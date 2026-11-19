@@ -7,7 +7,7 @@ captured_by: rowan-example
 synthetic: false
 scrubbed_by: tools/capture/scrub.py at 68726d8ccf48, every replacement and the remaining text read by eye
 kit: tools/capture at 68726d8ccf48
-script: tools/capture/SCRIPTS.md, Claude Code, steps 1 to 17
+script: tools/capture/SCRIPTS.md, Claude Code, steps 1 to 18
 otlp: http/json to tools/capture/otlp_sink.py, prompt logging off
 runs: cli (Windows Terminal), vscode (extension 2.1.328)
 ---
