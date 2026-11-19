@@ -8,6 +8,36 @@ Sibling docs this one builds on, not repeats: [hackatime-and-hack-club.md](hacka
 
 ## 0. Sources and versions seen
 
+Everything was read on 2026-11-19 unless a row gives another date. Full citations sit next to each claim; this table is the index a fact-checker starts from. "Secondary" means I read a summary, not the primary text.
+
+| Group | Source | Version or date seen | Used in |
+|---|---|---|---|
+| Hack Club, public | [fraud.hackclub.com](https://fraud.hackclub.com/) FAQ and [/fairplay](https://fraud.hackclub.com/fairplay) | Undated pages, fetched 2026-11-19 | A2 |
+| | [jackpot.hackclub.com/rules](https://jackpot.hackclub.com/rules) | Fetched 2026-11-19 | A2 |
+| | [hackclub.com/privacy](https://hackclub.com/privacy/) | Undated page, fetched 2026-11-19 | B3 |
+| | [readme.hackclub.com/nutshells](https://readme.hackclub.com/nutshells) | Via [hackatime-and-hack-club.md](hackatime-and-hack-club.md) 3.2 | A1 |
+| | hackclub/hackatime: `docs/configuration/privacy.md`, `config/routes.rb`, `Privacy::Token`, `Privacy::Eraser` | Commit `43bde10b02db` | B3 |
+| | [heliodex.cf/post/hackatimeBanned](https://heliodex.cf/post/hackatimeBanned) (first-hand account, not Hack Club's) | Posted 2026-08-16 | A2 |
+| Loops | [ghuntley.com/ralph](https://ghuntley.com/ralph/) | 2025-07-14 | A3 T2 |
+| Trackers and telemetry | wakatime/wakatime-cli `USAGE.md` | `develop` at `7ab26b5db6fe` (2026-11-05) | B1 |
+| | [ActivityWatch FAQ](https://docs.activitywatch.net/en/latest/faq.html) | `latest` docs | B1 |
+| | [VS Code telemetry docs](https://code.visualstudio.com/docs/configure/telemetry); [VSCodium README](https://github.com/VSCodium/vscodium) | Docs page dated 2026-11-18 | B1 |
+| | [go.dev/doc/telemetry](https://go.dev/doc/telemetry); [Russ Cox, "Telemetry opt-in"](https://research.swtch.com/telemetry-opt-in) | Post 2023-02-24; docs current | B1 |
+| | [GitHub blog on Copilot interaction data](https://github.blog/news-insights/company-news/updates-to-github-copilot-interaction-data-usage-policy/); [Copilot policy settings](https://docs.github.com/en/copilot/how-tos/manage-your-account/managing-copilot-policies-as-an-individual-subscriber); [community discussion 188488](https://github.com/orgs/community/discussions/188488); [Morse](https://trymorse.ai/blog/does-github-copilot-train-on-your-code) (secondary) | Blog 2026-03-25; Morse 2026-11-01 | B1 |
+| | [Microsoft Recall architecture](https://blogs.windows.com/windowsexperience/2024/09/27/update-on-recall-security-and-privacy-architecture/); [Signal](https://signal.org/blog/signal-doesnt-recall/); [Simon Willison](https://simonwillison.net/2024/Jun/1/stealing-everything-youve-ever-typed/) | 2024-09-27; 2025-05-21; 2024-06-01 | B1 |
+| Law (not legal advice) | [FTC COPPA amendments](https://www.ftc.gov/legal-library/browse/federal-register-notices/16-cfr-part-312-coppa-final-rule-amendments); [Latham & Watkins](https://www.lw.com/en/insights/ftc-publishes-updates-to-coppa-rule) (secondary) | Published 2025-04-22, effective 2025-06-23, compliance 2026-04-22; L&W 2025-05-14 | B2 |
+| | [euCONSENT, digital age of consent](https://euconsent.eu/digital-age-of-consent-under-the-gdpr/); [gdpr-info.eu Art. 25](https://gdpr-info.eu/art-25-gdpr/) | euCONSENT dated 2021-10-26 | B2, B7 |
+| | [GOV.UK child online safety guidance](https://www.gov.uk/guidance/child-online-safety-data-protection-and-privacy); [Data (Use and Access) Act 2025 s. 81](https://www.legislation.gov.uk/ukpga/2025/18/section/81) | GOV.UK revised 2021-09-27; s. 81 in force 2026-02-05 | B2 |
+| | [Cooley on NetChoice v. Bonta](https://www.cooley.com/news/insight/2026/2026-03-30-netchoice-v-bonta-ninth-circuit-narrows-injunction-against-californias-ageappropriate-design-code-act); [FKKS on AB 1043](https://fkks.com/?passle-post=102o301) (both secondary) | Cooley 2026-03-24 | B2 |
+| | [dpdprules.org on DPDP children's rules](https://dpdprules.org/blog/dpdp-childrens-data-rules) (secondary) | Sources checked there 2026-10-28 | B2 |
+| Secrets and PII tools | gitleaks `config/gitleaks.toml`; detect-secrets; TruffleHog; Presidio `conf/default.yaml`; spaCy model `meta.json`; GLiNER; `knowledgator/gliner-pii-edge-v1.0` card and file list (Hugging Face API); gline-rs README | gitleaks v8.30.1 (2026-03-21); detect-secrets v1.5.0 (2024-05-06); TruffleHog v3.99.9 (2026-11-12); Presidio 2.2.366 (2026-10-27); spaCy 3.8.0; GLiNER v0.2.30 (2026-11-02); gline-rs v1.1.0 (2026-08-05) | B4 |
+| Code similarity | [JPlag](https://github.com/jplag/JPlag); [Dolos](https://github.com/dodona-edu/dolos); Sağlam et al. ICSE-Companion 2024; Schleimer, Wilkerson and Aiken SIGMOD 2003; Biderman and Raff CIKM 2022 | JPlag v6.3.0 (2025-12-11); Dolos v2.10.0 (2026-10-19) | A4 |
+| OS input provenance | Microsoft Learn `KBDLLHOOKSTRUCT`; Apple `CGEventSourceStateID` and `secondsSinceLastEventType` (developer.apple.com JSON); Karabiner-Elements PR #4414; [AutoPTT](https://autoptt.com/posts/simulating-a-real-keyboard-with-faker-input/); Ryochan7/FakerInput; pqrs-org/Karabiner-DriverKit-VirtualHIDDevice; ReimuNotMoe/ydotool `Daemon/ydotoold.c`; MDN `Event.isTrusted`; [Clearcote](https://www.clearcotelabs.com/audit/checks/event-istrusted-provenance) (secondary); [macos-use.dev](https://macos-use.dev/t/macos-computer-use) (vendor) | MS page updated 2024-02-22; PR merged 2026-03-14 (`a83446cc8d8e`); AutoPTT 2026-01-11; FakerInput v0.1.1 (2025-12-19, archived); ydotool `708e96ff27e3`; MDN 2026-04-08; macos-use 2026-06-15 | A4 |
+| Detector papers | Barabási 2005; Goh and Barabási 2008; Dhakal et al. CHI 2018; DeAlcala et al. CVPRW 2023 (arXiv 2207.13394v3); Stefan, Shu and Yao 2012; Song, Wagner and Tian 2001; Broder 1997; Manku, Jain and Das Sarma 2007 | Published versions; DOIs inline | A4 |
+| Anti-cheat, proctoring, click fraud | McDonald, GDC 2018, via [Edgegap](https://edgegap.com/blog/anti-cheat-deep-dive-counter-strike-global-offensive) (secondary); [Riot](https://www.leagueoflegends.com/en-us/news/dev/dev-null-anti-cheat-kernel-driver/); [Bergmans et al. CSEDU 2021](https://www.scitepress.org/PublishedPapers/2021/103996/); [Sydney two-lane FAQ](https://educational-innovation.sydney.edu.au/teaching@sydney/frequently-asked-questions-about-the-two-lane-approach-to-assessment-in-the-age-of-ai/); [MRC IVT addendum](https://www.mediaratingcouncil.org/sites/default/files/Standards/IVT%20Addendum%20Update%20062520.pdf); [CISA TA18-331A](https://www.cisa.gov/news-events/alerts/2018/11/27/3ve-major-online-ad-fraud-operation); [CBS News](https://www.cbsnews.com/news/wells-fargo-fires-employees-faking-work/); [Oleson et al. HCOMP 2011](https://cdn.aaai.org/ocs/ws/ws0800/3995-16701-1-PB.pdf) | Riot 2020-02-03; Sydney 2024-07-02, revised 2026-04-21; MRC June 2020; CISA 2018-11-27; CBS 2024-06-17 | A5 |
+| LLM redaction | [Singhal et al. EDM 2024](https://educationaldatamining.org/edm2024/proceedings/2024.EDM-short-papers.57/index.html); [Garza et al. arXiv:2508.05545](https://arxiv.org/html/2508.05545) | 2024; 2025 | B5 |
+| Commitments | [RFC 9162](https://www.rfc-editor.org/rfc/rfc9162) section 2.1; [Johnson, Molnar, Song and Wagner, CT-RSA 2002](https://people.eecs.berkeley.edu/~daw/papers/hom-rsa02.pdf) | | B6 |
+
 ## Part A. Red team
 
 ### A1. Threat model and attacker profile
@@ -139,6 +169,25 @@ Human activity is bursty: short gaps cluster and long gaps are heavy-tailed ([Ba
 | Session shape | More than about 4 h of credited time with no gap over 10 min | Marathon farming (Ari has a `MARATHON_SESSION` flag, sibling doc 3.6) | Real flow states; R4's "intense flow state for hours" must still count, so this only raises review priority |
 | Time of day | Credited activity in every hour of a 24 h day across several days | Shift-sharing (T17) and automation | Insomnia, time zones, travel |
 
+#### Injected input, per OS
+
+Where input came from is the cheapest strong signal against T4 and T5, and what an unprivileged client can learn differs by OS. Capture APIs are in [ai-harness-signals.md](ai-harness-signals.md) 13.4; this table is only about provenance.
+
+| OS | Without a keyboard listener | With a keyboard listener | What still looks like hardware |
+|---|---|---|---|
+| Windows | `GetLastInputInfo`: any input, injected included, with no keyboard/mouse split | Low-level hook: `LLKHF_INJECTED` (0x10, bit 4) for injection "from any process", `LLKHF_LOWER_IL_INJECTED` (0x02) for injection from a lower integrity level ([KBDLLHOOKSTRUCT](https://learn.microsoft.com/en-us/windows/win32/api/winuser/ns-winuser-kbdllhookstruct), updated 2024-02-22). Raw Input: `RAWINPUTHEADER.hDevice` names each physical device and "is `0` for input generated with `SendInput`" ([AutoPTT](https://autoptt.com/posts/simulating-a-real-keyboard-with-faker-input/), 2026-01-11; the author's observation, not documented by Microsoft) | Virtual HID drivers. [FakerInput](https://github.com/Ryochan7/FakerInput) (MIT, archived, v0.1.1 2025-12-19) is "a driver that shows up as a keyboard and mouse that can be controlled by software", and "As far as the system was concerned, FakerInput and Sidekick *were* physical keyboards" (AutoPTT). Its Raw Input device path reads `HID#SYSTEM&Col0x` instead of a USB VID/PID, so a device inventory can label it. USB HID boards (T6) look like any keyboard |
+| macOS | `CGEventSourceSecondsSinceLastEventType(state, eventType)` takes an event type ("To get the elapsed time since the previous input event—keyboard, mouse, or tablet—specify `kCGAnyInputEventType`", [Apple](https://developer.apple.com/documentation/coregraphics/cgeventsource/secondssincelasteventtype(_:eventtype:))), so passing `kCGEventKeyDown` gives key-only idle with no permission. Apple tells "a user space device driver" to post events with `kCGEventSourceStateHIDSystemState` ([CGEventSourceStateID](https://developer.apple.com/documentation/coregraphics/cgeventsourcestateid)), so a low HID-state idle time is not proof of hardware (whether `CGEventPost` resets it is unverified; test on a Mac) | `CGEventTap`, which needs the Input Monitoring permission: an event posted with `CGEventPost` carries the poster's `kCGEventSourceUnixProcessID`. Karabiner's author notes that with synthetic CGEvents "we could identify and ignore re-entrant events via kCGEventSourceUnixProcessID" ([Karabiner-Elements PR #4414](https://github.com/pqrs-org/Karabiner-Elements/pull/4414), merged 2026-03-14). A computer-use vendor reports that its synthetic events carry a non-zero `eventSourceStateID` and hardware events zero ([macos-use.dev](https://macos-use.dev/t/macos-computer-use), 2026-06-15; vendor claim) | DriverKit virtual HID devices: "Both kCGEventSourceUnixProcessID and kCGEventSourceUserData become 0 after passing through the virtual device" (same PR). [Karabiner-DriverKit-VirtualHIDDevice](https://github.com/pqrs-org/Karabiner-DriverKit-VirtualHIDDevice) is Unlicense and ships signed, so any teen can install one |
+| Linux X11 | XInput2 raw events reach any X client, no permission | Same: XTEST input (xdotool, pyautogui) arrives from the "Virtual core XTEST" device (signals doc 13.4) | uinput devices, which need root or a udev rule on `/dev/uinput`. `ydotoold` names its device "ydotoold virtual device" with `BUS_VIRTUAL`, vendor 0x2333, product 0x6666 (`Daemon/ydotoold.c` in ReimuNotMoe/ydotool at `708e96ff27e3`, AGPL-3.0), and `/proc/bus/input/devices` lists it to any user; a one-line patch makes it claim to be a USB keyboard |
+| Linux Wayland | Idle only (`ext-idle-notify-v1`, Mutter `IdleMonitor`) | Not possible unprivileged. Reading `/dev/input/event*` needs the `input` group, which is a system-wide keylogger and too much to ask | Everything (`wtype`, libei, uinput) |
+| Browser extension (web chat, app builders) | n/a | A content script sees DOM events. `isTrusted` is `false` only for events "dispatched via `EventTarget.dispatchEvent()`" or `HTMLElement.click()` ([MDN](https://developer.mozilla.org/en-US/docs/Web/API/Event/isTrusted), 2026-04-08) | Puppeteer and Playwright drive Chrome DevTools Protocol `Input` commands, which the browser turns into events that report `isTrusted=true` ([Clearcote](https://www.clearcotelabs.com/audit/checks/event-istrusted-provenance), secondary); `navigator.webdriver` only flags browsers launched for automation |
+
+What this decides:
+
+1. **Without a keyboard listener, a software auto-typer looks like a person on Windows** (T5): `GetLastInputInfo` only says input happened. The listener is the only client check that labels AutoHotkey `Send`, `pyautogui`, Duey-style typers and computer-use agents (T4) on Windows, macOS and X11 at no measurable CPU cost.
+2. **Every OS has a free route to input that looks like hardware**: FakerInput on Windows, Karabiner's signed DriverKit device on macOS, uinput on Linux. The injected-input label catches the lazy majority and forces the rest to install a driver, which a device inventory (T6) can see as a new virtual keyboard. It never proves the input was human.
+3. **The listener costs privacy and trust.** On macOS it triggers the Input Monitoring prompt ("receive keystrokes from any application"). On Windows a low-level hook in an unsigned binary that also uploads data looks like a keylogger to antivirus heuristics (signals doc 13.4), which is why [client-platform.md](client-platform.md) 3.3 leaves keystroke counts out of v1. This doc's A8 #5 needs them. The two fit together if the listener is an **opt-in "typing evidence" module**: off by default, explained in one screen, counting only (key-down count, injected flag, hold-time median, rollover share per minute; never key identities), signed binaries only. Minutes with it are labeled "typing checked"; minutes without it are "typing unknown" and are judged on E1-E8 like everyone else's. Whether a program may require it for submitted hours is an Open question.
+4. **Mouse-only input never earns credit, even without a listener.** On Windows, `GetLastInputInfo` can't tell a jiggler from a keyboard, but under the credit rule (A8 #1) OS input only extends a capped reading window that a harness or editor act opened. A jiggler can't open one.
+
 #### Typing cadence
 
 Reference numbers from 168,000 typists ([Dhakal et al., CHI 2018](https://doi.org/10.1145/3173574.3174220), Table 1): mean 51.56 WPM (σ 20.20), mean inter-key interval 238.66 ms (σ 111.60), mean **keypress duration 116.25 ms (σ 23.88)**, 6.31% of keystrokes are error corrections, and a **rollover ratio of 25% (σ 17)**, meaning a quarter of keystrokes begin before the previous key is released; rollover correlates with speed at r = 0.73. Their timestamps carry about 10 ms of jitter from USB polling.
@@ -216,6 +265,7 @@ An LLM asked to rewrite a copied project defeats MOSS and probably weakens JPlag
 | Assessment design in the AI era | The University of Sydney's "two-lane" model: Lane 1 is "Secured, in person" ("interactive oral assessments; viva voces"), used mainly at program level; Lane 2 is open, with AI allowed. Most assessment is expected in Lane 2 | [Teaching@Sydney FAQ](https://educational-innovation.sydney.edu.au/teaching@sydney/frequently-asked-questions-about-the-two-lane-approach-to-assessment-in-the-age-of-ai/) (posted 2024-07-02, revised 2026-04-21) | Most hours go through automated evidence plus deflation (open lane). A risk-weighted sample goes through a live conversation with a reviewer (secure lane). Fraud Squad's "We want to talk to you" is already Lane 1 |
 | Click fraud: the MRC standard | Two tiers. General invalid traffic (GIVT) is filtered with "list-based common filtration procedures and parameter-based techniques" that every vendor must apply. Sophisticated invalid traffic (SIVT) needs "advanced analytics, multi-point corroboration/coordination, significant human intervention", and explicitly includes "Incentivized human invalid activity" such as click farms of real people | [MRC Invalid Traffic Detection and Filtration Standards Addendum](https://www.mediaratingcouncil.org/sites/default/files/Standards/IVT%20Addendum%20Update%20062520.pdf), June 2020 update | Tier 1: deterministic labels for known automation (harness flags, injected input, headless entrypoints), applied automatically and publicly documented. Tier 2: multi-signal scoring plus review for the rest, kept private. "Incentivized human" fraud (paid typists, account sharing) is a named category that only tier 2 can touch |
 | Click fraud: 3ve | 3ve controlled "over 1.7 million unique Internet Protocol (IP) addresses", ran a hidden browser on infected home PCs, and relayed data-center traffic through infected bots "in an effort to hide their true data center IPs" | [CISA alert TA18-331A](https://www.cisa.gov/news-events/alerts/2018/11/27/3ve-major-online-ad-fraud-operation), 2018-11-27 | Sophisticated fraud runs on real consumer machines, so per-event checks pass. It shows up in aggregate: shared infrastructure, lockstep timing, graph clusters (A4 cross-user) |
+| Employee monitoring ("bossware") | Wells Fargo fired more than a dozen wealth-management employees in 2024 over "simulation of keyboard activity creating impression of active work" (FINRA disclosures). Mouse jigglers cost about $20 and key-pressing gadgets about $60; the EFF notes such monitoring rewards "the wrong kinds of productivity" | [CBS News, 2024-06-17](https://www.cbsnews.com/news/wells-fargo-fires-employees-faking-work/), citing Bloomberg | Measuring presence invites cheap presence fakes, even among adults with careers at stake. Credit human acts and outcomes, not activity (Design implication 1) |
 | Crowdsourcing quality control | Hidden "gold" tasks with known answers measure each worker; "verifiable questions must be included into otherwise subjective tasks and answering the verifiable part correctly should take as much effort as doing the whole task" (Kittur, Chi and Suh 2008, as summarized there) | [Oleson et al., "Programmatic Gold", AAAI HCOMP 2011](https://cdn.aaai.org/ocs/ws/ws0800/3995-16701-1-PB.pdf) | Two uses. Seed the review queue with known-answer submissions to measure reviewers (T18). And design the verifiable part of the evidence (random reveal against commitments, B6) so that faking it costs about as much as doing the work |
 
 Three principles come out of all four fields:
@@ -276,7 +326,7 @@ Ranked by fraud and inflation removed per unit of engineering and privacy cost.
 | 2 | **Witnessing**: hash-chained local log, chain head to the server every 5 minutes, server receipt time as the clock, "backfilled" tier for anything late (B6) | T8, T20; bounds lookback and U6 | Client + server |
 | 3 | **Commits as anchors**: witnessed and forge-verified commits, time attached to commits, uncommitted time capped (server doc 4.3-4.4) | T9, T16a, T19; makes review fast | Client + server |
 | 4 | **Public tier-1 automation labels**: harness flags, headless entrypoints, process tree, injected-input flags, Caffeine-style periodic keys (the MRC GIVT tier) | T1-T5 commodity tools | Client |
-| 5 | **Cadence aggregates**: per-minute hold-time median and rollover share computed in memory; suspicious or injected minutes don't count as typing; no keystroke timestamps stored | T5, part of T6 | Client |
+| 5 | **Opt-in typing evidence**: a keyboard listener, off by default, that reads injected-input provenance (A4, per OS) and computes per-minute hold-time median and rollover share in memory; injected or suspicious minutes don't count as typing; no keystroke timestamps or key identities stored. Minutes without it are "typing unknown", not suspect | T4, T5, part of T6 | Client |
 | 6 | **Server risk score**: overlaps, alt candidates, shared root commits, client build and JA4, distribution outliers, graph clusters; orders the review queue and sets audit probability | T9, T11b, T12, T16a, T17a, T17c | Server, private module |
 | 7 | **Review protocol**: deflate by default, server-chosen random reveal, risk-weighted live interviews, pay after review, revocable hours, penalties shared with Fraud Squad | U1-U4, T6, T10, T21 | Review tooling |
 | 8 | **Reviewer integrity**: random assignment instead of claim queues, conflict-of-interest rules, seeded known-answer cases, per-reviewer statistics, access logs | T18, U5 (partly) | Server |
@@ -414,10 +464,175 @@ Karim's idea (BOUNTY.md): an AGENTS.md entry or skill tells the agent to take th
 
 ### B6. Disclosure tiers and commit-then-reveal evidence
 
+R10 explicitly allows "different privacy guarantees for logged hours vs. submitted hours." Four tiers make that concrete:
+
+| Tier | What | Where | Who sees it |
+|---|---|---|---|
+| **0. Local only** | Raw prompts, transcripts, agent output, file paths and names, window titles, per-event input features, OS usernames, hostnames, process names, device inventory, MinHash sketches, local typing profile, the device key | Encrypted spool and local database on the device (key in DPAPI, Keychain or Secret Service) | The user. Nothing in this tier is ever uploaded in the default path |
+| **1. Uploaded continuously** | Per-minute buckets per project: credited seconds by activity kind, human-evidence flags, injected and automation labels, re-roll counts; commit records (SHA, parents, diffstat, `observed_at`, optional path HMACs); chain heads and batch roots; client build id, random device id, harness names and versions. Names and URLs only for projects the user made public | pairtime server | The user's own dashboard in real time; aggregates on the public profile (B7); detectors |
+| **2. Revealed for submitted hours** | Event metadata for every event in the submission window, verified against the batch roots; a server-chosen sample of prompts with redactions, verified against their content commitments; optional extras the user adds; optional opt-in timelapse | Evidence store, behind reviewer sign-in (HCA, reviewer role) | Assigned reviewers, Fraud Squad, HQ spot-checkers, each view logged |
+| **3. Public** | Profile aggregates, public projects, forge-verified commits of public repos ([server-platform.md](server-platform.md) 5.2) | Public pages | Anyone |
+
+**Committing early so the client can reveal later without being trusted.** The goal: when a teen submits hours, a reviewer can check that what is revealed now is exactly what the client recorded then, and the server learns nothing about unrevealed content in the meantime. The construction uses only hashes, HMAC and a Merkle tree (no new cryptography):
+
+```text
+Install:  K_dev  = 32 random bytes, stored with DPAPI / Keychain / Secret Service
+          K_leaf = HKDF-SHA256(K_dev, info = "pairtime/v1/leaf")
+          K_tok  = HKDF-SHA256(K_dev, info = "pairtime/v1/token")
+
+Event i (sequence number s_i), with content split into tokens w_1..w_n (whitespace-separated, separators kept):
+  t_ij = leaf( HMAC(K_tok, s_i || j) || w_j )            per-token salted leaf
+  C_i  = MerkleRoot(t_i1 .. t_in)                         content commitment
+  E_i  = canonical CBOR { s_i, t_client, kind, harness, session_h, project_h,
+                          len_chars, typed_chars, pasted_chars, flags, C_i }
+  L_i  = leaf( HMAC(K_leaf, s_i) || E_i )                 salted event leaf
+
+Every 5 minutes, batch b on this device:
+  R_b  = MerkleRoot(L_i for the batch's events)
+  H_b  = SHA-256( 0x03 || H_(b-1) || R_b || n_b || b )    hash chain across batches
+  POST {device_id, b, n_b, R_b, H_b}  ->  server stores it with received_at
+```
+
+`leaf(x) = SHA-256(0x00 || x)` and interior nodes are `SHA-256(0x01 || left || right)`, as in Certificate Transparency's Merkle tree ([RFC 9162](https://www.rfc-editor.org/rfc/rfc9162) section 2.1). The per-token tree is the classic redactable-signature construction ([Johnson, Molnar, Song and Wagner, "Homomorphic Signature Schemes", CT-RSA 2002](https://people.eecs.berkeley.edu/~daw/papers/hom-rsa02.pdf)), used here as a commitment rather than a signature.
+
+Why each piece is there:
+
+- **Salts on every leaf and token.** Short prompts ("yes", "continue", "fix it") and event metadata are guessable. Without salts, the server could confirm guesses against the roots, or against the sibling hashes that come with any inclusion proof. HMAC under a device key gives each leaf its own salt, so revealing one item tells nothing about the others.
+- **The chain and `received_at`.** The client can't add, drop, reorder or edit events after the batch is uploaded. Anything first seen late is "backfilled" (A3, T8).
+- **Per-token commitments.** The user can hide a span (an email, a friend's name) and still prove the rest of the text is exactly what was typed. The reviewer sees where hidden spans are and how many tokens each covers.
+
+**Reveal at submission**, for the window W the user submits:
+
+1. The client sends `E_i` and its leaf salt for every event in W, with the batches' leaves. The server recomputes each `R_b`, checks it against the stored roots and chain, and records each event's witness lag. Event metadata for W is now visible to reviewers: kinds, times, lengths, typed vs pasted counts, flags. Content is not.
+2. Only then does the server draw a challenge: `k` content-bearing events chosen by a server CSPRNG (start with `k = max(10, 10% of prompts)`, capped at 30). Because the draw comes after step 1, the client can't prepare only the items it knows will be checked.
+3. For each challenged event, the client reveals the token values and salts for the tokens it keeps, and only the leaf hashes for redacted spans, plus a type marker for each span. The server recomputes `C_i` and checks it matches the `C_i` inside `E_i`.
+4. A challenged item the user won't reveal is allowed, but the minutes it supports are not credited (A7, E6).
+
+If a fraction `f` of a submission's prompts are bad (fabricated, re-rolled, LLM-written), a sample of `k` contains at least one with probability `1 − (1 − f)^k`: for `f` = 0.3 and `k` = 10 that is 0.97. The reveal catches later editing and content-free fabrication mechanically (the content must match a commitment made at the time); judging whether a revealed prompt is real struggle is the reviewer's job.
+
+**What commitments do not do.** They prove that a record existed at a time and hasn't changed. They don't prove that it describes something real: a modified client fabricating events live (T9) commits to its fabrications on time. Commitments raise the cost of fabrication, since it has to happen live with content behind every event, and they make the sample checkable. The rest is A4-A7.
+
+**Not trusting the server either.** R10 asks for audit "by an external party". A pairtime server could, in principle, insert or backdate roots. Once a day the server should publish one Merkle root over every `(device_id, b, H_b, received_at)` it received that day to a public append-only place: a commit to a public git repository is enough, and a transparency log such as Sigstore's Rekor is an option. An auditor can then check any submission's roots against the published daily root. The cost is one small commit a day.
+
+**Cost (R11, R8).** One upload of about 150 bytes per active device every 5 minutes, and a few hashes per event on the client. Revealing a submission costs one request per batch plus `k` content reveals.
+
+**Deletion.** Deleting the user's account deletes the stored roots; deleting `K_dev` on the device makes the commitments unopenable ("crypto-shredding"). Neither needs the server to have seen any content.
+
 ### B7. Public-by-default profiles (R5) vs privacy for minors
+
+R5 asks for "public-by-default user profiles". Three rules pull the other way for a service whose users are 13 to 18:
+
+- GDPR and UK GDPR Art. 25(2): by default, "personal data are not made accessible without the individual's intervention to an indefinite number of natural persons" ([gdpr-info.eu](https://gdpr-info.eu/art-25-gdpr/)). A public profile is exactly that kind of access. This applies at every age, not just to children.
+- UK Children's Code Std 7: "Settings must be 'high privacy' by default for children", unless there is a compelling reason in the child's best interests. Std 13 bans nudging children to switch protections off (B2).
+- California AADC: "configure default privacy settings for children to a high level of privacy" is no longer enjoined (B2), if the law applies to the operator at all.
+
+The sibling server doc already proposes a visibility model in which only aggregates are public by default and anything that names a thing is public only if it is already public elsewhere ([server-platform.md](server-platform.md) 5.2). Seen from the minors' side, that model needs four additions:
+
+1. **An explicit choice at onboarding.** Show the actual profile preview and two equal buttons, "Public profile" and "Private profile", with nothing preselected (Cox's "no click-through default", B1). That choice is the "individual's intervention" Art. 25(2) asks for, and it keeps R5's spirit: most teens will choose public, as most Hackatime users leave it on. If Hack Club decides R5 means literally pre-public, then it should be public for the aggregate-only page, and the decision should be written up as the Children's Code's "compelling reason" assessment (Open questions).
+2. **No routine on the public page.** Public numbers are daily totals with no hour-of-day heatmap, and the public view updates at most hourly. An hour-by-hour activity graph of a 15-year-old shows when they sleep and when they are at school. The owner's own dashboard stays real-time (R5's "updates in real-time" is about the dashboard). Hackatime's "currently hacking" list (users active in the last 5 minutes, server doc 5.4) is live presence of minors and should be opt-in.
+3. **Nothing that locates a person.** No real name (handles can be pseudonymous; HCA keeps the legal identity), no school, no city, no age, no timezone shown. Std 10 asks for geolocation off by default, and a timezone plus a school name is close enough to geolocation.
+4. **No public trace of review.** Flags, trust tiers, deflations and rejected hours are never public (Hackatime masks `yellow` as `blue`, sibling doc 1.9). A public "hours deflated" counter would shame teens for a reviewer's caution. And a minor can delete anything they made public, at any time, which California's eraser law also asks for (B2).
 
 ### B8. Data inventory
 
+Every field the client collects or derives, where it lives, who can see it, and how long it is kept. Retention periods are proposals to make B2's "written and finite" rule concrete; the spot-check window they depend on is an Open question. "Submission window" means the period a submitted claim covers.
+
+**On the device (Tier 0).** Stored in the encrypted spool or local database; visible to the user only.
+
+| Field | Source | Kept |
+|---|---|---|
+| Raw prompt text | Hooks, log readers, AGENTS.md `track` calls | 30 days, or until any submission covering it is decided, whichever is later; user can shorten |
+| Agent output and transcripts | Not copied: read in place from the harness's own logs; pairtime stores only offsets and hashes | The harness's own retention (Claude Code 30 days by default, signals doc 3.2) |
+| Tool events: tool name, command, exit code, files touched | Hooks (`PostToolUse` etc.), log readers | 30 days |
+| File paths and names | Editor, git, hooks | 30 days (only HMACs are ever uploaded) |
+| Foreground app executable; whether the window is "relevant" to a project | OS focus watcher | 30 days. **Window titles are matched in memory and never stored** |
+| Per-minute presence bits (any input / key input where the OS separates them) | OS idle APIs, no listener | 90 days |
+| Per-minute input counts (keys, clicks, scroll) | Opt-in typing-evidence listener only (A4) | 90 days |
+| Per-minute cadence features: hold-time median, rollover share, injected share, auto-typer score | Opt-in listener, in-memory processing; **no per-keystroke timestamps or key identities are ever written** | 90 days |
+| Per-user typing profile (v2) | Rolling aggregate of cadence features | Rolling 90 days |
+| Prompt MinHash and SimHash sketches | Derived from prompts | 90 days |
+| Process chain at session start; harness env flags (`CLAUDE_CODE_CHILD_SESSION`, entrypoint, `originator`) | OS, harness | 30 days |
+| VM label, input-device inventory (v1.5) | CPUID, SMBIOS, Raw Input device list | 30 days |
+| Event leaves `E_i` and the device key `K_dev` (salts are derived from it) | Client | `E_i`: as long as the hours could still be submitted (proposal: 180 days). `K_dev`: until uninstall or rotation, in DPAPI, Keychain or Secret Service |
+| Local git data: SHAs, branch names, file names in diffs | git | As long as the repo exists; pairtime keeps only what it uploads |
+
+**On the server (Tiers 1 and 3).**
+
+| Field | Source | Who can see it | Kept |
+|---|---|---|---|
+| `hca_sub`, `slack_id` | HCA sign-in | User, admins, programs the user authorized | Account lifetime |
+| Email | HCA (`email` scope) | User, admins; programs only with user authorization | Account lifetime, encrypted at rest |
+| GitHub uid and username | GitHub link | User, admins; public if the user shows it | Account lifetime |
+| Handle and avatar | User | Public | Until changed |
+| Random `device_id`, OS family, client version and build id, harness names and versions | Client | User, admins, detectors | Device lifetime plus 90 days |
+| Uploading IP address and JA4 TLS fingerprint | Request metadata | Fraud tooling and admins only | 30 days (Hackatime's alt tools look back 30 days, sibling doc 1.9), then deleted |
+| Per-minute buckets per project: credited seconds by activity kind, human-evidence and automation flags, re-roll counts | Client | User (real time); public as daily aggregates (B7); reviewers for submission windows | Per-minute detail 13 months (enough for a year-in-review), then daily totals per project for the account's lifetime |
+| Commit records: SHA, parents, diffstat, `observed_at`, `server_first_seen_at`, optional path HMACs | Client, forge API | User; public for public repos; reviewers | Account lifetime |
+| Project fingerprint `HMAC(pepper, root commit)`; names and repo URLs of public projects only | Client | System; public projects are public | Account lifetime |
+| Batch roots and chain heads `(device_id, b, n_b, R_b, H_b, received_at)` | Client | System; auditors through the daily published root | Until the spot-check window closes for every submission that used them; unsubmitted roots after 180 days |
+| Risk scores and flags | Private detection module, **for submitted windows only** (B2 point 6) | Reviewers, Fraud Squad | Same as the submission's evidence |
+| Minimal fraud record after account deletion: `hca_sub`, verdict, date, reason category | Review outcome | Fraud Squad | A period Hack Club sets (Open questions), reported in the eraser's `retained` output |
+
+**In the evidence store (Tier 2).** Behind HCA sign-in with a reviewer role; every view logged.
+
+| Field | Who can see it | Kept |
+|---|---|---|
+| Event metadata for every event in a submission window, verified against roots | Assigned reviewers, Fraud Squad, HQ spot-checkers | Until the spot-check window closes (proposal: 12 months after the decision), then deleted; the verified summary numbers stay with the submission |
+| `k` revealed prompts, redacted, with markers | Same | Same; the user can purge one immediately if it exposed something, which re-opens the hours it supported |
+| Optional extras and opt-in timelapse | Same | Same |
+| Reviewer decisions, deflation justification, notes (written without personal data) | Program, HQ | As long as the Unified DB record exists |
+| Reviewer access log: who opened which evidence, when | HQ admins, **and the user** | 2 years |
+| Interviews | Notes only, no recordings | With the decision |
+
+Two cross-cutting rules: the client's `pairtime privacy show` prints every Tier 1 field exactly as the next upload will send it (B1's VS Code lesson), and Hack Club's privacy hub can export or delete all of the server-side rows above through the B3 endpoints.
+
 ## Design implications
 
+Each item is tagged with the requirements it serves.
+
+1. **Make the credit rule the first anti-fraud layer.** Credit only minutes with human-side evidence; agent-only spans and mouse-only input earn zero; reading and think windows are capped; one human-minute per wall-clock minute per account across all devices and projects. This removes T1-T3, T7, T11a, T12 and T14 with no detector at all (A3, A8 #1). [R2, R9]
+2. **Server receipt time is the clock.** Hash-chain the local log, upload a batch root every 5 minutes, and classify every minute as witnessed, backfilled or offline. Lookback hours are backfilled by definition: show them to the user (R3, R4) and require corroboration, such as forge push times, before they can be submitted (A3 T8, T20). [R4, R9, R10]
+3. **Commit, then reveal.** Use salted per-event leaves and per-token content trees (B6). At submission, verify all event metadata in the window against the stored roots, then draw a server-side random sample of `k` prompts to reveal with redactions. A challenged item the user withholds doesn't credit the minutes it supports. [R6, R10]
+4. **Publish one daily root of everything received** to a public git repository, so an external auditor doesn't have to trust the pairtime server not to backdate roots. About one small commit a day. [R10, R11]
+5. **Two detection tiers, as in the MRC invalid-traffic standard.** Tier 1: deterministic, documented labels for known automation (harness flags, headless entrypoints, process tree, `LLKHF_INJECTED`/`LLMHF_INJECTED`, XTEST, fixed-period keys like Caffeine's F15). Tier 2: private scoring in a separate server process (the Ari pattern), whose thresholds are never published (A5, A8 #9). [R9, R1]
+6. **Detectors rank; people decide.** No detector bans anyone. A flag changes the evidence required and the audit probability. The user sees which category of evidence was missing and can appeal to a person (A6). [R9, R3]
+7. **Risk-weighted audits with a short live interview**: two server-chosen commits, one design decision, one small live change. Publish the base audit rate; raise the probability with claimed hours so that `p·q > g/(g+L)` holds (A6). At the acceptance target this costs tens of reviewer-hours in total. [R9, R10]
+8. **Pay after review and keep hours revocable** through the spot-check window. Send confirmed fraud to Fraud Squad through Robert, so the penalty is Hack Club-wide. [R9]
+9. **Keystroke features stay in memory, and the listener is opt-in.** Ship the keyboard listener as an opt-in "typing evidence" module (Input Monitoring on macOS, a low-level hook in a signed binary on Windows, XInput2 on X11, nothing on Wayland). Store per-minute aggregates (counts, hold-time median, rollover share, injected share, a score); never write per-keystroke timestamps or key identities; stop counting while focus is outside the relevant-window list, which covers password fields. Minutes without it are "typing unknown" and judged on E1-E8 (A4). [R6, R8, R9]
+10. **Injected input is not typing evidence, and not fraud.** Offer an assistive-input declaration (dictation, switch access, on-screen keyboards) that routes the user to other evidence instead of a flag (A3 T4-T5). [R2, R6, R9]
+11. **VM detection is a label, never a flag.** Use the hypervisor's root-partition privilege bits so Windows with VBS or Hyper-V isn't misread as a VM, and allow ChromeOS Linux (A3 T10). Defer it past v1. [R8, R9]
+12. **Reviewer integrity is part of the product.** Random assignment instead of claim queues, no reviewing your own club, seeded known-answer submissions, per-reviewer statistics, and a reviewer access log that the reviewed user can see (A3 T18). [R9, R10, R6]
+13. **Redact on the device, deterministically, by removing spans.** Known values first (the client knows the user's names, paths, hostname and private repo names), then gitleaks' 222 rules, then validated PII patterns ported from Presidio, then optional GLiNER PII edge (46 MB uint8) at reveal time only, then a user preview. Never rewrite text (B4). [R6, R8]
+14. **Use the agent only for suggestions and labels.** At reveal time the agent may propose redaction spans as character offsets for the user to confirm; an agent-written summary is stored as a labeled claim, never as evidence (B5). [R6, R7, R9]
+15. **Fix the Tier 1 field list and make it printable.** `pairtime privacy show` prints exactly what the next upload will contain. Any new uploaded field goes through a public change process, as Go's telemetry does (B1, B6). [R6, R10]
+16. **High-privacy defaults for everyone, so age doesn't have to be known.** Public/private choice at onboarding with nothing preselected; an aggregate-only public page; daily public totals with no hour-of-day heatmap; live presence opt-in; nothing that locates a person; no public trace of review outcomes (B7). [R5, R6]
+17. **Write down a finite retention period for every field** (B8), and implement Hack Club's privacy-hub contract: `POST /api/privacy/delete` and `POST /api/privacy/export` with the same ES256 JWT checks Hackatime uses (B3). Keep a minimal fraud record after deletion and report it as retained. [R6, R5]
+18. **Rely on HCA for age and eligibility.** Refuse under-13 accounts, apply the 19th-birthday cutoff from HCA's eligibility rather than storing birthdates (B2, B3). [R6, A]
+19. **Score only submitted hours.** Fraud scoring is profiling; logged-only hours are never scored (B2 point 6). [R6, R9]
+20. **Encrypt the local store** with an OS-protected key and keep raw prompts for 30 days by default. Windows Recall's first preview showed what infostealers do with an unencrypted local activity database (B1). [R6, R8]
+21. **Check code similarity at review time** with JPlag (GPL-3.0, run as a separate tool) or Dolos (MIT) for public repos, against the Unified DB's code URLs (A4). [R9, R10]
+22. **Fit thresholds to review outcomes.** Audit verdicts and reviewer decisions become the labels detectors are trained on, the way Overwatch verdicts train VACnet (A5). [R2, R9]
+23. **Keep the trust layer cheap.** Roots are about 150 bytes per active device every 5 minutes; evidence moves only for submissions (B6). [R11]
+24. **Cap the bounded attacks.** Cap credited hours per day, uncommitted time and offline time per submission, so U3-U6 have a known maximum payoff for the audit rate to beat (A6). [R9]
+
 ## Open questions
+
+For Karim or Hack Club staff:
+
+1. **Who is the legal operator** of a hosted pairtime: Hack Club HQ, Karim, or each program? That decides which of COPPA, GDPR, the UK code, CCPA and DPDP apply (B2), and whether Hack Club's privacy notice and DPO cover pairtime.
+2. **How long is the spot-check window?** It sets how long Tier 2 evidence and roots must stay reachable (B8). The handbook doesn't say (sibling doc 3.7).
+3. **Will Fraud Squad accept** commit-then-reveal metadata, a random prompt sample and a short interview in place of editor history or screen video, which they trust today (A2)? Would the Telescreen team add a pairtime `kind` to Robert?
+4. **Interviews with minors.** Who may hold a 15-minute live call with a 15-year-old, in what channel, and is it recorded? Hack Club's safeguarding rules decide this, not pairtime.
+5. **R5 wording.** Does "public-by-default" allow an onboarding choice with nothing preselected, which GDPR Art. 25(2) and the UK code favour (B7)? If not, who writes the Children's Code "compelling reason" assessment?
+6. **India from about May 2027.** Will Hack Club get counsel's view on whether a self-installed tracker that uploads only aggregates is "tracking or behavioural monitoring of children" under DPDP s. 9(3), and whether Indian under-18s need a local-only mode (B2)? The 2026 Removal of Difficulties Order's effect on s. 9 is unverified here.
+7. **AGPL and private detection.** Is an open-core server acceptable under R1, with tier-2 rules in a private module run as a separate process, as Ari and Stardance do? The GPL FAQ treats programs that talk over pipes, sockets or command-line arguments as normally separate, unless they exchange intimate internal data structures (paraphrased; gnu.org was unreachable from this machine, so unverified). Third-party AGPL contributions to the public server don't change that, but a private module that links the server's code would.
+8. **Penalties and propagation.** Is a pairtime fraud verdict a Hack Club-wide ban, as Jackpot's rules imply? The audit-rate math (A6) needs that number.
+9. **Payout timing.** Can programs delay payouts until review and claw back hours later, as Stardance did with stardust?
+10. **Assistive input.** What should reviewers do with a declared dictation or switch-access user whose typing evidence is all injected (A3)?
+11. **Shared devices and networks.** What is the policy for siblings on one family PC, or a whole club on school Wi-Fi, so pairtime avoids the false positives described in A2?
+12. **Fraud record after deletion.** How long may Hack Club keep a minimal verdict record after a user deletes their account (B3)?
+13. **Remote development.** Are SSH sessions, Codespaces and other cloud dev boxes in scope? They need a local daemon paired with the remote one, because the remote machine sees no keyboard (A3 T3).
+14. **Who reviews.** Teen volunteers, paid staff or program authors? It changes conflict-of-interest rules and who may read minors' revealed prompts.
+15. **Calibration data.** Can pairtime get Stardance's per-devlog approved and original minutes with the matching Hackatime heartbeats under a data-sharing agreement, to fit thresholds (Design implication 22)? It's minors' data, so it needs the operator's sign-off.
+16. **The public audit rate.** What base rate is Hack Club willing to publish, and staff?
+17. **Requiring the typing listener.** May a program require the opt-in typing-evidence module (A4) for submitted hours, or for hours above a cap? Requiring it makes T4 and T5 much harder, but it puts an Input Monitoring prompt or a keyboard hook between a privacy-conscious teen and their prize, and the UK code's Std 13 forbids nudging children to give up protections.
