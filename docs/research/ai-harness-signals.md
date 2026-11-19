@@ -187,15 +187,176 @@ No local OTel exporter for individual users. OpenTelemetry Export exists only on
 
 ## 5. GitHub Copilot (VS Code chat and agent mode, Copilot CLI)
 
-(pending)
+Sources, read 2026-11-19: GitHub docs via `docs.github.com/api/article/body?pathname=...` for `copilot/reference/hooks-reference`, `copilot-cli-reference/cli-command-reference`, `cli-config-dir-reference`, `enterprise-administrators/opentelemetry-reference`; VS Code docs from microsoft/vscode-docs at `2d06388` (2026-11-18): `docs/agent-customization/hooks.md`, `docs/agents/guides/monitoring-agents.md`, `docs/agent-customization/custom-instructions.md`; storage from wakatime-cli `copilot.go`, `copilot_cli.go`, `copilot_sqlite.go`.
+
+One runtime, three front ends. VS Code's chat now runs a shared "Copilot harness" that VS Code, the GitHub Copilot app and Copilot CLI all use, with one hook format. A VS Code user can also pick **Claude** or **Codex** as the session target, which then run Claude Code's or Codex's own hooks. The older "Local" harness is deprecated (`chat.useHooks`, `chat.hookFilesLocations` only configure it).
+
+### 5.1 Hooks
+
+Locations, all combined: policy directory (machine-wide, can't be disabled), `.github/hooks/*.json` in the repo, user `~/.copilot/hooks/*.json` (`%USERPROFILE%\.copilot\hooks\` on Windows; `$COPILOT_HOME/hooks/`), inline `hooks` in `.github/copilot/settings.json`, `.github/copilot/settings.local.json`, `~/.copilot/settings.json`, the repo's `.claude/settings.json` and `.claude/settings.local.json`, and plugin `hooks.json`. Format: `{"version": 1, "hooks": {"<event>": [{"type": "command", "bash": "...", "powershell": "...", "command": "...", "cwd": "...", "env": {}, "timeoutSec": 30}]}}`; the CLI also accepts shell-free `exec` + `args`, and `http` and `prompt` hook types exist. A non-interactive install drops one file, `~/.copilot/hooks/pairtime.json`, which covers Copilot CLI, VS Code's Copilot harness and the Copilot app.
+
+Events: `sessionStart`, `sessionEnd`, `userPromptSubmitted`, `userPromptTransformed`, `preToolUse`, `postToolUse`, `postToolUseFailure`, `permissionRequest`, `agentStop`, `subagentStart`, `subagentStop`, `errorOccurred`, `preCompact`, `notification`. The event name picks the payload style: camelCase (`sessionStart`) gives camelCase fields and a Unix-ms `timestamp`; PascalCase (`SessionStart`) gives VS Code-compatible snake_case fields with an ISO 8601 `timestamp`. Unlike Claude Code and Cursor, every Copilot payload carries a timestamp.
+
+| Event | Input (camelCase) |
+|---|---|
+| `sessionStart` | `sessionId`, `timestamp`, `cwd`, `source` (`startup`, `resume`, `new`), `initialPrompt` |
+| `userPromptSubmitted` | `sessionId`, `timestamp`, `cwd`, `prompt` (command-hook output is ignored, so it's observe-only) |
+| `preToolUse` / `postToolUse` | `toolName`, `toolArgs`, results |
+| `agentStop` | `sessionId`, `timestamp`, `cwd`, `transcriptPath`, `stopReason` (`end_turn`), `stop_hook_active` |
+| `sessionEnd` | `reason` (`complete`, `error`, `abort`, `timeout`, `user_exit`) |
+| `notification` (CLI only, async) | `message`, `title`, `notification_type`: `shell_completed`, `shell_detached_completed`, `agent_completed`, `agent_idle`, `permission_prompt`, `elicitation_dialog` |
+| subagent events | add `agentId`, `agentType`, `parentAgentId` |
+
+Copilot cloud agent (the coding agent that opens PRs) runs only `bash`/`command` entries from `.github/hooks/*.json` in its Linux sandbox. There `userPromptSubmitted` fires at most once per job and `notification` never fires.
+
+### 5.2 Local transcripts and stores
+
+| Surface | Path | Format |
+|---|---|---|
+| Copilot CLI sessions | `~/.copilot/session-state/<session-id>/events.jsonl` (`$COPILOT_HOME`; Windows `%USERPROFILE%\.copilot\`); the folder also holds plans, checkpoints, tracked files | append-only JSONL, each `{type, data, timestamp}`; types include `session.start` (`data.sessionId`, `data.context.cwd`), `session.model_change`, `user.message` (`data.content`), `assistant.message`, `tool.execution_start` (`toolName`, `arguments`), `tool.execution_complete`, `session.compaction_complete`, `session.shutdown` |
+| Copilot CLI typed-command history | `~/.copilot/command-history-state/` | managed, last 50 commands by default (`commandHistoryMaxSize`, max 1000) |
+| Copilot CLI cross-session index | `~/.copilot/session-store.db` (SQLite) | rebuilt by `/chronicle reindex`, which also syncs session data to the user's GitHub account |
+| Copilot CLI logs | `~/.copilot/logs/` | session logs |
+| VS Code chat sessions | `<Code user dir>/workspaceStorage/<hash>/chatSessions/*.json` or `.jsonl`; Code user dir = `%APPDATA%\Code\User` (Windows), `~/Library/Application Support/Code/User` (macOS), `~/.config/Code/User` (Linux) | JSON: `sessionId`, `creationDate`, `lastMessageDate`, `requests[]` with `requestId`, `timestamp` (ms), `message.text`, `response[]`, `modelState.completedAt`, `agent.extensionVersion` |
+| VS Code OTel span DB | `.../globalStorage/github.copilot-chat/agent-traces.db` when `github.copilot.chat.otel.dbSpanExporter.enabled` is on | SQLite spans with `start_time_ms` |
+
+No retention limit is documented for any of these. A lookback reader can rebuild Copilot CLI sessions with per-event timestamps, and VS Code chat requests with request and completion times.
+
+### 5.3 Telemetry
+
+VS Code Copilot Chat: enable with `github.copilot.chat.otel.enabled: true` (user settings.json) or `COPILOT_OTEL_ENABLED=true`; `github.copilot.chat.otel.exporterType` = `otlp-http` (default), `otlp-grpc`, `console`, `file`; `otlpEndpoint` default `http://localhost:4318`; `outfile` for JSON lines; content capture off by default (`captureContent`). Env vars override settings. Copilot CLI turns on with `COPILOT_OTEL_ENABLED=true`, `OTEL_EXPORTER_OTLP_ENDPOINT`, or `COPILOT_OTEL_FILE_EXPORTER_PATH`.
+
+Metrics that matter: `copilot_chat.edit.acceptance.count` (accept/reject, with `copilot_chat.edit.source`), `copilot_chat.lines_of_code.count`, `copilot_chat.edit.survival.four_gram` and `.no_revert` (how much accepted AI code survives), `copilot_chat.user.action.count` (copy, insert, apply, followup), `copilot_chat.user.feedback.count`, `copilot_chat.session.count`, `copilot_chat.agent.invocation.duration`, `copilot_chat.agent.turn.count`, and for the CLI `github.copilot.code.lines_added`/`lines_removed`, `github.copilot.tool.call.count`. Events: `copilot_chat.session.start`, `copilot_chat.agent.turn`, `copilot_chat.edit.feedback`, `copilot_chat.edit.hunk.action`, `copilot_chat.inline.done`, `github.copilot.session.shutdown`, `github.copilot.session.abort` ("user cancelled").
+
+No metric measures human time. The closest signals are the accept/reject events (a human decided) and `github.copilot.initiator`, documented only as "Request initiator" on chat spans. Copilot bills premium requests by initiator, so its values plausibly split user-initiated from agent-initiated requests, but the docs don't list them (unverified).
+
+### 5.4 Instructions, skills, MCP
+
+Copilot CLI merges all of these at once: `CLAUDE.md`, `GEMINI.md`, `AGENTS.md` (git root and cwd), `.github/instructions/**/*.instructions.md`, `.claude/rules/**/*.md`, `.github/copilot-instructions.md`, `~/.copilot/copilot-instructions.md`, `~/.copilot/instructions/**/*.instructions.md`, and `COPILOT_CUSTOM_INSTRUCTIONS_DIRS`. `--no-custom-instructions` turns them all off. Subagents get none unless their agent file sets `include-custom-instructions: true`. VS Code's Copilot harness reads `.github/copilot-instructions.md` or `AGENTS.md`. Skills and MCP servers are supported in both (Agent Skills, `copilot mcp`, VS Code `mcp.json`).
+
+### 5.5 Headless and autonomous runs
+
+| Mode | Tell |
+|---|---|
+| `copilot -p "..."` | Programmatic run; `--allow-all`/`--yolo`/`COPILOT_ALLOW_ALL`; `--share` writes a Markdown transcript. Whether `events.jsonl` marks print mode is not documented (unverified). |
+| Autopilot: `--autopilot`, `--mode autopilot`, `/autopilot`, `/goal [objective]`, `--plan --mode autopilot` | The agent continues until `task_complete`; `--max-autopilot-continues` (default 5) bounds continuations outside an objective; `--max-ai-credits` caps an objective. `agentStop.stop_hook_active` marks forced continuations. |
+| Cloud agent | Hooks only from the repo; one `userPromptSubmitted` per job; `sessionEnd.reason` `complete`/`error`/`timeout` |
+| Background agents | `notification` `agent_idle`, `agent_completed` |
+
 
 ## 6. OpenAI Codex (CLI, IDE extension, cloud)
 
-(pending)
+Sources, read 2026-11-19: docs now live at learn.chatgpt.com (developers.openai.com/codex redirects there with 308; append `.md` for Markdown): `docs/hooks.md`, `docs/config-file/config-advanced.md`, `docs/config-file/config-reference.md`, `docs/agent-configuration/agents-md.md`, `docs/non-interactive-mode.md`. Source: openai/codex (Apache-2.0) at `d64451b` (2026-11-19), latest release `rust-v0.170.0` (2026-11-18): `codex-rs/protocol/src/protocol.rs`, `codex-rs/rollout/src/{list.rs,rollout_file_name.rs,compression.rs}`, `codex-rs/history/src/rollout_payload.rs`, `codex-rs/message-history/src/lib.rs`, `codex-rs/otel/src/metrics/tags.rs`. Because Codex is open source, its formats can be pinned to a commit, unlike Claude Code's or Cursor's.
+
+### 6.1 Hooks
+
+Locations, all combined: system `/etc/codex/hooks.json` or `%ProgramData%\OpenAI\Codex\hooks.json`; user `$CODEX_HOME/hooks.json` (default `~/.codex/hooks.json`, `%USERPROFILE%\.codex\hooks.json`); trusted project `.codex/hooks.json`; plugin `hooks/hooks.json`; or inline `[hooks]` in the same layer's `config.toml`. Managed hooks go in `requirements.toml`. Shape matches Claude Code's: `{"hooks": {"<Event>": [{"matcher": "...", "hooks": [{"type": "command", "command": "...", "timeout": 3, "async": true}]}]}}`. Hooks are on by default; `[features] hooks = false` turns them off (`codex_hooks` is the deprecated alias).
+
+The install friction: "Before a non-managed hook can run, Codex requires you to review and trust the exact hook definition." Trust is pinned to the hook's hash, and new or changed hooks are skipped until the user approves them in `/hooks`. So pairtime can write `~/.codex/hooks.json` silently, but it won't fire until the user opens Codex and trusts it once, and again after every change to the hook definition. Keep the definition stable (a fixed `pairtime hook codex` command line) so updates to the binary don't invalidate trust. Managed hooks in `requirements.toml` are trusted by policy but need admin rights to install. `--dangerously-bypass-hook-trust` exists for one-off automation.
+
+Common input: `session_id` (subagents get the parent's), `transcript_path`, `cwd`, `hook_event_name`, `model`; turn-scoped events add `turn_id`; most add `permission_mode`. No timestamp.
+
+| Event | Notes for pairtime |
+|---|---|
+| `SessionStart` | `source`: `startup`, `resume`, `clear`, `compact`, `fork` |
+| `UserPromptSubmit` | `turn_id`, `prompt` |
+| `PreToolUse` / `PermissionRequest` / `PostToolUse` | shell and `exec_command` appear as `Bash`; `apply_patch` matches `Edit`/`Write` |
+| `PreModelRequest` / `PostModelRequest` | every model request attempt; post has `status`, `token_usage` |
+| `Stop` | `turn_id`, `stop_hook_active`, `last_assistant_message`; `decision: "block"` creates a new continuation prompt "that acts as a new user prompt" |
+| `Interrupt` | the user interrupted an active main-thread turn: a direct, human-only action signal |
+| `SubagentStart` / `SubagentStop` | `agent_id`, `agent_type`, `agent_transcript_path` |
+| `PreCompact` / `PostCompact` | `trigger` manual/auto |
+| `SessionEnd` | archive/delete, normal exit, or 30 min idle with no client showing it; `reason` is always `other` |
+
+Cloud: Codex Cloud and Work Cloud don't run local hooks. Enterprise "cloud orchestration" supports only admin-configured global MCP hooks.
+
+### 6.2 Local transcripts and history
+
+| File | Path | Format | Retention |
+|---|---|---|---|
+| Rollouts (one per thread) | `$CODEX_HOME/sessions/YYYY/MM/DD/rollout-YYYY-MM-DDThh-mm-ss-<uuid>.jsonl` | JSONL lines `{"timestamp": "...", "type": "<item>", "payload": {...}}` | Kept; files untouched for 7 days are compressed in the background to `.jsonl.zst` (zstd). Archived threads move to `archived_sessions/` |
+| Typed-message history | `$CODEX_HOME/history.jsonl` | `{"session_id":"<uuid>","ts":<unix_seconds>,"text":"<message>"}` | `history.persistence` = `save-all` or `none` (config reference; `save-all` is the observed default, unverified); `history.max_bytes` trims oldest lines |
+| Logs | `$CODEX_HOME/log/` (`codex-tui.log` when `log_dir` is set) | text | |
+
+Rollout item types (`type`, snake_case): `session_meta`, `turn_context`, `response_item`, `event_msg`, `compacted`, `token_usage_record`, `inter_agent_communication`, `inter_agent_communication_metadata`, `dynamic_tools_updated`, `world_state`, `retained_context`, `security_risk_score`, `realtime_item`. `event_msg` payload types used by parsers: `user_message` (`message`, `images`), `agent_message`, `token_count`, `exec_command_end`, `patch_apply_end`, `task_started`, `task_complete`, `turn_aborted`.
+
+`session_meta.payload` is the most useful line in any harness log for telling automation apart: `id`, `session_id`, `timestamp`, `cwd`, `originator`, `cli_version`, `source`, `thread_source`, `forked_from_id`, `parent_thread_id`, `agent_role`, `agent_nickname`, `creator_user_id`. Values:
+
+- `source` (enum `SessionSource`): `cli`, `vscode` (the serde default), `exec`, `mcp`, `custom(<string>)`, `internal` (`memory_consolidation`, `guardian`), `subagent` (`review`, `compact`, `thread_spawn{parent_thread_id, depth, agent_role}`, `memory_consolidation`, `other`).
+- `thread_source`: `user`, `subagent`, `guardian_review`, `memory_consolidation`, or a feature name.
+- `originator` known values: `codex_cli_rs`, `codex-tui`, `codex-cli`, `codex_exec`, `codex_vscode`, `codex_desktop`, `codex-app-server`, `codex-app-server-sdk`, `codex_sdk_ts`, `codex_mcp_server`.
+
+A lookback reader can rebuild Codex sessions fully: per-line timestamps, the session's origin, user messages, tool runs and patches. It needs a zstd decoder for files older than a week.
+
+### 6.3 Telemetry
+
+`[otel]` in `~/.codex/config.toml`: `exporter = "none"` (default), `{ otlp-http = { endpoint = "...", protocol = "binary", headers = {...} } }` (the doc example uses `binary`; a JSON option is unverified) or `{ otlp-grpc = {...} }`; `log_user_prompt = false` by default; `log_agent_responses`; `metrics_exporter`. Log events: `codex.conversation_starts`, `codex.api_request`, `codex.sse_event`, `codex.websocket_request`/`_event`, `codex.user_prompt` (length; content only if enabled), `codex.agent_response`, `codex.tool_decision` (approved/denied, and whether config or user decided), `codex.tool_result`, `codex.guardian_assessment`. Metrics include `turn.e2e_duration_ms`, `turn.tool.call`, `turn.token_usage`, `tool.call`, `approval.requested` (`approved`, `approved_with_amendment`, `approved_for_session`, `denied`, `abort`), `conversation.turn.count`, `task.user_shell` (user `!` shell actions), `task.undo`, `thread.started`, `multi_agent.spawn`. Every metric carries `originator`, `session_source`, `auth_mode`, `model`, `app.version`. No metric measures human time. Separate from OTel, Codex sends anonymous usage metrics to OpenAI unless `analytics` is disabled.
+
+### 6.4 AGENTS.md, skills, MCP
+
+Codex is where AGENTS.md started and reads it most completely: global `~/.codex/AGENTS.override.md` or `AGENTS.md`, then one file per directory from the git root down to cwd (`AGENTS.override.md`, `AGENTS.md`, then `project_doc_fallback_filenames`), concatenated root first, capped at `project_doc_max_bytes` (32 KiB default). Discovery runs once per run, at session start. Skills (`SKILL.md`) and MCP (`[mcp_servers.<id>]` in `config.toml`) are supported; custom prompts are deprecated in favor of skills.
+
+### 6.5 Headless and autonomous runs
+
+| Mode | Tell |
+|---|---|
+| `codex exec "..."` | `session_meta.source = "exec"`, `originator = "codex_exec"`; OTel tags `session_source=exec`; `--json` streams `thread.started`, `turn.started`, `turn.completed`, `turn.failed`, `item.*`. `--ephemeral` writes no rollout at all |
+| Codex SDK (TypeScript/Python) | `originator = "codex_sdk_ts"`/`codex-app-server-sdk` |
+| Codex as an MCP server driven by another agent | `source = "mcp"`, `originator = "codex_mcp_server"` |
+| IDE extension / desktop app | `source = "vscode"`, `originator = "codex_vscode"`/`codex_desktop` |
+| Subagents, reviews, guardian | `source.subagent`, `thread_source`, `parent_thread_id`, `inter_agent_communication` items |
+| Stop-hook continuation | `Stop.stop_hook_active`; the continuation prompt is written like a user prompt (check whether it reaches `history.jsonl`; unverified) |
+| Codex Cloud tasks | not on the local disk; visible only as PRs/commits and in the ChatGPT UI |
+
 
 ## 7. Gemini CLI
 
-(pending)
+Sources: google-gemini/gemini-cli (Apache-2.0) at `615d6bc` (2026-11-18), release v0.69.0 (2026-11-19): `docs/hooks/index.md`, `docs/hooks/reference.md`, `docs/cli/telemetry.md`, `docs/cli/session-management.md`, `docs/cli/headless.md`, `docs/cli/gemini-md.md`, `docs/cli/checkpointing.md`, `docs/reference/configuration.md`; storage fields from wakatime-cli `gemini.go`.
+
+### 7.1 Hooks
+
+Defined in the `hooks` object of `settings.json`: project `.gemini/settings.json`, user `~/.gemini/settings.json`, system `/etc/gemini-cli/settings.json`, merged. `hooksConfig.enabled` defaults to `true`. Handler: `{"type": "command", "command": "...", "name": "...", "timeout": 60000}` (ms) inside `{"matcher": "...", "sequential": false, "hooks": [...]}`. Project hooks are fingerprinted: if a project hook's name or command changes, it counts as new and untrusted and the user is warned before it runs. User-level hooks don't need that step, so pairtime installs to `~/.gemini/settings.json`. Env vars `GEMINI_PROJECT_DIR` and `CLAUDE_PROJECT_DIR` (alias) are set.
+
+Base input on every event: `session_id`, `transcript_path`, `cwd`, `hook_event_name`, `timestamp` (ISO 8601).
+
+| Event | Fires | Extra input |
+|---|---|---|
+| `SessionStart` | startup, resume, `/clear` | `source`: `startup`, `resume`, `clear` |
+| `BeforeAgent` | after the user submits a prompt, before planning | `prompt` |
+| `AfterAgent` | once per turn after the final response | `prompt`, `prompt_response`, `stop_hook_active`; `decision: "deny"` + `reason` sends `reason` back as a new prompt (retry loop) |
+| `BeforeModel` / `AfterModel` / `BeforeToolSelection` | around each model call | request/response |
+| `BeforeTool` / `AfterTool` | around each tool | tool name, args, result |
+| `Notification` | system alert | `notification_type` (`ToolPermission`), `message`, `details` |
+| `PreCompress` | before history compression (async) | `trigger` auto/manual |
+| `SessionEnd` | exit or clear (CLI does not wait for it) | `reason`: `exit`, `clear`, `logout`, `prompt_input_exit`, `other` |
+
+### 7.2 Local transcripts
+
+| File | Path | Format |
+|---|---|---|
+| Sessions | `~/.gemini/tmp/<project_hash>/chats/session-*.json`; subagent sessions under `chats/<parent-session>/` | JSON: `sessionId`, `startTime`, `lastUpdated`, `messages[]` with `id`, `type`, `timestamp`, `content`, `tokens{input,output,cached,thoughts,tool,total}`, `model`, `toolCalls[]{id,name,args,result,status,timestamp}`; edit results carry `diffStat.model_added_lines`/`model_removed_lines`. Update records use `$set` and `$rewindTo` |
+| Prompt log | `~/.gemini/tmp/<project_hash>/logs.json` | JSON array of `{sessionId, type, message, timestamp}` (the typed prompts) |
+| Project map | `~/.gemini/projects.json`, `~/.gemini/tmp/<hash>/.project_root` | maps hashes back to paths |
+| Checkpoints | `~/.gemini/history/<project_hash>` (shadow git repo) and `~/.gemini/tmp/<project_hash>/checkpoints` | only when checkpointing is enabled |
+
+Retention: `general.sessionRetention.enabled` defaults to `true`, `maxAge` `"30d"`, `minRetention` `"1d"`. `~` is `%USERPROFILE%` on Windows. A lookback reader can rebuild 30 days of sessions with per-message timestamps.
+
+### 7.3 Telemetry
+
+`telemetry` block in `settings.json` (or env): `enabled` (`GEMINI_TELEMETRY_ENABLED`, default `false`), `target` `local`/`gcp`, `otlpEndpoint` (default `http://localhost:4317`), `otlpProtocol` `grpc`/`http`, `outfile` (overrides the endpoint), `logPrompts` (default `true`, so pairtime must set it to `false` if it doesn't want prompt text in its own stream). Common attributes: `session.id`, `installation.id`, `active_approval_mode`, `user.email`.
+
+Log events include `gemini_cli.config` (with `output_format`, `approval_mode`, and GitHub Actions fields `github_workflow_name`, `github_event_name`, which identify CI runs), `gemini_cli.user_prompt` (`prompt_length`, `prompt_id`, `prompt`), `gemini_cli.tool_call` (with the user's decision), `gemini_cli.edit_correction`, `gemini_cli.rewind`, `gemini_cli.conversation_finished`, `gemini_cli.agent.start`/`.finish`, `gemini_cli.hook_call`, `gemini_cli.ide_connection`. Metrics include `gemini_cli.session.count`, `gemini_cli.lines.changed`, `gemini_cli.agent.duration`, `gemini_cli.agent.turns`, `gemini_cli.tool.call.count`. Nothing measures human time.
+
+The User-Agent carries a surface tag: `terminal`, `vscode` (Gemini Code Assist agent mode, `GeminiCLI-a2a-server`), `zed`, `xcode`, `jetbrains` (via ACP), or a custom `GEMINI_CLI_SURFACE`. Gemini CLI is the agent inside Gemini Code Assist and is commonly driven from Zed and JetBrains over ACP, so one set of hooks covers those surfaces too.
+
+### 7.4 Context files, extensions, MCP
+
+Gemini CLI reads `GEMINI.md` by default (global `~/.gemini/GEMINI.md`, then the project hierarchy and subdirectories). It reads `AGENTS.md` only if the user sets `context.fileName`, e.g. `["AGENTS.md", "GEMINI.md"]`. So an AGENTS.md-only integration does nothing here by default; pairtime would write to `~/.gemini/GEMINI.md` or set `context.fileName`. Extensions (`gemini extensions install`) bundle MCP servers, context files and commands; MCP servers go under `mcpServers` in `settings.json`.
+
+### 7.5 Headless
+
+Headless when stdin is not a TTY or with `-p/--prompt`; `--output-format json` or `stream-json` (`init`, `message`, `tool_use`, `tool_result`, `error`, `result`). Hooks still fire (`SessionStart` additional context is prepended to the prompt in non-interactive mode). The `gemini_cli.config` event records `output_format` and GitHub workflow fields. `--yolo`/approval mode shows in `active_approval_mode`.
+
 
 ## 8. Windsurf
 

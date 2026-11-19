@@ -228,7 +228,28 @@ Two details matter for pairtime:
 
 ### 1.9 Anti-fraud and trust
 
-(pending)
+What Hackatime itself provides:
+
+| Tool | Where | What it does |
+|---|---|---|
+| Trust levels | `users.trust_level`, `User#set_trust`, `trust_level_audit_logs` | `blue` unscored, `green` trusted, `yellow` suspected (shown to the user and to public APIs as `blue`), `red` convicted. Every change needs a reason (`POST /api/admin/v1/user/convict` refuses an empty `reason`) and is logged with the actor. Only superadmin and above can set `red`, and the actor must outrank the target |
+| Effects of `red` | `api_access_restricted?`, `LeaderboardUpdateJob` | Off leaderboards; OAuth and read APIs refused. Heartbeat ingestion still works (`allow_restricted: true`) |
+| Poison | `heartbeat_exclusions` kind `poison`, `POST/DELETE /api/admin/v1/poison/:hackatime_id` | Hides every heartbeat before a cutoff date from all reads without deleting them; revocable |
+| Leaderboard shadowban | `users.leaderboard_shadowbanned*`, `/api/admin/v1/leaderboard_shadowbans` | Hidden from leaderboards with a reason and optional expiry; the user isn't told |
+| Alt detection | `GET /api/admin/v1/alts/candidates`, `alts/shared_machines`, `heartbeats/ip_machine_pairs`, `user/get_users_by_ip`, `user/get_users_by_machine` | Finds accounts sharing a machine name and IP address within a lookback window (default 30 days) |
+| Client fingerprints | `heartbeats.user_agent` (trigram index), `heartbeats.ja4_id`, `GET /api/admin/v1/heartbeats/by_user_agent_segment` | Search by user-agent fragment; JA4 TLS fingerprints from Cloudflare can expose a script posting heartbeats with a faked editor user agent |
+| Quantized visualization | `GET /api/admin/v1/users/:id/visualization/quantized?year&month` | For each day, plots heartbeat `lineno` and `cursorpos` against time on a 400 x 100 grid, with daily totals. Scripted heartbeats show up as flat or regular patterns |
+| Admin timeline | `/admin/timeline`, `app/services/timeline_service.rb` | Several users' days side by side: spans with entity, project, editor and language, plus GitHub commit markers |
+| Raw data | `GET /api/admin/v1/user/heartbeats`, `user/heartbeat_values`, `user/stats`, `user/projects`, `user/trust_logs`, `user/info_batch` | Program and fraud tooling reads |
+| Audit | PaperTrail `versions`, `admin_api_keys` with scopes and expiry jobs | Who changed what |
+
+What the Fraud Department says publicly ([fraud.hackclub.com](https://fraud.hackclub.com/), fetched 2026-11-19):
+
+- "The fraud department uses certain metrics to attempt to detect people unfairly gaining hours on Hackatime." The signals are kept secret, and the page admits "sometimes we misjudge Hackatime data."
+- A flag blocks one project from one event; a ban restricts the account. "If you use AI to write or hold the conversation for you, we will turn down your appeal and ban you permanently."
+- Evidence for an appeal is VS Code's local history folder (`%APPDATA%\Code\User\History` on Windows, `~/.config/Code/User/History` on Linux, `~/Library/Application Support/Code/User/History` on macOS), or for other editors "a timelapse of your screen while coding". It adds that "your Hackatime activity should line up with your previous activity."
+
+Programs add their own checks on top of Hackatime. Stardance's integrity review (section 3.3) sets bit flags such as `cursor_strange`, `unknown_file`, `entropy_anomaly` and `neuralnet`, and keeps the signal definitions in a private secrets submodule (`app/helpers/admin/certification/integrity_helper.rb`: "the public repo never carries the signal names itself"). Two lessons follow for pairtime. Detection rules that are public get gamed, so the open-source client can't be where trust comes from. And whatever pairtime uploads has to be rich enough for reviewers to run their own checks on it.
 
 ### 1.10 Hosting, scale, cost
 
@@ -286,7 +307,36 @@ What this means for counting:
 
 ### 3.3 How programs reviewed and approved hours
 
-(pending)
+#### Stardance (summer 2026)
+
+Source: [hackclub/stardance](https://github.com/hackclub/stardance) at `b1d3e0eac1ae`. Stardance is a Rails app deployed on Coolify (`README.md`). Its admin "hour funnel" (`app/services/admin/hour_funnel.rb`) lists every stage an hour passes through, which makes it the clearest description of the pipeline:
+
+1. Devlogged. A participant links Hackatime projects (`hackatime_keys`) to a Stardance project and posts devlogs. Each devlog claims the Hackatime time since the previous one.
+2. Shipped, then ship certification (`Certification::Ship`): a reviewer checks the project works. States include approved, pending, returned to the builder, resubmitted, misfiled, withdrawn and rejected.
+3. YSWS review (`Certification::Ysws`, the "GOI" review in comments): a reviewer approves, marks down or rejects each devlog's minutes (`devlog_reviews.approved_minutes` against `original_minutes`, each with a justification). A review under `MIN_APPROVED_MINUTES` is rejected; the funnel labels it "Review rejected (under 6 min)".
+4. Integrity check (`Certification::Integrity`, software only; hardware skips it). Status `auto_passed`, `pending`, `manually_passed`, `deducted` (with `deduction_minutes`) or `banned`. Automatic checks fill `flags` (bits: `unknown_file`, `cursor_strange`, `neuralnet`, `no_hackatime_user`, `check_failed`, `entropy_anomaly`) and `fraud_detection_data` (JSON, signal names codenamed). Reviewers claim a check for 20 minutes (`CLAIM_TTL`). The review page draws a treemap of heartbeat share by file. A ban cascades to the project's other pending checks and rejects its YSWS queue. A deduction claws back the currency ("stardust") paid for those hours.
+5. Airtable sync (`Certification::YswsAirtableSyncJob`) into Stardance's own "YSWS Project Submission" table, from which Hack Club's automation fills the Unified DB (section 3.1).
+6. Payout cap: "Within 10h/devlog payout cap" (`Post::ShipEvent::MAX_PAYOUT_HOURS_PER_DEVLOG`).
+
+Hours sent to Airtable are `(sum of approved devlog minutes - integrity deduction minutes) / 60`, rounded to 2 decimals, in `Optional - Override Hours Spent`. The justification text is generated, and it records the raw Hackatime figure next to the approved one:
+
+```text
+The user logged <original> on hackatime. (This was adjusted to <approved> after review.)
+<commit activity sentence>
+Further deducted by <h> hours by the fraud department for hour fraud. Reason: <...>
+In this time they wrote <n> devlogs. Of which <a> were approved and <r> rejected.
+This project was initially ship certified by <name>.
+Following this it was YSWS reviewed by <name>
+devlog <id>: <minutes> min <status>: "<reviewer note>"
+...
+Passed automatic heartbeat checks. | Hours deducted during manual review. | ...
+The Stardance project can be found at https://stardance.hackclub.com/projects/<id>
+The Full YSWS Review + devlogs are at https://stardance.hackclub.com/admin/certification/review/<id>
+```
+
+Other fields Stardance writes per submission (`build_airtable_fields`): `review_id`, `ship_event_id`, `ship_cert_id`, `user_slack_id`, `Email`, `First Name`, `Last Name`, `Birthday`, address fields, `project_name`, `ai_declaration`, `project_update_description`, `Code URL`, `Playable URL`, `readme_url`, `Description`, `Screenshot`, `reviewer`, `ship_certifier`, `reviewed_at`, `ship_certed_at`, `rejection_reason`, `rejected_at`, `ship_start`, `ship_end`, `report_status`, `integrity_id`, `integrity_status`, `integrity_flags`, `fraud_data`, `flagged_double_dipped`, `hackatime_uid` and `hackatime_keys`.
+
+This is where BOUNTY.md R9's numbers come from: 123,400 Hackatime hours submitted to Stardance, 27,600 approved so far. Every hour went through a person who decided how much of the raw Hackatime figure to keep. The tracker supplies the starting number and the evidence; the program's reviewers decide the hours. A tracker that makes step 3 faster and more consistent is what program authors would value.
 
 ### 3.4 What a new tracker must provide
 
