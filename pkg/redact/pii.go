@@ -236,8 +236,10 @@ func ibanAt(s string, i int) int {
 
 // validIBAN is IbanRecognizer.validate_result on a value without
 // separators: the check digits must be the ones ISO 13616 computes, and
-// the value must have its country's format. Presidio only anchors the
-// format at the start; this anchors both ends.
+// the value must start with its country's format. Like Presidio, the
+// format is only anchored at the start, which its table relies on: the
+// entries for Mauritius, Palestine, Portugal and Qatar are shorter than
+// those countries' IBANs.
 func validIBAN(v string) bool {
 	if len(v) < 5 {
 		return false
@@ -265,7 +267,7 @@ func validIBAN(v string) bool {
 	if fmt.Sprintf("%02d", 98-rem) != v[2:4] {
 		return false
 	}
-	re, err := regexp.Compile("^(?:" + format + ")$")
+	re, err := regexp.Compile("^(?:" + format + ")")
 	return err == nil && re.MatchString(v)
 }
 
