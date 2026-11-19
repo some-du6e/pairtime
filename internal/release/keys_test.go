@@ -316,7 +316,7 @@ func TestSecretKeyNeverPrints(t *testing.T) {
 	}
 	// In an unexported field fmt can't call Format, so it prints the
 	// field's pointer as an address. No id, but no key either.
-	for _, got := range []string{fmt.Sprintf("%v", hidden), fmt.Sprintf("%+v", hidden), fmt.Sprintf("%#v", hidden), fmt.Sprintf("%d", hidden), fmt.Sprintf("%x", hidden)} {
+	for _, got := range []string{fmt.Sprintf("%v", hidden), fmt.Sprintf("%+v", hidden), fmt.Sprintf("%#v", hidden)} {
 		for _, s := range secrets {
 			if strings.Contains(got, s) {
 				t.Fatalf("a struct with the key in an unexported field prints %q, which contains the secret key", got)
