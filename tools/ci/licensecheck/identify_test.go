@@ -80,6 +80,9 @@ func TestIdentifyVariants(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// CodeRabbit's example of a condition that uses none of conditionRE's
+	// words.
+	const france = "Redistribution outside France constitutes copyright infringement."
 	mustReplace := func(s, old, new string) string {
 		if !strings.Contains(s, old) {
 			t.Fatalf("test text lacks %q", old)
@@ -112,6 +115,13 @@ func TestIdentifyVariants(t *testing.T) {
 		{name: "a restriction in the holder's name fails", text: mustReplace(mit, "EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS", "EVENT SHALL THE AUTHORS, WHO FORBID COMMERCIAL USE,")},
 		{name: "a restriction in place of a bullet fails", text: mustReplace(bsd2, "1. Redistributions of source", "No sale. Redistributions of source")},
 		{name: "a restriction in Apache-2.0's appendix fails", text: mustReplace(apache, "Copyright [yyyy] [name of copyright owner]", "Copyright 2024 Foo Inc. Not for commercial use.")},
+		{name: "a sentence on its own line under MIT's copyright fails", text: mustReplace(mit, "Copyright (c) <year> <copyright holders>", "Copyright (c) <year> <copyright holders>\n\n"+france)},
+		{name: "a sentence on its own line under ISC's copyright fails", text: mustReplace(isc, "Copyright <year> <owner>", "Copyright <year> <owner>\n"+france)},
+		{name: "a sentence on its own line under BSD-2-Clause's copyright fails", text: mustReplace(bsd2, "Copyright (c) <year> <owner>", "Copyright (c) <year> <owner>\n"+france)},
+		{name: "a sentence on its own line under BSD-3-Clause's copyright fails", text: mustReplace(bsd3, "Copyright (c) <year> <owner>.", "Copyright (c) <year> <owner>.\n"+france)},
+		{name: "a sentence above the copyright line fails", text: mustReplace(bsd2, "Copyright (c) <year> <owner>", france+"\nCopyright (c) <year> <owner>")},
+		{name: "a title and a rule above the copyright line are fine", text: mustReplace(bsd3, "Copyright (c) <year> <owner>.", "BSD 3-Clause License\n====================\n\nCopyright (c) 2020, Example Corp.\nAll rights reserved."), want: "BSD-3-Clause"},
+		{name: "a title on the copyright line is fine", text: mustReplace(mit, "MIT License\n\nCopyright (c) <year> <copyright holders>", "MIT License Copyright (c) 2020 Example Corp."), want: "MIT"},
 		{name: "a GPL mention in the copyright lines fails", text: mustReplace(mit, "Copyright (c) <year> <copyright holders>", "Copyright (c) 2016 A. Some files are under the GNU General Public License."), want: ""},
 		{name: "BSD-3-Clause without its third clause is BSD-2-Clause", text: bsd3[:strings.Index(bsd3, "3. Neither")] + bsd3[strings.Index(bsd3, "THIS SOFTWARE"):], want: "BSD-2-Clause"},
 		{name: "MIT and GPL texts in one file fail", text: mit + "\n" + string(gpl)},
@@ -156,11 +166,81 @@ func TestCompileTemplateErrors(t *testing.T) {
 		{name: "an unclosed optional part is an error", template: "a <<begin>> b"},
 		{name: "an unopened optional part is an error", template: "a <<end>> b"},
 		{name: "a bad variable regexp is an error", template: "a <<var:(>> b"},
+		{name: "a bad text regexp is an error", template: "a <<text:(>> b"},
+		{name: "two heads are an error", template: "<<head:.*>> a <<head:.*>> b"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			if _, err := compileTemplate(tt.template); err == nil {
 				t.Errorf("compileTemplate(%q) succeeded, want an error", tt.template)
+			}
+		})
+	}
+}
+
+func TestHeadLineOK(t *testing.T) {
+	tests := []struct {
+		name string
+		line string
+		want bool
+	}{
+		{name: "a copyright line is fine", line: "Copyright (c) 2016 Zalando SE", want: true},
+		{name: "a line starting with (c) is fine", line: "(c) 2016 Example Corp.", want: true},
+		{name: "a Markdown bullet before Copyright is fine", line: "* Copyright 2009 The Go Authors.", want: true},
+		{name: "all rights reserved is fine", line: "All rights reserved.", want: true},
+		{name: "a license title is fine", line: "The MIT License (MIT)", want: true},
+		{name: "a title naming the variant is fine", line: "BSD 2-Clause 'Simplified' License", want: true},
+		{name: "a rule of punctuation is fine", line: "====================", want: true},
+		{name: "a sentence fails", line: "Redistribution is limited to schools.", want: false},
+		{name: "a sentence that mentions copyright fails", line: "Redistribution outside France constitutes copyright infringement.", want: false},
+		{name: "a title with other words fails", line: "The MIT License applies only in France", want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := headLineOK(tt.line); got != tt.want {
+				t.Errorf("headLineOK(%q) = %v, want %v", tt.line, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestHeadLines(t *testing.T) {
+	tests := []struct {
+		name     string
+		original string
+		head     string
+		want     []string
+	}{
+		{
+			name:     "each line of the head comes back normalized",
+			original: "Copyright \u00a9 2012 The Go Authors.\nCopyright \u00a9 fsnotify Authors.\n\nRedistribution and use...",
+			head:     "Copyright (c) 2012 The Go Authors. Copyright (c) fsnotify Authors.",
+			want:     []string{"Copyright (c) 2012 The Go Authors.", "Copyright (c) fsnotify Authors."},
+		},
+		{
+			name:     "lines before the head are skipped",
+			original: "MIT License\n\nCopyright (c) 2020 A\n\nPermission is hereby granted...",
+			head:     "Copyright (c) 2020 A",
+			want:     []string{"Copyright (c) 2020 A"},
+		},
+		{
+			name:     "a head that ends mid-line keeps only its part",
+			original: "Copyright (c) 2020 A Permission is hereby granted...",
+			head:     "Copyright (c) 2020 A",
+			want:     []string{"Copyright (c) 2020 A"},
+		},
+		{
+			name:     "lines that don't add up give the head as one line",
+			original: "Copyright (c) 2020 A\nsomething else",
+			head:     "Copyright (c) 2020 A B",
+			want:     []string{"Copyright (c) 2020 A B"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := headLines(tt.original, tt.head)
+			if strings.Join(got, "|") != strings.Join(tt.want, "|") {
+				t.Errorf("headLines() = %q, want %q", got, tt.want)
 			}
 		})
 	}

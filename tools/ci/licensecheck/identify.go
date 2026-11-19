@@ -18,9 +18,10 @@ var Allowed = []string{"MIT", "BSD-2-Clause", "BSD-3-Clause", "Apache-2.0", "ISC
 
 // The templates follow the SPDX License List's matching templates: the
 // license text, with <<var:REGEX>> where real copies word it differently,
-// <<text:REGEX>> where they put free text (copyright lines, the holder's
-// name, list bullets), and <<begin>>...<<end>> around text a copy may leave
-// out (titles, Apache's appendix). Literal text is matched without regard
+// <<text:REGEX>> where they put free text (the holder's name, list
+// bullets), <<head:REGEX>> for the copyright lines and title above the
+// license, and <<begin>>...<<end>> around text a copy may leave out (titles,
+// Apache's appendix). Literal text is matched without regard
 // to case, spacing, quote style or the spelling "licence"; a REGEX is
 // matched against the text after that normalization.
 //
@@ -50,9 +51,10 @@ var otherLicenses = []string{
 
 // conditionRE finds the words of an added condition ("Redistribution is
 // prohibited without written permission") in a template's free text, which
-// should hold only copyright notices, names and bullets. A clause worded to
-// dodge it can still get through, so a reviewer reads a new dependency's
-// license too.
+// should hold only copyright notices, names and bullets. Each line of the
+// head must also be a copyright notice or a title (headLineOK). A clause
+// that avoids these words and sits on a copyright line can still get
+// through, so a reviewer reads a new dependency's license too.
 var conditionRE = regexp.MustCompile(`\b(prohibit\w*|restrict\w*|forbid\w*|not|no|without|except\w*|unless|only|solely|must|shall|may|cannot|requir\w*|consent\w*|permission\w*|permit\w*|commercial\w*|sell\w*|sale\w*|fees?|pay\w*|royalt\w*|terms?|conditions?|agree\w*|evil)\b`)
 
 type template struct {
@@ -99,6 +101,10 @@ func identify(text string) (id, reason string) {
 			why = fmt.Sprintf("it has the %s text, but the part that should be only copyright lines and names says %q, which reads as an added condition (%q)", t.id, shorten(text, 80), word)
 			continue
 		}
+		if line := badHeadLine(text, t.re, m); line != "" {
+			why = fmt.Sprintf("it has the %s text, but the line %q above it is neither a copyright notice nor a license title", t.id, shorten(line, 80))
+			continue
+		}
 		ids = append(ids, t.id)
 	}
 	switch len(ids) {
@@ -111,11 +117,11 @@ func identify(text string) (id, reason string) {
 	}
 }
 
-// addedCondition returns the first <<text>> part of a match that contains a
-// condition word, and the word.
+// addedCondition returns the first <<text>> or <<head>> part of a match
+// that contains a condition word, and the word.
 func addedCondition(re *regexp.Regexp, m []string) (text, word string) {
 	for i, name := range re.SubexpNames() {
-		if !strings.HasPrefix(name, "text") || m[i] == "" {
+		if !(strings.HasPrefix(name, "text") || name == "head") || m[i] == "" {
 			continue
 		}
 		if w := conditionRE.FindString(strings.ToLower(m[i])); w != "" {
@@ -123,6 +129,90 @@ func addedCondition(re *regexp.Regexp, m []string) (text, word string) {
 		}
 	}
 	return "", ""
+}
+
+// badHeadLine returns the first line of a match's <<head>> part that
+// headLineOK rejects, or "".
+func badHeadLine(original string, re *regexp.Regexp, m []string) string {
+	i := re.SubexpIndex("head")
+	if i < 0 || strings.TrimSpace(m[i]) == "" {
+		return ""
+	}
+	for _, line := range headLines(original, m[i]) {
+		if !headLineOK(line) {
+			return line
+		}
+	}
+	return ""
+}
+
+// headLines splits a template's matched head back into the file's lines,
+// each normalized. The head is matched on the whole normalized text, which
+// has no line breaks, so this walks the original lines until their
+// normalized forms add up to the head. The line that holds the head's end
+// may go on into the license text; only its head part is kept. Lines before
+// the head, such as a title the template matched itself, are skipped. When
+// the lines don't add up, it returns the head as one line.
+func headLines(original, head string) []string {
+	head = strings.TrimSpace(head)
+	var lines []string
+	acc := ""
+	for _, line := range strings.Split(original, "\n") {
+		n := normalize(line)
+		if n == "" {
+			continue
+		}
+		if acc == head {
+			break
+		}
+		next := n
+		if acc != "" {
+			next = acc + " " + n
+		}
+		switch {
+		case strings.HasPrefix(head, next):
+			lines = append(lines, n)
+			acc = next
+		case strings.HasPrefix(next, head):
+			lines = append(lines, strings.TrimSpace(strings.TrimPrefix(head, acc)))
+			acc = head
+		case acc != "":
+			return []string{head}
+		}
+	}
+	if acc != head {
+		return []string{head}
+	}
+	return lines
+}
+
+var (
+	wordRE = regexp.MustCompile(`[\p{L}\p{N}]+`)
+	// titleWords are the words of a license title ("The MIT License (MIT)",
+	// "BSD 3-Clause License") and of "All rights reserved".
+	titleWords = map[string]bool{
+		"the": true, "mit": true, "isc": true, "iscl": true, "bsd": true, "expat": true, "x11": true,
+		"license": true, "new": true, "simplified": true, "modified": true, "revised": true,
+		"clause": true, "0": true, "2": true, "3": true, "spdx": true, "identifier": true,
+		"all": true, "rights": true, "reserved": true,
+	}
+)
+
+// headLineOK reports whether a line above a license's text is a copyright
+// notice, a title, "All rights reserved", or a rule of punctuation.
+func headLineOK(line string) bool {
+	lower := strings.TrimLeft(strings.ToLower(line), "#*- ")
+	for _, start := range []string{"copyright", "(c)", "portions copyright"} {
+		if strings.HasPrefix(lower, start) {
+			return true
+		}
+	}
+	for _, w := range wordRE.FindAllString(lower, -1) {
+		if !titleWords[w] {
+			return false
+		}
+	}
+	return true
 }
 
 // shorten cuts s to at most n runes, marking the cut.
@@ -179,13 +269,13 @@ func literal(s string) []string {
 	return parts
 }
 
-var markerRE = regexp.MustCompile(`(?s)<<(begin|end|var:.*?|text:.*?)>>`)
+var markerRE = regexp.MustCompile(`(?s)<<(begin|end|var:.*?|text:.*?|head:.*?)>>`)
 
 // compileTemplate turns a template into one anchored, case-insensitive
 // regular expression.
 func compileTemplate(t string) (*regexp.Regexp, error) {
 	stack := [][]string{nil}
-	pos, texts := 0, 0
+	pos, texts, heads := 0, 0, 0
 	for _, m := range markerRE.FindAllStringSubmatchIndex(t, -1) {
 		top := len(stack) - 1
 		stack[top] = append(stack[top], literal(t[pos:m[0]])...)
@@ -205,11 +295,17 @@ func compileTemplate(t string) (*regexp.Regexp, error) {
 			if _, err := syntax.Parse(expr, syntax.Perl); err != nil {
 				return nil, fmt.Errorf("<<%s>>: %v", tag, err)
 			}
-			if kind == "text" {
-				// Named, so identify can screen it for added conditions.
+			// text and head parts are named, so identify can screen them.
+			switch kind {
+			case "text":
 				texts++
 				stack[top] = append(stack[top], fmt.Sprintf(`(?P<text%d>%s)`, texts, expr))
-			} else {
+			case "head":
+				if heads++; heads > 1 {
+					return nil, errors.New("more than one <<head>>")
+				}
+				stack[top] = append(stack[top], `(?P<head>`+expr+`)`)
+			default:
 				stack[top] = append(stack[top], `(?:`+expr+`)`)
 			}
 		}
