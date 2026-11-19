@@ -114,3 +114,68 @@ func TestTypeValid(t *testing.T) {
 		t.Errorf("typeOrder has %d types, want 18", len(typeOrder))
 	}
 }
+
+func TestTokens(t *testing.T) {
+	// The ledger spec's worked example (docs/spec/ledger-v1.md 10.10): 15
+	// tokens, and token 7 is "src/nav.js:12" at bytes 18 to 31.
+	spec := "still broken, see src/nav.js:12\r\nTypeError: x is undefined"
+	tests := []struct {
+		name  string
+		text  string
+		spans []Span
+		want  []Span
+	}{
+		{"a span inside a token takes the whole token", spec,
+			[]Span{{Start: 22, End: 28, Type: TypePrivate}},
+			[]Span{{Start: 18, End: 31, Type: TypePrivate}}},
+		{"an email address inside punctuation takes its token", "write to email:teen@example.com, ok",
+			[]Span{{Start: 15, End: 31, Type: TypeEmail}},
+			[]Span{{Start: 9, End: 32, Type: TypeEmail}}},
+		{"a span already on token edges stays", "Maya Kowalski said",
+			[]Span{{Start: 0, End: 13, Type: TypeGitName}},
+			[]Span{{Start: 0, End: 13, Type: TypeGitName}}},
+		{"two spans in one token become one", "key=abc:def",
+			[]Span{{Start: 4, End: 7, Type: TypeSecret}, {Start: 8, End: 11, Type: TypeDeny}},
+			[]Span{{Start: 0, End: 11, Type: TypeDeny}}},
+		{"a span that ends inside whitespace takes the whole run", "a  b",
+			[]Span{{Start: 0, End: 2, Type: TypeDeny}},
+			[]Span{{Start: 0, End: 3, Type: TypeDeny}}},
+		{"a no-break space separates tokens like any whitespace", "x y z",
+			[]Span{{Start: 3, End: 4, Type: TypeDeny}},
+			[]Span{{Start: 3, End: 4, Type: TypeDeny}}},
+		{"spans outside the text are dropped", "abc",
+			[]Span{{Start: 5, End: 9, Type: TypeDeny}, {Start: -2, End: 1, Type: TypeDeny}},
+			nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := Tokens(tt.text, tt.spans); !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("Tokens = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestReveal(t *testing.T) {
+	want := map[Type]string{
+		TypeAccount: "known", TypeHome: "known", TypeHost: "known", TypeGitName: "known", TypeGitEmail: "known",
+		TypeGitHub: "known", TypeHCA: "known", TypePrivate: "known", TypeDeny: "known",
+		TypeSecret: "secret",
+		TypeCard:   "pii", TypeIBAN: "pii", TypeUSSSN: "pii", TypeUKNINO: "pii", TypeAadhaar: "pii", TypeEmail: "pii",
+		TypeCode:   "code",
+		TypeManual: "teen",
+	}
+	for _, typ := range typeOrder {
+		t.Run(string(typ), func(t *testing.T) {
+			if got := typ.Reveal(); got != want[typ] {
+				t.Errorf("%q.Reveal() = %q, want %q", typ, got, want[typ])
+			}
+		})
+	}
+	if len(want) != len(typeOrder) {
+		t.Errorf("the table covers %d types, typeOrder has %d", len(want), len(typeOrder))
+	}
+	if got := Type("name").Reveal(); got != "" {
+		t.Errorf(`an unknown type reveals as %q, want ""`, got)
+	}
+}

@@ -7,6 +7,8 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 )
 
 // Type is the marker a removed span carries. It says what kind of thing was
@@ -52,6 +54,27 @@ var typeOrder = []Type{
 
 // Valid reports whether t is one of the types above.
 func (t Type) Valid() bool { return slices.Contains(typeOrder, t) }
+
+// Reveal is the type a ledger reveal gives a span with type t: "known",
+// "secret", "pii", "code" or "teen", the closed list of the ledger spec's
+// redacted reveal (docs/spec/ledger-v1.md 10.3, WP-LG3). A reveal shows
+// that coarser type, so it can't carry more than which step removed the
+// span. Reveal returns "" for a type that isn't valid.
+func (t Type) Reveal() string {
+	switch t {
+	case TypeAccount, TypeHome, TypeHost, TypeGitName, TypeGitEmail, TypeGitHub, TypeHCA, TypePrivate, TypeDeny:
+		return "known"
+	case TypeSecret:
+		return "secret"
+	case TypeCard, TypeIBAN, TypeUSSSN, TypeUKNINO, TypeAadhaar, TypeEmail:
+		return "pii"
+	case TypeCode:
+		return "code"
+	case TypeManual:
+		return "teen"
+	}
+	return ""
+}
 
 func (t Type) rank() int {
 	if i := slices.Index(typeOrder, t); i >= 0 {
@@ -146,6 +169,57 @@ func Render(text string, spans []Span) string {
 	}
 	b.WriteString(text[at:])
 	return b.String()
+}
+
+// Tokens rounds each span out to the whole tokens it touches, which is
+// what a reveal can remove: a token is a maximal run of whitespace, as
+// unicode.IsSpace has it, or of other characters (docs/spec/ledger-v1.md
+// 10.2). So an email address inside "email:teen@example.com," takes the
+// whole token with it. Spans that overlap once rounded are merged as Merge
+// does; spans outside text are dropped.
+func Tokens(text string, spans []Span) []Span {
+	out := make([]Span, 0, len(spans))
+	for _, s := range spans {
+		s.End = min(s.End, len(text))
+		if s.Start < 0 || s.Start >= s.End {
+			continue
+		}
+		s.Start = tokenStart(text, s.Start)
+		s.End = tokenEnd(text, s.End)
+		out = append(out, s)
+	}
+	return Merge(out)
+}
+
+// tokenStart returns where the token holding byte i starts.
+func tokenStart(text string, i int) int {
+	for i > 0 && !utf8.RuneStart(text[i]) {
+		i--
+	}
+	r, _ := utf8.DecodeRuneInString(text[i:])
+	space := unicode.IsSpace(r)
+	for i > 0 {
+		p, size := utf8.DecodeLastRuneInString(text[:i])
+		if unicode.IsSpace(p) != space {
+			break
+		}
+		i -= size
+	}
+	return i
+}
+
+// tokenEnd returns where the token holding byte e-1 ends.
+func tokenEnd(text string, e int) int {
+	last, _ := utf8.DecodeLastRuneInString(text[:e])
+	space := unicode.IsSpace(last)
+	for e < len(text) {
+		r, size := utf8.DecodeRuneInString(text[e:])
+		if unicode.IsSpace(r) != space {
+			break
+		}
+		e += size
+	}
+	return e
 }
 
 // sortSpans sorts spans by start, longest first, and drops exact repeats.
