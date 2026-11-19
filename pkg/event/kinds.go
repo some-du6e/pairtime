@@ -83,7 +83,8 @@ type PromptSubmit struct {
 	LowEffort          bool           `json:"low_effort"`
 	// SealedText is the prompt text, encrypted on the device before the
 	// event is written; base64 in JSON. Plain prompt text never goes in a
-	// prompt.submit event.
+	// prompt.submit event. The one event field that holds it is
+	// cli.track's label, which is local too.
 	SealedText []byte `json:"text,omitempty" pairtime:"local"`
 }
 
@@ -281,8 +282,10 @@ type EditorActivity struct {
 	// Editor names the editor as a key, such as "vscode" or "neovim".
 	Editor string    `json:"editor"`
 	Act    EditorAct `json:"act"`
-	// FileHash is the file's path as an opaque key keyed per device, in
-	// the same form as agent.tool's files (DESIGN 4.1 E-10, 5.7).
+	// FileHash is the file's path as an opaque key keyed per device: an
+	// HMAC under a device key, in the same form as agent.tool's files,
+	// never a plain hash a reader could recompute from a guessed path
+	// (DESIGN 4.1 E-10, 5.7).
 	FileHash     string     `json:"file_hash,omitempty"`
 	LinesChanged int        `json:"lines_changed"`
 	EditSource   EditSource `json:"edit_source"`
@@ -311,8 +314,9 @@ type ShellCommand struct {
 	// command ran.
 	TEnd        int64 `json:"t_end"`
 	Interactive bool  `json:"interactive"`
-	// ErrorSig is an opaque key in agent.tool's form: HMAC(K_feat,
-	// signature) truncated to 16 bytes (DESIGN 3.6, 4.1 E-10).
+	// ErrorSig is the signature of an error in the command's output, as an
+	// opaque key in agent.tool's form: HMAC(K_feat, signature) truncated to
+	// 16 bytes (DESIGN 3.6, 4.1 E-10).
 	ErrorSig string `json:"error_sig,omitempty"`
 }
 

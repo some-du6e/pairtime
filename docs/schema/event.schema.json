@@ -134,7 +134,7 @@
         "matches_pending_cron": {"type": "boolean"},
         "answers_question": {"type": "boolean"},
         "low_effort": {"type": "boolean"},
-        "text": {"type": "string", "contentEncoding": "base64", "pattern": "^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$", "x-local": true, "description": "The prompt text, encrypted on the device; standard padded base64. Plain prompt text never goes in an event."}
+        "text": {"type": "string", "contentEncoding": "base64", "pattern": "^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$", "x-local": true, "description": "The prompt text, encrypted on the device; standard padded base64. Plain prompt text never goes in a prompt.submit event. The one event field that holds it is cli.track's label, which is local too."}
       }
     },
     "agent.output": {
@@ -158,12 +158,12 @@
       "required": ["tool_class", "lines_added", "lines_removed", "visible_output_lines", "t_start", "t_end"],
       "properties": {
         "tool_class": {"$ref": "#/$defs/tool_class"},
-        "files": {"$ref": "#/$defs/key_list", "description": "Per-device hashes of the paths the tool touched."},
+        "files": {"$ref": "#/$defs/key_list", "description": "The paths the tool touched, each as an opaque key keyed per device: an HMAC under a device key, never a plain hash a reader could recompute from a guessed path. editor.activity's file_hash takes the same form, so an agent's edit and a person's edit of one file compare equal."},
         "lines_added": {"$ref": "#/$defs/count"},
         "lines_removed": {"$ref": "#/$defs/count"},
         "cmd_hash": {"$ref": "#/$defs/key", "x-local": true, "description": "Hash of the normalized command, for tools that run one."},
         "exit_code": {"type": "integer", "description": "Absent for tools that don't run a process."},
-        "error_sig": {"$ref": "#/$defs/key"},
+        "error_sig": {"$ref": "#/$defs/key", "description": "The signature of an error in the tool's output, as an opaque key: HMAC(K_feat, signature) truncated to 16 bytes, so revealing it in tier 2 leaks nothing a guess can test."},
         "visible_output_lines": {"$ref": "#/$defs/count"},
         "t_start": {"$ref": "#/$defs/unix_ms"},
         "t_end": {"$ref": "#/$defs/unix_ms", "description": "Not before t_start."}
@@ -239,7 +239,7 @@
       "properties": {
         "editor": {"$ref": "#/$defs/key", "description": "The editor, such as vscode or neovim."},
         "act": {"$ref": "#/$defs/editor_act"},
-        "file_hash": {"$ref": "#/$defs/key", "description": "Per-device hash of the file's path."},
+        "file_hash": {"$ref": "#/$defs/key", "description": "The file's path as an opaque key keyed per device: an HMAC under a device key, in the same form as agent.tool's files, never a plain hash a reader could recompute from a guessed path."},
         "lines_changed": {"$ref": "#/$defs/count"},
         "edit_source": {"$ref": "#/$defs/edit_source"}
       }
@@ -256,7 +256,7 @@
         "t_start": {"$ref": "#/$defs/unix_ms"},
         "t_end": {"$ref": "#/$defs/unix_ms", "description": "Not before t_start; equal to it when the run's length is unknown."},
         "interactive": {"type": "boolean"},
-        "error_sig": {"$ref": "#/$defs/key"}
+        "error_sig": {"$ref": "#/$defs/key", "description": "The signature of an error in the command's output, as an opaque key in agent.tool's form: HMAC(K_feat, signature) truncated to 16 bytes."}
       }
     },
     "git.change": {
