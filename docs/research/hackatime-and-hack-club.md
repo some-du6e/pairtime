@@ -420,7 +420,28 @@ Rough cost check (my arithmetic, not from the docs): 1.1 MB per minute is about 
 
 ## 5. Dark flow (fast.ai)
 
-(pending)
+Source: Rachel Thomas, "Breaking the Spell of Vibe Coding", fast.ai, 2026-01-28 ([fast.ai/posts/2026-01-28-dark-flow](https://www.fast.ai/posts/2026-01-28-dark-flow/), fetched 2026-11-19). Zach's vision post links it to say that time in dark flow "shouldn't count" (BOUNTY.md).
+
+The argument:
+
+- Real flow (Csikszentmihalyi) needs a goal, rules, "clear clues as to how well one is performing", and challenge matched to skill.
+- "Dark flow" is a term from gambling research ([PMC5846824](https://pmc.ncbi.nlm.nih.gov/articles/PMC5846824/)) for the absorption slot machines produce. It keeps the absorption and breaks the other conditions: luck drives outcomes while players credit their skill, and feedback is blurred by the "Loss Disguised as a Win" (you bet 20 cents, "win" 15 with celebration sounds, and are 5 cents down). Thomas also equates it with Csikszentmihalyi's "junk flow".
+- Vibe coding fits that pattern: it "does not provide clear clues of how well one is performing", "the match between challenge level and skill level is murky", and it gives "a false sense of control" and "a misleading feeling of agency" (the user picks among options the model offers).
+- Evidence cited: Armin Ronacher's "agent psychosis" post ("I spent two months excessively prompting the thing and wasting tokens"; tools he "felt really great about" that he never used), and METR's study, in which experienced developers "take 19% longer" with AI tools yet "still believed AI had sped them up by 20%" ([METR, 2025-07-10](https://metr.org/blog/2025-07-10-early-2025-ai-experienced-os-dev-study/): 16 developers, 246 real issues, mostly Cursor Pro with Claude 3.5/3.7 Sonnet). The METR page now says "These results are out of date" and points to a February 2026 follow-up.
+- On measurement: in junk or dark flow "we lose our ability to accurately assess our productivity levels and the quality of our work", and "individuals are terrible judges of their own productivity."
+
+The post names no detection signals and gives no advice to tool builders. What follows is my reading of how it should shape a struggle metric:
+
+| The post says | So the metric should |
+|---|---|
+| Absorption and screen time aren't evidence of flow | Never count raw wall time, agent runtime, token volume or line counts as struggle. They are the "Loss Disguised as a Win" (R2, R9) |
+| Real flow has clear feedback about performance | Credit the moments a person closes a feedback loop: reading or reviewing a diff, running the code or the tests, inspecting output, a fix after a failure, a manual edit to AI output (R2) |
+| Dark flow is compulsive and repetitive (Ronacher's months of prompting); Zach adds "doing the same thing over and over again" | Detect re-roll loops: near-duplicate prompts in a short window, accept-then-revert cycles, regenerations with no edit or test in between. Count the first attempt and stop counting the repeats (R2, R9) |
+| Agency is often illusory: the user picks among AI options | Weight prompts that change direction (new constraints, a rejected approach, a specific bug report) above "continue", "fix it" or "try again" (R2) |
+| Self-assessment is unreliable (METR's 39-point gap between perceived and measured speed) | Don't use self-reported hours or self-ratings as the hour number. Show the user the measured split instead, which is also the self-improvement hook R3 asks for |
+| Output that "felt great" was never used | Tie hours to a shipped artifact. The vision post's "The project must do what it says it does" (BOUNTY.md) makes the ship check part of the count (A) |
+
+One caution: a metric that can be read off the client can be gamed. If pairtime publishes "a prompt with more than N characters within M minutes of a test run counts", people will script exactly that. The definitions can be public (R1 needs that), but the final number should come from server-side checks against evidence. That is how Hackatime and Stardance already work (section 1.9).
 
 ## 6. Strategy
 
