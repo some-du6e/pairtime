@@ -135,21 +135,22 @@ func TestKindTable(t *testing.T) {
 	zeroIsValid := map[Kind]bool{KindSessionEnd: true, KindCLITrack: true, KindOSPresence: true}
 	seen := map[Kind]bool{}
 	for _, k := range ks {
-		if seen[k] {
-			t.Errorf("kind %q is registered twice", k)
-		}
-		seen[k] = true
-		p := newPayload(k)
-		if p == nil {
-			t.Errorf("newPayload(%q) = nil", k)
-			continue
-		}
-		if p.Kind() != k {
-			t.Errorf("newPayload(%q).Kind() = %q", k, p.Kind())
-		}
-		if err := p.Validate(); (err == nil) != zeroIsValid[k] {
-			t.Errorf("a zero %s payload: Validate() = %v, want valid = %v", k, err, zeroIsValid[k])
-		}
+		t.Run(string(k), func(t *testing.T) {
+			if seen[k] {
+				t.Errorf("kind %q is registered twice", k)
+			}
+			seen[k] = true
+			p := newPayload(k)
+			if p == nil {
+				t.Fatalf("newPayload(%q) = nil", k)
+			}
+			if p.Kind() != k {
+				t.Errorf("newPayload(%q).Kind() = %q", k, p.Kind())
+			}
+			if err := p.Validate(); (err == nil) != zeroIsValid[k] {
+				t.Errorf("a zero %s payload: Validate() = %v, want valid = %v", k, err, zeroIsValid[k])
+			}
+		})
 	}
 	if newPayload("agent.telepathy") != nil {
 		t.Error("newPayload accepted an unknown kind")
@@ -210,6 +211,10 @@ func TestEventValidate(t *testing.T) {
 		{"automation flags are keys", KindSessionStart, func(e *Event) {
 			e.Data.(*SessionStart).AutomationFlags = []string{"ok", "not a key"}
 		}, "data.automation_flags[1]:"},
+		{"session.end reason is a key", KindSessionEnd, func(e *Event) { e.Data.(*SessionEnd).Reason = "user quit" }, "data.reason:"},
+		{"agent.interrupt has a turn", KindAgentInterrupt, func(e *Event) { e.Data.(*AgentInterrupt).TurnKey = "" }, "data.turn_key:"},
+		{"agent.queue has a turn", KindAgentQueue, func(e *Event) { e.Data.(*AgentQueue).TurnKey = "" }, "data.turn_key:"},
+		{"agent.queue len_chars isn't negative", KindAgentQueue, func(e *Event) { e.Data.(*AgentQueue).LenChars = -1 }, "data.len_chars: must not be negative"},
 		{"typed_len_est adds up", KindPromptSubmit, func(e *Event) { e.Data.(*PromptSubmit).TypedLenEst = 140 }, "data.typed_len_est: must be len_chars - pasted_chars = 100"},
 		{"pasted_chars fits in len_chars", KindPromptSubmit, func(e *Event) {
 			p := e.Data.(*PromptSubmit)
@@ -337,10 +342,12 @@ func TestEventJSONGolden(t *testing.T) {
 }
 
 func TestEventMarshalWithoutData(t *testing.T) {
-	for _, data := range []Payload{nil, (*OSPower)(nil)} {
-		if b, err := json.Marshal(Event{Envelope: sample(t, KindOSPower).Envelope, Data: data}); err == nil {
-			t.Errorf("Marshal with data %#v = %s, want an error", data, b)
-		}
+	for name, data := range map[string]Payload{"nil": nil, "typed nil": (*OSPower)(nil)} {
+		t.Run(name, func(t *testing.T) {
+			if b, err := json.Marshal(Event{Envelope: sample(t, KindOSPower).Envelope, Data: data}); err == nil {
+				t.Errorf("Marshal with data %#v = %s, want an error", data, b)
+			}
+		})
 	}
 }
 
@@ -413,9 +420,11 @@ func TestLocalFields(t *testing.T) {
 		KindAgentStop:    {"pending_crons"},
 	}
 	for _, k := range Kinds() {
-		if got := localJSONNames(t, k); !slices.Equal(got, want[k]) {
-			t.Errorf("%s local fields = %q, want %q", k, got, want[k])
-		}
+		t.Run(string(k), func(t *testing.T) {
+			if got := localJSONNames(t, k); !slices.Equal(got, want[k]) {
+				t.Errorf("%s local fields = %q, want %q", k, got, want[k])
+			}
+		})
 	}
 }
 
@@ -508,18 +517,20 @@ func TestReason(t *testing.T) {
 		{"", false, false, ""},
 	}
 	for _, tt := range tests {
-		if got := tt.r.Credited(); got != tt.credited {
-			t.Errorf("Reason(%q).Credited() = %v, want %v", tt.r, got, tt.credited)
-		}
-		if got := tt.r.Uncredited(); got != tt.uncredited {
-			t.Errorf("Reason(%q).Uncredited() = %v, want %v", tt.r, got, tt.uncredited)
-		}
-		if got := tt.r.Activity(); got != tt.activity {
-			t.Errorf("Reason(%q).Activity() = %q, want %q", tt.r, got, tt.activity)
-		}
-		if got := tt.r.Valid(); got != (tt.credited || tt.uncredited) {
-			t.Errorf("Reason(%q).Valid() = %v", tt.r, got)
-		}
+		t.Run(strconv.Quote(string(tt.r)), func(t *testing.T) {
+			if got := tt.r.Credited(); got != tt.credited {
+				t.Errorf("Reason(%q).Credited() = %v, want %v", tt.r, got, tt.credited)
+			}
+			if got := tt.r.Uncredited(); got != tt.uncredited {
+				t.Errorf("Reason(%q).Uncredited() = %v, want %v", tt.r, got, tt.uncredited)
+			}
+			if got := tt.r.Activity(); got != tt.activity {
+				t.Errorf("Reason(%q).Activity() = %q, want %q", tt.r, got, tt.activity)
+			}
+			if got := tt.r.Valid(); got != (tt.credited || tt.uncredited) {
+				t.Errorf("Reason(%q).Valid() = %v", tt.r, got)
+			}
+		})
 	}
 }
 
@@ -536,18 +547,20 @@ func TestForeignPayload(t *testing.T) {
 	if !ok {
 		t.Fatalf("sample prompt.submit has data %T", e.Data)
 	}
-	for _, data := range []Payload{embedded{ps, "raw prompt"}, &embedded{ps, "raw prompt"}} {
-		f := e
-		f.Data = data
-		if err := f.Validate(); err == nil || !strings.Contains(err.Error(), "is not the payload type") {
-			t.Errorf("Validate(%T) = %v, want a payload type error", data, err)
-		}
-		s := f.Shareable()
-		if s.Data != nil {
-			t.Errorf("Shareable(%T) kept data %T", data, s.Data)
-		}
-		if _, err := json.Marshal(s); err == nil {
-			t.Errorf("Shareable(%T) produced an event that marshals", data)
-		}
+	for name, data := range map[string]Payload{"value": embedded{ps, "raw prompt"}, "pointer": &embedded{ps, "raw prompt"}} {
+		t.Run(name, func(t *testing.T) {
+			f := e
+			f.Data = data
+			if err := f.Validate(); err == nil || !strings.Contains(err.Error(), "is not the payload type") {
+				t.Errorf("Validate(%T) = %v, want a payload type error", data, err)
+			}
+			s := f.Shareable()
+			if s.Data != nil {
+				t.Errorf("Shareable(%T) kept data %T", data, s.Data)
+			}
+			if _, err := json.Marshal(s); err == nil {
+				t.Errorf("Shareable(%T) produced an event that marshals", data)
+			}
+		})
 	}
 }

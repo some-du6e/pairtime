@@ -480,8 +480,14 @@ func (r Rollup) Validate() error {
 		c.addf("end", "is before start")
 	}
 	c.seconds("credited_s", r.CreditedS)
+	// One timeline per person: a second of wall time earns at most a
+	// second of credit (SM 3.1, SM 5.1).
+	if window := r.End.Sub(r.Start).Seconds(); !r.End.Before(r.Start) && r.CreditedS > window+sumTolerance {
+		c.addf("credited_s", "is %v s, more than the %v s from start to end", r.CreditedS, window)
+	}
 	c.sumsTo("credited_by_reason", breakdown(c, "credited_by_reason", r.CreditedByReason, Reason.Credited), "credited_s", r.CreditedS)
 	c.sumsTo("credited_by_kind", breakdown(c, "credited_by_kind", r.CreditedByKind, activities.has), "credited_s", r.CreditedS)
+	checkKindsMatchReasons(c, r.CreditedByReason, r.CreditedByKind)
 	breakdown(c, "uncredited", r.Uncredited, Reason.Uncredited)
 	if len(r.CreditedByEvidence) > 0 {
 		c.sumsTo("credited_by_evidence", breakdown(c, "credited_by_evidence", r.CreditedByEvidence, evidences.has), "credited_s", r.CreditedS)
@@ -508,8 +514,39 @@ func (r Rollup) Validate() error {
 		c.addf("totals", "is for submission rollups only, got level %q", r.Level)
 	case r.Totals != nil:
 		c.within("totals", r.Totals.check)
+		// The uncommitted cap (SM 4.3) only removes credit.
+		if r.Totals.CreditedS > r.CreditedS+totalsTolerance {
+			c.addf("totals.credited_s", "is %v s, more than the rollup's %v s", r.Totals.CreditedS, r.CreditedS)
+		}
 	}
 	return c.err()
+}
+
+// checkKindsMatchReasons checks credited_by_kind against credited_by_reason
+// activity by activity. Each credit reason counts as exactly one activity,
+// so agreeing on the total isn't enough.
+func checkKindsMatchReasons(c *checker, byReason map[Reason]float64, byKind map[Activity]float64) {
+	fromReasons := map[Activity]float64{}
+	for reason, s := range byReason {
+		if a := reason.Activity(); a != "" {
+			fromReasons[a] += s
+		}
+	}
+	acts := slices.Collect(maps.Keys(fromReasons))
+	for a := range byKind {
+		if _, ok := fromReasons[a]; !ok {
+			acts = append(acts, a)
+		}
+	}
+	slices.Sort(acts)
+	for _, a := range acts {
+		if !activities.has(a) {
+			continue // breakdown already reported the key
+		}
+		if math.Abs(fromReasons[a]-byKind[a]) > sumTolerance {
+			c.addf("credited_by_kind", "has %v s of %s, but credited_by_reason puts %v s there", byKind[a], a, fromReasons[a])
+		}
+	}
 }
 
 // SubmissionTotals are the totals of a submission (SM 5.3) and the numbers

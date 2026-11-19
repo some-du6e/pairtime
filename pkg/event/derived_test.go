@@ -102,6 +102,7 @@ func validSubmission() Rollup {
 	tot := sm54Totals()
 	r := validRollup()
 	r.Level = LevelSubmission
+	r.End = r.Start.Add(7 * 24 * time.Hour) // a week of work, so 5.9 h fits
 	r.CreditedS = tot.CreditedS
 	r.CreditedByReason = map[Reason]float64{ReasonPrompt: 9000, ReasonSupervise: 4000, ReasonRead: 3560, ReasonEdit: 3000, ReasonTest: 1680}
 	r.CreditedByKind = map[Activity]float64{ActivityPrompting: 9000, ActivitySupervising: 4000, ActivityReadingOutput: 3560,
@@ -287,6 +288,11 @@ func TestRollupValidate(t *testing.T) {
 		{"by reason uses credit reasons", func(r *Rollup) { r.CreditedByReason = map[Reason]float64{ReasonAbsent: 120} }, "credited_by_reason: has an invalid key"},
 		{"by kind sums to credited", func(r *Rollup) { r.CreditedByKind[ActivityPrompting] = 1 }, "credited_by_kind: sums to 41"},
 		{"by kind uses activities", func(r *Rollup) { r.CreditedByKind["napping"] = 0 }, "credited_by_kind: has an invalid key"},
+		{"by kind matches by reason", func(r *Rollup) {
+			r.CreditedByKind = map[Activity]float64{ActivityPrompting: 40, ActivityReadingOutput: 80}
+		}, "but credited_by_reason puts 80 s there"},
+		{"credit fits the window", func(r *Rollup) { r.End = r.Start.Add(time.Minute) }, "credited_s: is 120 s, more than the 60 s from start to end"},
+		{"totals stay within the rollup", func(r *Rollup) { *r = validSubmission(); r.Totals.CreditedS += 100 }, "totals.credited_s: is 21340 s, more than the rollup's 21240 s"},
 		{"uncredited uses X codes", func(r *Rollup) { r.Uncredited[ReasonPrompt] = 1 }, "uncredited: has an invalid key"},
 		{"by evidence sums to credited", func(r *Rollup) { r.CreditedByEvidence[EvidenceC] = 5 }, "credited_by_evidence: sums to 125"},
 		{"by project is for days", func(r *Rollup) { r.CreditedByProject = map[string]float64{"p_9f2c": 120} }, "credited_by_project: is for day rollups only"},
