@@ -1,11 +1,16 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
-# The only place pairtime is built and tested. One job on purpose: the
-# account's Actions capacity is shared with another busy project.
+# Every PR's build and tests. One Linux job on purpose: the account's Actions
+# capacity is shared with another busy project, so new Linux checks join this
+# job as steps (DESIGN 3.13). The other workflows are path-filtered or manual;
+# AGENTS.md lists them.
 name: ci
 
 on:
   pull_request:
+    # labeled and unlabeled rerun the job when Karim adds or removes the
+    # oracle-change label, which the oracle guard reads.
+    types: [opened, synchronize, reopened, labeled, unlabeled]
   push:
     branches: [main]
   workflow_dispatch:
@@ -32,6 +37,10 @@ jobs:
     steps:
       # Actions are pinned to commit SHAs; tags can be moved. Dependabot bumps them.
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          # A PR is checked out as its merge commit; depth 2 brings its first
+          # parent, the base, for the oracle guard's diff.
+          fetch-depth: 2
 
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
@@ -130,3 +139,53 @@ jobs:
             esac
           done
           exit "$fail"
+
+      # The checks below run even when an earlier step failed, so one run
+      # reports every problem.
+
+      - name: Module licenses
+        if: ${{ !cancelled() }}
+        run: |
+          # Every module pairtime's packages and tests import, for each OS it
+          # ships on, must be MIT, BSD-2-Clause, BSD-3-Clause, Apache-2.0 or
+          # ISC (DESIGN 3.12). licensecheck exits 1 on a bad license.
+          tool="$RUNNER_TEMP/licensecheck"
+          go build -o "$tool" ./tools/ci/licensecheck
+          "$tool"
+
+          # The check must keep catching a GPL-3.0 module pulled in through a
+          # replace, and keep passing an MIT one (testdata/licensecheck).
+          "$tool" -C testdata/licensecheck/good
+          set +e
+          out=$("$tool" -C testdata/licensecheck/bad 2>&1)
+          code=$?
+          set -e
+          echo "$out"
+          if [ "$code" -ne 1 ] || ! grep -q '^::error::example.com/licensecheck/gpl@v0.0.0 => ../gpl: LICENSE:' <<<"$out"; then
+            echo "::error::licensecheck no longer rejects the GPL-3.0 module seeded in testdata/licensecheck/bad (exit $code)"
+            exit 1
+          fi
+          echo "the seeded GPL-3.0 module was rejected, as it should be"
+
+      - name: Fixture provenance
+        if: ${{ !cancelled() }}
+        # Every testdata/fixtures/<harness>/<version>/<os>/ directory has a
+        # PROVENANCE.md (DESIGN 5.1). fixtures.yml runs the same check by hand.
+        run: go run ./tools/ci/provenance testdata/fixtures
+
+      - name: Shell scripts
+        if: ${{ !cancelled() }}
+        run: |
+          # shellcheck comes with the runner image.
+          scripts=$(git ls-files -- '*.sh')
+          if [ -n "$scripts" ]; then
+            shellcheck $scripts
+          fi
+
+      - name: Oracle guard
+        # A PR may not change an existing oracle together with the code it
+        # checks, unless Karim adds the oracle-change label (docs/PLAN.md,
+        # ground rule 5). The labels come from the event payload.
+        if: ${{ !cancelled() && github.event_name == 'pull_request' }}
+        run: |
+          git -c core.quotePath=false diff --name-status -M HEAD^1 HEAD | bash tools/ci/oracle_guard.sh

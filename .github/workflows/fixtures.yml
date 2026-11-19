@@ -10,6 +10,10 @@ name: fixtures
 
 on:
   workflow_dispatch:
+  pull_request:
+    # Only to try out changes to this workflow on their own PR.
+    paths:
+      - .github/workflows/fixtures.yml
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
