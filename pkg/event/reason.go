@@ -115,6 +115,13 @@ var uncreditedReasons = enum[Reason]{values: []Reason{
 	ReasonAutopilot, ReasonNoProgress, ReasonLookupCap, ReasonBucketCap, ReasonDayCap,
 }}
 
+// darkFlowReasons are SM 4.2's discounts, the reasons a rule applies to an
+// anchor. The no-progress half rate isn't one: it weighs a project's
+// seconds, not anchors (SM 4.3).
+var darkFlowReasons = enum[Reason]{values: []Reason{
+	ReasonReroll, ReasonRewriteLoop, ReasonSameError, ReasonAutopilot,
+}}
+
 // Base returns r without RestoredSuffix and ReturnedSuffix. Each may
 // appear once, in that order, so "P+restored~r" has no base.
 func (r Reason) Base() Reason {

@@ -37,10 +37,13 @@ const (
 	KindCLITrack        Kind = "cli.track"
 )
 
-// kindRule says what may produce events of a kind (SM 1.2).
+// kindRule says what may produce events of a kind (SM 1.2) and how the
+// agent may receive them (DESIGN 4.1 E-2).
 type kindRule struct {
 	// sources, when set, are the only sources the kind comes from.
 	sources []Source
+	// vias, when set, are the only ways the agent receives the kind.
+	vias []Via
 	// noSession kinds come from no harness: harness and session_key are
 	// both "none".
 	noSession bool
@@ -50,13 +53,15 @@ type kindRule struct {
 }
 
 var (
-	fromOS      = kindRule{sources: []Source{SourceOS}, noSession: true}
+	fromOS      = kindRule{sources: []Source{SourceOS}, vias: []Via{ViaOS}, noSession: true}
 	fromHarness = kindRule{inSession: true}
 	fromAnyone  = kindRule{}
 )
 
 // kindTable lists every kind in SM 1.2 order with its payload type and
-// rule. It is the one place a new kind has to be registered in Go.
+// rule. It is the one place a new kind has to be registered in Go. The
+// ledger numbers record types in this order (DESIGN 3.6), so a new kind
+// goes at the end.
 var kindTable = []struct {
 	kind  Kind
 	alloc func() Payload
@@ -74,12 +79,12 @@ var kindTable = []struct {
 	{KindAgentSubagent, func() Payload { return new(AgentSubagent) }, fromHarness},
 	{KindEditorActivity, func() Payload { return new(EditorActivity) }, fromAnyone},
 	{KindShellCommand, func() Payload { return new(ShellCommand) }, fromAnyone},
-	{KindGitChange, func() Payload { return new(GitChange) }, kindRule{sources: []Source{SourceGit}, noSession: true}},
+	{KindGitChange, func() Payload { return new(GitChange) }, kindRule{sources: []Source{SourceGit}, vias: []Via{ViaGit}, noSession: true}},
 	{KindOSPresence, func() Payload { return new(OSPresence) }, fromOS},
 	{KindOSFocus, func() Payload { return new(OSFocus) }, fromOS},
 	{KindOSPower, func() Payload { return new(OSPower) }, fromOS},
-	{KindOTelActiveTime, func() Payload { return new(OTelActiveTime) }, kindRule{sources: []Source{SourceOTel}}},
-	{KindCLITrack, func() Payload { return new(CLITrack) }, kindRule{sources: []Source{SourceCLI, SourceMCP}}},
+	{KindOTelActiveTime, func() Payload { return new(OTelActiveTime) }, kindRule{sources: []Source{SourceOTel}, vias: []Via{ViaOTel}}},
+	{KindCLITrack, func() Payload { return new(CLITrack) }, kindRule{sources: []Source{SourceCLI, SourceMCP}, vias: []Via{ViaTrack}}},
 }
 
 var kinds = enum[Kind]{name: "kind", values: func() []Kind {
@@ -138,14 +143,18 @@ type Payload interface {
 // session: OS and git events (SM 1.1).
 const NoSession = "none"
 
-// Envelope holds the fields every event carries (SM 1.1).
+// Envelope holds the fields every event carries: SM 1.1's, without
+// chain_hash and with via (DESIGN 4.1 E-1, E-2). The ledger's Merkle
+// batches and batch chain replace the per-event hash chain (DESIGN 3.6),
+// because a linear chain would force revealing every event in a window.
 type Envelope struct {
 	// EventID is a UUIDv7 in canonical lowercase text form; see NewEventID.
 	EventID string `json:"event_id"`
 	// DeviceID is a random per-install id, never derived from hardware.
 	DeviceID string `json:"device_id"`
 	// Seq is the per-device sequence number, gapless from 1. The server
-	// uses it for exactly-once ingest.
+	// uses it for exactly-once ingest. The agent assigns it when it writes
+	// the event, so whatever an adapter or plugin sends is overwritten.
 	Seq uint64 `json:"seq"`
 	// T is the client's wall time, in Unix milliseconds UTC, when the
 	// adapter saw the event.
@@ -154,8 +163,11 @@ type Envelope struct {
 	// moment, so the server can re-anchor T within one boot.
 	Mono int64 `json:"mono"`
 	// BootID is Linux's boot_id, or an id generated per boot elsewhere.
-	BootID  string  `json:"boot_id"`
-	Source  Source  `json:"source"`
+	BootID string `json:"boot_id"`
+	// Source is what the record claims produced it.
+	Source Source `json:"source"`
+	// Via is how the agent received it, set by the agent; see [Via].
+	Via     Via     `json:"via"`
 	Harness Harness `json:"harness"`
 	// HarnessVersion is the harness's version as it reports it.
 	HarnessVersion string `json:"harness_version,omitempty"`
@@ -166,9 +178,6 @@ type Envelope struct {
 	// working directory, the repo's root commits or a hashed folder path.
 	// It is empty when no project applies, as for most OS events.
 	ProjectKey string `json:"project_key,omitempty"`
-	// ChainHash links this event to the previous one in the device's hash
-	// chain (TP A3, SP 8.5).
-	ChainHash Hash `json:"chain_hash"`
 }
 
 // Event is one normalized event: the envelope plus a kind-specific
@@ -240,7 +249,12 @@ func (e *Event) UnmarshalJSON(b []byte) error {
 
 // Validate reports every rule e breaks (SM 1.1, 1.2), or nil. Errors name
 // fields by JSON path, such as "data.typed_len_est". The schema in
-// docs/schema/event.schema.json states the same rules.
+// docs/schema/event.schema.json states the same rules for each field and
+// kind, but not the ones that compare two fields, such as typed_len_est =
+// len_chars - pasted_chars or t_end not before t_start; only Validate
+// checks those. The schema's "integer" also accepts 1e3 and 12.0, which
+// encoding/json refuses for an int field, so integers must be written as
+// integer literals.
 func (e Event) Validate() error {
 	c := &checker{}
 	checkEnvelope(c, e.Envelope)
@@ -269,6 +283,7 @@ func checkEnvelope(c *checker, e Envelope) {
 	}
 	c.key("boot_id", e.BootID)
 	checkEnum(c, "source", sources, e.Source)
+	checkEnum(c, "via", vias, e.Via)
 	checkEnum(c, "harness", harnesses, e.Harness)
 	c.text("harness_version", e.HarnessVersion, 64)
 	c.key("session_key", e.SessionKey)
@@ -277,11 +292,14 @@ func checkEnvelope(c *checker, e Envelope) {
 
 // checkKindRules checks the envelope against the kind's rule: OS and git
 // events have no harness or session, a few kinds come from one source
-// only, and harness events belong to a session.
+// and arrive one way only, and harness events belong to a session.
 func checkKindRules(c *checker, e Envelope, k Kind) {
 	r := ruleFor(k)
 	if r.sources != nil && !slices.Contains(r.sources, e.Source) {
 		c.addf("source", "%s events come from %q, got %q", k, r.sources, e.Source)
+	}
+	if r.vias != nil && !slices.Contains(r.vias, e.Via) {
+		c.addf("via", "%s events arrive via %q, got %q", k, r.vias, e.Via)
 	}
 	if r.noSession {
 		if e.Harness != HarnessNone {
@@ -332,29 +350,6 @@ func clearLocal(v reflect.Value) {
 			v.Field(i).SetZero()
 		}
 	}
-}
-
-// Hash is a SHA-256 digest. JSON and text forms are 64 lowercase hex
-// digits.
-type Hash [32]byte
-
-func (h Hash) String() string { return hex.EncodeToString(h[:]) }
-
-// MarshalText implements encoding.TextMarshaler.
-func (h Hash) MarshalText() ([]byte, error) {
-	b := make([]byte, hex.EncodedLen(len(h)))
-	hex.Encode(b, h[:])
-	return b, nil
-}
-
-// UnmarshalText implements encoding.TextUnmarshaler. It accepts only the
-// canonical form, 64 lowercase hex digits.
-func (h *Hash) UnmarshalText(b []byte) error {
-	if !isHex(string(b), 2*len(h)) {
-		return fmt.Errorf("event: a hash must be %d lowercase hex digits, got %q", 2*len(h), b)
-	}
-	_, err := hex.Decode(h[:], b)
-	return err
 }
 
 // NewEventID returns a new UUIDv7 (RFC 9562) whose timestamp is t: 48 bits

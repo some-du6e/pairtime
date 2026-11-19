@@ -19,9 +19,14 @@
 //
 //	{"event_id": "0193f6a1-2b3c-7d4e-8f00-112233445566", "device_id": "d_7f3a9c",
 //	 "seq": 18301, "t": 1795046500000, "mono": 81163000, "boot_id": "b_51c2",
-//	 "source": "os", "harness": "none", "session_key": "none",
-//	 "chain_hash": "<64 hex digits>", "kind": "os.presence",
+//	 "source": "os", "via": "os", "harness": "none", "session_key": "none",
+//	 "kind": "os.presence",
 //	 "data": {"idle_any_s": 3.5, "idle_keys_s": null, "locked": false}}
+//
+// Source is what a record claims produced it; via is how the pairtime
+// agent received it, and the agent sets via itself (DESIGN 4.1 E-2). The
+// envelope has no hash chain: the ledger's Merkle batches replace it
+// (DESIGN 3.6).
 //
 // # Local fields
 //
@@ -31,6 +36,11 @@
 // struct tag pairtime:"local" (and "x-local": true in the schema), and
 // [Event.Shareable] clears them. Call it on anything about to leave the
 // device.
+//
+// The ledger doesn't store local fields either. pkg/ledger derives keyed
+// scorer features and content commitments from them with the device keys,
+// then writes the event's Shareable form, so the server can re-score a
+// submitted window without ever seeing them (DESIGN 3.6, 4.1).
 //
 // # Validation
 //
@@ -44,7 +54,11 @@
 //
 // Identifiers that stand in for something private (devices, sessions,
 // turns, projects, files) are opaque keys of 1 to 128 letters, digits, '_'
-// or '-', keyed per device so nobody can recompute one from a guess. A path,
-// a command line or an email address can't pass as one. Digests of content,
-// such as command-line hashes, are local fields, not keys.
+// or '-', keyed per device so nobody can recompute one from a guess. The
+// format rejects separators, spaces, dots and '@', so a path, a command
+// line with arguments or an email address can't pass as a key. A bare
+// name like "Makefile" can, so the keying keeps a key private, not the
+// format. Digests of content, such as command-line hashes, are local
+// fields, not keys. The exception is a digest keyed so that a guess can't
+// be tested, such as agent.tool's error_sig (DESIGN 3.6).
 package event

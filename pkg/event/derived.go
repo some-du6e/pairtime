@@ -5,13 +5,17 @@ package event
 import (
 	"maps"
 	"math"
+	"reflect"
 	"slices"
 	"time"
 )
 
 // The records the scorer derives from events, in the order it builds them
-// (SM 1.3). All of them stay on the device except MinuteBucket and Rollup,
-// which are uploaded and carry numbers, reason codes and event ids only.
+// (SM 1.3). All of them stay on the device except the minute bucket, which
+// is the tier-1 upload. Its Shareable form carries numbers and codes only,
+// no event ids (DESIGN 4.1 E-5, 4.3). Rollups are summed on both sides: the
+// device keeps its own for local views (DESIGN 3.5), and the server sums
+// the buckets it receives (DESIGN 3.10).
 
 // SlotMS is the length of a slot in milliseconds. The 15-second slot is
 // the atomic unit of credit because it is the presence sample rate.
@@ -119,46 +123,135 @@ var activities = enum[Activity]{values: []Activity{
 	ActivityTesting, ActivityDebugging, ActivityHandEdit, ActivityLookup,
 }}
 
-// Evidence is how strong the evidence behind credited seconds is (SM 5.1).
+// Evidence is how strong the evidence behind credited seconds is: SM 5.1's
+// levels with DESIGN 6.4's provenance rule, which also looks at the
+// anchor's via.
 type Evidence string
 
 const (
-	// EvidenceA is witnessed, present by OS input, with anchors backed by
-	// keyboard input.
+	// EvidenceA is witnessed, or offline within DESIGN 6.2 D6's
+	// conditions; present by OS input; with an anchor backed by keyboard
+	// input (input_keys) that arrived via hook, log, shell, git or editor,
+	// or a track, plugin or bridge anchor with keyboard input in the host
+	// window in the 10 s before it.
 	EvidenceA Evidence = "A"
-	// EvidenceB is witnessed and present by OS input, without a
-	// keyboard-specific signal.
+	// EvidenceB is witnessed, or offline within D6's conditions; present by
+	// OS input with no keyboard-specific signal (input_any only); with an
+	// anchor that arrived via hook, log, shell, git or editor.
 	EvidenceB Evidence = "B"
-	// EvidenceC is backfilled, or presence unknown (lookback).
+	// EvidenceC is everything else: backfilled and lookback minutes, track,
+	// plugin and bridge anchors without keyboard corroboration,
+	// editor_unverified anchors, and offline minutes beyond the cap or
+	// without the forge push.
 	EvidenceC Evidence = "C"
 )
 
 var evidences = enum[Evidence]{values: []Evidence{EvidenceA, EvidenceB, EvidenceC}}
 
-// BucketState is a minute bucket's state (SM 5.1).
+// Label is a provenance label carried beside an evidence level. Labels
+// never change a level (DESIGN 6.4). DESIGN 6.4's sixth label,
+// editor_typing, isn't in v1 (DESIGN 5.11, 12 JB 3).
+type Label string
+
+const (
+	// LabelViaTrack marks credit that rests on a `pairtime track` anchor,
+	// whatever its level (DESIGN 5.4, 12 JB 3).
+	LabelViaTrack Label = "via_track"
+	// LabelViaPlugin marks credit that rests on a plugin anchor.
+	LabelViaPlugin Label = "via_plugin"
+	// LabelViaBridge marks credit that rests on a WakaTime bridge anchor,
+	// verified or not.
+	LabelViaBridge Label = "via_bridge"
+	// LabelTypingModule marks an anchor whose keyboard evidence came from
+	// the opt-in typing module (DESIGN 6.2 D16).
+	LabelTypingModule Label = "typing_module"
+	// LabelVM marks an anchor scored on a machine labeled as a VM, where the
+	// typing module alone can't make it level A (DESIGN 6.2 D17).
+	LabelVM Label = "vm"
+)
+
+var (
+	// anchorLabels are the labels an anchor may carry.
+	anchorLabels = enum[Label]{values: []Label{
+		LabelViaTrack, LabelViaPlugin, LabelViaBridge, LabelTypingModule, LabelVM,
+	}}
+	// slotLabels are the side-door labels, the ones a minute bucket's slot
+	// carries to tier 1 (DESIGN 4.1 E-6).
+	slotLabels = enum[Label]{values: []Label{LabelViaTrack, LabelViaPlugin, LabelViaBridge}}
+)
+
+// sideDoorLabel returns the label an anchor that arrived via v carries, or
+// "" when v isn't a labeled side door. editor_unverified anchors are level
+// C but carry no label (DESIGN 6.4).
+func sideDoorLabel(v Via) Label {
+	switch v {
+	case ViaTrack:
+		return LabelViaTrack
+	case ViaPlugin:
+		return LabelViaPlugin
+	case ViaBridge, ViaBridgeUnverified:
+		return LabelViaBridge
+	}
+	return ""
+}
+
+// checkLabels checks a list of labels: each from set, at most once, and in
+// set's order, so the same labels always encode the same way.
+func checkLabels(c *checker, field string, set enum[Label], ls []Label) {
+	last := -1
+	for i, l := range ls {
+		at := slices.Index(set.values, l)
+		switch {
+		case at < 0:
+			c.addf(fieldIndex(field, i), "%q is not one of %q", l, set.values)
+			return
+		case at <= last:
+			c.addf(field, "must list each label once, in the order %q", set.values)
+			return
+		}
+		last = at
+	}
+}
+
+// BucketState is a minute bucket's state (SM 5.1, DESIGN 6.2 D1).
 type BucketState string
 
 const (
-	StateFinal BucketState = "final"
+	// StatePending is a bucket within PENDING_WINDOW_S (900 s) of the end
+	// of its minute. Late events re-score it, and each change uploads a
+	// new revision with a higher rev (DESIGN 3.7). After the window it is
+	// final, provisional or restored.
+	StatePending BucketState = "pending"
+	StateFinal   BucketState = "final"
 	// StateProvisional holds half-weight seconds waiting for a progress
 	// event (SM 4.3).
 	StateProvisional BucketState = "provisional"
 	StateRestored    BucketState = "restored"
 )
 
-var bucketStates = enum[BucketState]{values: []BucketState{StateFinal, StateProvisional, StateRestored}}
+var bucketStates = enum[BucketState]{values: []BucketState{StatePending, StateFinal, StateProvisional, StateRestored}}
 
-// Witness says whether the server saw a minute's chain head in time.
+// Witness is the label a minute gets from when the server received the
+// ledger batch holding its records (DESIGN 7.4).
 type Witness string
 
 const (
-	// Witnessed means the chain head covering the minute reached the
-	// server within 15 minutes.
-	Witnessed  Witness = "witnessed"
+	// Witnessed means the batch reached the server within WITNESS_LAG_S
+	// (900 s).
+	Witnessed Witness = "witnessed"
+	// Offline means late, but sealed on a continuous chain while the
+	// ledger held upload-failure notes, then flushed in one catch-up
+	// (DESIGN 4.1 E-3). Its credit keeps its computed level only up to
+	// OFFLINE_CAP_S per submission and with a forge push within
+	// OFFLINE_PUSH_S of reconnecting (DESIGN 6.2 D6), which a submission
+	// decides.
+	Offline Witness = "offline"
+	// Backfilled is everything else that arrived late, and all lookback.
+	// Its credit is level C.
 	Backfilled Witness = "backfilled"
 )
 
-var witnesses = enum[Witness]{values: []Witness{Witnessed, Backfilled}}
+var witnesses = enum[Witness]{values: []Witness{Witnessed, Offline, Backfilled}}
 
 // RollupLevel is the span a Rollup sums over (SM 5.3).
 type RollupLevel string
@@ -275,9 +368,23 @@ type Anchor struct {
 	ProjectKey string     `json:"project_key"`
 	LeadS      float64    `json:"lead_s"`
 	TrailS     float64    `json:"trail_s"`
-	// DiscountedBy is the uncredited reason, such as X.reroll, under which
-	// a dark-flow or progress rule discounted this anchor (SM 4.2, 4.3).
+	// DiscountedBy is the dark-flow discount applied to this anchor, if
+	// any: X.reroll, X.rewrite_loop, X.same_error or X.autopilot (SM 4.2).
 	DiscountedBy Reason `json:"discounted_by,omitempty"`
+	// Via is how the agent received the record behind the act. With
+	// presence and keyboard evidence it sets the anchor's level (DESIGN
+	// 4.1 E-7, 6.4).
+	Via Via `json:"via"`
+	// Corroborated is set when a second record, written by a different
+	// code path, saw the same act: a hook and a transcript line, a hook and
+	// an OTel event, or an editor heartbeat that passed the peer-process
+	// check plus a commit whose diffstat covers the file. It is one of the
+	// conditions of DESIGN 6.4's corroborated band.
+	Corroborated bool `json:"corroborated"`
+	// Labels ride along with the anchor's level and never change it
+	// (DESIGN 6.4). A track, plugin or bridge anchor always carries its
+	// via_* label; no other anchor carries one.
+	Labels []Label `json:"labels,omitempty"`
 }
 
 // Validate reports every rule a breaks, or nil.
@@ -289,8 +396,19 @@ func (a Anchor) Validate() error {
 	c.key("project_key", a.ProjectKey)
 	c.seconds("lead_s", a.LeadS)
 	c.seconds("trail_s", a.TrailS)
-	if a.DiscountedBy != "" && !a.DiscountedBy.Uncredited() {
-		c.addf("discounted_by", "must be an uncredited reason (X.*), got %q", a.DiscountedBy)
+	if a.DiscountedBy != "" && !darkFlowReasons.has(a.DiscountedBy) {
+		c.addf("discounted_by", "must be a dark-flow discount, one of %q, got %q", darkFlowReasons.values, a.DiscountedBy)
+	}
+	checkEnum(c, "via", vias, a.Via)
+	checkLabels(c, "labels", anchorLabels, a.Labels)
+	want := sideDoorLabel(a.Via)
+	if want != "" && !slices.Contains(a.Labels, want) {
+		c.addf("labels", "missing %q; a %s anchor always carries it", want, a.Via)
+	}
+	for _, l := range a.Labels {
+		if slotLabels.has(l) && l != want {
+			c.addf("labels", "has %q, but the anchor arrived via %q", l, a.Via)
+		}
 	}
 	return c.err()
 }
@@ -341,8 +459,9 @@ func (s CreditSlot) Validate() error {
 }
 
 // MinuteBucket is the scorer's output for one device and UTC minute in
-// which anything was credited or an agent was running. It is the tier-1
-// upload (SM 5.1).
+// which anything was credited or an agent was running (SM 5.1). Its
+// Shareable form is the tier-1 upload, with exactly the fields DESIGN 4.3
+// lists.
 type MinuteBucket struct {
 	// V is the scoring_version that produced the record.
 	V string `json:"v"`
@@ -360,9 +479,25 @@ type MinuteBucket struct {
 	// project.
 	AgentRunningS float64 `json:"agent_running_s"`
 	// Anchors are the event ids whose windows covered credited seconds.
-	Anchors []string    `json:"anchors,omitempty"`
+	// They stay on the device (DESIGN 4.1 E-5, 6.2 D9): an event id is a
+	// UUIDv7, so it would give away the millisecond of every act, and
+	// tier 1 doesn't need them. The server recomputes them from a
+	// submission's reveal.
+	Anchors []string    `json:"anchors,omitempty" pairtime:"local"`
 	State   BucketState `json:"state"`
 	Witness Witness     `json:"witness"`
+	// Rev numbers the bucket's revisions, from 0. Each re-score inside the
+	// pending window that changes the bucket raises it by one, and a higher
+	// rev supersedes a lower one for the same device and minute (DESIGN
+	// 3.7, 6.2 D1).
+	Rev uint32 `json:"rev"`
+}
+
+// Shareable returns a copy of m without its local fields: the form that
+// leaves the device (DESIGN 4.3). m itself is not modified.
+func (m MinuteBucket) Shareable() MinuteBucket {
+	clearLocal(reflect.ValueOf(&m).Elem())
+	return m
 }
 
 // BucketSlot is one slot of a MinuteBucket, with the short field names of
@@ -375,6 +510,11 @@ type BucketSlot struct {
 	Why  Reason   `json:"why,omitempty"`
 	Kind Activity `json:"kind,omitempty"`
 	Ev   Evidence `json:"ev,omitempty"`
+	// Lbl lists the side-door labels of the anchors behind the slot's
+	// credited seconds, so programs and reviewers see which minutes rest
+	// on a side door (DESIGN 4.1 E-6): via_track, via_plugin and
+	// via_bridge, each at most once and in that order.
+	Lbl []Label `json:"lbl,omitempty"`
 }
 
 // Validate reports every rule m breaks, or nil.
@@ -394,6 +534,13 @@ func (m MinuteBucket) Validate() error {
 	for i, s := range m.Slots {
 		c.within(fieldIndex("slots", i), s.check)
 		slotSum += s.Credited
+		// Backfilled credit is level C (DESIGN 6.4). Witnessed and offline
+		// credit may be any level: track, plugin and bridge anchors are C
+		// when witnessed, and offline minutes past the cap become C only
+		// when a submission applies it.
+		if m.Witness == Backfilled && s.Credited > 0 && s.Ev != EvidenceC {
+			c.addf(fieldIndex("slots", i)+".ev", "must be %q in a backfilled minute, got %q", EvidenceC, s.Ev)
+		}
 	}
 	c.seconds("credited_s", m.CreditedS)
 	c.sumsTo("slots[].cr", slotSum, "credited_s", m.CreditedS)
@@ -405,10 +552,9 @@ func (m MinuteBucket) Validate() error {
 	if m.AgentRunningS > 60 {
 		c.addf("agent_running_s", "is %v, more than a minute", m.AgentRunningS)
 	}
+	// Anchors may be absent even with credit: Shareable clears them. Each
+	// credited CreditSlot still names its anchors on the device.
 	c.eventIDs("anchors", m.Anchors)
-	if m.CreditedS > 0 && len(m.Anchors) == 0 {
-		c.addf("anchors", "missing; every credited second traces back to an anchor")
-	}
 	checkEnum(c, "state", bucketStates, m.State)
 	checkEnum(c, "witness", witnesses, m.Witness)
 	return c.err()
@@ -416,6 +562,10 @@ func (m MinuteBucket) Validate() error {
 
 func (s BucketSlot) check(c *checker) {
 	c.slotSeconds("cr", s.Credited)
+	checkLabels(c, "lbl", slotLabels, s.Lbl)
+	if s.Credited == 0 && len(s.Lbl) > 0 {
+		c.addf("lbl", "a slot with no credit rests on no anchor, so it has no labels, got %q", s.Lbl)
+	}
 	if s.Credited > 0 {
 		c.key("p", s.Project)
 		if !s.Why.Credited() {
@@ -441,7 +591,9 @@ type Rollup struct {
 	V      string      `json:"v"`
 	Params string      `json:"params"`
 	Level  RollupLevel `json:"level"`
-	// ProjectKey is empty at the day level, which spans projects.
+	// ProjectKey is empty at the day level, which spans projects, and at
+	// the submission level when the submission covers several projects
+	// (DESIGN 7.5). CreditedByProject can then split the credit.
 	ProjectKey string    `json:"project_key,omitempty"`
 	Start      time.Time `json:"start"`
 	End        time.Time `json:"end"`
@@ -452,8 +604,8 @@ type Rollup struct {
 	Uncredited       map[Reason]float64   `json:"uncredited,omitempty"`
 	// CreditedByEvidence, when present, sums to CreditedS.
 	CreditedByEvidence map[Evidence]float64 `json:"credited_by_evidence,omitempty"`
-	// CreditedByProject is for the day level only. When present it sums to
-	// CreditedS.
+	// CreditedByProject is for the day and submission levels only. When
+	// present it sums to CreditedS.
 	CreditedByProject map[string]float64 `json:"credited_by_project,omitempty"`
 	AgentRunningS     float64            `json:"agent_running_s"`
 	AnchorCounts      map[AnchorKind]int `json:"anchor_counts,omitempty"`
@@ -467,11 +619,16 @@ func (r Rollup) Validate() error {
 	c.scoringVersion("v", r.V)
 	c.paramsHash("params", r.Params)
 	checkEnum(c, "level", rollupLevels, r.Level)
-	if r.Level == LevelDay {
+	switch r.Level {
+	case LevelDay:
 		if r.ProjectKey != "" {
 			c.addf("project_key", "a day rollup spans projects, got %q", r.ProjectKey)
 		}
-	} else {
+	case LevelSubmission:
+		// A submission covers a set of projects (DESIGN 7.5): one key, or
+		// none when it covers several.
+		c.optKey("project_key", r.ProjectKey)
+	default:
 		c.key("project_key", r.ProjectKey)
 	}
 	c.instant("start", r.Start)
@@ -493,8 +650,8 @@ func (r Rollup) Validate() error {
 		c.sumsTo("credited_by_evidence", breakdown(c, "credited_by_evidence", r.CreditedByEvidence, evidences.has), "credited_s", r.CreditedS)
 	}
 	if len(r.CreditedByProject) > 0 {
-		if r.Level != LevelDay {
-			c.addf("credited_by_project", "is for day rollups only, got level %q", r.Level)
+		if r.Level != LevelDay && r.Level != LevelSubmission {
+			c.addf("credited_by_project", "is for day and submission rollups only, got level %q", r.Level)
 		}
 		c.sumsTo("credited_by_project", breakdown(c, "credited_by_project", r.CreditedByProject, isKey), "credited_s", r.CreditedS)
 	}
@@ -549,23 +706,54 @@ func checkKindsMatchReasons(c *checker, byReason map[Reason]float64, byKind map[
 	}
 }
 
-// SubmissionTotals are the totals of a submission (SM 5.3) and the numbers
-// that answer the handbook's one-third rule (SM 5.4).
+// SubmissionTotals are the totals of a submission (SM 5.3), the numbers
+// that answer the handbook's one-third rule (SM 5.4), and the splits the
+// review page and the handbook text state (DESIGN 4.1 E-9, 7.7, 9.3).
 type SubmissionTotals struct {
 	// LoggedS is what Hackatime would log for the same activity: all
 	// heartbeats and agent events as one series, summed as min(gap, 120 s).
+	// Only records with via hook, log, otel, editor or bridge count; track,
+	// plugin and unverified records never do (DESIGN 6.2 D19).
 	LoggedS float64 `json:"logged_s"`
 	// CreditedS is the credited seconds after the uncommitted cap (SM 4.3).
-	CreditedS   float64 `json:"credited_s"`
+	// Held seconds aren't in it. Each credited second has one witness
+	// label, one evidence level and one band, so each of the three splits
+	// below sums to CreditedS.
+	CreditedS float64 `json:"credited_s"`
+	// WitnessedS, OfflineS and BackfilledS split CreditedS by witness label
+	// (SM 5.3, DESIGN 7.4).
 	WitnessedS  float64 `json:"witnessed_s"`
+	OfflineS    float64 `json:"offline_s"`
 	BackfilledS float64 `json:"backfilled_s"`
-	AgentOnlyS  float64 `json:"agent_only_s"`
+	// HeldS is the seconds the server holds because its re-score doesn't
+	// reproduce them or their chain doesn't verify (DESIGN 6.2 D7). They
+	// are outside CreditedS, the levels and the bands until a reviewer
+	// clears them.
+	HeldS float64 `json:"held_s"`
+	// LevelAS, LevelBS and LevelCS split CreditedS by evidence level
+	// (DESIGN 6.4).
+	LevelAS float64 `json:"level_a_s"`
+	LevelBS float64 `json:"level_b_s"`
+	LevelCS float64 `json:"level_c_s"`
+	// The four bands split CreditedS again (DESIGN 6.4, 7.7). The
+	// corroborated and witnessed bands are witnessed seconds at level A or
+	// B, the offline band is offline seconds at level A or B, and the
+	// backfilled band is every level-C second, which reviewers see with the
+	// handbook-third cap applied.
+	BandCorroboratedS float64 `json:"band_corroborated_s"`
+	BandWitnessedS    float64 `json:"band_witnessed_s"`
+	BandOfflineS      float64 `json:"band_offline_s"`
+	BandBackfilledS   float64 `json:"band_backfilled_s"`
+	// ViaTrackS is the credited seconds that rest on `pairtime track`
+	// anchors, the ones labeled via_track (DESIGN 7.7).
+	ViaTrackS  float64 `json:"via_track_s"`
+	AgentOnlyS float64 `json:"agent_only_s"`
 	// ExcludedLoopsS is X.reroll + X.rewrite_loop + X.same_error + X.autopilot.
 	ExcludedLoopsS float64 `json:"excluded_loops_s"`
 	// IdleS is X.absent seconds while an agent session was open.
 	IdleS float64 `json:"idle_s"`
-	// AILoggedS is the LoggedS rule applied to agent events only: what
-	// Hackatime would call "ai coding".
+	// AILoggedS is the LoggedS rule, via filter included, applied to agent
+	// events only: what Hackatime would call "ai coding".
 	AILoggedS     float64 `json:"ai_logged_s"`
 	CodingLoggedS float64 `json:"coding_logged_s"`
 	// HandbookS is CodingLoggedS + AILoggedS/3, the most a reviewer could
@@ -594,7 +782,11 @@ func (t SubmissionTotals) check(c *checker) {
 		v    float64
 	}{
 		{"logged_s", t.LoggedS}, {"credited_s", t.CreditedS}, {"witnessed_s", t.WitnessedS},
-		{"backfilled_s", t.BackfilledS}, {"agent_only_s", t.AgentOnlyS},
+		{"offline_s", t.OfflineS}, {"backfilled_s", t.BackfilledS}, {"held_s", t.HeldS},
+		{"level_a_s", t.LevelAS}, {"level_b_s", t.LevelBS}, {"level_c_s", t.LevelCS},
+		{"band_corroborated_s", t.BandCorroboratedS}, {"band_witnessed_s", t.BandWitnessedS},
+		{"band_offline_s", t.BandOfflineS}, {"band_backfilled_s", t.BandBackfilledS},
+		{"via_track_s", t.ViaTrackS}, {"agent_only_s", t.AgentOnlyS},
 		{"excluded_loops_s", t.ExcludedLoopsS}, {"idle_s", t.IdleS}, {"ai_logged_s", t.AILoggedS},
 		{"coding_logged_s", t.CodingLoggedS}, {"handbook_s", t.HandbookS},
 		{"ai_credited_s", t.AICreditedS}, {"hand_credited_s", t.HandCreditedS},
@@ -606,7 +798,22 @@ func (t SubmissionTotals) check(c *checker) {
 			c.addf(field, "is %v, but %s = %v", got, rule, want)
 		}
 	}
-	identity("witnessed_s", t.WitnessedS, "credited_s - backfilled_s", t.CreditedS-t.BackfilledS)
+	atMost := func(field string, got float64, rule string, limit float64) {
+		if got > limit+totalsTolerance {
+			c.addf(field, "is %v, more than %s = %v", got, rule, limit)
+		}
+	}
+	identity("witnessed_s", t.WitnessedS, "credited_s - offline_s - backfilled_s", t.CreditedS-t.OfflineS-t.BackfilledS)
+	identity("level_a_s", t.LevelAS, "credited_s - level_b_s - level_c_s", t.CreditedS-t.LevelBS-t.LevelCS)
+	identity("band_corroborated_s", t.BandCorroboratedS, "credited_s - band_witnessed_s - band_offline_s - band_backfilled_s",
+		t.CreditedS-t.BandWitnessedS-t.BandOfflineS-t.BandBackfilledS)
+	// DESIGN 6.4: the backfilled band is exactly the level-C seconds; the
+	// offline band holds offline seconds and the corroborated and
+	// witnessed bands witnessed ones.
+	identity("band_backfilled_s", t.BandBackfilledS, "level_c_s", t.LevelCS)
+	atMost("band_offline_s", t.BandOfflineS, "offline_s", t.OfflineS)
+	atMost("band_witnessed_s", t.BandWitnessedS, "witnessed_s - band_corroborated_s", t.WitnessedS-t.BandCorroboratedS)
+	atMost("via_track_s", t.ViaTrackS, "credited_s", t.CreditedS)
 	identity("coding_logged_s", t.CodingLoggedS, "logged_s - ai_logged_s", t.LoggedS-t.AILoggedS)
 	identity("handbook_s", t.HandbookS, "coding_logged_s + ai_logged_s / 3", t.CodingLoggedS+t.AILoggedS/3)
 	identity("hand_credited_s", t.HandCreditedS, "credited_s - ai_credited_s", t.CreditedS-t.AICreditedS)

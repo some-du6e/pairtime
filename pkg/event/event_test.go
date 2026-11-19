@@ -22,15 +22,6 @@ const (
 
 func ptr[T any](v T) *T { return &v }
 
-// testHash is bytes 0x00 to 0x1f.
-func testHash() Hash {
-	var h Hash
-	for i := range h {
-		h[i] = byte(i)
-	}
-	return h
-}
-
 func testMinHash() []uint32 {
 	h := make([]uint32, MinHashSize)
 	for i := range h {
@@ -52,14 +43,14 @@ func sample(t *testing.T, k Kind) Event {
 		Mono:           81163000,
 		BootID:         "b_51c2",
 		Source:         SourceHook,
+		Via:            ViaHook,
 		Harness:        HarnessClaudeCode,
 		HarnessVersion: "2.1.281",
 		SessionKey:     "s_4be1f0",
 		ProjectKey:     "p_9f2c",
-		ChainHash:      testHash(),
 	}
-	noHarness := func(src Source) {
-		env.Source, env.Harness, env.HarnessVersion, env.SessionKey = src, HarnessNone, "", NoSession
+	noHarness := func(src Source, via Via) {
+		env.Source, env.Via, env.Harness, env.HarnessVersion, env.SessionKey = src, via, HarnessNone, "", NoSession
 	}
 	var p Payload
 	switch k {
@@ -89,36 +80,36 @@ func sample(t *testing.T, k Kind) Event {
 	case KindAgentSubagent:
 		p = &AgentSubagent{Phase: SubagentStart, AgentKey: "a_77"}
 	case KindEditorActivity:
-		noHarness(SourceEditor)
+		noHarness(SourceEditor, ViaEditor)
 		p = &EditorActivity{Editor: "vscode", Act: ActEdit, FileHash: "f_a1", LinesChanged: 4, EditSource: EditSourceHuman}
 	case KindShellCommand:
-		noHarness(SourceShell)
+		noHarness(SourceShell, ViaShell)
 		p = &ShellCommand{CmdClass: CmdTest, CmdHash: "c_9d", ExitCode: ptr[int64](0), TStart: testT, TEnd: testT + 30000,
 			Interactive: true, ErrorSig: "es_12"}
 	case KindGitChange:
-		noHarness(SourceGit)
+		noHarness(SourceGit, ViaGit)
 		p = &GitChange{Op: GitCommit, SHA: "1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b",
 			Parents: []string{"0f1e2d3c4b5a69788796a5b4c3d2e1f0a9b8c7d6"}, FilesChanged: 3, Insertions: 40, Deletions: 12,
 			Actor: ActorHuman, AgentTrailer: "claude"}
 	case KindOSPresence:
-		noHarness(SourceOS)
+		noHarness(SourceOS, ViaOS)
 		env.ProjectKey = ""
 		p = &OSPresence{IdleAnyS: 3.5, IdleKeysS: ptr(12.25), Locked: true}
 	case KindOSFocus:
-		noHarness(SourceOS)
+		noHarness(SourceOS, ViaOS)
 		env.ProjectKey = ""
 		p = &OSFocus{AppClass: AppTerminal, AppHash: "app_5d", HostedSessions: []string{"s_4be1f0"}, FocusProject: "p_9f2c"}
 	case KindOSPower:
-		noHarness(SourceOS)
+		noHarness(SourceOS, ViaOS)
 		env.ProjectKey = ""
 		p = &OSPower{Op: PowerSuspend}
 	case KindOTelActiveTime:
-		env.Source = SourceOTel
+		env.Source, env.Via = SourceOTel, ViaOTel
 		p = &OTelActiveTime{Type: ActiveTimeUser, Seconds: 42.5}
 	case KindCLITrack:
-		env.Source = SourceCLI
-		env.Harness = HarnessOther
-		p = &CLITrack{Label: "fix the login redirect loop"}
+		env.Source, env.Via = SourceCLI, ViaTrack
+		p = &CLITrack{Label: "fix the login redirect loop", TextLen: 27,
+			EnvHints: []string{"CLAUDECODE", "CLAUDE_CODE_SESSION_ID"}, LogMatch: LogMatched}
 	default:
 		t.Fatalf("no sample for kind %q; add one", k)
 	}
@@ -130,9 +121,10 @@ func TestKindTable(t *testing.T) {
 	if len(ks) != 18 {
 		t.Errorf("Kinds() has %d kinds, SM 1.2 lists 18", len(ks))
 	}
-	// Payloads whose zero value is a real event: an unexplained session end,
-	// a track call with no label, and an idle sample taken mid-keystroke.
-	zeroIsValid := map[Kind]bool{KindSessionEnd: true, KindCLITrack: true, KindOSPresence: true}
+	// Payloads whose zero value is a real event: an unexplained session end
+	// and an idle sample taken mid-keystroke. A track call always says
+	// whether a log reader matched it.
+	zeroIsValid := map[Kind]bool{KindSessionEnd: true, KindOSPresence: true}
 	seen := map[Kind]bool{}
 	for _, k := range ks {
 		t.Run(string(k), func(t *testing.T) {
@@ -176,7 +168,7 @@ func TestEventValidate(t *testing.T) {
 		name   string
 		kind   Kind
 		mutate func(e *Event)
-		want   string // a substring of the error
+		want   string // a substring of the error, or "" for a valid event
 	}{
 		// Envelope.
 		{"event_id is a UUIDv7", KindAgentStop, func(e *Event) { e.EventID = "0193f6a1-2b3c-4d4e-8f00-112233445566" }, "event_id: must be a lowercase UUIDv7"},
@@ -188,6 +180,8 @@ func TestEventValidate(t *testing.T) {
 		{"mono isn't negative", KindAgentStop, func(e *Event) { e.Mono = -1 }, "mono:"},
 		{"boot_id is required", KindAgentStop, func(e *Event) { e.BootID = "" }, "boot_id:"},
 		{"unknown source", KindAgentStop, func(e *Event) { e.Source = "telepathy" }, "source:"},
+		{"via is required", KindAgentStop, func(e *Event) { e.Via = "" }, `via: "" is not one of`},
+		{"unknown via", KindAgentStop, func(e *Event) { e.Via = "wakatime" }, `via: "wakatime" is not one of`},
 		{"unknown harness", KindAgentStop, func(e *Event) { e.Harness = "Claude Code" }, "harness:"},
 		{"harness_version is one line", KindAgentStop, func(e *Event) { e.HarnessVersion = "2.1\n" }, "harness_version:"},
 		{"session_key isn't a path", KindAgentStop, func(e *Event) { e.SessionKey = "/home/teen/.claude/projects/x.jsonl" }, "session_key:"},
@@ -203,6 +197,17 @@ func TestEventValidate(t *testing.T) {
 		{"git events have no session", KindGitChange, func(e *Event) { e.SessionKey = "s_1" }, `session_key: must be "none"`},
 		{"otel events come from otel", KindOTelActiveTime, func(e *Event) { e.Source = SourceHook }, "source:"},
 		{"track events don't come from hooks", KindCLITrack, func(e *Event) { e.Source = SourceHook }, "source:"},
+
+		// How the agent may receive each kind (DESIGN 4.1 E-2).
+		{"presence samples arrive from the OS watchers", KindOSPresence, func(e *Event) { e.Via = ViaPlugin }, `via: os.presence events arrive via ["os"], got "plugin"`},
+		{"focus events arrive from the OS watchers", KindOSFocus, func(e *Event) { e.Via = ViaHook }, `via: os.focus events arrive via ["os"], got "hook"`},
+		{"power events arrive from the OS watchers", KindOSPower, func(e *Event) { e.Via = ViaTrack }, `via: os.power events arrive via ["os"], got "track"`},
+		{"git changes arrive from the git watcher", KindGitChange, func(e *Event) { e.Via = ViaBridge }, `via: git.change events arrive via ["git"], got "bridge"`},
+		{"track calls arrive through pairtime track", KindCLITrack, func(e *Event) { e.Via = ViaPlugin }, `via: cli.track events arrive via ["track"], got "plugin"`},
+		{"active time arrives through the OTLP receiver", KindOTelActiveTime, func(e *Event) { e.Via = ViaLog }, `via: otel.active_time events arrive via ["otel"], got "log"`},
+		{"a hook kind may arrive through a plugin", KindPromptSubmit, func(e *Event) { e.Via = ViaPlugin }, ""},
+		{"a hook kind may arrive through the bridge", KindAgentTool, func(e *Event) { e.Via = ViaBridgeUnverified }, ""},
+		{"an editor kind may arrive unverified", KindEditorActivity, func(e *Event) { e.Via = ViaEditorUnverified }, ""},
 		{"harness events have a harness", KindPromptSubmit, func(e *Event) { e.Harness = HarnessNone }, "harness: prompt.submit events come from a harness"},
 		{"harness events have a session", KindAgentTool, func(e *Event) { e.SessionKey = NoSession }, "session_key: agent.tool events belong to a harness session"},
 
@@ -258,17 +263,39 @@ func TestEventValidate(t *testing.T) {
 		{"unknown power op", KindOSPower, func(e *Event) { e.Data.(*OSPower).Op = "hibernate" }, "data.op:"},
 		{"otel seconds aren't negative", KindOTelActiveTime, func(e *Event) { e.Data.(*OTelActiveTime).Seconds = -5 }, "data.seconds:"},
 		{"a track label is one line", KindCLITrack, func(e *Event) { e.Data.(*CLITrack).Label = "line one\nline two" }, "data.label: must not contain control characters"},
-		{"a track label is capped", KindCLITrack, func(e *Event) { e.Data.(*CLITrack).Label = strings.Repeat("é", MaxLabelLen+1) }, "data.label: has 301 characters"},
+		{"a track label holds the AGENTS.md entry's 400 characters", KindCLITrack, func(e *Event) {
+			e.Data.(*CLITrack).Label = strings.Repeat("é", 400)
+		}, ""},
+		{"a track label is capped at 400 characters", KindCLITrack, func(e *Event) {
+			e.Data.(*CLITrack).Label = strings.Repeat("é", 401)
+		}, "data.label: has 401 characters, more than 400"},
+		{"a track call says whether a log reader matched it", KindCLITrack, func(e *Event) { e.Data.(*CLITrack).LogMatch = "" }, "data.log_match:"},
+		{"unknown log match", KindCLITrack, func(e *Event) { e.Data.(*CLITrack).LogMatch = "maybe" }, "data.log_match:"},
+		{"track text length isn't negative", KindCLITrack, func(e *Event) { e.Data.(*CLITrack).TextLen = -1 }, "data.text_len: must not be negative"},
+		{"env hints are names, never values", KindCLITrack, func(e *Event) {
+			e.Data.(*CLITrack).EnvHints = []string{"CLAUDECODE", "CLAUDE_CODE_SESSION_ID=5f0c"}
+		}, "data.env_hints[1]: must be an environment variable's name"},
+		{"env hints don't start with a digit", KindCLITrack, func(e *Event) { e.Data.(*CLITrack).EnvHints = []string{"1PASSWORD"} }, "data.env_hints[0]:"},
+		{"env hints are listed once", KindCLITrack, func(e *Event) {
+			e.Data.(*CLITrack).EnvHints = []string{"CLAUDECODE", "CLAUDECODE"}
+		}, "data.env_hints[1]: repeats an earlier name"},
+		{"a track call from no harness session", KindCLITrack, func(e *Event) {
+			e.Harness, e.SessionKey, e.Data.(*CLITrack).LogMatch = HarnessOther, NoSession, LogNoReader
+		}, ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			e := sample(t, tt.kind)
 			tt.mutate(&e)
 			err := e.Validate()
-			if err == nil {
-				t.Fatalf("Validate() = nil, want an error containing %q", tt.want)
-			}
-			if !strings.Contains(err.Error(), tt.want) {
+			switch {
+			case tt.want == "":
+				if err != nil {
+					t.Errorf("Validate() = %v, want nil", err)
+				}
+			case err == nil:
+				t.Errorf("Validate() = nil, want an error containing %q", tt.want)
+			case !strings.Contains(err.Error(), tt.want):
 				t.Errorf("Validate() = %q, want it to contain %q", err, tt.want)
 			}
 		})
@@ -333,8 +360,7 @@ func TestEventJSONGolden(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := `{"event_id":"0193f6a1-2b3c-7d4e-8f00-112233445566","device_id":"d_7f3a9c","seq":18301,"t":1795046500000,` +
-		`"mono":81163000,"boot_id":"b_51c2","source":"os","harness":"none","session_key":"none",` +
-		`"chain_hash":"000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",` +
+		`"mono":81163000,"boot_id":"b_51c2","source":"os","via":"os","harness":"none","session_key":"none",` +
 		`"kind":"os.presence","data":{"idle_any_s":3.5,"idle_keys_s":null,"locked":false}}`
 	if string(got) != want {
 		t.Errorf("Marshal =\n%s\nwant\n%s", got, want)
@@ -372,8 +398,7 @@ func TestEventUnmarshalErrors(t *testing.T) {
 		{"no data", swap(`,"data":{"turn_key":"t_01"}`, ``), "agent.interrupt event has no data"},
 		{"null data", swap(`{"turn_key":"t_01"}`, `null`), "agent.interrupt event has no data"},
 		{"data of the wrong shape", swap(`{"turn_key":"t_01"}`, `["t_01"]`), "agent.interrupt data"},
-		{"uppercase chain hash", swap(`"chain_hash":"000102`, `"chain_hash":"ABCDEF`), "lowercase hex"},
-		{"short chain hash", swap(`"chain_hash":"000102`, `"chain_hash":"`), "lowercase hex"},
+		{"via as a number", swap(`"via":"hook"`, `"via":1`), "via"},
 		{"seq as a string", swap(`"seq":18301`, `"seq":"18301"`), "seq"},
 		{"negative seq", swap(`"seq":18301`, `"seq":-1`), "seq"},
 		{"not an object", `[1,2,3]`, "cannot unmarshal"},
@@ -423,6 +448,31 @@ func TestLocalFields(t *testing.T) {
 		t.Run(string(k), func(t *testing.T) {
 			if got := localJSONNames(t, k); !slices.Equal(got, want[k]) {
 				t.Errorf("%s local fields = %q, want %q", k, got, want[k])
+			}
+		})
+	}
+	// Of the derived records only the minute bucket leaves the device, as
+	// tier 1, and its anchor ids stay behind (DESIGN 4.1 E-5, 4.3).
+	for _, d := range []struct {
+		typ  reflect.Type
+		want []string
+	}{
+		{reflect.TypeFor[MinuteBucket](), []string{"anchors"}},
+		{reflect.TypeFor[BucketSlot](), nil},
+	} {
+		t.Run(d.typ.Name(), func(t *testing.T) {
+			var got []string
+			for _, f := range jsonFields(d.typ) {
+				if !f.local {
+					continue
+				}
+				if !f.omitempty {
+					t.Errorf("%s.%s is local but not omitempty, so a shareable record would still carry it", d.typ.Name(), f.name)
+				}
+				got = append(got, f.name)
+			}
+			if !slices.Equal(got, d.want) {
+				t.Errorf("%s local fields = %q, want %q", d.typ.Name(), got, d.want)
 			}
 		})
 	}

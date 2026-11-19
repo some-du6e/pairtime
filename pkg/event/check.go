@@ -61,7 +61,11 @@ func (c *checker) within(field string, check func(*checker)) {
 }
 
 // isKey reports whether s is an opaque key: 1 to 128 ASCII letters, digits,
-// '_' or '-'. Paths, command lines and email addresses never qualify.
+// '_' or '-'. A path, a command line with arguments or an email address
+// can't pass, since each needs a separator, a space, a dot or '@'. A bare
+// name such as "Makefile" or "pytest" does pass, so isKey checks shape,
+// not privacy. What keeps a key private is that it is keyed per device: an
+// HMAC under a device secret, or a random id.
 func isKey(s string) bool {
 	if len(s) == 0 || len(s) > maxKeyLen {
 		return false
@@ -151,6 +155,22 @@ func (c *checker) eventIDs(field string, vs []string) {
 			return
 		}
 	}
+}
+
+// isEnvName reports whether s is an environment variable's name: a letter
+// or '_', then up to maxEnvNameLen-1 letters, digits or '_'. "NAME=value"
+// fails, so a value can't pass as a name.
+func isEnvName(s string) bool {
+	if len(s) == 0 || len(s) > maxEnvNameLen {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		b := s[i]
+		if !('a' <= b && b <= 'z' || 'A' <= b && b <= 'Z' || b == '_' || i > 0 && '0' <= b && b <= '9') {
+			return false
+		}
+	}
+	return true
 }
 
 // isGitID reports whether s is a git object id: 40 lowercase hex digits,
