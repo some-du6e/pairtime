@@ -108,8 +108,8 @@ func sample(t *testing.T, k Kind) Event {
 		p = &OTelActiveTime{Type: ActiveTimeUser, Seconds: 42.5}
 	case KindCLITrack:
 		env.Source, env.Via = SourceCLI, ViaTrack
-		env.Harness = HarnessOther
-		p = &CLITrack{Label: "fix the login redirect loop"}
+		p = &CLITrack{Label: "fix the login redirect loop", TextLen: 27,
+			EnvHints: []string{"CLAUDECODE", "CLAUDE_CODE_SESSION_ID"}, LogMatch: LogMatched}
 	default:
 		t.Fatalf("no sample for kind %q; add one", k)
 	}
@@ -121,9 +121,10 @@ func TestKindTable(t *testing.T) {
 	if len(ks) != 18 {
 		t.Errorf("Kinds() has %d kinds, SM 1.2 lists 18", len(ks))
 	}
-	// Payloads whose zero value is a real event: an unexplained session end,
-	// a track call with no label, and an idle sample taken mid-keystroke.
-	zeroIsValid := map[Kind]bool{KindSessionEnd: true, KindCLITrack: true, KindOSPresence: true}
+	// Payloads whose zero value is a real event: an unexplained session end
+	// and an idle sample taken mid-keystroke. A track call always says
+	// whether a log reader matched it.
+	zeroIsValid := map[Kind]bool{KindSessionEnd: true, KindOSPresence: true}
 	seen := map[Kind]bool{}
 	for _, k := range ks {
 		t.Run(string(k), func(t *testing.T) {
@@ -262,7 +263,25 @@ func TestEventValidate(t *testing.T) {
 		{"unknown power op", KindOSPower, func(e *Event) { e.Data.(*OSPower).Op = "hibernate" }, "data.op:"},
 		{"otel seconds aren't negative", KindOTelActiveTime, func(e *Event) { e.Data.(*OTelActiveTime).Seconds = -5 }, "data.seconds:"},
 		{"a track label is one line", KindCLITrack, func(e *Event) { e.Data.(*CLITrack).Label = "line one\nline two" }, "data.label: must not contain control characters"},
-		{"a track label is capped", KindCLITrack, func(e *Event) { e.Data.(*CLITrack).Label = strings.Repeat("é", MaxLabelLen+1) }, "data.label: has 301 characters"},
+		{"a track label holds the AGENTS.md entry's 400 characters", KindCLITrack, func(e *Event) {
+			e.Data.(*CLITrack).Label = strings.Repeat("é", 400)
+		}, ""},
+		{"a track label is capped at 400 characters", KindCLITrack, func(e *Event) {
+			e.Data.(*CLITrack).Label = strings.Repeat("é", 401)
+		}, "data.label: has 401 characters, more than 400"},
+		{"a track call says whether a log reader matched it", KindCLITrack, func(e *Event) { e.Data.(*CLITrack).LogMatch = "" }, "data.log_match:"},
+		{"unknown log match", KindCLITrack, func(e *Event) { e.Data.(*CLITrack).LogMatch = "maybe" }, "data.log_match:"},
+		{"track text length isn't negative", KindCLITrack, func(e *Event) { e.Data.(*CLITrack).TextLen = -1 }, "data.text_len: must not be negative"},
+		{"env hints are names, never values", KindCLITrack, func(e *Event) {
+			e.Data.(*CLITrack).EnvHints = []string{"CLAUDECODE", "CLAUDE_CODE_SESSION_ID=5f0c"}
+		}, "data.env_hints[1]: must be an environment variable's name"},
+		{"env hints don't start with a digit", KindCLITrack, func(e *Event) { e.Data.(*CLITrack).EnvHints = []string{"1PASSWORD"} }, "data.env_hints[0]:"},
+		{"env hints are listed once", KindCLITrack, func(e *Event) {
+			e.Data.(*CLITrack).EnvHints = []string{"CLAUDECODE", "CLAUDECODE"}
+		}, "data.env_hints[1]: repeats an earlier name"},
+		{"a track call from no harness session", KindCLITrack, func(e *Event) {
+			e.Harness, e.SessionKey, e.Data.(*CLITrack).LogMatch = HarnessOther, NoSession, LogNoReader
+		}, ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -429,6 +448,31 @@ func TestLocalFields(t *testing.T) {
 		t.Run(string(k), func(t *testing.T) {
 			if got := localJSONNames(t, k); !slices.Equal(got, want[k]) {
 				t.Errorf("%s local fields = %q, want %q", k, got, want[k])
+			}
+		})
+	}
+	// Of the derived records only the minute bucket leaves the device, as
+	// tier 1, and its anchor ids stay behind (DESIGN 4.1 E-5, 4.3).
+	for _, d := range []struct {
+		typ  reflect.Type
+		want []string
+	}{
+		{reflect.TypeFor[MinuteBucket](), []string{"anchors"}},
+		{reflect.TypeFor[BucketSlot](), nil},
+	} {
+		t.Run(d.typ.Name(), func(t *testing.T) {
+			var got []string
+			for _, f := range jsonFields(d.typ) {
+				if !f.local {
+					continue
+				}
+				if !f.omitempty {
+					t.Errorf("%s.%s is local but not omitempty, so a shareable record would still carry it", d.typ.Name(), f.name)
+				}
+				got = append(got, f.name)
+			}
+			if !slices.Equal(got, d.want) {
+				t.Errorf("%s local fields = %q, want %q", d.typ.Name(), got, d.want)
 			}
 		})
 	}

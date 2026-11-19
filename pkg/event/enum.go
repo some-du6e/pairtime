@@ -401,3 +401,25 @@ const (
 var activeTimeTypes = enum[ActiveTimeType]{name: "active_time_type", values: []ActiveTimeType{
 	ActiveTimeUser, ActiveTimeCLI,
 }}
+
+// LogMatch says whether a pairtime log reader holds the user entry that a
+// `pairtime track` call copies (cli.track; DESIGN 5.2, 5.4).
+type LogMatch string
+
+const (
+	// LogMatched means a log reader holds the matching user entry from the
+	// same session within TRACK_LOG_MATCH_S (10 s). The log record's own
+	// anchor counts, and the track call is only a cross-check.
+	LogMatched LogMatch = "matched"
+	// LogUnmatched means a log reader covers the session but held no
+	// matching entry when the agent recorded the call. The scorer matches
+	// again inside the pending window, so a line the tailer reads late
+	// still matches (DESIGN 5.4).
+	LogUnmatched LogMatch = "unmatched"
+	// LogNoReader means no pairtime log reader covers the caller's session.
+	LogNoReader LogMatch = "no_reader"
+)
+
+var logMatches = enum[LogMatch]{name: "log_match", values: []LogMatch{
+	LogMatched, LogUnmatched, LogNoReader,
+}}

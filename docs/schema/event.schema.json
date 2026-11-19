@@ -69,6 +69,7 @@
     "count": {"type": "integer", "minimum": 0},
     "seconds": {"type": "number", "minimum": 0},
     "text64": {"type": "string", "maxLength": 64, "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*$", "description": "One line of text: no control characters."},
+    "env_name": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,63}$", "description": "An environment variable's name, never its value."},
 
     "kind": {"enum": ["session.start", "session.end", "prompt.submit", "agent.output", "agent.tool", "agent.permission", "agent.interrupt", "agent.queue", "agent.stop", "agent.subagent", "editor.activity", "shell.command", "git.change", "os.presence", "os.focus", "os.power", "otel.active_time", "cli.track"]},
     "source": {"enum": ["hook", "log", "otel", "os", "editor", "shell", "git", "cli", "mcp"], "description": "What the record claims produced it. cli is the AGENTS.md fallback, pairtime track."},
@@ -91,6 +92,7 @@
     "app_class": {"enum": ["terminal", "editor", "agent_app", "browser", "chat_app", "other", "none"]},
     "power_op": {"enum": ["suspend", "resume", "lock", "unlock"]},
     "active_time_type": {"enum": ["user", "cli"]},
+    "log_match": {"enum": ["matched", "unmatched", "no_reader"], "description": "matched: a log reader holds the user entry from the same session within TRACK_LOG_MATCH_S; unmatched: a reader covers the session but held no match when the call was recorded; no_reader: no reader covers the session."},
 
     "session.start": {
       "description": "A harness session started, resumed, was cleared, compacted or forked.",
@@ -316,12 +318,15 @@
       }
     },
     "cli.track": {
-      "description": "The coding agent ran pairtime track, following the AGENTS.md entry. The model's own claim, never an anchor by itself.",
+      "description": "A coding agent ran pairtime track, following the AGENTS.md entry. The model's own claim: it opens an anchor only under the four conditions of DESIGN 5.4, at level C unless keyboard input corroborates it, and never counts toward logged_s.",
       "type": "object",
       "additionalProperties": false,
-      "required": [],
+      "required": ["text_len", "log_match"],
       "properties": {
-        "label": {"type": "string", "maxLength": 300, "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*$", "x-local": true, "description": "What the model passed, on one line: a summary or the start of the user's message. Prompt text, so it stays on the device."}
+        "label": {"type": "string", "maxLength": 400, "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*$", "x-local": true, "description": "The text the model passed, on one line: the user's message with personal information removed. Prompt text, so it stays on the device."},
+        "text_len": {"$ref": "#/$defs/count", "description": "The number of characters the model passed. Shareable, unlike the label."},
+        "env_hints": {"type": "array", "maxItems": 1024, "uniqueItems": true, "items": {"$ref": "#/$defs/env_name"}, "description": "Names, never values, of harness environment variables set in the caller's environment, such as CLAUDE_CODE_SESSION_ID."},
+        "log_match": {"$ref": "#/$defs/log_match", "description": "Whether a pairtime log reader holds the user entry the call copies."}
       }
     }
   }

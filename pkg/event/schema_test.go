@@ -47,7 +47,7 @@ func schemaEnums() []enumInfo {
 		infoOf(parentClasses), infoOf(declaredOrigins), infoOf(toolClasses), infoOf(decisions),
 		infoOf(decidedBys), infoOf(stopReasons), infoOf(subagentPhases), infoOf(editorActs),
 		infoOf(editSources), infoOf(cmdClasses), infoOf(gitOps), infoOf(actors), infoOf(appClasses),
-		infoOf(powerOps), infoOf(activeTimeTypes),
+		infoOf(powerOps), infoOf(activeTimeTypes), infoOf(logMatches),
 	}
 }
 

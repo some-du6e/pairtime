@@ -153,6 +153,22 @@ func (c *checker) eventIDs(field string, vs []string) {
 	}
 }
 
+// isEnvName reports whether s is an environment variable's name: a letter
+// or '_', then up to maxEnvNameLen-1 letters, digits or '_'. "NAME=value"
+// fails, so a value can't pass as a name.
+func isEnvName(s string) bool {
+	if len(s) == 0 || len(s) > maxEnvNameLen {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		b := s[i]
+		if !('a' <= b && b <= 'z' || 'A' <= b && b <= 'Z' || b == '_' || i > 0 && '0' <= b && b <= '9') {
+			return false
+		}
+	}
+	return true
+}
+
 // isGitID reports whether s is a git object id: 40 lowercase hex digits,
 // or 64 in a SHA-256 repository.
 func isGitID(s string) bool { return isHex(s, 40) || isHex(s, 64) }
