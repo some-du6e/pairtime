@@ -6,7 +6,7 @@ We're building it for Hack Club's AI time tracking bounty. [docs/BOUNTY.md](docs
 
 ## Status
 
-Research and design are in progress, and the code is a skeleton. Both binaries build for every target and answer `version` and `help`, and `pkg/event` holds the event model, but nothing tracks time yet. There's nothing to install.
+Research and design are in progress, and the code is a skeleton. Both binaries build for every target and answer `version` and `help`, `pairtime agent` runs the background agent's skeleton, and `pkg/event` holds the event model, but nothing tracks time yet. There's nothing to install.
 
 ## Layout
 
@@ -17,13 +17,15 @@ One Go module holds the client, the server and the code they share.
 | `cmd/pairtime` | The client. One binary will be the background agent, the hook receiver for AI harnesses and the CLI |
 | `cmd/pairtimed` | The server: accounts, projects, rollups and the live dashboard, once they exist |
 | `pkg/event` | The event model from the [struggle-metric spec](docs/design/struggle-metric.md): the envelope, the 18 event kinds, the records the scorer derives from them, and validation for all of it |
+| `internal/agent` | The background agent: its data directories, the single-instance lock, `config.toml`, `state.json`, the scheduler every timer goes through, and the HTTP server on 127.0.0.1 |
+| `internal/webui` | The local dashboard's built files, embedded in the client. A placeholder stands in until the UI exists, so Go builds never need Node |
 | `internal/version` | Build info, set at link time |
 | `docs/schema/event.schema.json` | A JSON Schema for events, for adapters written in other languages. A test fails if it drifts from `pkg/event` |
 | `docs/` | Requirements, research and the design docs |
 
 ## Build from source
 
-You need Go 1.26 or later and nothing else. pairtime uses only the standard library and never cgo.
+You need Go 1.26 or later and nothing else. pairtime never uses cgo, and its few modules are pure Go (DESIGN 3.12).
 
 ```sh
 CGO_ENABLED=0 go build -o bin/ ./cmd/...
