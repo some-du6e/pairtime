@@ -1,0 +1,281 @@
+{
+  "upstream": "hackclub/stardance",
+  "revision": "b1d3e0eac1aef07c7a137111339babe05586607e",
+  "file": "app/services/hackatime_service.rb",
+  "blob": "288907c6b8f8a63ad4dfef123ef2670d85c057b6",
+  "base_url": "https://hackatime.hackclub.com",
+  "query_encoding": "Query parameters go through Faraday's default nested-params encoding: an array becomes repeated name[]=value pairs, which is why Stardance's comment says Rack keeps commas inside array elements (line 136), and true, false and integers become their plain strings. Hackatime ignores parameters it doesn't know, so the _t cache-buster has no effect on the answer.",
+  "connections": [
+    {
+      "name": "connection",
+      "prefix": "/api/v1",
+      "lines": "373-382",
+      "headers": [
+        {"name": "Content-Type", "value": "application/json"},
+        {"name": "Cache-Control", "value": "no-cache, no-store"},
+        {"name": "User-Agent", "value": "Stardance's configured user agent, Rails.application.config.user_agent"}
+      ],
+      "open_timeout_s": 10,
+      "read_timeout_s": 15
+    },
+    {
+      "name": "admin_connection",
+      "prefix": "/api/admin/v1",
+      "lines": "364-371",
+      "headers": [
+        {"name": "Content-Type", "value": "application/json"},
+        {"name": "User-Agent", "value": "Stardance's configured user agent"}
+      ],
+      "open_timeout_s": 10,
+      "read_timeout_s": 15
+    },
+    {
+      "name": "heartbeat_connection",
+      "prefix": "/api/hackatime/v1",
+      "lines": "385-392",
+      "headers": [
+        {"name": "Content-Type", "value": "application/json"},
+        {"name": "User-Agent", "value": "Stardance's configured user agent"}
+      ],
+      "open_timeout_s": 10,
+      "read_timeout_s": 15
+    }
+  ],
+  "requests": [
+    {
+      "id": "authenticated_me",
+      "stardance_method": "HackatimeService.fetch_authenticated_user",
+      "lines": "9-26",
+      "connection": "connection",
+      "method": "GET",
+      "path": "/api/v1/authenticated/me",
+      "auth": {"kind": "oauth_token", "header": "Authorization: Bearer <the user's Hackatime OAuth access token>"},
+      "query": [],
+      "reads": ["id"],
+      "on_failure": "Any non-2xx answer, timeout or exception gives nil. The status is logged.",
+      "callers": [],
+      "notes": ["The id is kept as a string."]
+    },
+    {
+      "id": "get_user_by_email",
+      "stardance_method": "HackatimeService.lookup_user_id_by_email",
+      "lines": "28-50",
+      "connection": "admin_connection",
+      "method": "POST",
+      "path": "/api/admin/v1/user/get_user_by_email",
+      "auth": {"kind": "admin_key", "header": "Authorization: Bearer <HACKATIME_ADMIN_KEY>"},
+      "query": [],
+      "body": {"content_type": "application/json", "form": "A JSON object with the one key email. A blank email is never sent.", "example": {"email": "rowan@example.org"}},
+      "reads": ["user_id"],
+      "on_failure": "404 means the address is unknown to Hackatime and gives nil without logging. Any other failure gives nil and logs the status.",
+      "callers": []
+    },
+    {
+      "id": "stats_projects",
+      "stardance_method": "HackatimeService.fetch_stats",
+      "lines": "52-77, 313-337",
+      "connection": "connection",
+      "method": "GET",
+      "path": "/api/v1/users/my/stats",
+      "fallback_path": "/api/v1/users/<hackatime uid>/stats",
+      "auth": {
+        "kind": "api_key",
+        "header": "Authorization: Bearer <the user's Hackatime API key>, from a one-week cache or from authenticated_api_keys",
+        "fallback": "If my/stats fails, Stardance drops the cached key, fetches a fresh one and retries once. If that fails too, or the user has no OAuth token, it calls the public path for the uid with no Authorization header and marks the result token_stale."
+      },
+      "query": [
+        {"name": "features", "form": "fixed", "example": "projects", "sent": "always", "lines": "53"},
+        {"name": "start_date", "form": "A date, START_DATE 2026-05-31 by default (line 3). The project seeding job asks from 2015-01-01.", "example": "2026-05-31", "sent": "always", "lines": "53"},
+        {"name": "test_param", "form": "fixed", "example": "true", "sent": "always", "lines": "53"},
+        {"name": "no_ai_coding", "form": "fixed", "example": "false", "sent": "always", "lines": "53"},
+        {"name": "_t", "form": "The current Unix time in whole seconds, as a cache-buster", "example": "1793728800", "sent": "always", "lines": "53"},
+        {"name": "end_date", "form": "Passed through when the caller gives one. No caller at this revision does.", "example": "2026-11-18T20:11:00Z", "sent": "when given", "lines": "54"}
+      ],
+      "reads": ["data.projects[].name", "data.projects[].total_seconds", "trust_factor.trust_value"],
+      "on_failure": "A non-2xx final answer, a timeout or an exception gives nil and logs the status and body.",
+      "callers": [
+        {"file": "app/models/user/hackatime_sync.rb", "lines": "48", "what": "the user's project list, with the default start"},
+        {"file": "app/jobs/project/ensure_hackatime_projects_job.rb", "lines": "21, 95-96", "what": "whether a project name already exists, from 2015-01-01"}
+      ],
+      "notes": [
+        "Projects named Other or <<LAST_PROJECT>> are dropped (app/models/user/hackatime_project.rb line 38), and total_seconds is converted with to_i.",
+        "trust_factor.trust_value equal to 1, red, marks the user banned."
+      ]
+    },
+    {
+      "id": "trust_factor",
+      "stardance_method": "HackatimeService.fetch_trust_level",
+      "lines": "80-96",
+      "connection": "connection",
+      "method": "GET",
+      "path": "/api/v1/users/<hackatime uid>/trust_factor",
+      "auth": {"kind": "none", "header": "No Authorization header"},
+      "query": [],
+      "reads": ["trust_level"],
+      "on_failure": "nil, logged. Not called for a blank uid.",
+      "callers": [
+        {"file": "app/models/user/hackatime_sync.rb", "lines": "87", "what": "the masked level, which works for banned users and private stats too (comment on line 79)"}
+      ]
+    },
+    {
+      "id": "info_batch",
+      "stardance_method": "HackatimeService.fetch_trust_levels",
+      "lines": "99-118",
+      "connection": "admin_connection",
+      "method": "GET",
+      "path": "/api/admin/v1/user/info_batch",
+      "auth": {"kind": "admin_key", "header": "Authorization: Bearer <HACKATIME_ADMIN_KEY>"},
+      "query": [
+        {"name": "ids", "form": "Hackatime uids joined with commas. The comment on line 98 says the endpoint takes at most 2,000.", "example": "4821,4822,4830", "sent": "always", "lines": "102"}
+      ],
+      "reads": ["users[].id", "users[].trust_level"],
+      "on_failure": "nil, logged. An answer without users raises inside the method and also gives nil.",
+      "callers": [],
+      "notes": ["This is the call that sees raw levels, yellow included. The result maps each id, as a string, to its level."]
+    },
+    {
+      "id": "stats_total_seconds",
+      "stardance_method": "HackatimeService.fetch_total_seconds_for_projects",
+      "lines": "120-164, 313-337",
+      "connection": "connection",
+      "method": "GET",
+      "path": "/api/v1/users/my/stats",
+      "fallback_path": "/api/v1/users/<hackatime uid>/stats",
+      "auth": {
+        "kind": "api_key",
+        "header": "Authorization: Bearer <the user's Hackatime API key>",
+        "fallback": "The same refresh-then-public sequence as stats_projects."
+      },
+      "query": [
+        {"name": "features", "form": "fixed", "example": "projects", "sent": "always", "lines": "131"},
+        {"name": "start_date", "form": "An ISO 8601 time from the devlog window callers, or the date 2026-05-31 when the caller gives none", "example": "2026-11-03T18:02:00Z", "sent": "always", "lines": "132"},
+        {"name": "test_param", "form": "fixed", "example": "true", "sent": "always", "lines": "133"},
+        {"name": "total_seconds", "form": "fixed", "example": "true", "sent": "always", "lines": "134"},
+        {"name": "no_ai_coding", "form": "fixed", "example": "false", "sent": "always", "lines": "135"},
+        {"name": "filter_by_project[]", "form": "One pair per Hackatime project name linked to the Stardance project, in the array form", "example": "remind-bot", "sent": "always", "lines": "136-137"},
+        {"name": "_t", "form": "The current Unix time in whole seconds", "example": "1793728800", "sent": "always", "lines": "138"},
+        {"name": "end_date", "form": "An ISO 8601 time from the devlog window callers", "example": "2026-11-18T20:11:00Z", "sent": "when given", "lines": "140"}
+      ],
+      "reads": ["total_seconds"],
+      "on_failure": "nil, logged, when the answer isn't 2xx or total_seconds isn't a non-negative integer. Before any request: nil for a blank uid or no keys, and nil when one of the names is exactly a comma, because Hackatime would split on it (lines 123-128).",
+      "callers": [
+        {"file": "app/models/project.rb", "lines": "663", "what": "a project's total, with the default start and no end"},
+        {"file": "app/models/project.rb", "lines": "673-689", "what": "one call per group of names sharing a devlog window start, start and end as ISO 8601"},
+        {"file": "app/models/post/devlog.rb", "lines": "214-217", "what": "one call per name for a devlog's breakdown, start and end as ISO 8601"},
+        {"file": "app/models/project/hackatime_devlog_resync.rb", "lines": "73-87", "what": "re-pulling a devlog's window, start and end as ISO 8601"}
+      ],
+      "notes": [
+        "These are the hours Stardance pays on. The comment on line 149 says it asks for the total instead of adding up data.projects because per-project numbers come from a different timeline."
+      ]
+    },
+    {
+      "id": "authenticated_api_keys",
+      "stardance_method": "HackatimeService.fetch_api_key",
+      "lines": "175-194",
+      "connection": "connection",
+      "method": "GET",
+      "path": "/api/v1/authenticated/api_keys",
+      "auth": {"kind": "oauth_token", "header": "Authorization: Bearer <the user's Hackatime OAuth access token>"},
+      "query": [],
+      "reads": ["token"],
+      "on_failure": "nil, logged. Not called for a blank token.",
+      "callers": [
+        {"file": "app/services/hackatime_service.rb", "lines": "353-361", "what": "resolve_api_key, which caches the key for a week under hackatime_api_key:<uid>"},
+        {"file": "app/jobs/project/ensure_hackatime_projects_job.rb", "lines": "67", "what": "the key to seed a project with"},
+        {"file": "app/services/lookout_heartbeat_forwarder.rb", "lines": "34", "what": "the key to forward Lookout time with"}
+      ]
+    },
+    {
+      "id": "heartbeats_bulk",
+      "stardance_method": "HackatimeService.push_heartbeats",
+      "lines": "201-224",
+      "connection": "heartbeat_connection",
+      "method": "POST",
+      "path": "/api/hackatime/v1/users/current/heartbeats.bulk",
+      "auth": {"kind": "api_key", "header": "Authorization: Bearer <the user's Hackatime API key>"},
+      "query": [],
+      "body": {
+        "content_type": "application/json",
+        "form": "A JSON array of heartbeat objects, at most 100 per request. A longer list goes out in slices of 100, one request each.",
+        "example": [{"type": "file", "entity": "lookout-session-example", "project": "remind-bot", "category": "coding", "editor": "Lookout", "language": "Lookout", "time": 1793728800}]
+      },
+      "reads": [],
+      "on_failure": "Returns false if any slice gets a non-2xx answer, after sending every slice. A timeout or exception also gives false.",
+      "callers": [
+        {"file": "app/services/hackatime_service.rb", "lines": "243-256", "what": "create_project, below"},
+        {"file": "app/services/lookout_heartbeat_forwarder.rb", "lines": "46, 61-76", "what": "Lookout capture times as file heartbeats with editor and language Lookout, category coding and the session token as entity"}
+      ],
+      "notes": [
+        "pairtime refuses this call with 403 (DESIGN 5.10). Programs can't write time into pairtime."
+      ]
+    },
+    {
+      "id": "heartbeats_bulk_project_seed",
+      "stardance_method": "HackatimeService.create_project",
+      "lines": "243-256",
+      "connection": "heartbeat_connection",
+      "method": "POST",
+      "path": "/api/hackatime/v1/users/current/heartbeats.bulk",
+      "auth": {"kind": "api_key", "header": "Authorization: Bearer <the user's Hackatime API key>"},
+      "query": [],
+      "body": {
+        "content_type": "application/json",
+        "form": "push_heartbeats with one heartbeat that creates the project name. Its fields are fixed apart from entity, project and time, which is the current Unix time in whole seconds.",
+        "example": [{"type": "app", "entity": "stardance-project-example", "project": "remind-bot", "category": "coding", "editor": "Stardance", "language": "Stardance", "plugin": "stardance-project-seed", "time": 1793728800}]
+      },
+      "reads": [],
+      "on_failure": "As push_heartbeats. Not sent for a blank key or name.",
+      "callers": [
+        {"file": "app/jobs/project/ensure_hackatime_projects_job.rb", "lines": "70", "what": "seeds a name that stats_projects reported missing"}
+      ],
+      "notes": [
+        "The comment on lines 226-242 explains why a seed adds no time: Hackatime's first heartbeat in a project is worth 0 seconds."
+      ]
+    },
+    {
+      "id": "heartbeats_spans",
+      "stardance_method": "HackatimeService.fetch_heartbeat_spans",
+      "lines": "258-278, 339-351",
+      "connection": "connection",
+      "method": "GET",
+      "path": "/api/v1/users/my/heartbeats/spans",
+      "fallback_path": "/api/v1/users/<hackatime uid>/heartbeats/spans",
+      "auth": {
+        "kind": "api_key",
+        "header": "Authorization: Bearer <the user's Hackatime API key>",
+        "fallback": "If my/heartbeats/spans fails, or the user has no OAuth token, the public path for the uid with no Authorization header. No key refresh here."
+      },
+      "query": [
+        {"name": "start_date", "form": "A date, YYYY-MM-DD, from the streak sync", "example": "2026-05-31", "sent": "always", "lines": "261"},
+        {"name": "end_date", "form": "A date, YYYY-MM-DD: the day after today in the streak sync", "example": "2026-11-20", "sent": "always", "lines": "261"},
+        {"name": "project[]", "form": "One pair per Hackatime project name, in the array form, sent only when there are names", "example": "remind-bot", "sent": "when given", "lines": "262"}
+      ],
+      "reads": ["spans"],
+      "on_failure": "[] on a non-2xx answer, a timeout or an exception. [] for a blank uid without a request.",
+      "callers": [
+        {"file": "app/models/streak_activity.rb", "lines": "95-101", "what": "streak days, bucketed by the user's local day"}
+      ]
+    },
+    {
+      "id": "my_heartbeats",
+      "stardance_method": "HackatimeService.fetch_heartbeats",
+      "lines": "286-307",
+      "connection": "connection",
+      "method": "GET",
+      "path": "/api/v1/my/heartbeats",
+      "auth": {"kind": "api_key", "header": "Authorization: Bearer <the user's Hackatime API key>"},
+      "query": [
+        {"name": "start_time", "form": "An ISO 8601 time", "example": "2026-11-03T18:00:00Z", "sent": "always", "lines": "291"},
+        {"name": "end_time", "form": "An ISO 8601 time", "example": "2026-11-03T19:00:00Z", "sent": "always", "lines": "292"}
+      ],
+      "reads": ["heartbeats[].entity", "heartbeats[].project"],
+      "on_failure": "[] on a non-2xx answer, a timeout or an exception. [] for a blank key without a request.",
+      "callers": [
+        {"file": "app/services/lookout_push_status.rb", "lines": "56-61", "what": "whether a Lookout session's time reached Hackatime, by matching entity against session tokens, one window at a time"}
+      ],
+      "notes": [
+        "The comment on lines 280-285 says the endpoint has no result cap, so callers keep the window short. pairtime answers 200 with an empty list (DESIGN 5.10)."
+      ]
+    }
+  ]
+}
