@@ -73,13 +73,48 @@ func mustNew(t *testing.T, k Known) *Redactor {
 	return r
 }
 
-// ruleSecrets is what one rule finds in text on its own, in one pass, the
-// way gitleaks' single-rule detector ran it.
+// ruleSecrets is the secrets one rule finds in text on its own, in one
+// pass, the way gitleaks' single-rule detector ran it.
 func ruleSecrets(rs *ruleset, r *rule, text string) []string {
 	got := []string{}
-	r.find(text, strings.ToLower(text), rs.global, func(s, e int) { got = append(got, text[s:e]) })
+	r.find(text, strings.ToLower(text), rs.global, func(secret, _ [2]int) {
+		got = append(got, text[secret[0]:secret[1]])
+	})
 	slices.Sort(got)
 	return got
+}
+
+// TestFragmentSecretsRemoveTheToken covers the rules whose secret group is
+// a piece of the token: the whole token must go.
+func TestFragmentSecretsRemoveTheToken(t *testing.T) {
+	uuid := "1a2b3c4d-5e6f-7a8b-9c0d-1e2f3a4b5c6d"
+	teams := "https://contoso.webhook" + ".office.com/webhookb2/" + uuid + "@" + uuid +
+		"/IncomingWebhook/" + strings.Repeat("0f1e2d3c", 4) + "/" + uuid
+	// Shaped like a base64-encoded JWT: "ZXlK" ("eyJ" encoded), then the
+	// encoded "alg" header field jwt-base64 looks for, then 40 or more
+	// base64 characters.
+	jwt64 :="ZXlKaGJHY2lPaUpJVXpJMU5pSXNJblI1Y0NJNklrcFhWQ0o5LmV5SnBjM01pT2lKcWIyVWlMQTBLSUNKbGVIQWlPakV6TURBNE1Ua3pPREFzRFFvZ0ltaDBkSEE2THk5bGVHRnRjR3hsTG1OdmJTOXBjMTl5YjI5MElqcDBjblZsZlEuZEJqZnRKZVo0Q1ZQLW1COTJLMjd1aGJVSlUxcDFyX3dXMWdGV0ZPRWpYaw"
+	tests := []struct {
+		name string
+		text string
+		rule string
+	}{
+		{"a Teams webhook URL goes whole", "post to " + teams + " please", "microsoft-teams-webhook"},
+		{"a base64-encoded JWT goes whole", "token: " + jwt64 + " ok", "jwt-base64"},
+	}
+	rs := mustRules(t)
+	r := mustNew(t, Known{})
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := ruleSecrets(rs, rs.byID[tt.rule], tt.text); len(got) == 0 {
+				t.Fatalf("%s finds nothing in %q", tt.rule, tt.text)
+			}
+			out := Render(tt.text, r.Find(tt.text))
+			if strings.Contains(out, uuid) || strings.Contains(out, "IncomingWebhook") || strings.Contains(out, "ZXlK") || strings.Contains(out, "LmV5") {
+				t.Errorf("Render = %q, still holds part of the token", out)
+			}
+		})
+	}
 }
 
 func TestGitleaksRulesCompile(t *testing.T) {

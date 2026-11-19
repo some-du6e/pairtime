@@ -52,7 +52,11 @@ func (r *Redactor) secrets(text string, emit func(start, end int, rule string)) 
 	run := func(s string) {
 		lower := strings.ToLower(s)
 		for _, ru := range r.rules.rules {
-			ru.find(s, lower, r.rules.global, func(start, end int) { emit(start, end, ru.id) })
+			ru.find(s, lower, r.rules.global, func(_, remove [2]int) {
+				if remove[0] < remove[1] {
+					emit(remove[0], remove[1], ru.id)
+				}
+			})
 		}
 	}
 	run(text)

@@ -195,12 +195,20 @@ func (r *rule) wanted(lower string) bool {
 	return false
 }
 
-// find calls emit with the span of every secret the rule finds in text. It
+// find calls emit for every finding of the rule in text, with the span of
+// the secret, which is what gitleaks reports, and the span to remove. It
 // follows gitleaks' detectRule (detect/detect.go at the pinned tag) for a
-// fragment with no path, no commit and no decoding, with two differences: a
-// "gitleaks:allow" comment doesn't hide a secret, and the span removed is
-// the secret group, or the whole match when the rule has no group.
-func (r *rule) find(text, lower string, global []*allowlist, emit func(start, end int)) {
+// fragment with no path, no commit and no decoding, except that a
+// "gitleaks:allow" comment doesn't hide a secret.
+//
+// The span to remove is the secret, unless the secret is a piece of a
+// longer token, which happens when a rule's first group is structure rather
+// than the secret: jwt-base64's groups name a JWT header field, and
+// microsoft-teams-webhook's is one block of a UUID in the URL. A letter or
+// digit of the match touching the secret gives that away, and then the
+// whole match goes, or most of the token would stay readable. So does the
+// match when the secret is empty.
+func (r *rule) find(text, lower string, global []*allowlist, emit func(secret, remove [2]int)) {
 	if !r.wanted(lower) {
 		return
 	}
@@ -243,15 +251,16 @@ func (r *rule) find(text, lower string, global []*allowlist, emit func(start, en
 		if allowed(global, secret, match, line) || allowed(r.allowlists, secret, match, line) {
 			continue
 		}
-		if start == end {
-			// gitleaks reports a finding with an empty secret when the
-			// secret group didn't take part. Remove the whole match.
-			start, end = off, off+len(match)
+		remove := [2]int{start, end}
+		if start == end || start > off && isASCIIAlnum(text[start-1]) || end < off+len(match) && isASCIIAlnum(text[end]) {
+			remove = [2]int{off, off + len(match)}
 		}
-		if start < end {
-			emit(start, end)
-		}
+		emit([2]int{start, end}, remove)
 	}
+}
+
+func isASCIIAlnum(c byte) bool {
+	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9'
 }
 
 // allowed is gitleaks' checkFindingAllowed for a finding with no path and
