@@ -2,8 +2,9 @@
 
 // Command pairtime is the pairtime client.
 //
-// This is the WP-0a stub. It knows `version` and `help` and nothing else.
-// The agent, hook, track and install commands come in later work packages.
+// main.go handles the built-in version and help. Every other command lives
+// in a file of its own and adds itself to the command table in commands.go,
+// so a new command is a new file.
 package main
 
 import (
@@ -16,16 +17,17 @@ import (
 	"github.com/some-du6e/pairtime/internal/version"
 )
 
-const usage = `pairtime counts the hours you spend building with AI: thinking, steering,
+// usage() puts the command list between these two.
+const usageHead = `pairtime counts the hours you spend building with AI: thinking, steering,
 reading, testing and fixing. It skips the hours your agent runs on its own.
 
 Usage:
   pairtime <command>
 
 Commands:
-  version   Print the version, build details and release keys
-  help      Show this help
+`
 
+const usageTail = `
 This build is a skeleton and doesn't track anything yet.
 Source and status: https://github.com/some-du6e/pairtime
 `
@@ -35,10 +37,10 @@ func main() {
 }
 
 // run executes one command line and returns the process exit code:
-// 0 on success, 2 for a usage error.
+// 0 on success, 2 for a usage error, or a status the command documents.
 func run(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		fmt.Fprint(stderr, usage)
+		fmt.Fprint(stderr, usage())
 		return 2
 	}
 	switch args[0] {
@@ -51,11 +53,14 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stdout, releaseKeys())
 		return 0
 	case "help", "--help", "-h":
-		fmt.Fprint(stdout, usage)
+		fmt.Fprint(stdout, usage())
 		return 0
 	default:
+		if c, ok := commands[args[0]]; ok {
+			return c.run(args[1:], stdout, stderr)
+		}
 		fmt.Fprintf(stderr, "pairtime: unknown command %q\n\n", args[0])
-		fmt.Fprint(stderr, usage)
+		fmt.Fprint(stderr, usage())
 		return 2
 	}
 }
