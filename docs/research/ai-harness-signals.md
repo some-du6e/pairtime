@@ -1,6 +1,6 @@
 # AI harness signals: what AI-assisted building leaves behind, and how to capture it
 
-Status: draft in progress
+Status: research complete, fact-check pending
 
 Track: signals. Researched 2026-11-18/19 for pairtime. Every claim cites a source with the date or version seen; anything not confirmed against a primary source is marked "(unverified)".
 
@@ -28,11 +28,33 @@ Track: signals. Researched 2026-11-18/19 for pairtime. Every claim cites a sourc
 
 ## 1. Scope, method, and how to read this doc
 
-(pending)
+Scope: what AI-assisted building leaves behind on a teen's machine, and how pairtime can capture it passively, privately, cheaply and on old Windows laptops. Covers the harnesses in the task brief (top six in depth), browser chat and app builders, and human-side signals outside the agent.
+
+Method:
+
+- Docs were fetched as raw Markdown wherever the vendor serves it (code.claude.com, cursor.com, learn.chatgpt.com, docs.devin.ai, kiro.dev, ampcode.com, GitHub docs via `docs.github.com/api/article/body`) and grepped directly, rather than relying on summaries. A few client-rendered pages (Antigravity, Junie, JetBrains AI Assistant, Trae) came through WebFetch summaries or raw page data and are marked where that limits confidence.
+- Open-source harnesses (Codex, Gemini CLI, Cline, OpenCode, Kilo, Goose, Continue, Aider, Zed) were checked against their repositories, pinned to the commit shown in section 19.
+- Local storage paths for closed-source tools come from wakatime-cli's readers (BSD-3-Clause), which are maintained against current releases.
+- Nothing was read from agent transcripts or configs on this machine, and nothing was installed or run. No claim here comes from a live test; section 17 lists what needs one.
+
+Reading conventions: field and event names are verbatim. "(unverified)" marks anything not confirmed in a primary source. Versions and dates are the ones seen on 2026-11-19; this field moves monthly, so re-check before building against a specific field.
+
 
 ## 2. Key findings
 
-(pending)
+1. **All six top harnesses now have lifecycle hooks with a prompt-submit event**, and they have converged on Claude Code's shape (`UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `Stop`, JSON on stdin, exit 2 blocks). Cursor, Devin Desktop and Copilot (repo level) even read Claude Code's own settings files. One receiver binary can cover most of the market. (sections 3 to 9)
+2. **Windsurf is now Devin Desktop** (2026-06-02, v3.0.12). The Cascade agent is legacy and no longer starts new conversations; its replacement, Devin Local, uses Devin CLI's hooks and reads `~/.claude/settings.json` hooks by default. Research or code built on Cascade's `pre_user_prompt` hooks is out of date. (section 8)
+3. **Only Claude Code measures human time itself**: the OTel metric `claude_code.active_time.total` has `type="user"` (keyboard interactions, reading responses) and `type="cli"` (tool execution, AI responses). No other harness exports anything comparable. (section 3.3)
+4. **A prompt-submit hook doesn't prove a human typed the prompt.** Claude Code fires `UserPromptSubmit` for `/loop` iterations, background subagents and cross-session messages, with no origin field. Automation flags exist elsewhere (Codex `session_meta.source`/`originator`, Claude `app.entrypoint`, Cursor `loop_count`, Copilot autopilot), but anyone driving the interactive TUI defeats them all. Human evidence has to come from outside the agent. (sections 3.1, 12)
+5. **Lookback is feasible for most harnesses**: Claude Code transcripts (30 days by default; `history.jsonl` of typed prompts kept indefinitely), Codex rollouts (no documented expiry; zstd-compressed after 7 days), Copilot CLI `events.jsonl` and VS Code `chatSessions`, Gemini CLI chats (30 days), Cursor's `state.vscdb` (heavy, multi-GB). That satisfies the organizer's "lookback mode counts as passive" path. (sections 3 to 7)
+6. **Codex is open source and its rollout header is the best automation tell found**: `source` (`cli`, `vscode`, `exec`, `mcp`, `subagent`, ...), `originator` (`codex_exec`, `codex_sdk_ts`, ...), `thread_source`. Its hooks, however, need a one-time user "trust" in `/hooks`, hash-pinned, before they run. (section 6)
+7. **AGENTS.md + CLI is a fallback, not the core.** It costs more than 30 tokens (the prompt copy is output tokens, plus one extra model request per turn), the model can skip or falsify it, sandboxes can block it, Claude Code ignores AGENTS.md whenever a CLAUDE.md exists, and Gemini CLI doesn't read it by default. Wherever a hook or log exists, those are strictly better. (section 11)
+8. **Cursor labels AI edits directly** (`afterTabFileEdit` for Tab, `afterFileEdit` for Agent). Stable VS Code can't: its change events don't carry an edit source (a proposed API does, but Marketplace extensions can't use it), and VS Code removed its own "AI vs typed characters" gauge on 2026-11-12 because agent users saw 95 to 100% AI. (sections 4.1, 13.1)
+9. **OS-level presence is cheap everywhere except GNOME Wayland focus**: `GetLastInputInfo`, `CGEventSourceSecondsSinceLastEventType`, `XScreenSaverQueryInfo`, `ext-idle-notify-v1` (KWin, Sway, Hyprland, not Mutter). Windows flags injected keystrokes (`LLKHF_INJECTED`), but low-level keyboard hooks look like keyloggers to antivirus and are removed silently if slow. (section 13.4)
+10. **wakatime-cli already parses about 60 agent logs** (BSD-3, reusable as a map of paths and fields), but it converts agent activity into "ai coding" time, which is exactly the metric the bounty's vision post rejects. (section 13.1)
+11. **Git gives attribution, not time.** Claude Code and Aider add `Co-authored-by` trailers by default, Replit adds `Replit-Commit-Author: Agent`, Lovable commits as `gpt-engineer-app[bot]`; all are removable, and commit dates are client-set. git-ai's `refs/notes/ai` standard adds line-level AI and "known human" attestations. (section 13.3)
+12. **The design that holds up**: hooks plus log readers plus a local OTLP receiver for the agent side, OS idle/focus and editor typing for the human side, git as the join key, cross-source consistency checks and a hash-chained local spool for trust. Everything except aggregates stays on the device. (sections 16, 17)
+
 
 ## 3. Claude Code
 
@@ -44,7 +66,7 @@ Config lives in JSON settings files under the `hooks` key: `~/.claude/settings.j
 
 Common input fields on every event: `session_id`, `prompt_id` (UUID, matches OTel `prompt.id`, absent until first user input), `transcript_path`, `cwd`, `scratchpad_dir` (v2.1.257+), `permission_mode` (`default`, `plan`, `acceptEdits`, `auto`, `dontAsk`, `bypassPermissions`), `effort.level`, `hook_event_name`, plus `agent_id`/`agent_type` inside subagents or `--agent` sessions. Only `SessionStart` may carry `model`. No hook payload carries a timestamp: the receiver stamps arrival time itself.
 
-Events that matter for time tracking (35 exist in total):
+Events that matter for time tracking (33 exist in total):
 
 | Event | Fires | Payload beyond common fields | Use for pairtime |
 |---|---|---|---|
@@ -158,7 +180,7 @@ The Cursor CLI (binary `agent`, formerly `cursor-agent`) runs the same hooks, re
 
 | Store | Path | Format | Notes |
 |---|---|---|---|
-| Agent transcripts (CLI, and IDE when enabled) | `~/.cursor/projects/<encoded-cwd>/agent-transcripts/<uuid>/<uuid>.jsonl`; subagents under `<parent>/subagents/`; older builds wrote `.txt` | JSONL lines `{"role":"user"|"assistant","message":{"content":[...]}}` and `{"type":"turn_ended","status":...}`; user text wrapped in `<user_query>` | No per-line timestamp in the shape public parsers document, so time comes from file mtime or from hooks. The CLI changelog says "headless transcripts write Claude Code-compatible JSONL" |
+| Agent transcripts (CLI, and IDE when enabled) | `~/.cursor/projects/<encoded-cwd>/agent-transcripts/<uuid>/<uuid>.jsonl`; subagents under `<parent>/subagents/`; older builds wrote `.txt` | JSONL lines `{"role": "user", "message": {"content": [...]}}` (role `user` or `assistant`) and `{"type":"turn_ended","status":...}`; user text wrapped in `<user_query>` | No per-line timestamp in the shape public parsers document, so time comes from file mtime or from hooks. The CLI changelog says "headless transcripts write Claude Code-compatible JSONL" |
 | IDE chat store | `state.vscdb` (SQLite) under `%APPDATA%\Cursor\User\globalStorage\` (Windows), `~/Library/Application Support/Cursor/User/globalStorage/` (macOS), `~/.config/Cursor/User/globalStorage/` (Linux); per-workspace copies in `workspaceStorage/*/state.vscdb` | table `cursorDiskKV(key, value)`; `composerData:<composerId>` (`createdAt`, `lastUpdatedAt`, `name`), `bubbleId:<composerId>:<bubbleId>` (`type` 1 = user, 2 = assistant; `text`; `createdAt` epoch ms; `tokenCount`; `toolFormerData.{name,status,result}` with tool names like `edit_file_v2`, `read_file_v2`, `run_terminal_command_v2`) | Can be several GB (one user's: 4.4 GB, 641 chats, 107k messages). wakatime only reads the newest N rows. Undocumented and changes between versions |
 | AI code attribution | `~/.cursor/ai-tracking/ai-code-tracking.db` (SQLite) | table `ai_code_hashes` with millisecond `timestamp`; other tables hold tracked-file snapshots and commit history (per wakatime's comment) | Cursor's own local record of which code the AI wrote; source of its team "AI code tracking" analytics (unverified link) |
 
@@ -405,7 +427,7 @@ Shorter treatment. Storage paths come from wakatime-cli `pkg/ai/*.go` at `7ab26b
 | Zed agent | none for Zed Agent; external agents (Claude Agent, Codex, Gemini CLI, OpenCode, Copilot, Cursor) run over ACP with their own runtimes and so their own hooks | none for Zed Agent | SQLite `threads.db`: `~/Library/Application Support/Zed/threads/threads.db`, `%LOCALAPPDATA%\Zed\threads\threads.db`, `~/.local/share/zed/threads/threads.db` | `AGENTS.md` primary; first match of `.rules`, `.cursorrules`, ..., `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`; global `~/.config/zed/AGENTS.md` / `%APPDATA%\Zed\AGENTS.md` | Zed is a host for other agents; cover those |
 | Google Antigravity (App, IDE, CLI) | `.agents/hooks.json` (workspace), `~/.gemini/config/hooks.json` (global), plugin `hooks.json`; events `SessionStart`, `PreToolUse`, `PostToolUse`, `PreInvocation`, `PostInvocation`, `Stop`; payload `conversationId`, `workspacePaths`, `transcriptPath`, `artifactDirectoryPath`, `modelName`, `lastUserInput`, no timestamp | none; `PreInvocation` with `invocationNum` 0 is the nearest | `~/.gemini/antigravity{,-ide,-cli}/brain/<conversationId>/.system_generated/logs/transcript.jsonl`; SQLite `~/.gemini/antigravity*/conversations/*.db` and `implicit/*.db` | rules, skills, plugins (antigravity.google/docs) | Antigravity's docs include a Gemini CLI migration page (`docs/cli/gcli-migration`), so some Gemini CLI users will move here (inferred from the URL) |
 | Kiro (IDE, CLI V3, Web) | `.kiro/hooks/<id>.json` (IDE and CLI); global `~/.kiro/hooks/` (CLI V3). Triggers: Prompt Submit, Agent Stop, Session Start/End, Pre/Post Tool Use, Permission Request, File Create/Save/Delete, Pre/Post Compaction, Pre/Post Task Execution, Manual | Prompt Submit (can't block in CLI) | IDE: `<Kiro user dir>/globalStorage/kiro.kiroagent/workspace-sessions/*/*.json`; CLI: `~/.kiro/sessions/**/messages.jsonl` + `session.json` (`KIRO_HOME`) | `.kiro/steering/`, `~/.kiro/steering/`, AGENTS.md supported on all surfaces | File Save trigger is an editor-side activity signal |
-| Amp | TS/JS plugins in `.amp/plugins/` or `~/.config/amp/plugins/`: `amp.on('session.start' | 'agent.start' | 'tool.call' | 'tool.result' | 'agent.end')`; `agent.start` fires when the user submits a prompt and carries `changesWorkflow` (`ship`, `push_branch`) when a button started the turn | `agent.start` | Threads live on ampcode.com; local cache `~/.cache/amp/logs/threads`, `cli.log` | `AGENTS.md` (Amp's primary format) | Execute mode `amp -x` for scripts; `-ox` spawns cloud "orbs"; automations run on a schedule |
+| Amp | TS/JS plugins in `.amp/plugins/` or `~/.config/amp/plugins/`: `amp.on(<event>, ...)` for `session.start`, `agent.start`, `tool.call`, `tool.result`, `agent.end`; `agent.start` fires when the user submits a prompt and carries `changesWorkflow` (`ship`, `push_branch`) when a button started the turn | `agent.start` | Threads live on ampcode.com; local cache `~/.cache/amp/logs/threads`, `cli.log` | `AGENTS.md` (Amp's primary format) | Execute mode `amp -x` for scripts; `-ox` spawns cloud "orbs"; automations run on a schedule |
 | Warp (terminal + agent) | none for Warp Agent | none | `warp.sqlite`: `~/Library/Application Support/dev.warp.Warp-Stable/`, `%LOCALAPPDATA%\warp\Warp\data\`, `~/.local/share/warp-terminal/` | `AGENTS.md` (or legacy `WARP.md`), root and cwd | Hosts third-party CLI agents (Claude Code, Codex, OpenCode) whose hooks still apply; Warp's terminal blocks are a command-timing source (unverified) |
 | JetBrains Junie (CLI, EAP) | `hooks` in `~/.junie/config.json` (project `.junie/config.json` ignored unless passed with `--config-location`); extensions with Claude-layout `hooks/hooks.json`; events `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `Stop`, `PermissionRequest`, `StopFailure`, `SessionEnd`; Windows runs `cmd /c` | `UserPromptSubmit` (TUI only; batch and ACP hosts skip it) | not documented | `.junie/AGENTS.md`, else root `AGENTS.md` + `.junie/rules/*.md`, else legacy `.junie/guidelines.md`; global `~/.junie/AGENTS.md` | Hook doc dated 2026-11-18; IDE plugin hooks not documented |
 | JetBrains AI Assistant (2026.3) | none documented | none | not documented | `AGENTS.md` for Junie, Codex, Copilot; `CLAUDE.md` for Claude Agent | Integrates Junie, Claude Agent, Codex, GitHub Copilot, plus ACP agents; the hosted agents' own hooks apply |
@@ -457,7 +479,7 @@ The proposal: one instruction in AGENTS.md (or a skill) tells the agent, on ever
 | Harness | Reads AGENTS.md by default? | Where the instruction must go to load reliably |
 |---|---|---|
 | Claude Code | Only when no `CLAUDE.md`/`.claude/CLAUDE.md`/`CLAUDE.local.md` exists in cwd or above (v2.1.277+) | `~/.claude/CLAUDE.md` (always loads) |
-| Cursor | Yes, root and nested | `~/.cursor` User Rules or a project rule with `alwaysApply: true` |
+| Cursor | Yes, root and nested | User Rules (global, in Cursor settings) or a project rule with `alwaysApply: true` |
 | Copilot CLI / VS Code | Yes (CLI merges AGENTS.md, CLAUDE.md, GEMINI.md, copilot-instructions) | `~/.copilot/copilot-instructions.md`; subagents get nothing unless `include-custom-instructions: true` |
 | Codex | Yes, natively, once at session start | `~/.codex/AGENTS.md` |
 | Gemini CLI | No; reads `GEMINI.md` unless `context.fileName` includes `AGENTS.md` | `~/.gemini/GEMINI.md` |
@@ -531,28 +553,257 @@ Signals combine well because faking all of them at once is expensive: keystrokes
 
 ## 13. Human-side signals outside the agent
 
-(pending)
+These are the signals that show the human, rather than the agent, doing something. They matter most because every agent-side signal in sections 3 to 12 can be produced by a script.
+
+### 13.1 Editor activity
+
+WakaTime-style plugins send a heartbeat when the user saves, switches files, or keeps editing the same file after 2 minutes (WakaTime's plugin guide, not re-read today), and the server joins heartbeats closer than the keystroke timeout (default 15 minutes) into durations (WakaTime FAQ, per `notes/hackatime.md`). wakatime-cli v2.28.4 also reads 60+ agent logs (section 3.2 onward) and relabels editor heartbeats within 2 minutes of AI activity as category `ai coding` when they show no human line changes (`pkg/ai/ai.go`). That measures when the agent was busy, which the vision post rejects as the metric.
+
+VS Code extension API (stable `vscode.d.ts`, main branch, 2026-11-19):
+
+| API | Gives | Tells AI from human? |
+|---|---|---|
+| `workspace.onDidChangeTextDocument` | `contentChanges[]` (range, text) per edit; `reason` is only `Undo = 1` or `Redo = 2` | No. Typing, paste, inline-completion accept, and agent edits all arrive as plain changes |
+| `window.onDidChangeTextEditorSelection` | `kind`: `Keyboard = 1` ("typing in the editor"), `Mouse = 2`, `Command = 3` | Partly: a change followed by a `Keyboard` selection move looks like typing; agent edits to unopened files have no editor at all |
+| `window.onDidChangeWindowState` | `focused`, and `active` ("interacted with recently") | Shows the human is at this window |
+| `workspace.onDidSaveTextDocument`, `onDidOpenTextDocument` | saves, opens | Agent tools also save files |
+| `window.onDidStartTerminalShellExecution` / `onDidEndTerminalShellExecution` | `commandLine.value`, `cwd`, `exitCode` (needs shell integration) | Commands in the integrated terminal; agents usually run their own subprocesses instead |
+| Proposed `textDocumentChangeReason` | `detailedReason.source`, e.g. `inline-completion`, `chat-edit`, `extension`, plus `metadata` | Yes, but proposed APIs can't be used by extensions published to the Marketplace (VS Code "Using Proposed API" page, not re-read today) |
+
+VS Code itself can tell them apart: v1.103 (July 2025) shipped an experimental `editor.aiStats.enabled` that showed "the percentage of characters that was inserted by AI versus inserted by typing". VS Code issue #347841 (closed 2026-11-12) removed it because "users who work with agents see an AI rate of 95% to 100% nearly all the time". So the core keeps an edit-source signal internally, and a stable extension can only approximate it: classify a change as typed when it is small (one or a few characters), follows a keystroke-driven selection change, and coincides with OS keyboard activity; classify larger multi-line inserts with no matching keystrokes as paste, completion, or agent. Cursor's `afterTabFileEdit`/`afterFileEdit` hooks label the AI edits directly (section 4.1).
+
+JetBrains: the IntelliJ Platform has `DocumentListener`, `CaretListener` and `TypedHandlerDelegate` (a typed-character callback distinct from programmatic edits), which allows a stronger "typed" signal than VS Code's (platform API, general knowledge; verify before relying on it). Zed has no third-party extension API for buffer events (unverified).
+
+### 13.2 Terminal activity
+
+| Source | Format | Notes |
+|---|---|---|
+| bash `~/.bash_history` | one command per line; `#<epoch>` lines only if `HISTTIMEFORMAT` is set | written at shell exit by default |
+| zsh `~/.zsh_history` | `: <epoch>:<duration>;<cmd>` with `EXTENDED_HISTORY` | common on macOS |
+| fish `~/.local/share/fish/fish_history` | `- cmd: ...` / `when: <epoch>` | timestamps by default |
+| PowerShell (PSReadLine) | `%APPDATA%\Microsoft\Windows\PowerShell\PSReadLine\ConsoleHost_history.txt` | no timestamps; Windows default shell |
+| Atuin | SQLite with timestamp, duration, exit code, cwd | opt-in tool |
+| Shell integration escapes | OSC 133 (FinalTerm; Windows Terminal, iTerm2, WezTerm, kitty) and OSC 633 (VS Code) mark prompt start, command start, command end with exit code | a terminal or shell plugin can timestamp each command |
+| Warp | `warp.sqlite` (section 9) | per-block command history (unverified schema) |
+
+What it proves: commands in an interactive shell's history were typed or pasted into that shell, because agent tools run non-interactive subprocesses that don't write history. Running tests, reading logs and fixing by hand all show up here. A tmux `send-keys` driver writes to history too, so this is corroboration, not proof. Reading history files is lookback-friendly but coarse (no timestamps in bash or PowerShell by default); a shell hook (`PROMPT_COMMAND`, zsh `preexec`/`precmd`, PowerShell `PSReadLine` `AddToHistoryHandler`) gives exact per-command times and is cheap, but means editing the user's shell profile.
+
+### 13.3 Git
+
+| Signal | Detail |
+|---|---|
+| Commits | author and committer name, email, dates. Both dates are set by the client (`GIT_AUTHOR_DATE`, `GIT_COMMITTER_DATE`, `--date`), so they prove nothing about when work happened unless a server saw the push (GitHub push events, reflog on the server) |
+| Diffs | size, files, churn; cheap to compute locally at commit time |
+| Agent trailers | Claude Code adds a `Co-Authored-By` trailer and a PR line by default (`attribution`, `attribution.commit`, `attribution.pr`, `attribution.sessionUrl`; `false` hides all, v2.1.281+). Aider adds `Co-authored-by` by default (`--attribute-co-authored-by`). Replit adds `Replit-Commit-Author: Agent` / `Deployment`. Lovable commits as `gpt-engineer-app[bot]`. All are optional or removable, so absence proves nothing |
+| git notes | `refs/notes/*`; travel only if pushed explicitly (`git push origin refs/notes/*`) |
+| git-ai (Apache-2.0, ~3k stars, pushed 2026-11-17) | Records which agent, model and prompt produced each line, in git notes under `refs/notes/ai` (standard v3.0.0: "MUST be stored under the `refs/notes/ai` namespace"). Attestations cover AI sessions (`s_` keys) and "known human" authors (`h_` keys, "as observed by an IDE extension"). Prompts are "scanned and redacted, and saved outside of Git". Supports Claude Code, Codex, Cursor, Copilot and others through their hooks; no git hooks or git wrapper |
+| Agent Trace | A Cursor-led attribution spec at github.com/cursor/agent-trace with partners including Amp, Cline, Cognition, git-ai, OpenCode, Vercel (per `notes/priorart.md`, unverified here) |
+
+Git answers "what shipped and which lines an agent claims", which R5 (git integration) and R10 (audit) need. It does not measure time. Its best use is as the join key: pairtime's hours should attach to commits, and a reviewer should be able to ask "which hours produced this diff".
+
+### 13.4 OS input and window focus
+
+| Platform | Idle time | Keystroke/mouse events | Focused window | Synthetic-input tell |
+|---|---|---|---|---|
+| Windows 7 to 11 | `GetLastInputInfo` (tick of last input in this session; ActivityWatch's `aw-watcher-afk/windows.py` uses it) | `SetWindowsHookEx(WH_KEYBOARD_LL / WH_MOUSE_LL)`, or Raw Input (`RIDEV_INPUTSINK`), which Microsoft recommends over low-level hooks | `SetWinEventHook(EVENT_SYSTEM_FOREGROUND)` (event-driven), `GetForegroundWindow`, `GetWindowThreadProcessId`, `QueryFullProcessImageNameW`, `GetWindowTextW` | `KBDLLHOOKSTRUCT.flags` `LLKHF_INJECTED` for `SendInput`/`keybd_event` input. Low-level hooks must answer within `LowLevelHooksTimeout` (max 1000 ms from Win10 1709); on Windows 7+ a slow hook "is silently removed" (Microsoft Learn, `LowLevelKeyboardProc`, 2025-07-14), so the hook thread must only enqueue |
+| macOS | `CGEventSourceSecondsSinceLastEventType(kCGEventSourceStateHIDSystemState, kCGAnyInputEventType)` (ActivityWatch `macos.py`), no permission needed | `CGEventTap` needs Input Monitoring permission | `NSWorkspace` `didActivateApplicationNotification` (app); window titles need Accessibility, or Screen Recording for `CGWindowListCopyWindowInfo` names | event fields `kCGEventSourceUnixProcessID` / source state ID can identify posted events (unverified; test) |
+| Linux X11 | `XScreenSaverQueryInfo` (MIT-SCREEN-SAVER) | XInput2 raw events (ActivityWatch's `unix.py` uses pynput listeners) | `_NET_ACTIVE_WINDOW` on the root window, `_NET_WM_NAME`, `_NET_WM_PID` | XTEST input arrives from the "Virtual core XTEST" device (XI2 `sourceid`) |
+| Linux Wayland | `ext-idle-notify-v1`: `get_idle_notification` and, since v2, `get_input_idle_notification` (input only, ignores inhibitors); supported by KWin 6.7, Sway 1.11, Hyprland 0.52.1, COSMIC, niri and others, not Mutter (GNOME) or Weston (wayland.app, 2026-11-19). GNOME: `org.gnome.Mutter.IdleMonitor.GetIdletime` over D-Bus (general knowledge) | none for unprivileged clients by design; reading `/dev/input` needs the `input` group | no standard protocol; GNOME needs a Shell extension, KDE a KWin script, wlroots `wlr-foreign-toplevel-management` | n/a |
+
+What these prove: a person (or a device pretending to be one) is producing input on this machine, and which app has focus. Idle time is the minimum viable signal for "the human is present" and is enough to drop time when nobody is at the machine. Keystroke counts are a stronger signal but need consent (and on macOS an Input Monitoring prompt). pairtime should count keystrokes and their timing only, never record which keys, and attribute them to the focused app.
+
+ActivityWatch's watchers are the reference design (MPL-2.0; Python, one process per watcher). Its RAM use on old laptops is a reason to reimplement the same calls in one native binary rather than embed it (memory figures unverified).
+
+### 13.5 Browser extensions
+
+Covered in section 10.1: content scripts on the chat sites for prompt-submit timing and typing-vs-paste, `chrome.idle` for presence, tab focus for attribution. The same extension can see app builders (Lovable, Bolt, v0, Replit) because they are web apps.
+
 
 ## 14. Signal scorecard
 
-(pending)
+CPU and RAM figures are estimates for a 2016-era Windows 10 laptop (dual-core i3/i5, 4 GB RAM, often an HDD), assuming pairtime is one native daemon plus a tiny native hook binary. They are not measurements; benchmark before quoting them.
+
+| Signal | What it proves about the human | How it is faked | Privacy cost | Platforms | Cost on an old laptop |
+|---|---|---|---|---|---|
+| Prompt-submit hook (`UserPromptSubmit`, `beforeSubmitPrompt`, `userPromptSubmitted`, `BeforeAgent`) | A prompt entered the agent at time T, with this text and length. Not that a human typed it: Claude Code fires it for `/loop`, background agents and cross-session messages too | Script drives the TUI or SDK; LLM writes prompts; loop features | Raw prompt reaches pairtime locally; keep a hash, length and local-only text | All top harnesses, Win/Mac/Linux (Cline file hooks: not Windows) | Command hook = one process spawn per event: about 10 to 30 ms and under 5 MB for a native exe, 200+ ms and 30+ MB for Node/Python. HTTP hooks (Claude Code; Copilot with `COPILOT_HOOK_ALLOW_LOCALHOST=1`) avoid the spawn |
+| Tool and stop hooks (`PreToolUse`, `PostToolUse`, `Stop`, `afterFileEdit`) | When the agent worked, on which files, with what result. Agent time, not human time | Same as above | File paths, commands, diffs | Same | Fires many times per turn; register only the events needed, use matchers, or read the transcript instead |
+| Human-decision hooks (`PermissionRequest`, Claude `Notification permission_prompt`/`idle_prompt`, Codex `Interrupt`, accept/reject OTel events) | A decision point was presented, and when it was answered; latency between prompt and answer is human reaction time | Auto-approve modes (`--yolo`, `bypassPermissions`, `--force`) remove the prompts; a script can answer them | Low | Most | Rare events; negligible |
+| Transcript/log lookback reader | Complete session history with per-message timestamps (Claude Code, Codex, Copilot, Gemini, Cursor DB) | Replayed or synthesized log files; edited timestamps; logs written by a script that never called a model | Highest: full prompts, code, tool output, secrets the agent read. Must stay local | All OSes; formats undocumented and versioned except Codex (open source) | JSONL tail via file watcher (`ReadDirectoryChangesW`/FSEvents/inotify): negligible. Cursor `state.vscdb` (can be GBs): heavy I/O on HDD, read incrementally by rowid and rate-limit. Codex `.jsonl.zst` decode only on backfill |
+| Claude Code OTel `claude_code.active_time.total{type=user}` | Client-measured seconds of user keyboard interaction and reading inside Claude Code | Synthetic keystrokes into the terminal; the metric is computed client-side | Low (no content by default) | Claude Code only, all OSes | Local OTLP/HTTP receiver: one batch per 60 s (metrics) and per 5 s (logs); negligible |
+| Other OTel (Copilot edit accept/reject, survival; Codex `approval.requested`, `task.user_shell`; Gemini tool decisions) | Human decisions on AI output; how much accepted AI code survives | As above | Low | Copilot (VS Code, CLI), Codex, Gemini CLI | Negligible |
+| AGENTS.md + `pairtime track` | That the model followed an instruction | Trivially: run the CLI from a script; prompt injection; deleted line | Model-chosen text | Any harness with a shell tool | One extra model request per turn (tokens, latency) |
+| MCP server presence | A session of harness X opened project Y (`clientInfo`, `roots`) | Start the MCP client yourself | Low | Every MCP-capable harness | One idle process per harness session, a few MB |
+| Editor typing (small keystroke-driven edits) | The human typed code in this file at time T | Auto-typers (`SendInput`, xdotool) replaying code; injected edits via extension | File names, edit sizes; never store text | VS Code family, JetBrains; Zed limited | Event-driven; negligible if the extension debounces |
+| AI-edit labels (Cursor `afterTabFileEdit`/`afterFileEdit`, VS Code proposed API, git-ai) | Which edits came from AI | Disable the hook; edit outside the editor | Low | Cursor; VS Code Insiders only; git-ai where installed | Negligible |
+| OS idle time | Someone touched keyboard or mouse in the last N seconds | Mouse jigglers, auto-typers, any injected input | Very low | Win `GetLastInputInfo`, mac `CGEventSourceSecondsSinceLastEventType`, X11 `XScreenSaverQueryInfo`, Wayland `ext-idle-notify-v1` (not GNOME, which needs Mutter's D-Bus IdleMonitor) | 1 Hz poll: negligible; no AV risk |
+| OS keystroke/mouse counts and timing | Human-like input cadence in the focused app; injected input is flagged on Windows (`LLKHF_INJECTED`) and X11 (XTEST device) | Hardware HID injectors (USB boards), VMs, remote desktop | Medium: even counts reveal activity patterns; never log key identities | Windows LL hook or Raw Input; macOS event tap (Input Monitoring prompt); X11 XI2; Wayland not possible unprivileged | Negligible CPU, but low-level keyboard hooks in unsigned binaries look like keyloggers to antivirus heuristics; make it opt-in and code-sign |
+| Window focus | Which app, and which project window, has the user's attention | Leave the window focused while a script runs | Window titles leak document and site names; store app + project, hash titles | Win `SetWinEventHook(EVENT_SYSTEM_FOREGROUND)`, mac `NSWorkspace` (titles need Accessibility), X11 `_NET_ACTIVE_WINDOW`; Wayland needs per-compositor helpers | Event-driven on Windows and macOS: negligible |
+| Shell history / shell hook | Commands typed or pasted into an interactive shell (tests, git, running the app) | tmux `send-keys`, scripted shells | Commands can contain secrets; store command name and timing only by default | bash, zsh, fish, PowerShell (no timestamps), Atuin | Shell hook: microseconds per command; history parse: negligible |
+| Git commits, diffs, trailers, notes | What shipped; which commits agents claim; links hours to output | Client-side dates are forgeable; trailers are removable | Code stays local; send hashes and stats | All | Negligible at commit time |
+| Browser extension on chat and builder sites | Prompt-submit timing, typing vs paste, tab focus for web-only work | Same as other UI automation; DOM-level scripts | Prompt text visible to the extension; keep local | Chrome/Edge/Firefox; managed Chromebooks may block | Content script: low; one extension per browser |
+| Vendor data exports | Full web-chat history after the fact | Exports can be edited before upload | Everything | ChatGPT, Claude.ai, Google Takeout | Manual |
+
+The pattern: everything an agent writes about itself is forgeable by a script, and everything the OS sees is forgeable with injected input. They fail differently, though. A cheater has to fake both, consistently, at once: a believable transcript, keystroke cadence matching the prompt lengths, focus on the right window, editor edits between turns, and commits that match the diffs. pairtime's trust comes from cross-checking independent sources, not from any single one.
+
 
 ## 15. Matrix: harness by capture method
 
-(pending)
+Cell = coverage / build effort. Coverage: **Y** works for passive time tracking, **P** partial (caveat in note), **N** not available, **-** not applicable. Effort: S (days), M (one to two weeks), L (more, or ongoing breakage). "Editor extension" means a pairtime VS Code-family or JetBrains extension that sees the human's typing alongside the agent.
+
+| Harness | Hook | Log reader (lookback) | OTel receiver | AGENTS.md + CLI | MCP server | Editor extension |
+|---|---|---|---|---|---|---|
+| Claude Code (CLI, VS Code ext, Desktop Code tab) | Y / S (HTTP or command; plugin packaging) | Y / M (`~/.claude/projects`, `history.jsonl`; undocumented format) | Y / S (only harness with human-time metric) | P / S (only via `~/.claude/CLAUDE.md`) | P / S | P (VS Code ext host) |
+| Cursor (IDE, `agent` CLI) | Y / S (`~/.cursor/hooks.json`; Tab vs Agent edit hooks) | P / L (multi-GB `state.vscdb`; JSONL transcripts lack timestamps) | N (Enterprise cloud only) | P / S | P / S | Y / M (VS Code fork; Open VSX) |
+| GitHub Copilot (VS Code, CLI, app) | Y / S (`~/.copilot/hooks/*.json`, timestamps included) | Y / M (`events.jsonl`, `chatSessions/`) | Y / S (edit accept/reject, survival) | P / S | P / S | Y / M |
+| OpenAI Codex (CLI, IDE ext, desktop) | P / S (works, but each hook needs one-time user trust in `/hooks`) | Y / S (open-source format; `source`/`originator` fields) | P / S (no human-time metric) | Y / S (native `~/.codex/AGENTS.md`) | P / S | P (IDE ext) |
+| Gemini CLI | Y / S (`~/.gemini/settings.json`, timestamps included) | Y / S (`~/.gemini/tmp/*/chats`, `logs.json`) | P / S (`logPrompts` defaults on) | P / S (needs `GEMINI.md` or `context.fileName`) | P / S | - |
+| Windsurf → Devin Desktop / Devin CLI | Y / S (reads `~/.claude/settings.json` hooks; or `~/.config/devin/config.json`) | P / M (`~/.local/share/devin/transcripts`; Windows path unknown) | N | P / S | P / S | Y / M (VS Code fork) |
+| Cline | P / S (opt-in; Windows unsupported for file hooks) | Y / S (`tasks/<id>/*.json`) | P (enterprise OTel docs exist; unverified) | P / S | P / S | (it is an extension) |
+| Kilo Code, OpenCode | Y / M (JS/TS plugin) | Y / M (SQLite) | N | Y / S | P / S | - |
+| Zed agent | N | Y / M (`threads.db`) | N | Y / S (only in-agent path) | P / S | N (no buffer-event API found) |
+| Antigravity | P / S (no prompt event) | P / M (`brain/.../transcript.jsonl`, per-conversation SQLite) | N | P / S | P / S | P (VS Code-based IDE, unverified) |
+| Kiro | Y / S (`.kiro/hooks`, `~/.kiro/hooks` for CLI) | P / M | N | Y / S | P / S | P |
+| Amp | Y / M (JS plugin) | P (threads are server-side) | N | Y / S | P / S | - |
+| Warp agent | N | P / M (`warp.sqlite`) | N | Y / S | P / S | - |
+| JetBrains Junie CLI / AI Assistant | P / S (Junie CLI hooks; IDE undocumented) | N | N | Y / S | P / S | Y / L (JetBrains plugin) |
+| Trae | P / S (Claude-style; details unverified) | N | N | P / S | P / S | P |
+| Continue | P / S (`data` destination POST) | Y / S (`~/.continue/dev_data`) | N | P / S | P / S | (it is an extension) |
+| Goose | Y / S (`~/.agents/plugins/*/hooks/hooks.json`) | Y / S (`sessions.db`) | N | P / S | Y / S | - |
+| Aider | N | Y / S (`.aider.input.history` in repo) | N | N | N | - |
+| ChatGPT / Claude.ai / Gemini web | - | P (manual exports) | - | N | - | browser extension Y / M |
+| Lovable, Bolt, v0, Replit | - | via git only | - | N | - | browser extension P / M |
+
+Two columns that apply to every row: OS idle + focus watcher (Y / M, all platforms except per-compositor Wayland focus) and git integration (Y / S).
+
 
 ## 16. Recommended v1 set
 
-(pending)
+Ordered by value per unit of work.
+
+1. **One local daemon** (native, single binary per OS) that owns: a spool on disk, a localhost receiver (HTTP for hooks, OTLP/HTTP for telemetry), the OS idle + focus watcher, and the log readers. Budget: idle CPU near zero, under 30 MB RAM.
+2. **A tiny native hook binary** (`pairtime hook <harness>`) registered in exec form. It reads stdin, stamps the arrival time, appends one line to the spool (or POSTs to the daemon), and exits in milliseconds. Fail-open always: a dead daemon must never block the agent.
+3. **Hooks for the top six, installed by `pairtime install`:**
+   - Claude Code: `~/.claude/settings.json` (or a plugin) for `SessionStart`, `UserPromptSubmit`, `Stop`, `StopFailure`, `Notification`, `PermissionRequest`, `PostToolUse` (matcher `Edit|Write|Bash`), `SubagentStart`/`Stop`, `SessionEnd`. Cursor and Devin Desktop read the same file at user level; dedupe by harness.
+   - Cursor: `~/.cursor/hooks.json` adds `beforeSubmitPrompt`, `afterTabFileEdit`, `afterFileEdit`, `afterAgentResponse`, `stop`, `sessionStart`/`End`.
+   - Copilot: `~/.copilot/hooks/pairtime.json` (camelCase events, for the timestamps).
+   - Codex: `~/.codex/hooks.json`, plus a first-run notice telling the user to trust it in `/hooks`; until trusted, fall back to the rollout reader.
+   - Gemini CLI: `~/.gemini/settings.json` hooks; set `telemetry.logPrompts=false` if enabling OTel.
+4. **Claude Code OTel** via the `env` block of `~/.claude/settings.json` pointing at the daemon (`OTEL_EXPORTER_OTLP_PROTOCOL=http/json` or `http/protobuf`, `OTEL_METRICS_INCLUDE_ENTRYPOINT=true`, prompt logging off). Store `active_time{type=user}` and `{type=cli}` per session as a reference measure to calibrate pairtime's own estimate against.
+5. **Lookback readers** for Claude Code, Codex, Copilot CLI, VS Code Copilot chat and Gemini CLI. They backfill when hooks weren't installed yet (R4's "lookback" path) and give a second, independent record to compare hooks against. Cursor's DB reader is v1.5: high value but heavy and fragile.
+6. **OS signals:** idle time and foreground app on all three OSes (Windows `GetLastInputInfo` + `SetWinEventHook`; macOS `CGEventSourceSecondsSinceLastEventType` + `NSWorkspace`; X11 and `ext-idle-notify-v1`). Keystroke counts are opt-in.
+7. **Git:** per-commit stats at commit time (via the daemon watching `.git` or a `post-commit` hook), agent trailers, and reading git-ai notes when present. Hours attach to commits.
+8. **AGENTS.md + CLI** only as the fallback integration for harnesses with nothing else, shipped as a documented "plugin" for R7.
+
+Deferred to v2: VS Code and JetBrains extensions for typed-vs-AI edits, the browser extension for web chat and app builders, OpenCode/Kilo/Amp plugins, Cursor DB reader, shell-hook integration.
+
 
 ## 17. Design implications
 
-(pending)
+Each recommendation is tagged with the requirements it serves.
+
+1. **Hooks first, log readers second, AGENTS.md last.** Hooks are deterministic, cost no tokens, run outside the model's sandbox and can't be skipped by the model; logs give lookback and an independent second record; AGENTS.md + CLI is only the fallback for harnesses with neither. [R4, R7, R8]
+2. **Hours come from human-side evidence; agent events only frame them.** Credit a minute when the session is live (agent events in the last N minutes) and there is human evidence in that minute: OS input with the terminal, editor or chat tab of that project focused, a prompt submit, a permission answer, an interrupt, a typed edit, a shell command. Agent-only spans, where the agent runs and the human gives no input, count as agent time: shown to the user, never submitted as struggle. This is the concrete form of "count the human, not the agent's runtime", and it means `/loop`, `/goal`, autopilot and `-p` runs earn nothing on their own. [R2, R9]
+3. **Reading and reviewing need an explicit, capped rule.** After a `Stop`/`agentStop`/`AfterAgent`, give credit for focus-plus-input time on the agent's window up to a cap scaled by response length (reading speed), and for diff review in the editor. Watching a spinner with no input earns nothing. Calibrate the caps against Claude Code's `active_time{type=user}`, which measures "typing and reading responses" client-side. [R2, R3]
+4. **Label automated turns at ingest** with every flag in section 12.1 (`app.entrypoint`, Codex `source`/`originator`/`thread_source`, `Stop.session_crons` prompt matches, `stop_hook_active`, Cursor `loop_count`/`is_background_agent`, Copilot autopilot, Gemini `output_format`, nested-agent env and process tree), and show them in the UI. Most automation is honest, and labeling it beats treating it as fraud. [R2, R9, R3]
+5. **Detect dark flow and repetition locally.** Keep MinHash signatures of normalized prompts on the device; down-weight runs of near-duplicate prompts with no edits, tests or reading between them, and show the user when it happens, which is useful feedback in its own right. [R2, R3, R9]
+6. **Normalize everything into one event schema** (`session`, `turn`, `prompt`, `tool`, `edit{source: human|tab|agent|unknown}`, `decision`, `stop`, `input_activity`, `focus`, `commit`), each event tagged with its source (hook, log, otel, os, git, cli) and harness. The "plugin approach" in R7 is this schema plus a documented spool format, so a new harness needs only an adapter. [R7]
+7. **Treat every undocumented format as unstable.** Pin parsers to versions, keep fixture tests per harness version, and record parse failures locally. Prefer documented surfaces (hooks, OTel, Codex's open-source rollout format) over Claude Code's and Cursor's internal formats, which their own docs say change between releases. wakatime-cli's BSD-3 readers are a vetted starting point for paths and fields. [R7, R8]
+8. **Cross-source consistency is the anti-fraud core.** For each claimed hour, check that hooks, logs, OTel, OS input, editor edits and git agree: prompts with no preceding keystrokes, transcripts with no hook events, hook events with no OS input, typing speed that's physically impossible, and commits whose diffs don't match recorded edits all lower trust. Report a per-hour trust score instead of a binary verdict. [R9, R10]
+9. **Make local records tamper-evident.** Hash-chain the spool (each record carries the previous record's hash) and upload the chain head every few minutes, so a replayed or backdated log can't later match what the server saw. The cost is one hash per upload. [R9, R10, R11]
+10. **Two privacy tiers.** Logged data stays local: raw prompts, transcripts, file names, window titles. The server gets per-minute aggregates per project plus hashes. Only at submission does pairtime build a redacted evidence pack (timeline, aggregates, prompt hashes or user-approved excerpts, commit links) that reviewers can check against the anchored hashes. [R6, R10]
+11. **Redact on the device, deterministically.** Hooks hand pairtime the raw prompt; strip emails, phone numbers, keys, tokens and home paths with local rules before anything is stored beyond the spool. Don't rely on the model to strip PII. [R6]
+12. **Build for the 10-year-old Windows laptop first.** One native binary per OS; hooks in exec form (Claude Code) or HTTP to localhost (Claude Code; Copilot needs `COPILOT_HOOK_ALLOW_LOCALHOST=1`); no Node or Python runtime; event-driven file and focus watching; no low-level keyboard hook by default (antivirus flags it, and it fails silently past 1 s); code-sign the binaries. [R8, R6]
+13. **Install touches user-level config only**, merged idempotently, removable by `pairtime uninstall`: never commit hooks, AGENTS.md or CLAUDE.md into users' repos. Handle Codex's one-time hook trust and Cline's "Enable Hooks" checkbox with clear prompts. [R4, R6, R7]
+14. **Use lookback to show value on day one.** Backfill from Claude Code (30 days), Gemini CLI (30 days), Codex and Copilot (no documented expiry) on install, but mark backfilled hours as lower-trust for submission because they lack OS-side evidence. [R3, R4, R9]
+15. **Attach hours to commits.** Per-commit stats and agent trailers or git-ai notes let reviewers ask "which hours produced this diff", which is what YSWS review needs. [R5, R10]
+16. **Upload only aggregates.** Per-minute buckets per project are a few KB per user per day, which keeps hosting far below R11's $500/month even at 15,488 MAU. [R11, R5]
+17. **Lead with self-improvement views:** human vs agent time, time spent waiting on the agent, prompts per hour, repeated-prompt streaks, review time, interruptions. Claude Code's `active_time` user/cli split is a ready-made example of what to show. [R3]
+
 
 ## 18. Open questions
 
-(pending)
+For Karim or Hack Club staff:
+
+1. Does reading the agent's output count as productive struggle, and how much? The vision post counts "actively solving problems"; is watching a long streamed answer with no input credited, capped, or zero?
+2. Which OS-level signals are acceptable under R6: idle time and foreground app only, or also keystroke counts and window titles? Would Hack Club's privacy reviewers accept an opt-in keystroke-cadence signal for higher-trust submissions?
+3. Will YSWS reviewers and Fraud Squad accept a hash-anchored evidence pack without screen recording, or do high-value submissions still need a Lapse-style timelapse?
+4. Can Hackatime share aggregate counts of AI user-agent tokens (wakatime-cli tags heartbeats per harness) so pairtime's harness priority matches what teens actually use?
+5. Is it acceptable for the installer to edit global agent configs (`~/.claude/settings.json`, `~/.cursor/hooks.json`, `~/.codex/hooks.json`, ...) with one consent screen?
+6. Does a one-time "trust this hook" step in Codex, or ticking "Enable Hooks" in Cline, still count as passive under R4?
+7. Should submitted data show agent hours alongside human hours, so program authors can see how a project was built, or human hours only?
+8. Are web-only builders (Lovable, Bolt, v0, Replit) and web chat in scope for v1, given they need a browser extension? Do programs accept hours from those tools at all?
+9. Are school-managed devices (Chromebooks, locked-down Windows) in scope? They usually block extensions and global installs.
+10. Should pairtime also emit WakaTime-compatible heartbeats into Hackatime so existing program pipelines keep working, and how should AI-assisted human time be categorized there?
+11. What labeled ground truth exists, such as Stardance's hand-reviewed hours, that pairtime could calibrate against for R2?
+
 
 ## 19. Sources
 
-(pending)
+All read 2026-11-19 unless noted. Docs fetched as raw Markdown where the site offers it; GitHub files pinned to the commit shown.
+
+Claude Code (Anthropic), code.claude.com/docs/en/*.md, changelog latest v2.1.328:
+1. `hooks` — events, common input fields, UserPromptSubmit sources, Stop `session_crons`, async and HTTP hooks, workspace trust, Windows exec form.
+2. `monitoring-usage` — OTel metrics and events, `active_time.total` `type` user/cli, `app.entrypoint`, repo-settings restrictions.
+3. `sessions` and `claude-directory` — transcript paths, `cleanupPeriodDays` (30), `history.jsonl` retention, scratchpad layout.
+4. `headless` — `-p`, `--bare`, structured output.
+5. `memory` — AGENTS.md rules (v2.1.277+, only without CLAUDE.md).
+6. `goal`, `scheduled-tasks` — `/goal` as a prompt-based Stop hook, `/loop`, 7-day expiry.
+7. `env-vars` — `CLAUDECODE`, `CLAUDE_CODE_CHILD_SESSION`, `CLAUDE_CODE_SESSION_ID`, `CLAUDE_CODE_SKIP_PROMPT_HISTORY`.
+8. `settings-reference` — `attribution` commit/PR trailers.
+9. `skills`, `mcp`, `statusline`, `changelog`.
+
+Cursor, cursor.com/docs/*.md:
+10. `hooks.md` — events, common fields, Tab vs Agent edit hooks, cloud-agent coverage, Windows via PowerShell.
+11. `reference/third-party-hooks.md` — Claude Code hook loading and mapping.
+12. `rules.md`, `skills.md`, `mcp.md`.
+13. `cli/headless.md`, `cli/reference/output-format.md`, `cli/changelog.md` (v2026.11.17).
+14. `enterprise/opentelemetry-export.md`, `enterprise/privacy-and-data-governance.md`.
+
+GitHub Copilot and VS Code:
+15. docs.github.com (via `/api/article/body`): `copilot/reference/hooks-reference`, `copilot-cli-reference/cli-command-reference`, `cli-config-dir-reference`, `enterprise-administrators/opentelemetry-reference`.
+16. microsoft/vscode-docs @ `2d06388` (2026-11-18): `docs/agent-customization/hooks.md`, `docs/agents/guides/monitoring-agents.md`, `docs/agent-customization/custom-instructions.md`, `release-notes/v1_103.md` (AI statistics).
+17. microsoft/vscode main: `src/vscode-dts/vscode.d.ts`, `vscode.proposed.textDocumentChangeReason.d.ts`; issue #347841 (AI stats removal, closed 2026-11-12).
+
+OpenAI Codex:
+18. learn.chatgpt.com/docs: `hooks.md`, `config-file/config-advanced.md`, `config-file/config-reference.md`, `agent-configuration/agents-md.md`, `non-interactive-mode.md`.
+19. openai/codex (Apache-2.0) @ `d64451b`, release rust-v0.170.0: `codex-rs/protocol/src/protocol.rs` (SessionSource, SessionMeta), `codex-rs/rollout/src/{lib.rs,list.rs,rollout_file_name.rs,compression.rs}`, `codex-rs/history/src/rollout_payload.rs`, `codex-rs/message-history/src/lib.rs`, `codex-rs/otel/src/metrics/tags.rs`.
+
+Gemini CLI:
+20. google-gemini/gemini-cli (Apache-2.0) @ `615d6bc`, v0.69.0: `docs/hooks/{index,reference}.md`, `docs/cli/{telemetry,session-management,headless,gemini-md,checkpointing}.md`, `docs/reference/configuration.md`.
+
+Windsurf / Devin Desktop:
+21. docs.devin.ai: `desktop/cascade/hooks.md` (now "Devin Local Customizations"), `desktop/cascade.md` (legacy Cascade), `desktop/changelog.md` (v3.0.12, 2026-06-02, rename), `cli/extensibility/hooks/overview.md`, `cli/extensibility/hooks/lifecycle-hooks.md`.
+
+Other harnesses:
+22. cline/cline main: `.clinerules/hooks/README.md`, `docs/sdk/plugins.mdx`, `docs/customization/cline-rules.mdx`; release v4.1.26.
+23. RooCodeInc/Roo-Code — repository archived (GitHub API).
+24. Kilo-Org/kilocode main: `packages/kilo-docs/pages/{automate/extending/plugins,code-with-ai/agents/session-history,customize/agents-md}.md`.
+25. anomalyco/opencode dev: `services/site/src/docs/content/build/plugins/{index,server,migrate-v1}.mdx`.
+26. Aider-AI/aider main: `aider/website/docs/config/options.md`, `docs/more/analytics.md`.
+27. zed-industries/zed main: `docs/src/ai/{rules,instructions,external-agents,agent-panel}.md`.
+28. antigravity.google/docs/hooks (WebFetch summary) and `llms.txt`.
+29. kiro.dev/docs: `hooks.md`, `hooks/types.md`, `ide/whats-new-v1/hooks.md`, `steering.md`.
+30. ampcode.com: `llms.txt`, `docs/markdown/customize/plugins`.
+31. docs.warp.dev `_llms-txt/agents.txt`.
+32. junie.jetbrains.com/docs/junie-cli-hooks.html and `guidelines-and-memory.html` (both dated 2026-11-18); jetbrains.com/help/ai-assistant/agents.html (2026.3, dated 2026-10-07).
+33. docs.trae.ai/ide/hook-configuration-reference (raw page data; client-rendered).
+34. continuedev/continue main: `docs/reference.mdx` (`data` destinations), `docs/customize/deep-dives/development-data.mdx`.
+35. aaif-goose/goose main: `documentation/docs/guides/context-engineering/hooks.md`.
+
+Prior art and parsers:
+36. wakatime/wakatime-cli (BSD-3-Clause) @ `7ab26b5`, v2.28.4: `pkg/ai/*.go` (per-harness log paths and fields; "ai coding" relabeling in `ai.go`; `transcript_clock.go`).
+37. daaain/claude-code-log @ `763365c`: `claude_code_log/models.py` (transcript entry fields, queue operations).
+38. FailproofAI/failproofai: `lib/log-entries.ts` (entry types).
+39. git-ai-project/git-ai (Apache-2.0): `README.md`, `specs/git_ai_standard_v3.0.0.md` (`refs/notes/ai`, human attestations).
+40. ActivityWatch/aw-watcher-afk (MPL-2.0): `aw_watcher_afk/{windows,macos,unix}.py`; licenses of activitywatch, aw-watcher-window, browser-wakatime via GitHub API.
+41. GitHub commit search (2026-11-19): `Replit-Commit-Author` trailers; `gpt-engineer-app[bot]` commits.
+
+Platform APIs:
+42. learn.microsoft.com, `LowLevelKeyboardProc` (ms.date 2025-07-14): timeout and silent-removal rules, Raw Input recommendation.
+43. wayland.app, `ext-idle-notify-v1`: interfaces, v2 input-idle notification, compositor support table.
+44. developer.chrome.com, `chrome.idle` API reference.
+45. Not re-read today, cited from prior knowledge: VS Code "Using Proposed API" page (proposed APIs barred from Marketplace extensions); WakaTime plugin-creation guide (heartbeat rules).
+
+Internal notes:
+46. `docs/research/notes/signals.md`, `notes/hackatime.md`, `notes/priorart.md` (unverified leads; used only where re-verified above, or marked).
+
