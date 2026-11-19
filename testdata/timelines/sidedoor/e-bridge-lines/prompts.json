@@ -1,0 +1,29 @@
+{
+  "fixture": "sidedoor/e-bridge-lines",
+  "prompts": [
+    {
+      "turn_key": "t_dbf0560dea6e",
+      "t": 1795636983000,
+      "local": "14:03:03",
+      "text": null,
+      "len_chars": 90,
+      "source": "a bridge prompt carries no text, only ai_prompt_length (DESIGN 5.7); with 20 or more characters it is substantive (AD D2), since every go-ahead on SM 2.2's list is shorter"
+    },
+    {
+      "turn_key": "t_fe396482f8d7",
+      "t": 1795637103000,
+      "local": "14:05:03",
+      "text": null,
+      "len_chars": 90,
+      "source": "a bridge prompt carries no text, only ai_prompt_length (DESIGN 5.7); with 20 or more characters it is substantive (AD D2), since every go-ahead on SM 2.2's list is shorter"
+    },
+    {
+      "turn_key": "t_d45947d7c466",
+      "t": 1795637223000,
+      "local": "14:07:03",
+      "text": null,
+      "len_chars": 90,
+      "source": "a bridge prompt carries no text, only ai_prompt_length (DESIGN 5.7); with 20 or more characters it is substantive (AD D2), since every go-ahead on SM 2.2's list is shorter"
+    }
+  ]
+}
