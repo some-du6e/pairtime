@@ -1,0 +1,2707 @@
+{
+  "fixture": "6.1",
+  "title": "Three hours of deep flow with Claude Code",
+  "sm": "docs/design/struggle-metric.md 6.1",
+  "date": "2026-11-21",
+  "timezone": "Asia/Kolkata",
+  "utc_offset": "+05:30",
+  "os": "macos",
+  "input_keys": true,
+  "evidence": "A",
+  "witness": "witnessed",
+  "device": "d_d8f6b2257b69",
+  "projects": {"p_0eccb85aa257": "cs2go"},
+  "window": {"start": "2026-11-21T08:30:00Z", "end": "2026-11-21T11:30:00Z", "local": "14:00-17:00"},
+  "rows": [
+    {
+      "start": "2026-11-21T08:30:00Z",
+      "minutes": 1,
+      "local": "14:00",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"NAV": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "14:00"
+    },
+    {
+      "start": "2026-11-21T08:31:00Z",
+      "minutes": 1,
+      "local": "14:01",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"P": 10, "NAV": 50}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "14:01"
+    },
+    {
+      "start": "2026-11-21T08:32:00Z",
+      "minutes": 1,
+      "local": "14:02",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "14:02"
+    },
+    {
+      "start": "2026-11-21T08:33:00Z",
+      "minutes": 1,
+      "local": "14:03",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "14:03"
+    },
+    {
+      "start": "2026-11-21T08:34:00Z",
+      "minutes": 1,
+      "local": "14:04",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 35,
+      "credit": {
+        "p_0eccb85aa257": {"SUP": 35}
+      },
+      "uncredited": {"X.agent_only": 25},
+      "agent_running_s": 60,
+      "sm": "14:04"
+    },
+    {
+      "start": "2026-11-21T08:35:00Z",
+      "minutes": 1,
+      "local": "14:05",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"PA": 25, "SUP": 35}
+      },
+      "uncredited": {},
+      "agent_running_s": 60,
+      "sm": "14:05"
+    },
+    {
+      "start": "2026-11-21T08:36:00Z",
+      "minutes": 1,
+      "local": "14:06",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"SUP": 30, "READ": 30}
+      },
+      "uncredited": {},
+      "agent_running_s": 30,
+      "sm": "14:06"
+    },
+    {
+      "start": "2026-11-21T08:37:00Z",
+      "minutes": 1,
+      "local": "14:07",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"READ": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "14:07"
+    },
+    {
+      "start": "2026-11-21T08:38:00Z",
+      "minutes": 1,
+      "local": "14:08",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"READ": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "14:08",
+      "note": "SM: the bucket still holds 303 s at the end of the minute (303 1/3 s: 553 1/3 filled, 250 drained)."
+    },
+    {
+      "start": "2026-11-21T08:39:00Z",
+      "minutes": 1,
+      "local": "14:09",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"LOOKUP": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "14:09"
+    },
+    {
+      "start": "2026-11-21T08:40:00Z",
+      "minutes": 1,
+      "local": "14:10",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"LOOKUP": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "14:10"
+    },
+    {
+      "start": "2026-11-21T08:41:00Z",
+      "minutes": 1,
+      "local": "14:11",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"NAV": 20, "G": 40}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "14:11"
+    },
+    {
+      "start": "2026-11-21T08:42:00Z",
+      "minutes": 1,
+      "local": "14:12",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"NAV": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "14:00; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T08:43:00Z",
+      "minutes": 1,
+      "local": "14:13",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"P": 10, "NAV": 50}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "14:01; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T08:44:00Z",
+      "minutes": 1,
+      "local": "14:14",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "14:02; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T08:45:00Z",
+      "minutes": 1,
+      "local": "14:15",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "14:03; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T08:46:00Z",
+      "minutes": 1,
+      "local": "14:16",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 35,
+      "credit": {
+        "p_0eccb85aa257": {"SUP": 35}
+      },
+      "uncredited": {"X.agent_only": 25},
+      "agent_running_s": 60,
+      "sm": "14:04; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T08:47:00Z",
+      "minutes": 1,
+      "local": "14:17",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"PA": 25, "SUP": 35}
+      },
+      "uncredited": {},
+      "agent_running_s": 60,
+      "sm": "14:05; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T08:48:00Z",
+      "minutes": 1,
+      "local": "14:18",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"SUP": 30, "READ": 30}
+      },
+      "uncredited": {},
+      "agent_running_s": 30,
+      "sm": "14:06; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T08:49:00Z",
+      "minutes": 1,
+      "local": "14:19",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"READ": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "14:07; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T08:50:00Z",
+      "minutes": 1,
+      "local": "14:20",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"READ": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "14:08; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T08:51:00Z",
+      "minutes": 1,
+      "local": "14:21",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"LOOKUP": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "14:09; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T08:52:00Z",
+      "minutes": 1,
+      "local": "14:22",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"LOOKUP": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "14:10; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T08:53:00Z",
+      "minutes": 1,
+      "local": "14:23",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"E": 40, "NAV": 20}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "minute 11 of the other cycles is a small hand edit in VS Code, which credits the same 60 s as E and NAV",
+      "note": "The hand edit's heartbeat is at :40, where cycle 1's commit is.",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T08:54:00Z",
+      "minutes": 1,
+      "local": "14:24",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"NAV": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "14:00; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T08:55:00Z",
+      "minutes": 1,
+      "local": "14:25",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"P": 10, "NAV": 50}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "14:01; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T08:56:00Z",
+      "minutes": 1,
+      "local": "14:26",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "14:02; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T08:57:00Z",
+      "minutes": 1,
+      "local": "14:27",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "14:03; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T08:58:00Z",
+      "minutes": 1,
+      "local": "14:28",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 35,
+      "credit": {
+        "p_0eccb85aa257": {"SUP": 35}
+      },
+      "uncredited": {"X.agent_only": 25},
+      "agent_running_s": 60,
+      "sm": "14:04; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T08:59:00Z",
+      "minutes": 1,
+      "local": "14:29",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"PA": 25, "SUP": 35}
+      },
+      "uncredited": {},
+      "agent_running_s": 60,
+      "sm": "14:05; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T09:00:00Z",
+      "minutes": 1,
+      "local": "14:30",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"SUP": 30, "READ": 30}
+      },
+      "uncredited": {},
+      "agent_running_s": 30,
+      "sm": "14:06; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T09:01:00Z",
+      "minutes": 1,
+      "local": "14:31",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"READ": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "14:07; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T09:02:00Z",
+      "minutes": 1,
+      "local": "14:32",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"READ": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "14:08; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T09:03:00Z",
+      "minutes": 1,
+      "local": "14:33",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"LOOKUP": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "14:09; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T09:04:00Z",
+      "minutes": 1,
+      "local": "14:34",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"LOOKUP": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "14:10; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T09:05:00Z",
+      "minutes": 1,
+      "local": "14:35",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"NAV": 20, "G": 40}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "14:11; minute 11 is a commit in cycles 3, 6, 9, 12 and 15",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T09:06:00Z",
+      "minutes": 1,
+      "local": "14:36",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"NAV": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "14:00; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T09:07:00Z",
+      "minutes": 1,
+      "local": "14:37",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"P": 10, "NAV": 50}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "14:01; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T09:08:00Z",
+      "minutes": 1,
+      "local": "14:38",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "14:02; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T09:09:00Z",
+      "minutes": 1,
+      "local": "14:39",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "14:03; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T09:10:00Z",
+      "minutes": 1,
+      "local": "14:40",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 35,
+      "credit": {
+        "p_0eccb85aa257": {"SUP": 35}
+      },
+      "uncredited": {"X.agent_only": 25},
+      "agent_running_s": 60,
+      "sm": "14:04; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T09:11:00Z",
+      "minutes": 1,
+      "local": "14:41",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"PA": 25, "SUP": 35}
+      },
+      "uncredited": {},
+      "agent_running_s": 60,
+      "sm": "14:05; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T09:12:00Z",
+      "minutes": 1,
+      "local": "14:42",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"SUP": 30, "READ": 30}
+      },
+      "uncredited": {},
+      "agent_running_s": 30,
+      "sm": "14:06; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T09:13:00Z",
+      "minutes": 1,
+      "local": "14:43",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"READ": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "14:07; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T09:14:00Z",
+      "minutes": 1,
+      "local": "14:44",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"READ": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "14:08; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T09:15:00Z",
+      "minutes": 1,
+      "local": "14:45",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"LOOKUP": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "14:09; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T09:16:00Z",
+      "minutes": 1,
+      "local": "14:46",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"LOOKUP": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "14:10; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T09:17:00Z",
+      "minutes": 1,
+      "local": "14:47",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"E": 40, "NAV": 20}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "minute 11 of the other cycles is a small hand edit in VS Code, which credits the same 60 s as E and NAV",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T09:18:00Z",
+      "minutes": 1,
+      "local": "14:48",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"NAV": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "14:00; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T09:19:00Z",
+      "minutes": 1,
+      "local": "14:49",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"P": 10, "NAV": 50}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "14:01; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T09:20:00Z",
+      "minutes": 1,
+      "local": "14:50",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "14:02; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T09:21:00Z",
+      "minutes": 1,
+      "local": "14:51",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "14:03; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T09:22:00Z",
+      "minutes": 1,
+      "local": "14:52",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 35,
+      "credit": {
+        "p_0eccb85aa257": {"SUP": 35}
+      },
+      "uncredited": {"X.agent_only": 25},
+      "agent_running_s": 60,
+      "sm": "14:04; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T09:23:00Z",
+      "minutes": 1,
+      "local": "14:53",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"PA": 25, "SUP": 35}
+      },
+      "uncredited": {},
+      "agent_running_s": 60,
+      "sm": "14:05; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T09:24:00Z",
+      "minutes": 1,
+      "local": "14:54",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"SUP": 30, "READ": 30}
+      },
+      "uncredited": {},
+      "agent_running_s": 30,
+      "sm": "14:06; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T09:25:00Z",
+      "minutes": 1,
+      "local": "14:55",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"READ": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "14:07; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T09:26:00Z",
+      "minutes": 1,
+      "local": "14:56",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"READ": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "14:08; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T09:27:00Z",
+      "minutes": 1,
+      "local": "14:57",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"LOOKUP": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "14:09; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T09:28:00Z",
+      "minutes": 1,
+      "local": "14:58",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"LOOKUP": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "14:10; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T09:29:00Z",
+      "minutes": 1,
+      "local": "14:59",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"E": 40, "NAV": 20}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "minute 11 of the other cycles is a small hand edit in VS Code, which credits the same 60 s as E and NAV",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T09:30:00Z",
+      "minutes": 1,
+      "local": "15:00",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"NAV": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "14:00; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T09:31:00Z",
+      "minutes": 1,
+      "local": "15:01",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"P": 10, "NAV": 50}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "14:01; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T09:32:00Z",
+      "minutes": 1,
+      "local": "15:02",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "14:02; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T09:33:00Z",
+      "minutes": 1,
+      "local": "15:03",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "14:03; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T09:34:00Z",
+      "minutes": 1,
+      "local": "15:04",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 35,
+      "credit": {
+        "p_0eccb85aa257": {"SUP": 35}
+      },
+      "uncredited": {"X.agent_only": 25},
+      "agent_running_s": 60,
+      "sm": "14:04; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T09:35:00Z",
+      "minutes": 1,
+      "local": "15:05",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"PA": 25, "SUP": 35}
+      },
+      "uncredited": {},
+      "agent_running_s": 60,
+      "sm": "14:05; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T09:36:00Z",
+      "minutes": 1,
+      "local": "15:06",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"SUP": 30, "READ": 30}
+      },
+      "uncredited": {},
+      "agent_running_s": 30,
+      "sm": "14:06; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T09:37:00Z",
+      "minutes": 1,
+      "local": "15:07",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 10,
+      "credit": {
+        "p_0eccb85aa257": {"READ": 10}
+      },
+      "uncredited": {"X.absent": 50},
+      "agent_running_s": 0,
+      "sm": "the drink: the tail credits reading until 15:07:10, then X.absent to 15:12:40, 290 s in cycle 6 and 40 s in cycle 7",
+      "note": "His last input is at 15:06:40, so the tail ends at 15:07:10.",
+      "derived": ["credited_s", "credit", "uncredited"],
+      "erratum": "2026-11-19-sm-6.1-presence-edges"
+    },
+    {
+      "start": "2026-11-21T09:38:00Z",
+      "minutes": 4,
+      "local": "15:08-15:11",
+      "bucket": false,
+      "codes": ["X.absent"],
+      "sm": "the drink: the tail credits reading until 15:07:10, then X.absent to 15:12:40, 290 s in cycle 6 and 40 s in cycle 7",
+      "note": "Nothing is credited and no agent runs, so these minutes have no bucket (SM 5.1), and their 240 s of X.absent are in no bucket either. Cycle 6's commit, which SM's first variation puts at 15:11:40, never happens: he is away.",
+      "derived": ["bucket"],
+      "erratum": "2026-11-19-sm-6.1-presence-edges"
+    },
+    {
+      "start": "2026-11-21T09:42:00Z",
+      "minutes": 1,
+      "local": "15:12",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 20,
+      "credit": {
+        "p_0eccb85aa257": {"NAV": 20}
+      },
+      "uncredited": {"X.absent": 40},
+      "agent_running_s": 0,
+      "sm": "the drink: the tail credits reading until 15:07:10, then X.absent to 15:12:40, 290 s in cycle 6 and 40 s in cycle 7",
+      "note": "Back at 15:12:40 with a click in VS Code, a NAV anchor that doesn't qualify for the return rule. The lead of the 15:13:50 heartbeat credits 15:12:40 to 15:13:00.",
+      "derived": ["credited_s", "credit", "uncredited"],
+      "erratum": "2026-11-19-sm-6.1-presence-edges"
+    },
+    {
+      "start": "2026-11-21T09:43:00Z",
+      "minutes": 1,
+      "local": "15:13",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"P": 10, "NAV": 50}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "14:01; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T09:44:00Z",
+      "minutes": 1,
+      "local": "15:14",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "14:02; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T09:45:00Z",
+      "minutes": 1,
+      "local": "15:15",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "14:03; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T09:46:00Z",
+      "minutes": 1,
+      "local": "15:16",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 35,
+      "credit": {
+        "p_0eccb85aa257": {"SUP": 35}
+      },
+      "uncredited": {"X.agent_only": 25},
+      "agent_running_s": 60,
+      "sm": "14:04; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T09:47:00Z",
+      "minutes": 1,
+      "local": "15:17",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"PA": 25, "SUP": 35}
+      },
+      "uncredited": {},
+      "agent_running_s": 60,
+      "sm": "14:05; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T09:48:00Z",
+      "minutes": 1,
+      "local": "15:18",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"SUP": 30, "READ": 30}
+      },
+      "uncredited": {},
+      "agent_running_s": 30,
+      "sm": "14:06; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T09:49:00Z",
+      "minutes": 1,
+      "local": "15:19",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"READ": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "14:07; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T09:50:00Z",
+      "minutes": 1,
+      "local": "15:20",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"READ": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "14:08; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T09:51:00Z",
+      "minutes": 1,
+      "local": "15:21",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"LOOKUP": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "14:09; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T09:52:00Z",
+      "minutes": 1,
+      "local": "15:22",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"LOOKUP": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "14:10; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T09:53:00Z",
+      "minutes": 1,
+      "local": "15:23",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"E": 40, "NAV": 20}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "minute 11 of the other cycles is a small hand edit in VS Code, which credits the same 60 s as E and NAV",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T09:54:00Z",
+      "minutes": 1,
+      "local": "15:24",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"NAV": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "14:00; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T09:55:00Z",
+      "minutes": 1,
+      "local": "15:25",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"P": 10, "NAV": 50}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "14:01; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T09:56:00Z",
+      "minutes": 1,
+      "local": "15:26",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "14:02; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T09:57:00Z",
+      "minutes": 1,
+      "local": "15:27",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "14:03; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T09:58:00Z",
+      "minutes": 1,
+      "local": "15:28",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 35,
+      "credit": {
+        "p_0eccb85aa257": {"SUP": 35}
+      },
+      "uncredited": {"X.agent_only": 25},
+      "agent_running_s": 60,
+      "sm": "14:04; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T09:59:00Z",
+      "minutes": 1,
+      "local": "15:29",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"PA": 25, "SUP": 35}
+      },
+      "uncredited": {},
+      "agent_running_s": 60,
+      "sm": "14:05; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T10:00:00Z",
+      "minutes": 1,
+      "local": "15:30",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"SUP": 30, "READ": 30}
+      },
+      "uncredited": {},
+      "agent_running_s": 30,
+      "sm": "14:06; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T10:01:00Z",
+      "minutes": 1,
+      "local": "15:31",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"READ": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "14:07; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T10:02:00Z",
+      "minutes": 1,
+      "local": "15:32",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"READ": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "14:08; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T10:03:00Z",
+      "minutes": 1,
+      "local": "15:33",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"LOOKUP": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "14:09; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T10:04:00Z",
+      "minutes": 1,
+      "local": "15:34",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"LOOKUP": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "14:10; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T10:05:00Z",
+      "minutes": 1,
+      "local": "15:35",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"E": 40, "NAV": 20}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "minute 11 of the other cycles is a small hand edit in VS Code, which credits the same 60 s as E and NAV",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T10:06:00Z",
+      "minutes": 1,
+      "local": "15:36",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"NAV": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "14:00; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T10:07:00Z",
+      "minutes": 1,
+      "local": "15:37",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"P": 10, "NAV": 50}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "14:01; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T10:08:00Z",
+      "minutes": 1,
+      "local": "15:38",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "14:02; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T10:09:00Z",
+      "minutes": 1,
+      "local": "15:39",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "14:03; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T10:10:00Z",
+      "minutes": 1,
+      "local": "15:40",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 35,
+      "credit": {
+        "p_0eccb85aa257": {"SUP": 35}
+      },
+      "uncredited": {"X.agent_only": 25},
+      "agent_running_s": 60,
+      "sm": "14:04; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T10:11:00Z",
+      "minutes": 1,
+      "local": "15:41",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"PA": 25, "SUP": 35}
+      },
+      "uncredited": {},
+      "agent_running_s": 60,
+      "sm": "14:05; the other fourteen cycles are the same shape",
+      "note": "The agent's test run fails at 15:41:50 with the AssertionError; credit is unchanged.",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T10:12:00Z",
+      "minutes": 1,
+      "local": "15:42",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"SUP": 30, "READ": 30}
+      },
+      "uncredited": {},
+      "agent_running_s": 30,
+      "sm": "14:06; the other fourteen cycles are the same shape",
+      "note": "A second failing run at 15:42:20, the same AssertionError.",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T10:13:00Z",
+      "minutes": 1,
+      "local": "15:43",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"READ": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "14:07; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T10:14:00Z",
+      "minutes": 1,
+      "local": "15:44",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"READ": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "14:08; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T10:15:00Z",
+      "minutes": 1,
+      "local": "15:45",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"LOOKUP": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "14:09; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T10:16:00Z",
+      "minutes": 1,
+      "local": "15:46",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"LOOKUP": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "14:10; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T10:17:00Z",
+      "minutes": 1,
+      "local": "15:47",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"NAV": 20, "G": 40}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "14:11; minute 11 is a commit in cycles 3, 6, 9, 12 and 15",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T10:18:00Z",
+      "minutes": 1,
+      "local": "15:48",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"NAV": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "14:00; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T10:19:00Z",
+      "minutes": 1,
+      "local": "15:49",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"P": 10, "NAV": 50}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "14:01; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T10:20:00Z",
+      "minutes": 1,
+      "local": "15:50",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "14:02; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T10:21:00Z",
+      "minutes": 1,
+      "local": "15:51",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "14:03; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T10:22:00Z",
+      "minutes": 1,
+      "local": "15:52",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 35,
+      "credit": {
+        "p_0eccb85aa257": {"SUP": 35}
+      },
+      "uncredited": {"X.agent_only": 25},
+      "agent_running_s": 60,
+      "sm": "14:04; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T10:23:00Z",
+      "minutes": 1,
+      "local": "15:53",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"PA": 25, "SUP": 35}
+      },
+      "uncredited": {},
+      "agent_running_s": 60,
+      "sm": "14:05; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T10:24:00Z",
+      "minutes": 1,
+      "local": "15:54",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"SUP": 30, "READ": 30}
+      },
+      "uncredited": {},
+      "agent_running_s": 30,
+      "sm": "14:06; the other fourteen cycles are the same shape",
+      "note": "A third failing run at 15:54:20, the same AssertionError, after the agent tried his hypothesis.",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T10:25:00Z",
+      "minutes": 1,
+      "local": "15:55",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"READ": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "14:07; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T10:26:00Z",
+      "minutes": 1,
+      "local": "15:56",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"READ": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "14:08; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T10:27:00Z",
+      "minutes": 1,
+      "local": "15:57",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"LOOKUP": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "14:09; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T10:28:00Z",
+      "minutes": 1,
+      "local": "15:58",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"LOOKUP": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "14:10; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T10:29:00Z",
+      "minutes": 1,
+      "local": "15:59",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"E": 40, "NAV": 20}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "minute 11 of the other cycles is a small hand edit in VS Code, which credits the same 60 s as E and NAV",
+      "note": "His own edit fixes the failing test.",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T10:30:00Z",
+      "minutes": 1,
+      "local": "16:00",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"NAV": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "14:00; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T10:31:00Z",
+      "minutes": 1,
+      "local": "16:01",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"P": 10, "NAV": 50}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "14:01; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T10:32:00Z",
+      "minutes": 1,
+      "local": "16:02",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "14:02; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T10:33:00Z",
+      "minutes": 1,
+      "local": "16:03",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "14:03; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T10:34:00Z",
+      "minutes": 1,
+      "local": "16:04",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 35,
+      "credit": {
+        "p_0eccb85aa257": {"SUP": 35}
+      },
+      "uncredited": {"X.agent_only": 25},
+      "agent_running_s": 60,
+      "sm": "14:04; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T10:35:00Z",
+      "minutes": 1,
+      "local": "16:05",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"PA": 25, "SUP": 35}
+      },
+      "uncredited": {},
+      "agent_running_s": 60,
+      "sm": "14:05; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T10:36:00Z",
+      "minutes": 1,
+      "local": "16:06",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"SUP": 30, "READ": 30}
+      },
+      "uncredited": {},
+      "agent_running_s": 30,
+      "sm": "14:06; the other fourteen cycles are the same shape",
+      "note": "The test run at 16:06:20 passes: a run_green, after his own edit at 15:59:40.",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T10:37:00Z",
+      "minutes": 1,
+      "local": "16:07",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"READ": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "14:07; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T10:38:00Z",
+      "minutes": 1,
+      "local": "16:08",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"READ": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "14:08; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T10:39:00Z",
+      "minutes": 1,
+      "local": "16:09",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"LOOKUP": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "14:09; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T10:40:00Z",
+      "minutes": 1,
+      "local": "16:10",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"LOOKUP": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "14:10; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T10:41:00Z",
+      "minutes": 1,
+      "local": "16:11",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"E": 40, "NAV": 20}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "minute 11 of the other cycles is a small hand edit in VS Code, which credits the same 60 s as E and NAV",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T10:42:00Z",
+      "minutes": 1,
+      "local": "16:12",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"NAV": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "14:00; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T10:43:00Z",
+      "minutes": 1,
+      "local": "16:13",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"P": 10, "NAV": 50}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "14:01; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T10:44:00Z",
+      "minutes": 1,
+      "local": "16:14",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "14:02; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T10:45:00Z",
+      "minutes": 1,
+      "local": "16:15",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "14:03; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T10:46:00Z",
+      "minutes": 1,
+      "local": "16:16",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 35,
+      "credit": {
+        "p_0eccb85aa257": {"SUP": 35}
+      },
+      "uncredited": {"X.agent_only": 25},
+      "agent_running_s": 60,
+      "sm": "14:04; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T10:47:00Z",
+      "minutes": 1,
+      "local": "16:17",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"PA": 25, "SUP": 35}
+      },
+      "uncredited": {},
+      "agent_running_s": 60,
+      "sm": "14:05; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T10:48:00Z",
+      "minutes": 1,
+      "local": "16:18",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"SUP": 30, "READ": 30}
+      },
+      "uncredited": {},
+      "agent_running_s": 30,
+      "sm": "14:06; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T10:49:00Z",
+      "minutes": 1,
+      "local": "16:19",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"READ": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "14:07; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T10:50:00Z",
+      "minutes": 1,
+      "local": "16:20",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"READ": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "14:08; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T10:51:00Z",
+      "minutes": 1,
+      "local": "16:21",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"LOOKUP": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "14:09; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T10:52:00Z",
+      "minutes": 1,
+      "local": "16:22",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"LOOKUP": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "14:10; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T10:53:00Z",
+      "minutes": 1,
+      "local": "16:23",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"NAV": 20, "G": 40}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "14:11; minute 11 is a commit in cycles 3, 6, 9, 12 and 15",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T10:54:00Z",
+      "minutes": 1,
+      "local": "16:24",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"NAV": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "14:00; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T10:55:00Z",
+      "minutes": 1,
+      "local": "16:25",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"P": 10, "NAV": 50}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "14:01; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T10:56:00Z",
+      "minutes": 1,
+      "local": "16:26",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "14:02; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T10:57:00Z",
+      "minutes": 1,
+      "local": "16:27",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "14:03; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T10:58:00Z",
+      "minutes": 1,
+      "local": "16:28",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 35,
+      "credit": {
+        "p_0eccb85aa257": {"SUP": 35}
+      },
+      "uncredited": {"X.agent_only": 25},
+      "agent_running_s": 60,
+      "sm": "14:04; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T10:59:00Z",
+      "minutes": 1,
+      "local": "16:29",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"PA": 25, "SUP": 35}
+      },
+      "uncredited": {},
+      "agent_running_s": 60,
+      "sm": "14:05; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T11:00:00Z",
+      "minutes": 1,
+      "local": "16:30",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"SUP": 30, "READ": 30}
+      },
+      "uncredited": {},
+      "agent_running_s": 30,
+      "sm": "14:06; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T11:01:00Z",
+      "minutes": 1,
+      "local": "16:31",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"READ": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "14:07; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T11:02:00Z",
+      "minutes": 1,
+      "local": "16:32",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"READ": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "14:08; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T11:03:00Z",
+      "minutes": 1,
+      "local": "16:33",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"LOOKUP": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "14:09; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T11:04:00Z",
+      "minutes": 1,
+      "local": "16:34",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"LOOKUP": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "14:10; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T11:05:00Z",
+      "minutes": 1,
+      "local": "16:35",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"E": 40, "NAV": 20}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "minute 11 of the other cycles is a small hand edit in VS Code, which credits the same 60 s as E and NAV",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T11:06:00Z",
+      "minutes": 1,
+      "local": "16:36",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"NAV": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "14:00; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T11:07:00Z",
+      "minutes": 1,
+      "local": "16:37",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"P": 10, "NAV": 50}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "14:01; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T11:08:00Z",
+      "minutes": 1,
+      "local": "16:38",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "14:02; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T11:09:00Z",
+      "minutes": 1,
+      "local": "16:39",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "14:03; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T11:10:00Z",
+      "minutes": 1,
+      "local": "16:40",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 35,
+      "credit": {
+        "p_0eccb85aa257": {"SUP": 35}
+      },
+      "uncredited": {"X.agent_only": 25},
+      "agent_running_s": 60,
+      "sm": "14:04; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T11:11:00Z",
+      "minutes": 1,
+      "local": "16:41",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"PA": 25, "SUP": 35}
+      },
+      "uncredited": {},
+      "agent_running_s": 60,
+      "sm": "14:05; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T11:12:00Z",
+      "minutes": 1,
+      "local": "16:42",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"SUP": 30, "READ": 30}
+      },
+      "uncredited": {},
+      "agent_running_s": 30,
+      "sm": "14:06; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T11:13:00Z",
+      "minutes": 1,
+      "local": "16:43",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"READ": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "14:07; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T11:14:00Z",
+      "minutes": 1,
+      "local": "16:44",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"READ": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "14:08; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T11:15:00Z",
+      "minutes": 1,
+      "local": "16:45",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"LOOKUP": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "14:09; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T11:16:00Z",
+      "minutes": 1,
+      "local": "16:46",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"LOOKUP": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "14:10; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T11:17:00Z",
+      "minutes": 1,
+      "local": "16:47",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"E": 40, "NAV": 20}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "minute 11 of the other cycles is a small hand edit in VS Code, which credits the same 60 s as E and NAV",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T11:18:00Z",
+      "minutes": 1,
+      "local": "16:48",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"NAV": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "14:00; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T11:19:00Z",
+      "minutes": 1,
+      "local": "16:49",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"P": 10, "NAV": 50}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "14:01; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T11:20:00Z",
+      "minutes": 1,
+      "local": "16:50",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "14:02; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T11:21:00Z",
+      "minutes": 1,
+      "local": "16:51",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "14:03; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T11:22:00Z",
+      "minutes": 1,
+      "local": "16:52",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 35,
+      "credit": {
+        "p_0eccb85aa257": {"SUP": 35}
+      },
+      "uncredited": {"X.agent_only": 25},
+      "agent_running_s": 60,
+      "sm": "14:04; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T11:23:00Z",
+      "minutes": 1,
+      "local": "16:53",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"PA": 25, "SUP": 35}
+      },
+      "uncredited": {},
+      "agent_running_s": 60,
+      "sm": "14:05; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T11:24:00Z",
+      "minutes": 1,
+      "local": "16:54",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"SUP": 30, "READ": 30}
+      },
+      "uncredited": {},
+      "agent_running_s": 30,
+      "sm": "14:06; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T11:25:00Z",
+      "minutes": 1,
+      "local": "16:55",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"READ": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "14:07; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T11:26:00Z",
+      "minutes": 1,
+      "local": "16:56",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"READ": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "14:08; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T11:27:00Z",
+      "minutes": 1,
+      "local": "16:57",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"LOOKUP": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "14:09; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T11:28:00Z",
+      "minutes": 1,
+      "local": "16:58",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"LOOKUP": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "14:10; the other fourteen cycles are the same shape",
+      "derived": ["credited_s", "credit", "uncredited"]
+    },
+    {
+      "start": "2026-11-21T11:29:00Z",
+      "minutes": 1,
+      "local": "16:59",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"NAV": 20, "G": 40}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "14:11; minute 11 is a commit in cycles 3, 6, 9, 12 and 15",
+      "derived": ["credited_s", "credit", "uncredited"]
+    }
+  ],
+  "totals": {
+    "credited_s": 10095,
+    "credited_by_project": {"p_0eccb85aa257": 10095},
+    "credited_by_reason": {"P": 1950, "PA": 375, "E": 360, "NAV": 1890, "G": 200, "SUP": 1500, "READ": 2140, "LOOKUP": 1680},
+    "uncredited": {"X.absent": 90, "X.agent_only": 375},
+    "agent_running_s": 2250,
+    "wall_s": 10800,
+    "ai_credited_s": 5965,
+    "hand_credited_s": 4130,
+    "agent_only_s": 375,
+    "absent_s": 330,
+    "first_cycle_credited_s": 695
+  },
+  "stated": [
+    "wall_s",
+    "credited_s",
+    "ai_credited_s",
+    "hand_credited_s",
+    "agent_only_s",
+    "absent_s",
+    "first_cycle_credited_s"
+  ],
+  "approx": {
+    "logged_s": {"about": 8300, "sm": "Hackatime-equivalent logged_s: about 8,300"},
+    "ai_logged_s": {
+      "about": 4050,
+      "sm": "of which ai_logged_s: about 4,050, each run plus the 120 s gap credit before each prompt, 270 s a cycle"
+    },
+    "handbook_s": {"about": 5600, "sm": "handbook_s: about 5,600, 1 h 33 min"},
+    "ai_ratio": {"about": 1.47, "sm": "ai_ratio is 5,965 / 4,050 = 1.47"}
+  },
+  "errata": ["2026-11-19-sm-6.1-presence-edges", "2026-11-19-sm-6.1-same-error"],
+  "notes": [
+    "ai_credited_s is P + PA + SUP + READ and hand_credited_s is NAV + E + G + LOOKUP, as SM's table splits them; no credited second inside an agent turn has a hand-work reason (SM 5.4).",
+    "absent_s is SM's X.absent total, the drink's 330 s. The rows' X.absent sums to 90 (50 in 15:07, 40 in 15:12): the other 240 s fall in 15:08 to 15:11, which have no bucket. See the presence-edges erratum.",
+    "agent_only_s is the 25 s a cycle that SM's 14:04 row calls X.agent_only. agent_running_s, 150 s a turn from submit to stop, follows from SM's times.",
+    "Commits: cycle 1's at 14:11:40 and cycles 3, 9, 12 and 15's, five in all. Cycle 6's would be at 15:11:40, during the drink.",
+    "Cycles 9 and 10: the agent's test run fails at 15:41:50, 15:42:20 and 15:54:20 with one AssertionError signature, and passes at 16:06:20, after his hand edit at 15:59:40. Nothing is discounted. See the same-error erratum for why SM's reason doesn't apply.",
+    "This fixture's events replay to logged_s 7370, ai_logged_s 3930 and handbook_s 4750 under min(gap, 120 s) over the window; SM says about 8,300, 4,050 and 5,600. The first prompt has no agent event within 120 s before it in the window, which is the 120 s off SM's ai_logged_s, and VS Code sends only the heartbeats SM names."
+  ]
+}
