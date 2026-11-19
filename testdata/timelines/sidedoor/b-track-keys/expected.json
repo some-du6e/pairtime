@@ -1,0 +1,154 @@
+{
+  "fixture": "sidedoor/b-track-keys",
+  "title": "The track loop on macOS, with key presses before each call",
+  "sm": "docs/PLAN.md WP-FX4 (b); DESIGN 5.2, 5.4, 6.2 D2 and D3, 6.4",
+  "date": "2026-11-25",
+  "timezone": "America/Chicago",
+  "utc_offset": "-06:00",
+  "os": "macos",
+  "input_keys": true,
+  "evidence": "A",
+  "witness": "witnessed",
+  "device": "d_c0a1102d3d07",
+  "projects": {"p_9e146dc421f7": "the project the Goose session runs in"},
+  "window": {"start": "2026-11-25T20:00:00Z", "end": "2026-11-25T20:09:00Z", "local": "14:00-14:09"},
+  "rows": [
+    {
+      "start": "2026-11-25T20:00:00Z",
+      "minutes": 1,
+      "local": "14:00",
+      "bucket": false,
+      "codes": ["X.no_anchor"],
+      "note": "As in (a): before any lead reaches back."
+    },
+    {
+      "start": "2026-11-25T20:01:00Z",
+      "minutes": 1,
+      "local": "14:01",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_9e146dc421f7": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "note": "Think parts from 14:01:00, and every typing part from 14:03:45 on, where every slot has key presses."
+    },
+    {
+      "start": "2026-11-25T20:02:00Z",
+      "minutes": 1,
+      "local": "14:02",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_9e146dc421f7": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "note": "Think parts from 14:01:00, and every typing part from 14:03:45 on, where every slot has key presses."
+    },
+    {
+      "start": "2026-11-25T20:03:00Z",
+      "minutes": 1,
+      "local": "14:03",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_9e146dc421f7": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "note": "Think parts from 14:01:00, and every typing part from 14:03:45 on, where every slot has key presses."
+    },
+    {
+      "start": "2026-11-25T20:04:00Z",
+      "minutes": 1,
+      "local": "14:04",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_9e146dc421f7": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "note": "Think parts from 14:01:00, and every typing part from 14:03:45 on, where every slot has key presses."
+    },
+    {
+      "start": "2026-11-25T20:05:00Z",
+      "minutes": 1,
+      "local": "14:05",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_9e146dc421f7": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "note": "Think parts from 14:01:00, and every typing part from 14:03:45 on, where every slot has key presses."
+    },
+    {
+      "start": "2026-11-25T20:06:00Z",
+      "minutes": 1,
+      "local": "14:06",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_9e146dc421f7": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "note": "Think parts from 14:01:00, and every typing part from 14:03:45 on, where every slot has key presses."
+    },
+    {
+      "start": "2026-11-25T20:07:00Z",
+      "minutes": 1,
+      "local": "14:07",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 29,
+      "credit": {
+        "p_9e146dc421f7": {"P": 9, "READ": 20}
+      },
+      "uncredited": {"X.no_anchor": 31},
+      "agent_running_s": 0,
+      "note": "The last lead ends at the 14:07:09 call; its 20 s base drains until 14:07:29.",
+      "erratum": "2026-11-19-turns-without-a-stop"
+    },
+    {
+      "start": "2026-11-25T20:08:00Z",
+      "minutes": 1,
+      "local": "14:08",
+      "bucket": false,
+      "codes": ["X.no_anchor"],
+      "erratum": "2026-11-19-turns-without-a-stop"
+    }
+  ],
+  "totals": {
+    "credited_s": 389,
+    "credited_by_project": {"p_9e146dc421f7": 389},
+    "credited_by_reason": {"P": 369, "READ": 20},
+    "uncredited": {"X.no_anchor": 31},
+    "agent_running_s": 0,
+    "level_a_s": 389,
+    "level_b_s": 0,
+    "level_c_s": 0,
+    "via_track_s": 389,
+    "logged_s": 0,
+    "ai_logged_s": 0,
+    "level_c_cap_s": 0
+  },
+  "stated": ["level_a_s", "level_b_s", "level_c_s"],
+  "approx": {},
+  "errata": ["2026-11-19-turns-without-a-stop"],
+  "notes": [
+    "Every credited second rests on a keyboard-backed track anchor: level A, labeled via_track. A level-A minute is recommended as credited (SM 5.4), so these are submittable; the keyboard is the evidence.",
+    "logged_s and ai_logged_s are still 0: D19 drops cli.track records whatever their level.",
+    "The 20 s READ in 14:07 and its X.no_anchor seconds depend on the erratum, as in (a)."
+  ]
+}

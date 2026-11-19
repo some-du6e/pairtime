@@ -152,7 +152,7 @@ class Sweep:
                 _, _, op, s = ops[i]
                 if op == "reset":
                     entries = [s] if s else []
-                else:
+                elif s:
                     entries.append(s)
                     over = sum(entries) - BUCKET_MAX_S
                     while over > 0:
@@ -167,7 +167,7 @@ class Sweep:
                 yield t, a["reason"], a["level"]
                 continue
             near = [x for x in self.anchors if abs(x["t"] - t) <= READ_HORIZON_S * SECOND]
-            if entries and near:
+            if sum(entries) > 0 and near:
                 need = Fraction(1)
                 while need and entries:
                     take = min(need, entries[0])
