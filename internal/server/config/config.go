@@ -217,12 +217,16 @@ func (c *Config) finish(dir string) error {
 	if c.OpsListen == "" {
 		c.OpsListen = DefaultOpsListen
 	}
+	var port string
 	for _, l := range []struct{ key, addr string }{{"listen", c.Listen}, {"ops_listen", c.OpsListen}} {
-		if _, _, err := net.SplitHostPort(l.addr); err != nil {
+		_, p, err := net.SplitHostPort(l.addr)
+		if err != nil {
 			fail("%s is %q; use host:port, such as \":8080\"", l.key, l.addr)
 		}
+		port = p
 	}
-	if c.Listen == c.OpsListen {
+	// Port 0 asks the OS for a free port, so two of them never clash.
+	if c.Listen == c.OpsListen && port != "0" {
 		fail("listen and ops_listen are both %q; the ops endpoints need their own private port (DESIGN 10.4)", c.Listen)
 	}
 
