@@ -8,7 +8,6 @@
 package utils
 
 import (
-	"encoding/base64"
 	"encoding/json"
 	"os"
 	"sort"
@@ -17,8 +16,8 @@ import (
 	"github.com/zricethezav/gitleaks/v8/detect"
 )
 
-// Text and secrets are base64url without padding, so the corpus doesn't
-// look like a pile of leaked keys to secret scanners.
+// extract.sh gzips the corpus, so secret scanners don't take its samples
+// for leaked keys.
 type pairtimeSample struct {
 	Text    string   `json:"text"`
 	Path    string   `json:"path,omitempty"`
@@ -32,14 +31,13 @@ type pairtimeCase struct {
 }
 
 func pairtimeSamples(rule config.Rule, texts []string, paths map[string]string) []pairtimeSample {
-	enc := base64.RawURLEncoding.EncodeToString
 	samples := []pairtimeSample{}
 	add := func(text, path string) {
 		r := rule
 		d := createSingleRuleDetector(&r)
-		s := pairtimeSample{Text: enc([]byte(text)), Path: path, Secrets: []string{}}
+		s := pairtimeSample{Text: text, Path: path, Secrets: []string{}}
 		for _, f := range d.Detect(detect.Fragment{Raw: text, FilePath: path}) {
-			s.Secrets = append(s.Secrets, enc([]byte(f.Secret)))
+			s.Secrets = append(s.Secrets, f.Secret)
 		}
 		samples = append(samples, s)
 	}

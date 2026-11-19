@@ -1,7 +1,7 @@
 #!/bin/sh
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
-# Rebuilds corpus.jsonl, pkg/redact's planted-secret corpus, from the true
+# Rebuilds corpus.jsonl.gz, pkg/redact's planted-secret corpus, from the true
 # and false positives in gitleaks' own rule sources at the pinned tag.
 #
 # Usage: testdata/redact/gitleaks/extract.sh [output file]
@@ -20,7 +20,7 @@ commit=83d9cd684c87d95d656c1458ef04895a7f1cbd8e
 
 here=$(cd "$(dirname "$0")" && pwd)
 repo=$(cd "$here/../../.." && pwd)
-out=${1:-$here/corpus.jsonl}
+out=${1:-$here/corpus.jsonl.gz}
 
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
@@ -67,5 +67,5 @@ if ! gzip -dc "$repo/pkg/redact/rules/gitleaks.toml.gz" | cmp -s - "$work/gitlea
 	exit 1
 fi
 
-LC_ALL=C sort "$work/dump.jsonl" >"$out"
-echo "extract.sh: wrote $(wc -l <"$out") rule cases to $out"
+LC_ALL=C sort "$work/dump.jsonl" | gzip -9n >"$out"
+echo "extract.sh: wrote $(wc -l <"$work/dump.jsonl") rule cases to $out"
