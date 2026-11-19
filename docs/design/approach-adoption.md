@@ -33,7 +33,7 @@ Citations use short names and section numbers:
 | 1. Drop-in | A day | Point a second instance of the existing `HackatimeService` at pairtime's base URL. The same stats call, with the same Hackatime project names, returns credited seconds (SP 10.5). An Airtable automation script that ships with pairtime fills the justification fields |
 | 2. Native | A few days | Use pairtime's submission API with webhooks signed like Robert's (SP 10.2) |
 
-**Why the handbook already creates demand.** Quality and Integrity's rule is that Hackatime `ai coding` time "must be deflated to at most ⅓ of its original amount unless there is significant evidence proving that more time should be credited" (HC 3.7). Ari applies exactly that third (HC 3.6). A teen who really did spend three hours steering and checking an agent has no way today to get more than one of them credited. Pairtime is built to be that "significant evidence", and it is just as willing to show that an agent left on `/goal` overnight deserves nothing (SM 5.4). That gives engaged AI users a reason to install it, and gives programs a reason to accept it: hours that arrive pre-deflated and defensible, which means fewer spot-check fines (HC 3.7, point 5).
+**Why the handbook already creates demand.** Quality and Integrity's rule is that Hackatime `ai coding` time "must be deflated to at most ⅓ of its original amount unless there is significant evidence proving that more time should be credited" (HC 3.7). Ari applies exactly that third (HC 3.6). A teen who really did spend three hours steering and checking an agent has no way today to get more than one of them credited. Pairtime is built to be that "significant evidence", and it is just as willing to show that an agent left on `/goal` overnight deserves nothing (SM 5.4). That gives engaged AI users a reason to install it. Programs get hours that arrive pre-deflated and defensible, which means fewer spot-check fines (HC 3.7, point 5).
 
 ## 2. Requirements
 
@@ -58,7 +58,7 @@ Citations use short names and section numbers:
 
 ### 3.1 Shape
 
-Two Go binaries and one web UI. The client scores on the device and uploads numbers. The server witnesses, rolls up, streams, and turns submitted windows into reviewable, signed evidence. This is the stack the client and server research both recommend (CP 7; SP 1), and I keep it unchanged, because a familiar stack is itself an adoption asset: wakatime-cli, grit's `gritd` and Wakapi are all single Go binaries with SQLite or files (PA 1.8, 1.14).
+Two Go binaries and one web UI. The client scores on the device and uploads numbers. The server witnesses, rolls up, streams, and turns submitted windows into reviewable, signed evidence. This is the stack the client and server research both recommend (CP 7; SP 1), and I keep it unchanged. wakatime-cli, grit's `gritd` and Wakapi are all Go, so contributors from Hack Club and the Hackatime ecosystem can already read it (CP 1.6; PA 1.8, 1.14).
 
 ```text
  THE TEEN'S MACHINE                                                         KARIM'S DOMAIN (Cloudflare tunnel)
@@ -141,7 +141,7 @@ Local store (CP 5.1, 5.2):
 | `pairtime.db` | SQLite, WAL, `synchronous=NORMAL`, commits batched every 15 to 60 s | Slots, turns, anchors, credit slots, minute buckets, upload cursors, log-tailer cursors, project map. Rebuildable from the spool |
 | `config.toml` | TOML | Settings, project names and visibility, privacy rules, program links |
 
-UI: the dashboard is served by the agent and opened in the user's own browser, with a one-time URL, Host and Origin checks, and a `SameSite=Strict` cookie (CP 5.3, 6.3). A tray icon lives inside the agent on Windows and Linux (fyne-io/systray builds without cgo there; CP 5.3). macOS gets no tray in v1 because it needs cgo and an app bundle (CP 5.3). Mac users see their total in the dashboard, on the web, and through `pairtime statusline`, which a terminal status line can call (Claude Code has a `statusLine` setting for this; it is not covered in HS, so verify before building). The WakaTime editor status bar keeps showing Hackatime's total, because wakatime-cli asks `api_url` for it.
+The agent serves the dashboard on `127.0.0.1`, and `pairtime dashboard` opens it in the user's own browser with a one-time URL, Host and Origin checks, and a `SameSite=Strict` cookie (CP 5.3, 6.3). A tray icon lives inside the agent on Windows and Linux (fyne-io/systray builds without cgo there; CP 5.3). macOS gets no tray in v1 because it needs cgo and an app bundle (CP 5.3). Mac users see their total in the dashboard, on the web, and through `pairtime statusline`, which a terminal status line can call. Claude Code has a `statusLine` setting for this, but HS doesn't cover it, so check it before building. The WakaTime editor status bar keeps showing Hackatime's total, because wakatime-cli asks `api_url` for it.
 
 ### 3.4 Server
 
@@ -186,7 +186,7 @@ There is no telemetry or analytics channel. Cloudflare terminates TLS at the edg
 
 ## 4. Integrations
 
-The rule for every integration: use what already runs on the teen's machine and in the program's code, and add the smallest possible thing next to it. Three capture layers cover R7, and each is wider and weaker than the one before. Native hooks for the top six harnesses carry full evidence. The WakaTime bridge reaches every harness wakatime-cli already reads, at reduced strength. Karim's AGENTS.md entry reaches anything with a shell tool, at the lowest strength. A harness can sit in more than one layer, and the strongest wins.
+Every integration follows one rule. Use what already runs on the teen's machine and in the program's code, and add the smallest possible thing next to it. Three capture layers cover R7, and each is wider and weaker than the one before. Native hooks for the top six harnesses carry full evidence. The WakaTime bridge reaches every harness wakatime-cli already reads, at reduced strength. Karim's AGENTS.md entry reaches anything with a shell tool, at the lowest strength. A harness can sit in more than one layer, and the strongest wins.
 
 ### 4.1 v1 harness set
 
@@ -236,9 +236,9 @@ wakatime-cli already reads 46 agents' local logs (HS 2, finding 10) and turns th
 | Editor heartbeat (plugin user agent, no AI token) with `human_line_changes > 0` or `is_write` | `editor.activity` `edit` or `save`, `edit_source = unknown`. This is the hand-edit signal for every editor with a WakaTime plugin |
 | Other editor heartbeats | `editor.activity` `navigate` |
 
-Bridge prompts are weaker than hook prompts in three ways, and the scorer treats them accordingly. They carry no text, so the re-roll and fix-it detectors can't run on them: they are classed `low_effort` unless `ai_prompt_length >= 20`, and then get the typing lead but not the 120 s think lead (the same shrink SM 2.8 uses for lookback). They arrive late, because wakatime-cli syncs AI logs only when an editor plugin calls it, so they need the settling window in section 5. And the 2-minute and 30-minute relabelling rules have already folded some human edits into `ai coding` (HC 2.2), which is why the bridge classifies by fields rather than category.
+Bridge prompts are weaker than hook prompts in three ways, and the scorer treats them accordingly. They carry no text, so the re-roll and fix-it detectors can't run on them. They are classed `low_effort` unless `ai_prompt_length >= 20`, and then get the typing lead but not the 120 s think lead (the same shrink SM 2.8 uses for lookback). They arrive late, because wakatime-cli syncs AI logs only when an editor plugin calls it, so they need the settling window in section 5. And the 2-minute and 30-minute relabelling rules have already folded some human edits into `ai coding` (HC 2.2), which is why the bridge classifies by fields rather than category.
 
-Where a native adapter exists for the same session (matched by `ai_session` and time), the native events win and the bridge events become a cross-check: a native session whose prompt count disagrees with wakatime-cli's count for the same transcript is inconsistent, which is the cross-source check HS 17.8 asks for.
+Where a native adapter exists for the same session (matched by `ai_session` and time), the native events win and the bridge events become a cross-check. A native session whose prompt count disagrees with wakatime-cli's count for the same transcript is inconsistent, which is the cross-source check HS 17.8 asks for.
 
 ### 4.4 Karim's AGENTS.md entry and `pairtime track`
 
@@ -253,18 +253,18 @@ mention it to the user. If the command fails or isn't found, carry on normally.
 <!-- pairtime:end -->
 ```
 
-Where it goes: only into the global rules file of harnesses that have no hook and no log reader in v1, such as Zed's agent, Warp's agent and JetBrains AI Assistant (HS 11.1, 15). For a harness pairtime doesn't recognize, `pairtime install --print-agents-md` prints the entry to paste. It is never written into a repository (HS 17.13).
+The installer writes it only into the global rules file of harnesses that have no hook and no log reader in v1, such as Zed's agent, Warp's agent and JetBrains AI Assistant (HS 11.1, 15). For a harness pairtime doesn't recognize, `pairtime install --print-agents-md` prints the entry to paste. It is never written into a repository (HS 17.13).
 
 Why it is the last layer, and how the design bounds it:
 
-- **Cost.** More than Karim's 30 tokens: the copied prompt is output tokens, and the tool call usually forces one extra model request per turn (HS 11.2). The 300-character cap bounds the copy at roughly 100 output tokens.
+- **Cost.** It costs more than Karim's 30 tokens, because the copied prompt is output tokens and the tool call usually forces one extra model request per turn (HS 11.2). The 300-character cap bounds the copy at roughly 100 output tokens.
 - **Compliance.** Instruction files are "context, not enforced configuration" and per-turn rituals are what agents drop first (HS 11.3). Pairtime measures the compliance rate where hooks also exist, by counting `track` calls per hook-observed prompt (HS 11.3).
 - **Spoofing.** Anyone can call `pairtime track` from a script (HS 11.3). So a `cli.track` event becomes an anchor only when the caller's process chain leads to a known harness process under the focused window, and keyboard input arrived in the 30 s before it (the model takes a few seconds to call it). It gets the go-ahead lead (`GO`, 20 s) and the turn's 20 s reading base whatever its length, and its evidence level is at most B. A `track`-only harness therefore earns Hackatime-like credit for editing (through the bridge) plus a small, fixed allowance per agent turn. That is honest for a fallback, and a native adapter lifts it.
 - **Sandboxes.** Codex's default `workspace-write` sandbox has no network access, and Claude Code and Copilot CLI have sandboxes too, so a model-run command may not reach the agent's socket (HS 11.2). When the socket is unreachable, `pairtime track` exits 0 and the turn is simply missed; it shows up in the compliance count. Pairtime doesn't try to get around a harness's sandbox. Hooks run outside the sandbox (HS 11.2), which is one more reason they come first.
 
 ### 4.5 Editor time: the WakaTime dual-send
 
-This is the adoption backbone, so its details are exact.
+The rest of the design depends on this path, so here it is in full.
 
 - **The line.** In `~/.wakatime.cfg`, under `[api_urls]`, add a pattern that matches every heartbeat, pointing at the local agent: `.+ = http://127.0.0.1:<port>/api/v1|<local key>`. wakatime-cli reads `[api_urls]` as a map, compiles every key as a case-insensitive regex, and sends each heartbeat to the default `api_url` and also "to ALL matching api_urls patterns", deduplicated by `url|key` (SP 8.8). Hackatime stays the `api_url`, so nothing changes for it.
 - **The key.** It must match `^(waka_)?[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$`. A malformed key makes wakatime-cli fail the whole run with an auth error and queue everything offline, so Hackatime would stop receiving too (HC 1.5; SP 8.3). The installer generates a lowercase UUIDv4, validates the line with the same regex before writing it, and the local endpoint accepts only that key.
@@ -280,7 +280,7 @@ This is the adoption backbone, so its details are exact.
 
 1. Download the binary to the per-user path (CP 7) and verify the signed release manifest's SHA-256 (CP 4.6). No admin rights anywhere.
 2. Write autostart and start the agent.
-3. Device sign-in: show a code, open `https://<host>/device`, and approve with Hack Club Auth (SP 3.5).
+3. Show a device code and open `https://<host>/device`, where the user approves the device with Hack Club Auth (SP 3.5).
 4. Detect harnesses and show the planned config changes as a diff (`--dry-run` prints only the diff). Merge the hook entries. Print the Codex trust instruction if Codex is present.
 5. Edit `~/.wakatime.cfg` (4.5). If wakatime-cli is installed, send a test heartbeat with entity `test.txt` (Hackatime stores that as a `test_entry`, HC 1.5) and confirm the local agent received it.
 6. Run lookback over the last 30 days, then open the dashboard on the user's own history.
@@ -328,9 +328,9 @@ Deviations, each with its reason:
 | D3 | **`cli.track` can anchor, weakly.** SM 1.2 says a `track` call is "never an anchor on its own". I let it anchor when the caller's process chain leads to a known harness process under the focused window and keyboard input arrived in the 30 s before it, with a fixed `GO`-class lead (20 s), the 20 s per-turn reading base, and evidence level at most B | With no anchor at all, the R7 fallback would credit nothing for the agent side of a harness that has no hooks, and its users would get less than Hackatime gives them, so they would not use pairtime there. The bound is about 40 s per turn, roughly what a go-ahead earns under SM, so a scripted `track` loop gains little, and still only with keyboard input and focus behind it |
 | D4 | **Handbook numbers from WakaTime's own categories when they exist.** SM 5.4 reconstructs `ai_logged_s` from agent events. When the bridge has the user's real heartbeats for the window, pairtime computes `hackatime_logged_s` exactly as Hackatime's boundary-aware path does (one global order over the linked project names, `min(gap, 120 s)`, `browsing`, `meeting` and `communicating` excluded; HC 1.4) and splits it by the `ai coding` category as WakaTime labelled it. `handbook_s` uses that split. SM's reconstruction remains the fallback for users without WakaTime | The handbook's rule applies to time "categorized as 'ai coding' by Wakatime" (HC 3.7, fact-check row 12), and reviewers check against Hackatime. A figure computed from the same heartbeats Hackatime received is the one they can verify, and a divergence from Hackatime's own number is a signal for Fraud Squad (section 6) |
 | D5 | **Submission rows are work sessions, not commit intervals.** SM 5.3 makes one row per commit interval. I make one row per work session (SM 5.3's own definition: a run of credited minutes split at gaps over `SESSION_GAP_S`), each listing the commits it touched, with the per-commit view kept as a second tab | Reviewers already settle hours in sitting-sized chunks: one devlog at a time in Stardance, row by row in Ari (HC 3.3, 3.6). A teen who commits once a week would get one giant commit-interval row, and a reviewer can only cut it coarsely. Work sessions also map one-to-one onto Ari journal entries for the bridge (4.7) |
-| D6 | **Evidence levels are reported to programs, not just used internally.** Each submission states the share of credited seconds at levels A, B and C, and the justification text says it in one sentence | Most Hack Clubbers are on Windows (B, R8), where v1 has `input_any` only, so most minutes will be level B (SM 2.1, 5.1). Whether level B counts as "significant evidence" above the one-third cap is Quality and Integrity's call (SM 5.4). Showing the split lets them set that policy instead of pairtime guessing it |
+| D6 | **Programs see the evidence levels.** Each submission states the share of credited seconds at levels A, B and C, and the justification text says it in one sentence | Most Hack Clubbers are on Windows (B, R8), where v1 has `input_any` only, so most minutes will be level B (SM 2.1, 5.1). Whether level B counts as "significant evidence" above the one-third cap is Quality and Integrity's call (SM 5.4). Showing the split lets them set that policy instead of pairtime guessing it |
 
-**Calibration through the pilot.** SM 7 is still being written, so here is how this design would fill it. The pilot program (section 8) produces labels for free: every reviewer cut on a row is a label for that row ("approved 41 of 52 credited minutes, reason: idle reading"). After the first 300 decided submissions, fit the free parameters (`THINK_LEAD_S`, `BUCKET_MAX_S`, `READ_WPM`, `DIFF_LPM`, `LOOKUP_MAX_S`, `NO_PROGRESS_LIMIT_S`) to minimize the gap between credited and approved seconds per row, with Claude Code's `active_time{type=user}` (SM 1.2, `otel.active_time`) as an independent reference. Each refit is a new `scoring_version`, published with its parameter-table hash (SM 5.1, `params`), at most once a month. Open submissions are recomputed; decided ones keep their numbers, as ari-webhooks does with `CurrentEvidenceVersion` (HC 3.6; SP 10.2). The target the pilot reports: the share of pairtime-credited hours that reviewers approve. Stardance approved about 22% of submitted Hackatime hours (HC 3.2). If pairtime's credited hours are approved at 80% or more, programs will notice.
+**Calibration through the pilot.** SM 7 is still being written, so here is how this design would fill it. The pilot program (section 8) produces labels for free, because every reviewer cut on a row is a label for that row ("approved 41 of 52 credited minutes, reason: idle reading"). After the first 300 decided submissions, fit the free parameters (`THINK_LEAD_S`, `BUCKET_MAX_S`, `READ_WPM`, `DIFF_LPM`, `LOOKUP_MAX_S`, `NO_PROGRESS_LIMIT_S`) to minimize the gap between credited and approved seconds per row, with Claude Code's `active_time{type=user}` (SM 1.2, `otel.active_time`) as an independent reference. Each refit is a new `scoring_version`, published with its parameter-table hash (SM 5.1, `params`), at most once a month. Open submissions are recomputed; decided ones keep their numbers, as ari-webhooks does with `CurrentEvidenceVersion` (HC 3.6; SP 10.2). The target the pilot reports: the share of pairtime-credited hours that reviewers approve. Stardance approved about 22% of submitted Hackatime hours (HC 3.2). If pairtime's credited hours are approved at 80% or more, programs will notice.
 
 ## 6. Trust
 
@@ -394,7 +394,7 @@ bundle-sub_01JD....tar
 
 ### 6.3 Sampling, audits and interviews
 
-Every submission gets a deep-audit probability `p = base + risk` (TP A6). The base rate is public (a proposal: 5%), and the risk model is private. Fraud stops paying when `p·q > g / (g + L)` (TP A6). With TP's illustrative inputs, a 40-hour claim worth about $200 needs `p > 0.28`, and a 10-hour claim needs `p > 0.08`, so the rate rises with claimed hours. The deep audit is a 15-minute call: walk through two server-chosen commits, explain one design decision, and make one small change live on a screen share (TP A6). At the acceptance target, auditing 15% of projects costs about 37.5 reviewer-hours in total (TP A6), far less than Stardance spent deflating by hand.
+Every submission gets a deep-audit probability `p = base + risk` (TP A6). The base rate is public, and I propose 5%. The risk model is private. Fraud stops paying when `p·q > g / (g + L)` (TP A6). With TP's illustrative inputs, a 40-hour claim worth about $200 needs `p > 0.28`, and a 10-hour claim needs `p > 0.08`, so the rate rises with claimed hours. The deep audit is a 15-minute call: walk through two server-chosen commits, explain one design decision, and make one small change live on a screen share (TP A6). At the acceptance target, auditing 15% of projects costs about 37.5 reviewer-hours in total (TP A6), far less than Stardance spent deflating by hand.
 
 Who runs it matters for credibility. In a program Karim runs, pairtime's own team would be grading pairtime's own users, which is attack U5 in TP A6. So the pilot asks Quality and Integrity to run or observe the audits and to spot-check pairtime submissions at a higher rate than usual, and publishes reviewer statistics. An adoption-first design can't afford a pilot whose numbers HQ doubts.
 
@@ -430,7 +430,7 @@ Adopted from TP B6:
 | 2. Revealed for submitted hours | Event metadata for every event in the submission window, verified against the batch roots; `k` server-chosen prompts with the user's redactions; optional extras | Evidence store, behind HCA sign-in with a reviewer role | Assigned reviewers, Fraud Squad and HQ spot-checkers, every view logged and shown to the user |
 | 3. Public | Profile aggregates, public projects, forge-verified commits of public repos | Public pages | Anyone |
 
-Redaction before reveal is deterministic and removes spans rather than rewriting text: first known values the client holds (the user's names, paths, hostname, private repo names), then gitleaks' rules, then validated PII patterns, then a preview the user confirms (TP DI 13). The agent may suggest spans, but never writes evidence (TP DI 14).
+Redaction before reveal is deterministic, and it removes spans rather than rewriting text. It strips the known values the client holds first (the user's names, paths, hostname, private repo names), then applies gitleaks' rules, then validated PII patterns, and ends with a preview the user confirms (TP DI 13). The agent may suggest spans, but never writes evidence (TP DI 14).
 
 ### 7.2 Data inventory, summarized
 
@@ -457,7 +457,7 @@ Programs get `hca_sub` and `slack_id` by default, and email only from users who 
 
 ### 7.3 Public by default, carefully
 
-R5 requires "public-by-default user profiles", and pairtime's users are 13 to 18, where GDPR Art. 25(2) and the UK Children's Code push the other way (TP B7). TP B7's own fallback for a literal reading of R5 is what this design does: the default public page is aggregate-only, and the onboarding screen shows the real preview with an equal-weight "Make private" choice. Concretely:
+R5 requires "public-by-default user profiles", and pairtime's users are 13 to 18, where GDPR Art. 25(2) and the UK Children's Code push the other way (TP B7). This design takes TP B7's own fallback for a literal reading of R5. The default public page is aggregate-only, and the onboarding screen shows the real preview with an equal-weight "Make private" choice. In detail:
 
 - Public by default: credited hours as daily totals, streak, a days-active calendar with no hour-of-day detail, top languages, harnesses used, public-repo projects with their commits (SP 5.2; TP B7).
 - The public view updates at most hourly. The owner's dashboard is the real-time one, which is what R5's "updates in real-time" needs. On the SSE stream, `profile:` topics carry coalesced hourly totals and `user:me` carries per-sync deltas (SP 6.4).
@@ -504,7 +504,7 @@ server within 15 minutes, and 71% had keyboard-level evidence. Every credited in
 evidence at the review URL, and the signed evidence bundle can be checked offline with `pairtime verify`.
 ```
 
-`Justification - Additional Justification` gets the review URL. `Hackatime Project Name(s) and Date Range(s)` gets `cs2go 11/1/2026-11/18/2026` in the handbook's format with UTC dates, and `Submitter Hackatime ID` the numeric id, when the user linked Hackatime (HC 3.6, 3.7). The human-written fields stay human: pairtime offers a factual draft for `Deflation Justification` ("deflated from Hackatime's 9.1 h to pairtime's 5.9 h: agent-only runtime 2.1 h, re-roll loops 0.6 h, idle reading 0.5 h excluded") that the reviewer must confirm or rewrite, and never touches `Specific Technical Features` (HC 3.7).
+`Justification - Additional Justification` gets the review URL. `Hackatime Project Name(s) and Date Range(s)` gets `cs2go 11/1/2026-11/18/2026` in the handbook's format with UTC dates, and `Submitter Hackatime ID` the numeric id, when the user linked Hackatime (HC 3.6, 3.7). The human-written fields stay human. Pairtime offers a factual draft for `Deflation Justification` ("deflated from Hackatime's 9.1 h to pairtime's 5.9 h: agent-only runtime 2.1 h, re-roll loops 0.6 h, idle reading 0.5 h excluded") that the reviewer must confirm or rewrite, and never touches `Specific Technical Features` (HC 3.7).
 
 ### 8.3 Which programs, in what order
 
@@ -516,13 +516,13 @@ Three routes, run in parallel, each with a target share of the 1,000:
 | B. Existing programs fighting the one-third rule | Programs on Ari (3am-ysws, hackxpansion, disposition, macondo), Robert clients (the-carnival, pixl, trmnt, Alchemize, savepoint, halflife, crossroads and others), and Flavortown (HC 3.3, 3.5, 3.6) | Tier 0 first, offered as optional evidence for AI time above a third; tier 1 for Rails apps | Their reviewers already have to cut AI time to a third "unless there is significant evidence" (HC 3.7). Pairtime is that evidence, and it moves the deflation work off the reviewer | 450 |
 | C. Low-ceremony Airtable-form programs | Programs whose only record is "repo URL + self-reported hours", which "can rank high by weighted projects" (HC 3.2) | Tier 0 plus the Airtable script | Any live tracker is an upgrade over self-report, and the handbook text is generated for them | 200 |
 
-Route A starts first because it doesn't need anyone else's calendar. Route B needs one champion per program, and the pitch is concrete: fewer spot-check fines and less deflation work, in the handbook's own format (HC 3.7, point 5). Route C is many small yeses that add up.
+Route A starts first because it doesn't need anyone else's calendar. Route B needs one champion per program, and the pitch to that person is fewer spot-check fines and less deflation work, in the handbook's own format (HC 3.7, point 5). Route C is many small yeses that add up.
 
 What a program author gets in the kit (`integrations/`): a one-page "switch on pairtime in a day" guide, the Airtable script, a Rails snippet for a second `HackatimeService`, the Ari journals bridge note, the Robert note ("change nothing"), the handbook text, and a 10-minute reviewer walkthrough of the review page.
 
 ### 8.4 Attribution and progress tracking
 
-Counting needs to be mechanical, so the first ask to HQ is a counting rule: a row in `approved_projects` counts toward the bounty when its `Override Hours Spent Justification` contains a pairtime review URL (`https://<host>/review/submissions/`). The data warehouse already copies the base into Postgres (HC 3.1), so that's one SQL query on HQ's side. Until HQ shares a count (HC Open question 13), pairtime keeps its own ledger from program outcomes: approved submissions with the approved seconds the program reports back (SP 10.2), shown on a public progress page by program. HQ's count is the authority; pairtime's ledger is the early warning.
+Counting needs to be mechanical, so the first ask to HQ is a counting rule. A row in `approved_projects` would count toward the bounty when its `Override Hours Spent Justification` contains a pairtime review URL (`https://<host>/review/submissions/`). The data warehouse already copies the base into Postgres (HC 3.1), so that's one SQL query on HQ's side. Until HQ shares a count (HC Open question 13), pairtime keeps its own ledger from program outcomes: approved submissions with the approved seconds the program reports back (SP 10.2), shown on a public progress page by program. HQ's count is the authority; pairtime's ledger is the early warning.
 
 ### 8.5 Timeline
 
@@ -582,10 +582,158 @@ What would break the budget, and why this design doesn't do it:
 - **Content for logged hours.** Only submitted windows move evidence (SP 9.4).
 - **Recomputing aggregates on the hot path.** Rollups are additive deltas (SP 6.1), so there is no equivalent of Hackatime's 17 worker-hours a day of rebuilds.
 
-What breaks first if usage grows past R11: the single SQLite writer, then SSE memory at tens of thousands of streams. The next steps are Postgres with the same schema, then a second process with a broker (SP 9.5). CI runs the test suite against both SQLite and Postgres so that path stays real (SP 12.11).
+If usage grows past R11, the single SQLite writer breaks first, then SSE memory at tens of thousands of streams. The next steps are Postgres with the same schema, then a second process with a broker (SP 9.5). CI runs the test suite against both SQLite and Postgres so that path stays real (SP 12.11).
 
 Costs outside R11's hosting line that the project still has to pay: Windows code signing (Azure Artifact Signing at about $9.99 a month, or SignPath, free for open source once there is a release with some reputation; CP 4.3) and the Apple Developer Program at $99 a year for notarization (CP 4.4).
 
 ## 10. Build plan
 
+Every work package (WP) is sized for one AI agent in one 2 to 4 hour session, and every acceptance criterion is something GitHub Actions can check, because nothing gets built or tested on the development machine. GitHub-hosted runners are free for a public repo, including `windows-latest`, `macos-latest` and `ubuntu-latest` (CP 7). A runner isn't a 2016 laptop, so footprint checks in CI are regression guards; the R8 proof comes from alpha testers' `pairtime doctor` reports.
+
+**Done means, for every WP:** `gofmt` and `go vet` clean, `staticcheck` clean, `go test ./...` green on Linux, Windows and macOS runners, all seven `CGO_ENABLED=0` targets cross-compile, the license gate passes, and any new workflow has a `workflow_dispatch` trigger so it can be re-run by hand.
+
+**Milestone order.** M0 and M1 make a tracker an alpha tester can live with (R3, R4, R8). M2 adds the server (R5). M3 is the first release a program can switch on (A, R9, R10). M4 widens coverage and ships signed installers (R7, R8). M5 is v1.5. Inside a milestone, WPs whose dependencies are met can run in parallel.
+
+### M0. Foundations
+
+| WP | Deliverable | CI acceptance | Depends on |
+|---|---|---|---|
+| 0.1 | Repo skeleton: `go.mod`, stub `cmd/pairtime` and `cmd/pairtime-server` that print a version, `ci.yml` | Lint and tests on three OS runners; seven cross-compiled artifacts uploaded; the license gate (a `go-licenses` check against an allowlist) fails on a fixture module with a disallowed license | none |
+| 0.2 | `pkg/event`: Go types for every SM 1.1 field and SM 1.2 kind, spool line codec, generated JSON Schema | Round-trip test per kind; `go generate` leaves no diff; a 60 s fuzz run of the decoder finds no panic | 0.1 |
+| 0.3 | `pkg/chain`: event chain hash, salted leaves, per-token Merkle trees, batch roots and chain (TP B6) | RFC 9162 Merkle test vectors pass; property tests show any added, dropped, reordered or edited event fails verification | 0.1 |
+| 0.4 | `pkg/score/params`: every SM parameter with defaults, canonical encoding, SHA-256 `params` hash | Golden hash; changing any single parameter changes the hash | 0.1 |
+| 0.5 | Scenario harness: a JSONL format describing presence slots, focus and events plus expected minute buckets, and a runner | A trivial scenario passes; the format is documented in `testdata/scenarios/README.md` | 0.2 |
+
+### M1. Local tracker
+
+| WP | Deliverable | CI acceptance | Depends on |
+|---|---|---|---|
+| 1.1 | Presence slots (SM 2.1): `yes`, `bridged`, `tail`, `returned`, `no`, `unknown`; hard breaks for lock, suspend and sample gaps; gaps from wall-clock values only (CP 2.2) | Scenario tests for every value and break, including a simulated suspend under both Windows-style and Linux-style monotonic clocks | 0.5 |
+| 1.2 | Prompt origin rules 1 to 8 and prompt classes (SM 2.2), plus D2 and D3 (section 5) | Table tests per rule, fed from hook payload fixtures | 0.5 |
+| 1.3 | Anchors and windows (SM 2.3) | One scenario per anchor kind with expected lead and trail seconds | 1.1, 1.2 |
+| 1.4 | Reading bucket (SM 2.4) | Scenarios: a spinner-only turn earns only its 20 s base; the 600 s cap; the 2 h TTL; no drain outside `READ_HORIZON_S` | 1.3 |
+| 1.5 | Focus, lookups and one-timeline attribution (SM 2.5, 3.1 to 3.3) | The R4 "five projects in an afternoon" scenario: per-project totals sum to the credited total with no second counted twice; lookup bracket and cap tests | 1.3 |
+| 1.6 | Dark-flow loops and progress (SM 4.2, 4.3): normalization, MinHash, re-roll, same-error, autopilot, the half rate and its restore | Scenarios including the A, B, A, B, A alternation caught at the third A, and a half-weight hour restored by a `run_green` within 24 h | 1.3 |
+| 1.7 | Combiner, minute buckets with the 10-minute settling versions (D1), work-session and day rollups (SM 2.7, 5.1, 5.3) | All three R4 stories as golden tests; determinism: 100 runs with event arrival order shuffled inside the settling window give byte-identical buckets | 1.4, 1.5, 1.6 |
+| 1.8 | Agent process: single-instance lock, spool writer, SQLite index, Unix socket, `127.0.0.1` HTTP with token, Host and Origin checks (CP 6.3), scorer loop | On three OS runners: 1,000 events over the socket, `kill -9`, restart, and the spool replay shows no loss and no duplicate; requests with a foreign Host or Origin get 403 | 0.2 |
+| 1.9 | `pairtime hook`: stdin cap, field parse, basic redaction, socket send with a 100 ms timeout, spool fallback, detached agent start, always exit 0 | On `windows-latest`, p95 round trip under 50 ms over 200 warm calls (a regression guard); agent-down calls append to the spool and exit 0; malformed stdin exits 0 with no output | 1.8 |
+| 1.10 | Windows presence and power: `GetLastInputInfo`, suspend and resume notifications, session lock | Fakes for unit tests; a 60 s smoke run on `windows-latest` emits four samples | 1.8 |
+| 1.11 | macOS presence, power and focus through `purego`: `CGEventSourceSecondsSinceLastEventType` for any input and for key-down, IOKit sleep, `NSWorkspace` activation | Builds with `CGO_ENABLED=0`; a smoke run on `macos-latest` emits samples and one focus event | 1.8 |
+| 1.12 | Linux presence and power: X11 screensaver info, Mutter `IdleMonitor` and logind `PrepareForSleep` over D-Bus, `unknown` where nothing is available (as grit does; PA 1.14) | Under Xvfb on `ubuntu-latest`, idle time is read; D-Bus paths tested against a mock bus | 1.8 |
+| 1.13 | Windows and X11 focus, and the process-tree walk that finds `hosted_sessions` (SM 3.2) | On `windows-latest`, two console windows swap focus and both changes are seen; a child-process tree resolves to its host window | 1.10, 1.12 |
+| 1.14 | Claude Code adapter: hook events, transcript reader for lookback, minimal OTLP receiver for `active_time` | Every registered hook event's fixture maps to the expected SM events; a transcript fixture replays to the same events as its hooks; `/loop` prompts are matched to `session_crons` by prefix (SM 2.2, rule 1) | 0.2, 1.8 |
+| 1.15 | Local WakaTime endpoint and `wakabridge` (4.3, 4.5): `heartbeats` and `heartbeats.bulk`, Basic, Bearer and `?api_key=` auth, Hackatime's per-item bulk response shape (HC 1.3), the heartbeat-to-event rules, the project-name map | Captured heartbeats, including transcript-derived ones with a model token in the user agent, map to the expected events; bulk response shape matches Hackatime's | 1.8 |
+| 1.16 | `e2e-wakatime.yml`: the real wakatime-cli v2.28.4 release binary on three OS runners, a fake Hackatime as `api_url`, the agent through `[api_urls]` | Both destinations receive a test heartbeat. With the agent stopped, the fake Hackatime still receives and wakatime-cli exits without an auth error; after restart the offline queue reaches the agent. The observed queue behaviour is written to a report artifact. A malformed key is refused by the installer before it reaches the file | 1.15, 1.17 |
+| 1.17 | Installer core: INI-preserving `~/.wakatime.cfg` editor (pattern choice, key validation, the no-config path with the watermark seed), Claude Code settings merger, autostart writers, exact uninstall, `--dry-run` diff | Golden before-and-after fixtures, including an existing `.*` line and existing git-ai hook entries; uninstall restores files byte for byte; `e2e-install.yml` runs install and uninstall with a temporary home directory on all three OSes | 0.1 |
+| 1.18 | `install.sh` and `install.ps1`: download, verify the release manifest's SHA-256, run `pairtime install` | `e2e-install.yml` runs both scripts against a local release fixture server; a tampered binary is refused | 1.17 |
+| 1.19 | Local dashboard v0 (Svelte, shared components): today and week, the chess clock, per-project list, uncredited time by reason, the loop recap | Playwright against an agent with a fixture database: displayed totals equal the scorer's output; no page loads without the one-time token | 1.7, 1.8 |
+| 1.20 | `pairtime doctor` and `pairtime privacy show` | `doctor --json` validates against its schema; `privacy show` output is byte-identical to the uploader's next batch body | 1.8 |
+| 1.21 | Git adapter: `.git` watch, refs and reflog, root-commit fingerprint, commit records, rewrites | Tests drive the `git` CLI in CI: commit, amend and rebase produce the right records and `rewrites`; the fingerprint is the same across a fresh clone | 0.2 |
+
+### M2. Server core
+
+| WP | Deliverable | CI acceptance | Depends on |
+|---|---|---|---|
+| 2.1 | Server skeleton: config, migrations, single writer committing every 50 ms or 500 rows, `/healthz`, `/readyz`, `/metrics`, startup check that `sqlite_version()` is at least 3.51.3 (SP 7.4) | Migrations apply on SQLite and on a Postgres 18 service container; the startup check refuses an old version in a test | 0.1 |
+| 2.2 | HCA OIDC login as a confidential client, requesting `openid email slack_id verification_status` explicitly (SP 12.1) | End-to-end against a fake OIDC provider in CI; submission is refused unless `verification_status` is `verified` | 2.1 |
+| 2.3 | Device grant (RFC 8628), `ptd_` tokens with a CRC32 checksum, Ed25519 key registration (SP 8.3) | The client completes the device flow against the server and the fake provider; corrupted tokens fail their checksum offline | 2.2 |
+| 2.4 | Ingest: per-device sequence dedupe, `Idempotency-Key`, RFC 9421 signature and `Content-Digest` checks, partial acceptance, the no-free-text schema firewall, size limits, rate-limit headers (SP 8.2, 8.6) | Replays are idempotent; a fuzz test that puts random text in every string field always gets 422; an unsigned or re-signed batch is refused | 2.3 |
+| 2.5 | Time and witness: offsets, monotonic re-anchoring, `clock_jump`, future and too-old rejection, per-minute `witness_log`, `witnessed` versus `backfilled` (SP 8.4, 8.5) | Scenarios with a skewed and a jumped clock; an event first seen after 15 minutes is `backfilled` | 2.4 |
+| 2.6 | Rollups, cross-device merge (SM 3.4) and the SSE hub: additive upserts, topic ring buffers, `Last-Event-ID`, 15 s keepalives, `resync`, hourly coalesced public topics (7.3) | A dashboard stream receives a delta within 2 s of ingest; reconnect replays the gap; 1,000 open streams add under 50 MB of memory; two devices crediting one minute keep one | 2.5 |
+| 2.7 | Profiles and project pages with the visibility rules of 7.3, and the onboarding choice | Playwright: a public profile contains no private project name and no hour-of-day data in its HTML or JSON; "Make private" hides it from an anonymous browser | 2.6 |
+| 2.8 | Commit ingest and forge verification for GitHub, GitLab and Forgejo public repos (SP 4.3) | Recorded HTTP fixtures; a commit first seen weeks after its author date is flagged | 2.4 |
+| 2.9 | Client uploader and sign-in: batch building, signing, backoff with full jitter, `Retry-After`, never dropping events (SP 8.6) | Client against server in CI: 24 hours of synthetic events replayed fast give equal totals on both sides, including through injected 429s and a server restart | 2.4, 1.7 |
+| 2.10 | Deploy: distroless image, `compose.yml` with `cloudflared`, `litestream.yml`, runbook; `restore-drill.yml` | The workflow builds the image, runs it, replicates to a MinIO service container, restores into a fresh container, passes `PRAGMA integrity_check` and the API smoke tests | 2.1 |
+
+### M3. The program path (first release a program can switch on)
+
+| WP | Deliverable | CI acceptance | Depends on |
+|---|---|---|---|
+| 3.1 | Submissions: create (idempotent on program and `external_id`), overlap rejection, frozen numbers, recompute-open-only on a new scoring version (SP 10.2) | API tests for every state transition; a second submission over the same project and window is refused | 2.6 |
+| 3.2 | Reveal protocol (TP B6): event metadata for the window, root verification, server CSPRNG challenge of `k = max(10, 10% of prompts)` capped at 30, redacted token reveals, withheld items uncredited | End to end: an honest client passes; an edited event fails; a withheld reveal lowers credited seconds by exactly the minutes it supported | 3.1, 0.3 |
+| 3.3 | Server re-scoring of the revealed window with `pkg/score` at the stated version | A client modified to inflate its buckets is flagged with a mismatch; an honest one matches to the second | 3.2, 1.7 |
+| 3.4 | Review UI: the panels in 6.2, row cuts that can only lower a row, required reasons, the access log | Playwright: a cut below captured seconds saves; a value above is refused; the reviewed user sees the access-log entry | 3.3 |
+| 3.5 | Handbook justification endpoint, the deflation draft, and `integrations/airtable-automation.js` | Golden text for a fixture submission; vitest with a mocked Airtable API shows the script filling every mapped field | 3.1 |
+| 3.6 | Hackatime-shaped reads (4.7): `authenticated/me`, `stats` with comma-string `filter_by_project` and ignored extras, `trust_factor`, `heartbeats/spans`, `info_batch`, `:username` resolution, the `pairtime` extra object, `final` | Contract tests built from Hackatime's MIT source at `43bde10b02db` (HC 0): same paths, parameters and JSON shapes; a small Ruby script in CI, written from scratch to make Stardance-style calls (HC 1.8), gets the expected credited seconds | 3.1 |
+| 3.7 | Program OAuth clients, client-credentials reads, user-initiated grants, project-name linking (4.7), webhooks signed like Robert's with a 300 s tolerance, the `updated_since` list | A reference verifier accepts the signature and rejects a stale timestamp; retries back off; reads for an unconnected user return 404 | 3.1 |
+| 3.8 | Evidence bundle, `pairtime verify`, `/.well-known/pairtime-keys.json`, the daily-root job | `verify` passes on an honest bundle and fails on any single changed byte; the daily root is deterministic and its commit is made to a test repository | 3.2 |
+| 3.9 | Trust levels, the private-module interface with a no-op default, tier-1 flags, the `hackatime_mismatch` hook | A scan of every public and program endpoint finds `yellow` always masked as `blue` | 3.1 |
+| 3.10 | Privacy hub: `POST /api/privacy/delete` and `/export` with ES256 JWTs, `iss: hackclub-privacy`, dry run, single-use `jti` (TP DI 17) | Tests with generated ES256 keys; a replayed `jti` is refused; a dry run deletes nothing | 2.2 |
+| 3.11 | Program kit in `integrations/`: the one-page guide, Rails snippet, Robert note, and the Ari `journals[]` bridge function | The bridge's JSON validates against a schema written from Ari's documented ingest keys (HC 3.6) | 3.5 |
+
+### M4. Breadth and release
+
+| WP | Deliverable | CI acceptance | Depends on |
+|---|---|---|---|
+| 4.1 | Codex adapter: hooks, rollout reader for `.jsonl` and `.jsonl.zst`, trust-state detection | Fixture tests; automation fields `source`, `originator`, `thread_source` map to origin rules (SM 2.2) | 0.2, 1.8 |
+| 4.2 | Cursor adapter: `~/.cursor/hooks.json`, Tab versus Agent edits, dedupe against Claude-format entries | Fixture tests; one prompt seen by both paths is counted once | 0.2, 1.8 |
+| 4.3 | Copilot adapter: CLI and VS Code hooks, `events.jsonl`, `chatSessions` | Fixture tests | 0.2, 1.8 |
+| 4.4 | Gemini CLI adapter, hooks plus `chats` reader | Fixture tests | 0.2, 1.8 |
+| 4.5 | Devin dedupe and harness detection from the hook's parent process | Fixture tests with recorded process trees | 1.14 |
+| 4.6 | AGENTS.md entry writer, `pairtime track`, the D3 rule, the compliance counter | Golden rules files; a scripted `track` loop with no keyboard input earns 0 in a scenario | 1.2, 1.17 |
+| 4.7 | Adapter SDK, conformance kit, `pairtime emit` | The kit passes on every in-tree adapter in CI | 4.1 to 4.4 |
+| 4.8 | Release pipeline: GoReleaser OSS, checksums, Ed25519-signed update manifest, Scoop bucket, Homebrew tap, winget manifest, self-update with the Windows rename swap (CP 4.6) | A tag on a fork produces every artifact; self-update swaps the binary on all three OS runners | 1.18 |
+| 4.9 | Code signing: SignPath or Artifact Signing for Windows, quill notarization for macOS (CP 4.3, 4.4) | `signtool verify` on `windows-latest` and `codesign -v` on `macos-latest` pass. Needs accounts that Karim creates | 4.8 |
+| 4.10 | Tray on Windows and Linux; `pairtime statusline` | Builds without cgo for those targets; statusline format test | 1.19 |
+| 4.11 | `footprint.yml`: idle RSS and CPU over 10 minutes, hook latency, binary size | Fails if Windows RSS exceeds 25 MB, average CPU exceeds 0.1%, or the binary exceeds 15 MB (CP 7 targets) | 1.8 |
+| 4.12 | `load.yml` (manual and weekly): 8x-peak ingest plus 5,000 SSE streams for 15 minutes against the server image | p99 ingest under 200 ms, no 5xx, server RSS under 1 GB | 2.6 |
+
+### M5. v1.5
+
+| WP | Deliverable | CI acceptance | Depends on |
+|---|---|---|---|
+| 5.1 | Opt-in typing evidence (TP DI 9): per-minute counts and injected share, nothing per keystroke stored | On `windows-latest`, synthetic `SendInput` keys show 100% injected share; a schema test proves no per-key table exists | 4.9 |
+| 5.2 | Reviewer integrity: random assignment, own-club conflicts, seeded known-answer submissions, reviewer statistics | API tests | 3.4 |
+| 5.3 | Ari `pairtime` time source: a written proposal and a reference row mapping, offered to Ari's maintainers | Mapping unit tests (the upstream change itself is theirs to accept) | 3.11 |
+| 5.4 | Cursor `state.vscdb` reader, incremental by rowid and rate-limited | Fixture database tests | 4.2 |
+| 5.5 | Shell integration (OSC 133/633 marks, zsh and fish history for lookback) for `CMD` and `TEST` anchors | Fixture tests | 1.3 |
+| 5.6 | Calibration tooling: export reviewer cuts as labels, refit parameters, emit a new `scoring_version` | On synthetic labels generated from known parameters, the fitter recovers them within 10% | 3.4 |
+| 5.7 | Opt-in server-side WakaTime endpoint for machines where the client can't run, with `entity` stored as an HMAC and 90-day retention (SP 8.8) | API tests; no plaintext path is stored | 2.4 |
+
 ## 11. Risks and cuts
+
+### 11.1 Risks
+
+Ordered by how badly each would hurt the race to 1,000 weighted projects.
+
+| # | Risk | Why it matters | Mitigation |
+|---|---|---|---|
+| 1 | **Pairtime breaks a teen's Hackatime.** A malformed `[api_urls]` key makes wakatime-cli fail the whole run, so Hackatime stops receiving too (HC 1.5), and how wakatime-cli treats a dead local destination is undocumented (4.5) | One report of "pairtime broke my Hackatime" in a program channel would end route B. Coexistence is the whole adoption bet | The installer validates the key with wakatime-cli's own regex before writing (4.5); `e2e-wakatime.yml` (WP 1.16) runs the real wakatime-cli binary on three OSes, including the agent-down case, and blocks the release on failure; `pairtime doctor` checks both destinations; uninstall restores the file byte for byte |
+| 2 | **HQ doesn't agree how to count pairtime projects**, or agrees late (HC Open question 1) | Without a counting rule, approved hours may never be attributed to pairtime | The counting rule in 8.4 is the first item in the first Q&I conversation, in week one (8.6). Pairtime's own outcome ledger tracks progress meanwhile. The `Alternate Tracking Method` text names pairtime in every row regardless |
+| 3 | **Level B isn't accepted as significant evidence** (section 5, D6) | Most Hack Clubbers are on Windows (B, R8), where v1 has no keyboard-specific signal. If level-B AI time stays capped at a third, pairtime's credit advantage shrinks to pre-deflation and evidence, and engaged AI users lose their main reason to install | The typing-evidence module (WP 5.1) is the first v1.5 item and needs code signing first (WP 4.9). The level split is shown on every submission so Q&I can set policy per level. Pre-deflated hours with evidence still save reviewers work, which is the program-side reason to adopt |
+| 4 | **Program calendars.** No program launching in the window, or route B champions saying "next season" | Hack Club programs run on seasons, and the bounty is a race (PA 1.14: grit was created 47 minutes after the announcement) | Route A, the native program, depends on no one else's calendar. Route C is many small programs. Tier 0 asks a program for one form field |
+| 5 | **Pilot funding and sponsorship** for the native program's grants (HC Open question 9) | Programs receive about $8.50 per approved hour from HQ (HC 3.2), so a 350-weighted-project program moves real money | Use the standard YSWS budget path with an HQ sponsor; a smaller first season if needed |
+| 6 | **Unvalidated accuracy.** The v1 parameters are guesses until the pilot (SM summary) | If reviewers find pairtime over-crediting, trust collapses for every program at once | Conservative defaults that follow "When in doubt, deflate" (HC 3.7), evidence levels, Q&I audits in the pilot, and the first refit after 300 decided submissions (section 5) |
+| 7 | **Unsigned Windows binaries.** Smart App Control blocks unsigned executables on Windows 11, and SmartScreen reputation starts from zero for every unsigned release (CP 4.3). SignPath wants an existing release with some reputation | The audience is the 10-year-old Windows laptop (B, R8) | Sign through Azure Artifact Signing under Hack Club's organization (about $9.99 a month; CP 4.3) as soon as possible; ship the first alpha through `irm ... \| iex`, whose downloads may not carry the Mark of the Web (unverified, CP 4.2) |
+| 8 | **Users without Hackatime are invisible to Robert** (HC 3.5) | The fraud desk only reads Hackatime | The pilot requires Hackatime as well (most participants have it already: 41,247 users, HC 1.10); a `pairtime` kind is requested from the Telescreen team |
+| 9 | **A pairtime-run program grading pairtime users** (TP A6, U5) | HQ may discount the native program's numbers | Q&I runs or observes audits and spot-checks at a higher rate; reviewer statistics are published (6.3) |
+| 10 | **Harness formats change** between releases (HS 17.7), and Codex hooks need a one-time trust (HS 6.1) | Silent loss of a harness's events | Fixtures per harness version in CI; the WakaTime bridge as a floor; `pairtime doctor` reports untrusted Codex hooks |
+| 11 | **Remote and locked-down machines.** SSH and cloud dev boxes earn nothing in v1 (SM 3.4); GNOME Wayland has no focus signal, so slots are `ambiguous` and reading isn't credited there (SM 3.2) | Some teens only have a school Chromebook or Codespaces | The opt-in server-side WakaTime endpoint (WP 5.7) gives those users level-C credit; the remote-input join stays an open question (SM 3.4) |
+| 12 | **Home-server hosting near a program deadline** (SP 9.3) | An outage on payout day costs program trust | Clients buffer; move the same compose file to a VPS (CCX13, or AX42 if CCX stays unavailable) before route A launches (section 9) |
+| 13 | **Hackatime's program API moves** (its HCA-only transition started 2026-11-13, SP 3.1; a ClickHouse move is in review, HC 1.10) | Tier 1 mirrors Hackatime's shapes | Contract tests pinned to a Hackatime commit; a watch on upstream changes to the stats and trust endpoints |
+| 14 | **Ari has no license in its repo metadata** (HC Open question 7) | The `pairtime` source contribution may be blocked | The journals bridge works without any Ari change (4.7) |
+| 15 | **AGPL and private detection rules** (HC Open question 11) | A legal question could delay tier-2 rules | Every requirement is met by the public build with the no-op module (3.2) |
+
+### 11.2 What I'd cut first
+
+If time runs short, cut from the top of this list. Everything here can come later without changing the program-facing contract.
+
+1. Leaderboards, badges, OG images and weekly emails. The recap and chess clock carry R3.
+2. Tray icons (WP 4.10). The dashboard and `pairtime statusline` remain.
+3. Package-manager channels: Scoop, Homebrew and winget (part of WP 4.8). The two install scripts remain.
+4. The Gemini, Devin and Copilot native adapters (WP 4.3 to 4.5). The WakaTime bridge covers them at reduced strength.
+5. Lookback readers other than Claude Code's.
+6. Submission webhooks and the `updated_since` list (part of WP 3.7). Tier 0 and tier 1 don't need them.
+7. Everything in M5 except typing evidence (WP 5.1).
+
+Never cut: the dual-send safety work (WP 1.15 to 1.17), the Claude Code adapter, the scorer, witnessing, submissions with the review page and handbook text, the evidence bundle with `pairtime verify`, HCA sign-in, and the ingest schema firewall. Those are the parts that get hours into the Unified DB without breaking anything a teen or program already relies on.
+
+### 11.3 Open questions for Karim and HQ
+
+1. The four questions for Quality and Integrity in 8.6: attribution, significant evidence by level, two trackers and one number, the spot-check window.
+2. Who sponsors and funds the native program, and which reviewers staff it (HC Open question 9)?
+3. Does R5's "public-by-default" mean pre-public, which needs a written Children's Code "compelling reason" assessment, or a forced choice at onboarding (TP B7)?
+4. Will HQ mark pairtime an official HCA app, or accept an allowlist of reviewer HCA ids (SP Open question 1)?
+5. Can Hack Club's organization hold the Windows signing account, and who holds the Apple Developer membership (CP 4.3, 4.4)?
+6. Would the Telescreen team add a `pairtime` kind, and would hackatime-setup's maintainers take an optional "also install pairtime" step (HC 3.5; 8.2)?
+7. Two facts to check before building: Claude Code's `statusLine` setting (3.3), which HS doesn't cover, and wakatime-cli's behaviour toward an unreachable `[api_urls]` destination (4.5), which WP 1.16 settles.
