@@ -103,7 +103,8 @@ func newPayload(k Kind) Payload {
 	return nil
 }
 
-// ruleFor returns the rule for k; unknown kinds get none.
+// ruleFor returns the rule for k. An unknown kind gets the rule with no
+// restrictions; Validate never reaches it, since only known kinds decode.
 func ruleFor(k Kind) kindRule {
 	for _, entry := range kindTable {
 		if entry.kind == k {
