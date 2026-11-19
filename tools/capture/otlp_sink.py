@@ -19,6 +19,10 @@ protobuf and won't copy it into a fixture.
 Every request gets an empty success reply, so the exporter never retries or
 backs off. One line per request on the terminal shows what arrived. Nothing is
 forwarded anywhere. Stop it with Ctrl+C. Standard library only, Python 3.8+.
+
+It also keeps the step log: each line you type into its terminal, such as a
+SCRIPTS.md step number, is appended to RUN_DIR/STEPS.txt with the time, so
+the fixture records which step every hook call and request belongs to.
 """
 
 import argparse
@@ -184,6 +188,19 @@ def make_handler(sink, out):
     return Handler
 
 
+def log_steps(run_dir, stdin, out):
+    """Append each line typed on stdin to RUN_DIR/STEPS.txt, stamped."""
+    path = os.path.join(run_dir, "STEPS.txt")
+    for line in stdin:
+        text = line.strip()
+        if not text:
+            continue
+        now = time.time_ns()
+        with open(path, "a", encoding="utf-8", newline="\n") as f:
+            f.write("%d\t%s\t%s\n" % (now, time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now / 1e9)), text))
+        print("noted step %s" % text, file=out, flush=True)
+
+
 def loopback(host):
     if host == "localhost":
         return True
@@ -217,6 +234,9 @@ def main(argv=None):
     print("point the harness at it with OTEL_EXPORTER_OTLP_ENDPOINT=http://%s:%d and "
           "OTEL_EXPORTER_OTLP_PROTOCOL=http/json; Ctrl+C stops" % (host if ":" not in host else "[%s]" % host, port),
           flush=True)
+    if sys.stdin is not None and sys.stdin.isatty():
+        print("type a step number and Enter before each step; it goes to STEPS.txt", flush=True)
+        threading.Thread(target=log_steps, args=(args.run_dir, sys.stdin, sys.stdout), daemon=True).start()
     try:
         server.serve_forever()
     except KeyboardInterrupt:
