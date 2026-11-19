@@ -1,0 +1,274 @@
+{
+  "upstream": "hackclub/data-warehouse",
+  "revision": "4ff995dddcb74d82b4cd9e078e851317397adc6a",
+  "file": "orpheus_engine/defs/airtable/generated_ids.py",
+  "blob": "b7fe2e97f6ac0d0d891a24a6981de63aac2c5358",
+  "names_only": "The file is generated from Airtable and lists each base, table and field with its Airtable id. It has no field types, so none are given here, and the field ids are left out because nothing pairtime builds addresses a field by id.",
+  "bases": [
+    {
+      "name": "wrangler",
+      "id": "appznGjUoC1o6jLZd",
+      "line": 3254,
+      "tables": [
+        {
+          "name": "ysws_project_submission",
+          "id": "tblAv8vzzQClBi5xR",
+          "line": 3258,
+          "field_count": 46,
+          "fields": [
+            {
+              "name": "Code URL",
+              "line": 3261,
+              "role": "project",
+              "filled_by": "program",
+              "handbook": "Code URL"
+            },
+            {
+              "name": "Playable URL",
+              "line": 3262,
+              "role": "project",
+              "filled_by": "program",
+              "handbook": "Playable URL"
+            },
+            {
+              "name": "Screenshot",
+              "line": 3270,
+              "role": "project",
+              "filled_by": "program",
+              "handbook": "Screenshot"
+            },
+            {
+              "name": "Description",
+              "line": 3271,
+              "role": "project",
+              "filled_by": "program",
+              "handbook": "Description"
+            },
+            {
+              "name": "GitHub Username",
+              "line": 3272,
+              "role": "project",
+              "filled_by": "program"
+            },
+            {
+              "name": "Linked lapse/lookout/hackatime links",
+              "line": 3282,
+              "role": "evidence",
+              "filled_by": "program"
+            },
+            {
+              "name": "AI usage disclaimer",
+              "line": 3283,
+              "role": "submission",
+              "filled_by": "program"
+            },
+            {
+              "name": "Hours claimed",
+              "line": 3284,
+              "role": "hours",
+              "filled_by": "program",
+              "note": "The hours the submitter claims."
+            },
+            {
+              "name": "Optional - Override Hours Spent",
+              "line": 3285,
+              "role": "hours",
+              "filled_by": "pairtime",
+              "handbook": "Override Hours Spent",
+              "note": "The reviewer-approved credited hours (DESIGN 9.3)."
+            },
+            {
+              "name": "Optional - Override Hours Spent Justification",
+              "line": 3286,
+              "role": "justification",
+              "filled_by": "program",
+              "handbook": "Optional - Override Hours Spent Justification",
+              "note": "One templated justification that overrides the separate fields. A program filling the fields leaves it empty (handbook), and pairtime's script doesn't write it."
+            },
+            {
+              "name": "Automation - Unified Justification",
+              "line": 3287,
+              "role": "justification",
+              "filled_by": "Hack Club automation",
+              "note": "The separate justification fields combined, as they reach the Unified YSWS DB."
+            },
+            {
+              "name": "Justification - Hackatime Project Name(s) + Date Range(s)",
+              "line": 3288,
+              "role": "justification",
+              "filled_by": "pairtime",
+              "handbook": "Hackatime Project Name(s) and Date Range(s)",
+              "note": "Only when the teen linked Hackatime (DESIGN 9.3)."
+            },
+            {
+              "name": "Justification - Submitter Hackatime ID",
+              "line": 3289,
+              "role": "justification",
+              "filled_by": "pairtime",
+              "handbook": "Submitter Hackatime ID",
+              "note": "Only when the teen linked Hackatime (DESIGN 9.3)."
+            },
+            {
+              "name": "Justification - Lapse Links, comma-separated",
+              "line": 3290,
+              "role": "justification",
+              "filled_by": "program",
+              "handbook": "Lapse Link(s)"
+            },
+            {
+              "name": "Justification - Specific Technical Features",
+              "line": 3291,
+              "role": "justification",
+              "filled_by": "reviewer",
+              "handbook": "Specific Technical Features",
+              "note": "Left to the reviewer (DESIGN 9.3)."
+            },
+            {
+              "name": "Justification - Deflation Justification",
+              "line": 3292,
+              "role": "justification",
+              "filled_by": "pairtime",
+              "handbook": "Deflation Justification",
+              "note": "A factual draft from reason codes that the reviewer confirms or rewrites (DESIGN 9.3)."
+            },
+            {
+              "name": "Justification - Alternate Tracking Method",
+              "line": 3293,
+              "role": "justification",
+              "filled_by": "pairtime",
+              "handbook": "Alternate Tracking Method",
+              "note": "The method text, starting with the fixed line Tracked with pairtime <version> (DESIGN 9.2, 9.3)."
+            },
+            {
+              "name": "Justification - Additional Justification",
+              "line": 3294,
+              "role": "justification",
+              "filled_by": "pairtime",
+              "handbook": "Additional Justification",
+              "note": "The review URL (DESIGN 9.3)."
+            },
+            {
+              "name": "Optional - Override Duplicate Justification",
+              "line": 3295,
+              "role": "exception",
+              "filled_by": "program",
+              "handbook": "Optional - Override Duplicate Justification"
+            },
+            {
+              "name": "Optional - Override Age Justification",
+              "line": 3296,
+              "role": "exception",
+              "filled_by": "program",
+              "handbook": "Optional - Override Age Justification"
+            },
+            {
+              "name": "Automation - Submit to Unified YSWS",
+              "line": 3297,
+              "role": "automation",
+              "filled_by": "Hack Club automation",
+              "note": "The button that sends the row to the Unified YSWS DB. Spot-check fixes go back through it (HC 3.7)."
+            },
+            {
+              "name": "Automation - Error",
+              "line": 3298,
+              "role": "automation",
+              "filled_by": "Hack Club automation"
+            },
+            {
+              "name": "Automation - First Submitted At",
+              "line": 3299,
+              "role": "automation",
+              "filled_by": "Hack Club automation"
+            },
+            {
+              "name": "Automation - Last Updated At",
+              "line": 3300,
+              "role": "automation",
+              "filled_by": "Hack Club automation"
+            },
+            {
+              "name": "Automation - YSWS Record ID",
+              "line": 3301,
+              "role": "automation",
+              "filled_by": "Hack Club automation"
+            },
+            {
+              "name": "Automation - Status",
+              "line": 3305,
+              "role": "automation",
+              "filled_by": "Hack Club automation"
+            },
+            {
+              "name": "Review status",
+              "line": 3306,
+              "role": "review",
+              "filled_by": "program"
+            }
+          ],
+          "left_out": "19 of the table's 46 fields: the feedback survey (lines 3263-3265), the submitter's name, contact, shipping address and birthday (lines 3266-3269, 3273-3281), and three mailing-list fields (lines 3302-3304). pairtime writes none of them."
+        }
+      ]
+    },
+    {
+      "name": "unified_ysws_projects_db",
+      "id": "app3A5kJwYqxMLOgh",
+      "line": 581,
+      "tables": [
+        {
+          "name": "approved_projects",
+          "id": "tblzWWGUYHVH7Zyqf",
+          "line": 585,
+          "fields": [
+            {
+              "name": "Code URL",
+              "line": 592,
+              "role": "project",
+              "filled_by": "Hack Club automation"
+            },
+            {
+              "name": "Hours Spent",
+              "line": 603,
+              "role": "hours",
+              "filled_by": "Hack Club automation",
+              "note": "Hours from the program (HC 3.1)."
+            },
+            {
+              "name": "Override Hours Spent",
+              "line": 604,
+              "role": "hours",
+              "filled_by": "Hack Club automation",
+              "note": "The program's approved hours, from its Optional - Override Hours Spent."
+            },
+            {
+              "name": "Override Hours Spent Justification",
+              "line": 605,
+              "role": "justification",
+              "filled_by": "Hack Club automation",
+              "note": "The combined justification. DESIGN 9.2's counting rule looks here for Tracked with pairtime, a pairtime review URL and a bundle hash."
+            },
+            {
+              "name": "YSWS–Weighted Project Contribution",
+              "line": 606,
+              "role": "weight",
+              "filled_by": "Hack Club automation",
+              "note": "10 hours make one weighted project. How Airtable computes it isn't public (HC 3.2)."
+            },
+            {
+              "name": "Approved At",
+              "line": 608,
+              "role": "review",
+              "filled_by": "Hack Club automation"
+            },
+            {
+              "name": "YSWS",
+              "line": 610,
+              "role": "program",
+              "filled_by": "Hack Club automation"
+            }
+          ],
+          "left_out": "Every other field: identity, eligibility, attribution splits and what the warehouse adds (HC 3.1). Only the fields that hold or explain a row's hours are here."
+        }
+      ]
+    }
+  ]
+}
