@@ -1,0 +1,229 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
+package store
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"fmt"
+	"net/url"
+	"os"
+	"path/filepath"
+	"runtime"
+	"strconv"
+	"strings"
+
+	_ "modernc.org/sqlite" // registers the "sqlite" driver
+)
+
+// MinSQLite is the oldest SQLite pairtimed opens a database with.
+// sqlite.org/wal section 11 documents a WAL-reset bug, present in 3.7.0
+// through 3.51.2 and fixed in 3.51.3, that can corrupt a database when two
+// connections write or checkpoint at the same instant. Litestream is such a
+// second connection (SP 7.4). The fix was also backported to 3.44.6 and
+// 3.50.7, but WP-SV1 sets a single floor, and the SQLite that
+// modernc.org/sqlite bundles is well above it.
+var MinSQLite = Version{Major: 3, Minor: 51, Patch: 3}
+
+// busyTimeoutMs is how long a connection waits for a lock another
+// connection holds, such as Litestream's checkpoint, before it fails with
+// SQLITE_BUSY.
+const busyTimeoutMs = 5000
+
+// Version is an SQLite release number, such as 3.53.4.
+type Version struct {
+	Major, Minor, Patch int
+}
+
+// ParseVersion reads the "X.Y.Z" form sqlite_version() returns.
+func ParseVersion(s string) (Version, error) {
+	parts := strings.Split(s, ".")
+	if len(parts) != 3 {
+		return Version{}, fmt.Errorf("store: SQLite version %q isn't of the form X.Y.Z", s)
+	}
+	var n [3]int
+	for i, p := range parts {
+		if p == "" || strings.Trim(p, "0123456789") != "" {
+			return Version{}, fmt.Errorf("store: SQLite version %q isn't of the form X.Y.Z", s)
+		}
+		v, err := strconv.Atoi(p)
+		if err != nil {
+			return Version{}, fmt.Errorf("store: SQLite version %q: %w", s, err)
+		}
+		n[i] = v
+	}
+	return Version{Major: n[0], Minor: n[1], Patch: n[2]}, nil
+}
+
+// Less reports whether v is an older release than w.
+func (v Version) Less(w Version) bool {
+	if v.Major != w.Major {
+		return v.Major < w.Major
+	}
+	if v.Minor != w.Minor {
+		return v.Minor < w.Minor
+	}
+	return v.Patch < w.Patch
+}
+
+func (v Version) String() string {
+	return fmt.Sprintf("%d.%d.%d", v.Major, v.Minor, v.Patch)
+}
+
+// ErrSQLiteTooOld is what Open returns, wrapped, for an SQLite older than
+// MinSQLite or one whose version it can't read.
+var ErrSQLiteTooOld = errors.New("SQLite is too old")
+
+// tooOldError explains a refused SQLite version.
+type tooOldError struct {
+	have   string
+	reason string
+}
+
+func (e *tooOldError) Error() string {
+	return fmt.Sprintf("store: refusing SQLite %q: %s. SQLite before %s has the WAL-reset bug that can corrupt a database Litestream replicates (sqlite.org/wal section 11)",
+		e.have, e.reason, MinSQLite)
+}
+
+func (e *tooOldError) Unwrap() error { return ErrSQLiteTooOld }
+
+// checkSQLiteVersion refuses any SQLite older than MinSQLite, and any
+// version string it can't read, since that can't be shown to be new enough.
+func checkSQLiteVersion(have string) error {
+	v, err := ParseVersion(have)
+	if err != nil {
+		return &tooOldError{have: have, reason: "the version can't be read"}
+	}
+	if v.Less(MinSQLite) {
+		return &tooOldError{have: have, reason: "it is older than " + MinSQLite.String()}
+	}
+	return nil
+}
+
+func openSQLite(ctx context.Context, o Options) (*DB, error) {
+	if o.Path == "" {
+		return nil, errors.New("store: no SQLite database path")
+	}
+	// modernc.org/sqlite reads everything after the first '?' as options,
+	// and a "file:" prefix switches it to URI file names.
+	if strings.Contains(o.Path, "?") || strings.HasPrefix(o.Path, "file:") {
+		return nil, fmt.Errorf("store: SQLite path %q can't contain '?' or start with \"file:\"", o.Path)
+	}
+
+	// The version check comes first, on an in-memory database, so a refused
+	// SQLite never opens, creates or converts the database file.
+	have := o.SQLiteVersion
+	if have == "" {
+		v, err := librarySQLiteVersion(ctx)
+		if err != nil {
+			return nil, err
+		}
+		have = v
+	}
+	if err := checkSQLiteVersion(have); err != nil {
+		return nil, err
+	}
+
+	// Create the file before SQLite does: SQLite gives the -wal and -shm
+	// files the database file's mode, so this keeps all three at 0600.
+	if err := os.MkdirAll(filepath.Dir(o.Path), 0o700); err != nil {
+		return nil, fmt.Errorf("store: %w", err)
+	}
+	f, err := os.OpenFile(o.Path, os.O_RDWR|os.O_CREATE, 0o600)
+	if err != nil {
+		return nil, fmt.Errorf("store: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		return nil, fmt.Errorf("store: %w", err)
+	}
+
+	w, err := sql.Open("sqlite", sqliteDSN(o.Path, true))
+	if err != nil {
+		return nil, fmt.Errorf("store: opening %s: %w", o.Path, err)
+	}
+	// One connection, never recycled: SQLite allows one writer at a time,
+	// and pairtimed has one writer goroutine (SP 7.4).
+	w.SetMaxOpenConns(1)
+	w.SetMaxIdleConns(1)
+	w.SetConnMaxLifetime(0)
+	w.SetConnMaxIdleTime(0)
+	if err := checkWAL(ctx, w); err != nil {
+		w.Close()
+		return nil, err
+	}
+
+	r, err := sql.Open("sqlite", sqliteDSN(o.Path, false))
+	if err != nil {
+		w.Close()
+		return nil, fmt.Errorf("store: opening %s: %w", o.Path, err)
+	}
+	n := max(4, runtime.GOMAXPROCS(0))
+	r.SetMaxOpenConns(n)
+	r.SetMaxIdleConns(n)
+	if err := r.PingContext(ctx); err != nil {
+		w.Close()
+		r.Close()
+		return nil, fmt.Errorf("store: opening %s: %w", o.Path, err)
+	}
+	return &DB{Engine: SQLite, Version: have, Write: w, Read: r}, nil
+}
+
+// librarySQLiteVersion asks the linked SQLite library for its version.
+func librarySQLiteVersion(ctx context.Context) (string, error) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		return "", fmt.Errorf("store: %w", err)
+	}
+	defer db.Close()
+	var v string
+	if err := db.QueryRowContext(ctx, "SELECT sqlite_version()").Scan(&v); err != nil {
+		return "", fmt.Errorf("store: reading the SQLite version: %w", err)
+	}
+	return v, nil
+}
+
+// sqliteDSN is the modernc.org/sqlite data source name for path. Each
+// _pragma runs, in order, on every new connection.
+func sqliteDSN(path string, write bool) string {
+	q := url.Values{}
+	q.Add("_pragma", fmt.Sprintf("busy_timeout(%d)", busyTimeoutMs))
+	if write {
+		// WAL lets readers run while the writer commits, and NORMAL syncs
+		// only at checkpoints. The cost is that the last transactions can
+		// roll back after a power cut; clients re-send them from their
+		// queues (DESIGN 10.1; SP 7.4, 9.3).
+		q.Add("_pragma", "journal_mode(WAL)")
+		q.Add("_pragma", "synchronous(NORMAL)")
+	}
+	// Postgres always enforces foreign keys, so SQLite does too.
+	q.Add("_pragma", "foreign_keys(1)")
+	if write {
+		// Take the write lock when a transaction starts rather than at its
+		// first write, so waiting on Litestream goes through busy_timeout
+		// instead of failing at once.
+		q.Set("_txlock", "immediate")
+	} else {
+		q.Add("_pragma", "query_only(1)")
+	}
+	return path + "?" + q.Encode()
+}
+
+// checkWAL confirms the settings sqliteDSN asked for took effect.
+func checkWAL(ctx context.Context, db *sql.DB) error {
+	var mode string
+	if err := db.QueryRowContext(ctx, "PRAGMA journal_mode").Scan(&mode); err != nil {
+		return fmt.Errorf("store: reading journal_mode: %w", err)
+	}
+	if !strings.EqualFold(mode, "wal") {
+		return fmt.Errorf("store: SQLite journal_mode is %q, want wal (DESIGN 10.1)", mode)
+	}
+	var sync int
+	if err := db.QueryRowContext(ctx, "PRAGMA synchronous").Scan(&sync); err != nil {
+		return fmt.Errorf("store: reading synchronous: %w", err)
+	}
+	if sync != 1 {
+		return fmt.Errorf("store: SQLite synchronous is %d, want 1 (NORMAL; DESIGN 10.1)", sync)
+	}
+	return nil
+}
