@@ -437,7 +437,10 @@ def get_str(obj, key, path):
 
 
 def get_list(obj, key, path):
+    """A list; null means an empty one, as Go writes a nil slice."""
     v = obj[key]
+    if v is None:
+        return []
     if not isinstance(v, list):
         raise FormatError("%s.%s: want a list" % (path, key))
     return v
@@ -1111,12 +1114,19 @@ def test_merkle():
 
 def test_rtypes():
     """Every kind in pkg/event's kindTable has an rtype, and nothing else."""
-    with open(repo_path("pkg", "event", "event.go"), encoding="utf-8") as f:
-        src = f.read()
+    base = repo_path("pkg", "event")
+    src = ""
+    for name in sorted(os.listdir(base)):
+        if name.endswith(".go") and not name.endswith("_test.go"):
+            with open(os.path.join(base, name), encoding="utf-8") as f:
+                src += f.read() + "\n"
     names = dict(re.findall(r'^\s*(Kind\w+)\s+Kind\s*=\s*"([^"]+)"', src, re.M))
     m = re.search(r"^var kindTable = \[\]struct \{.*?^\}\{\n(.*?)^\}\n", src, re.S | re.M)
-    expect(m is not None, "pkg/event/event.go has no kindTable")
-    table = [names[k] for k in re.findall(r"^\s*\{(Kind\w+),", m.group(1), re.M)]
+    expect(m is not None, "pkg/event has no kindTable")
+    table = []
+    for ident in re.findall(r"\b(Kind\w+)\b", m.group(1)):
+        if ident in names and names[ident] not in table:
+            table.append(names[ident])
     want = sorted(RTYPES[c] for c in EVENT_RTYPES)
     expect(sorted(table) == want, "kindTable has %s; the rtype table has %s" % (sorted(table), want))
     return "%d kinds" % len(table)
@@ -1145,6 +1155,77 @@ def test_vectors_check():
     return summary(rep.counts)
 
 
+def flip(hex_text):
+    """hex_text with its last digit changed."""
+    return hex_text[:-1] + ("1" if hex_text[-1] == "0" else "0")
+
+
+def test_check_catches():
+    """check reports each kind of tampering, on a small slice of the vectors."""
+    full = load_json("testdata", "ledger", "vectors.json")
+    base = {"format": FORMAT, "keys": full["keys"][:1], "digests": full["digests"][:2],
+            "chains": [full["chains"][1]], "days": full["days"][1:]}
+    expect(not check_document(json.loads(json.dumps(base))).errors, "the slice of the vectors doesn't pass check")
+
+    def batch(doc, j=0):
+        return doc["chains"][0]["batches"][j]
+
+    def rec(doc, j=0, k=0):
+        return batch(doc, j)["records"][k]
+
+    def day_row(doc, j=0):
+        return doc["days"][0]["rows"][j]
+
+    def setter(get, key, fn):
+        def apply(doc):
+            obj = get(doc)
+            obj[key] = fn(obj[key])
+        return apply
+
+    def swap_rows(doc):
+        rows = doc["days"][0]["rows"]
+        rows[0], rows[1] = rows[1], rows[0]
+
+    def os_with_project(doc):
+        rec(doc).update(rtype=0x0E, project_key="p_x", session_key=NO_SESSION)
+
+    mutations = (
+        ("a derived key", setter(lambda d: d["keys"][0], "k_leaf", flip)),
+        ("a project digest", setter(lambda d: d["digests"][1], "project", flip)),
+        ("a body byte", setter(rec, "body", flip)),
+        ("a nonce", setter(rec, "nonce", flip)),
+        ("an entry", setter(rec, "entry", flip)),
+        ("a seq", setter(lambda d: rec(d, 1, 0), "seq", lambda s: s + 1)),
+        ("a reserved rtype", setter(rec, "rtype", lambda _: 0x13)),
+        ("an os.* record with a project", os_with_project),
+        ("a root", setter(batch, "root", flip)),
+        ("a head", setter(batch, "head", flip)),
+        ("a prev", setter(lambda d: batch(d, 1), "prev", flip)),
+        ("a batch number", setter(lambda d: batch(d, 1), "b", lambda b: b + 1)),
+        ("n", setter(batch, "n", lambda n: n + 1)),
+        ("a receipt message", setter(batch, "receipt_msg", flip)),
+        ("a received_at", setter(batch, "received_at", lambda t: t + 1)),
+        ("a batch proof", setter(lambda d: batch(d)["proofs"][0], "path", lambda p: [flip(p[0])] + p[1:])),
+        ("a day leaf", setter(day_row, "leaf", flip)),
+        ("the order of day rows", swap_rows),
+        ("a day count", setter(lambda d: d["days"][0], "count", lambda n: n + 1)),
+        ("a day root", setter(lambda d: d["days"][0], "root", flip)),
+        ("a day head", setter(lambda d: d["days"][0], "head", flip)),
+        ("a day's signed message", setter(lambda d: d["days"][0], "signed_msg", flip)),
+        ("a day proof", setter(lambda d: d["days"][0]["proofs"][1], "path", lambda p: p[:-1])),
+        ("a missing day row", setter(lambda d: d["days"][0], "rows", lambda rows: rows[1:])),
+    )
+    for name, mutate in mutations:
+        doc = json.loads(json.dumps(base))
+        mutate(doc)
+        try:
+            caught = bool(check_document(doc).errors)
+        except FormatError:
+            caught = True
+        expect(caught, "check doesn't notice a changed %s" % name)
+    return "%d kinds of tampering caught" % len(mutations)
+
+
 SELFTESTS = (
     ("CT file checksums", test_ct_sums),
     ("RFC 4231 HMAC-SHA256", test_rfc4231),
@@ -1156,6 +1237,7 @@ SELFTESTS = (
     ("spec worked example", test_example),
     ("vectors regenerate", test_vectors_regenerate),
     ("vectors pass check", test_vectors_check),
+    ("check catches tampering", test_check_catches),
 )
 
 

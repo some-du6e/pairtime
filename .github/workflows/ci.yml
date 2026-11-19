@@ -65,6 +65,13 @@ jobs:
             exit 1
           fi
 
+      # The ledger's byte format is docs/spec/ledger-v1.md. This checks the
+      # stdlib-only Python reference against the RFC 5869, RFC 4231 and pinned
+      # Certificate Transparency vectors, and checks that
+      # testdata/ledger/vectors.json regenerates byte for byte.
+      - name: Ledger reference selftest
+        run: python3 -I tools/ledger_ref.py selftest
+
       - name: go vet
         run: go vet ./...
 
