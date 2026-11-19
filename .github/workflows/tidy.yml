@@ -65,7 +65,7 @@ jobs:
         run: |
           # Every module in the repo except test data, which keeps the
           # go.mod it was written with.
-          mods=$(git ls-files -- 'go.mod' '*/go.mod' | grep -v -e '^testdata/' -e '/testdata/' | xargs -r -n 1 dirname)
+          mods=$(git ls-files -- 'go.mod' '*/go.mod' | { grep -v -e '^testdata/' -e '/testdata/' || true; } | xargs -r -n 1 dirname)
           for dir in $mods; do
             echo "::group::go mod tidy in $dir"
             before=$(grep -E '^(go|toolchain) ' "$dir/go.mod" || true)
@@ -81,7 +81,7 @@ jobs:
       - name: Find npm projects
         id: npm
         run: |
-          dirs=$(git ls-files -- 'package.json' '*/package.json' | grep -v -e '^testdata/' -e '/testdata/' | xargs -r -n 1 dirname | tr '\n' ' ')
+          dirs=$(git ls-files -- 'package.json' '*/package.json' | { grep -v -e '^testdata/' -e '/testdata/' || true; } | xargs -r -n 1 dirname | tr '\n' ' ')
           echo "dirs=$dirs" >> "$GITHUB_OUTPUT"
           echo "npm projects: ${dirs:-none}"
 
