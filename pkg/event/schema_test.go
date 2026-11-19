@@ -3,11 +3,13 @@
 package event
 
 // These tests fail when docs/schema/event.schema.json and the Go types
-// drift apart. The schema is written by hand; the Go types are the
-// reference. A property the schema lists and Go lacks, a required list
-// that doesn't match the fields Go always writes, a missing kind, an enum
-// value on one side only, a local field marked on one side only, or a
-// kind rule that differs all fail here.
+// drift apart. The schema is written by hand and the Go types are the
+// reference. checkSchema lists every disagreement it finds: a missing kind,
+// a property on one side only, a required list that doesn't match the
+// fields Go always writes, an enum value on one side only, a local field
+// marked on one side only, a kind rule that differs, or a $ref that doesn't
+// resolve. TestSchemaDriftIsCaught breaks the schema in each of those ways
+// and checks that checkSchema notices.
 
 import (
 	"encoding/json"
@@ -85,12 +87,8 @@ func jsonFields(t reflect.Type) []field {
 	return out
 }
 
-type schemaDoc struct {
-	root map[string]any
-	defs map[string]any
-}
-
-func loadSchema(t *testing.T) schemaDoc {
+// loadSchema decodes the schema afresh, so a test may modify the result.
+func loadSchema(t *testing.T) map[string]any {
 	t.Helper()
 	b, err := os.ReadFile(filepath.FromSlash(schemaPath))
 	if err != nil {
@@ -100,40 +98,67 @@ func loadSchema(t *testing.T) schemaDoc {
 	if err := json.Unmarshal(b, &root); err != nil {
 		t.Fatalf("%s isn't valid JSON: %v", schemaPath, err)
 	}
-	return schemaDoc{root: root, defs: object(t, root["$defs"], "$defs")}
+	return root
 }
 
-func object(t *testing.T, v any, path string) map[string]any {
-	t.Helper()
+// schemaCheck collects every way a decoded schema disagrees with Go.
+type schemaCheck struct {
+	root, defs map[string]any
+	byType     map[reflect.Type]string
+	problems   []string
+}
+
+func checkSchema(root map[string]any) []string {
+	c := &schemaCheck{root: root, byType: map[reflect.Type]string{}}
+	for _, e := range schemaEnums() {
+		c.byType[e.typ] = e.name
+	}
+	c.defs = c.object(root["$defs"], "$defs")
+	c.envelope()
+	c.payloads()
+	c.enums()
+	c.kindRules()
+	c.refs("#", root)
+	return c.problems
+}
+
+func (c *schemaCheck) addf(format string, args ...any) {
+	c.problems = append(c.problems, fmt.Sprintf(format, args...))
+}
+
+// object returns v as an object, or records a problem and returns nil,
+// which reads as empty.
+func (c *schemaCheck) object(v any, path string) map[string]any {
 	m, ok := v.(map[string]any)
 	if !ok {
-		t.Fatalf("schema: %s is %T, want an object", path, v)
+		c.addf("%s is %T, want an object", path, v)
 	}
 	return m
 }
 
-func stringList(t *testing.T, v any, path string) []string {
-	t.Helper()
+func (c *schemaCheck) stringList(v any, path string) []string {
 	if v == nil {
 		return nil
 	}
 	list, ok := v.([]any)
 	if !ok {
-		t.Fatalf("schema: %s is %T, want an array", path, v)
+		c.addf("%s is %T, want an array", path, v)
+		return nil
 	}
-	out := make([]string, len(list))
+	out := make([]string, 0, len(list))
 	for i, x := range list {
 		s, ok := x.(string)
 		if !ok {
-			t.Fatalf("schema: %s[%d] is %T, want a string", path, i, x)
+			c.addf("%s[%d] is %T, want a string", path, i, x)
+			continue
 		}
-		out[i] = s
+		out = append(out, s)
 	}
 	return out
 }
 
-func (s schemaDoc) isEnum(name string) bool {
-	def, _ := s.defs[name].(map[string]any)
+func (c *schemaCheck) isEnum(name string) bool {
+	def, _ := c.defs[name].(map[string]any)
 	_, ok := def["enum"]
 	return ok
 }
@@ -148,17 +173,12 @@ func refName(prop map[string]any, list bool) string {
 	return strings.TrimPrefix(ref, "#/$defs/")
 }
 
-// checkObject compares one object schema with the Go fields it describes.
-func (s schemaDoc) checkObject(t *testing.T, where string, obj map[string]any, fields []field) {
-	t.Helper()
-	byType := map[reflect.Type]string{}
-	for _, e := range schemaEnums() {
-		byType[e.typ] = e.name
-	}
+// objectFields compares one object schema with the Go fields it describes.
+func (c *schemaCheck) objectFields(where string, obj map[string]any, fields []field) {
 	if obj["additionalProperties"] != false {
-		t.Errorf("%s: the schema must set \"additionalProperties\": false", where)
+		c.addf("%s: the schema must set \"additionalProperties\": false", where)
 	}
-	props := object(t, obj["properties"], where+".properties")
+	props := c.object(obj["properties"], where+".properties")
 	var names, required []string
 	for _, f := range fields {
 		names = append(names, f.name)
@@ -167,129 +187,126 @@ func (s schemaDoc) checkObject(t *testing.T, where string, obj map[string]any, f
 		}
 		p, ok := props[f.name]
 		if !ok {
-			t.Errorf("%s: the schema has no property %q", where, f.name)
+			c.addf("%s: the schema has no property %q", where, f.name)
 			continue
 		}
-		prop := object(t, p, where+"."+f.name)
+		prop := c.object(p, where+"."+f.name)
 		if local, _ := prop["x-local"].(bool); local != f.local {
-			t.Errorf("%s.%s: schema \"x-local\" is %v, but the Go pairtime:\"local\" tag says %v", where, f.name, local, f.local)
+			c.addf("%s.%s: schema \"x-local\" is %v, but the Go pairtime:\"local\" tag says %v", where, f.name, local, f.local)
 		}
 		if f.typ == nil {
 			continue
 		}
 		typ, list := f.typ, false
 		if typ.Kind() == reflect.Slice {
-			if _, isEnum := byType[typ.Elem()]; isEnum {
+			if _, isEnum := c.byType[typ.Elem()]; isEnum {
 				typ, list = typ.Elem(), true
 			}
 		}
-		want, isEnum := byType[typ]
+		want, isEnum := c.byType[typ]
 		got := refName(prop, list)
 		switch {
 		case isEnum && got != want:
-			t.Errorf("%s.%s: the Go type is enum %q, but the schema refers to %q", where, f.name, want, got)
-		case !isEnum && s.isEnum(got):
-			t.Errorf("%s.%s: the schema refers to enum %q, but the Go type is %s", where, f.name, got, f.typ)
+			c.addf("%s.%s: the Go type is enum %q, but the schema refers to %q", where, f.name, want, got)
+		case !isEnum && c.isEnum(got):
+			c.addf("%s.%s: the schema refers to enum %q, but the Go type is %s", where, f.name, got, f.typ)
 		}
 	}
 	for name := range props {
 		if !slices.Contains(names, name) {
-			t.Errorf("%s: schema property %q has no Go field", where, name)
+			c.addf("%s: schema property %q has no Go field", where, name)
 		}
 	}
-	got := stringList(t, obj["required"], where+".required")
+	got := c.stringList(obj["required"], where+".required")
 	slices.Sort(got)
 	slices.Sort(required)
 	if !slices.Equal(got, required) {
-		t.Errorf("%s: the schema requires %q, but Go always writes %q (the fields without omitempty)", where, got, required)
+		c.addf("%s: the schema requires %q, but Go always writes %q (the fields without omitempty)", where, got, required)
 	}
 }
 
-func TestSchemaEnvelope(t *testing.T) {
-	s := loadSchema(t)
+func (c *schemaCheck) envelope() {
 	fields := append(jsonFields(reflect.TypeFor[Envelope]()),
 		field{name: "kind", typ: reflect.TypeFor[Kind]()},
 		field{name: "data"})
-	s.checkObject(t, "event", s.root, fields)
+	c.objectFields("event", c.root, fields)
 }
 
-func TestSchemaPayloads(t *testing.T) {
-	s := loadSchema(t)
+func (c *schemaCheck) payloads() {
 	for _, k := range Kinds() {
-		def, ok := s.defs[string(k)]
+		def, ok := c.defs[string(k)]
 		if !ok {
-			t.Errorf("the schema has no $defs entry for kind %q", k)
+			c.addf("the schema has no $defs entry for kind %q", k)
 			continue
 		}
-		s.checkObject(t, string(k), object(t, def, "$defs/"+string(k)), jsonFields(reflect.TypeOf(newPayload(k)).Elem()))
+		c.objectFields(string(k), c.object(def, "$defs/"+string(k)), jsonFields(reflect.TypeOf(newPayload(k)).Elem()))
 	}
-	s.checkObject(t, "pending_cron", object(t, s.defs["pending_cron"], "$defs/pending_cron"), jsonFields(reflect.TypeFor[PendingCron]()))
+	c.objectFields("pending_cron", c.object(c.defs["pending_cron"], "$defs/pending_cron"), jsonFields(reflect.TypeFor[PendingCron]()))
 }
 
-func TestSchemaEnums(t *testing.T) {
-	s := loadSchema(t)
+func (c *schemaCheck) enums() {
 	registered := map[string]bool{}
 	for _, e := range schemaEnums() {
 		registered[e.name] = true
-		def, ok := s.defs[e.name]
+		def, ok := c.defs[e.name]
 		if !ok {
-			t.Errorf("the schema has no $defs entry %q for Go enum %s", e.name, e.typ)
+			c.addf("the schema has no $defs entry %q for Go enum %s", e.name, e.typ)
 			continue
 		}
-		if got := stringList(t, object(t, def, "$defs/"+e.name)["enum"], "$defs/"+e.name+".enum"); !slices.Equal(got, e.values) {
-			t.Errorf("$defs/%s lists %q, but Go %s has %q (same order)", e.name, got, e.typ, e.values)
+		if got := c.stringList(c.object(def, "$defs/"+e.name)["enum"], "$defs/"+e.name+".enum"); !slices.Equal(got, e.values) {
+			c.addf("$defs/%s lists %q, but Go %s has %q (same order)", e.name, got, e.typ, e.values)
 		}
 	}
-	for name := range s.defs {
-		if s.isEnum(name) && !registered[name] {
-			t.Errorf("schema enum $defs/%s has no Go enum; add it to schemaEnums", name)
+	for name := range c.defs {
+		if c.isEnum(name) && !registered[name] {
+			c.addf("schema enum $defs/%s has no Go enum; add it to schemaEnums", name)
 		}
 	}
 }
 
-// TestSchemaKindRules checks the schema's allOf: one if/then rule per kind,
-// sending "data" to that kind's $defs entry and restricting source,
-// harness and session_key exactly as the Go kind rule does.
-func TestSchemaKindRules(t *testing.T) {
-	s := loadSchema(t)
+// kindRules checks the schema's allOf: one if/then rule per kind, sending
+// "data" to that kind's $defs entry and restricting source, harness and
+// session_key exactly as the Go kind rule does.
+func (c *schemaCheck) kindRules() {
 	rules := map[Kind]map[string]any{}
-	allOf, ok := s.root["allOf"].([]any)
+	allOf, ok := c.root["allOf"].([]any)
 	if !ok {
-		t.Fatal("the schema has no allOf list of kind rules")
+		c.addf("the schema has no allOf list of kind rules")
 	}
 	for i, r := range allOf {
 		where := fmt.Sprintf("allOf[%d]", i)
-		rule := object(t, r, where)
-		cond := object(t, object(t, object(t, rule["if"], where+".if")["properties"], where+".if.properties")["kind"], where+".if.properties.kind")
-		k, _ := cond["const"].(string)
+		rule := c.object(r, where)
+		cond := c.object(rule["if"], where+".if")
+		k, _ := c.object(c.object(cond["properties"], where+".if.properties")["kind"], where+".if.properties.kind")["const"].(string)
 		if newPayload(Kind(k)) == nil {
-			t.Errorf("%s: its if names %q, which isn't a kind", where, k)
+			c.addf("%s: its if names %q, which isn't a kind", where, k)
 			continue
 		}
-		if !slices.Contains(stringList(t, object(t, rule["if"], where+".if")["required"], where+".if.required"), "kind") {
-			t.Errorf("%s: its if must require \"kind\", or it also matches events without one", where)
+		if !slices.Contains(c.stringList(cond["required"], where+".if.required"), "kind") {
+			c.addf("%s: its if must require \"kind\", or it also matches events without one", where)
 		}
 		if rules[Kind(k)] != nil {
-			t.Errorf("%s: a second rule for kind %q", where, k)
+			c.addf("%s: a second rule for kind %q", where, k)
 		}
-		rules[Kind(k)] = object(t, object(t, rule["then"], where+".then")["properties"], where+".then.properties")
+		rules[Kind(k)] = c.object(c.object(rule["then"], where+".then")["properties"], where+".then.properties")
 	}
 	for _, k := range Kinds() {
 		props, ok := rules[k]
 		if !ok {
-			t.Errorf("the schema's allOf has no rule for kind %q", k)
+			c.addf("the schema's allOf has no rule for kind %q", k)
 			continue
 		}
-		if got := refName(object(t, props["data"], string(k)+" rule data"), false); got != string(k) {
-			t.Errorf("%s rule: data refers to %q, want %q", k, got, k)
+		data, _ := props["data"].(map[string]any)
+		if got := refName(data, false); got != string(k) {
+			c.addf("%s rule: data refers to %q, want %q", k, got, k)
 		}
 		r := ruleFor(k)
 		var want []string
 		for _, src := range r.sources {
 			want = append(want, string(src))
 		}
-		if got := allowedValues(t, props["source"]); !slices.Equal(got, want) {
-			t.Errorf("%s rule: the schema allows sources %q, Go allows %q (empty means any)", k, got, want)
+		if got := c.allowed(props["source"]); !slices.Equal(got, want) {
+			c.addf("%s rule: the schema allows sources %q, Go allows %q (empty means any)", k, got, want)
 		}
 		wantMode := "any"
 		switch {
@@ -299,75 +316,181 @@ func TestSchemaKindRules(t *testing.T) {
 			wantMode = "not none"
 		}
 		for _, prop := range []string{"harness", "session_key"} {
-			if got := noneMode(t, props[prop]); got != wantMode {
-				t.Errorf("%s rule: the schema's %s is %q, Go's rule is %q", k, prop, got, wantMode)
+			if got := c.noneMode(props[prop]); got != wantMode {
+				c.addf("%s rule: the schema's %s is %q, Go's rule is %q", k, prop, got, wantMode)
 			}
 		}
 		for name := range props {
 			if !slices.Contains([]string{"data", "source", "harness", "session_key"}, name) {
-				t.Errorf("%s rule: unexpected property %q; this test only knows data, source, harness and session_key", k, name)
+				c.addf("%s rule: unexpected property %q; checkSchema only knows data, source, harness and session_key", k, name)
 			}
 		}
 	}
 }
 
-// allowedValues reads a {"const": x} or {"enum": [...]} restriction; nil
-// means the property isn't restricted.
-func allowedValues(t *testing.T, v any) []string {
-	t.Helper()
+// allowed reads a {"const": x} or {"enum": [...]} restriction; nil means
+// the property isn't restricted.
+func (c *schemaCheck) allowed(v any) []string {
 	if v == nil {
 		return nil
 	}
-	p := object(t, v, "source rule")
-	if c, ok := p["const"].(string); ok {
-		return []string{c}
+	p := c.object(v, "source rule")
+	if s, ok := p["const"].(string); ok {
+		return []string{s}
 	}
-	return stringList(t, p["enum"], "source rule enum")
+	return c.stringList(p["enum"], "source rule enum")
 }
 
 // noneMode reads how a rule restricts harness or session_key: "none" for
 // {"const": "none"}, "not none" for {"not": {"const": "none"}}, "any" when
 // absent.
-func noneMode(t *testing.T, v any) string {
-	t.Helper()
+func (c *schemaCheck) noneMode(v any) string {
 	if v == nil {
 		return "any"
 	}
-	p := object(t, v, "harness or session_key rule")
+	p := c.object(v, "harness or session_key rule")
 	if p["const"] == NoSession {
 		return "none"
 	}
 	if not, ok := p["not"].(map[string]any); ok && not["const"] == NoSession {
 		return "not none"
 	}
-	t.Errorf("unexpected harness or session_key rule %v", p)
-	return "?"
+	return fmt.Sprintf("unrecognized %v", p)
 }
 
-// TestSchemaRefs checks that every $ref in the schema points at an entry
-// that exists.
-func TestSchemaRefs(t *testing.T) {
-	s := loadSchema(t)
-	var walk func(path string, v any)
-	walk = func(path string, v any) {
-		switch v := v.(type) {
-		case map[string]any:
-			for key, child := range v {
-				if key == "$ref" {
-					ref, _ := child.(string)
-					name, ok := strings.CutPrefix(ref, "#/$defs/")
-					if _, exists := s.defs[name]; !ok || !exists {
-						t.Errorf("%s: $ref %q doesn't resolve", path, ref)
-					}
-					continue
+// refs checks that every $ref under v points at a $defs entry that exists.
+func (c *schemaCheck) refs(path string, v any) {
+	switch v := v.(type) {
+	case map[string]any:
+		for key, child := range v {
+			if key == "$ref" {
+				ref, _ := child.(string)
+				name, ok := strings.CutPrefix(ref, "#/$defs/")
+				if _, exists := c.defs[name]; !ok || !exists {
+					c.addf("%s: $ref %q doesn't resolve", path, ref)
 				}
-				walk(path+"/"+key, child)
+				continue
 			}
-		case []any:
-			for i, child := range v {
-				walk(path+"/"+strconv.Itoa(i), child)
-			}
+			c.refs(path+"/"+key, child)
+		}
+	case []any:
+		for i, child := range v {
+			c.refs(path+"/"+strconv.Itoa(i), child)
 		}
 	}
-	walk("#", s.root)
+}
+
+func TestSchemaMatchesGo(t *testing.T) {
+	for _, p := range checkSchema(loadSchema(t)) {
+		t.Error(p)
+	}
+}
+
+// at walks a decoded schema by object keys and returns the object there.
+func at(t *testing.T, root map[string]any, keys ...string) map[string]any {
+	t.Helper()
+	m := root
+	for i, k := range keys {
+		next, ok := m[k].(map[string]any)
+		if !ok {
+			t.Fatalf("schema has no object at %q", strings.Join(keys[:i+1], "/"))
+		}
+		m = next
+	}
+	return m
+}
+
+// kindRuleAt returns the then.properties of kind k's allOf rule, and its
+// index in allOf.
+func kindRuleAt(t *testing.T, root map[string]any, k Kind) (map[string]any, int) {
+	t.Helper()
+	for i, r := range root["allOf"].([]any) {
+		rule := r.(map[string]any)
+		if at(t, rule, "if", "properties", "kind")["const"] == string(k) {
+			return at(t, rule, "then", "properties"), i
+		}
+	}
+	t.Fatalf("schema has no allOf rule for %q", k)
+	return nil, -1
+}
+
+func TestSchemaDriftIsCaught(t *testing.T) {
+	tests := []struct {
+		name   string
+		breaks func(t *testing.T, root map[string]any)
+		want   string // a substring of one reported problem
+	}{
+		{"a kind missing from the kind enum", func(t *testing.T, root map[string]any) {
+			def := at(t, root, "$defs", "kind")
+			list := def["enum"].([]any)
+			def["enum"] = list[:len(list)-1]
+		}, "$defs/kind lists"},
+		{"a kind with no $defs entry", func(t *testing.T, root map[string]any) {
+			delete(at(t, root, "$defs"), "os.power")
+		}, `no $defs entry for kind "os.power"`},
+		{"a property Go doesn't have", func(t *testing.T, root map[string]any) {
+			at(t, root, "$defs", "agent.queue", "properties")["prompt"] = map[string]any{"type": "string"}
+		}, `property "prompt" has no Go field`},
+		{"a Go field the schema doesn't have", func(t *testing.T, root map[string]any) {
+			delete(at(t, root, "$defs", "agent.queue", "properties"), "len_chars")
+		}, `no property "len_chars"`},
+		{"an envelope field the schema doesn't have", func(t *testing.T, root map[string]any) {
+			delete(at(t, root, "properties"), "boot_id")
+		}, `event: the schema has no property "boot_id"`},
+		{"a required list out of step", func(t *testing.T, root map[string]any) {
+			at(t, root, "$defs", "agent.queue")["required"] = []any{"turn_key"}
+		}, "agent.queue: the schema requires"},
+		{"extra properties allowed", func(t *testing.T, root map[string]any) {
+			at(t, root, "$defs", "os.power")["additionalProperties"] = true
+		}, `os.power: the schema must set "additionalProperties": false`},
+		{"a local field the schema doesn't mark", func(t *testing.T, root map[string]any) {
+			delete(at(t, root, "$defs", "prompt.submit", "properties", "text"), "x-local")
+		}, `prompt.submit.text: schema "x-local" is false`},
+		{"a shared field the schema marks local", func(t *testing.T, root map[string]any) {
+			at(t, root, "$defs", "agent.tool", "properties", "error_sig")["x-local"] = true
+		}, `agent.tool.error_sig: schema "x-local" is true`},
+		{"an enum value only the schema has", func(t *testing.T, root map[string]any) {
+			def := at(t, root, "$defs", "power_op")
+			def["enum"] = append(def["enum"].([]any), "hibernate")
+		}, "$defs/power_op lists"},
+		{"an enum Go doesn't have", func(t *testing.T, root map[string]any) {
+			at(t, root, "$defs")["mood"] = map[string]any{"enum": []any{"calm", "stuck"}}
+		}, "$defs/mood has no Go enum"},
+		{"a field pointing at the wrong enum", func(t *testing.T, root map[string]any) {
+			at(t, root, "$defs", "os.power", "properties", "op")["$ref"] = "#/$defs/git_op"
+		}, `os.power.op: the Go type is enum "power_op"`},
+		{"a kind rule that lets any source through", func(t *testing.T, root map[string]any) {
+			props, _ := kindRuleAt(t, root, KindOSPresence)
+			delete(props, "source")
+		}, "os.presence rule: the schema allows sources"},
+		{"a kind rule that drops the session check", func(t *testing.T, root map[string]any) {
+			props, _ := kindRuleAt(t, root, KindPromptSubmit)
+			delete(props, "session_key")
+		}, "prompt.submit rule: the schema's session_key"},
+		{"a kind with no rule", func(t *testing.T, root map[string]any) {
+			_, i := kindRuleAt(t, root, KindCLITrack)
+			allOf := root["allOf"].([]any)
+			root["allOf"] = append(allOf[:i:i], allOf[i+1:]...)
+		}, `no rule for kind "cli.track"`},
+		{"a rule that sends data to another kind", func(t *testing.T, root map[string]any) {
+			props, _ := kindRuleAt(t, root, KindAgentQueue)
+			props["data"] = map[string]any{"$ref": "#/$defs/agent.stop"}
+		}, `agent.queue rule: data refers to "agent.stop"`},
+		{"a dangling $ref", func(t *testing.T, root map[string]any) {
+			at(t, root, "$defs", "agent.queue", "properties", "turn_key")["$ref"] = "#/$defs/turn"
+		}, `$ref "#/$defs/turn" doesn't resolve`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := loadSchema(t)
+			tt.breaks(t, root)
+			problems := checkSchema(root)
+			for _, p := range problems {
+				if strings.Contains(p, tt.want) {
+					return
+				}
+			}
+			t.Errorf("checkSchema didn't report %q; it reported %q", tt.want, problems)
+		})
+	}
 }
