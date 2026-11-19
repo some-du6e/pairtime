@@ -126,6 +126,16 @@ jobs:
               fail=1
               ;;
           esac
+          # It also names the release keys compiled into it.
+          ids=$("$TOOL" keys | paste -sd, - | sed 's/,/, /g')
+          want="release keys: ${ids:-none}"
+          case "$got" in
+            *"$want"*) ;;
+            *)
+              echo "::error::pairtime version should say \"$want\""
+              fail=1
+              ;;
+          esac
           exit "$fail"
 
       - name: Archives, checksums.txt and the manifest payload
@@ -203,6 +213,8 @@ jobs:
             ${{ env.STAGE }}/snapshot-key.pub
           if-no-files-found: error
           retention-days: 7
+          # A re-run of a failed attempt uploads under the same name.
+          overwrite: true
 
   publish:
     name: sign with the release key, publish
