@@ -101,8 +101,8 @@ func identify(text string) (id, reason string) {
 			why = fmt.Sprintf("it has the %s text, but the part that should be only copyright lines and names says %q, which reads as an added condition (%q)", t.id, shorten(text, 80), word)
 			continue
 		}
-		if line := badHeadLine(text, t.re, m); line != "" {
-			why = fmt.Sprintf("it has the %s text, but the line %q above it is neither a copyright notice nor a license title", t.id, shorten(line, 80))
+		if reason := badHead(text, t.re, m); reason != "" {
+			why = fmt.Sprintf("it has the %s text, but %s", t.id, reason)
 			continue
 		}
 		ids = append(ids, t.id)
@@ -131,16 +131,22 @@ func addedCondition(re *regexp.Regexp, m []string) (text, word string) {
 	return "", ""
 }
 
-// badHeadLine returns the first line of a match's <<head>> part that
-// headLineOK rejects, or "".
-func badHeadLine(original string, re *regexp.Regexp, m []string) string {
+// badHead says what is wrong with a match's <<head>> part: a line that
+// headLineOK rejects, or lines it can't tell apart. It returns "" when the
+// head is fine.
+func badHead(original string, re *regexp.Regexp, m []string) string {
 	i := re.SubexpIndex("head")
 	if i < 0 || strings.TrimSpace(m[i]) == "" {
 		return ""
 	}
-	for _, line := range headLines(original, m[i]) {
+	lines, ok := headLines(original, m[i])
+	if !ok {
+		// Unchecked lines could hide anything, so this fails closed.
+		return fmt.Sprintf("the lines above it (%q) can't be told apart to check them", shorten(strings.TrimSpace(m[i]), 80))
+	}
+	for _, line := range lines {
 		if !headLineOK(line) {
-			return line
+			return fmt.Sprintf("the line %q above it is neither a copyright notice nor a license title", shorten(line, 80))
 		}
 	}
 	return ""
@@ -149,13 +155,12 @@ func badHeadLine(original string, re *regexp.Regexp, m []string) string {
 // headLines splits a template's matched head back into the file's lines,
 // each normalized. The head is matched on the whole normalized text, which
 // has no line breaks, so this walks the original lines until their
-// normalized forms add up to the head. The line that holds the head's end
-// may go on into the license text; only its head part is kept. Lines before
-// the head, such as a title the template matched itself, are skipped. When
-// the lines don't add up, it returns the head as one line.
-func headLines(original, head string) []string {
+// normalized forms add up to the head. The head may start partway through a
+// line, after a title the template matched itself, and the line that holds
+// its end may go on into the license text; only the head's part of either
+// is kept. ok is false when the lines don't add up to the head.
+func headLines(original, head string) (lines []string, ok bool) {
 	head = strings.TrimSpace(head)
-	var lines []string
 	acc := ""
 	for _, line := range strings.Split(original, "\n") {
 		n := normalize(line)
@@ -164,6 +169,13 @@ func headLines(original, head string) []string {
 		}
 		if acc == head {
 			break
+		}
+		if acc == "" {
+			k := headStart(n, head)
+			if k < 0 {
+				continue
+			}
+			n = n[k:]
 		}
 		next := n
 		if acc != "" {
@@ -176,14 +188,25 @@ func headLines(original, head string) []string {
 		case strings.HasPrefix(next, head):
 			lines = append(lines, strings.TrimSpace(strings.TrimPrefix(head, acc)))
 			acc = head
-		case acc != "":
-			return []string{head}
+		default:
+			return nil, false
 		}
 	}
-	if acc != head {
-		return []string{head}
+	return lines, acc == head
+}
+
+// headStart returns where in a normalized line the head begins, at the
+// start of a word, or -1 when the line holds no start of it.
+func headStart(line, head string) int {
+	for k := 0; k < len(line); k++ {
+		if k > 0 && line[k-1] != ' ' {
+			continue
+		}
+		if rest := line[k:]; strings.HasPrefix(head, rest) || strings.HasPrefix(rest, head) {
+			return k
+		}
 	}
-	return lines
+	return -1
 }
 
 var (

@@ -131,6 +131,7 @@ func TestIdentifyVariants(t *testing.T) {
 		{name: "a sentence above the copyright line fails", text: mustReplace(bsd2, "Copyright (c) <year> <owner>", france+"\nCopyright (c) <year> <owner>")},
 		{name: "a title and a rule above the copyright line are fine", text: mustReplace(bsd3, "Copyright (c) <year> <owner>.", "BSD 3-Clause License\n====================\n\nCopyright (c) 2020, Example Corp.\nAll rights reserved."), want: "BSD-3-Clause"},
 		{name: "a title on the copyright line is fine", text: mustReplace(mit, "MIT License\n\nCopyright (c) <year> <copyright holders>", "MIT License Copyright (c) 2020 Example Corp."), want: "MIT"},
+		{name: "a sentence under a title and copyright sharing a line fails", text: mustReplace(mit, "MIT License\n\nCopyright (c) <year> <copyright holders>", "MIT License Copyright (c) 2020 Foo\n"+france)},
 		{name: "a GPL mention in the copyright lines fails", text: mustReplace(mit, "Copyright (c) <year> <copyright holders>", "Copyright (c) 2016 A. Some files are under the GNU General Public License."), want: ""},
 		{name: "BSD-3-Clause without its third clause is BSD-2-Clause", text: bsd3[:strings.Index(bsd3, "3. Neither")] + bsd3[strings.Index(bsd3, "THIS SOFTWARE"):], want: "BSD-2-Clause"},
 		{name: "MIT and GPL texts in one file fail", text: mit + "\n" + string(gpl)},
@@ -219,37 +220,47 @@ func TestHeadLines(t *testing.T) {
 		original string
 		head     string
 		want     []string
+		wantOK   bool
 	}{
 		{
 			name:     "each line of the head comes back normalized",
 			original: "Copyright \u00a9 2012 The Go Authors.\nCopyright \u00a9 fsnotify Authors.\n\nRedistribution and use...",
 			head:     "Copyright (c) 2012 The Go Authors. Copyright (c) fsnotify Authors.",
 			want:     []string{"Copyright (c) 2012 The Go Authors.", "Copyright (c) fsnotify Authors."},
+			wantOK:   true,
 		},
 		{
 			name:     "lines before the head are skipped",
 			original: "MIT License\n\nCopyright (c) 2020 A\n\nPermission is hereby granted...",
 			head:     "Copyright (c) 2020 A",
 			want:     []string{"Copyright (c) 2020 A"},
+			wantOK:   true,
+		},
+		{
+			name:     "a head that starts mid-line, after a title, keeps its own lines",
+			original: "MIT License Copyright (c) 2020 Foo\nRedistribution outside France constitutes copyright infringement.\n\nPermission is hereby granted...",
+			head:     "Copyright (c) 2020 Foo Redistribution outside France constitutes copyright infringement.",
+			want:     []string{"Copyright (c) 2020 Foo", "Redistribution outside France constitutes copyright infringement."},
+			wantOK:   true,
 		},
 		{
 			name:     "a head that ends mid-line keeps only its part",
 			original: "Copyright (c) 2020 A Permission is hereby granted...",
 			head:     "Copyright (c) 2020 A",
 			want:     []string{"Copyright (c) 2020 A"},
+			wantOK:   true,
 		},
 		{
-			name:     "lines that don't add up give the head as one line",
+			name:     "lines that don't add up to the head are not ok",
 			original: "Copyright (c) 2020 A\nsomething else",
 			head:     "Copyright (c) 2020 A B",
-			want:     []string{"Copyright (c) 2020 A B"},
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := headLines(tt.original, tt.head)
-			if strings.Join(got, "|") != strings.Join(tt.want, "|") {
-				t.Errorf("headLines() = %q, want %q", got, tt.want)
+			got, ok := headLines(tt.original, tt.head)
+			if ok != tt.wantOK || strings.Join(got, "|") != strings.Join(tt.want, "|") {
+				t.Errorf("headLines() = %q, %v, want %q, %v", got, ok, tt.want, tt.wantOK)
 			}
 		})
 	}
