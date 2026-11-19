@@ -399,7 +399,7 @@ def committed_message(raw):
     if len(raw) <= MESSAGE_MAX:
         return raw
     k = MESSAGE_MAX
-    while raw[k] & 0xC0 == 0x80:
+    while k > 0 and raw[k] & 0xC0 == 0x80:
         k -= 1
     return raw[:k]
 
@@ -1377,7 +1377,7 @@ def check_commitment(rep, obj, path):
     if "raw" in obj:
         if rtype != AGENT_OUTPUT:
             raise FormatError("%s: only an agent message has a raw text to cut" % path)
-        rep.same(path + ".text", text, committed_message(get_hex(obj, "raw", path)))
+        rep.same(path + ".text", text, committed_message(get_hex_text(obj, "raw", path)[0]))
     elif rtype == AGENT_OUTPUT and len(text) > MESSAGE_MAX:
         rep.fail(path + ".text", "is %d bytes; an agent message commits at most %d" % (len(text), MESSAGE_MAX))
     try:
