@@ -89,13 +89,22 @@ func TestIdentifyVariants(t *testing.T) {
 		}
 		return strings.Replace(s, old, new, 1)
 	}
+	// reflow puts each word from the first from onward on its own line.
+	reflow := func(s, from string) string {
+		i := strings.Index(s, from)
+		if i < 0 {
+			t.Fatalf("test text lacks %q", from)
+		}
+		return s[:i] + strings.Join(strings.Fields(s[i:]), "\n")
+	}
 	tests := []struct {
 		name string
 		text string
 		want string
 	}{
 		{name: "CRLF line endings don't matter", text: strings.ReplaceAll(mit, "\n", "\r\n"), want: "MIT"},
-		{name: "reflowed lines don't matter", text: strings.Join(strings.Fields(mit), "\n"), want: "MIT"},
+		{name: "reflowed lines in the license text don't matter", text: reflow(mit, "Permission is hereby"), want: "MIT"},
+		{name: "a copyright line split in two fails, since only notices and titles may stand above the text", text: mustReplace(mit, "Copyright (c) <year> <copyright holders>", "Copyright (c) <year>\n<copyright holders>")},
 		{name: "case doesn't matter", text: strings.ToLower(mit), want: "MIT"},
 		{name: "curly quotes count as straight ones", text: strings.NewReplacer(`"Software"`, "\u201cSoftware\u201d", `"AS IS"`, "\u201cAS IS\u201d").Replace(mit), want: "MIT"},
 		{name: "a byte order mark is ignored", text: "\ufeff" + mit, want: "MIT"},
