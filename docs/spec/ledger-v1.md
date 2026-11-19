@@ -272,15 +272,19 @@ A verifier that holds a run of a device's batches, with headers and body hashes 
 
 `pkg/ledger` reports a gap in `b` or `s`, a root mismatch and a head mismatch as distinct errors (WP-LG2). Each one points at a different fault: a batch that was hidden or dropped, a record that was changed or moved, a chain that was rewritten.
 
-## 10. Part 2, reserved for WP-LG3
+## 10. Part 2: content (WP-LG3, in progress)
 
-WP-LG3 specifies these in this file, in a section of its own:
+Being written. Planned subsections:
 
-- the tokens of a prompt or a turn's final agent message, the token leaves `t_ij`, and the content commitment `C`, a `ROOT` over them (5.1);
-- the redacted reveal and how it is verified;
-- the keyed features in `f` and their version `f.v`;
-- the 16-byte HMACs for `error_sig`, `template_hash` and `cmd_hash`;
-- the challenge draw of DESIGN 7.5 step 4.
+- 10.1 committed text: which records carry `c`, and the exact text each commits;
+- 10.2 tokens, token leaves `t_ij` and the content commitment `C`;
+- 10.3 the redacted reveal and its verification;
+- 10.4 normalization (SM 4.2);
+- 10.5 shingles, per-shingle values and the keyed MinHash (SM 8.5), with the Jaccard estimate;
+- 10.6 the 16-byte keyed values for `error_sig`, `template_hash`, `cmd_hash` and file paths, and edit hunks;
+- 10.7 the feature map `f` and `f.v`;
+- 10.8 what CC8 reveals;
+- 10.9 the challenge draw of DESIGN 7.5 step 4.
 
 Part 2 adds its prefixes, tags, labels and context strings to section 2 and reuses none of part 1's.
 
