@@ -678,7 +678,7 @@ For Karim or Hack Club staff:
 
 ## Fact-check log
 
-Adversarial fact-check, 2026-11-19. Each row is a claim a designer is likely to lean on, the primary source opened for it, and what changed in the doc. Rows are added as each check finishes.
+Adversarial fact-check, 2026-11-19. Each row is a claim a designer is likely to lean on, the primary source opened for it, and what changed in the doc. The substantive corrections are rows 10 (typing cadence), 12 (Slovenia), 21 (Copilot Max), 27 (hook prompts include loop iterations), 29 (the $85 citation), 30 (Hyper-V leaf) and 31 (JPlag normalization covers only Java and C++).
 
 | # | Claim (section) | Primary source opened | Result and change |
 |---|---|---|---|
