@@ -192,7 +192,9 @@ func TestOtherRecordBodies(t *testing.T) {
 			func() (Record, error) {
 				return UploadFailureRecord(k, 5, json.RawMessage(`{"reason":"<&>"}`))
 			},
-			`{"reason":"<&>"}`,
+			// encoding/json writes <, & and > as six-character unicode
+			// escapes; x5c is the backslash that starts each one.
+			"{\"reason\":\"\x5cu003c\x5cu0026\x5cu003e\"}",
 		},
 	}
 	for _, c := range cases {

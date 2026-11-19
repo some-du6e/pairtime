@@ -200,8 +200,8 @@ func TestCTTrees(t *testing.T) {
 
 // ctProbe is one of transparency-dev/merkle's inclusion-proof checks.
 type ctProbe struct {
-	LeafIdx  int64    `json:"leafIdx"`
-	TreeSize int64    `json:"treeSize"`
+	LeafIdx  uint64   `json:"leafIdx"`
+	TreeSize uint64   `json:"treeSize"`
 	Root     string   `json:"root"`
 	LeafHash string   `json:"leafHash"`
 	Proof    []string `json:"proof"`
@@ -219,9 +219,6 @@ func verifyProbe(p ctProbe) error {
 		}
 		return HashOf(b)
 	}
-	if p.LeafIdx < 0 || p.TreeSize < 0 {
-		return ErrProof
-	}
 	root, err := b64(p.Root)
 	if err != nil {
 		return err
@@ -236,7 +233,7 @@ func verifyProbe(p ctProbe) error {
 			return err
 		}
 	}
-	return VerifyInclusion(uint64(p.LeafIdx), uint64(p.TreeSize), leaf, proof, root)
+	return VerifyInclusion(p.LeafIdx, p.TreeSize, leaf, proof, root)
 }
 
 func TestCTInclusion(t *testing.T) {
@@ -279,10 +276,10 @@ func TestCTInclusion(t *testing.T) {
 			}
 			// A proof that verifies in a tree built from the published leaf
 			// inputs is also what InclusionProof generates.
-			n := int(p.TreeSize)
-			if p.WantErr || n >= len(roots) {
+			if p.WantErr || p.TreeSize >= uint64(len(roots)) {
 				return
 			}
+			n := int(p.TreeSize)
 			root, _ := base64.StdEncoding.DecodeString(p.Root)
 			if !bytes.Equal(root, roots[n][:]) {
 				return
