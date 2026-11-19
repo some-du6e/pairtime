@@ -5,7 +5,7 @@ The oracles `pkg/redact` is checked against (WP-PV1). None of them was written b
 | Directory | What it is | Where it comes from |
 |---|---|---|
 | `gitleaks/` | The planted corpus: 6,396 true positives and 374 false positives for 219 of gitleaks' rules, each with the secrets gitleaks' detector found in it | gitleaks' own rule sources at v8.30.1, run through gitleaks' config generator by `gitleaks/extract.sh`. See [gitleaks/README.md](gitleaks/README.md) |
-| `presidio/` | About 470 PII cases, valid numbers and near misses with a wrong checksum, plus the IBAN country table | Presidio's recognizer tests and `iban_patterns.py` at 2.2.366, copied unchanged. See [presidio/README.md](presidio/README.md) |
+| `presidio/` | 414 PII cases, valid numbers and near misses with a wrong checksum, plus the IBAN country table and three Verhoeff vectors | Presidio's recognizer tests and `iban_patterns.py` at 2.2.366, copied unchanged. See [presidio/README.md](presidio/README.md) |
 | `code/` | 14 code-block collapse goldens: `<name>.md` in, `<name>.golden` out | Written by hand from CommonMark 0.31.2's fence rules, section 4.5 |
 
 What the tests check:
