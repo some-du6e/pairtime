@@ -2000,7 +2000,7 @@ NORMALIZATION_TEXTS = (
     ("prose that isn't an error", "the error is that terror and Errors happen, error: none"),
     ("five words, so character shingles", "make the button bigger please"),
     ("six words, so word shingles", "make the button a bit bigger"),
-    ("the worked example of 10.11", "still broken, see src/nav.js:12\r\nTypeError: x is undefined"),
+    ("the worked example of 10.10", "still broken, see src/nav.js:12\r\nTypeError: x is undefined"),
 )
 
 
@@ -2031,7 +2031,7 @@ def tool_feature_json(k_dev, rtype, note, hunks, command):
 
 
 FEATURE_PROMPTS = (
-    ("the worked example of 10.11", "still broken, see src/nav.js:12\r\nTypeError: x is undefined", "error_paste"),
+    ("the worked example of 10.10", "still broken, see src/nav.js:12\r\nTypeError: x is undefined", "error_paste"),
     ("a re-roll, first", "the navbar still overlaps the hero on mobile, can you fix the css", "substantive"),
     ("a re-roll, same words in other case", "The navbar STILL overlaps the hero on mobile, can you fix the CSS", "substantive"),
     ("a re-roll, one word changed", "the navbar still overlaps the hero on mobile, can you fix the styles", "substantive"),
@@ -2511,7 +2511,7 @@ def test_check_catches():
 
 
 def content_example():
-    """The worked example in spec section 10.11, as (label, value) pairs.
+    """The worked example in spec section 10.10, as (label, value) pairs.
     selftest checks that every value appears in the spec."""
     out = []
     keys = derive_keys(bytes(range(32)))
@@ -2717,11 +2717,11 @@ def test_check_catches_content():
     picks = {
         "commitments": ["short prompt"],
         "reveals": ["short prompt: everything kept", "short prompt: removal at the start"],
-        "normalizations": ["the worked example of 10.11"],
-        "features": ["the worked example of 10.11", "an edit across two files, with an insertion and a deletion",
+        "normalizations": ["the worked example of 10.10"],
+        "features": ["the worked example of 10.10", "an edit across two files, with an insertion and a deletion",
                      "a command typed in a shell"],
         "jaccard": ["one word changed"],
-        "shingle_reveals": ["the worked example of 10.11: every shingle shown"],
+        "shingle_reveals": ["the worked example of 10.10: every shingle shown"],
         "draws": ["a pool of 12 on two devices"],
     }
     base = {"format": FORMAT, "lowercase": full["lowercase"], "challenge_k": full["challenge_k"]}
