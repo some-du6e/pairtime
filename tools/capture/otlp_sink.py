@@ -160,7 +160,7 @@ def make_handler(sink, out):
                 self.reply(400, b"", "text/plain")
                 return
             n, ext, is_json = sink.save(arrived_ns, self.path, self.headers, body, decoded, note)
-            print("%06d%s %-11s %7d bytes  %s" % (n, ext, self.path, len(decoded), summarize(self.path, decoded)),
+            print("%06d%s %-11s %7d bytes  %s" % (n, ext, self.path, len(decoded), summarize(decoded)),
                   file=out, flush=True)
             # An empty Export*ServiceResponse means full success in both encodings.
             if is_json:
