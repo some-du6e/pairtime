@@ -1,0 +1,123 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Ari ship payload, the body of POST /api/ingest/:program",
+  "description": "The keys Ari documents for a ship at hackclub/ari 637233962a0f (src/routes/docs/webhooks/inboundFields.ts), checked against the validator that enforces them, hackclub/ari-webhooks 01a47d67aa91 (internal/ingest/validate.go and payload.go). Ari has no license, so the names and limits are stated here in our own words. Where Ari accepts more than one spelling, this schema asks for the one Ari tells new integrations to use, so it is a little stricter than Ari and anything valid here is valid there. Ari answers an invalid ship with 422 and the name of the field at fault. Those names are part of Ari's contract (validate.go line 18) and are listed in each description.",
+  "type": "object",
+  "required": ["external_id", "maker", "title", "description", "repo_url", "thumbnail_url"],
+  "properties": {
+    "external_id": {"$ref": "#/$defs/nonblank", "description": "The program's id for the ship. Ari recognizes a resend or a withdrawal by it. 422 external_id."},
+    "maker": {"$ref": "#/$defs/maker"},
+    "collaborators": {
+      "type": "array",
+      "maxItems": 10,
+      "items": {"$ref": "#/$defs/collaborator"},
+      "description": "Only for programs with collaboration on, otherwise 422 collaborators_not_enabled. When present, these people are the ship, each gets their own verified time, and every journal entry needs an email naming one of them. 422 collaborators."
+    },
+    "title": {"$ref": "#/$defs/nonblank", "description": "422 title."},
+    "description": {"$ref": "#/$defs/nonblank", "description": "Shown under the title. 422 description."},
+    "repo_url": {"$ref": "#/$defs/http_url", "description": "The public repository Ari pulls commits from. 422 repo_url."},
+    "demo_url": {"$ref": "#/$defs/http_url", "description": "Required unless track is hardware. 422 demo_url."},
+    "thumbnail_url": {"$ref": "#/$defs/http_url", "description": "422 thumbnail_url."},
+    "track": {"type": "string", "description": "software, the default, or hardware. It picks the review queue and whether demo_url is required. 422 track for a non-string, null included."},
+    "shipped_at": {"$ref": "#/$defs/when", "description": "For migrations: backdates the ship. Refused when more than a day in the future or before 2000. 422 shipped_at."},
+    "hours": {"description": "Ignored, a leftover. Evidence time is Ari's to work out."},
+    "hackatime_projects": {
+      "type": "array",
+      "maxItems": 50,
+      "items": {"type": "string"},
+      "description": "Hackatime project keys that scope the time Ari pulls. <<LAST_PROJECT>> is accepted but never stored, and a ship with only that one gets a changes request. 422 hackatime_projects. pairtime's bridge never sends this, so the same time isn't counted through Hackatime too (DESIGN 5.10)."
+    },
+    "journals": {
+      "type": "array",
+      "maxItems": 200,
+      "items": {"$ref": "#/$defs/journal_entry"},
+      "description": "Work log entries. Ari's settlement counts them as the journals time source, one row per entry, and a reviewer can lower a row's seconds but never raise them (ari src/lib/review/settlement.ts lines 3-4, 135-153, 170). 422 journals for a non-array, more than 200 entries or a non-object entry."
+    },
+    "evidence": {"type": "array", "items": {"type": "string"}, "description": "Which kinds of evidence to use, from commits, elapsed and devlog. Unknown values are dropped. 422 evidence."},
+    "meta": {
+      "type": "object",
+      "maxProperties": 24,
+      "additionalProperties": {"type": ["string", "number", "boolean", "null", "array"], "items": {"type": ["string", "number", "boolean", "null"]}},
+      "description": "Flat context shown to reviewers. Keys are cut to 80 characters and values to 2,000, null values are dropped, and the key git may list extra repository URLs. 422 meta for more than 24 keys or a nested value."
+    },
+    "is_update": {"type": "boolean", "description": "Marks an update to an earlier ship. A non-empty update_message turns it on. 422 is_update."},
+    "update_message": {"type": "string", "description": "What changed since the last ship, cut to 2,000 characters. 422 update_message."}
+  },
+  "allOf": [
+    {
+      "description": "demo_url is required unless track is hardware. Ari also takes other casing and surrounding spaces in hardware; this schema asks for the plain spelling.",
+      "anyOf": [
+        {"required": ["demo_url"]},
+        {"required": ["track"], "properties": {"track": {"const": "hardware"}}}
+      ]
+    },
+    {
+      "description": "The evidence floor: at least one Hackatime project, one journal entry or some program time, otherwise 422 hackatime_projects_or_journals_or_program_hours. Ari also counts program_minutes, program_hours and collaborators' program time; this schema accepts only maker.program_seconds, the form Ari asks new integrations to send.",
+      "anyOf": [
+        {"required": ["hackatime_projects"], "properties": {"hackatime_projects": {"minItems": 1}}},
+        {"required": ["journals"], "properties": {"journals": {"minItems": 1}}},
+        {"properties": {"maker": {"required": ["program_seconds"], "properties": {"program_seconds": {"minimum": 1}}}}}
+      ]
+    }
+  ],
+  "$defs": {
+    "nonblank": {"type": "string", "pattern": "\\S", "description": "A string with at least one character that isn't whitespace."},
+    "http_url": {"type": "string", "pattern": "^\\s*[Hh][Tt][Tt][Pp][Ss]?://", "description": "Ari checks only that the trimmed value starts with http:// or https://, in any case (ari-webhooks internal/ingest/payload.go line 54)."},
+    "when": {
+      "type": "string",
+      "pattern": "^\\s*[0-9]{4}-[0-9]{2}-[0-9]{2}(T[0-9]{2}:[0-9]{2}(:[0-9]{2}(\\.[0-9]+)?(Z|[+-][0-9]{2}:[0-9]{2})?)?)?\\s*$",
+      "description": "An ISO 8601 date or date-time, as Ari's parseJsDate reads it (payload.go lines 56-78): RFC 3339 with an offset, a date-time without one, read as Ari's local time, or a bare date, read as UTC. Send RFC 3339 in UTC to leave nothing to the server's zone.",
+      "examples": ["2026-11-03T20:11:00Z", "2026-11-03", "2026-11-03T20:11"]
+    },
+    "program_time": {
+      "description": "Time the program vouches for, counted as its own program source and reviewer-deflatable. program_seconds wins over program_minutes, which wins over program_hours. Ari's code calls the figure evidence-free (payload.go line 126), and pairtime's bridge never sends it (DESIGN 5.10). 422 maker.program_hours or collaborators.program_hours for any of the three.",
+      "properties": {
+        "program_seconds": {"type": "integer", "minimum": 0, "maximum": 3600000},
+        "program_minutes": {"type": "number", "minimum": 0, "maximum": 60000},
+        "program_hours": {"type": "number", "minimum": 0, "maximum": 1000}
+      }
+    },
+    "maker": {
+      "type": "object",
+      "required": ["email", "name", "slack_id"],
+      "allOf": [{"$ref": "#/$defs/program_time"}],
+      "properties": {
+        "email": {"$ref": "#/$defs/nonblank", "description": "The maker's Hack Club email. 422 maker.email, also when maker is missing."},
+        "name": {"$ref": "#/$defs/nonblank", "description": "422 maker.name."},
+        "slack_id": {"$ref": "#/$defs/nonblank", "description": "422 maker.slack_id."},
+        "hackatime_id": {"type": "string", "description": "A string here, where Robert takes a number. Saves Ari the email and Slack lookup. 422 maker.hackatime_id."}
+      }
+    },
+    "collaborator": {
+      "type": "object",
+      "required": ["email"],
+      "allOf": [{"$ref": "#/$defs/program_time"}],
+      "properties": {
+        "email": {"$ref": "#/$defs/nonblank", "description": "Unique within the ship. 422 collaborators.email."},
+        "name": {"type": "string", "description": "422 collaborators.name."},
+        "slack_id": {"type": "string", "description": "422 collaborators.slack_id."},
+        "hackatime_id": {"type": "string", "description": "422 collaborators.hackatime_id."},
+        "hackatime_projects": {"type": "array", "items": {"type": "string"}, "description": "Merged into the ship's list. 422 collaborators.hackatime_projects."}
+      }
+    },
+    "journal_entry": {
+      "type": "object",
+      "required": ["text"],
+      "description": "One work log entry. text is required: an entry with only at, seconds and markdown is refused with 422 journals.text.",
+      "properties": {
+        "at": {"$ref": "#/$defs/when", "description": "When the entry happened. 422 journals.at when it doesn't parse."},
+        "date": {"$ref": "#/$defs/when", "description": "Read only when at is missing or null."},
+        "seconds": {"type": "integer", "minimum": 0, "maximum": 86400, "description": "The entry's length in whole seconds, at most a day. It wins over minutes and hours. A fraction or an out-of-range value gives 422 journals.minutes, not journals.seconds."},
+        "minutes": {"type": "number", "minimum": 0, "maximum": 1440, "description": "Rounded to whole minutes and stored times 60."},
+        "hours": {"type": "number", "minimum": 0, "maximum": 24, "description": "Times 60, then as minutes."},
+        "text": {"$ref": "#/$defs/nonblank", "description": "What got done, cut to 10,000 characters. 422 journals.text when blank."},
+        "markdown": {"type": "string", "description": "A richer version for reviewers, cut to 50,000 characters. Falls back to text."},
+        "email": {"type": "string", "description": "Required when the ship has collaborators, and must be one of theirs. 422 journals.email."}
+      },
+      "allOf": [
+        {"anyOf": [{"required": ["at"]}, {"required": ["date"]}]},
+        {"anyOf": [{"required": ["seconds"]}, {"required": ["minutes"]}, {"required": ["hours"]}], "description": "No length at all gives 422 journals.minutes."}
+      ]
+    }
+  }
+}

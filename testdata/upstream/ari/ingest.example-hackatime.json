@@ -1,0 +1,18 @@
+{
+  "external_id": "program-ship-4821",
+  "maker": {
+    "email": "rowan@example.org",
+    "name": "Rowan",
+    "slack_id": "U0123ABC",
+    "hackatime_id": "4821"
+  },
+  "title": "cs2go",
+  "description": "A command-line game written in Go.",
+  "repo_url": "https://github.com/example/cs2go",
+  "demo_url": "https://example.org/cs2go",
+  "thumbnail_url": "https://example.org/cs2go.png",
+  "track": "software",
+  "hackatime_projects": ["cs2go"],
+  "evidence": ["commits", "devlog"],
+  "meta": {"project_page": "https://program.example.org/projects/4821"}
+}
