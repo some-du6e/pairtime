@@ -288,13 +288,17 @@ def find_hits(text, rules):
 
 
 def apply(text, hits):
-    out, pos = [], 0
+    """The text with every hit replaced, and where each placeholder landed."""
+    out, spans, pos, shift = [], [], 0, 0
     for h in hits:
         out.append(text[pos:h.start])
         out.append(h.rule.placeholder)
+        start = h.start + shift
+        spans.append((start, start + len(h.rule.placeholder)))
+        shift += len(h.rule.placeholder) - (h.end - h.start)
         pos = h.end
     out.append(text[pos:])
-    return "".join(out)
+    return "".join(out), spans
 
 
 def mask(h):
@@ -303,11 +307,13 @@ def mask(h):
     return h.text
 
 
-def context(text, h, width=24):
-    before = text[max(0, h.start - width):h.start]
-    after = text[h.end:h.end + width]
-    shown = "[" + mask(h) + "]"
-    return (before + shown + after).replace("\r", "\\r").replace("\n", "\\n").replace("\t", "\\t")
+def context(clean, span, h, width=24):
+    """The replacement in its surroundings, taken from the scrubbed text, so
+    the report never shows a neighbouring secret."""
+    start, end = span
+    shown = "[" + mask(h) + " -> " + h.rule.placeholder + "]"
+    text = clean[max(0, start - width):start] + shown + clean[end:end + width]
+    return text.replace("\r", "\\r").replace("\n", "\\n").replace("\t", "\\t")
 
 
 def line_of(starts, offset):
@@ -434,28 +440,28 @@ def main(argv=None):
             continue
         files += 1
         hits = find_hits(text, rules)
-        starts = [i for i, c in enumerate(text) if c == "\n"]
-        for h in hits:
-            key = (h.rule.kind, mask(h), h.rule.placeholder)
-            totals[key] = totals.get(key, 0) + 1
-            rep.append("%s:%d  %s  %s" % (rel.replace(os.sep, "/"), line_of(starts, h.start) + 1, h.rule.kind, context(text, h)))
-        clean = apply(text, hits)
+        clean, spans = apply(text, hits)
+        clean_starts = [i for i, c in enumerate(clean) if c == "\n"]
 
         parts = rel.split(os.sep)
-        new_parts = [apply(p, find_hits(p, rules)) for p in parts]
+        new_parts = [apply(p, find_hits(p, rules))[0] for p in parts]
         new_rel = os.path.join(*new_parts)
         if new_rel.lower() in written:
             ap.error("%s and %s would both be scrubbed to %s" % (written[new_rel.lower()], rel, new_rel))
         written[new_rel.lower()] = rel
         if new_rel != rel:
             renamed.append((rel, new_rel))
+        for h, span in zip(hits, spans):
+            key = (h.rule.kind, mask(h), h.rule.placeholder)
+            totals[key] = totals.get(key, 0) + 1
+            rep.append("%s:%d  %s  %s" % (new_rel.replace(os.sep, "/"), line_of(clean_starts, span[0]) + 1, h.rule.kind,
+                                          context(clean, span, h)))
 
         # Blank out the placeholders first, so a value that happens to be
         # part of one (an account named cap, inside capture) isn't reported.
         lower = clean.lower()
         for ph in placeholders:
             lower = lower.replace(ph, "\0" * len(ph))
-        clean_starts = [i for i, c in enumerate(clean) if c == "\n"]
         for _, value in known:
             i = lower.find(value.lower())
             while i >= 0:
