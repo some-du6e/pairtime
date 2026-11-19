@@ -371,6 +371,650 @@ def day_message(day, head):
 
 
 # ---------------------------------------------------------------------------
+# 10. Content: token commitments, reveals, keyed features and the draw
+#
+# Part 2 of the spec. Section numbers below are its subsections of 10.
+
+# 10.1 Which records commit content, and to which text.
+
+PROMPT_SUBMIT = 0x03
+AGENT_OUTPUT = 0x04
+AGENT_TOOL = 0x05
+SHELL_COMMAND = 0x0C
+CLI_TRACK = 0x12
+CONTENT_RTYPES = (PROMPT_SUBMIT, AGENT_OUTPUT, CLI_TRACK)
+MESSAGE_MAX = 16384
+
+
+def committed_message(raw):
+    """The text a turn's final agent message commits: its longest prefix of
+    at most 16,384 bytes that ends on a character boundary."""
+    if len(raw) <= MESSAGE_MAX:
+        return raw
+    k = MESSAGE_MAX
+    while raw[k] & 0xC0 == 0x80:
+        k -= 1
+    return raw[:k]
+
+
+def utf8_text(data, what="text"):
+    """Strict UTF-8: no surrogates, no overlong forms, nothing above U+10FFFF."""
+    try:
+        return data.decode("utf-8")
+    except UnicodeDecodeError:
+        raise LedgerError("%s isn't valid UTF-8" % what)
+
+
+# 10.2 Tokens and the commitment. Whitespace is Unicode's White_Space
+# property, written out so no implementation leans on its library's tables.
+# Python's str.isspace() is not this set: it adds U+001C to U+001F.
+
+WHITESPACE = frozenset([0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x20, 0x85, 0xA0, 0x1680]
+                       + list(range(0x2000, 0x200B)) + [0x2028, 0x2029, 0x202F, 0x205F, 0x3000])
+
+
+def is_space(ch):
+    return ord(ch) in WHITESPACE
+
+
+def tokenize(text):
+    """Maximal runs of whitespace and of non-whitespace, in order. They
+    concatenate to text, and neighbours are always of different kinds."""
+    out, start = [], 0
+    for i in range(1, len(text) + 1):
+        if i == len(text) or is_space(text[i]) != is_space(text[start]):
+            out.append(text[start:i])
+            start = i
+    return out
+
+
+def words_of(text):
+    """The non-whitespace tokens of text."""
+    return [t for t in tokenize(text) if not is_space(t[0])]
+
+
+def token_salt(k_tok, seq, j):
+    """HMAC-SHA256(K_tok, u64(s) || u64(j)); tokens are numbered from 1."""
+    if not 1 <= seq < 1 << 64:
+        raise LedgerError("seq %d is out of range" % seq)
+    if j < 1:
+        raise LedgerError("tokens are numbered from 1")
+    return hmac_sha256(k_tok, u64(seq) + u64(j))
+
+
+def token_leaf(salt, token):
+    """t = SHA-256(0x00 || salt || token), which is LEAF(salt || token)."""
+    if len(salt) != 32:
+        raise LedgerError("a token salt is 32 bytes")
+    return leaf_hash(salt + token)
+
+
+def commit_text(k_tok, seq, text):
+    """The tokens of text (UTF-8 bytes) as bytes, their salts and leaves, and
+    the commitment (n, C)."""
+    toks = [t.encode("utf-8") for t in tokenize(utf8_text(text))]
+    salts = [token_salt(k_tok, seq, j) for j in range(1, len(toks) + 1)]
+    leaves = [token_leaf(s, t) for s, t in zip(salts, toks)]
+    return toks, salts, leaves, len(toks), tree_root(leaves)
+
+
+# 10.3 The redacted reveal. A kept item is ("kept", salt, token); a removed
+# span is ("removed", type, count, leaves, lines), lines None unless given.
+
+SPAN_TYPES = ("known", "secret", "pii", "code", "teen")
+REVEAL_VERDICTS = ("ok", "bad_item", "count", "alternation", "root")
+
+
+def token_kind(token):
+    """True for a whitespace token, False for a word, None for a byte string
+    that isn't one token: empty, not UTF-8, or both kinds at once."""
+    try:
+        text = token.decode("utf-8")
+    except UnicodeDecodeError:
+        return None
+    kinds = {is_space(c) for c in text}
+    return kinds.pop() if len(kinds) == 1 else None
+
+
+def verify_reveal(n, root, items):
+    """Checks a reveal against the commitment (n, C) in the order the spec
+    gives and returns the first verdict that applies, with the index of the
+    offending item for bad_item and alternation."""
+    leaves, kept, pos = [], [], 0
+    for i, item in enumerate(items):
+        if item[0] == "kept":
+            _, salt, token = item
+            kind = token_kind(token)
+            if len(salt) != 32 or kind is None:
+                return "bad_item", i
+            kept.append((pos, kind, i))
+            leaves.append(token_leaf(salt, token))
+            pos += 1
+        else:
+            _, span_type, count, hashes, lines = item
+            if span_type not in SPAN_TYPES or count < 1 or len(hashes) != count:
+                return "bad_item", i
+            if any(len(h) != 32 for h in hashes):
+                return "bad_item", i
+            if lines is not None and (span_type != "code" or lines < 1):
+                return "bad_item", i
+            leaves.extend(hashes)
+            pos += count
+    if pos != n:
+        return "count", None
+    for (p0, k0, _), (p1, k1, i1) in zip(kept, kept[1:]):
+        if (k0 == k1) != ((p1 - p0) % 2 == 0):
+            return "alternation", i1
+    if tree_root(leaves) != root:
+        return "root", None
+    return "ok", None
+
+
+def reveal_items(salts, toks, leaves, spans):
+    """A reveal that removes the given spans, each (first, count, type,
+    lines) with first counted from 0, and keeps every other token."""
+    items, j = [], 0
+    for first, count, span_type, lines in sorted(spans):
+        if first < j or first + count > len(toks):
+            raise LedgerError("spans overlap or run past the text")
+        items += [("kept", salts[k], toks[k]) for k in range(j, first)]
+        items.append(("removed", span_type, count, leaves[first:first + count], lines))
+        j = first + count
+    items += [("kept", salts[k], toks[k]) for k in range(j, len(toks))]
+    return items
+
+
+# 10.4 Normalization (SM 4.2): drop pasted blocks and error text by line,
+# lowercase, substitute, mark retries, collapse whitespace.
+
+TRACEBACK = "Traceback (most recent call last):"
+FENCE_OPEN_RE = re.compile(r" {0,3}(`{3,}|~{3,})(.*)")
+FENCE_CLOSE_RE = re.compile(r" {0,3}(`{3,}|~{3,})[ \t]*")
+PASTE_OPEN_RE = re.compile(r"<pasted_content(?: [^>]*)?>")
+PASTE_CLOSE = "</pasted_content>"
+# SM 4.2's first error lines, matched against a whole line with its leading
+# and trailing whitespace removed. ASCII classes only; nothing here needs
+# lookaround or backreferences, so Go's regexp runs the same patterns.
+ERROR_LINE_RES = tuple(re.compile(p) for p in (
+    r"(?:Uncaught )?(?:[A-Za-z_$][A-Za-z0-9_$]*\.)*[A-Za-z0-9_$]*(?:Error|Exception)(?::.*)?",
+    r"error\[E[0-9]{4}\](?::.*)?",
+    r"[^ \t]+:[0-9]+:[0-9]+: (?:fatal )?error:.*",
+    r"FAILED .+",
+    r"--- FAIL: .+",
+    r"panic: .+",
+))
+
+
+def split_lines(text):
+    """Lines split at LF, each without one trailing CR."""
+    return [line[:-1] if line.endswith("\r") else line for line in text.split("\n")]
+
+
+def strip_space(s):
+    i, j = 0, len(s)
+    while i < j and is_space(s[i]):
+        i += 1
+    while j > i and is_space(s[j - 1]):
+        j -= 1
+    return s[i:j]
+
+
+def opening_fence(line):
+    m = FENCE_OPEN_RE.fullmatch(line)
+    if m is None or (m.group(1)[0] == "`" and "`" in m.group(2)):
+        return None
+    return m.group(1)
+
+
+def closes_fence(line, fence):
+    m = FENCE_CLOSE_RE.fullmatch(line)
+    return m is not None and m.group(1)[0] == fence[0] and len(m.group(1)) >= len(fence)
+
+
+def is_error_line(s):
+    return any(r.fullmatch(s) is not None for r in ERROR_LINE_RES)
+
+
+def indented(line):
+    return line[:1] in (" ", "\t")
+
+
+def removed_lines(lines):
+    """Indices of the lines in fenced blocks, pasted_content blocks,
+    tracebacks and error text."""
+    removed, i = [], 0
+    while i < len(lines):
+        start, s = i, strip_space(lines[i])
+        fence = opening_fence(lines[i])
+        if fence is not None:
+            i += 1
+            while i < len(lines) and not closes_fence(lines[i], fence):
+                i += 1
+            i = min(i + 1, len(lines))
+        elif PASTE_OPEN_RE.fullmatch(s) is not None:
+            i += 1
+            while i < len(lines) and strip_space(lines[i]) != PASTE_CLOSE:
+                i += 1
+            i = min(i + 1, len(lines))
+        elif s == TRACEBACK or is_error_line(s):
+            i += 1
+            while i < len(lines) and indented(lines[i]):
+                i += 1
+        else:
+            i += 1
+            continue
+        removed.extend(range(start, i))
+    return removed
+
+
+# Unicode 15.0.0's simple lowercase mapping (UnicodeData.txt field 13) as
+# runs (first, count, delta, stride): for i in range(count), first + i*stride
+# maps to first + i*stride + delta. selftest checks it against Python's
+# unicodedata when that is 15.0.0. Library case tables follow newer Unicode
+# versions (Go 1.27's are 17.0.0), and f.v = 1 must never change.
+LOWER_UNICODE = "15.0.0"
+LOWER_RUNS = (
+    (0x0041, 26, 32, 1), (0x00C0, 23, 32, 1), (0x00D8, 7, 32, 1), (0x0100, 24, 1, 2),
+    (0x0130, 1, -199, 1), (0x0132, 3, 1, 2), (0x0139, 8, 1, 2), (0x014A, 23, 1, 2),
+    (0x0178, 1, -121, 1), (0x0179, 3, 1, 2), (0x0181, 1, 210, 1), (0x0182, 2, 1, 2),
+    (0x0186, 1, 206, 1), (0x0187, 1, 1, 1), (0x0189, 2, 205, 1), (0x018B, 1, 1, 1),
+    (0x018E, 1, 79, 1), (0x018F, 1, 202, 1), (0x0190, 1, 203, 1), (0x0191, 1, 1, 1),
+    (0x0193, 1, 205, 1), (0x0194, 1, 207, 1), (0x0196, 1, 211, 1), (0x0197, 1, 209, 1),
+    (0x0198, 1, 1, 1), (0x019C, 1, 211, 1), (0x019D, 1, 213, 1), (0x019F, 1, 214, 1),
+    (0x01A0, 3, 1, 2), (0x01A6, 1, 218, 1), (0x01A7, 1, 1, 1), (0x01A9, 1, 218, 1),
+    (0x01AC, 1, 1, 1), (0x01AE, 1, 218, 1), (0x01AF, 1, 1, 1), (0x01B1, 2, 217, 1),
+    (0x01B3, 2, 1, 2), (0x01B7, 1, 219, 1), (0x01B8, 1, 1, 1), (0x01BC, 1, 1, 1),
+    (0x01C4, 1, 2, 1), (0x01C5, 1, 1, 1), (0x01C7, 1, 2, 1), (0x01C8, 1, 1, 1), (0x01CA, 1, 2, 1),
+    (0x01CB, 9, 1, 2), (0x01DE, 9, 1, 2), (0x01F1, 1, 2, 1), (0x01F2, 2, 1, 2),
+    (0x01F6, 1, -97, 1), (0x01F7, 1, -56, 1), (0x01F8, 20, 1, 2), (0x0220, 1, -130, 1),
+    (0x0222, 9, 1, 2), (0x023A, 1, 10795, 1), (0x023B, 1, 1, 1), (0x023D, 1, -163, 1),
+    (0x023E, 1, 10792, 1), (0x0241, 1, 1, 1), (0x0243, 1, -195, 1), (0x0244, 1, 69, 1),
+    (0x0245, 1, 71, 1), (0x0246, 5, 1, 2), (0x0370, 2, 1, 2), (0x0376, 1, 1, 1),
+    (0x037F, 1, 116, 1), (0x0386, 1, 38, 1), (0x0388, 3, 37, 1), (0x038C, 1, 64, 1),
+    (0x038E, 2, 63, 1), (0x0391, 17, 32, 1), (0x03A3, 9, 32, 1), (0x03CF, 1, 8, 1),
+    (0x03D8, 12, 1, 2), (0x03F4, 1, -60, 1), (0x03F7, 1, 1, 1), (0x03F9, 1, -7, 1),
+    (0x03FA, 1, 1, 1), (0x03FD, 3, -130, 1), (0x0400, 16, 80, 1), (0x0410, 32, 32, 1),
+    (0x0460, 17, 1, 2), (0x048A, 27, 1, 2), (0x04C0, 1, 15, 1), (0x04C1, 7, 1, 2),
+    (0x04D0, 48, 1, 2), (0x0531, 38, 48, 1), (0x10A0, 38, 7264, 1), (0x10C7, 1, 7264, 1),
+    (0x10CD, 1, 7264, 1), (0x13A0, 80, 38864, 1), (0x13F0, 6, 8, 1), (0x1C90, 43, -3008, 1),
+    (0x1CBD, 3, -3008, 1), (0x1E00, 75, 1, 2), (0x1E9E, 1, -7615, 1), (0x1EA0, 48, 1, 2),
+    (0x1F08, 8, -8, 1), (0x1F18, 6, -8, 1), (0x1F28, 8, -8, 1), (0x1F38, 8, -8, 1),
+    (0x1F48, 6, -8, 1), (0x1F59, 4, -8, 2), (0x1F68, 8, -8, 1), (0x1F88, 8, -8, 1),
+    (0x1F98, 8, -8, 1), (0x1FA8, 8, -8, 1), (0x1FB8, 2, -8, 1), (0x1FBA, 2, -74, 1),
+    (0x1FBC, 1, -9, 1), (0x1FC8, 4, -86, 1), (0x1FCC, 1, -9, 1), (0x1FD8, 2, -8, 1),
+    (0x1FDA, 2, -100, 1), (0x1FE8, 2, -8, 1), (0x1FEA, 2, -112, 1), (0x1FEC, 1, -7, 1),
+    (0x1FF8, 2, -128, 1), (0x1FFA, 2, -126, 1), (0x1FFC, 1, -9, 1), (0x2126, 1, -7517, 1),
+    (0x212A, 1, -8383, 1), (0x212B, 1, -8262, 1), (0x2132, 1, 28, 1), (0x2160, 16, 16, 1),
+    (0x2183, 1, 1, 1), (0x24B6, 26, 26, 1), (0x2C00, 48, 48, 1), (0x2C60, 1, 1, 1),
+    (0x2C62, 1, -10743, 1), (0x2C63, 1, -3814, 1), (0x2C64, 1, -10727, 1), (0x2C67, 3, 1, 2),
+    (0x2C6D, 1, -10780, 1), (0x2C6E, 1, -10749, 1), (0x2C6F, 1, -10783, 1), (0x2C70, 1, -10782, 1),
+    (0x2C72, 1, 1, 1), (0x2C75, 1, 1, 1), (0x2C7E, 2, -10815, 1), (0x2C80, 50, 1, 2),
+    (0x2CEB, 2, 1, 2), (0x2CF2, 1, 1, 1), (0xA640, 23, 1, 2), (0xA680, 14, 1, 2),
+    (0xA722, 7, 1, 2), (0xA732, 31, 1, 2), (0xA779, 2, 1, 2), (0xA77D, 1, -35332, 1),
+    (0xA77E, 5, 1, 2), (0xA78B, 1, 1, 1), (0xA78D, 1, -42280, 1), (0xA790, 2, 1, 2),
+    (0xA796, 10, 1, 2), (0xA7AA, 1, -42308, 1), (0xA7AB, 1, -42319, 1), (0xA7AC, 1, -42315, 1),
+    (0xA7AD, 1, -42305, 1), (0xA7AE, 1, -42308, 1), (0xA7B0, 1, -42258, 1), (0xA7B1, 1, -42282, 1),
+    (0xA7B2, 1, -42261, 1), (0xA7B3, 1, 928, 1), (0xA7B4, 8, 1, 2), (0xA7C4, 1, -48, 1),
+    (0xA7C5, 1, -42307, 1), (0xA7C6, 1, -35384, 1), (0xA7C7, 2, 1, 2), (0xA7D0, 1, 1, 1),
+    (0xA7D6, 2, 1, 2), (0xA7F5, 1, 1, 1), (0xFF21, 26, 32, 1), (0x10400, 40, 40, 1),
+    (0x104B0, 36, 40, 1), (0x10570, 11, 39, 1), (0x1057C, 15, 39, 1), (0x1058C, 7, 39, 1),
+    (0x10594, 2, 39, 1), (0x10C80, 51, 64, 1), (0x118A0, 32, 32, 1), (0x16E40, 32, 32, 1),
+    (0x1E900, 34, 34, 1),
+)
+
+
+def lower_map(runs):
+    out = {}
+    for first, count, delta, stride in runs:
+        for i in range(count):
+            cp = first + i * stride
+            out[cp] = cp + delta
+    return out
+
+
+LOWER = lower_map(LOWER_RUNS)
+
+
+def lowercase(s):
+    return "".join(chr(LOWER.get(ord(c), ord(c))) for c in s)
+
+
+ALPHA = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz")
+DIGIT = frozenset("0123456789")
+ALNUM = ALPHA | DIGIT
+HEXDIGIT = frozenset("0123456789abcdefABCDEF")
+HEXLETTER = frozenset("abcdefABCDEF")
+SEPARATOR = frozenset("/\\")
+PATH_CHAR = ALNUM | SEPARATOR | frozenset("._-~$%+@:")
+PATH_START = ("/", "\\", "./", ".\\", "../", "..\\", "~/", "~\\")
+URL_RE = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://")
+ID_RE = re.compile(r"`[^`]+`")
+DIGITS_RE = re.compile(r"[0-9]+")
+
+
+def replace_runs(word, chars, fn):
+    """word with each maximal run of chars replaced by fn(run)."""
+    out, i = [], 0
+    while i < len(word):
+        j = i
+        while j < len(word) and word[j] in chars:
+            j += 1
+        if j > i:
+            out.append(fn(word[i:j]))
+            i = j
+        else:
+            out.append(word[i])
+            i += 1
+    return "".join(out)
+
+
+def is_path(run):
+    if not any(c in SEPARATOR for c in run) or not any(c in ALNUM for c in run):
+        return False
+    if run.startswith(PATH_START):
+        return True
+    if len(run) >= 3 and run[0] in ALPHA and run[1] == ":" and run[2] in SEPARATOR:
+        return True
+    if sum(1 for c in run if c in SEPARATOR) >= 2:
+        return True
+    last = run[max(run.rfind("/"), run.rfind("\\")) + 1:]
+    return any(last[k] == "." and last[k + 1] in ALNUM for k in range(len(last) - 1))
+
+
+def is_hex(run):
+    if len(run) >= 3 and run[0] == "0" and run[1] in "xX" and all(c in HEXDIGIT for c in run[2:]):
+        return True
+    return (len(run) >= 7 and all(c in HEXDIGIT for c in run)
+            and any(c in DIGIT for c in run) and any(c in HEXLETTER for c in run))
+
+
+def substitute(word):
+    """SM 4.2's substitutions inside one word, in this order: a URL to the end
+    of the word, backticked identifiers, paths, hex strings, numbers."""
+    m = URL_RE.search(word)
+    if m is not None:
+        word = word[:m.start()] + "<url>"
+    word = ID_RE.sub("<id>", word)
+    word = replace_runs(word, PATH_CHAR, lambda r: "<path>" if is_path(r) else r)
+    word = replace_runs(word, ALNUM, lambda r: "<hex>" if is_hex(r) else r)
+    return DIGITS_RE.sub("<n>", word)
+
+
+RETRY_PHRASES = (("still", "not", "working"), ("try", "again"), ("fix", "it"), ("still", "broken"),
+                 ("doesnt", "work"), ("again",), ("retry",))
+EDGE_PUNCT = frozenset("!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~\u2018\u2019\u201c\u201d")
+
+
+def bare(word):
+    """A word as retry phrases compare it: edge punctuation and apostrophes gone."""
+    i, j = 0, len(word)
+    while i < j and word[i] in EDGE_PUNCT:
+        i += 1
+    while j > i and word[j - 1] in EDGE_PUNCT:
+        j -= 1
+    return word[i:j].replace("'", "").replace("\u2019", "")
+
+
+def replace_retries(words):
+    out, i = [], 0
+    while i < len(words):
+        for phrase in RETRY_PHRASES:
+            if tuple(bare(w) for w in words[i:i + len(phrase)]) == phrase:
+                out.append("<retry>")
+                i += len(phrase)
+                break
+        else:
+            out.append(words[i])
+            i += 1
+    return out
+
+
+def normalize(text):
+    """10.4. Returns the removed line indices and the normalized words; the
+    normalized text is the words joined by single spaces."""
+    lines = split_lines(text)
+    removed = removed_lines(lines)
+    gone = set(removed)
+    words = []
+    for i, line in enumerate(lines):
+        if i not in gone:
+            words += [substitute(lowercase(w)) for w in words_of(line)]
+    return removed, replace_retries(words)
+
+
+def error_signature(text):
+    """10.6: the first error line of text, anywhere in it, with its words
+    substituted as in 10.4 but not lowercased. None when there is none."""
+    for line in split_lines(text):
+        s = strip_space(line)
+        if is_error_line(s):
+            return " ".join(substitute(w) for w in words_of(s))
+    return None
+
+
+# 10.5 Shingles, per-shingle values and the keyed MinHash.
+
+WORD_SHINGLE = 0x05
+CHAR_SHINGLE = 0x06
+SHINGLE_KINDS = {WORD_SHINGLE: "word3", CHAR_SHINGLE: "char5"}
+MINHASH_PREFIX = b"\x05"
+MINHASH_SIZE = 64
+NO_MIN = 0xFFFFFFFF
+
+
+def shingles(words):
+    """(tag, distinct shingles in ascending order): word 3-shingles from six
+    words up, else character 5-shingles of the normalized text."""
+    if len(words) >= 6:
+        return WORD_SHINGLE, sorted({" ".join(words[i:i + 3]) for i in range(len(words) - 2)})
+    text = " ".join(words)
+    if len(text) >= 5:
+        return CHAR_SHINGLE, sorted({text[i:i + 5] for i in range(len(text) - 4)})
+    return CHAR_SHINGLE, [text] if text else []
+
+
+def shingle_value(k_feat, tag, shingle):
+    """v(x) = HMAC-SHA256(K_feat, tag || x), 32 bytes."""
+    if tag not in SHINGLE_KINDS:
+        raise LedgerError("shingle tag 0x%02x isn't 0x05 or 0x06" % tag)
+    return hmac_sha256(k_feat, u8(tag) + shingle.encode("utf-8"))
+
+
+def minhash_values(v):
+    """The 64 values of one shingle: value 8k + r is bytes 4r to 4r+4 of
+    SHA-256(0x05 || v || u8(k)), big-endian."""
+    if len(v) != 32:
+        raise LedgerError("a per-shingle value is 32 bytes")
+    out = []
+    for k in range(8):
+        block = sha256(MINHASH_PREFIX + v + u8(k))
+        out += [int.from_bytes(block[i:i + 4], "big") for i in range(0, 32, 4)]
+    return out
+
+
+def sketch(values):
+    """The 64-value MinHash of a set of per-shingle values; 0xffffffff
+    throughout for the empty set."""
+    mh = [NO_MIN] * MINHASH_SIZE
+    for v in values:
+        for i, h in enumerate(minhash_values(v)):
+            if h < mh[i]:
+                mh[i] = h
+    return mh
+
+
+def sketch_bytes(mh):
+    return b"".join(x.to_bytes(4, "big") for x in mh)
+
+
+def sketch_from_bytes(data):
+    if len(data) != 4 * MINHASH_SIZE:
+        raise LedgerError("a sketch is 256 bytes")
+    return [int.from_bytes(data[i:i + 4], "big") for i in range(0, len(data), 4)]
+
+
+def jaccard_matches(a, b):
+    """The estimate of the Jaccard similarity is matches / 64."""
+    return sum(1 for x, y in zip(a, b) if x == y)
+
+
+# 10.6 The 16-byte keyed values and edit hunks.
+
+FEAT_ERROR = 0x01
+FEAT_TEMPLATE = 0x02
+FEAT_COMMAND = 0x03
+FEAT_PATH = 0x04
+
+
+def keyed16(k_feat, tag, text):
+    """HMAC-SHA256(K_feat, tag || text)[0:16]."""
+    if tag not in (FEAT_ERROR, FEAT_TEMPLATE, FEAT_COMMAND, FEAT_PATH):
+        raise LedgerError("feature tag 0x%02x isn't 0x01 to 0x04" % tag)
+    return hmac_sha256(k_feat, u8(tag) + text.encode("utf-8"))[:16]
+
+
+def command_text(cmd):
+    """A command line with its whitespace collapsed to single spaces."""
+    return " ".join(words_of(cmd))
+
+
+def check_path_form(path):
+    """10.6's path form: '/' separators, no empty, '.' or '..' component, no
+    trailing '/'; relative to the project root, or absolute from '/' or an
+    upper-case drive 'X:/'."""
+    body = path
+    if len(path) >= 3 and "A" <= path[0] <= "Z" and path[1:3] == ":/":
+        body = path[3:]
+    elif path.startswith("/"):
+        body = path[1:]
+    if "\\" in path or any(part in ("", ".", "..") for part in body.split("/")):
+        raise LedgerError("path %s isn't in the form of spec 10.6" % json.dumps(path))
+    return path
+
+
+def hunk(k_feat, path, old_start, old_lines, new_start, new_lines):
+    """One edit hunk as f carries it: the path's keyed value and the hunk
+    header's four numbers, @@ -old_start,old_lines +new_start,new_lines @@."""
+    for name, v in (("old_start", old_start), ("old_lines", old_lines),
+                    ("new_start", new_start), ("new_lines", new_lines)):
+        if not 0 <= v < 1 << 31:
+            raise LedgerError("%s %d is out of range" % (name, v))
+    if (old_lines and not old_start) or (new_lines and not new_start):
+        raise LedgerError("a hunk with lines starts at line 1 or later")
+    return {"p": keyed16(k_feat, FEAT_PATH, check_path_form(path)).hex(),
+            "os": old_start, "ol": old_lines, "ns": new_start, "nl": new_lines}
+
+
+# 10.7 The feature map f, version 1. Members in this order: v, mh, th, es,
+# pc, h, ch, each present only where 10.7 says.
+
+FEATURES_V = 1
+PROMPT_CLASSES = ("substantive", "low_effort", "answer", "error_paste")
+FEATURE_RTYPES = (PROMPT_SUBMIT, AGENT_TOOL, SHELL_COMMAND, CLI_TRACK)
+
+
+def prompt_features(k_feat, text, prompt_class):
+    """f for prompt.submit and cli.track, and the per-shingle values."""
+    if prompt_class not in PROMPT_CLASSES:
+        raise LedgerError("prompt class %s isn't one of %s" % (json.dumps(prompt_class), ", ".join(PROMPT_CLASSES)))
+    _, words = normalize(text)
+    tag, xs = shingles(words)
+    values = [shingle_value(k_feat, tag, x) for x in xs]
+    f = {"v": FEATURES_V, "mh": sketch_bytes(sketch(values)).hex(),
+         "th": keyed16(k_feat, FEAT_TEMPLATE, " ".join(words)).hex()}
+    sig = error_signature(text)
+    if sig is not None:
+        f["es"] = keyed16(k_feat, FEAT_ERROR, sig).hex()
+    f["pc"] = prompt_class
+    return f, values
+
+
+def tool_features(k_feat, hunks, command):
+    """f for agent.tool (hunks may be empty) and shell.command (hunks None)."""
+    f = {"v": FEATURES_V}
+    if hunks:
+        f["h"] = [hunk(k_feat, *h) for h in hunks]
+    cmd = command_text(command or "")
+    if cmd:
+        f["ch"] = keyed16(k_feat, FEAT_COMMAND, cmd).hex()
+    return f
+
+
+# 10.8 What CC8 reveals: every distinct shingle's value, ascending, each
+# with the shingle's text unless it touches a removed span.
+
+SHINGLE_VERDICTS = ("ok", "bad_entry", "sketch")
+
+
+def verify_shingle_reveal(mh, entries):
+    """entries are (v, x) with x None when hidden. Returns (verdict, index)."""
+    prev = None
+    for i, (v, x) in enumerate(entries):
+        if len(v) != 32 or (prev is not None and not prev < v):
+            return "bad_entry", i
+        if x is not None and (not x or utf8_or_none(x) is None):
+            return "bad_entry", i
+        prev = v
+    if sketch([v for v, _ in entries]) != mh:
+        return "sketch", None
+    return "ok", None
+
+
+def utf8_or_none(x):
+    """x decoded, or None when it isn't UTF-8."""
+    try:
+        return x.decode("utf-8")
+    except UnicodeDecodeError:
+        return None
+
+
+# 10.9 The challenge draw of DESIGN 7.5 step 4.
+
+COMMIT_DRAW = 2
+
+
+def draw_seed(r, metadata):
+    """seed = SHA-256(r || SHA-256(metadata reveal bytes))."""
+    if len(r) != 32:
+        raise LedgerError("r is 32 bytes")
+    return sha256(r + sha256(metadata))
+
+
+def draw_score(seed, device_id, seq):
+    """HMAC-SHA256(seed, u8(len(device_id)) || device_id || u64(seq))."""
+    if not 1 <= seq < 1 << 64:
+        raise LedgerError("seq %d is out of range" % seq)
+    return hmac_sha256(seed, device_field(device_id) + u64(seq))
+
+
+def commit_score(seed, commit_id):
+    """HMAC-SHA256(seed, 0x00 || the commit id's bytes)."""
+    if len(commit_id) not in (20, 32):
+        raise LedgerError("a commit id is 20 or 32 bytes")
+    return hmac_sha256(seed, b"\x00" + commit_id)
+
+
+def challenge_k(pool):
+    """CHALLENGE_K = max(10, ceil(pool / 10)), capped at 30."""
+    return min(30, max(10, (pool + 9) // 10))
+
+
+def draw(seed, pool):
+    """The drawn (device_id, seq) items, smallest score first."""
+    if len(set(pool)) != len(pool):
+        raise LedgerError("a pool lists each (device_id, seq) once")
+    ranked = sorted(pool, key=lambda item: (draw_score(seed, *item), key_bytes("device_id", item[0]), item[1]))
+    return ranked[:min(challenge_k(len(pool)), len(pool))]
+
+
+def draw_commits(seed, commits):
+    """The interview commits: the two with the smallest scores."""
+    if len(set(commits)) != len(commits):
+        raise LedgerError("a commit pool lists each commit once")
+    return sorted(commits, key=lambda c: commit_score(seed, c))[:COMMIT_DRAW]
+
+
+# ---------------------------------------------------------------------------
 # 11. check
 
 FORMAT = "pairtime-ledger-vectors-v1"
