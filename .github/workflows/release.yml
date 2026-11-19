@@ -160,6 +160,40 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Check that both checks catch tampering
+        # A check that can't fail proves nothing. Each copy below breaks one
+        # thing, and both verifiers must refuse it.
+        run: |
+          pub=$STAGE/snapshot-key.pub
+          refuse() {
+            if "$TOOL" verify -dir "$1" -pub "$pub" > /dev/null 2>&1; then
+              echo "::error::tools/release verify accepted $2"
+              exit 1
+            fi
+            if bash tools/release/check.sh "$1" "$pub" > /dev/null 2>&1; then
+              echo "::error::check.sh accepted $2"
+              exit 1
+            fi
+            echo "both refused $2"
+          }
+          v=${VERSION#v}
+
+          cp -r "$STAGE/dist" "$RUNNER_TEMP/bad-archive"
+          cp "$STAGE/dist/pairtime_${v}_linux_arm64.tar.gz" "$RUNNER_TEMP/bad-archive/pairtime_${v}_linux_amd64.tar.gz"
+          refuse "$RUNNER_TEMP/bad-archive" "an archive swapped for another target's"
+
+          cp -r "$STAGE/dist" "$RUNNER_TEMP/bad-payload"
+          jq -c '.payload |= (@base64d | sub("\"size\": "; "\"size\": 1") | @base64)' \
+            "$STAGE/dist/manifest.json" > "$RUNNER_TEMP/bad-payload/manifest.json"
+          refuse "$RUNNER_TEMP/bad-payload" "a payload changed after signing"
+
+          cp -r "$STAGE/dist" "$RUNNER_TEMP/bad-signature"
+          "$TOOL" sign -throwaway -payload "$STAGE/payload.json" -out "$RUNNER_TEMP/other-manifest.json"
+          other=$(jq -r '.signatures[0].sig' "$RUNNER_TEMP/other-manifest.json")
+          jq -c --arg sig "$other" '.signatures[0].sig = $sig' \
+            "$STAGE/dist/manifest.json" > "$RUNNER_TEMP/bad-signature/manifest.json"
+          refuse "$RUNNER_TEMP/bad-signature" "another key's signature under the trusted key's id"
+
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: pairtime-${{ env.VERSION }}
