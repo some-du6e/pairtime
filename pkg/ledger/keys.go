@@ -33,7 +33,9 @@ const nonceTag = 0x01
 // Like K_dev they never leave the device unencrypted (DESIGN 4.3, 7.11),
 // and nothing may log them. The fields are unexported, so encoding/json
 // writes Keys as {}, and Keys formats as a placeholder under every fmt
-// verb.
+// verb. Hold it by pointer, as DeriveKeys returns it: fmt can't call
+// Format on a Keys value kept in another struct's unexported field, and
+// would print its bytes.
 type Keys struct {
 	leaf, token, feat, vault [KeySize]byte
 }

@@ -373,8 +373,10 @@ func EventRecord(k *Keys, ev event.Event) (Record, error) {
 	if !ok {
 		return Record{}, fmt.Errorf("ledger: no rtype for kind %q", kind)
 	}
-	if err := ev.Validate(); err != nil {
-		return Record{}, fmt.Errorf("ledger: %s event %d isn't valid: %w", kind, ev.Seq, err)
+	if ev.Validate() != nil {
+		// Validate's errors can quote a field's value, which may be
+		// content, so this one doesn't carry them. Call Validate for them.
+		return Record{}, fmt.Errorf("ledger: %s event %d fails event.Validate", kind, ev.Seq)
 	}
 	if rtype.osRecord() && ev.ProjectKey != "" {
 		return Record{}, fmt.Errorf("ledger: %s events have no project_key", kind)
