@@ -1,0 +1,328 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/some-du6e/pairtime/main/docs/schema/event.schema.json",
+  "title": "pairtime event",
+  "description": "One normalized pairtime event (docs/design/struggle-metric.md section 1): the envelope fields, then kind, then the kind's payload under data. Go's pkg/event is the reference implementation, and its tests fail if this file and the Go types drift. Properties marked \"x-local\": true hold prompt text or hashes of private things; they never leave the device. Identifiers that stand in for something private are opaque keys (see $defs/key), so a path, command line or email address can't pass as one.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["event_id", "device_id", "seq", "t", "mono", "boot_id", "source", "harness", "session_key", "chain_hash", "kind", "data"],
+  "properties": {
+    "event_id": {"$ref": "#/$defs/uuid_v7", "description": "Unique and time-ordered."},
+    "device_id": {"$ref": "#/$defs/key", "description": "A random per-install id, never derived from hardware."},
+    "seq": {"type": "integer", "minimum": 1, "description": "Per-device sequence number, gapless from 1. The server uses it for exactly-once ingest."},
+    "t": {"$ref": "#/$defs/unix_ms", "description": "Client wall time when the adapter saw the event."},
+    "mono": {"type": "integer", "minimum": 0, "description": "Monotonic clock reading in milliseconds at the same moment, so the server can re-anchor t within one boot."},
+    "boot_id": {"$ref": "#/$defs/key", "description": "Linux's boot_id, or an id generated per boot elsewhere."},
+    "source": {"$ref": "#/$defs/source"},
+    "harness": {"$ref": "#/$defs/harness"},
+    "harness_version": {"$ref": "#/$defs/text64", "description": "The harness's version as it reports it."},
+    "session_key": {"$ref": "#/$defs/key", "description": "The harness session id salted per device, or \"none\" for OS and git events."},
+    "project_key": {"$ref": "#/$defs/key", "description": "The client's id for the project. Absent when no project applies."},
+    "chain_hash": {"$ref": "#/$defs/hash", "description": "Links this event to the previous one in the device's hash chain."},
+    "kind": {"$ref": "#/$defs/kind"},
+    "data": {"type": "object", "description": "The kind's payload; see the rules in allOf."}
+  },
+  "allOf": [
+    {"if": {"required": ["kind"], "properties": {"kind": {"const": "session.start"}}},
+     "then": {"properties": {"data": {"$ref": "#/$defs/session.start"}, "harness": {"not": {"const": "none"}}, "session_key": {"not": {"const": "none"}}}}},
+    {"if": {"required": ["kind"], "properties": {"kind": {"const": "session.end"}}},
+     "then": {"properties": {"data": {"$ref": "#/$defs/session.end"}, "harness": {"not": {"const": "none"}}, "session_key": {"not": {"const": "none"}}}}},
+    {"if": {"required": ["kind"], "properties": {"kind": {"const": "prompt.submit"}}},
+     "then": {"properties": {"data": {"$ref": "#/$defs/prompt.submit"}, "harness": {"not": {"const": "none"}}, "session_key": {"not": {"const": "none"}}}}},
+    {"if": {"required": ["kind"], "properties": {"kind": {"const": "agent.output"}}},
+     "then": {"properties": {"data": {"$ref": "#/$defs/agent.output"}, "harness": {"not": {"const": "none"}}, "session_key": {"not": {"const": "none"}}}}},
+    {"if": {"required": ["kind"], "properties": {"kind": {"const": "agent.tool"}}},
+     "then": {"properties": {"data": {"$ref": "#/$defs/agent.tool"}, "harness": {"not": {"const": "none"}}, "session_key": {"not": {"const": "none"}}}}},
+    {"if": {"required": ["kind"], "properties": {"kind": {"const": "agent.permission"}}},
+     "then": {"properties": {"data": {"$ref": "#/$defs/agent.permission"}, "harness": {"not": {"const": "none"}}, "session_key": {"not": {"const": "none"}}}}},
+    {"if": {"required": ["kind"], "properties": {"kind": {"const": "agent.interrupt"}}},
+     "then": {"properties": {"data": {"$ref": "#/$defs/agent.interrupt"}, "harness": {"not": {"const": "none"}}, "session_key": {"not": {"const": "none"}}}}},
+    {"if": {"required": ["kind"], "properties": {"kind": {"const": "agent.queue"}}},
+     "then": {"properties": {"data": {"$ref": "#/$defs/agent.queue"}, "harness": {"not": {"const": "none"}}, "session_key": {"not": {"const": "none"}}}}},
+    {"if": {"required": ["kind"], "properties": {"kind": {"const": "agent.stop"}}},
+     "then": {"properties": {"data": {"$ref": "#/$defs/agent.stop"}, "harness": {"not": {"const": "none"}}, "session_key": {"not": {"const": "none"}}}}},
+    {"if": {"required": ["kind"], "properties": {"kind": {"const": "agent.subagent"}}},
+     "then": {"properties": {"data": {"$ref": "#/$defs/agent.subagent"}, "harness": {"not": {"const": "none"}}, "session_key": {"not": {"const": "none"}}}}},
+    {"if": {"required": ["kind"], "properties": {"kind": {"const": "editor.activity"}}},
+     "then": {"properties": {"data": {"$ref": "#/$defs/editor.activity"}}}},
+    {"if": {"required": ["kind"], "properties": {"kind": {"const": "shell.command"}}},
+     "then": {"properties": {"data": {"$ref": "#/$defs/shell.command"}}}},
+    {"if": {"required": ["kind"], "properties": {"kind": {"const": "git.change"}}},
+     "then": {"properties": {"data": {"$ref": "#/$defs/git.change"}, "source": {"const": "git"}, "harness": {"const": "none"}, "session_key": {"const": "none"}}}},
+    {"if": {"required": ["kind"], "properties": {"kind": {"const": "os.presence"}}},
+     "then": {"properties": {"data": {"$ref": "#/$defs/os.presence"}, "source": {"const": "os"}, "harness": {"const": "none"}, "session_key": {"const": "none"}}}},
+    {"if": {"required": ["kind"], "properties": {"kind": {"const": "os.focus"}}},
+     "then": {"properties": {"data": {"$ref": "#/$defs/os.focus"}, "source": {"const": "os"}, "harness": {"const": "none"}, "session_key": {"const": "none"}}}},
+    {"if": {"required": ["kind"], "properties": {"kind": {"const": "os.power"}}},
+     "then": {"properties": {"data": {"$ref": "#/$defs/os.power"}, "source": {"const": "os"}, "harness": {"const": "none"}, "session_key": {"const": "none"}}}},
+    {"if": {"required": ["kind"], "properties": {"kind": {"const": "otel.active_time"}}},
+     "then": {"properties": {"data": {"$ref": "#/$defs/otel.active_time"}, "source": {"const": "otel"}}}},
+    {"if": {"required": ["kind"], "properties": {"kind": {"const": "cli.track"}}},
+     "then": {"properties": {"data": {"$ref": "#/$defs/cli.track"}, "source": {"enum": ["cli", "mcp"]}}}}
+  ],
+  "$defs": {
+    "key": {"type": "string", "pattern": "^[A-Za-z0-9_-]{1,128}$", "description": "An opaque key: 1 to 128 letters, digits, '_' or '-'."},
+    "key_list": {"type": "array", "maxItems": 1024, "items": {"$ref": "#/$defs/key"}},
+    "uuid_v7": {"type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$", "description": "A UUIDv7 (RFC 9562) in canonical lowercase text form."},
+    "unix_ms": {"type": "integer", "minimum": 1577836800000, "exclusiveMaximum": 4102444800000, "description": "Unix milliseconds, UTC. The bounds (2020 to 2100) catch a time in seconds or microseconds."},
+    "hash": {"type": "string", "pattern": "^[0-9a-f]{64}$", "description": "A SHA-256 digest as 64 lowercase hex digits."},
+    "git_id": {"type": "string", "pattern": "^[0-9a-f]{40}([0-9a-f]{24})?$", "description": "A git object id: 40 lowercase hex digits, or 64 in a SHA-256 repository."},
+    "count": {"type": "integer", "minimum": 0},
+    "seconds": {"type": "number", "minimum": 0},
+    "text64": {"type": "string", "maxLength": 64, "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*$", "description": "One line of text: no control characters."},
+
+    "kind": {"enum": ["session.start", "session.end", "prompt.submit", "agent.output", "agent.tool", "agent.permission", "agent.interrupt", "agent.queue", "agent.stop", "agent.subagent", "editor.activity", "shell.command", "git.change", "os.presence", "os.focus", "os.power", "otel.active_time", "cli.track"]},
+    "source": {"enum": ["hook", "log", "otel", "os", "editor", "shell", "git", "cli", "mcp"], "description": "cli is the AGENTS.md fallback, pairtime track."},
+    "harness": {"enum": ["claude_code", "cursor", "copilot", "codex", "gemini", "devin", "cline", "opencode", "other", "none"], "description": "other is an agent pairtime has no value for yet; none marks OS and git events."},
+    "start_kind": {"enum": ["startup", "resume", "clear", "compact", "fork"]},
+    "entrypoint": {"enum": ["cli", "ide", "desktop", "sdk", "exec", "mcp", "cloud", "unknown"]},
+    "parent_class": {"enum": ["terminal_app", "ide", "multiplexer", "remote", "script_runtime", "scheduler", "agent", "unknown"]},
+    "origin_declared": {"enum": ["cron", "loop", "goal", "subagent", "cross_session", "followup", "none"]},
+    "tool_class": {"enum": ["edit", "write", "read", "bash", "test", "build", "search", "web", "subagent", "other"]},
+    "decision": {"enum": ["accept", "reject", "edit", "cancel"]},
+    "decided_by": {"enum": ["user", "config", "hook"]},
+    "stop_reason": {"enum": ["end_turn", "question", "interrupted", "error", "limit"]},
+    "subagent_phase": {"enum": ["start", "stop"]},
+    "editor_act": {"enum": ["edit", "navigate", "save", "open", "debug", "task"]},
+    "edit_source": {"enum": ["human", "tab", "agent", "paste", "unknown"]},
+    "cmd_class": {"enum": ["test", "build", "run", "git", "install", "other"]},
+    "git_op": {"enum": ["commit", "amend", "rebase", "reset", "checkout", "merge", "revert", "push", "stash"]},
+    "actor": {"enum": ["human", "agent", "unknown"]},
+    "app_class": {"enum": ["terminal", "editor", "agent_app", "browser", "chat_app", "other", "none"]},
+    "power_op": {"enum": ["suspend", "resume", "lock", "unlock"]},
+    "active_time_type": {"enum": ["user", "cli"]},
+
+    "session.start": {
+      "description": "A harness session started, resumed, was cleared, compacted or forked.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["start_kind", "entrypoint", "parent_class", "has_tty"],
+      "properties": {
+        "start_kind": {"$ref": "#/$defs/start_kind"},
+        "entrypoint": {"$ref": "#/$defs/entrypoint"},
+        "automation_flags": {"$ref": "#/$defs/key_list", "description": "The harness's own automation tells, such as background_agent."},
+        "parent_class": {"$ref": "#/$defs/parent_class", "description": "The nearest ancestor process that isn't a plain interactive shell."},
+        "has_tty": {"type": "boolean"},
+        "permission_mode": {"$ref": "#/$defs/key", "description": "As the harness names it, such as acceptEdits or on-request."}
+      }
+    },
+    "session.end": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [],
+      "properties": {
+        "reason": {"$ref": "#/$defs/key", "description": "The harness's own end reason, such as logout."}
+      }
+    },
+    "prompt.submit": {
+      "description": "A prompt reached the agent. Whether a person typed it is decided later, from OS evidence.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["turn_key", "len_chars", "pasted_chars", "typed_len_est", "origin_declared", "matches_pending_cron", "answers_question", "low_effort"],
+      "properties": {
+        "turn_key": {"$ref": "#/$defs/key"},
+        "len_chars": {"$ref": "#/$defs/count"},
+        "pasted_chars": {"$ref": "#/$defs/count", "description": "At most len_chars."},
+        "typed_len_est": {"$ref": "#/$defs/count", "description": "len_chars - pasted_chars."},
+        "minhash": {"type": "array", "minItems": 64, "maxItems": 64, "items": {"type": "integer", "minimum": 0, "maximum": 4294967295}, "x-local": true, "description": "MinHash sketch of the normalized prompt, for re-roll detection."},
+        "template_hash": {"$ref": "#/$defs/key", "x-local": true},
+        "error_sig": {"$ref": "#/$defs/key", "x-local": true, "description": "Hashed signature of an error pasted into the prompt."},
+        "slash_command": {"type": "string", "pattern": "^/[A-Za-z0-9_:.-]{1,64}$", "description": "The command name only, never its arguments."},
+        "origin_declared": {"$ref": "#/$defs/origin_declared"},
+        "matches_pending_cron": {"type": "boolean"},
+        "answers_question": {"type": "boolean"},
+        "low_effort": {"type": "boolean"},
+        "text": {"type": "string", "contentEncoding": "base64", "pattern": "^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$", "x-local": true, "description": "The prompt text, encrypted on the device; standard padded base64. Plain prompt text never goes in an event."}
+      }
+    },
+    "agent.output": {
+      "description": "Output the agent showed in a turn.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["turn_key", "words", "code_lines", "is_final", "asks_question", "offers_options"],
+      "properties": {
+        "turn_key": {"$ref": "#/$defs/key"},
+        "words": {"$ref": "#/$defs/count", "description": "Displayed assistant text only, not hidden thinking."},
+        "code_lines": {"$ref": "#/$defs/count", "description": "Lines inside fenced code blocks."},
+        "is_final": {"type": "boolean"},
+        "asks_question": {"type": "boolean"},
+        "offers_options": {"type": "boolean"}
+      }
+    },
+    "agent.tool": {
+      "description": "One tool call by the agent.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tool_class", "lines_added", "lines_removed", "visible_output_lines", "t_start", "t_end"],
+      "properties": {
+        "tool_class": {"$ref": "#/$defs/tool_class"},
+        "files": {"$ref": "#/$defs/key_list", "description": "Per-device hashes of the paths the tool touched."},
+        "lines_added": {"$ref": "#/$defs/count"},
+        "lines_removed": {"$ref": "#/$defs/count"},
+        "cmd_hash": {"$ref": "#/$defs/key", "x-local": true, "description": "Hash of the normalized command, for tools that run one."},
+        "exit_code": {"type": "integer", "description": "Absent for tools that don't run a process."},
+        "error_sig": {"$ref": "#/$defs/key"},
+        "visible_output_lines": {"$ref": "#/$defs/count"},
+        "t_start": {"$ref": "#/$defs/unix_ms"},
+        "t_end": {"$ref": "#/$defs/unix_ms", "description": "Not before t_start."}
+      }
+    },
+    "agent.permission": {
+      "description": "A permission request and its answer.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["requested_at", "answered_at", "decision", "decided_by"],
+      "properties": {
+        "requested_at": {"$ref": "#/$defs/unix_ms"},
+        "answered_at": {"$ref": "#/$defs/unix_ms", "description": "Not before requested_at."},
+        "decision": {"$ref": "#/$defs/decision"},
+        "decided_by": {"$ref": "#/$defs/decided_by"}
+      }
+    },
+    "agent.interrupt": {
+      "description": "The person stopped a running turn.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["turn_key"],
+      "properties": {
+        "turn_key": {"$ref": "#/$defs/key"}
+      }
+    },
+    "agent.queue": {
+      "description": "A message typed while the agent was working.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["turn_key", "len_chars"],
+      "properties": {
+        "turn_key": {"$ref": "#/$defs/key"},
+        "len_chars": {"$ref": "#/$defs/count"}
+      }
+    },
+    "agent.stop": {
+      "description": "A turn ended.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["turn_key", "stop_reason", "stop_hook_active"],
+      "properties": {
+        "turn_key": {"$ref": "#/$defs/key"},
+        "stop_reason": {"$ref": "#/$defs/stop_reason"},
+        "stop_hook_active": {"type": "boolean", "description": "A stop hook made the turn continue, as /goal does."},
+        "pending_crons": {"type": "array", "maxItems": 1024, "items": {"$ref": "#/$defs/pending_cron"}, "x-local": true, "description": "The session's scheduled prompts at this stop. Device-only: the prefix hashes are digests of prompt text."}
+      }
+    },
+    "pending_cron": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["prefix_hash", "schedule"],
+      "properties": {
+        "prefix_hash": {"$ref": "#/$defs/key", "description": "Hash of the scheduled prompt's first 1,000 characters."},
+        "schedule": {"$ref": "#/$defs/text64", "minLength": 1, "description": "As the harness reports it, such as */20 * * * *."}
+      }
+    },
+    "agent.subagent": {
+      "description": "A subagent started or stopped.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["phase", "agent_key"],
+      "properties": {
+        "phase": {"$ref": "#/$defs/subagent_phase"},
+        "agent_key": {"$ref": "#/$defs/key"}
+      }
+    },
+    "editor.activity": {
+      "description": "An edit, save, navigation or other act in an editor, usually from a WakaTime heartbeat.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["editor", "act", "lines_changed", "edit_source"],
+      "properties": {
+        "editor": {"$ref": "#/$defs/key", "description": "The editor, such as vscode or neovim."},
+        "act": {"$ref": "#/$defs/editor_act"},
+        "file_hash": {"$ref": "#/$defs/key", "description": "Per-device hash of the file's path."},
+        "lines_changed": {"$ref": "#/$defs/count"},
+        "edit_source": {"$ref": "#/$defs/edit_source"}
+      }
+    },
+    "shell.command": {
+      "description": "A command run in a shell.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["cmd_class", "t_start", "t_end", "interactive"],
+      "properties": {
+        "cmd_class": {"$ref": "#/$defs/cmd_class"},
+        "cmd_hash": {"$ref": "#/$defs/key", "x-local": true},
+        "exit_code": {"type": "integer", "description": "Absent when the source doesn't record one, as zsh and fish history files don't."},
+        "t_start": {"$ref": "#/$defs/unix_ms"},
+        "t_end": {"$ref": "#/$defs/unix_ms", "description": "Not before t_start; equal to it when the run's length is unknown."},
+        "interactive": {"type": "boolean"},
+        "error_sig": {"$ref": "#/$defs/key"}
+      }
+    },
+    "git.change": {
+      "description": "A commit, checkout, push or other change seen in a repo's .git directory.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["op", "sha", "files_changed", "insertions", "deletions", "actor"],
+      "properties": {
+        "op": {"$ref": "#/$defs/git_op"},
+        "sha": {"$ref": "#/$defs/git_id", "description": "The commit the operation produced or moved HEAD to."},
+        "parents": {"type": "array", "maxItems": 1024, "items": {"$ref": "#/$defs/git_id"}},
+        "files_changed": {"$ref": "#/$defs/count"},
+        "insertions": {"$ref": "#/$defs/count"},
+        "deletions": {"$ref": "#/$defs/count"},
+        "actor": {"$ref": "#/$defs/actor"},
+        "agent_trailer": {"$ref": "#/$defs/key", "description": "The agent a commit trailer credits, such as claude or aider. Never the raw trailer, which can carry a person's name and email address."}
+      }
+    },
+    "os.presence": {
+      "description": "One idle-time sample, taken every 15 seconds.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["idle_any_s", "idle_keys_s", "locked"],
+      "properties": {
+        "idle_any_s": {"$ref": "#/$defs/seconds", "description": "Seconds since the last keyboard or mouse input."},
+        "idle_keys_s": {"type": ["number", "null"], "minimum": 0, "description": "Seconds since the last key press, or null where the OS can't tell keys from other input. Never less than idle_any_s, give or take a second."},
+        "locked": {"type": "boolean"}
+      }
+    },
+    "os.focus": {
+      "description": "The foreground app changed.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["app_class"],
+      "properties": {
+        "app_class": {"$ref": "#/$defs/app_class"},
+        "app_hash": {"$ref": "#/$defs/key", "x-local": true, "description": "Per-device hash of the focused app's identity."},
+        "hosted_sessions": {"$ref": "#/$defs/key_list", "description": "Session keys of harness processes running under the focused window's process."},
+        "focus_project": {"$ref": "#/$defs/key", "description": "The project the focused window resolves to."}
+      }
+    },
+    "os.power": {
+      "description": "The machine suspended, resumed, locked or unlocked.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["op"],
+      "properties": {
+        "op": {"$ref": "#/$defs/power_op"}
+      }
+    },
+    "otel.active_time": {
+      "description": "Claude Code's own active-time metric. It calibrates the scorer and is never credit.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "seconds"],
+      "properties": {
+        "type": {"$ref": "#/$defs/active_time_type"},
+        "seconds": {"$ref": "#/$defs/seconds"}
+      }
+    },
+    "cli.track": {
+      "description": "The coding agent ran pairtime track, following the AGENTS.md entry. The model's own claim, never an anchor by itself.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [],
+      "properties": {
+        "label": {"type": "string", "maxLength": 300, "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*$", "x-local": true, "description": "What the model passed, on one line: a summary or the start of the user's message. Prompt text, so it stays on the device."}
+      }
+    }
+  }
+}

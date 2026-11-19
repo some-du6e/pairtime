@@ -1,0 +1,132 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# The only place pairtime is built and tested. One job on purpose: the
+# account's Actions capacity is shared with another busy project.
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    name: lint, test, cross-compile
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      # pairtime never uses cgo (AGENTS.md). Vet, test and build all run
+      # without it, the same way the shipped binaries are built.
+      CGO_ENABLED: "0"
+    defaults:
+      run:
+        shell: bash
+    steps:
+      # Actions are pinned to commit SHAs; tags can be moved. Dependabot bumps them.
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: go.mod
+          # There is no go.sum (stdlib only), so key the build cache on go.mod.
+          cache-dependency-path: go.mod
+
+      - name: License gate
+        run: |
+          fail=0
+          if ! head -n 2 LICENSE | grep -q "GNU AFFERO GENERAL PUBLIC LICENSE"; then
+            echo "::error file=LICENSE::LICENSE is not the GNU AGPL text"
+            fail=1
+          fi
+          header="// SPDX-License-Identifier: AGPL-3.0-or-later"
+          while IFS= read -r f; do
+            if [ "$(head -n 1 "$f")" != "$header" ]; then
+              echo "::error file=$f,line=1::first line must be: $header"
+              fail=1
+            fi
+          done < <(git ls-files '*.go')
+          exit "$fail"
+
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            while IFS= read -r f; do
+              echo "::error file=$f::not gofmt-formatted; run gofmt -w $f"
+            done <<< "$unformatted"
+            exit 1
+          fi
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go test
+        run: go test ./...
+
+      - name: Cross-compile
+        run: |
+          # Targets from docs/research/client-platform.md section 7. windows/386
+          # stays in while its open question 2 (do 32-bit machines exist?) is open.
+          targets="windows/amd64 windows/386 windows/arm64 darwin/amd64 darwin/arm64 linux/amd64 linux/arm64"
+          # Client binary budget: under 15 MB, client-platform.md sections 7 and 9.
+          budget=15000000
+
+          pkg=github.com/some-du6e/pairtime/internal/version
+          commit=$(git rev-parse HEAD)
+          date=$(TZ=UTC git log -1 --format=%cd --date=format-local:%Y-%m-%dT%H:%M:%SZ)
+          ldflags="-s -w -X $pkg.Version=v0.0.0-ci -X $pkg.Commit=$commit -X $pkg.Date=$date"
+          # Outside the checkout, so the build's VCS stamp doesn't see the
+          # binaries as uncommitted changes.
+          dist="$RUNNER_TEMP/dist"
+
+          {
+            echo "### Binary sizes (stripped, CGO_ENABLED=0)"
+            echo
+            echo "| target | binary | bytes |"
+            echo "|---|---|---:|"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          fail=0
+          for target in $targets; do
+            goos=${target%/*}
+            goarch=${target#*/}
+            ext=""
+            if [ "$goos" = windows ]; then ext=".exe"; fi
+            for cmd in pairtime pairtimed; do
+              out="$dist/${goos}_${goarch}/$cmd$ext"
+              # -buildvcs=false: the -X values must supply commit and date,
+              # so a flag that stops applying shows up as an empty field.
+              GOOS=$goos GOARCH=$goarch go build -trimpath -buildvcs=false -ldflags="$ldflags" -o "$out" "./cmd/$cmd"
+              size=$(stat -c %s "$out")
+              printf '%-14s %-10s %10d bytes\n' "$target" "$cmd" "$size"
+              echo "| $target | $cmd | $size |" >> "$GITHUB_STEP_SUMMARY"
+              if [ "$cmd" = pairtime ] && [ "$size" -gt "$budget" ]; then
+                echo "::error::$target $cmd is $size bytes, over the $budget-byte client budget"
+                fail=1
+              fi
+            done
+          done
+
+          # The runner is linux/amd64, so those binaries can run here. This
+          # catches a -X path that no longer matches the version package,
+          # which the linker would otherwise ignore without a word.
+          for cmd in pairtime pairtimed; do
+            got=$("$dist/linux_amd64/$cmd" version)
+            echo "$got"
+            case "$got" in
+              "$cmd v0.0.0-ci (commit ${commit:0:12}, $date, "*) ;;
+              *)
+                echo "::error::$cmd version didn't report the -ldflags values"
+                fail=1
+                ;;
+            esac
+          done
+          exit "$fail"
