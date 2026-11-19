@@ -1,0 +1,45 @@
+{
+  "fixture": "4.2-alternation",
+  "prompts": [
+    {
+      "turn_key": "t_a3b5a765ea66",
+      "t": 1795422780000,
+      "local": "19:33:00",
+      "text": "make the sidebar collapse into an icon rail on small screens",
+      "len_chars": 60,
+      "source": "invented: SM 4.2 names the prompts A and B without texts"
+    },
+    {
+      "turn_key": "t_e96fa5b99b6d",
+      "t": 1795422960000,
+      "local": "19:36:00",
+      "text": "keep the top bar pinned to the top of the page as you scroll",
+      "len_chars": 60,
+      "source": "invented: SM 4.2 names the prompts A and B without texts"
+    },
+    {
+      "turn_key": "t_1db5ec5bbe29",
+      "t": 1795423140000,
+      "local": "19:39:00",
+      "text": "make the sidebar collapse into an icon rail on small screens",
+      "len_chars": 60,
+      "source": "invented: SM 4.2 names the prompts A and B without texts"
+    },
+    {
+      "turn_key": "t_a433d069cb4d",
+      "t": 1795423320000,
+      "local": "19:42:00",
+      "text": "keep the top bar pinned to the top of the page as you scroll",
+      "len_chars": 60,
+      "source": "invented: SM 4.2 names the prompts A and B without texts"
+    },
+    {
+      "turn_key": "t_9e975cfb61c8",
+      "t": 1795423500000,
+      "local": "19:45:00",
+      "text": "make the sidebar collapse into an icon rail on small screens",
+      "len_chars": 60,
+      "source": "invented: SM 4.2 names the prompts A and B without texts"
+    }
+  ]
+}

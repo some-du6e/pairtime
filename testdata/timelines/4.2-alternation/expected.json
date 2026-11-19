@@ -1,0 +1,246 @@
+{
+  "fixture": "4.2-alternation",
+  "title": "Alternating two prompts: A, B, A, B, A",
+  "sm": "docs/design/struggle-metric.md 4.2",
+  "date": "2026-11-23",
+  "timezone": "Australia/Melbourne",
+  "utc_offset": "+11:00",
+  "os": "macos",
+  "input_keys": true,
+  "evidence": "A",
+  "witness": "witnessed",
+  "device": "d_61e266631200",
+  "projects": {"p_b2738424d7c2": "dashboard"},
+  "window": {"start": "2026-11-23T08:31:00Z", "end": "2026-11-23T08:46:00Z", "local": "19:31-19:46"},
+  "rows": [
+    {
+      "start": "2026-11-23T08:31:00Z",
+      "minutes": 1,
+      "local": "19:31",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_b2738424d7c2": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "derived": ["credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-23T08:32:00Z",
+      "minutes": 1,
+      "local": "19:32",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_b2738424d7c2": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "derived": ["credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-23T08:33:00Z",
+      "minutes": 1,
+      "local": "19:33",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_b2738424d7c2": {"P": 40, "SUP": 20}
+      },
+      "uncredited": {},
+      "agent_running_s": 60,
+      "derived": ["credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-23T08:34:00Z",
+      "minutes": 1,
+      "local": "19:34",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_b2738424d7c2": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "derived": ["credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-23T08:35:00Z",
+      "minutes": 1,
+      "local": "19:35",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_b2738424d7c2": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "derived": ["credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-23T08:36:00Z",
+      "minutes": 1,
+      "local": "19:36",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_b2738424d7c2": {"P": 40, "SUP": 20}
+      },
+      "uncredited": {},
+      "agent_running_s": 60,
+      "derived": ["credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-23T08:37:00Z",
+      "minutes": 1,
+      "local": "19:37",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_b2738424d7c2": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "derived": ["credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-23T08:38:00Z",
+      "minutes": 1,
+      "local": "19:38",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_b2738424d7c2": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "derived": ["credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-23T08:39:00Z",
+      "minutes": 1,
+      "local": "19:39",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_b2738424d7c2": {"P": 40, "SUP": 20}
+      },
+      "uncredited": {},
+      "agent_running_s": 60,
+      "derived": ["credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-23T08:40:00Z",
+      "minutes": 1,
+      "local": "19:40",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_b2738424d7c2": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "derived": ["credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-23T08:41:00Z",
+      "minutes": 1,
+      "local": "19:41",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_b2738424d7c2": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "derived": ["credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-23T08:42:00Z",
+      "minutes": 1,
+      "local": "19:42",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_b2738424d7c2": {"SUP": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 60,
+      "sm": "4.2, What a discount does: a discounted turn opens no anchor windows",
+      "derived": ["credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-23T08:43:00Z",
+      "minutes": 1,
+      "local": "19:43",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_b2738424d7c2": {"READ": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "4.2, What a discount does",
+      "derived": ["credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-23T08:44:00Z",
+      "minutes": 1,
+      "local": "19:44",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_b2738424d7c2": {"READ": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "4.2, What a discount does",
+      "derived": ["credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-23T08:45:00Z",
+      "minutes": 1,
+      "local": "19:45",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 0,
+      "credit": {},
+      "uncredited": {"X.reroll": 60},
+      "agent_running_s": 60,
+      "sm": "4.2, Re-roll: alternating A, B, A, B, A is caught at the third A",
+      "derived": ["credit", "uncredited", "agent_running_s"]
+    }
+  ],
+  "totals": {
+    "credited_s": 840,
+    "credited_by_project": {"p_b2738424d7c2": 840},
+    "credited_by_reason": {"P": 600, "SUP": 120, "READ": 120},
+    "uncredited": {"X.reroll": 60},
+    "agent_running_s": 300,
+    "excluded_loops_s": 60
+  },
+  "stated": [],
+  "approx": {},
+  "errata": [],
+  "notes": [
+    "SM 4.2 states the outcome, not minute rows: the third A is attempt 3 and discounted as X.reroll, the others are credited. Every row here follows from SM's rules applied to this timeline (README.md).",
+    "Each lead is 120 + 60 / 1.5 = 160 s, so it starts 20 s after the prompt before it, and the turn's 20 s bucket base covers those 20 s as SUP.",
+    "A3 is discounted, so its lead from 19:42:20 opens no window and B2's bucket is read instead: SUP while B2 runs, READ after. A3 resets the bucket to zero, so its own minute is X.reroll.",
+    "excluded_loops_s is the X.reroll seconds (SM 5.3)."
+  ]
+}
