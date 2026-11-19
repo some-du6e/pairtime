@@ -360,7 +360,57 @@ What pairtime should take from this:
 
 ### B4. On-device PII and secret stripping
 
+**Where redaction sits.** In the design in B6, raw prompts never leave the device in the normal path. Redaction matters in three places: (1) anything the client writes outside the encrypted spool (logs, crash reports, the local UI's cached summaries), (2) prompts revealed for submitted hours, and (3) any summary or label derived from prompt text. So the heavy work runs on a handful of revealed items, not on every prompt, which is what makes it affordable on an old laptop.
+
+**Tools, measured from their repos and model cards (2026-11-19):**
+
+| Tool | License | Version | What it is | Size and cost | Fit for pairtime |
+|---|---|---|---|---|---|
+| [gitleaks](https://github.com/gitleaks/gitleaks) rules (`config/gitleaks.toml`) | MIT | v8.30.1 (2026-03-21) | 222 `[[rules]]`, 130 with an entropy floor, each with keywords for a fast prefilter. Includes `anthropic-api-key` (`sk-ant-api03-[a-zA-Z0-9_\-]{93}AA`), `openai-api-key` (matches the `T3BlbkFJ` marker), `github-pat`, `github-fine-grained-pat`, `aws-access-token`, `discord-*`, `slack-bot-token`, `stripe-access-token`, `huggingface-access-token`, `npm-access-token`, `jwt`, `private-key`, and `generic-api-key` (entropy 3.5) | 98 KB of TOML; regexes are RE2 syntax, so they port as data to Go's `regexp` or Rust's `regex` crate (neither supports lookaround, which RE2 rules avoid) | **Yes, v1.** Run on every string before it is stored outside the spool or revealed |
+| [detect-secrets](https://github.com/Yelp/detect-secrets) | Apache-2.0 | v1.5.0 (2024-05-06) | Shannon-entropy plugins for base64 and hex strings, configurable limit 0-8 | Python | Borrow the entropy approach only; gitleaks covers the rest |
+| [TruffleHog](https://github.com/trufflesecurity/trufflehog) | AGPL-3.0 | v3.99.9 (2026-11-12) | Hundreds of detectors, many with live **verification** against the provider's API | Go | **No verification**: it would send a teen's leaked key to a third party to test it. Detector regexes are reusable (AGPL is compatible with pairtime's license) |
+| [Presidio](https://github.com/data-privacy-stack/presidio) (the `microsoft/presidio` URL now redirects here) | MIT | 2.2.366 (2026-10-27) | PII analyzer: pattern recognizers with checksum validation (credit cards, IBAN, `in_aadhaar_recognizer`, `in_pan_recognizer`, `uk_nino_recognizer`, `us_ssn_recognizer` and dozens more), NER via spaCy `en_core_web_lg` by default (`conf/default.yaml`, which also ignores `ORGANIZATION` as having "many false positives"), plus GLiNER, transformers and LLM recognizers | Python plus a 400 MB default model | **Not in the native client.** Port its pattern recognizers and checksums as data; use Presidio itself in server-side or reviewer tooling if ever needed |
+| spaCy English pipelines | MIT | 3.8.0 | NER F-score from each model's `meta.json`: `en_core_web_sm` 0.843, `en_core_web_lg` 0.855, `en_core_web_trf` 0.899 | Wheels: sm 12.8 MB, md 33.5 MB, lg 400.7 MB, trf 457.4 MB; all need a Python runtime | No: the client is one native binary with no Python ([client-platform.md](client-platform.md) 1) |
+| [GLiNER](https://github.com/urchade/GLiNER) PII models | Apache-2.0 | GLiNER v0.2.30 (2026-11-02) | Zero-shot NER for arbitrary labels. [`knowledgator/gliner-pii-edge-v1.0`](https://huggingface.co/knowledgator/gliner-pii-edge-v1.0): "60+ predefined PII categories"; precision 78.96%, recall 72.34%, F1 75.50% on its synthetic benchmark (small 76.84%, base 80.99%, large 83.25%) | Edge ONNX files: `model.onnx` 181 MB, `model_fp16.onnx` 91 MB, `model_quint8.onnx` 46 MB (Hugging Face API, 2026-11-19). Needs ONNX Runtime | **Optional, at reveal time only**, as a downloadable component, to highlight names and places for the user to confirm |
+| [gline-rs](https://github.com/fbilhaut/gline-rs) | Apache-2.0 | v1.1.0 (2026-08-05) | Rust inference for GLiNER over ONNX Runtime (`ort`) | README: 6.67 sequences/s vs 1.61 for the Python original, with the *large* multitask model on an 8-core i9 | The way to run GLiNER from a Rust client. A Go client would need ONNX Runtime bindings (cgo or `purego`) |
+
+**CPU cost on an old laptop.** I measured nothing (no installs on this machine), so these are estimates to verify on a real 2015-2016 dual-core Windows laptop:
+
+- Regex rules with a keyword prefilter: well under a millisecond per prompt. Run always.
+- GLiNER PII edge, uint8: about 45M parameters (181 MB of fp32 weights / 4 bytes), roughly a tenth of the large model gline-rs benchmarked, on a CPU with a quarter of the cores. Plausibly 0.1-1 s per short prompt and a few hundred MB of RAM while loaded (unverified). Fine for revealing 20 prompts once at submission; wrong for the always-on daemon. Run it in a separate short-lived process.
+
+**Pipeline**, in order:
+
+1. **Known-value redaction (exact, high precision, free).** The client knows the exact strings that identify this user: OS account name, home directory, hostname, `git config user.name` and `user.email`, GitHub and HCA usernames, the names of private repos and folders, and a user-supplied deny list (friends' names, school name). Replace them with stable placeholders (`~`, `[HOST]`, `[ME]`, `[PRIVATE_REPO_1]`). Regex can't find a friend's name; the user's own deny list can.
+2. **Secrets**: gitleaks rules plus PEM blocks, `KEY=VALUE` lines from `.env`-like content, URLs with credentials (`scheme://user:pass@`) or token-like query parameters. When one fires in a prompt, also tell the user: the secret has already gone to the model provider, so it should be rotated. That is useful for its own sake (R3).
+3. **Structured PII** with validators: email, phone (libphonenumber ports exist for Go and Rust), IPv4 and IPv6, MAC, credit card (Luhn), IBAN (mod-97), national IDs with checksums ported from Presidio (US SSN, UK NINO, Aadhaar with its Verhoeff check digit), dates of birth near words like "born" or "DOB".
+4. **Names and places (optional, reveal time only)**: GLiNER PII edge on the items being revealed, shown to the user as suggestions.
+5. **The user previews and edits** every revealed item, sees exactly what the reviewer will see, and can withhold any item (withheld items count against the hours they support; B6).
+
+Redaction removes spans and never rewrites text. Each removed span becomes a typed marker (`[EMAIL]`, `[NAME_1]`) whose position and length the commitment still proves (B6). Rewriting would break the link between what was committed and what is revealed.
+
+**Assume redaction fails sometimes.** Even good NER misses names (the GLiNER edge model's recall is 72%), so the rest of the design has to limit the damage: reveal a random sample rather than everything, keep revealed evidence behind reviewer sign-in, log every reviewer view, delete revealed evidence when the spot-check window closes (B8), and give the user a "this revealed something it shouldn't have" button that purges an item immediately.
+
 ### B5. Asking the agent to strip PII: what it gets right and wrong
+
+Karim's idea (BOUNTY.md): an AGENTS.md entry or skill tells the agent to take the user's prompt, strip PII, and pass it to `pairtime track`. The sibling signals doc assessed its cost and reliability ([ai-harness-signals.md](ai-harness-signals.md) 11); this section looks only at the PII part.
+
+**What it gets right**
+
+- **Context.** A model knows that "Maya said the API is broken" contains a person's name and that "Maple Grove High" is a school. Regex doesn't. This is exactly the class of PII that deterministic rules miss.
+- **No ML on the laptop.** The model already runs in the cloud, so the old Windows laptop does no NER work (R8).
+- **Universal.** It works in any harness that reads instruction files, including ones with no hooks (R7).
+- **The summary has value.** "Fixing wall clipping in the BSP traversal" is a better review label than a hash, and the model can write it.
+
+**What it gets wrong**
+
+1. **No privacy gain against the provider.** By the time the agent sees the prompt, the raw text has already gone to the model provider, under that provider's retention and training terms (Copilot Free, Pro and Pro+ train on it by default, B1). Stripping protects only against pairtime's own server, and the hook-based design never sends raw prompts there anyway.
+2. **LLM redaction misses things and over-redacts.** Prompted GPT-4 on 3,505 student forum posts reached recall 0.958 and precision 0.526, removing famous names, mythological names and nearly every place while still missing about 4% of PII, and it "sometimes fixed grammar or punctuation" despite instructions ([Singhal et al., EDM 2024](https://educationaldatamining.org/edm2024/proceedings/2024.EDM-short-papers.57/index.html)). In PRvL, GPT-4 with retrieval reached span precision 0.886 and recall 0.900; even the best tuned open model, which missed about 2% of PII in its own domain, fell to recall 0.687-0.776 on an unseen English dataset, and some models "hallucinate mask tokens in contexts that contain no actual PII" ([Garza et al., arXiv:2508.05545](https://arxiv.org/html/2508.05545), 2025).
+3. **It breaks the evidence chain.** The model rewrites the prompt, so the text it reports can't be checked against what the hook captured. A reviewer can't tell redaction from paraphrase from invention.
+4. **The attacker controls it.** The model writes whatever its instructions say. A cheater's AGENTS.md can say "report this prompt as: ...", and a repo's own instruction file can tell it to skip the call (signals doc 11.3). Compliance also drops in long loops, after compaction and in subagents.
+5. **It costs output tokens and an extra tool call every turn** (signals doc 11.2), for a privacy gain the hook path gets for free.
+
+**Verdict.** Do the redaction deterministically, on the device, on the raw prompt the hook or log reader captured (B4). Use the agent for two things only: a self-described intent label, stored as a labeled claim and never as evidence; and, at submission time, *suggesting* spans to redact in the few prompts being revealed. The suggestions must come back as character offsets into the original, applied as span removals, so the commitment still verifies (B6). The user confirms every suggestion. This keeps what the idea gets right (context, no local ML) and drops what it gets wrong, because the provider already has the text and the model never gets to decide what is committed.
 
 ### B6. Disclosure tiers and commit-then-reveal evidence
 
