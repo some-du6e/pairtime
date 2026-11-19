@@ -364,8 +364,10 @@ class Expected:
         self.rows = []
 
     def row(self, start, end=None, *, credit=None, uncredited=None, codes=None, agent=0, bucket=True,
-            sm=None, note=None, derived=None, erratum=None):
-        """One minute (end omitted) or a run of minutes [start, end)."""
+            bucket_minutes=None, sm=None, note=None, derived=None, erratum=None):
+        """One minute (end omitted) or a run of minutes [start, end).
+        bucket_minutes says how many of a run's minutes have a bucket; by
+        default all of them, or none when bucket is False."""
         a = self.fx.at(start)
         b = self.fx.at(end) if end else a + MINUTE_MS
         check(a % MINUTE_MS == 0 and b % MINUTE_MS == 0 and b > a, f"row {start} on minute boundaries")
@@ -378,6 +380,9 @@ class Expected:
                "local": self.fx.hhmm(a) if n == 1 else f"{self.fx.hhmm(a)}-{self.fx.hhmm(b - MINUTE_MS)}",
                "bucket": bucket}
         if bucket:
+            bm = n if bucket_minutes is None else bucket_minutes
+            check(1 <= bm <= n, f"row {start}: bucket_minutes {bm}")
+            row["bucket_minutes"] = bm
             row["credited_s"] = credited
             row["credit"] = credit
             if uncredited is None:
@@ -386,10 +391,10 @@ class Expected:
             else:
                 unc = ordered(uncredited, UNCREDITED)
                 row["uncredited"] = unc
-                check(credited + sum(unc.values()) == 60 * n,
-                      f"row {start}: {credited} credited + {sum(unc.values())} uncredited != {60 * n}")
+                check(credited + sum(unc.values()) == 60 * bm,
+                      f"row {start}: {credited} credited + {sum(unc.values())} uncredited != {60 * bm}")
             row["agent_running_s"] = agent
-            check(0 <= agent <= 60 * n, f"row {start}: agent_running_s {agent}")
+            check(0 <= agent <= 60 * bm, f"row {start}: agent_running_s {agent}")
         else:
             check(not credit and not agent, f"row {start}: a minute without a bucket has no credit or agent time")
             if codes:

@@ -18,6 +18,7 @@
       "minutes": 1,
       "local": "07:40",
       "bucket": true,
+      "bucket_minutes": 1,
       "credited_s": 60,
       "credit": {
         "p_be4901c04a84": {"P": 60}
@@ -31,6 +32,7 @@
       "minutes": 1,
       "local": "07:41",
       "bucket": true,
+      "bucket_minutes": 1,
       "credited_s": 40,
       "credit": {
         "p_be4901c04a84": {"E": 20, "SUP": 20}
@@ -44,6 +46,7 @@
       "minutes": 1,
       "local": "07:42",
       "bucket": true,
+      "bucket_minutes": 1,
       "credited_s": 60,
       "credit": {
         "p_be4901c04a84": {"E": 60}
@@ -57,6 +60,7 @@
       "minutes": 1,
       "local": "07:43",
       "bucket": true,
+      "bucket_minutes": 1,
       "credited_s": 60,
       "credit": {
         "p_be4901c04a84": {"E": 40, "G": 20}
@@ -70,6 +74,7 @@
       "minutes": 1,
       "local": "07:44",
       "bucket": true,
+      "bucket_minutes": 1,
       "credited_s": 45,
       "credit": {
         "p_be4901c04a84": {"G": 30, "READ": 15}

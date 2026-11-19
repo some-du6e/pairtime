@@ -241,13 +241,17 @@ func TestRows(t *testing.T) {
 						t.Errorf("%s: code %q is not an uncredited reason", where, c)
 					}
 				}
-				span := 60 * float64(r.Minutes)
 				if !r.Bucket {
-					if r.CreditedS != 0 || len(r.Credit) > 0 || r.Uncredited != nil || r.AgentRunningS != 0 {
+					if r.BucketMinutes != 0 || r.CreditedS != 0 || len(r.Credit) > 0 || r.Uncredited != nil || r.AgentRunningS != 0 {
 						t.Errorf("%s: a minute without a bucket has no credit, no uncredited seconds and no agent time", where)
 					}
 					continue
 				}
+				if r.BucketMinutes < 1 || r.BucketMinutes > r.Minutes || r.Minutes == 1 && r.BucketMinutes != 1 {
+					t.Errorf("%s: bucket_minutes %d for %d minutes", where, r.BucketMinutes, r.Minutes)
+				}
+				// Only minutes with a bucket report seconds.
+				span := 60 * float64(r.BucketMinutes)
 				sum := 0.0
 				for p, reasons := range r.Credit {
 					if _, ok := exp.Projects[p]; !ok {

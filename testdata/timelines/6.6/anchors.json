@@ -1,0 +1,496 @@
+{
+  "fixture": "6.6",
+  "anchors": [],
+  "turns": [
+    {
+      "session_key": "s_0e1e18144685",
+      "turn_key": "t_4de36fff8c0b",
+      "t_submit": 1795278605000,
+      "local_submit": "22:00:05",
+      "t_stop": 1795278730000,
+      "local_stop": "22:02:10",
+      "origin": "headless",
+      "sm": "22:00: entrypoint sdk, parent_class script_runtime, so origin headless (SM 2.2 rule 4)"
+    },
+    {
+      "session_key": "s_324767662b28",
+      "turn_key": "t_7882b7942063",
+      "t_submit": 1795278902000,
+      "local_submit": "22:05:02",
+      "t_stop": 1795279023000,
+      "local_stop": "22:07:03",
+      "origin": "headless",
+      "sm": "22:00: entrypoint sdk, parent_class script_runtime, so origin headless (SM 2.2 rule 4)"
+    },
+    {
+      "session_key": "s_cf970a5ae3df",
+      "turn_key": "t_99341af468f1",
+      "t_submit": 1795279304000,
+      "local_submit": "22:11:44",
+      "t_stop": 1795279442000,
+      "local_stop": "22:14:02",
+      "origin": "headless",
+      "sm": "22:00: entrypoint sdk, parent_class script_runtime, so origin headless (SM 2.2 rule 4)"
+    },
+    {
+      "session_key": "s_af26e9b65655",
+      "turn_key": "t_fac8075f565c",
+      "t_submit": 1795279744000,
+      "local_submit": "22:19:04",
+      "t_stop": 1795279842000,
+      "local_stop": "22:20:42",
+      "origin": "headless",
+      "sm": "22:00: entrypoint sdk, parent_class script_runtime, so origin headless (SM 2.2 rule 4)"
+    },
+    {
+      "session_key": "s_25814acfadb5",
+      "turn_key": "t_76ec17491b86",
+      "t_submit": 1795280111000,
+      "local_submit": "22:25:11",
+      "t_stop": 1795280258000,
+      "local_stop": "22:27:38",
+      "origin": "headless",
+      "sm": "22:00: entrypoint sdk, parent_class script_runtime, so origin headless (SM 2.2 rule 4)"
+    },
+    {
+      "session_key": "s_ea94a9753336",
+      "turn_key": "t_44031641e506",
+      "t_submit": 1795280327000,
+      "local_submit": "22:28:47",
+      "t_stop": 1795280450000,
+      "local_stop": "22:30:50",
+      "origin": "headless",
+      "sm": "22:00: entrypoint sdk, parent_class script_runtime, so origin headless (SM 2.2 rule 4)"
+    },
+    {
+      "session_key": "s_703af187d811",
+      "turn_key": "t_bff330e4c7f0",
+      "t_submit": 1795280629000,
+      "local_submit": "22:33:49",
+      "t_stop": 1795280722000,
+      "local_stop": "22:35:22",
+      "origin": "headless",
+      "sm": "22:00: entrypoint sdk, parent_class script_runtime, so origin headless (SM 2.2 rule 4)"
+    },
+    {
+      "session_key": "s_8a4cffe357e3",
+      "turn_key": "t_0091f81ef903",
+      "t_submit": 1795280940000,
+      "local_submit": "22:39:00",
+      "t_stop": 1795281013000,
+      "local_stop": "22:40:13",
+      "origin": "headless",
+      "sm": "22:00: entrypoint sdk, parent_class script_runtime, so origin headless (SM 2.2 rule 4)"
+    },
+    {
+      "session_key": "s_d33770e08f6f",
+      "turn_key": "t_9858841f34df",
+      "t_submit": 1795281087000,
+      "local_submit": "22:41:27",
+      "t_stop": 1795281157000,
+      "local_stop": "22:42:37",
+      "origin": "headless",
+      "sm": "22:00: entrypoint sdk, parent_class script_runtime, so origin headless (SM 2.2 rule 4)"
+    },
+    {
+      "session_key": "s_8afade13e30b",
+      "turn_key": "t_2ee31ec177ed",
+      "t_submit": 1795281423000,
+      "local_submit": "22:47:03",
+      "t_stop": 1795281583000,
+      "local_stop": "22:49:43",
+      "origin": "headless",
+      "sm": "22:00: entrypoint sdk, parent_class script_runtime, so origin headless (SM 2.2 rule 4)"
+    },
+    {
+      "session_key": "s_dab5bb4243e6",
+      "turn_key": "t_d0427599f2ca",
+      "t_submit": 1795281841000,
+      "local_submit": "22:54:01",
+      "t_stop": 1795281916000,
+      "local_stop": "22:55:16",
+      "origin": "headless",
+      "sm": "22:00: entrypoint sdk, parent_class script_runtime, so origin headless (SM 2.2 rule 4)"
+    },
+    {
+      "session_key": "s_706cf0cbf10b",
+      "turn_key": "t_90db41e545de",
+      "t_submit": 1795282176000,
+      "local_submit": "22:59:36",
+      "t_stop": 1795282320000,
+      "local_stop": "23:02:00",
+      "origin": "headless",
+      "sm": "22:00: entrypoint sdk, parent_class script_runtime, so origin headless (SM 2.2 rule 4)"
+    },
+    {
+      "session_key": "s_a705ee215b01",
+      "turn_key": "t_5809a20cee6e",
+      "t_submit": 1795282527000,
+      "local_submit": "23:05:27",
+      "t_stop": 1795282653000,
+      "local_stop": "23:07:33",
+      "origin": "headless",
+      "sm": "22:00: entrypoint sdk, parent_class script_runtime, so origin headless (SM 2.2 rule 4)"
+    },
+    {
+      "session_key": "s_0d18feeec569",
+      "turn_key": "t_f7356ab9f5dd",
+      "t_submit": 1795282784000,
+      "local_submit": "23:09:44",
+      "t_stop": 1795282870000,
+      "local_stop": "23:11:10",
+      "origin": "headless",
+      "sm": "22:00: entrypoint sdk, parent_class script_runtime, so origin headless (SM 2.2 rule 4)"
+    },
+    {
+      "session_key": "s_56d304a52943",
+      "turn_key": "t_af9809a6380b",
+      "t_submit": 1795283001000,
+      "local_submit": "23:13:21",
+      "t_stop": 1795283086000,
+      "local_stop": "23:14:46",
+      "origin": "headless",
+      "sm": "22:00: entrypoint sdk, parent_class script_runtime, so origin headless (SM 2.2 rule 4)"
+    },
+    {
+      "session_key": "s_e16c88d78b51",
+      "turn_key": "t_f713e74a3115",
+      "t_submit": 1795283195000,
+      "local_submit": "23:16:35",
+      "t_stop": 1795283304000,
+      "local_stop": "23:18:24",
+      "origin": "headless",
+      "sm": "22:00: entrypoint sdk, parent_class script_runtime, so origin headless (SM 2.2 rule 4)"
+    },
+    {
+      "session_key": "s_38dd7427a791",
+      "turn_key": "t_46cf1f635d70",
+      "t_submit": 1795283596000,
+      "local_submit": "23:23:16",
+      "t_stop": 1795283717000,
+      "local_stop": "23:25:17",
+      "origin": "headless",
+      "sm": "22:00: entrypoint sdk, parent_class script_runtime, so origin headless (SM 2.2 rule 4)"
+    },
+    {
+      "session_key": "s_4ee44bd54043",
+      "turn_key": "t_1677d19d787b",
+      "t_submit": 1795283881000,
+      "local_submit": "23:28:01",
+      "t_stop": 1795283971000,
+      "local_stop": "23:29:31",
+      "origin": "headless",
+      "sm": "22:00: entrypoint sdk, parent_class script_runtime, so origin headless (SM 2.2 rule 4)"
+    },
+    {
+      "session_key": "s_b9e45d0fcfca",
+      "turn_key": "t_9251068349c4",
+      "t_submit": 1795284136000,
+      "local_submit": "23:32:16",
+      "t_stop": 1795284268000,
+      "local_stop": "23:34:28",
+      "origin": "headless",
+      "sm": "22:00: entrypoint sdk, parent_class script_runtime, so origin headless (SM 2.2 rule 4)"
+    },
+    {
+      "session_key": "s_5ab042b7d305",
+      "turn_key": "t_c3344a0a69f1",
+      "t_submit": 1795284355000,
+      "local_submit": "23:35:55",
+      "t_stop": 1795284443000,
+      "local_stop": "23:37:23",
+      "origin": "headless",
+      "sm": "22:00: entrypoint sdk, parent_class script_runtime, so origin headless (SM 2.2 rule 4)"
+    },
+    {
+      "session_key": "s_a109f6491008",
+      "turn_key": "t_158fd01a94b5",
+      "t_submit": 1795284534000,
+      "local_submit": "23:38:54",
+      "t_stop": 1795284683000,
+      "local_stop": "23:41:23",
+      "origin": "headless",
+      "sm": "22:00: entrypoint sdk, parent_class script_runtime, so origin headless (SM 2.2 rule 4)"
+    },
+    {
+      "session_key": "s_4fda8a55c291",
+      "turn_key": "t_afbe4259cabc",
+      "t_submit": 1795284910000,
+      "local_submit": "23:45:10",
+      "t_stop": 1795285066000,
+      "local_stop": "23:47:46",
+      "origin": "headless",
+      "sm": "22:00: entrypoint sdk, parent_class script_runtime, so origin headless (SM 2.2 rule 4)"
+    },
+    {
+      "session_key": "s_186a6a79d248",
+      "turn_key": "t_53d434fa3ac6",
+      "t_submit": 1795285336000,
+      "local_submit": "23:52:16",
+      "t_stop": 1795285406000,
+      "local_stop": "23:53:26",
+      "origin": "headless",
+      "sm": "22:00: entrypoint sdk, parent_class script_runtime, so origin headless (SM 2.2 rule 4)"
+    },
+    {
+      "session_key": "s_eb5c8df5bc33",
+      "turn_key": "t_766708107519",
+      "t_submit": 1795285591000,
+      "local_submit": "23:56:31",
+      "t_stop": 1795285712000,
+      "local_stop": "23:58:32",
+      "origin": "headless",
+      "sm": "22:00: entrypoint sdk, parent_class script_runtime, so origin headless (SM 2.2 rule 4)"
+    },
+    {
+      "session_key": "s_e31c5e779bc2",
+      "turn_key": "t_eb3a33a6c904",
+      "t_submit": 1795285891000,
+      "local_submit": "00:01:31",
+      "t_stop": 1795286025000,
+      "local_stop": "00:03:45",
+      "origin": "headless",
+      "sm": "22:00: entrypoint sdk, parent_class script_runtime, so origin headless (SM 2.2 rule 4)"
+    },
+    {
+      "session_key": "s_97fc6b81d0d7",
+      "turn_key": "t_8c10714521e3",
+      "t_submit": 1795286280000,
+      "local_submit": "00:08:00",
+      "t_stop": 1795286362000,
+      "local_stop": "00:09:22",
+      "origin": "headless",
+      "sm": "22:00: entrypoint sdk, parent_class script_runtime, so origin headless (SM 2.2 rule 4)"
+    },
+    {
+      "session_key": "s_fd3a11c0dd7d",
+      "turn_key": "t_d39d3ea7f34a",
+      "t_submit": 1795286506000,
+      "local_submit": "00:11:46",
+      "t_stop": 1795286622000,
+      "local_stop": "00:13:42",
+      "origin": "headless",
+      "sm": "22:00: entrypoint sdk, parent_class script_runtime, so origin headless (SM 2.2 rule 4)"
+    },
+    {
+      "session_key": "s_73fc0fcf3d88",
+      "turn_key": "t_b4b7ce06be89",
+      "t_submit": 1795286721000,
+      "local_submit": "00:15:21",
+      "t_stop": 1795286829000,
+      "local_stop": "00:17:09",
+      "origin": "headless",
+      "sm": "22:00: entrypoint sdk, parent_class script_runtime, so origin headless (SM 2.2 rule 4)"
+    },
+    {
+      "session_key": "s_8ed6e4493a32",
+      "turn_key": "t_e9294ca49ca1",
+      "t_submit": 1795286948000,
+      "local_submit": "00:19:08",
+      "t_stop": 1795287078000,
+      "local_stop": "00:21:18",
+      "origin": "headless",
+      "sm": "22:00: entrypoint sdk, parent_class script_runtime, so origin headless (SM 2.2 rule 4)"
+    },
+    {
+      "session_key": "s_35ebbd49e8ff",
+      "turn_key": "t_06822fa4a3ea",
+      "t_submit": 1795287245000,
+      "local_submit": "00:24:05",
+      "t_stop": 1795287400000,
+      "local_stop": "00:26:40",
+      "origin": "headless",
+      "sm": "22:00: entrypoint sdk, parent_class script_runtime, so origin headless (SM 2.2 rule 4)"
+    },
+    {
+      "session_key": "s_e907adc5da04",
+      "turn_key": "t_db1630f6249d",
+      "t_submit": 1795287467000,
+      "local_submit": "00:27:47",
+      "t_stop": 1795287618000,
+      "local_stop": "00:30:18",
+      "origin": "headless",
+      "sm": "22:00: entrypoint sdk, parent_class script_runtime, so origin headless (SM 2.2 rule 4)"
+    },
+    {
+      "session_key": "s_1bd91bbf21fb",
+      "turn_key": "t_e58849fd0c49",
+      "t_submit": 1795287815000,
+      "local_submit": "00:33:35",
+      "t_stop": 1795287954000,
+      "local_stop": "00:35:54",
+      "origin": "headless",
+      "sm": "22:00: entrypoint sdk, parent_class script_runtime, so origin headless (SM 2.2 rule 4)"
+    },
+    {
+      "session_key": "s_9d18d4cb73a4",
+      "turn_key": "t_2c7d64406962",
+      "t_submit": 1795288031000,
+      "local_submit": "00:37:11",
+      "t_stop": 1795288172000,
+      "local_stop": "00:39:32",
+      "origin": "headless",
+      "sm": "22:00: entrypoint sdk, parent_class script_runtime, so origin headless (SM 2.2 rule 4)"
+    },
+    {
+      "session_key": "s_9803d7e303d0",
+      "turn_key": "t_162c84f22fc2",
+      "t_submit": 1795288291000,
+      "local_submit": "00:41:31",
+      "t_stop": 1795288432000,
+      "local_stop": "00:43:52",
+      "origin": "headless",
+      "sm": "22:00: entrypoint sdk, parent_class script_runtime, so origin headless (SM 2.2 rule 4)"
+    },
+    {
+      "session_key": "s_ce685cb2ca24",
+      "turn_key": "t_0bcb1087b3df",
+      "t_submit": 1795288601000,
+      "local_submit": "00:46:41",
+      "t_stop": 1795288700000,
+      "local_stop": "00:48:20",
+      "origin": "headless",
+      "sm": "22:00: entrypoint sdk, parent_class script_runtime, so origin headless (SM 2.2 rule 4)"
+    },
+    {
+      "session_key": "s_2403daa3a733",
+      "turn_key": "t_28e1baa1ac87",
+      "t_submit": 1795288980000,
+      "local_submit": "00:53:00",
+      "t_stop": 1795289098000,
+      "local_stop": "00:54:58",
+      "origin": "headless",
+      "sm": "22:00: entrypoint sdk, parent_class script_runtime, so origin headless (SM 2.2 rule 4)"
+    },
+    {
+      "session_key": "s_a42a244f0124",
+      "turn_key": "t_b9043918e5ab",
+      "t_submit": 1795289172000,
+      "local_submit": "00:56:12",
+      "t_stop": 1795289274000,
+      "local_stop": "00:57:54",
+      "origin": "headless",
+      "sm": "22:00: entrypoint sdk, parent_class script_runtime, so origin headless (SM 2.2 rule 4)"
+    },
+    {
+      "session_key": "s_484e3ce36e54",
+      "turn_key": "t_81770dcb6d4f",
+      "t_submit": 1795289363000,
+      "local_submit": "00:59:23",
+      "t_stop": 1795289474000,
+      "local_stop": "01:01:14",
+      "origin": "headless",
+      "sm": "22:00: entrypoint sdk, parent_class script_runtime, so origin headless (SM 2.2 rule 4)"
+    },
+    {
+      "session_key": "s_353a593b77c8",
+      "turn_key": "t_9077519cbf20",
+      "t_submit": 1795289672000,
+      "local_submit": "01:04:32",
+      "t_stop": 1795289820000,
+      "local_stop": "01:07:00",
+      "origin": "headless",
+      "sm": "22:00: entrypoint sdk, parent_class script_runtime, so origin headless (SM 2.2 rule 4)"
+    },
+    {
+      "session_key": "s_9c73c64804de",
+      "turn_key": "t_232a4c457547",
+      "t_submit": 1795289969000,
+      "local_submit": "01:09:29",
+      "t_stop": 1795290045000,
+      "local_stop": "01:10:45",
+      "origin": "headless",
+      "sm": "22:00: entrypoint sdk, parent_class script_runtime, so origin headless (SM 2.2 rule 4)"
+    },
+    {
+      "session_key": "s_f4e77839d861",
+      "turn_key": "t_a44cd8f896d0",
+      "t_submit": 1795290229000,
+      "local_submit": "01:13:49",
+      "t_stop": 1795290379000,
+      "local_stop": "01:16:19",
+      "origin": "headless",
+      "sm": "22:00: entrypoint sdk, parent_class script_runtime, so origin headless (SM 2.2 rule 4)"
+    },
+    {
+      "session_key": "s_79a26b1aadf5",
+      "turn_key": "t_fc20f1405753",
+      "t_submit": 1795290447000,
+      "local_submit": "01:17:27",
+      "t_stop": 1795290556000,
+      "local_stop": "01:19:16",
+      "origin": "headless",
+      "sm": "22:00: entrypoint sdk, parent_class script_runtime, so origin headless (SM 2.2 rule 4)"
+    },
+    {
+      "session_key": "s_20915c79a284",
+      "turn_key": "t_ed61d9cebdc9",
+      "t_submit": 1795290832000,
+      "local_submit": "01:23:52",
+      "t_stop": 1795290918000,
+      "local_stop": "01:25:18",
+      "origin": "headless",
+      "sm": "22:00: entrypoint sdk, parent_class script_runtime, so origin headless (SM 2.2 rule 4)"
+    },
+    {
+      "session_key": "s_0b88746bc90d",
+      "turn_key": "t_cf6533213c0c",
+      "t_submit": 1795291052000,
+      "local_submit": "01:27:32",
+      "t_stop": 1795291169000,
+      "local_stop": "01:29:29",
+      "origin": "headless",
+      "sm": "22:00: entrypoint sdk, parent_class script_runtime, so origin headless (SM 2.2 rule 4)"
+    },
+    {
+      "session_key": "s_12599acdbd95",
+      "turn_key": "t_7414537f3c8a",
+      "t_submit": 1795291433000,
+      "local_submit": "01:33:53",
+      "t_stop": 1795291545000,
+      "local_stop": "01:35:45",
+      "origin": "headless",
+      "sm": "22:00: entrypoint sdk, parent_class script_runtime, so origin headless (SM 2.2 rule 4)"
+    },
+    {
+      "session_key": "s_8f8454b5d9a1",
+      "turn_key": "t_11f791f1fda4",
+      "t_submit": 1795291763000,
+      "local_submit": "01:39:23",
+      "t_stop": 1795291915000,
+      "local_stop": "01:41:55",
+      "origin": "headless",
+      "sm": "22:00: entrypoint sdk, parent_class script_runtime, so origin headless (SM 2.2 rule 4)"
+    },
+    {
+      "session_key": "s_6420e45a262f",
+      "turn_key": "t_8fec89508866",
+      "t_submit": 1795292188000,
+      "local_submit": "01:46:28",
+      "t_stop": 1795292308000,
+      "local_stop": "01:48:28",
+      "origin": "headless",
+      "sm": "22:00: entrypoint sdk, parent_class script_runtime, so origin headless (SM 2.2 rule 4)"
+    },
+    {
+      "session_key": "s_6c494a6f0307",
+      "turn_key": "t_ee210069d4c4",
+      "t_submit": 1795292473000,
+      "local_submit": "01:51:13",
+      "t_stop": 1795292601000,
+      "local_stop": "01:53:21",
+      "origin": "headless",
+      "sm": "22:00: entrypoint sdk, parent_class script_runtime, so origin headless (SM 2.2 rule 4)"
+    },
+    {
+      "session_key": "s_5c0e87cdb308",
+      "turn_key": "t_5f476ee75411",
+      "t_submit": 1795292884000,
+      "local_submit": "01:58:04",
+      "t_stop": 1795292990000,
+      "local_stop": "01:59:50",
+      "origin": "headless",
+      "sm": "22:00: entrypoint sdk, parent_class script_runtime, so origin headless (SM 2.2 rule 4)"
+    }
+  ]
+}

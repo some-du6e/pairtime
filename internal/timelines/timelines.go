@@ -95,12 +95,16 @@ type Row struct {
 	Start   time.Time `json:"start"`
 	Minutes int       `json:"minutes"`
 	Local   string    `json:"local"`
-	// Bucket says whether the scorer writes a minute bucket for each of
-	// the row's minutes. It writes one only when something was credited or
-	// an agent was running (SM 5.1). The fields below are set only when
-	// Bucket is true.
-	Bucket    bool    `json:"bucket"`
-	CreditedS float64 `json:"credited_s"`
+	// Bucket says whether the scorer writes a minute bucket for any of the
+	// row's minutes. It writes one only when something was credited or an
+	// agent was running (SM 5.1). The fields below are set only when Bucket
+	// is true.
+	Bucket bool `json:"bucket"`
+	// BucketMinutes is how many of the row's minutes have a bucket: all of
+	// them for a single minute, and for a run as many as had credit or a
+	// running agent. Credited and uncredited seconds cover those minutes.
+	BucketMinutes int     `json:"bucket_minutes"`
+	CreditedS     float64 `json:"credited_s"`
 	// Credit holds credited seconds by project, then by reason code.
 	Credit map[string]map[event.Reason]float64 `json:"credit"`
 	// Uncredited holds uncredited seconds by reason code. It is nil when
