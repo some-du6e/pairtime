@@ -10,11 +10,16 @@ require golang.org/x/sys v0.47.0
 
 require (
 	github.com/BurntSushi/toml v1.6.0
+	github.com/ebitengine/purego v0.11.3
+	github.com/fsnotify/fsnotify v1.10.1
+	github.com/godbus/dbus/v5 v5.2.4
 	github.com/lib/pq v1.12.3
+	github.com/zalando/go-keyring v0.2.8
 	modernc.org/sqlite v1.59.0
 )
 
 require (
+	github.com/danieljoos/wincred v1.2.3 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/mattn/go-isatty v0.0.24 // indirect
