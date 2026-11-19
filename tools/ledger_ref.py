@@ -1282,11 +1282,261 @@ def check_days(rep, days, rows_by_day):
         last_day, last_head = d, head
 
 
+def get_hex_text(obj, key, path):
+    """A UTF-8 byte string written as hex, decoded. Bytes that aren't UTF-8
+    are a format error: every text in the format is valid UTF-8."""
+    data = get_hex(obj, key, path)
+    try:
+        return data, data.decode("utf-8")
+    except UnicodeDecodeError:
+        raise FormatError("%s.%s: isn't UTF-8" % (path, key))
+
+
+def get_choice(obj, key, path, choices):
+    v = get_str(obj, key, path)
+    if v not in choices:
+        raise FormatError("%s.%s: want one of %s, got %s" % (path, key, ", ".join(choices), json.dumps(v)))
+    return v
+
+
+def check_lowercase(rep, obj, path):
+    fields(obj, path, ("unicode", "runs"))
+    if get_str(obj, "unicode", path) != LOWER_UNICODE:
+        rep.fail(path + ".unicode", "is %s; f.v = 1 lowercases with Unicode %s" % (json.dumps(obj["unicode"]), LOWER_UNICODE))
+    runs = []
+    for i, run in enumerate(get_list(obj, "runs", path)):
+        rp = "%s.runs[%d]" % (path, i)
+        fields(run, rp, ("first", "count", "delta", "stride"))
+        runs.append((get_int(run, "first", rp, 0, 0x10FFFF), get_int(run, "count", rp, 1, 0x110000),
+                     get_int(run, "delta", rp, -0x10FFFF, 0x10FFFF), get_int(run, "stride", rp, 1, 0x110000)))
+    got, want = lower_map(runs), LOWER
+    for cp in sorted(set(got) | set(want)):
+        if got.get(cp) != want.get(cp):
+            rep.fail(path, "maps U+%04X to %s, reference maps it to %s" % (
+                cp, "U+%04X" % got[cp] if cp in got else "itself", "U+%04X" % want[cp] if cp in want else "itself"))
+            break
+    rep.count("lowercase tables")
+
+
+def check_commitment(rep, obj, path):
+    fields(obj, path, ("k_dev", "seq", "rtype", "text", "n", "root"), ("raw", "tokens", "note"))
+    keys = derive_keys(get_hex(obj, "k_dev", path, 32))
+    seq = get_int(obj, "seq", path, 1)
+    rtype = get_int(obj, "rtype", path, 0, 0xFF)
+    text = get_hex(obj, "text", path)
+    n = get_int(obj, "n", path)
+    root = get_hex(obj, "root", path, 32)
+    rep.count("commitments")
+    if rtype not in CONTENT_RTYPES:
+        rep.fail(path + ".rtype", "is 0x%02x; only prompt.submit, agent.output and cli.track commit text" % rtype)
+        return
+    if "raw" in obj:
+        if rtype != AGENT_OUTPUT:
+            raise FormatError("%s: only an agent message has a raw text to cut" % path)
+        rep.same(path + ".text", text, committed_message(get_hex(obj, "raw", path)))
+    elif rtype == AGENT_OUTPUT and len(text) > MESSAGE_MAX:
+        rep.fail(path + ".text", "is %d bytes; an agent message commits at most %d" % (len(text), MESSAGE_MAX))
+    try:
+        toks, salts, leaves, want_n, want_root = commit_text(keys["k_tok"], seq, text)
+    except LedgerError as err:
+        rep.fail(path, str(err))
+        return
+    rep.same(path + ".n", n, want_n)
+    rep.same(path + ".root", root, want_root)
+    if "tokens" in obj:
+        given = get_list(obj, "tokens", path)
+        if len(given) != want_n:
+            rep.fail(path + ".tokens", "lists %d tokens, the text has %d" % (len(given), want_n))
+            return
+        for j, tok in enumerate(given):
+            tp = "%s.tokens[%d]" % (path, j)
+            fields(tok, tp, ("token", "salt", "leaf"))
+            rep.same(tp + ".token", get_hex(tok, "token", tp), toks[j])
+            rep.same(tp + ".salt", get_hex(tok, "salt", tp, 32), salts[j])
+            rep.same(tp + ".leaf", get_hex(tok, "leaf", tp, 32), leaves[j])
+
+
+def parse_reveal_items(items, path):
+    out = []
+    for i, item in enumerate(items):
+        ip = "%s[%d]" % (path, i)
+        if isinstance(item, dict) and "salt" in item:
+            fields(item, ip, ("salt", "token"))
+            out.append(("kept", get_hex(item, "salt", ip), get_hex(item, "token", ip)))
+        else:
+            fields(item, ip, ("type", "count", "leaves"), ("lines",))
+            leaves = [from_hex(h, "%s.leaves[%d]" % (ip, j)) for j, h in enumerate(get_list(item, "leaves", ip))]
+            lines = get_int(item, "lines", ip) if "lines" in item else None
+            out.append(("removed", get_str(item, "type", ip), get_int(item, "count", ip), leaves, lines))
+    return out
+
+
+def check_reveal(rep, obj, path):
+    fields(obj, path, ("n", "root", "items", "verdict"), ("note",))
+    n = get_int(obj, "n", path)
+    root = get_hex(obj, "root", path, 32)
+    items = parse_reveal_items(get_list(obj, "items", path), path + ".items")
+    verdict = get_choice(obj, "verdict", path, REVEAL_VERDICTS)
+    got, _ = verify_reveal(n, root, items)
+    rep.same(path + ".verdict", verdict, got)
+    rep.count("reveals")
+
+
+def check_normalization(rep, obj, path):
+    fields(obj, path, ("text", "removed_lines", "normalized", "shingle_kind", "shingles", "signature"), ("note",))
+    _, text = get_hex_text(obj, "text", path)
+    removed, words = normalize(text)
+    rep.same(path + ".removed_lines", get_list(obj, "removed_lines", path), removed)
+    rep.same(path + ".normalized", get_hex(obj, "normalized", path), " ".join(words).encode("utf-8"))
+    tag, xs = shingles(words)
+    rep.same(path + ".shingle_kind", get_choice(obj, "shingle_kind", path, ("word3", "char5")), SHINGLE_KINDS[tag])
+    given = [from_hex(x, "%s.shingles[%d]" % (path, i)) for i, x in enumerate(get_list(obj, "shingles", path))]
+    rep.same_list(path + ".shingles", given, [x.encode("utf-8") for x in xs])
+    sig = error_signature(text)
+    got_sig = None if obj["signature"] is None else get_hex(obj, "signature", path)
+    rep.same(path + ".signature", got_sig, None if sig is None else sig.encode("utf-8"))
+    rep.count("normalizations")
+
+
+def check_features(rep, obj, path):
+    if not isinstance(obj, dict) or "rtype" not in obj:
+        raise FormatError("%s: want an object with an rtype" % path)
+    rtype = get_int(obj, "rtype", path, 0, 0xFF)
+    common = ("k_dev", "rtype", "f")
+    if rtype in (PROMPT_SUBMIT, CLI_TRACK):
+        fields(obj, path, common + ("text", "prompt_class", "shingle_values"), ("note",))
+    elif rtype == AGENT_TOOL:
+        fields(obj, path, common + ("hunks",), ("command", "note"))
+    elif rtype == SHELL_COMMAND:
+        fields(obj, path, common, ("command", "note"))
+    else:
+        raise FormatError("%s.rtype: 0x%02x records carry no features" % (path, rtype))
+    keys = derive_keys(get_hex(obj, "k_dev", path, 32))
+    if not isinstance(obj["f"], dict):
+        raise FormatError("%s.f: want an object" % path)
+    rep.count("feature sets")
+    try:
+        if rtype in (PROMPT_SUBMIT, CLI_TRACK):
+            _, text = get_hex_text(obj, "text", path)
+            want, values = prompt_features(keys["k_feat"], text, get_str(obj, "prompt_class", path))
+            given = [from_hex(v, "%s.shingle_values[%d]" % (path, i), 32)
+                     for i, v in enumerate(get_list(obj, "shingle_values", path))]
+            rep.same_list(path + ".shingle_values", given, values)
+        else:
+            hunks = None
+            if rtype == AGENT_TOOL:
+                hunks = []
+                for i, h in enumerate(get_list(obj, "hunks", path)):
+                    hp = "%s.hunks[%d]" % (path, i)
+                    fields(h, hp, ("path", "old_start", "old_lines", "new_start", "new_lines"))
+                    hunks.append((get_str(h, "path", hp),) + tuple(
+                        get_int(h, k, hp) for k in ("old_start", "old_lines", "new_start", "new_lines")))
+            command = get_hex_text(obj, "command", path)[1] if "command" in obj else None
+            want = tool_features(keys["k_feat"], hunks, command)
+    except LedgerError as err:
+        rep.fail(path, str(err))
+        return
+    rep.same(path + ".f", obj["f"], want)
+
+
+def get_sketch(obj, key, path):
+    return sketch_from_bytes(get_hex(obj, key, path, 4 * MINHASH_SIZE))
+
+
+def check_jaccard(rep, obj, path):
+    fields(obj, path, ("a", "b", "matches"), ("note",))
+    a, b = get_sketch(obj, "a", path), get_sketch(obj, "b", path)
+    rep.same(path + ".matches", get_int(obj, "matches", path, 0, MINHASH_SIZE), jaccard_matches(a, b))
+    rep.count("jaccard pairs")
+
+
+def check_shingle_reveal(rep, obj, path):
+    fields(obj, path, ("mh", "entries", "verdict"), ("note",))
+    mh = get_sketch(obj, "mh", path)
+    entries = []
+    for i, e in enumerate(get_list(obj, "entries", path)):
+        ep = "%s.entries[%d]" % (path, i)
+        fields(e, ep, ("v",), ("x",))
+        entries.append((get_hex(e, "v", ep), get_hex(e, "x", ep) if "x" in e else None))
+    got, _ = verify_shingle_reveal(mh, entries)
+    rep.same(path + ".verdict", get_choice(obj, "verdict", path, SHINGLE_VERDICTS), got)
+    rep.count("shingle reveals")
+
+
+def check_draw(rep, obj, path):
+    fields(obj, path, ("r", "metadata", "seed", "pool", "drawn"), ("commits", "drawn_commits", "note"))
+    seed = draw_seed(get_hex(obj, "r", path, 32), get_hex(obj, "metadata", path))
+    rep.same(path + ".seed", get_hex(obj, "seed", path, 32), seed)
+    pool = []
+    for i, item in enumerate(get_list(obj, "pool", path)):
+        ip = "%s.pool[%d]" % (path, i)
+        fields(item, ip, ("device_id", "seq", "score"))
+        device_id, seq = get_str(item, "device_id", ip), get_int(item, "seq", ip, 1)
+        pool.append((device_id, seq))
+        try:
+            rep.same(ip + ".score", get_hex(item, "score", ip, 32), draw_score(seed, device_id, seq))
+        except LedgerError as err:
+            rep.fail(ip, str(err))
+    drawn = []
+    for i, item in enumerate(get_list(obj, "drawn", path)):
+        ip = "%s.drawn[%d]" % (path, i)
+        fields(item, ip, ("device_id", "seq"))
+        drawn.append((get_str(item, "device_id", ip), get_int(item, "seq", ip, 1)))
+    try:
+        rep.same(path + ".drawn", drawn, draw(seed, pool))
+    except LedgerError as err:
+        rep.fail(path + ".pool", str(err))
+    if ("commits" in obj) != ("drawn_commits" in obj):
+        raise FormatError("%s: commits and drawn_commits come together" % path)
+    if "commits" in obj:
+        commits = []
+        for i, c in enumerate(get_list(obj, "commits", path)):
+            cp = "%s.commits[%d]" % (path, i)
+            fields(c, cp, ("commit", "score"))
+            commit = get_hex(c, "commit", cp)
+            commits.append(commit)
+            try:
+                rep.same(cp + ".score", get_hex(c, "score", cp, 32), commit_score(seed, commit))
+            except LedgerError as err:
+                rep.fail(cp, str(err))
+        given = []
+        for i, c in enumerate(get_list(obj, "drawn_commits", path)):
+            cp = "%s.drawn_commits[%d]" % (path, i)
+            fields(c, cp, ("commit",))
+            given.append(get_hex(c, "commit", cp))
+        try:
+            rep.same(path + ".drawn_commits", [c.hex() for c in given], [c.hex() for c in draw_commits(seed, commits)])
+        except LedgerError as err:
+            rep.fail(path + ".commits", str(err))
+    rep.count("draws")
+
+
+def check_challenge_k(rep, obj, path):
+    fields(obj, path, ("pool", "k", "drawn"))
+    pool = get_int(obj, "pool", path)
+    rep.same(path + ".k", get_int(obj, "k", path), challenge_k(pool))
+    rep.same(path + ".drawn", get_int(obj, "drawn", path), min(challenge_k(pool), pool))
+    rep.count("challenge sizes")
+
+
+CONTENT_SECTIONS = (
+    ("commitments", check_commitment),
+    ("reveals", check_reveal),
+    ("normalizations", check_normalization),
+    ("features", check_features),
+    ("jaccard", check_jaccard),
+    ("shingle_reveals", check_shingle_reveal),
+    ("draws", check_draw),
+    ("challenge_k", check_challenge_k),
+)
+
+
 def check_document(doc):
     """Check a parsed vectors file and return a Report. Raises FormatError
     when the file doesn't follow the format."""
     rep = Report()
-    fields(doc, "file", ("format",), ("spec", "generator", "note", "keys", "digests", "chains", "days"))
+    fields(doc, "file", ("format",), ("spec", "generator", "note", "keys", "digests", "chains", "days", "lowercase")
+           + tuple(name for name, _ in CONTENT_SECTIONS))
     if doc["format"] != FORMAT:
         raise FormatError("file: format is %s, want %s" % (json.dumps(doc["format"]), json.dumps(FORMAT)))
     for i, item in enumerate(get_list(doc, "keys", "file") if "keys" in doc else []):
@@ -1307,13 +1557,20 @@ def check_document(doc):
             rep.fail(bp, "is missing from the rows of day %d" % day_of(received_at))
         elif row != (head, received_at):
             rep.fail(bp, "has a head or received_at other than its row in day %d" % day_of(received_at))
+    if "lowercase" in doc:
+        check_lowercase(rep, doc["lowercase"], "lowercase")
+    for name, fn in CONTENT_SECTIONS:
+        for i, item in enumerate(get_list(doc, name, "file") if name in doc else []):
+            fn(rep, item, "%s[%d]" % (name, i))
     if not rep.counts:
         raise FormatError("file: nothing to check")
     return rep
 
 
 def summary(counts):
-    order = ("key sets", "digests", "chains", "batches", "records", "days", "day rows", "inclusion proofs")
+    order = ("key sets", "digests", "chains", "batches", "records", "days", "day rows", "inclusion proofs",
+             "lowercase tables", "commitments", "reveals", "normalizations", "feature sets", "jaccard pairs",
+             "shingle reveals", "draws", "challenge sizes")
     return ", ".join("%d %s" % (counts[k], k) for k in order if k in counts)
 
 
@@ -1560,6 +1817,389 @@ def cmd_vectors(out):
     with open(out, "w", encoding="ascii", newline="\n") as f:
         f.write(text)
     print("vectors: wrote %s (%d bytes)" % (out, len(text)))
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# 11. vectors-content: the part 2 vectors
+
+SAMPLE_WORDS = (
+    "fix", "the", "navbar", "on", "mobile,", "it", "still", "broken", "try", "again", "please", "why", "does",
+    "src/app/main.go", "`useEffect`", "https://example.com/x?y=1", "3f9a2c1d", "0x1F", "42", "line", "ÉCOLE",
+    "straße", "İstanbul", "Ещё", "раз", "修复这个错误", "🙏", "naïve", "ΣΑΣ", "café,", "(see", "TypeError:", "x",
+    "is", "undefined", "doesn’t", "work!!", "sk-test-51Hx", "teen@example.com", "—", "```", "1.",
+)
+SAMPLE_SPACES = (" ", " ", " ", " ", "  ", "\t", "\n", "\r\n", "\r\n\r\n", "\u00a0", "\u3000", "\u2028", " \t ")
+
+
+def random_text(s, max_words):
+    parts = [s.pick(SAMPLE_SPACES)] if s.below(4) == 0 else []
+    for i in range(s.below(max_words + 1)):
+        if i:
+            parts.append(s.pick(SAMPLE_SPACES))
+        parts.append(s.pick(SAMPLE_WORDS))
+    if s.below(4) == 0:
+        parts.append(s.pick(SAMPLE_SPACES))
+    return "".join(parts)
+
+
+def random_spans(s, n):
+    """Up to three disjoint removed spans over n tokens, random types."""
+    spans, j = [], 0
+    while j < n and len(spans) < 3:
+        j += s.below(4)
+        if j >= n:
+            break
+        count = 1 + s.below(min(3, n - j))
+        span_type = s.pick(SPAN_TYPES)
+        spans.append((j, count, span_type, 1 + s.below(9) if span_type == "code" else None))
+        j += count + 1
+    return spans
+
+
+def item_json(item):
+    if item[0] == "kept":
+        return {"salt": item[1].hex(), "token": item[2].hex()}
+    out = {"type": item[1], "count": item[2], "leaves": [h.hex() for h in item[3]]}
+    if item[4] is not None:
+        out["lines"] = item[4]
+    return out
+
+
+def commitment_json(k_dev, seq, rtype, text, note, raw=None, with_tokens=True):
+    keys = derive_keys(k_dev)
+    toks, salts, leaves, n, root = commit_text(keys["k_tok"], seq, text)
+    out = {"note": note, "k_dev": k_dev.hex(), "seq": seq, "rtype": rtype}
+    if raw is not None:
+        out["raw"] = raw.hex()
+    out.update(text=text.hex(), n=n, root=root.hex())
+    if with_tokens:
+        out["tokens"] = [{"token": t.hex(), "salt": a.hex(), "leaf": h.hex()} for t, a, h in zip(toks, salts, leaves)]
+    return out, (toks, salts, leaves, n, root)
+
+
+def reveal_json(note, n, root, items, verdict=None):
+    got, _ = verify_reveal(n, root, items)
+    if verdict is not None and got != verdict:
+        raise LedgerError("the %s vector is %s, not %s" % (note, got, verdict))
+    return {"note": note, "n": n, "root": root.hex(), "items": [item_json(i) for i in items], "verdict": got}
+
+
+def make_reveals(k_dev, commitments):
+    """Positive reveals of the crafted texts and of random ones, then one
+    vector for each way a reveal can fail."""
+    out = []
+    by_note = {c[0]["note"]: c[1] for c in commitments}
+
+    def spans_of(note, spans, label):
+        toks, salts, leaves, n, root = by_note[note]
+        out.append(reveal_json("%s: %s" % (note, label), n, root, reveal_items(salts, toks, leaves, spans), "ok"))
+
+    spans_of("short prompt", [], "everything kept")
+    spans_of("short prompt", [(0, 1, "teen", None)], "removal at the start")
+    spans_of("short prompt", [(4, 1, "teen", None)], "removal in the middle")
+    spans_of("short prompt", [(6, 1, "teen", None)], "removal at the end")
+    spans_of("short prompt", [(0, 7, "teen", None)], "everything removed")
+    spans_of("empty prompt", [], "no tokens")
+    spans_of("CRLF", [(2, 2, "known", None)], "a word and its CRLF removed")
+    spans_of("non-ASCII", [(8, 1, "known", None), (14, 1, "pii", None)], "two removals, one at the end")
+    spans_of("secret and email", [(6, 1, "secret", None), (7, 1, "teen", None), (16, 1, "pii", None)],
+             "adjacent spans of two types, and an email")
+    spans_of("whitespace only", [(0, 1, "teen", None)], "the one whitespace token removed")
+    spans_of("agent message with code", [(6, 11, "code", 3)], "a fenced block collapsed to a code marker")
+    spans_of("leading and trailing whitespace", [(0, 1, "teen", None), (8, 1, "teen", None)],
+             "both whitespace edges removed")
+    s = Stream("content-reveals")
+    for c, data in commitments:
+        if c["note"].startswith("random"):
+            toks, salts, leaves, n, root = data
+            for k in range(2):
+                spans = random_spans(s, n)
+                out.append(reveal_json("%s, random removals %d" % (c["note"], k + 1), n, root,
+                                       reveal_items(salts, toks, leaves, spans), "ok"))
+
+    # Failures. The first two kinds use the short prompt's own commitment.
+    toks, salts, leaves, n, root = by_note["short prompt"]
+    keep = reveal_items(salts, toks, leaves, [])
+    k_tok = derive_keys(k_dev)["k_tok"]
+
+    def fail(note, items, verdict, commit=(n, root)):
+        out.append(reveal_json(note, commit[0], commit[1], items, verdict))
+
+    fail("a kept token changed", keep[:4] + [("kept", salts[4], b"logon")] + keep[5:], "root")
+    fail("a salt changed", keep[:2] + [("kept", bytes([salts[2][0] ^ 1]) + salts[2][1:], toks[2])] + keep[3:], "root")
+    fail("two words swapped", [keep[4]] + keep[1:4] + [keep[0]] + keep[5:], "root")
+    fail("a removed leaf changed", keep[:6] + [("removed", "teen", 1, [bytes([leaves[6][0] ^ 1]) + leaves[6][1:]], None)],
+         "root")
+    fail("the last token dropped", keep[:6], "count")
+    # The last three tokens collapsed into their subtree's hash: the items
+    # still hash to C, and only the committed n shows that tokens are missing.
+    collapsed = keep[:4] + [("removed", "teen", 1, [tree_root(leaves[4:7])], None)]
+    if tree_root(leaves[:4] + [tree_root(leaves[4:7])]) != root:
+        raise LedgerError("the collapse vector no longer reaches C")
+    fail("three tokens collapsed into their subtree hash: C matches, n doesn't", collapsed, "count")
+    fail("a span that claims an extra token", keep[:6] + [("removed", "teen", 2, [leaves[6], leaves[6]], None)], "count")
+    fail("an empty token", keep[:1] + [("kept", salts[1], b"")] + keep[2:], "bad_item")
+    fail("a token that isn't UTF-8", keep[:2] + [("kept", salts[2], b"\xff")] + keep[3:], "bad_item")
+    fail("a token mixing a word and whitespace", keep[:2] + [("kept", salts[2], b"the ")] + keep[3:], "bad_item")
+    fail("a 31-byte salt", keep[:2] + [("kept", salts[2][:31], toks[2])] + keep[3:], "bad_item")
+    fail("an unknown span type", keep[:6] + [("removed", "email", 1, [leaves[6]], None)], "bad_item")
+    fail("a span of no tokens", keep + [("removed", "teen", 0, [], None)], "bad_item")
+    fail("a span whose leaves don't match its count", keep[:5] + [("removed", "teen", 2, [leaves[5]], None)], "bad_item")
+    fail("a 31-byte leaf", keep[:6] + [("removed", "teen", 1, [leaves[6][:31]], None)], "bad_item")
+    fail("lines on a span that isn't code", keep[:6] + [("removed", "secret", 1, [leaves[6]], 1)], "bad_item")
+    fail("a code span of 0 lines", keep[:6] + [("removed", "code", 1, [leaves[6]], 0)], "bad_item")
+    # A client that committed tokens the tokenizer would never make: two
+    # words with nothing between them, and a word two places from whitespace.
+    salt = [token_salt(k_tok, 99, j) for j in (1, 2, 3)]
+    bad = [token_leaf(salt[0], b"fix"), token_leaf(salt[1], b"it")]
+    fail("two words side by side", [("kept", salt[0], b"fix"), ("kept", salt[1], b"it")], "alternation",
+         (2, tree_root(bad)))
+    bad = [token_leaf(salt[0], b"fix"), token_leaf(salt[1], b" "), token_leaf(salt[2], b" ")]
+    fail("whitespace two places after a word", [("kept", salt[0], b"fix"), ("removed", "teen", 1, [bad[1]], None),
+                                                 ("kept", salt[2], b" ")], "alternation", (3, tree_root(bad)))
+    return out
+
+
+NORMALIZATION_TEXTS = (
+    ("plain prompt of six words or more", "Fix the login bug please, it crashes on submit"),
+    ("the substitutions", "Open https://example.com/a?b=1, then edit src/app/main.go line 42 and `handleSubmit` "
+                          "at 0x7ffd5e8c with commit 3f9a2c1d"),
+    ("retry phrases", "doesn\u2019t work!! Still not working. fix it again? please retry"),
+    ("doesnt without an apostrophe, and a quoted again", "it doesnt work \u2018again\u2019"),
+    ("retry is the whole prompt", "try again"),
+    ("under five characters", "ok"),
+    ("empty", ""),
+    ("whitespace only", " \r\n\t\u3000"),
+    ("simple lowercase mapping, not full", "\u00c9COLE Stra\u00dfe \u0130stanbul \u03a3\u0391\u03a3 \u0415\u0449\u0451 \u0440\u0430\u0437"),
+    ("every kind of whitespace", "fix\r\nthe\u00a0bug\u3000now\u2028and\u0085then\u000bthe\u000cother\u2009one"),
+    ("paths and things that aren't", "and/or src/components a/b/c ./run.sh ~/notes.txt C:\\Users\\me\\x.txt "
+                                     "localhost:8080/api e.g./i.e. $HOME/.config/app"),
+    ("hex strings and numbers", "deadbeef facade1 abc123 0x1F 0x 1234567 a1b2c3d v1.2.3 2026-11-19"),
+    ("URL schemes and punctuation", "(see https://a.example/x), <ftp://b.example>, HTTP://C.EXAMPLE/Y and git+ssh://h/r"),
+    ("backticked identifiers", "rename `fooBar` to `foo_bar` and ``x`` then `two words` stay"),
+    ("a fenced block", "here is my code\n```python\nprint(1)\n```\nwhy does it fail"),
+    ("a tilde fence closed only by a long enough fence", "before\n~~~~\ncode\n~~~\nstill code\n~~~~~\nafter"),
+    ("an unclosed fence runs to the end", "look\n```\nall of this\nis code"),
+    ("backticks on one line aren't a fence", "```js const x = 1``` still here"),
+    ("four spaces of indent aren't a fence", "    ```\nindented\n   ```\ninside"),
+    ("pasted_content blocks", "<pasted_content id=\"1\">\nfoo bar\n</pasted_content>\nstill broken\n"
+                              "  <pasted_content id=\"2\" lines=\"3\">  \nbaz"),
+    ("a Python traceback", "still broken\nTraceback (most recent call last):\n  File \"app.py\", line 3, in <module>\n"
+                           "    main()\nValueError: invalid literal for int() with base 10: 'abc'\nany ideas?"),
+    ("a JavaScript error and its stack", "TypeError: Cannot read properties of undefined (reading 'map')\n"
+                                         "    at App (App.jsx:12:5)\n    at render (react-dom.js:99:1)\nwhy"),
+    ("Rust", "error[E0308]: mismatched types\n --> src/main.rs:4:5\n  |\nhelp me"),
+    ("a C compiler", "main.c:3:5: error: 'x' undeclared (first use in this function)\nwhat now"),
+    ("pytest", "FAILED tests/test_api.py::test_login - AssertionError: 401 != 200\nfix it"),
+    ("go test", "--- FAIL: TestParse (0.00s)\n    parse_test.go:14: got 3, want 4\nhmm"),
+    ("a Go panic", "panic: runtime error: index out of range [5] with length 3\n\ngoroutine 1 [running]:"),
+    ("an uncaught browser error", "Uncaught ReferenceError: foo is not defined\nat line 3"),
+    ("the error only inside a fence", "it fails:\n```\nKeyError: 'user_id'\n```\nhelp"),
+    ("an error line with CRLF", "still broken\r\nModuleNotFoundError: No module named 'requests'\r\n"),
+    ("prose that isn't an error", "the error is that terror and Errors happen, error: none"),
+    ("five words, so character shingles", "make the button bigger please"),
+    ("six words, so word shingles", "make the button a bit bigger"),
+    ("the worked example of 10.11", "still broken, see src/nav.js:12\r\nTypeError: x is undefined"),
+)
+
+
+def normalization_json(note, text):
+    removed, words = normalize(text)
+    tag, xs = shingles(words)
+    sig = error_signature(text)
+    return {"note": note, "text": text.encode("utf-8").hex(), "removed_lines": removed,
+            "normalized": " ".join(words).encode("utf-8").hex(), "shingle_kind": SHINGLE_KINDS[tag],
+            "shingles": [x.encode("utf-8").hex() for x in xs],
+            "signature": None if sig is None else sig.encode("utf-8").hex()}
+
+
+def prompt_feature_json(k_dev, rtype, note, text, prompt_class):
+    f, values = prompt_features(derive_keys(k_dev)["k_feat"], text, prompt_class)
+    return {"note": note, "k_dev": k_dev.hex(), "rtype": rtype, "text": text.encode("utf-8").hex(),
+            "prompt_class": prompt_class, "shingle_values": [v.hex() for v in values], "f": f}
+
+
+def tool_feature_json(k_dev, rtype, note, hunks, command):
+    out = {"note": note, "k_dev": k_dev.hex(), "rtype": rtype}
+    if rtype == AGENT_TOOL:
+        out["hunks"] = [dict(zip(("path", "old_start", "old_lines", "new_start", "new_lines"), h)) for h in hunks]
+    if command is not None:
+        out["command"] = command.encode("utf-8").hex()
+    out["f"] = tool_features(derive_keys(k_dev)["k_feat"], hunks if rtype == AGENT_TOOL else None, command)
+    return out
+
+
+FEATURE_PROMPTS = (
+    ("the worked example of 10.11", "still broken, see src/nav.js:12\r\nTypeError: x is undefined", "error_paste"),
+    ("a re-roll, first", "the navbar still overlaps the hero on mobile, can you fix the css", "substantive"),
+    ("a re-roll, same words in other case", "The navbar STILL overlaps the hero on mobile, can you fix the CSS", "substantive"),
+    ("a re-roll, one word changed", "the navbar still overlaps the hero on mobile, can you fix the styles", "substantive"),
+    ("unrelated", "add a dark mode toggle to the settings page and remember the choice", "substantive"),
+    ("a go-ahead", "try again", "low_effort"),
+    ("an answer", "2", "answer"),
+    ("empty", "", "low_effort"),
+    ("only pasted content", "<pasted_content id=\"7\">\nTraceback (most recent call last):\n  File \"x.py\", line 1\n"
+                            "NameError: name 'y' is not defined\n</pasted_content>", "error_paste"),
+    ("non-ASCII", "\u0415\u0449\u0451 \u0440\u0430\u0437 \u2014 \u043f\u043e\u0447\u0438\u043d\u0438 "
+                  "\u043a\u043d\u043e\u043f\u043a\u0443 \U0001f64f", "substantive"),
+)
+
+
+def make_features(k_dev):
+    out = [prompt_feature_json(k_dev, PROMPT_SUBMIT, note, text, pc) for note, text, pc in FEATURE_PROMPTS]
+    out.append(prompt_feature_json(k_dev, CLI_TRACK, "a track label", "make the navbar sticky on mobile", "substantive"))
+    out.append(tool_feature_json(k_dev, AGENT_TOOL, "an edit across two files, with an insertion and a deletion", [
+        ("src/nav.js", 10, 3, 10, 5), ("src/nav.js", 40, 0, 43, 2), ("web/app.tsx", 1, 4, 0, 0)], None))
+    out.append(tool_feature_json(k_dev, AGENT_TOOL, "a new file outside the project, and a Windows path", [
+        ("/tmp/scratch.txt", 0, 0, 1, 12), ("C:/Users/teen/notes.txt", 7, 1, 7, 1)], None))
+    out.append(tool_feature_json(k_dev, AGENT_TOOL, "a command run by the agent", [], "npm  test\t-- --watch\n"))
+    out.append(tool_feature_json(k_dev, AGENT_TOOL, "a read: no hunks, no command", [], None))
+    out.append(tool_feature_json(k_dev, SHELL_COMMAND, "a command typed in a shell", None, "  pytest -k  test_login "))
+    out.append(tool_feature_json(k_dev, SHELL_COMMAND, "a shell event with no command line", None, None))
+    return out
+
+
+def make_shingle_reveals(features):
+    """CC8 reveals for some of the prompts above, and one of each failure."""
+    out = []
+    for item in features[:5] + features[7:8]:
+        mh = bytes.fromhex(item["f"]["mh"])
+        text = bytes.fromhex(item["text"]).decode("utf-8")
+        _, words = normalize(text)
+        xs = shingles(words)[1]
+        pairs = sorted(zip((bytes.fromhex(v) for v in item["shingle_values"]), (x.encode("utf-8") for x in xs)))
+        entries = [{"v": v.hex(), "x": x.hex()} for v, x in pairs]
+        out.append({"note": "%s: every shingle shown" % item["note"], "mh": mh.hex(), "entries": entries,
+                    "verdict": "ok"})
+    first = out[0]
+    hidden = [{"v": e["v"]} if i % 3 == 0 else e for i, e in enumerate(first["entries"])]
+    out.append(dict(first, note="the worked example with every third shingle hidden", entries=hidden))
+    mh = sketch_from_bytes(bytes.fromhex(first["mh"]))
+    entries = first["entries"]
+    # A value that is the minimum somewhere, so changing it shows.
+    pick = next(i for i, e in enumerate(entries) if any(
+        h == m for h, m in zip(minhash_values(bytes.fromhex(e["v"])), mh)))
+    changed = [dict(e) for e in entries]
+    changed[pick]["v"] = sha256(b"not the shingle's value").hex()
+    changed.sort(key=lambda e: e["v"])
+    out.append(dict(first, note="a value that sets a minimum, replaced", entries=changed, verdict="sketch"))
+    out.append(dict(first, note="out of order", entries=entries[1:2] + entries[:1] + entries[2:], verdict="bad_entry"))
+    out.append(dict(first, note="a value twice", entries=entries[:1] + entries[:1] + entries[1:], verdict="bad_entry"))
+    out.append(dict(first, note="a 31-byte value", entries=[{"v": entries[0]["v"][:62]}] + entries[1:],
+                    verdict="bad_entry"))
+    out.append(dict(first, note="a shingle missing", entries=entries[:pick] + entries[pick + 1:], verdict="sketch"))
+    for item in out:
+        mh = sketch_from_bytes(bytes.fromhex(item["mh"]))
+        entries = [(bytes.fromhex(e["v"]), bytes.fromhex(e["x"]) if "x" in e else None) for e in item["entries"]]
+        if verify_shingle_reveal(mh, entries)[0] != item["verdict"]:
+            raise LedgerError("shingle reveal %s isn't %s" % (item["note"], item["verdict"]))
+    return out
+
+
+def make_jaccard(features):
+    by = {f["note"]: sketch_from_bytes(bytes.fromhex(f["f"]["mh"])) for f in features if "mh" in f["f"]}
+    pairs = (
+        ("identical after normalization", "a re-roll, first", "a re-roll, same words in other case"),
+        ("one word changed", "a re-roll, first", "a re-roll, one word changed"),
+        ("unrelated prompts", "a re-roll, first", "unrelated"),
+        ("two empty sets", "empty", "only pasted content"),
+        ("an empty set and a prompt", "empty", "a go-ahead"),
+    )
+    return [{"note": note, "a": sketch_bytes(by[a]).hex(), "b": sketch_bytes(by[b]).hex(),
+             "matches": jaccard_matches(by[a], by[b])} for note, a, b in pairs]
+
+
+def make_draw(s, note, pool_size, devices, commits):
+    r = s.take(32)
+    metadata = ("stand-in metadata reveal: %s" % note).encode("ascii")
+    seed = draw_seed(r, metadata)
+    pool = []
+    for i in range(pool_size):
+        device_id = devices[i % len(devices)]
+        pool.append((device_id, 1 + 37 * i + s.below(37)))
+    out = {"note": note, "r": r.hex(), "metadata": metadata.hex(), "seed": seed.hex(),
+           "pool": [{"device_id": d, "seq": q, "score": draw_score(seed, d, q).hex()} for d, q in pool],
+           "drawn": [{"device_id": d, "seq": q} for d, q in draw(seed, pool)]}
+    if commits:
+        ids = [s.take(20 if i % 2 else 32) for i in range(commits)]
+        out["commits"] = [{"commit": c.hex(), "score": commit_score(seed, c).hex()} for c in ids]
+        out["drawn_commits"] = [{"commit": c.hex()} for c in draw_commits(seed, ids)]
+    return out
+
+
+def make_content_vectors():
+    k_dev = Stream("content-key").take(32)
+    s = Stream("content-texts")
+    crafted = (
+        (PROMPT_SUBMIT, "empty prompt", ""),
+        (PROMPT_SUBMIT, "short prompt", "fix the login bug"),
+        (PROMPT_SUBMIT, "CRLF", "line one\r\nline two\r\n"),
+        (PROMPT_SUBMIT, "leading and trailing whitespace", "  leading and trailing whitespace \t\n"),
+        (PROMPT_SUBMIT, "non-ASCII", "\u0415\u0449\u0451 \u0440\u0430\u0437 \u2014 \u043f\u043e\u0447\u0438\u043d\u0438 "
+                                     "\u043a\u043d\u043e\u043f\u043a\u0443 \U0001f64f\u00a0\u0441\u0435\u0439\u0447\u0430\u0441"
+                                     "\u3000\u4fee\u590d\u8fd9\u4e2a\u9519\u8bef"),
+        (PROMPT_SUBMIT, "secret and email", "my key is sk-test-51Hx and my email is teen@example.com, why does it fail?"),
+        (PROMPT_SUBMIT, "whitespace only", "\n\n  \t"),
+        (AGENT_OUTPUT, "agent message with code", "Here's the fix:\n```js\nconst x = 1;\n```\nRun the tests again."),
+        (CLI_TRACK, "track label", "make the navbar sticky on mobile"),
+    )
+    commitments = []
+    for seq, (rtype, note, text) in enumerate(crafted, 1):
+        commitments.append(commitment_json(k_dev, 1000 + seq, rtype, text.encode("utf-8"), note))
+    # An agent message over 16 KiB whose cut falls inside a three-byte
+    # character, so the committed text stops before it.
+    raw = ("word " * 3276 + "ab\u4e2dcd").encode("utf-8")
+    commitments.append(commitment_json(k_dev, 2000, AGENT_OUTPUT, committed_message(raw),
+                                       "agent message over 16 KiB, cut before a split character", raw=raw,
+                                       with_tokens=False))
+    for i in range(12):
+        text = random_text(s, 24).encode("utf-8")
+        commitments.append(commitment_json(k_dev, 3000 + s.below(1 << 20), s.pick(CONTENT_RTYPES), text,
+                                           "random text %d" % (i + 1)))
+    reveals = make_reveals(k_dev, commitments)
+    normalizations = [normalization_json(note, text) for note, text in NORMALIZATION_TEXTS]
+    s = Stream("content-normalizations")
+    normalizations += [normalization_json("random text %d" % (i + 1), random_text(s, 30)) for i in range(10)]
+    features = make_features(k_dev)
+    s = Stream("content-draws")
+    draws = [
+        make_draw(s, "a pool of 12 on two devices", 12, ["d_example", "d_other"], 5),
+        make_draw(s, "a pool smaller than CHALLENGE_K", 4, ["d_example"], 1),
+        make_draw(s, "a pool of 137", 137, ["d_example", "d_laptop", "d_" + "x" * 126], 0),
+        make_draw(s, "a pool of 300, where the cap applies", 300, ["d_example"], 3),
+        make_draw(s, "an empty pool", 0, ["d_example"], 2),
+    ]
+    sizes = [{"pool": p, "k": challenge_k(p), "drawn": min(challenge_k(p), p)}
+             for p in (0, 1, 9, 10, 11, 99, 100, 101, 109, 110, 111, 200, 289, 290, 291, 299, 300, 1000)]
+    return {
+        "format": FORMAT,
+        "spec": "docs/spec/ledger-v1.md",
+        "generator": "python3 -I tools/ledger_ref.py vectors-content",
+        "note": "Part 2 vectors: commitments, reveals, normalization, keyed features, CC8 reveals and draws. "
+                "Test keys; see testdata/ledger/README.md.",
+        "lowercase": {"unicode": LOWER_UNICODE, "runs": [
+            {"first": a, "count": b, "delta": c, "stride": d} for a, b, c, d in LOWER_RUNS]},
+        "commitments": [c[0] for c in commitments],
+        "reveals": reveals,
+        "normalizations": normalizations,
+        "features": features,
+        "jaccard": make_jaccard(features),
+        "shingle_reveals": make_shingle_reveals(features),
+        "draws": draws,
+        "challenge_k": sizes,
+    }
+
+
+def content_vectors_text():
+    return dumps(make_content_vectors()) + "\n"
+
+
+def cmd_vectors_content(out):
+    text = content_vectors_text()
+    with open(out, "w", encoding="ascii", newline="\n") as f:
+        f.write(text)
+    print("vectors-content: wrote %s (%d bytes)" % (out, len(text)))
     return 0
 
 
@@ -1870,6 +2510,294 @@ def test_check_catches():
     return "%d kinds of tampering caught" % len(mutations)
 
 
+def content_example():
+    """The worked example in spec section 10.11, as (label, value) pairs.
+    selftest checks that every value appears in the spec."""
+    out = []
+    keys = derive_keys(bytes(range(32)))
+    text = "still broken, see src/nav.js:12\r\nTypeError: x is undefined"
+    toks, salts, leaves, n, root = commit_text(keys["k_tok"], 2, text.encode("utf-8"))
+    for j in (1, 2, 7, 15):
+        out += [("salt %d" % j, salts[j - 1]), ("leaf %d" % j, leaves[j - 1])]
+    out += [("n", n), ("C", root)]
+    items = reveal_items(salts, toks, leaves, [(6, 1, "known", None)])
+    out.append(("reveal verdict", verify_reveal(n, root, items)[0]))
+    removed, words = normalize(text)
+    out += [("normalized", " ".join(words)), ("signature", error_signature(text))]
+    tag, xs = shingles(words)
+    out += [("shingle %d" % i, json.dumps(x)) for i, x in enumerate(xs)]
+    values = [shingle_value(keys["k_feat"], tag, x) for x in xs]
+    out += [("value of %s" % json.dumps(xs[0]), values[0])]
+    out += [("value %d of %s" % (i, json.dumps(xs[0])), "%08x" % h) for i, h in enumerate(minhash_values(values[0])[:8])]
+    f, _ = prompt_features(keys["k_feat"], text, "error_paste")
+    out += [("mh", f["mh"]), ("th", f["th"]), ("es", f["es"]),
+            ("f", json.dumps(f, separators=(",", ":"))),
+            ("c", json.dumps({"n": n, "r": root.hex()}, separators=(",", ":")))]
+    tool = tool_features(keys["k_feat"], [("src/nav.js", 10, 3, 10, 5)], "npm test")
+    out += [("tool f", json.dumps(tool, separators=(",", ":")))]
+    r = bytes(range(32, 64))
+    metadata = b"stand-in metadata reveal"
+    seed = draw_seed(r, metadata)
+    pool = [("d_example", q) for q in (2, 9, 14, 23, 31, 40, 52, 61)] + [("d_other", q) for q in (7, 18, 26, 33)]
+    out += [("sha of metadata", sha256(metadata)), ("seed", seed),
+            ("score of d_example 2", draw_score(seed, "d_example", 2)),
+            ("drawn", ", ".join("%s %d" % item for item in draw(seed, pool)))]
+    return out
+
+
+def test_content_example():
+    with open(repo_path("docs", "spec", "ledger-v1.md"), encoding="utf-8") as f:
+        spec = f.read()
+    values = content_example()
+    for label, v in values:
+        text = v.hex() if isinstance(v, bytes) else str(v)
+        expect(text in spec, "the spec doesn't show part 2's %s, %s" % (label, text))
+    return "%d values" % len(values)
+
+
+def test_whitespace_set():
+    """10.2's whitespace is Python's isspace() less U+001C to U+001F, which
+    have bidirectional class B or S but aren't White_Space."""
+    python = {cp for cp in range(0x110000) if not 0xD800 <= cp <= 0xDFFF and chr(cp).isspace()}
+    want = python - {0x1C, 0x1D, 0x1E, 0x1F}
+    expect(WHITESPACE == frozenset(want), "WHITESPACE differs from isspace() less U+001C..U+001F: %s" %
+           sorted(WHITESPACE ^ want))
+    return "%d code points" % len(WHITESPACE)
+
+
+def python_lower(cp):
+    """Python's lowercase of one code point, which is the simple mapping
+    apart from U+0130, whose full mapping adds U+0307."""
+    lower = chr(cp).lower()
+    return 0x69 if cp == 0x130 else ord(lower) if len(lower) == 1 else None
+
+
+def test_lowercase_table():
+    import unicodedata
+    pairs = 0
+    if unicodedata.unidata_version == LOWER_UNICODE:
+        derived = {}
+        for cp in range(0x110000):
+            if 0xD800 <= cp <= 0xDFFF:
+                continue
+            lo = python_lower(cp)
+            expect(lo is not None, "U+%04X lowercases to more than one code point" % cp)
+            if lo != cp:
+                derived[cp] = lo
+        expect(derived == LOWER, "LOWER_RUNS differs from unicodedata %s at %s" % (
+            LOWER_UNICODE, sorted(set(derived.items()) ^ set(LOWER.items()))[:3]))
+        how = "equal to Python's unicodedata %s" % LOWER_UNICODE
+    else:
+        # A later database keeps every case pair (Unicode's stability policy),
+        # so each pinned mapping must still hold.
+        for cp, lo in LOWER.items():
+            expect(python_lower(cp) == lo, "U+%04X no longer lowercases to U+%04X" % (cp, lo))
+        how = "pairs still hold in unicodedata %s" % unicodedata.unidata_version
+    for cp, lo in LOWER.items():
+        expect(cp not in WHITESPACE and lo not in WHITESPACE, "lowercasing touches whitespace")
+        pairs += 1
+    return "%d mappings, %s" % (pairs, how)
+
+
+def test_tokens():
+    """Tokens rebuild the text, alternate in kind, and the 16 KiB cut stops
+    at a character boundary."""
+    s = Stream("selftest-tokens")
+    for _ in range(500):
+        text = random_text(s, 40)
+        toks = tokenize(text)
+        expect("".join(toks) == text, "tokens don't rebuild %s" % json.dumps(text))
+        expect(all(toks), "an empty token")
+        expect(all(len({is_space(c) for c in t}) == 1 for t in toks), "a token of both kinds")
+        expect(all(is_space(a[0]) != is_space(b[0]) for a, b in zip(toks, toks[1:])), "two tokens of one kind side by side")
+    expect(tokenize("") == [], "the empty text has tokens")
+    cases = 0
+    for ch in ("a", "é", "中", "\U0001f64f"):
+        width = len(ch.encode("utf-8"))
+        for pad in range(MESSAGE_MAX - 4, MESSAGE_MAX + 1):
+            raw = (b"x" * pad) + (ch * 3).encode("utf-8")
+            cut = committed_message(raw)
+            expect(len(cut) <= MESSAGE_MAX and raw.startswith(cut), "the cut isn't a prefix of at most 16 KiB")
+            expect(len(raw) <= MESSAGE_MAX or MESSAGE_MAX - len(cut) < width, "the cut drops a whole character")
+            cut.decode("utf-8")
+            cases += 1
+    return "500 random texts, %d cuts" % cases
+
+
+def test_reveal_properties():
+    """Random removals verify; any change to a kept token, a salt or a
+    removed leaf doesn't."""
+    s = Stream("selftest-reveals")
+    k_tok = derive_keys(s.take(32))["k_tok"]
+    checked = tampered = 0
+    for i in range(100):
+        text = random_text(s, 20).encode("utf-8")
+        toks, salts, leaves, n, root = commit_text(k_tok, 1 + i, text)
+        items = reveal_items(salts, toks, leaves, random_spans(s, n))
+        expect(verify_reveal(n, root, items) == ("ok", None), "a random reveal of %s fails" % json.dumps(text.decode()))
+        checked += 1
+        for k, item in enumerate(items):
+            if item[0] == "kept":
+                changed = item[2][:-1] + bytes([item[2][-1] ^ 1])
+                variants = [("kept", item[1], changed), ("kept", bytes([item[1][0] ^ 1]) + item[1][1:], item[2])]
+            else:
+                variants = [item[:3] + ([bytes([item[3][0][0] ^ 1]) + item[3][0][1:]] + item[3][1:],) + item[4:]]
+            for v in variants:
+                expect(verify_reveal(n, root, items[:k] + [v] + items[k + 1:])[0] != "ok",
+                       "a changed item %d of a reveal still verifies" % k)
+                tampered += 1
+    return "%d reveals, %d tamperings" % (checked, tampered)
+
+
+def test_minhash_estimates():
+    """The hash family behaves like MinHash: over 100 pairs of random sets
+    the estimate is unbiased and close to the true Jaccard similarity. With
+    64 values its standard error is up to 0.0625, so the mean absolute error
+    should sit near 0.04."""
+    s = Stream("selftest-minhash")
+    k_feat = derive_keys(s.take(32))["k_feat"]
+    total = signed = 0.0
+    for _ in range(100):
+        universe = ["w%d" % s.below(1 << 30) for _ in range(40)]
+        a = set(universe[:10 + s.below(25)])
+        b = set(universe[s.below(25):])
+        true = len(a & b) / len(a | b)
+        sa = sketch([shingle_value(k_feat, WORD_SHINGLE, x) for x in a])
+        sb = sketch([shingle_value(k_feat, WORD_SHINGLE, x) for x in b])
+        err = jaccard_matches(sa, sb) / MINHASH_SIZE - true
+        total += abs(err)
+        signed += err
+        expect(sa == sketch([shingle_value(k_feat, WORD_SHINGLE, x) for x in sorted(a, reverse=True)]),
+               "the sketch depends on the order of the shingles")
+    expect(total / 100 < 0.07, "the estimates are off by %.3f on average" % (total / 100))
+    expect(abs(signed / 100) < 0.02, "the estimates are biased by %.3f" % (signed / 100))
+    return "mean error %.3f, bias %+.3f over 100 pairs" % (total / 100, signed / 100)
+
+
+def test_draw_properties():
+    """The draw takes the CHALLENGE_K smallest scores whatever the pool's
+    order, and CHALLENGE_K steps at the rounding boundaries."""
+    for pool, k in ((0, 10), (100, 10), (101, 11), (110, 11), (111, 12), (290, 29), (291, 30), (5000, 30)):
+        expect(challenge_k(pool) == k, "CHALLENGE_K(%d) is %d, want %d" % (pool, challenge_k(pool), k))
+    s = Stream("selftest-draws")
+    for size in (0, 1, 9, 10, 11, 57, 150):
+        seed = s.take(32)
+        pool = [("d_" + s.take(3).hex(), 1 + s.below(1 << 40)) for _ in range(size)]
+        drawn = draw(seed, pool)
+        shuffled = list(pool)
+        s.shuffle(shuffled)
+        expect(draw(seed, shuffled) == drawn, "the draw depends on the pool's order")
+        everything = sorted(pool, key=lambda item: draw_score(seed, *item))
+        expect(drawn == everything[:len(drawn)] and len(drawn) == min(size, challenge_k(size)),
+               "the draw isn't the smallest scores")
+    return "7 pools"
+
+
+def test_content_vectors_regenerate():
+    with open(repo_path("testdata", "ledger", "vectors-content.json"), encoding="ascii", newline="") as f:
+        published = f.read()
+    expect(published == content_vectors_text(), "testdata/ledger/vectors-content.json isn't what `vectors-content` writes")
+    return "%d bytes" % len(published)
+
+
+def test_content_vectors_check():
+    rep = check_document(load_json("testdata", "ledger", "vectors-content.json"))
+    expect(not rep.errors, "check finds %d mismatches, the first: %s" % (len(rep.errors), rep.errors[:1]))
+    return summary(rep.counts)
+
+
+def test_check_catches_content():
+    """check reports each kind of tampering with the part 2 vectors."""
+    full = load_json("testdata", "ledger", "vectors-content.json")
+
+    def note_index(section, note):
+        return next(i for i, item in enumerate(full[section]) if item.get("note") == note)
+
+    # A slice of the vectors, so each mutation checks a few items.
+    picks = {
+        "commitments": ["short prompt"],
+        "reveals": ["short prompt: everything kept", "short prompt: removal at the start"],
+        "normalizations": ["the worked example of 10.11"],
+        "features": ["the worked example of 10.11", "an edit across two files, with an insertion and a deletion",
+                     "a command typed in a shell"],
+        "jaccard": ["one word changed"],
+        "shingle_reveals": ["the worked example of 10.11: every shingle shown"],
+        "draws": ["a pool of 12 on two devices"],
+    }
+    base = {"format": FORMAT, "lowercase": full["lowercase"], "challenge_k": full["challenge_k"]}
+    for name, notes in picks.items():
+        base[name] = [full[name][note_index(name, note)] for note in notes]
+    expect(not check_document(json.loads(json.dumps(base))).errors, "the slice of the content vectors doesn't pass check")
+
+    def at(section, i, *keys):
+        def get(doc):
+            obj = doc[section][i]
+            for k in keys:
+                obj = obj[k]
+            return obj
+        return get
+
+    def setter(get, key, fn):
+        def apply(doc):
+            obj = get(doc)
+            obj[key] = fn(obj[key])
+        return apply
+
+    short, example, tool, shell = 0, 0, 1, 2
+    long_msg = full["commitments"][note_index("commitments", "agent message over 16 KiB, cut before a split character")]
+
+    def swap(key):
+        def apply(doc):
+            lst = doc["draws"][0][key]
+            lst[0], lst[1] = lst[1], lst[0]
+        return apply
+
+    mutations = (
+        ("a lowercase run", setter(lambda d: d["lowercase"]["runs"][0], "delta", lambda x: x + 1)),
+        ("a committed text", setter(at("commitments", short), "text", flip)),
+        ("a commitment root", setter(at("commitments", short), "root", flip)),
+        ("a token count", setter(at("commitments", short), "n", lambda x: x + 1)),
+        ("a token salt", setter(at("commitments", short, "tokens", 2), "salt", flip)),
+        ("a token leaf", setter(at("commitments", short, "tokens", 2), "leaf", flip)),
+        ("a token's bytes", setter(at("commitments", short, "tokens", 2), "token", flip)),
+        ("a commitment's rtype", setter(at("commitments", short), "rtype", lambda _: AGENT_TOOL)),
+        ("an agent message left uncut", lambda d: d.update(commitments=[
+            dict(long_msg, text=long_msg["raw"][:2 * MESSAGE_MAX])])),
+        ("a reveal's verdict", setter(at("reveals", 0), "verdict", lambda _: "root")),
+        ("a kept token in a reveal", setter(at("reveals", 0, "items", 0), "token", flip)),
+        ("a removed leaf in a reveal", setter(at("reveals", 1, "items", 0, "leaves"), 0, flip)),
+        ("a normalized text", setter(at("normalizations", example), "normalized", flip)),
+        ("the removed lines", setter(at("normalizations", example), "removed_lines", lambda _: [])),
+        ("the shingle kind", setter(at("normalizations", example), "shingle_kind", lambda _: "word3")),
+        ("an error signature", setter(at("normalizations", example), "signature", flip)),
+        ("a missing shingle", setter(at("normalizations", example), "shingles", lambda xs: xs[1:])),
+        ("a sketch", setter(at("features", 0, "f"), "mh", flip)),
+        ("a template hash", setter(at("features", 0, "f"), "th", flip)),
+        ("a dropped error signature", lambda d: d["features"][0]["f"].pop("es")),
+        ("a prompt class", setter(at("features", 0, "f"), "pc", lambda _: "substantive")),
+        ("a per-shingle value", setter(at("features", 0, "shingle_values"), 0, flip)),
+        ("a hunk's path", setter(at("features", tool, "f", "h", 0), "p", flip)),
+        ("a hunk's numbers", setter(at("features", tool, "f", "h", 0), "nl", lambda x: x + 1)),
+        ("a command hash", setter(at("features", shell, "f"), "ch", flip)),
+        ("a Jaccard count", setter(at("jaccard", 0), "matches", lambda x: x + 1)),
+        ("a shingle reveal's verdict", setter(at("shingle_reveals", 0), "verdict", lambda _: "sketch")),
+        ("a draw seed", setter(at("draws", 0), "seed", flip)),
+        ("a pool score", setter(at("draws", 0, "pool", 3), "score", flip)),
+        ("the drawn order", swap("drawn")),
+        ("the drawn commits", swap("drawn_commits")),
+        ("a CHALLENGE_K", setter(at("challenge_k", 7), "k", lambda x: x - 1)),
+    )
+    for name, mutate in mutations:
+        doc = json.loads(json.dumps(base))
+        mutate(doc)
+        try:
+            caught = bool(check_document(doc).errors)
+        except FormatError:
+            caught = True
+        expect(caught, "check doesn't notice a changed %s" % name)
+    return "%d kinds of tampering caught" % len(mutations)
+
+
 SELFTESTS = (
     ("CT file checksums", test_ct_sums),
     ("RFC 4231 HMAC-SHA256", test_rfc4231),
@@ -1882,6 +2810,16 @@ SELFTESTS = (
     ("vectors regenerate", test_vectors_regenerate),
     ("vectors pass check", test_vectors_check),
     ("check catches tampering", test_check_catches),
+    ("whitespace set", test_whitespace_set),
+    ("Unicode 15.0.0 lowercase table", test_lowercase_table),
+    ("tokens and the 16 KiB cut", test_tokens),
+    ("reveal properties", test_reveal_properties),
+    ("MinHash estimates", test_minhash_estimates),
+    ("draw properties", test_draw_properties),
+    ("part 2 worked example", test_content_example),
+    ("content vectors regenerate", test_content_vectors_regenerate),
+    ("content vectors pass check", test_content_vectors_check),
+    ("check catches content changes", test_check_catches_content),
 )
 
 
@@ -1901,6 +2839,7 @@ def cmd_selftest():
 
 USAGE = """usage: ledger_ref.py selftest
        ledger_ref.py vectors [--out PATH]
+       ledger_ref.py vectors-content [--out PATH]
        ledger_ref.py check FILE"""
 
 
@@ -1909,6 +2848,8 @@ def main(argv):
         return cmd_selftest()
     if argv[:1] == ["vectors"] and len(argv) in (1, 3) and (len(argv) == 1 or argv[1] == "--out"):
         return cmd_vectors(argv[2] if len(argv) == 3 else repo_path("testdata", "ledger", "vectors.json"))
+    if argv[:1] == ["vectors-content"] and len(argv) in (1, 3) and (len(argv) == 1 or argv[1] == "--out"):
+        return cmd_vectors_content(argv[2] if len(argv) == 3 else repo_path("testdata", "ledger", "vectors-content.json"))
     if argv[:1] == ["check"] and len(argv) == 2:
         return cmd_check(argv[1])
     print(USAGE, file=sys.stderr)
