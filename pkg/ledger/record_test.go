@@ -1,0 +1,441 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
+package ledger
+
+import (
+	"bytes"
+	"encoding/binary"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"reflect"
+	"strings"
+	"testing"
+
+	"github.com/some-du6e/pairtime/pkg/event"
+)
+
+func TestRTypeTable(t *testing.T) {
+	// Spec 4.2's table, written out: the codes are frozen, so this list
+	// must never follow a change to pkg/event's kindTable.
+	spec42 := []string{
+		0x01: "session.start", 0x02: "session.end", 0x03: "prompt.submit", 0x04: "agent.output",
+		0x05: "agent.tool", 0x06: "agent.permission", 0x07: "agent.interrupt", 0x08: "agent.queue",
+		0x09: "agent.stop", 0x0a: "agent.subagent", 0x0b: "editor.activity", 0x0c: "shell.command",
+		0x0d: "git.change", 0x0e: "os.presence", 0x0f: "os.focus", 0x10: "os.power",
+		0x11: "otel.active_time", 0x12: "cli.track",
+	}
+	cases := []struct {
+		name  string
+		check func(t *testing.T)
+	}{
+		{"0x01 to 0x12 hold the 18 kinds in spec 4.2's order", func(t *testing.T) {
+			for code := 0x01; code <= 0x12; code++ {
+				k, ok := RType(code).EventKind()
+				if !ok || string(k) != spec42[code] {
+					t.Errorf("rtype 0x%02x holds %q, spec 4.2 says %q", code, k, spec42[code])
+				}
+				if r, ok := RTypeOf(event.Kind(spec42[code])); !ok || r != RType(code) {
+					t.Errorf("RTypeOf(%s) = 0x%02x, %v; want 0x%02x", spec42[code], uint8(r), ok, code)
+				}
+			}
+		}},
+		{"every kind pkg/event defines has an rtype, so none can reach the ledger without one", func(t *testing.T) {
+			for _, k := range event.Kinds() {
+				if _, ok := RTypeOf(k); !ok {
+					t.Errorf("kind %s has no rtype; give it the next free code from 0x13", k)
+				}
+			}
+		}},
+		{"0x40 is a checkpoint and 0x41 an upload-failure note", func(t *testing.T) {
+			if RTypeCheckpoint != 0x40 || RTypeUploadFailure != 0x41 {
+				t.Errorf("checkpoint is 0x%02x and upload failure 0x%02x", uint8(RTypeCheckpoint), uint8(RTypeUploadFailure))
+			}
+			if RTypeCheckpoint.String() != "checkpoint" || RTypeUploadFailure.String() != "upload_failure" {
+				t.Errorf("their names are %q and %q", RTypeCheckpoint, RTypeUploadFailure)
+			}
+		}},
+		{"0x00, 0x13 to 0x3f and 0x42 to 0xff are reserved", func(t *testing.T) {
+			for code := 0; code < 256; code++ {
+				want := code >= 0x01 && code <= 0x12 || code == 0x40 || code == 0x41
+				if RType(code).Known() != want {
+					t.Errorf("rtype 0x%02x: Known() = %v, want %v", code, !want, want)
+				}
+			}
+		}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, c.check)
+	}
+}
+
+// localFieldsSet returns the JSON names of p's local fields that aren't
+// zero.
+func localFieldsSet(p event.Payload) []string {
+	var set []string
+	v := reflect.ValueOf(p).Elem()
+	for i := 0; i < v.NumField(); i++ {
+		f := v.Type().Field(i)
+		if f.Tag.Get("pairtime") == "local" && !v.Field(i).IsZero() {
+			set = append(set, strings.Split(f.Tag.Get("json"), ",")[0])
+		}
+	}
+	return set
+}
+
+func TestEventRecordBodies(t *testing.T) {
+	k := testKeys(t)
+	for i, kind := range event.Kinds() {
+		t.Run(string(kind)+": the body is the nonce then the shareable event, and decoding then encoding it gives the same bytes", func(t *testing.T) {
+			ev, err := sampleEvent(kind)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ev.Seq = uint64(100 + i)
+			if len(localFieldsSet(ev.Data)) == 0 && hasLocalFields(ev.Data) {
+				t.Fatal("the sample sets none of its local fields, so it can't show they are cleared")
+			}
+			rec, err := EventRecord(k, ev)
+			if err != nil {
+				t.Fatal(err)
+			}
+			n := k.Nonce(ev.Seq)
+			if prefix := `{"n":"` + hex.EncodeToString(n[:]) + `","e":`; !bytes.HasPrefix(rec.Body, []byte(prefix)) {
+				t.Errorf("body doesn't start with %s: %s", prefix, rec.Body)
+			}
+			shareable, err := ev.Shareable().MarshalJSON()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if want := `{"n":"` + n.String() + `","e":` + string(shareable) + `}`; string(rec.Body) != want {
+				t.Errorf("body is\n%s\nwant\n%s", rec.Body, want)
+			}
+
+			// Decode, then encode: the body type gives the stored bytes back.
+			b, err := ParseBody(rec.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			again, err := b.Encode()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(again, rec.Body) {
+				t.Errorf("decoding and encoding the body gives\n%s\nnot\n%s", again, rec.Body)
+			}
+			// And through the event: decode it, write its record again.
+			got, err := b.Event()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if set := localFieldsSet(got.Data); len(set) != 0 {
+				t.Errorf("the stored event keeps local fields %v", set)
+			}
+			rec2, err := EventRecord(k, got)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(rec2.Body, rec.Body) || rec2.Header != rec.Header {
+				t.Errorf("writing the decoded event again gives\n%s\nnot\n%s", rec2.Body, rec.Body)
+			}
+
+			h := rec.Header
+			project, _ := ProjectDigest(ev.ProjectKey)
+			session, _ := SessionDigest(ev.SessionKey)
+			if r, _ := RTypeOf(kind); h.Seq() != ev.Seq || h.RType() != r || h.Project() != project || h.Session() != session {
+				t.Errorf("header %x isn't s %d, rtype 0x%02x and the event's digests", h, ev.Seq, uint8(r))
+			}
+			if err := CheckBody(rec.Header, rec.Body); err != nil {
+				t.Errorf("the body disagrees with its own header: %v", err)
+			}
+			if err := k.CheckNonce(ev.Seq, rec.Body); err != nil {
+				t.Error(err)
+			}
+		})
+	}
+}
+
+func hasLocalFields(p event.Payload) bool {
+	tp := reflect.TypeOf(p).Elem()
+	for i := 0; i < tp.NumField(); i++ {
+		if tp.Field(i).Tag.Get("pairtime") == "local" {
+			return true
+		}
+	}
+	return false
+}
+
+func TestOtherRecordBodies(t *testing.T) {
+	k := testKeys(t)
+	cases := []struct {
+		name     string
+		write    func() (Record, error)
+		wantBody string
+	}{
+		{
+			"a checkpoint stores its state compacted, under the project's digest and no session",
+			func() (Record, error) {
+				return CheckpointRecord(k, 3, "p_example", json.RawMessage("{ \"project_key\": \"p_example\",\n  \"buckets\": [1, 2] }"))
+			},
+			`{"project_key":"p_example","buckets":[1,2]}`,
+		},
+		{
+			"an upload-failure note stores the note, under no project and no session",
+			func() (Record, error) {
+				return UploadFailureRecord(k, 4, json.RawMessage(`{"reason":"tls"}`))
+			},
+			`{"reason":"tls"}`,
+		},
+		{
+			"a record's text is escaped the way encoding/json escapes it",
+			func() (Record, error) {
+				return UploadFailureRecord(k, 5, json.RawMessage(`{"reason":"<&>"}`))
+			},
+			`{"reason":"<&>"}`,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			rec, err := c.write()
+			if err != nil {
+				t.Fatal(err)
+			}
+			n := k.Nonce(rec.Header.Seq())
+			if want := `{"n":"` + n.String() + `","e":` + c.wantBody + `}`; string(rec.Body) != want {
+				t.Errorf("body is %s, want %s", rec.Body, want)
+			}
+			b, err := ParseBody(rec.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if again, err := b.Encode(); err != nil || !bytes.Equal(again, rec.Body) {
+				t.Errorf("decoding and encoding gives %s, %v", again, err)
+			}
+			if err := rec.Header.Check(); err != nil {
+				t.Error(err)
+			}
+			if err := CheckBody(rec.Header, rec.Body); err != nil {
+				t.Error(err)
+			}
+		})
+	}
+}
+
+func TestWritersRefuse(t *testing.T) {
+	k := testKeys(t)
+	event1 := func(kind event.Kind, edit func(*event.Event)) func() error {
+		return func() error {
+			ev, err := sampleEvent(kind)
+			if err != nil {
+				return err
+			}
+			ev.Seq = 1
+			edit(&ev)
+			_, err = EventRecord(k, ev)
+			return err
+		}
+	}
+	cases := []struct {
+		name  string
+		write func() error
+	}{
+		{"an os.presence event with a project_key is refused (spec 4.3)", event1(event.KindOSPresence, func(e *event.Event) { e.ProjectKey = "p_9f2c" })},
+		{"an os.focus event with a project_key is refused (spec 4.3)", event1(event.KindOSFocus, func(e *event.Event) { e.ProjectKey = "p_9f2c" })},
+		{"an os.power event with a project_key is refused (spec 4.3)", event1(event.KindOSPower, func(e *event.Event) { e.ProjectKey = "p_9f2c" })},
+		{"an event with seq 0 is refused; sequence numbers start at 1", event1(event.KindAgentOutput, func(e *event.Event) { e.Seq = 0 })},
+		{"an event that fails Validate is refused", event1(event.KindPromptSubmit, func(e *event.Event) { e.Data.(*event.PromptSubmit).TypedLenEst = 7 })},
+		{"an event whose project_key is a path is refused", event1(event.KindAgentTool, func(e *event.Event) { e.ProjectKey = "src/main.go" })},
+		{"an event with no payload is refused", event1(event.KindAgentOutput, func(e *event.Event) { e.Data = nil })},
+		{"a checkpoint with no project is refused", func() error {
+			_, err := CheckpointRecord(k, 1, "", json.RawMessage(`{}`))
+			return err
+		}},
+		{"a checkpoint whose state isn't JSON is refused", func() error {
+			_, err := CheckpointRecord(k, 1, "p_x", json.RawMessage(`{"a":`))
+			return err
+		}},
+		{"a checkpoint with a null state is refused", func() error {
+			_, err := CheckpointRecord(k, 1, "p_x", json.RawMessage(`null`))
+			return err
+		}},
+		{"an upload-failure note with no note is refused", func() error {
+			_, err := UploadFailureRecord(k, 1, nil)
+			return err
+		}},
+		{"a header of reserved rtype 0x13 is refused", func() error {
+			_, err := NewHeader(1, 0x13, "", event.NoSession)
+			return err
+		}},
+		{"a header of rtype 0x00 is refused", func() error {
+			_, err := NewHeader(1, 0x00, "", event.NoSession)
+			return err
+		}},
+		{"a checkpoint header with a session is refused", func() error {
+			_, err := NewHeader(1, RTypeCheckpoint, "p_x", "s_x")
+			return err
+		}},
+		{"an upload-failure header with a project is refused", func() error {
+			_, err := NewHeader(1, RTypeUploadFailure, "p_x", event.NoSession)
+			return err
+		}},
+		{"a header with a session key that isn't an opaque key is refused", func() error {
+			_, err := NewHeader(1, 0x03, "p_x", "a b")
+			return err
+		}},
+		{"a header whose session key is empty is refused; no session is \"none\"", func() error {
+			_, err := NewHeader(1, 0x03, "p_x", "")
+			return err
+		}},
+		{"a header whose project key is 129 characters is refused", func() error {
+			_, err := NewHeader(1, 0x03, strings.Repeat("p", 129), "s_x")
+			return err
+		}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if err := c.write(); err == nil {
+				t.Error("written")
+			}
+		})
+	}
+}
+
+func TestCheckBody(t *testing.T) {
+	k := testKeys(t)
+	ev, err := sampleEvent(event.KindPromptSubmit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ev.Seq = 7
+	rec, err := EventRecord(k, ev)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := func(edit func(*event.Event)) []byte {
+		e := ev
+		payload := *ev.Data.(*event.PromptSubmit)
+		e.Data = &payload
+		edit(&e)
+		raw, err := e.Shareable().MarshalJSON()
+		if err != nil {
+			t.Fatal(err)
+		}
+		out, err := Body{N: k.Nonce(7), E: raw}.Encode()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+	header := func(s uint64, r RType, project, session string) Header {
+		var h Header
+		binary.BigEndian.PutUint64(h[:8], s)
+		h[8] = byte(r)
+		p, _ := ProjectDigest(project)
+		ss, _ := SessionDigest(session)
+		copy(h[9:25], p[:])
+		copy(h[25:], ss[:])
+		return h
+	}
+	nonceHex := k.Nonce(7).String()
+	cases := []struct {
+		name   string
+		header Header
+		body   []byte
+		want   error
+	}{
+		{"a body that holds its header's event agrees with it", rec.Header, rec.Body, nil},
+		{"a body whose event is another kind than its header's rtype disagrees", header(7, 0x04, "p_9f2c", "s_4be1f0"), rec.Body, ErrBodyHeader},
+		{"a body whose seq isn't its header's s disagrees", rec.Header, body(func(e *event.Event) { e.Seq = 8 }), ErrBodyHeader},
+		{"a body whose project_key doesn't have its header's project digest disagrees", rec.Header, body(func(e *event.Event) { e.ProjectKey = "p_other" }), ErrBodyHeader},
+		{"a body with no project_key under a header with a project disagrees", rec.Header, body(func(e *event.Event) { e.ProjectKey = "" }), ErrBodyHeader},
+		{"a body whose session_key doesn't have its header's session digest disagrees", rec.Header, body(func(e *event.Event) { e.SessionKey = "s_other" }), ErrBodyHeader},
+		{"a body whose record isn't an event, under an event rtype, disagrees", rec.Header, []byte(`{"n":"` + nonceHex + `","e":{"stand_in":"prompt.submit","seq":7}}`), ErrBodyHeader},
+		{"a body that doesn't start with the n member isn't a body", rec.Header, []byte(`{"e":{},"n":"` + nonceHex + `"}`), ErrBody},
+		{"a body with a member part 1 doesn't define isn't a body", rec.Header, []byte(`{"n":"` + nonceHex + `","e":{},"x":1}`), ErrBody},
+		{"a body with data after the object isn't a body", rec.Header, append(bytes.Clone(rec.Body), []byte(`{}`)...), ErrBody},
+		{"a body with a null record isn't a body", rec.Header, []byte(`{"n":"` + nonceHex + `","e":null}`), ErrBody},
+		{"a body whose nonce is uppercase hex isn't a body", rec.Header, []byte(`{"n":"` + strings.ToUpper(nonceHex) + `","e":{}}`), ErrBody},
+		{"a body under an rtype not in the table is reported as unknown", header(7, 0x13, "", event.NoSession), []byte(`{"n":"` + nonceHex + `","e":{}}`), ErrUnknownRType},
+		{"a checkpoint body only has to parse, until WP-SC5 says how a state names its project", header(7, RTypeCheckpoint, "p_x", event.NoSession), []byte(`{"n":"` + nonceHex + `","e":{"any":"state"}}`), nil},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := CheckBody(c.header, c.body)
+			switch {
+			case c.want == nil && err != nil:
+				t.Errorf("CheckBody: %v", err)
+			case c.want != nil && !errors.Is(err, c.want):
+				t.Errorf("CheckBody gives %v, want an error wrapping %v", err, c.want)
+			}
+		})
+	}
+}
+
+func TestCheckNonce(t *testing.T) {
+	k := testKeys(t)
+	rec, err := UploadFailureRecord(k, 9, json.RawMessage(`{"reason":"dns"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := DeriveKeys(bytes.Repeat([]byte{0xff}, KeySize))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		name string
+		keys *Keys
+		s    uint64
+		body []byte
+		ok   bool
+	}{
+		{"a body carries its own record's nonce", k, 9, rec.Body, true},
+		{"a body doesn't carry another record's nonce", k, 10, rec.Body, false},
+		{"a body doesn't carry the nonce another device's K_leaf gives", other, 9, rec.Body, false},
+		{"a body cut short inside its nonce carries none", k, 9, rec.Body[:20], false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := c.keys.CheckNonce(c.s, c.body)
+			if c.ok != (err == nil) {
+				t.Errorf("CheckNonce = %v", err)
+			}
+			if err != nil && !errors.Is(err, ErrNonce) {
+				t.Errorf("%v doesn't wrap ErrNonce", err)
+			}
+		})
+	}
+}
+
+func TestKeysAreNeverPrinted(t *testing.T) {
+	k := testKeys(t)
+	leaf, tok, feat, vault := k.LeafKey(), k.TokenKey(), k.FeatKey(), k.VaultKey()
+	secrets := [][]byte{leaf[:], tok[:], feat[:], vault[:]}
+	var cases []struct {
+		name string
+		out  string
+	}
+	for _, verb := range []string{"%v", "%+v", "%#v", "%s", "%x", "%X", "%d", "%q"} {
+		cases = append(cases,
+			struct{ name, out string }{"Keys formats as a placeholder under " + verb, fmt.Sprintf(verb, *k)},
+			struct{ name, out string }{"*Keys formats as a placeholder under " + verb, fmt.Sprintf(verb, k)},
+		)
+	}
+	js, err := json.Marshal(k)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases = append(cases, struct{ name, out string }{"encoding/json writes Keys as {}", string(js)})
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if c.out != "ledger.Keys{redacted}" && c.out != "{}" {
+				t.Errorf("printed %q", c.out)
+			}
+			for _, s := range secrets {
+				if strings.Contains(strings.ToLower(c.out), hex.EncodeToString(s)) || strings.Contains(c.out, fmt.Sprint(s[:4])) {
+					t.Errorf("output %q shows key bytes", c.out)
+				}
+			}
+		})
+	}
+}
