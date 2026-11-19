@@ -128,7 +128,9 @@ type presence struct {
 	// first is the start of slots[0].
 	first int64
 	slots []Slot
-	runs  []silentRun
+	// lastIn holds, for each slot, the latest input a sample shows in it.
+	lastIn []int64
+	runs   []silentRun
 }
 
 func buildPresence(r rules, recs []event.Event, high int64, fl *focusLine) *presence {
@@ -277,8 +279,16 @@ func buildPresence(r rules, recs []event.Event, high int64, fl *focusLine) *pres
 		}
 		s.Then = s.Present
 	}
+	p.lastIn = lastIn
 	p.classifyRuns(lastIn)
 	return p
+}
+
+// unsampled reports whether t falls before the presence sampler ran: there
+// is no sample, or none until after the slot holding t ends. Such a slot is
+// SM 2.1's unknown.
+func (p *presence) unsampled(t int64) bool {
+	return len(p.samples) == 0 || floorSlot(t)+event.SlotMS <= p.samples[0].t
 }
 
 // mark returns, for each of the n slots, whether it overlaps any of the
