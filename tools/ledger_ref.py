@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Reference implementation of pairtime's ledger format, part 1.
+"""Reference implementation of pairtime's ledger format, parts 1 and 2.
 
 docs/spec/ledger-v1.md is the specification, and the section numbers in
 this file are its sections. The code uses only the Python standard library
@@ -8,18 +8,25 @@ and shares nothing with pkg/ledger, which is what lets it check pkg/ledger.
 
     python3 -I tools/ledger_ref.py selftest
         Check the RFC 5869, RFC 4231 and Certificate Transparency vectors,
-        the rtype table against pkg/event, the spec's worked example, and
-        that testdata/ledger/vectors.json regenerates byte for byte and
-        passes check.
+        the rtype table against pkg/event, the whitespace and lowercase
+        tables against Python's Unicode database, the spec's worked
+        examples, and that testdata/ledger/vectors.json and
+        vectors-content.json regenerate byte for byte and pass check.
 
     python3 -I tools/ledger_ref.py vectors [--out PATH]
-        Write the vectors from fixed seeds, by default to
+        Write the part 1 vectors from fixed seeds, by default to
         testdata/ledger/vectors.json.
 
+    python3 -I tools/ledger_ref.py vectors-content [--out PATH]
+        Write the part 2 vectors from fixed seeds, by default to
+        testdata/ledger/vectors-content.json.
+
     python3 -I tools/ledger_ref.py check FILE
-        Recompute every key, digest, nonce, entry, root, head, signed
-        message and inclusion proof in FILE, a file in the vectors format
-        (spec section 11), and print each mismatch.
+        Recompute every value in FILE, a file in the vectors format (spec
+        section 11): keys, digests, nonces, entries, roots, heads, signed
+        messages and inclusion proofs; content commitments, reveal
+        verdicts, normalizations, features, CC8 reveals and draws. Print
+        each mismatch.
 
 Exit status: 0 when everything matches, 1 when something doesn't, 2 for a
 usage error or a file that isn't in the vectors format.
