@@ -17,19 +17,19 @@ import (
 var Allowed = []string{"MIT", "BSD-2-Clause", "BSD-3-Clause", "Apache-2.0", "ISC"}
 
 // The templates follow the SPDX License List's matching templates: the
-// license text, with <<var:REGEX>> where real copies differ (copyright
-// lines, the holder's name, list bullets) and <<begin>>...<<end>> around
-// text a copy may leave out (titles, Apache's appendix). Literal text is
-// matched without regard to case, spacing, quote style or the spelling
-// "licence"; a REGEX is matched against the text after that normalization.
+// license text, with <<var:REGEX>> where real copies word it differently,
+// <<text:REGEX>> where they put free text (copyright lines, the holder's
+// name, list bullets), and <<begin>>...<<end>> around text a copy may leave
+// out (titles, Apache's appendix). Literal text is matched without regard
+// to case, spacing, quote style or the spelling "licence"; a REGEX is
+// matched against the text after that normalization.
 //
 //go:embed templates/*.txt
 var templateFS embed.FS
 
 // otherLicenses are phrases that name a license outside Allowed. A file has
-// to match a template as a whole, so extra clauses fail. But a template's
-// variable parts accept any text, so these phrases are looked for anywhere,
-// and a reviewer still reads a new dependency's license (AGENTS.md).
+// to match a template as a whole, so extra clauses fail, but these phrases
+// are looked for anywhere in it.
 var otherLicenses = []string{
 	"general public license", // GPL, LGPL and AGPL
 	"affero",
@@ -47,6 +47,13 @@ var otherLicenses = []string{
 	"noncommercial",
 	"good, not evil", // the JSON license
 }
+
+// conditionRE finds the words of an added condition ("Redistribution is
+// prohibited without written permission") in a template's free text, which
+// should hold only copyright notices, names and bullets. A clause worded to
+// dodge it can still get through, so a reviewer reads a new dependency's
+// license too.
+var conditionRE = regexp.MustCompile(`\b(prohibit\w*|restrict\w*|forbid\w*|not|no|without|except\w*|unless|only|solely|must|shall|may|cannot|requir\w*|consent\w*|permission\w*|permit\w*|commercial\w*|sell\w*|sale\w*|fees?|pay\w*|royalt\w*|terms?|conditions?|agree\w*|evil)\b`)
 
 type template struct {
 	id string
@@ -82,19 +89,49 @@ func identify(text string) (id, reason string) {
 		}
 	}
 	var ids []string
+	why := "its text isn't " + orList(Allowed)
 	for _, t := range templates {
-		if t.re.MatchString(n) {
-			ids = append(ids, t.id)
+		m := t.re.FindStringSubmatch(n)
+		if m == nil {
+			continue
 		}
+		if text, word := addedCondition(t.re, m); word != "" {
+			why = fmt.Sprintf("it has the %s text, but the part that should be only copyright lines and names says %q, which reads as an added condition (%q)", t.id, shorten(text, 80), word)
+			continue
+		}
+		ids = append(ids, t.id)
 	}
 	switch len(ids) {
 	case 1:
 		return ids[0], ""
 	case 0:
-		return "", "its text isn't " + orList(Allowed)
+		return "", why
 	default:
 		return "", "its text matches more than one license: " + strings.Join(ids, ", ")
 	}
+}
+
+// addedCondition returns the first <<text>> part of a match that contains a
+// condition word, and the word.
+func addedCondition(re *regexp.Regexp, m []string) (text, word string) {
+	for i, name := range re.SubexpNames() {
+		if !strings.HasPrefix(name, "text") || m[i] == "" {
+			continue
+		}
+		if w := conditionRE.FindString(strings.ToLower(m[i])); w != "" {
+			return strings.TrimSpace(m[i]), w
+		}
+	}
+	return "", ""
+}
+
+// shorten cuts s to at most n runes, marking the cut.
+func shorten(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return string(r[:n-3]) + "..."
 }
 
 func orList(ids []string) string {
@@ -142,13 +179,13 @@ func literal(s string) []string {
 	return parts
 }
 
-var markerRE = regexp.MustCompile(`(?s)<<(begin|end|var:.*?)>>`)
+var markerRE = regexp.MustCompile(`(?s)<<(begin|end|var:.*?|text:.*?)>>`)
 
 // compileTemplate turns a template into one anchored, case-insensitive
 // regular expression.
 func compileTemplate(t string) (*regexp.Regexp, error) {
 	stack := [][]string{nil}
-	pos := 0
+	pos, texts := 0, 0
 	for _, m := range markerRE.FindAllStringSubmatchIndex(t, -1) {
 		top := len(stack) - 1
 		stack[top] = append(stack[top], literal(t[pos:m[0]])...)
@@ -164,11 +201,17 @@ func compileTemplate(t string) (*regexp.Regexp, error) {
 			stack = stack[:top]
 			stack[top-1] = append(stack[top-1], `(?:`+strings.Join(inner, `\s*`)+`)?`)
 		default:
-			expr := strings.TrimPrefix(tag, "var:")
+			kind, expr, _ := strings.Cut(tag, ":")
 			if _, err := syntax.Parse(expr, syntax.Perl); err != nil {
-				return nil, fmt.Errorf("<<var:%s>>: %v", expr, err)
+				return nil, fmt.Errorf("<<%s>>: %v", tag, err)
 			}
-			stack[top] = append(stack[top], `(?:`+expr+`)`)
+			if kind == "text" {
+				// Named, so identify can screen it for added conditions.
+				texts++
+				stack[top] = append(stack[top], fmt.Sprintf(`(?P<text%d>%s)`, texts, expr))
+			} else {
+				stack[top] = append(stack[top], `(?:`+expr+`)`)
+			}
 		}
 	}
 	if len(stack) != 1 {

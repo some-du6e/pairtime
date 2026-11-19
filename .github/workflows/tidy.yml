@@ -89,6 +89,9 @@ jobs:
         if: steps.npm.outputs.dirs != ''
         with:
           node-version: 24
+          # This run may be the one that creates the lockfile, so setup-node
+          # mustn't go looking for one to key a cache on.
+          package-manager-cache: false
 
       - name: npm lockfiles
         if: steps.npm.outputs.dirs != ''

@@ -6,16 +6,16 @@
 // pairtime on every PR.
 //
 // It asks the go command for every package the module's packages and tests
-// import, for each OS pairtime ships on, so a module imported only on
-// Windows or only by a test still counts, and so does a module swapped in
-// with a replace directive. For each package from another module it reads
+// import, for each of the seven targets ci.yml cross-compiles, so a module
+// imported only on Windows, only on arm64 or only by a test still counts,
+// and so does a module swapped in with a replace directive. For each package from another module it reads
 // the license files in the package's directory and every directory above
 // it up to the module root, and the module root must have one. Every
 // license file found must be one of the allowed licenses (see identify.go).
 //
 // Usage:
 //
-//	go run ./tools/ci/licensecheck [-C dir] [-goos list]
+//	go run ./tools/ci/licensecheck [-C dir] [-targets list]
 //
 // The exit status is 1 when a module fails and 2 when the check can't run,
 // for example when go.sum lacks an entry (run tidy.yml; AGENTS.md).
@@ -109,17 +109,23 @@ func run(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("licensecheck", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	dir := fs.String("C", ".", "check the module in this directory")
-	goos := fs.String("goos", "linux,windows,darwin", "comma-separated GOOS values to list packages for")
+	targets := fs.String("targets", "windows/amd64,windows/386,windows/arm64,darwin/amd64,darwin/arm64,linux/amd64,linux/arm64",
+		"comma-separated GOOS/GOARCH pairs to list packages for, the same seven ci.yml cross-compiles")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
 	if fs.NArg() != 0 {
-		fmt.Fprintln(stderr, "usage: licensecheck [-C dir] [-goos list]")
+		fmt.Fprintln(stderr, "usage: licensecheck [-C dir] [-targets list]")
 		return 2
 	}
 	var pkgs []goPackage
-	for _, g := range strings.Split(*goos, ",") {
-		p, err := listPackages(*dir, strings.TrimSpace(g))
+	for _, target := range strings.Split(*targets, ",") {
+		goos, goarch, ok := strings.Cut(strings.TrimSpace(target), "/")
+		if !ok || goos == "" || goarch == "" {
+			fmt.Fprintf(stderr, "licensecheck: target %q isn't GOOS/GOARCH\n", target)
+			return 2
+		}
+		p, err := listPackages(*dir, goos, goarch)
 		if err != nil {
 			fmt.Fprintf(stderr, "licensecheck: %v\n", err)
 			return 2
@@ -138,7 +144,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintf(stdout, "::error::%s: %s\n", v.module, p)
 		}
 	}
-	fmt.Fprintf(stdout, "licensecheck: %d dependency modules of %s for %s, %d failed\n", len(verdicts), *dir, *goos, failed)
+	fmt.Fprintf(stdout, "licensecheck: %d dependency modules of %s for %s, %d failed\n", len(verdicts), *dir, *targets, failed)
 	if failed > 0 {
 		fmt.Fprintf(stdout, "Dependencies must be %s (DESIGN 3.12). Replace a failing module, or, if its license really is one of these, extend tools/ci/licensecheck with a test case from that file.\n", orList(Allowed))
 		return 1
@@ -147,17 +153,17 @@ func run(args []string, stdout, stderr io.Writer) int {
 }
 
 // listPackages lists every package the module in dir builds or tests with
-// on goos, with its module.
-func listPackages(dir, goos string) ([]goPackage, error) {
+// for one target, with its module.
+func listPackages(dir, goos, goarch string) ([]goPackage, error) {
 	cmd := exec.Command("go", "list", "-deps", "-test", "-json=ImportPath,Dir,Standard,Module", "./...")
 	cmd.Dir = dir
 	// GOWORK=off: a stray go.work must not change the module graph.
-	cmd.Env = append(os.Environ(), "GOOS="+goos, "CGO_ENABLED=0", "GOWORK=off")
+	cmd.Env = append(os.Environ(), "GOOS="+goos, "GOARCH="+goarch, "CGO_ENABLED=0", "GOWORK=off")
 	var out, errOut bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = &errOut
 	if err := cmd.Run(); err != nil {
-		return nil, fmt.Errorf("go list for GOOS=%s in %s: %v\n%s", goos, dir, err, errOut.String())
+		return nil, fmt.Errorf("go list for %s/%s in %s: %v\n%s", goos, goarch, dir, err, errOut.String())
 	}
 	var pkgs []goPackage
 	dec := json.NewDecoder(&out)
@@ -236,7 +242,7 @@ func checkDir(root, dir string, licenses map[string]bool, problems *[]string) in
 	}
 	found := 0
 	for _, e := range entries {
-		if !e.Type().IsRegular() || !licenseFiles[strings.ToLower(e.Name())] {
+		if !licenseFiles[strings.ToLower(e.Name())] || e.IsDir() {
 			continue
 		}
 		found++
@@ -246,6 +252,12 @@ func checkDir(root, dir string, licenses map[string]bool, problems *[]string) in
 			rel = name
 		}
 		rel = filepath.ToSlash(rel)
+		if !e.Type().IsRegular() {
+			// A link could point anywhere, and module zips leave links out,
+			// so what it shows here isn't what a download gets.
+			*problems = append(*problems, fmt.Sprintf("%s is a symbolic link or special file; license files must be regular files", rel))
+			continue
+		}
 		data, err := os.ReadFile(name)
 		if err != nil {
 			*problems = append(*problems, fmt.Sprintf("reading %s: %v", rel, err))

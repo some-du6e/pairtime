@@ -25,10 +25,11 @@ func TestCheck(t *testing.T) {
 	// Each case lays out files under a fresh directory and lists packages
 	// whose Dir and Module paths are relative to it.
 	tests := []struct {
-		name  string
-		files map[string]string
-		pkgs  []goPackage
-		want  []verdict
+		name     string
+		files    map[string]string
+		symlinks map[string]string // link path: target
+		pkgs     []goPackage
+		want     []verdict
 	}{
 		{
 			name: "standard library and main-module packages are skipped",
@@ -112,6 +113,15 @@ func TestCheck(t *testing.T) {
 			want: []verdict{{module: "example.com/dep@v1.0.0", licenses: []string{"Apache-2.0", "MIT"}}},
 		},
 		{
+			name:     "a symlinked license file fails even beside an allowed one",
+			files:    map[string]string{"gpl.txt": gpl, "dep/LICENSE-MIT": mit},
+			symlinks: map[string]string{"dep/LICENSE": "../gpl.txt"},
+			pkgs:     []goPackage{{ImportPath: "example.com/dep", Dir: "dep", Module: &goModule{Path: "example.com/dep", Version: "v1.0.0", Dir: "dep"}}},
+			want: []verdict{{module: "example.com/dep@v1.0.0", licenses: []string{"MIT"}, problems: []string{
+				"LICENSE is a symbolic link or special file; license files must be regular files",
+			}}},
+		},
+		{
 			name:  "packages listed for several OSes count once",
 			files: map[string]string{"dep/LICENSE": mit, "dep/sub/s.go": "package sub"},
 			pkgs: []goPackage{
@@ -146,6 +156,15 @@ func TestCheck(t *testing.T) {
 				}
 				if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
 					t.Fatal(err)
+				}
+			}
+			for link, target := range tt.symlinks {
+				p := filepath.Join(root, filepath.FromSlash(link))
+				if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(target, p); err != nil {
+					t.Skipf("can't make symlinks here: %v", err)
 				}
 			}
 			abs := func(rel string) string {

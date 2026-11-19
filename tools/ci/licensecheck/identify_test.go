@@ -74,6 +74,7 @@ func TestIdentifyVariants(t *testing.T) {
 	mit := read("spdx-MIT.txt")
 	isc := read("spdx-ISC.txt")
 	apache := read("spdx-Apache-2.0.txt")
+	bsd2 := read("spdx-BSD-2-Clause.txt")
 	bsd3 := read("spdx-BSD-3-Clause.txt")
 	gpl, err := os.ReadFile("../../../testdata/licensecheck/gpl/LICENSE")
 	if err != nil {
@@ -104,6 +105,13 @@ func TestIdentifyVariants(t *testing.T) {
 		{name: "text after MIT fails", text: mit + "\nExcept for the files in vendor/, which are proprietary.\n"},
 		{name: "text before Apache-2.0 fails", text: "Parts of this module may not be redistributed.\n\n" + apache},
 		{name: "the Commons Clause after Apache-2.0 fails", text: apache + "\n\"Commons Clause\" License Condition v1.0\n\nThe Software is provided to you by the Licensor under the License, as defined below, subject to the following condition.\n"},
+		{name: "a restriction after MIT's copyright line fails", text: mustReplace(mit, "Copyright (c) <year> <copyright holders>", "Copyright (c) <year> <copyright holders>\n\nRedistribution is prohibited without written permission.")},
+		{name: "a restriction after ISC's copyright line fails", text: mustReplace(isc, "Copyright <year> <owner>", "Copyright <year> <owner>\nCommercial use is prohibited.")},
+		{name: "a restriction after BSD-2-Clause's copyright line fails", text: mustReplace(bsd2, "Copyright (c) <year> <owner>", "Copyright (c) <year> <owner>\nRedistribution is prohibited without written permission.")},
+		{name: "a restriction after BSD-3-Clause's copyright line fails", text: mustReplace(bsd3, "Copyright (c) <year> <owner>.", "Copyright (c) <year> <owner>.\nThis software may not be sold.")},
+		{name: "a restriction in the holder's name fails", text: mustReplace(mit, "EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS", "EVENT SHALL THE AUTHORS, WHO FORBID COMMERCIAL USE,")},
+		{name: "a restriction in place of a bullet fails", text: mustReplace(bsd2, "1. Redistributions of source", "No sale. Redistributions of source")},
+		{name: "a restriction in Apache-2.0's appendix fails", text: mustReplace(apache, "Copyright [yyyy] [name of copyright owner]", "Copyright 2024 Foo Inc. Not for commercial use.")},
 		{name: "a GPL mention in the copyright lines fails", text: mustReplace(mit, "Copyright (c) <year> <copyright holders>", "Copyright (c) 2016 A. Some files are under the GNU General Public License."), want: ""},
 		{name: "BSD-3-Clause without its third clause is BSD-2-Clause", text: bsd3[:strings.Index(bsd3, "3. Neither")] + bsd3[strings.Index(bsd3, "THIS SOFTWARE"):], want: "BSD-2-Clause"},
 		{name: "MIT and GPL texts in one file fail", text: mit + "\n" + string(gpl)},

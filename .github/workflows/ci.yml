@@ -146,9 +146,10 @@ jobs:
       - name: Module licenses
         if: ${{ !cancelled() }}
         run: |
-          # Every module pairtime's packages and tests import, for each OS it
-          # ships on, must be MIT, BSD-2-Clause, BSD-3-Clause, Apache-2.0 or
-          # ISC (DESIGN 3.12). licensecheck exits 1 on a bad license.
+          # Every module pairtime's packages and tests import, for each of
+          # the seven targets above, must be MIT, BSD-2-Clause, BSD-3-Clause,
+          # Apache-2.0 or ISC (DESIGN 3.12). licensecheck exits 1 on a bad
+          # license.
           tool="$RUNNER_TEMP/licensecheck"
           go build -o "$tool" ./tools/ci/licensecheck
           "$tool"

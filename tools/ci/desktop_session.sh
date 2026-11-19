@@ -76,7 +76,7 @@ echo "display $DISPLAY: Xvfb and openbox up, focus switching works"
 # The inner script is single-quoted on purpose: the bus address only exists
 # inside the session.
 # shellcheck disable=SC2016
-dbus-run-session -- sh -c '
+dbus-run-session -- sh -ec '
 	dbus-send --session --print-reply --dest=org.freedesktop.DBus \
 		/org/freedesktop/DBus org.freedesktop.DBus.GetId >/dev/null
 	echo "private session bus up at $DBUS_SESSION_BUS_ADDRESS"
