@@ -30,9 +30,10 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v5
+      # Actions are pinned to commit SHAs; tags can be moved. Dependabot bumps them.
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
           go-version-file: go.mod
           # There is no go.sum (stdlib only), so key the build cache on go.mod.
@@ -101,7 +102,9 @@ jobs:
             if [ "$goos" = windows ]; then ext=".exe"; fi
             for cmd in pairtime pairtimed; do
               out="$dist/${goos}_${goarch}/$cmd$ext"
-              GOOS=$goos GOARCH=$goarch go build -trimpath -ldflags="$ldflags" -o "$out" "./cmd/$cmd"
+              # -buildvcs=false: the -X values must supply commit and date,
+              # so a flag that stops applying shows up as an empty field.
+              GOOS=$goos GOARCH=$goarch go build -trimpath -buildvcs=false -ldflags="$ldflags" -o "$out" "./cmd/$cmd"
               size=$(stat -c %s "$out")
               printf '%-14s %-10s %10d bytes\n' "$target" "$cmd" "$size"
               echo "| $target | $cmd | $size |" >> "$GITHUB_STEP_SUMMARY"

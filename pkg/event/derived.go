@@ -226,7 +226,11 @@ type Turn struct {
 	Attempt   int `json:"attempt"`
 	WordsOut  int `json:"words_out"`
 	DiffLines int `json:"diff_lines"`
-	// Unread is set when the output arrived while nobody was looking.
+	// Unread is set when the person replied too fast to have read the
+	// final message: words_final >= 100 and the time from agent.stop to
+	// the next prompt is under 0.25 * 60 * words_final / 238 seconds
+	// (SM 4.2's autopilot test). It is about reply speed, not presence;
+	// output nobody was there to see is SM 2.1's unread_prose_words.
 	Unread bool `json:"unread"`
 }
 
@@ -391,6 +395,7 @@ func (m MinuteBucket) Validate() error {
 		c.within(fieldIndex("slots", i), s.check)
 		slotSum += s.Credited
 	}
+	c.seconds("credited_s", m.CreditedS)
 	c.sumsTo("slots[].cr", slotSum, "credited_s", m.CreditedS)
 	uncredited := breakdown(c, "uncredited", m.Uncredited, Reason.Uncredited)
 	if total := m.CreditedS + uncredited; total > 60+sumTolerance {

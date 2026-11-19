@@ -410,6 +410,7 @@ func TestLocalFields(t *testing.T) {
 		KindShellCommand: {"cmd_hash"},
 		KindOSFocus:      {"app_hash"},
 		KindCLITrack:     {"label"},
+		KindAgentStop:    {"pending_crons"},
 	}
 	for _, k := range Kinds() {
 		if got := localJSONNames(t, k); !slices.Equal(got, want[k]) {
@@ -497,6 +498,11 @@ func TestReason(t *testing.T) {
 		{"X.absent", false, true, ""},
 		{"X.noprog", false, true, ""},
 		{"X.absent~r", false, false, ""},
+		{"P+restored", true, false, ActivityPrompting},
+		{"READ~r+restored", true, false, ActivityReadingOutput},
+		{"X.absent+restored", false, false, ""},
+		{"P+restored~r", false, false, ""},
+		{"P+restored+restored", false, false, ""},
 		{"P~r~r", false, false, ""},
 		{"p", false, false, ""},
 		{"", false, false, ""},
@@ -513,6 +519,35 @@ func TestReason(t *testing.T) {
 		}
 		if got := tt.r.Valid(); got != (tt.credited || tt.uncredited) {
 			t.Errorf("Reason(%q).Valid() = %v", tt.r, got)
+		}
+	}
+}
+
+// embedded wraps a real payload the way an adapter might, to keep extra
+// data next to it. Neither Validate nor Shareable may accept it.
+type embedded struct {
+	*PromptSubmit
+	Raw string
+}
+
+func TestForeignPayload(t *testing.T) {
+	e := sample(t, KindPromptSubmit)
+	ps, ok := e.Data.(*PromptSubmit)
+	if !ok {
+		t.Fatalf("sample prompt.submit has data %T", e.Data)
+	}
+	for _, data := range []Payload{embedded{ps, "raw prompt"}, &embedded{ps, "raw prompt"}} {
+		f := e
+		f.Data = data
+		if err := f.Validate(); err == nil || !strings.Contains(err.Error(), "is not the payload type") {
+			t.Errorf("Validate(%T) = %v, want a payload type error", data, err)
+		}
+		s := f.Shareable()
+		if s.Data != nil {
+			t.Errorf("Shareable(%T) kept data %T", data, s.Data)
+		}
+		if _, err := json.Marshal(s); err == nil {
+			t.Errorf("Shareable(%T) produced an event that marshals", data)
 		}
 	}
 }

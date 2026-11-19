@@ -7,11 +7,17 @@ import "strings"
 // Reason is a reason code (SM 5.2): why a second was credited, or why not.
 // Uncredited reasons start with "X.". A credit reason may end in
 // ReturnedSuffix, meaning the second was credited in a returned slot,
-// with no input, under SM 2.1's return rule ("READ~r", "P~r").
+// with no input, under SM 2.1's return rule ("READ~r", "P~r"). It may
+// also end in RestoredSuffix, after ReturnedSuffix if both apply
+// ("READ~r+restored").
 type Reason string
 
 // ReturnedSuffix marks a credit reason earned in a returned slot.
 const ReturnedSuffix = "~r"
+
+// RestoredSuffix marks a credit reason whose half-weighted second a later
+// progress event put back to weight 1 (SM 4.3).
+const RestoredSuffix = "+restored"
 
 // Credit reasons.
 const (
@@ -109,8 +115,12 @@ var uncreditedReasons = enum[Reason]{values: []Reason{
 	ReasonAutopilot, ReasonNoProgress, ReasonLookupCap, ReasonBucketCap, ReasonDayCap,
 }}
 
-// Base returns r without ReturnedSuffix.
-func (r Reason) Base() Reason { return Reason(strings.TrimSuffix(string(r), ReturnedSuffix)) }
+// Base returns r without RestoredSuffix and ReturnedSuffix. Each may
+// appear once, in that order, so "P+restored~r" has no base.
+func (r Reason) Base() Reason {
+	s := strings.TrimSuffix(string(r), RestoredSuffix)
+	return Reason(strings.TrimSuffix(s, ReturnedSuffix))
+}
 
 // Activity returns the activity a credit reason's seconds count as, or ""
 // if r isn't a credit reason.
@@ -125,7 +135,7 @@ func (r Reason) Activity() Activity {
 }
 
 // Credited reports whether r is a credit reason, with or without
-// ReturnedSuffix.
+// ReturnedSuffix and RestoredSuffix.
 func (r Reason) Credited() bool { return r.Activity() != "" }
 
 // Uncredited reports whether r is an uncredited reason.

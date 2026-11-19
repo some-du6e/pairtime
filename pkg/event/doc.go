@@ -43,7 +43,8 @@
 // server.
 //
 // Identifiers that stand in for something private (devices, sessions,
-// turns, projects, files, commands) are opaque keys of 1 to 128 letters,
-// digits, '_' or '-'. A path, a command line or an email address can't pass
-// as one.
+// turns, projects, files) are opaque keys of 1 to 128 letters, digits, '_'
+// or '-', keyed per device so nobody can recompute one from a guess. A path,
+// a command line or an email address can't pass as one. Digests of content,
+// such as command-line hashes, are local fields, not keys.
 package event

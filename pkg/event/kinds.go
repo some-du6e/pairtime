@@ -108,7 +108,9 @@ func (p *PromptSubmit) check(c *checker) {
 // AgentOutput is agent.output: output the agent showed in a turn.
 type AgentOutput struct {
 	TurnKey string `json:"turn_key"`
-	// Words counts displayed assistant text, not hidden thinking.
+	// Words counts displayed assistant prose outside fenced code blocks
+	// (SM 2.4's prose_words), not hidden thinking. Fenced blocks count in
+	// CodeLines instead, so code isn't counted twice.
 	Words int `json:"words"`
 	// CodeLines counts lines inside fenced code blocks.
 	CodeLines     int  `json:"code_lines"`
@@ -210,7 +212,9 @@ type AgentStop struct {
 	StopHookActive bool `json:"stop_hook_active"`
 	// PendingCrons are the session's scheduled prompts at this stop. A
 	// later prompt matching one is labelled scheduled (SM 2.2 rule 1).
-	PendingCrons []PendingCron `json:"pending_crons,omitempty"`
+	// They hold digests of prompt text, so they stay on the device;
+	// prompt.submit's matches_pending_cron carries the result instead.
+	PendingCrons []PendingCron `json:"pending_crons,omitempty" pairtime:"local"`
 }
 
 // PendingCron is one scheduled prompt waiting in a session.

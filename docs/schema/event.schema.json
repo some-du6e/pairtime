@@ -207,7 +207,7 @@
         "turn_key": {"$ref": "#/$defs/key"},
         "stop_reason": {"$ref": "#/$defs/stop_reason"},
         "stop_hook_active": {"type": "boolean", "description": "A stop hook made the turn continue, as /goal does."},
-        "pending_crons": {"type": "array", "maxItems": 1024, "items": {"$ref": "#/$defs/pending_cron"}, "description": "The session's scheduled prompts at this stop."}
+        "pending_crons": {"type": "array", "maxItems": 1024, "items": {"$ref": "#/$defs/pending_cron"}, "x-local": true, "description": "The session's scheduled prompts at this stop. Device-only: the prefix hashes are digests of prompt text."}
       }
     },
     "pending_cron": {

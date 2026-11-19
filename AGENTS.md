@@ -30,8 +30,8 @@ docs/design/struggle-metric.md (SM) is the source of truth for what pairtime cre
 
 Raw prompt text, agent output, code, file paths, command lines and window titles stay on the device. Uploads carry numbers, reason codes, opaque keys and event ids (SM 1, SM 5.1).
 
-- A field holding prompt text, or a hash or sketch of anything private, is *local*. Tag it `pairtime:"local"` with `omitempty` in Go and `"x-local": true` in the schema. `Event.Shareable` clears local fields, so pass everything bound off the device through it.
-- Identifiers for private things (devices, sessions, projects, files, commands) are opaque keys: random ids or salted hashes that pass `isKey`, which rejects paths and email addresses.
+- Content and digests of content are *local*: prompt text and its sketches (MinHash, template hashes, error signatures in prompts), command-line hashes, app identity hashes and scheduled-prompt hashes. Tag them `pairtime:"local"` with `omitempty` in Go and `"x-local": true` in the schema. `Event.Shareable` clears local fields, so pass everything bound off the device through it. It only clears top-level payload fields, so tag the whole field when the private part is nested.
+- Identifiers of devices, sessions, turns, projects and files are opaque keys and may be shared. They must be keyed per device (an HMAC under a device secret, or a random id), never a plain hash a reader could recompute from a guess. They pass `isKey`, which rejects paths and email addresses.
 - `TestLocalFields` pins the local fields. Changing that list changes what pairtime may upload, so the PR description calls it out.
 
 ## Changing the event model

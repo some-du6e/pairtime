@@ -103,6 +103,13 @@ func newPayload(k Kind) Payload {
 	return nil
 }
 
+// ownPayload reports whether p is the payload type this package defines
+// for p's kind, and not, say, a struct that embeds it.
+func ownPayload(p Payload) bool {
+	want := newPayload(p.Kind())
+	return want != nil && reflect.TypeOf(p) == reflect.TypeOf(want)
+}
+
 // ruleFor returns the rule for k. An unknown kind gets the rule with no
 // restrictions; Validate never reaches it, since only known kinds decode.
 func ruleFor(k Kind) kindRule {
@@ -116,7 +123,9 @@ func ruleFor(k Kind) kindRule {
 
 // Payload is the kind-specific part of an event, held under "data". Each
 // kind in SM 1.2 has one payload type in this package, always used as a
-// pointer, and no other type can implement Payload.
+// pointer. A type in another package can still satisfy Payload by
+// embedding one, so Validate rejects any type but the kind's own, and
+// Shareable refuses to copy one.
 type Payload interface {
 	// Kind returns the kind the payload belongs to.
 	Kind() Kind
@@ -239,6 +248,10 @@ func (e Event) Validate() error {
 		c.addf("data", "missing")
 		return c.err()
 	}
+	if !ownPayload(e.Data) {
+		c.addf("data", "%T is not the payload type for %s", e.Data, e.Data.Kind())
+		return c.err()
+	}
 	checkKindRules(c, e.Envelope, e.Data.Kind())
 	c.within("data", e.Data.check)
 	return c.err()
@@ -295,6 +308,12 @@ func checkKindRules(c *checker, e Envelope, k Kind) {
 // the device. e itself is not modified.
 func (e Event) Shareable() Event {
 	if isNil(e.Data) {
+		return e
+	}
+	if !ownPayload(e.Data) {
+		// clearLocal can't see fields a foreign type adds. Fail closed:
+		// with no data, MarshalJSON refuses to encode the event.
+		e.Data = nil
 		return e
 	}
 	src := reflect.ValueOf(e.Data).Elem()
