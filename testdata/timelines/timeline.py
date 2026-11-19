@@ -22,6 +22,7 @@ from datetime import datetime, timedelta, timezone
 
 SLOT_MS = 15_000
 MINUTE_MS = 60_000
+EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
 
 # Uncredited reason codes in SM 5.2 order, and credit reasons in SM 5.2
 # order. Rows list their reasons in these orders.
@@ -164,11 +165,12 @@ class Fixture:
         h, m, sec = (parts + [0])[:3]
         ms = int((frac + "000")[:3]) if frac else 0
         dt = self._base + timedelta(days=day, hours=h, minutes=m, seconds=sec, milliseconds=ms)
-        return int(dt.timestamp() * 1000)
+        # Integer arithmetic: a float timestamp times 1000 can land a
+        # millisecond short.
+        return (dt - EPOCH) // timedelta(milliseconds=1)
 
     def local(self, t):
-        dt = datetime.fromtimestamp(t / 1000, tz=timezone(timedelta(minutes=self.utc_offset_min)))
-        return dt
+        return (EPOCH + timedelta(milliseconds=t)).astimezone(timezone(timedelta(minutes=self.utc_offset_min)))
 
     def hhmm(self, t):
         return self.local(t).strftime("%H:%M")
@@ -182,7 +184,7 @@ class Fixture:
 
     @staticmethod
     def utc(t):
-        dt = datetime.fromtimestamp(t / 1000, tz=timezone.utc)
+        dt = EPOCH + timedelta(milliseconds=t)
         s = dt.strftime("%Y-%m-%dT%H:%M:%S")
         if t % 1000:
             s += f".{t % 1000:03d}"
