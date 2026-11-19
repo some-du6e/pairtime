@@ -1,0 +1,13 @@
+{
+  "fixture": "6.2",
+  "prompts": [
+    {
+      "turn_key": "t_9bdf9be6133e",
+      "t": 1795524060000,
+      "local": "07:41:00",
+      "text": null,
+      "len_chars": 120,
+      "source": "SM 6.2 gives the length of Maya's prompt, not its text"
+    }
+  ]
+}

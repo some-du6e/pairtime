@@ -1,0 +1,59 @@
+{
+  "fixture": "6.2",
+  "anchors": [
+    {
+      "event_id": "01a20d92-e360-79ce-9855-6847ed4a621a",
+      "kind": "substantive_prompt",
+      "t": 1795524060000,
+      "local": "07:41:00",
+      "project_key": "p_be4901c04a84",
+      "origin": "human_typed",
+      "prompt_class": "substantive",
+      "lead_s": 200,
+      "trail_s": 0,
+      "lead_from": "sm",
+      "via": "hook",
+      "level": "B",
+      "sm": "07:40: the lead is 120 + 80 = 200 s, but nothing before 07:40:00 counts"
+    },
+    {
+      "event_id": "01a20d95-5460-788b-b1c7-84f27a8ec962",
+      "kind": "typed_edit",
+      "t": 1795524220000,
+      "local": "07:43:40",
+      "project_key": "p_be4901c04a84",
+      "lead_s": 120,
+      "trail_s": 0,
+      "lead_from": "params",
+      "via": "editor",
+      "level": "B",
+      "sm": "07:41 to 07:43: the E lead starts at 07:41:40"
+    },
+    {
+      "event_id": "01a20d96-17b0-7064-a03a-6f63ee7e2ea1",
+      "kind": "human_commit",
+      "t": 1795524270000,
+      "local": "07:44:30",
+      "project_key": "p_be4901c04a84",
+      "lead_s": 60,
+      "trail_s": 0,
+      "lead_from": "sm",
+      "via": "git",
+      "level": "B",
+      "sm": "07:44: G, lead 60 s"
+    }
+  ],
+  "turns": [
+    {
+      "session_key": "s_8c26182b539a",
+      "turn_key": "t_9bdf9be6133e",
+      "t_submit": 1795524060000,
+      "local_submit": "07:41:00",
+      "t_stop": 1795524150000,
+      "local_stop": "07:42:30",
+      "origin": "human_typed",
+      "prompt_class": "substantive",
+      "sm": "07:40: origin human_typed"
+    }
+  ]
+}
