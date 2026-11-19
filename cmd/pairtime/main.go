@@ -10,7 +10,9 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 
+	"github.com/some-du6e/pairtime/internal/release"
 	"github.com/some-du6e/pairtime/internal/version"
 )
 
@@ -21,7 +23,7 @@ Usage:
   pairtime <command>
 
 Commands:
-  version   Print the version and build details
+  version   Print the version, build details and release keys
   help      Show this help
 
 This build is a skeleton and doesn't track anything yet.
@@ -46,6 +48,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 			return 2
 		}
 		fmt.Fprintf(stdout, "pairtime %s\n", version.Get())
+		fmt.Fprintln(stdout, releaseKeys())
 		return 0
 	case "help", "--help", "-h":
 		fmt.Fprint(stdout, usage)
@@ -55,4 +58,22 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprint(stderr, usage)
 		return 2
 	}
+}
+
+// releaseKeys names the release keys compiled into this binary, the only
+// keys whose signed update manifests it accepts
+// (docs/spec/update-manifest.md).
+func releaseKeys() string {
+	keys, err := release.TrustedKeys()
+	if err != nil {
+		return "release keys: unreadable: " + err.Error()
+	}
+	if len(keys) == 0 {
+		return "release keys: none"
+	}
+	ids := make([]string, len(keys))
+	for i, k := range keys {
+		ids[i] = k.ID()
+	}
+	return "release keys: " + strings.Join(ids, ", ")
 }
