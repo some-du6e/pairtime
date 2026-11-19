@@ -500,6 +500,23 @@ func (m MinuteBucket) Shareable() MinuteBucket {
 	return m
 }
 
+// Tier1BucketFields returns the JSON keys a shareable MinuteBucket
+// writes, in order: DESIGN 4.3's tier-1 list for minute buckets.
+// TestTier1Shape fails when Shareable writes any other key, and the
+// server's ingest allowlist is checked against this list, so a new key
+// needs Karim to add it to DESIGN 4.3 first (PLAN ground rule 10). Each
+// call returns a new slice, so no caller can change the list.
+func Tier1BucketFields() []string {
+	return []string{"v", "params", "minute", "device", "slots", "credited_s", "uncredited", "agent_running_s", "state", "witness", "rev"}
+}
+
+// Tier1SlotFields returns the JSON keys each of a shareable bucket's four
+// slots writes, in order: DESIGN 4.3's slots[4]{p, cr, why, kind, ev,
+// lbl}. Like Tier1BucketFields, each call returns a new slice.
+func Tier1SlotFields() []string {
+	return []string{"p", "cr", "why", "kind", "ev", "lbl"}
+}
+
 // BucketSlot is one slot of a MinuteBucket, with the short field names of
 // the upload format.
 type BucketSlot struct {

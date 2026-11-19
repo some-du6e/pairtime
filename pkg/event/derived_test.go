@@ -351,9 +351,10 @@ func objectKeys(t *testing.T, b []byte) []string {
 }
 
 // TestTier1Shape pins what a minute bucket uploads: the JSON keys of its
-// shareable form, and of each of its four slots, are DESIGN 4.3's tier-1
-// list, in order. A new field fails here until it is local, or Karim adds
-// it to DESIGN 4.3 (PLAN ground rule 10).
+// shareable form, and of each of its four slots, are Tier1BucketFields and
+// Tier1SlotFields, DESIGN 4.3's tier-1 list, in order. A new field fails
+// here until it is local, or Karim adds it to DESIGN 4.3 (PLAN ground rule
+// 10).
 func TestTier1Shape(t *testing.T) {
 	m := tier1Bucket()
 	for _, v := range append([]reflect.Value{reflect.ValueOf(m)}, sliceValues(m.Slots)...) {
@@ -376,16 +377,14 @@ func TestTier1Shape(t *testing.T) {
 	if err := json.Unmarshal(b, &wire); err != nil {
 		t.Fatal(err)
 	}
-	bucketKeys := []string{"v", "params", "minute", "device", "slots", "credited_s", "uncredited", "agent_running_s", "state", "witness", "rev"}
-	slotKeys := []string{"p", "cr", "why", "kind", "ev", "lbl"}
 	type keysCase struct {
 		name string
 		json []byte
 		want []string
 	}
-	tests := []keysCase{{"a shareable bucket has DESIGN 4.3's fields and no anchor ids", b, bucketKeys}}
+	tests := []keysCase{{"a shareable bucket has DESIGN 4.3's fields and no anchor ids", b, Tier1BucketFields()}}
 	for i, raw := range wire.Slots {
-		tests = append(tests, keysCase{fmt.Sprintf("slot %d has DESIGN 4.3's slot fields", i), raw, slotKeys})
+		tests = append(tests, keysCase{fmt.Sprintf("slot %d has DESIGN 4.3's slot fields", i), raw, Tier1SlotFields()})
 	}
 	if len(wire.Slots) != 4 {
 		t.Errorf("the shareable bucket has %d slots, DESIGN 4.3 says 4", len(wire.Slots))
@@ -394,6 +393,25 @@ func TestTier1Shape(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := objectKeys(t, tt.json); !slices.Equal(got, tt.want) {
 				t.Errorf("keys = %q, want %q\njson: %s", got, tt.want, tt.json)
+			}
+		})
+	}
+}
+
+func TestTier1FieldsCantBeChanged(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		fields func() []string
+	}{
+		{"changing a copy of the bucket fields leaves the list alone", Tier1BucketFields},
+		{"changing a copy of the slot fields leaves the list alone", Tier1SlotFields},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			want := tt.fields()
+			got := tt.fields()
+			got[0] = "anchors"
+			if again := tt.fields(); !slices.Equal(again, want) {
+				t.Errorf("after changing a returned slice, the list is %q, want %q", again, want)
 			}
 		})
 	}
