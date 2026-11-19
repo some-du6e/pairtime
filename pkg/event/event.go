@@ -37,30 +37,49 @@ const (
 	KindCLITrack        Kind = "cli.track"
 )
 
-// kindTable lists every kind in SM 1.2 order with its payload type. It is
-// the one place a new kind has to be registered in Go.
+// kindRule says what may produce events of a kind (SM 1.2).
+type kindRule struct {
+	// sources, when set, are the only sources the kind comes from.
+	sources []Source
+	// noSession kinds come from no harness: harness and session_key are
+	// both "none".
+	noSession bool
+	// inSession kinds belong to a harness session: neither harness nor
+	// session_key may be "none".
+	inSession bool
+}
+
+var (
+	fromOS      = kindRule{sources: []Source{SourceOS}, noSession: true}
+	fromHarness = kindRule{inSession: true}
+	fromAnyone  = kindRule{}
+)
+
+// kindTable lists every kind in SM 1.2 order with its payload type and
+// rule. It is the one place a new kind has to be registered in Go.
 var kindTable = []struct {
 	kind  Kind
 	alloc func() Payload
+	rule  kindRule
 }{
-	{KindSessionStart, func() Payload { return new(SessionStart) }},
-	{KindSessionEnd, func() Payload { return new(SessionEnd) }},
-	{KindPromptSubmit, func() Payload { return new(PromptSubmit) }},
-	{KindAgentOutput, func() Payload { return new(AgentOutput) }},
-	{KindAgentTool, func() Payload { return new(AgentTool) }},
-	{KindAgentPermission, func() Payload { return new(AgentPermission) }},
-	{KindAgentInterrupt, func() Payload { return new(AgentInterrupt) }},
-	{KindAgentQueue, func() Payload { return new(AgentQueue) }},
-	{KindAgentStop, func() Payload { return new(AgentStop) }},
-	{KindAgentSubagent, func() Payload { return new(AgentSubagent) }},
-	{KindEditorActivity, func() Payload { return new(EditorActivity) }},
-	{KindShellCommand, func() Payload { return new(ShellCommand) }},
-	{KindGitChange, func() Payload { return new(GitChange) }},
-	{KindOSPresence, func() Payload { return new(OSPresence) }},
-	{KindOSFocus, func() Payload { return new(OSFocus) }},
-	{KindOSPower, func() Payload { return new(OSPower) }},
-	{KindOTelActiveTime, func() Payload { return new(OTelActiveTime) }},
-	{KindCLITrack, func() Payload { return new(CLITrack) }},
+	{KindSessionStart, func() Payload { return new(SessionStart) }, fromHarness},
+	{KindSessionEnd, func() Payload { return new(SessionEnd) }, fromHarness},
+	{KindPromptSubmit, func() Payload { return new(PromptSubmit) }, fromHarness},
+	{KindAgentOutput, func() Payload { return new(AgentOutput) }, fromHarness},
+	{KindAgentTool, func() Payload { return new(AgentTool) }, fromHarness},
+	{KindAgentPermission, func() Payload { return new(AgentPermission) }, fromHarness},
+	{KindAgentInterrupt, func() Payload { return new(AgentInterrupt) }, fromHarness},
+	{KindAgentQueue, func() Payload { return new(AgentQueue) }, fromHarness},
+	{KindAgentStop, func() Payload { return new(AgentStop) }, fromHarness},
+	{KindAgentSubagent, func() Payload { return new(AgentSubagent) }, fromHarness},
+	{KindEditorActivity, func() Payload { return new(EditorActivity) }, fromAnyone},
+	{KindShellCommand, func() Payload { return new(ShellCommand) }, fromAnyone},
+	{KindGitChange, func() Payload { return new(GitChange) }, kindRule{sources: []Source{SourceGit}, noSession: true}},
+	{KindOSPresence, func() Payload { return new(OSPresence) }, fromOS},
+	{KindOSFocus, func() Payload { return new(OSFocus) }, fromOS},
+	{KindOSPower, func() Payload { return new(OSPower) }, fromOS},
+	{KindOTelActiveTime, func() Payload { return new(OTelActiveTime) }, kindRule{sources: []Source{SourceOTel}}},
+	{KindCLITrack, func() Payload { return new(CLITrack) }, kindRule{sources: []Source{SourceCLI, SourceMCP}}},
 }
 
 var kinds = enum[Kind]{name: "kind", values: func() []Kind {
@@ -82,6 +101,16 @@ func newPayload(k Kind) Payload {
 		}
 	}
 	return nil
+}
+
+// ruleFor returns the rule for k; unknown kinds get none.
+func ruleFor(k Kind) kindRule {
+	for _, entry := range kindTable {
+		if entry.kind == k {
+			return entry.rule
+		}
+	}
+	return fromAnyone
 }
 
 // Payload is the kind-specific part of an event, held under "data". Each
@@ -232,44 +261,29 @@ func checkEnvelope(c *checker, e Envelope) {
 	c.optKey("project_key", e.ProjectKey)
 }
 
-// checkKindRules checks the envelope against what SM 1.2 says produces
-// each kind: OS and git events have no harness or session, a few kinds
-// come from one source only, and harness events belong to a session.
+// checkKindRules checks the envelope against the kind's rule: OS and git
+// events have no harness or session, a few kinds come from one source
+// only, and harness events belong to a session.
 func checkKindRules(c *checker, e Envelope, k Kind) {
-	switch k {
-	case KindOSPresence, KindOSFocus, KindOSPower:
-		mustSource(c, k, e.Source, SourceOS)
-		noHarness(c, k, e)
-	case KindGitChange:
-		mustSource(c, k, e.Source, SourceGit)
-		noHarness(c, k, e)
-	case KindOTelActiveTime:
-		mustSource(c, k, e.Source, SourceOTel)
-	case KindCLITrack:
-		mustSource(c, k, e.Source, SourceCLI, SourceMCP)
-	case KindSessionStart, KindSessionEnd, KindPromptSubmit, KindAgentOutput, KindAgentTool,
-		KindAgentPermission, KindAgentInterrupt, KindAgentQueue, KindAgentStop, KindAgentSubagent:
+	r := ruleFor(k)
+	if r.sources != nil && !slices.Contains(r.sources, e.Source) {
+		c.addf("source", "%s events come from %q, got %q", k, r.sources, e.Source)
+	}
+	if r.noSession {
+		if e.Harness != HarnessNone {
+			c.addf("harness", "must be %q for %s events, got %q", HarnessNone, k, e.Harness)
+		}
+		if e.SessionKey != NoSession {
+			c.addf("session_key", "must be %q for %s events, got %q", NoSession, k, e.SessionKey)
+		}
+	}
+	if r.inSession {
 		if e.Harness == HarnessNone {
 			c.addf("harness", "%s events come from a harness, got %q", k, e.Harness)
 		}
 		if e.SessionKey == NoSession {
 			c.addf("session_key", "%s events belong to a harness session, got %q", k, e.SessionKey)
 		}
-	}
-}
-
-func mustSource(c *checker, k Kind, got Source, allowed ...Source) {
-	if !slices.Contains(allowed, got) {
-		c.addf("source", "%s events come from %q, got %q", k, allowed, got)
-	}
-}
-
-func noHarness(c *checker, k Kind, e Envelope) {
-	if e.Harness != HarnessNone {
-		c.addf("harness", "must be %q for %s events, got %q", HarnessNone, k, e.Harness)
-	}
-	if e.SessionKey != NoSession {
-		c.addf("session_key", "must be %q for %s events, got %q", NoSession, k, e.SessionKey)
 	}
 }
 
