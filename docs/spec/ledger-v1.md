@@ -396,7 +396,7 @@ The quotes aren't part of the patterns. `E1` to `E6` are SM 4.2's first error li
 
 **3. Words.** The words of each line that stays are its tokens that aren't whitespace (10.2), in order. A line break separates words like any other whitespace.
 
-**4. Lowercase.** Replace each code point of each word with its simple lowercase mapping in Unicode 15.0.0, field 13 of `UnicodeData.txt`, or keep it when it has none. The mapping takes one code point to one: `İ` (U+0130) becomes `i`, `Σ` becomes `σ` even at the end of a word, and `ß` stays. The version is pinned because case tables grow with Unicode and a library's tables follow its own version (Go 1.27's are 17.0.0). `vectors-content.json` lists the whole mapping, 1,433 code points, and `selftest` checks it against Python's `unicodedata` when that is 15.0.0.
+**4. Lowercase.** Replace each code point of each word with its simple lowercase mapping in Unicode 15.0.0, field 13 of `UnicodeData.txt`, or keep it when it has none. The mapping takes one code point to one: `İ` (U+0130) becomes `i`, `Σ` becomes `σ` even at the end of a word, and `ß` stays. The version is pinned because case tables grow with Unicode and a library's tables follow its own version. Unicode 16.0.0 and 17.0.0 add 55 mappings and change none of these, so Go 1.27's `unicode.ToLower`, whose tables are 17.0.0, differs from this mapping at exactly those 55 code points. `vectors-content.json` lists the whole mapping, 1,433 code points, with the 55 later ones beside it. `selftest` checks the table against Python's `unicodedata`: exactly when that is 15.0.0, and allowing only the 55 when it is 15.1.0 to 17.0.0.
 
 **5. Substitutions.** Apply these within each word, in this order, each to the output of the one before.
 
@@ -641,7 +641,7 @@ Each command exits 0 when everything matches, 1 when a value doesn't, and 2 for 
 | `proofs[]` | `index` (`m`, from 0), `path` (5.2) |
 | `days[]` | `day` (`d`), optional `date` (`YYYY-MM-DD`), `prev` (`G_(d-1)`), `count`, `root` (`T_d`), `head` (`G_d`), `signed_msg` (`D_d`), `rows`, optional `proofs` |
 | `rows[]` | `device_id`, `b`, `head` (`H_b`), `received_at`, `leaf` (the leaf bytes, not their hash) |
-| `lowercase` | an object: `unicode` (`"15.0.0"`) and `runs[]`, each `first`, `count`, `delta`, `stride`, meaning that for `i` from 0 to `count - 1`, code point `first + i × stride` lowercases to itself plus `delta` (10.4) |
+| `lowercase` | an object: `unicode` (`"15.0.0"`) and `runs[]`, each `first`, `count`, `delta`, `stride`, meaning that for `i` from 0 to `count - 1`, code point `first + i × stride` lowercases to itself plus `delta` (10.4); optional `later_unicode` and `later[]`, each `code`, `lower`, the mappings Unicode added after `unicode` up to `later_unicode`, which version 1 never applies |
 | `commitments[]` | `k_dev`, `seq` (`s`), `rtype`, `text` (the committed bytes), `n`, `root` (`C`), optional `raw` (an agent message before its cut), optional `tokens[]`, each `token`, `salt`, `leaf` (10.1, 10.2) |
 | `reveals[]` | `n`, `root`, `items` (10.3), `verdict`: `ok`, `bad_item`, `count`, `alternation` or `root` |
 | `normalizations[]` | `text`, `removed_lines` (line indices from 0), `normalized` (the normalized text), `shingle_kind` (`word3` or `char5`), `shingles` (ascending), `signature` (the error signature, or `null`) (10.4 to 10.6) |
@@ -675,7 +675,7 @@ The bodies are stand-ins: the real envelope with the record's real nonce, and `"
 
 `vectors-content.json` covers part 2:
 
-- `lowercase`: the whole Unicode 15.0.0 mapping, as 182 runs.
+- `lowercase`: the whole Unicode 15.0.0 mapping, as 182 runs, and the 55 mappings that 16.0.0 and 17.0.0 add.
 - `commitments`: an empty prompt, a short prompt, CRLF, whitespace at both ends, Cyrillic, an emoji, a no-break space, an ideographic space and Chinese in one prompt, a secret and an email address, a whitespace-only text, an agent message with a code block, a `track` label, an agent message over 16 KiB whose cut falls inside a three-byte character, and 12 random texts.
 - `reveals`: removals at the start, in the middle and at the end, everything removed, nothing removed, adjacent spans of two types, a code span with its line count, two random removals of each random text, and one or more cases of each failing verdict. Among them is a reveal whose leaves still hash to `C` but cover too few tokens, the case the committed `n` exists for (10.2).
 - `normalizations`: each rule of 10.4 and each pattern `F1` to `E6`, the cases where a rule doesn't apply, and 10 random texts.

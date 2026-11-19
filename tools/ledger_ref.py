@@ -670,6 +670,31 @@ LOWER_RUNS = (
 )
 
 
+# The simple lowercase mappings Unicode added after 15.0.0, up to 17.0.0, as
+# (code point, lowercase). They are what Go 1.27's unicode tables, which are
+# 17.0.0, add to LOWER_RUNS; those tables agree with LOWER_RUNS on every
+# other code point. f.v = 1 never applies them. selftest uses them to check
+# LOWER_RUNS exactly against any database from 15.0.0 to 17.0.0, and the
+# vectors carry them so pkg/ledger can test unicode.ToLower for drift.
+LOWER_LATER_UNICODE = "17.0.0"
+LOWER_LATER = (
+    (0x1C89, 0x1C8A), (0xA7CB, 0x0264), (0xA7CC, 0xA7CD), (0xA7CE, 0xA7CF), (0xA7D2, 0xA7D3),
+    (0xA7D4, 0xA7D5), (0xA7DA, 0xA7DB), (0xA7DC, 0x019B), (0x10D50, 0x10D70), (0x10D51, 0x10D71),
+    (0x10D52, 0x10D72), (0x10D53, 0x10D73), (0x10D54, 0x10D74), (0x10D55, 0x10D75),
+    (0x10D56, 0x10D76), (0x10D57, 0x10D77), (0x10D58, 0x10D78), (0x10D59, 0x10D79),
+    (0x10D5A, 0x10D7A), (0x10D5B, 0x10D7B), (0x10D5C, 0x10D7C), (0x10D5D, 0x10D7D),
+    (0x10D5E, 0x10D7E), (0x10D5F, 0x10D7F), (0x10D60, 0x10D80), (0x10D61, 0x10D81),
+    (0x10D62, 0x10D82), (0x10D63, 0x10D83), (0x10D64, 0x10D84), (0x10D65, 0x10D85),
+    (0x16EA0, 0x16EBB), (0x16EA1, 0x16EBC), (0x16EA2, 0x16EBD), (0x16EA3, 0x16EBE),
+    (0x16EA4, 0x16EBF), (0x16EA5, 0x16EC0), (0x16EA6, 0x16EC1), (0x16EA7, 0x16EC2),
+    (0x16EA8, 0x16EC3), (0x16EA9, 0x16EC4), (0x16EAA, 0x16EC5), (0x16EAB, 0x16EC6),
+    (0x16EAC, 0x16EC7), (0x16EAD, 0x16EC8), (0x16EAE, 0x16EC9), (0x16EAF, 0x16ECA),
+    (0x16EB0, 0x16ECB), (0x16EB1, 0x16ECC), (0x16EB2, 0x16ECD), (0x16EB3, 0x16ECE),
+    (0x16EB4, 0x16ECF), (0x16EB5, 0x16ED0), (0x16EB6, 0x16ED1), (0x16EB7, 0x16ED2),
+    (0x16EB8, 0x16ED3),
+)
+
+
 def lower_map(runs):
     out = {}
     for first, count, delta, stride in runs:
@@ -1307,7 +1332,7 @@ def get_choice(obj, key, path, choices):
 
 
 def check_lowercase(rep, obj, path):
-    fields(obj, path, ("unicode", "runs"))
+    fields(obj, path, ("unicode", "runs"), ("later_unicode", "later"))
     if get_str(obj, "unicode", path) != LOWER_UNICODE:
         rep.fail(path + ".unicode", "is %s; f.v = 1 lowercases with Unicode %s" % (json.dumps(obj["unicode"]), LOWER_UNICODE))
     runs = []
@@ -1322,6 +1347,18 @@ def check_lowercase(rep, obj, path):
             rep.fail(path, "maps U+%04X to %s, reference maps it to %s" % (
                 cp, "U+%04X" % got[cp] if cp in got else "itself", "U+%04X" % want[cp] if cp in want else "itself"))
             break
+    if ("later_unicode" in obj) != ("later" in obj):
+        raise FormatError("%s: later_unicode and later come together" % path)
+    if "later" in obj:
+        if get_str(obj, "later_unicode", path) != LOWER_LATER_UNICODE:
+            rep.fail(path + ".later_unicode", "is %s; the reference lists additions up to %s" % (
+                json.dumps(obj["later_unicode"]), LOWER_LATER_UNICODE))
+        given = []
+        for i, item in enumerate(get_list(obj, "later", path)):
+            ip = "%s.later[%d]" % (path, i)
+            fields(item, ip, ("code", "lower"))
+            given.append((get_int(item, "code", ip, 0, 0x10FFFF), get_int(item, "lower", ip, 0, 0x10FFFF)))
+        rep.same(path + ".later", sorted(given), sorted(LOWER_LATER))
     rep.count("lowercase tables")
 
 
@@ -2186,7 +2223,9 @@ def make_content_vectors():
         "note": "Part 2 vectors: commitments, reveals, normalization, keyed features, CC8 reveals and draws. "
                 "Test keys; see testdata/ledger/README.md.",
         "lowercase": {"unicode": LOWER_UNICODE, "runs": [
-            {"first": a, "count": b, "delta": c, "stride": d} for a, b, c, d in LOWER_RUNS]},
+            {"first": a, "count": b, "delta": c, "stride": d} for a, b, c, d in LOWER_RUNS],
+            "later_unicode": LOWER_LATER_UNICODE,
+            "later": [{"code": a, "lower": b} for a, b in LOWER_LATER]},
         "commitments": [c[0] for c in commitments],
         "reveals": reveals,
         "normalizations": normalizations,
@@ -2579,31 +2618,41 @@ def python_lower(cp):
     return 0x69 if cp == 0x130 else ord(lower) if len(lower) == 1 else None
 
 
+def unicode_version(text):
+    return tuple(int(x) for x in text.split("."))
+
+
 def test_lowercase_table():
+    """LOWER_RUNS against Python's unicodedata: equal for 15.0.0, equal less
+    LOWER_LATER for 15.1.0 to 17.0.0, and each pair still held after that."""
     import unicodedata
-    pairs = 0
-    if unicodedata.unidata_version == LOWER_UNICODE:
-        derived = {}
-        for cp in range(0x110000):
-            if 0xD800 <= cp <= 0xDFFF:
-                continue
-            lo = python_lower(cp)
-            expect(lo is not None, "U+%04X lowercases to more than one code point" % cp)
-            if lo != cp:
-                derived[cp] = lo
-        expect(derived == LOWER, "LOWER_RUNS differs from unicodedata %s at %s" % (
-            LOWER_UNICODE, sorted(set(derived.items()) ^ set(LOWER.items()))[:3]))
-        how = "equal to Python's unicodedata %s" % LOWER_UNICODE
-    else:
-        # A later database keeps every case pair (Unicode's stability policy),
-        # so each pinned mapping must still hold.
+    version = unicodedata.unidata_version
+    later = dict(LOWER_LATER)
+    expect(not set(later) & set(LOWER), "a later mapping is already in the 15.0.0 table")
+    expect(all(cp not in WHITESPACE and lo not in WHITESPACE for cp, lo in LOWER.items()), "lowercasing touches whitespace")
+    if unicode_version(version) > unicode_version(LOWER_LATER_UNICODE):
+        # Unicode keeps every case pair, so each pinned mapping must still hold.
         for cp, lo in LOWER.items():
-            expect(python_lower(cp) == lo, "U+%04X no longer lowercases to U+%04X" % (cp, lo))
-        how = "pairs still hold in unicodedata %s" % unicodedata.unidata_version
+            expect(python_lower(cp) == lo, "U+%04X no longer lowercases to U+%04X in unicodedata %s" % (cp, lo, version))
+        return "%d mappings; unicodedata %s is past %s, so only checked that each still holds" % (
+            len(LOWER), version, LOWER_LATER_UNICODE)
+    derived = {}
+    for cp in range(0x110000):
+        if 0xD800 <= cp <= 0xDFFF:
+            continue
+        lo = python_lower(cp)
+        expect(lo is not None, "U+%04X lowercases to more than one code point in unicodedata %s" % (cp, version))
+        if lo != cp:
+            derived[cp] = lo
+    extra = {cp: lo for cp, lo in derived.items() if cp not in LOWER}
     for cp, lo in LOWER.items():
-        expect(cp not in WHITESPACE and lo not in WHITESPACE, "lowercasing touches whitespace")
-        pairs += 1
-    return "%d mappings, %s" % (pairs, how)
+        expect(derived.get(cp) == lo, "unicodedata %s doesn't lowercase U+%04X to U+%04X" % (version, cp, lo))
+    for cp, lo in extra.items():
+        expect(later.get(cp) == lo, "unicodedata %s lowercases U+%04X to U+%04X, which is in neither table" % (version, cp, lo))
+    if version == LOWER_UNICODE:
+        expect(not extra, "unicodedata 15.0.0 has mappings the table lacks")
+        return "%d mappings, equal to unicodedata %s" % (len(LOWER), version)
+    return "%d mappings, equal to unicodedata %s less %d later ones" % (len(LOWER), version, len(extra))
 
 
 def test_tokens():
