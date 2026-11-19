@@ -49,13 +49,25 @@ var otherLicenses = []string{
 	"good, not evil", // the JSON license
 }
 
-// conditionRE finds the words of an added condition ("Redistribution is
-// prohibited without written permission") in a template's free text, which
-// should hold only copyright notices, names and bullets. Each line of the
-// head must also be a copyright notice or a title (headLineOK). A clause
-// that avoids these words and sits on a copyright line can still get
-// through, so a reviewer reads a new dependency's license too.
-var conditionRE = regexp.MustCompile(`\b(prohibit\w*|restrict\w*|forbid\w*|not|no|without|except\w*|unless|only|solely|must|shall|may|cannot|requir\w*|consent\w*|permission\w*|permit\w*|commercial\w*|sell\w*|sale\w*|fees?|pay\w*|royalt\w*|terms?|conditions?|agree\w*|evil)\b`)
+// conditionRE finds an added condition ("Redistribution is prohibited
+// without written permission", "Commercial use is prohibited") in a
+// template's free text, which should hold only copyright notices, names
+// and bullets. It looks for phrases, not lone words, so holders such as
+// "PayPal, Inc." or "Sally May" pass. Each line of the head must also be a
+// copyright notice or a title (headLineOK). A clause that avoids these
+// phrases and sits on a copyright line can still get through, so a
+// reviewer reads a new dependency's license too.
+var conditionRE = regexp.MustCompile(`\b(?:prohibit\w*|forbid\w*|unless|except\w*|cannot` +
+	`|(?:is|are|be|being) (?:strictly )?(?:restricted|limited|not permitted|not allowed)` +
+	`|(?:may|must|shall|can|will) not` +
+	`|not (?:be )?(?:permitted|allowed|used|sold|resold|redistributed|distributed|modified|copied|for)` +
+	`|no (?:commercial|redistribution|modification|sale|resale|use)` +
+	`|without (?:the )?(?:express |prior )?(?:written )?(?:permission|consent|authori[sz]ation|license)` +
+	`|(?:non-?)?commercial (?:use|purposes?|redistribution|distribution)` +
+	`|for (?:non-?commercial|personal|educational|internal|evaluation|academic) (?:use|purposes?)` +
+	`|(?:use|used) only|only (?:be )?(?:used|for|by|with|within|in)` +
+	`|requires? (?:a |an )?(?:fee|payment|license|permission|consent|registration)` +
+	`|royalt(?:y|ies)|license fee|subject to|terms (?:of|and conditions))\b`)
 
 type template struct {
 	id string
@@ -238,6 +250,19 @@ func headLineOK(line string) bool {
 	return true
 }
 
+// matchesAnyChar reports whether a parsed regexp has a . anywhere.
+func matchesAnyChar(re *syntax.Regexp) bool {
+	if re.Op == syntax.OpAnyChar || re.Op == syntax.OpAnyCharNotNL {
+		return true
+	}
+	for _, sub := range re.Sub {
+		if matchesAnyChar(sub) {
+			return true
+		}
+	}
+	return false
+}
+
 // shorten cuts s to at most n runes, marking the cut.
 func shorten(s string, n int) string {
 	r := []rune(s)
@@ -315,8 +340,12 @@ func compileTemplate(t string) (*regexp.Regexp, error) {
 			stack[top-1] = append(stack[top-1], `(?:`+strings.Join(inner, `\s*`)+`)?`)
 		default:
 			kind, expr, _ := strings.Cut(tag, ":")
-			if _, err := syntax.Parse(expr, syntax.Perl); err != nil {
+			parsed, err := syntax.Parse(expr, syntax.Perl)
+			if err != nil {
 				return nil, fmt.Errorf("<<%s>>: %v", tag, err)
+			}
+			if kind == "var" && matchesAnyChar(parsed) {
+				return nil, fmt.Errorf("<<%s>> matches any character; free text belongs in <<text>> or <<head>>, which identify screens", tag)
 			}
 			// text and head parts are named, so identify can screen them.
 			switch kind {

@@ -132,6 +132,14 @@ func TestIdentifyVariants(t *testing.T) {
 		{name: "a title and a rule above the copyright line are fine", text: mustReplace(bsd3, "Copyright (c) <year> <owner>.", "BSD 3-Clause License\n====================\n\nCopyright (c) 2020, Example Corp.\nAll rights reserved."), want: "BSD-3-Clause"},
 		{name: "a title on the copyright line is fine", text: mustReplace(mit, "MIT License\n\nCopyright (c) <year> <copyright holders>", "MIT License Copyright (c) 2020 Example Corp."), want: "MIT"},
 		{name: "a sentence under a title and copyright sharing a line fails", text: mustReplace(mit, "MIT License\n\nCopyright (c) <year> <copyright holders>", "MIT License Copyright (c) 2020 Foo\n"+france)},
+		{name: "a holder named PayPal passes", text: mustReplace(mit, "Copyright (c) <year> <copyright holders>", "Copyright (c) 2024 PayPal, Inc."), want: "MIT"},
+		{name: "a holder named May passes", text: mustReplace(mit, "Copyright (c) <year> <copyright holders>", "Copyright (c) 2024 Sally May"), want: "MIT"},
+		{name: "a holder whose name starts with No passes", text: mustReplace(mit, "Copyright (c) <year> <copyright holders>", "Copyright (c) 2024 No Starch Press"), want: "MIT"},
+		{name: "a condition on the copyright line itself fails", text: mustReplace(mit, "Copyright (c) <year> <copyright holders>", "Copyright (c) 2020 Foo. Commercial use is prohibited.")},
+		{name: "a may-not condition on the copyright line itself fails", text: mustReplace(mit, "Copyright (c) <year> <copyright holders>", "Copyright (c) 2020 Foo. This software may not be sold.")},
+		{name: "a condition inside BSD-3-Clause's endorsement clause fails", text: mustReplace(bsd3, "Neither the name of the copyright holder nor the names of its contributors may", "Neither the name of Foo nor the names of its contributors may be used to endorse this software. Commercial use is prohibited. Neither the name of Foo nor the names of its contributors may")},
+		{name: "BSD-3-Clause's 'the name of X may not' wording is BSD-3-Clause", text: mustReplace(bsd3, "Neither the name of the copyright holder nor the names of its contributors may", "The name of the author may not"), want: "BSD-3-Clause"},
+		{name: "BSD-3-Clause naming their contributors is BSD-3-Clause", text: mustReplace(bsd3, "nor the names of its contributors", "nor the names of their contributors"), want: "BSD-3-Clause"},
 		{name: "a GPL mention in the copyright lines fails", text: mustReplace(mit, "Copyright (c) <year> <copyright holders>", "Copyright (c) 2016 A. Some files are under the GNU General Public License."), want: ""},
 		{name: "BSD-3-Clause without its third clause is BSD-2-Clause", text: bsd3[:strings.Index(bsd3, "3. Neither")] + bsd3[strings.Index(bsd3, "THIS SOFTWARE"):], want: "BSD-2-Clause"},
 		{name: "MIT and GPL texts in one file fail", text: mit + "\n" + string(gpl)},
@@ -178,6 +186,7 @@ func TestCompileTemplateErrors(t *testing.T) {
 		{name: "a bad variable regexp is an error", template: "a <<var:(>> b"},
 		{name: "a bad text regexp is an error", template: "a <<text:(>> b"},
 		{name: "two heads are an error", template: "<<head:.*>> a <<head:.*>> b"},
+		{name: "a wildcard in a var is an error, since only text and head are screened", template: "a <<var:foo .{1,20} bar>> b"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
