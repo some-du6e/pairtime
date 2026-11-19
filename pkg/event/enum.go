@@ -82,12 +82,14 @@ const (
 	// records why it was added.
 	ViaBridgeUnverified Via = "bridge_unverified"
 	// ViaTrack is `pairtime track`, called by an agent following the
-	// AGENTS.md entry (DESIGN 5.4). It never counts toward logged_s.
+	// AGENTS.md entry (DESIGN 5.4). Like ViaBridge its anchors are level C
+	// unless corroborated, and it never counts toward logged_s.
 	ViaTrack Via = "track"
 	// ViaPlugin is a plugin posting over HTTP or through the inbox, or
 	// `pairtime emit` and the generic hook mode from a process whose
-	// parent chain reaches no listed host (DESIGN 5.3). It never counts
-	// toward logged_s.
+	// parent chain reaches no listed host (DESIGN 5.3). Like ViaBridge its
+	// anchors are level C unless corroborated, and it never counts toward
+	// logged_s.
 	ViaPlugin Via = "plugin"
 )
 
