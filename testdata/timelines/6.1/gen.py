@@ -13,6 +13,7 @@ import timeline as tl  # noqa: E402
 
 EDGES = "2026-11-19-sm-6.1-presence-edges"
 SAME_ERROR = "2026-11-19-sm-6.1-same-error"
+REPLAY = "2026-11-19-sm-6.1-hackatime-replay"
 
 fx = tl.Fixture(
     "6.1",
@@ -523,7 +524,7 @@ expected = exp.doc(
         "handbook_s": {"about": 5600, "sm": "handbook_s: about 5,600, 1 h 33 min"},
         "ai_ratio": {"about": 1.47, "sm": "ai_ratio is 5,965 / 4,050 = 1.47"},
     },
-    errata=[EDGES, SAME_ERROR],
+    errata=[EDGES, SAME_ERROR, REPLAY],
     notes=[
         "ai_credited_s is P + PA + SUP + READ and hand_credited_s is NAV + E + G + LOOKUP, as SM's table "
         "splits them; no credited second inside an agent turn has a hand-work reason (SM 5.4).",
@@ -540,7 +541,7 @@ expected = exp.doc(
         f"This fixture's events replay to logged_s {logged:g}, ai_logged_s {ai_logged:g} and handbook_s "
         f"{handbook:g} under min(gap, 120 s) over the window; SM says about 8,300, 4,050 and 5,600. The "
         "first prompt has no agent event within 120 s before it in the window, which is the 120 s off SM's "
-        "ai_logged_s, and VS Code sends only the heartbeats SM names.",
+        "ai_logged_s, and VS Code sends only the heartbeats SM names. See the Hackatime-replay erratum.",
     ],
 )
 

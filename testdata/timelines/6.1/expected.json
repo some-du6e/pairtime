@@ -2695,13 +2695,17 @@
     "handbook_s": {"about": 5600, "sm": "handbook_s: about 5,600, 1 h 33 min"},
     "ai_ratio": {"about": 1.47, "sm": "ai_ratio is 5,965 / 4,050 = 1.47"}
   },
-  "errata": ["2026-11-19-sm-6.1-presence-edges", "2026-11-19-sm-6.1-same-error"],
+  "errata": [
+    "2026-11-19-sm-6.1-presence-edges",
+    "2026-11-19-sm-6.1-same-error",
+    "2026-11-19-sm-6.1-hackatime-replay"
+  ],
   "notes": [
     "ai_credited_s is P + PA + SUP + READ and hand_credited_s is NAV + E + G + LOOKUP, as SM's table splits them; no credited second inside an agent turn has a hand-work reason (SM 5.4).",
     "absent_s is SM's X.absent total, the drink's 330 s. The rows' X.absent sums to 90 (50 in 15:07, 40 in 15:12): the other 240 s fall in 15:08 to 15:11, which have no bucket. See the presence-edges erratum.",
     "agent_only_s is the 25 s a cycle that SM's 14:04 row calls X.agent_only. agent_running_s, 150 s a turn from submit to stop, follows from SM's times.",
     "Commits: cycle 1's at 14:11:40 and cycles 3, 9, 12 and 15's, five in all. Cycle 6's would be at 15:11:40, during the drink.",
     "Cycles 9 and 10: the agent's test run fails at 15:41:50, 15:42:20 and 15:54:20 with one AssertionError signature, and passes at 16:06:20, after his hand edit at 15:59:40. Nothing is discounted. See the same-error erratum for why SM's reason doesn't apply.",
-    "This fixture's events replay to logged_s 7370, ai_logged_s 3930 and handbook_s 4750 under min(gap, 120 s) over the window; SM says about 8,300, 4,050 and 5,600. The first prompt has no agent event within 120 s before it in the window, which is the 120 s off SM's ai_logged_s, and VS Code sends only the heartbeats SM names."
+    "This fixture's events replay to logged_s 7370, ai_logged_s 3930 and handbook_s 4750 under min(gap, 120 s) over the window; SM says about 8,300, 4,050 and 5,600. The first prompt has no agent event within 120 s before it in the window, which is the 120 s off SM's ai_logged_s, and VS Code sends only the heartbeats SM names. See the Hackatime-replay erratum."
   ]
 }
