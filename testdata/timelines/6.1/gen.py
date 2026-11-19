@@ -476,7 +476,8 @@ for k in range(1, CYCLES + 1):
             if k == 1 and m == 8:
                 note = "SM: the bucket still holds 303 s at the end of the minute (303 1/3 s: 553 1/3 filled, 250 drained)."
             if k == 9 and m == 5:
-                note = "The agent's test run fails at 15:41:50 with the AssertionError; credit is unchanged."
+                note = ("The agent's test run fails at 15:41:50 with the AssertionError. Its 4 lines add 30 s to "
+                        "a bucket that never runs dry here, so the row keeps cycle 1's shape.")
             if k == 9 and m == 6:
                 note = "A second failing run at 15:42:20, the same AssertionError."
             if k == 10 and m == 6:
@@ -545,12 +546,17 @@ expected = exp.doc(
     ],
 )
 
-# The acts SM names, in time order.
+# The acts SM names, in time order. Outside cycle 1, sm names the cycle-1
+# row the act copies.
 anchors = []
 turns = []
 prompt_entries = []
 for k in range(1, CYCLES + 1):
     C = start(k)
+
+    def shaped(text):
+        return text if k == 1 else f"{text}; {SAME_SHAPE}"
+
     if k == DRINK + 1:
         click = fx.event_at("editor.activity", BACK)
         anchors.append(tl.anchor(fx, click, kind="editor_navigation", lead_s=120, trail_s=0, lead_from="params",
@@ -559,31 +565,34 @@ for k in range(1, CYCLES + 1):
     else:
         nav = fx.event_at("editor.activity", C + off("0:30"))
         anchors.append(tl.anchor(fx, nav, kind="editor_navigation", lead_s=120, trail_s=0, lead_from="params",
-                                 level="A", sm="14:00: heartbeats at 14:00:30 and 14:01:50 become NAV anchors"))
+                                 level="A",
+                                 sm=shaped("14:00: heartbeats at 14:00:30 and 14:01:50 become NAV anchors")))
     nav = fx.event_at("editor.activity", C + off("1:50"))
     anchors.append(tl.anchor(fx, nav, kind="editor_navigation", lead_s=120, trail_s=0, lead_from="params",
-                             level="A", sm="14:01: from 14:01:50 the lead of his next prompt takes over"))
+                             level="A", sm=shaped("14:01: from 14:01:50 the lead of his next prompt takes over")))
     sub = fx.event_at("prompt.submit", C + off("4:00"))
     anchors.append(tl.anchor(fx, sub, kind="substantive_prompt", origin="human_typed", prompt_class="substantive",
-                             lead_s=320, trail_s=0, lead_from="sm",
-                             level="A", sm="14:03: sends at 14:04:00; its lead is 120 + 300 / 1.5 = 320 s"))
+                             lead_s=320, trail_s=0, lead_from="sm", level="A",
+                             sm=shaped("14:03: sends at 14:04:00; its lead is 120 + 300 / 1.5 = 320 s")))
     pa = fx.event_at("agent.permission", C + off("5:25"))
     anchors.append(tl.anchor(fx, pa, kind="permission_answer", lead_s=15, trail_s=10, lead_from="params",
-                             level="A", sm="14:05: permission request at 14:05:10, accepted at 14:05:25; "
-                                           "the wait and the 10 s trail are PA 25"))
+                             level="A", sm=shaped("14:05: permission request at 14:05:10, accepted at 14:05:25; "
+                                                  "the wait and the 10 s trail are PA 25")))
     if k == DRINK:
         pass
     elif k in COMMIT_CYCLES:
         g = fx.event_at("git.change", C + off("11:40"))
         anchors.append(tl.anchor(fx, g, kind="human_commit", lead_s=60, trail_s=0, lead_from="sm", level="A",
-                                 sm="14:11: commit at 14:11:40 (G, lead 60 s)"))
+                                 sm="14:11: commit at 14:11:40 (G, lead 60 s)" if k == 1 else
+                                 "14:11; minute 11 is a commit in cycles 3, 6, 9, 12 and 15"))
     else:
         e = fx.event_at("editor.activity", C + off("11:40"))
         anchors.append(tl.anchor(fx, e, kind="typed_edit", lead_s=120, trail_s=0, lead_from="params", level="A",
-                                 sm="minute 11 is a small hand edit in VS Code, crediting E and NAV"))
+                                 sm="minute 11 of the other cycles is a small hand edit in VS Code, crediting "
+                                    "E and NAV"))
     turns.append(tl.turn(fx, C + off("4:00"), C + off("6:30"), session=S, turn_key=TURN[k], origin="human_typed",
                          prompt_class="substantive",
-                         sm="14:04 to 14:06: the agent starts at 14:04:00 and stops at 14:06:30"))
+                         sm=shaped("14:04 to 14:06: the agent starts at 14:04:00 and stops at 14:06:30")))
     source = "SM 6.1 gives each cycle's prompt 300 characters and quotes none"
     if k == 10:
         source = ("SM 6.1 quotes the hypothesis Rowan answers the failing test with, \"the hitbox updates before "

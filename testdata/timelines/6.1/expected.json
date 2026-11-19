@@ -1486,7 +1486,7 @@
       "uncredited": {},
       "agent_running_s": 60,
       "sm": "14:05; the other fourteen cycles are the same shape",
-      "note": "The agent's test run fails at 15:41:50 with the AssertionError; credit is unchanged.",
+      "note": "The agent's test run fails at 15:41:50 with the AssertionError. Its 4 lines add 30 s to a bucket that never runs dry here, so the row keeps cycle 1's shape.",
       "derived": ["credited_s", "credit", "uncredited"]
     },
     {
