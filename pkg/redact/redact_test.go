@@ -3,6 +3,7 @@
 package redact
 
 import (
+	"slices"
 	"strings"
 	"testing"
 )
@@ -79,27 +80,27 @@ func typeNames(ts []Type) []string {
 // Find reports the secret inside it on its own, with its rule.
 func TestFindKeepsInnerSecrets(t *testing.T) {
 	ghp := fakeKey("gh"+"p_", "Zx81Qw4LmN", 36, "")
-	text := "```\ntoken = \"" + ghp + "\"\n```"
+	tests := []struct {
+		name     string
+		text     string
+		restored string // the text with Find's spans removed and no code collapse
+	}{
+		{"a secret inside a code block is its own span", "```\ntoken = \"" + ghp + "\"\n```", "```\ntoken = \"[SECRET]\"\n```"},
+		{"a secret inside an indented block in a list is its own span", "1. Run:\n   ```sh\n   gh auth login --with-token " + ghp + "\n   ```",
+			"1. Run:\n   ```sh\n   gh auth login --with-token [SECRET]\n   ```"},
+	}
 	r := mustNew(t, Known{})
-	start := strings.Index(text, ghp)
-	found := false
-	for _, s := range r.Find(text) {
-		if s.Type == TypeSecret && s.Rule == "github-pat" && s.Start == start && s.End == start+len(ghp) {
-			found = true
-		}
-	}
-	if !found {
-		t.Errorf("Find(%q) has no github-pat span at %d", text, start)
-	}
-	restored := Render(text, r.Find(text)) // the block added back, its secret still out
-	if strings.Contains(restored, ghp) || !strings.Contains(restored, "token = \"[SECRET]\"") {
-		t.Errorf("restored block = %q", restored)
-	}
-}
-
-func TestNewLoadsRulesOnce(t *testing.T) {
-	a, b := mustNew(t, Known{}), mustNew(t, testTeen)
-	if a.rules != b.rules {
-		t.Error("two Redactors loaded the rules twice")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			start := strings.Index(tt.text, ghp)
+			want := Span{Start: start, End: start + len(ghp), Type: TypeSecret, Rule: "github-pat"}
+			spans := r.Find(tt.text)
+			if !slices.Contains(spans, want) {
+				t.Errorf("Find = %v, want it to contain %v", spans, want)
+			}
+			if got := Render(tt.text, spans); got != tt.restored {
+				t.Errorf("with the block restored, Render = %q, want %q", got, tt.restored)
+			}
+		})
 	}
 }

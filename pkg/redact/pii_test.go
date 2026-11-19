@@ -343,20 +343,15 @@ func TestIBANFormatsMatchPresidio(t *testing.T) {
 			blocks[name] = strings.Trim(val, `"`)
 		}
 	}
-	if len(got) != 76 {
-		t.Fatalf("parsed %d countries, want 76", len(got))
+	if len(got) != 76 || len(ibanFormats) != 76 {
+		t.Fatalf("Presidio's table has %d countries and ibanFormats %d, want 76 each", len(got), len(ibanFormats))
 	}
-	if !reflect.DeepEqual(got, ibanFormats) {
-		for cc, re := range got {
-			if ibanFormats[cc] != re {
-				t.Errorf("%s: ibanFormats has %q, Presidio %q", cc, ibanFormats[cc], re)
+	for cc, want := range got {
+		t.Run(cc+" has Presidio's format", func(t *testing.T) {
+			if have, ok := ibanFormats[cc]; !ok || have != want {
+				t.Errorf("ibanFormats[%q] = %q, Presidio has %q", cc, have, want)
 			}
-		}
-		for cc := range ibanFormats {
-			if _, ok := got[cc]; !ok {
-				t.Errorf("%s is in ibanFormats but not in Presidio's table", cc)
-			}
-		}
+		})
 	}
 }
 

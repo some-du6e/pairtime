@@ -129,6 +129,9 @@ func TestGitleaksRulesCompile(t *testing.T) {
 	if len(rs.global) != 1 {
 		t.Errorf("loaded %d global allowlists, want 1", len(rs.global))
 	}
+	if a, b := mustNew(t, Known{}), mustNew(t, testTeen); a.rules != rs || b.rules != rs {
+		t.Error("a Redactor loaded its own copy of the rules")
+	}
 	for _, r := range rs.rules {
 		t.Run(r.id, func(t *testing.T) {
 			if _, err := regexp.Compile(r.pattern); err != nil {
