@@ -72,7 +72,7 @@ jobs:
             (cd "$dir" && go mod tidy)
             after=$(grep -E '^(go|toolchain) ' "$dir/go.mod" || true)
             if [ "$before" != "$after" ]; then
-              echo "::error file=$dir/go.mod::go mod tidy changed the go or toolchain line from '$before' to '$after'; a dependency needs a newer Go than 1.26"
+              echo "::error file=$dir/go.mod::go mod tidy would change '$before' to '$after' because a dependency asks for a newer Go. The go directive stays at 1.26 (AGENTS.md): pick an older version of that dependency, or ask Karim."
               exit 1
             fi
             echo "::endgroup::"

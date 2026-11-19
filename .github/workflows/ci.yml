@@ -160,8 +160,9 @@ jobs:
           out=$("$tool" -C testdata/licensecheck/bad 2>&1)
           code=$?
           set -e
-          # Indented, so the expected ::error:: lines don't become annotations.
-          sed 's/^/    /' <<<"$out"
+          # Rewritten, so the expected errors don't become PR annotations: the
+          # runner reads ::error:: even after leading spaces.
+          sed 's/^::error::/expected error: /' <<<"$out"
           if [ "$code" -ne 1 ] || ! grep -q '^::error::example.com/licensecheck/gpl@v0.0.0 => ../gpl: LICENSE:' <<<"$out"; then
             echo "::error::licensecheck no longer rejects the GPL-3.0 module seeded in testdata/licensecheck/bad (exit $code)"
             exit 1
