@@ -15,10 +15,11 @@ testdata/fixtures/<harness>/<version>/<os>/
       time              when the call arrived: unix_ns, utc and the clock used, one key=value per line
       cwd               the hook process's working directory
       parents           the hook's parent processes, nearest first: pid and executable name, never command lines
+      stderr            only when the dumper itself hit an error
     otlp/NNNNNN.json    one OTLP/HTTP JSON request body, as sent
-    otlp/NNNNNN.meta    its arrival time, path, content type and encoding
-    transcripts/        the harness's own session files for the sessions the hooks saw
-    MANIFEST.txt        every file in the run with its size and SHA-256, written by the collector
+    otlp/NNNNNN.meta    its arrival time, path, content type, encoding and header names
+    transcripts/        the harness's own session files for the sessions the hooks saw, under home/ by their path
+      INDEX.txt         each copied file with its source path, size and modification time
     STEPS.txt           which SCRIPTS.md step the person was on, with the time they started it
 ```
 
@@ -43,7 +44,8 @@ The scrub replaces values with these, so tests can rely on them:
 | Home directory | `C:\Users\capture` on Windows, `/Users/capture` on macOS, `/home/capture` on Linux, in every spelling the files use |
 | OS account name | `capture` |
 | Hostname | `capture-host` |
-| git `user.name` and other listed names | `Capture User` |
+| git `user.name` | `Capture User` |
 | git `user.email` and other email addresses | `capture@example.invalid` |
+| Anything else the person lists with `--also`: a real name, a school | `REDACTED` |
 | Account and organization ids in telemetry | `00000000-0000-4000-8000-000000000000` |
 | Key- or token-shaped strings | `REDACTED_<KIND>`, such as `REDACTED_GITHUB_TOKEN` |

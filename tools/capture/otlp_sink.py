@@ -176,9 +176,15 @@ def make_handler(sink, out):
             self.reply(404, b"", "text/plain")
 
         def reply(self, status, payload, ctype):
+            # After an error the request body may be unread, so the next bytes
+            # on this connection aren't a request: close it.
+            if status >= 400:
+                self.close_connection = True
             self.send_response(status)
             self.send_header("Content-Type", ctype)
             self.send_header("Content-Length", str(len(payload)))
+            if status >= 400:
+                self.send_header("Connection", "close")
             self.end_headers()
             self.wfile.write(payload)
 
