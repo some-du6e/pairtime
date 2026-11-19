@@ -1,0 +1,78 @@
+{
+  "fixture": "sidedoor/g-track-without-prompt",
+  "case": "g",
+  "title": "A track call on a hooked session with no prompt near it",
+  "wp": "docs/PLAN.md WP-FX4 (g)",
+  "rules": ["DESIGN 5.2", "DESIGN 5.4", "DESIGN 6.2 D19", "DESIGN 6.4"],
+  "records": [
+    {
+      "event_id": "01a2144f-6fc0-7422-aaa9-4a7f67759026",
+      "t": 1795637080000,
+      "local": "14:04:40",
+      "kind": "prompt.submit",
+      "via": "hook",
+      "anchor": true,
+      "level": "B",
+      "labels": [],
+      "flags": [],
+      "logged_s": 0,
+      "ai_logged_s": 0,
+      "why": "A hook prompt that passes SM 2.2 rule 6, substantive, lead 220 s. Level B: input_any only (6.4)."
+    },
+    {
+      "event_id": "01a21450-3310-784c-ae60-de1332f35988",
+      "t": 1795637130000,
+      "local": "14:05:30",
+      "kind": "agent.output",
+      "via": "log",
+      "anchor": false,
+      "flags": [],
+      "logged_s": 0,
+      "ai_logged_s": 0,
+      "why": "The answer from the transcript: 120 words fill 40 s. Not one of SM 5.4's agent events."
+    },
+    {
+      "event_id": "01a21450-3310-7397-9730-9ab1a03efa85",
+      "t": 1795637130000,
+      "local": "14:05:30",
+      "kind": "agent.stop",
+      "via": "hook",
+      "anchor": false,
+      "flags": [],
+      "logged_s": 50,
+      "ai_logged_s": 50,
+      "why": "The Stop hook: an agent event, counted in both series."
+    },
+    {
+      "event_id": "01a21452-07d0-708a-a2bb-ebcf0368a3a0",
+      "t": 1795637250000,
+      "local": "14:07:30",
+      "kind": "cli.track",
+      "via": "track",
+      "anchor": false,
+      "track": "without_prompt",
+      "flags": ["track_without_prompt"],
+      "logged_s": 0,
+      "ai_logged_s": 0,
+      "why": "DESIGN 5.4: pairtime sees the session through hooks and a log reader, and no hook or log prompt of the session is within TRACK_LOG_MATCH_S = 10 s of the call; the nearest is 170 s back. It opens nothing and raises the tier-2 flag track_without_prompt. Never counts toward logged_s (D19)."
+    }
+  ],
+  "turns": [
+    {
+      "opened_by": "01a2144f-6fc0-7422-aaa9-4a7f67759026",
+      "turn_key": "t_ce2e7a352448",
+      "session_key": "s_b2a5135d74c9",
+      "t": 1795637080000,
+      "local": "14:04:40",
+      "via": "hook",
+      "backed": true,
+      "output_fill_s": 40,
+      "fill_s": 60,
+      "why": "SM 2.4: the 20 s base and 40 s for the 120-word answer. The track call starts no turn."
+    }
+  ],
+  "errata": [],
+  "notes": [
+    "A wrong scorer that opened an anchor for the call would credit its think part, 14:03:50 to 14:05:50, where it beats the bucket from 14:04:40, and a fresh 20 s base from 14:07:30, all at level C."
+  ]
+}
