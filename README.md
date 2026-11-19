@@ -1,5 +1,13 @@
-<img src="assets/icon.svg" width="64" height="64" alt="">
+# pairtime
 
-# ai-time-tracker
+A time tracker for building with AI. It's meant to count the hours you spend thinking, steering, reading, testing and fixing, and to skip the hours your agent spends running on its own.
 
-Created in [T3 Code](https://t3.codes).
+We're building it for Hack Club's AI time tracking bounty. [docs/BOUNTY.md](docs/BOUNTY.md) has the requirements, quoted from the announcement.
+
+## Status
+
+Research and design are in progress. There's nothing to install yet.
+
+## License
+
+[AGPL-3.0](LICENSE)
