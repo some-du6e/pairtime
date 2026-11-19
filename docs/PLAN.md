@@ -1,0 +1,1390 @@
+# pairtime build plan
+
+Status: draft in progress
+
+This plan turns [DESIGN.md](DESIGN.md) into work packages (WPs) for AI coding agents. It was written on 2026-11-19, after PR #1 (WP-0a, branch `wp0a-skeleton`) went green. Where this plan and DESIGN.md disagree on what to build, DESIGN.md wins and the WP is wrong; fix the WP. Where they disagree on order or size, this plan wins, because DESIGN.md 9.7 assumed five agents and this plan has three.
+
+## How to use this plan
+
+Each WP is handed to one coding agent that starts with no context. The agent reads, in this order: the repo's `AGENTS.md`, its WP block below, every section the block cites, and the files the block says it touches. It works 2 to 4 hours in its own git worktree, can't build or test on its machine, and opens one PR. Karim reviews and merges.
+
+Citations use DESIGN.md's keys, plus `DESIGN` for DESIGN.md itself:
+
+| Key | File |
+|---|---|
+| DESIGN | `docs/DESIGN.md` |
+| B | `docs/BOUNTY.md` |
+| SM | `docs/design/struggle-metric.md` |
+| AD, EV, TE | `docs/design/approach-adoption.md`, `approach-evidence.md`, `approach-teen.md` |
+| JB, JE, JT | `docs/design/judging-bounty.md`, `judging-engineering.md`, `judging-trust.md` |
+| HC, HS, CP, SP, PA, TP | `docs/research/hackatime-and-hack-club.md`, `ai-harness-signals.md`, `client-platform.md`, `server-platform.md`, `prior-art-and-measurement.md`, `trust-and-privacy.md` |
+| PR1 | PR #1, the merged skeleton: `pkg/event`, `docs/schema/event.schema.json`, `ci.yml`, `AGENTS.md` |
+
+A WP block has these fields:
+
+- **Depends on**: WPs that must be merged first. "PR1" means the skeleton.
+- **Touches**: the packages and files the PR may change. Touching anything else needs a sentence in the PR description saying why.
+- **Build**: what to write. It cites the design section that is the spec.
+- **CI checks**: what must be green before review. Every check runs in GitHub Actions.
+- **Oracle**: the thing that decides whether the code is right and that this WP's agent didn't write. A WP whose only check is its own unit tests isn't done (JE must-fix 1).
+- **Human**: present only when a person, a real machine or an account is needed. Such WPs are marked [human] in their title.
+
+Ids are stable area codes, not an order. The order is in the milestone tables and in "Suggested order for the first ten".
+
+| Code | Area | Code | Area |
+|---|---|---|---|
+| CI | workflows and repo tooling | SV | server core (`internal/server`) |
+| EV | `pkg/event` | SB | submissions, reveal, sealing, bundle |
+| PA | `pkg/params` | TR | checks, detectors, red-team, typing evidence |
+| FX | oracle fixtures written before the code they check | RV | review desk |
+| LG | `pkg/ledger`, the ledger writer, the vault | PG | program integrations |
+| SC | `pkg/score` | PV | redaction, privacy hub, recovery, age signal |
+| AG | `internal/agent` | CA | calibration |
+| OS | `internal/platform` | OP | deploy and operations |
+| AD | adapters and harness captures | RL | release, install scripts, signing, channels |
+| IN | `internal/install` | UI, CO | local UI, coach |
+
+## Ground rules for every work package
+
+These extend PR1's `AGENTS.md`, DESIGN 9.7's rules and TE 10.1. A WP that can't meet them is split before it starts, not during.
+
+1. **One WP, one session, one PR.** If the work won't fit in 4 hours, stop at a clean point, open the PR as a draft, and write in its description what is left. Karim splits the rest into a new WP.
+2. **Nothing builds or runs on the agent's machine.** gofmt is the only local tool (PR1 `AGENTS.md`). No `go build`, `go test`, `go mod tidy`, `npm install` or `npx`. Push the branch and read the run with `gh run list --branch <branch>` and `gh run view <id> --log-failed`.
+3. **Lockfiles come from CI.** Adding a Go module or an npm package needs `go.sum` or `package-lock.json` lines nobody can write by hand. Run `gh workflow run tidy.yml --ref <branch>` (WP-CI1), which runs `go mod tidy` and `npm install --package-lock-only --ignore-scripts` and pushes the result to the branch. Pushes made by that workflow don't start CI, so push an empty commit or re-run CI afterwards.
+4. **Dependencies.** Standard library first. A new module must be cgo-free, permissively licensed (MIT, BSD-2-Clause, BSD-3-Clause, Apache-2.0 or ISC) and on DESIGN 3.12's list, or the PR says why the list falls short. The license step in `ci.yml` (WP-CI1) checks every module, transitive ones included.
+5. **Oracles are read-only.** A PR may add oracle files next to new code, but may not modify existing ones together with the code they check. The `oracle-guard` step in `ci.yml` fails such a PR unless Karim adds the `oracle-change` label. Oracle paths: `docs/DESIGN.md`, `docs/BOUNTY.md`, `docs/design/**`, `docs/research/**`, `testdata/timelines/**`, `testdata/ledger/**`, `tools/ledger_ref.py`, `testdata/fixtures/**`, `testdata/upstream/**`, `testdata/checks/**`, `testdata/redteam/**`.
+6. **Errata go to Karim.** When an SM worked example, a design number or a captured fixture disagrees with what the spec says should happen, the PR adds `docs/errata/<date>-<topic>.md` with the input, the expected value, the computed value and the reasoning, adds the `erratum` label and stops. It never tunes the code to the fixture or edits SM to pass its own test (DESIGN 6.6).
+7. **Fixtures, not live services.** No CI job uses a model API key, a teen's data, Hack Club's live services or a real forge. HCA, forges, Airtable and program APIs are fakes or recorded fixtures (TE 10.1).
+8. **PR1's conventions hold.** SPDX header on line one of every Go file, gofmt, table tests with rule-stating case names, `pairtime:"local"` tags with `omitempty`, opaque keys that pass `isKey`, and a call-out in the PR description for any change to `TestLocalFields` (PR1 `AGENTS.md`).
+9. **Integer scoring.** `pkg/score` and anything that feeds it use integers: milliseconds for time, half-second units for credit, exact rationals for non-integer parameters. Floats appear only when writing PR1's float fields (DESIGN 3.7).
+10. **Content stays on the device.** No WP may add a tier-1 field without updating DESIGN 4.3's table through Karim first (TP DI 15). The ingest firewall test (WP-SV5) is the backstop.
+11. **Done means** `ci.yml` green; every other workflow the PR's paths trigger green; the WP's own CI checks green; the PR description lists the oracle and how it was used; and, for WPs marked race, one `gh workflow run nightly.yml --ref <branch>` run green.
+
+## CI policy
+
+GitHub Actions is the only build and test environment, and its capacity is shared with another busy project (PR1 `AGENTS.md`; JE must-fix 3). Linux is the default, everything else is the exception.
+
+| Workflow | Runs on | Triggers | What it runs | Added by |
+|---|---|---|---|---|
+| `ci.yml` | one `ubuntu-latest` job | every PR, pushes to `main`, `workflow_dispatch` | PR1's steps (license text and SPDX headers, gofmt, vet, `go test ./...`, the seven-target cross-compile with the 15 MB client budget), plus, as new steps: module license check, `oracle-guard`, fixture provenance check, `python3 -I tools/ledger_ref.py selftest`, `score-regression` | PR1, WP-CI1, WP-LG1, WP-SC4 |
+| `platform.yml` | `windows-latest`, `macos-latest`, and `ubuntu-latest` with Xvfb, one job each | PRs touching `internal/platform/**`, `internal/install/**`, `internal/agent/ipc/**`, `internal/adapters/git/**`, `cmd/pairtime/**`; release tags; `workflow_dispatch` | `go test` of those packages only, not the whole module; the Linux job runs only the desktop tests that need an X server and a private D-Bus | WP-CI1 |
+| `nightly.yml` | `ubuntu-latest` | 03:00 UTC daily, `workflow_dispatch` | `go test -race` (with `CGO_ENABLED=1`, the one exception to the cgo rule) over `internal/agent/...`, `internal/server/...` and `pkg/...`; the 10-minute footprint run is in `footprint.yml` | WP-CI1 |
+| `postgres.yml` | `ubuntu-latest` with a Postgres 18 service | PRs touching `internal/server/store/**`; nightly; `workflow_dispatch` | the store and migration tests against Postgres (SP 7.4) | WP-SV1 |
+| `web.yml` | `ubuntu-latest` | PRs touching `web/**`, `extension/**`, `internal/webui/**`; release tags | `npm ci`, vitest, the real UI build, Playwright on Chromium only | WP-CI1, WP-UI0 |
+| `footprint.yml` | `windows-latest` | PRs touching `internal/agent/**`, `internal/platform/windows/**`, `cmd/pairtime/**`, `go.mod`: a 3-minute idle run; nightly and release tags: the full 10 minutes | idle RSS under 25 MB, idle CPU under 0.1%, hook p95 under 25 ms over 200 warm calls (DESIGN 9.7) | WP-AG1, WP-AG3 |
+| `e2e-wakatime.yml` | `ubuntu-latest`, `windows-latest`, `macos-latest` | PRs touching `internal/adapters/wakatime/**`, `internal/install/wakacfg/**`; release tags; `workflow_dispatch` | the real wakatime-cli v2.28.4 against a fake Hackatime and the agent (DESIGN 5.6). Blocks every release | WP-AD17 |
+| `e2e-install.yml` | the same three runners | PRs touching `install/**`, `internal/install/**`, `tools/release/**`; release tags | both install scripts, `pairtime install` and `uninstall` in a temporary home | WP-RL2 |
+| `release.yml` | `ubuntu-latest` | tags `v*`; `workflow_dispatch` builds a snapshot without publishing | archives, `checksums.txt`, signed manifest, server image to GHCR, later signing and VSIX | WP-RL1, WP-OP1 |
+| `restore-drill.yml` | `ubuntu-latest` with MinIO | weekly, on server image bumps, `workflow_dispatch` | restore into a fresh container, `PRAGMA integrity_check`, API smoke tests (DESIGN 10.3) | WP-OP1 |
+| `loadtest.yml` | `ubuntu-latest` | weekly, `workflow_dispatch` | the 8x R11 peak against a 2 vCPU, 8 GB container (DESIGN 10.6) | WP-OP3 |
+| `tidy.yml` | `ubuntu-latest` | `workflow_dispatch` only | `go mod tidy`, npm lockfile refresh, push to the branch | WP-CI1 |
+| `probe.yml` | `ubuntu-latest` | `workflow_dispatch` only | fetches `https://<host>/healthz` and `/.well-known/pairtime-keys.json` from outside | WP-OP2 |
+
+Rules every workflow follows:
+
+- `concurrency: group: ${{ github.workflow }}-${{ github.ref }}` with `cancel-in-progress: true`, so a new push cancels the stale run. `release.yml` on a tag is the exception: it never cancels.
+- `workflow_dispatch` on every workflow, so a run can be repeated by hand.
+- `timeout-minutes` on every job: 15 for `ci.yml`, 20 for `platform.yml`, 30 for e2e jobs, 45 for `loadtest.yml`.
+- `permissions: contents: read` unless the job pushes (`tidy.yml`) or publishes (`release.yml`).
+- No matrix over Go versions or architectures. The seven targets are a loop inside one job (PR1). The only three-runner workflows are the two e2e jobs, and both are path-filtered and release-gated.
+- Windows and macOS tests use injected fakes. Real focus switching runs only on Linux under Xvfb with `xdotool` (JE must-fix 11).
+- A WP that adds platform code outside the `platform.yml` paths adds its path to the filter in the same PR.
+- Windows and macOS runners are the scarce ones. A WP that needs one should batch its fixes: read every failure in a run before pushing again.
+
+## Milestones at a glance
+
+Milestones overlap: the server lane starts M3 work while M1 is still finishing. The target is the date the exit check should pass.
+
+| Milestone | What it delivers | Target | WPs | Exit check |
+|---|---|---|---|---|
+| M1, alpha 0 | A local-only tracker testers can install with one command: Claude Code hooks and transcripts, git, OS presence and focus on all three OSes, the SM scorer without dark flow, `today`, `recap`, `statusline`, `doctor`. No uploads, `~/.wakatime.cfg` untouched | 2026-12-01 | 35, 1 [human] | `e2e-install.yml` green; SM 6.1 to 6.4 and 6.6 reproduce; footprint green; `v0.1.0-alpha.1` clean on two of Karim's machines |
+| M2, alpha 1 | Dark flow, the local dashboard, session recaps and moments, the welcome recap, Codex and Cursor, OTLP, the vault, redaction, and the WakaTime dual-send behind its e2e gate | 12-08 | 22, 2 [human] | `e2e-wakatime.yml` green on three runners; SM 6.5 reproduces; `v0.2.0-alpha.1` |
+| M3, server | HCA and device sign-in, signed ingest with receipts, the firewall, witness labels, rollups, the live dashboard, profiles, commits and forges, build days, the privacy hub, daily roots, the deploy | 12-11 | 19, 1 [human] | probe and restore drill green on `https://<host>`; witnessed minutes from Karim's device |
+| M4, program path | Submissions, reveal, sealing, exact re-scoring, CC1 to CC11, risk and audit, the review desk, the handbook text, Hackatime-compatible reads, the Airtable script, the program kit, bundles and `verify`, labeling mode | 12-18 | 30, 1 [human] | the sandbox Airtable round trip; `verify` offline; the Ruby client |
+| M5, breadth and hardening | Copilot, Gemini, Devin, Cline, `track` and Karim's AGENTS.md entry, plugins, red-team goldens, the age signal, signing, the VS Code extension, channels, self-update, the load test | 12-14 to 12-31 | 21, 7 need a person or an account | load test green; red-team step; age signal merged by 12-31 |
+| M6, calibration and 1.0 | Scoring 1.0.0 and the R2 report, the typing module in signed builds, the VM rule, recovery and backups, the rest of the coach, seeded cases, the VPS move, the 1.0 gate | 12-21 to 2027-01-17 | 13, 3 [human] | 1.0.0 deployed and decisions open on 01-04; `v1.0.0` released |
+
+That is 140 WPs. 11 of them are done by a person or by the deploy agent (the captures, the two deploys, the sandbox round trip, labeling and the laptop reports), so 129 are coding-agent sessions. The targets assume the three slots together land about four WPs a day and Karim merges within half a day; at six a day there are several days of slack before 12-18. When the program path is at risk, the cut-first WPs move out of v1 in DESIGN 9.7's order and M4 doesn't move (DESIGN 9.7; JB, The race with grit).
+
+## Dependency graph and parallel lanes
+
+At most three agents run at once. Each WP's "Depends on" line is the full dependency list; this section says how to schedule them.
+
+| Lane | Areas | Main paths |
+|---|---|---|
+| A, core libraries | EV, PA, FX, LG1 to LG4, SC, TR, SB2, SB8 | `pkg/`, `testdata/`, `tools/ledger_ref.py` |
+| B, client | AG, OS, AD, IN, RL, CO, UI1, UI3, PV, LG5, LG6, SB3, SB6 | `cmd/pairtime/`, `internal/agent/`, `internal/platform/`, `internal/adapters/`, `internal/install/`, `install/` |
+| C, server and web | SV, SB1, SB4, SB5, SB7, RV, PG, CA, OP, UI0 | `cmd/pairtimed/`, `internal/server/`, `web/`, `integrations/`, `deploy/` |
+
+Scheduling rules:
+
+1. Normally one WP per lane is in flight. A lane with nothing unblocked lends its slot to another lane's next WP, as long as the two WPs' "Touches" lines don't overlap.
+2. A free slot takes, in order: an unblocked WP on the critical path below; any other WP of the earliest unfinished milestone; a later milestone's WP. Cut-first WPs go last.
+3. These never run at the same time, because they edit the same files: any two SC WPs (`pkg/score`); WP-LG2 and WP-LG4; WP-LG1 and WP-LG3 (`tools/ledger_ref.py`); any two IN WPs (shared planners and the consent screen); WP-RV1 and WP-RV2. WPs that each add a `ci.yml` step (WP-CI1, WP-LG1, WP-SC4, WP-PG5, WP-FX7) may overlap but should expect a rebase.
+4. Human WPs don't take a slot. Start each one the day its dependency merges, because calendar time, not agent time, is their constraint.
+
+The critical path, the chains that decide when a program can count a pairtime hour:
+
+- Scorer: WP-EV1, WP-FX1, WP-FX4, WP-SC1, WP-SC2 (also WP-FX3), WP-SC3 (also WP-FX2), WP-SC4, WP-SC5, then WP-SB3.
+- Ledger: WP-LG1, WP-LG2, WP-OS7, WP-LG5, WP-AG4, WP-AG5, then WP-SB3; and WP-LG3, WP-LG4, then WP-SB5.
+- Server: WP-SV1, WP-SV2, WP-SV3, WP-SV4, WP-SV5 and WP-SV6, then WP-AG5; WP-SV6, WP-SV7, WP-SV12, WP-SB1, then WP-SB3.
+- Submission to a counted row: WP-SB3, WP-SB4, WP-SB5, WP-TR2 (after WP-FX6 and WP-TR1), WP-SB8, WP-PG1 (also WP-PG0 and WP-PG11), WP-PG2 (also WP-PG6), WP-PG12 (also WP-PG8 and WP-OP2).
+- Review: WP-SB4 and WP-TR1, WP-RV1, WP-RV2 (also WP-SB7).
+- Deploy: WP-SV1, WP-SV15, WP-OP1, WP-OP2 (also WP-SV14 and WP-SV17).
+- Decisions: WP-CA0, WP-CA1, WP-CA2, WP-CA3, which lifts the `409 scoring_not_frozen` gate on 2027-01-04.
+
+The longest chain is the first scorer line followed by the submission line: 16 WPs from WP-EV1 to WP-PG12.
+
+A suggested schedule for M1, if each slot lands one WP per half day:
+
+| Half day | Slot A | Slot B | Slot C |
+|---|---|---|---|
+| 1 (11-20) | WP-EV1 | WP-CI1 | WP-LG1 |
+| 2 | WP-PA1 | WP-AD0 | WP-LG1, continued |
+| 3 | WP-FX1 | WP-AG1 | WP-RL1 |
+| 4 | WP-FX4 | WP-AG2 | WP-LG2 |
+| 5 | WP-SC1 | WP-OS6 | WP-FX3 |
+| 6 | WP-SC1, continued | WP-AG3 | WP-FX2 |
+| 7 | WP-SC2 | WP-OS1 | WP-OS7 |
+| 8 | WP-SC3 | WP-AD2, once WP-AD1's capture is merged | WP-LG5 |
+| 9 | WP-SC4 | WP-OS2 | WP-IN1 |
+| 10 | WP-AG4 | WP-AD3 | WP-AD5 |
+| 11 | WP-CO0 | WP-OS3 | WP-IN2 |
+| 12 (11-25) | WP-AG6 | WP-OS4 | WP-RL2 |
+
+That leaves about five days of slack before 12-01. Slot C moves to WP-SV1 as soon as WP-RL2 is in review, because the server chain is the longest chain that doesn't touch M1. Slot A moves to WP-LG3, WP-FX5 and WP-FX6 after WP-AG6.
+
+## Suggested order for the first ten
+
+(Filled in after the WP sections.)
+
+## M1: alpha 0, a local tracker testers can install
+
+Goal: by 2026-12-01, when the shadow week starts (DESIGN 6.7 step 2), a tester on Windows 10, macOS or Linux runs one command, keeps working in Claude Code as usual, and sees their time next to Claude's per project in `pairtime today`, `pairtime recap` and `pairtime statusline`. Nothing is uploaded: the alpha runs in local-only mode, because no controller is named yet (DESIGN 8.6). It doesn't touch `~/.wakatime.cfg`, so it can't break anyone's Hackatime; the dual-send waits for its e2e gate in M2 (DESIGN 5.6). Loops are credited until the dark-flow rules land in M2, and the release notes say so.
+
+Exit check: `e2e-install.yml` green on three runners; SM 6.1, 6.2, 6.3, 6.4 and 6.6 reproduce in `ci.yml`; `footprint.yml` green; Karim installs `v0.1.0-alpha.1` on his own machine and one Windows 10 laptop and `pairtime doctor` is clean on both.
+
+### WP-CI1. CI layout, helper workflows and guards
+
+- Depends on: PR1.
+- Touches: `.github/workflows/{ci,platform,nightly,web,tidy}.yml`, `tools/ci/`, `testdata/licensecheck/`, `AGENTS.md`.
+- Build: the workflows in the CI policy table that don't need code yet: `platform.yml` (windows-latest, macos-latest, and an ubuntu-latest job with Xvfb for Linux desktop code), `nightly.yml`, `web.yml`, each running nothing harmful when its packages don't exist yet. `tidy.yml`, which runs `go mod tidy` and, where `package.json` files exist, `npm install --package-lock-only --ignore-scripts`, then commits and pushes to the dispatched branch with `permissions: contents: write`. New `ci.yml` steps: a module license check (`go-licenses` pinned to a release, or a small checker in a separate `tools/` module) allowing MIT, BSD-2-Clause, BSD-3-Clause, Apache-2.0 and ISC; `oracle-guard` (`tools/ci/oracle_guard.sh`), which reads `git diff --name-status` against the base and fails when an oracle path from ground rule 5 is modified, deleted or renamed in a PR that also changes `cmd/`, `internal/`, `pkg/`, `web/` or `extension/`, unless the PR carries the `oracle-change` label; a provenance check that every `testdata/fixtures/<harness>/<version>/<os>/` directory has a `PROVENANCE.md` with `harness`, `harness_version`, `os`, `captured_on`, `captured_by`, `synthetic` and `scrubbed_by`. Rewrite `AGENTS.md`'s CI section to this plan's CI policy, the tidy workflow, the oracle and errata rules, and the nightly `-race` exception to `CGO_ENABLED=0` (DESIGN 3.13, 13.1 item 9).
+- CI checks: `ci.yml` green with every new step. The license step fails on a seeded nested module in `testdata/licensecheck/` that pulls in a local module with a GPL-3.0 `LICENSE` through a `replace`, and the step asserts that failure. `oracle_guard.sh` has a table test over fake name-status lists: modified oracle plus code fails, added oracle plus code passes, label present passes. Each new workflow has one green `workflow_dispatch` run linked in the PR.
+- Oracle: the seeded bad module; GitHub's documented `pull_request` payload for labels.
+- Human: Karim creates the `oracle-change` and `erratum` labels and approves the `AGENTS.md` rule changes, which DESIGN 13.1 item 9 leaves to Karim.
+
+### WP-EV1. Event model changes for the ledger and the side-door rules
+
+- Depends on: PR1.
+- Touches: `pkg/event/*.go`, `docs/schema/event.schema.json`.
+- Build: DESIGN 4.1 E-1 to E-10, Go and schema in the same commit. Remove `chain_hash`. Add `via` with its eleven values and the `kindTable` rules (`os.*` only `os`, `git.change` only `git`, `cli.track` only `track`, `otel.active_time` only `otel`); keep `source` and document that `source` is what the record claims and `via` is how the agent received it. Add `offline` to `Witness`, `pending` to `BucketState`, `rev` (uint32) to `MinuteBucket`; tag `MinuteBucket.Anchors` local; add `lbl` to `BucketSlot`, `via`, `corroborated` and `labels` to `Anchor`, `text_len`, `env_hints` and `log_match` to `CLITrack`; raise `MaxLabelLen` from 300 to 400 (DESIGN 5.4); add E-9's totals to `SubmissionTotals`, including one field per band (corroborated, witnessed, offline, backfilled; DESIGN 6.4). One gap to close: DESIGN 6.2 D19 counts bridge records toward `logged_s` only when their heartbeat passed the peer-process check, and E-2 has no value for a bridge record that failed it. Add `bridge_unverified` beside `editor_unverified` and record the choice in `docs/errata/` for Karim.
+- CI checks: PR1's schema drift test; `TestLocalFields` updated, with the change to `anchors` called out in the PR; a validation case for every new `kindTable` rule; a new `TestTier1Shape` asserting that the JSON keys of a shareable `MinuteBucket` and its slots are exactly DESIGN 4.3's list (`v`, `params`, `minute`, `device`, `slots[4]{p, cr, why, kind, ev, lbl}`, `credited_s`, `uncredited`, `agent_running_s`, `state`, `witness`, `rev`).
+- Oracle: DESIGN 4.1's change table and DESIGN 4.3's tier-1 field list.
+
+### WP-PA1. Public parameter table
+
+- Depends on: PR1.
+- Touches: `pkg/params/` (new), `pkg/params/tables/0.1.0.json`.
+- Build: every parameter of SM 8.1 to 8.6 and DESIGN 6.3 with SM's v1 values, without `CHAIN_HEAD_INTERVAL_S` (replaced by `BATCH_S`, DESIGN 6.2 D8) and with `STREAK_DAY_S` renamed `BUILD_DAY_S`. SM 8.7's tier-2 starting points are not scoring parameters and belong to WP-TR3. Canonical JSON (sorted keys, no whitespace, numbers kept as their decimal text) and its SHA-256 as the `params` hash (SM 7.6). Non-integer values (`COMPOSE_CPS` 1.5, `NOREAD_FRAC` 0.25 and others) are exposed as exact rationals parsed from the decimal text, never as `float64`, so `pkg/score` stays integer-only. Every table version is embedded and can be looked up by version or by hash (DESIGN 6.6). A test helper lists every `params.<Name>` selector in a package with `go/ast`, and a test fails when `pkg/score` reads a name the table lacks (TE WP0.6).
+- CI checks: one table-test row per parameter with SM's value; the Go canonical bytes equal the output of `jq -cS . pkg/params/tables/0.1.0.json`, and `sha256sum` of that output equals the Go hash; changing any one value changes the hash.
+- Oracle: SM 8 and DESIGN 6.3 for values; `jq` and `sha256sum` as an independent canonical form and hash.
+
+### WP-FX1. Timeline fixture format, with SM 6.2, 6.4 and 6.6
+
+- Depends on: WP-EV1.
+- Touches: `testdata/timelines/README.md`, `testdata/timelines/{6.2,6.4,6.6}/`, `internal/timelines/` (loader).
+- Build: the format every scorer WP is tested against. Per fixture: `events.jsonl` (`pkg/event` events in arrival order); `expected.json` (per-minute rows with credited seconds per project, the reason split and uncredited seconds by code, aggregate rows where SM gives only a range, and totals); `anchors.json` (every human act SM names, with kind, time, origin, class, and lead and trail seconds where SM states them); `prompts.json` (prompt texts SM quotes, keyed by turn, for content-derived features); `README.md` (the SM rows used, the date and UTC offset chosen, the OS and evidence level, and every timing choice SM leaves open). Then SM 6.2, 6.4 and 6.6 with every event a real client would record: `os.presence` every 15 s (`idle_keys_s` null on the Windows machines of 6.2 and 6.6, set on 6.4's X11 machine with the key counter), `os.focus` with `hosted_sessions`, `os.power` (6.2's resume at 07:40:00 and suspend at 07:44:45), harness, editor and git events. The loader in `internal/timelines` is what later tests import.
+- CI checks: every event passes `Event.Validate()` and the JSON Schema; per-minute rows sum to SM's totals, 265 s for 6.2, 810 s for 6.4 and 0 s for 6.6; every minute's reasons and uncredited seconds sum to 60 or to the seconds SM accounts for; 6.4's agent time of 23,400 s and agent-only 23,180 s are in its totals.
+- Oracle: SM 6.2, 6.4 and 6.6. The WP transcribes and computes nothing new; a disagreement inside SM becomes an erratum (ground rule 6).
+
+### WP-FX2. SM 6.3 with its two-tab variant, and SM 6.5
+
+- Depends on: WP-FX1.
+- Touches: `testdata/timelines/{6.3,6.3-tabs,6.5,4.2-alternation}/`.
+- Build: `4.2-alternation`, five prompts A, B, A, B, A with no change event between them, from SM 4.2's re-roll paragraph: the third A is attempt 3 and discounted as `X.reroll`, the others are credited. 6.3 from 13:58, so B's 13:58 answer exists, with expected rows for 14:00 to 14:29: A 510, B 450, E 540, D 300, 1,800 s in all, and A's 570 s and B's 180 s of unwatched agent time. `6.3-tabs`, the variant of SM 6.3's second-to-last paragraph where A and B are tabs of one iTerm window: 14:01:30 to 14:02:00 moves from A to B, giving A 480 and B 480 with the same total. 6.5 from 20:00 to 21:00: per-minute rows to 20:42, one aggregate row for 20:43 to 20:59 (940 credited, `X.agent_only` 80), and totals of 1,490 credited, `excluded_loops_s` 2,010 and `X.agent_only` 100. Turns T1 to T19 carry their edit hunks (lines 10 to 21, then 12 to 19) so rewrite overlap is computable, and `prompts.json` holds the prompts SM quotes plus invented paraphrases where SM says "mostly in new words", each marked invented.
+- CI checks: as WP-FX1, with the totals above.
+- Oracle: SM 6.3 and 6.5.
+
+### WP-FX3. SM 6.1, three hours of flow
+
+- Depends on: WP-FX1.
+- Touches: `testdata/timelines/6.1/`.
+- Build: fifteen 12-minute cycles from 14:00 to 17:00. Cycle 1 follows SM's table row by row. Minute 11 is a commit in cycles 3, 6, 9, 12 and 15 and a hand edit in the others. Cycle 6 has the drink: Rowan leaves at 15:06:40 and is back at 15:12:40 with a click in VS Code. Cycles 9 and 10 have three failing test runs with the same `AssertionError`, each answered by a new hypothesis, then his own fix and a green run. Rows for cycles 2 to 15 are derived from cycle 1 and marked `derived`. A generator, if used, is checked in with a test that its output equals the checked-in files.
+- CI checks: validity as WP-FX1; totals: 10,800 s wall, 10,095 credited, 5,965 AI-assisted (`P`, `PA`, `SUP`, `READ`), 4,130 hand work (`NAV`, `E`, `G`, `LOOKUP`), `X.agent_only` 375, `X.absent` 330.
+- Oracle: SM 6.1's table, its list of variations and its totals.
+
+### WP-FX4. Side-door fixtures
+
+- Depends on: WP-FX1.
+- Touches: `testdata/timelines/sidedoor/`.
+- Build: short timelines from DESIGN 5.2, 5.4, 6.2 (D2, D3, D19) and 6.4, on a Windows machine with `input_any` true and `input_keys` null unless stated: (a) `cli.track` every 20 s with a jiggler and focus on the host terminal, from a session no hook or log reader sees; (b) the same on macOS with key-down input in the host window in the 10 s before each call; (c) `via = plugin` events reporting 50,000-word outputs; (d) editor heartbeats posted by a script (`via = editor_unverified`); (e) bridge records with 5,000 changed lines; (f) a `track` call 4 s after a hook prompt from the same session; (g) a `track` call on a hook-visible session with no prompt within 10 s. Expected per case: each anchor's level; credited seconds by level; reading fill per turn; each record's contribution to `logged_s` and `ai_logged_s`.
+- CI checks: validity; an expected file per case. Expected values: (a), (c), (d), (e) have only level-C credit; (b) is level A; (c) and (e) fill at most `R_TURN_BASE_S` = 20 s per turn; (a), (c) and (d) add 0 to `logged_s` and `ai_logged_s`; (f) is `track_matched` and opens nothing; (g) opens nothing and raises `track_without_prompt`.
+- Oracle: the rule text of DESIGN 5.2, 5.4, D2, D3, D19 and 6.4. Every expected value follows from the rules without running a scorer.
+
+### WP-LG1. Ledger byte spec and Python reference, part 1
+
+- Depends on: PR1.
+- Touches: `docs/spec/ledger-v1.md` (new), `tools/ledger_ref.py`, `testdata/ledger/`, `ci.yml` (one step).
+- Build: a byte-level spec of DESIGN 3.6 except token commitments and features, which are WP-LG3: HKDF-SHA256 key derivation (state the salt: RFC 5869's default of zeros), the 33-byte header, the rtype table (0x01 to 0x12 in PR1's `kindTable` order, 0x40 checkpoint, 0x41 upload failure), project and session digests, nonces, bodies as opaque stored bytes, entries, RFC 9162 MTH with its leaf and node prefixes, the batch chain with its 0x03 byte, the receipt message, inclusion proofs (RFC 9162 2.1.3), and the daily tree over `(device_id, b, H_b, received_at)` leaves chained to the previous day (DESIGN 7.4), with the leaf encoding written down. Then `tools/ledger_ref.py` in stdlib-only Python: `selftest` checks the published vectors; `vectors` writes `testdata/ledger/vectors.json` from fixed seeds (batch sizes 1, 2, 3, 7, 8, 9, 100 and 1,000 among 50 batches); `check <file>` recomputes every root, head and proof in a JSON file the Go tests write. Python's standard library has no Ed25519, so the reference emits receipt message bytes and the Go side checks signatures against RFC 8032.
+- CI checks: `python3 -I tools/ledger_ref.py selftest` as a `ci.yml` step, covering RFC 5869 cases 1 to 3, RFC 4231's HMAC-SHA256 cases, and the RFC 6962/9162 Merkle roots and inclusion proofs from `transparency-dev/merkle`'s test data, copied with its Apache-2.0 notice into `testdata/ledger/ct/` at a commit named in the README.
+- Oracle: RFC 5869, RFC 4231, RFC 9162 and the pinned CT vectors. This WP writes no Go, because WP-LG2 is checked against it.
+
+### WP-LG2. `pkg/ledger`, part 1
+
+- Depends on: WP-LG1, WP-EV1.
+- Touches: `pkg/ledger/` (new).
+- Build: `ledger-v1.md` part 1 in Go: key derivation with `crypto/hkdf`; headers; nonces; entries hashed over the stored body bytes; a canonical body writer (struct field order, no insignificant whitespace) with a decode-then-encode identity test; batch sealing (`R_b`, `n_b`, `H_b`); receipts signed and verified with `crypto/ed25519`; inclusion proofs; day trees. Verification returns typed errors for a gap in `b` or `seq`, a root mismatch and a head mismatch.
+- CI checks: `vectors.json` reproduces exactly; a Go test writes 1,000 random batches to a file and runs `python3 -I tools/ledger_ref.py check` on it, failing if `python3` is missing; flipping any single byte of any stored header, body or batch row of a small batch fails verification; RFC 8032 test vectors 1 to 3 pass for the receipt signer.
+- Oracle: `tools/ledger_ref.py` and `vectors.json` from WP-LG1; RFC 8032.
+
+### WP-SC1. Scorer 1: presence, origin, anchors, leads and evidence levels
+
+- Depends on: WP-EV1, WP-PA1, WP-FX1, WP-FX4.
+- Touches: `pkg/score/` (new), `pkg/score/VERSION` (`0.1.0`).
+- Build: `Step(state, records) (state, outputs)` with no I/O, no clock reads and integer arithmetic (DESIGN 3.7). SM 2.1: 15-second slots with `input_any` and `input_keys` rebuilt from idle samples, the present values `yes`, `bridged`, `tail`, `returned` (with `RETURN_CREDIT`), `no` and `unknown`, and the hard breaks (lock, suspend, a sample gap over `SLEEP_GAP_S`), with gaps from wall-clock values. SM 2.2: origin rules 1 to 8 and the prompt classes, with the go-ahead list copied verbatim. SM 2.3: anchors with think and typing parts. DESIGN 6.4: each anchor's level from presence, keyboard evidence and `via`; the side-door rule (D2); the `track` gate with its four conditions and the `TRACK_*` parameters (DESIGN 5.4, D3), including `track_matched` and `track_without_prompt`. Output at this stage: anchors with origin, class, lead and trail windows, level and labels.
+- CI checks: anchors match `anchors.json` for every fixture that has one (6.2, 6.4 and 6.6 now; 6.1, 6.3 and 6.5 once WP-FX2 and WP-FX3 are merged): kind, time, origin, class, `lead_s`, `trail_s`; 6.6 yields no anchor and every prompt is `headless`; WP-FX4's anchor expectations hold; WP-PA1's static parameter check passes.
+- Oracle: the leads and origins SM 6 states, through WP-FX1 to WP-FX3; WP-FX4's expected levels.
+
+### WP-SC2. Scorer 2: reading bucket, focus, lookups and the combine rule
+
+- Depends on: WP-SC1, WP-FX3.
+- Touches: `pkg/score/`.
+- Build: SM 2.4's reading bucket (fill formula, FIFO, `BUCKET_MAX_S`, `BUCKET_TTL_S`, resets, discount reset, `READ_HORIZON_S`) with DESIGN 5.2's cap of `R_TURN_BASE_S` per turn for plugin and bridge output not backed by a hook or transcript record; SM 2.5 focus and lookups; SM 2.6 agent-only accounting; SM 2.7's combine rule within one project; per-second reason codes (SM 5.2) summed into 15-second credit slots. Multi-project priority is WP-SC3 and dark flow is WP-SC6.
+- CI checks: per-minute credit and reasons reproduce for 6.1, 6.2, 6.4 and 6.6; 6.1's totals (10,095, 5,965, 4,130, 375, 330); 6.4's 810 credited and 23,180 agent-only; WP-FX4 (c) and (e) fill at most 20 s per turn.
+- Oracle: SM 6 through WP-FX1 and WP-FX3.
+
+### WP-SC3. Scorer 3: one timeline across projects
+
+- Depends on: WP-SC2, WP-FX2.
+- Touches: `pkg/score/`.
+- Build: SM 3.1 to 3.3: one attention stream per device; a slot's project from the focused window, its `hosted_sessions`, the most recent editor heartbeat and, for a terminal hosting several sessions, the look-ahead to each session's next anchor, then `ATTRIB_STICKY_S`; the tie-break order. Cross-device merging (SM 3.4) is server-side, WP-SV7.
+- CI checks: 6.3 reproduces minute by minute (A 510, B 450, E 540, D 300); `6.3-tabs` gives A 480 and B 480; per-project credit sums to the credited total in every fixture.
+- Oracle: SM 6.3 through WP-FX2.
+
+### WP-SC4. Scorer 4: minute buckets, revisions, rollups and the regression guard
+
+- Depends on: WP-SC3.
+- Touches: `pkg/score/`, `testdata/timelines/*/golden.jsonl` (new files), `ci.yml`, `AGENTS.md`.
+- Build: SM 5.1 minute buckets with four slots; `pending` for `PENDING_WINDOW_S` after the minute, then `final`, with `rev` raised by each late change (DESIGN 6.2 D1); SM's `provisional` and `restored` states; reason maps; `agent_running_s`; SM 5.3 rollups by day, work session (`SESSION_GAP_S`) and project; `SubmissionTotals` with SM 5.4's quantities and D19's provenance filter. The `score-regression` step in `ci.yml` runs every timeline, compares full bucket output with `golden.jsonl`, and fails when output changes without a change to `pkg/score/VERSION` in the same PR (EV WP1.7). Replace `AGENTS.md`'s "fix whichever is wrong" sentence with the erratum rule (DESIGN 6.6).
+- CI checks: buckets pass `pkg/event` validation; minute totals from buckets equal `expected.json` for the five fixtures WP-SC3 reproduces; WP-FX4 (a), (c) and (d) add 0 to `logged_s` and `ai_logged_s`; a record arriving late inside the pending window raises `rev` by exactly one on exactly one minute; the guard script has a table test over fake diffs.
+- Oracle: SM 6 expected files; D1 and D19 through WP-FX4. The goldens are regression guards, not oracles.
+
+### WP-AG1. Agent skeleton and footprint gate
+
+- Depends on: WP-CI1.
+- Touches: `cmd/pairtime/`, `internal/agent/` (new), `internal/webui/` (placeholder), `.github/workflows/footprint.yml`, `go.mod`, `go.sum`.
+- Build: `pairtime agent` with a single-instance lock (a named mutex on Windows, `flock` elsewhere; a second instance exits with a documented code), DESIGN 3.5's data directories, `config.toml` (`mode = "local"` by default in alpha builds), `state.json` written by atomic rename, one scheduler for every timer so wakeups can be counted, and the loopback HTTP server: `127.0.0.1` only, a fixed default port with fallback, a bearer token in user-only `port.json`, `Host` limited to `127.0.0.1:<port>` and `localhost:<port>`, and any foreign `Origin` refused (CP 6.3). Each subcommand lives in its own file and registers itself in a table in `cmd/pairtime`, so later WPs add a file instead of editing `main.go`, and parallel WPs don't collide. `internal/webui` embeds a checked-in placeholder `dist/index.html`, so Go builds never need Node (JE must-fix 8). Import now every heavy module the client will ship, so footprint is measured from the first build (JE must-fix 4): `golang.org/x/sys`, `github.com/fsnotify/fsnotify`, `github.com/godbus/dbus/v5`, `github.com/ebitengine/purego`, `github.com/zalando/go-keyring`, and `github.com/BurntSushi/toml` (MIT; the standard library has no TOML parser and DESIGN 3.5, 5.3 and 10.2 use TOML). `footprint.yml` starts the agent on `windows-latest` with a temporary data directory and reads `WorkingSet64` and CPU time from PowerShell's `Get-Process`.
+- CI checks: `ci.yml` cross-compile still under 15 MB, with the size in the step summary; a table test of the HTTP guard (foreign `Host` 403, foreign `Origin` 403, no token 401); `platform.yml` green for the lock and the server; `footprint.yml` green: RSS under 25 MB and CPU time over wall time under 0.001.
+- Oracle: CP 7 and DESIGN 9.7's numbers, measured by the OS, not by the agent.
+
+### WP-AG2. Socket IPC and the inbox
+
+- Depends on: WP-AG1.
+- Touches: `internal/agent/ipc/`, `internal/agent/inbox/`.
+- Build: a per-user AF_UNIX socket on all three OSes at CP 6.3's paths, with stale-socket removal and a user-only directory; length-prefixed JSON frames with an ack; on Windows, a named-pipe fallback (`\\.\pipe\pairtime-<SID>`, owner-only DACL, `FILE_FLAG_FIRST_PIPE_INSTANCE`) through `golang.org/x/sys/windows`, used when a startup self-test of AF_UNIX fails (CP 6.3; JE graft 16); `inbox/` JSON Lines with one `O_APPEND` write per message, drained at start and every minute, deleted once drained, and deduplicated by message id so a crash between drain and delete doesn't double-count (DESIGN 3.5). Race: yes.
+- CI checks: on Linux (`ci.yml`) and Windows (`platform.yml`): 1,000 messages, `kill -9` of the agent mid-stream, restart, exactly 1,000 delivered; the named-pipe path, forced by a test flag, passes the same test on `windows-latest`; on Linux a socket owned by another uid is refused.
+- Oracle: the sender's count against the receiver's, across a real process kill.
+
+### WP-OS6. Process table, parent chains and the `procs` scanner
+
+- Depends on: WP-AG1.
+- Touches: `internal/platform/{windows,darwin,linux}/`, `internal/agent/procs/`, `internal/platform/appclass.json`.
+- Build: a process-table reader per OS (Toolhelp32 and `QueryFullProcessImageNameW`; `sysctl` and `libproc` through purego; `/proc`); the parent chain of a pid with executable names and start times; SM 2.2 rule 4's `parent_class` classifier, which skips shells; the app-class table as data shared by all three OSes (terminal, editor, agent_app, browser, chat_app, other), each entry citing HS or CP; and the `procs` scanner (`PROC_SCAN_S`), which emits `session.start` for harness processes that fire no hooks (`claude --bare`, `claude -p`, `codex exec`) with `entrypoint` and `has_tty` (DESIGN 3.3).
+- CI checks: real child chains spawned by the test (`python3` to `bash` to a stub classifies `script_runtime`; a shell alone does not) on Linux in `ci.yml` and on Windows and macOS in `platform.yml`; a golden classifier test over recorded process tables for SM 6.6 and its three variants.
+- Oracle: real processes; SM 2.2 rule 4 and SM 6.6.
+
+### WP-AG3. `pairtime hook`, the fast path
+
+- Depends on: WP-AG2, WP-OS6.
+- Touches: `cmd/pairtime/`, `internal/agent/hookpath/`, `.github/workflows/footprint.yml`.
+- Build: `pairtime hook --harness <h> --event <e>` as CP 6.2 and DESIGN 3.2 describe: read stdin up to 1 MiB, stamp wall time, monotonic time and boot id, capture the raw parent chain (WP-OS6), send one frame with a 100 ms timeout, otherwise append one inbox line and start the agent detached (`DETACHED_PROCESS` on Windows, `setsid` elsewhere), always exit 0 and print nothing. `track` and `emit` reuse this path later (WP-AD18, WP-AD19).
+- CI checks: `footprint.yml` adds hook p95 under 25 ms over 200 warm calls on `windows-latest`, which DESIGN 9.7 sets at half the R8 claim (the 50 ms claim on a 2016 laptop is a 1.0 gate, WP-RL9); with the agent stopped, one call appends one line and exits 0; 2 MiB of stdin is cut at 1 MiB and still exits 0; malformed stdin exits 0 with empty stdout and stderr.
+- Oracle: timing measured by the workflow around the process; Claude Code's hook contract (exit code 2 blocks, stdout is parsed as JSON; CP 6.2).
+
+### WP-OS1. Windows presence, power and project-context gating
+
+- Depends on: WP-AG1.
+- Touches: `internal/platform/windows/`, `internal/agent/presence/`.
+- Build: `GetLastInputInfo` with a tick-wrap clamp; sampling every `SAMPLE_S` only while a project context is live, slowing to `SLOW_SAMPLE_S` after `CONTEXT_IDLE_S` with no input and no running turn, with an immediate sample on any hook, focus or power event (DESIGN 3.3, D14); `PowerRegisterSuspendResumeNotification` and WTS session-lock notifications to `os.power`, with a seal signal for the ledger writer; gaps from wall-clock values (CP 2.2); EcoQoS through `SetProcessInformation` with `ProcessPowerThrottling` (TE 3.2).
+- CI checks: fake-clock table tests of the gate and the cadence in `ci.yml`; on `windows-latest`, a 60 s smoke emits samples only after a fake context goes live, and EcoQoS reads back as set through `GetProcessInformation`.
+- Oracle: values read back from Win32; D14's rule text.
+
+### WP-OS2. Windows focus and hosted sessions
+
+- Depends on: WP-OS1, WP-OS6.
+- Touches: `internal/platform/windows/`, `internal/agent/focus/`.
+- Build: `SetWinEventHook(EVENT_SYSTEM_FOREGROUND)` on a locked OS thread with its own message loop; `app_class` from the shared table; `hosted_sessions` from the focused window's process tree (WP-OS6); `os.focus` events. Window titles are never read (DESIGN 3.3).
+- CI checks: injected-fake tests on `windows-latest` turning a sequence of foreground changes into the expected `os.focus` events; no test moves real focus (JE must-fix 11).
+- Oracle: SM 3.2's hosting rule; the shared app-class table.
+
+### WP-OS3. macOS presence, power and focus
+
+- Depends on: WP-AG1.
+- Touches: `internal/platform/darwin/`.
+- Build: through purego, `CGEventSourceSecondsSinceLastEventType` for any input and for key-down (`idle_keys_s`); IOKit sleep and wake on a CFRunLoop thread; `NSWorkspace` activation notifications; screen lock and unlock. Find out whether the key-down idle call needs Input Monitoring permission, which SM 1.2 and DESIGN 5.7 leave open: the test records what the call returns on `macos-latest` without the permission and uploads the finding as an artifact.
+- CI checks: `CGO_ENABLED=0` builds for `darwin/amd64` and `darwin/arm64` (`ci.yml`); a `macos-latest` smoke returns idle values and handles a synthetic activation through an injected fake; the finding artifact exists.
+- Oracle: the OS's own values. Karim reads the artifact; if a permission is needed, DESIGN 5.7's `libproc` peer check for macOS becomes a follow-up WP.
+
+### WP-OS4. Linux presence, power and focus
+
+- Depends on: WP-AG1.
+- Touches: `internal/platform/linux/`.
+- Build: X11 idle through purego `dlopen` of `libX11.so.6` and `libXss.so.1`, with no new module (if `dlopen` can't work on the runner, the PR proposes a module and says why); focus from `_NET_ACTIVE_WINDOW` and `_NET_WM_PID`; Mutter's `IdleMonitor` over D-Bus on GNOME Wayland, where there is no focus signal and slots are `ambiguous` (SM 3.2); logind `PrepareForSleep` and session lock signals; `unknown` presence everywhere else. KDE and wlroots (`ext-idle-notify-v1`) are WP-OS5.
+- CI checks: in `platform.yml`'s Linux job, under Xvfb with `openbox` and two `xterm`s: `xdotool` key input resets idle, and `xdotool windowactivate` between the two windows yields two `os.focus` events; a private `dbus-daemon` with fake `IdleMonitor` and logind services exercises the D-Bus paths.
+- Oracle: the X server's own idle counter and the window manager's active-window property.
+
+### WP-OS7. Device keystore
+
+- Depends on: WP-AG1, WP-LG2.
+- Touches: `internal/platform/*/`, `internal/agent/keys/`.
+- Build: create `K_dev` (32 random bytes) at first run; store it with DPAPI `CryptProtectData` on Windows, the Keychain on macOS and Secret Service on Linux through `go-keyring`, else a 0600 file with a warning that `doctor` and the dashboard repeat (DESIGN 3.6; CP 5.2); derive `K_leaf`, `K_tok`, `K_feat` and `K_vault` with `pkg/ledger`; never log or upload any of them.
+- CI checks: a round trip per OS in `platform.yml` (DPAPI on Windows, the login keychain on macOS, the 0600 fallback and a fake Secret Service on a private D-Bus on Linux); keys derived from a fixed `K_dev` equal the values in `vectors.json`.
+- Oracle: WP-LG1's derivation vectors.
+
+### WP-LG5. Ledger writer
+
+- Depends on: WP-LG2, WP-AG1, WP-OS7.
+- Touches: `internal/agent/ledger/`.
+- Build: `ledger/YYYY-MM-DD.seg` with length-prefixed `{hdr, body}` records and `ledger/batches.seg` (DESIGN 3.5, 3.6); bodies from `Event.Shareable()`; sealing every `BATCH_S` while there are new records and at once on lock, suspend, prompt and stop; a gapless per-device `seq`; recovery of a torn tail at start; one fsync per seal, which suits a spinning disk; APIs for upload-failure notes (rtype 0x41, used by WP-AG5) and scorer checkpoints (rtype 0x40, used by WP-SC5). Race: yes.
+- CI checks: a crash loop kills the writer at random points 200 times on Linux (`ci.yml`) and Windows (`platform.yml`); after every restart `pkg/ledger` verifies the chain, `seq` has no gap apart from a truncated tail, no sealed batch changed, and `tools/ledger_ref.py check` agrees.
+- Oracle: `pkg/ledger` verification and the Python reference.
+
+### WP-AG4. Scorer loop and local stores
+
+- Depends on: WP-SC4, WP-LG5, WP-AG2.
+- Touches: `internal/agent/scorer/`, `internal/agent/store/`.
+- Build: step `pkg/score` every 60 s and after each prompt or stop hook over new ledger records; write `buckets/YYYY-MM-DD.jsonl` with revisions and `days/YYYY-MM-DD.json` rollups (DESIGN 3.5); keep scorer state and the project map in `state.json` and rebuild both from the ledger when it is missing. Add `display.shadow` (DESIGN 6.7 step 2): when on, every view shows credited totals as "calibrating" and keeps moments, loops and the agent's time. Calibration volunteers get it on from 12-01 until the scoring freeze; other alpha testers get it off.
+- CI checks: the 6.2 fixture's events sent through the socket produce the same buckets as calling `pkg/score` directly; deleting `state.json` and restarting rebuilds identical buckets; `kill -9` mid-run loses nothing.
+- Oracle: `pkg/score` output on the SM fixtures, which is itself checked against SM.
+
+### WP-AD0. Harness capture kit
+
+- Depends on: WP-CI1.
+- Touches: `tools/capture/`, `testdata/fixtures/README.md`, `testdata/fixtures/PROVENANCE.template.md`.
+- Build: a hook dumper in POSIX sh and in PowerShell that writes stdin, argv, the names (never the values) of environment variables and the arrival time to numbered files and exits 0; a stdlib Python sink that saves each OTLP/HTTP JSON request body; a transcript collector; a scrub script that replaces the home path, username, hostname, git name and email, and anything shaped like an API key with fixed placeholders and lists every replacement for manual review (used until `pairtime fixtures scrub` exists, WP-PV1); and `tools/capture/SCRIPTS.md`, one script per harness listing the exact actions that exercise every event the adapter maps in DESIGN 5.1: session start, a typed prompt, a pasted prompt, a permission accepted and one rejected, an edit, a shell command, a failing test, an interrupt, a subagent, `/loop` once and `/goal` once where the harness has them, session end, and one headless run (`claude -p`, `codex exec`). Fixture layout: `testdata/fixtures/<harness>/<version>/<os>/`.
+- CI checks: `shellcheck` on the sh dumper; a Linux test pipes sample JSON through it and checks the files; the provenance step accepts the template's example.
+- Oracle: the hook contracts cited in HS 3.1, 4.1, 5.1, 6.1, 7.1 and 8.1.
+
+### WP-AD1. Capture Claude Code fixtures [human]
+
+- Depends on: WP-AD0.
+- Touches: `testdata/fixtures/claude_code/**` only.
+- Build: follow `SCRIPTS.md` for the Claude Code CLI on Windows 10 or 11 and on macOS or Linux, and repeat the core steps in the VS Code extension; export OTLP/JSON to the sink with prompt logging off; run the scrub script, read every replacement and the remaining text by eye, fill `PROVENANCE.md` (version from `claude --version`, OS build, date, name, `synthetic: false`).
+- CI checks: provenance step; `oracle-guard`.
+- Oracle: this capture is the oracle for WP-AD2 and WP-AD3.
+- Human: someone with Claude Code signed in on two real machines, about two hours. Captures contain nothing private after the scrub, because the repo is public.
+
+### WP-AD2. Claude Code adapter 1: hooks and the adapter interface
+
+- Depends on: WP-AD1, WP-AG3.
+- Touches: `internal/adapters/` (interface, registry, conformance runner), `internal/adapters/claudecode/`.
+- Build: DESIGN 3.4's `Adapter` interface with a pure `Parse`, and `via` set by the agent from how a record arrived; DESIGN 5.1's Claude Code hook events (`SessionStart`, `UserPromptSubmit`, `Stop`, `StopFailure`, `Notification`, `PermissionRequest`, `PostToolUse` for `Edit|Write|Bash`, `SubagentStart`, `SubagentStop`, `SessionEnd`) mapped to SM 1.2 kinds with the automation labels of SM 2.2 (`app.entrypoint`, `CLAUDE_CODE_CHILD_SESSION`, `Stop.session_crons`, `stop_hook_active`, `isSidechain`, `agent_id`); `/loop` prompts matched to `session_crons` by prefix (SM 2.2 rule 1); prompt text only in local fields; `Detect`, `Hosts` and `Fixtures`; unknown events and fields counted as parse failures, never fatal. `pairtime adapters test <dir>` replays a fixture directory and diffs the events against expected JSON (DESIGN 5.3).
+- CI checks: every captured payload maps to its expected events; a test asserts that each non-derived field of every expected event appears in the raw captured input; an adapter with only `synthetic: true` fixtures fails the conformance runner.
+- Oracle: WP-AD1's captures; SM 1.2 and HS 3.1. Expected events are reviewed against the payloads field by field.
+
+### WP-AD3. Claude Code adapter 2: transcripts, tailers and the lookback reader
+
+- Depends on: WP-AD2.
+- Touches: `internal/agent/tailers/`, `internal/adapters/claudecode/`, `internal/platform/*/` (priority calls).
+- Build: the shared tailer (fsnotify plus a slow `stat` poll of hot files, CP 3.2; per-file cursors in `state.json`; truncation and rotation); the transcript parser for `~/.claude/projects/**/*.jsonl` (user entries, assistant prose and code-line counts, tool uses with edit hunks, `isSidechain`), producing records with `via = log`; and the 30-day lookback reader at low CPU and I/O priority (`PROCESS_MODE_BACKGROUND_BEGIN` on Windows, `ioprio_set` idle class and nice on Linux, `setpriority` background on macOS) with a progress callback (TE WP4.7).
+- CI checks: each captured transcript replays to the same prompt, output and tool events as its hooks, turn by turn (order, time within 5 s, `len_chars`), which is what CC1 relies on (DESIGN 7.3); a test reads back the I/O priority on Linux; malformed lines raise the parse-failure counter.
+- Oracle: WP-AD1's hooks and transcripts of the same sessions.
+
+### WP-AD5. Git adapter and project resolution
+
+- Depends on: WP-AG1.
+- Touches: `internal/adapters/git/`.
+- Build: DESIGN 5.8's client side. Resolve each `cwd` and editor project once with `git rev-parse --git-dir` (worktrees and submodules included); watch `.git` non-recursively (`HEAD`, `index`, `ORIG_HEAD`, `logs/HEAD`); commit records with SHA, parents, author and committer times, `observed_at`, `--shortstat` against the first parent, `rewrites` from the reflog, `actor = agent` when an agent tool ran the same git command within 2 s, trailer agents as keys, and git-ai notes under `refs/notes/ai` as labels; project identity from the sorted root-commit set, and a salted path hash for folders without git; `.pairtime-ignore` and exclude patterns keep a folder out entirely (DESIGN 8.8). `core.hooksPath` is never set.
+- CI checks: tests drive the real `git` CLI on Linux (`ci.yml`) and Windows (`platform.yml`): commit, amend, a non-interactive rebase through `GIT_SEQUENCE_EDITOR`, merge and reset produce the right records and `rewrites`; the fingerprint survives a fresh clone; an ignored folder yields nothing.
+- Oracle: the real git binary's own `log`, `reflog` and `diff --shortstat` output, compared by the test.
+
+### WP-IN1. Installer core
+
+- Depends on: WP-AG1.
+- Touches: `internal/install/`.
+- Build: a JSON settings merger that adds exec-form hook entries (absolute `pairtime` path plus args) beside existing ones and never replaces them (DESIGN 5.1; HS 13.3); the Claude Code planner for DESIGN 5.1's hook list; autostart writers for the HKCU Run value, a LaunchAgent plist and an XDG autostart `.desktop` file, none needing admin (CP 2.1); a backup of every file touched; uninstall that removes exactly what pairtime added and restores a file byte for byte if pairtime created it; `--dry-run` printing a unified diff per file. The `~/.wakatime.cfg` editor is WP-IN3.
+- CI checks: golden before-and-after files, including a `settings.json` holding git-ai's hook entries as HS 13.3 describes them and another tool's hooks, in LF and CRLF; a second run produces no diff; uninstall restores every file byte for byte; on `windows-latest` the Run value is written and removed.
+- Oracle: real-world "before" shapes (git-ai's documented entries) and byte comparison after uninstall.
+
+### WP-IN2. `pairtime install` and `uninstall`
+
+- Depends on: WP-IN1, WP-AD2.
+- Touches: `cmd/pairtime/`, `internal/install/consent/`.
+- Build: DESIGN 5.9 steps 1 to 4 and 9 for the alpha: place the binary at the per-user path (CP 7), detect harnesses through each adapter's `Detect`, show one consent screen in the terminal with every planned change as a diff and its cost line where DESIGN gives one, let the teen untick any item (`--yes` for scripts), write autostart, start the agent, merge hooks, set local-only mode, and run lookback if WP-AD3 is present. `uninstall` reverses every step. The WakaTime line, the AGENTS.md entry, sign-in, the age signal and the consent cards come later (WP-IN3, WP-AD18, WP-SV3, WP-PV3, WP-UI3).
+- CI checks: snapshot tests of the consent screen for three sets of detected harnesses; on all three runners in `platform.yml`, in a temporary `HOME` or `USERPROFILE`, install then uninstall leaves the file tree identical to the snapshot taken before, and no agent process remains.
+- Oracle: a file-system diff against the pre-install snapshot.
+
+### WP-RL1. Release pipeline
+
+- Depends on: WP-CI1.
+- Touches: `.github/workflows/release.yml`, `tools/release/` (a Go main package for the manifest), `docs/spec/update-manifest.md`.
+- Build: on `v*` tags, build the seven targets with PR1's ldflags; archive (zip for Windows, tar.gz elsewhere); write `checksums.txt` (SHA-256) and `manifest.json` (version, per-platform URL and SHA-256, minimum supported version; CP 4.6), signed with Ed25519 from the `RELEASE_SIGNING_KEY` secret; publish tags with `-alpha` or `-beta` as GitHub prereleases. The public key is compiled into the client. `workflow_dispatch` builds a snapshot signed with a throwaway key and uploads artifacts without publishing.
+- CI checks: a snapshot run on the PR branch produces every artifact and passes `sha256sum -c checksums.txt`; a Go test verifies a manifest written by `tools/release` and rejects it after a one-byte change; RFC 8032 vectors for the signer.
+- Oracle: `sha256sum`; RFC 8032.
+- Human: Karim runs `tools/release keygen` once, stores the private half as `RELEASE_SIGNING_KEY` and commits the public half. Until then tags are signed with the snapshot key and marked unsigned in their notes.
+
+### WP-RL2. Install scripts and `e2e-install.yml`
+
+- Depends on: WP-RL1, WP-IN2.
+- Touches: `install/install.sh`, `install/install.ps1`, `.github/workflows/e2e-install.yml`, `release.yml` (attach the scripts).
+- Build: scripts that download the archive and `checksums.txt` for the tag, verify SHA-256, put the binary at the per-user path (`%LOCALAPPDATA%\pairtime\bin\pairtime.exe`, `~/.local/bin/pairtime`; CP 7) and run `pairtime install`. Windows PowerShell 5.1 has no Ed25519, so the scripts check SHA-256 and the binary then checks the manifest signature with its compiled-in key (`pairtime install --verify-manifest <file>`) before it changes anything. No admin rights. The alpha's script URLs are release assets; `https://<host>/install.ps1` arrives with the deploy (WP-OP2).
+- CI checks: `e2e-install.yml` on three runners against a local release fixture served over HTTP: install succeeds; a binary with a wrong SHA-256 is refused by the script; a manifest with a bad signature is refused by the binary; uninstall leaves nothing.
+- Oracle: SHA-256 of the fixture files; WP-RL1's signature check.
+
+### WP-CO0. CLI views: today, recap, statusline
+
+- Depends on: WP-AG4.
+- Touches: `cmd/pairtime/`, `internal/coach/text/`, `docs/schema/cli-today.schema.json`.
+- Build: `pairtime today` (per project: your time, the agent's time named after the harness, uncredited time by reason in plain words); `pairtime recap` (the last work session: your time by kind, the agent's time, evidence-level shares); `pairtime statusline` (one line such as `you 1h 12m · Claude 2h 40m`, reading `days/` only, so it returns in under 50 ms); all with `--json`; all honor `display.shadow`. Copy follows DESIGN 3.8: credited time is "your time", agent-only time is named after the agent, nothing scolds.
+- CI checks: golden text for stores built from the 6.2 and 6.4 fixtures; `--json` validates against its schema; the printed numbers equal the bucket totals.
+- Oracle: SM 6.2 and 6.4 totals; DESIGN 3.8's copy rules.
+
+### WP-AG6. `doctor`, `doctor --report` and `ledger show`
+
+- Depends on: WP-AG4, WP-AG3.
+- Touches: `cmd/pairtime/`, `internal/agent/doctor/`.
+- Build: the DESIGN 5.9 `doctor` lines that exist by alpha 0: agent running; idle detection working, or "presence unknown on this desktop"; hook round trip in ms per installed harness from a synthetic call; Claude Code folder-trust hint; adapters found with parse-failure counts; signing state of the binary; keystore mode, with the fallback warning. `--json`. `doctor --report` writes the redacted footprint report (RSS, idle CPU, wakeups per minute, hook latency, disk type, OS build) that is the R8 evidence (TE WP7.9). `ledger show --day <date>` prints every record in plain JSON (DESIGN 8.8).
+- CI checks: `doctor --json` validates against its schema; a test plants a username, a hostname and a home path in the environment and the data directory and finds none of them in the report; `ledger show` output parses back into the same records.
+- Oracle: the planted values; the schema.
+
+## M2: alpha 1, the coach, editor time and two more harnesses
+
+Goal: by 2026-12-08, the alpha does what makes it worth keeping (R3) and stops crediting loops: dark-flow rules, the local dashboard, a recap and one notification after each work session, the welcome recap from 30 days of lookback, Codex and Cursor, and editor time through the WakaTime dual-send. The dual-send ships only after `e2e-wakatime.yml` is green on three runners, because one "pairtime broke my Hackatime" report would end route B (DESIGN 5.6, 11 risk 1).
+
+Exit check: `e2e-wakatime.yml` green on three runners; SM 6.5 reproduces; `web.yml` green; Karim tags `v0.2.0-alpha.1`, and alpha testers' `pairtime doctor` shows both WakaTime destinations reachable.
+
+### WP-LG3. Ledger byte spec and Python reference, part 2: content
+
+- Depends on: WP-LG1.
+- Touches: `tools/ledger_ref.py`, `docs/spec/ledger-v1.md`, `testdata/ledger/vectors-content.json`.
+- Build: the content half of DESIGN 3.6, specified to the byte and implemented in the Python reference. Token commitments: define tokenization exactly (alternating runs of non-whitespace and whitespace, so kept tokens reassemble to the original text), `t_ij`, and `C_i` as an RFC 9162 tree over precomputed leaves. The redacted reveal: kept tokens with their salts, removed spans as leaf hashes with a type marker and a token count, and its verification. Keyed features: SM 4.2's normalization (lowercase; pasted blocks and error text removed; `<n>`, `<path>`, `<url>`, `<hex>`, `<id>` and `<retry>` substitutions; whitespace collapsed), word 3-shingles or character 5-shingles under six words (SM 8.5), 64 keyed MinHash values with the hash family written down, the Jaccard estimate, HMAC wrappers truncated to 16 bytes for `error_sig`, `template_hash` and `cmd_hash`, edit hunks as `(HMAC(K_feat, path), start, end)`, and the per-shingle HMACs that CC8 reveals (DESIGN 7.3). The challenge draw of DESIGN 7.5 step 4: the seed, the pool order by `HMAC-SHA256(seed, device_id || seq)`, and `CHALLENGE_K` = max(10, 10% of the pool) capped at 30, with the rounding rule stated.
+- CI checks: `selftest` covers the new parts; `vectors-content.json` from fixed seeds includes removals at the start, middle and end, an empty prompt, non-ASCII text and CRLF.
+- Oracle: DESIGN 3.6 and 7.5, SM 4.2 and 8.5. No Go in this WP.
+
+### WP-LG4. `pkg/ledger`, part 2: commitments, features and the draw
+
+- Depends on: WP-LG2, WP-LG3.
+- Touches: `pkg/ledger/`, `pkg/ledger/features/`, `internal/agent/ledger/`.
+- Build: Go for everything WP-LG3 specified. From this WP on, the ledger writer fills each body's `f` (with `f.v = 1`) and `c` for prompts and final agent messages.
+- CI checks: `vectors-content.json` reproduces; `tools/ledger_ref.py check` agrees on 1,000 random texts with random span removals; changing any kept token fails verification; span types and token counts survive a reveal.
+- Oracle: WP-LG3.
+
+### WP-SC5. Scorer 5: state, checkpoints and determinism
+
+- Depends on: WP-SC4, WP-LG5.
+- Touches: `pkg/score/`, `internal/agent/scorer/`.
+- Build: a deterministic serialization of `score.ProjectState` with keyed values only, holding the fields DESIGN 6.5 lists that exist so far (WP-SC6 adds the dark-flow counters); checkpoints sealed as rtype 0x40 records at every UTC minute divisible by 15 for each project with records in the last 24 hours; resume from any checkpoint.
+- CI checks: a state round trip at every minute boundary of every fixture gives identical output; 100 shuffled arrival orders inside the pending window give byte-identical final buckets (AD WP 1.7); resuming from each checkpoint reproduces the rest of the fixture's output; `platform.yml` runs the fixtures as a `windows/386` binary and its bucket bytes equal the `linux/amd64` goldens.
+- Oracle: the SM fixtures; byte equality across arrival orders and architectures.
+
+### WP-SC6. Scorer 6: dark flow and progress
+
+- Depends on: WP-SC5, WP-LG4, WP-FX2.
+- Touches: `pkg/score/`, `pkg/score/VERSION` (`0.2.0`).
+- Build: SM 4.2's four detectors (re-roll, fix-it, autopilot, rewrite loop) reading content only through the keyed features `f` (DESIGN 6.2 D18); SM 4.3's progress events, the `NO_PROGRESS_LIMIT_S` half rate and its restore within `PROGRESS_RESTORE_S`; `DAY_CAP_S`; `UNCOMMITTED_CAP_S` in submission totals; a discounted turn resets the reading bucket to zero (SM 2.4). The detector counters join `ProjectState`.
+- CI checks: 6.5 reproduces minute by minute to 20:42 and in aggregate after (1,490 credited; `excluded_loops_s` 2,010, from 20:05:00 to 20:38:30; `X.agent_only` 100); the `4.2-alternation` fixture from WP-FX2 is caught at the third A; 6.1's cycles 9 and 10 stay undiscounted; every other fixture's output is unchanged apart from the version.
+- Oracle: SM 6.5 and SM 4.2.
+
+### WP-FX5. Lookback fixtures
+
+- Depends on: WP-FX3.
+- Touches: `testdata/timelines/lookback/`.
+- Build: `6.1-transcript-only` and `6.4-transcript-only`, the harness events of SM 6.1 and 6.4 with every OS and editor event removed, plus a two-session case where two sessions run in parallel. Expected credit is computed by hand from SM 2.8, with the arithmetic per minute in the README: origin rules 1 to 5 still apply and other prompts count as `human_typed` at level C; leads are typing time only (6.1's 300-character prompt gets 200 s); permission waits keep up to `UNKNOWN_PA_MAX_S`; reading is capped at `UNKNOWN_BUCKET_MAX_S` per turn and credited only between a stop and a human prompt within 600 s, so 6.1's twelve-minute cycles credit no reading; a second wanted by two sessions goes to the one with the most recent human prompt; everything is `backfilled`.
+- CI checks: validity; the README's arithmetic sums to the expected totals.
+- Oracle: SM 2.8's rules, applied by hand by an agent that doesn't write the scorer.
+
+### WP-SC7. Scorer 7: lookback mode
+
+- Depends on: WP-SC3, WP-FX5.
+- Touches: `pkg/score/`.
+- Build: SM 2.8 for slots whose presence is `unknown`, with DESIGN 6.2 D11's labeling: level C, witness `backfilled`, and a lookback marker that keeps these minutes out of public totals, build days, boards and submissions unless a program opts in to level C.
+- CI checks: WP-FX5's fixtures reproduce.
+- Oracle: WP-FX5.
+
+### WP-LG6. Vault, retention sweeps and "delete everything"
+
+- Depends on: WP-LG5, WP-OS7.
+- Touches: `internal/agent/vault/`, `internal/agent/retention/`.
+- Build: `vault/YYYY-MM-DD.seg` with per-record AES-256-GCM under `K_vault` (random 96-bit nonce, the ledger `seq` as associated data) holding prompt text, each turn's final agent message up to 16 KiB, and file paths for local recaps (DESIGN 3.5); the "keep prompt text" switch; retention sweeps for every device row of DESIGN 4.4; "delete everything", which wipes the data directory and `K_dev` (DESIGN 8.8).
+- CI checks: a round trip; the AES-GCM wrapper passes Wycheproof's `aes_gcm_test.json` at a pinned commit; under a fake clock, a sweep deletes exactly what DESIGN 4.4 says and nothing else; a planted prompt string appears in no file except the vault, checked over the raw bytes of the data directory.
+- Oracle: DESIGN 4.4's table; Wycheproof's vectors.
+
+### WP-PV1. `pkg/redact` and `pairtime fixtures scrub`
+
+- Depends on: PR1.
+- Touches: `pkg/redact/` (new), `pkg/redact/rules/` (generated data), `testdata/redact/`, `cmd/pairtime/`.
+- Build: DESIGN 7.5 step 6 and 8.7 in order: known values (OS account name, home directory, hostname, `git config` name and email, GitHub and HCA usernames, private repo and folder names, the teen's deny list); gitleaks' rules as data, converted by a checked-in script from `config/gitleaks.toml` at a pinned gitleaks tag with its MIT notice (gitleaks is Go, so its patterns compile with `regexp`); validated PII patterns ported from Presidio (cards with Luhn, IBAN with mod-97, US SSN, UK NINO, Aadhaar with Verhoeff). Redaction removes spans and never rewrites text, and returns each span with a type marker for the reveal (WP-LG4). Fenced code blocks in agent messages collapse to typed markers with a line count. `pairtime fixtures scrub <dir>` runs the pipeline over capture files and prints every span it removed, replacing WP-AD0's temporary script.
+- CI checks: a planted corpus built from the true-positive examples in gitleaks' own rule sources at the pinned tag is fully redacted; valid-checksum PII samples are redacted and near misses with a wrong checksum are not; code-block collapse goldens.
+- Oracle: gitleaks' upstream examples; the published check-digit algorithms.
+
+### WP-UI0. Web skeleton
+
+- Depends on: WP-CI1, WP-AG1.
+- Touches: `web/` (new), `internal/webui/`, `docs/api/local.openapi.yaml`, `.github/workflows/web.yml`.
+- Build: Svelte 5 and TypeScript built by Vite with exact pinned versions; two entry points, the local dashboard and the server UI, over a shared component package (DESIGN 3.11); API types generated from OpenAPI files (SP 7.3); a consent-card component whose primary-styled button is "Not now" with nothing preselected (DESIGN 8.4) and a profile-choice component with two equal-weight buttons (DESIGN 8.3), both used later; Playwright with Chromium only. The checked-in placeholder `dist/` stays, and `web.yml` and `release.yml` build the real UI before embedding it. Lockfiles come from `tidy.yml` (ground rule 3).
+- CI checks: `web.yml`: vitest, the build, and a Playwright smoke that opens the built page served by a `pairtime agent` built in the same job; `ci.yml` still builds with no Node.
+- Oracle: DESIGN 8.4's consent rule, asserted by Playwright on the component.
+
+### WP-UI1. Local dashboard v0
+
+- Depends on: WP-UI0, WP-AG4.
+- Touches: `web/src/local/`, `internal/agent/api/`, `docs/api/local.openapi.yaml`.
+- Build: `pairtime dashboard` opens a one-time URL that sets a `SameSite=Strict`, `HttpOnly` cookie (DESIGN 3.9). Pages: Today (the chess clock per project and day, DESIGN 3.8 copy, pending minutes drawn lighter), Projects (credited time by kind, uncredited time by reason in plain words), Privacy (what is stored locally, retention periods, "delete everything"), Settings (adapters with last event time and parse-failure count, mode, exclusions, "pause for 1 hour", `display.shadow`). Nothing with a webview stays resident (CP 5.3).
+- CI checks: Playwright against an agent loaded with the 6.3 fixture's store: displayed totals equal `pkg/score`'s; no page and no API call works without the cookie; pause stops new records for an hour under a fake clock.
+- Oracle: SM 6.3's totals through the scorer; DESIGN 3.9's access rules.
+
+### WP-OS8. Notifications
+
+- Depends on: WP-AG1.
+- Touches: `internal/platform/*/`, `internal/agent/notifier/`.
+- Build: one notification per work session, never a polling loop, with quiet hours (DESIGN 3.3): a `Shell_NotifyIcon` balloon from a transient hidden window on Windows, `osascript` on macOS, `org.freedesktop.Notifications.Notify` over D-Bus on Linux (TE WP4.6).
+- CI checks: fake-notifier tests for one-per-session and quiet hours in `ci.yml`; a `windows-latest` smoke creates and removes the transient icon; the Linux job delivers to a fake notification service on a private bus.
+- Oracle: DESIGN 3.3's notifier rule; the freedesktop `Notify` signature.
+
+### WP-CO1. Session recaps and moments
+
+- Depends on: WP-SC6, WP-OS8, WP-UI1, WP-AD5.
+- Touches: `internal/coach/`, `web/src/local/`, `cmd/pairtime/`.
+- Build: work-session detection (no credited minute for `SESSION_GAP_S`, or a lock or suspend); the recap of DESIGN 3.8 (your time by kind, the agent's time named after the agent, moments, loops caught with what ended each, evidence-level shares, a "Was this right?" control stored locally); the moments `first_commit`, `first_green_test`, `first_test_written`, `rejected_agent_edit`, `interrupt`, `fixed_by_hand`, `long_fight`, `loop_caught`, `comeback`, `new_language` and `new_tool`; one notification per session. Copy follows DESIGN 3.8's last two paragraphs and PA 4.4: uncredited time named for what it was, never as the teen's failure.
+- CI checks: golden recaps for the six SM fixtures; the 6.5 recap names the loop from 20:05 to 20:38, the 17 repeats, the same 8 lines and the 20:41 hand edit that ended it, as SM 6.5's last paragraph does; each moment kind has a fixture that triggers it and a near miss that doesn't.
+- Oracle: SM 6.5's recap sentence and DESIGN 1.2's examples, over the SM fixtures.
+
+### WP-CO2. Welcome recap from lookback
+
+- Depends on: WP-SC7, WP-AD3, WP-UI1.
+- Touches: `internal/coach/`, `internal/agent/lookback/`, `web/src/local/`.
+- Build: on first run, lookback over 30 days at low CPU and I/O priority with a progress bar in the terminal and the dashboard, then the welcome recap ("Since <date> you built on N projects on M days. Your clock: about X h. Claude's clock: Y h.", labeled as estimated from logs) and a "before pairtime" band on project views (DESIGN 1.2, 3.8; TE WP4.7). Lookback minutes never reach build days, public totals or submissions (D11).
+- CI checks: WP-AD1's transcripts give the welcome numbers that `pkg/score` computes for them; the lookback worker's priority is read back on Linux; lookback minutes are absent from the build-day input.
+- Oracle: WP-FX5's arithmetic through WP-SC7.
+
+### WP-AD4. Claude Code OTLP/JSON receiver
+
+- Depends on: WP-AD2.
+- Touches: `internal/adapters/otlp/`, `internal/install/`.
+- Build: an OTLP/HTTP receiver on the local server that accepts `http/json` only, so there is no protobuf dependency (DESIGN 3.12); `otel.active_time` events, which calibrate and never credit (SM 1.2, 7.3); `user.email`, account and organization ids dropped on arrival (DESIGN 5.1); the install item that adds Claude Code's settings `env` block for the export with prompt logging off (HS 3.3).
+- CI checks: WP-AD1's captured OTLP bodies map to the expected events; a planted email address in an attribute never reaches the ledger, checked over the ledger's raw bytes.
+- Oracle: WP-AD1's captures; HS 3.3.
+
+### WP-AD6. Capture Codex fixtures [human]
+
+- Depends on: WP-AD0.
+- Touches: `testdata/fixtures/codex/**` only.
+- Build: `SCRIPTS.md` for the Codex CLI with hooks trusted once in `/hooks`, the same session with hooks untrusted, the rollout files from `~/.codex/sessions/**`, one `codex exec` run, a subagent, and the IDE extension if available.
+- Oracle: this capture is the oracle for WP-AD7.
+- Human: someone with Codex signed in, on one real machine (Windows if possible), about an hour.
+
+### WP-AD7. Codex adapter
+
+- Depends on: WP-AD6, WP-AD3, WP-IN1.
+- Touches: `internal/adapters/codex/`, `internal/install/`.
+- Build: the `~/.codex/hooks.json` planner with one fixed command line, so a binary update doesn't change its hash and break trust (DESIGN 5.1); hook parsing; the rollout reader for `rollout-*.jsonl`, with `.jsonl.zst` files counted and reported by `doctor` (DESIGN 3.12); trust-state detection and the `doctor` line "Codex hooks not trusted yet, using rollout logs" (HS 6.1); `session_meta.source`, `originator`, `thread_source` and subagent depth mapped to SM 2.2's origin rules.
+- CI checks: captured hooks and rollouts map to the expected events; each automation field lands on its SM 2.2 rule; with hooks untrusted, minutes come from rollouts with `via = log`; a turn seen by both counts once.
+- Oracle: WP-AD6's captures; HS 6.1 to 6.5.
+
+### WP-AD8. Capture Cursor fixtures [human]
+
+- Depends on: WP-AD0.
+- Touches: `testdata/fixtures/cursor/**` only.
+- Build: `SCRIPTS.md` for Cursor's IDE agent and the `agent` CLI: every `hooks.json` event of DESIGN 5.1, a Tab completion accepted, a background agent run, and one session with a Claude-format user hook also installed, so the double delivery is on record.
+- Oracle: this capture is the oracle for WP-AD9.
+- Human: someone with Cursor signed in, on one real machine, about an hour.
+
+### WP-AD9. Cursor adapter
+
+- Depends on: WP-AD8, WP-AD2, WP-IN1.
+- Touches: `internal/adapters/cursor/`, `internal/install/`.
+- Build: the `~/.cursor/hooks.json` planner; `beforeSubmitPrompt`, `afterTabFileEdit`, `afterFileEdit`, `afterAgentResponse`, `stop`, `sessionStart` and `sessionEnd`; `is_background_agent`, `stop.loop_count` and `followup_message` as automation labels; Tab edits as `edit_source = tab`; deduplication of the Claude-format hooks Cursor also runs, by the harness the hook binary finds in its parent chain (DESIGN 5.1). The `state.vscdb` reader is v1.5.
+- CI checks: captured payloads map to the expected events; one prompt delivered through both hook configurations counts once.
+- Oracle: WP-AD8's captures; HS 4.1.
+
+### WP-OS13. Peer-process check for loopback connections
+
+- Depends on: WP-AG1, WP-OS6.
+- Touches: `internal/platform/windows/`, `internal/platform/linux/`, `internal/agent/peer/`.
+- Build: the owning pid of a loopback TCP connection's client port, through `GetExtendedTcpTable` on Windows and `/proc/net/tcp` plus `/proc/<pid>/fd` on Linux; the check passes when that process is wakatime-cli and its parent chain reaches an editor process (DESIGN 5.7). macOS skips it, as DESIGN 5.7 says.
+- CI checks: on Linux and Windows, a child process opens a real loopback connection and the check returns the child's pid; a connection from a process that isn't wakatime-cli fails the check.
+- Oracle: the OS's own connection tables and the real child pid.
+
+### WP-AD16. WakaTime local endpoint and the bridge
+
+- Depends on: WP-OS13, WP-AD1.
+- Touches: `internal/adapters/wakatime/`, `pkg/wakacompat/` (new), `testdata/fixtures/wakatime/`, `testdata/upstream/hackatime/`, `.github/workflows/e2e-wakatime.yml` (a capture job).
+- Build: DESIGN 5.6's local endpoint (`POST /api/v1/users/current/heartbeats` and `.bulk` with up to 100 items and per-item responses in Hackatime's shape; `GET /api/v1/users/current/statusbar/today`; Basic, Bearer and `?api_key=` auth accepting only the installer's key; deduplication on a hash of the canonical fields). DESIGN 5.7's bridge table: editor heartbeats to `editor.activity`, transcript-derived heartbeats to `prompt.submit` and `agent.tool` with `via = bridge` and the typing lead only, an editor edit within 120 s of an agent edit on the same file hash as `edit_source = agent`, paths replaced by per-device HMACs on arrival, and `via` set from the peer check (`editor` or `editor_unverified`, `bridge` or `bridge_unverified`). The map from WakaTime project names to pairtime projects, which program linking needs later (DESIGN 5.10). `(time, project HMAC, category)` kept per heartbeat for 180 days, for WP-PG11. A `workflow_dispatch` capture job runs the real wakatime-cli v2.28.4 with simulated plugin calls and with WP-AD1's transcripts for its AI sync, and records every request body into `testdata/fixtures/wakatime/2.28.4/linux/` with provenance "captured in CI". Copy the response shapes of Hackatime's heartbeat controllers at `43bde10b02db` (MIT, notice kept) into `testdata/upstream/hackatime/` with a provenance note.
+- CI checks: the CI-captured heartbeats map to the expected events; a heartbeat posted by a test script becomes `editor_unverified`; bulk responses match the copied Hackatime shapes.
+- Oracle: the real wakatime-cli's requests; Hackatime's controllers at the pinned commit.
+
+### WP-IN3. The `~/.wakatime.cfg` editor
+
+- Depends on: WP-IN1.
+- Touches: `internal/install/wakacfg/`, `internal/install/`, `internal/agent/doctor/`.
+- Build: DESIGN 5.6 in full. An INI editor that leaves every other byte alone (comments, order, CRLF, a BOM); the match-all pattern under `[api_urls]` pointing at `http://127.0.0.1:<port>/api/v1|<key>`, using the first unused spelling of `.+`, `^.*$` and `(?s).*`; a lowercase UUIDv4 key, validated with wakatime-cli's regex `^(waka_)?[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$` before writing, and the whole line validated again; with no WakaTime config, `api_url` set to the agent, `[internal] ai_logs_last_parsed_at = <now>` seeded in `~/.wakatime/wakatime-internal.cfg` (HC 1.5), the WakaTime extension offered, and a note that programs on Robert still need Hackatime; a port change rewrites only pairtime's line; uninstall removes exactly pairtime's line by its key and restores a file pairtime created byte for byte. The consent screen gains the line, and `doctor` checks that both destinations are reachable.
+- CI checks: golden before and after files: hackatime-setup's config template (HC 1.5), a config with an existing `.*` line for another server, CRLF with comments, and no config at all; a malformed key is refused before the file is opened for writing; uninstall restores bytes.
+- Oracle: wakatime-cli's key regex and hackatime-setup's template (HC 1.5). The real binary is the final oracle, in WP-AD17.
+
+### WP-AD17. `e2e-wakatime.yml`
+
+- Depends on: WP-AD16, WP-IN3.
+- Touches: `.github/workflows/e2e-wakatime.yml`, `tools/e2e/fakehackatime/`, `.github/workflows/release.yml`.
+- Build: DESIGN 5.6's job on `ubuntu-latest`, `windows-latest` and `macos-latest`: download the wakatime-cli v2.28.4 release asset and check its checksum; a fake Hackatime as `api_url` and the agent through `[api_urls]`, both written by `pairtime install`; both receive a test heartbeat; with the agent stopped, the fake Hackatime still receives and wakatime-cli exits without an auth error; after a restart, the offline queue reaches the agent; a malformed key is refused by the installer. The observed queue behaviour (exit codes, queue counts) is uploaded as a report artifact. `release.yml` refuses to publish a tag whose commit doesn't have a green run of this workflow (JE must-fix 5; JB must-fix 5).
+- CI checks: the workflow is green on all three runners.
+- Oracle: the real wakatime-cli binary.
+
+## M3: the server and witnessed time
+
+Goal: by 2026-12-11, `pairtimed` runs on Karim's domain with Hack Club Auth sign-in, device sign-in, signed ingest with receipts, the free-text firewall, witness labels, rollups, a live owner dashboard, aggregate-only public profiles, commits with forge verification, build days, the privacy hub and a published daily witness root (R5, R6, R9). Engineering doesn't wait for the launch gates: the instance deploys with `signups_open = false` and `profile_default = "ask"`, and Karim flips them when the controller is named and the assessment in DESIGN 8.3 is signed (DESIGN 8.6, 10.5 step 5). Until then testers stay in local-only mode. The native program opens for building on 12-14 and needs this milestone (DESIGN 9.4).
+
+Exit check: `restore-drill.yml` green; `probe.yml` green against `https://<host>`; in CI, a delta reaches an open dashboard within 2 s of ingest; Karim signs in on the deployed instance with HCA and his alpha device uploads witnessed minutes.
+
+### WP-SV1. `pairtimed` skeleton
+
+- Depends on: WP-CI1.
+- Touches: `cmd/pairtimed/`, `internal/server/{config,store,migrations,writer,ops}/`, `.github/workflows/postgres.yml`, `go.mod`, `go.sum`.
+- Build: `pairtimed serve`, `migrate`, `healthcheck` and `version`, registered the same way as the client's subcommands (WP-AG1); configuration from `pairtime.toml` with DESIGN 10.2's keys plus `secrets.env`; SQLite through `modernc.org/sqlite` (server only; DESIGN 3.12) in WAL mode with `synchronous=NORMAL`; startup refuses an SQLite older than 3.51.3 (SP 7.4); SQL kept portable so Postgres stays the scale-out path (SP 7.4, 9.5); additive migrations that run at start; one writer goroutine committing every 50 ms or 500 rows; `/healthz`, `/readyz` (database writable; WP-OP1 and WP-SV15 add Litestream lag and object storage) and `/metrics` on a private port (ingest rate, batch latency, open streams, writer queue depth; DESIGN 10.4).
+- CI checks: migrations apply from empty on SQLite in `ci.yml` and on Postgres 18 in `postgres.yml`; an injected old version string makes startup refuse; 10,000 single-row writes commit in at most 20 transactions per second of wall time (DESIGN 10.6).
+- Oracle: SP 7.4's limits; Postgres as a second SQL engine that catches non-portable SQL.
+
+### WP-SV2. Hack Club Auth sign-in
+
+- Depends on: WP-SV1.
+- Touches: `internal/server/auth/`, `internal/server/accounts/`.
+- Build: `GET /auth/hca/login` and `/auth/hca/callback` as a confidential OIDC client requesting `openid email slack_id verification_status` explicitly, because discovery doesn't list them (SP 3.1); `hca_sub` as the identity key; session cookies (`HttpOnly`, `Secure`, `SameSite=Lax` for the redirect); sign-in refused when `verification_status` is `ineligible`, submitting allowed only for `verified`, and an "eligibility to confirm" note for `verified_but_over_18` (DESIGN 8.2); email encrypted at rest (DESIGN 4.4); `prompt=login` for the fresh login a submission freeze asks for (DESIGN 7.5 step 2); the `reviewers` allowlist of HCA subs and roles loaded from config (DESIGN 10.2), used by WP-RV1 and WP-RV4.
+- CI checks: end to end against an independent mock OIDC server run as a service container (for example `navikt/mock-oauth2-server`, pinned by digest): sign-in works; `ineligible` is refused; a wrong `state`, `nonce`, issuer, audience or an expired ID token is refused.
+- Oracle: OIDC Core's ID-token validation rules, exercised by an OIDC server nobody on this project wrote.
+- Human: none for CI. The real HCA client is registered by Karim in week one (DESIGN 9.6) and used in WP-OP2.
+
+### WP-SV3. Device grant, device tokens, device keys and `pairtime login`
+
+- Depends on: WP-SV2.
+- Touches: `internal/server/device/`, `cmd/pairtime/`, `internal/agent/account/`.
+- Build: the RFC 8628 device grant (`POST /oauth/device/code`, the `/device` page where a signed-in teen types the code, `POST /oauth/token` with `authorization_pending`, `slow_down`, `expired_token` and `access_denied`); a `ptd_` device token of at least 30 base62 characters plus a 6-character CRC32 checksum, stored hashed (SP 8.3); Ed25519 device-key registration bound to the token; device list and revoke on the account page; `pairtime login`, which shows the code and URL, polls, keeps the token in the keystore (WP-OS7), registers the device key and switches a local-only install to online without losing its history (DESIGN 3.2). The desktop never holds an HCA token (DESIGN 3.10).
+- CI checks: the real client completes the flow against the server and the mock OIDC server in one test; a corrupted token fails its checksum without a database lookup; polling faster than the interval gets `slow_down`.
+- Oracle: RFC 8628 sections 3.4 and 3.5; the mock OIDC server.
+
+### WP-SV4. Ingest 1: signed envelope, chain link and receipts
+
+- Depends on: WP-SV3, WP-LG2.
+- Touches: `internal/server/ingest/`, `internal/server/witness/`.
+- Build: `POST /api/v1/ingest/batches` with DESIGN 4.5's envelope: bearer token, `Idempotency-Key`, gzip body, `X-Pairtime-Device`, `X-Pairtime-Req` (strictly increasing), `X-Pairtime-Time` (within 300 s; every response carries the server time), and `X-Pairtime-Signature` over the fixed message. Batch roots `{b, n, R_b, H_b, prev}` where `prev` must equal the stored head; dedupe on `(device_id, b)`; witness rows `(device_id, b, n, R_b, H_b, received_at)`; one signed receipt per batch (DESIGN 3.6); `GET /api/v1/ingest/state` and `GET /api/v1/time`. Buckets, commit records and labels are accepted only in DESIGN 4.3's shapes; WP-SV5 hardens that into the firewall. Race: yes.
+- CI checks: replays are idempotent; a body signed by another key, a reused or lower counter, a clock 301 s off, a body whose hash differs and a `prev` that isn't the stored head are each refused with their own code; receipts verify with `pkg/ledger`; random valid chains are accepted and any single mutation is refused.
+- Oracle: DESIGN 4.5's envelope; `pkg/ledger`, which is checked against the Python reference.
+
+### WP-SV5. Ingest 2: the free-text firewall and limits
+
+- Depends on: WP-SV4.
+- Touches: `internal/server/ingest/`.
+- Build: an allowlist schema for every field of every tier-1 record, where each string is an id, enum, hash or HMAC of bounded length and anything that could hold free text gets a 422 with a machine-readable code (SP 8.2); per-request limits of 2,000 buckets, 500 commit records, 256 KB compressed and 4 MB decompressed, enforced while reading so a gzip bomb stops early; partial acceptance that names each rejected item (DESIGN 4.5).
+- CI checks: Go fuzzing for 60 s in `ci.yml` plus a checked-in corpus puts random text in every string field and always gets a 422 for that item (AD WP 2.4; JT graft 9); oversized and bomb bodies are refused before they are fully read; a test diffs the allowlist's field set against `TestTier1Shape`'s list from WP-EV1.
+- Oracle: DESIGN 4.3's field list and its "Never in it" column.
+
+### WP-SV6. Clocks and witness labels
+
+- Depends on: WP-SV4.
+- Touches: `internal/server/witness/`.
+- Build: event times re-anchored from the monotonic clock within one boot; events more than 5 minutes in the future refused (SP 8.4); one label per record from its batch's `received_at` minus its corrected time: `witnessed` within `WITNESS_LAG_S`, `offline` when late but sealed on a continuous chain while the ledger held upload-failure notes and flushed in one catch-up, `backfilled` otherwise and for all lookback (DESIGN 7.4); the inputs WP-SB4 needs to apply `OFFLINE_CAP_S` and `OFFLINE_PUSH_S` at submission (D6).
+- CI checks: scenarios with a skewed clock, a jumped clock and a reboot; a record first seen after 15 minutes is `backfilled`; a two-hour outage with failure notes and one catch-up is `offline`; the same outage without notes is `backfilled`.
+- Oracle: DESIGN 7.4's table and D6.
+
+### WP-SV7. Rollups and cross-device merge
+
+- Depends on: WP-SV6.
+- Touches: `internal/server/rollup/`.
+- Build: additive upserts into `rollups_daily (user, project, day, activity_kind)` from the delta between a bucket's revisions; one human minute per wall-clock minute per account across devices, with the `concurrent_devices` flag (SM 3.4); pending and final kept apart; `GET /api/v1/users/me/dashboard`.
+- CI checks: replaying revisions in random order converges to the same rollups; two devices crediting one minute keep one and raise the flag; dashboard totals equal the sum of stored final buckets.
+- Oracle: SM 3.4; the sum invariant over stored buckets.
+
+### WP-SV8. Live stream and the owner dashboard
+
+- Depends on: WP-SV7, WP-UI0.
+- Touches: `internal/server/stream/`, `web/src/server/dashboard/`.
+- Build: `GET /api/v1/stream` with topics, per-topic ring buffers, `Last-Event-ID` resume, 15 s keepalives, a `resync` event and a polling fallback (SP 6.4); `profile:` topics carry totals coalesced to once an hour; the owner's dashboard page in the server UI, live over the stream, with pending minutes drawn lighter. Race: yes.
+- CI checks: Playwright sees an ingested delta on an open dashboard within 2 s (DESIGN 2, R5); a reconnect with `Last-Event-ID` replays the gap; a Go test opens 1,000 streams and the process grows by less than 50 MB; a public topic never emits twice within an hour.
+- Oracle: DESIGN 2's R5 numbers, measured by Playwright's clock and Go's runtime memory statistics.
+
+### WP-AG5. Uploader, failure notes and `privacy show`
+
+- Depends on: WP-SV5, WP-SV6, WP-AG4, WP-AD5.
+- Touches: `internal/agent/uploader/`, `cmd/pairtime/`, `web/src/local/privacy/`.
+- Build: signed tier-1 uploads every 60 s while there is anything new, within 10 s after a prompt or stop hook (coalesced), and at once on lock and suspend (DESIGN 3.3, 4.3); bucket revisions; receipts stored in `batches.seg`; upload-failure notes with the codes `dns`, `connect`, `tls`, `http_5xx` and `http_429` as rtype 0x41; backoff with full jitter and `Retry-After`; resume from `GET /ingest/state`; records are never dropped; lookback minutes never go up as live minutes (D11). `pairtime privacy show` prints the next upload byte for byte, and the dashboard's Privacy page lists every past upload in plain words (DESIGN 8.8). Race: yes.
+- CI checks: client and server in one Linux test: 24 hours of synthetic records give equal totals on both sides through injected 429s, 503s and a server restart; a server stopped for two hours yields `offline` labels for that stretch and `witnessed` elsewhere; `privacy show` output equals the next request's body bytes.
+- Oracle: the server's totals against the client's; DESIGN 7.4's labels.
+
+### WP-SV9. Public profiles, project pages and the server's cards
+
+- Depends on: WP-SV7, WP-UI0.
+- Touches: `internal/server/profile/`, `web/src/server/profile/`.
+- Build: `/@:username` and `/@:username/:project` with exactly DESIGN 8.3's fields (handle, daily credited totals without hour-of-day detail, build days and the weekly-goal streak, harnesses and languages, public projects with forge-verified commits, published devlogs, chosen badges) and no trace of review; hourly refresh; `profile_default = "public"` as the code default and `"ask"` as Karim's launch state, with the card rules of DESIGN 8.3; "Make it private" in one click; deleting anything published takes effect at once; the consent cards of DESIGN 8.4 in the server UI.
+- CI checks: Playwright: in both modes nothing is public before the card is answered; in `public` mode both buttons have equal computed styles, and in `ask` mode "Private profile" is the primary one; the primary-styled button on every consent card reads "Not now" (TE WP4.13); seeded private project names and hour-specific data are absent from every public HTML and JSON response; "Make it private" hides the profile from an anonymous browser at once.
+- Oracle: DESIGN 8.3 and 8.4; seeded private values searched for in responses.
+
+### WP-UI3. Client onboarding: sign-in, profile card and consent cards
+
+- Depends on: WP-SV3, WP-SV9, WP-UI1.
+- Touches: `internal/install/consent/`, `web/src/local/onboarding/`, `cmd/pairtime/`.
+- Build: DESIGN 5.9 steps 7 and 8. Device-code sign-in during install unless the teen picks local-only mode or sign-ups are closed, in which case install says so and stays local. The profile card with a live preview of the public profile built from local aggregates. The consent-card framework of DESIGN 8.4: one card per item, "Not now" most prominent, nothing preselected, a refusal not asked again for a calendar year, revoking one toggle in Settings, and no asking when the device signals refusal. Cards are registered by the WPs that add the items (typing module, club boards, habit insights, backups, research use).
+- CI checks: Playwright on the local onboarding: every card's primary button is "Not now"; a refusal is remembered for 365 days under a fake clock; revoking flips the setting back.
+- Oracle: DESIGN 8.4.
+
+### WP-SV10. Projects, commits and forge verification
+
+- Depends on: WP-SV4.
+- Touches: `internal/server/project/`, `internal/server/forge/`, `testdata/fixtures/forges/`.
+- Build: project registration (root-commit SHAs turned into `HMAC(pepper, root_sha)` and discarded; a normalized remote only for public repos or published projects; SP 4.2); commit records with three clocks: `observed_at`, `server_first_seen_at` and the forge time (DESIGN 5.8); verification of public-repo commits on GitHub, GitLab and Forgejo with one lookup per SHA and a diffstat check, GitHub's compare API for ranges, retries with backoff for 24 hours, and a server token within GitHub's 5,000 requests an hour (SP 4.1); the `backdated` and `few_commits` flags; rewrites that move credited time to the new SHA (SP 4.4). A `workflow_dispatch` job records real API responses for a few commits of well-known public repos on each forge, and the tests replay those recordings.
+- CI checks: recorded responses replay; a diffstat mismatch is caught; a commit first seen weeks after its author date is flagged `backdated`; a 20-hour project with one commit gets `few_commits`; a rebase moves credited seconds to the rewritten SHA.
+- Oracle: real forge responses, recorded once.
+
+### WP-SV12. Build days, devlogs and badges
+
+- Depends on: WP-SV7.
+- Touches: `internal/server/devlog/`, `internal/server/buildday/`, `web/src/local/builddays/`.
+- Build: DESIGN 6.2 D10: a build day is a local day with at least `BUILD_DAY_S` credited seconds at level A or B that the server received within `BUILD_DAY_LAG_S`; consistency over `CONSISTENCY_WINDOW_D`; a weekly goal (default 3), weeks in a row, one freeze per `FREEZE_EARN_DAYS` build days with at most `FREEZE_MAX` held, spent automatically on a missed week; a time-zone change at most once per 30 days; no daily streak counter. `POST`, `GET` and `DELETE /api/v1/devlogs` with Markdown exactly as previewed and the `ai_assisted` label; badges as codes. The local Build days page mirrors the server (DESIGN 3.8).
+- CI checks: fake-clock tests: a day received after 70 hours counts and one after 73 doesn't; lookback and level-C-only days don't count; freezes are earned and spent; a second time-zone change inside 30 days is refused; a published devlog reads back byte for byte and a delete hides it at once.
+- Oracle: D10's rule text and parameters.
+
+### WP-SV13. Privacy hub endpoints and the eraser
+
+- Depends on: WP-SV2.
+- Touches: `internal/server/privacy/`.
+- Build: DESIGN 8.9: `POST /api/privacy/delete` and `POST /api/privacy/export` with an ES256 JWT carrying `kid`, `typ` `JWT`, `iss` `hackclub-privacy`, pairtime's own `aud`, and `iat exp jti request_id action dry_run subject`; a lifetime of at most 300 s with 30 s of leeway; single-use `jti`; keys from `https://yeet.hackclub.com/.well-known/jwks.json` cached for 300 s; `action` matching the endpoint; `subject` looked up by `emails`, `slack_id` or `identity_id`; `dry_run` running the same code in a rolled-back transaction. The eraser deletes every server row of DESIGN 4.4 and reports what it kept and why, which is only the minimal fraud record.
+- CI checks: tokens signed by a generated P-256 key verify; a replayed `jti`, an expired token, a wrong `aud`, `iss` or `action` are refused; a dry run leaves a database checksum unchanged; the eraser's report lists exactly DESIGN 4.4's retained row.
+- Oracle: DESIGN 8.9 and TP B3's contract; RFC 7519's claim rules; DESIGN 4.4.
+
+### WP-SV14. Privacy notice, evidence-level page and server retention
+
+- Depends on: WP-SV1.
+- Touches: `internal/server/pages/`, `internal/server/retention/`, `docs/retention.json` (new, the one source).
+- Build: `https://<host>/privacy` from a Markdown template with placeholders for the controller's name and contact (DESIGN 8.6) and a retention table generated from the same data the jobs use (DESIGN 4.4); `https://<host>/docs/evidence` with DESIGN 6.4's definition, versioned with the scoring version; the server's retention jobs (IPs and JA4 deleted after 30 days; per-minute buckets reduced to daily totals after 180 days; witness rows kept 180 days unless a submission inside its spot-check window uses them; device rows 90 days after a device is removed); the `signups_open` gate on account creation.
+- CI checks: under a fake clock the jobs delete exactly DESIGN 4.4's server rows; the page's retention table equals the jobs' configuration; with `signups_open = false` a new HCA identity gets a clear refusal page and no row.
+- Oracle: DESIGN 4.4.
+
+### WP-SV15. Object storage client
+
+- Depends on: WP-SV1.
+- Touches: `internal/server/objstore/`.
+- Build: a small S3 client on the standard library: AWS Signature Version 4, `PUT`, `GET`, `HEAD`, `DELETE` and listing, write-once puts for sealed evidence blobs keyed by SHA-256 under `evidence/` (DESIGN 10.1), and the nightly snapshot bucket; `/readyz` checks it.
+- CI checks: AWS's published SigV4 test-suite cases, copied with their license at a recorded version, pass; against a MinIO service container: put, get, list, and a second put to the same evidence key refused.
+- Oracle: AWS's SigV4 test suite; MinIO as an independent S3 implementation.
+
+### WP-SV17. Daily witness root publisher
+
+- Depends on: WP-SV4, WP-LG2.
+- Touches: `internal/server/publisher/`, `internal/server/keys/`.
+- Build: at 00:10 UTC, one Merkle root over every `(device_id, b, H_b, received_at)` received that UTC day, chained to the previous day's root and signed with the server key, committed to the public `pairtime-witness` repository through GitHub's contents API with a fine-grained token (DESIGN 3.10, 7.4); a missed day is published on the next run; inclusion proofs kept for bundles; `/.well-known/pairtime-keys.json` with key ids and validity dates, old keys kept forever (DESIGN 10.2). This starts with witnessing, so every witnessed day gets a public root.
+- CI checks: for a fixed day of witness rows the root is deterministic and equals the day tree from `tools/ledger_ref.py`; publishing goes to a local bare repository through a `file://` remote; the published file holds only hashes and a count.
+- Oracle: WP-LG1's day-tree reference.
+- Human: Karim creates `pairtime-witness` and its token (DESIGN 10.5 item 6) before WP-OP2.
+
+### WP-OP1. Deploy bundle, server image and restore drill
+
+- Depends on: WP-SV1, WP-SV15.
+- Touches: `deploy/` (`compose.yml`, `litestream.yml`, `cloudflared/`, `pairtime.toml.tmpl`, `runbook.md`, `renovate.json`), `Dockerfile.pairtimed`, `.github/workflows/{release,restore-drill}.yml`, `cmd/pairtimed/`, `internal/server/backup/`.
+- Build: DESIGN 10.1 to 10.5. A distroless static image holding `pairtimed` and a pinned Litestream v0.5 binary checked against its checksum, built and pushed to `ghcr.io/some-du6e/pairtimed` by `release.yml`, so the host never builds. `compose.yml` as DESIGN 10.1 shows, with pinned tags. `litestream.yml` with `exec: pairtimed serve`, `restore-if-db-not-exists`, a 10 s sync interval, 24 h snapshots, 72 h retention and the Healthchecks heartbeat. `pairtimed init --base-url` (creates `server.ed25519`, `evidence.p256` and `pepper` in `/data/keys` with mode 0600, writes `pairtime.toml`, prints the public keys). `pairtimed keys backup --age <recipient>`, plus the nightly `VACUUM INTO` snapshot encrypted with age and uploaded to the second bucket (DESIGN 10.3); both need `filippo.io/age` (BSD-3-Clause) in `pairtimed` only, and the PR says why. `pairtimed doctor` (HCA discovery, both buckets, replication lag, a dry-run push to `pairtime-witness`, both Healthchecks URLs, `/healthz` through the tunnel). A ping every 5 minutes while `/readyz` passes (DESIGN 10.4). `pairtimed` serves `install.sh` and `install.ps1` for the current release at `https://<host>/`. `runbook.md`, written for the deploy agent: first deploy, upgrades through Renovate PRs, rollback to the previous tag, moving to a VPS.
+- CI checks: `restore-drill.yml` builds the image, runs it against a MinIO service container, writes data, destroys the container, restores into a fresh one from the replica, and passes `PRAGMA integrity_check` and API smoke tests; the nightly snapshot decrypts with the `age` command-line tool and a test identity and restores; files from `pairtimed init` have mode 0600.
+- Oracle: SQLite's integrity check after a real restore; the `age` CLI as an independent decrypter.
+
+### WP-OP2. Deploy on Karim's domain [human]
+
+- Depends on: WP-OP1, WP-SV14, WP-SV17, and every other M3 WP the runbook names.
+- Touches: nothing in the repo except, if needed, fixes to `deploy/runbook.md`.
+- Build: run by the deploy agent on Karim's host, following `deploy/runbook.md` and DESIGN 10.5's steps: pull the pinned release; `pairtimed init --base-url https://<host>`; back up the keys with `pairtimed keys backup --age`; fill `secrets.env` and `tunnel.env` with mode 0600; `docker compose up -d`; `pairtimed doctor`; leave `signups_open = false` and `profile_default = "ask"`.
+- CI checks: `gh workflow run probe.yml -f host=<host>` from GitHub's network is green (`/healthz` 200, `/.well-known/pairtime-keys.json` parses, TLS valid); `restore-drill.yml` dispatched with the real bucket's read-only credentials, stored as environment secrets, passes; `pairtimed doctor` output, all green, is pasted into the deploy issue; Healthchecks.io shows both checks up.
+- Oracle: probes from outside the host; a restore from the real replica.
+- Human: Karim provides DESIGN 10.5's list once: a Linux host with Docker and Compose v2 and at least 40 GB of local disk; the Cloudflare tunnel and its token for `<host>`; the HCA client id and secret with redirect `https://<host>/auth/hca/callback`; two buckets and keys scoped to them; the age public key (the private key stays offline); `pairtime-witness`, its token and a read-only forge token; two Healthchecks.io URLs; and, from HQ when ready, the privacy hub `aud`, the reviewer allowlist and the controller's notice text. Karim alone decides when `signups_open` and `profile_default` change.
+
+## M4: the program path
+
+Goal: by 2026-12-18, a program can take pairtime hours under today's handbook, in each of DESIGN 1.4's three tiers, and a reviewer can check them (A, R9, R10). That means submissions with freeze, commit-then-reveal and the sticky challenge; sealed tier-2 content; exact re-scoring with held minutes; the public checks; the review page; the handbook text; the Hackatime-compatible reads; the Airtable script and the program kit; the bundle and offline `verify`; and labeling mode for the calibration pilot. The native program takes submissions from 12-21 (DESIGN 9.4), and decisions stay closed until scoring 1.0.0 (DESIGN 6.7 step 5).
+
+Exit check: a test submission from the deployed instance round-trips into a sandbox Airtable base with every handbook field filled (DESIGN 9.7; WP-PG12); its bundle passes `pairtime verify` with networking off; a Ruby client written from scratch gets the expected credited seconds through the Hackatime-compatible reads.
+
+### WP-PG0. Upstream contract captures
+
+- Depends on: PR1.
+- Touches: `testdata/upstream/{hackatime,stardance,robert,ari,handbook,airtable}/`, each with `PROVENANCE.md`.
+- Build: oracles for every program integration, from the pinned sources in HC 0. Hackatime at `43bde10b02db` is MIT, so copy, with its notice, the controllers and response shapes for `authenticated/me`, `authenticated/api_keys`, `get_user_by_email`, `stats`, `trust_factor`, `info_batch`, `heartbeats/spans` and `my/heartbeats`, the identifier lookup order (`User.lookup_by_identifier`), and the duration SQL in `app/models/concerns/heartbeatable.rb` (HC 1.4, 1.8). Stardance at `b1d3e0eac1ae` has no license, so copy none of its code: write each request its `HackatimeService` makes (method, path, query parameters and the form each takes, headers, auth) as JSON citing file and line (HC 1.8). Robert's webhook signature scheme as HC 3.5 documents it, with test values computed from that description. Ari's documented ingest keys (`journals[]`, `hackatime_projects[]`, `program_seconds`) at `637233962a0f`, described, not copied, since Ari has no license (HC 3.6). The handbook's field names (HC 3.7) and the field names of the wrangler Airtable base. Captures record interfaces only; a weakness noticed in a live Hack Club service goes to Hack Club privately and never into this public repo.
+- CI checks: the provenance step; every JSON file validates against a small schema in the same directory; `oracle-guard` (the PR adds oracle files only).
+- Oracle: the pinned upstream sources themselves. No product code in this WP, because WP-AD16, WP-PG1 to WP-PG8 and WP-PG11 are tested against it.
+
+### WP-SB1. Submissions API
+
+- Depends on: WP-SV7, WP-SV12.
+- Touches: `internal/server/submission/`.
+- Build: DESIGN 7.5 steps 1 and 2 and SP 10.2: `POST /api/v1/submissions`, idempotent on `(program, external_id)`, for a set of projects `P` and a window `W` or a list of devlog windows, each the credited time between two consecutive devlogs on the project (D13); refusal of a second submission of the same project and window to another program, and an overlap flag against another user's submission on the same repo fingerprint; the freeze, which records `P`, `W`, the scoring version, the parameter hash and a fresh 32-byte `r`, and returns only `SHA-256(r)`; the fresh login the web flow asks for (`prompt=login`); a state machine (created, frozen, metadata revealed, challenged, content revealed, checked, in review, decided, withdrawn, revoked); `POST .../withdraw`; `GET .../:id`; `GET /api/v1/submissions?updated_since=` scoped to the calling program. Webhooks are WP-PG7.
+- CI checks: a table test of every legal and illegal transition; idempotent create; the cross-program refusal and the overlap flag; `r` is unreadable through any endpoint before the metadata reveal is stored, and it matches the commitment afterwards.
+- Oracle: DESIGN 7.5 and SP 10.2.
+
+### WP-SB2. `pkg/seal` and the evidence key
+
+- Depends on: WP-SV17.
+- Touches: `pkg/seal/` (new), `internal/server/keys/`, `cmd/pairtimed/`.
+- Build: DESIGN 7.6: ECDH P-256 through `crypto/ecdh`, HKDF-SHA256 with `info = "pairtime/v1/seal" || submission_id || part`, AES-256-GCM; a sealed-blob format with key id, ephemeral public key, nonce and ciphertext; opening with the evidence key; re-sealing to a viewer's ephemeral key; the evidence public key in `/.well-known/pairtime-keys.json` with id and validity dates; `pairtimed keys rotate-evidence`, which re-seals stored blobs.
+- CI checks: Wycheproof's `ecdh_secp256r1` and `aes_gcm` vectors at a pinned commit; round trips; changed ciphertext or associated data fails to open; after rotation every stored blob opens with the new key.
+- Oracle: Wycheproof; RFC 5869. WP-SB7 adds a second, independent implementation (WebCrypto).
+
+### WP-SB3. Client metadata reveal and `pairtime submit --dry-run`
+
+- Depends on: WP-SB1, WP-SB2, WP-SC5, WP-AG5.
+- Touches: `internal/agent/submit/`, `cmd/pairtime/`.
+- Build: DESIGN 6.5's reveal set over its range: full bodies for (a) records whose header project is in `P`, (b) every `os.presence`, `os.focus` and `os.power` record, (c) every `editor.activity` record of any project, (d) every record of a harness session that an `os.focus` record lists in `hosted_sessions` together with a session of `P`, plus those projects' checkpoints, and (e) `P`'s checkpoints; every other record of an overlapping batch as header and body hash only. The preview text DESIGN 6.5 requires ("what this reveals about other projects"). Seal to the evidence key and upload. `pairtime submit --dry-run` prints exactly the plaintext that would be sealed.
+- CI checks: submitting project D of the 6.3 fixture sends no body of A, B or E outside rules (b) to (d), and every body those rules require; in `6.3-tabs`, submitting A includes B's session records under (d); the dry-run bytes equal the plaintext inside the sealed upload.
+- Oracle: DESIGN 6.5's list, applied to SM 6.3 and its two-tab variant (JE must-fix 7).
+
+### WP-SB4. Server verification and exact re-scoring
+
+- Depends on: WP-SB3, WP-SV6.
+- Touches: `internal/server/reveal/`.
+- Build: DESIGN 7.5 step 3: open the metadata reveal in memory; rebuild every leaf, root and head against the witness rows and require no gap in `b` or `seq` (CC7); compute each record's witness lag and label; re-score with `pkg/score` at the frozen version and parameter hash from the checkpoints over DESIGN 6.5's range and compare slot by slot with the live buckets (CC6); hold minutes that don't reproduce or whose chain fails (D7); apply D6 (`OFFLINE_CAP_S` per submission, a forge push within `OFFLINE_PUSH_S`); fill `SubmissionTotals` with bands and `held_s`. A config flag turns CC6 into a flag only (DESIGN 11 risk 9).
+- CI checks: submitting D of 6.3 reproduces D's credit to the half-second; `6.3-tabs` reproduces A and B; a modified client that moves one minute from A to B fails CC6 and holds exactly that minute; a dropped record fails CC7; four hours of offline minutes are capped at 10,800 s.
+- Oracle: SM 6.3 and its variant; the Python ledger reference for roots.
+
+### WP-SB5. Challenge, sticky draw and content verification
+
+- Depends on: WP-SB4, WP-LG4.
+- Touches: `internal/server/challenge/`.
+- Build: DESIGN 7.5 steps 4 to 8: `r` revealed only after the metadata reveal is stored; the seed and the draw as WP-LG3 specifies; the pool (human-origin prompts and `track` calls in `P` and `W` that opened a credited anchor and carry a commitment) plus two commits for the interview list; the sticky draw, keyed `(device_id, seq)` for as long as the record could be submitted, so a later submission whose pool contains a drawn item must reveal it or it counts as withheld; a withdrawal after the draw marks every drawn, unrevealed item withheld for every future submission; content verification against `C_i` (kept tokens with salts, leaves and markers of removed spans) and the hook CC8 uses; withheld items uncredit the lead and reading their anchor opened; `expired` answers checked against the witnessed age, giving "witnessed, evidence lost".
+- CI checks: WP-LG3's draw vectors reproduce; withdraw then resubmit gains nothing, because the second submission must reveal the first draw's items; a withheld item removes exactly its minutes; an `expired` claim for a record younger than its retention period is refused.
+- Oracle: WP-LG3's vectors; DESIGN 7.5's rules.
+
+### WP-SB6. Client content reveal and the submission page
+
+- Depends on: WP-SB5, WP-PV1, WP-LG6, WP-UI1.
+- Touches: `internal/agent/submit/`, `web/src/local/submit/`.
+- Build: for each drawn turn, the prompt and the final agent message of the turn before it (DESIGN 7.5 step 6), passed through `pkg/redact`, with code blocks in agent messages collapsed by default; the teen sees exactly what a reviewer will see with every redaction highlighted, can remove more, add code back or withhold any item; the client sends kept tokens with their salts plus the leaves and markers of removed spans, sealed; `expired` for text past retention. The dashboard's submission page: pick the project and window or devlog windows, preview the metadata reveal, then review the draw. The page later shows the access log (WP-RV2).
+- CI checks: Playwright: a planted secret in a drawn prompt is highlighted and removed by default; a span removed by hand disappears from the payload; a withheld item sends no tokens; every payload verifies against `C_i` with `pkg/ledger`.
+- Oracle: `pkg/ledger` verification; `pkg/redact`'s corpus.
+
+### WP-SB7. Viewer sealing and the reveals endpoint
+
+- Depends on: WP-SB5, WP-SB2, WP-UI0.
+- Touches: `internal/server/reveal/`, `web/src/shared/seal/`.
+- Build: `GET /api/v1/submissions/:id/reveals` with the viewer's ephemeral P-256 public key generated by WebCrypto; the server decrypts in memory, re-seals to that key and answers with `Cache-Control: no-store`; an access-log entry per fetch (DESIGN 7.6); the browser module that opens the response.
+- CI checks: Playwright in Chromium opens a reveal sealed by Go's `pkg/seal` and shows the right text; a planted plaintext string never appears in captured server logs; every response carries `no-store`.
+- Oracle: WebCrypto, an independent implementation of ECDH, HKDF and AES-GCM.
+
+### WP-SB8. Bundle and `pairtime verify`
+
+- Depends on: WP-SB5, WP-SB7, WP-SV17, WP-TR2.
+- Touches: `pkg/bundle/` (new), `cmd/pairtime/`, `internal/server/submission/`.
+- Build: DESIGN 7.8's tar archive (`manifest.json` signed with the server's Ed25519 key; `batches.json` with receipts and day-tree inclusion proofs; `records.jsonl`; `buckets.json`; `challenge.json` without tokens; `commits.json`; `checks.json`; `review.json`; `flags.json` in the reviewer variant only) at `GET .../bundle`; `pairtime verify bundle.tar` offline, exiting 0 when everything reproduces, 1 when numbers differ, 2 when a signature or proof fails, and 3 for an older MAJOR version, printing the release built from that version's tag (DESIGN 6.6); `--fetch-reveals` with a reviewer sign-in, checking each reveal against its `C_i`, keeping it in memory and logging each fetch.
+- CI checks: the bundle of an end-to-end submission verifies under `sudo unshare --net` on the Linux runner; a one-byte change in any file exits 2 for signatures and proofs and 1 for numbers; a bundle stamped with the next MAJOR exits 3.
+- Oracle: the Python reference for roots and day trees; `pkg/score` and `pkg/check` re-run independently of the server's stored results.
+
+### WP-FX6. Check fixtures
+
+- Depends on: WP-FX2, WP-FX3.
+- Touches: `testdata/checks/`.
+- Build: for each of CC1 to CC11 (DESIGN 7.3), one scenario that fails and one that passes, made by editing copies of SM fixtures exactly as the table's "Catches" column describes: CC1 a hook prompt with no transcript entry; CC2 prompts with no OS input before submit; CC3 a commit with 300 changed lines and no recorded edits; CC4 a commit seen by the server more than 15 minutes after `observed_at`, and a forge diffstat that doesn't match; CC5 two devices crediting one slot; CC6 a moved minute; CC7 a dropped record; CC8 a falsified sketch; CC9 a session that changes project; CC10 editor anchors while no editor of the project has focus; CC11 key-down counts too low for the typed length. Plus a not-computable case: CC1 on a harness with no log reader. Each has its expected result and counts.
+- CI checks: validity; one expected file per scenario.
+- Oracle: DESIGN 7.3's table.
+
+### WP-TR1. `pkg/check`, CC1 to CC5
+
+- Depends on: WP-FX6, WP-SV10, WP-SC4.
+- Touches: `pkg/check/` (new).
+- Build: CC1 to CC5 as public code, run by the client before a submission and by the server on the reveal; results are pass, fail or not computable, with counts; failures change the band and review priority, never credited seconds (DESIGN 7.3).
+- CI checks: each check fails its failing fixture and passes its clean one; not computable is never counted as a failure.
+- Oracle: WP-FX6.
+
+### WP-TR2. `pkg/check`, CC6 to CC11
+
+- Depends on: WP-FX6, WP-SB5, WP-TR1.
+- Touches: `pkg/check/`.
+- Build: CC8 to CC11, and CC6 and CC7 reported through the same result type from WP-SB4's re-score and chain check. CC8 recomputes the keyed sketch and `prompt_class` of challenged turns from revealed text and per-shingle HMACs (DESIGN 7.3).
+- CI checks: as WP-TR1 for CC6 to CC11.
+- Oracle: WP-FX6.
+
+### WP-TR3. Tier-2 detectors, the audit formula and the sentinel stub
+
+- Depends on: WP-TR1, WP-SB4.
+- Touches: `internal/server/risk/`, `internal/server/sentinelapi/`.
+- Build: SM 8.7's eight flags as public code with SM's starting points as defaults, and deployed thresholds and weights read from `config/tier2.toml`, which is never committed (TE D13); detectors run only on submitted windows (TP B2 point 6); `hackatime_mismatch` with a private threshold (DESIGN 7.2); the audit probability `p = min(0.6, max(AUDIT_BASE_P, 1.1 * h / (0.6 * h + 120)) + risk)` and its draw, with the risk inputs named publicly (DESIGN 7.9); the sentinel socket client and a stub sentinel, off unless configured (DESIGN 3.10).
+- CI checks: no detector runs for an unsubmitted window; with zero risk, `p` is 0.08 at 5 h, 0.087 at 10 h and 0.306 at 40 h; SM 6.6's timeline raises `regular_timing` (SM gives burstiness of about -0.6) and `periodic_input`; over 10,000 trials the audit draw rate is within 1 point of `p`.
+- Oracle: DESIGN 7.9's numbers; SM 6.6.
+
+### WP-RV1. Review page 1, and the demo seed
+
+- Depends on: WP-SB4, WP-TR1, WP-UI0.
+- Touches: `web/src/server/review/`, `internal/server/review/`, `cmd/pairtimed/`.
+- Build: `/review/submissions/:id` behind HCA sign-in and a reviewer role from the allowlist (DESIGN 7.7 items 1 to 4): the headline; must-view rows (every row with a failed check or a flag, plus one clean row drawn at random) that gate "Approve remaining rows"; devlog windows with work-session rows, loop rows at 0 that a reviewer may raise up to `captured_s` with a reason (D12), and a per-commit tab; hour strips with lanes for kind, level and witness label and markers for prompts, permission answers, interrupts, test runs and commits; a minute drawer that replays SM 2.7 for any minute; cut reasons; the keys `j`, `k`, `a`, `d`, `r`, `f`, `o`. `pairtimed seed --demo` loads synthetic submissions built from the SM fixtures, for Playwright and for the clickable demo Quality and Integrity gets (DESIGN 9.5).
+- CI checks: Playwright: "Approve remaining rows" stays locked until the must-view rows are opened; the API refuses a cut above `captured_s` and a raise above a loop row's `captured_s`; the drawer for a 6.1 minute lists the anchors `anchors.json` gives for it.
+- Oracle: DESIGN 7.7; SM 6.1 through WP-FX3.
+
+### WP-RV2. Review page 2
+
+- Depends on: WP-RV1, WP-SB7, WP-SV10.
+- Touches: `web/src/server/review/`, `internal/server/review/`, `web/src/local/submit/`.
+- Build: DESIGN 7.7 items 5 to 12: revealed turns at their markers (agent message left, prompt right, removed spans as typed markers, "matches commitment, witnessed hh:mm:ss"), with withheld, expired and purged items shown as such; commits with three clocks, diffstat, credited time since the parent and a forge link; checks per row with counts; flags as codes and categories, never thresholds; the story column below the evidence; cross-checks (`hackatime_logged_s` against Hackatime's figure, the Telescreen link, earlier decided submissions scoped by role, JT must-fix 14); the handbook text with copy buttons once WP-PG1 exists; the access log, which the teen also sees on the submission page.
+- CI checks: Playwright: the teen sees the reviewer's access-log entry; a program reviewer sees only their program's earlier submissions and a `qi` reviewer sees all; seeded threshold values never appear in the DOM.
+- Oracle: DESIGN 7.7 and JT must-fix 14.
+
+### WP-RV3. Fraud Squad desk
+
+- Depends on: WP-RV2.
+- Touches: `web/src/server/fraud/`, `internal/server/fraud/`.
+- Build: `/review/fraud` for the `fraud_squad` role: search across submissions by device, shared root-commit fingerprint, overlapping windows, and IP and JA4 within 30 days, so users without Hackatime aren't invisible (DESIGN 7.2; JB must-fix 8).
+- CI checks: two seeded accounts sharing a root commit are found; an IP older than 30 days isn't found, because WP-SV14's job deleted it; other roles get 403.
+- Oracle: DESIGN 4.4's 30-day rule; seeded data.
+
+### WP-RV4. Reviewer roles, assignment and outcomes
+
+- Depends on: WP-RV1.
+- Touches: `internal/server/review/`.
+- Build: the roles of DESIGN 10.2 (`program_reviewer:<program>`, `qi`, `fraud_squad`, `spot_checker`, `admin`); random assignment from a pool, never a claim queue; conflicts (the reviewer's own club by self-declaration, a shared GitHub repository or organization; DESIGN 7.10); `POST .../review` with cuts, raises and reasons; `POST .../outcome`, which returns `409 scoring_not_frozen` until the instance runs scoring 1.0.0 (DESIGN 6.7 step 5); outcomes written to the outcome ledger (WP-PG9); deflation text with no personal data.
+- CI checks: an outcome before 1.0.0 gets 409; a reviewer is never assigned someone from their own club or a shared repository; over 1,000 assignments the spread across a pool is uniform within tolerance.
+- Oracle: DESIGN 6.7 and 7.10.
+
+### WP-RV5. Purge, exposure reports and revocation
+
+- Depends on: WP-RV2.
+- Touches: `internal/server/reveal/`, `web/src/server/review/`, `web/src/local/submit/`.
+- Build: DESIGN 7.11: the teen's "This revealed something it shouldn't have" button (`POST .../purge`) deletes the item from the evidence store at once, uncredits its minutes and gives the program a revision; the reviewer's "Report an exposure" (`POST .../exposure`) hides the item from every viewer at once and asks the teen to purge or keep it; revocation through the spot-check window emits `submission.revoked` (DESIGN 7.9).
+- CI checks: a purged item is gone from object storage and the database and its minutes are uncredited; an exposure report hides the item for every role at once; a revocation emits the event.
+- Oracle: DESIGN 7.11.
+
+### WP-PG11. `pkg/wakacompat`: Hackatime-equivalent seconds
+
+- Depends on: WP-AD16, WP-PG0.
+- Touches: `pkg/wakacompat/`, `.github/workflows/postgres.yml`.
+- Build: DESIGN 6.2 D15: `hackatime_logged_s` over the linked Hackatime names in one global order, `min(gap, 120 s)`, the heartbeat just before the window included as Hackatime's boundary-aware path does, `browsing`, `meeting` and `communicating` excluded, split by WakaTime's `ai coding` category; `handbook_s` from that split; SM 5.4's reconstruction as the fallback when no heartbeats exist.
+- CI checks: on generated heartbeat sets, the Go numbers equal what Hackatime's own duration SQL, copied in WP-PG0, returns on the Postgres service container (a `postgres.yml` job path-filtered to `pkg/wakacompat/**`).
+- Oracle: Hackatime's SQL at `43bde10b02db`.
+
+### WP-PG1. Handbook text and the deflation draft
+
+- Depends on: WP-SB8, WP-PG11.
+- Touches: `internal/server/justification/`.
+- Build: `GET /api/v1/submissions/:id/justification?format=handbook` with DESIGN 9.3's fields: the fixed first line "Tracked with pairtime <version> (scoring <version>)", the Alternate Tracking Method text, the review URL, Hackatime project names and date ranges in the handbook's format with UTC dates, the Hackatime id when linked, a factual Deflation Justification draft built from reason codes, and Specific Technical Features left empty; the bundle's SHA-256 and the program's preset in the text (DESIGN 9.2).
+- CI checks: golden text for a fixture submission follows DESIGN 9.3's example sentence by sentence, with the first line verbatim, the URL and the hash present, and every number taken from the submission's totals.
+- Oracle: DESIGN 9.3's golden example and field table; the handbook field names from WP-PG0.
+
+### WP-PG6. Program OAuth, scopes and project-name linking
+
+- Depends on: WP-SB1, WP-AD16.
+- Touches: `internal/server/program/`, `web/src/server/connect/`, `internal/agent/link/`.
+- Build: `/oauth/authorize` and `/oauth/token` with authorization code and PKCE for teens' grants and client credentials for program reads; the scopes `profile:read`, `email:read`, `hours:read`, `submissions:read` and `submissions:write` (DESIGN 3.10); program registration by an admin; the "Connect pairtime" consent page; linking, where the agent proposes which Hackatime project names belong to which pairtime project, the teen confirms, and the server stores `HMAC(pepper, user_id, name)` (DESIGN 5.10, 4.3); unlinking deletes those HMACs; reads for a user not connected to the calling program return 404.
+- CI checks: OAuth flows end to end, with RFC 7636 appendix B's S256 vector; reads for an unconnected user return 404; no plaintext Hackatime name is in the database after linking (a scan for planted names).
+- Oracle: RFC 6749 and RFC 7636.
+
+### WP-PG2. Airtable automation script
+
+- Depends on: WP-PG1, WP-PG6.
+- Touches: `integrations/airtable-automation.js`, `integrations/airtable/`.
+- Build: a "Run script" automation that takes the record's pairtime URL, calls the justification endpoint with the program's token and writes the fields named in a mapping at the top of the script, defaulting to the wrangler base's names (DESIGN 5.10; HC 3.7).
+- CI checks: in `web.yml`, vitest with a mock of Airtable's scripting API (`input.config()`, `base.getTable()`, `table.updateRecordAsync()`) shows every mapped field filled from the golden justification.
+- Oracle: DESIGN 9.3's field table; the field names from WP-PG0. The real round trip is WP-PG12.
+
+### WP-PG3. Hackatime-compatible reads 1: identity and keys
+
+- Depends on: WP-PG0, WP-PG6.
+- Touches: `internal/server/hackatime/`.
+- Build: DESIGN 5.10's table rows for `GET /api/v1/authenticated/me`, `GET /api/v1/authenticated/api_keys` (a read-only `ptr_` token that can call stats, spans and `my/stats` for this user and this program only, never an ingest credential; HC DI 9) and `POST /api/admin/v1/user/get_user_by_email` (the program's admin key; only users connected to that program who granted `email:read`, else 404); `:uid` resolution of a numeric id, a Slack id, an HCA id, a username or `my`, in Hackatime's order (SP 10.5).
+- CI checks: contract tests replay WP-PG0's Stardance request shapes and compare responses with WP-PG0's Hackatime shapes; a `ptr_` token is refused by ingest.
+- Oracle: WP-PG0's captures.
+
+### WP-PG4. Hackatime-compatible reads 2: stats and trust
+
+- Depends on: WP-PG3, WP-SV7.
+- Touches: `internal/server/hackatime/`.
+- Build: `GET /api/v1/users/:uid/stats` and `GET /api/v1/users/my/stats` with `features=projects`, `start_date`, `end_date` and `total_seconds=true`; `filter_by_project` as an array and as a comma string; `test_param`, `no_ai_coding`, `boundary_aware` and `filter_by_category` accepted and ignored; credited seconds for the linked names; the extra `pairtime` object (`logged_s`, `handbook_s`, `ai_logged_s`, `witnessed_s`, `offline_s`, shares by level, `scoring_version`, `final`); `final: false` for windows that ended less than 48 hours ago (DESIGN 5.10); `trust_factor` embedded and at `GET .../trust_factor` always Hackatime's unscored value in its shape (JT must-fix 14); `GET /api/admin/v1/user/info_batch?ids=` for up to 2,000 ids, connected users only.
+- CI checks: contract tests from WP-PG0 for both `filter_by_project` forms; `trust_factor` is the unscored value for every seeded user, flagged or not; a window ending 47 hours ago reads `final: false`.
+- Oracle: WP-PG0's captures.
+
+### WP-PG5. Hackatime-compatible reads 3, and a Ruby client
+
+- Depends on: WP-PG4.
+- Touches: `internal/server/hackatime/`, `integrations/rails/check.rb`, `ci.yml` (one step with the runner's Ruby).
+- Build: `GET /api/v1/users/:uid/heartbeats/spans` (credited intervals as spans per linked project); `GET /api/v1/my/heartbeats` (200, an empty `heartbeats` list and `X-Pairtime-Note: heartbeats-not-stored`); `POST /api/hackatime/v1/users/current/heartbeats.bulk` (403 with `{"error": "pairtime accepts time only from the teen's own client"}`). A Ruby script written from scratch from WP-PG0's request list, making Stardance's calls against a test server (DESIGN 9.7 WP 3.12).
+- CI checks: the Ruby script gets the expected credited seconds for a fixture user with two linked names; the refused and empty calls answer exactly as DESIGN 5.10 says.
+- Oracle: WP-PG0's request list, exercised by a client in another language.
+
+### WP-PG8. Program kit
+
+- Depends on: WP-PG1, WP-PG2, WP-PG5.
+- Touches: `integrations/`.
+- Build: DESIGN 9.4's kit: a one-page "switch on pairtime in a day" guide for each tier; the Rails snippet for a second `HackatimeService` pointed at `https://<host>`; the Robert note ("change nothing; send the same Hackatime names") and a draft of the `kind: "pairtime"` proposal for the Telescreen team (DESIGN 5.10); the Ari `journals[]` bridge as a function that emits one entry per devlog window with `at`, `seconds` and `markdown` naming pairtime and the evidence link, never `hackatime_projects[]` or `program_seconds` (HC 3.6); the handbook text; the attribution rule of DESIGN 9.2; a 10-minute reviewer walkthrough of the review page.
+- CI checks: the bridge's output validates against the schema WP-PG0 wrote from Ari's documented keys.
+- Oracle: WP-PG0's Ari capture; DESIGN 9.2.
+
+### WP-PG9. Outcome ledger, progress page and R3 metrics
+
+- Depends on: WP-RV4.
+- Touches: `internal/server/metrics/`, `web/src/server/progress/`.
+- Build: the outcome ledger from outcome calls (and from webhooks once WP-PG7 lands); a public progress page by program with counts only (DESIGN 9.2); the weekly counts of DESIGN 9.8 (devices first seen, devices still uploading after four weeks, submissions created, decided and approved, approved hours, weighted-project equivalents, each route's install-to-submit rate); DESIGN 6.8's two R3 numbers (four-week retention by first-upload week; never-submitted share of credited seconds by monthly cohort); a CSV export for the weekly reconciliation with HQ.
+- CI checks: a small hand-checkable dataset (ten devices, two cohorts) yields the expected retention and never-submitted share; the public page contains no per-user value.
+- Oracle: DESIGN 6.8's definitions on data small enough to check by hand in the test's comment.
+
+### WP-CA0. Calibration intake
+
+- Depends on: WP-SB6, WP-UI3.
+- Touches: `internal/server/calibration/`, `internal/agent/submit/`, `web/src/local/onboarding/`.
+- Build: how a volunteer's labeled session reaches the raters (DESIGN 6.7 step 3; SM 7.2): a `calibration` program on the instance; a research-use consent card with "Not now" first; `pairtime submit --program calibration --session <id>`, which submits one work session with every prompt drawn, redacted and reviewed by the volunteer, plus a link to the volunteer's own recording; access for assigned labelers only; deletion 30 days after labeling; never visible to any program.
+- CI checks: without the consent record the submission is refused; a non-labeler gets 403; under a fake clock the reveal is deleted 30 days after its labels are saved.
+- Oracle: DESIGN 6.7's last paragraph and SM 7.2's privacy rules.
+
+### WP-CA1. Labeling mode
+
+- Depends on: WP-CA0, WP-RV1.
+- Touches: `web/src/server/review/labeling/`, `internal/server/calibration/`.
+- Build: EV WP4.10 on the review page: the volunteer's recording beside the hour strips; minute labels in SM 7.1's categories (`steering`, `verifying`, `integrating`, `debugging`, `lookup`, `waiting`, `loop`, `away`, `off_task`); two raters and an adjudicator per session; Cohen's κ computed in the app, with the 20-session calibration set flagged (SM 7.2); label export; consented "Was this right?" answers used to rank which sessions to label first, never to change credit (DESIGN 6.7 step 3).
+- CI checks: Playwright: labels save and export in SM 7.1's categories; κ for the worked example in Cohen's 1960 paper, as reproduced in standard references, comes out at the published value.
+- Oracle: a published worked example of Cohen's κ.
+
+### WP-PG12. Sandbox Airtable round trip [human]
+
+- Depends on: WP-PG2, WP-PG8, WP-OP2.
+- Touches: nothing; the result goes in the M4 issue.
+- Build: Karim, or a program author who agrees to help, makes a sandbox Airtable base with the handbook fields and the "Automation - Submit to Unified YSWS" button shape, installs the script, and runs one test submission from a test account through tier 0 and the script.
+- CI checks: none; the check is that every handbook field is filled and the review URL opens.
+- Oracle: Airtable itself.
+- Human: an Airtable account and about an hour.
+
+## M5: breadth, distribution and hardening
+
+Goal: from 12-14 to 12-31, widen coverage (R7), make install and update easy on the old Windows laptop (R8), and prove the trust and cost claims (R9, R11), without taking agent slots from M4 while any M4 WP is unblocked. Two items here have hard dates: the OS age signal ships before 2026-12-31 (DESIGN 8.2), and signing is needed before the typing module (M6). WPs marked cut-first follow DESIGN 9.7's cut order and are the first to drop if time runs short.
+
+Exit check: `loadtest.yml` green; the red-team step green or every remaining case linked to an open issue; signed Windows and macOS binaries from `release.yml` (once Karim's accounts exist); the age-signal WP merged by 12-31.
+
+### WP-AD10. Capture Copilot fixtures [human]
+
+- Depends on: WP-AD0.
+- Touches: `testdata/fixtures/copilot/**` only.
+- Build: `SCRIPTS.md` for Copilot agent mode in VS Code and for the Copilot CLI, with the camelCase hooks in `~/.copilot/hooks/pairtime.json`, the CLI's `events.jsonl`, VS Code's `chatSessions/`, one autopilot run and a subagent (DESIGN 5.1; HS 5).
+- Oracle: this capture is the oracle for WP-AD11.
+- Human: someone with Copilot enabled, on one real machine, about an hour.
+
+### WP-AD11. Copilot adapter
+
+- Depends on: WP-AD10, WP-AD3, WP-IN1.
+- Touches: `internal/adapters/copilot/`, `internal/install/`.
+- Build: the hooks planner in exec form only, because HTTP hooks need `COPILOT_HOOK_ALLOW_LOCALHOST=1` (HS 14); hook parsing with the payloads' own timestamps; `events.jsonl` and `chatSessions/` readers on the shared tailer; autopilot, `stop_hook_active` and subagent `agentId` as automation labels (SM 2.2).
+- CI checks: captured payloads and logs map to the expected events; a turn seen by hook and log counts once.
+- Oracle: WP-AD10's captures; HS 5.1 to 5.5.
+
+### WP-AD12. Capture Gemini CLI fixtures [human]
+
+- Depends on: WP-AD0.
+- Touches: `testdata/fixtures/gemini/**` only.
+- Build: `SCRIPTS.md` for Gemini CLI with hooks in `~/.gemini/settings.json`, the `~/.gemini/tmp/*/chats` and `logs.json` files, a non-TTY `-p` run and an `AfterAgent` deny-retry (DESIGN 5.1; HS 7).
+- Human: someone with Gemini CLI signed in, about an hour.
+
+### WP-AD13. Gemini CLI adapter (cut-first)
+
+- Depends on: WP-AD12, WP-AD3, WP-IN1.
+- Touches: `internal/adapters/gemini/`, `internal/install/`.
+- Build: the hooks planner (with `telemetry.logPrompts=false` if the teen has Gemini's telemetry on), hook parsing, the chats reader for live use and lookback, and the automation labels of SM 2.2 rules 2 and 4. Until it ships, the WakaTime bridge covers Gemini at level C (DESIGN 9.7 cut list).
+- CI checks: captured fixtures map to the expected events; a turn seen by hook and log counts once.
+- Oracle: WP-AD12's captures.
+
+### WP-AD14. Capture Devin and Cline fixtures [human]
+
+- Depends on: WP-AD0.
+- Touches: `testdata/fixtures/{devin,cline}/**` only.
+- Build: Devin Desktop and Devin CLI, which read the Claude-format hooks in `~/.claude/settings.json`, plus `~/.local/share/devin/transcripts` (and the Windows path, which HS 15 doesn't know, if found); Cline's file hooks on macOS or Linux after "Enable Hooks", and its `tasks/<id>/*.json` on Windows (DESIGN 5.1).
+- Human: someone with Devin and Cline signed in, on macOS or Linux and on Windows, about two hours.
+
+### WP-AD15. Devin and Cline adapters (cut-first)
+
+- Depends on: WP-AD14, WP-AD2, WP-AD3.
+- Touches: `internal/adapters/{devin,cline}/`, `internal/install/`.
+- Build: Devin attributed by the harness in the hook binary's parent chain and deduplicated against Claude Code's own events; Devin's transcript reader; Cline's hooks planner for macOS and Linux and the task reader on every OS, with Windows Cline as log reader plus presence only (TE 4.1).
+- CI checks: captured fixtures map; one prompt delivered through Claude-format hooks to both Claude Code and Devin counts once, for the right harness.
+- Oracle: WP-AD14's captures.
+
+### WP-AD18. `pairtime track`, Karim's AGENTS.md entry and the compliance counter
+
+- Depends on: WP-AG3, WP-SC1, WP-IN1, WP-PV1, WP-LG6.
+- Touches: `cmd/pairtime/`, `internal/adapters/track/`, `internal/install/agentsmd/`, `testdata/agents-md/`.
+- Build: DESIGN 5.4. `pairtime track --harness <name> "<text>"` on the hook path with `via = track`; the agent fills `harness` and `session_key` from the process tree when the call descends from a harness session, and E-8's `text_len`, `env_hints` and `log_match`; the text is redacted again with `pkg/redact`, stored in the vault and committed, so the challenge can draw it; in a sandbox the command tries the socket, then the local port, then exits 0 silently. The instruction-file writer: DESIGN 5.4's entry text verbatim between its `pairtime:begin v1` and `pairtime:end` markers, copied into `testdata/agents-md/entry-v1.md` as the oracle file; written into the user-level instruction file of every detected harness in DESIGN 5.4's list, with the warning when `~/.codex/AGENTS.override.md` exists, a printed entry for Cursor, `permissions.allow: ["Bash(pairtime track *)"]` for Claude Code, `--print-agents-md`, never into a repository; one consent-screen item per harness with DESIGN 5.4's cost line. The per-harness compliance counter (HS 11.3). DESIGN 13.1 items 2 and 3 are open; this WP follows the design as written until Karim decides.
+- CI checks: WP-FX4's cases (a), (b), (f) and (g) pass through the whole agent path, not only the scorer; golden files for every harness in DESIGN 5.4's list, including files with the user's own text above and below the block; the installed text equals `entry-v1.md` byte for byte; uninstall removes exactly the block.
+- Oracle: DESIGN 5.4's entry text and rules; WP-FX4.
+
+### WP-AD19. Plugin SDK, `pairtime emit` and the conformance kit
+
+- Depends on: WP-AG3, WP-SC2, WP-FX4.
+- Touches: `cmd/pairtime/`, `internal/adapters/plugin/`, `sdk/plugin/`.
+- Build: DESIGN 5.3 way 2. A `pairtime-plugin.toml` manifest (`id`, `version`, `harness`, `emits`, `hosts`); events as `pkg/event` JSON Lines through `pairtime emit --source plugin:<id>`, `POST http://127.0.0.1:<port>/v1/events` with the bearer token, or `inbox/<id>/*.jsonl`; validation against `docs/schema/event.schema.json`; `t` overwritten with the arrival time when more than 5 s off; provenance `plugin:<id>@<version>`; `via = hook` only when `emit`'s parent chain reaches a listed host, else `plugin`, and never what the sender says. `pairtime adapters test <fixtures>` as the conformance kit; `sdk/plugin/` with the spec and an example plugin in Python; every plugin listed in Settings with its last event time and parse failures.
+- CI checks: the example plugin passes the kit with the runner's `python3`; WP-FX4 case (c) sent over HTTP fills at most 20 s per turn; invalid events are refused and counted; a plugin that sets `via` itself is overridden.
+- Oracle: the hand-written JSON Schema (kept equal to Go by PR1's drift test); WP-FX4.
+
+### WP-AD20. Generic hook mode
+
+- Depends on: WP-AD19, WP-AD2.
+- Touches: `internal/adapters/generic/`, `internal/adapters/generic/mappings/`.
+- Build: DESIGN 5.3 way 1: `pairtime hook --harness <name> --event <prompt|stop|tool|permission|session_start|session_end> --map <mapping.toml>`, where the mapping names the JSON paths of the session id, cwd, prompt and tool fields and lists the `hosts` executables; `via = hook` when the parent chain reaches a listed host, else `plugin`. Ship a mapping for Claude Code's payload shape as the reference mapping.
+- CI checks: WP-AD1's Claude Code captures, run through the generic mapping, give the same prompt, stop and tool events as the native adapter for every mapped field.
+- Oracle: WP-AD1's captures and the native adapter's output on them.
+
+### WP-FX7. Red-team fixtures
+
+- Depends on: WP-FX4, WP-FX6.
+- Touches: `testdata/redteam/`, `ci.yml` (a red-team step).
+- Build: TP A3's attacks T1 to T15 and DESIGN 7.12's ladder as timelines with expected credit (TE WP8.4; JT graft 5): 0 for T1, T2, T3 with `input_keys`, T7 and T14; 0 witnessed seconds for T8; at most the free attempts for T15 (SM 7.3); plus a `track` loop with a jiggler, forged plugin sizes, forged editor heartbeats, an offline-flush fabrication (at most 10,800 s per submission, only with a forge push within 24 hours, never pre-approved), and withdraw-and-redraw (gains nothing). The step runs each through the client and server test harness. A case the code doesn't meet yet is marked `expected_fail` with an issue number; the step fails when a passing case regresses or an `expected_fail` case starts passing.
+- CI checks: the step itself; every case has an expected file.
+- Oracle: TP A3, SM 7.3's adversarial row and DESIGN 7.12.
+
+### WP-PV3. OS age signal (ships before 2026-12-31) [human]
+
+- Depends on: WP-IN2, WP-UI3.
+- Touches: `internal/agent/age/`, `internal/platform/darwin/`, `internal/install/`.
+- Build: DESIGN 8.2. From 2027-01-01, request the OS age-range signal at first launch; installs from before 2027 that update after 2026-01-01 request it before 2027-07-01. On macOS 26 and later the signal is Apple's Declared Age Range, which needs the `com.apple.developer.declared-age-range` entitlement: first check whether a notarized command-line binary can carry it, and if not, record "no signal". Windows and Linux record "no signal". Bands: under 13, 13 to 15, 16 to 17, 18 and over. An under-13 band refuses sign-in, stops capture and deletes local data with a message pointing at Hack Club's policy; other bands change nothing; the band stays on the device; declining proceeds with HCA as the check.
+- CI checks: a fake under-13 band refuses sign-in, stops capture and deletes local data; "no signal" proceeds; before 2027-01-01 under a fake clock nothing is requested; a scan of every request body in the client-server test finds no band.
+- Oracle: DESIGN 8.2 and the statute sections it cites.
+- Human: the entitlement check needs Karim's Apple Developer membership (WP-RL5) and a Mac on macOS 26.
+
+### WP-RL5. Code signing [human]
+
+- Depends on: WP-RL1.
+- Touches: `.github/workflows/release.yml`, `internal/agent/doctor/`.
+- Build: Windows signing through Azure Artifact Signing under Hack Club's organization, or SignPath Foundation (CP 4.3); macOS notarization of the CLI binaries with `quill` from the Linux runner (CP 4.4); a signed-build tag passed to the Go build so WP-TR5's listener is compiled only into signed binaries; without the secrets the job skips cleanly and the release notes say "unsigned"; `doctor` reports the signing state.
+- CI checks: with the secrets, `signtool verify /pa` on `windows-latest` and `codesign -v` on `macos-latest` pass on the release artifacts; without them, the signing job is skipped and the release is marked unsigned.
+- Oracle: the OS vendors' own signature checkers.
+- Human: Karim applies in week one for Azure Artifact Signing under Hack Club (identity validation takes 1 to 30 business days) and for an Apple Developer membership (DESIGN 9.6), then adds the secrets.
+
+### WP-RL6. VS Code extension
+
+- Depends on: WP-RL1, WP-IN2, WP-AD16.
+- Touches: `extension/vscode/`, `.github/workflows/{web,release}.yml`.
+- Build: DESIGN 5.11: an install channel and a status bar. Per-platform VSIX packages (`vsce package --target win32-x64` and the other targets of CP 4.2) carry the signed binary; first activation shows the consent screen and runs `pairtime install`; the status-bar item reads the local `statusbar/today` endpoint; release publishes to the Marketplace and Open VSX. No change-shape events in v1.
+- CI checks: `web.yml` packages every target; each VSIX loads under `@vscode/test-electron` and finds its binary; the status bar shows a fixture store's total.
+- Oracle: VS Code's own extension host.
+- Human: Karim creates the Marketplace publisher and the Open VSX namespace and adds their tokens.
+
+### WP-RL3. Package channels (cut-first) [human]
+
+- Depends on: WP-RL1.
+- Touches: `.github/workflows/release.yml`, `packaging/`.
+- Build: a Scoop bucket, a Homebrew tap and a winget manifest generated on release (CP 4.2); package-managed installs never self-update (CP 4.6).
+- CI checks: a tag on a fork produces every manifest; `scoop install` from the generated manifest works on `windows-latest` and `brew install` from the tap works on `macos-latest`.
+- Oracle: the package managers themselves.
+- Human: Karim creates the bucket and tap repositories and a token; winget submissions go through `microsoft/winget-pkgs` review.
+
+### WP-RL4. Self-update (cut-first)
+
+- Depends on: WP-RL1.
+- Touches: `internal/agent/updater/`, `internal/platform/*/`.
+- Build: CP 4.6: a check at agent start and daily; the signed manifest verified with the compiled-in key, then the download's SHA-256; `rename(2)` over the old binary on macOS and Linux; on Windows, rename `pairtime.exe` to `pairtime.old.exe`, move the new file in, restart, delete the old one on the next start; no self-update when a package manager owns the binary; hooks keep calling a stable path.
+- CI checks: on all three `platform.yml` jobs against a local manifest server: a good update swaps and restarts; a bad signature is refused; a hook call during the swap still lands, directly or through the inbox.
+- Oracle: the manifest signature; real file operations on each OS.
+
+### WP-OS9. Tray on Windows and Linux (cut-first)
+
+- Depends on: WP-AG4.
+- Touches: `internal/platform/{windows,linux}/`, `internal/agent/tray/`.
+- Build: `fyne.io/systray` in Windows and Linux files only, after confirming its cgo-free build (CP 5.3); a tooltip like "you 1h 12m, Claude 2h 40m"; a menu with "Open dashboard", "Pause for 1 hour" and "Quit". macOS gets no menu-bar helper in v1 (DESIGN 3.3).
+- CI checks: `CGO_ENABLED=0` cross-compiles still pass and the binary stays under 15 MB; a `windows-latest` smoke creates and removes the icon; `footprint.yml` stays green.
+- Oracle: the cross-compile itself; the OS's notification area.
+
+### WP-OS5. KDE and wlroots idle through `ext-idle-notify-v1`
+
+- Depends on: WP-OS4.
+- Touches: `internal/platform/linux/`.
+- Build: presence on KDE and wlroots compositors through `ext-idle-notify-v1`, either by purego `dlopen` of `libwayland-client` or with a pure-Go Wayland client that meets ground rule 4; the PR states which. Focus stays unavailable on Wayland (SM 3.2).
+- CI checks: in the Linux job, a headless `sway` (`WLR_BACKENDS=headless`) reports idle and resets it on synthetic input.
+- Oracle: the compositor's own idle notifications.
+
+### WP-OP3. Load test
+
+- Depends on: WP-SV8, WP-AG5, WP-PG4.
+- Touches: `.github/workflows/loadtest.yml`, `tools/loadtest/`.
+- Build: DESIGN 10.6's proof: synthetic clients at the 8x R11 peak (1,220 devices syncing every 60 s plus hook bursts, 5,000 stream viewers, program reads) against `pairtimed` in a container limited to 2 vCPU and 8 GB, for 15 minutes; a report artifact.
+- CI checks: p99 ingest latency under 250 ms, no 5xx, no writer backlog, server RSS under 1 GB.
+- Oracle: DESIGN 10.6's numbers, measured from the client side.
+
+### WP-SV11. Optional GitHub App [human]
+
+- Depends on: WP-SV10.
+- Touches: `internal/server/forge/github/`.
+- Build: DESIGN 5.8's optional App with Metadata and Contents read on repos the teen picks; push timestamps as the forge clock; for private repos, the `added`, `removed` and `modified` path arrays dropped on receipt; webhook signatures checked with `X-Hub-Signature-256`.
+- CI checks: GitHub's published webhook-signature example (secret "It's a Secret to Everybody", payload "Hello, World!") verifies; a recorded push payload for a private repo is stored with no paths.
+- Oracle: GitHub's documented signature example.
+- Human: Karim registers the App and stores its id and key (DESIGN 10.5 item 6).
+
+### WP-PG7. Webhooks (cut-first)
+
+- Depends on: WP-SB1, WP-PG0.
+- Touches: `internal/server/webhook/`.
+- Build: a signed webhook for each submission state change, including `submission.decided` and `submission.revoked`, with `X-Pairtime-Signature: sha256=<hex HMAC-SHA256 of "<X-Pairtime-Timestamp>.<body>">` and a 300 s tolerance, Robert's scheme (SP 10.2); retries with backoff. Tiers 0 and 1 don't need it (DESIGN 9.7 cut list).
+- CI checks: a verifier written from WP-PG0's description of Robert's scheme accepts the signatures and rejects a stale timestamp; retries back off.
+- Oracle: WP-PG0's Robert capture.
+
+### WP-SV16. Clubs and boards (cut-first)
+
+- Depends on: WP-SV12, WP-UI3.
+- Touches: `internal/server/club/`, `web/src/server/club/`.
+- Build: hashed join codes; a consent card; `GET /api/v1/clubs/:id/board` ranking build days over `BOARD_WINDOW_D` for signed-in members only; a shadowban for admins (TE 3.8; SP 3.4).
+- CI checks: non-members get 403; a member who hasn't consented doesn't appear; boards rank build days, never hours.
+- Oracle: DESIGN 6.2 D10 and TE 3.8.
+
+## M6: calibration and 1.0
+
+Goal: scoring 1.0.0 frozen and the R2 report published by 2027-01-04, before any program decision (DESIGN 6.7; JB must-fix 2); the typing module in signed builds before the first payout (JT must-fix 10); and the rest of the coach (R3). The first January decisions depend on this milestone, so calibration WPs outrank coach WPs here.
+
+Exit check: scoring 1.0.0 tagged and deployed; `POST .../outcome` stops returning 409; the R2 report published; `v1.0.0` released through WP-RL9's gate.
+
+### WP-CA2. Calibration tooling
+
+- Depends on: WP-CA1, WP-SC6, WP-PG11.
+- Touches: `tools/calibrate/`, `pkg/params/tables/`.
+- Build: SM 7.3 to 7.5: ±25% sensitivity per parameter; coordinate descent on a grid inside each parameter's source range with the asymmetric loss (an over-credited minute costs twice an under-credited one), the κ target as a constraint and leave-one-participant-out validation; the Beta(2.5, 7.5) prior on approved over logged (SM 7.4); the four baselines (Hackatime raw at `min(gap, 120 s)`, the handbook third, grit's published rules from PA 1.14, Claude Code's `active_time{type="user"}`); output is a new parameter table (a MINOR version, DESIGN 6.6) and the R2 report with every metric in SM 7.3's table. Real labels are processed only in a private repository's `workflow_dispatch` on encrypted data, never in this public repo (TE WP8.2).
+- CI checks: on synthetic labels generated from known parameters, the fitter recovers them within 10% (AD WP 5.6); the report renders from a synthetic dataset.
+- Oracle: planted parameters in synthetic data.
+
+### WP-CA3. Labeling, fit and freeze [human]
+
+- Depends on: WP-CA1, WP-CA2.
+- Touches: `pkg/params/tables/1.0.0.json`, `pkg/score/VERSION`, `docs/r2-report.md`.
+- Build: DESIGN 6.7 steps 1 to 4. Volunteers record at least five sessions each from 12-07 to 12-27; two raters label every session and a third adjudicates; if κ on the shared 20-session set is under 0.6, the label guide is revised first; the fit runs from 12-28 to 2027-01-03 in the private workflow; Karim reviews it, and an agent opens the PR that adds the 1.0.0 table, the sensitivity table and the baseline comparison. If the set is thin, freeze 1.0.0 with the v1 values and publish what was measured (DESIGN 11 risk 6).
+- CI checks: `score-regression` passes with the version bump; the report's numbers come from the fit run's artifact.
+- Oracle: the raters' labels.
+- Human: 40 to 60 volunteers aged 13 to 18, at least 40% on Windows (DESIGN 6.7 step 1), raters, an adjudicator, and Karim's approval. The deploy agent then sets `scoring_version = 1.0.0` on the instance.
+
+### WP-TR5. Typing module, signed builds only
+
+- Depends on: WP-RL5, WP-UI3, WP-OS1, WP-OS3, WP-OS4.
+- Touches: `internal/platform/*/typing*`, `internal/agent/typing/`.
+- Build: DESIGN 7.2 rank 5: per-15-second key counts and the injected-input share, never key identities or per-key times; Windows Raw Input with `RIDEV_INPUTSINK` and the `hDevice == 0` test for injected keyboard input (TP fact-check row 7); a listen-only `CGEventTap` on macOS; XInput2 with XTEST detection on X11; nothing on Wayland. Opt-in through a consent card with "Not now" first (D16). The listener files carry the signed-build tag from WP-RL5, so no unsigned binary contains a keyboard listener (JE must-fix 10). Feeds CC11.
+- CI checks: on `windows-latest`, keys sent with `SendInput` count as injected; under Xvfb, `xdotool` (XTEST) keys count as injected; a schema test proves no field can hold a key identity or a per-key time; `go tool nm` on an untagged build finds no listener symbol.
+- Oracle: input injected by the OS's own APIs.
+
+### WP-TR6. VM label and D17
+
+- Depends on: WP-TR5.
+- Touches: `internal/platform/cpuid/`, `pkg/score/`.
+- Build: DESIGN 6.2 D17: a VM label from CPUID through a small Go assembly function on amd64 and 386 (`unknown` on arm64), using the Hyper-V root-partition test (a non-zero leaf `0x40000007`) so Windows with VBS isn't misread (TP DI 11); on a labeled machine, minutes that are level A only because of the typing module drop to level B, and the label never lowers credit otherwise. Bumps `pkg/score/VERSION`.
+- CI checks: fixture CPUID values: a guest is labeled and a root partition isn't; module-only level A becomes B on a labeled machine and nothing else changes; GitHub's runners are virtual machines, so the label reads true on `ubuntu-latest`.
+- Oracle: the runner's real CPUID; the vendors' documented leaves.
+
+### WP-PV2. Recovery code, backups and `pairtime restore`
+
+- Depends on: WP-AG5, WP-LG6, WP-UI3.
+- Touches: `internal/agent/backup/`, `internal/server/backup/`, `cmd/pairtime/`.
+- Build: DESIGN 7.11's device-loss plan: an opt-in recovery code (128 random bits as 26 base32 characters in groups of four) offered with "Not now" first; `K_dev` wrapped with AES-256-GCM under `HKDF(recovery_code, "pairtime/v1/recovery")` and stored with `PUT /api/v1/devices/:id/recovery`; with backup on, daily ledger and vault segments encrypted under `HKDF(K_dev, "pairtime/v1/backup")` to `PUT /api/v1/devices/:id/backup` or `pairtime backup --to <dir>`; `pairtime restore` on a new install; backup segments older than 180 days deleted on the server (DESIGN 4.4).
+- CI checks: a backup made in one job restores in a second job on a fresh runner image, not into the same data directory, and the restored device reveals and verifies a fixture submission; a wrong code fails cleanly; a byte scan shows the server never receives the code or `K_dev`.
+- Oracle: `pkg/ledger` verification after a restore on a different machine.
+
+### WP-CO3. Logbook and project stories
+
+- Depends on: WP-CO1.
+- Touches: `internal/coach/`, `web/src/local/`, `cmd/pairtime/`.
+- Build: DESIGN 3.8's nightly logbook (error families beaten, such as `TypeError`, Rust `E0502` and `FAILED <test>`; languages; tools; firsts) and the project story (moments, commits, devlogs and credited time on one timeline, with the "before pairtime" band); `pairtime story --project . --since last-devlog --json`, which carries no prompt text unless `--include-prompts` is given (DESIGN 5.5).
+- CI checks: golden output for the SM fixtures; `--json` without `--include-prompts` contains none of the fixtures' prompt strings.
+- Oracle: the SM fixtures; DESIGN 5.5's rule.
+
+### WP-CO4. Devlog drafts, publishing and the coach skill
+
+- Depends on: WP-CO3, WP-SV12, WP-AD18.
+- Touches: `internal/coach/`, `web/src/local/`, `agents/`, `internal/install/agentsmd/`.
+- Build: DESIGN 3.8's devlog draft (weekly or on "New devlog": the facts since the last devlog, the teen's own commit subjects, the long fight and how it ended, two reflective prompts, the sentences left to the teen); publishing through `POST /api/v1/devlogs` exactly as previewed; a draft written through the teen's agent carries `ai_assisted = true` and publishes with the label (DESIGN 5.5); the coach skill `~/.claude/skills/pairtime-coach/SKILL.md` with `permissions.allow` for `Bash(pairtime recap *)`, `Bash(pairtime story *)` and `Bash(pairtime devlog *)`, and the three-line mention in the Codex, Gemini CLI and Copilot instruction files.
+- CI checks: golden drafts for the SM fixtures; a draft created by `pairtime devlog` from a process whose parent chain reaches a harness publishes with `ai_assisted`; the published text equals the preview byte for byte; golden skill and instruction files.
+- Oracle: DESIGN 3.8 and 5.5.
+
+### WP-CO5. Habit insights and shared recap feedback (cut-first)
+
+- Depends on: WP-CO3, WP-UI3.
+- Touches: `internal/coach/`, `web/src/local/`.
+- Build: opt-in weekly insights (verification share, hand-edit share, rejections and interrupts per hour, `asked_why` moments from local prompt-kind rules), each week compared only with the teen's own earlier weeks; opt-in sharing of "Was this right?" answers as calibration labels (DESIGN 3.8, 8.5; TE D8).
+- CI checks: nothing runs or uploads without its consent record; golden insights over a multi-week fixture.
+- Oracle: DESIGN 8.5's consent rule.
+
+### WP-RV6. Seeded known-answer cases and reviewer statistics
+
+- Depends on: WP-RV4, WP-FX7.
+- Touches: `internal/server/review/`, `web/src/server/review/`.
+- Build: DESIGN 7.10: seeded submissions built from SM 6's timelines and the red-team fixtures at about 2% of the queue, never reaching a program; each reviewer's accuracy on them; a second reviewer on every decision for a reviewer who keeps diverging; per-reviewer statistics for HQ (approval rate, hours approved per review, seconds per decision, seeded accuracy, spot-check outcomes). Must land before decisions open on 2027-01-04.
+- CI checks: over a simulated queue, seeded cases appear at 2% within tolerance; no seeded case reaches the program API, a webhook or the justification endpoint; statistics on a fixture history come out as computed by hand in the test.
+- Oracle: DESIGN 7.10.
+
+### WP-PG10. Ari `pairtime` source proposal
+
+- Depends on: WP-PG8.
+- Touches: `integrations/ari/`.
+- Build: a written proposal and a reference mapping from pairtime's submission rows to a `pairtime` time source in Ari's `src/lib/review/settlement.ts` (DESIGN 5.10; HC 3.6). The upstream change is Ari's maintainers' to accept, and Ari has no license in its metadata (HC OQ 7), so nothing is copied from it.
+- CI checks: unit tests of the mapping.
+- Oracle: WP-PG0's description of Ari's ingest keys.
+
+### WP-OP4. Move to a VPS before the first payout [human]
+
+- Depends on: WP-OP2.
+- Touches: `deploy/runbook.md` if a step needs fixing.
+- Build: run by the deploy agent: DESIGN 10.5's "Moving to a VPS": a Hetzner CCX13, or the AX42 fallback while CCX plans show "currently unavailable" (SP 9.4); restore from the replica; point the tunnel at the new host; stop the old one.
+- CI checks: `probe.yml` and `restore-drill.yml` green against the new host; `pairtimed doctor` green; the witness row count and the latest day root are the same before and after the move.
+- Oracle: probes from outside; the published day root.
+- Human: Karim rents the box and picks the date, before the native program pays out.
+
+### WP-RL8. Footprint reports from old laptops [human]
+
+- Depends on: WP-AG6, a release candidate.
+- Touches: `docs/footprint/` (redacted reports).
+- Build: at least five pre-2017 Windows laptops run the release candidate for a day of normal use, and their owners share `pairtime doctor --report`.
+- CI checks: none; the check is the numbers: warm hook round trip under 50 ms, RSS under 25 MB and idle CPU under 0.1% on each laptop (DESIGN 2, R8; 9.7).
+- Oracle: real hardware.
+- Human: alpha testers with old laptops, recruited in week one (DESIGN 9.6).
+
+### WP-RL9. The 1.0 release gate
+
+- Depends on: WP-RL5, WP-RL8, WP-CA3, WP-AD17, WP-TR5, WP-PV3.
+- Touches: `.github/workflows/release.yml`, `docs/release-checklist.md`.
+- Build: `release.yml` refuses `v1.0.0` and later unless the tagged commit has a green `e2e-wakatime.yml` run, the binaries are signed, the embedded parameter tables include 1.0.0, `docs/footprint/` holds at least five reports that meet the R8 numbers, and the release notes link the published R2 report.
+- CI checks: a dry run on a fork's tag fails for each missing condition, one at a time.
+- Oracle: the conditions themselves, checked mechanically.
+- Human: Karim tags `v1.0.0`.
+
+## Deploy
+
+The deploy is three WPs, and only the first is code. Nothing builds on Karim's host: `release.yml` builds and pushes the image, and the host pulls pinned tags (DESIGN 10).
+
+| WP | Who runs it | When | What it leaves behind |
+|---|---|---|---|
+| WP-OP1 | a coding agent | M3, as soon as WP-SV1 and WP-SV15 merge | the image on GHCR, `deploy/compose.yml`, `litestream.yml`, the cloudflared config, `pairtimed init`, `keys backup`, `doctor`, `runbook.md`, `restore-drill.yml` |
+| WP-OP2 | the deploy agent on Karim's host, following `deploy/runbook.md` | M3, target 2026-12-09, once Karim has supplied DESIGN 10.5's list | `https://<host>` serving the release, keys backed up to the offline age key, `probe.yml` and the restore drill green, Healthchecks pinging |
+| WP-OP4 | the deploy agent | January, before the native program's first payout | the same compose file on a Hetzner CCX13 or AX42, restored from the replica, tunnel moved |
+
+After WP-OP2 the instance changes only through these steps, each a reviewed diff or a config change Karim approves:
+
+- Upgrades: merge the Renovate PR after CI passes, then `docker compose pull` and restart. Migrations are additive in v1 and run at start; a rollback is the previous tag (DESIGN 10.5 step 6).
+- `signups_open = true` once the controller is named and the privacy notice is published (DESIGN 8.6). Before that, testers stay local-only.
+- `profile_default = "public"` once the controller signs the assessment in DESIGN 8.3 and counsel has looked at it.
+- `scoring_version = 1.0.0` on 2027-01-04 after WP-CA3, which also lifts the `409 scoring_not_frozen` gate.
+- Weekly: `restore-drill.yml` runs on its schedule and on every image bump.
+
+## Work that needs a human or a real machine
+
+Everything else runs in GitHub Actions. These are listed in the order they are needed, with the WP that waits on each.
+
+| Needed by | What | Who | Blocks |
+|---|---|---|---|
+| 2026-11-20 | The `oracle-change` and `erratum` labels; approval of the CI and errata rule changes in `AGENTS.md` (DESIGN 13.1 item 9) | Karim | WP-CI1 |
+| 2026-11-20 to 11-27 | The week-one asks of DESIGN 9.6: the Quality and Integrity brief, the native-program proposal, Azure Artifact Signing under Hack Club and the Apple Developer membership, the HCA OAuth client, the privacy-hub `aud`, naming the controller, the Telescreen and Ari notes, recruiting alpha testers and calibration volunteers | Karim, with HQ | WP-RL5, WP-OP2, WP-SV13 in production, WP-CA3, sign-ups |
+| about 11-23 | Claude Code captures on Windows and on macOS or Linux | someone with Claude Code | WP-AD2, WP-AD3, WP-AD4, WP-AD16, WP-AD20 |
+| before the first tag, about 11-30 | The release signing key: run `tools/release keygen`, store the private half as `RELEASE_SIGNING_KEY` | Karim | WP-RL1's signed tags |
+| 12-01 | 20 to 30 alpha testers, at least 10 on pre-2017 Windows laptops (DESIGN 9.6) | Karim | M1's purpose, WP-RL8 |
+| about 12-02 | Codex and Cursor captures | testers with those harnesses | WP-AD7, WP-AD9 |
+| before WP-OP2 | `pairtime-witness` and its token; DESIGN 10.5's host, tunnel, HCA client, buckets, age key, Healthchecks URLs; the hostname `<host>` (DESIGN 13.1 item 4) | Karim | WP-SV17 in production, WP-OP2 |
+| WP-OP2, about 12-09 | Running the deploy on Karim's host | the deploy agent | M3's exit, everything after |
+| when the controller is named | Flipping `signups_open`, later `profile_default` | Karim | witnessed time for testers, public profiles |
+| about 12-17 | A sandbox Airtable base and one test submission | Karim or a willing program author | WP-PG12, M4's exit |
+| mid-December | Copilot, Gemini CLI, Devin and Cline captures | testers with those harnesses | WP-AD11, WP-AD13, WP-AD15 |
+| when granted | Signing secrets for Windows and macOS | Karim | WP-RL5, then WP-TR5 and WP-RL9 |
+| before 12-31 | A Mac on macOS 26 and the Apple membership, to test the Declared Age Range entitlement | Karim | WP-PV3 |
+| before release | Marketplace publisher and Open VSX namespace tokens; Scoop bucket and Homebrew tap repositories; the optional GitHub App | Karim | WP-RL6, WP-RL3, WP-SV11 |
+| 12-07 to 2027-01-03 | Volunteers' recorded sessions, two raters and an adjudicator per session, the private fit run, Karim's approval of 1.0.0 | volunteers, raters, Karim | WP-CA3, every program decision |
+| before the first payout | A VPS and a date for the move | Karim, then the deploy agent | WP-OP4 |
+| before 1.0 | `pairtime doctor --report` from at least five pre-2017 Windows laptops | alpha testers | WP-RL8, WP-RL9 |
+| 1.0 | The `v1.0.0` tag | Karim | WP-RL9 |
+
+Open decisions in DESIGN 13.1 don't block any WP. The plan builds what the design says until Karim decides: Karim's AGENTS.md entry goes to every detected harness and passes the message with personal information removed, capped at 400 characters (items 2 and 3, WP-AD18); the optional sentinel ships as a stub (item 5, WP-TR3); Go stays at 1.26 (item 8); sign-in is HCA only (item 11).
+
+## Deliberately out of v1
+
+These are left out on purpose. Each has a reason in the design, and none is needed for a program to count pairtime hours.
+
+- **v1.5 capture:** Zed `threads.db` and Warp `warp.sqlite` readers, Goose and Continue readers, Cursor's `state.vscdb` reader (it can be gigabytes on a spinning disk), shell integration with OSC 133 and 633 marks for `CMD` and `TEST` anchors, WSL mode, `pairtime mcp`, and the opt-in server-side WakaTime endpoint for machines where the client can't run (DESIGN 5.1, 9.7). Until then those harnesses earn level C through `track` and the bridge.
+- **Editor change-shape events and the `editor_typing` label** (DESIGN 5.11; JB must-fix 3). The VS Code extension is an install channel and a status bar in v1.
+- **v2:** the browser extension for browser chat and app builders, opt-in sampled screen evidence, GLiNER redaction at reveal time, per-user typing profiles, and a macOS menu-bar app (DESIGN 9.7).
+- **Dolos similarity checks against Unified DB code URLs** (DESIGN 7.12, U4), v1.5.
+- **Detectors beyond SM 8.7's published set.** Only the sentinel stub ships; whether Hack Club runs a private one is DESIGN 13.1 item 5.
+- **OTLP over protobuf and zstd-compressed Codex rollouts** (DESIGN 3.12). `doctor` counts the skipped `.jsonl.zst` files.
+- **Postgres in production.** The SQL stays portable and `postgres.yml` keeps it working; SQLite carries R11's load (DESIGN 10.6).
+- **Microsoft Store, npm, Snap and Flatpak channels, OG images and README badges** (CP 4.2, 4.5; DESIGN 9.7 cut list).
+- **Sign-up without Hack Club Auth** (DESIGN 13.1 item 11), and SSH, Codespaces and Chromebook setups, which stay stated gaps (DESIGN 11 risk 21).
+- **Upstream changes in other people's code.** Robert's `kind: "pairtime"` and Ari's `pairtime` time source are proposals pairtime writes (WP-PG8, WP-PG10) and their maintainers decide on.
+- **Software for audits and interviews.** The audit in DESIGN 7.9 is a process run by people in a Slack huddle; v1 builds only the draw, the interview commits and the outcome record.
