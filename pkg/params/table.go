@@ -21,8 +21,8 @@ import (
 
 // Rat is an exact rational number in lowest terms with a positive
 // denominator. Rational parameters are read as a Rat so that integer-only
-// code can use them: x times COMPOSE_CPS is x * r.Num() / r.Den(), rounded
-// however the caller's rule says.
+// code can use them: x times r is x * r.Num() / r.Den(), rounded however
+// the caller's rule says, and x divided by r is x * r.Den() / r.Num().
 type Rat struct {
 	num, den int64
 }

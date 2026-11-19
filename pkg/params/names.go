@@ -124,7 +124,9 @@ const (
 
 // SM 8.5, dark flow and progress.
 const (
-	// MINHASH_PERMS is the number of MinHash values per prompt.
+	// MINHASH_PERMS is the number of MinHash values per prompt. The event
+	// model fixes the same number as event.MinHashSize, and the ledger
+	// commits the sketches, so a new value is a change to both.
 	MINHASH_PERMS IntParam = "MINHASH_PERMS"
 	// SHINGLE_WORDS is the length of a word shingle, in words (SM 8.5
 	// SHINGLE).
