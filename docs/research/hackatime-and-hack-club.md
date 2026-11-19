@@ -18,8 +18,13 @@ Code was read at these commits (HEAD of the default branch on 2026-11-19 unless 
 | [hackclub/lookout](https://github.com/hackclub/lookout) | AGPL-3.0 | `be1b7b9230f2` | 2026-11-18 |
 | [hackclub/data-warehouse](https://github.com/hackclub/data-warehouse) | none in API metadata | `4ff995dddcb7` | 2026-11-17 |
 | [wakatime/wakatime-cli](https://github.com/wakatime/wakatime-cli) | BSD-3-Clause | `7ab26b5db6fe` (branch `develop`) | 2026-11-05 |
+| [hackclub/ari](https://github.com/hackclub/ari) (ship review) | none in API metadata | `637233962a0f` | 2026-11-16 |
+| [hackclub/ari-webhooks](https://github.com/hackclub/ari-webhooks) | none in API metadata | `01a47d67aa91` | 2026-11-10 |
+| [hackclub/flavortown](https://github.com/hackclub/flavortown) | none in API metadata | `371026446d1b` | 2026-11-19 |
+| Robert clients: hackclub/the-carnival, hackclub/pixl, hackclub/trmnt, hackclub/Alchemize | | default branch | 2026-11-19 |
+| [YSWS Project Submission Guidelines](https://hackclub.gitbook.io/ysws-project-submission-guidelines/BLBRN8LIfoCZhFV6oMNR/) (GitBook, Markdown pages) | | "Last updated: March 2026" | fetched 2026-11-19 |
 
-Licenses come from `gh api repos/OWNER/REPO` (`.license.spdx_id`) on 2026-11-19. Web pages were fetched on 2026-11-19.
+Licenses come from `gh api repos/OWNER/REPO` (`.license.spdx_id`) on 2026-11-19. Web pages were fetched on 2026-11-19. Telescreen's own source is not public as far as I could find.
 
 ## 1. Hackatime
 
@@ -407,7 +412,7 @@ Programs never write to the unified base directly. Each program keeps its own su
 
 Related tables in the same base: `ysws_programs` (`Weighted–Total`, `Weighted Projects This Month`, `Weighted Projects–2026`, `Average weight`, `Average Hours Per Grant`, `Cost Per Hour`, `Budget per hour`, `Start Date`, `End Date`, `Review Channel ID`, and more), `ysws_authors`, `ysws_spot_checks` and `ysws_spotchecks` (first, second and third review with `needs_nonzero_hours`, `needs_public_repo_url`, `needs_playable_url`, `is_duplicated`, `needs_under_19_birthday`, `ai_checked`, `ai_score`), `eliminated_projects` and `project_fines`. Spot checks mean Hack Club HQ re-reviews a sample of approved rows after the program has approved them.
 
-None of these fields name a time tracker. The unified DB holds only an hour number and a justification string, and the program owns that number. So a project counts toward the bounty when a program puts it in this table with hours that came from pairtime. Judging that will probably mean reading `Override Hours Spent Justification` or asking the program (see Open questions).
+None of the `approved_projects` fields names a time tracker. The unified DB holds an hour number and a justification string, and the program owns that number. The tracker is named one step earlier, in the program's submission table. Quality and Integrity's handbook defines structured justification fields, among them `Justification - Alternate Tracking Method` for "something other than Hackatime or Lapse", which an automation folds into the unified justification text (section 3.7). So a project counts toward the bounty when a program puts it in this table with hours that came from pairtime, and the evidence for that is the `Alternate Tracking Method` text inside `Override Hours Spent Justification` (see Open questions).
 
 ### 3.2 How a weighted project is calculated
 
@@ -456,6 +461,8 @@ Other fields Stardance writes per submission (`build_airtable_fields`): `review_
 | Summer of Making (summer 2025) | Each devlog pulls `GET https://hackatime.hackclub.com/api/v1/users/<slack_id>/stats?filter_by_project=<keys>&start_date=<previous devlog>&end_date=<this devlog>&features=projects&total_seconds=true&test_param=true` into `devlogs.duration_seconds` | Devlogs created after 2025-07-19 are capped at 36,000 s (10 h) (`capped_duration_seconds`). Ship certification by "Shipwrights" and an admin YSWS review (`app/controllers/admin/ship_certifications_controller.rb`, `app/controllers/admin/ysws_reviews_controller.rb`). Stardance inherited this design | [hackclub/summer-of-making](https://github.com/hackclub/summer-of-making) `app/models/devlog.rb` |
 | Shipwrecked (Aug 2025, in-person, 130 attendees) | Per linked Hackatime project, `HackatimeProjectLink.rawHours` with an optional `hoursOverride` ("Override for the Hackatime reported hours"); effective hours prefer the override | A `Review` model with a "Justification for approved hours (from checklist)", plus shipped and viral approvals and project flags | [hackclub/shipwrecked](https://github.com/hackclub/shipwrecked) `prisma/schema.prisma`, `lib/hackatime-links.ts` |
 
+Flavortown, running now, uses a third review stack. [hackclub/flavortown](https://github.com/hackclub/flavortown) at `371026446d1b` pulls finished reviews from `https://review.hackclub.com` (`YswsReviewService::BASE_URL` in `app/services/ysws_review_service.rb`). Each devlog there carries `origSecs` (Hackatime) and `approvedMins`, and the review is by "the Guardian of Integrity" (`app/jobs/ysws_review_sync_job.rb`, `build_justification`). The sync job also deduplicates across programs by Code URL. If the project is already in the Unified DB under another program, it submits only `new_hours - unified_hours`, and only when the increase is more than 0.5 h. So hours on a project that some other program already paid for count only as the increase, whichever tracker measured them.
+
 Over three programs the pattern hardens. High Seas paid out raw Hackatime hours. Summer of Making put a reviewer and a 10-hour-per-devlog cap between Hackatime and the payout. Stardance added an integrity team with automated flags and deductions on top. Hackatime is never the final authority: every program stores a raw number and a reviewer-approved number, and the unified DB stores the approved one with a justification.
 
 This is where BOUNTY.md R9's numbers come from: 123,400 Hackatime hours submitted to Stardance, 27,600 approved so far. Every hour went through a person who decided how much of the raw Hackatime figure to keep. The tracker supplies the starting number and the evidence; the program's reviewers decide the hours. A tracker that makes step 3 faster and more consistent is what program authors would value.
@@ -478,6 +485,118 @@ Program apps are mostly Rails apps cut from the same pattern (Summer of Making, 
 | Guidance from HQ | "We will work with Quality and Integrity to provide good guidance around how to use new time tracking tools" | BOUNTY.md, Zach in thread |
 
 Two points follow. First, programs want a smaller, more defensible number with evidence attached, not a bigger one. A tracker that hands reviewers a pre-deflated figure, plus the reasons and the evidence, saves them the work that cut Stardance's 123,400 hours to 27,600. Second, the integration cost has to be close to zero. A program author already has a `HackatimeService`. A pairtime client that answers the same calls, or a pairtime figure that shows up inside Hackatime, gets adopted. One that needs a new review workflow probably doesn't, unless HQ requires it.
+
+### 3.5 Telescreen and Robert: the shared fraud review desk
+
+Telescreen (`https://telescreen.hackclub.com`) is Hack Club's shared review workbench. Its pages sit behind Hack Club Auth ("Sign in with your Hack Club account to continue", fetched 2026-11-19), and I found no public source repo (`gh search repos telescreen --owner hackclub` returns nothing), so everything below comes from the public program code that calls it. Its API docs are at `https://telescreen.hackclub.com/robert/docs`, also behind the login. GitHub code search for `telescreen.hackclub.com` (2026-11-19) finds clients in at least 12 Hack Club repos, among them hackclub/the-carnival, hackclub/pixl, hackclub/trmnt, hackclub/Alchemize, hackclub/savepoint, hackclub/halflife, hackclub/crossroads, hackclub/live, hackclub/shrink, hackclub/fellow-ysws and hackclub/stardance.
+
+It replaced the older fraud desk. Stardance's `app/helpers/telescreen_helper.rb` rewrites old `joe.fraud.hackclub.com/profile/<id>` and `/case/<n>` links to Telescreen's `/subjects/<id>` and `/joe/cases/<n>`. Pixl's client says "Joe's old equivalent (lib/joe.ts) is retired" and "manual fraud triage is retired regardless of whether Robert is configured yet" (`apps/internal-dashboard/lib/robert.ts`).
+
+Reviewer deep links (Stardance `telescreen_helper.rb`, savepoint `app/models/telescreen.rb`, halflife `src/lib/review-platform/telescreen.ts`):
+
+| URL | Opens |
+|---|---|
+| `/subjects/<slack id or numeric Hackatime id>` | A person's subject page ("review cockpit") |
+| `/workbench/hackatime/overview?u=<hackatime uid>&p=<key1,key2>` | Hackatime evidence for the listed project keys |
+| `/workbench/hackatime?slack=<SLACK_ID>` | The same, looked up by Slack id |
+| `/workbench/lapse?u=<hackatime uid>&t=<lapse id>` | One Lapse timelapse |
+| `/joe/cases/<n>` | Cases migrated from Joe |
+
+Every workbench is keyed on the Hackatime user id. Hackatime and Lapse are the evidence sources Telescreen knows about.
+
+**Robert** is "Telescreen's review desk for YSWS submissions" (hackclub/trmnt `src/src/lib/server/robert.ts`). A program sends each shipped project to Robert, a fraud reviewer scores it, and the program records its own final decision back. The API, reconstructed from four clients: hackclub/the-carnival `src/lib/telescreen/client.ts` and `shared.ts`, hackclub/pixl `apps/internal-dashboard/lib/robert.ts`, hackclub/trmnt `src/src/lib/server/robert.ts`, and hackclub/Alchemize `src/lib/server/telescreenClient.ts`, all at their default branch on 2026-11-19:
+
+| Method and path | Body | Returns |
+|---|---|---|
+| `POST /api/v1/ysws/projects` | `name`, `kind` (`"hackatime"` or `"hardware"`), `codeUrl`, `demoUrl?`, `submitter: {slackId?, hackatimeId?}`, `hackatimeProjects: string[]` (Alchemize caps it at 50 distinct names), `journal?: [{title, content, loggedAt, hours?}]` (hardware), `externalId` | `{id, state, created}`. Resending the same `externalId` returns the same project, so retries are idempotent |
+| `GET /api/v1/ysws/projects/:id` | | `{id, externalId, state, trustScore, creditedSeconds, review: {trustScore, note, at}, outcome: {status, reason, at}, submittedAt}`. trmnt reads it wrapped as `{project: ...}`; the other clients read it bare |
+| `GET /api/v1/ysws/projects?state=&limit=&offset=` | | `{total, projects[]}`, newest submission first |
+| `POST /api/v1/ysws/projects/:id/outcome` | `{status: "approved" \| "rejected", reason?}` | Only while `awaiting_outcome`; `409` once an outcome is final |
+| `DELETE /api/v1/ysws/projects/:id` | `{signedOffBy}` | Withdraws a submission; refused with `409` once a reviewer has scored it |
+| `PATCH /api/v1/ysws/event` | `{webhookUrl}` | `{webhookUrl, secret}` |
+
+- Auth is `Authorization: Bearer <key>`. "The API key belongs to exactly one Robert event, so no path names an event" (the-carnival). Alchemize refuses keys that don't start with `ysws_`.
+- States: `awaiting_review`, then `awaiting_outcome` (scored above 4, waiting for the program), `rejected_fraud` (scored 4 or below, final) or `decided`.
+- Score bands (the-carnival `shared.ts`): "1–4 Fraud: final rejection", "5–7 Doubtful: usually a deduction; the granting admin must acknowledge it", "8–10 Clean".
+- `creditedSeconds` is Robert's own figure. Alchemize sends "the Hackatime project names Robert needs to credit time" and nothing else about hours, so Robert computes credited time from Hackatime itself.
+- Webhooks: `X-Robert-Signature` is `sha256=` plus the hex HMAC-SHA256 of `<X-Robert-Timestamp>.<raw body>` under the event's secret, and receivers reject timestamps more than 300 s off (trmnt, Alchemize). Pixl notes that the webhook for an outcome decided in Robert's own UI "carries no review note (only outcome.reason)", so it also polls the list endpoint.
+- Data minimisation is the norm: Alchemize sends "Never the owner's email, name, address, birthdate or Unified ID."
+
+What this means for pairtime. Robert is where Fraud Squad's verdict now enters a program, and its only time-bearing input is `kind: "hackatime"` with Hackatime project names. A program that adopts pairtime still needs a fraud verdict from somewhere. Pairtime hours reach that review in one of two ways: as Hackatime projects (forwarding, Design implication 13), or through a new Robert `kind` with a pairtime evidence workbench, which only the Telescreen team can add. This is the most direct form of Zach's "We will work with Quality and Integrity to provide good guidance" (BOUNTY.md), and it belongs in the first conversation with HQ (Open questions).
+
+### 3.6 Ari: the ship-review platform and its hours math
+
+[hackclub/ari](https://github.com/hackclub/ari) (web app: SvelteKit, Prisma, Bun; no license in API metadata; commit `637233962a0f`, 2026-11-16) and [hackclub/ari-webhooks](https://github.com/hackclub/ari-webhooks) (Go ingestion and background service on the same database; `01a47d67aa91`, 2026-11-10) make up Hack Club's "ship-review platform". The README says "programs use them for verifying that a project submission follows the [YSWS Submission guidelines](https://hack.club/ysws-rules)". Robert (3.5) gives the fraud verdict; Ari is where a reviewer settles the hours.
+
+It is open core. "There are private sections of the platform that are under a private repo, these contents are not to be shown to the public for containing fraud tooling or showing how certain flags work in specific" (ari `README.md`). One Dockerfile builds a public image, where `.dockerignore` keeps `private/` out, and a private image that gets `private/web` as a separate build context. Pairtime's AGPL server could use the same split for its detection rules (Design implication 11).
+
+**Ingest.** Programs send signed ship webhooks to `POST /api/ingest/:program`, plus withdraw and status calls, and Ari sends signed outbound webhooks back with retries (ari-webhooks `README.md`). JSON keys accepted (`internal/ingest/validate.go`, `payload.go`): `external_id`, `maker` (`email`, `name`, `slack_id`, `hackatime_id`), `title`, `description`, `repo_url`, `demo_url`, `thumbnail_url`, `track` (`software` or `hardware`), `shipped_at`, `evidence[]`, `hackatime_projects[]`, `journals[]` (`at`/`date`, `seconds`/`minutes`/`hours`, `text`, `markdown`, `email`), `meta`, `is_update`, `update_message`, `collaborators[]`. A ship must carry at least one of Hackatime projects, journals or program hours (`hackatime_projects_or_journals_or_program_hours`). A program can also assert time directly with `program_seconds`, `program_minutes` or `program_hours` (bounded at 1,000 h), which the code calls "a program-asserted, evidence-free figure" (`parseProgramSeconds`).
+
+**Time sources and cuts.** `src/lib/review/settlement.ts` knows four time sources: `hackatime`, `journals`, `lapse` and `program`. The reviewer settles a ship row by row. Rows are Hackatime time per person, per-commit `codingSeconds`, "Time after the last commit", each devlog entry, each timelapse clip (`lengthSeconds`), and program-added time. `clampSeconds` holds each settled row at or below its captured value, so a reviewer can only cut. Deductions decided outside the review (`deductionsSeconds`) are fixed. When tracked time is zero but commits exist, the ship settles from commits (`usesCommitFallback`). The review page also shows per-file hours (`ariw."submissionFileHours"`: `path`, `seconds`, `bytes`, `status`) and the maker's past approved projects with their `creditedSeconds` (`src/lib/server/review/loadExternal.ts`).
+
+**Hackatime capture** (`internal/integrations/hackatime/spans.go`):
+
+- Ari recomputes Hackatime's count itself from raw heartbeats: "sessions break on gaps > 120s; each session after the first carries the capped 120s re-entry gap. Sum of durations == Hackatime's official total." It cross-checks against `GET /api/v1/users/:id/projects/details` (the "oracle") and falls back to the public `heartbeats/spans` endpoint when the two disagree. A 403 there means the maker turned stats off, and Ari treats it as a privacy setting, not a failure.
+- **`ai coding` time is credited at one third**: "AI-assisted time is credited at one third" (`aiCreditShare = 1.0 / 3`). The comment on `DiscountAiCoding` reads "an 8-hour AI session is still 8 hours of sitting there, it just is not credited like hand-written code." The cut is stored as `HoursBreakdown.aiDiscountedMinutes` (migration `00005`) and shown to reviewers as `aiDiscountedSeconds`. Spans from the fallback endpoint carry no category, so they can't be discounted.
+- Heartbeats that Lapse synced (entity `<name> (<id>)`, type `timelapse` or category `timelapsing`) are removed from the Hackatime figure when the clip is credited on its own row, "so the same recording is not paid twice".
+- `internal/ingest.CurrentEvidenceVersion` is stored per submission. When "capture or hours math" changes, open submissions are re-ingested and decided ones keep their settled numbers (migration `00012_integer_seconds.sql`). This is the versioning that Design implication 5 asks of pairtime.
+
+Public flag kinds include `MARATHON_SESSION`, `HOURS_REUSE` and `IDLE_DEVLOG` (migration `00004_time_flag_checks.sql`) and a phantom-files flag (`00003`); the rest live in the private repo.
+
+**The justification format is a Quality and Integrity standard.** `internal/outbound/justification.go`: "Override Hours Spent Justification (YSWS handbook, Quality and Integrity): the internal evidence record behind the hours a program credits. Field names and the comma-separated string shapes are the handbook's, not ours." The fields are:
+
+| Field | Shape | Written by |
+|---|---|---|
+| `hackatime_projects` | `"<project> M/D/YYYY-M/D/YYYY, ..."` (UTC dates of the evidence window) | System |
+| `hackatime_user_id` | Hackatime numeric id, "so a spot-checker can pull up the same heartbeats the reviewer read" | System |
+| `lapse_links` | Comma-separated Lapse URLs | System |
+| `technical_features` | Prose | Reviewer |
+| `deflation_reason` | Prose | Reviewer |
+
+Programs opt in per program (`Program.hoursJustification`); programs on "the legacy flow" get no block.
+
+What this means for pairtime:
+
+1. Three AI policies are already in production, and they disagree. Hackatime's leaderboard credits `ai coding` at 90% for three hours a day, then decays (1.4). Stardance counts it at full weight (`no_ai_coding=false`). Ari credits it at one third. Pairtime's credited time for AI-assisted work has to be easier to defend than Ari's flat third. A reviewer used to Ari will ask why pairtime credits more, and the answer has to be visible evidence of the human's part.
+2. The handbook decides what evidence a spot-checker can follow. Today it names Hackatime and Lapse. For pairtime hours to be checkable after approval, the handbook needs a field such as `pairtime_links` (stable review URLs) that Quality and Integrity would have to add.
+3. Ari already has the integration shape pairtime needs: a time source with rows a reviewer can cut. A `pairtime` source would list credited intervals (prompt-and-review cycles, test-and-fix loops) as rows, each with captured seconds and a link to evidence. Until Ari supports it, a program could pass pairtime's figure as `program_seconds`, but Ari treats that as evidence-free, which defeats the point.
+
+### 3.7 Quality and Integrity's rules for hours (the YSWS handbook)
+
+HQ's rules for what goes into the Unified DB are the [YSWS Project Submission Guidelines](https://hackclub.gitbook.io/ysws-project-submission-guidelines/BLBRN8LIfoCZhFV6oMNR/) (`https://hack.club/ysws-rules` redirects there). It is a GitBook maintained by `@lfd`, who calls it "a recompilation of the rules that have been in place ... not a cage", to be "revised and updated" when a program conflicts with a rule. I read the Markdown versions of its pages on 2026-11-19. Most pages say "Last updated: March 2026"; Project Exceptions says June 2026. Ari's code calls this "the YSWS handbook" (3.6).
+
+**Hours policy** ([Override Hours Spent](https://hackclub.gitbook.io/ysws-project-submission-guidelines/BLBRN8LIfoCZhFV6oMNR/override-hours-spent.md)):
+
+- The field "records the number of hours being approved", and the approved hours "should represent the *genuine effort* put into building the project."
+- "Default to Deflation": "When a reviewer has doubts about the accuracy of the claimed hours, the correct response is to **deflate aggressively**. ... **When in doubt, deflate.** ... give them the benefit of the doubt on intent, but not on the number."
+- Outright fraud ("heartbeats generated by a script rather than actual coding activity", plagiarism, "A commit history that was manufactured after the fact") is not deflated to zero. It never enters the database.
+- On AI: "The key question is not 'how much of the code did AI write?' but rather 'how much genuine effort did the submitter invest?'" and "**AI slop is not eligible.** A project that was generated in a single prompt with no meaningful iteration, testing, or refinement is not a real project. If the submitter did not engage with the output (did not debug it, did not shape it, did not learn from it), then there is no genuine effort to reward. Reject these submissions outright." Programs "may define **stricter** AI usage criteria than the ones described here, but they may **not** be more relaxed."
+- **The one-third rule.** "If the project is using Hackatime and some amount of time tracked is categorized as 'ai coding' by Wakatime, that time must be deflated **to at most ⅓ of its original amount** unless there is significant evidence proving that more time should be credited." The stated reason is that WakaTime "is incentivized to overtrack hours spent on AI coding due to business plan, so these projects are tracking the time that AI is working on a prompt as active coding time even though the user could be doing anything (and is likely not coding) while it's running." Worked example: 4 h of coding plus 3 h of `ai coding` gives "at most 5 hours of justifiable time". This is the policy that Ari's `aiCreditShare = 1.0 / 3` implements (3.6).
+- Art and assets may count if part of the core project, but no more than 30% of approved hours. For an update, submit "only the hours tracked since the last update".
+
+**Justification** ([Override Hours Spent Justification](https://hackclub.gitbook.io/ysws-project-submission-guidelines/BLBRN8LIfoCZhFV6oMNR/override-hours-spent-justification.md)). The standard: "someone who was not involved in the review should be able to read this justification, follow the links, and reach the same conclusion you did." The field is "**not public-facing**". Programs fill structured fields that an automation combines into the Unified DB's justification, or write one templated justification containing every element:
+
+| Field | Include when | Notes from the handbook |
+|---|---|---|
+| Hackatime Project Name(s) and Date Range(s) | Using Hackatime | Comma-separated, e.g. `hackatime-project 7/20/2026-7/22/2026, hackatime-project-2 7/21/2026-7/23/2026`. "Can/should be automated" |
+| Submitter Hackatime ID | Using Hackatime | Numeric id |
+| Lapse Link(s) | Using Lapse | Comma-separated; for coding Lapses, how much was on-task and what deflation followed |
+| Specific Technical Features | Always | Human-written; "realtime multiplayer, procedurally-generated worlds, cloud saving", not "React" |
+| Deflation Justification | Hours were deflated | The deflated-to number and why |
+| **Alternate Tracking Method** | "You are tracking time using something other than Hackatime or Lapse" | "a brief explanation of what method you used (ex. self-reported by user, base amount for project of this type, in-house YSWS-specific tracker) and why you are confident that the number of hours submitted ... are accurate according to your method." The explanation "can be automated"; subjective methods also need a human-written reason |
+| Additional Justification | Suspicious characteristics, or extra links | e.g. "the project page on a custom YSWS review platform" |
+
+These map one-to-one onto Airtable fields in program bases. The `wrangler` base (`appznGjUoC1o6jLZd`) table `ysws_project_submission` (`tblAv8vzzQClBi5xR`) has `Justification - Hackatime Project Name(s) + Date Range(s)`, `Justification - Submitter Hackatime ID`, `Justification - Lapse Links, comma-separated`, `Justification - Specific Technical Features`, `Justification - Deflation Justification`, `Justification - Alternate Tracking Method`, `Justification - Additional Justification`, `Automation - Unified Justification`, `Automation - Submit to Unified YSWS`, `Hours claimed`, `AI usage disclaimer` and `Linked lapse/lookout/hackatime links` (data-warehouse `orpheus_engine/defs/airtable/generated_ids.py` at `4ff995dddcb7`). The `snowglobe` base's `projects` table has Ari's versions: `ari_hackatime_justification`, `ari_hackatime_user_id`, `ari_lapse_links`, `ari_technical_features`, `ari_deflation_reason`, `ari_justification_extra`, `ari_approved_hours_paid`.
+
+**Spot-checks** ([Spot-Checks](https://hackclub.gitbook.io/ysws-project-submission-guidelines/BLBRN8LIfoCZhFV6oMNR/spot-checks.md)). Verdicts are Accepted, "Needs Changes (fine issued)" and "Rejected (fine issued)". A project with either of the last two "is removed from the Unified Database". Grounds include "Submitted project does not match the reviewer justification (ex. hour mismatch ...)", a justification that "does not contain all required elements", and "Required evidence (ex. Hackatime projects) cannot be located using the information provided". The [shipped-project page](https://hackclub.gitbook.io/ysws-project-submission-guidelines/BLBRN8LIfoCZhFV6oMNR/what-makes-a-project-shipped.md) and the [required fields](https://hackclub.gitbook.io/ysws-project-submission-guidelines/BLBRN8LIfoCZhFV6oMNR/required-submission-fields.md) add that a Code URL must be public, with "multiple commits that reflect the development progress" ("a 20-hour project with only one commit does not follow the guidelines").
+
+What this means for pairtime:
+
+1. **There is already a legal path for a new tracker.** A program that tracks with pairtime fills "Alternate Tracking Method" with an automated explanation of pairtime's method and puts the pairtime review URL in "Additional Justification". No HQ change is needed to start. A dedicated field (like `Lapse Link(s)`) would come later, once Quality and Integrity trust the tool.
+2. **The one-third rule is pairtime's opening.** Every Hackatime-tracked AI hour is capped at a third "unless there is significant evidence proving that more time should be credited." Pairtime's job is to be that evidence. It should report, for AI-assisted time, how much the human was present and engaged, so a reviewer can credit more than a third where the evidence supports it, and less where it doesn't. The fairness case runs both ways: a person who spent 3 of 3 hours steering and reviewing deserves more than 1 hour, and an agent left running overnight deserves none.
+3. **"AI slop" has a definition pairtime can check:** a single prompt with "no meaningful iteration, testing, or refinement". The tracker can flag one-shot sessions (one prompt, no test runs, no manual edits, no follow-up prompts) before a reviewer sees them.
+4. **Evidence links have to survive spot-checks.** If a spot-checker can't open the evidence, the project is removed and the program fined. Pairtime's review pages and uploaded evidence for submitted hours must stay reachable by HQ reviewers, signed in with HCA, for as long as spot-checks can happen. The handbook doesn't give that window (Open questions).
+5. **Defaults favour under-counting.** "When in doubt, deflate" means pairtime should report a conservative credited number and show what it left out. The pitch to programs is fewer spot-check fines, not more hours.
 
 ## 4. Lapse and Lookout
 
