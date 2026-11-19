@@ -94,7 +94,9 @@ func validDayRollup() Rollup {
 // 4.8 h corroborated, 0.8 h witnessed, 0.2 h offline and 0.1 h backfilled;
 // it credited 4.6 h (62%) of the AI-assisted time; 71% of credited time
 // was level A. The level-C 0.1 h is the backfilled band, and here it is
-// all backfilled time.
+// all backfilled time. Its Deflation Justification excludes agent-only
+// runtime 2.1 h, re-roll loops 0.6 h and idle reading 0.5 h, which are
+// the 3.2 h between Hackatime's 9.1 h and pairtime's 5.9 h.
 func handbookTotals() SubmissionTotals {
 	const h = 3600
 	return SubmissionTotals{
@@ -102,7 +104,7 @@ func handbookTotals() SubmissionTotals {
 		WitnessedS: 20160, OfflineS: 720, BackfilledS: 360,
 		LevelAS: 15080, LevelBS: 5800, LevelCS: 360,
 		BandCorroboratedS: 17280, BandWitnessedS: 2880, BandOfflineS: 720, BandBackfilledS: 360,
-		AgentOnlyS: 2 * h, ExcludedLoopsS: 0.3 * h, IdleS: h,
+		AgentOnlyS: 2.1 * h, ExcludedLoopsS: 0.6 * h, IdleS: 0.5 * h,
 		AILoggedS: 7.4 * h, CodingLoggedS: 1.7 * h, HandbookS: 1.7*h + 7.4*h/3,
 		AICreditedS: 4.6 * h, HandCreditedS: 1.3 * h, AIRatio: ptr(4.6 / 7.4),
 	}
@@ -532,10 +534,13 @@ func TestSubmissionTotalsValidate(t *testing.T) {
 		}, "ai_ratio: must be null"},
 		{"no negative totals", func(s *SubmissionTotals) { s.IdleS = -1 }, "idle_s:"},
 	})
-	// DESIGN 9.3's handbook text rounds these: "allows at most 4.2 h",
-	// "credited 5.9 h: 4.8 h corroborated, 0.8 h witnessed, 0.2 h offline,
-	// 0.1 h backfilled", "credited 4.6 h (62%)" and "71% of credited time had
-	// keyboard-level evidence (level A)".
+	// DESIGN 9.3's handbook text rounds these: "Hackatime logged 9.1 h, 7.4 h
+	// of it as AI coding", "allows at most 4.2 h", "credited 5.9 h: 4.8 h
+	// corroborated, 0.8 h witnessed, 0.2 h offline, 0.1 h backfilled",
+	// "credited 4.6 h (62%)" and "71% of credited time had keyboard-level
+	// evidence (level A)". Its Deflation Justification reads "deflated from
+	// Hackatime's 9.1 h to pairtime's 5.9 h: agent-only runtime 2.1 h,
+	// re-roll loops 0.6 h, idle reading 0.5 h excluded".
 	tot := handbookTotals()
 	hours := func(s float64) float64 { return math.Round(s/360) / 10 }
 	percent := func(part, whole float64) float64 { return math.Round(100 * part / whole) }
@@ -543,6 +548,8 @@ func TestSubmissionTotalsValidate(t *testing.T) {
 		name      string
 		got, want float64
 	}{
+		{"Hackatime logged 9.1 h", hours(tot.LoggedS), 9.1},
+		{"7.4 h of it AI coding", hours(tot.AILoggedS), 7.4},
 		{"the handbook allows 4.2 h", hours(tot.HandbookS), 4.2},
 		{"pairtime credited 5.9 h", hours(tot.CreditedS), 5.9},
 		{"4.8 h corroborated", hours(tot.BandCorroboratedS), 4.8},
@@ -552,6 +559,11 @@ func TestSubmissionTotalsValidate(t *testing.T) {
 		{"4.6 h of AI time credited", hours(tot.AICreditedS), 4.6},
 		{"62% of AI time credited", math.Round(*tot.AIRatio * 100), 62},
 		{"71% of credited time at level A", percent(tot.LevelAS, tot.CreditedS), 71},
+		{"agent-only runtime 2.1 h excluded", hours(tot.AgentOnlyS), 2.1},
+		{"re-roll loops 0.6 h excluded", hours(tot.ExcludedLoopsS), 0.6},
+		{"idle reading 0.5 h excluded", hours(tot.IdleS), 0.5},
+		{"deflated by 3.2 h from 9.1 h to 5.9 h", hours(tot.LoggedS - tot.CreditedS), 3.2},
+		{"the three exclusions are the whole 3.2 h", hours(tot.AgentOnlyS + tot.ExcludedLoopsS + tot.IdleS), 3.2},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			if tt.got != tt.want {
