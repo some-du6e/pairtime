@@ -93,7 +93,7 @@ func TestFragmentSecretsRemoveTheToken(t *testing.T) {
 	// Shaped like a base64-encoded JWT: "ZXlK" ("eyJ" encoded), then the
 	// encoded "alg" header field jwt-base64 looks for, then 40 or more
 	// base64 characters.
-	jwt64 :="ZXlKaGJHY2lPaUpJVXpJMU5pSXNJblI1Y0NJNklrcFhWQ0o5LmV5SnBjM01pT2lKcWIyVWlMQTBLSUNKbGVIQWlPakV6TURBNE1Ua3pPREFzRFFvZ0ltaDBkSEE2THk5bGVHRnRjR3hsTG1OdmJTOXBjMTl5YjI5MElqcDBjblZsZlEuZEJqZnRKZVo0Q1ZQLW1COTJLMjd1aGJVSlUxcDFyX3dXMWdGV0ZPRWpYaw"
+	jwt64 := "ZXlKaGJHY2lPaUpJVXpJMU5pSXNJblI1Y0NJNklrcFhWQ0o5LmV5SnBjM01pT2lKcWIyVWlMQTBLSUNKbGVIQWlPakV6TURBNE1Ua3pPREFzRFFvZ0ltaDBkSEE2THk5bGVHRnRjR3hsTG1OdmJTOXBjMTl5YjI5MElqcDBjblZsZlEuZEJqZnRKZVo0Q1ZQLW1COTJLMjd1aGJVSlUxcDFyX3dXMWdGV0ZPRWpYaw"
 	tests := []struct {
 		name string
 		text string
