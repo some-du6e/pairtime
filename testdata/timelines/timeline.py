@@ -64,7 +64,9 @@ def encode(v):
     if isinstance(v, int):
         return str(v)
     if isinstance(v, float):
-        raise TypeError("use Seconds or int, not float")
+        # Only the hand-read files hold floats, such as an approximate
+        # ratio. Event fields use Seconds, which encodes exactly.
+        return str(int(v)) if v.is_integer() else repr(v)
     if isinstance(v, str):
         return json.dumps(v, ensure_ascii=False)
     if isinstance(v, list):
@@ -483,3 +485,93 @@ def turn(fx, submit, stop, *, session, turn_key, origin, prompt_class=None, sm=N
     if sm:
         t["sm"] = sm
     return t
+
+
+class Rand:
+    """A deterministic number source: SHA-256 of a seed and a counter.
+    Python's random module would do, but its output isn't promised across
+    versions, and the generators must reproduce byte for byte."""
+
+    def __init__(self, seed):
+        self.seed = seed
+        self.n = 0
+
+    def below(self, n):
+        self.n += 1
+        h = hashlib.sha256(f"{self.seed}:{self.n}".encode()).digest()
+        return int.from_bytes(h[:8], "big") % n
+
+    def between(self, lo, hi):
+        """An integer in [lo, hi]."""
+        return lo + self.below(hi - lo + 1)
+
+
+class Bucket:
+    """SM 2.4's reading bucket for one session, used only to check that a
+    fixture's events give the bucket SM describes. It isn't the scorer.
+
+    Amounts are fractions of a second (fractions.Fraction), fills happen at
+    their event's time, the cap evicts the oldest entries, entries expire
+    BUCKET_TTL_S after they were filled, and draining takes the oldest
+    first."""
+
+    READ_WPM, DIFF_LPM, TOOL_LINES_MAX = 180, 8, 4
+    BASE_S, MAX_S, TTL_MS = 20, 600, 7_200_000
+
+    def __init__(self):
+        from fractions import Fraction
+        self.F = Fraction
+        self.entries = []  # [fill_ms, seconds]
+
+    def amount(self, kind, data):
+        F = self.F
+        if kind == "agent.output":
+            return F(60 * data["words"], self.READ_WPM) + F(60 * data["code_lines"], self.DIFF_LPM)
+        if kind == "agent.tool":
+            lines = data["lines_added"] + data["lines_removed"] + min(data["visible_output_lines"], self.TOOL_LINES_MAX)
+            return F(60 * lines, self.DIFF_LPM)
+        return F(0)
+
+    def reset(self, t, base):
+        self.entries = [[t, self.F(base)]] if base else []
+
+    def fill(self, t, seconds):
+        if seconds <= 0:
+            return
+        self.entries.append([t, self.F(seconds)])
+        over = self.total() - self.MAX_S
+        while over > 0:
+            if self.entries[0][1] <= over:
+                over -= self.entries[0][1]
+                self.entries.pop(0)
+            else:
+                self.entries[0][1] -= over
+                over = 0
+
+    def expire(self, t):
+        self.entries = [e for e in self.entries if t - e[0] <= self.TTL_MS]
+
+    def total(self):
+        return sum((e[1] for e in self.entries), self.F(0))
+
+    def drain(self, seconds):
+        """Drains up to seconds and returns how much it could."""
+        got = self.F(0)
+        need = self.F(seconds)
+        while need > 0 and self.entries:
+            take = min(need, self.entries[0][1])
+            self.entries[0][1] -= take
+            need -= take
+            got += take
+            if self.entries[0][1] == 0:
+                self.entries.pop(0)
+        return got
+
+
+def hackatime_replay(times):
+    """SM 5.3's logged_s rule over sorted Unix ms times: the sum of
+    min(gap, 120 s) between consecutive records, in seconds."""
+    total = 0
+    for a, b in zip(times, times[1:]):
+        total += min(b - a, 120_000)
+    return total / 1000

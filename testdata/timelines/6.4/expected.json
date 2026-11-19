@@ -1,0 +1,248 @@
+{
+  "fixture": "6.4",
+  "title": "A /goal agent running unattended overnight",
+  "sm": "docs/design/struggle-metric.md 6.4",
+  "date": "2026-11-20",
+  "timezone": "Europe/Berlin",
+  "utc_offset": "+01:00",
+  "os": "linux",
+  "input_keys": true,
+  "evidence": "A",
+  "witness": "witnessed",
+  "device": "d_2038d182522a",
+  "projects": {"p_b1de4629be47": "pixel-forge"},
+  "window": {"start": "2026-11-20T22:37:00Z", "end": "2026-11-21T06:37:00Z", "local": "23:37-07:37"},
+  "rows": [
+    {
+      "start": "2026-11-20T22:37:00Z",
+      "minutes": 1,
+      "local": "23:37",
+      "bucket": true,
+      "credited_s": 50,
+      "credit": {
+        "p_b1de4629be47": {"P": 50}
+      },
+      "uncredited": {"X.no_anchor": 10},
+      "agent_running_s": 0,
+      "sm": "23:37",
+      "erratum": "2026-11-19-sm-6.4-prompt-lengths"
+    },
+    {
+      "start": "2026-11-20T22:38:00Z",
+      "minutes": 1,
+      "local": "23:38",
+      "bucket": true,
+      "credited_s": 60,
+      "credit": {
+        "p_b1de4629be47": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "23:38"
+    },
+    {
+      "start": "2026-11-20T22:39:00Z",
+      "minutes": 1,
+      "local": "23:39",
+      "bucket": true,
+      "credited_s": 60,
+      "credit": {
+        "p_b1de4629be47": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "23:39"
+    },
+    {
+      "start": "2026-11-20T22:40:00Z",
+      "minutes": 1,
+      "local": "23:40",
+      "bucket": true,
+      "credited_s": 60,
+      "credit": {
+        "p_b1de4629be47": {"SUP": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 60,
+      "sm": "23:40"
+    },
+    {
+      "start": "2026-11-20T22:41:00Z",
+      "minutes": 1,
+      "local": "23:41",
+      "bucket": true,
+      "credited_s": 60,
+      "credit": {
+        "p_b1de4629be47": {"SUP": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 60,
+      "sm": "23:41"
+    },
+    {
+      "start": "2026-11-20T22:42:00Z",
+      "minutes": 1,
+      "local": "23:42",
+      "bucket": true,
+      "credited_s": 60,
+      "credit": {
+        "p_b1de4629be47": {"SUP": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 60,
+      "sm": "23:42"
+    },
+    {
+      "start": "2026-11-20T22:43:00Z",
+      "minutes": 1,
+      "local": "23:43",
+      "bucket": true,
+      "credited_s": 40,
+      "credit": {
+        "p_b1de4629be47": {"SUP": 40}
+      },
+      "uncredited": {"X.absent": 20},
+      "agent_running_s": 60,
+      "sm": "23:43"
+    },
+    {
+      "start": "2026-11-20T22:44:00Z",
+      "minutes": 386,
+      "local": "23:44-06:09",
+      "bucket": true,
+      "credited_s": 0,
+      "credit": {},
+      "uncredited": {"X.absent": 23160},
+      "agent_running_s": 23160,
+      "sm": "23:44 to 07:29",
+      "note": "The agent runs alone until 06:10:00; every second is X.absent, its turns are X.automated and its time is agent-only.",
+      "derived": ["uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-21T05:10:00Z",
+      "minutes": 80,
+      "local": "06:10-07:29",
+      "bucket": false,
+      "codes": ["X.absent"],
+      "sm": "23:44 to 07:29",
+      "note": "The agent has finished and nothing is credited, so these minutes have no bucket (SM 5.1).",
+      "derived": ["bucket"]
+    },
+    {
+      "start": "2026-11-21T06:30:00Z",
+      "minutes": 1,
+      "local": "07:30",
+      "bucket": true,
+      "credited_s": 60,
+      "credit": {
+        "p_b1de4629be47": {"READ": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "07:30"
+    },
+    {
+      "start": "2026-11-21T06:31:00Z",
+      "minutes": 1,
+      "local": "07:31",
+      "bucket": true,
+      "credited_s": 60,
+      "credit": {
+        "p_b1de4629be47": {"READ": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "07:31"
+    },
+    {
+      "start": "2026-11-21T06:32:00Z",
+      "minutes": 1,
+      "local": "07:32",
+      "bucket": true,
+      "credited_s": 60,
+      "credit": {
+        "p_b1de4629be47": {"READ": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "07:32"
+    },
+    {
+      "start": "2026-11-21T06:33:00Z",
+      "minutes": 1,
+      "local": "07:33",
+      "bucket": true,
+      "credited_s": 60,
+      "credit": {
+        "p_b1de4629be47": {"READ": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "07:33"
+    },
+    {
+      "start": "2026-11-21T06:34:00Z",
+      "minutes": 1,
+      "local": "07:34",
+      "bucket": true,
+      "credited_s": 60,
+      "credit": {
+        "p_b1de4629be47": {"P": 41, "READ": 19}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "07:34",
+      "erratum": "2026-11-19-sm-6.4-prompt-lengths"
+    },
+    {
+      "start": "2026-11-21T06:35:00Z",
+      "minutes": 1,
+      "local": "07:35",
+      "bucket": true,
+      "credited_s": 60,
+      "credit": {
+        "p_b1de4629be47": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "07:35"
+    },
+    {
+      "start": "2026-11-21T06:36:00Z",
+      "minutes": 1,
+      "local": "07:36",
+      "bucket": true,
+      "credited_s": 60,
+      "credit": {
+        "p_b1de4629be47": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "07:36"
+    }
+  ],
+  "totals": {
+    "credited_s": 810,
+    "credited_by_project": {"p_b1de4629be47": 810},
+    "credited_by_reason": {"P": 331, "SUP": 220, "READ": 259},
+    "uncredited": {"X.absent": 23180, "X.no_anchor": 10},
+    "agent_running_s": 23400,
+    "agent_only_s": 23180,
+    "ai_credited_s": 810,
+    "hand_credited_s": 0
+  },
+  "stated": ["credited_s", "agent_running_s", "agent_only_s", "ai_credited_s", "hand_credited_s"],
+  "approx": {
+    "ai_logged_s": {"about": 23500, "sm": "Hackatime would log about 23,500 s of ai coding for the night"},
+    "handbook_s": {"about": 7800, "sm": "the flat third would credit about 7,800 s (2 h 11 min)"},
+    "ai_ratio": {"about": 0.03, "sm": "ai_ratio is about 0.03"}
+  },
+  "errata": ["2026-11-19-sm-6.4-prompt-lengths"],
+  "notes": [
+    "The lead of the 23:40:00 prompt is 120 + 75 / 1.5 = 170 s and that of the 07:37:00 prompt 120 + 61 / 1.5 = 161 s, with 40.67 s of typing rounded as SM rounds it. The quoted prompts have 73 and 60 characters; see the erratum.",
+    "From 23:43:40 every second is X.absent although the agent runs: no presence wins over an agent with nothing to show (SM's 23:43 row). Those seconds are agent-only time all the same, so agent_only_s is 23,400 - 220 credited during the run.",
+    "The overnight row's seconds follow from SM's times: the tail ends at 23:43:40, the agent finishes at 06:10:00 and he unlocks at 07:30:00.",
+    "This fixture's agent events replay to 23520 s under min(gap, 120 s); SM says about 23,500.",
+    "The bucket holds 341 s when he starts the follow-up's lead at 07:34:19; the 07:37:00 prompt resets it."
+  ]
+}
