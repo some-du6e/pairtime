@@ -911,12 +911,12 @@ def command_text(cmd):
 
 
 def check_path_form(path):
-    """10.6's path form: '/' separators, no empty, '.' or '..' component, no
-    trailing '/'; relative to the project root, or absolute from '/' or an
-    upper-case drive 'X:/'."""
+    """10.6's path form: '/' separators and never '\\', no empty, '.' or '..'
+    component, no trailing '/'; relative to the project root, or absolute
+    from '/' or from an upper-case drive letter, ':' and '/'."""
     body = path
-    if len(path) >= 3 and "A" <= path[0] <= "Z" and path[1:3] == ":/":
-        body = path[3:]
+    if len(path) >= 2 and path[0] in ALPHA and path[1] == ":":
+        body = path[3:] if "A" <= path[0] <= "Z" and path[2:3] == "/" else ""
     elif path.startswith("/"):
         body = path[1:]
     if "\\" in path or any(part in ("", ".", "..") for part in body.split("/")):
