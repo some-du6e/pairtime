@@ -1,13 +1,25 @@
 # Prior art, measurement science, motivation, and server cost
 
-Status: draft in progress
+Status: research complete, fact-check pending
 
 Track: priorart. Started 2026-11-19. Covers what already exists for tracking time and effort in AI-assisted coding, what research says separates engaged work from passive work, what makes tracking motivating for teens, and whether the server fits R11's $500/month budget.
 
 Requirement IDs (R1-R11, A) refer to [docs/BOUNTY.md](../BOUNTY.md).
 
+## Key findings
+
+1. **No existing tool measures the human's part of AI-assisted work.** WakaTime, Hackatime and vibe-log all start the clock from agent transcript timestamps, so an unattended agent run counts as the human's time (1.1, 1.2, 1.5).
+2. **grit already implements this thesis.** It's an AGPL-3.0 bounty entry created about 45 minutes after the announcement, with transcripts, an OS idle bitmap, turn-based credit windows, a server-witnessed hash chain, reviewer flags and a SQLite/SSE server. pairtime has to win on validated accuracy, harness coverage, motivation and, above all, program adoption (1.14).
+3. **Time on task doesn't separate learning from delegating; the kind of human input does.** In Anthropic's 2026 trial the lowest scorers (24%) spent the most time (31 min), while conceptual questions and explanation requests went with 65-86% scores. A 2026 study of 19,418 student turns and a 2026 prompt taxonomy (HADT) show the same split in logs (2.2).
+4. **Verification is the largest human activity, and expert steering makes the agent do more, not less.** CUPS found 22.4% of time went to verifying. Anthropic found expert prompts trigger 12 agent actions vs 5 for novices. Credit reading, reviewing, testing and fixing by hand, and never penalize long agent runs as such (2.2).
+5. **People can't report their own AI-assisted time.** METR found estimates off by about 40 points, and concurrent agents broke its wall-clock timing. pairtime must measure human minutes, deduplicated across sessions (2.2).
+6. **Engaged and passive work can be told apart locally without uploading content.** The signals are OS presence, human-typed prompts, reading time vs output length, review decisions and interrupts, hand edits, test transitions, human debugging and progress. Re-rolls, repetition, regular timing, fix-it loops, autopilot and losses disguised as wins all have concrete detectors (3).
+7. **Motivation should come from informational feedback and consistency awards.** Streak counters and hour leaderboards produce token activity and gaming, as the GitHub natural experiment and Hackatime's leaderboard shadowbans show (4).
+8. **R11 is easy if the client computes credit.** That's about 1 GB/month of derived rows and 2.5-10 requests/s on average, which one Hetzner CCX13-class box plus object storage handles for about $49/month, or about $150/month with a standby (10-30% of the cap). What breaks the budget: server-side LLM calls, storing every transcript, and screen capture (5).
+
 ## Contents
 
+0. Key findings
 1. Prior art: tools that track or analyze AI-assisted coding
 2. Measurement science: productive struggle and how people program with AI
 3. Signals that separate engaged from passive work
@@ -40,10 +52,10 @@ The short version: every existing tool measures one of three things. It measures
 ### 1.2 Hackatime: WakaTime-compatible server with an AI discount
 
 - **Repo**: [hackclub/hackatime](https://github.com/hackclub/hackatime), MIT, commit `43bde10` (2026-11-19). Rails + Postgres. The sibling doc `hackatime-and-hack-club.md` covers it in depth; this entry is only what matters for prior art.
-- **What it measures**: WakaTime heartbeats (it accepts the WakaTime API), with a much shorter join: `app/models/concerns/heartbeatable.rb` sums `LEAST(time - LAG(time), heartbeat_timeout_duration)` per user, where `heartbeat_timeout_duration` defaults to **2 minutes**, not WakaTime's 15. Only categories `coding` and `ai coding` count toward totals (`where(category: [ "coding", "ai coding" ])`).
+- **What it measures**: WakaTime heartbeats (it accepts the WakaTime API), with a much shorter join: `app/models/concerns/heartbeatable.rb` sums `LEAST(time - LAG(time), heartbeat_timeout_duration)` per user, where `heartbeat_timeout_duration` defaults to **2 minutes**, not WakaTime's 15. Leaderboards count only categories `coding` and `ai coding` (the `leaderboard_eligible` scope); streaks exclude `browsing`.
 - **AI handling**: `app/javascript/pages/Home/signedIn/AiCodingMeter.svelte` shows an "AI vs Human Coding" split from `stats["ai coding"]` vs `stats.coding`. `app/models/leaderboard_entry.rb` discounts AI time on the leaderboard: "AI coding earns 90% for the first three hours of a day. After that the rate decays exponentially, halving roughly every 1.4 hours, so a day of AI coding can never be worth more than 90% * (3h + 2h) = 4.5 hours." Constants: `AI_CREDIT_RATE = 0.9`, `AI_FULL_RATE_SECONDS = 3h`, `AI_DECAY_SECONDS = 2h`.
 - **Borrow**: the 2-minute gap cap (it keeps idle tails short and is what Hack Club reviewers already calibrate against). The daily diminishing-returns curve as a fallback cap for any signal pairtime can't verify.
-- **Falls short**: the discount is a flat haircut on agent-driven time. It can't tell a student reviewing every diff from one who walked away, so it under-credits the first and over-credits the second. Stardance's 123,400 submitted vs 27,600 approved hours (BOUNTY.md R9) is the result.
+- **Falls short**: the discount is a flat haircut on agent-driven time. It can't tell a student reviewing every diff from one who walked away, so it under-credits the first and over-credits the second. That's the backdrop to Stardance, where reviewers approved 27,600 of 123,400 submitted hours, mostly by deflating hours by hand (BOUNTY.md R9).
 
 ### 1.3 git-ai: line attribution in git notes
 
@@ -94,7 +106,7 @@ The short version: every existing tool measures one of three things. It measures
 
 - **Repo**: [ActivityWatch/activitywatch](https://github.com/ActivityWatch/activitywatch), MPL-2.0, about 19,700 stars, last push 2026-11-15. Python and Rust.
 - **What it measures**: active window (app and title), AFK state, browser tab, editor file, per user, all local. No server, no accounts.
-- **How**: watchers send *heartbeats* to a local server on `localhost:5600`. A heartbeat merges with the previous event when the data is identical and it arrives within `pulsetime` seconds, so steady state costs one row update instead of one row per poll. The AFK watcher ([aw-watcher-afk](https://github.com/ActivityWatch/aw-watcher-afk), MPL-2.0) polls input every `poll_time = 5` s and marks AFK after `timeout = 180` s without input, sending heartbeats with `pulsetime = timeout + poll_time` (`aw_watcher_afk/config.py`, `afk.py`).
+- **How**: watchers send *heartbeats* to a local server on `localhost:5600`. A heartbeat merges with the previous event when the data is identical and it arrives within `pulsetime` seconds, so steady state costs one row update instead of one row per poll (merge semantics from ActivityWatch's docs, not re-read). The AFK watcher ([aw-watcher-afk](https://github.com/ActivityWatch/aw-watcher-afk), MPL-2.0) polls input every `poll_time = 5` s and marks AFK after `timeout = 180` s without input, sending heartbeats with `pulsetime = timeout + poll_time` (`aw_watcher_afk/config.py`, `afk.py`).
 - **Borrow**: the heartbeat-with-pulsetime merge, which is the cheapest correct way to store "still active" on a low-spec laptop (R8). The idea that the AFK signal is *presence*, not content: seconds since last input, never keystrokes (R6). Everything stays local by default.
 - **Falls short**: no projects, no server, no AI awareness, and window titles are sensitive (they include file names and page titles), which is more than pairtime should upload.
 
@@ -107,7 +119,7 @@ The short version: every existing tool measures one of three things. It measures
 
 ### 1.11 Vendor analytics: Claude Code, Cursor, GitHub Copilot
 
-These are enterprise dashboards. None is available to a teenager on a personal plan, but their field choices show what the vendors think is measurable, and Claude Code's local OTel export works on any plan.
+The dashboards and admin APIs are org-level products that a teenager on a personal plan can't use. Claude Code's OTel export is the exception: it "works on any plan" (Analytics API FAQ). Their field choices still show what the vendors think is measurable. Copilot field names come from the earlier agent's fetch of GitHub's usage-metrics reference; only the [lines-of-code page](https://docs.github.com/en/copilot/reference/copilot-usage-metrics/lines-of-code-metrics) was re-fetched.
 
 | | Claude Code | Cursor | GitHub Copilot |
 |---|---|---|---|
@@ -136,10 +148,10 @@ Searched GitHub on 2026-11-19 for repos created after 2026-11-10 matching "produ
 | Repo | License | Created | What it does | Notes |
 |---|---|---|---|---|
 | [N1k0s1/grit](https://github.com/N1k0s1/grit) | AGPL-3.0 | 2026-11-19 00:24 UTC | Bounty entry. Credits "only human-steered time" from transcripts plus an OS idle signal. Go, SQLite, SSE. | The closest prior art to pairtime; see 1.14. |
-| [polmarza/mod-crono](https://github.com/polmarza/mod-crono) | none stated | 2026-11-17 | Claude Code mod: a "chess clock" (reloj de ajedrez) for human vs Claude time per project. Your clock stops when you send, Claude's runs until it finishes; yours restarts when you type in the prompt box (terminal) or press Start. Auto-pauses after 10 min with no activity. | Not passive (manual Start in the desktop app). The chess-clock framing is a good UI metaphor. |
+| [polmarza/mod-crono](https://github.com/polmarza/mod-crono) | none (no license file) | 2026-11-17 | Claude Code mod: a "chess clock" (reloj de ajedrez) for human vs Claude time per project. Your clock stops when you send, Claude's runs until it finishes; yours restarts when you type in the prompt box (terminal) or press Start. Auto-pauses after 10 min with no activity. | Not passive (manual Start in the desktop app). The chess-clock framing is a good UI metaphor. |
 | [Abdoul-sudo/worklog](https://github.com/Abdoul-sudo/worklog) | MIT | 2026-11-12 | Claude Code mod: time, tokens and API price per project, with a yearly heatmap. | Agent time, not human time (from description; not read). |
 | [leue21/timeweft](https://github.com/leue21/timeweft) | MIT | 2026-11-16 | Time tracking for parallel agents per git branch, Jira timesheets. | Billing-oriented (description only). |
-| [szmichalczyk/focus-app](https://github.com/szmichalczyk/focus-app) | none stated | 2026-11-16 | macOS local tracker: apps, windows, tabs and Claude Code sessions next to logged time. | macOS only (description only). |
+| [szmichalczyk/focus-app](https://github.com/szmichalczyk/focus-app) | none (no license file) | 2026-11-16 | macOS local tracker: apps, windows, tabs and Claude Code sessions next to logged time. | macOS only (description only). |
 
 Older Hack Club tools relevant here: [hackclub/elapsed](https://github.com/hackclub/elapsed) (MIT, created 2026-03-10, last push 2026-07-01: "new timelapse tracking tool and media sharing platform"), plus Lapse and Lookout (1.10). The sibling notes list `hackclub/ari`, `hackclub/breadcrumb` and `hackclub/sunbeam-review` as read by the earlier agent; their purpose wasn't recorded and I didn't re-check them.
 
@@ -259,7 +271,7 @@ Page title "How Claude Code is used in practice" ([link](https://www.anthropic.c
 - **Late-2025 follow-up** ([METR blog, 2026-02-24](https://metr.org/blog/2026-02-24-uplift-update/)): 57 developers, 143 repos, 800+ tasks. Returning developers "-18% with a confidence interval between -38% and +9%"; new developers "-4%, with a confidence interval between -15% and +9%" (negative = faster). METR calls this "an unreliable signal" because developers refused to work without AI (30-50% of surveyed developers withheld some tasks; one said "I avoid issues like AI can finish things in just 2 hours, but I have to spend 20 hours"), and because "our measurements of time-spent on each task are unreliable" for "developers who use multiple AI agents concurrently". Developers "would often work an unrelated task while waiting for the agent to complete its work."
 - **Self-report survey** ([METR, 2026-05-11](https://metr.org/blog/2026-05-11-ai-usage-survey/)): 349 technical workers, median self-reported 1.4-2x change in value of work and 3x in speed. METR: "survey results are not necessarily grounded in reality"; in its 2025 study "people overestimated AI's effect on their time spent on tasks by 40 percentage points on average."
 - **Task substitution** ([METR, 2026-05-08](https://metr.org/blog/2026-05-08-task-substitution-and-uplift/); Cunningham, Whitfill): theory note. AI shifts people toward tasks it makes cheap, including "Cadillac Tasks" done "only because AI has made it cheap", so speedup on observed tasks can overstate value.
-- **For pairtime**: (1) *People cannot estimate their own AI-assisted time*: a 39-43 point gap between perceived and measured speed. So self-declared hours are worthless as evidence and pairtime must measure (R9). (2) METR, with paid participants and screen recordings, could not get reliable task times once developers ran agents in parallel and did other work while waiting. Wall-clock per task is the wrong unit; pairtime has to attribute *human* minutes, deduplicated across concurrent sessions, which is what grit does (1.14). (3) "Waiting for the agent" while doing unrelated work is common and must not be credited to the project the agent is working on, but should be credited to whatever the human is actually doing (R4's "5 projects in an afternoon").
+- **For pairtime**: (1) *People cannot estimate their own AI-assisted time*: in the 2025 trial the gap between belief and measurement was 39 points after the fact (estimated 20% faster, measured 19% slower) and 43 points beforehand (forecast 24% faster). So self-declared hours are worthless as evidence and pairtime must measure (R9). (2) METR, with paid participants and screen recordings, could not get reliable task times once developers ran agents in parallel and did other work while waiting. Wall-clock per task is the wrong unit; pairtime has to attribute *human* minutes, deduplicated across concurrent sessions, which is what grit does (1.14). (3) "Waiting for the agent" while doing unrelated work is common and must not be credited to the project the agent is working on, but should be credited to whatever the human is actually doing (R4's "5 projects in an afternoon").
 
 #### Anthropic Economic Index on Claude Code (2025-04-28) and "Learning curves" (2026-03-24)
 
@@ -330,7 +342,7 @@ The natural structure is the *turn*: human input, agent run, agent stops, human 
 | S2 | **Focus** | Frontmost app classified locally into editor / terminal / browser-docs / harness / other; only the category is kept | OS | Lookout records frontmost app and window focus per capture | Leaving the IDE focused while away (caught by S1) |
 | S3 | **Human-typed prompt** | A prompt event with keyboard presence in the preceding minute(s) and composition time consistent with its length; a prompt with no input at all is not human | Harness hook or transcript + S1 | grit `no-input-prompts`; Claude Code `UserPromptSubmit` "also fires on turns Claude Code starts on its own" | Scripted prompts plus a jiggler; typing an LLM's text by hand (slow, so self-limiting) |
 | S4 | **Prompt kind** | Local classifier per human turn: inquiry or conceptual question, request for explanation, constraint or acceptance criteria, verification request, correction of the agent, design decision, vs delegation, bare go-ahead, re-roll | Transcript, local model or rules | Skill study (conceptual inquiry 65%, generation-then-comprehension 86% vs delegation 39%); Rinja (instrumental vs executive help-seeking); HADT; Economic Index patterns; Anthropic expertise cues (precise framing, asking to verify, correcting Claude) | Writing "inquiry-shaped" prompts. Feeds credit only as a modest multiplier and as reviewer evidence |
-| S5 | **Reading time** | Gap between agent stop and the next human action, with presence, compared with output length. Silent reading of English prose averages 238 wpm (most adults 175-300; [Brysbaert 2019](https://doi.org/10.1016/j.jml.2019.104047)); code is slower (unverified). Next prompt in under ~25% of minimum reading time = output not read | Transcript + S1 | CUPS: verification is 22.4% of time; dark flow: code "not read by humans" | Waiting before replying. Capped per turn, so cheap to fake but low payoff |
+| S5 | **Reading time** | Gap between agent stop and the next human action, with presence, compared with output length. Silent reading of English prose averages 238 wpm (most adults 175-300; [Brysbaert 2019](https://doi.org/10.1016/j.jml.2019.104047)); code is slower (unverified). Heuristic to calibrate: next prompt in under ~25% of minimum reading time = output not read | Transcript + S1 | CUPS: verification is 22.4% of time; dark flow: code "not read by humans" | Waiting before replying. Capped per turn, so cheap to fake but low payoff |
 | S6 | **Review decisions** | Permission prompts answered (accept, reject, edit), decision latency; interrupts mid-turn | `PermissionRequest`, `PreToolUse`; transcript interrupt markers; Claude Code `code_edit_tool.decision` metric, `tool.blocked_on_user` span | Autonomy study: experienced users interrupt in about 9% of turns vs 5% for new users | Rubber-stamping accepts. Rejections and interrupts are the strong signal |
 | S7 | **Hand edits** | Lines changed in the editor by the human (editor plugin, e.g. WakaTime's `human_line_changes`), or working-tree changes not attributable to an agent tool call | Editor plugin, file watcher, git-ai `h_` attestations and `overriden_lines` | Kazemitabaar (manual modification preserved learning); CUPS "Editing Last Suggestion"; Agent Trace `mixed` | Pasting AI output into the editor. Mitigated by paste-size heuristics in the plugin |
 | S8 | **Run and test cycles** | Human-run commands in the terminal (shell integration) or agent-run tests the human asked for; result transitions (fail to pass), error recurrence | Terminal, harness tool results | Barke: execution is a main validation strategy; Anthropic: "test suites passing" is a hard success signal | Running tests in a loop. Only transitions count |
@@ -404,16 +416,185 @@ R3 asks for a tool teens want to install "to self-improve, regardless of any You
 
 ## 5. Server cost model for R11
 
-(pending)
+R11: hosting must stay under $500/month at 15,488 MAU logging 109,759 hours/month. Hackatime's bill is $213/month on a 32-core, 192 GB machine using 10% CPU, 65 GB RAM, 1 of 4 TB disk and about 1 MB/s of network; Zach puts its effective cost at $55/month (BOUNTY.md). A Hackatime maintainer says its Postgres is deliberately overprovisioned (BOUNTY.md thread).
+
+### 5.1 Workload
+
+| Quantity | Value | Derivation |
+|---|---|---|
+| Hours per MAU per month | 7.09 | 109,759 / 15,488 |
+| Active user-minutes per month | 6,585,540 | 109,759 × 60 |
+| Average concurrent active users | 152 | 109,759 h / 720 h |
+| Daily peak (assume 4×) | ~610 | evenings and weekends across time zones |
+| Event peak (assume 8×) | ~1,220 | a program deadline or hackathon weekend |
+
+The peak factors are assumptions; Hackatime's per-hour histogram would replace them (open question).
+
+### 5.2 Three event schemas, three volumes
+
+The design choice that decides cost is *what the client uploads*. pairtime's privacy model already says raw prompts and code stay local (R6), so the client computes credited minutes itself and the server stores derived records.
+
+**Schema A, client-computed (recommended).** Per-row sizes assume Postgres: a 23-byte tuple header ("occupying 23 bytes on most machines") plus a 4-byte line pointer per row ([PostgreSQL 18 docs, Database Page Layout](https://www.postgresql.org/docs/current/storage-page-layout.html)), padded to 24 on 64-bit, plus an index share.
+
+| Record | Fields (payload) | Rows/month | Bytes/row | MB/month |
+|---|---|---|---|---|
+| `turn` | session_id (16), seq (4), prompt_ts (8), stop_ts (8), human_secs (2), agent_secs (2), kind (1), flags (2), chain_hash (32), harness (1), project_id (8) ≈ 84 B | 2,195,180 (assumes 20 human turns per logged hour, high) | ~152 | 334 |
+| `credited_minute` | user_id, project_id, minute, rule, source, flags ≈ 32 B | 6,585,540 (upper bound: one per active minute) | ~92 | 606 |
+| `session` summary | start, end, credited, counts, flags, trust tier | 146,345 (45-min sessions) | ~300 | 44 |
+| presence bitmap | 1,440 bits = 180 B per user-day | 123,904 (8 active days per MAU) | ~220 | 27 |
+| daily rollup | user, project, day, credited, agent, streak inputs | 185,856 | ~100 | 19 |
+| **Total** | | | | **~1.0 GB/month, ~12 GB/year** |
+
+**Schema B, Hackatime-style raw heartbeats.** Hackatime's `heartbeats` table (`db/schema.rb`, commit `43bde10`) has about 36 columns, including the absolute file path (`entity`), `user_agent`, `ip_address`, `machine`, `dependencies` (array), a unique `fields_hash` text column, and at least nine indexes. At an assumed 800 bytes per heartbeat including indexes and 60-120 heartbeats per active hour (editor plugins plus WakaTime's per-prompt and per-edit AI heartbeats, 1.1), that's 6.6-13.2M rows and **5-10 GB per month**, or 190-380 GB over three years. That is consistent with Hackatime's 1 TB used, given years of history and imports.
+
+**Schema C, every hook event without content.** About 460 events per active hour (20 prompts, about 200 tool calls at Anthropic's "about 10 actions per prompt", 240 presence samples) is 50M events/month: 7.6 GB/month at 150 B/row in Postgres, or about 0.8 GB/month in a columnar store at a typical 10x compression (assumption).
+
+**Evidence for submitted hours (R10).** The acceptance target is 10,000 submitted hours. At an assumed 50-200 KB of redacted, compressed transcript per submitted hour, that's 0.5-2 GB in total. Timelapses, if a program wants them, stay in Lookout (1.10) and aren't pairtime's cost.
+
+**Conclusion**: schema A is 5-10x smaller than Hackatime's and fits any database on a small disk for a decade. Storage cost rounds to zero; the server's real work is auth, ingest, dashboards and the review queue.
+
+### 5.3 Ingest and real-time delivery
+
+| Sync interval while active | Requests/month | Average | 4× peak | 8× peak |
+|---|---|---|---|---|
+| 60 s | 6.6M | 2.5/s | 10/s | 20/s |
+| 15 s | 26.3M | 10.2/s | 41/s | 81/s |
+
+Both are trivial for one process. The dashboard requirement (R5: "updates in real-time as time is logged") is met by a 60-second client sync plus an immediate push on hook events (prompt, stop), so profiles move within a minute.
+
+**SSE vs WebSocket.** The traffic is one-way (server to browser: new minutes, leaderboard changes), which is what Server-Sent Events are for. Facts that matter:
+
+- MDN: without HTTP/2, SSE is limited to "6" connections "per browser + domain" across all tabs, marked "Won't fix" in Chrome and Firefox. Over HTTP/2 the concurrent stream limit is negotiated and "defaults to 100" ([MDN, Using server-sent events](https://developer.mozilla.org/en-US/docs/Web/API/Server-sent_events/Using_server-sent_events)). So serve SSE over HTTP/2 (any modern reverse proxy or CDN does by default).
+- Reconnect is built in: the `retry:` field sets the delay, and the browser sends `Last-Event-ID` (WHATWG HTML spec) so the server can resume. A comment line (`: keepalive`) prevents idle timeouts; the HTML spec suggests one "every 15 seconds or so".
+- Cloudflare, if used in front: error 524 fires when the origin sends no response within "the default 125 seconds Proxy Read Timeout", adjustable only on Enterprise ([Cloudflare docs](https://developers.cloudflare.com/support/troubleshooting/http-status-codes/cloudflare-5xx-errors/error-524/)). Whether a streaming SSE response with periodic comments avoids it isn't stated on that page (unverified); a 15 s keepalive is well inside the window either way.
+- WebSocket adds nothing needed here: no client-to-server messages on the dashboard, and the client agent uploads with plain HTTPS POSTs that work through school proxies. SSE is plain HTTP, so it also survives proxies that block WebSocket upgrades (common on school networks, unverified).
+- Memory: at an assumed 30 KB per idle connection (goroutine stack plus buffers in Go, or similar in Rust async), 2,000 concurrent viewers cost about 60 MB.
+
+### 5.4 Storage engines
+
+Versions and licenses from the GitHub API on 2026-11-19.
+
+| Engine | Version | License | Fit for schema A | Notes |
+|---|---|---|---|---|
+| **SQLite + Litestream** | Litestream v0.5.18 (2026-11-03) | SQLite public domain; Litestream Apache-2.0 | Good. One file, one writer; batch writes per request; WAL mode | Litestream streams the WAL to S3-compatible storage (Hetzner Object Storage) for continuous backup and point-in-time restore. Single node: high availability means "restore fast", not failover. Matches grit's and Wakapi's default deployment |
+| **PostgreSQL** | 18 (docs current) | PostgreSQL License | Good. Monthly partitions on `credited_minute` and `turn` | What Hackatime runs, so Hack Club ops already know it. More RAM and ops than SQLite; easy to add a read replica |
+| **TimescaleDB** | 2.32.0 (2026-11-12) | Apache-2.0 core plus Timescale License (TSL) for compression and continuous aggregates | Overkill | TSL (`tsl/LICENSE-TIMESCALE` §2.1) grants "Internal Use" and "Value Added Products or Services" licenses; the latter requires notifying customers that the TSL applies and that "the customer is prohibited, either contractually or technically, from defining, redefining, or modifying the database schema". Fine for Hack Club self-hosting, but a TSL dependency makes pairtime's server stack not purely open source, which matters for an AGPL-3.0 entry (R1). Compression isn't needed at 1 GB/month |
+| **ClickHouse** | v26.9.32.8-stable (2026-11-18) | Apache-2.0 | Only for schema B or C | Columnar, compresses well, very fast aggregates. Wants "batches of at least 1,000 rows, and ideally between 10,000–100,000 rows" and "around one insert query per second", or `async_insert=1,wait_for_async_insert=1` for many small clients ([ClickHouse docs](https://clickhouse.com/docs/best-practices/selecting-an-insert-strategy)). An extra service to run |
+
+Recommendation: SQLite + Litestream or Postgres, with pre-aggregated daily rollups (as Wakapi does with `app.aggregation_time`, 1.8) so dashboards never scan per-minute rows. Choose Postgres if Hack Club will run it alongside Hackatime; choose SQLite if pairtime must be trivially self-hostable by others. If pairtime later accepts raw WakaTime heartbeats from editor plugins at Hackatime scale (R7), give them a 30-90-day retention, since credit is computed from them once, or move only that table to ClickHouse.
+
+### 5.5 Price on Hetzner
+
+Prices from hetzner.com on 2026-11-19, EUR excluding VAT; converted at the ECB reference rate of 1.0968 USD/EUR (2026-11-18, via frankfurter.app). Cloud General Purpose (dedicated vCPU) per [hetzner.com/cloud/general-purpose](https://www.hetzner.com/cloud/general-purpose): CCX13 2 vCPU / 8 GB / 80 GB NVMe, €36.99 (HEL1) or €43.49 (NBG1); CCX23 4 vCPU / 16 GB / 160 GB, €73.49 or €86.49; CCX33 8 vCPU / 32 GB / 240 GB, €117.99 or €138.99; 20-30 TB traffic included in EU locations, €1.00 per extra TB, IPv4 included. That page also said "This product is currently unavailable" next to each Create link (possibly a conditional message). Dedicated AX ([matrix](https://www.hetzner.com/dedicated-rootserver/matrix-ax/)): AX41 Ryzen 5 3600 / 64 GB DDR4 from €59.00; AX42 Ryzen 7 PRO 8700GE / 64 GB DDR5 ECC from €79.00 plus €49.00 setup; AX102 Ryzen 9 7950X3D / 128 GB from €159.00. Object Storage ([hetzner.com/storage/object-storage](https://www.hetzner.com/storage/object-storage/)): €6.49/month including 1 TB stored and 1 TB egress, S3-compatible, S3 API requests free.
+
+| Configuration | EUR/month | USD/month | Share of $500 | Margin |
+|---|---|---|---|---|
+| Minimal: CCX13 (HEL1) + Object Storage (Litestream replica, evidence bundles) + snapshots | 44.62 | 48.94 | 10% | 10.2× |
+| Dedicated: AX42 + Object Storage (plus €49 one-time setup) | 85.49 | 93.77 | 19% | 5.3× |
+| Comfortable: CCX23 (NBG1) primary + CCX13 warm standby + Object Storage | 136.47 | 149.68 | 30% | 3.3× |
+| Big: CCX33 primary + CCX23 standby + Object Storage | 231.97 | 254.42 | 51% | 2.0× |
+
+Why the minimal box suffices: peak ingest is 20-80 requests/s of small JSON; storage is about 12 GB/year; 1,220 concurrent trackers and 2,000 SSE viewers fit in a few hundred MB of RAM; and there's no server-side media encoding (unlike Lapse's ffmpeg worker, 1.10) or transcript parsing (the client does it). Hackatime's own measured use (10% of 32 cores, about 3 cores) is the upper reference for a heavier, heartbeat-based design.
+
+**What could break the budget**, in order of risk:
+
+1. **Server-side LLM calls.** If prompt classification (S4) or teach-back grading (S11) ran on the server, 2.2M turns/month at even $0.0005 per call is $1,100/month, over budget on its own. Classification must run on the client (rules plus an optional small local model, or the user's own agent via the AGENTS.md route), or be limited to submitted hours only.
+2. **Storing raw transcripts for every logged hour.** Claude Code transcripts include tool outputs and can be large (sizes not measured here). Store them only for submitted hours (R10's own suggestion) and keep them in object storage, not the database.
+3. **Screen evidence.** Timelapse capture and encoding is the expensive design; leave it to Lookout as an opt-in attachment.
+4. **Bandwidth spikes.** 20 TB included per EU cloud server covers about 7× Hackatime's ~2.6 TB/month (1 MB/s sustained); overage is €1/TB.
+
+Under these assumptions the R11 budget has a 3-10× margin. A load test on the minimal box with replayed traffic at the 8× peak rate is the evidence Hack Club will want to see (open question 5).
 
 ## 6. Design implications
 
-(pending)
+Each item names the requirements it serves. "Section" references point to the evidence above.
+
+1. **Credit human minutes, never agent time or wall clock.** The base unit is a minute in which the human was present and steering, verifying, integrating or debugging (3.1). Every credited minute stores the rule that credited it, so totals can be explained and audited. This is what separates pairtime from WakaTime, Hackatime and vibe-log, which all clock agent transcript timestamps (1.1, 1.2, 1.5). (R2, R9, R10)
+2. **Gate credit on OS presence, collected without content.** Seconds since last input per OS (`GetLastInputInfo`, `CGEventSourceSecondsSinceLastEventType`, Mutter `IdleMonitor` or X11), one bit per minute, a second bitmap for "sampler running" so missing data isn't read as idleness (grit, ActivityWatch). Pure-API calls, no keyloggers, no Accessibility permission. (R4, R6, R8)
+3. **Model sessions as turns and credit the gaps.** Human input → agent run → stop → human gap. Credit composition time, reading time scaled to output length (238 wpm prose baseline, slower for code), review decisions, hand edits and test runs in the gaps; credit an agent run only while the human is present or returns promptly (grit's 2-minute return window is a reasonable start). Cap any idle gap (10 minutes is grit's; Hackatime's 2-minute cap and Lookout's 10-minute pause bracket it). (R2, R4, R9)
+4. **Never penalize long agent runs as such.** Experts make the agent do more per prompt (12 vs 5 actions), and experienced users auto-approve more (2.2). Penalize absence, not autonomy. Interrupts, rejections and corrections are positive evidence. (R2, R3)
+5. **Classify every human turn locally against a published taxonomy.** Use the Economic Index's five patterns (directive, feedback loop, task iteration, validation, learning) plus the skill study's patterns (conceptual inquiry, explanation requests, generation-then-comprehension vs delegation, iterative AI debugging) and Rinja's instrumental vs executive help-seeking. Rules first, an optional small local model second, the user's own agent via the AGENTS.md route third. Only the label syncs. Use labels as a bounded multiplier and as reviewer evidence, never as the sole basis for credit. Never classify on the server (cost, 5.5, and privacy). (R2, R6, R11)
+6. **Score turns and sessions, not people.** Two-thirds of engagement variance is within students, by project phase (HADT, 2.2). No per-user "AI trust score" that discounts all of someone's time. (R2, R3)
+7. **Ship anti-pattern detectors as reviewer flags, separate from credit.** Re-roll (near-duplicate consecutive prompts with no edit or reading between), repetition, regular timing (CV < 0.1), prompts with no input, fix-it loops, autopilot, and loss-disguised-as-win (lots of change, no progress signal). Flags don't change credit (grit's rule), which keeps the credit rule simple and makes gaming visible to reviewers. Publish the credit rules; keep flag thresholds reviewer-only, as Fraud Squad does. (R9, R10)
+8. **Deduplicate across parallel sessions and attribute by focus.** A human minute counts once, toward the project in focus (frontmost app category plus last human input). This handles R4's "5 projects in an afternoon" and METR's concurrent-agent problem. (R4, R9)
+9. **Witness timing on the server as it happens.** Sync each turn's timing and a salted hash of the redacted prompt within minutes; on submission, the server recomputes the chain and labels turns witnessed or backfilled (grit's design). This is the main defense against an LLM writing believable transcripts after the fact, a concern raised in the BOUNTY.md thread. Lookback mode remains allowed (Zach: "A sufficiently high quality implementation of a lookback mode could count as passive") but earns a lower trust tier. (R4, R9, R10)
+10. **Require progress evidence for big totals.** Tests going from failing to passing, commits matching session files, errors that stop recurring (S10). Bjork's caveat: difficulty without progress isn't desirable difficulty. Hours with no progress signal over a long stretch get a reviewer flag. (R2, R9)
+11. **Integrate with git through existing standards.** Read and write git-ai notes (`refs/notes/ai`, `authorship/3.0.0`); emit Agent Trace records; add a `Co-authored-by:` trailer instruction to the AGENTS.md snippet (the LinearB pattern). Reviewers then see per-commit human vs AI lines, including human rewrites of AI lines (`overriden_lines`, `mixed`). (R5, R7, R10)
+12. **Build adapters by porting, not inventing.** WakaTime CLI's `pkg/ai` parsers (about 45 harnesses, BSD-3-Clause, AGPL-compatible with attribution) and ccusage's log locations (MIT) are the fastest path to broad coverage. Accept the WakaTime heartbeat API so every WakaTime editor plugin feeds the hand-edit signal. Use Claude Code's OTel `active_time{type="user"}` as an independent cross-check where enabled. Keep Karim's AGENTS.md `track` command as the universal fallback. (R7)
+13. **Calibrate against reviewer decisions instead of hand-tuning.** Fit the rule's constants to Hack Club's historical approved vs submitted hours (Stardance: 27,600 of 123,400) and to a hand-labeled pairtime session set, and publish the agreement metric. This is the concrete way to beat grit on R2. (R2, R9)
+14. **Make submission evidence reviewer-friendly and opt-in.** A redacted Markdown transcript per submitted session (SpecStory-like), a `--dry-run` that shows the exact bundle, git-ai attribution, the per-minute rule list, and optionally a short teach-back answer (the epistemic-debt study's gate halved maintenance failure) and a linked Lookout session. Nothing beyond numbers leaves the machine for logged-only hours. (R6, R10)
+15. **Lead the product with informational feedback, not a prize meter.** Local session recaps (bugs you fixed yourself, questions you asked, agent edits you rejected or rewrote), skill growth, devlog drafts, a chess-clock "you vs agent" view. Streak day = 15 credited human minutes, with freezes. Rank on rolling-window consistency (Strava Local Legend style), not on hours. Positive feedback raises intrinsic motivation (d = 0.33) while tangible engagement-contingent rewards lower it (d = -0.40), most for children. (R3)
+16. **Privacy defaults that survive scrutiny.** No screenshots, keystroke content, window titles, file names or prompts uploaded by default. Public-by-default profiles (R5) show hours, projects and streaks only. Local deletion. Open source. Remember 58% of monitored students self-censor (CDT): if pairtime feels like monitoring, it loses the messy exploratory prompts that are the struggle. (R5, R6)
+17. **Server: client computes, server stores derived rows.** Schema A (about 1 GB/month), SQLite + Litestream or Postgres, daily rollups, SSE over HTTP/2 with 15-second keepalives, plain HTTPS ingest. One CCX13-class box plus object storage is about $49/month; with a warm standby, about $150/month, 30% of the R11 cap. Don't adopt TimescaleDB's TSL features in an AGPL project. Load-test at 8× average concurrency before claiming R11. (R5, R11, R1)
+18. **Keep Hackatime's AI discount only as a backstop.** Its flat 90% rate with daily decay (1.2) can't tell supervised from unsupervised AI time. Use it, if at all, as a cap on time pairtime can't verify (for example, editor heartbeats from an unknown plugin with no presence data). (R9)
+19. **Treat adoption as the critical path.** grit already implements most of the core design (1.14), and the bounty goes to the first entry that gets 1,000 weighted projects into the YSWS DB. Exporting credited hours in a form Hackatime and the YSWS pipeline already ingest, and giving reviewers tooling that fits their workflow, matters more than any single signal. (A, R9)
 
 ## 7. Open questions
 
-(pending)
+For Karim or Hack Club staff:
+
+1. **Calibration data.** Will Hack Club share per-project submitted vs approved hours (Stardance and other programs), ideally with the Hackatime heartbeats behind them, so the credit rule can be fitted to real reviewer decisions? Under what privacy terms? (Decides how design implication 13 is done.)
+2. **What reviewers will see.** For submitted hours, is reading redacted prompt text acceptable to students and required by reviewers? Or will reviewers accept locally computed labels plus timing and git evidence without prompt text?
+3. **Away-from-keyboard thinking.** Will Hack Club reviewers credit thinking time with no input (whiteboarding, reading on a phone)? If so, up to what cap per gap?
+4. **Lookback vs live.** Is a session that was never synced live (lookback, backfilled) acceptable for YSWS hours, and at what trust level? This decides how hard pairtime must push `watch`-style background sync.
+5. **R11 evidence.** Will a load-test report on a single Hetzner box at an agreed peak factor satisfy R11? Can Hackatime share its hourly concurrency profile so the peak factor isn't a guess?
+6. **Path into the Unified YSWS DB.** Do pairtime hours enter via Hackatime as a source, or directly? Who in Quality and Integrity signs off, and what format do they want?
+7. **AI vs non-AI hours.** Do programs want AI-assisted hours reported separately from hand-coding hours, or one productive-struggle total?
+8. **grit.** Compete, collaborate, or merge? Both are AGPL-3.0 and share a thesis; a split community slows adoption for both (Karim's call).
+9. **Ownership probes.** Would program authors accept, and would teens tolerate, an optional short "explain this change" step at submission?
+10. **Minors and consent.** What are Hack Club's requirements for users under 13 and for parental consent when a tool records presence and prompts locally and uploads derived data? (Staff/legal.)
+11. **Hosting home.** Is self-hosting on Karim's domain (BOUNTY.md) the long-term plan, or should the design assume a later move to Hack Club infrastructure?
 
 ## 8. Sources
 
-(pending)
+Accessed 2026-11-19 unless noted. "Not re-read" marks items taken from the earlier agent's fetches in `notes/priorart.md` or `notes/hackatime.md` without re-checking. Internal: [docs/BOUNTY.md](../BOUNTY.md).
+
+**Tools and specs (section 1)**
+- WakaTime CLI, [wakatime/wakatime-cli](https://github.com/wakatime/wakatime-cli) at `7ab26b5`: `pkg/ai/ai.go`, `claude.go`, `transcript_clock.go`, `pkg/heartbeat/heartbeat.go`, `category.go`
+- WakaTime [FAQ](https://wakatime.com/faq), [API docs](https://wakatime.com/developers) (not re-read), [yearly wrapped post](https://wakatime.com/blog/69-get-ready-for-your-yearly-wrapped-code-stats) (not re-read)
+- Hackatime, [hackclub/hackatime](https://github.com/hackclub/hackatime) at `43bde10`: `app/models/concerns/heartbeatable.rb`, `app/models/leaderboard_entry.rb`, `app/models/goal.rb`, `app/models/user.rb`, `app/jobs/weekly_summary_user_email_job.rb`, `app/javascript/pages/Home/signedIn/AiCodingMeter.svelte`, `db/schema.rb`
+- Wakapi, [muety/wakapi](https://github.com/muety/wakapi) v2.18.2: `config.default.yml`, README
+- ActivityWatch, [ActivityWatch/activitywatch](https://github.com/ActivityWatch/activitywatch); [aw-watcher-afk](https://github.com/ActivityWatch/aw-watcher-afk): `aw_watcher_afk/config.py`, `afk.py`
+- Lapse, [hackclub/lapse](https://github.com/hackclub/lapse) at `202d020`, README
+- Lookout, [hackclub/lookout](https://github.com/hackclub/lookout) at `be1b7b9`: README, `packages/server/drizzle/0034_capture_activity.sql`
+- Elapsed, [hackclub/elapsed](https://github.com/hackclub/elapsed) (repo metadata only)
+- git-ai, [git-ai-project/git-ai](https://github.com/git-ai-project/git-ai) v1.7.6: README, [Git AI Standard v3.0.0](https://github.com/git-ai-project/git-ai/blob/main/specs/git_ai_standard_v3.0.0.md)
+- Agent Trace, [agent-trace.dev](https://agent-trace.dev/) v0.1.0; [InfoQ, 2026-02-04](https://www.infoq.com/news/2026/02/agent-trace-cursor/) (not re-read)
+- vibe-log, [vibe-log/vibe-log-cli](https://github.com/vibe-log/vibe-log-cli): `src/lib/readers/claude.ts`, `src/lib/prompt-analyzer.ts`
+- ccusage, [ccusage/ccusage](https://github.com/ccusage/ccusage) v20.0.51: README, LICENSE
+- SpecStory, [specstoryai/getspecstory](https://github.com/specstoryai/getspecstory): README
+- Claude Code [monitoring (OTel)](https://code.claude.com/docs/en/monitoring-usage) and [hooks](https://code.claude.com/docs/en/hooks) references; [Claude Code Analytics API](https://platform.claude.com/docs/en/manage-claude/claude-code-analytics-api)
+- Cursor [AI Code Tracking API](https://cursor.com/docs/account/teams/ai-code-tracking-api)
+- GitHub [Copilot usage metrics REST API](https://docs.github.com/en/rest/copilot/copilot-usage-metrics?apiVersion=2026-03-10) (not re-read) and lines-of-code metrics page (fetched)
+- DX [AI Measurement Framework](https://getdx.com/blog/ai-measurement-framework-guide/); LinearB [AI Insights FAQ](https://linearb.helpdocs.io/article/ww1ciql9uw-linear-b-ai-insights-faq) (not re-read); Jellyfish [AI Impact](https://jellyfish.co/platform/jellyfish-ai-impact/) (not re-read)
+- Community: [N1k0s1/grit](https://github.com/N1k0s1/grit) at `e7cf94e` (README, `internal/score/score.go`, `internal/score/anomaly.go`, `internal/activity/idle_*.go`); [polmarza/mod-crono](https://github.com/polmarza/mod-crono) (README); [Abdoul-sudo/worklog](https://github.com/Abdoul-sudo/worklog), [leue21/timeweft](https://github.com/leue21/timeweft), [szmichalczyk/focus-app](https://github.com/szmichalczyk/focus-app) (descriptions only)
+- Hack Club [Fraud Squad FAQ](https://fraud.hackclub.com/) (not re-read)
+
+**Measurement science (section 2)**
+- Hiebert and Grouws 2007, quoted in [NCTM productive struggle slides](https://www.nctm.org/uploadedFiles/Conferences_and_Professional_Development/Institutes/Supporting_Students_Productive_Struggle/ProductiveStruggle_Keynote-Smith_Slides.pdf)
+- Kapur 2008, [doi:10.1080/07370000802212669](https://doi.org/10.1080/07370000802212669); Kapur 2016, [doi:10.1080/00461520.2016.1155457](https://doi.org/10.1080/00461520.2016.1155457) (abstract via OpenAlex); Sinha and Kapur 2021, [doi:10.3102/00346543211019105](https://doi.org/10.3102/00346543211019105) (abstract via Crossref)
+- Bjork and Bjork 2011, [PDF](https://bjorklab.psych.ucla.edu/wp-content/uploads/sites/13/2016/11/Making-Things-Hard-on-Yourself-but-in-a-Good-Way-20111.pdf)
+- Mozannar et al., CUPS, [arXiv:2210.14306](https://arxiv.org/abs/2210.14306) v5 (full text)
+- Barke et al., Grounded Copilot, [arXiv:2206.15000](https://arxiv.org/abs/2206.15000) v3 (full text)
+- Anthropic: [agentic coding and returns to expertise](https://www.anthropic.com/research/claude-code-expertise) (2026-06-16); [measuring agent autonomy](https://www.anthropic.com/research/measuring-agent-autonomy) (2026-02-18); [AI assistance and coding skills](https://www.anthropic.com/research/AI-assistance-coding-skills) (2026-01-29); [Economic Index: software development](https://www.anthropic.com/research/impact-software-development) (2025-04-28); [Economic Index: learning curves](https://www.anthropic.com/research/economic-index-march-2026-report) (2026-03-24); [Education Report](https://www.anthropic.com/research/anthropic-education-report-how-university-students-use-claude) (2025-04-08, not re-read)
+- METR: [arXiv:2507.09089](https://arxiv.org/abs/2507.09089); [design change, 2026-02-24](https://metr.org/blog/2026-02-24-uplift-update/); [task substitution, 2026-05-08](https://metr.org/blog/2026-05-08-task-substitution-and-uplift/); [self-report survey, 2026-05-11](https://metr.org/blog/2026-05-11-ai-usage-survey/)
+- Kosmyna et al., [arXiv:2506.08872](https://arxiv.org/abs/2506.08872)
+- Lee et al., CHI 2025, [Microsoft Research page](https://www.microsoft.com/en-us/research/publication/the-impact-of-generative-ai-on-critical-thinking-self-reported-reductions-in-cognitive-effort-and-confidence-effects-from-a-survey-of-knowledge-workers/), [doi:10.1145/3706598.3713778](https://doi.org/10.1145/3706598.3713778)
+- Thomas, [Breaking the Spell of Vibe Coding](https://www.fast.ai/posts/2026-01-28-dark-flow/); Dixon et al. 2018, [doi:10.1007/s10899-017-9695-1](https://doi.org/10.1007/s10899-017-9695-1) (abstract via Europe PMC)
+- Kazemitabaar et al., [arXiv:2302.07427](https://arxiv.org/abs/2302.07427); Rinja et al., [arXiv:2604.27134](https://arxiv.org/abs/2604.27134); Sankaranarayanan, [arXiv:2602.20206](https://arxiv.org/abs/2602.20206); Shakiba and Chaffey, [arXiv:2611.04783](https://arxiv.org/abs/2611.04783) (abstracts)
+- Brysbaert 2019, [doi:10.1016/j.jml.2019.104047](https://doi.org/10.1016/j.jml.2019.104047) (abstract via OpenAlex)
+
+**Motivation (section 4)**
+- Moldon, Strohmaier, Wachs, ICSE 2021, [doi:10.1109/ICSE43902.2021.00058](https://doi.org/10.1109/ICSE43902.2021.00058) (abstract via OpenAlex)
+- Duolingo, [habit-building research behind your streak](https://blog.duolingo.com/how-duolingo-streak-builds-habit/) (2022-01-31)
+- Strava, [Local Legend help article](https://support.strava.com/en-us/articles/15401751-what-is-the-local-legend-achievement-on-strava)
+- Deci, Koestner, Ryan 1999, [doi:10.1037/0033-2909.125.6.627](https://doi.org/10.1037/0033-2909.125.6.627) (abstract via OpenAlex)
+- Strathern 1997, *European Review* 5(3):305-321, DOI `10.1002/(sici)1234-981x(199707)5:3<305::aid-euro184>3.0.co;2-4` (metadata via Crossref)
+- CDT, [student activity monitoring research](https://cdt.org/insights/cdt-original-research-examines-privacy-implications-of-school-issued-devices-and-student-activity-monitoring-software/) (2021-09-21)
+
+**Server cost (section 5)**
+- [PostgreSQL 18 docs, Database Page Layout](https://www.postgresql.org/docs/current/storage-page-layout.html)
+- [benbjohnson/litestream](https://github.com/benbjohnson/litestream) v0.5.18; [timescale/timescaledb](https://github.com/timescale/timescaledb) 2.32.0 and `tsl/LICENSE-TIMESCALE`; [ClickHouse/ClickHouse](https://github.com/ClickHouse/ClickHouse) v26.9.32.8-stable; [ClickHouse insert strategy](https://clickhouse.com/docs/best-practices/selecting-an-insert-strategy)
+- [MDN, Using server-sent events](https://developer.mozilla.org/en-US/docs/Web/API/Server-sent_events/Using_server-sent_events); [Cloudflare error 524](https://developers.cloudflare.com/support/troubleshooting/http-status-codes/cloudflare-5xx-errors/error-524/)
+- Hetzner [Cloud General Purpose](https://www.hetzner.com/cloud/general-purpose), [AX dedicated matrix](https://www.hetzner.com/dedicated-rootserver/matrix-ax/), [Object Storage](https://www.hetzner.com/storage/object-storage/)
+- ECB EUR/USD reference rate for 2026-11-18 via [frankfurter.app](https://api.frankfurter.app/latest?from=EUR&to=USD)
