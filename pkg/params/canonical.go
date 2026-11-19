@@ -48,9 +48,9 @@ func decode(data []byte) (any, error) {
 	return v, nil
 }
 
-// token reads the next token. Input that ends inside a document is an
+// nextToken reads the next token. Input that ends inside a document is an
 // error, not the end of the stream.
-func token(dec *json.Decoder) (json.Token, error) {
+func nextToken(dec *json.Decoder) (json.Token, error) {
 	t, err := dec.Token()
 	if errors.Is(err, io.EOF) {
 		err = io.ErrUnexpectedEOF
@@ -59,7 +59,7 @@ func token(dec *json.Decoder) (json.Token, error) {
 }
 
 func decodeValue(dec *json.Decoder) (any, error) {
-	tok, err := token(dec)
+	tok, err := nextToken(dec)
 	if err != nil {
 		return nil, err
 	}
@@ -74,12 +74,12 @@ func decodeValue(dec *json.Decoder) (any, error) {
 				}
 				list = append(list, v)
 			}
-			_, err := token(dec) // ]
+			_, err := nextToken(dec) // ]
 			return list, err
 		}
 		obj := make(map[string]any)
 		for dec.More() {
-			kt, err := token(dec)
+			kt, err := nextToken(dec)
 			if err != nil {
 				return nil, err
 			}
@@ -99,7 +99,7 @@ func decodeValue(dec *json.Decoder) (any, error) {
 			}
 			obj[k] = v
 		}
-		_, err := token(dec) // }
+		_, err := nextToken(dec) // }
 		return obj, err
 	case string:
 		if err := checkString(tok); err != nil {
