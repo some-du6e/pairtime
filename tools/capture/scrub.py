@@ -84,7 +84,12 @@ ACCOUNT_ATTRIBUTES = (
 # start where a token starts (a literal, or a lookbehind), so a long base64
 # run, such as an image in a transcript, costs linear time rather than
 # quadratic.
-B = r"(?<![A-Za-z0-9])"
+#
+# In JSON text a value can follow an escape such as \n, so the letter before
+# it is n. ESC counts an escape as a boundary, and the email pattern can't
+# start just after a backslash, so it never swallows half an escape.
+ESC = r"(?<=\\[ntrbf])|(?<=\\u[0-9A-Fa-f]{4})"
+B = r"(?:(?<![A-Za-z0-9])|" + ESC + ")"
 SECRET_PATTERNS = [
     ("PRIVATE_KEY", r"-----BEGIN[A-Z ]{0,40}PRIVATE KEY-----.*?-----END[A-Z ]{0,40}PRIVATE KEY-----"),
     ("ANTHROPIC_KEY", B + r"sk-ant-[A-Za-z0-9_-]{16,}"),
@@ -99,12 +104,12 @@ SECRET_PATTERNS = [
     ("NPM_TOKEN", B + r"npm_[A-Za-z0-9]{36}"),
     ("JWT", B + r"eyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}"),
     ("URL_PASSWORD", r"(?i)(?<![a-z0-9+.-])[a-z][a-z0-9+.-]*://[^/\s:@\"']+:(?P<secret>[^/\s@\"']+)@"),
-    ("BEARER_TOKEN", r"(?i)\bbearer\s+(?P<secret>[A-Za-z0-9._~+/-]{16,}=*)"),
+    ("BEARER_TOKEN", r"(?i)(?:\b|" + ESC + r")bearer\s+(?P<secret>[A-Za-z0-9._~+/-]{16,}=*)"),
     ("SECRET", r"(?i)(?:api[_-]?key|access[_-]?key|secret(?:[_-]?key)?|(?:access|auth|refresh|session|bearer)?[_-]?token"
                r"|passwd|password|pwd)[\"']?\s*[:=]\s*[\"']?(?P<secret>[A-Za-z0-9_\-./+=]{12,})"),
 ]
 
-EMAIL_PATTERN = r"(?<![A-Za-z0-9._%+-])[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}"
+EMAIL_PATTERN = r"(?:(?<![A-Za-z0-9._%+\\-])|" + ESC + r")[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}"
 
 SKIP_NAMES = {".DS_Store", "Thumbs.db", "desktop.ini"}
 
@@ -132,7 +137,7 @@ def bounded(value):
     longer word: karim matches in /home/karim/ and karim@host, not in karima."""
     p = "(?i:" + re.escape(value) + ")"
     if value[:1].isalnum():
-        p = "(?<![A-Za-z0-9])" + p
+        p = B + p
     if value[-1:].isalnum():
         p = p + "(?![A-Za-z0-9])"
     return p
