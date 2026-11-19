@@ -19,11 +19,11 @@ The format can't change once a server has witnessed data in it, because old bund
 - Times are Unix milliseconds, UTC, the unit of `pkg/event`'s `t`.
 - In JSON, a byte string is lowercase hex and an integer is a JSON number.
 
-`device_id`, `project_key` and `session_key` are `pkg/event` opaque keys: 1 to 128 ASCII characters, each one of `A-Z a-z 0-9 _ -`. A writer never builds a header, receipt message or day leaf from any other string, and a reader rejects one built from any other string.
+`device_id`, `project_key` and `session_key` are `pkg/event` opaque keys: 1 to 128 ASCII characters, each one of `A-Z a-z 0-9 _ -`. Writers refuse any other string in these fields, and so do verifiers wherever they read one, as in a receipt message or a day leaf.
 
 ## 2. Domain separation
 
-Every value the ledger hashes or signs starts with a byte or a string that says what kind of value it is, so no value can pass for another kind:
+Every value the ledger hashes into a tree or a chain, and every message it signs, starts with a byte or a string that says what kind of value it is, so no value can pass for another kind:
 
 | Input | First bytes | Section |
 |---|---|---|
@@ -36,7 +36,9 @@ Every value the ledger hashes or signs starts with a byte or a string that says 
 | Ed25519 by the server key, a receipt | `pairtime-receipt-v1` | 7 |
 | Ed25519 by the server key, a day head | `pairtime-day-v1` | 8 |
 
-`0x02` is unassigned. No SHA-256 input in version 1 starts with it.
+`0x02` is unassigned. No tagged SHA-256 input in version 1 starts with it.
+
+The plain digests carry no tag. The project and session digests (4.3) and a body's hash (4.6) each sit at a fixed offset in a fixed-length header or entry, where nothing else can take their place.
 
 The nonce's tag byte leaves room for other HMACs under `K_leaf` with other first bytes. Version 1 has only the nonce.
 
@@ -209,7 +211,9 @@ H_0 = zero(32)
 
 Each head depends on every batch before it, so no record can be added, dropped, reordered or changed after its batch is uploaded without changing every later head (DESIGN 3.6, CC7 in DESIGN 7.3).
 
-The client uploads `{b, n, R_b, H_b, prev}` with `prev = H_(b-1)` (DESIGN 4.3); the upload's JSON is WP-SV4's. The server refuses the batch unless `prev` equals the head it stored for batch `b - 1`, or `zero(32)` when `b = 1`, and unless `H_b` is `SHA-256(0x03 || prev || R_b || u64(n) || u64(b))` for the values it received. It then stores `(device_id, b, n_b, R_b, H_b, received_at)`, where `received_at` is the server's clock, in Unix milliseconds, when it stored the row.
+The client uploads `{b, n, R_b, H_b, prev}` with `prev = H_(b-1)` (DESIGN 4.3); the upload's JSON is WP-SV4's. The server refuses a batch whose `H_b` isn't `SHA-256(0x03 || prev || R_b || u64(n) || u64(b))` for the values it received, a batch 1 whose `prev` isn't `zero(32)`, and a batch whose `prev` differs from the head it stored for batch `b - 1` (DESIGN 4.5's chain link). It then stores `(device_id, b, n_b, R_b, H_b, received_at)`, where `received_at` is the server's clock, in Unix milliseconds, when it stored the row.
+
+A device's first upload can start after batch 1, for example when it leaves local-only mode with batches it never sent (DESIGN 4.2). Whether the server then asks for the earlier batches or starts the device's witnessed chain at that batch is WP-SV4's decision. This spec only fixes the bytes either way.
 
 ## 7. Receipts
 
@@ -256,7 +260,7 @@ It commits `d`, `G_(d-1)`, `T_d`, `count_d`, `G_d` and `signature_d` to the publ
 
 A verifier that holds a run of a device's batches, with headers and body hashes for every record in them, checks:
 
-1. Batch numbers rise by 1 with no gap. A run that starts at `b = 1` has `prev = zero(32)`; one that starts later has, as its first `prev`, the head the server stored for the batch before.
+1. Batch numbers rise by 1 with no gap. A run that starts at `b = 1` has `prev = zero(32)`. A run that starts later links its first `prev` to the head the server stored for the batch before it, when the server stored one.
 2. Sequence numbers rise by 1 with no gap, within and across batches. Batch 1 starts at `s = 1`.
 3. Every header follows 4.3: its rtype is in the table, an `os.*` header has the zero project, and checkpoints and upload-failure notes have the fields their row in 4.3 gives them.
 4. Every entry is its header followed by the SHA-256 of the record's stored body, and every revealed body agrees with its header (4.5).
@@ -302,7 +306,7 @@ python3 -I tools/ledger_ref.py vectors [--out PATH]
 python3 -I tools/ledger_ref.py check FILE
 ```
 
-`selftest` checks the RFC 5869, RFC 4231 and Certificate Transparency vectors, the rtype table against `pkg/event`'s `kindTable`, and the worked example in section 12 against this file, then checks that `vectors.json` is byte for byte what `vectors` writes and that it passes `check`. `ci.yml` runs it on every PR.
+`selftest` checks the RFC 5869, RFC 4231 and Certificate Transparency vectors, the rtype table against `pkg/event`'s `kindTable`, and the worked example in section 12 against this file. Then it checks that `vectors.json` is byte for byte what `vectors` writes, that it passes `check`, and that `check` catches each of 24 kinds of tampering with it. `ci.yml` runs it on every PR.
 
 `check FILE` recomputes every value in a file in the format of 11.3 and prints each mismatch with its JSON path. `pkg/ledger`'s tests write such files and run `check` on them (WP-LG2).
 
