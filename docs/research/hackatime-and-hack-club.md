@@ -253,13 +253,74 @@ Programs add their own checks on top of Hackatime. Stardance's integrity review 
 
 ### 1.10 Hosting, scale, cost
 
-(pending)
+Public numbers beyond BOUNTY.md R11:
+
+| Fact | Source |
+|---|---|
+| "41,247 users" and "2,805,220 hours tracked" | [hackatime.hackclub.com](https://hackatime.hackclub.com/) home page, fetched 2026-11-19 |
+| "Heartbeats are the bulk of our Postgres: 755 GB for 426M rows, 592 GB of which is 32 indexes." Dashboard rollups "take about 17 worker-hours a day to refresh" | [hackatime PR #1745](https://github.com/hackclub/hackatime/pull/1745) "Move heartbeats to ClickHouse", a draft opened 2026-10-04 and still unmerged on 2026-11-19 |
+| In ClickHouse, a `MergeTree` ordered by `(user_id, time, id)`, "All of production fits in 5.5 GiB". The copy drops 23.4M exact duplicates | same PR |
+| Users with 1M+ heartbeats exist; counting their heartbeats takes about 300 ms | [hackatime PR #1337](https://github.com/hackclub/hackatime/pull/1337) |
+| Production runs on Coolify behind Cloudflare | `config/initializers/git_version.rb`, `config/initializers/rack_attack.rb` |
+| Hackatime's Postgres is deliberately overprovisioned (a maintainer in the bounty thread) | BOUNTY.md, themes |
+
+Derived numbers for a load model (my arithmetic, approximate):
+
+- 426M rows over 2.8M tracked hours is roughly 150 heartbeat rows per tracked hour, including duplicates and AI-transcript rows. The share coming from wakatime-cli's AI sync is unknown.
+- At 109,759 hours per month (R11), that is about 16M heartbeats per month, roughly 6 per second on average. Peaks are higher because teen activity clusters in evenings and weekends.
+- About 1.8 KB per heartbeat row in Postgres including indexes (755 GB / 426M), against about 14 bytes per row in ClickHouse (5.5 GiB / 403M). The storage cost of a heartbeat log is almost all indexes and row overhead, and a columnar store removes it.
+
+So R11 is not tight for a heartbeat server. The costs that could break $500/month are screen-evidence storage (section 4.2) and heavy per-request computation, such as LLM calls per prompt or per review.
+
+Two Hackatime issues show AI-time problems reaching support: [#1763](https://github.com/hackclub/hackatime/issues/1763) (2026-10-16) asks to delete about 1,045 `ai coding` rows in one hour that the AI sync attached to the wrong project from unrelated old folders, and [#1753](https://github.com/hackclub/hackatime/issues/1753) (2026-10-13) asks how to exclude "autonomous AI activity" synced from Codex transcripts. The CLI has a `--sync-ai-disabled` flag (mentioned in #1753).
 
 ## 2. WakaTime
 
 ### 2.1 Heartbeat schema and API
 
-(pending)
+From [wakatime.com/developers](https://wakatime.com/developers) (fetched 2026-11-19). Base URL `https://api.wakatime.com/api/v1` (`BaseURL` in wakatime-cli `pkg/api/api.go`).
+
+`POST /api/v1/users/current/heartbeats` and `POST /api/v1/users/current/heartbeats.bulk` (also `/users/:user/...`). Scope `write_heartbeats`. The docs say "The bulk endpoint accepts an array of heartbeats, limited to 25 per POST request" and "Editor and OS are detected from the User-Agent header." A single POST returns `202` with `data.{id, entity, type, time}`. The general rate limit is "fewer than 10 requests per second on average over any 5 minute period".
+
+| Field | Type | Documented meaning |
+|---|---|---|
+| `entity` | string | "absolute file path or domain" |
+| `type` | string | `file`, `app`, `url` or `domain` |
+| `category` | string | Optional; "normally this is inferred automatically from type" |
+| `time` | float | Unix epoch seconds with fractions |
+| `project`, `branch`, `language` | string | Optional |
+| `project_root_count` | int | Folders in the project root path, so the server can make paths relative |
+| `dependencies` | string | Comma-separated (Hackatime takes an array) |
+| `lines`, `lineno`, `cursorpos` | int | File length, cursor row and column |
+| `is_write` | bool | Heartbeat came from a save |
+| `ai_line_changes` | int | "lines added or removed by GenAI since last heartbeat in the current file" |
+| `human_line_changes` | int | "lines added or removed by old-school typing since last heartbeat in the current file" |
+| `ai_session` | string | AI session id |
+| `ai_input_tokens`, `ai_output_tokens` | int | Tokens since the last heartbeat |
+| `ai_prompt_length` | int | "number of user prompt characters typed to AI since the last heartbeat" |
+| `ai_subscription_plan` | string | Plan of the AI tool |
+
+wakatime-cli also sends `ai_cached_input_tokens` (`pkg/heartbeat/heartbeat.go`), which the public docs don't list. The model is not a heartbeat field; it goes in the user agent (section 2.2). Documented categories: `ai coding`, `browsing`, `building`, `code reviewing`, `coding`, `communicating`, `debugging`, `designing`, `indexing`, `learning`, `manual testing`, `notes`, `researching`, `running tests`, `writing docs`, `writing tests`. The CLI knows five more: `advising`, `meeting`, `planning`, `supporting`, `translating`.
+
+Read endpoints a compatible server would mirror:
+
+| Endpoint | Notes |
+|---|---|
+| `GET /users/current/durations?date=` | Heartbeats joined into spans; params `project`, `branches`, `timeout`, `writes_only`, `timezone`, `slice_by` (`category`, `dependencies`, `editor`, `entity`, `language`, `machine`, `os`, `project`; default `project`). Each duration carries AI aggregates, including `ai_model_costs` |
+| `GET /users/current/summaries?start&end` or `range=` | Per-day totals. `grand_total` has `ai_additions`, `ai_deletions`, `human_additions`, `human_deletions`, `ai_model_line_changes`, `ai_model_costs`, `ai_model_breakdown[]` (`name`, `lines`, `input_tokens`, `output_tokens`, `cached_input_tokens`, `cost`), `ai_input_tokens`, `ai_output_tokens` and `ai_prompt_length_avg` (from the raw notes' fetch summary; not re-checked) |
+| `GET /users/current/statusbar/today` | What editor plugins display |
+| `GET /users/current/stats/:range` | Aggregates by editor, language, project and more |
+
+Durations, from Alan Hamlett's reference code (gist [processHeartbeatsIntoDurations.js](https://gist.github.com/alanhamlett/0d0c496fe40d977dbdbf0abf0b34ec57), BSD-3-Clause, last active 2025-04-21):
+
+- If the next heartbeat is less than `timeout` minutes away (default 15), the current heartbeat gets the full gap. Otherwise it gets 0, so an idle gap adds nothing at all, unlike Hackatime's 2-minute cap.
+- The time before a project switch goes to the earlier heartbeat's project, the reverse of Hackatime's `attributed_durations_by`.
+- Mini-durations merge only while the project (case-insensitive) stays the same. Entity, language and category don't split a duration.
+- The last heartbeat adds 0 unless the next day's first heartbeat is within the timeout.
+
+The FAQ adds that public profiles and leaderboards always use the default 15-minute timeout, and that "the timeout preference only affects time *between* heartbeats not surrounding" ([wakatime.com/faq](https://wakatime.com/faq), from the raw notes' fetch summary).
+
+For pairtime, compatibility means accepting this heartbeat shape at `/api/v1/users/current/heartbeats(.bulk)` with Basic or Bearer key auth, answering `statusbar/today`, and tolerating unknown fields. Then every WakaTime plugin, Hackatime's installer and wakatime-cli's AI parsers work against pairtime by changing only `api_url`.
 
 ### 2.2 AI tracking in wakatime-cli
 
@@ -289,11 +350,32 @@ What this means for counting:
 
 ### 2.3 Desktop app and AI apps
 
-(pending)
+WakaTime has two desktop trackers, both BSD-3-Clause: [wakatime/macos-wakatime](https://github.com/wakatime/macos-wakatime) (Swift, `8c70917f8469`, 2026-07-22) and [wakatime/desktop-wakatime](https://github.com/wakatime/desktop-wakatime) (TypeScript/Electron for Windows and Linux, `2d27faef3e63`, 2026-05-21). [wakatime.com/desktop](https://wakatime.com/desktop) calls the app "a catch-all if we don't have a plugin for your IDE or app."
+
+The macOS app tracks only a fixed allow-list of bundle ids (`WakaTime/Watchers/MonitoredApp.swift`): Adobe apps, Arc, Brave, Canva, Chrome, Figma, Firefox, GitHub Desktop, iMessage, Inkscape, iTerm2, Linear, Miro, Notes, Notion, Postman, Rocket.Chat, Safari, Slack, TablePlus, Terminal, Warp, WeCom, WhatsApp, Xcode, Zed and Zoom. It reads window titles and browser URLs through the Accessibility API. Categories are fixed per app in `MonitoringManager.category(for:)` (designing, communicating, meeting, browsing, coding), and a browser URL matching a GitHub, GitLab or Bitbucket pull request becomes `code reviewing` (`category(from:)`).
+
+No ChatGPT, Claude or Codex desktop app is on that list. WakaTime's AI tracking comes from wakatime-cli reading local transcripts and databases (section 2.2). [wakatime.com/llms.txt](https://wakatime.com/llms.txt) names Claude Code, the Claude desktop apps and Claude in editors, plus Codex, Continue, Cody, Roo Code, OpenCode, Copilot, Cursor, Windsurf, Qoder, Kiro, Cline, Gemini, Pi and Goose (from the raw notes' fetch summary). The same page says that capturing data on the developer's machine means "it knows whether code was AI generated or Human written".
 
 ### 2.4 Why people call it inaccurate
 
-(pending)
+The bounty thread says WakaTime's AI tracking "is widely seen as poor" (BOUNTY.md). The public issue tracker shows errors in both directions:
+
+| Issue | What it reports |
+|---|---|
+| [vscode-wakatime#440](https://github.com/wakatime/vscode-wakatime/issues/440) (2025-07-18, closed, 27 comments) | "it says I have spent 10 minutes AI coding when I haven't used AI at all today" |
+| [vscode-wakatime#474](https://github.com/wakatime/vscode-wakatime/issues/474) (2026-03-03, closed) | A fully AI-written commit (`10 files changed +939 -11`) shows on the dashboard as "Human: +456 -6", "AI additions: 15" |
+| [vscode-wakatime#495](https://github.com/wakatime/vscode-wakatime/issues/495) (2026-09-08, open) | "`ai coding` latches on and cannot clear while you type (30.2.1)". Over two weeks, 98.3% of time was labelled `ai coding` against an honest 86.1%, and 12 of 14 heartbeats with `human_line_changes > 0` were still labelled `ai coding`. The reporter traces it to the release path in `onChangeTextDocument` |
+| #464, #476, #483, #484, #486, #482 (2025-11 to 2026-06) | Cursor's AI edits counted as human, Cursor time attributed to VS Code, Codex window time counted as Cursor editor time, AI activity barely tracked over Remote SSH |
+
+Why this happens, from the code:
+
+1. The editor plugin guesses from the shape of edits (section 1.5). A single change of more than 2 newlines or 50 characters, repeated within 500 ms, flips `isAICodeGenerating` on. Single-character inserts or deletions are needed to flip it off, and other edit kinds reset the countdown (#495). Autocomplete, snippets, formatters, paste and multi-cursor edits all look like AI. AI edits applied through the file system (an agent writing files) don't show up as editor inserts at all.
+2. Line counting uses `document.lineCount` deltas, and any jump above 50 lines within 60 s is zeroed "to prevent counting large copy/paste as human typed lines" (`updateLineNumbers` in `src/wakatime.ts`). Large AI diffs therefore vanish from both counts, which matches #474.
+3. The CLI's AI sync relabels editor heartbeats within 2 minutes (or 30 minutes before the first human edit) of agent activity as `ai coding` (section 2.2). A person reviewing the agent's output gets counted as the agent.
+4. `ai coding` time is the spacing of agent transcript records, so it measures how long the agent was busy, not how long a person was engaged.
+5. For time itself, the 15-minute default timeout credits up to 15 minutes of silence between any two heartbeats. That over-counts idle time; Hackatime's 2-minute cap under-counts reading and thinking.
+
+The underlying problem is that none of these signals separates the person from the agent. Edit-shape heuristics break whenever tools change how they insert text, and transcript timestamps measure the agent. Pairtime needs human-side evidence: input events, focus, prompt submissions and review actions, tied to the harness's own events (R2, R7).
 
 ## 3. The Hack Club YSWS pipeline
 

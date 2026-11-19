@@ -403,7 +403,7 @@ Shorter treatment. Storage paths come from wakatime-cli `pkg/ai/*.go` at `7ab26b
 | OpenCode (MIT, anomalyco/opencode) | Server plugins in `.opencode/plugins/` or config `plugins`; `ctx.event.subscribe()` event stream (e.g. `session.idle`), hooks `ctx.session.hook("prompt")`, `ctx.tool.hook("execute.before")`; v1 names `chat.message`, `tool.execute.before` | `session.hook("prompt")` | SQLite `opencode*.db` in the data dir (`~/.local/share/opencode`, `~/Library/Application Support/opencode`, `%LOCALAPPDATA%\opencode`); legacy JSON under `storage/session/` and `storage/message/<session>/` | `AGENTS.md` (native), `CLAUDE.md` fallback (unverified) | A pairtime plugin is a small JS module; runs inside OpenCode's server |
 | Aider (Apache-2.0) | none (only `--lint-cmd`, `--test-cmd`) | none | In the repo root: `.aider.input.history` (typed input, with timestamp header lines) and `.aider.chat.history.md`; optional `--analytics-log <file>` JSONL | `--read CONVENTIONS.md`; no native AGENTS.md (unverified) | Git attribution on by default: `--attribute-co-authored-by` (default True) adds a `Co-authored-by` trailer; `--attribute-author`/`--attribute-committer` append "(aider)". Repo activity slowed (last push 2026-05-22) |
 | Zed agent | none for Zed Agent; external agents (Claude Agent, Codex, Gemini CLI, OpenCode, Copilot, Cursor) run over ACP with their own runtimes and so their own hooks | none for Zed Agent | SQLite `threads.db`: `~/Library/Application Support/Zed/threads/threads.db`, `%LOCALAPPDATA%\Zed\threads\threads.db`, `~/.local/share/zed/threads/threads.db` | `AGENTS.md` primary; first match of `.rules`, `.cursorrules`, ..., `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`; global `~/.config/zed/AGENTS.md` / `%APPDATA%\Zed\AGENTS.md` | Zed is a host for other agents; cover those |
-| Google Antigravity (App, IDE, CLI) | `.agents/hooks.json` (workspace), `~/.gemini/config/hooks.json` (global), plugin `hooks.json`; events `SessionStart`, `PreToolUse`, `PostToolUse`, `PreInvocation`, `PostInvocation`, `Stop`; payload `conversationId`, `workspacePaths`, `transcriptPath`, `artifactDirectoryPath`, `modelName`, `lastUserInput`, no timestamp | none; `PreInvocation` with `invocationNum` 0 is the nearest | `~/.gemini/antigravity{,-ide,-cli}/brain/<conversationId>/.system_generated/logs/transcript.jsonl`; SQLite `~/.gemini/antigravity*/conversations/*.db` and `implicit/*.db` | rules, skills, plugins (antigravity.google/docs) | Gemini CLI users are being migrated to Antigravity CLI (docs `cli/gcli-migration`) |
+| Google Antigravity (App, IDE, CLI) | `.agents/hooks.json` (workspace), `~/.gemini/config/hooks.json` (global), plugin `hooks.json`; events `SessionStart`, `PreToolUse`, `PostToolUse`, `PreInvocation`, `PostInvocation`, `Stop`; payload `conversationId`, `workspacePaths`, `transcriptPath`, `artifactDirectoryPath`, `modelName`, `lastUserInput`, no timestamp | none; `PreInvocation` with `invocationNum` 0 is the nearest | `~/.gemini/antigravity{,-ide,-cli}/brain/<conversationId>/.system_generated/logs/transcript.jsonl`; SQLite `~/.gemini/antigravity*/conversations/*.db` and `implicit/*.db` | rules, skills, plugins (antigravity.google/docs) | Antigravity's docs include a Gemini CLI migration page (`docs/cli/gcli-migration`), so some Gemini CLI users will move here (inferred from the URL) |
 | Kiro (IDE, CLI V3, Web) | `.kiro/hooks/<id>.json` (IDE and CLI); global `~/.kiro/hooks/` (CLI V3). Triggers: Prompt Submit, Agent Stop, Session Start/End, Pre/Post Tool Use, Permission Request, File Create/Save/Delete, Pre/Post Compaction, Pre/Post Task Execution, Manual | Prompt Submit (can't block in CLI) | IDE: `<Kiro user dir>/globalStorage/kiro.kiroagent/workspace-sessions/*/*.json`; CLI: `~/.kiro/sessions/**/messages.jsonl` + `session.json` (`KIRO_HOME`) | `.kiro/steering/`, `~/.kiro/steering/`, AGENTS.md supported on all surfaces | File Save trigger is an editor-side activity signal |
 | Amp | TS/JS plugins in `.amp/plugins/` or `~/.config/amp/plugins/`: `amp.on('session.start' | 'agent.start' | 'tool.call' | 'tool.result' | 'agent.end')`; `agent.start` fires when the user submits a prompt and carries `changesWorkflow` (`ship`, `push_branch`) when a button started the turn | `agent.start` | Threads live on ampcode.com; local cache `~/.cache/amp/logs/threads`, `cli.log` | `AGENTS.md` (Amp's primary format) | Execute mode `amp -x` for scripts; `-ox` spawns cloud "orbs"; automations run on a schedule |
 | Warp (terminal + agent) | none for Warp Agent | none | `warp.sqlite`: `~/Library/Application Support/dev.warp.Warp-Stable/`, `%LOCALAPPDATA%\warp\Warp\data\`, `~/.local/share/warp-terminal/` | `AGENTS.md` (or legacy `WARP.md`), root and cwd | Hosts third-party CLI agents (Claude Code, Codex, OpenCode) whose hooks still apply; Warp's terminal blocks are a command-timing source (unverified) |
@@ -422,15 +422,112 @@ Patterns across the long tail:
 
 ## 10. Browser chat and app builders
 
-(pending)
+None of these run on the user's machine, so no hook, transcript or OTel stream exists locally. What remains is the browser, the vendors' data exports, and git.
+
+### 10.1 Browser chat (ChatGPT, Claude.ai, Gemini)
+
+| Signal | How | What it gives | Limits |
+|---|---|---|---|
+| Browser extension (Chrome MV3, Firefox WebExtension) | Content script on `chatgpt.com`, `claude.ai`, `gemini.google.com`; listen for the composer's submit (Enter key / send button) and for streamed response start/end via DOM mutation | Prompt-submit timestamps, prompt length, typing duration before submit, paste vs typed (from `paste` and `keydown` events), response-complete times, time the tab stays focused while the response is read | DOM selectors break when the sites change (monthly); needs host permissions that privacy-conscious users and school-managed Chromebooks may block; one extension per browser family |
+| `chrome.idle` | `chrome.idle.onStateChanged`, `queryState(seconds)`; states `active`, `idle`, `locked`; default threshold 60 s; permission `idle` (developer.chrome.com, read 2026-11-19) | Machine-wide idle, from inside the browser | Coarse; the page documents no minimum interval |
+| `tabs`/`windows` focus | `chrome.tabs.onActivated`, `chrome.windows.onFocusChanged` | Which chat tab is in front, and for how long | Same as WakaTime's browser extension does for domains |
+| Vendor data exports | ChatGPT: Settings > Data controls > Export (a zip with `conversations.json`; messages carry `create_time` epoch seconds, per community parsers, unverified); Claude.ai: Settings > Privacy > Export data (`conversations.json` with `created_at` per message, unverified); Gemini: Google Takeout "Gemini Apps Activity" (unverified) | Full history with timestamps, after the fact | Manual, slow (email link), all-or-nothing privacy; useful for an audit on request, not for passive tracking |
+
+Desktop chat apps (ChatGPT desktop, Claude desktop) are Electron or native apps with no plugin API; the OS window-focus watcher (section 13.4) is the only passive signal. Claude Desktop's Code tab runs Claude Code, so Claude Code's hooks and OTel apply there (`app.entrypoint=claude-desktop`).
+
+### 10.2 App builders (Lovable, Bolt, v0, Replit Agent) and cloud agents
+
+| Product | What reaches the user's git | Evidence seen |
+|---|---|---|
+| Lovable | Two-way GitHub sync; commits are authored by `gpt-engineer-app[bot]` (Lovable was formerly GPT Engineer) | GitHub commit search, 2026-11-19: commits such as "Add options chain table UI" with author `gpt-engineer-app[bot]` |
+| Replit Agent | Commits carry trailers: `Replit-Commit-Author: Agent` (agent edits), `Replit-Commit-Author: Deployment` + `Replit-Commit-Deployment-Build-Id`, `Replit-Task-Id`, `Replit-Merge-Attempt` | GitHub commit search, 2026-11-19: 20 sampled commit messages (mostly squash merges) held 166 `Replit-Commit-Author: Agent` lines and 26 `Replit-Commit-Author: Deployment` lines |
+| Bolt.new (StackBlitz) | GitHub export/sync from the web IDE | author pattern unverified (search rate-limited) |
+| v0 (Vercel) | GitHub sync / PRs | author pattern unverified (search rate-limited) |
+| Claude Code on the web, Codex Cloud, Copilot coding agent, Cursor/Devin cloud agents | PRs and commits from the vendor's VM; Copilot's coding agent commits as `Copilot` (unverified) | Section 3.5, 6.5, 5.1 |
+
+What these signals prove: that an agent made the change, and roughly when. They say nothing about how long the human spent steering. For app builders, pairtime's only human-time evidence is the browser extension (prompt submits, typing, focus) plus OS focus time on the builder's tab. Commit cadence and the human-authored commits between bot commits are corroborating evidence, not time.
+
 
 ## 11. The AGENTS.md + CLI idea, assessed
 
-(pending)
+The proposal: one instruction in AGENTS.md (or a skill) tells the agent, on every user message, to run `pairtime track "<PII-stripped copy of the prompt>"`. Estimated cost: about 30 input tokens and one tool call.
+
+### 11.1 Does each harness read the file?
+
+| Harness | Reads AGENTS.md by default? | Where the instruction must go to load reliably |
+|---|---|---|
+| Claude Code | Only when no `CLAUDE.md`/`.claude/CLAUDE.md`/`CLAUDE.local.md` exists in cwd or above (v2.1.277+) | `~/.claude/CLAUDE.md` (always loads) |
+| Cursor | Yes, root and nested | `~/.cursor` User Rules or a project rule with `alwaysApply: true` |
+| Copilot CLI / VS Code | Yes (CLI merges AGENTS.md, CLAUDE.md, GEMINI.md, copilot-instructions) | `~/.copilot/copilot-instructions.md`; subagents get nothing unless `include-custom-instructions: true` |
+| Codex | Yes, natively, once at session start | `~/.codex/AGENTS.md` |
+| Gemini CLI | No; reads `GEMINI.md` unless `context.fileName` includes `AGENTS.md` | `~/.gemini/GEMINI.md` |
+| Devin Desktop / Devin CLI | Yes (`AGENTS.md`, `AGENTS.local.md`, `AGENT.md`) | `~/.devin/global_rules.md` |
+| Cline, Kilo, OpenCode, Zed, Warp, Junie, JetBrains AI Assistant, Amp, Kiro, Trae | Yes (Trae and Kiro via a toggle or steering) | the tool's global rules file |
+| Aider | No (`--read CONVENTIONS.md`); the model can't run shell commands on its own | not workable |
+| Browser chat, app builders | No local shell | not workable |
+
+### 11.2 Cost, recomputed
+
+The "30 tokens" figure counts only the instruction. The real per-turn cost is larger:
+
+1. The instruction sits in context on every request (about 30 to 60 tokens, usually cache-read).
+2. The model writes the tool call, including the copied prompt: output tokens roughly equal to the prompt's length plus about 30. Output tokens are the expensive kind, and a 300-token prompt costs about 330 output tokens to copy.
+3. A tool call ends the model's response, so the harness must send another request carrying the whole context (cache-read) to get the real answer. That's one extra API request per turn, unless the model batches `track` alongside its first real tool call in parallel. On subscription plans it consumes rate limit; on API keys it costs money roughly proportional to context size.
+4. Latency: one more round trip, typically one to a few seconds per turn.
+5. Permission prompts: Claude Code asks before an unlisted Bash command, so the installer has to add `permissions.allow: ["Bash(pairtime track:*)"]`. Codex runs model commands inside its sandbox, where writes outside the workspace and network access are off by default (`sandbox_workspace_write.network_access` is opt-in), so the CLI might not reach a localhost daemon or `~/.pairtime`. Copilot CLI and Claude Code also have sandboxes. Hooks run outside the model's sandbox, so none of this applies to them.
+
+Asking for a short summary instead of a full copy cuts item 2, but makes the record lossy and more spoofable.
+
+### 11.3 Reliability and spoofing
+
+- Compliance is not guaranteed. Claude Code's own docs say instruction files are "context, not enforced configuration" and send users to hooks for anything that must happen. Per-turn rituals are what agents drop first: after compaction, in long tool loops, under `/goal` or autopilot, in subagents (Copilot subagents don't get instructions by default), and in `--bare` or `--no-custom-instructions` runs. I found no published compliance rate (unverified). pairtime can measure it: on harnesses that have both, count AGENTS.md calls per hook-observed prompt.
+- The model writes the "stripped" prompt, so the record shows what the model chose to report. It can paraphrase, truncate, or invent.
+- Anyone can run `pairtime track "..."` from a script, in a loop, with fabricated prompts. The CLI can't tell who called it except from weak hints: the parent process chain, harness env vars such as `CLAUDE_CODE_SESSION_ID`/`CLAUDECODE` (Claude Code sets both in tool subprocesses), and matching against a hook or log record.
+- A repo's own AGENTS.md (prompt injection) can tell the agent to skip the call, or to call it with fake content. Deleting the line skips it for good.
+- Privacy is no better than hooks: the raw prompt already goes to the model provider, and a hook receives the raw prompt locally, where pairtime can redact it deterministically (regex for emails, phone numbers, keys, paths) instead of trusting an LLM to do it.
+
+### 11.4 Verdict
+
+Where a hook or a readable log exists, it beats AGENTS.md + CLI on every axis: it is deterministic, costs zero tokens, runs outside the model's sandbox, can't be skipped by the model, gives exact timestamps (Copilot, Gemini, Cline) or receiver-stamped ones, and sees prompts the model never mentions. That covers the top six harnesses and most of the long tail (section 15).
+
+Use AGENTS.md + CLI only for:
+
+1. Agents with no hooks and no readable log: Zed Agent (it has `threads.db`, so even there a reader exists), Warp Agent, JetBrains AI Assistant chat, and any new harness before a native integration ships. This is R7's "plugin approach" fallback.
+2. A consistency check where hooks exist: a missing or mismatched `track` call is not proof of fraud, but a `track` call with no matching hook event means the call came from outside the agent.
+3. Optional self-declared context, such as "what I'm working on", which only the model or user can supply.
+
+An MCP server variant (`pairtime` MCP with a `track` tool) has the same compliance problem, but the server process itself is a passive signal: harnesses start stdio MCP servers per session or per app launch, and the `initialize` request carries `clientInfo.name`/`version` (which harness) and `roots` (which project). Claude Code also passes `CLAUDE_CODE_SESSION_ID` to stdio MCP servers. That gives session boundaries and project attribution for any MCP-capable harness with zero tokens, as long as the model never has to call the tool.
+
 
 ## 12. Telling a human session from headless, scheduled, and agent-driven runs
 
-(pending)
+### 12.1 Fields that reveal automation, per harness
+
+| Harness | Headless / SDK | Scheduled or self-continuing | Agent driving agent |
+|---|---|---|---|
+| Claude Code | OTel `app.entrypoint` `sdk-cli`/`sdk-ts`/`sdk-py` (opt-in attribute); `--bare` leaves no hooks; prompt absent from `history.jsonl` (unverified) | `Stop.session_crons[].prompt` lists what will fire; `stop_hook_active`; `/goal` evaluator verdicts in transcript; `/loop` prompts fire only when idle | `CLAUDE_CODE_CHILD_SESSION=1` and `CLAUDECODE=1` in any process Claude Code spawns; OTel `agent_id`/`parent_agent_id`, `workflow.run_id`; `isSidechain` in transcripts |
+| Codex | `session_meta.source=exec`, `originator=codex_exec`/`codex_sdk_ts`/`codex-app-server-sdk`; OTel `session_source` | `Stop` continuation prompts; `stop_hook_active` | `source=mcp` (Codex run as an MCP server by another agent), `source.subagent.thread_spawn.depth`, `inter_agent_communication` items |
+| Copilot | `copilot -p`; cloud agent: one `userPromptSubmitted` per job | autopilot, `/goal`, `--max-autopilot-continues`; `stop_hook_active` | subagent `agentId`/`parentAgentId`; `github.copilot.initiator` (values unverified) |
+| Cursor | `agent -p`, `--force` | `stop.loop_count` > 0 marks auto follow-ups | `sessionStart.is_background_agent`; `surface` (`sdk`, `api`, `automations`, ...) on self-hosted workers |
+| Gemini CLI | non-TTY or `-p`; `gemini_cli.config.output_format`, `github_workflow_name` | `AfterAgent.stop_hook_active` retries | User-Agent surface tag (`vscode`, `zed`, `jetbrains` via ACP) |
+| Devin, Junie, Kiro | Junie batch host and Kiro CLI Prompt Submit semantics differ; Junie batch never fires `UserPromptSubmit` | `Stop` block loops (Junie caps at 8) | ACP host fires a subset of events (Junie: only SessionStart, PreToolUse, SessionEnd) |
+
+None of these flags survives a determined cheater: a script can drive the interactive TUI (tmux `send-keys`, a pty wrapper, an LLM-controlled terminal) and every field above reads "interactive human". The flags catch honest automation, which is most of it, and they let pairtime label agent time correctly instead of treating it as fraud.
+
+### 12.2 Cross-harness heuristics for "a human typed this"
+
+| Check | Data needed | Catches | Misses |
+|---|---|---|---|
+| OS keyboard activity in the N seconds before a prompt-submit event | OS input hook or idle counter (section 13.4) + hook timestamp | `-p` scripts, cron, cross-session messages, remote control, prompts sent while the machine was idle or locked | Auto-typers that inject OS-level input |
+| Typing time vs prompt length | keystroke count/timing in the terminal or editor before submit; prompt length from the hook | Pasted or injected prompts (a 2,000-char prompt "typed" in 1 s) | Paste is legitimate (error logs); use as a weight, not a block |
+| Injected-input flag | Windows low-level hook `LLKHF_INJECTED`; macOS `CGEventGetIntegerValueField(kCGEventSourceUnixProcessID)` / event source state; X11 XTEST device | `SendInput`/AutoHotkey/xdotool auto-typers | Hardware injectors (USB HID boards), VMs, remote desktop |
+| Regularity of prompt timing | prompt timestamps | `/loop`-style fixed intervals, scripted cadence | Jittered scripts |
+| Near-duplicate prompts | prompt hashes or MinHash of normalized text, kept locally | Repetitive re-prompting ("try again", "fix it"), the vision post's "doing the same thing over and over" | Paraphrased repetition |
+| Process tree | parent chain of the agent process at session start | an agent spawned by another agent or by a Python/Node script; `tmux`/`expect` wrappers | an attacker who launches from a normal shell and drives it remotely |
+| Foreground window and focus | OS focus watcher | prompts submitted while the terminal or editor wasn't focused | focus can be kept on purpose |
+
+Signals combine well because faking all of them at once is expensive: keystrokes with human timing, focus on the right window, varied prompts, edits in the editor between turns, and commits that match.
+
 
 ## 13. Human-side signals outside the agent
 
