@@ -144,6 +144,7 @@ func buildPresence(r rules, recs []event.Event, high int64, fl *focusLine) *pres
 		lockFrom, sleepFrom int64
 		haveSample          bool
 		lastSample          int64
+		lastIdle            int64 // the idle time the last sample showed
 	)
 	for _, e := range recs {
 		switch d := e.Data.(type) {
@@ -152,9 +153,12 @@ func buildPresence(r rules, recs []event.Event, high int64, fl *focusLine) *pres
 			if d.IdleKeysS != nil {
 				s.hasKeys, s.lastKey = true, e.T-msOf(*d.IdleKeysS)
 			}
-			if haveSample && e.T-lastSample > r.sleepGap {
+			if gap := e.T - lastSample; haveSample && gap > r.sleepGap && !(lastIdle >= r.contextIdle && gap <= r.slowGap) {
 				// SM 2.1: gaps come from wall-clock sample times. The open
-				// interval between the two samples is the gap.
+				// interval between the two samples is the gap. After
+				// CONTEXT_IDLE_S without input the agent samples once a
+				// minute (DESIGN 6.2 D14), and a gap that slow sampling
+				// explains is no sleep.
 				gaps = append(gaps, span{lastSample + 1, e.T})
 			}
 			// A sample after a suspend shows the machine awake again, even
@@ -170,7 +174,7 @@ func buildPresence(r rules, recs []event.Event, high int64, fl *focusLine) *pres
 				locks, locked = append(locks, span{lockFrom, e.T}), false
 			}
 			p.samples = append(p.samples, s)
-			haveSample, lastSample = true, e.T
+			haveSample, lastSample, lastIdle = true, e.T, e.T-s.lastAny
 		case *event.OSPower:
 			switch d.Op {
 			case event.PowerSuspend:

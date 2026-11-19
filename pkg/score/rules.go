@@ -42,6 +42,11 @@ type rules struct {
 
 	// DESIGN 6.3.
 	pendingWindow int64
+	contextIdle   int64
+	// slowGap is the longest gap between samples that isn't a hard break
+	// once sampling has slowed to one a minute (DESIGN 6.2 D14): twice
+	// SLOW_SAMPLE_S, as SLEEP_GAP_S is twice SAMPLE_S.
+	slowGap       int64
 	trackInputPre int64
 	trackMinGap   int64
 	trackLogMatch int64
@@ -87,6 +92,8 @@ func newRules(t *params.Table) rules {
 		readHorizon: ms(params.READ_HORIZON_S),
 
 		pendingWindow: ms(params.PENDING_WINDOW_S),
+		contextIdle:   ms(params.CONTEXT_IDLE_S),
+		slowGap:       ms(params.SLOW_SAMPLE_S) * t.Int(params.SLEEP_GAP_S) / t.Int(params.SAMPLE_S),
 		trackInputPre: ms(params.TRACK_INPUT_PRE_S),
 		trackMinGap:   ms(params.TRACK_MIN_GAP_S),
 		trackLogMatch: ms(params.TRACK_LOG_MATCH_S),
