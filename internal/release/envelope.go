@@ -68,7 +68,7 @@ func Sign(payload []byte, keys ...SecretKey) ([]byte, error) {
 	env := envelope{Payload: b64.EncodeToString(payload), PayloadType: PayloadType}
 	seen := map[string]bool{}
 	for _, k := range keys {
-		if len(k.key) != ed25519.PrivateKeySize {
+		if !k.valid() {
 			return nil, errors.New("empty signing key")
 		}
 		id := k.Public().ID()

@@ -105,7 +105,14 @@ func (k PublicKey) verify(msg, sig []byte) bool {
 
 // SecretKey is a release signing key. Every fmt verb prints only its id,
 // so a stray Printf can't leak it; Text is the one way to get the key out.
+// The key sits behind a pointer because fmt can't call Format on a value
+// in an unexported struct field: there it prints the field, and a pointer
+// prints as an address.
 type SecretKey struct {
+	s *secret
+}
+
+type secret struct {
 	key ed25519.PrivateKey
 }
 
@@ -115,7 +122,7 @@ func GenerateSecretKey(rand io.Reader) (SecretKey, error) {
 	if err != nil {
 		return SecretKey{}, err
 	}
-	return SecretKey{key: priv}, nil
+	return SecretKey{s: &secret{key: priv}}, nil
 }
 
 // ParseSecretKey reads a secret key in the form Text writes. Its errors
@@ -133,21 +140,24 @@ func ParseSecretKey(s string) (SecretKey, error) {
 	if err != nil || len(seed) != ed25519.SeedSize {
 		return SecretKey{}, fmt.Errorf("a release secret key is %q and a %d-byte RFC 8032 private key in padded standard base64", secretKeyPrefix, ed25519.SeedSize)
 	}
-	return SecretKey{key: ed25519.NewKeyFromSeed(seed)}, nil
+	return SecretKey{s: &secret{key: ed25519.NewKeyFromSeed(seed)}}, nil
 }
+
+// valid reports whether k holds a key; the zero SecretKey doesn't.
+func (k SecretKey) valid() bool { return k.s != nil && len(k.s.key) == ed25519.PrivateKeySize }
 
 // Text returns the key's text form: what keygen prints once and the
 // RELEASE_SIGNING_KEY secret holds.
-func (k SecretKey) Text() string { return secretKeyPrefix + b64.EncodeToString(k.key.Seed()) }
+func (k SecretKey) Text() string { return secretKeyPrefix + b64.EncodeToString(k.s.key.Seed()) }
 
 // Public returns the key's public half.
 func (k SecretKey) Public() PublicKey {
-	return PublicKey{key: k.key.Public().(ed25519.PublicKey)}
+	return PublicKey{key: k.s.key.Public().(ed25519.PublicKey)}
 }
 
 // String names the key by its public id.
 func (k SecretKey) String() string {
-	if len(k.key) != ed25519.PrivateKeySize {
+	if !k.valid() {
 		return "release secret key (empty)"
 	}
 	return "release secret key " + k.Public().ID()
@@ -157,4 +167,4 @@ func (k SecretKey) String() string {
 func (k SecretKey) Format(f fmt.State, verb rune) { io.WriteString(f, k.String()) }
 
 // sign returns the RFC 8032 Ed25519 signature of msg.
-func (k SecretKey) sign(msg []byte) []byte { return ed25519.Sign(k.key, msg) }
+func (k SecretKey) sign(msg []byte) []byte { return ed25519.Sign(k.s.key, msg) }
