@@ -81,6 +81,13 @@ jobs:
       - name: Ledger reference selftest
         run: python3 -I tools/ledger_ref.py selftest
 
+      - name: Upstream captures
+        # testdata/upstream: each capture's PROVENANCE.md, every JSON file
+        # against the schema next to it, and Robert's webhook vectors
+        # (testdata/upstream/README.md). Standard library only.
+        if: ${{ !cancelled() }}
+        run: python3 -I testdata/upstream/check.py
+
       - name: go vet
         run: go vet ./...
 
