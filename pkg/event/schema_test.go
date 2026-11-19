@@ -210,6 +210,8 @@ func (c *schemaCheck) objectFields(where string, obj map[string]any, fields []fi
 			c.addf("%s.%s: the Go type is enum %q, but the schema refers to %q", where, f.name, want, got)
 		case !isEnum && c.isEnum(got):
 			c.addf("%s.%s: the schema refers to enum %q, but the Go type is %s", where, f.name, got, f.typ)
+		case !isEnum:
+			c.jsonTypes(where+"."+f.name, prop, f)
 		}
 	}
 	for name := range props {
@@ -222,6 +224,90 @@ func (c *schemaCheck) objectFields(where string, obj map[string]any, fields []fi
 	slices.Sort(required)
 	if !slices.Equal(got, required) {
 		c.addf("%s: the schema requires %q, but Go always writes %q (the fields without omitempty)", where, got, required)
+	}
+}
+
+// lookup returns the value of key in schema s, following s's $ref chain
+// until a schema has it.
+func (c *schemaCheck) lookup(s map[string]any, key string) (any, bool) {
+	for depth := 0; s != nil && depth < 8; depth++ {
+		if v, ok := s[key]; ok {
+			return v, true
+		}
+		ref, ok := s["$ref"].(string)
+		if !ok {
+			return nil, false
+		}
+		s, _ = c.defs[strings.TrimPrefix(ref, "#/$defs/")].(map[string]any)
+	}
+	return nil, false
+}
+
+// schemaTypes returns the sorted JSON types schema s allows, following $ref,
+// or nil when it doesn't say.
+func (c *schemaCheck) schemaTypes(s map[string]any, path string) []string {
+	v, ok := c.lookup(s, "type")
+	if !ok {
+		return nil
+	}
+	if one, ok := v.(string); ok {
+		return []string{one}
+	}
+	types := c.stringList(v, path+".type")
+	slices.Sort(types)
+	return types
+}
+
+// jsonType names the JSON type encoding/json writes for Go type t.
+func jsonType(t reflect.Type) string {
+	switch t.Kind() {
+	case reflect.String:
+		return "string"
+	case reflect.Bool:
+		return "boolean"
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		return "integer"
+	case reflect.Float32, reflect.Float64:
+		return "number"
+	case reflect.Slice:
+		if t.Elem().Kind() == reflect.Uint8 {
+			return "string" // []byte is written as base64
+		}
+		return "array"
+	case reflect.Struct, reflect.Map:
+		return "object"
+	}
+	return "unknown Go kind " + t.Kind().String()
+}
+
+// jsonTypes compares the JSON types a property allows with the ones its Go
+// field writes: a pointer without omitempty may also be null, and a list's
+// items are compared too, unless they are enums.
+func (c *schemaCheck) jsonTypes(path string, prop map[string]any, f field) {
+	typ := f.typ
+	want := []string{}
+	if typ.Kind() == reflect.Pointer {
+		typ = typ.Elem()
+		if !f.omitempty {
+			want = append(want, "null")
+		}
+	}
+	want = append(want, jsonType(typ))
+	slices.Sort(want)
+	if got := c.schemaTypes(prop, path); !slices.Equal(got, want) {
+		c.addf("%s: the schema allows JSON types %q, but Go writes %q", path, got, want)
+	}
+	if jsonType(typ) != "array" {
+		return
+	}
+	if _, isEnum := c.byType[typ.Elem()]; isEnum {
+		return
+	}
+	items, _ := c.lookup(prop, "items")
+	itemSchema := c.object(items, path+".items")
+	if got, want := c.schemaTypes(itemSchema, path+".items"), []string{jsonType(typ.Elem())}; !slices.Equal(got, want) {
+		c.addf("%s: the schema allows items of JSON types %q, but Go writes %q", path, got, want)
 	}
 }
 
@@ -393,6 +479,37 @@ func TestSchemaMatchesGo(t *testing.T) {
 	}
 }
 
+// TestSchemaBounds ties the schema's bounds to the Go constants Validate
+// uses, so changing one side alone fails.
+func TestSchemaBounds(t *testing.T) {
+	root := loadSchema(t)
+	tests := []struct {
+		name string
+		path []string
+		key  string
+		want any
+	}{
+		{"a MinHash sketch has at least MinHashSize values", []string{"$defs", "prompt.submit", "properties", "minhash"}, "minItems", float64(MinHashSize)},
+		{"a MinHash sketch has at most MinHashSize values", []string{"$defs", "prompt.submit", "properties", "minhash"}, "maxItems", float64(MinHashSize)},
+		{"a track label holds at most MaxLabelLen characters", []string{"$defs", "cli.track", "properties", "label"}, "maxLength", float64(MaxLabelLen)},
+		{"key lists hold at most maxList keys", []string{"$defs", "key_list"}, "maxItems", float64(maxList)},
+		{"env hints hold at most maxList names", []string{"$defs", "cli.track", "properties", "env_hints"}, "maxItems", float64(maxList)},
+		{"parents hold at most maxList ids", []string{"$defs", "git.change", "properties", "parents"}, "maxItems", float64(maxList)},
+		{"pending crons hold at most maxList entries", []string{"$defs", "agent.stop", "properties", "pending_crons"}, "maxItems", float64(maxList)},
+		{"a key has 1 to maxKeyLen characters", []string{"$defs", "key"}, "pattern", fmt.Sprintf("^[A-Za-z0-9_-]{1,%d}$", maxKeyLen)},
+		{"an env name has at most maxEnvNameLen characters", []string{"$defs", "env_name"}, "pattern", fmt.Sprintf("^[A-Za-z_][A-Za-z0-9_]{0,%d}$", maxEnvNameLen-1)},
+		{"times start at minUnixMS", []string{"$defs", "unix_ms"}, "minimum", float64(minUnixMS)},
+		{"times end before maxUnixMS", []string{"$defs", "unix_ms"}, "exclusiveMaximum", float64(maxUnixMS)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := at(t, root, tt.path...)[tt.key]; got != tt.want {
+				t.Errorf("%s has %s = %v, want %v", strings.Join(tt.path, "/"), tt.key, got, tt.want)
+			}
+		})
+	}
+}
+
 // at walks a decoded schema by object keys and returns the object there.
 func at(t *testing.T, root map[string]any, keys ...string) map[string]any {
 	t.Helper()
@@ -502,6 +619,21 @@ func TestSchemaDriftIsCaught(t *testing.T) {
 		{"a dangling $ref", func(t *testing.T, root map[string]any) {
 			at(t, root, "$defs", "agent.queue", "properties", "turn_key")["$ref"] = "#/$defs/turn"
 		}, `$ref "#/$defs/turn" doesn't resolve`},
+		{"a number the schema calls an integer", func(t *testing.T, root map[string]any) {
+			at(t, root, "$defs", "os.presence", "properties")["idle_any_s"] = map[string]any{"$ref": "#/$defs/count"}
+		}, `os.presence.idle_any_s: the schema allows JSON types ["integer"], but Go writes ["number"]`},
+		{"a nullable field the schema doesn't let be null", func(t *testing.T, root map[string]any) {
+			at(t, root, "$defs", "os.presence", "properties", "idle_keys_s")["type"] = "number"
+		}, `os.presence.idle_keys_s: the schema allows JSON types ["number"], but Go writes ["null" "number"]`},
+		{"an envelope integer the schema calls a string", func(t *testing.T, root map[string]any) {
+			at(t, root, "properties", "seq")["type"] = "string"
+		}, `event.seq: the schema allows JSON types ["string"]`},
+		{"list items of the wrong type", func(t *testing.T, root map[string]any) {
+			at(t, root, "$defs", "prompt.submit", "properties", "minhash", "items")["type"] = "string"
+		}, `prompt.submit.minhash: the schema allows items of JSON types ["string"], but Go writes ["integer"]`},
+		{"a shared $def whose type changes", func(t *testing.T, root map[string]any) {
+			at(t, root, "$defs", "key_list", "items")["$ref"] = "#/$defs/count"
+		}, `session.start.automation_flags: the schema allows items of JSON types ["integer"], but Go writes ["string"]`},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

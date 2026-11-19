@@ -61,7 +61,11 @@ func (c *checker) within(field string, check func(*checker)) {
 }
 
 // isKey reports whether s is an opaque key: 1 to 128 ASCII letters, digits,
-// '_' or '-'. Paths, command lines and email addresses never qualify.
+// '_' or '-'. A path, a command line with arguments or an email address
+// can't pass, since each needs a separator, a space, a dot or '@'. A bare
+// name such as "Makefile" or "pytest" does pass, so isKey checks shape,
+// not privacy. What keeps a key private is that it is keyed per device: an
+// HMAC under a device secret, or a random id.
 func isKey(s string) bool {
 	if len(s) == 0 || len(s) > maxKeyLen {
 		return false

@@ -37,6 +37,11 @@
 // [Event.Shareable] clears them. Call it on anything about to leave the
 // device.
 //
+// The ledger doesn't store local fields either. pkg/ledger derives keyed
+// scorer features and content commitments from them with the device keys,
+// then writes the event's Shareable form, so the server can re-score a
+// submitted window without ever seeing them (DESIGN 3.6, 4.1).
+//
 // # Validation
 //
 // Validate methods report every broken rule at once, joined with
@@ -49,7 +54,11 @@
 //
 // Identifiers that stand in for something private (devices, sessions,
 // turns, projects, files) are opaque keys of 1 to 128 letters, digits, '_'
-// or '-', keyed per device so nobody can recompute one from a guess. A path,
-// a command line or an email address can't pass as one. Digests of content,
-// such as command-line hashes, are local fields, not keys.
+// or '-', keyed per device so nobody can recompute one from a guess. The
+// format rejects separators, spaces, dots and '@', so a path, a command
+// line with arguments or an email address can't pass as a key. A bare
+// name like "Makefile" can, so the keying keeps a key private, not the
+// format. Digests of content, such as command-line hashes, are local
+// fields, not keys. The exception is a digest keyed so that a guess can't
+// be tested, such as agent.tool's error_sig (DESIGN 3.6).
 package event

@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://raw.githubusercontent.com/some-du6e/pairtime/main/docs/schema/event.schema.json",
   "title": "pairtime event",
-  "description": "One normalized pairtime event (docs/design/struggle-metric.md section 1): the envelope fields, then kind, then the kind's payload under data. Go's pkg/event is the reference implementation, and its tests fail if this file and the Go types drift. Properties marked \"x-local\": true hold prompt text or hashes of private things; they never leave the device. Identifiers that stand in for something private are opaque keys (see $defs/key), so a path, command line or email address can't pass as one.",
+  "description": "One normalized pairtime event (docs/design/struggle-metric.md section 1, with the changes in docs/DESIGN.md section 4.1): the envelope fields, then kind, then the kind's payload under data. Go's pkg/event is the reference implementation, and its tests fail if this file and the Go types drift. This schema checks each field and each kind's rules. Go's Validate also checks the rules that compare two fields, such as typed_len_est = len_chars - pasted_chars, which this schema doesn't state. Write integers as integer literals: JSON Schema's integer accepts 1e3 and 12.0, but Go's decoder refuses them. Properties marked \"x-local\": true hold prompt text or hashes of private things; they never leave the device. Identifiers that stand in for something private are opaque keys keyed per device (see $defs/key). The key format rejects separators, spaces, dots and '@', so a path, a command line with arguments or an email address can't pass as one, but a bare name like Makefile can: the keying keeps a key private, not the format.",
   "type": "object",
   "additionalProperties": false,
   "required": ["event_id", "device_id", "seq", "t", "mono", "boot_id", "source", "via", "harness", "session_key", "kind", "data"],
@@ -61,7 +61,7 @@
      "then": {"properties": {"data": {"$ref": "#/$defs/cli.track"}, "source": {"enum": ["cli", "mcp"]}, "via": {"const": "track"}}}}
   ],
   "$defs": {
-    "key": {"type": "string", "pattern": "^[A-Za-z0-9_-]{1,128}$", "description": "An opaque key: 1 to 128 letters, digits, '_' or '-'."},
+    "key": {"type": "string", "pattern": "^[A-Za-z0-9_-]{1,128}$", "description": "An opaque key: 1 to 128 letters, digits, '_' or '-'. Keyed per device, as an HMAC under a device secret or a random id, never a plain hash someone could recompute from a guess."},
     "key_list": {"type": "array", "maxItems": 1024, "items": {"$ref": "#/$defs/key"}},
     "uuid_v7": {"type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$", "description": "A UUIDv7 (RFC 9562) in canonical lowercase text form."},
     "unix_ms": {"type": "integer", "minimum": 1577836800000, "exclusiveMaximum": 4102444800000, "description": "Unix milliseconds, UTC. The bounds (2020 to 2100) catch a time in seconds or microseconds."},

@@ -249,7 +249,12 @@ func (e *Event) UnmarshalJSON(b []byte) error {
 
 // Validate reports every rule e breaks (SM 1.1, 1.2), or nil. Errors name
 // fields by JSON path, such as "data.typed_len_est". The schema in
-// docs/schema/event.schema.json states the same rules.
+// docs/schema/event.schema.json states the same rules for each field and
+// kind, but not the ones that compare two fields, such as typed_len_est =
+// len_chars - pasted_chars or t_end not before t_start; only Validate
+// checks those. The schema's "integer" also accepts 1e3 and 12.0, which
+// encoding/json refuses for an int field, so integers must be written as
+// integer literals.
 func (e Event) Validate() error {
 	c := &checker{}
 	checkEnvelope(c, e.Envelope)
