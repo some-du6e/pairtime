@@ -147,15 +147,17 @@ test_run(at("23:43:30"))
 fx.emit(at("23:53:10"), "os.power", {"op": "lock"}, source="os", via="os", sample=True)
 
 # The rest of the night. Fixed points: the turn stops, 31 commits 750 s
-# apart from 23:52:00 to 06:07:00, the first green test run at 03:12:00 and
-# the final summary at 06:09:55. Between them the agent reads, edits, runs
+# apart from 23:46:00 to 06:01:00, the first green test run at 03:12:00 and
+# the final summary at 06:09:55. No two fall within 4 s of each other, since
+# the agent runs one tool at a time. Between them the agent reads, edits, runs
 # the tests and writes short messages, one tool call or message every 55 to
 # 110 s, so no gap between agent events passes Hackatime's 120 s.
-COMMITS = [at("23:52:00") + k * 750_000 for k in range(31)]
-tl.check(COMMITS[-1] == at("+1 06:07:00"), "last commit at 06:07:00")
+COMMITS = [at("23:46:00") + k * 750_000 for k in range(31)]
+tl.check(COMMITS[-1] == at("+1 06:01:00"), "last commit at 06:01:00")
 fixed = [(t, "commit") for t in COMMITS] + [(t, "stop") for t in STOPS] + [(GREEN, "green")]
 fixed.append((at("+1 06:09:55"), "final"))
 fixed.sort()
+tl.check(all(b[0] - a[0] >= 4_100 for a, b in zip(fixed, fixed[1:])), "fixed points at least 4.1 s apart")
 rand = tl.Rand("6.4 night")
 cycle = ["read", "edit", "test", "edit", "edit", "test"]
 step = 0
