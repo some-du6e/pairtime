@@ -1,6 +1,6 @@
 # pairtime build plan
 
-Status: draft in progress
+Status: ready for build
 
 This plan turns [DESIGN.md](DESIGN.md) into work packages (WPs) for AI coding agents. It was written on 2026-11-19, after PR #1 (WP-0a, branch `wp0a-skeleton`) went green. Where this plan and DESIGN.md disagree on what to build, DESIGN.md wins and the WP is wrong; fix the WP. Where they disagree on order or size, this plan wins, because DESIGN.md 9.7 assumed five agents and this plan has three.
 
@@ -54,7 +54,7 @@ These extend PR1's `AGENTS.md`, DESIGN 9.7's rules and TE 10.1. A WP that can't 
 4. **Dependencies.** Standard library first. A new module must be cgo-free, permissively licensed (MIT, BSD-2-Clause, BSD-3-Clause, Apache-2.0 or ISC) and on DESIGN 3.12's list, or the PR says why the list falls short. The license step in `ci.yml` (WP-CI1) checks every module, transitive ones included.
 5. **Oracles are read-only.** A PR may add oracle files next to new code, but may not modify existing ones together with the code they check. The `oracle-guard` step in `ci.yml` fails such a PR unless Karim adds the `oracle-change` label. Oracle paths: `docs/DESIGN.md`, `docs/BOUNTY.md`, `docs/design/**`, `docs/research/**`, `testdata/timelines/**`, `testdata/ledger/**`, `tools/ledger_ref.py`, `testdata/fixtures/**`, `testdata/upstream/**`, `testdata/checks/**`, `testdata/redteam/**`.
 6. **Errata go to Karim.** When an SM worked example, a design number or a captured fixture disagrees with what the spec says should happen, the PR adds `docs/errata/<date>-<topic>.md` with the input, the expected value, the computed value and the reasoning, adds the `erratum` label and stops. It never tunes the code to the fixture or edits SM to pass its own test (DESIGN 6.6).
-7. **Fixtures, not live services.** No CI job uses a model API key, a teen's data, Hack Club's live services or a real forge. HCA, forges, Airtable and program APIs are fakes or recorded fixtures (TE 10.1).
+7. **Fixtures, not live services.** No CI job uses a model API key, a teen's data, Hack Club's live services or a real forge. HCA, forges, Airtable and program APIs are fakes or recorded fixtures (TE 10.1). The repo is public: captures of Hack Club code record interfaces only, and a weakness noticed in a live Hack Club service is reported to Hack Club privately, never written into the repo, an issue or a PR.
 8. **PR1's conventions hold.** SPDX header on line one of every Go file, gofmt, table tests with rule-stating case names, `pairtime:"local"` tags with `omitempty`, opaque keys that pass `isKey`, and a call-out in the PR description for any change to `TestLocalFields` (PR1 `AGENTS.md`).
 9. **Integer scoring.** `pkg/score` and anything that feeds it use integers: milliseconds for time, half-second units for credit, exact rationals for non-integer parameters. Floats appear only when writing PR1's float fields (DESIGN 3.7).
 10. **Content stays on the device.** No WP may add a tier-1 field without updating DESIGN 4.3's table through Karim first (TP DI 15). The ingest firewall test (WP-SV5) is the backstop.
@@ -66,9 +66,9 @@ GitHub Actions is the only build and test environment, and its capacity is share
 
 | Workflow | Runs on | Triggers | What it runs | Added by |
 |---|---|---|---|---|
-| `ci.yml` | one `ubuntu-latest` job | every PR, pushes to `main`, `workflow_dispatch` | PR1's steps (license text and SPDX headers, gofmt, vet, `go test ./...`, the seven-target cross-compile with the 15 MB client budget), plus, as new steps: module license check, `oracle-guard`, fixture provenance check, `python3 -I tools/ledger_ref.py selftest`, `score-regression` | PR1, WP-CI1, WP-LG1, WP-SC4 |
+| `ci.yml` | one `ubuntu-latest` job | every PR, pushes to `main`, `workflow_dispatch` | PR1's steps (license text and SPDX headers, gofmt, vet, `go test ./...`, the seven-target cross-compile with the 15 MB client budget), plus, as new steps: module license check, `oracle-guard`, fixture provenance check, `python3 -I tools/ledger_ref.py selftest`, `score-regression`, the ingest fuzz corpus, the Ruby client check and the red-team goldens | PR1, then WP-CI1, WP-LG1, WP-SC4, WP-SV5, WP-PG5, WP-FX7 |
 | `platform.yml` | `windows-latest`, `macos-latest`, and `ubuntu-latest` with Xvfb, one job each | PRs touching `internal/platform/**`, `internal/install/**`, `internal/agent/ipc/**`, `internal/adapters/git/**`, `cmd/pairtime/**`; release tags; `workflow_dispatch` | `go test` of those packages only, not the whole module; the Linux job runs only the desktop tests that need an X server and a private D-Bus | WP-CI1 |
-| `nightly.yml` | `ubuntu-latest` | 03:00 UTC daily, `workflow_dispatch` | `go test -race` (with `CGO_ENABLED=1`, the one exception to the cgo rule) over `internal/agent/...`, `internal/server/...` and `pkg/...`; the 10-minute footprint run is in `footprint.yml` | WP-CI1 |
+| `nightly.yml` | `ubuntu-latest` | 03:00 UTC daily, `workflow_dispatch` | `go test -race` (with `CGO_ENABLED=1`, the one exception to the cgo rule) over `internal/agent/...`, `internal/server/...` and `pkg/...`, plus 60 s of Go fuzzing on ingest (WP-SV5); the 10-minute footprint run is in `footprint.yml` | WP-CI1 |
 | `postgres.yml` | `ubuntu-latest` with a Postgres 18 service | PRs touching `internal/server/store/**`; nightly; `workflow_dispatch` | the store and migration tests against Postgres (SP 7.4) | WP-SV1 |
 | `web.yml` | `ubuntu-latest` | PRs touching `web/**`, `extension/**`, `internal/webui/**`; release tags | `npm ci`, vitest, the real UI build, Playwright on Chromium only | WP-CI1, WP-UI0 |
 | `footprint.yml` | `windows-latest` | PRs touching `internal/agent/**`, `internal/platform/windows/**`, `cmd/pairtime/**`, `go.mod`: a 3-minute idle run; nightly and release tags: the full 10 minutes | idle RSS under 25 MB, idle CPU under 0.1%, hook p95 under 25 ms over 200 warm calls (DESIGN 9.7) | WP-AG1, WP-AG3 |
@@ -78,7 +78,7 @@ GitHub Actions is the only build and test environment, and its capacity is share
 | `restore-drill.yml` | `ubuntu-latest` with MinIO | weekly, on server image bumps, `workflow_dispatch` | restore into a fresh container, `PRAGMA integrity_check`, API smoke tests (DESIGN 10.3) | WP-OP1 |
 | `loadtest.yml` | `ubuntu-latest` | weekly, `workflow_dispatch` | the 8x R11 peak against a 2 vCPU, 8 GB container (DESIGN 10.6) | WP-OP3 |
 | `tidy.yml` | `ubuntu-latest` | `workflow_dispatch` only | `go mod tidy`, npm lockfile refresh, push to the branch | WP-CI1 |
-| `probe.yml` | `ubuntu-latest` | `workflow_dispatch` only | fetches `https://<host>/healthz` and `/.well-known/pairtime-keys.json` from outside | WP-OP2 |
+| `probe.yml` | `ubuntu-latest` | `workflow_dispatch` only | fetches `https://<host>/healthz` and `/.well-known/pairtime-keys.json` from outside | WP-OP1 |
 
 Rules every workflow follows:
 
@@ -112,15 +112,15 @@ At most three agents run at once. Each WP's "Depends on" line is the full depend
 
 | Lane | Areas | Main paths |
 |---|---|---|
-| A, core libraries | EV, PA, FX, LG1 to LG4, SC, TR, SB2, SB8 | `pkg/`, `testdata/`, `tools/ledger_ref.py` |
-| B, client | AG, OS, AD, IN, RL, CO, UI1, UI3, PV, LG5, LG6, SB3, SB6 | `cmd/pairtime/`, `internal/agent/`, `internal/platform/`, `internal/adapters/`, `internal/install/`, `install/` |
-| C, server and web | SV, SB1, SB4, SB5, SB7, RV, PG, CA, OP, UI0 | `cmd/pairtimed/`, `internal/server/`, `web/`, `integrations/`, `deploy/` |
+| A, core libraries | EV, PA, FX, LG1 to LG4, SC, TR1, TR2, TR6, SB2, SB8 | `pkg/`, `testdata/`, `tools/ledger_ref.py` |
+| B, client | AG, OS, AD, IN, RL, CO, UI1, UI3, PV, LG5, LG6, SB3, SB6, TR5 | `cmd/pairtime/`, `internal/agent/`, `internal/platform/`, `internal/adapters/`, `internal/install/`, `install/` |
+| C, server and web | SV, SB1, SB4, SB5, SB7, RV, PG, CA, OP, UI0, TR3 | `cmd/pairtimed/`, `internal/server/`, `web/`, `integrations/`, `deploy/` |
 
 Scheduling rules:
 
 1. Normally one WP per lane is in flight. A lane with nothing unblocked lends its slot to another lane's next WP, as long as the two WPs' "Touches" lines don't overlap.
 2. A free slot takes, in order: an unblocked WP on the critical path below; any other WP of the earliest unfinished milestone; a later milestone's WP. Cut-first WPs go last.
-3. These never run at the same time, because they edit the same files: any two SC WPs (`pkg/score`); WP-LG2 and WP-LG4; WP-LG1 and WP-LG3 (`tools/ledger_ref.py`); any two IN WPs (shared planners and the consent screen); WP-RV1 and WP-RV2. WPs that each add a `ci.yml` step (WP-CI1, WP-LG1, WP-SC4, WP-PG5, WP-FX7) may overlap but should expect a rebase.
+3. These never run at the same time, because they edit the same files: any two SC WPs (`pkg/score`); WP-LG2 and WP-LG4; WP-LG1 and WP-LG3 (`tools/ledger_ref.py`); any two IN WPs (shared planners and the consent screen); WP-RV1 and WP-RV2. WPs that each add a `ci.yml` step (WP-CI1, WP-LG1, WP-SC4, WP-SV5, WP-PG5, WP-FX7) may overlap but should expect a rebase.
 4. Human WPs don't take a slot. Start each one the day its dependency merges, because calendar time, not agent time, is their constraint.
 
 The critical path, the chains that decide when a program can count a pairtime hour:
@@ -156,7 +156,20 @@ That leaves about five days of slack before 12-01. Slot C moves to WP-SV1 as soo
 
 ## Suggested order for the first ten
 
-(Filled in after the WP sections.)
+| # | WP | Slot | Waits for | Why it goes now |
+|---|---|---|---|---|
+| 1 | WP-EV1, event model changes | A | PR1 | Every fixture and the ledger are written against it |
+| 2 | WP-CI1, CI layout, helper workflows and guards | B | PR1 | The platform jobs, the lockfile helper, the license check and the oracle guard must exist before the first module and the first fixture |
+| 3 | WP-LG1, ledger spec and Python reference, part 1 | C | PR1 | The ledger is a slow chain, and its format can't change once data is witnessed (DESIGN 3.6) |
+| 4 | WP-PA1, parameter table | A | PR1 | Small, and the scorer reads it |
+| 5 | WP-AD0, harness capture kit | B | WP-CI1 | Human captures take calendar days; the kit lets the Claude Code capture start on day 2 |
+| 6 | WP-FX1, fixture format with SM 6.2, 6.4 and 6.6 | A | WP-EV1 | The scorer's oracle exists before any scorer code (JE graft 10) |
+| 7 | WP-AG1, agent skeleton and footprint gate | B | WP-CI1 | Every client WP builds on it, and footprint is measured from here on (JE must-fix 4) |
+| 8 | WP-RL1, release pipeline | C | WP-CI1 | Testers need something to download, and it depends on nothing else |
+| 9 | WP-LG2, `pkg/ledger` part 1 | C | WP-LG1, WP-EV1 | The keystore, the ledger writer and ingest all need it |
+| 10 | WP-FX4, side-door fixtures | A | WP-FX1 | With WP-PA1 and WP-FX1 it unblocks WP-SC1 |
+
+Next come WP-AG2, WP-OS6, WP-FX3, WP-SC1, WP-FX2 and WP-AG3. Outside the slots, WP-AD1's Claude Code capture starts the day WP-AD0 merges, and Karim's week-one asks (DESIGN 9.6) run in parallel from 11-20.
 
 ## M1: alpha 0, a local tracker testers can install
 
@@ -266,7 +279,7 @@ Exit check: `e2e-install.yml` green on three runners; SM 6.1, 6.2, 6.3, 6.4 and 
 - Depends on: WP-SC3.
 - Touches: `pkg/score/`, `testdata/timelines/*/golden.jsonl` (new files), `ci.yml`, `AGENTS.md`.
 - Build: SM 5.1 minute buckets with four slots; `pending` for `PENDING_WINDOW_S` after the minute, then `final`, with `rev` raised by each late change (DESIGN 6.2 D1); SM's `provisional` and `restored` states; reason maps; `agent_running_s`; SM 5.3 rollups by day, work session (`SESSION_GAP_S`) and project; `SubmissionTotals` with SM 5.4's quantities and D19's provenance filter. The `score-regression` step in `ci.yml` runs every timeline, compares full bucket output with `golden.jsonl`, and fails when output changes without a change to `pkg/score/VERSION` in the same PR (EV WP1.7). Replace `AGENTS.md`'s "fix whichever is wrong" sentence with the erratum rule (DESIGN 6.6).
-- CI checks: buckets pass `pkg/event` validation; minute totals from buckets equal `expected.json` for the five fixtures WP-SC3 reproduces; WP-FX4 (a), (c) and (d) add 0 to `logged_s` and `ai_logged_s`; a record arriving late inside the pending window raises `rev` by exactly one on exactly one minute; the guard script has a table test over fake diffs.
+- CI checks: buckets pass `pkg/event` validation; minute totals from buckets equal `expected.json` for the fixtures WP-SC2 and WP-SC3 reproduce (6.1, 6.2, 6.3, `6.3-tabs`, 6.4, 6.6); WP-FX4 (a), (c) and (d) add 0 to `logged_s` and `ai_logged_s`; a record arriving late inside the pending window raises `rev` by exactly one on exactly one minute; the guard script has a table test over fake diffs.
 - Oracle: SM 6 expected files; D1 and D19 through WP-FX4. The goldens are regression guards, not oracles.
 
 ### WP-AG1. Agent skeleton and footprint gate
@@ -281,7 +294,7 @@ Exit check: `e2e-install.yml` green on three runners; SM 6.1, 6.2, 6.3, 6.4 and 
 
 - Depends on: WP-AG1.
 - Touches: `internal/agent/ipc/`, `internal/agent/inbox/`.
-- Build: a per-user AF_UNIX socket on all three OSes at CP 6.3's paths, with stale-socket removal and a user-only directory; length-prefixed JSON frames with an ack; on Windows, a named-pipe fallback (`\\.\pipe\pairtime-<SID>`, owner-only DACL, `FILE_FLAG_FIRST_PIPE_INSTANCE`) through `golang.org/x/sys/windows`, used when a startup self-test of AF_UNIX fails (CP 6.3; JE graft 16); `inbox/` JSON Lines with one `O_APPEND` write per message, drained at start and every minute, deleted once drained, and deduplicated by message id so a crash between drain and delete doesn't double-count (DESIGN 3.5). Race: yes.
+- Build: a per-user AF_UNIX socket on all three OSes at CP 6.3's paths, with stale-socket removal and a user-only directory; length-prefixed JSON frames with an ack; on Windows, a named-pipe fallback (`\\.\pipe\pairtime-<SID>`, owner-only DACL, `FILE_FLAG_FIRST_PIPE_INSTANCE`) through `golang.org/x/sys/windows`, used when a startup self-test of AF_UNIX fails (CP 6.3; DESIGN 3.3); `inbox/` JSON Lines with one `O_APPEND` write per message, drained at start and every minute, deleted once drained, and deduplicated by message id so a crash between drain and delete doesn't double-count (DESIGN 3.5). Race: yes.
 - CI checks: on Linux (`ci.yml`) and Windows (`platform.yml`): 1,000 messages, `kill -9` of the agent mid-stream, restart, exactly 1,000 delivered; the named-pipe path, forced by a test flag, passes the same test on `windows-latest`; on Linux a socket owned by another uid is refused.
 - Oracle: the sender's count against the receiver's, across a real process kill.
 
@@ -353,7 +366,7 @@ Exit check: `e2e-install.yml` green on three runners; SM 6.1, 6.2, 6.3, 6.4 and 
 
 - Depends on: WP-SC4, WP-LG5, WP-AG2.
 - Touches: `internal/agent/scorer/`, `internal/agent/store/`.
-- Build: step `pkg/score` every 60 s and after each prompt or stop hook over new ledger records; write `buckets/YYYY-MM-DD.jsonl` with revisions and `days/YYYY-MM-DD.json` rollups (DESIGN 3.5); keep scorer state and the project map in `state.json` and rebuild both from the ledger when it is missing. Add `display.shadow` (DESIGN 6.7 step 2): when on, every view shows credited totals as "calibrating" and keeps moments, loops and the agent's time. Calibration volunteers get it on from 12-01 until the scoring freeze; other alpha testers get it off.
+- Build: step `pkg/score` every 60 s and after each prompt or stop hook over new ledger records; write `buckets/YYYY-MM-DD.jsonl` with revisions and `days/YYYY-MM-DD.json` rollups (DESIGN 3.5); keep scorer state and the project map in `state.json` and rebuild both from the ledger when it is missing. Add `display.shadow` (DESIGN 6.7 step 2): when on, every view shows credited totals as "calibrating" and keeps moments, loops and the agent's time. Calibration volunteers get it on from 12-01 until the scoring freeze, through `pairtime install --calibration-volunteer`; other alpha testers get it off.
 - CI checks: the 6.2 fixture's events sent through the socket produce the same buckets as calling `pkg/score` directly; deleting `state.json` and restarting rebuilds identical buckets; `kill -9` mid-run loses nothing.
 - Oracle: `pkg/score` output on the SM fixtures, which is itself checked against SM.
 
@@ -372,7 +385,7 @@ Exit check: `e2e-install.yml` green on three runners; SM 6.1, 6.2, 6.3, 6.4 and 
 - Build: follow `SCRIPTS.md` for the Claude Code CLI on Windows 10 or 11 and on macOS or Linux, and repeat the core steps in the VS Code extension; export OTLP/JSON to the sink with prompt logging off; run the scrub script, read every replacement and the remaining text by eye, fill `PROVENANCE.md` (version from `claude --version`, OS build, date, name, `synthetic: false`).
 - CI checks: provenance step; `oracle-guard`.
 - Oracle: this capture is the oracle for WP-AD2 and WP-AD3.
-- Human: someone with Claude Code signed in on two real machines, about two hours. Captures contain nothing private after the scrub, because the repo is public.
+- Human: someone with Claude Code signed in on two real machines, about two hours. The repo is public, so nothing private may remain after the scrub.
 
 ### WP-AD2. Claude Code adapter 1: hooks and the adapter interface
 
@@ -489,7 +502,7 @@ Exit check: `e2e-wakatime.yml` green on three runners; SM 6.5 reproduces; `web.y
 
 - Depends on: WP-FX3.
 - Touches: `testdata/timelines/lookback/`.
-- Build: `6.1-transcript-only` and `6.4-transcript-only`, the harness events of SM 6.1 and 6.4 with every OS and editor event removed, plus a two-session case where two sessions run in parallel. Expected credit is computed by hand from SM 2.8, with the arithmetic per minute in the README: origin rules 1 to 5 still apply and other prompts count as `human_typed` at level C; leads are typing time only (6.1's 300-character prompt gets 200 s); permission waits keep up to `UNKNOWN_PA_MAX_S`; reading is capped at `UNKNOWN_BUCKET_MAX_S` per turn and credited only between a stop and a human prompt within 600 s, so 6.1's twelve-minute cycles credit no reading; a second wanted by two sessions goes to the one with the most recent human prompt; everything is `backfilled`.
+- Build: `6.1-transcript-only` and `6.4-transcript-only`, the harness events of SM 6.1 and 6.4 with every OS and editor event removed, plus a two-session case where two sessions run in parallel. Expected credit is computed by hand from SM 2.8, with the arithmetic per minute in the README: origin rules 1 to 5 still apply and other prompts count as `human_typed` at level C; leads are typing time only (6.1's 300-character prompt gets 200 s); permission waits keep up to `UNKNOWN_PA_MAX_S`; reading is capped at `UNKNOWN_BUCKET_MAX_S` per turn and credited only between a stop and a human prompt that follows within 600 s (in 6.1 the stop at 14:06:30 and the next prompt at 14:16:00 are 570 s apart, so each turn earns some); a second wanted by two sessions goes to the one with the most recent human prompt; everything is `backfilled`.
 - CI checks: validity; the README's arithmetic sums to the expected totals.
 - Oracle: SM 2.8's rules, applied by hand by an agent that doesn't write the scorer.
 
@@ -633,7 +646,7 @@ Exit check: `e2e-wakatime.yml` green on three runners; SM 6.5 reproduces; `web.y
 
 Goal: by 2026-12-11, `pairtimed` runs on Karim's domain with Hack Club Auth sign-in, device sign-in, signed ingest with receipts, the free-text firewall, witness labels, rollups, a live owner dashboard, aggregate-only public profiles, commits with forge verification, build days, the privacy hub and a published daily witness root (R5, R6, R9). Engineering doesn't wait for the launch gates: the instance deploys with `signups_open = false` and `profile_default = "ask"`, and Karim flips them when the controller is named and the assessment in DESIGN 8.3 is signed (DESIGN 8.6, 10.5 step 5). Until then testers stay in local-only mode. The native program opens for building on 12-14 and needs this milestone (DESIGN 9.4).
 
-Exit check: `restore-drill.yml` green; `probe.yml` green against `https://<host>`; in CI, a delta reaches an open dashboard within 2 s of ingest; Karim signs in on the deployed instance with HCA and his alpha device uploads witnessed minutes.
+Exit check: `restore-drill.yml` green; `probe.yml` green against `https://<host>`; in CI, a delta reaches an open dashboard within 2 s of ingest; an operator account signs in on the deployed instance with HCA, and its alpha device uploads witnessed minutes.
 
 ### WP-SV1. `pairtimed` skeleton
 
@@ -673,7 +686,7 @@ Exit check: `restore-drill.yml` green; `probe.yml` green against `https://<host>
 - Depends on: WP-SV4.
 - Touches: `internal/server/ingest/`.
 - Build: an allowlist schema for every field of every tier-1 record, where each string is an id, enum, hash or HMAC of bounded length and anything that could hold free text gets a 422 with a machine-readable code (SP 8.2); per-request limits of 2,000 buckets, 500 commit records, 256 KB compressed and 4 MB decompressed, enforced while reading so a gzip bomb stops early; partial acceptance that names each rejected item (DESIGN 4.5).
-- CI checks: Go fuzzing for 60 s in `ci.yml` plus a checked-in corpus puts random text in every string field and always gets a 422 for that item (AD WP 2.4; JT graft 9); oversized and bomb bodies are refused before they are fully read; a test diffs the allowlist's field set against `TestTier1Shape`'s list from WP-EV1.
+- CI checks: a fuzz test that puts random text in every string field always gets a 422 for that item (AD WP 2.4; JT graft 9): its checked-in corpus runs in `ci.yml` on every PR, and 60 s of Go fuzzing runs in `nightly.yml` and on this WP's branch; oversized and bomb bodies are refused before they are fully read; a test diffs the allowlist's field set against `TestTier1Shape`'s list from WP-EV1.
 - Oracle: DESIGN 4.3's field list and its "Never in it" column.
 
 ### WP-SV6. Clocks and witness labels
@@ -752,8 +765,8 @@ Exit check: `restore-drill.yml` green; `probe.yml` green against `https://<host>
 
 - Depends on: WP-SV1.
 - Touches: `internal/server/pages/`, `internal/server/retention/`, `docs/retention.json` (new, the one source).
-- Build: `https://<host>/privacy` from a Markdown template with placeholders for the controller's name and contact (DESIGN 8.6) and a retention table generated from the same data the jobs use (DESIGN 4.4); `https://<host>/docs/evidence` with DESIGN 6.4's definition, versioned with the scoring version; the server's retention jobs (IPs and JA4 deleted after 30 days; per-minute buckets reduced to daily totals after 180 days; witness rows kept 180 days unless a submission inside its spot-check window uses them; device rows 90 days after a device is removed); the `signups_open` gate on account creation.
-- CI checks: under a fake clock the jobs delete exactly DESIGN 4.4's server rows; the page's retention table equals the jobs' configuration; with `signups_open = false` a new HCA identity gets a clear refusal page and no row.
+- Build: `https://<host>/privacy` from a Markdown template with placeholders for the controller's name and contact (DESIGN 8.6) and a retention table generated from the same data the jobs use (DESIGN 4.4); `https://<host>/docs/evidence` with DESIGN 6.4's definition, versioned with the scoring version; the server's retention jobs (IPs and JA4 deleted after 30 days; per-minute buckets reduced to daily totals after 180 days; witness rows kept 180 days unless a submission inside its spot-check window uses them; device rows 90 days after a device is removed); the `signups_open` gate on account creation, with an `operators` list of HCA subs that may sign in while sign-ups are closed, for smoke tests; Karim decides who is on it (DESIGN 8.6).
+- CI checks: under a fake clock the jobs delete exactly DESIGN 4.4's server rows; the page's retention table equals the jobs' configuration; with `signups_open = false` a new HCA identity gets a clear refusal page and no row, and an identity on the `operators` list signs in.
 - Oracle: DESIGN 4.4.
 
 ### WP-SV15. Object storage client
@@ -776,9 +789,9 @@ Exit check: `restore-drill.yml` green; `probe.yml` green against `https://<host>
 ### WP-OP1. Deploy bundle, server image and restore drill
 
 - Depends on: WP-SV1, WP-SV15.
-- Touches: `deploy/` (`compose.yml`, `litestream.yml`, `cloudflared/`, `pairtime.toml.tmpl`, `runbook.md`, `renovate.json`), `Dockerfile.pairtimed`, `.github/workflows/{release,restore-drill}.yml`, `cmd/pairtimed/`, `internal/server/backup/`.
+- Touches: `deploy/` (`compose.yml`, `litestream.yml`, `cloudflared/`, `pairtime.toml.tmpl`, `runbook.md`, `renovate.json`), `Dockerfile.pairtimed`, `.github/workflows/{release,restore-drill,probe}.yml`, `cmd/pairtimed/`, `internal/server/backup/`.
 - Build: DESIGN 10.1 to 10.5. A distroless static image holding `pairtimed` and a pinned Litestream v0.5 binary checked against its checksum, built and pushed to `ghcr.io/some-du6e/pairtimed` by `release.yml`, so the host never builds. `compose.yml` as DESIGN 10.1 shows, with pinned tags. `litestream.yml` with `exec: pairtimed serve`, `restore-if-db-not-exists`, a 10 s sync interval, 24 h snapshots, 72 h retention and the Healthchecks heartbeat. `pairtimed init --base-url` (creates `server.ed25519`, `evidence.p256` and `pepper` in `/data/keys` with mode 0600, writes `pairtime.toml`, prints the public keys). `pairtimed keys backup --age <recipient>`, plus the nightly `VACUUM INTO` snapshot encrypted with age and uploaded to the second bucket (DESIGN 10.3); both need `filippo.io/age` (BSD-3-Clause) in `pairtimed` only, and the PR says why. `pairtimed doctor` (HCA discovery, both buckets, replication lag, a dry-run push to `pairtime-witness`, both Healthchecks URLs, `/healthz` through the tunnel). A ping every 5 minutes while `/readyz` passes (DESIGN 10.4). `pairtimed` serves `install.sh` and `install.ps1` for the current release at `https://<host>/`. `runbook.md`, written for the deploy agent: first deploy, upgrades through Renovate PRs, rollback to the previous tag, moving to a VPS.
-- CI checks: `restore-drill.yml` builds the image, runs it against a MinIO service container, writes data, destroys the container, restores into a fresh one from the replica, and passes `PRAGMA integrity_check` and API smoke tests; the nightly snapshot decrypts with the `age` command-line tool and a test identity and restores; files from `pairtimed init` have mode 0600.
+- CI checks: `probe.yml` takes a `host` input and fails unless `/healthz` returns 200, `/.well-known/pairtime-keys.json` parses and TLS is valid. `restore-drill.yml` builds the image, runs it against a MinIO service container, writes data, destroys the container, restores into a fresh one from the replica, and passes `PRAGMA integrity_check` and API smoke tests; the nightly snapshot decrypts with the `age` command-line tool and a test identity and restores; files from `pairtimed init` have mode 0600.
 - Oracle: SQLite's integrity check after a real restore; the `age` CLI as an independent decrypter.
 
 ### WP-OP2. Deploy on Karim's domain [human]
@@ -802,7 +815,7 @@ Exit check: a test submission from the deployed instance round-trips into a sand
 - Touches: `testdata/upstream/{hackatime,stardance,robert,ari,handbook,airtable}/`, each with `PROVENANCE.md`.
 - Build: oracles for every program integration, from the pinned sources in HC 0. Hackatime at `43bde10b02db` is MIT, so copy, with its notice, the controllers and response shapes for `authenticated/me`, `authenticated/api_keys`, `get_user_by_email`, `stats`, `trust_factor`, `info_batch`, `heartbeats/spans` and `my/heartbeats`, the identifier lookup order (`User.lookup_by_identifier`), and the duration SQL in `app/models/concerns/heartbeatable.rb` (HC 1.4, 1.8). Stardance at `b1d3e0eac1ae` has no license, so copy none of its code: write each request its `HackatimeService` makes (method, path, query parameters and the form each takes, headers, auth) as JSON citing file and line (HC 1.8). Robert's webhook signature scheme as HC 3.5 documents it, with test values computed from that description. Ari's documented ingest keys (`journals[]`, `hackatime_projects[]`, `program_seconds`) at `637233962a0f`, described, not copied, since Ari has no license (HC 3.6). The handbook's field names (HC 3.7) and the field names of the wrangler Airtable base. Captures record interfaces only; a weakness noticed in a live Hack Club service goes to Hack Club privately and never into this public repo.
 - CI checks: the provenance step; every JSON file validates against a small schema in the same directory; `oracle-guard` (the PR adds oracle files only).
-- Oracle: the pinned upstream sources themselves. No product code in this WP, because WP-AD16, WP-PG1 to WP-PG8 and WP-PG11 are tested against it.
+- Oracle: the pinned upstream sources themselves. No product code in this WP, because WP-AD16, WP-PG1 to WP-PG5, WP-PG7, WP-PG8 and WP-PG11 are tested against it.
 
 ### WP-SB1. Submissions API
 
@@ -912,7 +925,7 @@ Exit check: a test submission from the deployed instance round-trips into a sand
 
 - Depends on: WP-RV1, WP-SB7, WP-SV10.
 - Touches: `web/src/server/review/`, `internal/server/review/`, `web/src/local/submit/`.
-- Build: DESIGN 7.7 items 5 to 12: revealed turns at their markers (agent message left, prompt right, removed spans as typed markers, "matches commitment, witnessed hh:mm:ss"), with withheld, expired and purged items shown as such; commits with three clocks, diffstat, credited time since the parent and a forge link; checks per row with counts; flags as codes and categories, never thresholds; the story column below the evidence; cross-checks (`hackatime_logged_s` against Hackatime's figure, the Telescreen link, earlier decided submissions scoped by role, JT must-fix 14); the handbook text with copy buttons once WP-PG1 exists; the access log, which the teen also sees on the submission page.
+- Build: DESIGN 7.7 items 5 to 12: revealed turns at their markers (agent message left, prompt right, removed spans as typed markers, "matches commitment, witnessed hh:mm:ss"), with withheld, expired and purged items shown as such; commits with three clocks, diffstat, credited time since the parent and a forge link; checks per row with counts; flags as codes and categories, never thresholds; the story column below the evidence; cross-checks (`hackatime_logged_s` against Hackatime's figure, the Telescreen link, earlier decided submissions scoped by role, JT must-fix 14); the handbook text with copy buttons once WP-PG1 exists; a link to the teen's Lookout session when the submission carries one, for large claims (DESIGN 5.10); the access log, which the teen also sees on the submission page.
 - CI checks: Playwright: the teen sees the reviewer's access-log entry; a program reviewer sees only their program's earlier submissions and a `qi` reviewer sees all; seeded threshold values never appear in the DOM.
 - Oracle: DESIGN 7.7 and JT must-fix 14.
 
@@ -1361,6 +1374,8 @@ Everything else runs in GitHub Actions. These are listed in the order they are n
 | before WP-OP2 | `pairtime-witness` and its token; DESIGN 10.5's host, tunnel, HCA client, buckets, age key, Healthchecks URLs; the hostname `<host>` (DESIGN 13.1 item 4) | Karim | WP-SV17 in production, WP-OP2 |
 | WP-OP2, about 12-09 | Running the deploy on Karim's host | the deploy agent | M3's exit, everything after |
 | when the controller is named | Flipping `signups_open`, later `profile_default` | Karim | witnessed time for testers, public profiles |
+| before 12-14 | The native program's own setup: its Airtable submission table with the handbook fields, its reviewers recruited from outside the build team, and Quality and Integrity asked to run or observe its audits (DESIGN 9.4, 7.10) | Karim's team, with HQ | the native program opening |
+| about 12-15 | Showing Quality and Integrity the review page on `pairtimed seed --demo` data, with the evidence-level page and the red-team results (DESIGN 9.5) | Karim | the "significant evidence" answer (DESIGN 13.2 item 3) |
 | about 12-17 | A sandbox Airtable base and one test submission | Karim or a willing program author | WP-PG12, M4's exit |
 | mid-December | Copilot, Gemini CLI, Devin and Cline captures | testers with those harnesses | WP-AD11, WP-AD13, WP-AD15 |
 | when granted | Signing secrets for Windows and macOS | Karim | WP-RL5, then WP-TR5 and WP-RL9 |
