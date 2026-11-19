@@ -1,0 +1,38 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Checks fixture provenance on any branch, by hand (DESIGN 3.13, 5.1):
+#
+#   gh workflow run fixtures.yml --ref <branch>
+#
+# ci.yml runs the same check on every PR. This workflow is for a person
+# capturing harness fixtures who wants the verdict before opening one.
+name: fixtures
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  provenance:
+    name: fixture provenance
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      CGO_ENABLED: "0"
+    steps:
+      # Actions are pinned to commit SHAs; tags can be moved. Dependabot bumps them.
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.mod
+
+      - name: Fixture provenance
+        run: go run ./tools/ci/provenance testdata/fixtures
