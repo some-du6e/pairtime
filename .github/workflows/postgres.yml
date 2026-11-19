@@ -72,3 +72,22 @@ jobs:
 
       - name: go test (server packages, SQLite and Postgres)
         run: bash tools/ci/test_existing.sh -count=1 -- internal/server
+
+      - name: The Postgres variants ran
+        # Tests reach Postgres only through storetest.Engines() and the
+        # variable above, so a green run proves nothing unless they did.
+        # This reruns the migration and commit-rate tests verbosely and
+        # fails unless each engine's variant passed. It also prints the
+        # commit rates the acceptance test measured.
+        run: |
+          out=$(go test -count=1 -v -run '^(TestApply|TestCommitRate)$' ./internal/server/migrations ./internal/server/writer) || {
+            echo "$out"
+            exit 1
+          }
+          grep -E -e '--- (PASS|FAIL|SKIP): Test(Apply|CommitRate)/[a-z]+(/10,000[^ ]*)? ' -e 'transactions a second' <<<"$out"
+          for t in TestApply/sqlite TestApply/postgres TestCommitRate/sqlite/10,000 TestCommitRate/postgres/10,000; do
+            if ! grep -q -- "--- PASS: $t" <<<"$out"; then
+              echo "::error::$t didn't run and pass"
+              exit 1
+            fi
+          done
