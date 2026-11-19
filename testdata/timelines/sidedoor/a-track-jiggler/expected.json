@@ -1,0 +1,157 @@
+{
+  "fixture": "sidedoor/a-track-jiggler",
+  "title": "A pairtime track loop and a mouse jiggler on Windows",
+  "sm": "docs/PLAN.md WP-FX4 (a); DESIGN 5.2, 5.4, 6.2 D2, D3 and D19, 6.4",
+  "date": "2026-11-25",
+  "timezone": "America/Chicago",
+  "utc_offset": "-06:00",
+  "os": "windows",
+  "input_keys": false,
+  "evidence": "C",
+  "witness": "witnessed",
+  "device": "d_8a2f57bad442",
+  "projects": {"p_0ab2b0c69e5f": "the project the Goose session runs in"},
+  "window": {"start": "2026-11-25T20:00:00Z", "end": "2026-11-25T20:09:00Z", "local": "14:00-14:09"},
+  "rows": [
+    {
+      "start": "2026-11-25T20:00:00Z",
+      "minutes": 1,
+      "local": "14:00",
+      "bucket": false,
+      "codes": ["X.no_anchor"],
+      "note": "The jiggler on a focused terminal, before any lead reaches back this far."
+    },
+    {
+      "start": "2026-11-25T20:01:00Z",
+      "minutes": 1,
+      "local": "14:01",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0ab2b0c69e5f": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "note": "Inside the think parts of the track anchors, which need presence only."
+    },
+    {
+      "start": "2026-11-25T20:02:00Z",
+      "minutes": 1,
+      "local": "14:02",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0ab2b0c69e5f": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "note": "Inside the think parts of the track anchors, which need presence only."
+    },
+    {
+      "start": "2026-11-25T20:03:00Z",
+      "minutes": 1,
+      "local": "14:03",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0ab2b0c69e5f": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "note": "Inside the think parts of the track anchors, which need presence only."
+    },
+    {
+      "start": "2026-11-25T20:04:00Z",
+      "minutes": 1,
+      "local": "14:04",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0ab2b0c69e5f": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "note": "Inside the think parts of the track anchors, which need presence only."
+    },
+    {
+      "start": "2026-11-25T20:05:00Z",
+      "minutes": 1,
+      "local": "14:05",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0ab2b0c69e5f": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "note": "Inside the think parts of the track anchors, which need presence only."
+    },
+    {
+      "start": "2026-11-25T20:06:00Z",
+      "minutes": 1,
+      "local": "14:06",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 59,
+      "credit": {
+        "p_0ab2b0c69e5f": {"P": 9, "READ": 50}
+      },
+      "uncredited": {"X.no_anchor": 1},
+      "agent_running_s": 0,
+      "note": "The last think part ends at 14:06:09, 60 s before the last call. Then each call's 20 s base drains: 18 s left of the 14:06:06 call's, 20 s of the 14:06:27 call's, and 12 s of the 14:06:48 call's; 14:06:47 has nothing left to drain.",
+      "erratum": "2026-11-19-turns-without-a-stop"
+    },
+    {
+      "start": "2026-11-25T20:07:00Z",
+      "minutes": 1,
+      "local": "14:07",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 28,
+      "credit": {
+        "p_0ab2b0c69e5f": {"READ": 28}
+      },
+      "uncredited": {"X.no_anchor": 32},
+      "agent_running_s": 0,
+      "note": "The rest of the 14:06:48 base until 14:07:08, then the 14:07:09 call's 20 s until 14:07:29.",
+      "erratum": "2026-11-19-turns-without-a-stop"
+    },
+    {
+      "start": "2026-11-25T20:08:00Z",
+      "minutes": 1,
+      "local": "14:08",
+      "bucket": false,
+      "codes": ["X.no_anchor"],
+      "note": "Nothing credits the jiggler; no bucket, since no agent turn runs.",
+      "erratum": "2026-11-19-turns-without-a-stop"
+    }
+  ],
+  "totals": {
+    "credited_s": 387,
+    "credited_by_project": {"p_0ab2b0c69e5f": 387},
+    "credited_by_reason": {"P": 309, "READ": 78},
+    "uncredited": {"X.no_anchor": 33},
+    "agent_running_s": 0,
+    "level_a_s": 0,
+    "level_b_s": 0,
+    "level_c_s": 387,
+    "via_track_s": 387,
+    "logged_s": 0,
+    "ai_logged_s": 0,
+    "level_c_cap_s": 0
+  },
+  "stated": ["level_a_s", "level_b_s", "logged_s", "ai_logged_s", "level_c_cap_s"],
+  "approx": {},
+  "errata": ["2026-11-19-turns-without-a-stop"],
+  "notes": [
+    "Every credited second rests on a track anchor, so all 387 s are level C and labeled via_track.",
+    "logged_s and ai_logged_s are 0: cli.track records never count (DESIGN 6.2 D19), and nothing else of the session reaches pairtime.",
+    "level_c_cap_s is min(level_c_s, ai_logged_s / 3), the most a program that opts in to level C could take inside forge-verified commit intervals (DESIGN 5.2, 6.2 D5; SM 5.4). It is 0, so the loop earns 0 submittable seconds whatever the program's policy, as DESIGN 5.2 requires.",
+    "The READ seconds and the X.no_anchor seconds after 14:06:09 depend on the erratum: a track turn has no agent record, so the rules don't say whether it is running, which would make them SUP and X.agent_only."
+  ]
+}
