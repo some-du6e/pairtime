@@ -13,7 +13,7 @@ Track: signals. Researched 2026-11-18/19 for pairtime. Every claim cites a sourc
 5. GitHub Copilot (VS Code chat and agent mode, Copilot CLI)
 6. OpenAI Codex (CLI, IDE extension, cloud)
 7. Gemini CLI
-8. Windsurf
+8. Windsurf (now Devin Desktop)
 9. Other harnesses (Cline, Roo Code, Kilo Code, OpenCode, Aider, Zed, Antigravity, Kiro, Amp, Warp, JetBrains, Trae, Continue, Goose)
 10. Browser chat and app builders
 11. The AGENTS.md + CLI idea, assessed
@@ -358,9 +358,38 @@ Gemini CLI reads `GEMINI.md` by default (global `~/.gemini/GEMINI.md`, then the 
 Headless when stdin is not a TTY or with `-p/--prompt`; `--output-format json` or `stream-json` (`init`, `message`, `tool_use`, `tool_result`, `error`, `result`). Hooks still fire (`SessionStart` additional context is prepended to the prompt in non-interactive mode). The `gemini_cli.config` event records `output_format` and GitHub workflow fields. `--yolo`/approval mode shows in `active_approval_mode`.
 
 
-## 8. Windsurf
+## 8. Windsurf (now Devin Desktop)
 
-(pending)
+Sources, read 2026-11-19: docs.windsurf.com now redirects (307) to docs.devin.ai. Pages: `desktop/cascade/hooks.md` (which now serves "Devin Local Customizations"), `desktop/cascade.md` ("Cascade (legacy)"), `desktop/changelog.md`, `cli/extensibility/hooks/overview.md`, `cli/extensibility/hooks/lifecycle-hooks.md`; storage from wakatime-cli `windsurf.go` and `devin.go`.
+
+What changed: "Windsurf is now Devin Desktop" (changelog v3.0.12, 2026-06-02; latest stable seen v3.14.30825). The old Cascade agent is legacy: "Devin Desktop no longer starts new Cascade conversations and no longer opens old ones. New conversations start with Devin Local." Devin Local "shares its agent harness with Devin CLI", so it uses Devin CLI's hooks, rules and skills. The Windsurf JetBrains plugin still runs Cascade. Research or code that targets Cascade's old hook names (`pre_user_prompt`, `post_cascade_response`, `.windsurf/hooks.json`) is out of date for the editor; only `post_setup_worktree` in `.windsurf/hooks.json` is still documented on the legacy page.
+
+### 8.1 Hooks (Devin Local and Devin CLI)
+
+| Scope | Files |
+|---|---|
+| Project (cwd and ancestors up to repo root) | `.devin/hooks.v1.json` (the whole file is the hooks object), `.devin/config.json` / `.devin/config.local.json` (`"hooks"` key), `.claude/settings.json`, `.claude/settings.local.json` |
+| User | `~/.config/devin/config.json` (`%APPDATA%\devin\config.json` on Windows), `~/.claude.json`, `~/.claude/settings.json`, `~/.claude/settings.local.json` |
+
+Claude-format hooks under `.claude/` load by default (`read_config_from.claude`). Events: `PreToolUse`, `PostToolUse`, `PermissionRequest`, `UserPromptSubmit` (`prompt`), `Stop` (can block to continue), `PostCompaction`, `SessionStart` (`source` `startup`/`resume`), `SessionEnd` (`reason`; not fired in cloud sessions). Every payload has `session_id` and a per-turn `prompt_id`. Handler types: `command`, `prompt`. Exit 2 or `"decision": "block"` blocks. Hooks don't load in Restricted Mode (untrusted workspace).
+
+So the same Claude-format block pairtime writes into `~/.claude/settings.json` fires in Claude Code, in Cursor, and in Devin Desktop/Devin CLI, provided the receiver normalizes the per-harness payload differences.
+
+### 8.2 Local stores
+
+| Store | Path | Notes |
+|---|---|---|
+| Devin CLI / Devin Local transcripts | `~/.local/share/devin/transcripts/*.json` (Linux/macOS per wakatime; Windows path unverified) | JSON with a `steps` array |
+| Legacy Windsurf editor state | `state.vscdb` under `.../Windsurf/User/globalStorage/` (also `Windsurf - Next`), same `cursorDiskKV` `bubbleId:` layout as Cursor | Read by wakatime; whether Devin Desktop still writes it is unverified |
+| Legacy Cascade memories, global rules and workflows | `~/.codeium/windsurf/` (`global_workflows/`, memories) | config, not activity |
+
+### 8.3 Telemetry, rules, headless
+
+- No user-configurable OTel export found. Team analytics and the Analytics API (lines suggested/accepted, "AI-written code percentage") are Teams/Enterprise features on the vendor's servers.
+- Rules: `AGENTS.md`, `AGENTS.local.md` and `AGENT.md` are always-on rules at the workspace root and every directory down to the working one; `.devin/rules/*.md` with `trigger` frontmatter (`always_on`, `glob`, `model_decision`, `manual`); `.devin/global_rules.md`; user `~/.devin/rules/*.md`; legacy `.windsurf/rules/` and `.windsurfrules` are imported.
+- Skills: `.devin/skills/`, `.agents/skills/`, `~/.config/devin/skills/`, `~/.agents/skills/`. MCP: `.devin/mcp_config.json`, `~/.config/devin/mcp_config.json`.
+- Headless and cloud: Devin CLI runs non-interactively and hands off to Devin Cloud (`devin --cloud`, `/handoff`); cloud sessions don't fire `SessionEnd` and run on Cognition's VMs. No documented field separates them in local hooks (unverified).
+
 
 ## 9. Other harnesses
 

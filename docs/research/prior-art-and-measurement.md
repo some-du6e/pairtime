@@ -178,7 +178,52 @@ Older Hack Club tools relevant here: [hackclub/elapsed](https://github.com/hackc
 
 ## 2. Measurement science
 
-(pending)
+### 2.1 Productive struggle in education research
+
+(in progress)
+
+### 2.2 How people program with AI
+
+#### CUPS (Mozannar, Bansal, Fourney, Horvitz; CHI 2024)
+
+"Reading Between the Lines: Modeling User Behavior and Costs in AI-Assisted Programming", [arXiv:2210.14306](https://arxiv.org/abs/2210.14306) v5 (2024-04-22). Read from the full text.
+
+- **Design**: 21 programmers solved tasks with GitHub Copilot, then watched their own screen recording and labeled each telemetry segment with a CUPS state. Mean task time 12.23 min (max 20.80). 1,024 suggestions shown, 34.0% accepted (per-participant mean 36.5%, range 14.3%-60.7%). 3,137 labels.
+- **States** (Table 1): Thinking/Verifying Suggestion; Not Thinking ("programmer away from keyboard"); Deferring Thought For Later ("accepts suggestion without completely verifying it, but plans to verify it after"); Thinking About New Code To Write; Waiting For Suggestion; Writing New Code; Editing Last Suggestion; Editing (Personally) Written Code; Prompt Crafting; Writing Documentation; Debugging/Testing Code; Looking up Documentation; Accepted; Rejected.
+- **Time shares**: verifying suggestions was the largest state, "22.4% (sN = 12.97)" of session time; writing new functionality was second at 14.05%; waiting for suggestions 4.2%. The Copilot-specific states (verifying, deferring, waiting, prompt crafting, editing suggestion) together took "51.5 % (sN = 19.3) of the average session duration".
+- **Transitions**: Prompt Crafting → Verifying (p = 0.54); Deferring Thought → Verifying (p = 0.54): "deference incurs verification debt, and this debt often 'catches up' with the programmer"; Writing New Functionality → Verifying (p = 0.59).
+- **For pairtime**: in completion-style AI coding, *verification is the single biggest human activity*, bigger than writing code. A tracker that drops verification time drops a quarter of the real work. "Deferring thought" is the measurable form of skipping verification, and the paper shows it usually has to be paid back later.
+
+#### Grounded Copilot (Barke, James, Polikarpova; 2022-2023)
+
+"Grounded Copilot: How Programmers Interact with Code-Generating Models", [arXiv:2206.15000](https://arxiv.org/abs/2206.15000) v3 (2022-10-31). Published in PACMPL (OOPSLA) 2023 (venue from memory; the arXiv PDF still carries the ACM template placeholder). Read from the full text.
+
+- **Design**: grounded theory from 20 participants on four tasks (Chat Server, Chat Client, Benford's Law, Advent of Code) in Python, Rust, Haskell and Java, plus coded livestreams.
+- **Finding**: interactions are "bimodal". "In acceleration mode, the programmer already knows what they want to do next, and Copilot helps them get there quicker; interactions in this mode are fast and do not break programmer's flow. In exploration mode, the programmer is not sure how to proceed and uses Copilot to explore their options or get a starting point for the solution; interactions in this mode are slow and deliberate, and include explicit prompting and more extensive validation."
+- **Acceleration**: happens after the programmer decomposes the task into "microtasks" (4.1.1); focuses on small logical units (4.1.2); "long, multi-line suggestions are at best dismissed out of hand and at worst distract the programmer away from their flow" (4.1.3); validation is visual "pattern matching" (4.1.4).
+- **Exploration**: triggered by novel tasks or unexpected behavior (4.2.1); explicit prompting with comments (4.2.3); comparing multiple suggestions (4.2.4); explicit validation by "code examination, code execution (or testing), relying on IDE-integrated static analysis (e.g. a type checker), and looking up documentation" (4.2.5); willing to accept and then edit (4.2.6).
+- **Time**: exploration took 248.6 participant-minutes vs 104.7 for acceleration. In exploration, validation leaned to comprehension (examination, documentation); in acceleration, to "rapid feedback on code correctness (execution)".
+- **For pairtime**: both modes are productive struggle, but they look different in logs. Acceleration is short, frequent, low-latency accepts by someone who has already decomposed the problem; exploration is slower, with reading, doc lookups, edits and test runs. A credit rule must not mistake acceleration's speed for disengagement, or exploration's long pauses for idleness. Decomposition (the human splitting work into microtasks) is the skill that unlocks acceleration, and it shows up in agent sessions as specific, scoped prompts.
+
+#### Anthropic: "Agentic coding and persistent returns to expertise" (2026-06-16)
+
+Page title "How Claude Code is used in practice" ([link](https://www.anthropic.com/research/claude-code-expertise)). Hitzig, Massenkoff, Lyubich, Zhang, Heller, McCrory (Economics team).
+
+- **Data**: "~400,000 interactive sessions from ~235,000 people between October 2025 and April 2026", CLI, Claude.ai and desktop; headless `claude -p` excluded. Classifiers are Claude Sonnet 4.6 on privacy-preserving pipelines; "more than 90% of sessions our classifier labeled as creating or modifying code showed code changes in the telemetry."
+- **Expertise measure**: a task-specific 5-point rating from three cues: "how precisely the user frames their directions", "what they ask Claude to verify", and "whether the user tends to correct Claude or Claude tends to correct the user".
+- **Results**: "The greater domain expertise a person brings to a session, the more work Claude does per instruction." Novice prompts set off "about five Claude actions and roughly 600 words of output"; expert prompts "12 actions" and "3,200 words". Controlled effect: "+9% actions and +13% output per expertise level". Verified success: novices 15%, intermediate and up 28-33%; partial success 77% vs 91-92%. "19% of sessions where the user appears to be a novice end abandoned, against 5-7% for everyone else." Pooled: about 4 turns per session, about 10 actions per prompt; "people make about 70% of the planning decisions but only 20% of the execution decisions."
+- **Metrics it proposes**: per session, "the user's share of planning decisions and the user's share of execution decisions"; actions and output per prompt; a success-signal score whose hard signals are "git activity like commits and pull requests matching the work", "test suites passing", "explicit affirmation from the user"; a failure-signal score from errors, test failures, repeated attempts and user objections; "verified success" = judged successful plus at least one hard signal; "abandoned" = troubled, failed and zero lines written. Nine work modes: build, fix, test, orchestrate, operate, understand, plan, analyze, communicate.
+- **For pairtime**: two warnings and one gift. Warning 1: *agent actions per prompt rise with expertise*, so "the agent did a lot per prompt" is a sign of skill, not of laziness. A rule that penalizes long agent runs punishes the students who steer best. Warning 2: the strongest markers of engaged use (precise framing, asking for verification, correcting the agent) are properties of prompt *content*, so they need local analysis of prompts that never leave the machine (R6). Gift: hard success signals (commits matching the work, tests passing) are cheap to detect locally and are exactly what a reviewer wants attached to submitted hours (R10).
+
+#### Anthropic: "Measuring AI agent autonomy in practice" (2026-02-18)
+
+[Link](https://www.anthropic.com/research/measuring-agent-autonomy). McCain, Millar, Huang, et al. (Societal Impacts).
+
+- **Measures**: turn duration ("how much time has elapsed between when Claude starts working and when it stops"; a turn ends when Claude finishes, asks a question, or the user interrupts), auto-approve share, interrupt rate, Claude-initiated clarification stops.
+- **Numbers**: "The median turn lasts around 45 seconds", stable between 40 and 55 s. The 99.9th percentile "nearly doubled, from under 25 minutes to over 45 minutes" from Oct 2025 to Jan 2026, then declined somewhat. Full auto-approve: "roughly 20%" of sessions for users with under 50 sessions, "over 40%" by 750 sessions. Interrupts: "New users (those with around 10 sessions) interrupt Claude in 5% of turns"; "more experienced users interrupt in around 9% of turns". "On the most complex tasks, Claude Code stops to ask for clarification more than twice as often as humans interrupt it." Internal: interventions per session fell from 5.4 to 3.3 (Aug-Dec 2025).
+- **For pairtime**: (a) the median agent turn is about 45 s, so in most sessions the human is waiting less than a minute per turn and the interesting time is *between* turns. (b) Long turns are rare (the 99.9th percentile is 25-45 min), so a cap on credited agent time per turn affects few honest turns. (c) Experienced users *both* auto-approve more and interrupt more: they shift from approving each action to monitoring and stepping in when needed. Auto-approve is therefore not evidence of disengagement, but interrupts are evidence of engagement. (d) Agent-initiated clarification questions are common; a human's answer to one is a real decision even if it is one word (compare vibe-log's rubric, 1.5).
+
+(Further studies in progress.)
 
 ## 3. Signals that separate engaged from passive work
 

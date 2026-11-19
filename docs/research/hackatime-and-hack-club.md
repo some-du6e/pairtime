@@ -299,11 +299,37 @@ What this means for counting:
 
 ### 3.1 The Unified YSWS Projects DB
 
-(pending)
+The Unified YSWS Projects DB is an Airtable base, `unified_ysws_projects_db` (`app3A5kJwYqxMLOgh`). Its main table is `approved_projects` (`tblzWWGUYHVH7Zyqf`). IDs come from [hackclub/data-warehouse](https://github.com/hackclub/data-warehouse) `orpheus_engine/defs/airtable/generated_ids.py` at `4ff995dddcb7`, and Stardance uses the same IDs (`app/services/certification/unified_ysws_service.rb`). The data warehouse is a Dagster project ("Owned by @24c02. Please talk to it before editing.") that copies the base into Postgres (`airtable_unified_ysws_projects_db` schema), backs it up daily as Parquet, and enriches rows: geocoding, archiving code and live URLs, GitHub star counts, and searches for mentions of the project online (`orpheus_engine/defs/unified_ysws_db/definitions.py`).
+
+Programs never write to the unified base directly. Each program keeps its own submission table (Stardance's is "YSWS Project Submission", `app/services/certification/ysws_airtable.rb`), and Hack Club automation copies approved rows into `approved_projects`. Stardance's comment: "The unified base is fed by each program's own submission table, so the hours column can carry either name depending on which automation wrote the row." Once a row is in the unified base, Stardance's sync job won't rewrite it; "that record is corrected by hand" (`app/models/certification/integrity.rb`).
+
+`approved_projects` fields that matter for time tracking:
+
+| Field | Meaning |
+|---|---|
+| `Hours Spent` | Hours from the program |
+| `Override Hours Spent` | Reviewer-adjusted hours; programs send it as `Optional - Override Hours Spent` |
+| `Override Hours Spent Justification` | Free text explaining the hours (Stardance's template is in 3.3) |
+| `YSWS–Weighted Project Contribution` | Airtable formula; hours / 10 (section 3.2) |
+| `YSWS–Weighted Project Author Attribution`, `...Count`, `...Per Author` | Splits a project's weight across co-authors |
+| `YSWS` (link), `YSWS–Name`, `YSWS–Default Hours Per Grant`, `YSWS–Current Owners` | The program the row belongs to |
+| `Approved At`, `Age When Approved`, `Birthday` | Eligibility (spot checks look for under-19 at approval) |
+| `Code URL`, `Playable URL`, `Screenshot`, `Description`, `GitHub Username` | The shipped project |
+| `Email`, `First Name`, `Last Name`, address fields | Identity; ties spend to a person |
+| `Override Duplicate Justification`, `Override Age Justification` | Exceptions |
+| `Archive - *`, `Repo - *`, `YSWS Project Mentions - *`, `Geocoded - *` | Added by the warehouse |
+
+Related tables in the same base: `ysws_programs` (`Weighted–Total`, `Weighted Projects This Month`, `Weighted Projects–2026`, `Average weight`, `Average Hours Per Grant`, `Cost Per Hour`, `Budget per hour`, `Start Date`, `End Date`, `Review Channel ID`, and more), `ysws_authors`, `ysws_spot_checks` and `ysws_spotchecks` (first, second and third review with `needs_nonzero_hours`, `needs_public_repo_url`, `needs_playable_url`, `is_duplicated`, `needs_under_19_birthday`, `ai_checked`, `ai_score`), `eliminated_projects` and `project_fines`. Spot checks mean Hack Club HQ re-reviews a sample of approved rows after the program has approved them.
+
+None of these fields name a time tracker. The unified DB holds only an hour number and a justification string, and the program owns that number. So a project counts toward the bounty when a program puts it in this table with hours that came from pairtime. Judging that will probably mean reading `Override Hours Spent Justification` or asking the program (see Open questions).
 
 ### 3.2 How a weighted project is calculated
 
-(pending)
+"A weighted project is 10 hours of shipped work" ([readme.hackclub.com/nutshells](https://readme.hackclub.com/nutshells), fetched 2026-11-19). A Hack Club post from 2026-03-04 adds "A project with 20 hours counts as 2 weighted projects, 30 hours as 3 weighted projects" ([notes.deven.dev](https://notes.deven.dev/posts/the-plan-for-hack-club-world-dominance)). The warehouse code agrees: `bin/ysws_true_expense.py` says "weighted hours == SUM(weighted_project_contribution)*10". The formula itself is an Airtable formula field and isn't in any repo, so I couldn't check whether it uses override hours ahead of `Hours Spent`, rounds, or caps (unverified). The one capped weight in code is `weighted_referral_count = sum(min(user_hours, 10)) / 10` per user and program (`orpheus_engine/defs/ysws_programs_sync/definitions.py`), and that is a different metric.
+
+So 1,000 weighted projects means about 10,000 approved hours in `approved_projects`, as Zach confirmed in the thread (BOUNTY.md). After review those hours are counted at Stardance's approval rate (27,600 of 123,400, about 22%). At that rate, getting 10,000 approved hours could take on the order of 45,000 submitted hours unless pairtime's hours are easier to approve. A tracker whose raw number is already close to what a reviewer would approve has a direct advantage here (R2, R9).
+
+Money: the same post says programs receive "85 USD to the program budget (8.5 USD per hour spent building with good practice)" per weighted project, and online programs are "encouraged to spend 50 USD per weighted project (or 5.00 USD per hour)". The nutshells page gives "one hour of shipped work is $5 for most YSWSs". Every approved hour is money, which is why programs review so hard.
 
 ### 3.3 How programs reviewed and approved hours
 
@@ -346,15 +372,51 @@ This is where BOUNTY.md R9's numbers come from: 123,400 Hackatime hours submitte
 
 ### 4.1 Lapse
 
-(pending)
+[hackclub/lapse](https://github.com/hackclub/lapse) (MIT, `LICENSE.md`; commit `202d0209b03e`) is "a place for Hack Clubbers to record and share timelapses", in beta. Its README calls it "a fancy WakaTime plugin" for timelapses. It's a pnpm TypeScript monorepo with a web client, a Fastify/oRPC server and a CPU-heavy ffmpeg `worker`, plus Postgres, Redis and S3, deployed with Docker on Coolify (`README.md`). Recording now goes through Lookout: the browser recorder is Lookout's Rust code compiled to WebAssembly (a git submodule), and the desktop path is the Lookout app (section 4.2).
+
+What it records and sends:
+
+- A recording is a sequence of snapshots. On publish, Lapse pushes every snapshot to the user's Hackatime account as a heartbeat (`syncTimelapseWithHackatime` in `apps/server/src/routers/timelapse.ts`): `entity: "<name> (<id>)"`, `category: "timelapsing"`, `type: "timelapse"`, `language: "Lapse"`, `user_agent: "wakatime/lapse (lapse) lapse/2.0.0 lapse/2.0.0"`, `project` set to the Hackatime project the user picked, in batches of 100.
+- Lapse's own duration (`durationBySnapshots`) adds gaps only when they are 120 s or shorter and drops longer gaps entirely, while Hackatime caps them at 120 s. The same recording can therefore show slightly different totals in Lapse and in Hackatime.
+- `timelapsing` is not `coding`, so this time never reaches Hackatime leaderboards (section 1.6), although program stats calls with `test_param=true` include it.
+- Users that Hackatime has marked `red` may publish only recordings made with the Lookout desktop app, not browser recordings (`isRestrictedBrowserRecording` in `apps/server/src/lookoutPublish.ts`).
+
+Encryption and privacy. The README says "All timelapses are encrypted before being published. That means that you (and *only* you!) can access them." The code is more modest:
+
+- The browser's per-device 128-bit key (`apps/client/src/encryption.ts`) is now marked `@deprecated` ("Only used for legacy encrypted draft thumbnails. New timelapses use Lookout which handles encryption server-side").
+- `packages/shared/src/encryption.ts` uses AES-CBC, though its doc comments say AES-128-GCM, so the ciphertext is not authenticated.
+- The server decrypts drafts itself (`apps/server/src/encryption.ts`, PBKDF2 over a passkey with salts derived from a constant), and `docs/privacy.md` says queued encode jobs "carry" the draft's passkey.
+
+So drafts are protected from casual access, but the server can read anything that gets published. Before publishing, the user can cut footage with an `editList` (`docs/custom-clients.md`). GDPR deletion and export go through Hack Club's privacy hub (`yeet.hackclub.com`, ES256 JWTs, dry run first), and heartbeats already sent to Hackatime are left for the hub's Hackatime step (`docs/privacy.md`).
+
+Reviewer evidence: `packages/api/src/contracts/detection.ts` defines a lookup that returns, per timelapse, the recording (`duration`, `playbackUrl`, `snapshotTimestamps`, `hackatimeProject`), the owner's `hackatimeId`, provenance (`lookout` or `legacy`), and Lookout evidence (`trackingMode`, `trackedSeconds`, `activeSeconds`, `screenshotCount`, `captureRange`, `captureTimestamps`, `clientInfo`). This is the shape fraud reviewers already get from a timelapse tool.
+
+Passive or not: Zach says Lapse "is not passive. You need to turn it on to start tracking" (BOUNTY.md). I found no "lookback" mode: GitHub code search for `lookback` in hackclub/lapse and hackclub/lookout returns nothing (2026-11-19), so the term exists only in Zach's reply. [hackclub/elapsed](https://github.com/hackclub/elapsed) (MIT, .NET/Uno, last pushed 2026-07-01) is a native third-party client for the Lapse API, not a new recorder.
 
 ### 4.2 Lookout
 
-(pending)
+[hackclub/lookout](https://github.com/hackclub/lookout) (AGPL-3.0, `LICENCE`; commit `be1b7b9230f2`; desktop release v0.4.2 of 2026-11-10 for Windows x64/arm64, macOS Intel/ARM, Linux deb/rpm/pacman) is "Simple time-tracking via periodic screenshots as a service, designed to be embedded into Hack Club programs", formerly "Collapse". It has a Rust capture engine (`lookout-session` for pure logic, `lookout-protocol` for the wire protocol, `lookout-core` for capture, hardware H.264 clips through VideoToolbox, Media Foundation or GStreamer, and redaction), a Tauri desktop shell, a React SDK, a hosted web recorder, and a TypeScript server with Postgres (drizzle) and Cloudflare R2 storage (`README.md`, `crates/lookout-core/README.md`, `docs/integration.md`).
+
+How it works (`docs/integration.md`):
+
+- There are no user accounts. A program's backend creates a session with its API key (`POST /api/internal/...`), passes the session token to the client (a `lookout://session?token=` deep link, the React SDK, or the hosted recorder), and later reads the results with the same token. Programs integrate by emailing lookout@hackclub.com first.
+- The client records one roughly 60-second clip per minute holding about 6 frames taken 10 s apart, and falls back to one JPEG per minute. Clips are capped at 8 MB per minute server-side; a typical screen is about 1.1 MB per minute.
+- `trackedSeconds` is decided by the server. In credit mode, "each capture that arrives within ±30s of the streak-anchored expected mark credits 60s; out-of-window captures reset the streak." The last capture before a pause credits the exact 0 to 60 s since the last mark. The server stamps its own time when the client asks for an upload URL and checks with `HeadObject` that the upload exists, so "clients can't fake credits".
+- Sessions auto-pause after 10 minutes without uploads and auto-stop after 24 hours. Limits: 10 upload-URL and 20 confirm requests per minute, at most 720 confirmed captures (12 hours) and 4,320 upload-URL requests per session.
+- Native clients also send interaction metadata with each capture (`activity`, `packages/server/API.md`): pointer position as fractions of the display, the frontmost app's id, whether the focused window is being recorded, window frames and display layout. "Window titles are never sent." It is "Internal only, like the JA4 fingerprint": never returned on token endpoints, because "echoing the data back would let a forger tune it". The docs call it "a signal for spotting lazy cheating (a pointer that never moves, coordinates repeating exactly, a recorded window that is never in front), not proof."
+- Retention: "The original screenshot images are only retained for 7 days after a session stops", while timestamps, the compiled video and the thumbnail are kept. Cut footage is deleted as soon as the edited timelapse is ready.
+- Hackatime: the program fetches `/timings` (one timestamp per credited minute) and pushes them to Hackatime with editor `Lookout`. Stardance's `LookoutHeartbeatForwarder` sends `type: "file"`, `entity: <session token>`, `language: "Lookout"`, `category: "coding"`, `editor: "Lookout"`, so Lookout time counts as `coding` everywhere, leaderboards included. Lapse uses `timelapsing` for the same kind of data, so already two conventions exist.
+
+Rough cost check (my arithmetic, not from the docs): 1.1 MB per minute is about 66 MB per recorded hour. Recording all 109,759 monthly Hackatime hours (R11) would mean about 7.2 TB uploaded per month. R2 doesn't charge for egress, but storing and compiling that much is a real cost. Uploading only submitted hours, as R10 suggests, is what makes screen evidence affordable.
 
 ### 4.3 Lessons for pairtime
 
-(pending)
+1. Timelapses are the evidence Hack Club already trusts. The fraud page asks for one in appeals, Stardance integrates Lookout, and reviewers have tools for it. A pairtime submission that can attach a Lookout-compatible capture for the claimed hours plugs into existing review habits (R9, R10, A).
+2. Neither tool is passive. Lookout sessions are created by a program and Lapse has to be started. A local rolling capture that keeps evidence on disk and uploads only the minutes behind submitted hours is the "lookback" Zach describes, and it meets R4's three stories as long as capture is always on and cheap (R4, R6, R8).
+3. Credit on a server-anchored grid works. A client can't invent minutes if the server issues the schedule and stamps arrival times. Pairtime's attestation pings can use the same idea even when the evidence itself stays local (R9).
+4. Keep fraud signals server-side and unexplained. Lookout hides `activity` and JA4 from the token holder, Stardance keeps signal names in a private submodule, and the fraud page doesn't publish its patterns. Pairtime's client is AGPL and readable, so its trust has to come from server-side cross-checks, not client secrecy (R9).
+5. Be exact about privacy. Lapse's "only you" claim doesn't match a server that decrypts at publish. Pairtime should state precisely what leaves the machine, when, and who can decrypt it (R6).
+6. One heartbeat convention per source. Lapse sends `timelapsing` and Stardance's Lookout forwarding sends `coding`, and the two land in different Hackatime totals. If pairtime feeds Hackatime, it needs one documented category and editor value, agreed with Hackatime maintainers (R5, A).
 
 ## 5. Dark flow (fast.ai)
 
