@@ -14,7 +14,10 @@ type enum[T ~string] struct {
 
 func (e enum[T]) has(v T) bool { return slices.Contains(e.values, v) }
 
-// Source is the kind of adapter that produced an event (SM 1.1).
+// Source is the kind of adapter or tool the record says produced it (SM
+// 1.1). It is the record's own claim. [Via] is how the pairtime agent
+// actually received it, and the two can differ: a plugin that posts
+// events claiming source "hook" over HTTP has via "plugin".
 type Source string
 
 const (
@@ -32,6 +35,65 @@ const (
 
 var sources = enum[Source]{name: "source", values: []Source{
 	SourceHook, SourceLog, SourceOTel, SourceOS, SourceEditor, SourceShell, SourceGit, SourceCLI, SourceMCP,
+}}
+
+// Via is how the pairtime agent received a record (DESIGN 4.1 E-2). The
+// agent sets it from the path the record came in by and overwrites
+// whatever a sender wrote, so a sender can't choose its own via. An
+// anchor's evidence level depends on it (DESIGN 6.4), and only records
+// with via hook, log, otel, editor or bridge count toward logged_s,
+// ai_logged_s and hackatime_logged_s (DESIGN 6.2 D19).
+type Via string
+
+const (
+	// ViaHook is a hook the harness ran: one of its native hooks, or
+	// `pairtime hook` and `pairtime emit` called from a process whose
+	// parent chain reaches a host the mapping or plugin lists (DESIGN
+	// 5.3).
+	ViaHook Via = "hook"
+	// ViaLog is one of pairtime's log readers: a transcript, rollout or
+	// history file the harness wrote.
+	ViaLog Via = "log"
+	// ViaOTel is the agent's OTLP receiver.
+	ViaOTel Via = "otel"
+	// ViaOS is the agent's own presence, focus, power and process watchers.
+	ViaOS Via = "os"
+	// ViaGit is the agent's .git watcher.
+	ViaGit Via = "git"
+	// ViaShell is a shell integration.
+	ViaShell Via = "shell"
+	// ViaEditor is an editor heartbeat that passed the peer-process check:
+	// the connection came from wakatime-cli, whose parent chain reaches an
+	// editor (DESIGN 5.7).
+	ViaEditor Via = "editor"
+	// ViaEditorUnverified is an editor heartbeat that failed the
+	// peer-process check. Its anchors are level C and it never counts
+	// toward logged_s (DESIGN 5.2, 6.4, D19).
+	ViaEditorUnverified Via = "editor_unverified"
+	// ViaBridge is a record the WakaTime bridge made from a
+	// transcript-derived heartbeat that passed the peer-process check
+	// (DESIGN 5.7). Its anchors are level C unless keyboard input or the
+	// harness's own log corroborates them (DESIGN 5.2).
+	ViaBridge Via = "bridge"
+	// ViaBridgeUnverified is a bridge record from a heartbeat that failed
+	// the peer-process check. It is level C like ViaBridge, and like
+	// ViaEditorUnverified it never counts toward logged_s. DESIGN 4.1
+	// E-2 has no value for it; docs/errata/2026-11-19-bridge-unverified.md
+	// records why it was added.
+	ViaBridgeUnverified Via = "bridge_unverified"
+	// ViaTrack is `pairtime track`, called by an agent following the
+	// AGENTS.md entry (DESIGN 5.4). It never counts toward logged_s.
+	ViaTrack Via = "track"
+	// ViaPlugin is a plugin posting over HTTP or through the inbox, or
+	// `pairtime emit` and the generic hook mode from a process whose
+	// parent chain reaches no listed host (DESIGN 5.3). It never counts
+	// toward logged_s.
+	ViaPlugin Via = "plugin"
+)
+
+var vias = enum[Via]{name: "via", values: []Via{
+	ViaHook, ViaLog, ViaOTel, ViaOS, ViaGit, ViaShell, ViaEditor, ViaEditorUnverified,
+	ViaBridge, ViaBridgeUnverified, ViaTrack, ViaPlugin,
 }}
 
 // Harness is the AI coding tool behind an event (SM 1.1).

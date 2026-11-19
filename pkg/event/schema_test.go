@@ -43,7 +43,7 @@ func infoOf[T ~string](e enum[T]) enumInfo {
 // schemaEnums lists every enum the event schema describes under $defs.
 func schemaEnums() []enumInfo {
 	return []enumInfo{
-		infoOf(kinds), infoOf(sources), infoOf(harnesses), infoOf(startKinds), infoOf(entrypoints),
+		infoOf(kinds), infoOf(sources), infoOf(vias), infoOf(harnesses), infoOf(startKinds), infoOf(entrypoints),
 		infoOf(parentClasses), infoOf(declaredOrigins), infoOf(toolClasses), infoOf(decisions),
 		infoOf(decidedBys), infoOf(stopReasons), infoOf(subagentPhases), infoOf(editorActs),
 		infoOf(editSources), infoOf(cmdClasses), infoOf(gitOps), infoOf(actors), infoOf(appClasses),
@@ -265,8 +265,8 @@ func (c *schemaCheck) enums() {
 }
 
 // kindRules checks the schema's allOf: one if/then rule per kind, sending
-// "data" to that kind's $defs entry and restricting source, harness and
-// session_key exactly as the Go kind rule does.
+// "data" to that kind's $defs entry and restricting source, via, harness
+// and session_key exactly as the Go kind rule does.
 func (c *schemaCheck) kindRules() {
 	rules := map[Kind]map[string]any{}
 	allOf, ok := c.root["allOf"].([]any)
@@ -308,6 +308,13 @@ func (c *schemaCheck) kindRules() {
 		if got := c.allowed(props["source"]); !slices.Equal(got, want) {
 			c.addf("%s rule: the schema allows sources %q, Go allows %q (empty means any)", k, got, want)
 		}
+		var wantVias []string
+		for _, v := range r.vias {
+			wantVias = append(wantVias, string(v))
+		}
+		if got := c.allowed(props["via"]); !slices.Equal(got, wantVias) {
+			c.addf("%s rule: the schema allows vias %q, Go allows %q (empty means any)", k, got, wantVias)
+		}
 		wantMode := "any"
 		switch {
 		case r.noSession:
@@ -321,24 +328,24 @@ func (c *schemaCheck) kindRules() {
 			}
 		}
 		for name := range props {
-			if !slices.Contains([]string{"data", "source", "harness", "session_key"}, name) {
-				c.addf("%s rule: unexpected property %q; checkSchema only knows data, source, harness and session_key", k, name)
+			if !slices.Contains([]string{"data", "source", "via", "harness", "session_key"}, name) {
+				c.addf("%s rule: unexpected property %q; checkSchema only knows data, source, via, harness and session_key", k, name)
 			}
 		}
 	}
 }
 
-// allowed reads a {"const": x} or {"enum": [...]} restriction; nil means
-// the property isn't restricted.
+// allowed reads a {"const": x} or {"enum": [...]} restriction on source
+// or via; nil means the property isn't restricted.
 func (c *schemaCheck) allowed(v any) []string {
 	if v == nil {
 		return nil
 	}
-	p := c.object(v, "source rule")
+	p := c.object(v, "source or via rule")
 	if s, ok := p["const"].(string); ok {
 		return []string{s}
 	}
-	return c.stringList(p["enum"], "source rule enum")
+	return c.stringList(p["enum"], "source or via rule enum")
 }
 
 // noneMode reads how a rule restricts harness or session_key: "none" for
@@ -437,6 +444,9 @@ func TestSchemaDriftIsCaught(t *testing.T) {
 		{"an envelope field the schema doesn't have", func(t *testing.T, root map[string]any) {
 			delete(at(t, root, "properties"), "boot_id")
 		}, `event: the schema has no property "boot_id"`},
+		{"an envelope field Go dropped", func(t *testing.T, root map[string]any) {
+			at(t, root, "properties")["chain_hash"] = map[string]any{"type": "string"}
+		}, `event: schema property "chain_hash" has no Go field`},
 		{"a required list out of step", func(t *testing.T, root map[string]any) {
 			at(t, root, "$defs", "agent.queue")["required"] = []any{"turn_key"}
 		}, "agent.queue: the schema requires"},
@@ -463,6 +473,19 @@ func TestSchemaDriftIsCaught(t *testing.T) {
 			props, _ := kindRuleAt(t, root, KindOSPresence)
 			delete(props, "source")
 		}, "os.presence rule: the schema allows sources"},
+		{"a kind rule that lets any via through", func(t *testing.T, root map[string]any) {
+			props, _ := kindRuleAt(t, root, KindCLITrack)
+			delete(props, "via")
+		}, "cli.track rule: the schema allows vias"},
+		{"a kind rule with a via Go doesn't allow", func(t *testing.T, root map[string]any) {
+			props, _ := kindRuleAt(t, root, KindGitChange)
+			props["via"] = map[string]any{"const": "plugin"}
+		}, "git.change rule: the schema allows vias"},
+		{"a via value only Go has", func(t *testing.T, root map[string]any) {
+			def := at(t, root, "$defs", "via")
+			list := def["enum"].([]any)
+			def["enum"] = slices.DeleteFunc(slices.Clone(list), func(v any) bool { return v == "bridge_unverified" })
+		}, "$defs/via lists"},
 		{"a kind rule that drops the session check", func(t *testing.T, root map[string]any) {
 			props, _ := kindRuleAt(t, root, KindPromptSubmit)
 			delete(props, "session_key")

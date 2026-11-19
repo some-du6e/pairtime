@@ -19,9 +19,14 @@
 //
 //	{"event_id": "0193f6a1-2b3c-7d4e-8f00-112233445566", "device_id": "d_7f3a9c",
 //	 "seq": 18301, "t": 1795046500000, "mono": 81163000, "boot_id": "b_51c2",
-//	 "source": "os", "harness": "none", "session_key": "none",
-//	 "chain_hash": "<64 hex digits>", "kind": "os.presence",
+//	 "source": "os", "via": "os", "harness": "none", "session_key": "none",
+//	 "kind": "os.presence",
 //	 "data": {"idle_any_s": 3.5, "idle_keys_s": null, "locked": false}}
+//
+// Source is what a record claims produced it; via is how the pairtime
+// agent received it, and the agent sets via itself (DESIGN 4.1 E-2). The
+// envelope has no hash chain: the ledger's Merkle batches replace it
+// (DESIGN 3.6).
 //
 // # Local fields
 //
