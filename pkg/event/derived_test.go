@@ -460,6 +460,18 @@ func TestRollupValidate(t *testing.T) {
 			*r = validSubmission()
 			r.ProjectKey, r.CreditedByProject = "", map[string]float64{"p_9f2c": 15000, "p_77aa": 6000}
 		}, "credited_by_project: sums to 21000"},
+		{"a keyed submission's breakdown may name its own project", func(r *Rollup) {
+			*r = validSubmission()
+			r.CreditedByProject = map[string]float64{"p_9f2c": 21240}
+		}, ""},
+		{"a keyed submission's breakdown names no other project", func(r *Rollup) {
+			*r = validSubmission()
+			r.CreditedByProject = map[string]float64{"p_77aa": 21240}
+		}, `credited_by_project: names project "p_77aa", but the submission covers only its project_key "p_9f2c"`},
+		{"a keyed submission doesn't share its credit with another project", func(r *Rollup) {
+			*r = validSubmission()
+			r.CreditedByProject = map[string]float64{"p_9f2c": 15000, "p_77aa": 6240}
+		}, `credited_by_project: names project "p_77aa"`},
 		{"a submission's project is a key", func(r *Rollup) { *r = validSubmission(); r.ProjectKey = "/home/teen/game" }, "project_key:"},
 		{"unknown level", func(r *Rollup) { r.Level = "week" }, "level:"},
 		{"a day spans projects", func(r *Rollup) { *r = validDayRollup(); r.ProjectKey = "p_9f2c" }, "project_key: a day rollup spans projects"},

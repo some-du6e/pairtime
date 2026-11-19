@@ -605,7 +605,8 @@ type Rollup struct {
 	// CreditedByEvidence, when present, sums to CreditedS.
 	CreditedByEvidence map[Evidence]float64 `json:"credited_by_evidence,omitempty"`
 	// CreditedByProject is for the day and submission levels only. When
-	// present it sums to CreditedS.
+	// present it sums to CreditedS. A submission with a ProjectKey may
+	// name only that project in it.
 	CreditedByProject map[string]float64 `json:"credited_by_project,omitempty"`
 	AgentRunningS     float64            `json:"agent_running_s"`
 	AnchorCounts      map[AnchorKind]int `json:"anchor_counts,omitempty"`
@@ -626,8 +627,16 @@ func (r Rollup) Validate() error {
 		}
 	case LevelSubmission:
 		// A submission covers a set of projects (DESIGN 7.5): one key, or
-		// none when it covers several.
+		// none when it covers several. A keyed submission covers that one
+		// project, so its breakdown can't put credit anywhere else.
 		c.optKey("project_key", r.ProjectKey)
+		if isKey(r.ProjectKey) {
+			for _, k := range slices.Sorted(maps.Keys(r.CreditedByProject)) {
+				if k != r.ProjectKey {
+					c.addf("credited_by_project", "names project %q, but the submission covers only its project_key %q", k, r.ProjectKey)
+				}
+			}
+		}
 	default:
 		c.key("project_key", r.ProjectKey)
 	}
