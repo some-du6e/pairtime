@@ -1,0 +1,83 @@
+// This file isn't part of pairtime's build; the .txt suffix keeps the Go
+// toolchain away from it. extract.sh copies it into gitleaks' own
+// cmd/generate/config/utils package and calls pairtimeDump at the top of
+// Validate and ValidateWithPaths, so every true and false positive gitleaks
+// checks its rules against is written out, with the secrets gitleaks' own
+// detector finds in it.
+
+package utils
+
+import (
+	"encoding/base64"
+	"encoding/json"
+	"os"
+	"sort"
+
+	"github.com/zricethezav/gitleaks/v8/config"
+	"github.com/zricethezav/gitleaks/v8/detect"
+)
+
+// Text and secrets are base64url without padding, so the corpus doesn't
+// look like a pile of leaked keys to secret scanners.
+type pairtimeSample struct {
+	Text    string   `json:"text"`
+	Path    string   `json:"path,omitempty"`
+	Secrets []string `json:"secrets"`
+}
+
+type pairtimeCase struct {
+	Rule string           `json:"rule"`
+	TPs  []pairtimeSample `json:"tps"`
+	FPs  []pairtimeSample `json:"fps"`
+}
+
+func pairtimeSamples(rule config.Rule, texts []string, paths map[string]string) []pairtimeSample {
+	enc := base64.RawURLEncoding.EncodeToString
+	samples := []pairtimeSample{}
+	add := func(text, path string) {
+		r := rule
+		d := createSingleRuleDetector(&r)
+		s := pairtimeSample{Text: enc([]byte(text)), Path: path, Secrets: []string{}}
+		for _, f := range d.Detect(detect.Fragment{Raw: text, FilePath: path}) {
+			s.Secrets = append(s.Secrets, enc([]byte(f.Secret)))
+		}
+		samples = append(samples, s)
+	}
+	for _, t := range texts {
+		add(t, "")
+	}
+	keys := make([]string, 0, len(paths))
+	for p := range paths {
+		keys = append(keys, p)
+	}
+	sort.Strings(keys)
+	for _, p := range keys {
+		add(paths[p], p)
+	}
+	return samples
+}
+
+func pairtimeDump(rule config.Rule, tps, fps []string, pathTPs, pathFPs map[string]string) {
+	out := os.Getenv("PAIRTIME_GITLEAKS_DUMP")
+	if out == "" {
+		return
+	}
+	line, err := json.Marshal(pairtimeCase{
+		Rule: rule.RuleID,
+		TPs:  pairtimeSamples(rule, tps, pathTPs),
+		FPs:  pairtimeSamples(rule, fps, pathFPs),
+	})
+	if err != nil {
+		panic(err)
+	}
+	f, err := os.OpenFile(out, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		panic(err)
+	}
+	if _, err := f.Write(append(line, '\n')); err != nil {
+		panic(err)
+	}
+	if err := f.Close(); err != nil {
+		panic(err)
+	}
+}
