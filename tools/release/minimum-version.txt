@@ -1,0 +1,5 @@
+# The oldest client version a tagged release still supports: the
+# manifest's minimum_version (docs/spec/update-manifest.md). Raise it in a
+# PR when older clients must update first, for example after the server
+# stops accepting what they send. v0.0.0 means no client is too old.
+v0.0.0
