@@ -1,0 +1,7 @@
+{
+  "id": 4821,
+  "emails": ["rowan@example.org"],
+  "slack_id": "U0123ABC",
+  "github_username": "rowan",
+  "trust_factor": {"trust_level": "blue", "trust_value": 0}
+}

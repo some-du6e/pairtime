@@ -1,0 +1,10 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "GET /api/v1/users/:username/stats with total_seconds=true, 200",
+  "description": "The early returns in StatsController#user_stats, stats_controller.rb line 66 (test_param=true) and line 90 (otherwise): only the total, with no data object and no trust_factor. This is how Stardance reads the hours for the Hackatime projects linked to one of its projects, and it rejects anything but a non-negative integer here (stardance hackatime_service.rb lines 147-152).",
+  "type": "object",
+  "required": ["total_seconds"],
+  "properties": {
+    "total_seconds": {"type": "integer", "minimum": 0}
+  }
+}

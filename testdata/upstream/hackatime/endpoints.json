@@ -1,0 +1,282 @@
+{
+  "upstream": "hackclub/hackatime",
+  "revision": "43bde10b02dbd2371fb4f802e724a1a875ac0dfc",
+  "base_url": "https://hackatime.hackclub.com",
+  "time_zone": "Program calls carry no session cookie, so ApplicationController's around_action :switch_time_zone, if: :current_user (app/controllers/application_controller.rb lines 14-19, with current_user read from the session at lines 45-47) never runs for them. Time.zone stays Rails' default, UTC, because config.time_zone is left commented out (config/application.rb line 37). A date-only start_date or end_date therefore means 00:00:00 UTC on that day.",
+  "identifier_lookup": {
+    "source": {"file": "app/models/user.rb", "lines": "95-112", "excerpt": "excerpts/app/models/user.rb"},
+    "order": [
+      "id, tried only when the identifier is all digits",
+      "slack_uid",
+      "hca_id",
+      "username"
+    ],
+    "rule": "One query loads every user matching any of the four, then the first match in this order wins. The identifier 42 finds the user whose id is 42 before a user whose username is 42. A blank identifier finds nobody.",
+    "my": "The literal my resolves to the caller that the request's credential identifies (StatsController#set_user, stats_controller.rb lines 168-177). Without a usable credential it resolves to nobody, and the action answers 404 User not found.",
+    "used_by": ["stats", "heartbeats_spans"],
+    "trust_factor_differs": "trust_factor has its own lookup over slack_uid and username, plus id when the identifier is all digits. It never tries hca_id and has no my (stats_controller.rb lines 128-138). pairtime answers it with Hackatime's unscored blue value for any user that matches (DESIGN 5.10)."
+  },
+  "endpoints": [
+    {
+      "id": "authenticated_me",
+      "method": "GET",
+      "path": "/api/v1/authenticated/me",
+      "route": {"file": "config/routes.rb", "lines": "275-276", "excerpt": "excerpts/config/routes.rb"},
+      "action": {
+        "name": "Api::V1::Authenticated::MeController#index",
+        "source": {"file": "app/controllers/api/v1/authenticated/me_controller.rb", "lines": "9-27", "excerpt": "excerpts/app/controllers/api/v1/authenticated/me_controller.rb"}
+      },
+      "auth": [
+        {"kind": "oauth_token", "how": "Authorization: Bearer <access token from Hackatime's OAuth provider>"}
+      ],
+      "params": [],
+      "responses": [
+        {"status": 200, "when": "Doorkeeper accepts the token.", "schema": "responses/authenticated_me.schema.json"},
+        {
+          "status": 401,
+          "when": "The account is pending deletion. Body {\"error\": \"Unauthorized\"}. Unlike the other authenticated actions, this one still answers for an account whose API access is restricted (me_controller.rb lines 6-7).",
+          "schema": "responses/error.schema.json",
+          "source": {"file": "app/controllers/api/v1/authenticated/application_controller.rb", "lines": "24-26", "excerpt": "excerpts/app/controllers/api/v1/authenticated/application_controller.rb"}
+        },
+        {"status": 401, "when": "Doorkeeper refuses the token: missing, expired or revoked. A token it accepts but finds short of the action's scope gets 403.", "body": "Doorkeeper's own answer, not a Hackatime JSON error"}
+      ],
+      "notes": [
+        "Stardance reads only id, and stores it as a string (stardance app/services/hackatime_service.rb lines 9-26)."
+      ]
+    },
+    {
+      "id": "authenticated_api_keys",
+      "method": "GET",
+      "path": "/api/v1/authenticated/api_keys",
+      "route": {"file": "config/routes.rb", "lines": "275, 282", "excerpt": "excerpts/config/routes.rb"},
+      "action": {
+        "name": "Api::V1::Authenticated::ApiKeysController#index",
+        "source": {"file": "app/controllers/api/v1/authenticated/api_keys_controller.rb", "lines": "5-13", "excerpt": "excerpts/app/controllers/api/v1/authenticated/api_keys_controller.rb"}
+      },
+      "auth": [
+        {"kind": "oauth_token", "how": "Authorization: Bearer <access token from Hackatime's OAuth provider>"}
+      ],
+      "params": [],
+      "responses": [
+        {"status": 200, "when": "Doorkeeper accepts the token.", "schema": "responses/authenticated_api_keys.schema.json"},
+        {
+          "status": 401,
+          "when": "The account's API access is restricted, as a red account's is (HC 1.9). Body {\"error\": \"Unauthorized\"}.",
+          "schema": "responses/error.schema.json",
+          "source": {"file": "app/controllers/api/v1/authenticated/application_controller.rb", "lines": "20-22", "excerpt": "excerpts/app/controllers/api/v1/authenticated/application_controller.rb"}
+        },
+        {"status": 401, "when": "Doorkeeper refuses the token, as for authenticated_me.", "body": "Doorkeeper's own answer, not a Hackatime JSON error"}
+      ],
+      "notes": [
+        "For a user with no key the call creates one (api_keys.create!), so this read can write.",
+        "Stardance caches the key for a week per Hackatime uid, and drops it and fetches a fresh one when a stats call made with the cached key fails (stardance app/services/hackatime_service.rb lines 313-361)."
+      ]
+    },
+    {
+      "id": "get_user_by_email",
+      "method": "POST",
+      "path": "/api/admin/v1/user/get_user_by_email",
+      "route": {"file": "config/routes.rb", "lines": "287-288, 300", "excerpt": "excerpts/config/routes.rb"},
+      "action": {
+        "name": "Api::Admin::V1::AdminController#get_user_by_email, from UserUtilities",
+        "source": {"file": "app/controllers/concerns/api/admin/v1/user_utilities.rb", "lines": "32-37", "excerpt": "excerpts/app/controllers/concerns/api/admin/v1/user_utilities.rb"}
+      },
+      "auth": [
+        {
+          "kind": "admin_key",
+          "how": "Authorization: Bearer <admin API key>, read by Rails' token authentication. The key needs the users:read scope.",
+          "source": {"file": "app/controllers/concerns/api/admin/v1/user_utilities.rb", "lines": "26"}
+        }
+      ],
+      "params": [
+        {
+          "name": "email",
+          "in": "body",
+          "required": true,
+          "forms": ["{\"email\": \"rowan@example.org\"} with Content-Type: application/json, as Stardance sends it"],
+          "meaning": "Compared for equality with the stored addresses (EmailAddress.find_by(email:)). Rails also reads it from a form body or the query string."
+        }
+      ],
+      "responses": [
+        {"status": 200, "when": "Some user has the address.", "schema": "responses/get_user_by_email.schema.json"},
+        {"status": 404, "when": "No user has it. Body {\"error\": \"email not found\"}.", "schema": "responses/error.schema.json"},
+        {"status": 422, "when": "email is missing or blank. Body {\"error\": \"bro dont have a email\"}.", "schema": "responses/error.schema.json"},
+        {"status": 401, "when": "No admin key, or one Hackatime doesn't know.", "body": "Rails' plain-text 'HTTP Token: Access denied.' with a WWW-Authenticate: Token header"}
+      ]
+    },
+    {
+      "id": "stats",
+      "method": "GET",
+      "path": "/api/v1/users/:username/stats",
+      "route": {"file": "config/routes.rb", "lines": "255", "excerpt": "excerpts/config/routes.rb"},
+      "action": {
+        "name": "Api::V1::StatsController#user_stats",
+        "source": {"file": "app/controllers/api/v1/stats_controller.rb", "lines": "32-113", "excerpt": "excerpts/app/controllers/api/v1/stats_controller.rb"}
+      },
+      "auth": [
+        {"kind": "none", "how": "No credential. Allowed when the user's stats are public, which is the default (users.allow_public_stats_lookup, HC 1.7)."},
+        {
+          "kind": "api_key",
+          "how": "Authorization: Bearer <the user's API key>. It identifies the caller, which my needs, and lets a user read their own private stats. This action reads Bearer only, not Basic and not ?api_key=.",
+          "source": {"file": "app/controllers/api/v1/stats_controller.rb", "lines": "168-177", "excerpt": "excerpts/app/controllers/api/v1/stats_controller.rb"}
+        },
+        {"kind": "oauth_token", "how": "Authorization: Bearer <OAuth access token with the read scope>, with the same effect as an API key.", "source": {"file": "app/controllers/api/v1/stats_controller.rb", "lines": "168-177", "excerpt": "excerpts/app/controllers/api/v1/stats_controller.rb"}}
+      ],
+      "params": [
+        {"name": "username", "in": "path", "required": true, "forms": ["4821", "U0123ABC", "an HCA id", "rowan", "my"], "meaning": "Resolved as identifier_lookup describes."},
+        {
+          "name": "start_date",
+          "in": "query",
+          "forms": ["2026-05-31", "2026-11-03T18:02:00Z"],
+          "default": "10 years ago",
+          "meaning": "Parsed with Time.zone.parse, so in UTC for a program call (see time_zone). A value that doesn't parse gives 422 {\"error\": \"Invalid start_date\"}.",
+          "source": {"file": "app/controllers/api/v1/stats_controller.rb", "lines": "226-234", "excerpt": "excerpts/app/controllers/api/v1/stats_controller.rb"}
+        },
+        {
+          "name": "end_date",
+          "in": "query",
+          "forms": ["2026-11-18", "2026-11-18T20:11:00Z"],
+          "default": "the end of today, Date.today.end_of_day",
+          "meaning": "Parsed like start_date. A bare date means the start of that day, so end_date=2026-11-18 stops at 2026-11-18T00:00:00Z. 422 {\"error\": \"Invalid end_date\"} when it doesn't parse."
+        },
+        {"name": "features", "in": "query", "forms": ["projects", "languages,projects"], "default": "languages", "meaning": "Comma string of summary sections. projects adds data.projects and languages adds data.languages. Other names are accepted and add nothing."},
+        {
+          "name": "filter_by_project",
+          "in": "query",
+          "forms": ["remind-bot,cs2go", "filter_by_project[]=remind-bot&filter_by_project[]=cs2go"],
+          "meaning": "Limits every figure to these Hackatime project names. The value goes through .split(\",\"): a comma string splits into names, and an array goes through ActiveSupport's Array#split, which splits only at elements equal to \",\". Both forms filter on the same names, except that a name containing a comma survives only the array form, and a project named exactly \",\" breaks the array form (stardance app/services/hackatime_service.rb lines 123-128)."
+        },
+        {"name": "filter_by_category", "in": "query", "forms": ["coding,ai coding"], "meaning": "Comma string. Read only on the total_seconds=true path without test_param."},
+        {"name": "test_param", "in": "query", "forms": ["true"], "meaning": "Off unless exactly true. When true the total is boundary-aware, only valid timestamps count, and the categories browsing, meeting and communicating are left out, plus ai coding when no_ai_coding=true, compared with LOWER(category). Stardance always sends it."},
+        {"name": "no_ai_coding", "in": "query", "forms": ["true", "false"], "meaning": "true leaves out the ai coding category. Stardance sends false, so its hours include ai coding at full weight."},
+        {"name": "total_seconds", "in": "query", "forms": ["true"], "meaning": "Return only {\"total_seconds\": n}."},
+        {"name": "boundary_aware", "in": "query", "forms": ["true"], "meaning": "Read only on the total_seconds=true path without test_param, where it switches that total to the boundary-aware sum with the same category exclusions."},
+        {"name": "limit", "in": "query", "forms": ["5"], "default": "0, which means no limit", "meaning": "Caps data.projects and data.languages after they are sorted by seconds."}
+      ],
+      "responses": [
+        {"status": 200, "when": "total_seconds is anything but true.", "schema": "responses/stats.schema.json"},
+        {"status": 200, "when": "total_seconds=true.", "schema": "responses/stats_total_seconds.schema.json"},
+        {"status": 404, "when": "The identifier resolves to nobody, or my comes without a usable credential. Body {\"error\": \"User not found\"}.", "schema": "responses/error.schema.json"},
+        {
+          "status": 403,
+          "when": "The user turned public stats off and the caller isn't that user. Body {\"error\": \"user has disabled public stats\"}.",
+          "schema": "responses/error.schema.json",
+          "source": {"file": "app/controllers/api/v1/stats_controller.rb", "lines": "179-184", "excerpt": "excerpts/app/controllers/api/v1/stats_controller.rb"}
+        },
+        {"status": 422, "when": "start_date or end_date doesn't parse.", "schema": "responses/error.schema.json"}
+      ],
+      "notes": [
+        "With test_param=true, WakatimeService truncates both bounds to whole epoch seconds (convert_to_unix_timestamp, wakatime_service.rb lines 275-292). The boundary-aware total then counts every gap that ends at a heartbeat with start <= time <= end, including the gap from the last matching heartbeat before start (heartbeatable.rb lines 286-311). data.projects counts start <= time < end, with no boundary heartbeat (wakatime_service.rb line 22).",
+        "Without test_param, total_seconds=true uses the bounds as parsed, start <= time < end, and the plain sum, or the boundary-aware sum when boundary_aware=true (stats_controller.rb lines 71-90).",
+        "Per-project seconds come from the grouped path and the test-mode total from the boundary-aware path, so they don't add up to each other. That is why Stardance makes one total_seconds=true call for each set of linked names (stardance app/services/hackatime_service.rb line 149).",
+        "The category exclusion is NOT (LOWER(category) IN (...)), which also drops a heartbeat whose category is NULL. Hackatime's ingest fills in a missing category, coding or browsing by type (HC 1.2), so NULL only appears in rows written some other way.",
+        "Unknown parameters are ignored, Stardance's _t cache-buster included."
+      ]
+    },
+    {
+      "id": "trust_factor",
+      "method": "GET",
+      "path": "/api/v1/users/:username/trust_factor",
+      "route": {"file": "config/routes.rb", "lines": "257", "excerpt": "excerpts/config/routes.rb"},
+      "action": {
+        "name": "Api::V1::StatsController#trust_factor",
+        "source": {"file": "app/controllers/api/v1/stats_controller.rb", "lines": "128-138", "excerpt": "excerpts/app/controllers/api/v1/stats_controller.rb"}
+      },
+      "auth": [
+        {
+          "kind": "none",
+          "how": "No credential is read. The action is outside USER_LOOKUP_ACTIONS, so it skips set_user and the public-stats check and answers for users with private stats and for restricted accounts. Stardance relies on that (stardance app/services/hackatime_service.rb lines 79-96).",
+          "source": {"file": "app/controllers/api/v1/stats_controller.rb", "lines": "2, 5-6", "excerpt": "excerpts/app/controllers/api/v1/stats_controller.rb"}
+        }
+      ],
+      "params": [
+        {"name": "username", "in": "path", "required": true, "forms": ["4821", "U0123ABC", "rowan"], "meaning": "Looked up as identifier_lookup.trust_factor_differs describes."}
+      ],
+      "responses": [
+        {"status": 200, "when": "A user matched.", "schema": "responses/trust_factor.schema.json"},
+        {"status": 404, "when": "Nobody matched. Body {\"error\": \"User not found\"}.", "schema": "responses/error.schema.json"}
+      ]
+    },
+    {
+      "id": "info_batch",
+      "method": "GET",
+      "path": "/api/admin/v1/user/info_batch",
+      "route": {"file": "config/routes.rb", "lines": "287-288, 291", "excerpt": "excerpts/config/routes.rb"},
+      "action": {
+        "name": "Api::Admin::V1::AdminController#user_info_batch, from UserUtilities",
+        "source": {"file": "app/controllers/concerns/api/admin/v1/user_utilities.rb", "lines": "284-297", "excerpt": "excerpts/app/controllers/concerns/api/admin/v1/user_utilities.rb"}
+      },
+      "auth": [
+        {"kind": "admin_key", "how": "Authorization: Bearer <admin API key> with the users:read scope, as for get_user_by_email.", "source": {"file": "app/controllers/concerns/api/admin/v1/user_utilities.rb", "lines": "26"}}
+      ],
+      "params": [
+        {"name": "ids", "in": "query", "required": true, "forms": ["1,2,3"], "meaning": "Comma string. Each part is stripped and converted with to_i, so a part that isn't a number becomes 0 and matches nobody. Duplicates are dropped and the first 2,000 kept."}
+      ],
+      "responses": [
+        {"status": 200, "when": "ids has at least one part.", "schema": "responses/info_batch.schema.json"},
+        {"status": 422, "when": "ids is missing or blank, body {\"error\": \"ids parameter required\"}, or splits into no parts, as a lone comma does, body {\"error\": \"no valid ids provided\"}.", "schema": "responses/error.schema.json"},
+        {"status": 401, "when": "No admin key, or one Hackatime doesn't know.", "body": "Rails' plain-text 'HTTP Token: Access denied.' with a WWW-Authenticate: Token header"}
+      ]
+    },
+    {
+      "id": "heartbeats_spans",
+      "method": "GET",
+      "path": "/api/v1/users/:username/heartbeats/spans",
+      "route": {"file": "config/routes.rb", "lines": "256", "excerpt": "excerpts/config/routes.rb"},
+      "action": {
+        "name": "Api::V1::StatsController#user_spans",
+        "source": {"file": "app/controllers/api/v1/stats_controller.rb", "lines": "115-126", "excerpt": "excerpts/app/controllers/api/v1/stats_controller.rb"}
+      },
+      "auth": [
+        {"kind": "none", "how": "As for stats: allowed when the user's stats are public."},
+        {"kind": "api_key", "how": "Authorization: Bearer <the user's API key>, as for stats. Stardance calls users/my/heartbeats/spans this way first (stardance app/services/hackatime_service.rb lines 339-351)."},
+        {"kind": "oauth_token", "how": "Authorization: Bearer <OAuth access token with the read scope>, as for stats."}
+      ],
+      "params": [
+        {"name": "username", "in": "path", "required": true, "forms": ["4821", "U0123ABC", "an HCA id", "rowan", "my"], "meaning": "Resolved as identifier_lookup describes."},
+        {"name": "start_date", "in": "query", "forms": ["2026-05-31", "2026-11-03T18:02:00Z"], "default": "10 years ago", "meaning": "Parsed like stats' start_date but not truncated. Heartbeats with start_date <= time <= end_date count."},
+        {"name": "end_date", "in": "query", "forms": ["2026-11-20"], "default": "the end of today", "meaning": "Parsed like stats' end_date."},
+        {"name": "project", "in": "query", "forms": ["remind-bot", "project[]=remind-bot&project[]=cs2go"], "meaning": "One name, or several in the array form, which Stardance sends."},
+        {"name": "filter_by_project", "in": "query", "forms": ["remind-bot,cs2go"], "meaning": "Comma string, read only when project is absent or blank."}
+      ],
+      "responses": [
+        {"status": 200, "when": "The user resolves and their stats are readable.", "schema": "responses/spans.schema.json"},
+        {"status": 404, "when": "As for stats. Body {\"error\": \"User not found\"}.", "schema": "responses/error.schema.json"},
+        {"status": 403, "when": "As for stats. Body {\"error\": \"user has disabled public stats\"}.", "schema": "responses/error.schema.json"},
+        {"status": 422, "when": "start_date or end_date doesn't parse.", "schema": "responses/error.schema.json"}
+      ],
+      "notes": [
+        "Spans cover every category, browsing included, unlike the test-mode stats total."
+      ]
+    },
+    {
+      "id": "my_heartbeats",
+      "method": "GET",
+      "path": "/api/v1/my/heartbeats",
+      "route": {"file": "config/routes.rb", "lines": "269, 271", "excerpt": "excerpts/config/routes.rb"},
+      "action": {
+        "name": "Api::V1::My::HeartbeatsController#index",
+        "source": {"file": "app/controllers/api/v1/my/heartbeats_controller.rb", "lines": "26-38", "excerpt": "excerpts/app/controllers/api/v1/my/heartbeats_controller.rb"}
+      },
+      "auth": [
+        {
+          "kind": "api_key",
+          "how": "Authorization: Bearer <API key>, or Authorization: Basic <base64 of the bare API key>, which is what wakatime-cli sends.",
+          "source": {"file": "app/controllers/api/v1/my/heartbeats_controller.rb", "lines": "42-48", "excerpt": "excerpts/app/controllers/api/v1/my/heartbeats_controller.rb"}
+        },
+        {"kind": "oauth_token", "how": "Authorization: Bearer <OAuth access token with the read scope>."}
+      ],
+      "params": [
+        {"name": "start_time", "in": "query", "forms": ["2026-11-03T18:00:00Z"], "default": "the start of today, UTC", "meaning": "Parsed with Ruby's Time.parse, which reads a string without an offset in the server process's zone. A string it can't parse raises, and the action doesn't rescue that."},
+        {"name": "end_time", "in": "query", "forms": ["2026-11-03T19:00:00Z"], "default": "the end of today, UTC", "meaning": "Parsed like start_time."}
+      ],
+      "responses": [
+        {"status": 200, "when": "The credential identifies a user whose API access isn't restricted.", "schema": "responses/my_heartbeats.schema.json"},
+        {"status": 401, "when": "No credential, one Hackatime doesn't know, or a restricted account. Body {\"error\": \"Unauthorized\"}.", "schema": "responses/error.schema.json"}
+      ],
+      "notes": [
+        "Both bounds are inclusive and the list has no cap, so callers keep the window short themselves (stardance app/services/hackatime_service.rb lines 280-285)."
+      ]
+    }
+  ]
+}

@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "GET /api/admin/v1/user/info_batch, 200",
+  "description": "UserUtilities#user_info_batch, user_utilities.rb lines 284-297: users.as_json with ten columns and two methods. Users come back in database order, not the order of ids, and an id that matches nobody is left out without an error. trust_level is the raw level, yellow included; this is the call Stardance uses to see raw levels (stardance hackatime_service.rb lines 98-118).",
+  "type": "object",
+  "required": ["users"],
+  "properties": {
+    "users": {
+      "type": "array",
+      "maxItems": 2000,
+      "items": {
+        "type": "object",
+        "required": [
+          "id", "username", "slack_uid", "slack_username", "github_username", "timezone",
+          "country_code", "trust_level", "slack_avatar_url", "github_avatar_url", "display_name", "avatar_url"
+        ],
+        "properties": {
+          "id": {"type": "integer", "minimum": 1},
+          "username": {"type": ["string", "null"]},
+          "slack_uid": {"type": ["string", "null"]},
+          "slack_username": {"type": ["string", "null"]},
+          "github_username": {"type": ["string", "null"]},
+          "timezone": {"type": ["string", "null"]},
+          "country_code": {"type": ["string", "null"]},
+          "trust_level": {"enum": ["blue", "red", "green", "yellow"]},
+          "slack_avatar_url": {"type": ["string", "null"]},
+          "github_avatar_url": {"type": ["string", "null"]},
+          "display_name": {"type": "string", "description": "User#display_name (user.rb lines 400-408)."},
+          "avatar_url": {"type": "string", "description": "User#avatar_url (user.rb lines 387-398), which always returns a URL or a data: URI."}
+        }
+      }
+    }
+  }
+}

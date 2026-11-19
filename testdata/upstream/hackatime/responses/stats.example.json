@@ -1,0 +1,24 @@
+{
+  "data": {
+    "username": "rowan",
+    "user_id": "4821",
+    "is_coding_activity_visible": true,
+    "is_other_usage_visible": true,
+    "status": "ok",
+    "start": "2026-05-31T00:00:00Z",
+    "end": "2026-11-19T23:59:59Z",
+    "range": "all_time",
+    "human_readable_range": "All Time",
+    "total_seconds": 12840,
+    "daily_average": 74,
+    "human_readable_total": "3h 34m",
+    "human_readable_daily_average": "1m 14s",
+    "projects": [
+      {"name": "remind-bot", "total_seconds": 9000, "text": "2h 30m", "hours": 2, "minutes": 30, "percent": 70.09, "digital": "02:30:00"},
+      {"name": "cs2go", "total_seconds": 4200, "text": "1h 10m", "hours": 1, "minutes": 10, "percent": 32.71, "digital": "01:10:00"}
+    ],
+    "unique_total_seconds": 10380,
+    "streak": 3
+  },
+  "trust_factor": {"trust_level": "blue", "trust_value": 0}
+}

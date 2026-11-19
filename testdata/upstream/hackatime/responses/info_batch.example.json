@@ -1,0 +1,18 @@
+{
+  "users": [
+    {
+      "id": 4821,
+      "username": "rowan",
+      "slack_uid": "U0123ABC",
+      "slack_username": "rowan",
+      "github_username": "rowan",
+      "timezone": "America/New_York",
+      "country_code": "US",
+      "trust_level": "blue",
+      "slack_avatar_url": null,
+      "github_avatar_url": "https://example.org/avatars/rowan.png",
+      "display_name": "rowan",
+      "avatar_url": "https://example.org/avatars/rowan.png"
+    }
+  ]
+}

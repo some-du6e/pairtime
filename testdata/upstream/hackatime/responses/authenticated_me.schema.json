@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "GET /api/v1/authenticated/me, 200",
+  "description": "MeController#index, me_controller.rb lines 9-27. trust_factor carries the raw level for a verified, confidential OAuth application and the masked public level for any other, so only verified confidential apps can see yellow.",
+  "type": "object",
+  "required": ["id", "emails", "slack_id", "github_username", "trust_factor"],
+  "properties": {
+    "id": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Hackatime's numeric user id. Stardance keeps it as a string (stardance hackatime_service.rb line 15)."
+    },
+    "emails": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "Every address on the account, or [] when there are none."
+    },
+    "slack_id": {"type": ["string", "null"]},
+    "github_username": {"type": ["string", "null"]},
+    "trust_factor": {"$ref": "#/$defs/trust_factor"}
+  },
+  "$defs": {
+    "trust_factor": {
+      "type": "object",
+      "required": ["trust_level", "trust_value"],
+      "description": "A level and its enum value from User.trust_levels (user.rb lines 48-53). The pair always agrees.",
+      "oneOf": [
+        {"properties": {"trust_level": {"const": "blue"}, "trust_value": {"const": 0}}},
+        {"properties": {"trust_level": {"const": "red"}, "trust_value": {"const": 1}}},
+        {"properties": {"trust_level": {"const": "green"}, "trust_value": {"const": 2}}},
+        {"properties": {"trust_level": {"const": "yellow"}, "trust_value": {"const": 3}}}
+      ]
+    }
+  }
+}

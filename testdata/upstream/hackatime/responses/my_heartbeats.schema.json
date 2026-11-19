@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "GET /api/v1/my/heartbeats, 200",
+  "description": "My::HeartbeatsController#index, my/heartbeats_controller.rb lines 26-38: the caller's heartbeats with start_time <= time <= end_time, oldest first, with no cap on the count, and their plain duration_seconds. pairtime answers with an empty list and the X-Pairtime-Note header instead (DESIGN 5.10), which this schema allows.",
+  "type": "object",
+  "required": ["start_time", "end_time", "total_seconds", "heartbeats"],
+  "properties": {
+    "start_time": {"$ref": "#/$defs/json_time"},
+    "end_time": {"$ref": "#/$defs/json_time"},
+    "total_seconds": {"type": "integer", "minimum": 0},
+    "heartbeats": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "description": "A whole heartbeats row as Rails serializes it: every column of the table, HC 1.2 lists them, except the ignored ysws_program. Only the fields below are pinned. Stardance reads entity and project (stardance lookout_push_status.rb lines 56-61).",
+        "required": ["id", "time", "entity", "project"],
+        "properties": {
+          "id": {"type": "integer", "minimum": 1},
+          "time": {"type": "number", "description": "Epoch seconds with fractions."},
+          "entity": {"type": ["string", "null"]},
+          "project": {"type": ["string", "null"]}
+        }
+      }
+    }
+  },
+  "$defs": {
+    "json_time": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?(Z|[+-][0-9]{2}:[0-9]{2})$",
+      "description": "A Time as Rails writes it to JSON, ISO 8601 with milliseconds."
+    }
+  }
+}
