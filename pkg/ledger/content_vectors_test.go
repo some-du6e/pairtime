@@ -40,6 +40,7 @@ type contentVectorsFile struct {
 }
 
 type lowercaseVec struct {
+	Note         string        `json:"note,omitempty"`
 	Unicode      string        `json:"unicode"`
 	Runs         []lowerRunVec `json:"runs"`
 	LaterUnicode string        `json:"later_unicode,omitempty"`
@@ -198,11 +199,11 @@ type commitRef struct {
 	Commit hexBytes `json:"commit"`
 }
 
-// challengeKVec takes no note: the reference's check refuses one here.
 type challengeKVec struct {
-	Pool  int `json:"pool"`
-	K     int `json:"k"`
-	Drawn int `json:"drawn"`
+	Note  string `json:"note,omitempty"`
+	Pool  int    `json:"pool"`
+	K     int    `json:"k"`
+	Drawn int    `json:"drawn"`
 }
 
 // readContentVectors reads testdata/ledger/vectors-content.json, refusing
