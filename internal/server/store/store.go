@@ -16,7 +16,9 @@
 //   - Placeholders are $1, $2, and so on. modernc.org/sqlite binds $NNN by
 //     number, as Postgres does.
 //   - Upserts are INSERT ... ON CONFLICT (...) DO UPDATE SET col =
-//     excluded.col. Never INSERT OR REPLACE or INSERT OR IGNORE.
+//     excluded.col. Never INSERT OR REPLACE or INSERT OR IGNORE. A
+//     migration may not upsert, since that rewrites rows the previous
+//     release wrote; package migrations allows ON CONFLICT DO NOTHING.
 //   - Times are BIGINT epoch milliseconds, and ids are UUIDv7 as TEXT.
 //   - Column types are TEXT and BIGINT, and BYTEA for raw bytes. No
 //     AUTOINCREMENT, SERIAL, STRICT or WITHOUT ROWID.

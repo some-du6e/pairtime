@@ -8,9 +8,9 @@
 // their tables as new files. Migrations are additive in v1, so the previous
 // release still runs on a database the next one migrated, and a rollback is
 // the previous image tag: a migration may create tables and indexes, add
-// columns that are nullable or have a default, and insert rows, and nothing
-// else. Parse refuses any other statement, so a test over the embedded files
-// catches it in CI.
+// columns that are nullable or have a default, and insert rows, with ON
+// CONFLICT DO NOTHING but never DO UPDATE, and nothing else. Parse refuses
+// any other statement, so a test over the embedded files catches it in CI.
 //
 // The database records each applied migration with the SHA-256 of its
 // statements. A migration whose statements changed after it was applied
@@ -144,7 +144,9 @@ func Split(text string) ([]string, error) {
 
 // CheckAdditive refuses a statement that could remove, rename or rewrite
 // anything. It must create a table or an index, add a column that is
-// nullable or has a default, or insert rows (DESIGN 10.5 step 6).
+// nullable or has a default, or insert rows without touching the ones
+// already there (DESIGN 10.5 step 6). It reads words, not SQL, so it
+// catches mistakes and not a statement written to slip past it.
 func CheckAdditive(stmt string) error {
 	if strings.Contains(stmt, ";") {
 		return errors.New("it holds a ';', so it may be two statements; end each statement with a semicolon at the end of a line")
@@ -154,7 +156,15 @@ func CheckAdditive(stmt string) error {
 		return len(words) >= len(prefix) && slices.Equal(words[:len(prefix)], prefix)
 	}
 	switch {
-	case starts("CREATE", "TABLE"), starts("CREATE", "INDEX"), starts("CREATE", "UNIQUE", "INDEX"), starts("INSERT", "INTO"):
+	case starts("CREATE", "TABLE"), starts("CREATE", "INDEX"), starts("CREATE", "UNIQUE", "INDEX"):
+		return nil
+	case starts("INSERT", "INTO"):
+		// The upsert package store recommends for pairtimed's own writes
+		// rewrites a row that is already there. ON CONFLICT DO NOTHING
+		// leaves it alone, so that form stays additive.
+		if hasPair(words, "DO", "UPDATE") {
+			return errors.New("INSERT ... ON CONFLICT DO UPDATE rewrites rows that are already there, so the previous release can find its rows changed; use ON CONFLICT DO NOTHING (DESIGN 10.5)")
+		}
 		return nil
 	case starts("ALTER", "TABLE"):
 		// ALTER TABLE name ADD COLUMN column type ...
