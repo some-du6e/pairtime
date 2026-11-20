@@ -117,8 +117,33 @@ func TestFixturesScrub(t *testing.T) {
 			args:      maya,
 			wantCode:  1,
 			wantFiles: map[string]string{"-home-maya-robot/1.jsonl": "{}\n"},
-			wantOut:   []string{"-home-[ACCOUNT]-robot: the name holds account; rename it by hand"},
+			wantOut:   []string{"[HOME]-robot: the name holds home; rename it by hand"},
 			notOut:    []string{"maya"},
+		},
+		{
+			name: "a Claude Code project folder named after a Windows home is reported, and the home goes in every spelling",
+			files: map[string]string{
+				"transcripts/home/.claude/projects/C--Users-Maya-Chen-robot/1.jsonl": `{"cwd":"C:\\Users\\Maya Chen\\robot",` +
+					`"transcript_path":"C:\\Users\\Maya Chen\\.claude\\projects\\C--Users-Maya-Chen-robot\\1.jsonl",` +
+					`"uri":"file:///c%3A/Users/Maya%20Chen/robot"}` + "\n",
+			},
+			args:     []string{"--home", `C:\Users\Maya Chen`, "--account", "Maya Chen"},
+			wantCode: 1,
+			wantFiles: map[string]string{
+				"transcripts/home/.claude/projects/C--Users-Maya-Chen-robot/1.jsonl": `{"cwd":"[HOME]\\robot",` +
+					`"transcript_path":"[HOME]\\.claude\\projects\\[HOME]-robot\\1.jsonl",` +
+					`"uri":"file://[HOME]/robot"}` + "\n",
+			},
+			wantOut: []string{
+				"transcripts/home/.claude/projects/[HOME]-robot: the name holds home; rename it by hand\n",
+				"transcripts/home/.claude/projects/[HOME]-robot/1.jsonl:1:9: home, 20 bytes\n",
+				"transcripts/home/.claude/projects/[HOME]-robot/1.jsonl:1:57: home, 20 bytes\n",
+				"transcripts/home/.claude/projects/[HOME]-robot/1.jsonl:1:98: home, 18 bytes\n",
+				"transcripts/home/.claude/projects/[HOME]-robot/1.jsonl:1:147: home, 23 bytes\n",
+				"removed 4 spans from 1 of 1 files",
+				"1 entries need a look by hand",
+			},
+			notOut: []string{"Maya", "Chen"},
 		},
 		{
 			name:     "PROVENANCE.md is left alone",

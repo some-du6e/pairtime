@@ -19,6 +19,7 @@ func TestKnownValues(t *testing.T) {
 		Deny:      []string{"Jonah", "Lincoln High"},
 	}
 	windows := Known{Homes: []string{`C:\Users\Maya Chen`}}
+	spaced := Known{Accounts: []string{"Maya Chen"}, Homes: []string{"/home/maya_k"}, Private: []string{"my_app"}}
 	accented := Known{GitNames: []string{"José Núñez"}}
 	generic := Known{
 		Accounts: []string{"Owner", "al"},
@@ -36,7 +37,9 @@ func TestKnownValues(t *testing.T) {
 		{"the home directory goes and the rest of the path stays", teen,
 			"open /home/maya/proj/main.go", "open [HOME]/proj/main.go"},
 		{"the account name goes where other text joins it with punctuation", teen,
-			"user maya_dev and -home-maya-proj", "user [ACCOUNT]_dev and -home-[ACCOUNT]-proj"},
+			"user maya_dev and x-maya-proj", "user [ACCOUNT]_dev and x-[ACCOUNT]-proj"},
+		{"the home goes as Claude Code names a project folder after it", teen,
+			"~/.claude/projects/-home-maya-proj/1.jsonl", "~/.claude/projects/[HOME]-proj/1.jsonl"},
 		{"a value inside a longer word stays", teen,
 			"the mayan calendar", "the mayan calendar"},
 		{"matching ignores case", teen,
@@ -63,6 +66,22 @@ func TestKnownValues(t *testing.T) {
 			"/mnt/c/Users/Maya Chen/proj", "[HOME]/proj"},
 		{"a Windows home goes in a file URL", windows,
 			"file:///C:/Users/Maya%20Chen/proj", "file:///[HOME]/proj"},
+		{"a Windows home goes in a VS Code file URI, with its drive in lower case and its colon escaped", windows,
+			"file:///c%3A/Users/Maya%20Chen/robot", "file://[HOME]/robot"},
+		{"a Windows home goes as Claude Code names a project folder after it", windows,
+			`C:\Users\Maya Chen\.claude\projects\C--Users-Maya-Chen-robot\1.jsonl`, `[HOME]\.claude\projects\[HOME]-robot\1.jsonl`},
+		{"a Windows home goes in JSON that was put in a JSON string", windows,
+			`{"nested":"{\"cwd\":\"C:\\\\Users\\\\Maya Chen\\\\robot\"}"}`, `{"nested":"{\"cwd\":\"[HOME]\\\\robot\"}"}`},
+		{"a Windows home goes URL-escaped in a query string", windows,
+			"?folder=C%3A%5CUsers%5CMaya+Chen", "?folder=[HOME]"},
+		{"an account with a space goes as a project folder name spells it", spaced,
+			"projects/-Users-Maya-Chen-robot/", "projects/-Users-[ACCOUNT]-robot/"},
+		{"an account with a space goes URL-escaped", spaced,
+			"/Users/Maya%20Chen/robot", "/Users/[ACCOUNT]/robot"},
+		{"a home with an underscore goes as a project folder name spells it", spaced,
+			"projects/-home-maya-k-robot/", "projects/[HOME]-robot/"},
+		{"a private folder goes as a project folder name spells it", spaced,
+			"projects/-Users-sam-my-app/", "projects/-Users-sam-[PRIVATE]/"},
 		{"a name goes as Python's json module escapes it", accented,
 			`{"author": "Jos\u00e9 N\u00fa\u00f1ez"}`, `{"author": "[GIT_NAME]"}`},
 		{"a name goes as written", accented,

@@ -111,7 +111,8 @@ func compileKnown(k Known) []knownPattern {
 		if !keep(tv.t, v) {
 			continue
 		}
-		for _, s := range spellings(tv.t, v) {
+		for _, sp := range spellings(tv.t, v) {
+			s := sp.s
 			key := strings.ToLower(s)
 			if seen[key] {
 				continue
@@ -130,37 +131,145 @@ func compileKnown(k Known) []knownPattern {
 	return out
 }
 
+// spelling is one way a file can write a known value: the value written
+// that way, and how to write another value the same way, so that a
+// placeholder can take its place in the same form.
+type spelling struct {
+	s  string
+	as func(string) string
+}
+
 // spellings returns v as it can appear in a prompt, an agent message or a
-// raw capture file: as is, escaped inside a JSON string (with "/" escaped
-// or not, and with non-ASCII as \u escapes or not), and for a Windows home
-// also with forward slashes and as Git Bash and WSL write it.
-func spellings(t Type, v string) []string {
-	out := []string{v}
-	add := func(s string) {
-		if s != "" && !slices.Contains(out, s) {
-			out = append(out, s)
+// raw capture file, as is first:
+//
+//   - for a Windows home, also with forward slashes, as Git Bash and WSL
+//     write it (/c/Users/..., /mnt/c/Users/...), and as VS Code writes it
+//     in a file URI, with the drive in lower case and its colon escaped
+//     (/c%3A/Users/...);
+//   - each of those URL-escaped, as Go writes a path (%20 for a space) and
+//     as VS Code does (C%3A too), and as Claude Code names a project
+//     folder after its working directory, with every character but an
+//     ASCII letter or digit turned into a dash (C--Users-Maya-Chen; HS 3.2);
+//   - the value in a query string, with + for a space;
+//   - and each of those escaped inside a JSON string: with "/" escaped or
+//     not, with non-ASCII as \u escapes or not, and escaped twice, as in
+//     JSON that was itself put in a JSON string.
+func spellings(t Type, v string) []spelling {
+	var out []spelling
+	add := func(as func(string) string) {
+		s := as(v)
+		if s == "" || slices.ContainsFunc(out, func(sp spelling) bool { return sp.s == s }) {
+			return
 		}
+		out = append(out, spelling{s, as})
 	}
-	if t == TypeHome {
-		if windowsDrive(v) {
-			fwd := strings.ReplaceAll(v, `\`, "/")
-			drive := strings.ToLower(v[:1])
-			add(fwd)
-			add("/" + drive + fwd[2:])
-			add("/mnt/" + drive + fwd[2:])
-		}
-		for _, s := range slices.Clone(out) {
-			if strings.HasPrefix(s, "/") || windowsDrive(s) {
-				add((&url.URL{Path: s}).EscapedPath())
-			}
-		}
+	same := func(s string) string { return s }
+	bases := []func(string) string{same}
+	drive := t == TypeHome && windowsDrive(v)
+	if drive {
+		bases = append(bases, forwardSlashes, gitBashPath, wslPath)
 	}
-	for _, s := range slices.Clone(out) {
-		add(jsonEscape(s, false))
-		add(jsonEscape(s, true))
-		add(strings.ReplaceAll(jsonEscape(s, false), "/", `\/`))
+	var forms []func(string) string
+	for _, b := range bases {
+		forms = append(forms, b, then(b, goEscapedPath), then(b, uriEscape), then(b, dashed))
+	}
+	forms = append(forms, url.QueryEscape)
+	if drive {
+		forms = append(forms, vscodePath)
+	}
+	jsons := []func(string) string{
+		same,
+		func(s string) string { return jsonEscape(s, false) },
+		func(s string) string { return jsonEscape(s, true) },
+		func(s string) string { return strings.ReplaceAll(jsonEscape(s, false), "/", `\/`) },
+		func(s string) string { return jsonEscape(jsonEscape(s, false), false) },
+	}
+	for _, f := range forms {
+		for _, j := range jsons {
+			add(then(f, j))
+		}
 	}
 	return out
+}
+
+// then returns f followed by g.
+func then(f, g func(string) string) func(string) string {
+	return func(s string) string { return g(f(s)) }
+}
+
+func forwardSlashes(s string) string { return strings.ReplaceAll(s, `\`, "/") }
+
+// gitBashPath writes a Windows path as Git Bash does: C:\Users becomes
+// /c/Users.
+func gitBashPath(s string) string {
+	if !windowsDrive(s) {
+		return ""
+	}
+	return "/" + strings.ToLower(s[:1]) + forwardSlashes(s[2:])
+}
+
+// wslPath writes a Windows path as WSL does: C:\Users becomes /mnt/c/Users.
+func wslPath(s string) string {
+	if !windowsDrive(s) {
+		return ""
+	}
+	return "/mnt/" + strings.ToLower(s[:1]) + forwardSlashes(s[2:])
+}
+
+// vscodePath writes a Windows path as the path of a VS Code file URI:
+// C:\Users\Maya Chen becomes /c%3A/Users/Maya%20Chen.
+func vscodePath(s string) string {
+	if !windowsDrive(s) {
+		return ""
+	}
+	return "/" + strings.ToLower(s[:1]) + "%3A" + uriEscape(forwardSlashes(s[2:]))
+}
+
+// goEscapedPath escapes s as Go's net/url writes a path, which keeps the
+// colon of C:/Users and turns a space into %20.
+func goEscapedPath(s string) string { return (&url.URL{Path: s}).EscapedPath() }
+
+// uriEscape escapes s as VS Code writes a path in a URI: every byte but an
+// ASCII letter or digit, -, ., _, ~ and / becomes %XX.
+func uriEscape(s string) string {
+	const hexDigits = "0123456789ABCDEF"
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if isASCIIAlnum(c) || strings.IndexByte("-._~/", c) >= 0 {
+			b.WriteByte(c)
+			continue
+		}
+		b.WriteByte('%')
+		b.WriteByte(hexDigits[c>>4])
+		b.WriteByte(hexDigits[c&0xf])
+	}
+	return b.String()
+}
+
+// dashed writes s as Claude Code names a project folder after its working
+// directory: every character but an ASCII letter or digit becomes a dash,
+// and one outside the BMP two, since JavaScript counts it as two. A value
+// with fewer than three letters and digits has no such spelling, because
+// it would be mostly dashes.
+func dashed(s string) string {
+	var b strings.Builder
+	n := 0
+	for _, r := range s {
+		switch {
+		case r < utf8.RuneSelf && isASCIIAlnum(byte(r)):
+			b.WriteRune(r)
+			n++
+		case r > 0xffff:
+			b.WriteString("--")
+		default:
+			b.WriteByte('-')
+		}
+	}
+	if n < 3 {
+		return ""
+	}
+	return b.String()
 }
 
 // jsonEscape returns s as it appears between the quotes of a JSON string.

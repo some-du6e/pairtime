@@ -23,11 +23,15 @@
 //     and folder names, and the teen's deny list. Matching ignores case,
 //     needs a word edge where the value starts or ends with a letter or
 //     digit, and also finds the spellings a raw capture file uses: JSON
-//     escapes, and for a Windows home its forward-slash, Git Bash, WSL and
-//     file URL forms. Right after a JSON escape such as \n or \t is a word
-//     edge, since that's where an embedded line starts. Short and generic
-//     names such as "user" or "app" are skipped unless the teen put them
-//     on the deny list.
+//     escapes, once or twice for JSON inside JSON; URL escapes, as %20 or
+//     in a query string; the name Claude Code gives a project folder,
+//     with every character but an ASCII letter or digit turned into a
+//     dash (C--Users-Maya-Chen-robot); and for a Windows home its
+//     forward-slash, Git Bash and WSL forms and the path of a file URI,
+//     VS Code's /c%3A/Users/... included. Right after a JSON escape such
+//     as \n or \t is a word edge, since that's where an embedded line
+//     starts. Short and generic names such as "user" or "app" are skipped
+//     unless the teen put them on the deny list.
 //  2. gitleaks' rules as data: rules/gitleaks.json.gz, converted from
 //     gitleaks' default config at a pinned tag by rules/convert.py. The
 //     engine follows gitleaks' detectRule: the keyword prefilter, the
