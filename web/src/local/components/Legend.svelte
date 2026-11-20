@@ -7,18 +7,23 @@
 	// words, as `pairtime recap` gives them, then `pairtime today`'s notes,
 	// how much is level C and how much may still change. So level-C time is
 	// labeled wherever it shows (DESIGN 6.2 D11, D-focus-unknown), and
-	// pending time says it is pending (DESIGN 3.7).
+	// pending time says it is pending (DESIGN 3.7). A card whose bars each
+	// have a clock line of their own, such as the week's, shows the notes
+	// alone.
 	interface Props {
 		you: YourTime;
+		/** false leaves the levels' shares out and keeps the notes. */
+		shares?: boolean;
 	}
 
-	let { you }: Props = $props();
+	let { you, shares = true }: Props = $props();
+	const levels = $derived(shares ? you.levels : []);
 	const said = $derived(notes(you));
 </script>
 
-{#if you.levels.length > 0 || said.length > 0}
+{#if levels.length > 0 || said.length > 0}
 	<ul class="legend" data-testid="legend">
-		{#each you.levels as l (l.level)}
+		{#each levels as l (l.level)}
 			<li data-part={l.level}>
 				<span class="pt-swatch pt-swatch-{l.level}" aria-hidden="true"></span><span class="share">{text.share(l.share)}</span>
 				{text.phrase('level_line', { level: l.level, words: l.words })}

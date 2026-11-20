@@ -34,7 +34,10 @@ export type Harness = keyof ByHarness;
 
 /**
  * What the agent counts for one project over a span, a local day or a work
- * session: the fields DayProject and WorkSession share.
+ * session: the fields DayProject and WorkSession share. While display.shadow
+ * is on the agent leaves the credited fields and on_hold_s out
+ * (D-shadow-scope), so each is optional, and model.ts reads a missing
+ * number as 0 and a missing map as {}.
  */
 export type Tally = Pick<
 	DayProject,
@@ -45,6 +48,7 @@ export type Tally = Pick<
 	| 'agent_only_s'
 	| 'agent_only_by_harness'
 	| 'uncredited'
+	| 'on_hold_s'
 >;
 
 export const api = createClient<paths>();

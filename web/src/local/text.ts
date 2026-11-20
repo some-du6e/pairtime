@@ -18,6 +18,7 @@ const catalog = {
 	kinds: en.kinds as Record<string, string>,
 	agentTime: en.agent_time,
 	other: en.other as Record<string, string>,
+	onHold: en.on_hold,
 	levels: en.levels as Record<string, string>,
 	phrases: en.phrases,
 };
@@ -41,10 +42,14 @@ export function agent(h: Harness | string): string {
 	return catalog.agents[h] ?? catalog.agents.other ?? 'your agent';
 }
 
-/** Credited time of kind k, with the agent named agentName: "reading Claude's answers" (text.Kind). */
+/**
+ * Credited time of kind k, with the agent named agentName: "reading
+ * Claude's answers". A kind en.json doesn't describe is its code, made
+ * printable (text.Kind).
+ */
 export function kind(k: Kind | string, agentName: string): string {
 	const s = catalog.kinds[k];
-	return s === undefined ? k : fill(s, { agent: agentName });
+	return s === undefined ? printable(k) : fill(s, { agent: agentName });
 }
 
 /** The agent-only time of the agent named agentName: "Claude, working on its own" (text.AgentTime). */
@@ -66,9 +71,35 @@ export function other(r: Reason | string, agentName: string): string {
 	return s === undefined ? '' : fill(s, { agent: agentName });
 }
 
+/**
+ * The X.noprog seconds that progress can still bring back: "on hold: these
+ * come back when you fix it" (text.OnHold; approach-teen.md D5). en.json's
+ * X.noprog words describe the rest.
+ */
+export function onHold(): string {
+	return catalog.onHold;
+}
+
 /** Evidence level e in words, or "" for a level that isn't one (text.Level). */
 export function level(e: Level | string): string {
 	return catalog.levels[e] ?? '';
+}
+
+// Go's unicode.IsControl is the Cc category, and unicode.Bidi_Control the
+// Bidi_Control property. A JavaScript string can't hold the bytes that
+// aren't UTF-8, which Go replaces too; a lone surrogate, Cs, stands in for
+// them.
+const unprintable = /[\p{Cc}\p{Bidi_Control}\p{Cs}]/gu;
+const replacement = String.fromCodePoint(0xfffd);
+
+/**
+ * s with each control character, each bidirectional formatting character
+ * and each lone surrogate replaced by U+FFFD (text.Printable). Text a view
+ * shows that didn't come from the catalog, such as a project's name, goes
+ * through it, so it can't turn the rest of a line around.
+ */
+export function printable(s: string): string {
+	return s.replace(unprintable, replacement);
 }
 
 const maxSeconds = 1e12;
@@ -105,12 +136,23 @@ export interface AgentClock {
 /**
  * The chess clock (DESIGN 3.8): "you 1h 12m · Claude 2h 40m", your time
  * and then each agent's time on its own, as information and never as a
- * ratio or a target. Calibrating, your time reads "calibrating" and the
- * agents' times still show. An agent with less than a second is left out
+ * ratio or a target. levelC is the part of your time at evidence level C,
+ * which the clock labels from a second up: "you 1h 12m, 20m level C ·
+ * Claude 2h 40m" (DESIGN 6.2 D11). Calibrating, your time reads
+ * "calibrating", with no level, and the agents' times still show. An agent
+ * with less than a second is left out; the rest keep their order
  * (text.Clock).
  */
-export function clock(you: number, calibrating: boolean, agents: AgentClock[]): string {
-	const parts = [calibrating ? phrase('you_calibrating') : phrase('you', { time: duration(you) })];
+export function clock(you: number, levelC: number, calibrating: boolean, agents: AgentClock[]): string {
+	let head: string;
+	if (calibrating) {
+		head = phrase('you_calibrating');
+	} else if (levelC >= 1) {
+		head = phrase('you_level_c', { time: duration(you), level_c: duration(levelC) });
+	} else {
+		head = phrase('you', { time: duration(you) });
+	}
+	const parts = [head];
 	for (const a of agents) {
 		if (a.s >= 1) {
 			parts.push(phrase('agent', { agent: a.name, time: duration(a.s) }));
@@ -170,15 +212,16 @@ const timeFormat = new Intl.DateTimeFormat('en-GB', { hour: '2-digit', minute: '
 
 /**
  * A local date, YYYY-MM-DD, as the views head a day: "Tuesday, November
- * 24" (text.Day). A date that doesn't parse comes back as it is.
+ * 24" (text.Day). A date that doesn't parse comes back as it is, made
+ * printable, as views.go's dayTitle gives it.
  */
 export function day(date: string): string {
 	const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(date);
 	if (!m) {
-		return date;
+		return printable(date);
 	}
 	const d = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])));
-	return d.toISOString().slice(0, 10) === date ? dayFormat.format(d) : date;
+	return d.toISOString().slice(0, 10) === date ? dayFormat.format(d) : printable(date);
 }
 
 const localDayFormat = new Intl.DateTimeFormat('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
@@ -226,6 +269,7 @@ export function entries(): { where: string; s: string }[] {
 	add('kinds', catalog.kinds);
 	out.push({ where: 'agent_time', s: catalog.agentTime });
 	add('other', catalog.other);
+	out.push({ where: 'on_hold', s: catalog.onHold });
 	add('levels', catalog.levels);
 	add('phrases', catalog.phrases);
 	return out;

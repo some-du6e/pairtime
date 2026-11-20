@@ -5,10 +5,11 @@
 	import Clock from '../components/Clock.svelte';
 	import Hands from '../components/Hands.svelte';
 	import HowItCounts from '../components/HowItCounts.svelte';
+	import Legend from '../components/Legend.svelte';
 	import Rows from '../components/Rows.svelte';
 	import Session from '../components/Session.svelte';
-	import { focusWords } from '../copy.ts';
-	import { clockLine, dayLabel, projects, scaleOf, whole, yourParts } from '../model.ts';
+	import { focusWords, unreadDays } from '../copy.ts';
+	import { clockLine, dayLabel, otherRows, projects, scaleOf, whole, yourParts } from '../model.ts';
 	import * as text from '../text.ts';
 
 	// Today (DESIGN 3.9; docs/PLAN.md, WP-UI1): the chess clock for the day
@@ -16,21 +17,26 @@
 	// pending minutes drawn lighter, level-C time labeled, the last work
 	// session, the week so far, and how pairtime counts. While the desktop
 	// hides which window is in front it says so first (D-focus-unknown).
+	// While calibrating it shows the agents' time, and of the rest only SM
+	// 4.2's loops (D-shadow-scope).
 	interface Props {
 		/** GET /v1/days/today. */
 		today: Day;
 		/** This week's days up to today, the ones that came back. */
 		week: Day[];
-		/** GET /v1/sessions/last, or undefined until it comes back. */
+		/** This week's earlier dates whose answer didn't come back, so the week leaves them out. */
+		unread?: string[];
+		/** GET /v1/sessions/last, or undefined when its answer didn't come back. */
 		session?: LastSession | undefined;
 		/** From GET /v1/status; absent until the agent reports it (WP-AG6). */
 		focus?: Focus | undefined;
 	}
 
-	let { today, week, session, focus }: Props = $props();
+	let { today, week, unread = [], session, focus }: Props = $props();
 
 	const calibrating = $derived(today.shadow);
 	const day = $derived(whole([today], calibrating, 'today'));
+	const rest = $derived(otherRows(day));
 	const list = $derived(projects([today], calibrating));
 	const scale = $derived(scaleOf(list));
 	// Only days with something on them, so the week shows what you did and
@@ -38,6 +44,9 @@
 	const days = $derived(
 		week.filter((d) => d.projects.length > 0).map((d) => ({ date: d.date, view: whole([d], calibrating, d.date) })),
 	);
+	// The week's notes label its level-C and pending time, as the day's
+	// legend does (DESIGN 6.2 D11). Each day's bar has its own clock line,
+	// so the levels' shares stay on the day's card.
 	const weekView = $derived(whole(week, calibrating, 'this week'));
 	const weekScale = $derived(scaleOf(days.map((r) => r.view)));
 </script>
@@ -66,9 +75,9 @@
 	{:else}
 		<p class="big" data-testid="today-clock">{clockLine(day)}</p>
 		<Hands view={day} scale={scaleOf([day])} />
-		{#if day.other.length > 0}
+		{#if rest.length > 0}
 			<h3>The rest of the time</h3>
-			<Rows rows={day.other.map((o) => ({ key: o.reason, words: o.words, s: o.s }))} testid="other" />
+			<Rows rows={rest} testid="other" />
 		{/if}
 	{/if}
 </section>
@@ -82,16 +91,22 @@
 	</section>
 {/if}
 
-{#if session}
-	<Session session={session.session} calibrating={session.shadow} />
-{/if}
+<Session session={session ? session.session : undefined} calibrating={calibrating || session?.shadow === true} />
 
 <section class="pt-card wide" aria-labelledby="week-title" data-testid="week">
 	<h2 id="week-title">This week</h2>
+	{#if unread.length > 0}
+		<p class="pt-note" data-testid="unread-days">{unreadDays(unread)}</p>
+	{/if}
 	{#if days.length === 0}
 		<p>Nothing tracked yet this week.</p>
 	{:else}
 		<p data-testid="week-clock">{clockLine(weekView)}</p>
+		{#if weekView.you}
+			<div class="notes" data-testid="week-notes">
+				<Legend you={weekView.you} shares={false} />
+			</div>
+		{/if}
 		<ul class="days" aria-label="Each day this week with time on it">
 			{#each days as r (r.date)}
 				<li data-date={r.date}>
@@ -141,6 +156,10 @@
 
 	.projects {
 		margin: 0 0 var(--pt-gap);
+	}
+
+	.notes {
+		margin: 0 0 0.75rem;
 	}
 
 	.days {

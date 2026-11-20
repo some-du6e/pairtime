@@ -4,7 +4,7 @@
 	import AppShell from '$shared/components/AppShell.svelte';
 	import { api, type Day, type LastSession, type Status } from './api.ts';
 	import SignedOut from './components/SignedOut.svelte';
-	import { addDays, dates, monday } from './model.ts';
+	import { addDays, dates, mayChange, monday } from './model.ts';
 	import Privacy from './pages/Privacy.svelte';
 	import Projects from './pages/Projects.svelte';
 	import Settings from './pages/Settings.svelte';
@@ -19,7 +19,13 @@
 	// own (DESIGN 3.7), and never while it is hidden. It reads the routes
 	// `pairtime today` and `recap` read (WP-CO0), GET /v1/days/{date} and
 	// GET /v1/sessions/last, and asks for each earlier day of the span once,
-	// and again only while that day still had pending minutes.
+	// and again each minute while that day can still change (model.ts's
+	// mayChange): while it has pending minutes, or, for yesterday, while it
+	// has minutes progress can still bring back, as a restore reaches back
+	// PROGRESS_RESTORE_S, 86,400 s (SM 4.3), or while calibrating hides
+	// whether it has. A day whose answer never came back is asked again too,
+	// and the page names it as left out until it comes; one that came back
+	// before keeps those numbers meanwhile.
 	const refreshMs = 60_000;
 
 	// Each is replaced whole and never changed in place, so none needs a
@@ -44,21 +50,28 @@
 		return r.page === 'projects' && r.range === 'month' ? addDays(date, -29) : monday(date);
 	}
 
-	/** The span's days that came back, in date order, today last. */
-	function span(first: string, t: Day): Day[] {
-		const out: Day[] = [];
+	/**
+	 * The span's days that came back, in date order, today last, and its
+	 * earlier dates whose answer didn't. A date not asked about yet, its
+	 * answer on the way, is in neither.
+	 */
+	function span(first: string, t: Day): { days: Day[]; unread: string[] } {
+		const days: Day[] = [];
+		const unread: string[] = [];
 		for (const date of dates(first, addDays(t.date, -1))) {
 			const got = past.get(date);
 			if (got?.ok) {
-				out.push(got.data);
+				days.push(got.data);
+			} else if (got) {
+				unread.push(date);
 			}
 		}
-		out.push(t);
-		return out;
+		days.push(t);
+		return { days, unread };
 	}
 
 	const from = $derived(today?.ok ? firstDay(route, today.data.date) : '');
-	const shown = $derived(today?.ok ? span(from, today.data) : []);
+	const shown = $derived(today?.ok ? span(from, today.data) : { days: [], unread: [] });
 
 	async function refresh(r: Route, signal: AbortSignal): Promise<void> {
 		const s = await api.get('/v1/status', { signal });
@@ -75,11 +88,12 @@
 		if (!t.ok || (r.page !== 'today' && r.page !== 'projects')) {
 			return;
 		}
-		// Earlier days change only while they have pending minutes, such as
-		// just after midnight; a day that didn't come back is asked again.
-		const ask = dates(firstDay(r, t.data.date), addDays(t.data.date, -1)).filter((date) => {
+		// An earlier day is asked again while it can still change, and when
+		// its answer didn't come back.
+		const yesterday = addDays(t.data.date, -1);
+		const ask = dates(firstDay(r, t.data.date), yesterday).filter((date) => {
 			const got = past.get(date);
-			return !got?.ok || got.data.projects.some((p) => p.pending_s > 0);
+			return !got?.ok || mayChange(got.data, date === yesterday, t.data.shadow);
 		});
 		if (ask.length === 0) {
 			return;
@@ -88,7 +102,9 @@
 		const next = new Map(past);
 		ask.forEach((date, i) => {
 			const day = got[i];
-			if (day) {
+			// An answer that didn't come back doesn't replace one that did: the
+			// day keeps its last numbers until the next ask.
+			if (day && (day.ok || !next.get(date)?.ok)) {
 				next.set(date, day);
 			}
 		});
@@ -188,9 +204,15 @@
 			</section>
 		{/if}
 	{:else if route.page === 'projects'}
-		<Projects days={shown} range={route.range} {from} to={today.data.date} />
+		<Projects days={shown.days} unread={shown.unread} range={route.range} {from} to={today.data.date} />
 	{:else}
-		<Today today={today.data} week={shown} session={session?.ok ? session.data : undefined} focus={status.data.focus} />
+		<Today
+			today={today.data}
+			week={shown.days}
+			unread={shown.unread}
+			session={session?.ok ? session.data : undefined}
+			focus={status.data.focus}
+		/>
 	{/if}
 </AppShell>
 

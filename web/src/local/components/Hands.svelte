@@ -8,7 +8,9 @@
 	// A chess clock's hands (DESIGN 3.8): your time beside each agent's time
 	// on its own, as information, never as a ratio to aim for (PA 4.3), each
 	// with a bar drawn to the page's scale. While calibrating, your time
-	// reads "calibrating" and the agents' time stays (DESIGN 6.7).
+	// reads "calibrating" and the agents' time stays (DESIGN 6.7). An agent
+	// with under a second, which would read "0m", has no hand, as the clock
+	// line and `pairtime today` leave it out.
 	interface Props {
 		view: ProjectView;
 		/** The seconds that fill a bar, the same for every clock on a page. */
@@ -16,6 +18,7 @@
 	}
 
 	let { view, scale }: Props = $props();
+	const agents = $derived(view.agents.filter((a) => a.s >= 1));
 </script>
 
 <dl class="hands">
@@ -30,7 +33,7 @@
 			{/if}
 		</dd>
 	</div>
-	{#each view.agents as a (a.harness)}
+	{#each agents as a (a.harness)}
 		<div class="hand" data-testid="agent">
 			<dt>{text.sentence(text.agentTime(a.name))}</dt>
 			<dd>
