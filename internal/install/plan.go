@@ -84,6 +84,7 @@ type Change struct {
 	Notes []string
 
 	mkdirs []string // directories to make before writing, outermost first
+	kinds  []string // the kinds of the edits that make the change
 }
 
 // Empty reports whether the plan changes no target. Apply may still tidy
@@ -91,8 +92,13 @@ type Change struct {
 func (p *Plan) Empty() bool { return len(p.Changes) == 0 }
 
 // Diff returns the plan as one unified diff per target that changes, which
-// is what `pairtime install --dry-run` prints. A target that isn't there
-// on one side is /dev/null on that side.
+// is what `pairtime install --dry-run` prints and the consent screen shows.
+// A target that isn't there on one side is /dev/null on that side.
+//
+// It is for people to read, not to apply. In a settings file every string
+// value and comment pairtime didn't write shows as ***, so that no token
+// or webhook URL of the teen's reaches the screen (maskSettings), and a
+// character a terminal would act on is written out (escapeControls).
 func (p *Plan) Diff() string {
 	var b strings.Builder
 	for _, c := range p.Changes {
@@ -103,9 +109,20 @@ func (p *Plan) Diff() string {
 		if !c.After.Exists {
 			to = "/dev/null"
 		}
-		b.WriteString(udiff.Unified(from, to, c.Before.text(), c.After.text()))
+		b.WriteString(udiff.Unified(from, to, c.shown(c.Before), c.shown(c.After)))
 	}
-	return b.String()
+	return escapeControls(b.String())
+}
+
+// kindsOf returns the kinds of recs, each once.
+func kindsOf(recs []editRecord) []string {
+	var kinds []string
+	for _, r := range recs {
+		if !slices.Contains(kinds, r.Kind) {
+			kinds = append(kinds, r.Kind)
+		}
+	}
+	return kinds
 }
 
 // PlanInstall plans items' edits. Each target is read once and every edit
@@ -151,7 +168,7 @@ func (in *Installer) planInstall(groups []*group) (*Plan, error) {
 		if cur.Exists && !g.target.isRegistry() && cur.Mode&0o200 == 0 {
 			return nil, fmt.Errorf("%s is read-only, so pairtime leaves it alone; make it writable and run install again", g.target)
 		}
-		ch := Change{Target: g.target, Items: itemIDs(g.recs), Before: cur, After: next}
+		ch := Change{Target: g.target, Items: itemIDs(g.recs), Before: cur, After: next, kinds: kindsOf(g.recs)}
 		if !g.target.isRegistry() && !cur.Exists {
 			// A file that isn't there may be missing its folders too: on a
 			// first install, and on a rerun after an Apply that stopped
@@ -381,7 +398,7 @@ func (in *Installer) planUndo(rec record) (Change, error) {
 	if err != nil {
 		return Change{}, err
 	}
-	ch := Change{Target: rec.Target, Items: itemIDs(rec.Edits), Before: cur}
+	ch := Change{Target: rec.Target, Items: itemIDs(rec.Edits), Before: cur, kinds: kindsOf(rec.Edits)}
 	base, err := in.loadSaved(rec.Base)
 	if err != nil {
 		return Change{}, fmt.Errorf("%s: %w", rec.Target, err)
@@ -411,7 +428,7 @@ func (in *Installer) planFound(g *group) (Change, error) {
 	if err != nil {
 		return Change{}, err
 	}
-	ch := Change{Target: g.target, Items: itemIDs(g.recs), Before: cur, After: cur}
+	ch := Change{Target: g.target, Items: itemIDs(g.recs), Before: cur, After: cur, kinds: kindsOf(g.recs)}
 	switch {
 	case !cur.Exists:
 		return ch, nil

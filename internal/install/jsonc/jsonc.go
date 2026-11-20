@@ -111,6 +111,44 @@ func BOMLen(src []byte) int {
 	return 0
 }
 
+// Comments returns where src's comments are: each span runs from a
+// comment's first slash to just past its end, which for a // comment is the
+// end of its line, without the line break. src must parse.
+func Comments(src []byte) [][2]int {
+	var spans [][2]int
+	for i := BOMLen(src); i < len(src); {
+		switch {
+		case src[i] == '"':
+			for i++; i < len(src) && src[i] != '"'; i++ {
+				if src[i] == '\\' {
+					i++
+				}
+			}
+			i++
+		case src[i] == '/' && i+1 < len(src) && src[i+1] == '/':
+			end := len(src)
+			if n := bytes.IndexByte(src[i:], '\n'); n >= 0 {
+				end = i + n
+				if src[end-1] == '\r' {
+					end--
+				}
+			}
+			spans = append(spans, [2]int{i, end})
+			i = end
+		case src[i] == '/' && i+1 < len(src) && src[i+1] == '*':
+			end := len(src)
+			if n := bytes.Index(src[i+2:], []byte("*/")); n >= 0 {
+				end = i + 2 + n + 2
+			}
+			spans = append(spans, [2]int{i, end})
+			i = end
+		default:
+			i++
+		}
+	}
+	return spans
+}
+
 // Get returns the value of v's last member named key, which is the one
 // JSON.parse and encoding/json keep, or nil when v isn't an object or has
 // no such member.
