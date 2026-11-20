@@ -199,3 +199,26 @@ func slotAt(d Derived, t int64) (Slot, bool) {
 	}
 	return d.Slots[i], true
 }
+
+func (b *tl) shell(t int64, project string, p *event.ShellCommand) event.Event {
+	return b.emit(t, event.Envelope{Source: event.SourceShell, Via: event.ViaShell, Harness: event.HarnessNone,
+		SessionKey: event.NoSession, ProjectKey: project}, p)
+}
+
+func (b *tl) git(t int64, project string, actor event.Actor) event.Event {
+	return b.emit(t, event.Envelope{Source: event.SourceGit, Via: event.ViaGit, Harness: event.HarnessNone,
+		SessionKey: event.NoSession, ProjectKey: project},
+		&event.GitChange{Op: event.GitCommit, SHA: "99d45dfe857548da524bb234c7ce7c29f267c9df", FilesChanged: 1,
+			Insertions: 1, Actor: actor})
+}
+
+// track adds a `pairtime track` call from session sess, or from no session
+// if sess is "none".
+func (b *tl) track(t int64, sess string, textLen int, match event.LogMatch, label string) event.Event {
+	h := event.HarnessOther
+	if sess == event.NoSession {
+		h = event.HarnessNone
+	}
+	return b.emit(t, event.Envelope{Source: event.SourceCLI, Via: event.ViaTrack, Harness: h, SessionKey: sess,
+		ProjectKey: "p_1"}, &event.CLITrack{Label: label, TextLen: textLen, LogMatch: match})
+}
