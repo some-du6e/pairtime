@@ -40,18 +40,18 @@ func zeroID(id string) bool {
 type step int
 
 const (
-	stepUnknown     step = iota // a message the adapter doesn't know
-	stepNone                    // nothing to report, like a clone's first entry
-	stepCommit                  // a new commit: commit, cherry-pick, am
-	stepAmend                   // commit --amend
-	stepMerge                   // merge or pull: a merge commit or a fast-forward
-	stepRevert                  // revert
-	stepRebaseStart             // rebase (start)
-	stepRebaseStep              // a pick, reword, edit, squash, fixup or continue
-	stepRebaseFinish            // rebase (finish)
-	stepRebaseAbort             // rebase (abort)
-	stepCheckout                // checkout or switch
-	stepReset                   // reset
+	stepUnknown      step = iota // a message the adapter doesn't know
+	stepNone                     // nothing to report, like a clone's first entry
+	stepCommit                   // a new commit: commit, cherry-pick, am
+	stepAmend                    // commit --amend
+	stepMerge                    // merge or pull: a merge commit or a fast-forward
+	stepRevert                   // revert
+	stepRebaseStart              // rebase (start)
+	stepRebaseStep               // a pick, reword, edit, squash, fixup or continue
+	stepRebaseFinish             // rebase (finish)
+	stepRebaseAbort              // rebase (abort)
+	stepCheckout                 // checkout or switch
+	stepReset                    // reset
 )
 
 // action is what classify makes of a reflog message.
