@@ -306,32 +306,55 @@ def problems(inst, schema, at, root, base):
 
 
 # The validator is checked before it checks anything else. Each case names
-# the rule it pins: (name, schema, instance, valid).
+# the rule it pins: (name, schema, instance, valid). Every keyword has a case
+# that fails when the keyword is ignored, and every rule about how a keyword
+# behaves has a case that fails when the rule changes. x-file-ref's cases
+# point at this script, which is always there.
 SELFTEST = [
     ("type rejects a string where an integer is wanted", {"type": "integer"}, "1", False),
+    ("type takes a list of names", {"type": ["string", "null"]}, None, True),
     ("a float with no fraction counts as an integer", {"type": "integer"}, 1.0, True),
     ("a boolean is not an integer", {"type": "integer"}, True, False),
     ("an integer is a number", {"type": "number"}, 3, True),
     ("required reports a missing property", {"type": "object", "required": ["a"]}, {}, False),
+    ("properties checks the value of a listed key", {"properties": {"a": {"type": "integer"}}}, {"a": "x"}, False),
     ("additionalProperties false rejects an extra key",
      {"properties": {"a": {}}, "additionalProperties": False}, {"a": 1, "b": 2}, False),
+    ("additionalProperties checks the keys properties doesn't list",
+     {"properties": {"a": {}}, "additionalProperties": {"type": "integer"}}, {"a": "x", "b": "y"}, False),
+    ("additionalProperties leaves the listed keys alone",
+     {"properties": {"a": {}}, "additionalProperties": {"type": "integer"}}, {"a": "x"}, True),
     ("properties are open when additionalProperties is absent",
      {"properties": {"a": {"type": "integer"}}}, {"a": 1, "b": "x"}, True),
+    ("minProperties refuses a smaller object", {"minProperties": 1}, {}, False),
+    ("maxProperties caps an object", {"maxProperties": 1}, {"a": 1, "b": 2}, False),
     ("enum never equates true with 1", {"enum": [1]}, True, False),
+    ("const refuses a different value", {"const": {"a": [1, 2]}}, {"a": [1, 3]}, False),
     ("const compares nested values", {"const": {"a": [1, 2]}}, {"a": [1, 2.0]}, True),
-    ("pattern searches, so anchors are needed for a full match", {"pattern": "^ab$"}, "xab", False),
+    ("pattern searches, so an unanchored pattern matches inside the string", {"pattern": "ab"}, "xab", True),
+    ("an anchored pattern refuses extra characters", {"pattern": "^ab$"}, "xab", False),
     ("\\d in a pattern matches ASCII digits only", {"pattern": "^\\d+$"}, "١٢", False),
-    ("oneOf fails when two branches match", {"oneOf": [{"type": "integer"}, {"type": "number"}]}, 1, False),
+    ("minLength counts characters, not bytes", {"minLength": 3}, "éé", False),
+    ("maxLength counts characters, not bytes", {"maxLength": 2}, "éé", True),
+    ("maxLength refuses a longer string", {"maxLength": 2}, "abc", False),
+    ("items checks every element", {"items": {"type": "integer"}}, [1, "x"], False),
+    ("minItems refuses a shorter array", {"minItems": 2}, [1], False),
+    ("maxItems caps an array", {"maxItems": 1}, [1, 2], False),
+    ("uniqueItems treats 1 and 1.0 as equal", {"uniqueItems": True}, [1, 1.0], False),
+    ("minimum is inclusive", {"minimum": 0}, 0, True),
+    ("minimum refuses a smaller value", {"minimum": 0}, -1, False),
+    ("maximum is inclusive", {"maximum": 300}, 300, True),
+    ("maximum refuses a larger value", {"maximum": 300}, 301, False),
+    ("allOf needs every branch", {"allOf": [{"type": "integer"}, {"minimum": 2}]}, 1, False),
     ("anyOf passes when one branch matches", {"anyOf": [{"type": "string"}, {"type": "null"}]}, None, True),
+    ("anyOf fails when no branch matches", {"anyOf": [{"type": "string"}, {"type": "null"}]}, 1, False),
+    ("oneOf fails when two branches match", {"oneOf": [{"type": "integer"}, {"type": "number"}]}, 1, False),
     ("not rejects a matching value", {"not": {"const": "x"}}, "x", False),
     ("$ref follows a local definition", {"$defs": {"n": {"type": "null"}}, "$ref": "#/$defs/n"}, 0, False),
-    ("maxItems caps an array", {"maxItems": 1}, [1, 2], False),
-    ("minimum is inclusive", {"minimum": 0}, 0, True),
-    ("maximum is inclusive", {"maximum": 300}, 301, False),
-    ("uniqueItems treats 1 and 1.0 as equal", {"uniqueItems": True}, [1, 1.0], False),
-    ("minLength counts characters, not bytes", {"minLength": 2}, "éé", True),
-    ("maxProperties caps an object", {"maxProperties": 1}, {"a": 1, "b": 2}, False),
-    ("x-file-ref refuses a path outside the directory", {"x-file-ref": True}, "../check.py", False),
+    ("x-file-ref accepts a file in the directory", {"x-file-ref": True}, os.path.basename(__file__), True),
+    ("x-file-ref refuses a path through .., even to a file that exists", {"x-file-ref": True},
+     f"../{os.path.basename(HERE)}/{os.path.basename(__file__)}", False),
+    ("x-file-ref refuses an absolute path", {"x-file-ref": True}, "/" + os.path.basename(__file__), False),
 ]
 
 
