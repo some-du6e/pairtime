@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"os/user"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"unicode/utf8"
 
@@ -254,7 +255,7 @@ func (s *scrubber) file(path, shown string) {
 	}
 	text := string(b)
 	var edits []edit
-	for _, sp := range redact.Merge(s.r.Find(text)) {
+	for _, sp := range redact.Merge(append(s.r.Find(text), telemetryIDs(text)...)) {
 		with := s.placeholder(text, sp)
 		if with == text[sp.Start:sp.End] {
 			// A placeholder from an earlier run, or an address that can
@@ -309,7 +310,58 @@ const (
 	placeholderName    = "Capture User"
 	placeholderEmail   = "capture@example.invalid"
 	placeholderOther   = "REDACTED"
+	placeholderID      = "00000000-0000-4000-8000-000000000000"
 )
+
+// typeTelemetryID marks the value of an OTLP attribute that identifies an
+// account. It's the scrub's own type: pkg/redact has no reason to find
+// these in a prompt, and in a fixture each one is listed like any span.
+const typeTelemetryID redact.Type = "telemetry_id"
+
+// The OTLP/JSON attributes that identify an account or an organization,
+// which Claude Code puts on every metric and event by default
+// (docs/research/ai-harness-signals.md 3.3). The same keys as scrub.py's.
+const telemetryKeys = `user\.account_uuid|user\.account_id|user\.id|organization\.id|enduser\.id`
+
+// telemetryValue is an attribute's value: a JSON string, whose contents
+// are the first group, or a bare number, the second.
+const telemetryValue = `\{\s*"(?:stringValue|intValue)"\s*:\s*(?:"((?:[^"\\]|\\.)*)"|(-?[0-9]+))`
+
+// telemetryIDPatterns find the value of such an attribute, with "key"
+// before "value" or after it, since a JSON object's fields have no order.
+// The first has the key in group 1 and the value in groups 2 and 3, the
+// second the value in groups 1 and 2 and the key in group 3.
+var telemetryIDPatterns = []*regexp.Regexp{
+	regexp.MustCompile(`"key"\s*:\s*"(` + telemetryKeys + `)"\s*,\s*"value"\s*:\s*` + telemetryValue),
+	regexp.MustCompile(`"value"\s*:\s*` + telemetryValue + `\s*\}\s*,\s*"key"\s*:\s*"(` + telemetryKeys + `)"`),
+}
+
+// telemetryIDs returns a span for the value of each account or
+// organization id attribute in an OTLP/JSON body, with the attribute's key
+// as its Rule, so the listing names it.
+func telemetryIDs(text string) []redact.Span {
+	var spans []redact.Span
+	for i, re := range telemetryIDPatterns {
+		key, str, num := 1, 2, 3
+		if i == 1 {
+			key, str, num = 3, 1, 2
+		}
+		for _, m := range re.FindAllStringSubmatchIndex(text, -1) {
+			v := str
+			if m[2*v] < 0 {
+				v = num
+			}
+			spans = append(spans, redact.Span{Start: m[2*v], End: m[2*v+1], Type: typeTelemetryID, Rule: text[m[2*key]:m[2*key+1]]})
+		}
+	}
+	return spans
+}
+
+// isNumber reports whether s is an integer in JSON's form.
+func isNumber(s string) bool {
+	s = strings.TrimPrefix(s, "-")
+	return s != "" && strings.Trim(s, "0123456789") == ""
+}
 
 // placeholder is what takes span sp's place in text. A known value gets
 // its kind's placeholder written the way the text writes the value, so a
@@ -331,6 +383,11 @@ func (s *scrubber) placeholder(text string, sp redact.Span) string {
 			return "REDACTED_SECRET"
 		}
 		return "REDACTED_" + strings.ToUpper(strings.ReplaceAll(sp.Rule, "-", "_"))
+	case sp.Type == typeTelemetryID:
+		if isNumber(matched) {
+			return "0" // an intValue, which has to stay a number
+		}
+		return placeholderID
 	case sp.Type.Reveal() == "known":
 		for _, v := range knownValues(s.k, sp.Type) {
 			if p, ok := redact.Respell(sp.Type, v, matched, knownPlaceholder(sp.Type, v)); ok {

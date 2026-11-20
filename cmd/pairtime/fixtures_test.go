@@ -88,6 +88,34 @@ func TestFixturesScrub(t *testing.T) {
 			notOut: []string{"maya", "Maya", "jonah"},
 		},
 		{
+			name: "telemetry account and organization ids become README's id, or 0 for a number, and each is listed",
+			files: map[string]string{
+				"otlp/000001.json": `{"resourceMetrics":[{"resource":{"attributes":[` +
+					`{"key":"user.account_uuid","value":{"stringValue":"9b1e7f9e-1111-4222-8333-444455556666"}},` +
+					`{"value":{"stringValue":"77aa88bb-1111-4222-8333-444455556666"},"key":"organization.id"},` +
+					`{"key":"user.account_id","value":{"intValue":"4242"}},` +
+					`{"key":"enduser.id","value":{"intValue":77}},` +
+					`{"key":"session.id","value":{"stringValue":"5d6c1e2a-7b8f-4c3d-9e0f-112233445566"}}]}}]}`,
+			},
+			wantCode: 0,
+			wantFiles: map[string]string{
+				"otlp/000001.json": `{"resourceMetrics":[{"resource":{"attributes":[` +
+					`{"key":"user.account_uuid","value":{"stringValue":"00000000-0000-4000-8000-000000000000"}},` +
+					`{"value":{"stringValue":"00000000-0000-4000-8000-000000000000"},"key":"organization.id"},` +
+					`{"key":"user.account_id","value":{"intValue":"0"}},` +
+					`{"key":"enduser.id","value":{"intValue":0}},` +
+					`{"key":"session.id","value":{"stringValue":"5d6c1e2a-7b8f-4c3d-9e0f-112233445566"}}]}}]}`,
+			},
+			wantOut: []string{
+				"otlp/000001.json:1:99: telemetry_id user.account_uuid, 36 bytes\n",
+				"otlp/000001.json:1:164: telemetry_id organization.id, 36 bytes\n",
+				"otlp/000001.json:1:274: telemetry_id user.account_id, 4 bytes\n",
+				"otlp/000001.json:1:322: telemetry_id enduser.id, 2 bytes\n",
+				"removed 4 spans from 1 of 1 files",
+			},
+			notOut: []string{"9b1e7f9e", "77aa88bb"},
+		},
+		{
 			name:     "-n lists the spans and changes nothing",
 			files:    map[string]string{"a.txt": "home is /home/maya\n"},
 			args:     append([]string{"-n"}, maya...),
@@ -279,7 +307,7 @@ func TestFixturesScrubPlantedCapture(t *testing.T) {
 		check func(t *testing.T)
 	}{
 		{"no planted value survives in any file, in any case", func(t *testing.T) {
-			for _, v := range []string{"rowan", "westfield", strings.ToLower(anthropic[:24]), strings.ToLower(ghp), "akiaabcd", "eyjhbgci"} {
+			for _, v := range []string{"rowan", "westfield", strings.ToLower(anthropic[:24]), strings.ToLower(ghp), "akiaabcd", "eyjhbgci", "9b1e7f9e", "77aa88bb"} {
 				if strings.Contains(everything, v) {
 					t.Errorf("%q survived the scrub", v)
 				}
@@ -307,6 +335,11 @@ func TestFixturesScrubPlantedCapture(t *testing.T) {
 				if !strings.Contains(all.String(), want) {
 					t.Errorf("no %s in the output", want)
 				}
+			}
+		}},
+		{"telemetry account ids become README's id", func(t *testing.T) {
+			if got := out["otlp/000001.json"]; strings.Count(got, "00000000-0000-4000-8000-000000000000") != 2 {
+				t.Errorf("otlp body: %s", got)
 			}
 		}},
 		{"keys and tokens become REDACTED and their rule", func(t *testing.T) {
