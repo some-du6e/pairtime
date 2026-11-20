@@ -23,7 +23,8 @@ var (
 )
 
 // These hold for the placeholder, which ci.yml embeds, and for the real
-// dashboard, which web.yml builds into dist/ before it runs them again.
+// dashboard, which web.yml builds into dist/, and release.yml's build job
+// downloads into it, before each runs them again.
 func TestFS(t *testing.T) {
 	index, err := fs.ReadFile(FS(), "index.html")
 	if err != nil {
