@@ -33,7 +33,7 @@ pairtime keeps these on your computer:
 - your code, your file names and your folder paths
 - your window titles, which pairtime matches to your projects in memory and doesn't even store
 - the names of other apps you use
-- your keystrokes. pairtime never records which keys you press or when you press them. If you turn on the typing module, it keeps per-minute counts and summaries, never the keys.
+- your keystrokes. pairtime never records which keys you press. It does note, in each presence sample, how long ago you last pressed a key, and if you turn on the typing module, how many keys you pressed in each 15 seconds and what share of them a program typed rather than your keyboard. These numbers go to reviewers with your other records when you submit hours.
 
 pairtime encrypts what it keeps of your prompts, the agent's replies and your file paths. That keeps them from other people who use this computer under their own account, from apps that sync your home folder to the cloud, and from casual reading. It doesn't protect them from malware running as you.
 

@@ -241,6 +241,11 @@ func TestPrivacyNotice(t *testing.T) {
 			},
 		},
 		{
+			name:    "the notice says presence samples record the time since the last key press, and the typing module counts per 15 seconds (DESIGN 7.2)",
+			want:    []string{"how long ago you last pressed a key", "how many keys you pressed in each 15 seconds", "These numbers go to reviewers with your other records when you submit hours."},
+			notWant: []string{"or when you press them", "per-minute counts"},
+		},
+		{
 			name: "the IP period in the prose is the schedule's",
 			want: []string{"the server deletes them after 30 days."},
 		},
