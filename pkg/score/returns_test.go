@@ -29,11 +29,11 @@ func silence(app event.AppClass, resume int64, act func(b *tl)) *tl {
 }
 
 // TestActsEndingASilence checks SM 2.3's presence tests in the slot whose
-// input ends a silence longer than PRESENCE_GAP_S, where a sample taken
-// later in the slot dates the input (presence.markStarts). The tests read
-// SM 2.1's presence for the slot, which has input, so an act early in it
-// still opens its anchor, and an interrupt that comes first still keeps
-// the return rule from crediting the silence.
+// input ends a silence longer than PRESENCE_GAP_S, where a sample taken at
+// a focus event later in the slot dates the input (presence.markStarts).
+// The tests read SM 2.1's presence for the slot, which has input, so an act
+// early in it still opens its anchor, and an interrupt that comes first
+// still keeps the return rule from crediting the silence.
 func TestActsEndingASilence(t *testing.T) {
 	// The person watches the agent after its answer at 102 s and touches
 	// nothing from 100 s until 330 s.
@@ -45,15 +45,26 @@ func TestActsEndingASilence(t *testing.T) {
 		b.prompt(at(30), event.ViaHook, "s_1", "p_1", "t_1", 30)
 		b.harness(at(102), event.ViaLog, "s_1", "p_1", &event.AgentOutput{TurnKey: "t_1", Words: 160})
 	}
+	// redrawn is the agent writing the terminal's window again at 336 s,
+	// as it does when a session starts under it, with the sample it takes
+	// then: that sample reports a mouse move at 335.5 s, which dates the
+	// slot's input after the act at 333 s.
+	redrawn := func(b *tl) {
+		b.mouse(atMS(335_500))
+		b.focus(at(336), event.AppTerminal, "p_1", "s_1", "s_2")
+		b.sample(at(336))
+	}
 	cases := []struct {
 		name string
 		act  func(b *tl) event.Event
 		kind event.AnchorKind
 	}{
 		{
-			name: "an interrupt at 333 s, before the correction whose hook sample at 340 s dates the slot's input, is INT, and nothing is returned",
+			name: "an interrupt at 333 s, before a focus sample dates the slot's input, is INT, and the correction after it ends no returned run",
 			act: func(b *tl) event.Event {
+				b.press(at(333))
 				e := b.harness(at(333), event.ViaLog, "s_1", "p_1", &event.AgentInterrupt{TurnKey: "t_1"})
+				redrawn(b)
 				b.press(atMS(339_500))
 				b.prompt(at(340), event.ViaHook, "s_1", "p_1", "t_2", 20)
 				b.sample(at(340))
@@ -62,9 +73,10 @@ func TestActsEndingASilence(t *testing.T) {
 			kind: event.AnchorInterrupt,
 		},
 		{
-			name: "a permission answered at 333 s, before the tool's hook sample at 338 s dates the slot's input, is PA",
+			name: "a permission answered at 333 s, before a focus sample dates the slot's input, is PA",
 			act: func(b *tl) event.Event {
-				b.mouse(atMS(337_500))
+				b.press(at(333))
+				redrawn(b)
 				e := b.harness(at(338), event.ViaHook, "s_1", "p_1", &event.AgentPermission{RequestedAt: at(320),
 					AnsweredAt: at(333), Decision: event.DecisionAccept, DecidedBy: event.DecidedByUser})
 				b.sample(at(338))
@@ -86,8 +98,8 @@ func TestActsEndingASilence(t *testing.T) {
 			if len(d.Returns) != 0 {
 				t.Errorf("returns %+v, want none", d.Returns)
 			}
-			if s, _ := slotAt(d, at(330)); s.PresentUntil == s.End() {
-				t.Errorf("slot at 330 s is %+v; the test needs its input dated by the sample inside it", s)
+			if s, _ := slotAt(d, at(330)); s.PresentUntil != at(335) {
+				t.Errorf("slot at 330 s is %+v; the test needs its input dated at 335 s by the focus sample", s)
 			}
 		})
 	}

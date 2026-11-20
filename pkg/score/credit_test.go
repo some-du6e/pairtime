@@ -339,6 +339,16 @@ func TestCredit(t *testing.T) {
 			},
 		},
 		{
+			name: "SM 2.1: a prompt's own hook sample doesn't date the end of a silence, so the typing before it in that slot is P",
+			build: func(b *tl) {
+				*b = *silence(event.AppTerminal, 451, func(b *tl) {
+					b.prompt(at(460), event.ViaHook, "s_1", "p_1", "t_2", 30)
+					b.sample(at(460))
+				})
+			},
+			want: []secondsWant{{450, 465, map[event.Reason]int64{rP: 10, rSUP: 5}}},
+		},
+		{
 			name: "SM 5.2: focus on a terminal that resolves to no project is X.ambiguous, on another app X.other_focus",
 			build: func(b *tl) {
 				b.focus(at(0), event.AppTerminal, "")

@@ -21,21 +21,25 @@ The samples can't tell the two returns apart. A sample reports when the last inp
 | By slot, SM 2.1's "input during the slot" | `NAV` 30, `X.absent` 30 | `P` 50, `X.no_anchor` 10 | 810 s |
 | The presence-edges proposal: at the pinned input, else at the slot's last reported input | `NAV` 20, `X.absent` 40 | `P` 48, `X.absent` 12 | 808 s |
 | At the first input a sample taken inside the slot reports, else at the slot's start | `NAV` 20, `X.absent` 40 | `P` 50, `X.no_anchor` 10 | 810 s |
+| At the input a focus or power sample inside the slot reports; a hook sample only bounds it; else at the slot's start | `NAV` 20, `X.absent` 40 | `P` 50, `X.no_anchor` 10 | 810 s |
 
-Only the third reproduces both fixtures. By slot, 6.1 credits 10,105 s instead of 10,095.
+The last two reproduce both fixtures. By slot, 6.1 credits 10,105 s instead of 10,095.
+
+They differ on SM 2.1's main case for the return rule, a silence "followed straight away by a typed prompt" (added after the #52 review, #80). The agent samples at the prompt's `UserPromptSubmit` hook, and that sample reports the Enter key, the last input before it, not the first key of the return. Take a prompt of 30 characters submitted at 460 s, typed from 451.5 s, after a silence from 105 s. The third rule starts presence at 459 s, so 450 to 458 s of the slot [450, 465) are `X.absent` though the person typed through them, and only 1 s of the lead's typing part counts. The fourth starts it at 450 s and credits 10 s of `P`. Without the hook sample both give 10 s, so the third rule pays less where the agent knows more.
 
 ## What the scorer does
 
-It takes the third rule. The regular sample at a slot's end stands for the whole slot, as SM 2.1 has it. A sample the agent takes inside the slot, at a hook, focus or power event (DESIGN 3.3), dates what it reports. So after a silence longer than `PRESENCE_GAP_S`, the silence runs into the slot that ends it, up to the second of the first input that an inside sample reports. If no inside sample reports one, the silence runs up to the last inside sample, which still shows none. With no inside sample at all, presence starts with the slot. A silence the return rule credits includes those seconds. `presence.markStarts` in `pkg/score/presence.go` is the code.
+It takes the fourth rule. The regular sample at a slot's end stands for the whole slot, as SM 2.1 has it. A sample the agent takes inside the slot at a focus change or a power event (DESIGN 3.3) dates the input it reports, because that input is the act that ended the silence. So after a silence longer than `PRESENCE_GAP_S`, the silence runs into the slot that ends it, up to the second of that input. A sample taken at a hook reports the hook's own act, which typing or reading may have preceded, so it only bounds the start: the silence runs up to the last inside sample that still shows none, or to the slot's start. With no inside sample at all, presence starts with the slot. A silence the return rule credits includes those seconds. `presence.markStarts` in `pkg/score/presence.go` is the code.
 
 The dated start is for crediting seconds. SM 2.3's evidence tests that read presence, a permission answer's at `answered_at` and an interrupt's in its slot, read SM 2.1's value for the slot, as the slot record does: a slot with input is present from its start. Otherwise an interrupt early in the slot that ends a silence, before the correction whose hook sample dates the input, would open no anchor, and the prompt after it would end the silence as a returned run, which SM 2.1 denies when the first act is an interrupt.
 
-The rule is generous where the samples are coarse and strict where they are fine. Someone who comes back late in a slot with no event sample in it gets the whole slot, up to 14 s more than the conservative choice. Someone whose return comes with a focus change or a hook gets credit from that second.
+The rule is generous where the samples are coarse and strict where they are fine. Someone who comes back late in a slot with no event sample in it gets the whole slot, up to 14 s more than the conservative choice. Someone whose return comes with a focus change gets credit from that second.
 
 ## For Karim
 
 1. Pick where presence starts after a long silence:
-   - The scorer's rule. 6.1 and 6.4 stay as they are, and SM 2.1 gains a sentence on samples taken inside a slot.
+   - The scorer's rule. 6.1 and 6.4 stay as they are, and SM 2.1 gains a sentence on samples taken inside a slot at focus and power events.
+   - The third rule, which dates a return from any inside sample. 6.1 and 6.4 stay as they are too, but a typed prompt's own hook sample cuts its typing in the slot that ends the silence.
    - The conservative choice. 6.4's 23:37 row becomes `P` 48 and `X.absent` 12 and its total 808 s, in an `oracle-change` PR that also changes SM 6.4's table.
    - By slot. 6.1's 15:12 row and totals change as the presence-edges erratum's table shows.
 2. Whichever you pick also settles that erratum's first question for the start of presence. Its end, the tail, is measured to the millisecond in both fixtures already.

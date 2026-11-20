@@ -92,6 +92,9 @@ type sample struct {
 	hasKeys bool
 	lastKey int64
 	locked  bool
+	// atEvent is set for a sample taken at a focus change or a power
+	// event: an os.focus or os.power record has the same time.
+	atEvent bool
 }
 
 // span is the half-open interval [from, to) in Unix milliseconds.
@@ -147,6 +150,16 @@ func buildPresence(r rules, recs []event.Event, now int64, fl *focusLine) *prese
 	if len(recs) == 0 {
 		return p
 	}
+	// The agent samples at once at every hook, focus and power event
+	// (DESIGN 3.3). markStarts needs to know which samples came with a
+	// focus or power event.
+	eventAt := map[int64]bool{}
+	for _, e := range recs {
+		switch e.Data.(type) {
+		case *event.OSFocus, *event.OSPower:
+			eventAt[e.T] = true
+		}
+	}
 	var (
 		locks, sleeps, gaps []span
 		locked, asleep      bool
@@ -158,7 +171,7 @@ func buildPresence(r rules, recs []event.Event, now int64, fl *focusLine) *prese
 	for _, e := range recs {
 		switch d := e.Data.(type) {
 		case *event.OSPresence:
-			s := sample{t: e.T, lastAny: e.T - msOf(d.IdleAnyS), locked: d.Locked}
+			s := sample{t: e.T, lastAny: e.T - msOf(d.IdleAnyS), locked: d.Locked, atEvent: eventAt[e.T]}
 			if d.IdleKeysS != nil {
 				s.hasKeys, s.lastKey = true, e.T-msOf(*d.IdleKeysS)
 			}
@@ -315,15 +328,18 @@ func buildPresence(r rules, recs []event.Event, now int64, fl *focusLine) *prese
 // where the samples can (SM 2.1, docs/errata/2026-11-19-sm-6.1-presence-edges.md).
 // SM 2.1 makes a slot with input present from its start, and the regular
 // sample at the slot's end can't say more. But the agent also samples at
-// hook, focus and power events (DESIGN 3.3), and a sample taken inside the
-// slot dates what it reports. So the silence lasts into the slot until the
-// first input such a sample reports, to the second, or, when none reports
-// one, until the last of them that still shows the silence. SM 6.1's drink
-// needs the first: Rowan clicks at 15:12:40, which a focus sample reports,
-// and SM credits from there. SM 6.4's 23:37 row needs the second half: only
-// the sample at the slot's end reports his return, and SM credits the slot
-// from its start. docs/errata/2026-11-19-presence-start-after-silence.md
-// asks Karim to confirm the rule.
+// hook, focus and power events (DESIGN 3.3). A sample taken inside the slot
+// at a focus change or a power event dates the input it reports, which is
+// the act that ended the silence: the silence lasts into the slot until
+// that input, to the second. A sample taken at a hook reports the hook's
+// own act, such as the Enter that submits a prompt, and the typing before
+// it is the return too, so it only bounds the start: the silence lasts
+// until the last sample inside the slot that still shows it, or the slot's
+// start. SM 6.1's drink needs the first: Rowan clicks at 15:12:40, which a
+// focus sample reports, and SM credits from there. SM 6.4's 23:37 row has
+// no sample inside the slot, and SM credits it from its start.
+// docs/errata/2026-11-19-presence-start-after-silence.md asks Karim to
+// confirm the rule.
 func (p *presence) markStarts() {
 	for _, run := range p.runs {
 		if !run.right || (run.left && int64(run.j-run.i)*event.SlotMS <= p.r.presenceGap) {
@@ -338,16 +354,20 @@ func (p *presence) markStarts() {
 }
 
 // firstInputInside returns when the samples taken inside (a, b) let the
-// slot [a, b) start to count as present: at the second holding the first
-// input one of them reports in the slot, else at the last of them, which
-// still shows no input in it, else at a.
+// slot [a, b) start to count as present: at the second holding the input
+// that the first of them to report one reports, when a focus change or a
+// power event took it; else at the last of them that still shows no input
+// in the slot; else at a.
 func (p *presence) firstInputInside(a, b int64) int64 {
 	from := a
 	i := sort.Search(len(p.samples), func(i int) bool { return p.samples[i].t > a })
 	for ; i < len(p.samples) && p.samples[i].t < b; i++ {
 		s := p.samples[i]
 		if s.lastAny >= a {
-			return max(a, floorSecond(s.lastAny))
+			if s.atEvent {
+				return max(a, floorSecond(s.lastAny))
+			}
+			return from
 		}
 		from = s.t
 	}
