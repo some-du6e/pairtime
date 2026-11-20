@@ -35,9 +35,9 @@ var (
 	procPowerUnregisterSuspendResumeNotification = modPowrprof.NewProc("PowerUnregisterSuspendResumeNotification")
 )
 
-// A Go callback is never freed, and a process gets about 2,000 of them,
-// so every registration shares one and finds its watch by the context
-// value Windows passes back.
+// A Go callback is never freed, and Go promises only 1,024 per process, so
+// every registration shares one and finds its watch by the context value
+// Windows passes back.
 var (
 	suspendCallbackOnce sync.Once
 	suspendCallback     uintptr
