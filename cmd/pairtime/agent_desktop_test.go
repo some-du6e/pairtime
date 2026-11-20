@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/some-du6e/pairtime/internal/agent/procs"
 	"github.com/some-du6e/pairtime/pkg/event"
 )
 
@@ -63,7 +64,9 @@ func xdotool(t *testing.T, args ...string) {
 // both hosted nothing would make one record, not two, since the focus
 // component writes a record only when it says something new (WP-OS2).
 func TestDesktopAgentOnX11(t *testing.T) {
-	claude := startWindow(t, []string{"--class", "PairtimeClaude"}, []string{sleepEnv + "=10m"}, "xterm", "-class", "PairtimeClaude", "-e", fakeHarness(t))
+	fake := fakeHarness(t)
+	claude := startWindow(t, []string{"--class", "PairtimeClaude"}, []string{sleepEnv + "=10m"}, "xterm", "-class", "PairtimeClaude", "-e", fake)
+	claudeAt := time.Now() // the fake claude started by now, with its window
 	plain := startWindow(t, []string{"--class", "PairtimePlain"}, nil, "xterm", "-class", "PairtimePlain", "-e", "sleep", "600")
 	ptHome := t.TempDir()
 	var out syncBuffer
@@ -79,9 +82,6 @@ func TestDesktopAgentOnX11(t *testing.T) {
 	st := waitStatus(t, ptHome, 30*time.Second, "found its X11 sources", func(s agentStatus) bool {
 		return s.Signals.Idle.Via != "" && s.Signals.Focus.Via != ""
 	})
-	// The process scan runs on the minute. After its first run the agent
-	// knows the fake claude's session, so the xterm it runs in hosts it.
-	waitStatus(t, ptHome, 90*time.Second, "run its process scan", func(s agentStatus) bool { return s.runs("procs.scan") > 0 })
 
 	// Each switch waits for the window manager, and then a moment for
 	// the agent, which reads _NET_ACTIVE_WINDOW 50 ms after it changes.
@@ -89,7 +89,15 @@ func TestDesktopAgentOnX11(t *testing.T) {
 		xdotool(t, "windowactivate", "--sync", w)
 		time.Sleep(500 * time.Millisecond)
 	}
+	// The process scan reports a harness process only once it has run
+	// for procs.Grace, so the scan a terminal's focus asks for as the
+	// agent starts finds the fake claude too young. One after that tells
+	// the agent its session, and focus on its xterm asks for one at once
+	// (procs.KickDelay) rather than on the minute.
+	time.Sleep(time.Until(claudeAt.Add(procs.Grace + 2*time.Second)))
+	scans := readStatus(t, ptHome).runs("procs.scan")
 	activate(claude)
+	waitStatus(t, ptHome, 90*time.Second, "scanned the processes again", func(s agentStatus) bool { return s.runs("procs.scan") > scans })
 	// Two seconds without input, then a key, then focus moves at once:
 	// the sample presence takes for the switch is the first after the
 	// key, so it has to show the key.
