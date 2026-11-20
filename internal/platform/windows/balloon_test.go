@@ -39,10 +39,20 @@ func TestTransientIconIsCreatedAndRemoved(t *testing.T) {
 	tests := []struct {
 		name     string
 		lifetime time.Duration
-		cancel   bool // give up at once instead of waiting out the lifetime
+		cancel   bool   // give up at once instead of waiting out the lifetime
+		post     uint32 // a message another program sends the window during the wait
 	}{
 		{name: "the icon is up while the balloon shows, and gone with its window after the lifetime", lifetime: 500 * time.Millisecond},
 		{name: "a caller that gives up ends the wait well before the lifetime", lifetime: time.Minute, cancel: true},
+		{
+			// taskkill without /F sends WM_CLOSE to each top-level window.
+			// DefWindowProc would destroy the window and its timer, and the
+			// loop would then wait forever with the icon still up.
+			name:     "a window asked to close ends the wait and outlives it, so the icon still comes down first",
+			lifetime: time.Minute,
+			post:     balloonWMClose,
+		},
+		{name: "a window told it is being destroyed ends the wait", lifetime: time.Minute, post: balloonWMDestroy},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -68,6 +78,12 @@ func TestTransientIconIsCreatedAndRemoved(t *testing.T) {
 				if tt.cancel {
 					cancel()
 				}
+				if tt.post != 0 {
+					// Queued now, so the wait's message loop takes it.
+					if r, _, err := balloonAPI.postMessage.Call(uintptr(hwnd), uintptr(tt.post), 0, 0); r == 0 {
+						t.Errorf("PostMessageW(0x%04x) failed: %v", tt.post, err)
+					}
+				}
 				start := time.Now()
 				err = b.wait(ctx, tt.lifetime)
 				waited := time.Since(start)
@@ -75,8 +91,11 @@ func TestTransientIconIsCreatedAndRemoved(t *testing.T) {
 				if err != nil {
 					t.Errorf("wait() error = %v", err)
 				}
-				if tt.cancel && waited > 10*time.Second {
-					t.Errorf("wait() took %v after the caller gave up", waited)
+				if (tt.cancel || tt.post != 0) && waited > 10*time.Second {
+					t.Errorf("wait() took %v, so the message or the caller didn't end it", waited)
+				}
+				if !windows.IsWindow(hwnd) {
+					t.Error("the hidden window was gone before close, which must remove the icon first")
 				}
 				b.removeIcon()
 				if b.iconExists() {
@@ -87,6 +106,68 @@ func TestTransientIconIsCreatedAndRemoved(t *testing.T) {
 					t.Error("the hidden window still exists after close")
 				}
 			})
+		})
+	}
+}
+
+func TestOnBalloonThread(t *testing.T) {
+	errOwn := errors.New("the balloon's own answer")
+	tests := []struct {
+		name string
+		// show is the balloon's work; release ends a show that ignores ctx.
+		show   func(ctx context.Context, release <-chan struct{}) error
+		cancel bool // ctx is cancelled once show has started
+		want   error
+	}{
+		{
+			name:   "the balloon's own answer is returned when it comes first",
+			show:   func(context.Context, <-chan struct{}) error { return errOwn },
+			cancel: false,
+			want:   errOwn,
+		},
+		{
+			name: "a balloon that sees ctx and takes its icon down in time has its own answer returned",
+			show: func(ctx context.Context, _ <-chan struct{}) error {
+				<-ctx.Done()
+				return nil
+			},
+			cancel: true,
+			want:   nil,
+		},
+		{
+			name: "a balloon thread stuck past the cleanup wait is left behind, and ctx's error is returned",
+			show: func(_ context.Context, release <-chan struct{}) error {
+				<-release
+				return nil
+			},
+			cancel: true,
+			want:   context.Canceled,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			release := make(chan struct{})
+			defer close(release) // ends a stuck show after the test
+			started := make(chan struct{})
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			if tt.cancel {
+				go func() {
+					<-started
+					cancel()
+				}()
+			}
+			begin := time.Now()
+			err := onBalloonThread(ctx, 200*time.Millisecond, func(ctx context.Context) error {
+				close(started)
+				return tt.show(ctx, release)
+			})
+			if !errors.Is(err, tt.want) {
+				t.Errorf("onBalloonThread() = %v, want %v", err, tt.want)
+			}
+			if took := time.Since(begin); took > 10*time.Second {
+				t.Errorf("onBalloonThread() took %v", took)
+			}
 		})
 	}
 }
