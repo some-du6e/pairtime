@@ -43,29 +43,26 @@ func run(t *testing.T, stdin []byte, name string, args ...string) []byte {
 	return out
 }
 
-// jq runs jq -cS . on stdin, or on the file named in args, and returns
-// what it writes without the newline it ends with.
+// jq runs jq -cSj . on stdin, or on the file named in args, and returns
+// what it writes, as doc.go's hash recipe does. The -j leaves out the
+// newline jq -cS ends with. It would also print a top-level string without
+// its quotes, so every document given to jq is an object or an array.
 func jq(t *testing.T, stdin []byte, args ...string) []byte {
 	t.Helper()
-	out := run(t, stdin, "jq", append([]string{"-cS", "."}, args...)...)
-	b, ok := bytes.CutSuffix(out, []byte("\n"))
-	if !ok {
-		t.Fatalf("jq's output doesn't end in a newline: %q", out)
-	}
-	return b
+	return run(t, stdin, "jq", append([]string{"-cSj", "."}, args...)...)
 }
 
 // TestCanonicalMatchesJq is the plan's oracle for the canonical form and
-// the hash: for every embedded table, Canonical is byte for byte what
-// jq -cS . writes for the file, and Hash is what sha256sum prints for
-// those bytes.
+// the hash, run the way doc.go tells readers to run it: for every embedded
+// table, Canonical is byte for byte what jq -cSj . writes for the file,
+// and Hash is what sha256sum prints for those bytes.
 func TestCanonicalMatchesJq(t *testing.T) {
 	for _, tab := range Tables() {
-		t.Run("jq and sha256sum agree with table "+tab.Version(), func(t *testing.T) {
-			file := filepath.Join("tables", tab.Version()+".json")
+		file := filepath.Join("tables", tab.Version()+".json")
+		t.Run("jq -cSj and sha256sum agree with table "+tab.Version(), func(t *testing.T) {
 			want := jq(t, nil, file)
 			if got := tab.Canonical(); !bytes.Equal(got, want) {
-				t.Errorf("Canonical() differs from jq -cS . %s\n got: %s\nwant: %s", file, got, want)
+				t.Errorf("Canonical() differs from jq -cSj . %s\n got: %s\nwant: %s", file, got, want)
 			}
 			out := string(run(t, want, "sha256sum"))
 			sum, _, _ := strings.Cut(out, " ")
@@ -74,6 +71,12 @@ func TestCanonicalMatchesJq(t *testing.T) {
 			}
 			if got := tab.Hash(); got != "sha256:"+sum {
 				t.Errorf("Hash() = %s, but sha256sum of jq's output is %s", got, sum)
+			}
+		})
+		t.Run("jq -cS writes table "+tab.Version()+" with a final newline the hash leaves out", func(t *testing.T) {
+			out := run(t, nil, "jq", "-cS", ".", file)
+			if want := append(tab.Canonical(), '\n'); !bytes.Equal(out, want) {
+				t.Errorf("jq -cS . %s wrote %q, want the canonical bytes and a newline", file, out)
 			}
 		})
 	}
@@ -165,7 +168,7 @@ func TestCanonicalForm(t *testing.T) {
 				t.Errorf("canonical form of %q\n got: %s\nwant: %s", c.in, got, c.want)
 			}
 			if got := string(jq(t, []byte(c.in))); got != c.want {
-				t.Errorf("jq -cS . of %q\n got: %s\nwant: %s", c.in, got, c.want)
+				t.Errorf("jq -cSj . of %q\n got: %s\nwant: %s", c.in, got, c.want)
 			}
 		})
 	}

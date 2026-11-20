@@ -25,10 +25,14 @@
 // bytewise, no whitespace, and every number exactly as the file writes it.
 // So that the text of a number is a function of its value, numbers are
 // plain decimals with no exponent and no trailing zeros after the point,
-// and strings are printable ASCII. jq produces the same bytes, so anyone
-// can check a hash without pairtime:
+// and strings are printable ASCII. No number but 0 is closer to 0 than
+// 0.000001, which jq would write with an exponent. So jq produces the same
+// bytes, and anyone can check a hash without pairtime:
 //
 //	jq -cSj . pkg/params/tables/0.1.0.json | sha256sum
+//
+// The -j matters: without it jq ends its output with a newline, which the
+// hash doesn't cover.
 //
 // # Reading parameters
 //
