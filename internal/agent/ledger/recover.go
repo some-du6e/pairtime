@@ -471,7 +471,15 @@ func (w *Writer) scan(rows []rowPayload) ([]rowPayload, error) {
 		}
 		from = rows[max(0, n-questionRows)].Start
 		if snap != (position{}) {
+			// The newest seal frame that holds the questions, unless the
+			// last batch is the one it seals: then from that batch's first
+			// record, so a record is always read for the key check below,
+			// and the seal frame after the records restores the questions
+			// they gave.
 			from = snap
+			if last.Start.before(snap) {
+				from = last.Start
+			}
 		}
 		if !slices.Contains(days, from.Seg) {
 			from = position{Seg: start.Seg}

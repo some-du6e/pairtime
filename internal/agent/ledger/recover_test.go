@@ -223,6 +223,50 @@ func TestRecoverRefuses(t *testing.T) {
 		})
 	}
 
+	// A ledger that ends with the seal frame of a batch that holds the
+	// prompt classes' questions, which Open restores from, with no record
+	// after it.
+	atSnapshot := t.TempDir()
+	{
+		w := open(t, atSnapshot, newClock(testT))
+		rng := rand.New(rand.NewPCG(31, 32))
+		for range questionRows {
+			if _, _, err := write(w, rng, "os.presence", testT); err != nil {
+				t.Fatal(err)
+			}
+			if _, _, err := w.Seal(); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := w.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	keyCases := []struct {
+		name string
+		opts func(*Options)
+		want error
+	}{
+		{"a ledger that ends at a seal frame holding the questions opens with its own keys", nil, nil},
+		{"a ledger that ends at a seal frame holding the questions still refuses another key's keys",
+			func(o *Options) { o.Keys = keysOf(t, otherKDev) }, ErrDamaged},
+	}
+	for _, kc := range keyCases {
+		t.Run(kc.name, func(t *testing.T) {
+			var edit []func(*Options)
+			if kc.opts != nil {
+				edit = append(edit, kc.opts)
+			}
+			w, err := openErr(atSnapshot, newClock(testT+60_000), edit...)
+			if err == nil {
+				err = w.Close()
+			}
+			if !errors.Is(err, kc.want) {
+				t.Fatalf("Open: %v, want %v", err, kc.want)
+			}
+		})
+	}
+
 	t.Run("an empty batches.seg leaves every file where it is, and ReadChain refuses it too", func(t *testing.T) {
 		c := crash(t)
 		name := filepath.Join(c.dir, batchesName)
