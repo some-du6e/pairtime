@@ -213,6 +213,8 @@ func TestExecArg(t *testing.T) {
 		{name: "a double quote in quotes takes two backslashes", exe: `/home/a"b/pairtime`, want: `"/home/a\\"b/pairtime"`},
 		{name: "a percent sign is doubled", exe: "/home/100%/pairtime", want: "/home/100%%/pairtime"},
 		{name: "a percent sign in a path that needs quotes is refused", exe: "/home/1 00%/pairtime", wantErr: true},
+		{name: "an equals sign is refused, which the spec forbids in the program's path", exe: "/home/a=b/.local/bin/pairtime", wantErr: true},
+		{name: "an equals sign is refused in a path that needs quotes too", exe: "/home/a b=c/pairtime", wantErr: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

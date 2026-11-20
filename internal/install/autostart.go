@@ -156,13 +156,18 @@ func desktopEntry(exe string) ([]byte, error) {
 		"Terminal=false\n"), nil
 }
 
-// execArg writes s as one argument of an Exec key. An argument with a
-// reserved character goes in double quotes, inside which ", `, $ and \
-// take a backslash; a literal % is written %%, which the spec doesn't
-// allow inside quotes; and the whole value then takes the escapes of a
-// string value, which double every backslash (Desktop Entry Specification
-// 1.5, "The Exec key").
+// execArg writes s, the program's path, as the first argument of an Exec
+// key. An argument with a reserved character goes in double quotes, inside
+// which ", `, $ and \ take a backslash; a literal % is written %%, which
+// the spec doesn't allow inside quotes; and the whole value then takes the
+// escapes of a string value, which double every backslash. "The name or
+// path of the executable program may not contain the equal sign", quoted
+// or not, so such a path is refused (Desktop Entry Specification 1.5, "The
+// Exec key").
 func execArg(s string) (string, error) {
+	if strings.Contains(s, "=") {
+		return "", fmt.Errorf("the binary's path %q holds an equals sign, which a desktop entry can't carry in the program it starts", s)
+	}
 	const reserved = " \t\n\"'\\><~|&;$*?#()`"
 	if !strings.ContainsAny(s, reserved) {
 		return desktopString(strings.ReplaceAll(s, "%", "%%")), nil
