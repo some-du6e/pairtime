@@ -32,6 +32,11 @@ type Plan struct {
 	backups   []pendingBackup
 	drops     []string // backup files Apply deletes once it is done
 	rmdirs    []string // directories uninstall removes if empty, innermost first
+
+	// stop, when a test sets it, runs before Apply writes each target, and
+	// an error from it stops Apply there, as a crash or a failed write
+	// would.
+	stop func(Target) error
 }
 
 // Change is one target's planned change.
@@ -130,6 +135,15 @@ func (in *Installer) PlanInstall(items []Item) (*Plan, error) {
 			return nil, fmt.Errorf("%s is read-only, so pairtime leaves it alone; make it writable and run install again", g.target)
 		}
 		ch := Change{Target: g.target, Items: itemIDs(g.recs), Before: cur, After: next}
+		if !g.target.isRegistry() && !cur.Exists {
+			// A file that isn't there may be missing its folders too: on a
+			// first install, and on a rerun after an Apply that stopped
+			// before it made them, after an uninstall that stopped once it
+			// had removed them, or after the teen deleted ~/.claude.
+			if ch.mkdirs, err = missingDirs(g.target.Path); err != nil {
+				return nil, err
+			}
+		}
 		rec := p.manifest.find(g.target)
 		switch {
 		case rec == nil:
@@ -137,16 +151,11 @@ func (in *Installer) PlanInstall(items []Item) (*Plan, error) {
 			// what uninstall puts back, without any pairtime hooks an
 			// earlier install left there, which would run a binary that
 			// uninstall deletes.
-			if !g.target.isRegistry() {
-				if ch.mkdirs, err = missingDirs(g.target.Path); err != nil {
-					return nil, err
-				}
-			}
 			base, err := undoAll(cur, cur, g.recs)
 			if err != nil {
 				return nil, fmt.Errorf("%s %w", g.target, err)
 			}
-			p.manifest.Targets = append(p.manifest.Targets, record{Target: g.target, Dirs: ch.mkdirs})
+			p.manifest.Targets = append(p.manifest.Targets, record{Target: g.target})
 			rec = &p.manifest.Targets[len(p.manifest.Targets)-1]
 			p.rebase(rec, base)
 		case rec.Written != cur.digest():
@@ -163,6 +172,9 @@ func (in *Installer) PlanInstall(items []Item) (*Plan, error) {
 			}
 			p.rebase(rec, base)
 		}
+		// Uninstall removes the folders this Apply makes, as it removes
+		// the ones an earlier one made.
+		rec.Dirs = addDirs(rec.Dirs, ch.mkdirs)
 		rec.Written = next.digest()
 		for _, r := range g.recs {
 			if !slices.Contains(rec.Edits, r) {
@@ -337,6 +349,11 @@ func (p *Plan) Apply() error {
 		}
 	}
 	for _, c := range p.Changes {
+		if p.stop != nil {
+			if err := p.stop(c.Target); err != nil {
+				return err
+			}
+		}
 		if err := makeDirs(c.mkdirs); err != nil {
 			return err
 		}

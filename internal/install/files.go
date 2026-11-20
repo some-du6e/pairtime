@@ -127,6 +127,19 @@ func missingDirs(path string) ([]string, error) {
 	return dirs, nil
 }
 
+// addDirs returns dirs with each directory in more that it lacks, still
+// outermost first. Both are folders above the same file, so a shorter
+// path is an outer folder.
+func addDirs(dirs, more []string) []string {
+	for _, d := range more {
+		if !slices.Contains(dirs, d) {
+			dirs = append(dirs, d)
+		}
+	}
+	slices.SortStableFunc(dirs, func(a, b string) int { return len(a) - len(b) })
+	return dirs
+}
+
 // makeDirs makes dirs, outermost first. One that is already there is fine.
 func makeDirs(dirs []string) error {
 	for _, d := range dirs {

@@ -73,6 +73,87 @@ func TestApplyRefusesAStalePlan(t *testing.T) {
 	}
 }
 
+// errStopped is the error a test's Plan.stop returns to stop Apply.
+var errStopped = errors.New("stopped by the test")
+
+func TestRerunMakesFoldersThatAreGone(t *testing.T) {
+	settings := []byte("{}\n")
+	tests := []struct {
+		name string
+		// damage leaves the state the rerun starts from.
+		damage func(t *testing.T, env Env, in *Installer, items []Item)
+		// want is what settings.json holds after uninstall; nil for no
+		// file and no ~/.claude.
+		want []byte
+	}{
+		{
+			name: "an Apply that stopped after writing the manifest, before it made the entry's folders, is finished by a rerun",
+			damage: func(t *testing.T, _ Env, in *Installer, items []Item) {
+				p, err := in.PlanInstall(items)
+				if err != nil {
+					t.Fatal(err)
+				}
+				p.stop = func(Target) error { return errStopped }
+				if err := p.Apply(); !errors.Is(err, errStopped) {
+					t.Fatalf("Apply = %v, want it stopped by the test", err)
+				}
+				if _, err := os.Stat(in.manifestPath()); err != nil {
+					t.Fatalf("the stopped Apply wrote no manifest: %v", err)
+				}
+			},
+			want: settings,
+		},
+		{
+			name: "a ~/.claude the teen deleted after install is made again by a reinstall, and uninstall takes it away",
+			damage: func(t *testing.T, env Env, in *Installer, items []Item) {
+				install(t, in, items...)
+				if err := os.RemoveAll(filepath.Dir(ClaudeSettings(env))); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			name: "an uninstall that stopped after removing the entry's folders, before it wrote the manifest, is followed by a working reinstall",
+			damage: func(t *testing.T, env Env, in *Installer, items []Item) {
+				install(t, in, items...)
+				autostart := filepath.Join(env.Home, ".config", "autostart")
+				for _, p := range []string{filepath.Join(autostart, DesktopFile), autostart, filepath.Dir(autostart)} {
+					if err := os.Remove(p); err != nil {
+						t.Fatal(err)
+					}
+				}
+			},
+			want: settings,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			env := testEnv(t, "linux", nil)
+			items := linuxItems(t, env, settings)
+			desktop := filepath.Join(env.Home, ".config", "autostart", DesktopFile)
+			in := newInstaller(t)
+			tt.damage(t, env, in, items)
+
+			install(t, in, items...)
+			if got := readOrNil(t, desktop); !bytes.Equal(got, autostartGolden(t, DesktopFile)) {
+				t.Errorf("after the rerun the autostart entry holds\n%s", got)
+			}
+			if got := readOrNil(t, ClaudeSettings(env)); !bytes.Contains(got, []byte("--harness")) {
+				t.Errorf("after the rerun settings.json has no pairtime hooks:\n%s", got)
+			}
+
+			uninstall(t, in)
+			checkGone(t, filepath.Join(env.Home, ".config"), "the folder install made for the autostart entry")
+			if tt.want == nil {
+				checkGone(t, filepath.Dir(ClaudeSettings(env)), "the folder the reinstall made for settings.json")
+			} else if got := readOrNil(t, ClaudeSettings(env)); !bytes.Equal(got, tt.want) {
+				t.Errorf("after uninstall settings.json holds\n%s\nwant\n%s", got, tt.want)
+			}
+			checkGone(t, in.Dir, "pairtime's install directory")
+		})
+	}
+}
+
 func TestPlanInstallRefusesBadItems(t *testing.T) {
 	env := testEnv(t, "linux", nil)
 	auto, err := Autostart(env)
