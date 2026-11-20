@@ -202,6 +202,44 @@ func TestResolve(t *testing.T) {
 			},
 		},
 		{
+			name: "a repo reached through a link resolves to one common dir, git dir and project, whichever spelling the folder comes in",
+			run: func(t *testing.T, g *gitEnv) {
+				r := g.initRepo()
+				r.commit("one", map[string]string{"src/a.txt": "a\n"})
+				wt := filepath.Join(filepath.Dir(r.dir), "wt")
+				r.git("worktree", "add", "-q", wt, "-b", "wt")
+				link := linkTo(t, filepath.Dir(r.dir), true)
+				via := filepath.Join(link, filepath.Base(r.dir))
+				res := g.resolver(ProjectMap{}, Excludes{})
+				var main []Location
+				for _, dir := range []string{via, filepath.Join(via, "src"), r.dir, filepath.Join(via, ".git")} {
+					loc, err := res.Resolve(ctx, dir)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if loc.Linked || loc.CommonDir != loc.GitDir {
+						t.Errorf("%s: common dir %q, git dir %q, linked %v; want a main worktree whose common dir is its git dir", dir, loc.CommonDir, loc.GitDir, loc.Linked)
+					}
+					main = append(main, loc)
+				}
+				for _, loc := range main[1:] {
+					if loc.CommonDir != main[0].CommonDir || loc.GitDir != main[0].GitDir || loc.Project != main[0].Project {
+						t.Errorf("%+v differs from %+v", loc, main[0])
+					}
+				}
+				linked, err := res.Resolve(ctx, filepath.Join(link, "wt"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !linked.Linked || linked.CommonDir != main[0].CommonDir || linked.Project != main[0].Project {
+					t.Errorf("linked worktree %+v, want a linked worktree with the common dir %q", linked, main[0].CommonDir)
+				}
+				if m := res.Map(); len(m.Repos) != 1 {
+					t.Errorf("the project map has %d repos, want 1: %+v", len(m.Repos), m.Repos)
+				}
+			},
+		},
+		{
 			name: "a folder inside a git directory resolves to its repo with no top level of its own",
 			run: func(t *testing.T, g *gitEnv) {
 				r := g.initRepo()

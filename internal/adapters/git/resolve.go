@@ -341,10 +341,7 @@ func (r *Resolver) resolve(ctx context.Context, abs string) (Location, error) {
 		// The key comes from the folder's canonical path, the form git
 		// prints for a top level: symlinks resolved, and on Windows short
 		// names expanded. So `git init` in the folder keeps its key.
-		dir := abs
-		if canon, err := filepath.EvalSymlinks(abs); err == nil {
-			dir = canon
-		}
+		dir := canonicalDir(abs)
 		if r.ignored(dir) {
 			return Location{}, ErrIgnored
 		}
@@ -404,11 +401,48 @@ func (r *Resolver) revParse(ctx context.Context, abs string) (revParseInfo, erro
 	if err != nil && !(errors.As(err, &exit) && strings.Contains(exit.Stderr, "must be run in a work tree")) {
 		return revParseInfo{}, err
 	}
-	return parseRevParse(abs, string(out))
+	// --absolute-git-dir and --show-toplevel are canonical: symlinks
+	// resolved, like macOS's /var to /private/var, and on Windows long names
+	// instead of 8.3 ones like RUNNER~1. A main worktree's common dir comes
+	// out relative to git's working directory, which git also reads from
+	// the OS in canonical form. abs is the folder as the caller spelled it,
+	// so the common dir is joined onto abs's canonical form and then takes
+	// the git dir's spelling when the two are one folder. Repos are keyed
+	// by their common dir, so every path to a repo has to give one spelling.
+	info, err := parseRevParse(canonicalDir(abs), string(out))
+	if err != nil {
+		return revParseInfo{}, err
+	}
+	info.commonDir = commonSpelling(info.commonDir, info.gitDir)
+	return info, nil
+}
+
+// canonicalDir returns dir with symlinks resolved and, on Windows, short
+// names expanded, or dir itself when that fails.
+func canonicalDir(dir string) string {
+	if canon, err := filepath.EvalSymlinks(dir); err == nil {
+		return canon
+	}
+	return dir
+}
+
+// commonSpelling returns commonDir as gitDir spells it when both are one
+// folder, as in a main worktree, and otherwise in canonical form.
+func commonSpelling(commonDir, gitDir string) string {
+	if foldPath(commonDir) == foldPath(gitDir) {
+		return gitDir
+	}
+	if a, err := os.Stat(commonDir); err == nil {
+		if b, err := os.Stat(gitDir); err == nil && os.SameFile(a, b) {
+			return gitDir
+		}
+	}
+	return canonicalDir(commonDir)
 }
 
 // parseRevParse reads revParse's output: five lines always, then the top
-// level and the superproject's top level when there are any.
+// level and the superproject's top level when there are any. A relative
+// common dir is joined onto abs, the folder git ran in.
 func parseRevParse(abs, out string) (revParseInfo, error) {
 	lines := strings.Split(strings.TrimRight(out, "\r\n"), "\n")
 	for i := range lines {

@@ -4,6 +4,7 @@ package git
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io/fs"
@@ -544,37 +545,16 @@ func TestScanAgainstGit(t *testing.T) {
 		{
 			name: "a new repo's first commit moves it from its folder key to its root-commit key and keeps the folder key as an alias",
 			run: func(t *testing.T, g *gitEnv) {
-				dir := filepath.Join(t.TempDir(), "game")
-				if err := os.Mkdir(dir, 0o755); err != nil {
-					t.Fatal(err)
-				}
-				res := g.resolver(ProjectMap{}, Excludes{})
-				before, err := res.Resolve(ctx, dir)
-				if err != nil {
-					t.Fatal(err)
-				}
-				g.git(dir, "init", "-q")
-				res.Forget()
-				unborn, err := res.Resolve(ctx, dir)
-				if err != nil {
-					t.Fatal(err)
-				}
-				if before.Kind != KindFolder || unborn.Kind != KindUnborn || unborn.Project != before.Project {
-					t.Fatalf("before %s %s, after git init %s %s; want the folder's key to carry over", before.Kind, before.Project, unborn.Kind, unborn.Project)
-				}
-				s := g.scanner(res, dir)
-				r := &testRepo{g: g, dir: dir}
-				sha := r.commit("first", map[string]string{"main.go": "package main\n"})
-				c := one(t, mustScan(t, s))
-				roots := strings.Fields(r.git("rev-list", "--max-parents=0", "HEAD"))
-				want := rootsKey(testSecret, roots)
-				if c.Event.ProjectKey != want || c.Commits[0].SHA != sha || c.Commits[0].Project != want {
-					t.Errorf("first commit in project %s, want the root-commit key %s", c.Event.ProjectKey, want)
-				}
-				if aliases := res.Aliases(want); !slices.Contains(aliases, before.Project) {
-					t.Errorf("aliases %v, want the folder key %s", aliases, before.Project)
-				}
-				checkAgainstGit(t, r, c.Commits[0])
+				firstCommitKeepsAlias(t, g, filepath.Join(t.TempDir(), "game"))
+			},
+		},
+		{
+			name: "a new repo reached through a symlink keeps its folder key as an alias too, though git prints the real path",
+			run: func(t *testing.T, g *gitEnv) {
+				// A junction can't stand in: Go's EvalSymlinks leaves it, so a
+				// plain folder behind one keys by the junction's path while
+				// git prints the real one.
+				firstCommitKeepsAlias(t, g, filepath.Join(linkTo(t, t.TempDir(), false), "game"))
 			},
 		},
 		{
@@ -703,8 +683,54 @@ func TestScanAgainstGit(t *testing.T) {
 	}
 }
 
-// snapshot lists every file under dir with its size, mode and
-// modification time.
+// firstCommitKeepsAlias makes dir, resolves it as a plain folder, runs git
+// init and a first commit in it, and checks that the commit lands under
+// the root-commit key with the folder key as its alias.
+func firstCommitKeepsAlias(t *testing.T, g *gitEnv, dir string) {
+	t.Helper()
+	ctx := context.Background()
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	res := g.resolver(ProjectMap{}, Excludes{})
+	before, err := res.Resolve(ctx, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	g.git(dir, "init", "-q")
+	res.Forget()
+	unborn, err := res.Resolve(ctx, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if before.Kind != KindFolder || unborn.Kind != KindUnborn || unborn.Project != before.Project {
+		t.Fatalf("before %s %s, after git init %s %s; want the folder's key to carry over", before.Kind, before.Project, unborn.Kind, unborn.Project)
+	}
+	s := g.scanner(res, dir)
+	r := &testRepo{g: g, dir: dir}
+	sha := r.commit("first", map[string]string{"main.go": "package main\n"})
+	c := one(t, mustScan(t, s))
+	roots := strings.Fields(r.git("rev-list", "--max-parents=0", "HEAD"))
+	want := rootsKey(testSecret, roots)
+	if c.Event.ProjectKey != want || c.Commits[0].SHA != sha || c.Commits[0].Project != want {
+		t.Errorf("first commit in project %s, want the root-commit key %s", c.Event.ProjectKey, want)
+	}
+	if aliases := res.Aliases(want); !slices.Contains(aliases, before.Project) {
+		t.Errorf("aliases %v, want the folder key %s", aliases, before.Project)
+	}
+	if m := res.Map(); len(m.Repos) != 1 {
+		t.Errorf("the project map has %d repos, want 1: %+v", len(m.Repos), m.Repos)
+	}
+	checkAgainstGit(t, r, c.Commits[0])
+}
+
+// snapshot lists every entry under dir: each regular file with its size,
+// mode, modification time and a hash of its content, each symlink with
+// its target, and each folder by name only. Each path is stat'ed on its
+// own: on Windows the FileInfo a directory listing gives is NTFS's copy in
+// the parent's index, which it refreshes lazily, so a folder's time there
+// can change with no write at all. A folder's own time adds nothing a write
+// wouldn't show anyway, as a file that appeared, changed or went.
 func snapshot(t *testing.T, dir string) map[string]string {
 	t.Helper()
 	files := make(map[string]string)
@@ -712,11 +738,26 @@ func snapshot(t *testing.T, dir string) map[string]string {
 		if err != nil {
 			return err
 		}
-		fi, err := d.Info()
+		fi, err := os.Lstat(p)
 		if err != nil {
 			return err
 		}
-		files[p] = fmt.Sprintf("%d %v %d", fi.Size(), fi.Mode(), fi.ModTime().UnixNano())
+		switch {
+		case fi.IsDir():
+			files[p] = "dir"
+		case fi.Mode()&fs.ModeSymlink != 0:
+			target, err := os.Readlink(p)
+			if err != nil {
+				return err
+			}
+			files[p] = "symlink " + target
+		default:
+			data, err := os.ReadFile(p)
+			if err != nil {
+				return err
+			}
+			files[p] = fmt.Sprintf("%d %v %d %x", fi.Size(), fi.Mode(), fi.ModTime().UnixNano(), sha256.Sum256(data))
+		}
 		return nil
 	})
 	if err != nil {

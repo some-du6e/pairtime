@@ -327,6 +327,28 @@ func sameDir(t *testing.T, a, b string) bool {
 	return os.SameFile(fa, fb)
 }
 
+// linkTo makes a symlink to the folder target and returns its path. On
+// Windows, where a symlink can need a privilege the test lacks, a junction
+// stands in when junctionOK allows it. git resolves both to the real path,
+// and Go's EvalSymlinks resolves only the symlink.
+func linkTo(t *testing.T, target string, junctionOK bool) string {
+	t.Helper()
+	link := filepath.Join(t.TempDir(), "link")
+	err := os.Symlink(target, link)
+	if err == nil {
+		return link
+	}
+	if runtime.GOOS == "windows" && junctionOK {
+		out, jerr := exec.Command("cmd", "/c", "mklink", "/J", link, target).CombinedOutput()
+		if jerr == nil {
+			return link
+		}
+		t.Skipf("can't make a symlink (%v) or a junction (%v: %s)", err, jerr, out)
+	}
+	t.Skipf("can't make a symlink: %v", err)
+	return ""
+}
+
 var keyRE = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
 
 // scanner returns a scanner for the repo at dir whose first scan is done.
