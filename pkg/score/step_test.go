@@ -149,6 +149,64 @@ func TestStepsAgree(t *testing.T) {
 	}
 }
 
+// TestFutureRecord checks that a record dated ahead of the device's clock,
+// as a bridge prompt with a skewed transcript timestamp is, doesn't move
+// "now": FinalBefore stays where the samples put it, and the records that
+// come after it are still output.
+func TestFutureRecord(t *testing.T) {
+	r := newRules(testTable(t))
+	bridgePrompt := func(b *tl, tm int64) event.Event {
+		return b.harness(tm, event.ViaBridge, "s_b", "p_1", &event.PromptSubmit{TurnKey: "t_b", LenChars: 30,
+			TypedLenEst: 30, OriginDeclared: event.DeclaredNone})
+	}
+	t.Run("a bridge record an hour ahead leaves FinalBefore behind the samples, and the records after it are output", func(t *testing.T) {
+		b := newTL(false)
+		terminalSession(b)
+		b.mouse(every(at(1), at(5996), 5000)...)
+		b.prompt(at(60), event.ViaHook, "s_1", "p_1", "t_1", 30)
+		b.agentStops(at(61), "s_1", "t_1")
+		future := bridgePrompt(b, at(1500+3600))
+		b.samples(at(0), at(6000))
+		recs := b.records()
+		// It arrives at 1,500 s, with the records up to then; the rest
+		// come after it.
+		var first, rest []event.Event
+		for _, e := range recs {
+			if e.T <= at(1500) || e.EventID == future.EventID {
+				first = append(first, e)
+			} else {
+				rest = append(rest, e)
+			}
+		}
+		s1, o1 := Step(NewState(testTable(t), Device{}), first)
+		if want := floorSlot(at(1500) + r.pendingWindow - r.settle); o1.FinalBefore != want {
+			t.Errorf("FinalBefore %d s, want %d s: PENDING_WINDOW_S past the last sample, less the look-ahead",
+				(o1.FinalBefore-base)/1000, (want-base)/1000)
+		}
+		_, o2 := Step(s1, rest)
+		var all Derived
+		all.Append(o1.Final)
+		all.Append(o2.Final)
+		all.Append(o2.Pending)
+		if got, want := marshal(t, all), marshal(t, scoreAll(t, Device{}, recs)); !bytes.Equal(got, want) {
+			t.Errorf("two Steps differ from one %s", firstDiff(got, want))
+		}
+	})
+	t.Run("a record a day ahead, with the screen left locked, derives no slot past PENDING_WINDOW_S after the samples", func(t *testing.T) {
+		b := newTL(false)
+		terminalSession(b)
+		b.mouse(every(at(1), at(296), 5000)...)
+		b.samples(at(0), at(299))
+		b.power(at(300), event.PowerLock)
+		b.samples(at(300), at(600))
+		bridgePrompt(b, at(600+86_400))
+		d := b.run(t, Device{})
+		if n, most := len(d.Slots), int((600+r.pendingWindow/1000)/15)+1; n > most {
+			t.Errorf("%d slots, want at most %d", n, most)
+		}
+	})
+}
+
 func TestStateConstructors(t *testing.T) {
 	for _, c := range []struct {
 		name string

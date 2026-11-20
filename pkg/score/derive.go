@@ -15,9 +15,12 @@ import (
 // the return rule, which needs the anchors, then the reading buckets and
 // the per-second credit, which need all of them.
 type deriver struct {
-	r        rules
-	dev      Device
-	recs     []event.Event
+	r    rules
+	dev  Device
+	recs []event.Event
+	// now is the present as Step takes it (State.now). Nothing is derived
+	// for a slot after it.
+	now      int64
 	byID     map[string]int
 	focus    *focusLine
 	pres     *presence
@@ -35,15 +38,16 @@ type deriver struct {
 	lookups []span
 }
 
-// derive runs every pass over recs, which must be in record order. Besides
-// what it derives, it returns the spans of the browser and chat-app runs.
-func derive(r rules, dev Device, recs []event.Event) (Derived, []span) {
+// derive runs every pass over recs, which must be in record order, with now
+// as the present. Besides what it derives, it returns the spans of the
+// browser and chat-app runs.
+func derive(r rules, dev Device, recs []event.Event, now int64) (Derived, []span) {
 	if len(recs) == 0 {
 		return Derived{}, nil
 	}
-	d := &deriver{r: r, dev: dev, recs: recs}
+	d := &deriver{r: r, dev: dev, recs: recs, now: now}
 	d.focus = buildFocus(recs)
-	d.pres = buildPresence(r, recs, recs[len(recs)-1].T, d.focus)
+	d.pres = buildPresence(r, recs, now, d.focus)
 	d.buildSessions()
 	d.buildTurns()
 	d.promptAnchors()

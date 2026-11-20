@@ -37,9 +37,38 @@ type State struct {
 	recs []event.Event
 	// high is the largest t of any record, 0 before the first.
 	high int64
+	// own is the largest t of a record the agent stamps itself: an
+	// os.presence, os.focus or os.power, 0 before the first.
+	own int64
 	// done is the FinalBefore of the last Step: everything derived for a
 	// time before it has been emitted as final.
 	done int64
+}
+
+// ownRecord reports whether the agent stamps e's t itself, from the
+// device's clock (DESIGN 3.3), rather than taking it from a hook, a
+// transcript, a heartbeat or another program.
+func ownRecord(e event.Event) bool {
+	switch e.Data.(type) {
+	case *event.OSPresence, *event.OSFocus, *event.OSPower:
+		return true
+	}
+	return false
+}
+
+// now is the time the scorer takes as the present: the largest t of any
+// record, but no more than PENDING_WINDOW_S past the latest record the
+// agent stamps itself. Those arrive every 15 to 60 s while a project
+// context is live (DESIGN 3.3). A record dated further ahead, such as a
+// bridge prompt whose transcript timestamp is hours off, so stays pending
+// until the samples reach it, instead of making every real record after
+// it come too late to be output. With no record of the agent's own, now is
+// high.
+func (s State) now(r rules) int64 {
+	if s.own == 0 {
+		return s.high
+	}
+	return min(s.high, s.own+r.pendingWindow)
 }
 
 // NewState returns the state of a scorer that has seen no records and
@@ -102,8 +131,10 @@ type Derived struct {
 // it derived. Records may come in any order and may repeat: Step keeps
 // them in record order, by t, then seq, then event_id, and drops a record
 // whose event_id it already holds. It reads no clock and does no I/O;
-// "now" is the largest t it has seen. Every record must pass
-// event.Validate, as every record in the ledger does.
+// "now" is the largest t it has seen, but no more than PENDING_WINDOW_S
+// past the latest sample, focus or power record, which the agent stamps
+// itself. Every record must pass event.Validate, as every record in the
+// ledger does.
 //
 // A record whose t is before the state's FinalBefore still counts toward
 // what is pending, but what is final stays final.
@@ -111,18 +142,22 @@ func Step(s State, records []event.Event) (State, Output) {
 	if s.table == nil {
 		panic("score: Step on a State not made by NewState")
 	}
-	next := State{table: s.table, device: s.device, high: s.high, done: s.done}
+	next := State{table: s.table, device: s.device, high: s.high, own: s.own, done: s.done}
 	next.recs = merge(s.recs, records)
 	for _, e := range records {
 		if e.Data != nil {
 			next.high = max(next.high, e.T)
+			if ownRecord(e) {
+				next.own = max(next.own, e.T)
+			}
 		}
 	}
 	r := newRules(s.table)
-	all, lookups := derive(r, s.device, next.recs)
+	now := next.now(r)
+	all, lookups := derive(r, s.device, next.recs, now)
 	fb := s.done
 	if len(next.recs) > 0 {
-		to := floorSlot(next.high - r.settle)
+		to := floorSlot(now - r.settle)
 		// A browser run's credit waits for the slot after it: a lookup
 		// needs credit within LOOKUP_BRACKET_S on both sides (SM 2.5). So
 		// nothing from a run whose end bracket isn't final yet is final.
