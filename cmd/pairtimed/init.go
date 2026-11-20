@@ -84,7 +84,7 @@ func runInit(ctx context.Context, e *env, args []string) int {
 	if *out != "-" {
 		if _, err := os.Lstat(*out); err == nil {
 			return fail("%s exists, and init never replaces a pairtime.toml. Move it aside to write a new one", *out)
-		} else if !errors.Is(err, fs.ErrNotExist) {
+		} else if !errors.Is(err, os.ErrNotExist) {
 			return fail("%v", err)
 		}
 	}
