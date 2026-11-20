@@ -199,7 +199,7 @@ Exit check: `e2e-install.yml` green on three runners; SM 6.1, 6.2, 6.3, 6.4 and 
 - Depends on: PR1.
 - Touches: `pkg/params/` (new), `pkg/params/tables/0.1.0.json`.
 - Build: every parameter of SM 8.1 to 8.6 and DESIGN 6.3 with SM's v1 values, without `CHAIN_HEAD_INTERVAL_S` (replaced by `BATCH_S`, DESIGN 6.2 D8) and with `STREAK_DAY_S` renamed `BUILD_DAY_S`. SM 8.7's tier-2 starting points are not scoring parameters and belong to WP-TR3. Canonical JSON (sorted keys, no whitespace, numbers kept as their decimal text) and its SHA-256 as the `params` hash (SM 7.6). Non-integer values (`COMPOSE_CPS` 1.5, `NOREAD_FRAC` 0.25 and others) are exposed as exact rationals parsed from the decimal text, never as `float64`, so `pkg/score` stays integer-only. Every table version is embedded and can be looked up by version or by hash (DESIGN 6.6). A test helper lists every `params.<Name>` selector in a package with `go/ast`, and a test fails when `pkg/score` reads a name the table lacks (TE WP0.6).
-- CI checks: one table-test row per parameter with SM's value; the Go canonical bytes equal the output of `jq -cS . pkg/params/tables/0.1.0.json`, and `sha256sum` of that output equals the Go hash; changing any one value changes the hash.
+- CI checks: one table-test row per parameter with SM's value; the Go canonical bytes equal the output of `jq -cSj . pkg/params/tables/0.1.0.json` (`-j` drops the final newline `jq -cS` writes, which the hash doesn't cover), and `sha256sum` of that output equals the Go hash; changing any one value changes the hash.
 - Oracle: SM 8 and DESIGN 6.3 for values; `jq` and `sha256sum` as an independent canonical form and hash.
 
 ### WP-FX1. Timeline fixture format, with SM 6.2, 6.4 and 6.6
