@@ -99,8 +99,8 @@ function Invoke-Child([string[]]$Arguments, [hashtable]$Environment = @{}, [stri
 }
 
 # Runs a script file with -File and the given parameters.
-function Invoke-File([string]$Script, [string[]]$Parameters = @(), [hashtable]$Environment = @{}) {
-  Invoke-Child (@('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', $Script) + $Parameters) $Environment
+function Invoke-File([string]$Script, [string[]]$Parameters = @(), [hashtable]$Environment = @{}, [string]$Shell = 'powershell.exe') {
+  Invoke-Child (@('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', $Script) + $Parameters) $Environment $Shell
 }
 
 # Runs the README's one-liner, irm ... | iex, for the stamped script.
@@ -111,8 +111,62 @@ function Invoke-OneLiner([hashtable]$Environment, [string]$Shell = 'powershell.e
 $installed = 'pairtime pairtime\bin pairtime\bin\pairtime.exe'
 
 # The real binary's cases stop before pairtime install with -NoInstall, so
-# they don't change when it gains that command (WP-IN2). One case below
-# checks what happens without it.
+# they don't change when it gains that command (WP-IN2). The cases just
+# below run it, for real once it has the command.
+#
+# The cases that need a script trusting no release key run the repository's
+# copy, which pins none: the stamped copies pin whatever release-keys.txt
+# holds, which stops being nothing once Karim commits the release key.
+
+# A new empty folder in the scratch space, for a case's APPDATA or
+# USERPROFILE.
+function New-Dir([string]$Name) {
+  (New-Item -ItemType Directory -Path (Join-Path $scratch ($Name + '-' + [guid]::NewGuid().ToString('N')))).FullName
+}
+
+# The HKCU Run value pairtime install writes for autostart, or $null.
+function Get-RunValue {
+  $run = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Software\Microsoft\Windows\CurrentVersion\Run')
+  if ($null -eq $run) { return $null }
+  try { $run.GetValue('pairtime') } finally { $run.Close() }
+}
+
+# Waits up to Seconds for Dir to hold nothing Get-Tree counts. pairtime
+# uninstall can't delete the pairtime.exe it runs from, so a process that
+# waits for it to exit does that a moment later.
+function Wait-Empty([string]$Dir, [int]$Seconds) {
+  $deadline = (Get-Date).AddSeconds($Seconds)
+  while ((Get-Date) -lt $deadline) {
+    try { if (-not (Get-Tree $Dir)) { return } } catch { }
+    Start-Sleep -Milliseconds 250
+  }
+}
+
+# Fails if a process still runs from Dir, as an agent that pairtime
+# uninstall didn't stop would, and then stops it.
+function Test-NoAgent([string]$Dir) {
+  $left = @()
+  foreach ($i in 1..50) {
+    $left = @(Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -and $_.ExecutablePath.StartsWith("$Dir\", [StringComparison]::OrdinalIgnoreCase) })
+    if ($left.Count -eq 0) { return }
+    Start-Sleep -Milliseconds 200
+  }
+  Add-Failure "a process from $Dir still runs after pairtime uninstall: $(($left | ForEach-Object { "$($_.ProcessId) $($_.ExecutablePath)" }) -join '; ')"
+  foreach ($p in $left) { Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue }
+}
+
+# Checks that Line, a command the script printed, parses as PowerShell and
+# names Want as one string, unchanged.
+function Test-PrintedCommand([string]$What, [string]$Line, [string]$Want) {
+  $errors = $null
+  $ast = [System.Management.Automation.Language.Parser]::ParseInput($Line, [ref]$null, [ref]$errors)
+  if ($errors.Count -ne 0) {
+    Add-Failure "$What doesn't parse ($($errors[0].Message)): $Line"
+    return
+  }
+  $strings = @($ast.FindAll({ $args[0] -is [System.Management.Automation.Language.StringConstantExpressionAst] }, $true) | ForEach-Object { $_.Value })
+  if ($strings -cnotcontains $Want) { Add-Failure "$What doesn't name $Want as one string: $Line" }
+}
 
 # Runs a case and checks that it exits 0 (Want ok) or doesn't (Want
 # fails), that its output matches Pattern, that LOCALAPPDATA then holds
@@ -200,7 +254,31 @@ try {
   $realZip.Dispose()
 }
 if (@(& $realExe help) -cmatch '^  install ') {
-  Write-Output '::notice::the real pairtime has an install command now (WP-IN2), so install/e2e should run it, then pairtime uninstall, in a temporary LOCALAPPDATA and check that nothing is left (docs/PLAN.md, WP-RL2)'
+  # The real pairtime install and uninstall, through the script
+  # (docs/PLAN.md, WP-RL2): set up with -Yes in an empty LOCALAPPDATA,
+  # APPDATA and USERPROFILE, then taken out with --delete-data, they must
+  # leave all three as empty as they found them, the folders the script
+  # made included, with no Run value and no agent left.
+  New-Case
+  $roaming = New-Dir 'roaming'
+  $profileDir = New-Dir 'profile'
+  $caseEnvironment = @{ APPDATA = $roaming; USERPROFILE = $profileDir }
+  $runBefore = Get-RunValue
+  $setUp = Invoke-File $stamped (Real real real.pub @('-Yes')) $caseEnvironment
+  $exe = Join-Path $script:appData 'pairtime\bin\pairtime.exe'
+  $takenOut = @{ Code = 1; Output = "there's no $exe to run pairtime uninstall with" }
+  if (Test-Path -LiteralPath $exe) { $takenOut = Invoke-Child @('uninstall', '--yes', '--delete-data') $caseEnvironment $exe }
+  Wait-Empty $script:appData 30
+  $code = $setUp.Code
+  if ($code -eq 0) { $code = $takenOut.Code }
+  Test-Case 'with -Yes in an empty profile, the script and pairtime install set pairtime up, and pairtime uninstall --yes --delete-data leaves it empty again' `
+    ok 'Running pairtime install' '' @{ Code = $code; Output = $setUp.Output + $takenOut.Output }
+  foreach ($dir in @($roaming, $profileDir)) {
+    $left = Get-Tree $dir
+    if ($left) { Add-Failure "pairtime uninstall left [$left] in $dir" }
+  }
+  Test-NoAgent $script:appData
+  if ($null -eq $runBefore -and $null -ne (Get-RunValue)) { Add-Failure "pairtime uninstall left the Run value pairtime" }
 } else {
   New-Case
   Test-Case 'without -NoInstall, setup stops before pairtime install while the binary has none' ok 'has no install command yet' $installed `
@@ -229,18 +307,30 @@ Test-Binary real
 Stop-Process -Id $running.Id -Force
 
 New-Case
-Test-Case 'by default an unsigned release is refused, before anything is downloaded' fails 'trusts no release key' '' `
-  (Invoke-File $stamped @('-BaseUrl', "$server/real"))
+Test-Case 'by default a script that trusts no key refuses the release, before anything is downloaded' fails 'trusts no release key' '' `
+  (Invoke-File $repoScript @('-Version', $version, '-BaseUrl', "$server/real"))
 
 New-Case
-Test-Case '-AllowUnsigned installs an unsigned release, with a warning' ok 'no key this script trusts signed manifest.json' $installed `
-  (Invoke-File $stamped @('-BaseUrl', "$server/real", '-AllowUnsigned', '-NoInstall'))
+Test-Case '-AllowUnsigned has a script that trusts no key install an unsigned release, with a warning' ok 'no key this script trusts signed manifest.json' $installed `
+  (Invoke-File $repoScript @('-Version', $version, '-BaseUrl', "$server/real", '-AllowUnsigned', '-NoInstall'))
 Test-Binary real
 
 New-Case
-Test-Case 'PAIRTIME_ALLOW_UNSIGNED=1 with irm | iex installs a release no trusted key signed, with a warning' `
-  ok 'no key this script trusts signed manifest.json' $installed `
+$command = "`$env:PAIRTIME_ALLOW_UNSIGNED = '1'; irm $server/repo/install.ps1 | iex; " +
+  "if (Test-Path Env:PAIRTIME_ALLOW_UNSIGNED) { 'PAIRTIME_ALLOW_UNSIGNED is still set'; exit 9 } else { 'PAIRTIME_ALLOW_UNSIGNED is gone' }"
+Test-Case 'PAIRTIME_ALLOW_UNSIGNED has irm | iex of a script that trusts no key install an unsigned release, and is gone from the session after' `
+  ok 'no key this script trusts signed manifest\.json[\s\S]*PAIRTIME_ALLOW_UNSIGNED is gone' $installed `
+  (Invoke-Child @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', $command) @{ PAIRTIME_VERSION = $version; PAIRTIME_BASE_URL = "$server/real"; PAIRTIME_NO_INSTALL = '1' })
+
+New-Case
+Test-Case 'PAIRTIME_ALLOW_UNSIGNED does not apply once the script trusts a key: a release no trusted key signed is refused' `
+  fails "isn't signed by a key this script trusts.*Allowing unsigned installs doesn't change that" '' `
   (Invoke-OneLiner @{ PAIRTIME_BASE_URL = "$server/real"; PAIRTIME_RELEASE_KEYS = (Join-Path $keys 'other.pub'); PAIRTIME_ALLOW_UNSIGNED = '1'; PAIRTIME_NO_INSTALL = '1' })
+
+New-Case
+Test-Case '-AllowUnsigned does not apply once the script trusts a key either' `
+  fails "isn't signed by a key this script trusts.*Allowing unsigned installs doesn't change that" '' `
+  (Invoke-File $stamped (Real real other.pub @('-AllowUnsigned')))
 
 foreach ($refused in @(
     @('other.pub', 'real', "a release signed by a key it doesn't trust"),
@@ -251,6 +341,10 @@ foreach ($refused in @(
   Test-Case "$($refused[2]) is refused, and nothing is installed" fails "isn't signed by a key this script trusts" '' `
     (Invoke-File $stamped (Real $refused[1] $refused[0]))
 }
+
+New-Case
+Test-Case 'a signature whose base64 is not canonical is refused, as internal/release refuses it, and nothing is installed' `
+  fails "manifest.json isn't a pairtime update manifest in the form tools/release writes" '' (Invoke-File $stamped (Real noncanonical-signature real.pub))
 
 New-Case
 Test-Case 'one good signature is enough, after one that fails under a trusted key''s id' `
@@ -274,12 +368,22 @@ Test-Case 'a signed manifest for another release is refused' fails "manifest.jso
   (Invoke-File $stamped (Real real real.pub @('-Version', 'v0.0.0-snapshot.999999999')))
 
 New-Case
-Test-Case 'a build with an install command gets handed over to' ok 'Running pairtime install' $installed (Invoke-File $stamped (Real fake fake.pub))
-Test-Record 'install'
+Test-Case 'a build with an install command gets handed over to, told which folders the script made' ok 'Running pairtime install' $installed (Invoke-File $stamped (Real fake fake.pub))
+Test-Record "install --made $($script:appData)\pairtime --made $($script:appData)\pairtime\bin"
 
 New-Case
 Test-Case '-Yes is passed on to pairtime install as --yes' ok 'Running pairtime install' $installed (Invoke-File $stamped (Real fake fake.pub @('-Yes')))
-Test-Record 'install --yes'
+Test-Record "install --yes --made $($script:appData)\pairtime --made $($script:appData)\pairtime\bin"
+
+New-Case
+New-Item -ItemType Directory -Path (Join-Path $script:appData 'pairtime') | Out-Null
+Test-Case 'a pairtime folder that was there is not named as made' ok 'Running pairtime install' $installed (Invoke-File $stamped (Real fake fake.pub))
+Test-Record "install --made $($script:appData)\pairtime\bin"
+
+New-Case
+New-Item -ItemType Directory -Path (Join-Path $script:appData 'pairtime\bin') | Out-Null
+Test-Case 'when pairtime\bin was there, pairtime install hears of no folder the script made' ok 'Running pairtime install' $installed (Invoke-File $stamped (Real fake fake.pub))
+Test-Record 'install'
 
 New-Case
 Test-Case '-NoInstall stops once the binary is in place' ok 'To finish setting it up, run' $installed (Invoke-File $stamped (Real fake fake.pub @('-NoInstall')))
@@ -288,6 +392,20 @@ Test-Record ''
 New-Case
 Test-Case 'a failing pairtime install fails the script, and the binary stays' fails "'pairtime install' stopped with status 4" $installed `
   (Invoke-File $stamped (Real fake fake.pub) @{ PAIRTIME_FAKE_INSTALL_EXIT = '4' })
+
+New-Case
+$script:appData = (New-Item -ItemType Directory -Path (Join-Path $script:appData "D'Angelo")).FullName
+$result = Invoke-File $stamped (Real real real.pub @('-NoInstall'))
+Test-Case "the commands it prints are quoted for a LOCALAPPDATA with an apostrophe in it" ok 'To finish setting it up, run' $installed $result
+$lines = @($result.Output -split "`r?`n")
+$finish = @($lines | Where-Object { $_.StartsWith('To finish setting it up, run: ') })
+$pathCommand = @($lines | Where-Object { $_.Contains('CreateSubKey') })
+if ($finish.Count -ne 1 -or $pathCommand.Count -ne 1) {
+  Add-Failure "found $($finish.Count) commands to finish with and $($pathCommand.Count) PATH commands, not one each"
+} else {
+  Test-PrintedCommand 'the command to finish with' $finish[0].Substring('To finish setting it up, run: '.Length) (Join-Path $script:appData 'pairtime\bin\pairtime.exe')
+  Test-PrintedCommand 'the PATH command' $pathCommand[0].Trim() (Join-Path $script:appData 'pairtime\bin')
+}
 
 New-Case
 Test-Case "a base URL that isn't https or this computer is refused" fails 'must be an https URL' '' `
@@ -318,14 +436,14 @@ $vectorFile = Join-Path $scratch 'vectors.txt'
 # An empty message is written as -.
 Set-Content -LiteralPath $vectorFile -Value ($vectors | ForEach-Object { $f = $_.Split(' '); if ($f[2] -eq '') { $f[2] = '-' }; $f -join ' ' })
 
-# Runs Body in a new powershell.exe with install.ps1's functions loaded. It
-# must print ok.
-function Test-Functions([string]$Name, [string]$Body) {
+# Runs Body in a new powershell.exe, or Shell, with install.ps1's functions
+# loaded. It must print ok.
+function Test-Functions([string]$Name, [string]$Body, [string]$Shell = 'powershell.exe') {
   $file = Join-Path $scratch ('unit-' + [guid]::NewGuid().ToString('N') + '.ps1')
   $text = "`$ErrorActionPreference = 'Stop'`n`$env:PAIRTIME_INSTALL_PS1_TEST = 'functions'`n. '$repoScript'`n$Body"
   Set-Content -LiteralPath $file -Value $text
   New-Case
-  $result = Invoke-File $file @() @{ VECTORS = $vectorFile }
+  $result = Invoke-File $file @() @{ VECTORS = $vectorFile } $Shell
   if ($result.Code -eq 0 -and $result.Output -cmatch '(?m)^ok\r?$') {
     Write-Output "ok   $Name"
   } else {
@@ -360,10 +478,86 @@ $started = Get-Date
 $slow = Invoke-WithTimeout 'ping.exe' '-n 30 127.0.0.1' 2
 if (-not $slow.TimedOut -or $slow.Ok) { 'ping -n 30 finished in 2 seconds?'; exit 1 }
 if (((Get-Date) - $started).TotalSeconds -gt 15) { 'the kill took too long'; exit 1 }
+# The killed process has exited by the time Invoke-WithTimeout returns, so
+# its exe can go at once, as the install's cleanup removes the new one.
+$copy = Join-Path $env:TEMP 'ping-copy.exe'
+Copy-Item -LiteralPath (Get-Command ping.exe).Source -Destination $copy
+$slow = Invoke-WithTimeout $copy '-n 30 127.0.0.1' 2
+if (-not $slow.TimedOut) { 'the copy of ping finished in 2 seconds?'; exit 1 }
+Remove-Item -LiteralPath $copy
 $quick = Invoke-WithTimeout 'cmd.exe' '/c echo hi' 10
 if (-not $quick.Ok -or $quick.Output.Trim() -ne 'hi') { "a quick command: $($quick.Output)"; exit 1 }
 $failing = Invoke-WithTimeout 'cmd.exe' '/c exit 7' 10
 if ($failing.Ok -or $failing.Output -notmatch 'status 7') { "a failing command: $($failing.Output)"; exit 1 }
+'ok'
+'@
+
+$elevation = @'
+$type = Get-ElevationType
+"TOKEN_ELEVATION_TYPE $type"
+if ($type -lt 1 -or $type -gt 3) { 'Get-ElevationType gave no elevation type'; exit 1 }
+'ok'
+'@
+Test-Functions 'Get-ElevationType reads the token through GetTokenInformation, in Windows PowerShell 5.1' $elevation
+if (Get-Command pwsh -ErrorAction SilentlyContinue) {
+  Test-Functions 'Get-ElevationType reads the token through GetTokenInformation, in PowerShell 7' $elevation 'pwsh.exe'
+}
+
+Test-Functions 'only the elevated half of a split token is refused, as pairtime hook refuses it' @'
+foreach ($type in 0, 1, 3) { Assert-NotElevated $type }
+try {
+  Assert-NotElevated 2
+  'the elevated half went on'
+  exit 1
+} catch {
+  if ($_.Exception.Message -notmatch "don't run install\.ps1 as administrator") { "the refusal said: $($_.Exception.Message)"; exit 1 }
+}
+'ok'
+'@
+
+Test-Functions 'the PATH command adds the folder and keeps Path REG_EXPAND_SZ, its references unexpanded' @'
+$key = 'Software\pairtime-e2e-' + [guid]::NewGuid().ToString('N') + '\Environment'
+$dir = "C:\Users\D'Angelo\AppData\Local\pairtime\bin"
+$stored = '%USERPROFILE%\AppData\Local\Microsoft\WindowsApps;%PAIRTIME_E2E_UNSET%\bin;'
+try {
+  $k = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey($key)
+  $k.SetValue('Path', $stored, 'ExpandString')
+  $k.Close()
+  Invoke-Expression (Get-PathCommand $dir $key)
+  $k = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey($key)
+  $kind = $k.GetValueKind('Path')
+  $got = $k.GetValue('Path', '', 'DoNotExpandEnvironmentNames')
+  $k.Close()
+  if ($kind -ne 'ExpandString' -or $got -cne ($stored + $dir)) { "Path is $kind [$got], want ExpandString [$stored$dir]"; exit 1 }
+  # With no Path yet, the folder is all of it.
+  [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey($key, $true).DeleteValue('Path')
+  Invoke-Expression (Get-PathCommand $dir $key)
+  $k = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey($key)
+  $got = $k.GetValue('Path', '', 'DoNotExpandEnvironmentNames')
+  $k.Close()
+  if ($got -cne $dir) { "a new Path is [$got], want [$dir]"; exit 1 }
+} finally {
+  [Microsoft.Win32.Registry]::CurrentUser.DeleteSubKeyTree($key.Substring(0, $key.LastIndexOf('\')), $false)
+}
+'ok'
+'@
+
+Test-Functions 'only canonical base64 is accepted, as internal/release accepts it' @'
+$good = ConvertFrom-StrictBase64 'aGk='
+if ($null -eq $good -or [System.Text.Encoding]::ASCII.GetString($good) -cne 'hi') { 'aGk= did not decode to hi'; exit 1 }
+foreach ($bad in @('QR==', 'QQ', 'QQ===', 'aGk=aGk=', 'aG k=', "aGk=`n")) {
+  if ($null -ne (ConvertFrom-StrictBase64 $bad)) { "accepted [$bad]"; exit 1 }
+}
+'ok'
+'@
+
+Test-Functions 'a path in a printed command reads back as one string, curly quotes too' @'
+foreach ($text in @("C:\Users\D'Angelo\pairtime.exe", "it$([char]0x2019)s", "two''quotes", "$([char]0x2018)x$([char]0x201B)", '')) {
+  $errors = $null
+  $ast = [System.Management.Automation.Language.Parser]::ParseInput((ConvertTo-Quoted $text), [ref]$null, [ref]$errors)
+  $value = $ast.EndBlock.Statements[0].PipelineElements[0].Expression.Value
+  if ($errors.Count -ne 0 -or $value -cne $text) { "[$text] came back as [$value] from $(ConvertTo-Quoted $text)"; exit 1 }
+}
 'ok'
 '@
 
