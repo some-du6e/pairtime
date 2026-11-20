@@ -469,6 +469,98 @@ func TestReceipts(t *testing.T) {
 	})
 }
 
+// TestReceiptRegion checks that a receipt marks every frame of batches.seg
+// before it as flushed. A frame there that isn't whole is damage, which
+// Open refuses rather than cut the receipts after it; a torn frame after
+// the last receipt is still a crash's torn tail.
+func TestReceiptRegion(t *testing.T) {
+	seed := make([]byte, ed25519.SeedSize)
+	copy(seed, "pairtime ledger writer test server")
+	server := ed25519.NewKeyFromSeed(seed)
+	// build gives batches.seg the frames chain, row 1, row 2, receipt 1,
+	// receipt 2, row 3.
+	build := func(t *testing.T) (dir string, frames []frame) {
+		t.Helper()
+		dir = t.TempDir()
+		w := open(t, dir, newClock(testT))
+		rng := rand.New(rand.NewPCG(25, 26))
+		var rows []Batch
+		receipt := func(b Batch) {
+			rc, err := ledger.SignReceipt(server, w.DeviceID(), b.Row.B, b.Row.Head, uint64(testT)+250)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := w.StoreReceipt(b.Row.B, rc); err != nil {
+				t.Fatal(err)
+			}
+		}
+		for i := range 3 {
+			if i == 2 {
+				receipt(rows[0])
+				receipt(rows[1])
+			}
+			if _, _, err := write(w, rng, "os.presence", testT); err != nil {
+				t.Fatal(err)
+			}
+			b, _, err := w.Seal()
+			if err != nil {
+				t.Fatal(err)
+			}
+			rows = append(rows, b)
+		}
+		if err := w.Close(); err != nil {
+			t.Fatal(err)
+		}
+		frames = framesOf(t, filepath.Join(dir, batchesName))
+		if got := len(frames); got != 6 || frames[3].kind != kindReceipt || frames[5].kind != kindBatch {
+			t.Fatalf("batches.seg has %d frames, want the six this test builds", got)
+		}
+		return dir, frames
+	}
+	cases := []struct {
+		name string
+		edit func(t *testing.T, name string, frames []frame)
+		// want is Open's error, or nil when it recovers with both
+		// receipts.
+		want error
+	}{
+		{"a changed byte in a row before a receipt is damage, not a torn tail",
+			func(t *testing.T, name string, frames []frame) { flipByte(t, name, frames[1].off+frameHeadSize+1) }, ErrDamaged},
+		{"a changed byte in a receipt before another receipt is damage",
+			func(t *testing.T, name string, frames []frame) { flipByte(t, name, frames[3].off+frameHeadSize+1) }, ErrDamaged},
+		{"a torn row after the last receipt is cut off and rebuilt, and the receipts stay",
+			func(t *testing.T, name string, frames []frame) { truncate(t, name, frames[5].end-3) }, nil},
+		{"zeros after the last receipt are a torn tail too",
+			func(t *testing.T, name string, frames []frame) { appendBytes(t, name, make([]byte, 64)) }, nil},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			dir, frames := build(t)
+			c.edit(t, filepath.Join(dir, batchesName), frames)
+			w, err := openErr(dir, newClock(testT+60_000))
+			if err == nil {
+				err = w.Close()
+			}
+			if !errors.Is(err, c.want) {
+				t.Fatalf("Open: %v, want %v", err, c.want)
+			}
+			if c.want != nil {
+				return
+			}
+			got := verify(t, dir, keysOf(t, testKDev))
+			var with []uint64
+			for _, b := range got {
+				if b.Row.Receipt != nil {
+					with = append(with, b.Row.B)
+				}
+			}
+			if len(got) != 3 || !slices.Equal(with, []uint64{1, 2}) {
+				t.Errorf("after Open, %d batches, with receipts for %v; want 3, with receipts for batches 1 and 2", len(got), with)
+			}
+		})
+	}
+}
+
 // TestFiles checks the layout of the files: the chain frame, a record
 // frame holding the header and body as pkg/ledger built them, and the row.
 func TestFiles(t *testing.T) {

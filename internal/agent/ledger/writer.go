@@ -637,7 +637,10 @@ func (w *Writer) writeRow(rp rowPayload) error {
 // StoreReceipt keeps the server's receipt for batch b in batches.seg, with
 // its received_at (ledger-v1 7; DESIGN 3.5). The uploader checks it under
 // the server key before it calls StoreReceipt (WP-AG5). A receipt can't be
-// made again from what the device holds, so it is flushed at once.
+// made again from what the device holds, so it is flushed at once. So is
+// everything before it, first: a frame before a receipt that isn't whole
+// is then damage, which Open refuses, and never a crash's torn tail, which
+// Open would cut off with the receipts after it (readBatchesFile).
 func (w *Writer) StoreReceipt(b uint64, r ledger.Receipt) error {
 	w.sealMu.Lock()
 	defer w.sealMu.Unlock()
@@ -652,6 +655,10 @@ func (w *Writer) StoreReceipt(b uint64, r ledger.Receipt) error {
 	}
 	payload, err := json.Marshal(receiptPayload{B: b, ReceivedAt: r.ReceivedAt, Signature: hex.EncodeToString(r.Signature[:])})
 	if err != nil {
+		return err
+	}
+	if err := w.batches.sync(); err != nil {
+		w.fail(err)
 		return err
 	}
 	if err := w.batches.write(appendFrame(nil, kindReceipt, payload)); err != nil {

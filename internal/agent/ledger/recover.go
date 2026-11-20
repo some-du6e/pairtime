@@ -3,10 +3,12 @@
 package ledger
 
 import (
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/crc32"
 	"io"
 	"io/fs"
 	"os"
@@ -64,6 +66,15 @@ func readBatchesFile(name string) (*batchesFile, error) {
 			if i == 0 {
 				return nil, damaged("%s doesn't start with the chain it belongs to: %v", batchesName, err)
 			}
+			// StoreReceipt flushes the file before each receipt, so only
+			// what follows the last receipt can be a torn tail.
+			later, err := receiptAfter(f, torn.off+1)
+			if err != nil {
+				return nil, err
+			}
+			if later {
+				return nil, damaged("%s: %v, before a receipt that was flushed after it", batchesName, torn)
+			}
 			bf.good, bf.torn = torn.off, true
 			break
 		}
@@ -112,6 +123,44 @@ func readBatchesFile(name string) (*batchesFile, error) {
 		}
 	}
 	return bf, nil
+}
+
+// receiptAfter reports whether f holds a whole receipt frame anywhere from
+// off on, at any offset, since frames after one that isn't whole can't be
+// found by reading on. A receipt there was flushed after every byte before
+// it (StoreReceipt). Random bytes pass for one only if they have the
+// receipt's kind byte, a length that fits, a matching CRC-32C and a
+// receipt's JSON, which a torn tail's zeros or leftovers don't.
+func receiptAfter(f *os.File, off int64) (bool, error) {
+	fi, err := f.Stat()
+	if err != nil {
+		return false, err
+	}
+	if fi.Size() <= off {
+		return false, nil
+	}
+	buf := make([]byte, fi.Size()-off)
+	if _, err := f.ReadAt(buf, off); err != nil && !errors.Is(err, io.EOF) {
+		return false, err
+	}
+	for i := 0; i+frameHeadSize+frameTailSize <= len(buf); i++ {
+		if buf[i] != kindReceipt {
+			continue
+		}
+		size := binary.BigEndian.Uint32(buf[i+1:])
+		if size > maxPayload || int64(len(buf)-i) < frameSize(int(size)) {
+			continue
+		}
+		end := i + frameHeadSize + int(size)
+		if crc32.Checksum(buf[i:end], castagnoli) != binary.BigEndian.Uint32(buf[end:]) {
+			continue
+		}
+		var r receiptPayload
+		if json.Unmarshal(buf[i+frameHeadSize:end], &r) == nil && r.B > 0 && r.Signature != "" {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // isOpaqueKey reports whether s is a pkg/event opaque key: 1 to 128
