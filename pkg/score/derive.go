@@ -10,13 +10,15 @@ import (
 	"github.com/some-du6e/pairtime/pkg/event"
 )
 
-// deriver derives everything WP-SC1 builds from one sorted list of
-// records, in passes: focus and presence, sessions and turns, anchors,
-// `pairtime track` calls, then the return rule, which needs the anchors.
+// deriver derives everything from one sorted list of records, in passes:
+// focus and presence, sessions and turns, anchors, `pairtime track` calls,
+// the return rule, which needs the anchors, then the reading buckets and
+// the per-second credit, which need all of them.
 type deriver struct {
 	r        rules
 	dev      Device
 	recs     []event.Event
+	byID     map[string]int
 	focus    *focusLine
 	pres     *presence
 	sessions map[string]*session
@@ -25,12 +27,19 @@ type deriver struct {
 	tracks   []TrackCall
 	flags    []Flag
 	returns  []Return
+	buckets  map[string]*bucket
+	fills    []Fill
+	credits  []Credit
+	// lookups are the browser and chat-app runs, whose credit waits for
+	// their end (Step).
+	lookups []span
 }
 
-// derive runs every pass over recs, which must be in record order.
-func derive(r rules, dev Device, recs []event.Event) Derived {
+// derive runs every pass over recs, which must be in record order. Besides
+// what it derives, it returns the spans of the browser and chat-app runs.
+func derive(r rules, dev Device, recs []event.Event) (Derived, []span) {
 	if len(recs) == 0 {
-		return Derived{}
+		return Derived{}, nil
 	}
 	d := &deriver{r: r, dev: dev, recs: recs}
 	d.focus = buildFocus(recs)
@@ -42,15 +51,18 @@ func derive(r rules, dev Device, recs []event.Event) Derived {
 	d.trackCalls()
 	slices.SortFunc(d.anchors, anchorCmp)
 	d.markReturns()
+	d.buildBuckets()
+	d.credit()
 
-	out := Derived{Slots: slices.Clone(d.pres.slots), Anchors: d.anchors, Returns: d.returns, Tracks: d.tracks}
+	out := Derived{Slots: slices.Clone(d.pres.slots), Anchors: d.anchors, Returns: d.returns, Tracks: d.tracks,
+		Credits: d.credits, Fills: d.fills}
 	for _, tb := range d.turns {
 		out.Turns = append(out.Turns, tb.turn)
 	}
 	slices.SortFunc(out.Tracks, trackCmp)
 	out.Flags = d.flags
 	slices.SortFunc(out.Flags, flagCmp)
-	return out
+	return out, d.lookups
 }
 
 // Flag is a review flag a record raised (SM 8.7, DESIGN 5.4). Flags change

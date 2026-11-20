@@ -96,6 +96,11 @@ func (d *deriver) markReturns() {
 				s.Then = event.PresentReturned
 			}
 		}
+		// The silence runs into the slot after it until the input a sample
+		// there dates (presence.markStarts).
+		if s := &p.slots[run.j]; s.Present == event.PresentNo && s.Then == event.PresentYes {
+			s.Present = event.PresentReturned
+		}
 	}
 }
 

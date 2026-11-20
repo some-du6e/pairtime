@@ -82,10 +82,11 @@ type Output struct {
 }
 
 // Derived holds the records the scorer derives from events (SM 1.3), as
-// far as WP-SC1 builds them: presence slots, turns, anchors, the silent
-// runs the return rule credits, the fate of each `pairtime track` call,
-// and review flags. Each list is in time order, ties broken by ids, so
-// equal inputs give equal lists.
+// far as WP-SC1 and WP-SC2 build them: presence slots, turns, anchors, the
+// silent runs the return rule credits, the fate of each `pairtime track`
+// call, review flags, what each turn put in its reading bucket, and every
+// slot's credit. Each list is in time order, ties broken by ids, so equal
+// inputs give equal lists.
 type Derived struct {
 	Slots   []Slot      `json:"slots"`
 	Turns   []Turn      `json:"turns"`
@@ -93,6 +94,8 @@ type Derived struct {
 	Returns []Return    `json:"returns"`
 	Tracks  []TrackCall `json:"tracks"`
 	Flags   []Flag      `json:"flags"`
+	Fills   []Fill      `json:"fills"`
+	Credits []Credit    `json:"credits"`
 }
 
 // Step scores records on top of state s and returns the new state and what
@@ -116,10 +119,19 @@ func Step(s State, records []event.Event) (State, Output) {
 		}
 	}
 	r := newRules(s.table)
-	all := derive(r, s.device, next.recs)
+	all, lookups := derive(r, s.device, next.recs)
 	fb := s.done
 	if len(next.recs) > 0 {
-		fb = max(fb, floorSlot(next.high-r.settle))
+		to := floorSlot(next.high - r.settle)
+		// A browser run's credit waits for the slot after it: a lookup
+		// needs credit within LOOKUP_BRACKET_S on both sides (SM 2.5). So
+		// nothing from a run whose end bracket isn't final yet is final.
+		for _, sp := range lookups {
+			if sp.from < to && sp.to+r.lookupBracket > to {
+				to = min(to, sp.from)
+			}
+		}
+		fb = max(fb, to)
 	}
 	next.done = fb
 	out := Output{FinalBefore: fb}
@@ -190,6 +202,8 @@ func (d Derived) split(from, to int64) (final, pending Derived) {
 	final.Returns, pending.Returns = splitBy(d.Returns, from, to, func(r Return) int64 { return r.RunStart })
 	final.Tracks, pending.Tracks = splitBy(d.Tracks, from, to, func(c TrackCall) int64 { return c.T })
 	final.Flags, pending.Flags = splitBy(d.Flags, from, to, func(f Flag) int64 { return f.T })
+	final.Fills, pending.Fills = splitBy(d.Fills, from, to, func(f Fill) int64 { return f.decided })
+	final.Credits, pending.Credits = splitBy(d.Credits, from, to, func(c Credit) int64 { return c.Slot })
 	return final, pending
 }
 
@@ -216,10 +230,14 @@ func (d *Derived) Append(o Derived) {
 	d.Returns = append(d.Returns, o.Returns...)
 	d.Tracks = append(d.Tracks, o.Tracks...)
 	d.Flags = append(d.Flags, o.Flags...)
+	d.Fills = append(d.Fills, o.Fills...)
+	d.Credits = append(d.Credits, o.Credits...)
 	slices.SortStableFunc(d.Slots, func(a, b Slot) int { return cmp.Compare(a.Start, b.Start) })
 	slices.SortStableFunc(d.Turns, turnCmp)
 	slices.SortStableFunc(d.Anchors, anchorCmp)
 	slices.SortStableFunc(d.Returns, func(a, b Return) int { return cmp.Compare(a.RunStart, b.RunStart) })
 	slices.SortStableFunc(d.Tracks, trackCmp)
 	slices.SortStableFunc(d.Flags, flagCmp)
+	slices.SortStableFunc(d.Fills, fillCmp)
+	slices.SortStableFunc(d.Credits, func(a, b Credit) int { return cmp.Compare(a.Slot, b.Slot) })
 }

@@ -22,8 +22,15 @@ type Turn struct {
 	ProjectKey string        `json:"project_key,omitempty"`
 	TSubmit    int64         `json:"t_submit"`
 	// TStop is 0 while the turn is running.
-	TStop  int64        `json:"t_stop,omitempty"`
-	Origin event.Origin `json:"origin"`
+	TStop int64 `json:"t_stop,omitempty"`
+	// RunUntil is when the agent stopped working on the turn: at TStop, or
+	// for a turn with no agent.stop at its last agent record, and in either
+	// case no later than the session's next prompt. A turn with no agent
+	// record after its prompt never runs, and its RunUntil is TSubmit. This
+	// is the rule docs/errata/2026-11-19-turns-without-a-stop.md proposes;
+	// it decides SUP against READ (SM 2.4) and agent_running_s (SM 5.1).
+	RunUntil int64        `json:"run_until"`
+	Origin   event.Origin `json:"origin"`
 	// PromptClass is set for turns a person started.
 	PromptClass event.PromptClass `json:"prompt_class,omitempty"`
 	// Prompt is the event_id of the prompt.submit that started the turn,
@@ -152,8 +159,14 @@ type turnBuild struct {
 	stopHook  bool
 	words     int
 	diffLines int
+	// lastAgent is the time of the turn's last agent.output, agent.tool or
+	// agent.stop, or 0.
+	lastAgent int64
 	turn      Turn
 }
+
+// running reports whether the agent was working on the turn at t.
+func (tb *turnBuild) running(t int64) bool { return tb.turn.TSubmit <= t && t < tb.turn.RunUntil }
 
 // viaRank orders the ways a record can arrive, most trusted first. When
 // several records saw the same act, the first in this order is the one the
@@ -338,15 +351,16 @@ func (d *deriver) buildTurns() {
 			}
 			s.lastStop = max(s.lastStop, e.T)
 		}
+		tb.lastAgent = max(tb.lastAgent, e.T)
 	}
 	for _, s := range d.sessions {
 		slices.SortStableFunc(s.turns, func(a, b *turnBuild) int { return cmp.Compare(a.tSubmit, b.tSubmit) })
 	}
-	// Edit tools carry no turn key; their lines go to the turn running in
-	// their session at the time.
+	// Tools carry no turn key; they go to the turn running in their session
+	// at the time, and an edit tool's lines with them.
 	for _, e := range d.recs {
 		p, ok := e.Data.(*event.AgentTool)
-		if !ok || (p.ToolClass != event.ToolEdit && p.ToolClass != event.ToolWrite) {
+		if !ok {
 			continue
 		}
 		s := d.sessions[e.SessionKey]
@@ -354,16 +368,42 @@ func (d *deriver) buildTurns() {
 			continue
 		}
 		if tb := s.runningAt(e.T); tb != nil {
-			tb.diffLines += p.LinesAdded + p.LinesRemoved
+			if isEdit(p) {
+				tb.diffLines += p.LinesAdded + p.LinesRemoved
+			}
+			tb.lastAgent = max(tb.lastAgent, e.T)
 		}
 	}
 	for _, s := range d.sessions {
-		for _, tb := range s.turns {
+		for k, tb := range s.turns {
 			d.finishTurn(tb)
+			tb.turn.RunUntil = tb.runUntil(s.turns[k+1:])
 			d.turns = append(d.turns, tb)
 		}
 	}
 	slices.SortFunc(d.turns, func(a, b *turnBuild) int { return turnCmp(a.turn, b.turn) })
+}
+
+// isEdit reports whether a tool call changed files, so that its lines are
+// the turn's diff (SM 2.4).
+func isEdit(p *event.AgentTool) bool {
+	return p.ToolClass == event.ToolEdit || p.ToolClass == event.ToolWrite
+}
+
+// runUntil is the end of the turn's run (Turn.RunUntil). later are the
+// session's turns after it, in submit order.
+func (tb *turnBuild) runUntil(later []*turnBuild) int64 {
+	end := tb.tStop
+	if end == 0 {
+		end = tb.lastAgent
+	}
+	for _, n := range later {
+		if n.primary >= 0 && n.tSubmit > tb.tSubmit {
+			end = min(end, n.tSubmit)
+			break
+		}
+	}
+	return max(end, tb.tSubmit)
 }
 
 // runningAt returns the turn of s that was running at t, or nil.
