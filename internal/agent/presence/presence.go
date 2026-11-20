@@ -70,9 +70,12 @@ type OS struct {
 	// at Start, and follows lock and unlock events from then on. Nil means
 	// unlocked.
 	Locked func() (bool, error)
-	// WatchPower calls fn on every suspend, resume, lock and unlock until
-	// the returned stop is called. Nil means no power events.
-	WatchPower func(fn func(op event.PowerOp)) (stop func(), err error)
+	// WatchSuspend calls fn on every suspend and resume until the returned
+	// stop is called. Nil means none are seen.
+	WatchSuspend func(fn func(op event.PowerOp)) (stop func(), err error)
+	// WatchLock calls fn on every lock and unlock of the session until the
+	// returned stop is called. Nil means none are seen.
+	WatchLock func(fn func(op event.PowerOp)) (stop func(), err error)
 }
 
 // ThisOS returns the sources of the OS the agent runs on.
@@ -115,18 +118,18 @@ type Options struct {
 type Sampler struct {
 	opts Options
 
-	mu        sync.Mutex
-	g         gate
-	locked    bool
-	started   bool
-	stopped   bool
-	stopPower func()
-	timer     *sched.Job    // nil until a context first goes live
-	due       time.Time     // when timer fires; zero while it is stopped
-	every     time.Duration // the cadence timer was armed for
-	last      time.Time     // when the latest sample was taken
-	samples   uint64
-	problems  map[string]string
+	mu       sync.Mutex
+	g        gate
+	locked   bool
+	started  bool
+	stopped  bool
+	stops    []func()      // stop the power watches
+	timer    *sched.Job    // nil until a context first goes live
+	due      time.Time     // when timer fires; zero while it is stopped
+	every    time.Duration // the cadence timer was armed for
+	last     time.Time     // when the latest sample was taken
+	samples  uint64
+	problems map[string]string
 }
 
 // New returns a sampler that does nothing until Start.
@@ -137,8 +140,8 @@ func New(opts Options) *Sampler {
 	return &Sampler{opts: opts, problems: make(map[string]string)}
 }
 
-// Start reads the session's lock state and starts watching power events.
-// A source that fails is reported through Options.Problem, and the sampler
+// Start reads the session's lock state and starts the power watches. A
+// source that fails is reported through Options.Problem, and the sampler
 // carries on without it. With no idle source, Start does nothing.
 func (s *Sampler) Start() {
 	if s.opts.OS.Idle == nil {
@@ -156,33 +159,39 @@ func (s *Sampler) Start() {
 	s.started = true
 	s.locked = locked
 	if lockErr != nil {
-		s.setProblem("lock", fmt.Sprintf("couldn't read whether the session is locked, so presence assumes it isn't until the next lock: %v", lockErr))
+		s.setProblem("lock-state", fmt.Sprintf("couldn't read whether the session is locked, so presence takes it as unlocked until the next lock: %v", lockErr))
 	}
 	s.mu.Unlock()
 
-	if s.opts.OS.WatchPower == nil {
+	s.watch("suspend", "suspend and resume go unrecorded", s.opts.OS.WatchSuspend)
+	s.watch("lock", "lock and unlock go unrecorded", s.opts.OS.WatchLock)
+}
+
+// watch starts one power watch, or reports why it couldn't.
+func (s *Sampler) watch(source, loss string, start func(func(event.PowerOp)) (func(), error)) {
+	if start == nil {
 		return
 	}
-	// Not under s.mu: a watcher may deliver an event before it returns.
-	stop, err := s.opts.OS.WatchPower(s.Power)
+	// Not under s.mu: a watch may deliver an event before it returns.
+	stop, err := start(s.Power)
 	s.mu.Lock()
 	if err != nil {
-		s.setProblem("power", fmt.Sprintf("suspend, resume, lock and unlock go unrecorded: %v", err))
+		s.setProblem(source, fmt.Sprintf("%s: %v", loss, err))
 		s.mu.Unlock()
 		return
 	}
 	if s.stopped {
-		// Stop ran while the watcher started. stop may wait for an event
+		// Stop ran while the watch started. stop may wait for an event
 		// that is waiting for s.mu, so it runs unlocked.
 		s.mu.Unlock()
 		stop()
 		return
 	}
-	s.stopPower = stop
+	s.stops = append(s.stops, stop)
 	s.mu.Unlock()
 }
 
-// Stop stops the timer and the power watch. The sampler records nothing
+// Stop stops the timer and the power watches. The sampler records nothing
 // after it returns.
 func (s *Sampler) Stop() {
 	s.mu.Lock()
@@ -191,10 +200,10 @@ func (s *Sampler) Stop() {
 		s.timer.Stop()
 	}
 	s.due, s.every = time.Time{}, 0
-	stop := s.stopPower
-	s.stopPower = nil
+	stops := s.stops
+	s.stops = nil
 	s.mu.Unlock()
-	if stop != nil {
+	for _, stop := range stops {
 		stop()
 	}
 }
