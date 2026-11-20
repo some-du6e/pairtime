@@ -720,6 +720,41 @@ def s_62_cc3(out):
     sc.build(out)
 
 
+def s_62_cc3_plugin(out):
+    sc = Scenario("6.2-cc3-plugin-claim", "Copied lines claimed by a plugin-posted heartbeat",
+                  "As 6.2-cc3-copied-lines, and before committing she runs a script that drops one line into "
+                  "pairtime's plugin inbox: an editor heartbeat for remind-bot claiming the copied files as a "
+                  "300-line paste. Any process on the machine can do that (DESIGN 5.2), so the claim explains "
+                  "none of the commit's lines.",
+                  base=S62, projects=[REMIND], window=W62)
+    dev = s62(sc)
+    c = dev.one("git.change")
+    c["data"]["files_changed"] = 7
+    c["data"]["insertions"] = 328
+    sc.edit("The commit's --shortstat is 7 files, 328 insertions and 13 deletions, as in 6.2-cc3-copied-lines.")
+    fix = dev.one("editor.activity", 1795524220000)
+    t = 1795524250000  # 07:44:10, 20 s before the commit
+    dev.insert(dev.like(fix, t, "editor.activity",
+                        {"editor": "cursor", "act": "edit", "file_hash": tl.key("f", "6.2 the copied files"),
+                         "lines_changed": 300, "edit_source": "paste"}, via="plugin"))
+    sc.edit("An editor.activity at 07:44:10 via plugin: an edit of remind-bot with edit_source paste and "
+            "lines_changed 300. It arrives over the inbox, so the agent takes no presence sample at it.")
+    dev.finish()
+    sc.slots = {dev.id: {W62[0] + i * ck.SLOT_MS: cr for i, cr in enumerate(SLOTS62)}}
+    sc.commits = s62_commit(dev, batch_received(sc, dev))
+    sc.fails = ["CC3"]
+    s62_state(sc, cc3=False)
+    sc.state("CC3", "fail", commits=1, flagged=1)
+    sc.notes.append("CC3 counts the lines of records from the vias D19 trusts, hook, log, otel, editor and "
+                    "verified bridge records. The plugin's 300 lines are listed as ignored_lines, so 300 of the "
+                    "commit's 341 lines stay unexplained and CC3 raises unexplained_lines. Counted, the claim would "
+                    "explain all of them.")
+    sc.notes.append("A paste isn't an anchor's kind of edit (SM 2.3), so CC10 doesn't count the record, and it "
+                    "credits nothing: it opens no window, the slot it falls in already resolves to remind-bot, and "
+                    "plugin records never count toward logged_s (D19). The credited slots are 6.2's.")
+    sc.build(out)
+
+
 def s_62_cc4_late(out):
     sc = Scenario("6.2-cc4-late", "A commit the server first saw 18 minutes after observed_at",
                   "pairtimed first heard of the commit at 08:02:30.6, from the laptop's commit record, 18 minutes "
@@ -969,7 +1004,7 @@ def s_63_cc9_orphan(out):
 
 
 SCENARIOS = [s_42_clean, s_42_cc1, s_42_cc2, s_42_cc5, s_42_cc7, s_42_cc7_batch, s_42_cc8_false, s_42_cc8_key, s_42_cc8_limit,
-             s_42_cc9, s_42_cc11, s_62_clean, s_62_cc3, s_62_cc4_late, s_62_cc4_diffstat, s_63_clean, s_63_cc4_pushed,
+             s_42_cc9, s_42_cc11, s_62_clean, s_62_cc3, s_62_cc3_plugin, s_62_cc4_late, s_62_cc4_diffstat, s_63_clean, s_63_cc4_pushed,
              s_63_cc6, s_63_cc9, s_63_cc9_orphan, s_63_cc10]
 
 

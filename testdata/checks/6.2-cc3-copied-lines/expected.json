@@ -54,6 +54,7 @@
           "t": 1795524270000,
           "changed_lines": 341,
           "recorded_lines": 41,
+          "ignored_lines": 0,
           "unexplained_lines": 300,
           "flagged": true
         }

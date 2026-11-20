@@ -43,6 +43,11 @@ KEYS_PRE_MS = 10_000
 CC1_SKEW_MS = 5_000
 # DESIGN 7.3 CC3: more than half of a commit's lines, and more than 200.
 CC3_LINES = 200
+# DESIGN 6.2 D19: the vias whose records count toward logged_s, bridge
+# meaning a heartbeat that passed the peer-process check. track, plugin,
+# bridge_unverified and editor_unverified records are claims any process on
+# the machine can make (DESIGN 5.2).
+TRUSTED_VIAS = {"hook", "log", "otel", "editor", "bridge"}
 # DESIGN 7.3 CC4: server_first_seen_at before observed_at plus 15 minutes;
 # on App-installed repos, push time not earlier than observed_at minus 60 s.
 CC4_SEEN_MS = 900_000
@@ -725,7 +730,9 @@ def cc2(events, sub, keys):
 def cc3(events, sub):
     """Edits against git: a commit is flagged unexplained_lines when more
     than half of its --shortstat lines, and more than 200, have no
-    recorded edit since the commit before it in its project."""
+    recorded edit since the commit before it in its project. Only records
+    from the vias D19 trusts record an edit; the lines other records claim
+    are listed as ignored_lines and explain nothing."""
     commits = [e for e in events if e["kind"] == "git.change" and e["data"]["op"] == "commit"
                and e.get("project_key") in sub["projects"]]
     counts = {"commits": 0, "flagged": 0}
@@ -736,20 +743,25 @@ def cc3(events, sub):
         counts["commits"] += 1
         earlier = [x["t"] for x in commits if x["t"] < c["t"] and x["project_key"] == c["project_key"]]
         since = max(earlier) if earlier else None
-        recorded = 0
+        recorded = ignored = 0
         for e in events:
             if e["t"] > c["t"] or since is not None and e["t"] <= since or e.get("project_key") != c["project_key"]:
                 continue
             d = e["data"]
+            lines = 0
             if e["kind"] == "agent.tool" and d["tool_class"] in ("edit", "write"):
-                recorded += d["lines_added"] + d["lines_removed"]
+                lines = d["lines_added"] + d["lines_removed"]
             elif e["kind"] == "editor.activity" and d["edit_source"] != "agent":
-                recorded += d["lines_changed"]
+                lines = d["lines_changed"]
+            if e["via"] in TRUSTED_VIAS:
+                recorded += lines
+            else:
+                ignored += lines
         changed = c["data"]["insertions"] + c["data"]["deletions"]
         unexplained = max(0, changed - recorded)
         flagged = 2 * unexplained > changed and unexplained > CC3_LINES
         item = {"sha": c["data"]["sha"], "t": c["t"], "changed_lines": changed, "recorded_lines": recorded,
-                "unexplained_lines": unexplained, "flagged": flagged}
+                "ignored_lines": ignored, "unexplained_lines": unexplained, "flagged": flagged}
         items.append(item)
         counts["flagged"] += flagged
     if not counts["commits"]:

@@ -12,7 +12,7 @@ Each failing scenario fails one check. Every other check passes on the same data
 |---|---|---|---|
 | CC1 hook vs log | `4.2-clean`, the `6.3-*` scenarios | `4.2-cc1-no-transcript` | `6.2-clean`: Cursor has no v1 log reader |
 | CC2 prompt vs OS | `4.2-clean`, `6.2-clean`, `6.3-clean` | `4.2-cc2-send-keys` | |
-| CC3 edits vs git | `6.2-clean`, `6.3-clean` | `6.2-cc3-copied-lines` | the `4.2-*` scenarios: no commit |
+| CC3 edits vs git | `6.2-clean`, `6.3-clean` | `6.2-cc3-copied-lines`, `6.2-cc3-plugin-claim` | the `4.2-*` scenarios: no commit |
 | CC4 commit clocks | `6.2-clean`, `6.3-clean` | `6.2-cc4-late`, `6.2-cc4-diffstat`, `6.3-cc4-pushed-earlier` | the `4.2-*` scenarios: no commit |
 | CC5 one attention stream | `4.2-clean`, `6.2-clean`, `6.3-clean` | `4.2-cc5-second-device` | `4.2-cc2-send-keys`: nothing credited |
 | CC6 live vs re-scored | every scenario but one | `6.3-cc6-moved-minute` | |
@@ -41,6 +41,7 @@ Each failing scenario fails one check. Every other check passes on the same data
 | `4.2-cc11-pasted` | 4.2-alternation | B2 was pasted with Cmd-V and the paste wasn't marked: three key-downs for 60 typed characters |
 | `6.2-clean` | 6.2 | Nothing the checks object to: the base with its commit's server clocks and forge lookup |
 | `6.2-cc3-copied-lines` | 6.2 | The commit adds 299 lines copied in outside anything pairtime watches |
+| `6.2-cc3-plugin-claim` | 6.2 | As `6.2-cc3-copied-lines`, plus a heartbeat posted through the plugin inbox that claims the copied lines as a 300-line paste |
 | `6.2-cc4-late` | 6.2 | pairtimed first sees the commit 18 minutes after its `observed_at` |
 | `6.2-cc4-diffstat` | 6.2 | The forge's diffstat for the commit isn't the one the laptop reported |
 | `6.3-clean` | [6.3](../timelines/6.3/) | Nothing the checks object to: the base with the log readers' copies of A's and B's prompts and E's commit clocks |
@@ -117,7 +118,7 @@ CC5 and CC6 read the minute buckets the server received live, which a scenario d
 
 - **CC1.** For each session of `P` whose harness has a v1 log reader (DESIGN 5.1: Claude Code, Codex, Copilot, Gemini CLI, Devin and Cline, not Cursor), each hook `prompt.submit` in `W` needs a `via` `log` `prompt.submit` with the same session and `turn_key`, at most 5 s from it and with the same `len_chars`. The matched pairs keep their order, and every log entry has its hook record. A hook prompt of a session with no reader is counted as not computable.
 - **CC2.** The prompts of `P` in `W` that SM 2.2 rules 1 to 5 leave unlabeled, one per turn, the hook's record where there is one. Each needs input in the 10 s before submit, read from the sample taken at the hook (`idle_keys_s` where the machine has `input_keys`, else `idle_any_s`, at most 10 s), and focus at submit on a window whose `hosted_sessions` holds the session, or on the editor for an IDE session.
-- **CC3.** For each commit of `P` in `W`, the changed lines are its insertions plus deletions. The recorded lines are the lines added and removed by `agent.tool` edits and writes, plus `lines_changed` of every `editor.activity` except `edit_source` `agent`, in the commit's project since the commit before it there. A commit is flagged `unexplained_lines` when its unexplained lines, changed minus recorded, are more than half its lines and more than 200.
+- **CC3.** For each commit of `P` in `W`, the changed lines are its insertions plus deletions. The recorded lines are the lines added and removed by `agent.tool` edits and writes, plus `lines_changed` of every `editor.activity` except `edit_source` `agent`, in the commit's project since the commit before it there, from records whose `via` DESIGN 6.2 D19 trusts: `hook`, `log`, `otel`, `editor`, and `bridge`, which is a heartbeat that passed the peer-process check. Records via `plugin`, `track`, `bridge_unverified` or `editor_unverified` are claims any process on the machine can make (DESIGN 5.2), so their lines explain nothing; each item lists them as `ignored_lines`. A commit is flagged `unexplained_lines` when its unexplained lines, changed minus recorded, are more than half its lines and more than 200.
 - **CC4.** For each commit, `observed_at` < `server_first_seen_at` < `observed_at` + 15 minutes. On an App-installed repo, `push_time` ≥ `observed_at` − 60 s. The forge found the SHA with the record's files, insertions and deletions.
 - **CC5.** Every device's live buckets in `W`, in every project. A slot is credited twice when two devices, or two projects of one device, credit it. `merge_dropped_s` is what SM 3.4's merge drops, which is WP-SV7's job; CC5 changes no credit.
 - **CC6.** Each device's live buckets against its re-score, minute by minute and slot by slot, in the minutes of W that CC7 doesn't hold: a held minute's records didn't verify, so there is nothing to reproduce it from. A minute that differs is held (DESIGN 6.2 D7).
