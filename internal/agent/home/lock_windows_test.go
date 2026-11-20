@@ -19,8 +19,9 @@ import (
 
 // TestLockSpellings checks that the lock belongs to the data directory, not
 // to the path that names it: while one Acquire holds it, an Acquire that
-// names the same directory another way fails. A mutex named after the path
-// let each spelling run an agent of its own (#46).
+// names the same directory another way fails. The named mutex alone,
+// which is named after the path, let each spelling run an agent of its own
+// (#46).
 func TestLockSpellings(t *testing.T) {
 	tests := []struct {
 		name string
@@ -109,11 +110,11 @@ func junction(t *testing.T, dir string) (string, string) {
 }
 
 // TestLockSessions checks that the lock keeps out the same user's agent in
-// another Windows session. A Local\ mutex exists in one session's
-// namespace only, so an agent in the desktop session didn't see one that
-// Claude Code started over OpenSSH, or that a scheduled task set to run
-// whether the user is logged on or not started, both of which run in
-// session 0 (#46).
+// another Windows session. The Local\ mutex alone, which exists in one
+// session's namespace, didn't keep an agent in the desktop session from
+// running beside one that Claude Code started over OpenSSH, or that a
+// scheduled task set to run whether the user is logged on or not started,
+// both of which run in session 0 (#46).
 func TestLockSessions(t *testing.T) {
 	tests := []struct {
 		name string
