@@ -15,7 +15,8 @@ testdata/fixtures/<harness>/<version>/<os>/
       env               the names of the environment variables the hook saw, one per line, sorted; never their values
       time              when the call arrived: unix_ns, utc and the clock used, one key=value per line
       cwd               the hook process's working directory
-      parents           the hook's parent processes, nearest first: pid and executable name, never command lines
+      parents           the hook's parent processes, nearest first: pid, controlling terminal (? or ?? when none) and executable name, never command lines
+      console           Windows only: attached or none, whether the hook had a console, which it shares with the harness that started it
       stderr            only when the dumper itself hit an error
     otlp/NNNNNN.json    one OTLP/HTTP JSON request body, as sent
     otlp/NNNNNN.meta    its arrival time, path, content type, encoding and header names

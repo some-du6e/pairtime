@@ -346,6 +346,19 @@ func TestDumpers(t *testing.T) {
 						t.Fatalf("parents starts with %q, want this test's pid %d", lines[0], os.Getpid())
 					}
 				}},
+				{"each parents line is pid, terminal and name, with the terminal ps reports", func(t *testing.T) {
+					runDir, _ := call(t, payload)
+					lines := strings.Split(strings.TrimSpace(read(t, filepath.Join(first(runDir), "parents"))), "\n")
+					for _, line := range lines {
+						if len(strings.Fields(line)) < 3 {
+							t.Errorf("parents line %q isn't pid, terminal and name", line)
+						}
+					}
+					ps := run(t, ".", nil, nil, need(t, "ps"), "-o", "tty=", "-p", strconv.Itoa(os.Getpid()))
+					if f := strings.Fields(lines[0]); len(f) < 3 || f[1] != strings.TrimSpace(ps.stdout) {
+						t.Errorf("parents starts with %q, want this test's terminal %q", lines[0], strings.TrimSpace(ps.stdout))
+					}
+				}},
 				{"it prints nothing, exits 0 and leaves no stderr file", func(t *testing.T) {
 					runDir, r := call(t, payload)
 					if r.code != 0 || r.stdout != "" || r.stderr != "" {

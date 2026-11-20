@@ -11,8 +11,10 @@
 #   argv     the arguments, one per line (RUN_DIR and LABEL first)
 #   env      the names of the environment variables, sorted. Never the values
 #   cwd      the working directory
-#   parents  pid and executable name of each parent process, nearest first.
-#            Never command lines, which can hold prompts
+#   parents  pid, controlling terminal and executable name of each parent
+#            process, nearest first: "1234 pts/3 claude". The terminal is ?
+#            (?? on macOS) when the process has none. Never command lines,
+#            which can hold prompts
 #   stdin    the bytes on stdin, unchanged
 #   stderr   only if something in this script failed
 #
@@ -88,15 +90,18 @@ awk 'BEGIN { for (name in ENVIRON) print name }' | LC_ALL=C sort >"$call/env"
 
 pwd >"$call/cwd"
 
-# Walk up from our parent through one ps listing. comm is the executable
-# name (a full path on macOS, so keep only its last part); unlike args it
-# never includes the command line.
-ps -A -o pid= -o ppid= -o comm= 2>/dev/null | awk -v start="$PPID" '
+# Walk up from our parent through one ps listing. tty is the controlling
+# terminal, which tells a session someone types into from a headless one
+# (SM 1.2 has_tty). comm is the executable name (a full path on macOS, so
+# keep only its last part); unlike args it never includes the command line.
+# It comes last because it can hold spaces.
+ps -A -o pid= -o ppid= -o tty= -o comm= 2>/dev/null | awk -v start="$PPID" '
 	{
 		pid = $1
 		ppid[pid] = $2
+		tty[pid] = $3
 		line = $0
-		sub(/^[ \t]*[0-9]+[ \t]+[0-9]+[ \t]*/, "", line)
+		sub(/^[ \t]*[0-9]+[ \t]+[0-9]+[ \t]+[^ \t]+[ \t]*/, "", line)
 		sub(/.*\//, "", line)
 		name[pid] = line
 	}
@@ -104,10 +109,10 @@ ps -A -o pid= -o ppid= -o comm= 2>/dev/null | awk -v start="$PPID" '
 		p = start
 		for (i = 0; i < 12 && p != "" && p != 0; i++) {
 			if (!(p in name)) {
-				print p " ?"
+				print p " ? ?"
 				break
 			}
-			print p " " name[p]
+			print p " " tty[p] " " name[p]
 			if (ppid[p] == p) {
 				break
 			}
