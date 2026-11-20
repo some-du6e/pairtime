@@ -9,7 +9,7 @@ Three checks, each explained in README.md next to this file:
 1. Provenance. Every capture directory has a PROVENANCE.md whose front
    matter pins each source to a commit or a retrieval date and names its
    license. A directory that copies upstream text carries that upstream's
-   LICENSE and copies only from licensed sources.
+   LICENSE and copies only from sources under a license in COPYABLE.
 2. Schemas. Every JSON file validates against the schema its name points
    to, in the same directory: foo.json and foo.<label>.json against
    foo.schema.json. Every schema has at least one such file, and every
@@ -42,6 +42,10 @@ METHODS = ("copied", "described", "reconstructed")
 PROVENANCE_KEYS = ("method", "captured_on", "captured_by", "source")
 GITHUB_SOURCE = re.compile(r"https://github\.com/[\w.-]+/[\w.-]+/(?:tree|blob)/[0-9a-f]{40}(?:/\S*)?")
 LICENSE_ID = re.compile(r"none|[A-Za-z0-9][A-Za-z0-9.+-]*")
+# A capture may quote an upstream only under one of these, as SPDX ids, which
+# SPDX matches without regard to case. A source under anything else, none,
+# NOASSERTION and UNLICENSED included, is described in our own words.
+COPYABLE = ("MIT", "BSD-2-Clause", "BSD-3-Clause", "Apache-2.0", "ISC", "0BSD", "CC0-1.0", "CC-BY-4.0")
 DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
 
 DRAFT = "https://json-schema.org/draft/2020-12/schema"
@@ -310,6 +314,60 @@ def problems(inst, schema, at, root, base):
     return out
 
 
+def provenance_problems(lines, has_license_file):
+    """What is wrong with a PROVENANCE.md, given its lines and whether the
+    upstream's LICENSE file sits next to it."""
+    if not lines or lines[0] != "---" or "---" not in lines[1:]:
+        return ["needs front matter between two --- lines at the top"]
+    out = []
+    fields = {}
+    for line in lines[1:lines.index("---", 1)]:
+        if not line.strip():
+            continue
+        key, sep, value = line.partition(":")
+        key, value = key.strip(), value.strip()
+        if not sep or key not in PROVENANCE_KEYS:
+            out.append(f"front matter line {line!r}: keys are {', '.join(PROVENANCE_KEYS)}")
+            continue
+        fields.setdefault(key, []).append(value)
+    for key in ("method", "captured_on", "captured_by"):
+        if len(fields.get(key, [])) != 1 or not fields[key][0]:
+            out.append(f"needs exactly one non-empty {key!r} line")
+    method = fields.get("method", [""])[0]
+    if method not in METHODS:
+        out.append(f"method {method!r}: want one of {', '.join(METHODS)}")
+    captured_on = fields.get("captured_on", [""])[0]
+    if not DATE.fullmatch(captured_on):
+        out.append(f"captured_on {captured_on!r}: want YYYY-MM-DD")
+    sources = fields.get("source", [])
+    if not sources:
+        out.append("needs at least one 'source' line")
+    licenses = []
+    for value in sources:
+        parts = value.split()
+        if len(parts) < 2 or not LICENSE_ID.fullmatch(parts[1]):
+            out.append(f"source {value!r}: want '<url> <license or none> ...'")
+            continue
+        url, license_id, rest = parts[0], parts[1], parts[2:]
+        licenses.append(license_id)
+        if url.startswith("https://github.com/"):
+            if not GITHUB_SOURCE.fullmatch(url) or rest:
+                out.append(f"source {url}: a GitHub source is a tree or blob URL at a full "
+                           "40-character commit, followed only by its license")
+        elif not (url.startswith("https://") and len(rest) == 2 and rest[0] == "retrieved"
+                  and DATE.fullmatch(rest[1])):
+            out.append(f"source {url}: a web source is '<https url> <license> retrieved YYYY-MM-DD'")
+    if method == "copied":
+        copyable = {c.casefold() for c in COPYABLE}
+        refused = [lic for lic in licenses if lic.casefold() not in copyable]
+        if refused:
+            out.append(f"method 'copied' needs every source under one of {', '.join(COPYABLE)}, and "
+                       f"{', '.join(refused)} isn't; describe such a source in our own words instead")
+        if not has_license_file:
+            out.append("method 'copied' needs the upstream's LICENSE in the same directory")
+    return out
+
+
 # The validator is checked before it checks anything else. Each case names
 # the rule it pins: (name, schema, instance, valid). Every keyword has a case
 # that fails when the keyword is ignored, and every rule about how a keyword
@@ -374,6 +432,30 @@ SCHEMA_SELFTEST = [
 ]
 
 
+def front_matter(method, licenses):
+    """A PROVENANCE.md head with one GitHub source per license, for the selftest."""
+    return (["---", f"method: {method}", "captured_on: 2026-11-19", "captured_by: selftest"]
+            + [f"source: https://github.com/example/repo{i}/tree/{'0' * 40} {lic}" for i, lic in enumerate(licenses)]
+            + ["---"])
+
+
+# And the provenance rules: (name, method, each source's license, whether the
+# LICENSE file is there, allowed).
+PROVENANCE_SELFTEST = [
+    ("copied from an MIT source with its LICENSE file is allowed", "copied", ["MIT"], True, True),
+    ("copied takes an SPDX id in any case", "copied", ["mit"], True, True),
+    ("copied needs the upstream's LICENSE file", "copied", ["MIT"], False, False),
+    ("copied refuses a source with no license", "copied", ["none"], True, False),
+    ("copied refuses None, whatever its case", "copied", ["None"], True, False),
+    ("copied refuses NOASSERTION, GitHub's id for a license it can't identify", "copied", ["NOASSERTION"], True, False),
+    ("copied refuses UNLICENSED", "copied", ["UNLICENSED"], True, False),
+    ("copied refuses other", "copied", ["other"], True, False),
+    ("copied refuses a license outside the list", "copied", ["CC-BY-NC-4.0"], True, False),
+    ("copied needs every source licensed, not just one", "copied", ["MIT", "none"], True, False),
+    ("described may cite an unlicensed source", "described", ["none"], False, True),
+]
+
+
 def robert_signature(secret, timestamp, body):
     """X-Robert-Signature for a delivery: sha256= and the lowercase hex
     HMAC-SHA256 of "<timestamp>.<raw body>", keyed by the UTF-8 secret."""
@@ -434,6 +516,10 @@ class Checker:
             got = not schema_problems(schema, schema, "#")
             if got != allowed:
                 self.fail(__file__, f"schema selftest {name!r}: got allowed={got}, want {allowed}")
+        for name, method, licenses, has_license_file, allowed in PROVENANCE_SELFTEST:
+            got = not provenance_problems(front_matter(method, licenses), has_license_file)
+            if got != allowed:
+                self.fail(__file__, f"provenance selftest {name!r}: got allowed={got}, want {allowed}")
 
     def provenance(self, top):
         path = os.path.join(top, "PROVENANCE.md")
@@ -442,52 +528,8 @@ class Checker:
             return
         with open(path, encoding="utf-8") as f:
             lines = f.read().splitlines()
-        if not lines or lines[0] != "---" or "---" not in lines[1:]:
-            self.fail(path, "needs front matter between two --- lines at the top")
-            return
-        fields = {}
-        for line in lines[1:lines.index("---", 1)]:
-            if not line.strip():
-                continue
-            key, sep, value = line.partition(":")
-            key, value = key.strip(), value.strip()
-            if not sep or key not in PROVENANCE_KEYS:
-                self.fail(path, f"front matter line {line!r}: keys are {', '.join(PROVENANCE_KEYS)}")
-                continue
-            fields.setdefault(key, []).append(value)
-        for key in ("method", "captured_on", "captured_by"):
-            if len(fields.get(key, [])) != 1 or not fields[key][0]:
-                self.fail(path, f"needs exactly one non-empty {key!r} line")
-        method = fields.get("method", [""])[0]
-        if method not in METHODS:
-            self.fail(path, f"method {method!r}: want one of {', '.join(METHODS)}")
-        captured_on = fields.get("captured_on", [""])[0]
-        if not DATE.fullmatch(captured_on):
-            self.fail(path, f"captured_on {captured_on!r}: want YYYY-MM-DD")
-        sources = fields.get("source", [])
-        if not sources:
-            self.fail(path, "needs at least one 'source' line")
-        licenses = []
-        for value in sources:
-            parts = value.split()
-            if len(parts) < 2 or not LICENSE_ID.fullmatch(parts[1]):
-                self.fail(path, f"source {value!r}: want '<url> <license or none> ...'")
-                continue
-            url, license_id, rest = parts[0], parts[1], parts[2:]
-            licenses.append(license_id)
-            if url.startswith("https://github.com/"):
-                if not GITHUB_SOURCE.fullmatch(url) or rest:
-                    self.fail(path, f"source {url}: a GitHub source is a tree or blob URL at a full "
-                                    "40-character commit, followed only by its license")
-            elif not (url.startswith("https://") and len(rest) == 2 and rest[0] == "retrieved"
-                      and DATE.fullmatch(rest[1])):
-                self.fail(path, f"source {url}: a web source is '<https url> <license> retrieved YYYY-MM-DD'")
-        if method == "copied":
-            if "none" in licenses:
-                self.fail(path, "method 'copied' needs a license on every source; "
-                                "describe an unlicensed source in our own words instead")
-            if not os.path.isfile(os.path.join(top, "LICENSE")):
-                self.fail(path, "method 'copied' needs the upstream's LICENSE in the same directory")
+        for message in provenance_problems(lines, os.path.isfile(os.path.join(top, "LICENSE"))):
+            self.fail(path, message)
 
     def json_files(self, top):
         for dirpath, dirnames, filenames in os.walk(top):

@@ -35,7 +35,7 @@ source: https://github.com/hackclub/hackatime/tree/43bde10b02dbd2371fb4f802e724a
 
 - `method` is `copied` (some text is verbatim upstream text), `described` (all of it is ours) or `reconstructed` (ours, and inferred from callers because the source isn't public).
 - `source` repeats, one line per upstream. A GitHub source is a tree or blob URL at a full 40-character commit, then its SPDX license or `none`. A web page is its URL, its license or `none`, then `retrieved YYYY-MM-DD`.
-- `copied` requires a license on every source and the upstream's `LICENSE` file next to the note.
+- `copied` requires the upstream's `LICENSE` file next to the note, and every source under one of the licenses `check.py` lets a capture quote: MIT, BSD-2-Clause, BSD-3-Clause, Apache-2.0, ISC, 0BSD, CC0-1.0 or CC-BY-4.0, in any case, since SPDX ids match without it. A source under anything else, `none`, `NOASSERTION` and `UNLICENSED` included, is described in our own words.
 
 The prose below the front matter lists what was taken from where, by file, line range and git blob SHA, and what was left out.
 
