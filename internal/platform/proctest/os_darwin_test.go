@@ -21,6 +21,9 @@ const goos = platform.Darwin
 
 func readOS() ([]platform.Proc, error) { return darwin.Processes() }
 
+// readSelf reads this process alone, as a hook reads its own chain entry.
+func readSelf() (platform.Proc, error) { return darwin.Self() }
+
 func ownPGID() int { return syscall.Getpgrp() }
 
 func bashPath() (string, error)   { return exec.LookPath("bash") }
