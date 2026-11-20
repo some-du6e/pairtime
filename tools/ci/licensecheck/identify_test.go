@@ -215,6 +215,10 @@ func TestShortLicenseNames(t *testing.T) {
 		{name: "CC0-1.0 fails", holder: "Foo. Files under asm/: CC0-1.0", mention: "CC0-1.0"},
 		{name: "a link to the GPL's text fails, though normalize drops URLs", holder: "Foo. Files under asm/: https://www.gnu.org/licenses/gpl-3.0.html", mention: "gpl-3.0"},
 		{name: "a link to the MPL's text fails", holder: "Foo. Files under asm/: https://www.mozilla.org/MPL/2.0/", mention: "MPL"},
+		{name: "GPL_v2, joined by an underscore, fails", holder: "Foo. Files under asm/ are GPL_v2", mention: "GPL"},
+		{name: "a license file named COPYING_LGPL fails", holder: "Foo. Files under asm/ are covered by COPYING_LGPL", mention: "LGPL"},
+		{name: "LICENSE_GPL fails", holder: "Foo. See LICENSE_GPL for asm/", mention: "GPL"},
+		{name: "a holder with underscores and no license name passes", holder: "The foo_bar Authors"},
 		{name: "a holder whose name starts with GPL's letters passes", holder: "Gplot Authors"},
 		{name: "a URL whose path starts with GPL's letters passes", holder: "Foo, https://github.com/foo/gplot"},
 		{name: "a holder named Elastic passes without a version after it", holder: "Elastic N.V."},
@@ -260,7 +264,7 @@ func TestShortLicenseNamesInAllowedTexts(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if m := otherLicenseIDRE.FindString(charFixer.Replace(string(data))); m != "" {
+			if m := shortLicenseName(string(data)); m != "" {
 				t.Errorf("otherLicenseIDRE finds %q in %s", m, tt.file)
 			}
 		})

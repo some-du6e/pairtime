@@ -57,7 +57,7 @@ var otherLicenses = []string{
 // gnu.org/licenses/gpl-3.0.html. Each must stand as a whole word, with an
 // optional version after it, so a name that only starts with the same
 // letters (Gplot, Eplus, Elastic N.V.) passes. No allowed license's text
-// uses any of them.
+// uses any of them. shortLicenseName runs it.
 var otherLicenseIDRE = regexp.MustCompile(`(?i)\b(?:(?:[al]?gpl|mpl|epl|eupl|cddl|sspl|busl|bsl|cc0|cc[-\s]?by)(?:-?v?\d+(?:\.\d+)*)?` +
 	`|elv2|elastic-v?\d+(?:\.\d+)*)\b`)
 
@@ -104,6 +104,14 @@ func mustLoadTemplates() []template {
 	return ts
 }
 
+// shortLicenseName returns the first short license name otherLicenseIDRE
+// finds in a license file's text, or "". It reads underscores as spaces
+// first: RE2's word boundary counts '_' as part of a word, so GPL_v2 or
+// COPYING_LGPL would hide the name.
+func shortLicenseName(text string) string {
+	return otherLicenseIDRE.FindString(strings.ReplaceAll(charFixer.Replace(text), "_", " "))
+}
+
 // identify names the allowed license a license file holds. When the file
 // holds none of them, id is empty and reason says why.
 func identify(text string) (id, reason string) {
@@ -116,7 +124,7 @@ func identify(text string) (id, reason string) {
 	}
 	// Matched before normalize drops URLs, so a link to a license's text
 	// counts as a mention too.
-	if name := otherLicenseIDRE.FindString(charFixer.Replace(text)); name != "" {
+	if name := shortLicenseName(text); name != "" {
 		return "", fmt.Sprintf("it mentions %q, so it isn't only %s", name, orList(Allowed))
 	}
 	var ids []string
