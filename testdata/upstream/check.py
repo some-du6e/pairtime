@@ -18,7 +18,8 @@ Three checks, each explained in README.md next to this file:
    error, so no schema can lean on a keyword that nothing checks.
 3. Robert's webhook vectors. Each signature in robert/webhook.json is
    recomputed from its inputs, and each verification case must get the
-   verdict it expects from the scheme written down in that file.
+   verdict it expects from the scheme written down in that file and say
+   rightly, in mac_valid, whether its signature is its inputs' MAC.
 
 Standard library only. CI runs it with the runner's python3 and nothing
 installed. It exits 1 when anything fails.
@@ -463,6 +464,15 @@ def robert_signature(secret, timestamp, body):
     return "sha256=" + hmac.new(secret.encode("utf-8"), message, hashlib.sha256).hexdigest()
 
 
+def mac_matches(case):
+    """Whether a verify case's signature is the right MAC for its secret,
+    timestamp and body, or None when a header is missing."""
+    if case["timestamp"] is None or case["signature"] is None:
+        return None
+    expected = robert_signature(case["secret"], case["timestamp"], case["body"])
+    return hmac.compare_digest(expected.encode("utf-8"), case["signature"].encode("utf-8"))
+
+
 def robert_accepts(case, tolerance):
     """The receiver rule robert/webhook.json writes down, applied to a case."""
     secret, timestamp, signature = case["secret"], case["timestamp"], case["signature"]
@@ -472,8 +482,59 @@ def robert_accepts(case, tolerance):
         return False
     if abs(case["now"] - int(timestamp)) > tolerance:
         return False
-    expected = robert_signature(secret, timestamp, case["body"]).encode("utf-8")
-    return hmac.compare_digest(expected, signature.encode("utf-8"))
+    return mac_matches(case)
+
+
+def robert_problems(doc):
+    """What is wrong with webhook.json's vectors and cases, and how many
+    there are. Each case's mac_valid is checked as well as its verdict. The
+    receiver rule stops at the first test that fails, so a case refused for
+    its clock is refused just the same with a wrong MAC, and only mac_valid
+    notices."""
+    out, count = [], 0
+    tolerance = doc["scheme"]["tolerance_s"]
+    for v in doc["signing_vectors"]:
+        got = robert_signature(v["secret"], v["timestamp"], v["body"])
+        if got != v["signature"]:
+            out.append(f"signing vector {v['name']!r}: inputs give {got}, the file says {v['signature']}")
+        count += 1
+    for case in doc["verify_cases"]:
+        mac = mac_matches(case)
+        if mac is not case["mac_valid"]:
+            out.append(f"verify case {case['name']!r}: the file says mac_valid {json.dumps(case['mac_valid'])}, "
+                       f"its inputs give {json.dumps(mac)}")
+        got = "accept" if robert_accepts(case, tolerance) else "reject"
+        if got != case["expect"]:
+            out.append(f"verify case {case['name']!r}: the scheme gives {got}, the file says {case['expect']}")
+        count += 1
+    return out, count
+
+
+def robert_doc(vector_changes=None, **case_changes):
+    """A webhook.json with one signing vector and one verify case, both
+    right unless changed, for the selftest."""
+    vector = {"name": "selftest", "secret": "s", "timestamp": "100", "body": "{}",
+              "signature": robert_signature("s", "100", "{}")}
+    case = dict(vector, now=100, mac_valid=True, expect="accept")
+    vector.update(vector_changes or {})
+    case.update(case_changes)
+    return {"scheme": {"tolerance_s": 300}, "signing_vectors": [vector], "verify_cases": [case]}
+
+
+WRONG_MAC = "sha256=" + "0" * 64
+
+# The Robert checks: (name, webhook.json, whether it passes).
+ROBERT_SELFTEST = [
+    ("a right MAC inside the window is accepted", robert_doc(), True),
+    ("a signing vector whose signature isn't its inputs' MAC is caught", robert_doc({"signature": WRONG_MAC}), False),
+    ("a verify case whose verdict isn't the scheme's is caught", robert_doc(expect="reject"), False),
+    ("a wrong MAC is caught in a case refused for its clock anyway",
+     robert_doc(signature=WRONG_MAC, now=1000, expect="reject"), False),
+    ("a right MAC marked mac_valid false is caught", robert_doc(mac_valid=False), False),
+    ("a wrong MAC marked mac_valid false is refused", robert_doc(signature=WRONG_MAC, mac_valid=False, expect="reject"), True),
+    ("a case with a missing header has mac_valid null", robert_doc(signature=None, mac_valid=None, expect="reject"), True),
+    ("mac_valid true on a case with a missing header is caught", robert_doc(signature=None, expect="reject"), False),
+]
 
 
 def no_duplicate_keys(pairs):
@@ -520,6 +581,10 @@ class Checker:
             got = not provenance_problems(front_matter(method, licenses), has_license_file)
             if got != allowed:
                 self.fail(__file__, f"provenance selftest {name!r}: got allowed={got}, want {allowed}")
+        for name, doc, passes in ROBERT_SELFTEST:
+            got = not robert_problems(doc)[0]
+            if got != passes:
+                self.fail(__file__, f"Robert selftest {name!r}: got passes={got}, want {passes}")
 
     def provenance(self, top):
         path = os.path.join(top, "PROVENANCE.md")
@@ -586,20 +651,12 @@ class Checker:
             return
         doc = self.load(path)
         try:
-            tolerance = doc["scheme"]["tolerance_s"]
-            for v in doc["signing_vectors"]:
-                got = robert_signature(v["secret"], v["timestamp"], v["body"])
-                if got != v["signature"]:
-                    self.fail(path, f"signing vector {v['name']!r}: inputs give {got}, the file says {v['signature']}")
-                self.vectors += 1
-            for case in doc["verify_cases"]:
-                got = "accept" if robert_accepts(case, tolerance) else "reject"
-                if got != case["expect"]:
-                    self.fail(path, f"verify case {case['name']!r}: the scheme gives {got}, "
-                                    f"the file says {case['expect']}")
-                self.vectors += 1
+            found, self.vectors = robert_problems(doc)
         except (KeyError, TypeError, ValueError) as err:
             self.fail(path, f"can't read the vectors: {err!r}")
+            return
+        for message in found:
+            self.fail(path, message)
 
 
 def main():

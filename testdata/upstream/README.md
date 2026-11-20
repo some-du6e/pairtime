@@ -53,4 +53,4 @@ Downstream WPs can load the response and payload schemas in their own tests. A s
 python3 -I testdata/upstream/check.py
 ```
 
-CI runs it in `ci.yml` as the "Upstream captures" step. It needs nothing beyond the standard library. Besides provenance and schemas, it recomputes every Robert webhook signature in `robert/webhook.json` and runs each verification case through the scheme written there.
+CI runs it in `ci.yml` as the "Upstream captures" step. It needs nothing beyond the standard library. Besides provenance and schemas, it recomputes every Robert webhook signature in `robert/webhook.json`, runs each verification case through the scheme written there, and checks that each case's `mac_valid` says rightly whether its signature is the MAC of its inputs.
