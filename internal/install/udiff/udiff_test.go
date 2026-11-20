@@ -133,6 +133,13 @@ func TestGitAppliesTheDiff(t *testing.T) {
 				to = "/dev/null"
 			}
 			patch := Unified(from, to, p.a, p.b)
+			if patch == "" {
+				// A random edit can undo itself; equal sides have no diff.
+				if p.a == nil || p.b == nil || !bytes.Equal(p.a, p.b) {
+					t.Fatal("Unified gave no diff for two different sides")
+				}
+				return
+			}
 			if err := os.WriteFile(filepath.Join(dir, "p.diff"), []byte(patch), 0o644); err != nil {
 				t.Fatal(err)
 			}

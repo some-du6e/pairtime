@@ -163,19 +163,19 @@ func TestPlanDiff(t *testing.T) {
 func TestUninstallWorksAroundATargetItCantUndo(t *testing.T) {
 	tests := []struct {
 		name   string
-		break_ func(t *testing.T, env Env, in *Installer)
+		damage func(t *testing.T, env Env, in *Installer)
 		want   string // in the problem
 	}{
 		{
 			name: "a settings file that stopped being JSON stays, and the autostart entry still goes",
-			break_: func(t *testing.T, env Env, _ *Installer) {
+			damage: func(t *testing.T, env Env, _ *Installer) {
 				writeFile(t, ClaudeSettings(env), []byte("{ oops"))
 			},
 			want: "isn't valid JSON",
 		},
 		{
 			name: "a backup that changed stops its own target's undo, and the autostart entry still goes",
-			break_: func(t *testing.T, _ Env, in *Installer) {
+			damage: func(t *testing.T, _ Env, in *Installer) {
 				backups, err := filepath.Glob(filepath.Join(in.backupsDir(), "*"))
 				if err != nil || len(backups) != 1 {
 					t.Fatalf("want one backup, found %q (%v)", backups, err)
@@ -191,7 +191,7 @@ func TestUninstallWorksAroundATargetItCantUndo(t *testing.T) {
 			items := linuxItems(t, env, []byte("{\"model\": \"opus\"}\n"))
 			in := newInstaller(t)
 			install(t, in, items...)
-			tt.break_(t, env, in)
+			tt.damage(t, env, in)
 			settings := readOrNil(t, ClaudeSettings(env))
 
 			u, err := in.PlanUninstall()
