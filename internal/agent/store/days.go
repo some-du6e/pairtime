@@ -248,10 +248,15 @@ func credits(b Bucket, key string) bool {
 	return false
 }
 
+// sessionLookback bounds how far back LastSession looks for a credited
+// minute, so a store with none doesn't have every file read at each ask.
+const sessionLookback = 30 * dayMS
+
 // LastSession returns the most recent work session in s whose last
-// credited minute starts before to, in Unix ms, or nil when there is none:
-// the one whose last credited minute is latest, in the project with most
-// of that minute's credit. gapMS is SESSION_GAP_S in milliseconds.
+// credited minute starts before to, in Unix ms, or nil when there is none
+// in the 30 days before to: the one whose last credited minute is latest,
+// in the project with most of that minute's credit. gapMS is
+// SESSION_GAP_S in milliseconds.
 func LastSession(s *Buckets, to, gapMS int64) (*Session, error) {
 	var (
 		project    string
@@ -261,6 +266,9 @@ func LastSession(s *Buckets, to, gapMS int64) (*Session, error) {
 	err := s.Before(to, func(b Bucket) bool {
 		m := b.At()
 		if project == "" {
+			if m < to-sessionLookback {
+				return false
+			}
 			if project = creditedProject(b); project == "" {
 				return true
 			}

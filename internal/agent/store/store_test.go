@@ -518,6 +518,13 @@ func TestLastSession(t *testing.T) {
 			project: "p_a", from: "2026-11-19T23:59:00Z", end: "2026-11-20T00:00:00Z", credited: 10,
 		},
 		{
+			name: "a credited minute more than 30 days back isn't looked for",
+			minutes: func(t *testing.T) []Bucket {
+				return []Bucket{bucket(t, "2026-10-20T10:00:00Z", event.StateFinal, a, nil)}
+			},
+			to: "2026-11-20T10:01:00Z",
+		},
+		{
 			name:    "with no credited minute there is no session",
 			minutes: func(t *testing.T) []Bucket { return []Bucket{agentOnly(t, "2026-11-20T10:05:00Z")} },
 			to:      "2026-11-21T00:00:00Z",

@@ -581,6 +581,19 @@ func (l *Loop) step(b uint64) {
 	l.win.slide(fb - l.lookback)
 	if !l.batching {
 		l.save()
+	} else {
+		// Scoring a long ledger again touches every day it covers. The
+		// days whose minutes are all final can go from memory.
+		l.forget()
+	}
+}
+
+// forget drops from the bucket store's memory the days that ended two days
+// before FinalBefore: every minute of them is final, so the loop never
+// writes to them again.
+func (l *Loop) forget() {
+	if err := l.opts.Buckets.Forget(l.cur.FinalBefore - 2*dayMS); err != nil {
+		l.log.Warn("closing old bucket files", "err", err)
 	}
 }
 
@@ -635,6 +648,7 @@ func (l *Loop) save() {
 			ok = false
 			l.fault(fmt.Sprintf("the scorer couldn't write the rollup of %s: %v", date, err))
 		}
+		l.forget() // after a rebuild there may be months of them
 	}
 	clear(l.days)
 	if err := l.opts.Buckets.Sync(); err != nil {
@@ -654,9 +668,7 @@ func (l *Loop) save() {
 		l.fault(fmt.Sprintf("the scorer couldn't save its place in state.json: %v", err))
 		return
 	}
-	if err := l.opts.Buckets.Forget(l.cur.FinalBefore - 2*dayMS); err != nil {
-		l.log.Warn("closing old bucket files", "err", err)
-	}
+	l.forget()
 	if ok && l.troubled && l.stuck == nil {
 		l.troubled = false
 		l.problem("")
