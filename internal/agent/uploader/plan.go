@@ -335,14 +335,20 @@ func sameMarks(a, b map[string]store.Mark) bool {
 }
 
 // sortedHarnesses returns the labels' harnesses: every harness the ledger
-// named with a version in client_build's form, by name, at most
-// harnessesMax, and an empty list, never null, when there are none.
+// named, once and by name, with the version it last named when that is in
+// client_build's form and with none otherwise, at most harnessesMax, and
+// an empty list, never null, when there are none (ingest-v1 2.3.4).
 func sortedHarnesses(seen map[event.Harness]string) []Harness {
 	out := []Harness{}
 	for _, name := range slices.Sorted(maps.Keys(seen)) {
-		if v := seen[name]; knownHarness(name) && buildForm(v) && len(out) < harnessesMax {
-			out = append(out, Harness{Name: name, Version: v})
+		if !knownHarness(name) || len(out) >= harnessesMax {
+			continue
 		}
+		h := Harness{Name: name}
+		if v := seen[name]; buildForm(v) {
+			h.Version = v
+		}
+		out = append(out, h)
 	}
 	return out
 }

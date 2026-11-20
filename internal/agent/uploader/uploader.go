@@ -329,7 +329,9 @@ func (u *Uploader) Sealed(b ledger.Batch) {
 			if learned == nil {
 				learned = map[event.Harness]string{}
 			}
-			learned[h] = v
+			if v != "" || learned[h] == "" {
+				learned[h] = v
+			}
 		}
 	}
 	u.mu.Lock()
@@ -350,8 +352,9 @@ func (u *Uploader) Sealed(b ledger.Batch) {
 	}
 }
 
-// harnessOf reads the harness and its version from a record's body, and
-// false when the body names none the labels can carry.
+// harnessOf reads the harness and its version from a record's body, with
+// "" for a version not in client_build's form, and false when the body
+// names no harness the labels can carry.
 func harnessOf(body []byte) (event.Harness, string, bool) {
 	var b struct {
 		E struct {
@@ -359,10 +362,14 @@ func harnessOf(body []byte) (event.Harness, string, bool) {
 			HarnessVersion string        `json:"harness_version"`
 		} `json:"e"`
 	}
-	if json.Unmarshal(body, &b) != nil || !knownHarness(b.E.Harness) || !buildForm(b.E.HarnessVersion) {
+	if json.Unmarshal(body, &b) != nil || !knownHarness(b.E.Harness) {
 		return "", "", false
 	}
-	return b.E.Harness, b.E.HarnessVersion, true
+	v := b.E.HarnessVersion
+	if !buildForm(v) {
+		v = ""
+	}
+	return b.E.Harness, v, true
 }
 
 // Soon makes the uploader send within SoonDelay, as after a prompt or a
@@ -646,7 +653,11 @@ func (u *Uploader) takeSealed() {
 	}
 	changed := false
 	for h, v := range seen {
-		if u.st.Harnesses[h] != v {
+		old, known := u.st.Harnesses[h]
+		if v == "" && known {
+			continue // a record that names no version keeps the one known
+		}
+		if !known || old != v {
 			if u.st.Harnesses == nil {
 				u.st.Harnesses = map[event.Harness]string{}
 			}
@@ -964,13 +975,11 @@ func (u *Uploader) refused(c Credentials, p plan, a answer) {
 		code = fmt.Sprintf("status %d", a.status)
 	}
 	switch code {
-	case refusalTokenMissing, refusalTokenInvalid, refusalRevoked, refusalMismatch:
-		// Not this token again: signing in again gives a new one.
+	case refusalTokenMissing, refusalTokenInvalid, refusalRevoked, refusalMismatch, refusalKeyMissing:
+		// Not this token again: signing in again gives a new one, and binds
+		// the device key with it (ingest-v1 2.6).
 		u.blocked = c.Token
 		u.setProblem("server", fmt.Sprintf("the server refused this computer's sign-in (%s), so pairtime uploads nothing until you run pairtime login again", code))
-	case refusalKeyMissing:
-		u.setProblem("server", "the server has no device key for this computer yet; pairtime login registers it")
-		u.notBefore = u.now().Add(10 * time.Minute)
 	case refusalKeyReused:
 		// A new body needs a new key: the next try builds a new request.
 		u.drop()

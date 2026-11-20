@@ -48,10 +48,12 @@ type Labels struct {
 	VM             bool      `json:"vm"`
 }
 
-// Harness is a harness the device records and the version it last saw.
+// Harness is a harness the device records and the version it last saw,
+// which is left out when the harness named none in client_build's form
+// (ingest-v1 2.3.4).
 type Harness struct {
 	Name    event.Harness `json:"name"`
-	Version string        `json:"version"`
+	Version string        `json:"version,omitempty"`
 }
 
 // Response is the answer to a request that reached processing, status 200

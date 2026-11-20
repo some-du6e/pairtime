@@ -191,7 +191,9 @@ func TestHarnesses(t *testing.T) {
 		{"none is an empty list", nil, []Harness{}},
 		{"harnesses go by name", map[event.Harness]string{event.HarnessCodex: "0.9.1", event.HarnessClaudeCode: "2.1.327"},
 			[]Harness{{event.HarnessClaudeCode, "2.1.327"}, {event.HarnessCodex, "0.9.1"}}},
-		{"a version that isn't client_build's form stays out", map[event.Harness]string{event.HarnessCursor: "1.2 (beta)"}, []Harness{}},
+		{"a harness whose version isn't in client_build's form goes without it", map[event.Harness]string{event.HarnessCursor: "1.2 (beta)"},
+			[]Harness{{Name: event.HarnessCursor}}},
+		{"a harness that named no version goes without one", map[event.Harness]string{event.HarnessOther: ""}, []Harness{{Name: event.HarnessOther}}},
 		{"none, the OS's harness, stays out", map[event.Harness]string{event.HarnessNone: "1"}, []Harness{}},
 	}
 	for _, tc := range tests {
