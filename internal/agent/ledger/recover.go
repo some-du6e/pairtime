@@ -288,6 +288,17 @@ func (w *Writer) finishArchives() error {
 	return nil
 }
 
+// questionRows is how many batches back Open reads the records it rebuilds
+// the prompt classes' questions from (score.Questions): about an hour of
+// work, at a batch a minute. A prompt that answers a question asked before
+// the agent restarted usually comes within minutes.
+const questionRows = 64
+
+// before reports whether p comes before q in the segments.
+func (p position) before(q position) bool {
+	return p.Seg < q.Seg || p.Seg == q.Seg && p.Off < q.Off
+}
+
 // scan reads the segments from where the last row of batches.seg says its
 // batch ends, and leaves the writer ready to append after the last whole
 // frame: w.next, w.b, w.head, w.pending and w.seg. It returns the rows of
@@ -296,14 +307,15 @@ func (w *Writer) finishArchives() error {
 // A frame that isn't whole is a torn tail, which a crash or a power cut
 // leaves, only at the end of the newest segment and after the last row's
 // end, which was flushed before the row was written. scan cuts it off.
-// Anywhere else, the files are damaged. The records before the last row's
-// end are read only to rebuild what the prompt classes need.
+// Anywhere else, the files are damaged. Reading starts questionRows
+// batches before the last row's end; the records before that end are
+// read only to rebuild what the prompt classes need.
 func (w *Writer) scan(rows []rowPayload) ([]rowPayload, error) {
 	days, err := segments(w.dir)
 	if err != nil {
 		return nil, err
 	}
-	var start position
+	var start, from position
 	next, b, head := uint64(1), uint64(0), ledger.Hash{}
 	if n := len(rows); n > 0 {
 		last := rows[n-1]
@@ -311,14 +323,19 @@ func (w *Writer) scan(rows []rowPayload) ([]rowPayload, error) {
 		if !slices.Contains(days, start.Seg) {
 			return nil, damaged("batch %d ends in the segment of %s, which isn't there", last.B, start.Seg)
 		}
+		from = rows[max(0, n-questionRows)].Start
+		if !slices.Contains(days, from.Seg) {
+			from = position{Seg: start.Seg}
+		}
 	} else if len(days) > 0 {
 		start = position{Seg: days[0]}
+		from = start
 	} else {
 		return nil, nil
 	}
 	var restored []rowPayload
 	keyChecked := false
-	for i := slices.Index(days, start.Seg); i < len(days); i++ {
+	for i := slices.Index(days, from.Seg); i < len(days); i++ {
 		day, newest := days[i], i == len(days)-1
 		f, err := openAppend(segPath(w.dir, day), false)
 		if err != nil {
@@ -328,7 +345,15 @@ func (w *Writer) scan(rows []rowPayload) ([]rowPayload, error) {
 			f.close()
 			return nil, damaged("the segment of %s is shorter than its batches say", day)
 		}
-		fr := newFrameReader(io.NewSectionReader(f.f, 0, f.size), 0)
+		off := int64(0)
+		if day == from.Seg {
+			off = from.Off
+		}
+		if f.size < off {
+			f.close()
+			return nil, damaged("the segment of %s is shorter than its batches say", day)
+		}
+		fr := newFrameReader(io.NewSectionReader(f.f, off, f.size-off), off)
 		for {
 			fm, err := fr.next()
 			if errors.Is(err, io.EOF) {
@@ -336,7 +361,7 @@ func (w *Writer) scan(rows []rowPayload) ([]rowPayload, error) {
 			}
 			var torn *tornError
 			if errors.As(err, &torn) {
-				if !newest || (day == start.Seg && torn.off < start.Off) {
+				if !newest || (position{Seg: day, Off: torn.off}).before(start) {
 					f.close()
 					return nil, damaged("the segment of %s: %v", day, err)
 				}
@@ -350,8 +375,9 @@ func (w *Writer) scan(rows []rowPayload) ([]rowPayload, error) {
 				f.close()
 				return nil, err
 			}
-			sealed := day == start.Seg && fm.end <= start.Off
-			if day == start.Seg && fm.off < start.Off && !sealed {
+			end := position{Seg: day, Off: fm.end}
+			sealed := !start.before(end)
+			if !sealed && (position{Seg: day, Off: fm.off}).before(start) {
 				f.close()
 				return nil, damaged("the segment of %s has a frame across the end of batch %d", day, b)
 			}
@@ -385,7 +411,7 @@ func (w *Writer) scan(rows []rowPayload) ([]rowPayload, error) {
 				if sealed {
 					continue
 				}
-				rp, err := w.sealFrame(fm.payload, b, head, position{Seg: day, Off: fm.end})
+				rp, err := w.sealFrame(fm.payload, b, head, end)
 				if err != nil {
 					f.close()
 					return nil, fmt.Errorf("the segment of %s, offset %d: %w", day, fm.off, err)
