@@ -428,18 +428,27 @@ jobs:
           cd "$d"
           sudo install -d -m 0700 -o "$UID65532" -g "$UID65532" data witness-roots
           mkdir config
-          umask 077
-          {
-            echo "PAIRTIME_S3_ENDPOINT=$S3_ENDPOINT"
-            echo "PAIRTIME_S3_REGION=${S3_REGION:-auto}"
-            echo "PAIRTIME_S3_BUCKET=$S3_BUCKET"
-            echo "PAIRTIME_S3_SNAPSHOT_BUCKET=$S3_SNAPSHOT_BUCKET"
-            echo "PAIRTIME_S3_ACCESS_KEY_ID='$S3_ACCESS_KEY_ID'"
-            echo "PAIRTIME_S3_SECRET_ACCESS_KEY='$S3_SECRET_ACCESS_KEY'"
-          } > config/secrets.env
-          : > config/tunnel.env
+          # Only the two env files are private: compose reads them on the
+          # host. pairtime.toml must stay readable by 65532, the image's user.
+          (
+            umask 077
+            {
+              echo "PAIRTIME_S3_ENDPOINT=$S3_ENDPOINT"
+              echo "PAIRTIME_S3_REGION=${S3_REGION:-auto}"
+              echo "PAIRTIME_S3_BUCKET=$S3_BUCKET"
+              echo "PAIRTIME_S3_SNAPSHOT_BUCKET=$S3_SNAPSHOT_BUCKET"
+              echo "PAIRTIME_S3_ACCESS_KEY_ID='$S3_ACCESS_KEY_ID'"
+              echo "PAIRTIME_S3_SECRET_ACCESS_KEY='$S3_SECRET_ACCESS_KEY'"
+            } > config/secrets.env
+            : > config/tunnel.env
+          )
           printf 'services:\n  pairtimed:\n    image: pairtimed:drill\n    pull_policy: never\n    network_mode: host\n' > drill.yml
-          docker compose -f compose.yml -f drill.yml run --rm -T pairtimed pairtimed init -base-url http://localhost:8080 -config-out - > config/pairtime.toml
+          # To a new name and then moved, as runbook step 7 does: a redirect
+          # straight to pairtime.toml would make the file before init runs,
+          # and init refuses to replace one.
+          docker compose -f compose.yml -f drill.yml run --rm -T pairtimed pairtimed init -base-url http://localhost:8080 -config-out - > config/pairtime.toml.new
+          install -m 0644 config/pairtime.toml.new config/pairtime.toml
+          rm config/pairtime.toml.new
 
       - name: Restore the real replica, read-only
         run: |
@@ -470,7 +479,9 @@ jobs:
           # Reads only: the newest snapshot and key backup exist and are
           # recent. Karim's key stays offline, so the snapshot is checked
           # for age's header alone.
-          docker exec drill-serve pairtimed doctor -only snapshot,keys_backup,database,keys,config
+          # -skip push: "snapshot" in -only also names push.snapshot, which
+          # would fail on the missing monitor URL, or ping the real monitor.
+          docker exec drill-serve pairtimed doctor -only snapshot,keys_backup,database,keys,config -skip push
           docker exec drill-serve pairtimed snapshot fetch -o /data/latest.db.age
           sudo head -c 21 data/latest.db.age | grep -q 'age-encryption.org/v1'
           docker rm -f drill-serve

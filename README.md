@@ -16,7 +16,7 @@ One Go module holds the client, the server and the code they share.
 |---|---|
 | `cmd/pairtime` | The client. One binary will be the background agent, the hook receiver for AI harnesses and the CLI |
 | `cmd/pairtimed` | The server. `serve` checks SQLite, applies the migrations, signs people in with Hack Club Auth and serves until it's stopped, `migrate` applies them alone, and `healthcheck` asks a running server whether it's ready. `init`, `keys`, `snapshot` and `doctor` set up, back up and check a deployment. Projects, rollups and the live dashboard come later |
-| `deploy` | The deploy bundle: `compose.yml` with pairtimed under Litestream, cloudflared and the witness sidecar, `litestream.yml`, the `pairtime.toml` template, and [runbook.md](deploy/runbook.md), the procedure a deploy agent follows. `Dockerfile.pairtimed` at the top builds the image release.yml pushes |
+| `deploy` | The deploy bundle: `compose.yml` with pairtimed under Litestream, cloudflared and the witness sidecar, `litestream.yml`, the `pairtime.toml` template, and [runbook.md](deploy/runbook.md), the procedure a deploy agent follows. `Dockerfile.pairtimed` at the top builds the image server-image.yml pushes |
 | `pkg/event` | The event model from the [struggle-metric spec](docs/design/struggle-metric.md): the envelope, the 18 event kinds, the records the scorer derives from them, and validation for all of it |
 | `pkg/params` | The public parameter table: every tunable value in the credit rule (SM 8, DESIGN 6.3), as canonical JSON with its SHA-256 |
 | `pkg/score` | The scorer: turns events into credited human seconds, following SM with DESIGN 6.2's deviations |
