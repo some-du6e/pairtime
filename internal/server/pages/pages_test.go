@@ -1,0 +1,480 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
+package pages
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/base64"
+	"fmt"
+	"html"
+	"io"
+	"io/fs"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"os"
+	"path"
+	"reflect"
+	"regexp"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/some-du6e/pairtime/internal/server/retention"
+	"github.com/some-du6e/pairtime/internal/server/store"
+	"github.com/some-du6e/pairtime/internal/server/store/storetest"
+)
+
+// newSite builds a Site from o, with the embedded retention schedule and a
+// base URL unless o sets them.
+func newSite(t *testing.T, o Options) *Site {
+	t.Helper()
+	if o.Retention == nil {
+		p, err := retention.Default()
+		if err != nil {
+			t.Fatal(err)
+		}
+		o.Retention = p
+	}
+	if o.BaseURL == "" {
+		o.BaseURL = "https://pairtime.example.org"
+	}
+	if o.Version == "" {
+		o.Version = "v0.0.0-test"
+	}
+	s, err := New(o)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	return s
+}
+
+var (
+	rowRe  = regexp.MustCompile(`(?s)<tr>(.*?)</tr>`)
+	cellRe = regexp.MustCompile(`(?s)<td>(.*?)</td>`)
+	tagRe  = regexp.MustCompile(`<[^>]*>`)
+)
+
+// tableRows returns the text of each body row of each table in page.
+func tableRows(page string) [][]string {
+	var rows [][]string
+	for _, m := range rowRe.FindAllStringSubmatch(page, -1) {
+		cells := cellRe.FindAllStringSubmatch(m[1], -1)
+		if len(cells) == 0 {
+			continue // the header row
+		}
+		var r []string
+		for _, c := range cells {
+			r = append(r, html.UnescapeString(tagRe.ReplaceAllString(c[1], "")))
+		}
+		rows = append(rows, r)
+	}
+	return rows
+}
+
+// TestRetentionTable checks that the notice's retention tables are the
+// schedule the retention jobs run, by editing the schedule and seeing both
+// follow.
+func TestRetentionTable(t *testing.T) {
+	tests := []struct {
+		name string
+		edit func(p *retention.Policy)
+	}{
+		{name: "the notice's tables are docs/retention.json's schedule, in its order", edit: func(*retention.Policy) {}},
+		{name: "a changed period shows on the page and in the job alike", edit: func(p *retention.Policy) {
+			for i := range p.Entries {
+				if p.Entries[i].ID == "server.ip_ja4" {
+					p.Entries[i].Days = 45
+				}
+			}
+		}},
+		{name: "a changed spot-check window shows on the page and in the hold alike", edit: func(p *retention.Policy) { p.SpotCheckWindow.Months = 18 }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p, err := retention.Default()
+			if err != nil {
+				t.Fatal(err)
+			}
+			tt.edit(p)
+			page := string(newSite(t, Options{Retention: p}).privacy)
+			got := tableRows(page)
+			var want [][]string
+			for _, where := range retention.Places {
+				for _, e := range p.In(where) {
+					want = append(want, []string{e.Data, p.Kept(e)})
+				}
+			}
+			if !reflect.DeepEqual(got, want) {
+				t.Errorf("the notice's retention rows are\n%q\nwant\n%q", got, want)
+			}
+			kept := make(map[string]string)
+			for _, r := range got {
+				if len(r) == 2 {
+					kept[r[0]] = r[1]
+				}
+			}
+			for _, j := range p.AllJobs() {
+				e, _ := p.Find(j.ID)
+				text, ok := kept[e.Data]
+				if !ok {
+					t.Errorf("%s: the notice has no row for %q", j.ID, e.Data)
+					continue
+				}
+				if want := retention.Days(int(j.MaxAge / (24 * time.Hour))); !strings.Contains(text, want) {
+					t.Errorf("%s deletes after %v, but the notice says %q", j.ID, j.MaxAge, text)
+				}
+				if j.Hold != nil {
+					if want := fmt.Sprintf("%d months after the decision", j.Hold.WindowMonths); !strings.Contains(text, want) {
+						t.Errorf("%s holds rows for %d months, but the notice says %q", j.ID, j.Hold.WindowMonths, text)
+					}
+				}
+			}
+			if want := fmt.Sprintf("keeps it open for %d months after the decision", p.SpotCheckWindow.Months); !strings.Contains(page, want) {
+				t.Errorf("the notice doesn't say %q", want)
+			}
+		})
+	}
+}
+
+func TestPrivacyNotice(t *testing.T) {
+	tests := []struct {
+		name    string
+		opts    Options
+		want    []string // substrings of the page
+		notWant []string
+	}{
+		{
+			name: "without a controller the notice says it isn't final and marks the placeholders",
+			want: []string{"This notice isn&#39;t final.", "The controller here is <strong>[not named yet]</strong>.", "contact <strong>[not named yet]</strong>."},
+		},
+		{
+			name:    "a named controller and contact replace the placeholders and the warning",
+			opts:    Options{Controller: Controller{Name: "Hack Club", Contact: "privacy@example.org"}},
+			want:    []string{"The controller here is Hack Club.", `contact <a href="mailto:privacy@example.org">privacy@example.org</a>.`},
+			notWant: []string{"isn&#39;t final", "not named yet"},
+		},
+		{
+			name:    "a name without a contact keeps the notice marked not final",
+			opts:    Options{Controller: Controller{Name: "Hack Club"}},
+			want:    []string{"This notice isn&#39;t final.", "The controller here is Hack Club."},
+			notWant: []string{"The controller here is <strong>"},
+		},
+		{
+			name: "an https contact becomes a link",
+			opts: Options{Controller: Controller{Name: "Karim", Contact: "https://example.org/privacy"}},
+			want: []string{`contact <a href="https://example.org/privacy">https://example.org/privacy</a>.`},
+		},
+		{
+			name: "the Data Protection Officer appears when set",
+			opts: Options{Controller: Controller{Name: "Hack Club", Contact: "privacy@example.org", DPO: "dpo@example.org"}},
+			want: []string{`Data Protection Officer at <a href="mailto:dpo@example.org">dpo@example.org</a>.`},
+		},
+		{
+			name:    "without a Data Protection Officer the notice names none",
+			notWant: []string{"Data Protection Officer"},
+		},
+		{
+			name: "markup in a controller's name is shown as text",
+			opts: Options{Controller: Controller{Name: "<b>Evil</b> *Co* [x](https://e.org)", Contact: "a@example.org"}},
+			want: []string{"The controller here is &lt;b&gt;Evil&lt;/b&gt; *Co* [x](https://e.org)."},
+		},
+		{
+			name:    "in ask mode the private choice is the prominent button",
+			opts:    Options{ProfileDefault: "ask"},
+			want:    []string{"&#34;Private profile&#34; is the more prominent button"},
+			notWant: []string{"public by default"},
+		},
+		{
+			name:    "in public mode profiles are public by default, with equal buttons",
+			opts:    Options{ProfileDefault: "public"},
+			want:    []string{"Profiles on this server are public by default", "as equal buttons"},
+			notWant: []string{"more prominent button. Either"},
+		},
+		{
+			name:    "the privacy hub is promised only once its aud is set",
+			notWant: []string{"privacy hub"},
+		},
+		{
+			name: "with the privacy hub set the notice says Hack Club can reach this server",
+			opts: Options{PrivacyHub: true},
+			want: []string{"through the same privacy hub it uses for Hackatime"},
+		},
+		{
+			name: "the IP period in the prose is the schedule's",
+			want: []string{"the server deletes them after 30 days."},
+		},
+		{
+			name: "the notice names this server and its version",
+			opts: Options{BaseURL: "https://pairtime.example.net", Version: "v1.2.3"},
+			want: []string{"the pairtime server at https://pairtime.example.net", "built by pairtime v1.2.3", "pairtime v1.2.3 is free software"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			page := string(newSite(t, tt.opts).privacy)
+			for _, w := range tt.want {
+				if !strings.Contains(page, w) {
+					t.Errorf("the notice doesn't contain %q", w)
+				}
+			}
+			for _, w := range tt.notWant {
+				if strings.Contains(page, w) {
+					t.Errorf("the notice contains %q", w)
+				}
+			}
+		})
+	}
+}
+
+func TestNewRefuses(t *testing.T) {
+	tests := []struct {
+		name    string
+		opts    Options
+		wantErr string
+	}{
+		{name: "a contact that is neither an email address nor an https URL", opts: Options{Controller: Controller{Name: "X", Contact: "call me"}}, wantErr: "must be an email address or an https URL"},
+		{name: "a javascript: contact", opts: Options{Controller: Controller{Name: "X", Contact: "javascript:alert(1)"}}, wantErr: "must be an email address or an https URL"},
+		{name: "an http contact", opts: Options{Controller: Controller{Name: "X", Contact: "http://example.org"}}, wantErr: "must be an email address or an https URL"},
+		{name: "a scoring MAJOR without its own evidence definition", opts: Options{ScoringVersion: "1.0.0"}, wantErr: "no evidence definition covers scoring 1.0.0"},
+		{name: "a scoring version that isn't X.Y.Z", opts: Options{ScoringVersion: "1.0"}, wantErr: "isn't of the form X.Y.Z"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p, err := retention.Default()
+			if err != nil {
+				t.Fatal(err)
+			}
+			tt.opts.Retention = p
+			_, err = New(tt.opts)
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Errorf("New error = %v, want one containing %q", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestRoutes(t *testing.T) {
+	mux := http.NewServeMux()
+	newSite(t, Options{ScoringVersion: "0.4.2"}).Register(mux)
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	tests := []struct {
+		name     string
+		method   string
+		path     string
+		wantCode int
+		wantBody string
+	}{
+		{name: "/privacy serves the notice", path: "/privacy", wantCode: 200, wantBody: "<h1 id=\"pairtime-privacy-notice\">pairtime privacy notice</h1>"},
+		{name: "HEAD /privacy answers too", method: http.MethodHead, path: "/privacy", wantCode: 200},
+		{name: "POST /privacy is refused", method: http.MethodPost, path: "/privacy", wantCode: 405},
+		{name: "/docs/evidence serves the definition for the scoring version this server runs", path: "/docs/evidence", wantCode: 200, wantBody: "This server runs scoring 0.4.2."},
+		{name: "/docs/evidence says which versions its definition covers", path: "/docs/evidence", wantCode: 200, wantBody: "for scoring 0.1.0 and the later 0.x versions."},
+		{name: "/docs/evidence/<version> serves the definition in force at that version", path: "/docs/evidence/0.1.0", wantCode: 200, wantBody: "Evidence levels and bands"},
+		{name: "a version before the first definition has none", path: "/docs/evidence/0.0.9", wantCode: 404},
+		{name: "a MAJOR without a definition of its own has none", path: "/docs/evidence/1.0.0", wantCode: 404},
+		{name: "a malformed version is not found", path: "/docs/evidence/latest", wantCode: 404},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			method := tt.method
+			if method == "" {
+				method = http.MethodGet
+			}
+			req, err := http.NewRequest(method, srv.URL+tt.path, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			resp, err := srv.Client().Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+			body, err := io.ReadAll(resp.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if resp.StatusCode != tt.wantCode {
+				t.Fatalf("%s %s = %d, want %d", method, tt.path, resp.StatusCode, tt.wantCode)
+			}
+			if tt.wantBody != "" && !strings.Contains(string(body), tt.wantBody) {
+				t.Errorf("%s %s doesn't contain %q", method, tt.path, tt.wantBody)
+			}
+			if tt.wantCode == 200 {
+				if ct := resp.Header.Get("Content-Type"); ct != "text/html; charset=utf-8" {
+					t.Errorf("Content-Type = %q", ct)
+				}
+				if csp := resp.Header.Get("Content-Security-Policy"); !strings.HasPrefix(csp, "default-src 'none'; style-src 'sha256-") {
+					t.Errorf("Content-Security-Policy = %q", csp)
+				}
+			}
+		})
+	}
+}
+
+// TestStyleHash checks that the CSP allows exactly the inline stylesheet
+// each page carries, so browsers don't drop it.
+func TestStyleHash(t *testing.T) {
+	s := newSite(t, Options{})
+	pages := []struct {
+		name string
+		page []byte
+	}{
+		{name: "the privacy notice's style matches its CSP hash", page: s.privacy},
+		{name: "the evidence page's style matches its CSP hash", page: s.current},
+		{name: "the refusal page's style matches its CSP hash", page: s.Signups.refusal},
+	}
+	for _, p := range pages {
+		t.Run(p.name, func(t *testing.T) {
+			_, rest, ok := strings.Cut(string(p.page), "<style>")
+			css, _, ok2 := strings.Cut(rest, "</style>")
+			if !ok || !ok2 {
+				t.Fatal("the page has no <style> element")
+			}
+			sum := sha256.Sum256([]byte(css))
+			want := "style-src 'sha256-" + base64.StdEncoding.EncodeToString(sum[:]) + "'"
+			if !strings.Contains(s.csp, want) {
+				t.Errorf("CSP %q doesn't allow the page's style; want %s", s.csp, want)
+			}
+		})
+	}
+}
+
+// TestEvidenceIsDesign64 checks the evidence definition for the built-in
+// scoring version against the oracle: every line of DESIGN 6.4, after its
+// first paragraph, which says where the page is served, must appear in the
+// definition word for word.
+func TestEvidenceIsDesign64(t *testing.T) {
+	data, err := os.ReadFile("../../../docs/DESIGN.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, sec, ok := strings.Cut(string(data), "\n### 6.4 Evidence levels and bands\n")
+	if !ok {
+		t.Fatal("docs/DESIGN.md has no section 6.4")
+	}
+	sec, _, _ = strings.Cut(sec, "\n### ")
+	var lines []string
+	for _, l := range strings.Split(sec, "\n") {
+		if strings.TrimSpace(l) != "" {
+			lines = append(lines, l)
+		}
+	}
+	if len(lines) < 10 || !strings.HasPrefix(lines[0], "This is the one published definition") {
+		t.Fatalf("DESIGN 6.4 doesn't start as expected: %q", lines[:min(1, len(lines))])
+	}
+
+	// The definition in force at the built-in version is the newest file of
+	// its MAJOR that starts at or before it.
+	builtin, _ := parseVersion(BuiltinScoringVersion)
+	names, err := fs.Glob(files, "evidence/*.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var file string
+	var from version
+	for _, n := range names {
+		v, ok := parseVersion(strings.TrimSuffix(path.Base(n), ".md"))
+		if ok && v[0] == builtin[0] && v.compare(builtin) <= 0 && (file == "" || v.compare(from) > 0) {
+			file, from = n, v
+		}
+	}
+	if file == "" {
+		t.Fatalf("no evidence definition covers scoring %s", BuiltinScoringVersion)
+	}
+	src, err := fs.ReadFile(files, file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, l := range lines[1:] {
+		t.Run(fmt.Sprintf("DESIGN 6.4 line %d appears word for word", i+2), func(t *testing.T) {
+			if !strings.Contains(string(src), l) {
+				t.Errorf("%s lacks DESIGN 6.4's line\n%s", file, l)
+			}
+		})
+	}
+}
+
+// callback stands in for WP-SV2's HCA callback once it has verified the ID
+// token for sub: it looks up the account, asks the gate, and creates the
+// account only when the gate admits sub.
+func callback(db *store.DB, gate *Signups) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctx := r.Context()
+		sub := r.URL.Query().Get("sub")
+		var n int
+		if err := db.Read.QueryRowContext(ctx, `SELECT count(*) FROM accounts WHERE hca_sub = $1`, sub).Scan(&n); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if !gate.Admit(w, sub, n > 0) {
+			return
+		}
+		if n == 0 {
+			if _, err := db.Write.ExecContext(ctx, `INSERT INTO accounts (hca_sub) VALUES ($1)`, sub); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+		}
+		fmt.Fprint(w, "signed in")
+	})
+}
+
+func TestSignups(t *testing.T) {
+	tests := []struct {
+		name      string
+		open      bool
+		operators []string
+		existing  []string // HCA subs that already have accounts
+		sub       string
+		wantCode  int
+		wantBody  string
+		wantRows  int // accounts for sub afterwards
+	}{
+		{name: "while sign-ups are closed a new identity gets the refusal page and no row", sub: "ident!new", wantCode: 403, wantBody: "Sign-ups aren&#39;t open yet", wantRows: 0},
+		{name: "the refusal says nothing was kept", sub: "ident!new", wantCode: 403, wantBody: "No account was made for you, and nothing from your Hack Club sign-in was saved.", wantRows: 0},
+		{name: "while sign-ups are closed an operator signs in and gets an account", operators: []string{"ident!op"}, sub: "ident!op", wantCode: 200, wantBody: "signed in", wantRows: 1},
+		{name: "the operators list lets in only the subs on it", operators: []string{"ident!op"}, sub: "ident!other", wantCode: 403, wantRows: 0},
+		{name: "while sign-ups are closed an existing account still signs in", existing: []string{"ident!old"}, sub: "ident!old", wantCode: 200, wantBody: "signed in", wantRows: 1},
+		{name: "with sign-ups open a new identity gets an account", open: true, sub: "ident!new", wantCode: 200, wantBody: "signed in", wantRows: 1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			db := storetest.Open(t, store.SQLite)
+			if _, err := db.Write.ExecContext(ctx, `CREATE TABLE accounts (hca_sub TEXT PRIMARY KEY)`); err != nil {
+				t.Fatal(err)
+			}
+			for _, sub := range tt.existing {
+				if _, err := db.Write.ExecContext(ctx, `INSERT INTO accounts (hca_sub) VALUES ($1)`, sub); err != nil {
+					t.Fatal(err)
+				}
+			}
+			gate := newSite(t, Options{SignupsOpen: tt.open, Operators: tt.operators}).Signups
+			rec := httptest.NewRecorder()
+			callback(db, gate).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/auth/hca/callback?sub="+url.QueryEscape(tt.sub), nil))
+
+			if rec.Code != tt.wantCode {
+				t.Errorf("status = %d, want %d", rec.Code, tt.wantCode)
+			}
+			if !strings.Contains(rec.Body.String(), tt.wantBody) {
+				t.Errorf("body doesn't contain %q:\n%s", tt.wantBody, rec.Body.String())
+			}
+			if tt.wantCode == 403 {
+				if cc := rec.Header().Get("Cache-Control"); cc != "no-store" {
+					t.Errorf("Cache-Control = %q, want no-store", cc)
+				}
+			}
+			var n int
+			if err := db.Read.QueryRowContext(ctx, `SELECT count(*) FROM accounts WHERE hca_sub = $1`, tt.sub).Scan(&n); err != nil {
+				t.Fatal(err)
+			}
+			if n != tt.wantRows {
+				t.Errorf("accounts for %s = %d, want %d", tt.sub, n, tt.wantRows)
+			}
+		})
+	}
+}

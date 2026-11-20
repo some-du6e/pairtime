@@ -1,0 +1,145 @@
+{{- /* SPDX-License-Identifier: AGPL-3.0-or-later */ -}}
+# pairtime privacy notice
+
+{{if not .Named -}}
+> **This notice isn't final.** It doesn't name a controller yet, the person or organization responsible for your data on this server. Until it does, this server takes no sign-ups, and the parts marked "not named yet" stay empty.
+
+{{end -}}
+This notice covers the pairtime server at {{.BaseURL}} and the pairtime program on your computer. It's written for Hack Clubbers aged 13 to 18 and their parents. If anything in it is unclear, ask the controller.
+
+## The short version
+
+- Your prompts, your code, your file names and your window titles stay on your computer.
+- This server gets numbers: how many seconds of each minute were credited, to which project (as a key, not its name), and why the rest weren't.
+- Nothing about you is public until you choose what to show.
+- Hours are checked for fraud only when you submit them to a program.
+- Every kind of data has a time limit, listed under [How long we keep things](#how-long-we-keep-things).
+
+## Who is responsible for your data
+
+The controller decides what happens to your data on this server and answers for it. The controller here is {{.Controller}}. To ask a question or use your rights, contact {{.Contact}}.{{if .DPO}} You can also reach Hack Club's Data Protection Officer at {{.DPO}}.{{end}}
+
+pairtime is open source under the AGPL-3.0 license, and [the code this server runs]({{.SourceURL}}) is public, so anyone can check this notice against it.
+
+## What pairtime does
+
+pairtime counts the time you spend building with AI tools: thinking, writing prompts, reading what the agent did, testing and fixing. Time your agent spends working on its own doesn't count. The pairtime program on your computer does the tracking and the scoring, and this server receives the results as numbers. That lets you see your time from anywhere, show a profile if you want one, and submit hours to a Hack Club program.
+
+## What stays on your computer
+
+pairtime keeps these on your computer:
+
+- the text of your prompts and of the agent's replies
+- your code, your file names and your folder paths
+- your window titles, which pairtime matches to your projects in memory and doesn't even store
+- the names of other apps you use
+- your keystrokes. pairtime never records which keys you press or when you press them. If you turn on the typing module, it keeps per-minute counts and summaries, never the keys.
+
+None of it is uploaded, with one exception that you control. When you submit hours, a few of your prompts and the agent messages they answered go to the program's reviewers, after you've seen exactly what they will see. [When you submit hours](#when-you-submit-hours) explains how.
+
+If you also use Hackatime, your editor keeps sending Hackatime what it sent before. pairtime adds nothing to it and removes nothing from it.
+
+## What this server receives
+
+About once a minute while you work, your computer uploads these:
+
+- **Minute buckets.** For each minute, how many seconds were credited, to which project key, at which evidence level, and a reason code for each second that wasn't credited.
+- **Batch roots.** Hashes that seal what your computer recorded, so the record can't be changed later without it showing.
+- **Commit records.** For each commit, its ID and its parents, its times, how many files and lines changed, the credited time since the commit before it, and whether an AI agent made it. File paths go only as keyed hashes, never as names.
+- **Labels.** Your pairtime version, the scoring version, the names and versions of your AI tools, whether the typing module is on, and whether pairtime thinks it runs in a virtual machine.
+
+Each upload also shows this server the IP address it came from. Cloudflare, which sits in front of the server, adds a fingerprint of your connection's TLS settings called JA4. Hack Club's Fraud Squad can look them up when it checks submitted hours, and the server deletes them after {{days "server.ip_ja4"}}.
+
+Some things reach the server only at particular moments:
+
+- **Sign-in.** When you sign in with Hack Club Auth, the server gets your Hack Club Auth ID, your Slack ID, your email address, and whether Hack Club has verified you. It stores your email encrypted.
+- **A new computer.** When you sign in on a computer, the server gives it a random device ID and stores its OS family and a device key that signs its uploads.
+- **A new project.** When pairtime first sees a git repository, it sends the ID of the repository's first commit. The server turns that into a keyed hash and throws the ID away. It gets the repository's address only if the repository is public or you publish the project.
+- **Programs.** When you connect a project to a program, the server stores keyed hashes of the Hackatime project names you choose to link.
+- **Publishing.** When you publish a devlog, a project page or badges, the server gets exactly what the preview showed you.
+- **Backups.** Only if you turn them on, the server gets your device key, locked with your recovery code, and encrypted copies of your ledger and vault. It can't open them without your recovery code.
+
+This server never receives your prompts or the agent's output, file names or paths, window titles, the names of other programs you run, branch names of private repositories, keystrokes or their timing, prompt similarity sketches, error messages, your computer's name, or your username on it.
+
+There's no analytics or telemetry. Apart from what this notice lists, the only request pairtime makes is a daily check with GitHub for updates, and that carries none of your data. To see exactly what the next upload will send, run `pairtime privacy show`.
+
+If you'd rather upload nothing, use local-only mode. pairtime still tracks your time and shows it on your computer, but hours tracked that way can never be submitted to a program.
+
+## Why we use your data
+
+Everything pairtime does with your data falls into one of three groups.
+
+1. **The service you asked for.** Tracking and scoring on your computer, uploads for your own dashboard, session recaps, and the totals on your public profile if you have one.
+2. **Fraud protection.** Checks, risk scores and audits, and only on hours you submit. pairtime doesn't score your other hours for fraud.
+3. **Everything else, which needs your consent.** That's the typing module, club boards, habit insights, showing that you're building right now, sharing feedback on recaps to improve scoring, research use of pilot data, and backups with a recovery code. Each one gets its own card. Nothing is ticked for you, and "Not now" is the most prominent button. Saying no takes no feature away, and pairtime won't ask again for a year. You can turn any of them off later with one switch in Settings.
+
+One question about consent is still open. On Windows, and on Linux with X11, most minutes count as evidence level B unless the typing module is on, and a high share of level-B minutes is one of the things that raises the chance a person audits a submission. Whether that treats people who said no unfairly is a legal question that hasn't been answered yet.
+
+## Your public profile
+
+{{if .PublicDefault -}}
+Profiles on this server are public by default, but nothing about you is public until you answer the profile card. The card shows a preview of your public page, with "Keep my profile public" and "Make it private" as equal buttons.
+{{- else -}}
+Nothing about you is public until you choose. The first time you sign in, a card asks whether you want a public profile, and "Private profile" is the more prominent button.
+{{- end}} Either way, you can switch with one click at any time, and anything you delete from your profile disappears at once.
+
+A public profile shows only your handle, your daily totals (never the time of day), your build days and weekly streak, the AI tools and languages you use, projects whose repositories are public with their verified commits, devlogs you published, and badges you picked. It never shows your real name, school, city, age or time zone, your prompts or file names, private repositories, details of your computer, or anything about reviews. It updates at most once an hour. Leaderboards, club boards and "currently building" stay off unless you turn them on.
+
+Reviewers never use your profile, build days or badges as evidence, so keeping your profile private costs you nothing.
+
+## When you submit hours
+
+Submitting hours to a program is always your choice. This is what happens when you do:
+
+- Your computer reveals the records behind those hours, so the server can check them against what it received at the time.
+- The server draws some of your prompts at random. For each one, you reveal the prompt and the agent message it answered. pairtime first removes the secrets and personal details it can find, then shows you exactly what a reviewer will see. You can remove more, or withhold any item. If you withhold one, the minutes it supports aren't credited.
+- Redaction sometimes misses things, names especially, so read the preview before you send it.
+- The preview also says what the check reveals about your other projects. That's counts and times, never content.
+- What you reveal is sealed end to end, so Cloudflare and anything else in between can't read it. Only the reviewers assigned to your submission, Hack Club's Fraud Squad, its Quality and Integrity team and HQ spot-checkers can open it. Every view is logged, and you can read the log.
+- If a revealed item shows something it shouldn't, the "This revealed something it shouldn't have" button deletes it at once. The minutes it supported stop counting.
+- A person may audit your submission in a 15-minute walk-through on a Slack huddle. It's never recorded, your camera is never needed, and you can bring a parent or club leader, or choose a written audit instead. Hack Club's safeguarding rules come first where they differ.
+
+## Who else is involved
+
+- **Hack Club Auth** signs you in.
+- **Cloudflare** sits in front of this server and handles its encrypted connections. It can see the numbers your computer uploads, but not the evidence you reveal when you submit.
+- **GitHub, GitLab and Forgejo.** The server looks up commits of your public repositories there to check them. Once a day it also publishes a day root to a public GitHub repository. A day root is one hash over that day's uploads, with a count and nothing about you.
+- **A storage provider** keeps backup copies of this server's database.
+- **Programs** you connect a project to get your submissions and their outcomes.
+- **Healthchecks.io** gets a ping every 5 minutes, so the operator knows the server is up. The pings carry nothing about you.
+
+Apart from these, this server sends your data nowhere.
+
+## How long we keep things
+
+Every kind of data has a time limit. These tables come from the same file this server's cleanup jobs read, [docs/retention.json](https://github.com/some-du6e/pairtime/blob/main/docs/retention.json). A spot-check window is the time after a decision during which Hack Club can check a submission again. {{if .WindowProvisional}}Until Hack Club sets its length, pairtime keeps it open for {{.WindowMonths}} months after the decision.{{else}}It stays open for {{.WindowMonths}} months after the decision.{{end}}
+{{range .Sections}}
+### {{.Title}}
+
+| What | How long it's kept |
+|---|---|
+{{range .Rows}}| {{.Data}} | {{.Kept}} |
+{{end}}{{end}}
+## Your choices and rights
+
+On your computer:
+
+- `pairtime privacy show` prints the next upload exactly as it will be sent.
+- `pairtime ledger show --day <date>` prints everything pairtime recorded that day.
+- A `.pairtime-ignore` file keeps a folder out of pairtime entirely, and the tray menu can pause tracking for an hour.
+- Local-only mode uploads nothing.
+- "Delete everything" wipes pairtime's data on your computer, including its device key.
+
+Through the controller, you can ask for a copy of your data, ask for it to be corrected or deleted, and withdraw any consent you gave. Deleting your account deletes everything this server holds about you, except the minimal fraud record in the table above, which the deletion report lists as kept. Copies that programs already received, such as the outcome of a submission, are held by those programs, not by this server.{{if .PrivacyHub}} Hack Club's privacy team can also export or delete your pairtime data for you, through the same privacy hub it uses for Hackatime.{{end}}
+
+Parents and guardians can contact the controller with questions or requests too.
+
+## Age
+
+pairtime on this server is for Hack Clubbers aged 13 to 18. Hack Club Auth decides who is eligible, so pairtime never asks for your birthdate or stores it. If Hack Club Auth marks you as not eligible, sign-in is refused, and submitting hours needs a verified Hack Club account. If you're under 13, Hack Club's rules don't let you use its services, this one included. Hours you log on or after your 19th birthday don't earn credit in Hack Club programs.
+
+From 2027, if your computer's operating system can share an age range, pairtime asks for it once. The range stays on your computer and is never sent anywhere, and you or a parent can decline to share it. If it says you're under 13, pairtime stops tracking and deletes its data on your computer.
+
+## Changes to this notice
+
+If pairtime ever starts uploading a new kind of data, the change goes through a public review in pairtime's repository first, and this notice changes with it. This page was built by pairtime {{.Version}} from this server's settings.
