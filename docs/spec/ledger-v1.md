@@ -76,13 +76,15 @@ HMAC pads a key shorter than SHA-256's 64-byte block with zeros, so an empty sal
 
 Other parts of pairtime derive keys under the same `pairtime/v1/` prefix: `backup` and `recovery` in DESIGN 7.11, and `seal` in DESIGN 7.6. Their own specs define them. A new ledger key takes a new label, and no label is ever used for two keys. `K_dev` and the keys derived from it never leave the device unencrypted (DESIGN 4.3, 7.11).
 
+One `K_dev` writes one chain. The nonce (4.4) and the token salts (10.2) are keyed by `s` alone, so they stay unique only while no `s` repeats under one `K_dev`. A `K_dev` that `pairtime restore` unwraps onto a new install (DESIGN 7.11) only verifies and opens the old chain's records. The restored install writes its own chain, under its own `device_id` and a `K_dev` generated for it, from `s = 1`, and keeps the old key for reading. A second chain under the old key would repeat every nonce and salt: a body or a salt revealed from the old chain would let a reader confirm guesses of the new chain's hidden bodies, or of its removed tokens, at the same `s`.
+
 ## 4. Records
 
 A record is one entry in a device's ledger: an event, a scorer checkpoint or an upload-failure note. The writer appends records to `ledger/YYYY-MM-DD.seg` (DESIGN 3.5). That file's layout belongs to WP-LG5 and nothing in it is hashed apart from the header and body bytes below.
 
 ### 4.1 Sequence numbers
 
-Every record has a sequence number `s`. The device's first record has `s = 1`, and each record it writes after that, of any type, has the next number. There are no gaps and no repeats. An event's `seq` field equals the `s` of the record that holds it.
+Every record has a sequence number `s`. The device's first record has `s = 1`, and each record it writes after that, of any type, has the next number. There are no gaps and no repeats, and because one `K_dev` writes one chain (3), no `s` repeats under a `K_dev` either. An event's `seq` field equals the `s` of the record that holds it.
 
 Checkpoints and upload-failure notes take numbers from the same sequence. So the record sequence has no gaps, while the events' own `seq` values skip the numbers those records hold.
 
@@ -885,3 +887,4 @@ The review of parts 1 and 2 (issue #19) decided these, before any device witness
 29. An `f` with a `v` below 1 or not an integer, a `null` member, or a member version 1 doesn't list under `v = 1` is malformed. A `v` above a reader's own is unknown, and a server refuses or holds such a record (10.7).
 30. The server refuses an empty batch, and once it holds a batch of a device it refuses that device's batch `b` unless it stored batch `b - 1` with head `prev`, DESIGN 3.10's chain link. Only a device's first upload may start after batch 1. An earlier draft refused only a `prev` that differed from a stored head, which let a device skip a batch (6, 9).
 31. The server returns `received_at` with each receipt, and the client stores it next to the receipt. DESIGN 3.5's `batches.seg` row and DESIGN 3.6 name only the receipt, which can't be checked without the time it signs (7).
+32. One `K_dev` writes one chain, so no `s` repeats under it. An install restored with `pairtime restore` writes a new chain under a new `K_dev` and keeps the old key only to verify and open the old chain. DESIGN 7.11 unwraps the old key onto the new install, and a second chain from `s = 1` under it would repeat every nonce and token salt (3, 4.1).
