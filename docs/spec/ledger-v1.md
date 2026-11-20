@@ -261,7 +261,7 @@ The day number of a time `t` is `d = floor(t / 86,400,000)`, days since 1970-01-
 leaf = u8(len(device_id)) || ascii(device_id) || u64(b) || H_b || u64(received_at)
 ```
 
-The leaves are ordered by `received_at`, then by `device_id` compared byte by byte, then by `b`. That order has no ties, because the server stores each `(device_id, b)` once. Equal `received_at` values are common: a device that was offline flushes many batches in one request.
+The leaves are ordered by `received_at`, then by `device_id` compared byte by byte as unsigned bytes, a shorter id sorting before a longer one it begins, then by `b`. No case folding, locale or collation enters the comparison: `Zq` sorts before `aB`, `a-` before `aB` before `a_`, and `w` before `w_`, while `strings.ToLower` or a database's `en_US` collation would order them otherwise and publish a different `T_d` for good. That order has no ties, because the server stores each `(device_id, b)` once. Equal `received_at` values are common: a device that was offline flushes many batches in one request.
 
 ```text
 T_d     = MTH(day d's leaves, in that order)      T_d = SHA-256 of no bytes for a day with no rows
@@ -714,7 +714,7 @@ Besides recomputing each value from the file's own inputs, `check` applies these
 - `digests`: no project, one-character keys, `none` as a project key, where it is an ordinary key, and 128-character keys.
 - Chain A: 50 batches whose sizes include the plan's list, 1, 2, 3, 7, 8, 9, 100 and 1,000, with every rtype, uploaded about a minute apart from 23:20 UTC so they span midnight. It has proofs for every leaf of each batch of up to 9 records and for eight leaves of each larger batch.
 - Chain B: a 128-character `device_id`, and four batches that share one `received_at`, as an offline flush would.
-- Days: 2026-11-19 and 2026-11-20, with rows from both chains and from four devices whose chains aren't in the file. Two of those rows share a millisecond with a chain A batch, one sorting before it and one after it; chain B's four batches share one millisecond; and two rows fall in the last and the first millisecond of a day. 2026-11-21 has no rows. Every leaf has a proof.
+- Days: 2026-11-19 and 2026-11-20, with rows from both chains and from ten devices whose chains aren't in the file. Eight of those rows share a millisecond with a chain A batch: one sorting before it and one after it, and `Zq`, `aB`, `a-`, `a_`, `w` and `w_`, whose byte order differs from their order with case folded or under a locale's collation (8). Chain B's four batches share one millisecond, and two rows fall in the last and the first millisecond of a day. 2026-11-21 has no rows. Every leaf has a proof.
 
 The bodies are stand-ins: the real envelope with the record's real nonce, and `"e":{"stand_in":"<record type>","seq":<s>}` in place of the record. Hashing never parses a body, so a stand-in exercises the same code a real body does. The keys are test keys, published here and used nowhere else.
 

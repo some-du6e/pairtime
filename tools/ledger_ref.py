@@ -1968,6 +1968,15 @@ def make_days(s, chains, first_day, days):
         (after, 7, tie),
         (mid, 1, d1 + s.below(DAY_MS)),
         (mid, 2, d2 + s.below(DAY_MS)),
+        # Ids whose byte order isn't their order with case folded or under
+        # a locale's collation, which skips '-' and '_' at first: Zq before
+        # aB, a- before aB before a_, and w before w_.
+        ("Zq", 1, tie),
+        ("aB", 1, tie),
+        ("a-", 1, tie),
+        ("a_", 1, tie),
+        ("w", 1, tie),
+        ("w_", 1, tie),
     ):
         rows.append((device_id, b, s.take(32), received_at))
     out, prev = [], ZERO32
