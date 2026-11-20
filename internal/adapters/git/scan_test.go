@@ -818,6 +818,15 @@ func TestScanAgainstGit(t *testing.T) {
 				if changes := mustScan(t, s); len(changes) == 0 {
 					t.Fatal("the scan found nothing to read")
 				}
+				// Resolving again checks the known identity's roots, and a
+				// restarted resolver does too.
+				res.Forget()
+				if _, err := res.Resolve(ctx, r.dir); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := g.resolver(res.Map(), Excludes{}).Resolve(ctx, r.dir); err != nil {
+					t.Fatal(err)
+				}
 				if after := snapshot(t, filepath.Join(r.dir, ".git")); !maps.Equal(before, after) {
 					t.Errorf("files under .git changed:\n%s", snapshotDiff(before, after))
 				}
