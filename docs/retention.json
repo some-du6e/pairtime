@@ -99,14 +99,19 @@
       "id": "server.minute_buckets",
       "where": "server",
       "data": "Minute buckets: for each 15 seconds, the credited seconds by project key, why they were credited and what kind of work they counted as, with the reasons for seconds that weren't credited and how long an AI agent was running",
-      "kept": "Per-minute detail for {days}, the furthest back a submission can reach. After that only daily totals per project and kind of work stay, for as long as your account exists",
+      "kept": "Per-minute detail for {days}, the furthest back a submission can reach. Minutes a submission uses stay until its spot-check window closes ({window}). After that only daily totals per project and kind of work stay, for as long as your account exists",
       "days": 180,
       "lifetime_tables": ["rollups_daily"],
       "jobs": [{
         "table": "minute_buckets",
         "key": ["device_id", "minute_ms"],
         "time_column": "minute_ms",
-        "awaits": "WP-SV7"
+        "awaits": "WP-SV7",
+        "hold": {
+          "table": "submission_minutes",
+          "decided_column": "decided_at_ms",
+          "awaits": "WP-SB4"
+        }
       }]
     },
     {

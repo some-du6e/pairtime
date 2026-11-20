@@ -16,9 +16,12 @@
 // hold keeps. That one shape covers DESIGN 4.4's four server jobs:
 //
 //   - IP addresses and JA4 fingerprints, 30 days after they were seen.
-//   - Per-minute buckets, 180 days after their minute. Ingest keeps the
-//     daily totals per project current in rollups_daily (WP-SV7), so
-//     deleting the minute rows leaves exactly those totals.
+//   - Per-minute buckets, 180 days after their minute, unless a
+//     submission still inside its spot-check window uses them, since
+//     CC6 and the bundle compare against the buckets received live
+//     (DESIGN 7.3, 7.8). Ingest keeps the daily totals per project and
+//     activity current in rollups_daily (WP-SV7), so deleting the minute
+//     rows leaves exactly those totals.
 //   - Witness rows, 180 days after they were received, unless a
 //     submission still inside its spot-check window uses them.
 //   - Device rows, 90 days after the device was removed. A device that

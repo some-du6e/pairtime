@@ -269,7 +269,7 @@ func TestJobs(t *testing.T) {
 				}
 			},
 			wantJobs: []string{"server.devices/devices", "server.ip_ja4/request_origins", "server.minute_buckets/minute_buckets", "server.witness/witness_rows"},
-			wantOff:  []string{"server.witness/witness_rows hold awaits WP-SB4"},
+			wantOff:  []string{"server.minute_buckets/minute_buckets hold awaits WP-SB4", "server.witness/witness_rows hold awaits WP-SB4"},
 		},
 		{
 			name: "a job runs with its hold once both tables exist",
@@ -283,7 +283,7 @@ func TestJobs(t *testing.T) {
 					}
 				}
 			},
-			wantJobs: []string{"server.devices/devices", "server.ip_ja4/request_origins", "server.minute_buckets/minute_buckets", "server.witness/witness_rows+hold"},
+			wantJobs: []string{"server.devices/devices", "server.ip_ja4/request_origins", "server.minute_buckets/minute_buckets+hold", "server.witness/witness_rows+hold"},
 		},
 	}
 	for _, tt := range tests {
@@ -472,6 +472,9 @@ func TestSweep(t *testing.T) {
 				{name: "an IP seen a year ago is deleted", job: "server.ip_ja4/request_origins", age: 365 * day},
 				{name: "a minute bucket 180 days old loses its per-minute row", job: "server.minute_buckets/minute_buckets", age: 180 * day},
 				{name: "a minute bucket a minute younger than 180 days keeps its row", job: "server.minute_buckets/minute_buckets", age: 180*day - time.Minute, kept: true},
+				{name: "an old minute bucket an open submission uses keeps its row", job: "server.minute_buckets/minute_buckets", age: 400 * day, hold: &hold{open: true}, kept: true},
+				{name: "an old minute bucket keeps its row a minute before its submission's window closes", job: "server.minute_buckets/minute_buckets", age: 400 * day, hold: &hold{decided: utc(2026, 7, 1, 12, 1)}, kept: true},
+				{name: "an old minute bucket loses its row when its submission's window closes", job: "server.minute_buckets/minute_buckets", age: 400 * day, hold: &hold{decided: utc(2026, 7, 1, 12, 0)}},
 				{name: "a device removed 90 days ago is deleted", job: "server.devices/devices", age: 90 * day},
 				{name: "a device removed 89 days ago stays", job: "server.devices/devices", age: 89 * day, kept: true},
 				{name: "a device that was never removed stays", job: "server.devices/devices", null: true, kept: true},
