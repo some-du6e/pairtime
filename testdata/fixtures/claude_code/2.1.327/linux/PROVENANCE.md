@@ -6,7 +6,7 @@ captured_on: 2026-11-20
 captured_by: an AI agent (pairtime's WP-AD1 build agent) driving a tmux pty on swiss, not a person
 synthetic: false
 scrubbed_by: pairtime fixtures scrub v0.0.0-snapshot.49 (CI-built at e3621dd0b101, release.yml run 44773070395), then tools/capture/scrub.py at b2dac8f74bd0 as a dry-run second check; two false positives restored by hand; checked by an agent with the searches listed below, not read by a person
-kit: tools/capture at b2dac8f74bd0 (branch wp-ad1-kit-step22, which adds steps 22 and 23 to main's kit)
+kit: tools/capture at b2dac8f74bd0 (PR #98, which adds steps 22 and 23 to main's kit)
 script: tools/capture/SCRIPTS.md at b2dac8f74bd0, Claude Code, steps 1 to 14, 16 to 18 and 20 to 23; step 15 skipped
 otlp: http/json to tools/capture/otlp_sink.py, prompt, response and tool logging off
 runs: cli (tmux 3.4 pty)
@@ -36,7 +36,7 @@ No person typed anything in this capture. An AI agent drove Claude Code 2.1.327 
 - Step 7: `git status` is read-only, so Claude ran it without asking: no `PermissionRequest`.
 - Step 9: Esc was pressed about 1.2 s after Enter. Claude Code put the prompt back in the input box, which was emptied with Ctrl+U before the next step.
 - Step 10: 2.1.327 ran the subagent in the background. The main turn stopped at once, the subagent's two test runs each asked for permission and were accepted, and when it finished Claude Code sent a `<task-notification>` prompt (machine text, with a `UserPromptSubmit`) and reported back.
-- Step 20: the nested run has a `session_id` of its own (`SessionStart` `startup`, `UserPromptSubmit`, `Stop`, `SessionEnd` `reason` `other`), and its `parents` show claude under claude.
+- Step 20: the nested run has a `session_id` of its own (`SessionStart` `startup`, `UserPromptSubmit`, `Stop`, `SessionEnd` `reason` `other`), and its `parents` show claude under claude, both without a terminal. It sent no telemetry: no OTLP body carries its `session.id`, although its hooks' `env` names every telemetry variable the outer session had. The headless run at step 18 did send telemetry.
 - Step 11: `Notification` `idle_prompt` about 60 s after the answer.
 - Step 12: the loop fired three times, not twice: the follow-up was typed after the third run had finished, so the two wouldn't overlap. Each loop run's `Stop` has one entry in `session_crons`.
 - Steps 13 and 21: `STEPS.txt` marks step 21 twice. The first try, at 17:06:59 UTC, was typed while a permission dialog had focus, so the text never reached the input box; its final Enter accepted the pending edit of `wordcount.py` (option 1, Yes), which step 13 says to accept anyway. The second, at 17:07:39 UTC, is the real step 21: the message was queued, and its `UserPromptSubmit` came when Claude took it up. The goal was met at its first check, so no continued turn ran and every `Stop` has `stop_hook_active` false.
