@@ -148,6 +148,7 @@ func TestShellcheck(t *testing.T) {
 	}{
 		{"the sh dumper passes shellcheck as POSIX sh", "dump-hook.sh"},
 		{"Gemini's deny-once hook passes shellcheck as POSIX sh", "deny-once.sh"},
+		{"Claude Code's allow-once hook passes shellcheck as POSIX sh", "allow-once.sh"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -214,6 +215,14 @@ func TestScripts(t *testing.T) {
 		{"the Claude Code script starts a nested session", "| 20 | Type the step 20 prompt", `claude -p "Say nested."`},
 		{"the Claude Code script queues a message while /goal works", "| 21 | While step 13 is still working",
 			"When you're done, say which test you fixed."},
+		// A permission a hook answered is the case Claude Code's own report
+		// has to tell apart from the person's (SM 1.2), and the process on
+		// the far end of the sink's connections is what the OTLP receiver's
+		// peer check looks up (DESIGN 5.2).
+		{"the Claude Code script has the capture's hook answer one permission prompt", "| 22 | Type the step 22 prompt",
+			"Create a file named hook-allowed.txt holding the single line: capture test"},
+		{"the Claude Code script records which process holds the sink's connections", "| 23 | In a third terminal, run the step 23 command",
+			"lsof -nP -iTCP:4318 -sTCP:ESTABLISHED -Fpc >> ROOT/runs/cli/connections"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			if !strings.Contains(claude, c.row) || !strings.Contains(claude, c.prompt+"\n```") {
@@ -627,6 +636,223 @@ func TestDenyOnce(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, c.check)
+	}
+}
+
+// allowers are the two allow-once hooks, as the command lines that run them.
+var allowers = []dumper{
+	{"sh", func(t *testing.T) []string { return []string{need(t, "sh"), kit(t, "allow-once.sh")} }},
+	{"pwsh", func(t *testing.T) []string {
+		return []string{need(t, "pwsh"), "-NoProfile", "-NonInteractive", "-File", kit(t, "allow-once.ps1")}
+	}},
+}
+
+// TestAllowOnce checks allow-once.sh and allow-once.ps1, Claude Code's
+// PermissionRequest hook in a capture, which answers step 22's prompt
+// itself so the capture holds one permission a hook decided (SCRIPTS.md,
+// step 22; SM 1.2).
+func TestAllowOnce(t *testing.T) {
+	unixOnly(t)
+	scripts := read(t, "SCRIPTS.md")
+	constant := func(t *testing.T, file, pattern string) string {
+		t.Helper()
+		m := regexp.MustCompile(pattern).FindStringSubmatch(read(t, kit(t, file)))
+		if m == nil {
+			t.Fatalf("%s has no line matching %s", file, pattern)
+		}
+		return m[1]
+	}
+	file := constant(t, "allow-once.sh", `(?m)^file='([^']*)'$`)
+	decision := constant(t, "allow-once.sh", `(?m)^decision='([^']*)'$`)
+	step22 := jsonText(t, map[string]any{
+		"hook_event_name": "PermissionRequest", "tool_name": "Write",
+		"tool_input": map[string]any{"file_path": "/home/capture/projects/cli/" + file, "content": "capture test\n"},
+	})
+	other := jsonText(t, map[string]any{
+		"hook_event_name": "PermissionRequest", "tool_name": "Write",
+		"tool_input": map[string]any{"file_path": "/home/capture/projects/cli/notes.txt", "content": "capture test\n"},
+	})
+
+	t.Run("both scripts answer step 22's file with the same decision, Claude Code's allow for PermissionRequest", func(t *testing.T) {
+		if got := constant(t, "allow-once.ps1", `(?m)^\$file = '([^']*)'$`); got != file {
+			t.Errorf("allow-once.ps1 answers for %q, allow-once.sh for %q", got, file)
+		}
+		if got := constant(t, "allow-once.ps1", `(?m)^\$decision = '([^']*)'$`); got != decision {
+			t.Errorf("allow-once.ps1 sends %q, allow-once.sh %q", got, decision)
+		}
+		var d struct {
+			HookSpecificOutput struct {
+				HookEventName string `json:"hookEventName"`
+				Decision      struct {
+					Behavior string `json:"behavior"`
+				} `json:"decision"`
+			} `json:"hookSpecificOutput"`
+		}
+		if err := json.Unmarshal([]byte(decision), &d); err != nil || d.HookSpecificOutput.HookEventName != "PermissionRequest" ||
+			d.HookSpecificOutput.Decision.Behavior != "allow" {
+			t.Fatalf("decision %q (%v), want hookSpecificOutput for PermissionRequest with behavior allow", decision, err)
+		}
+	})
+	t.Run("step 22's prompt in SCRIPTS.md names the file, so the scrub knows it as the script's text", func(t *testing.T) {
+		prompt := "Create a file named " + file + " holding the single line: capture test"
+		if !strings.Contains(scripts, "```text\n"+prompt+"\n```") {
+			t.Fatalf("SCRIPTS.md has no text block holding %q", prompt)
+		}
+	})
+
+	for _, a := range allowers {
+		t.Run(a.name, func(t *testing.T) {
+			base := a.argv(t)
+			call := func(t *testing.T, runDir, payload string, env ...string) (result, time.Duration) {
+				t.Helper()
+				start := time.Now()
+				r := run(t, t.TempDir(), []byte(payload), env, append(append([]string{}, base...), runDir, "PermissionRequest")...)
+				if r.code != 0 || r.stderr != "" {
+					t.Fatalf("exit %d, stderr %q; want 0 and nothing", r.code, r.stderr)
+				}
+				return r, time.Since(start)
+			}
+			allowed := func(t *testing.T, r result) bool {
+				t.Helper()
+				if r.stdout == "" {
+					return false
+				}
+				if r.stdout != decision+"\n" {
+					t.Fatalf("stdout %q, want the decision %q", r.stdout, decision)
+				}
+				return true
+			}
+			cases := []struct {
+				name  string
+				check func(t *testing.T)
+			}{
+				{"the first call naming step 22's file is allowed, 2 s after it arrives", func(t *testing.T) {
+					r, took := call(t, filepath.Join(t.TempDir(), "run"), step22)
+					if !allowed(t, r) {
+						t.Fatal("not allowed")
+					}
+					if took < 2*time.Second {
+						t.Fatalf("answered after %v, want at least 2 s", took)
+					}
+				}},
+				{"a later call naming it is left to the person", func(t *testing.T) {
+					runDir := filepath.Join(t.TempDir(), "run")
+					call(t, runDir, step22)
+					if r, _ := call(t, runDir, step22); allowed(t, r) {
+						t.Fatal("allowed twice")
+					}
+				}},
+				{"step 22 is allowed once, even when mkdir says each call made the marker", func(t *testing.T) {
+					runDir, path := filepath.Join(t.TempDir(), "run"), lyingMkdir(t)
+					if r, _ := call(t, runDir, step22, path); !allowed(t, r) {
+						t.Fatal("not allowed")
+					}
+					if r, _ := call(t, runDir, step22, path); allowed(t, r) {
+						t.Fatal("allowed twice")
+					}
+				}},
+				{"the decision it sends is kept in the run as allow-once", func(t *testing.T) {
+					runDir := filepath.Join(t.TempDir(), "run")
+					r, _ := call(t, runDir, step22)
+					if got := read(t, filepath.Join(runDir, "allow-once")); r.stdout == "" || got != r.stdout {
+						t.Fatalf("allow-once = %q, want what it printed, %q", got, r.stdout)
+					}
+				}},
+				{"a call for another file is left to the person and keeps the answer for step 22", func(t *testing.T) {
+					runDir := filepath.Join(t.TempDir(), "run")
+					if r, _ := call(t, runDir, other); allowed(t, r) {
+						t.Fatal("another file was allowed")
+					}
+					if _, err := os.Stat(filepath.Join(runDir, "allow-once")); err == nil {
+						t.Fatal("allow-once was written for another file")
+					}
+					if r, _ := call(t, runDir, step22); !allowed(t, r) {
+						t.Fatal("step 22 wasn't allowed after another file")
+					}
+				}},
+				{"every call is recorded like any other hook, and no temporary file stays", func(t *testing.T) {
+					runDir := filepath.Join(t.TempDir(), "run")
+					call(t, runDir, other)
+					call(t, runDir, step22)
+					for i, want := range []string{other, step22} {
+						dir := filepath.Join(runDir, "hooks", "00000"+strconv.Itoa(i+1))
+						if got := read(t, filepath.Join(dir, "stdin")); got != want {
+							t.Errorf("call %d stdin = %q, want %q", i+1, got, want)
+						}
+						if got := read(t, filepath.Join(dir, "argv")); got != runDir+"\nPermissionRequest\n" {
+							t.Errorf("call %d argv = %q", i+1, got)
+						}
+					}
+					entries, _ := os.ReadDir(runDir)
+					for _, e := range entries {
+						if strings.HasPrefix(e.Name(), ".allow-once.") {
+							t.Errorf("%s left in the run", e.Name())
+						}
+					}
+				}},
+				{"calls that arrive together are each recorded, and only one is allowed", func(t *testing.T) {
+					runDir := filepath.Join(t.TempDir(), "run")
+					env := append(os.Environ(), lyingMkdir(t))
+					var wg sync.WaitGroup
+					outs := make([]string, 6)
+					for i := range outs {
+						wg.Add(1)
+						go func(i int) {
+							defer wg.Done()
+							cmd := exec.Command(base[0], append(append([]string{}, base[1:]...), runDir, "PermissionRequest")...)
+							cmd.Env = env
+							cmd.Stdin = strings.NewReader(step22)
+							out, err := cmd.Output()
+							if err != nil {
+								t.Errorf("call %d: %v", i, err)
+							}
+							outs[i] = string(out)
+						}(i)
+					}
+					wg.Wait()
+					answered := 0
+					for _, out := range outs {
+						if out == decision+"\n" {
+							answered++
+						} else if out != "" {
+							t.Errorf("a call printed %q", out)
+						}
+					}
+					if answered != 1 {
+						t.Errorf("%d calls were allowed, want 1", answered)
+					}
+					stdins := 0
+					for path, text := range tree(t, runDir) {
+						if strings.HasSuffix(path, "/stdin") {
+							stdins++
+							if text != step22 {
+								t.Errorf("%s = %q, want the payload", path, text)
+							}
+						}
+					}
+					if stdins != len(outs) {
+						t.Errorf("%d calls recorded, want %d", stdins, len(outs))
+					}
+				}},
+				{"without arguments it exits 0 without reading the payload", func(t *testing.T) {
+					dir := t.TempDir()
+					r := run(t, dir, hostile, nil, base...)
+					if r.code != 0 || r.stdout != "" || len(tree(t, dir)) != 0 {
+						t.Fatalf("exit %d, stdout %q, files %v; want 0 and nothing", r.code, r.stdout, keys(tree(t, dir)))
+					}
+				}},
+				{"it exits 0 and allows nothing when the run folder can't be made", func(t *testing.T) {
+					f := filepath.Join(t.TempDir(), "file")
+					write(t, f, "")
+					if r, _ := call(t, filepath.Join(f, "run"), step22); allowed(t, r) {
+						t.Fatal("allowed without a run folder to record it in")
+					}
+				}},
+			}
+			for _, c := range cases {
+				t.Run(c.name, c.check)
+			}
+		})
 	}
 }
 
@@ -1503,7 +1729,7 @@ func TestPrepare(t *testing.T) {
 		name  string
 		check func(t *testing.T)
 	}{
-		{"every DESIGN 5.1 hook runs the dumper itself in exec form, with the run and its label as args", func(t *testing.T) {
+		{"every DESIGN 5.1 hook runs a kit script itself in exec form, with the run and its label as args", func(t *testing.T) {
 			if len(hooks) != len(claudeHooks) {
 				t.Errorf("%d events, want %d: %v", len(hooks), len(claudeHooks), hooks)
 			}
@@ -1514,9 +1740,13 @@ func TestPrepare(t *testing.T) {
 					continue
 				}
 				h := entries[0].Hooks[0]
+				script := kit(t, "dump-hook.sh")
+				if name == "PermissionRequest" {
+					script = kit(t, "allow-once.sh")
+				}
 				want := []string{runDir, name}
-				if h.Type != "command" || h.Command != kit(t, "dump-hook.sh") || strings.Join(h.Args, "\n") != strings.Join(want, "\n") {
-					t.Errorf("%s: %+v, want %s %q", name, h, kit(t, "dump-hook.sh"), want)
+				if h.Type != "command" || h.Command != script || strings.Join(h.Args, "\n") != strings.Join(want, "\n") {
+					t.Errorf("%s: %+v, want %s %q", name, h, script, want)
 				}
 				if entries[0].Matcher != matcher {
 					t.Errorf("%s matcher = %q, want %q", name, entries[0].Matcher, matcher)
@@ -1524,6 +1754,25 @@ func TestPrepare(t *testing.T) {
 			}
 			if h := hooks["SessionEnd"][0].Hooks[0]; h.Timeout < 5 {
 				t.Errorf("SessionEnd timeout = %d, want room beyond the 1.5 s budget", h.Timeout)
+			}
+		}},
+		{"PermissionRequest runs allow-once, with a timeout that leaves room for its 2 s wait", func(t *testing.T) {
+			h := hooks["PermissionRequest"][0].Hooks[0]
+			if filepath.Base(h.Command) != "allow-once.sh" || h.Timeout < 5 {
+				t.Fatalf("PermissionRequest runs %s with timeout %d, want allow-once.sh and at least 5 s", h.Command, h.Timeout)
+			}
+		}},
+		{"Claude Code starts in manual permission mode, so the script's prompts reach the person", func(t *testing.T) {
+			var s struct {
+				Permissions struct {
+					DefaultMode string `json:"defaultMode"`
+				} `json:"permissions"`
+			}
+			if err := json.Unmarshal([]byte(read(t, settings)), &s); err != nil {
+				t.Fatal(err)
+			}
+			if s.Permissions.DefaultMode != "default" {
+				t.Fatalf("permissions.defaultMode = %q, want default, which Claude Code shows as manual mode", s.Permissions.DefaultMode)
 			}
 		}},
 		{"a configured hook really writes a call", func(t *testing.T) {
@@ -1687,28 +1936,30 @@ func TestPrepare(t *testing.T) {
 				t.Fatalf("--shell-form: exit %d: %s", r.code, r.stderr)
 			}
 		}},
-		{"a dumper that can't run as a command is refused", func(t *testing.T) {
-			for _, c := range []struct {
-				name, want string
-				spoil      func(path string) error
-			}{
-				{"no executable bit", "chmod +x", func(p string) error { return os.Chmod(p, 0o644) }},
-				{"Windows line endings", "line endings", func(p string) error {
-					b, err := os.ReadFile(p)
-					if err != nil {
-						return err
+		{"a hook script that can't run as a command is refused", func(t *testing.T) {
+			for _, script := range []string{"dump-hook.sh", "allow-once.sh"} {
+				for _, c := range []struct {
+					name, want string
+					spoil      func(path string) error
+				}{
+					{"no executable bit", "chmod +x", func(p string) error { return os.Chmod(p, 0o644) }},
+					{"Windows line endings", "line endings", func(p string) error {
+						b, err := os.ReadFile(p)
+						if err != nil {
+							return err
+						}
+						return os.WriteFile(p, bytes.ReplaceAll(b, []byte("\n"), []byte("\r\n")), 0o755)
+					}},
+				} {
+					copied := copyKit(t, filepath.Join(t.TempDir(), "pairtime"))
+					if err := c.spoil(filepath.Join(copied, script)); err != nil {
+						t.Fatal(err)
 					}
-					return os.WriteFile(p, bytes.ReplaceAll(b, []byte("\n"), []byte("\r\n")), 0o755)
-				}},
-			} {
-				copied := copyKit(t, filepath.Join(t.TempDir(), "pairtime"))
-				if err := c.spoil(filepath.Join(copied, "dump-hook.sh")); err != nil {
-					t.Fatal(err)
-				}
-				r := run(t, ".", nil, env, need(t, "python3"), "-I", "-B", filepath.Join(copied, "prepare.py"), "claude_code",
-					filepath.Join(t.TempDir(), "capture"), "cli")
-				if r.code != 2 || !strings.Contains(r.stderr, c.want) {
-					t.Errorf("%s: exit %d, want 2 and %q: %s", c.name, r.code, c.want, r.stderr)
+					r := run(t, ".", nil, env, need(t, "python3"), "-I", "-B", filepath.Join(copied, "prepare.py"), "claude_code",
+						filepath.Join(t.TempDir(), "capture"), "cli")
+					if r.code != 2 || !strings.Contains(r.stderr, c.want) || !strings.Contains(r.stderr, script) {
+						t.Errorf("%s, %s: exit %d, want 2 and %q naming the script: %s", script, c.name, r.code, c.want, r.stderr)
+					}
 				}
 			}
 		}},

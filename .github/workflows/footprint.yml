@@ -166,6 +166,10 @@ jobs:
             if ($null -ne $before.Switches -and $null -ne $after.Switches) {
               $switchesPerMinute = [math]::Round(($after.Switches - $before.Switches) / $minutes, 1)
             }
+            # What the wakeups were. presence.sample runs only while a project
+            # context is live, which a terminal in front makes (DESIGN 3.3),
+            # and the runner's foreground window can be the step's console.
+            $jobRuns = (@($status.jobs) | ForEach-Object { "$($_.name) $($_.runs)" }) -join ', '
 
             # A second agent on the same data directory exits at once with
             # status 3 (pairtime agent -h).
@@ -199,6 +203,7 @@ jobs:
               "| threads, handles | $($after.Threads), $($after.Handles) | none |",
               "| thread context switches per minute | $switchesPerMinute | none |",
               "| scheduler wakeups | $($status.wakeups) | none |",
+              "| runs of each scheduler job | $jobRuns | none |",
               "| binary size | $((Get-Item $exe).Length) bytes | ci.yml |",
               "| a second agent's exit status | $secondStatus | 3: $(Verdict $secondOk) |",
               "| clean stop: exit status, pid in port.json | $stopStatus, $pidAfter | 0, 0: $(Verdict $stopOk) |"
