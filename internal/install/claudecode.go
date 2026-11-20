@@ -22,10 +22,14 @@ const ItemClaudeCode = "hooks/claude_code"
 // (DESIGN 3.4).
 const claudeHarness = "claude_code"
 
-// claudeHooks are DESIGN 5.1's Claude Code hook events, each with the
-// matcher pairtime installs it under. "" is no matcher, which matches
+// claudeHook is one of the hooks pairtime installs in Claude Code: the
+// event, and the matcher it goes under. "" is no matcher, which matches
 // everything.
-var claudeHooks = []struct{ event, matcher string }{
+type claudeHook struct{ event, matcher string }
+
+// claudeHooks are DESIGN 5.1's Claude Code hook events, each with the
+// matcher pairtime installs it under.
+var claudeHooks = []claudeHook{
 	{"SessionStart", ""},
 	{"UserPromptSubmit", ""},
 	{"Stop", ""},
@@ -185,7 +189,7 @@ func hookArgs(event string) []string {
 // one of the hooks this edit installs. Fields pairtime doesn't write, such
 // as a timeout the teen added, don't matter.
 func (e *claudeEdit) isWanted(event string, group, h *jsonc.Value) bool {
-	i := slices.IndexFunc(claudeHooks, func(hk struct{ event, matcher string }) bool { return hk.event == event })
+	i := slices.IndexFunc(claudeHooks, func(hk claudeHook) bool { return hk.event == event })
 	if i < 0 || !sameMatcher(group, claudeHooks[i].matcher) {
 		return false
 	}
@@ -193,6 +197,15 @@ func (e *claudeEdit) isWanted(event string, group, h *jsonc.Value) bool {
 	return typ != nil && typ.Kind == jsonc.String && typ.Text == "command" &&
 		cmd != nil && cmd.Kind == jsonc.String && cmd.Text == e.exe &&
 		slices.Equal(strs(h.Get("args")), hookArgs(event))
+}
+
+// claudeMatcher returns the matcher pairtime installs event's hook under,
+// "" for none or for an event it doesn't install.
+func claudeMatcher(event string) string {
+	if i := slices.IndexFunc(claudeHooks, func(hk claudeHook) bool { return hk.event == event }); i >= 0 {
+		return claudeHooks[i].matcher
+	}
+	return ""
 }
 
 // sameMatcher reports whether group's matcher is want. No matcher, "" and
