@@ -266,9 +266,13 @@ jobs:
         # copies attached to a release install that release and check its
         # manifest against those keys (docs/PLAN.md, WP-RL2). With no key
         # yet, they refuse the release unless told to allow it unsigned.
-        # e2e-install.yml installs from copies made the same way.
+        # Their SHA-256s go into the payload before it's signed, so the
+        # signature covers the first file `curl | sh` runs, and immutable
+        # releases keep a published copy from being replaced
+        # (D-immutable-releases). e2e-install.yml installs from copies made
+        # the same way.
         run: |
-          "$TOOL" scripts -version "$VERSION" -out "$STAGE/dist"
+          "$TOOL" scripts -version "$VERSION" -out "$STAGE/dist" -payload "$STAGE/payload.json"
 
       - name: Sign with a throwaway key
         # Made here, used once, never stored. The publish job re-signs a
@@ -367,6 +371,10 @@ jobs:
           jq -c --arg sig "$other" '.signatures[0].sig = $sig' \
             "$STAGE/dist/manifest.json" > "$RUNNER_TEMP/bad-signature/manifest.json"
           refuse "$RUNNER_TEMP/bad-signature" "another key's signature under the trusted key's id"
+
+          cp -r "$STAGE/dist" "$RUNNER_TEMP/bad-script"
+          echo 'echo changed after signing' >> "$RUNNER_TEMP/bad-script/install.sh"
+          refuse "$RUNNER_TEMP/bad-script" "an install script changed after signing"
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:

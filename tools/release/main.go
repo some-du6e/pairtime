@@ -19,7 +19,7 @@
 //	    -targets "os/arch ..." -bin dir -out dir -payload file [-extra files]
 //	release sign -payload file -out manifest.json (-key-env NAME | -throwaway) [-pub-out file]
 //	release verify -dir dir [-pub file] [-targets "os/arch ..."]
-//	release scripts -version v -out dir [-in install]
+//	release scripts -version v -out dir [-in install] [-payload file]
 package main
 
 import (
@@ -61,7 +61,8 @@ Usage:
   release sign ...             sign the payload into manifest.json
   release verify -dir dir      check manifest.json, checksums.txt and the archives
   release scripts ...          write install.sh and install.ps1 with the release's
-                               version and the release keys compiled in
+                               version and the release keys compiled in, and
+                               list their SHA-256s in the payload
 
 "release <command> -h" lists a command's flags.
 `
@@ -701,6 +702,24 @@ func cmdVerify(args []string, stdout, stderr io.Writer) error {
 			return fmt.Errorf("%s: %s has SHA-256 %s, but the manifest says %s", name, t.exe(), sha256Hex(bin), a.BinarySHA256)
 		}
 	}
+	// The install scripts are what `curl | sh` runs first, so a release's
+	// copies must be the ones its signed payload lists, and every copy in
+	// the directory must be listed (D-immutable-releases).
+	for _, s := range installScripts {
+		_, listed := m.InstallScripts[s.name]
+		if _, err := os.Stat(filepath.Join(*dir, s.name)); err == nil && !listed {
+			return fmt.Errorf("%s is in %s, but the manifest doesn't list its SHA-256 (tools/release scripts -payload lists it)", s.name, *dir)
+		}
+	}
+	for _, name := range sortedKeys(m.InstallScripts) {
+		b, err := os.ReadFile(filepath.Join(*dir, name))
+		if err != nil {
+			return fmt.Errorf("the manifest lists install script %s: %w", name, err)
+		}
+		if got := sha256Hex(b); got != m.InstallScripts[name] {
+			return fmt.Errorf("%s has SHA-256 %s, but the manifest says %s", name, got, m.InstallScripts[name])
+		}
+	}
 	if *targetList != "" {
 		want, err := parseTargets(*targetList)
 		if err != nil {
@@ -716,8 +735,12 @@ func cmdVerify(args []string, stdout, stderr io.Writer) error {
 			return fmt.Errorf("the manifest lists %s, not %s", strings.Join(got, " "), strings.Join(wantNames, " "))
 		}
 	}
-	fmt.Fprintf(stdout, "%s: manifest.json for %s is signed by trusted key %s, and its %d archives match it and checksums.txt\n",
+	fmt.Fprintf(stdout, "%s: manifest.json for %s is signed by trusted key %s, and its %d archives match it and checksums.txt",
 		*dir, m.Version, signer.ID(), len(m.Artifacts))
+	if n := len(m.InstallScripts); n > 0 {
+		fmt.Fprintf(stdout, ", and its %d install scripts match it", n)
+	}
+	fmt.Fprintln(stdout)
 	return nil
 }
 

@@ -3,6 +3,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto/rand"
 	"os"
 	"os/exec"
@@ -214,6 +215,126 @@ func TestScriptsCommand(t *testing.T) {
 					if code, _, _ := cli(t, args...); code != 2 {
 						t.Errorf("release %s: exit %d, want 2", strings.Join(args, " "), code)
 					}
+				}
+			},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, tc.run)
+	}
+}
+
+// TestScriptsInPayload checks that scripts -payload lists the stamped
+// copies' SHA-256s in the payload before it's signed, and that verify holds
+// a release's copies to them (D-immutable-releases).
+func TestScriptsInPayload(t *testing.T) {
+	repoInstall := filepath.Join("..", "..", "install")
+	scripts := func(f fixture, more ...string) []string {
+		return append([]string{"scripts", "-version", testVersion, "-in", repoInstall, "-out", f.out}, more...)
+	}
+	// built makes a release the way release.yml's build job does: dist,
+	// then scripts -payload, then sign.
+	built := func(t *testing.T) fixture {
+		t.Helper()
+		f := newFixture(t)
+		mustCLI(t, f.distArgs(f.out, f.payload)...)
+		mustCLI(t, scripts(f, "-payload", f.payload)...)
+		mustCLI(t, "sign", "-throwaway", "-payload", f.payload, "-out", f.manifest, "-pub-out", f.pub)
+		return f
+	}
+	refused := func(t *testing.T, f fixture, want string) {
+		t.Helper()
+		code, _, errOut := cli(t, "verify", "-dir", f.out, "-pub", f.pub)
+		if code != 1 || !strings.Contains(errOut, want) {
+			t.Fatalf("verify: exit %d, stderr %q; want exit 1 and %q", code, errOut, want)
+		}
+	}
+	tests := []struct {
+		name string
+		run  func(t *testing.T)
+	}{
+		{
+			name: "the payload lists both stamped copies' SHA-256s, and nothing else in it changes",
+			run: func(t *testing.T) {
+				f := newFixture(t)
+				mustCLI(t, f.distArgs(f.out, f.payload)...)
+				before := read(t, f.payload)
+				out := mustCLI(t, scripts(f, "-payload", f.payload)...)
+				m, err := release.DecodeManifest(read(t, f.payload))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(m.InstallScripts) != len(installScripts) {
+					t.Errorf("install_scripts = %v, want one entry per script", m.InstallScripts)
+				}
+				for _, s := range installScripts {
+					if got, want := m.InstallScripts[s.name], sha256Hex(read(t, filepath.Join(f.out, s.name))); got != want {
+						t.Errorf("install_scripts[%s] = %q, want the stamped copy's %s", s.name, got, want)
+					}
+				}
+				m.InstallScripts = nil
+				if again, err := release.EncodeManifest(m); err != nil || !bytes.Equal(again, before) {
+					t.Errorf("without install_scripts the payload is\n%s\nwant dist's\n%s", again, before)
+				}
+				if !strings.Contains(out, "listed their SHA-256s in "+f.payload) {
+					t.Errorf("stdout %q doesn't say where the SHA-256s went", out)
+				}
+			},
+		},
+		{
+			name: "verify accepts a release whose scripts are listed, and counts them",
+			run: func(t *testing.T) {
+				f := built(t)
+				out := mustCLI(t, "verify", "-dir", f.out, "-pub", f.pub, "-targets", testTargets)
+				if !strings.Contains(out, "and its 2 install scripts match it") {
+					t.Errorf("verify printed %q", out)
+				}
+			},
+		},
+		{
+			name: "verify refuses an install script changed after signing",
+			run: func(t *testing.T) {
+				f := built(t)
+				p := filepath.Join(f.out, "install.sh")
+				write(t, p, string(read(t, p))+"echo changed\n")
+				refused(t, f, "install.sh has SHA-256")
+			},
+		},
+		{
+			name: "verify refuses a release without an install script its manifest lists",
+			run: func(t *testing.T) {
+				f := built(t)
+				if err := os.Remove(filepath.Join(f.out, "install.ps1")); err != nil {
+					t.Fatal(err)
+				}
+				refused(t, f, "the manifest lists install script install.ps1")
+			},
+		},
+		{
+			name: "verify refuses an install script that the manifest doesn't list",
+			run: func(t *testing.T) {
+				f := newFixture(t)
+				mustCLI(t, f.distArgs(f.out, f.payload)...)
+				mustCLI(t, scripts(f)...)
+				mustCLI(t, "sign", "-throwaway", "-payload", f.payload, "-out", f.manifest, "-pub-out", f.pub)
+				refused(t, f, "install.sh is in "+f.out+", but the manifest doesn't list its SHA-256")
+			},
+		},
+		{
+			name: "scripts refuses another release's payload and writes nothing",
+			run: func(t *testing.T) {
+				f := newFixture(t)
+				mustCLI(t, f.distArgs(f.out, f.payload)...)
+				before := read(t, f.payload)
+				code, _, errOut := cli(t, "scripts", "-version", "v0.2.0", "-in", repoInstall, "-out", f.out, "-payload", f.payload)
+				if code != 1 || !strings.Contains(errOut, "is the payload for "+testVersion+", not v0.2.0") {
+					t.Fatalf("exit %d, stderr %q", code, errOut)
+				}
+				if _, err := os.Stat(filepath.Join(f.out, "install.sh")); err == nil {
+					t.Error("install.sh was written")
+				}
+				if !bytes.Equal(read(t, f.payload), before) {
+					t.Error("the payload changed")
 				}
 			},
 		},
