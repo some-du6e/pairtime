@@ -202,8 +202,10 @@ type ownedEdit struct {
 	data   []byte
 	typ    uint32 // a registry value's type; 0 for a file
 	// entry is the kind of entry the edit writes, which picks the function
-	// that recognizes an entry some pairtime wrote (agentEntries). ""
-	// recognizes only what this edit writes.
+	// that recognizes an entry some pairtime wrote (agentEntries). Every
+	// owned edit names one: with "", claims knows only the entry this edit
+	// writes, and undoOwned, which has only the manifest, knows none, so it
+	// leaves an entry that changed since install alone.
 	entry string
 	// keep, when set, returns data with what the teen set in cur, an entry
 	// pairtime wrote, carried over, such as autostart turned off.
