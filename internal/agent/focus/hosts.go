@@ -51,18 +51,22 @@ func consoleHelper(goos string, p platform.Proc) bool {
 	return false
 }
 
-// helpers names, by OS and app, the helper processes an app runs harness
-// sessions under that need not descend from the app's own process, each as
-// a prefix of the helper's name. iTerm2 runs each session's job under an
-// iTermServer process named for its version, iTermServer-3.7.7 on
-// macos-latest, which is iTerm2's child while iTerm2 runs. The server
-// outlives iTerm2: when iTerm2 crashes or is killed, launchd adopts it and
-// its sessions keep running, outside iTerm2's chain, for a later iTerm2 to
-// restore (DESIGN 3.3; decision E-6.3-two-tabs; the capture in
-// testdata/iterm2-macos-latest.json). appclass.json's darwin terminal
-// entry lists the same names as itermserver*.
-var helpers = map[string]map[string]string{
-	platform.Darwin: {"iterm2": "itermserver"},
+// helperPrefix names the helper processes that app, on goos, runs harness
+// sessions under that need not descend from the app's own process, as a
+// prefix of their names, or returns "" when it has none. iTerm2 runs each
+// session's job under an iTermServer process named for its version,
+// iTermServer-3.7.7 on macos-latest, which is iTerm2's child while iTerm2
+// runs. The server outlives iTerm2: when iTerm2 crashes or is killed,
+// launchd adopts it and its sessions keep running, outside iTerm2's chain,
+// for a later iTerm2 to restore (DESIGN 3.3; decision E-6.3-two-tabs; the
+// capture in testdata/iterm2-macos-latest.json). appclass.json's darwin
+// terminal entry lists the same names as itermserver*. It is a function,
+// not a table, so it costs pairtime hook nothing at start.
+func helperPrefix(goos, app string) string {
+	if goos == platform.Darwin && app == "iterm2" {
+		return "itermserver"
+	}
+	return ""
 }
 
 // windowOf describes the window whose process is pid, or reports false
@@ -80,7 +84,7 @@ var helpers = map[string]map[string]string{
 // macOS every window of an app is one window, since macOS reports app
 // activations (MacFocus), and iTerm2's window also hosts the sessions
 // under the user's iTermServer processes, which may not descend from
-// iTerm2 (helpers).
+// iTerm2 (helperPrefix).
 //
 // When Windows names a console helper itself, the window is that helper's
 // console: it belongs to the process the helper serves, its parent, which
@@ -119,11 +123,11 @@ func windowOf(t *platform.Table, pid int) (window, bool) {
 }
 
 // addHelpers adds to w's hosts the helper processes its app runs sessions
-// under (helpers), wherever they sit in the table, as long as they belong
-// to the user the app runs as. Another user's iTermServer, left by fast
-// user switching, serves that user's iTerm2, not the one in front.
+// under (helperPrefix), wherever they sit in the table, as long as they
+// belong to the user the app runs as. Another user's iTermServer, left by
+// fast user switching, serves that user's iTerm2, not the one in front.
 func addHelpers(t *platform.Table, w *window) {
-	prefix := helpers[t.OS()][w.name]
+	prefix := helperPrefix(t.OS(), w.name)
 	if prefix == "" || w.proc.Owner == "" {
 		return
 	}

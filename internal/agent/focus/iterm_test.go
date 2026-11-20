@@ -89,11 +89,17 @@ func TestITerm2Helpers(t *testing.T) {
 			t.Errorf("hosted_sessions %v, want only the session under iTerm2's own process", got)
 		}
 	})
-	t.Run("every helper prefix names processes appclass.json calls a macOS terminal, so a helper is classified as the app it serves", func(t *testing.T) {
-		for app, prefix := range helpers[platform.Darwin] {
-			e, ok := platform.Lookup(platform.Darwin, prefix+"-3.5.14")
-			if !ok || e.AppClass != event.AppTerminal || !slices.Contains(e.Names, prefix+"*") || !slices.Contains(e.Names, app) {
-				t.Errorf("%s's helpers %s*: appclass.json gives %+v, %v; want the terminal entry that lists %s and %s*", app, prefix, e, ok, app, prefix)
+	t.Run("iTerm2's helper prefix names processes appclass.json calls a macOS terminal, in the entry that lists iTerm2", func(t *testing.T) {
+		prefix := helperPrefix(platform.Darwin, "iterm2")
+		e, ok := platform.Lookup(platform.Darwin, prefix+"-3.7.7")
+		if prefix == "" || !ok || e.AppClass != event.AppTerminal || !slices.Contains(e.Names, prefix+"*") || !slices.Contains(e.Names, "iterm2") {
+			t.Errorf("iTerm2's helpers %q*: appclass.json gives %+v, %v; want the terminal entry that lists iterm2 and %s*", prefix, e, ok, prefix)
+		}
+	})
+	t.Run("only iTerm2 on macOS has helpers", func(t *testing.T) {
+		for _, c := range []struct{ goos, app string }{{platform.Darwin, "terminal"}, {platform.Linux, "iterm2"}, {platform.Windows, "iterm2"}} {
+			if p := helperPrefix(c.goos, c.app); p != "" {
+				t.Errorf("helperPrefix(%s, %s) = %q, want none", c.goos, c.app, p)
 			}
 		}
 	})
