@@ -103,9 +103,11 @@ type bucket struct {
 	ops     []bucketOp
 	next    int
 	entries []entry
-	// spans are the times the session's turns ran, in submit order, for SUP
-	// against READ.
+	// spans are the times the session's turns ran, sorted and merged, for
+	// SUP against READ, and cur indexes the first of them that hadn't ended
+	// at the last time runningAt was asked about.
 	spans []span
+	cur   int
 }
 
 // advance applies every op at or before t and drops entries older than
@@ -185,17 +187,29 @@ func (b *bucket) drain(u int64, proseOnly bool) source {
 	return src
 }
 
-// runningAt reports whether a turn of the session was running at t.
+// runningAt reports whether a turn of the session was running at t. The
+// credit pass asks about seconds in order, so t never decreases from one
+// call to the next, and each span is passed once.
 func (b *bucket) runningAt(t int64) bool {
-	for _, sp := range b.spans {
-		if sp.from > t {
-			return false
-		}
-		if t < sp.to {
-			return true
-		}
+	for b.cur < len(b.spans) && b.spans[b.cur].to <= t {
+		b.cur++
 	}
-	return false
+	return b.cur < len(b.spans) && b.spans[b.cur].from <= t
+}
+
+// mergeSpans returns spans sorted, with overlapping and touching ones
+// joined.
+func mergeSpans(spans []span) []span {
+	slices.SortFunc(spans, func(a, b span) int { return cmp.Compare(a.from, b.from) })
+	var out []span
+	for _, sp := range spans {
+		if n := len(out); n > 0 && sp.from <= out[n-1].to {
+			out[n-1].to = max(out[n-1].to, sp.to)
+			continue
+		}
+		out = append(out, sp)
+	}
+	return out
 }
 
 // turnFill is the fill of one turn while the buckets are built.
@@ -378,6 +392,7 @@ func (d *deriver) buildBuckets() {
 		}
 	}
 	for _, b := range d.buckets {
+		b.spans = mergeSpans(b.spans)
 		slices.SortStableFunc(b.ops, func(x, y bucketOp) int {
 			if c := cmp.Compare(x.t, y.t); c != 0 {
 				return c
@@ -393,14 +408,16 @@ func (d *deriver) buildBuckets() {
 	slices.SortFunc(d.fills, fillCmp)
 }
 
-// turnByKey returns the session's turn with turn key k, or nil.
+// turnByKey returns the session's turn with turn key k, or nil. A session
+// has one turn per key (buildTurns).
 func (s *session) turnByKey(k string) *turnBuild {
-	for _, tb := range s.turns {
-		if tb.key == k {
-			return tb
+	if s.byKey == nil {
+		s.byKey = make(map[string]*turnBuild, len(s.turns))
+		for _, tb := range s.turns {
+			s.byKey[tb.key] = tb
 		}
 	}
-	return nil
+	return s.byKey[k]
 }
 
 // recIndex returns the index of the record with event_id id.

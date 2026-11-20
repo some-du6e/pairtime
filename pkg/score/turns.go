@@ -107,6 +107,8 @@ type session struct {
 	// ends are the times of its session.end records, in order.
 	ends  []int64
 	turns []*turnBuild
+	// byKey indexes turns by turn key once they are all built.
+	byKey map[string]*turnBuild
 }
 
 // posRec is a record's payload with its index in the records and its time.
@@ -500,18 +502,17 @@ func (tb *turnBuild) runUntil(r rules, later []*turnBuild, now int64) int64 {
 	return max(end, tb.tSubmit)
 }
 
-// runningAt returns the turn of s that was running at t, or nil.
+// runningAt returns the turn of s that was running at t, or nil: the latest
+// submitted at or before t that hadn't stopped by t. s.turns must be in
+// submit order.
 func (s *session) runningAt(t int64) *turnBuild {
-	var found *turnBuild
-	for _, tb := range s.turns {
-		if tb.tSubmit > t {
-			break
-		}
-		if tb.tStop == 0 || t < tb.tStop {
-			found = tb
+	i := sort.Search(len(s.turns), func(i int) bool { return s.turns[i].tSubmit > t })
+	for i--; i >= 0; i-- {
+		if tb := s.turns[i]; tb.tStop == 0 || t < tb.tStop {
+			return tb
 		}
 	}
-	return found
+	return nil
 }
 
 // finishTurn gives a turn its origin, class and typed length.
