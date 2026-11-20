@@ -538,7 +538,10 @@ TRACEBACK = "Traceback (most recent call last):"
 FENCE_OPEN_RE = re.compile(r" {0,3}(`{3,}|~{3,})(.*)")
 FENCE_CLOSE_RE = re.compile(r" {0,3}(`{3,}|~{3,})[ \t]*")
 PASTE_OPEN_RE = re.compile(r"<pasted_content(?: [^>]*)?>")
-PASTE_CLOSE = "</pasted_content>"
+# P2. Claude Code 2.1.327 closes a paste with </pasted_content id="1a2b">,
+# repeating the opener's id; older sessions wrote </pasted_content>. Ids
+# aren't compared.
+PASTE_CLOSE_RE = re.compile(r"</pasted_content(?: [^>]*)?>")
 # SM 4.2's first error lines, matched against a whole line with its leading
 # and trailing whitespace removed. ASCII classes only; nothing here needs
 # lookaround or backreferences, so Go's regexp runs the same patterns.
@@ -600,7 +603,7 @@ def removed_lines(lines):
             i = min(i + 1, len(lines))
         elif PASTE_OPEN_RE.fullmatch(s) is not None:
             i += 1
-            while i < len(lines) and strip_space(lines[i]) != PASTE_CLOSE:
+            while i < len(lines) and PASTE_CLOSE_RE.fullmatch(strip_space(lines[i])) is None:
                 i += 1
             i = min(i + 1, len(lines))
         elif s == TRACEBACK or is_error_line(s):
@@ -2037,6 +2040,16 @@ NORMALIZATION_TEXTS = (
     ("four spaces of indent aren't a fence", "    ```\nindented\n   ```\ninside"),
     ("pasted_content blocks", "<pasted_content id=\"1\">\nfoo bar\n</pasted_content>\nstill broken\n"
                               "  <pasted_content id=\"2\" lines=\"3\">  \nbaz"),
+    # The wrapper as Claude Code 2.1.327 writes it: the paste starts on its
+    # own line after a blank one, and the closer repeats the opener's id.
+    ("Claude Code's paste wrapper, then typed text", "here's the error:\n\n<pasted_content id=\"1a2b\">\n"
+                                                    "TypeError: x is undefined\n    at parse (src/parse.js:4:11)\n"
+                                                    "</pasted_content id=\"1a2b\">\nwhy does it fail on empty input?"),
+    ("two pastes with ids, text between and after", "compare\n\n<pasted_content id=\"00ff\">\nfirst log\n"
+                                                    "</pasted_content id=\"00ff\">\nwith\n\n<pasted_content id=\"c0de\">\n"
+                                                    "second log\n</pasted_content id=\"c0de\">\nand tell me which is right"),
+    ("a closer with another id still closes a paste", "<pasted_content id=\"aaaa\">\nlog\n"
+                                                      "</pasted_content id=\"bbbb\">\nthe typed part stays"),
     ("a Python traceback", "still broken\nTraceback (most recent call last):\n  File \"app.py\", line 3, in <module>\n"
                            "    main()\nValueError: invalid literal for int() with base 10: 'abc'\nany ideas?"),
     ("a JavaScript error and its stack", "TypeError: Cannot read properties of undefined (reading 'map')\n"
@@ -2099,6 +2112,10 @@ FEATURE_PROMPTS = (
     ("empty", "", "low_effort"),
     ("only pasted content", "<pasted_content id=\"7\">\nTraceback (most recent call last):\n  File \"x.py\", line 1\n"
                             "NameError: name 'y' is not defined\n</pasted_content>", "error_paste"),
+    ("a paste in Claude Code's wrapper, then a question", "it fails like this\n\n<pasted_content id=\"9e41\">\n"
+                                                         "Traceback (most recent call last):\n  File \"app.py\", line 3, in <module>\n"
+                                                         "KeyError: 'user_id'\n</pasted_content id=\"9e41\">\n"
+                                                         "why is user_id missing after login?", "error_paste"),
     ("non-ASCII", "\u0415\u0449\u0451 \u0440\u0430\u0437 \u2014 \u043f\u043e\u0447\u0438\u043d\u0438 "
                   "\u043a\u043d\u043e\u043f\u043a\u0443 \U0001f64f", "substantive"),
 )

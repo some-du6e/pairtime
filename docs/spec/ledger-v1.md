@@ -397,7 +397,7 @@ SM 4.2 compares prompts after normalizing them. Normalization takes a committed 
 **2. Pasted blocks and error text.** Walk the lines from the top. At each line, the first rule below that applies removes that line and the lines it names, and the walk goes on after them. A line no rule applies to stays. "Stripped" means with leading and trailing whitespace (10.2) removed, and "matches" means the whole line matches.
 
 - *Fenced block.* The line matches `F1` below, and for a backtick fence the rest of the line, the second group, holds no backtick (so a one-line `` ```js x = 1``` `` isn't a fence). The block runs to the first later line that matches `F2` with a fence of the same character, at least as long as the opening one, or else to the end of the text. The closing line goes with it. This is CommonMark's fenced code block without its other cases.
-- *Pasted block.* The stripped line matches `P1`, the wrapper Claude Code puts around pastes in sessions that mark them (SM 1.2). The block runs to the first later line that is `</pasted_content>` when stripped, or else to the end of the text.
+- *Pasted block.* The stripped line matches `P1`, the opening line of the wrapper Claude Code puts around pastes in sessions that mark them (SM 1.2). The block runs to the first later line whose stripped form matches `P2`, the closing line, or else to the end of the text, and the closing line goes with it. Claude Code 2.1.327 writes a paste as `<pasted_content id="1a2b">`, a line break, the pasted text, a line break, then `</pasted_content id="1a2b">` and a line break, where the id is four lowercase hex digits that the closer repeats. `P2` accepts any attributes, so a closer without an id, as older sessions wrote, closes a block too. It doesn't compare ids, so a paste that itself holds a closing line ends there, and the rest of it stays as text.
 - *Traceback.* The stripped line is `Traceback (most recent call last):`. It goes, with every following line that starts with a space or a tab. The exception line that ends a traceback then meets the next rule.
 - *Error line.* The stripped line matches one of `E1` to `E6`. It goes, with every following line that starts with a space or a tab, which takes stack frames and compiler carets with it.
 
@@ -405,6 +405,7 @@ SM 4.2 compares prompts after normalizing them. Normalization takes a committed 
 F1  " {0,3}(`{3,}|~{3,})(.*)"
 F2  " {0,3}(`{3,}|~{3,})[ \t]*"
 P1  "<pasted_content(?: [^>]*)?>"
+P2  "</pasted_content(?: [^>]*)?>"
 E1  "(?:Uncaught )?(?:[A-Za-z_$][A-Za-z0-9_$]*\.)*[A-Za-z0-9_$]*(?:Error|Exception)(?::.*)?"
 E2  "error\[E[0-9]{4}\](?::.*)?"
 E3  "[^ \t]+:[0-9]+:[0-9]+: (?:fatal )?error:.*"
@@ -699,8 +700,8 @@ The bodies are stand-ins: the real envelope with the record's real nonce, and `"
 - `lowercase`: the whole Unicode 15.0.0 mapping, as 182 runs, and the 55 mappings that 16.0.0 and 17.0.0 add.
 - `commitments`: an empty prompt, a short prompt, CRLF, whitespace at both ends, Cyrillic, an emoji, a no-break space, an ideographic space and Chinese in one prompt, a secret and an email address, a whitespace-only text, an agent message with a code block, a `track` label, an agent message over 16 KiB whose cut falls inside a three-byte character, and 12 random texts.
 - `reveals`: removals at the start, in the middle and at the end, everything removed, nothing removed, adjacent spans of two types, a code span with its line count, two random removals of each random text, and one or more cases of each failing verdict. Among them is a reveal whose leaves still hash to `C` but cover too few tokens, the case the committed `n` exists for (10.2).
-- `normalizations`: each rule of 10.4 and each pattern `F1` to `E6`, the cases where a rule doesn't apply, and 10 random texts.
-- `features`: prompts with and without an error signature, three versions of one re-roll, an empty prompt, a prompt of nothing but a paste, a bridge prompt with no text, a `track` label, `agent.tool` records with hunks across two files, an insertion, a deletion, a file outside the project and a Windows path, a command, and a read with neither, and `shell.command` records with and without a command.
+- `normalizations`: each rule of 10.4 and each pattern `F1` to `E6`, the cases where a rule doesn't apply, pastes in the wrapper Claude Code 2.1.327 writes with typed text after them, and 10 random texts.
+- `features`: prompts with and without an error signature, three versions of one re-roll, an empty prompt, a prompt of nothing but a paste, a paste in Claude Code's wrapper followed by a question, a bridge prompt with no text, a `track` label, `agent.tool` records with hunks across two files, an insertion, a deletion, a file outside the project and a Windows path, a command, and a read with neither, and `shell.command` records with and without a command.
 - `jaccard`, `shingle_reveals` and `draws`: the pairs, CC8 reveals and draws built from those, including each failing verdict, a pool smaller than `CHALLENGE_K`, a pool of 300 where the cap applies, and an empty pool.
 
 ## 12. Worked example
@@ -847,7 +848,7 @@ Part 2 decides these, for DESIGN 3.6, 5.4, 7.3 and 7.5 and SM 4.2 and 8.5:
 14. Whitespace is the 25 `White_Space` code points, listed. Tokens alternate, are numbered from 1, and enter the salt as `u64(s) || u64(j)` (10.2).
 15. `c` holds the token count with the root, `{"n": n, "r": C}`. DESIGN 3.6 gives `C_i` alone, but without the count a reveal can pass a subtree's hash off as one removed token (10.2).
 16. A reveal shows tokens and leaves in hex; span types are a closed list of five; `lines` goes only on `code` spans and is unchecked; the verdicts come in a fixed order (10.3).
-17. Normalization's rules: blocks by line, the fence, paste and error patterns `F1` to `E6`, Unicode 15.0.0's simple lowercase mapping, the substitutions in a fixed order within each word with exact path and hex rules, and retry phrases compared without edge punctuation or apostrophes. SM 4.2 names these steps without defining them (10.4).
+17. Normalization's rules: blocks by line, the fence, paste and error patterns `F1` to `E6`, a paste closed by any closing line `P2` matches, Unicode 15.0.0's simple lowercase mapping, the substitutions in a fixed order within each word with exact path and hex rules, and retry phrases compared without edge punctuation or apostrophes. SM 4.2 names these steps without defining them (10.4).
 18. Shingles form a set; character shingles count code points; a normalized text of one to four code points is its own shingle; the empty set's sketch is `0xffffffff` throughout (10.5).
 19. The MinHash family is one keyed HMAC per shingle, tagged by shingle kind, expanded with SHA-256 into 64 values. The Jaccard estimate is `m / 64`, compared in exact rationals (10.5).
 20. Each 16-byte keyed value has a tag for its kind. The template is the normalized text. The error signature is the first line matching `E1` to `E6`, substituted but not lowercased, and the same function fills `agent.tool` and `shell.command` `error_sig`. Commands collapse whitespace; paths are relative to the project root with `/` (10.6).
