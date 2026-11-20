@@ -605,7 +605,7 @@ func uptime() *float64 {
 }
 
 // TestFindingRunLoop records two facts about where macOS delivers what a
-// Loop listens to, for whoever wires the Loop into the agent: whether a
+// Loop listens to, for WP-OS9, which wires the Loop into the agent: whether a
 // notification posted to NSWorkspace's notification center reaches the
 // observer's method, which says whether the center can be tested by
 // posting to it, and whether distributed notifications reach a Loop that

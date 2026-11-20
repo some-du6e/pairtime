@@ -48,13 +48,14 @@
 // Notification Programming Topics; the NSWorkspace and NSRunningApplication
 // references). On macos-latest a distributed notification never reached a
 // Loop off the main thread (TestFindingRunLoop). So the Loop has to run on
-// the process's main thread to see locks and app switches. The agent has to
-// arrange that: runtime.LockOSThread in an init function of its main
-// package keeps the main goroutine on the main thread, and the main
-// goroutine then calls Loop.Run while the rest of the agent runs elsewhere.
-// IOKit's messages arrive on whatever thread runs the loop, so off the main
-// thread a Loop still reports sleep and wake, and its Status says that locks
-// and app switches may not arrive.
+// the process's main thread to see locks and app switches. WP-OS9 in
+// docs/PLAN.md wires the package into the agent that way:
+// runtime.LockOSThread in an init function of cmd/pairtime keeps the main
+// goroutine on the main thread, and the main goroutine then calls Loop.Run
+// while the rest of the agent runs elsewhere. IOKit's messages arrive on
+// whatever thread runs the loop, so off the main thread a Loop still
+// reports sleep and wake, and its Status says that locks and app switches
+// may not arrive.
 //
 // # Focus granularity
 //
