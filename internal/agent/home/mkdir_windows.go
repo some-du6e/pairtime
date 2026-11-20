@@ -18,9 +18,8 @@ import (
 // Windows ignores os.MkdirAll's mode, so a directory made with it takes
 // its parent's ACL, and a folder at a drive root, such as C:\pairtime,
 // would let every signed-in user read and change state.json and
-// config.toml (#46).
-// The DACL is there from the moment the directory exists, so no one else
-// can open it or make a file in it first.
+// config.toml (#46). The DACL is there from the moment the directory
+// exists, so no one else can open it or make a file in it first.
 func mkdirAll(dir string) error {
 	if fi, err := os.Stat(dir); err == nil {
 		if fi.IsDir() {
