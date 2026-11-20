@@ -5,6 +5,7 @@ package darwin
 import (
 	"context"
 	"fmt"
+	"math"
 	"os"
 	"slices"
 	"strings"
@@ -25,13 +26,24 @@ import (
 // runners are slow, not that slow.
 const wait = 10 * time.Second
 
+// hidLagS is how far, in seconds, IOKit's HIDIdleTime may stray from
+// CoreGraphics' any-input idle time. On an idle runner the two agree to a
+// few milliseconds, but HIDIdleTime can miss a posted event. In platform.yml
+// run 44656311435, the second key TestFindingKeyDownIdle posted, 1.5 s
+// after its first, reset CoreGraphics' time and left HIDIdleTime counting
+// from the first key (own_process_run.reader.after in
+// macos-key-down-idle.json). That test posts its two keys about quietS
+// apart, so twice quietS allows for the miss and still fails a time that is
+// finite but wrong by more.
+const hidLagS = 2 * quietS
+
 func TestPresenceOnMac(t *testing.T) {
 	tests := []struct {
 		name  string
 		check func(t *testing.T)
 	}{
 		{
-			name: "Presence returns an any-input idle time that passes pkg/event's rules",
+			name: "Presence returns any-input and key-down idle times that pass pkg/event's rules",
 			check: func(t *testing.T) {
 				p, err := Presence()
 				if err != nil {
@@ -40,15 +52,41 @@ func TestPresenceOnMac(t *testing.T) {
 				if err := p.Validate(); err != nil {
 					t.Fatalf("sample %+v breaks pkg/event's rules: %v", p, err)
 				}
+				// CoreGraphics answers on macos-latest, so a sample without
+				// idle_keys_s fell back to HIDIdleTime or got an invalid
+				// key-down time.
+				if p.IdleKeysS == nil {
+					t.Errorf("sample %+v has a null idle_keys_s; CoreGraphics should give both times", p)
+				}
 			},
 		},
 		{
-			name: "CoreGraphics loads and answers for both event types",
+			name: "CoreGraphics gives a finite idle time that isn't negative for both event types",
 			check: func(t *testing.T) {
 				for _, typ := range []uint32{cgAnyInput, cgKeyDown} {
-					if _, ok := (macPresence{}).cgIdle(typ); !ok {
+					v, ok := (macPresence{}).cgIdle(typ)
+					switch {
+					case !ok:
 						t.Errorf("cgIdle(%#x): CoreGraphics didn't load: %v", typ, cg.err)
+					case !validIdle(v):
+						t.Errorf("cgIdle(%#x) = %v; want a finite time >= 0", typ, v)
 					}
+				}
+			},
+		},
+		{
+			name: "CoreGraphics' any-input idle time agrees with IOKit's HIDIdleTime, allowing for HIDIdleTime's lag",
+			check: func(t *testing.T) {
+				cgS, ok := (macPresence{}).cgIdle(cgAnyInput)
+				if !ok || !validIdle(cgS) {
+					t.Fatalf("cgIdle(any input) = %v, %v; want a valid idle time", cgS, ok)
+				}
+				ns, ok := (macPresence{}).hidIdle()
+				if !ok {
+					t.Fatal("hidIdle() gave no time")
+				}
+				if hidS := float64(ns) / 1e9; math.Abs(cgS-hidS) > hidLagS {
+					t.Errorf("CoreGraphics says %.3f s since any input and HIDIdleTime %.3f s; want them within %v s", cgS, hidS, hidLagS)
 				}
 			},
 		},
