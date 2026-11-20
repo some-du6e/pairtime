@@ -124,7 +124,7 @@ func runInit(ctx context.Context, e *env, args []string) int {
 		if _, err := e.stdout.Write(toml); err != nil {
 			return fail("%v", err)
 		}
-	} else if err := writeConfig(*out, toml); err != nil {
+	} else if err := writeConfigFile(*out, toml); err != nil {
 		return fail("%v. The keys in %s are in place; run init again, which keeps them, once it can write the file", err, keysDir)
 	} else {
 		fmt.Fprintf(notes, "wrote %s\n", *out)
@@ -197,9 +197,9 @@ func ensureKeys(dir string) (keys *backup.Keys, made bool, err error) {
 	}
 }
 
-// writeConfig writes pairtime.toml, which must not exist, with mode 0644:
+// writeConfigFile writes pairtime.toml, which must not exist, with mode 0644:
 // it holds no secret, and the container's user reads it.
-func writeConfig(path string, data []byte) error {
+func writeConfigFile(path string, data []byte) error {
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
 	if err != nil {
 		return err
