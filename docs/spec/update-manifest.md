@@ -147,13 +147,15 @@ Karim does this once, before the first tag that should be signed (PLAN WP-RL1). 
 
    It should print one line, ending in `tag v*`. Delete the policy of any other line with `gh api -X DELETE repos/some-du6e/pairtime/environments/release/deployment-branch-policies/<id>`.
 
-2. Make the key from the repository root, with its secret half going straight into the environment:
+2. Make the key from the repository root, with its secret half going to an offline copy and straight into the environment:
 
    ```sh
-   go run ./tools/release keygen | gh secret set RELEASE_SIGNING_KEY --env release --repo some-du6e/pairtime
+   go run ./tools/release keygen \
+     | tee >(age -r <your age recipient> -o "$HOME/release-signing-key.age") \
+     | gh secret set RELEASE_SIGNING_KEY --env release --repo some-du6e/pairtime
    ```
 
-   `keygen` appends the public key to `release-keys.txt` and prints the secret key to standard output once. Keep an offline copy too, for example by putting `tee >(age -r <recipient> -o release-signing-key.age)` between the two commands, with the offline `age` key DESIGN 10.2 uses for the server's keys. GitHub never shows a secret again. If the key is lost, installed clients can't verify any update, including one that would trust a new key.
+   `keygen` appends the public key to `release-keys.txt` and prints the secret key to standard output once. `tee` encrypts one copy to the offline `age` key DESIGN 10.2 uses for the server's keys, and `gh` stores the other. The copy goes to your home directory, outside the checkout: keygen runs from the repository root, and the next step commits from there, where one `git add -A` would put the encrypted key in the public history for good. `.gitignore` ignores `*.age` as a second guard. GitHub never shows a secret again, so the copy is the only way back, and if the key is lost no installed client can verify any update, including one that would trust a new key. Check that the copy decrypts: `age -d -i <your age identity> "$HOME/release-signing-key.age" | cut -c1-32` prints `pairtime-release-ed25519-secret:` and none of the key.
 
    Store the key in the environment and nowhere else in GitHub. A repository or organization secret with the same name would reach every workflow run on every branch, so `release.yml` fails while one exists.
 

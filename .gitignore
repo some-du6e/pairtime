@@ -1,1 +1,4 @@
+# An age-encrypted backup of a release or server key. Keys never go in
+# git, not even encrypted (DESIGN 10.2; docs/spec/update-manifest.md).
+*.age
 /bin/
