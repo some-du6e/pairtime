@@ -23,9 +23,11 @@ type Commit struct {
 	Parents []string `json:"parents"`
 	Project string   `json:"project"`
 	// ObservedAt is when the adapter first saw the commit, in Unix
-	// milliseconds of the device's clock. Author and committer times are
-	// whatever the commit says, which anyone can set (HS 13.3).
-	ObservedAt    int64 `json:"observed_at"`
+	// milliseconds of the device's clock, as every time in pkg/event is.
+	ObservedAt int64 `json:"observed_at"`
+	// AuthorTime and CommitterTime are the commit's own dates in Unix
+	// seconds, git's unit and SP 4.3's "epoch s", not milliseconds. They
+	// are whatever the commit says, which anyone can set (HS 13.3).
 	AuthorTime    int64 `json:"author_time"`
 	CommitterTime int64 `json:"committer_time"`
 	// FilesChanged, Insertions and Deletions are `git diff --shortstat`

@@ -14,10 +14,10 @@ import (
 	"strings"
 )
 
-// ProjectSecretLabel is the HKDF label of the project secret. It follows
-// ledger-v1.md section 3: other parts of pairtime derive their keys from
-// K_dev under the same "pairtime/v1/" prefix, each with a label of its
-// own, and no label is used for two keys.
+// ProjectSecretLabel is the HKDF label of the project secret. ledger-v1.md
+// section 3 lists it beside the ledger's own labels, with the domain
+// strings below: every key derived from K_dev has a "pairtime/v1/" label
+// of its own, and no label is used for two keys.
 const ProjectSecretLabel = "pairtime/v1/project"
 
 // SecretLen is the length of the project secret, in bytes.

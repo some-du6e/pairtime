@@ -5,6 +5,7 @@ package git
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"errors"
 	"os"
 	"path/filepath"
@@ -313,6 +314,42 @@ func TestResolve(t *testing.T) {
 			},
 		},
 		{
+			name: "a project's aliases come from every repo with its key, so a fresh clone without them doesn't hide the original's",
+			run: func(t *testing.T, g *gitEnv) {
+				dir := filepath.Join(t.TempDir(), "game")
+				if err := os.Mkdir(dir, 0o755); err != nil {
+					t.Fatal(err)
+				}
+				res := g.resolver(ProjectMap{}, Excludes{})
+				folder, err := res.Resolve(ctx, dir)
+				if err != nil {
+					t.Fatal(err)
+				}
+				g.git(dir, "init", "-q")
+				res.Forget()
+				unborn, err := res.Resolve(ctx, dir)
+				if err != nil {
+					t.Fatal(err)
+				}
+				(&testRepo{g: g, dir: dir}).commit("first", map[string]string{"main.go": "package main\n"})
+				repo, err := res.Rekey(ctx, unborn)
+				if err != nil {
+					t.Fatal(err)
+				}
+				clone := filepath.Join(t.TempDir(), "game-copy")
+				g.git(filepath.Dir(clone), "clone", "-q", dir, clone)
+				if c, err := res.Resolve(ctx, clone); err != nil || c.Project != repo.Project {
+					t.Fatalf("clone %+v, %v; want the original's key %s", c, err, repo.Project)
+				}
+				// Two repos share the key now; map order mustn't decide.
+				for i := 0; i < 50; i++ {
+					if got := res.Aliases(repo.Project); !slices.Equal(got, []string{folder.Project}) {
+						t.Fatalf("aliases %v, want the folder key %s", got, folder.Project)
+					}
+				}
+			},
+		},
+		{
 			name: "a folder inside a git directory resolves to its repo with no top level of its own",
 			run: func(t *testing.T, g *gitEnv) {
 				r := g.initRepo()
@@ -395,6 +432,39 @@ func TestExcludesProblems(t *testing.T) {
 			ex, problems := NewExcludes(tc.patterns, tc.home)
 			if len(problems) != tc.want || len(ex.pats) != 0 {
 				t.Errorf("problems %q and %d patterns, want %d problems and none kept", problems, len(ex.pats), tc.want)
+			}
+		})
+	}
+}
+
+// TestProjectKeyVectors pins the project secret and both key forms to
+// values computed outside Go, from ledger-v1.md section 3's derivation and
+// the domain strings it lists for project keys, so a change to the label,
+// a domain or the key form fails here.
+func TestProjectKeyVectors(t *testing.T) {
+	kDev := make([]byte, 32)
+	for i := range kDev {
+		kDev[i] = byte(i)
+	}
+	secret, err := ProjectSecret(kDev)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, b := strings.Repeat("a", 40), strings.Repeat("b", 40)
+	cases := []struct {
+		name string
+		got  string
+		want string
+	}{
+		{"ProjectSecret of K_dev 00..1f is HKDF-SHA256 under pairtime/v1/project", hex.EncodeToString(secret), "2981b135d2056f8dd91c7461cfd3dd72ffd86989a45fd4a95aa84367a8b4981e"},
+		{"a repo with one root gets g and 16 bytes of the roots HMAC", rootsKey(secret, []string{a}), "g3dfd1a4e8f815d86942bcfba1ea99d33"},
+		{"two roots give one key whatever order git lists them in", rootsKey(secret, []string{b, a}), "g23d8845d6e8c9a60fa8d6026b040b9ef"},
+		{"a folder gets d and 16 bytes of the folder HMAC of its path", folderKey(secret, "/home/teen/game"), "da8c6d44ea951c2e471c26f25f18dd2fd"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.got != tc.want {
+				t.Errorf("got %s, want %s", tc.got, tc.want)
 			}
 		})
 	}

@@ -192,16 +192,22 @@ func (r *Resolver) Map() ProjectMap {
 	return m
 }
 
-// Aliases returns the keys project had before its current one.
+// Aliases returns the keys project had before its current one, sorted.
+// Several repos can share a key, as a fresh clone shares the original's,
+// and each brings the aliases it had.
 func (r *Resolver) Aliases(project string) []string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	var out []string
 	for _, p := range r.repos {
 		if p.Key == project {
-			return slices.Clone(p.Aliases)
+			for _, a := range p.Aliases {
+				out = appendNew(out, a)
+			}
 		}
 	}
-	return nil
+	slices.Sort(out)
+	return out
 }
 
 // Resolve returns the Location of dir, a harness session's cwd or an

@@ -68,7 +68,18 @@ K_x = HMAC-SHA256(PRK, ascii(label) || 0x01)
 
 HMAC pads a key shorter than SHA-256's 64-byte block with zeros, so an empty salt and `zero(32)` give the same `PRK`. RFC 5869's test case 3 runs through that path.
 
-Other parts of pairtime derive keys under the same `pairtime/v1/` prefix: `backup` and `recovery` in DESIGN 7.11, and `seal` in DESIGN 7.6. Their own specs define them. A new ledger key takes a new label, and no label is ever used for two keys. `K_dev` and the keys derived from it never leave the device unencrypted (DESIGN 4.3, 7.11).
+Other parts of pairtime derive keys under the same `pairtime/v1/` prefix: `backup` and `recovery` in DESIGN 7.11, `seal` in DESIGN 7.6, and `project` in the git adapter (WP-AD5). Their own specs define them, and the git adapter's is below. A new ledger key takes a new label, and no label is ever used for two keys. `K_dev` and the keys derived from it never leave the device unencrypted (DESIGN 4.3, 7.11).
+
+The git adapter's project secret is `K_project`, derived as above with the label `pairtime/v1/project`. Project keys are HMACs under it, each over a domain string of its own, so a root commit and a folder can never give the same key:
+
+```text
+repo key   = "g" || hex(HMAC-SHA256(K_project, ascii("pairtime/v1/project/roots") || 0x00
+                                   || root_1 || 0x0a || ... || root_n || 0x0a)[0:16])
+folder key = "d" || hex(HMAC-SHA256(K_project, ascii("pairtime/v1/project/folder") || 0x00
+                                   || utf8(folder))[0:16])
+```
+
+`root_1` to `root_n` are the repo's root commit ids in lowercase hex, sorted and without repeats. `folder` is the folder's canonical path with forward slashes, lowercased on Windows and macOS. `internal/adapters/git/keys.go` has the code, and `TestProjectKeyVectors` pins a vector for each form.
 
 ## 4. Records
 
