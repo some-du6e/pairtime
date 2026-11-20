@@ -9,6 +9,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"math"
 	"slices"
 	"strings"
 )
@@ -27,6 +28,17 @@ const dayContext = "pairtime-day-v1"
 // DayOf returns the day number of t, a time in Unix ms: floor(t /
 // 86,400,000), the days since 1970-01-01 UTC (spec 8).
 func DayOf(t uint64) uint64 { return t / DayMS }
+
+// DayEnd returns the last millisecond of day d, (d + 1) * 86,400,000 - 1.
+// The server key valid then signs day d's head, whenever the head is
+// signed or published (spec 8). ok is false for a d whose end doesn't fit
+// in 64 bits.
+func DayEnd(d uint64) (t uint64, ok bool) {
+	if d > (math.MaxUint64-(DayMS-1))/DayMS {
+		return 0, false
+	}
+	return d*DayMS + DayMS - 1, true
+}
 
 // DayRow is one batch a server stored, as its day tree sees it: the
 // device, the batch number, the head and when the server stored the row
@@ -162,7 +174,8 @@ func (d *Day) Publish(key ed25519.PrivateKey) (PublishedDay, error) {
 }
 
 // SignDay returns the server's signature over D_d for day d with head
-// (spec 8).
+// (spec 8). key must be the server key that was valid at the end of day d
+// (DayEnd), even when the day is signed after a rotation.
 func SignDay(key ed25519.PrivateKey, d uint64, head Hash) ([SignatureSize]byte, error) {
 	return sign(key, DayMessage(d, head))
 }
@@ -227,10 +240,13 @@ func (p PublishedDay) VerifyRows(rows []DayRow) error {
 // VerifyDays checks a run of published days (spec 9 item 9): each day
 // after the first has the next day number and a prev equal to the head
 // before it, each head follows from its day's prev, root, count and d, and
-// each signature verifies under pub. The first day's prev is taken as
-// given. It returns nil or every problem joined: a GapError for a missing
-// day, HeadMismatchErrors, and DayErrors wrapping ErrDaySignature.
-func VerifyDays(pub ed25519.PublicKey, days []PublishedDay) error {
+// each signature verifies under serverKey(t), where t is the last
+// millisecond of its day (DayEnd). serverKey returns the server's public
+// key that was valid at t (DESIGN 10.2), or nil if none was, so a run of
+// days can cross a key rotation. The first day's prev is taken as given.
+// It returns nil or every problem joined: a GapError for a missing day,
+// HeadMismatchErrors, and DayErrors wrapping ErrDaySignature.
+func VerifyDays(serverKey func(t uint64) ed25519.PublicKey, days []PublishedDay) error {
 	var v problems
 	for i, p := range days {
 		if v.full() {
@@ -247,6 +263,10 @@ func VerifyDays(pub ed25519.PublicKey, days []PublishedDay) error {
 		}
 		if head := DayHead(p.Prev, p.Root, p.Count, p.D); head != p.Head {
 			v.add(&HeadMismatchError{Day: true, Number: p.D, Stored: p.Head, Computed: head})
+		}
+		var pub ed25519.PublicKey
+		if end, ok := DayEnd(p.D); ok && serverKey != nil {
+			pub = serverKey(end)
 		}
 		if err := VerifyDay(pub, p.D, p.Head, p.Signature); err != nil {
 			v.add(&DayError{D: p.D, Err: err})

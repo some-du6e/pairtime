@@ -20,10 +20,16 @@ One Go module holds the client, the server and the code they share.
 | `pkg/params` | The public parameter table: every tunable value in the credit rule (SM 8, DESIGN 6.3), as canonical JSON with its SHA-256 |
 | `pkg/ledger` | Part 1 of the [ledger format](docs/spec/ledger-v1.md): device keys, records, Merkle trees and inclusion proofs, the batch chain, the server's receipts, day trees and verification |
 | `internal/agent` | The background agent: its data directories, the single-instance lock, `config.toml`, `state.json`, the scheduler every timer goes through, and the HTTP server on 127.0.0.1 |
+| `internal/agent/presence` | Presence and power: idle-time samples on each 15-second slot boundary and suspend, resume, lock and unlock, recorded only while a project context is live (DESIGN 3.3, D14) |
+| `internal/agent/keys` | The device keystore: the device key `K_dev`, made once per install and kept in the OS's secret store or, failing that, a user-only file, and the ledger keys derived from it |
+| `internal/platform/windows` | Win32 calls without cgo: input idle time, suspend and lock notifications, EcoQoS, and DPAPI, which keeps the device key. No keyboard listener of any kind |
+| `internal/platform/darwin`, `internal/platform/linux` | What macOS and Linux report about idle time, focus, sleep and screen lock, and the device keystore's half on each: the Keychain on macOS, the Secret Service on Linux |
 | `internal/server` | The server's packages: `config` reads `pairtime.toml`, `store` opens the database (SQLite in WAL mode, or Postgres), `migrations` holds the schema, `writer` is the one goroutine every write goes through, and `ops` serves the health and readiness endpoints |
 | `internal/release` | The [update manifest](docs/spec/update-manifest.md), the signed list of release archives a client checks its downloads against, and the release keys built into the client |
 | `internal/timelines` | Loads `testdata/timelines`, the struggle-metric spec's worked examples written out as events. The scorer's tests compare their output with them |
-| `internal/webui` | The local dashboard's built files, embedded in the client. A placeholder stands in until the UI exists, so Go builds never need Node |
+| `internal/webui` | The local dashboard's built files, embedded in the client. The repo carries a placeholder, so Go builds never need Node |
+| `web` | The web UI in Svelte 5 and TypeScript: the local dashboard the agent serves, the server UI, and the components they share. [web/README.md](web/README.md) says how it builds |
+| `docs/api` | OpenAPI specs of pairtime's HTTP APIs. The UI's TypeScript types are generated from them |
 | `internal/version` | Build info, set at link time |
 | `tools/` | `ledger_ref.py`, a standard-library Python reference for `pkg/ledger`; `release`, which packages and signs releases; `capture`, the kit for capturing harness fixtures; and `ci`, the checks the workflows run |
 | `testdata/` | What the tests read: the timelines, ledger vectors, captures of upstream interfaces, harness fixtures, and the license check's seeded modules |
@@ -56,6 +62,13 @@ CGO_ENABLED=0 go build -trimpath \
 ```
 
 Without those flags, `pairtime version` reports the commit the go command stamped into the binary.
+
+A plain `go build` embeds the placeholder dashboard. To embed the real one, build the UI first, which needs Node 22.12 or later:
+
+```sh
+(cd web && npm ci && npm run build)
+CGO_ENABLED=0 go build -o bin/ ./cmd/pairtime
+```
 
 ## License
 

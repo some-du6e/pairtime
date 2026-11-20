@@ -12,7 +12,8 @@ import (
 // ones and never a mix (DESIGN 3.5): it writes a temporary file beside
 // name, flushes it to disk and renames it over name. The new file is
 // readable by its owner only (mode 0600) where the OS has file modes; on
-// Windows it inherits its directory's ACL.
+// Windows it inherits its directory's ACL, which is user-only in the
+// directories Create makes.
 func WriteFile(name string, data []byte) error {
 	return writeFile(name, data, false)
 }

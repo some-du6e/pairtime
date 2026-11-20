@@ -66,8 +66,9 @@ type Options struct {
 //   - sequence numbers rise by 1 within and across batches, from 1 in
 //     batch 1, and each row's first_seq is its first record's;
 //   - every header follows spec 4.3;
-//   - every revealed body hashes to its entry and agrees with its header
-//     (CheckBody), and with Options.Keys carries its record's nonce;
+//   - every revealed body hashes to its entry, is valid and agrees with its
+//     header and with c.DeviceID (CheckBody), and with Options.Keys carries
+//     its record's nonce;
 //   - n_b counts the batch's records, R_b is the MTH of their entries, and
 //     H_b follows from the head stored for the batch before, R_b, n_b and
 //     b, which is the link the server checks;
@@ -77,9 +78,11 @@ type Options struct {
 // A gap in b or seq is a *GapError, a root mismatch a *RootMismatchError
 // and a head mismatch a *HeadMismatchError; the other problems are
 // *RecordError and *BatchError. errors.As picks each type out. A record
-// whose rtype isn't in the table is a RecordError wrapping
-// ErrUnknownRType, and its batch is still checked, since roots and heads
-// never read rtype.
+// whose rtype is a kind added after this package (RType.Later) is a
+// RecordError wrapping ErrUnknownRType, and its batch is still checked,
+// since roots and heads never read rtype: an auditor reports the kind as
+// unknown, and a server refuses or holds it (spec 4.2). A code version 1
+// never assigns is a RecordError wrapping ErrHeader.
 func (c Chain) Verify(opt Options) error {
 	v := &chainCheck{opt: opt, deviceID: c.DeviceID}
 	prev := c.Prev
@@ -154,7 +157,7 @@ func (v *chainCheck) batch(bt *Batch, prev Hash, first bool, want uint64) uint64
 			v.add(&RecordError{B: row.B, Seq: s, Err: ErrBodyHash})
 		}
 		if headerErr == nil {
-			if err := CheckBody(h, body); err != nil {
+			if err := CheckBody(v.deviceID, h, body); err != nil {
 				v.add(&RecordError{B: row.B, Seq: s, Err: err})
 			}
 		}

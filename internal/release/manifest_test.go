@@ -119,14 +119,39 @@ func TestEncodeDecodeManifest(t *testing.T) {
 			}
 		})
 	}
-	if !bytes.HasSuffix(payload, []byte("}\n")) || !bytes.Contains(payload, []byte("\n  \"version\": ")) {
-		t.Errorf("EncodeManifest should write indented JSON with a final newline, wrote:\n%s", payload)
+}
+
+func TestEncodeManifestForm(t *testing.T) {
+	m := testManifest()
+	// A query string puts & in a URL, which encoding/json escapes unless
+	// EncodeManifest turns HTML escaping off.
+	m.Artifacts[0].URL = "https://example.com/a.zip?x=1&y=2"
+	payload, err := EncodeManifest(m)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if bytes.Contains(payload, []byte(`&`)) {
-		t.Errorf("EncodeManifest escaped HTML characters")
+	decoded, err := DecodeManifest(payload)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if _, err := EncodeManifest(&Manifest{}); err == nil {
-		t.Errorf("EncodeManifest accepted an invalid manifest")
+	_, invalid := EncodeManifest(&Manifest{})
+	tests := []struct {
+		name string
+		ok   bool
+	}{
+		{name: "fields are indented by two spaces", ok: bytes.Contains(payload, []byte("\n  \"version\": "))},
+		{name: "the payload ends with a newline", ok: bytes.HasSuffix(payload, []byte("}\n"))},
+		{name: "an & in a URL stays a literal &", ok: bytes.Contains(payload, []byte(`"https://example.com/a.zip?x=1&y=2"`))},
+		{name: "an & is never escaped as \x5cu0026", ok: !bytes.Contains(payload, []byte("\x5cu0026"))},
+		{name: "the URL decodes unchanged", ok: decoded.Artifacts[0].URL == m.Artifacts[0].URL},
+		{name: "an invalid manifest isn't encoded", ok: invalid != nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if !tt.ok {
+				t.Errorf("EncodeManifest wrote:\n%s", payload)
+			}
+		})
 	}
 }
 

@@ -6,6 +6,7 @@ import (
 	"bufio"
 	"bytes"
 	"compress/gzip"
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -146,6 +147,7 @@ func TestShellcheck(t *testing.T) {
 		name, file string
 	}{
 		{"the sh dumper passes shellcheck as POSIX sh", "dump-hook.sh"},
+		{"Gemini's deny-once hook passes shellcheck as POSIX sh", "deny-once.sh"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -153,6 +155,90 @@ func TestShellcheck(t *testing.T) {
 			if r.code != 0 {
 				t.Fatalf("shellcheck %s:\n%s%s", c.file, r.stdout, r.stderr)
 			}
+		})
+	}
+}
+
+// A CRLF checkout of a shell script makes sh fail on the carriage returns,
+// and Git for Windows checks text out with CRLF by default.
+func TestLineEndings(t *testing.T) {
+	unixOnly(t)
+	git := need(t, "git")
+	if r := run(t, ".", nil, nil, git, "rev-parse", "--is-inside-work-tree"); r.code != 0 {
+		t.Skip("not a git checkout")
+	}
+	scripts, err := filepath.Glob("*.sh")
+	if err != nil || len(scripts) == 0 {
+		t.Fatalf("no shell scripts in the kit: %v", err)
+	}
+	for _, f := range scripts {
+		t.Run(f+" is checked out with LF endings whatever core.autocrlf says", func(t *testing.T) {
+			r := run(t, ".", nil, nil, git, "check-attr", "eol", "--", f)
+			if got := strings.TrimSpace(r.stdout); got != f+": eol: lf" {
+				t.Fatalf("git check-attr eol = %q, want %q", got, f+": eol: lf")
+			}
+		})
+	}
+}
+
+// TestScripts checks SCRIPTS.md's step lists. Step 4's prompt refers to the
+// spec pasted at step 3, and WP-AD0 wants a pasted prompt in every script.
+func TestScripts(t *testing.T) {
+	text := read(t, "SCRIPTS.md")
+	sections := map[string]string{}
+	for _, part := range regexp.MustCompile(`(?m)^## `).Split(text, -1)[1:] {
+		title, body, _ := strings.Cut(part, "\n")
+		sections[title] = body
+	}
+	lists := regexp.MustCompile(`\bsteps ((?:\d+(?: \([^)]*\))?(?:, |,? and )?)+)`)
+	numbers := func(list string) map[string]bool {
+		list = regexp.MustCompile(`\([^)]*\)`).ReplaceAllString(list, "")
+		got := map[string]bool{}
+		for _, n := range regexp.MustCompile(`\d+`).FindAllString(list, -1) {
+			got[n] = true
+		}
+		return got
+	}
+	t.Run("every step list with step 4 has step 3, whose paste step 4 refers to", func(t *testing.T) {
+		for _, m := range lists.FindAllStringSubmatch(text, -1) {
+			if got := numbers(m[1]); got["4"] && !got["3"] {
+				t.Errorf("%q has step 4 without step 3", m[0])
+			}
+		}
+	})
+	// A nested claude -p is the only run whose parents show claude under
+	// claude, and a message typed while the agent works is the only source
+	// of agent.queue (SM 1.2; HS 3.2, 12.1).
+	claude := sections["Claude Code"]
+	for _, c := range []struct{ name, row, prompt string }{
+		{"the Claude Code script starts a nested session", "| 20 | Type the step 20 prompt", `claude -p "Say nested."`},
+		{"the Claude Code script queues a message while /goal works", "| 21 | While step 13 is still working",
+			"When you're done, say which test you fixed."},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			if !strings.Contains(claude, c.row) || !strings.Contains(claude, c.prompt+"\n```") {
+				t.Fatalf("no table row %q with its prompt %q", c.row, c.prompt)
+			}
+		})
+	}
+	for _, h := range []string{"Claude Code", "Codex", "Cursor", "GitHub Copilot", "Gemini CLI", "Devin", "Cline"} {
+		t.Run("the "+h+" script has the pasted prompt", func(t *testing.T) {
+			body, ok := sections[h]
+			if !ok {
+				t.Fatalf("no %s section", h)
+			}
+			if h == "Claude Code" {
+				if !strings.Contains(body, "| 3 | Copy the three-line block below and paste it as one prompt") {
+					t.Fatal("the steps table has no step 3 paste")
+				}
+				return
+			}
+			for _, m := range lists.FindAllStringSubmatch(body, -1) {
+				if numbers(m[1])["3"] {
+					return
+				}
+			}
+			t.Fatalf("no step list in the %s section has step 3", h)
 		})
 	}
 }
@@ -178,6 +264,28 @@ const (
 // A payload with the shapes that break naive copies: non-ASCII text, CRLF,
 // and no newline at the end.
 var payload = []byte("{\"session_id\":\"3f9c\",\"hook_event_name\":\"UserPromptSubmit\",\"prompt\":\"caf\u00e9 \u2603\"}\r\n{\"tail\":true}")
+
+// hostile is a hook payload whose strings hold command substitutions, as an
+// agent's reply quoting a command can. A shell that reads it as its script
+// runs both and creates the two files.
+var hostile = []byte("{\"session_id\":\"x\",\"last_assistant_message\":\"I ran \x60touch backtick-ran\x60 and $(touch dollar-ran)\"}")
+
+// lyingMkdir returns a PATH setting whose mkdir reports success for a
+// folder that is already there. uutils mkdir before 0.11, Ubuntu 26.04's,
+// can tell a process that lost a race for a folder just that (uutils issue
+// 13970), so the hooks must never take mkdir's answer as a claim. With this
+// mkdir a test sees that answer every time, on any machine.
+func lyingMkdir(t *testing.T) string {
+	t.Helper()
+	real := need(t, "mkdir")
+	bin := t.TempDir()
+	script := "#!/bin/sh\nfor last; do :; done\nif [ -d \"$last\" ]; then\n\texit 0\nfi\nexec '" +
+		strings.ReplaceAll(real, "'", `'\''`) + "' \"$@\"\n"
+	if err := os.WriteFile(filepath.Join(bin, "mkdir"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return "PATH=" + bin + string(os.PathListSeparator) + os.Getenv("PATH")
+}
 
 func TestDumpers(t *testing.T) {
 	unixOnly(t)
@@ -271,6 +379,19 @@ func TestDumpers(t *testing.T) {
 						t.Fatalf("parents starts with %q, want this test's pid %d", lines[0], os.Getpid())
 					}
 				}},
+				{"each parents line is pid, terminal and name, with the terminal ps reports", func(t *testing.T) {
+					runDir, _ := call(t, payload)
+					lines := strings.Split(strings.TrimSpace(read(t, filepath.Join(first(runDir), "parents"))), "\n")
+					for _, line := range lines {
+						if len(strings.Fields(line)) < 3 {
+							t.Errorf("parents line %q isn't pid, terminal and name", line)
+						}
+					}
+					ps := run(t, ".", nil, nil, need(t, "ps"), "-o", "tty=", "-p", strconv.Itoa(os.Getpid()))
+					if f := strings.Fields(lines[0]); len(f) < 3 || f[1] != strings.TrimSpace(ps.stdout) {
+						t.Errorf("parents starts with %q, want this test's terminal %q", lines[0], strings.TrimSpace(ps.stdout))
+					}
+				}},
 				{"it prints nothing, exits 0 and leaves no stderr file", func(t *testing.T) {
 					runDir, r := call(t, payload)
 					if r.code != 0 || r.stdout != "" || r.stderr != "" {
@@ -290,6 +411,34 @@ func TestDumpers(t *testing.T) {
 						t.Fatalf("wrote %v", files)
 					}
 				}},
+				{"a hooks folder it can't write to ends the call at once, not after a million numbers", func(t *testing.T) {
+					if os.Geteuid() == 0 {
+						t.Skip("root can write to a read-only folder")
+					}
+					runDir := filepath.Join(t.TempDir(), "run")
+					hooks := filepath.Join(runDir, "hooks")
+					if err := os.MkdirAll(hooks, 0o755); err != nil {
+						t.Fatal(err)
+					}
+					if err := os.Chmod(hooks, 0o555); err != nil {
+						t.Fatal(err)
+					}
+					t.Cleanup(func() { _ = os.Chmod(hooks, 0o755) })
+					ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+					defer cancel()
+					cmd := exec.CommandContext(ctx, base[0], append(append([]string{}, base[1:]...), runDir, "Stop")...)
+					cmd.Stdin = bytes.NewReader(payload)
+					err := cmd.Run()
+					if ctx.Err() != nil {
+						t.Fatal("still trying numbers after 30 s")
+					}
+					if err != nil {
+						t.Fatalf("exit: %v, want 0", err)
+					}
+					if entries, _ := os.ReadDir(hooks); len(entries) != 0 {
+						t.Fatalf("wrote %d entries into a read-only folder", len(entries))
+					}
+				}},
 				{"calls are numbered in arrival order", func(t *testing.T) {
 					runDir := filepath.Join(t.TempDir(), "run")
 					for _, in := range []string{"first", "second", "third"} {
@@ -301,14 +450,34 @@ func TestDumpers(t *testing.T) {
 						}
 					}
 				}},
+				// Two calls that race for one number: the other call has
+				// claimed 000002, and mkdir tells this one it made that
+				// folder, as uutils mkdir can tell the call that lost.
+				{"a number whose time file is there is taken, even when mkdir says this call made its folder", func(t *testing.T) {
+					runDir := filepath.Join(t.TempDir(), "run")
+					taken := filepath.Join(runDir, "hooks", "000002")
+					write(t, filepath.Join(taken, "time"), "the other call's\n")
+					run(t, t.TempDir(), payload, []string{lyingMkdir(t)}, append(append([]string{}, base...), runDir, "Stop")...)
+					if got := read(t, filepath.Join(taken, "time")); got != "the other call's\n" {
+						t.Errorf("the other call's time file now holds %q", got)
+					}
+					if _, err := os.Stat(filepath.Join(taken, "stdin")); err == nil {
+						t.Error("it wrote its stdin into the other call's folder")
+					}
+					if got := read(t, filepath.Join(runDir, "hooks", "000003", "stdin")); got != string(payload) {
+						t.Errorf("hooks/000003/stdin = %q, want the payload", got)
+					}
+				}},
 				{"concurrent calls each get their own directory", func(t *testing.T) {
 					runDir := filepath.Join(t.TempDir(), "run")
+					env := append(os.Environ(), lyingMkdir(t))
 					var wg sync.WaitGroup
 					for i := 0; i < 8; i++ {
 						wg.Add(1)
 						go func(i int) {
 							defer wg.Done()
 							cmd := exec.Command(base[0], append(append([]string{}, base[1:]...), runDir, "PostToolUse")...)
+							cmd.Env = env
 							cmd.Stdin = strings.NewReader("call " + strconv.Itoa(i))
 							if err := cmd.Run(); err != nil {
 								t.Errorf("call %d: %v", i, err)
@@ -333,6 +502,131 @@ func TestDumpers(t *testing.T) {
 				t.Run(c.name, c.check)
 			}
 		})
+	}
+}
+
+// TestDenyOnce checks deny-once.sh, the AfterAgent hook that gives the
+// Gemini CLI capture its one deny-retry (SCRIPTS.md, step 19; HS 7.1).
+func TestDenyOnce(t *testing.T) {
+	unixOnly(t)
+	sh := need(t, "sh")
+	script := kit(t, "deny-once.sh")
+	source, scripts := read(t, script), read(t, "SCRIPTS.md")
+	quoted := func(name string) string {
+		m := regexp.MustCompile(`(?m)^` + name + `='([^']*)'$`).FindStringSubmatch(source)
+		if m == nil {
+			t.Fatalf("deny-once.sh sets no %s", name)
+		}
+		return m[1]
+	}
+	prompt, reason := quoted("prompt"), quoted("reason")
+	step19 := jsonText(t, map[string]any{"hook_event_name": "AfterAgent", "prompt": prompt, "prompt_response": "Apple"})
+	other := jsonText(t, map[string]any{"hook_event_name": "AfterAgent", "prompt": "What does count_words do? Answer in one sentence."})
+	call := func(t *testing.T, runDir, payload string, env ...string) result {
+		t.Helper()
+		r := run(t, t.TempDir(), []byte(payload), env, sh, script, runDir, "AfterAgent")
+		if r.code != 0 || r.stderr != "" {
+			t.Fatalf("exit %d, stderr %q; want 0 and nothing", r.code, r.stderr)
+		}
+		return r
+	}
+	denied := func(t *testing.T, r result) bool {
+		t.Helper()
+		if r.stdout == "" {
+			return false
+		}
+		var d struct{ Decision, Reason string }
+		if err := json.Unmarshal([]byte(r.stdout), &d); err != nil || d.Decision != "deny" || d.Reason != reason {
+			t.Fatalf("stdout %q, want Gemini's deny decision with the reason %q", r.stdout, reason)
+		}
+		return true
+	}
+
+	cases := []struct {
+		name  string
+		check func(t *testing.T)
+	}{
+		{"step 19's prompt and the reason are SCRIPTS.md text, so the scrub doesn't flag them", func(t *testing.T) {
+			for _, text := range []string{prompt, reason} {
+				if !strings.Contains(scripts, "```text\n"+text+"\n```") {
+					t.Errorf("SCRIPTS.md has no text block holding %q", text)
+				}
+			}
+		}},
+		{"the first call with step 19's prompt is turned down", func(t *testing.T) {
+			if !denied(t, call(t, filepath.Join(t.TempDir(), "run"), step19)) {
+				t.Fatal("not turned down")
+			}
+		}},
+		{"a later call with step 19's prompt isn't turned down", func(t *testing.T) {
+			runDir := filepath.Join(t.TempDir(), "run")
+			call(t, runDir, step19)
+			if denied(t, call(t, runDir, step19)) {
+				t.Fatal("turned down twice")
+			}
+		}},
+		{"step 19 is turned down once, even when mkdir says each call made the marker", func(t *testing.T) {
+			runDir, path := filepath.Join(t.TempDir(), "run"), lyingMkdir(t)
+			if !denied(t, call(t, runDir, step19, path)) {
+				t.Fatal("not turned down")
+			}
+			if denied(t, call(t, runDir, step19, path)) {
+				t.Fatal("turned down twice")
+			}
+		}},
+		{"the decision it sends is kept in the run as deny-once", func(t *testing.T) {
+			runDir := filepath.Join(t.TempDir(), "run")
+			r := call(t, runDir, step19)
+			if got := read(t, filepath.Join(runDir, "deny-once")); r.stdout == "" || got != r.stdout {
+				t.Fatalf("deny-once = %q, want what it printed, %q", got, r.stdout)
+			}
+		}},
+		{"a call with another prompt isn't turned down and leaves the denial for step 19", func(t *testing.T) {
+			runDir := filepath.Join(t.TempDir(), "run")
+			if denied(t, call(t, runDir, other)) {
+				t.Fatal("another prompt was turned down")
+			}
+			if !denied(t, call(t, runDir, step19)) {
+				t.Fatal("step 19 wasn't turned down after another prompt")
+			}
+		}},
+		{"every call is recorded like any other hook, and no temporary file stays", func(t *testing.T) {
+			runDir := filepath.Join(t.TempDir(), "run")
+			call(t, runDir, other)
+			call(t, runDir, step19)
+			for i, want := range []string{other, step19} {
+				dir := filepath.Join(runDir, "hooks", "00000"+strconv.Itoa(i+1))
+				if got := read(t, filepath.Join(dir, "stdin")); got != want {
+					t.Errorf("call %d stdin = %q, want %q", i+1, got, want)
+				}
+				if got := read(t, filepath.Join(dir, "argv")); got != runDir+"\nAfterAgent\n" {
+					t.Errorf("call %d argv = %q", i+1, got)
+				}
+			}
+			entries, _ := os.ReadDir(runDir)
+			for _, e := range entries {
+				if strings.HasPrefix(e.Name(), ".deny-once.") {
+					t.Errorf("%s left in the run", e.Name())
+				}
+			}
+		}},
+		{"without arguments it exits 0 without reading the payload", func(t *testing.T) {
+			dir := t.TempDir()
+			r := run(t, dir, hostile, nil, sh, script)
+			if r.code != 0 || r.stdout != "" || len(tree(t, dir)) != 0 {
+				t.Fatalf("exit %d, stdout %q, files %v; want 0 and nothing", r.code, r.stdout, keys(tree(t, dir)))
+			}
+		}},
+		{"it exits 0 and turns nothing down when the run folder can't be made", func(t *testing.T) {
+			file := filepath.Join(t.TempDir(), "file")
+			write(t, file, "")
+			if denied(t, call(t, filepath.Join(file, "run"), step19)) {
+				t.Fatal("turned down without a run folder to record it in")
+			}
+		}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, c.check)
 	}
 }
 
@@ -471,29 +765,67 @@ func TestSink(t *testing.T) {
 	})
 }
 
+// writeCapture writes the capture.json prepare.py leaves in a run: the
+// harness, and the settings folder it was pointed at, if any.
+func writeCapture(t *testing.T, runDir, harness string, strict bool, folders map[string]string) {
+	t.Helper()
+	if folders == nil {
+		folders = map[string]string{}
+	}
+	write(t, filepath.Join(runDir, "capture.json"), jsonText(t, map[string]any{
+		"harness": harness, "run": filepath.Base(runDir), "settings_folder": folders, "strict": strict, "hooks": "exec",
+	}))
+}
+
 func TestCollect(t *testing.T) {
 	unixOnly(t)
 	home := t.TempDir()
 	project := filepath.Join(home, "pairtime-capture", "project")
-	projects := filepath.Join(home, ".claude", "projects", "-capture-project")
+	// The settings folder prepare.py gave Claude Code, as CLAUDE_CONFIG_DIR.
+	config := filepath.Join(home, ".claude")
+	projects := filepath.Join(config, "projects", "-capture-project")
 	transcript := filepath.Join(projects, "sess-1.jsonl")
 	write(t, transcript, "{\"type\":\"user\",\"sessionId\":\"sess-1\"}\n")
 	write(t, filepath.Join(projects, "sess-1", "subagents", "agent-a.jsonl"), "{\"isSidechain\":true}\n")
 	write(t, filepath.Join(projects, "sess-2.jsonl"), "{\"type\":\"user\",\"sessionId\":\"sess-2\"}\n")
+	// The run's hook calls arrived over the last minute. History entries
+	// carry their own times: Claude Code's timestamp in ms, Codex's ts in
+	// seconds, Gemini CLI's an ISO 8601 string.
+	now := time.Now()
+	during, earlier := now.Add(-30*time.Second), now.Add(-time.Hour)
 	history := filepath.Join(home, ".claude", "history.jsonl")
-	captured := jsonText(t, map[string]any{"display": "a captured prompt", "project": project}) + "\n"
-	elsewhere := jsonText(t, map[string]any{"display": "a prompt from another project", "project": filepath.Join(home, "school")}) + "\n"
-	bySession := jsonText(t, map[string]any{"display": "a prompt by session id", "sessionId": "sess-1"}) + "\n"
-	write(t, history, captured+elsewhere+bySession)
+	entry := func(fields map[string]any) string { return jsonText(t, fields) + "\n" }
+	captured := entry(map[string]any{"display": "a captured prompt", "project": project, "timestamp": during.UnixMilli()})
+	elsewhere := entry(map[string]any{"display": "a prompt from another project", "project": filepath.Join(home, "school"),
+		"timestamp": during.UnixMilli()})
+	bySession := entry(map[string]any{"display": "a prompt by session id", "sessionId": "sess-1", "project": project,
+		"timestamp": during.UnixMilli()})
+	attempt := entry(map[string]any{"display": "an earlier attempt's private prompt", "project": project,
+		"timestamp": earlier.UnixMilli()})
+	otherSession := entry(map[string]any{"display": "another session's prompt in the same folder", "sessionId": "sess-9",
+		"project": project, "timestamp": during.UnixMilli()})
+	undated := entry(map[string]any{"display": "a prompt with no time", "project": project})
+	codex := entry(map[string]any{"session_id": "sess-1", "ts": during.Unix(), "text": "a Codex prompt"})
+	write(t, history, captured+elsewhere+bySession+attempt+otherSession+undated+codex)
+	logs := filepath.Join(home, ".claude", "logs.json")
+	write(t, logs, jsonText(t, []map[string]any{
+		{"sessionId": "sess-1", "type": "user", "message": "a Gemini prompt", "timestamp": during.UTC().Format(time.RFC3339Nano)},
+		{"sessionId": "sess-9", "type": "user", "message": "another session's Gemini prompt", "timestamp": during.UTC().Format(time.RFC3339)},
+	}))
 
 	runDir := filepath.Join(t.TempDir(), "run")
+	writeCapture(t, runDir, "claude_code", true, map[string]string{"CLAUDE_CONFIG_DIR": config})
+	for i, at := range []time.Time{now.Add(-time.Minute), now} {
+		write(t, filepath.Join(runDir, "hooks", "00000"+strconv.Itoa(i+1), "time"),
+			"unix_ns="+strconv.FormatInt(at.UnixNano(), 10)+"\nutc="+at.UTC().Format(time.RFC3339)+"\nclock=gnu-date\n")
+	}
 	write(t, filepath.Join(runDir, "hooks", "000001", "stdin"),
 		jsonText(t, map[string]any{"session_id": "sess-1", "transcript_path": transcript, "cwd": project}))
 	write(t, filepath.Join(runDir, "hooks", "000002", "stdin"),
 		jsonText(t, map[string]any{"session_id": "sess-1", "transcript_path": filepath.Join(projects, "gone.jsonl"), "cwd": project}))
 	write(t, filepath.Join(runDir, "hooks", "000003", "stdin"), "not json")
 
-	r := run(t, ".", nil, []string{"HOME=" + home}, python(t, "collect.py", runDir, "--history", history)...)
+	r := run(t, ".", nil, []string{"HOME=" + home}, python(t, "collect.py", runDir, "--history", history, "--history", logs)...)
 	if r.code != 0 {
 		t.Fatalf("collect.py exit %d:\n%s%s", r.code, r.stdout, r.stderr)
 	}
@@ -520,9 +852,20 @@ func TestCollect(t *testing.T) {
 				}
 			}
 		}},
-		{"history keeps only lines from the captured sessions and folders", func(t *testing.T) {
-			if h := got["home/.claude/history.jsonl"]; h != captured+bySession {
-				t.Fatalf("history = %q, want %q", h, captured+bySession)
+		{"history keeps a captured session's entries, and an undated one from its folder only while the run went", func(t *testing.T) {
+			// Left behind: another project's prompt, an earlier attempt's in the
+			// same folder, another session's, and one that can't be placed.
+			if h, want := got["home/.claude/history.jsonl"], captured+bySession+codex; h != want {
+				t.Fatalf("history = %q, want %q", h, want)
+			}
+		}},
+		{"a history file that is one JSON array is filtered entry by entry", func(t *testing.T) {
+			var entries []map[string]any
+			if err := json.Unmarshal([]byte(got["home/.claude/logs.json"]), &entries); err != nil {
+				t.Fatalf("logs.json = %q: %v", got["home/.claude/logs.json"], err)
+			}
+			if len(entries) != 1 || entries[0]["message"] != "a Gemini prompt" {
+				t.Fatalf("logs.json entries = %v, want only the captured session's", entries)
 			}
 		}},
 		{"INDEX.txt lists every copied file with its source", func(t *testing.T) {
@@ -542,6 +885,62 @@ func TestCollect(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, c.check)
 	}
+
+	// A run whose harness had a settings folder of its own takes nothing
+	// from outside it: such a file ran with the person's own settings.
+	outside := filepath.Join(home, "elsewhere", "projects", "-capture-project", "sess-9.jsonl")
+	write(t, outside, "{\"type\":\"user\",\"sessionId\":\"sess-9\"}\n")
+	elsewhereHistory := filepath.Join(home, "elsewhere", "history.jsonl")
+	write(t, elsewhereHistory, captured)
+	refusals := []struct {
+		name, harness string
+		strict        bool
+		args          []string
+		want          string
+	}{
+		{"a transcript from outside the settings folder stops the collect, and nothing is copied", "claude_code", true,
+			nil, "outside " + config},
+		{"a history file from outside the settings folder stops the collect", "claude_code", true,
+			[]string{"--history", elsewhereHistory}, "--history " + elsewhereHistory},
+		{"an --extra path from outside the settings folder stops the collect", "claude_code", true,
+			[]string{"--extra", elsewhereHistory, "--yes"}, "--extra " + elsewhereHistory},
+		{"a run with no capture.json isn't collected", "", false, nil, "no capture.json"},
+	}
+	for _, c := range refusals {
+		t.Run(c.name, func(t *testing.T) {
+			dir := filepath.Join(t.TempDir(), "run")
+			if c.harness != "" {
+				writeCapture(t, dir, c.harness, c.strict, map[string]string{"CLAUDE_CONFIG_DIR": config})
+			}
+			named := transcript
+			if len(c.args) == 0 && c.harness != "" {
+				named = outside
+			}
+			write(t, filepath.Join(dir, "hooks", "000001", "stdin"),
+				jsonText(t, map[string]any{"session_id": "sess-9", "transcript_path": named, "cwd": project}))
+			r := run(t, ".", nil, []string{"HOME=" + home}, python(t, "collect.py", append([]string{dir}, c.args...)...)...)
+			if r.code != 2 || !strings.Contains(r.stderr, c.want) {
+				t.Fatalf("exit %d, want 2 and %q:\n%s%s", r.code, c.want, r.stdout, r.stderr)
+			}
+			if _, err := os.Stat(filepath.Join(dir, "transcripts")); err == nil {
+				t.Fatalf("copied %v", keys(tree(t, filepath.Join(dir, "transcripts"))))
+			}
+		})
+	}
+
+	t.Run("a harness that can't be given a settings folder may collect from anywhere", func(t *testing.T) {
+		dir := filepath.Join(t.TempDir(), "run")
+		writeCapture(t, dir, "cursor", false, nil)
+		write(t, filepath.Join(dir, "hooks", "000001", "stdin"),
+			jsonText(t, map[string]any{"session_id": "sess-9", "transcript_path": outside, "cwd": project}))
+		r := run(t, ".", nil, []string{"HOME=" + home}, python(t, "collect.py", dir)...)
+		if r.code != 0 {
+			t.Fatalf("exit %d:\n%s%s", r.code, r.stdout, r.stderr)
+		}
+		if _, ok := tree(t, filepath.Join(dir, "transcripts"))["home/elsewhere/projects/-capture-project/sess-9.jsonl"]; !ok {
+			t.Fatalf("copied %v", keys(tree(t, filepath.Join(dir, "transcripts"))))
+		}
+	})
 }
 
 func keys(m map[string]string) []string {
@@ -569,7 +968,12 @@ var planted = map[string]string{
 {"nested":"{\"stdout\":\"C:\\\\Users\\\\RowanQ\\\\x\"}","school":"Westfield High"}
 {"keys":"ghp_AbCdEfGhIjKlMnOpQrStUvWxYz0123456789 AKIAABCDEFGHIJKLMNOP eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U","trailer":"Co-Authored-By: Claude <noreply@anthropic.com>"}
 `,
-	"otlp/000001.json": `{"resourceLogs":[{"resource":{"attributes":[{"key":"user.account_uuid","value":{"stringValue":"9b1e7f9e-1111-4222-8333-444455556666"}},{"key":"organization.id","value":{"stringValue":"77aa88bb-1111-4222-8333-444455556666"}},{"key":"user.email","value":{"stringValue":"rowan.quinn@westfield.edu"}},{"key":"session.id","value":{"stringValue":"` + plantedSession + `"}}]}}]}`,
+	// Account ids outside telemetry attributes: a Codex rollout's
+	// session_meta (HS 6.2) and the userId in a Cline hook payload (HS 9).
+	"transcripts/home/.codex/sessions/2026/11/19/rollout-2026-11-19T20-00-00-" + plantedSession + ".jsonl": `{"timestamp":"2026-11-19T20:00:00Z","type":"session_meta","payload":{"id":"` + plantedSession + `","source":"cli","creator_user_id":"user-Q9x8w7V6u5T4","creator_account_id":"acct-5566778899aa"}}
+`,
+	"hooks/000003/stdin": `{"clineVersion":"3.40.0","hookName":"UserPromptSubmit","taskId":"1763582400000","userId":"usr_5f4e3d2c1b0a","prompt":"What does count_words do? Answer in one sentence."}`,
+	"otlp/000001.json":   `{"resourceLogs":[{"resource":{"attributes":[{"key":"user.account_uuid","value":{"stringValue":"9b1e7f9e-1111-4222-8333-444455556666"}},{"key":"organization.id","value":{"stringValue":"77aa88bb-1111-4222-8333-444455556666"}},{"key":"user.email","value":{"stringValue":"rowan.quinn@westfield.edu"}},{"key":"session.id","value":{"stringValue":"` + plantedSession + `"}}]}}]}`,
 }
 
 // scrubArgs are the values the planted capture's person would have: given
@@ -579,6 +983,9 @@ var scrubArgs = []string{"--no-detect", "--home", "/home/rowanq", "--home", `C:\
 
 func TestScrub(t *testing.T) {
 	unixOnly(t)
+	// An empty home folder, so no instruction file of the runner's own is
+	// looked for.
+	quiet := []string{"HOME=" + t.TempDir()}
 	work := t.TempDir()
 	runDir := filepath.Join(work, "run")
 	for path, text := range planted {
@@ -588,7 +995,7 @@ func TestScrub(t *testing.T) {
 		t.Fatal(err)
 	}
 	outDir := filepath.Join(work, "out")
-	r := run(t, ".", nil, nil, python(t, "scrub.py", append(append([]string{}, scrubArgs...), runDir, outDir)...)...)
+	r := run(t, ".", nil, quiet, python(t, "scrub.py", append(append([]string{}, scrubArgs...), runDir, outDir)...)...)
 	if r.code != 0 {
 		t.Fatalf("scrub.py exit %d, want 0:\n%s%s", r.code, r.stdout, r.stderr)
 	}
@@ -604,17 +1011,10 @@ func TestScrub(t *testing.T) {
 		check func(t *testing.T)
 	}{
 		{"no planted value survives in any file or path, in any case", func(t *testing.T) {
-			for _, v := range []string{"rowan", "westfield", "sk-ant-api03", "ghp_", "akiaabcd", "eyjhbgci", "9b1e7f9e", "77aa88bb"} {
+			for _, v := range []string{"rowan", "westfield", "sk-ant-api03", "ghp_", "akiaabcd", "eyjhbgci", "9b1e7f9e", "77aa88bb",
+				"q9x8w7v6", "5566778899aa", "5f4e3d2c1b0a"} {
 				if strings.Contains(everything, v) {
 					t.Errorf("%q survived the scrub", v)
-				}
-			}
-		}},
-		{"a home path is replaced in every spelling", func(t *testing.T) {
-			for _, want := range []string{`/home/capture/pairtime-capture/project`, `C:\\Users\\capture\\pairtime-capture`,
-				`C%3A/Users/capture/pairtime-capture`, `C:\\\\Users\\\\capture\\\\x`, `-home-capture-pairtime-capture-project`} {
-				if !strings.Contains(all.String(), want) {
-					t.Errorf("no %s in the output", want)
 				}
 			}
 		}},
@@ -638,6 +1038,19 @@ func TestScrub(t *testing.T) {
 				t.Fatalf("otlp body: %s", got)
 			}
 		}},
+		{"account ids outside telemetry attributes become the fixed id", func(t *testing.T) {
+			for path, want := range map[string][]string{
+				"transcripts/home/.codex/sessions/2026/11/19/rollout-2026-11-19T20-00-00-" + plantedSession + ".jsonl": {
+					`"creator_user_id":"00000000-0000-4000-8000-000000000000"`, `"creator_account_id":"00000000-0000-4000-8000-000000000000"`},
+				"hooks/000003/stdin": {`"userId":"00000000-0000-4000-8000-000000000000"`, `"taskId":"1763582400000"`},
+			} {
+				for _, w := range want {
+					if !strings.Contains(out[path], w) {
+						t.Errorf("%s lacks %s:\n%s", path, w, out[path])
+					}
+				}
+			}
+		}},
 		{"ids that aren't secrets and public tool addresses are kept", func(t *testing.T) {
 			for _, want := range []string{plantedSession, plantedTool, "noreply@anthropic.com"} {
 				if !strings.Contains(all.String(), want) {
@@ -655,12 +1068,6 @@ func TestScrub(t *testing.T) {
 						t.Errorf("%s: invalid JSON after the scrub: %s", path, line)
 					}
 				}
-			}
-		}},
-		{"folder names are scrubbed like file contents", func(t *testing.T) {
-			want := "transcripts/home/.claude/projects/-home-capture-pairtime-capture-project/" + plantedSession + ".jsonl"
-			if _, ok := out[want]; !ok {
-				t.Fatalf("no %s; got %v", want, keys(out))
 			}
 		}},
 		{"a file that isn't UTF-8 text is left out", func(t *testing.T) {
@@ -687,29 +1094,338 @@ func TestScrub(t *testing.T) {
 		}},
 		{"scrubbing the output again replaces nothing", func(t *testing.T) {
 			again := filepath.Join(work, "again")
-			r := run(t, ".", nil, nil, python(t, "scrub.py", append(append([]string{}, scrubArgs...), "--report", filepath.Join(work, "r2.txt"), outDir, again)...)...)
+			r := run(t, ".", nil, quiet, python(t, "scrub.py", append(append([]string{}, scrubArgs...), "--report", filepath.Join(work, "r2.txt"), outDir, again)...)...)
 			if r.code != 0 || !strings.Contains(r.stdout, "Nothing was replaced.") {
 				t.Fatalf("exit %d:\n%s", r.code, r.stdout)
 			}
 		}},
-		{"a known value inside a longer word is reported and fails the run", func(t *testing.T) {
+		{"a known value inside a longer word is reported, fails the run, and nothing is written", func(t *testing.T) {
 			dir := t.TempDir()
 			write(t, filepath.Join(dir, "run", "notes.txt"), "rowanqsLaptop\n")
-			r := run(t, ".", nil, nil, python(t, "scrub.py", "--no-detect", "--user", "rowanq", filepath.Join(dir, "run"), filepath.Join(dir, "out"))...)
+			write(t, filepath.Join(dir, "run", "clean.txt"), "nothing private\n")
+			r := run(t, ".", nil, quiet, python(t, "scrub.py", "--no-detect", "--user", "rowanq", filepath.Join(dir, "run"), filepath.Join(dir, "out"))...)
 			if r.code != 1 || !strings.Contains(r.stdout, "STILL PRESENT") || !strings.Contains(r.stdout, "notes.txt:1") {
 				t.Fatalf("exit %d:\n%s", r.code, r.stdout)
 			}
+			if _, err := os.Stat(filepath.Join(dir, "out")); err == nil {
+				t.Fatalf("the scrub wrote %v although it found a leftover", keys(tree(t, filepath.Join(dir, "out"))))
+			}
+		}},
+		{"--accept-leftovers writes the output once the person has checked them", func(t *testing.T) {
+			dir := t.TempDir()
+			write(t, filepath.Join(dir, "run", "notes.txt"), "rowanqsLaptop\n")
+			r := run(t, ".", nil, quiet, python(t, "scrub.py", "--no-detect", "--user", "rowanq", "--accept-leftovers",
+				filepath.Join(dir, "run"), filepath.Join(dir, "out"))...)
+			if r.code != 0 || !strings.Contains(r.stdout, "STILL PRESENT") {
+				t.Fatalf("exit %d, want 0 with the leftover still listed:\n%s", r.code, r.stdout)
+			}
+			if got := read(t, filepath.Join(dir, "out", "notes.txt")); got != "rowanqsLaptop\n" {
+				t.Fatalf("notes.txt = %q", got)
+			}
 		}},
 		{"an output folder inside the run is refused", func(t *testing.T) {
-			r := run(t, ".", nil, nil, python(t, "scrub.py", "--no-detect", runDir, filepath.Join(runDir, "out"))...)
+			r := run(t, ".", nil, quiet, python(t, "scrub.py", "--no-detect", runDir, filepath.Join(runDir, "out"))...)
 			if r.code != 2 {
 				t.Fatalf("exit %d, want 2:\n%s", r.code, r.stderr)
+			}
+		}},
+		{"a report inside the pairtime checkout is refused, and nothing is written", func(t *testing.T) {
+			report := filepath.Join(kit(t, "."), "inside-scrub-report.txt")
+			out := filepath.Join(t.TempDir(), "out")
+			r := run(t, ".", nil, quiet, python(t, "scrub.py", "--no-detect", "--report", report, runDir, out)...)
+			if r.code != 2 || !strings.Contains(r.stderr, "inside the pairtime checkout") {
+				t.Fatalf("exit %d, want 2:\n%s", r.code, r.stderr)
+			}
+			for _, p := range []string{report, out} {
+				if _, err := os.Stat(p); err == nil {
+					t.Errorf("%s was written", p)
+				}
+			}
+		}},
+		{"scrubbing a fixture already in the checkout needs --report outside it", func(t *testing.T) {
+			repo := filepath.Join(t.TempDir(), "pairtime")
+			scrub := filepath.Join(copyKit(t, repo), "scrub.py")
+			fixture := filepath.Join(repo, "testdata", "fixtures", "claude_code", "2.1.328", "linux", "cli")
+			write(t, filepath.Join(fixture, "notes.txt"), "nothing private\n")
+			py := []string{need(t, "python3"), "-I", "-B", scrub, "--no-detect"}
+			r := run(t, ".", nil, quiet, append(py, fixture, filepath.Join(t.TempDir(), "check"))...)
+			if r.code != 2 || !strings.Contains(r.stderr, "--report") {
+				t.Fatalf("the default report beside the fixture: exit %d, want 2 and a pointer to --report:\n%s", r.code, r.stderr)
+			}
+			if _, err := os.Stat(fixture + "-scrub-report.txt"); err == nil {
+				t.Fatal("a report was written beside the fixture")
+			}
+			r = run(t, ".", nil, quiet, append(py, "--report", filepath.Join(t.TempDir(), "r.txt"), fixture, filepath.Join(t.TempDir(), "check"))...)
+			if r.code != 0 {
+				t.Fatalf("with --report outside: exit %d:\n%s%s", r.code, r.stdout, r.stderr)
+			}
+		}},
+		{"git ignores scrub reports anywhere in the checkout", func(t *testing.T) {
+			git := need(t, "git")
+			if r := run(t, ".", nil, nil, git, "rev-parse", "--is-inside-work-tree"); r.code != 0 {
+				t.Skip("not a git checkout")
+			}
+			r := run(t, ".", nil, nil, git, "check-ignore", "-q", filepath.Join("..", "..", "testdata", "fixtures", "claude_code",
+				"2.1.328", "linux", "cli-scrub-report.txt"))
+			if r.code != 0 {
+				t.Fatalf("git check-ignore exit %d: a report beside a fixture isn't ignored", r.code)
 			}
 		}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, c.check)
 	}
+
+	// Every spelling of a home folder, from a scrub that knows only the home
+	// folders. Their last parts aren't account names, so nothing but the
+	// home rules can replace them, and a spelling the scrub doesn't make
+	// survives.
+	t.Run("a home folder is replaced in every spelling the files use", func(t *testing.T) {
+		spellings := []struct{ name, in, want string }{
+			{"as is", `/srv/homes/qz9-casa/pairtime-capture/project`, `/home/capture/pairtime-capture/project`},
+			{"as is, on Windows", `C:\Profiles\Qz9 Casa\x`, `C:\Users\capture\x`},
+			{"JSON-escaped", `"C:\\Profiles\\Qz9 Casa\\pairtime-capture"`, `"C:\\Users\\capture\\pairtime-capture"`},
+			{"escaped twice, in JSON inside a JSON string", `"{\"cwd\":\"C:\\\\Profiles\\\\Qz9 Casa\\\\x\"}"`,
+				`\"C:\\\\Users\\\\capture\\\\x\"`},
+			{"with forward slashes", `C:/Profiles/Qz9 Casa/x`, `C:/Users/capture/x`},
+			{"in a file URL", `file:///c%3A/Profiles/Qz9%20Casa/x`, `file:///C%3A/Users/capture/x`},
+			{"URL-encoded with its backslashes", `C%3A%5CProfiles%5CQz9%20Casa%5Cx`, `C%3A%5CUsers%5Ccapture%5Cx`},
+			{"with JSON's escaped slashes", `"\/srv\/homes\/qz9-casa\/x"`, `"\/home\/capture\/x"`},
+			{"as Claude Code names a project folder", `-srv-homes-qz9-casa-pairtime-capture-project`,
+				`-home-capture-pairtime-capture-project`},
+			{"as Claude Code names a Windows project folder", `C--Profiles-Qz9-Casa-pairtime-capture-project`,
+				`C--Users-capture-pairtime-capture-project`},
+		}
+		var lines []string
+		for _, c := range spellings {
+			lines = append(lines, c.in)
+		}
+		dir := t.TempDir()
+		folder := "transcripts/home/.claude/projects/-srv-homes-qz9-casa-pairtime-capture-project/s.jsonl"
+		write(t, filepath.Join(dir, "run", "notes.txt"), strings.Join(lines, "\n")+"\n")
+		write(t, filepath.Join(dir, "run", filepath.FromSlash(folder)), "{}\n")
+		r := run(t, ".", nil, quiet, python(t, "scrub.py", "--no-detect", "--home", "/srv/homes/qz9-casa", "--home", `C:\Profiles\Qz9 Casa`,
+			filepath.Join(dir, "run"), filepath.Join(dir, "out"))...)
+		if r.code != 0 {
+			t.Fatalf("exit %d:\n%s%s", r.code, r.stdout, r.stderr)
+		}
+		out := tree(t, filepath.Join(dir, "out"))
+		got := out["notes.txt"]
+		for _, c := range spellings {
+			t.Run(c.name, func(t *testing.T) {
+				if !strings.Contains(got, c.want) {
+					t.Errorf("no %s in:\n%s", c.want, got)
+				}
+			})
+		}
+		t.Run("folder names are scrubbed like file contents", func(t *testing.T) {
+			if _, ok := out["transcripts/home/.claude/projects/-home-capture-pairtime-capture-project/s.jsonl"]; !ok {
+				t.Fatalf("got %v", keys(out))
+			}
+		})
+		t.Run("no spelling of either home survives", func(t *testing.T) {
+			for path, text := range out {
+				if strings.Contains(strings.ToLower(path+text), "qz9") {
+					t.Errorf("%s still holds qz9:\n%s", path, text)
+				}
+			}
+		})
+	})
+
+	// Windows gives C:\Users\Karim Abdallah the short name KARIMA~1 too, and
+	// often sets %TEMP% with it. Any Users\NAME~N folder is a home folder,
+	// so it goes even when the scrub knows nothing about the machine.
+	t.Run("a Windows short home folder name is replaced in every spelling, from any machine", func(t *testing.T) {
+		shorts := []struct{ name, in, want string }{
+			{"JSON-escaped, in a temp path", `{"stdout":"C:\\Users\\KARIMA~1\\AppData\\Local\\Temp\\claude-x"}`,
+				`{"stdout":"C:\\Users\\capture\\AppData\\Local\\Temp\\claude-x"}`},
+			{"as is", `C:\Users\JOHNSM~2\x`, `C:\Users\capture\x`},
+			{"with forward slashes", `C:/Users/ROWANQ~1/x`, `C:/Users/capture/x`},
+			{"URL-encoded", `C%3A%5CUsers%5CROWANQ~1%5Cx`, `C%3A%5CUsers%5Ccapture%5Cx`},
+			{"escaped twice", `"C:\\\\Users\\\\KARIMA~1\\\\x"`, `"C:\\\\Users\\\\capture\\\\x"`},
+			{"a short name outside Users stays", `D:\Backup\README~1.TXT`, `D:\Backup\README~1.TXT`},
+		}
+		var lines []string
+		for _, c := range shorts {
+			lines = append(lines, c.in)
+		}
+		dir := t.TempDir()
+		write(t, filepath.Join(dir, "run", "notes.txt"), strings.Join(lines, "\n")+"\n")
+		r := run(t, ".", nil, quiet, python(t, "scrub.py", "--no-detect", filepath.Join(dir, "run"), filepath.Join(dir, "out"))...)
+		if r.code != 0 {
+			t.Fatalf("exit %d:\n%s%s", r.code, r.stdout, r.stderr)
+		}
+		got := read(t, filepath.Join(dir, "out", "notes.txt"))
+		for _, c := range shorts {
+			t.Run(c.name, func(t *testing.T) {
+				if !strings.Contains(got, c.want) {
+					t.Errorf("no %s in:\n%s", c.want, got)
+				}
+			})
+		}
+	})
+	t.Run("the short home folder in %TEMP% is found, and a long one gives none", func(t *testing.T) {
+		code := "import json, sys; sys.path.insert(0, sys.argv[1]); import scrub; " +
+			"print(json.dumps([scrub.short_homes([], {'TEMP': t}) for t in sys.argv[2:]]))"
+		r := run(t, ".", nil, nil, need(t, "python3"), "-I", "-B", "-c", code, kit(t, "."),
+			`C:\Users\KARIMA~1\AppData\Local\Temp`, `C:\Users\Karim Abdallah\AppData\Local\Temp`)
+		var got [][]string
+		if err := json.Unmarshal([]byte(r.stdout), &got); err != nil {
+			t.Fatalf("%q: %v (%s)", r.stdout, err, r.stderr)
+		}
+		if len(got) != 2 || len(got[0]) != 1 || got[0][0] != `C:\Users\KARIMA~1` || len(got[1]) != 0 {
+			t.Fatalf("short_homes = %q, want [[C:\\Users\\KARIMA~1] []]", got)
+		}
+	})
+
+	// The person's own instruction files: a line of one in the capture means
+	// the harness loaded it, whatever the isolation was meant to do. The
+	// quote in it is JSON-escaped in the transcript, and the scripted prompt
+	// both files hold is the kit's text, not theirs.
+	mine := `Always answer as "Rowan the pirate", matey.`
+	scripted := "What does count_words do? Answer in one sentence."
+	instructions := []struct {
+		name string
+		// file is where the instruction file sits: below the home folder,
+		// or, starting with ../, in a folder above the scratch project.
+		file string
+	}{
+		{"a line of your own CLAUDE.md in a transcript fails the scrub", ".claude/CLAUDE.md"},
+		{"a line of an AGENTS.md in a folder above the project fails the scrub", "../AGENTS.md"},
+		{"a file moved aside for the capture is still checked", ".codex/AGENTS.md.pairtime-aside"},
+	}
+	for _, c := range instructions {
+		t.Run(c.name, func(t *testing.T) {
+			own, dir := t.TempDir(), t.TempDir()
+			project := filepath.Join(dir, "capture", "project")
+			path := filepath.Join(own, filepath.FromSlash(c.file))
+			if strings.HasPrefix(c.file, "../") {
+				path = filepath.Join(project, filepath.FromSlash(c.file))
+			}
+			write(t, path, "# Mine\n\n"+mine+"\n"+scripted+"\n")
+			runDir := filepath.Join(dir, "capture", "runs", "cli")
+			write(t, filepath.Join(runDir, "hooks", "000001", "cwd"), project+"\n")
+			write(t, filepath.Join(runDir, "transcripts", "t.jsonl"), jsonText(t, map[string]any{
+				"type": "user", "message": map[string]any{"content": "Instructions:\n" + mine + "\n" + scripted}})+"\n")
+			r := run(t, ".", nil, []string{"HOME=" + own}, python(t, "scrub.py", "--no-detect", runDir, filepath.Join(dir, "out"))...)
+			if r.code != 1 || !strings.Contains(r.stdout, "FROM YOUR OWN INSTRUCTION FILES") ||
+				!strings.Contains(r.stdout, "holds line 3 of "+path) {
+				t.Fatalf("exit %d, want 1 and line 3 of %s flagged:\n%s%s", r.code, path, r.stdout, r.stderr)
+			}
+			if strings.Contains(r.stdout, "line 4 of") {
+				t.Errorf("the scripted prompt was flagged as the person's own text:\n%s", r.stdout)
+			}
+			if _, err := os.Stat(filepath.Join(dir, "out")); err == nil {
+				t.Errorf("the scrub wrote its output although the capture holds the person's instructions")
+			}
+		})
+	}
+	// An account named User, a common Windows default, scrubbed with no
+	// --home: the field values and keys that hold the word stay, and the
+	// name is still replaced where it stands as a path or an identity.
+	t.Run("a common account name such as Windows' User", func(t *testing.T) {
+		common := []struct{ name, in, want string }{
+			{`"type":"user" and "role":"user" stay`, `{"type":"user","message":{"role":"user"}}`,
+				`{"type":"user","message":{"role":"user"}}`},
+			{"a telemetry key named user.email stays", `{"key":"user.email","value":{"stringValue":"a@b.example"}}`,
+				`{"key":"user.email",`},
+			{"a home folder holding it is replaced in its JSON spelling", `{"cwd":"C:\\Users\\User\\pairtime-capture"}`,
+				`{"cwd":"C:\\Users\\capture\\pairtime-capture"}`},
+			{"name@host and HOST\\name are replaced", `{"stdout":"User@DESKTOP-AB12CD:~$ whoami\nDESKTOP-AB12CD\\User"}`,
+				`capture@capture-host:~$ whoami\ncapture-host\\capture`},
+			{"words that hold it stay", `{"text":"Username and users stay"}`, `Username and users stay`},
+		}
+		var lines []string
+		for _, c := range common {
+			lines = append(lines, c.in)
+		}
+		dir := t.TempDir()
+		folder := "transcripts/home/.claude/projects/C--Users-User-pairtime-capture-project/s.jsonl"
+		write(t, filepath.Join(dir, "run", filepath.FromSlash(folder)), strings.Join(lines, "\n")+"\n")
+		r := run(t, ".", nil, quiet, python(t, "scrub.py", "--no-detect", "--user", "User", "--host", "DESKTOP-AB12CD",
+			filepath.Join(dir, "run"), filepath.Join(dir, "out"))...)
+		if r.code != 0 || !strings.Contains(r.stdout, "never as words on their own: User") {
+			t.Fatalf("exit %d, want 0 and User reported as a common word:\n%s%s", r.code, r.stdout, r.stderr)
+		}
+		out := tree(t, filepath.Join(dir, "out"))
+		got, ok := out["transcripts/home/.claude/projects/C--Users-capture-pairtime-capture-project/s.jsonl"]
+		if !ok {
+			t.Fatalf("the project folder name wasn't scrubbed: %v", keys(out))
+		}
+		for _, c := range common {
+			t.Run(c.name, func(t *testing.T) {
+				if !strings.Contains(got, c.want) {
+					t.Errorf("no %s in:\n%s", c.want, got)
+				}
+			})
+		}
+	})
+
+	// A name that is only common for this person goes the same way with
+	// --common, and one under four characters without it.
+	names := []struct {
+		name  string
+		args  []string
+		code  int
+		stays string
+	}{
+		{"an account name inside ordinary words fails the scrub", []string{"--user", "mark"}, 1, ""},
+		{"--common replaces it only in paths and as name@host", []string{"--user", "mark", "--common", "mark"}, 0, "markdown"},
+		{"a name under four characters is replaced only in paths and as name@host", []string{"--user", "al"}, 0, "always"},
+	}
+	for _, c := range names {
+		t.Run(c.name, func(t *testing.T) {
+			dir := t.TempDir()
+			user := c.args[1]
+			write(t, filepath.Join(dir, "run", "notes.txt"), "/home/"+user+"/x "+user+"@box always markdown\n")
+			r := run(t, ".", nil, quiet, python(t, "scrub.py", append(append([]string{"--no-detect"}, c.args...),
+				filepath.Join(dir, "run"), filepath.Join(dir, "out"))...)...)
+			if r.code != c.code {
+				t.Fatalf("exit %d, want %d:\n%s%s", r.code, c.code, r.stdout, r.stderr)
+			}
+			if c.code != 0 {
+				return
+			}
+			got := read(t, filepath.Join(dir, "out", "notes.txt"))
+			if !strings.Contains(got, "/home/capture/x capture@box") || !strings.Contains(got, c.stays) {
+				t.Fatalf("notes.txt = %q, want the path and name@box replaced and %q kept", got, c.stays)
+			}
+		})
+	}
+
+	t.Run("pasted blocks and a history file's prompt text are checked against SCRIPTS.md", func(t *testing.T) {
+		step3 := "Here is a spec. Say in one sentence whether it is clear, and don't write any code yet.\n" +
+			"count_lines(text) returns how many lines of text are not empty.\nA line holding only spaces counts as empty."
+		entry := func(fields map[string]any) string { return jsonText(t, fields) + "\n" }
+		dir := t.TempDir()
+		write(t, filepath.Join(dir, "run", "transcripts", "home", ".claude", "history.jsonl"),
+			entry(map[string]any{"display": "[Pasted text #1 +3 lines]", "pastedContents": map[string]any{
+				"1": map[string]any{"id": 1, "type": "text", "content": step3}}})+
+				entry(map[string]any{"display": "[Pasted text #1 +1 lines]", "pastedContents": map[string]any{
+					"1": map[string]any{"id": 1, "type": "text", "content": "my private notes"}}})+
+				entry(map[string]any{"session_id": "s", "ts": 1, "text": "my secret plan"}))
+		r := run(t, ".", nil, quiet, python(t, "scrub.py", "--no-detect", filepath.Join(dir, "run"), filepath.Join(dir, "out"))...)
+		for _, want := range []string{"my private notes", "my secret plan"} {
+			if !strings.Contains(r.stdout, want) {
+				t.Errorf("%q isn't flagged as unscripted:\n%s", want, r.stdout)
+			}
+		}
+		for _, scripted := range []string{"Here is a spec", "Pasted text"} {
+			if strings.Contains(r.stdout, scripted) {
+				t.Errorf("%q is flagged, but it's the script's own paste or Claude Code's placeholder:\n%s", scripted, r.stdout)
+			}
+		}
+	})
+
+	t.Run("a capture without a line of your instruction files passes", func(t *testing.T) {
+		own, dir := t.TempDir(), t.TempDir()
+		write(t, filepath.Join(own, ".claude", "CLAUDE.md"), mine+"\n")
+		write(t, filepath.Join(dir, "run", "transcripts", "t.jsonl"), jsonText(t, map[string]any{"type": "user", "content": scripted})+"\n")
+		r := run(t, ".", nil, []string{"HOME=" + own}, python(t, "scrub.py", "--no-detect", filepath.Join(dir, "run"), filepath.Join(dir, "out"))...)
+		if r.code != 0 || strings.Contains(r.stdout, "INSTRUCTION FILES") {
+			t.Fatalf("exit %d, want 0:\n%s%s", r.code, r.stdout, r.stderr)
+		}
+	})
 }
 
 // claudeHooks is DESIGN 5.1's Claude Code hook list, with its matchers.
@@ -741,6 +1457,33 @@ func readSettings(t *testing.T, path string) map[string][]hookEntry {
 	return s.Hooks
 }
 
+// copyKit copies the kit's scripts into repo/tools/capture, keeping their
+// modes, and returns that folder. prepare.py takes the folder two levels up
+// as the pairtime checkout.
+func copyKit(t *testing.T, repo string) string {
+	t.Helper()
+	dir := filepath.Join(repo, "tools", "capture")
+	entries, err := os.ReadDir(".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		ext := filepath.Ext(e.Name())
+		if e.IsDir() || (ext != ".py" && ext != ".sh" && ext != ".ps1" && ext != ".md") {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil {
+			t.Fatal(err)
+		}
+		write(t, filepath.Join(dir, e.Name()), read(t, e.Name()))
+		if err := os.Chmod(filepath.Join(dir, e.Name()), info.Mode().Perm()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return dir
+}
+
 func TestPrepare(t *testing.T) {
 	unixOnly(t)
 	need(t, "git")
@@ -751,7 +1494,7 @@ func TestPrepare(t *testing.T) {
 	if r.code != 0 {
 		t.Fatalf("prepare.py exit %d:\n%s%s", r.code, r.stdout, r.stderr)
 	}
-	project := filepath.Join(root, "project")
+	project := filepath.Join(root, "projects", "cli")
 	runDir := filepath.Join(root, "runs", "cli")
 	settings := filepath.Join(project, ".claude", "settings.local.json")
 	hooks := readSettings(t, settings)
@@ -760,7 +1503,7 @@ func TestPrepare(t *testing.T) {
 		name  string
 		check func(t *testing.T)
 	}{
-		{"every DESIGN 5.1 hook runs the dumper in exec form with the run and its label", func(t *testing.T) {
+		{"every DESIGN 5.1 hook runs the dumper itself in exec form, with the run and its label as args", func(t *testing.T) {
 			if len(hooks) != len(claudeHooks) {
 				t.Errorf("%d events, want %d: %v", len(hooks), len(claudeHooks), hooks)
 			}
@@ -771,9 +1514,9 @@ func TestPrepare(t *testing.T) {
 					continue
 				}
 				h := entries[0].Hooks[0]
-				want := []string{kit(t, "dump-hook.sh"), runDir, name}
-				if h.Type != "command" || h.Command != "/bin/sh" || strings.Join(h.Args, "\n") != strings.Join(want, "\n") {
-					t.Errorf("%s: %+v, want /bin/sh %q", name, h, want)
+				want := []string{runDir, name}
+				if h.Type != "command" || h.Command != kit(t, "dump-hook.sh") || strings.Join(h.Args, "\n") != strings.Join(want, "\n") {
+					t.Errorf("%s: %+v, want %s %q", name, h, kit(t, "dump-hook.sh"), want)
 				}
 				if entries[0].Matcher != matcher {
 					t.Errorf("%s matcher = %q, want %q", name, entries[0].Matcher, matcher)
@@ -788,6 +1531,67 @@ func TestPrepare(t *testing.T) {
 			run(t, project, payload, nil, append([]string{h.Command}, h.Args...)...)
 			if got := read(t, filepath.Join(runDir, "hooks", "000001", "stdin")); got != string(payload) {
 				t.Fatalf("stdin = %q", got)
+			}
+		}},
+		{"a harness that drops args runs the dumper bare, which runs nothing from the payload", func(t *testing.T) {
+			// The payload really is hostile: the old form, a bare /bin/sh
+			// with the payload on stdin, runs the commands inside it.
+			old := t.TempDir()
+			run(t, old, hostile, nil, need(t, "sh"))
+			if len(tree(t, old)) == 0 {
+				t.Fatal("a bare sh ran nothing from the hostile payload, so this check would prove nothing")
+			}
+			h := hooks["Stop"][0].Hooks[0]
+			before := len(tree(t, runDir))
+			// Exec form without its args, and the command run through a shell.
+			for _, argv := range [][]string{{h.Command}, {need(t, "sh"), "-c", h.Command}} {
+				dir := t.TempDir()
+				r := run(t, dir, hostile, nil, argv...)
+				if r.code != 0 || r.stdout != "" || r.stderr != "" {
+					t.Errorf("%q: exit %d, stdout %q, stderr %q; want 0 and nothing", argv, r.code, r.stdout, r.stderr)
+				}
+				if files := tree(t, dir); len(files) != 0 {
+					t.Errorf("%q ran something from the payload: %v", argv, keys(files))
+				}
+			}
+			if after := len(tree(t, runDir)); after != before {
+				t.Errorf("a call without args wrote into the run: %d files, then %d", before, after)
+			}
+		}},
+		{"on Windows a hook is one powershell.exe command line with no args to drop, run the same by Git Bash and PowerShell", func(t *testing.T) {
+			// A stand-in for powershell.exe, which this Linux runner lacks.
+			pwsh := need(t, "pwsh")
+			bin := t.TempDir()
+			write(t, filepath.Join(bin, "powershell.exe"), "#!/bin/sh\nexec "+pwsh+" \"$@\"\n")
+			if err := os.Chmod(filepath.Join(bin, "powershell.exe"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			// A space in the run folder, as in C:\Users\Rowan Quinn.
+			winRun := filepath.Join(t.TempDir(), "rowan quinn", "run")
+			code := "import json, sys; sys.path.insert(0, sys.argv[1]); import prepare; " +
+				"print(json.dumps(prepare.hook_command(sys.argv[2], 'Stop', False, windows=True)))"
+			r := run(t, ".", nil, nil, need(t, "python3"), "-I", "-B", "-c", code, kit(t, "."), winRun)
+			var h map[string]any
+			if err := json.Unmarshal([]byte(r.stdout), &h); err != nil {
+				t.Fatalf("handler %q: %v (%s)", r.stdout, err, r.stderr)
+			}
+			cmd, _ := h["command"].(string)
+			if _, ok := h["args"]; ok || len(h) != 1 || !strings.HasPrefix(cmd, "powershell.exe -NoProfile ") {
+				t.Fatalf("handler %v, want only a command that starts with the bare powershell.exe", h)
+			}
+			env := []string{"PATH=" + bin + string(os.PathListSeparator) + os.Getenv("PATH")}
+			shells := [][]string{{need(t, "sh"), "-c", cmd}, {pwsh, "-NoProfile", "-NonInteractive", "-Command", cmd}}
+			for i, shell := range shells {
+				if r := run(t, project, payload, env, shell...); r.code != 0 {
+					t.Errorf("%s: exit %d: %s", shell[0], r.code, r.stderr)
+				}
+				call := filepath.Join(winRun, "hooks", "00000"+strconv.Itoa(i+1))
+				if got := read(t, filepath.Join(call, "argv")); got != winRun+"\nStop\n" {
+					t.Errorf("%s: argv = %q, want the run and Stop", shell[0], got)
+				}
+			}
+			if got := read(t, filepath.Join(winRun, "hooks", "000001", "stdin")); got != string(payload) {
+				t.Errorf("stdin through sh = %q", got)
 			}
 		}},
 		{"the scratch project is a git repo with a made-up author", func(t *testing.T) {
@@ -805,17 +1609,56 @@ func TestPrepare(t *testing.T) {
 				t.Fatalf("exit %d: %s", r.code, r.stderr)
 			}
 		}},
-		{"a new run keeps the old settings file as a backup", func(t *testing.T) {
+		{"each run gets a scratch project of its own, starting from the first commit", func(t *testing.T) {
+			// What the CLI run's agent left: step 4's edit, committed.
+			write(t, filepath.Join(project, "wordcount.py"), "def count_lines(text):\n    return 0\n")
+			run(t, project, nil, env, "git", "commit", "-qam", "Add count_lines")
 			r := run(t, ".", nil, env, python(t, "prepare.py", "claude_code", root, "vscode")...)
 			if r.code != 0 {
 				t.Fatalf("exit %d: %s", r.code, r.stderr)
 			}
-			matches, _ := filepath.Glob(settings + ".bak-*")
-			if len(matches) != 1 {
-				t.Fatalf("backups: %v", matches)
+			vscode := filepath.Join(root, "projects", "vscode")
+			if got := read(t, filepath.Join(vscode, "wordcount.py")); strings.Contains(got, "count_lines") {
+				t.Errorf("the VS Code run starts from the CLI run's edit:\n%s", got)
 			}
-			if h := readSettings(t, settings)["Stop"][0].Hooks[0]; h.Args[1] != filepath.Join(root, "runs", "vscode") {
-				t.Fatalf("Stop hook writes to %s", h.Args[1])
+			if h := readSettings(t, filepath.Join(vscode, ".claude", "settings.local.json"))["Stop"][0].Hooks[0]; h.Args[0] != filepath.Join(root, "runs", "vscode") {
+				t.Errorf("the VS Code run's Stop hook writes to %s", h.Args[0])
+			}
+			if h := readSettings(t, settings)["Stop"][0].Hooks[0]; h.Args[0] != runDir {
+				t.Errorf("the CLI run's Stop hook now writes to %s", h.Args[0])
+			}
+		}},
+		{"preparing a run again resets its project to the first commit", func(t *testing.T) {
+			vscode := filepath.Join(root, "projects", "vscode")
+			write(t, filepath.Join(vscode, "notes.txt"), "capture test\n")
+			write(t, filepath.Join(vscode, "wordcount.py"), "edited\n")
+			run(t, vscode, nil, env, "git", "commit", "-qam", "An edit during the run")
+			r := run(t, ".", nil, env, python(t, "prepare.py", "claude_code", root, "vscode")...)
+			if r.code != 0 || !strings.Contains(r.stdout, "Reset the scratch project") {
+				t.Fatalf("exit %d, want 0 and a reset:\n%s%s", r.code, r.stdout, r.stderr)
+			}
+			if _, err := os.Stat(filepath.Join(vscode, "notes.txt")); err == nil {
+				t.Errorf("notes.txt survived the reset")
+			}
+			if got := read(t, filepath.Join(vscode, "wordcount.py")); !strings.Contains(got, "def count_words") {
+				t.Errorf("wordcount.py = %q, want the first commit's", got)
+			}
+			if r := run(t, vscode, nil, env, "git", "rev-list", "--count", "HEAD"); strings.TrimSpace(r.stdout) != "1" {
+				t.Errorf("%s commits after the reset, want 1", strings.TrimSpace(r.stdout))
+			}
+			if _, err := os.Stat(filepath.Join(vscode, ".claude", "settings.local.json")); err != nil {
+				t.Errorf("the hooks weren't written again: %v", err)
+			}
+		}},
+		{"a project folder prepare.py didn't make is never reset", func(t *testing.T) {
+			mine := filepath.Join(root, "projects", "mine")
+			write(t, filepath.Join(mine, "precious.txt"), "keep me\n")
+			r := run(t, ".", nil, env, python(t, "prepare.py", "claude_code", root, "mine")...)
+			if r.code != 2 || !strings.Contains(r.stderr, "isn't a scratch project") {
+				t.Fatalf("exit %d, want 2: %s", r.code, r.stderr)
+			}
+			if got := read(t, filepath.Join(mine, "precious.txt")); got != "keep me\n" {
+				t.Fatalf("precious.txt = %q", got)
 			}
 		}},
 		{"--shell-form writes one command string that works in a shell", func(t *testing.T) {
@@ -823,13 +1666,50 @@ func TestPrepare(t *testing.T) {
 			if r.code != 0 {
 				t.Fatalf("exit %d: %s", r.code, r.stderr)
 			}
-			h := readSettings(t, settings)["Stop"][0].Hooks[0]
+			h := readSettings(t, filepath.Join(root, "projects", "shell", ".claude", "settings.local.json"))["Stop"][0].Hooks[0]
 			if len(h.Args) != 0 || !strings.Contains(h.Command, "dump-hook.sh") {
 				t.Fatalf("handler %+v", h)
 			}
 			run(t, project, []byte("{}"), nil, need(t, "sh"), "-c", h.Command)
 			if got := read(t, filepath.Join(root, "runs", "shell", "hooks", "000001", "argv")); !strings.HasSuffix(got, "\nStop\n") {
 				t.Fatalf("argv = %q", got)
+			}
+		}},
+		{"a kit path a shell would split is refused in exec form, and --shell-form quotes it", func(t *testing.T) {
+			copied := copyKit(t, filepath.Join(t.TempDir(), "my stuff", "pairtime"))
+			prep := []string{need(t, "python3"), "-I", "-B", filepath.Join(copied, "prepare.py"), "claude_code"}
+			r := run(t, ".", nil, env, append(prep, filepath.Join(t.TempDir(), "capture"), "cli")...)
+			if r.code != 2 || !strings.Contains(r.stderr, "--shell-form") {
+				t.Fatalf("exit %d, want 2 and a pointer to --shell-form: %s", r.code, r.stderr)
+			}
+			r = run(t, ".", nil, env, append(prep, filepath.Join(t.TempDir(), "capture"), "cli", "--shell-form")...)
+			if r.code != 0 {
+				t.Fatalf("--shell-form: exit %d: %s", r.code, r.stderr)
+			}
+		}},
+		{"a dumper that can't run as a command is refused", func(t *testing.T) {
+			for _, c := range []struct {
+				name, want string
+				spoil      func(path string) error
+			}{
+				{"no executable bit", "chmod +x", func(p string) error { return os.Chmod(p, 0o644) }},
+				{"Windows line endings", "line endings", func(p string) error {
+					b, err := os.ReadFile(p)
+					if err != nil {
+						return err
+					}
+					return os.WriteFile(p, bytes.ReplaceAll(b, []byte("\n"), []byte("\r\n")), 0o755)
+				}},
+			} {
+				copied := copyKit(t, filepath.Join(t.TempDir(), "pairtime"))
+				if err := c.spoil(filepath.Join(copied, "dump-hook.sh")); err != nil {
+					t.Fatal(err)
+				}
+				r := run(t, ".", nil, env, need(t, "python3"), "-I", "-B", filepath.Join(copied, "prepare.py"), "claude_code",
+					filepath.Join(t.TempDir(), "capture"), "cli")
+				if r.code != 2 || !strings.Contains(r.stderr, c.want) {
+					t.Errorf("%s: exit %d, want 2 and %q: %s", c.name, r.code, c.want, r.stderr)
+				}
 			}
 		}},
 		{"a capture folder inside the pairtime checkout is refused", func(t *testing.T) {
@@ -842,10 +1722,198 @@ func TestPrepare(t *testing.T) {
 				t.Fatalf("%s was created", inRepo)
 			}
 		}},
+		{"Claude Code gets a settings folder of its own, and every printed command uses it", func(t *testing.T) {
+			config := filepath.Join(root, "claude-home")
+			if info, err := os.Stat(config); err != nil || !info.IsDir() {
+				t.Fatalf("no settings folder %s: %v", config, err)
+			}
+			for _, want := range []string{"export CLAUDE_CONFIG_DIR=" + config, "export CLAUDE_CODE_DISABLE_CLAUDE_MDS=1",
+				"--history " + filepath.Join(config, "history.jsonl")} {
+				if !strings.Contains(r.stdout, want) {
+					t.Errorf("prepare.py didn't print %q:\n%s", want, r.stdout)
+				}
+			}
+			if strings.Contains(r.stdout, filepath.Join(home, ".claude")) {
+				t.Errorf("prepare.py still points at the person's own ~/.claude:\n%s", r.stdout)
+			}
+			c := readCapture(t, runDir)
+			if c.Harness != "claude_code" || !c.Strict || c.Folders["CLAUDE_CONFIG_DIR"] != config || c.Hooks != "exec" {
+				t.Errorf("capture.json = %+v", c)
+			}
+		}},
+		{"ROOT is readable by its owner only, since the settings folder holds a sign-in", func(t *testing.T) {
+			info, err := os.Stat(root)
+			if err != nil || info.Mode().Perm()&0o077 != 0 {
+				t.Fatalf("ROOT mode %v: %v", info.Mode(), err)
+			}
+		}},
+		{"a harness that doesn't read Claude Code's hook format gets no Claude hooks", func(t *testing.T) {
+			r := run(t, ".", nil, env, python(t, "prepare.py", "codex", root, "codex")...)
+			if r.code != 0 {
+				t.Fatalf("exit %d: %s", r.code, r.stderr)
+			}
+			if _, err := os.Stat(filepath.Join(root, "projects", "codex", ".claude")); err == nil {
+				t.Errorf("the Codex run's project has Claude Code hooks")
+			}
+			codexHome := filepath.Join(root, "codex-home")
+			if !strings.Contains(r.stdout, "export CODEX_HOME="+codexHome) ||
+				!strings.Contains(r.stdout, "--history "+filepath.Join(codexHome, "history.jsonl")) {
+				t.Errorf("no CODEX_HOME or Codex history in:\n%s", r.stdout)
+			}
+			if c := readCapture(t, filepath.Join(root, "runs", "codex")); c.Hooks != "none" || c.Folders["CODEX_HOME"] != codexHome {
+				t.Errorf("capture.json = %+v", c)
+			}
+		}},
+		{"a ROOT that is the home folder, or holds files the kit didn't make, is refused", func(t *testing.T) {
+			full := t.TempDir()
+			write(t, filepath.Join(full, "notes.txt"), "mine\n")
+			for _, dir := range []string{home, full} {
+				r := run(t, ".", nil, env, python(t, "prepare.py", "claude_code", dir, "cli")...)
+				if r.code != 2 {
+					t.Errorf("%s: exit %d, want 2: %s", dir, r.code, r.stderr)
+				}
+			}
+			if _, err := os.Stat(filepath.Join(full, "projects")); err == nil {
+				t.Errorf("a scratch project was made in a refused ROOT")
+			}
+		}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, c.check)
 	}
+
+	// Cursor reads your own config files, so prepare.py refuses while one it
+	// would load holds something, and passes once it's moved aside.
+	preflights := []struct {
+		// entry is what prepare.py names, the file itself or the folder
+		// holding it; "" when it shouldn't refuse.
+		name, harness, file, text, entry string
+	}{
+		{"Cursor is refused while your own hooks.json holds hooks", "cursor", ".cursor/hooks.json",
+			`{"version":1,"hooks":{"stop":[{"command":"say done"}]}}`, ".cursor/hooks.json"},
+		{"Cursor is refused while your Claude Code settings hold hooks, which it imports", "cursor", ".claude/settings.json",
+			`{"model":"opus","hooks":{"Stop":[{"hooks":[{"type":"command","command":"true"}]}]}}`, ".claude/settings.json"},
+		{"Cursor is refused while a skills folder of yours holds a skill", "cursor", ".claude/skills/mine/SKILL.md",
+			"---\nname: mine\n---\n", ".claude/skills"},
+		{"a JSON file that can't be read counts as holding something", "cursor", ".cursor/mcp.json", "{not json", ".cursor/mcp.json"},
+		{"Cline is refused while your global rules hold a rule", "cline", "Documents/Cline/Rules/me.md", "Be brief.\n",
+			"Documents/Cline/Rules"},
+		{"settings without hooks don't stop Cursor", "cursor", ".claude/settings.json", `{"model":"opus"}`, ""},
+		{"an empty hooks list doesn't stop Cursor", "cursor", ".cursor/hooks.json", `{"version":1,"hooks":{}}`, ""},
+	}
+	for _, c := range preflights {
+		t.Run(c.name, func(t *testing.T) {
+			own := t.TempDir()
+			write(t, filepath.Join(own, filepath.FromSlash(c.file)), c.text)
+			env := []string{"HOME=" + own, "PATH=" + os.Getenv("PATH")}
+			capture := filepath.Join(t.TempDir(), "capture")
+			r := run(t, ".", nil, env, python(t, "prepare.py", c.harness, capture, c.harness)...)
+			if c.entry == "" {
+				if r.code != 0 {
+					t.Fatalf("exit %d, want 0: %s", r.code, r.stderr)
+				}
+				return
+			}
+			moved := filepath.Join(own, filepath.FromSlash(c.entry))
+			if r.code != 2 || !strings.Contains(r.stderr, moved) || !strings.Contains(r.stderr, "mv "+moved+" "+moved+".pairtime-aside") {
+				t.Fatalf("exit %d, want 2, naming %s with the command to move it aside:\n%s", r.code, moved, r.stderr)
+			}
+			if _, err := os.Stat(capture); err == nil {
+				t.Fatalf("a refused prepare made %s", capture)
+			}
+			if err := os.Rename(moved, moved+".pairtime-aside"); err != nil {
+				t.Fatal(err)
+			}
+			r = run(t, ".", nil, env, python(t, "prepare.py", c.harness, capture, c.harness)...)
+			if r.code != 0 || !strings.Contains(r.stdout, "mv "+moved+".pairtime-aside "+moved) {
+				t.Fatalf("once moved aside: exit %d, want 0 and the command to move it back:\n%s%s", r.code, r.stdout, r.stderr)
+			}
+		})
+	}
+}
+
+// TestPrepareHarnesses checks what prepare.py sets up and prints for the
+// harnesses other than Claude Code.
+func TestPrepareHarnesses(t *testing.T) {
+	unixOnly(t)
+	need(t, "git")
+	cases := []struct {
+		harness, section string
+		// history is the history file collect.py gets, below ROOT, or "".
+		history string
+		// claudeHooks says whether the harness runs Claude Code-format hooks
+		// in real use, so the run's project gets them (HS 4.1, 8.1). Copilot
+		// reads a repo's .claude/ too (HS 5.1), but pairtime installs only
+		// Copilot's own hooks for it.
+		claudeHooks bool
+	}{
+		{"codex", "Codex", "codex-home/history.jsonl", false},
+		{"cursor", "Cursor", "", true},
+		{"copilot", "GitHub Copilot", "", false},
+		{"gemini", "Gemini CLI", "", false},
+		{"devin", "Devin", "", true},
+		{"cline", "Cline", "", false},
+	}
+	for _, c := range cases {
+		t.Run(c.harness+"'s commands name its own fixture folder, SCRIPTS.md section and history, never Claude Code's", func(t *testing.T) {
+			capture := filepath.Join(t.TempDir(), "capture")
+			env := []string{"HOME=" + t.TempDir(), "PATH=" + os.Getenv("PATH")}
+			r := run(t, ".", nil, env, python(t, "prepare.py", c.harness, capture, "run1")...)
+			if r.code != 0 {
+				t.Fatalf("exit %d:\n%s%s", r.code, r.stdout, r.stderr)
+			}
+			fixture := filepath.Join(filepath.Dir(filepath.Dir(kit(t, "."))), "testdata", "fixtures", c.harness) + string(os.PathSeparator)
+			for _, want := range []string{fixture, `Follow the "` + c.section + `" section`} {
+				if !strings.Contains(r.stdout, want) {
+					t.Errorf("no %q in:\n%s", want, r.stdout)
+				}
+			}
+			if strings.Contains(r.stdout, "claude_code") || strings.Contains(r.stdout, filepath.Join(".claude", "history.jsonl")) {
+				t.Errorf("Claude Code's fixture folder or history in:\n%s", r.stdout)
+			}
+			if c.history != "" && !strings.Contains(r.stdout, "--history "+filepath.Join(capture, filepath.FromSlash(c.history))) {
+				t.Errorf("no --history %s in:\n%s", c.history, r.stdout)
+			}
+			if c.history == "" && strings.Contains(r.stdout, "--history") {
+				t.Errorf("a --history for a harness with no history file:\n%s", r.stdout)
+			}
+		})
+		t.Run(c.harness+"'s project has Claude Code-format hooks only if it runs them in real use", func(t *testing.T) {
+			capture := filepath.Join(t.TempDir(), "capture")
+			env := []string{"HOME=" + t.TempDir(), "PATH=" + os.Getenv("PATH")}
+			if r := run(t, ".", nil, env, python(t, "prepare.py", c.harness, capture, "run1")...); r.code != 0 {
+				t.Fatalf("exit %d:\n%s%s", r.code, r.stdout, r.stderr)
+			}
+			settings := filepath.Join(capture, "projects", "run1", ".claude", "settings.local.json")
+			_, err := os.Stat(settings)
+			if has := err == nil; has != c.claudeHooks {
+				t.Fatalf("%s exists: %v, want %v", settings, has, c.claudeHooks)
+			}
+			if c.claudeHooks {
+				if h := readSettings(t, settings)["Stop"][0].Hooks[0]; h.Args[0] != filepath.Join(capture, "runs", "run1") {
+					t.Errorf("the Stop hook writes to %s", h.Args[0])
+				}
+			}
+		})
+	}
+}
+
+// captureFile is capture.json, as collect.py and the scrub read it.
+type captureFile struct {
+	Harness string            `json:"harness"`
+	Strict  bool              `json:"strict"`
+	Folders map[string]string `json:"settings_folder"`
+	Hooks   string            `json:"hooks"`
+	Project string            `json:"project"`
+}
+
+func readCapture(t *testing.T, runDir string) captureFile {
+	t.Helper()
+	var c captureFile
+	if err := json.Unmarshal([]byte(read(t, filepath.Join(runDir, "capture.json"))), &c); err != nil {
+		t.Fatal(err)
+	}
+	return c
 }
 
 // frontMatter reads the key: value lines between the --- lines that open a

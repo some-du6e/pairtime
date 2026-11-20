@@ -1,0 +1,103 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# The object storage client against MinIO, an S3 implementation pairtime
+# didn't write (PLAN WP-SV15's oracle, with AWS's signing test suite).
+# ci.yml runs the client's tests against the in-process test server on
+# every PR; this workflow runs TestMinIO, which ci.yml skips, against a
+# real S3 server. It runs on PRs that touch the client, weekly, and by
+# hand:
+#
+#   gh workflow run objstore.yml --ref <branch>
+name: objstore
+
+on:
+  pull_request:
+    paths:
+      - internal/server/objstore/**
+      - .github/workflows/objstore.yml
+  schedule:
+    # Mondays, after nightly.yml and postgres.yml, so they don't queue together.
+    - cron: "0 4 * * 1"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  minio:
+    name: object storage client against MinIO
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      minio:
+        # MinIO's own images are gone from Docker Hub and Quay, and its
+        # repository was archived in 2026, so this is Bitnami's last build of
+        # MinIO RELEASE.2025-07-23, pinned by digest. Bitnami's image starts
+        # the server by itself, which a service container needs, since it
+        # can't be given a command. MINIO_SKIP_CLIENT keeps its entrypoint
+        # from starting and stopping the server once before the real start;
+        # TestMinIO creates the buckets.
+        image: bitnamilegacy/minio:2025.7.23-debian-12-r5@sha256:6dabb4a2088c9a79908de3bc05f4586c23ad2182c8908e7e3acbf61c1467fb20
+        env:
+          MINIO_ROOT_USER: pairtime-ci
+          MINIO_ROOT_PASSWORD: pairtime-ci-not-a-secret
+          MINIO_SKIP_CLIENT: "yes"
+        ports:
+          - 9000:9000
+    env:
+      # pairtime never uses cgo (AGENTS.md).
+      CGO_ENABLED: "0"
+      # TestMinIO skips unless these are set (internal/server/objstore/minio_test.go).
+      PAIRTIME_TEST_S3_ENDPOINT: http://127.0.0.1:9000
+      PAIRTIME_TEST_S3_REGION: us-east-1
+      PAIRTIME_TEST_S3_ACCESS_KEY_ID: pairtime-ci
+      PAIRTIME_TEST_S3_SECRET_ACCESS_KEY: pairtime-ci-not-a-secret
+      PAIRTIME_TEST_S3_BUCKET: pairtime
+      PAIRTIME_TEST_S3_SNAPSHOT_BUCKET: pairtime-snapshots
+    defaults:
+      run:
+        shell: bash
+    steps:
+      # Actions are pinned to commit SHAs; tags can be moved. Dependabot bumps them.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: Wait for MinIO
+        run: |
+          for _ in $(seq 90); do
+            if curl -fsS -o /dev/null http://127.0.0.1:9000/minio/health/ready; then
+              docker exec "${{ job.services.minio.id }}" minio --version || true
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "::error::MinIO didn't become ready within 90 s"
+          exit 1
+
+      - name: TestMinIO
+        run: |
+          out=$(go test -count=1 -v -run '^TestMinIO$' ./internal/server/objstore) || {
+            echo "$out"
+            exit 1
+          }
+          grep -E -e '--- (PASS|FAIL|SKIP): TestMinIO' <<<"$out"
+          # A skipped test passes go test, so a green run proves nothing
+          # unless TestMinIO ran, and the acceptance check with it.
+          for t in TestMinIO TestMinIO/a_second_put_to_the_same_evidence_key_is_refused; do
+            if ! grep -q -- "--- PASS: $t " <<<"$out"; then
+              echo "::error::$t didn't run and pass"
+              exit 1
+            fi
+          done
+
+      - name: MinIO's log
+        if: failure()
+        run: docker logs "${{ job.services.minio.id }}" 2>&1 | tail -n 100
