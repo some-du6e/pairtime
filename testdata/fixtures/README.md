@@ -7,7 +7,8 @@ What real AI harnesses send and write, captured on real machines. Each adapter i
 ```text
 testdata/fixtures/<harness>/<version>/<os>/
   PROVENANCE.md         who captured it, when, on what, and how it was scrubbed
-  <run>/                one run of the capture script, named after the surface: cli, vscode, desktop, ...
+  <run>/                one run of the capture script, named after the surface: cli, vscode, ...
+    capture.json        how prepare.py set the run up: the harness, the hook form, the settings folder
     hooks/NNNNNN/       one hook call, numbered in arrival order
       stdin             the bytes the harness wrote to the hook's stdin, unchanged
       argv              the hook's arguments, one per line, as the harness passed them

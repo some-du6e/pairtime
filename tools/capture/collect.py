@@ -20,6 +20,12 @@ saw, and every other line is left out. --extra copies a file or folder you
 name, for harnesses whose hooks don't say where their logs are, after showing
 you the list and asking.
 
+When prepare.py gave the harness a settings folder of its own (capture.json
+in RUN_DIR says so), every file collected must come from inside it. A
+session file from anywhere else means that session ran with your own
+settings, instructions and plugins, so collect.py copies nothing and says
+so.
+
 transcripts/INDEX.txt lists every copied file with where it came from, its
 size and its modification time, since some harnesses' logs carry no
 timestamps of their own. Nothing leaves this machine. Standard library only,
@@ -67,6 +73,44 @@ def payloads(run_dir):
 
 def norm(path):
     return os.path.normcase(os.path.normpath(path))
+
+
+def inside(path, root):
+    path, root = os.path.realpath(path), os.path.realpath(root)
+    return path == root or path.startswith(root.rstrip(os.sep) + os.sep)
+
+
+def load_capture(run_dir):
+    """capture.json, which prepare.py writes into the run, or None."""
+    try:
+        with open(os.path.join(run_dir, "capture.json"), "rb") as f:
+            doc = json.loads(f.read().decode("utf-8"))
+    except (OSError, UnicodeDecodeError, ValueError):
+        return None
+    return doc if isinstance(doc, dict) else None
+
+
+def isolation_problems(capture, transcripts, histories, extras):
+    """Why the files to collect can't be from the captured sessions, when the
+    run's harness had a settings folder of its own: one line per file that
+    sits outside it."""
+    folders = [f for f in (capture.get("settings_folder") or {}).values() if isinstance(f, str) and f]
+    if not capture.get("strict") or not folders:
+        return []
+    where = " or ".join(folders)
+    problems = []
+    for t in transcripts:
+        if not any(inside(t, f) for f in folders):
+            problems.append("a hook names %s, outside %s, the settings folder prepare.py gave the harness. That session "
+                            "ran with your own settings, so your instructions, hooks or plugins may be in it." % (t, where))
+    for h in histories:
+        if not any(inside(h, f) for f in folders):
+            problems.append("--history %s is outside %s, so it isn't this run's history. prepare.py printed the right "
+                            "path." % (h, where))
+    for e in extras:
+        if not any(inside(e, f) for f in folders):
+            problems.append("--extra %s is outside %s, so it isn't from the captured sessions." % (e, where))
+    return problems
 
 
 def seen(run_dir):
@@ -162,16 +206,25 @@ def main(argv=None):
     ap.add_argument("--yes", action="store_true", help="copy --extra paths without asking")
     args = ap.parse_args(argv)
     run_dir = os.path.abspath(args.run_dir)
+    capture = load_capture(run_dir)
+    if capture is None:
+        ap.error("%s has no capture.json, so prepare.py didn't make it. Set the run up with prepare.py" % run_dir)
     if not os.path.isdir(os.path.join(run_dir, "hooks")):
         ap.error("%s has no hooks/ folder: run the capture first" % run_dir)
 
     transcripts, sessions, folders = seen(run_dir)
+    for p in args.extra:
+        if not os.path.exists(p):
+            ap.error("--extra %s doesn't exist" % p)
+    problems = isolation_problems(capture, transcripts, [os.path.abspath(h) for h in args.history],
+                                  [os.path.abspath(e) for e in args.extra])
+    if problems:
+        ap.error("nothing was copied.\n\n" + "\n\n".join(problems) + "\n\nStart over with a new ROOT, and set the "
+                 "variables prepare.py prints in the terminal you start the harness from (SCRIPTS.md, Before any capture).")
     copies, missing = plan(run_dir, transcripts)
 
     extras = []
     for p in args.extra:
-        if not os.path.exists(p):
-            ap.error("--extra %s doesn't exist" % p)
         extras.extend(files_under(os.path.abspath(p)))
     if extras and not args.yes:
         print("--extra would copy these %d files in full:" % len(extras))

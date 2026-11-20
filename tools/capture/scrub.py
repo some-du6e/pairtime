@@ -23,7 +23,11 @@ text, such as protobuf telemetry, are left out, since they can't be scrubbed.
 Then it checks the result: any known value still present without a word
 boundary (karim in karimsLaptop) is listed, and so is every prompt in the hook
 payloads with a line that isn't in SCRIPTS.md, since every prompt should come
-from the script.
+from the script. So is every line of your own instruction files that the
+capture holds (CLAUDE.md, AGENTS.md, GEMINI.md, rules and the like, from your
+home folder and from the folders above the scratch project): prepare.py's
+settings folder keeps them out of the captured sessions, and a line found
+here means the harness loaded them anyway.
 
 The report, which holds the original values, is printed and saved beside
 RUN_DIR as RUN_DIR-scrub-report.txt, never inside OUT_DIR: it must not be
@@ -112,6 +116,28 @@ SECRET_PATTERNS = [
 EMAIL_PATTERN = r"(?:(?<![A-Za-z0-9._%+\\-])|" + ESC + r")[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}"
 
 SKIP_NAMES = {".DS_Store", "Thumbs.db", "desktop.ini"}
+
+# Instruction files the harnesses load into every session (HS 3.4, 4.4, 5.4,
+# 6.4, 7.4, 8.3, 9): below your home folder, and, for Claude Code, in every
+# folder above the one it runs in. prepare.py keeps them out of the captured
+# sessions, and the scrub checks that it did by looking for their lines.
+HOME_INSTRUCTIONS = (
+    ".claude/CLAUDE.md", ".claude/rules", ".codex/AGENTS.md", ".codex/AGENTS.override.md", ".gemini/GEMINI.md",
+    ".copilot/copilot-instructions.md", ".copilot/instructions", ".agents/AGENTS.md", ".devin/rules",
+    "Documents/Cline/Rules",
+)
+FOLDER_INSTRUCTIONS = ("CLAUDE.md", "CLAUDE.local.md", ".claude/CLAUDE.md", ".claude/rules", "AGENTS.md",
+                       "AGENTS.override.md", "GEMINI.md")
+# The settings-folder variables that move the home-folder files above.
+MOVED_INSTRUCTIONS = (
+    ("CLAUDE_CONFIG_DIR", ("CLAUDE.md", "rules")),
+    ("CODEX_HOME", ("AGENTS.md", "AGENTS.override.md")),
+    ("COPILOT_HOME", ("copilot-instructions.md", "instructions")),
+    ("GEMINI_CLI_HOME", (".gemini/GEMINI.md",)),
+)
+# prepare.py's name for a file moved aside for a capture.
+ASIDE = ".pairtime-aside"
+MAX_INSTRUCTION_BYTES = 1 << 20
 
 
 class Rule:
@@ -338,20 +364,135 @@ def scripted_lines():
     return " ".join(text.split())
 
 
-def prompts_in(text):
-    """Prompt texts in a hook payload, history line or OTLP body."""
-    keys = ("prompt", "initialPrompt", "display")
-    found = []
-    docs = []
+def json_docs(text):
+    """The JSON documents in a file: the whole file, or each JSON line."""
     try:
-        docs.append(json.loads(text))
+        return [json.loads(text)]
     except ValueError:
-        for line in text.splitlines():
+        pass
+    docs = []
+    for line in text.splitlines():
+        if line.lstrip()[:1] in ("{", "["):
             try:
                 docs.append(json.loads(line))
             except ValueError:
                 pass
-    stack = docs
+    return docs
+
+
+def strings_in(doc, key=None):
+    """(key, string) for every string in a JSON value, with the key of the
+    member it sits in."""
+    stack = [(key, doc)]
+    while stack:
+        k, v = stack.pop()
+        if isinstance(v, dict):
+            stack.extend(v.items())
+        elif isinstance(v, list):
+            stack.extend((k, x) for x in v)
+        elif isinstance(v, str):
+            yield k, v
+
+
+def readable(text):
+    """The text the way a person reading it sees it: as stored, then every
+    JSON string in it decoded, with each run of whitespace as one space."""
+    parts = [text]
+    for doc in json_docs(text):
+        parts.extend(s for _, s in strings_in(doc))
+    return " ".join(" ".join(parts).split())
+
+
+def run_folders(run_dir):
+    """The folders the captured sessions ran in: each hook call's cwd, the
+    cwd fields of the payloads, and the project capture.json names."""
+    found = set()
+    try:
+        with open(os.path.join(run_dir, "capture.json"), encoding="utf-8") as f:
+            project = json.load(f).get("project")
+        if isinstance(project, str) and project:
+            found.add(project)
+    except (OSError, ValueError, AttributeError):
+        pass
+    hooks = os.path.join(run_dir, "hooks")
+    for name in sorted(os.listdir(hooks)) if os.path.isdir(hooks) else []:
+        for leaf in ("cwd", "stdin"):
+            try:
+                with open(os.path.join(hooks, name, leaf), "rb") as f:
+                    text = f.read().decode("utf-8")
+            except (OSError, UnicodeDecodeError):
+                continue
+            if leaf == "cwd":
+                if text.strip():
+                    found.add(text.strip())
+                continue
+            for doc in json_docs(text):
+                found.update(s for k, s in strings_in(doc) if k == "cwd" and s)
+    return sorted(f for f in found if os.path.isabs(f))
+
+
+def instruction_files(folders, environ=None):
+    """Every instruction file on this machine that a captured session could
+    have loaded, including ones prepare.py had you move aside."""
+    environ = os.environ if environ is None else environ
+    bases = [(os.path.expanduser("~"), HOME_INSTRUCTIONS)]
+    bases += [(environ[var], rels) for var, rels in MOVED_INSTRUCTIONS if environ.get(var)]
+    for folder in folders:
+        d = os.path.dirname(os.path.abspath(folder))
+        while True:
+            bases.append((d, FOLDER_INSTRUCTIONS))
+            up = os.path.dirname(d)
+            if up == d:
+                break
+            d = up
+    found, seen = [], set()
+    for base, rels in bases:
+        for rel in rels:
+            path = os.path.join(base, *rel.split("/"))
+            for p in (path, path + ASIDE):
+                files = [p] if os.path.isfile(p) else [os.path.join(r, n) for r, _, ns in os.walk(p) for n in sorted(ns)]
+                for f in files:
+                    real = os.path.realpath(f)
+                    if real not in seen and os.path.isfile(real):
+                        seen.add(real)
+                        found.append(f)
+    return found
+
+
+def instruction_lines(path, kit_text):
+    """(line number, text) for each line of an instruction file long enough
+    to be its own, with whitespace runs as one space. Lines the kit itself
+    holds (a SCRIPTS.md prompt, the scratch project) are left out."""
+    try:
+        with open(path, "rb") as f:
+            text = f.read(MAX_INSTRUCTION_BYTES).decode("utf-8", "replace")
+    except OSError:
+        return []
+    out = []
+    for i, line in enumerate(text.splitlines(), 1):
+        s = " ".join(line.split())
+        if len(s) >= 20 and sum(c.isalpha() for c in s) >= 12 and s not in kit_text:
+            out.append((i, s))
+    return out
+
+
+def kit_text():
+    """SCRIPTS.md and prepare.py, the text a capture is meant to hold."""
+    parts = []
+    for name in ("SCRIPTS.md", "prepare.py"):
+        try:
+            with open(os.path.join(KIT_DIR, name), encoding="utf-8") as f:
+                parts.append(f.read())
+        except OSError:
+            pass
+    return " ".join(" ".join(parts).split())
+
+
+def prompts_in(text):
+    """Prompt texts in a hook payload, history line or OTLP body."""
+    keys = ("prompt", "initialPrompt", "display")
+    found = []
+    stack = json_docs(text)
     while stack:
         v = stack.pop()
         if isinstance(v, dict):
@@ -422,9 +563,12 @@ def main(argv=None):
 
     rep = []
     totals = {}
-    renamed, skipped, leftovers, unscripted = [], [], [], []
+    renamed, skipped, leftovers, unscripted, borrowed = [], [], [], [], []
     scripts = scripted_lines()
     files = 0
+    kit = kit_text()
+    sources = instruction_files(run_folders(run_dir))
+    needles = [(src, n, line) for src in sources for n, line in instruction_lines(src, kit)]
 
     for rel in files_in(run_dir):
         src = os.path.join(run_dir, rel)
@@ -469,6 +613,14 @@ def main(argv=None):
                                                       clean[max(0, i - 20):i + len(value) + 20]))
                 i = lower.find(value.lower(), i + len(value))
 
+        # The raw text, so a line naming you is found before the scrub
+        # changes it.
+        if needles:
+            hay = readable(text)
+            for src, n, line in needles:
+                if line in hay:
+                    borrowed.append("%s  holds line %d of %s: %r" % (new_rel.replace(os.sep, "/"), n, src, line[:80]))
+
         if scripts is not None and (parts[0] == "hooks" or "history" in parts[-1]):
             for p in prompts_in(clean):
                 lines = [ln for ln in p.splitlines() if ln.strip() and " ".join(ln.split()) not in scripts]
@@ -494,12 +646,17 @@ def main(argv=None):
         ("Renamed paths", ["%s -> %s" % (a.replace(os.sep, "/"), b.replace(os.sep, "/")) for a, b in renamed]),
         ("Left out", ["%s: %s" % (a.replace(os.sep, "/"), why) for a, why in skipped]),
         ("STILL PRESENT inside longer words. Check each one; add --also or redo the run if it's private", leftovers),
+        ("FROM YOUR OWN INSTRUCTION FILES, so the harness loaded them into the captured sessions. Don't commit this "
+         "run. Start over with a new ROOT, with the settings folder prepare.py prints, or with the file moved aside",
+         borrowed),
         ("Prompts with a line that isn't in SCRIPTS.md. Each should be machine text or yours to keep", unscripted),
     ):
         if rows:
             summary += ["", title + ":"] + ["  " + r for r in rows]
     if scripts is None:
         summary += ["", "SCRIPTS.md wasn't found next to scrub.py, so prompts weren't checked."]
+    summary += ["", "Checked the capture against %d line%s of %d instruction file%s of yours." % (
+        len(needles), "" if len(needles) == 1 else "s", len(sources), "" if len(sources) == 1 else "s")]
     summary += ["", "Every replacement, with file:line and context, is in " + report_path,
                 "That report holds the original values: keep it out of the repo, and delete it with the run when you're done.",
                 "Now read every file in %s yourself before committing it." % out_dir]
@@ -507,7 +664,7 @@ def main(argv=None):
     with open(report_path, "w", encoding="utf-8", newline="\n") as f:
         f.write("\n".join(summary) + "\n\nEvery replacement:\n" + "\n".join("  " + r for r in rep) + "\n")
     print("\n".join(summary))
-    return 1 if leftovers else 0
+    return 1 if leftovers or borrowed else 0
 
 
 if __name__ == "__main__":
