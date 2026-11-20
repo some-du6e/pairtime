@@ -141,9 +141,12 @@ func (a *agent) openLedger() (*ledger.Writer, error) {
 	// doctor and the dashboard repeat it (DESIGN 3.6; CP 5.2).
 	a.setProblem("keystore", st.Warning())
 	return ledger.Open(ledger.Options{
-		Dir:     a.dirs.Ledger(),
-		Keys:    ks.Keys(),
-		KeyID:   st.KeyID,
+		Dir:   a.dirs.Ledger(),
+		Keys:  ks.Keys(),
+		KeyID: st.KeyID,
+		// keystore.json keeps the key's chain, so a ledger directory that
+		// is deleted can't make the key start another (ledger-v1 3).
+		Chains:  ks,
 		Sched:   a.sched,
 		Problem: func(msg string) { a.setProblem("ledger", msg) },
 	})

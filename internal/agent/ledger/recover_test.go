@@ -390,3 +390,181 @@ func TestReadBatchesFrom(t *testing.T) {
 		t.Errorf("%d sealed records, want 10", n)
 	}
 }
+
+// memChains is an Options.Chains in memory, as the keystore keeps one.
+type memChains struct {
+	chain string
+	fail  error // what RecordChain returns, when set
+	calls int   // RecordChain calls
+}
+
+func (m *memChains) Chain() string { return m.chain }
+
+func (m *memChains) RecordChain(id string) error {
+	m.calls++
+	switch {
+	case m.fail != nil:
+		return m.fail
+	case m.chain != "" && m.chain != id:
+		return errors.New("the key already has a chain")
+	}
+	m.chain = id
+	return nil
+}
+
+// TestChains checks that the chain a key writes is on record beside the key
+// before any record is written to it, and that a key with a chain on record
+// never starts a second one (ledger-v1 3).
+func TestChains(t *testing.T) {
+	withChains := func(m *memChains) func(*Options) { return func(o *Options) { o.Chains = m } }
+	// started is a ledger whose key started its chain with m, or with no
+	// record when m is nil, wrote records and closed.
+	started := func(t *testing.T, m *memChains) (dir, device string) {
+		t.Helper()
+		dir = t.TempDir()
+		var edit []func(*Options)
+		if m != nil {
+			edit = append(edit, withChains(m))
+		}
+		w := open(t, dir, newClock(testT), edit...)
+		writeRandom(t, w, rand.New(rand.NewPCG(21, 22)), 10, 3, testT)
+		if err := w.Close(); err != nil {
+			t.Fatal(err)
+		}
+		return dir, w.DeviceID()
+	}
+
+	t.Run("a new chain is on record when Open returns, and Open after that records nothing more", func(t *testing.T) {
+		m := &memChains{}
+		dir, device := started(t, m)
+		if m.chain != device || m.calls != 1 {
+			t.Fatalf("on record %q after %d calls, want %s after 1", m.chain, m.calls, device)
+		}
+		w := open(t, dir, newClock(testT+60_000), withChains(m))
+		if err := w.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if m.calls != 1 {
+			t.Errorf("Open recorded the chain again: %d calls", m.calls)
+		}
+	})
+
+	gone := []struct {
+		name string
+		edit func(t *testing.T, dir string)
+		want error
+	}{
+		{"a deleted ledger directory can't make the key start a second chain",
+			func(t *testing.T, dir string) {
+				if err := os.RemoveAll(dir); err != nil {
+					t.Fatal(err)
+				}
+			}, ErrKeyReuse},
+		{"a ledger directory whose files were deleted can't either",
+			func(t *testing.T, dir string) {
+				days, err := segments(dir)
+				if err != nil {
+					t.Fatal(err)
+				}
+				for _, day := range days {
+					if err := os.Remove(segPath(dir, day)); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if err := os.Remove(filepath.Join(dir, batchesName)); err != nil {
+					t.Fatal(err)
+				}
+			}, ErrKeyReuse},
+		{"an emptied batches.seg is damage, and starts nothing",
+			func(t *testing.T, dir string) { truncate(t, filepath.Join(dir, batchesName), 0) }, ErrDamaged},
+	}
+	for _, tc := range gone {
+		t.Run(tc.name, func(t *testing.T) {
+			m := &memChains{}
+			dir, _ := started(t, m)
+			tc.edit(t, dir)
+			if w, err := openErr(dir, newClock(testT+60_000), withChains(m)); !errors.Is(err, tc.want) {
+				if err == nil {
+					w.Close()
+				}
+				t.Fatalf("Open: %v, want %v", err, tc.want)
+			}
+			if days, err := segments(dir); err != nil || len(days) > 0 && tc.want == ErrKeyReuse {
+				t.Errorf("Open wrote segments %v (%v) for a key it refused", days, err)
+			}
+			if tc.want == ErrKeyReuse {
+				if _, err := os.Stat(filepath.Join(dir, batchesName)); !errors.Is(err, fs.ErrNotExist) {
+					t.Errorf("Open started a chain under the key: %v", err)
+				}
+			}
+		})
+	}
+
+	t.Run("a chain written before the record existed is recorded before Open writes to it", func(t *testing.T) {
+		dir, device := started(t, nil)
+		m := &memChains{}
+		w := open(t, dir, newClock(testT+60_000), withChains(m))
+		if m.chain != device {
+			t.Errorf("on record %q, want %s", m.chain, device)
+		}
+		if err := w.Close(); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	t.Run("a ledger holding another chain of the key than the one on record is refused, and nothing is written to it", func(t *testing.T) {
+		dir, _ := started(t, nil)
+		seg := segPath(dir, "2026-11-19")
+		size := fileSize(t, seg)
+		if w, err := openErr(dir, newClock(testT+60_000), withChains(&memChains{chain: "d_elsewhere"})); !errors.Is(err, ErrKeyReuse) {
+			if err == nil {
+				w.Close()
+			}
+			t.Fatalf("Open: %v, want ErrKeyReuse", err)
+		}
+		if got := fileSize(t, seg); got != size {
+			t.Errorf("the segment went from %d to %d bytes", size, got)
+		}
+	})
+
+	t.Run("a key with a chain on record elsewhere leaves another key's chain where it is", func(t *testing.T) {
+		dir, device := started(t, nil)
+		other := func(o *Options) {
+			o.Keys, o.KeyID, o.Chains = keysOf(t, otherKDev), otherKeyID, &memChains{chain: "d_elsewhere"}
+		}
+		if w, err := openErr(dir, newClock(testT+60_000), other); !errors.Is(err, ErrKeyReuse) {
+			if err == nil {
+				w.Close()
+			}
+			t.Fatalf("Open: %v, want ErrKeyReuse", err)
+		}
+		info, err := ReadChain(dir)
+		if err != nil || info.DeviceID != device || info.KeyID != testKeyID {
+			t.Errorf("the ledger's chain is now %+v, %v; want device %s of the first key", info, err, device)
+		}
+		if _, err := os.Stat(filepath.Join(dir, oldDir)); !errors.Is(err, fs.ErrNotExist) {
+			t.Errorf("Open archived the chain: %v", err)
+		}
+	})
+
+	t.Run("a record that fails stops Open before any record, and the next Open records the chain it started", func(t *testing.T) {
+		dir := t.TempDir()
+		boom := errors.New("the keystore is locked")
+		m := &memChains{fail: boom}
+		if w, err := openErr(dir, newClock(testT), withChains(m)); !errors.Is(err, boom) {
+			if err == nil {
+				w.Close()
+			}
+			t.Fatalf("Open: %v, want the record's error", err)
+		}
+		m.fail = nil
+		w := open(t, dir, newClock(testT), withChains(m))
+		info, err := ReadChain(dir)
+		if err != nil || m.chain != info.DeviceID || w.DeviceID() != info.DeviceID {
+			t.Errorf("on record %q, and the ledger's chain is %+v, %v; want them the same", m.chain, info, err)
+		}
+		if s, _, err := write(w, rand.New(rand.NewPCG(23, 24)), "os.presence", testT); err != nil || s != 1 {
+			t.Errorf("the chain's first record got s = %d and %v, want 1", s, err)
+		}
+	})
+}

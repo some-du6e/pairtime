@@ -32,12 +32,26 @@ var (
 	// ledger, because the only ways to go on would drop sealed records or
 	// number records again, which repeats nonces (ledger-v1 3).
 	ErrDamaged = errors.New("ledger: the ledger's files are damaged")
-	// ErrKeyReuse is a ledger directory that kept an old chain of the
-	// device key the writer was given. A new chain under that key would
-	// start again from s = 1 and repeat every nonce and token salt of the
-	// old one (ledger-v1 3).
-	ErrKeyReuse = errors.New("ledger: the ledger already holds an old chain of this device key")
+	// ErrKeyReuse is a device key that already has a chain the writer
+	// can't go on with here: the chain Options.Chains records for the key
+	// isn't the one this ledger directory holds, as when the directory was
+	// deleted or emptied, or the directory kept an old chain of the key in
+	// old/. A new chain under that key would start again from s = 1 and
+	// repeat every nonce and token salt of the old one (ledger-v1 3), so
+	// going on takes a new device key.
+	ErrKeyReuse = errors.New("ledger: this device key already has a chain, and a second one would repeat its nonces")
 )
+
+// ChainRecord keeps, next to a device key and out of the ledger directory,
+// the device id of the one chain the key writes, so deleting the directory
+// doesn't delete the record. *keys.Keystore is one.
+type ChainRecord interface {
+	// Chain returns the device id of the key's chain, or "" when the key
+	// has started none.
+	Chain() string
+	// RecordChain records deviceID as the key's chain.
+	RecordChain(deviceID string) error
+}
 
 // pendingMax is how many records the writer holds unsealed before it seals
 // at once rather than wait for BATCH_S: a long backfill or an inbox drain
@@ -58,6 +72,16 @@ type Options struct {
 	// anything else that gives the installation a new K_dev, starts a new
 	// device (ledger-v1 3; decision E-sm-1.1-seq-gaps).
 	KeyID string
+	// Chains, when set, records next to K_dev which chain the key writes:
+	// the agent passes its keystore. Open refuses with ErrKeyReuse to start
+	// a chain for a key that has one on record, or to write to a chain of
+	// the key that isn't that one, and it records the chain it writes
+	// before the chain's first record and before it writes to a chain it
+	// finds unrecorded. So no record exists under a key whose chain isn't
+	// on record, and a ledger directory that is deleted or emptied can't
+	// make the key number records from s = 1 again. Without it, Open can
+	// tell a used key only from the directory's own old/.
+	Chains ChainRecord
 	// Params is the table BATCH_S, SUBSTANTIVE_CHARS and
 	// ERROR_PASTE_TEXT_MAX come from, which should be the one the scorer
 	// runs with. Nil means the newest table pkg/params embeds.
@@ -130,6 +154,7 @@ type Writer struct {
 	keys     *ledger.Keys
 	feat     *features.Key
 	keyID    string
+	chains   ChainRecord
 	table    *params.Table
 	batchS   time.Duration
 	now      func() time.Time
@@ -205,6 +230,7 @@ func Open(opts Options) (*Writer, error) {
 		keys:     opts.Keys,
 		feat:     opts.Keys.Features(),
 		keyID:    opts.KeyID,
+		chains:   opts.Chains,
 		table:    table,
 		batchS:   time.Duration(table.Int(params.BATCH_S)) * time.Second,
 		now:      now,

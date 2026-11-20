@@ -165,6 +165,13 @@ func (w *Writer) recover() error {
 		}
 		return w.newChain()
 	}
+	// A chain the key started before keystore.json kept chains isn't on
+	// record yet. It goes on record before anything is written to it, and
+	// before scan can find the files damaged, so deleting a damaged ledger
+	// can't make the key start again from s = 1.
+	if err := w.ownChain(bf.chain.DeviceID); err != nil {
+		return err
+	}
 	w.device = bf.chain.DeviceID
 	if w.batches, err = openAppend(name, false); err != nil {
 		return err
@@ -193,7 +200,14 @@ func (w *Writer) recover() error {
 
 // newChain starts the chain of this writer's key: a new device id, and
 // batches.seg with nothing but its chain frame, written whole before any
-// record. It refuses a key that kept an old chain here (ErrKeyReuse).
+// record. It refuses a key that has a chain on record or kept an old chain
+// here (ErrKeyReuse), and records the new chain before Open writes any
+// record to it.
+//
+// The record comes after batches.seg and not before it. A chain is on
+// record before any record is written, which is all that keeps nonces
+// from repeating, and a record made first would lock the key out for good
+// if batches.seg then failed to write, as on a full disk.
 func (w *Writer) newChain() error {
 	if err := w.keyUnused(); err != nil {
 		return err
@@ -207,13 +221,41 @@ func (w *Writer) newChain() error {
 	if err := home.WriteFile(name, appendFrame(nil, kindChain, payload)); err != nil {
 		return err
 	}
-	w.batches, err = openAppend(name, false)
-	return err
+	if w.batches, err = openAppend(name, false); err != nil {
+		return err
+	}
+	return w.ownChain(w.device)
 }
 
-// keyUnused returns ErrKeyReuse when the writer's key kept an old chain
-// here, so a chain under it would start again from s = 1.
+// ownChain checks that device's chain is the one Options.Chains records
+// for the writer's key, and records it when the key has none on record
+// yet. A key whose record names another chain gets ErrKeyReuse.
+func (w *Writer) ownChain(device string) error {
+	if w.chains == nil {
+		return nil
+	}
+	switch rec := w.chains.Chain(); rec {
+	case device:
+		return nil
+	case "":
+		if err := w.chains.RecordChain(device); err != nil {
+			return fmt.Errorf("ledger: recording the chain of device %s next to its key: %w", device, err)
+		}
+		return nil
+	default:
+		return fmt.Errorf("%w: the key writes the chain of device %s, and this ledger holds its chain of device %s", ErrKeyReuse, rec, device)
+	}
+}
+
+// keyUnused returns ErrKeyReuse when the writer's key has a chain on
+// record, which this ledger doesn't hold, or kept an old chain here, so a
+// chain under it would start again from s = 1.
 func (w *Writer) keyUnused() error {
+	if w.chains != nil {
+		if rec := w.chains.Chain(); rec != "" {
+			return fmt.Errorf("%w: the key started the chain of device %s, which this ledger doesn't hold", ErrKeyReuse, rec)
+		}
+	}
 	for _, name := range []string{w.keyID, w.keyID + partialSuffix} {
 		_, err := os.Stat(filepath.Join(w.dir, oldDir, name))
 		if err == nil {

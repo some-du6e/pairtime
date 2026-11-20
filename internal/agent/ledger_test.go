@@ -4,7 +4,10 @@ package agent
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
+	"io/fs"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -201,5 +204,46 @@ func waitChain(t *testing.T, a *running, dirs home.Dirs) ledger.ChainInfo {
 			t.Fatalf("the agent didn't open its ledger within 20 s: %v; status %+v", err, getStatus(t, a))
 		}
 		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+// TestLedgerDeleted checks that the agent's keystore keeps the chain its
+// device key writes: after the ledger directory is deleted, the next run
+// starts no second chain under the key, which would number records from 1
+// again, and says why the ledger isn't open.
+func TestLedgerDeleted(t *testing.T) {
+	dirs := home.Dirs{Data: t.TempDir(), Config: t.TempDir()}
+	dirs.Runtime = dirs.Data
+	opts := Options{Dirs: dirs, Ports: []int{0}, KeyStores: []keys.Store{}}
+	first := startAgent(t, opts)
+	before := waitChain(t, first, dirs)
+	first.cancel()
+	if err := first.waitExit(t); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(dirs.Ledger()); err != nil {
+		t.Fatal(err)
+	}
+
+	a := startAgent(t, opts)
+	s := waitStatus(t, a, func(s statusReply) bool { return s.Problems["ledger"] != "" })
+	_, chainErr := ledger.ReadChain(dirs.Ledger())
+	a.cancel()
+	stopErr := a.waitExit(t)
+
+	cases := []struct {
+		name string
+		ok   bool
+	}{
+		{"the ledger problem names the chain the key already writes", strings.Contains(s.Problems["ledger"], before.DeviceID)},
+		{"no second chain starts in the new ledger directory", errors.Is(chainErr, fs.ErrNotExist)},
+		{"the agent stops cleanly without its ledger", stopErr == nil},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if !c.ok {
+				t.Errorf("no: problem %q, chain %+v, ReadChain %v, stop %v", s.Problems["ledger"], before, chainErr, stopErr)
+			}
+		})
 	}
 }
