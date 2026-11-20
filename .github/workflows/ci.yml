@@ -190,12 +190,14 @@ jobs:
         # package and its tests for one GOOS/GOARCH, so this compiles
         # internal/platform for all seven targets with CGO_ENABLED=0, such as
         # internal/platform/darwin for darwin/amd64 and darwin/arm64 (WP-OS3).
+        # internal/agent/notifier is here too for its per-OS files and their
+        # tests, which the cross-compile leaves out (WP-OS8).
         # The Windows and macOS tests themselves run in platform.yml.
         if: ${{ !cancelled() }}
         run: |
           for target in windows/amd64 windows/386 windows/arm64 darwin/amd64 darwin/arm64 linux/amd64 linux/arm64; do
-            echo "go vet ./internal/platform/... for $target"
-            GOOS=${target%/*} GOARCH=${target#*/} go vet ./internal/platform/...
+            echo "go vet ./internal/platform/... ./internal/agent/notifier/... for $target"
+            GOOS=${target%/*} GOARCH=${target#*/} go vet ./internal/platform/... ./internal/agent/notifier/...
           done
 
       - name: Module licenses
