@@ -28,8 +28,9 @@ type Anchor struct {
 	// SessionKey and TurnKey are set for acts inside a harness session.
 	SessionKey string `json:"session_key,omitempty"`
 	TurnKey    string `json:"turn_key,omitempty"`
-	// Origin and PromptClass are set for prompts, queued messages and
-	// `pairtime track` anchors.
+	// Origin is set for prompts and queued messages, and PromptClass for
+	// those and `pairtime track` anchors, whose gate takes the place of an
+	// origin (DESIGN 5.4).
 	Origin      event.Origin      `json:"origin,omitempty"`
 	PromptClass event.PromptClass `json:"prompt_class,omitempty"`
 	Reason      event.Reason      `json:"reason"`

@@ -79,6 +79,9 @@ type session struct {
 	// native is set when any of its records came through a hook or a log
 	// reader, the code paths the harness itself feeds (DESIGN 5.2).
 	native bool
+	// bridged is set when any of its records came through the WakaTime
+	// bridge, which reads them from an editor's wakatime-cli (DESIGN 5.7).
+	bridged bool
 	// nativePrompts are the times of its prompts that came that way.
 	nativePrompts []int64
 	// outputs and stops are its agent.output and agent.stop records, for
@@ -222,6 +225,9 @@ func (d *deriver) buildSessions() {
 		}
 		if nativeVia(e.Via) {
 			s.native = true
+		}
+		if e.Via == event.ViaBridge || e.Via == event.ViaBridgeUnverified {
+			s.bridged = true
 		}
 		switch p := e.Data.(type) {
 		case *event.SessionStart:
@@ -460,13 +466,16 @@ func (d *deriver) headless(st *event.SessionStart, s *session) bool {
 	return true
 }
 
-// hostedBy reports whether window f hosts session s, or is the editor of
-// an IDE session in the session's project (SM 2.2 rule 6).
+// hostedBy reports whether window f hosts session s (SM 2.2 rule 6): its
+// hosted_sessions hold the session, or it is the editor, in the session's
+// project, of a session that runs in an IDE. A session the bridge reports
+// runs in one: its records come from the editor's wakatime-cli (DESIGN
+// 5.7), and no hook says more about its process.
 func (d *deriver) hostedBy(f *focusRec, s *session, pos int) bool {
 	if f.hosts(s.key) {
 		return true
 	}
-	return s.ide(pos) && f.class == event.AppEditor && (f.project == "" || f.project == s.project)
+	return (s.ide(pos) || s.bridged) && f.class == event.AppEditor && (f.project == "" || f.project == s.project)
 }
 
 // classify gives a person's prompt its class (SM 2.2). The prompt's text

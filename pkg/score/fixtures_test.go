@@ -96,89 +96,101 @@ func seconds(ms int64) float64 { return float64(ms) / 1000 }
 
 func TestFixtureAnchors(t *testing.T) {
 	for _, f := range loadFixtures(t) {
-		got := scoreAll(t, fixtureDevice(f), f.Events)
-		byID := map[string]Anchor{}
-		for _, a := range got.Anchors {
-			byID[a.ID] = a
-		}
-		t.Run(f.Name+" yields the anchors SM names and no others", func(t *testing.T) {
-			var want, have []string
-			for _, a := range f.Anchors.Anchors {
-				want = append(want, a.EventID)
-			}
-			for _, a := range got.Anchors {
-				have = append(have, a.ID)
-			}
-			slices.Sort(want)
-			slices.Sort(have)
-			if !slices.Equal(want, have) {
-				t.Errorf("anchors %q, want %q", have, want)
-			}
-		})
-		for _, want := range f.Anchors.Anchors {
-			name := fmt.Sprintf("%s %s %s has SM's kind, time, project, origin, class, lead, trail, via and level",
-				f.Name, want.Local, want.Kind)
-			t.Run(name, func(t *testing.T) {
-				a, ok := byID[want.EventID]
-				if !ok {
-					t.Fatalf("no anchor for event %s", want.EventID)
-				}
-				for _, c := range []struct {
-					field     string
-					got, want any
-				}{
-					{"kind", a.Kind, want.Kind},
-					{"t", a.T, want.T},
-					{"project_key", a.ProjectKey, want.ProjectKey},
-					{"origin", a.Origin, want.Origin},
-					{"prompt_class", a.PromptClass, want.PromptClass},
-					{"lead_s", seconds(a.LeadMS), want.LeadS},
-					{"trail_s", seconds(a.TrailMS), want.TrailS},
-					{"via", a.Via, want.Via},
-					{"level", a.Level, want.Level},
-				} {
-					if c.got != c.want {
-						t.Errorf("%s = %v, want %v (%s)", c.field, c.got, c.want, want.SM)
-					}
-				}
-				if err := a.Event().Validate(); err != nil {
-					t.Errorf("the anchor isn't a valid event.Anchor: %v", err)
-				}
-			})
-		}
+		checkAnchors(t, f, scoreAll(t, fixtureDevice(f), f.Events))
 	}
 }
 
 func TestFixtureTurns(t *testing.T) {
 	for _, f := range loadFixtures(t) {
-		got := scoreAll(t, fixtureDevice(f), f.Events)
-		byKey := map[[2]string]Turn{}
-		for _, tu := range got.Turns {
-			byKey[[2]string{tu.SessionKey, tu.TurnKey}] = tu
+		checkTurns(t, f, scoreAll(t, fixtureDevice(f), f.Events))
+	}
+}
+
+// checkAnchors compares the anchors the scorer derived for a fixture with
+// its anchors.json.
+func checkAnchors(t *testing.T, f *timelines.Fixture, got Derived) {
+	t.Helper()
+	byID := map[string]Anchor{}
+	for _, a := range got.Anchors {
+		byID[a.ID] = a
+	}
+	t.Run(f.Name+" yields the anchors its oracle names and no others", func(t *testing.T) {
+		var want, have []string
+		for _, a := range f.Anchors.Anchors {
+			want = append(want, a.EventID)
 		}
-		t.Run(f.Name+" yields the turns SM describes and no others", func(t *testing.T) {
-			if len(got.Turns) != len(f.Anchors.Turns) {
-				t.Errorf("%d turns, want %d", len(got.Turns), len(f.Anchors.Turns))
+		for _, a := range got.Anchors {
+			have = append(have, a.ID)
+		}
+		slices.Sort(want)
+		slices.Sort(have)
+		if !slices.Equal(want, have) {
+			t.Errorf("anchors %q, want %q", have, want)
+		}
+	})
+	for _, want := range f.Anchors.Anchors {
+		name := fmt.Sprintf("%s %s %s has the oracle's kind, time, project, origin, class, lead, trail, via and level",
+			f.Name, want.Local, want.Kind)
+		t.Run(name, func(t *testing.T) {
+			a, ok := byID[want.EventID]
+			if !ok {
+				t.Fatalf("no anchor for event %s", want.EventID)
+			}
+			for _, c := range []struct {
+				field     string
+				got, want any
+			}{
+				{"kind", a.Kind, want.Kind},
+				{"t", a.T, want.T},
+				{"project_key", a.ProjectKey, want.ProjectKey},
+				{"origin", a.Origin, want.Origin},
+				{"prompt_class", a.PromptClass, want.PromptClass},
+				{"lead_s", seconds(a.LeadMS), want.LeadS},
+				{"trail_s", seconds(a.TrailMS), want.TrailS},
+				{"via", a.Via, want.Via},
+				{"level", a.Level, want.Level},
+			} {
+				if c.got != c.want {
+					t.Errorf("%s = %v, want %v (%s)", c.field, c.got, c.want, want.SM)
+				}
+			}
+			if err := a.Event().Validate(); err != nil {
+				t.Errorf("the anchor isn't a valid event.Anchor: %v", err)
 			}
 		})
-		for _, want := range f.Anchors.Turns {
-			name := fmt.Sprintf("%s turn submitted at %s has SM's times, origin and class", f.Name, want.LocalSubmit)
-			t.Run(name, func(t *testing.T) {
-				tu, ok := byKey[[2]string{want.SessionKey, want.TurnKey}]
-				if !ok {
-					t.Fatalf("no turn %s in session %s", want.TurnKey, want.SessionKey)
-				}
-				if tu.TSubmit != want.TSubmit || tu.TStop != want.TStop {
-					t.Errorf("turn runs %d to %d, want %d to %d", tu.TSubmit, tu.TStop, want.TSubmit, want.TStop)
-				}
-				if tu.Origin != want.Origin || tu.PromptClass != want.PromptClass {
-					t.Errorf("origin %q, class %q; want %q, %q (%s)", tu.Origin, tu.PromptClass, want.Origin, want.PromptClass, want.SM)
-				}
-				if err := tu.Event().Validate(); err != nil {
-					t.Errorf("the turn isn't a valid event.Turn: %v", err)
-				}
-			})
+	}
+}
+
+// checkTurns compares the turns the scorer derived for a fixture with its
+// anchors.json.
+func checkTurns(t *testing.T, f *timelines.Fixture, got Derived) {
+	t.Helper()
+	byKey := map[[2]string]Turn{}
+	for _, tu := range got.Turns {
+		byKey[[2]string{tu.SessionKey, tu.TurnKey}] = tu
+	}
+	t.Run(f.Name+" yields the turns its oracle describes and no others", func(t *testing.T) {
+		if len(got.Turns) != len(f.Anchors.Turns) {
+			t.Errorf("%d turns, want %d", len(got.Turns), len(f.Anchors.Turns))
 		}
+	})
+	for _, want := range f.Anchors.Turns {
+		name := fmt.Sprintf("%s turn submitted at %s has the oracle's times, origin and class", f.Name, want.LocalSubmit)
+		t.Run(name, func(t *testing.T) {
+			tu, ok := byKey[[2]string{want.SessionKey, want.TurnKey}]
+			if !ok {
+				t.Fatalf("no turn %s in session %s", want.TurnKey, want.SessionKey)
+			}
+			if tu.TSubmit != want.TSubmit || tu.TStop != want.TStop {
+				t.Errorf("turn runs %d to %d, want %d to %d", tu.TSubmit, tu.TStop, want.TSubmit, want.TStop)
+			}
+			if tu.Origin != want.Origin || tu.PromptClass != want.PromptClass {
+				t.Errorf("origin %q, class %q; want %q, %q (%s)", tu.Origin, tu.PromptClass, want.Origin, want.PromptClass, want.SM)
+			}
+			if err := tu.Event().Validate(); err != nil {
+				t.Errorf("the turn isn't a valid event.Turn: %v", err)
+			}
+		})
 	}
 }
 

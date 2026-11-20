@@ -150,7 +150,7 @@ func TestTrackGate(t *testing.T) {
 					continue
 				}
 				if a.Level != w.level || a.Kind != w.kind || a.LeadMS != w.lead*1000 || !a.TypingNeedsKeys ||
-					!slices.Equal(a.Labels, []event.Label{event.LabelViaTrack}) || a.Origin != event.OriginHumanTyped {
+					!slices.Equal(a.Labels, []event.Label{event.LabelViaTrack}) || a.Origin != "" {
 					t.Errorf("call %d: anchor %+v, want level %s kind %s lead %d s, typing needing keys, via_track", i, a, w.level, w.kind, w.lead)
 				}
 			}

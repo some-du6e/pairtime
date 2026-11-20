@@ -57,19 +57,22 @@ func trackCmp(a, b TrackCall) int {
 //
 // From a session pairtime sees through hooks or a log reader, the
 // session's own prompt is the anchor. A call within TRACK_DEDUPE_S of one
-// of its hook or log prompts is track_matched. One with no such prompt
-// within TRACK_LOG_MATCH_S raises track_without_prompt. DESIGN 5.4's two
-// windows overlap: a call 10 to 30 s from a prompt is both near enough to
-// match and too far for the flag's window. It is track_matched, not
-// flagged, because an agent following the entry calls track alongside its
-// first tool call, which can come that late after the prompt
-// (docs/errata/2026-11-19-track-windows.md).
+// of its hook or log prompts is track_matched, and one with no such prompt
+// within TRACK_DEDUPE_S raises track_without_prompt. DESIGN 5.4 gives the
+// flag TRACK_LOG_MATCH_S, so a call 10 to 30 s from a prompt would be both
+// matched and flagged; this follows the single window that
+// docs/errata/2026-11-19-track-match-windows.md proposes to Karim, since an
+// agent following the entry calls track alongside its first tool call,
+// which can come that late. TRACK_LOG_MATCH_S keeps its job in DESIGN 5.2,
+// where a log record takes over from a side-door prompt.
 //
 // From any other session the call is the fallback anchor, opened only
 // when the gate's four conditions hold. It is classed like a prompt from
-// its length and, on the device, its text; its typing part needs key
-// presses; it is level C with via_track, or A with key presses in the host
-// window in the KEYS_PRE_S before it.
+// its length and, on the device, its text, but has no origin: the four
+// conditions take the place of SM 2.2's origin rules, which are for
+// prompt.submit. Its typing part needs key presses, and it is level C with
+// via_track, or A with key presses in the host window in the KEYS_PRE_S
+// before it.
 func (d *deriver) trackCalls() {
 	lastAnchor := map[string]int64{}
 	for i, e := range d.recs {
@@ -83,13 +86,9 @@ func (d *deriver) trackCalls() {
 		switch {
 		case seen && s.nativePromptNear(e.T, d.r.trackDedupe):
 			c.Outcome = TrackMatched
-		case seen && !s.nativePromptNear(e.T, d.r.trackLogMatch):
+		case seen:
 			c.Outcome = TrackWithoutPrompt
 			d.flag(FlagTrackWithoutPrompt, e)
-		case seen:
-			// Near a prompt by TRACK_LOG_MATCH_S though not by
-			// TRACK_DEDUPE_S, which v1's values rule out.
-			c.Outcome = TrackMatched
 		default:
 			c.Outcome, c.Failed = d.trackGate(i, e, p, s, lastAnchor)
 		}
@@ -128,8 +127,7 @@ func (d *deriver) trackGate(i int, e event.Event, p *event.CLITrack, s *session,
 	if project == "" {
 		project = s.project
 	}
-	a := Anchor{ID: e.EventID, T: e.T, ProjectKey: project, SessionKey: s.key, Origin: event.OriginHumanTyped,
-		PromptClass: class, LeadMS: think + typing, TypingMS: typing, TypingNeedsKeys: true, TrailFrom: e.T,
+	a := Anchor{ID: e.EventID, T: e.T, ProjectKey: project, SessionKey: s.key, PromptClass: class, LeadMS: think + typing, TypingMS: typing, TypingNeedsKeys: true, TrailFrom: e.T,
 		Via: e.Via}
 	a.Kind, a.Reason = promptKind(class)
 	d.level(&a, e.T-d.r.keysPre, e.T, host)
