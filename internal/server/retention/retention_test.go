@@ -326,7 +326,7 @@ func TestDeleteSQL(t *testing.T) {
 			wantSQL: "DELETE FROM witness_rows WHERE (device_id, b) IN (SELECT t.device_id, t.b FROM witness_rows t WHERE t.received_at_ms <= $1" +
 				" AND NOT EXISTS (SELECT 1 FROM submission_batches h WHERE h.device_id = t.device_id AND h.b = t.b" +
 				" AND (h.decided_at_ms IS NULL OR h.decided_at_ms > $3)) LIMIT $2)",
-			wantArgs: []any{now.Add(-180 * day).UnixMilli(), 500, now.AddDate(0, -12, 0).UnixMilli()},
+			wantArgs: []any{now.Add(-180 * day).UnixMilli(), 500, time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC).UnixMilli()},
 		},
 	}
 	for _, tt := range tests {
@@ -342,47 +342,133 @@ func TestDeleteSQL(t *testing.T) {
 	}
 }
 
+// utc is a UTC time to the minute, for writing test dates as literals.
+func utc(y int, m time.Month, d, h, min int) time.Time {
+	return time.Date(y, m, d, h, min, 0, 0, time.UTC)
+}
+
+// TestWindow checks when a spot-check window closes, and that the hold
+// cutoff the jobs compute is its inverse, with dates written out rather
+// than computed the way the code computes them.
+func TestWindow(t *testing.T) {
+	ms := time.Millisecond
+	closes := []struct {
+		name    string
+		months  int
+		decided time.Time
+		want    time.Time
+	}{
+		{name: "a window closes the same day and time, months later", months: 12, decided: utc(2026, 7, 1, 12, 0), want: utc(2027, 7, 1, 12, 0)},
+		{name: "a window into a shorter month stays open to its end", months: 1, decided: utc(2027, 3, 31, 10, 0), want: utc(2027, 5, 1, 0, 0)},
+		{name: "a window from a leap day closes as March starts", months: 12, decided: utc(2028, 2, 29, 6, 0), want: utc(2029, 3, 1, 0, 0)},
+		{name: "a window counts months in UTC, whatever zone the decision is in", months: 12, decided: time.Date(2026, 7, 1, 7, 0, 0, 0, time.FixedZone("UTC-5", -5*3600)), want: utc(2027, 7, 1, 12, 0)},
+	}
+	for _, tt := range closes {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := (Window{Months: tt.months}).Closes(tt.decided); !got.Equal(tt.want) {
+				t.Errorf("Closes(%v) = %v, want %v", tt.decided, got, tt.want)
+			}
+		})
+	}
+	cutoffs := []struct {
+		name   string
+		months int
+		now    time.Time
+		want   time.Time
+	}{
+		{name: "the cutoff is months before now when that date exists", months: 12, now: utc(2027, 7, 1, 12, 0), want: utc(2026, 7, 1, 12, 0)},
+		{name: "on 2028-02-29 every decision of February 2027 has closed and none of 1 March", months: 12, now: utc(2028, 2, 29, 6, 0), want: utc(2027, 3, 1, 0, 0).Add(-ms)},
+		{name: "18 months before 2028-08-29 is past February 2027 too", months: 18, now: utc(2028, 8, 29, 6, 0), want: utc(2027, 3, 1, 0, 0).Add(-ms)},
+		{name: "one month before 31 March is the end of February", months: 1, now: utc(2027, 3, 31, 10, 0), want: utc(2027, 3, 1, 0, 0).Add(-ms)},
+		{name: "the cutoff counts in UTC, whatever zone the clock is in", months: 12, now: time.Date(2027, 7, 1, 7, 0, 0, 0, time.FixedZone("UTC-5", -5*3600)), want: utc(2026, 7, 1, 12, 0)},
+	}
+	for _, tt := range cutoffs {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := lastClosed(tt.now, tt.months); !got.Equal(tt.want) {
+				t.Errorf("lastClosed(%v, %d) = %v, want %v", tt.now, tt.months, got, tt.want)
+			}
+		})
+	}
+	t.Run("a hold is released exactly when its window closes, every six hours for two years", func(t *testing.T) {
+		// Closes never decreases as the decision gets later, so the
+		// boundary decides it: the cutoff's own window has closed, and the
+		// window of a decision a millisecond later hasn't.
+		for _, months := range []int{1, 12, 18} {
+			w := Window{Months: months}
+			for now := utc(2027, 1, 1, 0, 0); now.Before(utc(2029, 1, 1, 0, 0)); now = now.Add(6 * time.Hour) {
+				cut := lastClosed(now, months)
+				if c := w.Closes(cut); c.After(now) {
+					t.Fatalf("%d months, now %v: the cutoff %v closes at %v, after now, so its hold is released early", months, now, cut, c)
+				}
+				if c := w.Closes(cut.Add(ms)); !c.After(now) {
+					t.Fatalf("%d months, now %v: a decision at %v closed at %v, but its hold stays", months, now, cut.Add(ms), c)
+				}
+			}
+		}
+	})
+}
+
 // TestSweep runs the four server jobs under a fake clock against tables
 // shaped as their bindings say, on SQLite and, in postgres.yml, Postgres.
-// The ages are written from DESIGN 4.4 here rather than read from the
-// schedule, so with TestDesignPeriods it checks that the jobs delete
-// exactly DESIGN 4.4's rows.
+// The ages and dates are written from DESIGN 4.4 here rather than read
+// from the schedule, so with TestDesignPeriods it checks that the jobs
+// delete exactly DESIGN 4.4's rows. Each sweep runs on a database of its
+// own.
 func TestSweep(t *testing.T) {
 	p, err := Default()
 	if err != nil {
 		t.Fatal(err)
 	}
-	now := time.Date(2027, 7, 1, 12, 0, 0, 0, time.UTC)
-	monthsAgo := func(m int) time.Time { return now.AddDate(0, -m, 0) }
 	type hold struct {
 		open    bool      // the submission isn't decided
 		decided time.Time // when it was decided, unless open
 		other   bool      // the hold names a different row
 	}
-	cases := []struct {
+	type sweepCase struct {
 		name string
 		job  string
-		age  time.Duration // how long before now the row's time is
+		age  time.Duration // how long before the sweep the row's time is
 		null bool          // the row's time is NULL
 		hold *hold
 		kept bool
+	}
+	sweeps := []struct {
+		name  string
+		at    time.Time
+		cases []sweepCase
 	}{
-		{name: "an IP seen 30 days ago is deleted", job: "server.ip_ja4", age: 30 * day},
-		{name: "an IP seen a millisecond less than 30 days ago stays", job: "server.ip_ja4", age: 30*day - time.Millisecond, kept: true},
-		{name: "an IP seen an hour ago stays", job: "server.ip_ja4", age: time.Hour, kept: true},
-		{name: "an IP seen a year ago is deleted", job: "server.ip_ja4", age: 365 * day},
-		{name: "a minute bucket 180 days old loses its per-minute row", job: "server.minute_buckets", age: 180 * day},
-		{name: "a minute bucket a minute younger than 180 days keeps its row", job: "server.minute_buckets", age: 180*day - time.Minute, kept: true},
-		{name: "a device removed 90 days ago is deleted", job: "server.devices", age: 90 * day},
-		{name: "a device removed 89 days ago stays", job: "server.devices", age: 89 * day, kept: true},
-		{name: "a device that was never removed stays", job: "server.devices", null: true, kept: true},
-		{name: "a witness row received 180 days ago is deleted", job: "server.witness", age: 180 * day},
-		{name: "a witness row received 179 days ago stays", job: "server.witness", age: 179 * day, kept: true},
-		{name: "an old witness row an open submission uses stays", job: "server.witness", age: 400 * day, hold: &hold{open: true}, kept: true},
-		{name: "an old witness row stays 11 months after its submission's decision", job: "server.witness", age: 400 * day, hold: &hold{decided: monthsAgo(11)}, kept: true},
-		{name: "an old witness row stays a minute before the spot-check window closes", job: "server.witness", age: 400 * day, hold: &hold{decided: monthsAgo(12).Add(time.Minute)}, kept: true},
-		{name: "an old witness row is deleted when the window closes, 12 months after the decision", job: "server.witness", age: 400 * day, hold: &hold{decided: monthsAgo(12)}},
-		{name: "a hold on a different batch keeps nothing", job: "server.witness", age: 400 * day, hold: &hold{open: true, other: true}},
+		{
+			name: "a sweep on 2027-07-01",
+			at:   utc(2027, 7, 1, 12, 0),
+			cases: []sweepCase{
+				{name: "an IP seen 30 days ago is deleted", job: "server.ip_ja4", age: 30 * day},
+				{name: "an IP seen a millisecond less than 30 days ago stays", job: "server.ip_ja4", age: 30*day - time.Millisecond, kept: true},
+				{name: "an IP seen an hour ago stays", job: "server.ip_ja4", age: time.Hour, kept: true},
+				{name: "an IP seen a year ago is deleted", job: "server.ip_ja4", age: 365 * day},
+				{name: "a minute bucket 180 days old loses its per-minute row", job: "server.minute_buckets", age: 180 * day},
+				{name: "a minute bucket a minute younger than 180 days keeps its row", job: "server.minute_buckets", age: 180*day - time.Minute, kept: true},
+				{name: "a device removed 90 days ago is deleted", job: "server.devices", age: 90 * day},
+				{name: "a device removed 89 days ago stays", job: "server.devices", age: 89 * day, kept: true},
+				{name: "a device that was never removed stays", job: "server.devices", null: true, kept: true},
+				{name: "a witness row received 180 days ago is deleted", job: "server.witness", age: 180 * day},
+				{name: "a witness row received 179 days ago stays", job: "server.witness", age: 179 * day, kept: true},
+				{name: "an old witness row an open submission uses stays", job: "server.witness", age: 400 * day, hold: &hold{open: true}, kept: true},
+				{name: "an old witness row stays 11 months after its submission's decision", job: "server.witness", age: 400 * day, hold: &hold{decided: utc(2026, 8, 1, 12, 0)}, kept: true},
+				{name: "an old witness row stays a minute before the spot-check window closes", job: "server.witness", age: 400 * day, hold: &hold{decided: utc(2026, 7, 1, 12, 1)}, kept: true},
+				{name: "an old witness row is deleted when the window closes, 12 months after the decision", job: "server.witness", age: 400 * day, hold: &hold{decided: utc(2026, 7, 1, 12, 0)}},
+				{name: "a hold on a different batch keeps nothing", job: "server.witness", age: 400 * day, hold: &hold{open: true, other: true}},
+			},
+		},
+		{
+			name: "a sweep on 2028-02-29, a date February 2027 lacks",
+			at:   utc(2028, 2, 29, 6, 0),
+			cases: []sweepCase{
+				{name: "a decision on 2027-02-28, whose window closed on 2028-02-28, holds nothing", job: "server.witness", age: 400 * day, hold: &hold{decided: utc(2027, 2, 28, 6, 0)}},
+				{name: "a decision in the last minute of 2027-02-28 holds nothing", job: "server.witness", age: 400 * day, hold: &hold{decided: utc(2027, 2, 28, 23, 59)}},
+				{name: "a decision at midnight starting 2027-03-01 still holds its row", job: "server.witness", age: 400 * day, hold: &hold{decided: utc(2027, 3, 1, 0, 0)}, kept: true},
+				{name: "a decision on 2027-03-01, whose window closes on 2028-03-01, still holds its row", job: "server.witness", age: 400 * day, hold: &hold{decided: utc(2027, 3, 1, 6, 0)}, kept: true},
+			},
+		},
 	}
 
 	jobs := p.AllJobs()
@@ -390,74 +476,77 @@ func TestSweep(t *testing.T) {
 	for _, j := range jobs {
 		byID[j.ID] = j
 	}
-	wantDeleted := make(map[string]int64)
-	for _, c := range cases {
-		if _, ok := byID[c.job]; !ok {
-			t.Fatalf("%s: docs/retention.json has no job %s", c.name, c.job)
-		}
-		if !c.kept {
-			wantDeleted[c.job]++
+	for _, sw := range sweeps {
+		for _, c := range sw.cases {
+			if _, ok := byID[c.job]; !ok {
+				t.Fatalf("%s: docs/retention.json has no job %s", c.name, c.job)
+			}
 		}
 	}
 
 	for _, engine := range storetest.Engines() {
 		t.Run(string(engine), func(t *testing.T) {
-			ctx := context.Background()
-			db := storetest.Open(t, engine)
-			createTables(t, db, jobs)
-			for i, c := range cases {
-				j := byID[c.job]
-				var at any
-				if !c.null {
-					at = now.Add(-c.age).UnixMilli()
-				}
-				cols, vals := rowValues(j, i, at)
-				insert(t, db, j.Table, cols, vals)
-				if h := c.hold; h != nil {
-					hi := i
-					if h.other {
-						hi = 1000 + i
+			for _, sw := range sweeps {
+				t.Run(sw.name, func(t *testing.T) {
+					ctx := context.Background()
+					db := storetest.Open(t, engine)
+					createTables(t, db, jobs)
+					wantDeleted := make(map[string]int64)
+					rowTime := func(c sweepCase) any {
+						if c.null {
+							return nil
+						}
+						return sw.at.Add(-c.age).UnixMilli()
 					}
-					hcols, hvals := keyValues(j, hi, at)
-					var decided any
-					if !h.open {
-						decided = h.decided.UnixMilli()
+					for i, c := range sw.cases {
+						j := byID[c.job]
+						if !c.kept {
+							wantDeleted[c.job]++
+						}
+						cols, vals := rowValues(j, i, rowTime(c))
+						insert(t, db, j.Table, cols, vals)
+						if h := c.hold; h != nil {
+							hi := i
+							if h.other {
+								hi = 1000 + i
+							}
+							hcols, hvals := keyValues(j, hi, rowTime(c))
+							var decided any
+							if !h.open {
+								decided = h.decided.UnixMilli()
+							}
+							insert(t, db, j.Hold.Table, append(hcols, j.Hold.DecidedColumn), append(hvals, decided))
+						}
 					}
-					insert(t, db, j.Hold.Table, append(hcols, j.Hold.DecidedColumn), append(hvals, decided))
-				}
-			}
 
-			w := writer.Start(db.Write, writer.Options{})
-			// A batch of 2 makes the jobs that delete two rows or more
-			// loop.
-			results := Sweep(ctx, w, jobs, now, 2)
-			again := Sweep(ctx, w, jobs, now, 2)
-			w.Close()
+					w := writer.Start(db.Write, writer.Options{})
+					// A batch of 2 makes the jobs that delete two rows or
+					// more loop.
+					results := Sweep(ctx, w, jobs, sw.at, 2)
+					again := Sweep(ctx, w, jobs, sw.at, 2)
+					w.Close()
 
-			if len(results) != len(jobs) {
-				t.Fatalf("Sweep returned %d results for %d jobs", len(results), len(jobs))
-			}
-			for _, r := range results {
-				if r.Err != nil {
-					t.Errorf("%s: %v", r.ID, r.Err)
-				} else if r.Deleted != wantDeleted[r.ID] {
-					t.Errorf("%s deleted %d rows, want %d", r.ID, r.Deleted, wantDeleted[r.ID])
-				}
-			}
-			for _, r := range again {
-				if r.Err != nil || r.Deleted != 0 {
-					t.Errorf("a second sweep at the same time: %s deleted %d rows (error %v), want 0", r.ID, r.Deleted, r.Err)
-				}
-			}
-			for i, c := range cases {
-				t.Run(c.name, func(t *testing.T) {
-					j := byID[c.job]
-					var at any
-					if !c.null {
-						at = now.Add(-c.age).UnixMilli()
+					if len(results) != len(jobs) {
+						t.Fatalf("Sweep returned %d results for %d jobs", len(results), len(jobs))
 					}
-					if got := exists(t, db, j, i, at); got != c.kept {
-						t.Errorf("row kept = %v, want %v", got, c.kept)
+					for _, r := range results {
+						if r.Err != nil {
+							t.Errorf("%s: %v", r.ID, r.Err)
+						} else if r.Deleted != wantDeleted[r.ID] {
+							t.Errorf("%s deleted %d rows, want %d", r.ID, r.Deleted, wantDeleted[r.ID])
+						}
+					}
+					for _, r := range again {
+						if r.Err != nil || r.Deleted != 0 {
+							t.Errorf("a second sweep at the same time: %s deleted %d rows (error %v), want 0", r.ID, r.Deleted, r.Err)
+						}
+					}
+					for i, c := range sw.cases {
+						t.Run(c.name, func(t *testing.T) {
+							if got := exists(t, db, byID[c.job], i, rowTime(c)); got != c.kept {
+								t.Errorf("row kept = %v, want %v", got, c.kept)
+							}
+						})
 					}
 				})
 			}

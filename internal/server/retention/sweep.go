@@ -143,8 +143,8 @@ func Sweep(ctx context.Context, d Doer, jobs []Job, now time.Time, batch int) []
 // deleteSQL is one batch's DELETE and its arguments, in the portable SQL of
 // package store. A row whose time is at or before now minus MaxAge is past
 // its period. A hold keeps its row while the hold's decision time is NULL,
-// because the submission is open, or later than now minus the window,
-// because the window closes when the decision is that old.
+// because the submission is open, or later than lastClosed, because the
+// decision's spot-check window is still open (Window.Closes).
 func (j Job) deleteSQL(now time.Time, batch int) (string, []any) {
 	col := func(alias string, cols []string) []string {
 		out := make([]string, len(cols))
@@ -170,7 +170,7 @@ func (j Job) deleteSQL(now time.Time, batch int) (string, []any) {
 		decided := "h." + h.DecidedColumn
 		b.WriteString(" AND NOT EXISTS (SELECT 1 FROM " + h.Table + " h WHERE " + strings.Join(match, " AND ") +
 			" AND (" + decided + " IS NULL OR " + decided + " > $3))")
-		args = append(args, now.AddDate(0, -h.WindowMonths, 0).UnixMilli())
+		args = append(args, lastClosed(now, h.WindowMonths).UnixMilli())
 	}
 	b.WriteString(" LIMIT $2)")
 	return b.String(), args

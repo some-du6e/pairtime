@@ -43,6 +43,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/some-du6e/pairtime/docs"
 )
@@ -319,6 +320,39 @@ func Days(n int) string {
 		return "1 day"
 	}
 	return fmt.Sprintf("%d days", n)
+}
+
+// Closes returns when the spot-check window of a decision made at decided
+// closes: Months calendar months later, in UTC. When that month lacks the
+// day, as one month after 31 March does, the window stays open to the end
+// of the month and closes as the next month starts. The evidence store
+// uses the same rule.
+func (w Window) Closes(decided time.Time) time.Time {
+	d := decided.UTC()
+	c := d.AddDate(0, w.Months, 0)
+	if c.Day() != d.Day() {
+		// AddDate rolled an impossible date, such as 31 April, into the
+		// next month.
+		c = time.Date(c.Year(), c.Month(), 1, 0, 0, 0, 0, time.UTC)
+	}
+	return c
+}
+
+// lastClosed returns the latest decision time, to the millisecond, whose
+// window of months has closed by now, as Window.Closes counts it. A hold
+// keeps its row while its decision is later. Subtracting months from now
+// isn't the inverse of Closes, because AddDate rolls an impossible date
+// into the next month: 29 February 2028 less 12 months is 1 March 2027,
+// which would release decisions of 1 March 2027 a day early.
+func lastClosed(now time.Time, months int) time.Time {
+	n := now.UTC()
+	c := n.AddDate(0, -months, 0)
+	if c.Day() != n.Day() {
+		// No date months back has n's day, so every decision of the
+		// shorter month has closed, and none of the next.
+		c = time.Date(c.Year(), c.Month(), 1, 0, 0, 0, 0, time.UTC).Add(-time.Millisecond)
+	}
+	return c
 }
 
 // String says the window in plain words, such as "12 months after the
