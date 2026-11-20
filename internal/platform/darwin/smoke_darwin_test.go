@@ -5,6 +5,7 @@ package darwin
 import (
 	"context"
 	"fmt"
+	"math"
 	"os"
 	"slices"
 	"strings"
@@ -25,13 +26,24 @@ import (
 // runners are slow, not that slow.
 const wait = 10 * time.Second
 
+// hidLagS is how far, in seconds, IOKit's HIDIdleTime may stray from
+// CoreGraphics' any-input idle time. On an idle runner the two agree to a
+// few milliseconds, but HIDIdleTime can miss a posted event. In platform.yml
+// run 44656311435, the second key TestFindingKeyDownIdle posted, 1.5 s
+// after its first, reset CoreGraphics' time and left HIDIdleTime counting
+// from the first key (own_process_run.reader.after in
+// macos-key-down-idle.json). That test posts its two keys about quietS
+// apart, so twice quietS allows for the miss and still fails a time that is
+// finite but wrong by more.
+const hidLagS = 2 * quietS
+
 func TestPresenceOnMac(t *testing.T) {
 	tests := []struct {
 		name  string
 		check func(t *testing.T)
 	}{
 		{
-			name: "Presence returns an any-input idle time that passes pkg/event's rules",
+			name: "Presence returns any-input and key-down idle times that pass pkg/event's rules",
 			check: func(t *testing.T) {
 				p, err := Presence()
 				if err != nil {
@@ -40,15 +52,41 @@ func TestPresenceOnMac(t *testing.T) {
 				if err := p.Validate(); err != nil {
 					t.Fatalf("sample %+v breaks pkg/event's rules: %v", p, err)
 				}
+				// CoreGraphics answers on macos-latest, so a sample without
+				// idle_keys_s fell back to HIDIdleTime or got an invalid
+				// key-down time.
+				if p.IdleKeysS == nil {
+					t.Errorf("sample %+v has a null idle_keys_s; CoreGraphics should give both times", p)
+				}
 			},
 		},
 		{
-			name: "CoreGraphics loads and answers for both event types",
+			name: "CoreGraphics gives a finite idle time that isn't negative for both event types",
 			check: func(t *testing.T) {
 				for _, typ := range []uint32{cgAnyInput, cgKeyDown} {
-					if _, ok := (macPresence{}).cgIdle(typ); !ok {
+					v, ok := (macPresence{}).cgIdle(typ)
+					switch {
+					case !ok:
 						t.Errorf("cgIdle(%#x): CoreGraphics didn't load: %v", typ, cg.err)
+					case !validIdle(v):
+						t.Errorf("cgIdle(%#x) = %v; want a finite time >= 0", typ, v)
 					}
+				}
+			},
+		},
+		{
+			name: "CoreGraphics' any-input idle time agrees with IOKit's HIDIdleTime, allowing for HIDIdleTime's lag",
+			check: func(t *testing.T) {
+				cgS, ok := (macPresence{}).cgIdle(cgAnyInput)
+				if !ok || !validIdle(cgS) {
+					t.Fatalf("cgIdle(any input) = %v, %v; want a valid idle time", cgS, ok)
+				}
+				ns, ok := (macPresence{}).hidIdle()
+				if !ok {
+					t.Fatal("hidIdle() gave no time")
+				}
+				if hidS := float64(ns) / 1e9; math.Abs(cgS-hidS) > hidLagS {
+					t.Errorf("CoreGraphics says %.3f s since any input and HIDIdleTime %.3f s; want them within %v s", cgS, hidS, hidLagS)
 				}
 			},
 		},
@@ -256,11 +294,11 @@ func activationTarget(t *testing.T) (uintptr, App) {
 	return 0, App{}
 }
 
-// deliverActivation hands the observer's method the
-// NSWorkspaceDidActivateApplicationNotification NSWorkspace would send if
-// the app activationTarget picks came to the front, the way NSWorkspace's
-// notification center calls it, and returns that app. No app's focus
-// changes.
+// deliverActivation calls the observer's method directly with the
+// NSWorkspaceDidActivateApplicationNotification NSWorkspace would post if
+// the app activationTarget picks came to the front, and returns that app.
+// It skips NSWorkspace's notification center, which postActivation goes
+// through. No app's focus changes.
 func deliverActivation(t *testing.T, b *macBackend) App {
 	t.Helper()
 	if err := loadTestObjC(); err != nil {
@@ -285,18 +323,24 @@ func deliverActivation(t *testing.T, b *macBackend) App {
 }
 
 // postActivation posts that same notification to NSWorkspace's
-// notification center, for TestFindingRunLoop.
-func postActivation(t *testing.T) {
+// notification center, which hands it to every observer of the name, and
+// returns the app it names. The post goes through the registration that
+// openFocus makes, so it checks the center, the name and the selector as
+// well as the observer's method. No app's focus changes.
+func postActivation(t *testing.T) App {
 	t.Helper()
 	if err := loadTestObjC(); err != nil {
 		t.Fatal(err)
 	}
+	var want App
 	withPool(func() {
 		ws := objc.send(objc.clsNSWorkspace, objc.selSharedWorkspace)
 		nc := objc.send(ws, objc.selNotificationCenter)
-		ra, _ := activationTarget(t)
+		ra, app := activationTarget(t)
+		want = app
 		testObjC.send3(nc, testObjC.selPostNotification, objc.didActivateName, ws, activationInfo(ra))
 	})
+	return want
 }
 
 // postDistributed posts a distributed notification, as loginwindow posts
@@ -332,10 +376,13 @@ func TestLoopOnMac(t *testing.T) {
 			},
 		},
 		{
-			name:       "the observer's method turns a synthetic activation of this process into its App",
+			name:       "on the main thread an activation posted to NSWorkspace's notification center reaches the handler as the named app",
 			mainThread: true,
 			run: func(t *testing.T, l *Loop, b *macBackend, rec *macRecorder) {
-				want := deliverActivation(t, b)
+				if b.observer == 0 {
+					t.Fatalf("the Loop has no NSWorkspace observer: %v", l.Status().Focus)
+				}
+				want := postActivation(t)
 				if got := rec.waitFocus(t, want.PID); got != want {
 					t.Errorf("Focus(%+v), want Focus(%+v)", got, want)
 				}
@@ -373,7 +420,7 @@ func TestLoopOnMac(t *testing.T) {
 			},
 		},
 		{
-			name:       "off the main thread IOKit still registers, Status says where the Loop runs, and the observer still turns an activation into an App",
+			name:       "off the main thread IOKit still registers, Status says where the Loop runs, and the observer's method, called directly, still turns an activation into an App",
 			mainThread: false,
 			run: func(t *testing.T, l *Loop, b *macBackend, rec *macRecorder) {
 				st := l.Status()
@@ -408,3 +455,38 @@ func TestLoopOnMac(t *testing.T) {
 // testPowerIDs are the notification ids the tests' synthetic IOKit
 // messages carry.
 var testPowerIDs = map[uintptr]bool{42: true, 43: true}
+
+// TestAppKitConstantsOnMac pins the two AppKit constants the NSWorkspace
+// observer reads to Apple's names. The synthetic activations are built from
+// the same values the Loop registers and reads, so they would still pass if
+// a binding read the wrong symbol; these cases wouldn't.
+func TestAppKitConstantsOnMac(t *testing.T) {
+	tests := []struct {
+		name string
+		str  *uintptr // an NSString bound by loadObjC
+		want string
+	}{
+		{
+			name: "the notification the observer registers for is NSWorkspaceDidActivateApplicationNotification",
+			str:  &objc.didActivateName,
+			want: "NSWorkspaceDidActivateApplicationNotification",
+		},
+		{
+			name: "the userInfo key the observer reads the app from is NSWorkspaceApplicationKey",
+			str:  &objc.applicationKey,
+			want: "NSWorkspaceApplicationKey",
+		},
+	}
+	if err := loadObjC(); err != nil {
+		t.Fatal(err)
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var got string
+			withPool(func() { got = nsString(*tt.str) })
+			if got != tt.want {
+				t.Errorf("the constant reads %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
