@@ -550,13 +550,20 @@ PASTE_CLOSE_RE = re.compile(r"</pasted_content(?: [^>]*)?>")
 # and trailing whitespace removed. ASCII classes only; nothing here needs
 # lookaround or backreferences, so Go's regexp runs the same patterns.
 ERROR_LINE_RES = tuple(re.compile(p) for p in (
-    r"(?:Uncaught )?(?:[A-Za-z_$][A-Za-z0-9_$]*\.)*[A-Za-z0-9_$]*(?:Error|Exception)(?::.*)?",
+    r"(?:Uncaught (?:\(in promise\) )?|Exception in thread \"[^\"]*\" |Caused by: )?"
+    r"(?:[A-Za-z_$][A-Za-z0-9_$]*\.)*[A-Za-z0-9_$]*(?:Error|Exception)(?::.*)?",
     r"error\[E[0-9]{4}\](?::.*)?",
     r"[^ \t]+:[0-9]+:[0-9]+: (?:fatal )?error:.*",
     r"FAILED .+",
     r"--- FAIL: .+",
     r"panic: .+",
 ))
+# R: a compiler's gutter line with its line number at column 0, which rustc
+# writes for the widest line number, as in "2 |     let x: i32 = 1;". It
+# goes with an E2 or E3 line, whose other gutter lines are indented.
+GUTTER_RE = re.compile(r"[0-9]+ +\|.*")
+# G: the first line of a goroutine's stack in a Go panic.
+GOROUTINE_RE = re.compile(r"goroutine [0-9]+ [^\[]*\[[^\]]*\]:")
 
 
 def split_lines(text):
@@ -586,7 +593,15 @@ def closes_fence(line, fence):
 
 
 def is_error_line(s):
-    return any(r.fullmatch(s) is not None for r in ERROR_LINE_RES)
+    return error_pattern(s) is not None
+
+
+def error_pattern(s):
+    """The number, 1 to 6, of the first of E1 to E6 that s matches, or None."""
+    for k, r in enumerate(ERROR_LINE_RES, 1):
+        if r.fullmatch(s) is not None:
+            return k
+    return None
 
 
 def indented(line):
@@ -611,9 +626,23 @@ def removed_lines(lines):
                 i += 1
             i = min(i + 1, len(lines))
         elif s == TRACEBACK or is_error_line(s):
+            k = error_pattern(s)
             i += 1
-            while i < len(lines) and indented(lines[i]):
+            while i < len(lines) and (indented(lines[i]) or k in (2, 3) and GUTTER_RE.fullmatch(lines[i])
+                                      or k == 6 and lines[i].startswith("[signal ")):
                 i += 1
+            while k == 6:
+                # A goroutine block: the blank lines before it, its first
+                # line, then each frame and the tab-indented file line
+                # under it.
+                j = i
+                while j < len(lines) and strip_space(lines[j]) == "":
+                    j += 1
+                if j == len(lines) or GOROUTINE_RE.fullmatch(strip_space(lines[j])) is None:
+                    break
+                i = j + 1
+                while i < len(lines) and (lines[i].startswith("\t") or i + 1 < len(lines) and lines[i + 1].startswith("\t")):
+                    i += 1
         else:
             i += 1
             continue
@@ -2273,12 +2302,34 @@ NORMALIZATION_TEXTS = (
                            "    main()\nValueError: invalid literal for int() with base 10: 'abc'\nany ideas?"),
     ("a JavaScript error and its stack", "TypeError: Cannot read properties of undefined (reading 'map')\n"
                                          "    at App (App.jsx:12:5)\n    at render (react-dom.js:99:1)\nwhy"),
-    ("Rust", "error[E0308]: mismatched types\n --> src/main.rs:4:5\n  |\nhelp me"),
+    # rustc's own output: its gutter puts the widest line number at column 0.
+    ("Rust, as rustc prints it", "error[E0308]: mismatched types\n --> src/main.rs:2:18\n  |\n"
+                                 "2 |     let x: i32 = \"a\";\n  |            ---   ^^^ expected `i32`, found `&str`\n"
+                                 "  |            |\n  |            expected due to this\n\nwhy won't this compile?"),
+    ("Rust with a two-digit line number", "error[E0425]: cannot find value `y` in this scope\n  --> src/lib.rs:12:5\n"
+                                          "   |\n12 |     y + 1\n   |     ^ not found in this scope\n"
+                                          "13 | }\nwhere did y go"),
     ("a C compiler", "main.c:3:5: error: 'x' undeclared (first use in this function)\nwhat now"),
     ("pytest", "FAILED tests/test_api.py::test_login - AssertionError: 401 != 200\nfix it"),
     ("go test", "--- FAIL: TestParse (0.00s)\n    parse_test.go:14: got 3, want 4\nhmm"),
-    ("a Go panic", "panic: runtime error: index out of range [5] with length 3\n\ngoroutine 1 [running]:"),
+    # go run's own output, with the exit status go run adds.
+    ("a Go panic, as go run prints it", "the slice code panics:\n\npanic: runtime error: index out of range [5] with "
+                                       "length 3\n\ngoroutine 1 [running]:\nmain.main()\n\t/home/teen/x/main.go:8 +0x1d\n"
+                                       "exit status 2\nhow do I fix this?"),
+    ("a Go nil dereference: its signal line and two goroutines", "panic: runtime error: invalid memory address or nil "
+                                       "pointer dereference\n[signal SIGSEGV: segmentation violation code=0x1 addr=0x0 "
+                                       "pc=0x47e1b6]\n\ngoroutine 6 [running]:\nmain.worker(0x0)\n"
+                                       "\t/home/teen/x/main.go:14 +0x16\ncreated by main.main in goroutine 1\n"
+                                       "\t/home/teen/x/main.go:9 +0x25\n\ngoroutine 1 [chan receive]:\nmain.main()\n"
+                                       "\t/home/teen/x/main.go:10 +0x3a\nwhy is it nil"),
+    ("a JVM exception with its cause", "Exception in thread \"main\" java.lang.IllegalStateException: boom\n"
+                                      "\tat Main.run(Main.java:7)\n\tat Main.main(Main.java:3)\nCaused by: "
+                                      "java.lang.NumberFormatException: For input string: \"x\"\n"
+                                      "\tat java.base/java.lang.Integer.parseInt(Integer.java:661)\n\t... 1 more\n"
+                                      "what is going on"),
     ("an uncaught browser error", "Uncaught ReferenceError: foo is not defined\nat line 3"),
+    ("an uncaught promise rejection", "Uncaught (in promise) TypeError: Failed to fetch\n"
+                                     "    at loadUser (app.js:12:9)\nthe API is up though"),
     ("the error only inside a fence", "it fails:\n```\nKeyError: 'user_id'\n```\nhelp"),
     ("an error line with CRLF", "still broken\r\nModuleNotFoundError: No module named 'requests'\r\n"),
     ("prose that isn't an error", "the error is that terror and Errors happen, error: none"),
