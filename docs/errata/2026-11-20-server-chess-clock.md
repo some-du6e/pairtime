@@ -1,6 +1,6 @@
 # Erratum: the server can't draw DESIGN 3.8's chess clock, because a tier-1 bucket carries neither agent-only seconds nor the agent's project
 
-Date 2026-11-20. Raised by WP-DB0 (the dashboard wave), from the review of #125. Status: decided 2026-11-20 by the orchestrator for Karim: option 1, so every tier-1 minute bucket carries `agent_only{p: s}`.
+Date 2026-11-20. Raised by WP-DB0 (the dashboard wave), from the review of #125. Status: decided 2026-11-20 by the orchestrator for Karim: option 1 (D-bucket-agent-only). Every tier-1 minute bucket gains `agent_only{p: s}`, the seconds in the minute a turn of each project ran that weren't credited to that project. WP-EV3 adds it to DESIGN 4.3, `pkg/event` and the schema. WP-SC4 fills it, ingest accepts it, the uploader sends it, and the server's chess clock reads it. Until those land, `/demo`'s sample already shows agent-only time per project, and no real dashboard is served.
 
 ## Input
 
@@ -23,9 +23,3 @@ Pick one before the dashboard is the place teens read their week.
 
 1. **Add agent-only seconds by project to the bucket.** Each bucket gets `agent_only{p: s}`: for each project key, the seconds in the minute a turn of that project ran and the second wasn't credited to it. The scorer already counts exactly this for each slot, `score.Credit.AgentOnly`, by project (`pkg/score/credit.go`), so the bucket sums four slots. DESIGN 4.3 and the tier-1 field list change through you (PLAN ground rule 10), then `pkg/event`, ingest's shape check, the uploader and `rollup.Bucket`. The server's chess clock then matches the device's, per project. This is the change I'd make: it is the number SM 2.6 says the chess clock shows, it names the project the agent ran in, and it is a count of seconds per opaque key, so it fits tier 1.
 2. **Keep running time on the server.** DESIGN 3.8 says the server's dashboard shows the agent's running time beside the owner's, overlapping, and the device's coach keeps the agent-only clock. The per-project split stays the slots' share, which is right when the owner works in one project at a time and wrong for an agent running in one project while the owner's attention is in another.
-
-## Decided
-
-Option 1, as decision D-bucket-agent-only. Every tier-1 minute bucket gains `agent_only{p: s}`. For each project key, it holds the seconds in the minute that a turn of that project ran and that weren't credited to that project. That is `pkg/score`'s `Credit.AgentOnly` summed over the minute's slots, the number SM 2.6 and SM 6.3's per-project `agent_only_s` define. Keys are the same keyed project keys as `slots[].p`. Values are seconds in steps of 0.5, from 0 to 60 each. DESIGN 4.3's bucket field list and `pkg/event`'s tier-1 bucket fields list it right after `agent_running_s`. The server's chess clock reads it, so the server and the device show the same clock per project and day.
-
-The orchestrator chose it because it is the number SM 2.6 says the chess clock shows, it names the project the agent ran in, and it is a count of seconds per opaque key, which fits tier 1 and DESIGN 4.3's Never-in-it column. Running time overlaps the owner's time and names no project, so it can't draw DESIGN 3.8's clock.

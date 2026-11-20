@@ -1,0 +1,128 @@
+{{- /* SPDX-License-Identifier: AGPL-3.0-or-later */ -}}
+<h1>{{if .Sample}}Sample dashboard{{else}}Your dashboard{{end}}</h1>
+{{- if .Sample}}
+<div class="sample" role="note">
+<p><strong class="tag">Sample data</strong> These are thirty made-up days of a teen building three projects with {{.Agent}}. No real person&#39;s time is on this page. The project names are made up too, and your own dashboard shows each project by a short code instead, since your project names stay on your computer.</p>
+{{- if and .SignIn .SignupsOpen}}
+<p><a class="button" href="{{.Login}}">Sign in with Hack Club</a> and run <code>pairtime login</code> on your computer, and your own dashboard shows your time the way this one does.</p>
+{{- else if .SignupsOpen}}
+<p>Sign-ups on this server are open, but sign-in isn&#39;t set up on it yet.</p>
+{{- else if .SignIn}}
+<p>Sign-ups are closed for now, and testers join by invitation. Until sign-ups open, this server makes accounts only for the people who run it, and testers use pairtime on their own computers.</p>
+{{- else}}
+<p>Sign-ups are closed for now, and testers join by invitation, using pairtime on their own computers until sign-ups open. Sign-in isn&#39;t set up on this server yet.</p>
+{{- end}}
+</div>
+{{- end}}
+
+<section aria-labelledby="today">
+<h2 id="today">Today <span class="when">{{.Today.Date}}</span></h2>
+<p class="hero"><strong>{{.Today.You}}</strong> of your time</p>
+<p class="lede">{{.Agent}} worked on its own for {{.Today.Agent}}.{{with .Today.YouPending}} {{.}} of your time is still pending.{{end}}</p>
+{{- if .Today.Clocks}}
+<ul class="clocks">
+{{- range .Today.Clocks}}
+<li>
+<p class="clock-name"><span class="key {{.Color}}"></span>{{.Name}}</p>
+<p class="face"><span>You</span> <strong>{{.You}}</strong>{{with .YouPending}} <small>{{.}} pending</small>{{end}}</p>
+<p class="face"><span>{{$.Agent}}</span> <strong>{{.Agent}}</strong>{{with .AgentPending}} <small>{{.}} pending</small>{{end}}</p>
+</li>
+{{- end}}
+</ul>
+<p class="note">Two clocks, not a score. {{.Agent}}&#39;s clock counts the time it worked on a project with none of your time counted there, so the two never run at once, and there&#39;s no right ratio between them.</p>
+{{- else}}
+<p class="note">Nothing counted yet today.</p>
+{{- end}}
+</section>
+
+<section aria-labelledby="week">
+<h2 id="week">Last 7 days</h2>
+<p class="lede"><strong>{{.Week.You}}</strong> of your time. {{.Agent}} worked on its own for {{.Week.Agent}}.</p>
+<div class="chart" aria-hidden="true">
+<div class="yaxis">
+{{- range .Week.Ticks}}<span class="{{.At}}">{{.Label}}</span>{{end -}}
+</div>
+<ol class="bars">
+{{- range .Week.Columns}}
+<li class="col">{{range .Segments}}<span class="seg {{.Class}}" title="{{.Title}}"></span>{{end}}{{with .Total}}<small class="cap">{{.}}</small>{{end}}</li>
+{{- end}}
+</ol>
+<ol class="xaxis">
+{{- range .Week.Columns}}
+<li{{if .Today}} class="today"{{end}}><span>{{.Dow}}</span>{{with .Dom}}<span class="dom">{{.}}</span>{{end}}</li>
+{{- end}}
+</ol>
+</div>
+{{- if .Week.Legend}}
+<ul class="legend">
+{{- range .Week.Legend}}
+<li><span class="key {{.Color}}"></span>{{.Name}}</li>
+{{- end}}
+{{- if .Week.HasPending}}
+<li><span class="key c1 pend"></span>Faded means pending</li>
+{{- end}}
+</ul>
+{{- end}}
+{{- if .Week.HasPending}}
+<p class="note">Pending minutes can still change until your computer sends their final version, usually within 15 minutes, so they stay faded until then.</p>
+{{- end}}
+<details>
+<summary>The last 7 days as a table</summary>
+<div class="table"><table>
+<thead><tr><th>Day</th>{{range .Week.Table.Names}}<th>{{.}}</th>{{end}}<th>Total</th></tr></thead>
+<tbody>
+{{- range .Week.Table.Rows}}
+<tr><td>{{.Day}}</td>{{range .Cells}}<td>{{.}}</td>{{end}}<td>{{.Total}}</td></tr>
+{{- end}}
+</tbody>
+</table></div>
+</details>
+</section>
+
+<section aria-labelledby="projects">
+<h2 id="projects">Projects</h2>
+{{- if .Projects}}
+<div class="table"><table class="projects">
+<thead><tr><th>Project</th><th>Last 7 days</th><th>Last 30 days</th></tr></thead>
+<tbody>
+{{- range .Projects}}
+<tr><td><span class="key {{.Color}}"></span>{{.Name}}</td><td><strong>{{.Week}}</strong> <span class="agent">{{$.Agent}} {{.WeekAgent}}</span></td><td><strong>{{.Month}}</strong> <span class="agent">{{$.Agent}} {{.MonthAgent}}</span></td></tr>
+{{- end}}
+</tbody>
+<tfoot>
+<tr><th>{{.AllProjects.Name}}</th><td><strong>{{.AllProjects.Week}}</strong> <span class="agent">{{.Agent}} {{.AllProjects.WeekAgent}}</span></td><td><strong>{{.AllProjects.Month}}</strong> <span class="agent">{{.Agent}} {{.AllProjects.MonthAgent}}</span></td></tr>
+</tfoot>
+</table></div>
+{{- else}}
+<p class="note">No project has any time in the last 30 days.</p>
+{{- end}}
+</section>
+
+<section aria-labelledby="levels">
+<h2 id="levels">Evidence levels</h2>
+<p class="lede">How closely pairtime can back up your last 7 days. <a href="/docs/evidence">What A, B and C mean</a></p>
+{{- if .Levels.Blocks}}
+<div class="segbar" role="img" aria-label="{{.Levels.Label}}">
+{{- range .Levels.Blocks}}<span class="{{.Class}}" title="{{.Title}}">{{if .Printed}}{{.Share}}{{end}}</span>{{end -}}
+</div>
+{{- end}}
+<ul class="levels">
+{{- range .Levels.Items}}
+<li><span class="key {{.Swatch}}"></span><span><strong>Level {{.Level}}.</strong> {{.Text}}</span><span class="lt">{{.Time}}, {{.Share}}</span></li>
+{{- end}}
+</ul>
+</section>
+
+<section aria-labelledby="kinds">
+<h2 id="kinds">What you spent it on</h2>
+{{- if .Kinds}}
+<p class="lede">Your last 7 days, by the kind of work pairtime counted.</p>
+<ul class="kinds">
+{{- range .Kinds}}
+<li><span class="kname">{{.Name}}</span><span class="track" aria-hidden="true">{{range .Bars}}<span class="bar {{.Class}}" title="{{.Title}}"></span>{{end}}</span><span class="kt">{{.Time}}</span></li>
+{{- end}}
+</ul>
+{{- else}}
+<p class="note">Nothing counted in the last 7 days.</p>
+{{- end}}
+</section>

@@ -13,6 +13,15 @@
 // agent drains the spool later. A message can therefore arrive twice, and
 // the Sink keeps one copy of each id.
 //
+// The CLI may also ask the agent a question (Ask), such as for the last
+// work session that `pairtime recap` prints: a frame with an id and the
+// question's name, which the agent answers in its reply frame through
+// Options.Answer, and never stores. A question goes through the same
+// checks as a message, so asking needs no token, and the answer, which
+// may name the teen's projects, reaches no other user. An agent from
+// before questions reads one as a message without a kind, refuses it and
+// stores nothing.
+//
 // No other user may hand the agent messages or read the ones hooks send:
 //
 //   - The socket lives in a directory only this user can open (0700 on

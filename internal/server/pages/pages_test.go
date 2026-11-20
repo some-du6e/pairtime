@@ -440,6 +440,7 @@ func TestRoutes(t *testing.T) {
 func TestStyleHash(t *testing.T) {
 	s := newSite(t, Options{})
 	_, home := getHome(t, Options{}, signInOn("U0FAKEVERIFIED"))
+	_, demo := getDemo(t, Options{}, signInOn(""))
 	pages := []struct {
 		name string
 		page []byte
@@ -447,6 +448,7 @@ func TestStyleHash(t *testing.T) {
 		{name: "the privacy notice's style matches its CSP hash", page: s.privacy},
 		{name: "the evidence page's style matches its CSP hash", page: s.current},
 		{name: "the home page's style matches its CSP hash, with a form or without", page: []byte(home)},
+		{name: "the sample dashboard's style matches its CSP hash", page: []byte(demo)},
 	}
 	for _, p := range pages {
 		t.Run(p.name, func(t *testing.T) {

@@ -110,6 +110,31 @@ func TestPipe(t *testing.T) {
 			},
 		},
 		{
+			name: "a question over the forced pipe gets its answer, and the sink stores nothing",
+			run: func(t *testing.T, ep Endpoint) {
+				want := json.RawMessage(`{"shadow":true,"session":null}`)
+				a := &answers{by: map[string]json.RawMessage{AskLastSession: want}}
+				_, sink := serve(t, ep, Options{ForcePipe: true, Answer: a.answer}, nil)
+				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cancel()
+				c, err := Dial(ctx, ep)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer c.Close()
+				if c.Via() != inbox.ViaPipe {
+					t.Errorf("the connection is %q, want the pipe", c.Via())
+				}
+				got, err := c.Ask(ctx, AskLastSession)
+				if err != nil || string(got) != string(want) {
+					t.Errorf("Ask = %s, %v; want %s", got, err, want)
+				}
+				if d := sink.deliveries(); len(d) != 0 {
+					t.Errorf("the sink stored %+v", d)
+				}
+			},
+		},
+		{
 			name: "a second agent can't take a pipe that one has already",
 			run: func(t *testing.T, ep Endpoint) {
 				serve(t, ep, Options{ForcePipe: true}, nil)
