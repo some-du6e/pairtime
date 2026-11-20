@@ -142,6 +142,24 @@ func (f *fakeIngest) state(w http.ResponseWriter, r *http.Request) {
 	if !f.auth(w, r) {
 		return
 	}
+	timeS, sigS := r.Header.Get("X-Pairtime-Time"), r.Header.Get("X-Pairtime-Signature")
+	if !decimalForm.MatchString(timeS) {
+		f.refuse(w, 400, "time_malformed")
+		return
+	}
+	if len(sigS) != len("ed25519=")+88 || sigS[:8] != "ed25519=" {
+		f.refuse(w, 400, "signature_malformed")
+		return
+	}
+	if t, _ := strconv.ParseInt(timeS, 10, 64); t-f.now().UnixMilli() > 300_000 || f.now().UnixMilli()-t > 300_000 {
+		f.refuse(w, 401, "clock_skew")
+		return
+	}
+	sig, err := base64.StdEncoding.DecodeString(sigS[8:])
+	if err != nil || !ed25519.Verify(f.devKey, []byte("pairtime-ingest-state-v1\n"+f.device+"\n"+timeS), sig) {
+		f.refuse(w, 401, "signature_invalid")
+		return
+	}
 	var head, start any
 	if f.head != nil {
 		head = map[string]any{"b": f.head.b, "H_b": f.head.head, "received_at": f.head.receivedAt}

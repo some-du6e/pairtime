@@ -22,8 +22,13 @@ const (
 	pathTime    = "/api/v1/time"
 )
 
-// signContext starts the signed message M (DESIGN 4.5; ingest-v1 2.2).
-const signContext = "pairtime-ingest-v1\n"
+// signContext starts the signed message M (DESIGN 4.5; ingest-v1 2.2),
+// and stateContext the state request's M_state (ingest-v1 3), so neither
+// signature passes for the other.
+const (
+	signContext  = "pairtime-ingest-v1\n"
+	stateContext = "pairtime-ingest-state-v1\n"
+)
 
 // Signer signs with the device's Ed25519 key, the one it registered with
 // its token (WP-SV3): RFC 8032's PureEdDSA, what crypto/ed25519.Sign
@@ -53,6 +58,32 @@ func message(deviceID string, req uint64, unixMS int64, bodyHash string) []byte 
 	m = strconv.AppendInt(m, unixMS, 10)
 	m = append(m, '\n')
 	return append(m, bodyHash...)
+}
+
+// stateMessage returns M_state = "pairtime-ingest-state-v1\n" ||
+// device_id || "\n" || time, with time in decimal ASCII (ingest-v1 3).
+func stateMessage(deviceID string, unixMS int64) []byte {
+	m := make([]byte, 0, len(stateContext)+len(deviceID)+1+20)
+	m = append(m, stateContext...)
+	m = append(m, deviceID...)
+	m = append(m, '\n')
+	return strconv.AppendInt(m, unixMS, 10)
+}
+
+// signState signs a state request at unixMS, and returns the
+// X-Pairtime-Signature value.
+func signState(s Signer, deviceID string, unixMS int64) (string, error) {
+	if s == nil {
+		return "", errors.New("uploader: no device key to sign with")
+	}
+	sig, err := s(stateMessage(deviceID, unixMS))
+	if err != nil {
+		return "", fmt.Errorf("uploader: signing the state request: %w", err)
+	}
+	if len(sig) != ed25519.SignatureSize {
+		return "", fmt.Errorf("uploader: an Ed25519 signature is %d bytes, got %d", ed25519.SignatureSize, len(sig))
+	}
+	return "ed25519=" + base64.StdEncoding.EncodeToString(sig), nil
 }
 
 // bodyHash returns hex(SHA-256(raw)), the X-Pairtime-Body-SHA256 value

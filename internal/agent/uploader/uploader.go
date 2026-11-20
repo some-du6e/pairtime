@@ -753,6 +753,11 @@ func labelsDue(l Labels, st saved, started, now time.Time) (bool, error) {
 // server answers as a duplicate with its receipt.
 func (u *Uploader) sync(c Credentials) bool {
 	st, a, err := u.getState(u.ctx, c)
+	if err == nil && a.refusal.Error == refusalClockSkew {
+		// The refusal carried the server's time, which set the offset:
+		// sign again with it.
+		st, a, err = u.getState(u.ctx, c)
+	}
 	switch {
 	case err == nil && a.status == http.StatusOK:
 	case err != nil && a.status == http.StatusOK:

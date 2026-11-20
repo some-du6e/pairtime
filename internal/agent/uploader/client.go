@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -84,8 +85,16 @@ func (u *Uploader) getState(ctx context.Context, c Credentials) (State, answer, 
 	if err != nil {
 		return State{}, answer{}, err
 	}
+	// The device signs it, as it signs an upload (ingest-v1 3).
+	t := u.clock.serverNow().UnixMilli()
+	sig, err := signState(c.Sign, c.DeviceID, t)
+	if err != nil {
+		return State{}, answer{}, err
+	}
 	req.Header.Set("Authorization", "Bearer "+c.Token)
 	req.Header.Set("X-Pairtime-Device", c.DeviceID)
+	req.Header.Set("X-Pairtime-Time", strconv.FormatInt(t, 10))
+	req.Header.Set("X-Pairtime-Signature", sig)
 	a, err := u.do(ctx, req)
 	if err != nil || a.status != http.StatusOK {
 		return State{}, a, err

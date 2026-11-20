@@ -7,9 +7,11 @@ import (
 	"compress/gzip"
 	"crypto/ed25519"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"io"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/some-du6e/pairtime/pkg/ledger"
@@ -125,6 +127,20 @@ func TestSigning(t *testing.T) {
 				if got := h.Get(k); got != v {
 					t.Errorf("%s = %q, want %q", k, got, v)
 				}
+			}
+		}},
+		{"the state request signs M_state, which has its own context and no counter or body", func(t *testing.T) {
+			m := stateMessage("d_example", 1795089660250)
+			if string(m) != "pairtime-ingest-state-v1\nd_example\n1795089660250" {
+				t.Errorf("M_state = %q", m)
+			}
+			sig, err := signState(KeySigner(exampleKey()), "d_example", 1795089660250)
+			if err != nil {
+				t.Fatal(err)
+			}
+			raw, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(sig, "ed25519="))
+			if err != nil || !ed25519.Verify(exampleKey().Public().(ed25519.PublicKey), m, raw) {
+				t.Errorf("the state signature %q doesn't verify", sig)
 			}
 		}},
 		{"a signer that gives no 64-byte signature is refused", func(t *testing.T) {
