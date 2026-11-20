@@ -15,13 +15,14 @@
 	//
 	// The preview of the public profile comes from the caller: local
 	// aggregates on the device (WP-UI3), the server's own data in the server
-	// UI (WP-SV9).
+	// UI (WP-SV9). Every caller gives one, because the copy in both modes
+	// introduces it and DESIGN 8.3 has the card show the real preview.
 	interface Props {
 		mode: ProfileMode;
 		/** Gets the choice each time the teen presses a button. */
 		onchoose: (choice: ProfileVisibility) => void;
 		/** What the public profile would show. */
-		preview?: Snippet;
+		preview: Snippet;
 	}
 
 	let { mode, onchoose, preview }: Props = $props();
@@ -35,9 +36,7 @@
 	{:else}
 		<p>Nothing is public until you choose. A public profile shows anyone this:</p>
 	{/if}
-	{#if preview}
-		<div class="preview">{@render preview()}</div>
-	{/if}
+	<div class="preview">{@render preview()}</div>
 	<p class="pt-note">
 		It never shows your name, school, city, age, time zone, prompts, file names or private projects.
 	</p>
