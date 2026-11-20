@@ -122,6 +122,30 @@ func TestRFC8032(t *testing.T) {
 			}
 		})
 	}
+	t.Run("the signer refuses a private key whose public half isn't its seed's, which would sign what no key verifies", func(t *testing.T) {
+		key := ed25519.NewKeyFromSeed(mustHex(t, cases[0].secret))
+		for _, i := range []int{ed25519.SeedSize, ed25519.PrivateKeySize - 1} {
+			bad := bytes.Clone(key)
+			bad[i] ^= 0x01
+			if sig, err := sign(bad, nil); err == nil {
+				t.Errorf("with byte %d of the public half changed, sign gives %x", i, sig)
+			}
+			if _, err := SignReceipt(bad, "d_example", 1, Hash{}, 0); err == nil {
+				t.Errorf("with byte %d of the public half changed, SignReceipt signs", i)
+			}
+			if _, err := SignDay(bad, 20776, Hash{}); err == nil {
+				t.Errorf("with byte %d of the public half changed, SignDay signs", i)
+			}
+		}
+	})
+	t.Run("the signer refuses a private key of the wrong length", func(t *testing.T) {
+		key := ed25519.NewKeyFromSeed(mustHex(t, cases[0].secret))
+		for _, k := range []ed25519.PrivateKey{nil, key[:ed25519.SeedSize], append(bytes.Clone(key), 0)} {
+			if _, err := sign(k, nil); err == nil {
+				t.Errorf("a %d-byte key signs", len(k))
+			}
+		}
+	})
 }
 
 // ctConstants reads the leaf inputs, the subtree hashes and the roots of
