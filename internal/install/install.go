@@ -188,6 +188,16 @@ func (c Content) Same(d Content) bool {
 	return !c.Exists || (bytes.Equal(c.Data, d.Data) && c.Type == d.Type)
 }
 
+// unchanged reports whether c, what a target holds when Apply reads it
+// again, is still d, what it held when the plan read it: the same thing,
+// and for a file the same mode, since Apply writes the file with the mode
+// the plan read. A mode changed in between, such as settings.json made
+// private, would otherwise be undone. Same, which tells whether an edit
+// changes anything, ignores the mode.
+func (c Content) unchanged(d Content) bool {
+	return c.Same(d) && c.Mode == d.Mode
+}
+
 // digest identifies c in the manifest: "" for nothing there, and otherwise
 // the SHA-256 of the data, with the type of a registry value.
 func (c Content) digest() string {

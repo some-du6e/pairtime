@@ -590,7 +590,7 @@ func (p *Plan) Apply() error {
 		if err != nil {
 			return err
 		}
-		if !cur.Same(c.Before) {
+		if !cur.unchanged(c.Before) {
 			return fmt.Errorf("%s %w", c.Target, ErrStale)
 		}
 	}
@@ -630,7 +630,7 @@ func (p *Plan) Apply() error {
 		}
 		if cur, err := in.read(c.Target); err != nil {
 			return err
-		} else if !cur.Same(c.Before) {
+		} else if !cur.unchanged(c.Before) {
 			return fmt.Errorf("%s %w", c.Target, ErrStale)
 		}
 		if err := makeDirs(c.mkdirs); err != nil {

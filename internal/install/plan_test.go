@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -39,6 +40,17 @@ func TestApplyRefusesAStalePlan(t *testing.T) {
 			name: "a target that changed after planning stops Apply before it writes anything",
 			between: func(t *testing.T, env Env, _ *Installer, _ []Item) {
 				writeFile(t, ClaudeSettings(env), []byte("{\"model\": \"haiku\"}\n"))
+			},
+		},
+		{
+			name: "a settings file made private after planning stops Apply before it writes anything, so its mode stays",
+			between: func(t *testing.T, env Env, _ *Installer, _ []Item) {
+				if runtime.GOOS == "windows" {
+					t.Skip("Windows has no mode bits to make a file private with")
+				}
+				if err := os.Chmod(ClaudeSettings(env), 0o600); err != nil {
+					t.Fatal(err)
+				}
 			},
 		},
 		{
