@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"os"
@@ -161,10 +162,11 @@ func idKey(id string) ([16]byte, bool) {
 
 // Deliver stores d, unless the journal has its id already, in which case it
 // returns nil and stores nothing. It is safe to call from many goroutines.
+// A message whose id it can't keep is ErrRejected.
 func (j *Journal) Deliver(d Delivery) error {
 	k, ok := idKey(d.ID)
 	if !ok {
-		return errors.New("inbox: a message id must be 32 lowercase hex digits")
+		return fmt.Errorf("%w: its id isn't 32 lowercase hex digits", ErrRejected)
 	}
 	j.mu.Lock()
 	defer j.mu.Unlock()

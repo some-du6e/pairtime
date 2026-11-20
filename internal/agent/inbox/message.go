@@ -168,12 +168,25 @@ type Delivery struct {
 }
 
 // Sink is where the agent puts each message it takes in. The socket acks a
-// message, and a drain deletes a spool file, only after Deliver returns nil
-// for it, so Deliver must have stored the message durably by then: enough
-// that it survives the agent being killed, if not a power cut. Deliver must
+// message, and a drain moves past it, only after Deliver returns nil for
+// it, so Deliver must have stored the message durably by then: enough that
+// it survives the agent being killed, if not a power cut. Deliver must
 // also store each id once, and return nil without storing anything for an
 // id it has stored before, because both ways in deliver some messages
 // twice.
+//
+// For a message it will never store, such as one whose body it can't
+// read, Deliver returns ErrRejected, wrapped or not, and a drain counts the
+// message and goes on to the next. Any other error says that the sink
+// can't store messages for now, and a drain stops there until the next
+// one (Drainer.Drain). A sink that returned such an error for one message
+// for good would hold the drain back for good.
 type Sink interface {
 	Deliver(d Delivery) error
 }
+
+// ErrRejected is what a Sink returns, wrapped or not, for a message it will
+// never store. Over the socket the agent refuses such a message like any
+// other it can't store, so the sender spools it, and the drain then counts
+// it and skips it.
+var ErrRejected = errors.New("inbox: the agent won't store this message")

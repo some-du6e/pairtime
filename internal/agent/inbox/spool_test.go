@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -126,7 +127,7 @@ func TestAppendDrain(t *testing.T) {
 				}
 				// The killed drain took the spool and stored m1, but never
 				// got to m2 or to deleting the file.
-				if err := take(inbox); err != nil {
+				if _, err := take(inbox); err != nil {
 					t.Fatal(err)
 				}
 				j := openJournal(t, journal)
@@ -197,7 +198,7 @@ func TestAppendDrain(t *testing.T) {
 				afterWrite = func() {
 					if !took {
 						took = true
-						if err := take(inbox); err != nil {
+						if _, err := take(inbox); err != nil {
 							t.Error(err)
 						}
 					}
@@ -208,7 +209,7 @@ func TestAppendDrain(t *testing.T) {
 					t.Fatal(err)
 				}
 				afterWrite = nil
-				names, err := taken(inbox)
+				names, err := NewDrainer(inbox, nil, utcNow).taken()
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -307,6 +308,242 @@ func TestAppendDrain(t *testing.T) {
 				}
 				if left := spoolFiles(t, inbox); len(left) != 0 {
 					t.Errorf("the inbox still has %v", left)
+				}
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			tt.run(t, filepath.Join(dir, "inbox"), filepath.Join(dir, "received"))
+		})
+	}
+}
+
+// appendAll spools each message in turn.
+func appendAll(t *testing.T, inbox string, ms ...Message) {
+	t.Helper()
+	for _, m := range ms {
+		if err := Append(inbox, m); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// script is a Sink over a Journal that a test can make fail. It refuses
+// the ids in reject for good, fails every message while down is set, and
+// fails each id in failOnce the first time it is handed it. It counts how
+// often it is handed each id.
+type script struct {
+	j        *Journal
+	mu       sync.Mutex
+	reject   map[string]bool
+	failOnce map[string]bool
+	down     error
+	calls    map[string]int
+}
+
+func newScript(j *Journal) *script {
+	return &script{j: j, reject: map[string]bool{}, failOnce: map[string]bool{}, calls: map[string]int{}}
+}
+
+func (s *script) Deliver(d Delivery) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.calls[d.ID]++
+	switch {
+	case s.down != nil:
+		return s.down
+	case s.reject[d.ID]:
+		return fmt.Errorf("%w: the test says so", ErrRejected)
+	case s.failOnce[d.ID]:
+		delete(s.failOnce, d.ID)
+		return errors.New("the disk is full, for now")
+	}
+	return s.j.Deliver(d)
+}
+
+func (s *script) setDown(err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.down = err
+}
+
+func (s *script) handed(id string) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.calls[id]
+}
+
+func TestDrainer(t *testing.T) {
+	tests := []struct {
+		name string
+		run  func(t *testing.T, inbox, journal string)
+	}{
+		{
+			name: "a message the sink rejects for good is skipped, and the rest of its file goes in",
+			run: func(t *testing.T, inbox, journal string) {
+				a, x, b := newMessage(t, 1), newMessage(t, 2), newMessage(t, 3)
+				appendAll(t, inbox, a, x, b)
+				s := newScript(openJournal(t, journal))
+				s.reject[x.ID] = true
+				res, err := Drain(inbox, s, utcNow)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if res.Delivered != 2 || res.Rejected != 1 || res.Files != 1 {
+					t.Errorf("Drain = %+v, want 2 delivered, 1 rejected and the file deleted", res)
+				}
+				if got := journalIDs(t, journal); got[a.ID] != 1 || got[b.ID] != 1 || got[x.ID] != 0 {
+					t.Errorf("the journal has %v, want the two messages around the rejected one", got)
+				}
+				if left := spoolFiles(t, inbox); len(left) != 0 {
+					t.Errorf("the inbox still has %v", left)
+				}
+			},
+		},
+		{
+			name: "a sink that fails stops the drain and leaves the spool where it is, so MaxSpool still bounds the inbox",
+			run: func(t *testing.T, inbox, journal string) {
+				s := newScript(openJournal(t, journal))
+				s.setDown(errors.New("received/ can't be written"))
+				d := NewDrainer(inbox, s, utcNow)
+				appendAll(t, inbox, newMessage(t, 1))
+				if _, err := d.Drain(); err == nil {
+					t.Fatal("Drain = nil with a sink that fails")
+				}
+				appendAll(t, inbox, newMessage(t, 2))
+				for range 3 {
+					if _, err := d.Drain(); err == nil {
+						t.Fatal("Drain = nil with a sink that fails")
+					}
+				}
+				// The first drain took the spool. None took it after that.
+				if left := spoolFiles(t, inbox); len(left) != 2 || !slices.Contains(left, SpoolName) {
+					t.Fatalf("the inbox has %v, want one taken file and the spool", left)
+				}
+				// So the spool fills, and Append says so. A message is
+				// about 110 bytes.
+				old := maxSpool
+				maxSpool = 400
+				t.Cleanup(func() { maxSpool = old })
+				var err error
+				for n := 3; err == nil && n < 20; n++ {
+					err = Append(inbox, newMessage(t, n))
+				}
+				if !errors.Is(err, ErrSpoolFull) {
+					t.Fatalf("Append = %v, want ErrSpoolFull once the spool fills", err)
+				}
+				// Once the sink is back, all of it goes in.
+				s.setDown(nil)
+				res, err := d.Drain()
+				if err != nil {
+					t.Fatal(err)
+				}
+				if res.Files != 2 || res.Delivered < 2 {
+					t.Errorf("Drain = %+v, want both files in", res)
+				}
+				if left := spoolFiles(t, inbox); len(left) != 0 {
+					t.Errorf("the inbox still has %v", left)
+				}
+			},
+		},
+		{
+			name: "a drain that the sink stopped is picked up where it stopped",
+			run: func(t *testing.T, inbox, journal string) {
+				m1, m2, m3 := newMessage(t, 1), newMessage(t, 2), newMessage(t, 3)
+				appendAll(t, inbox, m1, m2, m3)
+				s := newScript(openJournal(t, journal))
+				s.failOnce[m2.ID] = true
+				d := NewDrainer(inbox, s, utcNow)
+				if res, err := d.Drain(); err == nil || res.Delivered != 1 {
+					t.Fatalf("the first Drain = %+v, %v; want one message in and the sink's failure", res, err)
+				}
+				res, err := d.Drain()
+				if err != nil || res.Delivered != 2 || res.Files != 1 {
+					t.Fatalf("the second Drain = %+v, %v; want the other two messages in and the file deleted", res, err)
+				}
+				for _, c := range []struct {
+					name string
+					id   string
+					want int
+				}{
+					{"the message before the failure", m1.ID, 1},
+					{"the message the sink failed", m2.ID, 2},
+					{"the message after it", m3.ID, 1},
+				} {
+					if got := s.handed(c.id); got != c.want {
+						t.Errorf("the sink was handed %s %d times, want %d", c.name, got, c.want)
+					}
+				}
+			},
+		},
+		{
+			name: "a file that can't be read is passed over, and set aside once it has failed maxFileFailures drains",
+			run: func(t *testing.T, inbox, journal string) {
+				if runtime.GOOS == "windows" {
+					t.Skip("on Windows a file's mode doesn't keep its owner from reading it")
+				}
+				if os.Geteuid() == 0 {
+					t.Skip("root reads a file whatever its mode")
+				}
+				m1, m2 := newMessage(t, 1), newMessage(t, 2)
+				appendAll(t, inbox, m1)
+				first, err := take(inbox)
+				if err != nil || first == "" {
+					t.Fatalf("take = %q, %v", first, err)
+				}
+				if err := os.Chmod(first, 0); err != nil {
+					t.Fatal(err)
+				}
+				appendAll(t, inbox, m2)
+				d := NewDrainer(inbox, openJournal(t, journal), utcNow)
+				for i := 1; i <= maxFileFailures; i++ {
+					res, err := d.Drain()
+					if err == nil || res.Failed != 1 {
+						t.Fatalf("drain %d = %+v, %v; want the unreadable file to fail", i, res, err)
+					}
+					if aside := res.SetAside == 1; aside != (i == maxFileFailures) {
+						t.Errorf("drain %d set aside %d files, want 1 only at drain %d", i, res.SetAside, maxFileFailures)
+					}
+				}
+				if got := journalIDs(t, journal); got[m2.ID] != 1 || got[m1.ID] != 0 {
+					t.Errorf("the journal has %v, want only the message spooled after the unreadable file", got)
+				}
+				bad := strings.TrimSuffix(first, takenSuffix) + badSuffix
+				if _, err := os.Lstat(bad); err != nil {
+					t.Errorf("the unreadable file wasn't set aside: %v", err)
+				}
+				if res, err := d.Drain(); err != nil || res.Failed != 0 {
+					t.Errorf("a drain after that = %+v, %v; want the file set aside left alone", res, err)
+				}
+			},
+		},
+		{
+			name: "a file set aside is deleted KeepDays after it was set aside",
+			run: func(t *testing.T, inbox, journal string) {
+				if err := os.MkdirAll(inbox, 0o700); err != nil {
+					t.Fatal(err)
+				}
+				old := filepath.Join(inbox, "spool-00000000000000000001-00000001"+badSuffix)
+				fresh := filepath.Join(inbox, "spool-00000000000000000002-00000002"+badSuffix)
+				for _, name := range []string{old, fresh} {
+					if err := os.WriteFile(name, []byte("\n"), 0o600); err != nil {
+						t.Fatal(err)
+					}
+				}
+				then := time.Now().Add(-(KeepDays*24 + 1) * time.Hour)
+				if err := os.Chtimes(old, then, then); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := Drain(inbox, openJournal(t, journal), utcNow); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := os.Lstat(old); !os.IsNotExist(err) {
+					t.Errorf("the file set aside over KeepDays ago is still there: %v", err)
+				}
+				if _, err := os.Lstat(fresh); err != nil {
+					t.Errorf("the file set aside today is gone: %v", err)
 				}
 			},
 		},

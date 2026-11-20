@@ -159,10 +159,13 @@ func TestPrivateSpool(t *testing.T) {
 				j := openJournal(t, journal)
 				res, err := Drain(inbox, j, utcNow)
 				if err == nil {
-					t.Error("Drain took a file that others may write without a word")
+					t.Error("Drain passed over a file that others may write without a word")
 				}
-				if stored, _ := j.Stats(); stored != 0 || res.Delivered != 0 {
-					t.Errorf("Drain = %+v and the journal stored %d, want nothing delivered", res, stored)
+				if stored, _ := j.Stats(); stored != 0 || res.Delivered != 0 || res.SetAside != 1 {
+					t.Errorf("Drain = %+v and the journal stored %d, want nothing delivered and the file set aside", res, stored)
+				}
+				if bad, _ := filepath.Glob(filepath.Join(inbox, "*"+badSuffix)); len(bad) != 1 {
+					t.Errorf("the inbox has %v set aside, want the one file", bad)
 				}
 			},
 		},
