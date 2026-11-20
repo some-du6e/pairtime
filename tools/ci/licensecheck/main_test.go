@@ -191,6 +191,25 @@ func TestCheck(t *testing.T) {
 	}
 }
 
+func TestTagSets(t *testing.T) {
+	tests := []struct {
+		name string
+		goos string
+		want []string
+	}{
+		{name: "linux is listed as it ships and as platform.yml's desktop job builds it", goos: "linux", want: []string{"", "desktop"}},
+		{name: "windows is listed only as it ships, since desktop tests need linux", goos: "windows", want: []string{""}},
+		{name: "darwin is listed only as it ships, since desktop tests need linux", goos: "darwin", want: []string{""}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tagSets(tt.goos); !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("tagSets(%q) = %q, want %q", tt.goos, got, tt.want)
+			}
+		})
+	}
+}
+
 func show(vs []verdict) string {
 	var b strings.Builder
 	for _, v := range vs {

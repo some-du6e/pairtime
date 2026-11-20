@@ -6,6 +6,10 @@ checking pairtime itself (docs/PLAN.md, WP-CI1):
 - `bad` imports `example.com/licensecheck/gpl` through a `replace` directive.
   `gpl/LICENSE` is the GNU GPL 3.0, so the check must fail, naming that
   module.
+- `desktop` imports the same GPL module the same way, but only from
+  `gpl_desktop_test.go`, under `//go:build linux && desktop` like the
+  desktop tests in AGENTS.md. The check lists linux with `-tags desktop`
+  too, so it must fail here as well.
 - `good` imports `example.com/licensecheck/mit` the same way, and
   `mit/LICENSE` is the MIT license, so the check must pass.
 

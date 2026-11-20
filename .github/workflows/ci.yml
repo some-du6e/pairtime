@@ -161,28 +161,32 @@ jobs:
         if: ${{ !cancelled() }}
         run: |
           # Every module pairtime's packages and tests import, for each of
-          # the seven targets above, must be MIT, BSD-2-Clause, BSD-3-Clause,
-          # Apache-2.0 or ISC (DESIGN 3.12). licensecheck exits 1 on a bad
-          # license.
+          # the seven targets above and for the desktop tests, must be MIT,
+          # BSD-2-Clause, BSD-3-Clause, Apache-2.0 or ISC (DESIGN 3.12).
+          # licensecheck exits 1 on a bad license.
           tool="$RUNNER_TEMP/licensecheck"
           go build -o "$tool" ./tools/ci/licensecheck
           "$tool"
 
           # The check must keep catching a GPL-3.0 module pulled in through a
-          # replace, and keep passing an MIT one (testdata/licensecheck).
+          # replace, whether a package imports it (bad) or only a desktop
+          # test does (desktop), and keep passing an MIT one
+          # (testdata/licensecheck).
           "$tool" -C testdata/licensecheck/good
-          set +e
-          out=$("$tool" -C testdata/licensecheck/bad 2>&1)
-          code=$?
-          set -e
-          # Rewritten, so the expected errors don't become PR annotations: the
-          # runner reads ::error:: even after leading spaces.
-          sed 's/^::error::/expected error: /' <<<"$out"
-          if [ "$code" -ne 1 ] || ! grep -q '^::error::example.com/licensecheck/gpl@v0.0.0 => ../gpl: LICENSE:' <<<"$out"; then
-            echo "::error::licensecheck no longer rejects the GPL-3.0 module seeded in testdata/licensecheck/bad (exit $code)"
-            exit 1
-          fi
-          echo "the seeded GPL-3.0 module was rejected, as it should be"
+          for seeded in bad desktop; do
+            set +e
+            out=$("$tool" -C "testdata/licensecheck/$seeded" 2>&1)
+            code=$?
+            set -e
+            # Rewritten, so the expected errors don't become PR annotations:
+            # the runner reads ::error:: even after leading spaces.
+            sed 's/^::error::/expected error: /' <<<"$out"
+            if [ "$code" -ne 1 ] || ! grep -q '^::error::example.com/licensecheck/gpl@v0.0.0 => ../gpl: LICENSE:' <<<"$out"; then
+              echo "::error::licensecheck no longer rejects the GPL-3.0 module seeded in testdata/licensecheck/$seeded (exit $code)"
+              exit 1
+            fi
+            echo "the GPL-3.0 module seeded in $seeded was rejected, as it should be"
+          done
 
       - name: Fixture provenance
         if: ${{ !cancelled() }}
