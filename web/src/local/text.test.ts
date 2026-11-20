@@ -1,105 +1,158 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-// text.ts against internal/coach/text's own test cases (text_test.go), so
-// the dashboard spells time, names agents and rounds shares as the CLI
-// does.
+// text.ts against internal/coach/text's own test cases, read from the file
+// text_test.go reads them from, testdata/cases.json. So the dashboard
+// spells time, names agents and rounds shares as the CLI does, and a case
+// changed for Go fails here too until text.ts follows. Only the cases that
+// file can't hold, and what text.ts does that the Go package doesn't, are
+// written here.
 
+import { readFileSync } from 'node:fs';
 import { describe, expect, test } from 'vitest';
+import en from '../../../internal/coach/text/en.json';
 import * as text from './text.ts';
 
-describe('duration, as text.Duration', () => {
-	const cases: [string, number, string][] = [
-		['nothing is 0m', 0, '0m'],
-		['less than a second is 0m', 0.5, '0m'],
-		['a negative number is 0m', -30, '0m'],
-		['seconds alone below a minute', 45, '45s'],
-		['a half second rounds down', 45.5, '45s'],
-		['minutes and seconds below an hour', 265, '4m 25s'],
-		['whole minutes drop the seconds', 720, '12m'],
-		['hours and minutes from an hour up, seconds dropped', 4339, '1h 12m'],
-		['whole hours drop the minutes', 7200, '2h'],
-		['an hour and a few seconds is the hour', 3605, '1h'],
-		['59 minutes 59 seconds stays below the hour', 3599, '59m 59s'],
-		["SM 6.4's agent-only night", 23180, '6h 26m'],
-		["a huge number doesn't overflow", 1e300, '277777777h 46m'],
-		['NaN is 0m', Number.NaN, '0m'],
+/** internal/coach/text/testdata/cases.json, the tables text.ts shares with text_test.go. */
+interface Cases {
+	duration: { name: string; s: number; want: string }[];
+	clock: { name: string; you: number; level_c: number; calibrating: boolean; agents: text.AgentClock[]; want: string }[];
+	percentages: { name: string; parts: number[]; want: number[] }[];
+	words: { name: string; func: string; args: string[]; want: string }[];
+}
+
+const shared = JSON.parse(
+	readFileSync(new URL('../../../internal/coach/text/testdata/cases.json', import.meta.url), 'utf8'),
+) as Cases;
+
+type PhraseKey = Parameters<typeof text.phrase>[0];
+
+/** k as one of en.json's phrases, which is what text.phrase takes. */
+function phraseKey(k: string): PhraseKey {
+	if (!Object.hasOwn(en.phrases, k)) {
+		throw new Error(`en.json has no phrase ${k}`);
+	}
+	return k as PhraseKey;
+}
+
+/** Pairs of name and value, as text.Fill takes them, in the record text.ts's fill and phrase take. */
+function named(pairs: string[]): Record<string, string> {
+	const out: Record<string, string> = {};
+	for (let i = 0; i + 1 < pairs.length; i += 2) {
+		const name = pairs[i];
+		const value = pairs[i + 1];
+		if (name !== undefined && value !== undefined) {
+			out[name] = value;
+		}
+	}
+	return out;
+}
+
+/** The argument count of a function that takes one argument and then pairs of name and value, as Phrase and Fill do. */
+const oneThenPairs = -1;
+
+/**
+ * text.ts's port of each Go function a words case names, called as
+ * text_test.go's wordFuncs calls the Go one: how many arguments it takes,
+ * and the call. Day takes a YYYY-MM-DD date and Clocktime an RFC 3339 time.
+ */
+const wordFuncs: Record<string, { args: number; call: (...a: string[]) => string }> = {
+	Agent: { args: 1, call: (h: string) => text.agent(h) },
+	Kind: { args: 2, call: (k: string, agentName: string) => text.kind(k, agentName) },
+	AgentTime: { args: 1, call: (agentName: string) => text.agentTime(agentName) },
+	Other: { args: 2, call: (r: string, agentName: string) => text.other(r, agentName) },
+	OnHold: { args: 0, call: () => text.onHold() },
+	Level: { args: 1, call: (e: string) => text.level(e) },
+	Printable: { args: 1, call: (s: string) => text.printable(s) },
+	Phrase: { args: oneThenPairs, call: (key: string, ...vars: string[]) => text.phrase(phraseKey(key), named(vars)) },
+	Fill: { args: oneThenPairs, call: (s: string, ...vars: string[]) => text.fill(s, named(vars)) },
+	Sentence: { args: 1, call: (s: string) => text.sentence(s) },
+	Day: { args: 1, call: (date: string) => text.day(date) },
+	Clocktime: { args: 1, call: (at: string) => text.clocktime(new Date(at)) },
+};
+
+describe('internal/coach/text/testdata/cases.json', () => {
+	const tables: [string, unknown[]][] = [
+		['duration', shared.duration],
+		['clock', shared.clock],
+		['percentages', shared.percentages],
+		['words', shared.words],
 	];
-	for (const [name, s, want] of cases) {
-		test(name, () => {
-			expect(text.duration(s)).toBe(want);
+	for (const [name, rows] of tables) {
+		test(`its ${name} table has cases, so the tests that read it check something`, () => {
+			expect(Array.isArray(rows) && rows.length > 0).toBe(true);
+		});
+	}
+});
+
+describe('duration, as text.Duration', () => {
+	for (const c of shared.duration) {
+		test(c.name, () => {
+			expect(text.duration(c.s)).toBe(c.want);
 		});
 	}
 });
 
 describe('clock, as text.Clock', () => {
-	const claude = { name: 'Claude', s: 9600 };
-	const cases: [string, number, boolean, text.AgentClock[], string][] = [
-		["your time then the agent's, as DESIGN 3.8 writes it", 4320, false, [claude], 'you 1h 12m · Claude 2h 40m'],
-		['no agent time shows your time alone', 265, false, [], 'you 4m 25s'],
-		['an agent with no time is left out', 265, false, [{ name: 'Cursor', s: 0.5 }], 'you 4m 25s'],
-		['two agents keep their order', 60, false, [claude, { name: 'Codex', s: 300 }], 'you 1m · Claude 2h 40m · Codex 5m'],
-		["calibrating hides your time and keeps the agent's", 4320, true, [claude], 'you calibrating · Claude 2h 40m'],
-		['nothing yet is 0m', 0, false, [], 'you 0m'],
-	];
-	for (const [name, you, calibrating, agents, want] of cases) {
-		test(name, () => {
-			const got = text.clock(you, calibrating, agents);
-			expect(got).toBe(want);
-			expect(got).not.toMatch(/[%/]/);
+	for (const c of shared.clock) {
+		test(c.name, () => {
+			const got = text.clock(c.you, c.level_c, c.calibrating, c.agents);
+			expect(got).toBe(c.want);
+			expect(got, 'the clock shows no ratio').not.toMatch(/[%/]/);
 		});
 	}
 });
 
 describe("the catalog's words, as text_test.go's TestWords", () => {
-	const cases: [string, () => string, string][] = [
-		["claude_code's agent is Claude", () => text.agent('claude_code'), 'Claude'],
-		["a harness en.json doesn't know is your agent", () => text.agent('zed'), 'your agent'],
-		['reading names the agent', () => text.kind('reading_output', 'Claude'), "reading Claude's answers"],
-		['an unknown kind shows its code', () => text.kind('juggling', 'Claude'), 'juggling'],
-		['agent-only time names the agent', () => text.agentTime('Cursor'), 'Cursor, working on its own'],
-		['X.absent is away (D5)', () => text.other('X.absent', 'Claude'), 'away'],
-		['X.noprog is on hold (D5)', () => text.other('X.noprog', 'Claude'), 'on hold: these come back when you fix it'],
-		['the rewrite loop names the agent', () => text.other('X.rewrite_loop', 'Codex'), 'Codex rewriting the same lines'],
-		["X.agent_only isn't other time", () => text.other('X.agent_only', 'Claude'), ''],
-		['level C says where it counts', () => text.level('C'), 'this counts only on your own dashboard'],
-		[
-			'a phrase fills its placeholders',
-			() => text.phrase('session_span', { day: 'Tuesday, November 24', start: '07:40', end: '07:45' }),
-			'Tuesday, November 24, 07:40 to 07:45',
-		],
-		["a value with braces isn't filled again", () => text.phrase('session_last', { project: '{time}' }), 'Your last session: {time}'],
-		['a placeholder with no value stays', () => text.fill('you {time}'), 'you {time}'],
-		['Sentence capitalizes the first letter', () => text.sentence('your agent, working on its own'), 'Your agent, working on its own'],
-		['Sentence leaves an empty string', () => text.sentence(''), ''],
-		['Day heads a day', () => text.day('2026-11-24'), 'Tuesday, November 24'],
-		["a date that doesn't parse stays as it is", () => text.day('2026-02-30'), '2026-02-30'],
-		['X.agent_only and X.automated are the agent\'s time', () => String(text.isAgentTime('X.agent_only') && text.isAgentTime('X.automated')), 'true'],
-		['a share that rounds to 0 is <1%, as recap prints it', () => text.share(0), '<1%'],
-	];
-	for (const [name, got, want] of cases) {
-		test(name, () => {
-			expect(got()).toBe(want);
+	for (const c of shared.words) {
+		test(c.name, () => {
+			const f = wordFuncs[c.func];
+			if (f === undefined) {
+				throw new Error(`text.ts has no port of ${c.func} for this case`);
+			}
+			const fits = f.args === oneThenPairs ? c.args.length % 2 === 1 : c.args.length === f.args;
+			expect(fits, `${c.func} takes the arguments ${JSON.stringify(c.args)}`).toBe(true);
+			expect(f.call(...c.args)).toBe(c.want);
 		});
 	}
 });
 
 describe('percentages, as text.Percentages', () => {
-	const cases: [string, number[], number[]][] = [
-		['one part is 100', [265], [100]],
-		['thirds give the extra point to the first', [1, 1, 1], [34, 33, 33]],
-		['the largest remainder gets the extra point', [1, 2, 3.5], [15, 31, 54]],
-		['a zero part stays 0 and the rest add up to 100', [0, 3, 1], [0, 75, 25]],
-		['a tiny part can round to 0', [1, 999], [0, 100]],
-		['nothing positive is all zeros', [0, -1], [0, 0]],
-		['no parts is no percentages', [], []],
-		["SM 6.3's afternoon by level", [11640, 480, 300], [94, 4, 2]],
-	];
-	for (const [name, parts, want] of cases) {
-		test(name, () => {
-			const got = text.percentages(parts);
-			expect(got).toEqual(want);
+	for (const c of shared.percentages) {
+		test(c.name, () => {
+			const got = text.percentages(c.parts);
+			expect(got).toEqual(c.want);
 			const sum = got.reduce((a, b) => a + b, 0);
-			expect(sum === 100 || sum === 0).toBe(true);
+			expect(sum === 100 || sum === 0, `adds up to ${sum}`).toBe(true);
+		});
+	}
+});
+
+describe("text.ts's own cases: what cases.json can't hold, and what the Go package doesn't do", () => {
+	const replacement = String.fromCodePoint(0xfffd);
+	const own: { name: string; got: () => string; want: string }[] = [
+		{ name: 'NaN is 0m', got: () => text.duration(Number.NaN), want: '0m' },
+		{
+			name: "Printable replaces a lone surrogate, as Go's Printable replaces bytes that aren't UTF-8",
+			got: () => text.printable(`a${String.fromCharCode(0xd800)}b`),
+			want: `a${replacement}b`,
+		},
+		{
+			name: 'Printable keeps a character outside the Basic Multilingual Plane whole',
+			got: () => text.printable(`a${String.fromCodePoint(0x1f600)}b`),
+			want: `a${String.fromCodePoint(0x1f600)}b`,
+		},
+		{ name: "a date that doesn't parse stays as it is", got: () => text.day('2026-02-30'), want: '2026-02-30' },
+		{
+			name: "X.agent_only and X.automated are the agent's time",
+			got: () => String(text.isAgentTime('X.agent_only') && text.isAgentTime('X.automated')),
+			want: 'true',
+		},
+		{ name: 'a share is its whole percent, as recap prints it', got: () => text.share(54), want: '54%' },
+		{ name: 'a share that rounds to 0 is <1%, as recap prints it', got: () => text.share(0), want: '<1%' },
+	];
+	for (const c of own) {
+		test(c.name, () => {
+			expect(c.got()).toBe(c.want);
 		});
 	}
 });
