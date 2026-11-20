@@ -35,6 +35,10 @@ func TestApplyRefusesAStalePlan(t *testing.T) {
 		name string
 		// between runs between planning and Apply.
 		between func(t *testing.T, env Env, in *Installer, items []Item)
+		// modes is true for a case that needs Unix file modes. It is
+		// skipped on Windows before planning, since the plan's install
+		// lock would keep the test's folder from being removed.
+		modes bool
 	}{
 		{
 			name: "a target that changed after planning stops Apply before it writes anything",
@@ -45,13 +49,11 @@ func TestApplyRefusesAStalePlan(t *testing.T) {
 		{
 			name: "a settings file made private after planning stops Apply before it writes anything, so its mode stays",
 			between: func(t *testing.T, env Env, _ *Installer, _ []Item) {
-				if runtime.GOOS == "windows" {
-					t.Skip("Windows has no mode bits to make a file private with")
-				}
 				if err := os.Chmod(ClaudeSettings(env), 0o600); err != nil {
 					t.Fatal(err)
 				}
 			},
+			modes: true,
 		},
 		{
 			name: "a manifest that changed after planning stops Apply before it writes anything",
@@ -64,6 +66,9 @@ func TestApplyRefusesAStalePlan(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			if tt.modes && runtime.GOOS == "windows" {
+				t.Skip("Windows has no mode bits to make a file private with")
+			}
 			env := testEnv(t, "linux", nil)
 			items := linuxItems(t, env, []byte("{}\n"))
 			in := newInstaller(t)
