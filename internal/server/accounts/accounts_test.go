@@ -8,11 +8,13 @@ import (
 	"errors"
 	"regexp"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/some-du6e/pairtime/internal/server/config"
 	"github.com/some-du6e/pairtime/internal/server/migrations"
+	"github.com/some-du6e/pairtime/internal/server/retention"
 	"github.com/some-du6e/pairtime/internal/server/store"
 	"github.com/some-du6e/pairtime/internal/server/store/storetest"
 	"github.com/some-du6e/pairtime/internal/server/writer"
@@ -681,6 +683,42 @@ func TestFreshLoginWithin(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := tt.sess.FreshLoginWithin(tt.d, now); got != tt.want {
 				t.Errorf("FreshLoginWithin(%v) = %v, want %v", tt.d, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestSessionRetention checks the privacy notice's period for sessions,
+// docs/retention.json's server.sessions, against what this package does: a
+// session lasts DefaultSessionLifetime, and DeleteExpiredSessions deletes
+// its row sessionGrace after it ends (DESIGN 4.4).
+func TestSessionRetention(t *testing.T) {
+	p, err := retention.Default()
+	if err != nil {
+		t.Fatal(err)
+	}
+	e, ok := p.Find("server.sessions")
+	if !ok {
+		t.Fatal("docs/retention.json has no server.sessions entry")
+	}
+	const day = 24 * time.Hour
+	tests := []struct {
+		name string
+		ok   bool
+		want string
+	}{
+		{name: "a session's lifetime is a whole number of days", ok: DefaultSessionLifetime%day == 0, want: "DefaultSessionLifetime in whole days"},
+		{name: "the grace before its row goes is a whole number of days", ok: sessionGrace%day == 0, want: "sessionGrace in whole days"},
+		{name: "the notice says how long a session lasts", ok: strings.Contains(e.Kept, retention.Days(int(DefaultSessionLifetime/day))+" after you sign in at the latest"),
+			want: retention.Days(int(DefaultSessionLifetime/day)) + " after you sign in at the latest"},
+		{name: "the notice says how long the row outlives the session", ok: strings.Contains(e.Kept, "deleted "+retention.Days(int(sessionGrace/day))+" after the session ends"),
+			want: "deleted " + retention.Days(int(sessionGrace/day)) + " after the session ends"},
+		{name: "the entry covers the sessions table", ok: slices.Contains(e.Tables, "sessions"), want: `"tables": ["sessions"]`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if !tt.ok {
+				t.Errorf("server.sessions = %+v; want %s", e, tt.want)
 			}
 		})
 	}

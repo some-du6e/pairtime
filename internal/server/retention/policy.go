@@ -28,8 +28,10 @@
 // appears, so the package that creates a table also turns its job on.
 //
 // The other entries are enforced elsewhere: on the device by the client's
-// retention sweeps (WP-LG6), on account deletion by the eraser (WP-SV13),
-// and in the evidence store by the submission work packages.
+// retention sweeps (WP-LG6), sign-in sessions by package accounts, whose
+// TestSessionRetention checks its periods against the schedule's, on
+// account deletion by the eraser (WP-SV13), and in the evidence store by
+// the submission work packages.
 package retention
 
 import (

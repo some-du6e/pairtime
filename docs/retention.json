@@ -58,8 +58,16 @@
     {
       "id": "server.account",
       "where": "server",
-      "data": "Your account: your Hack Club Auth ID, Slack ID and handle, your email address (stored encrypted), and your GitHub user ID if you link GitHub",
-      "kept": "While your account exists"
+      "data": "Your account: your Hack Club Auth ID, Slack ID and handle, your email address (stored encrypted, with a keyed hash so a deletion request can find it), whether Hack Club Auth has verified you and says you're eligible for its programs, when you signed up and last signed in, and your GitHub user ID if you link GitHub",
+      "kept": "While your account exists",
+      "tables": ["users"]
+    },
+    {
+      "id": "server.sessions",
+      "where": "server",
+      "data": "Sign-in sessions: for each browser you sign in with, a hash of its session cookie (never the cookie itself), when you signed in, and when Hack Club Auth last checked it was you",
+      "kept": "Until you sign out, or 30 days after you sign in at the latest. The record is deleted 1 day after the session ends",
+      "tables": ["sessions"]
     },
     {
       "id": "server.devices",
