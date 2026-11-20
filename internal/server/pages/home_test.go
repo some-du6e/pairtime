@@ -53,7 +53,7 @@ func TestHome(t *testing.T) {
 			signIn: signInOn(""),
 			want: []string{
 				`<h1 id="pairtime-counts-the-time-you-spend-building-with-ai">pairtime counts the time you spend building with AI</h1>`,
-				"<p>Not the time your AI spends.",
+				"<p>Not the time your AI spends.</p>",
 				"The time your agent works on its own doesn&#39;t, however long it runs.",
 				"When you ship a project to a Hack Club program, the program can use the hours pairtime counted.",
 			},

@@ -89,7 +89,7 @@ th { font-weight: 600; }
 footer { margin-top: 3rem; padding-bottom: 2rem; color: var(--muted); font-size: 0.9rem; border-top: 1px solid var(--line); }
 .home main { padding-top: 2.5rem; }
 .home h1 { font-size: clamp(2rem, 1.3rem + 3.2vw, 2.9rem); line-height: 1.12; letter-spacing: -0.025em; margin: 0 0 1rem; text-wrap: balance; }
-.home h1 + p { font-size: 1.2rem; line-height: 1.55; color: var(--muted); margin: 0 0 1.75rem; }
+.home h1 + p { font-size: 1.35rem; line-height: 1.4; color: var(--muted); margin: 0 0 1.25rem; }
 .home h2 { font-size: 1.25rem; margin-top: 2.4rem; }
 .home blockquote { border-radius: 0 10px 10px 0; padding: 0.3rem 1.1rem; }
 .home ul { list-style: none; padding: 0; margin: 1rem 0 0; display: grid; gap: 0.6rem; }

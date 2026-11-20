@@ -43,8 +43,9 @@ type SignIn struct {
 type homeData struct {
 	// SignIn says whether sign-in is set up on this server.
 	SignIn bool
-	// SignupsOpen says whether anyone may make an account, or only the
-	// operators (DESIGN 8.6).
+	// SignupsOpen says whether anyone may make an account. While it is
+	// false only the operators, the people who run this server, may, and
+	// testers stay local-only (DESIGN 8.6; D-server-config).
 	SignupsOpen bool
 	// Source is where the code is published.
 	Source string

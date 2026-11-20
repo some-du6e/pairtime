@@ -1,7 +1,9 @@
 {{- /* SPDX-License-Identifier: AGPL-3.0-or-later */ -}}
 # pairtime counts the time you spend building with AI
 
-Not the time your AI spends. Thinking, writing prompts, reading what the agent did, testing and fixing all count. The time your agent works on its own doesn't, however long it runs. When you ship a project to a Hack Club program, the program can use the hours pairtime counted.
+Not the time your AI spends.
+
+Thinking, writing prompts, reading what the agent did, testing and fixing all count. The time your agent works on its own doesn't, however long it runs. When you ship a project to a Hack Club program, the program can use the hours pairtime counted.
 
 {{if .SignupsOpen -}}
 > **Early pilot.** Sign-ups on this server are open.{{if .SignIn}} Sign in with Hack Club to make your account.{{else}} Sign-in isn't set up on this server yet, though.{{end}}
@@ -11,7 +13,11 @@ Not the time your AI spends. Thinking, writing prompts, reading what the agent d
 
 ## How it counts
 
-pairtime runs on your computer, and hooks in your AI tools tell it each time you send a prompt or answer your agent. A second counts only when something you did started it, your computer saw you there, and that project was in front. Each counted second gets an [evidence level](/docs/evidence): A when your keyboard backs it up, B when your computer saw you but can't tell whether you were typing, and C for time pairtime can check less closely, like time it reads back later from your tools' history. What you type stays on your computer, apart from a few prompts you look over first if you submit hours to a program.
+pairtime runs on your computer, and hooks in your AI tools tell it each time you send a prompt or answer your agent. A second counts only when something you did started it, your computer saw you there, and that project was in front.
+
+Each counted second gets an [evidence level](/docs/evidence): A when your keyboard backs it up, B when your computer saw you but can't tell whether you were typing, and C for time pairtime can check less closely, like time it reads back later from your tools' history.
+
+What you type stays on your computer, apart from a few prompts you look over first if you submit hours to a program.
 
 ## Read more
 
