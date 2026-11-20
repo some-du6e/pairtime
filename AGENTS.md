@@ -79,7 +79,7 @@ docs/retention.json is the one source for how long pairtime keeps each kind of d
 - A job whose table doesn't exist yet names the WP that creates it in `awaits`. That WP creates the table with the columns the job names and removes `awaits`, which turns the job on.
 - No foreign key points at a table a retention job deletes from, such as `devices`: the delete would fail, or cascade into rows that stay longer, such as the witness rows of a device removed 90 days ago. TestTables checks this.
 - Ingest's chain head (the `prev` a new batch must match) and request counter live on the device row, never only in `witness_rows`, whose job deletes a device's newest rows too once they are 180 days old, as after a summer away.
-- Whatever decides, re-decides or withdraws a submission (WP-RV4's outcome, the withdraw endpoint) sets `decided_at_ms` on that submission's rows in `submission_batches`, or deletes them. A hold whose `decided_at_ms` stays NULL keeps its witness rows for ever.
+- Whatever decides, re-decides or withdraws a submission (WP-RV4's outcome, the withdraw endpoint) sets `decided_at_ms` on that submission's holds in `submission_batches` and `submission_minutes`, or deletes them. Each hold table's own job deletes a hold once its window has closed, but a hold whose `decided_at_ms` stays NULL keeps itself and the rows it names for ever.
 
 ## Changing the event model
 

@@ -13,7 +13,8 @@
 // jobs to tables. A job deletes its table's rows whose time column is at
 // least the entry's days old, or, for a job by the window, whose time
 // column is a decision whose spot-check window has closed, except rows a
-// hold keeps. That one shape covers DESIGN 4.4's four server jobs:
+// hold keeps. That one shape covers DESIGN 4.4's four server jobs, and
+// the two that delete the holds:
 //
 //   - IP addresses and JA4 fingerprints, 30 days after they were seen.
 //   - Per-minute buckets, 180 days after their minute, unless a
@@ -26,6 +27,10 @@
 //     submission still inside its spot-check window uses them.
 //   - Device rows, 90 days after the device was removed. A device that
 //     hasn't been removed has no removal time, so its row stays.
+//   - The holds that say which minute buckets and witness rows a
+//     submission uses, once its spot-check window has closed. Load
+//     refuses a hold whose table no job of its entry deletes from this
+//     way, so no hold outlives the window it stands for.
 //
 // The tables belong to the work packages that create them. Until a table
 // exists, its job or hold names that package in awaits and doesn't run.
@@ -164,7 +169,9 @@ type JobSpec struct {
 // open, then the time the submission was decided, in epoch milliseconds.
 // A held row stays while its submission is open, and until the spot-check
 // window after the decision has passed. The submission code deletes the
-// holds of a submission that is withdrawn.
+// holds of a submission that is withdrawn. The hold table is also the
+// table of one of the entry's jobs by the window, with DecidedColumn as
+// its time column, which deletes each hold once its window has closed.
 type HoldSpec struct {
 	// Table is the hold table.
 	Table string `json:"table"`
@@ -344,6 +351,14 @@ func (p *Policy) check() error {
 				}
 				if keys[h.DecidedColumn] {
 					fail("%s: hold.decided_column %s is also a key column", jat, h.DecidedColumn)
+				}
+				// Without a job of its own, a hold would stay after its
+				// window closed and its held row was deleted.
+				deleted := slices.ContainsFunc(e.Jobs, func(o JobSpec) bool {
+					return o.Table == h.Table && o.Period == PeriodWindow && o.TimeColumn == h.DecidedColumn
+				})
+				if !deleted {
+					fail("%s: nothing deletes the holds in %s; give the entry a job on %s with \"period\": \"window\" and time_column %s, so each hold goes once its window has closed", jat, h.Table, h.Table, h.DecidedColumn)
 				}
 			}
 		}

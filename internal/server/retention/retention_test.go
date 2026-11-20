@@ -58,6 +58,29 @@ func TestLoad(t *testing.T) {
 				`"time_column": "seen_at_ms"`, `"time_column": "decided_at_ms", "period": "window"`,
 			).Replace(validDoc),
 		},
+		{
+			name: "a hold's table needs a job by the window, or its holds would outlive the window",
+			data: strings.NewReplacer(
+				`"kept": "{days}"`, `"kept": "{days}, or until its window closes ({window})"`,
+				`"time_column": "seen_at_ms"}`, `"time_column": "seen_at_ms", "hold": {"table": "holds", "decided_column": "decided_at_ms"}}`,
+			).Replace(validDoc),
+			wantErr: "nothing deletes the holds in holds",
+		},
+		{
+			name: "a job by days on a hold's table doesn't count, since a hold lasts until its window closes",
+			data: strings.NewReplacer(
+				`"kept": "{days}"`, `"kept": "{days}, or until its window closes ({window})"`,
+				`"time_column": "seen_at_ms"}`, `"time_column": "seen_at_ms", "hold": {"table": "holds", "decided_column": "decided_at_ms"}}, {"table": "holds", "key": ["submission_id", "id"], "time_column": "decided_at_ms"}`,
+			).Replace(validDoc),
+			wantErr: "nothing deletes the holds in holds",
+		},
+		{
+			name: "a hold whose table a job by the window deletes from loads",
+			data: strings.NewReplacer(
+				`"kept": "{days}"`, `"kept": "{days}, or until its window closes ({window})"`,
+				`"time_column": "seen_at_ms"}`, `"time_column": "seen_at_ms", "hold": {"table": "holds", "decided_column": "decided_at_ms"}}, {"table": "holds", "key": ["submission_id", "id"], "time_column": "decided_at_ms", "period": "window"}`,
+			).Replace(validDoc),
+		},
 		{name: "kept may not write a number of its own beside {days}", old: `"kept": "{days}"`, new: `"kept": "{days}, or 31 days"`, wantErr: "a number besides {days}"},
 		{name: "a device entry has no jobs, since its data isn't in the server's database", old: `"id": "server.ip_ja4", "where": "server"`, new: `"id": "device.ip_ja4", "where": "device"`, wantErr: "only server and evidence entries have tables and jobs"},
 		{name: "an entry with a period can't list a table no job deletes", old: `"days": 30,`, new: `"days": 30, "tables": ["request_log"],`, wantErr: "nothing would delete table request_log"},
@@ -284,9 +307,13 @@ func TestJobs(t *testing.T) {
 		wantOff  []string
 	}{
 		{
-			name:    "every job waits while its table doesn't exist",
-			edit:    func(*Policy) {},
-			wantOff: []string{"server.devices/devices awaits WP-SV3", "server.ip_ja4/request_origins awaits WP-SV4", "server.minute_buckets/minute_buckets awaits WP-SV7", "server.witness/witness_rows awaits WP-SV4"},
+			name: "every job waits while its table doesn't exist",
+			edit: func(*Policy) {},
+			wantOff: []string{
+				"server.devices/devices awaits WP-SV3", "server.ip_ja4/request_origins awaits WP-SV4",
+				"server.minute_buckets/minute_buckets awaits WP-SV7", "server.minute_buckets/submission_minutes awaits WP-SB4",
+				"server.witness/witness_rows awaits WP-SV4", "server.witness/submission_batches awaits WP-SB4",
+			},
 		},
 		{
 			name: "a job whose table exists runs, without a hold whose table doesn't",
@@ -297,8 +324,12 @@ func TestJobs(t *testing.T) {
 					}
 				}
 			},
-			wantJobs: []string{"server.devices/devices", "server.ip_ja4/request_origins", "server.minute_buckets/minute_buckets", "server.witness/witness_rows"},
-			wantOff:  []string{"server.minute_buckets/minute_buckets hold awaits WP-SB4", "server.witness/witness_rows hold awaits WP-SB4"},
+			wantJobs: []string{
+				"server.devices/devices", "server.ip_ja4/request_origins",
+				"server.minute_buckets/minute_buckets", "server.minute_buckets/submission_minutes",
+				"server.witness/witness_rows", "server.witness/submission_batches",
+			},
+			wantOff: []string{"server.minute_buckets/minute_buckets hold awaits WP-SB4", "server.witness/witness_rows hold awaits WP-SB4"},
 		},
 		{
 			name: "a job runs with its hold once both tables exist",
@@ -312,7 +343,11 @@ func TestJobs(t *testing.T) {
 					}
 				}
 			},
-			wantJobs: []string{"server.devices/devices", "server.ip_ja4/request_origins", "server.minute_buckets/minute_buckets+hold", "server.witness/witness_rows+hold"},
+			wantJobs: []string{
+				"server.devices/devices", "server.ip_ja4/request_origins",
+				"server.minute_buckets/minute_buckets+hold", "server.minute_buckets/submission_minutes",
+				"server.witness/witness_rows+hold", "server.witness/submission_batches",
+			},
 		},
 	}
 	for _, tt := range tests {
@@ -462,12 +497,13 @@ func TestWindow(t *testing.T) {
 	})
 }
 
-// TestSweep runs the four server jobs under a fake clock against tables
-// shaped as their bindings say, on SQLite and, in postgres.yml, Postgres.
-// The ages and dates are written from DESIGN 4.4 here rather than read
-// from the schedule, so with TestDesignPeriods it checks that the jobs
-// delete exactly DESIGN 4.4's rows. Each sweep runs on a database of its
-// own.
+// TestSweep runs the server jobs under a fake clock against tables shaped
+// as their bindings say, on SQLite and, in postgres.yml, Postgres. The
+// ages and dates are written from DESIGN 4.4 here rather than read from
+// the schedule, so with TestDesignPeriods it checks that the jobs delete
+// exactly DESIGN 4.4's rows. A case's hold is a row of its job's hold
+// table, and the hold table's own job deletes it once its window has
+// closed. Each sweep runs on a database of its own.
 func TestSweep(t *testing.T) {
 	p, err := Default()
 	if err != nil {
@@ -477,6 +513,7 @@ func TestSweep(t *testing.T) {
 		open    bool      // the submission isn't decided
 		decided time.Time // when it was decided, unless open
 		other   bool      // the hold names a different row
+		gone    bool      // the hold itself is deleted, because its window has closed
 	}
 	type sweepCase struct {
 		name string
@@ -501,44 +538,74 @@ func TestSweep(t *testing.T) {
 				{name: "an IP seen a year ago is deleted", job: "server.ip_ja4/request_origins", age: 365 * day},
 				{name: "a minute bucket 180 days old loses its per-minute row", job: "server.minute_buckets/minute_buckets", age: 180 * day},
 				{name: "a minute bucket a minute younger than 180 days keeps its row", job: "server.minute_buckets/minute_buckets", age: 180*day - time.Minute, kept: true},
-				{name: "an old minute bucket an open submission uses keeps its row", job: "server.minute_buckets/minute_buckets", age: 400 * day, hold: &hold{open: true}, kept: true},
-				{name: "an old minute bucket keeps its row a minute before its submission's window closes", job: "server.minute_buckets/minute_buckets", age: 400 * day, hold: &hold{decided: utc(2026, 7, 1, 12, 1)}, kept: true},
-				{name: "an old minute bucket loses its row when its submission's window closes", job: "server.minute_buckets/minute_buckets", age: 400 * day, hold: &hold{decided: utc(2026, 7, 1, 12, 0)}},
+				{name: "an old minute bucket an open submission uses keeps its row and its hold", job: "server.minute_buckets/minute_buckets", age: 400 * day, hold: &hold{open: true}, kept: true},
+				{name: "an old minute bucket keeps its row and its hold a minute before its submission's window closes", job: "server.minute_buckets/minute_buckets", age: 400 * day, hold: &hold{decided: utc(2026, 7, 1, 12, 1)}, kept: true},
+				{name: "an old minute bucket loses its row, and its hold goes, when its submission's window closes", job: "server.minute_buckets/minute_buckets", age: 400 * day, hold: &hold{decided: utc(2026, 7, 1, 12, 0), gone: true}},
 				{name: "a device removed 90 days ago is deleted", job: "server.devices/devices", age: 90 * day},
 				{name: "a device removed 89 days ago stays", job: "server.devices/devices", age: 89 * day, kept: true},
 				{name: "a device that was never removed stays", job: "server.devices/devices", null: true, kept: true},
 				{name: "a witness row received 180 days ago is deleted", job: "server.witness/witness_rows", age: 180 * day},
 				{name: "a witness row received 179 days ago stays", job: "server.witness/witness_rows", age: 179 * day, kept: true},
-				{name: "an old witness row an open submission uses stays", job: "server.witness/witness_rows", age: 400 * day, hold: &hold{open: true}, kept: true},
-				{name: "an old witness row stays 11 months after its submission's decision", job: "server.witness/witness_rows", age: 400 * day, hold: &hold{decided: utc(2026, 8, 1, 12, 0)}, kept: true},
-				{name: "an old witness row stays a minute before the spot-check window closes", job: "server.witness/witness_rows", age: 400 * day, hold: &hold{decided: utc(2026, 7, 1, 12, 1)}, kept: true},
-				{name: "an old witness row is deleted when the window closes, 12 months after the decision", job: "server.witness/witness_rows", age: 400 * day, hold: &hold{decided: utc(2026, 7, 1, 12, 0)}},
-				{name: "a hold on a different batch keeps nothing", job: "server.witness/witness_rows", age: 400 * day, hold: &hold{open: true, other: true}},
+				{name: "an old witness row an open submission uses stays, and so does its hold", job: "server.witness/witness_rows", age: 400 * day, hold: &hold{open: true}, kept: true},
+				{name: "an old witness row and its hold stay 11 months after the submission's decision", job: "server.witness/witness_rows", age: 400 * day, hold: &hold{decided: utc(2026, 8, 1, 12, 0)}, kept: true},
+				{name: "an old witness row and its hold stay a minute before the spot-check window closes", job: "server.witness/witness_rows", age: 400 * day, hold: &hold{decided: utc(2026, 7, 1, 12, 1)}, kept: true},
+				{name: "an old witness row is deleted when the window closes, 12 months after the decision, and its hold goes too", job: "server.witness/witness_rows", age: 400 * day, hold: &hold{decided: utc(2026, 7, 1, 12, 0), gone: true}},
+				{name: "a hold on a different batch keeps nothing, and stays while its submission is open", job: "server.witness/witness_rows", age: 400 * day, hold: &hold{open: true, other: true}},
 			},
 		},
 		{
-			name: "a sweep on 2028-02-29, a date February 2027 lacks",
-			at:   utc(2028, 2, 29, 6, 0),
+			name: "a sweep at noon on 2028-02-29, a date February 2027 lacks",
+			at:   utc(2028, 2, 29, 12, 0),
 			cases: []sweepCase{
-				{name: "a decision on 2027-02-28, whose window closed on 2028-02-28, holds nothing", job: "server.witness/witness_rows", age: 400 * day, hold: &hold{decided: utc(2027, 2, 28, 6, 0)}},
-				{name: "a decision in the last minute of 2027-02-28 holds nothing", job: "server.witness/witness_rows", age: 400 * day, hold: &hold{decided: utc(2027, 2, 28, 23, 59)}},
-				{name: "a decision at midnight starting 2027-03-01 still holds its row", job: "server.witness/witness_rows", age: 400 * day, hold: &hold{decided: utc(2027, 3, 1, 0, 0)}, kept: true},
-				{name: "a decision on 2027-03-01, whose window closes on 2028-03-01, still holds its row", job: "server.witness/witness_rows", age: 400 * day, hold: &hold{decided: utc(2027, 3, 1, 6, 0)}, kept: true},
+				{name: "a decision at noon on 2027-02-28, whose window closed at noon on 2028-02-28, holds nothing and goes", job: "server.witness/witness_rows", age: 400 * day, hold: &hold{decided: utc(2027, 2, 28, 12, 0), gone: true}},
+				{name: "a decision in the last minute of 2027-02-28 holds nothing and goes", job: "server.witness/witness_rows", age: 400 * day, hold: &hold{decided: utc(2027, 2, 28, 23, 59), gone: true}},
+				{name: "a decision at midnight starting 2027-03-01 still holds its witness row", job: "server.witness/witness_rows", age: 400 * day, hold: &hold{decided: utc(2027, 3, 1, 0, 0)}, kept: true},
+				{name: "a decision at noon on 2027-03-01, whose window closes at noon on 2028-03-01, still holds its witness row", job: "server.witness/witness_rows", age: 400 * day, hold: &hold{decided: utc(2027, 3, 1, 12, 0)}, kept: true},
+				{name: "a minute bucket held by a decision at noon on 2027-02-28 loses its row, and the hold goes", job: "server.minute_buckets/minute_buckets", age: 400 * day, hold: &hold{decided: utc(2027, 2, 28, 12, 0), gone: true}},
+				{name: "a minute bucket held by a decision at midnight starting 2027-03-01 keeps its row and its hold", job: "server.minute_buckets/minute_buckets", age: 400 * day, hold: &hold{decided: utc(2027, 3, 1, 0, 0)}, kept: true},
 			},
 		},
 	}
 
 	jobs := p.AllJobs()
 	byID := make(map[string]Job)
+	byTable := make(map[string]Job)
 	for _, j := range jobs {
 		byID[j.ID] = j
+		byTable[j.Table] = j
 	}
 	for _, sw := range sweeps {
 		for _, c := range sw.cases {
-			if _, ok := byID[c.job]; !ok {
+			j, ok := byID[c.job]
+			switch {
+			case !ok:
 				t.Fatalf("%s: docs/retention.json has no job %s", c.name, c.job)
+			case c.hold != nil && j.Hold == nil:
+				t.Fatalf("%s: job %s has no hold", c.name, c.job)
+			case c.hold != nil && byTable[j.Hold.Table].ID == "":
+				t.Fatalf("%s: no job deletes the holds in %s", c.name, j.Hold.Table)
 			}
 		}
+	}
+	// holdKey returns the key of the hold that case i's hold names: the
+	// held row's key, for row hi, and the rest of the hold job's key, such
+	// as the submission, for case i.
+	holdKey := func(j Job, i, hi int, at any) ([]string, []any) {
+		cols, vals := keyValues(j, hi, at)
+		for _, k := range byTable[j.Hold.Table].Key {
+			if !slices.Contains(cols, k) {
+				cols = append(cols, k)
+				vals = append(vals, fmt.Sprintf("%s-%d", k, i))
+			}
+		}
+		return cols, vals
+	}
+	// heldRow is the row case i's hold names.
+	heldRow := func(i int, h *hold) int {
+		if h.other {
+			return 1000 + i
+		}
+		return i
 	}
 
 	for _, engine := range storetest.Engines() {
@@ -563,11 +630,10 @@ func TestSweep(t *testing.T) {
 						cols, vals := rowValues(j, i, rowTime(c))
 						insert(t, db, j.Table, cols, vals)
 						if h := c.hold; h != nil {
-							hi := i
-							if h.other {
-								hi = 1000 + i
+							if h.gone {
+								wantDeleted[byTable[j.Hold.Table].ID]++
 							}
-							hcols, hvals := keyValues(j, hi, rowTime(c))
+							hcols, hvals := holdKey(j, i, heldRow(i, h), rowTime(c))
 							var decided any
 							if !h.open {
 								decided = h.decided.UnixMilli()
@@ -600,8 +666,16 @@ func TestSweep(t *testing.T) {
 					}
 					for i, c := range sw.cases {
 						t.Run(c.name, func(t *testing.T) {
-							if got := exists(t, db, byID[c.job], i, rowTime(c)); got != c.kept {
+							j := byID[c.job]
+							cols, vals := keyValues(j, i, rowTime(c))
+							if got := exists(t, db, j.Table, cols, vals); got != c.kept {
 								t.Errorf("row kept = %v, want %v", got, c.kept)
+							}
+							if h := c.hold; h != nil {
+								hcols, hvals := holdKey(j, i, heldRow(i, h), rowTime(c))
+								if got := exists(t, db, j.Hold.Table, hcols, hvals); got != !h.gone {
+									t.Errorf("hold kept = %v, want %v", got, !h.gone)
+								}
 							}
 						})
 					}
@@ -635,36 +709,67 @@ func TestSweep(t *testing.T) {
 	}
 }
 
-// createTables creates each job's table, and its hold table, with just the
-// columns the binding names. Key columns are TEXT unless a key column is
-// also the time column.
+// createTables creates each job's table and each hold table, with just the
+// columns the bindings name. A column that some binding uses as a time, a
+// job's time column or a hold's decided column, is BIGINT, and any other
+// is TEXT, so a hold's columns compare with the rows it names on both
+// engines. A table that is both a hold and a job's, as every hold table
+// is, is created once, with the columns of both and the job's key.
 func createTables(t *testing.T, db *store.DB, jobs []Job) {
 	t.Helper()
-	exec := func(q string) {
-		t.Helper()
-		if _, err := db.Write.ExecContext(context.Background(), q); err != nil {
-			t.Fatalf("%s: %v", q, err)
+	times := make(map[string]bool)
+	for _, j := range jobs {
+		times[j.TimeColumn] = true
+		if j.Hold != nil {
+			times[j.Hold.DecidedColumn] = true
 		}
 	}
-	keyCols := func(j Job) []string {
-		var cols []string
-		for _, k := range j.Key {
-			typ := "TEXT"
-			if k == j.TimeColumn {
-				typ = "BIGINT"
-			}
-			cols = append(cols, k+" "+typ+" NOT NULL")
+	type table struct {
+		name string
+		cols []string
+		key  []string
+	}
+	var tables []*table
+	add := func(name string, cols, key []string) {
+		i := slices.IndexFunc(tables, func(tb *table) bool { return tb.name == name })
+		if i < 0 {
+			tables = append(tables, &table{name: name})
+			i = len(tables) - 1
 		}
-		return cols
+		tb := tables[i]
+		for _, c := range cols {
+			if !slices.Contains(tb.cols, c) {
+				tb.cols = append(tb.cols, c)
+			}
+		}
+		if key != nil {
+			tb.key = key
+		}
 	}
 	for _, j := range jobs {
-		cols := keyCols(j)
-		if !slices.Contains(j.Key, j.TimeColumn) {
-			cols = append(cols, j.TimeColumn+" BIGINT")
-		}
-		exec(fmt.Sprintf("CREATE TABLE %s (%s, PRIMARY KEY (%s))", j.Table, strings.Join(cols, ", "), strings.Join(j.Key, ", ")))
+		add(j.Table, append(slices.Clone(j.Key), j.TimeColumn), j.Key)
 		if h := j.Hold; h != nil {
-			exec(fmt.Sprintf("CREATE TABLE %s (%s, %s BIGINT)", h.Table, strings.Join(keyCols(j), ", "), h.DecidedColumn))
+			add(h.Table, append(slices.Clone(j.Key), h.DecidedColumn), nil)
+		}
+	}
+	for _, tb := range tables {
+		var defs []string
+		for _, c := range tb.cols {
+			def := c + " TEXT"
+			if times[c] {
+				def = c + " BIGINT"
+			}
+			if slices.Contains(tb.key, c) {
+				def += " NOT NULL"
+			}
+			defs = append(defs, def)
+		}
+		if len(tb.key) > 0 {
+			defs = append(defs, "PRIMARY KEY ("+strings.Join(tb.key, ", ")+")")
+		}
+		q := fmt.Sprintf("CREATE TABLE %s (%s)", tb.name, strings.Join(defs, ", "))
+		if _, err := db.Write.ExecContext(context.Background(), q); err != nil {
+			t.Fatalf("%s: %v", q, err)
 		}
 	}
 }
@@ -706,15 +811,14 @@ func insert(t *testing.T, db *store.DB, table string, cols []string, vals []any)
 	}
 }
 
-// exists reports whether row i of j's table is still there.
-func exists(t *testing.T, db *store.DB, j Job, i int, at any) bool {
+// exists reports whether table still has a row with these column values.
+func exists(t *testing.T, db *store.DB, table string, cols []string, vals []any) bool {
 	t.Helper()
-	cols, vals := keyValues(j, i, at)
 	conds := make([]string, len(cols))
 	for k, c := range cols {
 		conds[k] = c + " = $" + strconv.Itoa(k+1)
 	}
-	q := "SELECT count(*) FROM " + j.Table + " WHERE " + strings.Join(conds, " AND ")
+	q := "SELECT count(*) FROM " + table + " WHERE " + strings.Join(conds, " AND ")
 	var n int
 	if err := db.Read.QueryRowContext(context.Background(), q, vals...).Scan(&n); err != nil {
 		t.Fatalf("%s: %v", q, err)
