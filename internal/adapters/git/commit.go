@@ -16,8 +16,9 @@ import (
 // Commit is a commit record (DESIGN 4.3, 5.8; SP 4.3). The exported JSON
 // fields are the ones DESIGN 4.3 lets the client upload, apart from
 // credited_seconds_since_parent, which the scorer adds, and path_hmacs,
-// which v1 leaves out. Everything in Local stays on the device and is
-// never marshaled.
+// which wait for WP-AD2's file-key form, as does the file list that SM
+// 4.3's edit_survives reads on the device (PLAN, WP-SC6). Everything in
+// Local stays on the device and is never marshaled.
 type Commit struct {
 	SHA     string   `json:"sha"`
 	Parents []string `json:"parents"`
