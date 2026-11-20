@@ -273,7 +273,7 @@ func randomLedgers(t *testing.T) vectorsFile {
 	if len(doc.Days) < 2 {
 		t.Fatalf("the batches reached the server on %d days; they should span midnight", len(doc.Days))
 	}
-	if err := VerifyDays(testServerPub(), published); err != nil {
+	if err := VerifyDays(serverKeyAlways(testServerPub()), published); err != nil {
 		t.Fatal(err)
 	}
 	return doc
