@@ -285,3 +285,63 @@ func TestActs(t *testing.T) {
 		})
 	}
 }
+
+// TestTypedEditFocus checks SC1's typed-edit focus test in
+// D-editor-heartbeat-first's order: the editor in front is on the project of
+// the latest heartbeat with input in the same or previous slot, up to the
+// edit, a verified one ahead of a side door's (D-rule2-sidedoor), and on the
+// focus record's only when there is none. An edit is such a heartbeat
+// itself, so another project's heartbeat decides only when it is verified
+// and the edit isn't.
+func TestTypedEditFocus(t *testing.T) {
+	// heartbeat is a navigation in p_1 at s seconds, with input just before
+	// it, arriving via v.
+	heartbeat := func(s int64, v event.Via) func(b *tl) {
+		return func(b *tl) {
+			b.mouse(at(s) - 500)
+			b.editor(at(s), v, "p_1", event.ActNavigate, event.EditSourceUnknown)
+		}
+	}
+	cases := []struct {
+		name string
+		// record is the project the editor's focus record names, before the
+		// heartbeat and the edit, in p_2, at 58 s that arrives via via.
+		record string
+		before func(b *tl)
+		via    event.Via
+		// level is the edit's anchor's, or "" for none.
+		level event.Evidence
+	}{
+		{"D-editor-heartbeat-first: an edit is typed in its project's window though the focus record names another, since its own heartbeat is the latest",
+			"p_1", nil, event.ViaEditor, event.EvidenceB},
+		{"D-editor-heartbeat-first: an edit just after a verified heartbeat of another project in its slot is still its own window's",
+			"", heartbeat(56, event.ViaEditor), event.ViaEditor, event.EvidenceB},
+		{"D-rule2-sidedoor: an unverified edit just after a verified heartbeat of another project in its slot opens nothing, since the verified one says which window is in front",
+			"", heartbeat(56, event.ViaEditor), event.ViaEditorUnverified, ""},
+		{"D-rule2-sidedoor: an unverified edit whose slot and the one before hold no verified heartbeat is its own window's, at level C",
+			"", heartbeat(29, event.ViaEditor), event.ViaEditorUnverified, event.EvidenceC},
+		{"D-rule2-sidedoor: another project's plugin heartbeat just before an unverified edit doesn't outrank the edit's own",
+			"", heartbeat(56, event.ViaPlugin), event.ViaEditorUnverified, event.EvidenceC},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			b := newTL(false)
+			b.focus(at(0), event.AppEditor, c.record)
+			b.press(atMS(55_500))
+			if c.before != nil {
+				c.before(b)
+			}
+			e := b.editor(at(58), c.via, "p_2", event.ActEdit, event.EditSourceHuman)
+			b.samples(at(0), at(90))
+			a, ok := anchorByID(b.run(t, Device{}), e.EventID)
+			switch {
+			case c.level == "" && ok:
+				t.Errorf("an anchor %+v, want none", a)
+			case c.level != "" && !ok:
+				t.Fatalf("no anchor, want a typed edit at level %s", c.level)
+			case ok && (a.Kind != event.AnchorTypedEdit || a.Level != c.level):
+				t.Errorf("anchor %s at level %s, want a typed edit at level %s", a.Kind, a.Level, c.level)
+			}
+		})
+	}
+}

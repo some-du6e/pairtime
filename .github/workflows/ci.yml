@@ -59,12 +59,14 @@ jobs:
             fail=1
           fi
           header="// SPDX-License-Identifier: AGPL-3.0-or-later"
+          # third_party/ holds other projects' code under their own licenses,
+          # each with a PROVENANCE.md (AGENTS.md), so it keeps its headers.
           while IFS= read -r f; do
             if [ "$(head -n 1 "$f")" != "$header" ]; then
               echo "::error file=$f,line=1::first line must be: $header"
               fail=1
             fi
-          done < <(git ls-files '*.go')
+          done < <(git ls-files -- '*.go' ':(exclude)third_party/**')
           exit "$fail"
 
       - name: gofmt

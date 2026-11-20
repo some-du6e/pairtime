@@ -7,8 +7,9 @@
 // config directories, config.toml, state.json, the scheduler that every
 // timer goes through, and the HTTP server on 127.0.0.1. WP-AG2 added the
 // socket that hooks hand their messages to and the inbox they spool to
-// when the agent is down (packages ipc and inbox), and WP-OS8 the notifier
-// that shows the coach's notification. The other components of
+// when the agent is down (packages ipc and inbox), WP-AG3 what the agent
+// makes of each hook call (hooks.go, package hookpath), and WP-OS8 the
+// notifier that shows the coach's notification. The other components of
 // DESIGN 3.3 arrive in later work packages, each as a package under
 // internal/agent that Run starts.
 package agent
@@ -70,6 +71,11 @@ type Options struct {
 	// slice, which keeps K_dev in a key file in the data directory and
 	// off the OS's store.
 	KeyStores []keys.Store
+	// LedgerRetry, when set, replaces how long the agent first waits
+	// before it tries again to open a ledger that didn't open for a reason
+	// that can pass, such as a locked keyring; 15 s otherwise. Tests set
+	// it so they needn't wait.
+	LedgerRetry time.Duration
 }
 
 // linked keeps heavyModules' entry points reachable (see heavy_linux.go).
@@ -92,7 +98,9 @@ type agent struct {
 	port    int
 	procs   *procs.Scanner // the harness process scan (DESIGN 3.3)
 	journal *inbox.Journal // nil when it couldn't be opened
-	ipcSrv  *ipc.Server    // nil when hooks can't reach the agent
+	// ipcSrv is the socket's or the pipe's server, nil while hooks can't
+	// reach the agent.
+	ipcSrv atomic.Pointer[ipc.Server]
 	// notifier shows the coach's notification when a work session ends
 	// (WP-OS8). The coach calls its Notify, and its UserPresent on unlock
 	// and resume (WP-CO1).
@@ -103,10 +111,16 @@ type agent struct {
 	// kApp is K_app, which keys os.focus's app_hash, once keyFocus has
 	// derived it from the device key.
 	kApp atomic.Pointer[[]byte]
+	// hooked are the processes hooks came from, with their sessions, for
+	// focus (hooks.go), and kSession is K_session, which keys those
+	// sessions, once keySessions has derived it from the device key.
+	hooked   *hookTies
+	kSession atomic.Pointer[[]byte]
 	// ledgerIn takes presence's and focus's records, and presence's
 	// seals, to the ledger writer once it opens (WP-LG5).
-	ledgerIn  *ledger.Presence
-	keyStores []keys.Store // Options.KeyStores
+	ledgerIn    *ledger.Presence
+	keyStores   []keys.Store  // Options.KeyStores
+	ledgerRetry time.Duration // the first wait before the ledger opens again
 
 	stop     chan struct{} // closed when a client asks the agent to stop
 	stopOnce sync.Once
@@ -136,13 +150,18 @@ func Run(ctx context.Context, opts Options) error {
 	defer lock.Release()
 
 	a := &agent{
-		dirs:      opts.Dirs,
-		log:       log,
-		started:   time.Now(),
-		sched:     sched.New(),
-		stop:      make(chan struct{}),
-		problems:  make(map[string]string),
-		keyStores: opts.KeyStores,
+		dirs:        opts.Dirs,
+		log:         log,
+		started:     time.Now(),
+		sched:       sched.New(),
+		stop:        make(chan struct{}),
+		problems:    make(map[string]string),
+		keyStores:   opts.KeyStores,
+		ledgerRetry: defaultLedgerRetry,
+		hooked:      newHookTies(),
+	}
+	if opts.LedgerRetry > 0 {
+		a.ledgerRetry = opts.LedgerRetry
 	}
 	linkOnce.Do(func() { linked = heavyModules() })
 	if err := optIntoEcoQoS(); err != nil {

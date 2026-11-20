@@ -55,6 +55,9 @@ type rules struct {
 	lookupMax     int64
 	unitsPerS     int64
 
+	// SM 8.4, attribution.
+	attribSticky int64
+
 	// DESIGN 6.3.
 	pendingWindow int64
 	contextIdle   int64
@@ -136,6 +139,8 @@ func newRules(t *params.Table) rules {
 		readHorizon:   ms(params.READ_HORIZON_S),
 		lookupBracket: ms(params.LOOKUP_BRACKET_S),
 		lookupMax:     ms(params.LOOKUP_MAX_S),
+
+		attribSticky: ms(params.ATTRIB_STICKY_S),
 
 		pendingWindow: ms(params.PENDING_WINDOW_S),
 		contextIdle:   ms(params.CONTEXT_IDLE_S),

@@ -193,13 +193,31 @@ func TestFocusLongest(t *testing.T) {
 			class: event.AppTerminal, hosted: []string{"s_1"},
 		},
 		{
-			name: "a window written again when a session starts under it is one window, and its longest piece gives the hosted sessions",
+			name: "a window written again when a session starts under it is one window, and the hosted set it held longest gives the slot's sessions",
 			focus: func(b *tl) {
 				b.focus(at(0), event.AppBrowser, "")
 				b.focus(at(6), event.AppTerminal, "p_1")
 				b.focus(at(10), event.AppTerminal, "p_1", "s_1")
 			},
 			class: event.AppTerminal, hosted: []string{"s_1"},
+		},
+		{
+			name: "E-6.6-codes: of a window's hosted sets the one it held longest in total gives the slot's sessions, 4 + 5 s against a single 6 s",
+			focus: func(b *tl) {
+				b.focus(at(0), event.AppTerminal, "", "s_1", "s_2")
+				b.focus(at(4), event.AppTerminal, "", "s_1", "s_2", "s_3")
+				b.focus(at(10), event.AppTerminal, "", "s_2", "s_1")
+			},
+			class: event.AppTerminal, hosted: []string{"s_1", "s_2"},
+		},
+		{
+			name: "a hosted set is a set: a record that lists a session twice hosts what one listing it once does, 4 + 5 s against 6 s",
+			focus: func(b *tl) {
+				b.focus(at(0), event.AppTerminal, "", "s_1", "s_2")
+				b.focus(at(4), event.AppTerminal, "", "s_1", "s_2", "s_3")
+				b.focus(at(10), event.AppTerminal, "", "s_2", "s_1", "s_1")
+			},
+			class: event.AppTerminal, hosted: []string{"s_1", "s_2"},
 		},
 		{
 			name: "on a tie the window that had focus first holds the slot",

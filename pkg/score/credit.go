@@ -13,16 +13,31 @@ import (
 )
 
 // Credit is what SM 2.7's rule gives the seconds of one 15-second slot
-// (SM 1.3's credit_slot), within one project per slot: the seconds it
-// credits by project, reason and level, the seconds it doesn't by reason
-// (SM 5.2), and the seconds an agent ran. Every second of every derived
-// slot is one or the other, so Credited and Uncredited add up to 15
-// seconds. Choosing between projects is WP-SC3's (SM 3); here a slot's
-// project is the one its focus resolves to.
+// (SM 1.3's credit_slot): the seconds it credits by reason and level, the
+// seconds it doesn't by reason (SM 5.2), and the seconds an agent ran.
+// Every second of every derived slot is one or the other, so Credited and
+// Uncredited add up to 15 seconds. A slot's credited seconds all go to one
+// project, ProjectKey, so every second of the timeline goes to one project
+// at most (SM 3.1).
 type Credit struct {
 	// Slot is the slot's start in Unix milliseconds.
-	Slot     int64      `json:"slot"`
-	Credited []Credited `json:"credited,omitempty"`
+	Slot int64 `json:"slot"`
+	// ProjectKey is SM 5.1's p, the project the slot's seconds go to: the
+	// one its focus resolves to (SM 3.2, attribute). A slot that resolves to
+	// none takes the project of its first credited second, which for a
+	// browser or chat-app slot in a lookup run is the lookup's (SM 2.5) and
+	// for a slot SM 3.2 rule 1 leaves ambiguous the project of the anchor
+	// window that credits it (D-ambiguous-anchors). It is "" when the slot
+	// resolves to no project and nothing in it is credited. Every entry of
+	// Credited has this project.
+	ProjectKey string `json:"project_key,omitempty"`
+	// ResolvedBy is the event_id of the anchor that gave the slot of a
+	// window hosting several sessions of different projects to one of them,
+	// by SM 3.2 rule 1's look-ahead or by ATTRIB_STICKY_S. Credited seconds
+	// in the slot list it among their anchors and take no better level than
+	// it (DESIGN 6.4).
+	ResolvedBy string     `json:"resolved_by,omitempty"`
+	Credited   []Credited `json:"credited,omitempty"`
 	// Uncredited holds the slot's seconds that nothing credited, by
 	// reason.
 	Uncredited map[event.Reason]int64 `json:"uncredited,omitempty"`
@@ -45,7 +60,8 @@ type Credited struct {
 	// Level is the evidence level of the anchor behind the seconds
 	// (DESIGN 6.4): the anchor whose window covers them, the human anchor
 	// nearest a reading second within READ_HORIZON_S, or the lower of a
-	// lookup's two bracketing anchors.
+	// lookup's two bracketing anchors; and no better than the anchor that
+	// resolved the slot, in a window hosting several sessions (ResolvedBy).
 	Level event.Evidence `json:"level"`
 	// InTurn is set when a turn of the project was running in these
 	// seconds, which SM 5.4 counts as AI-assisted whatever the reason.
@@ -58,7 +74,8 @@ type Credited struct {
 	Halves  int64 `json:"halves"`
 	// AnchorIDs are the event ids of the anchors behind the seconds, so a
 	// reviewer can follow each second to the act that opened its window
-	// (SM 2.7), and Labels their provenance labels (DESIGN 6.4).
+	// (SM 2.7) and to the one that resolved its slot (ResolvedBy), and
+	// Labels their provenance labels (DESIGN 6.4).
 	AnchorIDs []string      `json:"anchor_ids"`
 	Labels    []event.Label `json:"labels,omitempty"`
 }
@@ -181,11 +198,13 @@ type creditor struct {
 	// buckets holds, per project, its sessions' buckets in key order.
 	buckets map[string][]*bucket
 	runs    map[string]*running
-	// noInputLeads holds, per project, the seconds the leads of its
-	// no-input prompts would have covered had a person typed them, sorted
-	// and merged: where X.no_input goes.
-	noInputLeads map[string][]secSpan
-	returns      []returned
+	// bySession holds, per harness session, the indexes of its anchors in
+	// time order, which SM 3.2 rule 1 resolves a slot by, as the editor
+	// heartbeats in deriver.beats do for rule 2 (attrib.go). attr holds each
+	// slot's resolution, made when the credit pass reaches it.
+	bySession map[string][]int
+	attr      []attribution
+	returns   []returned
 	// lookups are the browser and chat-app runs with credit in the
 	// LOOKUP_BRACKET_S before them, the ones that can become lookups. Step
 	// holds FinalBefore back for them until their end bracket is decided.
@@ -252,8 +271,8 @@ func (c *creditor) sec(t int64) int {
 	return int(max(0, min(k, int64(c.n))))
 }
 
-// index builds what the per-second pass looks up: anchors by project,
-// buckets by project, running turns, and the returned runs.
+// index builds what the per-second pass looks up: anchors by project and
+// by session, buckets by project, running turns, and the returned runs.
 func (c *creditor) index() {
 	d := c.d
 	c.byProject = map[string][]int{}
@@ -291,15 +310,7 @@ func (c *creditor) index() {
 	for _, r := range c.runs {
 		r.human, r.auto, r.noInput, r.any = merged(r.human), merged(r.auto), merged(r.noInput), merged(r.any)
 	}
-	c.noInputLeads = map[string][]secSpan{}
-	for _, l := range d.noInputLeads {
-		if from, to := c.sec(ceilSecond(l.from)), c.sec(ceilSecond(l.to)); from < to {
-			c.noInputLeads[l.proj] = append(c.noInputLeads[l.proj], secSpan{from, to})
-		}
-	}
-	for p, spans := range c.noInputLeads {
-		c.noInputLeads[p] = merged(spans)
-	}
+	c.indexAttribution()
 	ids := map[string]int{}
 	for i, a := range d.anchors {
 		ids[a.ID] = i
@@ -351,20 +362,24 @@ func (c *creditor) windows() []window {
 // cover (SM 3.3 rule 3): a lead beats a command's run or a trail; among
 // leads, the next anchor at or after the second wins, since time just
 // before an act is preparation for it; among runs and trails, the latest
-// anchor; then the earlier anchor.
+// anchor. Then the lower project key (rule 6), which only an ambiguous
+// slot's windows can differ in (D-ambiguous-anchors), then the earlier
+// anchor.
 func (c *creditor) better(x, y window) bool {
 	xl, yl := x.part != partAfter, y.part != partAfter
 	if xl != yl {
 		return xl
 	}
-	tx, ty := c.d.anchors[x.anchor].T, c.d.anchors[y.anchor].T
+	ax, ay := &c.d.anchors[x.anchor], &c.d.anchors[y.anchor]
 	switch {
-	case tx == ty:
+	case ax.T == ay.T && ax.ProjectKey != ay.ProjectKey:
+		return ax.ProjectKey < ay.ProjectKey
+	case ax.T == ay.T:
 		return x.anchor < y.anchor
 	case xl:
-		return tx < ty
+		return ax.T < ay.T
 	}
-	return tx > ty
+	return ax.T > ay.T
 }
 
 // typingOK reports whether a second of an anchor's typing part is realized
@@ -407,25 +422,48 @@ func (c *creditor) nearest(p string, t int64) int {
 
 // anchorsAndBuckets is pass one of SM 2.7: for each second, the anchor
 // windows that cover it, then the reading bucket. An anchor's window is
-// realized where the person is present (yes, bridged, tail) and the slot is
-// focused on the anchor's project, or, for the anchor that ended a returned
-// run, in its think part inside the run (SM 2.1). Anchor windows beat the
-// bucket (SM 3.3 rule 2), and the bucket drains only where none is
-// realized.
+// realized where the person is present (yes, bridged, tail) and the slot
+// resolves to the anchor's project (SM 3.2, 3.3 rule 1), or, for the anchor
+// that ended a returned run, in its think part inside the run (SM 2.1).
+// Anchor windows beat the bucket (SM 3.3 rule 2), and the bucket drains
+// only where none is realized.
+//
+// In a slot SM 3.2 rule 1 leaves ambiguous, anchors still count and the
+// bucket doesn't drain: every window that covers a present second competes,
+// whatever its project, until one credits a second, and from then on only
+// that project's windows do, so the slot keeps one project
+// (D-ambiguous-anchors, attribution.admits). SM 2.7's pseudo-code and SM
+// 3.3 rule 1 filter by focus_project, which such a slot has none of; they
+// are read through 3.2's clause
+// (docs/errata/2026-11-20-sm-3.2-ambiguous-anchors.md).
+//
+// SM 3.3 rule 1 lets a returned run's think part credit its anchor's
+// project whatever the slot's focus_project, since focus was on that
+// project through the run. An editor slot can still resolve to another
+// project, by a heartbeat after the input that ends the run
+// (D-editor-heartbeat-first), and then the run's think part credits nothing
+// in it, so that the slot keeps one project (SM 5.1, attribution.holds).
 func (c *creditor) anchorsAndBuckets() {
 	ws := c.windows()
 	var active []int
 	next := 0
 	oneSecond := c.r.unitsPerS
 	for k := 0; k < c.n; k++ {
-		s := &c.slots[k/perSlot]
-		if c.base[k/perSlot] < 0 {
+		i := k / perSlot
+		s := &c.slots[i]
+		if c.base[i] < 0 {
 			// A dead slot credits nothing. Windows and buckets are swept
 			// by time, so skipping its seconds changes nothing after it.
 			k += perSlot - 1
 			continue
 		}
 		t := c.at(k)
+		if k%perSlot == 0 {
+			// SM 3.2 rule 1 reads a session's bucket when the slot begins,
+			// before its first second drains anything.
+			c.attr[i] = c.attribute(s)
+		}
+		at := &c.attr[i]
 		for ; next < len(ws) && ws[next].from <= t; next++ {
 			active = append(active, next)
 		}
@@ -441,7 +479,7 @@ func (c *creditor) anchorsAndBuckets() {
 		if pres == event.PresentReturned {
 			rt = c.returnAt(t)
 		}
-		proj := s.FocusProject
+		proj := at.proj
 		best, suffix := -1, event.Reason("")
 		for _, wi := range active {
 			w := ws[wi]
@@ -451,8 +489,9 @@ func (c *creditor) anchorsAndBuckets() {
 			}
 			sfx := event.Reason("")
 			switch {
-			case present(pres) && proj != "" && proj == a.ProjectKey:
-			case rt != nil && rt.anchor == w.anchor && w.part == partThink && t >= a.T-a.TypingMS-c.r.thinkLead:
+			case present(pres) && at.admits(a.ProjectKey):
+			case rt != nil && rt.anchor == w.anchor && w.part == partThink && t >= a.T-a.TypingMS-c.r.thinkLead &&
+				at.holds(a.ProjectKey):
 				sfx = event.ReturnedSuffix
 			default:
 				continue
@@ -465,9 +504,15 @@ func (c *creditor) anchorsAndBuckets() {
 		if best >= 0 {
 			a := &c.d.anchors[ws[best].anchor]
 			sec.reason, sec.proj, sec.level, sec.anchor = a.Reason+suffix, a.ProjectKey, a.Level, int32(ws[best].anchor)
+			if proj == "" && at.won == "" {
+				at.won = a.ProjectKey
+			}
+			c.steer(at, sec)
 			continue
 		}
 		if proj == "" {
+			// No project, or an ambiguous slot: the bucket doesn't drain
+			// (SM 3.2 rule 1).
 			continue
 		}
 		proseOnly := false
@@ -523,6 +568,7 @@ func (c *creditor) anchorsAndBuckets() {
 			level = lowerLevel(level, src.level)
 		}
 		sec.reason, sec.proj, sec.level, sec.anchor, sec.label = reason, proj, level, int32(near), src.label
+		c.steer(at, sec)
 	}
 }
 
@@ -631,50 +677,49 @@ func lowerLevel(a, b event.Evidence) event.Evidence {
 	return b
 }
 
-// uncredited gives a second nothing credited its reason (SM 5.2), the
-// first that applies: X.absent without presence, X.lookup_cap past a
-// lookup's cap, X.other_focus with focus outside every project's windows,
-// X.ambiguous when the focus resolves to no single project, X.no_input on
-// a second the lead of a no-input prompt of the focused project would have
-// covered, X.bucket_cap on one the bucket would have credited but for
-// BUCKET_MAX_S, then, while a turn of the focused project runs, X.agent_only
-// if a person started it, X.automated if automation did, and X.agent_only
-// for a no-input turn, and X.no_anchor last.
-//
-// This is the order docs/errata/2026-11-19-sm-6.6-uncredited-codes.md
-// proposes, with X.no_input where it puts it. Its rule 4 names no code for
-// the run of a no-input turn, which gets SM 5.2's code for an agent turn
-// that ran with nothing credited, X.agent_only. Where the cap codes,
-// X.no_input and that run go is docs/errata/2026-11-20-uncredited-code-placement.md.
-func (c *creditor) uncredited(k int, s *Slot) event.Reason {
+// uncredited gives a second nothing credited its one reason, in SM 5.2's
+// order as E-6.6-codes decides it. Codes for credit a rule withheld come
+// first, and only on seconds the rule would have credited: X.lookup_cap
+// for a qualifying lookup run's present seconds past LOOKUP_MAX_S, and
+// X.bucket_cap for reading that BUCKET_MAX_S evicted. (The dark-flow
+// discounts, X.day_cap and X.noprog are WP-SC6's.) Every other second takes
+// the first that applies of X.absent; X.other_focus; X.ambiguous, for focus
+// that resolves to no project (SM 3.2) or that the client hasn't recorded
+// yet; then, while a turn of the slot's project runs, X.agent_only if a
+// person started one of the running turns, else X.automated, else
+// X.no_input for a turn whose prompt came with no input (SM 2.2 rule 8);
+// and last X.no_anchor. at is the slot's resolution (attribute).
+func (c *creditor) uncredited(k int, s *Slot, at *attribution) event.Reason {
+	if sec := c.state(k); sec != nil {
+		switch {
+		case sec.capped:
+			return event.ReasonLookupCap
+		case sec.bucketCap:
+			return event.ReasonBucketCap
+		}
+	}
 	if s.Asleep || s.Locked || !present(s.At(c.at(k))) {
 		return event.ReasonAbsent
 	}
-	if sec := c.state(k); sec != nil && sec.capped {
-		return event.ReasonLookupCap
+	if at.unrecorded {
+		return event.ReasonAmbiguous
 	}
 	switch s.FocusClass {
 	case event.AppTerminal, event.AppEditor, event.AppAgentApp:
 	default:
 		return event.ReasonOtherFocus
 	}
-	if s.FocusProject == "" {
+	if at.proj == "" {
 		return event.ReasonAmbiguous
 	}
-	if covers(c.noInputLeads[s.FocusProject], k) {
-		return event.ReasonNoInput
-	}
-	if sec := c.state(k); sec != nil && sec.bucketCap {
-		return event.ReasonBucketCap
-	}
-	if r := c.runs[s.FocusProject]; r != nil {
+	if r := c.runs[at.proj]; r != nil {
 		switch {
 		case covers(r.human, k):
 			return event.ReasonAgentOnly
 		case covers(r.auto, k):
 			return event.ReasonAutomated
 		case covers(r.noInput, k):
-			return event.ReasonAgentOnly
+			return event.ReasonNoInput
 		}
 	}
 	return event.ReasonNoAnchor
@@ -722,7 +767,11 @@ func (c *creditor) slotCredits() []Credit {
 			}
 		}
 		active = kept
-		cr := Credit{Slot: s.Start}
+		at := &c.attr[i]
+		cr := Credit{Slot: s.Start, ProjectKey: at.proj}
+		if at.resolver >= 0 {
+			cr.ResolvedBy = c.d.anchors[at.resolver].ID
+		}
 		group := map[creditKey]*Credited{}
 		var keys []creditKey
 		for k := lo; k < hi; k++ {
@@ -752,8 +801,16 @@ func (c *creditor) slotCredits() []Credit {
 				if cr.Uncredited == nil {
 					cr.Uncredited = map[event.Reason]int64{}
 				}
-				cr.Uncredited[c.uncredited(k, s)]++
+				cr.Uncredited[c.uncredited(k, s, at)]++
 				continue
+			}
+			// A slot that resolves to no project, a lookup's (SM 2.5) or an
+			// ambiguous one (D-ambiguous-anchors), takes the project of its
+			// first credited second. A slot that resolves to one keeps it,
+			// so TestCreditSlots compares what is credited with the
+			// resolution.
+			if cr.ProjectKey == "" {
+				cr.ProjectKey = sec.proj
 			}
 			key := creditKey{proj: sec.proj, reason: sec.reason, level: sec.level, inTurn: inTurn}
 			e := group[key]
@@ -764,7 +821,7 @@ func (c *creditor) slotCredits() []Credit {
 			}
 			e.Seconds++
 			e.Halves += 2
-			for _, ai := range []int32{sec.anchor, sec.other} {
+			for _, ai := range []int32{sec.anchor, sec.other, at.resolver} {
 				if ai < 0 {
 					continue
 				}
@@ -778,8 +835,13 @@ func (c *creditor) slotCredits() []Credit {
 					}
 				}
 			}
-			if sec.label != "" && !slices.Contains(e.Labels, sec.label) {
-				e.Labels = append(e.Labels, sec.label)
+			// The side-door heartbeat that resolved an editor slot labels all
+			// of it, as the anchor that resolved a shared terminal's slot does
+			// through its labels above (D-rule2-sidedoor).
+			for _, l := range []event.Label{sec.label, sideDoorLabel(at.sideDoor)} {
+				if l != "" && !slices.Contains(e.Labels, l) {
+					e.Labels = append(e.Labels, l)
+				}
 			}
 		}
 		slices.SortFunc(keys, func(x, y creditKey) int {

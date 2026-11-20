@@ -9,8 +9,13 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
+	"github.com/some-du6e/pairtime/internal/server/auth"
+	"github.com/some-du6e/pairtime/internal/server/backup"
 	"github.com/some-du6e/pairtime/internal/server/config"
 	"github.com/some-du6e/pairtime/internal/server/migrations"
 	"github.com/some-du6e/pairtime/internal/server/ops"
@@ -38,6 +43,7 @@ const retentionEvery = time.Hour
 func runServe(ctx context.Context, e *env, args []string) int {
 	fs := newFlagSet("serve", serveSummary, e)
 	load := configFlags(fs, e)
+	replica := fs.String("litestream-replica", "", "the path in the main bucket that Litestream replicates the database to, as litestream.yml's replica path; /readyz then checks the replica's lag (DESIGN 10.4)")
 	if code, done := parse(fs, args); done {
 		return code
 	}
@@ -50,17 +56,24 @@ func runServe(ctx context.Context, e *env, args []string) int {
 	for _, w := range cfg.Warnings {
 		logger.Warn(w)
 	}
-	if err := serve(ctx, cfg, logger, e); err != nil {
+	if err := serve(ctx, cfg, logger, e, serveOptions{replica: *replica}); err != nil {
 		logger.Error("pairtimed stopped", "err", err)
 		return 1
 	}
 	return 0
 }
 
+// serveOptions are serve's choices besides the configuration.
+type serveOptions struct {
+	// replica is the replica's path in the main bucket when Litestream
+	// runs serve, or "".
+	replica string
+}
+
 // serve runs the server until ctx ends or a listener fails. The order
 // matters: the SQLite version check comes before anything touches the
 // database file, and migrations finish before the first request.
-func serve(ctx context.Context, cfg *config.Config, logger *slog.Logger, e *env) error {
+func serve(ctx context.Context, cfg *config.Config, logger *slog.Logger, e *env, so serveOptions) error {
 	logger.Info("starting", "version", version.Get().String(), "config", cfg.Path, "engine", cfg.Database.Engine)
 
 	// The pages render before the database opens, so a bad template or
@@ -116,11 +129,16 @@ func serve(ctx context.Context, cfg *config.Config, logger *slog.Logger, e *env)
 
 	reg := ops.NewRegistry()
 	var w *writer.Writer
+	// The replica's lag, under Litestream, hears of every commit (set
+	// below, once the bucket is open).
+	var repl atomic.Pointer[backup.Replication]
 	series := ops.NewSeries(reg, func() int { return w.QueueDepth() })
 	w = writer.Start(db.Write, writer.Options{OnCommit: func(c writer.Commit) {
 		series.ObserveCommit(c.Duration, c.Rows, c.Failed, c.Err)
 		if c.Err != nil {
 			logger.Error("writer transaction failed", "err", c.Err, "ops", c.Ops, "rows", c.Rows)
+		} else if r := repl.Load(); r != nil && c.Rows > c.Failed {
+			r.Wrote(c.Start.Add(c.Duration))
 		}
 	}})
 	// Deferred after db.Close, so it runs first: queued writes commit
@@ -169,6 +187,56 @@ func serve(ctx context.Context, cfg *config.Config, logger *slog.Logger, e *env)
 		checks = append(checks, objs.checks()...)
 		logger.Info("object storage", "endpoint", cfg.ObjectStorage.Endpoint, "bucket", objs.main.Name(), "snapshot_bucket", objs.snapshots.Name())
 	}
+	switch {
+	case so.replica != "" && objs == nil:
+		return fmt.Errorf("-litestream-replica says Litestream replicates to the main bucket, but [object_storage] in %s is off", cfg.Path)
+	case so.replica != "" && cfg.Database.Engine != config.EngineSQLite:
+		return fmt.Errorf("-litestream-replica is for SQLite, and database.engine is %q", cfg.Database.Engine)
+	case so.replica != "":
+		r := backup.NewReplication(cfg.Database.Path, objs.main, so.replica)
+		repl.Store(r)
+		checks = append(checks, ops.Check{Name: "replication", Run: r.Check})
+		reg.GaugeFunc("pairtime_replication_lag_seconds", "How long the oldest change Litestream's replica lacks has waited, -1 before the first measure (DESIGN 10.4).", r.LastLag)
+		logger.Info("under Litestream: /readyz checks the replica's lag", "replica", objs.main.Name()+"/"+so.replica, "max_lag", backup.MaxLag.String())
+	case objs != nil:
+		logger.Warn("serve runs without -litestream-replica, so /readyz doesn't check replication; litestream.yml's exec passes it (deploy/litestream.yml)")
+	}
+
+	// The jobs below stop before the database closes: each is deferred
+	// after db.Close and w.Close, so it runs first.
+	bctx, stopBackground := context.WithCancel(ctx)
+	var background sync.WaitGroup
+	defer func() {
+		stopBackground()
+		background.Wait()
+	}()
+	if objs != nil && cfg.Database.Engine == config.EngineSQLite {
+		if err := backup.RemoveStaleCopies(backup.SnapshotDir(cfg.DataDir)); err != nil {
+			logger.Warn("couldn't remove the copies an unfinished snapshot left", "err", err)
+		}
+		job, err := newSnapshotJob(cfg, objs)
+		if err != nil {
+			logger.Warn("no nightly snapshots", "reason", err.Error())
+		} else {
+			last := reg.Gauge("pairtime_snapshot_last_success_timestamp_seconds", "When the last nightly snapshot was stored, in Unix seconds (DESIGN 10.3).")
+			failed := reg.Counter("pairtime_snapshot_failures_total", "Nightly snapshots that failed.")
+			background.Go(func() { runSnapshots(bctx, job, logger, last, failed) })
+		}
+	}
+	if err := distinctPushURLs(cfg.Secrets.Get); err != nil {
+		return err
+	}
+	if raw := cfg.Secrets.Get(envHeartbeatURL); raw != "" {
+		if err := checkPushURL(envHeartbeatURL, raw); err != nil {
+			return err
+		}
+		last := reg.Gauge("pairtime_heartbeat_last_ping_timestamp_seconds", "When pairtimed last pinged its push monitor, in Unix seconds (DESIGN 10.4).")
+		failed := reg.Counter("pairtime_heartbeat_failures_total", "Push-monitor pings that failed.")
+		background.Go(func() { runHeartbeat(bctx, raw, checks, logger, last, failed) })
+		logger.Info("the heartbeat pings its push monitor every 5 minutes while /readyz passes", "every", heartbeatEvery.String())
+	} else if objs != nil {
+		logger.Warn(envHeartbeatURL + " isn't set, so no push monitor hears from pairtimed (DESIGN 10.4)")
+	}
 
 	signIn, err := newSignIn(cfg, db, w, logger, site.Signups.MayCreate)
 	if err != nil {
@@ -179,6 +247,16 @@ func serve(ctx context.Context, cfg *config.Config, logger *slog.Logger, e *env)
 	public.HandleFunc("GET /healthz", ops.Healthz)
 	site.Register(public)
 	signIn.Register(public)
+	visit := pages.SignIn{
+		Enabled:    signIn.Enabled(),
+		LoginPath:  auth.LoginPath,
+		LogoutPath: auth.LogoutPath,
+		Visitor:    visitor(signIn, logger),
+	}
+	// The home page at /, where a sign-in without return_to lands.
+	site.RegisterHome(public, visit)
+	// /demo, the dashboard page drawn from a fixed, labelled sample.
+	site.RegisterDemo(public, visit, time.Now)
 	maintainCtx, stopMaintain := context.WithCancel(ctx)
 	defer stopMaintain()
 	go signIn.Maintain(maintainCtx)
@@ -194,7 +272,7 @@ func serve(ctx context.Context, cfg *config.Config, logger *slog.Logger, e *env)
 	}
 	errLog := slog.NewLogLogger(logger.Handler(), slog.LevelWarn)
 	servers := []*http.Server{
-		newHTTPServer(public, errLog),
+		newHTTPServer(withHSTS(cfg.BaseURL, public), errLog),
 		newHTTPServer(ops.Handler(reg, checks, ops.DefaultCheckTimeout), errLog),
 	}
 	listeners := []net.Listener{pubLn, opsLn}
@@ -253,6 +331,26 @@ func retentionReport(logger *slog.Logger, deleted, failed *ops.Counter) func(r r
 			logger.Info("retention job deleted rows", "job", r.ID, "rows", r.Deleted)
 		}
 	}
+}
+
+// hstsValue is the Strict-Transport-Security header the public listener
+// sends: a browser that reads it over https uses only https for this host
+// for the next year (RFC 6797).
+const hstsValue = "max-age=31536000"
+
+// withHSTS sets Strict-Transport-Security on every response h writes, when
+// base_url is https. Over plain http the header must not be sent (RFC 6797
+// 7.2), and config allows http only on a loopback host, for local runs and
+// tests. config has already put base_url in canonical form, so the scheme
+// is lowercase.
+func withHSTS(baseURL string, h http.Handler) http.Handler {
+	if !strings.HasPrefix(baseURL, "https://") {
+		return h
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Strict-Transport-Security", hstsValue)
+		h.ServeHTTP(w, r)
+	})
 }
 
 // newHTTPServer returns a server with timeouts for slow clients. There is

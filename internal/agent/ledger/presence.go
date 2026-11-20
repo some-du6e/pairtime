@@ -41,6 +41,12 @@ type Presence struct {
 	once    sync.Once
 	dropped atomic.Uint64
 	problem func(string)
+
+	// mu orders what Record and the goroutine say about dropped records,
+	// so the last word is right: being dropped before the writer opens,
+	// lost once it has.
+	mu       sync.Mutex
+	attached bool
 }
 
 // presenceItem is a record, or a seal when sealed is set, which the
@@ -51,7 +57,8 @@ type presenceItem struct {
 }
 
 // NewPresence starts a Presence. problem, when set, hears about records it
-// had to drop and writes that failed.
+// had to drop and writes that failed. Its messages are about presence's
+// queue only, so the agent files them apart from why the ledger isn't open.
 func NewPresence(problem func(msg string)) *Presence {
 	p := &Presence{
 		items:   make(chan presenceItem, presenceQueue),
@@ -79,9 +86,34 @@ func (p *Presence) Record(r presence.Record) {
 	select {
 	case p.items <- presenceItem{rec: r}:
 	default:
-		if p.dropped.Add(1) == 1 && p.problem != nil {
-			p.problem("the ledger isn't open, so presence and focus records are being dropped")
-		}
+		p.drop()
+	}
+}
+
+// drop counts a record Record dropped and says so.
+func (p *Presence) drop() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	n := p.dropped.Add(1)
+	if p.problem == nil {
+		return
+	}
+	switch {
+	case p.attached:
+		p.problem(fmt.Sprintf("the ledger fell behind, and %d presence and focus records were dropped", n))
+	case n == 1:
+		p.problem("the ledger isn't open, so presence and focus records are being dropped")
+	}
+}
+
+// markAttached marks the writer open, and when records were dropped before
+// it opened, says how many are lost.
+func (p *Presence) markAttached() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.attached = true
+	if n := p.dropped.Load(); n > 0 && p.problem != nil {
+		p.problem(fmt.Sprintf("%d presence and focus records were dropped while the ledger wasn't open", n))
 	}
 }
 
@@ -132,6 +164,7 @@ func (p *Presence) run() {
 	case <-p.stop:
 		return
 	}
+	p.markAttached()
 	for {
 		select {
 		case it := <-p.items:

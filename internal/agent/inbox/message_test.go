@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/some-du6e/pairtime/internal/platform"
 )
 
 func goodMessage() Message {
@@ -20,7 +22,7 @@ func goodMessage() Message {
 		Mono:   81163000,
 		BootID: "6f0f6f6e-2b1c-4c5e-9d07-0e3c1b2a4f55",
 		Chain: []Proc{
-			{PID: 4242, Name: "pairtime", Start: time.Date(2026, 11, 19, 11, 59, 59, 0, time.UTC)},
+			{PID: 4242, Name: "pairtime", Start: time.Date(2026, 11, 19, 11, 59, 59, 0, time.UTC), Ticks: 8116290},
 			{PID: 4100, Name: "claude", Start: time.Date(2026, 11, 19, 9, 0, 0, 0, time.UTC)},
 			{PID: 1},
 		},
@@ -28,9 +30,29 @@ func goodMessage() Message {
 	}
 }
 
+func TestProcID(t *testing.T) {
+	start := time.Date(2026, 11, 19, 11, 59, 59, 0, time.UTC)
+	tests := []struct {
+		name string
+		p    Proc
+		want platform.ID
+	}{
+		{"the ticks a Linux sender read name the process", Proc{PID: 7, Start: start, Ticks: 8116290}, platform.ID{PID: 7, Start: 8116290}},
+		{"without ticks the start does, in Unix nanoseconds", Proc{PID: 7, Start: start}, platform.ID{PID: 7, Start: start.UnixNano()}},
+		{"with neither only the pid is known", Proc{PID: 7}, platform.ID{PID: 7}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.p.ID(); got != tt.want {
+				t.Errorf("ID = %+v, want %+v", got, tt.want)
+			}
+		})
+	}
+}
+
 // sameProc reports whether a and b are the same entry of a parent chain.
 func sameProc(a, b Proc) bool {
-	return a.PID == b.PID && a.Name == b.Name && a.Start.Equal(b.Start)
+	return a.PID == b.PID && a.Name == b.Name && a.Start.Equal(b.Start) && a.Ticks == b.Ticks
 }
 
 // chainOf returns a parent chain of n processes.

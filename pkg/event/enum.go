@@ -49,10 +49,12 @@ var sources = enum[Source]{name: "source", values: []Source{
 type Via string
 
 const (
-	// ViaHook is a hook the harness ran: one of its native hooks, or
-	// `pairtime hook` and `pairtime emit` called from a process whose
-	// parent chain reaches a host the mapping or plugin lists (DESIGN
-	// 5.3).
+	// ViaHook is a hook the harness ran, delivered over the socket or the
+	// pipe: one of its native hooks, or `pairtime hook` and `pairtime
+	// emit`, whose parent chain the agent walks from the connection's peer
+	// to a host the adapter, mapping or plugin lists (DESIGN 3.4, 5.3). A
+	// chain the sender recorded itself never makes a record ViaHook
+	// (DESIGN 5.2).
 	ViaHook Via = "hook"
 	// ViaLog is one of pairtime's log readers: a transcript, rollout or
 	// history file the harness wrote.
@@ -90,13 +92,16 @@ const (
 	// and why macOS gets it.
 	ViaBridgeUnverified Via = "bridge_unverified"
 	// ViaTrack is `pairtime track`, called by an agent following the
-	// AGENTS.md entry (DESIGN 5.4). Like ViaBridge, its anchors are level C
+	// AGENTS.md entry (DESIGN 5.4), over the socket or through the inbox
+	// spool (DESIGN 5.2). Like ViaBridge, its anchors are level C
 	// unless keyboard input in the host window in the 10 s before them
 	// makes them level A, and it never counts toward logged_s.
 	ViaTrack Via = "track"
-	// ViaPlugin is a plugin posting over HTTP or through the inbox, or
-	// `pairtime emit` and the generic hook mode from a process whose
-	// parent chain reaches no listed host (DESIGN 5.3). Like ViaBridge, its
+	// ViaPlugin is a plugin posting over HTTP or writing to inbox/<id>/; a
+	// hook, `pairtime emit` or generic hook mode call over the socket or
+	// the pipe whose walked parent chain reaches no listed host; and every
+	// such call that reached the agent through the inbox spool, whatever
+	// parent chain it recorded (DESIGN 3.4, 5.2, 5.3). Like ViaBridge, its
 	// anchors are level C unless keyboard input in the host window in the
 	// 10 s before them makes them level A, and it never counts toward
 	// logged_s.
@@ -132,6 +137,9 @@ var harnesses = enum[Harness]{name: "harness", values: []Harness{
 	HarnessClaudeCode, HarnessCursor, HarnessCopilot, HarnessCodex, HarnessGemini,
 	HarnessDevin, HarnessCline, HarnessOpenCode, HarnessOther, HarnessNone,
 }}
+
+// Harnesses returns every harness, HarnessNone last, in the schema's order.
+func Harnesses() []Harness { return slices.Clone(harnesses.values) }
 
 // StartKind says how a harness session began (session.start).
 type StartKind string

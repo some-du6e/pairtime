@@ -22,7 +22,13 @@
 //   - old/<key id>/: the chain of a device key this installation no
 //     longer writes with, kept for reading.
 //
-// A frame is u8(kind) || u32(len) || payload || u32(CRC-32C), big-endian.
+// A frame is u8(kind) || u32(len) || payload || u32(CRC-32C), big-endian,
+// with a payload of at most 16 MiB. The writer refuses a record that
+// wouldn't fit.
+//
+// The device keystore keeps, next to K_dev, the device id of the one chain
+// the key writes (Options.Chains), where deleting the ledger directory
+// doesn't reach it.
 //
 // # Numbers
 //
@@ -32,17 +38,23 @@
 // Only records in a sealed batch keep their numbers: a crash can cut
 // records no batch holds yet, and after the restart the next record takes
 // the number after the last one that survived. Nothing of a cut record
-// left the device, so no nonce or salt anyone has seen is used twice. A new
-// K_dev, as after a restore, starts a new device whose chain begins at 1
-// (decision E-sm-1.1-seq-gaps, ledger-v1 3).
+// left the device, so no nonce or salt anyone has seen is used twice, and
+// the number Write returns is final only once Options.Sealed delivers the
+// record's batch. A new K_dev, as after a restore, starts a new device
+// whose chain begins at 1, and a K_dev never starts a second chain
+// (ErrKeyReuse). Decision E-sm-1.1-seq-gaps settled these rules; it is
+// decided, and its wording for ledger-v1 3 and 4.1 is pending, so the spec
+// still says only that no s repeats under a K_dev.
 //
 // # Durability
 //
 // A record is written with one write call and no flush. A seal writes its
 // seal frame after the batch's records, flushes that segment once, and
 // then appends the row to batches.seg without a flush: one fsync per seal.
-// Open rebuilds a row a power cut lost from its seal frame, cuts a torn
-// frame off the newest segment, and seals the records that survived
-// without a batch. Batches leave the device, through Options.Sealed, only
-// once they are on disk.
+// A receipt is flushed with everything in batches.seg before it, so only
+// what follows the last receipt can be a torn tail. Open cuts a torn frame
+// off the newest segment and off batches.seg, rebuilds a row a crash or a
+// power cut lost from its seal frame, flushing the segment before the row,
+// and seals the records that survived without a batch. Batches leave the
+// device, through Options.Sealed, only once they are on disk.
 package ledger
