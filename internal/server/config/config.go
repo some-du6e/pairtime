@@ -19,7 +19,8 @@
 //	path   = "<data_dir>/pairtime.db"
 //
 //	[hca]
-//	client_id = ""
+//	client_id = ""                      # empty: nobody can sign in
+//	issuer    = "https://auth.hackclub.com"
 //
 //	[privacy_hub]
 //	aud      = ""
@@ -28,9 +29,19 @@
 //	[sentinel]
 //	socket = ""                         # empty: the sentinel is off (DESIGN 7.2)
 //
+//	[object_storage]                    # an empty endpoint turns it off (DESIGN 10.1, 10.3)
+//	endpoint        = ""                # e.g. "https://<account id>.r2.cloudflarestorage.com"
+//	region          = "auto"            # R2's; AWS and Hetzner take the bucket's region
+//	bucket          = ""                # Litestream's replica and evidence/
+//	snapshot_bucket = ""                # nightly snapshots, 30-day lifecycle; never the same as bucket
+//	virtual_host    = false             # true: <bucket>.<endpoint host>/<key>; false: <endpoint>/<bucket>/<key>
+//
 //	[[reviewers]]                       # one table per HCA sub
 //	sub   = "..."
 //	roles = ["qi", "program_reviewer:<program>"]
+//
+// With object storage on, the secrets PAIRTIME_S3_ACCESS_KEY_ID and
+// PAIRTIME_S3_SECRET_ACCESS_KEY hold the access key for both buckets.
 //
 // A key the file doesn't need can be left out. A key this package doesn't
 // know is an error, so a misspelt key can't silently fall back to its
@@ -49,6 +60,9 @@ import (
 	"strings"
 
 	"github.com/BurntSushi/toml"
+
+	"github.com/some-du6e/pairtime/internal/server/objstore"
+	"github.com/some-du6e/pairtime/internal/server/objstore/sigv4"
 )
 
 // DefaultPath is where the deploy bundle mounts pairtime.toml (DESIGN 10.1).
@@ -62,6 +76,10 @@ const (
 	// DefaultDatabaseFile is the SQLite file's name inside data_dir.
 	DefaultDatabaseFile = "pairtime.db"
 )
+
+// DefaultHCAIssuer is Hack Club Auth's issuer (SP 3.1). Tests point
+// hca.issuer at a fake.
+const DefaultHCAIssuer = "https://auth.hackclub.com"
 
 // The values profile_default takes (DESIGN 8.3). Public is the code
 // default, as R5 asks; Karim's instance launches with Ask.
@@ -93,6 +111,8 @@ type Config struct {
 	PrivacyHub     PrivacyHub `toml:"privacy_hub"`
 	Sentinel       Sentinel   `toml:"sentinel"`
 
+	ObjectStorage ObjectStorage `toml:"object_storage"`
+
 	Listen    string   `toml:"listen"`
 	OpsListen string   `toml:"ops_listen"`
 	DataDir   string   `toml:"data_dir"`
@@ -113,9 +133,11 @@ type Reviewer struct {
 }
 
 // HCA configures the Hack Club Auth client (DESIGN 3.10). Its secret is
-// in secrets.env.
+// PAIRTIME_HCA_CLIENT_SECRET in secrets.env.
 type HCA struct {
 	ClientID string `toml:"client_id"`
+	// Issuer is HCA's issuer URL, DefaultHCAIssuer unless set.
+	Issuer string `toml:"issuer"`
 }
 
 // PrivacyHub configures the privacy hub endpoints (DESIGN 8.9).
@@ -127,6 +149,43 @@ type PrivacyHub struct {
 // Sentinel configures the optional private sentinel (DESIGN 7.2).
 type Sentinel struct {
 	Socket string `toml:"socket"`
+}
+
+// ObjectStorage says where the two buckets are (DESIGN 10.1, 10.3, 10.5
+// item 4). The access key for both is in the secrets S3AccessKeyID and
+// S3SecretAccessKey. With no endpoint, object storage is off: pairtimed
+// runs without an evidence store or snapshots, and /readyz doesn't check
+// a bucket. That is for local runs and tests; a deployment sets it.
+type ObjectStorage struct {
+	Endpoint string `toml:"endpoint"`
+	Region   string `toml:"region"`
+	// Bucket holds Litestream's replica and the evidence store.
+	Bucket string `toml:"bucket"`
+	// SnapshotBucket holds the nightly snapshots and has a 30-day
+	// lifecycle, so it must not be Bucket.
+	SnapshotBucket string `toml:"snapshot_bucket"`
+	VirtualHost    bool   `toml:"virtual_host"`
+}
+
+// Enabled reports whether object storage is configured.
+func (o ObjectStorage) Enabled() bool { return o.Endpoint != "" }
+
+// ObjectStore returns the object storage client's configuration, with the
+// access key from the secrets, and false when object storage is off.
+func (c *Config) ObjectStore() (objstore.Config, bool) {
+	o := c.ObjectStorage
+	if !o.Enabled() {
+		return objstore.Config{}, false
+	}
+	return objstore.Config{
+		Endpoint:    o.Endpoint,
+		Region:      o.Region,
+		VirtualHost: o.VirtualHost,
+		Credentials: sigv4.Credentials{
+			AccessKeyID:     c.Secrets.Get(S3AccessKeyID),
+			SecretAccessKey: c.Secrets.Get(S3SecretAccessKey),
+		},
+	}, true
 }
 
 // Database says where the data lives. The Postgres URL holds a password,
@@ -202,6 +261,13 @@ func (c *Config) finish(dir string) error {
 		fail("reviewers: %v", err)
 	}
 
+	if c.HCA.Issuer == "" {
+		c.HCA.Issuer = DefaultHCAIssuer
+	}
+	if err := checkIssuer(c.HCA.Issuer); err != nil {
+		fail("hca.issuer: %v", err)
+	}
+
 	if u := c.PrivacyHub.JWKSURL; u != "" {
 		if p, err := url.Parse(u); err != nil || p.Scheme != "https" || p.Host == "" {
 			fail("privacy_hub.jwks_url is %q; it must be an https URL", u)
@@ -254,7 +320,48 @@ func (c *Config) finish(dir string) error {
 			fail("database.engine is %q: %v", EnginePostgres, err)
 		}
 	}
+	errs = append(errs, checkObjectStorage(&c.ObjectStorage, c.Secrets)...)
 	return errors.Join(errs...)
+}
+
+// checkObjectStorage fills in the region and checks the section and its
+// secrets. Errors never quote the endpoint when it carries a user part,
+// which may be a key.
+func checkObjectStorage(o *ObjectStorage, secrets Secrets) []error {
+	if o.Endpoint == "" {
+		if o.Region != "" || o.Bucket != "" || o.SnapshotBucket != "" || o.VirtualHost {
+			return []error{errors.New("object_storage.endpoint is empty, so object storage is off, but other object_storage keys are set; set the endpoint or remove the section")}
+		}
+		return nil
+	}
+	var errs []error
+	if u, err := objstore.ParseEndpoint(o.Endpoint); err != nil {
+		errs = append(errs, fmt.Errorf("object_storage.endpoint: %v", err))
+	} else {
+		o.Endpoint = u.String()
+	}
+	if o.Region == "" {
+		o.Region = objstore.DefaultRegion
+	}
+	if err := objstore.CheckRegion(o.Region); err != nil {
+		errs = append(errs, fmt.Errorf("object_storage.region: %v", err))
+	}
+	for _, b := range []struct{ key, name string }{{"bucket", o.Bucket}, {"snapshot_bucket", o.SnapshotBucket}} {
+		if b.name == "" {
+			errs = append(errs, fmt.Errorf("object_storage.%s is required: one bucket for the replica and evidence, a second for snapshots (DESIGN 10.5 item 4)", b.key))
+		} else if err := objstore.CheckBucketName(b.name); err != nil {
+			errs = append(errs, fmt.Errorf("object_storage.%s: %v", b.key, err))
+		}
+	}
+	if o.Bucket != "" && o.Bucket == o.SnapshotBucket {
+		errs = append(errs, fmt.Errorf("object_storage.bucket and snapshot_bucket are both %q; the snapshot bucket's 30-day lifecycle would delete the evidence and the replica, so give snapshots a second bucket (DESIGN 10.3)", o.Bucket))
+	}
+	for _, name := range []string{S3AccessKeyID, S3SecretAccessKey} {
+		if secrets.Get(name) == "" {
+			errs = append(errs, fmt.Errorf("object storage is on, so set the secret %s", name))
+		}
+	}
+	return errs
 }
 
 // semver matches the MAJOR.MINOR.PATCH scoring versions of DESIGN 6.6.
@@ -263,8 +370,10 @@ var semver = regexp.MustCompile(`^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9
 // programName is the <program> of program_reviewer:<program>.
 var programName = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,63}$`)
 
-// checkBaseURL returns base_url without a trailing slash. It must be an
-// https origin, or http on a loopback host for local runs.
+// checkBaseURL returns base_url as an origin in the form browsers send in
+// an Origin header (CanonicalOrigin), which is what POST /auth/logout
+// compares with. It must be an https origin, or http on a loopback host
+// for local runs.
 func checkBaseURL(raw string) (string, error) {
 	if raw == "" {
 		return "", errors.New(`it is required, such as "https://pairtime.example.org"`)
@@ -286,7 +395,67 @@ func checkBaseURL(raw string) (string, error) {
 	default:
 		return raw, fmt.Errorf("%q must start with https://", raw)
 	}
-	return strings.TrimSuffix(raw, "/"), nil
+	if strings.ContainsFunc(u.Hostname(), func(r rune) bool { return r >= 0x80 }) {
+		return raw, fmt.Errorf("%q has a host that isn't ASCII; write it in its xn-- form, which is what browsers send", raw)
+	}
+	return CanonicalOrigin(raw), nil
+}
+
+// CanonicalOrigin returns the origin of an http or https URL the way
+// browsers write it in an Origin header (RFC 6454 6.1): the scheme and host
+// in lowercase, and no port when it is the scheme's default. It returns ""
+// for anything else, such as a URL with a path, a query or a user.
+func CanonicalOrigin(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil || u.Opaque != "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || (u.Path != "" && u.Path != "/") {
+		return ""
+	}
+	var defaultPort string
+	switch u.Scheme {
+	case "https":
+		defaultPort = "443"
+	case "http":
+		defaultPort = "80"
+	default:
+		return ""
+	}
+	host, port := strings.ToLower(u.Hostname()), u.Port()
+	if host == "" {
+		return ""
+	}
+	if port == defaultPort {
+		port = ""
+	}
+	switch {
+	case port != "":
+		host = net.JoinHostPort(host, port)
+	case strings.Contains(host, ":"):
+		host = "[" + host + "]"
+	}
+	return u.Scheme + "://" + host
+}
+
+// checkIssuer checks hca.issuer: an https URL with a host and no query or
+// fragment, or http on a loopback host, where tests run a fake HCA. Its
+// path may be anything, and it is compared with the discovery document's
+// issuer exactly (OIDC Discovery 4.3).
+func checkIssuer(raw string) error {
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+		return fmt.Errorf("%q must be a URL such as %q, with no query or user", raw, DefaultHCAIssuer)
+	}
+	switch u.Scheme {
+	case "https":
+		return nil
+	case "http":
+		host := u.Hostname()
+		if ip := net.ParseIP(host); host == "localhost" || (ip != nil && ip.IsLoopback()) {
+			return nil
+		}
+		return fmt.Errorf("%q uses http; only https is allowed, except on localhost", raw)
+	default:
+		return fmt.Errorf("%q must start with https://", raw)
+	}
 }
 
 // checkReviewers checks the allowlist: each sub once, each role known.

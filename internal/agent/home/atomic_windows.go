@@ -48,18 +48,31 @@ func createTemp(dir, prefix string, private bool) (*os.File, error) {
 // user full access and nobody else any, protected from inheriting the
 // directory's entries.
 var userOnly = sync.OnceValues(func() (*windows.SecurityAttributes, error) {
+	return userOnlyAttributes("")
+})
+
+// userOnlyDir is userOnly for a directory (mkdirAll). Its entry is marked
+// for inheritance by files (OI) and directories (CI), so everything made
+// inside gets the same one entry and nothing else.
+var userOnlyDir = sync.OnceValues(func() (*windows.SecurityAttributes, error) {
+	return userOnlyAttributes("OICI")
+})
+
+// userOnlyAttributes builds the security attributes of userOnly and
+// userOnlyDir, whose one entry has the SDDL ACE flags inherit.
+func userOnlyAttributes(inherit string) (*windows.SecurityAttributes, error) {
 	user, err := windows.GetCurrentProcessToken().GetTokenUser()
 	if err != nil {
 		return nil, err
 	}
-	sd, err := windows.SecurityDescriptorFromString("D:P(A;;FA;;;" + user.User.Sid.String() + ")")
+	sd, err := windows.SecurityDescriptorFromString("D:P(A;" + inherit + ";FA;;;" + user.User.Sid.String() + ")")
 	if err != nil {
 		return nil, err
 	}
 	sa := &windows.SecurityAttributes{SecurityDescriptor: sd}
 	sa.Length = uint32(unsafe.Sizeof(*sa))
 	return sa, nil
-})
+}
 
 // rename retries for a moment while another process, such as a virus
 // scanner or the search indexer, has the target open, which makes
