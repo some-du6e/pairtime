@@ -60,11 +60,6 @@ jobs:
         # (JE must-fix 11).
         run: bash tools/ci/test_existing.sh -- $PLATFORM_DIRS
 
-      # TEMPORARY, for PR #54 only: shows which lock and directory cases ran
-      # or skipped on the runner. Delete before merging.
-      - name: go test -v of the lock and Create (temporary)
-        run: go test -v -count=1 -run 'TestLock|TestCreate' ./internal/agent/home/
-
   macos:
     name: macos
     runs-on: macos-latest
