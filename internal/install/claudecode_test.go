@@ -133,6 +133,7 @@ func TestClaudeCodeGoldens(t *testing.T) {
 		goos string // the OS planned for, whose binary path after.json holds
 	}{
 		{"hooks go after git-ai's and other tools' entries in an LF file", "settings-lf", "linux"},
+		{"git-ai 1.7.7's catch-all groups, sorted keys and missing final newline stay as they were", "git-ai-1.7.7", "linux"},
 		{"a CRLF file keeps CRLF, in its own lines and in pairtime's", "settings-crlf", "linux"},
 		{"comments, trailing commas and tabs stay as they were", "jsonc", "linux"},
 		{"a one-line file stays on one line", "compact", "linux"},
@@ -807,6 +808,56 @@ func TestUninstallKeepsLinks(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			env := testEnv(t, "linux", nil)
 			tt.run(t, env, newInstaller(t))
+		})
+	}
+}
+
+func TestClaudeCodeUninstallAfterGitAiMigrates(t *testing.T) {
+	tests := []struct {
+		name string
+		// migrated is what git-ai's daily install-hooks leaves after
+		// pairtime's install over settings-lf/before.json.
+		migrated string
+		// want is what uninstall must leave: what git-ai's migration makes
+		// of before.json alone.
+		want string
+	}{
+		{"git-ai 1.7.7 moving its hooks into catch-all groups after pairtime's install keeps pairtime's hooks, and uninstall leaves what git-ai alone would have",
+			"git-ai-migration/migrated.json", "git-ai-1.7.7/before.json"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			migrated := readOrNil(t, filepath.Join("testdata", "claudecode", tt.migrated))
+			want := readOrNil(t, filepath.Join("testdata", "claudecode", tt.want))
+			if migrated == nil || want == nil {
+				t.Fatalf("testdata/claudecode/%s or %s is missing", tt.migrated, tt.want)
+			}
+			env := testEnv(t, "linux", nil)
+			path := ClaudeSettings(env)
+			writeFile(t, path, golden(t, "settings-lf", "before.json"))
+			item, err := ClaudeCode(env)
+			if err != nil {
+				t.Fatal(err)
+			}
+			in := newInstaller(t)
+			install(t, in, item)
+			if got := readOrNil(t, path); !bytes.Equal(got, golden(t, "settings-lf", "after.json")) {
+				t.Fatalf("the install didn't give settings-lf/after.json:\n%s", got)
+			}
+			writeFile(t, path, migrated)
+
+			again, err := in.PlanInstall([]Item{item})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !again.Empty() {
+				t.Errorf("git-ai's rewrite makes a second install plan changes:\n%s", again.Diff())
+			}
+			again.Close()
+			uninstall(t, in)
+			if got := readOrNil(t, path); !bytes.Equal(got, want) {
+				t.Errorf("after uninstall the file holds\n%s\nwant %s\n%s", got, tt.want, want)
+			}
 		})
 	}
 }

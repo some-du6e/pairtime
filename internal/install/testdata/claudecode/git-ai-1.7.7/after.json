@@ -1,0 +1,230 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "env": {
+    "CLAUDE_CODE_ENABLE_TELEMETRY": "0"
+  },
+  "hooks": {
+    "Notification": [
+      {
+        "hooks": [
+          {
+            "command": "notify-send 'Claude Code' 'Claude needs your input'",
+            "type": "command"
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/home/teen/.local/bin/pairtime",
+            "args": [
+              "hook",
+              "--harness",
+              "claude_code",
+              "--event",
+              "Notification"
+            ]
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "command": "/home/teen/.git-ai/bin/git-ai checkpoint claude --hook-input stdin",
+            "type": "command"
+          }
+        ],
+        "matcher": "*"
+      },
+      {
+        "matcher": "Edit|Write|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/home/teen/.local/bin/pairtime",
+            "args": [
+              "hook",
+              "--harness",
+              "claude_code",
+              "--event",
+              "PostToolUse"
+            ]
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "command": "/home/teen/.git-ai/bin/git-ai checkpoint claude --hook-input stdin",
+            "type": "command"
+          }
+        ],
+        "matcher": "*"
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "command": "paplay /usr/share/sounds/freedesktop/stereo/complete.oga",
+            "timeout": 5,
+            "type": "command"
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/home/teen/.local/bin/pairtime",
+            "args": [
+              "hook",
+              "--harness",
+              "claude_code",
+              "--event",
+              "Stop"
+            ]
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/home/teen/.local/bin/pairtime",
+            "args": [
+              "hook",
+              "--harness",
+              "claude_code",
+              "--event",
+              "SessionStart"
+            ]
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/home/teen/.local/bin/pairtime",
+            "args": [
+              "hook",
+              "--harness",
+              "claude_code",
+              "--event",
+              "UserPromptSubmit"
+            ]
+          }
+        ]
+      }
+    ],
+    "StopFailure": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/home/teen/.local/bin/pairtime",
+            "args": [
+              "hook",
+              "--harness",
+              "claude_code",
+              "--event",
+              "StopFailure"
+            ]
+          }
+        ]
+      }
+    ],
+    "PermissionRequest": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/home/teen/.local/bin/pairtime",
+            "args": [
+              "hook",
+              "--harness",
+              "claude_code",
+              "--event",
+              "PermissionRequest"
+            ]
+          }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/home/teen/.local/bin/pairtime",
+            "args": [
+              "hook",
+              "--harness",
+              "claude_code",
+              "--event",
+              "SubagentStart"
+            ]
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/home/teen/.local/bin/pairtime",
+            "args": [
+              "hook",
+              "--harness",
+              "claude_code",
+              "--event",
+              "SubagentStop"
+            ]
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/home/teen/.local/bin/pairtime",
+            "args": [
+              "hook",
+              "--harness",
+              "claude_code",
+              "--event",
+              "SessionEnd"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "model": "opus",
+  "permissions": {
+    "allow": [
+      "Bash(npm run test:*)",
+      "Bash(git diff:*)"
+    ],
+    "deny": [
+      "Read(./.env)"
+    ]
+  },
+  "statusLine": {
+    "command": "~/.claude/statusline.sh",
+    "type": "command"
+  }
+}
