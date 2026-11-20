@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -11,7 +12,7 @@ import (
 	"github.com/some-du6e/pairtime/internal/server/store"
 )
 
-const migrateSummary = "Apply the migrations the database lacks; serve does this at start too"
+const migrateSummary = "Apply the migrations an existing database lacks; serve does this at start too"
 
 func init() {
 	register(&command{name: "migrate", summary: migrateSummary, run: runMigrate})
@@ -32,7 +33,19 @@ func runMigrate(ctx context.Context, e *env, args []string) int {
 	if err != nil {
 		return fail(err)
 	}
-	db, err := store.Open(ctx, storeOptions(cfg, e))
+	for _, w := range cfg.Warnings {
+		fmt.Fprintf(e.stderr, "pairtimed migrate: warning: %s\n", w)
+	}
+	// Neither form creates a database. Litestream restores the database
+	// from the replica only when the file is missing, and then starts
+	// serve, which creates a new one where there is no replica (DESIGN
+	// 10.1). A file migrate made on a new host would stop that restore.
+	o := storeOptions(cfg, e)
+	o.NoCreate = true
+	db, err := store.Open(ctx, o)
+	if errors.Is(err, store.ErrNoDatabase) {
+		return fail(fmt.Errorf("%w. migrate opens only a database that exists, so that Litestream can still restore one here; pairtimed serve creates it", err))
+	}
 	if err != nil {
 		return fail(err)
 	}

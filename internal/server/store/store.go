@@ -16,7 +16,9 @@
 //   - Placeholders are $1, $2, and so on. modernc.org/sqlite binds $NNN by
 //     number, as Postgres does.
 //   - Upserts are INSERT ... ON CONFLICT (...) DO UPDATE SET col =
-//     excluded.col. Never INSERT OR REPLACE or INSERT OR IGNORE.
+//     excluded.col. Never INSERT OR REPLACE or INSERT OR IGNORE. A
+//     migration may not upsert, since that rewrites rows the previous
+//     release wrote; package migrations allows ON CONFLICT DO NOTHING.
 //   - Times are BIGINT epoch milliseconds, and ids are UUIDv7 as TEXT.
 //   - Column types are TEXT and BIGINT, and BYTEA for raw bytes. No
 //     AUTOINCREMENT, SERIAL, STRICT or WITHOUT ROWID.
@@ -30,6 +32,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log/slog"
 )
 
 // Engine names a database engine.
@@ -46,11 +49,26 @@ type Options struct {
 	// Engine is SQLite or Postgres. Empty means SQLite.
 	Engine Engine
 	// Path is the SQLite database file. A missing file is created with
-	// mode 0600, and a missing directory with mode 0700.
+	// mode 0600, and a missing directory with mode 0700, unless NoCreate
+	// is set. An existing file that group or others can read, as a
+	// Litestream restore leaves it, loses that access, and so do its -wal
+	// and -shm files. Open refuses the database when group or others can
+	// enter its directory and every directory above it, since Litestream
+	// writes copies of it there that pairtimed can't chmod. Neither check
+	// runs on Windows.
 	Path string
+	// NoCreate makes Open fail with ErrNoDatabase, and create nothing,
+	// when the SQLite file is missing. Only serve creates the database:
+	// Litestream restores from the replica when the file is missing and
+	// only then starts serve, so a file another command created would
+	// stop the restore (DESIGN 10.1). Postgres ignores it.
+	NoCreate bool
 	// URL is the Postgres connection URL,
 	// postgres://user:password@host:port/database?sslmode=....
 	URL string
+	// Logger gets a warning when Open changes a database file's mode.
+	// Nil means slog.Default().
+	Logger *slog.Logger
 	// SQLiteVersion, when set, stands in for what sqlite_version() reports.
 	// It exists for the test that checks the refusal of an old SQLite
 	// (WP-SV1); leave it empty everywhere else.
