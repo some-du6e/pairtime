@@ -13,6 +13,7 @@ import (
 	"slices"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/godbus/dbus/v5"
@@ -181,15 +182,51 @@ func (l *logind) takeDelayLock() (io.Closer, error) {
 	if !l.conn.SupportsUnixFDs() {
 		return nil, errors.New("the bus connection can't pass file descriptors")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), callWait)
-	defer cancel()
+	// No context: when a call's context ends, godbus stops tracking it and
+	// drops the answer if it comes later, file descriptor and all.
+	call := l.conn.Object(logindName, logindPath).Go(managerIface+".Inhibit", 0, make(chan *dbus.Call, 1),
+		"sleep", "pairtime", "Recording the minutes before sleep", "delay")
+	return awaitDelayLock(call, callWait)
+}
+
+// awaitDelayLock waits up to wait for logind's answer to Inhibit. For a
+// caller that isn't root, logind answers only once polkit allows the lock,
+// which can take seconds while polkitd starts, or right after a resume on
+// a slow disk. An answer after the wait is closed as it comes: a lock that
+// pairtime held without knowing would make every later sleep wait the
+// whole InhibitDelayMaxSec.
+func awaitDelayLock(call *dbus.Call, wait time.Duration) (io.Closer, error) {
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+	select {
+	case <-call.Done:
+		return delayLock(call)
+	case <-timer.C:
+		go func() {
+			<-call.Done
+			closeFDs(call.Body)
+		}()
+		return nil, errors.New("logind didn't answer Inhibit in time")
+	}
+}
+
+// delayLock returns the lock in Inhibit's answer.
+func delayLock(call *dbus.Call) (io.Closer, error) {
 	var fd dbus.UnixFD
-	err := l.conn.Object(logindName, logindPath).CallWithContext(ctx, managerIface+".Inhibit", 0,
-		"sleep", "pairtime", "Recording the minutes before sleep", "delay").Store(&fd)
-	if err != nil {
+	if err := call.Store(&fd); err != nil {
+		closeFDs(call.Body)
 		return nil, err
 	}
 	return os.NewFile(uintptr(fd), "logind delay lock"), nil
+}
+
+// closeFDs closes the file descriptors in a message body.
+func closeFDs(body []any) {
+	for _, v := range body {
+		if fd, ok := v.(dbus.UnixFD); ok {
+			syscall.Close(int(fd))
+		}
+	}
 }
 
 // run turns logind's signals into Power events on out until ctx ends or
