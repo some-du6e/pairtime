@@ -176,16 +176,17 @@ func startMacLoop(t *testing.T, mainThread bool, tweak func(b *macBackend)) (*Lo
 }
 
 // testObjC has the messages only the tests send: making a synthetic
-// activation notification and posting it.
+// activation notification, handing it over, and naming a class.
 var testObjC struct {
-	once  sync.Once
-	err   error
-	send2 func(obj, sel, a, b uintptr) uintptr
-	send3 func(obj, sel, a, b, c uintptr) uintptr
+	once      sync.Once
+	err       error
+	send2     func(obj, sel, a, b uintptr) uintptr
+	send3     func(obj, sel, a, b, c uintptr) uintptr
+	className func(obj uintptr) string // object_getClassName
 
-	clsNSDictionary                     uintptr
-	selCurrentApp, selDictWithObjForKey uintptr
-	selPostNotification                 uintptr
+	clsNSDictionary, clsNSNotification   uintptr
+	selCurrentApp, selDictWithObjForKey  uintptr
+	selPostNotification, selNoteWithName uintptr
 }
 
 func loadTestObjC() error {
@@ -195,23 +196,50 @@ func loadTestObjC() error {
 		}
 		l := dlopen(pathLibObjC)
 		msgSend := l.sym("objc_msgSend")
+		l.fn(&testObjC.className, "object_getClassName")
 		if testObjC.err = l.err; testObjC.err != nil {
 			return
 		}
 		purego.RegisterFunc(&testObjC.send2, msgSend)
 		purego.RegisterFunc(&testObjC.send3, msgSend)
 		testObjC.clsNSDictionary = objc.getClass("NSDictionary")
+		testObjC.clsNSNotification = objc.getClass("NSNotification")
 		testObjC.selCurrentApp = objc.registerName("currentApplication")
 		testObjC.selDictWithObjForKey = objc.registerName("dictionaryWithObject:forKey:")
 		testObjC.selPostNotification = objc.registerName("postNotificationName:object:userInfo:")
+		testObjC.selNoteWithName = objc.registerName("notificationWithName:object:userInfo:")
 	})
 	return testObjC.err
 }
 
-// postActivation posts the NSWorkspaceDidActivateApplicationNotification
-// NSWorkspace would post if this process came to the front, to NSWorkspace's
-// own notification center. The center calls its observers on the posting
-// thread before returning, so no app's focus changes.
+// activationInfo returns the userInfo NSWorkspace would attach to an
+// activation of this process, autoreleased.
+func activationInfo() uintptr {
+	app := objc.send(objc.clsNSRunningApplication, testObjC.selCurrentApp)
+	return testObjC.send2(testObjC.clsNSDictionary, testObjC.selDictWithObjForKey, app, objc.applicationKey)
+}
+
+// deliverActivation hands the observer's method the
+// NSWorkspaceDidActivateApplicationNotification NSWorkspace would send if
+// this process came to the front, the way NSWorkspace's notification center
+// calls it. No app's focus changes.
+func deliverActivation(t *testing.T, b *macBackend) {
+	t.Helper()
+	if err := loadTestObjC(); err != nil {
+		t.Fatal(err)
+	}
+	if b.observer == 0 {
+		t.Fatalf("the Loop has no NSWorkspace observer: %v", b.l.Status().Focus)
+	}
+	withPool(func() {
+		ws := objc.send(objc.clsNSWorkspace, objc.selSharedWorkspace)
+		note := testObjC.send3(testObjC.clsNSNotification, testObjC.selNoteWithName, objc.didActivateName, ws, activationInfo())
+		objc.send1(b.observer, objc.selActivated, note)
+	})
+}
+
+// postActivation posts that same notification to NSWorkspace's
+// notification center, for TestFindingRunLoop.
 func postActivation(t *testing.T) {
 	t.Helper()
 	if err := loadTestObjC(); err != nil {
@@ -220,9 +248,7 @@ func postActivation(t *testing.T) {
 	withPool(func() {
 		ws := objc.send(objc.clsNSWorkspace, objc.selSharedWorkspace)
 		nc := objc.send(ws, objc.selNotificationCenter)
-		app := objc.send(objc.clsNSRunningApplication, testObjC.selCurrentApp)
-		info := testObjC.send2(testObjC.clsNSDictionary, testObjC.selDictWithObjForKey, app, objc.applicationKey)
-		testObjC.send3(nc, testObjC.selPostNotification, objc.didActivateName, ws, info)
+		testObjC.send3(nc, testObjC.selPostNotification, objc.didActivateName, ws, activationInfo())
 	})
 }
 
@@ -258,10 +284,10 @@ func TestLoopOnMac(t *testing.T) {
 			},
 		},
 		{
-			name:       "a synthetic NSWorkspace activation reaches the handler as this process",
+			name:       "the observer's method turns a synthetic activation of this process into its App",
 			mainThread: true,
 			run: func(t *testing.T, l *Loop, b *macBackend, rec *macRecorder) {
-				postActivation(t)
+				deliverActivation(t, b)
 				app := rec.waitFocus(t, os.Getpid())
 				t.Logf("activation: pid %d, bundle id %q, executable %q", app.PID, app.BundleID, app.Executable)
 			},
@@ -298,14 +324,14 @@ func TestLoopOnMac(t *testing.T) {
 			},
 		},
 		{
-			name:       "off the main thread IOKit still registers, Status says where the Loop runs, and a synthetic activation still arrives",
+			name:       "off the main thread IOKit still registers, Status says where the Loop runs, and the observer still turns an activation into an App",
 			mainThread: false,
 			run: func(t *testing.T, l *Loop, b *macBackend, rec *macRecorder) {
 				st := l.Status()
 				if st.MainThread || st.Power != nil {
 					t.Errorf("Status() = %+v, want off the main thread with IOKit registered", st)
 				}
-				postActivation(t)
+				deliverActivation(t, b)
 				rec.waitFocus(t, os.Getpid())
 			},
 		},

@@ -77,8 +77,10 @@ type macBackend struct {
 	center                   uintptr
 	lockedName, unlockedName uintptr
 
-	// NSWorkspace activations.
+	// NSWorkspace activations. activations counts the notifications the
+	// observer's method got, whatever they held.
 	wsCenter, observer uintptr
+	activations        atomic.Uint64
 
 	// testAck, when set, gets IOKit answers in place of IOAllowPowerChange,
 	// so a test can feed the callback a message macOS never sent.
@@ -343,6 +345,7 @@ func onActivated(self, cmd, note uintptr) {
 	if b == nil {
 		return
 	}
+	b.activations.Add(1)
 	at := time.Now().Round(0)
 	withPool(func() {
 		info := objc.send(note, objc.selUserInfo)

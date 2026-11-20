@@ -85,6 +85,19 @@ jobs:
         # in for this one.
         run: bash tools/ci/test_existing.sh -count=1 -- $PLATFORM_DIRS
 
+      - name: Key-down idle without Input Monitoring
+        # The runner image grants Input Monitoring to the job's processes, so
+        # the run above can't show what key-down idle does without it, which
+        # is the question WP-OS3 has to answer (SM 1.2, DESIGN 5.7). This
+        # revokes the grant on this job's throwaway VM and asks again; the
+        # finding's file name says which state the test saw.
+        if: ${{ !cancelled() }}
+        env:
+          PAIRTIME_FINDINGS_DIR: ${{ runner.temp }}/findings
+        run: |
+          sudo tccutil reset ListenEvent || echo "::warning::tccutil reset ListenEvent failed, so Input Monitoring may still be granted"
+          bash tools/ci/test_existing.sh -count=1 -run '^TestFindingKeyDownIdle$' -- internal/platform/darwin
+
       - name: Upload the findings
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

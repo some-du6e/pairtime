@@ -18,7 +18,8 @@ import (
 // Input Monitoring permission (SM 1.2, DESIGN 5.7)? It records what the
 // calls return on macos-latest and, to see whether key-down idle notices a
 // key at all, posts one key-down and key-up of F20, a key with no default
-// action, and reads again. It writes macos-key-down-idle.json to
+// action, and reads again. It writes
+// macos-key-down-idle-input-monitoring-<granted|denied|unknown>.json to
 // $PAIRTIME_FINDINGS_DIR, which platform.yml uploads as an artifact, and
 // fails only when it can't write the file. It never asks for a permission.
 //
@@ -67,7 +68,13 @@ func TestFindingKeyDownIdle(t *testing.T) {
 	f.Before = p.read()
 	f.Probe = p.post()
 	f.Answer, f.Detail = f.conclude()
-	if !writeFinding(t, "macos-key-down-idle.json", f) {
+	// platform.yml runs this twice, the second time after revoking Input
+	// Monitoring, so the file says which state it saw.
+	state := "unknown"
+	if f.InputMonitoring != nil {
+		state = map[bool]string{true: "granted", false: "denied"}[*f.InputMonitoring]
+	}
+	if !writeFinding(t, "macos-key-down-idle-input-monitoring-"+state+".json", f) {
 		t.Fatalf("%s is set but nothing was written", findingsEnv)
 	}
 	t.Logf("%s: %s", f.Answer, f.Detail)
@@ -128,6 +135,8 @@ type keyProbe struct {
 	AnyReset  bool `json:"any_input_idle_reset"`
 	KeysReset bool `json:"key_down_idle_reset"`
 	CountRose bool `json:"key_down_count_rose"`
+	// HIDIdleReset says IOKit's HIDIdleTime, the fallback, saw it.
+	HIDIdleReset bool `json:"hid_idle_time_reset"`
 }
 
 // conclude turns the readings into the one-line answer Karim reads first.
@@ -138,7 +147,12 @@ func (f keyFinding) conclude() (answer, detail string) {
 	}
 	switch {
 	case f.InputMonitoring != nil && *f.InputMonitoring:
-		return "inconclusive", "the test process has Input Monitoring on this runner, so this run can't show what the call returns without it"
+		saw := "didn't see it"
+		if f.Probe.KeysReset {
+			saw = "dropped to " + keys
+		}
+		return "inconclusive", "the test process has Input Monitoring here, so this run can't show what the call returns without it. With it, key-down idle " + saw +
+			" after a posted key-down. The run without the permission, if platform.yml could revoke it, is in the -denied file"
 	case !f.Probe.Attempted:
 		return "inconclusive", "no key event could be made, so there was no fresh key press to look for: " + f.Probe.Error
 	case !f.Probe.AnyReset:
@@ -250,6 +264,7 @@ func (p *probe) post() keyProbe {
 	kp.AnyReset = below(kp.After.AnyHIDS, 1)
 	kp.KeysReset = below(kp.After.KeysHIDS, 1)
 	kp.CountRose = kp.After.KeyDowns > start.KeyDowns
+	kp.HIDIdleReset = below(kp.After.HIDIdleS, 1)
 	return kp
 }
 
@@ -279,4 +294,71 @@ func uptime() *float64 {
 	}
 	boot := time.Unix(tv.Sec, int64(tv.Usec)*1000)
 	return finite(time.Since(boot).Seconds())
+}
+
+// TestFindingRunLoop records two facts about where macOS delivers what a
+// Loop listens to, for whoever wires the Loop into the agent: whether a
+// notification posted to NSWorkspace's notification center reaches the
+// observer's method, which says whether the center can be tested by
+// posting to it, and whether distributed notifications reach a Loop that
+// isn't on the main thread. It writes macos-run-loop.json and fails only
+// when it can't.
+func TestFindingRunLoop(t *testing.T) {
+	if os.Getenv(findingsEnv) == "" {
+		t.Skipf("%s isn't set; platform.yml sets it on macos-latest", findingsEnv)
+	}
+	if err := loadTestObjC(); err != nil {
+		t.Fatal(err)
+	}
+	f := runLoopFinding{MacOS: sysctl("kern.osproductversion")}
+	t.Run("a post to NSWorkspace's notification center", func(t *testing.T) {
+		_, b, _ := startMacLoop(t, true, nil)
+		withPool(func() {
+			ws := objc.send(objc.clsNSWorkspace, objc.selSharedWorkspace)
+			f.CenterClass = testObjC.className(objc.send(ws, objc.selNotificationCenter))
+		})
+		before := b.activations.Load()
+		postActivation(t)
+		f.PostReachedObserver = eventually(2*time.Second, func() bool { return b.activations.Load() > before })
+	})
+	t.Run("a distributed notification to a Loop off the main thread", func(t *testing.T) {
+		l, _, rec := startMacLoop(t, false, func(b *macBackend) { b.lockNames = testLockNames() })
+		l.seedLock(false)
+		postDistributed(testLockNames()[0])
+		select {
+		case <-rec.power:
+			f.DistributedOffMain = true
+		case <-time.After(3 * time.Second):
+		}
+	})
+	if !writeFinding(t, "macos-run-loop.json", f) {
+		t.Fatalf("%s is set but nothing was written", findingsEnv)
+	}
+}
+
+type runLoopFinding struct {
+	MacOS string `json:"macos_version"`
+	// CenterClass is the class of [[NSWorkspace sharedWorkspace]
+	// notificationCenter].
+	CenterClass string `json:"workspace_notification_center_class"`
+	// PostReachedObserver is whether posting an activation notification to
+	// that center called the observer's method within 2 s, with the Loop on
+	// the main thread.
+	PostReachedObserver bool `json:"post_to_workspace_center_reached_observer"`
+	// DistributedOffMain is whether a distributed notification reached a
+	// Loop running off the main thread within 3 s, while the main thread ran
+	// no run loop.
+	DistributedOffMain bool `json:"distributed_notification_reached_loop_off_main_thread"`
+}
+
+// eventually polls cond every 20 ms until it holds or d has passed.
+func eventually(d time.Duration, cond func() bool) bool {
+	deadline := time.Now().Add(d)
+	for !cond() {
+		if time.Now().After(deadline) {
+			return false
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	return true
 }
