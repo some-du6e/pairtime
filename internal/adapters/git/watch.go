@@ -98,8 +98,10 @@ type Watcher struct {
 }
 
 type tree struct {
-	loc      Location
-	scan     *Scanner
+	loc  Location
+	scan *Scanner // used by the worker goroutine only
+	// state is the scanner's state after its last scan, for State.
+	state    ScannerState
 	sig      signature
 	watched  []string
 	debounce *time.Timer
@@ -205,7 +207,7 @@ func (w *Watcher) State() WatcherState {
 	defer w.mu.Unlock()
 	st := WatcherState{Worktrees: make(map[string]ScannerState, len(w.trees))}
 	for _, t := range w.trees {
-		st.Worktrees[t.loc.GitDir] = t.scan.State()
+		st.Worktrees[t.loc.GitDir] = t.state
 	}
 	return st
 }
@@ -232,7 +234,7 @@ func (w *Watcher) Track(ctx context.Context, dir string) (Location, error) {
 		return loc, nil
 	}
 	st := w.opts.State.Worktrees[loc.GitDir]
-	t := &tree{loc: loc}
+	t := &tree{loc: loc, state: st}
 	t.scan = NewScanner(w.git, loc, st, w.now, w.res.Rekey)
 	w.trees[key] = t
 	w.watchLocked(t)
@@ -405,9 +407,10 @@ func (w *Watcher) scan(t *tree) {
 	defer cancel()
 	sig := signatureOf(t.loc)
 	changes, err := t.scan.Scan(ctx)
+	loc, state := t.scan.Location(), t.scan.State()
 	w.mu.Lock()
 	t.sig = sig
-	t.loc = t.scan.Location()
+	t.loc, t.state = loc, state
 	if err != nil {
 		w.problems["scan"] = fmt.Sprintf("reading a repo's reflog failed: %v", err)
 	} else {
