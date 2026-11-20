@@ -133,6 +133,18 @@ func (n Normalized) Text() string { return strings.Join(n.Words, " ") }
 // word to its bare form, dropping a word that is left empty, and marks
 // retry phrases. text should be valid UTF-8, as every committed text is.
 func Normalize(text string) Normalized {
+	n, _ := normalizeSources(text)
+	return n
+}
+
+// normalizeSources is Normalize, and also returns the tokens of text that
+// each normalized word comes from (spec 10.8), numbered from 0 in the order
+// Tokens gives them. A word of step 3 is one token, since LF and CR are
+// whitespace and so no other token holds one, and a <retry> of step 7
+// comes from every token of the words it replaced. So walking the text's
+// tokens and counting the LFs between them gives the words of step 3 and
+// the line each is on.
+func normalizeSources(text string) (Normalized, [][]int) {
 	lines := splitLines(text)
 	removed := removedLines(lines)
 	gone := make([]bool, len(lines))
@@ -140,17 +152,23 @@ func Normalize(text string) Normalized {
 		gone[i] = true
 	}
 	var words []string
-	for i, line := range lines {
-		if gone[i] {
+	var sources [][]int
+	line := 0
+	for j, tok := range Tokens(text) {
+		if isSpaceToken(tok) {
+			line += strings.Count(tok, "\n")
 			continue
 		}
-		for _, w := range Words(line) {
-			if w = bare(substitute(strings.Map(Lower, w))); w != "" {
-				words = append(words, w)
-			}
+		if gone[line] {
+			continue
+		}
+		if w := bare(substitute(strings.Map(Lower, tok))); w != "" {
+			words = append(words, w)
+			sources = append(sources, []int{j})
 		}
 	}
-	return Normalized{RemovedLines: removed, Words: replaceRetries(words)}
+	words, sources = replaceRetries(words, sources)
+	return Normalized{RemovedLines: removed, Words: words}, sources
 }
 
 // ErrorSignature returns the error signature of text (spec 10.6): its first
@@ -298,7 +316,7 @@ func containsByte(s string, f func(byte) bool) bool {
 }
 
 // retryPhrases are SM 4.2's retry phrases, longest first, as spec 10.4
-// step 6 tries them.
+// step 7 tries them.
 var retryPhrases = [][]string{
 	{"still", "not", "working"},
 	{"try", "again"}, {"fix", "it"}, {"still", "broken"}, {"doesnt", "work"},
@@ -306,20 +324,23 @@ var retryPhrases = [][]string{
 }
 
 // replaceRetries walks the words from the left and turns each retry phrase
-// into the single word <retry> (spec 10.4 step 6).
-func replaceRetries(words []string) []string {
+// into the single word <retry> (spec 10.4 step 7). sources are the tokens
+// each word comes from, and a <retry> comes from those of every word it
+// replaced.
+func replaceRetries(words []string, sources [][]int) ([]string, [][]int) {
 	out := make([]string, 0, len(words))
+	outSources := make([][]int, 0, len(words))
 	for i := 0; i < len(words); {
 		k := retryAt(words[i:])
 		if k == 0 {
-			out = append(out, words[i])
+			out, outSources = append(out, words[i]), append(outSources, sources[i])
 			i++
 			continue
 		}
-		out = append(out, "<retry>")
+		out, outSources = append(out, "<retry>"), append(outSources, slices.Concat(sources[i:i+k]...))
 		i += k
 	}
-	return out
+	return out, outSources
 }
 
 // retryAt returns the number of words of the retry phrase that words

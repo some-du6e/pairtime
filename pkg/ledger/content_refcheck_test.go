@@ -484,21 +484,35 @@ func randomContent(t *testing.T) contentVectorsFile {
 		sketches = append(sketches, f.MH.Bytes())
 
 		if i%3 == 1 {
-			hide := func(string) bool { return rng.IntN(3) == 0 }
-			entries := fk.ShingleReveal(text, hide)
-			v, at := features.VerifyShingleReveal(*f.MH, entries)
-			if v != features.ShingleOK {
-				t.Fatalf("text %d: pkg/ledger's own CC8 reveal gets %s at entry %d", i, v, at)
+			// The CC8 reveal the client sends with the text's reveal,
+			// which removed the tokens of spans.
+			removed := []int{}
+			for _, sp := range spans {
+				for j := sp.First; j < sp.First+sp.Count; j++ {
+					removed = append(removed, j)
+				}
 			}
-			doc.ShingleReveals = append(doc.ShingleReveals, shingleRevealVec{MH: f.MH.Bytes(), Entries: entries, Verdict: v})
+			kind, entries := fk.ShingleReveal(text, removed)
+			v, at, unexplained := features.VerifyShingleReveal(*f.MH, entries, len(removed) > 0)
+			if v != features.ShingleOK || len(removed) == 0 && unexplained != 0 {
+				t.Fatalf("text %d: pkg/ledger's own CC8 reveal gets %s at entry %d, %d places unexplained", i, v, at, unexplained)
+			}
+			doc.ShingleReveals = append(doc.ShingleReveals, shingleRevealVec{MH: f.MH.Bytes(), Kind: kind,
+				Removed: len(removed) > 0, KDev: kDev, Text: &textHex, RemovedTokens: &removed, Entries: entries,
+				Verdict: v, Unexplained: &unexplained})
 			if len(entries) > 0 {
 				// One entry dropped: a sketch error unless its value set
-				// no minimum. Whatever pkg/ledger says, the reference
-				// must say too.
+				// no minimum, or spans were removed. Whatever pkg/ledger
+				// says, the reference must say too.
 				j := rng.IntN(len(entries))
 				dropped := append(append([]features.ShingleEntry{}, entries[:j]...), entries[j+1:]...)
-				v, _ := features.VerifyShingleReveal(*f.MH, dropped)
-				doc.ShingleReveals = append(doc.ShingleReveals, shingleRevealVec{Note: "one entry dropped", MH: f.MH.Bytes(), Entries: dropped, Verdict: v})
+				sv := shingleRevealVec{Note: "one entry dropped", MH: f.MH.Bytes(), Kind: kind, Removed: len(removed) > 0, Entries: dropped}
+				var u int
+				sv.Verdict, _, u = features.VerifyShingleReveal(*f.MH, dropped, sv.Removed)
+				if sv.Verdict == features.ShingleOK {
+					sv.Unexplained = &u
+				}
+				doc.ShingleReveals = append(doc.ShingleReveals, sv)
 			}
 		}
 	}
