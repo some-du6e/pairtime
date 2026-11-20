@@ -171,6 +171,9 @@ func TestOpenWithoutSignals(t *testing.T) {
 			if _, err := d.Idle(context.Background()); !errors.Is(err, ErrUnknown) {
 				t.Errorf("Idle: %v, want ErrUnknown", err)
 			}
+			if _, err := d.Locked(); !errors.Is(err, ErrLockUnknown) {
+				t.Errorf("Locked: %v, want ErrLockUnknown", err)
+			}
 			if d.Focus() != nil || d.Power() != nil {
 				t.Errorf("channels %v and %v, want nil", d.Focus(), d.Power())
 			}

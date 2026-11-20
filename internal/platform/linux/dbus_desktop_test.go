@@ -363,8 +363,8 @@ func TestDesktopLogindLock(t *testing.T) {
 			for _, locked := range tc.hints {
 				f.session.SetMust(sessionIface, "LockedHint", locked)
 				got = append(got, nextPower(t, d.Power()).Op)
-				if d.logind.locked.Load() != locked {
-					t.Errorf("after LockedHint %v, samples say locked %v", locked, !locked)
+				if got, err := d.Locked(); err != nil || got != locked {
+					t.Errorf("after LockedHint %v, Locked says %v, %v", locked, got, err)
 				}
 			}
 			if strings.Join(opsText(got), " ") != strings.Join(opsText(tc.want), " ") {

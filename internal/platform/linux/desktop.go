@@ -19,6 +19,10 @@ import (
 // ErrUnknown means the desktop gives no idle time. Status says why.
 var ErrUnknown = errors.New("this desktop gives pairtime no idle time")
 
+// ErrLockUnknown means logind can't say whether the session is locked.
+// Status.Lock says why.
+var ErrLockUnknown = errors.New("this session's lock state is unknown")
+
 // Config configures Open. The zero value reads the real session.
 type Config struct {
 	// Getenv reads the session's environment. Nil means os.Getenv.
@@ -380,6 +384,16 @@ func (d *Desktop) Idle(ctx context.Context) (Idle, error) {
 		i.Locked = d.logind.locked.Load()
 	}
 	return i, nil
+}
+
+// Locked reports logind's LockedHint for the agent's session, as of the
+// last change logind announced. It returns ErrLockUnknown when that isn't
+// known.
+func (d *Desktop) Locked() (bool, error) {
+	if d.logind == nil || !d.Status().Lock.Known() {
+		return false, ErrLockUnknown
+	}
+	return d.logind.locked.Load(), nil
 }
 
 // Focus returns the focus changes, starting with the window focused when
