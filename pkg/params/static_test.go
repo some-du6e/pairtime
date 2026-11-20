@@ -2,9 +2,11 @@
 
 package params
 
-// TE WP0.6's static check: every parameter pkg/score reads is in the
-// public table. The parameter types are opaque (names.go), so a params.NAME
-// selector is the only way another package can name a parameter.
+// TE WP0.6's static check: every parameter pkg/score reads through Int,
+// Rat or Bool is in the public table. The parameter types are opaque
+// (names.go), so a params.NAME selector is the only way another package can
+// name a parameter to those three. Table.Text takes a string and isn't
+// checked; it's for code that shows a whole table.
 // paramReads finds those selectors with go/ast, without building the
 // package, and TestScoreReadsOnlyTableParams compares them with every
 // embedded table.

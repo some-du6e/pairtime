@@ -50,9 +50,11 @@
 // parameters are variables only because a Go constant can't be a struct;
 // nothing assigns them.
 //
-// So every parameter pkg/score reads is a params.NAME selector there. A
-// test in this package lists those selectors with go/ast and fails if a
-// table lacks one of the names (TE WP0.6).
+// So every parameter pkg/score reads through Int, Rat or Bool is a
+// params.NAME selector there. A test in this package lists those selectors
+// with go/ast and fails if a table lacks one of the names (TE WP0.6).
+// Table.Text still takes a string, for code that shows a whole table, and
+// the test doesn't see reads through it, so rules don't use it.
 //
 // # Names that differ from SM 8
 //
