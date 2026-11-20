@@ -1,0 +1,13 @@
+{
+  "fixture": "sidedoor/g-track-without-prompt",
+  "prompts": [
+    {
+      "turn_key": "t_ce2e7a352448",
+      "t": 1795637080000,
+      "local": "14:04:40",
+      "text": "explain why the save file gets bigger every time i load it and save again without changing anything, and tell me which function writes the extra data.",
+      "len_chars": 150,
+      "source": "invented"
+    }
+  ]
+}
