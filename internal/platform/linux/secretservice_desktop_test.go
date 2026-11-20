@@ -12,6 +12,8 @@ import (
 	"maps"
 	"testing"
 
+	"github.com/zalando/go-keyring"
+
 	"github.com/some-du6e/pairtime/internal/platform/linux/fakesecret"
 )
 
@@ -118,6 +120,32 @@ func TestSecretServiceAgainstFake(t *testing.T) {
 			}
 			if n := len(itemsFor(fake, ss.Service, account)); n != 0 {
 				t.Errorf("%d items left for the account", n)
+			}
+		}},
+		{"a delete whose prompt is dismissed returns nil and leaves the item, because go-keyring drops the dismissed flag", func(t *testing.T, account string, secret []byte) {
+			// internal/agent/keys reads an item back after a nil delete for
+			// this reason. If go-keyring starts reporting the dismissal,
+			// this case fails, and keys' Destroy doc can say so.
+			if err := ss.Set(account, secret); err != nil {
+				t.Fatal(err)
+			}
+			fake.DismissDeletes(true)
+			defer fake.DismissDeletes(false)
+			if err := ss.Delete(account); err != nil {
+				t.Fatalf("Delete: %v, want nil", err)
+			}
+			got, err := ss.Get(account)
+			if err != nil || !bytes.Equal(got, secret) {
+				t.Errorf("Get after the dismissed delete: %v, want the secret", err)
+			}
+		}},
+		{"an item that isn't hex is ErrBadItem itself, whose text quotes none of the item", func(t *testing.T, account string, _ []byte) {
+			if err := keyring.Set(ss.Service, account, "zz-not-hex"); err != nil {
+				t.Fatal(err)
+			}
+			got, err := ss.Get(account)
+			if err != ErrBadItem || got != nil {
+				t.Fatalf("got (%v, %v), want ErrBadItem alone and no bytes", got, err)
 			}
 		}},
 		{"a refusing service fails Get and Set, and neither is ErrNotFound", func(t *testing.T, account string, secret []byte) {

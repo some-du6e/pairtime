@@ -115,6 +115,26 @@ func TestSecretService(t *testing.T) {
 				t.Errorf("Open once the Secret Service answers again: %v", err)
 			}
 		}},
+		{"a Secret Service delete whose prompt is dismissed doesn't count, so Destroy fails and keeps keystore.json for a retry", func(t *testing.T, fake *fakesecret.Service, opts Options) {
+			mustOpen(t, opts)
+			fake.DismissDeletes(true)
+			err := Destroy(opts)
+			fake.DismissDeletes(false)
+			if err == nil {
+				t.Fatal("Destroy succeeded while the Secret Service kept the key")
+			}
+			if n := len(deviceItems(t, fake, opts.Dir)); n != 1 {
+				t.Errorf("the Secret Service has %d device keys, want the one the dismissed delete left", n)
+			}
+			if err := Destroy(opts); err != nil {
+				t.Fatalf("Destroy once deletes are allowed again: %v", err)
+			}
+			for _, it := range fake.Items() {
+				if it.Attributes["service"] == keyringService {
+					t.Errorf("an item is left after Destroy: %v", it.Attributes)
+				}
+			}
+		}},
 		{"Destroy deletes the device key and archived keys from the Secret Service", func(t *testing.T, fake *fakesecret.Service, opts Options) {
 			ks := mustOpen(t, opts)
 			if _, err := ks.Archive(bytes.Repeat([]byte{0x5a}, keySize)); err != nil {

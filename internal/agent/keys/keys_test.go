@@ -10,6 +10,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -70,7 +71,11 @@ func TestOpen(t *testing.T) {
 				t.Errorf("reason %q doesn't say why the Secret Service wasn't used", st.Reason)
 			}
 			w := st.Warning()
-			for _, want := range []string{st.File, st.Reason, "any program you run can"} {
+			for _, want := range []string{
+				st.File, st.Reason,
+				"Other non-admin accounts", "administrators can", "any program you run can",
+				"secret store would also keep the key encrypted on disk",
+			} {
 				if !strings.Contains(w, want) {
 					t.Errorf("warning %q doesn't contain %q", w, want)
 				}
@@ -214,6 +219,20 @@ func TestOpen(t *testing.T) {
 				t.Fatalf("got %v, want ErrDamaged", err)
 			}
 		}},
+		{"an item its store says isn't in the form it writes is ErrDamaged, not ErrUnavailable", func(t *testing.T, dir string) {
+			osStore := newFake(KindKeychain)
+			opts := Options{Dir: dir, Stores: []Store{osStore}}
+			mustOpen(t, opts)
+			before := readFile(t, filepath.Join(keysDir(dir), markerName))
+			osStore.update(func(f *fakeStore) {
+				f.failGet = platformErr(errBadItem, errNoItem, errBadItem)
+			})
+			_, err := Open(opts)
+			if !errors.Is(err, ErrDamaged) || errors.Is(err, ErrUnavailable) {
+				t.Fatalf("got %v, want ErrDamaged alone", err)
+			}
+			checkNoNewKey(t, dir, osStore, before)
+		}},
 		{"an unreadable keystore.json is ErrDamaged, and no key is made", func(t *testing.T, dir string) {
 			writeRaw(t, dir, "{")
 			osStore := newFake(KindKeychain)
@@ -322,6 +341,98 @@ func TestOpen(t *testing.T) {
 	}
 }
 
+// errNoItem and errBadItem stand for a keyring store's own errors, which
+// platformErr turns into ErrNotFound and ErrDamaged.
+var (
+	errNoItem  = errors.New("keyring: no such item")
+	errBadItem = errors.New("keyring: the item isn't in the form pairtime writes")
+)
+
+func TestPlatformErr(t *testing.T) {
+	other := errors.New("keyring: the bus is down")
+	tests := []struct {
+		name string
+		err  error
+		want error // nil: neither ErrNotFound nor ErrDamaged
+	}{
+		{"a keyring's not-found error is ErrNotFound", fmt.Errorf("get: %w", errNoItem), ErrNotFound},
+		{"a keyring's error for an item in another form is ErrDamaged", fmt.Errorf("get: %w", errBadItem), ErrDamaged},
+		{"any other error passes as it is", other, nil},
+		{"no error stays no error", nil, nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := platformErr(tt.err, errNoItem, errBadItem)
+			if tt.err == nil {
+				if got != nil {
+					t.Fatalf("got %v, want nil", got)
+				}
+				return
+			}
+			if tt.want != nil && !errors.Is(got, tt.want) {
+				t.Errorf("got %v, want %v", got, tt.want)
+			}
+			if tt.want == nil && (errors.Is(got, ErrNotFound) || errors.Is(got, ErrDamaged) || got != tt.err) {
+				t.Errorf("got %v, want %v unchanged", got, tt.err)
+			}
+		})
+	}
+}
+
+// TestFirstRunRecordsStoresThatMayHoldTheKey checks which stores a first
+// run that went on to the key file records in keystore.json's unconfirmed
+// list, where Destroy looks for K_dev besides the store that holds it.
+func TestFirstRunRecordsStoresThatMayHoldTheKey(t *testing.T) {
+	tests := []struct {
+		name     string
+		set      func(f *fakeStore)
+		recorded bool
+		items    int // how many items the store has after the first run, or -1 for any
+	}{
+		{"a store that refuses the key isn't recorded, as it never had it", func(f *fakeStore) {
+			f.failSet = errors.New("no keyring daemon")
+		}, false, 0},
+		{"a save that doesn't answer in time is recorded, as it may yet finish", func(f *fakeStore) {
+			f.hang = make(chan struct{})
+		}, true, -1},
+		{"a store that saves the key but can't give it back is told to delete it, and recorded, as it can't show that it did", func(f *fakeStore) {
+			f.failGet = errors.New("read refused")
+		}, true, 0},
+		{"a store that gives back other bytes is told to delete them, and isn't recorded once it shows that it did", func(f *fakeStore) {
+			f.alter = true
+		}, false, 0},
+		{"a store that gives back other bytes and won't delete them is recorded", func(f *fakeStore) {
+			f.alter = true
+			f.failDel = errors.New("delete refused")
+		}, true, 1},
+		{"a store that says it deleted the bytes but kept them is recorded", func(f *fakeStore) {
+			f.alter = true
+			f.keep = true
+		}, true, 1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			osStore := newFake(KindSecretService)
+			tt.set(osStore)
+			if osStore.hang != nil {
+				defer close(osStore.hang)
+			}
+			ks := mustOpen(t, Options{Dir: dir, Stores: []Store{osStore}, Timeout: 50 * time.Millisecond})
+			if st := ks.Status(); st.Store != KindFile {
+				t.Fatalf("status %+v, want the key file", st)
+			}
+			m := markerIn(t, dir)
+			if got := slices.Contains(m.Unconfirmed, KindSecretService); got != tt.recorded {
+				t.Errorf("keystore.json lists %v as unconfirmed, want the Secret Service there: %v", m.Unconfirmed, tt.recorded)
+			}
+			if tt.items >= 0 && osStore.size() != tt.items {
+				t.Errorf("the store has %d items, want %d", osStore.size(), tt.items)
+			}
+		})
+	}
+}
+
 // checkNoNewKey checks that a failed Open left keystore.json as it was,
 // wrote nothing to the OS store and made no key file.
 func checkNoNewKey(t *testing.T, dir string, osStore *fakeStore, before []byte) {
@@ -364,11 +475,17 @@ func TestInspect(t *testing.T) {
 				t.Errorf("got %v, want fs.ErrNotExist", err)
 			}
 		}},
-		{"Inspect says what Status says, and asks no store for the key", func(t *testing.T, dir string) {
+		{"Inspect says what Status says from keystore.json alone, and asks this OS's store nothing", func(t *testing.T, dir string) {
+			// The fake is this OS's store here, so any call Inspect made
+			// to it would be counted. It loses the key first, so an
+			// Inspect that read it would fail too.
 			osStore := newFake(KindKeychain)
-			osStore.failSet = errors.New("keychain locked")
-			ks := mustOpen(t, Options{Dir: dir, Stores: []Store{osStore}})
-			gets := osStore.count("get")
+			useOSStore(t, osStore)
+			ks := mustOpen(t, Options{Dir: dir})
+			if st := ks.Status(); st.Store != KindKeychain {
+				t.Fatalf("status %+v, want the fake as this OS's store", st)
+			}
+			osStore.update(func(f *fakeStore) { clear(f.items); clear(f.calls) })
 			st, err := Inspect(dir)
 			if err != nil {
 				t.Fatal(err)
@@ -376,11 +493,35 @@ func TestInspect(t *testing.T) {
 			if fmt.Sprint(st) != fmt.Sprint(ks.Status()) {
 				t.Errorf("Inspect gave %+v, Status gave %+v", st, ks.Status())
 			}
-			if st.Warning() == "" {
-				t.Error("a key in the key file has no warning")
+			for _, method := range []string{"get", "set", "delete"} {
+				if n := osStore.count(method); n != 0 {
+					t.Errorf("Inspect called the store's %s %d times", method, n)
+				}
 			}
-			if osStore.count("get") != gets {
-				t.Error("Inspect asked the store for the key")
+		}},
+		{"Inspect repeats the fallback warning without reading the key file", func(t *testing.T, dir string) {
+			osStore := newFake(KindKeychain)
+			osStore.failSet = errors.New("keychain locked")
+			useOSStore(t, osStore)
+			ks := mustOpen(t, Options{Dir: dir})
+			want := ks.Status()
+			if !want.Fallback {
+				t.Fatalf("status %+v, want the key file", want)
+			}
+			// With the key file gone, an Inspect that read it would fail.
+			if err := os.Remove(want.File); err != nil {
+				t.Fatal(err)
+			}
+			osStore.update(func(f *fakeStore) { clear(f.calls) })
+			st, err := Inspect(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if fmt.Sprint(st) != fmt.Sprint(want) || st.Warning() == "" || st.Warning() != want.Warning() {
+				t.Errorf("Inspect gave %+v with warning %q, want %+v with warning %q", st, st.Warning(), want, want.Warning())
+			}
+			if n := osStore.count("get"); n != 0 {
+				t.Errorf("Inspect asked the store for the key %d times", n)
 			}
 		}},
 		{"a damaged keystore.json is ErrDamaged", func(t *testing.T, dir string) {
@@ -461,6 +602,110 @@ func TestDestroy(t *testing.T) {
 			}
 			if osStore.size() != 0 {
 				t.Error("the retry didn't delete the key")
+			}
+		}},
+		{"a delete that returns nil but leaves the key doesn't count, so Destroy fails and keeps keystore.json for a retry", func(t *testing.T, dir string) {
+			osStore := newFake(KindSecretService)
+			opts := Options{Dir: dir, Stores: []Store{osStore}}
+			mustOpen(t, opts)
+			osStore.update(func(f *fakeStore) { f.keep = true })
+			if err := Destroy(opts); err == nil {
+				t.Fatal("Destroy succeeded while the key stayed in its store")
+			}
+			if _, err := Inspect(dir); err != nil {
+				t.Errorf("keystore.json didn't survive the failed Destroy: %v", err)
+			}
+			osStore.update(func(f *fakeStore) { f.keep = false })
+			if err := Destroy(opts); err != nil {
+				t.Fatal(err)
+			}
+			if osStore.size() != 0 {
+				t.Error("the retry didn't delete the key")
+			}
+		}},
+		{"Destroy deletes the key from a store whose first-run save timed out and finished late", func(t *testing.T, dir string) {
+			osStore := newFake(KindSecretService)
+			osStore.hang = make(chan struct{})
+			opts := Options{Dir: dir, Stores: []Store{osStore}, Timeout: 50 * time.Millisecond}
+			ks := mustOpen(t, opts)
+			if st := ks.Status(); st.Store != KindFile {
+				t.Fatalf("status %+v, want the key file", st)
+			}
+			item := markerIn(t, dir).deviceItem()
+			close(osStore.hang)
+			osStore.waitFor(t, item)
+			if err := Destroy(opts); err != nil {
+				t.Fatal(err)
+			}
+			if osStore.has(item) {
+				t.Error("the late copy of the key is still in the store")
+			}
+		}},
+		{"a store that may hold the key and can't delete it fails Destroy, which keeps keystore.json for a retry", func(t *testing.T, dir string) {
+			osStore := newFake(KindSecretService)
+			osStore.hang = make(chan struct{})
+			opts := Options{Dir: dir, Stores: []Store{osStore}, Timeout: 50 * time.Millisecond}
+			mustOpen(t, opts)
+			close(osStore.hang)
+			osStore.waitFor(t, markerIn(t, dir).deviceItem())
+			osStore.update(func(f *fakeStore) { f.failDel = errors.New("keyring locked") })
+			if err := Destroy(opts); err == nil {
+				t.Fatal("Destroy succeeded while a store that may hold the key couldn't delete it")
+			}
+			if _, err := Inspect(dir); err != nil {
+				t.Errorf("keystore.json didn't survive the failed Destroy: %v", err)
+			}
+			osStore.update(func(f *fakeStore) { f.failDel = nil })
+			if err := Destroy(opts); err != nil {
+				t.Fatal(err)
+			}
+			if osStore.size() != 0 {
+				t.Error("the retry didn't delete the key")
+			}
+		}},
+		{"Destroy over a first run cut off after a store timed out deletes the key from that store", func(t *testing.T, dir string) {
+			const install = "00112233445566778899aabbccddeeff"
+			writeRaw(t, dir, `{"v":1,"install":"`+install+`","unconfirmed":["secret-service"]}`)
+			osStore := newFake(KindSecretService)
+			if err := osStore.Set(install+".kdev", make([]byte, keySize)); err != nil {
+				t.Fatal(err)
+			}
+			osStore.update(func(f *fakeStore) { f.failDel = errors.New("keyring locked") })
+			opts := Options{Dir: dir, Stores: []Store{osStore}}
+			if err := Destroy(opts); err == nil {
+				t.Fatal("Destroy succeeded while the store it recorded couldn't delete the key")
+			}
+			osStore.update(func(f *fakeStore) { f.failDel = nil })
+			if err := Destroy(opts); err != nil {
+				t.Fatal(err)
+			}
+			if osStore.size() != 0 {
+				t.Error("the key is still in the store")
+			}
+		}},
+		{"Destroy names a keyring keystore.json names that this system doesn't have, and still deletes the keystore's files", func(t *testing.T, dir string) {
+			mustOpen(t, Options{Dir: dir, Stores: []Store{newFake(KindKeychain)}})
+			item := markerIn(t, dir).deviceItem()
+			err := Destroy(Options{Dir: dir, Stores: []Store{}})
+			if !errors.Is(err, ErrUnavailable) {
+				t.Fatalf("got %v, want ErrUnavailable", err)
+			}
+			for _, want := range []string{KindKeychain.Description(), item} {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("error %q doesn't name %q", err, want)
+				}
+			}
+			if _, err := os.Stat(keysDir(dir)); !os.IsNotExist(err) {
+				t.Errorf("the keystore's directory is still there (%v)", err)
+			}
+		}},
+		{"a DPAPI blob keystore.json names goes with the directory on a system without DPAPI", func(t *testing.T, dir string) {
+			mustOpen(t, Options{Dir: dir, Stores: []Store{newFake(KindDPAPI)}})
+			if err := Destroy(Options{Dir: dir, Stores: []Store{}}); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := os.Stat(keysDir(dir)); !os.IsNotExist(err) {
+				t.Errorf("the keystore's directory is still there (%v)", err)
 			}
 		}},
 		{"a store that was never given the key doesn't stop Destroy", func(t *testing.T, dir string) {
@@ -551,6 +796,103 @@ func TestArchive(t *testing.T) {
 			}
 			if n := osStore.count("set"); n != 2 {
 				t.Errorf("the store was written %d times, want twice: the device key and the archived one", n)
+			}
+		}},
+		{"keystore.json lists an archived key before its store gets it", func(t *testing.T, dir string) {
+			osStore := newFake(KindKeychain)
+			ks := mustOpen(t, Options{Dir: dir, Stores: []Store{osStore}})
+			id, err := keyID(old)
+			if err != nil {
+				t.Fatal(err)
+			}
+			listed := false
+			osStore.update(func(f *fakeStore) {
+				f.onSet = func(string) {
+					m, err := readMarker(keysDir(dir))
+					_, listed = m.archived(id)
+					if err != nil {
+						t.Error(err)
+					}
+				}
+			})
+			if _, err := ks.Archive(old); err != nil {
+				t.Fatal(err)
+			}
+			if !listed {
+				t.Error("the store got the archived key before keystore.json listed it")
+			}
+		}},
+		{"an Archive whose store refused the key leaves keystore.json without it", func(t *testing.T, dir string) {
+			osStore := newFake(KindKeychain)
+			ks := mustOpen(t, Options{Dir: dir, Stores: []Store{osStore}})
+			osStore.update(func(f *fakeStore) { f.failSet = errors.New("keychain locked") })
+			if _, err := ks.Archive(old); err == nil {
+				t.Fatal("Archive succeeded with a store that refused the key")
+			}
+			if m := markerIn(t, dir); len(m.Archived) != 0 {
+				t.Errorf("keystore.json lists %v", m.Archived)
+			}
+			if st := ks.Status(); len(st.Archived) != 0 {
+				t.Errorf("status lists archived keys %v", st.Archived)
+			}
+		}},
+		{"an Archive whose save timed out stays listed, so Destroy deletes the key once the save lands", func(t *testing.T, dir string) {
+			osStore := newFake(KindKeychain)
+			opts := Options{Dir: dir, Stores: []Store{osStore}, Timeout: 50 * time.Millisecond}
+			ks := mustOpen(t, opts)
+			hang := make(chan struct{})
+			osStore.update(func(f *fakeStore) { f.hang = hang })
+			if _, err := ks.Archive(old); !errors.Is(err, ErrUnavailable) {
+				t.Fatalf("got %v, want ErrUnavailable", err)
+			}
+			m := markerIn(t, dir)
+			if len(m.Archived) != 1 {
+				t.Fatalf("keystore.json lists %v, want the archived key", m.Archived)
+			}
+			close(hang)
+			osStore.waitFor(t, m.archivedItem(m.Archived[0].ID))
+			osStore.update(func(f *fakeStore) { f.hang = nil })
+			if err := Destroy(opts); err != nil {
+				t.Fatal(err)
+			}
+			if osStore.size() != 0 {
+				t.Errorf("the store still has %d items", osStore.size())
+			}
+		}},
+		{"archiving a key whose item is gone from its store saves it again", func(t *testing.T, dir string) {
+			osStore := newFake(KindKeychain)
+			ks := mustOpen(t, Options{Dir: dir, Stores: []Store{osStore}})
+			id, err := ks.Archive(old)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := osStore.Delete(markerIn(t, dir).archivedItem(id)); err != nil {
+				t.Fatal(err)
+			}
+			if again, err := ks.Archive(old); err != nil || again != id {
+				t.Fatalf("got (%s, %v), want (%s, nil)", again, err, id)
+			}
+			if _, err := ks.ArchivedKeys(id); err != nil {
+				t.Errorf("ArchivedKeys after archiving again: %v", err)
+			}
+		}},
+		{"ArchivedKeys won't use a keystore.json of another installation", func(t *testing.T, dir string) {
+			ks := mustOpen(t, Options{Dir: dir, Stores: []Store{}})
+			id, err := ks.Archive(old)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := ks.Status()
+			m := markerIn(t, dir)
+			m.Install = "ffffffffffffffffffffffffffffffff"
+			if err := writeMarker(keysDir(dir), m); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := ks.ArchivedKeys(id); !errors.Is(err, ErrDamaged) {
+				t.Errorf("got %v, want ErrDamaged", err)
+			}
+			if st := ks.Status(); fmt.Sprint(st) != fmt.Sprint(want) {
+				t.Errorf("the keystore took the other installation's keystore.json: %+v", st)
 			}
 		}},
 		{"the installation's own key can't be archived", func(t *testing.T, dir string) {

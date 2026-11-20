@@ -72,6 +72,19 @@ func TestThisOSStore(t *testing.T) {
 				t.Fatal(err)
 			}
 		}},
+		{"an item in this OS's keyring that isn't hex is ErrDamaged, not ErrUnavailable", func(t *testing.T, c osCase) {
+			st := c.ks.Status()
+			if st.Store != KindKeychain && st.Store != KindSecretService {
+				t.Skipf("the key is in %s, which keeps no text items", st.Store.Description())
+			}
+			if !plantText(t, markerIn(t, c.opts.Dir).deviceItem(), "not hex") {
+				t.Skip("this build has no keyring to plant an item in")
+			}
+			_, err := Open(c.opts)
+			if !errors.Is(err, ErrDamaged) || errors.Is(err, ErrUnavailable) {
+				t.Fatalf("got %v, want ErrDamaged alone", err)
+			}
+		}},
 		{"Destroy removes the key from this OS's store", func(t *testing.T, c osCase) {
 			st := c.ks.Status()
 			m, err := readMarker(keysDir(c.opts.Dir))

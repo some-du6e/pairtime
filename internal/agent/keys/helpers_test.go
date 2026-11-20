@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/some-du6e/pairtime/pkg/ledger"
 )
@@ -24,7 +25,9 @@ type fakeStore struct {
 	failSet error
 	failDel error
 	alter   bool          // Get gives the secret back with a bit flipped
+	keep    bool          // Delete returns nil and keeps the item, as a dismissed keyring prompt does
 	hang    chan struct{} // when set, each call waits until it is closed
+	onSet   func(name string)
 }
 
 func newFake(kind Kind) *fakeStore {
@@ -64,6 +67,12 @@ func (f *fakeStore) Get(name string) ([]byte, error) {
 func (f *fakeStore) Set(name string, secret []byte) error {
 	f.enter("set")
 	f.mu.Lock()
+	onSet := f.onSet
+	f.mu.Unlock()
+	if onSet != nil {
+		onSet(name)
+	}
+	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.failSet != nil {
 		return f.failSet
@@ -82,7 +91,9 @@ func (f *fakeStore) Delete(name string) error {
 	if _, ok := f.items[name]; !ok {
 		return ErrNotFound
 	}
-	delete(f.items, name)
+	if !f.keep {
+		delete(f.items, name)
+	}
 	return nil
 }
 
@@ -110,6 +121,38 @@ func (f *fakeStore) size() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return len(f.items)
+}
+
+// waitFor fails the test unless the fake has name within 10 s, as it does
+// once a call that timed out finishes late.
+func (f *fakeStore) waitFor(t *testing.T, name string) {
+	t.Helper()
+	for deadline := time.Now().Add(10 * time.Second); !f.has(name); {
+		if time.Now().After(deadline) {
+			t.Fatalf("the store never got %s", name)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+// useOSStore makes s the store this OS has, for keystores whose
+// Options.Stores is nil, until the test ends. Every call that would reach
+// this OS's store then reaches s, so a test can count them.
+func useOSStore(t *testing.T, s Store) {
+	t.Helper()
+	saved := thisOSStores
+	thisOSStores = func(string) []Store { return []Store{s} }
+	t.Cleanup(func() { thisOSStores = saved })
+}
+
+// markerIn reads keystore.json in the data directory dir.
+func markerIn(t *testing.T, dir string) marker {
+	t.Helper()
+	m, err := readMarker(keysDir(dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return m
 }
 
 // fixedKey returns a source of new device keys that always gives k, for
