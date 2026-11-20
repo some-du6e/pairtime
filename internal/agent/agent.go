@@ -100,8 +100,11 @@ type agent struct {
 
 	presence *presence.Sampler // presence and power (DESIGN 3.3)
 	focus    *focus.Watcher    // the window in front (DESIGN 3.3)
-	// ledgerIn takes presence's records and seals to the ledger writer
-	// once it opens (WP-LG5).
+	// kApp is K_app, which keys os.focus's app_hash, once keyFocus has
+	// derived it from the device key.
+	kApp atomic.Pointer[[]byte]
+	// ledgerIn takes presence's and focus's records, and presence's
+	// seals, to the ledger writer once it opens (WP-LG5).
 	ledgerIn  *ledger.Presence
 	keyStores []keys.Store // Options.KeyStores
 

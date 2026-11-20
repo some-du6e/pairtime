@@ -3,6 +3,7 @@
 package ledger
 
 import (
+	"slices"
 	"testing"
 	"time"
 
@@ -41,6 +42,36 @@ func TestPresence(t *testing.T) {
 		}
 		if _, ok := eventOf(t, recs[1]).Data.(*event.OSPower); !ok {
 			t.Error("the records aren't in the order presence took them")
+		}
+	})
+
+	t.Run("an os.focus record the agent passes on is written in the order queued, as an OS event, with its local app_hash left out", func(t *testing.T) {
+		dir := t.TempDir()
+		p := NewPresence(nil)
+		w := open(t, dir, newClock(testT))
+		p.Attach(w)
+		p.Focus(at, &event.OSFocus{AppClass: event.AppTerminal, AppHash: "a18ecfcc1abf15c0fce0859c46e557fa6", HostedSessions: []string{"s_tab1"}, FocusProject: "p_9f2c"})
+		p.Record(sample)
+		p.Close()
+		if err := w.Close(); err != nil {
+			t.Fatal(err)
+		}
+		recs := records(verify(t, dir, keysOf(t, testKDev)))
+		if len(recs) != 2 {
+			t.Fatalf("%d records, want 2", len(recs))
+		}
+		ev := eventOf(t, recs[0])
+		d, ok := ev.Data.(*event.OSFocus)
+		switch {
+		case !ok:
+			t.Fatalf("the first record is %T, want the os.focus queued first", ev.Data)
+		case ev.Source != event.SourceOS || ev.Via != event.ViaOS || ev.Harness != event.HarnessNone ||
+			ev.SessionKey != event.NoSession || ev.ProjectKey != "" || ev.T != testT || ev.BootID != runBoot:
+			t.Errorf("the os.focus record's envelope is %+v", ev.Envelope)
+		case d.AppHash != "":
+			t.Errorf("app_hash %q reached the ledger body, which Event.Shareable leaves it out of", d.AppHash)
+		case d.AppClass != event.AppTerminal || !slices.Equal(d.HostedSessions, []string{"s_tab1"}) || d.FocusProject != "p_9f2c":
+			t.Errorf("the os.focus record holds %+v", d)
 		}
 	})
 

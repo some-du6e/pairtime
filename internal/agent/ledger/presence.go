@@ -25,11 +25,14 @@ const sealWait = 1500 * time.Millisecond
 
 // Presence carries the presence component's records and seals to a Writer:
 // its Record and Seal are presence.Options.Record and Seal (WP-OS1). It
-// queues them on a goroutine of its own, because presence calls Record
-// with its sampler locked and needs it to return at once, and because the
-// writer may open after presence starts. Records go to the writer in the
-// order presence took them, and a seal follows the records before it, so
-// a suspend's os.power record is in the batch its seal makes.
+// carries the focus component's os.focus records too, which the agent
+// passes to Focus (WP-OS2), so every record the agent makes of the OS
+// goes through one queue. It queues them on a goroutine of its own,
+// because presence calls Record with its sampler locked and needs it to
+// return at once, and because the writer may open after presence starts.
+// Records go to the writer in the order they were queued, and a seal
+// follows the records before it, so a suspend's os.power record is in the
+// batch its seal makes.
 type Presence struct {
 	items   chan presenceItem
 	attach  chan *Writer
@@ -77,9 +80,19 @@ func (p *Presence) Record(r presence.Record) {
 	case p.items <- presenceItem{rec: r}:
 	default:
 		if p.dropped.Add(1) == 1 && p.problem != nil {
-			p.problem("the ledger isn't open, so presence records are being dropped")
+			p.problem("the ledger isn't open, so presence and focus records are being dropped")
 		}
 	}
+}
+
+// Focus queues an os.focus record of the focus component, which the agent
+// passes on from focus.Options.Record (WP-OS2). The record of a focus
+// change is queued while presence is locked, just before the sample
+// presence takes for that change (presence.Sampler.FocusAt), so the two
+// reach the writer in that order, with one time. Like Record, it never
+// blocks.
+func (p *Presence) Focus(at time.Time, d *event.OSFocus) {
+	p.Record(presence.Record{At: at, Data: d})
 }
 
 // Seal seals a batch with every record presence took before it, and waits
@@ -146,12 +159,13 @@ func (p *Presence) handle(w *Writer, it presenceItem) {
 		return
 	}
 	if _, err := w.Write(Input{Event: presenceEvent(it.rec)}); err != nil && p.problem != nil {
-		p.problem(fmt.Sprintf("the ledger couldn't write a presence record: %v", err))
+		p.problem(fmt.Sprintf("the ledger couldn't write an %s record: %v", it.rec.Data.Kind(), err))
 	}
 }
 
-// presenceEvent gives a presence record the envelope of an OS event (SM
-// 1.1, 1.2): it has no project and no session, and came from the OS.
+// presenceEvent gives a presence or focus record the envelope of an OS
+// event (SM 1.1, 1.2): it has no project and no session, and came from the
+// OS.
 func presenceEvent(r presence.Record) event.Event {
 	return event.Event{
 		Envelope: event.Envelope{
