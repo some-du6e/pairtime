@@ -52,8 +52,8 @@ func ClaudeSettings(env Env) string {
 
 // ClaudeCode returns the item that adds pairtime's hooks to Claude Code's
 // user settings (DESIGN 5.1). Each hook is a group of its own in exec form,
-// the binary's absolute path as "command" and the rest as "args", which
-// every program that reads the file runs (HS 16):
+// the binary's absolute path as "command" and the rest as "args", the one
+// hook type every program that reads the file runs (HS 16):
 //
 //	{"hooks": [{"type": "command", "command": "<exe>",
 //	  "args": ["hook", "--harness", "claude_code", "--event", "<event>"]}]}
@@ -62,6 +62,16 @@ func ClaudeSettings(env Env) string {
 // the ones already there, which stay as they are: git-ai rewrites its own
 // entries in the same file every day (HS 13.3). A pairtime hook from an
 // older install, such as one with another binary path, is replaced.
+//
+// cursor-agent loads these hooks too, and runs "command" without "args"
+// (Cursor forum, "imported Claude Code plugin hooks get a Cursor-shaped
+// payload", against cursor-agent 2026.09.26). The binary started with no
+// arguments and its stdin from a program exits 0 and prints nothing
+// (cmd/pairtime, start), so the hook does no harm there and records
+// nothing. Cursor's events come from the hooks in ~/.cursor/hooks.json
+// (DESIGN 5.1), which these would duplicate anyway. The arguments can't go
+// in "command" instead: without "args", Claude Code runs "command" through
+// a shell, which CP 8 rules out.
 func ClaudeCode(env Env) (Item, error) {
 	if err := env.check(); err != nil {
 		return Item{}, err
