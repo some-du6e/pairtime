@@ -1,10 +1,11 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
 # The web UI and the VS Code extension: npm licenses, npm ci, svelte-check,
-# vitest, the real UI build, Playwright on Chromium only against a `pairtime
-# agent` built in this job with that UI embedded, and SPDX headers (DESIGN
-# 3.13; docs/PLAN.md, WP-UI0). Go-only jobs never need Node, because
-# internal/webui embeds a checked-in placeholder (DESIGN 3.12).
+# vitest, the real UI build and the notices of the npm code in it,
+# Playwright on Chromium only against a `pairtime agent` built in this job
+# with that UI embedded, and SPDX headers (DESIGN 3.13; docs/PLAN.md,
+# WP-UI0). Go-only jobs never need Node, because internal/webui embeds a
+# checked-in placeholder (DESIGN 3.12).
 name: web
 
 on:
@@ -13,7 +14,8 @@ on:
     # docs/api: the embedded UI, the local API's spec, and `pairtime agent`,
     # whose answers take their shape from code across internal/agent (the
     # ipc object comes from messages.go, the mode from config/), the build
-    # info in internal/version and the command in cmd/pairtime.
+    # info in internal/version and the command in cmd/pairtime. And the
+    # notices check and the list it holds to the build.
     paths:
       - web/**
       - extension/**
@@ -23,6 +25,8 @@ on:
       - internal/version/**
       - cmd/pairtime/**
       - tools/ci/npm_licenses.py
+      - tools/ci/npm_notices.py
+      - tools/release/extra-notices.txt
       - .github/workflows/web.yml
   push:
     tags: ["v*"]
@@ -51,9 +55,12 @@ jobs:
 
       - name: npm licenses
         # From the lockfiles alone, before anything is installed. Lockfiles
-        # come from tidy.yml (docs/PLAN.md, ground rule 3).
+        # come from tidy.yml (docs/PLAN.md, ground rule 3). The notices
+        # check's selftest needs no install either; the check itself runs
+        # after the build.
         run: |
           python3 -I tools/ci/npm_licenses.py selftest
+          python3 -I tools/ci/npm_notices.py selftest
           locks=$(git ls-files -- 'web/package-lock.json' 'extension/*/package-lock.json')
           if [ -n "$locks" ]; then
             python3 -I tools/ci/npm_licenses.py $locks
@@ -100,6 +107,17 @@ jobs:
             echo "::error::the local dashboard is $size bytes, over its $budget-byte budget"
             exit 1
           fi
+
+      - name: Notices for the dashboard's npm code
+        # Release archives carry the license of every npm package with code
+        # in the dashboard, from the copies in internal/webui/notices that
+        # tools/release/extra-notices.txt lists. This holds them to the
+        # build above, through the record vite.config.ts wrote beside it: a
+        # bundled package without its copies, a copy that isn't the file in
+        # node_modules byte for byte, and a copy or line for a package the
+        # build no longer bundles all fail (tools/ci/npm_notices.py).
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: python3 -I tools/ci/npm_notices.py web/dist/bundle-agent.json
 
       - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
