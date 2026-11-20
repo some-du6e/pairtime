@@ -18,15 +18,19 @@
 //     quiet hours (config.toml [notifications]; DESIGN 3.9; TE 11.1 risk 2).
 //   - Nothing is shown about a session that ended more than Fresh ago. By
 //     then the recap is old news, and it waits in the dashboard.
-//   - Nothing is shown within Fresh of the last notification. Work sessions
-//     are at least SESSION_GAP_S apart unless a lock or a suspend ended one,
-//     so this only stops a run of short sessions cut by locks from becoming a
-//     run of notifications. pairtime never nags (PA 4.4).
+//   - Nothing is shown within Fresh of the last notification. A session
+//     ends SESSION_GAP_S after its last credited minute, or sooner at a lock
+//     or a suspend, and each project has its own sessions (SM 5.3). So
+//     short sessions cut by locks, or sessions in two projects ending
+//     together, can't become a run of notifications. pairtime never nags
+//     (PA 4.4).
 //   - A note that finds the screen locked waits instead of appearing on the
 //     lock screen, where anyone near the computer could read it. It goes out
 //     on UserPresent, if it is still fresh then. A newer note takes its
 //     place and asks the OS afresh, so one missed unlock can't hold back
-//     more than one note.
+//     more than one note. Only the Windows backend can tell a locked screen
+//     so far; on macOS and Linux the desktop's own lock-screen settings
+//     decide what a locked screen shows.
 //
 // Notify never blocks. Show runs on a goroutine that exists only while a
 // note is on its way to the screen, under a deadline, and an idle notifier
