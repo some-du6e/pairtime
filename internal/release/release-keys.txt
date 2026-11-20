@@ -1,0 +1,8 @@
+# Release public keys. The pairtime client compiles this file in and
+# accepts an update manifest only if one of these keys signed it
+# (docs/spec/update-manifest.md). One key per line; lines starting with #
+# are comments.
+#
+# To add a key, run `go run ./tools/release keygen` from the repository
+# root. It appends the public half here and prints the secret half once,
+# for the RELEASE_SIGNING_KEY secret. Never put a secret key in this file.
