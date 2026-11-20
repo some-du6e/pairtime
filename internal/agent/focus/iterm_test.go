@@ -58,7 +58,7 @@ func TestITerm2Helpers(t *testing.T) {
 		pid    int
 		hosted []string
 	}{
-		{"iTerm2 in front hosts the session under the iTermServer it started and the one under an iTermServer launchd adopted (E-6.3-two-tabs)", tab, 300, []string{"s_adopted", "s_tab"}},
+		{"iTerm2 in front hosts the sessions under its own iTermServer and under one launchd adopted, but not under another user's (E-6.3-two-tabs)", tab, 300, []string{"s_adopted", "s_tab"}},
 		{"Terminal in front hosts its own session and none of iTerm2's", tab, 400, []string{"s_terminal"}},
 	}
 	for _, tt := range tests {

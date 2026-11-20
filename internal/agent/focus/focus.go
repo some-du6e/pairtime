@@ -262,6 +262,9 @@ func (w *Watcher) Start() {
 	stop, err := w.opts.OS.Watch(w.deliver)
 	w.mu.Lock()
 	if err != nil {
+		// TODO(WP-OS15): record one os.focus with app_class unknown here
+		// too, as for no source, once WP-EV2 adds the value: on Windows
+		// this is a foreground hook that couldn't be set (D-focus-unknown).
 		w.status.Unknown = "the focus source didn't start: " + err.Error()
 		w.status.NoSource = w.status.Unknown
 		w.setProblem("source", fmt.Sprintf("focus changes go unrecorded, because %s didn't start: %v", w.opts.OS.Via, err))

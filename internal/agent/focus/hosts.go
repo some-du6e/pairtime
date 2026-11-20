@@ -58,8 +58,9 @@ func consoleHelper(goos string, p platform.Proc) bool {
 // iTermServer-3.7.7 on macos-latest, which is iTerm2's child while iTerm2
 // runs. The server outlives iTerm2: when iTerm2 crashes or is killed,
 // launchd adopts it and its sessions keep running, outside iTerm2's chain,
-// for a later iTerm2 to restore (DESIGN 3.3; decision E-6.3-two-tabs; the
-// capture in testdata/iterm2-macos-latest.json). appclass.json's darwin
+// for a later iTerm2 to restore (decision E-6.3-two-tabs, whose sentence
+// for DESIGN 3.3's focus row hasn't landed yet; the capture in
+// testdata/iterm2-macos-latest.json). appclass.json's darwin
 // terminal entry lists the same names as itermserver*. It is a function,
 // not a table, so it costs pairtime hook nothing at start.
 func helperPrefix(goos, app string) string {

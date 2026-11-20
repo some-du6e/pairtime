@@ -49,6 +49,12 @@ func NewMacLoop() *MacLoop {
 // locked to it. It returns at once with an error when no notification
 // source registers, or anywhere but macOS; the agent goes on without them,
 // and GET /v1/status says why.
+//
+// TODO(WP-OS15): MacFocus.Watch always starts, so the focus component can't
+// tell that macOS reports no activations. Once WP-EV2 adds app_class
+// unknown, pass m.focus an unknown change when the Loop's Status says the
+// activation observer didn't register, or when Run fails, so those slots
+// credit at level C (SM 2.5, D-focus-unknown).
 func (m *MacLoop) Run(ctx context.Context) error {
 	err := m.loop.Run(ctx)
 	m.mu.Lock()
