@@ -8,7 +8,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"slices"
+	"syscall"
 	"testing"
 	"time"
 
@@ -288,11 +290,43 @@ func TestLogindHandle(t *testing.T) {
 			},
 			want: nil, owner: owner,
 		},
+		// The cases below would make logind look for the session again,
+		// which takes a bus connection this test hasn't got, if handle
+		// didn't drop them first.
+		{
+			name: "the end of a session pairtime doesn't follow changes nothing",
+			sigs: []*dbus.Signal{
+				{Sender: owner, Path: logindPath, Name: managerIface + ".SessionRemoved", Body: []any{"33", dbus.ObjectPath("/org/freedesktop/login1/session/_33")}},
+			},
+			want: nil, owner: owner,
+		},
+		{
+			name: "SessionNew and SessionRemoved from anyone but logind are ignored",
+			sigs: []*dbus.Signal{
+				{Sender: ":1.99", Path: logindPath, Name: managerIface + ".SessionNew", Body: []any{"34", dbus.ObjectPath("/org/freedesktop/login1/session/_34")}},
+				{Sender: ":1.99", Path: logindPath, Name: managerIface + ".SessionRemoved", Body: []any{"32", session}},
+			},
+			want: nil, owner: owner,
+		},
+		{
+			name: "a malformed SessionRemoved is ignored",
+			sigs: []*dbus.Signal{
+				{Sender: owner, Path: logindPath, Name: managerIface + ".SessionRemoved", Body: []any{"32", "not a path"}},
+				{Sender: owner, Path: logindPath, Name: managerIface + ".SessionRemoved", Body: []any{"32"}},
+			},
+			want: nil, owner: owner,
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			rig := newTrackerRig()
-			l := &logind{owner: owner, session: session, track: rig.t}
+			var locked bool
+			l := &logind{owner: owner, session: session, track: rig.t, report: func(lock Signal, v bool) {
+				if !lock.Known() {
+					t.Errorf("lock reported unknown: %+v", lock)
+				}
+				locked = v
+			}}
 			var got []event.PowerOp
 			for _, sig := range tc.sigs {
 				for _, p := range l.handle(sig, time.Now()) {
@@ -305,8 +339,85 @@ func TestLogindHandle(t *testing.T) {
 			if l.owner != tc.owner {
 				t.Errorf("trusted sender %q, want %q", l.owner, tc.owner)
 			}
-			if want := slices.Contains(got, event.PowerLock) && !slices.Contains(got, event.PowerUnlock); l.locked.Load() != want {
-				t.Errorf("locked %v, want %v", l.locked.Load(), want)
+			if want := slices.Contains(got, event.PowerLock) && !slices.Contains(got, event.PowerUnlock); locked != want {
+				t.Errorf("locked %v, want %v", locked, want)
+			}
+			if l.session != session {
+				t.Errorf("follows session %q, want %q", l.session, session)
+			}
+		})
+	}
+}
+
+// lockPipe makes a pipe whose write end stands in for logind's delay lock:
+// the read end sees EOF once every copy of the write end is closed, as
+// logind's end of the lock does. The write end's descriptor belongs to the
+// code under test.
+func lockPipe(t *testing.T) (*os.File, int) {
+	t.Helper()
+	var p [2]int
+	if err := syscall.Pipe2(p[:], syscall.O_CLOEXEC|syscall.O_NONBLOCK); err != nil {
+		t.Fatal(err)
+	}
+	r := os.NewFile(uintptr(p[0]), "lock pipe")
+	t.Cleanup(func() { r.Close() })
+	return r, p[1]
+}
+
+// pipeClosed reports whether every copy of r's write end is closed within
+// the time given.
+func pipeClosed(r *os.File, within time.Duration) bool {
+	r.SetReadDeadline(time.Now().Add(within))
+	var b [1]byte
+	_, err := r.Read(b[:])
+	return errors.Is(err, io.EOF)
+}
+
+func TestAwaitDelayLock(t *testing.T) {
+	fdOnly := func(fd int) []any { return []any{dbus.UnixFD(fd)} }
+	cases := []struct {
+		name string
+		late bool            // logind answers after pairtime stopped waiting
+		body func(int) []any // the answer's body, given the lock's descriptor
+		err  error           // the call's error
+		lock bool            // awaitDelayLock returns the lock
+	}{
+		{"an answer within the wait is the lock, held until it is closed", false, fdOnly, nil, true},
+		{"an answer after the wait is closed as it comes, so no lock outlives the call", true, fdOnly, nil, false},
+		{"an answer that isn't one descriptor is no lock, and the descriptor in it is closed", false, func(fd int) []any { return []any{"lock", dbus.UnixFD(fd)} }, nil, false},
+		{"an error is no lock", false, nil, dbus.Error{Name: "org.freedesktop.DBus.Error.AccessDenied"}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r, w := lockPipe(t)
+			call := &dbus.Call{Done: make(chan *dbus.Call, 1)}
+			answer := func() {
+				call.Err = tc.err
+				if tc.body != nil {
+					call.Body = tc.body(w)
+				} else {
+					syscall.Close(w) // an error carries no lock to close
+				}
+				call.Done <- call
+			}
+			if !tc.late {
+				answer()
+			}
+			lock, err := awaitDelayLock(call, 100*time.Millisecond)
+			if tc.late {
+				answer()
+			}
+			if got := err == nil; got != tc.lock {
+				t.Fatalf("lock %v, %v; want a lock: %v", lock, err, tc.lock)
+			}
+			if tc.lock {
+				if pipeClosed(r, 200*time.Millisecond) {
+					t.Fatal("the lock was released before it was closed")
+				}
+				lock.Close()
+			}
+			if !pipeClosed(r, 5*time.Second) {
+				t.Fatal("the lock is still held")
 			}
 		})
 	}

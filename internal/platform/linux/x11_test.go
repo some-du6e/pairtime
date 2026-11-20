@@ -126,7 +126,7 @@ func TestX11Idle(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newFakeX(t, fakeXConfig{roots: []uint32{0x100}, noSaver: !tc.saver, noise: tc.noise, seqStart: tc.seqStart})
-			src := &x11Idle{open: func(time.Duration) (*xconn, error) {
+			src := &x11Idle{open: func(time.Time) (*xconn, error) {
 				c, err := f.dial(0, nil)
 				if c != nil {
 					c.seq = tc.seqStart
@@ -163,7 +163,7 @@ func TestX11IdleReconnects(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newFakeX(t, fakeXConfig{roots: []uint32{0x100}})
 			dials := 0
-			src := &x11Idle{open: func(time.Duration) (*xconn, error) {
+			src := &x11Idle{open: func(time.Time) (*xconn, error) {
 				dials++
 				return f.dial(0, nil)
 			}}
@@ -193,32 +193,144 @@ func TestX11IdleReconnects(t *testing.T) {
 	}
 }
 
+func TestX11IdleOneDeadline(t *testing.T) {
+	cases := []struct {
+		name  string
+		delay time.Duration // how long the server takes over each answer
+		ok    bool          // the sample succeeds
+	}{
+		// A sample that reconnects waits for four answers: the setup,
+		// QueryExtension, QueryVersion and QueryInfo. At 150 ms each, any
+		// one of them fits the 400 ms deadline, but not all four.
+		{"a reconnecting sample whose steps each fit the deadline but together don't fails at the deadline", 150 * time.Millisecond, false},
+		{"a reconnecting sample that fits the deadline gets the idle time", 0, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFakeX(t, fakeXConfig{roots: []uint32{0x100}, delay: tc.delay})
+			src := &x11Idle{open: func(deadline time.Time) (*xconn, error) { return f.dialBy(0, nil, deadline) }}
+			defer src.close()
+			f.setIdle(3000)
+			ctx, cancel := context.WithTimeout(context.Background(), 400*time.Millisecond)
+			defer cancel()
+			start := time.Now()
+			got, err := src.idle(ctx)
+			took := time.Since(start)
+			if tc.ok {
+				if err != nil || got != 3*time.Second {
+					t.Fatalf("sample %v, %v; want 3s", got, err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("the sample took %v and succeeded, past its 400 ms deadline", took)
+			}
+			if took > time.Second {
+				t.Errorf("the sample gave up after %v, want at its 400 ms deadline", took)
+			}
+		})
+	}
+}
+
 // Windows the focus tests use. testHost is the machine the client runs on.
+// Each window's client has the pid the X server took from its socket, which
+// X-Resource reports, and most set the same pid as their _NET_WM_PID.
 const (
-	testHost  = "testhost"
-	winA      = 0x501 // pid 4242, on testhost
-	winB      = 0x502 // pid 777, on testhost under its full name
-	winRemote = 0x503 // pid 999, on another host
-	winGone   = 0x504 // destroyed before pairtime reads it
-	winNoPID  = 0x505 // sets no _NET_WM_PID
-	winLast   = 0x5ff // the sentinel each test ends with, pid 1
-	wmCheck   = 0x400 // the window manager's check window
+	testHost   = "testhost"
+	winA       = 0x501 // pid 4242, on testhost
+	winB       = 0x502 // pid 777, on testhost under its full name
+	winRemote  = 0x503 // pid 999 on another host, forwarded by the local ssh, pid 555
+	winGone    = 0x504 // destroyed before pairtime reads it; a new client, pid 6666, took its client's slot
+	winNoPID   = 0x505 // sets no _NET_WM_PID; the server knows pid 888
+	winSandbox = 0x506 // a Flatpak app: _NET_WM_PID 2 from its sandbox, pid 31337 on the host
+	winTCP     = 0x507 // connected over TCP, so the server knows no pid; _NET_WM_PID 4343
+	winLast    = 0x5ff // the sentinel each test ends with, pid 1
+	wmCheck    = 0x400 // the window manager's check window
 )
 
-// focusStep changes the fake server, then sends a PropertyNotify.
-type focusStep struct {
-	active uint32 // set _NET_ACTIVE_WINDOW to this window
-	notify string // the root property the PropertyNotify names
+// testRoot is the root window of the fake servers' one screen.
+const testRoot = 0x100
+
+// setWM gives f's root window the properties of a window manager: "ewmh"
+// is one that keeps _NET_ACTIVE_WINDOW, "none" is none, "stale" left a
+// check window that is gone, and "unlisted" doesn't list _NET_ACTIVE_WINDOW
+// in _NET_SUPPORTED. active is the window _NET_ACTIVE_WINDOW names.
+func setWM(f *fakeX, wm string, active uint32) {
+	switch wm {
+	case "ewmh", "unlisted":
+		f.addWindow(wmCheck)
+		f.setCardinal(testRoot, "_NET_SUPPORTING_WM_CHECK", atomWindow, wmCheck)
+		f.setCardinal(wmCheck, "_NET_SUPPORTING_WM_CHECK", atomWindow, wmCheck)
+	case "stale":
+		f.setCardinal(testRoot, "_NET_SUPPORTING_WM_CHECK", atomWindow, wmCheck)
+	}
+	supported := []string{"_NET_SUPPORTED", "_NET_CLIENT_LIST", "_NET_ACTIVE_WINDOW"}
+	if wm == "unlisted" {
+		supported = supported[:2]
+	}
+	var list []byte
+	for _, name := range supported {
+		list = put32le(list, f.atom(name))
+	}
+	f.setProp(testRoot, "_NET_SUPPORTED", atomAtom, 32, list)
+	f.setCardinal(testRoot, "_NET_ACTIVE_WINDOW", atomWindow, active)
 }
+
+// addTestWindows gives f the windows above.
+func addTestWindows(f *fakeX) {
+	for _, w := range []struct {
+		id      uint32
+		netPID  uint32 // _NET_WM_PID, or 0 for none
+		hostPID uint32 // the pid the server knows, or 0 for none
+		machine string
+	}{
+		{winA, 4242, 4242, testHost},
+		{winB, 777, 777, testHost + ".example.org"},
+		{winRemote, 999, 555, "elsewhere"},
+		{winNoPID, 0, 888, testHost},
+		{winSandbox, 2, 31337, testHost},
+		{winTCP, 4343, 0, testHost},
+		{winLast, 1, 1, testHost},
+	} {
+		f.addWindow(w.id)
+		if w.netPID != 0 {
+			f.setCardinal(w.id, "_NET_WM_PID", atomCardinal, w.netPID)
+		}
+		if w.hostPID != 0 {
+			f.setClientPID(w.id, w.hostPID)
+		}
+		f.setProp(w.id, "WM_CLIENT_MACHINE", atomString, 8, []byte(w.machine))
+	}
+	f.setClientPID(winGone, 6666)
+}
+
+// focusStep is one thing the window manager does: it sets the root's
+// _NET_ACTIVE_WINDOW to each window in active in turn, burstGap apart, or,
+// when other is set, it changes that root property instead.
+type focusStep struct {
+	active []uint32
+	other  string
+}
+
+// The cases that set _NET_ACTIVE_WINDOW more than once in a step give the
+// watcher burstSettle to settle in, and leave burstGap between the changes.
+// That gap gives a watcher that reads at once time to read, and leaves the
+// burst well inside the settle time on a slow runner.
+const (
+	burstSettle = 300 * time.Millisecond
+	burstGap    = 30 * time.Millisecond
+)
 
 func TestX11Focus(t *testing.T) {
 	cases := []struct {
 		name   string
 		wm     string // "ewmh", "none", "stale" or "unlisted"
+		xres   string // the server's X-Resource, as fakeXConfig.xres
 		start  uint32 // _NET_ACTIVE_WINDOW at start
 		steps  []focusStep
-		want   []Focus // Window and PID of each report before the sentinel
-		onEWMH bool    // the window manager was found only after start
+		settle time.Duration // the watcher's settle time; zero means focusSettle
+		want   []Focus       // Window and PID of each report before the sentinel
+		onEWMH bool          // the window manager was found only after start
 	}{
 		{
 			name: "the window focused at start is reported once, with its pid",
@@ -228,46 +340,100 @@ func TestX11Focus(t *testing.T) {
 		{
 			name: "a change of _NET_ACTIVE_WINDOW reports the new window",
 			wm:   "ewmh", start: winA,
-			steps: []focusStep{{active: winB, notify: "_NET_ACTIVE_WINDOW"}},
+			steps: []focusStep{{active: []uint32{winB}}},
 			want:  []Focus{{Window: winA, PID: 4242}, {Window: winB, PID: 777}},
 		},
 		{
-			name: "a change of another root property reports nothing",
+			name: "a change of another root property reports nothing and reads nothing",
 			wm:   "ewmh", start: winA,
-			steps: []focusStep{{active: winA, notify: "_NET_CLIENT_LIST_STACKING"}},
+			steps: []focusStep{{other: "_NET_CLIENT_LIST_STACKING"}},
 			want:  []Focus{{Window: winA, PID: 4242}},
 		},
 		{
 			name: "the same window set again reports nothing",
 			wm:   "ewmh", start: winA,
-			steps: []focusStep{{active: winA, notify: "_NET_ACTIVE_WINDOW"}},
+			steps: []focusStep{{active: []uint32{winA}}},
 			want:  []Focus{{Window: winA, PID: 4242}},
 		},
 		{
-			name: "a window from another host has no pid",
+			name: "None and then a window, within the settle time, are one report, of the window",
+			wm:   "ewmh", start: winA, settle: burstSettle,
+			steps: []focusStep{{active: []uint32{0, winB}}},
+			want:  []Focus{{Window: winA, PID: 4242}, {Window: winB, PID: 777}},
+		},
+		{
+			name: "None and then the same window again, within the settle time, report nothing",
+			wm:   "ewmh", start: winA, settle: burstSettle,
+			steps: []focusStep{{active: []uint32{0, winA}}},
+			want:  []Focus{{Window: winA, PID: 4242}},
+		},
+		{
+			name: "two windows in turn within the settle time are one report, of the second",
+			wm:   "ewmh", start: winA, settle: burstSettle,
+			steps: []focusStep{{active: []uint32{winB, winNoPID}}},
+			want:  []Focus{{Window: winA, PID: 4242}, {Window: winNoPID, PID: 888}},
+		},
+		{
+			name: "None that lasts past the settle time is reported, as after a click on the desktop",
+			wm:   "ewmh", start: winA,
+			steps: []focusStep{{active: []uint32{0}}, {active: []uint32{winB}}},
+			want:  []Focus{{Window: winA, PID: 4242}, {Window: 0}, {Window: winB, PID: 777}},
+		},
+		{
+			name: "a Flatpak app's window has its pid on the host, from the server, not its sandbox's _NET_WM_PID",
+			wm:   "ewmh", start: winSandbox,
+			want: []Focus{{Window: winSandbox, PID: 31337}},
+		},
+		{
+			name: "a window without _NET_WM_PID has the pid the server knows",
+			wm:   "ewmh", start: winNoPID,
+			want: []Focus{{Window: winNoPID, PID: 888}},
+		},
+		{
+			name: "a window from another host has no pid, though the server names the local ssh as its client",
 			wm:   "ewmh", start: winRemote,
 			want: []Focus{{Window: winRemote}},
 		},
 		{
-			name: "a window that is gone has no pid",
+			name: "a client the server knows no pid for, as over TCP, has none, whatever its _NET_WM_PID says",
+			wm:   "ewmh", start: winTCP,
+			want: []Focus{{Window: winTCP}},
+		},
+		{
+			name: "a window that is gone has no pid, though a new client took its client's slot",
 			wm:   "ewmh", start: winGone,
 			want: []Focus{{Window: winGone}},
 		},
 		{
-			name: "a window without _NET_WM_PID has no pid",
-			wm:   "ewmh", start: winNoPID,
+			name: "without X-Resource, the pid is the window's _NET_WM_PID",
+			wm:   "ewmh", xres: "none", start: winA,
+			want: []Focus{{Window: winA, PID: 4242}},
+		},
+		{
+			name: "without X-Resource, a window without _NET_WM_PID has no pid",
+			wm:   "ewmh", xres: "none", start: winNoPID,
 			want: []Focus{{Window: winNoPID}},
+		},
+		{
+			name: "without X-Resource, a window from another host has no pid",
+			wm:   "ewmh", xres: "none", start: winRemote,
+			want: []Focus{{Window: winRemote}},
+		},
+		{
+			name: "X-Resource 1.1 has no QueryClientIds, so the pid is _NET_WM_PID",
+			wm:   "ewmh", xres: "1.1", start: winA,
+			want: []Focus{{Window: winA, PID: 4242}},
 		},
 		{
 			name: "no focused window is window 0",
 			wm:   "ewmh", start: 0,
-			steps: []focusStep{{active: winB, notify: "_NET_ACTIVE_WINDOW"}},
+			steps: []focusStep{{active: []uint32{winB}}},
 			want:  []Focus{{Window: 0}, {Window: winB, PID: 777}},
 		},
 		{
 			name: "without a window manager nothing is reported until _NET_ACTIVE_WINDOW changes",
 			wm:   "none", start: winA,
-			steps:  []focusStep{{active: winB, notify: "_NET_CLIENT_LIST"}},
+			steps:  []focusStep{{other: "_NET_CLIENT_LIST"}},
 			want:   nil,
 			onEWMH: true,
 		},
@@ -286,55 +452,33 @@ func TestX11Focus(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			const root = 0x100
-			f := newFakeX(t, fakeXConfig{roots: []uint32{root}})
-			for _, w := range []struct {
-				id      uint32
-				pid     uint32
-				machine string
-			}{
-				{winA, 4242, testHost},
-				{winB, 777, testHost + ".example.org"},
-				{winRemote, 999, "elsewhere"},
-				{winNoPID, 0, testHost},
-				{winLast, 1, testHost},
-			} {
-				f.addWindow(w.id)
-				if w.pid != 0 {
-					f.setCardinal(w.id, "_NET_WM_PID", atomCardinal, w.pid)
-				}
-				f.setProp(w.id, "WM_CLIENT_MACHINE", atomString, 8, []byte(w.machine))
-			}
-			switch tc.wm {
-			case "ewmh", "unlisted":
-				f.addWindow(wmCheck)
-				f.setCardinal(root, "_NET_SUPPORTING_WM_CHECK", atomWindow, wmCheck)
-				f.setCardinal(wmCheck, "_NET_SUPPORTING_WM_CHECK", atomWindow, wmCheck)
-			case "stale":
-				f.setCardinal(root, "_NET_SUPPORTING_WM_CHECK", atomWindow, wmCheck)
-			}
-			supported := []string{"_NET_SUPPORTED", "_NET_CLIENT_LIST", "_NET_ACTIVE_WINDOW"}
-			if tc.wm == "unlisted" {
-				supported = supported[:2]
-			}
-			var list []byte
-			for _, name := range supported {
-				list = put32le(list, f.atom(name))
-			}
-			f.setProp(root, "_NET_SUPPORTED", atomAtom, 32, list)
-			f.setCardinal(root, "_NET_ACTIVE_WINDOW", atomWindow, tc.start)
+			f := newFakeX(t, fakeXConfig{roots: []uint32{testRoot}, xres: tc.xres})
+			addTestWindows(f)
+			setWM(f, tc.wm, tc.start)
+			const root = testRoot
 
 			c, err := f.dial(0, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
-			w, err := newX11Focus(c, testHost, 5*time.Second)
+			w, err := newX11Focus(c, testHost, time.Now().Add(5*time.Second))
 			if err != nil {
 				t.Fatal(err)
 			}
 			defer w.close()
+			if w.settle != focusSettle {
+				t.Errorf("settle time %v, want focusSettle", w.settle)
+			}
+			settle := focusSettle
+			if tc.settle != 0 {
+				settle = tc.settle
+			}
+			w.settle = settle
 			if got := f.selectedOn(root); got&propertyChangeMask == 0 {
 				t.Fatalf("the root's event mask is %#x, without PropertyChangeMask", got)
+			}
+			if wantVia := map[string]string{"": focusViaXRes, "1.1": focusViaPID, "none": focusViaPID}[tc.xres]; w.via() != wantVia {
+				t.Errorf("focus via %q, want %q", w.via(), wantVia)
 			}
 			found := false
 			w.onEWMH = func() { found = true }
@@ -344,12 +488,13 @@ func TestX11Focus(t *testing.T) {
 			done := make(chan error, 1)
 			go func() { done <- w.run(ctx, out) }()
 
-			var got []Focus
+			var got []Focus // reports without At, for comparing with want
 			next := func() Focus {
 				t.Helper()
 				select {
 				case r := <-out:
-					return Focus{Window: r.Window, PID: r.PID}
+					got = append(got, Focus{Window: r.Window, PID: r.PID})
+					return r
 				case err := <-done:
 					t.Fatalf("the watcher stopped: %v", err)
 				case <-time.After(5 * time.Second):
@@ -357,34 +502,87 @@ func TestX11Focus(t *testing.T) {
 				}
 				return Focus{}
 			}
-			// Each report is awaited before the next change, so the client
-			// can't read a later value for an earlier notification.
-			if tc.wm == "ewmh" {
-				got = append(got, next())
-			}
-			current := tc.start
-			for _, s := range tc.steps {
-				f.setCardinal(root, "_NET_ACTIVE_WINDOW", atomWindow, s.active)
-				f.notify(root, s.notify)
-				if tc.wm == "ewmh" && s.notify == "_NET_ACTIVE_WINDOW" && s.active != current {
-					got = append(got, next())
+			reads := func() int { return f.readsOf(root, "_NET_ACTIVE_WINDOW") }
+			// A report of a change is dated at the change, and comes at least
+			// the settle time later.
+			checkAt := func(r Focus, changed time.Time) {
+				t.Helper()
+				if r.At.Before(changed) {
+					t.Errorf("window %#x is dated %v before the change it reports", r.Window, changed.Sub(r.At))
 				}
-				current = s.active
+				if late := time.Since(r.At); late < settle {
+					t.Errorf("window %#x was reported %v after its date; want it dated at the change, at least the %v settle time before", r.Window, late, settle)
+				}
 			}
-			f.setCardinal(root, "_NET_ACTIVE_WINDOW", atomWindow, winLast)
-			f.notify(root, "_NET_ACTIVE_WINDOW")
+			// _NET_ACTIVE_WINDOW is read once at start when a window manager
+			// keeps it, once for each step that sets it, a burst included,
+			// and never for a change of another property. Each step waits
+			// until the watcher is done with it, so that no read can see a
+			// later step's window.
+			reported, current, wantReads := false, uint32(0), 0
+			if tc.wm == "ewmh" {
+				r := next()
+				reported, current, wantReads = true, r.Window, 1
+			}
+			if n := reads(); n != wantReads {
+				t.Errorf("read _NET_ACTIVE_WINDOW %d times at start, want %d", n, wantReads)
+			}
+			for _, s := range tc.steps {
+				before := reads()
+				if s.other != "" {
+					f.notify(root, s.other)
+					// A watcher that took this for a focus change would read
+					// once it settled.
+					time.Sleep(settle + 100*time.Millisecond)
+					if n := reads() - before; n != 0 {
+						t.Errorf("a change of %s read _NET_ACTIVE_WINDOW %d times, want none", s.other, n)
+					}
+					continue
+				}
+				changed := time.Now()
+				for i, win := range s.active {
+					if i > 0 {
+						time.Sleep(burstGap)
+					}
+					f.setActive(root, win)
+				}
+				if n := reads() - before; len(s.active) > 1 && n != 0 {
+					t.Fatalf("read _NET_ACTIVE_WINDOW %d times within a burst, before it settled", n)
+				}
+				if win := s.active[len(s.active)-1]; reported && win == current {
+					// Nothing is reported, so wait for the read that finds
+					// the window unchanged.
+					eventually(t, "a read of _NET_ACTIVE_WINDOW", func() bool { return reads() > before })
+				} else {
+					r := next()
+					checkAt(r, changed)
+					reported, current = true, r.Window
+				}
+				if n := reads() - before; n != 1 {
+					t.Errorf("a change of _NET_ACTIVE_WINDOW read it %d times, want once", n)
+				}
+			}
+			before, changed := reads(), time.Now()
+			f.setActive(root, winLast)
 			for {
 				r := next()
 				if r.Window == winLast {
+					got = got[:len(got)-1]
 					if r.PID != 1 {
 						t.Errorf("the sentinel window's pid is %d, want 1", r.PID)
 					}
+					checkAt(r, changed)
 					break
 				}
-				got = append(got, r)
+			}
+			if n := reads() - before; n != 1 {
+				t.Errorf("the sentinel's change read _NET_ACTIVE_WINDOW %d times, want once", n)
 			}
 			if !equalFocus(got, tc.want) {
 				t.Errorf("reports %+v, want %+v", got, tc.want)
+			}
+			if n := f.readsOfAny("_NET_WM_PID"); tc.xres == "" && n != 0 {
+				t.Errorf("read _NET_WM_PID %d times on a server with X-Resource 1.2", n)
 			}
 			cancel()
 			w.close()

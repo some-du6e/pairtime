@@ -13,11 +13,31 @@ import (
 // maxPID is Linux's PID_MAX_LIMIT. A larger _NET_WM_PID is garbage.
 const maxPID = 1 << 22
 
+// Where focus comes from, as Status.Focus names it.
+const (
+	focusViaXRes = "_NET_ACTIVE_WINDOW, with each window's process from X-Resource"
+	focusViaPID  = "_NET_ACTIVE_WINDOW, with each window's process from its _NET_WM_PID, which is wrong for Flatpak apps: the X server lacks X-Resource 1.2"
+)
+
+// focusSettle is how long the watcher lets _NET_ACTIVE_WINDOW settle after
+// a change before it reads the property. A window manager can set it more
+// than once for one switch: openbox sets it to None and then, 0.2 ms later,
+// to the window it focuses. Read at once, that is two os.focus events, the
+// first saying nothing has focus. Read focusSettle after the first change,
+// it is one event, for the window focus came to rest on, dated at that
+// first change. A None that lasts, as after a click on the desktop, is
+// reported like any window. 50 ms leaves window managers far slower than
+// openbox time to finish a switch, and is a twentieth of the one-second
+// steps the scorer credits in (SM 2.7). The timer runs only after a change.
+const focusSettle = 50 * time.Millisecond
+
 // x11Focus follows the focused window through the window manager's
 // _NET_ACTIVE_WINDOW property on the root window (EWMH 1.5), which changes
 // with every focus change and announces itself with a PropertyNotify. The
-// focused window's process comes from its _NET_WM_PID. It owns its own X
-// connection, which sits in a blocked read between focus changes.
+// focused window's process comes from the X server through X-Resource, or
+// from the window's _NET_WM_PID on a server without X-Resource 1.2 (see
+// windowPID). It owns its own X connection, which sits in a blocked read
+// between focus changes.
 type x11Focus struct {
 	c        *xconn
 	hostname string
@@ -27,6 +47,10 @@ type x11Focus struct {
 	supported uint32 // _NET_SUPPORTED
 	wmCheck   uint32 // _NET_SUPPORTING_WM_CHECK
 
+	// xres is X-Resource's major opcode when the server speaks version
+	// 1.2, which says which process each client is, and 0 when it doesn't.
+	xres byte
+
 	// ewmh is set once the window manager is known to keep
 	// _NET_ACTIVE_WINDOW. Until then the root's property says nothing
 	// about focus, so nothing is reported.
@@ -35,25 +59,32 @@ type x11Focus struct {
 	// manager keeping _NET_ACTIVE_WINDOW that the start-up check missed.
 	onEWMH func()
 
-	dirty bool   // _NET_ACTIVE_WINDOW changed since it was last read
-	sent  bool   // a Focus has been reported
-	last  uint32 // the window last reported
+	// settle is focusSettle. Tests set other times.
+	settle time.Duration
+	// dirty says _NET_ACTIVE_WINDOW changed since it was last read, and
+	// changed when the first of those changes came in. changed is zero
+	// when dirty is only the read at start, which has no change to wait
+	// out.
+	dirty   bool
+	changed time.Time
+	sent    bool   // a Focus has been reported
+	last    uint32 // the window last reported
 }
 
 // newX11Focus takes over c, interns the atoms, starts listening for
 // property changes on the root window and checks for a window manager
-// that keeps _NET_ACTIVE_WINDOW. It closes c if it fails.
-func newX11Focus(c *xconn, hostname string, timeout time.Duration) (*x11Focus, error) {
-	w := &x11Focus{c: c, hostname: hostname}
-	if err := w.setup(timeout); err != nil {
+// that keeps _NET_ACTIVE_WINDOW, all by deadline. It closes c if it fails.
+func newX11Focus(c *xconn, hostname string, deadline time.Time) (*x11Focus, error) {
+	w := &x11Focus{c: c, hostname: hostname, settle: focusSettle}
+	if err := w.setup(deadline); err != nil {
 		c.close()
 		return nil, err
 	}
 	return w, nil
 }
 
-func (w *x11Focus) setup(timeout time.Duration) error {
-	if err := w.c.conn.SetDeadline(time.Now().Add(timeout)); err != nil {
+func (w *x11Focus) setup(deadline time.Time) error {
+	if err := w.c.conn.SetDeadline(deadline); err != nil {
 		return err
 	}
 	w.c.onEvent = w.event
@@ -72,6 +103,9 @@ func (w *x11Focus) setup(timeout time.Duration) error {
 		}
 		*a.atom = atom
 	}
+	if err := w.findXRes(); err != nil {
+		return err
+	}
 	// Select before the first read, so a change between the two isn't
 	// missed: it sets dirty, and run reads again.
 	if err := w.c.selectPropertyChanges(w.c.root); err != nil {
@@ -86,6 +120,34 @@ func (w *x11Focus) setup(timeout time.Duration) error {
 		w.ewmh, w.dirty = true, true
 	}
 	return w.c.conn.SetDeadline(time.Time{})
+}
+
+// findXRes looks for X-Resource 1.2. Xorg, Xvfb and XWayland have had it
+// since 2012; on a server without it, windowPID falls back to _NET_WM_PID.
+func (w *x11Focus) findXRes() error {
+	major, ok, err := w.c.queryExtension(xResExtension)
+	if err != nil || !ok {
+		return err
+	}
+	has, err := w.c.xResHasClientIDs(major)
+	if isProtoError(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if has {
+		w.xres = major
+	}
+	return nil
+}
+
+// via names where focus comes from, for Status.Focus.
+func (w *x11Focus) via() string {
+	if w.xres != 0 {
+		return focusViaXRes
+	}
+	return focusViaPID
 }
 
 // wmKeepsActiveWindow checks EWMH's two signs of a live window manager
@@ -128,24 +190,45 @@ func (w *x11Focus) event(p []byte) {
 			w.onEWMH()
 		}
 	}
+	if !w.dirty {
+		w.changed = time.Now()
+	}
 	w.dirty = true
 }
 
 // run reports the focused window on out, once at the start and then once
-// per change, until the connection fails or ctx ends. A burst of changes
-// is read as one: each read takes the property's value at that moment.
+// per change, until the connection fails or ctx ends. Changes that come
+// within focusSettle of the first are read as one, and nothing is reported
+// when they end on the window reported last.
 func (w *x11Focus) run(ctx context.Context, out chan<- Focus) error {
 	for {
 		for w.dirty {
-			w.dirty = false
-			f, err := w.read()
+			if err := w.waitToSettle(ctx); err != nil {
+				return err
+			}
+			at := w.changed
+			win, err := w.activeWindow()
 			if err != nil {
 				return err
 			}
-			if w.sent && f.Window == w.last {
+			if w.sent && win == w.last {
 				continue
 			}
-			w.sent, w.last = true, f.Window
+			if at.IsZero() {
+				at = time.Now()
+			}
+			f := Focus{At: at, Window: win}
+			if win != 0 {
+				if f.PID, err = w.windowPID(win); err != nil {
+					return err
+				}
+			}
+			// With room in out, the select below may send even after ctx
+			// ends, so check first.
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			w.sent, w.last = true, win
 			select {
 			case out <- f:
 			case <-ctx.Done():
@@ -160,34 +243,73 @@ func (w *x11Focus) run(ctx context.Context, out chan<- Focus) error {
 	}
 }
 
-// read returns the focused window now. A window that vanished between the
-// property change and this read reports no process.
-func (w *x11Focus) read() (Focus, error) {
-	win, _, err := w.c.getCardinal(w.c.root, w.active, atomWindow)
-	if isProtoError(err) {
-		win, err = 0, nil
+// waitToSettle waits until focusSettle has passed since the change about to
+// be read, or until ctx ends. Changes that come in meanwhile wait in the
+// socket, and activeWindow's reply covers them.
+func (w *x11Focus) waitToSettle(ctx context.Context) error {
+	if w.changed.IsZero() {
+		return nil
 	}
-	if err != nil {
-		return Focus{}, err
+	wait := time.Until(w.changed.Add(w.settle))
+	if wait <= 0 {
+		return nil
 	}
-	f := Focus{At: time.Now(), Window: win}
-	if win != 0 {
-		f.PID, err = w.windowPID(win)
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
 	}
-	return f, err
 }
 
-// windowPID returns the focused window's _NET_WM_PID, or 0 when the window
-// doesn't say, is gone, or belongs to a client on another host: EWMH says a
-// pid only means something together with WM_CLIENT_MACHINE, and a client
-// forwarded over ssh -X or running in a container reports a pid from a
-// process table that isn't this one.
-func (w *x11Focus) windowPID(win uint32) (int, error) {
-	pid, ok, err := w.c.getCardinal(win, w.pid, atomCardinal)
+// activeWindow reads _NET_ACTIVE_WINDOW, the focused window or 0 for none,
+// and marks every change so far as read. The server queues a client's
+// events and replies in the order it makes them, so a PropertyNotify that
+// comes in before the reply is about a change the reply shows; only one
+// that comes after it calls for another read.
+func (w *x11Focus) activeWindow() (uint32, error) {
+	win, _, err := w.c.getCardinal(w.c.root, w.active, atomWindow)
+	w.dirty, w.changed = false, time.Time{}
 	if isProtoError(err) {
 		return 0, nil
 	}
-	if err != nil || !ok || pid == 0 || pid > maxPID {
+	return win, err
+}
+
+// windowPID returns the process of the client that owns the focused
+// window, or 0 when it can't be known: the window is gone, its client runs
+// on another host, or the server knows no pid for it.
+//
+// The pid comes from the X server, through X-Resource. A window's own
+// _NET_WM_PID is whatever getpid() returned in its client, and Flatpak
+// starts every app in a PID namespace of its own while keeping the host's
+// name, so a Flatpak editor's window says it is pid 2 or so, which on the
+// host is kthreadd. The server took the pid from the client's socket, in
+// its own namespace; it has none for a client that connected over TCP, and
+// then the window has no pid. Only a server without X-Resource 1.2 leaves
+// _NET_WM_PID as the one source.
+//
+// Either way, WM_CLIENT_MACHINE has to name this host. A client forwarded by
+// ssh -X reaches the server through the local ssh process, whose pid is the
+// one X-Resource gives, and a remote client's _NET_WM_PID is from another
+// machine's process table (EWMH: a pid only means something together with
+// WM_CLIENT_MACHINE). Reading it after the pid also checks that the window
+// still exists, so a pid read for a window that has closed, whose client's
+// slot a new client may have taken, isn't reported.
+func (w *x11Focus) windowPID(win uint32) (int, error) {
+	var pid uint32
+	var err error
+	if w.xres != 0 {
+		pid, err = w.c.clientPID(w.xres, win)
+	} else {
+		pid, _, err = w.c.getCardinal(win, w.pid, atomCardinal)
+	}
+	if isProtoError(err) {
+		return 0, nil
+	}
+	if err != nil || pid == 0 || pid > maxPID {
 		return 0, err
 	}
 	_, machine, err := w.c.getProperty(win, atomWMClientMachine, atomString, 64)
