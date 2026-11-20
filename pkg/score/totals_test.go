@@ -94,33 +94,71 @@ func TestFixtureSubmissionTotals(t *testing.T) {
 			})
 		}
 	}
-	// docs/errata/2026-11-19-sm-6.1-hackatime-replay.md's decision
-	// (E-6.1-hackatime) pins SM 6.1's replay: logged_s 7,832, ai_logged_s
-	// 4,050, handbook_s 5,132 and ai_ratio 5,965 / 4,050 = 1.47.
+	// SM 6.1's window replays to logged_s 7,712, ai_logged_s 3,930 and
+	// handbook_s 5,092 under main's SM 5.3 and 5.4, as 6.1's expected.json
+	// notes; SM's own "about 8,300" and "about 4,050" are estimates
+	// (docs/errata/2026-11-19-sm-6.1-hackatime-replay.md). E-6.1-hackatime
+	// gives 7,832, 4,050 and 5,132, once P08 lands its SM text and sets
+	// hackatimeDecided.
 	f := fixture(t, "6.1")
 	tot := fixtureSubmission(f).Totals(scoreAll(t, fixtureDevice(f), f.Events), f.Events)
 	for _, c := range []struct {
 		name      string
+		rule      loggedRule
 		got, want float64
 	}{
-		{"SM 6.1's logged_s counts its window from the 13:57:05 heartbeat before it: 7,832 s (SM 5.3)", tot.LoggedS, 7832},
-		{"SM 6.1's ai_logged_s gives each gap to the record that ends it: 4,050 s (SM 5.4)", tot.AILoggedS, 4050},
-		{"SM 6.1's handbook_s is coding_logged_s plus a third of ai_logged_s: 5,132 s", tot.HandbookS, 5132},
+		{"SM 6.1's logged_s is min(gap, 120 s) over its window's heartbeats and agent events: 7,712 s (SM 5.3)", smRule, tot.LoggedS, 7712},
+		{"SM 6.1's ai_logged_s is the same rule over its agent events alone: 3,930 s (SM 5.4)", smRule, tot.AILoggedS, 3930},
+		{"SM 6.1's handbook_s is coding_logged_s plus a third of ai_logged_s: 5,092 s", smRule, tot.HandbookS, 5092},
+		{"SM 6.1's ai_ratio is 5,965 / 3,930", smRule, ratio(tot), 5965.0 / 3930},
+		{"E-6.1-hackatime: SM 6.1's logged_s counts its window from the 13:57:05 heartbeat before it: 7,832 s", decidedRule, tot.LoggedS, 7832},
+		{"E-6.1-hackatime: SM 6.1's ai_logged_s gives each gap to the record that ends it: 4,050 s", decidedRule, tot.AILoggedS, 4050},
+		{"E-6.1-hackatime: SM 6.1's handbook_s is 5,132 s", decidedRule, tot.HandbookS, 5132},
+		{"E-6.1-hackatime: SM 6.1's ai_ratio is 5,965 / 4,050 = 1.47", decidedRule, ratio(tot), 5965.0 / 4050},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			if c.got != c.want {
+			c.rule.skip(t)
+			if math.IsNaN(c.got) || math.Abs(c.got-c.want) > 1e-9 {
 				t.Errorf("%v, want %v", c.got, c.want)
 			}
 		})
 	}
-	t.Run("SM 6.1's ai_ratio is 5,965 / 4,050 = 1.47, and its totals pass pkg/event validation", func(t *testing.T) {
-		if tot.AIRatio == nil || math.Abs(*tot.AIRatio-5965.0/4050) > 1e-9 {
-			t.Errorf("ai_ratio %v", tot.AIRatio)
-		}
+	t.Run("SM 6.1's totals pass pkg/event validation", func(t *testing.T) {
 		if err := tot.Validate(); err != nil {
 			t.Error(err)
 		}
 	})
+}
+
+// ratio is t's ai_ratio, or NaN when it has none.
+func ratio(t event.SubmissionTotals) float64 {
+	if t.AIRatio == nil {
+		return math.NaN()
+	}
+	return *t.AIRatio
+}
+
+// loggedRule says which logged_s and ai_logged_s rule a test case pins:
+// both, main's SM 5.3 and 5.4 (smRule), or E-6.1-hackatime's (decidedRule).
+// hackatimeDecided picks the one Totals follows, and the other's cases skip.
+type loggedRule int
+
+const (
+	bothRules loggedRule = iota
+	smRule
+	decidedRule
+)
+
+// skip skips a case that pins the rule Totals doesn't follow.
+func (r loggedRule) skip(t *testing.T) {
+	t.Helper()
+	switch {
+	case r == decidedRule && !hackatimeDecided:
+		// TODO(P08): these run once P08 sets hackatimeDecided.
+		t.Skip("E-6.1-hackatime's rule waits for its SM 5.3 and 5.4 text, which P08 brings (D-sc4-sm-first, #132)")
+	case r == smRule && hackatimeDecided:
+		t.Skip("main's SM 5.3 and 5.4 rule, which E-6.1-hackatime replaces")
+	}
 }
 
 func TestLoggedSeries(t *testing.T) {
@@ -132,21 +170,40 @@ func TestLoggedSeries(t *testing.T) {
 		b.harness(at(s), event.ViaHook, "s_1", "p_1", &event.AgentTool{ToolClass: event.ToolEdit, Files: []string{"f_1"},
 			LinesAdded: 1, TStart: at(s) - 500, TEnd: at(s)})
 	}
+	// The window opens with a heartbeat at 0 s, a prompt at 50 s and a
+	// heartbeat at 100 s.
+	promptBetween := func(b *tl) {
+		heartbeat(b, 0, event.ViaEditor, "p_1")
+		b.prompt(at(50), event.ViaHook, "s_1", "p_1", "t_1", 30)
+		heartbeat(b, 100, event.ViaEditor, "p_1")
+	}
+	// An agent edit at 50 s, with a heartbeat of its file 5 s or 6 s
+	// after it.
+	echoAfter := func(s int64) func(b *tl) {
+		return func(b *tl) {
+			heartbeat(b, 0, event.ViaEditor, "p_1")
+			edit(b, 50)
+			heartbeat(b, 50+s, event.ViaEditor, "p_1")
+		}
+	}
 	cases := []struct {
 		name       string
+		rule       loggedRule
 		build      func(b *tl)
 		logged, ai float64
 	}{
-		{"each counted record adds its gap to the one before it, at most 120 s (SM 5.3, HC 1.4)",
+		{"each counted record adds its gap to the one before it, at most 120 s (SM 5.3, HC 1.4)", bothRules,
 			func(b *tl) {
 				heartbeat(b, 0, event.ViaEditor, "p_1")
 				heartbeat(b, 60, event.ViaEditor, "p_1")
 				heartbeat(b, 300, event.ViaEditor, "p_1")
 			},
 			180, 0},
-		{"the window's first record counts its gap from the last counted record before the window (SM 5.3)",
+		{"the window's first record adds nothing, since SM 5.3 sums the window's records", smRule,
+			func(b *tl) { heartbeat(b, -100, event.ViaEditor, "p_1"); heartbeat(b, 0, event.ViaEditor, "p_1") }, 0, 0},
+		{"E-6.1-hackatime: the window's first record counts its gap from the last counted record before the window", decidedRule,
 			func(b *tl) { heartbeat(b, -100, event.ViaEditor, "p_1"); heartbeat(b, 0, event.ViaEditor, "p_1") }, 100, 0},
-		{"track, plugin, editor_unverified and bridge_unverified records never count (DESIGN 6.2 D19)",
+		{"track, plugin, editor_unverified and bridge_unverified records never count (DESIGN 6.2 D19)", bothRules,
 			func(b *tl) {
 				heartbeat(b, 0, event.ViaEditorUnverified, "p_1")
 				heartbeat(b, 60, event.ViaEditorUnverified, "p_1")
@@ -154,36 +211,29 @@ func TestLoggedSeries(t *testing.T) {
 				b.harness(at(100), event.ViaBridgeUnverified, "s_8", "p_1", &event.AgentStop{TurnKey: "t_8", StopReason: event.StopEndTurn})
 				b.track(at(110), "s_t", 30, event.LogNoReader, "")
 			}, 0, 0},
-		{"each gap goes to the record that ends it: to ai_logged_s at an agent event, to coding at a heartbeat (SM 5.4)",
-			func(b *tl) {
-				heartbeat(b, 0, event.ViaEditor, "p_1")
-				b.prompt(at(50), event.ViaHook, "s_1", "p_1", "t_1", 30)
-				heartbeat(b, 100, event.ViaEditor, "p_1")
-			}, 100, 50},
-		{"a heartbeat within 5 s of an agent edit of its file counts as part of the edit (SM 5.4)",
-			func(b *tl) {
-				heartbeat(b, 0, event.ViaEditor, "p_1")
-				edit(b, 50)
-				heartbeat(b, 55, event.ViaEditor, "p_1")
-			}, 55, 55},
-		{"a heartbeat 6 s after the agent's edit of its file is the person's",
-			func(b *tl) {
-				heartbeat(b, 0, event.ViaEditor, "p_1")
-				edit(b, 50)
-				heartbeat(b, 56, event.ViaEditor, "p_1")
-			}, 56, 50},
-		{"records of projects outside the submission don't count",
+		{"ai_logged_s is the logged_s rule over the agent events alone, so one prompt between two heartbeats adds nothing to it (SM 5.4)", smRule,
+			promptBetween, 100, 0},
+		{"E-6.1-hackatime: each gap goes to the record that ends it, to ai_logged_s at an agent event and to coding at a heartbeat", decidedRule,
+			promptBetween, 100, 50},
+		{"a heartbeat 5 s after an agent edit of its file is still a heartbeat, which ai_logged_s doesn't count (SM 5.4)", smRule,
+			echoAfter(5), 55, 0},
+		{"E-6.1-hackatime: a heartbeat within 5 s of an agent edit of its file counts as part of the edit", decidedRule,
+			echoAfter(5), 55, 55},
+		{"E-6.1-hackatime: a heartbeat 6 s after the agent's edit of its file is the person's", decidedRule,
+			echoAfter(6), 56, 50},
+		{"records of projects outside the submission don't count", bothRules,
 			func(b *tl) {
 				heartbeat(b, 0, event.ViaEditor, "p_1")
 				heartbeat(b, 60, event.ViaEditor, "p_2")
 				heartbeat(b, 90, event.ViaEditor, "p_1")
 			},
 			90, 0},
-		{"records at or after the window's end don't count",
+		{"records at or after the window's end don't count", bothRules,
 			func(b *tl) { heartbeat(b, 500, event.ViaEditor, "p_1"); heartbeat(b, 600, event.ViaEditor, "p_1") }, 0, 0},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
+			c.rule.skip(t)
 			b := newTL(false)
 			c.build(b)
 			tot := sub.Totals(Derived{}, b.records())

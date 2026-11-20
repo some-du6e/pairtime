@@ -30,9 +30,27 @@ type Submission struct {
 // not a pairtime parameter.
 const hackatimeGapMS = 120_000
 
+// hackatimeDecided picks the logged_s and ai_logged_s rule. While it is
+// false, Totals follows main's SM: logged_s is min(gap, 120 s) over one
+// time-ordered series of the window's counted records (SM 5.3), and
+// ai_logged_s the same rule over the agent events alone (SM 5.4), which
+// gives SM 6.1's window logged_s 7,712, ai_logged_s 3,930 and handbook_s
+// 5,092, as 6.1's expected.json notes. Set, it follows E-6.1-hackatime
+// (docs/errata/2026-11-19-sm-6.1-hackatime-replay.md, decided 2026-11-20):
+// each gap goes to the record that ends it, an editor heartbeat within
+// echoMS of an agent edit of its file counts as the agent's, and the
+// window's first record counts its gap from the last counted record before
+// the window, which gives 6.1 7,832, 4,050 and 5,132. That decision puts its
+// oracle PR first, so the rule waits for SM's text (D-sc4-sm-first, #132).
+//
+// TODO(P08): the decisions PR that lands E-6.1-hackatime's SM 5.3, 5.4 and
+// 6.1 text sets this true, which runs the test cases that pin the decided
+// rule and skips the ones that pin main's, and then drops the switch.
+const hackatimeDecided = false
+
 // echoMS is how close an editor heartbeat must be to an agent edit of the
-// same file to count as part of it (SM 5.4), as wakatime-cli treats such a
-// heartbeat as a duplicate of the agent's (HC 2.2).
+// same file to count as part of it under E-6.1-hackatime, as wakatime-cli
+// treats such a heartbeat as a duplicate of the agent's (HC 2.2).
 const echoMS = 5_000
 
 // Totals returns the submission's totals, SM 5.3's and SM 5.4's, from what
@@ -50,18 +68,15 @@ const echoMS = 5_000
 //     the backfilled band every level-C second. The server decides the
 //     bands again at submission, with the checks only it runs (CC6, CC7,
 //     CC9, CC10).
-//   - logged_s and ai_logged_s are Hackatime's min(gap, 120 s) over one
-//     series of the submitted projects' editor heartbeats and agent events
-//     (prompt submits, tool calls and stops), ordered by t, then seq, then
-//     event_id, the window's first counting its gap from the last such
-//     record before the window (SM 5.3). Only records via hook, log, otel,
-//     editor or bridge count; track, plugin, editor_unverified and
-//     bridge_unverified records never do (DESIGN 6.2 D19). Each gap goes to
-//     the record that ends it, and to ai_logged_s when that is an agent
-//     event or an editor heartbeat within 5 s of a counted agent edit of
-//     the same file (SM 5.4). These are the rules of
-//     docs/errata/2026-11-19-sm-6.1-hackatime-replay.md, decided
-//     2026-11-20 as E-6.1-hackatime.
+//   - logged_s is Hackatime's min(gap, 120 s) between each two consecutive
+//     records of one series: the submitted projects' editor heartbeats and
+//     agent events (prompt submits, tool calls and stops) in the window,
+//     ordered by t, then seq, then event_id (SM 5.3). Only records via
+//     hook, log, otel, editor or bridge count; track, plugin,
+//     editor_unverified and bridge_unverified records never do (DESIGN 6.2
+//     D19). ai_logged_s is the same rule over the agent events alone (SM
+//     5.4). hackatimeDecided switches both to E-6.1-hackatime's rule once
+//     SM states it.
 //   - ai_credited_s is credit under P, ANS, GO, Q, PA, INT, SUP and READ,
 //     and any credited second inside a turn of its project (SM 5.4).
 //   - agent_only_s, excluded_loops_s and idle_s count the submitted
@@ -233,6 +248,17 @@ func agentEvent(e event.Event) bool {
 
 // logged returns logged_s and ai_logged_s in milliseconds (SM 5.3, 5.4).
 func (s Submission) logged(records []event.Event, in func(string) bool) (logged, ai int64) {
+	series := loggedSeries(records, in)
+	if !hackatimeDecided {
+		return s.replay(series, nil), s.replay(series, agentEvent)
+	}
+	return s.loggedDecided(series)
+}
+
+// loggedSeries returns the records that count toward logged_s, the
+// submitted projects' editor heartbeats and agent events through a logged
+// via (D19), in record order, each once.
+func loggedSeries(records []event.Event, in func(string) bool) []event.Event {
 	var series []event.Event
 	for _, e := range records {
 		if !loggedVia(e.Via) || !in(e.ProjectKey) {
@@ -243,7 +269,38 @@ func (s Submission) logged(records []event.Event, in func(string) bool) (logged,
 		}
 	}
 	slices.SortStableFunc(series, recordCmp)
-	series = slices.CompactFunc(series, func(a, b event.Event) bool { return a.EventID == b.EventID })
+	return slices.CompactFunc(series, func(a, b event.Event) bool { return a.EventID == b.EventID })
+}
+
+// replay is SM 5.3's rule over the records of series inside the window that
+// keep accepts, or all of them for nil: min(gap, 120 s) between each two
+// consecutive ones. The window's first such record adds nothing, since SM
+// 5.3 sums the window's records.
+func (s Submission) replay(series []event.Event, keep func(event.Event) bool) int64 {
+	var total int64
+	prev := int64(-1)
+	for _, e := range series {
+		if e.T >= s.To {
+			break
+		}
+		if e.T < s.From || keep != nil && !keep(e) {
+			continue
+		}
+		if prev >= 0 {
+			total += min(e.T-prev, hackatimeGapMS)
+		}
+		prev = e.T
+	}
+	return total
+}
+
+// loggedDecided is E-6.1-hackatime's rule over series, which waits for its
+// SM text (hackatimeDecided): one series whose first record in the window
+// counts its gap from the last counted record before the window, each gap
+// going to the record that ends it, and to ai_logged_s when that is an agent
+// event or an editor heartbeat within echoMS of a counted agent edit of the
+// same file.
+func (s Submission) loggedDecided(series []event.Event) (logged, ai int64) {
 	// The agent edits each heartbeat may echo.
 	var edits []event.Event
 	for _, e := range series {
