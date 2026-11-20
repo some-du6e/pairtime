@@ -9,16 +9,19 @@ name: web
 
 on:
   pull_request:
-    # DESIGN 3.13's paths, plus what the smoke test runs: the embedded UI,
-    # the local API's spec and the agent code that serves both.
+    # DESIGN 3.13's paths, plus everything the smoke test runs and holds to
+    # docs/api: the embedded UI, the local API's spec, and `pairtime agent`,
+    # whose answers take their shape from code across internal/agent (the
+    # ipc object comes from messages.go, the mode from config/), the build
+    # info in internal/version and the command in cmd/pairtime.
     paths:
       - web/**
       - extension/**
       - internal/webui/**
       - docs/api/**
-      - internal/agent/http.go
-      - internal/agent/api/**
-      - internal/agent/localhttp/**
+      - internal/agent/**
+      - internal/version/**
+      - cmd/pairtime/**
       - tools/ci/npm_licenses.py
       - .github/workflows/web.yml
   push:
