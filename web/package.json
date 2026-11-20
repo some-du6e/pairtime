@@ -13,9 +13,9 @@
     "check": "npm run gen && svelte-check --tsconfig ./tsconfig.json --fail-on-warnings",
     "test:unit": "vitest run",
     "test": "npm run check && npm run test:unit",
-    "build": "vite build --mode local && vite build --mode server && vite build --mode gallery",
+    "build": "vite build --mode agent && vite build --mode server && vite build --mode gallery",
     "e2e": "playwright test",
-    "dev": "vite --mode local",
+    "dev": "vite --mode agent",
     "dev:gallery": "vite --mode gallery"
   },
   "dependencies": {

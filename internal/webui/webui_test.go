@@ -53,7 +53,7 @@ func TestFS(t *testing.T) {
 			name: "the embedded UI is the placeholder or the local dashboard, not another entry point",
 			check: func(t *testing.T) {
 				if kind != "placeholder" && kind != "local" {
-					t.Errorf(`<meta name="pairtime-ui"> says %q; want "placeholder", or "local" from vite build --mode local`, kind)
+					t.Errorf(`<meta name="pairtime-ui"> says %q; want "placeholder", or "local" from vite build --mode agent`, kind)
 				}
 			},
 		},

@@ -10,7 +10,7 @@ const here = (path: string) => fileURLToPath(new URL(path, import.meta.url));
 // svelte/server and checked as HTML; Playwright checks them in Chromium
 // (tests/*.spec.ts).
 export default defineConfig({
-	plugins: [svelte()],
+	plugins: [svelte({ configFile: here('svelte.config.js') })],
 	resolve: {
 		alias: { $shared: here('src/shared'), $gen: here('src/gen') },
 	},

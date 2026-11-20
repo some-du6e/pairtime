@@ -4,7 +4,7 @@
 // serves on 127.0.0.1 (DESIGN 3.9).
 //
 // dist/ is what Vite builds from web/src/local: `npm run build` in web/
-// writes it (vite build --mode local), and web.yml and release.yml run that
+// writes it (vite build --mode agent), and web.yml and release.yml run that
 // before they build Go (DESIGN 3.12; JE must-fix 8). The repo carries only
 // a placeholder dist/index.html, so go build, go test and every Go-only CI
 // job work without Node. Don't commit a build over it; .gitignore keeps

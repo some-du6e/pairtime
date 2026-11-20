@@ -8,12 +8,13 @@ const here = (path: string) => fileURLToPath(new URL(path, import.meta.url));
 
 // Each UI builds on its own, `vite build --mode <name>`, so the local
 // dashboard carries only the code it uses. All three share src/shared/
-// (DESIGN 3.11).
+// (DESIGN 3.11). Vite reserves the mode name "local" for .env.local files,
+// so the local dashboard's mode is "agent", after the binary that embeds it.
 const apps = {
-	// The local dashboard. The agent embeds internal/webui/dist with go:embed
-	// and serves it on 127.0.0.1, so this build replaces the checked-in
-	// placeholder there (DESIGN 3.9, 3.12).
-	local: { root: 'src/local', outDir: '../internal/webui/dist' },
+	// The local dashboard, src/local. The agent embeds internal/webui/dist
+	// with go:embed and serves it on 127.0.0.1, so this build replaces the
+	// checked-in placeholder there (DESIGN 3.9, 3.12).
+	agent: { root: 'src/local', outDir: '../internal/webui/dist' },
 	// The server UI, which pairtimed will embed once it has pages
 	// (WP-SV8, WP-SV9).
 	server: { root: 'src/server', outDir: 'dist/server' },
@@ -60,18 +61,21 @@ function csp(): Plugin {
 	};
 }
 
-export default defineConfig(({ mode }) => {
-	if (!isApp(mode)) {
+export default defineConfig(({ command, mode, isPreview }) => {
+	// A build or preview names its UI, so a typo can't overwrite the
+	// dashboard the agent embeds. The dev server, and svelte-check, which
+	// loads this file to find the Svelte plugin, default to the dashboard.
+	if (!isApp(mode) && (command === 'build' || isPreview)) {
 		throw new Error(`vite: --mode must be one of ${Object.keys(apps).join(', ')}, not "${mode}"`);
 	}
-	const app = apps[mode];
+	const app = isApp(mode) ? apps[mode] : apps.agent;
 	return {
 		root: here(app.root),
 		// Assets are referenced from the site root; the agent serves the
 		// dashboard at /.
 		base: '/',
 		publicDir: false,
-		plugins: [svelte(), csp()],
+		plugins: [svelte({ configFile: here('svelte.config.js') }), csp()],
 		resolve: {
 			alias: { $shared: here('src/shared'), $gen: here('src/gen') },
 		},
