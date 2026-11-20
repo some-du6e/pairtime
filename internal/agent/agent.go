@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"github.com/some-du6e/pairtime/internal/agent/config"
+	"github.com/some-du6e/pairtime/internal/agent/focus"
 	"github.com/some-du6e/pairtime/internal/agent/home"
 	"github.com/some-du6e/pairtime/internal/agent/inbox"
 	"github.com/some-du6e/pairtime/internal/agent/ipc"
@@ -91,6 +92,7 @@ type agent struct {
 	notifier *notifier.Notifier
 
 	presence *presence.Sampler // presence and power (DESIGN 3.3)
+	focus    *focus.Watcher    // the window in front (DESIGN 3.3)
 
 	stop     chan struct{} // closed when a client asks the agent to stop
 	stopOnce sync.Once
@@ -134,8 +136,8 @@ func Run(ctx context.Context, opts Options) error {
 
 	// Each part that starts adds the step that stops it, and they stop in
 	// reverse order: the HTTP server, port.json, the socket and the inbox,
-	// the process scan, the config watch, presence, the scheduler, the
-	// notifier, state.json.
+	// focus, the process scan, the config watch, presence, the scheduler,
+	// the notifier, state.json.
 	var closers []func()
 	defer func() {
 		for i := len(closers) - 1; i >= 0; i-- {
@@ -173,7 +175,9 @@ func Run(ctx context.Context, opts Options) error {
 	closers = append(closers, a.startPresence())
 
 	closers = append(closers, a.watchConfig())
+	a.newFocus()
 	closers = append(closers, a.startProcs())
+	closers = append(closers, a.startFocus())
 	closers = append(closers, a.startIPC(opts))
 
 	ln, pf, err := a.listen(opts.Ports)
