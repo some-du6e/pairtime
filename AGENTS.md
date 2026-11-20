@@ -69,6 +69,18 @@ Raw prompt text, agent output, code, file paths, command lines and window titles
 - Identifiers of devices, sessions, turns, projects and files are opaque keys and may be shared. They must be keyed per device (an HMAC under a device secret, or a random id), never a plain hash a reader could recompute from a guess. They pass `isKey`, which checks only their shape. It turns away a path or an email address but passes a bare name like `Makefile`, so the keying is what keeps them private.
 - `TestLocalFields` pins the local fields. Changing that list changes what pairtime may upload, so the PR description calls it out.
 
+## Retention
+
+docs/retention.json is the one source for how long pairtime keeps each kind of data (DESIGN 4.4). The privacy notice at /privacy renders it, and pairtimed's retention jobs run it.
+
+- A migration that creates a table gives it a place there in the same PR, under the entry for the data it holds, or in `no_personal_data`. Under an entry with a period (`days`, or `{window}` in `kept`), the table is one of the entry's `jobs`, so its rows are deleted on time, or is in `lifetime_tables` when its rows stay while the account exists, as `kept` says. Only an entry without a period lists plain `tables`. Load refuses anything else, and TestTables in internal/server/retention checks every table.
+- `no_personal_data` holds only tables with nothing about a person or a device. A PR that adds a table there names it in its description, because no retention job deletes its rows.
+- Evidence-store entries take tables and jobs like server entries, because the store's index rows are in the server's database (DESIGN 10.1). A job with `"period": "window"` deletes rows whose time column holds a decision once its spot-check window has closed, by `Window.Closes`, the rule the evidence store uses too.
+- A job whose table doesn't exist yet names the WP that creates it in `awaits`. That WP creates the table with the columns the job names and removes `awaits`, which turns the job on.
+- No foreign key points at a table a retention job deletes from, such as `devices`: the delete would fail, or cascade into rows that stay longer, such as the witness rows of a device removed 90 days ago. TestTables checks this.
+- Ingest's chain head (the `prev` a new batch must match) and request counter live on the device row, never only in `witness_rows`, whose job deletes a device's newest rows too once they are 180 days old, as after a summer away.
+- Whatever decides, re-decides or withdraws a submission (WP-RV4's outcome, the withdraw endpoint) sets `decided_at_ms` on that submission's holds in `submission_batches` and `submission_minutes`, or deletes them. Each hold table's own job deletes a hold once its window has closed, but a hold whose `decided_at_ms` stays NULL keeps itself and the rows it names for ever.
+
 ## Changing the event model
 
 pkg/event and docs/schema/event.schema.json describe the same events, written by hand on both sides, and pkg/event/schema_test.go fails when they drift. Change both in the same commit. To add an event kind:

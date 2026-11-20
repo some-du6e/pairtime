@@ -7,7 +7,8 @@
 // storage settings, with these defaults:
 //
 //	base_url        = ""                # required, e.g. "https://<host>"
-//	signups_open    = false             # DESIGN 8.6
+//	signups_open    = false             # DESIGN 8.6; true needs [controller]
+//	operators       = []                # HCA subs that may sign in while signups_open is false (WP-SV14)
 //	profile_default = "public"          # or "ask" (DESIGN 8.3)
 //	scoring_version = ""                # X.Y.Z; empty means the built-in scorer's (DESIGN 6.7)
 //	listen          = ":8080"           # the API, behind cloudflared (DESIGN 10.5)
@@ -18,6 +19,11 @@
 //	[database]
 //	engine = "sqlite"                   # or "postgres", with PAIRTIME_DATABASE_URL as a secret
 //	path   = "<data_dir>/pairtime.db"
+//
+//	[controller]                        # who is responsible for the data (DESIGN 8.6)
+//	name    = ""                        # empty: the privacy notice says "not named yet"
+//	contact = ""                        # an email address or an https URL
+//	dpo     = ""                        # Hack Club's Data Protection Officer, when Hack Club is the controller
 //
 //	[hca]
 //	client_id = ""                      # empty: nobody can sign in
@@ -111,6 +117,11 @@ var keyVersions = map[string]int{
 	"reviewers":                      1,
 	"reviewers.sub":                  1,
 	"reviewers.roles":                1,
+	"operators":                      1,
+	"controller":                     1,
+	"controller.name":                1,
+	"controller.contact":             1,
+	"controller.dpo":                 1,
 	"hca":                            1,
 	"hca.client_id":                  1,
 	"hca.issuer":                     1,
@@ -175,9 +186,14 @@ type Config struct {
 	ProfileDefault string     `toml:"profile_default"`
 	ScoringVersion string     `toml:"scoring_version"`
 	Reviewers      []Reviewer `toml:"reviewers"`
-	HCA            HCA        `toml:"hca"`
-	PrivacyHub     PrivacyHub `toml:"privacy_hub"`
-	Sentinel       Sentinel   `toml:"sentinel"`
+	// Operators may sign in, and get an account, while sign-ups are
+	// closed, so an operator can smoke-test a deployed server. Karim
+	// decides who is on the list (DESIGN 8.6; WP-SV14).
+	Operators  []string   `toml:"operators"`
+	Controller Controller `toml:"controller"`
+	HCA        HCA        `toml:"hca"`
+	PrivacyHub PrivacyHub `toml:"privacy_hub"`
+	Sentinel   Sentinel   `toml:"sentinel"`
 
 	ObjectStorage ObjectStorage `toml:"object_storage"`
 
@@ -201,6 +217,19 @@ type Config struct {
 type Reviewer struct {
 	Sub   string   `toml:"sub"`
 	Roles []string `toml:"roles"`
+}
+
+// Controller names who is responsible for the data on this server, for
+// the privacy notice at /privacy (DESIGN 8.6). Until Name and Contact are
+// both set, the notice shows them as "not named yet" and sign-ups can't
+// open.
+type Controller struct {
+	Name string `toml:"name"`
+	// Contact is an email address or an https URL.
+	Contact string `toml:"contact"`
+	// DPO is how to reach Hack Club's Data Protection Officer, when Hack
+	// Club is the controller: an email address or an https URL.
+	DPO string `toml:"dpo"`
 }
 
 // HCA configures the Hack Club Auth client (DESIGN 3.10). Its secret is
@@ -379,6 +408,32 @@ func (c *Config) finish(dir string) error {
 
 	for _, err := range checkReviewers(c.Reviewers) {
 		fail("reviewers: %v", err)
+	}
+	operators := make(map[string]bool)
+	for _, sub := range c.Operators {
+		if !validSub(sub) {
+			fail("operators: %q must be 1 to 255 printable ASCII characters without spaces", sub)
+		}
+		if operators[sub] {
+			fail("operators: %q is listed twice", sub)
+		}
+		operators[sub] = true
+	}
+	// A name of only spaces is no name: the notice says "not named yet",
+	// and sign-ups can't open on it.
+	c.Controller.Name = strings.TrimSpace(c.Controller.Name)
+	if n := c.Controller.Name; strings.ContainsFunc(n, func(r rune) bool { return r < ' ' || r == 0x7f }) || len(n) > 200 {
+		fail("controller.name must be at most 200 characters, on one line")
+	}
+	for _, f := range []struct{ key, value string }{{"controller.contact", c.Controller.Contact}, {"controller.dpo", c.Controller.DPO}} {
+		if f.value != "" {
+			if err := checkContact(f.value); err != nil {
+				fail("%s: %v", f.key, err)
+			}
+		}
+	}
+	if c.SignupsOpen && (c.Controller.Name == "" || c.Controller.Contact == "") {
+		fail("signups_open is true, but controller.name and controller.contact aren't both set; sign-ups stay closed until the privacy notice names the controller (DESIGN 8.6)")
 	}
 
 	if c.HCA.Issuer == "" {
@@ -593,7 +648,7 @@ func checkReviewers(rs []Reviewer) []error {
 			errs = append(errs, fmt.Errorf("%s has no sub", where))
 		} else {
 			where = fmt.Sprintf("sub %q", r.Sub)
-			if len(r.Sub) > 255 || strings.ContainsFunc(r.Sub, func(c rune) bool { return c <= ' ' || c > '~' }) {
+			if !validSub(r.Sub) {
 				errs = append(errs, fmt.Errorf("%s must be 1 to 255 printable ASCII characters without spaces", where))
 			}
 			if seen[r.Sub] {
@@ -621,6 +676,30 @@ func checkReviewers(rs []Reviewer) []error {
 		}
 	}
 	return errs
+}
+
+// validSub reports whether sub can be an HCA subject: 1 to 255 printable
+// ASCII characters without spaces.
+func validSub(sub string) bool {
+	return sub != "" && len(sub) <= 255 && !strings.ContainsFunc(sub, func(c rune) bool { return c <= ' ' || c > '~' })
+}
+
+// checkContact accepts an email address or an https URL, which the privacy
+// notice shows as a link.
+func checkContact(s string) error {
+	if strings.ContainsAny(s, " \t\r\n()<>\"'\\") {
+		return fmt.Errorf("%q can't contain spaces, quotes, brackets or backslashes", s)
+	}
+	if strings.HasPrefix(s, "https://") {
+		if u, err := url.Parse(s); err != nil || u.Host == "" {
+			return fmt.Errorf("%q isn't an https URL", s)
+		}
+		return nil
+	}
+	if at := strings.Index(s, "@"); at <= 0 || at == len(s)-1 || strings.Count(s, "@") != 1 || strings.Contains(s, ":") {
+		return fmt.Errorf("%q must be an email address or an https URL", s)
+	}
+	return nil
 }
 
 // checkPostgresURL checks the URL's form without ever quoting it, because

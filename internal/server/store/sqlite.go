@@ -305,6 +305,10 @@ func sqliteDSN(path string, write bool) string {
 		// queues (DESIGN 10.1; SP 7.4, 9.3).
 		q.Add("_pragma", "journal_mode(WAL)")
 		q.Add("_pragma", "synchronous(NORMAL)")
+		// Deletes overwrite what they remove with zeros, so a row the
+		// retention jobs delete leaves no bytes in free space for the WAL,
+		// the file or Litestream's replica to carry (DESIGN 4.4, 10.3).
+		q.Add("_pragma", "secure_delete(1)")
 	}
 	// Postgres always enforces foreign keys, so SQLite does too.
 	q.Add("_pragma", "foreign_keys(1)")
@@ -334,6 +338,13 @@ func checkWAL(ctx context.Context, db *sql.DB) error {
 	}
 	if sync != 1 {
 		return fmt.Errorf("store: SQLite synchronous is %d, want 1 (NORMAL; DESIGN 10.1)", sync)
+	}
+	var secure int
+	if err := db.QueryRowContext(ctx, "PRAGMA secure_delete").Scan(&secure); err != nil {
+		return fmt.Errorf("store: reading secure_delete: %w", err)
+	}
+	if secure != 1 {
+		return fmt.Errorf("store: SQLite secure_delete is %d, want 1, so deleted rows leave no bytes behind (DESIGN 4.4)", secure)
 	}
 	return nil
 }

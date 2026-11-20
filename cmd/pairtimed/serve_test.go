@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"io/fs"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -17,7 +18,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/some-du6e/pairtime/internal/server/ops"
+	"github.com/some-du6e/pairtime/internal/server/retention"
 	"github.com/some-du6e/pairtime/internal/server/store"
+	"github.com/some-du6e/pairtime/internal/version"
 )
 
 // writeConfig writes a pairtime.toml for a test server that listens on
@@ -122,6 +126,11 @@ func TestServe(t *testing.T) {
 		{name: "/metrics has the ingest rate", url: private + "/metrics", wantCode: 200, wantBody: `(?m)^pairtime_ingest_batches_total 0$`},
 		{name: "/metrics has ingest batch latency", url: private + "/metrics", wantCode: 200, wantBody: `(?m)^pairtime_ingest_batch_duration_seconds_count 0$`},
 		{name: "/metrics has open streams", url: private + "/metrics", wantCode: 200, wantBody: `(?m)^pairtime_stream_open_streams 0$`},
+		{name: "/metrics counts rows the retention jobs deleted", url: private + "/metrics", wantCode: 200, wantBody: `(?m)^pairtime_retention_deleted_rows_total 0$`},
+		{name: "the public listener serves the privacy notice", url: public + "/privacy", wantCode: 200, wantBody: `<h1 id="pairtime-privacy-notice">`},
+		{name: "the privacy notice marks the controller as not named yet", url: public + "/privacy", wantCode: 200, wantBody: `This notice isn&#39;t final\.`},
+		{name: "the public listener serves the evidence definition", url: public + "/docs/evidence", wantCode: 200, wantBody: `This server runs scoring 0\.1\.0\.`},
+		{name: "the ops listener doesn't serve the pages", url: private + "/privacy", wantCode: 404},
 	}
 	client := &http.Client{Timeout: 10 * time.Second}
 	for _, tt := range requests {
@@ -308,6 +317,100 @@ func TestDialAddr(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := dialAddr(tt.listen); got != tt.want {
 				t.Errorf("dialAddr(%q) = %q, want %q", tt.listen, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestRetentionReport(t *testing.T) {
+	timeout := errors.New("retention: server.ip_ja4/request_origins: writer: the batch timed out")
+	tests := []struct {
+		name        string
+		result      retention.Result
+		stopping    bool // the sweep is being stopped
+		wantDeleted uint64
+		wantFailed  uint64
+		wantLog     []string // substrings of the one log line; nil means no line
+	}{
+		{
+			name:        "a job's deleted rows are counted and logged",
+			result:      retention.Result{ID: "server.ip_ja4/request_origins", Deleted: 3},
+			wantDeleted: 3,
+			wantLog:     []string{"level=INFO", "job=server.ip_ja4/request_origins", "rows=3"},
+		},
+		{
+			name:   "a job that deleted nothing logs nothing",
+			result: retention.Result{ID: "server.ip_ja4/request_origins"},
+		},
+		{
+			name:        "rows deleted before a job failed are counted, and the failure's log says how many",
+			result:      retention.Result{ID: "server.ip_ja4/request_origins", Deleted: 1500, Err: timeout},
+			wantDeleted: 1500,
+			wantFailed:  1,
+			wantLog:     []string{"level=ERROR", "job=server.ip_ja4/request_origins", "rows=1500", "the batch timed out"},
+		},
+		{
+			name:       "a job that fails before deleting anything counts the failure",
+			result:     retention.Result{ID: "server.ip_ja4/request_origins", Err: timeout},
+			wantFailed: 1,
+			wantLog:    []string{"level=ERROR", "rows=0"},
+		},
+		{
+			name:        "stopping the sweep isn't a failure, but the rows it deleted first still count",
+			result:      retention.Result{ID: "server.ip_ja4/request_origins", Deleted: 500, Err: context.Canceled},
+			stopping:    true,
+			wantDeleted: 500,
+			wantLog:     []string{"level=INFO", "rows=500"},
+		},
+		{
+			name:     "stopping the sweep before it deleted anything logs nothing",
+			result:   retention.Result{ID: "server.ip_ja4/request_origins", Err: context.Canceled},
+			stopping: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var out strings.Builder
+			deleted, failed := new(ops.Counter), new(ops.Counter)
+			retentionReport(slog.New(slog.NewTextHandler(&out, nil)), deleted, failed)(tt.result, tt.stopping)
+			if got := deleted.Value(); got != tt.wantDeleted {
+				t.Errorf("deleted rows counted = %d, want %d", got, tt.wantDeleted)
+			}
+			if got := failed.Value(); got != tt.wantFailed {
+				t.Errorf("failures counted = %d, want %d", got, tt.wantFailed)
+			}
+			lines := strings.Split(strings.TrimSpace(out.String()), "\n")
+			switch {
+			case tt.wantLog == nil && out.Len() > 0:
+				t.Errorf("logged %q, want nothing", out.String())
+			case tt.wantLog != nil && len(lines) != 1:
+				t.Errorf("logged %q, want one line", out.String())
+			case tt.wantLog != nil:
+				for _, w := range tt.wantLog {
+					if !strings.Contains(lines[0], w) {
+						t.Errorf("logged %q, want it to contain %q", lines[0], w)
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestSourceCommit(t *testing.T) {
+	commit := "1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b"
+	tests := []struct {
+		name string
+		info version.Info
+		want string
+	}{
+		{name: "a clean build's pages link its commit", info: version.Info{Commit: commit}, want: commit},
+		{name: "a build with local changes links no commit, since none holds what it runs", info: version.Info{Commit: commit, Modified: true}},
+		{name: "a build that doesn't know its commit links none", info: version.Info{}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := sourceCommit(tt.info); got != tt.want {
+				t.Errorf("sourceCommit(%+v) = %q, want %q", tt.info, got, tt.want)
 			}
 		})
 	}
