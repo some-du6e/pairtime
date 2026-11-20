@@ -48,10 +48,9 @@ func TestValidate(t *testing.T) {
 		{"allOf needs every schema", `{"allOf": [{"type": "integer"}, {"minimum": 5}]}`, `3`, false},
 		{"$ref applies the referenced schema", `{"$defs": {"s": {"type": "string"}}, "$ref": "#/$defs/s"}`, `1`, false},
 		{"$ref and its siblings both apply", `{"$defs": {"s": {"type": "string"}}, "$ref": "#/$defs/s", "minLength": 2}`, `"a"`, false},
-		{"a $ref that doesn't resolve is an error", `{"$ref": "#/$defs/missing"}`, `1`, false},
-		{"a $ref to another document is an error", `{"$ref": "event.schema.json#/$defs/key"}`, `1`, false},
-		{"an unsupported keyword is an error", `{"patternProperties": {}}`, `{}`, false},
-		{"format is unsupported, so a schema can't lean on it unchecked", `{"format": "date"}`, `"2026-11-24"`, false},
+		{"a $ref into $defs under not applies", `{"$defs": {"s": {"type": "string"}}, "not": {"$ref": "#/$defs/s"}}`, `"a"`, false},
+		{"not with a schema that rejects passes", `{"not": {"required": ["you"]}}`, `{"me": 1}`, true},
+		{"if with a required property takes then", `{"if": {"required": ["a"]}, "then": {"properties": {"a": {"const": 1}}}}`, `{"a": 2}`, false},
 		{"annotations never fail", `{"description": "x", "x-local": true, "contentEncoding": "base64"}`, `"y"`, true},
 		{"the true schema accepts anything", `true`, `{"a": [1]}`, true},
 		{"the false schema rejects everything", `false`, `null`, false},
@@ -81,13 +80,62 @@ func TestParse(t *testing.T) {
 	}{
 		{"an object is a schema", `{"type": "string"}`, false},
 		{"a boolean is a schema", `true`, false},
+		{"every keyword the validator knows, nested, is a schema", `{"$defs": {"k": {"type": ["string", "null"], "pattern": "^a", "minLength": 1}},
+			"type": "object", "required": ["a"], "additionalProperties": false,
+			"properties": {"a": {"$ref": "#/$defs/k"}, "b": {"items": {"enum": [1, 2]}, "minItems": 0, "uniqueItems": true}},
+			"allOf": [{"if": {"required": ["b"]}, "then": {"not": {"const": 1}}, "else": true}]}`, false},
 		{"a number isn't a schema", `3`, true},
 		{"two values aren't one schema", `{} {}`, true},
+		{"a stray } after the value isn't one schema", `{}}`, true},
+		{"a stray ] after the value isn't one schema", `[]]`, true},
+		{"white space after the value is fine", "{}\n\t ", false},
 		{"broken JSON isn't a schema", `{"type":`, true},
+		{"an unsupported keyword is an error", `{"patternProperties": {}}`, true},
+		{"format is unsupported, so a schema can't lean on it unchecked", `{"format": "date"}`, true},
+		{"an unsupported keyword under not is an error, not a pass", `{"not": {"format": "date"}}`, true},
+		{"an unsupported keyword under if is an error, not a silent else", `{"if": {"anyOf": [{}]}, "then": {}, "else": {}}`, true},
+		{"an unsupported keyword under then is an error", `{"if": true, "then": {"format": "date"}}`, true},
+		{"an unsupported keyword in $defs is an error even unused", `{"$defs": {"d": {"oneOf": []}}}`, true},
+		{"an unsupported keyword under items in properties is an error", `{"properties": {"a": {"items": {"prefixItems": []}}}}`, true},
+		{"a $ref that doesn't resolve is an error", `{"$ref": "#/$defs/missing"}`, true},
+		{"a $ref that doesn't resolve under not is an error, not a pass", `{"not": {"$ref": "#/$defs/missing"}}`, true},
+		{"a $ref to another document is an error", `{"$ref": "event.schema.json#/$defs/key"}`, true},
+		{"a pattern that doesn't compile is an error", `{"pattern": "("}`, true},
+		{"a subschema that is a number is an error", `{"properties": {"a": 3}}`, true},
+		{"items as a list, draft 7's tuples, is an error", `{"items": [{}]}`, true},
+		{"an unknown type name is an error", `{"type": "int"}`, true},
+		{"required that isn't a list of names is an error", `{"required": "a"}`, true},
+		{"a bound that isn't a number is an error", `{"minimum": "1"}`, true},
+		{"an empty allOf is an error", `{"allOf": []}`, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := Parse([]byte(tc.data))
+			if (err != nil) != tc.wantErr {
+				t.Errorf("err = %v, want an error: %v", err, tc.wantErr)
+			}
+		})
+	}
+}
+
+func TestValidateJSONTakesOneValue(t *testing.T) {
+	s, err := Parse([]byte(`{"type": "object"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		name    string
+		data    string
+		wantErr bool
+	}{
+		{"one object is one value", `{"v": 1}`, false},
+		{"one object and a newline is one value", "{\"v\": 1}\n", false},
+		{"a stray } after the object isn't JSON output", `{"v": 1}}`, true},
+		{"a second object isn't one value", `{"v": 1} {}`, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := s.ValidateJSON([]byte(tc.data))
 			if (err != nil) != tc.wantErr {
 				t.Errorf("err = %v, want an error: %v", err, tc.wantErr)
 			}

@@ -10,6 +10,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/some-du6e/pairtime/internal/agent/home"
 	"github.com/some-du6e/pairtime/internal/coach/text"
 )
 
@@ -17,8 +18,8 @@ const todayUsage = `Usage: pairtime today [--date YYYY-MM-DD] [--json]
 
 Shows today's time for each project you worked on: your time, and what
 you spent it on; each agent's time working on its own; and the other time
-pairtime saw, described for what it was. It asks the running agent, so
-the agent needs to be running.
+pairtime saw, described for what it was. It reads the day the agent has
+stored, so it shows what was tracked even while the agent is stopped.
 
   --date  Show another day, such as 2026-11-24.
   --json  Print the same numbers as JSON, as described in
@@ -26,7 +27,8 @@ the agent needs to be running.
 
 Exit status:
   0  the day was shown
-  1  the agent isn't running or couldn't answer
+  1  the agent isn't running and has stored nothing for today, or
+     pairtime couldn't read what it stored
   2  usage error
 `
 
@@ -64,19 +66,34 @@ func runToday(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "pairtime today: takes no arguments, got %q\n", flags.Args())
 		return 2
 	}
-	day := "today"
-	if *date != "" {
-		if _, err := time.Parse(time.DateOnly, *date); err != nil {
-			fmt.Fprintf(stderr, "pairtime today: --date wants a day such as 2026-11-24, got %q\n", *date)
-			return 2
-		}
-		day = *date
+	day := *date
+	if day == "" {
+		day = localToday()
+	} else if t, err := time.Parse(time.DateOnly, day); err != nil || t.Format(time.DateOnly) != day {
+		fmt.Fprintf(stderr, "pairtime today: --date wants a day such as 2026-11-24, got %q\n", day)
+		return 2
 	}
-	var reply dayReply
-	if !askView("/v1/days/"+day, &reply, stderr) {
+	dirs, err := home.Default()
+	if err != nil {
+		sayStoreFailure(stderr, err)
 		return 1
 	}
-	out := buildToday(reply)
+	shadow, err := readShadow(dirs)
+	if err != nil {
+		sayStoreFailure(stderr, err)
+		return 1
+	}
+	d, found, err := dayStore{dirs.Days()}.day(day)
+	if err != nil {
+		sayStoreFailure(stderr, err)
+		return 1
+	}
+	if !found && *date == "" && agentStopped(dirs) {
+		// Nothing tracked yet today because nothing is tracking.
+		sayAgentFailure(stderr, errAgentDown)
+		return 1
+	}
+	out := buildToday(d, shadow)
 	if *asJSON {
 		if err := writeJSON(stdout, out); err != nil {
 			fmt.Fprintf(stderr, "pairtime today: %v\n", err)
@@ -90,14 +107,15 @@ func runToday(args []string, stdout, stderr io.Writer) int {
 
 // buildToday turns the agent's day into the view, projects with the most
 // of your time first, then with the most agent time, then by name. While
-// calibrating, the order leaves your time out too.
-func buildToday(r dayReply) todayJSON {
-	out := todayJSON{V: jsonVersion, Date: r.Date, Calibrating: r.Shadow, Projects: []projectJSON{}}
+// calibrating (shadow), the order leaves your time out too, so it can't
+// say which project scored more.
+func buildToday(d dayFile, shadow bool) todayJSON {
+	out := todayJSON{V: jsonVersion, Date: d.Date, Calibrating: shadow, Projects: []projectJSON{}}
 	credit := map[string]float64{}
 	agentTime := map[string]float64{}
-	for _, p := range r.Projects {
-		out.Projects = append(out.Projects, buildProject(p.Project, p.Name, p.tally, r.Shadow))
-		if !r.Shadow {
+	for _, p := range d.Projects {
+		out.Projects = append(out.Projects, buildProject(p.Project, p.Name, p.tally, shadow))
+		if !shadow {
 			credit[p.Project] += p.CreditedS
 		}
 		agentTime[p.Project] += p.AgentOnlyS

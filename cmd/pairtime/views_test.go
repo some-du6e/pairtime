@@ -2,32 +2,36 @@
 
 package main
 
-// Tests for `pairtime today`, `recap` and `statusline` against a fake
-// agent: an HTTP server behind the real agent's Guard and RequireToken,
-// found through port.json in a PAIRTIME_HOME of its own. It serves days
-// and sessions built from the SM 6.2 and 6.4 timeline fixtures, whose
-// totals are the oracle, or made up to check one rule.
+// Tests for `pairtime today`, `recap` and `statusline`. today and
+// statusline read a PAIRTIME_HOME of their own: day rollups in days/ in the
+// shape WP-AG4's scorer writes them, config.toml and port.json. recap asks
+// a fake agent on that home's socket, which answers ipc.AskLastSession as
+// the agent does. The days and sessions come from the SM 6.2 and 6.4
+// timeline fixtures, whose totals are the oracle, or are made up to check
+// one rule.
 
 import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"errors"
 	"maps"
 	"math"
 	"net"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 	"unicode/utf8"
 
 	"github.com/some-du6e/pairtime/internal/agent/home"
+	"github.com/some-du6e/pairtime/internal/agent/inbox"
+	"github.com/some-du6e/pairtime/internal/agent/ipc"
 	"github.com/some-du6e/pairtime/internal/agent/localhttp"
 	"github.com/some-du6e/pairtime/internal/coach/text"
 	"github.com/some-du6e/pairtime/internal/jsonschema"
@@ -35,73 +39,120 @@ import (
 	"github.com/some-du6e/pairtime/pkg/params"
 )
 
-// fakeAgent answers GET /v1/days/{date} and GET /v1/sessions/last as the
-// agent would.
-type fakeAgent struct {
-	// days answers /v1/days/{date} by date, "today" included, and a date
-	// it doesn't hold is an empty day. With days nil the route is missing,
-	// as on an agent older than it.
-	days map[string]dayReply
-	// session answers /v1/sessions/last. With it nil the route is missing.
-	session *sessionReply
-	// hang holds every answer until the client gives up.
-	hang bool
+// fakeHome is a PAIRTIME_HOME for one test, on a path short enough for the
+// agent's socket (shortHome).
+type fakeHome struct {
+	t   *testing.T
+	dir string
 }
 
-// start serves f on 127.0.0.1 and writes its port.json into a new
-// PAIRTIME_HOME. It returns the paths the agent was asked for.
-func (f fakeAgent) start(t *testing.T) func() []string {
+func newHome(t *testing.T) fakeHome {
 	t.Helper()
-	dir := t.TempDir()
+	dir := shortHome(t)
 	t.Setenv(home.EnvHome, dir)
-	ln, err := net.Listen("tcp4", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
+	return fakeHome{t: t, dir: dir}
+}
+
+func (h fakeHome) dirs() home.Dirs { return home.Dirs{Data: h.dir, Config: h.dir, Runtime: h.dir} }
+
+// running writes the port.json of an agent that runs: this process.
+func (h fakeHome) running() fakeHome {
+	h.t.Helper()
+	writePortFile(h.t, h.dir, localhttp.PortFile{Port: 7247, Token: localhttp.NewToken(), PID: os.Getpid()})
+	return h
+}
+
+// shadow writes a config.toml that turns display.shadow on.
+func (h fakeHome) shadow() fakeHome {
+	h.t.Helper()
+	return h.writeFile("config.toml", []byte("[display]\nshadow = true\n"))
+}
+
+// writeDays writes each day's rollup into days/, as the agent's scorer
+// does.
+func (h fakeHome) writeDays(days ...dayFile) fakeHome {
+	h.t.Helper()
+	for _, d := range days {
+		b, err := json.Marshal(d)
+		if err != nil {
+			h.t.Fatal(err)
+		}
+		h.writeFile(filepath.Join("days", d.Date+".json"), append(b, '\n'))
 	}
-	port := localhttp.Port(ln)
-	token := localhttp.NewToken()
-	stop := make(chan struct{})
+	return h
+}
+
+// writeFile writes data to name, a path inside the home.
+func (h fakeHome) writeFile(name string, data []byte) fakeHome {
+	h.t.Helper()
+	path := filepath.Join(h.dir, name)
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		h.t.Fatal(err)
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		h.t.Fatal(err)
+	}
+	return h
+}
+
+// agent starts an agent on the home's socket that answers questions with
+// answer, as the agent does through ipc.Options.Answer, and takes no
+// messages. With answer nil it answers none, as an agent from before
+// WP-AG4 does. It returns the questions it was asked.
+func (h fakeHome) agent(answer func(q string) (json.RawMessage, error)) func() []string {
+	h.t.Helper()
+	ep, err := ipc.EndpointFor(h.dirs())
+	if err != nil {
+		h.t.Fatal(err)
+	}
 	var mu sync.Mutex
 	var asked []string
-	answer := func(w http.ResponseWriter, r *http.Request, v any) {
-		mu.Lock()
-		asked = append(asked, r.URL.Path)
-		mu.Unlock()
-		if f.hang {
-			select {
-			case <-r.Context().Done():
-			case <-stop:
-			}
-			return
+	opts := ipc.Options{}
+	if answer != nil {
+		opts.Answer = func(q string) (json.RawMessage, error) {
+			mu.Lock()
+			asked = append(asked, q)
+			mu.Unlock()
+			return answer(q)
 		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(v)
 	}
-	mux := http.NewServeMux()
-	if f.days != nil {
-		mux.HandleFunc("GET /v1/days/{date}", func(w http.ResponseWriter, r *http.Request) {
-			d, ok := f.days[r.PathValue("date")]
-			if !ok {
-				d = dayReply{Date: r.PathValue("date"), Projects: []dayProject{}}
-			}
-			answer(w, r, d)
-		})
+	srv, err := ipc.Listen(ep, opts)
+	if err != nil {
+		h.t.Fatalf("listening on the agent's socket: %v", err)
 	}
-	if f.session != nil {
-		mux.HandleFunc("GET /v1/sessions/last", func(w http.ResponseWriter, r *http.Request) { answer(w, r, f.session) })
-	}
-	srv := httptest.NewUnstartedServer(localhttp.Guard(port, localhttp.RequireToken(token, mux)))
-	srv.Listener.Close()
-	srv.Listener = ln
-	srv.Start()
-	t.Cleanup(srv.Close)
-	t.Cleanup(func() { close(stop) })
-	writePortFile(t, dir, localhttp.PortFile{Port: port, Token: token, PID: os.Getpid()})
+	served := make(chan error, 1)
+	go func() { served <- srv.Serve(noMessages{}) }()
+	h.t.Cleanup(func() {
+		srv.Close()
+		<-served
+	})
 	return func() []string {
 		mu.Lock()
 		defer mu.Unlock()
 		return slices.Clone(asked)
 	}
+}
+
+// noMessages is a Sink that takes no message: the views send none.
+type noMessages struct{}
+
+func (noMessages) Deliver(inbox.Delivery) error {
+	return errors.New("the views send the agent no messages")
+}
+
+// sessionAgent starts an agent whose answer to AskLastSession is r.
+func (h fakeHome) sessionAgent(r sessionReply) func() []string {
+	h.t.Helper()
+	b, err := json.Marshal(r)
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	return h.agent(func(q string) (json.RawMessage, error) {
+		if q != ipc.AskLastSession {
+			return nil, ipc.ErrUnknownQuestion
+		}
+		return b, nil
+	})
 }
 
 func writePortFile(t *testing.T, dir string, pf localhttp.PortFile) {
@@ -117,13 +168,26 @@ func runCmd(args ...string) (code int, stdout, stderr string) {
 	return code, out.String(), errOut.String()
 }
 
-// setZone makes the views give times of day in zone for the rest of the
-// test.
+// setZone makes the views give times of day and days in zone for the rest
+// of the test.
 func setZone(t *testing.T, zone *time.Location) {
 	t.Helper()
 	old := viewZone
 	viewZone = func() *time.Location { return zone }
 	t.Cleanup(func() { viewZone = old })
+}
+
+// onDay makes today date, at noon in zone, for the rest of the test.
+func onDay(t *testing.T, date string, zone *time.Location) {
+	t.Helper()
+	d, err := time.ParseInLocation(time.DateOnly, date, zone)
+	if err != nil {
+		t.Fatal(err)
+	}
+	setZone(t, zone)
+	old := viewNow
+	viewNow = func() time.Time { return d.Add(12 * time.Hour) }
+	t.Cleanup(func() { viewNow = old })
 }
 
 // fixtureExpected is the part of a timeline fixture's expected.json the
@@ -295,7 +359,7 @@ func fixtureHarness(t *testing.T, path string) event.Harness {
 	return ""
 }
 
-// tallyOf rolls minutes up into what the agent would answer for them.
+// tallyOf rolls minutes up into what the agent would store for them.
 func (s *fixtureStore) tallyOf(ms []fixtureMinute) tally {
 	t := tally{
 		CreditedByKind:     map[event.Activity]float64{},
@@ -309,11 +373,11 @@ func (s *fixtureStore) tallyOf(ms []fixtureMinute) tally {
 			t.CreditedByKind[reason.Activity()] += sec
 			t.CreditedByEvidence[s.exp.Evidence] += sec
 		}
-		// A minute's agent-only seconds are those its turns ran that
-		// nothing credited. In these fixtures a minute's credit falls
-		// inside its turn wherever both are, so that is the running
-		// seconds less the credited, which loadFixture checks against the
-		// fixture's agent_only_s.
+		// A minute's agent-only seconds are those its project's turns ran
+		// that the project didn't credit. These fixtures have one project,
+		// and a minute's credit falls inside its turn wherever both are, so
+		// that is the running seconds less the credited, which loadFixture
+		// checks against the fixture's agent_only_s.
 		only := max(0, m.running-m.credited)
 		t.AgentOnlyS += only
 		t.AgentOnlyByHarness[s.harness] += only
@@ -324,16 +388,22 @@ func (s *fixtureStore) tallyOf(ms []fixtureMinute) tally {
 	return t
 }
 
-// days rolls the minutes up into local days in the fixture's zone.
-func (s *fixtureStore) days() map[string]dayReply {
+// days rolls the minutes up into local days in the fixture's zone, each a
+// rollup as WP-AG4's scorer writes it.
+func (s *fixtureStore) days() map[string]dayFile {
 	byDay := map[string][]fixtureMinute{}
 	for _, m := range s.minutes {
 		d := m.start.In(s.zone).Format(time.DateOnly)
 		byDay[d] = append(byDay[d], m)
 	}
-	out := map[string]dayReply{}
+	out := map[string]dayFile{}
 	for d, ms := range byDay {
-		out[d] = dayReply{Date: d, Projects: []dayProject{{Project: s.project, Name: s.name, tally: s.tallyOf(ms)}}}
+		start, err := time.ParseInLocation(time.DateOnly, d, s.zone)
+		if err != nil {
+			panic(err)
+		}
+		out[d] = dayFile{Date: d, Zone: s.zone.String(), Start: start.UTC(), End: start.AddDate(0, 0, 1).UTC(),
+			Projects: []dayProject{{Project: s.project, Name: s.name, tally: s.tallyOf(ms)}}}
 	}
 	return out
 }
@@ -362,6 +432,8 @@ func (s *fixtureStore) lastSession() workSession {
 	}
 	return workSession{Project: s.project, Name: s.name, Start: start, End: end, tally: s.tallyOf(in)}
 }
+
+func dayFiles(m map[string]dayFile) []dayFile { return slices.Collect(maps.Values(m)) }
 
 const today62 = `Tuesday, November 24
 
@@ -438,16 +510,13 @@ func TestTodayFromFixtures(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			s := loadFixture(t, tc.fixture)
-			asked := fakeAgent{days: s.days()}.start(t)
+			newHome(t).running().writeDays(dayFiles(s.days())...)
 			code, out, errOut := runCmd("today", "--date", tc.date)
 			if code != 0 || errOut != "" {
 				t.Fatalf("exit %d, stderr %q", code, errOut)
 			}
 			if out != tc.want {
 				t.Errorf("got\n%s\nwant\n%s", out, tc.want)
-			}
-			if got, want := asked(), []string{"/v1/days/" + tc.date}; !slices.Equal(got, want) {
-				t.Errorf("asked the agent for %q, want %q", got, want)
 			}
 		})
 	}
@@ -467,7 +536,7 @@ func TestRecapFromFixtures(t *testing.T) {
 			s := loadFixture(t, tc.fixture)
 			setZone(t, s.zone)
 			last := s.lastSession()
-			asked := fakeAgent{session: &sessionReply{Session: &last}}.start(t)
+			asked := newHome(t).sessionAgent(sessionReply{Session: &last})
 			code, out, errOut := runCmd("recap")
 			if code != 0 || errOut != "" {
 				t.Fatalf("exit %d, stderr %q", code, errOut)
@@ -475,8 +544,8 @@ func TestRecapFromFixtures(t *testing.T) {
 			if out != tc.want {
 				t.Errorf("got\n%s\nwant\n%s", out, tc.want)
 			}
-			if got, want := asked(), []string{"/v1/sessions/last"}; !slices.Equal(got, want) {
-				t.Errorf("asked the agent for %q, want %q", got, want)
+			if got, want := asked(), []string{ipc.AskLastSession}; !slices.Equal(got, want) {
+				t.Errorf("asked the agent %q, want %q", got, want)
 			}
 		})
 	}
@@ -495,18 +564,14 @@ func TestStatuslineFromFixtures(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			s := loadFixture(t, tc.fixture)
-			days := s.days()
-			days["today"] = days[tc.date]
-			asked := fakeAgent{days: days}.start(t)
+			onDay(t, tc.date, s.zone)
+			newHome(t).running().writeDays(dayFiles(s.days())...)
 			code, out, errOut := runCmd("statusline", "--timeout", "5s")
 			if code != 0 || errOut != "" {
 				t.Fatalf("exit %d, stderr %q", code, errOut)
 			}
 			if out != tc.want {
 				t.Errorf("got %q, want %q", out, tc.want)
-			}
-			if got, want := asked(), []string{"/v1/days/today"}; !slices.Equal(got, want) {
-				t.Errorf("asked the agent for %q, want %q", got, want)
 			}
 		})
 	}
@@ -542,7 +607,7 @@ func TestTodayJSONMatchesBucketTotals(t *testing.T) {
 		t.Run("SM "+fixture+": today --json fits its schema, and over the fixture's days it adds up to the bucket totals", func(t *testing.T) {
 			s := loadFixture(t, fixture)
 			days := s.days()
-			fakeAgent{days: days}.start(t)
+			newHome(t).running().writeDays(dayFiles(days)...)
 			var you, agents float64
 			kinds := map[event.Activity]float64{}
 			other := map[event.Reason]float64{}
@@ -619,10 +684,11 @@ func TestTodayJSONMatchesBucketTotals(t *testing.T) {
 
 func TestRecapJSONMatchesTheSession(t *testing.T) {
 	for _, fixture := range []string{"6.2", "6.4"} {
-		t.Run("SM "+fixture+": recap --json gives the last session's span and numbers", func(t *testing.T) {
+		t.Run("SM "+fixture+": recap --json gives the last session's day, span and numbers", func(t *testing.T) {
 			s := loadFixture(t, fixture)
+			setZone(t, s.zone)
 			last := s.lastSession()
-			fakeAgent{session: &sessionReply{Session: &last}}.start(t)
+			newHome(t).sessionAgent(sessionReply{Session: &last})
 			code, out, errOut := runCmd("recap", "--json")
 			if code != 0 || errOut != "" {
 				t.Fatalf("exit %d, stderr %q", code, errOut)
@@ -631,99 +697,157 @@ func TestRecapJSONMatchesTheSession(t *testing.T) {
 			if err := json.Unmarshal([]byte(out), &got); err != nil {
 				t.Fatal(err)
 			}
-			if got.V != 1 || got.Calibrating || got.Session == nil || got.Session.You == nil {
+			g := got.Session
+			if got.V != 1 || got.Calibrating || g == nil || g.You == nil || g.Start == nil || g.End == nil {
 				t.Fatalf("got %s", out)
 			}
 			agents := 0.0
-			for _, a := range got.Session.Agents {
+			for _, a := range g.Agents {
 				agents += a.S
 			}
-			if !got.Session.Start.Equal(last.Start) || !got.Session.End.Equal(last.End) ||
-				got.Session.You.S != last.CreditedS || agents != last.AgentOnlyS {
-				t.Errorf("got %v to %v, %v s yours and %v s the agent's; want %v to %v, %v s and %v s",
-					got.Session.Start, got.Session.End, got.Session.You.S, agents, last.Start, last.End, last.CreditedS, last.AgentOnlyS)
+			wantDate := last.Start.In(s.zone).Format(time.DateOnly)
+			if g.Date != wantDate || !g.Start.Equal(last.Start) || !g.End.Equal(last.End) || g.You.S != last.CreditedS || agents != last.AgentOnlyS {
+				t.Errorf("got %s, %v to %v, %v s yours and %v s the agent's; want %s, %v to %v, %v s and %v s",
+					g.Date, g.Start, g.End, g.You.S, agents, wantDate, last.Start, last.End, last.CreditedS, last.AgentOnlyS)
 			}
 		})
 	}
 }
 
-func day(projects ...dayProject) dayReply {
-	return dayReply{Date: "2026-11-24", Projects: projects}
+func day(projects ...dayProject) dayFile {
+	return dayFile{Date: "2026-11-24", Projects: projects}
 }
 
-// mixedDay has two projects, the one with less of your time first, three
-// agents, level-C and pending time, and the no-progress half.
+// mixedDay has two projects whose order by your time disagrees with every
+// other order: the one with less of your time has more agent time, the
+// earlier name and the lower key, and comes first in the file. Its agents'
+// and its other time's order by seconds isn't their codes' order either.
+// It has level-C time, pending time, and X.noprog partly on hold.
 var mixedDay = day(
-	dayProject{Project: "p_aa01", Name: "remind-bot", tally: tally{
+	dayProject{Project: "p_aa01", Name: "pixel-forge", tally: tally{
 		CreditedS: 600, CreditedByKind: map[event.Activity]float64{event.ActivityTesting: 600},
 		CreditedByEvidence: map[event.Evidence]float64{event.EvidenceB: 600},
-		AgentOnlyS:         300, AgentOnlyByHarness: map[event.Harness]float64{event.HarnessCursor: 300},
-		Uncredited: map[event.Reason]float64{event.ReasonAbsent: 30, event.ReasonAgentOnly: 300},
+		AgentOnlyS:         2400, AgentOnlyByHarness: map[event.Harness]float64{event.HarnessCodex: 1800, event.HarnessClaudeCode: 600},
+		Uncredited: map[event.Reason]float64{event.ReasonOtherFocus: 900, event.ReasonNoProgress: 300, event.ReasonAgentOnly: 2400},
+		OnHoldS:    120,
 	}},
-	dayProject{Project: "p_bb02", Name: "pixel-forge", tally: tally{
+	dayProject{Project: "p_bb02", Name: "remind-bot", tally: tally{
 		CreditedS: 4200, PendingS: 300,
 		CreditedByKind:     map[event.Activity]float64{event.ActivityPrompting: 2400, event.ActivityHandEdit: 1800},
 		CreditedByEvidence: map[event.Evidence]float64{event.EvidenceA: 3000, event.EvidenceC: 1200},
-		AgentOnlyS:         2400, AgentOnlyByHarness: map[event.Harness]float64{event.HarnessClaudeCode: 1800, event.HarnessCodex: 600},
-		Uncredited: map[event.Reason]float64{event.ReasonOtherFocus: 120, event.ReasonNoProgress: 900, event.ReasonAgentOnly: 2400},
+		AgentOnlyS:         300, AgentOnlyByHarness: map[event.Harness]float64{event.HarnessCursor: 300},
+		Uncredited: map[event.Reason]float64{event.ReasonAbsent: 30, event.ReasonAgentOnly: 300},
 	}},
 )
 
 const todayMixed = `Tuesday, November 24
 
-pixel-forge: you 1h 10m · Claude 30m · Codex 10m
-  Your time                                 1h 10m
-    writing prompts                            40m
-    editing by hand                            30m
-    20m of it is level C: it counts only on your own dashboard
+remind-bot: you 1h 10m, 20m level C · Cursor 5m
+  Your time                   1h 10m
+    writing prompts              40m
+    editing by hand              30m
+    20m of it is level C: it shows on your own dashboard, not on your profile, build days or most programs
     5m of it may still change
-  Claude, working on its own                   30m
-  Codex, working on its own                    10m
-  On hold: these come back when you fix it     15m
-  In other apps                                 2m
+  Cursor, working on its own      5m
+  Away                           30s
 
-remind-bot: you 10m · Cursor 5m
-  Your time                   10m
-    testing                   10m
-  Cursor, working on its own   5m
-  Away                        30s
+pixel-forge: you 10m · Codex 30m · Claude 10m
+  Your time                                         10m
+    testing                                         10m
+  Codex, working on its own                         30m
+  Claude, working on its own                        10m
+  In other apps                                     15m
+  Past two hours without progress, counted at half   3m
+  On hold: these come back when you fix it           2m
 `
 
-// shadowDay is a day while display.shadow is on.
-var shadowDay = dayReply{Date: "2026-11-24", Shadow: true, Projects: []dayProject{{Project: "p_9f2c", Name: "remind-bot", tally: tally{
-	CreditedS: 4320, CreditedByKind: map[event.Activity]float64{event.ActivityPrompting: 4320},
-	CreditedByEvidence: map[event.Evidence]float64{event.EvidenceB: 4320},
+// shadowDay is a day while display.shadow is on, with time of every sort:
+// level C and pending, the agent's on its own and while nobody started it,
+// away, a loop, the no-progress half and credit past the day cap. Its
+// numbers appear nowhere else.
+var shadowDay = day(dayProject{Project: "p_9f2c", Name: "remind-bot", tally: tally{
+	CreditedS: 4320, PendingS: 77, CreditedByKind: map[event.Activity]float64{event.ActivityPrompting: 4320},
+	CreditedByEvidence: map[event.Evidence]float64{event.EvidenceB: 4277, event.EvidenceC: 43},
 	AgentOnlyS:         9600, AgentOnlyByHarness: map[event.Harness]float64{event.HarnessClaudeCode: 9600},
-	Uncredited: map[event.Reason]float64{event.ReasonAbsent: 600, event.ReasonAgentOnly: 9000, event.ReasonAutomated: 600},
-}}}}
+	Uncredited: map[event.Reason]float64{event.ReasonAbsent: 615, event.ReasonNoProgress: 135, event.ReasonRewriteLoop: 240,
+		event.ReasonDayCap: 345, event.ReasonAgentOnly: 9000, event.ReasonAutomated: 600},
+	OnHoldS: 135,
+}})
 
 const todayShadow = `Tuesday, November 24
 
 remind-bot: you calibrating · Claude 2h 40m
+  Your time                        calibrating
+  Claude, working on its own            2h 40m
+  Claude rewriting the same lines           4m
+
+Your time shows as calibrating while pairtime checks how it counts.
+`
+
+// shadowTwoDay is a calibrating day of two projects. remind-bot has more of
+// your time, less agent time, the later name and the lower key, and comes
+// first in the file, so only the hidden credit would put it first.
+var shadowTwoDay = day(
+	dayProject{Project: "p_aa01", Name: "remind-bot", tally: tally{
+		CreditedS: 4320, CreditedByKind: map[event.Activity]float64{event.ActivityPrompting: 4320},
+		CreditedByEvidence: map[event.Evidence]float64{event.EvidenceB: 4320},
+		AgentOnlyS:         300, AgentOnlyByHarness: map[event.Harness]float64{event.HarnessCursor: 300},
+		Uncredited: map[event.Reason]float64{event.ReasonAgentOnly: 300, event.ReasonAbsent: 60},
+	}},
+	dayProject{Project: "p_bb02", Name: "pixel-forge", tally: tally{
+		CreditedS: 60, CreditedByKind: map[event.Activity]float64{event.ActivityPrompting: 60},
+		CreditedByEvidence: map[event.Evidence]float64{event.EvidenceB: 60},
+		AgentOnlyS:         1800, AgentOnlyByHarness: map[event.Harness]float64{event.HarnessClaudeCode: 1800},
+		Uncredited: map[event.Reason]float64{event.ReasonAgentOnly: 1800},
+	}},
+)
+
+const todayShadowTwo = `Tuesday, November 24
+
+pixel-forge: you calibrating · Claude 30m
   Your time                   calibrating
-  Claude, working on its own       2h 40m
-  Away                                10m
+  Claude, working on its own          30m
+
+remind-bot: you calibrating · Cursor 5m
+  Your time                   calibrating
+  Cursor, working on its own           5m
 
 Your time shows as calibrating while pairtime checks how it counts.
 `
 
 func TestTodayRules(t *testing.T) {
-	empty := day()
 	cases := []struct {
-		name string
-		days map[string]dayReply
-		args []string
-		want string
+		name    string
+		shadow  bool // config.toml turns display.shadow on
+		stopped bool // the agent is stopped: there is no port.json
+		days    []dayFile
+		args    []string
+		want    string
 	}{
-		{"projects go the most of your time first; level C, pending time and on-hold time are labeled", map[string]dayReply{"today": mixedDay}, nil, todayMixed},
-		{"with display.shadow on, your time is calibrating and the agent's time and other time still show", map[string]dayReply{"today": shadowDay}, nil, todayShadow},
-		{"an empty today says nothing is tracked yet", map[string]dayReply{"today": empty}, nil, "Tuesday, November 24\n\nNothing tracked yet today.\n"},
-		{"an empty day asked for by date says nothing was tracked", map[string]dayReply{"2026-11-24": empty}, []string{"--date", "2026-11-24"}, "Tuesday, November 24\n\nNothing tracked this day.\n"},
+		{name: "projects go the most of your time first, which no other order would give; level C, pending and on-hold time are labeled",
+			days: []dayFile{mixedDay}, want: todayMixed},
+		{name: "with display.shadow on, your time is calibrating, the agent's time and its loops still show, and the other time doesn't",
+			shadow: true, days: []dayFile{shadowDay}, want: todayShadow},
+		{name: "with display.shadow on, your time doesn't decide the order, so the project with more of it, less agent time and the later name comes second",
+			shadow: true, days: []dayFile{shadowTwoDay}, want: todayShadowTwo},
+		{name: "an empty today says nothing is tracked yet", want: "Tuesday, November 24\n\nNothing tracked yet today.\n"},
+		{name: "an empty day asked for by date says nothing was tracked", args: []string{"--date", "2026-11-24"},
+			want: "Tuesday, November 24\n\nNothing tracked this day.\n"},
+		{name: "an empty day asked for by date says so while the agent is stopped too", stopped: true, args: []string{"--date", "2026-11-24"},
+			want: "Tuesday, November 24\n\nNothing tracked this day.\n"},
+		{name: "today's stored time shows while the agent is stopped", stopped: true, days: []dayFile{mixedDay}, want: todayMixed},
 	}
 	schema := loadTodaySchema(t)
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			fakeAgent{days: tc.days}.start(t)
+			onDay(t, "2026-11-24", time.UTC)
+			h := newHome(t).writeDays(tc.days...)
+			if !tc.stopped {
+				h.running()
+			}
+			if tc.shadow {
+				h.shadow()
+			}
 			code, out, errOut := runCmd(append([]string{"today"}, tc.args...)...)
 			if code != 0 || errOut != "" {
 				t.Fatalf("exit %d, stderr %q", code, errOut)
@@ -740,33 +864,45 @@ func TestTodayRules(t *testing.T) {
 	}
 }
 
+func TestTodayJSONOrder(t *testing.T) {
+	cases := []struct {
+		name   string
+		shadow bool
+		day    dayFile
+		want   []string // project keys, in order
+	}{
+		{"the project with the most of your time comes first", false, mixedDay, []string{"p_bb02", "p_aa01"}},
+		{"while calibrating, the project with the most agent time comes first, whatever its credit", true, shadowTwoDay, []string{"p_bb02", "p_aa01"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			onDay(t, "2026-11-24", time.UTC)
+			h := newHome(t).running().writeDays(tc.day)
+			if tc.shadow {
+				h.shadow()
+			}
+			_, out, _ := runCmd("today", "--json")
+			var got todayJSON
+			if err := json.Unmarshal([]byte(out), &got); err != nil {
+				t.Fatalf("%v: %s", err, out)
+			}
+			var keys []string
+			for _, p := range got.Projects {
+				keys = append(keys, p.Project)
+			}
+			if !slices.Equal(keys, tc.want) {
+				t.Errorf("projects %q, want %q", keys, tc.want)
+			}
+		})
+	}
+}
+
 func TestTodayJSONWhileCalibrating(t *testing.T) {
-	fakeAgent{days: map[string]dayReply{"today": shadowDay}}.start(t)
+	onDay(t, "2026-11-24", time.UTC)
+	newHome(t).running().shadow().writeDays(shadowDay)
 	code, out, _ := runCmd("today", "--json")
 	if code != 0 {
 		t.Fatalf("exit %d", code)
-	}
-	cases := []struct {
-		name  string
-		check func(raw map[string]any, got todayJSON) bool
-	}{
-		{"the day says it is calibrating", func(_ map[string]any, got todayJSON) bool { return got.Calibrating }},
-		{"no project has your time", func(raw map[string]any, _ todayJSON) bool {
-			for _, p := range raw["projects"].([]any) {
-				if _, ok := p.(map[string]any)["you"]; ok {
-					return false
-				}
-			}
-			return true
-		}},
-		{"the credited seconds appear nowhere in the output", func(map[string]any, todayJSON) bool { return !strings.Contains(out, "4320") }},
-		{"the agent's time still shows", func(_ map[string]any, got todayJSON) bool {
-			return len(got.Projects) == 1 && len(got.Projects[0].Agents) == 1 && got.Projects[0].Agents[0].S == 9600
-		}},
-		{"other time still shows, without X.agent_only and X.automated", func(_ map[string]any, got todayJSON) bool {
-			o := got.Projects[0].Other
-			return len(o) == 1 && o[0].Reason == event.ReasonAbsent && o[0].Words == "away"
-		}},
 	}
 	var raw map[string]any
 	var got todayJSON
@@ -776,9 +912,41 @@ func TestTodayJSONWhileCalibrating(t *testing.T) {
 	if err := json.Unmarshal([]byte(out), &got); err != nil {
 		t.Fatal(err)
 	}
+	cases := []struct {
+		name  string
+		check func() bool
+	}{
+		{"the day says it is calibrating", func() bool { return got.Calibrating }},
+		{"no project has your time", func() bool {
+			for _, p := range raw["projects"].([]any) {
+				if _, ok := p.(map[string]any)["you"]; ok {
+					return false
+				}
+			}
+			return true
+		}},
+		{"your time, its pending part and its levels appear nowhere", func() bool {
+			return !strings.Contains(out, "4320") && !strings.Contains(out, "4277") && !strings.Contains(out, `"pending_s"`) && !strings.Contains(out, `"levels"`)
+		}},
+		{"the agent's time still shows", func() bool {
+			return len(got.Projects) == 1 && len(got.Projects[0].Agents) == 1 && got.Projects[0].Agents[0].S == 9600
+		}},
+		{"other time holds SM 4.2's loops alone", func() bool {
+			o := got.Projects[0].Other
+			return len(o) == 1 && o[0].Reason == event.ReasonRewriteLoop && o[0].Words == "Claude rewriting the same lines" && o[0].S == 240
+		}},
+		{"away, the no-progress half and the day cap appear nowhere, so the credit can't be worked out from them (D-shadow-scope)", func() bool {
+			for _, s := range []string{"615", "135", "345", "X.absent", "X.noprog", "X.day_cap"} {
+				if strings.Contains(out, s) {
+					return false
+				}
+			}
+			return true
+		}},
+	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if !tc.check(raw, got) {
+			if !tc.check() {
 				t.Errorf("not so in\n%s", out)
 			}
 		})
@@ -788,8 +956,12 @@ func TestTodayJSONWhileCalibrating(t *testing.T) {
 func TestTodaySchemaRejects(t *testing.T) {
 	schema := loadTodaySchema(t)
 	s := loadFixture(t, "6.2")
-	fakeAgent{days: s.days()}.start(t)
+	newHome(t).running().writeDays(dayFiles(s.days())...)
 	_, good, _ := runCmd("today", "--json", "--date", "2026-11-24")
+	calibrating := func(m map[string]any) {
+		m["calibrating"] = true
+		delete(project(m), "you")
+	}
 	cases := []struct {
 		name  string
 		edit  func(m map[string]any)
@@ -798,6 +970,35 @@ func TestTodaySchemaRejects(t *testing.T) {
 		{"the output as printed fits", func(map[string]any) {}, true},
 		{"your time while calibrating doesn't fit", func(m map[string]any) { m["calibrating"] = true }, false},
 		{"a project without your time while not calibrating doesn't fit", func(m map[string]any) { delete(project(m), "you") }, false},
+		{"while calibrating, a project with only the agent's time fits", func(m map[string]any) {
+			calibrating(m)
+			project(m)["other"] = []any{}
+		}, true},
+		{"while calibrating, a loop fits", func(m map[string]any) {
+			calibrating(m)
+			project(m)["other"] = []any{map[string]any{"reason": "X.reroll", "words": "re-rolling the same prompt", "s": 30}}
+		}, true},
+		{"while calibrating, away time doesn't fit, since it gives the hidden credit away", func(m map[string]any) {
+			calibrating(m)
+			project(m)["other"] = []any{map[string]any{"reason": "X.absent", "words": "away", "s": 15}}
+		}, false},
+		{"while calibrating, credit past the day cap doesn't fit (D-shadow-scope)", func(m map[string]any) {
+			calibrating(m)
+			project(m)["other"] = []any{map[string]any{"reason": "X.day_cap", "words": "past 12 hours in one day", "s": 15}}
+		}, false},
+		{"while calibrating, the no-progress half doesn't fit", func(m map[string]any) {
+			calibrating(m)
+			project(m)["other"] = []any{map[string]any{"reason": "X.noprog", "words": "on hold: these come back when you fix it", "s": 15, "on_hold": true}}
+		}, false},
+		{"the on-hold part of X.noprog fits", func(m map[string]any) {
+			project(m)["other"] = []any{map[string]any{"reason": "X.noprog", "words": "on hold: these come back when you fix it", "s": 15, "on_hold": true}}
+		}, true},
+		{"on hold on a reason other than X.noprog doesn't fit", func(m map[string]any) {
+			project(m)["other"] = []any{map[string]any{"reason": "X.absent", "words": "away", "s": 15, "on_hold": true}}
+		}, false},
+		{"on_hold false doesn't fit, since it is left out instead", func(m map[string]any) {
+			project(m)["other"] = []any{map[string]any{"reason": "X.noprog", "words": "x", "s": 15, "on_hold": false}}
+		}, false},
 		{"an unknown field doesn't fit", func(m map[string]any) { m["total_s"] = 265 }, false},
 		{"the agent's time listed as other time doesn't fit", func(m map[string]any) {
 			project(m)["other"] = []any{map[string]any{"reason": "X.agent_only", "words": "Cursor", "s": 20}}
@@ -918,6 +1119,22 @@ func TestTodaySchemaMatchesGo(t *testing.T) {
 			}
 		})
 	}
+	t.Run("the schema's loops while calibrating are pkg/event's dark-flow reasons", func(t *testing.T) {
+		then := root["then"].(map[string]any)["properties"].(map[string]any)["projects"].(map[string]any)["items"].(map[string]any)
+		var got []string
+		for _, v := range then["properties"].(map[string]any)["other"].(map[string]any)["items"].(map[string]any)["properties"].(map[string]any)["reason"].(map[string]any)["enum"].([]any) {
+			got = append(got, v.(string))
+		}
+		var want []string
+		for _, r := range event.UncreditedReasons() {
+			if r.DarkFlow() {
+				want = append(want, string(r))
+			}
+		}
+		if !slices.Equal(got, want) {
+			t.Errorf("enum %q, want %q", got, want)
+		}
+	})
 }
 
 func cmpName(def string) string {
@@ -940,11 +1157,30 @@ func TestRecapRules(t *testing.T) {
 	berlin := time.FixedZone("+01:00", 3600)
 	s := loadFixture(t, "6.2")
 	last62 := s.lastSession()
+	open := workSession{
+		Project: "p_bb02", Name: "pixel-forge", Open: true,
+		Start: time.Date(2026, 11, 24, 12, 40, 0, 0, time.UTC), End: time.Date(2026, 11, 24, 13, 52, 0, 0, time.UTC),
+		tally: tally{
+			CreditedS: 4320, CreditedByKind: map[event.Activity]float64{event.ActivityPrompting: 4320},
+			CreditedByEvidence: map[event.Evidence]float64{event.EvidenceB: 4320},
+			AgentOnlyS:         600, AgentOnlyByHarness: map[event.Harness]float64{event.HarnessClaudeCode: 600},
+			Uncredited: map[event.Reason]float64{event.ReasonAgentOnly: 600, event.ReasonOtherFocus: 300},
+		},
+	}
+	const shadow62 = `Your last session: remind-bot
+Tuesday, November 24
+
+  Your time                   calibrating
+  Cursor, working on its own          20s
+
+Your time shows as calibrating while pairtime checks how it counts.
+`
 	cases := []struct {
-		name  string
-		zone  *time.Location
-		reply sessionReply
-		want  string
+		name   string
+		zone   *time.Location
+		shadow bool // config.toml turns display.shadow on
+		reply  sessionReply
+		want   string
 	}{
 		{
 			name: "before the first session, recap says so kindly",
@@ -953,37 +1189,37 @@ func TestRecapRules(t *testing.T) {
 		},
 		{
 			name: "a session that goes on is your session so far, since its start",
-			zone: newYork,
-			reply: sessionReply{Session: &workSession{
-				Project: "p_bb02", Name: "pixel-forge", Open: true,
-				Start: time.Date(2026, 11, 24, 12, 40, 0, 0, time.UTC), End: time.Date(2026, 11, 24, 13, 52, 0, 0, time.UTC),
-				tally: tally{
-					CreditedS: 4320, CreditedByKind: map[event.Activity]float64{event.ActivityPrompting: 4320},
-					CreditedByEvidence: map[event.Evidence]float64{event.EvidenceB: 4320},
-					AgentOnlyS:         600, AgentOnlyByHarness: map[event.Harness]float64{event.HarnessClaudeCode: 600},
-					Uncredited: map[event.Reason]float64{event.ReasonAgentOnly: 600},
-				},
-			}},
+			zone: newYork, reply: sessionReply{Session: &open},
 			want: `Your session so far: pixel-forge
 Tuesday, November 24, since 07:40
 
   Your time                   1h 12m
     writing prompts           1h 12m
   Claude, working on its own     10m
+  In other apps                   5m
 
 How pairtime saw your time
   100%  level B: pairtime saw you at the computer, not your typing
 `,
 		},
 		{
-			name: "with display.shadow on, your time and its levels are calibrating and the agent's time still shows",
+			name: "with display.shadow on, your time is calibrating, the session is its day alone, and only the agent's time shows",
 			zone: newYork, reply: sessionReply{Shadow: true, Session: &last62},
-			want: `Your last session: remind-bot
-Tuesday, November 24, 07:40 to 07:45
+			want: shadow62,
+		},
+		{
+			name: "with display.shadow just turned on in config.toml, before the agent says so, the recap is calibrating too",
+			zone: newYork, shadow: true, reply: sessionReply{Session: &last62},
+			want: shadow62,
+		},
+		{
+			name: "a session that goes on while calibrating is its day and project alone, without saying it goes on (D-shadow-scope)",
+			zone: newYork, reply: sessionReply{Shadow: true, Session: &open},
+			want: `Your last session: pixel-forge
+Tuesday, November 24
 
   Your time                   calibrating
-  Cursor, working on its own          20s
-  Away                                15s
+  Claude, working on its own          10m
 
 Your time shows as calibrating while pairtime checks how it counts.
 `,
@@ -1004,18 +1240,22 @@ Friday, November 20, 23:30 to Saturday, November 21, 00:10
 
   Your time          39m 50s
     writing prompts  39m 50s
-    5s of it is level C: it counts only on your own dashboard
+    5s of it is level C: it shows on your own dashboard, not on your profile, build days or most programs
 
 How pairtime saw your time
   100%  level A: pairtime saw your typing
-   <1%  level C: this counts only on your own dashboard
+   <1%  level C: this shows on your own dashboard, not on your profile, build days or most programs
 `,
 		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			setZone(t, tc.zone)
-			fakeAgent{session: &tc.reply}.start(t)
+			h := newHome(t)
+			if tc.shadow {
+				h.shadow()
+			}
+			h.sessionAgent(tc.reply)
 			code, out, errOut := runCmd("recap")
 			if code != 0 || errOut != "" {
 				t.Fatalf("exit %d, stderr %q", code, errOut)
@@ -1027,19 +1267,133 @@ How pairtime saw your time
 	}
 }
 
-func TestStatuslineRules(t *testing.T) {
+func TestRecapJSONWhileCalibrating(t *testing.T) {
+	s := loadFixture(t, "6.2")
+	setZone(t, s.zone)
+	last := s.lastSession()
+	newHome(t).sessionAgent(sessionReply{Shadow: true, Session: &last})
+	code, out, errOut := runCmd("recap", "--json")
+	if code != 0 || errOut != "" {
+		t.Fatalf("exit %d, stderr %q", code, errOut)
+	}
+	var raw map[string]any
+	if err := json.Unmarshal([]byte(out), &raw); err != nil {
+		t.Fatal(err)
+	}
+	session, _ := raw["session"].(map[string]any)
 	cases := []struct {
 		name string
-		day  dayReply
-		want string
+		ok   bool
 	}{
-		{"the line sums projects and names the two busiest agents", mixedDay, "you 1h 20m · Claude 30m · Codex 10m\n"},
-		{"with display.shadow on, your time is calibrating", shadowDay, "you calibrating · Claude 2h 40m\n"},
-		{"a day with nothing yet is 0m", day(), "you 0m\n"},
+		{"the recap says it is calibrating", raw["calibrating"] == true},
+		{"the session has its day", session["date"] == "2026-11-24"},
+		{"the session has no start or end, which would bound your time", session["start"] == nil && session["end"] == nil},
+		{"whether the session goes on, which would say whether its last minute counted, is left out", session["open"] == nil},
+		{"no time of day appears anywhere", !strings.Contains(out, "T12:")},
+		{"your time is left out", session["you"] == nil},
+		{"the agent's time still shows", len(session["agents"].([]any)) == 1},
+		{"other time holds no away time", len(session["other"].([]any)) == 0},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			fakeAgent{days: map[string]dayReply{"today": tc.day}}.start(t)
+			if !tc.ok {
+				t.Errorf("not so in\n%s", out)
+			}
+		})
+	}
+}
+
+// shadowAnswer is the agent's answer to AskLastSession while display.shadow
+// is on (D-shadow-scope): no credited or pending numbers, no credited-by
+// maps, no uncredited codes but its own and the loops, no start, end or
+// open, and the session's local date.
+const shadowAnswer = `{"shadow": true, "session": {"project": "p_aa01", "name": "remind-bot", "date": "2026-11-24",
+	"agent_only_s": 20, "agent_only_by_harness": {"cursor": 20}, "uncredited": {"X.agent_only": 20, "X.reroll": 30}}}`
+
+const recapShadowAnswer = `Your last session: remind-bot
+Tuesday, November 24
+
+  Your time                   calibrating
+  Cursor, working on its own          20s
+  Re-rolling the same prompt          30s
+
+Your time shows as calibrating while pairtime checks how it counts.
+`
+
+// TestRecapReadsWhatTheAgentLeavesOut holds recap to D-shadow-scope's
+// shape: a number the agent leaves out reads as 0 and a map as empty.
+func TestRecapReadsWhatTheAgentLeavesOut(t *testing.T) {
+	cases := []struct {
+		name   string
+		answer string
+		want   string
+	}{
+		{"the shadow answer is calibrating, with the agent's time, the loop and the session's date", shadowAnswer, recapShadowAnswer},
+		{"a shadow answer that names no day prints none", strings.Replace(shadowAnswer, `"date": "2026-11-24",`, "", 1),
+			strings.Replace(recapShadowAnswer, "Tuesday, November 24\n", "", 1)},
+		{"an answer without its maps reads them as empty: your time, and no kinds, levels, agents or other time", `{"shadow": false, "session": {"project": "p_aa01", "name": "remind-bot",
+			"date": "2026-11-23", "start": "2026-11-24T04:30:00Z", "end": "2026-11-24T04:40:00Z", "credited_s": 600}}`,
+			"Your last session: remind-bot\nMonday, November 23, 23:30 to 23:40\n\n  Your time  10m\n"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			setZone(t, time.FixedZone("-05:00", -5*3600))
+			newHome(t).agent(func(string) (json.RawMessage, error) { return json.RawMessage(tc.answer), nil })
+			code, out, errOut := runCmd("recap")
+			if code != 0 || errOut != "" {
+				t.Fatalf("exit %d, stderr %q", code, errOut)
+			}
+			if out != tc.want {
+				t.Errorf("got\n%s\nwant\n%s", out, tc.want)
+			}
+		})
+	}
+	t.Run("--json of the shadow answer has its date, the agent's time and the loop, and nothing else", func(t *testing.T) {
+		newHome(t).agent(func(string) (json.RawMessage, error) { return json.RawMessage(shadowAnswer), nil })
+		_, out, _ := runCmd("recap", "--json")
+		var raw map[string]any
+		if err := json.Unmarshal([]byte(out), &raw); err != nil {
+			t.Fatalf("%v: %s", err, out)
+		}
+		s := raw["session"].(map[string]any)
+		var keys []string
+		for k := range s {
+			keys = append(keys, k)
+		}
+		slices.Sort(keys)
+		if want := []string{"agents", "date", "name", "other", "project"}; !slices.Equal(keys, want) || raw["calibrating"] != true {
+			t.Errorf("session fields %q, want %q, in\n%s", keys, want, out)
+		}
+		if o := s["other"].([]any); len(o) != 1 || o[0].(map[string]any)["reason"] != "X.reroll" {
+			t.Errorf("other is %v, want the loop alone", o)
+		}
+	})
+}
+
+func TestStatuslineRules(t *testing.T) {
+	cases := []struct {
+		name   string
+		shadow bool
+		day    *dayFile // nil: no rollup yet today
+		want   string
+		levels map[event.Evidence]float64 // --json's you_by_level
+	}{
+		{"the line sums projects, names the two busiest agents, and labels level C (D11)", false, &mixedDay,
+			"you 1h 20m, 20m level C · Codex 30m · Claude 10m\n",
+			map[event.Evidence]float64{event.EvidenceA: 3000, event.EvidenceB: 600, event.EvidenceC: 1200}},
+		{"with display.shadow on, your time is calibrating, with no level", true, &shadowDay, "you calibrating · Claude 2h 40m\n", nil},
+		{"before today's first counted minute the line is 0m", false, nil, "you 0m\n", nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			onDay(t, "2026-11-24", time.UTC)
+			h := newHome(t).running()
+			if tc.shadow {
+				h.shadow()
+			}
+			if tc.day != nil {
+				h.writeDays(*tc.day)
+			}
 			code, out, errOut := runCmd("statusline", "--timeout", "5s")
 			if code != 0 || errOut != "" {
 				t.Fatalf("exit %d, stderr %q", code, errOut)
@@ -1055,89 +1409,327 @@ func TestStatuslineRules(t *testing.T) {
 			if err := json.Unmarshal([]byte(out), &got); code != 0 || err != nil {
 				t.Fatalf("--json: exit %d, %v: %q", code, err, out)
 			}
-			if got.Line+"\n" != tc.want || got.Calibrating != tc.day.Shadow || (got.YouS == nil) != tc.day.Shadow {
+			if got.Line+"\n" != tc.want || got.Calibrating != tc.shadow || (got.YouS == nil) != tc.shadow || !maps.Equal(got.YouByLevel, tc.levels) {
 				t.Errorf("--json gave %s", out)
 			}
 		})
 	}
 }
 
-// agentSituation is a way the agent can be missing or fail.
-type agentSituation struct {
-	name string
-	set  func(t *testing.T)
-	// want is what today and recap print on stderr.
-	want string
-}
-
-func agentSituations() []agentSituation {
-	return []agentSituation{
-		{"no port.json, because the agent never ran", func(t *testing.T) { t.Setenv(home.EnvHome, t.TempDir()) }, text.Phrase(text.KeyAgentDown)},
-		{"port.json says the agent stopped", func(t *testing.T) {
-			dir := t.TempDir()
-			t.Setenv(home.EnvHome, dir)
-			writePortFile(t, dir, localhttp.PortFile{Port: 7247, Token: localhttp.NewToken(), PID: 0})
-		}, text.Phrase(text.KeyAgentDown)},
-		{"nothing listens on the port in port.json", func(t *testing.T) {
-			ln, err := net.Listen("tcp4", "127.0.0.1:0")
-			if err != nil {
-				t.Fatal(err)
+func TestTodayAndStatuslineWhenNothingCanBeShown(t *testing.T) {
+	agentDown := text.Phrase(text.KeyAgentDown)
+	storeFailed := text.Phrase(text.KeyStoreError, "error", "")
+	cases := []struct {
+		name string
+		set  func(h fakeHome)
+		// want is today's stderr, or how it starts when prefix is set.
+		want   string
+		prefix bool
+	}{
+		{"no port.json, because the agent never ran, and nothing stored today", func(fakeHome) {}, agentDown, false},
+		{"port.json says the agent stopped, and nothing stored today", func(h fakeHome) {
+			writePortFile(h.t, h.dir, localhttp.PortFile{Port: 7247, Token: localhttp.NewToken(), PID: 0})
+		}, agentDown, false},
+		{"today's rollup isn't JSON", func(h fakeHome) {
+			h.running().writeFile(filepath.Join("days", "2026-11-24.json"), []byte("{"))
+		}, storeFailed, true},
+		{"today's rollup holds another day", func(h fakeHome) {
+			b, _ := json.Marshal(dayFile{Date: "2026-11-23", Projects: []dayProject{}})
+			h.running().writeFile(filepath.Join("days", "2026-11-24.json"), b)
+		}, storeFailed, true},
+		{"config.toml can't be read, so whether to hide your time isn't known", func(h fakeHome) {
+			h.running()
+			if err := os.Mkdir(h.dirs().ConfigFile(), 0o700); err != nil {
+				h.t.Fatal(err)
 			}
-			port := localhttp.Port(ln)
-			ln.Close()
-			dir := t.TempDir()
-			t.Setenv(home.EnvHome, dir)
-			writePortFile(t, dir, localhttp.PortFile{Port: port, Token: localhttp.NewToken(), PID: os.Getpid()})
-		}, text.Phrase(text.KeyAgentDown)},
-		{"the agent is older than the route", func(t *testing.T) { fakeAgent{}.start(t) }, text.Phrase(text.KeyAgentOld)},
-		{"the agent doesn't answer in time", func(t *testing.T) {
-			fakeAgent{days: map[string]dayReply{}, session: &sessionReply{}, hang: true}.start(t)
-		}, text.Phrase(text.KeyAgentSlow)},
-		{"port.json's token isn't the agent's", func(t *testing.T) {
-			fakeAgent{days: map[string]dayReply{}, session: &sessionReply{}}.start(t)
-			dirs, err := home.Default()
-			if err != nil {
-				t.Fatal(err)
-			}
-			pf, err := localhttp.ReadPortFile(dirs.PortFile())
-			if err != nil {
-				t.Fatal(err)
-			}
-			pf.Token = localhttp.NewToken()
-			writePortFile(t, dirs.Data, pf)
-		}, text.Phrase(text.KeyAgentError, "error", "the agent answered 401 Unauthorized")},
+		}, storeFailed, true},
 	}
-}
-
-func TestViewsWhenTheAgentFails(t *testing.T) {
-	old := viewTimeout
-	viewTimeout = 200 * time.Millisecond
-	t.Cleanup(func() { viewTimeout = old })
-	for _, sit := range agentSituations() {
-		for _, cmd := range []string{"today", "recap"} {
-			t.Run(cmd+": "+sit.name+" exits 1 and says so kindly on stderr", func(t *testing.T) {
-				sit.set(t)
-				code, out, errOut := runCmd(cmd)
-				if code != 1 || out != "" || errOut != sit.want+"\n" {
-					t.Errorf("exit %d, stdout %q, stderr %q; want exit 1, no stdout and %q", code, out, errOut, sit.want)
-				}
-			})
-		}
-		t.Run("statusline: "+sit.name+" prints nothing, exits 0 and returns at once", func(t *testing.T) {
-			sit.set(t)
-			begin := time.Now()
-			code, out, errOut := runCmd("statusline", "--timeout", "50ms")
+	for _, tc := range cases {
+		t.Run("today: "+tc.name+" exits 1 and says so on stderr", func(t *testing.T) {
+			onDay(t, "2026-11-24", time.UTC)
+			tc.set(newHome(t))
+			code, out, errOut := runCmd("today")
+			ok := errOut == tc.want+"\n"
+			if tc.prefix {
+				ok = strings.HasPrefix(errOut, tc.want) && len(errOut) > len(tc.want)+1
+			}
+			if code != 1 || out != "" || !ok {
+				t.Errorf("exit %d, stdout %q, stderr %q; want exit 1, no stdout and %q", code, out, errOut, tc.want)
+			}
+		})
+		t.Run("statusline: "+tc.name+" prints nothing and exits 0", func(t *testing.T) {
+			onDay(t, "2026-11-24", time.UTC)
+			tc.set(newHome(t))
+			code, out, errOut := runCmd("statusline", "--timeout", "5s")
 			if code != 0 || out != "" || errOut != "" {
 				t.Errorf("exit %d, stdout %q, stderr %q; want exit 0 and nothing", code, out, errOut)
-			}
-			if took := time.Since(begin); took > 2*time.Second {
-				t.Errorf("took %v with a 50ms timeout", took)
 			}
 		})
 	}
 }
 
-func TestStatuslineDefaultTimeout(t *testing.T) {
+func TestRecapWhenTheAgentFails(t *testing.T) {
+	old := viewTimeout
+	viewTimeout = 300 * time.Millisecond
+	t.Cleanup(func() { viewTimeout = old })
+	agentFailed := text.Phrase(text.KeyAgentError, "error", "")
+	cases := []struct {
+		name string
+		set  func(t *testing.T, h fakeHome)
+		// want is recap's stderr, or how it starts when prefix is set.
+		want   string
+		prefix bool
+	}{
+		{"nothing listens on the socket", func(*testing.T, fakeHome) {}, text.Phrase(text.KeyAgentDown), false},
+		{"nothing listens on the socket, though port.json names a port", func(_ *testing.T, h fakeHome) { h.running() }, text.Phrase(text.KeyAgentDown), false},
+		{"the agent answers no question, as one from before WP-AG4", func(_ *testing.T, h fakeHome) { h.agent(nil) }, text.Phrase(text.KeyAgentOld), false},
+		{"the agent doesn't answer in time", func(t *testing.T, h fakeHome) {
+			block := make(chan struct{})
+			h.agent(func(string) (json.RawMessage, error) {
+				<-block
+				return nil, ipc.ErrUnknownQuestion
+			})
+			t.Cleanup(func() { close(block) }) // before the agent's own cleanup, which waits for the answer
+		}, text.Phrase(text.KeyAgentSlow), false},
+		{"the agent couldn't answer", func(_ *testing.T, h fakeHome) {
+			h.agent(func(string) (json.RawMessage, error) { return nil, errors.New("the bucket store is gone") })
+		}, agentFailed, true},
+		{"the agent's answer isn't a session", func(_ *testing.T, h fakeHome) {
+			h.agent(func(string) (json.RawMessage, error) { return json.RawMessage(`[1, 2]`), nil })
+		}, agentFailed, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name+": recap exits 1 and says so kindly on stderr", func(t *testing.T) {
+			h := newHome(t)
+			tc.set(t, h)
+			code, out, errOut := runCmd("recap")
+			ok := errOut == tc.want+"\n"
+			if tc.prefix {
+				ok = strings.HasPrefix(errOut, tc.want) && len(errOut) > len(tc.want)+1
+			}
+			if code != 1 || out != "" || !ok {
+				t.Errorf("exit %d, stdout %q, stderr %q; want exit 1, no stdout and %q", code, out, errOut, tc.want)
+			}
+		})
+	}
+}
+
+// TestViewsSendNothingOverTCP holds the views to #120: with an agent's
+// port.json naming a port where something listens, and everything each
+// view needs at hand, none of them connects to that port, so none hands
+// the bearer token to whatever listens there.
+func TestViewsSendNothingOverTCP(t *testing.T) {
+	ln, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var connected atomic.Int32
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			connected.Add(1)
+			c.Close()
+		}
+	}()
+	t.Cleanup(func() { ln.Close() })
+	s := loadFixture(t, "6.2")
+	onDay(t, "2026-11-24", s.zone)
+	h := newHome(t).writeDays(dayFiles(s.days())...)
+	writePortFile(t, h.dir, localhttp.PortFile{Port: localhttp.Port(ln), Token: localhttp.NewToken(), PID: os.Getpid()})
+	last := s.lastSession()
+	h.sessionAgent(sessionReply{Session: &last})
+	for _, args := range [][]string{
+		{"today"}, {"today", "--json"}, {"today", "--date", "2026-11-24"},
+		{"statusline", "--timeout", "5s"}, {"statusline", "--json", "--timeout", "5s"},
+		{"recap"}, {"recap", "--json"},
+	} {
+		code, out, errOut := runCmd(args...)
+		if code != 0 || out == "" || errOut != "" {
+			t.Errorf("%q: exit %d, stdout %q, stderr %q", args, code, out, errOut)
+		}
+	}
+	if n := connected.Load(); n != 0 {
+		t.Errorf("the views connected to port.json's port %d times", n)
+	}
+}
+
+func TestDayStore(t *testing.T) {
+	t.Run("a day as WP-AG4's scorer writes it reads field for field", func(t *testing.T) {
+		// testdata/days/2026-11-24.json is SM 6.2's day as WP-AG4's
+		// store.WriteDay writes it at 6c15be9: json.Marshal of a store.Day,
+		// whose projects embed store.Tally, with no name yet.
+		d, found, err := dayStore{filepath.Join("testdata", "days")}.day("2026-11-24")
+		if err != nil || !found {
+			t.Fatalf("found %v, %v", found, err)
+		}
+		start, end := time.Date(2026, 11, 24, 5, 0, 0, 0, time.UTC), time.Date(2026, 11, 25, 5, 0, 0, 0, time.UTC)
+		if d.Date != "2026-11-24" || d.Zone != "Local" || !d.Start.Equal(start) || !d.End.Equal(end) || len(d.Projects) != 1 {
+			t.Fatalf("got %+v", d)
+		}
+		want := dayProject{Project: "p_be4901c04a84", tally: tally{
+			CreditedS: 265,
+			CreditedByKind: map[event.Activity]float64{event.ActivityHandEdit: 120, event.ActivityPrompting: 60,
+				event.ActivityReadingOutput: 15, event.ActivityReviewing: 50, event.ActivitySupervising: 20},
+			CreditedByEvidence: map[event.Evidence]float64{event.EvidenceB: 265},
+			AgentOnlyS:         20, AgentOnlyByHarness: map[event.Harness]float64{event.HarnessCursor: 20},
+			Uncredited: map[event.Reason]float64{event.ReasonAbsent: 15, event.ReasonAgentOnly: 20},
+		}}
+		if !reflect.DeepEqual(d.Projects[0], want) {
+			t.Errorf("got %+v\nwant %+v", d.Projects[0], want)
+		}
+	})
+	t.Run("today shows that day with the project's key, which stands in for a name until the project map has one", func(t *testing.T) {
+		b, err := os.ReadFile(filepath.Join("testdata", "days", "2026-11-24.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		newHome(t).running().writeFile(filepath.Join("days", "2026-11-24.json"), b)
+		code, out, errOut := runCmd("today", "--date", "2026-11-24")
+		want := strings.Replace(today62, "remind-bot:", "p_be4901c04a84:", 1)
+		if code != 0 || errOut != "" || out != want {
+			t.Errorf("exit %d, stderr %q, got\n%s\nwant\n%s", code, errOut, out, want)
+		}
+	})
+	dir := t.TempDir()
+	write := func(name, data string) {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(data), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("2026-11-20.json", `{"date": "2026-11-20", "projects": null, "minutes": 1440, "future": {"x": 1}}`)
+	write("2026-11-21.json", `{"date": "2026-11-21", "projects": [`)
+	write("2026-11-22.json", `{"date": "2026-11-23", "projects": []}`)
+	write("2026-11-23.json", `{"date": "2026-11-23", "projects": [], "pad": "`+strings.Repeat("x", maxDayFile)+`"}`)
+	cases := []struct {
+		name      string
+		date      string
+		wantFound bool
+		wantErr   bool
+	}{
+		{"fields a newer agent adds are ignored, and no projects are none", "2026-11-20", true, false},
+		{"a day with no rollup is empty, not an error", "2026-11-24", false, false},
+		{"a rollup that isn't JSON is an error", "2026-11-21", false, true},
+		{"a rollup that holds another day is an error", "2026-11-22", false, true},
+		{"a rollup over 1 MiB is an error", "2026-11-23", false, true},
+		{"a date that doesn't exist is refused", "2026-02-30", false, true},
+		{"a path is refused as a date", "../days/2026-11-20", false, true},
+		{"a file name is refused as a date", "2026-11-20.json", false, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			d, found, err := dayStore{dir}.day(tc.date)
+			if found != tc.wantFound || (err != nil) != tc.wantErr {
+				t.Fatalf("found %v, err %v; want found %v and an error: %v", found, err, tc.wantFound, tc.wantErr)
+			}
+			if err == nil && (d.Date != tc.date || d.Projects == nil || len(d.Projects) != 0) {
+				t.Errorf("got %+v, want the day %s with no projects", d, tc.date)
+			}
+		})
+	}
+}
+
+// evil is a project name made of what a folder's name may hold: an OSC 52
+// write to the clipboard, a bell, a screen clear and U+202E, which turns
+// the rest of a line around.
+const evil = "remind\x1b]52;c;cm0gLXJmIH4=\x07bot\x1b[2J\xe2\x80\xae"
+
+// terminalUnsafe returns the bytes in s, text a view printed, that a
+// terminal would act on: control characters but the line ends, and U+202E.
+func terminalUnsafe(s string) []string {
+	var out []string
+	for _, r := range s {
+		if (r < 0x20 && r != '\n') || r == 0x7f || (r >= 0x80 && r < 0xa0) || r == 0x202e {
+			out = append(out, string(r))
+		}
+	}
+	return out
+}
+
+func TestViewsPrintNoControlBytes(t *testing.T) {
+	tl := tally{
+		CreditedS: 60, CreditedByKind: map[event.Activity]float64{event.ActivityPrompting: 60, "jug\x1b[31mgling": 30},
+		CreditedByEvidence: map[event.Evidence]float64{event.EvidenceB: 60},
+		AgentOnlyS:         30, AgentOnlyByHarness: map[event.Harness]float64{"claude\x1b[2J": 30},
+		Uncredited: map[event.Reason]float64{event.ReasonAbsent: 30, "X.\x07ring": 30},
+	}
+	cases := []struct {
+		name string
+		args []string
+	}{
+		{"today", []string{"today"}},
+		{"statusline", []string{"statusline", "--timeout", "5s"}},
+		{"recap", []string{"recap"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name+" prints a project's name and the agent's codes with nothing a terminal acts on", func(t *testing.T) {
+			onDay(t, "2026-11-24", time.UTC)
+			h := newHome(t).running().writeDays(day(dayProject{Project: "p_aa01", Name: evil, tally: tl}))
+			h.sessionAgent(sessionReply{Session: &workSession{Project: "p_aa01", Name: evil,
+				Start: time.Date(2026, 11, 24, 7, 0, 0, 0, time.UTC), End: time.Date(2026, 11, 24, 7, 5, 0, 0, time.UTC), tally: tl}})
+			code, out, errOut := runCmd(tc.args...)
+			if code != 0 || errOut != "" {
+				t.Fatalf("exit %d, stderr %q", code, errOut)
+			}
+			if bad := terminalUnsafe(out); len(bad) > 0 {
+				t.Errorf("printed %q in\n%q", bad, out)
+			}
+		})
+	}
+	t.Run("--json escapes them, as encoding/json does", func(t *testing.T) {
+		onDay(t, "2026-11-24", time.UTC)
+		newHome(t).running().writeDays(day(dayProject{Project: "p_aa01", Name: evil, tally: tl}))
+		_, out, _ := runCmd("today", "--json")
+		if strings.ContainsAny(out, "\x1b\x07") {
+			t.Errorf("--json printed a raw control character: %q", out)
+		}
+	})
+}
+
+const todayUnknown = `Tuesday, November 24
+
+remind-bot: you 10m · your agent 2m
+  Your time                       10m
+    writing prompts                5m
+  Your agent, working on its own   2m
+  Away                             1m
+`
+
+// TestCodesANewerAgentAdds holds the views to what they print when the
+// agent's stores name a harness, a kind or a reason this build has no
+// words for: an agent newer than the CLI wrote them.
+func TestCodesANewerAgentAdds(t *testing.T) {
+	newer := day(dayProject{Project: "p_aa01", Name: "remind-bot", tally: tally{
+		CreditedS: 600, CreditedByKind: map[event.Activity]float64{event.ActivityPrompting: 300, "juggling": 300},
+		CreditedByEvidence: map[event.Evidence]float64{event.EvidenceB: 600},
+		AgentOnlyS:         120, AgentOnlyByHarness: map[event.Harness]float64{"windsurf": 120},
+		Uncredited: map[event.Reason]float64{event.ReasonAbsent: 60, "X.new_thing": 90, event.ReasonAgentOnly: 120},
+	}})
+	onDay(t, "2026-11-24", time.UTC)
+	newHome(t).running().writeDays(newer)
+	t.Run("the text calls the harness your agent and leaves out the kind and the reason, but not their seconds", func(t *testing.T) {
+		code, out, errOut := runCmd("today")
+		if code != 0 || errOut != "" || out != todayUnknown {
+			t.Errorf("exit %d, stderr %q, got\n%s\nwant\n%s", code, errOut, out, todayUnknown)
+		}
+	})
+	t.Run("--json still fits cli-today.schema.json", func(t *testing.T) {
+		_, out, _ := runCmd("today", "--json")
+		checkSchema(t, loadTodaySchema(t), out)
+		var got todayJSON
+		if err := json.Unmarshal([]byte(out), &got); err != nil {
+			t.Fatal(err)
+		}
+		p := got.Projects[0]
+		if len(p.Agents) != 1 || p.Agents[0].Harness != event.HarnessOther || p.You.S != 600 || len(p.You.Kinds) != 1 || len(p.Other) != 1 {
+			t.Errorf("got %s", out)
+		}
+	})
+}
+
+func TestStatuslineTimeout(t *testing.T) {
 	cases := []struct {
 		name  string
 		check func(t *testing.T)
@@ -1147,12 +1739,30 @@ func TestStatuslineDefaultTimeout(t *testing.T) {
 				t.Errorf("the default timeout is %v", statuslineTimeout)
 			}
 		}},
-		{"with no --timeout, a hung agent gets nothing printed within a second", func(t *testing.T) {
-			fakeAgent{days: map[string]dayReply{}, hang: true}.start(t)
+		{"with no --timeout, a day that takes long to read prints nothing within a second", func(t *testing.T) {
+			block := make(chan struct{})
+			old := statusRead
+			statusRead = func() (*statusJSON, error) {
+				<-block
+				return nil, errors.New("too late")
+			}
+			t.Cleanup(func() {
+				close(block)
+				statusRead = old
+			})
 			begin := time.Now()
 			code, out, errOut := runCmd("statusline")
 			if took := time.Since(begin); code != 0 || out != "" || errOut != "" || took > time.Second {
 				t.Errorf("exit %d, stdout %q, stderr %q after %v", code, out, errOut, took)
+			}
+		}},
+		{"a bug while reading the day prints nothing and exits 0", func(t *testing.T) {
+			old := statusRead
+			statusRead = func() (*statusJSON, error) { panic("a bug") }
+			t.Cleanup(func() { statusRead = old })
+			code, out, errOut := runCmd("statusline", "--timeout", "5s")
+			if code != 0 || out != "" || errOut != "" {
+				t.Errorf("exit %d, stdout %q, stderr %q", code, out, errOut)
 			}
 		}},
 	}
@@ -1172,6 +1782,7 @@ func TestViewUsage(t *testing.T) {
 		{"recap -h documents the exit status", []string{"recap", "-h"}, 0, "1  the agent isn't running"},
 		{"statusline -h shows Claude Code's setting", []string{"statusline", "-h"}, 0, `"statusLine": {"type": "command", "command": "pairtime statusline"}`},
 		{"today with a date that isn't one is a usage error", []string{"today", "--date", "11/24/2026"}, 2, "--date wants a day such as 2026-11-24"},
+		{"today with a date that doesn't exist is a usage error", []string{"today", "--date", "2026-02-30"}, 2, "--date wants a day such as 2026-11-24"},
 		{"today with an argument is a usage error", []string{"today", "yesterday"}, 2, "takes no arguments"},
 		{"recap with an argument is a usage error", []string{"recap", "last"}, 2, "takes no arguments"},
 		{"statusline with a timeout of 0 is a usage error", []string{"statusline", "--timeout", "0s"}, 2, "--timeout must be more than 0"},

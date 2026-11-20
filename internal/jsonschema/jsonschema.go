@@ -3,7 +3,12 @@
 // Package jsonschema checks JSON against a JSON Schema (draft 2020-12),
 // for the keywords pairtime's schemas in docs/schema use, with the
 // standard library alone. A keyword it doesn't know is an error, not a
-// pass, so a schema can't outgrow it unnoticed.
+// pass, so a schema can't outgrow it unnoticed. Parse looks at every
+// subschema once, those under not and if included, and refuses a keyword
+// it doesn't support, a $ref that doesn't resolve, a pattern that doesn't
+// compile and a keyword whose value has the wrong type. So validating
+// only ever reports how an instance breaks the schema, and not and if
+// can't turn a broken subschema into a silent pass.
 //
 // Tests use it to check what a command prints against the schema that
 // describes it, such as `pairtime today --json` against
@@ -16,6 +21,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"math/big"
 	"regexp"
 	"slices"
@@ -35,22 +41,22 @@ type Schema struct {
 	patterns map[string]*regexp.Regexp
 }
 
-// Parse decodes a schema.
+// Parse decodes a schema and checks every subschema in it (checkSchema).
 func Parse(data []byte) (*Schema, error) {
 	root, err := Decode(data)
 	if err != nil {
 		return nil, err
 	}
-	switch root.(type) {
-	case bool, map[string]any:
-	default:
-		return nil, fmt.Errorf("jsonschema: a schema is an object or a boolean, got %s", jsonType(root))
+	s := &Schema{root: root, patterns: map[string]*regexp.Regexp{}}
+	if err := s.checkSchema("#", root); err != nil {
+		return nil, err
 	}
-	return &Schema{root: root, patterns: map[string]*regexp.Regexp{}}, nil
+	return s, nil
 }
 
 // Decode decodes one JSON value, keeping numbers as json.Number, which is
-// what Validate expects.
+// what Validate expects. Anything after the value but white space is an
+// error, a stray '}' or ']' included, which Decoder.More doesn't report.
 func Decode(b []byte) (any, error) {
 	dec := json.NewDecoder(bytes.NewReader(b))
 	dec.UseNumber()
@@ -58,10 +64,132 @@ func Decode(b []byte) (any, error) {
 	if err := dec.Decode(&v); err != nil {
 		return nil, err
 	}
-	if dec.More() {
-		return nil, fmt.Errorf("more than one JSON value")
+	if _, err := dec.Token(); err != io.EOF {
+		return nil, fmt.Errorf("jsonschema: more follows the JSON value")
 	}
 	return v, nil
+}
+
+// typeNames are the names "type" may use.
+var typeNames = []string{"null", "boolean", "object", "array", "number", "integer", "string"}
+
+// checkSchema checks schema, found at the JSON pointer at, and every
+// subschema inside it: $defs, properties, additionalProperties, items,
+// allOf, not, if, then and else. It returns the first problem: a schema
+// that is neither an object nor a boolean, a keyword this validator
+// doesn't support, a $ref that doesn't resolve, a pattern that doesn't
+// compile, or a keyword whose value has the wrong type.
+func (s *Schema) checkSchema(at string, schema any) error {
+	sc, ok := schema.(map[string]any)
+	if !ok {
+		if _, ok := schema.(bool); ok {
+			return nil
+		}
+		return fmt.Errorf("jsonschema: %s: a schema is an object or a boolean, got %s", at, jsonType(schema))
+	}
+	for _, k := range sortedKeys(sc) {
+		kw, where := sc[k], at+"/"+pointerToken(k)
+		bad := func(want string) error {
+			return fmt.Errorf("jsonschema: %s: %s must be %s, got %s", at, k, want, jsonType(kw))
+		}
+		switch k {
+		case "$ref":
+			ref, ok := kw.(string)
+			if !ok {
+				return bad("a string")
+			}
+			if _, err := s.resolve(ref); err != nil {
+				return fmt.Errorf("jsonschema: %s: %w", at, err)
+			}
+		case "$defs", "properties":
+			subs, ok := kw.(map[string]any)
+			if !ok {
+				return bad("an object")
+			}
+			for _, name := range sortedKeys(subs) {
+				if err := s.checkSchema(where+"/"+pointerToken(name), subs[name]); err != nil {
+					return err
+				}
+			}
+		case "additionalProperties", "items", "not", "if", "then", "else":
+			if err := s.checkSchema(where, kw); err != nil {
+				return err
+			}
+		case "allOf":
+			list, ok := kw.([]any)
+			if !ok || len(list) == 0 {
+				return bad("a non-empty array")
+			}
+			for i, sub := range list {
+				if err := s.checkSchema(fmt.Sprintf("%s/%d", where, i), sub); err != nil {
+					return err
+				}
+			}
+		case "type":
+			if !validType(kw) {
+				return bad(fmt.Sprintf("one of %q or a list of them", typeNames))
+			}
+		case "enum":
+			if _, ok := kw.([]any); !ok {
+				return bad("an array")
+			}
+		case "required":
+			list, ok := kw.([]any)
+			if !ok {
+				return bad("an array of strings")
+			}
+			for _, r := range list {
+				if _, ok := r.(string); !ok {
+					return bad("an array of strings")
+				}
+			}
+		case "minItems", "maxItems", "minLength", "maxLength", "minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum":
+			if _, ok := asRat(kw); !ok {
+				return bad("a number")
+			}
+		case "uniqueItems":
+			if _, ok := kw.(bool); !ok {
+				return bad("a boolean")
+			}
+		case "pattern":
+			src, ok := kw.(string)
+			if !ok {
+				return bad("a string")
+			}
+			if _, err := s.pattern(src); err != nil {
+				return fmt.Errorf("jsonschema: %s: pattern %q: %w", at, src, err)
+			}
+		case "const":
+			// Any value.
+		default:
+			if !slices.Contains(annotations, k) {
+				return fmt.Errorf("jsonschema: %s: schema keyword %q isn't supported by this validator", at, k)
+			}
+		}
+	}
+	return nil
+}
+
+// validType reports whether kw is a type name or a non-empty list of them.
+func validType(kw any) bool {
+	switch t := kw.(type) {
+	case string:
+		return slices.Contains(typeNames, t)
+	case []any:
+		for _, x := range t {
+			name, ok := x.(string)
+			if !ok || !slices.Contains(typeNames, name) {
+				return false
+			}
+		}
+		return len(t) > 0
+	}
+	return false
+}
+
+// pointerToken escapes a name as one token of a JSON pointer (RFC 6901).
+func pointerToken(name string) string {
+	return strings.ReplaceAll(strings.ReplaceAll(name, "~", "~0"), "/", "~1")
 }
 
 // ValidateJSON decodes data and returns every way it breaks the schema.
