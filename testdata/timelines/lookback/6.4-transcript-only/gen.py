@@ -93,6 +93,11 @@ rp = lb.Replay(events, T0, END)
 lb.check_rows(exp, rp, {S: P})
 tl.check(not rp.conflicts, "one session, so no second is wanted twice")
 tl.check(all(not v for v in rp.spans.values()), "no stop is followed by a human prompt within 600 s")
+# The erratum's point 2. With no reading span the cap cuts nothing; nothing
+# covers 10 s before the /goal prompt's lead and 19 s before the follow-up's.
+kinds = lb.uncredited_kinds(rp, T0, END)
+tl.check(kinds == {"agent": 43 * 60 + 20, "automated": 347 * 60 - 20, "uncovered": 10 + 19},
+         f"uncredited seconds {kinds}")
 
 totals = exp.totals()
 tl.check(totals["credited_s"] == 50 + 41 == 91, "credited")

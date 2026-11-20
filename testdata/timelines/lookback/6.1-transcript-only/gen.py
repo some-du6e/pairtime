@@ -98,8 +98,16 @@ for k in range(1, CYCLES + 1):
     note0 = None
     if k == 1:
         note0 = ("The prompt at 14:04:00 has 300 typed characters. Its lead is typing time only, 300 / 1.5 = "
-                 "200 s, from 14:00:40. No think lead and no editor anchors: nothing covers 14:00:00 to 14:00:40.")
-    row(0, credit={P: {"P": 20}}, uncredited=None, codes=["X.no_anchor"], erratum=ER, note=note0)
+                 "200 s, from 14:00:40. No think lead, no editor anchors and no stop before it: nothing covers "
+                 "14:00:00 to 14:00:40.")
+    if k == 2:
+        note0 = ("14:12:00 to 14:12:40 lie between cycle 1's stop and this prompt, so the session would read them "
+                 "but for the 120 s cap: X.bucket_cap, as in the last 30 s of 14:08.")
+    # Cycle 1's first 40 s follow no stop. Every later cycle's lie between
+    # the stop before them and their prompt, where only the cap stops the
+    # reading.
+    row(0, credit={P: {"P": 20}}, uncredited=None, codes=["X.no_anchor"] if k == 1 else ["X.bucket_cap"],
+        erratum=ER, note=note0)
     row(1, credit={P: {"P": 60}}, uncredited={})
     row(2, credit={P: {"P": 60}}, uncredited={})
     row(3, credit={P: {"P": 60}}, uncredited={})
@@ -118,8 +126,10 @@ for k in range(1, CYCLES + 1):
                   "cycle reads like the others.")
         row(6, credit={P: {"READ": 30}}, uncredited={"X.agent_only": 30}, agent=30, note=n6)
         row(7, credit={P: {"READ": 60}}, uncredited={})
-        row(8, credit={P: {"READ": 30}}, uncredited=None, codes=["X.no_anchor"], erratum=ER,
-            note="The 120 s of reading end at 14:08:30." if k == 1 else None)
+        row(8, credit={P: {"READ": 30}}, uncredited=None, codes=["X.bucket_cap"], erratum=ER,
+            note="The 120 s of reading end at 14:08:30. The turn's output would last to the next prompt's "
+                 "lead, so only the cap keeps the other 30 s from being read: X.bucket_cap."
+            if k == 1 else None)
         exp.row(fx.hhmm(C + 9 * 60_000), fx.hhmm(C + 12 * 60_000), bucket=False, sm="2.8; " + SEEN.format(
             "14:09 to 14:11") + ("" if k == 1 else SAME), derived=["bucket"],
             note="Nothing is credited and no agent runs, so these minutes have no bucket (SM 5.1). The live "
@@ -137,6 +147,11 @@ for k in range(1, CYCLES + 1):
 rp = lb.Replay(events, T0, END)
 lb.check_rows(exp, rp, {S: P})
 tl.check(not rp.conflicts, "one session, so no second is wanted twice")
+# The erratum's point 2. Outside the agent's turns, the cap cuts 30 s after
+# each of cycles 1 to 14's reading and the first 40 s of cycles 2 to 15;
+# nothing covers cycle 1's first 40 s or the 30 s after cycle 15's stop.
+kinds = lb.uncredited_kinds(rp, T0, END)
+tl.check(kinds == {"agent": 15 * 125, "capped": 14 * (30 + 40), "uncovered": 40 + 30}, f"uncredited seconds {kinds}")
 
 totals = exp.totals()
 by_reason = totals["credited_by_reason"]

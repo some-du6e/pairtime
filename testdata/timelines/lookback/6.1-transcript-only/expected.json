@@ -27,7 +27,7 @@
       "codes": ["X.no_anchor"],
       "agent_running_s": 0,
       "sm": "2.8; the events of 6.1's 14:00 row",
-      "note": "The prompt at 14:04:00 has 300 typed characters. Its lead is typing time only, 300 / 1.5 = 200 s, from 14:00:40. No think lead and no editor anchors: nothing covers 14:00:00 to 14:00:40.",
+      "note": "The prompt at 14:04:00 has 300 typed characters. Its lead is typing time only, 300 / 1.5 = 200 s, from 14:00:40. No think lead, no editor anchors and no stop before it: nothing covers 14:00:00 to 14:00:40.",
       "derived": ["credited_s", "credit", "uncredited", "agent_running_s"],
       "erratum": "2026-11-19-sm-2.8-lookback"
     },
@@ -149,10 +149,10 @@
         "p_0eccb85aa257": {"READ": 30}
       },
       "uncredited": null,
-      "codes": ["X.no_anchor"],
+      "codes": ["X.bucket_cap"],
       "agent_running_s": 0,
       "sm": "2.8; the events of 6.1's 14:08 row",
-      "note": "The 120 s of reading end at 14:08:30.",
+      "note": "The 120 s of reading end at 14:08:30. The turn's output would last to the next prompt's lead, so only the cap keeps the other 30 s from being read: X.bucket_cap.",
       "derived": ["credited_s", "credit", "uncredited", "agent_running_s"],
       "erratum": "2026-11-19-sm-2.8-lookback"
     },
@@ -176,9 +176,10 @@
         "p_0eccb85aa257": {"P": 20}
       },
       "uncredited": null,
-      "codes": ["X.no_anchor"],
+      "codes": ["X.bucket_cap"],
       "agent_running_s": 0,
       "sm": "2.8; the events of 6.1's 14:00 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "note": "14:12:00 to 14:12:40 lie between cycle 1's stop and this prompt, so the session would read them but for the 120 s cap: X.bucket_cap, as in the last 30 s of 14:08.",
       "derived": ["credited_s", "credit", "uncredited", "agent_running_s"],
       "erratum": "2026-11-19-sm-2.8-lookback"
     },
@@ -297,7 +298,7 @@
         "p_0eccb85aa257": {"READ": 30}
       },
       "uncredited": null,
-      "codes": ["X.no_anchor"],
+      "codes": ["X.bucket_cap"],
       "agent_running_s": 0,
       "sm": "2.8; the events of 6.1's 14:08 row; cycles 2 to 15 have the same events, 12 minutes apart",
       "derived": ["credited_s", "credit", "uncredited", "agent_running_s"],
@@ -322,7 +323,7 @@
         "p_0eccb85aa257": {"P": 20}
       },
       "uncredited": null,
-      "codes": ["X.no_anchor"],
+      "codes": ["X.bucket_cap"],
       "agent_running_s": 0,
       "sm": "2.8; the events of 6.1's 14:00 row; cycles 2 to 15 have the same events, 12 minutes apart",
       "derived": ["credited_s", "credit", "uncredited", "agent_running_s"],
@@ -443,7 +444,7 @@
         "p_0eccb85aa257": {"READ": 30}
       },
       "uncredited": null,
-      "codes": ["X.no_anchor"],
+      "codes": ["X.bucket_cap"],
       "agent_running_s": 0,
       "sm": "2.8; the events of 6.1's 14:08 row; cycles 2 to 15 have the same events, 12 minutes apart",
       "derived": ["credited_s", "credit", "uncredited", "agent_running_s"],
@@ -468,7 +469,7 @@
         "p_0eccb85aa257": {"P": 20}
       },
       "uncredited": null,
-      "codes": ["X.no_anchor"],
+      "codes": ["X.bucket_cap"],
       "agent_running_s": 0,
       "sm": "2.8; the events of 6.1's 14:00 row; cycles 2 to 15 have the same events, 12 minutes apart",
       "derived": ["credited_s", "credit", "uncredited", "agent_running_s"],
@@ -589,7 +590,7 @@
         "p_0eccb85aa257": {"READ": 30}
       },
       "uncredited": null,
-      "codes": ["X.no_anchor"],
+      "codes": ["X.bucket_cap"],
       "agent_running_s": 0,
       "sm": "2.8; the events of 6.1's 14:08 row; cycles 2 to 15 have the same events, 12 minutes apart",
       "derived": ["credited_s", "credit", "uncredited", "agent_running_s"],
@@ -614,7 +615,7 @@
         "p_0eccb85aa257": {"P": 20}
       },
       "uncredited": null,
-      "codes": ["X.no_anchor"],
+      "codes": ["X.bucket_cap"],
       "agent_running_s": 0,
       "sm": "2.8; the events of 6.1's 14:00 row; cycles 2 to 15 have the same events, 12 minutes apart",
       "derived": ["credited_s", "credit", "uncredited", "agent_running_s"],
@@ -735,7 +736,7 @@
         "p_0eccb85aa257": {"READ": 30}
       },
       "uncredited": null,
-      "codes": ["X.no_anchor"],
+      "codes": ["X.bucket_cap"],
       "agent_running_s": 0,
       "sm": "2.8; the events of 6.1's 14:08 row; cycles 2 to 15 have the same events, 12 minutes apart",
       "derived": ["credited_s", "credit", "uncredited", "agent_running_s"],
@@ -760,7 +761,7 @@
         "p_0eccb85aa257": {"P": 20}
       },
       "uncredited": null,
-      "codes": ["X.no_anchor"],
+      "codes": ["X.bucket_cap"],
       "agent_running_s": 0,
       "sm": "2.8; the events of 6.1's 14:00 row; cycles 2 to 15 have the same events, 12 minutes apart",
       "derived": ["credited_s", "credit", "uncredited", "agent_running_s"],
@@ -882,7 +883,7 @@
         "p_0eccb85aa257": {"READ": 30}
       },
       "uncredited": null,
-      "codes": ["X.no_anchor"],
+      "codes": ["X.bucket_cap"],
       "agent_running_s": 0,
       "sm": "2.8; the events of 6.1's 14:08 row; cycles 2 to 15 have the same events, 12 minutes apart",
       "derived": ["credited_s", "credit", "uncredited", "agent_running_s"],
@@ -907,7 +908,7 @@
         "p_0eccb85aa257": {"P": 20}
       },
       "uncredited": null,
-      "codes": ["X.no_anchor"],
+      "codes": ["X.bucket_cap"],
       "agent_running_s": 0,
       "sm": "2.8; the events of 6.1's 14:00 row; cycles 2 to 15 have the same events, 12 minutes apart",
       "derived": ["credited_s", "credit", "uncredited", "agent_running_s"],
@@ -1028,7 +1029,7 @@
         "p_0eccb85aa257": {"READ": 30}
       },
       "uncredited": null,
-      "codes": ["X.no_anchor"],
+      "codes": ["X.bucket_cap"],
       "agent_running_s": 0,
       "sm": "2.8; the events of 6.1's 14:08 row; cycles 2 to 15 have the same events, 12 minutes apart",
       "derived": ["credited_s", "credit", "uncredited", "agent_running_s"],
@@ -1053,7 +1054,7 @@
         "p_0eccb85aa257": {"P": 20}
       },
       "uncredited": null,
-      "codes": ["X.no_anchor"],
+      "codes": ["X.bucket_cap"],
       "agent_running_s": 0,
       "sm": "2.8; the events of 6.1's 14:00 row; cycles 2 to 15 have the same events, 12 minutes apart",
       "derived": ["credited_s", "credit", "uncredited", "agent_running_s"],
@@ -1174,7 +1175,7 @@
         "p_0eccb85aa257": {"READ": 30}
       },
       "uncredited": null,
-      "codes": ["X.no_anchor"],
+      "codes": ["X.bucket_cap"],
       "agent_running_s": 0,
       "sm": "2.8; the events of 6.1's 14:08 row; cycles 2 to 15 have the same events, 12 minutes apart",
       "derived": ["credited_s", "credit", "uncredited", "agent_running_s"],
@@ -1199,7 +1200,7 @@
         "p_0eccb85aa257": {"P": 20}
       },
       "uncredited": null,
-      "codes": ["X.no_anchor"],
+      "codes": ["X.bucket_cap"],
       "agent_running_s": 0,
       "sm": "2.8; the events of 6.1's 14:00 row; cycles 2 to 15 have the same events, 12 minutes apart",
       "derived": ["credited_s", "credit", "uncredited", "agent_running_s"],
@@ -1320,7 +1321,7 @@
         "p_0eccb85aa257": {"READ": 30}
       },
       "uncredited": null,
-      "codes": ["X.no_anchor"],
+      "codes": ["X.bucket_cap"],
       "agent_running_s": 0,
       "sm": "2.8; the events of 6.1's 14:08 row; cycles 2 to 15 have the same events, 12 minutes apart",
       "derived": ["credited_s", "credit", "uncredited", "agent_running_s"],
@@ -1345,7 +1346,7 @@
         "p_0eccb85aa257": {"P": 20}
       },
       "uncredited": null,
-      "codes": ["X.no_anchor"],
+      "codes": ["X.bucket_cap"],
       "agent_running_s": 0,
       "sm": "2.8; the events of 6.1's 14:00 row; cycles 2 to 15 have the same events, 12 minutes apart",
       "derived": ["credited_s", "credit", "uncredited", "agent_running_s"],
@@ -1466,7 +1467,7 @@
         "p_0eccb85aa257": {"READ": 30}
       },
       "uncredited": null,
-      "codes": ["X.no_anchor"],
+      "codes": ["X.bucket_cap"],
       "agent_running_s": 0,
       "sm": "2.8; the events of 6.1's 14:08 row; cycles 2 to 15 have the same events, 12 minutes apart",
       "derived": ["credited_s", "credit", "uncredited", "agent_running_s"],
@@ -1491,7 +1492,7 @@
         "p_0eccb85aa257": {"P": 20}
       },
       "uncredited": null,
-      "codes": ["X.no_anchor"],
+      "codes": ["X.bucket_cap"],
       "agent_running_s": 0,
       "sm": "2.8; the events of 6.1's 14:00 row; cycles 2 to 15 have the same events, 12 minutes apart",
       "derived": ["credited_s", "credit", "uncredited", "agent_running_s"],
@@ -1612,7 +1613,7 @@
         "p_0eccb85aa257": {"READ": 30}
       },
       "uncredited": null,
-      "codes": ["X.no_anchor"],
+      "codes": ["X.bucket_cap"],
       "agent_running_s": 0,
       "sm": "2.8; the events of 6.1's 14:08 row; cycles 2 to 15 have the same events, 12 minutes apart",
       "derived": ["credited_s", "credit", "uncredited", "agent_running_s"],
@@ -1637,7 +1638,7 @@
         "p_0eccb85aa257": {"P": 20}
       },
       "uncredited": null,
-      "codes": ["X.no_anchor"],
+      "codes": ["X.bucket_cap"],
       "agent_running_s": 0,
       "sm": "2.8; the events of 6.1's 14:00 row; cycles 2 to 15 have the same events, 12 minutes apart",
       "derived": ["credited_s", "credit", "uncredited", "agent_running_s"],
@@ -1758,7 +1759,7 @@
         "p_0eccb85aa257": {"READ": 30}
       },
       "uncredited": null,
-      "codes": ["X.no_anchor"],
+      "codes": ["X.bucket_cap"],
       "agent_running_s": 0,
       "sm": "2.8; the events of 6.1's 14:08 row; cycles 2 to 15 have the same events, 12 minutes apart",
       "derived": ["credited_s", "credit", "uncredited", "agent_running_s"],
@@ -1783,7 +1784,7 @@
         "p_0eccb85aa257": {"P": 20}
       },
       "uncredited": null,
-      "codes": ["X.no_anchor"],
+      "codes": ["X.bucket_cap"],
       "agent_running_s": 0,
       "sm": "2.8; the events of 6.1's 14:00 row; cycles 2 to 15 have the same events, 12 minutes apart",
       "derived": ["credited_s", "credit", "uncredited", "agent_running_s"],
@@ -1904,7 +1905,7 @@
         "p_0eccb85aa257": {"READ": 30}
       },
       "uncredited": null,
-      "codes": ["X.no_anchor"],
+      "codes": ["X.bucket_cap"],
       "agent_running_s": 0,
       "sm": "2.8; the events of 6.1's 14:08 row; cycles 2 to 15 have the same events, 12 minutes apart",
       "derived": ["credited_s", "credit", "uncredited", "agent_running_s"],
@@ -1929,7 +1930,7 @@
         "p_0eccb85aa257": {"P": 20}
       },
       "uncredited": null,
-      "codes": ["X.no_anchor"],
+      "codes": ["X.bucket_cap"],
       "agent_running_s": 0,
       "sm": "2.8; the events of 6.1's 14:00 row; cycles 2 to 15 have the same events, 12 minutes apart",
       "derived": ["credited_s", "credit", "uncredited", "agent_running_s"],
@@ -2050,7 +2051,7 @@
         "p_0eccb85aa257": {"READ": 30}
       },
       "uncredited": null,
-      "codes": ["X.no_anchor"],
+      "codes": ["X.bucket_cap"],
       "agent_running_s": 0,
       "sm": "2.8; the events of 6.1's 14:08 row; cycles 2 to 15 have the same events, 12 minutes apart",
       "derived": ["credited_s", "credit", "uncredited", "agent_running_s"],
@@ -2075,7 +2076,7 @@
         "p_0eccb85aa257": {"P": 20}
       },
       "uncredited": null,
-      "codes": ["X.no_anchor"],
+      "codes": ["X.bucket_cap"],
       "agent_running_s": 0,
       "sm": "2.8; the events of 6.1's 14:00 row; cycles 2 to 15 have the same events, 12 minutes apart",
       "derived": ["credited_s", "credit", "uncredited", "agent_running_s"],

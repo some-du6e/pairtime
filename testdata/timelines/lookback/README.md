@@ -18,7 +18,12 @@ Each case is a directory with the files of [`../README.md`](../README.md)'s form
 
 - **Events** are what a transcript reader writes: harness events only, `source` and `via` `log`, with no `os.*`, `editor.activity`, `shell.command` or `git.change`. `seq` starts at 1, because lookback runs at the agent's first start. The two SM cases take their records from the live fixtures' `events.jsonl`, keeping each record's time, keys and payload, so they change when those files do.
 - **expected.json** has `evidence` `C`, `witness` `backfilled` and `input_keys` false, since no sample exists. `stated` is empty, because SM states no lookback numbers. Rows credit only `P`, `ANS`, `GO`, `Q`, `PA`, `INT` and `READ`: there is nothing to give `E`, `NAV`, `CMD`, `TEST`, `G` or `LOOKUP`, and lookback never credits reading while an agent runs, so never `SUP`.
-- **Uncredited codes.** A second in an agent turn that nothing credits is `X.agent_only`. SM decides no code for a second outside every window with no agent running (the erratum's point 2), nor whether a stop-hook turn's seconds are `X.automated` (WP-FX1's 6.6 erratum, point 1). A row with any such second has `uncredited` null, lists the candidate codes in `codes` and names the erratum. Scorer tests check its credit and leave its uncredited seconds alone.
+- **Uncredited codes.** A second in an agent turn that nothing credits is `X.agent_only`. Three other kinds of second wait on an erratum, and a row with any of them has `uncredited` null, lists their codes in `codes` and names the erratum:
+  - a second between a stop and the prompt that follows within 600 s, which only the 120 s cap keeps from being read, gets `X.bucket_cap` (the lookback erratum's point 2);
+  - a second outside every window and reading span, with no agent running, gets `X.no_anchor`, the same point's proposal;
+  - a second in a stop-hook turn gets `X.automated` or `X.agent_only` (WP-FX1's 6.6 erratum, point 1).
+
+  Scorer tests check such a row's credit and leave its uncredited seconds alone. `check_rows` in lookback.py checks each row's codes against the seconds the replay finds in it.
 - **anchors.json** holds prompts and permission answers only, all level C. A prompt's `lead_s` is its typing time, `typed_len_est / 1.5`, and a permission answer's is its wait, at most 60 s, with a 10 s trail.
 - **README.md** works every row out by hand in two kinds of table, which the Go test and gen.py both parse:
   - `| Minute | Credited | Reasons | Arithmetic |`. Minute is a row's `local`, such as `14:00` or `14:09-14:11`. Reasons lists `REASON seconds` items, each with the project's name first when the case has more than one project, or says `none`. Each such row must equal the row of `expected.json` with that `local`.

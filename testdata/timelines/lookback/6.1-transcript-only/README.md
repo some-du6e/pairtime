@@ -23,7 +23,7 @@ Cycle 1:
 
 | Minute | Credited | Reasons | Arithmetic |
 |---|---|---|---|
-| 14:00 | 20 | `P` 20 | The 14:04:00 prompt has 300 typed characters. SM 2.8 keeps only its typing time, 300 / 1.5 = 200 s, so its lead starts at 14:00:40. Nothing covers 14:00:00 to 14:00:40, and SM decides no code for those 40 s |
+| 14:00 | 20 | `P` 20 | The 14:04:00 prompt has 300 typed characters. SM 2.8 keeps only its typing time, 300 / 1.5 = 200 s, so its lead starts at 14:00:40. No stop comes before it, so nothing covers 14:00:00 to 14:00:40, and SM decides no code for those 40 s |
 | 14:01 | 60 | `P` 60 | The same lead |
 | 14:02 | 60 | `P` 60 | The same lead |
 | 14:03 | 60 | `P` 60 | The same lead, to the submit at 14:04:00. 20 + 60 + 60 + 60 = 200 |
@@ -31,14 +31,14 @@ Cycle 1:
 | 14:05 | 25 | `PA` 25 | Asked at 14:05:10 and answered at 14:05:25. The 15 s wait is under the 60 s cap, and the 10 s trail follows: 15 + 10 = 25, from 14:05:10 to 14:05:35. `X.agent_only` 10 + 25 = 35 |
 | 14:06 | 30 | `READ` 30 | The agent stops at 14:06:30. The next prompt comes at 14:16:00, 570 s later, inside 600 s, so the turn's output counts as reading from the stop. `X.agent_only` 30 before it |
 | 14:07 | 60 | `READ` 60 | The turn filled its bucket with 20 + 15 + 15 + 225 + 225 + 53 1/3 = 553 1/3 s, and lookback keeps 120 of it |
-| 14:08 | 30 | `READ` 30 | 30 + 60 + 30 = 120, the cap, reached at 14:08:30. SM decides no code for the other 30 s |
+| 14:08 | 30 | `READ` 30 | 30 + 60 + 30 = 120, the cap, reached at 14:08:30. The output would last until the next prompt's lead, so only the cap keeps the other 30 s from being read. The erratum proposes `X.bucket_cap` for them |
 | 14:09-14:11 | 0 | none | Nothing is credited and no agent runs, so there is no bucket |
 
-Cycles 2 to 14 repeat cycle 1, each 12 minutes later. Each stop is followed by the next prompt 570 s later, cycle 6's included. Cycle 15 has no prompt after it:
+Cycles 2 to 14 repeat cycle 1, each 12 minutes later. Each stop is followed by the next prompt 570 s later, cycle 6's included. Only the codes of the first minute differ. From cycle 2 on, its first 40 s lie between the stop before them and the prompt, so the cap cuts them, as it cuts 14:08's last 30 s. Cycle 15 has no prompt after it:
 
 | Minute | Credited | Reasons | Arithmetic |
 |---|---|---|---|
-| 16:48 | 20 | `P` 20 | The 16:52:00 prompt's lead, 200 s from 16:48:40 |
+| 16:48 | 20 | `P` 20 | The 16:52:00 prompt's lead, 200 s from 16:48:40. The cap cuts the 40 s before it, as in cycles 2 to 14 |
 | 16:49 | 60 | `P` 60 | The same lead |
 | 16:50 | 60 | `P` 60 | The same lead |
 | 16:51 | 60 | `P` 60 | The same lead, to the submit at 16:52:00 |
@@ -77,7 +77,7 @@ All 5,055 s are AI-assisted (`P`, `PA`, `READ`). There is no hand work, because 
 
 - **Reading starts at the stop.** SM 2.8 credits reading "between a stop and a human prompt that follows within 600 s", and here the next prompt follows each stop 570 s later. Nothing else wants those seconds, so the bucket drains from the stop, one second per second, as SM 2.4 drains it, and the 120 s end at C+8:30.
 - **The permission's trail stays.** SM 2.8 changes the permission answer's lead, its wait, to at most 60 s, and says nothing about its 10 s trail, so the trail is SM 2.3's. Without the trail each cycle would credit 15 s of `PA`, not 25, and the afternoon 4,905 s. That is the erratum's point 5.
-- **Codes.** Seconds in an agent turn that nothing credits are `X.agent_only` (SM 5.2). Seconds outside every lookback window when no agent runs fit no code in SM 5.2, because `X.absent` and `X.no_anchor` both describe presence that lookback doesn't know. Rows with such seconds have `uncredited` null, list the erratum's proposal, `X.no_anchor`, in `codes`, and name the erratum. This is point 2.
+- **Codes.** Seconds in an agent turn that nothing credits are `X.agent_only` (SM 5.2). The other uncredited seconds are the erratum's point 2, so their rows have `uncredited` null, list a code in `codes` and name the erratum. 980 of them lie between a stop and the next prompt, where only the 120 s cap stops the reading: 30 s after each of cycles 1 to 14's reading and the first 40 s of cycles 2 to 15. SM 2.8 calls that 120 s the bucket cap, so those rows list `X.bucket_cap`. The other 70 s, cycle 1's first 40 and the 30 after cycle 15's stop, lie outside every window and reading span. No SM 5.2 code fits them, because `X.absent` and `X.no_anchor` both describe presence that lookback doesn't know, so their rows list the erratum's proposal, `X.no_anchor`.
 - **The envelope.** Each record keeps the live record's time, session, project, turn and payload, with `source` and `via` set to `log`. `seq` starts at 1, because lookback runs at the agent's first start. `mono` and `boot_id` are the live fixture's: a transcript has no monotonic reading, and no lookback rule reads one.
 - **`session.start`** keeps the live fields, `entrypoint` `cli`, `parent_class` `terminal_app` and a TTY, so SM 2.2 rule 4 sees an interactive session. A transcript may not record all of them. The erratum's point 4 asks what lookback does when it can't.
 
