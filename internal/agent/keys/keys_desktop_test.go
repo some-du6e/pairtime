@@ -55,7 +55,7 @@ func deviceItems(t *testing.T, fake *fakesecret.Service, dir string) []fakesecre
 	return out
 }
 
-func TestSecretService(t *testing.T) {
+func TestDesktopSecretService(t *testing.T) {
 	tests := []struct {
 		name string
 		run  func(t *testing.T, fake *fakesecret.Service, opts Options)

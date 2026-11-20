@@ -43,7 +43,7 @@ func itemsFor(fake *fakesecret.Service, service, account string) []fakesecret.It
 	return out
 }
 
-func TestSecretServiceAgainstFake(t *testing.T) {
+func TestDesktopSecretServiceAgainstFake(t *testing.T) {
 	fake := startFake(t)
 	ss := SecretService{Service: "pairtime-test"}
 	tests := []struct {
