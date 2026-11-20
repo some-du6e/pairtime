@@ -265,9 +265,19 @@ func (d *deriver) harnessAnchor(best int, pos []int) {
 		case typed >= d.r.substantive:
 			class = event.ClassSubstantive
 		}
+		// SM 2.2 rule 7, as for a prompt of its class (SM 2.3): more than
+		// the lead's input slots could have typed at TYPING_MAX_CPS is
+		// pasted, and the typing part is computed from what they could.
+		// agent.queue carries no pasted_chars, so this is its only bound.
 		think, typing := d.leadParts(class, e.Via, typed)
+		a.Origin = event.OriginHumanTyped
+		active := d.pres.inputSlots(e.T-think-typing, e.T) * event.SlotMS / 1000
+		if most := d.r.typingMaxCPS * active; typed > most {
+			a.Origin = event.OriginHumanPasted
+			_, typing = d.leadParts(class, e.Via, most)
+		}
 		a.Kind, a.Reason, a.TurnKey = event.AnchorQueuedMessage, event.ReasonQueued, p.TurnKey
-		a.Origin, a.PromptClass = event.OriginHumanTyped, class
+		a.PromptClass = class
 		a.LeadMS, a.TypingMS = think+typing, typing
 	case *event.AgentPermission:
 		// decided_by user, an answer no faster than PA_MIN_LATENCY_MS, and

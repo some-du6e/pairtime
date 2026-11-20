@@ -169,7 +169,16 @@ func TestActs(t *testing.T) {
 				return b.harness(at(58), event.ViaHook, "s_1", "p_1", &event.AgentQueue{TurnKey: "t_q", LenChars: 40})
 			},
 			// 40 / 1.5 = 26.67 s, rounded to 27.
-			want: Anchor{Kind: event.AnchorQueuedMessage, Reason: event.ReasonQueued, LeadMS: 147_000, Level: event.EvidenceB}},
+			want: Anchor{Kind: event.AnchorQueuedMessage, Reason: event.ReasonQueued, LeadMS: 147_000, Level: event.EvidenceB,
+				Origin: event.OriginHumanTyped}},
+		{name: "a queued message longer than its lead's input slots could type is human_pasted, its typing part cut by rule 7",
+			app: event.AppTerminal, act: func(b *tl) event.Event {
+				return b.harness(at(58), event.ViaHook, "s_1", "p_1", &event.AgentQueue{TurnKey: "t_q", LenChars: 450})
+			},
+			// One input slot: 15 s at 15 characters a second is 225, and
+			// 225 / 1.5 = 150 s of typing.
+			want: Anchor{Kind: event.AnchorQueuedMessage, Reason: event.ReasonQueued, LeadMS: 120_000 + 150_000,
+				Level: event.EvidenceB, Origin: event.OriginHumanPasted}},
 		{name: "an interactive command typed in a shell credits CMD_LEAD_S, its run up to CMD_WATCH_MAX_S and CMD_TRAIL_S after it",
 			app: event.AppTerminal, act: shell(event.CmdRun, true),
 			want: Anchor{Kind: event.AnchorTypedCommand, Reason: event.ReasonCommand, LeadMS: 60_000, WatchMS: 300_000,
@@ -207,7 +216,8 @@ func TestActs(t *testing.T) {
 				t.Fatalf("no anchor, want %s", c.want.Kind)
 			case ok:
 				if a.Kind != c.want.Kind || a.Reason != c.want.Reason || a.LeadMS != c.want.LeadMS ||
-					a.TrailMS != c.want.TrailMS || a.WatchMS != c.want.WatchMS || a.Level != c.want.Level {
+					a.TrailMS != c.want.TrailMS || a.WatchMS != c.want.WatchMS || a.Level != c.want.Level ||
+					(c.want.Origin != "" && a.Origin != c.want.Origin) {
 					t.Errorf("anchor %+v, want kind %s reason %s lead %d trail %d watch %d level %s", a, c.want.Kind,
 						c.want.Reason, c.want.LeadMS, c.want.TrailMS, c.want.WatchMS, c.want.Level)
 				}
