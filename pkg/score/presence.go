@@ -107,8 +107,9 @@ const idleMaxS = 1e12
 // milliseconds, rounding to the nearest. It goes through the decimal text,
 // which strconv rounds exactly, so the result doesn't depend on float
 // arithmetic. event.Validate asks only that an idle time be finite and not
-// negative, so one at or past idleMaxS reads as idleMaxS, a long idle:
-// garbage must not pass for fresh input.
+// negative, so one at or past idleMaxS reads as idleMaxS, a long idle, and
+// so does any text strconv can't read back: garbage must not pass for fresh
+// input.
 func msOf(sec float64) int64 {
 	if !(sec < idleMaxS) {
 		return idleMaxS * 1000
@@ -119,7 +120,7 @@ func msOf(sec float64) int64 {
 	w, err1 := strconv.ParseInt(whole, 10, 64)
 	f, err2 := strconv.ParseInt(frac, 10, 64)
 	if err1 != nil || err2 != nil {
-		return 0
+		return idleMaxS * 1000
 	}
 	if neg {
 		return -(w*1000 + f)

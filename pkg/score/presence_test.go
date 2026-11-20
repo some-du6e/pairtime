@@ -257,6 +257,8 @@ func TestMsOf(t *testing.T) {
 		{"an idle time too large for int64 milliseconds reads as idleMaxS, a long idle, not as input at the sample", 1e19, idleMaxS * 1000},
 		{"one that would overflow the conversion to milliseconds reads as idleMaxS too", 9.3e15, idleMaxS * 1000},
 		{"one just under idleMaxS keeps its value", 999_999_999_999, 999_999_999_999_000},
+		{"text strconv can't read back, from a value event.Validate would reject, reads as idleMaxS, never as input at the sample",
+			-1e19, idleMaxS * 1000},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			if got := msOf(c.in); got != c.want {
