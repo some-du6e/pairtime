@@ -3,6 +3,7 @@
 package hookpath
 
 import (
+	"strconv"
 	"time"
 
 	"golang.org/x/sys/unix"
@@ -15,11 +16,16 @@ func readOS() ([]platform.Proc, error) { return darwin.Processes() }
 
 // monoNow reads CLOCK_MONOTONIC, which on macOS goes on counting while the
 // Mac sleeps (clock_gettime(3)), and the UUID the kernel makes for each
-// boot.
+// boot, kern.bootsessionuuid. A kernel without that sysctl names the boot
+// by kern.boottime instead, as hex microseconds.
 func monoNow() (int64, string) {
 	boot, err := unix.Sysctl("kern.bootsessionuuid")
-	if err != nil {
-		return 0, ""
+	if err != nil || boot == "" {
+		tv, terr := unix.SysctlTimeval("kern.boottime")
+		if terr != nil {
+			return 0, ""
+		}
+		boot = "m" + strconv.FormatInt(tv.Nano()/int64(time.Microsecond), 16)
 	}
 	var ts unix.Timespec
 	if err := unix.ClockGettime(unix.CLOCK_MONOTONIC, &ts); err != nil {

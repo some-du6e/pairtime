@@ -4,9 +4,12 @@
 # process rather than by the agent (DESIGN 9.7; docs/PLAN.md, WP-AG1). An
 # idle agent's working set must stay under 25 MB and its CPU time under
 # 0.1% of the wall time. Private bytes, threads, handles and wakeups are
-# reported with no gate yet, and ci.yml gates the binary size. A PR that
-# touches the client gets a 3-minute idle span; the nightly run, release
-# tags and runs by hand get 10 minutes:
+# reported with no gate yet, and ci.yml gates the binary size. After the
+# idle span, 200 warm `pairtime hook` calls, each timed by this workflow
+# from process start to exit, must have a p95 under 25 ms, half the R8
+# claim (DESIGN 9.7; docs/PLAN.md, WP-AG3). A PR that touches the client
+# gets a 3-minute idle span; the nightly run, release tags and runs by hand
+# get 10 minutes:
 #
 #   gh workflow run footprint.yml --ref <branch> [-f minutes=N]
 name: footprint
@@ -159,6 +162,47 @@ jobs:
             if ($after.Peak -gt $before.Peak -and $after.Peak -gt $highest) { $highest = $after.Peak }
             $status = Invoke-RestMethod -Uri "$base/v1/status" -Headers $headers
 
+            # The hook's round trip, as a harness sees it: 200 warm calls of
+            # pairtime hook in exec form with an event on stdin, each timed
+            # from process start to exit, with the agent up. Ten calls first
+            # warm the file cache and aren't counted. Each must exit 0 and
+            # print nothing, which a harness reads as hook output (CP 6.2).
+            $hookEvent = '{"session_id":"footprint","hook_event_name":"UserPromptSubmit","prompt":"time this hook"}'
+            $hookArgs = @('hook', '--harness', 'claude_code', '--event', 'UserPromptSubmit')
+            $warmup = 10
+            $hookCalls = 200
+            $hookTimes = [System.Collections.Generic.List[double]]::new()
+            $hookBad = 0
+            for ($i = 0; $i -lt $warmup + $hookCalls; $i++) {
+              $psi = [System.Diagnostics.ProcessStartInfo]::new($exe)
+              foreach ($a in $hookArgs) { $psi.ArgumentList.Add($a) }
+              $psi.UseShellExecute = $false
+              $psi.CreateNoWindow = $true
+              $psi.RedirectStandardInput = $true
+              $psi.RedirectStandardOutput = $true
+              $psi.RedirectStandardError = $true
+              $sw = [System.Diagnostics.Stopwatch]::StartNew()
+              $p = [System.Diagnostics.Process]::Start($psi)
+              $p.StandardInput.Write($hookEvent)
+              $p.StandardInput.Close()
+              $hookOut = $p.StandardOutput.ReadToEnd()
+              $hookErr = $p.StandardError.ReadToEnd()
+              $p.WaitForExit()
+              $sw.Stop()
+              if ($p.ExitCode -ne 0 -or $hookOut -ne '' -or $hookErr -ne '') {
+                $hookBad++
+                Write-Host "hook call $i exited $($p.ExitCode), stdout '$hookOut', stderr '$hookErr'"
+              }
+              if ($i -ge $warmup) { $hookTimes.Add($sw.Elapsed.TotalMilliseconds) }
+              $p.Dispose()
+            }
+            $sorted = @($hookTimes | Sort-Object)
+            $hookP95 = $sorted[[math]::Ceiling(0.95 * $sorted.Count) - 1]
+            $hookP50 = $sorted[[math]::Ceiling(0.50 * $sorted.Count) - 1]
+            $hookMax = $sorted[-1]
+            $hookStatus = Invoke-RestMethod -Uri "$base/v1/status" -Headers $headers
+            $hookStored = $hookStatus.ipc.stored - $status.ipc.stored
+
             $wall = ($after.Time - $before.Time).TotalSeconds
             $cpuShare = ($after.Cpu - $before.Cpu) / $wall
             $minutes = $wall / 60
@@ -182,10 +226,13 @@ jobs:
 
             $budgetRss = 25000000
             $budgetCpu = 0.001
+            $budgetHookMs = 25
             $rssOk = $highest -lt $budgetRss
             $cpuOk = $cpuShare -lt $budgetCpu
             $secondOk = $secondStatus -eq 3
             $stopOk = ($stopStatus -eq 0) -and ($pidAfter -eq 0)
+            $hookOk = $hookP95 -lt $budgetHookMs
+            $hookQuietOk = $hookBad -eq 0
             $rows = @(
               "### Idle agent on windows-latest, $([math]::Round($minutes, 1)) minutes",
               '',
@@ -201,12 +248,16 @@ jobs:
               "| scheduler wakeups | $($status.wakeups) | none |",
               "| binary size | $((Get-Item $exe).Length) bytes | ci.yml |",
               "| a second agent's exit status | $secondStatus | 3: $(Verdict $secondOk) |",
-              "| clean stop: exit status, pid in port.json | $stopStatus, $pidAfter | 0, 0: $(Verdict $stopOk) |"
+              "| clean stop: exit status, pid in port.json | $stopStatus, $pidAfter | 0, 0: $(Verdict $stopOk) |",
+              "| hook p95 over $hookCalls warm calls, timed around the process | $([math]::Round($hookP95, 1)) ms | under $budgetHookMs ms: $(Verdict $hookOk) |",
+              "| hook p50, slowest | $([math]::Round($hookP50, 1)) ms, $([math]::Round($hookMax, 1)) ms | none |",
+              "| hook calls that exited non-zero or printed anything | $hookBad | 0: $(Verdict $hookQuietOk) |",
+              "| hook calls the agent stored over its socket by the end | $hookStored of $($warmup + $hookCalls) | none: a call the agent acks late is spooled and drained within a minute |"
             )
             $summary = $rows -join "`n"
             $summary | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
             Write-Host $summary
-            if (-not ($rssOk -and $cpuOk -and $secondOk -and $stopOk)) {
+            if (-not ($rssOk -and $cpuOk -and $secondOk -and $stopOk -and $hookOk -and $hookQuietOk)) {
               throw 'the agent failed a footprint gate; see the table above'
             }
           } catch {
