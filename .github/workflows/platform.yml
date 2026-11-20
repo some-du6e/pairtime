@@ -15,9 +15,12 @@ on:
       - internal/install/**
       - internal/agent/ipc/**
       # The agent's platform code: the lock, the data directories and
-      # private files (home), and the loopback server (localhttp).
+      # private files (home), the loopback server (localhttp), and the
+      # device keystore, which picks DPAPI, the Keychain or the Secret
+      # Service by OS (keys).
       - internal/agent/home/**
       - internal/agent/localhttp/**
+      - internal/agent/keys/**
       - cmd/pairtime/**
       - .github/workflows/platform.yml
       - tools/ci/test_existing.sh
@@ -36,7 +39,7 @@ permissions:
 env:
   # pairtime never uses cgo (AGENTS.md).
   CGO_ENABLED: "0"
-  PLATFORM_DIRS: internal/platform internal/install internal/agent/ipc internal/agent/home internal/agent/localhttp cmd/pairtime
+  PLATFORM_DIRS: internal/platform internal/install internal/agent/ipc internal/agent/home internal/agent/localhttp internal/agent/keys cmd/pairtime
 
 jobs:
   windows:
