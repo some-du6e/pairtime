@@ -676,6 +676,122 @@ func TestShownNotificationIsSavedForTheNextStart(t *testing.T) {
 	}
 }
 
+// A decision is in state.json as soon as it is made, not only after a
+// clean stop, so an agent that crashes, is killed or loses power doesn't
+// show a session's note on its next start.
+func TestDecisionsAreSavedWhenMade(t *testing.T) {
+	tests := []struct {
+		name      string
+		settings  config.Notifications
+		lastShown string // what state.json says before the first start, as a clock time; "" for nothing
+		ago       time.Duration
+		want      Outcome
+	}{
+		{name: "a session dropped while notifications are off", settings: config.Notifications{Off: true}, want: TurnedOff},
+		{name: "a session dropped for quiet hours", settings: config.Notifications{Quiet: mustQuiet("19:00-21:00")}, want: InQuietHours},
+		{name: "a session that ended too long ago", ago: Fresh() + time.Second, want: Stale},
+		{name: "a session too soon after the last notification", lastShown: "19:50:00", want: TooSoon},
+		{name: "a session whose note was shown", want: Queued},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			name := filepath.Join(t.TempDir(), "state.json")
+			st, _, err := state.Open(name)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tt.lastShown != "" {
+				if err := st.Put(memoryKey, remembered{LastShown: at(tt.lastShown)}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			first := newRig(tt.settings, nil, st)
+			defer first.n.Close()
+			first.run(t, []step{{at: "20:00:00", notify: "s1", ago: tt.ago, want: tt.want}})
+
+			// The first agent never stopped cleanly: the next one reads
+			// what is on disk.
+			onDisk, _, err := state.Open(name)
+			if err != nil {
+				t.Fatal(err)
+			}
+			next := newRig(config.Notifications{}, nil, onDisk)
+			defer next.n.Close()
+			next.run(t, []step{{at: "20:01:00", notify: "s1", want: Repeated}})
+		})
+	}
+}
+
+// putLog is a Memory that keeps every snapshot put into it, and takes a
+// moment over each, so that two Puts in flight at once would likely land
+// out of order.
+type putLog struct {
+	mu   sync.Mutex
+	puts []remembered
+}
+
+func (m *putLog) Get(string, any) (bool, error) { return false, nil }
+
+func (m *putLog) Put(_ string, v any) error {
+	r, ok := v.(remembered)
+	if !ok {
+		return fmt.Errorf("Put(%T), want a remembered", v)
+	}
+	time.Sleep(time.Millisecond)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.puts = append(m.puts, r)
+	return nil
+}
+
+func (m *putLog) Save() error { return nil }
+
+func TestMemoryNeverGoesBack(t *testing.T) {
+	tests := []struct {
+		name  string
+		notes int
+	}{
+		{name: "every Put holds the newest session and last notification of the one before, or newer ones", notes: 40},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mem := &putLog{}
+			clock := &fakeClock{t: at("08:00:00")}
+			n := New(Options{Backend: &fakeBackend{}, Memory: mem, Now: clock.Now})
+			for i := range tt.notes {
+				// Fresh apart, so that every note that finds the notifier
+				// free is shown and moves the last notification on.
+				clock.Set(at("08:00:00").Add(time.Duration(i) * Fresh()))
+				n.Notify(Note{Session: fmt.Sprintf("s%03d", i), Ended: clock.Now()})
+			}
+			n.wg.Wait()
+			n.Close()
+
+			mem.mu.Lock()
+			defer mem.mu.Unlock()
+			if len(mem.puts) == 0 {
+				t.Fatal("nothing was put into Memory")
+			}
+			newest := func(r remembered) string {
+				if len(r.Sessions) == 0 {
+					return ""
+				}
+				return r.Sessions[len(r.Sessions)-1]
+			}
+			for i := 1; i < len(mem.puts); i++ {
+				prev, cur := mem.puts[i-1], mem.puts[i]
+				if newest(cur) < newest(prev) || cur.LastShown.Before(prev.LastShown) {
+					t.Errorf("Put %d has newest session %s and last notification %s, after Put %d's %s and %s",
+						i, newest(cur), cur.LastShown.Format(time.TimeOnly), i-1, newest(prev), prev.LastShown.Format(time.TimeOnly))
+				}
+			}
+			if last, want := newest(mem.puts[len(mem.puts)-1]), fmt.Sprintf("s%03d", tt.notes-1); last != want {
+				t.Errorf("the last Put's newest session = %s, want %s", last, want)
+			}
+		})
+	}
+}
+
 func TestFreshIsSessionGapFromTheNewestTable(t *testing.T) {
 	tables := params.Tables()
 	newest := tables[len(tables)-1]

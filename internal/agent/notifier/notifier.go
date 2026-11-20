@@ -228,7 +228,9 @@ type Options struct {
 	// the defaults: on, with no quiet hours.
 	Settings func() config.Notifications
 	// Memory keeps the last notification time and recent sessions across
-	// restarts. Nil keeps them for this process only.
+	// restarts. Each decision and each notification shown is put and saved
+	// there as it happens, off the caller's path. Nil keeps them for this
+	// process only.
 	Memory Memory
 	// Now is the clock. Quiet hours read the clock time in the location of
 	// the times it returns. Nil means localtime.Now, which reads the
@@ -258,7 +260,13 @@ type Notifier struct {
 	problem  func(string)
 	result   func(Note, Outcome)
 
-	wg sync.WaitGroup // the goroutine that runs Show, while there is one
+	// wg counts the goroutines that run Show and save Memory, while there
+	// are any.
+	wg sync.WaitGroup
+	// putMu is held from each snapshot of what Memory keeps to its Put, so
+	// the Puts land in the order of their snapshots and Memory never goes
+	// back to an older one. It is taken before mu, never while mu is held.
+	putMu sync.Mutex
 
 	mu        sync.Mutex
 	closed    bool
@@ -268,6 +276,8 @@ type Notifier struct {
 	cancel    context.CancelFunc // ends that Show early
 	away      bool               // the last Show found the screen locked
 	waiting   *Note              // the newest note not yet shown
+	saving    bool               // a goroutine is saving Memory
+	dirty     bool               // what Memory keeps changed since that goroutine last looked
 }
 
 // report is a final outcome to hand to Options.Result outside the lock.
@@ -359,6 +369,9 @@ func (n *Notifier) decide(note Note, set config.Notifications, now time.Time, re
 	if len(n.sessions) > sessionsKept {
 		n.sessions = n.sessions[len(n.sessions)-sessionsKept:]
 	}
+	// The decision is made, whatever it is, so a crash before the next
+	// clean stop mustn't forget it.
+	n.persist()
 	if g := n.gate(note, set, now); g != Queued {
 		return g, nil
 	}
@@ -435,6 +448,7 @@ func (n *Notifier) run(ctx context.Context, cancel context.CancelFunc, note Note
 		switch o {
 		case Shown:
 			n.lastShown = now
+			n.persist()
 		case Waiting:
 			if n.waiting == nil {
 				n.waiting = &note
@@ -464,12 +478,10 @@ func (n *Notifier) run(ctx context.Context, cancel context.CancelFunc, note Note
 			n.showing = false
 			n.cancel = nil
 		}
-		mem := n.snapshot()
 		n.mu.Unlock()
 
 		n.logOutcome(o, err)
 		n.tellProblem(o, err)
-		n.save(mem)
 		n.finish(reports)
 		if !more {
 			return
@@ -506,9 +518,10 @@ func (n *Notifier) UserPresent() {
 }
 
 // Close stops a Show in progress, which takes down whatever it put on
-// screen, such as the Windows tray icon, and waits a moment for it to end.
-// Notes after Close are Stopped. Close keeps what the notifier remembers in
-// Memory without saving it; the agent saves state.json as it stops.
+// screen, such as the Windows tray icon, and waits a moment for it and for
+// a save of Memory to end. Notes after Close are Stopped. Close puts what
+// the notifier remembers in Memory without saving it; the agent saves
+// state.json as it stops.
 func (n *Notifier) Close() {
 	var reports []report
 	n.mu.Lock()
@@ -535,16 +548,11 @@ func (n *Notifier) Close() {
 	select {
 	case <-done:
 	case <-time.After(closeWait):
-		n.log.Warn("a notification was still on its way when the agent stopped")
+		n.log.Warn("a notification, or a save of what the notifier remembers, was still running when the agent stopped")
 	}
 	if n.memory != nil {
 		// After the wait, so a Show that ended meanwhile is counted.
-		n.mu.Lock()
-		mem := n.snapshot()
-		n.mu.Unlock()
-		if err := n.memory.Put(memoryKey, mem); err != nil {
-			n.log.Warn("couldn't keep the notifier's state", "err", err)
-		}
+		n.putMemory()
 	}
 }
 
@@ -553,17 +561,58 @@ func (n *Notifier) snapshot() remembered {
 	return remembered{LastShown: n.lastShown, Sessions: append([]string(nil), n.sessions...)}
 }
 
-// save writes mem to Memory, off the caller's path.
-func (n *Notifier) save(mem remembered) {
+// persist has what the notifier remembers saved to Memory as soon as it
+// changes, a decision or a notification shown, so a crash, a kill or a
+// power cut forgets nothing that happened before it. The save runs on a
+// goroutine, off the caller's path, since Memory's Save writes a file and
+// Put may wait for another component's Save. Changes that come while it
+// works go in its next round, so there is one such goroutine at most, and
+// none once Memory has the latest. n.mu is held.
+func (n *Notifier) persist() {
 	if n.memory == nil {
 		return
 	}
-	err := n.memory.Put(memoryKey, mem)
-	if err == nil {
-		err = n.memory.Save()
+	n.dirty = true
+	if n.saving {
+		return
 	}
-	if err != nil {
-		n.log.Warn("couldn't save the notifier's state", "err", err)
+	n.saving = true
+	n.wg.Add(1)
+	go n.saveLoop()
+}
+
+// saveLoop puts what the notifier remembers in Memory and saves it, until
+// nothing has changed since its last round.
+func (n *Notifier) saveLoop() {
+	defer n.wg.Done()
+	for {
+		n.mu.Lock()
+		if !n.dirty {
+			n.saving = false
+			n.mu.Unlock()
+			return
+		}
+		n.dirty = false
+		n.mu.Unlock()
+		n.putMemory()
+		if err := n.memory.Save(); err != nil {
+			n.log.Warn("couldn't save the notifier's state", "err", err)
+		}
+	}
+}
+
+// putMemory puts what the notifier remembers now into Memory. The snapshot
+// and the Put happen under putMu, so a Put never lands after a newer one.
+// n.mu isn't held: Put may wait for a Save that holds Memory's lock, and
+// Notify must not wait with it.
+func (n *Notifier) putMemory() {
+	n.putMu.Lock()
+	defer n.putMu.Unlock()
+	n.mu.Lock()
+	mem := n.snapshot()
+	n.mu.Unlock()
+	if err := n.memory.Put(memoryKey, mem); err != nil {
+		n.log.Warn("couldn't keep the notifier's state", "err", err)
 	}
 }
 
