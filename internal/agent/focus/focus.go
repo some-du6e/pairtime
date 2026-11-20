@@ -241,9 +241,9 @@ func (w *Watcher) Start() {
 	}
 	w.started = true
 	if w.opts.OS.Watch == nil || w.opts.OS.Read == nil {
-		// TODO(D-focus-unknown): record one os.focus with app_class
-		// unknown here once pkg/event has it (WP-EV2), so these slots
-		// credit at level C (SM 2.5). Until then nothing is recorded and
+		// TODO(WP-OS15): record one os.focus with app_class unknown here
+		// once WP-EV2 adds the value, so these slots credit at level C
+		// (SM 2.5, D-focus-unknown). Until then nothing is recorded and
 		// Status says why.
 		reason := w.opts.OS.Unknown
 		if reason == "" {
@@ -574,9 +574,10 @@ func (w *Watcher) write(f *front, at time.Time) {
 // unknown is a change to a window pairtime can't name. It records nothing
 // and says why in Status (WP-OS2 decision 2).
 //
-// TODO(D-focus-unknown): write an os.focus with app_class unknown once
-// pkg/event has it (WP-EV2), so the slots credit at level C (SM 2.5)
-// instead of crediting the window that was in front before.
+// TODO(WP-OS15): write an os.focus with app_class unknown here once
+// WP-EV2 adds the value, so the slots credit at level C (SM 2.5,
+// D-focus-unknown) instead of crediting the window that was in front
+// before.
 func (w *Watcher) unknown(at time.Time, reason string) {
 	w.cur = nil
 	w.mu.Lock()

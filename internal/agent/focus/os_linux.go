@@ -36,10 +36,10 @@ const linuxVia = "_NET_ACTIVE_WINDOW"
 // re-made. Then nothing is recorded, d's Status says why, and the window
 // last recorded stays in front for the scorer.
 //
-// TODO(D-focus-unknown): record an os.focus with app_class unknown when
-// focus is unknown from the start and whenever it turns unknown, once
-// pkg/event has it (WP-EV2) and d reports each change between known and
-// unknown focus, so those slots credit at level C (SM 2.5).
+// TODO(WP-OS15): record an os.focus with app_class unknown when focus is
+// unknown from the start and whenever it turns unknown, once WP-EV2 adds
+// the value and d reports each change between known and unknown focus, so
+// those slots credit at level C (SM 2.5, D-focus-unknown).
 func LinuxOS(d Desktop) OS {
 	o := OS{Read: linux.Processes, GOOS: platform.Linux}
 	st := d.Status().Focus
