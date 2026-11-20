@@ -141,6 +141,16 @@ func dialBus(ctx context.Context, address string, opts ...dbus.ConnOption) (*dbu
 		if conn, err = dialBusAddress(ctx, a, opts); err == nil {
 			return conn, nil
 		}
+		// A dial that gave up on its deadline reports an i/o timeout. That
+		// deadline is ctx's: the socket's write deadline is set from it,
+		// and net.Dialer has no timeout of its own here. But the socket's
+		// deadline and ctx's timer are separate, so the dial can report the
+		// timeout a moment before ctx is marked done. Wait for ctx to
+		// settle, so the caller gets its error and not the i/o timeout.
+		if _, hasDeadline := ctx.Deadline(); hasDeadline && os.IsTimeout(err) {
+			<-ctx.Done()
+			break
+		}
 	}
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
