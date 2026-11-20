@@ -101,9 +101,9 @@ var levels = []event.Evidence{event.EvidenceA, event.EvidenceB, event.EvidenceC}
 
 // buildProject turns the agent's tally for a project into what the views
 // show. With calibrating set (display.shadow), your time is left out, and
-// so is the other time but SM 4.2's loops: with what was left out, and
-// what the day or session took, your hidden time could be worked out
-// (DESIGN 6.7 step 2; SM 7.5). A code this build has no words for, from a
+// so is the other time but SM 4.2's loops, X.day_cap included: with what
+// was left out, and what the day or session took, your hidden time could
+// be worked out (D-shadow-scope; DESIGN 6.7 step 2; SM 7.5). A code this build has no words for, from a
 // newer agent, is left out too, so --json keeps to its schema and no raw
 // code reaches the terminal; its seconds stay in your time and the agent's.
 func buildProject(key, name string, t tally, calibrating bool) projectJSON {

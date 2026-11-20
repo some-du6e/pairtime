@@ -103,6 +103,11 @@ type dayProject struct {
 // sessionReply is the last work session (SM 5.3), or the one still going,
 // as GET /v1/sessions/last gives it and the agent answers
 // ipc.AskLastSession. Session is null before the first.
+//
+// While display.shadow is on, the agent leaves out every credited number,
+// every uncredited code but its own and SM 4.2's loops, and the session's
+// start and end (D-shadow-scope). A number it leaves out reads as 0 and a
+// map as empty, and the views say "calibrating".
 type sessionReply struct {
 	// Shadow is display.shadow (DESIGN 6.7 step 2).
 	Shadow  bool         `json:"shadow"`
@@ -110,10 +115,14 @@ type sessionReply struct {
 }
 
 type workSession struct {
-	Project string    `json:"project"`
-	Name    string    `json:"name"`
-	Start   time.Time `json:"start"`
-	End     time.Time `json:"end"`
+	Project string `json:"project"`
+	Name    string `json:"name"`
+	// Date is the local day the session started on, YYYY-MM-DD: all a
+	// session says of when it was while display.shadow is on
+	// (D-shadow-scope). Without it, the views take the day from Start.
+	Date  string    `json:"date,omitempty"`
+	Start time.Time `json:"start"`
+	End   time.Time `json:"end"`
 	// Open is set while the session goes on: no SESSION_GAP_S without
 	// credit since End, and no lock or suspend (DESIGN 3.8).
 	Open bool `json:"open"`

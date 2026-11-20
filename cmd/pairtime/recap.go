@@ -49,15 +49,16 @@ type recapJSON struct {
 type sessionJSON struct {
 	// Date is the local day the session started on, YYYY-MM-DD.
 	Date string `json:"date"`
-	// Start and End are the session's bounds, in UTC. While calibrating
-	// both are left out: with the time a session took, the rest of the
-	// recap would give away the credited total it hides (DESIGN 6.7 step
-	// 2; SM 7.5).
+	// Start and End are the session's bounds, in UTC, and Open says
+	// whether it goes on, End then being the end of its last counted
+	// minute so far. While calibrating all three are left out, and a
+	// session is its day and project alone (D-shadow-scope): with the time
+	// a session took, the rest of the recap would give away the credited
+	// total it hides, and whether it goes on says whether the last minute
+	// counted (DESIGN 6.7 step 2; SM 7.5).
 	Start *time.Time `json:"start,omitempty"`
 	End   *time.Time `json:"end,omitempty"`
-	// Open is set while the session goes on, and End is then the end of
-	// its last counted minute so far.
-	Open bool `json:"open"`
+	Open  *bool      `json:"open,omitempty"`
 	projectJSON
 }
 
@@ -109,18 +110,18 @@ func runRecap(args []string, stdout, stderr io.Writer) int {
 }
 
 // buildRecap turns the agent's session into the view, with its day in
-// zone. With calibrating set, the session's times are left out as well as
-// your time (buildProject).
+// zone when the agent doesn't say which day it was. With calibrating set,
+// the session's times are left out as well as your time (buildProject).
 func buildRecap(r sessionReply, calibrating bool, zone *time.Location) recapJSON {
 	out := recapJSON{V: jsonVersion, Calibrating: calibrating}
 	if s := r.Session; s != nil {
-		js := &sessionJSON{
-			Date: s.Start.In(zone).Format(time.DateOnly), Open: s.Open,
-			projectJSON: buildProject(s.Project, s.Name, s.tally, calibrating),
+		js := &sessionJSON{Date: s.Date, projectJSON: buildProject(s.Project, s.Name, s.tally, calibrating)}
+		if js.Date == "" && !s.Start.IsZero() {
+			js.Date = s.Start.In(zone).Format(time.DateOnly)
 		}
 		if !calibrating {
-			start, end := s.Start.UTC(), s.End.UTC()
-			js.Start, js.End = &start, &end
+			start, end, open := s.Start.UTC(), s.End.UTC(), s.Open
+			js.Start, js.End, js.Open = &start, &end, &open
 		}
 		out.Session = js
 	}
@@ -137,14 +138,16 @@ func writeRecap(w io.Writer, r recapJSON, zone *time.Location) {
 		return
 	}
 	head := text.KeySessionLast
-	if s.Open {
+	if s.Open != nil && *s.Open {
 		head = text.KeySessionOpen
 	}
 	fmt.Fprintln(w, text.Phrase(head, "project", s.title()))
 	switch {
 	case s.Start == nil || s.End == nil:
-		fmt.Fprintln(w, dayTitle(s.Date))
-	case s.Open:
+		if s.Date != "" {
+			fmt.Fprintln(w, dayTitle(s.Date))
+		}
+	case s.Open != nil && *s.Open:
 		start := s.Start.In(zone)
 		fmt.Fprintln(w, text.Phrase(text.KeySessionSince, "day", text.Day(start), "start", text.Clocktime(start)))
 	default:

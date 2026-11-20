@@ -763,13 +763,14 @@ pixel-forge: you 10m · Codex 30m · Claude 10m
 
 // shadowDay is a day while display.shadow is on, with time of every sort:
 // level C and pending, the agent's on its own and while nobody started it,
-// away, a loop, and the no-progress half. Its numbers appear nowhere else.
+// away, a loop, the no-progress half and credit past the day cap. Its
+// numbers appear nowhere else.
 var shadowDay = day(dayProject{Project: "p_9f2c", Name: "remind-bot", tally: tally{
 	CreditedS: 4320, PendingS: 77, CreditedByKind: map[event.Activity]float64{event.ActivityPrompting: 4320},
 	CreditedByEvidence: map[event.Evidence]float64{event.EvidenceB: 4277, event.EvidenceC: 43},
 	AgentOnlyS:         9600, AgentOnlyByHarness: map[event.Harness]float64{event.HarnessClaudeCode: 9600},
 	Uncredited: map[event.Reason]float64{event.ReasonAbsent: 615, event.ReasonNoProgress: 135, event.ReasonRewriteLoop: 240,
-		event.ReasonAgentOnly: 9000, event.ReasonAutomated: 600},
+		event.ReasonDayCap: 345, event.ReasonAgentOnly: 9000, event.ReasonAutomated: 600},
 	OnHoldS: 135,
 }})
 
@@ -934,8 +935,13 @@ func TestTodayJSONWhileCalibrating(t *testing.T) {
 			o := got.Projects[0].Other
 			return len(o) == 1 && o[0].Reason == event.ReasonRewriteLoop && o[0].Words == "Claude rewriting the same lines" && o[0].S == 240
 		}},
-		{"away and the no-progress half appear nowhere, so the credit can't be worked out from them", func() bool {
-			return !strings.Contains(out, "615") && !strings.Contains(out, "135") && !strings.Contains(out, "X.absent") && !strings.Contains(out, "X.noprog")
+		{"away, the no-progress half and the day cap appear nowhere, so the credit can't be worked out from them (D-shadow-scope)", func() bool {
+			for _, s := range []string{"615", "135", "345", "X.absent", "X.noprog", "X.day_cap"} {
+				if strings.Contains(out, s) {
+					return false
+				}
+			}
+			return true
 		}},
 	}
 	for _, tc := range cases {
@@ -975,6 +981,10 @@ func TestTodaySchemaRejects(t *testing.T) {
 		{"while calibrating, away time doesn't fit, since it gives the hidden credit away", func(m map[string]any) {
 			calibrating(m)
 			project(m)["other"] = []any{map[string]any{"reason": "X.absent", "words": "away", "s": 15}}
+		}, false},
+		{"while calibrating, credit past the day cap doesn't fit (D-shadow-scope)", func(m map[string]any) {
+			calibrating(m)
+			project(m)["other"] = []any{map[string]any{"reason": "X.day_cap", "words": "past 12 hours in one day", "s": 15}}
 		}, false},
 		{"while calibrating, the no-progress half doesn't fit", func(m map[string]any) {
 			calibrating(m)
@@ -1203,9 +1213,9 @@ How pairtime saw your time
 			want: shadow62,
 		},
 		{
-			name: "a session that goes on while calibrating has no start either",
+			name: "a session that goes on while calibrating is its day and project alone, without saying it goes on (D-shadow-scope)",
 			zone: newYork, reply: sessionReply{Shadow: true, Session: &open},
-			want: `Your session so far: pixel-forge
+			want: `Your last session: pixel-forge
 Tuesday, November 24
 
   Your time                   calibrating
@@ -1278,6 +1288,7 @@ func TestRecapJSONWhileCalibrating(t *testing.T) {
 		{"the recap says it is calibrating", raw["calibrating"] == true},
 		{"the session has its day", session["date"] == "2026-11-24"},
 		{"the session has no start or end, which would bound your time", session["start"] == nil && session["end"] == nil},
+		{"whether the session goes on, which would say whether its last minute counted, is left out", session["open"] == nil},
 		{"no time of day appears anywhere", !strings.Contains(out, "T12:")},
 		{"your time is left out", session["you"] == nil},
 		{"the agent's time still shows", len(session["agents"].([]any)) == 1},
@@ -1290,6 +1301,73 @@ func TestRecapJSONWhileCalibrating(t *testing.T) {
 			}
 		})
 	}
+}
+
+// shadowAnswer is the agent's answer to AskLastSession while display.shadow
+// is on (D-shadow-scope): no credited or pending numbers, no credited-by
+// maps, no uncredited codes but its own and the loops, no start, end or
+// open, and the session's local date.
+const shadowAnswer = `{"shadow": true, "session": {"project": "p_aa01", "name": "remind-bot", "date": "2026-11-24",
+	"agent_only_s": 20, "agent_only_by_harness": {"cursor": 20}, "uncredited": {"X.agent_only": 20, "X.reroll": 30}}}`
+
+const recapShadowAnswer = `Your last session: remind-bot
+Tuesday, November 24
+
+  Your time                   calibrating
+  Cursor, working on its own          20s
+  Re-rolling the same prompt          30s
+
+Your time shows as calibrating while pairtime checks how it counts.
+`
+
+// TestRecapReadsWhatTheAgentLeavesOut holds recap to D-shadow-scope's
+// shape: a number the agent leaves out reads as 0 and a map as empty.
+func TestRecapReadsWhatTheAgentLeavesOut(t *testing.T) {
+	cases := []struct {
+		name   string
+		answer string
+		want   string
+	}{
+		{"the shadow answer is calibrating, with the agent's time, the loop and the session's date", shadowAnswer, recapShadowAnswer},
+		{"a shadow answer that names no day prints none", strings.Replace(shadowAnswer, `"date": "2026-11-24",`, "", 1),
+			strings.Replace(recapShadowAnswer, "Tuesday, November 24\n", "", 1)},
+		{"an answer without its maps reads them as empty: your time, and no kinds, levels, agents or other time", `{"shadow": false, "session": {"project": "p_aa01", "name": "remind-bot",
+			"date": "2026-11-23", "start": "2026-11-24T04:30:00Z", "end": "2026-11-24T04:40:00Z", "credited_s": 600}}`,
+			"Your last session: remind-bot\nMonday, November 23, 23:30 to 23:40\n\n  Your time  10m\n"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			setZone(t, time.FixedZone("-05:00", -5*3600))
+			newHome(t).agent(func(string) (json.RawMessage, error) { return json.RawMessage(tc.answer), nil })
+			code, out, errOut := runCmd("recap")
+			if code != 0 || errOut != "" {
+				t.Fatalf("exit %d, stderr %q", code, errOut)
+			}
+			if out != tc.want {
+				t.Errorf("got\n%s\nwant\n%s", out, tc.want)
+			}
+		})
+	}
+	t.Run("--json of the shadow answer has its date, the agent's time and the loop, and nothing else", func(t *testing.T) {
+		newHome(t).agent(func(string) (json.RawMessage, error) { return json.RawMessage(shadowAnswer), nil })
+		_, out, _ := runCmd("recap", "--json")
+		var raw map[string]any
+		if err := json.Unmarshal([]byte(out), &raw); err != nil {
+			t.Fatalf("%v: %s", err, out)
+		}
+		s := raw["session"].(map[string]any)
+		var keys []string
+		for k := range s {
+			keys = append(keys, k)
+		}
+		slices.Sort(keys)
+		if want := []string{"agents", "date", "name", "other", "project"}; !slices.Equal(keys, want) || raw["calibrating"] != true {
+			t.Errorf("session fields %q, want %q, in\n%s", keys, want, out)
+		}
+		if o := s["other"].([]any); len(o) != 1 || o[0].(map[string]any)["reason"] != "X.reroll" {
+			t.Errorf("other is %v, want the loop alone", o)
+		}
+	})
 }
 
 func TestStatuslineRules(t *testing.T) {
