@@ -48,6 +48,7 @@ import (
 	"time"
 
 	"github.com/some-du6e/pairtime/internal/server/accounts"
+	"github.com/some-du6e/pairtime/internal/server/config"
 )
 
 // The paths this package serves.
@@ -165,12 +166,15 @@ type Config struct {
 // Service serves sign-in.
 type Service struct {
 	baseURL, redirectURI string
-	issuer, clientID     string
-	accounts             *accounts.Store
-	oidc                 *oidcClient // nil while sign-in is off
-	log                  *slog.Logger
-	now                  func() time.Time
-	exchanges            chan struct{}
+	// origin is base_url as browsers send it in an Origin header, or ""
+	// when it isn't an http or https origin.
+	origin           string
+	issuer, clientID string
+	accounts         *accounts.Store
+	oidc             *oidcClient // nil while sign-in is off
+	log              *slog.Logger
+	now              func() time.Time
+	exchanges        chan struct{}
 	// loginKey signs login cookies. It is made at start and lives only in
 	// memory, so a sign-in in progress across a restart starts again.
 	loginKey []byte
@@ -195,6 +199,7 @@ func New(c Config) (*Service, error) {
 		loginKey:  randomBytes(loginKeySize),
 	}
 	s.redirectURI = s.baseURL + CallbackPath
+	s.origin = config.CanonicalOrigin(s.baseURL)
 	if c.ClientID == "" {
 		return s, nil
 	}
@@ -226,6 +231,7 @@ func New(c Config) (*Service, error) {
 		redirectURI:  s.redirectURI,
 		http:         hc,
 		now:          c.Now,
+		log:          c.Logger,
 	}
 	return s, nil
 }

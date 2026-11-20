@@ -91,3 +91,49 @@ func TestNonceFor(t *testing.T) {
 		})
 	}
 }
+
+func TestSameOrigin(t *testing.T) {
+	const base = "https://pairtime.example.org"
+	tests := []struct {
+		name      string
+		baseURL   string // "" means base
+		origin    string
+		fetchSite string
+		want      bool
+	}{
+		{name: "an Origin equal to base_url is the same origin", origin: base, want: true},
+		{name: "a base_url with capitals matches the lowercase Origin browsers send", baseURL: "https://Pairtime.Example.org", origin: base, want: true},
+		{name: "a base_url with the default port matches an Origin without it", baseURL: "https://pairtime.example.org:443", origin: base, want: true},
+		{name: "a base_url with a trailing slash matches", baseURL: base + "/", origin: base, want: true},
+		{name: "another host is refused", origin: "https://evil.example"},
+		{name: "a host that only starts like pairtime's is refused", origin: "https://pairtime.example.org.evil.example"},
+		{name: "http for an https base_url is refused", origin: "http://pairtime.example.org"},
+		{name: "another port is refused", origin: "https://pairtime.example.org:8443"},
+		{name: "the opaque Origin null is refused", origin: "null"},
+		{name: "without Origin a same-origin fetch is allowed", fetchSite: "same-origin", want: true},
+		{name: "without Origin a cross-site fetch is refused", fetchSite: "cross-site"},
+		{name: "a request with neither header isn't from a browser and is allowed", want: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			b := tt.baseURL
+			if b == "" {
+				b = base
+			}
+			s, err := New(Config{BaseURL: b})
+			if err != nil {
+				t.Fatal(err)
+			}
+			req := httptest.NewRequest(http.MethodPost, LogoutPath, nil)
+			if tt.origin != "" {
+				req.Header.Set("Origin", tt.origin)
+			}
+			if tt.fetchSite != "" {
+				req.Header.Set("Sec-Fetch-Site", tt.fetchSite)
+			}
+			if got := s.sameOrigin(req); got != tt.want {
+				t.Errorf("sameOrigin = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}

@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/some-du6e/pairtime/internal/server/accounts"
+	"github.com/some-du6e/pairtime/internal/server/config"
 )
 
 // loginState is what the login cookie carries from the login page to the
@@ -367,10 +368,12 @@ func (s *Service) logout(w http.ResponseWriter, r *http.Request) {
 // pairtimed's own pages. Browsers send Origin with every POST, and
 // Sec-Fetch-Site too; a request with neither isn't from a browser, so it
 // carries no cookie it didn't mean to. The session cookie's SameSite=Lax
-// keeps it off cross-site POSTs as well.
+// keeps it off cross-site POSTs as well. Origin is compared in its
+// canonical form, so a base_url written with capitals or a default port
+// still matches what browsers send.
 func (s *Service) sameOrigin(r *http.Request) bool {
 	if o := r.Header.Get("Origin"); o != "" {
-		return o == s.baseURL
+		return s.origin != "" && config.CanonicalOrigin(o) == s.origin
 	}
 	switch r.Header.Get("Sec-Fetch-Site") {
 	case "", "same-origin", "none":

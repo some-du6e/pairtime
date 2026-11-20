@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"math/big"
 	"net/http"
 	"net/url"
@@ -22,6 +23,11 @@ import (
 // discoveryTTL is how long a discovery document is used before it is
 // fetched again.
 const discoveryTTL = 24 * time.Hour
+
+// discoveryRetry is how long a failed fetch of the discovery document waits
+// before the next try. Meanwhile a document fetched before stays in use,
+// and without one sign-ins fail at once.
+const discoveryRetry = time.Minute
 
 // jwksTTL is how long signing keys are used before they are fetched again.
 const jwksTTL = time.Hour
@@ -67,33 +73,89 @@ type oidcClient struct {
 	issuer, clientID, clientSecret, redirectURI string
 	http                                        *http.Client
 	now                                         func() time.Time
+	log                                         *slog.Logger
 
+	// mu guards the discovery document. Nobody holds it during a fetch.
 	mu        sync.Mutex
 	prov      *provider
-	provAt    time.Time
+	provAt    time.Time     // when prov was fetched
+	provErr   error         // why the last fetch failed, if it did
+	provTried time.Time     // when that fetch ran
+	provBusy  chan struct{} // closed when the fetch under way ends; nil without one
+
+	// keysMu guards the signing keys, and is held while they are fetched.
+	keysMu    sync.Mutex
 	keys      []publicKey
 	keysAt    time.Time // when keys were fetched
 	keysTried time.Time // when a fetch was last tried
 }
 
 // provider returns HCA's discovery document, fetching it when it is
-// missing or a day old. While HCA is unreachable, a document fetched before
-// stays in use.
+// missing or a day old. One request fetches at a time: meanwhile the others
+// get the document fetched before, or wait for the fetch when there is
+// none. While HCA is unreachable the document fetched before stays in use,
+// and a failed fetch is tried again a minute later, not on every request.
 func (c *oidcClient) provider(ctx context.Context) (*provider, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.prov != nil && c.now().Sub(c.provAt) < discoveryTTL {
-		return c.prov, nil
-	}
-	p, err := c.discover(ctx)
-	if err != nil {
-		if c.prov != nil {
-			return c.prov, nil
+	for {
+		c.mu.Lock()
+		now := c.now()
+		switch {
+		case c.prov != nil && now.Sub(c.provAt) < discoveryTTL:
+			p := c.prov
+			c.mu.Unlock()
+			return p, nil
+		case c.provBusy != nil && c.prov != nil:
+			p := c.prov
+			c.mu.Unlock()
+			return p, nil
+		case c.provBusy != nil:
+			busy := c.provBusy
+			c.mu.Unlock()
+			select {
+			case <-busy:
+				continue
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		case c.provErr != nil && now.Sub(c.provTried) < discoveryRetry:
+			p, err := c.prov, c.provErr
+			c.mu.Unlock()
+			if p != nil {
+				return p, nil
+			}
+			return nil, err
 		}
-		return nil, err
+		busy := make(chan struct{})
+		c.provBusy = busy
+		c.mu.Unlock()
+
+		p, err := c.discover(ctx)
+
+		c.mu.Lock()
+		c.provBusy = nil
+		close(busy)
+		switch {
+		case err == nil:
+			c.prov, c.provAt, c.provErr = p, c.now(), nil
+		case ctx.Err() == nil:
+			// A fetch its caller gave up on says nothing about HCA, so only
+			// other failures wait out discoveryRetry.
+			c.provErr, c.provTried = err, c.now()
+			if c.prov != nil {
+				c.log.Warn("HCA's discovery document couldn't be refreshed, so the copy fetched before stays in use; the next try is in a minute",
+					"fetched_at", c.provAt.UTC().Format(time.RFC3339), "err", err)
+			}
+		}
+		stale := c.prov
+		c.mu.Unlock()
+		if err != nil {
+			if stale != nil {
+				return stale, nil
+			}
+			return nil, err
+		}
+		return p, nil
 	}
-	c.prov, c.provAt = p, c.now()
-	return p, nil
 }
 
 // discover fetches and checks the discovery document.
@@ -149,8 +211,8 @@ func authMethod(supported []string) (string, error) {
 // matches kid, which is how a rotated key arrives, but never twice within
 // jwksMinInterval.
 func (c *oidcClient) signingKeys(ctx context.Context, jwksURI, kid string) ([]*rsa.PublicKey, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	c.keysMu.Lock()
+	defer c.keysMu.Unlock()
 	now := c.now()
 	fresh := c.keys != nil && now.Sub(c.keysAt) < jwksTTL
 	if fresh {

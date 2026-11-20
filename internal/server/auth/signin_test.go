@@ -3,6 +3,7 @@
 package auth_test
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
@@ -334,18 +335,13 @@ func testSignIn(t *testing.T, engine store.Engine) {
 			wantCode:   auth.CodeBadSignature,
 		},
 		{
-			name: "an ID token naming an unknown key is refused without fetching the JWKS again",
+			name: "an ID token naming a kid HCA never published is refused",
 			hook: func(tok *hcafake.Token) string {
 				tok.Header["kid"] = "not-a-published-kid"
 				return tok.SignWith(hcafake.Key(1))
 			},
 			wantStatus: http.StatusUnauthorized,
 			wantCode:   auth.CodeUnknownKey,
-			check: func(t *testing.T, _ *harness, hca *hcafake.Server, _ *flow, _ auth.Me) {
-				if n := hca.JWKSCalls(); n != 1 {
-					t.Errorf("the JWKS was fetched %d times, want once", n)
-				}
-			},
 		},
 		{
 			name: "an ID token whose claims changed after signing is refused",
@@ -706,33 +702,70 @@ func TestLogout(t *testing.T) {
 	}
 }
 
-func TestKeyRotation(t *testing.T) {
-	var mu sync.Mutex
-	at := time.Now()
-	clock := func() time.Time {
-		mu.Lock()
-		defer mu.Unlock()
-		return at
+// TestSigningKeys checks when the JWKS is fetched: at the first sign-in,
+// again for a kid the cached keys lack, which is how a rotated key arrives,
+// and again once the keys are an hour old, but never twice in a minute.
+func TestSigningKeys(t *testing.T) {
+	tests := []struct {
+		name string
+		// After a first sign-in, which fetches the JWKS once:
+		rotate     bool          // HCA signs with a new key from now on
+		unknownKid bool          // the next ID token names a kid HCA never published
+		wait       time.Duration // the clock moves on by this before the next sign-in
+		wantCode   string        // "" means the next sign-in succeeds
+		wantJWKS   int           // JWKS fetches in all
+	}{
+		{name: "a token signed with a rotated key is accepted after one more fetch", rotate: true, wait: 2 * time.Minute, wantJWKS: 2},
+		{name: "a known key comes from the cache for an hour", wait: 59 * time.Minute, wantJWKS: 1},
+		{name: "keys an hour old are fetched again", wait: time.Hour, wantJWKS: 2},
+		{name: "an unknown kid within a minute of the last fetch is refused without fetching again", unknownKid: true, wait: 30 * time.Second, wantCode: auth.CodeUnknownKey, wantJWKS: 1},
+		{name: "an unknown kid a minute after the last fetch is looked for in one more fetch", unknownKid: true, wait: time.Minute, wantCode: auth.CodeUnknownKey, wantJWKS: 2},
 	}
-	hca := hcafake.New(t)
-	hca.SetNow(clock)
-	h := newHarness(t, harnessConfig{
-		engine:       storetest.Engines()[0],
-		issuer:       hca.URL,
-		clientID:     hcafake.ClientID,
-		clientSecret: hcafake.ClientSecret,
-		mayCreate:    anyone,
-		now:          clock,
-		register:     hca.AddRedirectURI,
-	})
-	checkSignedIn(t, h, h.signIn(signInOptions{}), "/")
-	hca.RotateKey(hcafake.Key(2))
-	mu.Lock()
-	at = at.Add(2 * time.Minute)
-	mu.Unlock()
-	checkSignedIn(t, h, h.signIn(signInOptions{}), "/")
-	if n := hca.JWKSCalls(); n != 2 {
-		t.Errorf("the JWKS was fetched %d times, want twice: once at first, once for the rotated key", n)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var mu sync.Mutex
+			at := time.Now()
+			clock := func() time.Time {
+				mu.Lock()
+				defer mu.Unlock()
+				return at
+			}
+			hca := hcafake.New(t)
+			hca.SetNow(clock)
+			h := newHarness(t, harnessConfig{
+				engine:       storetest.Engines()[0],
+				issuer:       hca.URL,
+				clientID:     hcafake.ClientID,
+				clientSecret: hcafake.ClientSecret,
+				mayCreate:    anyone,
+				now:          clock,
+				register:     hca.AddRedirectURI,
+			})
+			checkSignedIn(t, h, h.signIn(signInOptions{}), "/")
+			if tt.rotate {
+				hca.RotateKey(hcafake.Key(2))
+			}
+			if tt.unknownKid {
+				hca.SetHook(func(tok *hcafake.Token) string {
+					tok.Header["kid"] = "not-a-published-kid"
+					return tok.Sign()
+				})
+			}
+			mu.Lock()
+			at = at.Add(tt.wait)
+			mu.Unlock()
+			// The next sign-in is another browser's.
+			h.client.Jar = newJar(t)
+			f := h.signIn(signInOptions{})
+			if tt.wantCode == "" {
+				checkSignedIn(t, h, f, "/")
+			} else {
+				checkRefused(t, h, f, http.StatusUnauthorized, tt.wantCode)
+			}
+			if n := hca.JWKSCalls(); n != tt.wantJWKS {
+				t.Errorf("the JWKS was fetched %d times, want %d", n, tt.wantJWKS)
+			}
+		})
 	}
 }
 
@@ -809,6 +842,176 @@ func TestDiscoveryChecks(t *testing.T) {
 			r := h.get(h.srv.URL + auth.LoginPath)
 			if r.status != http.StatusServiceUnavailable || errorCode(r) != auth.CodeHCAUnreachable {
 				t.Errorf("login = %d %q, want 503 %q; log:\n%s", r.status, errorCode(r), auth.CodeHCAUnreachable, h.logs.String())
+			}
+		})
+	}
+}
+
+func TestDiscoveryRefresh(t *testing.T) {
+	type step struct {
+		wait time.Duration // the clock moves on by this first
+		// discovery, when set, changes HCA's discovery document from now
+		// on: "broken" names another issuer, so every fetch fails, and
+		// "fixed" undoes that.
+		discovery  string
+		wantStatus int // the login page's status
+		wantCalls  int // discovery fetches so far
+	}
+	tests := []struct {
+		name    string
+		steps   []step
+		wantLog string // the log holds this at the end
+	}{
+		{
+			name: "a discovery document is fetched again once it is a day old",
+			steps: []step{
+				{wantStatus: http.StatusFound, wantCalls: 1},
+				{wait: 23 * time.Hour, wantStatus: http.StatusFound, wantCalls: 1},
+				{wait: time.Hour, wantStatus: http.StatusFound, wantCalls: 2},
+			},
+		},
+		{
+			name: "a failed refresh keeps the document fetched before, is logged, and is tried again a minute later",
+			steps: []step{
+				{wantStatus: http.StatusFound, wantCalls: 1},
+				{wait: 25 * time.Hour, discovery: "broken", wantStatus: http.StatusFound, wantCalls: 2},
+				{wantStatus: http.StatusFound, wantCalls: 2},
+				{wait: 59 * time.Second, wantStatus: http.StatusFound, wantCalls: 2},
+				{wait: time.Second, wantStatus: http.StatusFound, wantCalls: 3},
+				{wait: time.Minute, discovery: "fixed", wantStatus: http.StatusFound, wantCalls: 4},
+				{wait: time.Hour, wantStatus: http.StatusFound, wantCalls: 4},
+			},
+			wantLog: "discovery document couldn't be refreshed",
+		},
+		{
+			name: "without a document fetched before, a failed fetch is tried again a minute later, not on every sign-in",
+			steps: []step{
+				{discovery: "broken", wantStatus: http.StatusServiceUnavailable, wantCalls: 1},
+				{wantStatus: http.StatusServiceUnavailable, wantCalls: 1},
+				{wait: time.Minute, wantStatus: http.StatusServiceUnavailable, wantCalls: 2},
+				{wait: time.Minute, discovery: "fixed", wantStatus: http.StatusFound, wantCalls: 3},
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var mu sync.Mutex
+			at := time.Now()
+			clock := func() time.Time {
+				mu.Lock()
+				defer mu.Unlock()
+				return at
+			}
+			hca := hcafake.New(t)
+			h := newHarness(t, harnessConfig{
+				engine:       storetest.Engines()[0],
+				issuer:       hca.URL,
+				clientID:     hcafake.ClientID,
+				clientSecret: hcafake.ClientSecret,
+				mayCreate:    anyone,
+				now:          clock,
+				register:     hca.AddRedirectURI,
+			})
+			for i, st := range tt.steps {
+				mu.Lock()
+				at = at.Add(st.wait)
+				mu.Unlock()
+				switch st.discovery {
+				case "broken":
+					hca.SetDiscovery(func(d map[string]any) { d["issuer"] = "https://auth.example.org" })
+				case "fixed":
+					hca.SetDiscovery(nil)
+				}
+				r := h.get(h.srv.URL + auth.LoginPath)
+				if r.status != st.wantStatus || hca.DiscoveryCalls() != st.wantCalls {
+					t.Fatalf("step %d: login = %d after %d discovery fetches, want %d after %d; log:\n%s",
+						i, r.status, hca.DiscoveryCalls(), st.wantStatus, st.wantCalls, h.logs.String())
+				}
+			}
+			if !strings.Contains(h.logs.String(), tt.wantLog) {
+				t.Errorf("the log doesn't hold %q:\n%s", tt.wantLog, h.logs.String())
+			}
+		})
+	}
+}
+
+func TestDiscoveryHang(t *testing.T) {
+	var mu sync.Mutex
+	at := time.Now()
+	clock := func() time.Time {
+		mu.Lock()
+		defer mu.Unlock()
+		return at
+	}
+	hca := hcafake.New(t)
+	h := newHarness(t, harnessConfig{
+		engine:       storetest.Engines()[0],
+		issuer:       hca.URL,
+		clientID:     hcafake.ClientID,
+		clientSecret: hcafake.ClientSecret,
+		mayCreate:    anyone,
+		now:          clock,
+		register:     hca.AddRedirectURI,
+	})
+	if r := h.get(h.srv.URL + auth.LoginPath); r.status != http.StatusFound {
+		t.Fatalf("the first login page answered %d, want 302", r.status)
+	}
+	// From now on HCA's discovery endpoint hangs until released, and the
+	// document fetched at first is over a day old.
+	started, released := make(chan struct{}), make(chan struct{})
+	release := sync.OnceFunc(func() { close(released) })
+	defer release()
+	var once sync.Once
+	hca.SetDiscovery(func(map[string]any) {
+		once.Do(func() { close(started) })
+		<-released
+	})
+	mu.Lock()
+	at = at.Add(25 * time.Hour)
+	mu.Unlock()
+
+	// h.get calls t.Fatalf, which only the test's own goroutine may, so the
+	// login that starts the refresh uses the client directly.
+	first := make(chan int, 1)
+	go func() {
+		resp, err := h.client.Get(h.srv.URL + auth.LoginPath)
+		if err != nil {
+			first <- 0
+			return
+		}
+		resp.Body.Close()
+		first <- resp.StatusCode
+	}()
+	select {
+	case <-started:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the refresh never reached HCA")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	second := 0
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, h.srv.URL+auth.LoginPath, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp, err := h.client.Do(req); err == nil {
+		resp.Body.Close()
+		second = resp.StatusCode
+	}
+	release()
+	firstStatus := <-first
+	tests := []struct {
+		name string
+		ok   bool
+	}{
+		{name: "another sign-in gets the document fetched before while the refresh hangs", ok: second == http.StatusFound},
+		{name: "the sign-in that started the refresh gets its answer once HCA answers", ok: firstStatus == http.StatusFound},
+		{name: "only the one request fetched the document again", ok: hca.DiscoveryCalls() == 2},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if !tt.ok {
+				t.Errorf("second login = %d, first = %d, discovery fetches = %d", second, firstStatus, hca.DiscoveryCalls())
 			}
 		})
 	}

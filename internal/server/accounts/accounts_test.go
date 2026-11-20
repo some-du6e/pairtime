@@ -466,22 +466,34 @@ func TestDeleteExpiredSessions(t *testing.T) {
 		t.Run(string(engine), func(t *testing.T) {
 			c := newClock()
 			s, db := open(t, engine, Options{MayCreate: anyone, Now: c.now, SessionLifetime: time.Hour})
-			expired, _, err := s.SignIn(ctx, verified(), Login{})
-			if err != nil {
-				t.Fatal(err)
+			signIn := func() string {
+				t.Helper()
+				sess, _, err := s.SignIn(ctx, verified(), Login{})
+				if err != nil {
+					t.Fatal(err)
+				}
+				return sess.Token
 			}
-			revoked, _, err := s.SignIn(ctx, verified(), Login{})
-			if err != nil {
-				t.Fatal(err)
+			revoke := func(token string) {
+				t.Helper()
+				if err := s.Revoke(ctx, token); err != nil {
+					t.Fatal(err)
+				}
 			}
-			if err := s.Revoke(ctx, revoked.Token); err != nil {
-				t.Fatal(err)
-			}
-			c.t = c.t.Add(time.Hour + sessionGrace)
-			live, _, err := s.SignIn(ctx, verified(), Login{})
-			if err != nil {
-				t.Fatal(err)
-			}
+			// At T0 a session opens, and it expires at T0+1h.
+			expired := signIn()
+			// At T1 = T0+1h two more open, both expiring at T1+1h, and one
+			// of them is revoked at once.
+			c.t = c.t.Add(time.Hour)
+			revoked, twin := signIn(), signIn()
+			revoke(revoked)
+			// A day and a millisecond later the cutoff is T1 plus 1 ms: the
+			// first session expired before it, and the revoked one was
+			// revoked before it but expires after it, so only its
+			// revocation can delete it.
+			c.t = c.t.Add(sessionGrace + time.Millisecond)
+			revokedNow, live := signIn(), signIn()
+			revoke(revokedNow)
 			n, err := s.DeleteExpiredSessions(ctx)
 			if err != nil {
 				t.Fatal(err)
@@ -491,9 +503,11 @@ func TestDeleteExpiredSessions(t *testing.T) {
 				token string
 				want  int
 			}{
-				{name: "a session that expired a day ago is deleted", token: expired.Token, want: 0},
-				{name: "a session revoked a day ago is deleted", token: revoked.Token, want: 0},
-				{name: "a live session is kept", token: live.Token, want: 1},
+				{name: "a session that expired more than a day ago is deleted", token: expired, want: 0},
+				{name: "a session revoked more than a day ago is deleted, though it expires later", token: revoked, want: 0},
+				{name: "a session that expired less than a day ago is kept", token: twin, want: 1},
+				{name: "a session revoked less than a day ago is kept", token: revokedNow, want: 1},
+				{name: "a live session is kept", token: live, want: 1},
 			}
 			for _, tt := range tests {
 				t.Run(tt.name, func(t *testing.T) {

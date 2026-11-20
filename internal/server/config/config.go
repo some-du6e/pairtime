@@ -370,8 +370,10 @@ var semver = regexp.MustCompile(`^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9
 // programName is the <program> of program_reviewer:<program>.
 var programName = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,63}$`)
 
-// checkBaseURL returns base_url without a trailing slash. It must be an
-// https origin, or http on a loopback host for local runs.
+// checkBaseURL returns base_url as an origin in the form browsers send in
+// an Origin header (CanonicalOrigin), which is what POST /auth/logout
+// compares with. It must be an https origin, or http on a loopback host
+// for local runs.
 func checkBaseURL(raw string) (string, error) {
 	if raw == "" {
 		return "", errors.New(`it is required, such as "https://pairtime.example.org"`)
@@ -393,7 +395,44 @@ func checkBaseURL(raw string) (string, error) {
 	default:
 		return raw, fmt.Errorf("%q must start with https://", raw)
 	}
-	return strings.TrimSuffix(raw, "/"), nil
+	if strings.ContainsFunc(u.Hostname(), func(r rune) bool { return r >= 0x80 }) {
+		return raw, fmt.Errorf("%q has a host that isn't ASCII; write it in its xn-- form, which is what browsers send", raw)
+	}
+	return CanonicalOrigin(raw), nil
+}
+
+// CanonicalOrigin returns the origin of an http or https URL the way
+// browsers write it in an Origin header (RFC 6454 6.1): the scheme and host
+// in lowercase, and no port when it is the scheme's default. It returns ""
+// for anything else, such as a URL with a path, a query or a user.
+func CanonicalOrigin(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil || u.Opaque != "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || (u.Path != "" && u.Path != "/") {
+		return ""
+	}
+	var defaultPort string
+	switch u.Scheme {
+	case "https":
+		defaultPort = "443"
+	case "http":
+		defaultPort = "80"
+	default:
+		return ""
+	}
+	host, port := strings.ToLower(u.Hostname()), u.Port()
+	if host == "" {
+		return ""
+	}
+	if port == defaultPort {
+		port = ""
+	}
+	switch {
+	case port != "":
+		host = net.JoinHostPort(host, port)
+	case strings.Contains(host, ":"):
+		host = "[" + host + "]"
+	}
+	return u.Scheme + "://" + host
 }
 
 // checkIssuer checks hca.issuer: an https URL with a host and no query or

@@ -135,6 +135,12 @@ func TestLoad(t *testing.T) {
 				}
 			},
 		},
+		{name: "base_url's scheme and host are lowercased, as browsers send Origin", toml: "base_url = \"HTTPS://Pairtime.Example.ORG\"\n", check: wantBaseURL("https://pairtime.example.org")},
+		{name: "base_url drops https's default port", toml: "base_url = \"https://pairtime.example.org:443/\"\n", check: wantBaseURL("https://pairtime.example.org")},
+		{name: "base_url drops http's default port", toml: "base_url = \"http://localhost:80\"\n", check: wantBaseURL("http://localhost")},
+		{name: "base_url keeps a port that isn't the default", toml: "base_url = \"https://pairtime.example.org:8443\"\n", check: wantBaseURL("https://pairtime.example.org:8443")},
+		{name: "an IPv6 loopback base_url keeps its brackets", toml: "base_url = \"http://[::1]:80\"\n", check: wantBaseURL("http://[::1]")},
+		{name: "base_url's host must be ASCII, as browsers send it", toml: "base_url = \"https://pairtim\u00e9.example.org\"\n", wantErr: "isn't ASCII"},
 		{name: "profile_default is public or ask, never private", toml: base + "profile_default = \"private\"\n", wantErr: "profile_default"},
 		{name: "scoring_version must be X.Y.Z", toml: base + "scoring_version = \"0.x\"\n", wantErr: "scoring_version"},
 		{name: "scoring_version can't have a leading zero", toml: base + "scoring_version = \"01.0.0\"\n", wantErr: "scoring_version"},
@@ -277,6 +283,41 @@ func TestLoad(t *testing.T) {
 			}
 			if tt.check != nil {
 				tt.check(t, c, dir)
+			}
+		})
+	}
+}
+
+// wantBaseURL checks that Load left base_url as want.
+func wantBaseURL(want string) func(t *testing.T, c *Config, dir string) {
+	return func(t *testing.T, c *Config, _ string) {
+		if c.BaseURL != want {
+			t.Errorf("base_url = %q, want %q", c.BaseURL, want)
+		}
+	}
+}
+
+func TestCanonicalOrigin(t *testing.T) {
+	tests := []struct {
+		name, in, want string
+	}{
+		{name: "an origin browsers would send is kept", in: "https://pairtime.example.org", want: "https://pairtime.example.org"},
+		{name: "the host is lowercased", in: "https://Pairtime.Example.org", want: "https://pairtime.example.org"},
+		{name: "https's default port is dropped", in: "https://pairtime.example.org:443", want: "https://pairtime.example.org"},
+		{name: "http's default port is dropped", in: "http://127.0.0.1:80", want: "http://127.0.0.1"},
+		{name: "another port is kept", in: "https://pairtime.example.org:8443", want: "https://pairtime.example.org:8443"},
+		{name: "443 isn't http's default", in: "http://localhost:443", want: "http://localhost:443"},
+		{name: "an IPv6 host keeps its brackets", in: "https://[::1]:443", want: "https://[::1]"},
+		{name: "a trailing slash is dropped", in: "https://pairtime.example.org/", want: "https://pairtime.example.org"},
+		{name: "a path isn't an origin", in: "https://pairtime.example.org/x"},
+		{name: "a user isn't part of an origin", in: "https://me@pairtime.example.org"},
+		{name: "another scheme has no origin here", in: "ftp://pairtime.example.org"},
+		{name: "the opaque origin null isn't one", in: "null"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := CanonicalOrigin(tt.in); got != tt.want {
+				t.Errorf("CanonicalOrigin(%q) = %q, want %q", tt.in, got, tt.want)
 			}
 		})
 	}
