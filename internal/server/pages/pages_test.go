@@ -295,6 +295,15 @@ func TestPrivacyNotice(t *testing.T) {
 			notWant: []string{"takes no feature away"},
 		},
 		{
+			name: "removing something published says how, and warns that copies may remain (California Bus. and Prof. Code 22581)",
+			want: []string{
+				"To remove one thing, use the pairtime dashboard on your computer: delete the devlog, remove the badge, or set the project back to private.",
+				"You can also ask the controller to remove anything you published.",
+				"That doesn&#39;t ensure it&#39;s gone completely, though.",
+			},
+			notWant: []string{"disappears at once"},
+		},
+		{
 			name: "the IP period in the prose is the schedule's",
 			want: []string{"the server deletes them after 30 days."},
 		},

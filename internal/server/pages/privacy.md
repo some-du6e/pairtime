@@ -86,9 +86,11 @@ One question about consent is still open. On Windows, and on Linux with X11, mos
 Profiles on this server are public by default, but nothing about you is public until you answer the profile card. The card shows a preview of your public page, with "Keep my profile public" and "Make it private" as equal buttons.
 {{- else -}}
 Nothing about you is public until you choose. The first time you sign in, a card asks whether you want a public profile, and "Private profile" is the more prominent button.
-{{- end}} Either way, you can switch with one click at any time, and anything you delete from your profile disappears at once.
+{{- end}} Either way, you can switch with one click at any time.
 
 A public profile shows only your handle, your daily totals (never the time of day), your build days and weekly streak, the AI tools and languages you use, projects whose repositories are public with their verified commits, devlogs you published, and badges you picked. It never shows your real name, school, city, age or time zone, your prompts or file names, private repositories, details of your computer, or anything about reviews. It updates at most once an hour. Leaderboards, club boards and "currently building" stay off unless you turn them on.
+
+To take everything down at once, make your profile private. To remove one thing, use the pairtime dashboard on your computer: delete the devlog, remove the badge, or set the project back to private. You can also ask the controller to remove anything you published. Whatever you remove stops being public at once. That doesn't ensure it's gone completely, though. A person, a program or a search engine that copied it while it was public may still have the copy.
 
 Reviewers never use your profile, build days or badges as evidence, so keeping your profile private costs you nothing.
 
