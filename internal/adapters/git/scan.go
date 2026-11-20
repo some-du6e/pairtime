@@ -152,6 +152,13 @@ type Scanner struct {
 	// other worktrees there, so commits they made are recorded first.
 	beforeArrivals func(context.Context)
 	arrivalsReady  bool
+	// staged are the commits the scan in progress recorded. They count as
+	// recorded for its own later operations, and join recent only when the
+	// scan ends well, so a scan that fails records none: its retry has to
+	// find them again. A scanner sharing its repo's set leaves that to the
+	// Watcher, which adds them when it holds the changes.
+	staged    []string
+	stagedSet map[string]bool
 }
 
 // NewScanner returns a scanner for the worktree at loc, resuming from st.
@@ -199,6 +206,9 @@ const maxFailures = 3
 // observed.
 func (s *Scanner) Scan(ctx context.Context) ([]Change, error) {
 	now := s.now()
+	// A rebase that is stopped when the scan starts, or when its reads
+	// end, waits: the person can abort it in between.
+	stopped := rebaseInProgress(s.loc.GitDir)
 	window, err := readReflog(ctx, s.git, s.loc.Dir, reflogWindows[0])
 	if err != nil {
 		return nil, err
@@ -216,7 +226,7 @@ func (s *Scanner) Scan(ctx context.Context) ([]Change, error) {
 	if err != nil || len(fresh) == 0 {
 		return nil, err
 	}
-	ops, used := plan(fresh, rebaseInProgress(s.loc.GitDir))
+	ops, used := plan(fresh, stopped || rebaseInProgress(s.loc.GitDir))
 	if used == 0 {
 		return nil, nil
 	}
@@ -233,6 +243,11 @@ func (s *Scanner) Scan(ctx context.Context) ([]Change, error) {
 	}
 	s.failed = 0
 	if err == nil {
+		if !s.shared {
+			for _, id := range s.staged {
+				s.recent.add(id)
+			}
+		}
 		s.rerootIfRewritten(ctx, changes)
 	}
 	last := fresh[used-1]
@@ -288,7 +303,12 @@ func (s *Scanner) head(ctx context.Context) string {
 	return ids[0]
 }
 
-func (s *Scanner) remember(sha string) { s.recent.add(sha) }
+func (s *Scanner) remember(sha string) {
+	if !s.stagedSet[sha] {
+		s.staged = append(s.staged, sha)
+		s.stagedSet[sha] = true
+	}
+}
 
 // maybeRekey asks the resolver for the repo's identity again when these
 // operations may have changed it: a repo's first commit, or a shallow
@@ -456,6 +476,7 @@ func rebaseEnd(entries []entry, start int) (end int, aborted, closed bool) {
 // build turns operations into changes, reading what they need from git.
 func (s *Scanner) build(ctx context.Context, ops []op, now time.Time) ([]Change, error) {
 	s.lazy, s.arrivalsReady = false, false
+	s.staged, s.stagedSet = nil, make(map[string]bool)
 	if v, err := s.git.Version(); err == nil && !HonorsNoLazyFetch(v) {
 		s.lazy = partialClone(ctx, s.git, s.loc.Dir)
 	}
@@ -721,7 +742,7 @@ func (s *Scanner) arrivals(ctx context.Context, old, tip string, madeTip bool) (
 	}
 	var want []string
 	for _, id := range ids {
-		if (madeTip && id == tip) || s.recent.has(id) {
+		if (madeTip && id == tip) || s.stagedSet[id] || s.recent.has(id) {
 			continue
 		}
 		want = append(want, id)

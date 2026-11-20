@@ -219,7 +219,7 @@ type heldChange struct {
 	c       Change
 	t       *tree
 	p       *pendingState
-	common  string
+	gitDir  string // the worktree's git directory, which agent runs match
 	until   time.Time
 	decided bool
 }
@@ -859,11 +859,18 @@ func (w *Watcher) scan(t *tree) {
 	} else {
 		p := &pendingState{st: state, left: len(changes)}
 		t.pending = append(t.pending, p)
+		// The commits count as recorded from the moment their changes are
+		// held, under the same lock State takes, so State never saves one
+		// ahead of its worktree's cursor.
+		rs := w.recentLocked(loc.CommonDir)
 		for _, c := range changes {
+			for _, cm := range c.Commits {
+				rs.add(cm.SHA)
+			}
 			if c.actor() == event.ActorHuman && now.Sub(time.Unix(c.GitEnd+1, 0)) > StaleAfter {
 				c.SetActor(event.ActorUnknown)
 			}
-			h := &heldChange{c: c, t: t, p: p, common: loc.CommonDir, until: now.Add(w.opts.Hold)}
+			h := &heldChange{c: c, t: t, p: p, gitDir: loc.GitDir, until: now.Add(w.opts.Hold)}
 			w.matchLocked(h)
 			w.held = append(w.held, h)
 		}
@@ -892,11 +899,13 @@ func (w *Watcher) addRuns(call string, end time.Time, runs []gitRun) {
 			continue
 		}
 		loc, err := w.res.Resolve(context.Background(), runs[i].dir)
-		if err != nil || loc.CommonDir == "" {
+		if err != nil || loc.GitDir == "" {
 			runs[i].dir = ""
 			continue
 		}
-		runs[i].dir = loc.CommonDir
+		// A worktree's git directory: an agent's commit in one worktree
+		// says nothing about the person's in another of the same repo.
+		runs[i].dir = loc.GitDir
 	}
 	now := w.now()
 	w.mu.Lock()
@@ -935,14 +944,14 @@ func (w *Watcher) addRuns(call string, end time.Time, runs []gitRun) {
 }
 
 // matchLocked marks h as the agent's when a kept agent run explains it.
-// runs hold the common directory their folder resolved to.
+// runs hold the git directory of the worktree their folder resolved to.
 func (w *Watcher) matchLocked(h *heldChange) {
 	if h.decided {
 		return
 	}
 	op := h.c.Op()
 	for _, r := range w.runs {
-		if runMatches(r, r.dir, h.common, op, h.c.GitStart, h.c.GitEnd) {
+		if runMatches(r, r.dir, h.gitDir, op, h.c.GitStart, h.c.GitEnd) {
 			h.c.SetActor(event.ActorAgent)
 			h.decided = true
 			return
@@ -951,13 +960,13 @@ func (w *Watcher) matchLocked(h *heldChange) {
 }
 
 // openCallLocked returns how long h waits for an agent's shell call that
-// is still running: a call in h's repo that can run h's git command and
-// started before h's operation did, give or take ActorWindow.
+// is still running: a call in h's worktree that can run h's git command
+// and started before h's operation did, give or take ActorWindow.
 func (w *Watcher) openCallLocked(h *heldChange, now time.Time) (time.Time, bool) {
 	op := h.c.Op()
 	var until time.Time
 	for _, r := range w.runs {
-		if !r.end.IsZero() || r.dir == "" || foldPath(r.dir) != foldPath(h.common) || !slices.Contains(r.ops, op) {
+		if !r.end.IsZero() || r.dir == "" || foldPath(r.dir) != foldPath(h.gitDir) || !slices.Contains(r.ops, op) {
 			continue
 		}
 		if !time.Unix(h.c.GitStart+1, 0).After(r.start.Add(-ActorWindow)) {
@@ -1006,6 +1015,13 @@ func (w *Watcher) release(final bool) {
 			return
 		}
 		h := w.held[idx]
+		if w.res.ignoredLoc(h.t.loc) {
+			// A .pairtime-ignore that came during the hold, with no poll or
+			// scan since to see it: the worktree goes, held changes and all.
+			w.dropLocked(h.t.key, h.t)
+			w.mu.Unlock()
+			continue
+		}
 		w.held = slices.Delete(w.held, idx, idx+1)
 		w.mu.Unlock()
 		w.opts.Sink(h.c)

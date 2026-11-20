@@ -241,13 +241,14 @@ func shellWords(s string) []string {
 }
 
 // runMatches reports whether an agent's finished git run explains a
-// change in the repo with common directory commonDir whose reflog entries
-// are stamped gitStart to gitEnd. runCommon is the common directory the
-// run's folder resolved to. The operation has to fall within the call's
-// span widened by ActorWindow on each side; when the call's start isn't
-// known, its end has to be within ActorWindow of the operation's end.
-func runMatches(r gitRun, runCommon, commonDir string, op event.GitOp, gitStart, gitEnd int64) bool {
-	if r.end.IsZero() || runCommon == "" || foldPath(runCommon) != foldPath(commonDir) || !slices.Contains(r.ops, op) {
+// change in the worktree with git directory gitDir whose reflog entries
+// are stamped gitStart to gitEnd. runGitDir is the git directory of the
+// worktree the run's folder resolved to. The operation has to fall within
+// the call's span widened by ActorWindow on each side; when the call's
+// start isn't known, its end has to be within ActorWindow of the
+// operation's end.
+func runMatches(r gitRun, runGitDir, gitDir string, op event.GitOp, gitStart, gitEnd int64) bool {
+	if r.end.IsZero() || runGitDir == "" || foldPath(runGitDir) != foldPath(gitDir) || !slices.Contains(r.ops, op) {
 		return false
 	}
 	first, lo := gitStart, r.start.Add(-ActorWindow)

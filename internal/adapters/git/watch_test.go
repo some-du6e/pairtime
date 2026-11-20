@@ -417,6 +417,31 @@ func TestWatcher(t *testing.T) {
 			},
 		},
 		{
+			name: "an agent's commit in one worktree of a repo leaves the person's commit in another worktree, at the same moment, the person's",
+			run: func(t *testing.T, g *gitEnv) {
+				g.realDates = true
+				r := g.initRepo()
+				r.commit("one", map[string]string{"a.txt": "a\n"})
+				wt := filepath.Join(t.TempDir(), "wt")
+				r.git("worktree", "add", "-q", wt, "-b", "agent")
+				sink := make(testSink, 16)
+				w := g.watcher(g.resolver(ProjectMap{}, Excludes{}), sink, WatcherOptions{NoNotify: true, Hold: 200 * time.Millisecond})
+				track(t, w, r.dir)
+				track(t, w, wt)
+				byHand := r.commit("by hand", map[string]string{"a.txt": "b\n"})
+				byAgent := (&testRepo{g: g, dir: wt}).commit("by the agent", map[string]string{"w.txt": "w\n"})
+				w.NoteAgentCommand(AgentCommand{End: time.Now(), Dir: wt, Line: `git commit -am "by the agent"`})
+				w.Poll()
+				want := map[string]event.Actor{byHand: event.ActorHuman, byAgent: event.ActorAgent}
+				for i := 0; i < 2; i++ {
+					ev := gitChange(t, sink.next(t, 10*time.Second))
+					if actor, ok := want[ev.SHA]; !ok || ev.Actor != actor {
+						t.Errorf("commit %s: actor %s, want %s", ev.SHA[:7], ev.Actor, actor)
+					}
+				}
+			},
+		},
+		{
 			name: "an ignored folder is never tracked, and its commits reach no sink",
 			run: func(t *testing.T, g *gitEnv) {
 				r := g.initRepo()
@@ -461,7 +486,7 @@ func TestWatcher(t *testing.T) {
 			},
 		},
 		{
-			name: "a change held for an agent never goes out once its repo turns ignored, not even at Close",
+			name: "a change held for an agent never goes out once its repo turns ignored, not even at Close with no poll since",
 			run: func(t *testing.T, g *gitEnv) {
 				r := g.initRepo()
 				r.commit("one", map[string]string{"a.txt": "a\n"})
@@ -471,9 +496,9 @@ func TestWatcher(t *testing.T) {
 				r.commit("two", map[string]string{"a.txt": "b\n"})
 				w.Poll()
 				w.flush()
+				// No notification covers the working tree, and no poll
+				// comes before the change would go out.
 				r.write(map[string]string{IgnoreFile: ""})
-				w.Poll()
-				w.flush()
 				w.Close()
 				sink.none(t)
 			},
