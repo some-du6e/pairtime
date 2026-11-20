@@ -377,6 +377,16 @@ func TestCheckScenarioResults(t *testing.T) {
 				t.Error("a known-limit scenario is one the checks pass")
 			}
 		})
+		t.Run(s.name+" CC5 and CC6, which no code here recomputes, say what they rest on", func(t *testing.T) {
+			if r, ok := exp.Checks["CC6"]; ok && r.Basis == "" {
+				t.Error("CC6 has no basis")
+			}
+			if r, ok := exp.Checks["CC5"]; ok && r.Result != "not_computable" && r.Basis == "" {
+				if _, counted := r.Counts["slots_credited"]; !counted {
+					t.Error("CC5 states neither its slot counts nor a basis")
+				}
+			}
+		})
 		t.Run(s.name+" names a submission, its live buckets and existing errata", func(t *testing.T) {
 			w := exp.Submission.Window
 			if !w.Start.Before(w.End) || !w.Start.Truncate(time.Minute).Equal(w.Start) || !w.End.Truncate(time.Minute).Equal(w.End) {
