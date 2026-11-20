@@ -264,6 +264,36 @@ func TestBuildWritesARelease(t *testing.T) {
 		}
 	})
 
+	t.Run("a tar.gz holds no build time and no owner, so neither the clock nor the user changes its bytes", func(t *testing.T) {
+		for _, a := range m.Artifacts {
+			tg := target{a.OS, a.Arch}
+			if tg.goos == "windows" {
+				continue // a zip, whose entries carry only the commit time
+			}
+			name := archiveName(testVersion, tg)
+			gz, err := gzip.NewReader(bytes.NewReader(read(t, filepath.Join(f.out, name))))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if h := gz.Header; !h.ModTime.IsZero() || h.Name != "" || h.Comment != "" || h.Extra != nil {
+				t.Errorf("%s: gzip header has time %v, name %q, comment %q and extra %q; want none of them", name, h.ModTime, h.Name, h.Comment, h.Extra)
+			}
+			tr := tar.NewReader(gz)
+			for {
+				hdr, err := tr.Next()
+				if err == io.EOF {
+					break
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				if hdr.Uid != 0 || hdr.Gid != 0 || hdr.Uname != "" || hdr.Gname != "" {
+					t.Errorf("%s: %s is owned by %d:%d (%q:%q), want 0:0 with no names", name, hdr.Name, hdr.Uid, hdr.Gid, hdr.Uname, hdr.Gname)
+				}
+			}
+		}
+	})
+
 	t.Run("the payload in manifest.json is the one dist wrote", func(t *testing.T) {
 		var env struct{ Payload string }
 		if err := json.Unmarshal(read(t, f.manifest), &env); err != nil {
@@ -276,6 +306,10 @@ func TestBuildWritesARelease(t *testing.T) {
 	})
 }
 
+// TestDistIsReproducible runs dist twice in one process, moments apart, so
+// it can't see a header taken from the clock, which gzip keeps in whole
+// seconds, or from the user running it. TestBuildWritesARelease checks
+// those headers directly.
 func TestDistIsReproducible(t *testing.T) {
 	f := newFixture(t)
 	a, b := filepath.Join(f.dir, "a"), filepath.Join(f.dir, "b")
