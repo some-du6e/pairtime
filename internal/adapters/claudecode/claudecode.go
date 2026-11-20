@@ -239,6 +239,20 @@ func (a *Adapter) sessionFor(id string) *session {
 	return s
 }
 
+// HookReported reports whether a hook call of Claude Code's session id has
+// reached the adapter, over the socket, the pipe or the spool. A log reader
+// writes session.start only for a session no hook reported, so that its
+// placeholder, with parent_class unknown and has_tty false, never stands in
+// for a hooked session's own (E-2.8-lookback; SM 1.2). That holds for a
+// session whose hooks only the spool delivered too: its records are side
+// doors, and a log reader's session.start would be the one SM 2.2 rule 4
+// read, making it headless.
+func (a *Adapter) HookReported(sessionID string) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.sessions[sessionID] != nil
+}
+
 // startedTurn reports whether prompt_id id already started a turn.
 func (s *session) startedTurn(id string) bool {
 	for _, t := range s.started {

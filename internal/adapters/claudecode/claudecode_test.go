@@ -197,6 +197,22 @@ func TestDeliveries(t *testing.T) {
 		}
 	})
 
+	t.Run("every session a hook reported, through the spool too, is one a log reader must write no session.start for", func(t *testing.T) {
+		for _, way := range []adapters.Delivery{adapters.Walked, adapters.Spooled} {
+			a := newTest()
+			adapters.Replay(a, calls, adapters.ReplayOptions{GOOS: "linux", Way: way})
+			for _, id := range []string{"617e16a3-ddb4-44ca-af68-72cf58ed1a34", "2197af56-2e28-498b-bf5d-15bbdd529e13",
+				"b0423624-aebf-47ff-88b0-927e8df77410", "e5edd056-19ab-4262-8f2f-25ec0c28c9f9"} {
+				if !a.HookReported(id) {
+					t.Errorf("session %s isn't reported", id[:8])
+				}
+			}
+			if a.HookReported("00000000-0000-4000-8000-000000000000") {
+				t.Error("a session no hook named is reported")
+			}
+		}
+	})
+
 	t.Run("a call another harness's process ran is that harness's to record", func(t *testing.T) {
 		cursor := []platform.Proc{{PID: 5151, Name: "cursor-agent", TTY: platform.TTYAttached}, {PID: 5150, Name: "zsh"}}
 		d, took := adapters.DeliveryOf(event.HarnessClaudeCode, withParents(prompt, cursor), adapters.Walked, prompt.Arrived)
