@@ -60,6 +60,31 @@ type WatcherOptions struct {
 	NoNotify bool
 	Now      func() time.Time
 	Log      *slog.Logger
+
+	// newNotifier replaces fsnotify in tests.
+	newNotifier func() (notifier, error)
+}
+
+// notifier is the part of fsnotify the watcher uses.
+type notifier interface {
+	Add(name string) error
+	Remove(name string) error
+	Close() error
+	eventCh() <-chan fsnotify.Event
+	errCh() <-chan error
+}
+
+type fsnotifier struct{ *fsnotify.Watcher }
+
+func (f fsnotifier) eventCh() <-chan fsnotify.Event { return f.Events }
+func (f fsnotifier) errCh() <-chan error            { return f.Errors }
+
+func newFsnotifier() (notifier, error) {
+	f, err := fsnotify.NewWatcher()
+	if err != nil {
+		return nil, err
+	}
+	return fsnotifier{f}, nil
 }
 
 // WatcherState is what the watcher keeps in state.json: each worktree's
@@ -81,18 +106,25 @@ type Watcher struct {
 	git  *Runner
 	log  *slog.Logger
 	now  func() time.Time
-	fsw  *fsnotify.Watcher
+	fsw  notifier
 
 	work chan func()
 	stop chan struct{}
 	done chan struct{}
+
+	// The watch goroutine alone calls fsw.Add and fsw.Remove (see
+	// watches). wkick wakes it for w.wreqs; wstop and wdone stop it.
+	wkick chan struct{}
+	wstop chan struct{}
+	wdone chan struct{}
 
 	mu    sync.Mutex
 	trees map[string]*tree // by foldPath of the git directory
 	// saved are the states scanners resume from, by foldPath of the git
 	// directory: opts.State's, until a worktree is tracked or dropped.
 	saved    map[string]ScannerState
-	byDir    map[string]*tree // by foldPath of each watched directory
+	byDir    map[string]*watchDir // by foldPath of each watched directory
+	wreqs    []*tree              // worktrees whose watches the watch goroutine should bring up to date
 	runs     []gitRun
 	held     []*heldChange
 	timer    *time.Timer
@@ -112,6 +144,13 @@ type tree struct {
 	// dropped is set once the worktree is out of pairtime, so a scan of it
 	// that was already queued or running yields nothing.
 	dropped bool
+}
+
+// watchDir is a directory with a file notification, and the worktrees it
+// serves: a repo's reftable directory serves every worktree of the repo.
+type watchDir struct {
+	path  string
+	trees []*tree
 }
 
 type heldChange struct {
@@ -139,7 +178,10 @@ func NewWatcher(opts WatcherOptions) (*Watcher, error) {
 		done:     make(chan struct{}),
 		trees:    make(map[string]*tree),
 		saved:    make(map[string]ScannerState),
-		byDir:    make(map[string]*tree),
+		byDir:    make(map[string]*watchDir),
+		wkick:    make(chan struct{}, 1),
+		wstop:    make(chan struct{}),
+		wdone:    make(chan struct{}),
 		problems: make(map[string]string),
 	}
 	if w.git == nil {
@@ -164,12 +206,17 @@ func NewWatcher(opts WatcherOptions) (*Watcher, error) {
 		w.saved[foldPath(gitDir)] = st
 	}
 	if !opts.NoNotify {
-		fsw, err := fsnotify.NewWatcher()
+		newNotifier := opts.newNotifier
+		if newNotifier == nil {
+			newNotifier = newFsnotifier
+		}
+		fsw, err := newNotifier()
 		if err != nil {
 			w.problems["notify"] = fmt.Sprintf("repos are polled, not watched, because file notifications didn't start: %v", err)
 		} else {
 			w.fsw = fsw
 			go w.events()
+			go w.watches()
 		}
 	}
 	go w.loop()
@@ -194,6 +241,10 @@ func (w *Watcher) Close() error {
 	}
 	w.mu.Unlock()
 	if w.fsw != nil {
+		// An Add or Remove in flight finishes first, since events() keeps
+		// draining; closing fsnotify under it could leave it waiting.
+		close(w.wstop)
+		<-w.wdone
 		w.fsw.Close()
 	}
 	close(w.stop)
@@ -262,36 +313,151 @@ func (w *Watcher) Track(ctx context.Context, dir string) (Location, error) {
 	t := &tree{key: key, loc: loc, state: st}
 	t.scan = NewScanner(w.git, loc, st, w.now, w.res.Rekey)
 	w.trees[key] = t
-	w.watchLocked(t)
+	w.requestWatchLocked(t)
 	// The first scan sets the cursor, or catches up from a saved one.
 	w.queueLocked(t)
 	return loc, nil
 }
 
-// watchLocked adds file notifications for a worktree's git directory and
-// its logs directory, and for a reftable repo its reftable directory:
-// never the working tree, and never recursively (CP 3.2).
-func (w *Watcher) watchLocked(t *tree) {
-	if w.fsw == nil || len(w.byDir) >= 2*w.opts.MaxWatched {
+// requestWatchLocked asks the watch goroutine to bring t's file
+// notifications in line with whether t is tracked.
+func (w *Watcher) requestWatchLocked(t *tree) {
+	if w.fsw == nil {
 		return
 	}
-	dirs := []string{t.loc.GitDir, filepath.Join(t.loc.GitDir, "logs")}
-	if fi, err := os.Stat(filepath.Join(t.loc.CommonDir, "reftable")); err == nil && fi.IsDir() {
-		dirs = append(dirs, filepath.Join(t.loc.CommonDir, "reftable"))
+	if !slices.Contains(w.wreqs, t) {
+		w.wreqs = append(w.wreqs, t)
 	}
-	for _, d := range dirs {
-		k := foldPath(d)
-		if _, ok := w.byDir[k]; ok {
-			continue
+	select {
+	case w.wkick <- struct{}{}:
+	default:
+	}
+}
+
+// watches runs every fsw.Add and fsw.Remove. fsnotify's Windows backend
+// hands both to the one goroutine that also sends Events, and that
+// goroutine blocks on a full Events channel, which only events() drains.
+// So neither may run in events() or under w.mu, which events() takes:
+// once 50 events were queued, each side would wait for the other.
+func (w *Watcher) watches() {
+	defer close(w.wdone)
+	for {
+		select {
+		case <-w.wkick:
+		case <-w.wstop:
+			return
 		}
-		if err := w.fsw.Add(d); err != nil {
-			if !errors.Is(err, os.ErrNotExist) {
-				w.log.Debug("git watch", "err", err)
+		for {
+			w.mu.Lock()
+			if len(w.wreqs) == 0 || w.closed {
+				w.mu.Unlock()
+				break
 			}
-			continue
+			t := w.wreqs[0]
+			w.wreqs = w.wreqs[1:]
+			w.mu.Unlock()
+			w.syncWatches(t)
 		}
-		w.byDir[k] = t
-		t.watched = append(t.watched, d)
+	}
+}
+
+// watchDirs are the directories a worktree's notifications cover: its git
+// directory and logs directory, and in a reftable repo the reftable
+// directories, its own (a linked worktree keeps its HEAD there) and the
+// repo's. Never the working tree, and never recursively (CP 3.2).
+func watchDirs(loc Location) []string {
+	dirs := []string{loc.GitDir, filepath.Join(loc.GitDir, "logs")}
+	for _, d := range []string{loc.GitDir, loc.CommonDir} {
+		rt := filepath.Join(d, "reftable")
+		if fi, err := os.Stat(rt); err == nil && fi.IsDir() && !slices.Contains(dirs, rt) {
+			dirs = append(dirs, rt)
+		}
+	}
+	return dirs
+}
+
+// syncWatches adds and removes t's file notifications, never with w.mu
+// held across a call into fsnotify. A worktree past MaxWatched gets none
+// and is only polled.
+func (w *Watcher) syncWatches(t *tree) {
+	w.mu.Lock()
+	tracked := !w.closed && w.trees[t.key] == t
+	loc := t.loc
+	have := slices.Clone(t.watched)
+	room := len(have) > 0 || len(w.byDir) < 2*w.opts.MaxWatched
+	w.mu.Unlock()
+	var want []string
+	if tracked && room {
+		want = watchDirs(loc)
+	}
+	for _, d := range have {
+		if !slices.Contains(want, d) {
+			w.unwatch(t, d)
+		}
+	}
+	for _, d := range want {
+		if !slices.Contains(have, d) {
+			w.watch(t, d)
+		}
+	}
+}
+
+// watch adds directory d for t, or joins t to the worktrees it serves.
+func (w *Watcher) watch(t *tree, d string) {
+	k := foldPath(d)
+	w.mu.Lock()
+	if w.closed || w.trees[t.key] != t {
+		w.mu.Unlock()
+		return
+	}
+	if wd, ok := w.byDir[k]; ok {
+		if !slices.Contains(wd.trees, t) {
+			wd.trees = append(wd.trees, t)
+			t.watched = append(t.watched, d)
+		}
+		w.mu.Unlock()
+		return
+	}
+	wd := &watchDir{path: d, trees: []*tree{t}}
+	w.byDir[k] = wd // events for d find t while Add runs
+	t.watched = append(t.watched, d)
+	w.mu.Unlock()
+	err := w.fsw.Add(d)
+	if err == nil {
+		return
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		w.log.Debug("git watch", "err", err)
+	}
+	w.mu.Lock()
+	if w.byDir[k] == wd {
+		delete(w.byDir, k)
+	}
+	for _, wt := range wd.trees {
+		wt.watched = slices.DeleteFunc(wt.watched, func(x string) bool { return foldPath(x) == k })
+	}
+	w.mu.Unlock()
+}
+
+// unwatch takes t off directory d, and removes d's notification once no
+// worktree is left on it.
+func (w *Watcher) unwatch(t *tree, d string) {
+	k := foldPath(d)
+	w.mu.Lock()
+	t.watched = slices.DeleteFunc(t.watched, func(x string) bool { return foldPath(x) == k })
+	wd, ok := w.byDir[k]
+	if !ok {
+		w.mu.Unlock()
+		return
+	}
+	wd.trees = slices.DeleteFunc(wd.trees, func(x *tree) bool { return x == t })
+	last := len(wd.trees) == 0
+	if last {
+		delete(w.byDir, k)
+	}
+	w.mu.Unlock()
+	if last {
+		_ = w.fsw.Remove(wd.path) // fails for a directory that is gone, which needs nothing
 	}
 }
 
@@ -310,7 +476,7 @@ func relevant(name string) bool {
 func (w *Watcher) events() {
 	for {
 		select {
-		case ev, ok := <-w.fsw.Events:
+		case ev, ok := <-w.fsw.eventCh():
 			if !ok {
 				return
 			}
@@ -318,20 +484,23 @@ func (w *Watcher) events() {
 				continue
 			}
 			w.mu.Lock()
-			t := w.byDir[foldPath(filepath.Dir(ev.Name))]
-			if t != nil && !w.closed {
-				if filepath.Base(ev.Name) == "logs" && ev.Has(fsnotify.Create) {
-					w.watchLocked(t) // a new repo's first commit makes logs/
-				}
-				if t.debounce == nil {
-					tt := t
-					t.debounce = time.AfterFunc(w.opts.Debounce, func() { w.poke(tt) })
-				} else {
-					t.debounce.Reset(w.opts.Debounce)
+			if wd := w.byDir[foldPath(filepath.Dir(ev.Name))]; wd != nil && !w.closed {
+				for _, t := range wd.trees {
+					if filepath.Base(ev.Name) == "logs" && ev.Has(fsnotify.Create) {
+						// A new repo's first commit makes logs/; the watch
+						// goroutine adds it, never this one (see watches).
+						w.requestWatchLocked(t)
+					}
+					if t.debounce == nil {
+						tt := t
+						t.debounce = time.AfterFunc(w.opts.Debounce, func() { w.poke(tt) })
+					} else {
+						t.debounce.Reset(w.opts.Debounce)
+					}
 				}
 			}
 			w.mu.Unlock()
-		case err, ok := <-w.fsw.Errors:
+		case err, ok := <-w.fsw.errCh():
 			if !ok {
 				return
 			}
@@ -402,16 +571,11 @@ func (w *Watcher) dropLocked(key string, t *tree) {
 }
 
 func (w *Watcher) untrackLocked(key string, t *tree) {
-	for _, d := range t.watched {
-		if w.fsw != nil {
-			_ = w.fsw.Remove(d)
-		}
-		delete(w.byDir, foldPath(d))
-	}
 	if t.debounce != nil {
 		t.debounce.Stop()
 	}
 	delete(w.trees, key)
+	w.requestWatchLocked(t) // the watch goroutine removes its notifications
 }
 
 // queueLocked asks the worker to scan t.
@@ -574,7 +738,7 @@ func (w *Watcher) release(final bool) {
 // have moved: the size and modification time of the files a HEAD move,
 // a ref update or a reflog append writes.
 type signature struct {
-	files [8]fileSig
+	files [9]fileSig
 	head  string
 }
 
@@ -593,7 +757,7 @@ func statSig(name string) fileSig {
 }
 
 // signatureOf stats HEAD, logs/HEAD, ORIG_HEAD, the current branch's
-// loose ref, packed-refs, the reftable list, the shallow file and the
+// loose ref, packed-refs, the reftable lists, the shallow file and the
 // rebase state. The index isn't in it: it changes on every `git status`.
 func signatureOf(loc Location) signature {
 	var s signature
@@ -611,6 +775,11 @@ func signatureOf(loc Location) signature {
 	s.files[5] = statSig(filepath.Join(loc.CommonDir, "reftable", "tables.list"))
 	s.files[6] = statSig(filepath.Join(loc.CommonDir, "shallow"))
 	s.files[7] = fileSig{ok: rebaseInProgress(loc.GitDir)}
+	if foldPath(loc.GitDir) != foldPath(loc.CommonDir) {
+		// A linked worktree of a reftable repo keeps its HEAD in a stack
+		// of its own.
+		s.files[8] = statSig(filepath.Join(loc.GitDir, "reftable", "tables.list"))
+	}
 	return s
 }
 

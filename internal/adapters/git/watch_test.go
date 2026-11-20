@@ -5,9 +5,14 @@ package git
 import (
 	"context"
 	"errors"
+	"fmt"
+	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
+
+	"github.com/fsnotify/fsnotify"
 
 	"github.com/some-du6e/pairtime/pkg/event"
 )
@@ -43,6 +48,117 @@ func (s testSink) none(t *testing.T) {
 		t.Fatalf("got a %s change, want none", c.Op())
 	default:
 	}
+}
+
+// blockingNotifier stands in for fsnotify's Windows backend, whose one
+// reader goroutine both answers Add and Remove and sends Events, and blocks
+// while the Events channel is full, answering nothing meanwhile.
+type blockingNotifier struct {
+	events    chan fsnotify.Event
+	errs      chan error
+	input     chan notifyReq
+	kick      chan struct{}
+	closed    chan struct{}
+	closeOnce sync.Once
+
+	mu      sync.Mutex
+	queue   []fsnotify.Event
+	watched map[string]bool
+}
+
+type notifyReq struct {
+	add   bool
+	path  string
+	reply chan error
+}
+
+func newBlockingNotifier() *blockingNotifier {
+	n := &blockingNotifier{
+		events:  make(chan fsnotify.Event, 2),
+		errs:    make(chan error),
+		input:   make(chan notifyReq),
+		kick:    make(chan struct{}, 1),
+		closed:  make(chan struct{}),
+		watched: make(map[string]bool),
+	}
+	go n.reader()
+	return n
+}
+
+func (n *blockingNotifier) reader() {
+	defer close(n.events)
+	for {
+		n.mu.Lock()
+		if len(n.queue) > 0 {
+			ev := n.queue[0]
+			n.queue = n.queue[1:]
+			n.mu.Unlock()
+			select {
+			case n.events <- ev: // like sendEvent: Add and Remove wait meanwhile
+			case <-n.closed:
+				return
+			}
+			continue
+		}
+		n.mu.Unlock()
+		select {
+		case req := <-n.input:
+			req.reply <- n.handle(req)
+		case <-n.kick:
+		case <-n.closed:
+			return
+		}
+	}
+}
+
+func (n *blockingNotifier) handle(req notifyReq) error {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if !req.add {
+		delete(n.watched, req.path)
+		return nil
+	}
+	if _, err := os.Stat(req.path); err != nil {
+		return err
+	}
+	n.watched[req.path] = true
+	return nil
+}
+
+func (n *blockingNotifier) do(req notifyReq) error {
+	req.reply = make(chan error, 1)
+	select {
+	case n.input <- req:
+	case <-n.closed:
+		return fsnotify.ErrClosed
+	}
+	return <-req.reply
+}
+
+func (n *blockingNotifier) Add(name string) error    { return n.do(notifyReq{add: true, path: name}) }
+func (n *blockingNotifier) Remove(name string) error { return n.do(notifyReq{path: name}) }
+func (n *blockingNotifier) Close() error {
+	n.closeOnce.Do(func() { close(n.closed) })
+	return nil
+}
+func (n *blockingNotifier) eventCh() <-chan fsnotify.Event { return n.events }
+func (n *blockingNotifier) errCh() <-chan error            { return n.errs }
+
+// send queues events for the reader to deliver.
+func (n *blockingNotifier) send(evs ...fsnotify.Event) {
+	n.mu.Lock()
+	n.queue = append(n.queue, evs...)
+	n.mu.Unlock()
+	select {
+	case n.kick <- struct{}{}:
+	default:
+	}
+}
+
+func (n *blockingNotifier) isWatched(name string) bool {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return n.watched[name]
 }
 
 func (g *gitEnv) watcher(res *Resolver, sink testSink, opts WatcherOptions) *Watcher {
@@ -249,6 +365,44 @@ func TestWatcher(t *testing.T) {
 				}
 				w.Close()
 				sink.none(t)
+			},
+		},
+		{
+			name: "a flood of file events while the watch adds a new repo's logs folder doesn't deadlock it, as it would with fsnotify's Windows backend",
+			run: func(t *testing.T, g *gitEnv) {
+				g.realDates = true
+				dir := filepath.Join(t.TempDir(), "fresh")
+				if err := os.Mkdir(dir, 0o755); err != nil {
+					t.Fatal(err)
+				}
+				g.git(dir, "init", "-q")
+				n := newBlockingNotifier()
+				sink := make(testSink, 16)
+				w := g.watcher(g.resolver(ProjectMap{}, Excludes{}), sink, WatcherOptions{
+					Hold: 50 * time.Millisecond, Debounce: 50 * time.Millisecond,
+					newNotifier: func() (notifier, error) { return n, nil },
+				})
+				loc := track(t, w, dir)
+				sha := (&testRepo{g: g, dir: dir}).commit("first", map[string]string{"a.txt": "a\n"})
+				// The first commit made logs/. Its notification comes ahead of
+				// more than the Events channel holds.
+				logs := filepath.Join(loc.GitDir, "logs")
+				evs := []fsnotify.Event{{Name: logs, Op: fsnotify.Create}}
+				for i := 0; i < 100; i++ {
+					evs = append(evs, fsnotify.Event{Name: filepath.Join(loc.GitDir, fmt.Sprintf("burst-%d", i)), Op: fsnotify.Write})
+				}
+				n.send(append(evs, fsnotify.Event{Name: filepath.Join(loc.GitDir, "HEAD"), Op: fsnotify.Write})...)
+				c := sink.next(t, 20*time.Second)
+				if c.Op() != event.GitCommit || len(c.Commits) != 1 || c.Commits[0].SHA != sha {
+					t.Errorf("got %s %v, want the first commit %s", c.Op(), shas(c.Commits), sha)
+				}
+				deadline := time.Now().Add(10 * time.Second)
+				for !n.isWatched(logs) && time.Now().Before(deadline) {
+					time.Sleep(10 * time.Millisecond)
+				}
+				if !n.isWatched(logs) {
+					t.Error("the new logs folder never got its watch")
+				}
 			},
 		},
 		{
