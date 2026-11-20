@@ -19,6 +19,7 @@ import timeline as tl  # noqa: E402
 LOOKUP_ERRATUM = "2026-11-19-sm-6.5-lookup-slots"
 LOOP_ERRATUM = "2026-11-19-sm-6.5-loop-codes"
 LENGTH_ERRATUM = "2026-11-19-sm-6.5-prompt-length"
+SWITCH_ERRATUM = "2026-11-19-sm-6.5-file-switch"
 THINK_LEAD_S, COMPOSE_CPS, LOW_LEAD_S, EDIT_LEAD_S, COMMIT_LEAD_S = 120, Fraction(3, 2), 20, 120, 60
 
 fx = tl.Fixture(
@@ -140,8 +141,9 @@ fx.pointer("20:38:00.200", "20:38:09.700", "20:38:21.400", "20:38:30.200")  # th
 fx.pointer("20:38:41.600", "20:38:58.300", "20:39:07.900")  # sits in the terminal
 fx.pointer("20:39:15.100")                         # clicks VS Code
 fx.keys_at("20:39:17.000", "20:39:17.600", "20:39:18.200", "20:39:19.600")  # Ctrl+P, Navbar.css
-fx.pointer_every("20:39:26.500", "20:40:46.500", 10_000)  # reads the rules
-fx.typing("20:40:51.000", "20:40:59.900", 500)     # opens Hero.css, types the margin-top, saves
+fx.pointer_every("20:39:26.500", "20:40:46.500", 10_000)  # reads the rules, scrolling
+fx.keys_at("20:40:51.000", "20:40:51.200", "20:40:51.400", "20:40:51.600")  # Ctrl+P, Hero.css
+fx.typing("20:40:52.600", "20:40:59.900", 300)     # types the margin-top, saves
 fx.pointer("20:41:04.300", "20:41:09.900")         # waits for the reload, clicks the browser
 fx.pointer("20:41:18.400", "20:41:29.000", "20:41:36.600", "20:41:39.900")  # the phone view: fixed
 fx.typing("20:41:42.000", "20:42:59.600", 780)     # types T20
@@ -258,7 +260,11 @@ run(19)
 browser("20:38:00.300")
 terminal("20:38:30.300")
 vscode("20:39:15.300")
-heartbeat("20:39:20.000", "open", NAVBAR, 0)
+# WakaTime sends a heartbeat when the file in front changes and at a save
+# (HC 1.5): opening Navbar.css, switching to Hero.css, saving the fix.
+# DESIGN 5.7 makes the first two navigate, so both are NAV anchors.
+heartbeat("20:39:20.000", "navigate", NAVBAR, 0)
+heartbeat("20:40:52.000", "navigate", HERO, 0)
 heartbeat("20:41:00.000", "save", HERO, 1)
 browser("20:41:10.000")
 terminal("20:41:40.000")
@@ -339,8 +345,8 @@ tl.check(SENT[22] - lead(22) * 1000 <= at("20:58:00"), "T22's lead covers 20:58:
 tl.check(at("20:39:20") - EDIT_LEAD_S * 1000 < RUNS[19][0], "the NAV lead would reach back past T19's stop")
 tl.check(at("20:41:00") - EDIT_LEAD_S * 1000 == at("20:39:00"), "the 20:41:00 edit's lead starts at 20:39:00")
 tl.check(at("20:58:00") - COMMIT_LEAD_S * 1000 == at("20:57:00"), "the commit's lead starts at 20:57:00")
-for name in [("editor", "20:39:20.000"), ("editor", "20:41:00.000"), ("editor", "20:55:00.000"),
-             ("editor", "20:57:00.000"), "commit"]:
+for name in [("editor", "20:39:20.000"), ("editor", "20:40:52.000"), ("editor", "20:41:00.000"),
+             ("editor", "20:55:00.000"), ("editor", "20:57:00.000"), "commit"]:
     e = ev[name]
     tl.check(slot_inputs(e["t"] - e["t"] % tl.SLOT_MS), f"input in the slot of the {e['kind']} at {fx.hhmmss(e['t'])}")
 for k, t in SENT.items():
@@ -534,6 +540,36 @@ tl.check(would_codes("20:03") == {"X.rewrite_loop": 20} and would_codes("20:05")
          and would_codes("20:13")["X.agent_only"] == 20,
          "the literal reading gives the erratum's codes for 20:03, 20:05, 20:06, 20:07 and 20:13")
 
+# The file-switch erratum. Switching to Hero.css at 20:40:52 sends a WakaTime
+# heartbeat (HC 1.5), a navigate and so a NAV anchor (DESIGN 5.7, SM 2.3),
+# and the lead of the next anchor wins (SM 3.3 rule 3). From 20:38:30, when
+# he is back from the browser and T19 has stopped, to the 20:41:00 save:
+EDITOR_ANCHORS = {"20:39:20.000": "NAV", "20:40:52.000": "NAV", "20:41:00.000": "E"}
+tl.check({b: ev[("editor", b)]["data"]["act"] for b in EDITOR_ANCHORS}
+         == {"20:39:20.000": "navigate", "20:40:52.000": "navigate", "20:41:00.000": "save"},
+         "two navigations and a save")
+
+
+def editor_minutes(beats):
+    """20:38:30 to 20:41:00 by minute and reason, from the leads of the
+    given editor anchors and T20's prompt."""
+    windows = [(ev[("editor", b)]["t"], EDITOR_ANCHORS[b], EDIT_LEAD_S * 1000) for b in beats]
+    windows.append((SENT[20], "P", lead(20) * 1000))
+    got = {}
+    for tau in range(at("20:38:30"), at("20:41:00"), 1000):
+        _, why, _ = min(w for w in windows if w[0] - w[2] <= tau < w[0])
+        reasons = got.setdefault(fx.hhmm(tau), {})
+        reasons[why] = reasons.get(why, 0) + 1
+    return got
+
+
+sm_editor = editor_minutes(["20:39:20.000", "20:41:00.000"])
+with_switch = editor_minutes(list(EDITOR_ANCHORS))
+tl.check(sm_editor == {"20:38": {"NAV": 30}, "20:39": {"NAV": 20, "E": 40}, "20:40": {"E": 60}},
+         f"without the 20:40:52 heartbeat the leads give SM's rows: {sm_editor}")
+tl.check(with_switch == {"20:38": {"NAV": 30}, "20:39": {"NAV": 60}, "20:40": {"NAV": 52, "E": 8}},
+         f"with it they give 20:39 NAV 60 and 20:40 NAV 52, E 8: {with_switch}")
+
 # What Hackatime would log for the hour (SM 6.5's last paragraph): agent
 # events as ai coding, editor heartbeats as coding, each replayed with
 # min(gap, 120 s), and the handbook's third.
@@ -570,8 +606,8 @@ for m in range(at("20:08"), at("20:38"), tl.MINUTE_MS):
     row(fx.hhmm(m), None, None, codes=["X.reroll", "X.rewrite_loop"], sm="20:08 to 20:37", erratum=LOOP_ERRATUM,
         note="SM gives the range's codes, not each minute's seconds.")
 row("20:38", {"NAV": 30}, {"X.rewrite_loop": 30})
-row("20:39", {"NAV": 20, "E": 40}, {})
-row("20:40", {"E": 60}, {})
+row("20:39", {"NAV": 20, "E": 40}, {}, erratum=SWITCH_ERRATUM)
+row("20:40", {"E": 60}, {}, erratum=SWITCH_ERRATUM)
 row("20:41", {"P": 30, "LOOKUP": 30}, {})
 row("20:42", {"P": 60}, {})
 exp.row("20:43", "21:00", credit={P: {"P": 240, "E": 180, "G": 60, "SUP": 160, "READ": 180, "LOOKUP": 120}},
@@ -618,6 +654,14 @@ tl.check(rest["local"] == "20:43-20:59" and rest["credited_s"] == 940 and rest["
 tl.check(split["SUP"] + split["READ"] == sum(b - a for a, b in drain if a >= at("20:43")) // 1000
          and split["LOOKUP"] == 15 * sum(at("20:43") <= s < at("21:00") for s in browser_slots),
          f"20:43 to 20:59: SUP and READ are the bucket's seconds and LOOKUP the browser's: {split}")
+# Rows 20:38 to 20:40 are what the editor anchors' leads give without the
+# 20:40:52 heartbeat. With it, 20:38 is the same and 20:39 and 20:40 aren't.
+for r in exp.rows:
+    m = r["local"]
+    if m in sm_editor:
+        moved = sm_editor[m] != with_switch[m]
+        tl.check(r["credit"][P] == sm_editor[m] and (r.get("erratum") == SWITCH_ERRATUM) == moved,
+                 f"row {m} is SM's and names the file-switch erratum only if the heartbeat moves it")
 
 expected = exp.doc(
     extra_totals={"credited_s": 1490, "excluded_loops_s": excluded},
@@ -627,7 +671,7 @@ expected = exp.doc(
         "coding_logged_s": {"about": 300, "sm": "and 5 of coding for this hour"},
         "handbook_s": {"about": 1320, "sm": "the handbook's third would allow about 22 minutes"},
     },
-    errata=[LOOKUP_ERRATUM, LOOP_ERRATUM, LENGTH_ERRATUM],
+    errata=[SWITCH_ERRATUM, LOOKUP_ERRATUM, LOOP_ERRATUM, LENGTH_ERRATUM],
     notes=[
         "excluded_loops_s is X.reroll + X.rewrite_loop from 20:05:00 to 20:38:30 (SM 5.3). The rows 20:08 to "
         "20:37 give SM's codes without seconds, so totals.uncredited holds only the loop seconds of 20:05, 20:06, "
@@ -642,6 +686,12 @@ expected = exp.doc(
         "go-ahead with a 20 s lead. 20:05 and 20:06 would be X.reroll and 20:07 X.rewrite_loop. excluded_loops_s "
         "and X.agent_only stay 2,010 and 100; see the loop-codes erratum.",
         "SM's X.agent_only total of 100 s is totals.uncredited: 20 s at 20:03 and 80 s in 20:43-20:59.",
+        "Rows 20:39 and 20:40 are SM's, which have no anchor between the 20:39:20 heartbeat and the 20:41:00 save. "
+        "Switching to Hero.css sends a WakaTime heartbeat at 20:40:52, a navigate and so a NAV anchor, and with "
+        "it the next anchor's lead (SM 3.3 rule 3) gives 20:39 " + ", ".join(
+            f"{c} {n}" for c, n in with_switch["20:39"].items()) + " and 20:40 " + ", ".join(
+            f"{c} {n}" for c, n in with_switch["20:40"].items()) + ". The minutes credit 60 s either way; see the "
+        "file-switch erratum.",
         "T3 to T19 are discounted: T3 as rewrite repeat 2 (attempt 2), T4 as attempt 3, and from T5 on the "
         "paraphrases as rewrite repeats and the exact repeats (T7, T12, T16) as attempts 4, 5 and 6. Where both "
         "rules fire, the code is X.reroll, as in SM's 20:07 row.",
@@ -687,6 +737,9 @@ for k in sorted(SENT):
 anchor_list += [
     anc(ev[("editor", "20:39:20.000")], "editor_navigation", EDIT_LEAD_S, "params",
         "20:38-20:39: opens Navbar.css (heartbeat at 20:39:20); its lead can't reach back past T19's stop"),
+    anc(ev[("editor", "20:40:52.000")], "editor_navigation", EDIT_LEAD_S, "params",
+        "20:40: switches to Hero.css to type the fix (heartbeat at 20:40:52), an anchor SM's rows don't have; "
+        "see the file-switch erratum"),
     anc(ev[("editor", "20:41:00.000")], "typed_edit", EDIT_LEAD_S, "params",
         "20:40: edits Hero.css by hand at 20:41:00, a change event"),
     anc(ev[("editor", "20:55:00.000")], "typed_edit", EDIT_LEAD_S, "params", "20:43 to 20:59: E"),
