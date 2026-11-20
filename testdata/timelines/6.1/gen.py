@@ -112,15 +112,30 @@ def focus(t, app_class, app, project=None):
     return fx.emit(t, "os.focus", data, source="os", via="os", sample=True)
 
 
-def heartbeat(t, act, file, lines=0):
+heartbeats = []  # (t, file, save), for the check of WakaTime's rule below
+
+
+def heartbeat(t, act, file, lines=0, save=False):
     # WakaTime's VS Code plugin through the dual-send (DESIGN 5.6). The
-    # bridge maps a heartbeat with changed lines to an edit and any other to
-    # navigation, both with edit_source unknown (DESIGN 5.7). macOS skips the
-    # peer-process check, so these arrive via editor.
+    # bridge maps a heartbeat with changed lines or a save to an edit and
+    # any other to navigation, both with edit_source unknown (DESIGN 5.7).
+    # macOS skips the peer-process check, so these arrive via editor.
+    heartbeats.append((t, file, save))
     return fx.emit(t, "editor.activity",
                    {"editor": "vscode", "act": act, "file_hash": file, "lines_changed": lines,
                     "edit_source": "unknown"},
                    source="editor", via="editor", project=P)
+
+
+def open_file():
+    """The file VS Code has open: the last heartbeat's."""
+    return heartbeats[-1][1]
+
+
+def another_file():
+    """A file he opens, one of the eleven other than the one open."""
+    others = [f for f in FILES if f != open_file()]
+    return others[rand.below(len(others))]
 
 
 def prompt(t, turn):
@@ -229,7 +244,7 @@ def cycle(k):
         # Back from the drink: the first thing he does is click in VS Code.
         move(BACK)
         focus(BACK, "editor", CODE, P)
-        heartbeat(BACK, "navigate", FILES[rand.below(len(FILES))])
+        heartbeat(BACK, "navigate", another_file())
         presses(BACK + 1_300, c("1:46.0"), 2_500, 6_000)
     else:
         if k > 1 and (k - 1) in COMMIT_CYCLES:
@@ -237,12 +252,12 @@ def cycle(k):
             focus(C, "editor", CODE, P)
         presses(c("0:01.2"), c("0:28.0"), 1_800, 4_200)
         press(c("0:29.6"))
-        heartbeat(c("0:30"), "navigate", FILES[rand.below(len(FILES))])
+        heartbeat(c("0:30"), "navigate", another_file())
         presses(c("0:32.4"), c("1:46.0"), 2_500, 6_000)
     press(c("1:47.2"))
     presses(c("1:47.8"), c("1:49.3"), 400, 600)
     press(c("1:49.6"))
-    heartbeat(c("1:50"), "navigate", FILES[rand.below(len(FILES))])
+    heartbeat(c("1:50"), "navigate", another_file())
     press(c("1:53.1"))
     press(c("1:56.4"))
 
@@ -305,11 +320,16 @@ def cycle(k):
                len(edits_since_commit["files"]))
         edits_since_commit.update(ins=0, dels=0, files=set())
     else:
+        # The edit is in the file open since 1:50, so VS Code changes no file.
         focus(c("11:00"), "editor", CODE, P)
         presses(c("11:02.0"), c("11:39.2"), 500, 900)
         press(c("11:39.7"))  # Cmd-S
-        hand = FILES[rand.below(len(FILES))]
-        heartbeat(c("11:40"), "edit", hand, lines=2)
+        # A number drawn and dropped. Other fixtures copy this one's harness
+        # events by time and data, and the draws after this one set the
+        # agent's files and line counts, so they keep their place.
+        rand.below(len(FILES))
+        hand = open_file()
+        heartbeat(c("11:40"), "edit", hand, lines=2, save=True)
         edits_since_commit["ins"] += 2
         edits_since_commit["dels"] += 1
         edits_since_commit["files"].add(hand)
@@ -327,7 +347,7 @@ press(at("16:59:59.900"))
 focus(at("17:00:00.000"), "editor", CODE, P)
 presses(at("17:00:01.200"), at("17:00:28.000"), 1_800, 4_200)
 press(at("17:00:29.600"))
-heartbeat(at("17:00:30.000"), "navigate", FILES[rand.below(len(FILES))])
+heartbeat(at("17:00:30.000"), "navigate", another_file())
 press(at("17:00:33.100"))
 press(at("17:00:37.500"))
 press(at("17:00:42.200"))
@@ -358,6 +378,16 @@ for a, b in zip(times, times[1:]):
     tl.check(b - a <= 120_000, f"silence from {fx.hhmmss(a)} to {fx.hhmmss(b)} is at most 120 s")
 tl.check(LEFT in times and BACK in times and not input_in(LEFT + 1, BACK), "the drink: 15:06:40 to 15:12:40")
 tl.check(BACK - LEFT == 360_000, "the silent run is 6 minutes long")
+
+# WakaTime's VS Code plugin sends a heartbeat when the file changes, on a
+# save, or on an editor event more than 120 s after the last heartbeat
+# (HC 1.5), and only from the window in front (SM 3.2).
+for (a, fa, _), (b, fb, save) in zip(heartbeats, heartbeats[1:]):
+    tl.check(fb != fa or save or b - a > 120_000,
+             f"the heartbeat at {fx.hhmmss(b)} changes file, saves or comes over 120 s after {fx.hhmmss(a)}")
+for t, _, _ in heartbeats:
+    front = [e for e in events if e["kind"] == "os.focus" and e["t"] <= t][-1]
+    tl.check(front["data"]["app_hash"] == CODE, f"VS Code is in front at the heartbeat at {fx.hhmmss(t)}")
 
 prompts_at = [start(k) + off("4:00") for k in range(1, CYCLES + 1)]
 for k in range(1, CYCLES + 1):
