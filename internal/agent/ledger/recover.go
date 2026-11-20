@@ -40,7 +40,9 @@ func damaged(format string, args ...any) error {
 
 // readBatchesFile reads batches.seg. It stops at the first frame that
 // isn't whole, which only a crash or a power cut leaves at the end of a
-// file written without a flush, and says where that is. Its chain frame
+// file written without a flush, and says where that is. A receipt is
+// flushed with everything before it (StoreReceipt), so such a frame with a
+// whole receipt after it is damage instead. Its chain frame
 // was written whole, by atomic rename, before any other, so a file that
 // doesn't start with one is damaged, and so is an empty one: without its
 // chain frame nothing says which device or key the segments belong to,
