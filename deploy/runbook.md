@@ -348,7 +348,7 @@ Before the native program pays out, the server moves to a Hetzner CCX13, or an A
 
 | Path on the host | Owner and mode | In the container |
 |---|---|---|
-| `data/` | 65532, 0700 | `/data` in pairtimed: the database, its WAL, Litestream's `.pairtime.db-litestream/`, `keys/` |
+| `data/` | 65532, 0700 | `/data` in pairtimed: the database, its WAL, Litestream's `.pairtime.db-litestream/`, `keys/`, and `tmp/` for SQLite's temporary files |
 | `data/keys/*` | 65532, 0600 | written once by init, read by pairtimed |
 | `witness-roots/` | 65532, 0700 | `/witness`, written by pairtimed (WP-SV17) and read by the witness sidecar |
 | `config/` | you, 0755 | `/etc/pairtime`, read-only, in pairtimed |
