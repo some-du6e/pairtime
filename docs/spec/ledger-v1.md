@@ -338,7 +338,7 @@ U+0009 to U+000D, U+0020, U+0085, U+00A0, U+1680, U+2000 to U+200A,
 U+2028, U+2029, U+202F, U+205F, U+3000
 ```
 
-Go's `unicode.IsSpace` tests this set. Python's `str.isspace` doesn't, because it adds U+001C to U+001F.
+Implementations test these 25 code points directly, as 10.4 pins its lowercase table, and not through a library's `White_Space` table, which follows the library's Unicode version: U+180E left the set in Unicode 6.3. A server whose table gained a code point would read an honest kept token holding it as mixing kinds, `bad_item` (10.3), and its CC8 shingles would stop matching the client's. Go's `unicode.IsSpace` tests the same set today, which makes it a useful cross-check in tests. Python's `str.isspace` doesn't, because it adds U+001C to U+001F.
 
 The tokens of a text are its maximal runs of whitespace and its maximal runs of other code points, in order. So neighbouring tokens are of different kinds, no token is empty, and the tokens concatenate to the text. The empty text has no tokens. CRLF is a whitespace token, or part of one. Tokens are numbered from `j = 1` to `n`.
 
