@@ -20,8 +20,9 @@ Delete the capture folder when you're done; that removes the scratch project, th
 |---|---|
 | `dump-hook.sh RUN_DIR LABEL` | The hook command on macOS and Linux (and on Windows under Git Bash). Each call writes `hooks/NNNNNN/` with `time`, `argv`, `env`, `cwd`, `parents` (pid, controlling terminal and executable name of each parent) and `stdin` |
 | `dump-hook.ps1 RUN_DIR LABEL` | The same in PowerShell, for Windows. Same files, same format; Windows has no terminals, so it adds `console`, which says whether the hook had a console to share with the harness |
+| `allow-once.sh RUN_DIR LABEL`, `allow-once.ps1` | Claude Code's `PermissionRequest` hook: records the call with the dumper, and answers step 22's permission prompt itself, once, 2 seconds after it arrives, so the capture holds a permission a hook decided. The decision it sent is kept in `RUN_DIR/allow-once` |
 | `deny-once.sh RUN_DIR LABEL` | Gemini CLI's `AfterAgent` hook: records the call with `dump-hook.sh`, and turns step 19's first answer down once, so the capture holds a deny-retry. The decision it sent is kept in `RUN_DIR/deny-once` |
-| `otlp_sink.py RUN_DIR` | Saves each OTLP/HTTP JSON request as `otlp/NNNNNN.json` with a `.meta` file, and records step numbers typed into its terminal in `STEPS.txt` |
+| `otlp_sink.py RUN_DIR` | Saves each OTLP/HTTP JSON request as `otlp/NNNNNN.json` with a `.meta` file, and records step numbers typed into its terminal in `STEPS.txt`. SCRIPTS.md's step 23 adds `connections`, the pid and executable name of each process holding one of its connections, from `lsof` or `Get-NetTCPConnection` |
 | `prepare.py HARNESS ROOT RUN` | Makes the scratch project, the run folder and the harness's settings folder, writes the Claude Code hook config for the harnesses that read it, and prints the commands for the rest |
 | `collect.py RUN_DIR` | Copies the transcripts the captured hooks name, with `--history` and `--extra` for history files and harness logs |
 | `scrub.py RUN_DIR OUT_DIR` | Writes the scrubbed copy into the repo and the report beside the run |
