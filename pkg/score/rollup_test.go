@@ -63,7 +63,18 @@ func TestWorkSessions(t *testing.T) {
 		{"each project has its own sessions, which another project's minute doesn't split",
 			joinDerived(creditMinutes("p_1", at(0), at(300)), creditMinutes("p_2", at(180))),
 			[]want{{"p_1", 0, 360, 120}, {"p_2", 180, 240, 60}}},
-		{"a minute with nothing credited to the project starts no session", creditMinutes("p_1"), nil},
+		{"a minute focused on p_1 that credits it nothing starts no p_1 session, though another project's credit in it starts one",
+			Derived{
+				Slots: []Slot{{Start: at(60), FocusProject: "p_1"}, {Start: at(75), FocusProject: "p_1"},
+					{Start: at(90), FocusProject: "p_1"}, {Start: at(105), FocusProject: "p_1"}},
+				Credits: []Credit{
+					{Slot: at(60), Uncredited: map[event.Reason]int64{xNoAnch: 15}},
+					{Slot: at(75), Uncredited: map[event.Reason]int64{xAgent: 15}, AgentS: 15, AgentOnly: map[string]int64{"p_1": 15}},
+					{Slot: at(90), Credited: []Credited{credOf("p_2", rP, event.EvidenceA, 15)}},
+					{Slot: at(105), Uncredited: map[event.Reason]int64{xNoAnch: 15}},
+				},
+			},
+			[]want{{"p_2", 60, 120, 15}}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -253,15 +264,15 @@ func TestDays(t *testing.T) {
 
 func TestProjectCommits(t *testing.T) {
 	b := newTL(false)
-	commit := func(tm int64, project string, op event.GitOp, sha string) {
+	commit := func(tm int64, project string, op event.GitOp, sha string, parents ...string) {
 		b.emit(tm, event.Envelope{Source: event.SourceGit, Via: event.ViaGit, Harness: event.HarnessNone,
-			SessionKey: event.NoSession, ProjectKey: project}, &event.GitChange{Op: op, SHA: sha, Actor: event.ActorHuman})
+			SessionKey: event.NoSession, ProjectKey: project}, &event.GitChange{Op: op, SHA: sha, Parents: parents, Actor: event.ActorHuman})
 	}
 	sha := func(c byte) string { return string(slices.Repeat([]byte{c}, 40)) }
-	commit(at(100), "p_1", event.GitCommit, sha('1'))
-	commit(at(250), "p_1", event.GitCommit, sha('2'))
+	commit(at(100), "p_1", event.GitCommit, sha('1'), sha('0'))
+	commit(at(250), "p_1", event.GitCommit, sha('2'), sha('1'))
 	// The amend replaces the commit at 250 s.
-	commit(at(300), "p_1", event.GitAmend, sha('3'))
+	commit(at(300), "p_1", event.GitAmend, sha('3'), sha('1'))
 	// Another project's commit and a rebase move nothing.
 	commit(at(200), "p_2", event.GitCommit, sha('4'))
 	commit(at(280), "p_1", event.GitRebase, sha('5'))
@@ -292,7 +303,7 @@ func TestProjectCommits(t *testing.T) {
 		ok   bool
 	}{
 		{"the project rollup passes pkg/event validation and credits all 90 s", p.Validate() == nil && p.CreditedS == 90},
-		{"each slot's credit goes to the first commit after the slot's start, and an amend takes the commit it replaces (SM 3.5)",
+		{"in linear history a commit takes the credit since its parent's record, the first all the credit before it, and an amend takes the place of the commit it replaces (SM 3.5)",
 			reflect.DeepEqual(have, []commitWant{
 				{sha('1'), 30, map[event.Activity]float64{event.ActivityPrompting: 15, event.ActivityHandEdit: 15}},
 				{sha('3'), 45, map[event.Activity]float64{event.ActivityReadingOutput: 15, event.ActivityReviewing: 15,
@@ -310,10 +321,84 @@ func TestProjectCommits(t *testing.T) {
 	}
 }
 
+// TestCommitParents checks which credit a commit takes when history isn't
+// linear: from its first parent's record to its own (SM 3.5, DESIGN 5.8's
+// first parent), a merge included, since neither SM nor DESIGN says which
+// parent a merge's time runs from.
+func TestCommitParents(t *testing.T) {
+	sha := func(c byte) string { return string(slices.Repeat([]byte{c}, 40)) }
+	main0, f1, f2, merge, pulled, after := sha('a'), sha('b'), sha('c'), sha('d'), sha('e'), sha('f')
+	type gitWant struct {
+		sha      string
+		credited float64
+	}
+	cases := []struct {
+		name    string
+		commits func(commit func(s int64, op event.GitOp, sha string, parents ...string))
+		// slots are slot starts, in seconds, each crediting p_1 15 s.
+		slots       []int64
+		want        []gitWant
+		uncommitted float64
+	}{
+		{
+			name: "a merge takes the credit since its first parent, the branch it was made on, so it shows the feature branch's work as well as its 30 s",
+			commits: func(commit func(int64, event.GitOp, string, ...string)) {
+				commit(100, event.GitCommit, main0)
+				// A feature branch from main0, then git merge on main 30 s
+				// after its last commit.
+				commit(1900, event.GitCommit, f1, main0)
+				commit(3700, event.GitCommit, f2, f1)
+				commit(3730, event.GitMerge, merge, main0, f2)
+			},
+			slots:       []int64{0, 1000, 2000, 3715, 3750},
+			want:        []gitWant{{main0, 15}, {f1, 15}, {f2, 15}, {merge, 45}},
+			uncommitted: 15,
+		},
+		{
+			name: "a commit whose first parent has no record, as after a pull, takes the credit since the commit record before it",
+			commits: func(commit func(int64, event.GitOp, string, ...string)) {
+				commit(100, event.GitCommit, main0)
+				commit(500, event.GitCommit, after, pulled)
+			},
+			slots: []int64{0, 300, 600},
+			want:  []gitWant{{main0, 15}, {after, 15}}, uncommitted: 15,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			b := newTL(false)
+			c.commits(func(s int64, op event.GitOp, sha string, parents ...string) {
+				b.emit(at(s), event.Envelope{Source: event.SourceGit, Via: event.ViaGit, Harness: event.HarnessNone,
+					SessionKey: event.NoSession, ProjectKey: "p_1"}, &event.GitChange{Op: op, SHA: sha, Parents: parents, Actor: event.ActorHuman})
+			})
+			var d Derived
+			for _, s := range c.slots {
+				d.Credits = append(d.Credits, Credit{Slot: at(s), Credited: []Credited{credOf("p_1", rP, event.EvidenceA, 15)}})
+			}
+			got := Rollups{Table: testTable(t)}.Projects(d, b.records())
+			if len(got) != 1 {
+				t.Fatalf("project rollups %+v, want p_1's", got)
+			}
+			if err := got[0].Validate(); err != nil {
+				t.Error(err)
+			}
+			var have []gitWant
+			for _, ct := range got[0].Commits {
+				have = append(have, gitWant{ct.SHA, ct.CreditedS})
+			}
+			if !reflect.DeepEqual(have, c.want) || got[0].UncommittedS != c.uncommitted {
+				t.Errorf("commits %+v and %v s uncommitted, want %+v and %v s", have, got[0].UncommittedS, c.want, c.uncommitted)
+			}
+		})
+	}
+}
+
 // TestFixtureRollups checks each fixture's rollups against each other and
 // its minutes: every one is a valid pkg/event rollup, the days credit what
 // the minutes do, each project's work sessions what its project rollup
-// does, and each day's projects what the day does.
+// does, and each day's projects what the day does. Every fixture's history
+// is linear, each commit's first parent the commit before it, so a
+// project's commits and its uncommitted time split its credit exactly.
 func TestFixtureRollups(t *testing.T) {
 	for _, f := range creditCases(t) {
 		d := scoreAll(t, fixtureDevice(f), f.Events)

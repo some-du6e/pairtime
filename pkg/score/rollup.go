@@ -5,6 +5,7 @@ package score
 import (
 	"cmp"
 	"maps"
+	"math"
 	"slices"
 	"strings"
 	"time"
@@ -399,7 +400,7 @@ type ProjectRollup struct {
 	// AgentOnlyS is the project's agent-only time (SM 2.6).
 	AgentOnlyS float64 `json:"agent_only_s"`
 	// Commits are the project's commits, in order, each with the credit
-	// since the commit before it.
+	// since its parent.
 	Commits []CommitTime `json:"commits,omitempty"`
 	// UncommittedS is the credit after the project's last commit, the
 	// uncommitted time (SM 3.5, SP 4.3), and UncommittedByKind splits it.
@@ -413,8 +414,9 @@ type CommitTime struct {
 	// T is when the commit's git.change record says it happened.
 	T int64 `json:"t"`
 	// CreditedS is the commit's credited_seconds_since_parent: the
-	// project's credit since the commit before it, and CreditedByKind
-	// splits it.
+	// project's credit from its first parent's record to its own (Projects
+	// says which parent and when it has none), and CreditedByKind splits
+	// it.
 	CreditedS      float64                    `json:"credited_seconds_since_parent"`
 	CreditedByKind map[event.Activity]float64 `json:"credited_by_kind,omitempty"`
 }
@@ -424,12 +426,22 @@ type CommitTime struct {
 // any that include the projects' git.change records.
 //
 // A project's commits are its git.change records of op commit, merge or
-// revert, each a new commit after the one before it. An amend replaces the
-// commit before it, so the amended commit takes that commit's time and
-// what came after it. Each slot's credit goes to the first commit made
-// after the slot's start, and credit after the last commit is
-// uncommitted. Moving time across a rebase is the server's (SP 4.4): here
-// a rebase moves nothing.
+// revert. An amend replaces the commit before it, so the amended commit
+// takes that commit's place and parent. A commit's
+// credited_seconds_since_parent is the project's credit in the slots that
+// start at or after its parent's record and before its own: SM 3.5's
+// credit "between a commit's parent and the commit". The parent is the
+// first one, the parent DESIGN 5.8's --shortstat counts against. Neither SM
+// nor DESIGN says which parent a merge's time runs from, so a merge takes
+// its first parent too, the branch it was made on, and its interval can
+// cover the merged branch's commits; that labels no second twice in the
+// timeline, since commits only label seconds it credited once (SM 3.5, SP
+// 4.4). A commit whose first parent has no record here, such as the first
+// commit after pairtime started, takes the credit since the commit record
+// before it, or all the credit before it when there is none. So in linear
+// history each credited slot before the last commit goes to exactly one
+// commit. Credit from the last commit on is uncommitted. Moving time across
+// a rebase is the server's (SP 4.4): here a rebase moves nothing.
 func (r Rollups) Projects(d Derived, records []event.Event) []ProjectRollup {
 	ms := Minutes(d)
 	commits := projectCommits(records)
@@ -437,9 +449,8 @@ func (r Rollups) Projects(d Derived, records []event.Event) []ProjectRollup {
 	for _, p := range creditedProjects(ms) {
 		t := newTally()
 		from, to := int64(0), int64(0)
-		cs := commits[p]
-		byCommit := make([]map[event.Activity]int64, len(cs))
-		var after map[event.Activity]int64
+		// The project's credited slots, in order, by kind.
+		var slots []kindSlot
 		for _, m := range ms {
 			if m.creditedHalves()[p] == 0 && !m.touches(p) {
 				continue
@@ -450,44 +461,65 @@ func (r Rollups) Projects(d Derived, records []event.Event) []ProjectRollup {
 			to = m.End()
 			for _, s := range m.Slots {
 				t.addSlot(s, p, r.backfilled(m.Start))
-				k, _ := slices.BinarySearchFunc(cs, s.Slot, func(c CommitTime, slot int64) int {
-					if c.T > slot {
-						return 1
-					}
-					return -1
-				})
+				var byKind map[event.Activity]int64
 				for _, e := range s.Credited {
 					if e.ProjectKey != p || e.Halves == 0 {
 						continue
 					}
-					if k < len(cs) {
-						if byCommit[k] == nil {
-							byCommit[k] = map[event.Activity]int64{}
-						}
-						byCommit[k][e.Reason.Activity()] += e.Halves
-					} else {
-						if after == nil {
-							after = map[event.Activity]int64{}
-						}
-						after[e.Reason.Activity()] += e.Halves
+					if byKind == nil {
+						byKind = map[event.Activity]int64{}
 					}
+					byKind[e.Reason.Activity()] += e.Halves
+				}
+				if byKind != nil {
+					slots = append(slots, kindSlot{s.Slot, byKind})
 				}
 			}
 		}
 		t.addAnchors(d.Anchors, p, from, to)
-		pr := ProjectRollup{Rollup: t.rollup(r.Table, event.LevelProject, p, from, to), AgentOnlyS: float64(t.agentOnly),
-			UncommittedByKind: halvesOf(after)}
+		pr := ProjectRollup{Rollup: t.rollup(r.Table, event.LevelProject, p, from, to), AgentOnlyS: float64(t.agentOnly)}
+		cs := commits[p]
+		last := int64(math.MinInt64)
+		if n := len(cs); n > 0 {
+			last = cs[n-1].T
+		}
+		after := sumKinds(slots, last, math.MaxInt64)
+		pr.UncommittedByKind = halvesOf(after)
 		for _, n := range after {
 			pr.UncommittedS += float64(n) / 2
 		}
-		for k, c := range cs {
-			c.CreditedByKind = halvesOf(byCommit[k])
-			for _, n := range byCommit[k] {
-				c.CreditedS += float64(n) / 2
+		for _, c := range cs {
+			byKind := sumKinds(slots, c.since, c.T)
+			ct := c.CommitTime
+			ct.CreditedByKind = halvesOf(byKind)
+			for _, n := range byKind {
+				ct.CreditedS += float64(n) / 2
 			}
-			pr.Commits = append(pr.Commits, c)
+			pr.Commits = append(pr.Commits, ct)
 		}
 		out = append(out, pr)
+	}
+	return out
+}
+
+// kindSlot is one slot's credit to a project, by kind, in half-seconds.
+type kindSlot struct {
+	start  int64
+	byKind map[event.Activity]int64
+}
+
+// sumKinds sums the credit of the slots, in order, that start in [from,
+// to), by kind.
+func sumKinds(slots []kindSlot, from, to int64) map[event.Activity]int64 {
+	var out map[event.Activity]int64
+	i, _ := slices.BinarySearchFunc(slots, from, func(s kindSlot, t int64) int { return cmp.Compare(s.start, t) })
+	for ; i < len(slots) && slots[i].start < to; i++ {
+		for k, n := range slots[i].byKind {
+			if out == nil {
+				out = map[event.Activity]int64{}
+			}
+			out[k] += n
+		}
 	}
 	return out
 }
@@ -503,31 +535,61 @@ func (m Minute) touches(p string) bool {
 	return false
 }
 
+// commitRecord is a commit as Projects attributes credit to it.
+type commitRecord struct {
+	CommitTime
+	// parent is the SHA of its first parent, or "" with none.
+	parent string
+	// since is the start of its interval: its first parent's T, or the T
+	// of the commit record before it when the first parent has no record
+	// earlier than it, or math.MinInt64 for the first.
+	since int64
+}
+
 // projectCommits returns each project's commits from its git.change
-// records, in record order.
-func projectCommits(records []event.Event) map[string][]CommitTime {
+// records, in order of their records, with the interval each one's credit
+// comes from.
+func projectCommits(records []event.Event) map[string][]commitRecord {
 	recs := slices.Clone(records)
 	slices.SortStableFunc(recs, recordCmp)
-	out := map[string][]CommitTime{}
+	out := map[string][]commitRecord{}
 	for _, e := range recs {
 		g, ok := e.Data.(*event.GitChange)
 		if !ok || e.ProjectKey == "" {
 			continue
 		}
+		c := commitRecord{CommitTime: CommitTime{SHA: g.SHA, T: e.T}}
+		if len(g.Parents) > 0 {
+			c.parent = g.Parents[0]
+		}
 		cs := out[e.ProjectKey]
 		switch g.Op {
 		case event.GitCommit, event.GitMerge, event.GitRevert:
-			out[e.ProjectKey] = append(cs, CommitTime{SHA: g.SHA, T: e.T})
+			out[e.ProjectKey] = append(cs, c)
 		case event.GitAmend:
 			if n := len(cs); n > 0 {
-				cs[n-1].SHA, cs[n-1].T = g.SHA, e.T
+				if c.parent == "" {
+					c.parent = cs[n-1].parent
+				}
+				cs[n-1] = c
 			} else {
-				out[e.ProjectKey] = append(cs, CommitTime{SHA: g.SHA, T: e.T})
+				out[e.ProjectKey] = append(cs, c)
 			}
 		}
 	}
 	for p, cs := range out {
-		slices.SortStableFunc(cs, func(a, b CommitTime) int { return cmp.Compare(a.T, b.T) })
+		slices.SortStableFunc(cs, func(a, b commitRecord) int { return cmp.Compare(a.T, b.T) })
+		recorded := map[string]int64{}
+		for k := range cs {
+			cs[k].since = math.MinInt64
+			if k > 0 {
+				cs[k].since = cs[k-1].T
+			}
+			if t, ok := recorded[cs[k].parent]; ok && cs[k].parent != "" && t < cs[k].T {
+				cs[k].since = t
+			}
+			recorded[cs[k].SHA] = cs[k].T
+		}
 		out[p] = cs
 	}
 	return out
