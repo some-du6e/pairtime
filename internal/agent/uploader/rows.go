@@ -8,6 +8,7 @@ import (
 
 	"github.com/some-du6e/pairtime/internal/agent/ledger"
 	"github.com/some-du6e/pairtime/pkg/event"
+	pkgledger "github.com/some-du6e/pairtime/pkg/ledger"
 )
 
 // rowTime is what the uploader keeps of every sealed batch to read the
@@ -30,6 +31,8 @@ type rowIndex struct {
 	times  []rowTime // times[i] is batch i + 1
 	first  uint64    // queue[0]'s batch, when queue isn't empty
 	queue  []ledger.Row
+	// lastHead is the newest batch's H_b, the prev of the next one.
+	lastHead pkgledger.Hash
 }
 
 // loadRows reads the chain in the ledger directory dir and keeps the rows
@@ -70,6 +73,7 @@ func (ix *rowIndex) add(r ledger.Row) error {
 		ix.first = r.B
 	}
 	ix.queue = append(ix.queue, r)
+	ix.lastHead = r.Head
 	return nil
 }
 
