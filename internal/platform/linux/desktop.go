@@ -156,6 +156,7 @@ type Desktop struct {
 
 	mu     sync.Mutex
 	status Status
+	locked bool // LockedHint, while Status.Lock is known
 
 	cancel    context.CancelFunc
 	wg        sync.WaitGroup
@@ -334,7 +335,7 @@ func (d *Desktop) startPower(ctx context.Context, systemBus func(context.Context
 		d.setStatus(func(s *Status) { s.Power, s.Lock = reason, reason })
 		return
 	}
-	l, lockErr, err := openLogind(ctx, conn, readyTimeout, log)
+	l, err := openLogind(ctx, conn, readyTimeout, log, d.setLock)
 	if err != nil {
 		conn.Close()
 		reason := unknown(err.Error() + ": suspends show only as gaps between samples")
@@ -342,11 +343,7 @@ func (d *Desktop) startPower(ctx context.Context, systemBus func(context.Context
 		return
 	}
 	d.logind = l
-	lock := via("logind LockedHint")
-	if lockErr != nil {
-		lock = unknownErr(lockErr)
-	}
-	d.setStatus(func(s *Status) { s.Power, s.Lock = via("logind PrepareForSleep"), lock })
+	d.setStatus(func(s *Status) { s.Power = via("logind PrepareForSleep") })
 	d.power = make(chan Power, 8)
 	d.closers = append(d.closers, func() { conn.Close() })
 	d.wg.Add(1)
@@ -370,6 +367,14 @@ func (d *Desktop) setStatus(f func(*Status)) {
 	f(&d.status)
 }
 
+// setLock records the lock state logind reports: Status.Lock, and
+// LockedHint while that is known.
+func (d *Desktop) setLock(lock Signal, locked bool) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.status.Lock, d.locked = lock, locked
+}
+
 // Status returns where each signal comes from now.
 func (d *Desktop) Status() Status {
 	d.mu.Lock()
@@ -391,20 +396,23 @@ func (d *Desktop) Idle(ctx context.Context) (Idle, error) {
 		return Idle{}, err
 	}
 	i := Idle{At: time.Now(), Any: idle}
-	if d.logind != nil {
-		i.Locked = d.logind.locked.Load()
+	if locked, err := d.Locked(); err == nil {
+		i.Locked = locked
 	}
 	return i, nil
 }
 
-// Locked reports logind's LockedHint for the agent's session, as of the
-// last change logind announced. It returns ErrLockUnknown when that isn't
-// known.
+// Locked reports logind's LockedHint for the session pairtime follows, as
+// of the last change logind announced. It returns ErrLockUnknown when that
+// isn't known: logind is out of reach, or the session ended and the next
+// one isn't found yet.
 func (d *Desktop) Locked() (bool, error) {
-	if d.logind == nil || !d.Status().Lock.Known() {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if !d.status.Lock.Known() {
 		return false, ErrLockUnknown
 	}
-	return d.logind.locked.Load(), nil
+	return d.locked, nil
 }
 
 // Focus returns the focus changes, starting with the window focused when

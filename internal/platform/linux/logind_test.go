@@ -290,11 +290,43 @@ func TestLogindHandle(t *testing.T) {
 			},
 			want: nil, owner: owner,
 		},
+		// The cases below would make logind look for the session again,
+		// which takes a bus connection this test hasn't got, if handle
+		// didn't drop them first.
+		{
+			name: "the end of a session pairtime doesn't follow changes nothing",
+			sigs: []*dbus.Signal{
+				{Sender: owner, Path: logindPath, Name: managerIface + ".SessionRemoved", Body: []any{"33", dbus.ObjectPath("/org/freedesktop/login1/session/_33")}},
+			},
+			want: nil, owner: owner,
+		},
+		{
+			name: "SessionNew and SessionRemoved from anyone but logind are ignored",
+			sigs: []*dbus.Signal{
+				{Sender: ":1.99", Path: logindPath, Name: managerIface + ".SessionNew", Body: []any{"34", dbus.ObjectPath("/org/freedesktop/login1/session/_34")}},
+				{Sender: ":1.99", Path: logindPath, Name: managerIface + ".SessionRemoved", Body: []any{"32", session}},
+			},
+			want: nil, owner: owner,
+		},
+		{
+			name: "a malformed SessionRemoved is ignored",
+			sigs: []*dbus.Signal{
+				{Sender: owner, Path: logindPath, Name: managerIface + ".SessionRemoved", Body: []any{"32", "not a path"}},
+				{Sender: owner, Path: logindPath, Name: managerIface + ".SessionRemoved", Body: []any{"32"}},
+			},
+			want: nil, owner: owner,
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			rig := newTrackerRig()
-			l := &logind{owner: owner, session: session, track: rig.t}
+			var locked bool
+			l := &logind{owner: owner, session: session, track: rig.t, report: func(lock Signal, v bool) {
+				if !lock.Known() {
+					t.Errorf("lock reported unknown: %+v", lock)
+				}
+				locked = v
+			}}
 			var got []event.PowerOp
 			for _, sig := range tc.sigs {
 				for _, p := range l.handle(sig, time.Now()) {
@@ -307,8 +339,11 @@ func TestLogindHandle(t *testing.T) {
 			if l.owner != tc.owner {
 				t.Errorf("trusted sender %q, want %q", l.owner, tc.owner)
 			}
-			if want := slices.Contains(got, event.PowerLock) && !slices.Contains(got, event.PowerUnlock); l.locked.Load() != want {
-				t.Errorf("locked %v, want %v", l.locked.Load(), want)
+			if want := slices.Contains(got, event.PowerLock) && !slices.Contains(got, event.PowerUnlock); locked != want {
+				t.Errorf("locked %v, want %v", locked, want)
+			}
+			if l.session != session {
+				t.Errorf("follows session %q, want %q", l.session, session)
 			}
 		})
 	}

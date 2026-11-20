@@ -236,3 +236,45 @@ func TestSilentBuses(t *testing.T) {
 		})
 	}
 }
+
+// stubIdle is an idle source that always answers a minute.
+type stubIdle struct{}
+
+func (stubIdle) idle(context.Context) (time.Duration, error) { return time.Minute, nil }
+func (stubIdle) name() string                                { return "stub" }
+func (stubIdle) close()                                      {}
+
+func TestIdleLocked(t *testing.T) {
+	cases := []struct {
+		name   string
+		lock   Signal // Status.Lock
+		locked bool   // the last LockedHint logind reported
+		want   bool
+	}{
+		{"a sample while the followed session is locked says locked", via(lockVia), true, true},
+		{"a sample while the followed session is unlocked says unlocked", via(lockVia), false, false},
+		{"a sample once logind is lost says unlocked, not the last LockedHint", unknown("lost the connection to logind"), true, false},
+		{"a sample while the next session isn't found yet says unlocked", unknown("the session pairtime followed has ended"), true, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			d := &Desktop{idleSrc: stubIdle{}}
+			d.setLock(tc.lock, tc.locked)
+			i, err := d.Idle(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if i.Locked != tc.want {
+				t.Errorf("Idle says locked %v, want %v", i.Locked, tc.want)
+			}
+			locked, err := d.Locked()
+			if tc.lock.Known() {
+				if err != nil || locked != tc.want {
+					t.Errorf("Locked: %v, %v; want %v", locked, err, tc.want)
+				}
+			} else if !errors.Is(err, ErrLockUnknown) {
+				t.Errorf("Locked: %v, %v; want ErrLockUnknown", locked, err)
+			}
+		})
+	}
+}

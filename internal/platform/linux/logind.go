@@ -12,7 +12,6 @@ import (
 	"os"
 	"slices"
 	"sync"
-	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -36,6 +35,9 @@ const (
 // doesn't is broken, and pairtime goes on without what it asked for.
 const callWait = 2 * time.Second
 
+// lockVia names the source of lock state, as Status.Lock gives it.
+const lockVia = "logind LockedHint"
+
 // logind reports suspend and resume from the Manager's PrepareForSleep
 // signal, and lock and unlock from the LockedHint property of the user's
 // session. Before each sleep it holds a delay lock, so the agent can seal
@@ -46,39 +48,45 @@ const callWait = 2 * time.Second
 // lock set LockedHint (GNOME Shell and KDE's kscreenlocker do), which
 // logind announces with PropertiesChanged. A locker that doesn't leaves
 // lock unknown rather than stuck on a lock no unlock ever follows.
+//
+// The agent can outlive the session it follows. A systemd user unit stays
+// up after a logout, and so does an autostarted agent when logind keeps a
+// logged-out session's processes (KillUserProcesses=no), which leaves that
+// session closing until the agent exits. So the Manager's SessionNew and
+// SessionRemoved make logind look for the session again, and lock state is
+// unknown until it has read the next one's LockedHint.
 type logind struct {
 	conn    *dbus.Conn
-	session dbus.ObjectPath // "" when the user's session wasn't found
+	session dbus.ObjectPath // the session followed, or "" while there is none
 	track   *powerTracker
 	sigs    chan *dbus.Signal
 	log     *slog.Logger
+	// report is told the lock state whenever it changes: Status.Lock, and
+	// LockedHint while that is known.
+	report func(lock Signal, locked bool)
 
 	// owner is logind's unique bus name: only its signals count. Anyone
 	// on the bus can send a signal addressed to this connection, but the
 	// bus stamps the true sender on it.
-	owner  string
-	locked atomic.Bool
+	owner string
 }
 
 // openLogind subscribes to logind's signals, finds the session, reads its
 // lock state and takes the first delay lock. It fails only when logind
 // can't be reached; without a session it still reports suspend and
-// resume, and lockErr says why lock state is unknown.
-func openLogind(ctx context.Context, conn *dbus.Conn, readyTimeout time.Duration, log *slog.Logger) (l *logind, lockErr error, err error) {
+// resume, and tells report why lock state is unknown.
+func openLogind(ctx context.Context, conn *dbus.Conn, readyTimeout time.Duration, log *slog.Logger, report func(Signal, bool)) (*logind, error) {
 	ctx, cancel := context.WithTimeout(ctx, callWait)
 	defer cancel()
-	l = &logind{conn: conn, log: log, sigs: make(chan *dbus.Signal, 16)}
+	l := &logind{conn: conn, log: log, report: report, sigs: make(chan *dbus.Signal, 16)}
 	if err := conn.BusObject().CallWithContext(ctx, busName+".GetNameOwner", 0, logindName).Store(&l.owner); err != nil {
-		return nil, nil, errors.New("logind isn't on the system bus")
+		return nil, errors.New("logind isn't on the system bus")
 	}
 	conn.Signal(l.sigs)
 	rules := [][]dbus.MatchOption{
-		{
-			dbus.WithMatchSender(logindName),
-			dbus.WithMatchObjectPath(logindPath),
-			dbus.WithMatchInterface(managerIface),
-			dbus.WithMatchMember("PrepareForSleep"),
-		},
+		managerRule("PrepareForSleep"),
+		managerRule("SessionNew"),
+		managerRule("SessionRemoved"),
 		{
 			dbus.WithMatchSender(busName),
 			dbus.WithMatchInterface(busName),
@@ -88,58 +96,125 @@ func openLogind(ctx context.Context, conn *dbus.Conn, readyTimeout time.Duration
 	}
 	for _, rule := range rules {
 		if err := conn.AddMatchSignalContext(ctx, rule...); err != nil {
-			return nil, nil, err
+			return nil, err
 		}
 	}
 
 	l.track = &powerTracker{take: l.takeDelayLock, timeout: readyTimeout, after: afterFunc, log: log}
-	lockErr = l.watchSession(ctx)
+	if locked, err := l.follow(ctx); err != nil {
+		l.report(unknownErr(err), false)
+	} else {
+		// The first reading only sets the state; run reports it as a
+		// lock if the session starts out locked.
+		l.track.initial = &locked
+		l.report(via(lockVia), locked)
+	}
 	l.track.hold()
-	return l, lockErr, nil
+	return l, nil
 }
 
-// watchSession finds the user's session, subscribes to its property
-// changes and reads LockedHint. Subscribing first means a change between
-// the two isn't lost.
-func (l *logind) watchSession(ctx context.Context) error {
-	session, err := l.findSession(ctx)
-	if err != nil {
-		return err
+// managerRule matches one of the Manager's signals.
+func managerRule(member string) []dbus.MatchOption {
+	return []dbus.MatchOption{
+		dbus.WithMatchSender(logindName),
+		dbus.WithMatchObjectPath(logindPath),
+		dbus.WithMatchInterface(managerIface),
+		dbus.WithMatchMember(member),
 	}
-	err = l.conn.AddMatchSignalContext(ctx,
+}
+
+// sessionRule matches the changes of session's properties.
+func sessionRule(session dbus.ObjectPath) []dbus.MatchOption {
+	return []dbus.MatchOption{
 		dbus.WithMatchSender(logindName),
 		dbus.WithMatchObjectPath(session),
 		dbus.WithMatchInterface(propsIface),
 		dbus.WithMatchMember("PropertiesChanged"),
 		dbus.WithMatchArg(0, sessionIface),
-	)
+	}
+}
+
+// follow finds the session whose lock state counts and watches it.
+func (l *logind) follow(ctx context.Context) (bool, error) {
+	session, err := l.findSession(ctx)
 	if err != nil {
-		return err
+		return false, err
+	}
+	return l.watch(ctx, session)
+}
+
+// watch subscribes to session's property changes and reads its LockedHint.
+// Subscribing first means a change between the two isn't lost. Without a
+// first reading a later change can't be told from the state before it, so
+// then no session is followed.
+func (l *logind) watch(ctx context.Context, session dbus.ObjectPath) (bool, error) {
+	if err := l.conn.AddMatchSignalContext(ctx, sessionRule(session)...); err != nil {
+		return false, err
 	}
 	l.session = session
 	locked, err := l.readLockedHint(ctx)
 	if err != nil {
-		// Without a first reading, a later change can't be told from
-		// the state before it: leave lock unknown throughout.
-		l.session = ""
-		return err
+		l.unfollow(ctx)
+		return false, err
 	}
-	// The first reading only sets the state; run reports it as a lock if
-	// the session starts out locked.
-	l.track.initial = &locked
-	l.locked.Store(locked)
+	return locked, nil
+}
+
+// unfollow stops following the session. If RemoveMatch fails, the
+// session's signals still come, and handle drops them by their path.
+func (l *logind) unfollow(ctx context.Context) {
+	if l.session == "" {
+		return
+	}
+	_ = l.conn.RemoveMatchSignalContext(ctx, sessionRule(l.session)...)
+	l.session = ""
+}
+
+// refollow looks for the session to follow again after one started or
+// ended, and moves to it if it isn't the one followed. ended says the
+// followed session is gone, so lock state is unknown from the start.
+func (l *logind) refollow(now time.Time, ended bool) []Power {
+	ctx, cancel := context.WithTimeout(context.Background(), callWait)
+	defer cancel()
+	if ended {
+		l.unfollow(ctx)
+		l.report(unknown("the session pairtime followed has ended"), false)
+	}
+	session, err := l.findSession(ctx)
+	if err == nil && session == l.session {
+		return nil
+	}
+	if err != nil && l.session != "" && !l.closing(ctx, l.session) {
+		// The session followed goes on, and a lookup that failed is no
+		// reason to drop it.
+		return nil
+	}
+	l.unfollow(ctx)
+	if err == nil {
+		var locked bool
+		if locked, err = l.watch(ctx, session); err == nil {
+			l.report(via(lockVia), locked)
+			if p, ok := l.track.lockedHint(locked, now); ok {
+				return []Power{p}
+			}
+			return nil
+		}
+	}
+	l.report(unknownErr(err), false)
 	return nil
 }
 
-// findSession returns the object path of the agent's logind session. An
-// agent started by systemd's user manager belongs to no session; then the
-// user's display session, the graphical one, is the one whose lock and
-// idle state matter.
+// findSession returns the object path of the session whose lock state
+// counts: the agent's own logind session, unless it is closing because its
+// user logged out. An agent started by systemd's user manager belongs to
+// no session, and one left in a closing session follows no screen any
+// more; for those, the user's display session, the graphical one, is the
+// one whose lock and idle state matter.
 func (l *logind) findSession(ctx context.Context) (dbus.ObjectPath, error) {
 	mgr := l.conn.Object(logindName, logindPath)
 	var path dbus.ObjectPath
 	err := mgr.CallWithContext(ctx, managerIface+".GetSessionByPID", 0, uint32(os.Getpid())).Store(&path)
-	if err == nil && path.IsValid() && path != "/" {
+	if err == nil && path.IsValid() && path != "/" && !l.closing(ctx, path) {
 		return path, nil
 	}
 	var user dbus.ObjectPath
@@ -160,6 +235,16 @@ func (l *logind) findSession(ctx context.Context) (dbus.ObjectPath, error) {
 		}
 	}
 	return "", errors.New("the user has no graphical logind session")
+}
+
+// closing reports whether session's State is "closing": its user logged
+// out, and processes such as the agent are left in it. A State that can't
+// be read counts as not closing.
+func (l *logind) closing(ctx context.Context, session dbus.ObjectPath) bool {
+	var v dbus.Variant
+	err := l.conn.Object(logindName, session).CallWithContext(ctx, propsIface+".Get", 0, sessionIface, "State").Store(&v)
+	state, _ := v.Value().(string)
+	return err == nil && state == "closing"
 }
 
 func (l *logind) readLockedHint(ctx context.Context) (bool, error) {
@@ -307,10 +392,23 @@ func (l *logind) handle(sig *dbus.Signal, now time.Time) []Power {
 		} else {
 			return nil
 		}
-		l.locked.Store(locked)
+		l.report(via(lockVia), locked)
 		if p, ok := l.track.lockedHint(locked, now); ok {
 			return []Power{p}
 		}
+	case managerIface + ".SessionNew", managerIface + ".SessionRemoved":
+		if sig.Sender != l.owner || sig.Path != logindPath || len(sig.Body) != 2 {
+			return nil
+		}
+		path, ok := sig.Body[1].(dbus.ObjectPath)
+		if !ok {
+			return nil
+		}
+		ended := sig.Name == managerIface+".SessionRemoved" && path == l.session
+		if sig.Name == managerIface+".SessionRemoved" && !ended && l.session != "" {
+			return nil // another session ended
+		}
+		return l.refollow(now, ended)
 	}
 	return nil
 }
