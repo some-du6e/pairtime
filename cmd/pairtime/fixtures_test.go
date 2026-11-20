@@ -88,6 +88,26 @@ func TestFixturesScrub(t *testing.T) {
 			notOut: []string{"maya", "Maya", "jonah"},
 		},
 		{
+			// Merged with the address around it, the account or the
+			// password would take the address's type and stay with it
+			// (D-email-redaction).
+			name: "a known value or a URL password inside a kept address is still replaced",
+			files: map[string]string{
+				"log.txt": "rowanq@example.com\npostgres://app:Tr0ub4dor3x@db.example.com/app\nCo-Authored-By: Claude <noreply@anthropic.com>\n",
+			},
+			args:     []string{"--account", "rowanq"},
+			wantCode: 0,
+			wantFiles: map[string]string{
+				"log.txt": "capture@example.com\npostgres://app:REDACTED_URL_PASSWORD@db.example.com/app\nCo-Authored-By: Claude <noreply@anthropic.com>\n",
+			},
+			wantOut: []string{
+				"log.txt:1:1: account, 6 bytes\n",
+				"log.txt:2:16: secret url-password, 11 bytes\n",
+				"removed 2 spans from 1 of 1 files",
+			},
+			notOut: []string{"rowanq", "Tr0ub4dor3x"},
+		},
+		{
 			name: "telemetry account and organization ids become README's id, or 0 for a number, and each is listed",
 			files: map[string]string{
 				"otlp/000001.json": `{"resourceMetrics":[{"resource":{"attributes":[` +
@@ -279,7 +299,7 @@ func TestFixturesScrubPlantedCapture(t *testing.T) {
 			`{"toolUseResult":{"stdout":"rowanq\nrowanq@rowans-laptop:~$ git log\nAuthor: Rowan Quinn <rowan.quinn@westfield.edu>\n` + anthropic +
 			`"},"uri":"file:///c%3A/Users/RowanQ/pairtime-capture/project"}` + "\n" +
 			`{"nested":"{\"stdout\":\"C:\\\\Users\\\\RowanQ\\\\x\"}","school":"Westfield High"}` + "\n" +
-			`{"keys":"` + ghp + " " + aws + " " + jwt + `","trailer":"Co-Authored-By: Claude <noreply@anthropic.com>"}` + "\n",
+			`{"keys":"` + ghp + " " + aws + " " + jwt + `","trailer":"Co-Authored-By: Claude <noreply@anthropic.com>\nCo-authored-by: aider (gpt-5) <aider@aider.chat>"}` + "\n",
 		"otlp/000001.json": `{"resourceLogs":[{"resource":{"attributes":[` +
 			`{"key":"user.account_uuid","value":{"stringValue":"9b1e7f9e-1111-4222-8333-444455556666"}},` +
 			`{"key":"organization.id","value":{"stringValue":"77aa88bb-1111-4222-8333-444455556666"}},` +
@@ -350,7 +370,7 @@ func TestFixturesScrubPlantedCapture(t *testing.T) {
 			}
 		}},
 		{"ids that aren't secrets and public tool addresses are kept", func(t *testing.T) {
-			for _, want := range []string{session, tool, "noreply@anthropic.com"} {
+			for _, want := range []string{session, tool, "noreply@anthropic.com", "aider@aider.chat"} {
 				if !strings.Contains(all.String(), want) {
 					t.Errorf("%s was removed", want)
 				}

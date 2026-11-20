@@ -26,18 +26,19 @@ const fixturesUsage = `Usage:
 Scrub takes out of captured harness fixtures what must not be committed
 (DESIGN 5.1): this machine's account name, home directory, hostname and git
 name and email, the values given with the flags below, anything one of
-gitleaks' rules calls a secret, and personal data that passes its checksum.
-Every file under <dir> is rewritten in place, with the fixed placeholders
-of testdata/fixtures/README.md written the way the file writes each value:
-the home becomes C:\Users\capture, /Users/capture or /home/capture, the
-account capture, the hostname capture-host, the git name Capture User, git
-and other email addresses capture@example.invalid, other listed values
-REDACTED, and a secret REDACTED_ and its gitleaks rule, such as
-REDACTED_GITHUB_PAT. A tool's own address, such as noreply@anthropic.com,
-and one at a domain reserved for examples stay. One line is printed per
-span, without the text it removed, for the review by hand that has to
-follow. Run it with -n first to see what it would change. PROVENANCE.md
-files are left alone.
+gitleaks' rules calls a secret, and personal data that passes Presidio's
+checks, email addresses included. Every file under <dir> is rewritten in
+place, with the fixed placeholders of testdata/fixtures/README.md written
+the way the file writes each value: the home becomes C:\Users\capture,
+/Users/capture or /home/capture, the account capture, the hostname
+capture-host, the git name Capture User, git and other email addresses
+capture@example.invalid, other listed values REDACTED, and a secret
+REDACTED_ and its gitleaks rule, such as REDACTED_GITHUB_PAT. A tool's own
+address, such as noreply@anthropic.com, and one at a domain reserved for
+examples stay, though a known value or a key inside one is still replaced.
+One line is printed per span, without the text it removed, for the review
+by hand that has to follow. Run it with -n first to see what it would
+change. PROVENANCE.md files are left alone.
 
 It exits 1 when something needs that review before anything is committed: a
 binary file it can't scrub, a symlink, or a file or directory name that
@@ -254,12 +255,23 @@ func (s *scrubber) file(path, shown string) {
 		return
 	}
 	text := string(b)
+	// An address that can stay goes before the spans are merged, so a known
+	// value, a URL's password or a key inside it keeps a span of its own and
+	// is still replaced. Merged first, the address would be the longest span
+	// and take whatever it holds with it (D-email-redaction).
+	var found []redact.Span
+	for _, sp := range append(s.r.Find(text), telemetryIDs(text)...) {
+		if sp.Type == redact.TypeEmail && publicAddress(text[sp.Start:sp.End]) {
+			continue
+		}
+		found = append(found, sp)
+	}
 	var edits []edit
-	for _, sp := range redact.Merge(append(s.r.Find(text), telemetryIDs(text)...)) {
+	for _, sp := range redact.Merge(found) {
 		with := s.placeholder(text, sp)
 		if with == text[sp.Start:sp.End] {
-			// A placeholder from an earlier run, or an address that can
-			// stay, so scrubbing a scrubbed file changes nothing.
+			// A placeholder from an earlier run, so scrubbing a scrubbed
+			// file changes nothing.
 			continue
 		}
 		edits = append(edits, edit{sp, with})
@@ -368,15 +380,11 @@ func isNumber(s string) bool {
 // JSON-escaped home gets a JSON-escaped placeholder and Claude Code's
 // project folder for it, C--Users-Maya-Chen-robot, becomes
 // C--Users-capture-robot. A span that holds more than one value, once
-// merged, gets REDACTED. An email address that can stay is its own
-// placeholder.
+// merged, gets REDACTED.
 func (s *scrubber) placeholder(text string, sp redact.Span) string {
 	matched := text[sp.Start:sp.End]
 	switch {
 	case sp.Type == redact.TypeEmail:
-		if publicAddress(matched) {
-			return matched
-		}
 		return placeholderEmail
 	case sp.Type == redact.TypeSecret:
 		if sp.Rule == "" {
@@ -459,10 +467,14 @@ func homePlaceholder(home string) string {
 }
 
 // publicAddresses are addresses tools write into commits and remotes, such
-// as Claude Code's Co-Authored-By trailer. They name nobody, and keeping
-// them keeps fixtures true to what the harness wrote, as scrub.py did.
+// as the Co-Authored-By trailers of Claude Code and Aider, which the git
+// adapter reads to tell an agent's commit from a person's (HS 13.3). They
+// name nobody, and keeping them keeps fixtures true to what the harness
+// wrote. testdata/fixtures/README.md lists them, and scrub.py keeps the
+// same ones.
 var publicAddresses = map[string]bool{
 	"noreply@anthropic.com": true,
+	"aider@aider.chat":      true,
 	"noreply@github.com":    true,
 	"noreply@openai.com":    true,
 	"git@github.com":        true,
