@@ -198,6 +198,11 @@ type Uploader struct {
 	pending   *pendingReq
 	blocked   string // the token the server refused, which isn't tried again
 	problems  map[string]string
+	retry     bool // a failure is waiting for its retry at notBefore
+
+	// maxRoots and maxBuckets replace ingest-v1's limits when set, so
+	// tests can split an upload into many requests.
+	maxRoots, maxBuckets int
 }
 
 // sealedRow is what the uploader takes of a sealed batch: its row and when
@@ -429,8 +434,11 @@ func (u *Uploader) run() {
 			default:
 			}
 		}
-		if wait := u.notBefore.Sub(u.now()); wait > 0 {
-			timer.Reset(wait)
+		if wait := u.notBefore.Sub(u.now()); wait > 0 || u.retry {
+			// A failure tries again when its backoff ends, with no other
+			// wake needed.
+			u.retry = false
+			timer.Reset(max(wait, time.Millisecond))
 		}
 	}
 }
@@ -569,11 +577,13 @@ func (u *Uploader) next() (plan, string, error) {
 		return u.pending.plan, u.pending.key, nil
 	}
 	p, err := makePlan(planInput{
-		rows:      u.rows,
-		st:        u.st,
-		bucketDir: u.opts.BucketDir,
-		lag:       u.lag,
-		labels:    u.labelsDue(),
+		rows:       u.rows,
+		st:         u.st,
+		bucketDir:  u.opts.BucketDir,
+		lag:        u.lag,
+		labels:     u.labelsDue(),
+		maxRoots:   u.maxRoots,
+		maxBuckets: u.maxBuckets,
 	})
 	if err != nil {
 		return plan{}, "", err
@@ -767,6 +777,7 @@ func (u *Uploader) failed(c Credentials, err error, a answer, retry *pendingReq)
 	u.save()
 	wait := u.backoff.fail(retryAfter(a.header, u.now()))
 	u.notBefore = u.now().Add(wait)
+	u.retry = true
 	msg := string(reason)
 	if err != nil {
 		msg += ": " + err.Error()
@@ -883,7 +894,8 @@ func (u *Uploader) answered(c Credentials, p plan, a answer) bool {
 			u.log.Warn("the server refused the labels", "code", resp.Labels.Code, "field", resp.Labels.Field)
 		}
 	}
-	if len(p.body.Buckets) >= maxBuckets {
+	if len(p.body.Buckets) > 0 {
+		// More revisions may wait behind the ones that went.
 		more = true
 	}
 	u.pending = nil

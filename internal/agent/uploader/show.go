@@ -44,6 +44,9 @@ type PreviewOptions struct {
 	Credentials Credentials
 	// Now is the time to preview at, time.Now() when zero.
 	Now time.Time
+
+	// maxRoots and maxBuckets are the Uploader's, for tests.
+	maxRoots, maxBuckets int
 }
 
 // Next returns the next upload: the request waiting for its retry, or the
@@ -87,10 +90,12 @@ func Next(o PreviewOptions) (Preview, error) {
 	}
 	rows.trim(max(st.Next, 1))
 	in := planInput{
-		rows:      rows,
-		st:        st,
-		bucketDir: o.BucketDir,
-		lag:       o.Params.Int(params.WITNESS_LAG_S) * 1000,
+		rows:       rows,
+		st:         st,
+		bucketDir:  o.BucketDir,
+		lag:        o.Params.Int(params.WITNESS_LAG_S) * 1000,
+		maxRoots:   o.maxRoots,
+		maxBuckets: o.maxBuckets,
 	}
 	l := currentLabels(build, o.Params, o.Device, st.Harnesses)
 	due, err := labelsDue(l, st, started, now)
