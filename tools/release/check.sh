@@ -42,7 +42,7 @@ manifest=$dist/manifest.json
 [ "$(jq -r .payloadType "$manifest")" = "$type" ] || fail "manifest.json's payloadType isn't $type"
 b64 "$(jq -r .payload "$manifest")" "$work/payload.json" || fail "manifest.json's payload isn't in canonical base64"
 # Every signature, whichever key made it, is 64 bytes in canonical base64.
-while read -r any; do
+while IFS= read -r any; do
   if ! b64 "$any" "$work/any.sig" || [ "$(stat -c %s "$work/any.sig")" -ne 64 ]; then
     fail "a signature in manifest.json isn't 64 bytes in canonical base64"
   fi

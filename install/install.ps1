@@ -558,8 +558,13 @@ $installPairtime = {
       }
     }
 
+    # The command that finishes the setup, for every message that tells you
+    # to run it. A pairtime install run later would find the folders this
+    # script made already there, so it names them (pairtime install --made).
+    $finish = "& $(ConvertTo-Quoted $target) install"
+    for ($i = $made.Count - 1; $i -ge 0; $i--) { $finish += " --made $(ConvertTo-Quoted $made[$i])" }
     if ($placeOnly) {
-      Say "To finish setting it up, run: & $(ConvertTo-Quoted $target) install"
+      Say "To finish setting it up, run: $finish"
     } elseif (@(& $target help) -cmatch '^  install ') {
       Say 'Running pairtime install. It lists every change it would make and asks before making any.'
       $installArgs = @('install')
@@ -570,7 +575,7 @@ $installPairtime = {
       # (pairtime install --made), outermost first.
       for ($i = $made.Count - 1; $i -ge 0; $i--) { $installArgs += @('--made', $made[$i]) }
       & $target @installArgs
-      if ($LASTEXITCODE -ne 0) { Fail "'pairtime install' stopped with status $LASTEXITCODE. pairtime is at $target; run & $(ConvertTo-Quoted $target) install to try again." }
+      if ($LASTEXITCODE -ne 0) { Fail "'pairtime install' stopped with status $LASTEXITCODE. pairtime is at $target; run $finish to try again." }
     } else {
       Say 'This build of pairtime has no install command yet, so setup stops here.'
     }

@@ -209,6 +209,7 @@ new=''
 made_bin=''
 made_local=''
 installed=''
+finish=''
 step='starting'
 on_exit() {
   status=$?
@@ -225,7 +226,7 @@ on_exit() {
       *) why="stopped by an unexpected error while $step (status $status)" ;;
     esac
     if [ -n "$installed" ]; then
-      printf 'install.sh: %s. pairtime %s is installed at %s. To finish setting it up, run: %s install\n' "$why" "$version" "$target" "$(shell_quote "$target")" >&2
+      printf 'install.sh: %s. pairtime %s is installed at %s. To finish setting it up, run: %s\n' "$why" "$version" "$target" "$finish" >&2
     else
       printf 'install.sh: %s. Nothing was installed.\n' "$why" >&2
     fi
@@ -580,7 +581,9 @@ main() {
   # pairtime is set up for the person running it, in their own home. Run
   # as root, it would install for root, or under a sudo that keeps HOME it
   # would leave root's files in yours, so it stops before downloading
-  # anything, as pairtime hook and pairtime install do.
+  # anything. That is stricter than pairtime hook and pairtime install,
+  # which refuse root only in a home that root doesn't own: a sudo that
+  # sets HOME to root's would otherwise install for root.
   [ "$(id -u)" != 0 ] || die "don't run install.sh as root or with sudo: pairtime installs into your own home folder, so run the command again from a normal terminal, without sudo."
 
   [ -n "$version" ] || die "this copy of install.sh doesn't name a release; pass --version, such as --version v0.1.0"
@@ -672,6 +675,12 @@ main() {
     "pairtime $version "*) ;;
     *) die "the new binary says it's $(head -n 1 "$work/version.out" | head -c 200), not pairtime $version, so it wasn't installed" ;;
   esac
+  # The command that finishes the setup, for every message that tells you
+  # to run it. A pairtime install run later would find the folders this
+  # script made already there, so it names them (pairtime install --made).
+  finish="$(shell_quote "$target") install"
+  if [ -n "$made_local" ]; then finish="$finish --made $(shell_quote "$HOME/.local")"; fi
+  if [ -n "$made_bin" ]; then finish="$finish --made $(shell_quote "$bin_dir")"; fi
   step="moving pairtime to $target"
   mv -f "$new" "$target" || die "couldn't move pairtime to $target"
   new=''
@@ -680,7 +689,7 @@ main() {
 
   step='running pairtime install'
   if [ "$no_install" = 1 ]; then
-    say "To finish setting it up, run: $(shell_quote "$target") install"
+    say "To finish setting it up, run: $finish"
   elif "$target" help < /dev/null 2> /dev/null | grep -q '^  install '; then
     set -- install
     if [ "$yes" = 1 ]; then set -- "$@" --yes; fi
@@ -701,7 +710,7 @@ main() {
     else
       "$target" "$@" < /dev/null || status=$?
     fi
-    [ "$status" = 0 ] || die "\`pairtime install\` stopped with status $status. pairtime is at $target; run \`$(shell_quote "$target") install\` to try again."
+    [ "$status" = 0 ] || die "\`pairtime install\` stopped with status $status. pairtime is at $target; run \`$finish\` to try again."
   else
     say "This build of pairtime has no install command yet, so setup stops here."
   fi

@@ -337,8 +337,10 @@ check "the command it prints is quoted for a home with an apostrophe and a space
 printed=$(sed -n 's/^To finish setting it up, run: //p' "$scratch/output")
 # shlex reads the line as sh would, without running anything.
 words=$(python3 -I -c 'import shlex, sys; print("\n".join(shlex.split(sys.argv[1])))' "$printed" 2>&1 || :)
-if [ "$words" != "$home/.local/bin/pairtime"$'\ninstall' ]; then
-  fail "the printed command [$printed] reads as [${words//$'\n'/, }], not $home/.local/bin/pairtime and install"
+# A pairtime install run later finds the folders made, so it's told them.
+want="$home/.local/bin/pairtime"$'\ninstall\n--made\n'"$home/.local"$'\n--made\n'"$home/.local/bin"
+if [ "$words" != "$want" ]; then
+  fail "the printed command [$printed] reads as [${words//$'\n'/, }], not [${want//$'\n'/, }]"
 fi
 
 if sudo -n true 2> /dev/null; then

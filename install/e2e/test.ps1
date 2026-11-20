@@ -408,7 +408,10 @@ $pathCommand = @($lines | Where-Object { $_.Contains('CreateSubKey') })
 if ($finish.Count -ne 1 -or $pathCommand.Count -ne 1) {
   Add-Failure "found $($finish.Count) commands to finish with and $($pathCommand.Count) PATH commands, not one each"
 } else {
-  Test-PrintedCommand 'the command to finish with' $finish[0].Substring('To finish setting it up, run: '.Length) (Join-Path $script:appData 'pairtime\bin\pairtime.exe')
+  # A pairtime install run later finds the folders made, so it's told them.
+  foreach ($want in @('pairtime\bin\pairtime.exe', 'pairtime', 'pairtime\bin')) {
+    Test-PrintedCommand 'the command to finish with' $finish[0].Substring('To finish setting it up, run: '.Length) (Join-Path $script:appData $want)
+  }
   Test-PrintedCommand 'the PATH command' $pathCommand[0].Trim() (Join-Path $script:appData 'pairtime\bin')
 }
 
