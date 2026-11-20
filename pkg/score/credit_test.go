@@ -476,6 +476,103 @@ func TestSideDoorPump(t *testing.T) {
 	}
 }
 
+func creditAt(d Derived, slot int64) (Credit, bool) {
+	i := slices.IndexFunc(d.Credits, func(c Credit) bool { return c.Slot == slot })
+	if i < 0 {
+		return Credit{}, false
+	}
+	return d.Credits[i], true
+}
+
+// TestAgentTime checks SM 5.1's agent_running_s and SM 2.6's agent-only
+// seconds where turns of two projects run at once, through a screen lock,
+// where no second has any other state.
+func TestAgentTime(t *testing.T) {
+	// A typed turn in p_1 runs from 60 s to 300 s and a scheduled one in
+	// p_2 from 100 s to 200 s. The person is in p_1's terminal, and the
+	// screen is locked from 150 s to 240 s.
+	b := newTL(false)
+	terminalSession(b)
+	b.harness(at(0), event.ViaHook, "s_2", "p_2", &event.SessionStart{StartKind: event.StartStartup,
+		Entrypoint: event.EntrypointCLI, ParentClass: event.ParentTerminalApp, HasTTY: true})
+	b.mouse(every(at(1), at(146), 5000)...)
+	b.mouse(every(at(241), at(356), 5000)...)
+	b.prompt(at(60), event.ViaHook, "s_1", "p_1", "t_1", 30)
+	scheduled(b.prompt(at(100), event.ViaHook, "s_2", "p_2", "t_2", 30))
+	b.harness(at(200), event.ViaHook, "s_2", "p_2", &event.AgentStop{TurnKey: "t_2", StopReason: event.StopEndTurn})
+	b.agentStops(at(300), "s_1", "t_1")
+	b.samples(at(0), at(149))
+	b.power(at(150), event.PowerLock)
+	b.samples(at(150), at(239))
+	b.power(at(240), event.PowerUnlock)
+	b.samples(at(240), at(360))
+	d := b.run(t, Device{})
+	for _, c := range []struct {
+		name      string
+		slot      int64
+		agentS    int64
+		agentOnly map[string]int64
+		absent    int64
+	}{
+		{"while both run, each second counts once, and every uncredited second is agent-only for both projects", 105, 15,
+			map[string]int64{"p_1": 15, "p_2": 15}, 0},
+		{"through the lock both turns still run, and nothing credits either", 150, 15,
+			map[string]int64{"p_1": 15, "p_2": 15}, 15},
+		{"p_2's turn stops at 200 s, inside the lock", 195, 15, map[string]int64{"p_1": 15, "p_2": 5}, 15},
+		{"after the lock only p_1's turn runs", 240, 15, map[string]int64{"p_1": 15}, 0},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			cr, ok := creditAt(d, at(c.slot))
+			if !ok {
+				t.Fatal("no credit slot")
+			}
+			if cr.AgentS != c.agentS || !maps.Equal(cr.AgentOnly, c.agentOnly) || cr.Uncredited[xAbsent] != c.absent {
+				t.Errorf("agent_running_s %d, agent-only %v, X.absent %d; want %d, %v and %d", cr.AgentS, cr.AgentOnly,
+					cr.Uncredited[xAbsent], c.agentS, c.agentOnly, c.absent)
+			}
+		})
+	}
+}
+
+// TestSlotRange checks how far back slots go: from the first record, but
+// no more than BUCKET_TTL_S before the presence sampler first ran, so one
+// record dated a year back derives no slot for every 15 s since.
+func TestSlotRange(t *testing.T) {
+	r := newRules(testTable(t))
+	for _, c := range []struct {
+		name  string
+		first int64 // seconds after base of the first record
+		want  int64 // seconds after base of the first slot
+	}{
+		{"slots start with a record a minute before the first sample", -60, -60},
+		{"a record a year before the first sample starts them BUCKET_TTL_S before it", -365 * 86_400, -r.bucketTTL / 1000},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			b := newTL(false)
+			terminalSession(b)
+			b.harness(at(c.first), event.ViaBridge, "s_b", "p_1", &event.PromptSubmit{TurnKey: "t_b", LenChars: 30,
+				TypedLenEst: 30, OriginDeclared: event.DeclaredNone})
+			b.mouse(every(at(1), at(56), 5000)...)
+			b.samples(at(0), at(60))
+			d := b.run(t, Device{})
+			if len(d.Slots) == 0 {
+				t.Fatal("no slots")
+			}
+			if d.Slots[0].Start != at(c.want) {
+				t.Fatalf("slots from %d s, want %d s", (d.Slots[0].Start-base)/1000, c.want)
+			}
+			if want := int((60 - c.want) / 15); len(d.Slots) != want || len(d.Credits) != want {
+				t.Errorf("%d slots and %d credit slots, want %d", len(d.Slots), len(d.Credits), want)
+			}
+			for _, s := range d.Slots {
+				if s.Start < at(0) && s.Present != event.PresentUnknown {
+					t.Errorf("slot at %d s before the first sample is %q", (s.Start-base)/1000, s.Present)
+				}
+			}
+		})
+	}
+}
+
 // TestLookupHoldsFinal checks that a browser run's seconds stay pending
 // until its end bracket is final, since a lookup needs credit on both sides
 // (SM 2.5), and that stepping in two parts gives what one Step gives.

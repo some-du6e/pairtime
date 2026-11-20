@@ -220,7 +220,18 @@ func buildPresence(r rules, recs []event.Event, high int64, fl *focusLine) *pres
 		locks = append(locks, span{lockFrom, math.MaxInt64})
 	}
 
-	p.first = floorSlot(recs[0].T)
+	// Slots start with the first record, but no more than BUCKET_TTL_S
+	// before the sampler first ran, or before high when it never has.
+	// Every slot before the first sample is unknown and credits nothing (SM
+	// 2.1), and what so old a record put in a bucket has expired by the time
+	// the sampler sees anything. A record dated years back, which a
+	// transcript or the bridge can carry, would otherwise derive a slot for
+	// every 15 s since. Lookback (SM 2.8, WP-SC7) will need its own range.
+	ref := high
+	if len(p.samples) > 0 {
+		ref = p.samples[0].t
+	}
+	p.first = max(floorSlot(recs[0].T), floorSlot(ref-r.bucketTTL))
 	last := floorSlot(high)
 	n := int((last-p.first)/event.SlotMS) + 1
 	asleepAt := p.mark(n, sleeps, gaps)

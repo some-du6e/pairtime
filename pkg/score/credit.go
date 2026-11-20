@@ -116,13 +116,42 @@ type second struct {
 	capped bool
 }
 
-// running counts, per second of the timeline, the turns of one project
-// that were running, by who started them.
+// secSpan is the half-open interval [from, to) of second indexes.
+type secSpan struct{ from, to int }
+
+// running holds the seconds the turns of one project ran, by who started
+// them, and all of them together, each as sorted, disjoint spans. Spans,
+// unlike an array per second, keep the cost of a project with a running
+// turn to its turns, not to the length of the timeline.
 type running struct {
-	human, auto, noInput []int32
+	human, auto, noInput, any []secSpan
 }
 
-func (r *running) any(k int) bool { return r.human[k] > 0 || r.auto[k] > 0 || r.noInput[k] > 0 }
+// covers reports whether one of spans, sorted and disjoint, holds second k.
+func covers(spans []secSpan, k int) bool {
+	i := sort.Search(len(spans), func(i int) bool { return spans[i].to > k })
+	return i < len(spans) && spans[i].from <= k
+}
+
+// overlaps reports whether one of spans holds a second in [from, to).
+func overlaps(spans []secSpan, from, to int) bool {
+	i := sort.Search(len(spans), func(i int) bool { return spans[i].to > from })
+	return i < len(spans) && spans[i].from < to
+}
+
+// merged returns spans sorted, with overlapping and touching ones joined.
+func merged(spans []secSpan) []secSpan {
+	slices.SortFunc(spans, func(a, b secSpan) int { return cmp.Compare(a.from, b.from) })
+	var out []secSpan
+	for _, sp := range spans {
+		if n := len(out); n > 0 && sp.from <= out[n-1].to {
+			out[n-1].to = max(out[n-1].to, sp.to)
+			continue
+		}
+		out = append(out, sp)
+	}
+	return out
+}
 
 // returned is a Return as the credit pass reads it.
 type returned struct {
@@ -137,8 +166,14 @@ type creditor struct {
 	r     rules
 	slots []Slot
 	first int64 // the start of the first slot
-	n     int   // seconds
-	secs  []second
+	n     int   // seconds, a second's index counting from first
+	// secs holds the state of the seconds of live slots only, and base,
+	// per slot, the index in secs of its first second, or -1 for a dead
+	// slot (deadSlot). Every second of a dead slot is X.absent, so it needs
+	// no state, and the memory follows the samples rather than the span
+	// the records cover.
+	secs []second
+	base []int32
 	// byProject holds, per project, the indexes of its anchors in time
 	// order, for READ_HORIZON_S.
 	byProject map[string][]int
@@ -154,6 +189,16 @@ type creditor struct {
 // ceilSecond returns the start of the first whole second at or after t.
 func ceilSecond(t int64) int64 { return -floorSecond(-t) }
 
+// perSlot is the number of seconds in a slot.
+const perSlot = int(event.SlotMS / 1000)
+
+// deadSlot reports whether nothing can credit any second of slot s: it is a
+// hard break, or the presence sampler wasn't running yet (SM 2.1). Every
+// second there is X.absent.
+func deadSlot(s *Slot) bool {
+	return s.Asleep || s.Locked || s.Present == event.PresentUnknown
+}
+
 // credit runs SM 2.7 over the derived slots: anchor windows, then the
 // reading bucket, then lookups (SM 2.5), then a reason for every second
 // nothing credited (SM 5.2).
@@ -162,8 +207,17 @@ func (d *deriver) credit() {
 	if len(slots) == 0 {
 		return
 	}
-	c := &creditor{d: d, r: d.r, slots: slots, first: slots[0].Start, n: len(slots) * int(event.SlotMS/1000)}
-	c.secs = make([]second, c.n)
+	c := &creditor{d: d, r: d.r, slots: slots, first: slots[0].Start, n: len(slots) * perSlot}
+	c.base = make([]int32, len(slots))
+	live := 0
+	for i := range slots {
+		c.base[i] = -1
+		if !deadSlot(&slots[i]) {
+			c.base[i] = int32(live * perSlot)
+			live++
+		}
+	}
+	c.secs = make([]second, live*perSlot)
 	for k := range c.secs {
 		c.secs[k].anchor, c.secs[k].other = -1, -1
 	}
@@ -172,6 +226,15 @@ func (d *deriver) credit() {
 	c.lookupRuns()
 	d.credits = c.slotCredits()
 	d.lookups = c.lookups
+}
+
+// state returns the state of second k, or nil if its slot is dead.
+func (c *creditor) state(k int) *second {
+	b := c.base[k/perSlot]
+	if b < 0 {
+		return nil
+	}
+	return &c.secs[int(b)+k%perSlot]
 }
 
 // at returns the time of second k.
@@ -199,31 +262,28 @@ func (c *creditor) index() {
 	c.runs = map[string]*running{}
 	for _, tb := range d.turns {
 		t := tb.turn
-		if t.RunUntil <= t.TSubmit {
+		from, to := c.sec(ceilSecond(t.TSubmit)), c.sec(ceilSecond(t.RunUntil))
+		if from >= to {
 			continue
 		}
 		r := c.runs[t.ProjectKey]
 		if r == nil {
-			r = &running{human: make([]int32, c.n+1), auto: make([]int32, c.n+1), noInput: make([]int32, c.n+1)}
+			r = &running{}
 			c.runs[t.ProjectKey] = r
 		}
-		count := r.auto
+		sp := secSpan{from, to}
 		switch {
 		case t.Origin.Human():
-			count = r.human
+			r.human = append(r.human, sp)
 		case t.Origin == event.OriginNoInput:
-			count = r.noInput
+			r.noInput = append(r.noInput, sp)
+		default:
+			r.auto = append(r.auto, sp)
 		}
-		from, to := c.sec(ceilSecond(t.TSubmit)), c.sec(ceilSecond(t.RunUntil))
-		count[from]++
-		count[to]--
+		r.any = append(r.any, sp)
 	}
 	for _, r := range c.runs {
-		for _, xs := range [][]int32{r.human, r.auto, r.noInput} {
-			for k := 1; k < len(xs); k++ {
-				xs[k] += xs[k-1]
-			}
-		}
+		r.human, r.auto, r.noInput, r.any = merged(r.human), merged(r.auto), merged(r.noInput), merged(r.any)
 	}
 	ids := map[string]int{}
 	for i, a := range d.anchors {
@@ -334,8 +394,14 @@ func (c *creditor) anchorsAndBuckets() {
 	next := 0
 	oneSecond := c.r.unitsPerS
 	for k := 0; k < c.n; k++ {
+		s := &c.slots[k/perSlot]
+		if c.base[k/perSlot] < 0 {
+			// A dead slot credits nothing. Windows and buckets are swept
+			// by time, so skipping its seconds changes nothing after it.
+			k += perSlot - 1
+			continue
+		}
 		t := c.at(k)
-		s := &c.slots[k/int(event.SlotMS/1000)]
 		for ; next < len(ws) && ws[next].from <= t; next++ {
 			active = append(active, next)
 		}
@@ -371,7 +437,7 @@ func (c *creditor) anchorsAndBuckets() {
 				best, suffix = wi, sfx
 			}
 		}
-		sec := &c.secs[k]
+		sec := c.state(k)
 		if best >= 0 {
 			a := &c.d.anchors[ws[best].anchor]
 			sec.reason, sec.proj, sec.level, sec.anchor = a.Reason+suffix, a.ProjectKey, a.Level, int32(ws[best].anchor)
@@ -433,7 +499,6 @@ func (c *creditor) anchorsAndBuckets() {
 // When the brackets fit more than one project, the lower project key wins
 // (SM 3.3 rule 6).
 func (c *creditor) lookupRuns() {
-	per := int(event.SlotMS / 1000)
 	for i := 0; i < len(c.slots); {
 		if !lookupSlot(&c.slots[i]) {
 			i++
@@ -443,7 +508,7 @@ func (c *creditor) lookupRuns() {
 		for j < len(c.slots) && lookupSlot(&c.slots[j]) {
 			j++
 		}
-		from, to := i*per, j*per // seconds [from, to)
+		from, to := i*perSlot, j*perSlot // seconds [from, to)
 		c.lookups = append(c.lookups, span{c.at(from), c.at(to)})
 		i = j
 		// A credited second ending LOOKUP_BRACKET_S before the run starts
@@ -473,10 +538,10 @@ func (c *creditor) lookupRuns() {
 		}
 		left := c.r.lookupMax / 1000
 		for k := from; k < to; k++ {
-			if !present(c.slots[k/per].At(c.at(k))) {
+			sec := c.state(k)
+			if sec == nil || !present(c.slots[k/perSlot].At(c.at(k))) {
 				continue
 			}
-			sec := &c.secs[k]
 			if left == 0 {
 				sec.capped = true
 				continue
@@ -500,12 +565,12 @@ func lookupSlot(s *Slot) bool {
 func (c *creditor) brackets(from, to int, last bool) map[string]second {
 	out := map[string]second{}
 	for k := max(from, 0); k < min(to, c.n); k++ {
-		s := c.secs[k]
-		if s.reason == "" || s.reason == event.ReasonLookup {
+		s := c.state(k)
+		if s == nil || s.reason == "" || s.reason == event.ReasonLookup {
 			continue
 		}
 		if _, ok := out[s.proj]; !ok || last {
-			out[s.proj] = s
+			out[s.proj] = *s
 		}
 	}
 	return out
@@ -515,15 +580,7 @@ func (c *creditor) brackets(from, to int, last bool) map[string]second {
 // to).
 func (c *creditor) runsDuring(p string, from, to int) bool {
 	r := c.runs[p]
-	if r == nil {
-		return false
-	}
-	for k := from; k < to; k++ {
-		if r.any(k) {
-			return true
-		}
-	}
-	return false
+	return r != nil && overlaps(r.any, from, to)
 }
 
 // lowerLevel returns the weaker of two evidence levels.
@@ -543,11 +600,10 @@ func lowerLevel(a, b event.Evidence) event.Evidence {
 // input, and X.no_anchor otherwise. This is the order
 // docs/errata/2026-11-19-sm-6.6-uncredited-codes.md proposes.
 func (c *creditor) uncredited(k int, s *Slot) event.Reason {
-	sec := c.secs[k]
-	switch {
-	case s.Asleep || s.Locked || !present(s.At(c.at(k))):
+	if s.Asleep || s.Locked || !present(s.At(c.at(k))) {
 		return event.ReasonAbsent
-	case sec.capped:
+	}
+	if sec := c.state(k); sec != nil && sec.capped {
 		return event.ReasonLookupCap
 	}
 	switch s.FocusClass {
@@ -560,11 +616,11 @@ func (c *creditor) uncredited(k int, s *Slot) event.Reason {
 	}
 	if r := c.runs[s.FocusProject]; r != nil {
 		switch {
-		case r.human[k] > 0:
+		case covers(r.human, k):
 			return event.ReasonAgentOnly
-		case r.auto[k] > 0:
+		case covers(r.auto, k):
 			return event.ReasonAutomated
-		case r.noInput[k] > 0:
+		case covers(r.noInput, k):
 			return event.ReasonNoInput
 		}
 	}
@@ -579,29 +635,61 @@ type creditKey struct {
 	inTurn bool
 }
 
-// slotCredits sums the seconds into one Credit per slot.
+// projSpan is a span of seconds in which a turn of a project ran.
+type projSpan struct {
+	proj string
+	secSpan
+}
+
+// slotCredits sums the seconds into one Credit per slot. It sweeps every
+// project's running spans along the slots, so the agent time of a slot
+// costs what runs in it, not the number of projects.
 func (c *creditor) slotCredits() []Credit {
-	per := int(event.SlotMS / 1000)
 	out := make([]Credit, len(c.slots))
-	projects := slices.Sorted(maps.Keys(c.runs))
+	var spans []projSpan
+	for _, p := range slices.Sorted(maps.Keys(c.runs)) {
+		for _, sp := range c.runs[p].any {
+			spans = append(spans, projSpan{p, sp})
+		}
+	}
+	slices.SortStableFunc(spans, func(a, b projSpan) int { return cmp.Compare(a.from, b.from) })
+	var active []projSpan
+	next := 0
+	none := second{anchor: -1, other: -1} // a dead slot's seconds
 	for i := range c.slots {
 		s := &c.slots[i]
+		lo, hi := i*perSlot, (i+1)*perSlot
+		for ; next < len(spans) && spans[next].from < hi; next++ {
+			active = append(active, spans[next])
+		}
+		kept := active[:0]
+		for _, a := range active {
+			if a.to > lo {
+				kept = append(kept, a)
+			}
+		}
+		active = kept
 		cr := Credit{Slot: s.Start}
 		group := map[creditKey]*Credited{}
 		var keys []creditKey
-		for k := i * per; k < (i+1)*per; k++ {
-			sec := c.secs[k]
-			agent := false
-			for _, p := range projects {
-				if !c.runs[p].any(k) {
+		for k := lo; k < hi; k++ {
+			sec := c.state(k)
+			if sec == nil {
+				sec = &none
+			}
+			agent, inTurn := false, false
+			for _, a := range active {
+				if k < a.from || k >= a.to {
 					continue
 				}
 				agent = true
-				if p != "" && sec.proj != p {
+				if a.proj == sec.proj {
+					inTurn = true
+				} else if a.proj != "" {
 					if cr.AgentOnly == nil {
 						cr.AgentOnly = map[string]int64{}
 					}
-					cr.AgentOnly[p]++
+					cr.AgentOnly[a.proj]++
 				}
 			}
 			if agent {
@@ -614,10 +702,7 @@ func (c *creditor) slotCredits() []Credit {
 				cr.Uncredited[c.uncredited(k, s)]++
 				continue
 			}
-			key := creditKey{proj: sec.proj, reason: sec.reason, level: sec.level}
-			if r := c.runs[sec.proj]; r != nil && r.any(k) {
-				key.inTurn = true
-			}
+			key := creditKey{proj: sec.proj, reason: sec.reason, level: sec.level, inTurn: inTurn}
 			e := group[key]
 			if e == nil {
 				e = &Credited{ProjectKey: key.proj, Reason: key.reason, Level: key.level, InTurn: key.inTurn}
