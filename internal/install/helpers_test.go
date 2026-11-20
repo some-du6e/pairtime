@@ -69,11 +69,11 @@ func install(t *testing.T, in *Installer, items ...Item) *Plan {
 	return p
 }
 
-// uninstall plans uninstall and applies it, failing the test on an error
-// or a problem.
-func uninstall(t *testing.T, in *Installer) *Plan {
+// uninstall plans uninstall for items and applies it, failing the test on
+// an error or a problem.
+func uninstall(t *testing.T, in *Installer, items ...Item) *Plan {
 	t.Helper()
-	p, err := in.PlanUninstall()
+	p, err := in.PlanUninstall(items...)
 	if err != nil {
 		t.Fatalf("PlanUninstall: %v", err)
 	}

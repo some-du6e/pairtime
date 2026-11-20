@@ -80,37 +80,13 @@ func (p *Plan) Diff() string {
 // right after Apply gives an empty plan. If the manifest doesn't know such
 // a target, Apply still records it (see adopt).
 func (in *Installer) PlanInstall(items []Item) (*Plan, error) {
-	m, oldSum, err := in.loadManifest()
+	groups, err := groupEdits(items)
 	if err != nil {
 		return nil, err
 	}
-	type group struct {
-		target Target
-		edits  []Edit
-		recs   []editRecord
-	}
-	var groups []*group
-	byTarget := map[Target]*group{}
-	ids := map[string]bool{}
-	for _, it := range items {
-		if it.ID == "" || ids[it.ID] {
-			return nil, fmt.Errorf("install item %q is missing its ID or listed twice", it.ID)
-		}
-		ids[it.ID] = true
-		for _, e := range it.Edits {
-			if _, ok := undoers[e.Kind()]; !ok {
-				return nil, fmt.Errorf("install item %s has an edit of kind %q, which uninstall can't undo", it.ID, e.Kind())
-			}
-			t := e.Target()
-			g := byTarget[t]
-			if g == nil {
-				g = &group{target: t}
-				byTarget[t] = g
-				groups = append(groups, g)
-			}
-			g.edits = append(g.edits, e)
-			g.recs = append(g.recs, editRecord{Item: it.ID, Kind: e.Kind()})
-		}
+	m, oldSum, err := in.loadManifest()
+	if err != nil {
+		return nil, err
 	}
 
 	p := &Plan{in: in, oldSum: oldSum, manifest: m.clone()}
@@ -186,6 +162,69 @@ func (in *Installer) PlanInstall(items []Item) (*Plan, error) {
 	return p, nil
 }
 
+// group is the edits of one or more items to one target, in order.
+type group struct {
+	target Target
+	edits  []Edit
+	recs   []editRecord
+}
+
+// claimer is an edit that owns its target whole, such as an autostart
+// entry, and can tell an entry an earlier pairtime wrote there, whatever
+// binary path it names, from something else at the same name, which is
+// the teen's.
+type claimer interface {
+	Edit
+	// claims reports whether cur, which exists, is an earlier pairtime's.
+	claims(cur Content) bool
+}
+
+// owns reports whether one of edits owns its target whole.
+func owns(edits []Edit) bool {
+	return slices.ContainsFunc(edits, func(e Edit) bool {
+		_, ok := e.(claimer)
+		return ok
+	})
+}
+
+// claimed reports whether one of edits claims cur as an earlier pairtime's.
+func claimed(edits []Edit, cur Content) bool {
+	return cur.Exists && slices.ContainsFunc(edits, func(e Edit) bool {
+		c, ok := e.(claimer)
+		return ok && c.claims(cur)
+	})
+}
+
+// groupEdits groups items' edits by target, in the order the targets first
+// appear. It refuses an item without an ID, one listed twice, and an edit
+// of a kind uninstall can't undo.
+func groupEdits(items []Item) ([]*group, error) {
+	var groups []*group
+	byTarget := map[Target]*group{}
+	ids := map[string]bool{}
+	for _, it := range items {
+		if it.ID == "" || ids[it.ID] {
+			return nil, fmt.Errorf("install item %q is missing its ID or listed twice", it.ID)
+		}
+		ids[it.ID] = true
+		for _, e := range it.Edits {
+			if _, ok := undoers[e.Kind()]; !ok {
+				return nil, fmt.Errorf("install item %s has an edit of kind %q, which uninstall can't undo", it.ID, e.Kind())
+			}
+			t := e.Target()
+			g := byTarget[t]
+			if g == nil {
+				g = &group{target: t}
+				byTarget[t] = g
+				groups = append(groups, g)
+			}
+			g.edits = append(g.edits, e)
+			g.recs = append(g.recs, editRecord{Item: it.ID, Kind: e.Kind()})
+		}
+	}
+	return groups, nil
+}
+
 // adopt records a target that already holds what the items want when the
 // manifest doesn't know it, as after a reinstall with pairtime's data
 // directory gone. Without a record uninstall would leave pairtime's hooks
@@ -226,7 +265,19 @@ func (p *Plan) rebase(rec *record, base Content) {
 // pairtime created is deleted, with the directories pairtime made for it.
 // A target that changed since loses only pairtime's edits. A target that
 // can't be undone stays in the manifest and in Problems.
-func (in *Installer) PlanUninstall() (*Plan, error) {
+//
+// items are the items install would offer on this machine, the same ones
+// PlanInstall takes. Their targets that the manifest doesn't record lose
+// whatever pairtime finds of its own there, as adopt would record it:
+// pairtime's hooks, and an autostart entry that starts a pairtime agent.
+// That covers a manifest that is gone with pairtime's data directory, after
+// "Delete everything" (DESIGN 8.8) or by hand, which would otherwise leave
+// hooks and a login item that keep starting pairtime.
+func (in *Installer) PlanUninstall(items ...Item) (*Plan, error) {
+	groups, err := groupEdits(items)
+	if err != nil {
+		return nil, err
+	}
 	m, oldSum, err := in.loadManifest()
 	if err != nil {
 		return nil, err
@@ -253,6 +304,20 @@ func (in *Installer) PlanUninstall() (*Plan, error) {
 	}
 	slices.Reverse(kept)
 	p.manifest.Targets = kept
+	for i := len(groups) - 1; i >= 0; i-- {
+		g := groups[i]
+		if m.find(g.target) != nil {
+			continue
+		}
+		ch, err := in.planFound(g)
+		if err != nil {
+			p.Problems = append(p.Problems, err.Error())
+			continue
+		}
+		if !ch.Before.Same(ch.After) {
+			p.Changes = append(p.Changes, ch)
+		}
+	}
 	return p, nil
 }
 
@@ -277,10 +342,55 @@ func (in *Installer) planUndo(rec record) (Change, error) {
 			ch.Notes = append(ch.Notes, "This changed since pairtime wrote it, so only pairtime's own entries come out.")
 		}
 	}
-	if !ch.After.Same(cur) && cur.Exists && ch.After.Exists && !rec.Target.isRegistry() && cur.Mode&0o200 == 0 {
-		return Change{}, fmt.Errorf("%s is read-only now, so pairtime leaves it alone; make it writable and run uninstall again", rec.Target)
+	return ch, checkUndo(ch)
+}
+
+// planFound works out how uninstall takes pairtime's entries out of g's
+// target, which the manifest doesn't record, the way adopt finds them:
+// every pairtime hook goes, with the lists and the file that only held
+// pairtime's hooks, and an entry pairtime owns whole goes when one of g's
+// edits claims it as pairtime's.
+func (in *Installer) planFound(g *group) (Change, error) {
+	cur, err := in.read(g.target)
+	if err != nil {
+		return Change{}, err
 	}
-	return ch, nil
+	ch := Change{Target: g.target, Items: itemIDs(g.recs), Before: cur, After: cur}
+	switch {
+	case !cur.Exists:
+		return ch, nil
+	case owns(g.edits):
+		if !claimed(g.edits, cur) {
+			return ch, nil // an entry of the same name that isn't pairtime's
+		}
+	default:
+		// Only a file that holds a pairtime entry changes: the empty lists
+		// and the empty file that the undo below takes away are pairtime's
+		// only when pairtime's entries were in them.
+		kept, err := undoAll(cur, cur, g.recs)
+		if err != nil {
+			return Change{}, fmt.Errorf("%s %w", g.target, err)
+		}
+		if kept.Same(cur) {
+			return ch, nil
+		}
+	}
+	if ch.After, err = undoAll(cur, Content{}, g.recs); err != nil {
+		return Change{}, fmt.Errorf("%s %w", g.target, err)
+	}
+	if !ch.After.Same(cur) {
+		ch.Notes = append(ch.Notes, "pairtime has no record of installing this, so uninstall takes out what it recognizes as pairtime's.")
+	}
+	return ch, checkUndo(ch)
+}
+
+// checkUndo refuses an undo that would rewrite a file the teen made
+// read-only.
+func checkUndo(ch Change) error {
+	if !ch.After.Same(ch.Before) && ch.Before.Exists && ch.After.Exists && !ch.Target.isRegistry() && ch.Before.Mode&0o200 == 0 {
+		return fmt.Errorf("%s is read-only now, so pairtime leaves it alone; make it writable and run uninstall again", ch.Target)
+	}
+	return nil
 }
 
 // undoAll undoes edits on cur, the last one first.

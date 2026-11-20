@@ -50,16 +50,16 @@ func Autostart(env Env) (Item, error) {
 		if err != nil {
 			return Item{}, err
 		}
-		e = ownedEdit{target: RegistryValue(RunKey, RunValue), data: []byte(cmd), typ: RegSZ}
+		e = ownedEdit{target: RegistryValue(RunKey, RunValue), data: []byte(cmd), typ: RegSZ, claim: isAgentRunValue}
 	case "darwin":
 		path := filepath.Join(env.Home, "Library", "LaunchAgents", LaunchAgentLabel+".plist")
-		e = ownedEdit{target: File(path), data: launchAgent(env.Exe)}
+		e = ownedEdit{target: File(path), data: launchAgent(env.Exe), claim: isAgentLaunchAgent}
 	case "linux":
 		data, err := desktopEntry(env.Exe)
 		if err != nil {
 			return Item{}, err
 		}
-		e = ownedEdit{target: File(filepath.Join(configHome(env), "autostart", DesktopFile)), data: data}
+		e = ownedEdit{target: File(filepath.Join(configHome(env), "autostart", DesktopFile)), data: data, claim: isAgentDesktopEntry}
 	default:
 		return Item{}, fmt.Errorf("pairtime can't start itself at login on %s", env.GOOS)
 	}
@@ -186,11 +186,25 @@ type ownedEdit struct {
 	target Target
 	data   []byte
 	typ    uint32 // a registry value's type; 0 for a file
+	// claim reports whether content at the target is an entry some
+	// pairtime wrote: one that starts the agent of a binary called
+	// pairtime, at any path. nil claims only what this edit writes.
+	claim func(Content) bool
 }
 
 func (e ownedEdit) Target() Target { return e.target }
 
 func (e ownedEdit) Kind() string { return kindOwned }
+
+// claims makes ownedEdit a claimer: an entry is pairtime's when it is what
+// this edit writes, or what claim recognizes, such as the entry of an
+// install whose binary was somewhere else.
+func (e ownedEdit) claims(cur Content) bool {
+	if next, err := e.Apply(cur); err == nil && next.Same(cur) {
+		return true
+	}
+	return e.claim != nil && e.claim(cur)
+}
 
 func (e ownedEdit) Apply(cur Content) (Content, error) {
 	next := Content{Exists: true, Data: e.data, Type: e.typ}
@@ -207,4 +221,144 @@ func undoOwned(cur, base Content) (Content, error) {
 		return cur, nil
 	}
 	return base, nil
+}
+
+// isPairtimeBinary reports whether path names a binary called pairtime,
+// pairtime.exe on Windows, whatever folder it is in.
+func isPairtimeBinary(path string) bool {
+	name := path[strings.LastIndexAny(path, `/\`)+1:]
+	return strings.EqualFold(name, "pairtime") || strings.EqualFold(name, "pairtime.exe")
+}
+
+// startsAgent reports whether args, a program and its arguments, start a
+// pairtime binary's agent.
+func startsAgent(args []string) bool {
+	return len(args) >= 2 && isPairtimeBinary(args[0]) && args[1] == "agent"
+}
+
+// isAgentRunValue reports whether c, a Run value, starts a pairtime agent.
+// The program is the first token of the command line, in double quotes or
+// up to the first space or tab, as CreateProcess reads it, and may hold
+// environment variables in a REG_EXPAND_SZ value.
+func isAgentRunValue(c Content) bool {
+	if c.Type != RegSZ && c.Type != RegExpandSZ {
+		return false
+	}
+	cmd := strings.TrimLeft(string(c.Data), " \t")
+	var prog, rest string
+	if strings.HasPrefix(cmd, `"`) {
+		end := strings.IndexByte(cmd[1:], '"')
+		if end < 0 {
+			return false
+		}
+		prog, rest = cmd[1:1+end], cmd[2+end:]
+	} else {
+		prog, rest = cmd, ""
+		if i := strings.IndexAny(cmd, " \t"); i >= 0 {
+			prog, rest = cmd[:i], cmd[i:]
+		}
+	}
+	return startsAgent(append([]string{prog}, strings.Fields(rest)...))
+}
+
+// isAgentLaunchAgent reports whether c, a LaunchAgent property list in XML,
+// starts a pairtime agent through its ProgramArguments. A binary property
+// list, or one that doesn't parse, isn't pairtime's.
+func isAgentLaunchAgent(c Content) bool {
+	var doc struct {
+		Dict struct {
+			// Items are the dict's keys and values, in order.
+			Items []struct {
+				XMLName xml.Name
+				Text    string   `xml:",chardata"`
+				Strings []string `xml:"string"`
+			} `xml:",any"`
+		} `xml:"dict"`
+	}
+	if xml.Unmarshal(c.Data, &doc) != nil {
+		return false
+	}
+	items := doc.Dict.Items
+	for i := 0; i+1 < len(items); i++ {
+		if items[i].XMLName.Local == "key" && items[i].Text == "ProgramArguments" && items[i+1].XMLName.Local == "array" {
+			return startsAgent(items[i+1].Strings)
+		}
+	}
+	return false
+}
+
+// isAgentDesktopEntry reports whether c, an XDG desktop entry, starts a
+// pairtime agent through the Exec key of its [Desktop Entry] group.
+func isAgentDesktopEntry(c Content) bool {
+	group := ""
+	for _, line := range strings.Split(string(c.Data), "\n") {
+		line = strings.TrimSpace(line)
+		switch {
+		case line == "" || strings.HasPrefix(line, "#"):
+		case strings.HasPrefix(line, "["):
+			group = line
+		case group == "[Desktop Entry]":
+			key, value, ok := strings.Cut(line, "=")
+			if ok && strings.TrimSpace(key) == "Exec" {
+				return startsAgent(execArgs(strings.TrimSpace(value)))
+			}
+		}
+	}
+	return false
+}
+
+// execArgs splits an Exec value, as written in the file, into its program
+// and arguments, undoing what execArg and desktopString do: the string
+// escapes first, then double quotes, inside which a backslash escapes the
+// next character, then %% (Desktop Entry Specification 1.5, "The Exec
+// key").
+func execArgs(value string) []string {
+	var s strings.Builder
+	for i := 0; i < len(value); i++ {
+		c := value[i]
+		if c == '\\' && i+1 < len(value) {
+			i++
+			switch value[i] {
+			case 's':
+				c = ' '
+			case 'n':
+				c = '\n'
+			case 't':
+				c = '\t'
+			case 'r':
+				c = '\r'
+			case '\\':
+			default:
+				s.WriteByte('\\') // an escape of the quoting, below
+				c = value[i]
+			}
+		}
+		s.WriteByte(c)
+	}
+	var args []string
+	var arg strings.Builder
+	open, quoted := false, false
+	u := s.String()
+	for i := 0; i < len(u); i++ {
+		switch c := u[i]; {
+		case quoted && c == '\\' && i+1 < len(u):
+			i++
+			arg.WriteByte(u[i])
+		case c == '"':
+			quoted, open = !quoted, true
+		case !quoted && (c == ' ' || c == '\t'):
+			if open {
+				args = append(args, strings.ReplaceAll(arg.String(), "%%", "%"))
+				arg.Reset()
+				open = false
+			}
+		default:
+			arg.WriteByte(c)
+			open = true
+		}
+	}
+	if open {
+		args = append(args, strings.ReplaceAll(arg.String(), "%%", "%"))
+	}
+	return args
 }

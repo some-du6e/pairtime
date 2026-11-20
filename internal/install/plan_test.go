@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -408,6 +409,196 @@ func TestReinstallRecordsEntriesTheManifestForgot(t *testing.T) {
 				checkGone(t, tt.path(env), "the entry")
 			} else if got := readOrNil(t, tt.path(env)); !bytes.Equal(got, tt.want) {
 				t.Errorf("after uninstall the file holds\n%s\nwant\n%s", got, tt.want)
+			}
+		})
+	}
+}
+
+// autostartEntry reads env's autostart entry from in, as a file or a value
+// in in's registry.
+func autostartEntry(t *testing.T, env Env, in *Installer) Content {
+	t.Helper()
+	item, err := Autostart(env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := in.read(item.Edits[0].Target())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return c
+}
+
+func TestUninstallWithoutTheManifest(t *testing.T) {
+	before := golden(t, "settings-lf", "before.json")
+	tests := []struct {
+		name string
+		goos string
+	}{
+		{"after the data directory is gone, uninstall still takes out the hooks and the Run value", "windows"},
+		{"after the data directory is gone, uninstall still takes out the hooks and the LaunchAgent", "darwin"},
+		{"after the data directory is gone, uninstall still takes out the hooks and the XDG autostart entry", "linux"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			env := testEnv(t, tt.goos, nil)
+			writeFile(t, ClaudeSettings(env), before)
+			auto, err := Autostart(env)
+			if err != nil {
+				t.Fatal(err)
+			}
+			claude, err := ClaudeCode(env)
+			if err != nil {
+				t.Fatal(err)
+			}
+			items := []Item{auto, claude}
+			in := newInstaller(t)
+			install(t, in, items...)
+			if !autostartEntry(t, env, in).Exists {
+				t.Fatal("install wrote no autostart entry")
+			}
+			// "Delete everything" wipes the data directory, manifest and
+			// backups included (DESIGN 8.8).
+			if err := os.RemoveAll(filepath.Dir(in.Dir)); err != nil {
+				t.Fatal(err)
+			}
+
+			p := uninstall(t, in, items...)
+			if len(p.Changes) != 2 {
+				t.Errorf("the uninstall plan has %d changes, want the hooks and the autostart entry:\n%s", len(p.Changes), p.Diff())
+			}
+			for _, c := range p.Changes {
+				if len(c.Notes) == 0 {
+					t.Errorf("the change to %s doesn't say pairtime had no record of it", c.Target)
+				}
+			}
+			if got := readOrNil(t, ClaudeSettings(env)); !bytes.Equal(got, before) {
+				t.Errorf("after uninstall settings.json holds\n%s\nwant before.json\n%s", got, before)
+			}
+			if got := autostartEntry(t, env, in); got.Exists {
+				t.Errorf("after uninstall the autostart entry is still there:\n%s", got.Data)
+			}
+			checkGone(t, in.Dir, "pairtime's install directory")
+			again, err := in.PlanUninstall(items...)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !again.Empty() || len(again.Problems) > 0 {
+				t.Errorf("a second uninstall plans changes or has problems %q:\n%s", again.Problems, again.Diff())
+			}
+		})
+	}
+}
+
+func TestUninstallWithoutTheManifestLeavesWhatIsntPairtimes(t *testing.T) {
+	otherHook := "{\n  \"hooks\": {\n    \"Stop\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"say done\"\n          }\n        ]\n      }\n    ]\n  }\n}\n"
+	tests := []struct {
+		name  string
+		goos  string
+		entry string // what sits at pairtime's autostart name
+		typ   uint32 // its registry type, on Windows
+		// settings is settings.json, with no pairtime hook in it.
+		settings string
+	}{
+		{name: "a Run value of the same name that starts another program stays, and so do other tools' hooks", goos: "windows",
+			entry: `"C:\Program Files\Other\other.exe" agent`, typ: RegSZ, settings: otherHook},
+		{name: "a LaunchAgent file of the same name that starts another program stays, and so does an empty hooks object", goos: "darwin",
+			entry:    "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<plist version=\"1.0\">\n<dict>\n\t<key>ProgramArguments</key>\n\t<array>\n\t\t<string>/usr/local/bin/other</string>\n\t\t<string>agent</string>\n\t</array>\n</dict>\n</plist>\n",
+			settings: "{\"hooks\": {}}\n"},
+		{name: "a desktop entry of the same name that only hides a system-wide one stays, and so does an empty hook list", goos: "linux",
+			entry: "[Desktop Entry]\nHidden=true\n", settings: "{\"model\": \"opus\", \"hooks\": {\"Stop\": []}}\n"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			env := testEnv(t, tt.goos, nil)
+			writeFile(t, ClaudeSettings(env), []byte(tt.settings))
+			in := newInstaller(t)
+			auto, err := Autostart(env)
+			if err != nil {
+				t.Fatal(err)
+			}
+			claude, err := ClaudeCode(env)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if target := auto.Edits[0].Target(); target.isRegistry() {
+				in.Registry.Set(target.Key, target.Name, tt.entry, tt.typ)
+			} else {
+				writeFile(t, target.Path, []byte(tt.entry))
+			}
+			p := uninstall(t, in, auto, claude)
+			if !p.Empty() {
+				t.Errorf("uninstall planned changes to what isn't pairtime's:\n%s", p.Diff())
+			}
+			if got := autostartEntry(t, env, in); !got.Exists || string(got.Data) != tt.entry {
+				t.Errorf("after uninstall the entry holds %q, want %q", got.Data, tt.entry)
+			}
+			if got := readOrNil(t, ClaudeSettings(env)); string(got) != tt.settings {
+				t.Errorf("after uninstall settings.json holds\n%s\nwant\n%s", got, tt.settings)
+			}
+		})
+	}
+}
+
+func TestAutostartClaimsAnEarlierPairtimesEntry(t *testing.T) {
+	plist := func(args ...string) string {
+		var b strings.Builder
+		b.WriteString("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\">\n<dict>\n\t<key>Label</key>\n\t<string>dev.pairtime.agent</string>\n\t<key>ProgramArguments</key>\n\t<array>\n")
+		for _, a := range args {
+			b.WriteString("\t\t<string>" + a + "</string>\n")
+		}
+		b.WriteString("\t</array>\n</dict>\n</plist>\n")
+		return b.String()
+	}
+	tests := []struct {
+		name  string
+		claim func(Content) bool
+		entry Content
+		want  bool
+	}{
+		{"a Run value for pairtime.exe at another path is pairtime's", isAgentRunValue, Content{Exists: true, Type: RegSZ, Data: []byte(`"C:\old\pairtime.exe" agent`)}, true},
+		{"a Run value with environment variables in an expandable path is pairtime's", isAgentRunValue, Content{Exists: true, Type: RegExpandSZ, Data: []byte(`"%LOCALAPPDATA%\old\pairtime.exe" agent --detach`)}, true},
+		{"an unquoted Run command for PAIRTIME.EXE is pairtime's", isAgentRunValue, Content{Exists: true, Type: RegSZ, Data: []byte(`C:\bin\PAIRTIME.EXE agent`)}, true},
+		{"a Run value for another program is not pairtime's", isAgentRunValue, Content{Exists: true, Type: RegSZ, Data: []byte(`"C:\Program Files\Other\other.exe" agent`)}, false},
+		{"a Run value that runs pairtime without the agent command is not pairtime's", isAgentRunValue, Content{Exists: true, Type: RegSZ, Data: []byte(`"C:\bin\pairtime.exe" dashboard`)}, false},
+		{"a Run value with an unclosed quote is not pairtime's", isAgentRunValue, Content{Exists: true, Type: RegSZ, Data: []byte(`"C:\bin\pairtime.exe agent`)}, false},
+		{"a LaunchAgent for pairtime at another path is pairtime's", isAgentLaunchAgent, Content{Exists: true, Data: []byte(plist("/opt/pairtime/bin/pairtime", "agent"))}, true},
+		{"a LaunchAgent for another program is not pairtime's", isAgentLaunchAgent, Content{Exists: true, Data: []byte(plist("/usr/local/bin/other", "agent"))}, false},
+		{"a property list that isn't XML is not pairtime's", isAgentLaunchAgent, Content{Exists: true, Data: []byte("bplist00\x01")}, false},
+		{"a desktop entry for pairtime at another path is pairtime's", isAgentDesktopEntry, Content{Exists: true, Data: []byte("[Desktop Entry]\nType=Application\nExec=/opt/pairtime/bin/pairtime agent\n")}, true},
+		{"a desktop entry with a quoted path and escapes is pairtime's", isAgentDesktopEntry, Content{Exists: true, Data: []byte("[Desktop Entry]\nExec = \"/home/te en/a\\\\\\\\b/pairtime\" agent\n")}, true},
+		{"a desktop entry the teen turned off is still pairtime's", isAgentDesktopEntry, Content{Exists: true, Data: []byte("[Desktop Entry]\nExec=/home/teen/.local/bin/pairtime agent\nHidden=true\n")}, true},
+		{"a desktop entry whose only Exec is in an action group is not pairtime's", isAgentDesktopEntry, Content{Exists: true, Data: []byte("[Desktop Entry]\nName=x\n[Desktop Action run]\nExec=/opt/pairtime/bin/pairtime agent\n")}, false},
+		{"a desktop entry that only hides a system-wide one is not pairtime's", isAgentDesktopEntry, Content{Exists: true, Data: []byte("[Desktop Entry]\nHidden=true\n")}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.claim(tt.entry); got != tt.want {
+				t.Errorf("claim(%q) = %v, want %v", tt.entry.Data, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestExecArgsUndoesExecArg(t *testing.T) {
+	tests := []struct {
+		name string
+		exe  string
+	}{
+		{"a plain path comes back as it is", "/home/teen/.local/bin/pairtime"},
+		{"a path with a space comes back from its quotes", "/home/te en/pairtime"},
+		{"a backslash comes back from its four", `/home/a\b/pairtime`},
+		{"a dollar sign, a backtick and a double quote come back", "/home/$x/`y\"z/pairtime"},
+		{"a percent sign comes back from its two", "/home/100%/pairtime"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			arg, err := execArg(tt.exe)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := execArgs(arg + " agent"); !slices.Equal(got, []string{tt.exe, "agent"}) {
+				t.Errorf("execArgs(%q) = %q, want [%q agent]", arg+" agent", got, tt.exe)
 			}
 		})
 	}
