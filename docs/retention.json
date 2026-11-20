@@ -72,15 +72,21 @@
     {
       "id": "server.devices",
       "where": "server",
-      "data": "Your devices: a random device ID, the OS family, the pairtime build, and the names and versions of your AI tools",
+      "data": "Your devices: for each computer you link with pairtime login, a random device ID, a hash of its sign-in token (never the token itself), the public key that signs its uploads, the OS family, the pairtime build, when you linked it and when it last connected, and the names and versions of your AI tools",
       "kept": "Until you remove the device, then {days} more",
       "days": 90,
       "jobs": [{
         "table": "devices",
         "key": ["device_id"],
-        "time_column": "removed_at_ms",
-        "awaits": "WP-SV3"
+        "time_column": "removed_at_ms"
       }]
+    },
+    {
+      "id": "server.device_codes",
+      "where": "server",
+      "data": "Codes for linking a computer: a hash of the code you type and of the app's own code, the device ID, OS family and pairtime build the app sent, and which account approved or turned it down, and when",
+      "kept": "The code works for 15 minutes after the app asks for it. The record is deleted 1 day after that",
+      "tables": ["device_codes"]
     },
     {
       "id": "server.ip_ja4",

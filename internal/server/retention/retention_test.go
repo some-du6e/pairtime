@@ -272,7 +272,10 @@ func TestDesignPeriods(t *testing.T) {
 	t.Run("every number written in a kept text is checked", func(t *testing.T) {
 		// Load refuses a number beside {days}, so these are entries
 		// without days.
-		elsewhere := map[string]bool{"server.sessions": true} // accounts' TestSessionRetention
+		elsewhere := map[string]bool{
+			"server.sessions":     true, // accounts' TestSessionRetention
+			"server.device_codes": true, // device's TestCodeRetention
+		}
 		for _, e := range p.Entries {
 			if strings.ContainsAny(e.Kept, "0123456789") && !checked[e.ID] && !elsewhere[e.ID] {
 				t.Errorf("%s's kept says %q, and no case in TestDesignPeriods checks its number", e.ID, e.Kept)
@@ -307,10 +310,11 @@ func TestJobs(t *testing.T) {
 		wantOff  []string
 	}{
 		{
-			name: "every job waits while its table doesn't exist",
-			edit: func(*Policy) {},
+			name:     "a job whose table exists runs, and every other job waits for its table",
+			edit:     func(*Policy) {},
+			wantJobs: []string{"server.devices/devices"},
 			wantOff: []string{
-				"server.devices/devices awaits WP-SV3", "server.ip_ja4/request_origins awaits WP-SV4",
+				"server.ip_ja4/request_origins awaits WP-SV4",
 				"server.minute_buckets/minute_buckets awaits WP-SV7", "server.minute_buckets/submission_minutes awaits WP-SB4",
 				"server.witness/witness_rows awaits WP-SV4", "server.witness/submission_batches awaits WP-SB4",
 			},
