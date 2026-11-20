@@ -73,7 +73,7 @@ Raw prompt text, agent output, code, file paths, command lines and window titles
 
 docs/retention.json is the one source for how long pairtime keeps each kind of data (DESIGN 4.4). The privacy notice at /privacy renders it, and pairtimed's retention jobs run it.
 
-- A migration that creates a table gives it a place there in the same PR: as an entry's job table, in an entry's `tables`, or in `no_personal_data`. TestTables in internal/server/retention checks every table.
+- A migration that creates a table gives it a place there in the same PR, under the entry for the data it holds, or in `no_personal_data`. Under an entry with a period (`days`, or `{window}` in `kept`), the table is one of the entry's `jobs`, so its rows are deleted on time, or is in `lifetime_tables` when its rows stay while the account exists, as `kept` says. Only an entry without a period lists plain `tables`. Load refuses anything else, and TestTables in internal/server/retention checks every table.
 - A job whose table doesn't exist yet names the WP that creates it in `awaits`. That WP creates the table with the columns the job names and removes `awaits`, which turns the job on.
 
 ## Changing the event model

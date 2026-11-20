@@ -29,7 +29,7 @@ const validDoc = `{"about": "test", "version": 1, "source": "DESIGN 4.4",
 "no_personal_data": ["schema_migrations"],
 "entries": [
 {"id": "server.ip_ja4", "where": "server", "data": "IPs", "kept": "{days}", "days": 30,
- "job": {"table": "request_origins", "key": ["id"], "time_column": "seen_at_ms"}}
+ "jobs": [{"table": "request_origins", "key": ["id"], "time_column": "seen_at_ms"}]}
 ]}`
 
 func TestLoad(t *testing.T) {
@@ -50,13 +50,18 @@ func TestLoad(t *testing.T) {
 		{name: "{days} needs days", old: `"days": 30,`, new: ``, wantErr: "days isn't set"},
 		{name: "a job needs days", old: `"days": 30,`, new: ``, wantErr: "a job needs days"},
 		{name: "kept may not write a number of its own beside {days}", old: `"kept": "{days}"`, new: `"kept": "{days}, or 31 days"`, wantErr: "a number besides {days}"},
-		{name: "only server entries have jobs", old: `"id": "server.ip_ja4", "where": "server"`, new: `"id": "device.ip_ja4", "where": "device"`, wantErr: "only server entries have jobs"},
+		{name: "only server entries have jobs", old: `"id": "server.ip_ja4", "where": "server"`, new: `"id": "device.ip_ja4", "where": "device"`, wantErr: "only server entries have tables and jobs"},
+		{name: "an entry with a period can't list a table no job deletes", old: `"days": 30,`, new: `"days": 30, "tables": ["request_log"],`, wantErr: "nothing would delete table request_log"},
+		{name: "lifetime_tables is for an entry with a period", old: `"kept": "{days}", "days": 30,`, new: `"kept": "forever", "lifetime_tables": ["rollups"],`, wantErr: "lifetime_tables is for an entry with a period"},
+		{name: "a table in lifetime_tables can't also be a job's", old: `"days": 30,`, new: `"days": 30, "lifetime_tables": ["request_origins"],`, wantErr: "is in lifetime_tables, but the job deletes its rows"},
+		{name: "two jobs of one entry can't delete from one table", old: `"jobs": [{"table": "request_origins", "key": ["id"], "time_column": "seen_at_ms"}]`,
+			new: `"jobs": [{"table": "request_origins", "key": ["id"], "time_column": "seen_at_ms"}, {"table": "request_origins", "key": ["id"], "time_column": "seen_at_ms"}]`, wantErr: "another job of the entry deletes from request_origins"},
 		{name: "an unknown place is refused", old: `"where": "server"`, new: `"where": "cloud"`, wantErr: `where is "cloud"`},
 		{name: "an id must start with its place", old: `"id": "server.ip_ja4"`, new: `"id": "ip_ja4"`, wantErr: "id must be where.name"},
 		{name: "an id is used once", old: "\n]}", new: ",\n" + `{"id": "server.ip_ja4", "where": "server", "data": "x", "kept": "forever"}` + "\n]}", wantErr: "the id is used twice"},
 		{name: "a table belongs to one entry", old: `"no_personal_data": ["schema_migrations"]`, new: `"no_personal_data": ["request_origins"]`, wantErr: "table request_origins belongs to both"},
 		{name: "a column name can't carry SQL", old: `"time_column": "seen_at_ms"`, new: `"time_column": "seen_at_ms; DROP TABLE devices"`, wantErr: "isn't a lowercase SQL name"},
-		{name: "a key column is listed once", old: `"key": ["id"]`, new: `"key": ["id", "id"]`, wantErr: "job.key lists id twice"},
+		{name: "a key column is listed once", old: `"key": ["id"]`, new: `"key": ["id", "id"]`, wantErr: "key lists id twice"},
 		{name: "data can't be empty", old: `"data": "IPs"`, new: `"data": " "`, wantErr: "data is empty"},
 	}
 	for _, tt := range tests {
@@ -243,33 +248,33 @@ func TestJobs(t *testing.T) {
 		{
 			name:    "every job waits while its table doesn't exist",
 			edit:    func(*Policy) {},
-			wantOff: []string{"server.devices awaits WP-SV3", "server.ip_ja4 awaits WP-SV4", "server.minute_buckets awaits WP-SV7", "server.witness awaits WP-SV4"},
+			wantOff: []string{"server.devices/devices awaits WP-SV3", "server.ip_ja4/request_origins awaits WP-SV4", "server.minute_buckets/minute_buckets awaits WP-SV7", "server.witness/witness_rows awaits WP-SV4"},
 		},
 		{
 			name: "a job whose table exists runs, without a hold whose table doesn't",
 			edit: func(p *Policy) {
 				for _, e := range p.Entries {
-					if e.Job != nil {
-						e.Job.Awaits = ""
+					for k := range e.Jobs {
+						e.Jobs[k].Awaits = ""
 					}
 				}
 			},
-			wantJobs: []string{"server.devices", "server.ip_ja4", "server.minute_buckets", "server.witness"},
-			wantOff:  []string{"server.witness hold awaits WP-SB4"},
+			wantJobs: []string{"server.devices/devices", "server.ip_ja4/request_origins", "server.minute_buckets/minute_buckets", "server.witness/witness_rows"},
+			wantOff:  []string{"server.witness/witness_rows hold awaits WP-SB4"},
 		},
 		{
 			name: "a job runs with its hold once both tables exist",
 			edit: func(p *Policy) {
 				for _, e := range p.Entries {
-					if e.Job != nil {
-						e.Job.Awaits = ""
-						if e.Job.Hold != nil {
-							e.Job.Hold.Awaits = ""
+					for k := range e.Jobs {
+						e.Jobs[k].Awaits = ""
+						if h := e.Jobs[k].Hold; h != nil {
+							h.Awaits = ""
 						}
 					}
 				}
 			},
-			wantJobs: []string{"server.devices", "server.ip_ja4", "server.minute_buckets", "server.witness+hold"},
+			wantJobs: []string{"server.devices/devices", "server.ip_ja4/request_origins", "server.minute_buckets/minute_buckets", "server.witness/witness_rows+hold"},
 		},
 	}
 	for _, tt := range tests {
@@ -287,7 +292,7 @@ func TestJobs(t *testing.T) {
 					id += "+hold"
 				}
 				got = append(got, id)
-				e, _ := p.Find(j.ID)
+				e, _ := p.Find(j.Entry)
 				if j.MaxAge != time.Duration(e.Days)*day {
 					t.Errorf("%s MaxAge = %v, want the entry's %d days", j.ID, j.MaxAge, e.Days)
 				}
@@ -441,32 +446,32 @@ func TestSweep(t *testing.T) {
 			name: "a sweep on 2027-07-01",
 			at:   utc(2027, 7, 1, 12, 0),
 			cases: []sweepCase{
-				{name: "an IP seen 30 days ago is deleted", job: "server.ip_ja4", age: 30 * day},
-				{name: "an IP seen a millisecond less than 30 days ago stays", job: "server.ip_ja4", age: 30*day - time.Millisecond, kept: true},
-				{name: "an IP seen an hour ago stays", job: "server.ip_ja4", age: time.Hour, kept: true},
-				{name: "an IP seen a year ago is deleted", job: "server.ip_ja4", age: 365 * day},
-				{name: "a minute bucket 180 days old loses its per-minute row", job: "server.minute_buckets", age: 180 * day},
-				{name: "a minute bucket a minute younger than 180 days keeps its row", job: "server.minute_buckets", age: 180*day - time.Minute, kept: true},
-				{name: "a device removed 90 days ago is deleted", job: "server.devices", age: 90 * day},
-				{name: "a device removed 89 days ago stays", job: "server.devices", age: 89 * day, kept: true},
-				{name: "a device that was never removed stays", job: "server.devices", null: true, kept: true},
-				{name: "a witness row received 180 days ago is deleted", job: "server.witness", age: 180 * day},
-				{name: "a witness row received 179 days ago stays", job: "server.witness", age: 179 * day, kept: true},
-				{name: "an old witness row an open submission uses stays", job: "server.witness", age: 400 * day, hold: &hold{open: true}, kept: true},
-				{name: "an old witness row stays 11 months after its submission's decision", job: "server.witness", age: 400 * day, hold: &hold{decided: utc(2026, 8, 1, 12, 0)}, kept: true},
-				{name: "an old witness row stays a minute before the spot-check window closes", job: "server.witness", age: 400 * day, hold: &hold{decided: utc(2026, 7, 1, 12, 1)}, kept: true},
-				{name: "an old witness row is deleted when the window closes, 12 months after the decision", job: "server.witness", age: 400 * day, hold: &hold{decided: utc(2026, 7, 1, 12, 0)}},
-				{name: "a hold on a different batch keeps nothing", job: "server.witness", age: 400 * day, hold: &hold{open: true, other: true}},
+				{name: "an IP seen 30 days ago is deleted", job: "server.ip_ja4/request_origins", age: 30 * day},
+				{name: "an IP seen a millisecond less than 30 days ago stays", job: "server.ip_ja4/request_origins", age: 30*day - time.Millisecond, kept: true},
+				{name: "an IP seen an hour ago stays", job: "server.ip_ja4/request_origins", age: time.Hour, kept: true},
+				{name: "an IP seen a year ago is deleted", job: "server.ip_ja4/request_origins", age: 365 * day},
+				{name: "a minute bucket 180 days old loses its per-minute row", job: "server.minute_buckets/minute_buckets", age: 180 * day},
+				{name: "a minute bucket a minute younger than 180 days keeps its row", job: "server.minute_buckets/minute_buckets", age: 180*day - time.Minute, kept: true},
+				{name: "a device removed 90 days ago is deleted", job: "server.devices/devices", age: 90 * day},
+				{name: "a device removed 89 days ago stays", job: "server.devices/devices", age: 89 * day, kept: true},
+				{name: "a device that was never removed stays", job: "server.devices/devices", null: true, kept: true},
+				{name: "a witness row received 180 days ago is deleted", job: "server.witness/witness_rows", age: 180 * day},
+				{name: "a witness row received 179 days ago stays", job: "server.witness/witness_rows", age: 179 * day, kept: true},
+				{name: "an old witness row an open submission uses stays", job: "server.witness/witness_rows", age: 400 * day, hold: &hold{open: true}, kept: true},
+				{name: "an old witness row stays 11 months after its submission's decision", job: "server.witness/witness_rows", age: 400 * day, hold: &hold{decided: utc(2026, 8, 1, 12, 0)}, kept: true},
+				{name: "an old witness row stays a minute before the spot-check window closes", job: "server.witness/witness_rows", age: 400 * day, hold: &hold{decided: utc(2026, 7, 1, 12, 1)}, kept: true},
+				{name: "an old witness row is deleted when the window closes, 12 months after the decision", job: "server.witness/witness_rows", age: 400 * day, hold: &hold{decided: utc(2026, 7, 1, 12, 0)}},
+				{name: "a hold on a different batch keeps nothing", job: "server.witness/witness_rows", age: 400 * day, hold: &hold{open: true, other: true}},
 			},
 		},
 		{
 			name: "a sweep on 2028-02-29, a date February 2027 lacks",
 			at:   utc(2028, 2, 29, 6, 0),
 			cases: []sweepCase{
-				{name: "a decision on 2027-02-28, whose window closed on 2028-02-28, holds nothing", job: "server.witness", age: 400 * day, hold: &hold{decided: utc(2027, 2, 28, 6, 0)}},
-				{name: "a decision in the last minute of 2027-02-28 holds nothing", job: "server.witness", age: 400 * day, hold: &hold{decided: utc(2027, 2, 28, 23, 59)}},
-				{name: "a decision at midnight starting 2027-03-01 still holds its row", job: "server.witness", age: 400 * day, hold: &hold{decided: utc(2027, 3, 1, 0, 0)}, kept: true},
-				{name: "a decision on 2027-03-01, whose window closes on 2028-03-01, still holds its row", job: "server.witness", age: 400 * day, hold: &hold{decided: utc(2027, 3, 1, 6, 0)}, kept: true},
+				{name: "a decision on 2027-02-28, whose window closed on 2028-02-28, holds nothing", job: "server.witness/witness_rows", age: 400 * day, hold: &hold{decided: utc(2027, 2, 28, 6, 0)}},
+				{name: "a decision in the last minute of 2027-02-28 holds nothing", job: "server.witness/witness_rows", age: 400 * day, hold: &hold{decided: utc(2027, 2, 28, 23, 59)}},
+				{name: "a decision at midnight starting 2027-03-01 still holds its row", job: "server.witness/witness_rows", age: 400 * day, hold: &hold{decided: utc(2027, 3, 1, 0, 0)}, kept: true},
+				{name: "a decision on 2027-03-01, whose window closes on 2028-03-01, still holds its row", job: "server.witness/witness_rows", age: 400 * day, hold: &hold{decided: utc(2027, 3, 1, 6, 0)}, kept: true},
 			},
 		},
 	}
@@ -698,10 +703,10 @@ func TestTables(t *testing.T) {
 		claimed[n] = true
 	}
 	for _, e := range p.Entries {
-		for _, n := range e.Tables {
+		for _, n := range slices.Concat(e.Tables, e.LifetimeTables) {
 			claimed[n] = true
 		}
-		if j := e.Job; j != nil {
+		for _, j := range e.Jobs {
 			claimed[j.Table] = true
 			if j.Hold != nil {
 				claimed[j.Hold.Table] = true
@@ -736,7 +741,7 @@ func TestTables(t *testing.T) {
 			check: func(t *testing.T) {
 				for _, n := range tables {
 					if !claimed[n] {
-						t.Errorf("table %s isn't in docs/retention.json; add it to the entry for the data it holds, as its job or in its tables, or to no_personal_data", n)
+						t.Errorf("table %s isn't in docs/retention.json; add it to the entry for the data it holds, as a job's table, in lifetime_tables or, for an entry without a period, in tables; or add it to no_personal_data", n)
 					}
 				}
 			},
@@ -745,7 +750,7 @@ func TestTables(t *testing.T) {
 			name: "a job runs only on a table that exists, with the columns it names",
 			check: func(t *testing.T) {
 				for _, e := range p.Entries {
-					if j := e.Job; j != nil {
+					for _, j := range e.Jobs {
 						bound(t, e.ID, j.Table, j.Awaits, append(slices.Clone(j.Key), j.TimeColumn))
 					}
 				}
@@ -755,11 +760,11 @@ func TestTables(t *testing.T) {
 			name: "a hold is used only once its table exists, with the columns it names",
 			check: func(t *testing.T) {
 				for _, e := range p.Entries {
-					if e.Job == nil || e.Job.Hold == nil {
-						continue
+					for _, j := range e.Jobs {
+						if h := j.Hold; h != nil {
+							bound(t, e.ID+" hold", h.Table, h.Awaits, append(slices.Clone(j.Key), h.DecidedColumn))
+						}
 					}
-					h := e.Job.Hold
-					bound(t, e.ID+" hold", h.Table, h.Awaits, append(slices.Clone(e.Job.Key), h.DecidedColumn))
 				}
 			},
 		},

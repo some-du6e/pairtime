@@ -1,5 +1,5 @@
 {
-  "about": "How long pairtime keeps each kind of data, from DESIGN 4.4. This file is the one copy the code reads. The privacy notice at /privacy renders its retention table from it, and pairtimed's retention jobs take their periods, tables and columns from it. In kept, {days} stands for the entry's days and {window} for the spot-check window, so a number is never written twice. Every table pairtimed's migrations create belongs to an entry, as its job's table or in its tables, or is listed in no_personal_data. A job or hold with awaits set is off until the work package named there creates its table, and that package removes awaits.",
+  "about": "How long pairtime keeps each kind of data, from DESIGN 4.4. This file is the one copy the code reads. The privacy notice at /privacy renders its retention table from it, and pairtimed's retention jobs take their periods, tables and columns from it. In kept, {days} stands for the entry's days and {window} for the spot-check window, so a number is never written twice. Every table pairtimed's migrations create belongs to an entry or is listed in no_personal_data. An entry with a period (days or {window}) puts each of its tables under one of its jobs, which deletes its rows on time, or in lifetime_tables when its rows stay while the account exists; only an entry without a period lists plain tables. A job or hold with awaits set is off until the work package named there creates its table, and that package removes awaits.",
   "version": 1,
   "source": "DESIGN 4.4",
   "spot_check_window": {
@@ -75,12 +75,12 @@
       "data": "Your devices: a random device ID, the OS family, the pairtime build, and the names and versions of your AI tools",
       "kept": "Until you remove the device, then {days} more",
       "days": 90,
-      "job": {
+      "jobs": [{
         "table": "devices",
         "key": ["device_id"],
         "time_column": "removed_at_ms",
         "awaits": "WP-SV3"
-      }
+      }]
     },
     {
       "id": "server.ip_ja4",
@@ -88,12 +88,12 @@
       "data": "The IP address each upload comes from, and its TLS fingerprint (JA4)",
       "kept": "{days}, then deleted outright, not shortened",
       "days": 30,
-      "job": {
+      "jobs": [{
         "table": "request_origins",
         "key": ["id"],
         "time_column": "seen_at_ms",
         "awaits": "WP-SV4"
-      }
+      }]
     },
     {
       "id": "server.minute_buckets",
@@ -101,13 +101,13 @@
       "data": "Minute buckets: for each 15 seconds, the credited seconds by project key, why they were credited and what kind of work they counted as, with the reasons for seconds that weren't credited and how long an AI agent was running",
       "kept": "Per-minute detail for {days}, the furthest back a submission can reach. After that only daily totals per project and kind of work stay, for as long as your account exists",
       "days": 180,
-      "tables": ["rollups_daily"],
-      "job": {
+      "lifetime_tables": ["rollups_daily"],
+      "jobs": [{
         "table": "minute_buckets",
         "key": ["device_id", "minute_ms"],
         "time_column": "minute_ms",
         "awaits": "WP-SV7"
-      }
+      }]
     },
     {
       "id": "server.witness",
@@ -115,7 +115,7 @@
       "data": "Witness rows and batch roots: the hash of each upload batch, and when the server received it",
       "kept": "{days}. Rows that a submission uses stay until its spot-check window closes ({window})",
       "days": 180,
-      "job": {
+      "jobs": [{
         "table": "witness_rows",
         "key": ["device_id", "b"],
         "time_column": "received_at_ms",
@@ -125,7 +125,7 @@
           "decided_column": "decided_at_ms",
           "awaits": "WP-SB4"
         }
-      }
+      }]
     },
     {
       "id": "server.commits",

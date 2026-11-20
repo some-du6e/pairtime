@@ -13,9 +13,12 @@ import (
 
 // Job is a server retention job, ready to run.
 type Job struct {
-	// ID is its entry's id, such as "server.ip_ja4".
+	// ID names the job by its entry and its table, such as
+	// "server.ip_ja4/request_origins".
 	ID string
-	// Table, Key and TimeColumn are the entry's binding.
+	// Entry is its entry's id, such as "server.ip_ja4".
+	Entry string
+	// Table, Key and TimeColumn are the job's binding.
 	Table      string
 	Key        []string
 	TimeColumn string
@@ -36,23 +39,21 @@ type Hold struct {
 
 // Jobs returns the jobs whose tables exist: those without awaits, each
 // with its hold unless the hold awaits its table. off lists the rest, as
-// "server.devices awaits WP-SV3", for the log.
+// "server.devices/devices awaits WP-SV3", for the log.
 func (p *Policy) Jobs() (jobs []Job, off []string) {
 	for _, e := range p.Entries {
-		j := e.Job
-		if j == nil {
-			continue
+		for _, spec := range e.Jobs {
+			job := p.job(e, spec)
+			if spec.Awaits != "" {
+				off = append(off, job.ID+" awaits "+spec.Awaits)
+				continue
+			}
+			if h := spec.Hold; h != nil && h.Awaits != "" {
+				off = append(off, job.ID+" hold awaits "+h.Awaits)
+				job.Hold = nil
+			}
+			jobs = append(jobs, job)
 		}
-		if j.Awaits != "" {
-			off = append(off, e.ID+" awaits "+j.Awaits)
-			continue
-		}
-		job := p.job(e)
-		if h := j.Hold; h != nil && h.Awaits != "" {
-			off = append(off, e.ID+" hold awaits "+h.Awaits)
-			job.Hold = nil
-		}
-		jobs = append(jobs, job)
 	}
 	return jobs, off
 }
@@ -62,22 +63,23 @@ func (p *Policy) Jobs() (jobs []Job, off []string) {
 func (p *Policy) AllJobs() []Job {
 	var jobs []Job
 	for _, e := range p.Entries {
-		if e.Job != nil {
-			jobs = append(jobs, p.job(e))
+		for _, spec := range e.Jobs {
+			jobs = append(jobs, p.job(e, spec))
 		}
 	}
 	return jobs
 }
 
-func (p *Policy) job(e Entry) Job {
+func (p *Policy) job(e Entry, spec JobSpec) Job {
 	j := Job{
-		ID:         e.ID,
-		Table:      e.Job.Table,
-		Key:        e.Job.Key,
-		TimeColumn: e.Job.TimeColumn,
+		ID:         e.ID + "/" + spec.Table,
+		Entry:      e.ID,
+		Table:      spec.Table,
+		Key:        spec.Key,
+		TimeColumn: spec.TimeColumn,
 		MaxAge:     time.Duration(e.Days) * 24 * time.Hour,
 	}
-	if h := e.Job.Hold; h != nil {
+	if h := spec.Hold; h != nil {
 		j.Hold = &Hold{Table: h.Table, DecidedColumn: h.DecidedColumn, WindowMonths: p.SpotCheckWindow.Months}
 	}
 	return j

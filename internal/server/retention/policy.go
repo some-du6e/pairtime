@@ -8,9 +8,9 @@
 // its retention table from a Policy (package pages), and Sweep runs the
 // jobs the same Policy describes, so the page and the jobs can't disagree.
 //
-// A server entry may bind a job to a table. The job deletes the table's
-// rows whose time column is at least the entry's days old, except rows a
-// hold keeps. That one shape covers DESIGN 4.4's four server jobs:
+// A server entry may bind jobs to tables. A job deletes its table's rows
+// whose time column is at least the entry's days old, except rows a hold
+// keeps. That one shape covers DESIGN 4.4's four server jobs:
 //
 //   - IP addresses and JA4 fingerprints, 30 days after they were seen.
 //   - Per-minute buckets, 180 days after their minute. Ingest keeps the
@@ -26,6 +26,12 @@
 // TestTables fails when a table the migrations create has no entry, when a
 // job's table lacks the columns its entry names, and when an awaited table
 // appears, so the package that creates a table also turns its job on.
+//
+// An entry with a period, days or the spot-check window, can't simply list
+// a table: each of its tables is a job's, so something deletes its rows,
+// or is in its lifetime_tables, whose rows its kept says stay while the
+// account exists. Only an entry without a period, such as the account,
+// lists plain tables.
 //
 // The other entries are enforced elsewhere: on the device by the client's
 // retention sweeps (WP-LG6), sign-in sessions by package accounts, whose
@@ -99,13 +105,28 @@ type Entry struct {
 	Kept string `json:"kept"`
 	// Days is the entry's period, when it has one.
 	Days int `json:"days,omitempty"`
-	// Tables lists server tables that hold this data, besides Job's.
+	// Tables lists server tables that hold this data and that no job
+	// deletes from. Only an entry without a period has them: its data is
+	// kept while the account exists, or deleted by other code, as its kept
+	// says.
 	Tables []string `json:"tables,omitempty"`
-	// Job, when set, is the server job that enforces Days.
-	Job *JobSpec `json:"job,omitempty"`
+	// LifetimeTables lists tables of an entry with a period whose rows
+	// stay while the account exists, as its kept says: the daily totals
+	// that outlive the minute buckets.
+	LifetimeTables []string `json:"lifetime_tables,omitempty"`
+	// Jobs are the server jobs that enforce the entry's period, at most one
+	// per table.
+	Jobs []JobSpec `json:"jobs,omitempty"`
 }
 
-// JobSpec binds an entry to the table its job deletes from.
+// HasPeriod reports whether the entry's data is kept for a period, days or
+// the spot-check window, rather than while the account exists or for a
+// time kept says in words.
+func (e Entry) HasPeriod() bool {
+	return e.Days > 0 || strings.Contains(e.Kept, "{window}")
+}
+
+// JobSpec binds an entry to a table one of its jobs deletes from.
 type JobSpec struct {
 	// Table is the table the job deletes rows of.
 	Table string `json:"table"`
@@ -186,13 +207,16 @@ func (p *Policy) check() error {
 		fail("there are no entries")
 	}
 
+	// owner says which entry, or no_personal_data, each table belongs to.
+	// One entry may name a table more than once, as a job's table and as
+	// a hold.
 	owner := make(map[string]string)
 	claim := func(table, by string) {
 		if !identifier.MatchString(table) {
 			fail("%s: table %q isn't a lowercase SQL name", by, table)
 			return
 		}
-		if other, dup := owner[table]; dup {
+		if other, dup := owner[table]; dup && other != by {
 			fail("table %s belongs to both %s and %s", table, other, by)
 			return
 		}
@@ -241,46 +265,60 @@ func (p *Policy) check() error {
 		if e.Days > 0 && strings.ContainsAny(placeholder.ReplaceAllString(e.Kept, ""), "0123456789") {
 			fail("%s: kept has a number besides {days}, which could drift from days", at)
 		}
+		hasTables := len(e.Tables) > 0 || len(e.LifetimeTables) > 0 || len(e.Jobs) > 0
+		if hasTables && e.Where != Server {
+			fail("%s: only server entries have tables and jobs", at)
+		}
 		for _, t := range e.Tables {
-			if e.Where != Server {
-				fail("%s: only server entries have tables", at)
+			if e.HasPeriod() {
+				fail("%s: the entry has a period, so nothing would delete table %s's rows on time; give it a job, or list it in lifetime_tables if its rows stay while the account exists", at, t)
 			}
 			claim(t, e.ID)
 		}
-		j := e.Job
-		if j == nil {
-			continue
+		if len(e.LifetimeTables) > 0 && !e.HasPeriod() {
+			fail("%s: lifetime_tables is for an entry with a period; list its tables in tables", at)
 		}
-		if e.Where != Server {
-			fail("%s: only server entries have jobs", at)
+		for _, t := range e.LifetimeTables {
+			claim(t, e.ID)
 		}
-		if e.Days == 0 {
-			fail("%s: a job needs days", at)
-		}
-		claim(j.Table, e.ID)
-		if len(j.Key) == 0 {
-			fail("%s: job.key is empty", at)
-		}
-		keys := make(map[string]bool)
-		for _, c := range j.Key {
-			if !identifier.MatchString(c) {
-				fail("%s: job.key column %q isn't a lowercase SQL name", at, c)
+		jobTables := make(map[string]bool)
+		for k, j := range e.Jobs {
+			jat := fmt.Sprintf("%s job %d", at, k+1)
+			if e.Days == 0 {
+				fail("%s: a job needs days", jat)
 			}
-			if keys[c] {
-				fail("%s: job.key lists %s twice", at, c)
+			if jobTables[j.Table] {
+				fail("%s: another job of the entry deletes from %s", jat, j.Table)
 			}
-			keys[c] = true
-		}
-		if !identifier.MatchString(j.TimeColumn) {
-			fail("%s: job.time_column %q isn't a lowercase SQL name", at, j.TimeColumn)
-		}
-		if h := j.Hold; h != nil {
-			claim(h.Table, e.ID+" (hold)")
-			if !identifier.MatchString(h.DecidedColumn) {
-				fail("%s: hold.decided_column %q isn't a lowercase SQL name", at, h.DecidedColumn)
+			jobTables[j.Table] = true
+			if slices.Contains(e.LifetimeTables, j.Table) {
+				fail("%s: %s is in lifetime_tables, but the job deletes its rows", jat, j.Table)
 			}
-			if keys[h.DecidedColumn] {
-				fail("%s: hold.decided_column %s is also a key column", at, h.DecidedColumn)
+			claim(j.Table, e.ID)
+			if len(j.Key) == 0 {
+				fail("%s: key is empty", jat)
+			}
+			keys := make(map[string]bool)
+			for _, c := range j.Key {
+				if !identifier.MatchString(c) {
+					fail("%s: key column %q isn't a lowercase SQL name", jat, c)
+				}
+				if keys[c] {
+					fail("%s: key lists %s twice", jat, c)
+				}
+				keys[c] = true
+			}
+			if !identifier.MatchString(j.TimeColumn) {
+				fail("%s: time_column %q isn't a lowercase SQL name", jat, j.TimeColumn)
+			}
+			if h := j.Hold; h != nil {
+				claim(h.Table, e.ID)
+				if !identifier.MatchString(h.DecidedColumn) {
+					fail("%s: hold.decided_column %q isn't a lowercase SQL name", jat, h.DecidedColumn)
+				}
+				if keys[h.DecidedColumn] {
+					fail("%s: hold.decided_column %s is also a key column", jat, h.DecidedColumn)
+				}
 			}
 		}
 	}

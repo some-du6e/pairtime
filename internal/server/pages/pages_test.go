@@ -113,7 +113,7 @@ func TestRetentionTable(t *testing.T) {
 				}
 			}
 			for _, j := range p.AllJobs() {
-				e, _ := p.Find(j.ID)
+				e, _ := p.Find(j.Entry)
 				text, ok := kept[e.Data]
 				if !ok {
 					t.Errorf("%s: the notice has no row for %q", j.ID, e.Data)
