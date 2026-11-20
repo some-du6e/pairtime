@@ -59,6 +59,6 @@ The scrub replaces values with these, so tests can rely on them:
 These addresses name nobody, so the scrub leaves them as the harness wrote them, and tests can rely on them too:
 
 - The public addresses tools write into commits and remotes: `noreply@anthropic.com` (Claude Code's `Co-Authored-By` trailer), `aider@aider.chat` (Aider's), `noreply@github.com`, `noreply@openai.com`, `git@github.com`, `git@gitlab.com`, `git@bitbucket.org` and `git@ssh.dev.azure.com`.
-- Addresses at a domain reserved for examples and tests: `example.com`, `example.org`, `example.net` and any name under them, and any name under `.example`, `.invalid`, `.test` or `.localhost`.
+- Addresses at a domain reserved for examples and tests: `example.com`, `example.org`, `example.net` and any name under them, and a name of one label under `.example`, `.invalid`, `.test` or `.localhost`, such as `capture@example.invalid` or `user@myapp.test`. A longer name under those four, such as `jane.doe@westfield.edu.invalid`, is a real address with a reserved label appended, so it's replaced.
 
 A known value or a key inside one of them is still replaced: with the account `rowan`, `rowan@example.com` becomes `capture@example.com`.

@@ -154,6 +154,27 @@ func TestFixturesScrub(t *testing.T) {
 			notOut: []string{stripe, anthropic, "oauth"},
 		},
 		{
+			// A sandbox anonymizer disables a real address by appending a
+			// reserved label, and it still names someone
+			// (D-email-redaction-tld).
+			name: "under a reserved top-level domain only a one-label name is kept, so a real address with .invalid appended is replaced",
+			files: map[string]string{
+				"owners.txt": "Owner: jane.doe@westfield.edu.invalid\nci@runner.ci.test\n" +
+					"user@myapp.test dev@build.localhost a@b.example capture@example.invalid\n",
+			},
+			wantCode: 0,
+			wantFiles: map[string]string{
+				"owners.txt": "Owner: capture@example.invalid\ncapture@example.invalid\n" +
+					"user@myapp.test dev@build.localhost a@b.example capture@example.invalid\n",
+			},
+			wantOut: []string{
+				"owners.txt:1:8: email, 30 bytes\n",
+				"owners.txt:2:1: email, 17 bytes\n",
+				"removed 2 spans from 1 of 1 files",
+			},
+			notOut: []string{"jane", "westfield", "runner"},
+		},
+		{
 			name: "telemetry account and organization ids become README's id, or 0 for a number, and each is listed",
 			files: map[string]string{
 				"otlp/000001.json": `{"resourceMetrics":[{"resource":{"attributes":[` +

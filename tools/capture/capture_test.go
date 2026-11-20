@@ -1565,6 +1565,22 @@ func TestScrub(t *testing.T) {
 				t.Fatalf("notes.txt = %q, want %q", got, "capture@ci.example.com\n")
 			}
 		}},
+		// The same lines as TestFixturesScrub's case for the rule
+		// (D-email-redaction-tld).
+		{"under a reserved top-level domain only a one-label name is kept, so a real address with .invalid appended is replaced", func(t *testing.T) {
+			dir := t.TempDir()
+			write(t, filepath.Join(dir, "run", "owners.txt"), "Owner: jane.doe@westfield.edu.invalid\nci@runner.ci.test\n"+
+				"user@myapp.test dev@build.localhost a@b.example capture@example.invalid\n")
+			r := run(t, ".", nil, quiet, python(t, "scrub.py", "--no-detect", filepath.Join(dir, "run"), filepath.Join(dir, "out"))...)
+			if r.code != 0 {
+				t.Fatalf("exit %d:\n%s%s", r.code, r.stdout, r.stderr)
+			}
+			want := "Owner: capture@example.invalid\ncapture@example.invalid\n" +
+				"user@myapp.test dev@build.localhost a@b.example capture@example.invalid\n"
+			if got := read(t, filepath.Join(dir, "out", "owners.txt")); got != want {
+				t.Fatalf("owners.txt = %q, want %q", got, want)
+			}
+		}},
 		// The lines of two TestFixturesScrub cases in cmd/pairtime. scrub.py's
 		// key patterns need nothing after a key, so a key followed by an
 		// address's @ or a URL's colon is found in place, and both scrubs

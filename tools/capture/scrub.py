@@ -77,7 +77,11 @@ ACCOUNT_ID = "00000000-0000-4000-8000-000000000000"
 # Public addresses that tools write into commits and remotes, and domains
 # reserved for examples, as testdata/fixtures/README.md lists them. Keeping
 # them keeps fixtures realistic; none of them names a person. Aider's
-# trailer address is one the git adapter reads (HS 13.3).
+# trailer address is one the git adapter reads (HS 13.3). Under the reserved
+# top-level domains only a name of one label is kept, such as
+# example.invalid: jane.doe@westfield.edu.invalid is a real address with a
+# reserved label appended, which is how sandbox anonymizers disable one
+# (D-email-redaction-tld).
 KEEP_EMAILS = {
     "noreply@anthropic.com",
     "aider@aider.chat",
@@ -88,7 +92,7 @@ KEEP_EMAILS = {
     "git@bitbucket.org",
     "git@ssh.dev.azure.com",
 }
-KEEP_EMAIL_DOMAINS = ("example.com", "example.org", "example.net", "example.invalid")
+KEEP_EMAIL_DOMAINS = ("example.com", "example.org", "example.net")
 KEEP_EMAIL_TLDS = (".example", ".invalid", ".test", ".localhost")
 
 # Telemetry attributes that identify an account. Claude Code attaches these
@@ -432,8 +436,10 @@ def build_rules(known, common=()):
     def keep_email(text):
         t = text.lower()
         domain = t.rsplit("@", 1)[-1]
-        return (t in KEEP_EMAILS or domain.endswith(KEEP_EMAIL_TLDS)
-                or any(domain == d or domain.endswith("." + d) for d in KEEP_EMAIL_DOMAINS))
+        if t in KEEP_EMAILS or any(domain == d or domain.endswith("." + d) for d in KEEP_EMAIL_DOMAINS):
+            return True
+        labels = [domain[:-len(tld)] for tld in KEEP_EMAIL_TLDS if domain.endswith(tld)]
+        return any(label and "." not in label for label in labels)
 
     # A Users\NAME~N folder is a home folder's 8.3 short name, whoever's it
     # is, so it goes in every spelling, even from another machine.

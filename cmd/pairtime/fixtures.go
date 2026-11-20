@@ -487,7 +487,11 @@ var publicAddresses = map[string]bool{
 
 // publicAddress reports whether an email address can stay in a fixture:
 // one of publicAddresses, or one at a domain reserved for examples, which
-// reaches nobody (RFC 2606 and RFC 6761).
+// reaches nobody (RFC 2606 and RFC 6761). Under the reserved top-level
+// domains, only a name of one label counts, such as example.invalid or
+// myapp.test. A longer one, such as westfield.edu.invalid, is a real
+// address with a reserved label appended, which is how sandbox anonymizers
+// disable one, and it still names someone (D-email-redaction-tld).
 func publicAddress(addr string) bool {
 	a := strings.ToLower(addr)
 	if publicAddresses[a] {
@@ -500,7 +504,7 @@ func publicAddress(addr string) bool {
 		}
 	}
 	for _, tld := range []string{".example", ".invalid", ".test", ".localhost"} {
-		if strings.HasSuffix(domain, tld) {
+		if label, ok := strings.CutSuffix(domain, tld); ok && label != "" && !strings.Contains(label, ".") {
 			return true
 		}
 	}
