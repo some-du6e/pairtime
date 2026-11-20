@@ -155,9 +155,10 @@ func (o *options) storeOf(k Kind) Store {
 }
 
 // lockWait is how long Open, Archive and Destroy wait for another process
-// that holds the keystore's lock. A first run can take a few store calls,
-// each up to the timeout, so this is longer than that.
-func (o *options) lockWait() time.Duration { return 4*o.timeout + 10*time.Second }
+// that holds the keystore's lock. Saving a key in one store can take four
+// calls, each up to the timeout: the save, the read back, and when that
+// fails, the delete and the check that it worked. So this is longer.
+func (o *options) lockWait() time.Duration { return 6*o.timeout + 10*time.Second }
 
 // lock takes the keystore's lock, which serializes first runs, archives and
 // Destroy across processes: the agent, `pairtime install`, `pairtime
@@ -550,12 +551,12 @@ func Inspect(dir string) (Status, error) {
 }
 
 // Destroy deletes the installation's device keys, its own and any it
-// archived, from every store that may hold them, then the keystore's files:
-// everything in its directory but the lock, keystore.json last. After it,
-// the records those keys wrote can't be opened, and
-// their nonces can't be checked, by anyone (crypto-shredding, DESIGN 3.5),
-// and the next Open makes a new K_dev. It is "delete everything" (DESIGN
-// 8.8; WP-LG6) and uninstall's last step, so a person asks for it.
+// archived, from every store that may hold them, then the keystore's
+// files: everything in its directory but the lock, keystore.json last.
+// After it, the records those keys wrote can't be opened, and their nonces
+// can't be checked, by anyone (crypto-shredding, DESIGN 3.5), and the next
+// Open makes a new K_dev. It is "delete everything" (DESIGN 8.8; WP-LG6)
+// and uninstall's last step, so a person asks for it.
 //
 // The stores keystore.json names for a key are the one that holds it, any
 // a first run couldn't be sure doesn't have it (marker.Unconfirmed), and
