@@ -645,6 +645,7 @@ drawn, smallest first     = d_example 9, d_other 26, d_other 7, d_example 14, d_
 
 | Path | What it is |
 |---|---|
+| `docs/spec/ledger-v1.md` | this spec, including the rules the reference doesn't encode, such as 4.5's body-header agreement, 4.3's `os.*` writer refusal, 5.2's rule for `n` and the steps of section 9 |
 | `tools/ledger_ref.py` | the Python reference |
 | `testdata/ledger/vectors.json` | vectors from fixed seeds, written by `ledger_ref.py vectors` |
 | `testdata/ledger/vectors-content.json` | part 2 vectors from fixed seeds, written by `ledger_ref.py vectors-content` |
@@ -652,7 +653,7 @@ drawn, smallest first     = d_example 9, d_other 26, d_other 7, d_example 14, d_
 | `testdata/ledger/rfc4231.json` | RFC 4231 test cases 1 to 7, HMAC-SHA-256 only |
 | `testdata/ledger/ct/` | Certificate Transparency Merkle vectors from transparency-dev/merkle, pinned to one commit |
 
-All of them are oracles under the plan's ground rule 5: a PR that changes them along with the code they check needs the `oracle-change` label.
+All of them are oracles under the plan's ground rule 5: a PR that changes them along with the code they check needs the `oracle-change` label. `ci.yml`'s oracle guard doesn't list `docs/spec/` yet, so until it does, review is what holds this file to the rule.
 
 ### 11.2 Commands
 
