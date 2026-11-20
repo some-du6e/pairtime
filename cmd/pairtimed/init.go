@@ -109,6 +109,9 @@ func runInit(ctx context.Context, e *env, args []string) int {
 	if data.BaseURL == "" {
 		data.BaseURL = *baseURL
 	}
+	if err := litestreamQuotable(e.getenv); err != nil {
+		return fail("%v", err)
+	}
 	toml, err := renderConfig(data, e.environ)
 	if err != nil {
 		return fail("%v", err)
@@ -228,6 +231,25 @@ func checkDataDir(dir string) error {
 	}
 	if runtime.GOOS != "windows" && fi.Mode().Perm()&0o077 != 0 {
 		return fmt.Errorf("the data directory %s has mode %04o, so group or others can enter it, and pairtimed serve would refuse it: chmod 700 %s (DESIGN 10.1)", dir, fi.Mode().Perm(), dir)
+	}
+	return nil
+}
+
+// litestreamValues are the variables litestream.yml reads, each inside
+// single quotes.
+var litestreamValues = []string{envS3Endpoint, envS3Region, envS3Bucket,
+	"PAIRTIME_S3_ACCESS_KEY_ID", "PAIRTIME_S3_SECRET_ACCESS_KEY", envLitestreamHeartbeatURL}
+
+// litestreamQuotable refuses a value litestream.yml's single quotes can't
+// hold: Litestream puts the value in before YAML reads the file, and in
+// single quotes YAML keeps a backslash as written but ends the string at
+// a ', and no quoting holds a line break. Errors name the variable, never
+// its value.
+func litestreamQuotable(get func(string) string) error {
+	for _, name := range litestreamValues {
+		if strings.ContainsFunc(get(name), func(r rune) bool { return r == '\'' || r < ' ' || r == 0x7f }) {
+			return fmt.Errorf("%s holds a ' or a control character, which litestream.yml can't take inside its single quotes; Litestream wouldn't start. Make a new key or URL without one", name)
+		}
 	}
 	return nil
 }

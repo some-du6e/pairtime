@@ -64,18 +64,23 @@ const archiveDir = "pairtime-keys"
 
 // keyBackupReadme is the README.txt inside a key backup.
 const keyBackupReadme = `This is a backup of a pairtimed server's keys (DESIGN 10.2), made by
-pairtimed keys backup. Restore it on the server's host, with the age
-identity that goes with the recipient it was encrypted to:
+pairtimed keys backup. Decrypt it offline, on the machine that holds the
+age identity it was encrypted to. That identity never goes near the
+server:
 
   age -d -i <identity file> pairtime-keys-<time>.tar.age | tar -x
+
+Then send only the pairtime-keys/ directory to the server's host, and
+there:
+
   install -d -m 0700 -o 65532 -g 65532 data/keys
   install -m 0600 -o 65532 -g 65532 pairtime-keys/server.ed25519 \
     pairtime-keys/evidence.p256 pairtime-keys/pepper data/keys/
 
-and, if PAIRTIME_EMAIL_KEY is here, put its one line back into
-config/secrets.env as PAIRTIME_EMAIL_KEY=<value>. Then shred this
-directory: it holds the keys in the clear (deploy/runbook.md, Restoring
-the keys).
+If PAIRTIME_EMAIL_KEY is here, put its one line back into
+config/secrets.env as PAIRTIME_EMAIL_KEY=<value>. Then shred the
+directory on both machines: it holds the keys in the clear
+(deploy/runbook.md, Restoring the keys).
 `
 
 // WriteKeyBackup writes the backup of the keys in dir to w: a tar archive

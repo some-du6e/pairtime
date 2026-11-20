@@ -249,3 +249,33 @@ func TestTOMLString(t *testing.T) {
 		})
 	}
 }
+
+func TestLitestreamQuotable(t *testing.T) {
+	tests := []struct {
+		name    string
+		value   string
+		wantErr bool
+	}{
+		{name: "a key with a slash and a plus fits in single quotes", value: "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY"},
+		{name: "a backslash fits too, since single quotes keep it as written", value: "abc" + "\x5c" + "def"},
+		{name: "an Uptime Kuma push URL fits", value: "http://kuma.lan:3001/api/push/tok?status=up&msg=OK&ping="},
+		{name: "a ' would end the quotes early, so it is refused", value: "it's", wantErr: true},
+		{name: "a line break is refused", value: "two\nlines", wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := litestreamQuotable(func(name string) string {
+				if name == "PAIRTIME_S3_SECRET_ACCESS_KEY" {
+					return tt.value
+				}
+				return ""
+			})
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("error = %v, want an error: %v", err, tt.wantErr)
+			}
+			if err != nil && (strings.Contains(err.Error(), tt.value) || !strings.Contains(err.Error(), "PAIRTIME_S3_SECRET_ACCESS_KEY")) {
+				t.Errorf("the error should name the variable and not quote its value: %v", err)
+			}
+		})
+	}
+}

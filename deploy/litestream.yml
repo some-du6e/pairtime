@@ -9,8 +9,11 @@
 #
 # Litestream fills ${NAME} from its environment, which compose sets from
 # config/secrets.env, so this file holds no value of one deployment and
-# comes from git with compose.yml. Each one is in double quotes, so a URL
-# with '&' or '?' in it, as an Uptime Kuma push URL has, stays one string.
+# comes from git with compose.yml. Each one is in single quotes, where YAML
+# keeps a value as written, so a URL with '&' or '?' in it, as an Uptime
+# Kuma push URL has, stays one string and a backslash in a key stays a
+# backslash. Only a ' would end one early: pairtimed init and doctor
+# refuse a value that holds one.
 # pairtimed's own copy of the endpoint and the bucket is [object_storage]
 # in pairtime.toml; `pairtimed init` writes it from the same variables, and
 # `pairtimed doctor` fails when the two disagree.
@@ -26,7 +29,7 @@ exec: pairtimed serve -litestream-replica litestream
 # Litestream's own dead man's switch: a GET of this push-monitor URL every
 # 5 minutes, sent only while the database has synced within that time
 # (DESIGN 10.4). Empty turns it off, as in the restore drill.
-heartbeat-url: "${PAIRTIME_LITESTREAM_HEARTBEAT_URL}"
+heartbeat-url: '${PAIRTIME_LITESTREAM_HEARTBEAT_URL}'
 heartbeat-interval: 5m
 
 # A full snapshot every 24 hours, kept 72 hours (DESIGN 10.3).
@@ -40,16 +43,16 @@ dbs:
     restore-if-db-not-exists: true
     replica:
       type: s3
-      endpoint: "${PAIRTIME_S3_ENDPOINT}"
-      region: "${PAIRTIME_S3_REGION}"
-      bucket: "${PAIRTIME_S3_BUCKET}"
+      endpoint: '${PAIRTIME_S3_ENDPOINT}'
+      region: '${PAIRTIME_S3_REGION}'
+      bucket: '${PAIRTIME_S3_BUCKET}'
       # The same as -litestream-replica in exec above.
       path: litestream
       # pairtimed's client uses path-style URLs too, which R2, Hetzner
       # and MinIO all take.
       force-path-style: true
-      access-key-id: "${PAIRTIME_S3_ACCESS_KEY_ID}"
-      secret-access-key: "${PAIRTIME_S3_SECRET_ACCESS_KEY}"
+      access-key-id: '${PAIRTIME_S3_ACCESS_KEY_ID}'
+      secret-access-key: '${PAIRTIME_S3_SECRET_ACCESS_KEY}'
       # About 10 s of writes at risk, inside R2's free request tier
       # (DESIGN 10.3).
       sync-interval: 10s

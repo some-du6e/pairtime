@@ -51,6 +51,11 @@ var ErrNotImplemented = errors.New("objstore: the store doesn't implement this c
 // CompleteMultipartUpload can get after an earlier attempt finished it.
 var errNoSuchUpload = errors.New("objstore: no such multipart upload")
 
+// errCutAnswer marks a CompleteMultipartUpload answer that broke off after
+// its headers. S3 sends them before it finishes, so the upload may or may
+// not be complete, and the call is tried again.
+var errCutAnswer = errors.New("the answer broke off")
+
 // StreamOptions are the choices of PutStream.
 type StreamOptions struct {
 	// ContentType is stored with the object; empty means
@@ -268,10 +273,16 @@ func (b *Bucket) completeUpload(ctx context.Context, key, id, token string, part
 			etag, err = b.readComplete(resp, key)
 		}
 		// do retries what failed in the status line. S3 can also answer
-		// 200 and fail in the body, and such a failure gets the same
-		// tries.
+		// 200 and fail in the body, or lose the body after the headers,
+		// and both get the same tries.
 		var e *Error
-		if err == nil || !errors.As(err, &e) || e.Status != http.StatusOK || attempt >= b.c.attempts || !retryable(ctx, err) {
+		if err == nil || !errors.As(err, &e) || e.Status != http.StatusOK || attempt >= b.c.attempts {
+			break
+		}
+		if !errors.Is(err, errCutAnswer) && !retryable(ctx, err) {
+			break
+		}
+		if ctx.Err() != nil {
 			break
 		}
 		retried = true
@@ -280,7 +291,7 @@ func (b *Bucket) completeUpload(ctx context.Context, key, id, token string, part
 		}
 	}
 	if err != nil {
-		if !retried || !(errors.Is(err, ErrExists) || errors.Is(err, errNoSuchUpload)) {
+		if !retried || !(errors.Is(err, ErrExists) || errors.Is(err, errNoSuchUpload) || errors.Is(err, errCutAnswer)) {
 			return ObjectInfo{}, err
 		}
 		// An attempt failed without saying whether the store carried it
@@ -301,7 +312,7 @@ func (b *Bucket) readComplete(resp *http.Response, key string) (string, error) {
 	defer resp.Body.Close()
 	data, err := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
 	if err != nil {
-		return "", &Error{Op: "CompleteMultipartUpload", Bucket: b.name, Key: key, Status: resp.StatusCode, Err: fmt.Errorf("reading the answer: %w", err)}
+		return "", &Error{Op: "CompleteMultipartUpload", Bucket: b.name, Key: key, Status: resp.StatusCode, Err: fmt.Errorf("%w: %v", errCutAnswer, err)}
 	}
 	var res completeResult
 	if err := xml.Unmarshal(data, &res); err != nil {

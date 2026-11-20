@@ -35,6 +35,9 @@ func TestReplicationLag(t *testing.T) {
 		replica []string
 		want    time.Duration
 		wantErr string
+		// wrote is when serve last told Replication of a commit; zero for
+		// none.
+		wrote time.Time
 		// wantCheck is what Check says, "" for a pass.
 		wantCheck string
 	}{
@@ -59,6 +62,17 @@ func TestReplicationLag(t *testing.T) {
 		{name: "a replica more than a minute behind fails the readiness check",
 			local:   []local{{ltx(1, 1), ago(61)}},
 			replica: nil, want: 61 * time.Second, wantCheck: "behind the database"},
+		{name: "a commit no local file has followed for over a minute fails, though the files match, since Litestream stopped reading",
+			local:   []local{{ltx(1, 1), ago(100)}},
+			replica: []string{ltx(1, 1)}, wrote: ago(90), want: 90 * time.Second, wantCheck: "isn't reading"},
+		{name: "a commit that a newer local file followed was read",
+			local:   []local{{ltx(1, 1), ago(100)}, {ltx(2, 2), ago(10)}},
+			replica: []string{ltx(1, 1), ltx(2, 2)}, wrote: ago(30), want: 0},
+		{name: "a commit a few seconds old that no file has followed yet is a short wait, not a failure",
+			local:   []local{{ltx(1, 1), ago(100)}},
+			replica: []string{ltx(1, 1)}, wrote: ago(3), want: 3 * time.Second},
+		{name: "a commit with no local files at all waits too",
+			local: nil, replica: []string{ltx(1, 1)}, wrote: ago(70), want: 70 * time.Second, wantCheck: "behind the database"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -93,6 +107,10 @@ func TestReplicationLag(t *testing.T) {
 			}
 			if got := r.LastLag(); got != -1 {
 				t.Errorf("LastLag before any measure = %v, want -1", got)
+			}
+			if !tt.wrote.IsZero() {
+				r.Wrote(tt.wrote)
+				r.Wrote(now) // only the oldest waiting commit counts
 			}
 			got, err := r.Lag(context.Background())
 			if tt.wantErr != "" {

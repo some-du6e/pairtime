@@ -86,6 +86,11 @@ type Server struct {
 // answer 501 NotImplemented, as R2 does.
 const NotImplemented = "not implemented"
 
+// CutBody, as the status of FailAfter or FailMatching with after set,
+// answers 200 and then closes the connection halfway through the body, as
+// when a store's answer is lost after its headers.
+const CutBody = -1
+
 // upload is a multipart upload in progress.
 type upload struct {
 	bucket, key string
@@ -305,6 +310,13 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 		if f.status == 0 {
 			s.drop(w, r)
 			return
+		}
+		if f.status == CutBody {
+			s.record(r, http.StatusOK)
+			w.Header().Set("Content-Length", strconv.Itoa(len(a.body)+64))
+			w.WriteHeader(http.StatusOK)
+			w.Write(a.body[:len(a.body)/2])
+			panic(http.ErrAbortHandler)
 		}
 		msg := "injected by the test"
 		if f.after {

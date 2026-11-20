@@ -34,7 +34,10 @@ var ltxName = regexp.MustCompile(`^([0-9a-f]{16})-([0-9a-f]{16})\.ltx$`)
 // lacks the local files whose last transaction id is above the highest it
 // has. Litestream deletes old level-0 files on both sides together and
 // keeps the newest on each, so a database that hasn't changed reads as
-// caught up.
+// caught up. Matching files alone don't show that Litestream still reads
+// the database, though, so serve also tells Replication about each commit
+// (Wrote), and a commit that no newer local file follows counts as waiting
+// too.
 //
 // It reads the directory and lists one prefix of the bucket: one class A
 // request on R2 a call. restore-drill.yml runs it against the real
@@ -52,6 +55,35 @@ type Replication struct {
 
 	// lastLag holds the last lag measured, in milliseconds, or -1.
 	lastLag atomic.Int64
+	// pending is when the oldest commit that no local LTX file has
+	// followed yet was made, in Unix milliseconds, or 0.
+	pending atomic.Int64
+}
+
+// Wrote records a commit made at t. serve calls it from the writer's
+// OnCommit for each transaction that changed rows. Lag then treats the
+// commit as waiting until Litestream writes a local LTX file after it,
+// which tells a database Litestream stopped reading from one that hasn't
+// changed.
+func (r *Replication) Wrote(t time.Time) {
+	r.pending.CompareAndSwap(0, t.UnixMilli())
+}
+
+// captureLag is how long the oldest commit Wrote recorded has waited for
+// a local LTX file to follow it, the newest of which Litestream wrote at
+// newest; 0 once one has.
+func (r *Replication) captureLag(newest, now time.Time) time.Duration {
+	p := r.pending.Load()
+	if p == 0 {
+		return 0
+	}
+	since := time.UnixMilli(p)
+	if !newest.Before(since) {
+		// Litestream wrote a file after the commit, so it read it.
+		r.pending.CompareAndSwap(p, 0)
+		return 0
+	}
+	return max(now.Sub(since), 0)
 }
 
 // NewReplication returns the measure of the replica at path in bucket of
@@ -95,9 +127,10 @@ func parseLTX(name string) (ltxFile, bool) {
 
 // Lag returns how long the oldest change the replica lacks has waited for
 // it: the age of the oldest local level-0 file above the replica's highest
-// transaction id, or 0 when there is none. It fails when Litestream has
-// left no state next to the database, which means it isn't replicating
-// this database.
+// transaction id, or of the oldest commit no local file has followed
+// (Wrote), whichever is older; 0 when there is neither. It fails when
+// Litestream has left no state next to the database, which means it isn't
+// replicating this database.
 func (r *Replication) Lag(ctx context.Context) (time.Duration, error) {
 	now := time.Now
 	if r.Now != nil {
@@ -111,6 +144,7 @@ func (r *Replication) Lag(ctx context.Context) (time.Duration, error) {
 		return 0, fmt.Errorf("backup: %w", err)
 	}
 	var local []ltxFile
+	var newest time.Time
 	for _, e := range entries {
 		f, ok := parseLTX(e.Name())
 		if !ok || !e.Type().IsRegular() {
@@ -125,10 +159,14 @@ func (r *Replication) Lag(ctx context.Context) (time.Duration, error) {
 		}
 		f.modified = fi.ModTime()
 		local = append(local, f)
+		if f.modified.After(newest) {
+			newest = f.modified
+		}
 	}
+	capture := r.captureLag(newest, now())
 	if len(local) == 0 {
-		r.lastLag.Store(0)
-		return 0, nil
+		r.lastLag.Store(capture.Milliseconds())
+		return capture, nil
 	}
 	var replica uint64
 	for o, err := range r.Bucket.List(ctx, r.prefix()) {
@@ -145,9 +183,9 @@ func (r *Replication) Lag(ctx context.Context) (time.Duration, error) {
 			oldest = f.modified
 		}
 	}
-	lag := time.Duration(0)
+	lag := capture
 	if !oldest.IsZero() {
-		lag = max(now().Sub(oldest), 0)
+		lag = max(lag, now().Sub(oldest))
 	}
 	r.lastLag.Store(lag.Milliseconds())
 	return lag, nil
@@ -161,7 +199,7 @@ func (r *Replication) Check(ctx context.Context) error {
 		return err
 	}
 	if lag > MaxLag {
-		return fmt.Errorf("the replica is %s behind the database, over %s: Litestream isn't uploading (DESIGN 10.4)", lag.Round(time.Second), MaxLag)
+		return fmt.Errorf("the replica is %s behind the database, over %s: Litestream isn't reading or uploading changes (DESIGN 10.4)", lag.Round(time.Second), MaxLag)
 	}
 	return nil
 }

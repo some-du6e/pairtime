@@ -60,7 +60,7 @@ show prints each key's id and public key.
 func runKeysBackup(ctx context.Context, e *env, args []string) int {
 	fs := newFlagSet("keys backup", "Back the server's keys up, encrypted to Karim's age key", e)
 	load := configFlags(fs, e)
-	recipient := fs.String("age", e.getenv(envAgeRecipient), "Karim's age public key, age1... ($"+envAgeRecipient+")")
+	recipient := fs.String("age", "", "Karim's age public key, age1...; $"+envAgeRecipient+", from the environment or -secrets, unless set")
 	out := fs.String("o", "-", `the file to write, never over an existing one; "-" is standard output`)
 	upload := fs.Bool("upload", false, "also store the backup in the main bucket, under "+backup.KeyBackupPrefix)
 	if code, done := parse(fs, args); done {
@@ -70,13 +70,16 @@ func runKeysBackup(ctx context.Context, e *env, args []string) int {
 		fmt.Fprintf(e.stderr, "pairtimed keys backup: "+format+"\n", a...)
 		return 1
 	}
-	r, err := backup.ParseRecipient(*recipient)
-	if err != nil {
-		return fail("%v. Pass -age or set %s", err, envAgeRecipient)
-	}
 	cfg, err := load()
 	if err != nil {
 		return fail("%v", err)
+	}
+	if *recipient == "" {
+		*recipient = cfg.Secrets.Get(envAgeRecipient)
+	}
+	r, err := backup.ParseRecipient(*recipient)
+	if err != nil {
+		return fail("%v. Pass -age or set %s", err, envAgeRecipient)
 	}
 	emailKey := cfg.Secrets.Get(config.EmailKey)
 	now := time.Now()
@@ -115,11 +118,14 @@ func runKeysBackup(ctx context.Context, e *env, args []string) int {
 		if err != nil {
 			return fail("%v", err)
 		}
-		if _, err := f.Write(b.Bytes()); err != nil {
-			f.Close()
-			return fail("%v", err)
+		// A backup half written is no backup, and would make the next
+		// try refuse the name, so it goes.
+		_, err = f.Write(b.Bytes())
+		if cerr := f.Close(); err == nil {
+			err = cerr
 		}
-		if err := f.Close(); err != nil {
+		if err != nil {
+			os.Remove(*out)
 			return fail("%v", err)
 		}
 		fmt.Fprintf(e.stderr, "wrote the backup of %s to %s\n", held, *out)

@@ -349,6 +349,9 @@ func (d *doctor) checkLitestream(context.Context) result {
 			problems = append(problems, fmt.Sprintf("%s, which litestream.yml reads, isn't %s in pairtime.toml", v.name, v.toml))
 		}
 	}
+	if err := litestreamQuotable(d.cfg.Secrets.Get); err != nil {
+		problems = append(problems, err.Error())
+	}
 	if len(problems) > 0 {
 		return bad("%s", strings.Join(problems, "; "))
 	}
@@ -431,19 +434,29 @@ func (d *doctor) checkWriteOnce(ctx context.Context, b *objstore.Bucket) result 
 	var r [8]byte
 	rand.Read(r[:])
 	key := doctorProbePrefix + hex.EncodeToString(r[:])
-	defer b.Delete(context.WithoutCancel(ctx), key)
 	if _, err := b.Put(ctx, key, strings.NewReader("first"), objstore.PutOptions{IfNoneMatch: true}); err != nil {
 		return bad("a write-once put of %s failed: %v", key, err)
 	}
 	_, err := b.Put(ctx, key, strings.NewReader("second"), objstore.PutOptions{IfNoneMatch: true})
+	// The probe goes whatever the second put did, on a clock of its own,
+	// so a check that ran out of time still cleans up.
+	dctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
+	derr := b.Delete(dctx, key)
+	cancel()
+	var res result
 	switch {
 	case errors.Is(err, objstore.ErrExists):
-		return ok("refused a second write-once put to %s, and deleted the probe", key)
+		res = ok("refused a second write-once put to %s", key)
 	case err == nil:
-		return bad("the store took a second If-None-Match: * put to %s, so evidence and snapshots can be overwritten. Use a store with conditional writes", key)
+		res = bad("the store took a second If-None-Match: * put to %s, so evidence and snapshots can be overwritten. Use a store with conditional writes", key)
 	default:
-		return bad("the second write-once put to %s failed oddly: %v", key, err)
+		res = bad("the second write-once put to %s failed oddly: %v", key, err)
 	}
+	if derr != nil {
+		return bad("%s, and deleting the probe failed, so delete %s by hand: %v", res.detail, key, derr)
+	}
+	res.detail += ", and deleted the probe"
+	return res
 }
 
 func (d *doctor) checkSnapshot(ctx context.Context) result {

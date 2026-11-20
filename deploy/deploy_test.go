@@ -6,6 +6,7 @@ import (
 	"os"
 	"path"
 	"regexp"
+	"strings"
 	"testing"
 
 	"github.com/some-du6e/pairtime/internal/server/config"
@@ -121,6 +122,29 @@ func TestWitnessFiles(t *testing.T) {
 			}
 			if !regexp.MustCompile(`(?m)^\s*- \./` + regexp.QuoteMeta(tt.path) + `:`).MatchString(ComposeYAML) {
 				t.Errorf("compose.yml doesn't mount %s", tt.path)
+			}
+		})
+	}
+}
+
+func TestLitestreamQuotesEveryVariable(t *testing.T) {
+	var tests []struct{ name, line string }
+	for _, l := range strings.Split(LitestreamYAML, "\n") {
+		if strings.Contains(l, "${") && !strings.HasPrefix(strings.TrimSpace(l), "#") {
+			tests = append(tests, struct{ name, line string }{
+				name: strings.TrimSpace(l) + " holds its variable in single quotes, where YAML keeps a backslash as written",
+				line: l,
+			})
+		}
+	}
+	if len(tests) != 6 {
+		t.Fatalf("litestream.yml has %d lines with a variable, want 6", len(tests))
+	}
+	quoted := regexp.MustCompile(`:\s'\$\{[A-Z0-9_]+\}'\s*$`)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if !quoted.MatchString(tt.line) {
+				t.Errorf("%q isn't key: '${NAME}'", tt.line)
 			}
 		})
 	}

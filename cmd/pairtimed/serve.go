@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/some-du6e/pairtime/internal/server/backup"
@@ -126,11 +127,16 @@ func serve(ctx context.Context, cfg *config.Config, logger *slog.Logger, e *env,
 
 	reg := ops.NewRegistry()
 	var w *writer.Writer
+	// The replica's lag, under Litestream, hears of every commit (set
+	// below, once the bucket is open).
+	var repl atomic.Pointer[backup.Replication]
 	series := ops.NewSeries(reg, func() int { return w.QueueDepth() })
 	w = writer.Start(db.Write, writer.Options{OnCommit: func(c writer.Commit) {
 		series.ObserveCommit(c.Duration, c.Rows, c.Failed, c.Err)
 		if c.Err != nil {
 			logger.Error("writer transaction failed", "err", c.Err, "ops", c.Ops, "rows", c.Rows)
+		} else if r := repl.Load(); r != nil && c.Rows > c.Failed {
+			r.Wrote(c.Start.Add(c.Duration))
 		}
 	}})
 	// Deferred after db.Close, so it runs first: queued writes commit
@@ -185,9 +191,10 @@ func serve(ctx context.Context, cfg *config.Config, logger *slog.Logger, e *env,
 	case so.replica != "" && cfg.Database.Engine != config.EngineSQLite:
 		return fmt.Errorf("-litestream-replica is for SQLite, and database.engine is %q", cfg.Database.Engine)
 	case so.replica != "":
-		repl := backup.NewReplication(cfg.Database.Path, objs.main, so.replica)
-		checks = append(checks, ops.Check{Name: "replication", Run: repl.Check})
-		reg.GaugeFunc("pairtime_replication_lag_seconds", "How long the oldest change Litestream's replica lacks has waited, -1 before the first measure (DESIGN 10.4).", repl.LastLag)
+		r := backup.NewReplication(cfg.Database.Path, objs.main, so.replica)
+		repl.Store(r)
+		checks = append(checks, ops.Check{Name: "replication", Run: r.Check})
+		reg.GaugeFunc("pairtime_replication_lag_seconds", "How long the oldest change Litestream's replica lacks has waited, -1 before the first measure (DESIGN 10.4).", r.LastLag)
 		logger.Info("under Litestream: /readyz checks the replica's lag", "replica", objs.main.Name()+"/"+so.replica, "max_lag", backup.MaxLag.String())
 	case objs != nil:
 		logger.Warn("serve runs without -litestream-replica, so /readyz doesn't check replication; litestream.yml's exec passes it (deploy/litestream.yml)")

@@ -139,6 +139,12 @@ func TestPutStream(t *testing.T) {
 				srv.FailMatching(1, isComplete, 0, "", true)
 			},
 			wantCalls: []string{"create", "part", "part", "complete", "complete", "HEAD"}, wantStored: true},
+		{name: "a completion whose 200 answer breaks off is tried again, and a HEAD finds this upload's object",
+			size: part + 1,
+			setup: func(_ *testing.T, srv *objstoretest.Server, _ *Bucket) {
+				srv.FailMatching(1, isComplete, objstoretest.CutBody, "", true)
+			},
+			wantCalls: []string{"create", "part", "part", "complete", "complete", "HEAD"}, wantStored: true},
 		{name: "a completion that answers 200 with an InternalError body is retried",
 			size: part + 1,
 			setup: func(_ *testing.T, srv *objstoretest.Server, _ *Bucket) {
