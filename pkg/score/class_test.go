@@ -178,3 +178,37 @@ func TestQuestions(t *testing.T) {
 		}
 	})
 }
+
+// TestTrackClass checks that TrackClass gives a `pairtime track` call the
+// class of the anchor the scorer opens for it.
+func TestTrackClass(t *testing.T) {
+	cases := []struct {
+		name    string
+		textLen int
+		label   string
+		want    event.PromptClass
+	}{
+		{"a call of 30 characters is substantive", 30, "", event.ClassSubstantive},
+		{"a call of exactly SUBSTANTIVE_CHARS characters is substantive", 20, "", event.ClassSubstantive},
+		{"a call under SUBSTANTIVE_CHARS characters is a go-ahead", 19, "", event.ClassLowEffort},
+		{"a call of two characters is a go-ahead", 2, "ok", event.ClassLowEffort},
+		{"a call is classed by its length, not its label's words", 30, "keep going!!!!!!!!!!!!!!!!!!!!", event.ClassSubstantive},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			b := trackScene(false)
+			tr := b.track(at(60), "s_t", c.textLen, event.LogNoReader, c.label)
+			b.samples(at(0), at(120))
+			a, ok := anchorByID(b.run(t, Device{}), tr.EventID)
+			if !ok {
+				t.Fatal("the call opened no anchor")
+			}
+			if a.PromptClass != c.want {
+				t.Fatalf("the scorer's anchor has class %q, and the case expects %q", a.PromptClass, c.want)
+			}
+			if got := TrackClass(testTable(t), tr.Data.(*event.CLITrack)); got != a.PromptClass {
+				t.Errorf("TrackClass gives %q, and the scorer %q", got, a.PromptClass)
+			}
+		})
+	}
+}

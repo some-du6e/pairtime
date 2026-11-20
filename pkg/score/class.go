@@ -25,6 +25,24 @@ func PromptClass(t *params.Table, p *event.PromptSubmit, asked bool) event.Promp
 	return promptClass(p, asked, t.Int(params.SUBSTANTIVE_CHARS), t.Int(params.ERROR_PASTE_TEXT_MAX))
 }
 
+// TrackClass returns the class of a `pairtime track` call, the one the
+// scorer gives the anchor the call opens (DESIGN 5.4): substantive from
+// SUBSTANTIVE_CHARS characters of text_len, and low_effort under that. The
+// label is local, so the server's exact re-score never sees it, and the
+// call is classed by its length alone (DESIGN 6.5). The ledger writer
+// records it as a track record's f.pc (ledger-v1 10.7).
+func TrackClass(t *params.Table, p *event.CLITrack) event.PromptClass {
+	return trackClass(p, t.Int(params.SUBSTANTIVE_CHARS))
+}
+
+// trackClass is TrackClass with SUBSTANTIVE_CHARS given.
+func trackClass(p *event.CLITrack, substantive int64) event.PromptClass {
+	if count(p.TextLen) < substantive {
+		return event.ClassLowEffort
+	}
+	return event.ClassSubstantive
+}
+
 // questionSessions bounds how many sessions a Questions remembers. When it
 // would hold more, it forgets the one it heard from least recently.
 const questionSessions = 1024
