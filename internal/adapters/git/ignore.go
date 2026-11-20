@@ -48,7 +48,7 @@ func NewExcludes(patterns []string, home string) (ex Excludes, problems []string
 				problems = append(problems, fmt.Sprintf("exclude pattern %q starts with ~, but the home folder is unknown", raw))
 				continue
 			}
-			p = home + p[1:]
+			p = globLiteral(home) + p[1:]
 		}
 		if os.PathSeparator == '\\' {
 			p = strings.ReplaceAll(p, `\`, "/")
@@ -123,26 +123,53 @@ func splitPath(p string) []string {
 
 // matchPrefix reports whether pat matches the first k elements of elems,
 // for some k, which is what makes a pattern cover the folders below the
-// ones it names.
+// ones it names. Each pair of positions is tried once, so a pattern with
+// many "**" elements costs its length times the path's, squared at most.
 func matchPrefix(pat, elems []string) bool {
-	if len(pat) == 0 {
-		return true
-	}
-	if pat[0] == "**" {
-		for k := 0; k <= len(elems); k++ {
-			if matchPrefix(pat[1:], elems[k:]) {
-				return true
+	memo := make(map[[2]int]bool)
+	var match func(i, j int) bool
+	match = func(i, j int) bool {
+		if i == len(pat) {
+			return true
+		}
+		k := [2]int{i, j}
+		if v, ok := memo[k]; ok {
+			return v
+		}
+		ok := false
+		if pat[i] == "**" {
+			for jj := j; jj <= len(elems) && !ok; jj++ {
+				ok = match(i+1, jj)
+			}
+		} else if j < len(elems) {
+			if m, err := path.Match(pat[i], elems[j]); err == nil && m {
+				ok = match(i+1, j+1)
 			}
 		}
-		return false
+		memo[k] = ok
+		return ok
 	}
-	if len(elems) == 0 {
-		return false
+	return match(0, 0)
+}
+
+// globLiteral quotes the wildcards in s, so path.Match reads them as
+// plain characters: a home folder can be named "dev[1]". A backslash is a
+// separator on Windows and git's escape elsewhere.
+func globLiteral(s string) string {
+	var b strings.Builder
+	for _, c := range s {
+		switch {
+		case c == '*' || c == '?' || c == '[':
+			b.WriteByte('[')
+			b.WriteRune(c)
+			b.WriteByte(']')
+		case c == '\\' && os.PathSeparator != '\\':
+			b.WriteString(`\\`)
+		default:
+			b.WriteRune(c)
+		}
 	}
-	if ok, err := path.Match(pat[0], elems[0]); err != nil || !ok {
-		return false
-	}
-	return matchPrefix(pat[1:], elems[1:])
+	return b.String()
 }
 
 // ignoreFileAbove returns the folder that holds a .pairtime-ignore, looking

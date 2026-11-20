@@ -142,11 +142,17 @@ func readMeta(ctx context.Context, g *Runner, dir string, shas []string, notes b
 		args := append([]string{"log", "--no-walk=unsorted", "--date=raw", notesArg, "--format=" + metaFormat}, batch...)
 		args = append(args, "--")
 		text, err := g.Run(ctx, dir, args...)
-		if err != nil {
-			return nil, err
+		var ms []*meta
+		if err == nil {
+			ms, err = parseMeta(string(text))
 		}
-		ms, err := parseMeta(string(text))
 		if err != nil {
+			if notes {
+				// A note can hold any byte, the record separator too, and a
+				// notes tree git can't read fails the call. The commits
+				// matter more than their notes: read them again without.
+				return readMeta(ctx, g, dir, shas, false)
+			}
 			return nil, err
 		}
 		for _, m := range ms {
@@ -233,7 +239,7 @@ func agentOf(trailers, authorName, authorEmail string) string {
 	}
 	if a := botAuthors[strings.TrimSpace(authorName)]; a != "" {
 		found = append(found, a)
-	} else if name, _, ok := strings.Cut(strings.ToLower(authorEmail), "@users.noreply.github.com"); ok {
+	} else if name, ok := strings.CutSuffix(strings.ToLower(authorEmail), "@users.noreply.github.com"); ok {
 		// A bot account's noreply address ends its name part in "[bot]",
 		// after an optional "<id>+".
 		if _, login, ok := strings.Cut(name, "+"); ok {

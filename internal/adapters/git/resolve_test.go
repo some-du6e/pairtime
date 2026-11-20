@@ -103,10 +103,19 @@ func TestResolve(t *testing.T) {
 			run: func(t *testing.T, g *gitEnv) {
 				a, b := t.TempDir(), t.TempDir()
 				res := g.resolver(ProjectMap{}, Excludes{})
-				la1, _ := res.Resolve(ctx, a)
+				la1, err := res.Resolve(ctx, a)
+				if err != nil {
+					t.Fatal(err)
+				}
 				res.Forget()
-				la2, _ := res.Resolve(ctx, a)
-				lb, _ := res.Resolve(ctx, b)
+				la2, err := res.Resolve(ctx, a)
+				if err != nil {
+					t.Fatal(err)
+				}
+				lb, err := res.Resolve(ctx, b)
+				if err != nil || lb.Kind != KindFolder {
+					t.Fatalf("second folder: %+v, %v; want a folder location", lb, err)
+				}
 				if la1.Kind != KindFolder || !strings.HasPrefix(la1.Project, prefixFolder) || la1.Project != la2.Project || la1.Project == lb.Project {
 					t.Errorf("keys %s, %s and %s; want one stable folder key per folder", la1.Project, la2.Project, lb.Project)
 				}
@@ -302,8 +311,10 @@ func TestResolve(t *testing.T) {
 				if _, err := g.gitErr(nested, nil, "rev-parse", "--show-superproject-working-tree"); err != nil {
 					t.Fatal(err)
 				}
-				if _, err := os.Stat(marker); err != nil {
-					t.Skipf("this git ran no fsmonitor hook for the superproject lookup, so there is nothing to check: %v", err)
+				if _, err := os.Stat(marker); errors.Is(err, os.ErrNotExist) {
+					t.Skip("this git ran no fsmonitor hook for the superproject lookup, so there is nothing to check")
+				} else if err != nil {
+					t.Fatal(err)
 				}
 				if err := os.Remove(marker); err != nil {
 					t.Fatal(err)
@@ -313,6 +324,8 @@ func TestResolve(t *testing.T) {
 				}
 				if _, err := os.Stat(marker); err == nil {
 					t.Error("resolving the nested repo ran the outer repo's fsmonitor hook")
+				} else if !errors.Is(err, os.ErrNotExist) {
+					t.Fatal(err)
 				}
 			},
 		},
@@ -571,6 +584,38 @@ func TestExcludes(t *testing.T) {
 			}
 			if got := ex.Match(tc.dir); got != tc.want {
 				t.Errorf("Match(%q) with %q = %v, want %v", tc.dir, tc.patterns, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestExcludesLiteralHome(t *testing.T) {
+	home := "/home/dev[1]"
+	if os.PathSeparator == '\\' {
+		home = `C:\Users\dev[1]`
+	}
+	deep := "/" + strings.Repeat("d/", 24) + "x"
+	if os.PathSeparator == '\\' {
+		deep = `C:\` + strings.Repeat(`d\`, 24) + "x"
+	}
+	cases := []struct {
+		name    string
+		pattern string
+		dir     string
+		want    bool
+	}{
+		{"a home folder's brackets are plain characters in a ~ pattern", "~/private", filepath.Join(home, "private", "notes"), true},
+		{"and don't turn into a class that matches another folder", "~/private", filepath.Join(filepath.Dir(home), "dev1", "private"), false},
+		{"a pattern of fifteen ** and a name not in the path answers at once", "/" + strings.Repeat("**/", 15) + "private", deep, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ex, problems := NewExcludes([]string{tc.pattern}, home)
+			if len(problems) > 0 {
+				t.Fatal(problems)
+			}
+			if got := ex.Match(tc.dir); got != tc.want {
+				t.Errorf("Match(%q) with %q = %v, want %v", tc.dir, tc.pattern, got, tc.want)
 			}
 		})
 	}

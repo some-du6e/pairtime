@@ -230,6 +230,7 @@ func TestParseMeta(t *testing.T) {
 		{"Lovable's bot author names lovable", rec("gpt-engineer-app[bot]", "159125892+gpt-engineer-app[bot]@users.noreply.github.com", ""), "lovable"},
 		{"a person co-author names no agent", rec("Teen", "t@example.com", "Co-authored-by: Sam <sam@example.com>\nSigned-off-by: Teen <t@example.com>\n"), ""},
 		{"a claimed name with another address names no agent", rec("Teen", "t@example.com", "Co-authored-by: Claude <claude@example.com>\n"), ""},
+		{"a bot name on a look-alike noreply domain names no agent", rec("Teen", "gpt-engineer-app[bot]@users.noreply.github.com.example.org", ""), ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -388,6 +389,12 @@ func TestMatchRewrites(t *testing.T) {
 			rebased:   []*meta{m("n1", "a", 100, "one"), m("n2", "a", 200, "two")},
 			folds:     map[string]int{"n1": 1},
 			want:      []Rewrite{{"o1", "n1"}, {"o2", "n2"}, {"o3", "n1"}},
+		},
+		{
+			name:      "two commits of one author second, moved and one reworded, each map to its own copy",
+			originals: []*meta{m("a", "a", 100, "A"), m("b", "a", 100, "B")},
+			rebased:   []*meta{m("nb", "a", 100, "B"), m("na", "a", 100, "A2")},
+			want:      []Rewrite{{"a", "na"}, {"b", "nb"}},
 		},
 		{
 			name:      "a commit with a reset author date matches nothing",

@@ -121,24 +121,21 @@ func keyOf(m *meta) authorKey { return authorKey{m.author, m.AuthorTime, m.Autho
 func matchRewrites(originals, rebased []*meta, folds map[string]int) []Rewrite {
 	target := make([]string, len(originals))
 	used := make([]bool, len(rebased))
-	for i, o := range originals {
-		k := keyOf(o)
-		pick := -1
-		for j, r := range rebased {
-			if used[j] || keyOf(r) != k {
+	// The same author, author date and subject first, for every original,
+	// so a reworded commit can't take the copy of another commit with the
+	// same author and second; then the same author and date alone.
+	for _, sameSubject := range []bool{true, false} {
+		for i, o := range originals {
+			if target[i] != "" {
 				continue
 			}
-			if pick < 0 {
-				pick = j
+			for j, r := range rebased {
+				if !used[j] && keyOf(r) == keyOf(o) && (!sameSubject || r.subject == o.subject) {
+					target[i] = r.SHA
+					used[j] = true
+					break
+				}
 			}
-			if r.subject == o.subject {
-				pick = j
-				break
-			}
-		}
-		if pick >= 0 {
-			target[i] = rebased[pick].SHA
-			used[pick] = true
 		}
 	}
 
