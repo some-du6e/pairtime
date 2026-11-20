@@ -221,23 +221,7 @@ func normalizeName(name string) string {
 // Linux marks an image deleted since it started, as after an update, with
 // " (deleted)"; that is dropped.
 func ExeName(goos, path string) string {
-	p := path
-	if goos == Windows {
-		p = strings.ReplaceAll(p, `\`, "/")
-	}
-	if goos == Linux {
-		p = strings.TrimSuffix(p, " (deleted)")
-	}
-	p = strings.TrimRight(p, "/")
-	dir, base := p, p
-	if i := strings.LastIndexByte(p, '/'); i >= 0 {
-		dir, base = p[:i], p[i+1:]
-	} else {
-		dir = ""
-	}
-	if goos == Windows && len(base) > 4 && strings.EqualFold(base[len(base)-4:], ".exe") {
-		base = base[:len(base)-4]
-	}
+	p, dir, base := splitPath(goos, path)
 	lower := strings.ToLower(p)
 	parent, grand := lastTwo(strings.ToLower(dir))
 	switch {
@@ -252,6 +236,52 @@ func ExeName(goos, path string) string {
 		return "claude"
 	}
 	return base
+}
+
+// splitPath cleans an executable's path and splits it into its directory
+// and its base name without ".exe".
+func splitPath(goos, path string) (p, dir, base string) {
+	p = path
+	if goos == Windows {
+		p = strings.ReplaceAll(p, `\`, "/")
+	}
+	if goos == Linux {
+		p = strings.TrimSuffix(p, " (deleted)")
+	}
+	p = strings.TrimRight(p, "/")
+	base = p
+	if i := strings.LastIndexByte(p, '/'); i >= 0 {
+		dir, base = p[:i], p[i+1:]
+	}
+	if goos == Windows && len(base) > 4 && strings.EqualFold(base[len(base)-4:], ".exe") {
+		base = base[:len(base)-4]
+	}
+	return p, dir, base
+}
+
+// commMin is the shortest name Linux (15 bytes) or macOS (16) cuts a
+// process's comm to.
+const commMin = 15
+
+// AliasOf returns what a reader stores as Proc.Alias for a process whose
+// executable is at path, named name by ExeName, which goes by comm (Linux
+// comm, macOS p_comm). It is empty when comm says nothing more: when it
+// is name, or the file's own base name whole or cut short by the OS. So a
+// Node app that set its title, or a script run through a #! line, keeps
+// its own name, while Claude.app's "Claude" doesn't override the name
+// "claude-desktop" that ExeName gave it.
+func AliasOf(goos, path, name, comm string) string {
+	if comm == "" || strings.EqualFold(comm, name) {
+		return ""
+	}
+	_, _, base := splitPath(goos, path)
+	if strings.EqualFold(comm, base) {
+		return ""
+	}
+	if len(comm) >= commMin && len(base) > len(comm) && strings.EqualFold(base[:len(comm)], comm) {
+		return ""
+	}
+	return comm
 }
 
 // lastTwo returns the last and second-to-last components of a slash path.
