@@ -156,20 +156,26 @@ func hostedSessions(t *platform.Table, w window, sessions map[platform.ID]string
 }
 
 // focusProject resolves the window's project from the sessions it hosts
-// (SM 3.2): a terminal or an agent desktop app goes to its sessions'
-// project when they all have the same one, which is always so for one
-// session. Several sessions in different projects, or one whose project
-// isn't known, leave it empty, and the scorer picks among the sessions by
-// SM 3.2 rule 1's look-ahead. An editor's project comes from its own
-// heartbeats instead (SM 3.2 rule 2): its process runs every window of
-// the editor, and one of them may be on a project none of its sessions
-// is in. Other apps have no project (rules 4 and 5).
+// (SM 3.2): a terminal, an editor or an agent desktop app goes to its
+// sessions' project when they all have the same one, which is always so
+// for one session. Several sessions in different projects, or one whose
+// project isn't known, leave it empty, and the scorer picks among the
+// sessions by SM 3.2 rule 1's look-ahead, or for an editor by its
+// heartbeats (rule 2). Other apps have no project (rules 4 and 5).
+//
+// One process runs every window of an editor, as one runs every window of
+// Windows Terminal, so the window in front may show a project that none
+// of its sessions is in. Decision 1 counts such an app as one window that
+// hosts all of them, for editors as for terminals, and SM 6.2 credits a
+// prompt typed in Cursor because Cursor hosts the session, before any
+// heartbeat says which project it shows (testdata/timelines/README.md,
+// "Focus").
 func focusProject(class event.AppClass, hosted []string, projectOf func(session string) string) string {
 	if projectOf == nil || len(hosted) == 0 {
 		return ""
 	}
 	switch class {
-	case event.AppTerminal, event.AppAgentApp:
+	case event.AppTerminal, event.AppEditor, event.AppAgentApp:
 	default:
 		return ""
 	}

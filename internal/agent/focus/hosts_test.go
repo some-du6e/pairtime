@@ -222,7 +222,9 @@ func TestFocusProject(t *testing.T) {
 		{"sessions in two projects leave the slot to the scorer's look-ahead", event.AppTerminal, []string{"s_a", "s_b"}, ""},
 		{"a session whose project isn't known leaves the project empty", event.AppTerminal, []string{"s_a", "s_new"}, ""},
 		{"an agent desktop app gives the project of the session it hosts (SM 3.2 rule 3)", event.AppAgentApp, []string{"s_b"}, "p_b"},
-		{"an editor's project comes from its heartbeats, not its sessions (SM 3.2 rule 2)", event.AppEditor, []string{"s_a"}, ""},
+		{"an editor gives the project of the session it hosts, as Cursor does in SM 6.2", event.AppEditor, []string{"s_a"}, "p_a"},
+		{"an editor's sessions in two projects leave the project to its heartbeats (SM 3.2 rule 2)", event.AppEditor, []string{"s_a", "s_b"}, ""},
+		{"a browser has no project, whatever runs under it (SM 3.2 rule 4)", event.AppBrowser, []string{"s_a"}, ""},
 		{"a window that hosts nothing has no project", event.AppTerminal, nil, ""},
 	}
 	for _, tt := range tests {
