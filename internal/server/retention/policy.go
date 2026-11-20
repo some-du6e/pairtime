@@ -47,8 +47,9 @@
 // The other entries are enforced elsewhere: on the device by the client's
 // retention sweeps (WP-LG6), sign-in sessions by package accounts, whose
 // TestSessionRetention checks its periods against the schedule's, on
-// account deletion by the eraser (WP-SV13), and in the evidence store by
-// the submission work packages.
+// account deletion by the eraser (WP-SV13, with WP-SB4's evidence step),
+// and in the evidence store by WP-SV18, which runs the evidence entries'
+// jobs and deletes each blob before the row that names it.
 package retention
 
 import (
@@ -166,12 +167,13 @@ type JobSpec struct {
 
 // HoldSpec names a table of holds. A hold row has the job's key columns,
 // naming the row it holds, and DecidedColumn: NULL while its submission is
-// open, then the time the submission was decided, in epoch milliseconds.
-// A held row stays while its submission is open, and until the spot-check
-// window after the decision has passed. The submission code deletes the
-// holds of a submission that is withdrawn. The hold table is also the
-// table of one of the entry's jobs by the window, with DecidedColumn as
-// its time column, which deletes each hold once its window has closed.
+// open, then when its spot-check window opened, in epoch milliseconds: its
+// latest decision, or a withdrawal that came before any decision, or its
+// freeze once it has stayed open a window (DESIGN 4.4). WP-SV18 writes it
+// from the submission. A held row stays until that window has closed, and
+// a withdrawal deletes no hold. The hold table is also the table of one of
+// the entry's jobs by the window, with DecidedColumn as its time column,
+// which deletes each hold once its window has closed.
 type HoldSpec struct {
 	// Table is the hold table.
 	Table string `json:"table"`

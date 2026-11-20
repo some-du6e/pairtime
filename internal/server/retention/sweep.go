@@ -40,15 +40,29 @@ type Hold struct {
 	WindowMonths int
 }
 
+// evidenceJobsAwait is the work package that runs the evidence entries'
+// jobs (D-evidence-retention-wp).
+const evidenceJobsAwait = "WP-SV18"
+
 // Jobs returns the jobs whose tables exist: those without awaits, each
 // with its hold unless the hold awaits its table. off lists the rest, as
 // "server.devices/devices awaits WP-SV3", for the log.
+//
+// A job of an evidence entry stays off even once its table exists, as
+// "evidence.revealed/<table> awaits WP-SV18". Sweep deletes rows only, and
+// an evidence row can name a blob in the evidence store that has to be
+// deleted first, or the blob would outlive the only row that names it.
+// WP-SV18 runs those jobs, deleting each blob before its row.
 func (p *Policy) Jobs() (jobs []Job, off []string) {
 	for _, e := range p.Entries {
 		for _, spec := range e.Jobs {
 			job := p.job(e, spec)
 			if spec.Awaits != "" {
 				off = append(off, job.ID+" awaits "+spec.Awaits)
+				continue
+			}
+			if e.Where == Evidence {
+				off = append(off, job.ID+" awaits "+evidenceJobsAwait)
 				continue
 			}
 			if h := spec.Hold; h != nil && h.Awaits != "" {

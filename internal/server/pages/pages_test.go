@@ -320,6 +320,18 @@ func TestPrivacyNotice(t *testing.T) {
 			want: []string{"The continuous backup isn&#39;t encrypted with a key of the operator&#39;s own, so the storage provider could read it."},
 		},
 		{
+			name: "the notice says withdrawing deletes nothing, and when a withdrawn or undecided submission's window opens (DESIGN 4.4)",
+			want: []string{
+				"Withdrawing a submission doesn&#39;t delete what you revealed. It stays for the spot-check window, counted from when you withdraw, so a withdrawal can&#39;t cut short a check that&#39;s under way.",
+				"months after the decision. If you withdraw a submission before it&#39;s decided, its window starts when you withdraw it, and if it&#39;s never decided or withdrawn, when you submitted it.",
+			},
+		},
+		{
+			name:    "the purge promises one deletion, since the buckets keep no versions (DESIGN 10.3)",
+			want:    []string{"button deletes it from the evidence store at once. The minutes it supported stop counting."},
+			notWant: []string{"every stored version"},
+		},
+		{
 			name: "the notice names this server and its version",
 			opts: Options{BaseURL: "https://pairtime.example.net", Version: "v1.2.3"},
 			want: []string{"the pairtime server at https://pairtime.example.net", "built by pairtime v1.2.3", "pairtime v1.2.3 is free software"},

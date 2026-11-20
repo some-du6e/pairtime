@@ -349,6 +349,45 @@ func TestJobs(t *testing.T) {
 				"server.witness/witness_rows+hold", "server.witness/submission_batches",
 			},
 		},
+		{
+			name: "a job of an evidence entry stays off until WP-SV18, even once its table exists",
+			edit: func(p *Policy) {
+				for i := range p.Entries {
+					e := &p.Entries[i]
+					for k := range e.Jobs {
+						e.Jobs[k].Awaits = ""
+						if h := e.Jobs[k].Hold; h != nil {
+							h.Awaits = ""
+						}
+					}
+					if e.ID == "evidence.revealed" {
+						e.Jobs = append(e.Jobs, evidenceIndexJob(""))
+					}
+				}
+			},
+			wantJobs: []string{
+				"server.devices/devices", "server.ip_ja4/request_origins",
+				"server.minute_buckets/minute_buckets+hold", "server.minute_buckets/submission_minutes",
+				"server.witness/witness_rows+hold", "server.witness/submission_batches",
+			},
+			wantOff: []string{"evidence.revealed/evidence_index awaits WP-SV18"},
+		},
+		{
+			name: "a job of an evidence entry whose table doesn't exist yet waits for the package that creates it",
+			edit: func(p *Policy) {
+				for i := range p.Entries {
+					if e := &p.Entries[i]; e.ID == "evidence.revealed" {
+						e.Jobs = append(e.Jobs, evidenceIndexJob("WP-SB4"))
+					}
+				}
+			},
+			wantOff: []string{
+				"server.devices/devices awaits WP-SV3", "server.ip_ja4/request_origins awaits WP-SV4",
+				"server.minute_buckets/minute_buckets awaits WP-SV7", "server.minute_buckets/submission_minutes awaits WP-SB4",
+				"server.witness/witness_rows awaits WP-SV4", "server.witness/submission_batches awaits WP-SB4",
+				"evidence.revealed/evidence_index awaits WP-SB4",
+			},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -386,6 +425,12 @@ func TestJobs(t *testing.T) {
 			}
 		})
 	}
+}
+
+// evidenceIndexJob is a job by the window on an evidence index table, the
+// shape WP-SB4 gives evidence.revealed, with awaits set as given.
+func evidenceIndexJob(awaits string) JobSpec {
+	return JobSpec{Table: "evidence_index", Key: []string{"blob"}, TimeColumn: "decided_at_ms", Period: PeriodWindow, Awaits: awaits}
 }
 
 func TestDeleteSQL(t *testing.T) {

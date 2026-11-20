@@ -174,9 +174,8 @@ func (b *Bucket) Head(ctx context.Context, key string) (ObjectInfo, error) {
 }
 
 // Delete removes key. Deleting a missing key succeeds, as it does in S3.
-// In a bucket with versioning on, the store keeps the old versions behind
-// a delete marker, so Delete alone doesn't purge an object there
-// (docs/errata/2026-11-20-evidence-versioning.md).
+// pairtimed's buckets never keep versions (DESIGN 10.3), and pairtimed
+// doctor fails on one that does, so Delete removes the object for good.
 func (b *Bucket) Delete(ctx context.Context, key string) error {
 	if err := CheckKey(key); err != nil {
 		return err
