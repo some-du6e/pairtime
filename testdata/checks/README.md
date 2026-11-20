@@ -20,7 +20,7 @@ Each failing scenario fails one check. Every other check passes on the same data
 | CC8 content-derived inputs | `4.2-clean`, `4.2-cc8-removed-spans` | `4.2-cc8-false-sketch`, `4.2-cc8-made-up-key`, `4.2-cc8-hidden-shingles`, `4.2-cc8-false-class`, `4.2-cc8-inflated-length` | `4.2-cc2-send-keys`: nothing drawn |
 | CC9 session integrity | `4.2-clean`, `6.2-clean`, `6.3-clean` | `6.3-cc9-moved-turn`, `6.3-cc9-orphan-turn`, `4.2-cc9-parent-class` | |
 | CC10 editor vs focus | `6.2-clean`, `6.3-clean` | `6.3-cc10-injected-heartbeats`: no editor has focus; `6.3-cc10-wrong-project`: the focused editor is on another project | the `4.2-*` scenarios: no editor |
-| CC11 typing, module on | `4.2-clean` | `4.2-cc11-pasted` | the `6.2-*` and `6.3-*` scenarios: module off; `4.2-cc2-send-keys`: no human prompt |
+| CC11 typing, module on | `4.2-clean` | `4.2-cc11-pasted` | the `6.2-*` and `6.3-*` scenarios and `4.2-cc8-inflated-length`: module off; `4.2-cc2-send-keys`: no human prompt |
 
 `4.2-cc8-removed-spans` passes every check although its client lied. It is the limit ledger-v1.md 10.8 states and [issue #15](https://github.com/some-du6e/pairtime/issues/15) asks Karim to decide on. Its `known_limit` says so.
 
@@ -35,7 +35,7 @@ Each failing scenario fails one check. Every other check passes on the same data
 | `4.2-cc7-dropped-record` | 4.2-alternation | The reveal leaves out one record of a witnessed batch |
 | `4.2-cc7-dropped-batch` | 4.2-alternation | The reveal leaves out the last batch of the re-score range, A3's stop and its sample |
 | `4.2-cc8-false-sketch` | 4.2-alternation | A3's committed sketch is another request's, so the re-roll rule misses it; the client reveals A3's true values |
-| `4.2-cc8-made-up-key` | 4.2-alternation | A3's sketch and values are under a key of the client's own; A1 shows the same shingles with other values |
+| `4.2-cc8-made-up-key` | 4.2-alternation | A3's sketch and values are under a key of the client's own; A1 and A2 show the same shingles with other values |
 | `4.2-cc8-hidden-shingles` | 4.2-alternation | As the made-up key, with no `x` on any of A3's values and nothing removed |
 | `4.2-cc8-false-class` | 4.2-alternation | B2 is the go-ahead `looks good`, committed with class substantive |
 | `4.2-cc8-inflated-length` | 4.2-alternation | B2's `len_chars` and `typed_len_est` say 450 for its 60 characters; the typing module is off |
@@ -147,6 +147,6 @@ python3 -I testdata/checks/gen.py            # rewrite the checked-in files
 python3 -I testdata/checks/gen.py --out /tmp/x
 ```
 
-`gen.py` describes every scenario. `checks.py` holds what they share: loading a base fixture, the edits, the ledger, the keyed content values, and the reading of each check. Both use `../timelines/timeline.py` unchanged. Presence edits work from the base's own samples: each sample says when the last input before it was, those times give every sample back exactly, and an edit removes or adds input times and recomputes the samples. `checks.py` refuses a prompt text that ledger-v1.md 10.4 would change, so its normalization never has to guess. The texts it commits are plain lowercase words, which every step of 10.4 leaves as they are.
+`gen.py` describes every scenario. `checks.py` holds what they share: loading a base fixture, the edits, the ledger, the keyed content values, and the reading of each check. Both use `../timelines/timeline.py` unchanged. Presence edits work from the base's own samples: each sample says when the last input before it was, those times give every sample back exactly, and an edit removes or adds input times and recomputes the samples. `checks.py` refuses a prompt text that ledger-v1.md 10.4 would change, so its normalization never has to guess. The texts it commits are plain lowercase words, which every step of 10.4 leaves as they are, and 4.2's come from its `prompts.json`. Every slot table CC5 reads must add up to the base's rows, minute by minute, so a base that changes can't leave a stale table behind. `gen.py` first runs `checks.selftest`, which covers what no scenario reaches.
 
-The output is deterministic. `internal/timelines/checks_test.go` checks every event against `Event.Validate`, the JSON Schema and its own encoding; each device's stream; the shape of every `expected.json`; each revealed batch's root and head against the witnessed ones, except the batches CC7 fails; each body's `e` against `Event.Shareable` of its event, byte for byte; and that `gen.py` writes every file byte for byte.
+The output is deterministic. `internal/timelines/checks_test.go` checks that every directory here but `__pycache__` has an `expected.json`; every event against `Event.Validate`, the JSON Schema and its own encoding; each device's stream; the shape of every `expected.json`, including a `basis` for CC6 and for a CC5 without slot counts; that the witnessed rows chain and arrive in order and that `rescore_range` is DESIGN 6.5's; that the reveal covers the range and each revealed batch's root and head reproduce the witnessed ones, except the batches CC7 fails; each body's `e` against `Event.Shareable` of its event, byte for byte; and that `gen.py` writes every file byte for byte.
