@@ -63,11 +63,14 @@ type Runner struct {
 	// DefaultTimeout.
 	Timeout time.Duration
 
-	once    sync.Once
+	// mu guards the probe's result. Only a probe that worked is kept, so
+	// a git installed later, or a `git version` that timed out under
+	// load, is tried again on the next call instead of failing every call
+	// for the Runner's life.
+	mu      sync.Mutex
+	probed  bool
 	exe     string
-	exeErr  error
 	version Version
-	verErr  error
 }
 
 // redirecting are environment variables that would point git at another
@@ -148,59 +151,72 @@ func HonorsNoLazyFetch(v Version) bool {
 	return ok && v.Patch >= p
 }
 
-func (r *Runner) init() {
-	r.once.Do(func() {
-		name := r.Path
-		if name == "" {
-			name = "git"
-		}
-		r.exe, r.exeErr = exec.LookPath(name)
-		if r.exeErr != nil {
-			r.exeErr = fmt.Errorf("%w: %v", ErrNoGit, r.exeErr)
-			return
-		}
-		out, err := r.run(context.Background(), "", nil, 1<<10, "version")
-		if err != nil {
-			r.verErr = err
-			return
-		}
-		r.version, r.verErr = ParseVersion(string(out))
-	})
+// probe finds git and reads its version, once it works.
+func (r *Runner) probe() (string, Version, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.probed {
+		return r.exe, r.version, nil
+	}
+	name := r.Path
+	if name == "" {
+		name = "git"
+	}
+	exe, err := exec.LookPath(name)
+	if err != nil {
+		return "", Version{}, fmt.Errorf("%w: %v", ErrNoGit, err)
+	}
+	out, err := r.run(context.Background(), exe, "", nil, 1<<10, "version")
+	if err != nil {
+		return "", Version{}, err
+	}
+	v, err := ParseVersion(string(out))
+	if err != nil {
+		return "", Version{}, err
+	}
+	r.probed, r.exe, r.version = true, exe, v
+	return exe, v, nil
 }
 
 // Version returns the git version, or an error when git can't be run or
 // is older than MinVersion.
 func (r *Runner) Version() (Version, error) {
-	r.init()
-	if r.exeErr != nil {
-		return Version{}, r.exeErr
+	_, v, err := r.ready()
+	return v, err
+}
+
+// ready returns the git executable and its version, or why git can't be
+// used.
+func (r *Runner) ready() (string, Version, error) {
+	exe, v, err := r.probe()
+	if err != nil {
+		return "", Version{}, err
 	}
-	if r.verErr != nil {
-		return Version{}, r.verErr
+	if v.Less(MinVersion) {
+		return "", v, fmt.Errorf("git %s is older than %s, the oldest the git adapter supports", v, MinVersion)
 	}
-	if r.version.Less(MinVersion) {
-		return r.version, fmt.Errorf("git %s is older than %s, the oldest the git adapter supports", r.version, MinVersion)
-	}
-	return r.version, nil
+	return exe, v, nil
 }
 
 // Run runs git with args in dir and returns what it printed on stdout.
 func (r *Runner) Run(ctx context.Context, dir string, args ...string) ([]byte, error) {
-	if _, err := r.Version(); err != nil {
+	exe, _, err := r.ready()
+	if err != nil {
 		return nil, err
 	}
-	return r.run(ctx, dir, nil, defaultMaxOutput, args...)
+	return r.run(ctx, exe, dir, nil, defaultMaxOutput, args...)
 }
 
 // RunInput is Run with stdin.
 func (r *Runner) RunInput(ctx context.Context, dir string, stdin []byte, args ...string) ([]byte, error) {
-	if _, err := r.Version(); err != nil {
+	exe, _, err := r.ready()
+	if err != nil {
 		return nil, err
 	}
-	return r.run(ctx, dir, stdin, defaultMaxOutput, args...)
+	return r.run(ctx, exe, dir, stdin, defaultMaxOutput, args...)
 }
 
-func (r *Runner) run(ctx context.Context, dir string, stdin []byte, limit int, args ...string) ([]byte, error) {
+func (r *Runner) run(ctx context.Context, exe, dir string, stdin []byte, limit int, args ...string) ([]byte, error) {
 	// A caller's own deadline wins, so a call known to be slow, like the
 	// root-commit walk, can have longer.
 	if _, ok := ctx.Deadline(); !ok {
@@ -213,7 +229,7 @@ func (r *Runner) run(ctx context.Context, dir string, stdin []byte, limit int, a
 		defer cancel()
 	}
 
-	cmd := exec.CommandContext(ctx, r.exe, append(append([]string(nil), fixedArgs...), args...)...)
+	cmd := exec.CommandContext(ctx, exe, append(append([]string(nil), fixedArgs...), args...)...)
 	cmd.Dir = dir
 	cmd.Env = environ(os.Environ(), r.Env)
 	if stdin != nil {

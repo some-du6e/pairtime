@@ -3,6 +3,8 @@
 package git
 
 import (
+	"errors"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -576,6 +578,31 @@ func TestHonorsNoLazyFetch(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := HonorsNoLazyFetch(tc.v); got != tc.want {
 				t.Errorf("HonorsNoLazyFetch(%v) = %v, want %v", tc.v, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestRunnerProbe(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git isn't installed")
+	}
+	cases := []struct {
+		name   string
+		first  string
+		second string
+	}{
+		{"a failed probe isn't kept: git found later is used", filepath.Join(t.TempDir(), "no-git-here"), "git"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r := &Runner{Path: tc.first}
+			if _, err := r.Version(); !errors.Is(err, ErrNoGit) {
+				t.Fatalf("first probe: %v, want ErrNoGit", err)
+			}
+			r.Path = tc.second
+			if v, err := r.Version(); err != nil || v.Major < 2 {
+				t.Errorf("second probe: %v, %v; want git's version", v, err)
 			}
 		})
 	}
