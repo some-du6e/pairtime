@@ -471,6 +471,10 @@ func TestParseGitRuns(t *testing.T) {
 		{"git commands that don't move HEAD aren't kept", `git status && git diff && git log -1`, nil, nil},
 		{"a command that isn't git isn't kept", `npm test && echo git commit`, nil, nil},
 		{"an absolute git path counts as git", `/usr/bin/git merge --no-edit side`, []string{cwd}, []event.GitOp{event.GitMerge}},
+		{"--git-dir points git at another repo, so the run isn't kept", `git --git-dir=/elsewhere/.git commit -m x`, nil, nil},
+		{"--work-tree with its value as the next word isn't kept either", `git --work-tree /elsewhere commit -m x`, nil, nil},
+		{"GIT_DIR before git points it elsewhere too", `GIT_DIR=/elsewhere/.git git commit -m x`, nil, nil},
+		{"an exported GIT_DIR covers the git commands after it", `export GIT_DIR=/elsewhere/.git; git commit -m x`, nil, nil},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

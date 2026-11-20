@@ -79,9 +79,12 @@ var subcommandOps = map[string][]event.GitOp{
 func parseGitRuns(c AgentCommand) []gitRun {
 	var runs []gitRun
 	dir := c.Dir
+	exported := false // an export of GIT_DIR or GIT_WORK_TREE earlier in the line
 	for _, simple := range splitCommands(c.Line) {
 		words := shellWords(simple)
+		redirected := exported
 		for len(words) > 0 && isAssignment(words[0]) {
+			redirected = redirected || redirectsGit(words[0])
 			words = words[1:]
 		}
 		if len(words) == 0 {
@@ -91,6 +94,10 @@ func parseGitRuns(c AgentCommand) []gitRun {
 		case name == "cd" || name == "pushd":
 			if len(words) > 1 && words[1] != "-" {
 				dir = joinDir(dir, words[1])
+			}
+		case name == "export":
+			for _, w := range words[1:] {
+				exported = exported || redirectsGit(w)
 			}
 		case isGitExe(name):
 			runDir := dir
@@ -103,8 +110,13 @@ func parseGitRuns(c AgentCommand) []gitRun {
 					i++
 				case w == "-c" && i+1 < len(words):
 					i++
+				case w == "--git-dir" || w == "--work-tree":
+					redirected = true
+					i++ // its value
+				case strings.HasPrefix(w, "--git-dir=") || strings.HasPrefix(w, "--work-tree="):
+					redirected = true
 				case strings.HasPrefix(w, "-"):
-					// --no-pager, --git-dir=..., --work-tree=... and the like
+					// --no-pager and the like
 				default:
 					sub = w
 				}
@@ -112,12 +124,28 @@ func parseGitRuns(c AgentCommand) []gitRun {
 					break
 				}
 			}
-			if ops := subcommandOps[sub]; ops != nil {
+			// git pointed at another repository than its folder's runs
+			// there, which the folder doesn't say, so the run isn't kept.
+			if ops := subcommandOps[sub]; ops != nil && !redirected {
 				runs = append(runs, gitRun{call: c.Call, start: c.Start, end: c.End, dir: runDir, ops: ops})
 			}
 		}
 	}
 	return runs
+}
+
+// redirectsGit reports whether a shell assignment points git at another
+// repository than the folder's own.
+func redirectsGit(assignment string) bool {
+	name, _, ok := strings.Cut(assignment, "=")
+	if !ok {
+		return false
+	}
+	switch strings.ToUpper(name) {
+	case "GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR":
+		return true
+	}
+	return false
 }
 
 func isGitExe(name string) bool {
