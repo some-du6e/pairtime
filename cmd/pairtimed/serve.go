@@ -9,10 +9,12 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/some-du6e/pairtime/internal/server/auth"
 	"github.com/some-du6e/pairtime/internal/server/backup"
 	"github.com/some-du6e/pairtime/internal/server/config"
 	"github.com/some-du6e/pairtime/internal/server/migrations"
@@ -245,8 +247,13 @@ func serve(ctx context.Context, cfg *config.Config, logger *slog.Logger, e *env,
 	public.HandleFunc("GET /healthz", ops.Healthz)
 	site.Register(public)
 	signIn.Register(public)
-	// Where a sign-in without return_to lands.
-	public.HandleFunc("GET /{$}", home(signIn, logger))
+	// The home page at /, where a sign-in without return_to lands.
+	site.RegisterHome(public, pages.SignIn{
+		Enabled:    signIn.Enabled(),
+		LoginPath:  auth.LoginPath,
+		LogoutPath: auth.LogoutPath,
+		Visitor:    visitor(signIn, logger),
+	})
 	maintainCtx, stopMaintain := context.WithCancel(ctx)
 	defer stopMaintain()
 	go signIn.Maintain(maintainCtx)
@@ -262,7 +269,7 @@ func serve(ctx context.Context, cfg *config.Config, logger *slog.Logger, e *env,
 	}
 	errLog := slog.NewLogLogger(logger.Handler(), slog.LevelWarn)
 	servers := []*http.Server{
-		newHTTPServer(public, errLog),
+		newHTTPServer(withHSTS(cfg.BaseURL, public), errLog),
 		newHTTPServer(ops.Handler(reg, checks, ops.DefaultCheckTimeout), errLog),
 	}
 	listeners := []net.Listener{pubLn, opsLn}
@@ -321,6 +328,26 @@ func retentionReport(logger *slog.Logger, deleted, failed *ops.Counter) func(r r
 			logger.Info("retention job deleted rows", "job", r.ID, "rows", r.Deleted)
 		}
 	}
+}
+
+// hstsValue is the Strict-Transport-Security header the public listener
+// sends: a browser that reads it over https uses only https for this host
+// for the next year (RFC 6797).
+const hstsValue = "max-age=31536000"
+
+// withHSTS sets Strict-Transport-Security on every response h writes, when
+// base_url is https. Over plain http the header must not be sent (RFC 6797
+// 7.2), and config allows http only on a loopback host, for local runs and
+// tests. config has already put base_url in canonical form, so the scheme
+// is lowercase.
+func withHSTS(baseURL string, h http.Handler) http.Handler {
+	if !strings.HasPrefix(baseURL, "https://") {
+		return h
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Strict-Transport-Security", hstsValue)
+		h.ServeHTTP(w, r)
+	})
 }
 
 // newHTTPServer returns a server with timeouts for slow clients. There is

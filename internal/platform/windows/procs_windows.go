@@ -6,6 +6,7 @@ package windows
 
 import (
 	"errors"
+	"os"
 	"time"
 	"unsafe"
 
@@ -114,6 +115,28 @@ func fromInfo(info *win.SYSTEM_PROCESS_INFORMATION) platform.Proc {
 	}
 	p.Owner = owner
 	return p
+}
+
+// Self returns this process the way Processes reads it, so its ID is the
+// one the table gives it: its pid, its executable's name, and its creation
+// time from GetProcessTimes, which is the CreateTime the table reads from
+// SystemProcessInformation (fromInfo checks the two against each other). A
+// hook records itself with it, for the agent to check its own walk against
+// (internal/agent/hookpath). It opens nothing: the handle is the pseudo
+// handle of the current process.
+func Self() (platform.Proc, error) {
+	var created, exited, kernel, user win.Filetime
+	if err := win.GetProcessTimes(win.CurrentProcess(), &created, &exited, &kernel, &user); err != nil {
+		return platform.Proc{}, err
+	}
+	p := platform.Proc{PID: int(win.GetCurrentProcessId())}
+	if ft := int64(created.HighDateTime)<<32 | int64(created.LowDateTime); ft > 0 {
+		p.Start = fromFiletime(ft)
+	}
+	if exe, err := os.Executable(); err == nil {
+		p.Name = platform.ExeName(platform.Windows, exe)
+	}
+	return p, nil
 }
 
 // fromFiletime converts a FILETIME count, 100 ns intervals since 1601.

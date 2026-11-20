@@ -10,13 +10,17 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/some-du6e/pairtime/internal/platform"
+	"github.com/some-du6e/pairtime/internal/platform/clock"
+	"github.com/some-du6e/pairtime/pkg/event"
 )
 
 func TestJournal(t *testing.T) {
 	day := time.Date(2026, 11, 19, 15, 0, 0, 0, time.UTC)
 	deliver := func(t *testing.T, j *Journal, m Message, at time.Time) {
 		t.Helper()
-		if err := j.Deliver(Delivery{Message: m, Via: ViaSocket, PeerPID: 42, Received: at}); err != nil {
+		if err := j.Deliver(Delivery{Message: m, Via: ViaSocket, PeerPID: 42, Received: clock.Stamp{Wall: at}}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -154,12 +158,38 @@ func TestJournal(t *testing.T) {
 			},
 		},
 		{
+			name: "the journal records how long the agent's own walk was and what the agent made of it",
+			run: func(t *testing.T, dir string) {
+				j := open(t, dir, day)
+				m := newMessage(t, 1)
+				walk := []platform.Proc{{PID: 42, Name: "pairtime"}, {PID: 41, Name: "claude"}}
+				d := Delivery{Message: m, Via: ViaSocket, PeerPID: 42, Walk: walk, EventVia: event.ViaHook, Harness: event.HarnessClaudeCode, Received: clock.Stamp{Wall: day}}
+				if err := j.Deliver(d); err != nil {
+					t.Fatal(err)
+				}
+				b, err := os.ReadFile(filepath.Join(dir, "2026-11-19.jsonl"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				var l journalLine
+				if err := json.Unmarshal([]byte(strings.TrimSpace(string(b))), &l); err != nil {
+					t.Fatal(err)
+				}
+				if l.Walk != 2 || l.EventVia != event.ViaHook || l.Harness != event.HarnessClaudeCode {
+					t.Errorf("the journal line is %+v, want a walk of 2, via hook and claude_code", l)
+				}
+				if strings.Contains(string(b), "claude\"") {
+					t.Errorf("the journal has the walk's process names: %s", b)
+				}
+			},
+		},
+		{
 			name: "a message whose id the journal can't keep is rejected for good",
 			run: func(t *testing.T, dir string) {
 				j := open(t, dir, day)
 				m := newMessage(t, 1)
 				m.ID = "nope"
-				if err := j.Deliver(Delivery{Message: m, Received: day}); !errors.Is(err, ErrRejected) {
+				if err := j.Deliver(Delivery{Message: m, Received: clock.Stamp{Wall: day}}); !errors.Is(err, ErrRejected) {
 					t.Errorf("Deliver = %v, want ErrRejected", err)
 				}
 			},
@@ -169,7 +199,7 @@ func TestJournal(t *testing.T) {
 			run: func(t *testing.T, dir string) {
 				j := open(t, dir, day)
 				j.Close()
-				if err := j.Deliver(Delivery{Message: newMessage(t, 1), Received: day}); err == nil {
+				if err := j.Deliver(Delivery{Message: newMessage(t, 1), Received: clock.Stamp{Wall: day}}); err == nil {
 					t.Error("Deliver after Close returned nil")
 				}
 			},
