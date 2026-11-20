@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"html/template"
+	"log/slog"
 	"math"
 	"net/http"
 	"slices"
@@ -17,6 +18,7 @@ import (
 	"time"
 
 	"github.com/some-du6e/pairtime/internal/server/dashboard"
+	"github.com/some-du6e/pairtime/internal/server/rollup"
 )
 
 // The dashboard page draws a dashboard.View, a server-rendered first cut
@@ -97,11 +99,21 @@ type dashPage struct {
 	// starts.
 	SignIn, SignupsOpen bool
 	Login               string
-	// Agent names the agent.
-	Agent    string
-	Today    todayPart
-	Week     weekPart
-	Projects []projectRow
+	// Owner is set on a signed-in account's own dashboard, and Empty when
+	// it has no time in the last 30 days yet, which shows how to link the
+	// app instead of empty charts.
+	Owner, Empty bool
+	// Zone is the IANA time zone the account's days are counted in, and
+	// ZoneError says why the last change to it was refused.
+	Zone, ZoneError string
+	// ZonePath is where the time zone form posts.
+	ZonePath string
+	// Agent names the agent in a sentence, and AgentStart at its start or
+	// alone, as in "Your agent ran for 2h".
+	Agent, AgentStart string
+	Today             todayPart
+	Week              weekPart
+	Projects          []projectRow
 	// AllProjects totals the projects.
 	AllProjects projectRow
 	Levels      levelsPart
@@ -207,9 +219,17 @@ func newDashPage(v dashboard.View, in SignIn, signupsOpen bool) (dashPage, error
 	}
 	agent := v.Agent
 	if agent == "" {
-		agent = "your agent"
+		agent = dashboard.AgentName
 	}
-	p := dashPage{Sample: v.Sample, SignIn: in.Enabled, SignupsOpen: signupsOpen, Login: in.LoginPath, Agent: agent}
+	p := dashPage{
+		Sample: v.Sample, SignIn: in.Enabled, SignupsOpen: signupsOpen, Agent: agent, AgentStart: capitalize(agent),
+		Owner: !v.Sample, Empty: !v.Sample && v.Month.You.Total() == 0 && v.Month.Agent.Total() == 0,
+		Zone: v.TZ, ZonePath: ZonePath,
+	}
+	if in.LoginPath != "" {
+		// Sign-in brings the visitor to their own dashboard.
+		p.Login = in.LoginPath + "?return_to=" + DashboardPath
+	}
 	color := make(map[string]string, len(v.Projects))
 	names := make(map[string]string, len(v.Projects))
 	for i, pr := range v.Projects {
@@ -592,4 +612,139 @@ func (s *Site) RegisterDemo(mux *http.ServeMux, in SignIn, now func() time.Time)
 		}
 		writePage(w, http.StatusOK, page, s.csp, "no-cache", "no-referrer")
 	})
+}
+
+// capitalize returns s with its first letter in upper case.
+func capitalize(s string) string {
+	if s == "" || s[0] < 'a' || s[0] > 'z' {
+		return s
+	}
+	return string(s[0]-'a'+'A') + s[1:]
+}
+
+// The owner's dashboard's paths.
+const (
+	DashboardPath = "/dashboard"
+	ZonePath      = "/dashboard/zone"
+)
+
+// Dashboard wires the signed-in owner's dashboard to its data.
+type Dashboard struct {
+	// Source is where views come from: dashboard.Rollups in pairtimed.
+	Source dashboard.Source
+	// Account returns the users id of the account a request is signed in
+	// to, and false when it isn't signed in.
+	Account func(r *http.Request) (string, bool)
+	// SetZone sets an account's time zone. It wraps rollup.ErrBadZone for
+	// a name that isn't one.
+	SetZone func(ctx context.Context, account, zone string) error
+	// SameOrigin reports whether a POST comes from this server's own
+	// pages, as auth.Service.SameOrigin does.
+	SameOrigin func(r *http.Request) bool
+	// Now is the clock.
+	Now func() time.Time
+	// Logger hears of reads and writes that fail.
+	Logger *slog.Logger
+}
+
+// zoneFormMax bounds the time zone form's body.
+const zoneFormMax = 4 << 10
+
+// RegisterDashboard adds GET /dashboard, the signed-in account's own
+// dashboard, and POST /dashboard/zone, which sets its time zone. With
+// sign-in off the page says so and links /demo. A visitor who isn't signed
+// in goes to Hack Club sign-in, which brings them back.
+//
+// The page is the owner's own, so nothing may store it, and its form posts
+// to this server only. Its referrer policy is same-origin, like the home
+// page's, so the form's POST carries this server's Origin.
+func (s *Site) RegisterDashboard(mux *http.ServeMux, in SignIn, d Dashboard) {
+	mux.HandleFunc("GET "+DashboardPath, func(w http.ResponseWriter, r *http.Request) {
+		s.serveDashboard(w, r, in, d, "", http.StatusOK)
+	})
+	mux.HandleFunc("POST "+ZonePath, func(w http.ResponseWriter, r *http.Request) {
+		if !in.Enabled || d.Account == nil {
+			http.Redirect(w, r, DashboardPath, http.StatusSeeOther)
+			return
+		}
+		if d.SameOrigin == nil || !d.SameOrigin(r) {
+			http.Error(w, "Changing your time zone has to start from your dashboard.", http.StatusForbidden)
+			return
+		}
+		id, ok := d.Account(r)
+		if !ok {
+			http.Redirect(w, r, in.LoginPath+"?return_to="+DashboardPath, http.StatusSeeOther)
+			return
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, zoneFormMax)
+		if err := r.ParseForm(); err != nil {
+			http.Error(w, "That form didn't arrive whole.", http.StatusBadRequest)
+			return
+		}
+		zone := strings.TrimSpace(r.PostForm.Get("zone"))
+		if err := d.SetZone(r.Context(), id, zone); err != nil {
+			if errors.Is(err, rollup.ErrBadZone) {
+				s.serveDashboard(w, r, in, d, "That isn't a time zone pairtime knows. Use a name like America/New_York or Europe/London.", http.StatusUnprocessableEntity)
+				return
+			}
+			d.Logger.Error("setting a time zone", "user", id, "err", err)
+			http.Error(w, "Your time zone didn't save. Try again in a minute.", http.StatusInternalServerError)
+			return
+		}
+		http.Redirect(w, r, DashboardPath, http.StatusSeeOther)
+	})
+}
+
+// serveDashboard writes the dashboard page for r, with zoneError, if any,
+// beside the time zone form.
+func (s *Site) serveDashboard(w http.ResponseWriter, r *http.Request, in SignIn, d Dashboard, zoneError string, code int) {
+	if !in.Enabled || d.Account == nil {
+		var body bytes.Buffer
+		var page bytes.Buffer
+		if err := s.dash.ExecuteTemplate(&body, "off", nil); err != nil || s.layout.wrap(&page, layoutData{Title: "Your dashboard", Class: "dash", Body: template.HTML(body.String())}) != nil {
+			http.Error(w, "This page didn't render.", http.StatusInternalServerError)
+			return
+		}
+		writePage(w, http.StatusOK, page.Bytes(), s.csp, "no-store", "no-referrer")
+		return
+	}
+	id, ok := d.Account(r)
+	if !ok {
+		http.Redirect(w, r, in.LoginPath+"?return_to="+DashboardPath, http.StatusSeeOther)
+		return
+	}
+	v, err := d.Source.View(r.Context(), id, d.Now())
+	var page []byte
+	if err == nil {
+		acct := &account{SignedIn: true, Login: in.LoginPath, Logout: in.LogoutPath}
+		if in.Visitor != nil {
+			acct.Handle, _ = in.Visitor(r)
+		}
+		page, err = s.ownerPage(v, in, acct, zoneError)
+	}
+	if err != nil {
+		d.Logger.Error("showing a dashboard", "user", id, "err", err)
+		http.Error(w, "Your dashboard didn't load. Try again in a minute.", http.StatusInternalServerError)
+		return
+	}
+	writePage(w, code, page, s.cspForm, "no-store", "same-origin")
+}
+
+// ownerPage renders v as a signed-in account's own dashboard, with acct in
+// the header.
+func (s *Site) ownerPage(v dashboard.View, in SignIn, acct *account, zoneError string) ([]byte, error) {
+	d, err := newDashPage(v, in, s.signupsOpen)
+	if err != nil {
+		return nil, err
+	}
+	d.ZoneError = zoneError
+	var body bytes.Buffer
+	if err := s.dash.Execute(&body, d); err != nil {
+		return nil, fmt.Errorf("pages: %w", err)
+	}
+	var out bytes.Buffer
+	if err := s.layout.wrap(&out, layoutData{Title: "Your dashboard", Class: "dash", Body: template.HTML(body.String()), Account: acct}); err != nil {
+		return nil, err
+	}
+	return out.Bytes(), nil
 }

@@ -135,6 +135,10 @@ var zones sync.Map // string to *time.Location
 // "America/Argentina/Buenos_Aires" or "Etc/GMT+5".
 var zoneName = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_+-]*(/[A-Za-z0-9_+-]+){0,2}$`)
 
+// ErrBadZone is what LoadZone and SetZone return, wrapped, for a name that
+// isn't a time zone pairtime knows.
+var ErrBadZone = errors.New("not a time zone pairtime knows")
+
 // LoadZone returns the zone an IANA name names. It refuses "Local", which
 // is the server's own and no account's, and any name the zone database
 // doesn't have.
@@ -143,11 +147,11 @@ func LoadZone(name string) (*time.Location, error) {
 		return v.(*time.Location), nil
 	}
 	if name == "Local" || len(name) > 64 || !zoneName.MatchString(name) {
-		return nil, fmt.Errorf("rollup: %q isn't a time zone name", name)
+		return nil, fmt.Errorf("rollup: %q: %w", name, ErrBadZone)
 	}
 	loc, err := time.LoadLocation(name)
 	if err != nil {
-		return nil, fmt.Errorf("rollup: %q isn't a time zone pairtime knows: %w", name, err)
+		return nil, fmt.Errorf("rollup: %q: %w (%v)", name, ErrBadZone, err)
 	}
 	zones.Store(name, loc)
 	return loc, nil

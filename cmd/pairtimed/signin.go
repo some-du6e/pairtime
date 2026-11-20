@@ -79,6 +79,22 @@ func visitor(svc *auth.Service, logger *slog.Logger) func(*http.Request) (string
 	}
 }
 
+// accountOf tells the dashboard which account a request is signed in to:
+// its users id. Like visitor, it logs a session that can't be read and
+// treats the request as signed out.
+func accountOf(svc *auth.Service, logger *slog.Logger) func(*http.Request) (string, bool) {
+	return func(r *http.Request) (string, bool) {
+		sess, err := svc.Session(r)
+		if err != nil {
+			if !errors.Is(err, accounts.ErrNoSession) {
+				logger.Error("reading a session for the dashboard", "err", err)
+			}
+			return "", false
+		}
+		return sess.User.ID, true
+	}
+}
+
 // handle is the name the home page shows for an account: its Slack ID, or
 // its HCA subject when HCA sent no Slack ID. pairtime has no handles of its
 // own until profiles come (DESIGN 8.3). The page never shows the email

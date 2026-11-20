@@ -17,10 +17,12 @@ import (
 	"github.com/some-du6e/pairtime/internal/server/auth"
 	"github.com/some-du6e/pairtime/internal/server/backup"
 	"github.com/some-du6e/pairtime/internal/server/config"
+	"github.com/some-du6e/pairtime/internal/server/dashboard"
 	"github.com/some-du6e/pairtime/internal/server/migrations"
 	"github.com/some-du6e/pairtime/internal/server/ops"
 	"github.com/some-du6e/pairtime/internal/server/pages"
 	"github.com/some-du6e/pairtime/internal/server/retention"
+	"github.com/some-du6e/pairtime/internal/server/rollup"
 	"github.com/some-du6e/pairtime/internal/server/store"
 	"github.com/some-du6e/pairtime/internal/server/writer"
 	"github.com/some-du6e/pairtime/internal/version"
@@ -257,6 +259,24 @@ func serve(ctx context.Context, cfg *config.Config, logger *slog.Logger, e *env,
 	site.RegisterHome(public, visit)
 	// /demo, the dashboard page drawn from a fixed, labelled sample.
 	site.RegisterDemo(public, visit, time.Now)
+	// The signed-in owner's dashboard, as a page and as JSON, from the
+	// rollups (WP-SV7). Ingest's bucket revisions reach them through
+	// rollup.ApplyEvent.
+	rollups := dashboard.Rollups{DB: db.Read}
+	owner := accountOf(signIn, logger)
+	site.RegisterDashboard(public, visit, pages.Dashboard{
+		Source:  rollups,
+		Account: owner,
+		SetZone: func(ctx context.Context, account, zone string) error {
+			return w.Do(ctx, 1, func(ctx context.Context, tx writer.Tx) error {
+				return rollup.SetZone(ctx, tx, account, zone)
+			})
+		},
+		SameOrigin: signIn.SameOrigin,
+		Now:        time.Now,
+		Logger:     logger,
+	})
+	public.HandleFunc("GET "+dashboard.APIPath, dashboard.API(rollups, owner, time.Now, logger))
 	maintainCtx, stopMaintain := context.WithCancel(ctx)
 	defer stopMaintain()
 	go signIn.Maintain(maintainCtx)
