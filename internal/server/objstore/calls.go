@@ -60,13 +60,20 @@ func (b *Bucket) Put(ctx context.Context, key string, body io.ReadSeeker, opts P
 	if err != nil {
 		return fail(fmt.Errorf("reading the body: %w", err))
 	}
-	h := sha256.New()
-	size, err := io.Copy(h, io.LimitReader(body, MaxPutSize+1))
+	end, err := body.Seek(0, io.SeekEnd)
 	if err != nil {
 		return fail(fmt.Errorf("reading the body: %w", err))
 	}
+	size := end - start
 	if size > MaxPutSize {
-		return fail(fmt.Errorf("%w: the body is over %d bytes", ErrTooLarge, int64(MaxPutSize)))
+		return fail(fmt.Errorf("%w: the body is %d bytes, over %d", ErrTooLarge, size, int64(MaxPutSize)))
+	}
+	if _, err := body.Seek(start, io.SeekStart); err != nil {
+		return fail(fmt.Errorf("reading the body: %w", err))
+	}
+	h := sha256.New()
+	if n, err := io.Copy(h, io.LimitReader(body, size)); err != nil || n != size {
+		return fail(fmt.Errorf("reading the body: got %d of %d bytes: %v", n, size, err))
 	}
 	ctype := opts.ContentType
 	if ctype == "" {
