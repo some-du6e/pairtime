@@ -134,18 +134,19 @@ func openSQLite(ctx context.Context, o Options) (*DB, error) {
 	// Create the file before SQLite does: SQLite gives the -wal and -shm
 	// files the database file's mode, so this keeps all three at 0600.
 	// With NoCreate, a missing file is an error and nothing is created.
-	var f *os.File
-	var err error
+	// The directory is checked first, so a refused Open creates no file.
+	flag := os.O_RDWR | os.O_CREATE
 	if o.NoCreate {
-		f, err = os.OpenFile(o.Path, os.O_RDWR, 0)
-		if errors.Is(err, fs.ErrNotExist) {
-			return nil, fmt.Errorf("store: %w at %s", ErrNoDatabase, o.Path)
-		}
-	} else {
-		if err := os.MkdirAll(filepath.Dir(o.Path), 0o700); err != nil {
-			return nil, fmt.Errorf("store: %w", err)
-		}
-		f, err = os.OpenFile(o.Path, os.O_RDWR|os.O_CREATE, 0o600)
+		flag = os.O_RDWR
+	} else if err := os.MkdirAll(filepath.Dir(o.Path), 0o700); err != nil {
+		return nil, fmt.Errorf("store: %w", err)
+	}
+	if err := checkDir(o.Path); err != nil {
+		return nil, err
+	}
+	f, err := os.OpenFile(o.Path, flag, 0o600)
+	if o.NoCreate && errors.Is(err, fs.ErrNotExist) {
+		return nil, fmt.Errorf("store: %w at %s", ErrNoDatabase, o.Path)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("store: %w", err)
@@ -199,8 +200,11 @@ func openSQLite(ctx context.Context, o Options) (*DB, error) {
 // A file pairtimed creates is already 0600, but one it didn't keeps its own
 // mode: Litestream's restore writes the database with os.Create, which
 // gives 0644 under the usual umask, on exactly the recovery path of DESIGN
-// 10.1. Litestream gives its later copies the database file's mode, so
-// this fixes those too.
+// 10.1. That doesn't cover all of Litestream's own copies. The LTX files
+// its syncs write take the database file's mode, but after a restore its
+// first sync downloads the replica's latest LTX file with os.Create, once
+// pairtimed has started. pairtimed can't chmod files Litestream writes
+// later, so checkDir keeps them private through the directory instead.
 func tighten(path string, logger *slog.Logger) error {
 	for _, p := range []string{path, path + "-wal", path + "-shm"} {
 		fi, err := os.Stat(p)
@@ -221,6 +225,58 @@ func tighten(path string, logger *slog.Logger) error {
 			"file", p, "was", fmt.Sprintf("%04o", perm), "now", fmt.Sprintf("%04o", perm&^0o077))
 	}
 	return nil
+}
+
+// checkDir refuses a database that users other than pairtimed's could
+// reach through its directory. Litestream writes copies of the database's
+// pages there, in .<name>-litestream/, some with os.Create's 0644 (see
+// tighten), so only the directories above them keep those private: the
+// database's directory, or one above it, must shut out group and others.
+// checkDir changes no directory, since database.path may point into a
+// shared one such as /tmp. A missing directory passes, since it holds no
+// database yet. Windows is skipped.
+func checkDir(path string) error {
+	if runtime.GOOS == "windows" {
+		return nil
+	}
+	abs, err := filepath.Abs(filepath.Dir(path))
+	if err != nil {
+		return fmt.Errorf("store: %w", err)
+	}
+	dir, err := filepath.EvalSymlinks(abs)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("store: %w", err)
+	}
+	closed, err := closedDir(dir, os.Stat)
+	if err != nil {
+		return fmt.Errorf("store: %w", err)
+	}
+	if closed == "" {
+		return fmt.Errorf("store: group or others can enter %s, the database's directory, and every directory above it, so they could read the copies of the database that Litestream writes there in a mode of its own. Run chmod 700 %s (DESIGN 10.1)", dir, dir)
+	}
+	return nil
+}
+
+// closedDir returns the first directory, from dir up to the root, that
+// neither group nor others can enter, or "" when each one lets them in.
+func closedDir(dir string, stat func(string) (fs.FileInfo, error)) (string, error) {
+	for {
+		fi, err := stat(dir)
+		if err != nil {
+			return "", err
+		}
+		if fi.Mode().Perm()&0o011 == 0 {
+			return dir, nil
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return "", nil
+		}
+		dir = parent
+	}
 }
 
 // librarySQLiteVersion asks the linked SQLite library for its version.

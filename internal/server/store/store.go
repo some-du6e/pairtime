@@ -52,7 +52,10 @@ type Options struct {
 	// mode 0600, and a missing directory with mode 0700, unless NoCreate
 	// is set. An existing file that group or others can read, as a
 	// Litestream restore leaves it, loses that access, and so do its -wal
-	// and -shm files (not on Windows).
+	// and -shm files. Open refuses the database when group or others can
+	// enter its directory and every directory above it, since Litestream
+	// writes copies of it there that pairtimed can't chmod. Neither check
+	// runs on Windows.
 	Path string
 	// NoCreate makes Open fail with ErrNoDatabase, and create nothing,
 	// when the SQLite file is missing. Only serve creates the database:
