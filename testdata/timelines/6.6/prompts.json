@@ -1,0 +1,397 @@
+{
+  "fixture": "6.6",
+  "prompts": [
+    {
+      "turn_key": "t_4de36fff8c0b",
+      "t": 1795278605000,
+      "local": "22:00:05",
+      "text": "the leaderboard sorts ties wrong, make it stable and add a test",
+      "len_chars": 63,
+      "source": "quoted in SM 6.6's 22:00 row"
+    },
+    {
+      "turn_key": "t_7882b7942063",
+      "t": 1795278902000,
+      "local": "22:05:02",
+      "text": null,
+      "len_chars": 135,
+      "source": "SM: an LLM writes a varied, plausible prompt; the fixture chose the length"
+    },
+    {
+      "turn_key": "t_99341af468f1",
+      "t": 1795279304000,
+      "local": "22:11:44",
+      "text": null,
+      "len_chars": 114,
+      "source": "SM: an LLM writes a varied, plausible prompt; the fixture chose the length"
+    },
+    {
+      "turn_key": "t_fac8075f565c",
+      "t": 1795279744000,
+      "local": "22:19:04",
+      "text": null,
+      "len_chars": 52,
+      "source": "SM: an LLM writes a varied, plausible prompt; the fixture chose the length"
+    },
+    {
+      "turn_key": "t_76ec17491b86",
+      "t": 1795280111000,
+      "local": "22:25:11",
+      "text": null,
+      "len_chars": 129,
+      "source": "SM: an LLM writes a varied, plausible prompt; the fixture chose the length"
+    },
+    {
+      "turn_key": "t_44031641e506",
+      "t": 1795280327000,
+      "local": "22:28:47",
+      "text": null,
+      "len_chars": 77,
+      "source": "SM: an LLM writes a varied, plausible prompt; the fixture chose the length"
+    },
+    {
+      "turn_key": "t_bff330e4c7f0",
+      "t": 1795280629000,
+      "local": "22:33:49",
+      "text": null,
+      "len_chars": 66,
+      "source": "SM: an LLM writes a varied, plausible prompt; the fixture chose the length"
+    },
+    {
+      "turn_key": "t_0091f81ef903",
+      "t": 1795280940000,
+      "local": "22:39:00",
+      "text": null,
+      "len_chars": 76,
+      "source": "SM: an LLM writes a varied, plausible prompt; the fixture chose the length"
+    },
+    {
+      "turn_key": "t_9858841f34df",
+      "t": 1795281087000,
+      "local": "22:41:27",
+      "text": null,
+      "len_chars": 84,
+      "source": "SM: an LLM writes a varied, plausible prompt; the fixture chose the length"
+    },
+    {
+      "turn_key": "t_2ee31ec177ed",
+      "t": 1795281423000,
+      "local": "22:47:03",
+      "text": null,
+      "len_chars": 89,
+      "source": "SM: an LLM writes a varied, plausible prompt; the fixture chose the length"
+    },
+    {
+      "turn_key": "t_d0427599f2ca",
+      "t": 1795281841000,
+      "local": "22:54:01",
+      "text": null,
+      "len_chars": 136,
+      "source": "SM: an LLM writes a varied, plausible prompt; the fixture chose the length"
+    },
+    {
+      "turn_key": "t_90db41e545de",
+      "t": 1795282176000,
+      "local": "22:59:36",
+      "text": null,
+      "len_chars": 135,
+      "source": "SM: an LLM writes a varied, plausible prompt; the fixture chose the length"
+    },
+    {
+      "turn_key": "t_5809a20cee6e",
+      "t": 1795282527000,
+      "local": "23:05:27",
+      "text": null,
+      "len_chars": 92,
+      "source": "SM: an LLM writes a varied, plausible prompt; the fixture chose the length"
+    },
+    {
+      "turn_key": "t_f7356ab9f5dd",
+      "t": 1795282784000,
+      "local": "23:09:44",
+      "text": null,
+      "len_chars": 77,
+      "source": "SM: an LLM writes a varied, plausible prompt; the fixture chose the length"
+    },
+    {
+      "turn_key": "t_af9809a6380b",
+      "t": 1795283001000,
+      "local": "23:13:21",
+      "text": null,
+      "len_chars": 86,
+      "source": "SM: an LLM writes a varied, plausible prompt; the fixture chose the length"
+    },
+    {
+      "turn_key": "t_f713e74a3115",
+      "t": 1795283195000,
+      "local": "23:16:35",
+      "text": null,
+      "len_chars": 116,
+      "source": "SM: an LLM writes a varied, plausible prompt; the fixture chose the length"
+    },
+    {
+      "turn_key": "t_46cf1f635d70",
+      "t": 1795283596000,
+      "local": "23:23:16",
+      "text": null,
+      "len_chars": 115,
+      "source": "SM: an LLM writes a varied, plausible prompt; the fixture chose the length"
+    },
+    {
+      "turn_key": "t_1677d19d787b",
+      "t": 1795283881000,
+      "local": "23:28:01",
+      "text": null,
+      "len_chars": 67,
+      "source": "SM: an LLM writes a varied, plausible prompt; the fixture chose the length"
+    },
+    {
+      "turn_key": "t_9251068349c4",
+      "t": 1795284136000,
+      "local": "23:32:16",
+      "text": null,
+      "len_chars": 81,
+      "source": "SM: an LLM writes a varied, plausible prompt; the fixture chose the length"
+    },
+    {
+      "turn_key": "t_c3344a0a69f1",
+      "t": 1795284355000,
+      "local": "23:35:55",
+      "text": null,
+      "len_chars": 90,
+      "source": "SM: an LLM writes a varied, plausible prompt; the fixture chose the length"
+    },
+    {
+      "turn_key": "t_158fd01a94b5",
+      "t": 1795284534000,
+      "local": "23:38:54",
+      "text": null,
+      "len_chars": 63,
+      "source": "SM: an LLM writes a varied, plausible prompt; the fixture chose the length"
+    },
+    {
+      "turn_key": "t_afbe4259cabc",
+      "t": 1795284910000,
+      "local": "23:45:10",
+      "text": null,
+      "len_chars": 68,
+      "source": "SM: an LLM writes a varied, plausible prompt; the fixture chose the length"
+    },
+    {
+      "turn_key": "t_53d434fa3ac6",
+      "t": 1795285336000,
+      "local": "23:52:16",
+      "text": null,
+      "len_chars": 92,
+      "source": "SM: an LLM writes a varied, plausible prompt; the fixture chose the length"
+    },
+    {
+      "turn_key": "t_766708107519",
+      "t": 1795285591000,
+      "local": "23:56:31",
+      "text": null,
+      "len_chars": 111,
+      "source": "SM: an LLM writes a varied, plausible prompt; the fixture chose the length"
+    },
+    {
+      "turn_key": "t_eb3a33a6c904",
+      "t": 1795285891000,
+      "local": "00:01:31",
+      "text": null,
+      "len_chars": 126,
+      "source": "SM: an LLM writes a varied, plausible prompt; the fixture chose the length"
+    },
+    {
+      "turn_key": "t_8c10714521e3",
+      "t": 1795286280000,
+      "local": "00:08:00",
+      "text": null,
+      "len_chars": 93,
+      "source": "SM: an LLM writes a varied, plausible prompt; the fixture chose the length"
+    },
+    {
+      "turn_key": "t_d39d3ea7f34a",
+      "t": 1795286506000,
+      "local": "00:11:46",
+      "text": null,
+      "len_chars": 104,
+      "source": "SM: an LLM writes a varied, plausible prompt; the fixture chose the length"
+    },
+    {
+      "turn_key": "t_b4b7ce06be89",
+      "t": 1795286721000,
+      "local": "00:15:21",
+      "text": null,
+      "len_chars": 75,
+      "source": "SM: an LLM writes a varied, plausible prompt; the fixture chose the length"
+    },
+    {
+      "turn_key": "t_e9294ca49ca1",
+      "t": 1795286948000,
+      "local": "00:19:08",
+      "text": null,
+      "len_chars": 55,
+      "source": "SM: an LLM writes a varied, plausible prompt; the fixture chose the length"
+    },
+    {
+      "turn_key": "t_06822fa4a3ea",
+      "t": 1795287245000,
+      "local": "00:24:05",
+      "text": null,
+      "len_chars": 114,
+      "source": "SM: an LLM writes a varied, plausible prompt; the fixture chose the length"
+    },
+    {
+      "turn_key": "t_db1630f6249d",
+      "t": 1795287467000,
+      "local": "00:27:47",
+      "text": null,
+      "len_chars": 98,
+      "source": "SM: an LLM writes a varied, plausible prompt; the fixture chose the length"
+    },
+    {
+      "turn_key": "t_e58849fd0c49",
+      "t": 1795287815000,
+      "local": "00:33:35",
+      "text": null,
+      "len_chars": 84,
+      "source": "SM: an LLM writes a varied, plausible prompt; the fixture chose the length"
+    },
+    {
+      "turn_key": "t_2c7d64406962",
+      "t": 1795288031000,
+      "local": "00:37:11",
+      "text": null,
+      "len_chars": 125,
+      "source": "SM: an LLM writes a varied, plausible prompt; the fixture chose the length"
+    },
+    {
+      "turn_key": "t_162c84f22fc2",
+      "t": 1795288291000,
+      "local": "00:41:31",
+      "text": null,
+      "len_chars": 67,
+      "source": "SM: an LLM writes a varied, plausible prompt; the fixture chose the length"
+    },
+    {
+      "turn_key": "t_0bcb1087b3df",
+      "t": 1795288601000,
+      "local": "00:46:41",
+      "text": null,
+      "len_chars": 67,
+      "source": "SM: an LLM writes a varied, plausible prompt; the fixture chose the length"
+    },
+    {
+      "turn_key": "t_28e1baa1ac87",
+      "t": 1795288980000,
+      "local": "00:53:00",
+      "text": null,
+      "len_chars": 46,
+      "source": "SM: an LLM writes a varied, plausible prompt; the fixture chose the length"
+    },
+    {
+      "turn_key": "t_b9043918e5ab",
+      "t": 1795289172000,
+      "local": "00:56:12",
+      "text": null,
+      "len_chars": 54,
+      "source": "SM: an LLM writes a varied, plausible prompt; the fixture chose the length"
+    },
+    {
+      "turn_key": "t_81770dcb6d4f",
+      "t": 1795289363000,
+      "local": "00:59:23",
+      "text": null,
+      "len_chars": 108,
+      "source": "SM: an LLM writes a varied, plausible prompt; the fixture chose the length"
+    },
+    {
+      "turn_key": "t_9077519cbf20",
+      "t": 1795289672000,
+      "local": "01:04:32",
+      "text": null,
+      "len_chars": 111,
+      "source": "SM: an LLM writes a varied, plausible prompt; the fixture chose the length"
+    },
+    {
+      "turn_key": "t_232a4c457547",
+      "t": 1795289969000,
+      "local": "01:09:29",
+      "text": null,
+      "len_chars": 99,
+      "source": "SM: an LLM writes a varied, plausible prompt; the fixture chose the length"
+    },
+    {
+      "turn_key": "t_a44cd8f896d0",
+      "t": 1795290229000,
+      "local": "01:13:49",
+      "text": null,
+      "len_chars": 75,
+      "source": "SM: an LLM writes a varied, plausible prompt; the fixture chose the length"
+    },
+    {
+      "turn_key": "t_fc20f1405753",
+      "t": 1795290447000,
+      "local": "01:17:27",
+      "text": null,
+      "len_chars": 57,
+      "source": "SM: an LLM writes a varied, plausible prompt; the fixture chose the length"
+    },
+    {
+      "turn_key": "t_ed61d9cebdc9",
+      "t": 1795290832000,
+      "local": "01:23:52",
+      "text": null,
+      "len_chars": 69,
+      "source": "SM: an LLM writes a varied, plausible prompt; the fixture chose the length"
+    },
+    {
+      "turn_key": "t_cf6533213c0c",
+      "t": 1795291052000,
+      "local": "01:27:32",
+      "text": null,
+      "len_chars": 109,
+      "source": "SM: an LLM writes a varied, plausible prompt; the fixture chose the length"
+    },
+    {
+      "turn_key": "t_7414537f3c8a",
+      "t": 1795291433000,
+      "local": "01:33:53",
+      "text": null,
+      "len_chars": 117,
+      "source": "SM: an LLM writes a varied, plausible prompt; the fixture chose the length"
+    },
+    {
+      "turn_key": "t_11f791f1fda4",
+      "t": 1795291763000,
+      "local": "01:39:23",
+      "text": null,
+      "len_chars": 91,
+      "source": "SM: an LLM writes a varied, plausible prompt; the fixture chose the length"
+    },
+    {
+      "turn_key": "t_8fec89508866",
+      "t": 1795292188000,
+      "local": "01:46:28",
+      "text": null,
+      "len_chars": 91,
+      "source": "SM: an LLM writes a varied, plausible prompt; the fixture chose the length"
+    },
+    {
+      "turn_key": "t_ee210069d4c4",
+      "t": 1795292473000,
+      "local": "01:51:13",
+      "text": null,
+      "len_chars": 108,
+      "source": "SM: an LLM writes a varied, plausible prompt; the fixture chose the length"
+    },
+    {
+      "turn_key": "t_5f476ee75411",
+      "t": 1795292884000,
+      "local": "01:58:04",
+      "text": null,
+      "len_chars": 53,
+      "source": "SM: an LLM writes a varied, plausible prompt; the fixture chose the length"
+    }
+  ]
+}
