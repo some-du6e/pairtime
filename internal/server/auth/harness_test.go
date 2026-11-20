@@ -203,6 +203,9 @@ type flow struct {
 	authorize *url.URL
 	// callback is where HCA sent it back.
 	callback *url.URL
+	// prompted is set when HCA showed a login form instead of answering
+	// at once.
+	prompted bool
 	// resp is the callback's response.
 	resp response
 }
@@ -230,6 +233,7 @@ func (h *harness) signIn(o signInOptions) *flow {
 	f.authorize = h.location(r)
 	r = h.get(f.authorize.String())
 	if r.status == http.StatusOK {
+		f.prompted = true
 		r = h.postForm(f.authorize.String(), url.Values{"username": {"pairtime-test"}}, nil)
 	}
 	if r.status != http.StatusFound {
