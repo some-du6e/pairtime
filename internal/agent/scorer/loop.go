@@ -43,16 +43,21 @@
 // given, and Step derives all of them again each time. So the loop keeps
 // the records from Lookback (6 h) before FinalBefore on, and stands for
 // the ones before with the carry: the last record of each kind whose
-// effect lasts until a later one ends it, and for each prompted turn still
-// running, what its run needs (window.go). Each Step scores the window and
-// the carry in a new State. What that derives at and after FinalBefore is
-// what a State holding every record would, because no rule bounded in time
-// reaches back further than BUCKET_TTL_S (2 h), and the carry stands for
-// the rules that aren't bounded. Two cases are what it misses: a browser
-// run longer than Lookback, whose lookup credit (SM 2.5) rests on a bracket
-// before the run, and a turn that a stop hook continued without a prompt
-// and that runs longer than Lookback, which the carry keeps by its latest
-// output and stop alone.
+// effect lasts until a later one ends it (window.go). A turn's run has no
+// bound in time (SM 2.6), so a turn that ran into the window holds the
+// window's start at the turn's submit, for up to holdMaxMS: its run, its
+// origin and its class come from its own records. Past that, and once a
+// run is over, the carry keeps the session's last prompted turn's latest
+// agent record and whether its run was cut or it stopped, and dates what
+// it carries so the run goes on, or stays over, as it does with every
+// record. Each Step scores the window and the carry in a new State. What
+// that derives at and after FinalBefore is what a State holding every
+// record would, because no rule bounded in time reaches back further than
+// BUCKET_TTL_S (2 h), and the window and the carry stand for the rules
+// that aren't bounded. What it misses is a browser run longer than
+// Lookback, whose lookup credit (SM 2.5) rests on a bracket before the
+// run, and a turn that runs longer than holdMaxMS and whose origin rests
+// on input it carries no record of.
 //
 // # Its place
 //
@@ -104,6 +109,10 @@ const DefaultLookback = 6 * time.Hour
 // queueMax bounds the batches waiting for the loop. Past it the loop drops
 // them and reads them from the ledger's files instead.
 const queueMax = 1024
+
+// holdMaxMS bounds how far before Lookback a running turn holds the
+// window's start: a day.
+const holdMaxMS = 24 * 3600 * 1000
 
 // dayMS is a day in milliseconds.
 const dayMS = 24 * 3600 * 1000
@@ -718,7 +727,7 @@ func (l *Loop) step(b uint64) {
 		}
 	}
 	l.cur.FinalBefore = fb
-	l.win.slide(fb - l.lookback)
+	l.win.slide(holdFor(all.Turns, fb-l.lookback))
 	if !l.batching {
 		l.save()
 	} else {
@@ -726,6 +735,20 @@ func (l *Loop) step(b uint64) {
 		// days whose minutes are all final can go from memory.
 		l.forget()
 	}
+}
+
+// holdFor returns where the window starts when it would start at from:
+// from, or the earliest submit of a turn that ran past from, if no more than
+// holdMaxMS before it. A State that holds such a turn's records gives its
+// run, origin and class as one holding every record does.
+func holdFor(turns []score.Turn, from int64) int64 {
+	start := from
+	for _, tn := range turns {
+		if tn.RunUntil > from && tn.TSubmit < start && tn.TSubmit >= from-holdMaxMS {
+			start = tn.TSubmit
+		}
+	}
+	return start
 }
 
 // forget drops from the bucket store's memory the days that ended two days

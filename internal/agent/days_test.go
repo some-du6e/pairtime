@@ -4,13 +4,16 @@ package agent
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log/slog"
 	"maps"
 	"net/http"
 	"os"
 	"testing"
 	"time"
 
+	"github.com/some-du6e/pairtime/internal/agent/config"
 	"github.com/some-du6e/pairtime/internal/agent/home"
 	"github.com/some-du6e/pairtime/internal/agent/keys"
 	"github.com/some-du6e/pairtime/internal/agent/store"
@@ -435,6 +438,78 @@ func TestLastSession(t *testing.T) {
 			var raw map[string]any
 			get(t, a, "/v1/sessions/last", &r, &raw)
 			tt.check(t, r, raw)
+		})
+	}
+}
+
+func TestAnswerQuestion(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Minute)
+	tests := []struct {
+		name     string
+		shadow   bool
+		question string
+		check    func(t *testing.T, ans json.RawMessage, err error, want []byte)
+	}{
+		{
+			name: "sessions/last is answered with what GET /v1/sessions/last gives",
+			check: func(t *testing.T, ans json.RawMessage, err error, want []byte) {
+				if err != nil || string(ans) != string(want) {
+					t.Errorf("answer %s (%v), want %s", ans, err, want)
+				}
+			},
+		},
+		{
+			name:   "with display.shadow on sessions/last is answered by the same rule as GET /v1/sessions/last",
+			shadow: true,
+			check: func(t *testing.T, ans json.RawMessage, err error, want []byte) {
+				var raw map[string]any
+				if err != nil || json.Unmarshal(ans, &raw) != nil || string(ans) != string(want) {
+					t.Fatalf("answer %s (%v), want %s", ans, err, want)
+				}
+				hidesAll(t, "the answer's session", raw["session"], append([]string{"start", "end", "open"}, shadowHides...)...)
+			},
+		},
+		{
+			name:     "a question the agent has no answer for is refused",
+			question: "days/today",
+			check: func(t *testing.T, ans json.RawMessage, err error, _ []byte) {
+				if !errors.Is(err, errUnknownQuestion) || ans != nil {
+					t.Errorf("answer %s, %v; want errUnknownQuestion", ans, err)
+				}
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dirs := home.Dirs{Data: t.TempDir(), Config: t.TempDir()}
+			dirs.Runtime = dirs.Data
+			if err := dirs.Create(); err != nil {
+				t.Fatal(err)
+			}
+			putMinutes(t, dirs, now.Add(-5*time.Minute), loopMinute)
+			bs, err := store.OpenBuckets(dirs.Buckets())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer bs.Close()
+			a := &agent{table: newestTable(), loc: time.UTC, buckets: bs, log: slog.New(slog.DiscardHandler)}
+			cfg := config.Default()
+			cfg.Display.Shadow = tt.shadow
+			a.cfg.Store(&cfg)
+			q := tt.question
+			if q == "" {
+				q = askLastSession
+			}
+			reply, err := a.lastSession(time.Now())
+			if err != nil {
+				t.Fatal(err)
+			}
+			want, err := json.Marshal(reply)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ans, err := a.answerQuestion(q)
+			tt.check(t, ans, err, want)
 		})
 	}
 }

@@ -3,6 +3,7 @@
 package agent
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -248,6 +249,31 @@ func (a *agent) serveLastSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, reply)
+}
+
+// askLastSession is the question `pairtime recap` asks over the per-user
+// socket for the last work session (#107's ipc.AskLastSession).
+const askLastSession = "sessions/last"
+
+// errUnknownQuestion is a question the agent has no answer for.
+var errUnknownQuestion = errors.New("the agent doesn't answer that question")
+
+// answerQuestion answers a question the CLI asks over the per-user socket,
+// as #107's ipc.Options.Answer does: sessions/last gets the JSON that GET
+// /v1/sessions/last gives, display.shadow's rule included, so `pairtime
+// recap` and the dashboard show the same session. Once the socket takes
+// questions, startIPC sets it as ipc.Options.Answer, and it returns
+// ipc.ErrUnknownQuestion for any other question in place of
+// errUnknownQuestion.
+func (a *agent) answerQuestion(q string) (json.RawMessage, error) {
+	if q != askLastSession {
+		return nil, fmt.Errorf("%w: %q", errUnknownQuestion, q)
+	}
+	reply, err := a.lastSession(time.Now())
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(reply)
 }
 
 // lastSession returns the last work session at now, as GET

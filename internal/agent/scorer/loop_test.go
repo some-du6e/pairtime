@@ -4,6 +4,7 @@ package scorer
 
 import (
 	"bytes"
+	"cmp"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -1008,7 +1009,17 @@ func TestWriteFailures(t *testing.T) {
 			} else if p := r.lastProblem(); p != "" {
 				t.Errorf("doctor still hears %q after the writes work again", p)
 			}
-			compare(t, r.stored(from, to), want)
+			// The two runs' ledgers are two devices.
+			chain, err := ledger.ReadChain(r.path("ledger"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			mine := map[int64]store.Bucket{}
+			for m, b := range want {
+				b.Device = chain.DeviceID
+				mine[m] = b
+			}
+			compare(t, r.stored(from, to), mine)
 			got := r.dirFiles("days")
 			for _, name := range slices.Sorted(maps.Keys(wantDays)) {
 				if !bytes.Equal(got[name], wantDays[name]) {
@@ -1022,10 +1033,14 @@ func TestWriteFailures(t *testing.T) {
 // hookTurn returns a Claude Code turn the harness's hooks alone report,
 // as WP-AD2 delivers one before WP-AD3 reads its transcript: 6.4's
 // session start a minute before at, its prompt at at, and a tool call at
-// at plus each of tools, in Unix ms, with no stop.
+// at plus each of tools, in Unix ms, with no stop. Nobody is at the
+// computer, and the agent samples presence once a minute, as it does
+// after CONTEXT_IDLE_S without input (DESIGN 6.2 D14), so no sample gap is
+// a sleep. Without samples pkg/score derives only the BUCKET_TTL_S before
+// now, which no loop over the batches could match.
 func hookTurn(t *testing.T, at int64, tools []int64) []event.Event {
 	t.Helper()
-	var start, prompt, tool *event.Event
+	var start, prompt, tool, sample *event.Event
 	evs := fixture(t, "6.4").Events
 	for i := range evs {
 		e := &evs[i]
@@ -1038,10 +1053,12 @@ func hookTurn(t *testing.T, at int64, tools []int64) []event.Event {
 			if e.Via == event.ViaHook {
 				tool = cmpOr(tool, e)
 			}
+		case *event.OSPresence:
+			sample = cmpOr(sample, e)
 		}
 	}
-	if start == nil || prompt == nil || tool == nil {
-		t.Fatal("6.4 has no session start, prompt or hooked tool call")
+	if start == nil || prompt == nil || tool == nil || sample == nil {
+		t.Fatal("6.4 has no session start, prompt, hooked tool call or presence sample")
 	}
 	n := 0
 	clone := func(tmpl *event.Event, ts int64) event.Event {
@@ -1060,6 +1077,14 @@ func hookTurn(t *testing.T, at int64, tools []int64) []event.Event {
 		e.Data = &p
 		out = append(out, e)
 	}
+	end := at + slices.Max(tools) + 60_000
+	for ts := at - 55_000; ts <= end; ts += 60_000 {
+		e := clone(sample, ts)
+		idle := float64(600 + (ts-at+55_000)/1000)
+		e.Data = &event.OSPresence{IdleAnyS: idle, IdleKeysS: &idle}
+		out = append(out, e)
+	}
+	slices.SortStableFunc(out, func(a, b event.Event) int { return cmp.Compare(a.T, b.T) })
 	return out
 }
 
@@ -1110,6 +1135,31 @@ func TestLongHookedTurns(t *testing.T) {
 			}
 			from, to := span(evs)
 			compare(t, r.stored(from, to), want)
+		})
+	}
+}
+
+func TestHoldFor(t *testing.T) {
+	const h = 3600 * 1000
+	from := int64(30 * h)
+	turn := func(submit, runUntil int64) score.Turn { return score.Turn{TSubmit: submit, RunUntil: runUntil} }
+	tests := []struct {
+		name  string
+		turns []score.Turn
+		want  int64
+	}{
+		{"a turn that ran past the window's start holds it at the turn's submit", []score.Turn{turn(20*h, 31*h)}, 20 * h},
+		{"a turn whose run ended at or before the window's start holds nothing", []score.Turn{turn(20*h, 30*h)}, from},
+		{"a turn submitted inside the window holds nothing", []score.Turn{turn(30*h+1, 32*h)}, from},
+		{"a turn submitted more than holdMaxMS before the window's start holds nothing", []score.Turn{turn(from-holdMaxMS-1, 31*h)}, from},
+		{"a turn submitted holdMaxMS before the window's start still holds it", []score.Turn{turn(from-holdMaxMS, 31*h)}, from - holdMaxMS},
+		{"of two turns that ran past it, the earlier submit holds the window's start", []score.Turn{turn(25*h, 31*h), turn(22*h, 30*h+1)}, 22 * h},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := holdFor(tt.turns, from); got != tt.want {
+				t.Errorf("holdFor = %d, want %d", got, tt.want)
+			}
 		})
 	}
 }
