@@ -112,21 +112,36 @@ func runAgent(args []string, stdout, stderr io.Writer) int {
 // new agent has this process's environment, so it finds the same data
 // directory, and it exits by itself when an agent already runs there.
 func detachAgent(stdout, stderr io.Writer) int {
+	pid, err := startAgent("")
+	if err != nil {
+		fmt.Fprintf(stderr, "pairtime agent: starting the agent: %v\n", err)
+		return 1
+	}
+	fmt.Fprintf(stdout, "pairtime agent: started the agent, process %d\n", pid)
+	return 0
+}
+
+// startAgent starts `pairtime agent` in a new process that outlives this
+// one and has no console window (detachedAttr), and returns its process ID
+// without waiting for it. `agent --detach` starts the agent this way, and
+// so does a hook that finds it down (DESIGN 3.2). dir, when not "", is the
+// agent's working directory: a hook runs in the harness's project folder,
+// which Windows wouldn't let anyone delete while the agent worked in it.
+func startAgent(dir string) (int, error) {
 	exe, err := os.Executable()
 	if err != nil {
-		fmt.Fprintf(stderr, "pairtime agent: %v\n", err)
-		return 1
+		return 0, err
 	}
 	cmd := exec.Command(exe, "agent")
 	cmd.SysProcAttr = detachedAttr()
+	cmd.Dir = dir
 	// With no Stdin, Stdout or Stderr the agent gets the null device for
 	// all three, so it holds on to nothing of this process's console or
 	// pipes.
 	if err := cmd.Start(); err != nil {
-		fmt.Fprintf(stderr, "pairtime agent: starting the agent: %v\n", err)
-		return 1
+		return 0, err
 	}
-	fmt.Fprintf(stdout, "pairtime agent: started the agent, process %d\n", cmd.Process.Pid)
+	pid := cmd.Process.Pid
 	cmd.Process.Release()
-	return 0
+	return pid, nil
 }

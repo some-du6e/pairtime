@@ -27,6 +27,10 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/some-du6e/pairtime/internal/platform"
+	"github.com/some-du6e/pairtime/internal/platform/clock"
+	"github.com/some-du6e/pairtime/pkg/event"
 )
 
 // MaxMessage is the largest message, as JSON, that the socket and the spool
@@ -58,7 +62,13 @@ type Message struct {
 	BootID string `json:"boot_id,omitempty"`
 	// Chain is the parent chain the sender recorded (DESIGN 3.2): the
 	// sender itself first, then its parent, that one's parent and so on,
-	// at most MaxChain processes.
+	// at most MaxChain processes. A hook always records itself, and the
+	// rest only when it spools (internal/agent/hookpath).
+	//
+	// It is the sender's own word. It may name the harness (DESIGN 5.1),
+	// and its first process must match the agent's walk for that walk to
+	// count (DESIGN 3.4), but it never makes the message's events via =
+	// hook.
 	Chain []Proc `json:"chain,omitempty"`
 	// Body is the payload, a JSON value whose shape depends on Kind. It
 	// may hold content, such as a prompt, so it stays on the device.
@@ -81,6 +91,18 @@ type Proc struct {
 	// read it. With PID it names one process even after the OS gives the
 	// pid to another.
 	Start time.Time `json:"start,omitzero"`
+	// Ticks is the start in clock ticks after boot, where the OS keeps it
+	// that way: Linux's starttime (proc(5)), 0 elsewhere. Linux works Start
+	// out from the boot time, which moves with every step of the wall
+	// clock, so there Ticks, not Start, is what names the process across
+	// two reads, as platform.Proc.ID has it.
+	Ticks uint64 `json:"ticks,omitempty"`
+}
+
+// ID returns p's process ID as platform.Proc.ID gives it: the pid with
+// Ticks where the sender read them, else Start.
+func (p Proc) ID() platform.ID {
+	return platform.Proc{PID: p.PID, Start: p.Start, Ticks: p.Ticks}.ID()
 }
 
 // New returns a message of the given kind with a new id, sent now.
@@ -219,14 +241,12 @@ const (
 	ViaPipe Via = "pipe"
 	// ViaInbox is the spool, drained from disk. Any process of this user
 	// can append to it, so a spooled message's Chain and times are all
-	// that says who sent it and when, and nothing vouches for them.
-	//
-	// TODO(DESIGN 5.2): which via the events of a spooled hook call get is
-	// still open. 5.2's list of side doors leaves the hook spool out, and
-	// 3.4 and 5.3 give inbox events via = plugin, which would make a
-	// level-C anchor of every hook call spooled while the agent restarts.
-	// The orchestrator picks the rule before WP-AG3 and WP-AG4; messages
-	// carry what it may need.
+	// that says who sent it and when, and nothing vouches for them. So the
+	// events of every spooled hook, emit or generic-hook call get via =
+	// plugin, and a track call's keep via = track, whatever chain the line
+	// records (DESIGN 5.2, applied in internal/agent/hookpath), and they
+	// take the sender's Sent, Mono and BootID as their times, never later
+	// than the drain that read the line.
 	ViaInbox Via = "inbox"
 )
 
@@ -235,17 +255,33 @@ type Delivery struct {
 	Message
 	Via Via
 	// PeerPID is the sending process as the OS reported it for the socket
-	// or the pipe, so later work packages can walk its parent chain
-	// themselves instead of believing the sender. It is 0 where the OS
-	// doesn't say, and for the spool, which says nothing of who wrote a
-	// line: there the sender's own Chain is all there is.
+	// or the pipe, so the agent can walk its parent chain itself instead of
+	// believing the sender. It is 0 where the OS doesn't say, and for the
+	// spool, which says nothing of who wrote a line: there the sender's own
+	// Chain is all there is.
 	PeerPID int
-	// Received is the agent's wall-clock time when it took the message in:
-	// as it arrived over the socket or the pipe, and for the spool when a
-	// drain read it, which can be long after the call. So a spooled
-	// message has no arrival time from the agent, only its sender's Sent,
-	// Mono and BootID.
-	Received time.Time
+	// Walk is that walk: the sending process and its ancestors, nearest
+	// first, as the agent read them from the process table as soon as it
+	// accepted the connection (ipc.Options.Walk), while the sender waited
+	// for its ack. It is nil for the spool, and when the agent couldn't
+	// read the table. Only the walk vouches for which process sent a
+	// message (internal/agent/hookpath).
+	Walk []platform.Proc
+	// EventVia and Harness are what the agent made of where the message
+	// came from: the via its events get, and the harness whose process
+	// sent it, as hookpath.Of says. A sink in front of the Journal sets
+	// them, and the Journal records them; they are "" until then.
+	EventVia event.Via
+	Harness  event.Harness
+	// Received is the agent's own stamp from when it took the message in,
+	// by its wall clock and its monotonic clock (clock.Now): as the message
+	// arrived over the socket or the pipe, and for the spool when a drain
+	// read it, which can be long after the call. So for a spooled message
+	// the agent knows only that it was written before then: its events
+	// take its sender's Sent, Mono and BootID, or the agent's own stamp
+	// from then when the sender's is later or has no monotonic reading
+	// (DESIGN 5.2; hookpath.Times).
+	Received clock.Stamp
 }
 
 // Sink is where the agent puts each message it takes in. The socket acks a

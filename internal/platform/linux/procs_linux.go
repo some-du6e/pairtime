@@ -40,6 +40,22 @@ func Processes() ([]platform.Proc, error) {
 	return readProc("/proc")
 }
 
+// Self reads this process alone, the way Processes reads each process, so
+// its ID is the one the table gives it. A hook records itself with it, for
+// the agent to check its own walk against (internal/agent/hookpath).
+func Self() (platform.Proc, error) {
+	boot, err := bootTime("/proc")
+	if err != nil {
+		return platform.Proc{}, err
+	}
+	pid := os.Getpid()
+	p, ok := readPid("/proc", pid, boot, make([]byte, 2048), make([]byte, unix.PathMax))
+	if !ok {
+		return platform.Proc{}, fmt.Errorf("this process, %d, isn't in /proc", pid)
+	}
+	return p, nil
+}
+
 // BootID returns the kernel's random id for this boot, which names the
 // boot that Proc.Ticks count from.
 func BootID() (string, error) {
