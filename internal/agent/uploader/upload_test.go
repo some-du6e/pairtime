@@ -7,6 +7,7 @@ import (
 	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/json"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -264,6 +265,15 @@ func TestUploadDay(t *testing.T) {
 			}
 			if labels != 1 {
 				t.Errorf("the labels went %d times", labels)
+			}
+			// The day was logged before the sign-in, so nothing tried to send
+			// it on time, and the failures of the catch-up after don't change
+			// that: every minute reads backfilled (DESIGN 4.2, 7.4).
+			fake.mu.Lock()
+			witness := maps.Clone(fake.witness)
+			fake.mu.Unlock()
+			if witness[event.Backfilled] != lines || len(witness) != 1 {
+				t.Errorf("the server took the readings %v, not %d backfilled", witness, lines)
 			}
 			// The failure notes aren't sealed yet, so once the uploader has
 			// saved its place nothing is left to send.

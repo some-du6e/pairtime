@@ -93,6 +93,6 @@ func (a *agent) sealed(b ledger.Batch) {
 func (a *agent) sealAndUpload(op event.PowerOp) {
 	a.ledgerIn.Seal(op)
 	if u := a.upload.Load(); u != nil {
-		u.Wake()
+		u.Urgent()
 	}
 }

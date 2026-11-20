@@ -191,6 +191,7 @@ type Uploader struct {
 	done   chan struct{}
 	once   sync.Once
 	soon   atomic.Bool // a SoonDelay wake is armed
+	urgent atomic.Bool // the next cycle doesn't wait for the scorer
 	job    *sched.Job
 
 	mu     sync.Mutex
@@ -218,6 +219,9 @@ type Uploader struct {
 	// maxRoots and maxBuckets replace ingest-v1's limits when set, so
 	// tests can split an upload into many requests.
 	maxRoots, maxBuckets int
+	// splitRoots and splitBuckets lower them after the server found a
+	// request too large, until splitOK requests in a row have gone.
+	splitRoots, splitBuckets, splitOK int
 }
 
 // sealedRow is what the uploader takes of a sealed batch: its row and when
@@ -374,8 +378,17 @@ func (u *Uploader) Soon() {
 	})
 }
 
-// Wake makes the uploader send at once, as on lock and suspend, unless
-// it is backing off after a failure.
+// Urgent makes the uploader send at once without waiting for the scorer,
+// as on lock and suspend, when the machine may sleep within seconds: the
+// batch roots go first, and buckets the scorer hasn't written yet follow
+// on the next wake (DESIGN 3.3).
+func (u *Uploader) Urgent() {
+	u.urgent.Store(true)
+	u.Wake()
+}
+
+// Wake makes the uploader send at once, unless it is backing off after a
+// failure.
 func (u *Uploader) Wake() {
 	select {
 	case u.kick <- struct{}{}:
@@ -504,7 +517,7 @@ func (u *Uploader) cycle() bool {
 	if !u.synced && !u.sync(c) {
 		return false
 	}
-	if !u.flush() {
+	if !u.urgent.Swap(false) && !u.flush() {
 		return false // stopping
 	}
 	u.takeSealed()
@@ -645,8 +658,8 @@ func (u *Uploader) next() (plan, string, error) {
 		bucketDir:  u.opts.BucketDir,
 		lag:        u.lag,
 		labels:     u.labelsDue(),
-		maxRoots:   u.maxRoots,
-		maxBuckets: u.maxBuckets,
+		maxRoots:   lower(u.maxRoots, u.splitRoots),
+		maxBuckets: lower(u.maxBuckets, u.splitBuckets),
 		notAfter:   u.clock.serverNow().Add(futureMargin).UnixMilli(),
 	})
 	if err != nil {
@@ -654,6 +667,21 @@ func (u *Uploader) next() (plan, string, error) {
 	}
 	return p, event.NewEventID(u.now()), nil
 }
+
+// lower returns the lower of two limits, where 0 is no limit.
+func lower(a, b int) int {
+	switch {
+	case a == 0:
+		return b
+	case b == 0:
+		return a
+	}
+	return min(a, b)
+}
+
+// splitRun is how many requests in a row go before a split's lower limits
+// are lifted again.
+const splitRun = 20
 
 // labels returns the labels the device sends now.
 func (u *Uploader) labels() Labels {
@@ -726,12 +754,20 @@ func (u *Uploader) sync(c Credentials) bool {
 	if st.ChainStart != nil {
 		u.st.ChainStart = *st.ChainStart
 	}
+	if held := u.st.Next; held > 1 && (st.Head == nil || st.Head.B+1 < held) {
+		// The server no longer holds batches it took, as after a restore
+		// that lost its last writes, and it may have lost their buckets
+		// too: every revision goes again, and it answers the ones it kept
+		// as duplicates. The first receipts stay (receipt).
+		u.st.Marks = nil
+		u.log.Warn("the server's chain is behind what it took, so every minute goes again", "head", st.Head, "next", held)
+	}
 	next := uint64(1)
 	if st.Head != nil {
 		next = st.Head.B + 1
 		if b := u.forkAt(st.Head); b != 0 {
 			u.st.Fork = b
-			u.setProblem("chain", fmt.Sprintf("the server's record of this computer's ledger differs from it at batch %d, so pairtime sends no more batch roots; this is a bug, or the ledger was changed", b))
+			u.setProblem("chain", forkProblem(b))
 		}
 		// A batch the server holds that the device has no receipt for
 		// goes again, and its duplicate brings the receipt back. Batches
@@ -756,6 +792,11 @@ func (u *Uploader) sync(c Credentials) bool {
 	u.save()
 	u.setStatus(func(s *Status) { s.Next = next })
 	return true
+}
+
+// forkProblem is what doctor hears about a fork at batch b.
+func forkProblem(b uint64) string {
+	return fmt.Sprintf("the server's record of this computer's ledger differs from it at batch %d, so pairtime sends no more batch roots, and the minutes after it go up as backfilled; this is a bug, or the ledger was changed", b)
 }
 
 // forkAt returns the batch of the server's head when the device's own row
@@ -784,8 +825,10 @@ func (u *Uploader) forkAt(h *Head) uint64 {
 // state.json first when the counter would pass it.
 func (u *Uploader) reserve() (uint64, error) {
 	if u.lastReq+1 > u.st.Req {
+		old := u.st.Req
 		u.st.Req = u.lastReq + counterBlock
 		if err := u.saveErr(); err != nil {
+			u.st.Req = old // a reservation counts only once it is on disk
 			return 0, err
 		}
 	}
@@ -900,10 +943,15 @@ func (u *Uploader) refused(c Credentials, p plan, a answer) {
 		u.drop()
 		u.notBefore = u.now().Add(SoonDelay)
 	case refusalBodyTooLarge, refusalDecompressed, refusalTooManyBatches, refusalTooManyBuckets:
-		// Split the upload (ingest-v1 2.6): from now on a request carries
-		// half as much.
-		u.maxRoots = max(1, len(p.body.Batches)/2)
-		u.maxBuckets = max(1, len(p.body.Buckets)/2)
+		// Split the upload (ingest-v1 2.6): the lists the request carried
+		// go in halves, until requests have gone well for a while.
+		if n := len(p.body.Batches); n > 1 {
+			u.splitRoots = n / 2
+		}
+		if n := len(p.body.Buckets); n > 1 {
+			u.splitBuckets = n / 2
+		}
+		u.splitOK = 0
 		u.drop()
 		u.notBefore = u.now().Add(SoonDelay)
 	default:
@@ -950,34 +998,39 @@ func (u *Uploader) answered(c Credentials, p plan, a answer) bool {
 	}
 	u.backoff.ok()
 	more := false
-	resync, took := false, false
+	resync, took, refetched := false, false, false
+	next := max(u.st.Next, 1)
 	for i, res := range resp.Batches {
 		root := p.body.Batches[i]
+		passed := false
 		switch res.Code {
 		case codeAccepted, codeDuplicate:
-			u.receipt(c, root, res.Receipt)
-			u.st.Next = root.B + 1
-			more, took = true, true
+			u.receipt(c, root, res.Receipt, &refetched)
+			passed, took = true, true
 		case codeBeforeChain:
 			// The server holds no row for it any more: no receipt comes
-			// for it, so the next state read doesn't send it again.
+			// for it, so no state read sends it again.
 			u.st.Gone = max(u.st.Gone, root.B)
-			resync = true
+			passed, resync = true, true
 		case codePrevMismatch, codeChainGap:
 			resync = true
-		case codeBatchConflict:
-			u.st.Fork = root.B
 		default:
-			// A root the server can't take as it is: the chain can't go past
-			// it, so no root goes after it until this is looked at.
-			u.st.Fork = root.B
+			// batch_conflict, or a root the server can't take as it is: no
+			// root after it can link, so none goes until this is looked at.
+			if u.st.Fork == 0 || root.B < u.st.Fork {
+				u.st.Fork = root.B
+			}
 		}
-		if res.Code != codeAccepted && res.Code != codeDuplicate {
-			break
+		if passed && root.B == next {
+			next = root.B + 1
 		}
 	}
+	u.st.Next = next
+	if took {
+		more = true
+	}
 	if u.st.Fork != 0 {
-		u.setProblem("chain", fmt.Sprintf("the server's record of this computer's ledger differs from it at batch %d, so pairtime sends no more batch roots; this is a bug, or the ledger was changed", u.st.Fork))
+		u.setProblem("chain", forkProblem(u.st.Fork))
 	}
 	refused := map[string]int{}
 	marks, held := p.marks, false
@@ -1025,6 +1078,11 @@ func (u *Uploader) answered(c Credentials, p plan, a answer) bool {
 		// clock's offset holds them back.
 		more = true
 	}
+	if u.splitRoots > 0 || u.splitBuckets > 0 {
+		if u.splitOK++; u.splitOK >= splitRun {
+			u.splitRoots, u.splitBuckets, u.splitOK = 0, 0, 0
+		}
+	}
 	u.pending = nil
 	u.removeOutbox()
 	switch {
@@ -1053,17 +1111,30 @@ func (u *Uploader) answered(c Credentials, p plan, a answer) bool {
 	return more
 }
 
-// receipt checks an accepted root's receipt and keeps it in batches.seg,
-// reading the server key again once when the receipt names another.
-func (u *Uploader) receipt(c Credentials, root Root, wr *WireReceipt) {
+// receipt checks an accepted root's receipt and keeps it in batches.seg.
+// A batch that has one keeps its first: it binds the server to when it
+// first had the batch (ledger-v1 7), and a later one, as after a server
+// restore, would date it later. When the receipt names a key the uploader
+// doesn't have, it reads the state again, once per answer (refetched). A
+// receipt it can't check isn't kept, but its received_at reads the
+// batch's minutes until the agent stops, so they don't wait for a receipt
+// that can't come.
+func (u *Uploader) receipt(c Credentials, root Root, wr *WireReceipt, refetched *bool) {
+	if _, ok := u.rows.receivedAt(root.B); ok && !u.rows.unchecked(root.B) {
+		return
+	}
 	r, err := checkReceipt(u.st.ServerKey, u.rows.device, root.B, root.Head, wr)
-	if errors.Is(err, errNoKey) {
-		if st, a, gerr := u.getState(u.ctx, c); gerr == nil && a.status == http.StatusOK {
+	if errors.Is(err, errNoKey) && !*refetched {
+		*refetched = true
+		if st, a, gerr := u.getState(u.ctx, c); gerr == nil && a.status == http.StatusOK && st.ServerKey != nil {
 			u.st.ServerKey = st.ServerKey
 			r, err = checkReceipt(u.st.ServerKey, u.rows.device, root.B, root.Head, wr)
 		}
 	}
 	if err != nil {
+		if wr != nil {
+			u.rows.receivedUnchecked(root.B, int64(wr.ReceivedAt))
+		}
 		u.setProblem("receipts", fmt.Sprintf("the server's receipt for batch %d doesn't check out, so it isn't kept: %v", root.B, err))
 		u.log.Warn("a receipt doesn't check out", "batch", root.B, "err", err)
 		return

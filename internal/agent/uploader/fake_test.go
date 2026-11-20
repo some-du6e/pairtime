@@ -15,6 +15,7 @@ import (
 	"io"
 	"net/http"
 	"regexp"
+	"slices"
 	"strconv"
 	"sync"
 	"time"
@@ -50,6 +51,7 @@ type fakeIngest struct {
 	revs              int                          // revisions accepted
 	labels            int                          // labels accepted
 	futures           int                          // buckets answered future_minute
+	witness           map[event.Witness]int        // the readings of the revisions accepted
 	lastKey, lastHash string
 	lastResp          []byte
 	replays           int
@@ -70,6 +72,7 @@ func newFakeIngest(device, token string, devKey ed25519.PublicKey) *fakeIngest {
 	return &fakeIngest{
 		device: device, token: token, devKey: devKey, key: key, keyID: hex.EncodeToString(sum[:8]),
 		now: time.Now, faults: map[int]string{}, rows: map[uint64]fakeRow{}, buckets: map[int64]event.MinuteBucket{},
+		witness: map[event.Witness]int{},
 	}
 }
 
@@ -385,6 +388,29 @@ func (f *fakeIngest) root(raw json.RawMessage, receivedAt uint64) map[string]any
 }
 
 func (f *fakeIngest) bucket(raw json.RawMessage) map[string]any {
+	// Only DESIGN 4.3's members, as pkg/event lists them: anchors, which
+	// event.MinuteBucket would decode, is refused here as the real
+	// allowlist refuses it.
+	var members map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &members); err != nil {
+		return map[string]any{"status": 422, "code": "not_object"}
+	}
+	for k := range members {
+		if !slices.Contains(event.Tier1BucketFields(), k) {
+			return map[string]any{"status": 422, "code": "unknown_field", "field": ""}
+		}
+	}
+	var slots []map[string]json.RawMessage
+	if err := json.Unmarshal(members["slots"], &slots); err != nil {
+		return map[string]any{"status": 422, "code": "bad_type", "field": "slots"}
+	}
+	for i, sl := range slots {
+		for k := range sl {
+			if !slices.Contains(event.Tier1SlotFields(), k) {
+				return map[string]any{"status": 422, "code": "unknown_field", "field": fmt.Sprintf("slots[%d]", i)}
+			}
+		}
+	}
 	var mb event.MinuteBucket
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
@@ -420,6 +446,7 @@ func (f *fakeIngest) bucket(raw json.RawMessage) map[string]any {
 	case !ok || cur.Rev < mb.Rev:
 		f.buckets[ms] = mb
 		f.revs++
+		f.witness[mb.Witness]++
 		return map[string]any{"status": 200, "code": "accepted"}
 	case cur.Rev > mb.Rev:
 		return map[string]any{"status": 200, "code": "superseded"}

@@ -40,43 +40,51 @@ func indexOf(t *testing.T, sealed []float64, got []float64) *rowIndex {
 
 func TestWitness(t *testing.T) {
 	const lag = 900_000
+	mins := func(m float64) int64 { return int64(m * 60_000) }
 	tests := []struct {
-		name       string
-		sealed     []float64 // minutes of day0
-		got        []float64 // minutes of day0, -1 for no receipt
-		chainStart uint64
-		offline    []span
-		created    int // the minute of day0 the chain began, 0 for unknown
-		minute     int
-		want       event.Witness
-		known      bool
+		name    string
+		sealed  []float64 // minutes of day0
+		got     []float64 // minutes of day0 on the server's clock, -1 for no receipt
+		r       reading   // lag is set for every case
+		created int       // the minute of day0 the chain began, 0 for unknown
+		minute  int
+		want    event.Witness
+		known   bool
 	}{
 		{"a minute whose next batch arrived within the lag is witnessed",
-			[]float64{1, 2}, []float64{1.1, 2.1}, 0, nil, 0, 0, event.Witnessed, true},
+			[]float64{1, 2}, []float64{1.1, 2.1}, reading{}, 0, 0, event.Witnessed, true},
 		{"the batch that counts is the first one sealed after the minute ends",
-			[]float64{0.5, 1, 30}, []float64{0.6, 40, 40}, 0, nil, 0, 0, event.Backfilled, true},
+			[]float64{0.5, 1, 30}, []float64{0.6, 40, 40}, reading{}, 0, 0, event.Backfilled, true},
 		{"a batch received just at the lag is still witnessed",
-			[]float64{1}, []float64{16}, 0, nil, 0, 0, event.Witnessed, true},
-		{"a batch sealed on time, received late, with failure notes in between, is offline",
-			[]float64{1}, []float64{120}, 0, []span{{From: at(30), To: at(90)}}, 0, 0, event.Offline, true},
+			[]float64{1}, []float64{16}, reading{}, 0, 0, event.Witnessed, true},
+		{"a batch sealed on time that failed to go within the lag, and went late, is offline",
+			[]float64{1}, []float64{120}, reading{offline: []span{{From: at(2), To: at(110)}}}, 0, 0, event.Offline, true},
 		{"a late batch with no failure notes is backfilled, as in local-only mode",
-			[]float64{1}, []float64{120}, 0, nil, 0, 0, event.Backfilled, true},
-		{"failure notes outside the wait don't make it offline",
-			[]float64{1}, []float64{120}, 0, []span{{From: at(200), To: at(210)}}, 0, 0, event.Backfilled, true},
+			[]float64{1}, []float64{120}, reading{}, 0, 0, event.Backfilled, true},
+		{"a failure only in the catch-up after a stretch of sending nothing doesn't make it offline",
+			[]float64{1}, []float64{120}, reading{offline: []span{{From: at(119), To: at(119)}}}, 0, 0, event.Backfilled, true},
 		{"a minute sealed long after it, as lookback is, is backfilled even with failure notes",
-			[]float64{600}, []float64{601}, 0, []span{{From: at(600), To: at(600)}}, 0, 0, event.Backfilled, true},
+			[]float64{600}, []float64{601}, reading{offline: []span{{From: at(600), To: at(601)}}}, 0, 0, event.Backfilled, true},
 		{"a minute before the server's chain starts is backfilled",
-			[]float64{1, 2}, []float64{-1, 2.1}, 2, nil, 0, 0, event.Backfilled, true},
+			[]float64{1, 2}, []float64{-1, 2.1}, reading{chainStart: 2}, 0, 0, event.Backfilled, true},
+		{"a minute whose batch is at or after a fork is backfilled, since the server never takes it",
+			[]float64{1, 2}, []float64{1.1, -1}, reading{fork: 2}, 0, 1, event.Backfilled, true},
+		{"a minute whose batch is before the fork reads by its batch",
+			[]float64{1, 2}, []float64{1.1, -1}, reading{fork: 2}, 0, 0, event.Witnessed, true},
+		{"a device clock 20 minutes slow still reads its live minutes witnessed",
+			[]float64{1}, []float64{21.1}, reading{offset: mins(20)}, 0, 0, event.Witnessed, true},
+		{"a device clock 20 minutes fast reads a batch 30 minutes late as late",
+			[]float64{1}, []float64{11}, reading{offset: -mins(20)}, 0, 0, event.Backfilled, true},
 		{"a minute no batch was sealed after waits",
-			[]float64{1}, []float64{1.1}, 0, nil, 0, 5, "", false},
+			[]float64{1}, []float64{1.1}, reading{}, 0, 5, "", false},
 		{"a minute whose batch has no receipt yet waits",
-			[]float64{1}, []float64{-1}, 0, nil, 0, 0, "", false},
+			[]float64{1}, []float64{-1}, reading{}, 0, 0, "", false},
 		{"a clock that went back between seals doesn't hide the batch after",
-			[]float64{10, 3, 20}, []float64{10.1, 10.2, 20.1}, 0, nil, 0, 5, event.Witnessed, true},
+			[]float64{10, 3, 20}, []float64{10.1, 10.2, 20.1}, reading{}, 0, 5, event.Witnessed, true},
 		{"a minute that ended before the chain began is lookback's, and backfilled however soon its batch arrived",
-			[]float64{6}, []float64{6.1}, 0, nil, 5, 3, event.Backfilled, true},
+			[]float64{6}, []float64{6.1}, reading{}, 5, 3, event.Backfilled, true},
 		{"a minute that ended after the chain began reads by its batch",
-			[]float64{6}, []float64{6.1}, 0, nil, 5, 5, event.Witnessed, true},
+			[]float64{6}, []float64{6.1}, reading{}, 5, 5, event.Witnessed, true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -84,9 +92,59 @@ func TestWitness(t *testing.T) {
 			if tc.created > 0 {
 				ix.created = at(tc.created)
 			}
-			w, ok := witnessOf(ix, at(tc.minute), lag, tc.chainStart, tc.offline)
+			tc.r.lag = lag
+			w, ok := witnessOf(ix, at(tc.minute), tc.r)
 			if w != tc.want || ok != tc.known {
 				t.Errorf("witnessOf = %q, %v; want %q, %v", w, ok, tc.want, tc.known)
+			}
+		})
+	}
+}
+
+// TestOutage is PLAN's two-hour outage, read on the device: a batch a
+// minute for four hours, the server down from hour 1 to hour 3 while the
+// uploader's tries fail every few minutes, and everything held back sent
+// in one catch-up when it comes back. The minutes of the outage read
+// offline, and the minutes before and after it witnessed.
+func TestOutage(t *testing.T) {
+	const lag = 900_000
+	var sealed, got []float64
+	for m := 1; m <= 240; m++ {
+		sealed = append(sealed, float64(m))
+		switch {
+		case m < 60 || m > 180:
+			got = append(got, float64(m)+0.05)
+		default:
+			got = append(got, 180.5) // the catch-up
+		}
+	}
+	ix := indexOf(t, sealed, got)
+	var spans []span
+	s := saved{}
+	for m := 60.0; m <= 180; m += 4 {
+		s.noteFailure(at(0)+int64(m*60_000), len(s.Offline) > 0)
+	}
+	spans = s.Offline
+	tests := []struct {
+		name   string
+		minute int
+		want   event.Witness
+	}{
+		{"a minute an hour before the outage is witnessed", 0, event.Witnessed},
+		{"the minute just before the outage, whose batch waited through it, is offline", 59, event.Offline},
+		{"a minute in the first hour of the outage is offline", 90, event.Offline},
+		{"a minute in its second hour is offline", 150, event.Offline},
+		{"a minute whose batch reached the server within the lag of its end, even at the outage's end, is witnessed", 170, event.Witnessed},
+		{"a minute after the server came back is witnessed", 200, event.Witnessed},
+	}
+	if len(spans) != 1 {
+		t.Fatalf("the failures make %d spans, not one", len(spans))
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			w, ok := witnessOf(ix, at(tc.minute), reading{lag: lag, offline: spans})
+			if !ok || w != tc.want {
+				t.Errorf("witnessOf = %q, %v; want %q", w, ok, tc.want)
 			}
 		})
 	}

@@ -21,6 +21,9 @@ type rowTime struct {
 	sealedMax int64
 	// received is the receipt's received_at, in Unix ms, 0 without one.
 	received int64
+	// unchecked is set when received comes from a receipt the uploader
+	// couldn't check, which batches.seg doesn't keep.
+	unchecked bool
 }
 
 // rowIndex holds the device's chain as the uploader needs it: the times of
@@ -115,8 +118,23 @@ func (ix *rowIndex) row(b uint64) (ledger.Row, bool) {
 // received records batch b's receipt time, in Unix ms.
 func (ix *rowIndex) received(b uint64, at int64) {
 	if b >= 1 && b <= ix.last() {
-		ix.times[b-1].received = at
+		ix.times[b-1].received, ix.times[b-1].unchecked = at, false
 	}
+}
+
+// receivedUnchecked records the received_at of a receipt for batch b the
+// uploader couldn't check, which reads its minutes until a checked one
+// comes.
+func (ix *rowIndex) receivedUnchecked(b uint64, at int64) {
+	if b >= 1 && b <= ix.last() && ix.times[b-1].received == 0 {
+		ix.times[b-1].received, ix.times[b-1].unchecked = at, true
+	}
+}
+
+// unchecked reports whether batch b's receipt time is from a receipt the
+// uploader couldn't check.
+func (ix *rowIndex) unchecked(b uint64) bool {
+	return b >= 1 && b <= ix.last() && ix.times[b-1].unchecked
 }
 
 // receivedAt returns when the server received batch b, by its receipt, and
@@ -138,28 +156,48 @@ func (ix *rowIndex) sealedAfter(t int64) (uint64, bool) {
 	return uint64(i) + 1, true
 }
 
+// reading is what a minute's witness reading rests on besides the rows:
+// where the server's chain starts and where it forked from the device's,
+// the server's clock less the device's, and the stretches the uploader
+// couldn't reach the server.
+type reading struct {
+	lag        int64  // WITNESS_LAG_S, in ms
+	chainStart uint64 // the server's first batch, 0 when unknown
+	fork       uint64 // the batch the chains part at, 0 for none
+	offset     int64  // server clock less device clock, in ms
+	offline    []span
+}
+
 // witnessOf reads the witness label of the minute that starts at minute,
-// in Unix ms, as the device sees it, and false when it can't be read yet.
-// The server stores the reading as sent, and its own label is WP-SV6's
-// (ingest-v1 2.3.2).
+// in Unix ms on the device's clock, as the device sees it, and false when
+// it can't be read yet. The server stores the reading as sent, and its
+// own label is WP-SV6's (ingest-v1 2.3.2).
 //
 // A minute's records are in the batches up to the first one sealed after
 // the minute ended, B*, and the server received none of them later than
 // B*, because it takes a chain's batches in order. So the reading is B*'s
-// (DESIGN 7.4): witnessed when its receipt's received_at is at most lag
-// after the minute's end; offline when it was late but B* was sealed
-// within lag of the end and the uploader's failure notes fall between the
-// seal and the receipt, so it waited for the server; and backfilled
-// otherwise, which takes in every minute logged in local-only mode, when
-// the uploader tried nothing. A B* before the server's chain starts is
-// never received: backfilled. Lookback's minutes are backfilled whatever
-// their batch (D11; DESIGN 7.4): every minute that ended before the
-// device's chain began is one, since nothing recorded it live, and the
-// rest were sealed long after they happened. The reading waits
-// while no batch has been sealed after the minute, or B* has no receipt
-// yet, so it rests only on receipts and is the same whenever it is read:
-// `pairtime privacy show` gives the bytes the upload sends.
-func witnessOf(ix *rowIndex, minute, lag int64, chainStart uint64, offline []span) (event.Witness, bool) {
+// (DESIGN 7.4):
+//
+//   - witnessed when its receipt's received_at, on the server's clock,
+//     is at most lag after the minute's end, put on the server's clock
+//     by the offset the answers measured;
+//   - offline when it was late, but B* was sealed within lag of the end
+//     and the uploader's failure notes fall within lag after that seal:
+//     it tried to send B* in time and couldn't reach the server;
+//   - backfilled otherwise. That takes in every minute logged while
+//     nothing was sent (signed out, local-only mode, asleep), which a
+//     failure during the catch-up after doesn't change, and every minute
+//     whose B* the server can never receive: before its chain starts, or
+//     at or after a fork.
+//
+// Lookback's minutes are backfilled whatever their batch (D11; DESIGN
+// 7.4): every minute that ended before the device's chain began is one,
+// since nothing recorded it live, and the rest were sealed long after
+// they happened. The reading waits while no batch has been sealed after
+// the minute, or B* has no receipt yet, so it rests on what the device
+// keeps and is the same whenever it is read: `pairtime privacy show`
+// gives the bytes the upload sends.
+func witnessOf(ix *rowIndex, minute int64, r reading) (event.Witness, bool) {
 	end := minute + 60_000
 	if ix.created > 0 && end <= ix.created {
 		return event.Backfilled, true
@@ -168,7 +206,7 @@ func witnessOf(ix *rowIndex, minute, lag int64, chainStart uint64, offline []spa
 	if !ok {
 		return "", false
 	}
-	if chainStart > 0 && b < chainStart {
+	if (r.chainStart > 0 && b < r.chainStart) || (r.fork > 0 && b >= r.fork) {
 		return event.Backfilled, true
 	}
 	got, ok := ix.receivedAt(b)
@@ -177,9 +215,9 @@ func witnessOf(ix *rowIndex, minute, lag int64, chainStart uint64, offline []spa
 	}
 	sealed := ix.times[b-1].sealed
 	switch {
-	case got-end <= lag:
+	case got-(end+r.offset) <= r.lag:
 		return event.Witnessed, true
-	case sealed-end <= lag && offlineDuring(offline, sealed, got):
+	case sealed-end <= r.lag && offlineDuring(r.offline, sealed, sealed+r.lag):
 		return event.Offline, true
 	}
 	return event.Backfilled, true
