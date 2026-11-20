@@ -17,9 +17,9 @@ its modules renders code into a chunk or is a stylesheet, whose rules go to a
 CSS file, or when the build emits one of its files as an asset. It fails when:
 
 - the build has code from a module that is neither pairtime's own, in web/src
-  or in a directory OWN_OUTSIDE names, such as internal/coach/text, nor a
-  package's in web/node_modules, such as one a bundler or plugin writes
-  itself;
+  or in a directory or file OWN_OUTSIDE names, such as internal/coach/text
+  and docs/retention.json, nor a package's in web/node_modules, such as one
+  a bundler or plugin writes itself;
 - a package with code in the build is a dev dependency in
   web/package-lock.json, which npm_licenses.py holds only to the licenses
   build tools may have, or the lockfile has another version of it;
@@ -116,13 +116,17 @@ def locate(path):
     return "/".join(parts[: last + 1 + width]), "/".join(parts[last + 1 + width : -1])
 
 
-# Directories outside web/ whose files the dashboard may bundle as
-# pairtime's own code, under its AGPL like web/src: the words the coach, the
-# CLI views and the dashboard share (internal/coach/text, WP-CO0), so a
-# minute reads the same everywhere. Only these: a file elsewhere in the
+# What outside web/ the dashboard may bundle as pairtime's own code, under
+# its AGPL like web/src, by path from the repository root: the words the
+# coach, the CLI views and the dashboard share (internal/coach/text,
+# WP-CO0), so a minute reads the same everywhere, and docs/retention.json,
+# the one source for how long pairtime keeps each kind of data, whose device
+# entries the Privacy page shows (src/local/retention.ts). An entry that
+# ends in "/" is a directory and takes every file under it; any other entry
+# is one file and takes that file alone. Only these: a file elsewhere in the
 # repository may be another project's, such as gitleaks' rules in
 # pkg/redact/rules, and needs its notice.
-OWN_OUTSIDE = ("internal/coach/text/",)
+OWN_OUTSIDE = ("internal/coach/text/", "docs/retention.json")
 
 
 def is_own(path):
@@ -133,7 +137,7 @@ def is_own(path):
         return ".." not in parts
     if parts[0] == ".." and ".." not in parts[1:] and "node_modules" not in parts:
         rest = "/".join(parts[1:])
-        return any(rest.startswith(d) for d in OWN_OUTSIDE)
+        return any(rest.startswith(own) if own.endswith("/") else rest == own for own in OWN_OUTSIDE)
     return False
 
 
@@ -584,6 +588,26 @@ def selftest():
             "a path that climbs out of the repository fails, even through internal/coach/text",
             lambda w: module(w, "../../internal/coach/text/en.json", 10),
             ["10 bytes of code from ../../internal/coach/text/en.json"],
+        ),
+        (
+            "docs/retention.json, whose periods the Privacy page shows, is pairtime's own",
+            lambda w: module(w, "../docs/retention.json", 7000),
+            [],
+        ),
+        (
+            "another file in docs/ fails, though docs/retention.json is pairtime's own",
+            lambda w: module(w, "../docs/schema/event.schema.json", 10),
+            ["10 bytes of code from ../docs/schema/event.schema.json"],
+        ),
+        (
+            "a file whose name only starts with docs/retention.json fails",
+            lambda w: module(w, "../docs/retention.json.js", 10),
+            ["10 bytes of code from ../docs/retention.json.js"],
+        ),
+        (
+            "a file under docs/retention.json, as if it were a directory, fails",
+            lambda w: module(w, "../docs/retention.json/x.js", 10),
+            ["10 bytes of code from ../docs/retention.json/x.js"],
         ),
         (
             "a stylesheet from a package needs its notice though it renders no JavaScript",

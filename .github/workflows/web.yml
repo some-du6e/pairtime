@@ -15,14 +15,26 @@ on:
     # whose answers take their shape from code across internal/agent (the
     # ipc object comes from messages.go, the mode from config/), the build
     # info in internal/version and the command in cmd/pairtime. And the
-    # notices check and the list it holds to the build.
+    # notices check and the list it holds to the build, and the files
+    # outside web/ that the dashboard's words come from or are tested
+    # against, each named below with what reads it.
     paths:
       - web/**
       - extension/**
       - internal/webui/**
       # The words the dashboard shares with the CLI views (src/local/text.ts).
       - internal/coach/text/**
+      # How long pairtime keeps each kind of data, which Privacy shows
+      # (src/local/retention.ts) and pages/privacy.test.ts checks it
+      # against.
+      - docs/retention.json
+      # The scoring parameter tables: copy.test.ts holds the pending
+      # words' 15 minutes (src/local/copy.ts) to PENDING_WINDOW_S in each
+      # of them, so a table that changes it fails here.
+      - pkg/params/tables/**
       - docs/api/**
+      # Also internal/agent/inbox, whose KeepDays pages/privacy.test.ts
+      # holds Privacy's inbox row to.
       - internal/agent/**
       - internal/version/**
       - cmd/pairtime/**

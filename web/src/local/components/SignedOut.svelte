@@ -15,8 +15,7 @@
 	<h2 id="signin-title">Open your dashboard from a terminal</h2>
 	{#if expired}
 		<p data-testid="link-expired">
-			That link was used already, or it's more than two minutes old. Each link works once, so a copy of it is no use
-			to anyone else.
+			That link was used already, or it's more than two minutes old. Each link works once, for two minutes.
 		</p>
 	{/if}
 	<p>Run <code>pairtime dashboard</code>. It opens this page in your browser, signed in.</p>

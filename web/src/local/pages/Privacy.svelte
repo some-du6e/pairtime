@@ -1,37 +1,24 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script lang="ts">
 	import type { Mode } from '../api.ts';
+	import { keptOnDevice } from '../retention.ts';
 
 	// Privacy (DESIGN 3.9, 8.8; docs/PLAN.md, WP-UI1): what has left this
 	// computer, what pairtime keeps here and for how long (DESIGN 3.5, 4.4),
 	// what it never records, and who can read what it keeps (CP 5.2).
 	// "Delete everything" comes with the agent's wipe, in a later WP.
+	//
+	// The periods are docs/retention.json's device entries, in the file's
+	// order, then the inbox's row (retention.ts). This version has no vault
+	// (DESIGN 3.5), so the only prompt text it keeps is the inbox's, as
+	// plain text. Who can read it says so, and speaks of the vault's
+	// encryption only as what a later version, which keeps prompt text
+	// there, will do.
 	interface Props {
 		mode: Mode;
 	}
 
 	let { mode }: Props = $props();
-
-	// DESIGN 4.4's device rows, in words.
-	const kept: { what: string; kept: string }[] = [
-		{
-			what: "Your prompts, and the agent's last answer in each turn, encrypted",
-			kept: '90 days. If you send time to a program, until it decides, when that is later',
-		},
-		{ what: 'File paths, for your recaps, and the commands your tools ran', kept: '30 days' },
-		{
-			what: 'Whether you were at the keyboard and what kind of app was in front, every 15 seconds while you work in a project',
-			kept: '90 days',
-		},
-		{ what: 'A record of each event without its text, which can prove your time later', kept: '180 days' },
-		{ what: 'Your time minute by minute', kept: '180 days' },
-		{ what: 'Your time day by day, and your recaps', kept: 'Until you delete them' },
-		{ what: "This computer's pairtime key", kept: 'Until you uninstall pairtime' },
-		{
-			what: 'Transcripts and what the agent wrote',
-			kept: "pairtime reads them where your agent keeps them and doesn't copy them, so your agent's settings decide. Claude Code keeps them 30 days unless you change it",
-		},
-	];
 </script>
 
 <h1>Privacy</h1>
@@ -47,6 +34,10 @@
 
 <section class="pt-card wide" aria-labelledby="kept-title" data-testid="kept">
 	<h2 id="kept-title">What pairtime keeps on this computer</h2>
+	<p>
+		Some of these come with a later version of pairtime. Who can read it, below, says what this one keeps of your
+		prompts.
+	</p>
 	<table>
 		<thead>
 			<tr>
@@ -55,9 +46,9 @@
 			</tr>
 		</thead>
 		<tbody>
-			{#each kept as row (row.what)}
-				<tr>
-					<th scope="row">{row.what}</th>
+			{#each keptOnDevice as row (row.id)}
+				<tr data-id={row.id}>
+					<th scope="row">{row.data}</th>
 					<td>{row.kept}</td>
 				</tr>
 			{/each}
@@ -75,11 +66,18 @@
 	</ul>
 </section>
 
-<section class="pt-card" aria-labelledby="who-title">
+<section class="pt-card" aria-labelledby="who-title" data-testid="who">
 	<h2 id="who-title">Who can read it</h2>
 	<p>
-		pairtime encrypts your prompts on this computer. That keeps them from other people who use it, from cloud backups of
-		your home folder, and from a quick look. It can't keep them from a program running as you.
+		This version of pairtime keeps the text of your prompts in one place only: the inbox, until the agent reads it, as
+		the table above says. The inbox is plain text, not encrypted. It's in a folder that other people's accounts on this
+		computer can't open, but an administrator can, and so can any program running as you. A backup of your home folder
+		can copy it as it is.
+	</p>
+	<p>
+		A later version will keep your prompts, the agent's final reply to each one and the file paths for your recaps in a
+		vault, which it encrypts. That will keep them from other people who use this computer, from cloud backups of your
+		home folder, and from a quick look, but not from a program running as you.
 	</p>
 	<p>
 		This dashboard opens only on this computer, in the browser that <code>pairtime dashboard</code> signed in.

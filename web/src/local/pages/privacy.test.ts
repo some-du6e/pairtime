@@ -1,0 +1,208 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
+// The Privacy page rendered to HTML with svelte/server, held to the files
+// it speaks for: docs/retention.json, the one source for how long pairtime
+// keeps each kind of data (DESIGN 4.4), and internal/agent/inbox, whose
+// KeepDays says when the agent deletes a file of hook calls it can't read
+// (DESIGN 3.5). Playwright checks the built page (tests/dashboard.spec.ts).
+
+import { readdirSync, readFileSync } from 'node:fs';
+import { render } from 'svelte/server';
+import { describe, expect, test } from 'vitest';
+import type { Mode } from '../api.ts';
+import { inboxKeepDays, keptText } from '../retention.ts';
+import Privacy from './Privacy.svelte';
+
+/** The text a page shows, without tags, comments or entities. */
+function text(html: string): string {
+	return html
+		.replace(/<!--[\s\S]*?-->/g, '')
+		.replace(/<[^>]*>/g, ' ')
+		.replaceAll('&#39;', "'")
+		.replaceAll('&quot;', '"')
+		.replaceAll('&lt;', '<')
+		.replaceAll('&amp;', '&')
+		.replace(/\s+/g, ' ')
+		.trim();
+}
+
+/** The rows of the table of what pairtime keeps: each row's data-id, and the text of its two cells. */
+function rows(html: string): { id: string; data: string; kept: string }[] {
+	const body = /<tbody\b[^>]*>([\s\S]*?)<\/tbody>/.exec(html)?.[1] ?? '';
+	return [...body.matchAll(/<tr\b[^>]*\sdata-id="([^"]*)"[^>]*>([\s\S]*?)<\/tr>/g)].map((m) => {
+		const cells = [...(m[2] ?? '').matchAll(/<(th|td)\b[^>]*>([\s\S]*?)<\/\1>/g)].map((c) => text(c[2] ?? ''));
+		return { id: m[1] ?? '', data: cells[0] ?? '', kept: cells[1] ?? '' };
+	});
+}
+
+/** The page's sentences: those of each heading, paragraph, table cell and list item. */
+function sentences(html: string): string[] {
+	return [...html.matchAll(/<(h1|h2|p|th|td|li)\b[^>]*>([\s\S]*?)<\/\1>/g)]
+		.flatMap((m) => text(m[2] ?? '').split(/\.\s+/))
+		.filter((s) => s !== '');
+}
+
+interface Entry {
+	id: string;
+	where: string;
+	data: string;
+	kept: string;
+	days?: number;
+}
+
+const retention = JSON.parse(readFileSync(new URL('../../../../docs/retention.json', import.meta.url), 'utf8')) as {
+	spot_check_window: { months: number; provisional?: string };
+	entries: Entry[];
+};
+
+/** retention.json's entries for this computer, in the file's order. */
+const device = retention.entries.filter((e) => e.where === 'device');
+
+/** inbox.KeepDays, read from the Go source of internal/agent/inbox. */
+function keepDays(): number {
+	const dir = new URL('../../../../internal/agent/inbox/', import.meta.url);
+	const found = readdirSync(dir)
+		.filter((f) => f.endsWith('.go') && !f.endsWith('_test.go'))
+		.flatMap((f) => [...readFileSync(new URL(f, dir), 'utf8').matchAll(/^(?:const)?\s*KeepDays\s*=\s*(\d+)\s*(?:\/\/.*)?$/gm)])
+		.map((m) => Number(m[1]));
+	expect(found, 'the KeepDays constant in internal/agent/inbox').toHaveLength(1);
+	return found[0] ?? 0;
+}
+
+// internal/coach/text's scolding words (text_test.go): words that would
+// make a view nag, shame or set a target, matched as whole words in any
+// case, with a word right after a slash taken as a command's name.
+const scolding =
+	/(?:^|[^\w\/])(streaks?|don't break|keep it up|los(?:e|es|ing|t)|miss(?:ed|es|ing)?|behind|lazy|wast(?:e|ed|es|ing)|only counted|should|must|have to|need to|fail(?:ed|s|ing)?|goals?|targets?|ratios?|uncredited|not counted|doesn't count)\b/gi;
+
+// "%" and "!" turn time into a ratio or a cheer; the rest are the en dash,
+// the em dash and the curly quotes, which pairtime's copy doesn't use.
+const marks = ['%', '!', ...[0x2013, 0x2014, 0x2018, 0x2019, 0x201c, 0x201d].map((c) => String.fromCharCode(c))];
+
+describe('Privacy', () => {
+	const page = (mode: Mode = 'local') => render(Privacy, { props: { mode } }).body;
+	const cases: { name: string; check: (html: string) => void }[] = [
+		{
+			name: 'in local mode it says nothing has left this computer',
+			check: (html) => expect(text(html)).toContain('Nothing. pairtime is in local-only mode'),
+		},
+		{
+			name: "each device entry of docs/retention.json is a row, in the file's order, with its data and how long it is kept",
+			check: (html) => {
+				expect(device.length).toBeGreaterThan(0);
+				expect(rows(html).slice(0, device.length)).toEqual(
+					device.map((e) => ({ id: e.id, data: e.data, kept: keptText(e, retention.spot_check_window) })),
+				);
+			},
+		},
+		{
+			name: 'every row has its period filled in, with no {days} or {window} left, and an id of its own',
+			check: (html) => {
+				const all = rows(html);
+				expect(all.length).toBe(device.length + 1);
+				for (const r of all) {
+					expect(r.kept, r.id).not.toMatch(/\{\w*\}/);
+					expect(r.kept, r.id).not.toBe('');
+				}
+				expect(new Set(all.map((r) => r.id)).size).toBe(all.length);
+			},
+		},
+		{
+			name: "the prompt similarity sketches (MinHash) are on the list, as in DESIGN 4.4's 90-day row",
+			check: (html) => expect(rows(html).filter((r) => r.data.includes('MinHash'))).toHaveLength(1),
+		},
+		{
+			name: "the inbox's row comes last, and says its hook calls hold your prompts as plain text, not encrypted",
+			check: (html) => {
+				const inbox = rows(html).at(-1);
+				expect(inbox?.id).toBe('device.inbox');
+				expect(inbox?.data).toContain('your prompts included');
+				expect(inbox?.data).toContain('plain text, not encrypted');
+				expect(inbox?.kept).toContain('Until the agent has read it');
+			},
+		},
+		{
+			name: "the inbox's days are inbox.KeepDays in the Go source, so the words change with it",
+			check: (html) => {
+				const n = keepDays();
+				expect(inboxKeepDays).toBe(n);
+				expect(rows(html).at(-1)?.kept).toContain(`deletes it ${n === 1 ? '1 day' : `${n} days`} later`);
+			},
+		},
+		{
+			name: 'it says prompts are encrypted only of a later version, never of this one',
+			check: (html) => {
+				const said = sentences(html).filter((s) => /encrypt/i.test(s));
+				expect(said.length).toBeGreaterThan(0);
+				for (const s of said) {
+					expect(s).toMatch(/\b(?:not|isn't) encrypted\b|\blater version\b/i);
+				}
+			},
+		},
+		{
+			name: 'Who can read it says the inbox is the one place this version keeps prompt text, and that a program running as you can read it',
+			check: (html) => {
+				const t = text(html);
+				expect(t).toContain('This version of pairtime keeps the text of your prompts in one place only: the inbox');
+				expect(t).toContain('so can any program running as you');
+				expect(t).toContain('but not from a program running as you');
+			},
+		},
+		{
+			name: 'Who can read it says the dashboard opens only in the browser pairtime dashboard signed in',
+			check: (html) =>
+				expect(text(html)).toContain('This dashboard opens only on this computer, in the browser that pairtime dashboard signed in.'),
+		},
+		{
+			name: "its words keep the CLI's rules: nothing scolds, sets a target or counts a streak, and no dash or curly quote",
+			check: (html) => {
+				for (const s of sentences(html)) {
+					expect(s.match(scolding) ?? [], s).toEqual([]);
+					expect(
+						marks.filter((c) => s.includes(c)),
+						s,
+					).toEqual([]);
+				}
+			},
+		},
+		{
+			name: 'no element has a style attribute, which the CSP would block',
+			check: (html) => expect(html).not.toMatch(/\sstyle=/),
+		},
+	];
+	for (const c of cases) {
+		test(c.name, () => c.check(page()));
+	}
+});
+
+describe("each period reads as pairtimed's notice says it (retention.Policy.Kept)", () => {
+	const twelve = { months: 12 };
+	const cases: { name: string; kept: string; days?: number; window: { months: number; provisional?: string }; want: string }[] = [
+		{ name: "{days} becomes the entry's days", kept: '{days}, then deleted', days: 30, window: twelve, want: '30 days, then deleted' },
+		{ name: 'one day is singular', kept: '{days}', days: 1, window: twelve, want: '1 day' },
+		{
+			name: '{window} counts months after the decision',
+			kept: 'until ({window})',
+			window: twelve,
+			want: 'until (12 months after the decision)',
+		},
+		{
+			name: 'a provisional window says it is a default',
+			kept: 'until ({window})',
+			window: { months: 12, provisional: 'DESIGN 13.2' },
+			want: 'until (12 months after the decision, a default until Hack Club sets the window)',
+		},
+		{ name: 'one month is singular', kept: '{window}', window: { months: 1 }, want: '1 month after the decision' },
+		{ name: 'text without placeholders is unchanged', kept: 'While your account exists', window: twelve, want: 'While your account exists' },
+		{
+			name: 'both placeholders in one text are filled',
+			kept: '{days}, or longer while a submission uses them ({window})',
+			days: 180,
+			window: { months: 12, provisional: 'DESIGN 13.2' },
+			want: '180 days, or longer while a submission uses them (12 months after the decision, a default until Hack Club sets the window)',
+		},
+	];
+	for (const c of cases) {
+		test(c.name, () => expect(keptText({ kept: c.kept, days: c.days }, c.window)).toBe(c.want));
+	}
+});

@@ -156,9 +156,12 @@ export default defineConfig(({ command, mode, isPreview }) => {
 			host: '127.0.0.1',
 			port: 5173,
 			strictPort: true,
-			// The dashboard imports the words it shares with the CLI from
-			// internal/coach/text/en.json (src/local/text.ts), outside web/.
-			fs: { allow: [here('.'), here('../internal/coach/text')] },
+			// The dashboard imports two things from outside web/: the words it
+			// shares with the CLI, from internal/coach/text/en.json
+			// (src/local/text.ts), and how long pairtime keeps each kind of
+			// data, from docs/retention.json (src/local/retention.ts). Only that
+			// file of docs/, not the folder.
+			fs: { allow: [here('.'), here('../internal/coach/text'), here('../docs/retention.json')] },
 		},
 		preview: { host: '127.0.0.1', port: 4173, strictPort: true },
 	};
