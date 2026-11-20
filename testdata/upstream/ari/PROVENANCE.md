@@ -22,7 +22,7 @@ WP-PG8 validates its bridge's output against `ingest.schema.json`. WP-PG10 maps 
 
 ## What a pairtime bridge has to send
 
-DESIGN 5.10 describes the bridge's entries as `at`, `seconds` and `markdown`. Ari also requires `text` on every entry and answers 422 `journals.text` when it is blank, and `markdown` only falls back to `text`. So each entry needs `text` too, which the pairtime example has. Two more limits shape the bridge: an entry holds at most 86,400 seconds, and a ship at most 200 entries.
+DESIGN 5.10 describes the bridge's entries as `at`, `seconds` and `markdown`. Ari also requires `text` on every entry and answers 422 `journals.text` when it is blank, and `markdown` only falls back to `text`. So each entry needs `text` too, which the pairtime example has. Two more limits shape the bridge: an entry holds at most 86,400 seconds, and a ship at most 200 entries. Under D13 a teen with no devlogs has a single window, which can hold more than a day of credit, so one entry per window can break the first limit. `docs/errata/2026-11-20-ari-journal-entries.md` asks Karim how the bridge should meet all three.
 
 ## Files read
 
