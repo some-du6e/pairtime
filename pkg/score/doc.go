@@ -60,20 +60,21 @@
 //
 // # Final and pending
 //
-// Records can arrive late, up to PENDING_WINDOW_S (DESIGN 6.2 D1), and some
-// rules look ahead: the return rule up to RETURN_GAP_MAX_S plus
-// READ_HORIZON_S, which covers a lead's reach and the reading horizon. So
-// what Step derives for a time stays pending until the latest record is
-// that much later, then becomes final and is output once. No record
-// changes what was derived for a time further back than that look-ahead
-// before its own t, so whatever it changes is still pending when it
-// arrives. Where an act's record comes later than that, as a long typed
-// command's does at its end, the windows the act would open before then
-// credit nothing, in every Step alike, and the anchor is final from its
-// record's time. A browser run with credit just before it may be a lookup,
-// whose credit waits for the run's end, so nothing from such a run on is
-// final until its end bracket is, however long the run lasts
-// (docs/errata/2026-11-20-lookup-lookahead.md). Until WP-SC5 adds
+// What Step derives for a time stays pending until now is PENDING_WINDOW_S
+// later, then becomes final and is output once (DESIGN 3.7, 6.2 D1). No
+// record changes what was derived for a time more than READ_HORIZON_S
+// before its own t: a lead reaches back at most THINK_LEAD_S +
+// COMPOSE_MAX_S, reading needs a human act within READ_HORIZON_S, and the
+// return rule an act on record within READ_HORIZON_S of the silence's start
+// (SM 2.1). So a record that arrives up to PENDING_WINDOW_S - READ_HORIZON_S
+// late changes only what is still pending. An anchor is decided at the
+// latest t of its records; where that is later than its windows allow, as
+// a long typed command's record is at its end, the windows it would open
+// before then credit nothing, in every Step alike. A browser run with credit
+// just before it may be a lookup, whose credit waits for the run's end, so
+// nothing from such a run on is final until its end bracket is. SM 2.5 sets
+// no bound on that (docs/errata/2026-11-19-return-rule-lookahead.md,
+// docs/errata/2026-11-20-lookup-lookahead.md). Until WP-SC5 adds
 // checkpoints, a State holds every record it was given.
 //
 // # Readings of the spec
@@ -143,15 +144,15 @@
 //     (docs/errata/2026-11-19-turns-without-a-stop.md). A silence of a
 //     turn's agent records longer than BUCKET_TTL_S ends a hooked turn's
 //     run BUCKET_TTL_S after the last one, and one longer than
-//     RETURN_GAP_MAX_S + READ_HORIZON_S ends any other turn's at the last
-//     one, so no record reaches further back than the scorer's look-ahead.
+//     READ_HORIZON_S ends any other turn's at the last one, so no record
+//     reaches further back than the scorer's look-ahead.
 //     A continuation whose first record comes later than that after the
 //     previous stop starts at the record. The rules for hooked turns and
 //     for silences are docs/errata/2026-11-20-hooked-turn-runs.md.
 //   - A queued message resets the bucket when the agent picks it up, which
 //     no record says, so at the session's first agent record after the
 //     enqueue, the next point an agent takes up queued input, or at the
-//     enqueue when none follows within RETURN_GAP_MAX_S + READ_HORIZON_S.
+//     enqueue when none follows within READ_HORIZON_S.
 //   - A lookup second needs presence, and a run of browser or chat-app
 //     slots ends at a hard break. Its brackets are credited seconds of the
 //     same project, other than lookups, ending at most LOOKUP_BRACKET_S

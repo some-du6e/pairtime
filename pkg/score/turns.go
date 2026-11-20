@@ -29,7 +29,7 @@ type Turn struct {
 	// other turn to its last agent record, so a track turn, which has none,
 	// never runs (docs/errata/2026-11-19-turns-without-a-stop.md). A silence
 	// of the turn's agent records longer than BUCKET_TTL_S, or longer than
-	// RETURN_GAP_MAX_S + READ_HORIZON_S outside hooked sessions, ends it
+	// READ_HORIZON_S outside hooked sessions, ends it
 	// (turnBuild.runUntil, docs/errata/2026-11-20-hooked-turn-runs.md). It
 	// decides SUP against READ (SM 2.4) and agent_running_s (SM 5.1).
 	RunUntil int64        `json:"run_until"`

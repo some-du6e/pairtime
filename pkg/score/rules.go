@@ -71,24 +71,29 @@ type rules struct {
 	composeNeedsKeys bool
 
 	// reach is the furthest back from its own t that a record may change
-	// what the scorer derived. It is the return rule's look-ahead, the
-	// longest of SM's: a silent run of up to RETURN_GAP_MAX_S whose deciding
-	// anchor comes up to READ_HORIZON_S after it (SM 2.1). A lead (at most
-	// THINK_LEAD_S + COMPOSE_MAX_S) and the reading horizon fit inside it.
-	// Where a record would reach further, its effect is cut at its t minus
-	// reach, in every Step alike: a typed command's lead and run, when its
-	// record comes at the end of a run longer than that; a permission's
-	// wait, when its record comes long after the answer; and a turn's run,
-	// across a longer silence of its agent's records (turnBuild.runUntil,
-	// docs/errata/2026-11-20-hooked-turn-runs.md).
+	// what the scorer derived: READ_HORIZON_S, the bound DESIGN 3.7 and 6.2
+	// D1 set (docs/errata/2026-11-19-return-rule-lookahead.md, decided
+	// 2026-11-20 as E-return-lookahead). Reading needs a human act within it
+	// (SM 2.4), the return rule an act on record within it of the silence's
+	// start (SM 2.1), and a lead, at most THINK_LEAD_S + COMPOSE_MAX_S, fits
+	// inside it, as do TRACK_LOG_MATCH_S and TRACK_DEDUPE_S, the windows in
+	// which a hook or log record decides a side-door prompt or a track call
+	// (DESIGN 5.2, 5.4). Where a record would reach further, its effect is
+	// cut at its t minus reach, in every Step alike: a typed command's lead
+	// and run when its record comes at the end of a run longer than about
+	// nine minutes; a permission's wait when its record comes more than
+	// eight minutes after the answer; a turn's run across a longer silence
+	// of its agent's records outside hooked sessions (turnBuild.runUntil);
+	// and a queued message's reset when no agent record follows within it.
 	reach int64
 	// settle is how long after a time the scorer may still change what it
-	// derived for that time: the pending window for late records (DESIGN
-	// 6.2 D1) plus reach. So whatever a record changes is still pending when
-	// the record arrives, up to PENDING_WINDOW_S late, and the Finals of a
-	// Step per minute are what one Step gives. A browser run's lookup waits
-	// for its end, which can be later still, and Step holds FinalBefore for
-	// it on its own (docs/errata/2026-11-20-lookup-lookahead.md).
+	// derived for that time: PENDING_WINDOW_S, after which DESIGN 6.2 D1
+	// makes a minute final. That leaves PENDING_WINDOW_S minus reach, 300 s,
+	// for records that arrive late, so whatever a record changes is still
+	// pending when it arrives up to that late, and the Finals of a Step per
+	// minute are what one Step gives. A browser run's lookup waits for its
+	// end, which can be later still, and Step holds FinalBefore for it on
+	// its own (docs/errata/2026-11-20-lookup-lookahead.md).
 	settle int64
 }
 
@@ -141,8 +146,8 @@ func newRules(t *params.Table) rules {
 		composeNeedsKeys: t.Bool(params.COMPOSE_NEEDS_KEYS),
 	}
 	r.unitsPerS = r.readWPM * r.diffLPM
-	r.reach = r.returnGapMax + r.readHorizon
-	r.settle = r.pendingWindow + r.reach
+	r.reach = r.readHorizon
+	r.settle = r.pendingWindow
 	return r
 }
 

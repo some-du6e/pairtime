@@ -31,7 +31,7 @@ func TestStep(t *testing.T) {
 			t.Error("two Steps from the same state gave different outputs")
 		}
 	})
-	t.Run("FinalBefore is SM's lookahead and the pending window behind the latest record, on a slot boundary", func(t *testing.T) {
+	t.Run("FinalBefore is PENDING_WINDOW_S behind now, on a slot boundary", func(t *testing.T) {
 		r := newRules(testTable(t))
 		if want := floorSlot(s1.High() - r.settle); o1.FinalBefore != want {
 			t.Errorf("FinalBefore %d, want %d", o1.FinalBefore, want)
@@ -146,6 +146,31 @@ func TestStepsAgree(t *testing.T) {
 				}
 				if got := sumIn(d, at(3000), at(3060)); !sameCounts(got, map[event.Reason]int64{event.ReasonCommand: 60}) {
 					t.Errorf("the trail is %v, want CMD_TRAIL_S of CMD", got)
+				}
+			},
+		},
+		{
+			// With the 1,200 s reach the scorer had before the return-rule
+			// decision, this command returned the run (E-return-lookahead).
+			name: "a typed command recorded 700 s after a silence began ends no returned run, in a Step per minute as in one Step",
+			build: func(b *tl) {
+				b.focus(at(0), event.AppTerminal, "p_1")
+				// The last input is at 96 s, so the silence starts with the
+				// slot at 105 s; it ends at the slot holding the key presses
+				// before the command, typed at 470 s.
+				b.mouse(every(at(1), at(96), 5000)...)
+				b.press(every(atMS(460_500), atMS(469_500), 1000)...)
+				b.mouse(every(at(471), at(896), 5000)...)
+				b.shell(at(805), "p_1", &event.ShellCommand{CmdClass: event.CmdRun, TStart: at(470), TEnd: at(800),
+					Interactive: true})
+				b.samples(at(0), at(900))
+			},
+			check: func(t *testing.T, d Derived) {
+				if len(d.Anchors) != 1 || d.Anchors[0].Kind != event.AnchorTypedCommand {
+					t.Fatalf("anchors %+v, want the command's", d.Anchors)
+				}
+				if len(d.Returns) != 0 {
+					t.Errorf("returns %+v, want none: the command is on record 700 s after the silence began", d.Returns)
 				}
 			},
 		},
@@ -279,7 +304,7 @@ func TestFutureRecord(t *testing.T) {
 		}
 		s1, o1 := Step(NewState(testTable(t), Device{}), first)
 		if want := floorSlot(at(1500) + r.pendingWindow - r.settle); o1.FinalBefore != want {
-			t.Errorf("FinalBefore %d s, want %d s: PENDING_WINDOW_S past the last sample, less the look-ahead",
+			t.Errorf("FinalBefore %d s, want %d s: at the last sample: now is PENDING_WINDOW_S past it, and settle is PENDING_WINDOW_S",
 				(o1.FinalBefore-base)/1000, (want-base)/1000)
 		}
 		_, o2 := Step(s1, rest)

@@ -11,7 +11,8 @@ import (
 
 // Return is a silent run that SM 2.1's return rule credits: longer than
 // PRESENCE_GAP_S, at most RETURN_GAP_MAX_S, with input on both sides, and
-// ended by a substantive act in the project that held focus through it.
+// ended by a substantive act in the project that held focus through it, on
+// record within READ_HORIZON_S of the run's start.
 // Its slots past the tail are returned. Of the run, at most CreditMS
 // qualifies:
 //
@@ -70,20 +71,24 @@ func (d *deriver) markReturns() {
 		if focus.project == "" {
 			continue
 		}
-		// The first anchor after the run must be substantive, in the
-		// focused project, and within READ_HORIZON_S of the run's end,
-		// with no lock, sleep or focus change from the run's start to it.
-		// An anchor decided too late to reach the run's start (Anchor.from)
-		// doesn't count for it.
+		// Of the anchors after the run, the first one on record within
+		// READ_HORIZON_S of the run's start decides (SM 2.1): it must be
+		// substantive, in the focused project, with no lock, sleep or focus
+		// change from the run's start to it. An anchor is on record when it
+		// is decided (Anchor.decided), so a typed command counts from its
+		// end; one decided later doesn't count for the run, in every Step
+		// alike (docs/errata/2026-11-19-return-rule-lookahead.md, decided
+		// 2026-11-20 as E-return-lookahead).
+		horizon := start + d.r.readHorizon
 		k := sort.Search(len(d.anchors), func(k int) bool { return d.anchors[k].T >= end })
-		for k < len(d.anchors) && d.anchors[k].T <= end+d.r.readHorizon && d.anchors[k].from(d.r) > start {
+		for k < len(d.anchors) && d.anchors[k].T <= horizon && d.anchors[k].decided > horizon {
 			k++
 		}
 		if k == len(d.anchors) {
 			continue
 		}
 		a := d.anchors[k]
-		if a.T > end+d.r.readHorizon || !returnsFor(a.Kind, a.PromptClass) || a.ProjectKey != focus.project ||
+		if a.decided > horizon || !returnsFor(a.Kind, a.PromptClass) || a.ProjectKey != focus.project ||
 			d.focus.changed(start, a.T) || d.breakIn(end, a.T) {
 			continue
 		}
