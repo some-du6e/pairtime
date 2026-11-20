@@ -100,11 +100,19 @@ type sample struct {
 // span is the half-open interval [from, to) in Unix milliseconds.
 type span struct{ from, to int64 }
 
+// idleMaxS bounds an idle time: about 31,700 years, past any real one.
+const idleMaxS = 1e12
+
 // msOf converts seconds, as PR1's float fields hold them, to whole
 // milliseconds, rounding to the nearest. It goes through the decimal text,
 // which strconv rounds exactly, so the result doesn't depend on float
-// arithmetic.
+// arithmetic. event.Validate asks only that an idle time be finite and not
+// negative, so one at or past idleMaxS reads as idleMaxS, a long idle:
+// garbage must not pass for fresh input.
 func msOf(sec float64) int64 {
+	if !(sec < idleMaxS) {
+		return idleMaxS * 1000
+	}
 	s := strconv.FormatFloat(sec, 'f', 3, 64)
 	neg := strings.HasPrefix(s, "-")
 	whole, frac, _ := strings.Cut(strings.TrimPrefix(s, "-"), ".")

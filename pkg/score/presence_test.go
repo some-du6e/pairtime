@@ -254,6 +254,9 @@ func TestMsOf(t *testing.T) {
 		{"a large idle time keeps its tenths", 35248.6, 35_248_600},
 		{"sub-millisecond digits round to the nearest millisecond", 2.0006, 2001},
 		{"zero is zero", 0, 0},
+		{"an idle time too large for int64 milliseconds reads as idleMaxS, a long idle, not as input at the sample", 1e19, idleMaxS * 1000},
+		{"one that would overflow the conversion to milliseconds reads as idleMaxS too", 9.3e15, idleMaxS * 1000},
+		{"one just under idleMaxS keeps its value", 999_999_999_999, 999_999_999_999_000},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			if got := msOf(c.in); got != c.want {
