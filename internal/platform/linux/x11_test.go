@@ -305,12 +305,21 @@ func addTestWindows(f *fakeX) {
 }
 
 // focusStep is one thing the window manager does: it sets the root's
-// _NET_ACTIVE_WINDOW to each window in active in turn, or, when other is
-// set, it changes that root property instead.
+// _NET_ACTIVE_WINDOW to each window in active in turn, burstGap apart, or,
+// when other is set, it changes that root property instead.
 type focusStep struct {
 	active []uint32
 	other  string
 }
+
+// The cases that set _NET_ACTIVE_WINDOW more than once in a step give the
+// watcher burstSettle to settle in, and leave burstGap between the changes.
+// That gap gives a watcher that reads at once time to read, and leaves the
+// burst well inside the settle time on a slow runner.
+const (
+	burstSettle = 300 * time.Millisecond
+	burstGap    = 30 * time.Millisecond
+)
 
 func TestX11Focus(t *testing.T) {
 	cases := []struct {
@@ -319,8 +328,9 @@ func TestX11Focus(t *testing.T) {
 		xres   string // the server's X-Resource, as fakeXConfig.xres
 		start  uint32 // _NET_ACTIVE_WINDOW at start
 		steps  []focusStep
-		want   []Focus // Window and PID of each report before the sentinel
-		onEWMH bool    // the window manager was found only after start
+		settle time.Duration // the watcher's settle time; zero means focusSettle
+		want   []Focus       // Window and PID of each report before the sentinel
+		onEWMH bool          // the window manager was found only after start
 	}{
 		{
 			name: "the window focused at start is reported once, with its pid",
@@ -344,6 +354,30 @@ func TestX11Focus(t *testing.T) {
 			wm:   "ewmh", start: winA,
 			steps: []focusStep{{active: []uint32{winA}}},
 			want:  []Focus{{Window: winA, PID: 4242}},
+		},
+		{
+			name: "None and then a window, within the settle time, are one report, of the window",
+			wm:   "ewmh", start: winA, settle: burstSettle,
+			steps: []focusStep{{active: []uint32{0, winB}}},
+			want:  []Focus{{Window: winA, PID: 4242}, {Window: winB, PID: 777}},
+		},
+		{
+			name: "None and then the same window again, within the settle time, report nothing",
+			wm:   "ewmh", start: winA, settle: burstSettle,
+			steps: []focusStep{{active: []uint32{0, winA}}},
+			want:  []Focus{{Window: winA, PID: 4242}},
+		},
+		{
+			name: "two windows in turn within the settle time are one report, of the second",
+			wm:   "ewmh", start: winA, settle: burstSettle,
+			steps: []focusStep{{active: []uint32{winB, winNoPID}}},
+			want:  []Focus{{Window: winA, PID: 4242}, {Window: winNoPID, PID: 888}},
+		},
+		{
+			name: "None that lasts past the settle time is reported, as after a click on the desktop",
+			wm:   "ewmh", start: winA,
+			steps: []focusStep{{active: []uint32{0}}, {active: []uint32{winB}}},
+			want:  []Focus{{Window: winA, PID: 4242}, {Window: 0}, {Window: winB, PID: 777}},
 		},
 		{
 			name: "a Flatpak app's window has its pid on the host, from the server, not its sandbox's _NET_WM_PID",
@@ -432,6 +466,14 @@ func TestX11Focus(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer w.close()
+			if w.settle != focusSettle {
+				t.Errorf("settle time %v, want focusSettle", w.settle)
+			}
+			settle := focusSettle
+			if tc.settle != 0 {
+				settle = tc.settle
+			}
+			w.settle = settle
 			if got := f.selectedOn(root); got&propertyChangeMask == 0 {
 				t.Fatalf("the root's event mask is %#x, without PropertyChangeMask", got)
 			}
@@ -446,12 +488,13 @@ func TestX11Focus(t *testing.T) {
 			done := make(chan error, 1)
 			go func() { done <- w.run(ctx, out) }()
 
-			var got []Focus
+			var got []Focus // reports without At, for comparing with want
 			next := func() Focus {
 				t.Helper()
 				select {
 				case r := <-out:
-					return Focus{Window: r.Window, PID: r.PID}
+					got = append(got, Focus{Window: r.Window, PID: r.PID})
+					return r
 				case err := <-done:
 					t.Fatalf("the watcher stopped: %v", err)
 				case <-time.After(5 * time.Second):
@@ -460,14 +503,25 @@ func TestX11Focus(t *testing.T) {
 				return Focus{}
 			}
 			reads := func() int { return f.readsOf(root, "_NET_ACTIVE_WINDOW") }
+			// A report of a change is dated at the change, and comes at least
+			// the settle time later.
+			checkAt := func(r Focus, changed time.Time) {
+				t.Helper()
+				if r.At.Before(changed) {
+					t.Errorf("window %#x is dated %v before the change it reports", r.Window, changed.Sub(r.At))
+				}
+				if late := time.Since(r.At); late < settle {
+					t.Errorf("window %#x was reported %v after its date; want it dated at the change, at least the %v settle time before", r.Window, late, settle)
+				}
+			}
 			// _NET_ACTIVE_WINDOW is read once at start when a window manager
-			// keeps it, once per change of it, and never for a change of
-			// another property. Each step waits until the watcher is done
-			// with it, so that no read can see a later step's window.
+			// keeps it, once for each step that sets it, a burst included,
+			// and never for a change of another property. Each step waits
+			// until the watcher is done with it, so that no read can see a
+			// later step's window.
 			reported, current, wantReads := false, uint32(0), 0
 			if tc.wm == "ewmh" {
 				r := next()
-				got = append(got, r)
 				reported, current, wantReads = true, r.Window, 1
 			}
 			if n := reads(); n != wantReads {
@@ -478,15 +532,22 @@ func TestX11Focus(t *testing.T) {
 				if s.other != "" {
 					f.notify(root, s.other)
 					// A watcher that took this for a focus change would read
-					// well within this time.
-					time.Sleep(100 * time.Millisecond)
+					// once it settled.
+					time.Sleep(settle + 100*time.Millisecond)
 					if n := reads() - before; n != 0 {
 						t.Errorf("a change of %s read _NET_ACTIVE_WINDOW %d times, want none", s.other, n)
 					}
 					continue
 				}
-				for _, win := range s.active {
+				changed := time.Now()
+				for i, win := range s.active {
+					if i > 0 {
+						time.Sleep(burstGap)
+					}
 					f.setActive(root, win)
+				}
+				if n := reads() - before; len(s.active) > 1 && n != 0 {
+					t.Fatalf("read _NET_ACTIVE_WINDOW %d times within a burst, before it settled", n)
 				}
 				if win := s.active[len(s.active)-1]; reported && win == current {
 					// Nothing is reported, so wait for the read that finds
@@ -494,24 +555,25 @@ func TestX11Focus(t *testing.T) {
 					eventually(t, "a read of _NET_ACTIVE_WINDOW", func() bool { return reads() > before })
 				} else {
 					r := next()
-					got = append(got, r)
+					checkAt(r, changed)
 					reported, current = true, r.Window
 				}
 				if n := reads() - before; n != 1 {
 					t.Errorf("a change of _NET_ACTIVE_WINDOW read it %d times, want once", n)
 				}
 			}
-			before := reads()
+			before, changed := reads(), time.Now()
 			f.setActive(root, winLast)
 			for {
 				r := next()
 				if r.Window == winLast {
+					got = got[:len(got)-1]
 					if r.PID != 1 {
 						t.Errorf("the sentinel window's pid is %d, want 1", r.PID)
 					}
+					checkAt(r, changed)
 					break
 				}
-				got = append(got, r)
 			}
 			if n := reads() - before; n != 1 {
 				t.Errorf("the sentinel's change read _NET_ACTIVE_WINDOW %d times, want once", n)

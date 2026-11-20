@@ -19,6 +19,18 @@ const (
 	focusViaPID  = "_NET_ACTIVE_WINDOW, with each window's process from its _NET_WM_PID, which is wrong for Flatpak apps: the X server lacks X-Resource 1.2"
 )
 
+// focusSettle is how long the watcher lets _NET_ACTIVE_WINDOW settle after
+// a change before it reads the property. A window manager can set it more
+// than once for one switch: openbox sets it to None and then, 0.2 ms later,
+// to the window it focuses. Read at once, that is two os.focus events, the
+// first saying nothing has focus. Read focusSettle after the first change,
+// it is one event, for the window focus came to rest on, dated at that
+// first change. A None that lasts, as after a click on the desktop, is
+// reported like any window. 50 ms leaves window managers far slower than
+// openbox time to finish a switch, and is a twentieth of the one-second
+// steps the scorer credits in (SM 2.7). The timer runs only after a change.
+const focusSettle = 50 * time.Millisecond
+
 // x11Focus follows the focused window through the window manager's
 // _NET_ACTIVE_WINDOW property on the root window (EWMH 1.5), which changes
 // with every focus change and announces itself with a PropertyNotify. The
@@ -47,16 +59,23 @@ type x11Focus struct {
 	// manager keeping _NET_ACTIVE_WINDOW that the start-up check missed.
 	onEWMH func()
 
-	dirty bool   // _NET_ACTIVE_WINDOW changed since it was last read
-	sent  bool   // a Focus has been reported
-	last  uint32 // the window last reported
+	// settle is focusSettle. Tests set other times.
+	settle time.Duration
+	// dirty says _NET_ACTIVE_WINDOW changed since it was last read, and
+	// changed when the first of those changes came in. changed is zero
+	// when dirty is only the read at start, which has no change to wait
+	// out.
+	dirty   bool
+	changed time.Time
+	sent    bool   // a Focus has been reported
+	last    uint32 // the window last reported
 }
 
 // newX11Focus takes over c, interns the atoms, starts listening for
 // property changes on the root window and checks for a window manager
 // that keeps _NET_ACTIVE_WINDOW, all by deadline. It closes c if it fails.
 func newX11Focus(c *xconn, hostname string, deadline time.Time) (*x11Focus, error) {
-	w := &x11Focus{c: c, hostname: hostname}
+	w := &x11Focus{c: c, hostname: hostname, settle: focusSettle}
 	if err := w.setup(deadline); err != nil {
 		c.close()
 		return nil, err
@@ -171,29 +190,45 @@ func (w *x11Focus) event(p []byte) {
 			w.onEWMH()
 		}
 	}
+	if !w.dirty {
+		w.changed = time.Now()
+	}
 	w.dirty = true
 }
 
 // run reports the focused window on out, once at the start and then once
-// per change, until the connection fails or ctx ends. A burst of changes
-// is read as one: each read takes the property's value at that moment.
+// per change, until the connection fails or ctx ends. Changes that come
+// within focusSettle of the first are read as one, and nothing is reported
+// when they end on the window reported last.
 func (w *x11Focus) run(ctx context.Context, out chan<- Focus) error {
 	for {
 		for w.dirty {
-			w.dirty = false
-			f, err := w.read()
+			if err := w.waitToSettle(ctx); err != nil {
+				return err
+			}
+			at := w.changed
+			win, err := w.activeWindow()
 			if err != nil {
 				return err
 			}
-			if w.sent && f.Window == w.last {
+			if w.sent && win == w.last {
 				continue
+			}
+			if at.IsZero() {
+				at = time.Now()
+			}
+			f := Focus{At: at, Window: win}
+			if win != 0 {
+				if f.PID, err = w.windowPID(win); err != nil {
+					return err
+				}
 			}
 			// With room in out, the select below may send even after ctx
 			// ends, so check first.
 			if err := ctx.Err(); err != nil {
 				return err
 			}
-			w.sent, w.last = true, f.Window
+			w.sent, w.last = true, win
 			select {
 			case out <- f:
 			case <-ctx.Done():
@@ -208,21 +243,39 @@ func (w *x11Focus) run(ctx context.Context, out chan<- Focus) error {
 	}
 }
 
-// read returns the focused window now. A window that vanished between the
-// property change and this read reports no process.
-func (w *x11Focus) read() (Focus, error) {
+// waitToSettle waits until focusSettle has passed since the change about to
+// be read, or until ctx ends. Changes that come in meanwhile wait in the
+// socket, and activeWindow's reply covers them.
+func (w *x11Focus) waitToSettle(ctx context.Context) error {
+	if w.changed.IsZero() {
+		return nil
+	}
+	wait := time.Until(w.changed.Add(w.settle))
+	if wait <= 0 {
+		return nil
+	}
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// activeWindow reads _NET_ACTIVE_WINDOW, the focused window or 0 for none,
+// and marks every change so far as read. The server queues a client's
+// events and replies in the order it makes them, so a PropertyNotify that
+// comes in before the reply is about a change the reply shows; only one
+// that comes after it calls for another read.
+func (w *x11Focus) activeWindow() (uint32, error) {
 	win, _, err := w.c.getCardinal(w.c.root, w.active, atomWindow)
+	w.dirty, w.changed = false, time.Time{}
 	if isProtoError(err) {
-		win, err = 0, nil
+		return 0, nil
 	}
-	if err != nil {
-		return Focus{}, err
-	}
-	f := Focus{At: time.Now(), Window: win}
-	if win != 0 {
-		f.PID, err = w.windowPID(win)
-	}
-	return f, err
+	return win, err
 }
 
 // windowPID returns the process of the client that owns the focused

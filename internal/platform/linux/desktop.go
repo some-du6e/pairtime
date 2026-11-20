@@ -98,6 +98,10 @@ func (i Idle) Payload() *event.OSPresence {
 
 // Focus is a change of the focused window.
 type Focus struct {
+	// At is when focus moved to Window. The report comes focusSettle
+	// (50 ms) later, once _NET_ACTIVE_WINDOW has stopped changing. The
+	// first report after Open or a reconnect is dated when it was read,
+	// though focus may have been on the window for a while.
 	At time.Time
 	// Window is the X window that has focus, or 0 when none has.
 	Window uint32
@@ -481,7 +485,9 @@ func (d *Desktop) Locked() (bool, error) {
 }
 
 // Focus returns the focus changes. It is nil when no X11 watcher runs, as
-// on Wayland or without a display, and closed when watching stops.
+// on Wayland or without a display, and closed when watching stops. One
+// switch is one report, even when the window manager sets
+// _NET_ACTIVE_WINDOW to None on the way (focusSettle).
 //
 // A watcher can run while focus is unknown: until a window manager that
 // keeps _NET_ACTIVE_WINDOW appears, and while it reconnects after losing
