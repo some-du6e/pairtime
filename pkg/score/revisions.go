@@ -83,21 +83,14 @@ type Revision struct {
 // Update takes the Output of the next Step and returns the revisions it
 // makes, in minute order.
 func (r *Revisions) Update(out Output) []Revision {
-	focus := make(map[int64]string, len(out.Final.Slots)+len(out.Pending.Slots))
-	for _, s := range out.Final.Slots {
-		focus[s.Start] = s.FocusProject
-	}
-	for _, s := range out.Pending.Slots {
-		focus[s.Start] = s.FocusProject
-	}
 	for _, c := range out.Final.Credits {
 		m := floorMinute(c.Slot)
-		r.final[m] = append(r.final[m], MinuteSlot{Credit: c, FocusProject: focus[c.Slot]})
+		r.final[m] = append(r.final[m], MinuteSlot{Credit: c})
 	}
 	pending := map[int64][]MinuteSlot{}
 	for _, c := range out.Pending.Credits {
 		m := floorMinute(c.Slot)
-		pending[m] = append(pending[m], MinuteSlot{Credit: c, FocusProject: focus[c.Slot]})
+		pending[m] = append(pending[m], MinuteSlot{Credit: c})
 	}
 	starts := slices.Collect(maps.Keys(r.final))
 	for m := range pending {

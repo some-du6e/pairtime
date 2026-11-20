@@ -80,10 +80,10 @@ const echoMS = 5_000
 //   - ai_credited_s is credit under P, ANS, GO, Q, PA, INT, SUP and READ,
 //     and any credited second inside a turn of its project (SM 5.4).
 //   - agent_only_s, excluded_loops_s and idle_s count the submitted
-//     projects' agent-only time, the dark-flow discounts of slots focused
-//     on them, and the X.absent seconds of slots that start while one of
-//     their harness sessions is open, from its first record to its
-//     session.end or, without one, its last record.
+//     projects' agent-only time, the dark-flow discounts of slots whose
+//     seconds go to them, and the X.absent seconds of slots that start
+//     while one of their harness sessions is open, from its first record
+//     to its session.end or, without one, its last record.
 func (s Submission) Totals(d Derived, records []event.Event) event.SubmissionTotals {
 	in := func(p string) bool { return slices.Contains(s.Projects, p) }
 	witness := s.Witness
@@ -113,7 +113,7 @@ func (s Submission) Totals(d Derived, records []event.Event) event.SubmissionTot
 					agentOnly += n
 				}
 			}
-			if in(sl.FocusProject) {
+			if in(sl.ProjectKey) {
 				for _, r := range []event.Reason{event.ReasonReroll, event.ReasonRewriteLoop, event.ReasonSameError,
 					event.ReasonAutopilot} {
 					loops += sl.Uncredited[r]

@@ -62,8 +62,9 @@ func newTally() *tally {
 // all its credit, all its uncredited seconds, agent_running_s for any
 // project and every project's agent-only time. With a project, only what
 // is that project's counts: its credit, the uncredited seconds of a slot
-// whose focus is on it, the seconds a turn of it ran (its credit inside
-// its turns and its agent-only time) and its agent-only time (SM 2.6).
+// whose seconds go to it (Credit.ProjectKey), the seconds a turn of it ran
+// (its credit inside its turns and its agent-only time) and its agent-only
+// time (SM 2.6).
 func (t *tally) addSlot(s MinuteSlot, project string, backfilled bool) {
 	for _, e := range s.Credited {
 		if project != "" && e.ProjectKey != project {
@@ -92,7 +93,7 @@ func (t *tally) addSlot(s MinuteSlot, project string, backfilled bool) {
 		}
 		return
 	}
-	if s.FocusProject == project {
+	if s.ProjectKey == project {
 		for r, n := range s.Uncredited {
 			t.uncredited[r] += n
 		}
@@ -359,7 +360,7 @@ func dayStart(y int, mo time.Month, dd int, loc *time.Location) time.Time {
 }
 
 // dayProjects returns the sums of every project that has credit, agent
-// time or focus in the day's minutes.
+// time or a slot in the day's minutes.
 func (r Rollups) dayProjects(d Derived, day []Minute, from, to int64) []DayProject {
 	seen := map[string]bool{}
 	for _, m := range day {
@@ -370,8 +371,8 @@ func (r Rollups) dayProjects(d Derived, day []Minute, from, to int64) []DayProje
 			for p := range s.AgentOnly {
 				seen[p] = true
 			}
-			if s.FocusProject != "" {
-				seen[s.FocusProject] = true
+			if s.ProjectKey != "" {
+				seen[s.ProjectKey] = true
 			}
 		}
 	}
@@ -525,10 +526,10 @@ func sumKinds(slots []kindSlot, from, to int64) map[event.Activity]int64 {
 }
 
 // touches reports whether a turn of project p ran in the minute or a slot
-// of it was focused on p.
+// of it went to p.
 func (m Minute) touches(p string) bool {
 	for _, s := range m.Slots {
-		if s.AgentOnly[p] > 0 || s.FocusProject == p {
+		if s.AgentOnly[p] > 0 || s.ProjectKey == p {
 			return true
 		}
 	}

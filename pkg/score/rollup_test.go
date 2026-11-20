@@ -16,7 +16,7 @@ import (
 // slotCredit is a credit slot at t: seconds credited to project p under P
 // at level l, and the rest of the slot X.no_anchor.
 func slotCredit(t int64, p string, l event.Evidence, seconds int64) Credit {
-	c := Credit{Slot: t, Credited: []Credited{credOf(p, rP, l, seconds)}}
+	c := Credit{Slot: t, ProjectKey: p, Credited: []Credited{credOf(p, rP, l, seconds)}}
 	if seconds < 15 {
 		c.Uncredited = map[event.Reason]int64{xNoAnch: 15 - seconds}
 	}
@@ -30,7 +30,6 @@ func creditMinutes(p string, starts ...int64) Derived {
 	for _, m := range starts {
 		for k := int64(0); k < 4; k++ {
 			d.Credits = append(d.Credits, slotCredit(m+k*event.SlotMS, p, event.EvidenceA, 15))
-			d.Slots = append(d.Slots, Slot{Start: m + k*event.SlotMS, FocusProject: p})
 		}
 	}
 	return d
@@ -64,16 +63,13 @@ func TestWorkSessions(t *testing.T) {
 			joinDerived(creditMinutes("p_1", at(0), at(300)), creditMinutes("p_2", at(180))),
 			[]want{{"p_1", 0, 360, 120}, {"p_2", 180, 240, 60}}},
 		{"a minute focused on p_1 that credits it nothing starts no p_1 session, though another project's credit in it starts one",
-			Derived{
-				Slots: []Slot{{Start: at(60), FocusProject: "p_1"}, {Start: at(75), FocusProject: "p_1"},
-					{Start: at(90), FocusProject: "p_1"}, {Start: at(105), FocusProject: "p_1"}},
-				Credits: []Credit{
-					{Slot: at(60), Uncredited: map[event.Reason]int64{xNoAnch: 15}},
-					{Slot: at(75), Uncredited: map[event.Reason]int64{xAgent: 15}, AgentS: 15, AgentOnly: map[string]int64{"p_1": 15}},
-					{Slot: at(90), Credited: []Credited{credOf("p_2", rP, event.EvidenceA, 15)}},
-					{Slot: at(105), Uncredited: map[event.Reason]int64{xNoAnch: 15}},
-				},
-			},
+			Derived{Credits: []Credit{
+				{Slot: at(60), ProjectKey: "p_1", Uncredited: map[event.Reason]int64{xNoAnch: 15}},
+				{Slot: at(75), ProjectKey: "p_1", Uncredited: map[event.Reason]int64{xAgent: 15}, AgentS: 15,
+					AgentOnly: map[string]int64{"p_1": 15}},
+				{Slot: at(90), ProjectKey: "p_2", Credited: []Credited{credOf("p_2", rP, event.EvidenceA, 15)}},
+				{Slot: at(105), ProjectKey: "p_1", Uncredited: map[event.Reason]int64{xNoAnch: 15}},
+			}},
 			[]want{{"p_2", 60, 120, 15}}},
 	}
 	for _, c := range cases {
@@ -92,14 +88,14 @@ func TestWorkSessions(t *testing.T) {
 			}
 		})
 	}
-	t.Run("a session sums its project's agent time, agent-only time, the uncredited seconds of slots focused on it, and its anchors", func(t *testing.T) {
+	t.Run("a session sums its project's agent time, agent-only time, the uncredited seconds of slots that go to it, and its anchors", func(t *testing.T) {
 		in := credOf("p_1", rP, event.EvidenceA, 15)
 		in.InTurn = true
 		d := Derived{
-			Slots: []Slot{{Start: at(0), FocusProject: "p_1"}, {Start: at(15), FocusProject: "p_1"}, {Start: at(30)}},
 			Credits: []Credit{
-				{Slot: at(0), Credited: []Credited{in}, AgentS: 15},
-				{Slot: at(15), Uncredited: map[event.Reason]int64{xAgent: 15}, AgentS: 15, AgentOnly: map[string]int64{"p_1": 15}},
+				{Slot: at(0), ProjectKey: "p_1", Credited: []Credited{in}, AgentS: 15},
+				{Slot: at(15), ProjectKey: "p_1", Uncredited: map[event.Reason]int64{xAgent: 15}, AgentS: 15,
+					AgentOnly: map[string]int64{"p_1": 15}},
 				{Slot: at(30), Uncredited: map[event.Reason]int64{xOther: 15}, AgentS: 15, AgentOnly: map[string]int64{"p_2": 15}},
 			},
 			Anchors: []Anchor{{ID: idA, Kind: event.AnchorSubstantivePrompt, T: at(10), ProjectKey: "p_1"},

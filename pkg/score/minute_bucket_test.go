@@ -281,18 +281,16 @@ func TestMinuteBucket(t *testing.T) {
 }
 
 func TestMinutes(t *testing.T) {
-	d := Derived{
-		Slots:   []Slot{{Start: at(45), FocusProject: "p_1"}, {Start: at(60), FocusProject: "p_2"}},
-		Credits: []Credit{{Slot: at(60)}, {Slot: at(45)}, {Slot: at(60)}},
-	}
+	d := Derived{Credits: []Credit{{Slot: at(60), ProjectKey: "p_2"}, {Slot: at(45), ProjectKey: "p_1"},
+		{Slot: at(60), ProjectKey: "p_2"}}}
 	ms := Minutes(d)
 	cases := []struct {
 		name string
 		ok   bool
 	}{
 		{"credit slots are grouped by UTC minute, in time order", len(ms) == 2 && ms[0].Start == base && ms[1].Start == at(60)},
-		{"each slot keeps its focus project", len(ms) == 2 && ms[0].Slots[0].FocusProject == "p_1" &&
-			ms[1].Slots[0].FocusProject == "p_2"},
+		{"each slot keeps the project its seconds go to", len(ms) == 2 && ms[0].Slots[0].ProjectKey == "p_1" &&
+			ms[1].Slots[0].ProjectKey == "p_2"},
 		{"a slot listed twice is kept once", len(ms) == 2 && len(ms[1].Slots) == 1},
 		{"a minute ends a minute after it starts", len(ms) == 2 && ms[0].End() == at(60)},
 	}

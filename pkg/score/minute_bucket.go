@@ -30,12 +30,11 @@ type Minute struct {
 	Slots []MinuteSlot `json:"slots"`
 }
 
-// MinuteSlot is one derived slot of a minute.
+// MinuteSlot is one derived slot of a minute: its credit slot, whose
+// ProjectKey is the project the slot's seconds go to (SM 3.2, SM 5.1's p).
+// A rollup counts the slot's uncredited seconds toward that project.
 type MinuteSlot struct {
 	Credit
-	// FocusProject is the project the slot's focus resolves to (SM 3.2), or
-	// "". A rollup counts the slot's uncredited seconds toward it.
-	FocusProject string `json:"focus_project,omitempty"`
 }
 
 // floorMinute returns the start of the UTC minute holding t.
@@ -50,14 +49,9 @@ func floorMinute(t int64) int64 {
 // End returns the end of the minute.
 func (m Minute) End() int64 { return m.Start + MinuteMS }
 
-// Minutes groups d's credit slots by UTC minute, in time order, with the
-// focus project of each slot from d's slots. A minute holds only the slots
-// d derived.
+// Minutes groups d's credit slots by UTC minute, in time order. A minute
+// holds only the slots d derived.
 func Minutes(d Derived) []Minute {
-	focus := make(map[int64]string, len(d.Slots))
-	for _, s := range d.Slots {
-		focus[s.Start] = s.FocusProject
-	}
 	credits := slices.Clone(d.Credits)
 	slices.SortStableFunc(credits, func(a, b Credit) int { return cmp.Compare(a.Slot, b.Slot) })
 	var out []Minute
@@ -70,7 +64,7 @@ func Minutes(d Derived) []Minute {
 		if n := len(m.Slots); n > 0 && m.Slots[n-1].Slot == c.Slot {
 			continue // a slot Derived holds twice, as Append of overlapping views would give
 		}
-		m.Slots = append(m.Slots, MinuteSlot{Credit: c, FocusProject: focus[c.Slot]})
+		m.Slots = append(m.Slots, MinuteSlot{Credit: c})
 	}
 	return out
 }
