@@ -67,10 +67,10 @@
 // app goes by the project its focus record names, else by its hosted
 // sessions. An editor goes by the latest editor heartbeat with input in the
 // same or previous slot, and by the record only when there is none, since
-// the client names an editor's project from the sessions it hosts and
-// every window of an editor is one process (D-editor-heartbeat-first). A
-// browser, a chat app or any other app resolves to none, and only a lookup
-// credits it (SM 2.5).
+// the client names an editor's project from the sessions it hosts and all
+// of an editor's windows are one process on Windows and one app on macOS
+// (D-editor-heartbeat-first). A browser, a chat app or any other app
+// resolves to none, and only a lookup credits it (SM 2.5).
 //
 // For a window hosting sessions of several projects, SM 3.2 rule 1 is as
 // E-6.3-two-tabs decides it. The slot goes to the session of the first
