@@ -14,6 +14,7 @@ import timeline as tl  # noqa: E402
 EDGES = "2026-11-19-sm-6.1-presence-edges"
 SAME_ERROR = "2026-11-19-sm-6.1-same-error"
 REPLAY = "2026-11-19-sm-6.1-hackatime-replay"
+PERMISSION = "2026-11-19-sm-6.1-permission-answer"
 
 fx = tl.Fixture(
     "6.1",
@@ -540,7 +541,8 @@ for k in range(1, CYCLES + 1):
                 note = "A third failing run at 15:54:20, the same AssertionError, after the agent tried his hypothesis."
             if k == 11 and m == 6:
                 note = "The test run at 16:06:20 passes: a run_green, after his own edit, saved at 15:59:40."
-            exp.row(hhmm, credit={P: credit}, uncredited=unc, agent=agent, sm=sm, derived=derived, note=note)
+            exp.row(hhmm, credit={P: credit}, uncredited=unc, agent=agent, sm=sm, derived=derived, note=note,
+                    erratum=PERMISSION if m == 5 else None)
             continue
         if k in COMMIT_CYCLES:
             exp.row(hhmm, credit={P: {"G": 40, "NAV": 20}}, uncredited={},
@@ -601,7 +603,7 @@ expected = exp.doc(
         "handbook_s": {"about": 5600, "sm": "handbook_s: about 5,600, 1 h 33 min"},
         "ai_ratio": {"about": 1.47, "sm": "ai_ratio is 5,965 / 4,050 = 1.47"},
     },
-    errata=[EDGES, SAME_ERROR, REPLAY],
+    errata=[EDGES, SAME_ERROR, REPLAY, PERMISSION],
     notes=[
         "ai_credited_s is P + PA + SUP + READ and hand_credited_s is NAV + E + G + LOOKUP, as SM's table "
         "splits them; no credited second inside an agent turn has a hand-work reason (SM 5.4).",

@@ -95,7 +95,8 @@
       },
       "uncredited": {},
       "agent_running_s": 60,
-      "sm": "14:05"
+      "sm": "14:05",
+      "erratum": "2026-11-19-sm-6.1-permission-answer"
     },
     {
       "start": "2026-11-21T08:36:00Z",
@@ -270,7 +271,8 @@
       "uncredited": {},
       "agent_running_s": 60,
       "sm": "14:05; the other fourteen cycles are the same shape",
-      "derived": ["credited_s", "credit", "uncredited"]
+      "derived": ["credited_s", "credit", "uncredited"],
+      "erratum": "2026-11-19-sm-6.1-permission-answer"
     },
     {
       "start": "2026-11-21T08:48:00Z",
@@ -451,7 +453,8 @@
       "uncredited": {},
       "agent_running_s": 60,
       "sm": "14:05; the other fourteen cycles are the same shape",
-      "derived": ["credited_s", "credit", "uncredited"]
+      "derived": ["credited_s", "credit", "uncredited"],
+      "erratum": "2026-11-19-sm-6.1-permission-answer"
     },
     {
       "start": "2026-11-21T09:00:00Z",
@@ -631,7 +634,8 @@
       "uncredited": {},
       "agent_running_s": 60,
       "sm": "14:05; the other fourteen cycles are the same shape",
-      "derived": ["credited_s", "credit", "uncredited"]
+      "derived": ["credited_s", "credit", "uncredited"],
+      "erratum": "2026-11-19-sm-6.1-permission-answer"
     },
     {
       "start": "2026-11-21T09:12:00Z",
@@ -811,7 +815,8 @@
       "uncredited": {},
       "agent_running_s": 60,
       "sm": "14:05; the other fourteen cycles are the same shape",
-      "derived": ["credited_s", "credit", "uncredited"]
+      "derived": ["credited_s", "credit", "uncredited"],
+      "erratum": "2026-11-19-sm-6.1-permission-answer"
     },
     {
       "start": "2026-11-21T09:24:00Z",
@@ -991,7 +996,8 @@
       "uncredited": {},
       "agent_running_s": 60,
       "sm": "14:05; the other fourteen cycles are the same shape",
-      "derived": ["credited_s", "credit", "uncredited"]
+      "derived": ["credited_s", "credit", "uncredited"],
+      "erratum": "2026-11-19-sm-6.1-permission-answer"
     },
     {
       "start": "2026-11-21T09:36:00Z",
@@ -1126,7 +1132,8 @@
       "uncredited": {},
       "agent_running_s": 60,
       "sm": "14:05; the other fourteen cycles are the same shape",
-      "derived": ["credited_s", "credit", "uncredited"]
+      "derived": ["credited_s", "credit", "uncredited"],
+      "erratum": "2026-11-19-sm-6.1-permission-answer"
     },
     {
       "start": "2026-11-21T09:48:00Z",
@@ -1306,7 +1313,8 @@
       "uncredited": {},
       "agent_running_s": 60,
       "sm": "14:05; the other fourteen cycles are the same shape",
-      "derived": ["credited_s", "credit", "uncredited"]
+      "derived": ["credited_s", "credit", "uncredited"],
+      "erratum": "2026-11-19-sm-6.1-permission-answer"
     },
     {
       "start": "2026-11-21T10:00:00Z",
@@ -1487,7 +1495,8 @@
       "agent_running_s": 60,
       "sm": "14:05; the other fourteen cycles are the same shape",
       "note": "The agent's test run fails at 15:41:50 with the AssertionError. Its 4 lines add 30 s to a bucket that never runs dry here, so the row keeps cycle 1's shape.",
-      "derived": ["credited_s", "credit", "uncredited"]
+      "derived": ["credited_s", "credit", "uncredited"],
+      "erratum": "2026-11-19-sm-6.1-permission-answer"
     },
     {
       "start": "2026-11-21T10:12:00Z",
@@ -1668,7 +1677,8 @@
       "uncredited": {},
       "agent_running_s": 60,
       "sm": "14:05; the other fourteen cycles are the same shape",
-      "derived": ["credited_s", "credit", "uncredited"]
+      "derived": ["credited_s", "credit", "uncredited"],
+      "erratum": "2026-11-19-sm-6.1-permission-answer"
     },
     {
       "start": "2026-11-21T10:24:00Z",
@@ -1850,7 +1860,8 @@
       "uncredited": {},
       "agent_running_s": 60,
       "sm": "14:05; the other fourteen cycles are the same shape",
-      "derived": ["credited_s", "credit", "uncredited"]
+      "derived": ["credited_s", "credit", "uncredited"],
+      "erratum": "2026-11-19-sm-6.1-permission-answer"
     },
     {
       "start": "2026-11-21T10:36:00Z",
@@ -2031,7 +2042,8 @@
       "uncredited": {},
       "agent_running_s": 60,
       "sm": "14:05; the other fourteen cycles are the same shape",
-      "derived": ["credited_s", "credit", "uncredited"]
+      "derived": ["credited_s", "credit", "uncredited"],
+      "erratum": "2026-11-19-sm-6.1-permission-answer"
     },
     {
       "start": "2026-11-21T10:48:00Z",
@@ -2211,7 +2223,8 @@
       "uncredited": {},
       "agent_running_s": 60,
       "sm": "14:05; the other fourteen cycles are the same shape",
-      "derived": ["credited_s", "credit", "uncredited"]
+      "derived": ["credited_s", "credit", "uncredited"],
+      "erratum": "2026-11-19-sm-6.1-permission-answer"
     },
     {
       "start": "2026-11-21T11:00:00Z",
@@ -2391,7 +2404,8 @@
       "uncredited": {},
       "agent_running_s": 60,
       "sm": "14:05; the other fourteen cycles are the same shape",
-      "derived": ["credited_s", "credit", "uncredited"]
+      "derived": ["credited_s", "credit", "uncredited"],
+      "erratum": "2026-11-19-sm-6.1-permission-answer"
     },
     {
       "start": "2026-11-21T11:12:00Z",
@@ -2571,7 +2585,8 @@
       "uncredited": {},
       "agent_running_s": 60,
       "sm": "14:05; the other fourteen cycles are the same shape",
-      "derived": ["credited_s", "credit", "uncredited"]
+      "derived": ["credited_s", "credit", "uncredited"],
+      "erratum": "2026-11-19-sm-6.1-permission-answer"
     },
     {
       "start": "2026-11-21T11:24:00Z",
@@ -2698,7 +2713,8 @@
   "errata": [
     "2026-11-19-sm-6.1-presence-edges",
     "2026-11-19-sm-6.1-same-error",
-    "2026-11-19-sm-6.1-hackatime-replay"
+    "2026-11-19-sm-6.1-hackatime-replay",
+    "2026-11-19-sm-6.1-permission-answer"
   ],
   "notes": [
     "ai_credited_s is P + PA + SUP + READ and hand_credited_s is NAV + E + G + LOOKUP, as SM's table splits them; no credited second inside an agent turn has a hand-work reason (SM 5.4).",
