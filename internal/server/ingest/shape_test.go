@@ -545,7 +545,7 @@ var lenientForms = map[string]*regexp.Regexp{
 	"semver":  regexp.MustCompile(`^[0-9]{1,9}\.[0-9]{1,9}\.[0-9]{1,9}$`),
 	"params":  regexp.MustCompile(`^sha256:[0-9a-f]{64}$`),
 	"minute":  regexp.MustCompile(`^20[2-9][0-9]-[01][0-9]-[0-3][0-9]T[0-2][0-9]:[0-5][0-9]:00Z$`),
-	"reason":  regexp.MustCompile(`^[A-Za-z_.]{1,40}$`),
+	"reason":  regexp.MustCompile(`^[A-Za-z_.~+]{1,40}$`),
 	"lower":   regexp.MustCompile(`^[a-z_]{1,32}$`),
 	"level":   regexp.MustCompile(`^[ABC]$`),
 	"version": regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$`),
@@ -563,7 +563,7 @@ func FuzzFreeText(f *testing.F) {
 	for _, s := range freeText {
 		f.Add(s)
 	}
-	for _, s := range []string{"p_one", "1.0.0", "v0.1.0", "P", "X.absent", "via_track", "final", "human", "A",
+	for _, s := range []string{"p_one", "1.0.0", "v0.1.0", "P", "READ~r+restored", "X.absent", "via_track", "final", "human", "A",
 		strings.Repeat("a", 40), strings.Repeat("0", 64), "sha256:" + strings.Repeat("ab", 32), "2026-11-19T12:00:00Z"} {
 		f.Add(s)
 	}

@@ -138,7 +138,7 @@ Each slot, `encoding/json`'s form of `event.BucketSlot`:
 |---|---|---|
 | `p` | string | Optional. A project key |
 | `cr` | number | Credited seconds, 0 to 15 in steps of 0.5 |
-| `why` | string | Optional. A credit reason code of SM 5.2 (`Reason.Credited`) |
+| `why` | string | Optional. A credit reason code of SM 5.2, with `pkg/event`'s `~r` and `+restored` suffixes where they apply, such as `READ~r` (`Reason.Credited`) |
 | `kind` | string | Optional. An activity kind of SM 5.1 |
 | `ev` | string | Optional. The evidence level, `A`, `B` or `C` |
 | `lbl` | array | Optional. Side-door labels, each of `via_track`, `via_plugin`, `via_bridge` at most once and in that order |
