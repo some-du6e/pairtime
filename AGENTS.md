@@ -28,7 +28,7 @@ A change is done when every workflow its PR started is green. A WP marked "Race:
 Any workflow also runs by hand: `gh workflow run <file> --ref <branch>`.
 
 - A check CI lacks becomes a step of ci.yml's one job, with no matrix. A new workflow gets `workflow_dispatch`, a `concurrency` group that cancels stale runs, `timeout-minutes`, `permissions: contents: read`, and actions pinned to a full commit SHA with the version in a comment. Two exceptions: release.yml's run on a release tag never cancels, and a job that pushes (tidy.yml) or publishes (release.yml) gets the write permissions it needs, on that job alone.
-- Windows and macOS runners are the scarce ones, so read every failure in a run before pushing again. Tests there use injected fakes. Code needing them outside platform.yml's paths adds its path to that filter in the same PR.
+- Windows and macOS runners are the scarce ones, so read every failure in a run before pushing again. Tests there use injected fakes. platform.yml keeps two lists: its `paths` filter decides whether it runs, and `PLATFORM_DIRS` decides what the Windows and macOS jobs test. Code that needs those runners adds its directory to both lists in the same PR.
 - Tests that need an X server or a session D-Bus go in `*_desktop_test.go` files under `//go:build linux && desktop`. platform.yml's Linux job runs them with `-tags desktop` inside Xvfb, openbox and a private bus (tools/ci/desktop_session.sh); real focus switching with xdotool happens only there.
 - go.sum and package-lock.json come from CI: `gh workflow run tidy.yml --ref <branch>`. Its push starts no CI run, so pull, then push again (an empty commit will do).
 
