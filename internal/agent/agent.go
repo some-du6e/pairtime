@@ -7,7 +7,8 @@
 // config directories, config.toml, state.json, the scheduler that every
 // timer goes through, and the HTTP server on 127.0.0.1. WP-AG2 added the
 // socket that hooks hand their messages to and the inbox they spool to
-// when the agent is down (packages ipc and inbox). The other components of
+// when the agent is down (packages ipc and inbox), and WP-OS8 the notifier
+// that shows the coach's notification. The other components of
 // DESIGN 3.3 arrive in later work packages, each as a package under
 // internal/agent that Run starts.
 package agent
@@ -31,6 +32,8 @@ import (
 	"github.com/some-du6e/pairtime/internal/agent/inbox"
 	"github.com/some-du6e/pairtime/internal/agent/ipc"
 	"github.com/some-du6e/pairtime/internal/agent/localhttp"
+	"github.com/some-du6e/pairtime/internal/agent/notifier"
+	"github.com/some-du6e/pairtime/internal/agent/presence"
 	"github.com/some-du6e/pairtime/internal/agent/sched"
 	"github.com/some-du6e/pairtime/internal/agent/state"
 	"github.com/some-du6e/pairtime/internal/version"
@@ -80,6 +83,12 @@ type agent struct {
 	port    int
 	journal *inbox.Journal // nil when it couldn't be opened
 	ipcSrv  *ipc.Server    // nil when hooks can't reach the agent
+	// notifier shows the coach's notification when a work session ends
+	// (WP-OS8). The coach calls its Notify, and its UserPresent on unlock
+	// and resume (WP-CO1).
+	notifier *notifier.Notifier
+
+	presence *presence.Sampler // presence and power (DESIGN 3.3)
 
 	stop     chan struct{} // closed when a client asks the agent to stop
 	stopOnce sync.Once
@@ -117,10 +126,13 @@ func Run(ctx context.Context, opts Options) error {
 		problems: make(map[string]string),
 	}
 	linkOnce.Do(func() { linked = heavyModules() })
+	if err := optIntoEcoQoS(); err != nil {
+		log.Info("the agent runs without EcoQoS", "err", err)
+	}
 
 	// Each part that starts adds the step that stops it, and they stop in
 	// reverse order: the HTTP server, port.json, the socket and the inbox,
-	// the config watch, the scheduler, state.json.
+	// the config watch, presence, the scheduler, the notifier, state.json.
 	var closers []func()
 	defer func() {
 		for i := len(closers) - 1; i >= 0; i-- {
@@ -135,6 +147,16 @@ func Run(ctx context.Context, opts Options) error {
 	}
 	closers = append(closers, markStopped)
 
+	// Idle, the notifier holds no goroutine, timer or connection. It stops
+	// before state.json is saved, so what it remembers is in the file.
+	a.notifier = notifier.New(notifier.Options{
+		Settings: func() config.Notifications { return a.config().Notifications },
+		Memory:   a.state,
+		Log:      log.With("component", "notifier"),
+		Problem:  func(msg string) { a.setProblem("notifications", msg) },
+	})
+	closers = append(closers, a.notifier.Close)
+
 	schedCtx, stopSched := context.WithCancel(context.Background())
 	schedDone := make(chan struct{})
 	go func() {
@@ -145,6 +167,7 @@ func Run(ctx context.Context, opts Options) error {
 		stopSched()
 		<-schedDone
 	})
+	closers = append(closers, a.startPresence())
 
 	closers = append(closers, a.watchConfig())
 	closers = append(closers, a.startIPC(opts))
@@ -237,7 +260,7 @@ func (a *agent) loadConfig(first bool) {
 		}
 	case errors.Is(err, fs.ErrNotExist):
 	case err != nil:
-		problems = append(problems, fmt.Sprintf("couldn't read config.toml, so every setting has its default: %v", err))
+		problems = append(problems, fmt.Sprintf("couldn't read config.toml, so every setting has its default and notifications are off: %v", err))
 	}
 	a.cfg.Store(&cfg)
 	a.setProblem("config", strings.Join(problems, "; "))

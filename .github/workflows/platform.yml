@@ -14,12 +14,25 @@ on:
       - internal/platform/**
       - internal/install/**
       - internal/agent/ipc/**
+      # The agent's own files, startIPC in messages.go among them. ipc's
+      # TestAgentKilledMidStream runs a real agent.Run, and this is where it
+      # runs on Windows (socket and pipe) and macOS. It lives in
+      # internal/agent/ipc, so PLATFORM_DIRS needn't list these.
+      - internal/agent/*.go
       # The agent's platform code: the lock, the data directories and
-      # private files (home), the loopback server (localhttp), and the
-      # spool, which Windows file sharing makes OS-specific (inbox).
+      # private files (home), the loopback server (localhttp), the spool,
+      # which Windows file sharing makes OS-specific (inbox), presence,
+      # whose smoke test runs on the real Windows sources, and the device
+      # keystore, which picks DPAPI, the Keychain or the Secret Service by
+      # OS (keys).
       - internal/agent/inbox/**
       - internal/agent/home/**
       - internal/agent/localhttp/**
+      - internal/agent/presence/**
+      # The notifier's per-OS backends (platform_*.go) and the rules they
+      # share.
+      - internal/agent/notifier/**
+      - internal/agent/keys/**
       - cmd/pairtime/**
       - .github/workflows/platform.yml
       - tools/ci/test_existing.sh
@@ -38,7 +51,7 @@ permissions:
 env:
   # pairtime never uses cgo (AGENTS.md).
   CGO_ENABLED: "0"
-  PLATFORM_DIRS: internal/platform internal/install internal/agent/ipc internal/agent/inbox internal/agent/home internal/agent/localhttp cmd/pairtime
+  PLATFORM_DIRS: internal/platform internal/install internal/agent/ipc internal/agent/inbox internal/agent/home internal/agent/localhttp internal/agent/presence internal/agent/notifier internal/agent/keys cmd/pairtime
 
 jobs:
   windows:
@@ -50,9 +63,9 @@ jobs:
         shell: bash
     steps:
       # Actions are pinned to commit SHAs; tags can be moved. Dependabot bumps them.
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: go.mod
           cache-dependency-path: go.mod
@@ -70,9 +83,9 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: go.mod
           cache-dependency-path: go.mod
@@ -107,7 +120,7 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Find desktop tests
         id: find
@@ -123,7 +136,7 @@ jobs:
             echo "::notice::no *_desktop_test.go files yet, so there is nothing to run"
           fi
 
-      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         if: steps.find.outputs.run == 'true'
         with:
           go-version-file: go.mod
@@ -144,5 +157,9 @@ jobs:
           if [ -z "$DIRS" ]; then
             bash tools/ci/desktop_session.sh true
           else
-            bash tools/ci/desktop_session.sh bash tools/ci/test_existing.sh -tags desktop -- $DIRS
+            # -p 1 runs the packages' test binaries one at a time. Tests in
+            # several of them start fakenotify or fakesecret, which own
+            # org.freedesktop.Notifications or org.freedesktop.secrets on the
+            # one private bus, or need nobody to own them.
+            bash tools/ci/desktop_session.sh bash tools/ci/test_existing.sh -p 1 -tags desktop -- $DIRS
           fi

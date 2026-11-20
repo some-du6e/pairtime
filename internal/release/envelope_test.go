@@ -307,7 +307,9 @@ func TestTrustedKeys(t *testing.T) {
 			t.Errorf("key %s: %v", k.ID(), err)
 		}
 	}
-	if !strings.Contains(releaseKeys, "tools/release keygen") {
-		t.Errorf("release-keys.txt lost the comment that says how to add a key")
+	// keygen's own comments name it once a key is listed, so this looks
+	// for the pointer to the spec, whose steps keep a backup.
+	if !strings.Contains(releaseKeys, "Making the key") {
+		t.Errorf("release-keys.txt lost the comment that points at the spec's Making the key")
 	}
 }

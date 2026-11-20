@@ -20,9 +20,11 @@ import (
 // 3.5).
 const MessageMax = 16384
 
-// CommitsText reports whether records of kind k can commit a text (spec
+// CommitsText reports whether records of kind k commit a text (spec
 // 10.1): prompt.submit, agent.output when it is the turn's final message,
-// and cli.track. No other record has a "c" member.
+// and cli.track. Each of those has a "c" member, apart from the bridge and
+// plugin records whose text the device never had (Content.NoText), and no
+// other record has one.
 func CommitsText(k event.Kind) bool {
 	return k == event.KindPromptSubmit || k == event.KindAgentOutput || k == event.KindCLITrack
 }

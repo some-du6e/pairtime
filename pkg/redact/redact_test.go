@@ -3,6 +3,7 @@
 package redact
 
 import (
+	"encoding/json"
 	"slices"
 	"strings"
 	"testing"
@@ -63,6 +64,34 @@ func TestFindPipeline(t *testing.T) {
 			// nothing new, so scrubbing a scrubbed file changes nothing.
 			if again := Render(got, r.Find(got)); again != got {
 				t.Errorf("a second pass changed %q to %q", got, again)
+			}
+		})
+	}
+}
+
+// TestFindInJSON covers personal data in raw JSON captures, where the byte
+// before a value at the start of an embedded line is the n of \n. Each
+// result must still be JSON.
+func TestFindInJSON(t *testing.T) {
+	tests := []struct {
+		name string
+		text string
+		want string
+	}{
+		{"a card number at the start of an embedded line goes", `{"text":"card:\n4111 1111 1111 1111"}`, `{"text":"card:\n[CARD]"}`},
+		{"an SSN at the start of an embedded line goes", `{"text":"ssn:\n219-09-9999"}`, `{"text":"ssn:\n[US_SSN]"}`},
+		{"an email address after an escaped line break goes and the escape stays", `{"text":"hi\nbob@westfield.edu"}`, `{"text":"hi\n[EMAIL]"}`},
+		{"an email address with an escaped letter goes whole", "{\"from\":\"jos\x5cu00e9@westfield.edu\"}", `{"from":"[EMAIL]"}`},
+	}
+	r := mustNew(t, Known{})
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := Render(tt.text, r.Find(tt.text))
+			if got != tt.want {
+				t.Errorf("Render = %q, want %q", got, tt.want)
+			}
+			if !json.Valid([]byte(got)) {
+				t.Errorf("Render = %q, which isn't JSON any more", got)
 			}
 		})
 	}

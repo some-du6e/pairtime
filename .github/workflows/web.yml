@@ -1,24 +1,27 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
 # The web UI and the VS Code extension: npm licenses, npm ci, svelte-check,
-# vitest, the real UI build, and Playwright on Chromium only against a
-# `pairtime agent` built in this job with that UI embedded (DESIGN 3.13;
-# docs/PLAN.md, WP-UI0). Go-only jobs never need Node, because
+# vitest, the real UI build, Playwright on Chromium only against a `pairtime
+# agent` built in this job with that UI embedded, and SPDX headers (DESIGN
+# 3.13; docs/PLAN.md, WP-UI0). Go-only jobs never need Node, because
 # internal/webui embeds a checked-in placeholder (DESIGN 3.12).
 name: web
 
 on:
   pull_request:
-    # DESIGN 3.13's paths, plus what the smoke test runs: the embedded UI,
-    # the local API's spec and the agent code that serves both.
+    # DESIGN 3.13's paths, plus everything the smoke test runs and holds to
+    # docs/api: the embedded UI, the local API's spec, and `pairtime agent`,
+    # whose answers take their shape from code across internal/agent (the
+    # ipc object comes from messages.go, the mode from config/), the build
+    # info in internal/version and the command in cmd/pairtime.
     paths:
       - web/**
       - extension/**
       - internal/webui/**
       - docs/api/**
-      - internal/agent/http.go
-      - internal/agent/api/**
-      - internal/agent/localhttp/**
+      - internal/agent/**
+      - internal/version/**
+      - cmd/pairtime/**
       - tools/ci/npm_licenses.py
       - .github/workflows/web.yml
   push:
@@ -44,7 +47,7 @@ jobs:
         shell: bash
     steps:
       # Actions are pinned to commit SHAs; tags can be moved. Dependabot bumps them.
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: npm licenses
         # From the lockfiles alone, before anything is installed. Lockfiles
@@ -56,7 +59,7 @@ jobs:
             python3 -I tools/ci/npm_licenses.py $locks
           fi
 
-      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
           cache: npm
@@ -98,7 +101,7 @@ jobs:
             exit 1
           fi
 
-      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         with:
           go-version-file: go.mod
@@ -129,6 +132,40 @@ jobs:
           path: web/screens/
           retention-days: 7
           if-no-files-found: ignore
+
+      - name: SPDX headers
+        # AGENTS.md's rule for web files. An .html file starts with
+        # <!doctype html>, which TestFS needs the built page to start with,
+        # so its SPDX comment is line 2. This runs whatever failed above,
+        # and reads each file as committed, from git's index, because the
+        # build above wrote over internal/webui/dist/index.html.
+        if: ${{ !cancelled() }}
+        run: |
+          spdx="SPDX-License-Identifier: AGPL-3.0-or-later"
+          file=$RUNNER_TEMP/spdx-check
+          fail=0
+          while IFS= read -r f; do
+            git show ":$f" > "$file"
+            line=1
+            case "$f" in
+              *.ts | *.js) want="// $spdx" ;;
+              *.svelte) want="<!-- $spdx -->" ;;
+              *.css) want="/* $spdx */" ;;
+              *.html)
+                want="<!-- $spdx -->"
+                line=2
+                if [ "$(sed -n 1p "$file" | tr '[:upper:]' '[:lower:]')" != "<!doctype html>" ]; then
+                  echo "::error file=$f,line=1::line 1 must be: <!doctype html>"
+                  fail=1
+                fi
+                ;;
+            esac
+            if [ "$(sed -n "${line}p" "$file")" != "$want" ]; then
+              echo "::error file=$f,line=$line::line $line must be: $want"
+              fail=1
+            fi
+          done < <(git ls-files -- 'web/*.ts' 'web/*.js' 'web/*.svelte' 'web/*.css' 'web/*.html' 'internal/webui/dist/*.html')
+          exit "$fail"
 
       - name: Other npm projects (extension/)
         if: ${{ !cancelled() }}

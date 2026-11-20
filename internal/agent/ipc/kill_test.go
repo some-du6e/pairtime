@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -119,12 +120,12 @@ func startAgent(t *testing.T, data string, pipe bool) *agentProc {
 	for {
 		p, err := tryStart(exe, data, pipe)
 		if err == nil {
-			via, problems, serr := agentVia(data)
-			if serr == nil && via == want {
+			st, serr := agentStatus(data)
+			if serr == nil && st.IPC.Via == want {
 				t.Cleanup(func() { p.kill() })
 				return p
 			}
-			err = fmt.Errorf("it takes messages by %q, want %q (status: %v; problems: %v)", via, want, serr, problems)
+			err = fmt.Errorf("it takes messages by %q, want %q (status: %v; problems: %v)", st.IPC.Via, want, serr, st.Problems)
 			p.stop()
 		}
 		if time.Now().After(deadline) {
@@ -203,33 +204,39 @@ func (p *agentProc) stop() error {
 	}
 }
 
-// agentVia asks a running agent how it takes messages, and what problems
-// it reports.
-func agentVia(data string) (inbox.Via, map[string]string, error) {
+// agentReport is the part of a running agent's GET /v1/status that these
+// tests read.
+type agentReport struct {
+	IPC struct {
+		// Via is how the agent takes messages.
+		Via inbox.Via `json:"via"`
+		// Duplicates counts the second copies it dropped since it started.
+		Duplicates uint64 `json:"duplicates"`
+	} `json:"ipc"`
+	Problems map[string]string `json:"problems"`
+}
+
+// agentStatus asks the agent that runs on data for its status.
+func agentStatus(data string) (agentReport, error) {
 	pf, err := localhttp.ReadPortFile(home.Dirs{Data: data}.PortFile())
 	if err != nil {
-		return "", nil, err
+		return agentReport{}, err
 	}
 	req, err := http.NewRequest("GET", fmt.Sprintf("http://127.0.0.1:%d/v1/status", pf.Port), nil)
 	if err != nil {
-		return "", nil, err
+		return agentReport{}, err
 	}
 	req.Header.Set("Authorization", "Bearer "+pf.Token)
 	resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
 	if err != nil {
-		return "", nil, err
+		return agentReport{}, err
 	}
 	defer resp.Body.Close()
-	var status struct {
-		IPC struct {
-			Via inbox.Via `json:"via"`
-		} `json:"ipc"`
-		Problems map[string]string `json:"problems"`
+	var r agentReport
+	if err := json.NewDecoder(resp.Body).Decode(&r); err != nil {
+		return agentReport{}, err
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&status); err != nil {
-		return "", nil, err
-	}
-	return status.IPC.Via, status.Problems, nil
+	return r, nil
 }
 
 // stored is one line of the agent's journal, read the way a test that
@@ -275,8 +282,14 @@ func spoolLeft(t *testing.T, data string) []string {
 // messages against the agent's, across real kills of a real agent. Four
 // senders hand 1,000 messages to the agent the way hooks do, with
 // ipc.Send and its 100 ms timeout. The agent is killed twice while they
-// send, so messages are cut off mid-frame and mid-ack, and senders spool
-// while it is down. Every message must be stored exactly once.
+// send, and they spool while it is down.
+//
+// A kill seldom lands between a store and its ack, so while the agent is
+// down the test makes the duplicates itself: copies of acked messages in
+// the spool, as senders whose ack came too late leave them, and a taken
+// file of other copies, as a drain killed before its delete leaves it.
+// Every message must be stored exactly once, and the last agent must count
+// the copies made while it was down among the duplicates it dropped.
 func TestAgentKilledMidStream(t *testing.T) {
 	tests := []struct {
 		name string
@@ -304,6 +317,10 @@ func TestAgentKilledMidStream(t *testing.T) {
 			var gate sync.RWMutex
 			var next, done atomic.Int64
 			sent := make([][]string, senders)
+			// acked holds the messages the agent acked, in the order it
+			// did, for duplicate to copy.
+			var ackedMu sync.Mutex
+			var acked []inbox.Message
 			var wg sync.WaitGroup
 			// However the test ends, the senders stop first: they report
 			// through t, which must not outlive the test.
@@ -323,13 +340,18 @@ func TestAgentKilledMidStream(t *testing.T) {
 							return
 						}
 						m := inbox.New("test", json.RawMessage(fmt.Sprintf(`{"n":%d}`, n)))
-						_, err := ipc.Send(ep, m, ipc.HookTimeout)
+						via, err := ipc.Send(ep, m, ipc.HookTimeout)
 						gate.RUnlock()
 						if err != nil {
 							t.Errorf("message %d went nowhere: %v", n, err)
 							return
 						}
 						sent[s] = append(sent[s], m.ID)
+						if via != inbox.ViaInbox {
+							ackedMu.Lock()
+							acked = append(acked, m)
+							ackedMu.Unlock()
+						}
 						done.Add(1)
 					}
 				}()
@@ -350,12 +372,59 @@ func TestAgentKilledMidStream(t *testing.T) {
 				defer gate.Unlock()
 				proc = startAgent(t, data, tt.pipe)
 			}
+			// duplicate makes, while the agent is down, both kinds of copy
+			// that the next agent must drop when it drains them. It appends
+			// copies of the last messages acked to the spool, as senders
+			// whose ack came too late do, and writes copies of the ones
+			// acked before those to a taken file, as a drain killed before
+			// it deleted the file leaves it. It returns how many copies it
+			// made.
+			duplicate := func() int {
+				t.Helper()
+				const each = 5
+				ackedMu.Lock()
+				n := len(acked)
+				var last []inbox.Message
+				if n >= 2*each {
+					last = slices.Clone(acked[n-2*each:])
+				}
+				ackedMu.Unlock()
+				if last == nil {
+					t.Fatalf("the agent acked %d messages before it was killed, too few to copy", n)
+				}
+				for _, m := range last[each:] {
+					if err := inbox.Append(ep.Inbox, m); err != nil {
+						t.Fatal(err)
+					}
+				}
+				var b []byte
+				for _, m := range last[:each] {
+					line, err := m.Encode()
+					if err != nil {
+						t.Fatal(err)
+					}
+					b = append(b, '\n')
+					b = append(b, line...)
+					b = append(b, '\n')
+				}
+				// Named the way a drain names the spool it takes. Append made
+				// the inbox directory, if no sender had.
+				name := filepath.Join(ep.Inbox, fmt.Sprintf("spool-%020d-%s.drain", time.Now().UnixNano(), inbox.NewID()[:8]))
+				if err := os.WriteFile(name, b, 0o600); err != nil {
+					t.Fatal(err)
+				}
+				return len(last)
+			}
 			waitFor(250)
 			proc.kill()
+			duplicate()
 			waitFor(350)
 			restart()
 			waitFor(650)
 			proc.kill()
+			// The last agent's status counts only what it dropped, so these
+			// are the copies it must report.
+			copies := duplicate()
 			waitFor(750)
 			restart()
 			wg.Wait()
@@ -384,6 +453,15 @@ func TestAgentKilledMidStream(t *testing.T) {
 					t.Fatalf("after a minute the journal has %d messages and the inbox has %v", len(got), spoolLeft(t, data))
 				}
 				time.Sleep(50 * time.Millisecond)
+			}
+			// The inbox is empty, so the agent has drained every copy made
+			// while it was down, and each one was a message it had already.
+			st, err := agentStatus(data)
+			if err != nil {
+				t.Fatalf("asking the last agent for its status: %v", err)
+			}
+			if st.IPC.Duplicates < uint64(copies) {
+				t.Errorf("the last agent dropped %d duplicates, want at least the %d copies made while it was down", st.IPC.Duplicates, copies)
 			}
 			if err := proc.stop(); err != nil {
 				t.Errorf("the agent didn't stop cleanly: %v", err)
@@ -416,7 +494,7 @@ func TestAgentKilledMidStream(t *testing.T) {
 			if byVia[inbox.ViaInbox] == 0 || byVia[wantVia] == 0 || byVia[inbox.ViaInbox]+byVia[wantVia] != len(got) {
 				t.Errorf("the messages came in as %v, want some by %q and the rest by %q", byVia, inbox.ViaInbox, wantVia)
 			}
-			t.Logf("stored %d messages: %v", len(got), byVia)
+			t.Logf("stored %d messages: %v; the last agent dropped %d duplicates", len(got), byVia, st.IPC.Duplicates)
 		})
 	}
 }

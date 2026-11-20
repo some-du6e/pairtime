@@ -6,9 +6,7 @@ package linux
 
 import (
 	"context"
-	"errors"
-	"os"
-	"path/filepath"
+	"net"
 	"sync"
 	"time"
 
@@ -29,27 +27,39 @@ const (
 // milliseconds since the last user input. It keeps one session bus
 // connection, and reconnects on the next sample after it drops.
 type mutterIdle struct {
-	connect func() (*dbus.Conn, error)
+	// connect connects to the session bus before ctx ends.
+	connect func(ctx context.Context) (*dbus.Conn, error)
 
-	mu   sync.Mutex
-	conn *dbus.Conn
+	mu     sync.Mutex
+	conn   *dbus.Conn
+	closed bool // after close, samples fail rather than reconnect
 }
 
 func (m *mutterIdle) idle(ctx context.Context) (time.Duration, error) {
-	timeout, err := callTimeout(ctx)
+	return m.sample(ctx, sampleTimeout)
+}
+
+// sample reads the idle time, connecting first when there is no live
+// connection. Both are done within limit, or by ctx's deadline if that is
+// sooner.
+func (m *mutterIdle) sample(ctx context.Context, limit time.Duration) (time.Duration, error) {
+	deadline, err := sampleDeadline(ctx, limit)
 	if err != nil {
 		return 0, err
 	}
-	ctx, cancel := context.WithTimeout(ctx, timeout)
+	ctx, cancel := context.WithDeadline(ctx, deadline)
 	defer cancel()
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.closed {
+		return 0, net.ErrClosed
+	}
 	if m.conn != nil && !m.conn.Connected() {
 		m.conn.Close()
 		m.conn = nil
 	}
 	if m.conn == nil {
-		conn, err := m.connect()
+		conn, err := m.connect(ctx)
 		if err != nil {
 			return 0, err
 		}
@@ -72,43 +82,9 @@ func (m *mutterIdle) name() string { return mutterName }
 func (m *mutterIdle) close() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.closed = true
 	if m.conn != nil {
 		m.conn.Close()
 		m.conn = nil
 	}
-}
-
-// sessionBusAddress is the session bus the desktop gave its programs:
-// DBUS_SESSION_BUS_ADDRESS, else the socket systemd's user manager keeps
-// at $XDG_RUNTIME_DIR/bus. Unlike dbus.ConnectSessionBus, it never runs
-// dbus-launch to start a bus of its own when there is none.
-func sessionBusAddress(getenv func(string) string) (string, error) {
-	if a := getenv("DBUS_SESSION_BUS_ADDRESS"); a != "" && a != "autolaunch:" {
-		return a, nil
-	}
-	if dir := getenv("XDG_RUNTIME_DIR"); dir != "" {
-		path := filepath.Join(dir, "bus")
-		if fi, err := os.Stat(path); err == nil && fi.Mode()&os.ModeSocket != 0 {
-			return "unix:path=" + path, nil
-		}
-	}
-	return "", errors.New("no session bus: DBUS_SESSION_BUS_ADDRESS is unset and $XDG_RUNTIME_DIR/bus doesn't exist")
-}
-
-// connectBus opens a private connection to the bus at address: dial,
-// authenticate as this user, and say hello.
-func connectBus(address string) (*dbus.Conn, error) {
-	conn, err := dbus.Dial(address)
-	if err != nil {
-		return nil, err
-	}
-	if err := conn.Auth(nil); err != nil {
-		conn.Close()
-		return nil, err
-	}
-	if err := conn.Hello(); err != nil {
-		conn.Close()
-		return nil, err
-	}
-	return conn, nil
 }

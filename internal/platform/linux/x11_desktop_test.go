@@ -7,8 +7,9 @@ package linux
 // These tests run in platform.yml's Linux job, inside Xvfb with openbox
 // and a private session bus (tools/ci/desktop_session.sh). Their oracles
 // are the X server's own idle counter, moved by real XTEST input from
-// xdotool, and the window manager's active window, as xdotool and xprop,
-// two independent X clients, read it.
+// xdotool, the window manager's active window, as xdotool and xprop, two
+// independent X clients, read it, and the pid of each xterm the test
+// starts.
 
 import (
 	"context"
@@ -32,12 +33,12 @@ func openX11Desktop(t *testing.T) *Desktop {
 		t.Fatal("DISPLAY is unset: run this under tools/ci/desktop_session.sh")
 	}
 	d := Open(context.Background(), Config{
-		SystemBus: func() (*dbus.Conn, error) { return nil, errors.New("not in this test") },
+		SystemBus: func(context.Context) (*dbus.Conn, error) { return nil, errors.New("not in this test") },
 	})
 	t.Cleanup(func() { d.Close() })
 	s := d.Status()
-	if s.Session != SessionX11 || s.Idle.Via != screenSaverExtension || s.Focus.Via != "_NET_ACTIVE_WINDOW" {
-		t.Fatalf("status %+v, want X11 with MIT-SCREEN-SAVER idle time and _NET_ACTIVE_WINDOW focus", s)
+	if s.Session != SessionX11 || s.Idle.Via != screenSaverExtension || s.Focus.Via != focusViaXRes {
+		t.Fatalf("status %+v, want X11 with MIT-SCREEN-SAVER idle time, and focus from _NET_ACTIVE_WINDOW with X-Resource pids", s)
 	}
 	return d
 }
@@ -138,22 +139,36 @@ func xpropPID(t *testing.T, wid uint32) int {
 	return pid
 }
 
-// nextFocus waits for the next report of a focused window. openbox may
-// report no window for a moment between two, which is skipped.
+// nextFocus waits for the next focus report, whatever window it names,
+// none included.
 func nextFocus(t *testing.T, ch <-chan Focus) Focus {
 	t.Helper()
-	timeout := time.After(10 * time.Second)
+	select {
+	case f, ok := <-ch:
+		if !ok {
+			t.Fatal("the focus channel closed")
+		}
+		return f
+	case <-time.After(10 * time.Second):
+		t.Fatal("no focus report in 10 s")
+	}
+	return Focus{}
+}
+
+// moreFocus returns the focus reports that come before 500 ms pass with
+// none.
+func moreFocus(t *testing.T, ch <-chan Focus) []Focus {
+	t.Helper()
+	var more []Focus
 	for {
 		select {
 		case f, ok := <-ch:
 			if !ok {
 				t.Fatal("the focus channel closed")
 			}
-			if f.Window != 0 {
-				return f
-			}
-		case <-timeout:
-			t.Fatal("no focus report in 10 s")
+			more = append(more, f)
+		case <-time.After(500 * time.Millisecond):
+			return more
 		}
 	}
 }
@@ -164,10 +179,12 @@ func TestDesktopX11FocusFollowsActiveWindow(t *testing.T) {
 	d := openX11Desktop(t)
 	focus := d.Focus()
 
-	// Start from A, whatever had focus before.
+	// Start from A, whatever had focus before, and let the reports of
+	// getting there pass.
 	runTool(t, "xdotool", "windowactivate", "--sync", fmt.Sprint(winA))
 	for f := nextFocus(t, focus); f.Window != winA; f = nextFocus(t, focus) {
 	}
+	moreFocus(t, focus)
 
 	cases := []struct {
 		name string
@@ -180,7 +197,12 @@ func TestDesktopX11FocusFollowsActiveWindow(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			runTool(t, "xdotool", "windowactivate", "--sync", fmt.Sprint(tc.win))
+			// Every report counts, a window of none included: PLAN's
+			// check is that each switch is one os.focus event.
 			got := nextFocus(t, focus)
+			if more := moreFocus(t, focus); len(more) > 0 {
+				t.Fatalf("one switch gave %d reports: %+v, then %+v", 1+len(more), got, more)
+			}
 			active := runTool(t, "xdotool", "getactivewindow")
 			if got.Window != tc.win || active != fmt.Sprint(tc.win) {
 				t.Fatalf("reported window %d; xdotool activated %d and reads %s as active", got.Window, tc.win, active)
@@ -200,13 +222,34 @@ func TestDesktopX11FocusFollowsActiveWindow(t *testing.T) {
 			}
 		})
 	}
+}
 
-	// Two switches made exactly two reports: nothing else is queued.
-	select {
-	case f := <-focus:
-		if f.Window != 0 {
-			t.Errorf("an extra focus report: %+v", f)
-		}
-	case <-time.After(500 * time.Millisecond):
+func TestDesktopX11FocusPIDFromServer(t *testing.T) {
+	cases := []struct {
+		name   string
+		netPID string // what the test sets the xterm's _NET_WM_PID to
+	}{
+		{"a window whose _NET_WM_PID names a sandbox's pid, as a Flatpak app's does, reports its process's pid on the host", "2"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cmd, win := startXterm(t, "PairtimeSandboxed")
+			runTool(t, "xprop", "-id", fmt.Sprint(win), "-f", "_NET_WM_PID", "32c", "-set", "_NET_WM_PID", tc.netPID)
+			if got := fmt.Sprint(xpropPID(t, win)); got != tc.netPID {
+				t.Fatalf("xprop reads _NET_WM_PID %s after setting it to %s", got, tc.netPID)
+			}
+			d := openX11Desktop(t)
+			focus := d.Focus()
+			runTool(t, "xdotool", "windowactivate", "--sync", fmt.Sprint(win))
+			f := nextFocus(t, focus)
+			for f.Window != win {
+				f = nextFocus(t, focus)
+			}
+			// The xterm's own pid is the oracle: the X server took it from
+			// the xterm's socket when it connected.
+			if f.PID != cmd.Process.Pid {
+				t.Errorf("pid %d, want the xterm's %d rather than its _NET_WM_PID %s", f.PID, cmd.Process.Pid, tc.netPID)
+			}
+		})
 	}
 }

@@ -36,13 +36,13 @@ jobs:
         shell: bash
     steps:
       # Actions are pinned to commit SHAs; tags can be moved. Dependabot bumps them.
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # A PR is checked out as its merge commit; depth 2 brings its first
           # parent, the base, for the oracle guard's diff.
           fetch-depth: 2
 
-      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: go.mod
           # There is no go.sum (stdlib only), so key the build cache on go.mod.
@@ -181,6 +181,23 @@ jobs:
           done
           exit "$fail"
 
+      - name: Third-party notices
+        # release.yml packs each binary with the THIRD_PARTY_NOTICES.txt that
+        # tools/release notices writes from the modules it links
+        # (docs/spec/update-manifest.md). Writing them for all fourteen
+        # binaries above, the server's included, makes a module whose
+        # license files can't be found fail the PR that adds it, not a tag.
+        run: |
+          tool="$RUNNER_TEMP/release-tool"
+          go build -o "$tool" ./tools/release
+          for bin in "$RUNNER_TEMP"/dist/*/*; do
+            target=${bin%/*}
+            target=${target##*/}
+            name=${bin##*/}
+            mkdir -p "$RUNNER_TEMP/notices/$target"
+            "$tool" notices -bin "$bin" -out "$RUNNER_TEMP/notices/$target/${name%.exe}.txt"
+          done
+
       # The checks below run even when an earlier step failed, so one run
       # reports every problem.
 
@@ -189,14 +206,53 @@ jobs:
         # platform code lands before the agent calls it. go vet type-checks a
         # package and its tests for one GOOS/GOARCH, so this compiles
         # internal/platform for all seven targets with CGO_ENABLED=0, such as
-        # internal/platform/darwin for darwin/amd64 and darwin/arm64 (WP-OS3).
+        # internal/platform/darwin for darwin/amd64 and darwin/arm64 (WP-OS3),
+        # and the device keystore, which picks its store by OS (WP-OS7). The
+        # keystore's desktop tests build with -tags desktop on Linux alone.
         # The Windows and macOS tests themselves run in platform.yml.
         if: ${{ !cancelled() }}
         run: |
           for target in windows/amd64 windows/386 windows/arm64 darwin/amd64 darwin/arm64 linux/amd64 linux/arm64; do
-            echo "go vet ./internal/platform/... for $target"
-            GOOS=${target%/*} GOARCH=${target#*/} go vet ./internal/platform/...
+            echo "go vet ./internal/platform/... ./internal/agent/keys/... for $target"
+            GOOS=${target%/*} GOARCH=${target#*/} go vet ./internal/platform/... ./internal/agent/keys/...
           done
+          echo "go vet -tags desktop ./internal/agent/keys/... for linux/amd64"
+          GOOS=linux GOARCH=amd64 go vet -tags desktop ./internal/agent/keys/...
+
+      - name: HCA sign-in against an independent OIDC server
+        if: ${{ !cancelled() }}
+        # WP-SV2's oracle: pairtimed's Hack Club Auth sign-in, end to end
+        # against navikt/mock-oauth2-server (MIT), an OIDC server nobody on
+        # this project wrote, pinned by digest. Its config gives each client
+        # id the claims one case of TestMockOAuth2Server needs. The test
+        # skips without PAIRTIME_TEST_OIDC_URL, so this step fails unless it
+        # ran and passed.
+        env:
+          PAIRTIME_TEST_OIDC_URL: http://localhost:8080
+          # 6.1.4, 2026-10-28.
+          IMAGE: ghcr.io/navikt/mock-oauth2-server:6.1.4@sha256:647dd8c78a54f0e6fcd58d79c884e612f8f998a0662276f3e1db22e464a50192
+        run: |
+          docker run -d --name oidc -p 8080:8080 \
+            -e JSON_CONFIG_PATH=/config/mock-oauth2-server.json \
+            -v "$PWD/internal/server/auth/testdata:/config:ro" \
+            "$IMAGE" >/dev/null
+          for _ in $(seq 1 60); do
+            if curl -fsS http://localhost:8080/isalive >/dev/null 2>&1; then break; fi
+            sleep 1
+          done
+          set +e
+          out=$(go test -count=1 -v -run '^TestMockOAuth2Server$' ./internal/server/auth 2>&1)
+          code=$?
+          set -e
+          grep -E -- '--- (PASS|FAIL|SKIP)' <<<"$out" || true
+          if [ "$code" -ne 0 ] || ! grep -q -- '--- PASS: TestMockOAuth2Server ' <<<"$out" || grep -q -- '--- SKIP' <<<"$out"; then
+            echo "$out"
+            echo "::group::mock-oauth2-server log"
+            docker logs oidc 2>&1 | tail -n 200
+            echo "::endgroup::"
+            echo "::error::TestMockOAuth2Server didn't run and pass against mock-oauth2-server"
+            exit 1
+          fi
 
       - name: Module licenses
         if: ${{ !cancelled() }}

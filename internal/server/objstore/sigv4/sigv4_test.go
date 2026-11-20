@@ -492,7 +492,8 @@ func TestVerify(t *testing.T) {
 }
 
 func TestCredentialsNeverPrintSecrets(t *testing.T) {
-	c := testSigner().Credentials
+	s := testSigner()
+	c := s.Credentials
 	var logged bytes.Buffer
 	slog.New(slog.NewTextHandler(&logged, nil)).Info("signing", "creds", c)
 	outputs := []struct{ name, text string }{
@@ -501,6 +502,11 @@ func TestCredentialsNeverPrintSecrets(t *testing.T) {
 		{name: "%#v prints no secret", text: fmt.Sprintf("%#v", c)},
 		{name: "%s of a pointer prints no secret", text: fmt.Sprintf("%s", &c)},
 		{name: "slog prints no secret", text: logged.String()},
+		// Credentials is an exported field of Signer, so fmt reaches its
+		// String; objstore's TestClientNeverPrintsSecrets covers a Signer
+		// held in an unexported field, where it can't.
+		{name: "%+v of a *Signer prints no secret", text: fmt.Sprintf("%+v", s)},
+		{name: "%#v of a Signer prints no secret", text: fmt.Sprintf("%#v", *s)},
 	}
 	for _, o := range outputs {
 		t.Run(o.name, func(t *testing.T) {

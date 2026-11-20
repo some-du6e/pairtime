@@ -78,7 +78,9 @@ export function check(value: unknown, schema: Schema, root: Schema = schema, at 
 			}
 		}
 		for (const [name, v] of Object.entries(value)) {
-			const sub = properties[name];
+			// Own properties only: properties is a plain object, so
+			// properties["constructor"] would find Object.prototype's.
+			const sub = Object.hasOwn(properties, name) ? properties[name] : undefined;
 			if (sub !== undefined) {
 				errors.push(...check(v, sub, root, `${at}.${name}`));
 			} else if (schema.additionalProperties === false) {

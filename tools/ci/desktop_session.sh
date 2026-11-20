@@ -63,10 +63,17 @@ xterm -class PairtimeSmoke -e sleep 600 &
 smoke=$!
 pids="$pids $smoke"
 wid=$(timeout 30 xdotool search --sync --limit 1 --class PairtimeSmoke)
-timeout 30 xdotool windowactivate --sync "$wid"
-active=$(xdotool getactivewindow)
-if [ "$active" != "$wid" ]; then
-	echo "::error::xdotool activated window $wid but the active window is $active"
+# openbox can announce itself before it manages the new window or sets
+# _NET_ACTIVE_WINDOW on the root. Then windowactivate --sync returns early
+# and getactivewindow fails ("XGetWindowProperty[_NET_ACTIVE_WINDOW]
+# failed", seen on a hosted runner on 2026-11-20). So ask again until the
+# window manager reports the window as active.
+smoke_active() {
+	xdotool windowactivate "$wid" || true
+	[ "$(xdotool getactivewindow)" = "$wid" ]
+}
+if ! wait_for 30 smoke_active; then
+	echo "::error::xdotool activated window $wid but the active window is $(xdotool getactivewindow 2>&1 || true)"
 	exit 1
 fi
 kill "$smoke"

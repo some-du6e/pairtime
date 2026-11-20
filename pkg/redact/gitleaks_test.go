@@ -216,6 +216,7 @@ func TestSecretsInProse(t *testing.T) {
 	anthropic := fakeKey("sk-ant-"+"api03-", "aB3_x9Kq-Z", 93, "AA")
 	ghp := fakeKey("gh"+"p_", "Zx81Qw4LmN", 36, "")
 	stripe := fakeKey("sk_"+"live_", "Qw81Zx4LmN", 24, "")
+	hexKey := "a1b2c3d4e5f6" + "0718293a4b5c6d7e8f90"
 	tests := []struct {
 		name string
 		text string
@@ -228,6 +229,19 @@ func TestSecretsInProse(t *testing.T) {
 		{"a key in bold", "**" + anthropic + "**", anthropic, "anthropic-api-key"},
 		{"a GitHub token mid-sentence", "the token " + ghp + " stopped working", ghp, "github-pat"},
 		{"a key in a JSON string with an escaped newline", `{"text": "key ` + stripe + `\nthanks"}`, stripe, "stripe-access-token"},
+		{"a key on a prompt's last line isn't hidden by an allowlisted line before it",
+			"RUN --mount=type=secret,id=npmrc npm ci\nENV API_TOKEN=" + hexKey, hexKey, "generic-api-key"},
+		{"a key in smart quotes", "my key is “" + stripe + "”", stripe, "stripe-access-token"},
+		{"a key before a no-break space", stripe + "\xc2\xa0is mine", stripe, "stripe-access-token"},
+		{"a key before an ellipsis", "try " + stripe + "… it fails", stripe, "stripe-access-token"},
+		{"a key before a CJK full stop", "我的密钥是" + stripe + "。", stripe, "stripe-access-token"},
+		{"a key between Chinese words with no space", "密钥是" + stripe + "请保密", stripe, "stripe-access-token"},
+		{"a key before a fullwidth comma", stripe + "，谢谢", stripe, "stripe-access-token"},
+		{"a key before a Devanagari danda", "मेरी कुंजी " + stripe + "।", stripe, "stripe-access-token"},
+		{"a key in single smart quotes", "it's ‘" + stripe + "’", stripe, "stripe-access-token"},
+		{"a key before a narrow no-break space", stripe + "\xe2\x80\xafis mine", stripe, "stripe-access-token"},
+		{"a key before a thin space, one of the spaces from U+2000 to U+200A", stripe + "\xe2\x80\x89is mine", stripe, "stripe-access-token"},
+		{"a key before an ideographic space", stripe + "\xe3\x80\x80是我的", stripe, "stripe-access-token"},
 	}
 	r := mustNew(t, Known{})
 	for _, tt := range tests {
@@ -240,6 +254,47 @@ func TestSecretsInProse(t *testing.T) {
 			}
 			if out := Render(tt.text, spans); strings.Contains(out, tt.key) {
 				t.Errorf("Render = %q, still holds the key", out)
+			}
+		})
+	}
+}
+
+// TestSecretsInJSON covers keys in raw JSON captures, where a quoted value
+// is written \"...\" and a line break \n, so the byte after a key is a
+// backslash and the byte before one that starts a line is an n.
+func TestSecretsInJSON(t *testing.T) {
+	stripe := fakeKey("sk_"+"live_", "Qw81Zx4LmN", 24, "")
+	hexKey := "a1b2c3d4e5f6" + "0718293a4b5c6d7e8f90"
+	tests := []struct {
+		name string
+		text string
+		key  string
+		rule string
+	}{
+		{"a key quoted inside a JSON string", `{"input":{"content":"STRIPE_KEY=\"` + stripe + `\"\n"}}`, stripe, "stripe-access-token"},
+		{"a key at the start of an embedded line", `{"text":"my key:\n` + stripe + `"}`, stripe, "stripe-access-token"},
+		{"a key that ends an embedded sentence before the closing quote", `{"text":"it is ` + stripe + `.\""}`, stripe, "stripe-access-token"},
+		{"a key that ends an embedded sentence before a line break", `{"text":"` + stripe + `.\nthanks"}`, stripe, "stripe-access-token"},
+		{"an allowlisted embedded line doesn't hide a key on the next one",
+			`{"content":"RUN --mount=type=secret,id=npmrc npm ci\nENV API_TOKEN=` + hexKey + `\n"}`, hexKey, "generic-api-key"},
+		{"an allowlisted embedded line doesn't hide a key on the last one",
+			`{"content":"RUN --mount=type=secret,id=npmrc npm ci\nENV API_TOKEN=` + hexKey + `"}`, hexKey, "generic-api-key"},
+	}
+	r := mustNew(t, Known{})
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			start := strings.Index(tt.text, tt.key)
+			want := Span{Start: start, End: start + len(tt.key), Type: TypeSecret, Rule: tt.rule}
+			spans := r.Find(tt.text)
+			if !slices.Contains(spans, want) {
+				t.Errorf("Find = %v, want it to contain %v", spans, want)
+			}
+			out := Render(tt.text, spans)
+			if strings.Contains(out, tt.key) {
+				t.Errorf("Render = %q, still holds the key", out)
+			}
+			if !json.Valid([]byte(out)) {
+				t.Errorf("Render = %q, which isn't JSON any more", out)
 			}
 		})
 	}
@@ -258,6 +313,16 @@ func TestProseView(t *testing.T) {
 		{"punctuation before a line break goes", "abc,\ndef", "abc \ndef", true},
 		{"bold markers after a token go and before it stay", "**abc** x", "**abc   x", true},
 		{"text without punctuation comes back unchanged", "plain words", "plain words", false},
+		{"punctuation before a quote goes", `"key abc."`, `"key abc "`, true},
+		{"punctuation before a backslash goes, as at the end of a JSON string", `key abc.\"`, `key abc \"`, true},
+		{"punctuation before a semicolon goes", "abc.;", "abc ;", true},
+		{"smart quotes become spaces, every byte of them", "“abc”", "   abc   ", true},
+		{"an ellipsis becomes spaces", "abc… x", "abc    x", true},
+		{"a CJK full stop becomes spaces", "abc。", "abc   ", true},
+		{"a Devanagari danda becomes spaces", "abc।", "abc   ", true},
+		{"a no-break space becomes plain spaces", "abc\xc2\xa0x", "abc  x", true},
+		{"Chinese text right after a token becomes spaces", "abc请", "abc   ", true},
+		{"punctuation before a no-break space goes", "abc.\xc2\xa0x", "abc   x", true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -300,7 +365,7 @@ func TestGitleaksLine(t *testing.T) {
 		{"one line is the whole text", "a=secret", 2, 8, "a=secret"},
 		{"a later line starts at the line break before it", "x\na=secret\ny", 4, 10, "\na=secret"},
 		{"the first line has no break before it", "a=secret\ny", 2, 8, "a=secret"},
-		{"the last line without a break runs to the end", "x\na=secret", 4, 10, "x\na=secret"},
+		{"the last line without a break starts at the break before it, like any other line", "x\na=secret", 4, 10, "\na=secret"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

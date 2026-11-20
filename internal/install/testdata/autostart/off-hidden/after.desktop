@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=pairtime
+Comment=Counts the time you spend building with AI
+Exec=/home/teen/.local/bin/pairtime agent
+TryExec=/home/teen/.local/bin/pairtime
+Terminal=false
+Hidden=true

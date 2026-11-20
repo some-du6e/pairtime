@@ -4,11 +4,19 @@
 # specified in docs/spec/update-manifest.md.
 #
 # - A pushed v* tag builds the seven targets, signs manifest.json with the
-#   RELEASE_SIGNING_KEY secret and publishes a GitHub release. A tag with a
-#   prerelease part, such as v0.1.0-alpha.1, publishes a prerelease.
+#   RELEASE_SIGNING_KEY secret and publishes a GitHub release, if main
+#   contains the tagged commit and the release environment's reviewer
+#   approves the run. A tag with a prerelease part, such as v0.1.0-alpha.1,
+#   publishes a prerelease.
 # - workflow_dispatch, and a PR that changes the release code, build a
 #   snapshot signed with a throwaway key and keep it as a workflow
-#   artifact. They never publish and never read the secret.
+#   artifact. They never publish, and the release environment that holds
+#   the secret never admits them.
+#
+# npm and Vite run only in the dashboard job, on a runner of their own.
+# The build job, which compiles, hashes and signs the binaries, runs no
+# package code from npm: it takes the built dashboard as an artifact and
+# checks it before embedding it.
 #
 # The server image (WP-OP1), code signing (DESIGN 9.7 WP 4.10) and the VSIX
 # packages (WP 4.11) join this workflow later.
@@ -43,8 +51,53 @@ env:
   TARGETS: windows/amd64 windows/386 windows/arm64 darwin/amd64 darwin/arm64 linux/amd64 linux/arm64
 
 jobs:
+  dashboard:
+    name: build the local dashboard
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        shell: bash
+    steps:
+      # Actions are pinned to commit SHAs; tags can be moved. Dependabot bumps them.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          # No cache, as for Go: npm ci installs from the lockfile alone.
+          package-manager-cache: false
+
+      - name: The local dashboard
+        # internal/webui embeds whatever dist/ holds, which in a checkout is
+        # a placeholder; releases embed the real dashboard, built from web/
+        # (DESIGN 3.12; docs/PLAN.md, WP-UI0). Only the agent's UI: the server
+        # UI and the component gallery aren't part of the client. The API
+        # types are generated first, as web.yml does before its build, so a
+        # release builds the way web.yml tested.
+        working-directory: web
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          npm run gen
+          ./node_modules/.bin/vite build --mode agent
+          grep -q '<meta name="pairtime-ui" content="local"' ../internal/webui/dist/index.html
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dashboard
+          path: internal/webui/dist
+          if-no-files-found: error
+          # Dotfiles too, so dist/ reaches the build job as Vite wrote it.
+          include-hidden-files: true
+          retention-days: 7
+          # A re-run of a failed attempt uploads under the same name.
+          overwrite: true
+
   build:
     name: build, archive, sign with a throwaway key, check
+    needs: dashboard
     runs-on: ubuntu-latest
     timeout-minutes: 15
     defaults:
@@ -52,16 +105,29 @@ jobs:
         shell: bash
     steps:
       # Actions are pinned to commit SHAs; tags can be moved. Dependabot bumps them.
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
-      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: go.mod
           # No build cache: a release builds from source alone, so a
           # poisoned cache entry can't end up in it.
           cache: false
+
+      - name: The signing key isn't a repository secret
+        # This job deploys to no environment, so here the name can only
+        # find a repository or organization secret, which every workflow
+        # run on every branch can read. The key belongs to the release
+        # environment alone (docs/spec/update-manifest.md, Making the key).
+        env:
+          OUTSIDE_THE_ENVIRONMENT: ${{ secrets.RELEASE_SIGNING_KEY }}
+        run: |
+          if [ -n "$OUTSIDE_THE_ENVIRONMENT" ]; then
+            echo "::error::RELEASE_SIGNING_KEY is a repository or organization secret, which any workflow run on any branch can read. Delete it with gh secret delete RELEASE_SIGNING_KEY --repo some-du6e/pairtime, keep the key only in the release environment, and replace the key if a workflow run you don't trust could have read it (docs/spec/update-manifest.md)."
+            exit 1
+          fi
 
       - name: Version
         env:
@@ -72,16 +138,19 @@ jobs:
         run: |
           tool=$RUNNER_TEMP/release-tool
           go build -o "$tool" ./tools/release
+          # The oldest client version a tag supports. It's read and checked
+          # on every run, so the PR that raises it gets checked too.
+          filemin=$("$tool" min-version)
+          echo "tools/release/minimum-version.txt holds $filemin"
           if [ "$EVENT" = push ] && [ "$REF_TYPE" = tag ]; then
             version=$REF_NAME
-            # The oldest client version this release still supports.
-            min=$(grep -v '^#' tools/release/minimum-version.txt | tr -d '[:space:]')
+            min=$filemin
           else
             # A snapshot is never published, so it supports only itself.
             version=v0.0.0-snapshot.$RUN_NUMBER
             min=$version
           fi
-          # Refuses a tag that isn't a pairtime version before anything is built.
+          # Refuses a tag that isn't a pairtime version before any binary is built.
           "$tool" check -version "$version" -min-version "$min"
           {
             echo "TOOL=$tool"
@@ -92,22 +161,22 @@ jobs:
             echo "STAGE=$RUNNER_TEMP/stage"
           } >> "$GITHUB_ENV"
 
-      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
-        with:
-          node-version: 24
-          # No cache, as for Go: npm ci installs from the lockfile alone.
-          package-manager-cache: false
+      - name: Make room for the dashboard
+        # The placeholder goes, so dist/ holds exactly the files the
+        # dashboard job built.
+        run: rm -r internal/webui/dist
 
-      - name: The local dashboard
-        # internal/webui embeds whatever dist/ holds, which in a checkout is
-        # a placeholder; releases embed the real dashboard, built from web/
-        # (DESIGN 3.12; docs/PLAN.md, WP-UI0). Only the agent's UI: the server
-        # UI and the component gallery aren't part of the client.
-        working-directory: web
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: dashboard
+          path: internal/webui/dist
+
+      - name: Check the dashboard
+        # internal/webui's tests, on exactly the files go build embeds next:
+        # the CSP, and nothing loaded from another host or missing (TestFS).
         run: |
-          npm ci --ignore-scripts --no-audit --no-fund
-          ./node_modules/.bin/vite build --mode agent
-          grep -q '<meta name="pairtime-ui" content="local"' ../internal/webui/dist/index.html
+          grep -q '<meta name="pairtime-ui" content="local"' internal/webui/dist/index.html
+          go test ./internal/webui/
 
       - name: Build
         run: |
@@ -154,6 +223,22 @@ jobs:
               ;;
           esac
           exit "$fail"
+
+      - name: Third-party notices
+        # Each archive carries THIRD_PARTY_NOTICES.txt: the license and
+        # notice files of Go and of every module its binary links, from the
+        # module cache, and of the embedded material
+        # tools/release/extra-notices.txt lists. dist refuses a target
+        # without one (docs/spec/update-manifest.md).
+        run: |
+          for target in $TARGETS; do
+            goos=${target%/*}
+            goarch=${target#*/}
+            ext=""
+            if [ "$goos" = windows ]; then ext=".exe"; fi
+            dir="$STAGE/bin/${goos}_${goarch}"
+            "$TOOL" notices -bin "$dir/pairtime$ext" -out "$dir/THIRD_PARTY_NOTICES.txt"
+          done
 
       - name: Archives, checksums.txt and the manifest payload
         env:
@@ -239,8 +324,13 @@ jobs:
     if: github.event_name == 'push' && github.ref_type == 'tag'
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    # RELEASE_SIGNING_KEY belongs in this environment, whose deployment rule
-    # admits v* tags only, so no branch or PR run can read it.
+    # RELEASE_SIGNING_KEY lives only in this environment. Its deployment
+    # policy admits v* tags alone, so no branch or PR run can read it, and
+    # its required reviewer, Karim, approves each run. GitHub creates a
+    # missing environment with neither, and the spec's Making the key sets
+    # both up. They hold only against tools that can't act as Karim: an
+    # admin may push a v* tag on any commit, and a token of his can approve
+    # (docs/spec/update-manifest.md, What gets signed).
     environment: release
     permissions:
       # To create the release and upload its files.
@@ -251,14 +341,33 @@ jobs:
     env:
       VERSION: ${{ github.ref_name }}
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          # All of history, so the next step can tell whether main
+          # contains the tagged commit.
+          fetch-depth: 0
 
-      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: go.mod
           cache: false
+
+      - name: Only a commit on main is signed
+        # A v* tag pushed by mistake on a commit main doesn't contain, such
+        # as one on a PR branch or in an agent's worktree, stops here before
+        # the key is read. It catches mistakes only: a tag runs the
+        # release.yml of the commit it names, so a commit whose release.yml
+        # leaves this step out skips it. Who may push v* tags and approve
+        # this environment decides the rest (docs/spec/update-manifest.md,
+        # What gets signed).
+        run: |
+          git fetch --quiet --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" refs/remotes/origin/main; then
+            echo "::error::$VERSION tags $GITHUB_SHA, which main doesn't contain, so it won't be signed or published. Merge the change first, then tag a commit on main."
+            exit 1
+          fi
+          echo "main contains $GITHUB_SHA"
 
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:

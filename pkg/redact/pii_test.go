@@ -370,6 +370,9 @@ func TestChecksumNearMisses(t *testing.T) {
 		{"Amex test card in 4-6-5 groups is redacted", "amex 3782 822463 10005",
 			[]Span{{Start: 5, End: 22, Type: TypeCard}}},
 		{"a 13-digit millisecond timestamp is never a card", "at 1795046500000 ms", []Span{}},
+		{"Mastercard 2-series test card with a valid Luhn digit is redacted", "my card 2223 0031 2200 3222 got declined",
+			[]Span{{Start: 8, End: 27, Type: TypeCard}}},
+		{"the same 2-series card with the last digit off by one is kept", "my card 2223 0031 2200 3223 got declined", []Span{}},
 		{"German IBAN from the registry is redacted", "pay DE89 3704 0044 0532 0130 00 now",
 			[]Span{{Start: 4, End: 31, Type: TypeIBAN}}},
 		{"the same IBAN with a wrong check digit is kept", "pay DE88 3704 0044 0532 0130 00 now", []Span{}},
@@ -393,6 +396,10 @@ func TestChecksumNearMisses(t *testing.T) {
 			[]Span{{Start: 5, End: 34, Type: TypeEmail}}},
 		{"retina image name is not an email", "use logo@2x.png here", []Span{}},
 		{"npm version spec is not an email", "install react@18.3.1", []Span{}},
+		{"an email address after an escaped line break starts after the escape", `hi\nbob@westfield.edu`,
+			[]Span{{Start: 4, End: 21, Type: TypeEmail}}},
+		{"an email address after a unicode escape starts after the escape", "\x5cu003cbob@westfield.edu\x5cu003e",
+			[]Span{{Start: 6, End: 23, Type: TypeEmail}}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

@@ -15,4 +15,6 @@ func pipeName(string) (string, error) { return "", nil }
 
 func listenPipe(string) (net.Listener, error) { return nil, errNoPipe }
 
-func dialPipe(context.Context, string, identity) (net.Conn, error) { return nil, errNoPipe }
+func dialPipe(context.Context, Endpoint, identity) (net.Conn, error) { return nil, errNoPipe }
+
+func writePipeNote(Endpoint) error { return errNoPipe }
