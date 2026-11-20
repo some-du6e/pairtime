@@ -59,7 +59,11 @@
 	</div>
 
 	<div data-testid="profile-ask">
-		<ProfileChoice mode="ask" onchoose={(choice) => (askMode = choice)} />
+		<ProfileChoice mode="ask" onchoose={(choice) => (askMode = choice)}>
+			{#snippet preview()}
+				<p><strong>@sample</strong>: 4 build days this week, Python and Svelte, 2 public projects.</p>
+			{/snippet}
+		</ProfileChoice>
 		<p>Choice: <output data-testid="profile-ask-choice">{askMode ?? 'none'}</output></p>
 	</div>
 </AppShell>

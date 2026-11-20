@@ -56,8 +56,10 @@ function consentCard(declining?: string): string {
 	}).body;
 }
 
+const publicProfile = createRawSnippet(() => ({ render: () => '<p>@sample: 4 build days this week.</p>' }));
+
 function profileChoice(mode: ProfileMode): () => string {
-	return () => render(ProfileChoice, { props: { mode, onchoose: () => {} } }).body;
+	return () => render(ProfileChoice, { props: { mode, onchoose: () => {}, preview: publicProfile } }).body;
 }
 
 describe('ConsentCard (DESIGN 8.4)', () => {
@@ -163,6 +165,24 @@ describe('ProfileChoice (DESIGN 8.3)', () => {
 			html: profileChoice('public'),
 			check: (html) => {
 				expect(html).toContain('Nothing is public until you choose.');
+			},
+		},
+		{
+			name: 'in public mode the preview follows the sentence that introduces it',
+			html: profileChoice('public'),
+			check: (html) => {
+				const intro = html.indexOf('anyone can see this:</p>');
+				expect(intro).toBeGreaterThan(-1);
+				expect(html.indexOf('@sample: 4 build days this week.')).toBeGreaterThan(intro);
+			},
+		},
+		{
+			name: 'in ask mode the preview follows the sentence that introduces it',
+			html: profileChoice('ask'),
+			check: (html) => {
+				const intro = html.indexOf('A public profile shows anyone this:</p>');
+				expect(intro).toBeGreaterThan(-1);
+				expect(html.indexOf('@sample: 4 build days this week.')).toBeGreaterThan(intro);
 			},
 		},
 	];
