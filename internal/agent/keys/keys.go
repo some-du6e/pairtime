@@ -102,7 +102,8 @@ type Options struct {
 	// this package use that to stay off the OS store. The key file is
 	// always the last store tried.
 	Stores []Store
-	// Timeout bounds each call to a store. Zero means DefaultTimeout.
+	// Timeout bounds each call to a store that may wait for the user,
+	// which is every store but the key file. Zero means DefaultTimeout.
 	Timeout time.Duration
 }
 

@@ -157,13 +157,25 @@ func (f fileStore) Delete(name string) error {
 	return err
 }
 
-// Calls to stores. Each runs on its own goroutine under the keystore's
-// deadline. A call still running at the deadline is left to finish in the
-// background: Go can't stop it, and a keyring prompt may yet be answered.
-// What it returns then is thrown away, and a secret it read is zeroed.
+// Calls to stores. A store that may wait for the user, as a locked keyring
+// does, is called on its own goroutine under the keystore's deadline. A
+// call still running at the deadline is left to finish in the background:
+// Go can't stop it, and a keyring prompt may yet be answered. What it
+// returns then is thrown away, and a secret it read is zeroed.
+//
+// The key file never waits for anyone, so it is called directly. A
+// deadline there would only turn a slow disk into a failed first run, with
+// the write still going on behind it.
 
-// get calls s.Get under the deadline.
+// bounded reports whether calls to s run under the deadline: calls to
+// every store but the key file.
+func bounded(s Store) bool { return s.Kind() != KindFile }
+
+// get calls s.Get, under the deadline when s is bounded.
 func (o *options) get(s Store, name string) ([]byte, error) {
+	if !bounded(s) {
+		return s.Get(name)
+	}
 	type result struct {
 		b   []byte
 		err error
@@ -188,9 +200,13 @@ func (o *options) get(s Store, name string) ([]byte, error) {
 	}
 }
 
-// set calls s.Set under the deadline. The call gets its own copy of
-// secret, because it may outlive set, and the caller zeroes its own.
+// set calls s.Set, under the deadline when s is bounded. A bounded call
+// gets its own copy of secret, because it may outlive set, and the caller
+// zeroes its own.
 func (o *options) set(s Store, name string, secret []byte) error {
+	if !bounded(s) {
+		return s.Set(name, secret)
+	}
 	cp := bytes.Clone(secret)
 	return o.await(s, func() error {
 		defer clear(cp)
@@ -198,12 +214,17 @@ func (o *options) set(s Store, name string, secret []byte) error {
 	})
 }
 
-// del calls s.Delete under the deadline.
+// del calls s.Delete, under the deadline when s is bounded.
 func (o *options) del(s Store, name string) error {
 	return o.await(s, func() error { return s.Delete(name) })
 }
 
+// await runs call, on its own goroutine under the deadline when s is
+// bounded.
 func (o *options) await(s Store, call func() error) error {
+	if !bounded(s) {
+		return call()
+	}
 	done := make(chan error, 1)
 	go func() { done <- call() }()
 	t := time.NewTimer(o.timeout)

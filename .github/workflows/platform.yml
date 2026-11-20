@@ -129,5 +129,8 @@ jobs:
           if [ -z "$DIRS" ]; then
             bash tools/ci/desktop_session.sh true
           else
-            bash tools/ci/desktop_session.sh bash tools/ci/test_existing.sh -tags desktop -- $DIRS
+            # -p 1 runs the packages' test binaries one at a time. Tests in
+            # several of them start fakesecret, which owns
+            # org.freedesktop.secrets on the one private bus.
+            bash tools/ci/desktop_session.sh bash tools/ci/test_existing.sh -p 1 -tags desktop -- $DIRS
           fi

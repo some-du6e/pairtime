@@ -13,8 +13,9 @@
 //
 // The tests that use it are *_desktop_test.go files, which platform.yml
 // runs inside a private bus from dbus-run-session (AGENTS.md), so it never
-// meets a real keyring. Start refuses to run when another process owns the
-// name.
+// meets a real keyring. Start never takes the name from another owner: it
+// waits for the owner to give it up, as another test binary's fake does
+// when its test ends, and fails when that takes longer than NameWait.
 package fakesecret
 
 import (
@@ -26,9 +27,17 @@ import (
 	"slices"
 	"strconv"
 	"sync"
+	"time"
 
 	"github.com/godbus/dbus/v5"
 )
+
+// NameWait is how long Start waits for another owner of
+// org.freedesktop.secrets to give it up. go test runs packages' test
+// binaries side by side unless told -p 1, and each may start a fake on the
+// same bus, so a fake can find another holding the name for the length of
+// one test.
+const NameWait = 30 * time.Second
 
 const (
 	busName         = "org.freedesktop.secrets"
@@ -89,7 +98,8 @@ type Service struct {
 }
 
 // Start connects to the bus in DBUS_SESSION_BUS_ADDRESS, takes the name
-// org.freedesktop.secrets and serves the API until Close.
+// org.freedesktop.secrets, waiting up to NameWait while another connection
+// owns it, and serves the API until Close.
 func Start() (*Service, error) {
 	addr := os.Getenv("DBUS_SESSION_BUS_ADDRESS")
 	if addr == "" {
@@ -120,16 +130,24 @@ func Start() (*Service, error) {
 			return nil, fmt.Errorf("fakesecret: exporting %s: %w", e.iface, err)
 		}
 	}
-	reply, err := conn.RequestName(busName, dbus.NameFlagDoNotQueue)
-	if err != nil {
-		conn.Close()
-		return nil, fmt.Errorf("fakesecret: requesting %s: %w", busName, err)
+	// Without NameFlagReplaceExisting, a request never takes the name from
+	// its owner, so a real keyring keeps it and Start fails.
+	deadline := time.Now().Add(NameWait)
+	for {
+		reply, err := conn.RequestName(busName, dbus.NameFlagDoNotQueue)
+		if err != nil {
+			conn.Close()
+			return nil, fmt.Errorf("fakesecret: requesting %s: %w", busName, err)
+		}
+		if reply == dbus.RequestNameReplyPrimaryOwner {
+			return s, nil
+		}
+		if time.Now().After(deadline) {
+			conn.Close()
+			return nil, fmt.Errorf("fakesecret: another process has owned %s on this bus for %v", busName, NameWait)
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
-	if reply != dbus.RequestNameReplyPrimaryOwner {
-		conn.Close()
-		return nil, fmt.Errorf("fakesecret: another process owns %s on this bus", busName)
-	}
-	return s, nil
 }
 
 // Close gives up the name and disconnects. Releasing the name first, and

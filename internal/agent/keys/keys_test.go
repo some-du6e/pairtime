@@ -101,6 +101,19 @@ func TestOpen(t *testing.T) {
 				t.Errorf("status %+v, want the key file because the Secret Service didn't answer", st)
 			}
 		}},
+		{"the key file isn't held to the store deadline, so a slow disk can't fail a first run", func(t *testing.T, dir string) {
+			// A nanosecond is less than any write takes, so a key file
+			// under the deadline would fail here.
+			opts := Options{Dir: dir, Stores: []Store{}, Timeout: time.Nanosecond}
+			first := mustOpen(t, opts)
+			if st := first.Status(); st.Store != KindFile {
+				t.Fatalf("status %+v, want the key file", st)
+			}
+			again := mustOpen(t, opts)
+			if again.Created() || !sameKeys(again.Keys(), first.Keys()) {
+				t.Error("the second Open didn't read the key file back")
+			}
+		}},
 		{"with no OS store the key goes in the key file, and the warning says there was none", func(t *testing.T, dir string) {
 			ks := mustOpen(t, Options{Dir: dir, Stores: []Store{}})
 			st := ks.Status()
