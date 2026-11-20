@@ -48,9 +48,18 @@ func TestLoad(t *testing.T) {
 		{name: "an unknown placeholder is refused", old: `"kept": "{days}"`, new: `"kept": "{days} or {hours}"`, wantErr: "kept has {hours}"},
 		{name: "days must appear in kept as {days}", old: `"kept": "{days}"`, new: `"kept": "a month"`, wantErr: "kept doesn't say {days}"},
 		{name: "{days} needs days", old: `"days": 30,`, new: ``, wantErr: "days isn't set"},
-		{name: "a job needs days", old: `"days": 30,`, new: ``, wantErr: "a job needs days"},
+		{name: "a job by days needs days", old: `"days": 30,`, new: ``, wantErr: "a job by days needs the entry's days"},
+		{name: "a job by the spot-check window needs {window} in kept", old: `"time_column": "seen_at_ms"`, new: `"time_column": "seen_at_ms", "period": "window"`, wantErr: "needs kept to say {window}"},
+		{name: "an unknown period is refused", old: `"time_column": "seen_at_ms"`, new: `"time_column": "seen_at_ms", "period": "weeks"`, wantErr: `period is "weeks"`},
+		{
+			name: "an evidence entry may have jobs, since the evidence store's index rows are in the server's database",
+			data: strings.NewReplacer(
+				`"id": "server.ip_ja4", "where": "server", "data": "IPs", "kept": "{days}", "days": 30,`, `"id": "evidence.revealed", "where": "evidence", "data": "Reveals", "kept": "Until the window closes ({window})",`,
+				`"time_column": "seen_at_ms"`, `"time_column": "decided_at_ms", "period": "window"`,
+			).Replace(validDoc),
+		},
 		{name: "kept may not write a number of its own beside {days}", old: `"kept": "{days}"`, new: `"kept": "{days}, or 31 days"`, wantErr: "a number besides {days}"},
-		{name: "only server entries have jobs", old: `"id": "server.ip_ja4", "where": "server"`, new: `"id": "device.ip_ja4", "where": "device"`, wantErr: "only server entries have tables and jobs"},
+		{name: "a device entry has no jobs, since its data isn't in the server's database", old: `"id": "server.ip_ja4", "where": "server"`, new: `"id": "device.ip_ja4", "where": "device"`, wantErr: "only server and evidence entries have tables and jobs"},
 		{name: "an entry with a period can't list a table no job deletes", old: `"days": 30,`, new: `"days": 30, "tables": ["request_log"],`, wantErr: "nothing would delete table request_log"},
 		{name: "lifetime_tables is for an entry with a period", old: `"kept": "{days}", "days": 30,`, new: `"kept": "forever", "lifetime_tables": ["rollups"],`, wantErr: "lifetime_tables is for an entry with a period"},
 		{name: "a table in lifetime_tables can't also be a job's", old: `"days": 30,`, new: `"days": 30, "lifetime_tables": ["request_origins"],`, wantErr: "is in lifetime_tables, but the job deletes its rows"},
@@ -293,7 +302,12 @@ func TestJobs(t *testing.T) {
 				}
 				got = append(got, id)
 				e, _ := p.Find(j.Entry)
-				if j.MaxAge != time.Duration(e.Days)*day {
+				switch {
+				case j.WindowMonths > 0:
+					if j.WindowMonths != p.SpotCheckWindow.Months || j.MaxAge != 0 {
+						t.Errorf("%s runs by %d months and MaxAge %v, want the spot-check window's %d months alone", j.ID, j.WindowMonths, j.MaxAge, p.SpotCheckWindow.Months)
+					}
+				case j.MaxAge != time.Duration(e.Days)*day:
 					t.Errorf("%s MaxAge = %v, want the entry's %d days", j.ID, j.MaxAge, e.Days)
 				}
 				if j.Hold != nil && j.Hold.WindowMonths != p.SpotCheckWindow.Months {
@@ -332,6 +346,12 @@ func TestDeleteSQL(t *testing.T) {
 				" AND NOT EXISTS (SELECT 1 FROM submission_batches h WHERE h.device_id = t.device_id AND h.b = t.b" +
 				" AND (h.decided_at_ms IS NULL OR h.decided_at_ms > $3)) LIMIT $2)",
 			wantArgs: []any{now.Add(-180 * day).UnixMilli(), 500, time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC).UnixMilli()},
+		},
+		{
+			name:     "a job by the window deletes rows whose decision's window has closed",
+			job:      Job{ID: "evidence.revealed/evidence_index", Table: "evidence_index", Key: []string{"blob"}, TimeColumn: "decided_at_ms", WindowMonths: 12},
+			wantSQL:  "DELETE FROM evidence_index WHERE blob IN (SELECT t.blob FROM evidence_index t WHERE t.decided_at_ms <= $1 LIMIT $2)",
+			wantArgs: []any{time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC).UnixMilli(), 500},
 		},
 	}
 	for _, tt := range tests {

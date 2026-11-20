@@ -8,9 +8,12 @@
 // its retention table from a Policy (package pages), and Sweep runs the
 // jobs the same Policy describes, so the page and the jobs can't disagree.
 //
-// A server entry may bind jobs to tables. A job deletes its table's rows
-// whose time column is at least the entry's days old, except rows a hold
-// keeps. That one shape covers DESIGN 4.4's four server jobs:
+// An entry whose data is in the server's database, a server entry or the
+// evidence store's, whose index rows are there too (DESIGN 10.1), may bind
+// jobs to tables. A job deletes its table's rows whose time column is at
+// least the entry's days old, or, for a job by the window, whose time
+// column is a decision whose spot-check window has closed, except rows a
+// hold keeps. That one shape covers DESIGN 4.4's four server jobs:
 //
 //   - IP addresses and JA4 fingerprints, 30 days after they were seen.
 //   - Per-minute buckets, 180 days after their minute. Ingest keeps the
@@ -126,6 +129,15 @@ func (e Entry) HasPeriod() bool {
 	return e.Days > 0 || strings.Contains(e.Kept, "{window}")
 }
 
+// The values of JobSpec.Period.
+const (
+	// PeriodDays deletes a row once its time is the entry's days old.
+	PeriodDays = "days"
+	// PeriodWindow deletes a row once its time, a decision, is past the
+	// spot-check window (Window.Closes).
+	PeriodWindow = "window"
+)
+
 // JobSpec binds an entry to a table one of its jobs deletes from.
 type JobSpec struct {
 	// Table is the table the job deletes rows of.
@@ -135,6 +147,8 @@ type JobSpec struct {
 	// TimeColumn holds when each row's period started, in epoch
 	// milliseconds. A row whose TimeColumn is NULL never expires.
 	TimeColumn string `json:"time_column"`
+	// Period is PeriodDays, the default when empty, or PeriodWindow.
+	Period string `json:"period,omitempty"`
 	// Hold, when set, keeps the rows a submission uses.
 	Hold *HoldSpec `json:"hold,omitempty"`
 	// Awaits names the work package that creates Table. The job is off
@@ -266,8 +280,8 @@ func (p *Policy) check() error {
 			fail("%s: kept has a number besides {days}, which could drift from days", at)
 		}
 		hasTables := len(e.Tables) > 0 || len(e.LifetimeTables) > 0 || len(e.Jobs) > 0
-		if hasTables && e.Where != Server {
-			fail("%s: only server entries have tables and jobs", at)
+		if hasTables && e.Where != Server && e.Where != Evidence {
+			fail("%s: only server and evidence entries have tables and jobs, since only their data is in the server's database", at)
 		}
 		for _, t := range e.Tables {
 			if e.HasPeriod() {
@@ -284,8 +298,17 @@ func (p *Policy) check() error {
 		jobTables := make(map[string]bool)
 		for k, j := range e.Jobs {
 			jat := fmt.Sprintf("%s job %d", at, k+1)
-			if e.Days == 0 {
-				fail("%s: a job needs days", jat)
+			switch j.Period {
+			case "", PeriodDays:
+				if e.Days == 0 {
+					fail("%s: a job by days needs the entry's days", jat)
+				}
+			case PeriodWindow:
+				if !strings.Contains(e.Kept, "{window}") {
+					fail("%s: a job by the spot-check window needs kept to say {window}", jat)
+				}
+			default:
+				fail("%s: period is %q; use %q or %q", jat, j.Period, PeriodDays, PeriodWindow)
 			}
 			if jobTables[j.Table] {
 				fail("%s: another job of the entry deletes from %s", jat, j.Table)

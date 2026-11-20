@@ -119,7 +119,11 @@ func TestRetentionTable(t *testing.T) {
 					t.Errorf("%s: the notice has no row for %q", j.ID, e.Data)
 					continue
 				}
-				if want := retention.Days(int(j.MaxAge / (24 * time.Hour))); !strings.Contains(text, want) {
+				if j.WindowMonths > 0 {
+					if want := fmt.Sprintf("%d months after the decision", j.WindowMonths); !strings.Contains(text, want) {
+						t.Errorf("%s deletes %d months after the decision, but the notice says %q", j.ID, j.WindowMonths, text)
+					}
+				} else if want := retention.Days(int(j.MaxAge / (24 * time.Hour))); !strings.Contains(text, want) {
 					t.Errorf("%s deletes after %v, but the notice says %q", j.ID, j.MaxAge, text)
 				}
 				if j.Hold != nil {
