@@ -126,8 +126,14 @@ func (in *Installer) PlanInstall(items []Item) (*Plan, error) {
 			// The manifest doesn't know the target: what it holds now is
 			// what uninstall puts back, without any pairtime hooks an
 			// earlier install left there, which would run a binary that
-			// uninstall deletes.
-			base, err := undoAll(cur, cur, g.recs)
+			// uninstall deletes. An entry pairtime owns whole that an
+			// earlier pairtime wrote, with its binary somewhere else, had
+			// nothing before it, as adopt counts it.
+			before := cur
+			if claimed(g.edits, cur) {
+				before = Content{}
+			}
+			base, err := undoAll(cur, before, g.recs)
 			if err != nil {
 				return nil, fmt.Errorf("%s %w", g.target, err)
 			}

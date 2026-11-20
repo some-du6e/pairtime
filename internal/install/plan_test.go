@@ -364,6 +364,9 @@ func TestReinstallRecordsEntriesTheManifestForgot(t *testing.T) {
 		path   func(env Env) string
 		// want is what uninstall leaves at path; nil for nothing.
 		want []byte
+		// newExe is the reinstall's binary path, when it moved; "" when
+		// the reinstall finds everything as it wants it.
+		newExe string
 	}{
 		{
 			name:   "hooks an install the manifest forgot left are taken out by uninstall after a reinstall",
@@ -376,6 +379,12 @@ func TestReinstallRecordsEntriesTheManifestForgot(t *testing.T) {
 			name: "an autostart entry an install the manifest forgot left is removed by uninstall after a reinstall",
 			item: Autostart,
 			path: func(env Env) string { return filepath.Join(env.Home, ".config", "autostart", "pairtime.desktop") },
+		},
+		{
+			name:   "an autostart entry for another binary path that an install the manifest forgot left is removed by uninstall after a reinstall",
+			item:   Autostart,
+			path:   func(env Env) string { return filepath.Join(env.Home, ".config", "autostart", "pairtime.desktop") },
+			newExe: "/home/teen/bin/pairtime",
 		},
 	}
 	for _, tt := range tests {
@@ -391,15 +400,21 @@ func TestReinstallRecordsEntriesTheManifestForgot(t *testing.T) {
 			install(t, newInstaller(t), item)
 
 			// pairtime's data directory is gone: a new installer has no
-			// manifest. The reinstall has nothing to write, but records
-			// what it found.
+			// manifest. The reinstall has nothing to write, unless the
+			// binary moved, but records what it found.
+			if tt.newExe != "" {
+				env.Exe = tt.newExe
+				if item, err = tt.item(env); err != nil {
+					t.Fatal(err)
+				}
+			}
 			in := newInstaller(t)
 			p, err := in.PlanInstall([]Item{item})
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !p.Empty() {
-				t.Errorf("the reinstall plans changes:\n%s", p.Diff())
+			if p.Empty() != (tt.newExe == "") {
+				t.Errorf("the reinstall plans changes: %v, want %v:\n%s", !p.Empty(), tt.newExe != "", p.Diff())
 			}
 			if err := p.Apply(); err != nil {
 				t.Fatal(err)

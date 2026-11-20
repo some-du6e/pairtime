@@ -21,9 +21,13 @@ func TestRunValueOnThisAccount(t *testing.T) {
 	tests := []struct {
 		name   string
 		before *regValue // the value before install; nil for none
+		// earlier means before is an earlier pairtime's Run value, for
+		// another binary path, which uninstall takes away.
+		earlier bool
 	}{
-		{"a Run value pairtime adds is gone after uninstall", nil},
-		{"a Run value that was there before comes back after uninstall, with its type", &regValue{value: `"%LOCALAPPDATA%\old\pairtime.exe" agent`, typ: RegExpandSZ}},
+		{"a Run value pairtime adds is gone after uninstall", nil, false},
+		{"a Run value of the same name for another program comes back after uninstall, with its type", &regValue{value: `"%LOCALAPPDATA%\Other\other.exe" --tray`, typ: RegExpandSZ}, false},
+		{"a Run value an earlier pairtime wrote for another binary path is gone after uninstall", &regValue{value: `"%LOCALAPPDATA%\old\pairtime.exe" agent`, typ: RegExpandSZ}, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -39,7 +43,7 @@ func TestRunValueOnThisAccount(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			item := Item{ID: ItemAutostart, Edits: []Edit{ownedEdit{target: RegistryValue(RunKey, name), data: []byte(cmd), typ: RegSZ}}}
+			item := Item{ID: ItemAutostart, Edits: []Edit{ownedEdit{target: RegistryValue(RunKey, name), data: []byte(cmd), typ: RegSZ, claim: isAgentRunValue}}}
 			in := &Installer{Dir: filepath.Join(t.TempDir(), "install"), Registry: reg}
 
 			install(t, in, item)
@@ -60,9 +64,9 @@ func TestRunValueOnThisAccount(t *testing.T) {
 			switch {
 			case err != nil:
 				t.Fatal(err)
-			case tt.before == nil && ok:
+			case (tt.before == nil || tt.earlier) && ok:
 				t.Errorf("after uninstall the Run value is still there: %q", v)
-			case tt.before != nil && (!ok || v != tt.before.value || typ != tt.before.typ):
+			case tt.before != nil && !tt.earlier && (!ok || v != tt.before.value || typ != tt.before.typ):
 				t.Errorf("after uninstall the Run value is %q (type %d, there: %v), want %q (type %d)", v, typ, ok, tt.before.value, tt.before.typ)
 			}
 		})

@@ -91,13 +91,19 @@ func TestAutostartInstallAndUninstall(t *testing.T) {
 		// before is what the entry holds before install, "" for nothing.
 		before string
 		typ    uint32 // the registry type of before, on Windows
+		// earlier means before is an entry an earlier pairtime wrote, with
+		// its binary somewhere else, which uninstall takes away.
+		earlier bool
 	}{
 		{name: "a Run value pairtime adds is gone after uninstall", goos: "windows"},
-		{name: "a Run value that was there before comes back after uninstall, with its type", goos: "windows", before: `"C:\old\pairtime.exe" agent`, typ: RegExpandSZ},
+		{name: "a Run value of the same name for another program comes back after uninstall, with its type", goos: "windows", before: `"%LOCALAPPDATA%\Other\other.exe" --tray`, typ: RegExpandSZ},
+		{name: "a Run value an earlier pairtime wrote for another binary path is gone after uninstall", goos: "windows", before: `"C:\old\pairtime.exe" agent`, typ: RegExpandSZ, earlier: true},
 		{name: "a LaunchAgent pairtime adds is gone after uninstall, with the folders made for it", goos: "darwin"},
 		{name: "a LaunchAgent file that was there before comes back after uninstall", goos: "darwin", before: "<plist/>\n"},
+		{name: "a LaunchAgent an earlier pairtime wrote for another binary path is gone after uninstall", goos: "darwin", before: string(launchAgent("/opt/pairtime/bin/pairtime")), earlier: true},
 		{name: "an XDG autostart entry pairtime adds is gone after uninstall, with the folders made for it", goos: "linux"},
 		{name: "an XDG autostart entry that was there before comes back after uninstall", goos: "linux", before: "[Desktop Entry]\nHidden=true\n"},
+		{name: "an XDG autostart entry an earlier pairtime wrote for another binary path is gone after uninstall", goos: "linux", before: "[Desktop Entry]\nType=Application\nExec=/opt/pairtime/bin/pairtime agent\n", earlier: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -142,8 +148,12 @@ func TestAutostartInstallAndUninstall(t *testing.T) {
 			}
 
 			uninstall(t, in)
-			if got := read(); !got.Same(was) {
-				t.Errorf("after uninstall the entry holds %+v, want %+v", got, was)
+			want := was
+			if tt.earlier {
+				want = Content{}
+			}
+			if got := read(); !got.Same(want) {
+				t.Errorf("after uninstall the entry holds %+v, want %+v", got, want)
 			}
 			if tt.goos != "windows" && tt.before == "" {
 				top := filepath.Join(env.Home, ".config")
