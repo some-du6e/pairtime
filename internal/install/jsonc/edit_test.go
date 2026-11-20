@@ -162,12 +162,32 @@ func TestRemove(t *testing.T) {
 			src: "{\n  \"a\": 1,\n  \"b\": 2,\n  \"c\": 3\n}", i: 1, want: "{\n  \"a\": 1,\n  \"c\": 3\n}"},
 		{name: "CRLF lines go with their CR",
 			src: "[\r\n  1,\r\n  2\r\n]", i: 1, want: "[\r\n  1\r\n]"},
+		{name: "an element that shares its line with the next goes alone, so the comment on the line before doesn't swallow the next",
+			src: "[ // c\n  1, 2\n]", i: 0, want: "[ // c\n  2\n]"},
+		{name: "a member that shares its line with the next goes alone, after another member's comment",
+			src: "{\n  \"a\": 1, // one\n  \"b\": 2, \"c\": 3\n}", i: 1, want: "{\n  \"a\": 1, // one\n  \"c\": 3\n}"},
+		{name: "an element that shares its line with the next still takes its line when no comment ends the line before",
+			src: "[\n  1,\n  2, 3\n]", i: 1, want: "[\n  1, 3\n]"},
+		{name: "the last element keeps the closing bracket on its line out of the comment before it",
+			src: "[\n  1, // one\n  2]", i: 1, want: "[\n  1 // one\n  ]"},
+		{name: "the last element with a trailing comma keeps the closing bracket out of the comment before it",
+			src: "[\n  1, // one\n  2,]", i: 1, want: "[\n  1, // one\n  ]"},
+		{name: "the only element keeps the closing bracket on its line out of the comment before it",
+			src: "[ // c\n  1]", i: 0, want: "[ // c\n  ]"},
+		{name: "an element followed by its own comment can join a commented line, comment to comment",
+			src: "[ // c\n  1, // one\n  2\n]", i: 0, want: "[ // c // one\n  2\n]"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			c := at(t, tt.src, tt.path...)
-			if got := string(Remove([]byte(tt.src), c, tt.i)); got != tt.want {
+			got := string(Remove([]byte(tt.src), c, tt.i))
+			if got != tt.want {
 				t.Errorf("Remove gives\n%q\nwant\n%q", got, tt.want)
+			}
+			// Whatever the layout, the other items are all still there.
+			left := at(t, got, tt.path...)
+			if want := len(c.Items) - 1; len(left.Items) != want {
+				t.Errorf("after Remove %q holds %d items, want %d", got, len(left.Items), want)
 			}
 		})
 	}

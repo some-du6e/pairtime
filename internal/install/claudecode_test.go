@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 
@@ -621,6 +622,44 @@ func TestInstallKeepsHowTheFileIsStored(t *testing.T) {
 			check("after install", after)
 			uninstall(t, in)
 			check("after uninstall", before)
+		})
+	}
+}
+
+func TestClaudeCodeKeepsHooksThatShareALineWithAnOldOne(t *testing.T) {
+	old := `{"hooks": [{"type": "command", "command": "/opt/pairtime/bin/pairtime", "args": ["hook", "--harness", "claude_code", "--event", "Stop"]}]}`
+	other := `{"hooks": [{"type": "command", "command": "say done"}]}`
+	tests := []struct {
+		name   string
+		before string
+	}{
+		{"another tool's hook after an old pairtime hook on its line, below a comment, stays", "{\n  \"hooks\": {\n    \"Stop\": [ // when Claude stops\n      " + old + ", " + other + "\n    ]\n  }\n}\n"},
+		{"another tool's hook before an old pairtime hook on its line, with the closing bracket, stays", "{\n  \"hooks\": {\n    \"Stop\": [ // when Claude stops\n      " + other + ", " + old + "]\n  }\n}\n"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			env := testEnv(t, "linux", nil)
+			item, err := ClaudeCode(env)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, err := item.Edits[0].Apply(Content{Exists: true, Data: []byte(tt.before), Mode: 0o644})
+			if err != nil {
+				t.Fatal(err)
+			}
+			root, err := jsonc.Parse(got.Data)
+			if err != nil {
+				t.Fatalf("the merged file doesn't parse: %v\n%s", err, got.Data)
+			}
+			var cmds []string
+			for _, g := range root.Get("hooks").Get("Stop").Items {
+				for _, h := range g.Value.Get("hooks").Items {
+					cmds = append(cmds, h.Value.Get("command").Text)
+				}
+			}
+			if want := []string{"say done", testExe["linux"]}; !slices.Equal(cmds, want) {
+				t.Errorf("Stop runs %q, want %q:\n%s", cmds, want, got.Data)
+			}
 		})
 	}
 }

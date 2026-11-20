@@ -255,6 +255,11 @@ func insertLast(src []byte, c *Value, item func(indent string, st Style) string,
 // it too, so removing an item that AddMember or AppendElement added gives
 // back the bytes from before. An object or array left with nothing but
 // white space between its brackets becomes {} or [].
+//
+// Taking the line break before an item joins what is left of the item's
+// line to the line before. When a // comment ends that line and the rest
+// holds a value or a bracket, the comment would swallow it, so then only
+// the item and its separator go, and the line break stays.
 func Remove(src []byte, c *Value, i int) []byte {
 	closeAt := c.End - 1
 	it := c.Items[i]
@@ -263,44 +268,89 @@ func Remove(src []byte, c *Value, i int) []byte {
 	if j := skipBlank(src, end); j < closeAt && src[j] == ',' {
 		trailing = j
 	}
+	cut := end // the end of the item with its trailing comma
+	if trailing >= 0 {
+		cut = trailing + 1
+	}
 	lb, own := lineBreakBefore(src, start)
+	// joins reports whether the cut may start at lb: what follows the cut
+	// on the item's line, up to limit, can join the line before, whose
+	// last token ends at from.
+	joins := func(from, limit int) bool {
+		return own && (lineDone(src, cut, limit) || !endsInLineComment(src, from, lb))
+	}
 	switch {
 	case len(c.Items) == 1:
-		cut := end
-		if trailing >= 0 {
-			cut = trailing + 1
-		}
 		rest := append(append([]byte{}, src[c.Start+1:start]...), src[cut:closeAt]...)
 		if isBlank(rest) {
 			return splice(src, c.Start+1, closeAt, "")
 		}
-		if own {
+		if joins(c.Start+1, closeAt) {
 			start = lb
 		}
 		return splice(src, start, cut, "")
 	case i == len(c.Items)-1:
 		prev := c.Items[i-1]
 		sep := skipBlank(src, prev.Value.End) // the comma between prev and the item
-		if trailing >= 0 {
-			// The file writes trailing commas: the one after prev stays,
-			// and is prev's trailing comma again.
-			if own && sep < lb {
-				return splice(src, lb, trailing+1, "")
-			}
-			return splice(src, sep+1, trailing+1, "")
-		}
 		if own && sep < lb {
-			out := splice(src, lb, end, "")
+			if joins(sep+1, closeAt) {
+				start = lb
+			}
+			out := splice(src, start, cut, "")
+			if trailing >= 0 {
+				// The file writes trailing commas: the one after prev stays,
+				// and is prev's trailing comma again.
+				return out
+			}
 			return splice(out, sep, sep+1, "")
+		}
+		if trailing >= 0 {
+			return splice(src, sep+1, trailing+1, "")
 		}
 		return splice(src, prev.Value.End, end, "")
 	default:
 		next := c.Items[i+1]
-		if own && trailing >= 0 {
+		from := c.Start + 1 // where the last token before the item ends
+		if i > 0 {
+			from = skipBlank(src, c.Items[i-1].Value.End) + 1
+		}
+		if trailing >= 0 && joins(from, next.Start) {
 			return splice(src, lb, trailing+1, "")
 		}
 		return splice(src, start, next.Start, "")
 	}
+}
+
+// lineDone reports whether only spaces, tabs and comments come between i
+// and the end of its line, which comes before limit.
+func lineDone(src []byte, i, limit int) bool {
+	e := lineEnd(src, i, limit)
+	return e < limit && (src[e] == '\n' || src[e] == '\r')
+}
+
+// endsInLineComment reports whether a // comment runs up to lb, the line
+// break that ends a line, in src[from:lb], which holds only white space and
+// comments.
+func endsInLineComment(src []byte, from, lb int) bool {
+	for i := from; i+1 < lb; {
+		switch {
+		case src[i] == '/' && src[i+1] == '/':
+			n := bytes.IndexByte(src[i:lb], '\n')
+			if n < 0 {
+				return true
+			}
+			i += n + 1
+		case src[i] == '/' && src[i+1] == '*':
+			n := bytes.Index(src[i+2:lb], []byte("*/"))
+			if n < 0 {
+				return false
+			}
+			i += 2 + n + 2
+		default:
+			i++
+		}
+	}
+	return false
 }
 
 // splice returns src with src[from:to] replaced by text, in a new slice.
