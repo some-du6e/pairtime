@@ -152,9 +152,12 @@ func designRows(t *testing.T, heading string) [][]string {
 	return rows
 }
 
-// TestDesignPeriods checks every entry of docs/retention.json that has days
-// against the oracle: DESIGN 4.4's own text, or for the server's database
-// backups, which 4.4 doesn't list, DESIGN 10.3's.
+// TestDesignPeriods checks every period docs/retention.json states against
+// the oracle, DESIGN 4.4's own text, or for the server's database backups,
+// which 4.4 doesn't list, DESIGN 10.3's: each entry's days, and each number
+// that an entry without days writes in its kept text, such as the access
+// log's 2 years. The sessions entry's numbers are package accounts'
+// constants, which TestSessionRetention there checks.
 func TestDesignPeriods(t *testing.T) {
 	p, err := Default()
 	if err != nil {
@@ -168,6 +171,7 @@ func TestDesignPeriods(t *testing.T) {
 		data    string // the start of its second cell
 		re      string // captures the period in its third cell, or for 10.3 in its second
 		hours   bool   // the period is in hours, a whole number of days
+		kept    string // for an entry without days, captures the number its kept text writes
 	}{
 		{name: "prompt text is kept 90 days on the device", id: "device.prompt_text", where: "Device", data: "Prompt text, final agent messages", re: `^(\d+) days, or until a submission covering them is decided, whichever is later`},
 		{name: "file paths and tool commands are kept 30 days on the device", id: "device.paths_commands", where: "Device", data: "File paths in the vault; tool commands", re: `^(\d+) days$`},
@@ -181,6 +185,8 @@ func TestDesignPeriods(t *testing.T) {
 		{name: "backup segments older than 180 days are deleted", id: "server.backups", where: "Server", data: "Wrapped `K_dev` and encrypted backups", re: `; backup segments older than (\d+) days are deleted$`},
 		{name: "deleted rows stay in the continuous replica for its 72-hour retention", id: "server.db_replica", section: design103, where: "Continuous", data: "Litestream to object storage", re: `snapshots every \d+ h, retention (\d+) h \(`, hours: true},
 		{name: "deleted rows stay in the nightly snapshots for their 30-day lifecycle", id: "server.db_snapshots", section: design103, where: "Nightly", data: "`VACUUM INTO` a snapshot", re: `uploaded to a second bucket with a (\d+)-day lifecycle\.`},
+		{name: "the evidence access log is kept 2 years", id: "server.access_log", where: "Server", data: "Evidence access log", re: `^(\d+) years, visible to the teen$`, kept: `^(\d+) years$`},
+		{name: "Claude Code keeps its transcripts 30 days by default", id: "device.transcripts", where: "Device", data: "Transcripts and agent output", re: `\(Claude Code: (\d+) days by default; TP B8\)`, kept: `\(Claude Code keeps them for (\d+) days unless you change it\)$`},
 	}
 	checked := make(map[string]bool)
 	for _, tt := range tests {
@@ -215,6 +221,19 @@ func TestDesignPeriods(t *testing.T) {
 				}
 				want /= 24
 			}
+			if tt.kept != "" {
+				if e.Days != 0 {
+					t.Fatalf("%s has days %d, so its kept can't write a number of its own; compare its days", tt.id, e.Days)
+				}
+				km := regexp.MustCompile(tt.kept).FindStringSubmatch(e.Kept)
+				if km == nil {
+					t.Fatalf("%s's kept is %q, which doesn't match %s", tt.id, e.Kept, tt.kept)
+				}
+				if got, _ := strconv.Atoi(km[1]); got != want {
+					t.Errorf("%s's kept says %d (%q); DESIGN %s says %d (%q)", tt.id, got, e.Kept, section, want, kept)
+				}
+				return
+			}
 			if e.Days != want {
 				t.Errorf("%s has days %d; DESIGN %s says %d (%q)", tt.id, e.Days, section, want, kept)
 			}
@@ -224,6 +243,16 @@ func TestDesignPeriods(t *testing.T) {
 		for _, e := range p.Entries {
 			if e.Days > 0 && !checked[e.ID] {
 				t.Errorf("%s has days %d and no case in TestDesignPeriods", e.ID, e.Days)
+			}
+		}
+	})
+	t.Run("every number written in a kept text is checked", func(t *testing.T) {
+		// Load refuses a number beside {days}, so these are entries
+		// without days.
+		elsewhere := map[string]bool{"server.sessions": true} // accounts' TestSessionRetention
+		for _, e := range p.Entries {
+			if strings.ContainsAny(e.Kept, "0123456789") && !checked[e.ID] && !elsewhere[e.ID] {
+				t.Errorf("%s's kept says %q, and no case in TestDesignPeriods checks its number", e.ID, e.Kept)
 			}
 		}
 	})
