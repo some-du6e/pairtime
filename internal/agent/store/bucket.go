@@ -121,7 +121,7 @@ func (b Bucket) MinuteBucket(w event.Witness) event.MinuteBucket {
 	m := event.MinuteBucket{
 		V: b.V, Params: b.Params, Minute: b.Minute, Device: b.Device,
 		Slots: slices.Clone(b.Slots), CreditedS: b.CreditedS, Uncredited: maps.Clone(b.Uncredited),
-		AgentRunningS: b.AgentRunningS, Anchors: slices.Clone(b.Anchors),
+		AgentRunningS: b.AgentRunningS, AgentOnly: b.agentOnly(), Anchors: slices.Clone(b.Anchors),
 		State: b.State, Witness: w, Rev: b.Rev,
 	}
 	if w == event.Backfilled {
@@ -132,6 +132,23 @@ func (b Bucket) MinuteBucket(w event.Witness) event.MinuteBucket {
 		}
 	}
 	return m
+}
+
+// agentOnly returns the minute's agent-only seconds by project, as the
+// tier-1 bucket carries them (D-bucket-agent-only): the AgentOnlyS of each
+// project that has any, and nil when none has. AgentOnlyS is the same
+// count, the seconds a turn of the project ran that it wasn't credited.
+func (b Bucket) agentOnly() map[string]float64 {
+	var out map[string]float64
+	for key, p := range b.Projects {
+		if p.AgentOnlyS > 0 {
+			if out == nil {
+				out = map[string]float64{}
+			}
+			out[key] = float64(p.AgentOnlyS)
+		}
+	}
+	return out
 }
 
 // sameContent reports whether a and b say the same, apart from their rev

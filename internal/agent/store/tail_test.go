@@ -4,6 +4,7 @@ package store
 
 import (
 	"encoding/json"
+	"maps"
 	"os"
 	"path/filepath"
 	"testing"
@@ -154,4 +155,26 @@ func lastLine(data []byte) []byte {
 		}
 	}
 	return data
+}
+
+func TestMinuteBucketAgentOnly(t *testing.T) {
+	tests := []struct {
+		name  string
+		agent map[string]ProjectMinute
+		want  map[string]float64
+	}{
+		{"each project's agent-only seconds go as agent_only", map[string]ProjectMinute{"p_a": {AgentS: 30, AgentOnlyS: 20}, "p_b": {AgentS: 10, AgentOnlyS: 10}},
+			map[string]float64{"p_a": 20, "p_b": 10}},
+		{"a project whose agent time was all credited isn't named", map[string]ProjectMinute{"p_a": {AgentS: 30}, "p_b": {AgentOnlyS: 5}},
+			map[string]float64{"p_b": 5}},
+		{"a minute with no agent-only time has none", map[string]ProjectMinute{"p_a": {AgentS: 30}}, nil},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			b := Bucket{Projects: tc.agent}
+			if got := b.MinuteBucket(event.Witnessed).AgentOnly; !maps.Equal(got, tc.want) || (got == nil) != (tc.want == nil) {
+				t.Errorf("agent_only %v, want %v", got, tc.want)
+			}
+		})
+	}
 }

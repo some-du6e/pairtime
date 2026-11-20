@@ -33,7 +33,8 @@ func newestTable() *params.Table {
 }
 
 // testBucket is a valid minute bucket of the scorer's store: credited
-// seconds in slots of up to 15, 10 seconds left out, 20 of agent time.
+// seconds in slots of up to 15, 10 seconds left out, 20 of agent time that
+// p_test wasn't credited, and an anchor, which stays on the device.
 func testBucket(table *params.Table, device string, minute time.Time, credited float64, st event.BucketState) store.Bucket {
 	slots := make([]event.BucketSlot, 4)
 	left := credited
@@ -49,6 +50,9 @@ func testBucket(table *params.Table, device string, minute time.Time, credited f
 		V: table.Version(), Params: table.Hash(), Minute: minute.UTC(), Device: device, Slots: slots,
 		CreditedS: credited, Uncredited: map[event.Reason]float64{event.ReasonNoAnchor: 10},
 		AgentRunningS: 20, State: st,
+		// Anchors stay on the device, and agent_only goes (D-bucket-agent-only).
+		Anchors:  []string{event.NewEventID(minute)},
+		Projects: map[string]store.ProjectMinute{"p_test": {AgentS: 20, AgentOnlyS: 20}},
 	}
 }
 

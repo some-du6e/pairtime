@@ -141,6 +141,14 @@ func (ix *rowIndex) unchecked(b uint64) bool {
 	return b >= 1 && b <= ix.last() && ix.times[b-1].unchecked
 }
 
+// forgetReceipts forgets every receipt time: they came from another
+// server, which says nothing about when this one has the batches.
+func (ix *rowIndex) forgetReceipts() {
+	for i := range ix.times {
+		ix.times[i].received, ix.times[i].unchecked = 0, false
+	}
+}
+
 // receivedAt returns when the server received batch b, by its receipt, and
 // false while the device holds none.
 func (ix *rowIndex) receivedAt(b uint64) (int64, bool) {
@@ -204,9 +212,10 @@ type reading struct {
 //
 // A revision written after B*, by a later batch's records, can rest on
 // those records too: a prompt whose batch waited out an outage credits
-// the minutes its lead reaches back into. So a revision also reads its own
-// batch, the one whose scoring wrote it, by when the server received that
-// batch after it was sealed, and takes the worse of the two readings.
+// the minutes its lead reaches back into. So a revision also reads batch,
+// the one its credit rests on (the planner passes the batch whose scoring
+// changed the credit last, sentRev), by when the server received it after
+// it was sealed, and takes the worse of the two readings.
 func witnessOf(ix *rowIndex, minute int64, batch uint64, r reading) (event.Witness, bool) {
 	end := minute + 60_000
 	if ix.created > 0 && end <= ix.created {
@@ -244,7 +253,7 @@ func (r reading) of(ix *rowIndex, b uint64, due int64) (event.Witness, bool) {
 	switch {
 	case got-(due+r.offset) <= r.lag:
 		return event.Witnessed, true
-	case sealed-due <= r.lag && waitedOut(r.offline, sealed, r.lag, got-r.offset):
+	case sealed-due <= r.lag && waitedOut(r.offline, sealed, r.lag):
 		return event.Offline, true
 	}
 	return event.Backfilled, true

@@ -74,7 +74,7 @@ func hold(t *testing.T, f *fakeIngest, rows []ledger.Row, start uint64) {
 			t.Fatal(err)
 		}
 		row := fakeRow{b: r.B, n: r.N, root: r.Root.String(), head: r.Head.String(), prev: r.Prev.String(),
-			receivedAt: at, sig: hex.EncodeToString(rc.Signature[:])}
+			receivedAt: at, sig: hex.EncodeToString(rc.Signature[:]), keyID: f.keyID}
 		f.rows[r.B] = row
 		f.head = &row
 	}
@@ -453,6 +453,12 @@ func TestPreviewBuckets(t *testing.T) {
 			if p.Batches != 0 || p.Buckets != minutes || !p.Labels {
 				t.Fatalf("the preview holds %d roots, %d buckets, labels %v", p.Batches, p.Buckets, p.Labels)
 			}
+			if n := bytes.Count(p.JSON, []byte(`"agent_only":{"p_test":20}`)); n != minutes {
+				t.Errorf("%d of %d minutes carry their agent-only time", n, minutes)
+			}
+			if bytes.Contains(p.JSON, []byte(`"anchors"`)) {
+				t.Error("the preview names anchors")
+			}
 			shown = p
 		}},
 		{"the request the uploader sends is privacy show's, byte for byte", func(t *testing.T) {
@@ -477,5 +483,97 @@ func TestPreviewBuckets(t *testing.T) {
 		if !t.Run(tc.name, tc.run) {
 			break
 		}
+	}
+}
+
+// TestKeyRotation is a server that rotated its receipt key after it took
+// the device's batches, while the device lost their receipts: the
+// duplicates bring back receipts the old key signed, which the state's key
+// can't check. They aren't kept, but the minutes they date still go, and
+// the uploader asks for the state once for the answer, not once a root.
+func TestKeyRotation(t *testing.T) {
+	dir := t.TempDir()
+	dirs := home.Dirs{Data: dir, Config: dir, Runtime: dir}
+	table := newestTable()
+	w, rows := smallChain(t, dirs, 3)
+	start := rows[0].SealedAt.Add(-15 * time.Minute)
+	devKey := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{8}, 32))
+	f := newFakeIngest(w.DeviceID(), testToken, devKey.Public().(ed25519.PublicKey))
+	hold(t, f, rows, 1)
+	f.rotate("fake ingest receipt key, rotated")
+	bs, err := store.OpenBuckets(dirs.Buckets())
+	if err != nil {
+		t.Fatal(err)
+	}
+	const minutes = 40
+	for m := 0; m < minutes; m++ {
+		if _, _, err := bs.Put(testBucket(table, w.DeviceID(), start.Add(time.Duration(m)*time.Minute), 30, event.StateFinal)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := bs.Close(); err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(f)
+	t.Cleanup(srv.Close)
+	st, _, err := state.Open(dirs.StateFile())
+	if err != nil {
+		t.Fatal(err)
+	}
+	creds := Credentials{Server: srv.URL, Token: testToken, DeviceID: w.DeviceID(), Sign: KeySigner(devKey)}
+	var (
+		pmu     sync.Mutex
+		problem string
+	)
+	u, err := New(Options{
+		Ledger: w, LedgerDir: dirs.Ledger(), BucketDir: dirs.Buckets(), DataDir: dirs.Data, State: st,
+		Login:  LoginFunc(func() (Credentials, bool) { return creds, true }),
+		Params: table, Client: srv.Client(), Draw: func(int64) int64 { return 0 },
+		Problem: func(msg string) { pmu.Lock(); problem = msg; pmu.Unlock() },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	u.Start()
+	t.Cleanup(u.Close)
+	waitFor(t, "every minute", func() bool {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		return len(f.buckets) == minutes
+	})
+	u.Close()
+	tests := []struct {
+		name string
+		ok   func() bool
+	}{
+		{"the uploader read the state at its start and once for the answer the old receipts came in", func() bool {
+			f.mu.Lock()
+			defer f.mu.Unlock()
+			return f.gets <= 2
+		}},
+		{"no receipt the state's key can't check is kept in batches.seg", func() bool {
+			_, got, err := ledger.ReadRows(dirs.Ledger(), 1)
+			if err != nil {
+				return false
+			}
+			for _, r := range got {
+				if r.Receipt != nil {
+					return false
+				}
+			}
+			return true
+		}},
+		{"doctor hears that the receipts don't check out", func() bool {
+			pmu.Lock()
+			defer pmu.Unlock()
+			return strings.Contains(problem, "receipt")
+		}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if !tc.ok() {
+				t.Error("no")
+			}
+		})
 	}
 }

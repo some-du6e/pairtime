@@ -5,6 +5,7 @@ package uploader
 import (
 	"bytes"
 	"encoding/json"
+	"slices"
 	"testing"
 	"time"
 
@@ -253,5 +254,83 @@ func TestLabelsDue(t *testing.T) {
 				t.Errorf("labelsDue = %v, %v; want %v", got, err, tc.want)
 			}
 		})
+	}
+}
+
+// TestCreditBatch checks what a revision's reading rests on: a revision
+// that only flips its minute from pending to final keeps the batch its
+// credit rests on, however late the batch that wrote the flip reached the
+// server, and one whose credit a late batch changed reads that batch.
+func TestCreditBatch(t *testing.T) {
+	// Batches 1 and 2 reached the server at once; batch 3, sealed at minute
+	// 40, an hour and twenty minutes late, with no failure while it was due.
+	ix := indexOf(t, []float64{1, 7, 40}, []float64{1.1, 7.1, 120})
+	dir := t.TempDir()
+	bs, err := store.OpenBuckets(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	table := newestTable()
+	rev := func(minute int, credited float64, st event.BucketState, batch uint64) store.Bucket {
+		b := testBucket(table, "d_test", day0.Add(time.Duration(minute)*time.Minute), credited, st)
+		b.Batch = batch
+		return b
+	}
+	for _, b := range []store.Bucket{
+		rev(0, 30, event.StatePending, 1),
+		rev(5, 15, event.StatePending, 2),
+		rev(0, 30, event.StateFinal, 3),   // the flip, written by the late batch
+		rev(5, 30, event.StatePending, 3), // new credit, from the late batch
+	} {
+		if _, _, err := bs.Put(b); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := bs.Close(); err != nil {
+		t.Fatal(err)
+	}
+	want := []event.Witness{event.Witnessed, event.Witnessed, event.Witnessed, event.Backfilled}
+	readings := func(p plan) []event.Witness {
+		var ws []event.Witness
+		for _, b := range p.body.Buckets {
+			ws = append(ws, b.Witness)
+		}
+		return ws
+	}
+	tests := []struct {
+		name string
+		run  func(t *testing.T)
+	}{
+		{"in one plan, the flip keeps the reading and the new credit takes the late batch's", func(t *testing.T) {
+			p, err := makePlan(planInput{rows: ix, st: saved{Next: 4}, bucketDir: dir, lag: 900_000})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := readings(p); !slices.Equal(got, want) {
+				t.Errorf("readings %v, want %v", got, want)
+			}
+			if _, ok := p.sent[at(0)]; ok {
+				t.Error("a final minute is still remembered")
+			}
+			if r := p.sent[at(5)]; r.B != 3 {
+				t.Errorf("minute 5's credit rests on batch %d, not 3", r.B)
+			}
+		}},
+		{"across two plans, the second reads the flip from what the first sent", func(t *testing.T) {
+			first, err := makePlan(planInput{rows: ix, st: saved{Next: 4}, bucketDir: dir, lag: 900_000, maxBuckets: 2})
+			if err != nil {
+				t.Fatal(err)
+			}
+			second, err := makePlan(planInput{rows: ix, st: saved{Next: 4, Marks: first.marks, Sent: first.sent}, bucketDir: dir, lag: 900_000})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := append(readings(first), readings(second)...); !slices.Equal(got, want) {
+				t.Errorf("readings %v, want %v", got, want)
+			}
+		}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, tc.run)
 	}
 }

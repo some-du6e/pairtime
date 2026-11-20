@@ -582,6 +582,9 @@ func (u *Uploader) load(c Credentials) error {
 		u.log.Warn("the uploader's place in state.json doesn't read, so it starts afresh", "err", err)
 		st = saved{}
 	}
+	// A sign-in to another server: batches.seg's receipts are the old
+	// one's. A state.json that names no server, as a lost one, is no switch.
+	foreign := st.Chain == chain && st.Server != "" && (st.Server != c.Server || st.Device != c.DeviceID)
 	switch {
 	case st.Chain != chain:
 		st = saved{Chain: chain, Harnesses: st.Harnesses}
@@ -595,6 +598,10 @@ func (u *Uploader) load(c Credentials) error {
 	rows, err := loadRows(u.opts.LedgerDir, max(st.Next, 1))
 	if err != nil {
 		return err
+	}
+	if foreign {
+		// batches.seg's receipts are the old server's.
+		rows.forgetReceipts()
 	}
 	if rows.device != chain {
 		return fmt.Errorf("the ledger's batches.seg is %s's chain, and the writer writes %s's", rows.device, chain)
@@ -762,11 +769,18 @@ func (u *Uploader) sync(c Credentials) bool {
 	}
 	if held := u.st.Next; held > 1 && (st.Head == nil || st.Head.B+1 < held) {
 		// The server no longer holds batches it took, as after a restore
-		// that lost its last writes, and it may have lost their buckets
-		// too: every revision goes again, and it answers the ones it kept
-		// as duplicates. The first receipts stay (receipt).
-		u.st.Marks = nil
-		u.log.Warn("the server's chain is behind what it took, so every minute goes again", "head", st.Head, "next", held)
+		// that lost its last writes, and it may have lost the buckets that
+		// went with them: the days from an hour before its head's seal go
+		// again, and it answers the revisions it kept as duplicates. The
+		// first receipts stay (receipt).
+		cutoff := int64(0)
+		if st.Head != nil && st.Head.B >= 1 && st.Head.B <= u.rows.last() {
+			cutoff = u.rows.times[st.Head.B-1].sealedMax - time.Hour.Milliseconds()
+		}
+		from := store.DayOf(cutoff)
+		maps.DeleteFunc(u.st.Marks, func(day string, _ store.Mark) bool { return day >= from })
+		u.st.Sent = nil
+		u.log.Warn("the server's chain is behind what it took, so the minutes after its head go again", "head", st.Head, "next", held, "from", from)
 	}
 	next := uint64(1)
 	if st.Head != nil {
@@ -925,12 +939,13 @@ func (u *Uploader) failed(c Credentials, err error, a answer, retry *pendingReq)
 	if _, nerr := u.opts.Ledger.UploadFailure(uint64(t), string(reason)); nerr != nil {
 		u.log.Warn("the ledger didn't take an upload-failure note", "err", nerr)
 	}
-	u.st.noteFailure(t, u.backoff.failing() > 0)
+	open := u.backoff.failing() > 0
+	wait := u.backoff.fail(retryAfter(a.header, u.now()))
+	u.st.noteFailure(t, t+wait.Milliseconds(), open)
 	if retry != nil {
 		u.keep(retry)
 	}
 	u.save()
-	wait := u.backoff.fail(retryAfter(a.header, u.now()))
 	u.notBefore = u.now().Add(wait)
 	u.retry = true
 	msg := string(reason)
@@ -1080,7 +1095,7 @@ func (u *Uploader) answered(c Credentials, p plan, a answer) bool {
 	} else {
 		u.setProblem("buckets", "")
 	}
-	u.st.Marks = marks
+	u.st.Marks, u.st.Sent = marks, p.sent
 	if off, ok := u.clock.Offset(); ok {
 		u.st.Offset = off.Milliseconds()
 	}
@@ -1178,7 +1193,7 @@ func (u *Uploader) keep(p *pendingReq) {
 		u.st.Outbox = nil
 		return
 	}
-	u.st.Outbox = &outbox{Key: p.key, Hash: hex.EncodeToString(sum[:]), Marks: p.plan.marks, Labels: p.plan.labels}
+	u.st.Outbox = &outbox{Key: p.key, Hash: hex.EncodeToString(sum[:]), Marks: p.plan.marks, Sent: p.plan.sent, Labels: p.plan.labels}
 }
 
 // drop forgets the request waiting for its retry.
@@ -1232,7 +1247,7 @@ func readOutbox(dir string, st saved) (*pendingReq, error) {
 	if err != nil {
 		return nil, err
 	}
-	p := plan{body: body, js: js, raw: raw, hash: bodyHash(raw), marks: st.Outbox.Marks, labels: st.Outbox.Labels}
+	p := plan{body: body, js: js, raw: raw, hash: bodyHash(raw), marks: st.Outbox.Marks, sent: st.Outbox.Sent, labels: st.Outbox.Labels}
 	return &pendingReq{plan: p, key: st.Outbox.Key}, nil
 }
 

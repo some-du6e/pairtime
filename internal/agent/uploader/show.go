@@ -85,6 +85,9 @@ func Next(o PreviewOptions) (Preview, error) {
 	case st.Chain != rows.device:
 		st = saved{Chain: rows.device, Harnesses: st.Harnesses}
 	case st.Server != c.Server || st.Device != c.DeviceID:
+		if st.Server != "" {
+			rows.forgetReceipts() // they are the old server's
+		}
 		st = saved{Chain: rows.device, Harnesses: st.Harnesses}
 	}
 	if p, err := readOutbox(o.DataDir, st); err == nil && p != nil {

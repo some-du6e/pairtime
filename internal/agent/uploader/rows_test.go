@@ -87,8 +87,8 @@ func TestWitness(t *testing.T) {
 			[]float64{6}, []float64{6.1}, reading{}, 5, 0, 3, event.Backfilled, true},
 		{"a minute that ended after the chain began reads by its batch",
 			[]float64{6}, []float64{6.1}, reading{}, 5, 0, 5, event.Witnessed, true},
-		{"one failure and then a night asleep is no outage: the late batch is backfilled",
-			[]float64{1}, []float64{600}, reading{offline: []span{{From: at(1) + 30_000, To: at(1) + 30_000}}}, 0, 0, 0, event.Backfilled, true},
+		{"a failure while its batch was due, then a night asleep and a sync the next morning, is offline whatever the flush delay (D6)",
+			[]float64{1}, []float64{600}, reading{offline: []span{{From: at(1) + 30_000, To: at(1) + 30_000}}}, 0, 0, 0, event.Offline, true},
 		{"a later revision written by a batch that waited out an outage is offline, though its minute's first batch went at once",
 			[]float64{1, 5}, []float64{1.1, 90}, reading{offline: []span{{From: at(6), To: at(85)}}}, 0, 2, 0, event.Offline, true},
 		{"a later revision written by a batch the server got at once keeps its minute's reading",
@@ -132,7 +132,8 @@ func TestOutage(t *testing.T) {
 	var spans []span
 	s := saved{}
 	for m := 60.0; m <= 180; m += 4 {
-		s.noteFailure(at(0)+int64(m*60_000), len(s.Offline) > 0)
+		t := at(0) + int64(m*60_000)
+		s.noteFailure(t, t, len(s.Offline) > 0)
 	}
 	spans = s.Offline
 	tests := []struct {
@@ -165,21 +166,28 @@ func TestSpans(t *testing.T) {
 	tests := []struct {
 		name     string
 		failures []int64 // ms after day0
+		waits    []int64 // how long after each the uploader waits, 0 when nil
 		open     []bool  // whether each follows a failure with no success between
 		want     []span
 	}{
-		{"failures in a row make one span", []int64{0, 60_000, 600_000}, []bool{false, true, true},
+		{"failures in a row make one span", []int64{0, 60_000, 600_000}, nil, []bool{false, true, true},
 			[]span{{From: at(0), To: at(0) + 600_000}}},
-		{"a success between failures starts a new span", []int64{0, 60_000}, []bool{false, false},
+		{"a success between failures starts a new span", []int64{0, 60_000}, nil, []bool{false, false},
 			[]span{{From: at(0), To: at(0)}, {From: at(0) + 60_000, To: at(0) + 60_000}}},
-		{"failures further apart than any backoff, as across a night asleep, are two spans", []int64{0, 5 * hour}, []bool{false, true},
+		{"failures further apart than any backoff, as across a night asleep, are two spans", []int64{0, 5 * hour}, nil, []bool{false, true},
 			[]span{{From: at(0), To: at(0)}, {From: at(0) + 5*hour, To: at(0) + 5*hour}}},
+		{"a failure the server answered with an hour's Retry-After covers the wait", []int64{0}, []int64{hour}, []bool{false},
+			[]span{{From: at(0), To: at(0) + hour}}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			var s saved
 			for i, f := range tc.failures {
-				s.noteFailure(at(0)+f, tc.open[i])
+				var wait int64
+				if tc.waits != nil {
+					wait = tc.waits[i]
+				}
+				s.noteFailure(at(0)+f, at(0)+f+wait, tc.open[i])
 			}
 			if !slices.Equal(s.Offline, tc.want) {
 				t.Errorf("spans %v, want %v", s.Offline, tc.want)

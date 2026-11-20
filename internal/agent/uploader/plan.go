@@ -30,8 +30,9 @@ type plan struct {
 	raw  []byte // js in gzip: the raw body, what goes on the wire
 	hash string // hex(SHA-256(raw))
 	// marks are the bucket store's marks once the request's buckets are
-	// answered.
+	// answered, and sent what the pending minutes' credit rests on then.
 	marks map[string]store.Mark
+	sent  map[int64]sentRev
 	// labels is the hash of the labels the request carries, "" when it
 	// carries none.
 	labels string
@@ -65,11 +66,36 @@ type planInput struct {
 
 // entry is one revision line a plan read from the bucket store: its day,
 // the mark just past it, and the bucket it sends, nil for a line it only
-// passes over.
+// passes over, with its minute, what its credit rests on, and whether the
+// minute is still pending.
 type entry struct {
-	day    string
-	mark   store.Mark
-	bucket *event.MinuteBucket
+	day     string
+	mark    store.Mark
+	bucket  *event.MinuteBucket
+	minute  int64
+	rev     sentRev
+	pending bool
+}
+
+// sentKeep is how long before the newest pending minute an entry of
+// saved.Sent stays. A minute is pending for 35 minutes; an entry this old
+// belongs to a minute whose final revision a stopped scorer never wrote.
+const sentKeep = 48 * 60 * 60 * 1000
+
+// creditHash is a hash of what a revision credits and leaves out, which
+// tells a revision that changes a minute's credit from one that only
+// changes its state.
+func creditHash(b store.Bucket) string {
+	m := b.MinuteBucket(event.Witnessed)
+	js, _ := json.Marshal(struct {
+		Slots         []event.BucketSlot       `json:"slots"`
+		CreditedS     float64                  `json:"credited_s"`
+		Uncredited    map[event.Reason]float64 `json:"uncredited"`
+		AgentRunningS float64                  `json:"agent_running_s"`
+		AgentOnly     map[string]float64       `json:"agent_only"`
+	}{m.Slots, m.CreditedS, m.Uncredited, m.AgentRunningS, m.AgentOnly})
+	sum := sha256.Sum256(js)
+	return hex.EncodeToString(sum[:8])
 }
 
 // makePlan makes the next request: the batch roots from st.Next on, unless
@@ -137,9 +163,16 @@ func rootsOf(in planInput, n int) []Root {
 func bucketsOf(in planInput, n int) ([]entry, map[string]bool, []string, error) {
 	files, err := store.BucketDays(in.bucketDir)
 	if err != nil {
-		return nil, nil, nil, err
+		// No bucket goes, and no mark moves: the roots go without them.
+		return nil, nil, []string{"any day"}, nil
 	}
 	var unread []string
+	// sent is what the credit of each pending minute rests on, as the
+	// lines read so far leave it.
+	sent := maps.Clone(in.st.Sent)
+	if sent == nil {
+		sent = map[int64]sentRev{}
+	}
 	days := make(map[string]bool, len(files))
 	// Batches before the start never get a receipt: the server's chain
 	// starts after them, or it no longer holds them.
@@ -166,15 +199,28 @@ func bucketsOf(in planInput, n int) ([]entry, map[string]bool, []string, error) 
 				took++
 				return true
 			}
-			if in.notAfter != 0 && b.At() > in.notAfter {
+			ms := b.At()
+			if in.notAfter != 0 && ms > in.notAfter {
 				return false // it waits until the server's clock reaches it
 			}
-			w, ok := witnessOf(in.rows, b.At(), b.Batch, rd)
+			// The credit rests on the batch that last changed it: a
+			// revision that only changes the minute's state keeps it.
+			rev := sentRev{H: creditHash(b), B: b.Batch}
+			if prev, ok := sent[ms]; ok && prev.H == rev.H {
+				rev.B = prev.B
+			}
+			w, ok := witnessOf(in.rows, ms, rev.B, rd)
 			if !ok {
 				return false
 			}
+			pending := b.State == event.StatePending
+			if pending {
+				sent[ms] = rev
+			} else {
+				delete(sent, ms)
+			}
 			mb := b.MinuteBucket(w).Shareable()
-			out = append(out, entry{day: f.Day, mark: r.Mark, bucket: &mb})
+			out = append(out, entry{day: f.Day, mark: r.Mark, bucket: &mb, minute: ms, rev: rev, pending: pending})
 			took++
 			count++
 			return count < n
@@ -223,20 +269,35 @@ func firstBuckets(entries []entry, k int) []entry {
 // labels, and the marks its answer leaves. Marks of days the store no
 // longer has go.
 func assemble(in planInput, roots []Root, entries []entry, days map[string]bool) (plan, error) {
-	p := plan{body: Body{Batches: roots, Labels: in.labels}, marks: maps.Clone(in.st.Marks)}
+	p := plan{body: Body{Batches: roots, Labels: in.labels}, marks: maps.Clone(in.st.Marks), sent: maps.Clone(in.st.Sent)}
 	if p.marks == nil {
 		p.marks = map[string]store.Mark{}
 	}
-	maps.DeleteFunc(p.marks, func(day string, _ store.Mark) bool { return !days[day] })
+	if p.sent == nil {
+		p.sent = map[int64]sentRev{}
+	}
+	if days != nil {
+		maps.DeleteFunc(p.marks, func(day string, _ store.Mark) bool { return !days[day] })
+	}
 	for _, e := range entries {
 		if e.mark == (store.Mark{}) {
 			delete(p.marks, e.day)
 		} else {
 			p.marks[e.day] = e.mark
 		}
-		if e.bucket != nil {
-			p.body.Buckets = append(p.body.Buckets, *e.bucket)
+		if e.bucket == nil {
+			continue
 		}
+		p.body.Buckets = append(p.body.Buckets, *e.bucket)
+		if e.pending {
+			p.sent[e.minute] = e.rev
+		} else {
+			delete(p.sent, e.minute)
+		}
+	}
+	if len(p.sent) > 0 {
+		newest := slices.Max(slices.Collect(maps.Keys(p.sent)))
+		maps.DeleteFunc(p.sent, func(ms int64, _ sentRev) bool { return ms < newest-sentKeep })
 	}
 	if in.labels != nil {
 		h, err := labelsHash(*in.labels)

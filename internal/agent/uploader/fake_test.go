@@ -62,6 +62,7 @@ type fakeRow struct {
 	root, head, prev string
 	receivedAt       uint64
 	sig              string
+	keyID            string // the key that signed sig, which a duplicate names, as WP-SV4's does
 }
 
 func newFakeIngest(device, token string, devKey ed25519.PublicKey) *fakeIngest {
@@ -357,7 +358,7 @@ func (f *fakeIngest) root(raw json.RawMessage, receivedAt uint64) map[string]any
 	if old, ok := f.rows[b]; ok {
 		if old.n == n && old.root == r.Root && old.head == r.Head && old.prev == r.Prev {
 			return map[string]any{"status": 200, "code": "duplicate", "b": b,
-				"receipt": map[string]any{"received_at": old.receivedAt, "key_id": f.keyID, "sig": old.sig}}
+				"receipt": map[string]any{"received_at": old.receivedAt, "key_id": old.keyID, "sig": old.sig}}
 		}
 		return map[string]any{"status": 409, "code": "batch_conflict", "b": b}
 	}
@@ -380,7 +381,7 @@ func (f *fakeIngest) root(raw json.RawMessage, receivedAt uint64) map[string]any
 	if err != nil {
 		panic(err)
 	}
-	row := fakeRow{b: b, n: n, root: r.Root, head: r.Head, prev: r.Prev, receivedAt: receivedAt, sig: hex.EncodeToString(rc.Signature[:])}
+	row := fakeRow{b: b, n: n, root: r.Root, head: r.Head, prev: r.Prev, receivedAt: receivedAt, sig: hex.EncodeToString(rc.Signature[:]), keyID: f.keyID}
 	f.rows[b] = row
 	f.head = &row
 	return map[string]any{"status": 200, "code": "accepted", "b": b,
@@ -482,6 +483,15 @@ func (f *fakeIngest) label(raw json.RawMessage) map[string]any {
 	}
 	f.labels++
 	return map[string]any{"status": 200, "code": "accepted"}
+}
+
+// rotate gives the server a new receipt key, as DESIGN 10.2's yearly
+// rotation does. The rows it holds keep the receipts the old key signed.
+func (f *fakeIngest) rotate(name string) {
+	seed := sha256.Sum256([]byte(name))
+	f.key = ed25519.NewKeyFromSeed(seed[:])
+	sum := sha256.Sum256(f.key.Public().(ed25519.PublicKey))
+	f.keyID = hex.EncodeToString(sum[:8])
 }
 
 // totals sums the server's current revisions.

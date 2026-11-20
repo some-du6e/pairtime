@@ -78,6 +78,9 @@ type saved struct {
 	// Offline are the stretches the uploader couldn't reach the server, as
 	// its upload-failure notes say, oldest first.
 	Offline []span `json:"offline,omitempty"`
+	// Sent maps each minute still pending on the server, by its start in
+	// Unix ms, to what its last revision's credit rests on (sentRev).
+	Sent map[int64]sentRev `json:"sent,omitempty"`
 	// Offset is the server's clock less the device's, in ms, as the last
 	// answer measured: what X-Pairtime-Time is corrected by, and how far
 	// ahead of the server's clock a minute may be before it waits.
@@ -86,6 +89,16 @@ type saved struct {
 	ServerKey *ServerKey `json:"server_key,omitempty"`
 	// Outbox is the request a retry sends again, when one is waiting.
 	Outbox *outbox `json:"outbox,omitempty"`
+}
+
+// sentRev is what a minute's last revision sent rests on: a hash of its
+// credit, and the batch whose reading it took. A later revision that
+// changes no credit, as the flip from pending to final, keeps that batch's
+// reading rather than take its own, whose batch may have come late for
+// reasons that have nothing to do with the minute (DESIGN 7.4).
+type sentRev struct {
+	H string `json:"h"`
+	B uint64 `json:"b"`
 }
 
 // span is a stretch of failed uploads: the first and the last failure's
@@ -104,9 +117,11 @@ type outbox struct {
 	// Hash is the SHA-256 of outbox.json's JSON, in hex, so a damaged file
 	// is noticed and a new request built instead.
 	Hash string `json:"hash"`
-	// Marks are the bucket marks once its buckets are answered, and
-	// Labels the labels' hash when it carries them.
+	// Marks are the bucket marks once its buckets are answered, Sent what
+	// their credit rests on, and Labels the labels' hash when it carries
+	// them.
 	Marks  map[string]store.Mark `json:"marks,omitempty"`
+	Sent   map[int64]sentRev     `json:"sent,omitempty"`
 	Labels string                `json:"labels,omitempty"`
 }
 
@@ -115,6 +130,7 @@ func (s saved) clone() saved {
 	s.Marks = maps.Clone(s.Marks)
 	s.Harnesses = maps.Clone(s.Harnesses)
 	s.Offline = slices.Clone(s.Offline)
+	s.Sent = maps.Clone(s.Sent)
 	if s.ServerKey != nil {
 		k := *s.ServerKey
 		s.ServerKey = &k
@@ -122,6 +138,7 @@ func (s saved) clone() saved {
 	if s.Outbox != nil {
 		o := *s.Outbox
 		o.Marks = maps.Clone(o.Marks)
+		o.Sent = maps.Clone(o.Sent)
 		s.Outbox = &o
 	}
 	return s
@@ -133,29 +150,32 @@ func (s saved) clone() saved {
 // uploader wasn't trying then.
 const spanGap = int64((retryAfterMax + Every) / time.Millisecond)
 
-// noteFailure adds a failure at t, in Unix ms, to the offline spans: it
-// stretches the last span when the failure follows it with no success in
-// between (open) and within spanGap, and starts a new one otherwise.
-func (s *saved) noteFailure(t int64, open bool) {
-	if n := len(s.Offline); open && n > 0 && t >= s.Offline[n-1].To && t-s.Offline[n-1].To <= spanGap {
-		s.Offline[n-1].To = t
+// noteFailure adds a failure at t, in Unix ms, after which the uploader
+// waits until until to try again, to the offline spans: the server was out
+// of reach for all of it, as when it sent a Retry-After. It stretches the
+// last span when the failure follows it with no success in between (open)
+// and within spanGap, and starts a new one otherwise.
+func (s *saved) noteFailure(t, until int64, open bool) {
+	until = max(until, t)
+	if n := len(s.Offline); open && n > 0 && t >= s.Offline[n-1].From && t-s.Offline[n-1].To <= spanGap {
+		s.Offline[n-1].To = max(s.Offline[n-1].To, until)
 		return
 	}
-	s.Offline = append(s.Offline, span{From: t, To: t})
+	s.Offline = append(s.Offline, span{From: t, To: until})
 	if len(s.Offline) > offlineSpans {
 		s.Offline = slices.Clone(s.Offline[len(s.Offline)-offlineSpans:])
 	}
 }
 
 // waitedOut reports whether a batch sealed at sealed, on the device's
-// clock in Unix ms, was held back by an outage that its receipt, at got
-// on the same clock, ended: a span of failures began by the end of the
-// batch's witness window, lag after its seal, went on past the seal, and
-// the receipt came within spanGap of its last failure, in the catch-up
-// after it (DESIGN 7.4).
-func waitedOut(spans []span, sealed, lag, got int64) bool {
+// clock in Unix ms, was due to go while the uploader couldn't reach the
+// server: a span of failures, or the wait after one, falls in the batch's
+// witness window, the lag after its seal. Then its late receipt reads
+// offline whatever the flush delay, as the teen who syncs at school the
+// next morning gets (DESIGN 6.2 D6, 7.4).
+func waitedOut(spans []span, sealed, lag int64) bool {
 	for _, s := range spans {
-		if s.From <= sealed+lag && s.To >= sealed && got <= s.To+spanGap {
+		if s.From <= sealed+lag && s.To >= sealed {
 			return true
 		}
 	}
