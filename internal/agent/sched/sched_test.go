@@ -222,6 +222,45 @@ func TestScheduler(t *testing.T) {
 	}
 }
 
+// TestEarliest calls runDue and earliest with chosen wall-clock times,
+// which both take as a parameter, so it needs no fake clock. Times are
+// relative to G, the grid time the job was due at: a real timer can fire a
+// moment before it, because timers count monotonic time and the grid is in
+// wall-clock time.
+func TestEarliest(t *testing.T) {
+	const every = 15 * time.Second
+	tests := []struct {
+		name string
+		ran  time.Duration // when runDue ran the job
+		now  time.Duration // when earliest looked
+		want time.Duration // when the job is due next
+	}{
+		{name: "a job run a moment early stays due at the next grid time, so it doesn't run twice for one", ran: -5 * time.Millisecond, now: -4 * time.Millisecond, want: every},
+		{name: "a job run as early as runDue allows stays due at the next grid time", ran: -early, now: -early, want: every},
+		{name: "a job run on time stays due at the next grid time", ran: 0, now: time.Millisecond, want: every},
+		{name: "a wall clock set back by more than an interval moves the job to the first grid time after the new time", ran: 0, now: -time.Minute, want: -45 * time.Second},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := newScheduler(0)
+			runs := 0
+			s.Every("presence", every, func(time.Time) { runs++ })
+			g := s.Jobs()[0].Next
+			s.runDue(g.Add(tt.ran))
+			if runs != 1 {
+				t.Fatalf("runDue %v from G ran the job %d times, want 1", tt.ran, runs)
+			}
+			got, ok := s.earliest(g.Add(tt.now))
+			if !ok || !got.Equal(g.Add(tt.want)) {
+				t.Errorf("earliest(%v from G) = %v from G, %v; want %v from G", tt.now, got.Sub(g), ok, tt.want)
+			}
+			if next := s.Jobs()[0].Next; !next.Equal(g.Add(tt.want)) {
+				t.Errorf("the job is due %v from G, want %v from G", next.Sub(g), tt.want)
+			}
+		})
+	}
+}
+
 func TestGridAfter(t *testing.T) {
 	epoch := time.Unix(0, 0)
 	tests := []struct {

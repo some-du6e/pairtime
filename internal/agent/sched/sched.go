@@ -201,13 +201,16 @@ func (s *Scheduler) wake() {
 // earliest returns the due time of the job due first. It also moves an
 // Every job that is due more than one interval from now, which happens
 // only when the wall clock was set back, to the next grid time, so a clock
-// change can't stall it.
+// change can't stall it. A job that runDue ran up to early before its due
+// time is due up to early more than one interval later, so that much
+// counts as on time: moving that job back would run it twice for one grid
+// time.
 func (s *Scheduler) earliest(now time.Time) (time.Time, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var first time.Time
 	for j := range s.jobs {
-		if j.every > 0 && j.next.Sub(now) > j.every {
+		if j.every > 0 && j.next.Sub(now) > j.every+early {
 			j.next = s.gridAfter(now, j.every)
 		}
 		if first.IsZero() || j.next.Before(first) {
