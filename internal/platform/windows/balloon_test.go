@@ -7,12 +7,123 @@ package windows
 import (
 	"context"
 	"errors"
+	"fmt"
+	"os"
+	"os/exec"
 	"runtime"
+	"strconv"
 	"testing"
 	"time"
 
 	"golang.org/x/sys/windows"
 )
+
+// balloonsAloneEnv makes this test binary a process whose only GUI
+// threads are balloons' (see balloonsAlone). It holds how many balloons to
+// make. TestBalloonsInAProcessWithNoOtherGUIThread sets it.
+const balloonsAloneEnv = "PAIRTIME_TEST_BALLOONS_ALONE"
+
+func init() {
+	// Package initialization runs on the main thread, and locking it here
+	// keeps it for the main goroutine, which makes no window. Otherwise a
+	// balloon's goroutine could run there, and when a goroutine locked to
+	// the main thread ends, Go parks the thread for good instead of ending
+	// it (runtime.mexit), which would leave a GUI thread behind.
+	if os.Getenv(balloonsAloneEnv) != "" {
+		runtime.LockOSThread()
+	}
+}
+
+func TestMain(m *testing.M) {
+	if n := os.Getenv(balloonsAloneEnv); n != "" {
+		os.Exit(balloonsAlone(n))
+	}
+	os.Exit(m.Run())
+}
+
+// balloonsAlone makes n balloons' windows, each on a thread of its own
+// that ends before the next one starts, as ShowBalloon's threads do. It
+// returns the process's exit code: 0 when every window was made.
+func balloonsAlone(n string) int {
+	count, err := strconv.Atoi(n)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 2
+	}
+	for i := range count {
+		if err := balloonOnAThreadThatEnds(); err != nil {
+			fmt.Fprintf(os.Stderr, "balloon %d of %d: %v\n", i+1, count, err)
+			return 1
+		}
+	}
+	return 0
+}
+
+// balloonOnAThreadThatEnds makes a balloon's window and closes it, on a
+// goroutine locked to its OS thread, which Go ends with the goroutine. It
+// returns once that thread is gone, which is when Windows has done its
+// cleanup for the thread.
+func balloonOnAThreadThatEnds() error {
+	type result struct {
+		thread windows.Handle
+		err    error
+	}
+	done := make(chan result, 1)
+	go func() {
+		runtime.LockOSThread() // never unlocked
+		thread, err := windows.OpenThread(windows.SYNCHRONIZE, false, windows.GetCurrentThreadId())
+		if err != nil {
+			done <- result{err: fmt.Errorf("OpenThread: %w", err)}
+			return
+		}
+		b, err := newBalloon()
+		if err == nil {
+			b.close()
+		}
+		done <- result{thread: thread, err: err}
+	}()
+	r := <-done
+	if r.thread == 0 {
+		return r.err
+	}
+	defer windows.CloseHandle(r.thread)
+	switch ev, err := windows.WaitForSingleObject(r.thread, 10_000); {
+	case err != nil:
+		return fmt.Errorf("WaitForSingleObject: %w", err)
+	case ev != windows.WAIT_OBJECT_0:
+		return errors.New("the balloon's thread was still there 10 s after its goroutine ended")
+	}
+	return r.err
+}
+
+// Windows destroys the window classes a process registered when the last
+// of the process's GUI threads ends, and a balloon's thread ends with its
+// balloon. In a process with no other GUI thread, a class registered only
+// once makes every balloon after the first fail with "Cannot find window
+// class". This runs in a child process, because in this one other tests'
+// threads have called user32, and Go keeps those threads.
+func TestBalloonsInAProcessWithNoOtherGUIThread(t *testing.T) {
+	tests := []struct {
+		name     string
+		balloons int
+	}{
+		{name: "the first balloon gets its window", balloons: 1},
+		{name: "balloons made one after another, each once the thread of the one before has ended, all get their windows", balloons: 3},
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cmd := exec.Command(exe, "-test.run=^$")
+			cmd.Env = append(os.Environ(), balloonsAloneEnv+"="+strconv.Itoa(tt.balloons))
+			if out, err := cmd.CombinedOutput(); err != nil {
+				t.Errorf("a process making %d balloons in turn: %v\n%s", tt.balloons, err, out)
+			}
+		})
+	}
+}
 
 // onLockedThread runs fn on a goroutine locked to its OS thread, as
 // ShowBalloon does, and waits for it.

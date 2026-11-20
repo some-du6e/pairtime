@@ -8,12 +8,13 @@ import (
 
 // startPresence starts the presence and power component (WP-OS1) and
 // returns the step that stops it. It records nothing until a project
-// context goes live, and nothing makes one live yet. docs/PLAN.md names
-// who wires the rest: WP-OS2 reports focus changes through Focus, WP-OS6
-// the process scanner's count through HarnessProcesses, and WP-AG3 every
-// hook and track message through Hook; WP-LG5 sets Record and Seal, and
-// WP-AG4 passes the parameter table it scores with as Params. Until then
-// records are dropped and the sampler reads the newest table.
+// context goes live. So far only the process scan makes one live, by
+// reporting its count of harness session processes through
+// HarnessProcesses (procscan.go, WP-OS6). docs/PLAN.md names who wires the
+// rest: WP-OS2 reports focus changes through Focus, and WP-AG3 every hook
+// and track message through Hook; WP-LG5 sets Record and Seal, and WP-AG4
+// passes the parameter table it scores with as Params. Until then records
+// are dropped and the sampler reads the newest table.
 func (a *agent) startPresence() func() {
 	a.presence = presence.New(presence.Options{
 		Sched:   a.sched,
