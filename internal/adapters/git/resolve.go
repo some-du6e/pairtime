@@ -233,6 +233,9 @@ func (r *Resolver) Resolve(ctx context.Context, dir string) (Location, error) {
 	}
 
 	loc, err := r.resolveOnce(ctx, key, abs)
+	if err != nil && !errors.Is(err, ErrIgnored) {
+		return Location{}, err // a missing folder or a git that timed out: try again next time
+	}
 	r.mu.Lock()
 	if len(r.dirs) >= maxCachedDirs {
 		clear(r.dirs)
@@ -510,10 +513,9 @@ func (r *Resolver) keyForRoots(roots []string) string {
 }
 
 // Rekey looks again at the identity of loc's repo. The watcher calls it
-// when a repo
-// with no commit makes its first one, and when a shallow clone loses its
-// shallow file. It returns the location with the new key; the old key is
-// in Aliases.
+// when a repo with no commit makes its first one, and when a shallow clone
+// loses its shallow file. It returns the location with the new key; the
+// old key is in Aliases.
 func (r *Resolver) Rekey(ctx context.Context, loc Location) (Location, error) {
 	r.forgetRepo(loc.CommonDir)
 	return r.Resolve(ctx, loc.Dir)

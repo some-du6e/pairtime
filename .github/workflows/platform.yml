@@ -18,6 +18,9 @@ on:
       # private files (home), and the loopback server (localhttp).
       - internal/agent/home/**
       - internal/agent/localhttp/**
+      # The git adapter drives the real git CLI and watches .git with file
+      # notifications, both of which differ on Windows (PLAN, WP-AD5).
+      - internal/adapters/git/**
       - cmd/pairtime/**
       - .github/workflows/platform.yml
       - tools/ci/test_existing.sh
@@ -36,7 +39,7 @@ permissions:
 env:
   # pairtime never uses cgo (AGENTS.md).
   CGO_ENABLED: "0"
-  PLATFORM_DIRS: internal/platform internal/install internal/agent/ipc internal/agent/home internal/agent/localhttp cmd/pairtime
+  PLATFORM_DIRS: internal/platform internal/install internal/agent/ipc internal/agent/home internal/agent/localhttp internal/adapters/git cmd/pairtime
 
 jobs:
   windows:
