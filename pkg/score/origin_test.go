@@ -46,11 +46,14 @@ func (c promptCase) build() (*tl, event.Event) {
 }
 
 func TestOrigin(t *testing.T) {
-	// restartAt replaces terminalSession's session.start with one at t.
+	// restartAt replaces terminalSession's session.start with one at t,
+	// with the presence sample the agent takes at every hook event (DESIGN
+	// 3.3).
 	restartAt := func(t int64, entry event.Entrypoint, parent event.ParentClass, tty bool) func(b *tl, p *event.PromptSubmit) {
 		return func(b *tl, p *event.PromptSubmit) {
 			b.evs[1].T = t
 			b.evs[1].Data = &event.SessionStart{StartKind: event.StartStartup, Entrypoint: entry, ParentClass: parent, HasTTY: tty}
+			b.sample(t)
 		}
 	}
 	restart := func(entry event.Entrypoint, parent event.ParentClass, tty bool) func(b *tl, p *event.PromptSubmit) {
