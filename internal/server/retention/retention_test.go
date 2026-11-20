@@ -109,17 +109,24 @@ func TestKept(t *testing.T) {
 	}
 }
 
-// designRows returns the rows of DESIGN 4.4's table, each split into its
-// cells: where, data and kept.
-func designRows(t *testing.T) [][]string {
+// The DESIGN sections whose tables the periods come from.
+const (
+	design44  = "4.4 Data inventory and retention"
+	design103 = "10.3 Backups and the restore drill"
+)
+
+// designRows returns the rows of the table in the DESIGN section with the
+// given heading, each split into its cells. In 4.4 they are where, data
+// and kept; in 10.3, layer, mechanism, and RPO and RTO.
+func designRows(t *testing.T, heading string) [][]string {
 	t.Helper()
 	data, err := os.ReadFile("../../../docs/DESIGN.md")
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, section, ok := strings.Cut(string(data), "\n### 4.4 Data inventory and retention\n")
+	_, section, ok := strings.Cut(string(data), "\n### "+heading+"\n")
 	if !ok {
-		t.Fatal("docs/DESIGN.md has no section 4.4")
+		t.Fatalf("docs/DESIGN.md has no section %s", heading)
 	}
 	section, _, _ = strings.Cut(section, "\n### ")
 	var rows [][]string
@@ -131,20 +138,22 @@ func designRows(t *testing.T) [][]string {
 	return rows
 }
 
-// TestDesignPeriods checks every number in docs/retention.json against the
-// oracle, DESIGN 4.4's own text.
+// TestDesignPeriods checks every entry of docs/retention.json that has days
+// against the oracle: DESIGN 4.4's own text, or for the server's database
+// backups, which 4.4 doesn't list, DESIGN 10.3's.
 func TestDesignPeriods(t *testing.T) {
 	p, err := Default()
 	if err != nil {
 		t.Fatal(err)
 	}
-	rows := designRows(t)
 	tests := []struct {
-		name  string
-		id    string // the entry in docs/retention.json
-		where string // DESIGN 4.4's first cell
-		data  string // the start of its second cell
-		re    string // captures the days in its third cell
+		name    string
+		id      string // the entry in docs/retention.json
+		section string // the DESIGN section; "" means 4.4
+		where   string // the row's first cell
+		data    string // the start of its second cell
+		re      string // captures the period in its third cell, or for 10.3 in its second
+		hours   bool   // the period is in hours, a whole number of days
 	}{
 		{name: "prompt text is kept 90 days on the device", id: "device.prompt_text", where: "Device", data: "Prompt text, final agent messages", re: `^(\d+) days, or until a submission covering them is decided, whichever is later`},
 		{name: "file paths and tool commands are kept 30 days on the device", id: "device.paths_commands", where: "Device", data: "File paths in the vault; tool commands", re: `^(\d+) days$`},
@@ -156,6 +165,8 @@ func TestDesignPeriods(t *testing.T) {
 		{name: "per-minute buckets are kept 180 days, then daily totals", id: "server.minute_buckets", where: "Server", data: "Minute buckets", re: `^Per-minute detail for (\d+) days, the submission horizon, then daily totals per project`},
 		{name: "witness rows are kept 180 days unless a submission uses them", id: "server.witness", where: "Server", data: "Witness rows and batch roots", re: `^(\d+) days; rows a submission uses stay until its spot-check window closes$`},
 		{name: "backup segments older than 180 days are deleted", id: "server.backups", where: "Server", data: "Wrapped `K_dev` and encrypted backups", re: `; backup segments older than (\d+) days are deleted$`},
+		{name: "deleted rows stay in the continuous replica for its 72-hour retention", id: "server.db_replica", section: design103, where: "Continuous", data: "Litestream to object storage", re: `snapshots every \d+ h, retention (\d+) h \(`, hours: true},
+		{name: "deleted rows stay in the nightly snapshots for their 30-day lifecycle", id: "server.db_snapshots", section: design103, where: "Nightly", data: "`VACUUM INTO` a snapshot", re: `uploaded to a second bucket with a (\d+)-day lifecycle\.`},
 	}
 	checked := make(map[string]bool)
 	for _, tt := range tests {
@@ -165,22 +176,33 @@ func TestDesignPeriods(t *testing.T) {
 			if !ok {
 				t.Fatalf("docs/retention.json has no entry %s", tt.id)
 			}
+			section, cell := design44, 2
+			if tt.section != "" {
+				section, cell = tt.section, 1
+			}
 			var kept string
-			for _, r := range rows {
+			for _, r := range designRows(t, section) {
 				if len(r) == 3 && r[0] == tt.where && strings.HasPrefix(r[1], tt.data) {
-					kept = r[2]
+					kept = r[cell]
 					break
 				}
 			}
 			if kept == "" {
-				t.Fatalf("DESIGN 4.4 has no row %q, %q...", tt.where, tt.data)
+				t.Fatalf("DESIGN %s has no row %q, %q...", section, tt.where, tt.data)
 			}
 			m := regexp.MustCompile(tt.re).FindStringSubmatch(kept)
 			if m == nil {
-				t.Fatalf("DESIGN 4.4's %q row says %q, which doesn't match %s", tt.data, kept, tt.re)
+				t.Fatalf("DESIGN %s's %q row says %q, which doesn't match %s", section, tt.data, kept, tt.re)
 			}
-			if want, _ := strconv.Atoi(m[1]); e.Days != want {
-				t.Errorf("%s has days %d; DESIGN 4.4 says %d (%q)", tt.id, e.Days, want, kept)
+			want, _ := strconv.Atoi(m[1])
+			if tt.hours {
+				if want%24 != 0 {
+					t.Fatalf("DESIGN %s says %d h, which isn't a whole number of days", section, want)
+				}
+				want /= 24
+			}
+			if e.Days != want {
+				t.Errorf("%s has days %d; DESIGN %s says %d (%q)", tt.id, e.Days, section, want, kept)
 			}
 		})
 	}
@@ -193,7 +215,7 @@ func TestDesignPeriods(t *testing.T) {
 	})
 	t.Run("the spot-check window is DESIGN 4.4's default, marked provisional", func(t *testing.T) {
 		var kept string
-		for _, r := range rows {
+		for _, r := range designRows(t, design44) {
 			if len(r) == 3 && r[0] == "Evidence store" {
 				kept = r[2]
 			}

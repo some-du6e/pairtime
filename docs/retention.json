@@ -147,6 +147,20 @@
       "days": 180
     },
     {
+      "id": "server.db_replica",
+      "where": "server",
+      "data": "This server's continuous backup: a copy of its database that the storage provider keeps up to date within seconds. It isn't encrypted with a key of the operator's own, so the storage provider could read it",
+      "kept": "Anything deleted from the database stays in this copy for up to {days}",
+      "days": 3
+    },
+    {
+      "id": "server.db_snapshots",
+      "where": "server",
+      "data": "This server's nightly backups: a copy of its database each night, encrypted before it leaves the server",
+      "kept": "Anything deleted from the database stays in these copies for up to {days}",
+      "days": 30
+    },
+    {
       "id": "evidence.revealed",
       "where": "evidence",
       "data": "What you reveal when you submit hours: the records behind them, the prompts drawn for review, and any risk flags",

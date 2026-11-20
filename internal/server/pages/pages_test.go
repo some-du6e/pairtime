@@ -216,6 +216,18 @@ func TestPrivacyNotice(t *testing.T) {
 			want: []string{"the server deletes them after 30 days."},
 		},
 		{
+			name: "the prose gives the backups' period wherever it promises a deletion (DESIGN 10.3)",
+			want: []string{
+				"Copies stay in the server&#39;s backups until those expire, at most 30 days later",
+				"Copies in the server&#39;s backups go as the backups expire, within 30 days.",
+				"Deleted data is gone from the server&#39;s backups too within 30 days.",
+			},
+		},
+		{
+			name: "the notice says the continuous backup isn't encrypted with the operator's key (DESIGN 10.3)",
+			want: []string{"The continuous backup isn&#39;t encrypted with a key of the operator&#39;s own, so the storage provider could read it."},
+		},
+		{
 			name: "the notice names this server and its version",
 			opts: Options{BaseURL: "https://pairtime.example.net", Version: "v1.2.3"},
 			want: []string{"the pairtime server at https://pairtime.example.net", "built by pairtime v1.2.3", "pairtime v1.2.3 is free software"},

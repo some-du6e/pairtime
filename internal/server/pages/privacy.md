@@ -13,7 +13,7 @@ This notice covers the pairtime server at {{.BaseURL}} and the pairtime program 
 - This server gets numbers: how many seconds of each minute were credited, to which project (as a key, not its name), and why the rest weren't.
 - Nothing about you is public until you choose what to show.
 - Hours are checked for fraud only when you submit them to a program.
-- Every kind of data has a time limit, listed under [How long we keep things](#how-long-we-keep-things).
+- Every kind of data has a time limit, listed under [How long we keep things](#how-long-we-keep-things). Deleted data is gone from the server's backups too within {{days "server.db_snapshots"}}.
 
 ## Who is responsible for your data
 
@@ -50,7 +50,7 @@ About once a minute while you work, your computer uploads these:
 - **Commit records.** For each commit, its ID and its parents, its times, how many files and lines changed, the credited time since the commit before it, and whether an AI agent made it. File paths go only as keyed hashes, never as names.
 - **Labels.** Your pairtime version, the scoring version, the names and versions of your AI tools, whether the typing module is on, and whether pairtime thinks it runs in a virtual machine.
 
-Each upload also shows this server the IP address it came from. Cloudflare, which sits in front of the server, adds a fingerprint of your connection's TLS settings called JA4. Hack Club's Fraud Squad can look them up when it checks submitted hours, and the server deletes them after {{days "server.ip_ja4"}}.
+Each upload also shows this server the IP address it came from. Cloudflare, which sits in front of the server, adds a fingerprint of your connection's TLS settings called JA4. Hack Club's Fraud Squad can look them up when it checks submitted hours, and the server deletes them after {{days "server.ip_ja4"}}. Copies stay in the server's backups until those expire, at most {{days "server.db_snapshots"}} later (see [How long we keep things](#how-long-we-keep-things)).
 
 Some things reach the server only at particular moments:
 
@@ -101,7 +101,7 @@ Submitting hours to a program is always your choice. This is what happens when y
 - This server holds the key that opens it. It decrypts each item in memory to check it, and again each time a reviewer opens it, when it encrypts the item once more for that reviewer's browser alone. So whoever runs this server could read what you reveal. The operator also keeps an encrypted copy of the key offline.
 - The encryption doesn't protect against someone at Cloudflare who actively replaces the keys, because the key your computer encrypts to, and the review page reviewers open it with, both come through Cloudflare.
 - The people who may open what you reveal are the reviewers assigned to your submission, Hack Club's Fraud Squad, its Quality and Integrity team and HQ spot-checkers. Every view is logged, and you can read the log.
-- If a revealed item shows something it shouldn't, the "This revealed something it shouldn't have" button deletes it at once. The minutes it supported stop counting.
+- If a revealed item shows something it shouldn't, the "This revealed something it shouldn't have" button deletes it from the evidence store at once, every stored version of it included. The minutes it supported stop counting.
 - A person may audit your submission in a 15-minute walk-through on a Slack huddle. It's never recorded, your camera is never needed, and you can bring a parent or club leader, or choose a written audit instead. Hack Club's safeguarding rules come first where they differ.
 
 ## Who else is involved
@@ -109,7 +109,7 @@ Submitting hours to a program is always your choice. This is what happens when y
 - **Hack Club Auth** signs you in.
 - **Cloudflare** sits in front of this server and handles its encrypted connections, so it sees everything that passes between your computer or browser and this server, such as the numbers your computer uploads and the pages you open. What you reveal when you submit hours passes through it encrypted, with the limit [When you submit hours](#when-you-submit-hours) describes.
 - **GitHub, GitLab and Forgejo.** The server looks up commits of your public repositories there to check them. Once a day it also publishes a day root to a public GitHub repository. A day root is one hash over that day's uploads, with a count and nothing about you.
-- **A storage provider** keeps backup copies of this server's database.
+- **A storage provider** keeps this server's backups, and the evidence you reveal when you submit hours. The evidence and the nightly backups are encrypted before they reach it. The continuous backup isn't encrypted with a key of the operator's own, so the storage provider could read it.
 - **Programs** you connect a project to get your submissions and their outcomes.
 - **Healthchecks.io** gets a ping every 5 minutes, so the operator knows the server is up. The pings carry nothing about you.
 
@@ -135,7 +135,7 @@ On your computer:
 - Local-only mode uploads nothing.
 - "Delete everything" wipes pairtime's data on your computer, including its device key.
 
-Through the controller, you can ask for a copy of your data, ask for it to be corrected or deleted, and withdraw any consent you gave. Deleting your account deletes everything this server holds about you, except the minimal fraud record in the table above, which the deletion report lists as kept. Copies that programs already received, such as the outcome of a submission, are held by those programs, not by this server.{{if .PrivacyHub}} Hack Club's privacy team can also export or delete your pairtime data for you, through the same privacy hub it uses for Hackatime.{{end}}
+Through the controller, you can ask for a copy of your data, ask for it to be corrected or deleted, and withdraw any consent you gave. Deleting your account deletes everything this server holds about you, except the minimal fraud record in the table above, which the deletion report lists as kept. Copies in the server's backups go as the backups expire, within {{days "server.db_snapshots"}}. Copies that programs already received, such as the outcome of a submission, are held by those programs, not by this server.{{if .PrivacyHub}} Hack Club's privacy team can also export or delete your pairtime data for you, through the same privacy hub it uses for Hackatime.{{end}}
 
 Parents and guardians can contact the controller with questions or requests too.
 
