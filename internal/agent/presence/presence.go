@@ -191,9 +191,9 @@ func (s *Sampler) Start() {
 
 	// The lock state is read only now, because Windows tells a new
 	// registration nothing about the state it starts in: read before the
-	// watch, a lock in between would be lost. A lock or unlock the watch
-	// delivers from here on is at least as new as the read, so the read
-	// counts only if none came.
+	// watch, a lock in between would be lost. From here on every lock and
+	// unlock reaches Power, and the latest one is never older than the
+	// read, so the read counts only if none has come.
 	locked, lockErr := false, error(nil)
 	if f := s.opts.OS.Locked; f != nil {
 		locked, lockErr = f()
