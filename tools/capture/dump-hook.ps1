@@ -57,8 +57,9 @@ $harnesses = @('claude', 'codex', 'cursor-agent', 'copilot', 'gemini', 'devin', 
 # codex -c key=value exec or codex -p work exec: the root options in
 # codex-rs/cli/src/main.rs, codex-rs/tui/src/cli.rs and codex-rs/utils/cli
 # at d64451b. A value joined to its option with = needs no skipping. -c and
-# -C differ, so they are compared with case.
-$codexValues = @('-c', '--config', '--enable', '--disable', '--remote', '--remote-auth-token-env', '-a', '--ask-for-approval', '-i', '--image', '-m', '--model', '--local-provider', '-p', '--profile', '-s', '--sandbox', '-C', '--cd', '--add-dir')
+# -C differ, so they are compared with case. -i, --image isn't here: it
+# takes every argument up to the next option.
+$codexValues = @('-c', '--config', '--enable', '--disable', '--remote', '--remote-auth-token-env', '-a', '--ask-for-approval', '-m', '--model', '--local-provider', '-p', '--profile', '-s', '--sandbox', '-C', '--cd', '--add-dir')
 
 # Split-CommandLine splits a Windows command line into its arguments the
 # way CommandLineToArgvW does: whitespace ends an argument outside double
@@ -125,6 +126,7 @@ function Get-Answers([string]$key, [string[]]$words) {
     $bare = 'no'
     $subcommand = $false
     $value = $false
+    $images = $false
     $previous = ''
     for ($i = 1; $i -lt $words.Count; $i++) {
         $a = [string]$words[$i]
@@ -134,15 +136,21 @@ function Get-Answers([string]$key, [string[]]$words) {
         if ($key -eq 'codex') {
             # codex has no print flag; its exec subcommand, or e, is the
             # first argument that is neither an option nor the value of one.
-            if ($value) {
-                $value = $false
-            } elseif (-not $subcommand -and -not $a.StartsWith('-', [StringComparison]::Ordinal)) {
-                $subcommand = $true
-                if ($a -ceq 'exec' -or $a -ceq 'e') {
-                    $print = 'yes'
+            # -i takes as many values as come before the next option, as
+            # clap reads its num_args = 1.. (shared_options.rs).
+            if (-not $subcommand) {
+                $operand = -not $a.StartsWith('-', [StringComparison]::Ordinal)
+                if ($value) {
+                    $value = $false
+                } elseif (-not $operand) {
+                    $images = ($a -ceq '-i') -or ($a -ceq '--image')
+                    $value = (-not $images) -and ($codexValues -ccontains $a)
+                } elseif (-not $images) {
+                    $subcommand = $true
+                    if ($a -ceq 'exec' -or $a -ceq 'e') {
+                        $print = 'yes'
+                    }
                 }
-            } elseif (-not $subcommand -and $codexValues -ccontains $a) {
-                $value = $true
             }
         } elseif ($a -ceq '-p' -or $a -ceq '--print' -or $a -ceq '--prompt' -or $a.StartsWith('--prompt=', [StringComparison]::Ordinal)) {
             $print = 'yes'

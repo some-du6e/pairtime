@@ -397,9 +397,10 @@ func TestDumpers(t *testing.T) {
 			// the first can't start with a dash, or sh takes it for an option
 			// of its own. codex reads that -s as its --sandbox, so a codex
 			// call's first argument is a sandbox mode. With through, the fake
-			// runs the dumper through a shell that stays between them, as a
-			// hook command's sh -c, allow-once.sh, and Git Bash or PowerShell
-			// on Windows do.
+			// runs the dumper through a shell that stays between them, as
+			// allow-once.sh does, and Git Bash or PowerShell on Windows. A
+			// hook command run with sh -c doesn't stay when it's one command:
+			// the shell runs the dumper in its own place.
 			harnessCall := func(t *testing.T, through bool, name string, args ...string) string {
 				t.Helper()
 				dir := t.TempDir()
@@ -491,13 +492,21 @@ func TestDumpers(t *testing.T) {
 					}
 				}},
 				{"codex's e, after options and the values they take, is its print mode", func(t *testing.T) {
-					runDir := underHarness(t, "codex", "workspace-write", "-c", "model_reasoning_effort=high", "--profile", "work", "--model=o3", "e", harnessSentinel)
+					runDir := underHarness(t, "codex", "workspace-write", "-c", "model_reasoning_effort=high", "--profile", "work", "-i", "shot.png", "--model=o3", "e", harnessSentinel)
 					if got, want := flags(t, runDir), "name=codex\nprint=yes\nstream_json=no\nbare=no\n"; got != want {
 						t.Fatalf("flags = %q, want %q", got, want)
 					}
 				}},
 				{"an option's value isn't codex's subcommand, even when it reads exec", func(t *testing.T) {
 					runDir := underHarness(t, "codex", "workspace-write", "-m", "exec", harnessSentinel)
+					if got, want := flags(t, runDir), "name=codex\nprint=no\nstream_json=no\nbare=no\n"; got != want {
+						t.Fatalf("flags = %q, want %q", got, want)
+					}
+				}},
+				// clap gives -i every argument up to the next option, so this
+				// codex starts interactive with three images.
+				{"every argument after codex's -i, up to the next option, is an image, even exec", func(t *testing.T) {
+					runDir := underHarness(t, "codex", "workspace-write", "-i", "shot.png", "exec", harnessSentinel)
 					if got, want := flags(t, runDir), "name=codex\nprint=no\nstream_json=no\nbare=no\n"; got != want {
 						t.Fatalf("flags = %q, want %q", got, want)
 					}

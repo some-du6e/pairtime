@@ -157,8 +157,9 @@ harnesses='claude codex cursor-agent copilot gemini devin opencode cline'
 # The options codex takes a value with before its subcommand, as in
 # codex -c key=value exec or codex -p work exec: the root options in
 # codex-rs/cli/src/main.rs, codex-rs/tui/src/cli.rs and codex-rs/utils/cli
-# at d64451b. A value joined to its option with = needs no skipping.
-codex_values='-c --config --enable --disable --remote --remote-auth-token-env -a --ask-for-approval -i --image -m --model --local-provider -p --profile -s --sandbox -C --cd --add-dir'
+# at d64451b. A value joined to its option with = needs no skipping. -i,
+# --image isn't here: it takes every argument up to the next option.
+codex_values='-c --config --enable --disable --remote --remote-auth-token-env -a --ask-for-approval -m --model --local-provider -p --profile -s --sandbox -C --cd --add-dir'
 found=$(awk -v harnesses="$harnesses" '
 	BEGIN {
 		n = split(harnesses, list, " ")
@@ -211,17 +212,22 @@ if [ -n "$found" ]; then
 			{
 				# codex has no print flag; its exec subcommand, or e, is the
 				# first argument that is neither an option nor the value of
-				# one.
+				# one. -i takes as many values as come before the next option,
+				# as clap reads its num_args = 1.. (shared_options.rs).
 				if (name == "codex") {
-					if (value) {
-						value = 0
-					} else if (!subcommand && substr($0, 1, 1) != "-") {
-						subcommand = 1
-						if ($0 == "exec" || $0 == "e") {
-							print_flag = "yes"
+					if (!subcommand) {
+						operand = (substr($0, 1, 1) != "-")
+						if (value) {
+							value = 0
+						} else if (!operand) {
+							images = ($0 == "-i" || $0 == "--image")
+							value = (!images && ($0 in takes_value))
+						} else if (!images) {
+							subcommand = 1
+							if ($0 == "exec" || $0 == "e") {
+								print_flag = "yes"
+							}
 						}
-					} else if (!subcommand && ($0 in takes_value)) {
-						value = 1
 					}
 				} else if ($0 == "-p" || $0 == "--print" || $0 == "--prompt" || substr($0, 1, 9) == "--prompt=") {
 					print_flag = "yes"
