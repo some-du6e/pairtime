@@ -19,10 +19,11 @@
 //     because HCA doesn't separate 18 from 19 (DESIGN 8.2, 13.2).
 //   - needs_submission and pending: the person may sign in, not submit.
 //
-// While signups_open is false, an identity without an account is refused
-// and nothing is written, so the server holds no new person's data until
-// the controller is named (DESIGN 8.6). WP-SV14 adds the operators list
-// that may sign up while sign-ups are closed.
+// An identity without an account gets one only when Options.MayCreate
+// admits its HCA subject. Otherwise it is refused and nothing is written,
+// so the server holds no new person's data until the controller is named
+// (DESIGN 8.6). cmd/pairtimed admits everyone while signups_open is true;
+// WP-SV14's gate also admits the operators list while it is false.
 //
 // A session is a random token in the browser's cookie, and the database
 // keeps only its SHA-256. Every write goes through the writer goroutine;
@@ -167,7 +168,7 @@ const tokenBytes = 32
 // The errors SignIn and Session return.
 var (
 	ErrIneligible    = errors.New("accounts: Hack Club Auth marks this identity ineligible")
-	ErrSignupsClosed = errors.New("accounts: sign-ups are closed and this identity has no account")
+	ErrSignupsClosed = errors.New("accounts: this identity has no account, and sign-ups are closed to it")
 	ErrNoSession     = errors.New("accounts: no such session")
 )
 
@@ -179,9 +180,11 @@ type Options struct {
 	Emails *EmailCipher
 	// Reviewers is the reviewer allowlist of pairtime.toml (DESIGN 10.2).
 	Reviewers []config.Reviewer
-	// SignupsOpen says whether an identity without an account may create
-	// one (DESIGN 8.6).
-	SignupsOpen bool
+	// MayCreate reports whether the identity sub, which has no account,
+	// may create one (DESIGN 8.6). SignIn asks it inside the transaction
+	// that finds no account, so it must be quick and must not write. Nil
+	// means sign-ups are closed to everyone.
+	MayCreate func(sub string) bool
 	// SessionLifetime is how long a session lasts. Zero means
 	// DefaultSessionLifetime.
 	SessionLifetime time.Duration
@@ -191,13 +194,13 @@ type Options struct {
 
 // Store reads and writes accounts and sessions.
 type Store struct {
-	db          *store.DB
-	w           *writer.Writer
-	emails      *EmailCipher
-	roles       map[string][]string
-	signupsOpen bool
-	lifetime    time.Duration
-	now         func() time.Time
+	db        *store.DB
+	w         *writer.Writer
+	emails    *EmailCipher
+	roles     map[string][]string
+	mayCreate func(sub string) bool
+	lifetime  time.Duration
+	now       func() time.Time
 }
 
 // New returns a Store.
@@ -206,13 +209,13 @@ func New(o Options) (*Store, error) {
 		return nil, errors.New("accounts: New needs a database, a writer and an email cipher")
 	}
 	s := &Store{
-		db:          o.DB,
-		w:           o.Writer,
-		emails:      o.Emails,
-		roles:       make(map[string][]string, len(o.Reviewers)),
-		signupsOpen: o.SignupsOpen,
-		lifetime:    o.SessionLifetime,
-		now:         o.Now,
+		db:        o.DB,
+		w:         o.Writer,
+		emails:    o.Emails,
+		roles:     make(map[string][]string, len(o.Reviewers)),
+		mayCreate: o.MayCreate,
+		lifetime:  o.SessionLifetime,
+		now:       o.Now,
 	}
 	for _, r := range o.Reviewers {
 		s.roles[r.Sub] = slices.Clone(r.Roles)
@@ -236,8 +239,8 @@ func (s *Store) Roles(sub string) []string {
 // reports whether the sign-in created the account.
 //
 // SignIn returns ErrIneligible when HCA marks id ineligible, and
-// ErrSignupsClosed when sign-ups are closed and id has no account. Neither
-// opens a session. An existing account that turns ineligible gets its new
+// ErrSignupsClosed when id has no account and Options.MayCreate doesn't
+// admit it. Neither opens a session. An existing account that turns ineligible gets its new
 // status and loses its sessions; an identity without an account is never
 // written.
 func (s *Store) SignIn(ctx context.Context, id Identity, authTime time.Time) (sess *Session, created bool, err error) {
@@ -279,7 +282,7 @@ func (s *Store) SignIn(ctx context.Context, id Identity, authTime time.Time) (se
 				refused = ErrIneligible
 				return nil
 			}
-			if !s.signupsOpen {
+			if s.mayCreate == nil || !s.mayCreate(id.Sub) {
 				refused = ErrSignupsClosed
 				return nil
 			}

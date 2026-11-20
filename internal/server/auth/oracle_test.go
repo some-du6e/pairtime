@@ -89,7 +89,7 @@ func TestMockOAuth2Server(t *testing.T) {
 				issuer:       issuer,
 				clientID:     tt.clientID,
 				clientSecret: "mock-oauth2-server-takes-any-secret",
-				signupsOpen:  true,
+				mayCreate:    anyone,
 			})
 			f := h.signIn(tt.opts)
 			if tt.opts.query == fresh {

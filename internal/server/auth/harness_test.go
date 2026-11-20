@@ -61,8 +61,10 @@ type harnessConfig struct {
 	issuer       string
 	clientID     string
 	clientSecret string
-	signupsOpen  bool
-	reviewers    []config.Reviewer
+	// mayCreate is accounts.Options.MayCreate: nil closes sign-ups, and
+	// anyone opens them.
+	mayCreate func(sub string) bool
+	reviewers []config.Reviewer
 	// now is the sign-in service's clock; nil means time.Now.
 	now func() time.Time
 	// register gets the redirect URI before the server starts.
@@ -70,6 +72,9 @@ type harnessConfig struct {
 }
 
 var emailKey = bytes.Repeat([]byte{9}, accounts.EmailKeySize)
+
+// anyone is MayCreate with sign-ups open to every identity.
+func anyone(string) bool { return true }
 
 func newHarness(t *testing.T, c harnessConfig) *harness {
 	t.Helper()
@@ -89,11 +94,11 @@ func newHarness(t *testing.T, c harnessConfig) *harness {
 		t.Fatal(err)
 	}
 	acc, err := accounts.New(accounts.Options{
-		DB:          db,
-		Writer:      w,
-		Emails:      emails,
-		Reviewers:   c.reviewers,
-		SignupsOpen: c.signupsOpen,
+		DB:        db,
+		Writer:    w,
+		Emails:    emails,
+		Reviewers: c.reviewers,
+		MayCreate: c.mayCreate,
 	})
 	if err != nil {
 		t.Fatal(err)

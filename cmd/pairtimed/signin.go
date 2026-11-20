@@ -34,11 +34,11 @@ func newSignIn(cfg *config.Config, db *store.DB, w *writer.Writer, logger *slog.
 		return nil, err
 	}
 	acc, err := accounts.New(accounts.Options{
-		DB:          db,
-		Writer:      w,
-		Emails:      emails,
-		Reviewers:   cfg.Reviewers,
-		SignupsOpen: cfg.SignupsOpen,
+		DB:        db,
+		Writer:    w,
+		Emails:    emails,
+		Reviewers: cfg.Reviewers,
+		MayCreate: signupGate(cfg),
 	})
 	if err != nil {
 		return nil, err
@@ -56,4 +56,12 @@ func newSignIn(cfg *config.Config, db *store.DB, w *writer.Writer, logger *slog.
 	}
 	logger.Info("sign-in with Hack Club Auth is on", "issuer", cfg.HCA.Issuer, "redirect_uri", svc.RedirectURI(), "signups_open", cfg.SignupsOpen)
 	return svc, nil
+}
+
+// signupGate says which new identities may create an account: everyone
+// while signups_open is true, and no one while it is false (DESIGN 8.6).
+// WP-SV14 replaces it with a gate that also admits its operators list.
+func signupGate(cfg *config.Config) func(sub string) bool {
+	signupsOpen := cfg.SignupsOpen
+	return func(string) bool { return signupsOpen }
 }

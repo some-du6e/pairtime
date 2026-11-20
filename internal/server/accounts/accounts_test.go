@@ -73,6 +73,9 @@ func count(t *testing.T, db *store.DB, query string, args ...any) int {
 
 func boolPtr(b bool) *bool { return &b }
 
+// anyone is MayCreate with sign-ups open to every identity.
+func anyone(string) bool { return true }
+
 func verified() Identity {
 	return Identity{
 		Sub:          "ident!abc123",
@@ -86,8 +89,12 @@ func verified() Identity {
 func TestSignIn(t *testing.T) {
 	ctx := context.Background()
 	tests := []struct {
-		name       string
+		name string
+		// closed makes MayCreate nil once the before sign-ins are done,
+		// and mayCreate, when set, replaces it then. Otherwise anyone may
+		// sign up.
 		closed     bool
+		mayCreate  func(sub string) bool
 		before     []Identity // sign-ins that happen first, each accepted
 		id         Identity
 		wantErr    error // nil means the sign-in is accepted
@@ -180,6 +187,38 @@ func TestSignIn(t *testing.T) {
 			before: []Identity{verified()},
 			id:     verified(),
 		},
+		{
+			name:      "MayCreate admits a new identity by its HCA subject",
+			mayCreate: func(sub string) bool { return sub == "ident!abc123" },
+			id:        verified(),
+			check: func(t *testing.T, s *Store, db *store.DB, sess *Session, created bool) {
+				if !created || sess.User.HCASub != "ident!abc123" {
+					t.Errorf("created = %v, user = %+v; want a new account", created, sess.User)
+				}
+			},
+		},
+		{
+			name:      "a new identity MayCreate doesn't admit is refused and nothing is written",
+			mayCreate: func(sub string) bool { return sub == "ident!someoneElse" },
+			id:        verified(),
+			wantErr:   ErrSignupsClosed,
+			check: func(t *testing.T, s *Store, db *store.DB, _ *Session, _ bool) {
+				if n := count(t, db, `SELECT count(*) FROM users`); n != 0 {
+					t.Errorf("%d users, want 0", n)
+				}
+			},
+		},
+		{
+			name:      "an existing account signs in whatever MayCreate says",
+			mayCreate: func(string) bool { return false },
+			before:    []Identity{verified()},
+			id:        verified(),
+			check: func(t *testing.T, s *Store, db *store.DB, _ *Session, created bool) {
+				if created {
+					t.Error("created = true for an existing account")
+				}
+			},
+		},
 		{name: "an unknown verification status is refused", id: Identity{Sub: "ident!abc123", Status: "verified_eventually"}, wantErrAny: true},
 		{name: "an empty subject is refused", id: Identity{Status: Verified}, wantErrAny: true},
 		{name: "a subject with a space is refused", id: Identity{Sub: "ident! abc", Status: Verified}, wantErrAny: true},
@@ -188,13 +227,18 @@ func TestSignIn(t *testing.T) {
 		t.Run(string(engine), func(t *testing.T) {
 			for _, tt := range tests {
 				t.Run(tt.name, func(t *testing.T) {
-					s, db := open(t, engine, Options{SignupsOpen: true})
+					s, db := open(t, engine, Options{MayCreate: anyone})
 					for _, id := range tt.before {
 						if _, _, err := s.SignIn(ctx, id, time.Time{}); err != nil {
 							t.Fatalf("an earlier sign-in: %v", err)
 						}
 					}
-					s.signupsOpen = !tt.closed
+					switch {
+					case tt.closed:
+						s.mayCreate = nil
+					case tt.mayCreate != nil:
+						s.mayCreate = tt.mayCreate
+					}
 					sess, created, err := s.SignIn(ctx, tt.id, time.Time{})
 					switch {
 					case tt.wantErrAny:
@@ -224,7 +268,7 @@ func TestEmailAtRest(t *testing.T) {
 	ctx := context.Background()
 	for _, engine := range storetest.Engines() {
 		t.Run(string(engine), func(t *testing.T) {
-			s, db := open(t, engine, Options{SignupsOpen: true})
+			s, db := open(t, engine, Options{MayCreate: anyone})
 			id := verified()
 			id.Email = "Teen@Example.org"
 			sess, _, err := s.SignIn(ctx, id, time.Time{})
@@ -324,7 +368,7 @@ func TestSession(t *testing.T) {
 			for _, tt := range tests {
 				t.Run(tt.name, func(t *testing.T) {
 					c := newClock()
-					s, _ := open(t, engine, Options{SignupsOpen: true, Reviewers: reviewers, Now: c.now})
+					s, _ := open(t, engine, Options{MayCreate: anyone, Reviewers: reviewers, Now: c.now})
 					signed, _, err := s.SignIn(ctx, verified(), c.t.Add(-time.Minute))
 					if err != nil {
 						t.Fatal(err)
@@ -358,7 +402,7 @@ func TestTokenAtRest(t *testing.T) {
 	ctx := context.Background()
 	for _, engine := range storetest.Engines() {
 		t.Run(string(engine), func(t *testing.T) {
-			s, db := open(t, engine, Options{SignupsOpen: true})
+			s, db := open(t, engine, Options{MayCreate: anyone})
 			sess, _, err := s.SignIn(ctx, verified(), time.Time{})
 			if err != nil {
 				t.Fatal(err)
@@ -389,7 +433,7 @@ func TestDeleteExpiredSessions(t *testing.T) {
 	for _, engine := range storetest.Engines() {
 		t.Run(string(engine), func(t *testing.T) {
 			c := newClock()
-			s, db := open(t, engine, Options{SignupsOpen: true, Now: c.now, SessionLifetime: time.Hour})
+			s, db := open(t, engine, Options{MayCreate: anyone, Now: c.now, SessionLifetime: time.Hour})
 			expired, _, err := s.SignIn(ctx, verified(), time.Time{})
 			if err != nil {
 				t.Fatal(err)

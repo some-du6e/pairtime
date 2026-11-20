@@ -21,8 +21,9 @@ import (
 	"github.com/some-du6e/pairtime/internal/server/store/storetest"
 )
 
-// withFake returns a harness signing in through a fresh fake HCA.
-func withFake(t *testing.T, engine store.Engine, signupsOpen bool) (*harness, *hcafake.Server) {
+// withFake returns a harness signing in through a fresh fake HCA, where
+// mayCreate decides who may sign up.
+func withFake(t *testing.T, engine store.Engine, mayCreate func(sub string) bool) (*harness, *hcafake.Server) {
 	t.Helper()
 	hca := hcafake.New(t)
 	h := newHarness(t, harnessConfig{
@@ -30,7 +31,7 @@ func withFake(t *testing.T, engine store.Engine, signupsOpen bool) (*harness, *h
 		issuer:       hca.URL,
 		clientID:     hcafake.ClientID,
 		clientSecret: hcafake.ClientSecret,
-		signupsOpen:  signupsOpen,
+		mayCreate:    mayCreate,
 		register:     hca.AddRedirectURI,
 	})
 	return h, hca
@@ -58,10 +59,13 @@ func testSignIn(t *testing.T, engine store.Engine) {
 	tests := []struct {
 		name     string
 		identity *hcafake.Identity // nil: hcafake.Verified()
-		closed   bool              // sign-ups closed
-		deny     bool
-		hook     func(*hcafake.Token) string
-		opts     signInOptions
+		// closed closes sign-ups, and mayCreate, when set, decides who may
+		// sign up. Otherwise anyone may.
+		closed    bool
+		mayCreate func(sub string) bool
+		deny      bool
+		hook      func(*hcafake.Token) string
+		opts      signInOptions
 		// wantCode is the refusal's code; "" means the sign-in succeeds
 		// and lands on wantLocation, "/" when empty.
 		wantStatus   int
@@ -155,6 +159,26 @@ func testSignIn(t *testing.T, engine store.Engine) {
 		{
 			name:       "while sign-ups are closed a new identity is refused and gets no account row",
 			closed:     true,
+			wantStatus: http.StatusForbidden,
+			wantCode:   auth.CodeSignupsClosed,
+			check: func(t *testing.T, h *harness, _ *hcafake.Server, _ *flow, _ auth.Me) {
+				if n := h.count(`SELECT count(*) FROM users`); n != 0 {
+					t.Errorf("%d account rows, want 0", n)
+				}
+			},
+		},
+		{
+			name:      "while sign-ups are closed an identity MayCreate admits gets an account",
+			mayCreate: func(sub string) bool { return sub == hcafake.Verified().Sub },
+			check: func(t *testing.T, h *harness, _ *hcafake.Server, _ *flow, me auth.Me) {
+				if me.HCASub != hcafake.Verified().Sub || h.count(`SELECT count(*) FROM users`) != 1 {
+					t.Errorf("me = %+v; want the admitted identity, with one account row", me)
+				}
+			},
+		},
+		{
+			name:       "while sign-ups are closed an identity MayCreate doesn't admit is refused",
+			mayCreate:  func(sub string) bool { return sub == "ident!someoneElse" },
 			wantStatus: http.StatusForbidden,
 			wantCode:   auth.CodeSignupsClosed,
 			check: func(t *testing.T, h *harness, _ *hcafake.Server, _ *flow, _ auth.Me) {
@@ -417,7 +441,14 @@ func testSignIn(t *testing.T, engine store.Engine) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			h, hca := withFake(t, engine, !tt.closed)
+			mayCreate := anyone
+			switch {
+			case tt.closed:
+				mayCreate = nil
+			case tt.mayCreate != nil:
+				mayCreate = tt.mayCreate
+			}
+			h, hca := withFake(t, engine, mayCreate)
 			if tt.identity != nil {
 				hca.SetIdentity(*tt.identity)
 			}
@@ -444,7 +475,7 @@ func testSignIn(t *testing.T, engine store.Engine) {
 func TestSignInAgain(t *testing.T) {
 	for _, engine := range storetest.Engines() {
 		t.Run(string(engine), func(t *testing.T) {
-			h, hca := withFake(t, engine, true)
+			h, hca := withFake(t, engine, anyone)
 			first := checkSignedIn(t, h, h.signIn(signInOptions{}), "/")
 			id := hcafake.Verified()
 			id.SlackID = "U0NEWSLACK"
@@ -476,7 +507,7 @@ func TestSignInAgain(t *testing.T) {
 func TestIneligibleLater(t *testing.T) {
 	for _, engine := range storetest.Engines() {
 		t.Run(string(engine), func(t *testing.T) {
-			h, hca := withFake(t, engine, true)
+			h, hca := withFake(t, engine, anyone)
 			checkSignedIn(t, h, h.signIn(signInOptions{}), "/")
 			id := hcafake.Verified()
 			id.VerificationStatus = "ineligible"
@@ -516,7 +547,7 @@ func TestLogout(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			h, _ := withFake(t, storetest.Engines()[0], true)
+			h, _ := withFake(t, storetest.Engines()[0], anyone)
 			checkSignedIn(t, h, h.signIn(signInOptions{}), "/")
 			header := http.Header{}
 			switch tt.origin {
@@ -559,7 +590,7 @@ func TestKeyRotation(t *testing.T) {
 		issuer:       hca.URL,
 		clientID:     hcafake.ClientID,
 		clientSecret: hcafake.ClientSecret,
-		signupsOpen:  true,
+		mayCreate:    anyone,
 		now:          clock,
 		register:     hca.AddRedirectURI,
 	})
@@ -575,7 +606,7 @@ func TestKeyRotation(t *testing.T) {
 }
 
 func TestNoSecretsInLogs(t *testing.T) {
-	h, hca := withFake(t, storetest.Engines()[0], true)
+	h, hca := withFake(t, storetest.Engines()[0], anyone)
 	ok := h.signIn(signInOptions{})
 	checkSignedIn(t, h, ok, "/")
 	hca.SetHook(resign(func(c map[string]any) { c["nonce"] = "x" }))
@@ -608,7 +639,7 @@ func TestReviewerRoles(t *testing.T) {
 		issuer:       hca.URL,
 		clientID:     hcafake.ClientID,
 		clientSecret: hcafake.ClientSecret,
-		signupsOpen:  true,
+		mayCreate:    anyone,
 		reviewers:    []config.Reviewer{{Sub: hcafake.Verified().Sub, Roles: []string{"qi", "program_reviewer:stardance"}}},
 		register:     hca.AddRedirectURI,
 	})
@@ -640,7 +671,7 @@ func TestDiscoveryChecks(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			h, hca := withFake(t, storetest.Engines()[0], true)
+			h, hca := withFake(t, storetest.Engines()[0], anyone)
 			hca.SetDiscovery(tt.edit)
 			r := h.get(h.srv.URL + auth.LoginPath)
 			if r.status != http.StatusServiceUnavailable || errorCode(r) != auth.CodeHCAUnreachable {

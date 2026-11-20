@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/some-du6e/pairtime/internal/server/auth/hcafake"
+	"github.com/some-du6e/pairtime/internal/server/config"
 )
 
 // writeSignInConfig writes writeConfig's pairtime.toml with sign-ups open
@@ -133,5 +134,26 @@ func TestServeSignIn(t *testing.T) {
 		}
 	case <-time.After(60 * time.Second):
 		t.Fatal("serve didn't stop within a minute of its context ending")
+	}
+}
+
+func TestSignupGate(t *testing.T) {
+	tests := []struct {
+		name        string
+		signupsOpen bool
+		want        bool
+	}{
+		{name: "with signups_open = true any new identity may create an account", signupsOpen: true, want: true},
+		{name: "with signups_open = false no new identity may", signupsOpen: false, want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gate := signupGate(&config.Config{SignupsOpen: tt.signupsOpen})
+			for _, sub := range []string{"ident!abc123", "ident!someoneElse"} {
+				if got := gate(sub); got != tt.want {
+					t.Errorf("the gate answers %v for %s, want %v", got, sub, tt.want)
+				}
+			}
+		})
 	}
 }
