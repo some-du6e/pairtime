@@ -215,6 +215,41 @@ jobs:
             GOOS=${target%/*} GOARCH=${target#*/} go vet ./internal/platform/...
           done
 
+      - name: HCA sign-in against an independent OIDC server
+        if: ${{ !cancelled() }}
+        # WP-SV2's oracle: pairtimed's Hack Club Auth sign-in, end to end
+        # against navikt/mock-oauth2-server (MIT), an OIDC server nobody on
+        # this project wrote, pinned by digest. Its config gives each client
+        # id the claims one case of TestMockOAuth2Server needs. The test
+        # skips without PAIRTIME_TEST_OIDC_URL, so this step fails unless it
+        # ran and passed.
+        env:
+          PAIRTIME_TEST_OIDC_URL: http://localhost:8080
+          # 6.1.4, 2026-10-28.
+          IMAGE: ghcr.io/navikt/mock-oauth2-server:6.1.4@sha256:647dd8c78a54f0e6fcd58d79c884e612f8f998a0662276f3e1db22e464a50192
+        run: |
+          docker run -d --name oidc -p 8080:8080 \
+            -e JSON_CONFIG_PATH=/config/mock-oauth2-server.json \
+            -v "$PWD/internal/server/auth/testdata:/config:ro" \
+            "$IMAGE" >/dev/null
+          for _ in $(seq 1 60); do
+            if curl -fsS http://localhost:8080/isalive >/dev/null 2>&1; then break; fi
+            sleep 1
+          done
+          set +e
+          out=$(go test -count=1 -v -run '^TestMockOAuth2Server$' ./internal/server/auth 2>&1)
+          code=$?
+          set -e
+          grep -E -- '--- (PASS|FAIL|SKIP)' <<<"$out" || true
+          if [ "$code" -ne 0 ] || ! grep -q -- '--- PASS: TestMockOAuth2Server ' <<<"$out" || grep -q -- '--- SKIP' <<<"$out"; then
+            echo "$out"
+            echo "::group::mock-oauth2-server log"
+            docker logs oidc 2>&1 | tail -n 200
+            echo "::endgroup::"
+            echo "::error::TestMockOAuth2Server didn't run and pass against mock-oauth2-server"
+            exit 1
+          fi
+
       - name: Module licenses
         if: ${{ !cancelled() }}
         run: |

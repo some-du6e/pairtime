@@ -22,8 +22,9 @@ info:
     The dashboard's static files at `/` need nothing more. Routes under
     `/v1/` also need the bearer token from port.json, which only the user who
     runs the agent can read. The dashboard's own sign-in, a one-time URL that
-    sets a `SameSite=Strict`, `HttpOnly` cookie, comes with WP-UI1; until then
-    the dashboard shows how to open it and calls nothing that needs a token.
+    sets a `SameSite=Strict`, `HttpOnly` cookie, comes with WP-UI1. Until
+    then the dashboard calls GET /v1/status with no token, gets 401, and
+    says this version can't open it yet.
 servers:
   - url: http://127.0.0.1:7247
     description: the default port; port.json has the real one
@@ -54,8 +55,8 @@ paths:
       summary: Stop the agent
       description: >
         Answers first, then stops the agent the same way on every OS.
-        Windows has no signal for a process without a console, so this is how
-        `pairtime agent stop` and footprint.yml stop it cleanly.
+        Windows has no signal for a process without a console, and
+        footprint.yml uses this to stop the agent cleanly.
       responses:
         "202":
           description: The agent is stopping.
@@ -97,7 +98,7 @@ components:
     Status:
       type: object
       additionalProperties: false
-      required: [version, pid, started, uptime_s, mode, port, wakeups, jobs]
+      required: [version, pid, started, uptime_s, mode, port, wakeups, jobs, ipc]
       properties:
         version:
           $ref: "#/components/schemas/Version"
@@ -127,12 +128,14 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/Job"
+        ipc:
+          $ref: "#/components/schemas/IPC"
         problems:
           type: object
           description: >
             What isn't working, keyed by where it comes from (`config`,
-            `config-watch`, `state`), in words for the teen. Absent when
-            nothing is wrong.
+            `config-watch`, `state`, `port`, `ipc`), in words for the teen.
+            Absent when nothing is wrong.
           additionalProperties:
             type: string
     Version:
@@ -180,6 +183,35 @@ components:
         runs:
           type: integer
           minimum: 0
+    IPC:
+      type: object
+      additionalProperties: false
+      required: [stored, duplicates, refused]
+      description: >
+        The per-user socket hooks hand their messages to the agent on
+        (DESIGN 3.3).
+      properties:
+        via:
+          type: string
+          enum: [socket, pipe]
+          description: >
+            `socket` for the AF_UNIX socket, or `pipe` for the named pipe
+            Windows falls back to. Absent when hooks can't reach the agent and
+            spool their messages instead.
+        stored:
+          type: integer
+          minimum: 0
+          description: >
+            The messages the agent stored since it started, from the socket
+            and the spool both.
+        duplicates:
+          type: integer
+          minimum: 0
+          description: Second copies of stored messages, which the agent dropped.
+        refused:
+          type: integer
+          minimum: 0
+          description: Connections turned away because they didn't come from this user.
     Stopping:
       type: object
       additionalProperties: false

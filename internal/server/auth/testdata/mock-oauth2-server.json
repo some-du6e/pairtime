@@ -1,0 +1,71 @@
+{
+  "interactiveLogin": false,
+  "tokenCallbacks": [
+    {
+      "issuerId": "hca",
+      "tokenExpiry": 120,
+      "requestMappings": [
+        {
+          "requestParam": "client_id",
+          "match": "pairtime-verified",
+          "claims": {
+            "sub": "ident!mockVerified",
+            "email": "verified@example.org",
+            "email_verified": true,
+            "slack_id": "U0MOCKVERIFIED",
+            "verification_status": "verified",
+            "ysws_eligible": true
+          }
+        },
+        {
+          "requestParam": "client_id",
+          "match": "pairtime-ineligible",
+          "claims": {
+            "sub": "ident!mockIneligible",
+            "email": "ineligible@example.org",
+            "email_verified": true,
+            "verification_status": "ineligible",
+            "ysws_eligible": false
+          }
+        },
+        {
+          "requestParam": "client_id",
+          "match": "pairtime-wrong-nonce",
+          "claims": {
+            "sub": "ident!mockVerified",
+            "verification_status": "verified",
+            "nonce": "not-the-nonce-pairtimed-sent"
+          }
+        },
+        {
+          "requestParam": "client_id",
+          "match": "pairtime-wrong-issuer",
+          "claims": {
+            "sub": "ident!mockVerified",
+            "verification_status": "verified",
+            "iss": "http://localhost:8080/not-hca"
+          }
+        },
+        {
+          "requestParam": "client_id",
+          "match": "pairtime-wrong-audience",
+          "claims": {
+            "sub": "ident!mockVerified",
+            "verification_status": "verified",
+            "aud": "another-client"
+          }
+        },
+        {
+          "requestParam": "client_id",
+          "match": "pairtime-expired",
+          "claims": {
+            "sub": "ident!mockVerified",
+            "verification_status": "verified",
+            "iat": 1000000000,
+            "exp": 1000000120
+          }
+        }
+      ]
+    }
+  ]
+}
