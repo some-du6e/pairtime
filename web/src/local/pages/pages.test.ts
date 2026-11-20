@@ -148,7 +148,7 @@ describe('Today', () => {
 			name: 'the week lists only the days with time on them',
 			html: () => today(),
 			check: (html) => {
-				const rows = [...html.matchAll(/<tr data-date="([^"]+)"/g)].map((m) => m[1]);
+				const rows = [...html.matchAll(/<li[^>]* data-date="([^"]+)"/g)].map((m) => m[1]);
 				expect(rows).toEqual(['2026-11-16', '2026-11-18', '2026-11-19', '2026-11-20']);
 			},
 		},

@@ -163,7 +163,7 @@ test.describe('Today', () => {
 		const fake = await fakeAgent(page);
 		await page.goto(dashboardURL);
 		const week = page.getByTestId('week');
-		await expect(week.locator('tbody th')).toHaveText(['Monday, November 16', 'Wednesday, November 18', 'Yesterday', 'Today']);
+		await expect(week.getByTestId('week-day')).toHaveText(['Monday, November 16', 'Wednesday, November 18', 'Yesterday', 'Today']);
 		await expect(page.getByTestId('week-clock')).toHaveText('you 5h 37m · Claude 1h 21m · Copilot 33m · Codex 32m · Cursor 17m');
 		const asked = () => fake.requests.filter((u) => /^\/v1\/days\/2026-11-1[6-9]$/.test(u.pathname)).map((u) => u.pathname);
 		expect(asked().sort()).toEqual(['/v1/days/2026-11-16', '/v1/days/2026-11-17', '/v1/days/2026-11-18', '/v1/days/2026-11-19']);
@@ -325,6 +325,29 @@ test.describe('the whole dashboard', () => {
 		}
 		expect(elsewhere).toEqual([]);
 		expect(errors).toEqual([]);
+	});
+
+	test('on a phone no page scrolls sideways, and the week stacks each day', async ({ page }) => {
+		await page.setViewportSize({ width: 360, height: 780 });
+		await fakeAgent(page);
+		for (const [hash, heading] of [
+			['#/today', 'Today'],
+			['#/projects/30-days', 'Projects'],
+			['#/privacy', 'Privacy'],
+			['#/settings', 'Settings'],
+		] as const) {
+			await page.goto(dashboardURL + hash);
+			await expect(page.getByRole('heading', { level: 1 })).toHaveText(heading);
+			await expect(page.locator('main [aria-live]')).toHaveCount(0);
+			const wide = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+			expect(wide, hash).toBeLessThanOrEqual(0);
+		}
+		await page.goto(`${dashboardURL}#/today`);
+		// The day's bar sits under its clock line, as wide as the card.
+		const day = page.getByTestId('week').locator('li').last();
+		const bar = await day.getByTestId('bar').boundingBox();
+		const line = await day.locator('.line').boundingBox();
+		expect(bar && line && bar.y >= line.y + line.height - 1).toBe(true);
 	});
 
 	test('the agent not answering says how to start it', async ({ page }) => {

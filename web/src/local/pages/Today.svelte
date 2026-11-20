@@ -92,29 +92,17 @@
 		<p>Nothing tracked yet this week.</p>
 	{:else}
 		<p data-testid="week-clock">{clockLine(weekView)}</p>
-		<table>
-			<caption class="pt-visually-hidden">Each day this week with time on it</caption>
-			<thead>
-				<tr>
-					<th scope="col">Day</th>
-					<th scope="col">Clock</th>
-					<th scope="col"><span class="pt-visually-hidden">Your time</span></th>
-				</tr>
-			</thead>
-			<tbody>
-				{#each days as r (r.date)}
-					<tr data-date={r.date}>
-						<th scope="row">{dayLabel(r.date, today.date)}</th>
-						<td class="line">{clockLine(r.view)}</td>
-						<td class="bar">
-							{#if r.view.you}
-								<Bar parts={yourParts(r.view.you)} scale={weekScale} />
-							{/if}
-						</td>
-					</tr>
-				{/each}
-			</tbody>
-		</table>
+		<ul class="days" aria-label="Each day this week with time on it">
+			{#each days as r (r.date)}
+				<li data-date={r.date}>
+					<span class="day" data-testid="week-day">{dayLabel(r.date, today.date)}</span>
+					<span class="line">{clockLine(r.view)}</span>
+					{#if r.view.you}
+						<Bar parts={yourParts(r.view.you)} scale={weekScale} />
+					{/if}
+				</li>
+			{/each}
+		</ul>
 	{/if}
 </section>
 
@@ -155,33 +143,37 @@
 		margin: 0 0 var(--pt-gap);
 	}
 
-	table {
-		width: 100%;
-		border-collapse: collapse;
+	.days {
+		margin: 0;
+		padding: 0;
+		list-style: none;
 	}
 
-	th,
-	td {
-		padding: 0.375rem 0.75rem 0.375rem 0;
-		text-align: left;
-		vertical-align: middle;
+	/* A day, its clock and its bar side by side; stacked on a phone. */
+	.days li {
+		display: grid;
+		grid-template-columns: minmax(9rem, 13rem) 1fr minmax(6rem, 30%);
+		align-items: center;
+		gap: 0.25rem 1rem;
+		padding: 0.375rem 0;
+		border-top: 1px solid var(--pt-track);
 	}
 
-	thead th {
-		color: var(--pt-muted);
-		font-weight: 600;
-	}
-
-	tbody th {
-		font-weight: 400;
-		white-space: nowrap;
+	.days li:first-child {
+		border-top: 0;
 	}
 
 	.line {
 		font-variant-numeric: tabular-nums;
 	}
 
-	.bar {
-		width: 35%;
+	@media (max-width: 30rem) {
+		.days li {
+			grid-template-columns: 1fr;
+		}
+
+		.day {
+			font-weight: 600;
+		}
 	}
 </style>
