@@ -26,6 +26,8 @@ const focusSentence =
 /** The fill of each part of the first bar inside a test id, as RGB. */
 async function fills(page: Page, testid: string): Promise<Record<string, RGB>> {
 	const bar = page.getByTestId(testid).getByTestId('bar').first();
+	// evaluateAll doesn't wait, so wait for the agent's answer to be drawn.
+	await bar.locator('rect[data-part]').first().waitFor();
 	const parts = await bar
 		.locator('rect[data-part]')
 		.evaluateAll((rects) => rects.map((r) => [r.getAttribute('data-part') ?? '', getComputedStyle(r).fill] as const));
@@ -234,7 +236,7 @@ test.describe('Projects', () => {
 			/Reading Codex's answers\s*28m/,
 			/Watching Codex work\s*10m/,
 		]);
-		await expect(bot.getByTestId('other').locator('li')).toHaveText([/Re-rolling the same prompt\s*4m/]);
+		await expect(bot.getByTestId('other').locator('li')).toHaveText(['In other apps 6m', 'Re-rolling the same prompt 4m']);
 	});
 
 	test('the last 30 days asks the agent for each of the 30 days up to its own today', async ({ page }) => {

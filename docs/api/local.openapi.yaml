@@ -22,13 +22,13 @@ info:
     The dashboard's static files at `/` need nothing more. Routes under
     `/v1/` also need one of two credentials. Local tools send the bearer
     token from port.json, which only the user who runs the agent can read.
-    The dashboard sends the `pairtime_session` cookie, which
-    `pairtime dashboard` gets it: the command asks POST /v1/dashboard/link
-    for a one-time URL and opens it in the teen's browser, and GET /signin
-    sets the cookie, `SameSite=Strict` and `HttpOnly`, and sends the browser
-    on to the dashboard (DESIGN 3.9). A request the cookie signs in that
-    changes anything must also carry the dashboard's own Origin, which
-    browsers send with every fetch that isn't a GET.
+    The dashboard sends the `pairtime_session` cookie instead. `pairtime
+    dashboard` asks POST /v1/dashboard/link for a one-time URL and opens it
+    in the teen's browser, and GET /signin sets the cookie, `SameSite=Strict`
+    and `HttpOnly`, and sends the browser on to the dashboard (DESIGN 3.9).
+    A request the cookie signs in that changes anything must also carry the
+    dashboard's own Origin, which browsers send with every fetch that isn't
+    a GET.
 servers:
   - url: http://127.0.0.1:7247
     description: the default port; port.json has the real one
