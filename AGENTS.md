@@ -55,7 +55,7 @@ web/ is Svelte 5 and TypeScript built by Vite: the local dashboard (src/local, b
 - docs/api/*.openapi.yaml is the API contract. `npm run gen` writes the TypeScript types into web/src/gen/, which isn't checked in, so read the YAML and import the types with `import type`. A route or field changes in the YAML and in Go in the same PR; web/tests/smoke.spec.ts holds the running agent to the YAML.
 - Built pages carry a Content-Security-Policy that allows only their own origin: no CDN, web font, inline script, inline style or `style=` attribute. Fonts are system fonts, and colors are hex tokens in web/src/shared/styles/base.css.
 - Consent and profile questions use ConsentCard and ProfileChoice from web/src/shared. They fix "Not now" as the most prominent button and keep anything from being preselected (DESIGN 8.3, 8.4), and web/tests/consent.spec.ts checks that on the rendered page.
-- The first line of every .ts, .svelte, .css and .html file is an SPDX-License-Identifier comment for AGPL-3.0-or-later.
+- Every .ts, .js, .svelte, .css and .html file under web/ opens with an SPDX-License-Identifier comment for AGPL-3.0-or-later. An .html file has `<!doctype html>` on line 1, which TestFS needs the built page to start with, and the comment on line 2; every other file has it on line 1. web.yml's SPDX step checks them, and internal/webui's placeholder too.
 
 ## The struggle-metric spec decides scoring
 
