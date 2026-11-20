@@ -39,8 +39,9 @@ type Plan struct {
 	unlock func() error
 
 	// stop, when a test sets it, runs before Apply writes each target, and
-	// an error from it stops Apply there, as a crash or a failed write
-	// would.
+	// before install writes the manifest, with File(manifest.json) as the
+	// target. An error from it stops Apply there, as a crash or a failed
+	// write would.
 	stop func(Target) error
 }
 
@@ -584,9 +585,25 @@ func (p *Plan) Apply() error {
 	}
 	if !p.uninstall {
 		if err := p.saveBackups(); err != nil {
+			p.removeBackups()
 			return err
 		}
-		if err := in.writeManifest(data, p.oldSum); err != nil {
+		var err error
+		if p.stop != nil {
+			err = p.stop(File(in.manifestPath()))
+		}
+		if err == nil {
+			err = in.writeManifest(data, p.oldSum)
+		}
+		if err != nil {
+			// No manifest names this plan's backups, and they hold copies
+			// of settings files, tokens and all.
+			p.removeBackups()
+			return err
+		}
+		// The manifest now names this plan's backups instead of the ones
+		// they replace, so those go now, whatever happens to the targets.
+		if err := p.dropBackups(); err != nil {
 			return err
 		}
 	}
@@ -622,19 +639,52 @@ func (p *Plan) Apply() error {
 		if err := in.writeManifest(data, p.oldSum); err != nil {
 			return err
 		}
-	}
-	for _, name := range p.drops {
-		if err := os.Remove(filepath.Join(in.backupsDir(), name)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		if err := p.dropBackups(); err != nil {
 			return err
 		}
 	}
 	if data == nil {
 		// Nothing is recorded any more: take away pairtime's install
-		// directory, if nothing else is in it.
-		os.Remove(in.backupsDir())
-		os.Remove(in.Dir)
+		// directory, with any backup or temporary file an Apply that
+		// stopped half way left in it, if nothing else is in it.
+		in.removeLeftovers()
 	}
 	return nil
+}
+
+// removeBackups deletes the backups this plan wrote, or began to write.
+func (p *Plan) removeBackups() {
+	for _, b := range p.backups {
+		os.Remove(filepath.Join(p.in.backupsDir(), b.name))
+	}
+	os.Remove(p.in.backupsDir()) // if it is empty now
+}
+
+// dropBackups deletes the backups the manifest no longer names.
+func (p *Plan) dropBackups() error {
+	for _, name := range p.drops {
+		if err := os.Remove(filepath.Join(p.in.backupsDir(), name)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return err
+		}
+	}
+	p.drops = nil
+	return nil
+}
+
+// removeLeftovers takes away the install directory once the manifest is
+// gone: the backups and the temporary files of atomic writes that a failed
+// or interrupted Apply left there, then the directories, if they are empty
+// then. Only files pairtime names that way go.
+func (in *Installer) removeLeftovers() {
+	for _, dir := range []string{in.backupsDir(), in.Dir} {
+		entries, _ := os.ReadDir(dir)
+		for _, e := range entries {
+			if e.Type().IsRegular() && (isBackupName(e.Name()) || isTempName(e.Name())) {
+				os.Remove(filepath.Join(dir, e.Name()))
+			}
+		}
+		os.Remove(dir)
+	}
 }
 
 func (p *Plan) saveBackups() error {

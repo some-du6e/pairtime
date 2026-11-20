@@ -153,6 +153,31 @@ func backupName(t Target) string {
 	return strings.ToLower(rand.Text()[:12]) + "-" + clean
 }
 
+// isBackupName reports whether name is one backupName makes.
+func isBackupName(name string) bool {
+	prefix, rest, ok := strings.Cut(name, "-")
+	if !ok || len(prefix) != 12 || rest == "" {
+		return false
+	}
+	for _, r := range prefix {
+		if !('a' <= r && r <= 'z') && !('2' <= r && r <= '7') {
+			return false
+		}
+	}
+	for _, r := range rest {
+		if !('a' <= r && r <= 'z') && !('A' <= r && r <= 'Z') && !('0' <= r && r <= '9') && r != '.' && r != '-' && r != '_' {
+			return false
+		}
+	}
+	return true
+}
+
+// isTempName reports whether name is that of a temporary file
+// home.WriteFile writes beside a file before it renames it into place.
+func isTempName(name string) bool {
+	return strings.HasPrefix(name, ".") && strings.Contains(name, ".tmp-")
+}
+
 // loadSaved returns the base that s describes, checked against its digest.
 func (in *Installer) loadSaved(s saved) (Content, error) {
 	if !s.Exists {

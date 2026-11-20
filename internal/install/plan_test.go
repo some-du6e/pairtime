@@ -104,7 +104,12 @@ func TestRerunMakesFoldersThatAreGone(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				p.stop = func(Target) error { return errStopped }
+				p.stop = func(at Target) error {
+					if at.Path == in.manifestPath() {
+						return nil // the manifest is written
+					}
+					return errStopped // and Apply stops at the first target
+				}
 				if err := p.Apply(); !errors.Is(err, errStopped) {
 					t.Fatalf("Apply = %v, want it stopped by the test", err)
 				}
@@ -727,6 +732,134 @@ func TestOnePlanAtATime(t *testing.T) {
 					t.Errorf("planning while the first plan is open = %v, want ErrBusy", err)
 				}
 			}
+		})
+	}
+}
+
+// backupFiles lists the files in in's backups directory.
+func backupFiles(t *testing.T, in *Installer) []string {
+	t.Helper()
+	entries, err := os.ReadDir(in.backupsDir())
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, e := range entries {
+		names = append(names, e.Name())
+	}
+	return names
+}
+
+// namedBackups lists the backups in's manifest names.
+func namedBackups(t *testing.T, in *Installer) []string {
+	t.Helper()
+	m, _, err := in.loadManifest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, r := range m.Targets {
+		if r.Base.Backup != "" {
+			names = append(names, r.Base.Backup)
+		}
+	}
+	slices.Sort(names)
+	return names
+}
+
+func TestFailedInstallLeavesNoOrphanedBackups(t *testing.T) {
+	tests := []struct {
+		name string
+		// atManifest stops Apply where it would write the manifest; false
+		// stops it at the settings file, once the manifest is written.
+		atManifest bool
+	}{
+		{"an install that fails to write its manifest deletes the backups it wrote", true},
+		{"an install that fails at a target after writing its manifest has deleted the backups the manifest replaced", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			before := golden(t, "settings-lf", "before.json")
+			env := testEnv(t, "linux", nil)
+			path := ClaudeSettings(env)
+			writeFile(t, path, before)
+			in := newInstaller(t)
+			first, err := ClaudeCode(env)
+			if err != nil {
+				t.Fatal(err)
+			}
+			install(t, in, first)
+			// Another tool changes the file, and the binary moves, so the
+			// reinstall makes a new backup that replaces the first one.
+			appendGroup(t, path, "Stop", otherGroup)
+			env.Exe = "/home/teen/bin/pairtime"
+			second, err := ClaudeCode(env)
+			if err != nil {
+				t.Fatal(err)
+			}
+			p, err := in.PlanInstall([]Item{second})
+			if err != nil {
+				t.Fatal(err)
+			}
+			p.stop = func(at Target) error {
+				if (at.Path == in.manifestPath()) == tt.atManifest {
+					return errStopped
+				}
+				return nil
+			}
+			if err := p.Apply(); !errors.Is(err, errStopped) {
+				t.Fatalf("Apply = %v, want it stopped by the test", err)
+			}
+			if got, want := backupFiles(t, in), namedBackups(t, in); !slices.Equal(got, want) || len(want) != 1 {
+				t.Errorf("the backups directory holds %q, and the manifest names %q", got, want)
+			}
+
+			install(t, in, second)
+			uninstall(t, in)
+			if got := readOrNil(t, path); bytes.Contains(got, []byte("--harness")) || !bytes.Contains(got, []byte("other-tool")) {
+				t.Errorf("after uninstall the file holds\n%s\nwant the other tool's hook and none of pairtime's", got)
+			}
+			checkGone(t, in.Dir, "pairtime's install directory")
+		})
+	}
+}
+
+func TestUninstallTakesAwayLeftovers(t *testing.T) {
+	tests := []struct {
+		name string
+		// leave are files, under the install directory, that an
+		// interrupted Apply or someone else left there.
+		leave []string
+		// stays is true when the install directory must stay, because
+		// something in it isn't pairtime's.
+		stays bool
+	}{
+		{"a backup and a temporary file an interrupted Apply left go with the install directory",
+			[]string{filepath.Join("backups", "abcdefghijk2-settings.json"), ".manifest.json.tmp-12345", filepath.Join("backups", ".abcdefghijk2-settings.json.tmp-9")}, false},
+		{"a file that isn't pairtime's stays, and so does the install directory", []string{"notes.txt"}, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			env := testEnv(t, "linux", nil)
+			items := linuxItems(t, env, []byte("{\"model\": \"opus\"}\n"))
+			in := newInstaller(t)
+			install(t, in, items...)
+			for _, f := range tt.leave {
+				writeFile(t, filepath.Join(in.Dir, f), []byte("{}\n"))
+			}
+			uninstall(t, in)
+			if tt.stays {
+				for _, f := range tt.leave {
+					if readOrNil(t, filepath.Join(in.Dir, f)) == nil {
+						t.Errorf("uninstall deleted %s, which isn't pairtime's", f)
+					}
+				}
+				return
+			}
+			checkGone(t, in.Dir, "pairtime's install directory")
 		})
 	}
 }
