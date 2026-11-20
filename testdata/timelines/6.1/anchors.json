@@ -123,7 +123,20 @@
       "sm": "14:05: permission request at 14:05:10, accepted at 14:05:25; the wait and the 10 s trail are PA 25; the other fourteen cycles are the same shape"
     },
     {
-      "event_id": "01a1fd4f-ae20-7f1f-a684-76ff02742e40",
+      "event_id": "01a1fd4f-19b0-7c34-9e1b-2b826543e5d6",
+      "kind": "typed_edit",
+      "t": 1795251182000,
+      "local": "14:23:02",
+      "project_key": "p_0eccb85aa257",
+      "lead_s": 120,
+      "trail_s": 0,
+      "lead_from": "params",
+      "via": "editor",
+      "level": "A",
+      "sm": "minute 11 of the other cycles is a small hand edit in VS Code, crediting E and NAV; the heartbeat at his first keystroke"
+    },
+    {
+      "event_id": "01a1fd4f-ae20-7252-b695-0439b7f4b4cd",
       "kind": "typed_edit",
       "t": 1795251220000,
       "local": "14:23:40",
@@ -133,10 +146,10 @@
       "lead_from": "params",
       "via": "editor",
       "level": "A",
-      "sm": "minute 11 of the other cycles is a small hand edit in VS Code, crediting E and NAV"
+      "sm": "minute 11 of the other cycles is a small hand edit in VS Code, crediting E and NAV; the heartbeat at the save"
     },
     {
-      "event_id": "01a1fd50-7170-799c-bc46-316a30d04803",
+      "event_id": "01a1fd50-7170-7989-98ae-acd3bdbd10ee",
       "kind": "editor_navigation",
       "t": 1795251270000,
       "local": "14:24:30",
@@ -149,7 +162,7 @@
       "sm": "14:00: heartbeats at 14:00:30 and 14:01:50 become NAV anchors; the other fourteen cycles are the same shape"
     },
     {
-      "event_id": "01a1fd51-a9f0-7285-b5a8-962bf7aac003",
+      "event_id": "01a1fd51-a9f0-7618-a984-011efba22d59",
       "kind": "editor_navigation",
       "t": 1795251350000,
       "local": "14:25:50",
@@ -162,7 +175,7 @@
       "sm": "14:01: from 14:01:50 the lead of his next prompt takes over; the other fourteen cycles are the same shape"
     },
     {
-      "event_id": "01a1fd53-a5c0-7866-9624-760e68895d43",
+      "event_id": "01a1fd53-a5c0-79ae-b637-5a5d394e60a6",
       "kind": "substantive_prompt",
       "t": 1795251480000,
       "local": "14:28:00",
@@ -177,7 +190,7 @@
       "sm": "14:03: sends at 14:04:00; its lead is 120 + 300 / 1.5 = 320 s; the other fourteen cycles are the same shape"
     },
     {
-      "event_id": "01a1fd54-f1c8-7b3d-b222-899fe65e1f3b",
+      "event_id": "01a1fd54-f1c8-70b3-b6cd-2878477be912",
       "kind": "permission_answer",
       "t": 1795251565000,
       "local": "14:29:25",
@@ -190,7 +203,7 @@
       "sm": "14:05: permission request at 14:05:10, accepted at 14:05:25; the wait and the 10 s trail are PA 25; the other fourteen cycles are the same shape"
     },
     {
-      "event_id": "01a1fd5a-aaa0-7c88-9071-035a7f51f156",
+      "event_id": "01a1fd5a-aaa0-7d78-9c41-98210cec3ff9",
       "kind": "human_commit",
       "t": 1795251940000,
       "local": "14:35:40",
@@ -203,7 +216,7 @@
       "sm": "14:11; minute 11 is a commit in cycles 3, 6, 9, 12 and 15"
     },
     {
-      "event_id": "01a1fd5b-6df0-70ba-ae96-58aa9bc4263c",
+      "event_id": "01a1fd5b-6df0-7f54-b0b8-1bed10dffc10",
       "kind": "editor_navigation",
       "t": 1795251990000,
       "local": "14:36:30",
@@ -216,7 +229,7 @@
       "sm": "14:00: heartbeats at 14:00:30 and 14:01:50 become NAV anchors; the other fourteen cycles are the same shape"
     },
     {
-      "event_id": "01a1fd5c-a670-7205-b109-cb81eba6bf25",
+      "event_id": "01a1fd5c-a670-7478-80e3-4d55b9447e66",
       "kind": "editor_navigation",
       "t": 1795252070000,
       "local": "14:37:50",
@@ -229,7 +242,7 @@
       "sm": "14:01: from 14:01:50 the lead of his next prompt takes over; the other fourteen cycles are the same shape"
     },
     {
-      "event_id": "01a1fd5e-a240-7f1d-ab60-2a2bf7ffced8",
+      "event_id": "01a1fd5e-a240-7073-ab1d-9e9b23f3e3be",
       "kind": "substantive_prompt",
       "t": 1795252200000,
       "local": "14:40:00",
@@ -244,7 +257,7 @@
       "sm": "14:03: sends at 14:04:00; its lead is 120 + 300 / 1.5 = 320 s; the other fourteen cycles are the same shape"
     },
     {
-      "event_id": "01a1fd5f-ee48-748b-94f5-1a4017a9249a",
+      "event_id": "01a1fd5f-ee48-72dd-a95c-15a596dcac8a",
       "kind": "permission_answer",
       "t": 1795252285000,
       "local": "14:41:25",
@@ -257,7 +270,20 @@
       "sm": "14:05: permission request at 14:05:10, accepted at 14:05:25; the wait and the 10 s trail are PA 25; the other fourteen cycles are the same shape"
     },
     {
-      "event_id": "01a1fd65-a720-710f-b8ef-f7dbe169aa3d",
+      "event_id": "01a1fd65-12b0-7fe3-9c5c-b3f835766e5c",
+      "kind": "typed_edit",
+      "t": 1795252622000,
+      "local": "14:47:02",
+      "project_key": "p_0eccb85aa257",
+      "lead_s": 120,
+      "trail_s": 0,
+      "lead_from": "params",
+      "via": "editor",
+      "level": "A",
+      "sm": "minute 11 of the other cycles is a small hand edit in VS Code, crediting E and NAV; the heartbeat at his first keystroke"
+    },
+    {
+      "event_id": "01a1fd65-a720-77f8-9def-ee593214a786",
       "kind": "typed_edit",
       "t": 1795252660000,
       "local": "14:47:40",
@@ -267,10 +293,10 @@
       "lead_from": "params",
       "via": "editor",
       "level": "A",
-      "sm": "minute 11 of the other cycles is a small hand edit in VS Code, crediting E and NAV"
+      "sm": "minute 11 of the other cycles is a small hand edit in VS Code, crediting E and NAV; the heartbeat at the save"
     },
     {
-      "event_id": "01a1fd66-6a70-76eb-9b7f-94f5917b28ea",
+      "event_id": "01a1fd66-6a70-7144-ac87-53ea9fc94e8e",
       "kind": "editor_navigation",
       "t": 1795252710000,
       "local": "14:48:30",
@@ -283,7 +309,7 @@
       "sm": "14:00: heartbeats at 14:00:30 and 14:01:50 become NAV anchors; the other fourteen cycles are the same shape"
     },
     {
-      "event_id": "01a1fd67-a2f0-7a96-ae78-cbf4ce137311",
+      "event_id": "01a1fd67-a2f0-7ad0-b4b8-b08fb66eb2bb",
       "kind": "editor_navigation",
       "t": 1795252790000,
       "local": "14:49:50",
@@ -296,7 +322,7 @@
       "sm": "14:01: from 14:01:50 the lead of his next prompt takes over; the other fourteen cycles are the same shape"
     },
     {
-      "event_id": "01a1fd69-9ec0-7941-b99d-c544ac1a13b3",
+      "event_id": "01a1fd69-9ec0-7662-b2cb-15b8fd53259f",
       "kind": "substantive_prompt",
       "t": 1795252920000,
       "local": "14:52:00",
@@ -311,7 +337,7 @@
       "sm": "14:03: sends at 14:04:00; its lead is 120 + 300 / 1.5 = 320 s; the other fourteen cycles are the same shape"
     },
     {
-      "event_id": "01a1fd6a-eac8-7b35-8a27-37bacac2b612",
+      "event_id": "01a1fd6a-eac8-7c83-96b1-41e66e01bcd7",
       "kind": "permission_answer",
       "t": 1795253005000,
       "local": "14:53:25",
@@ -324,7 +350,20 @@
       "sm": "14:05: permission request at 14:05:10, accepted at 14:05:25; the wait and the 10 s trail are PA 25; the other fourteen cycles are the same shape"
     },
     {
-      "event_id": "01a1fd70-a3a0-7fbc-bb14-fd290540f519",
+      "event_id": "01a1fd70-0f30-7fbc-bb14-fd290540f519",
+      "kind": "typed_edit",
+      "t": 1795253342000,
+      "local": "14:59:02",
+      "project_key": "p_0eccb85aa257",
+      "lead_s": 120,
+      "trail_s": 0,
+      "lead_from": "params",
+      "via": "editor",
+      "level": "A",
+      "sm": "minute 11 of the other cycles is a small hand edit in VS Code, crediting E and NAV; the heartbeat at his first keystroke"
+    },
+    {
+      "event_id": "01a1fd70-a3a0-7b48-9c73-66f8bfd3209f",
       "kind": "typed_edit",
       "t": 1795253380000,
       "local": "14:59:40",
@@ -334,10 +373,10 @@
       "lead_from": "params",
       "via": "editor",
       "level": "A",
-      "sm": "minute 11 of the other cycles is a small hand edit in VS Code, crediting E and NAV"
+      "sm": "minute 11 of the other cycles is a small hand edit in VS Code, crediting E and NAV; the heartbeat at the save"
     },
     {
-      "event_id": "01a1fd71-66f0-7481-b106-177326084c80",
+      "event_id": "01a1fd71-66f0-77fb-9ffa-1c1eb8674ea4",
       "kind": "editor_navigation",
       "t": 1795253430000,
       "local": "15:00:30",
@@ -350,7 +389,7 @@
       "sm": "14:00: heartbeats at 14:00:30 and 14:01:50 become NAV anchors; the other fourteen cycles are the same shape"
     },
     {
-      "event_id": "01a1fd72-9f70-734f-bd08-caea36f97240",
+      "event_id": "01a1fd72-9f70-7c62-98dc-9206df7a4baf",
       "kind": "editor_navigation",
       "t": 1795253510000,
       "local": "15:01:50",
@@ -363,7 +402,7 @@
       "sm": "14:01: from 14:01:50 the lead of his next prompt takes over; the other fourteen cycles are the same shape"
     },
     {
-      "event_id": "01a1fd74-9b40-78b9-9346-12754659763f",
+      "event_id": "01a1fd74-9b40-7440-b0d9-f0b4b0322354",
       "kind": "substantive_prompt",
       "t": 1795253640000,
       "local": "15:04:00",
@@ -378,7 +417,7 @@
       "sm": "14:03: sends at 14:04:00; its lead is 120 + 300 / 1.5 = 320 s; the other fourteen cycles are the same shape"
     },
     {
-      "event_id": "01a1fd75-e748-7347-a0d6-f9c6a9e9ad53",
+      "event_id": "01a1fd75-e748-7d30-8443-0fa9b671f253",
       "kind": "permission_answer",
       "t": 1795253725000,
       "local": "15:05:25",
@@ -391,7 +430,7 @@
       "sm": "14:05: permission request at 14:05:10, accepted at 14:05:25; the wait and the 10 s trail are PA 25; the other fourteen cycles are the same shape"
     },
     {
-      "event_id": "01a1fd7c-8a80-7b9f-9f6b-c54dc71c7085",
+      "event_id": "01a1fd7c-8a80-7751-948d-a2ef81e338da",
       "kind": "editor_navigation",
       "t": 1795254160000,
       "local": "15:12:40",
@@ -404,7 +443,7 @@
       "sm": "the drink: back at 15:12:40, the first thing he does is click in VS Code; its first anchor is NAV"
     },
     {
-      "event_id": "01a1fd7d-9bf0-766d-92ad-ce63d15b3cf5",
+      "event_id": "01a1fd7d-9bf0-7cf0-b299-d3d41cc7a2a0",
       "kind": "editor_navigation",
       "t": 1795254230000,
       "local": "15:13:50",
@@ -417,7 +456,7 @@
       "sm": "14:01: from 14:01:50 the lead of his next prompt takes over; the other fourteen cycles are the same shape"
     },
     {
-      "event_id": "01a1fd7f-97c0-7205-a194-7b85176979d1",
+      "event_id": "01a1fd7f-97c0-726a-b401-150141e01578",
       "kind": "substantive_prompt",
       "t": 1795254360000,
       "local": "15:16:00",
@@ -432,7 +471,7 @@
       "sm": "14:03: sends at 14:04:00; its lead is 120 + 300 / 1.5 = 320 s; the other fourteen cycles are the same shape"
     },
     {
-      "event_id": "01a1fd80-e3c8-78d0-8758-233faee10028",
+      "event_id": "01a1fd80-e3c8-749e-91f9-8ffe09427e82",
       "kind": "permission_answer",
       "t": 1795254445000,
       "local": "15:17:25",
@@ -445,7 +484,20 @@
       "sm": "14:05: permission request at 14:05:10, accepted at 14:05:25; the wait and the 10 s trail are PA 25; the other fourteen cycles are the same shape"
     },
     {
-      "event_id": "01a1fd86-9ca0-7eb2-8b15-d0b49e6b791b",
+      "event_id": "01a1fd86-0830-7c78-a8be-cd4b60969dd3",
+      "kind": "typed_edit",
+      "t": 1795254782000,
+      "local": "15:23:02",
+      "project_key": "p_0eccb85aa257",
+      "lead_s": 120,
+      "trail_s": 0,
+      "lead_from": "params",
+      "via": "editor",
+      "level": "A",
+      "sm": "minute 11 of the other cycles is a small hand edit in VS Code, crediting E and NAV; the heartbeat at his first keystroke"
+    },
+    {
+      "event_id": "01a1fd86-9ca0-747d-aa57-b8b05c47ad3c",
       "kind": "typed_edit",
       "t": 1795254820000,
       "local": "15:23:40",
@@ -455,10 +507,10 @@
       "lead_from": "params",
       "via": "editor",
       "level": "A",
-      "sm": "minute 11 of the other cycles is a small hand edit in VS Code, crediting E and NAV"
+      "sm": "minute 11 of the other cycles is a small hand edit in VS Code, crediting E and NAV; the heartbeat at the save"
     },
     {
-      "event_id": "01a1fd87-5ff0-747d-aa57-b8b05c47ad3c",
+      "event_id": "01a1fd87-5ff0-72e2-8f52-32936654f0cc",
       "kind": "editor_navigation",
       "t": 1795254870000,
       "local": "15:24:30",
@@ -471,7 +523,7 @@
       "sm": "14:00: heartbeats at 14:00:30 and 14:01:50 become NAV anchors; the other fourteen cycles are the same shape"
     },
     {
-      "event_id": "01a1fd88-9870-7665-999c-5145f6821af9",
+      "event_id": "01a1fd88-9870-726f-a571-60d958106094",
       "kind": "editor_navigation",
       "t": 1795254950000,
       "local": "15:25:50",
@@ -484,7 +536,7 @@
       "sm": "14:01: from 14:01:50 the lead of his next prompt takes over; the other fourteen cycles are the same shape"
     },
     {
-      "event_id": "01a1fd8a-9440-71f3-90a1-c7fbd8cafeff",
+      "event_id": "01a1fd8a-9440-79d9-ad74-1f1e1ce71b5f",
       "kind": "substantive_prompt",
       "t": 1795255080000,
       "local": "15:28:00",
@@ -499,7 +551,7 @@
       "sm": "14:03: sends at 14:04:00; its lead is 120 + 300 / 1.5 = 320 s; the other fourteen cycles are the same shape"
     },
     {
-      "event_id": "01a1fd8b-e048-7c41-9e68-1993bea77e5d",
+      "event_id": "01a1fd8b-e048-7d31-a366-3eb0b0641071",
       "kind": "permission_answer",
       "t": 1795255165000,
       "local": "15:29:25",
@@ -512,7 +564,20 @@
       "sm": "14:05: permission request at 14:05:10, accepted at 14:05:25; the wait and the 10 s trail are PA 25; the other fourteen cycles are the same shape"
     },
     {
-      "event_id": "01a1fd91-9920-7a53-aa20-59be4e34e17b",
+      "event_id": "01a1fd91-04b0-7b9a-8f93-954d2926b1d6",
+      "kind": "typed_edit",
+      "t": 1795255502000,
+      "local": "15:35:02",
+      "project_key": "p_0eccb85aa257",
+      "lead_s": 120,
+      "trail_s": 0,
+      "lead_from": "params",
+      "via": "editor",
+      "level": "A",
+      "sm": "minute 11 of the other cycles is a small hand edit in VS Code, crediting E and NAV; the heartbeat at his first keystroke"
+    },
+    {
+      "event_id": "01a1fd91-9920-7ef8-9906-ba4b86f6d9c4",
       "kind": "typed_edit",
       "t": 1795255540000,
       "local": "15:35:40",
@@ -522,10 +587,10 @@
       "lead_from": "params",
       "via": "editor",
       "level": "A",
-      "sm": "minute 11 of the other cycles is a small hand edit in VS Code, crediting E and NAV"
+      "sm": "minute 11 of the other cycles is a small hand edit in VS Code, crediting E and NAV; the heartbeat at the save"
     },
     {
-      "event_id": "01a1fd92-5c70-7303-b8ee-64b02ba2b841",
+      "event_id": "01a1fd92-5c70-7c54-8b74-0c6eb15ddd15",
       "kind": "editor_navigation",
       "t": 1795255590000,
       "local": "15:36:30",
@@ -538,7 +603,7 @@
       "sm": "14:00: heartbeats at 14:00:30 and 14:01:50 become NAV anchors; the other fourteen cycles are the same shape"
     },
     {
-      "event_id": "01a1fd93-94f0-7efb-94a4-71a55c77ab3b",
+      "event_id": "01a1fd93-94f0-7f07-96b5-c017db689b72",
       "kind": "editor_navigation",
       "t": 1795255670000,
       "local": "15:37:50",
@@ -551,7 +616,7 @@
       "sm": "14:01: from 14:01:50 the lead of his next prompt takes over; the other fourteen cycles are the same shape"
     },
     {
-      "event_id": "01a1fd95-90c0-7faf-87a3-980eba24c29f",
+      "event_id": "01a1fd95-90c0-7047-994f-a58b14fdc6fc",
       "kind": "substantive_prompt",
       "t": 1795255800000,
       "local": "15:40:00",
@@ -566,7 +631,7 @@
       "sm": "14:03: sends at 14:04:00; its lead is 120 + 300 / 1.5 = 320 s; the other fourteen cycles are the same shape"
     },
     {
-      "event_id": "01a1fd96-dcc8-7692-b622-6b1e75968f8e",
+      "event_id": "01a1fd96-dcc8-76d4-9ccb-cd6a85066c8e",
       "kind": "permission_answer",
       "t": 1795255885000,
       "local": "15:41:25",
@@ -579,7 +644,7 @@
       "sm": "14:05: permission request at 14:05:10, accepted at 14:05:25; the wait and the 10 s trail are PA 25; the other fourteen cycles are the same shape"
     },
     {
-      "event_id": "01a1fd9c-95a0-7f19-a754-3b35ac005768",
+      "event_id": "01a1fd9c-95a0-7907-998f-b03c83cb2856",
       "kind": "human_commit",
       "t": 1795256260000,
       "local": "15:47:40",
@@ -592,7 +657,7 @@
       "sm": "14:11; minute 11 is a commit in cycles 3, 6, 9, 12 and 15"
     },
     {
-      "event_id": "01a1fd9d-58f0-7907-998f-b03c83cb2856",
+      "event_id": "01a1fd9d-58f0-74fa-a42a-54b12358a057",
       "kind": "editor_navigation",
       "t": 1795256310000,
       "local": "15:48:30",
@@ -605,7 +670,7 @@
       "sm": "14:00: heartbeats at 14:00:30 and 14:01:50 become NAV anchors; the other fourteen cycles are the same shape"
     },
     {
-      "event_id": "01a1fd9e-9170-7e78-9463-4527b365cd68",
+      "event_id": "01a1fd9e-9170-7f7f-a320-f9441d7f8e38",
       "kind": "editor_navigation",
       "t": 1795256390000,
       "local": "15:49:50",
@@ -618,7 +683,7 @@
       "sm": "14:01: from 14:01:50 the lead of his next prompt takes over; the other fourteen cycles are the same shape"
     },
     {
-      "event_id": "01a1fda0-8d40-7f80-9534-dfe1faaf504f",
+      "event_id": "01a1fda0-8d40-77cc-ab88-850e1583be95",
       "kind": "substantive_prompt",
       "t": 1795256520000,
       "local": "15:52:00",
@@ -633,7 +698,7 @@
       "sm": "14:03: sends at 14:04:00; its lead is 120 + 300 / 1.5 = 320 s; the other fourteen cycles are the same shape"
     },
     {
-      "event_id": "01a1fda1-d948-7e37-a0dd-87fa9f19c7d4",
+      "event_id": "01a1fda1-d948-7608-8c1d-dcc99b44243a",
       "kind": "permission_answer",
       "t": 1795256605000,
       "local": "15:53:25",
@@ -646,7 +711,20 @@
       "sm": "14:05: permission request at 14:05:10, accepted at 14:05:25; the wait and the 10 s trail are PA 25; the other fourteen cycles are the same shape"
     },
     {
-      "event_id": "01a1fda7-9220-7b45-bf42-ec172676abe4",
+      "event_id": "01a1fda6-fdb0-7bb1-a8b9-81391caccc9e",
+      "kind": "typed_edit",
+      "t": 1795256942000,
+      "local": "15:59:02",
+      "project_key": "p_0eccb85aa257",
+      "lead_s": 120,
+      "trail_s": 0,
+      "lead_from": "params",
+      "via": "editor",
+      "level": "A",
+      "sm": "minute 11 of the other cycles is a small hand edit in VS Code, crediting E and NAV; the heartbeat at his first keystroke"
+    },
+    {
+      "event_id": "01a1fda7-9220-7929-b416-a25c2c64ebff",
       "kind": "typed_edit",
       "t": 1795256980000,
       "local": "15:59:40",
@@ -656,10 +734,10 @@
       "lead_from": "params",
       "via": "editor",
       "level": "A",
-      "sm": "minute 11 of the other cycles is a small hand edit in VS Code, crediting E and NAV"
+      "sm": "minute 11 of the other cycles is a small hand edit in VS Code, crediting E and NAV; the heartbeat at the save"
     },
     {
-      "event_id": "01a1fda8-5570-759c-a80e-bf6fe1bb8e11",
+      "event_id": "01a1fda8-5570-7cb4-8ec6-d6a23c8b3e53",
       "kind": "editor_navigation",
       "t": 1795257030000,
       "local": "16:00:30",
@@ -672,7 +750,7 @@
       "sm": "14:00: heartbeats at 14:00:30 and 14:01:50 become NAV anchors; the other fourteen cycles are the same shape"
     },
     {
-      "event_id": "01a1fda9-8df0-7f93-a6d8-5368e6d958b0",
+      "event_id": "01a1fda9-8df0-72af-8e20-4e5ab273df77",
       "kind": "editor_navigation",
       "t": 1795257110000,
       "local": "16:01:50",
@@ -685,7 +763,7 @@
       "sm": "14:01: from 14:01:50 the lead of his next prompt takes over; the other fourteen cycles are the same shape"
     },
     {
-      "event_id": "01a1fdab-89c0-71b0-bc54-b8e2fe41ab12",
+      "event_id": "01a1fdab-89c0-72d8-a777-42ab09f16239",
       "kind": "substantive_prompt",
       "t": 1795257240000,
       "local": "16:04:00",
@@ -700,7 +778,7 @@
       "sm": "14:03: sends at 14:04:00; its lead is 120 + 300 / 1.5 = 320 s; the other fourteen cycles are the same shape"
     },
     {
-      "event_id": "01a1fdac-d5c8-7259-b7a3-d2d14ca2e9a7",
+      "event_id": "01a1fdac-d5c8-7c2c-8e78-c3755c675a65",
       "kind": "permission_answer",
       "t": 1795257325000,
       "local": "16:05:25",
@@ -713,7 +791,20 @@
       "sm": "14:05: permission request at 14:05:10, accepted at 14:05:25; the wait and the 10 s trail are PA 25; the other fourteen cycles are the same shape"
     },
     {
-      "event_id": "01a1fdb2-8ea0-7d45-b2fe-c085ed6368e5",
+      "event_id": "01a1fdb1-fa30-79e1-afc8-2bab191d6c0f",
+      "kind": "typed_edit",
+      "t": 1795257662000,
+      "local": "16:11:02",
+      "project_key": "p_0eccb85aa257",
+      "lead_s": 120,
+      "trail_s": 0,
+      "lead_from": "params",
+      "via": "editor",
+      "level": "A",
+      "sm": "minute 11 of the other cycles is a small hand edit in VS Code, crediting E and NAV; the heartbeat at his first keystroke"
+    },
+    {
+      "event_id": "01a1fdb2-8ea0-7016-aa21-f48b227a3e5c",
       "kind": "typed_edit",
       "t": 1795257700000,
       "local": "16:11:40",
@@ -723,10 +814,10 @@
       "lead_from": "params",
       "via": "editor",
       "level": "A",
-      "sm": "minute 11 of the other cycles is a small hand edit in VS Code, crediting E and NAV"
+      "sm": "minute 11 of the other cycles is a small hand edit in VS Code, crediting E and NAV; the heartbeat at the save"
     },
     {
-      "event_id": "01a1fdb3-51f0-79e1-afc8-2bab191d6c0f",
+      "event_id": "01a1fdb3-51f0-715a-a505-d9b44691bfee",
       "kind": "editor_navigation",
       "t": 1795257750000,
       "local": "16:12:30",
@@ -739,7 +830,7 @@
       "sm": "14:00: heartbeats at 14:00:30 and 14:01:50 become NAV anchors; the other fourteen cycles are the same shape"
     },
     {
-      "event_id": "01a1fdb4-8a70-715a-a505-d9b44691bfee",
+      "event_id": "01a1fdb4-8a70-776a-885d-f3e6e301a88b",
       "kind": "editor_navigation",
       "t": 1795257830000,
       "local": "16:13:50",
@@ -752,7 +843,7 @@
       "sm": "14:01: from 14:01:50 the lead of his next prompt takes over; the other fourteen cycles are the same shape"
     },
     {
-      "event_id": "01a1fdb6-8640-725d-a970-12c6817a0ad5",
+      "event_id": "01a1fdb6-8640-76ad-9a0c-582c2f3f6ea7",
       "kind": "substantive_prompt",
       "t": 1795257960000,
       "local": "16:16:00",
@@ -767,7 +858,7 @@
       "sm": "14:03: sends at 14:04:00; its lead is 120 + 300 / 1.5 = 320 s; the other fourteen cycles are the same shape"
     },
     {
-      "event_id": "01a1fdb7-d248-7ce3-9447-cc53ae6cd45e",
+      "event_id": "01a1fdb7-d248-7f79-9af5-d3f5b4dbff95",
       "kind": "permission_answer",
       "t": 1795258045000,
       "local": "16:17:25",
@@ -780,7 +871,7 @@
       "sm": "14:05: permission request at 14:05:10, accepted at 14:05:25; the wait and the 10 s trail are PA 25; the other fourteen cycles are the same shape"
     },
     {
-      "event_id": "01a1fdbd-8b20-77ff-8900-b0db0fef4370",
+      "event_id": "01a1fdbd-8b20-78a2-8318-3b88993bf320",
       "kind": "human_commit",
       "t": 1795258420000,
       "local": "16:23:40",
@@ -793,7 +884,7 @@
       "sm": "14:11; minute 11 is a commit in cycles 3, 6, 9, 12 and 15"
     },
     {
-      "event_id": "01a1fdbe-4e70-7029-99ca-aaa1c87e3d73",
+      "event_id": "01a1fdbe-4e70-7dce-81e2-5d4c3c2b2654",
       "kind": "editor_navigation",
       "t": 1795258470000,
       "local": "16:24:30",
@@ -806,7 +897,7 @@
       "sm": "14:00: heartbeats at 14:00:30 and 14:01:50 become NAV anchors; the other fourteen cycles are the same shape"
     },
     {
-      "event_id": "01a1fdbf-86f0-7dce-81e2-5d4c3c2b2654",
+      "event_id": "01a1fdbf-86f0-7c09-9f43-89548a747478",
       "kind": "editor_navigation",
       "t": 1795258550000,
       "local": "16:25:50",
@@ -819,7 +910,7 @@
       "sm": "14:01: from 14:01:50 the lead of his next prompt takes over; the other fourteen cycles are the same shape"
     },
     {
-      "event_id": "01a1fdc1-82c0-7604-bd23-9b2cd0099bc4",
+      "event_id": "01a1fdc1-82c0-7074-a796-a8aa28f847a0",
       "kind": "substantive_prompt",
       "t": 1795258680000,
       "local": "16:28:00",
@@ -834,7 +925,7 @@
       "sm": "14:03: sends at 14:04:00; its lead is 120 + 300 / 1.5 = 320 s; the other fourteen cycles are the same shape"
     },
     {
-      "event_id": "01a1fdc2-cec8-72b4-b1dd-91c934515e58",
+      "event_id": "01a1fdc2-cec8-72d4-a826-d7eba5309612",
       "kind": "permission_answer",
       "t": 1795258765000,
       "local": "16:29:25",
@@ -847,7 +938,20 @@
       "sm": "14:05: permission request at 14:05:10, accepted at 14:05:25; the wait and the 10 s trail are PA 25; the other fourteen cycles are the same shape"
     },
     {
-      "event_id": "01a1fdc8-87a0-7018-bc44-eca00d2be02a",
+      "event_id": "01a1fdc7-f330-7e31-ae14-25479f1a4fe8",
+      "kind": "typed_edit",
+      "t": 1795259102000,
+      "local": "16:35:02",
+      "project_key": "p_0eccb85aa257",
+      "lead_s": 120,
+      "trail_s": 0,
+      "lead_from": "params",
+      "via": "editor",
+      "level": "A",
+      "sm": "minute 11 of the other cycles is a small hand edit in VS Code, crediting E and NAV; the heartbeat at his first keystroke"
+    },
+    {
+      "event_id": "01a1fdc8-87a0-7071-a871-54ef1757c255",
       "kind": "typed_edit",
       "t": 1795259140000,
       "local": "16:35:40",
@@ -857,10 +961,10 @@
       "lead_from": "params",
       "via": "editor",
       "level": "A",
-      "sm": "minute 11 of the other cycles is a small hand edit in VS Code, crediting E and NAV"
+      "sm": "minute 11 of the other cycles is a small hand edit in VS Code, crediting E and NAV; the heartbeat at the save"
     },
     {
-      "event_id": "01a1fdc9-4af0-7711-a728-3ad722d6249d",
+      "event_id": "01a1fdc9-4af0-7870-8e97-d39c5eda6af1",
       "kind": "editor_navigation",
       "t": 1795259190000,
       "local": "16:36:30",
@@ -873,7 +977,7 @@
       "sm": "14:00: heartbeats at 14:00:30 and 14:01:50 become NAV anchors; the other fourteen cycles are the same shape"
     },
     {
-      "event_id": "01a1fdca-8370-778d-a834-5124b44d477f",
+      "event_id": "01a1fdca-8370-7e43-84a6-10ff3c5fb0d1",
       "kind": "editor_navigation",
       "t": 1795259270000,
       "local": "16:37:50",
@@ -886,7 +990,7 @@
       "sm": "14:01: from 14:01:50 the lead of his next prompt takes over; the other fourteen cycles are the same shape"
     },
     {
-      "event_id": "01a1fdcc-7f40-791c-86d6-85cb3f1d28de",
+      "event_id": "01a1fdcc-7f40-7fd7-ad19-7bd2a28e1a8d",
       "kind": "substantive_prompt",
       "t": 1795259400000,
       "local": "16:40:00",
@@ -901,7 +1005,7 @@
       "sm": "14:03: sends at 14:04:00; its lead is 120 + 300 / 1.5 = 320 s; the other fourteen cycles are the same shape"
     },
     {
-      "event_id": "01a1fdcd-cb48-7cd8-82b5-8aafd9fd946a",
+      "event_id": "01a1fdcd-cb48-7b1e-9418-0c72b7486db8",
       "kind": "permission_answer",
       "t": 1795259485000,
       "local": "16:41:25",
@@ -914,7 +1018,20 @@
       "sm": "14:05: permission request at 14:05:10, accepted at 14:05:25; the wait and the 10 s trail are PA 25; the other fourteen cycles are the same shape"
     },
     {
-      "event_id": "01a1fdd3-8420-7fd0-ae1e-a5f0b626f37d",
+      "event_id": "01a1fdd2-efb0-7c1e-b20d-3fd9059c532f",
+      "kind": "typed_edit",
+      "t": 1795259822000,
+      "local": "16:47:02",
+      "project_key": "p_0eccb85aa257",
+      "lead_s": 120,
+      "trail_s": 0,
+      "lead_from": "params",
+      "via": "editor",
+      "level": "A",
+      "sm": "minute 11 of the other cycles is a small hand edit in VS Code, crediting E and NAV; the heartbeat at his first keystroke"
+    },
+    {
+      "event_id": "01a1fdd3-8420-72f4-833b-c7cd2ee40485",
       "kind": "typed_edit",
       "t": 1795259860000,
       "local": "16:47:40",
@@ -924,10 +1041,10 @@
       "lead_from": "params",
       "via": "editor",
       "level": "A",
-      "sm": "minute 11 of the other cycles is a small hand edit in VS Code, crediting E and NAV"
+      "sm": "minute 11 of the other cycles is a small hand edit in VS Code, crediting E and NAV; the heartbeat at the save"
     },
     {
-      "event_id": "01a1fdd4-4770-7c57-afa3-0c35670a6da3",
+      "event_id": "01a1fdd4-4770-739b-904a-64f1611c5ffa",
       "kind": "editor_navigation",
       "t": 1795259910000,
       "local": "16:48:30",
@@ -940,7 +1057,7 @@
       "sm": "14:00: heartbeats at 14:00:30 and 14:01:50 become NAV anchors; the other fourteen cycles are the same shape"
     },
     {
-      "event_id": "01a1fdd5-7ff0-71b4-ab19-29f2e04d3b13",
+      "event_id": "01a1fdd5-7ff0-7067-aa30-ed0374253bc8",
       "kind": "editor_navigation",
       "t": 1795259990000,
       "local": "16:49:50",
@@ -953,7 +1070,7 @@
       "sm": "14:01: from 14:01:50 the lead of his next prompt takes over; the other fourteen cycles are the same shape"
     },
     {
-      "event_id": "01a1fdd7-7bc0-7608-bec2-65862c60ec5a",
+      "event_id": "01a1fdd7-7bc0-761d-9a6a-4b0aae083860",
       "kind": "substantive_prompt",
       "t": 1795260120000,
       "local": "16:52:00",
@@ -968,7 +1085,7 @@
       "sm": "14:03: sends at 14:04:00; its lead is 120 + 300 / 1.5 = 320 s; the other fourteen cycles are the same shape"
     },
     {
-      "event_id": "01a1fdd8-c7c8-761d-9a6a-4b0aae083860",
+      "event_id": "01a1fdd8-c7c8-7166-bf74-7d663aa48f4b",
       "kind": "permission_answer",
       "t": 1795260205000,
       "local": "16:53:25",
@@ -981,7 +1098,7 @@
       "sm": "14:05: permission request at 14:05:10, accepted at 14:05:25; the wait and the 10 s trail are PA 25; the other fourteen cycles are the same shape"
     },
     {
-      "event_id": "01a1fdde-80a0-78cc-be96-8bc9e5147ac8",
+      "event_id": "01a1fdde-80a0-7c06-89bc-645a81c78a7b",
       "kind": "human_commit",
       "t": 1795260580000,
       "local": "16:59:40",
@@ -994,7 +1111,7 @@
       "sm": "14:11; minute 11 is a commit in cycles 3, 6, 9, 12 and 15"
     },
     {
-      "event_id": "01a1fddf-43f0-78f9-9313-d7459afa4b27",
+      "event_id": "01a1fddf-43f0-748c-8ebc-f3f45b474eb3",
       "kind": "editor_navigation",
       "t": 1795260630000,
       "local": "17:00:30",

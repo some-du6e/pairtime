@@ -323,6 +323,11 @@ def cycle(k):
         # The edit is in the file open since 1:50, so VS Code changes no file.
         focus(c("11:00"), "editor", CODE, P)
         presses(c("11:02.0"), c("11:39.2"), 500, 900)
+        # His first key opens a new line. It is an editor event 552 s after
+        # the 1:50 heartbeat, so WakaTime sends a heartbeat with that one
+        # changed line (HC 1.5) in the same millisecond, and the bridge makes
+        # it an edit (DESIGN 5.7). The save carries the other two.
+        heartbeat(c("11:02.0"), "edit", open_file(), lines=1)
         press(c("11:39.7"))  # Cmd-S
         # A number drawn and dropped. Other fixtures copy this one's harness
         # events by time and data, and the draws after this one set the
@@ -405,6 +410,14 @@ for k in range(1, CYCLES + 1):
         tl.check([(e["t"] - C, e["data"]["app_class"]) for e in f]
                  == [(off("9:00"), "browser"), (off("11:00"), "terminal" if k in COMMIT_CYCLES else "editor")],
                  f"cycle {k}: the browser run is 9:00 to 11:00")
+    # Minute 11 of a hand-edit cycle is E 40 and NAV 20: from 11:00 the next
+    # anchor is one of the edit's two heartbeats until the save at 11:40,
+    # then the next cycle's first heartbeat, a navigation (SM 3.3 rule 3).
+    if k != DRINK and k not in COMMIT_CYCLES:
+        nxt = [(e["t"] - C, e["data"].get("act", e["kind"])) for e in events if C + off("11:00") <= e["t"] <= C + off("12:30")
+               and e["kind"] in ("editor.activity", "prompt.submit", "agent.permission", "git.change")]
+        tl.check(nxt == [(off("11:02"), "edit"), (off("11:40"), "edit"), (off("12:30"), "navigate")],
+                 f"cycle {k}: the hand edit's heartbeats at 11:02 and 11:40, then a navigation at 12:30")
 
 # Level A: every editor, permission and commit anchor has key presses in
 # its slot. A prompt's evidence is the 10 s before it, checked above.
@@ -445,13 +458,23 @@ for k in range(1, CYCLES + 1):
 
 # Hackatime's replay of the window (SM 5.3, 5.4): every editor heartbeat and
 # agent event for logged_s, the agent events alone for ai_logged_s.
+AI_KINDS = ("prompt.submit", "agent.tool", "agent.stop")
 in_window = [e for e in events if T0 <= e["t"] < END]
-ai_times = [e["t"] for e in in_window if e["kind"] in ("prompt.submit", "agent.tool", "agent.stop")]
+ai_times = [e["t"] for e in in_window if e["kind"] in AI_KINDS]
 all_times = sorted(ai_times + [e["t"] for e in in_window if e["kind"] == "editor.activity"])
 ai_logged = tl.hackatime_replay(ai_times)
 logged = tl.hackatime_replay(all_times)
 handbook = logged - ai_logged + ai_logged / 3
 tl.check(ai_logged == 4050 - 120, f"ai_logged_s replays to {ai_logged}")
+tl.check(logged == 7712, f"logged_s replays to {logged}")
+# Hackatime's boundary-aware path, which Stardance reads and DESIGN D15
+# follows, also takes the last record before the window (HC 1.4): the
+# 13:57:05 heartbeat, 205 s before the 14:00:30 one. No agent event comes
+# before the window, so only logged_s would change.
+before = [e["t"] for e in events if e["t"] < T0 and (e["kind"] in AI_KINDS or e["kind"] == "editor.activity")]
+logged_boundary = tl.hackatime_replay(before[-1:] + all_times)
+tl.check(fx.hhmmss(before[-1]) == "13:57:05" and logged_boundary == logged + 120,
+         f"the boundary-aware logged_s is {logged_boundary}")
 
 # The rows: cycle 1 is SM's table; the other fourteen cycles have its shape
 # with SM's three variations.
@@ -513,7 +536,7 @@ for k in range(1, CYCLES + 1):
             if k == 10 and m == 6:
                 note = "A third failing run at 15:54:20, the same AssertionError, after the agent tried his hypothesis."
             if k == 11 and m == 6:
-                note = "The test run at 16:06:20 passes: a run_green, after his own edit at 15:59:40."
+                note = "The test run at 16:06:20 passes: a run_green, after his own edit, saved at 15:59:40."
             exp.row(hhmm, credit={P: credit}, uncredited=unc, agent=agent, sm=sm, derived=derived, note=note)
             continue
         if k in COMMIT_CYCLES:
@@ -524,8 +547,10 @@ for k in range(1, CYCLES + 1):
             exp.row(hhmm, credit={P: {"E": 40, "NAV": 20}}, uncredited={},
                     sm="minute 11 of the other cycles is a small hand edit in VS Code, which credits the same "
                        "60 s as E and NAV",
-                    derived=DERIVED, note="The hand edit's heartbeat is at :40, where cycle 1's commit is."
-                    if k == 2 else ("His own edit fixes the failing test." if k == 10 else None))
+                    derived=DERIVED,
+                    note="The hand edit's heartbeats are at his first keystroke, 14:23:02, and at the save, 14:23:40, "
+                         "where cycle 1's commit is." if k == 2 else
+                    ("His own edit fixes the failing test." if k == 10 else None))
 
 # Totals SM states, checked against the sums of the rows by Expected.doc.
 rows_by_reason = exp.totals()["credited_by_reason"]
@@ -567,12 +592,14 @@ expected = exp.doc(
         "Commits: cycle 1's at 14:11:40 and cycles 3, 9, 12 and 15's, five in all. Cycle 6's would be at "
         "15:11:40, during the drink.",
         "Cycles 9 and 10: the agent's test run fails at 15:41:50, 15:42:20 and 15:54:20 with one "
-        "AssertionError signature, and passes at 16:06:20, after his hand edit at 15:59:40. Nothing is "
+        "AssertionError signature, and passes at 16:06:20, after his hand edit, saved at 15:59:40. Nothing is "
         "discounted. See the same-error erratum for why SM's reason doesn't apply.",
         f"This fixture's events replay to logged_s {logged:g}, ai_logged_s {ai_logged:g} and handbook_s "
         f"{handbook:g} under min(gap, 120 s) over the window; SM says about 8,300, 4,050 and 5,600. The "
         "first prompt has no agent event within 120 s before it in the window, which is the 120 s off SM's "
-        "ai_logged_s, and VS Code sends only the heartbeats SM names. See the Hackatime-replay erratum.",
+        "ai_logged_s, and VS Code sends only the heartbeats SM names, plus one at the first keystroke of each "
+        "hand edit. Hackatime's boundary-aware path would also count the 13:57:05 heartbeat before the window, "
+        f"for logged_s {logged_boundary:g}. See the Hackatime-replay erratum.",
     ],
 )
 
@@ -616,10 +643,11 @@ for k in range(1, CYCLES + 1):
                                  sm="14:11: commit at 14:11:40 (G, lead 60 s)" if k == 1 else
                                  "14:11; minute 11 is a commit in cycles 3, 6, 9, 12 and 15"))
     else:
-        e = fx.event_at("editor.activity", C + off("11:40"))
-        anchors.append(tl.anchor(fx, e, kind="typed_edit", lead_s=120, trail_s=0, lead_from="params", level="A",
-                                 sm="minute 11 of the other cycles is a small hand edit in VS Code, crediting "
-                                    "E and NAV"))
+        for mss, part in (("11:02", "his first keystroke"), ("11:40", "the save")):
+            e = fx.event_at("editor.activity", C + off(mss))
+            anchors.append(tl.anchor(fx, e, kind="typed_edit", lead_s=120, trail_s=0, lead_from="params", level="A",
+                                     sm="minute 11 of the other cycles is a small hand edit in VS Code, crediting "
+                                        f"E and NAV; the heartbeat at {part}"))
     turns.append(tl.turn(fx, C + off("4:00"), C + off("6:30"), session=S, turn_key=TURN[k], origin="human_typed",
                          prompt_class="substantive",
                          sm=shaped("14:04 to 14:06: the agent starts at 14:04:00 and stops at 14:06:30")))
