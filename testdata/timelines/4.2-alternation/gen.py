@@ -15,7 +15,9 @@ sys.path.insert(0, os.path.join(os.path.dirname(HERE), "6.5"))
 import neardup  # noqa: E402
 import timeline as tl  # noqa: E402
 
+LOOP_ERRATUM = "2026-11-19-sm-6.5-loop-codes"
 THINK_LEAD_S, COMPOSE_CPS = 120, Fraction(3, 2)
+LOOP_CODES = ("X.reroll", "X.rewrite_loop", "X.same_error", "X.autopilot")  # excluded_loops_s (SM 5.3)
 
 fx = tl.Fixture(
     "4.2-alternation",
@@ -114,7 +116,8 @@ for prev, name in zip(names, names[1:]):
     tl.check(SENT[name] - lead * 1000 == SENT[prev] + 20_000, f"{name}'s lead starts 20 s after {prev}")
 for name in names:
     t = SENT[name]
-    for s in range(t - 40_000, t, tl.SLOT_MS):
+    first = t - 40_000
+    for s in range(first - first % tl.SLOT_MS, t, tl.SLOT_MS):
         tl.check(any(slot_inputs(s)), f"{name}: key presses in slot {fx.hhmmss(s)} of the typing part")
     tl.check(t - fx.last_input_before(t - 1, keys_only=True) <= 10_000, f"{name}: keyboard input before submit")
 
@@ -162,8 +165,9 @@ exp = tl.Expected(fx, sm="docs/design/struggle-metric.md 4.2", evidence="A", wit
 DERIVED = ["credit", "uncredited", "agent_running_s"]
 
 
-def row(minute, credit, unc, agent, sm=None):
-    exp.row(minute, credit={P: credit} if credit else {}, uncredited=unc, agent=agent, sm=sm, derived=DERIVED)
+def row(minute, credit, unc, agent, sm=None, erratum=None):
+    exp.row(minute, credit={P: credit} if credit else {}, uncredited=unc, agent=agent, sm=sm, derived=DERIVED,
+            erratum=erratum)
 
 
 row("19:31", {"P": 60}, {}, 0)
@@ -176,13 +180,22 @@ for name, start in (("A1", "19:33"), ("B1", "19:36"), ("A2", "19:39")):
 row("19:42", {"SUP": 60}, {}, 60, sm="4.2, What a discount does: a discounted turn opens no anchor windows")
 row("19:43", {"READ": 60}, {}, 0, sm="4.2, What a discount does")
 row("19:44", {"READ": 60}, {}, 0, sm="4.2, What a discount does")
-row("19:45", None, {"X.reroll": 60}, 60, sm="4.2, Re-roll: alternating A, B, A, B, A is caught at the third A")
+# A3's agent runs and nothing credits a second, which SM 5.2's wording
+# makes X.agent_only; X.reroll needs the discount code to win (loop-codes
+# erratum, point 2).
+row("19:45", None, {"X.reroll": 60}, 60, sm="4.2, Re-roll: alternating A, B, A, B, A is caught at the third A",
+    erratum=LOOP_ERRATUM)
+
+# excluded_loops_s from the rows' loop codes: A3's minute, from its submit
+# to the end of the window, while its agent runs.
+excluded = sum(n for r in exp.rows for c, n in (r["uncredited"] or {}).items() if c in LOOP_CODES)
+tl.check(excluded == 60 == (WINDOW[1] - SENT["A3"]) // 1000, f"excluded_loops_s {excluded} is A3's minute")
 
 expected = exp.doc(
-    extra_totals={"credited_s": 840, "excluded_loops_s": 60},
+    extra_totals={"credited_s": 840, "excluded_loops_s": excluded},
     stated=[],
     approx={},
-    errata=[],
+    errata=[LOOP_ERRATUM],
     notes=[
         "SM 4.2 states the outcome, not minute rows: the third A is attempt 3 and discounted as X.reroll, the "
         "others are credited. Every row here follows from SM's rules applied to this timeline (README.md).",
@@ -191,6 +204,8 @@ expected = exp.doc(
         "A3 is discounted, so its lead from 19:42:20 opens no window and B2's bucket is read instead: SUP while "
         "B2 runs, READ after. A3 resets the bucket to zero, so its own minute is X.reroll.",
         "excluded_loops_s is the X.reroll seconds (SM 5.3).",
+        "Row 19:45 names 6.5's loop-codes erratum: A3's agent runs and nothing credits the minute, which SM 5.2's "
+        "wording makes X.agent_only. It is X.reroll if a discount code wins inside a discounted turn (point 2).",
     ],
 )
 
