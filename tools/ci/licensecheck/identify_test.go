@@ -14,7 +14,8 @@ import (
 // modules on DESIGN 3.12's list and their dependencies (real-*), with the
 // identifier GitHub's license detection gives each repository. GitHub gives
 // none for go-humanize because of the URL after its MIT text; pkg.go.dev
-// calls it MIT.
+// calls it MIT. modernc.org/libc lives on GitLab, and pkg.go.dev calls it
+// BSD-3-Clause.
 func TestIdentify(t *testing.T) {
 	tests := []struct {
 		name string
@@ -36,6 +37,7 @@ func TestIdentify(t *testing.T) {
 		{name: "go-humanize is MIT followed by its URL", file: "testdata/real-go-humanize.txt", want: "MIT"},
 		{name: "google/uuid is BSD-3-Clause", file: "testdata/real-google-uuid.txt", want: "BSD-3-Clause"},
 		{name: "go-isatty is MIT with the title after the copyright", file: "testdata/real-go-isatty.txt", want: "MIT"},
+		{name: "modernc.org/libc is BSD-3-Clause, naming the authors and the contributors (mathutil and memory share the text)", file: "testdata/real-modernc-libc.txt", want: "BSD-3-Clause"},
 		{name: "GPL-3.0 is not allowed", file: "../../../testdata/licensecheck/gpl/LICENSE"},
 		{name: "AGPL-3.0, pairtime's own license, is not allowed for a dependency", file: "../../../LICENSE"},
 		{name: "LGPL-3.0 is not allowed", file: "testdata/debian-LGPL-3.txt"},
