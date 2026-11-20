@@ -182,8 +182,11 @@ type Uploader struct {
 	soon   atomic.Bool // a SoonDelay wake is armed
 	job    *sched.Job
 
-	mu      sync.Mutex
-	sealed  []sealedRow // batches Sealed took that the loop hasn't
+	mu     sync.Mutex
+	sealed []sealedRow // batches Sealed took that the loop hasn't
+	// lost is set when the queue was full and dropped batches, which the
+	// loop then reads from batches.seg.
+	lost    bool
 	seen    map[event.Harness]string
 	running bool
 	status  Status
@@ -199,6 +202,7 @@ type Uploader struct {
 	blocked   string // the token the server refused, which isn't tried again
 	problems  map[string]string
 	retry     bool // a failure is waiting for its retry at notBefore
+	resyncs   int  // state reads in a row after chain refusals that took no root
 
 	// maxRoots and maxBuckets replace ingest-v1's limits when set, so
 	// tests can split an upload into many requests.
@@ -211,6 +215,11 @@ type sealedRow struct {
 	row      pkgledger.BatchRow
 	sealedAt time.Time
 }
+
+// sealedQueueMax bounds the sealed batches waiting for the loop, as while the
+// device isn't signed in. Past it the loop reads the rows from
+// batches.seg instead.
+const sealedQueueMax = 1024
 
 // pendingReq is a request waiting for its retry: the same body goes again
 // with the same Idempotency-Key (ingest-v1 2.10).
@@ -309,7 +318,11 @@ func (u *Uploader) Sealed(b ledger.Batch) {
 		}
 	}
 	u.mu.Lock()
-	u.sealed = append(u.sealed, sealedRow{row: b.Row, sealedAt: b.SealedAt})
+	if len(u.sealed) < sealedQueueMax {
+		u.sealed = append(u.sealed, sealedRow{row: b.Row, sealedAt: b.SealedAt})
+	} else {
+		u.sealed, u.lost = nil, true
+	}
 	for h, v := range learned {
 		if u.seen == nil {
 			u.seen = map[event.Harness]string{}
@@ -455,6 +468,12 @@ func (u *Uploader) cycle() bool {
 	}
 	u.setStatus(func(s *Status) { s.SignedIn = ok })
 	if !ok {
+		// Nothing goes, and nothing is kept for later: a sign-in reads the
+		// ledger again from batches.seg.
+		u.mu.Lock()
+		u.sealed, u.lost = nil, false
+		u.mu.Unlock()
+		u.loaded = false
 		u.setProblem("login", "")
 		return false
 	}
@@ -561,11 +580,16 @@ func (u *Uploader) load(c Credentials) error {
 // their records named to the labels.
 func (u *Uploader) takeSealed() {
 	u.mu.Lock()
-	batches := u.sealed
-	u.sealed = nil
+	batches, lost := u.sealed, u.lost
+	u.sealed, u.lost = nil, false
 	seen := u.seen
 	u.seen = nil
 	u.mu.Unlock()
+	if lost {
+		if rows, err := loadRows(u.opts.LedgerDir, max(u.st.Next, 1)); err == nil {
+			u.rows = rows
+		}
+	}
 	for _, sb := range batches {
 		switch {
 		case sb.row.B <= u.rows.last():
@@ -693,9 +717,14 @@ func (u *Uploader) sync(c Credentials) bool {
 	next := uint64(1)
 	if st.Head != nil {
 		next = st.Head.B + 1
+		if b := u.forkAt(st.Head); b != 0 {
+			u.st.Fork = b
+			u.setProblem("chain", fmt.Sprintf("the server's record of this computer's ledger differs from it at batch %d, so pairtime sends no more batch roots; this is a bug, or the ledger was changed", b))
+		}
 		// A batch the server holds that the device has no receipt for
-		// goes again, and its duplicate brings the receipt back.
-		for b := max(u.st.ChainStart, 1); b <= st.Head.B && b <= u.rows.last(); b++ {
+		// goes again, and its duplicate brings the receipt back. Batches
+		// the server said it no longer holds (Gone) are skipped.
+		for b := max(u.st.ChainStart, u.st.Gone+1, 1); b <= st.Head.B && b <= u.rows.last(); b++ {
 			if _, ok := u.rows.receivedAt(b); !ok {
 				next = b
 				break
@@ -715,6 +744,28 @@ func (u *Uploader) sync(c Credentials) bool {
 	u.save()
 	u.setStatus(func(s *Status) { s.Next = next })
 	return true
+}
+
+// forkAt returns the batch of the server's head when the device's own row
+// of that batch has another H_b: there the server's chain and the
+// device's part, and no root after it can link. It returns 0 when they
+// agree, or the device doesn't hold that batch.
+func (u *Uploader) forkAt(h *Head) uint64 {
+	if h.B == 0 || h.B > u.rows.last() {
+		return 0
+	}
+	row, ok := u.rows.row(h.B)
+	if !ok {
+		_, rows, err := ledger.ReadRows(u.opts.LedgerDir, h.B)
+		if err != nil || len(rows) == 0 || rows[0].B != h.B {
+			return 0
+		}
+		row = rows[0]
+	}
+	if row.Head != h.Head {
+		return h.B
+	}
+	return 0
 }
 
 // reserve returns the next request counter, raising the reservation in
@@ -833,6 +884,13 @@ func (u *Uploader) refused(c Credentials, p plan, a answer) {
 		// A new body needs a new key: the next try builds a new request.
 		u.drop()
 		u.notBefore = u.now().Add(SoonDelay)
+	case refusalBodyTooLarge, refusalDecompressed, refusalTooManyBatches, refusalTooManyBuckets:
+		// Split the upload (ingest-v1 2.6): from now on a request carries
+		// half as much.
+		u.maxRoots = max(1, len(p.body.Batches)/2)
+		u.maxBuckets = max(1, len(p.body.Buckets)/2)
+		u.drop()
+		u.notBefore = u.now().Add(SoonDelay)
 	default:
 		// The client's fault, which the same request won't fix: say so, and
 		// try a new request in an hour rather than hammer the server.
@@ -877,15 +935,20 @@ func (u *Uploader) answered(c Credentials, p plan, a answer) bool {
 	}
 	u.backoff.ok()
 	more := false
-	resync := false
+	resync, took := false, false
 	for i, res := range resp.Batches {
 		root := p.body.Batches[i]
 		switch res.Code {
 		case codeAccepted, codeDuplicate:
 			u.receipt(c, root, res.Receipt)
 			u.st.Next = root.B + 1
-			more = true
-		case codePrevMismatch, codeChainGap, codeBeforeChain:
+			more, took = true, true
+		case codeBeforeChain:
+			// The server holds no row for it any more: no receipt comes
+			// for it, so the next state read doesn't send it again.
+			u.st.Gone = max(u.st.Gone, root.B)
+			resync = true
+		case codePrevMismatch, codeChainGap:
 			resync = true
 		case codeBatchConflict:
 			u.st.Fork = root.B
@@ -928,9 +991,22 @@ func (u *Uploader) answered(c Credentials, p plan, a answer) bool {
 	}
 	u.pending = nil
 	u.removeOutbox()
+	switch {
+	case took:
+		u.resyncs = 0
+	case resync:
+		u.resyncs++
+	}
 	if resync {
 		u.synced = false
 		more = true
+		if u.resyncs >= 3 {
+			// Reading the state didn't help three times: wait, rather than
+			// ask the server again and again.
+			u.setProblem("chain", "the server keeps refusing this computer's batch roots where it says its chain stands")
+			u.notBefore = u.now().Add(10 * time.Minute)
+			more = false
+		}
 	}
 	u.rows.trim(u.st.Next)
 	u.save()

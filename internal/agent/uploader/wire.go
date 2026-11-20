@@ -147,6 +147,11 @@ const (
 	refusalMismatch     = "device_mismatch"
 	refusalKeyMissing   = "device_key_missing"
 	refusalKeyReused    = "idempotency_key_reused"
+
+	refusalBodyTooLarge   = "body_too_large"
+	refusalDecompressed   = "decompressed_too_large"
+	refusalTooManyBatches = "too_many_batches"
+	refusalTooManyBuckets = "too_many_buckets"
 )
 
 // encodeBody returns b's JSON exactly as the uploader sends it: what

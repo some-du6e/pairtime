@@ -126,6 +126,12 @@ func bucketsOf(in planInput, n int) ([]entry, map[string]bool, error) {
 		return nil, nil, err
 	}
 	days := make(map[string]bool, len(files))
+	// Batches before start never get a receipt: the server's chain starts
+	// after them, or it no longer holds them.
+	start := in.st.ChainStart
+	if g := in.st.Gone; g > 0 && g+1 > start {
+		start = g + 1
+	}
 	var out []entry
 	count := 0
 	for _, f := range files {
@@ -145,7 +151,7 @@ func bucketsOf(in planInput, n int) ([]entry, map[string]bool, error) {
 				took++
 				return true
 			}
-			w, ok := witnessOf(in.rows, b.At(), in.lag, in.st.ChainStart, in.st.Offline)
+			w, ok := witnessOf(in.rows, b.At(), in.lag, start, in.st.Offline)
 			if !ok {
 				return false
 			}

@@ -56,6 +56,10 @@ type saved struct {
 	// before it are never sent again: the server answers them
 	// before_chain.
 	ChainStart uint64 `json:"chain_start,omitempty"`
+	// Gone is the highest batch the server answered before_chain for: it
+	// holds no row for it any more, so no receipt comes for it or for the
+	// batches before it, and their minutes read backfilled.
+	Gone uint64 `json:"gone,omitempty"`
 	// Fork is the batch the server answered batch_conflict for: the
 	// device's ledger and the server's witness rows disagree there, which
 	// is a bug or tampering, and the uploader sends no batch root after it
