@@ -19,7 +19,8 @@
 //	path   = "<data_dir>/pairtime.db"
 //
 //	[hca]
-//	client_id = ""
+//	client_id = ""                      # empty: nobody can sign in
+//	issuer    = "https://auth.hackclub.com"
 //
 //	[privacy_hub]
 //	aud      = ""
@@ -62,6 +63,10 @@ const (
 	// DefaultDatabaseFile is the SQLite file's name inside data_dir.
 	DefaultDatabaseFile = "pairtime.db"
 )
+
+// DefaultHCAIssuer is Hack Club Auth's issuer (SP 3.1). Tests point
+// hca.issuer at a fake.
+const DefaultHCAIssuer = "https://auth.hackclub.com"
 
 // The values profile_default takes (DESIGN 8.3). Public is the code
 // default, as R5 asks; Karim's instance launches with Ask.
@@ -113,9 +118,11 @@ type Reviewer struct {
 }
 
 // HCA configures the Hack Club Auth client (DESIGN 3.10). Its secret is
-// in secrets.env.
+// PAIRTIME_HCA_CLIENT_SECRET in secrets.env.
 type HCA struct {
 	ClientID string `toml:"client_id"`
+	// Issuer is HCA's issuer URL, DefaultHCAIssuer unless set.
+	Issuer string `toml:"issuer"`
 }
 
 // PrivacyHub configures the privacy hub endpoints (DESIGN 8.9).
@@ -200,6 +207,13 @@ func (c *Config) finish(dir string) error {
 
 	for _, err := range checkReviewers(c.Reviewers) {
 		fail("reviewers: %v", err)
+	}
+
+	if c.HCA.Issuer == "" {
+		c.HCA.Issuer = DefaultHCAIssuer
+	}
+	if err := checkIssuer(c.HCA.Issuer); err != nil {
+		fail("hca.issuer: %v", err)
 	}
 
 	if u := c.PrivacyHub.JWKSURL; u != "" {
@@ -287,6 +301,29 @@ func checkBaseURL(raw string) (string, error) {
 		return raw, fmt.Errorf("%q must start with https://", raw)
 	}
 	return strings.TrimSuffix(raw, "/"), nil
+}
+
+// checkIssuer checks hca.issuer: an https URL with a host and no query or
+// fragment, or http on a loopback host, where tests run a fake HCA. Its
+// path may be anything, and it is compared with the discovery document's
+// issuer exactly (OIDC Discovery 4.3).
+func checkIssuer(raw string) error {
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+		return fmt.Errorf("%q must be a URL such as %q, with no query or user", raw, DefaultHCAIssuer)
+	}
+	switch u.Scheme {
+	case "https":
+		return nil
+	case "http":
+		host := u.Hostname()
+		if ip := net.ParseIP(host); host == "localhost" || (ip != nil && ip.IsLoopback()) {
+			return nil
+		}
+		return fmt.Errorf("%q uses http; only https is allowed, except on localhost", raw)
+	default:
+		return fmt.Errorf("%q must start with https://", raw)
+	}
 }
 
 // checkReviewers checks the allowlist: each sub once, each role known.

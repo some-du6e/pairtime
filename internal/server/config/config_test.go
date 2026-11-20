@@ -65,7 +65,7 @@ func TestLoad(t *testing.T) {
 						{Sub: "ident!abc123", Roles: []string{"qi", "program_reviewer:stardance"}},
 						{Sub: "ident!def456", Roles: []string{"fraud_squad", "spot_checker", "admin"}},
 					},
-					HCA:        HCA{ClientID: "hca-client"},
+					HCA:        HCA{ClientID: "hca-client", Issuer: DefaultHCAIssuer},
 					PrivacyHub: PrivacyHub{Aud: "pairtime", JWKSURL: "https://privacy.example.org/.well-known/jwks.json"},
 					Sentinel:   Sentinel{Socket: "/run/pairtime/sentinel.sock"},
 					Listen:     ":8081",
@@ -96,6 +96,8 @@ func TestLoad(t *testing.T) {
 					{"database.path", c.Database.Path, "/data/pairtime.db"},
 					{"scoring_version", c.ScoringVersion, ""},
 					{"sentinel.socket", c.Sentinel.Socket, ""},
+					{"hca.client_id", c.HCA.ClientID, ""},
+					{"hca.issuer", c.HCA.Issuer, "https://auth.hackclub.com"},
 				} {
 					if f.got != f.want {
 						t.Errorf("%s = %q, want %q", f.key, f.got, f.want)
@@ -131,6 +133,9 @@ func TestLoad(t *testing.T) {
 		{name: "a reviewer needs a sub", toml: base + "[[reviewers]]\nroles = [\"qi\"]\n", wantErr: "has no sub"},
 		{name: "a reviewer sub is listed once", toml: base + "[[reviewers]]\nsub = \"a\"\nroles = [\"qi\"]\n[[reviewers]]\nsub = \"a\"\nroles = [\"admin\"]\n", wantErr: "listed twice"},
 		{name: "a role is listed once per reviewer", toml: base + "[[reviewers]]\nsub = \"a\"\nroles = [\"qi\", \"qi\"]\n", wantErr: "twice"},
+		{name: "hca.issuer over plain http is refused", toml: base + "[hca]\nissuer = \"http://auth.example.org\"\n", wantErr: "hca.issuer"},
+		{name: "hca.issuer over http is allowed on localhost, for a fake HCA", toml: base + "[hca]\nissuer = \"http://localhost:8080/hca\"\n"},
+		{name: "hca.issuer can't carry a query", toml: base + "[hca]\nissuer = \"https://auth.example.org/?x=1\"\n", wantErr: "hca.issuer"},
 		{name: "privacy_hub.jwks_url must be https", toml: base + "[privacy_hub]\njwks_url = \"http://example.org/jwks.json\"\n", wantErr: "jwks_url"},
 		{name: "sentinel.socket must be absolute", toml: base + "[sentinel]\nsocket = \"sentinel.sock\"\n", wantErr: "sentinel.socket"},
 		{name: "listen must be host:port", toml: base + "listen = \"8080\"\n", wantErr: "listen is"},

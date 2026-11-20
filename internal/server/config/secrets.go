@@ -22,6 +22,13 @@ const (
 	// DatabaseURL is the Postgres connection URL, for database.engine =
 	// "postgres".
 	DatabaseURL = "PAIRTIME_DATABASE_URL"
+	// HCAClientSecret is the client secret of pairtimed's Hack Club Auth
+	// app, needed once hca.client_id is set (DESIGN 3.10).
+	HCAClientSecret = "PAIRTIME_HCA_CLIENT_SECRET"
+	// EmailKey is the 32-byte key that encrypts account emails at rest,
+	// as 64 hex digits or base64 (DESIGN 4.4). "openssl rand -hex 32"
+	// makes one. Sign-in needs it.
+	EmailKey = "PAIRTIME_EMAIL_KEY"
 )
 
 // Environment variables that say where the configuration is. They aren't
