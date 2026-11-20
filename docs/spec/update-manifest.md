@@ -141,26 +141,31 @@ The two prefixes differ, so a secret key pasted into the key list fails to parse
 
 ### Making the key
 
-Karim does this once, before the first tag that should be signed (PLAN WP-RL1). These are repository settings, so they're his to run, not an agent's.
+Karim does this once, before the first tag that should be signed (PLAN WP-RL1). These are repository settings, so they're his to run, not an agent's. Step 2 encrypts a backup to the offline `age` key pair (DESIGN 10.5, item 5), so that key pair has to exist first.
 
-1. Set up the `release` environment so that only `v*` tags can deploy to it. Only a job that deploys to it can read its secrets.
+1. Set up the `release` environment so that only `v*` tags can deploy to it, and only once Karim approves the run. Only a job that deploys to it can read its secrets.
 
    ```sh
-   gh api -X PUT repos/some-du6e/pairtime/environments/release \
-     -F 'deployment_branch_policy[protected_branches]=false' \
-     -F 'deployment_branch_policy[custom_branch_policies]=true'
+   gh api -X PUT repos/some-du6e/pairtime/environments/release --input - <<EOF
+   {
+     "deployment_branch_policy": {"protected_branches": false, "custom_branch_policies": true},
+     "reviewers": [{"type": "User", "id": $(gh api users/some-du6e --jq .id)}]
+   }
+   EOF
    gh api -X POST repos/some-du6e/pairtime/environments/release/deployment-branch-policies \
      -f name='v*' -f type=tag
    ```
 
-   Run both even if `release` already exists. The publish job names the environment, so a tag pushed before this step creates it, and GitHub creates it with no deployment policy, which lets a workflow run on any branch deploy to it and read its secrets. `PUT` adds the policy to an environment that exists, and if the `POST` reports that the `v*` policy exists, the environment already has it. Then check what it admits:
+   Run both even if `release` already exists. The publish job names the environment, so a tag pushed before this step creates it, and GitHub creates it with no deployment policy and no reviewer, which lets a workflow run on any branch deploy to it and read its secrets. `PUT` sets the policy and the reviewer on an environment that exists; send both fields in any later `PUT` too. If the `POST` reports that the `v*` policy exists, the environment already has it. Then check what it admits and who approves:
 
    ```sh
    gh api repos/some-du6e/pairtime/environments/release/deployment-branch-policies \
      --jq '.branch_policies[] | "\(.id) \(.type) \(.name)"'
+   gh api repos/some-du6e/pairtime/environments/release \
+     --jq '.protection_rules[] | select(.type == "required_reviewers") | .reviewers[].reviewer.login'
    ```
 
-   It should print one line, ending in `tag v*`. Delete the policy of any other line with `gh api -X DELETE repos/some-du6e/pairtime/environments/release/deployment-branch-policies/<id>`.
+   The first should print one line, ending in `tag v*`. Delete the policy of any other line with `gh api -X DELETE repos/some-du6e/pairtime/environments/release/deployment-branch-policies/<id>`. The second should print `some-du6e`. Each publish job then waits on its run's page until Karim approves it. The approval is no guard against a tool that has Karim's credentials (What gets signed).
 
 2. Make the key from the repository root, with its secret half going to an offline copy and straight into the environment:
 
@@ -178,7 +183,9 @@ Karim does this once, before the first tag that should be signed (PLAN WP-RL1). 
 
 ### What gets signed
 
-The publish job signs a tag only if `main` contains the tagged commit. It runs `git merge-base --is-ancestor "$GITHUB_SHA" origin/main` before it reads the key, so a `v*` tag pushed from a PR branch or an agent's worktree fails there. A tag runs the `release.yml` of the commit it names, though, and a branch's copy could leave that check out. Two rulesets close the gap. They're repository settings, so Karim adds them:
+The publish job signs a tag only if `main` contains the tagged commit. Before it reads the key, it runs `git merge-base --is-ancestor "$GITHUB_SHA" origin/main`, so a `v*` tag pushed by mistake on a PR branch or in an agent's worktree fails there. It catches mistakes, not someone who means to sign such a commit. A tag runs the `release.yml` of the commit it names, so the check runs only on commits whose `release.yml` still has it, and a tag on a commit whose copy leaves it out gets signed.
+
+What stops that is who can push a `v*` tag and approve the run. The environment's required reviewer is step 1 of Making the key, and two rulesets do the rest. They're repository settings, so Karim adds them:
 
 - `main` takes changes only through pull requests and can't be force-pushed or deleted, so "on `main`" means merged.
 - Only a repository admin, which on this personal repository means Karim, can create, move or delete a `v*` tag. Without this rule, anyone who can push a branch can push a tag.
@@ -218,18 +225,15 @@ gh api repos/some-du6e/pairtime/rulesets --jq '.[] | "\(.id) \(.target) \(.name)
 
 The last command should list both rulesets as `active`. Actor 5 is the admin role. The `main` ruleset lets nobody bypass it, so Karim's own changes go through PRs too, and so do the orchestrator's direct docs commits (#22).
 
-The tag rule can't tell Karim from a tool that pushes with his credentials, as the agents on his machines do. Against those, the merge-base check is the guard: such a tag can only sign code that's already on `main`. To approve each release by hand as well, make Karim a required reviewer of the environment, with its policy repeated in the same call:
+None of this stops a tool that holds Karim's credentials, and the agents on his machines hold them today. They push as `some-du6e`, an admin, and the tag ruleset lets admins bypass it. Any token of his with the `repo` scope, like the one `gh` uses, can approve a pending deployment as him (`POST repos/some-du6e/pairtime/actions/runs/<run id>/pending_deployments`). So such a tool can push a `v*` tag on any commit, with a `release.yml` that skips the check, and approve its run.
+
+To shut that out, give the agents a GitHub account of their own and add it as a collaborator, which on a personal repository has write access and not admin:
 
 ```sh
-gh api -X PUT repos/some-du6e/pairtime/environments/release --input - <<EOF
-{
-  "deployment_branch_policy": {"protected_branches": false, "custom_branch_policies": true},
-  "reviewers": [{"type": "User", "id": $(gh api users/some-du6e --jq .id)}]
-}
-EOF
+gh api -X PUT repos/some-du6e/pairtime/collaborators/<the agents' account>
 ```
 
-Each publish job then waits for his approval on the run's page.
+Once it accepts the invitation, sign the agents' `gh` and git credentials in as that account, and keep `some-du6e`'s tokens off the machines they run on, since an agent can use any token it can read. The tag ruleset then refuses their `v*` tags, and they can't approve the environment, because only Karim reviews it. They can still merge PRs, so a tag signs whatever `main` holds when Karim pushes it, and his approval is where he checks that.
 
 ### Replacing a key
 
@@ -260,7 +264,7 @@ A leaked secret key can sign manifests that every client trusting it accepts, un
 - `workflow_dispatch`, and a PR that changes the release code, build a snapshot. Its version is `v0.0.0-snapshot.<run number>` and its `minimum_version` is the same. A throwaway key made in the job signs it and is never stored. The files stay as a workflow artifact for 7 days, with the throwaway public key as `snapshot-key.pub`. Their URLs name a release that doesn't exist.
 - A tag pushed while no release key exists, with nothing in `release-keys.txt` and no secret, still publishes. The throwaway key signs it, its notes start with "Unsigned", and no client trusts its manifest; check its downloads against `checksums.txt`.
 - Once `release-keys.txt` lists a key, a tag fails instead of publishing if the secret is missing or its key isn't in the list.
-- A tag on a commit that `main` doesn't contain fails before anything is signed or published, with a key or without one (What gets signed).
+- A tag on a commit that `main` doesn't contain fails before anything is signed or published, with a key or without one, if that commit's `release.yml` has the check (What gets signed).
 
 ## Where clients find it
 

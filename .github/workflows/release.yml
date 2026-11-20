@@ -5,8 +5,9 @@
 #
 # - A pushed v* tag builds the seven targets, signs manifest.json with the
 #   RELEASE_SIGNING_KEY secret and publishes a GitHub release, if main
-#   contains the tagged commit. A tag with a prerelease part, such as
-#   v0.1.0-alpha.1, publishes a prerelease.
+#   contains the tagged commit and the release environment's reviewer
+#   approves the run. A tag with a prerelease part, such as v0.1.0-alpha.1,
+#   publishes a prerelease.
 # - workflow_dispatch, and a PR that changes the release code, build a
 #   snapshot signed with a throwaway key and keep it as a workflow
 #   artifact. They never publish, and the release environment that holds
@@ -273,10 +274,13 @@ jobs:
     if: github.event_name == 'push' && github.ref_type == 'tag'
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    # RELEASE_SIGNING_KEY lives only in this environment, whose deployment
-    # policy admits v* tags alone, so no branch or PR run can read it. The
-    # spec's Making the key sets that policy up; GitHub creates a missing
-    # environment without one.
+    # RELEASE_SIGNING_KEY lives only in this environment. Its deployment
+    # policy admits v* tags alone, so no branch or PR run can read it, and
+    # its required reviewer, Karim, approves each run. GitHub creates a
+    # missing environment with neither, and the spec's Making the key sets
+    # both up. They hold only against tools that can't act as Karim: an
+    # admin may push a v* tag on any commit, and a token of his can approve
+    # (docs/spec/update-manifest.md, What gets signed).
     environment: release
     permissions:
       # To create the release and upload its files.
@@ -300,12 +304,13 @@ jobs:
           cache: false
 
       - name: Only a commit on main is signed
-        # A tag runs the release.yml and tools/release of the commit it
-        # names, and this job can read the signing key. So nothing is
-        # signed unless main contains the tagged commit, and a tag pushed
-        # from a PR branch or an agent's worktree stops here. A branch's own
-        # release.yml could leave this step out, which is why only an admin
-        # may push v* tags (docs/spec/update-manifest.md, What gets signed).
+        # A v* tag pushed by mistake on a commit main doesn't contain, such
+        # as one on a PR branch or in an agent's worktree, stops here before
+        # the key is read. It catches mistakes only: a tag runs the
+        # release.yml of the commit it names, so a commit whose release.yml
+        # leaves this step out skips it. Who may push v* tags and approve
+        # this environment decides the rest (docs/spec/update-manifest.md,
+        # What gets signed).
         run: |
           git fetch --quiet --no-tags origin +refs/heads/main:refs/remotes/origin/main
           if ! git merge-base --is-ancestor "$GITHUB_SHA" refs/remotes/origin/main; then
