@@ -22,8 +22,9 @@ import (
 	"github.com/some-du6e/pairtime/pkg/ledger/features"
 )
 
-// TestNumbers checks decision E-sm-1.1-seq-gaps' numbering: one sequence
-// over every record the device writes, from 1, with no gap or repeat.
+// TestNumbers checks decision E-sm-1.1-seq-gaps' numbering (decided; spec
+// wording pending): one sequence over every record the device writes, from
+// 1, with no gap or repeat.
 func TestNumbers(t *testing.T) {
 	cases := []struct {
 		name  string

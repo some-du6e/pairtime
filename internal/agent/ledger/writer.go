@@ -70,7 +70,8 @@ type Options struct {
 	// whose chain another key wrote gets its files moved to old/<key id>,
 	// and a new chain starts at s = 1 under a new device id: a restore, or
 	// anything else that gives the installation a new K_dev, starts a new
-	// device (ledger-v1 3; decision E-sm-1.1-seq-gaps).
+	// device (ledger-v1 3; decision E-sm-1.1-seq-gaps, decided; spec
+	// wording pending).
 	KeyID string
 	// Chains, when set, records next to K_dev which chain the key writes:
 	// the agent passes its keystore. Open refuses with ErrKeyReuse to start
@@ -94,7 +95,8 @@ type Options struct {
 	// disk, in batch order, on the goroutine that sealed it, so it must
 	// return quickly. The scorer takes its records from here, and only
 	// from sealed batches, so nothing it scores or uploads rests on a
-	// record a crash could still cut (decision E-sm-1.1-seq-gaps).
+	// record a crash could still cut (decision E-sm-1.1-seq-gaps,
+	// decided; spec wording pending).
 	// Batches sealed before Open are on disk for ReadBatches.
 	Sealed func(Batch)
 	// Problem gets a description of what went wrong when a seal that no
@@ -148,7 +150,8 @@ type Input struct {
 // on while a seal waits for its fsync. The row needs no flush of its own,
 // because Open rebuilds a lost row from the seal frame. Records a crash
 // cuts were never in a sealed batch, and the next record takes the number
-// after the last one that survived (decision E-sm-1.1-seq-gaps).
+// after the last one that survived (decision E-sm-1.1-seq-gaps, decided;
+// spec wording pending).
 type Writer struct {
 	dir      string
 	keys     *ledger.Keys
@@ -298,6 +301,14 @@ func (w *Writer) DeviceID() string { return w.device }
 //
 // A record Write refuses, such as an event that fails Validate, takes no
 // sequence number. The error leaves the event's content out.
+//
+// The number is final only once Options.Sealed delivers the record's
+// batch. A crash or a power cut before the next seal can cut the record,
+// and after the restart the next record takes its number (decision
+// E-sm-1.1-seq-gaps, decided; spec wording pending). So whatever is kept
+// by the number, such as a vault entry, whose associated data it is
+// (WP-LG6), is keyed from Sealed, or checked against the sealed record's
+// c before it is revealed.
 func (w *Writer) Write(in Input) (uint64, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -360,7 +371,9 @@ func (w *Writer) prepare(in Input) (event.Event, ledger.Content) {
 // Checkpoint appends a scorer checkpoint (rtype 0x40): projectKey's
 // serialized score.ProjectState at the UTC minute t, in Unix ms, a
 // multiple of 900,000 (ledger-v1 4.7; DESIGN 3.6, 6.5). It returns the
-// record's sequence number.
+// record's sequence number, which is final only once Options.Sealed
+// delivers its batch, as Write's is: a reference to the checkpoint takes
+// its number from Sealed.
 func (w *Writer) Checkpoint(projectKey string, t uint64, state json.RawMessage) (uint64, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -380,7 +393,8 @@ func (w *Writer) Checkpoint(projectKey string, t uint64, state json.RawMessage) 
 // UploadFailure appends an upload-failure note (rtype 0x41): an upload
 // failed at t, in Unix ms, for reason, one of dns, connect, tls, http_5xx
 // and http_429 (ledger-v1 4.7; DESIGN 3.6, 7.4). It returns the record's
-// sequence number.
+// sequence number, which is final only once Options.Sealed delivers its
+// batch, as Write's is.
 func (w *Writer) UploadFailure(t uint64, reason string) (uint64, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()

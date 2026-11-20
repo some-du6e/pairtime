@@ -100,7 +100,8 @@ func flipByte(t *testing.T, name string, off int64) {
 }
 
 // TestRecover checks what Open does with each thing a crash or a power cut
-// can leave, and refuses what neither can (decision E-sm-1.1-seq-gaps).
+// can leave, and refuses what neither can (decision E-sm-1.1-seq-gaps,
+// decided; spec wording pending).
 func TestRecover(t *testing.T) {
 	batches := func(c crashed) string { return filepath.Join(c.dir, batchesName) }
 	cases := []struct {
@@ -281,8 +282,9 @@ func TestRecoverRefuses(t *testing.T) {
 	})
 }
 
-// TestKeyChange checks decision E-sm-1.1-seq-gaps for a new K_dev: the old
-// chain is kept for reading, and a new device starts at 1.
+// TestKeyChange checks decision E-sm-1.1-seq-gaps (decided; spec wording
+// pending) for a new K_dev: the old chain is kept for reading, and a new
+// device starts at 1.
 func TestKeyChange(t *testing.T) {
 	dir := t.TempDir()
 	clk := newClock(testT)
