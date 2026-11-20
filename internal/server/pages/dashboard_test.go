@@ -588,11 +588,11 @@ func TestOwnerDashboard(t *testing.T) {
 		wantHeaders  map[string]string
 	}{
 		{
-			name:     "with sign-in off the page says there's no dashboard of your own yet, and links the sample",
+			name:     "with sign-in off and sign-ups closed the page says there's no dashboard of your own, promises none, and links the sample",
 			signIn:   SignIn{},
 			wantCode: 200,
 			want: []string{
-				"Sign-in isn&#39;t open on this server yet, so there&#39;s no dashboard of your own to show.",
+				"Sign-in isn&#39;t set up on this server yet, so there&#39;s no dashboard of your own to show. Sign-ups are closed for now too, and testers join by invitation, using pairtime on their own computers until sign-ups open.</p>",
 				`<a class="button" href="/demo">See a sample dashboard</a>`,
 			},
 			notWant:     []string{"<form", "Sample data"},

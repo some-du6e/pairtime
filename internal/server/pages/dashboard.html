@@ -152,6 +152,9 @@
 </section>
 {{- end}}
 {{define "off"}}<h1>Your dashboard</h1>
-<p>Sign-in isn&#39;t open on this server yet, so there&#39;s no dashboard of your own to show. When it opens, you sign in with Hack Club, run <code>pairtime login</code> on your computer, and your time shows up here.</p>
+<p>Sign-in isn&#39;t set up on this server yet, so there&#39;s no dashboard of your own to show.
+{{- if .SignupsOpen}} Once it is, you sign in with Hack Club, run <code>pairtime login</code> on your computer, and your time shows up here.
+{{- else}} Sign-ups are closed for now too, and testers join by invitation, using pairtime on their own computers until sign-ups open.
+{{- end}}</p>
 <p><a class="button" href="/demo">See a sample dashboard</a></p>
 {{end}}

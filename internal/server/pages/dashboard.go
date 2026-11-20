@@ -621,7 +621,7 @@ func (s *Site) checkDashboard() error {
 		}
 	}
 	var off bytes.Buffer
-	return s.dash.ExecuteTemplate(&off, "off", nil)
+	return s.dash.ExecuteTemplate(&off, "off", struct{ SignupsOpen bool }{s.signupsOpen})
 }
 
 // RegisterDemo adds GET /demo, the dashboard page drawn from the fixed
@@ -736,7 +736,8 @@ func (s *Site) serveDashboard(w http.ResponseWriter, r *http.Request, in SignIn,
 	if !in.Enabled || d.Account == nil {
 		var body bytes.Buffer
 		var page bytes.Buffer
-		if err := s.dash.ExecuteTemplate(&body, "off", nil); err != nil || s.layout.wrap(&page, layoutData{Title: "Your dashboard", Class: "dash", Body: template.HTML(body.String())}) != nil {
+		off := struct{ SignupsOpen bool }{s.signupsOpen}
+		if err := s.dash.ExecuteTemplate(&body, "off", off); err != nil || s.layout.wrap(&page, layoutData{Title: "Your dashboard", Class: "dash", Body: template.HTML(body.String())}) != nil {
 			http.Error(w, "This page didn't render.", http.StatusInternalServerError)
 			return
 		}
