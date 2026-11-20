@@ -375,8 +375,7 @@ func TestDesktopFocusOnFakeX(t *testing.T) {
 				if s := d.Status(); s.Focus.Via != focusViaXRes {
 					t.Errorf("focus is %+v after the restart", s.Focus)
 				}
-				f.setCardinal(testRoot, "_NET_ACTIVE_WINDOW", atomWindow, winA)
-				f.notify(testRoot, "_NET_ACTIVE_WINDOW")
+				f.setActive(testRoot, winA)
 				if r := nextReport(t, focus); r.Window != winA || r.PID != 4242 {
 					t.Fatalf("report %+v, want winA with pid 4242 from the new connection", r)
 				}

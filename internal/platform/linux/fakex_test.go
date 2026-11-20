@@ -340,41 +340,52 @@ func (f *fakeX) handle(conn net.Conn, req []byte) {
 			f.writeError(conn, seq, 3, req[0], 0)
 		}
 	case opGetProperty:
-		window, atom, typ, words := le32(req[4:]), le32(req[8:]), le32(req[12:]), le32(req[20:])
-		f.mu.Lock()
-		f.reads[fakePropKey{window, atom}]++
-		exists := f.windows[window]
-		p, ok := f.props[fakePropKey{window, atom}]
-		f.mu.Unlock()
-		if !exists {
-			f.writeError(conn, seq, 3, req[0], 0)
-			return
-		}
-		var value []byte
-		var ptype uint32
-		var format byte
-		var after uint32
-		switch {
-		case !ok:
-		case typ != 0 && typ != p.typ:
-			ptype, format, after = p.typ, p.format, uint32(len(p.data))
-		default:
-			ptype, format = p.typ, p.format
-			value = p.data[:min(len(p.data), int(words)*4)]
-			after = uint32(len(p.data) - len(value))
-		}
-		r := fakeReply(seq, len(value)+pad4(len(value)))
-		r[1] = format
-		put32(r[8:], ptype)
-		put32(r[12:], after)
-		if format != 0 {
-			put32(r[16:], uint32(len(value)/int(format/8)))
-		}
-		copy(r[32:], value)
-		f.write(conn, r)
+		f.getProperty(conn, seq, req)
 	default:
 		f.writeError(conn, seq, 1, req[0], 0)
 	}
+}
+
+// getProperty answers GetProperty. It holds f.mu from the lookup to the
+// reply, and events go out under f.mu too, so the reply and the events on
+// its connection keep the order a real server gives them: a server handles
+// one request at a time and queues events and replies to a client in the
+// order it makes them, so every PropertyNotify that comes before a reply is
+// about a change the reply shows. Clients may rely on that, and a fake that
+// broke it would fail them for it.
+func (f *fakeX) getProperty(conn net.Conn, seq uint16, req []byte) {
+	window, atom, typ, words := le32(req[4:]), le32(req[8:]), le32(req[12:]), le32(req[20:])
+	time.Sleep(f.delay)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.reads[fakePropKey{window, atom}]++
+	if !f.windows[window] {
+		f.send(conn, errorPacket(seq, 3, req[0], 0))
+		return
+	}
+	p, ok := f.props[fakePropKey{window, atom}]
+	var value []byte
+	var ptype uint32
+	var format byte
+	var after uint32
+	switch {
+	case !ok:
+	case typ != 0 && typ != p.typ:
+		ptype, format, after = p.typ, p.format, uint32(len(p.data))
+	default:
+		ptype, format = p.typ, p.format
+		value = p.data[:min(len(p.data), int(words)*4)]
+		after = uint32(len(p.data) - len(value))
+	}
+	r := fakeReply(seq, len(value)+pad4(len(value)))
+	r[1] = format
+	put32(r[8:], ptype)
+	put32(r[12:], after)
+	if format != 0 {
+		put32(r[16:], uint32(len(value)/int(format/8)))
+	}
+	copy(r[32:], value)
+	f.send(conn, r)
 }
 
 // handleXRes answers X-Resource's QueryVersion and QueryClientIds, which
@@ -435,24 +446,35 @@ func fakeReply(seq uint16, extra int) []byte {
 }
 
 func (f *fakeX) writeError(conn net.Conn, seq uint16, code, major byte, minor uint16) {
+	f.write(conn, errorPacket(seq, code, major, minor))
+}
+
+func errorPacket(seq uint16, code, major byte, minor uint16) []byte {
 	e := make([]byte, 32)
 	e[1] = code
 	put16(e[2:], seq)
 	put16(e[8:], minor)
 	e[10] = major
-	f.write(conn, e)
+	return e
 }
 
-// write sends a packet, after an unrelated event when noise is on, so the
-// client has to skip events to find its reply.
+// write sends a packet after the configured delay.
 func (f *fakeX) write(conn net.Conn, p []byte) {
 	time.Sleep(f.delay)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.send(conn, p)
+}
+
+// send sends a packet, after an unrelated event when noise is on, so the
+// client has to skip events to find its reply. f.mu is held, as it is for
+// every packet the fake sends once a connection is set up, which keeps
+// each connection's packets in the order they were made.
+func (f *fakeX) send(conn net.Conn, p []byte) {
 	if f.noise {
 		mapping := make([]byte, 32)
 		mapping[0] = 34 // MappingNotify, which every client gets
-		f.mu.Lock()
 		put16(mapping[2:], f.seq[conn])
-		f.mu.Unlock()
 		conn.Write(mapping)
 	}
 	conn.Write(p)
@@ -517,25 +539,37 @@ func (f *fakeX) setCardinal(window uint32, name string, typ uint32, v uint32) {
 // that selected property changes on window.
 func (f *fakeX) notify(window uint32, name string) {
 	f.mu.Lock()
-	atom := f.atomLocked(name)
-	selected := f.selected[window]&propertyChangeMask != 0
-	conns := append([]net.Conn(nil), f.conns...)
-	seqs := make([]uint16, len(conns))
-	for i, c := range conns {
-		seqs[i] = f.seq[c]
-	}
-	f.mu.Unlock()
-	if !selected {
+	defer f.mu.Unlock()
+	f.notifyLocked(window, f.atomLocked(name))
+}
+
+// notifyLocked is notify with f.mu held.
+func (f *fakeX) notifyLocked(window, atom uint32) {
+	if f.selected[window]&propertyChangeMask == 0 {
 		return
 	}
-	for i, c := range conns {
+	for _, c := range f.conns {
 		e := make([]byte, 32)
 		e[0] = eventPropertyNotify
-		put16(e[2:], seqs[i])
+		put16(e[2:], f.seq[c])
 		put32(e[4:], window)
 		put32(e[8:], atom)
 		c.Write(e)
 	}
+}
+
+// setActive is the window manager focusing win: it sets root's
+// _NET_ACTIVE_WINDOW and sends the PropertyNotify for it in one step, as a
+// server carries out a ChangeProperty, so no reply goes out between the
+// change and its event.
+func (f *fakeX) setActive(root, win uint32) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	atom := f.atomLocked("_NET_ACTIVE_WINDOW")
+	v := make([]byte, 4)
+	put32(v, win)
+	f.props[fakePropKey{root, atom}] = fakeProp{typ: atomWindow, format: 32, data: v}
+	f.notifyLocked(root, atom)
 }
 
 // selectedOn returns the event mask clients selected on window.

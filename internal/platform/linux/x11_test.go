@@ -304,10 +304,12 @@ func addTestWindows(f *fakeX) {
 	f.setClientPID(winGone, 6666)
 }
 
-// focusStep changes the fake server, then sends a PropertyNotify.
+// focusStep is one thing the window manager does: it sets the root's
+// _NET_ACTIVE_WINDOW to each window in active in turn, or, when other is
+// set, it changes that root property instead.
 type focusStep struct {
-	active uint32 // set _NET_ACTIVE_WINDOW to this window
-	notify string // the root property the PropertyNotify names
+	active []uint32
+	other  string
 }
 
 func TestX11Focus(t *testing.T) {
@@ -328,19 +330,19 @@ func TestX11Focus(t *testing.T) {
 		{
 			name: "a change of _NET_ACTIVE_WINDOW reports the new window",
 			wm:   "ewmh", start: winA,
-			steps: []focusStep{{active: winB, notify: "_NET_ACTIVE_WINDOW"}},
+			steps: []focusStep{{active: []uint32{winB}}},
 			want:  []Focus{{Window: winA, PID: 4242}, {Window: winB, PID: 777}},
 		},
 		{
 			name: "a change of another root property reports nothing and reads nothing",
 			wm:   "ewmh", start: winA,
-			steps: []focusStep{{active: winA, notify: "_NET_CLIENT_LIST_STACKING"}},
+			steps: []focusStep{{other: "_NET_CLIENT_LIST_STACKING"}},
 			want:  []Focus{{Window: winA, PID: 4242}},
 		},
 		{
 			name: "the same window set again reports nothing",
 			wm:   "ewmh", start: winA,
-			steps: []focusStep{{active: winA, notify: "_NET_ACTIVE_WINDOW"}},
+			steps: []focusStep{{active: []uint32{winA}}},
 			want:  []Focus{{Window: winA, PID: 4242}},
 		},
 		{
@@ -391,13 +393,13 @@ func TestX11Focus(t *testing.T) {
 		{
 			name: "no focused window is window 0",
 			wm:   "ewmh", start: 0,
-			steps: []focusStep{{active: winB, notify: "_NET_ACTIVE_WINDOW"}},
+			steps: []focusStep{{active: []uint32{winB}}},
 			want:  []Focus{{Window: 0}, {Window: winB, PID: 777}},
 		},
 		{
 			name: "without a window manager nothing is reported until _NET_ACTIVE_WINDOW changes",
 			wm:   "none", start: winA,
-			steps:  []focusStep{{active: winB, notify: "_NET_CLIENT_LIST"}},
+			steps:  []focusStep{{other: "_NET_CLIENT_LIST"}},
 			want:   nil,
 			onEWMH: true,
 		},
@@ -457,22 +459,50 @@ func TestX11Focus(t *testing.T) {
 				}
 				return Focus{}
 			}
-			// Each report is awaited before the next change, so the client
-			// can't read a later value for an earlier notification.
+			reads := func() int { return f.readsOf(root, "_NET_ACTIVE_WINDOW") }
+			// _NET_ACTIVE_WINDOW is read once at start when a window manager
+			// keeps it, once per change of it, and never for a change of
+			// another property. Each step waits until the watcher is done
+			// with it, so that no read can see a later step's window.
+			reported, current, wantReads := false, uint32(0), 0
 			if tc.wm == "ewmh" {
-				got = append(got, next())
+				r := next()
+				got = append(got, r)
+				reported, current, wantReads = true, r.Window, 1
 			}
-			current := tc.start
+			if n := reads(); n != wantReads {
+				t.Errorf("read _NET_ACTIVE_WINDOW %d times at start, want %d", n, wantReads)
+			}
 			for _, s := range tc.steps {
-				f.setCardinal(root, "_NET_ACTIVE_WINDOW", atomWindow, s.active)
-				f.notify(root, s.notify)
-				if tc.wm == "ewmh" && s.notify == "_NET_ACTIVE_WINDOW" && s.active != current {
-					got = append(got, next())
+				before := reads()
+				if s.other != "" {
+					f.notify(root, s.other)
+					// A watcher that took this for a focus change would read
+					// well within this time.
+					time.Sleep(100 * time.Millisecond)
+					if n := reads() - before; n != 0 {
+						t.Errorf("a change of %s read _NET_ACTIVE_WINDOW %d times, want none", s.other, n)
+					}
+					continue
 				}
-				current = s.active
+				for _, win := range s.active {
+					f.setActive(root, win)
+				}
+				if win := s.active[len(s.active)-1]; reported && win == current {
+					// Nothing is reported, so wait for the read that finds
+					// the window unchanged.
+					eventually(t, "a read of _NET_ACTIVE_WINDOW", func() bool { return reads() > before })
+				} else {
+					r := next()
+					got = append(got, r)
+					reported, current = true, r.Window
+				}
+				if n := reads() - before; n != 1 {
+					t.Errorf("a change of _NET_ACTIVE_WINDOW read it %d times, want once", n)
+				}
 			}
-			f.setCardinal(root, "_NET_ACTIVE_WINDOW", atomWindow, winLast)
-			f.notify(root, "_NET_ACTIVE_WINDOW")
+			before := reads()
+			f.setActive(root, winLast)
 			for {
 				r := next()
 				if r.Window == winLast {
@@ -483,26 +513,14 @@ func TestX11Focus(t *testing.T) {
 				}
 				got = append(got, r)
 			}
+			if n := reads() - before; n != 1 {
+				t.Errorf("the sentinel's change read _NET_ACTIVE_WINDOW %d times, want once", n)
+			}
 			if !equalFocus(got, tc.want) {
 				t.Errorf("reports %+v, want %+v", got, tc.want)
 			}
 			if n := f.readsOfAny("_NET_WM_PID"); tc.xres == "" && n != 0 {
 				t.Errorf("read _NET_WM_PID %d times on a server with X-Resource 1.2", n)
-			}
-			// _NET_ACTIVE_WINDOW is read once at start when a window
-			// manager keeps it, once per notification of it, the
-			// sentinel's included, and never for another property.
-			wantReads := 1
-			if tc.wm == "ewmh" {
-				wantReads++
-			}
-			for _, s := range tc.steps {
-				if s.notify == "_NET_ACTIVE_WINDOW" {
-					wantReads++
-				}
-			}
-			if got := f.readsOf(root, "_NET_ACTIVE_WINDOW"); got != wantReads {
-				t.Errorf("read _NET_ACTIVE_WINDOW %d times, want %d", got, wantReads)
 			}
 			cancel()
 			w.close()
