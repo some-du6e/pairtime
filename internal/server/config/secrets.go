@@ -25,9 +25,11 @@ const (
 	// HCAClientSecret is the client secret of pairtimed's Hack Club Auth
 	// app, needed once hca.client_id is set (DESIGN 3.10).
 	HCAClientSecret = "PAIRTIME_HCA_CLIENT_SECRET"
-	// EmailKey is the 32-byte key that encrypts account emails at rest,
-	// as 64 hex digits or base64 (DESIGN 4.4). "openssl rand -hex 32"
-	// makes one. Sign-in needs it.
+	// EmailKey is the 32-byte key that encrypts account emails at rest
+	// and keys their lookup index, as 64 hex digits or base64 (DESIGN
+	// 4.4). "openssl rand -hex 32" makes one. Sign-in needs it. Losing it
+	// loses the stored emails and breaks lookups by email until each
+	// owner signs in again, so back it up with /data/keys (DESIGN 10.2).
 	EmailKey = "PAIRTIME_EMAIL_KEY"
 	// S3AccessKeyID and S3SecretAccessKey are object storage's access key,
 	// scoped to its two buckets (DESIGN 10.5 item 4). litestream.yml can

@@ -35,9 +35,13 @@ const keyIDSize = 4
 // The encryption key, the index key and the key id are each derived from
 // PAIRTIME_EMAIL_KEY with HKDF-SHA256 under their own label.
 //
-// HCA sends the email at every sign-in, so a lost key loses nothing for
-// good: each account's address comes back, sealed under the new key, the
-// next time its owner signs in.
+// Losing PAIRTIME_EMAIL_KEY loses data. HCA sends the email at every
+// sign-in, so an account's address comes back, sealed under the new key,
+// the next time its owner signs in. Until then, and for good when the
+// owner never signs in again, the address can't be read, and its
+// email_index no longer matches it, so a privacy-hub request that names
+// the person by email (DESIGN 8.9) doesn't find the account. The key needs
+// the same backup as the keys in /data/keys (DESIGN 10.2).
 type EmailCipher struct {
 	aead     cipher.AEAD
 	indexKey []byte

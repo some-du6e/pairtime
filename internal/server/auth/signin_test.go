@@ -575,6 +575,7 @@ func TestIneligibleLater(t *testing.T) {
 				{name: "the sign-in is refused as ineligible", ok: f.resp.status == http.StatusForbidden && errorCode(f.resp) == auth.CodeIneligible},
 				{name: "the earlier session no longer works", ok: func() bool { r, _ := h.me(); return r.status == http.StatusUnauthorized }()},
 				{name: "the account keeps its row, marked ineligible", ok: h.count(`SELECT count(*) FROM users WHERE verification_status = 'ineligible'`) == 1},
+				{name: "the row keeps no email or Slack id, though HCA sent both", ok: h.count(`SELECT count(*) FROM users WHERE slack_id IS NULL AND email_ct IS NULL AND email_index IS NULL`) == 1},
 				{name: "no session of the account is live", ok: h.count(`SELECT count(*) FROM sessions WHERE revoked_at_ms IS NULL`) == 0},
 			}
 			for _, tt := range tests {
@@ -647,20 +648,35 @@ func TestCodeInjection(t *testing.T) {
 
 func TestLogout(t *testing.T) {
 	tests := []struct {
-		name       string
-		origin     string // "" sends none; "self" sends the server's origin
-		fetchSite  string
-		wantStatus int
-		wantOut    bool // signed out afterwards
+		name      string
+		origin    string // "" sends none; "self" sends the server's origin
+		fetchSite string
+		// breakWriter closes the writer first, so the revoke fails.
+		breakWriter bool
+		wantStatus  int
+		wantCode    string // the error page's code, if there is one
+		wantOut     bool   // this browser is signed out afterwards
+		wantRevoked bool   // the session's row is revoked
 	}{
-		{name: "a sign-out from pairtimed's own page ends the session", origin: "self", wantStatus: http.StatusSeeOther, wantOut: true},
-		{name: "a sign-out posted from another site is refused", origin: "https://evil.example", wantStatus: http.StatusForbidden},
-		{name: "a cross-site request without Origin is refused by Sec-Fetch-Site", fetchSite: "cross-site", wantStatus: http.StatusForbidden},
+		{name: "a sign-out from pairtimed's own page ends the session", origin: "self", wantStatus: http.StatusSeeOther, wantOut: true, wantRevoked: true},
+		{name: "a sign-out posted from another site is refused", origin: "https://evil.example", wantStatus: http.StatusForbidden, wantCode: auth.CodeCrossOrigin},
+		{name: "a cross-site request without Origin is refused by Sec-Fetch-Site", fetchSite: "cross-site", wantStatus: http.StatusForbidden, wantCode: auth.CodeCrossOrigin},
+		{
+			name:        "a sign-out the server can't record still signs this browser out, and its page says so",
+			origin:      "self",
+			breakWriter: true,
+			wantStatus:  http.StatusInternalServerError,
+			wantCode:    auth.CodeLogoutFailed,
+			wantOut:     true,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			h, _ := withFake(t, storetest.Engines()[0], anyone)
 			checkSignedIn(t, h, h.signIn(signInOptions{}), "/")
+			if tt.breakWriter {
+				h.w.Close()
+			}
 			header := http.Header{}
 			switch tt.origin {
 			case "":
@@ -673,15 +689,18 @@ func TestLogout(t *testing.T) {
 				header.Set("Sec-Fetch-Site", tt.fetchSite)
 			}
 			r := h.postForm(h.srv.URL+auth.LogoutPath, url.Values{}, header)
-			if r.status != tt.wantStatus {
-				t.Fatalf("logout = %d, want %d; body:\n%s", r.status, tt.wantStatus, r.body)
+			if r.status != tt.wantStatus || errorCode(r) != tt.wantCode {
+				t.Fatalf("logout = %d with code %q, want %d with %q; body:\n%s", r.status, errorCode(r), tt.wantStatus, tt.wantCode, r.body)
+			}
+			if tt.wantCode == auth.CodeLogoutFailed && !strings.Contains(r.body, "This browser is signed out") {
+				t.Errorf("the page doesn't say this browser is signed out:\n%s", r.body)
 			}
 			me, _ := h.me()
 			if out := me.status == http.StatusUnauthorized; out != tt.wantOut {
 				t.Errorf("signed out = %v, want %v", out, tt.wantOut)
 			}
-			if tt.wantOut && h.count(`SELECT count(*) FROM sessions WHERE revoked_at_ms IS NOT NULL`) != 1 {
-				t.Error("the session row wasn't revoked")
+			if revoked := h.count(`SELECT count(*) FROM sessions WHERE revoked_at_ms IS NOT NULL`) == 1; revoked != tt.wantRevoked {
+				t.Errorf("the session row revoked = %v, want %v", revoked, tt.wantRevoked)
 			}
 		})
 	}

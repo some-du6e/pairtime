@@ -53,6 +53,7 @@ type harness struct {
 	svc    *auth.Service
 	acc    *accounts.Store
 	db     *store.DB
+	w      *writer.Writer
 	client *http.Client
 	logs   *syncBuffer
 }
@@ -138,7 +139,7 @@ func newHarness(t *testing.T, c harnessConfig) *harness {
 	client.Jar = newJar(t)
 	client.Timeout = 30 * time.Second
 	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-	return &harness{t: t, srv: srv, svc: svc, acc: acc, db: db, client: client, logs: logs}
+	return &harness{t: t, srv: srv, svc: svc, acc: acc, db: db, w: w, client: client, logs: logs}
 }
 
 func newJar(t *testing.T) http.CookieJar {

@@ -12,7 +12,7 @@
 //
 //   - ineligible: sign-in is refused. An identity without an account gets
 //     no row. An account that turns ineligible keeps its row with the new
-//     status and loses every session it had.
+//     status, loses its email and Slack id, and loses every session it had.
 //   - verified: the person may submit hours. When HCA's ysws_eligible isn't
 //     true, the case HCA's own API reports as verified_but_over_18, the
 //     account carries the "eligibility to confirm" note for programs,
@@ -258,8 +258,9 @@ func (s *Store) Roles(sub string) []string {
 // SignIn returns ErrIneligible when HCA marks id ineligible, and
 // ErrSignupsClosed when id has no account and Options.MayCreate doesn't
 // admit it. Neither opens a session. An existing account that turns
-// ineligible gets its new status and loses its sessions; an identity
-// without an account is never written.
+// ineligible gets its new status, loses its email, its Slack id and its
+// sessions, and keeps nothing HCA sent this time; an identity without an
+// account is never written.
 func (s *Store) SignIn(ctx context.Context, id Identity, login Login) (sess *Session, created bool, err error) {
 	if err := CheckSub(id.Sub); err != nil {
 		return nil, false, err
@@ -281,7 +282,7 @@ func (s *Store) SignIn(ctx context.Context, id Identity, login Login) (sess *Ses
 
 	// A nil interface, not a nil slice, so every driver writes NULL.
 	var sealed, index any
-	if id.Email != "" {
+	if id.Email != "" && id.Status != Ineligible {
 		sealed = s.emails.Seal(id.Sub, id.Email)
 		index = s.emails.Index(id.Email)
 	}
@@ -320,10 +321,14 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8, $8)`,
 		case err != nil:
 			return fmt.Errorf("accounts: looking up the account: %w", err)
 		case id.Status == Ineligible:
+			// The row keeps the status and drops the contact details: an
+			// identity HCA calls ineligible may be a child pairtime has no
+			// basis to hold them for (DESIGN 8.2, 13.2), and it can't sign
+			// in to delete them.
 			if _, err := tx.ExecContext(ctx, `UPDATE users
-SET slack_id = $2, email_ct = $3, email_index = $4, verification_status = $5, ysws_eligible = $6, updated_at_ms = $7
+SET slack_id = NULL, email_ct = NULL, email_index = NULL, verification_status = $2, ysws_eligible = $3, updated_at_ms = $4
 WHERE id = $1`,
-				userID, slack, sealed, index, string(id.Status), eligible, nowMs); err != nil {
+				userID, string(id.Status), eligible, nowMs); err != nil {
 				return fmt.Errorf("accounts: updating the account: %w", err)
 			}
 			if _, err := tx.ExecContext(ctx, `UPDATE sessions SET revoked_at_ms = $2 WHERE user_id = $1 AND revoked_at_ms IS NULL`,

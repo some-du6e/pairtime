@@ -83,7 +83,8 @@ const maxConcurrentExchanges = 16
 // exchangeTimeout bounds a callback's requests to HCA.
 const exchangeTimeout = 30 * time.Second
 
-// The codes of refused sign-ins, shown on the error page and logged.
+// The codes of refused sign-ins and failed sign-outs, shown on the error
+// page and logged.
 const (
 	CodeNotConfigured             = "not_configured"
 	CodeHCAUnreachable            = "hca_unreachable"
@@ -111,15 +112,18 @@ const (
 	CodeIneligible                = "ineligible"
 	CodeSignupsClosed             = "signups_closed"
 	CodeCrossOrigin               = "cross_origin"
+	CodeLogoutFailed              = "logout_failed"
 	CodeInternal                  = "internal"
 )
 
-// Error is a refused sign-in.
+// Error is a refused sign-in, or a sign-out that didn't work.
 type Error struct {
 	// Status is the HTTP status of the error page.
 	Status int
 	// Code is the stable reason, one of the Code constants.
 	Code string
+	// Title is the page's heading. Empty means "Sign-in didn't work".
+	Title string
 	// Message is the sentence the page shows.
 	Message string
 	// Err is the detail for the log. It is never shown and never holds a

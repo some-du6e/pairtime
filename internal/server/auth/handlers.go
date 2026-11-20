@@ -345,17 +345,21 @@ func plausibleEmail(e string) bool {
 func (s *Service) logout(w http.ResponseWriter, r *http.Request) {
 	noStore(w)
 	if !s.sameOrigin(r) {
-		s.fail(w, r, &Error{Status: http.StatusForbidden, Code: CodeCrossOrigin,
+		s.fail(w, r, &Error{Status: http.StatusForbidden, Code: CodeCrossOrigin, Title: "Signing out didn't work",
 			Message: "Signing out has to start from a pairtime page."})
 		return
 	}
+	// The browser forgets the session first, so it is signed out even
+	// when the server can't record that, as on a shared computer.
+	http.SetCookie(w, expiredCookie(SessionCookie))
 	if c, err := r.Cookie(SessionCookie); err == nil && s.accounts != nil {
 		if err := s.accounts.Revoke(r.Context(), c.Value); err != nil {
-			s.fail(w, r, internal(err))
+			s.fail(w, r, &Error{Status: http.StatusInternalServerError, Code: CodeLogoutFailed, Title: "Signing out didn't finish",
+				Message: "This browser is signed out, but an error on this pairtime server kept it from ending the session on the server too. Without this browser's cookie, which is deleted now, that session can't be used, and it expires on its own.",
+				Err:     err})
 			return
 		}
 	}
-	http.SetCookie(w, expiredCookie(SessionCookie))
 	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
 
@@ -521,10 +525,10 @@ var page = template.Must(template.New("page").Parse(`<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Sign-in didn't work · pairtime</title>
+<title>{{.Title}} · pairtime</title>
 </head>
 <body>
-<h1>Sign-in didn't work</h1>
+<h1>{{.Title}}</h1>
 <p>{{.Message}}</p>
 <p>Error code: <code>{{.Code}}</code></p>
 <p><a href="{{.Retry}}">Sign in with Hack Club Auth</a></p>
@@ -532,7 +536,8 @@ var page = template.Must(template.New("page").Parse(`<!doctype html>
 </html>
 `))
 
-// fail logs a refused sign-in and shows its error page.
+// fail logs a refused sign-in or a failed sign-out and shows its error
+// page.
 func (s *Service) fail(w http.ResponseWriter, r *http.Request, e *Error) {
 	level := slog.LevelWarn
 	if e.Status >= 500 {
@@ -542,11 +547,19 @@ func (s *Service) fail(w http.ResponseWriter, r *http.Request, e *Error) {
 	if e.Err != nil {
 		attrs = append(attrs, "err", e.Err.Error())
 	}
-	s.log.Log(r.Context(), level, "HCA sign-in refused", attrs...)
+	msg := "HCA sign-in refused"
+	if r.URL.Path == LogoutPath {
+		msg = "sign-out failed"
+	}
+	s.log.Log(r.Context(), level, msg, attrs...)
 	h := w.Header()
 	h.Set("Content-Type", "text/html; charset=utf-8")
 	h.Set("X-Content-Type-Options", "nosniff")
 	h.Set("Content-Security-Policy", "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
+	title := e.Title
+	if title == "" {
+		title = "Sign-in didn't work"
+	}
 	w.WriteHeader(e.Status)
-	page.Execute(w, struct{ Message, Code, Retry string }{e.Message, e.Code, LoginPath})
+	page.Execute(w, struct{ Title, Message, Code, Retry string }{title, e.Message, e.Code, LoginPath})
 }
