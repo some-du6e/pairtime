@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -490,6 +491,41 @@ func TestNotifyNeverWaitsForTheOS(t *testing.T) {
 			if got := strings.Join(results, "\n"); got != want {
 				t.Errorf("results:\n%s\nwant:\n%s", got, want)
 			}
+		})
+	}
+}
+
+// DESIGN 3.3: never a polling loop. An idle notifier has no goroutine and
+// no timer of its own, before its first note and after each one.
+func TestIdleNotifierRunsNothing(t *testing.T) {
+	tests := []struct {
+		name  string
+		errs  []error
+		steps []step
+	}{
+		{name: "a new notifier starts no goroutine"},
+		{name: "a notifier that showed a note keeps no goroutine", steps: []step{{at: "20:00:00", notify: "s1", want: Queued}}},
+		{
+			name:  "a notifier whose note waits for the screen keeps no goroutine",
+			errs:  []error{ErrAway},
+			steps: []step{{at: "20:00:00", notify: "s1", want: Queued}},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			before := runtime.NumGoroutine()
+			r := newRig(config.Notifications{}, tt.errs, nil)
+			r.run(t, tt.steps)
+			// A goroutine that has returned may take a moment to leave the
+			// count.
+			deadline := time.Now().Add(2 * time.Second)
+			for runtime.NumGoroutine() > before && time.Now().Before(deadline) {
+				time.Sleep(10 * time.Millisecond)
+			}
+			if after := runtime.NumGoroutine(); after > before {
+				t.Errorf("%d goroutines before, %d once the notifier was idle", before, after)
+			}
+			r.n.Close()
 		})
 	}
 }
