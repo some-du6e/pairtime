@@ -65,9 +65,12 @@
 // that project's windows and buckets credit them (SM 3.3 rule 1), and the
 // slot's Credit says which project in ProjectKey. A terminal or an agent
 // app goes by the project its focus record names, else by its hosted
-// sessions; an editor by the record, else by the latest editor heartbeat
-// with input in the same or previous slot; a browser, a chat app or any
-// other app resolves to none, and only a lookup credits it (SM 2.5).
+// sessions. An editor goes by the latest editor heartbeat with input in the
+// same or previous slot, and by the record only when there is none, since
+// the client names an editor's project from the sessions it hosts and
+// every window of an editor is one process (D-editor-heartbeat-first). A
+// browser, a chat app or any other app resolves to none, and only a lookup
+// credits it (SM 2.5).
 //
 // For a window hosting sessions of several projects, SM 3.2 rule 1 is as
 // E-6.3-two-tabs decides it. The slot goes to the session of the first
@@ -75,9 +78,22 @@
 // inside that anchor's lead or the anchor comes within READ_HORIZON_S while
 // its session's bucket isn't empty; else to the session with the most
 // recent anchor less than ATTRIB_STICKY_S before the slot; else it is
-// X.ambiguous. A second so resolved takes no better level than the
-// resolving anchor and carries its side-door label (DESIGN 6.4); the anchor
-// is among its AnchorIDs and in the slot's ResolvedBy.
+// ambiguous. A second so resolved takes no better level than the resolving
+// anchor and carries its side-door label (DESIGN 6.4); the anchor is among
+// its AnchorIDs and in the slot's ResolvedBy. In an ambiguous slot the
+// bucket doesn't drain, but anchors still count (D-ambiguous-anchors):
+// every anchor window that covers a present second competes, whatever its
+// project and whether or not its act has a session, in SM 3.3's order. The
+// window that credits the slot's first credited second gives the slot its
+// project, only that project's windows credit the rest of it, and what they
+// don't credit is X.ambiguous.
+//
+// Rule 2 prefers verified heartbeats (D-rule2-sidedoor). A side-door one,
+// from a plugin, the bridge or a heartbeat that failed the peer-process
+// check, decides an editor slot only when no verified one is in the same or
+// previous slot, and then every second credited in the slot is level C and
+// carries the side door's label, so a script posting heartbeats can't
+// steer reading at level A or B into its project.
 //
 // Readings of SM 3.2:
 //
@@ -86,17 +102,30 @@
 //     goes by the bucket or ATTRIB_STICKY_S.
 //   - An anchor is in the window when its session is one the window hosts.
 //     An act outside a harness session, such as a commit, resolves no slot
-//     of such a window.
+//     of such a window, though its windows compete in the window's
+//     ambiguous slots.
 //   - A window whose focus record names no project but whose hosted
 //     sessions all have one is that project's, as one hosted session's is.
 //   - Ties go to the earlier anchor for the look-ahead and to the later one
 //     for ATTRIB_STICKY_S, then to the lower project key (SM 3.3 rule 6),
-//     session key and event id.
+//     session key and event id. Two windows of an ambiguous slot tied
+//     under SM 3.3 rule 3 go to the lower project key too.
 //   - An agent's edit says nothing about which editor window is in front,
 //     so rule 2's heartbeats are the others.
+//   - A heartbeat is verified when it came by a path DESIGN 6.4 lets reach
+//     level A or B: `editor`, a heartbeat that passed the peer-process
+//     check, or `hook`, from Cursor's hooks. D-rule2-sidedoor names
+//     `editor` verified and plugins, the bridge and `editor_unverified`
+//     side doors, and no other path.
+//   - SC1's typed-edit focus test takes the editor's project the same way,
+//     at the edit: the latest heartbeat with input in the same or previous
+//     slot, up to the edit itself, a verified one first, then the record.
 //   - The return rule (SM 2.1) still needs a window that names one
 //     project, so a long silence in a window hosting several ends with its
-//     tail.
+//     tail. Its think part credits a slot only when the slot resolves to
+//     the run's project or to none, so that a slot keeps one project (SM
+//     5.1) when a heartbeat after the input that ends the run gives an
+//     editor slot to another one.
 //
 // # Final and pending
 //

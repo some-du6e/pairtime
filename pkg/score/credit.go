@@ -22,11 +22,14 @@ import (
 type Credit struct {
 	// Slot is the slot's start in Unix milliseconds.
 	Slot int64 `json:"slot"`
-	// ProjectKey is the project the slot's seconds go to: the one its focus
-	// resolves to (SM 3.2, attribute), or for a browser or chat-app slot in
-	// a lookup run the lookup's (SM 2.5). It is "" when the focus resolves
-	// to no project, and then nothing in the slot is credited. Every entry
-	// of Credited has this project.
+	// ProjectKey is SM 5.1's p, the project the slot's seconds go to: the
+	// one its focus resolves to (SM 3.2, attribute). A slot that resolves to
+	// none takes the project of its first credited second, which for a
+	// browser or chat-app slot in a lookup run is the lookup's (SM 2.5) and
+	// for a slot SM 3.2 rule 1 leaves ambiguous the project of the anchor
+	// window that credits it (D-ambiguous-anchors). It is "" when the slot
+	// resolves to no project and nothing in it is credited. Every entry of
+	// Credited has this project.
 	ProjectKey string `json:"project_key,omitempty"`
 	// ResolvedBy is the event_id of the anchor that gave the slot of a
 	// window hosting several sessions of different projects to one of them,
@@ -196,11 +199,10 @@ type creditor struct {
 	buckets map[string][]*bucket
 	runs    map[string]*running
 	// bySession holds, per harness session, the indexes of its anchors in
-	// time order, and beats the editor heartbeats with input in their slots,
-	// in time order: what SM 3.2 resolves a slot by (attrib.go). attr holds
-	// each slot's resolution, made when the credit pass reaches it.
+	// time order, which SM 3.2 rule 1 resolves a slot by, as the editor
+	// heartbeats in deriver.beats do for rule 2 (attrib.go). attr holds each
+	// slot's resolution, made when the credit pass reaches it.
 	bySession map[string][]int
-	beats     []beat
 	attr      []attribution
 	returns   []returned
 	// lookups are the browser and chat-app runs with credit in the
@@ -270,8 +272,7 @@ func (c *creditor) sec(t int64) int {
 }
 
 // index builds what the per-second pass looks up: anchors by project and
-// by session, buckets by project, running turns, editor heartbeats, and the
-// returned runs.
+// by session, buckets by project, running turns, and the returned runs.
 func (c *creditor) index() {
 	d := c.d
 	c.byProject = map[string][]int{}
@@ -361,20 +362,24 @@ func (c *creditor) windows() []window {
 // cover (SM 3.3 rule 3): a lead beats a command's run or a trail; among
 // leads, the next anchor at or after the second wins, since time just
 // before an act is preparation for it; among runs and trails, the latest
-// anchor; then the earlier anchor.
+// anchor. Then the lower project key (rule 6), which only an ambiguous
+// slot's windows can differ in (D-ambiguous-anchors), then the earlier
+// anchor.
 func (c *creditor) better(x, y window) bool {
 	xl, yl := x.part != partAfter, y.part != partAfter
 	if xl != yl {
 		return xl
 	}
-	tx, ty := c.d.anchors[x.anchor].T, c.d.anchors[y.anchor].T
+	ax, ay := &c.d.anchors[x.anchor], &c.d.anchors[y.anchor]
 	switch {
-	case tx == ty:
+	case ax.T == ay.T && ax.ProjectKey != ay.ProjectKey:
+		return ax.ProjectKey < ay.ProjectKey
+	case ax.T == ay.T:
 		return x.anchor < y.anchor
 	case xl:
-		return tx < ty
+		return ax.T < ay.T
 	}
-	return tx > ty
+	return ax.T > ay.T
 }
 
 // typingOK reports whether a second of an anchor's typing part is realized
@@ -422,6 +427,22 @@ func (c *creditor) nearest(p string, t int64) int {
 // that ended a returned run, in its think part inside the run (SM 2.1).
 // Anchor windows beat the bucket (SM 3.3 rule 2), and the bucket drains
 // only where none is realized.
+//
+// In a slot SM 3.2 rule 1 leaves ambiguous, anchors still count and the
+// bucket doesn't drain: every window that covers a present second competes,
+// whatever its project, until one credits a second, and from then on only
+// that project's windows do, so the slot keeps one project
+// (D-ambiguous-anchors, attribution.admits). SM 2.7's pseudo-code and SM
+// 3.3 rule 1 filter by focus_project, which such a slot has none of; they
+// are read through 3.2's clause
+// (docs/errata/2026-11-20-sm-3.2-ambiguous-anchors.md).
+//
+// SM 3.3 rule 1 lets a returned run's think part credit its anchor's
+// project whatever the slot's focus_project, since focus was on that
+// project through the run. An editor slot can still resolve to another
+// project, by a heartbeat after the input that ends the run
+// (D-editor-heartbeat-first), and then the run's think part credits nothing
+// in it, so that the slot keeps one project (SM 5.1, attribution.holds).
 func (c *creditor) anchorsAndBuckets() {
 	ws := c.windows()
 	var active []int
@@ -468,8 +489,9 @@ func (c *creditor) anchorsAndBuckets() {
 			}
 			sfx := event.Reason("")
 			switch {
-			case present(pres) && proj != "" && proj == a.ProjectKey:
-			case rt != nil && rt.anchor == w.anchor && w.part == partThink && t >= a.T-a.TypingMS-c.r.thinkLead:
+			case present(pres) && at.admits(a.ProjectKey):
+			case rt != nil && rt.anchor == w.anchor && w.part == partThink && t >= a.T-a.TypingMS-c.r.thinkLead &&
+				at.holds(a.ProjectKey):
 				sfx = event.ReturnedSuffix
 			default:
 				continue
@@ -482,10 +504,15 @@ func (c *creditor) anchorsAndBuckets() {
 		if best >= 0 {
 			a := &c.d.anchors[ws[best].anchor]
 			sec.reason, sec.proj, sec.level, sec.anchor = a.Reason+suffix, a.ProjectKey, a.Level, int32(ws[best].anchor)
+			if proj == "" && at.won == "" {
+				at.won = a.ProjectKey
+			}
 			c.steer(at, sec)
 			continue
 		}
 		if proj == "" {
+			// No project, or an ambiguous slot: the bucket doesn't drain
+			// (SM 3.2 rule 1).
 			continue
 		}
 		proseOnly := false
@@ -777,9 +804,14 @@ func (c *creditor) slotCredits() []Credit {
 				cr.Uncredited[c.uncredited(k, s, at)]++
 				continue
 			}
-			// A lookup's slot resolves to no project of its own and takes the
-			// lookup's (SM 2.5).
-			cr.ProjectKey = sec.proj
+			// A slot that resolves to no project, a lookup's (SM 2.5) or an
+			// ambiguous one (D-ambiguous-anchors), takes the project of its
+			// first credited second. A slot that resolves to one keeps it,
+			// so TestCreditSlots compares what is credited with the
+			// resolution.
+			if cr.ProjectKey == "" {
+				cr.ProjectKey = sec.proj
+			}
 			key := creditKey{proj: sec.proj, reason: sec.reason, level: sec.level, inTurn: inTurn}
 			e := group[key]
 			if e == nil {
@@ -803,8 +835,13 @@ func (c *creditor) slotCredits() []Credit {
 					}
 				}
 			}
-			if sec.label != "" && !slices.Contains(e.Labels, sec.label) {
-				e.Labels = append(e.Labels, sec.label)
+			// The side-door heartbeat that resolved an editor slot labels all
+			// of it, as the anchor that resolved a shared terminal's slot does
+			// through its labels above (D-rule2-sidedoor).
+			for _, l := range []event.Label{sec.label, sideDoorLabel(at.sideDoor)} {
+				if l != "" && !slices.Contains(e.Labels, l) {
+					e.Labels = append(e.Labels, l)
+				}
 			}
 		}
 		slices.SortFunc(keys, func(x, y creditKey) int {

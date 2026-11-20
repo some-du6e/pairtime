@@ -348,14 +348,19 @@ func (d *deriver) otherAnchor(i int, e event.Event) {
 		case event.ActEdit, event.ActSave:
 			// Typed by the person (human, tab or unknown, never the agent
 			// or a paste), input in its slot, key presses where the OS
-			// reports them, and the editor in focus on the same project.
+			// reports them, and the editor in focus on the same project:
+			// the project of SM 3.2 rule 2's heartbeat when there is one,
+			// else the one the focus record names (D-editor-heartbeat-first,
+			// D-rule2-sidedoor).
 			switch p.EditSource {
 			case event.EditSourceHuman, event.EditSourceTab, event.EditSourceUnknown:
 			default:
 				return
 			}
-			if !d.pres.slotInput(e.T, d.pres.keysAt(e.T)) || f.class != event.AppEditor ||
-				(f.project != "" && f.project != e.ProjectKey) {
+			if !d.pres.slotInput(e.T, d.pres.keysAt(e.T)) || f.class != event.AppEditor {
+				return
+			}
+			if on := d.editorProject(f, i); on != "" && on != e.ProjectKey {
 				return
 			}
 			a.Kind, a.Reason = event.AnchorTypedEdit, event.ReasonEdit
