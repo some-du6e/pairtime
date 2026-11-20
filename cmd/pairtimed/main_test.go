@@ -91,6 +91,10 @@ func TestCommandTable(t *testing.T) {
 		{name: "migrate registers itself", command: "migrate"},
 		{name: "healthcheck registers itself", command: "healthcheck"},
 		{name: "version registers itself", command: "version"},
+		{name: "init registers itself", command: "init"},
+		{name: "keys registers itself", command: "keys"},
+		{name: "snapshot registers itself", command: "snapshot"},
+		{name: "doctor registers itself", command: "doctor"},
 	}
 	help := usage()
 	for _, tt := range tests {

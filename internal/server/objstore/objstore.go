@@ -7,6 +7,8 @@
 // (package sigv4):
 //
 //   - PutObject, GetObject, HeadObject, DeleteObject and ListObjectsV2;
+//   - multipart uploads for bodies of unknown length (PutStream), and
+//     GetBucketVersioning (Bucket.Versioning) for pairtimed doctor;
 //   - write-once puts with If-None-Match: *, which the evidence store uses
 //     for sealed blobs keyed by their SHA-256 under evidence/ (Evidence;
 //     DESIGN 7.6, 10.1);
@@ -18,8 +20,9 @@
 // Requests use path-style URLs, https://<endpoint>/<bucket>/<key>, unless
 // the configuration asks for virtual-hosted ones, which need https and a
 // host name. A single put is capped at MaxPutSize, R2's cap, which is
-// 5 MiB under S3's 5 GiB. There is no multipart upload yet; PLAN WP-OP1
-// adds it for the nightly snapshots.
+// 5 MiB under S3's 5 GiB. PutStream sends a body of unknown length, such
+// as a nightly snapshot as age encrypts it, in parts of DefaultPartSize
+// with a multipart upload, which it aborts when any part fails.
 //
 // The package never logs. Its errors name the call, the bucket, the key,
 // the HTTP status and the S3 error code, and never a credential, a
@@ -516,8 +519,12 @@ func (c *Client) answerError(r request, resp *http.Response) *Error {
 		e.Err = ErrNoSuchBucket
 	case resp.StatusCode == http.StatusNotFound && (e.Code == "NoSuchKey" || r.method == http.MethodHead):
 		e.Err = ErrNotFound
+	case resp.StatusCode == http.StatusNotFound && e.Code == "NoSuchUpload":
+		e.Err = errNoSuchUpload
 	case resp.StatusCode == http.StatusPreconditionFailed:
 		e.Err = ErrExists
+	case resp.StatusCode == http.StatusNotImplemented || e.Code == "NotImplemented":
+		e.Err = ErrNotImplemented
 	case e.Code == "EntityTooLarge":
 		// A store whose cap is under MaxPutSize says so this way.
 		e.Err = ErrTooLarge

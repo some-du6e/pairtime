@@ -43,6 +43,9 @@ type ObjectInfo struct {
 	// check it against the bytes, so it is only the writer's word, which
 	// is why Evidence.Get hashes the bytes it reads.
 	SHA256 string
+	// upload is the token a multipart upload stored with the object
+	// (metaUpload), set by Get and Head.
+	upload string
 }
 
 // PutOptions are the choices of a put.
@@ -193,6 +196,7 @@ func info(key string, resp *http.Response) ObjectInfo {
 		ETag:        strings.Trim(resp.Header.Get("ETag"), `"`),
 		ContentType: resp.Header.Get("Content-Type"),
 		SHA256:      resp.Header.Get(metaSHA256),
+		upload:      resp.Header.Get(metaUpload),
 	}
 	if t, err := http.ParseTime(resp.Header.Get("Last-Modified")); err == nil {
 		i.LastModified = t

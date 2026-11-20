@@ -131,6 +131,10 @@ func TestServe(t *testing.T) {
 		{name: "the privacy notice marks the controller as not named yet", url: public + "/privacy", wantCode: 200, wantBody: `This notice isn&#39;t final\.`},
 		{name: "the public listener serves the evidence definition", url: public + "/docs/evidence", wantCode: 200, wantBody: `This server runs scoring 0\.1\.0\.`},
 		{name: "the ops listener doesn't serve the pages", url: private + "/privacy", wantCode: 404},
+		{name: "/ answers, so a sign-in without return_to never ends on a 404", url: public + "/", wantCode: 200, wantBody: `Sign-in isn't set up on this server yet\.`},
+		{name: "/ links to the privacy notice", url: public + "/", wantCode: 200, wantBody: `href="/privacy"`},
+		{name: "a path nothing serves is still a 404", url: public + "/nothing-here", wantCode: 404},
+		{name: "the ops listener doesn't serve the home page", url: private + "/", wantCode: 404},
 	}
 	client := &http.Client{Timeout: 10 * time.Second}
 	for _, tt := range requests {

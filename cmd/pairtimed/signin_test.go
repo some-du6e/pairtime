@@ -258,6 +258,17 @@ func TestServeSignups(t *testing.T) {
 			if resp.StatusCode != http.StatusSeeOther || session == nil {
 				t.Fatalf("the callback answered %d, session cookie %v; want 303 with a session; body:\n%s\nstderr:\n%s", resp.StatusCode, session, body, stderr.String())
 			}
+			// A sign-in without return_to lands on /, which says so,
+			// instead of a 404.
+			if landing := resp.Header.Get("Location"); landing != "/" {
+				t.Errorf("the callback sent the browser to %q, want /", landing)
+			}
+			if resp, body := get(t, "http://"+public+"/", session); resp.StatusCode != http.StatusOK || !strings.Contains(body, "You're signed in with Hack Club Auth") {
+				t.Errorf("/ after a sign-in answered %d: %s", resp.StatusCode, body)
+			}
+			if resp, body := get(t, "http://"+public+"/"); resp.StatusCode != http.StatusOK || !strings.Contains(body, `href="`+auth.LoginPath+`"`) {
+				t.Errorf("/ without a session answered %d: %s", resp.StatusCode, body)
+			}
 			resp, body = get(t, "http://"+public+auth.MePath, session)
 			var me auth.Me
 			if resp.StatusCode != http.StatusOK || json.Unmarshal([]byte(body), &me) != nil || me.HCASub != tt.identity.Sub {

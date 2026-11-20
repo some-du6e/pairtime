@@ -8,6 +8,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/xml"
 	"errors"
 	"io"
 	"net/http"
@@ -181,6 +182,61 @@ func TestMinIO(t *testing.T) {
 				t.Errorf("latest = %q, want %q", latest.Key, SnapshotKey(night))
 			}
 		}},
+		{name: "a snapshot of several parts reads back byte for byte", run: func(t *testing.T) {
+			// The threshold lowered to MinIO's smallest part, so 12 MiB
+			// takes three parts (PLAN WP-OP1).
+			data := randomBytes(2*MinPartSize + 2<<20)
+			key := run + "multipart/whole.db.age"
+			if _, err := snaps.PutStream(ctx, key, bytes.NewReader(data), StreamOptions{PartSize: MinPartSize, IfNoneMatch: true}); err != nil {
+				t.Fatal(err)
+			}
+			body, info, err := snaps.Get(ctx, key)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer body.Close()
+			got, err := io.ReadAll(body)
+			if err != nil || !bytes.Equal(got, data) {
+				t.Errorf("read back %d bytes (%v), want the %d sent", len(got), err, len(data))
+			}
+			if !strings.HasSuffix(info.ETag, "-3") {
+				t.Errorf("ETag %q isn't a three-part upload's", info.ETag)
+			}
+			if left := openUploads(t, ctx, snaps, key); len(left) > 0 {
+				t.Errorf("uploads left open: %q", left)
+			}
+		}},
+		{name: "a write-once multipart upload to an existing key is refused and aborted", run: func(t *testing.T) {
+			key := run + "multipart/whole.db.age"
+			_, err := snaps.PutStream(ctx, key, bytes.NewReader(randomBytes(MinPartSize+1)), StreamOptions{PartSize: MinPartSize, IfNoneMatch: true})
+			if !errors.Is(err, ErrExists) {
+				t.Fatalf("error = %v, want ErrExists", err)
+			}
+			if left := openUploads(t, ctx, snaps, key); len(left) > 0 {
+				t.Errorf("uploads left open: %q", left)
+			}
+		}},
+		{name: "a failed part aborts the upload, so MinIO keeps no parts", run: func(t *testing.T) {
+			key := run + "multipart/broken.db.age"
+			broken := errors.New("the encrypting pipe broke")
+			r := &hookReader{data: randomBytes(3 * MinPartSize), at: MinPartSize + 10, hook: func() {}, err: broken}
+			if _, err := snaps.PutStream(ctx, key, r, StreamOptions{PartSize: MinPartSize}); !errors.Is(err, broken) {
+				t.Fatalf("error = %v, want the reader's", err)
+			}
+			if left := openUploads(t, ctx, snaps, key); len(left) > 0 {
+				t.Errorf("uploads left open: %q", left)
+			}
+			if _, err := snaps.Head(ctx, key); !errors.Is(err, ErrNotFound) {
+				t.Errorf("head of the aborted key: %v, want ErrNotFound", err)
+			}
+		}},
+		{name: "a bucket nobody turned versioning on for reports no versioning state", run: func(t *testing.T) {
+			for _, b := range []*Bucket{main, snaps} {
+				if state, err := b.Versioning(ctx); err != nil || state != "" {
+					t.Errorf("%s: versioning %q, %v; want none", b.Name(), state, err)
+				}
+			}
+		}},
 		{name: "delete removes a key", run: func(t *testing.T) {
 			if err := main.Delete(ctx, run+"hello"); err != nil {
 				t.Fatal(err)
@@ -252,6 +308,34 @@ func ensureBucket(t *testing.T, ctx context.Context, b *Bucket) {
 		time.Sleep(time.Second)
 	}
 	t.Fatalf("bucket %s isn't ready after 90 s: %v", b.name, err)
+}
+
+// openUploads lists the multipart uploads of key that are still open,
+// with ListMultipartUploads, which pairtimed itself never needs.
+func openUploads(t *testing.T, ctx context.Context, b *Bucket, key string) []string {
+	t.Helper()
+	resp, err := b.c.do(ctx, request{op: "ListMultipartUploads", method: http.MethodGet, bucket: b.name,
+		rawQuery: "prefix=" + sigv4.URIEncode(key, true) + "&uploads"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var res struct {
+		Uploads []struct {
+			Key      string `xml:"Key"`
+			UploadID string `xml:"UploadId"`
+		} `xml:"Upload"`
+	}
+	if err := xml.NewDecoder(resp.Body).Decode(&res); err != nil {
+		t.Fatal(err)
+	}
+	var open []string
+	for _, u := range res.Uploads {
+		if u.Key == key {
+			open = append(open, u.UploadID)
+		}
+	}
+	return open
 }
 
 func randomHex(t *testing.T, n int) string {
