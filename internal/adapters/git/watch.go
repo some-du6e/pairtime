@@ -165,8 +165,9 @@ type Watcher struct {
 	// recent are the commits recorded in each repo, by foldPath of its
 	// common directory, shared by the scanners of its worktrees.
 	recent   map[string]*recentSet
-	byDir    map[string]*watchDir // by foldPath of each watched directory
-	wreqs    []*tree              // worktrees whose watches the watch goroutine should bring up to date
+	byDir    map[string]*watchDir      // by foldPath of each watched directory
+	wreqs    []*tree                   // worktrees whose watches the watch goroutine should bring up to date
+	wwait    map[*tree][]chan struct{} // closed once a worktree's queued request is done
 	runs     []gitRun
 	held     []*heldChange
 	timer    *time.Timer
@@ -243,6 +244,7 @@ func NewWatcher(opts WatcherOptions) (*Watcher, error) {
 		saved:    make(map[string]savedState),
 		recent:   make(map[string]*recentSet),
 		byDir:    make(map[string]*watchDir),
+		wwait:    make(map[*tree][]chan struct{}),
 		problems: make(map[string]string),
 	}
 	if w.git == nil {
@@ -397,11 +399,12 @@ func (w *Watcher) Track(ctx context.Context, dir string) (Location, error) {
 	}
 	key := foldPath(loc.GitDir)
 	w.mu.Lock()
-	defer w.mu.Unlock()
 	if w.closed {
+		w.mu.Unlock()
 		return loc, errors.New("the git watcher is closed")
 	}
 	if _, ok := w.trees[key]; ok {
+		w.mu.Unlock()
 		return loc, nil
 	}
 	t, ok := w.idle[key]
@@ -414,9 +417,20 @@ func (w *Watcher) Track(ctx context.Context, dir string) (Location, error) {
 		t.scan.share(w.recentLocked(loc.CommonDir))
 	}
 	w.trees[key] = t
-	w.requestWatchLocked(t)
+	watched := w.requestWatchLocked(t)
 	// The first scan sets the cursor, or catches up from a saved one.
 	w.queueLocked(t)
+	w.mu.Unlock()
+	// The worktree is watched when Track returns, as a caller expects. The
+	// wait holds no lock, so the watch goroutine's fsnotify calls can't
+	// block on it.
+	if watched != nil {
+		select {
+		case <-watched:
+		case <-w.stop:
+		case <-ctx.Done():
+		}
+	}
 	return loc, nil
 }
 
@@ -433,18 +447,22 @@ func (w *Watcher) recentLocked(commonDir string) *recentSet {
 }
 
 // requestWatchLocked asks the watch goroutine to bring t's file
-// notifications in line with whether t is tracked.
-func (w *Watcher) requestWatchLocked(t *tree) {
+// notifications in line with whether t is tracked. The channel it returns
+// is closed once that is done; it is nil without notifications.
+func (w *Watcher) requestWatchLocked(t *tree) <-chan struct{} {
 	if w.fsw == nil {
-		return
+		return nil
 	}
 	if !slices.Contains(w.wreqs, t) {
 		w.wreqs = append(w.wreqs, t)
 	}
+	done := make(chan struct{})
+	w.wwait[t] = append(w.wwait[t], done)
 	select {
 	case w.wkick <- struct{}{}:
 	default:
 	}
+	return done
 }
 
 // watches runs every fsw.Add and fsw.Remove. fsnotify's Windows backend
@@ -468,8 +486,15 @@ func (w *Watcher) watches() {
 			}
 			t := w.wreqs[0]
 			w.wreqs = w.wreqs[1:]
+			// A request that comes while this one runs queues t again,
+			// with its own channel.
+			done := w.wwait[t]
+			delete(w.wwait, t)
 			w.mu.Unlock()
 			w.syncWatches(t)
+			for _, c := range done {
+				close(c)
+			}
 		}
 	}
 }

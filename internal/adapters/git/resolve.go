@@ -251,7 +251,7 @@ func (r *Resolver) Resolve(ctx context.Context, dir string) (Location, error) {
 			// On Windows a FileInfo reads its file id lazily, from its path,
 			// at the first SameFile. Reading it now keeps it this folder's,
 			// whatever the path names later.
-			os.SameFile(fi, fi)
+			_ = os.SameFile(fi, fi)
 			entry.gitDir = fi
 		}
 	}
