@@ -2660,16 +2660,24 @@ def test_ct_sums():
 
 
 def test_rfc4231():
+    """RFC 4231's seven HMAC-SHA-256 cases. Only test case 5 is truncated,
+    to 16 bytes, and says so; every other case gives all 32 bytes, so a
+    re-extraction that lost a line of a value can't pass."""
     cases = load_json("testdata", "ledger", "rfc4231.json")["cases"]
-    for c in cases:
+    expect(len(cases) == 7, "rfc4231.json has %d cases, want test cases 1 to 7" % len(cases))
+    for i, c in enumerate(cases, 1):
         want = bytes.fromhex(c["hmac_sha256"])
-        got = hmac_sha256(bytes.fromhex(c["key"]), bytes.fromhex(c["data"]))[:len(want)]
+        size = c.get("truncate_bytes", 32)
+        expect((size == 16) == (i == 5), "%s: truncate_bytes is %s; only test case 5 is truncated" % (c["name"], size))
+        expect(len(want) == size, "%s: the expected value is %d bytes, want %d" % (c["name"], len(want), size))
+        got = hmac_sha256(bytes.fromhex(c["key"]), bytes.fromhex(c["data"]))[:size]
         expect(got == want, "%s: got %s" % (c["name"], got.hex()))
     return "%d cases" % len(cases)
 
 
 def test_rfc5869():
     cases = load_json("testdata", "ledger", "rfc5869.json")["cases"]
+    expect(len(cases) == 3, "rfc5869.json has %d cases, want test cases 1 to 3" % len(cases))
     for c in cases:
         prk = hkdf_extract(bytes.fromhex(c["salt"]), bytes.fromhex(c["ikm"]))
         expect(prk.hex() == c["prk"], "%s: PRK is %s" % (c["name"], prk.hex()))
