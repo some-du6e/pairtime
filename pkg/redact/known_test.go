@@ -115,6 +115,40 @@ func TestKnownValues(t *testing.T) {
 	}
 }
 
+func TestRespell(t *testing.T) {
+	const home, capture = `C:\Users\Maya Chen`, `C:\Users\capture`
+	tests := []struct {
+		name        string
+		t           Type
+		value       string
+		matched     string
+		replacement string
+		want        string
+		ok          bool
+	}{
+		{"a home written as is takes the replacement as is", TypeHome, home, home, capture, capture, true},
+		{"a JSON-escaped home takes a JSON-escaped replacement", TypeHome, home, `C:\\Users\\Maya Chen`, capture, `C:\\Users\\capture`, true},
+		{"a home escaped twice takes a replacement escaped twice", TypeHome, home, `C:\\\\Users\\\\Maya Chen`, capture, `C:\\\\Users\\\\capture`, true},
+		{"a project folder's dashes carry over", TypeHome, home, "C--Users-Maya-Chen", capture, "C--Users-capture", true},
+		{"VS Code's file URI path carries over, lower-case drive and all", TypeHome, home, "/c%3A/Users/Maya%20Chen", capture, "/c%3A/Users/capture", true},
+		{"a Git Bash path carries over", TypeHome, home, "/c/Users/Maya Chen", capture, "/c/Users/capture", true},
+		{"a home given with forward slashes still matches backslashes", TypeHome, "C:/Users/Maya Chen", home, "C:/Users/capture", capture, true},
+		{"case doesn't matter, as it doesn't to Find", TypeHome, home, `c:\users\MAYA CHEN`, capture, capture, true},
+		{"an account in a URL takes its escapes", TypeAccount, "Maya Chen", "Maya%20Chen", "capture", "capture", true},
+		{"a name in Python's JSON takes ASCII escapes", TypeGitName, "José Núñez", "Jos\x5cu00e9 N\x5cu00fa\x5cu00f1ez", "Capture User", "Capture User", true},
+		{"text that's more than one spelling isn't respelled", TypeHome, "/home/maya", "/home/maya-robot", "/home/capture", "", false},
+		{"a value Find skips isn't respelled", TypeAccount, "user", "user", "capture", "", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := Respell(tt.t, tt.value, tt.matched, tt.replacement)
+			if got != tt.want || ok != tt.ok {
+				t.Errorf("Respell(%s, %q, %q, %q) = %q, %v; want %q, %v", tt.t, tt.value, tt.matched, tt.replacement, got, ok, tt.want, tt.ok)
+			}
+		})
+	}
+}
+
 func TestJSONEscape(t *testing.T) {
 	tests := []struct {
 		name  string

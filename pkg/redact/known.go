@@ -100,14 +100,21 @@ type knownPattern struct {
 	left, right bool
 }
 
+// knownValue is v as Find looks for it: without surrounding space, and a
+// home without a trailing separator.
+func knownValue(t Type, v string) string {
+	v = strings.TrimSpace(v)
+	if t == TypeHome && !isDriveRoot(v) {
+		v = strings.TrimRight(v, `/\`)
+	}
+	return v
+}
+
 func compileKnown(k Known) []knownPattern {
 	var out []knownPattern
 	seen := make(map[string]bool)
 	for _, tv := range k.typed() {
-		v := strings.TrimSpace(tv.v)
-		if tv.t == TypeHome && !isDriveRoot(v) {
-			v = strings.TrimRight(v, `/\`)
-		}
+		v := knownValue(tv.t, tv.v)
 		if !keep(tv.t, v) {
 			continue
 		}
@@ -142,10 +149,10 @@ type spelling struct {
 // spellings returns v as it can appear in a prompt, an agent message or a
 // raw capture file, as is first:
 //
-//   - for a Windows home, also with forward slashes, as Git Bash and WSL
-//     write it (/c/Users/..., /mnt/c/Users/...), and as VS Code writes it
-//     in a file URI, with the drive in lower case and its colon escaped
-//     (/c%3A/Users/...);
+//   - for a Windows home, also with backslashes and with forward slashes,
+//     as Git Bash and WSL write it (/c/Users/..., /mnt/c/Users/...), and
+//     as VS Code writes it in a file URI, with the drive in lower case and
+//     its colon escaped (/c%3A/Users/...);
 //   - each of those URL-escaped, as Go writes a path (%20 for a space) and
 //     as VS Code does (C%3A too), and as Claude Code names a project
 //     folder after its working directory, with every character but an
@@ -167,7 +174,7 @@ func spellings(t Type, v string) []spelling {
 	bases := []func(string) string{same}
 	drive := t == TypeHome && windowsDrive(v)
 	if drive {
-		bases = append(bases, forwardSlashes, gitBashPath, wslPath)
+		bases = append(bases, backSlashes, forwardSlashes, gitBashPath, wslPath)
 	}
 	var forms []func(string) string
 	for _, b := range bases {
@@ -192,11 +199,36 @@ func spellings(t Type, v string) []spelling {
 	return out
 }
 
+// Respell writes replacement the way matched writes value, a known value of
+// type t, when matched is one of the spellings Find looks for: for the home
+// C:\Users\Maya Chen and the replacement C:\Users\capture, it turns
+// C:\\Users\\Maya Chen into C:\\Users\\capture and C--Users-Maya-Chen into
+// C--Users-capture. Case doesn't matter, as it doesn't to Find. It reports
+// false when matched isn't such a spelling, such as when a merged span
+// holds more than one value. `pairtime fixtures scrub` uses it to put a
+// fixture placeholder in place of each value, in the same form.
+func Respell(t Type, value, matched, replacement string) (string, bool) {
+	v := knownValue(t, value)
+	if !keep(t, v) {
+		return "", false
+	}
+	for _, sp := range spellings(t, v) {
+		if strings.EqualFold(sp.s, matched) {
+			if r := sp.as(replacement); r != "" {
+				return r, true
+			}
+			return replacement, true
+		}
+	}
+	return "", false
+}
+
 // then returns f followed by g.
 func then(f, g func(string) string) func(string) string {
 	return func(s string) string { return g(f(s)) }
 }
 
+func backSlashes(s string) string    { return strings.ReplaceAll(s, "/", `\`) }
 func forwardSlashes(s string) string { return strings.ReplaceAll(s, `\`, "/") }
 
 // gitBashPath writes a Windows path as Git Bash does: C:\Users becomes
