@@ -3,6 +3,7 @@
 package score
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/some-du6e/pairtime/pkg/event"
@@ -155,6 +156,57 @@ func TestPresence(t *testing.T) {
 			b := newTL(false)
 			c.build(b)
 			checkSlots(t, b.run(t, Device{}), c.want)
+		})
+	}
+}
+
+func TestFocusLongest(t *testing.T) {
+	cases := []struct {
+		name   string
+		focus  func(b *tl)
+		class  event.AppClass
+		hosted []string
+	}{
+		{
+			name: "SM 2.5: a window whose focus another window splits still holds the slot longest in total: 5 + 4 s against 6 s",
+			focus: func(b *tl) {
+				b.focus(at(0), event.AppTerminal, "p_1", "s_1")
+				b.focus(at(5), event.AppBrowser, "")
+				b.focus(at(11), event.AppTerminal, "p_1", "s_1")
+			},
+			class: event.AppTerminal, hosted: []string{"s_1"},
+		},
+		{
+			name: "a window written again when a session starts under it is one window, and its longest piece gives the hosted sessions",
+			focus: func(b *tl) {
+				b.focus(at(0), event.AppBrowser, "")
+				b.focus(at(6), event.AppTerminal, "p_1")
+				b.focus(at(10), event.AppTerminal, "p_1", "s_1")
+			},
+			class: event.AppTerminal, hosted: []string{"s_1"},
+		},
+		{
+			name: "on a tie the window that had focus first holds the slot",
+			focus: func(b *tl) {
+				b.focus(at(0), event.AppEditor, "p_1")
+				b.focus(atMS(7_500), event.AppBrowser, "")
+			},
+			class: event.AppEditor,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			b := newTL(false)
+			c.focus(b)
+			b.mouse(at(1))
+			b.samples(at(0), at(30))
+			s, ok := slotAt(b.run(t, Device{}), at(0))
+			if !ok {
+				t.Fatal("no slot")
+			}
+			if s.FocusClass != c.class || !slices.Equal(s.Hosted, c.hosted) {
+				t.Errorf("focus %s hosting %q, want %s hosting %q", s.FocusClass, s.Hosted, c.class, c.hosted)
+			}
 		})
 	}
 }

@@ -86,24 +86,50 @@ func (fl *focusLine) changed(from, to int64) bool {
 	return false
 }
 
-// longest returns what held focus longest in [a, b), the earliest on a
-// tie (SM 2.5).
+// longest returns what held focus longest in [a, b) (SM 2.5): the window
+// whose pieces of focus in it add up to the most time, the one to have
+// focus first on a tie. A window's focus comes in pieces when another
+// window took it in between, or when the agent wrote it again because a
+// session started or ended under it. Of the winning window's pieces it
+// returns the longest, the earliest on a tie, whose hosted sessions are
+// the slot's.
 func (fl *focusLine) longest(a, b int64) *focusRec {
-	best, bestLen := fl.at(a), int64(-1)
-	cur, from := best, a
+	type window struct {
+		first, best *focusRec
+		total, most int64
+	}
+	var wins []*window
+	add := func(f *focusRec, n int64) {
+		for _, w := range wins {
+			if w.first.sameWindow(f) {
+				w.total += n
+				if n > w.most {
+					w.best, w.most = f, n
+				}
+				return
+			}
+		}
+		wins = append(wins, &window{first: f, best: f, total: n, most: n})
+	}
+	cur, from := fl.at(a), a
 	i := sort.Search(len(fl.recs), func(i int) bool { return fl.recs[i].t > a })
 	for {
 		to := b
 		if i < len(fl.recs) && fl.recs[i].t < b {
 			to = fl.recs[i].t
 		}
-		if n := to - from; n > bestLen {
-			best, bestLen = cur, n
-		}
+		add(cur, to-from)
 		if to == b {
-			return best
+			break
 		}
 		cur, from = fl.recs[i], to
 		i++
 	}
+	win := wins[0]
+	for _, w := range wins[1:] {
+		if w.total > win.total {
+			win = w
+		}
+	}
+	return win.best
 }
