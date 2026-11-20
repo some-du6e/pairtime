@@ -4,8 +4,9 @@
 # specified in docs/spec/update-manifest.md.
 #
 # - A pushed v* tag builds the seven targets, signs manifest.json with the
-#   RELEASE_SIGNING_KEY secret and publishes a GitHub release. A tag with a
-#   prerelease part, such as v0.1.0-alpha.1, publishes a prerelease.
+#   RELEASE_SIGNING_KEY secret and publishes a GitHub release, if main
+#   contains the tagged commit. A tag with a prerelease part, such as
+#   v0.1.0-alpha.1, publishes a prerelease.
 # - workflow_dispatch, and a PR that changes the release code, build a
 #   snapshot signed with a throwaway key and keep it as a workflow
 #   artifact. They never publish, and the release environment that holds
@@ -256,11 +257,29 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           persist-credentials: false
+          # All of history, so the next step can tell whether main
+          # contains the tagged commit.
+          fetch-depth: 0
 
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
           go-version-file: go.mod
           cache: false
+
+      - name: Only a commit on main is signed
+        # A tag runs the release.yml and tools/release of the commit it
+        # names, and this job can read the signing key. So nothing is
+        # signed unless main contains the tagged commit, and a tag pushed
+        # from a PR branch or an agent's worktree stops here. A branch's own
+        # release.yml could leave this step out, which is why only an admin
+        # may push v* tags (docs/spec/update-manifest.md, What gets signed).
+        run: |
+          git fetch --quiet --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" refs/remotes/origin/main; then
+            echo "::error::$VERSION tags $GITHUB_SHA, which main doesn't contain, so it won't be signed or published. Merge the change first, then tag a commit on main."
+            exit 1
+          fi
+          echo "main contains $GITHUB_SHA"
 
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:

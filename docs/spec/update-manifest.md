@@ -161,6 +161,61 @@ Karim does this once, before the first tag that should be signed (PLAN WP-RL1). 
 
 3. Commit `release-keys.txt` in a PR. The first tag after it merges is signed.
 
+### What gets signed
+
+The publish job signs a tag only if `main` contains the tagged commit. It runs `git merge-base --is-ancestor "$GITHUB_SHA" origin/main` before it reads the key, so a `v*` tag pushed from a PR branch or an agent's worktree fails there. A tag runs the `release.yml` of the commit it names, though, and a branch's copy could leave that check out. Two rulesets close the gap. They're repository settings, so Karim adds them:
+
+- `main` takes changes only through pull requests and can't be force-pushed or deleted, so "on `main`" means merged.
+- Only a repository admin, which on this personal repository means Karim, can create, move or delete a `v*` tag. Without this rule, anyone who can push a branch can push a tag.
+
+```sh
+gh api -X POST repos/some-du6e/pairtime/rulesets --input - <<'EOF'
+{
+  "name": "main",
+  "target": "branch",
+  "enforcement": "active",
+  "conditions": {"ref_name": {"include": ["~DEFAULT_BRANCH"], "exclude": []}},
+  "rules": [
+    {"type": "deletion"},
+    {"type": "non_fast_forward"},
+    {"type": "pull_request", "parameters": {
+      "required_approving_review_count": 0,
+      "dismiss_stale_reviews_on_push": false,
+      "require_code_owner_review": false,
+      "require_last_push_approval": false,
+      "required_review_thread_resolution": false
+    }}
+  ]
+}
+EOF
+gh api -X POST repos/some-du6e/pairtime/rulesets --input - <<'EOF'
+{
+  "name": "release tags",
+  "target": "tag",
+  "enforcement": "active",
+  "conditions": {"ref_name": {"include": ["refs/tags/v*"], "exclude": []}},
+  "rules": [{"type": "creation"}, {"type": "update"}, {"type": "deletion"}],
+  "bypass_actors": [{"actor_id": 5, "actor_type": "RepositoryRole", "bypass_mode": "always"}]
+}
+EOF
+gh api repos/some-du6e/pairtime/rulesets --jq '.[] | "\(.id) \(.target) \(.name) \(.enforcement)"'
+```
+
+The last command should list both rulesets as `active`. Actor 5 is the admin role. The `main` ruleset lets nobody bypass it, so Karim's own changes go through PRs too, and so do the orchestrator's direct docs commits (#22).
+
+The tag rule can't tell Karim from a tool that pushes with his credentials, as the agents on his machines do. Against those, the merge-base check is the guard: such a tag can only sign code that's already on `main`. To approve each release by hand as well, make Karim a required reviewer of the environment, with its policy repeated in the same call:
+
+```sh
+gh api -X PUT repos/some-du6e/pairtime/environments/release --input - <<EOF
+{
+  "deployment_branch_policy": {"protected_branches": false, "custom_branch_policies": true},
+  "reviewers": [{"type": "User", "id": $(gh api users/some-du6e --jq .id)}]
+}
+EOF
+```
+
+Each publish job then waits for his approval on the run's page.
+
 ### Replacing a key
 
 1. Make a new key with `keygen` and ship a release whose `release-keys.txt` lists both keys.
@@ -174,6 +229,7 @@ A leaked secret key can sign manifests that every client trusting it accepts, un
 - `workflow_dispatch`, and a PR that changes the release code, build a snapshot. Its version is `v0.0.0-snapshot.<run number>` and its `minimum_version` is the same. A throwaway key made in the job signs it and is never stored. The files stay as a workflow artifact for 7 days, with the throwaway public key as `snapshot-key.pub`. Their URLs name a release that doesn't exist.
 - A tag pushed while no release key exists, with nothing in `release-keys.txt` and no secret, still publishes. The throwaway key signs it, its notes start with "Unsigned", and no client trusts its manifest; check its downloads against `checksums.txt`.
 - Once `release-keys.txt` lists a key, a tag fails instead of publishing if the secret is missing or its key isn't in the list.
+- A tag on a commit that `main` doesn't contain fails before anything is signed or published, with a key or without one (What gets signed).
 
 ## Where clients find it
 
