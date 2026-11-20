@@ -502,7 +502,7 @@ func TestParseEmailKey(t *testing.T) {
 		wantErr bool
 	}{
 		{name: "64 hex digits are a key", in: "fbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfb"},
-		{name: "padded standard base64 is a key", in: "+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/s="},
+		{name: "padded standard base64 is a key", in: "+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/s="},
 		{name: "unpadded URL-safe base64 is a key", in: "-_v7-_v7-_v7-_v7-_v7-_v7-_v7-_v7-_v7-_v7-_s"},
 		{name: "surrounding space is ignored", in: "  fbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfb\n"},
 		{name: "16 bytes are too few", in: "fbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfb", wantErr: true},
