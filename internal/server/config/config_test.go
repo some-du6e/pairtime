@@ -160,6 +160,7 @@ func TestLoad(t *testing.T) {
 		{name: "a role is listed once per reviewer", toml: base + "[[reviewers]]\nsub = \"a\"\nroles = [\"qi\", \"qi\"]\n", wantErr: "twice"},
 		{name: "signups_open needs a named controller, so sign-ups can't open before the privacy notice names one", toml: base + "signups_open = true\n", wantErr: "signups_open is true, but controller.name and controller.contact"},
 		{name: "signups_open needs the controller's contact too", toml: base + "signups_open = true\n[controller]\nname = \"Hack Club\"\n", wantErr: "signups_open is true, but controller.name and controller.contact"},
+		{name: "a controller name of only spaces is unset, so signups_open can't open on it", toml: base + "signups_open = true\n[controller]\nname = \"   \"\ncontact = \"privacy@example.org\"\n", wantErr: "signups_open is true, but controller.name and controller.contact"},
 		{
 			name: "signups_open opens once the controller is named",
 			toml: base + "signups_open = true\n[controller]\nname = \"Karim\"\ncontact = \"karim@example.org\"\n",

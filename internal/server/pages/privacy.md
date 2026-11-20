@@ -2,7 +2,7 @@
 # pairtime privacy notice
 
 {{if not .Named -}}
-> **This notice isn't final.** It doesn't name a controller yet, the person or organization responsible for your data on this server. Until it does, this server takes no sign-ups, and the parts marked "not named yet" stay empty.
+> **This notice isn't final.** It doesn't name a controller yet, the person or organization responsible for your data on this server. Until it does, this server takes no sign-ups except test accounts for the people who run it, and the parts marked "not named yet" stay empty.
 
 {{end -}}
 This notice covers the pairtime server at {{.BaseURL}} and the pairtime program on your computer. It's written for Hack Clubbers aged 13 to 18 and their parents. If anything in it is unclear, ask the controller.

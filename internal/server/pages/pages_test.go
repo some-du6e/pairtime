@@ -148,7 +148,7 @@ func TestPrivacyNotice(t *testing.T) {
 	}{
 		{
 			name: "without a controller the notice says it isn't final and marks the placeholders",
-			want: []string{"This notice isn&#39;t final.", "The controller here is <strong>[not named yet]</strong>.", "contact <strong>[not named yet]</strong>."},
+			want: []string{"This notice isn&#39;t final.", "takes no sign-ups except test accounts for the people who run it", "The controller here is <strong>[not named yet]</strong>.", "contact <strong>[not named yet]</strong>."},
 		},
 		{
 			name:    "a named controller and contact replace the placeholders and the warning",

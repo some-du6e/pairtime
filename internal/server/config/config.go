@@ -294,6 +294,9 @@ func (c *Config) finish(dir string) error {
 		}
 		operators[sub] = true
 	}
+	// A name of only spaces is no name: the notice says "not named yet",
+	// and sign-ups can't open on it.
+	c.Controller.Name = strings.TrimSpace(c.Controller.Name)
 	if n := c.Controller.Name; strings.ContainsFunc(n, func(r rune) bool { return r < ' ' || r == 0x7f }) || len(n) > 200 {
 		fail("controller.name must be at most 200 characters, on one line")
 	}
