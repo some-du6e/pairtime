@@ -61,6 +61,17 @@
 // checkpoints WP-SC5's, and dark flow and the no-progress weight WP-SC6's,
 // so every second is at weight 1 for now.
 //
+// # What WP-SC4 builds
+//
+// What the agent uploads and shows (SM 5, DESIGN 3.7). Minutes groups the
+// credit slots by UTC minute, and Minute.Bucket summarizes a minute as SM
+// 5.1's bucket. Revisions writes a new revision of a minute's bucket each
+// time a Step changes it, pending until PENDING_WINDOW_S after the minute
+// and final after. Rollups sums minutes into SM 5.3's work sessions, local
+// days and projects, and Submission.Totals gives a submission's totals (SM
+// 5.3, 5.4). Each timeline under testdata/timelines has a golden.jsonl with
+// its buckets, and TestGolden holds the output to it (DESIGN 6.6).
+//
 // # Final and pending
 //
 // What Step derives for a time stays pending until now is PENDING_WINDOW_S
