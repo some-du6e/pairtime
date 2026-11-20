@@ -25,4 +25,14 @@
 // Edits merge: a hook entry is added beside the ones already there and
 // never replaces them (DESIGN 5.1; HS 13.3), and every byte pairtime didn't
 // write, comments and line endings included, stays as it was.
+//
+// The hooks pairtime installs in a harness that has hooks of its own pass
+// that harness's own event name: Claude Code's run `pairtime hook
+// --harness claude_code --event UserPromptSubmit`, and the same for each
+// of DESIGN 5.1's ten events. DESIGN 5.3's generic names, prompt, stop,
+// tool, permission, session_start and session_end, belong to the generic
+// hook mode, which passes --map. They have no name for StopFailure,
+// SubagentStart, SubagentStop or Notification, and Claude Code's payload
+// carries hook_event_name anyway. So `pairtime hook` (WP-AG3) takes
+// --event as the harness's name for the event unless --map is given.
 package install
