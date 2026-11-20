@@ -10,7 +10,6 @@
 # is checked on every run, binaries that don't link the package included, so
 # a path that stops existing fails the build instead of dropping a notice
 # (docs/spec/update-manifest.md, THIRD_PARTY_NOTICES.txt).
-#
-# For example, for gitleaks' rules embedded in pkg/redact:
-#
-#   pkg/redact pkg/redact/rules/LICENSE gitleaks v8.30.1's default rules, embedded in pkg/redact
+
+pkg/redact pkg/redact/rules/LICENSE gitleaks v8.30.1's default rules, embedded in pkg/redact
+pkg/redact testdata/redact/presidio/LICENSE Presidio's pattern recognizers (presidio-analyzer 2.2.366), ported to pkg/redact
