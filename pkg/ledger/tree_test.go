@@ -3,9 +3,11 @@
 package ledger
 
 import (
+	"crypto/ed25519"
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"math"
 	"testing"
 )
 
@@ -146,6 +148,7 @@ func TestDays(t *testing.T) {
 		t.Fatal(err)
 	}
 	pub := testServerPub()
+	always := serverKeyAlways(pub)
 	published, err := built.Publish(testServerKey())
 	if err != nil {
 		t.Fatal(err)
@@ -236,14 +239,14 @@ func TestDays(t *testing.T) {
 			}
 		}},
 		{"two published days in a row verify", func(t *testing.T) {
-			if err := VerifyDays(pub, []PublishedDay{published, nextPub}); err != nil {
+			if err := VerifyDays(always, []PublishedDay{published, nextPub}); err != nil {
 				t.Error(err)
 			}
 		}},
 		{"a day missing from the chain is a gap in d", func(t *testing.T) {
 			later := nextPub
 			later.D = day + 2
-			err := VerifyDays(pub, []PublishedDay{published, later})
+			err := VerifyDays(always, []PublishedDay{published, later})
 			if !wants(err, func(e *GapError) bool { return e.Field == "d" && e.Want == day+1 && e.Got == day+2 }) {
 				t.Errorf("VerifyDays = %v", err)
 			}
@@ -251,7 +254,7 @@ func TestDays(t *testing.T) {
 		{"a prev that isn't the head of the day before is a head mismatch in the link", func(t *testing.T) {
 			other := nextPub
 			other.Prev = head("another day")
-			err := VerifyDays(pub, []PublishedDay{published, other})
+			err := VerifyDays(always, []PublishedDay{published, other})
 			if !wants(err, func(e *HeadMismatchError) bool { return e.Day && e.Prev && e.Number == day+1 }) {
 				t.Errorf("VerifyDays = %v", err)
 			}
@@ -259,9 +262,67 @@ func TestDays(t *testing.T) {
 		{"a head that doesn't follow from its day is a head mismatch", func(t *testing.T) {
 			other := published
 			other.Count++
-			err := VerifyDays(pub, []PublishedDay{other})
+			err := VerifyDays(always, []PublishedDay{other})
 			if !wants(err, func(e *HeadMismatchError) bool { return e.Day && !e.Prev && e.Number == day }) {
 				t.Errorf("VerifyDays = %v", err)
+			}
+		}},
+		{"a run of days across a key rotation verifies, each day under the key valid at its end", func(t *testing.T) {
+			// The server rotates to a new key at the first millisecond of
+			// day + 1, so day keeps the old key and day + 1 takes the new.
+			newKey := otherServerKey("the next year's server key")
+			rotated, err := next.Publish(newKey)
+			if err != nil {
+				t.Fatal(err)
+			}
+			rotation := uint64(day+1) * DayMS
+			schedule := func(ms uint64) ed25519.PublicKey {
+				if ms < rotation {
+					return pub
+				}
+				return newKey.Public().(ed25519.PublicKey)
+			}
+			if err := VerifyDays(schedule, []PublishedDay{published, rotated}); err != nil {
+				t.Error(err)
+			}
+			if err := VerifyDays(always, []PublishedDay{published, rotated}); !errors.Is(err, ErrDaySignature) {
+				t.Errorf("under the old key alone, VerifyDays = %v", err)
+			}
+		}},
+		{"a day signed after a rotation with the new key fails: the key is the one valid at the day's end", func(t *testing.T) {
+			newKey := otherServerKey("the next year's server key")
+			late, err := built.Publish(newKey)
+			if err != nil {
+				t.Fatal(err)
+			}
+			rotation := uint64(day+1) * DayMS
+			schedule := func(ms uint64) ed25519.PublicKey {
+				if ms < rotation {
+					return pub
+				}
+				return newKey.Public().(ed25519.PublicKey)
+			}
+			err = VerifyDays(schedule, []PublishedDay{late})
+			if !errors.Is(err, ErrDaySignature) || !wants(err, func(e *DayError) bool { return e.D == day }) {
+				t.Errorf("VerifyDays = %v", err)
+			}
+		}},
+		{"a day for which the schedule has no key fails its signature", func(t *testing.T) {
+			none := func(uint64) ed25519.PublicKey { return nil }
+			if err := VerifyDays(none, []PublishedDay{published}); !errors.Is(err, ErrDaySignature) {
+				t.Errorf("VerifyDays = %v", err)
+			}
+		}},
+		{"DayEnd is the day's last millisecond, and a day whose end doesn't fit in 64 bits has none", func(t *testing.T) {
+			if end, ok := DayEnd(day); !ok || end != start+DayMS-1 || DayOf(end) != day || DayOf(end+1) != day+1 {
+				t.Errorf("DayEnd(%d) = %d, %v", day, end, ok)
+			}
+			last := uint64(math.MaxUint64) / DayMS
+			if _, ok := DayEnd(last); ok {
+				t.Errorf("DayEnd(%d) fits", last)
+			}
+			if end, ok := DayEnd(last - 1); !ok || DayOf(end) != last-1 {
+				t.Errorf("DayEnd(%d) = %d, %v", last-1, end, ok)
 			}
 		}},
 		{"a day signed by another key fails its signature", func(t *testing.T) {
@@ -271,7 +332,7 @@ func TestDays(t *testing.T) {
 			}
 			other := published
 			other.Signature = sig
-			err = VerifyDays(pub, []PublishedDay{other})
+			err = VerifyDays(always, []PublishedDay{other})
 			if !errors.Is(err, ErrDaySignature) || !wants(err, func(e *DayError) bool { return e.D == day }) {
 				t.Errorf("VerifyDays = %v", err)
 			}

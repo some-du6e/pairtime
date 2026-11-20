@@ -256,12 +256,13 @@ type recordSpec struct {
 func testRecord(rng *rand.Rand, k *Keys, spec recordSpec) (rec Record, projectKey, sessionKey string, err error) {
 	switch spec.rtype {
 	case RTypeCheckpoint:
-		state := fmt.Sprintf(`{ "project_key": %q, "since_progress_ms": %d }`, spec.projectKey, rng.IntN(1_000_000))
-		rec, err = CheckpointRecord(k, spec.seq, spec.projectKey, json.RawMessage(state))
+		state := fmt.Sprintf(`{ "since_progress_ms": %d, "sessions": [] }`, rng.IntN(1_000_000))
+		minute := uint64(spec.t) / CheckpointMS * CheckpointMS
+		rec, err = CheckpointRecord(k, spec.seq, spec.projectKey, minute, json.RawMessage(state))
 		return rec, spec.projectKey, event.NoSession, err
 	case RTypeUploadFailure:
-		note := fmt.Sprintf(`{"reason":%q,"t":%d}`, pick(rng, []string{"dns", "connect", "tls", "http_5xx", "http_429"}), spec.t)
-		rec, err = UploadFailureRecord(k, spec.seq, json.RawMessage(note))
+		reason := pick(rng, []string{"dns", "connect", "tls", "http_5xx", "http_429"})
+		rec, err = UploadFailureRecord(k, spec.seq, uint64(spec.t), reason)
 		return rec, "", event.NoSession, err
 	}
 	kind, ok := spec.rtype.EventKind()

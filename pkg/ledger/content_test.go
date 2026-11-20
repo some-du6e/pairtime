@@ -160,6 +160,9 @@ func TestSpecContentWorkedExample(t *testing.T) {
 		}
 		mh := sha256.Sum256(m)
 		seed := DrawSeed(r, m)
+		if fromDigest := DrawSeedFromDigest(r, mh); fromDigest != seed {
+			t.Errorf("DrawSeedFromDigest(r, SHA-256(M)) = %s, and DrawSeed(r, M) = %s", fromDigest, seed)
+		}
 		score, err := DrawScore(seed, Turn{"d_example", 2})
 		if err != nil {
 			t.Fatal(err)

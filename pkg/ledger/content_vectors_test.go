@@ -4,7 +4,9 @@ package ledger
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -30,6 +32,7 @@ type contentVectorsFile struct {
 	Reveals        []revealVec        `json:"reveals,omitempty"`
 	Normalizations []normalizationVec `json:"normalizations,omitempty"`
 	Features       []featureVec       `json:"features,omitempty"`
+	Diffs          []diffVec          `json:"diffs,omitempty"`
 	Jaccard        []jaccardVec       `json:"jaccard,omitempty"`
 	ShingleReveals []shingleRevealVec `json:"shingle_reveals,omitempty"`
 	Draws          []drawVec          `json:"draws,omitempty"`
@@ -37,6 +40,7 @@ type contentVectorsFile struct {
 }
 
 type lowercaseVec struct {
+	Note         string        `json:"note,omitempty"`
 	Unicode      string        `json:"unicode"`
 	Runs         []lowerRunVec `json:"runs"`
 	LaterUnicode string        `json:"later_unicode,omitempty"`
@@ -114,6 +118,33 @@ type hunkVec struct {
 	NewLines int    `json:"new_lines"`
 }
 
+// diffVec is one hunk derivation of spec 10.6: a patch hunk with its
+// lines, or a file's text before and after one edit, and the zero-context
+// hunks it gives, or Malformed for a patch hunk that gives none.
+type diffVec struct {
+	Note      string     `json:"note,omitempty"`
+	Patch     *patchVec  `json:"patch,omitempty"`
+	Before    *hexBytes  `json:"before,omitempty"`
+	After     *hexBytes  `json:"after,omitempty"`
+	Hunks     *[]numsVec `json:"hunks,omitempty"`
+	Malformed bool       `json:"malformed,omitempty"`
+}
+
+type patchVec struct {
+	OldStart int        `json:"old_start"`
+	OldLines int        `json:"old_lines"`
+	NewStart int        `json:"new_start"`
+	NewLines int        `json:"new_lines"`
+	Lines    []hexBytes `json:"lines"`
+}
+
+type numsVec struct {
+	OldStart int `json:"old_start"`
+	OldLines int `json:"old_lines"`
+	NewStart int `json:"new_start"`
+	NewLines int `json:"new_lines"`
+}
+
 type jaccardVec struct {
 	Note    string   `json:"note,omitempty"`
 	A       hexBytes `json:"a"`
@@ -121,11 +152,20 @@ type jaccardVec struct {
 	Matches int      `json:"matches"`
 }
 
+// shingleRevealVec is one CC8 reveal (spec 10.8) and its verdict. KDev,
+// Text and RemovedTokens come together, on a reveal that is what the
+// client sends for that text with those tokens removed.
 type shingleRevealVec struct {
-	Note    string                  `json:"note,omitempty"`
-	MH      hexBytes                `json:"mh"`
-	Entries []features.ShingleEntry `json:"entries"`
-	Verdict features.ShingleVerdict `json:"verdict"`
+	Note          string                  `json:"note,omitempty"`
+	MH            hexBytes                `json:"mh"`
+	Kind          features.ShingleKind    `json:"kind"`
+	Removed       bool                    `json:"removed"`
+	KDev          hexBytes                `json:"k_dev,omitempty"`
+	Text          *hexBytes               `json:"text,omitempty"`
+	RemovedTokens *[]int                  `json:"removed_tokens,omitempty"`
+	Entries       []features.ShingleEntry `json:"entries"`
+	Verdict       features.ShingleVerdict `json:"verdict"`
+	Unexplained   *int                    `json:"unexplained,omitempty"`
 }
 
 type drawVec struct {
@@ -159,11 +199,11 @@ type commitRef struct {
 	Commit hexBytes `json:"commit"`
 }
 
-// challengeKVec takes no note: the reference's check refuses one here.
 type challengeKVec struct {
-	Pool  int `json:"pool"`
-	K     int `json:"k"`
-	Drawn int `json:"drawn"`
+	Note  string `json:"note,omitempty"`
+	Pool  int    `json:"pool"`
+	K     int    `json:"k"`
+	Drawn int    `json:"drawn"`
 }
 
 // readContentVectors reads testdata/ledger/vectors-content.json, refusing
@@ -209,11 +249,12 @@ func TestContentVectorsHaveWhatSpec11Lists(t *testing.T) {
 		{"the lowercase table has 182 runs", len(f.Lowercase.Runs), 182},
 		{"the lowercase table lists 55 later mappings", len(f.Lowercase.Later), 55},
 		{"the vectors hold 22 commitments", len(f.Commitments), 22},
-		{"the vectors hold 55 reveals", len(f.Reveals), 55},
-		{"the vectors hold 44 normalizations", len(f.Normalizations), 44},
-		{"the vectors hold 17 feature maps", len(f.Features), 17},
-		{"the vectors hold 5 Jaccard pairs", len(f.Jaccard), 5},
-		{"the vectors hold 12 CC8 reveals", len(f.ShingleReveals), 12},
+		{"the vectors hold 58 reveals", len(f.Reveals), 58},
+		{"the vectors hold 54 normalizations", len(f.Normalizations), 54},
+		{"the vectors hold 21 feature maps", len(f.Features), 21},
+		{"the vectors hold 17 hunk derivations", len(f.Diffs), 17},
+		{"the vectors hold 6 Jaccard pairs", len(f.Jaccard), 6},
+		{"the vectors hold 22 CC8 reveals", len(f.ShingleReveals), 22},
 		{"the vectors hold 5 draws", len(f.Draws), 5},
 		{"the vectors hold 18 CHALLENGE_K sizes", len(f.ChallengeK), 18},
 	}
@@ -419,8 +460,18 @@ func checkFeatureVector(t *testing.T, fv featureVec) {
 	var f features.F
 	switch kind {
 	case event.KindPromptSubmit, event.KindCLITrack:
-		if fv.Text == nil || fv.PromptClass == nil || fv.ShingleValues == nil {
-			t.Fatal("a prompt's features object lacks text, prompt_class or shingle_values")
+		if fv.PromptClass == nil || (fv.Text == nil) != (fv.ShingleValues == nil) {
+			t.Fatal("a prompt's features object lacks prompt_class, or has only one of text and shingle_values")
+		}
+		if fv.Text == nil {
+			// A prompt whose text the device never had (spec 10.1).
+			if kind != event.KindPromptSubmit {
+				t.Fatal("a track label always has its text")
+			}
+			if f, err = features.Textless(*fv.PromptClass); err != nil {
+				t.Fatal(err)
+			}
+			break
 		}
 		if f, err = fk.Prompt(string(*fv.Text), *fv.PromptClass); err != nil {
 			t.Fatal(err)
@@ -476,6 +527,49 @@ func checkFeatureVector(t *testing.T, fv featureVec) {
 	}
 }
 
+func TestVectorDiffs(t *testing.T) {
+	for i, dv := range readContentVectors(t).Diffs {
+		t.Run(fmt.Sprintf("diffs[%d] %s: the zero-context hunks reproduce", i, dv.Note), func(t *testing.T) {
+			var got []features.Edit
+			malformed := false
+			if dv.Patch != nil {
+				lines := make([]string, len(dv.Patch.Lines))
+				for j, l := range dv.Patch.Lines {
+					lines[j] = string(l)
+				}
+				var err error
+				got, err = features.EditsFromPatch("f.go", dv.Patch.OldStart, dv.Patch.OldLines, dv.Patch.NewStart, dv.Patch.NewLines, lines)
+				if err != nil {
+					if !errors.Is(err, features.ErrPatch) {
+						t.Fatalf("EditsFromPatch's error %v doesn't wrap ErrPatch", err)
+					}
+					malformed = true
+				}
+			} else {
+				if dv.Before == nil || dv.After == nil {
+					t.Fatal("a diff without a patch has no before and after")
+				}
+				if e, ok := features.EditFromTexts("f.go", string(*dv.Before), string(*dv.After)); ok {
+					got = []features.Edit{e}
+				}
+			}
+			if malformed != dv.Malformed {
+				t.Fatalf("pkg/ledger finds the patch malformed %v, the vectors %v", malformed, dv.Malformed)
+			}
+			if malformed {
+				return
+			}
+			var want []features.Edit
+			for _, h := range *dv.Hunks {
+				want = append(want, features.Edit{Path: "f.go", OldStart: h.OldStart, OldLines: h.OldLines, NewStart: h.NewStart, NewLines: h.NewLines})
+			}
+			if !slices.Equal(got, want) {
+				t.Errorf("pkg/ledger gives %v, the vectors %v", got, want)
+			}
+		})
+	}
+}
+
 func TestVectorJaccard(t *testing.T) {
 	for i, jv := range readContentVectors(t).Jaccard {
 		t.Run(fmt.Sprintf("jaccard[%d] %s: %d of 64 places match", i, jv.Note, jv.Matches), func(t *testing.T) {
@@ -504,8 +598,42 @@ func TestVectorShingleReveals(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got, at := features.VerifyShingleReveal(mh, sv.Entries); got != sv.Verdict {
+			got, at, unexplained := features.VerifyShingleReveal(mh, sv.Entries, sv.Removed)
+			if got != sv.Verdict {
 				t.Errorf("VerifyShingleReveal gives %s (entry %d), the vectors %s", got, at, sv.Verdict)
+			}
+			switch {
+			case (sv.Unexplained != nil) != (got == features.ShingleOK):
+				t.Errorf("the vectors give a count of unexplained places with %s", sv.Verdict)
+			case got == features.ShingleOK && *sv.Unexplained != unexplained:
+				t.Errorf("VerifyShingleReveal counts %d unexplained places, the vectors %d", unexplained, *sv.Unexplained)
+			}
+		})
+		if sv.Text == nil {
+			continue
+		}
+		t.Run(fmt.Sprintf("shingle_reveals[%d] %s: ShingleReveal sends these entries for the text with its tokens removed", i, sv.Note), func(t *testing.T) {
+			k, err := DeriveKeys(sv.KDev)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if sv.RemovedTokens == nil {
+				t.Fatal("the vectors give a text without removed_tokens")
+			}
+			kind, entries := k.Features().ShingleReveal(string(*sv.Text), *sv.RemovedTokens)
+			if kind != sv.Kind {
+				t.Errorf("kind %s, the vectors %s", kind, sv.Kind)
+			}
+			if sv.Removed != (len(*sv.RemovedTokens) > 0) {
+				t.Errorf("removed is %v with %d tokens removed", sv.Removed, len(*sv.RemovedTokens))
+			}
+			if len(entries) != len(sv.Entries) {
+				t.Fatalf("%d entries, the vectors %d", len(entries), len(sv.Entries))
+			}
+			for j, e := range entries {
+				if !bytes.Equal(e.V, sv.Entries[j].V) || !bytes.Equal(e.X, sv.Entries[j].X) {
+					t.Errorf("entries[%d] is %x %q, the vectors %x %q", j, e.V, e.X, sv.Entries[j].V, sv.Entries[j].X)
+				}
 			}
 		})
 	}
@@ -528,6 +656,9 @@ func checkDrawVector(t *testing.T, dv drawVec) {
 	}
 	seed := DrawSeed(r, dv.Metadata)
 	sameBytes(t, "seed", seed[:], dv.Seed)
+	if s := DrawSeedFromDigest(r, sha256.Sum256(dv.Metadata)); s != seed {
+		t.Errorf("DrawSeedFromDigest gives %s from SHA-256(M), and DrawSeed %s from M", s, seed)
+	}
 	pool := make([]Turn, len(dv.Pool))
 	for j, p := range dv.Pool {
 		pool[j] = Turn{DeviceID: p.DeviceID, Seq: p.Seq}

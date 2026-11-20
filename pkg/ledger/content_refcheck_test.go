@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"math/rand/v2"
 	"os"
 	"os/exec"
@@ -39,11 +40,13 @@ func TestReferenceCheckContent(t *testing.T) {
 	}
 
 	// Small slices of the same file, each with one value changed, to show
-	// the check really reads every section this test writes.
+	// the check really reads every section this test writes: it must exit
+	// 1 and name the changed value's JSON path.
 	small := func() contentVectorsFile {
 		s := contentVectorsFile{Format: vectorsFormat,
 			Commitments: doc.Commitments[:5], Reveals: doc.Reveals[:5], Normalizations: doc.Normalizations[:5],
-			Features: doc.Features[:5], ShingleReveals: doc.ShingleReveals[:5], Draws: doc.Draws[:3]}
+			Features: doc.Features[:5], Jaccard: doc.Jaccard[:5], ShingleReveals: doc.ShingleReveals[:5],
+			Draws: doc.Draws[:3], ChallengeK: doc.ChallengeK[:5]}
 		return deepCopyContent(t, s)
 	}
 	rootChanged := small()
@@ -55,24 +58,42 @@ func TestReferenceCheckContent(t *testing.T) {
 	fChanged := small()
 	fChanged.Features[0].F = json.RawMessage(strings.Replace(string(fChanged.Features[0].F), `"pc":"`, `"pc":"x`, 1))
 	drawChanged := small()
+	drawn := -1
 	for i := range drawChanged.Draws {
 		if d := drawChanged.Draws[i].Drawn; len(d) >= 2 {
 			d[0], d[1] = d[1], d[0]
+			drawn = i
 			break
 		}
 	}
+	if drawn < 0 {
+		t.Fatal("none of the first three draws drew two turns")
+	}
+	jaccardChanged := small()
+	jaccardChanged.Jaccard[1].Matches = (jaccardChanged.Jaccard[1].Matches + 1) % (features.SketchSize + 1)
+	shingleChanged := small()
+	if shingleChanged.ShingleReveals[0].Verdict != features.ShingleOK {
+		t.Fatal("the first CC8 reveal written isn't ok")
+	}
+	shingleChanged.ShingleReveals[0].Verdict = features.ShingleSketch
+	kChanged := small()
+	kChanged.ChallengeK[3].K++
 
 	cases := []struct {
 		name string
 		doc  contentVectorsFile
 		want int
+		path string // the JSON path check must name, for a changed file
 	}{
-		{"1,000 random texts with random removals, and their features, CC8 reveals and draws, pass tools/ledger_ref.py check", doc, 0},
-		{"tools/ledger_ref.py check fails the same commitments with one root byte changed", rootChanged, 1},
-		{"tools/ledger_ref.py check fails an ok reveal written down as failing on its root", verdictChanged, 1},
-		{"tools/ledger_ref.py check fails a normalized text with a byte added", normalizedChanged, 1},
-		{"tools/ledger_ref.py check fails a feature map whose prompt class was changed", fChanged, 1},
-		{"tools/ledger_ref.py check fails a draw with two drawn turns swapped", drawChanged, 1},
+		{"1,000 random texts with random removals, and their features, CC8 reveals and draws, pass tools/ledger_ref.py check", doc, 0, ""},
+		{"tools/ledger_ref.py check fails the same commitments with one root byte changed", rootChanged, 1, "commitments[1].root"},
+		{"tools/ledger_ref.py check fails an ok reveal written down as failing on its root", verdictChanged, 1, "reveals[2].verdict"},
+		{"tools/ledger_ref.py check fails a normalized text with a byte added", normalizedChanged, 1, "normalizations[3].normalized"},
+		{"tools/ledger_ref.py check fails a feature map whose prompt class was changed", fChanged, 1, "features[0].f"},
+		{"tools/ledger_ref.py check fails a draw with two drawn turns swapped", drawChanged, 1, fmt.Sprintf("draws[%d].drawn", drawn)},
+		{"tools/ledger_ref.py check fails a Jaccard pair with its match count changed", jaccardChanged, 1, "jaccard[1].matches"},
+		{"tools/ledger_ref.py check fails an ok CC8 reveal written down as failing on its sketch", shingleChanged, 1, "shingle_reveals[0].verdict"},
+		{"tools/ledger_ref.py check fails a CHALLENGE_K size changed", kChanged, 1, "challenge_k[3].k"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -96,6 +117,9 @@ func TestReferenceCheckContent(t *testing.T) {
 			}
 			if code != c.want {
 				t.Fatalf("tools/ledger_ref.py check exited %d, want %d:\n%s", code, c.want, out)
+			}
+			if c.path != "" && !bytes.Contains(out, []byte(c.path+": ")) {
+				t.Fatalf("tools/ledger_ref.py check doesn't name %s:\n%s", c.path, out)
 			}
 			lines := bytes.Split(bytes.TrimSpace(out), []byte("\n"))
 			t.Logf("%d bytes checked: %s", len(data), lines[len(lines)-1])
@@ -154,7 +178,8 @@ var (
 	sampleLines = []string{
 		"```", "```python", "```js const x = 1```", "~~~~", "~~~", "    ```", "   ```", "``` ", "````", "~~~~~ ",
 		"```\t", "<pasted_content>", `<pasted_content id="1">`, `  <pasted_content id="2" lines="3">  `,
-		"</pasted_content>", " </pasted_content> ", "<pasted_content id>", "Traceback (most recent call last):",
+		"</pasted_content>", " </pasted_content> ", "<pasted_content id>", `<pasted_content id="1a2b">`,
+		`</pasted_content id="1a2b">`, `</pasted_content id="ffff"> `, "</pasted_content id>", "Traceback (most recent call last):",
 		`  File "app.py", line 3, in <module>`, "    main()", "\tat x", " at App (App.jsx:12:5)",
 		"ValueError: invalid literal for int() with base 10: 'abc'",
 		"TypeError: Cannot read properties of undefined (reading 'map')", "Uncaught ReferenceError: foo is not defined",
@@ -163,6 +188,11 @@ var (
 		"a.go:1:2: fatal error: x.h: no such file", "FAILED tests/test_api.py::test_login - AssertionError: 401 != 200",
 		"FAILED ", "--- FAIL: TestParse (0.00s)", "    parse_test.go:14: got 3, want 4",
 		"panic: runtime error: index out of range [5] with length 3", "panic: ", "goroutine 1 [running]:",
+		"goroutine 18 [chan receive]:", "main.main()", "\t/home/teen/x/main.go:8 +0x1d", "created by main.main in goroutine 1",
+		"[signal SIGSEGV: segmentation violation code=0x1 addr=0x0 pc=0x47e1b6]", "2 |     let x: i32 = \"a\";", "12 | }",
+		"  |            ^^^ expected `i32`", "Exception in thread \"main\" java.lang.IllegalStateException: boom",
+		"\tat Main.main(Main.java:3)", "Caused by: java.lang.NumberFormatException: x", "\t... 1 more",
+		"Uncaught (in promise) TypeError: Failed to fetch", "",
 		"\U00003000TypeError: x\U00003000", "\U000000a0FAILED x 0x7ffd",
 	}
 	lineBreaks = []string{"\n", "\n", "\r\n", "\r\n\r\n", "\n\n"}
@@ -483,21 +513,35 @@ func randomContent(t *testing.T) contentVectorsFile {
 		sketches = append(sketches, f.MH.Bytes())
 
 		if i%3 == 1 {
-			hide := func(string) bool { return rng.IntN(3) == 0 }
-			entries := fk.ShingleReveal(text, hide)
-			v, at := features.VerifyShingleReveal(*f.MH, entries)
-			if v != features.ShingleOK {
-				t.Fatalf("text %d: pkg/ledger's own CC8 reveal gets %s at entry %d", i, v, at)
+			// The CC8 reveal the client sends with the text's reveal,
+			// which removed the tokens of spans.
+			removed := []int{}
+			for _, sp := range spans {
+				for j := sp.First; j < sp.First+sp.Count; j++ {
+					removed = append(removed, j)
+				}
 			}
-			doc.ShingleReveals = append(doc.ShingleReveals, shingleRevealVec{MH: f.MH.Bytes(), Entries: entries, Verdict: v})
+			kind, entries := fk.ShingleReveal(text, removed)
+			v, at, unexplained := features.VerifyShingleReveal(*f.MH, entries, len(removed) > 0)
+			if v != features.ShingleOK || len(removed) == 0 && unexplained != 0 {
+				t.Fatalf("text %d: pkg/ledger's own CC8 reveal gets %s at entry %d, %d places unexplained", i, v, at, unexplained)
+			}
+			doc.ShingleReveals = append(doc.ShingleReveals, shingleRevealVec{MH: f.MH.Bytes(), Kind: kind,
+				Removed: len(removed) > 0, KDev: kDev, Text: &textHex, RemovedTokens: &removed, Entries: entries,
+				Verdict: v, Unexplained: &unexplained})
 			if len(entries) > 0 {
 				// One entry dropped: a sketch error unless its value set
-				// no minimum. Whatever pkg/ledger says, the reference
-				// must say too.
+				// no minimum, or spans were removed. Whatever pkg/ledger
+				// says, the reference must say too.
 				j := rng.IntN(len(entries))
 				dropped := append(append([]features.ShingleEntry{}, entries[:j]...), entries[j+1:]...)
-				v, _ := features.VerifyShingleReveal(*f.MH, dropped)
-				doc.ShingleReveals = append(doc.ShingleReveals, shingleRevealVec{Note: "one entry dropped", MH: f.MH.Bytes(), Entries: dropped, Verdict: v})
+				sv := shingleRevealVec{Note: "one entry dropped", MH: f.MH.Bytes(), Kind: kind, Removed: len(removed) > 0, Entries: dropped}
+				var u int
+				sv.Verdict, _, u = features.VerifyShingleReveal(*f.MH, dropped, sv.Removed)
+				if sv.Verdict == features.ShingleOK {
+					sv.Unexplained = &u
+				}
+				doc.ShingleReveals = append(doc.ShingleReveals, sv)
 			}
 		}
 	}
