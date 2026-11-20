@@ -424,6 +424,36 @@ func TestPrintable(t *testing.T) {
 	})
 }
 
+func TestLogoutDamagedFile(t *testing.T) {
+	fake := &fakeServer{replies: map[string][]reply{}}
+	sec := &memSecrets{token: []byte(testToken), seed: make([]byte, ed25519.SeedSize)}
+	o := testOptions(t, fake, sec)
+	if err := os.WriteFile(File(o.DataDir), []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Login(context.Background(), o, testDevice, func(Code) {}); err == nil || !strings.Contains(err.Error(), "pairtime logout clears it") {
+		t.Errorf("Login over a damaged account.json = %v, want a pointer to pairtime logout", err)
+	}
+	r, err := Logout(context.Background(), Options{DataDir: o.DataDir, ConfigFile: o.ConfigFile, Secrets: sec, HTTP: o.HTTP})
+	tests := []struct {
+		name string
+		ok   bool
+	}{
+		{name: "logout over a damaged account.json succeeds", ok: err == nil},
+		{name: "it says the server wasn't told", ok: r.ServerErr != nil && strings.Contains(r.ServerErr.Error(), "doesn't know which server")},
+		{name: "it sends nothing, since it doesn't know where", ok: len(fake.seen) == 0},
+		{name: "it deletes the file", ok: func() bool { _, err := os.Stat(File(o.DataDir)); return errors.Is(err, os.ErrNotExist) }()},
+		{name: "it forgets the sign-in", ok: sec.token == nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if !tt.ok {
+				t.Errorf("it didn't: Logout = %+v, %v", r, err)
+			}
+		})
+	}
+}
+
 func TestLogoutWithoutKeystore(t *testing.T) {
 	fake := loginServer(http.StatusCreated)
 	sec := &memSecrets{}

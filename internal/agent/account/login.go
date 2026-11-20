@@ -109,7 +109,7 @@ func Login(ctx context.Context, o Options, d Device, show func(Code)) (Result, e
 	if l, err := Load(o.DataDir); err == nil {
 		return Result{Linked: l}, fmt.Errorf("%w (%s, device %s)", ErrAlreadyLinked, l.Server, l.DeviceID)
 	} else if !errors.Is(err, ErrNotLinked) {
-		return Result{}, err
+		return Result{}, fmt.Errorf("%w; pairtime logout clears it", err)
 	}
 	c := o.client()
 	code, err := c.RequestCode(ctx, d)
@@ -200,13 +200,19 @@ var ErrNoKeystore = errors.New("account: the keystore couldn't be opened, so the
 // ErrNoKeystore.
 //
 // It returns ErrNotLinked, after cleaning up anything left of a sign-in,
-// when this install wasn't linked.
+// when this install wasn't linked. A damaged account.json is deleted like
+// a good one; its server isn't known then, so ServerErr says the device
+// wasn't removed there.
 func Logout(ctx context.Context, o Options) (Result, error) {
 	l, lerr := Load(o.DataDir)
-	if lerr != nil && !errors.Is(lerr, ErrNotLinked) {
-		return Result{}, lerr
-	}
 	var r Result
+	damaged := lerr != nil && !errors.Is(lerr, ErrNotLinked)
+	if damaged {
+		r.ServerErr = fmt.Errorf("account: %w, so pairtime doesn't know which server to remove this computer from", lerr)
+		if err := remove(o.DataDir); err != nil {
+			return r, fmt.Errorf("account: deleting %s: %w", FileName, err)
+		}
+	}
 	r.Linked = l
 	if o.Secrets == nil {
 		if err := remove(o.DataDir); err != nil {
@@ -245,7 +251,7 @@ func Logout(ctx context.Context, o Options) (Result, error) {
 	if err := config.SetLocal(o.ConfigFile); err != nil {
 		r.ConfigErr = err
 	}
-	if lerr != nil {
+	if lerr != nil && !damaged {
 		return r, lerr
 	}
 	return r, nil

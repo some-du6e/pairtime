@@ -219,10 +219,16 @@ func runLogout(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "pairtime logout: %v\n", err)
 		return 1
 	}
-	if r.ServerErr != nil {
+	switch {
+	case r.ServerErr != nil && r.Linked.Server == "":
+		fmt.Fprintf(stdout, "%v. This computer has forgotten its token, so it can't upload; remove it on the devices page of the server it was linked to.\n", r.ServerErr)
+	case r.ServerErr != nil:
 		fmt.Fprintf(stdout, "pairtime couldn't reach %s to remove this computer (%v), so the server still lists it. This computer has forgotten its token, so it can't upload; remove it at %s/account/devices.\n", r.Linked.Server, r.ServerErr, r.Linked.Server)
 	}
-	fmt.Fprintf(stdout, "Unlinked from %s. pairtime is back in local mode: it keeps counting, and uploads nothing.\n", r.Linked.Server)
+	if r.Linked.Server != "" {
+		fmt.Fprintf(stdout, "Unlinked from %s. ", r.Linked.Server)
+	}
+	fmt.Fprintln(stdout, "pairtime is back in local mode: it keeps counting, and uploads nothing.")
 	if r.ConfigErr != nil {
 		fmt.Fprintf(stderr, "pairtime logout: %v\n", r.ConfigErr)
 	}
