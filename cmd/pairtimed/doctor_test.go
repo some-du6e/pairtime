@@ -268,6 +268,32 @@ func TestDoctor(t *testing.T) {
 			want: map[string][2]string{"readyz": {statusFail, "replication: behind"},
 				"push.pairtimed": {statusSkip, "sends no ping"}, "push.litestream": {statusSkip, "sends no ping"}},
 			wantCode: 1, wantPings: map[string]int{"/pairtimed": 0, "/snapshot": 1, "/litestream": 0}},
+		{name: "with object storage on, a /readyz without a replication check fails, but pairtimed's monitor still gets its ping, as the heartbeat sends it",
+			setup: func(_ *testing.T, d *deployed) {
+				d.readiness = ops.Readiness{Ready: true, Checks: []ops.CheckResult{{Name: "database", OK: true}}}
+			},
+			want: map[string][2]string{"readyz": {statusFail, "without -litestream-replica"},
+				"push.litestream": {statusSkip, "no replication check"}},
+			wantCode: 1, wantPings: map[string]int{"/pairtimed": 1, "/litestream": 0}},
+		{name: "with object storage off, a /readyz without a replication check is a skip with a note, and pairtimed's monitor gets its ping, as the heartbeat sends it",
+			setup: func(t *testing.T, d *deployed) {
+				d.readiness = ops.Readiness{Ready: true, Checks: []ops.CheckResult{{Name: "database", OK: true}}}
+				text, err := os.ReadFile(d.config)
+				if err != nil {
+					t.Fatal(err)
+				}
+				off := string(text[:strings.Index(string(text), "[object_storage]")])
+				writeFile(t, d.config, off, 0o644)
+			},
+			want: map[string][2]string{"readyz": {statusSkip, "object storage is off"},
+				"push.pairtimed":  {statusOK, "pinged pairtimed's push monitor"},
+				"push.litestream": {statusSkip, "no replication check"},
+				"push.snapshot":   {statusSkip, "sends no ping"},
+				// What object storage off costs a deployment, which these
+				// checks already said.
+				"object_storage": {statusFail, "is off"},
+				"litestream.yml": {statusFail, "isn't object_storage.endpoint"}},
+			wantCode: 1, wantPings: map[string]int{"/pairtimed": 1, "/litestream": 0, "/snapshot": 0}},
 		{name: "one monitor shared by two parts fails",
 			setup: func(_ *testing.T, d *deployed) {
 				d.environ = append(d.environ, "PAIRTIME_LITESTREAM_HEARTBEAT_URL="+d.monitors.URL+"/pairtimed")

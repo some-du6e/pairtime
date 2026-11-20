@@ -390,6 +390,8 @@ func (d *doctor) checkReadyz(ctx context.Context) result {
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&res); err != nil {
 		return bad("%s answered %s, not a readiness report: %v", u, resp.Status, err)
 	}
+	// d.readiness keeps /readyz's own answer: pairtimed's heartbeat pings
+	// on it, so doctor's push.pairtimed check does too.
 	d.readiness = &res
 	var parts []string
 	for _, c := range res.Checks {
@@ -399,14 +401,23 @@ func (d *doctor) checkReadyz(ctx context.Context) result {
 			parts = append(parts, c.Name+": "+c.Error)
 		}
 	}
-	if !slices.ContainsFunc(res.Checks, func(c ops.CheckResult) bool { return c.Name == "replication" }) {
-		parts = append(parts, "no replication check, so serve runs without -litestream-replica")
-		res.Ready = false
-	}
-	if !res.Ready {
+	replicated := d.hasReadyCheck("replication")
+	switch {
+	case !res.Ready:
 		return bad("%s", strings.Join(parts, "; "))
+	case !replicated && d.cfg.ObjectStorage.Enabled():
+		// litestream.yml's exec passes the flag, so a deployment with a
+		// bucket that lacks the check has a serve Litestream didn't start.
+		return bad("%s; no replication check, so serve runs without -litestream-replica, which litestream.yml's exec passes (deploy/litestream.yml)", strings.Join(parts, ", "))
+	case !replicated:
+		return skip("%s; no replication check, since object storage is off, so nothing replicates and there is no replica to measure", strings.Join(parts, ", "))
 	}
 	return ok("%s", strings.Join(parts, ", "))
+}
+
+// hasReadyCheck reports whether /readyz's answer has the check name.
+func (d *doctor) hasReadyCheck(name string) bool {
+	return d.readiness != nil && slices.ContainsFunc(d.readiness.Checks, func(c ops.CheckResult) bool { return c.Name == name })
 }
 
 // readyCheck reports whether /readyz's check name passed.
@@ -748,7 +759,11 @@ func (d *doctor) checkPushSnapshot(ctx context.Context) result {
 }
 
 func (d *doctor) checkPushLitestream(ctx context.Context) result {
-	return d.checkPush(ctx, envLitestreamHeartbeatURL, "Litestream", d.readyCheck("replication"), "the replication check didn't pass")
+	why := "the replication check didn't pass"
+	if d.readiness != nil && !d.hasReadyCheck("replication") {
+		why = "/readyz has no replication check to show that Litestream replicates"
+	}
+	return d.checkPush(ctx, envLitestreamHeartbeatURL, "Litestream", d.readyCheck("replication"), why)
 }
 
 // checkTunnel fetches /healthz at base_url, through Cloudflare and the
