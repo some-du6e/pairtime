@@ -1,0 +1,344 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Builds pairtime client releases (docs/PLAN.md, WP-RL1). What it writes is
+# specified in docs/spec/update-manifest.md.
+#
+# - A pushed v* tag builds the seven targets, signs manifest.json with the
+#   RELEASE_SIGNING_KEY secret and publishes a GitHub release. A tag with a
+#   prerelease part, such as v0.1.0-alpha.1, publishes a prerelease.
+# - workflow_dispatch, and a PR that changes the release code, build a
+#   snapshot signed with a throwaway key and keep it as a workflow
+#   artifact. They never publish and never read the secret.
+#
+# The server image (WP-OP1), code signing (DESIGN 9.7 WP 4.10) and the VSIX
+# packages (WP 4.11) join this workflow later.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+  pull_request:
+    # The snapshot dry run, only for PRs that touch the release code.
+    paths:
+      - .github/workflows/release.yml
+      - internal/release/**
+      - tools/release/**
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  # A new push cancels a stale snapshot, but a tag's release never cancels
+  # (docs/PLAN.md, CI policy).
+  cancel-in-progress: ${{ github.ref_type != 'tag' }}
+
+permissions:
+  contents: read
+
+env:
+  # pairtime never uses cgo (AGENTS.md), and a release is built with the Go
+  # that setup-go installed from go.mod, never one fetched mid-build.
+  CGO_ENABLED: "0"
+  GOTOOLCHAIN: local
+  # The targets in docs/research/client-platform.md section 7, as in ci.yml.
+  TARGETS: windows/amd64 windows/386 windows/arm64 darwin/amd64 darwin/arm64 linux/amd64 linux/arm64
+
+jobs:
+  build:
+    name: build, archive, sign with a throwaway key, check
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: bash
+    steps:
+      # Actions are pinned to commit SHAs; tags can be moved. Dependabot bumps them.
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: go.mod
+          # No build cache: a release builds from source alone, so a
+          # poisoned cache entry can't end up in it.
+          cache: false
+
+      - name: Version
+        env:
+          EVENT: ${{ github.event_name }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+          RUN_NUMBER: ${{ github.run_number }}
+        run: |
+          tool=$RUNNER_TEMP/release-tool
+          go build -o "$tool" ./tools/release
+          if [ "$EVENT" = push ] && [ "$REF_TYPE" = tag ]; then
+            version=$REF_NAME
+            # The oldest client version this release still supports.
+            min=$(grep -v '^#' tools/release/minimum-version.txt | tr -d '[:space:]')
+          else
+            # A snapshot is never published, so it supports only itself.
+            version=v0.0.0-snapshot.$RUN_NUMBER
+            min=$version
+          fi
+          # Refuses a tag that isn't a pairtime version before anything is built.
+          "$tool" check -version "$version" -min-version "$min"
+          {
+            echo "TOOL=$tool"
+            echo "VERSION=$version"
+            echo "MIN_VERSION=$min"
+            echo "COMMIT=$(git rev-parse HEAD)"
+            echo "DATE=$(TZ=UTC git log -1 --format=%cd --date=format-local:%Y-%m-%dT%H:%M:%SZ)"
+            echo "STAGE=$RUNNER_TEMP/stage"
+          } >> "$GITHUB_ENV"
+
+      - name: Build
+        run: |
+          pkg=github.com/some-du6e/pairtime/internal/version
+          ldflags="-s -w -X $pkg.Version=$VERSION -X $pkg.Commit=$COMMIT -X $pkg.Date=$DATE"
+          # Client binary budget: under 15 MB, as in ci.yml.
+          budget=15000000
+          fail=0
+          for target in $TARGETS; do
+            goos=${target%/*}
+            goarch=${target#*/}
+            ext=""
+            if [ "$goos" = windows ]; then ext=".exe"; fi
+            out="$STAGE/bin/${goos}_${goarch}/pairtime$ext"
+            # -trimpath and -buildvcs=false as in ci.yml: the -X values
+            # carry the commit and date.
+            GOOS=$goos GOARCH=$goarch go build -trimpath -buildvcs=false -ldflags="$ldflags" -o "$out" ./cmd/pairtime
+            size=$(stat -c %s "$out")
+            echo "$target: $size bytes"
+            if [ "$size" -gt "$budget" ]; then
+              echo "::error::$target pairtime is $size bytes, over the $budget-byte client budget"
+              fail=1
+            fi
+          done
+
+          # The runner is linux/amd64, so that binary runs here.
+          got=$("$STAGE/bin/linux_amd64/pairtime" version)
+          echo "$got"
+          case "$got" in
+            "pairtime $VERSION (commit ${COMMIT:0:12}, $DATE, "*) ;;
+            *)
+              echo "::error::pairtime version didn't report the -ldflags values"
+              fail=1
+              ;;
+          esac
+          # It also names the release keys compiled into it.
+          ids=$("$TOOL" keys | paste -sd, - | sed 's/,/, /g')
+          want="release keys: ${ids:-none}"
+          case "$got" in
+            *"$want"*) ;;
+            *)
+              echo "::error::pairtime version should say \"$want\""
+              fail=1
+              ;;
+          esac
+          exit "$fail"
+
+      - name: Archives, checksums.txt and the manifest payload
+        env:
+          REPO: ${{ github.repository }}
+        run: |
+          "$TOOL" dist \
+            -version "$VERSION" -commit "$COMMIT" -date "$DATE" -min-version "$MIN_VERSION" \
+            -base-url "https://github.com/$REPO/releases/download/$VERSION" \
+            -targets "$TARGETS" -bin "$STAGE/bin" -extra LICENSE,README.md \
+            -out "$STAGE/dist" -payload "$STAGE/payload.json"
+
+      - name: Sign with a throwaway key
+        # Made here, used once, never stored. The publish job re-signs a
+        # tag's manifest with RELEASE_SIGNING_KEY.
+        run: |
+          "$TOOL" sign -throwaway -payload "$STAGE/payload.json" \
+            -out "$STAGE/dist/manifest.json" -pub-out "$STAGE/snapshot-key.pub"
+
+      - name: Check the release files
+        run: |
+          "$TOOL" verify -dir "$STAGE/dist" -pub "$STAGE/snapshot-key.pub" -targets "$TARGETS"
+          # The same checks again with no pairtime code: coreutils, jq, OpenSSL.
+          bash tools/release/check.sh "$STAGE/dist" "$STAGE/snapshot-key.pub"
+          {
+            echo "### pairtime $VERSION"
+            echo
+            echo "Signed with a throwaway key. checksums.txt:"
+            echo
+            echo '```'
+            cat "$STAGE/dist/checksums.txt"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Check that both checks catch tampering
+        # A check that can't fail proves nothing. Each copy below breaks one
+        # thing, and both verifiers must refuse it.
+        run: |
+          pub=$STAGE/snapshot-key.pub
+          refuse() {
+            if "$TOOL" verify -dir "$1" -pub "$pub" > /dev/null 2>&1; then
+              echo "::error::tools/release verify accepted $2"
+              exit 1
+            fi
+            if bash tools/release/check.sh "$1" "$pub" > /dev/null 2>&1; then
+              echo "::error::check.sh accepted $2"
+              exit 1
+            fi
+            echo "both refused $2"
+          }
+          v=${VERSION#v}
+
+          cp -r "$STAGE/dist" "$RUNNER_TEMP/bad-archive"
+          cp "$STAGE/dist/pairtime_${v}_linux_arm64.tar.gz" "$RUNNER_TEMP/bad-archive/pairtime_${v}_linux_amd64.tar.gz"
+          refuse "$RUNNER_TEMP/bad-archive" "an archive swapped for another target's"
+
+          cp -r "$STAGE/dist" "$RUNNER_TEMP/bad-payload"
+          jq -c '.payload |= (@base64d | sub("\"size\": "; "\"size\": 1") | @base64)' \
+            "$STAGE/dist/manifest.json" > "$RUNNER_TEMP/bad-payload/manifest.json"
+          refuse "$RUNNER_TEMP/bad-payload" "a payload changed after signing"
+
+          cp -r "$STAGE/dist" "$RUNNER_TEMP/bad-signature"
+          "$TOOL" sign -throwaway -payload "$STAGE/payload.json" -out "$RUNNER_TEMP/other-manifest.json"
+          other=$(jq -r '.signatures[0].sig' "$RUNNER_TEMP/other-manifest.json")
+          jq -c --arg sig "$other" '.signatures[0].sig = $sig' \
+            "$STAGE/dist/manifest.json" > "$RUNNER_TEMP/bad-signature/manifest.json"
+          refuse "$RUNNER_TEMP/bad-signature" "another key's signature under the trusted key's id"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: pairtime-${{ env.VERSION }}
+          path: |
+            ${{ env.STAGE }}/dist
+            ${{ env.STAGE }}/payload.json
+            ${{ env.STAGE }}/snapshot-key.pub
+          if-no-files-found: error
+          retention-days: 7
+          # A re-run of a failed attempt uploads under the same name.
+          overwrite: true
+
+  publish:
+    name: sign with the release key, publish
+    needs: build
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # RELEASE_SIGNING_KEY belongs in this environment, whose deployment rule
+    # admits v* tags only, so no branch or PR run can read it.
+    environment: release
+    permissions:
+      # To create the release and upload its files.
+      contents: write
+    defaults:
+      run:
+        shell: bash
+    env:
+      VERSION: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: pairtime-${{ github.ref_name }}
+          path: ${{ runner.temp }}/stage
+
+      - name: Sign
+        env:
+          RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
+        run: |
+          stage=$RUNNER_TEMP/stage
+          tool=$RUNNER_TEMP/release-tool
+          go build -o "$tool" ./tools/release
+          compiled=$("$tool" keys | tr '\n' ' ')
+          if [ -z "$RELEASE_SIGNING_KEY" ]; then
+            if [ -n "$compiled" ]; then
+              echo "::error::internal/release/release-keys.txt lists release keys ($compiled) but RELEASE_SIGNING_KEY isn't set for this job. Store it in the release environment (docs/spec/update-manifest.md)."
+              exit 1
+            fi
+            echo "::warning title=Unsigned release::RELEASE_SIGNING_KEY isn't set and no release key is compiled in, so manifest.json keeps the build job's throwaway-key signature, which no pairtime client trusts. The release notes say it's unsigned."
+            cp "$stage/snapshot-key.pub" "$stage/signing.pub"
+            echo "SIGNED=false" >> "$GITHUB_ENV"
+          else
+            "$tool" sign -key-env RELEASE_SIGNING_KEY -payload "$stage/payload.json" \
+              -out "$stage/dist/manifest.json" -pub-out "$stage/signing.pub"
+            # The client built from this tag must trust the key that signs
+            # its release, or it could never verify an update. Without -pub,
+            # verify trusts only the keys compiled in.
+            "$tool" verify -dir "$stage/dist" -targets "$TARGETS"
+            echo "SIGNED=true" >> "$GITHUB_ENV"
+          fi
+
+      - name: Check the release files
+        run: |
+          stage=$RUNNER_TEMP/stage
+          bash tools/release/check.sh "$stage/dist" "$stage/signing.pub"
+          keyid=$(sed -n 's/^pairtime-release-ed25519-public://p' "$stage/signing.pub" | base64 -d | sha256sum | cut -c1-16)
+          echo "KEY_ID=$keyid" >> "$GITHUB_ENV"
+          if [ "$SIGNED" = true ]; then
+            # The linux/amd64 client as shipped must name the signing key.
+            mkdir "$RUNNER_TEMP/client"
+            tar -xzf "$stage/dist/pairtime_${VERSION#v}_linux_amd64.tar.gz" -C "$RUNNER_TEMP/client" pairtime
+            got=$("$RUNNER_TEMP/client/pairtime" version)
+            echo "$got"
+            case "$got" in
+              *"release keys: "*"$keyid"*) ;;
+              *)
+                echo "::error::the shipped linux/amd64 client doesn't trust release key $keyid"
+                exit 1
+                ;;
+            esac
+          fi
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          stage=$RUNNER_TEMP/stage
+          notes=$RUNNER_TEMP/notes.md
+          # The tag's annotation, if it has one, becomes the release notes.
+          git fetch --quiet --no-tags origin "+refs/tags/$VERSION:refs/tags/$VERSION"
+          {
+            if [ "$SIGNED" = true ]; then
+              echo "manifest.json is signed with release key \`$KEY_ID\`, which this release's \`pairtime\` binaries trust."
+            else
+              echo "**Unsigned.** No release signing key exists yet, so manifest.json is signed with a throwaway key that no pairtime client trusts. Check downloads against checksums.txt."
+            fi
+            echo
+            if [ "$(git cat-file -t "refs/tags/$VERSION")" = tag ]; then
+              git for-each-ref --format='%(contents:subject)%0a%0a%(contents:body)' "refs/tags/$VERSION"
+              echo
+            fi
+            echo "Built from $GITHUB_SHA by $RUN_URL. docs/spec/update-manifest.md describes the files."
+          } > "$notes"
+
+          # A release that's already out is never changed. A draft left by
+          # a failed run is replaced.
+          if draft=$(gh release view "$VERSION" --json isDraft --jq .isDraft 2>/dev/null); then
+            if [ "$draft" != true ]; then
+              echo "::error::release $VERSION is already published, and this run won't replace its files"
+              exit 1
+            fi
+            gh release delete "$VERSION" --yes
+          fi
+
+          create=(--draft --verify-tag --title "$VERSION" --notes-file "$notes")
+          publish=(--draft=false)
+          # tools/release check refused build metadata, so a hyphen means a
+          # prerelease part.
+          case "$VERSION" in
+            *-*) create+=(--prerelease) ;;
+            *) publish+=(--latest) ;;
+          esac
+          # Upload into a draft and publish once every file is there, so
+          # nobody sees a release with files missing.
+          gh release create "$VERSION" "${create[@]}" "$stage"/dist/*
+          gh release edit "$VERSION" "${publish[@]}"
+          echo "Published $VERSION: $(gh release view "$VERSION" --json url --jq .url)" >> "$GITHUB_STEP_SUMMARY"

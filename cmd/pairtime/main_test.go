@@ -18,6 +18,7 @@ func TestRun(t *testing.T) {
 	}{
 		{name: "no arguments", args: nil, wantCode: 2, wantStderr: "Usage:"},
 		{name: "version", args: []string{"version"}, wantCode: 0, wantStdout: "pairtime "},
+		{name: "version names the release keys compiled in", args: []string{"version"}, wantCode: 0, wantStdout: "\nrelease keys: "},
 		{name: "--version", args: []string{"--version"}, wantCode: 0, wantStdout: "pairtime "},
 		{name: "version with an argument", args: []string{"version", "extra"}, wantCode: 2, wantStderr: "takes no arguments"},
 		{name: "help", args: []string{"help"}, wantCode: 0, wantStdout: "Commands:"},

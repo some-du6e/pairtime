@@ -152,9 +152,13 @@ type Envelope struct {
 	EventID string `json:"event_id"`
 	// DeviceID is a random per-install id, never derived from hardware.
 	DeviceID string `json:"device_id"`
-	// Seq is the per-device sequence number, gapless from 1. The server
-	// uses it for exactly-once ingest. The agent assigns it when it writes
-	// the event, so whatever an adapter or plugin sends is overwritten.
+	// Seq is the s of the device's ledger record that holds the event
+	// (docs/spec/ledger-v1.md 4.1). One sequence numbers every ledger
+	// record from 1 with no gaps, scorer checkpoints and upload-failure
+	// notes included, so the events' own seq values skip the numbers
+	// those records hold. The server uses it for exactly-once ingest. The
+	// agent assigns it when it writes the event, so whatever an adapter or
+	// plugin sends is overwritten.
 	Seq uint64 `json:"seq"`
 	// T is the client's wall time, in Unix milliseconds UTC, when the
 	// adapter saw the event.
