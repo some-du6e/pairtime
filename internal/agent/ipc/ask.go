@@ -131,7 +131,7 @@ func (s *Server) answer(q question) (reply, bool) {
 		return unknown, true
 	case err != nil:
 		s.log.Warn("ipc: couldn't answer a question", "question", q.Ask, "err", err)
-		return reply{ID: q.ID, Error: "the agent couldn't answer " + q.Ask}, true
+		return reply{ID: q.ID, Error: "the agent's log says why"}, true
 	case !json.Valid(ans):
 		s.log.Warn("ipc: an answer isn't JSON", "question", q.Ask)
 		return reply{ID: q.ID, Error: "the agent's answer to " + q.Ask + " isn't JSON"}, true
