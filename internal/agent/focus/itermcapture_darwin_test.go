@@ -59,15 +59,12 @@ const iTermDomain = "com.googlecode.iterm2"
 // iterm2-macos-latest.json. It sets iTerm2's default profile to run a
 // session script, which starts a harness stub as its child, and then:
 //
-//  1. starts iTerm2, whose first window runs the first stub, under an
-//     iTermServer when iTerm2 runs its sessions in one;
+//  1. starts iTerm2, whose first window runs the first stub under an
+//     iTermServer, iTerm2's child;
 //  2. kills iTerm2, which leaves that iTermServer and its stub running,
-//     adopted by launchd, as after iTerm2 crashes or is restarted with
-//     sessions to restore;
-//  3. starts iTerm2 again, whose new window runs the second stub, which
-//     has to descend from the new iTerm2: if it runs under an iTermServer
-//     that doesn't, the test kills that iTerm2 too and starts it once more
-//     with its jobs run without servers;
+//     adopted by launchd, as after iTerm2 crashes;
+//  3. starts iTerm2 again, whose new window runs the second stub, under
+//     an iTermServer of the new iTerm2;
 //  4. opens a Terminal window that runs the third stub.
 //
 // Then it reads the table and checks it as TestITerm2Golden does, after
@@ -108,18 +105,9 @@ func TestCaptureITerm2(t *testing.T) {
 	tab = c.table()
 	c.note("killing iTerm2 %d with SIGKILL left %s %d and the first stub running, and the server's parent is now %s", it1.PID, server.Name, server.PID, c.nameOf(tab, c.ppidOf(tab, server.PID)))
 
-	// 3. A new iTerm2 and a session that descends from it. If its job runs
-	// under an iTermServer that doesn't, as the first one's may already
-	// have, iTerm2 starts once more with its jobs run without servers.
-	// RunJobsInServers is the advanced setting "Enable session
-	// restoration", on by default.
+	// 3. A new iTerm2 and a session of its own, under an iTermServer that
+	// is the new iTerm2's child. checkITermCapture fails if it isn't.
 	it2, second := c.iTerm2Session()
-	if !descends(c.table(), second, it2.PID) {
-		c.kill(it2.PID)
-		c.defaults("write", iTermDomain, "RunJobsInServers", "-bool", "false")
-		c.note("that stub doesn't descend from iTerm2 %d, so the test killed it and set RunJobsInServers false", it2.PID)
-		it2, second = c.iTerm2Session()
-	}
 
 	// 4. Terminal.
 	c.open("-a", "Terminal", filepath.Join(c.dir, "terminal.command"))
@@ -172,11 +160,6 @@ func (c *capture) iTerm2Session() (platform.Proc, int) {
 	app := c.app("iTerm2")
 	c.note("iTerm2 %d ran the stub in slot %d, %d: %s", app.PID, slot, stub, c.namesOf(c.table(), stub))
 	return app, stub
-}
-
-// descends reports whether pid's chain reaches ancestor.
-func descends(tab *platform.Table, pid, ancestor int) bool {
-	return slices.ContainsFunc(tab.Chain(pid), func(p platform.Proc) bool { return p.PID == ancestor })
 }
 
 // diagnose saves what explains a failed capture next to it, for the
@@ -492,13 +475,18 @@ func (c *capture) stopAll() {
 }
 
 // write writes g as TestITerm2Golden reads it, one process to a line.
+// The notes keep their < as it is, not as \u003c.
 func (c *capture) write(name string, g itermCapture) {
 	procs := g.Procs
 	g.Procs = nil
-	head, err := json.MarshalIndent(g, "", "  ")
-	if err != nil {
+	var enc bytes.Buffer
+	e := json.NewEncoder(&enc)
+	e.SetEscapeHTML(false)
+	e.SetIndent("", "  ")
+	if err := e.Encode(g); err != nil {
 		c.t.Fatal(err)
 	}
+	head := enc.Bytes()
 	// head ends with `"procs": null` and the closing brace.
 	cut := bytes.LastIndex(head, []byte(`"procs": null`))
 	if cut < 0 {

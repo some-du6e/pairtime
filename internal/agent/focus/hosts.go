@@ -53,12 +53,14 @@ func consoleHelper(goos string, p platform.Proc) bool {
 
 // helpers names, by OS and app, the helper processes an app runs harness
 // sessions under that need not descend from the app's own process, each as
-// a prefix of the helper's name. iTerm2 can run a session's job in an
-// iTermServer process, whose name carries iTerm2's version, so that the
-// session outlives iTerm2: when iTerm2 quits or crashes, launchd adopts the
-// server, and a later iTerm2 can restore the session from it (DESIGN 3.3;
-// decision E-6.3-two-tabs). appclass.json's darwin terminal entry lists
-// the same names as itermserver*.
+// a prefix of the helper's name. iTerm2 runs each session's job under an
+// iTermServer process named for its version, iTermServer-3.7.7 on
+// macos-latest, which is iTerm2's child while iTerm2 runs. The server
+// outlives iTerm2: when iTerm2 crashes or is killed, launchd adopts it and
+// its sessions keep running, outside iTerm2's chain, for a later iTerm2 to
+// restore (DESIGN 3.3; decision E-6.3-two-tabs; the capture in
+// testdata/iterm2-macos-latest.json). appclass.json's darwin terminal
+// entry lists the same names as itermserver*.
 var helpers = map[string]map[string]string{
 	platform.Darwin: {"iterm2": "itermserver"},
 }
