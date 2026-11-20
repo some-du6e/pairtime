@@ -172,7 +172,8 @@ const openTimeout = 2 * time.Second
 // Open finds the session's signals and starts watching focus and power.
 // It doesn't fail: a signal the desktop doesn't give is unknown in Status,
 // and the matching method reports ErrUnknown or returns a nil channel.
-// Watching stops when ctx ends or Close is called.
+// Watching stops when ctx ends or Close is called: the Focus and Power
+// channels close, and so do the connections that fed them.
 func Open(ctx context.Context, cfg Config) *Desktop {
 	getenv := cfg.Getenv
 	if getenv == nil {
@@ -286,42 +287,98 @@ func Open(ctx context.Context, cfg Config) *Desktop {
 	return d
 }
 
-// startFocus starts following _NET_ACTIVE_WINDOW on its own connection.
+// startFocus follows _NET_ACTIVE_WINDOW on a connection of its own. When
+// that connection drops, as when the display manager restarts a crashed X
+// server, or the user logs out and back in while the agent runs on, it
+// reconnects to the same display, as idle sampling does.
 func (d *Desktop) startFocus(ctx context.Context, disp xDisplay, dispErr error, getenv func(string) string, hostname string, log *slog.Logger) {
 	if dispErr != nil {
 		d.status.Focus = unknownErr(dispErr)
 		return
 	}
-	deadline := time.Now().Add(openTimeout)
-	c, err := openX11(disp, getenv, hostname, deadline)
+	open := func() (*x11Focus, error) {
+		deadline := time.Now().Add(openTimeout)
+		c, err := openX11(disp, getenv, hostname, deadline)
+		if err != nil {
+			return nil, err
+		}
+		return newX11Focus(c, hostname, deadline)
+	}
+	w, err := open()
 	if err != nil {
 		d.status.Focus = unknownErr(err)
 		return
 	}
-	w, err := newX11Focus(c, hostname, deadline)
-	if err != nil {
-		d.status.Focus = unknownErr(err)
-		return
-	}
-	d.status.Focus = via(w.via())
-	if !w.ewmh {
-		// Keep listening: a window manager that starts later sets the
-		// property, and the first change makes focus known.
-		d.status.Focus = unknown("the window manager doesn't keep _NET_ACTIVE_WINDOW")
-		w.onEWMH = func() { d.setStatus(func(s *Status) { s.Focus = via(w.via()) }) }
-	}
+	d.watchingFocus(w)
 	d.focus = make(chan Focus, 16)
-	d.closers = append(d.closers, w.close)
 	d.wg.Add(1)
 	go func() {
 		defer d.wg.Done()
 		defer close(d.focus)
-		err := w.run(ctx, d.focus)
-		if ctx.Err() == nil {
-			log.Warn("lost the X connection that follows focus", "err", err)
-			d.setStatus(func(s *Status) { s.Focus = unknown("lost the X connection") })
+		attempt := 0
+		for w != nil {
+			started := time.Now()
+			// Ending ctx closes the connection, which ends run's blocked
+			// read.
+			stop := context.AfterFunc(ctx, w.close)
+			err := w.run(ctx, d.focus)
+			stop()
+			w.close()
+			if ctx.Err() != nil {
+				break
+			}
+			if time.Since(started) > time.Minute {
+				attempt = 0 // it ran a while, so the waits start over
+			}
+			log.Warn("lost the X connection that follows focus; reconnecting", "err", err)
+			d.setStatus(func(s *Status) { s.Focus = unknown("lost the X connection; reconnecting") })
+			w, attempt = d.reconnectFocus(ctx, open, attempt)
 		}
+		d.setStatus(func(s *Status) { s.Focus = unknown("stopped watching") })
 	}()
+}
+
+// watchingFocus sets Status.Focus for a new watcher. A watcher that found
+// no window manager keeping _NET_ACTIVE_WINDOW goes on listening: one that
+// starts later sets the property, and the first change makes focus known.
+func (d *Desktop) watchingFocus(w *x11Focus) {
+	if w.ewmh {
+		d.setStatus(func(s *Status) { s.Focus = via(w.via()) })
+		return
+	}
+	d.setStatus(func(s *Status) { s.Focus = unknown("the window manager doesn't keep _NET_ACTIVE_WINDOW") })
+	w.onEWMH = func() { d.setStatus(func(s *Status) { s.Focus = via(w.via()) }) }
+}
+
+// focusRetry is how long focus waits before each attempt to reconnect, the
+// last wait repeating until one works. A display manager restarts a crashed
+// X server within seconds; a new login takes longer.
+var focusRetry = []time.Duration{0, time.Second, 2 * time.Second, 5 * time.Second, 10 * time.Second, 30 * time.Second}
+
+// reconnectFocus opens a new focus watcher, trying until one opens, the
+// first try after focusRetry[attempt]. It returns the watcher, or nil if
+// ctx ends first, and the attempt to start from if that watcher's
+// connection drops soon too, so that a server that drops every connection
+// at once gets the longer waits.
+func (d *Desktop) reconnectFocus(ctx context.Context, open func() (*x11Focus, error), attempt int) (*x11Focus, int) {
+	for ; ; attempt++ {
+		if wait := focusRetry[min(attempt, len(focusRetry)-1)]; wait > 0 {
+			timer := time.NewTimer(wait)
+			select {
+			case <-timer.C:
+			case <-ctx.Done():
+				timer.Stop()
+				return nil, attempt
+			}
+		}
+		if ctx.Err() != nil {
+			return nil, attempt
+		}
+		if w, err := open(); err == nil {
+			d.watchingFocus(w)
+			return w, attempt + 1
+		}
+	}
 }
 
 // startPower subscribes to logind. The focus goroutine may be running, so
@@ -345,19 +402,20 @@ func (d *Desktop) startPower(ctx context.Context, systemBus func(context.Context
 	d.logind = l
 	d.setStatus(func(s *Status) { s.Power = via("logind PrepareForSleep") })
 	d.power = make(chan Power, 8)
-	d.closers = append(d.closers, func() { conn.Close() })
 	d.wg.Add(1)
 	go func() {
 		defer d.wg.Done()
 		defer close(d.power)
 		l.run(ctx, d.power)
+		// Closed, the connection stops godbus queueing signals that no one
+		// reads any more.
+		conn.Close()
+		reason := unknown("stopped watching")
 		if ctx.Err() == nil {
 			log.Warn("lost the system bus connection to logind")
-			d.setStatus(func(s *Status) {
-				s.Power = unknown("lost the connection to logind")
-				s.Lock = s.Power
-			})
+			reason = unknown("lost the connection to logind")
 		}
+		d.setStatus(func(s *Status) { s.Power, s.Lock = reason, reason })
 	}()
 }
 
@@ -415,9 +473,14 @@ func (d *Desktop) Locked() (bool, error) {
 	return d.locked, nil
 }
 
-// Focus returns the focus changes, starting with the window focused when
-// watching began. It is nil when focus is unknown, and closed when
-// watching stops.
+// Focus returns the focus changes. It is nil when no X11 watcher runs, as
+// on Wayland or without a display, and closed when watching stops.
+//
+// A watcher can run while focus is unknown: until a window manager that
+// keeps _NET_ACTIVE_WINDOW appears, and while it reconnects after losing
+// the X connection. So Status().Focus.Known(), not a nil channel, is what
+// says whether focus is known. The first report once it is, and the first
+// after each reconnect, names the window focused then.
 func (d *Desktop) Focus() <-chan Focus { return d.focus }
 
 // Power returns suspends, resumes, locks and unlocks. It is nil when

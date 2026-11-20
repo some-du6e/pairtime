@@ -47,5 +47,6 @@
 // when the agent asks. Focus, power and lock changes arrive as X events and
 // D-Bus signals on blocked reads, so between changes the package wakes the
 // CPU not at all and owns no timers, apart from one armed while a suspend
-// waits for Power.Ready.
+// waits for Power.Ready and one while focus waits to reconnect to an X
+// server it lost.
 package linux

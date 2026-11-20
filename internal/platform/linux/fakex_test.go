@@ -34,6 +34,7 @@ type fakeX struct {
 	reads    map[fakePropKey]int // GetProperty requests, by window and property
 	conns    []net.Conn
 	accepted int // connections accepted
+	live     int // connections not closed yet
 	seq      map[net.Conn]uint16
 	gotName  string // the authorization a client sent
 	gotData  []byte
@@ -118,17 +119,39 @@ func startFakeX(cfg fakeXConfig, addr string) (*fakeX, error) {
 		return nil, err
 	}
 	f.ln = ln
-	go f.accept()
+	go f.accept(ln)
 	return f, nil
 }
 
 func (f *fakeX) close() {
-	f.ln.Close()
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.ln.Close()
 	for _, c := range f.conns {
 		c.Close()
 	}
+}
+
+// down stops listening and drops every client, as an X server that died.
+func (f *fakeX) down() {
+	f.mu.Lock()
+	f.ln.Close()
+	f.mu.Unlock()
+	f.dropClients()
+}
+
+// up listens again after down, as the X server the display manager
+// starts in place of the one that died.
+func (f *fakeX) up(t *testing.T) {
+	t.Helper()
+	ln, err := net.Listen("unix", f.addr)
+	if err != nil {
+		t.Fatalf("listening again: %v", err)
+	}
+	f.mu.Lock()
+	f.ln = ln
+	f.mu.Unlock()
+	go f.accept(ln)
 }
 
 // dial connects a client and runs the connection setup for screen.
@@ -160,22 +183,28 @@ func (f *fakeX) dropClients() {
 	f.conns = nil
 }
 
-func (f *fakeX) accept() {
+func (f *fakeX) accept(ln net.Listener) {
 	for {
-		conn, err := f.ln.Accept()
+		conn, err := ln.Accept()
 		if err != nil {
 			return
 		}
 		f.mu.Lock()
 		f.conns = append(f.conns, conn)
 		f.accepted++
+		f.live++
 		f.mu.Unlock()
 		go f.serve(conn)
 	}
 }
 
 func (f *fakeX) serve(conn net.Conn) {
-	defer conn.Close()
+	defer func() {
+		conn.Close()
+		f.mu.Lock()
+		f.live--
+		f.mu.Unlock()
+	}()
 	head := make([]byte, 12)
 	if _, err := io.ReadFull(conn, head); err != nil {
 		return
@@ -537,11 +566,12 @@ func (f *fakeX) readsOfAny(name string) int {
 	return n
 }
 
-// connections counts the connections the server has accepted.
-func (f *fakeX) connections() int {
+// connections counts the connections the server has accepted, and those
+// of them the client hasn't closed.
+func (f *fakeX) connections() (accepted, live int) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return f.accepted
+	return f.accepted, f.live
 }
 
 func (f *fakeX) auth() (string, []byte) {

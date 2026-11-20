@@ -278,3 +278,129 @@ func TestIdleLocked(t *testing.T) {
 		})
 	}
 }
+
+// openOnFakeX opens a desktop on a fake X display whose window manager has
+// winA focused, with no buses.
+func openOnFakeX(t *testing.T, ctx context.Context) (*Desktop, *fakeX) {
+	t.Helper()
+	f, display := newFakeDisplay(t, fakeXConfig{roots: []uint32{testRoot}})
+	addTestWindows(f)
+	setWM(f, "ewmh", winA)
+	noBus := func(context.Context) (*dbus.Conn, error) { return nil, errors.New("no bus here") }
+	env := map[string]string{"XDG_SESSION_TYPE": "x11", "DISPLAY": display}
+	d := Open(ctx, Config{
+		Getenv:     func(k string) string { return env[k] },
+		SessionBus: noBus,
+		SystemBus:  noBus,
+		Hostname:   testHost,
+	})
+	t.Cleanup(func() { d.Close() })
+	if s := d.Status(); s.Idle.Via != screenSaverExtension || s.Focus.Via != focusViaXRes {
+		t.Fatalf("status %+v, want idle time and focus from the fake X server", s)
+	}
+	return d, f
+}
+
+// nextReport waits for the next focus report.
+func nextReport(t *testing.T, ch <-chan Focus) Focus {
+	t.Helper()
+	select {
+	case f, ok := <-ch:
+		if !ok {
+			t.Fatal("the focus channel closed")
+		}
+		return f
+	case <-time.After(5 * time.Second):
+		t.Fatal("no focus report in 5 s")
+	}
+	return Focus{}
+}
+
+// eventually waits up to 5 s for cond.
+func eventually(t *testing.T, what string, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for !cond() {
+		if time.Now().After(deadline) {
+			t.Fatalf("waited 5 s for this: %s", what)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func TestDesktopFocusOnFakeX(t *testing.T) {
+	cases := []struct {
+		name string
+		run  func(t *testing.T, d *Desktop, f *fakeX, cancel context.CancelFunc)
+	}{
+		{
+			name: "ending Open's ctx without Close closes Focus and the X connection behind it",
+			run: func(t *testing.T, d *Desktop, f *fakeX, cancel context.CancelFunc) {
+				focus := d.Focus()
+				if r := nextReport(t, focus); r.Window != winA || r.PID != 4242 {
+					t.Fatalf("first report %+v, want winA with pid 4242", r)
+				}
+				cancel()
+				timeout := time.After(5 * time.Second)
+				for open := true; open; {
+					select {
+					case _, open = <-focus:
+					case <-timeout:
+						t.Fatal("Focus stayed open after ctx ended")
+					}
+				}
+				// The connection Idle uses stays until Close.
+				eventually(t, "only the idle connection is left", func() bool {
+					_, live := f.connections()
+					return live == 1
+				})
+				if s := d.Status(); s.Focus.Known() {
+					t.Errorf("focus is %+v after watching stopped, want unknown", s.Focus)
+				}
+			},
+		},
+		{
+			name: "focus is unknown while the X server is down and comes back with it, naming the window focused then",
+			run: func(t *testing.T, d *Desktop, f *fakeX, cancel context.CancelFunc) {
+				focus := d.Focus()
+				nextReport(t, focus)
+				f.down()
+				eventually(t, "focus is unknown", func() bool { return !d.Status().Focus.Known() })
+				f.setCardinal(testRoot, "_NET_ACTIVE_WINDOW", atomWindow, winB)
+				f.up(t)
+				if r := nextReport(t, focus); r.Window != winB || r.PID != 777 {
+					t.Fatalf("first report after the restart %+v, want winB with pid 777", r)
+				}
+				if s := d.Status(); s.Focus.Via != focusViaXRes {
+					t.Errorf("focus is %+v after the restart", s.Focus)
+				}
+				f.setCardinal(testRoot, "_NET_ACTIVE_WINDOW", atomWindow, winA)
+				f.notify(testRoot, "_NET_ACTIVE_WINDOW")
+				if r := nextReport(t, focus); r.Window != winA || r.PID != 4242 {
+					t.Fatalf("report %+v, want winA with pid 4242 from the new connection", r)
+				}
+				// Idle reconnects too: its first sample finds the old
+				// connection dead.
+				f.setIdle(2500)
+				var got Idle
+				var err error
+				for range 2 {
+					if got, err = d.Idle(context.Background()); err == nil {
+						break
+					}
+				}
+				if err != nil || got.Any != 2500*time.Millisecond {
+					t.Errorf("idle after the restart %v, %v; want 2.5s", got.Any, err)
+				}
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			d, f := openOnFakeX(t, ctx)
+			tc.run(t, d, f, cancel)
+		})
+	}
+}

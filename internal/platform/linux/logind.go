@@ -325,6 +325,11 @@ func (l *logind) run(ctx context.Context, out chan<- Power) {
 		queue = append(queue, p)
 	}
 	for {
+		// With room in out, the select below may send even after ctx
+		// ends, so check first.
+		if ctx.Err() != nil {
+			return
+		}
 		var send chan<- Power
 		var next Power
 		if len(queue) > 0 {

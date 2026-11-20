@@ -248,6 +248,34 @@ const (
 	wmCheck    = 0x400 // the window manager's check window
 )
 
+// testRoot is the root window of the fake servers' one screen.
+const testRoot = 0x100
+
+// setWM gives f's root window the properties of a window manager: "ewmh"
+// is one that keeps _NET_ACTIVE_WINDOW, "none" is none, "stale" left a
+// check window that is gone, and "unlisted" doesn't list _NET_ACTIVE_WINDOW
+// in _NET_SUPPORTED. active is the window _NET_ACTIVE_WINDOW names.
+func setWM(f *fakeX, wm string, active uint32) {
+	switch wm {
+	case "ewmh", "unlisted":
+		f.addWindow(wmCheck)
+		f.setCardinal(testRoot, "_NET_SUPPORTING_WM_CHECK", atomWindow, wmCheck)
+		f.setCardinal(wmCheck, "_NET_SUPPORTING_WM_CHECK", atomWindow, wmCheck)
+	case "stale":
+		f.setCardinal(testRoot, "_NET_SUPPORTING_WM_CHECK", atomWindow, wmCheck)
+	}
+	supported := []string{"_NET_SUPPORTED", "_NET_CLIENT_LIST", "_NET_ACTIVE_WINDOW"}
+	if wm == "unlisted" {
+		supported = supported[:2]
+	}
+	var list []byte
+	for _, name := range supported {
+		list = put32le(list, f.atom(name))
+	}
+	f.setProp(testRoot, "_NET_SUPPORTED", atomAtom, 32, list)
+	f.setCardinal(testRoot, "_NET_ACTIVE_WINDOW", atomWindow, active)
+}
+
 // addTestWindows gives f the windows above.
 func addTestWindows(f *fakeX) {
 	for _, w := range []struct {
@@ -388,27 +416,10 @@ func TestX11Focus(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			const root = 0x100
-			f := newFakeX(t, fakeXConfig{roots: []uint32{root}, xres: tc.xres})
+			f := newFakeX(t, fakeXConfig{roots: []uint32{testRoot}, xres: tc.xres})
 			addTestWindows(f)
-			switch tc.wm {
-			case "ewmh", "unlisted":
-				f.addWindow(wmCheck)
-				f.setCardinal(root, "_NET_SUPPORTING_WM_CHECK", atomWindow, wmCheck)
-				f.setCardinal(wmCheck, "_NET_SUPPORTING_WM_CHECK", atomWindow, wmCheck)
-			case "stale":
-				f.setCardinal(root, "_NET_SUPPORTING_WM_CHECK", atomWindow, wmCheck)
-			}
-			supported := []string{"_NET_SUPPORTED", "_NET_CLIENT_LIST", "_NET_ACTIVE_WINDOW"}
-			if tc.wm == "unlisted" {
-				supported = supported[:2]
-			}
-			var list []byte
-			for _, name := range supported {
-				list = put32le(list, f.atom(name))
-			}
-			f.setProp(root, "_NET_SUPPORTED", atomAtom, 32, list)
-			f.setCardinal(root, "_NET_ACTIVE_WINDOW", atomWindow, tc.start)
+			setWM(f, tc.wm, tc.start)
+			const root = testRoot
 
 			c, err := f.dial(0, nil)
 			if err != nil {

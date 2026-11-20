@@ -188,6 +188,11 @@ func (w *x11Focus) run(ctx context.Context, out chan<- Focus) error {
 			if w.sent && f.Window == w.last {
 				continue
 			}
+			// With room in out, the select below may send even after ctx
+			// ends, so check first.
+			if err := ctx.Err(); err != nil {
+				return err
+			}
 			w.sent, w.last = true, f.Window
 			select {
 			case out <- f:
