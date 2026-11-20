@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/some-du6e/pairtime/internal/agent/presence"
 	"github.com/some-du6e/pairtime/internal/agent/procs"
 	"github.com/some-du6e/pairtime/internal/agent/sched"
 	"github.com/some-du6e/pairtime/internal/agent/state"
@@ -31,7 +32,7 @@ func TestProcsKeepAContextLive(t *testing.T) {
 		state:    store,
 		problems: make(map[string]string),
 	}
-	t.Cleanup(a.startPresence())
+	t.Cleanup(a.startPresence(presence.OS{}))
 
 	now := time.Date(2026, 11, 20, 9, 0, 0, 0, time.UTC)
 	const me, sibling = "uid:1000", "uid:1001"

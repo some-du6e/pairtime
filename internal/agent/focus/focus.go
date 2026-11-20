@@ -48,11 +48,17 @@ import (
 type Change struct {
 	// At is when focus moved, from time.Now, with its monotonic reading.
 	At time.Time
-	// PID is the process of the window in front. It is 0 when Unknown is
-	// set.
+	// PID is the process of the window in front. It is 0 when Class or
+	// Unknown is set.
 	PID int
+	// Class, when set, is the app class of a window in front that has no
+	// process to walk: event.AppNone when no window has focus, as after a
+	// click on an X11 desktop, or event.AppOther for a window whose process
+	// isn't known, as an X11 window from another host. Such a window hosts
+	// no sessions (internal/platform/linux, Focus.Payload).
+	Class event.AppClass
 	// Unknown says why pairtime can't tell which window is in front, such
-	// as a secure desktop; it is empty when PID is set.
+	// as a secure desktop; it is empty when PID or Class is set.
 	Unknown string
 }
 
@@ -63,8 +69,12 @@ type OS struct {
 	Via string
 	// Watch calls fn with each change, the first one for the window in
 	// front as it starts, until the returned stop is called. fn returns
-	// at once. Nil means this OS has no focus source yet.
+	// at once. Nil means there is no focus source, and Unknown says why.
 	Watch func(fn func(Change)) (stop func(), err error)
+	// Unknown says why there is no focus source when Watch is nil, such as
+	// a Wayland desktop, which tells other programs nothing about focus.
+	// Empty means this OS has none yet.
+	Unknown string
 	// Read reads the process table. It must be set when Watch is.
 	Read func() ([]platform.Proc, error)
 	// GOOS is the operating system whose names Read returns.
@@ -149,6 +159,10 @@ type Options struct {
 type Status struct {
 	// Via names the focus source; it is empty when there is none.
 	Via string
+	// NoSource says why the component has no running focus source: the
+	// OS has none, or it didn't start. It is empty while the source runs,
+	// and before Start.
+	NoSource string
 	// Unknown says why the window in front is unknown now, or why there
 	// is no focus source; it is empty while a window is known.
 	Unknown string
@@ -191,7 +205,7 @@ type Watcher struct {
 
 // front is the window in front, as the last change or refresh found it.
 type front struct {
-	pid  int
+	pid  int // 0 for a window with no process to walk (Change.Class)
 	id   platform.ID
 	data *event.OSFocus
 	// sessions are the sessions data was worked out from.
@@ -227,9 +241,15 @@ func (w *Watcher) Start() {
 	}
 	w.started = true
 	if w.opts.OS.Watch == nil || w.opts.OS.Read == nil {
-		// TODO(D-focus-unknown): record that focus is unknown here once
-		// os.focus can say so.
-		w.status.Unknown = "pairtime has no focus source on this OS yet"
+		// TODO(D-focus-unknown): record one os.focus with app_class
+		// unknown here once pkg/event has it (WP-EV2), so these slots
+		// credit at level C (SM 2.5). Until then nothing is recorded and
+		// Status says why.
+		reason := w.opts.OS.Unknown
+		if reason == "" {
+			reason = "pairtime has no focus source on this OS yet"
+		}
+		w.status.Unknown, w.status.NoSource = reason, reason
 		w.mu.Unlock()
 		return
 	}
@@ -243,6 +263,7 @@ func (w *Watcher) Start() {
 	w.mu.Lock()
 	if err != nil {
 		w.status.Unknown = "the focus source didn't start: " + err.Error()
+		w.status.NoSource = w.status.Unknown
 		w.setProblem("source", fmt.Sprintf("focus changes go unrecorded, because %s didn't start: %v", w.opts.OS.Via, err))
 		w.mu.Unlock()
 		w.quitOnce.Do(func() { close(w.quit) })
@@ -376,6 +397,11 @@ func (w *Watcher) handle(c Change) {
 		w.unknown(c.At, c.Unknown)
 		return
 	}
+	if c.Class != "" {
+		// No process to walk, so no app_hash and no sessions.
+		w.show(c.At, &front{data: &event.OSFocus{AppClass: c.Class}})
+		return
+	}
 	t, err := w.table()
 	if err != nil {
 		w.unknown(c.At, "couldn't read the process table: "+err.Error())
@@ -387,11 +413,16 @@ func (w *Watcher) handle(c Change) {
 		return
 	}
 	sessions := w.sessions()
-	f := &front{pid: c.PID, id: win.proc.ID(), data: w.payload(t, win, sessions), sessions: sessions}
+	w.show(c.At, &front{pid: c.PID, id: win.proc.ID(), data: w.payload(t, win, sessions), sessions: sessions})
+}
+
+// show makes f the window in front, which came there at at, tells
+// presence, and writes f's record if a project context is live then.
+func (w *Watcher) show(at time.Time, f *front) {
 	w.cur = f
 	w.known(f)
 	live := false
-	w.tell(c.At, f.data.AppClass, func(at time.Time, l bool) {
+	w.tell(at, f.data.AppClass, func(at time.Time, l bool) {
 		if live = l; live {
 			w.write(f, at)
 		}
@@ -436,6 +467,15 @@ func (w *Watcher) notBefore(at time.Time) time.Time {
 func (w *Watcher) reconsider() {
 	f := w.cur
 	if f == nil || !w.live() {
+		return
+	}
+	if f.pid == 0 {
+		// A window with no process to walk hosts no sessions, so only a
+		// context that went live since it came to the front needs its
+		// record, and not when focus has moved on meanwhile.
+		if !f.written && !w.changePending() {
+			w.write(f, w.opts.Now())
+		}
 		return
 	}
 	sessions := w.sessions()
@@ -534,9 +574,9 @@ func (w *Watcher) write(f *front, at time.Time) {
 // unknown is a change to a window pairtime can't name. It records nothing
 // and says why in Status (WP-OS2 decision 2).
 //
-// TODO(D-focus-unknown): write an os.focus record of the class that says
-// focus is unknown once pkg/event, the schema and SM have it, so the slots
-// are ambiguous instead of crediting the window that was in front before.
+// TODO(D-focus-unknown): write an os.focus with app_class unknown once
+// pkg/event has it (WP-EV2), so the slots credit at level C (SM 2.5)
+// instead of crediting the window that was in front before.
 func (w *Watcher) unknown(at time.Time, reason string) {
 	w.cur = nil
 	w.mu.Lock()

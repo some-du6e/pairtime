@@ -88,7 +88,7 @@ func runAgent(args []string, stdout, stderr io.Writer) int {
 	// agent the usual way.
 	context.AfterFunc(ctx, stop)
 
-	err = agent.Run(ctx, agent.Options{Dirs: dirs, Log: slog.New(slog.NewTextHandler(stderr, nil)), KeyStores: agentKeyStores})
+	err = runAgentMain(ctx, agent.Options{Dirs: dirs, Log: slog.New(slog.NewTextHandler(stderr, nil)), KeyStores: agentKeyStores})
 	switch {
 	case errors.Is(err, agent.ErrAlreadyRunning):
 		fmt.Fprintf(stderr, "pairtime agent: already running for %s\n", dirs.Data)
