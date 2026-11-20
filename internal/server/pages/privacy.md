@@ -19,6 +19,8 @@ This notice covers the pairtime server at {{.BaseURL}} and the pairtime program 
 
 The controller decides what happens to your data on this server and answers for it. The controller here is {{.Controller}}. To ask a question or use your rights, contact {{.Contact}}.{{if .DPO}} You can also reach Hack Club's Data Protection Officer at {{.DPO}}.{{end}}
 
+If the controller is based outside the UK and the EU, UK and EU law may require it to name a representative in each, whom you could also contact. The representative is **\[not named yet\]**.
+
 pairtime is open source under the AGPL-3.0 license, and [the code this server runs]({{.SourceURL}}) is public, so anyone can check this notice against it.
 
 ## What pairtime does
@@ -70,11 +72,11 @@ If you'd rather upload nothing, use local-only mode. pairtime still tracks your 
 
 ## Why we use your data
 
-Everything pairtime does with your data falls into one of three groups.
+Everything pairtime does with your data falls into one of three groups, each with its own legal basis. A legal basis is the reason data protection laws, such as the EU's GDPR and the UK GDPR, allow a use of your data.
 
-1. **The service you asked for.** Tracking and scoring on your computer, uploads for your own dashboard, session recaps, and the totals on your public profile if you have one.
-2. **Fraud protection.** Checks, risk scores and audits, and only on hours you submit. pairtime doesn't score your other hours for fraud.
-3. **Everything else, which needs your consent.** That's the typing module, club boards, habit insights, showing that you're building right now, sharing feedback on recaps to improve scoring, research use of pilot data, and backups with a recovery code. Each one gets its own card. Nothing is ticked for you, and "Not now" is the most prominent button. Saying no takes no feature away, and pairtime won't ask again for a year. You can turn any of them off later with one switch in Settings.
+1. **The service you asked for.** Tracking and scoring on your computer, uploads for your own dashboard, session recaps, and the totals on your public profile if you have one. The legal basis is contract, because pairtime needs the data to give you the service you signed up for.
+2. **Fraud protection.** Checks, risk scores and audits, and only on hours you submit. pairtime doesn't score your other hours for fraud. The legal basis is legitimate interests. Hack Club and its programs need to know that the hours they reward were really spent building, which keeps the rewards fair for everyone who submits honestly. You can object, as [Your right to object](#your-right-to-object) explains.
+3. **Everything else, which needs your consent.** That's the typing module, club boards, habit insights, showing that you're building right now, sharing feedback on recaps to improve scoring, research use of pilot data, and backups with a recovery code. The legal basis is your consent. Each one gets its own card. Nothing is ticked for you, and "Not now" is the most prominent button. Saying no doesn't stop you from using pairtime, and pairtime won't ask again for a year. You can turn any of them off later with one switch in Settings.
 
 One question about consent is still open. On Windows, and on Linux with X11, most minutes count as evidence level B unless the typing module is on, and a high share of level-B minutes is one of the things that raises the chance a person audits a submission. Whether that treats people who said no unfairly is a legal question that hasn't been answered yet.
 
@@ -116,6 +118,8 @@ Submitting hours to a program is always your choice. This is what happens when y
 
 Apart from these, this server sends your data nowhere.
 
+Hack Club Auth, Cloudflare and GitHub are based in the United States, and Cloudflare runs data centers around the world. So some of your data is handled outside the UK and the EU, in the United States and elsewhere. When personal data leaves the UK or the EU, the law asks for a safeguard, such as the standard contractual clauses the UK and the EU publish. The safeguards the controller relies on are **\[not named yet\]**.
+
 ## How long we keep things
 
 Every kind of data has a time limit. These tables come from the same file this server's cleanup jobs read, {{.RetentionFile}}, as it was when this server was built. A spot-check window is the time after a decision during which Hack Club can check a submission again. {{if .WindowProvisional}}Until Hack Club sets its length, pairtime keeps it open for {{.WindowMonths}} months after the decision.{{else}}It stays open for {{.WindowMonths}} months after the decision.{{end}}
@@ -136,9 +140,24 @@ On your computer:
 - Local-only mode uploads nothing.
 - "Delete everything" wipes pairtime's data on your computer, including its device key.
 
-Through the controller, you can ask for a copy of your data, ask for it to be corrected or deleted, and withdraw any consent you gave. Deleting your account deletes everything this server holds about you, except the minimal fraud record in the table above, which the deletion report lists as kept. Copies in the server's backups go as the backups expire, within {{days "server.db_snapshots"}}. Copies that programs already received, such as the outcome of a submission, are held by those programs, not by this server.{{if .PrivacyHub}} Hack Club's privacy team can also export or delete your pairtime data for you, through the same privacy hub it uses for Hackatime.{{end}}
+Through the controller, you can:
+
+- get a copy of your data, in a file you can take to another service
+- have it corrected if it's wrong
+- have it deleted
+- have the controller stop using it, apart from keeping it, while a question about it is sorted out
+- object to its use for fraud protection, as [Your right to object](#your-right-to-object) explains
+- withdraw any consent you gave, which stops that use from then on
+
+Deleting your account deletes everything this server holds about you, except the minimal fraud record in the table above, which the deletion report lists as kept. Copies in the server's backups go as the backups expire, within {{days "server.db_snapshots"}}. Copies that programs already received, such as the outcome of a submission, are held by those programs, not by this server.{{if .PrivacyHub}} Hack Club's privacy team can also export or delete your pairtime data for you, through the same privacy hub it uses for Hackatime.{{end}}
 
 Parents and guardians can contact the controller with questions or requests too.
+
+If you think the controller is handling your data wrongly, you can complain to a data protection regulator. In the UK that's the Information Commission, and in the EU it's the data protection authority of the country you live in.
+
+## Your right to object
+
+Fraud protection rests on legitimate interests, not on your consent, so you have the right to object to it. Tell the controller why. The controller then has to stop using your data for it, unless it has compelling reasons that outweigh your interests and rights, or needs the data to make or defend a legal claim. Fraud checks only ever run on hours you submit, so hours you never submit are never checked.
 
 ## Age
 

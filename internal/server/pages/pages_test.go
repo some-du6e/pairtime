@@ -151,10 +151,18 @@ func TestPrivacyNotice(t *testing.T) {
 			want: []string{"This notice isn&#39;t final.", "takes no sign-ups except test accounts for the people who run it", "The controller here is <strong>[not named yet]</strong>.", "contact <strong>[not named yet]</strong>."},
 		},
 		{
-			name:    "a named controller and contact replace the placeholders and the warning",
+			name:    "a named controller and contact replace their placeholders and the warning",
 			opts:    Options{Controller: Controller{Name: "Hack Club", Contact: "privacy@example.org"}},
 			want:    []string{"The controller here is Hack Club.", `contact <a href="mailto:privacy@example.org">privacy@example.org</a>.`},
-			notWant: []string{"isn&#39;t final", "not named yet"},
+			notWant: []string{"isn&#39;t final", "The controller here is <strong>", "contact <strong>[not named yet]"},
+		},
+		{
+			name: "with a named controller the representative and the transfers' safeguards stay marked, since no setting fills them yet (DESIGN 13.2 item 6)",
+			opts: Options{Controller: Controller{Name: "Hack Club", Contact: "privacy@example.org"}},
+			want: []string{
+				"may require it to name a representative in each, whom you could also contact. The representative is <strong>[not named yet]</strong>.",
+				"The safeguards the controller relies on are <strong>[not named yet]</strong>.",
+			},
 		},
 		{
 			name:    "a name without a contact keeps the notice marked not final",
@@ -251,6 +259,40 @@ func TestPrivacyNotice(t *testing.T) {
 				"stay on your computer, unless you submit hours: then a few prompts, and the agent replies they answered, go to the program&#39;s reviewers.",
 				"This server gets your Hack Club identity and email address, the IP address each upload comes from, and numbers",
 			},
+		},
+		{
+			name: "each purpose has its legal basis, and fraud protection names its legitimate interest (GDPR Art. 13(1)(c) and (d))",
+			want: []string{
+				"The legal basis is contract, because pairtime needs the data to give you the service you signed up for.",
+				"The legal basis is legitimate interests. Hack Club and its programs need to know that the hours they reward were really spent building",
+				"The legal basis is your consent.",
+			},
+		},
+		{
+			name: "the right to object stands apart, under a heading of its own (GDPR Art. 21(4))",
+			want: []string{
+				`<h2 id="your-right-to-object">Your right to object</h2>`,
+				"Fraud protection rests on legitimate interests, not on your consent, so you have the right to object to it.",
+				`as <a href="#your-right-to-object">Your right to object</a> explains`,
+			},
+		},
+		{
+			name: "the notice lists every right and the regulators to complain to (GDPR Art. 13(2)(b) to (d))",
+			want: []string{
+				"get a copy of your data, in a file you can take to another service",
+				"have the controller stop using it, apart from keeping it, while a question about it is sorted out",
+				"withdraw any consent you gave, which stops that use from then on",
+				"In the UK that&#39;s the Information Commission, and in the EU it&#39;s the data protection authority of the country you live in.",
+			},
+		},
+		{
+			name: "the notice says where data goes outside the UK and the EU (GDPR Art. 13(1)(f))",
+			want: []string{"So some of your data is handled outside the UK and the EU, in the United States and elsewhere."},
+		},
+		{
+			name:    "the consent cards' promise is the one the cards make, that saying no doesn't stop you using pairtime (#72)",
+			want:    []string{"Saying no doesn&#39;t stop you from using pairtime, and pairtime won&#39;t ask again for a year."},
+			notWant: []string{"takes no feature away"},
 		},
 		{
 			name: "the IP period in the prose is the schedule's",
