@@ -286,6 +286,10 @@ func TestPrivacyNotice(t *testing.T) {
 			},
 		},
 		{
+			name: "the notice says Cloudflare runs bot detection on requests to this server, and that pairtime's pages block the script it adds for that",
+			want: []string{"It also runs automated bot detection on requests to this server, and pairtime&#39;s pages block the script it adds to them for that."},
+		},
+		{
 			name: "the notice says where data goes outside the UK and the EU (GDPR Art. 13(1)(f))",
 			want: []string{"So some of your data is handled outside the UK and the EU, in the United States and elsewhere."},
 		},
@@ -435,12 +439,14 @@ func TestRoutes(t *testing.T) {
 // each page carries, so browsers don't drop it.
 func TestStyleHash(t *testing.T) {
 	s := newSite(t, Options{})
+	_, home := getHome(t, Options{}, signInOn("U0FAKEVERIFIED"))
 	pages := []struct {
 		name string
 		page []byte
 	}{
 		{name: "the privacy notice's style matches its CSP hash", page: s.privacy},
 		{name: "the evidence page's style matches its CSP hash", page: s.current},
+		{name: "the home page's style matches its CSP hash, with a form or without", page: []byte(home)},
 	}
 	for _, p := range pages {
 		t.Run(p.name, func(t *testing.T) {
@@ -451,8 +457,10 @@ func TestStyleHash(t *testing.T) {
 			}
 			sum := sha256.Sum256([]byte(css))
 			want := "style-src 'sha256-" + base64.StdEncoding.EncodeToString(sum[:]) + "'"
-			if !strings.Contains(s.csp, want) {
-				t.Errorf("CSP %q doesn't allow the page's style; want %s", s.csp, want)
+			for _, csp := range []string{s.csp, s.cspForm} {
+				if !strings.Contains(csp, want) {
+					t.Errorf("CSP %q doesn't allow the page's style; want %s", csp, want)
+				}
 			}
 		})
 	}

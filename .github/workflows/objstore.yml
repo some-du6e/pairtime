@@ -8,6 +8,13 @@
 # hand:
 #
 #   gh workflow run objstore.yml --ref <branch>
+#   gh workflow run objstore.yml --ref <branch> -f minio=source
+#
+# The minio input picks the server. image, the default and what PRs and
+# the schedule use, is Bitnami's last build of MinIO RELEASE.2025-07-23,
+# pinned by digest. source builds the same release from MinIO's own source
+# with go install and starts it in a step, for the day that image is gone
+# too (D-minio-guard). restore-drill.yml takes the same input and pins.
 name: objstore
 
 on:
@@ -19,6 +26,12 @@ on:
     # Mondays, after nightly.yml and postgres.yml, so they don't queue together.
     - cron: "0 4 * * 1"
   workflow_dispatch:
+    inputs:
+      minio:
+        description: "image: Bitnami's MinIO, pinned by digest; source: MinIO built from its source at the same release"
+        type: choice
+        options: [image, source]
+        default: image
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -31,7 +44,8 @@ jobs:
   minio:
     name: object storage client against MinIO
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # Building MinIO from source takes several minutes of this.
+    timeout-minutes: 30
     services:
       minio:
         # MinIO's own images are gone from Docker Hub and Quay, and its
@@ -40,8 +54,9 @@ jobs:
         # the server by itself, which a service container needs, since it
         # can't be given a command. MINIO_SKIP_CLIENT keeps its entrypoint
         # from starting and stopping the server once before the real start;
-        # TestMinIO creates the buckets.
-        image: bitnamilegacy/minio:2025.7.23-debian-12-r5@sha256:6dabb4a2088c9a79908de3bc05f4586c23ad2182c8908e7e3acbf61c1467fb20
+        # TestMinIO creates the buckets. With minio=source the image is
+        # empty, which starts no service container, and a step runs MinIO.
+        image: ${{ inputs.minio != 'source' && 'bitnamilegacy/minio:2025.7.23-debian-12-r5@sha256:6dabb4a2088c9a79908de3bc05f4586c23ad2182c8908e7e3acbf61c1467fb20' || '' }}
         env:
           MINIO_ROOT_USER: pairtime-ci
           MINIO_ROOT_PASSWORD: pairtime-ci-not-a-secret
@@ -72,11 +87,31 @@ jobs:
             go.mod
             go.sum
 
+      - name: MinIO from source
+        if: inputs.minio == 'source'
+        env:
+          # The same release as the image: RELEASE.2025-07-23T15-54-02Z.
+          MINIO_MODULE: github.com/minio/minio@v0.0.0-20250723155402-7ced9663e6a7
+          MINIO_ROOT_USER: pairtime-ci
+          MINIO_ROOT_PASSWORD: pairtime-ci-not-a-secret
+        run: |
+          # MinIO's go.mod names the Go it needs, which go install may fetch.
+          GOTOOLCHAIN=auto go install "$MINIO_MODULE"
+          minio="$(go env GOPATH)/bin/minio"
+          "$minio" --version
+          mkdir "$RUNNER_TEMP/minio-data"
+          nohup "$minio" server "$RUNNER_TEMP/minio-data" --address :9000 > "$RUNNER_TEMP/minio.log" 2>&1 &
+          echo "started MinIO from source, pid $!"
+
       - name: Wait for MinIO
+        env:
+          SERVICE: ${{ job.services.minio.id }}
         run: |
           for _ in $(seq 90); do
             if curl -fsS -o /dev/null http://127.0.0.1:9000/minio/health/ready; then
-              docker exec "${{ job.services.minio.id }}" minio --version || true
+              if [ -n "$SERVICE" ]; then
+                docker exec "$SERVICE" minio --version || true
+              fi
               exit 0
             fi
             sleep 1
@@ -93,7 +128,9 @@ jobs:
           grep -E -e '--- (PASS|FAIL|SKIP): TestMinIO' <<<"$out"
           # A skipped test passes go test, so a green run proves nothing
           # unless TestMinIO ran, and the acceptance check with it.
-          for t in TestMinIO TestMinIO/a_second_put_to_the_same_evidence_key_is_refused; do
+          for t in TestMinIO TestMinIO/a_second_put_to_the_same_evidence_key_is_refused \
+            TestMinIO/a_snapshot_of_several_parts_reads_back_byte_for_byte \
+            TestMinIO/a_failed_part_aborts_the_upload,_so_MinIO_keeps_no_parts; do
             if ! grep -q -- "--- PASS: $t " <<<"$out"; then
               echo "::error::$t didn't run and pass"
               exit 1
@@ -102,4 +139,11 @@ jobs:
 
       - name: MinIO's log
         if: failure()
-        run: docker logs "${{ job.services.minio.id }}" 2>&1 | tail -n 100
+        env:
+          SERVICE: ${{ job.services.minio.id }}
+        run: |
+          if [ -n "$SERVICE" ]; then
+            docker logs "$SERVICE" 2>&1 | tail -n 100
+          else
+            tail -n 100 "$RUNNER_TEMP/minio.log"
+          fi

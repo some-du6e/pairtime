@@ -1,0 +1,144 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Builds the server image and pushes it to ghcr.io/some-du6e/pairtimed
+# (docs/PLAN.md, WP-OP1). deploy/compose.yml pins one of its pushes by tag
+# and digest, and the host only pulls (DESIGN 10.1). Client releases stay in
+# release.yml, under its signing key; this workflow never runs on a tag.
+#
+# Each run builds pairtimed for linux/amd64 and linux/arm64 from the commit,
+# with the Go setup-go installs from go.mod and no build cache, and pushes
+# both under sha-<12 hex digits of the commit>, and under main when the
+# commit is on main. The run's summary gives the line compose.yml pins:
+#
+#   image: ghcr.io/some-du6e/pairtimed:sha-<commit>@sha256:<digest>
+#
+# It runs on pushes to main that change the server, and by hand:
+#
+#   gh workflow run server-image.yml --ref main
+name: server-image
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - cmd/pairtimed/**
+      - internal/server/**
+      - deploy/**
+      - Dockerfile.pairtimed
+      - go.mod
+      - go.sum
+      - .github/workflows/server-image.yml
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  # To check the code out, and to push the image; nothing else.
+  contents: read
+  packages: write
+
+env:
+  # pairtime never uses cgo (AGENTS.md), and the image is built with the Go
+  # setup-go installed from go.mod, never one fetched mid-build.
+  CGO_ENABLED: "0"
+  GOTOOLCHAIN: local
+  IMAGE: ghcr.io/some-du6e/pairtimed
+
+jobs:
+  image:
+    name: build and push the server image
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    steps:
+      # Actions are pinned to commit SHAs; tags can be moved. Dependabot bumps them.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version-file: go.mod
+          # No build cache: an image that may be deployed builds from source
+          # alone, so a poisoned cache entry can't end up in it.
+          cache: false
+
+      - name: pairtimed for both Linux targets
+        run: |
+          short=${GITHUB_SHA::12}
+          version=v0.0.0-main.$short
+          date=$(TZ=UTC git log -1 --format=%cd --date=format-local:%Y-%m-%dT%H:%M:%SZ)
+          pkg=github.com/some-du6e/pairtime/internal/version
+          ldflags="-s -w -X $pkg.Version=$version -X $pkg.Commit=$GITHUB_SHA -X $pkg.Date=$date"
+          ctx=$RUNNER_TEMP/image
+          for goarch in amd64 arm64; do
+            GOOS=linux GOARCH=$goarch go build -trimpath -buildvcs=false -ldflags="$ldflags" \
+              -o "$ctx/dist/linux_$goarch/pairtimed" ./cmd/pairtimed
+          done
+          go run ./tools/release notices -bin "$ctx/dist/linux_amd64/pairtimed" -out "$ctx/dist/THIRD_PARTY_NOTICES.txt"
+          cp Dockerfile.pairtimed LICENSE "$ctx/"
+          got=$("$ctx/dist/linux_amd64/pairtimed" version | head -n 1)
+          echo "$got"
+          case "$got" in
+            "pairtimed $version (commit ${GITHUB_SHA:0:12}, $date, "*) ;;
+            *)
+              echo "::error::pairtimed version didn't report the -ldflags values"
+              exit 1
+              ;;
+          esac
+          {
+            echo "CTX=$ctx"
+            echo "VERSION=$version"
+            echo "TAG=sha-$short"
+          } >> "$GITHUB_ENV"
+
+      - name: Build and push
+        env:
+          ACTOR: ${{ github.actor }}
+          TOKEN: ${{ github.token }}
+        run: |
+          tags=(-t "$IMAGE:$TAG")
+          if [ "$GITHUB_REF" = refs/heads/main ]; then
+            tags+=(-t "$IMAGE:main")
+          fi
+          docker login ghcr.io -u "$ACTOR" --password-stdin <<<"$TOKEN"
+          docker buildx create --use --driver docker-container --name server-image > /dev/null
+          docker buildx build -f "$CTX/Dockerfile.pairtimed" --platform linux/amd64,linux/arm64 --push \
+            --build-arg VERSION="$VERSION" --build-arg COMMIT="$GITHUB_SHA" \
+            --metadata-file "$RUNNER_TEMP/image.json" "${tags[@]}" "$CTX"
+          digest=$(jq -r '."containerimage.digest"' "$RUNNER_TEMP/image.json")
+          case "$digest" in
+            sha256:*) ;;
+            *)
+              echo "::error::the push gave no digest"
+              exit 1
+              ;;
+          esac
+          echo "PINNED=$IMAGE:$TAG@$digest" >> "$GITHUB_ENV"
+          # gh run view shows annotations, so the line can be read without a browser.
+          echo "::notice title=Pin this image in deploy/compose.yml::image: $IMAGE:$TAG@$digest"
+
+      - name: The pushed image starts
+        # Pulled back by digest and run: both programs answer, and it runs
+        # as the nonroot user.
+        run: |
+          docker run --rm --platform linux/amd64 "$PINNED" pairtimed version
+          docker run --rm --platform linux/amd64 "$PINNED" litestream version
+          user=$(docker image inspect "$PINNED" --format '{{.Config.User}}')
+          if [ "$user" != "65532:65532" ]; then
+            echo "::error::the image runs as '$user', not 65532:65532"
+            exit 1
+          fi
+          {
+            echo "### The server image"
+            echo
+            echo "deploy/compose.yml pins it with this line (deploy/runbook.md, The image pin):"
+            echo
+            echo '```yaml'
+            echo "    image: $PINNED"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

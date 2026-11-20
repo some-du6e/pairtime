@@ -20,8 +20,10 @@
 //
 // keys/keystore.json says which store holds K_dev, with the installation's
 // random id and K_dev's id, a public fingerprint: HKDF-SHA256 of K_dev with
-// info "pairtime/v1/key-id", 16 bytes. It holds no secret. Inspect reads it
-// alone, so doctor can say where the key is without asking for it.
+// info "pairtime/v1/key-id", 16 bytes. Once the ledger writer has started
+// K_dev's chain, it also holds that chain's device id (RecordChain). It
+// holds no secret. Inspect reads it alone, so doctor can say where the key
+// is without asking for it.
 //
 // # What the keystore never does
 //
@@ -387,6 +389,58 @@ func (k *Keystore) Status() Status {
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	return k.m.status(k.o.dir)
+}
+
+// Chain returns the device id of the ledger chain this installation's K_dev
+// writes, as RecordChain recorded it, or "" while the ledger writer hasn't
+// started one.
+func (k *Keystore) Chain() string {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	return k.m.Chain
+}
+
+// RecordChain records in keystore.json that K_dev writes the ledger chain
+// of the device deviceID. One K_dev writes one chain (ledger-v1 3), because
+// the nonces and token salts are keyed by the sequence number alone, and a
+// second chain would number its records from 1 again. The ledger writer
+// records each chain before the chain's first record, and a chain it finds
+// that keystore.json doesn't name yet before it writes to it, so a ledger
+// directory that is deleted or emptied leaves the key's chain on record
+// here (internal/agent/ledger's ErrKeyReuse). Recording the same id again
+// does nothing, and recording another one fails.
+func (k *Keystore) RecordChain(deviceID string) error {
+	if !isDeviceID(deviceID) {
+		return fmt.Errorf("keys: %q isn't a device id", deviceID)
+	}
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	if k.m.Chain == deviceID {
+		return nil
+	}
+	unlock, err := k.o.lock()
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	m, err := k.reread() // Archive may have run in another process
+	if err != nil {
+		return err
+	}
+	k.m = m
+	switch m.Chain {
+	case deviceID:
+		return nil
+	case "":
+	default:
+		return fmt.Errorf("keys: the device key already writes the ledger chain of device %s, so it can't start the chain of %s", m.Chain, deviceID)
+	}
+	m.Chain = deviceID
+	if err := writeMarker(k.o.dir, m); err != nil {
+		return fmt.Errorf("keys: writing keystore.json: %w", err)
+	}
+	k.m = m
+	return nil
 }
 
 // Format writes a placeholder whatever the verb, so printing or logging a

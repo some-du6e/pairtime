@@ -1,0 +1,16 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "description": "Bumps the deploy bundle's pinned images, each as a PR whose restore drill must pass before it merges (DESIGN 10.4; deploy/runbook.md, Upgrades). Dependabot keeps the actions current (.github/dependabot.yml), so Renovate reads only these two files. Litestream's version in Dockerfile.pairtimed is bumped by hand, since its two SHA-256 sums change with it.",
+  "enabledManagers": ["docker-compose", "dockerfile"],
+  "includePaths": ["deploy/compose.yml", "Dockerfile.pairtimed"],
+  "pinDigests": true,
+  "commitMessagePrefix": "deploy:",
+  "prConcurrentLimit": 3,
+  "packageRules": [
+    {
+      "description": "pairtimed's images are tagged sha-<commit> by server-image.yml, which have no order Renovate can follow, so a PR pins a newer one by hand (deploy/runbook.md, The image pin).",
+      "matchPackageNames": ["ghcr.io/some-du6e/pairtimed"],
+      "enabled": false
+    }
+  ]
+}
