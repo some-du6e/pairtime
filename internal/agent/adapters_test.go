@@ -351,6 +351,13 @@ func TestHookCallsReachTheLedger(t *testing.T) {
 					t.Errorf("counts %+v", st)
 				}
 			})
+			t.Run("once the agent stops, no call is left pending or held on disk", func(t *testing.T) {
+				for _, name := range []string{r.dirs.Held(), r.dirs.Held() + ".replay", r.dirs.Held() + pendingSuffix} {
+					if _, err := os.Stat(name); !errors.Is(err, fs.ErrNotExist) {
+						t.Errorf("%s is there (%v)", filepath.Base(name), err)
+					}
+				}
+			})
 			k, _ := deviceKeys(t, r.dirs, []keys.Store{})
 			checkExpected(t, readLedger(t, r.dirs, event.SourceHook), k)
 		})
@@ -451,6 +458,58 @@ func TestHookCallsBeforeTheKeystore(t *testing.T) {
 						t.Errorf("no: %d records %+v", len(recs), recs)
 					}
 				})
+			}
+		})
+	}
+}
+
+// TestHookCallsAKilledAgentAcked checks that calls an agent acked and
+// hadn't parsed when it was killed, which it wrote to held.jsonl.pending
+// before each ack, are parsed by the next start, as they would have been.
+func TestHookCallsAKilledAgentAcked(t *testing.T) {
+	calls := readCapture(t)[:2] // the session's start, and its first prompt
+	r := newHookReplay(t)
+	if err := os.MkdirAll(r.dirs.Data, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	var pending []byte
+	for _, c := range calls {
+		c.Stdin = bytes.ReplaceAll(c.Stdin, []byte(captureHome), []byte(r.home))
+		// As the killed run took them in: over the socket, from under the
+		// captured parents (adapters.DeliveryOf).
+		line, err := heldLine(adapters.DeliveryOf(event.HarnessClaudeCode, c, adapters.Walked, calls[0].Arrived))
+		if err != nil {
+			t.Fatal(err)
+		}
+		pending = append(pending, line...)
+	}
+	if err := os.WriteFile(r.dirs.Held()+pendingSuffix, pending, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	a := startAgent(t, r.options([]keys.Store{}))
+	waitParsed(t, a, uint64(len(calls)))
+	a.cancel()
+	if err := a.waitExit(t); err != nil {
+		t.Fatal(err)
+	}
+	_, secret := deviceKeys(t, r.dirs, []keys.Store{})
+	recs := readLedger(t, r.dirs, event.SourceHook)
+	_, pendingErr := os.Stat(r.dirs.Held() + pendingSuffix)
+	checks := []struct {
+		name string
+		ok   bool
+	}{
+		{"the next start makes the calls' records: the session's start from the walk, then its prompt",
+			len(recs) == 2 && recs[0].ev.Kind() == event.KindSessionStart && recs[1].ev.Kind() == event.KindPromptSubmit &&
+				recs[0].ev.Via == event.ViaHook && recs[1].ev.Via == event.ViaHook},
+		{"they are keyed under this installation's K_session",
+			len(recs) == 2 && recs[1].ev.SessionKey == adapters.NewKeys(secret).Session(captureSession)},
+		{"the pending log is gone once they are parsed", errors.Is(pendingErr, fs.ErrNotExist)},
+	}
+	for _, c := range checks {
+		t.Run(c.name, func(t *testing.T) {
+			if !c.ok {
+				t.Errorf("no: %d records %+v, pending log %v", len(recs), recs, pendingErr)
 			}
 		})
 	}

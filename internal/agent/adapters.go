@@ -69,9 +69,14 @@ const keyRetry = time.Minute
 // agent took them in once the keys and the writer are there, in this run
 // or, after a stop, in the next.
 //
-// A call is acked once the journal has its id and the host its copy in
-// memory, and the worker parses or holds it moments later. An agent killed
-// in between loses it, as a crash loses the ledger's unsealed records.
+// The journal keeps no bodies, so before the socket acks a call, add also
+// appends it to held.jsonl.pending with one write and no flush, as the
+// journal writes its line: a call survives the agent being killed before
+// the worker parses or holds it (inbox.Sink). The worker empties the file
+// once every call in it is parsed or held, and the next start parses what a
+// killed run left there. A call whose records were written in the moment
+// before a kill, ahead of the emptying, is parsed again: twice rather than
+// never.
 type adapterHost struct {
 	a    *agent
 	goos string
@@ -88,6 +93,12 @@ type adapterHost struct {
 	held    int          // calls waiting in held.jsonl
 	dropped uint64       // calls lost because held.jsonl was full
 	saveDue bool
+	// pending is held.jsonl.pending, open once add has written to it, and
+	// pendingSize how much it holds. add writes it and the worker empties
+	// it, both under mu.
+	pending     *os.File
+	pendingSize int64
+	pendingBad  bool // the last write to it failed, and doctor heard so
 
 	kick chan struct{}
 	stop chan struct{}
@@ -197,6 +208,7 @@ func (a *agent) adaptersHost() *adapterHost {
 // the adapters' memory, the watcher's cursors and the project map.
 func (a *agent) startAdapters() func() {
 	h := a.adaptersHost()
+	h.recoverPending()
 	h.mu.Lock()
 	h.started = true
 	h.mu.Unlock()
@@ -253,20 +265,123 @@ func (h *adapterHost) attach(w *ledger.Writer) {
 	h.poke()
 }
 
-// add takes a call the hook sink stored (hookSteps.record). It never
-// blocks the hook: the worker parses it, or holds it while the agent has
-// no keys. A call that comes after the host stopped, which the agent's
-// stop order rules out, is held for the next run.
+// add takes a call the hook sink stored (hookSteps.record), before the
+// socket acks it. It writes the call to held.jsonl.pending, once, and
+// leaves the rest to the worker, which parses it, or holds it while the
+// agent has no keys. A call that comes after the host stopped, which the
+// agent's stop order rules out, is held for the next run.
 func (h *adapterHost) add(d inbox.Delivery) {
+	line, lineErr := heldLine(d)
 	h.mu.Lock()
 	if h.closed {
 		h.mu.Unlock()
 		h.hold([]inbox.Delivery{d})
 		return
 	}
+	err := lineErr
+	if err == nil {
+		err = h.writePendingLocked(line)
+	}
+	was := h.pendingBad
+	h.pendingBad = err != nil
 	h.queue = append(h.queue, d)
 	h.mu.Unlock()
+	switch {
+	case err != nil:
+		// The call goes on in memory alone.
+		h.a.setProblem("adapters.pending", fmt.Sprintf("hook calls the agent took in can be lost if it is killed before it parses them, because it can't write them down: %v", err))
+	case was:
+		h.a.setProblem("adapters.pending", "")
+	}
 	h.poke()
+}
+
+// pendingSuffix names held.jsonl.pending, beside held.jsonl.
+const pendingSuffix = ".pending"
+
+// writePendingLocked appends a call's line to held.jsonl.pending with one
+// write, opening the file on first use. It is opened without O_APPEND,
+// which on Windows gives a handle that can't truncate it; add alone
+// writes, so writes land at the end anyway. h.mu is held.
+func (h *adapterHost) writePendingLocked(line []byte) error {
+	if h.pending == nil {
+		f, err := os.OpenFile(h.a.dirs.Held()+pendingSuffix, os.O_WRONLY|os.O_CREATE, 0o600)
+		if err != nil {
+			return err
+		}
+		end, err := f.Seek(0, io.SeekEnd)
+		if err != nil {
+			f.Close()
+			return err
+		}
+		h.pending, h.pendingSize = f, end
+	}
+	if h.pendingSize+int64(len(line)) > inbox.MaxSpool {
+		return errors.New("held.jsonl.pending is full")
+	}
+	n, err := h.pending.Write(line)
+	h.pendingSize += int64(n)
+	return err
+}
+
+// donePending empties held.jsonl.pending once every call add wrote to it
+// is parsed or held, which an empty queue says under the lock add writes
+// with, and at the last step closes and deletes it.
+func (h *adapterHost) donePending(last bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.pending == nil || len(h.queue) > 0 {
+		return
+	}
+	if h.pendingSize > 0 {
+		if err := h.pending.Truncate(0); err != nil {
+			h.a.log.Warn("couldn't empty held.jsonl.pending", "err", err)
+			return
+		}
+		if _, err := h.pending.Seek(0, io.SeekStart); err != nil {
+			h.a.log.Warn("couldn't empty held.jsonl.pending", "err", err)
+			return
+		}
+		h.pendingSize = 0
+	}
+	if last {
+		h.pending.Close()
+		h.pending = nil
+		os.Remove(h.a.dirs.Held() + pendingSuffix)
+	}
+}
+
+// recoverPending moves what held.jsonl.pending holds, calls a run that was
+// killed had acked and not yet parsed or held, to the end of held.jsonl,
+// whose replay then parses them after the calls held before them.
+// startAdapters calls it before the socket can deliver a call.
+func (h *adapterHost) recoverPending() {
+	name := h.a.dirs.Held() + pendingSuffix
+	src, err := os.Open(name)
+	if errors.Is(err, fs.ErrNotExist) {
+		return
+	}
+	if err != nil {
+		h.a.log.Warn("the hook calls an earlier run left pending can't be read", "err", err)
+		return
+	}
+	dst, err := os.OpenFile(h.a.dirs.Held(), os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o600)
+	if err == nil {
+		// Each line starts with a newline (heldLine), so the calls stay
+		// whole whatever held.jsonl ends with.
+		_, err = io.Copy(dst, src)
+		if cerr := dst.Close(); err == nil {
+			err = cerr
+		}
+	}
+	src.Close()
+	if err != nil {
+		h.a.log.Warn("the hook calls an earlier run left pending couldn't be held", "err", err)
+		return
+	}
+	if err := os.Remove(name); err != nil {
+		h.a.log.Warn("couldn't delete held.jsonl.pending once held", "err", err)
+	}
 }
 
 // saveSoon has the worker save state.json at its next step, as after a
@@ -309,6 +424,7 @@ func (h *adapterHost) run() {
 			h.step(false)
 		case <-h.stop:
 			h.step(true)
+			h.donePending(true)
 			if g := h.git.Load(); g != nil {
 				g.close() // its held changes go to the ledger first
 			}
@@ -334,6 +450,7 @@ func (h *adapterHost) step(last bool) {
 
 	if !h.prepare() {
 		h.hold(batch)
+		h.donePending(false)
 		return
 	}
 	h.mu.Lock()
@@ -345,6 +462,7 @@ func (h *adapterHost) step(last bool) {
 	for _, d := range batch {
 		h.handle(d)
 	}
+	h.donePending(false)
 	if saveDue && !last {
 		h.save(false)
 	}
