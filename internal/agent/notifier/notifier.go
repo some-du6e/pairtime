@@ -27,11 +27,12 @@
 //     (PA 4.4).
 //   - A note that finds the screen locked waits instead of appearing on the
 //     lock screen, where anyone near the computer could read it. It goes out
-//     on UserPresent, if it is still fresh then. A newer note takes its
-//     place and asks the OS afresh, so one missed unlock can't hold back
-//     more than one note. Only the Windows backend can tell a locked screen
-//     so far; on macOS and Linux the desktop's own lock-screen settings
-//     decide what a locked screen shows.
+//     on UserPresent, which the coach calls on unlock and resume, if it is
+//     still fresh then. A newer note takes its place and asks the OS
+//     afresh, so one missed unlock can't hold back more than one note. Only
+//     the Windows backend can tell a locked screen so far; on macOS and
+//     Linux the desktop's own lock-screen settings decide what a locked
+//     screen shows.
 //
 // Notify never blocks. Show runs on a goroutine that exists only while a
 // note is on its way to the screen, under a deadline, and an idle notifier
@@ -500,9 +501,16 @@ func (n *Notifier) run(ctx context.Context, cancel context.CancelFunc, note Note
 }
 
 // UserPresent tells the notifier that someone is at the screen again: the
-// screen was unlocked, or the computer woke. The presence and power
-// components call it (WP-OS1, WP-OS3, WP-OS4). A note that waited for the
+// screen was unlocked, or the computer woke. A note that waited for the
 // screen goes out now, unless it went stale or quiet hours began meanwhile.
+//
+// The coach calls it, on every unlock and resume (WP-CO1 in docs/PLAN.md).
+// It hears them from internal/agent/presence, whose Sampler.Power gets
+// every lock, unlock, suspend and resume from the OS's watchers, in or out
+// of a project context: WP-CO1 adds a hook there beside Options.Seal, which
+// hears suspends and locks the same way, and reads the same events to end
+// work sessions. Until then nothing calls UserPresent, and a note that
+// found the screen locked waits until a newer note takes its place.
 func (n *Notifier) UserPresent() {
 	set := n.settings()
 	now := n.clock()

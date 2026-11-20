@@ -84,7 +84,8 @@ type agent struct {
 	journal *inbox.Journal // nil when it couldn't be opened
 	ipcSrv  *ipc.Server    // nil when hooks can't reach the agent
 	// notifier shows the coach's notification when a work session ends
-	// (WP-OS8); the coach calls it (WP-CO1).
+	// (WP-OS8). The coach calls its Notify, and its UserPresent on unlock
+	// and resume (WP-CO1).
 	notifier *notifier.Notifier
 
 	presence *presence.Sampler // presence and power (DESIGN 3.3)
