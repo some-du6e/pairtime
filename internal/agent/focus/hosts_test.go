@@ -17,9 +17,9 @@ import (
 
 var t0 = time.Date(2026, 11, 20, 14, 0, 0, 0, time.UTC)
 
-// proc is a Windows process that started min minutes after t0.
-func proc(pid, ppid int, name string, min int) platform.Proc {
-	return platform.Proc{PID: pid, PPID: ppid, Name: name, Start: t0.Add(time.Duration(min) * time.Minute), Owner: "session:1"}
+// proc is a Windows process that started mins minutes after t0.
+func proc(pid, ppid int, name string, mins int) platform.Proc {
+	return platform.Proc{PID: pid, PPID: ppid, Name: name, Start: t0.Add(time.Duration(mins) * time.Minute), Owner: "session:1"}
 }
 
 // desktop is a Windows desktop with every kind of window the hosting rule

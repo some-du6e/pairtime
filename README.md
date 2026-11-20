@@ -19,8 +19,9 @@ One Go module holds the client, the server and the code they share.
 | `pkg/event` | The event model from the [struggle-metric spec](docs/design/struggle-metric.md): the envelope, the 18 event kinds, the records the scorer derives from them, and validation for all of it |
 | `internal/agent` | The background agent: its data directories, the single-instance lock, `config.toml`, `state.json`, the scheduler every timer goes through, and the HTTP server on 127.0.0.1 |
 | `internal/agent/presence` | Presence and power: idle-time samples on each 15-second slot boundary and suspend, resume, lock and unlock, recorded only while a project context is live (DESIGN 3.3, D14) |
+| `internal/agent/focus` | Focus: an `os.focus` record each time another window comes to the front, with its app class, the harness sessions it hosts and a keyed hash of the app, recorded only while a project context is live (DESIGN 3.3, SM 3.2). Window titles are never read |
 | `internal/agent/keys` | The device keystore: the device key `K_dev`, made once per install and kept in the OS's secret store or, failing that, a user-only file, and the ledger keys derived from it |
-| `internal/platform/windows` | Win32 calls without cgo: input idle time, suspend and lock notifications, EcoQoS, and DPAPI, which keeps the device key. No keyboard listener of any kind |
+| `internal/platform/windows` | Win32 calls without cgo: input idle time, suspend and lock notifications, which window is in front and its process, the process table, EcoQoS, and DPAPI, which keeps the device key. No keyboard listener of any kind |
 | `internal/platform/darwin`, `internal/platform/linux` | What macOS and Linux report about idle time, focus, sleep and screen lock, and the device keystore's half on each: the Keychain on macOS, the Secret Service on Linux |
 | `internal/webui` | The local dashboard's built files, embedded in the client. The repo carries a placeholder, so Go builds never need Node |
 | `web` | The web UI in Svelte 5 and TypeScript: the local dashboard the agent serves, the server UI, and the components they share. [web/README.md](web/README.md) says how it builds |
