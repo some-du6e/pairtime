@@ -119,8 +119,11 @@ var envName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 //   - in single quotes, taken as written. It can't hold a ' or end in a
 //     '\', since compose reads \' as a quote inside the value.
 //   - in double quotes, with no '$' or '\', which compose expands.
-//   - unquoted, with no '$' or '\', and no '#' after a space or tab, which
-//     compose reads as the start of a comment.
+//   - unquoted, with no '$' or '\', and no '#' after a space or a tab.
+//     Compose cuts an unquoted value at " #" and reads the rest as a
+//     comment. It keeps a '#' after a tab, but godotenv, which compose's
+//     parser is a port of, cuts there too, and such a line reads as a
+//     comment, so it is refused as well.
 //
 // Nothing may follow a closing quote, and no line may hold a control
 // character other than tab or a space other than ' ' and tab. Every line is
@@ -195,8 +198,11 @@ func envValue(raw string) (string, error) {
 		if strings.ContainsAny(v, `$\`) {
 			return "", errors.New(`an unquoted value can't hold '$' or '\', which compose expands; put the value in single quotes`)
 		}
-		if strings.Contains(v, " #") || strings.Contains(v, "\t#") {
-			return "", errors.New("compose reads a '#' after a space or tab as the start of a comment; put the value in single quotes")
+		if strings.Contains(v, " #") {
+			return "", errors.New("compose cuts an unquoted value at ' #' and reads the rest as a comment; put the value in single quotes")
+		}
+		if strings.Contains(v, "\t#") {
+			return "", errors.New("a '#' after a tab in an unquoted value reads as a comment, though compose keeps it in the value; put the value in single quotes")
 		}
 		return v, nil
 	}
