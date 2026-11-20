@@ -241,22 +241,36 @@ func TestGrant(t *testing.T) {
 						t.Errorf("Referrer-Policy = %q, want same-origin, so the form's POST carries this server's Origin", rp)
 					}
 				}},
-				{name: "after 10 wrong codes a session gets no more tries, even with the right code", run: func(t *testing.T, h *harness) {
+				{name: "after 10 wrong codes an account gets no more tries, even with the right code, and signing in again doesn't reset it", run: func(t *testing.T, h *harness) {
 					b := h.signIn(verified("ident!teen1", "U0TEEN1"))
 					c := h.requestCode(testDeviceID)
 					tok := b.csrf(device.PagePath)
-					for i := range 10 {
+					for i := range 5 {
 						if r := b.post(device.PagePath, url.Values{"csrf": {tok}, "user_code": {"BBBB-BBBB"}}); r.status != http.StatusOK {
 							t.Fatalf("wrong code %d answered %d", i+1, r.status)
 						}
 					}
-					r := b.post(device.PagePath, url.Values{"csrf": {tok}, "user_code": {c.UserCode}})
+					// Codes posted straight to the decision count too.
+					for i := range 5 {
+						if r := b.post(device.DecisionPath, url.Values{"csrf": {tok}, "user_code": {"CCCC-CCCC"}, "decision": {"approve"}}); r.status != http.StatusOK {
+							t.Fatalf("wrong decision %d answered %d", i+1, r.status)
+						}
+					}
+					again := h.signIn(verified("ident!teen1", "U0TEEN1"))
+					againTok := again.csrf(device.PagePath)
+					r := again.post(device.PagePath, url.Values{"csrf": {againTok}, "user_code": {c.UserCode}})
 					if r.status != http.StatusTooManyRequests || strings.Contains(r.body, `value="approve"`) {
-						t.Errorf("the right code after 10 wrong ones answered %d:\n%s", r.status, r.body)
+						t.Errorf("the right code after 10 wrong ones, from a new sign-in, answered %d:\n%s", r.status, r.body)
+					}
+					if r := again.post(device.DecisionPath, url.Values{"csrf": {againTok}, "user_code": {c.UserCode}, "decision": {"approve"}}); r.status != http.StatusTooManyRequests {
+						t.Errorf("a decision after 10 wrong codes answered %d, want 429", r.status)
+					}
+					if _, tr := h.poll(c.DeviceCode); tr.Error != "authorization_pending" {
+						t.Errorf("poll = %q, want authorization_pending", tr.Error)
 					}
 					other := h.signIn(verified("ident!teen2", "U0TEEN2"))
 					if r := other.decide(c.UserCode, false); !strings.Contains(r.body, "<h1>Not linked</h1>") {
-						t.Errorf("another session's try answered %d:\n%s", r.status, r.body)
+						t.Errorf("another account's try answered %d:\n%s", r.status, r.body)
 					}
 				}},
 			}

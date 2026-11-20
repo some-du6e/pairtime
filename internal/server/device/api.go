@@ -80,7 +80,7 @@ func (s *Service) registerKey(w http.ResponseWriter, r *http.Request) {
 		writeOAuthError(w, http.StatusConflict, "key_already_registered", "This device already has a different key. Run pairtime logout, then pairtime login, to link it with a new one.")
 		return
 	case errors.Is(err, ErrRevoked):
-		w.Header().Set("WWW-Authenticate", `Bearer error="invalid_token"`)
+		w.Header().Set("WWW-Authenticate", challengeBadToken)
 		writeOAuthError(w, http.StatusUnauthorized, "invalid_token", "This device token isn't valid, or its device was removed. Run pairtime login again.")
 		return
 	case err != nil:

@@ -82,11 +82,15 @@ func TestDeviceAPI(t *testing.T) {
 						t.Errorf("the refusals registered something: a good key then answered %d", r.status)
 					}
 				}},
-				{name: "a request without a valid token gets 401 invalid_token", run: func(t *testing.T, h *harness, _ *browser, tok string) {
-					for name, bad := range map[string]string{"no token": "", "a corrupted token": corrupt(tok), "an unknown token": devtoken.New()} {
-						r := h.call(http.MethodGet, device.MePath, bad, nil)
-						if r.status != http.StatusUnauthorized || r.header.Get("WWW-Authenticate") != `Bearer error="invalid_token"` {
-							t.Errorf("%s answered %d, WWW-Authenticate %q; want 401 invalid_token", name, r.status, r.header.Get("WWW-Authenticate"))
+				{name: "a request with a token that isn't valid gets 401 invalid_token, and one with none a challenge without an error (RFC 6750 3.1)", run: func(t *testing.T, h *harness, _ *browser, tok string) {
+					for name, c := range map[string]struct{ token, challenge string }{
+						"no token":          {"", `Bearer realm="pairtime"`},
+						"a corrupted token": {corrupt(tok), `Bearer realm="pairtime", error="invalid_token"`},
+						"an unknown token":  {devtoken.New(), `Bearer realm="pairtime", error="invalid_token"`},
+					} {
+						r := h.call(http.MethodGet, device.MePath, c.token, nil)
+						if r.status != http.StatusUnauthorized || r.header.Get("WWW-Authenticate") != c.challenge {
+							t.Errorf("%s answered %d, WWW-Authenticate %q; want 401 and %q", name, r.status, r.header.Get("WWW-Authenticate"), c.challenge)
 						}
 					}
 				}},

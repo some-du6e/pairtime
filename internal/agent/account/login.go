@@ -122,6 +122,7 @@ func Login(ctx context.Context, o Options, d Device, show func(Code)) (Result, e
 		return Result{}, err
 	}
 	if tok.DeviceID != "" && tok.DeviceID != d.ID {
+		undo(ctx, c, o, tok.AccessToken)
 		return Result{}, fmt.Errorf("account: the server linked device %s, not this computer's %s", tok.DeviceID, d.ID)
 	}
 

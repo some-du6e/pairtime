@@ -22,7 +22,7 @@ RFC 8628 3.1. A form (`application/x-www-form-urlencoded`), every parameter at m
 | `device_id` | required | section 1 |
 | `os` | required | `windows`, `macos`, `linux` or `other` |
 | `client_build` | required | the app's version, 1 to 64 characters of `A-Z a-z 0-9 . _ + -`, such as `v0.1.0` or `dev` |
-| `scope` | optional | space-separated, each `ingest` or `read:self`; both when left out |
+| `scope` | optional | space-separated, each `ingest` or `read:self`. Every device token gets both, whatever this names |
 
 `200 OK`, JSON, `Cache-Control: no-store`:
 
@@ -43,7 +43,7 @@ Errors are RFC 6749 5.2 JSON, `{"error": "<code>", "error_description": "<senten
 
 ## 3. `GET /device`: the teen approves
 
-RFC 8628 3.3. The page asks a signed-in teen for the code, then shows what is asking (the OS family and pairtime build the app sent, and the code itself, to compare with the terminal, RFC 8628 3.3.1 and 5.4), and offers Approve and Deny. A signed-out visitor goes through `/auth/hca/login` and comes back. With sign-in off, the page says linking isn't open yet. Every POST it makes needs the server's own `Origin` and a token tied to the session (CSRF). After 10 wrong codes within 15 minutes, one session gets no more tries until that window ends.
+RFC 8628 3.3. The page asks a signed-in teen for the code, then shows what is asking (the OS family and pairtime build the app sent, and the code itself, to compare with the terminal, RFC 8628 3.3.1 and 5.4), and offers Approve and Deny. A signed-out visitor goes through `/auth/hca/login` and comes back. With sign-in off, the page says linking isn't open yet. Every POST it makes needs the server's own `Origin` and a token tied to the session (CSRF). After 10 wrong codes within 15 minutes, typed or posted with a decision, an account gets no more tries until that window ends, however often it signs in again.
 
 ## 4. `POST /oauth/token`
 
@@ -70,7 +70,7 @@ The token doesn't expire; it works until the device is removed. Errors, each `40
 
 `ptd_`, then 32 random base62 characters, then a 6-character checksum: 42 characters in all. Base62's digits are `0-9 A-Z a-z` in that order. The checksum is the CRC-32 (IEEE) of everything before it, `ptd_` included, written in base62 with the most significant digit first and padded with `0` to 6 characters. This copies GitHub's token format (SP 8.3): a scanner can tell a real token from a typo or a corrupted copy offline, and the server refuses a token whose checksum doesn't match before it looks anything up. A token of 30 to 64 random characters is accepted, so the length can grow. The server stores only the SHA-256 of the whole token, in hex.
 
-Requests with a token send `Authorization: Bearer ptd_...`. A missing, malformed, unknown or removed token gets `401` with `WWW-Authenticate: Bearer error="invalid_token"` (RFC 6750 3.1).
+Requests with a token send `Authorization: Bearer ptd_...`. A malformed, unknown or removed token gets `401` with `WWW-Authenticate: Bearer realm="pairtime", error="invalid_token"`, and a request without one gets `401` with `WWW-Authenticate: Bearer realm="pairtime"` and no error code (RFC 6750 3.1).
 
 ## 6. `POST /api/v1/devices/me/key`
 

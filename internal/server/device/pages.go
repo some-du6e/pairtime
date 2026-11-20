@@ -4,8 +4,6 @@ package device
 
 import (
 	"bytes"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"html/template"
 	"net/http"
@@ -18,8 +16,10 @@ import (
 	"github.com/some-du6e/pairtime/internal/server/pages"
 )
 
-// The limit on wrong codes: after maxWrongCodes within wrongCodeWindow, a
-// session gets no more tries until the window ends (RFC 8628 5.1).
+// The limit on wrong codes: after maxWrongCodes within wrongCodeWindow, an
+// account gets no more tries until the window ends, however many times it
+// signs in again (RFC 8628 5.1). Codes typed on /device and codes posted
+// to /device/decision count alike.
 const (
 	maxWrongCodes   = 10
 	wrongCodeWindow = 15 * time.Minute
@@ -223,10 +223,10 @@ func (s *Service) enter(w http.ResponseWriter, r *http.Request) {
 }
 
 // lookup shows the confirmation for the typed code, or the form again
-// with what was wrong. Every wrong code counts against the session's
+// with what was wrong. Every wrong code counts against the account's
 // limit, whichever way it came.
 func (s *Service) lookup(w http.ResponseWriter, r *http.Request, sess *accounts.Session, d *pageData, typed string) {
-	key := sessionKey(r)
+	key := sess.User.ID
 	d.Typed = typed
 	if !s.tries.allow(key) {
 		d.Locked = true
@@ -280,6 +280,15 @@ func (s *Service) decide(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "decision must be approve or deny", http.StatusBadRequest)
 		return
 	}
+	// A decision names its code itself, so it is held to the same limit
+	// as a typed code.
+	key := sess.User.ID
+	if !s.tries.allow(key) {
+		d.Locked = true
+		d.Problem = "That's too many wrong codes for now. Wait a quarter of an hour, then try again."
+		s.render(w, http.StatusTooManyRequests, "Link the pairtime app", "enter", d, sess)
+		return
+	}
 	code, ok := NormalizeUserCode(f.Get("user_code"))
 	err := ErrNoCode
 	if ok {
@@ -287,6 +296,7 @@ func (s *Service) decide(w http.ResponseWriter, r *http.Request) {
 	}
 	switch {
 	case errors.Is(err, ErrNoCode):
+		s.tries.fail(key)
 		d.Problem = "That code has expired, or was answered already. Run pairtime login again for a new one."
 		s.render(w, http.StatusOK, "Link the pairtime app", "enter", d, sess)
 	case errors.Is(err, ErrOtherAccount):
@@ -358,18 +368,7 @@ func (s *Service) data(r *http.Request, sess *accounts.Session) *pageData {
 	return &pageData{Handle: s.handle(&sess.User), CSRF: s.csrfToken(r)}
 }
 
-// sessionKey names the request's session for the limit on wrong codes,
-// without keeping its cookie.
-func sessionKey(r *http.Request) string {
-	c, err := r.Cookie(auth.SessionCookie)
-	if err != nil {
-		return ""
-	}
-	sum := sha256.Sum256([]byte(c.Value))
-	return hex.EncodeToString(sum[:16])
-}
-
-// limiter counts wrong codes per session over fixed windows.
+// limiter counts wrong codes per account over fixed windows.
 type limiter struct {
 	max    int
 	window time.Duration

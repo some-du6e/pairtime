@@ -195,9 +195,11 @@ func form(w http.ResponseWriter, r *http.Request) (url.Values, string) {
 	if err := r.ParseForm(); err != nil {
 		return nil, "The form doesn't parse, or is too long."
 	}
-	for k, vs := range r.PostForm {
+	for _, vs := range r.PostForm {
 		if len(vs) > 1 {
-			return nil, "The parameter " + k + " appears more than once."
+			// The name isn't echoed: error_description may hold only
+			// printable ASCII without '"' and '\' (RFC 6749 5.2).
+			return nil, "A parameter appears more than once."
 		}
 	}
 	return r.PostForm, ""
@@ -252,15 +254,29 @@ func bearer(r *http.Request) string {
 	return strings.TrimSpace(token)
 }
 
+// The WWW-Authenticate challenges of a 401 (RFC 6750 3.1): one without an
+// error code for a request that sent no token, and one with
+// invalid_token for a token that isn't valid.
+const (
+	challengeNoToken  = `Bearer realm="pairtime"`
+	challengeBadToken = `Bearer realm="pairtime", error="invalid_token"`
+)
+
 // authenticate finds the device of the request's bearer token, or answers
 // 401 itself and reports false (RFC 6750 3.1).
 func (s *Service) authenticate(w http.ResponseWriter, r *http.Request) (Device, bool) {
-	d, err := s.store.Authenticate(r.Context(), bearer(r))
+	tok := bearer(r)
+	if tok == "" {
+		w.Header().Set("WWW-Authenticate", challengeNoToken)
+		writeOAuthError(w, http.StatusUnauthorized, "unauthorized", "This request needs the device token pairtime login keeps.")
+		return Device{}, false
+	}
+	d, err := s.store.Authenticate(r.Context(), tok)
 	switch {
 	case err == nil:
 		return d, true
 	case errors.Is(err, ErrBadToken), errors.Is(err, ErrUnknownToken), errors.Is(err, ErrRevoked):
-		w.Header().Set("WWW-Authenticate", `Bearer error="invalid_token"`)
+		w.Header().Set("WWW-Authenticate", challengeBadToken)
 		writeOAuthError(w, http.StatusUnauthorized, "invalid_token", "This device token isn't valid, or its device was removed. Run pairtime login again.")
 	default:
 		s.log.Error("authenticating a device", "err", err)
