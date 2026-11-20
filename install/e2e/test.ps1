@@ -112,12 +112,14 @@ $installed = 'pairtime pairtime\bin pairtime\bin\pairtime.exe'
 
 # Runs a case and checks that it exits 0 (Want ok) or doesn't (Want
 # fails), that its output matches Pattern, that LOCALAPPDATA then holds
-# exactly Files, and that TEMP is empty.
+# exactly Files, and that TEMP is empty. PowerShell wraps error and warning
+# text at 120 columns, sometimes in the middle of a word, so the output and
+# the pattern are compared with their whitespace taken out.
 function Test-Case([string]$Name, [string]$Want, [string]$Pattern, [string]$Files, [hashtable]$Result) {
   $problems = @()
   if ($Want -eq 'ok' -and $Result.Code -ne 0) { $problems += "exited $($Result.Code), want 0" }
   if ($Want -eq 'fails' -and $Result.Code -eq 0) { $problems += 'exited 0, want a failure' }
-  if ($Result.Output -cnotmatch $Pattern) { $problems += "its output doesn't match /$Pattern/" }
+  if (($Result.Output -replace '\s+', '') -cnotmatch ($Pattern -replace ' ', '')) { $problems += "its output doesn't match /$Pattern/" }
   $got = Get-Tree $script:appData
   if ($got -ne $Files) { $problems += "LOCALAPPDATA holds [$got], want [$Files]" }
   $left = Get-Tree $script:tmp
@@ -323,7 +325,7 @@ $rows = @(Get-Content -LiteralPath $env:VECTORS)
 for ($n = 0; $n -lt $rows.Count; $n++) {
   $f = $rows[$n].Split(' ')
   $key = FromHex $f[1]; $msg = FromHex $f[2]; $sig = FromHex $f[3]
-  $other = FromHex $rows[($n + 1) % $rows.Count].Split(' ')[1]
+  $other = FromHex ($rows[($n + 1) % $rows.Count].Split(' ')[1])
   $r = [byte[]]$sig.Clone(); $r[0] = $r[0] -bxor 1
   $s = [byte[]]$sig.Clone(); $s[40] = $s[40] -bxor 0x10
   $longer = [byte[]]($msg + [byte]0)
