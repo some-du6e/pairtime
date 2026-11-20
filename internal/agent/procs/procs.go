@@ -265,8 +265,15 @@ func (s *Scanner) Scan() ([]Session, error) {
 		}
 	}
 
+	// Every process in the table is live, whether or not it reads as a
+	// harness: one that a read can't name, as when its exe link can't be
+	// read, keeps its claim and its report.
+	live := make(map[platform.ID]bool, len(all))
+	for _, p := range all {
+		live[p.ID()] = true
+	}
+
 	s.mu.Lock()
-	live := make(map[platform.ID]bool)
 	var found []Session
 	mine := 0 // this user's harness processes, launchers left out
 	for _, p := range all {
@@ -274,11 +281,10 @@ func (s *Scanner) Scan() ([]Session, error) {
 		if !ok {
 			continue
 		}
-		id := p.ID()
-		live[id] = true
 		if launcher[p.PID] || p.Owner == "" || p.Owner != s.self {
 			continue
 		}
+		id := p.ID()
 		mine++
 		if _, ok := s.claimed[id]; ok {
 			continue
@@ -321,11 +327,15 @@ func (s *Scanner) Scan() ([]Session, error) {
 			changed = true
 		}
 	}
-	if changed {
-		s.putLocked()
-	}
 	for _, sess := range found {
 		s.opts.Report(sess)
+	}
+	// Store gets the reports only once Report has them. Others save the
+	// same Store whenever they like, as the notifier does with state.json,
+	// and a report saved before Report ran would be lost to an agent
+	// killed in between.
+	if changed {
+		s.putLocked()
 	}
 	s.mu.Unlock()
 
@@ -420,11 +430,13 @@ func (s *Scanner) Start(sch *sched.Scheduler) func() {
 	s.kick = kick
 	s.mu.Unlock()
 	return func() {
-		every.Stop()
-		kick.Stop()
+		// Without s.kick, a Kick from here on does nothing, and Stop undoes
+		// one that came before.
 		s.mu.Lock()
 		s.kick = nil
 		s.mu.Unlock()
+		every.Stop()
+		kick.Stop()
 	}
 }
 
@@ -437,11 +449,11 @@ func (s *Scanner) Kick() {
 	if s.kick == nil {
 		return
 	}
-	d := KickDelay
-	if wait := s.lastKick.Add(KickGap).Sub(s.opts.Now()); wait > d {
-		d = wait
-	}
-	s.kick.Reset(d)
+	// The gap is counted on the wall clock, the scheduler's time. Capped
+	// at KickGap, a clock set back since the last kicked scan holds a kick
+	// no longer than that.
+	wait := min(s.lastKick.Add(KickGap).Sub(s.opts.Now()), KickGap)
+	s.kick.Reset(max(wait, KickDelay))
 }
 
 func (s *Scanner) scan() {

@@ -259,6 +259,16 @@ func TestScanOverTime(t *testing.T) {
 		p, _ := platform.NewTable(platform.Linux, f.procs).Get(pid)
 		return p
 	}
+	// rename gives pid the name a read finds for it. A read that can't
+	// follow a process's exe link names it by its comm, which for an image
+	// started by its version path is the version file's name.
+	rename := func(pid int, name string) {
+		for i := range f.procs {
+			if f.procs[i].PID == pid {
+				f.procs[i].Name = name
+			}
+		}
+	}
 	// terminal()'s harnesses start at -300 s (111), -200 s (121) and
 	// -100 s (132).
 	steps := []struct {
@@ -270,8 +280,12 @@ func TestScanOverTime(t *testing.T) {
 		{"the first scan reports the harness past the grace", func() { now = sec(-195) }, []int{111}, nil},
 		{"a later scan reports the ones that have grown past it", func() { now = sec(-80) }, []int{121, 132}, nil},
 		{"a scan with nothing new reports nothing", func() { now = sec(-20) }, []int{}, nil},
+		{"a reported harness that one read can't name keeps its report", func() { rename(121, "2.1.328") }, []int{}, nil},
+		{"named claude again, it isn't reported a second time", func() { rename(121, "claude") }, []int{}, nil},
 		{"a claim after a report withdraws the session, and the scan doesn't report it again", func() { s.Claim(boot, proc(111)) }, []int{}, []int{111}},
 		{"a second claim withdraws nothing more", func() { s.Claim(boot, proc(111)) }, []int{}, []int{111}},
+		{"a claimed harness that one read can't name keeps its claim", func() { rename(111, "2.1.328") }, []int{}, []int{111}},
+		{"named claude again, it still isn't reported", func() { rename(111, "claude") }, []int{}, []int{111}},
 		{"a claim from another boot is dropped", func() { s.Claim("another-boot", proc(121)) }, []int{}, []int{111}},
 		{"a pid reused by a new harness is a new session", func() {
 			now = sec(40)
@@ -529,6 +543,69 @@ func TestScanAcrossRestarts(t *testing.T) {
 	})
 }
 
+// TestReportBeforeItsState has another component save the shared
+// state.json while Report runs, as the notifier may at any moment from its
+// own goroutine. A session's report must not reach the file before Report
+// has the session, or an agent killed in between would never report it.
+func TestReportBeforeItsState(t *testing.T) {
+	tests := []struct {
+		name string
+	}{
+		{name: "a save of the shared state.json while Report runs holds no report of this scan's sessions, and the scan's own save does"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			name := filepath.Join(t.TempDir(), "state.json")
+			st, problem, err := state.Open(name)
+			if err != nil || problem != "" {
+				t.Fatalf("state.Open: %v %s", err, problem)
+			}
+			onDisk := func() []int {
+				t.Helper()
+				disk, _, err := state.Open(name)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var kept saved
+				if _, err := disk.Get(stateKey, &kept); err != nil {
+					t.Fatal(err)
+				}
+				var pids []int
+				for _, r := range kept.Reported {
+					pids = append(pids, r.Proc.PID)
+				}
+				return pids
+			}
+			var early []int // what a save made during Report wrote out
+			s := New(Options{
+				Read:  (&fake{procs: terminal()}).read,
+				OS:    platform.Linux,
+				Self:  me,
+				Boot:  boot,
+				Store: st,
+				Now:   func() time.Time { return sec(0) },
+				Report: func(Session) {
+					if err := st.Save(); err != nil {
+						t.Error(err)
+						return
+					}
+					early = append(early, onDisk()...)
+				},
+			})
+			found, err := s.Scan()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := pidsOf(found); !slices.Equal(got, []int{111, 121, 132}) || len(early) != 0 {
+				t.Errorf("reported %v, and saves during Report wrote reports of %v; want [111 121 132] and none", got, early)
+			}
+			if got := onDisk(); !slices.Equal(got, []int{111, 121, 132}) {
+				t.Errorf("after the scan state.json reports %v, want [111 121 132]", got)
+			}
+		})
+	}
+}
+
 // TestScanAcrossAClockStep checks that a step of the wall clock, which on
 // Linux moves every Start, neither reports a session again nor loses a
 // claim: IDs come from the start ticks.
@@ -657,6 +734,15 @@ func TestStartAndKick(t *testing.T) {
 		s.Kick()
 		if j := jobs()["procs.kick"]; !near(j.Next, time.Now().Add(KickDelay)) {
 			t.Errorf("procs.kick is due %s, want about %s from now", j.Next, KickDelay)
+		}
+	})
+	t.Run("a kick after the wall clock was set back an hour waits no longer than KickGap", func(t *testing.T) {
+		s.mu.Lock()
+		s.lastKick = time.Now().Add(time.Hour) // the last kicked scan's time, by the clock before it went back
+		s.mu.Unlock()
+		s.Kick()
+		if j := jobs()["procs.kick"]; !near(j.Next, time.Now().Add(KickGap)) {
+			t.Errorf("procs.kick is due %s, want about %s from now", j.Next, KickGap)
 		}
 	})
 	t.Run("stopping removes both jobs", func(t *testing.T) {
