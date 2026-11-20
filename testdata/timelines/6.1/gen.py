@@ -394,7 +394,6 @@ for t, _, _ in heartbeats:
     front = [e for e in events if e["kind"] == "os.focus" and e["t"] <= t][-1]
     tl.check(front["data"]["app_hash"] == CODE, f"VS Code is in front at the heartbeat at {fx.hhmmss(t)}")
 
-prompts_at = [start(k) + off("4:00") for k in range(1, CYCLES + 1)]
 for k in range(1, CYCLES + 1):
     C = start(k)
     sub = C + off("4:00")
@@ -414,7 +413,8 @@ for k in range(1, CYCLES + 1):
     # anchor is one of the edit's two heartbeats until the save at 11:40,
     # then the next cycle's first heartbeat, a navigation (SM 3.3 rule 3).
     if k != DRINK and k not in COMMIT_CYCLES:
-        nxt = [(e["t"] - C, e["data"].get("act", e["kind"])) for e in events if C + off("11:00") <= e["t"] <= C + off("12:30")
+        nxt = [(e["t"] - C, e["data"].get("act", e["kind"])) for e in events
+               if C + off("11:00") <= e["t"] <= C + off("12:30")
                and e["kind"] in ("editor.activity", "prompt.submit", "agent.permission", "git.change")]
         tl.check(nxt == [(off("11:02"), "edit"), (off("11:40"), "edit"), (off("12:30"), "navigate")],
                  f"cycle {k}: the hand edit's heartbeats at 11:02 and 11:40, then a navigation at 12:30")
@@ -426,8 +426,10 @@ for e in anchor_events:
     s = e["t"] - e["t"] % tl.SLOT_MS
     tl.check(keys_in(s, s + tl.SLOT_MS), f"key presses in the slot of the {e['kind']} at {fx.hhmmss(e['t'])}")
 
-tl.check(len(prompts_at) == 15 and sum(e["kind"] == "agent.permission" for e in events) == 15,
-         "fifteen typed prompts and fifteen permission decisions")
+in_window = [e for e in events if T0 <= e["t"] < END]
+typed = [e for e in in_window if e["kind"] == "prompt.submit" and e["data"]["pasted_chars"] == 0]
+decided = [e for e in in_window if e["kind"] == "agent.permission" and e["data"]["decided_by"] == "user"]
+tl.check(len(typed) == 15 and len(decided) == 15, "fifteen typed prompts and fifteen permission decisions")
 tl.check([fx.hhmmss(t) for t in commits] == ["14:11:40", "14:35:40", "15:47:40", "16:23:40", "16:59:40"],
          "five commits")
 tl.check(len(failing) == 3 and len(green) == 1, "three failing test runs, then a green one")
@@ -439,6 +441,7 @@ tl.check(all(e[2]["session_key"] == S for e in failing + green), "the agent runs
 # from 4:20 to 4:30 and from 4:45 to 5:00 (X.agent_only), never empty while
 # SM credits SUP or READ.
 fills = [(e["t"], e["kind"], e["data"]) for e in events if e["kind"] in ("agent.output", "agent.tool")]
+empty_s = 0  # seconds the bucket had nothing to drain, all of them while the agent runs
 for k in range(1, CYCLES + 1):
     C = start(k)
     bucket = tl.Bucket()
@@ -453,13 +456,13 @@ for k in range(1, CYCLES + 1):
         idle = C + off("4:20") <= tau < C + off("4:30") or C + off("4:45") <= tau < C + off("5:00")
         got = bucket.drain(1)
         tl.check(got == (0 if idle else 1), f"cycle {k}: the bucket at {fx.hhmmss(tau)}")
+        empty_s += got == 0
     if k == 1:
         tl.check(int(bucket.total()) == 303, f"the bucket holds 303 s at 14:09:00, not {float(bucket.total())}")
 
 # Hackatime's replay of the window (SM 5.3, 5.4): every editor heartbeat and
 # agent event for logged_s, the agent events alone for ai_logged_s.
 AI_KINDS = ("prompt.submit", "agent.tool", "agent.stop")
-in_window = [e for e in events if T0 <= e["t"] < END]
 ai_times = [e["t"] for e in in_window if e["kind"] in AI_KINDS]
 all_times = sorted(ai_times + [e["t"] for e in in_window if e["kind"] == "editor.activity"])
 ai_logged = tl.hackatime_replay(ai_times)
@@ -552,24 +555,42 @@ for k in range(1, CYCLES + 1):
                          "where cycle 1's commit is." if k == 2 else
                     ("His own edit fixes the failing test." if k == 10 else None))
 
-# Totals SM states, checked against the sums of the rows by Expected.doc.
-rows_by_reason = exp.totals()["credited_by_reason"]
-tl.check(sum(rows_by_reason.get(r, 0) for r in ("P", "PA", "SUP", "READ")) == 5965, "AI-assisted 5,965 s")
-tl.check(sum(rows_by_reason.get(r, 0) for r in ("NAV", "E", "G", "LOOKUP")) == 4130, "hand work 4,130 s")
-first = sum(sum(sum(v.values()) for v in r["credit"].values()) for r in exp.rows[:12])
-tl.check(first == 695, f"cycle 1 credits {first} s")
-tl.check(10095 + 375 + 330 == 10800, "credited, agent-only and absent seconds fill the wall time")
+# The totals SM states, each checked against what the rows give.
+SM_TOTALS = {
+    "wall_s": 10800,
+    "credited_s": 10095,
+    "ai_credited_s": 5965,
+    "hand_credited_s": 4130,
+    "agent_only_s": 375,
+    "absent_s": 330,
+    "first_cycle_credited_s": 695,
+}
+sums = exp.totals()
+by_reason, unc = sums["credited_by_reason"], sums["uncredited"]
+no_bucket = [r for r in exp.rows if not r["bucket"]]
+tl.check(all(r["codes"] == ["X.absent"] for r in no_bucket), "the minutes without a bucket are X.absent")
+rows_give = {
+    "wall_s": sum(60 * r["minutes"] for r in exp.rows),
+    "credited_s": sums["credited_s"],
+    "ai_credited_s": sum(by_reason.get(r, 0) for r in ("P", "PA", "SUP", "READ")),
+    "hand_credited_s": sum(by_reason.get(r, 0) for r in ("NAV", "E", "G", "LOOKUP")),
+    "agent_only_s": unc.get("X.agent_only", 0),
+    # The drink's X.absent: 90 s in the rows, and the minutes with no bucket.
+    "absent_s": unc.get("X.absent", 0) + sum(60 * r["minutes"] for r in no_bucket),
+    "first_cycle_credited_s": sum(r["credited_s"] for r in exp.rows[:12]),
+}
+for name, v in SM_TOTALS.items():
+    tl.check(rows_give[name] == v, f"{name}: the rows give {rows_give[name]}, SM says {v}")
+tl.check(rows_give["wall_s"] == (END - T0) // 1000, "the rows cover the window")
+tl.check(rows_give["ai_credited_s"] + rows_give["hand_credited_s"] == rows_give["credited_s"],
+         "every credited second is AI-assisted or hand work")
+tl.check(rows_give["credited_s"] + rows_give["agent_only_s"] + rows_give["absent_s"] == rows_give["wall_s"],
+         "credited, agent-only and absent seconds fill the wall time")
+tl.check(empty_s == rows_give["agent_only_s"],
+         f"the replayed bucket is empty for {empty_s} s while the agent runs, the rows' X.agent_only")
 
 expected = exp.doc(
-    extra_totals={
-        "wall_s": 10800,
-        "credited_s": 10095,
-        "ai_credited_s": 5965,
-        "hand_credited_s": 4130,
-        "agent_only_s": 375,
-        "absent_s": 330,
-        "first_cycle_credited_s": 695,
-    },
+    extra_totals=SM_TOTALS,
     stated=["wall_s", "credited_s", "ai_credited_s", "hand_credited_s", "agent_only_s", "absent_s",
             "first_cycle_credited_s"],
     approx={
