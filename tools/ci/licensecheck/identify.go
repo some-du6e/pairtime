@@ -30,7 +30,8 @@ var templateFS embed.FS
 
 // otherLicenses are phrases that name a license outside Allowed. A file has
 // to match a template as a whole, so extra clauses fail, but these phrases
-// are looked for anywhere in it.
+// are looked for anywhere in it, and so are their short names
+// (otherLicenseIDRE).
 var otherLicenses = []string{
 	"general public license", // GPL, LGPL and AGPL
 	"affero",
@@ -48,6 +49,17 @@ var otherLicenses = []string{
 	"noncommercial",
 	"good, not evil", // the JSON license
 }
+
+// otherLicenseIDRE finds the short names of the licenses otherLicenses
+// spells out, the way a note on a copyright line or a URL cites them:
+// GPLv2, LGPL-2.1, AGPL-3.0, MPL-2.0, EPL, EUPL, CDDL, SSPL, BUSL-1.1 or
+// BSL, ELv2 or Elastic-2.0, CC-BY-NC-4.0, CC0, and the path of
+// gnu.org/licenses/gpl-3.0.html. Each must stand as a whole word, with an
+// optional version after it, so a name that only starts with the same
+// letters (Gplot, Eplus, Elastic N.V.) passes. No allowed license's text
+// uses any of them.
+var otherLicenseIDRE = regexp.MustCompile(`(?i)\b(?:(?:[al]?gpl|mpl|epl|eupl|cddl|sspl|busl|bsl|cc0|cc[-\s]?by)(?:-?v?\d+(?:\.\d+)*)?` +
+	`|elv2|elastic-v?\d+(?:\.\d+)*)\b`)
 
 // conditionRE finds an added condition ("Redistribution is prohibited
 // without written permission", "Commercial use is prohibited") in a
@@ -101,6 +113,11 @@ func identify(text string) (id, reason string) {
 		if strings.Contains(lower, phrase) {
 			return "", fmt.Sprintf("it mentions %q, so it isn't only %s", phrase, orList(Allowed))
 		}
+	}
+	// Matched before normalize drops URLs, so a link to a license's text
+	// counts as a mention too.
+	if name := otherLicenseIDRE.FindString(charFixer.Replace(text)); name != "" {
+		return "", fmt.Sprintf("it mentions %q, so it isn't only %s", name, orList(Allowed))
 	}
 	var ids []string
 	why := "its text isn't " + orList(Allowed)

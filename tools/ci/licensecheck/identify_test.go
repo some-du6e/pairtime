@@ -4,6 +4,7 @@ package main
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -152,6 +153,94 @@ func TestIdentifyVariants(t *testing.T) {
 			got, reason := identify(tt.text)
 			if got != tt.want {
 				t.Errorf("identify() = %q (%s), want %q", got, reason, tt.want)
+			}
+		})
+	}
+}
+
+// TestShortLicenseNames puts the short name of a license outside Allowed,
+// or a link to its text, on MIT's copyright line, where the head rule
+// accepts anything after "Copyright". Each must fail, and the reason must
+// name it, so no case passes on another rule.
+func TestShortLicenseNames(t *testing.T) {
+	data, err := os.ReadFile("testdata/spdx-MIT.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	mit := string(data)
+	const line = "Copyright (c) <year> <copyright holders>"
+	if !strings.Contains(mit, line) {
+		t.Fatalf("spdx-MIT.txt lacks %q", line)
+	}
+	tests := []struct {
+		name    string
+		holder  string // what follows "Copyright (c) 2020 "
+		mention string // what identify says the text mentions; "" means it stays MIT
+	}{
+		{name: "GPLv2 fails", holder: "Foo. Files under asm/: GPLv2", mention: "GPLv2"},
+		{name: "GPL-3.0-or-later fails", holder: "Foo. Files under asm/: GPL-3.0-or-later", mention: "GPL-3.0"},
+		{name: "LGPL-2.1 fails", holder: "Foo. Files under asm/: LGPL-2.1", mention: "LGPL-2.1"},
+		{name: "AGPLv3 fails", holder: "Foo. Files under asm/: AGPLv3", mention: "AGPLv3"},
+		{name: "MPL-2.0 fails", holder: "Foo. Files under asm/: MPL-2.0", mention: "MPL-2.0"},
+		{name: "EPL-2.0 fails", holder: "Foo. Files under asm/: EPL-2.0", mention: "EPL-2.0"},
+		{name: "EUPL-1.2 fails", holder: "Foo. Files under asm/: EUPL-1.2", mention: "EUPL-1.2"},
+		{name: "CDDL-1.0 fails", holder: "Foo. Files under asm/: CDDL-1.0", mention: "CDDL-1.0"},
+		{name: "SSPL-1.0 fails", holder: "Foo. Files under asm/: SSPL-1.0", mention: "SSPL-1.0"},
+		{name: "BUSL-1.1 fails", holder: "Foo. Files under asm/: BUSL-1.1", mention: "BUSL-1.1"},
+		{name: "BSL, the Business Source License's other short name, fails", holder: "Foo. Files under asm/: BSL 1.1", mention: "BSL"},
+		{name: "ELv2 fails", holder: "Foo. Files under asm/: ELv2", mention: "ELv2"},
+		{name: "Elastic-2.0 fails", holder: "Foo. Files under asm/: Elastic-2.0", mention: "Elastic-2.0"},
+		{name: "CC-BY-NC-4.0 fails", holder: "Foo. Files under asm/: CC-BY-NC-4.0", mention: "CC-BY"},
+		{name: "CC0-1.0 fails", holder: "Foo. Files under asm/: CC0-1.0", mention: "CC0-1.0"},
+		{name: "a link to the GPL's text fails, though normalize drops URLs", holder: "Foo. Files under asm/: https://www.gnu.org/licenses/gpl-3.0.html", mention: "gpl-3.0"},
+		{name: "a link to the MPL's text fails", holder: "Foo. Files under asm/: https://www.mozilla.org/MPL/2.0/", mention: "MPL"},
+		{name: "a holder whose name starts with GPL's letters passes", holder: "Gplot Authors"},
+		{name: "a URL whose path starts with GPL's letters passes", holder: "Foo, https://github.com/foo/gplot"},
+		{name: "a holder named Elastic passes without a version after it", holder: "Elastic N.V."},
+		{name: "a holder whose name starts with EPL's letters passes", holder: "Eplus Ltd"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, reason := identify(strings.Replace(mit, line, "Copyright (c) 2020 "+tt.holder, 1))
+			if tt.mention == "" {
+				if got != "MIT" {
+					t.Errorf("identify() = %q (%s), want MIT", got, reason)
+				}
+				return
+			}
+			if want := `it mentions "` + tt.mention + `"`; got != "" || !strings.HasPrefix(reason, want) {
+				t.Errorf("identify() = %q (%s), want \"\" with a reason starting %s", got, reason, want)
+			}
+		})
+	}
+}
+
+// TestShortLicenseNamesInAllowedTexts checks that no allowed license's own
+// text, nor any real-* LICENSE file, uses a short name otherLicenseIDRE
+// looks for, so the screen can't turn an allowed module away.
+func TestShortLicenseNamesInAllowedTexts(t *testing.T) {
+	files, err := filepath.Glob("testdata/real-*.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range Allowed {
+		files = append(files, "testdata/spdx-"+id+".txt")
+	}
+	tests := []struct{ name, file string }{}
+	for _, f := range files {
+		tests = append(tests, struct{ name, file string }{name: filepath.Base(f) + " names no license outside Allowed", file: f})
+	}
+	if len(tests) < 2*len(Allowed) {
+		t.Fatalf("found only %d license texts", len(tests))
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			data, err := os.ReadFile(tt.file)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if m := otherLicenseIDRE.FindString(charFixer.Replace(string(data))); m != "" {
+				t.Errorf("otherLicenseIDRE finds %q in %s", m, tt.file)
 			}
 		})
 	}
