@@ -122,14 +122,15 @@ func (s sources) code() string {
 	return SourceURL + "/tree/" + s.commit
 }
 
-// file returns text, which is Markdown, as a link to path at the commit.
-// When the commit isn't known it returns text alone, since the file's
-// latest version may say something this server's copy doesn't.
-func (s sources) file(text, path string) string {
+// file returns text, which is Markdown, as a link to the repository's
+// file name at the commit. When the commit isn't known it returns text
+// alone, since the file's latest version may say something this server's
+// copy doesn't.
+func (s sources) file(text, name string) string {
 	if s.commit == "" {
 		return text
 	}
-	return "[" + text + "](" + SourceURL + "/blob/" + s.commit + "/" + path + ")"
+	return "[" + text + "](" + SourceURL + "/blob/" + s.commit + "/" + name + ")"
 }
 
 // Site holds the rendered pages.
