@@ -425,6 +425,77 @@ func oldHooks(n int) string {
 	return b.String()
 }
 
+// oldGroup returns a settings file with one group of n hooks from an older
+// pairtime install, at another binary path.
+func oldGroup(n int) string {
+	var b strings.Builder
+	b.WriteString(`{"hooks": {"Stop": [{"hooks": [`)
+	for i := range n {
+		if i > 0 {
+			b.WriteString(", ")
+		}
+		fmt.Fprintf(&b, `{"type": "command", "command": "/opt/pairtime/bin/pairtime", "args": ["hook", "--harness", "claude_code", "--event", "Stop%d"]}`, i)
+	}
+	b.WriteString("]}]}}\n")
+	return b.String()
+}
+
+// pairtimeOnlyLists returns a settings file with n hook lists, each holding
+// one pairtime hook and nothing else.
+func pairtimeOnlyLists(n int) string {
+	var b strings.Builder
+	b.WriteString(`{"hooks": {`)
+	for i := range n {
+		if i > 0 {
+			b.WriteString(", ")
+		}
+		fmt.Fprintf(&b, `"Event%d": [{"hooks": [{"type": "command", "command": "/home/teen/.local/bin/pairtime", "args": ["hook", "--harness", "claude_code", "--event", "Event%d"]}]}]`, i, i)
+	}
+	b.WriteString("}}\n")
+	return b.String()
+}
+
+func TestClaudeCodeTakesOutAsManyHooksAsItAllows(t *testing.T) {
+	tests := []struct {
+		name string
+		src  string
+		// undo takes every pairtime hook out of src, as uninstall does for a
+		// file pairtime created; otherwise install merges into src.
+		undo bool
+	}{
+		{"exactly maxRemovals old pairtime hooks, each in a group of its own, are all replaced", oldHooks(maxRemovals), false},
+		{"a group of exactly maxRemovals old pairtime hooks is replaced", oldGroup(maxRemovals), false},
+		{"exactly maxRemovals lists of pairtime's hooks alone all go at uninstall, with the file pairtime created", pairtimeOnlyLists(maxRemovals), true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cur := Content{Exists: true, Data: []byte(tt.src), Mode: 0o644}
+			if tt.undo {
+				got, err := undoClaudeHooks(cur, Content{}, nil)
+				if err != nil {
+					t.Fatalf("undoClaudeHooks: %v", err)
+				}
+				if got.Exists {
+					t.Errorf("undoClaudeHooks leaves\n%s\nwant no file", got.Data)
+				}
+				return
+			}
+			env := testEnv(t, "linux", nil)
+			item, err := ClaudeCode(env)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, err := item.Edits[0].Apply(cur)
+			if err != nil {
+				t.Fatalf("Apply: %v", err)
+			}
+			if bytes.Contains(got.Data, []byte("/opt/pairtime")) || bytes.Count(got.Data, []byte(env.Exe)) != len(claudeHooks) {
+				t.Errorf("after Apply the file holds\n%s\nwant only the %d new hooks", got.Data, len(claudeHooks))
+			}
+		})
+	}
+}
+
 func TestClaudeCodeLeavesFilesItCantMergeAlone(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -435,6 +506,7 @@ func TestClaudeCodeLeavesFilesItCantMergeAlone(t *testing.T) {
 		{"a file bigger than 4 MiB is left alone", `{"x": "` + strings.Repeat("a", 4<<20) + `"}`, 0o644, "bigger than the 4 MiB"},
 		{"a file under 4 MiB that pairtime's hooks would push past it is left alone", `{"x": "` + strings.Repeat("a", 4<<20-100) + `"}`, 0o644, "grow past the 4 MiB"},
 		{"a file with more pairtime hooks than pairtime ever writes is left alone", oldHooks(maxRemovals + 1), 0o644, "more pairtime hooks than pairtime ever writes"},
+		{"a group of more pairtime hooks than pairtime ever writes is left alone, though it would go in one removal", oldGroup(maxRemovals + 1), 0o644, "more pairtime hooks than pairtime ever writes"},
 		{"a file that isn't JSON is left alone", `{"model": }`, 0o644, "isn't valid JSON"},
 		{"a top level that isn't an object is left alone", `["model"]`, 0o644, "doesn't hold a JSON object"},
 		{"hooks that aren't an object are left alone", `{"hooks": ["x"]}`, 0o644, `"hooks" that isn't an object`},

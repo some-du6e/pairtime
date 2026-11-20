@@ -281,20 +281,23 @@ func parseSettings(src []byte) (*jsonc.Value, error) {
 	return root, nil
 }
 
-// maxRemovals bounds how many hooks, or empty lists, removeClaudeHooks and
-// pruneHooks take out of one file. pairtime writes 10 hooks, so a file
-// with more than this many of its hooks is broken, and refusing it keeps
-// the work small: each removal parses the file again, because every
-// removal moves the bytes after it and Remove's rules for the separator
-// and the line around an item depend on its neighbours. With readFile's
-// 4 MiB cap, that is at most a few hundred MiB of parsing.
+// maxRemovals bounds how many hook handlers removeClaudeHooks, and how many
+// empty lists pruneHooks, take out of one file: that many go, and a file
+// that needs one more is refused. pairtime writes 10 hooks, so a file with
+// more than this many of its hooks is broken, and refusing it keeps the
+// work small: each removal parses the file again, because every removal
+// moves the bytes after it and Remove's rules for the separator and the
+// line around an item depend on its neighbours. With readFile's 4 MiB cap,
+// that is at most a few hundred MiB of parsing. A group whose handlers all
+// go is one removal, but each of its handlers counts.
 const maxRemovals = 100
 
 // removeClaudeHooks takes out every hook handler match accepts, one at a
 // time. A group whose handlers all match goes as a whole; otherwise only
 // the matching handler goes, and the group keeps the others.
 func removeClaudeHooks(src []byte, match func(event string, group, h *jsonc.Value) bool) ([]byte, error) {
-	for range maxRemovals {
+	removed := 0
+	for {
 		root, err := parseSettings(src)
 		if err != nil || root == nil {
 			return src, err
@@ -303,18 +306,21 @@ func removeClaudeHooks(src []byte, match func(event string, group, h *jsonc.Valu
 		if hooks == nil || hooks.Kind != jsonc.Object {
 			return src, nil
 		}
-		next := removeOneHook(src, hooks, match)
-		if next == nil {
+		next, n := removeOneHook(src, hooks, match)
+		if n == 0 {
 			return src, nil
+		}
+		if removed += n; removed > maxRemovals {
+			return nil, errors.New("holds more pairtime hooks than pairtime ever writes")
 		}
 		src = next
 	}
-	return nil, errors.New("holds more pairtime hooks than pairtime ever writes")
 }
 
 // removeOneHook returns src without the first hook handler under hooks
-// that match accepts, or nil when there is none.
-func removeOneHook(src []byte, hooks *jsonc.Value, match func(event string, group, h *jsonc.Value) bool) []byte {
+// that match accepts, or without its whole group when match accepts every
+// handler in it, and how many handlers went: 0 when match accepts none.
+func removeOneHook(src []byte, hooks *jsonc.Value, match func(event string, group, h *jsonc.Value) bool) ([]byte, int) {
 	for _, ev := range hooks.Items {
 		list := ev.Value
 		if list.Kind != jsonc.Array {
@@ -338,13 +344,13 @@ func removeOneHook(src []byte, hooks *jsonc.Value, match func(event string, grou
 			case matched == 0:
 				continue
 			case matched == len(hs.Items):
-				return jsonc.Remove(src, list, gi)
+				return jsonc.Remove(src, list, gi), matched
 			default:
-				return jsonc.Remove(src, hs, first)
+				return jsonc.Remove(src, hs, first), 1
 			}
 		}
 	}
-	return nil
+	return nil, 0
 }
 
 // undoClaudeHooks takes every pairtime hook out of the settings cur holds,
@@ -383,7 +389,7 @@ func undoClaudeHooks(cur, base Content, _ json.RawMessage) (Content, error) {
 // base's "hooks", doesn't have, and then "hooks" itself if it is empty and
 // base had none.
 func pruneHooks(src []byte, before *jsonc.Value) ([]byte, error) {
-	for range maxRemovals {
+	for pruned := 0; ; pruned++ {
 		root, err := parseSettings(src)
 		if err != nil || root == nil {
 			return src, err
@@ -392,24 +398,23 @@ func pruneHooks(src []byte, before *jsonc.Value) ([]byte, error) {
 		if hooks == nil || hooks.Kind != jsonc.Object {
 			return src, nil
 		}
-		gone := false
-		for i := len(hooks.Items) - 1; i >= 0; i-- {
-			it := hooks.Items[i]
-			if emptyInside(src, it.Value) && before.Find(it.Key) < 0 {
-				src = jsonc.Remove(src, hooks, i)
-				gone = true
+		i := len(hooks.Items) - 1
+		for ; i >= 0; i-- {
+			if it := hooks.Items[i]; emptyInside(src, it.Value) && before.Find(it.Key) < 0 {
 				break
 			}
 		}
-		if gone {
-			continue
+		if i < 0 {
+			if before == nil && emptyInside(src, hooks) {
+				src = jsonc.Remove(src, root, root.Find("hooks"))
+			}
+			return src, nil
 		}
-		if before == nil && emptyInside(src, hooks) {
-			src = jsonc.Remove(src, root, root.Find("hooks"))
+		if pruned == maxRemovals {
+			return nil, errors.New("has more empty hook lists than pairtime ever writes")
 		}
-		return src, nil
+		src = jsonc.Remove(src, hooks, i)
 	}
-	return nil, errors.New("has more empty hook lists than pairtime ever writes")
 }
 
 // emptyInside reports whether v is an object or array with nothing
