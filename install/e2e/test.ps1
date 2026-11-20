@@ -110,6 +110,10 @@ function Invoke-OneLiner([hashtable]$Environment, [string]$Shell = 'powershell.e
 
 $installed = 'pairtime pairtime\bin pairtime\bin\pairtime.exe'
 
+# The real binary's cases stop before pairtime install with -NoInstall, so
+# they don't change when it gains that command (WP-IN2). One case below
+# checks what happens without it.
+
 # Runs a case and checks that it exits 0 (Want ok) or doesn't (Want
 # fails), that its output matches Pattern, that LOCALAPPDATA then holds
 # exactly Files, and that TEMP is empty. PowerShell wraps error and warning
@@ -176,28 +180,42 @@ function Real([string]$Release, [string]$Key, [string[]]$More = @()) {
 Write-Output "== install.ps1, against the fixture for $version"
 
 New-Case
-Test-Case 'irm | iex installs a release signed by a key it was given, and stops before pairtime install, which this build lacks' `
-  ok 'has no install command yet' $installed `
-  (Invoke-OneLiner @{ PAIRTIME_BASE_URL = "$server/real"; PAIRTIME_RELEASE_KEYS = (Join-Path $keys 'real.pub') })
+Test-Case 'irm | iex installs a release signed by a key it was given' ok 'Installed pairtime' $installed `
+  (Invoke-OneLiner @{ PAIRTIME_BASE_URL = "$server/real"; PAIRTIME_RELEASE_KEYS = (Join-Path $keys 'real.pub'); PAIRTIME_NO_INSTALL = '1' })
 Test-Binary real
 
 if (Get-Command pwsh -ErrorAction SilentlyContinue) {
   New-Case
   Test-Case 'PowerShell 7 runs the one-liner too' ok 'Installed pairtime' $installed `
-    (Invoke-OneLiner @{ PAIRTIME_BASE_URL = "$server/real"; PAIRTIME_RELEASE_KEYS = (Join-Path $keys 'real.pub') } 'pwsh.exe')
+    (Invoke-OneLiner @{ PAIRTIME_BASE_URL = "$server/real"; PAIRTIME_RELEASE_KEYS = (Join-Path $keys 'real.pub'); PAIRTIME_NO_INSTALL = '1' } 'pwsh.exe')
   Test-Binary real
+}
+
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+$realExe = Join-Path $scratch 'pairtime.exe'
+$realZip = [System.IO.Compression.ZipFile]::OpenRead((Join-Path $Fixture "real\pairtime_$($version.Substring(1))_windows_amd64.zip"))
+try {
+  [System.IO.Compression.ZipFileExtensions]::ExtractToFile($realZip.GetEntry('pairtime.exe'), $realExe)
+} finally {
+  $realZip.Dispose()
+}
+if (@(& $realExe help) -cmatch '^  install ') {
+  Write-Output '::notice::the real pairtime has an install command now (WP-IN2), so install/e2e should run it, then pairtime uninstall, in a temporary LOCALAPPDATA and check that nothing is left (docs/PLAN.md, WP-RL2)'
+} else {
+  New-Case
+  Test-Case 'without -NoInstall, setup stops before pairtime install while the binary has none' ok 'has no install command yet' $installed `
+    (Invoke-File $stamped (Real real real.pub))
 }
 
 New-Case
 New-Item -ItemType Directory -Force -Path (Join-Path $script:appData 'pairtime\bin') | Out-Null
 Set-Content -LiteralPath (Join-Path $script:appData 'pairtime\bin\pairtime.exe') -Value 'an old pairtime'
 Test-Case 'a pairtime.exe already there is replaced, and a PATH without it gets a hint' ok "isn't on your PATH" $installed `
-  (Invoke-File $stamped (Real real real.pub))
+  (Invoke-File $stamped (Real real real.pub @('-NoInstall')))
 Test-Binary real
 
 New-Case
 New-Item -ItemType Directory -Force -Path (Join-Path $script:appData 'pairtime\bin') | Out-Null
-Add-Type -AssemblyName System.IO.Compression.FileSystem
 $fakeZip = [System.IO.Compression.ZipFile]::OpenRead((Join-Path $Fixture "fake\pairtime_$($version.Substring(1))_windows_amd64.zip"))
 try {
   [System.IO.Compression.ZipFileExtensions]::ExtractToFile($fakeZip.GetEntry('pairtime.exe'), (Join-Path $script:appData 'pairtime\bin\pairtime.exe'))
@@ -206,7 +224,7 @@ try {
 }
 $running = Start-Process -FilePath (Join-Path $script:appData 'pairtime\bin\pairtime.exe') -ArgumentList 'wait' -PassThru -WindowStyle Hidden
 Test-Case 'a pairtime.exe that is running, as the agent would be, is moved aside and replaced' `
-  ok 'Installed pairtime' "$installed pairtime\bin\pairtime.old.exe" (Invoke-File $stamped (Real real real.pub))
+  ok 'Installed pairtime' "$installed pairtime\bin\pairtime.old.exe" (Invoke-File $stamped (Real real real.pub @('-NoInstall')))
 Test-Binary real
 Stop-Process -Id $running.Id -Force
 
@@ -216,13 +234,13 @@ Test-Case 'by default an unsigned release is refused, before anything is downloa
 
 New-Case
 Test-Case '-AllowUnsigned installs an unsigned release, with a warning' ok 'no key this script trusts signed manifest.json' $installed `
-  (Invoke-File $stamped @('-BaseUrl', "$server/real", '-AllowUnsigned'))
+  (Invoke-File $stamped @('-BaseUrl', "$server/real", '-AllowUnsigned', '-NoInstall'))
 Test-Binary real
 
 New-Case
 Test-Case 'PAIRTIME_ALLOW_UNSIGNED=1 with irm | iex installs a release no trusted key signed, with a warning' `
   ok 'no key this script trusts signed manifest.json' $installed `
-  (Invoke-OneLiner @{ PAIRTIME_BASE_URL = "$server/real"; PAIRTIME_RELEASE_KEYS = (Join-Path $keys 'other.pub'); PAIRTIME_ALLOW_UNSIGNED = '1' })
+  (Invoke-OneLiner @{ PAIRTIME_BASE_URL = "$server/real"; PAIRTIME_RELEASE_KEYS = (Join-Path $keys 'other.pub'); PAIRTIME_ALLOW_UNSIGNED = '1'; PAIRTIME_NO_INSTALL = '1' })
 
 foreach ($refused in @(
     @('other.pub', 'real', "a release signed by a key it doesn't trust"),
@@ -237,7 +255,7 @@ foreach ($refused in @(
 New-Case
 Test-Case 'one good signature is enough, after one that fails under a trusted key''s id' `
   ok "manifest.json is signed by release key $(Get-KeyId (Join-Path $keys 'two.pub'))" $installed `
-  (Invoke-File $stamped (Real two-signatures two.pub))
+  (Invoke-File $stamped (Real two-signatures two.pub @('-NoInstall')))
 
 New-Case
 Test-Case 'an archive with a wrong SHA-256 is refused, and nothing is installed' fails "doesn't have the SHA-256 manifest.json lists" '' `
@@ -285,7 +303,7 @@ Test-Case "the repository's copy names no release, so it needs a version" fails 
 
 New-Case
 Test-Case "the repository's copy installs with -Version and -ReleaseKeys" ok 'Installed pairtime' $installed `
-  (Invoke-File $repoScript (Real real real.pub @('-Version', $version)))
+  (Invoke-File $repoScript (Real real real.pub @('-Version', $version, '-NoInstall')))
 
 Write-Output "== install.ps1's functions"
 

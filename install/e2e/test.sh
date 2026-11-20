@@ -87,9 +87,13 @@ installed='./.local ./.local/bin ./.local/bin/pairtime'
 
 # The README's one-liner, for bash -c: the stamped script from the real
 # release, installing the release in directory $2 of the server at $0 with
-# the key file $1.
+# the key file $1, and PAIRTIME_NO_INSTALL=$3.
 # shellcheck disable=SC2016 # bash -c expands them
-one_liner='curl -fsSL "$0/real/install.sh" | PAIRTIME_BASE_URL="$0/$2" PAIRTIME_RELEASE_KEYS="$1" sh'
+one_liner='curl -fsSL "$0/real/install.sh" | PAIRTIME_BASE_URL="$0/$2" PAIRTIME_RELEASE_KEYS="$1" PAIRTIME_NO_INSTALL="$3" sh'
+
+# The real binary's cases stop before pairtime install with --no-install,
+# so they don't change when it gains that command (WP-IN2). One case below
+# checks what happens without it.
 
 # check NAME WANT PATTERN FILES COMMAND... runs COMMAND and checks that it
 # exits 0 (WANT ok) or doesn't (WANT fails), that its output matches the
@@ -142,22 +146,33 @@ check_record() {
 echo "== install.sh, against the fixture for $version, on $os/$arch"
 
 fresh
-check "curl | sh installs a release signed by a key it was given, and stops before pairtime install, which this build lacks" \
-  ok 'has no install command yet' "$installed" \
-  run bash -c "$one_liner" "$server" "$keys/real.pub" real
+check "curl | sh installs a release signed by a key it was given" \
+  ok 'Installed pairtime' "$installed" \
+  run bash -c "$one_liner" "$server" "$keys/real.pub" real 1
 check_binary real
+
+mkdir "$scratch/real-binary"
+tar -xzf "$fixture/real/pairtime_${version#v}_${os}_${arch}.tar.gz" -C "$scratch/real-binary" pairtime
+if "$scratch/real-binary/pairtime" help | grep -q '^  install '; then
+  echo "::notice::the real pairtime has an install command now (WP-IN2), so install/e2e should run it, then pairtime uninstall, in a temporary home and check that nothing is left (docs/PLAN.md, WP-RL2)"
+else
+  fresh
+  check "without --no-install, setup stops before pairtime install while the binary has none" \
+    ok 'has no install command yet' "$installed" \
+    run sh "$stamped" --base-url "$server/real" --release-keys "$keys/real.pub"
+fi
 
 fresh
 mkdir -p "$home/.local/bin"
 echo 'an old pairtime' > "$home/.local/bin/pairtime"
 check "a pairtime already in ~/.local/bin is replaced, and a PATH without it gets a hint" \
   ok "isn't on your PATH" "$installed" \
-  run sh "$stamped" --base-url "$server/real" --release-keys "$keys/real.pub"
+  run sh "$stamped" --base-url "$server/real" --release-keys "$keys/real.pub" --no-install
 check_binary real
 
 fresh
 check "bash runs it too" ok 'Installed pairtime' "$installed" \
-  run bash "$stamped" --base-url="$server/real" --release-keys="$keys/real.pub"
+  run bash "$stamped" --base-url="$server/real" --release-keys="$keys/real.pub" --no-install
 
 fresh
 check "by default an unsigned release is refused, before anything is downloaded" \
@@ -167,13 +182,13 @@ check "by default an unsigned release is refused, before anything is downloaded"
 fresh
 check "--allow-unsigned installs an unsigned release, with a warning" \
   ok 'warning: no key this script trusts signed manifest.json' "$installed" \
-  run sh "$stamped" --base-url "$server/real" --allow-unsigned
+  run sh "$stamped" --base-url "$server/real" --allow-unsigned --no-install
 check_binary real
 
 fresh
 check "PAIRTIME_ALLOW_UNSIGNED=1 installs a release no trusted key signed, with a warning" \
   ok 'warning: no key this script trusts signed manifest.json' "$installed" \
-  run PAIRTIME_ALLOW_UNSIGNED=1 sh "$stamped" --base-url "$server/real" --release-keys "$keys/other.pub"
+  run PAIRTIME_ALLOW_UNSIGNED=1 PAIRTIME_NO_INSTALL=1 sh "$stamped" --base-url "$server/real" --release-keys "$keys/other.pub"
 
 for refused in \
   "other.pub real a release signed by a key it doesn't trust" \
@@ -190,7 +205,7 @@ done
 fresh
 check "one good signature is enough, after one that fails under a trusted key's id" \
   ok "manifest.json is signed by release key $(key_id "$keys/two.pub")" "$installed" \
-  run sh "$stamped" --base-url "$server/two-signatures" --release-keys "$keys/two.pub"
+  run sh "$stamped" --base-url "$server/two-signatures" --release-keys "$keys/two.pub" --no-install
 
 fresh
 check "an archive with a wrong SHA-256 is refused, and nothing is installed" \
@@ -235,7 +250,7 @@ fresh
 check "under curl | sh in a terminal, pairtime install reads the terminal, not the pipe" \
   ok 'Running pairtime install' "$installed" \
   run python3 -I -c 'import pty, sys; sys.exit(pty.spawn(sys.argv[1:]) >> 8)' \
-  bash -c "$one_liner" "$server" "$keys/fake.pub" fake
+  bash -c "$one_liner" "$server" "$keys/fake.pub" fake ''
 check_record $'install\nstdin: terminal'
 
 fresh
@@ -251,7 +266,7 @@ check "a failing pairtime install fails the script, and the binary stays" \
 fresh
 printf '%s' "$(cat "$keys/real.pub")" > "$scratch/no-newline.pub"
 check "a key file without a final newline still counts its last key" ok 'Installed pairtime' "$installed" \
-  run sh "$stamped" --base-url "$server/real" --release-keys "$scratch/no-newline.pub"
+  run sh "$stamped" --base-url "$server/real" --release-keys "$scratch/no-newline.pub" --no-install
 
 fresh
 secret=$(head -c 32 /dev/zero | base64)
@@ -274,7 +289,7 @@ check "the repository's copy names no release, so it needs --version" fails "doe
 
 fresh
 check "the repository's copy installs with --version and --release-keys" ok 'Installed pairtime' "$installed" \
-  run sh "$repo_script" --version "$version" --base-url "$server/real" --release-keys "$keys/real.pub"
+  run sh "$repo_script" --version "$version" --base-url "$server/real" --release-keys "$keys/real.pub" --no-install
 
 echo "== install.sh's functions"
 
