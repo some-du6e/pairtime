@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/some-du6e/pairtime/pkg/event"
@@ -39,6 +40,14 @@ func (c Change) Op() event.GitOp {
 	return ""
 }
 
+// actor returns who the change's event says ran the operation.
+func (c Change) actor() event.Actor {
+	if g, ok := c.Event.Data.(*event.GitChange); ok {
+		return g.Actor
+	}
+	return ""
+}
+
 // SetActor sets who ran the operation on the event and on the commits it
 // made here.
 func (c *Change) SetActor(a event.Actor) {
@@ -64,24 +73,73 @@ const maxArrived = 200
 // maxRebase caps the commits a rebase records and maps.
 const maxRebase = 2000
 
-// recentMax is how many recorded commits a Scanner remembers, so that a
-// merge of a local branch doesn't record its commits again as arrivals.
-const recentMax = 256
+// recentMax is how many recorded commits a repo's scanners remember, so
+// that a merge of a local branch doesn't record its commits again as
+// arrivals.
+const recentMax = 1024
 
 // ScannerState is what a Scanner resumes from after a restart. It is
-// local state (state.json).
+// local state (state.json). A Watcher keeps Recent per repo instead, in
+// WatcherState.Repos, since a repo's worktrees share it.
 type ScannerState struct {
 	Cursor Cursor   `json:"cursor"`
 	Recent []string `json:"recent,omitempty"`
+}
+
+// recentSet is the commits recorded in one repo, newest last. A Watcher
+// gives the scanners of a repo's worktrees one set, so that a merge in one
+// worktree of a branch committed in another, say an agent's, doesn't
+// record those commits a second time, as made elsewhere. It is safe for
+// concurrent use.
+type recentSet struct {
+	dir string // the repo's common directory, as WatcherState keys it
+	mu  sync.Mutex
+	ids []string
+}
+
+func newRecentSet(dir string, ids []string) *recentSet {
+	rs := &recentSet{dir: dir}
+	for _, id := range ids {
+		rs.add(id)
+	}
+	return rs
+}
+
+func (rs *recentSet) has(id string) bool {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	return slices.Contains(rs.ids, id)
+}
+
+func (rs *recentSet) add(id string) {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	if slices.Contains(rs.ids, id) {
+		return
+	}
+	rs.ids = append(rs.ids, id)
+	if len(rs.ids) > recentMax {
+		rs.ids = slices.Delete(rs.ids, 0, len(rs.ids)-recentMax)
+	}
+}
+
+func (rs *recentSet) list() []string {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	return slices.Clone(rs.ids)
 }
 
 // Scanner reads one worktree's HEAD reflog and turns the entries written
 // since its last scan into Changes. It is not safe for concurrent use;
 // the Watcher runs one scan at a time per worktree.
 type Scanner struct {
-	git    *Runner
-	loc    Location
-	st     ScannerState
+	git *Runner
+	loc Location
+	st  ScannerState // its Recent lives in recent
+	// recent is the scanner's own set of recorded commits, or the one its
+	// repo's worktrees share (shared).
+	recent *recentSet
+	shared bool
 	now    func() time.Time
 	rekey  func(context.Context, Location) (Location, error)
 	failed int // consecutive scans that couldn't read commits
@@ -98,14 +156,27 @@ func NewScanner(g *Runner, loc Location, st ScannerState, now func() time.Time, 
 	if now == nil {
 		now = time.Now
 	}
-	st.Recent = slices.Clone(st.Recent)
-	return &Scanner{git: g, loc: loc, st: st, now: now, rekey: rekey}
+	s := &Scanner{git: g, loc: loc, st: ScannerState{Cursor: st.Cursor}, now: now, rekey: rekey}
+	s.recent = newRecentSet(loc.CommonDir, st.Recent)
+	return s
 }
 
-// State returns what to keep for the next start.
+// share makes the scanner record into rs, the set its repo's other
+// worktrees use, bringing along what it had.
+func (s *Scanner) share(rs *recentSet) {
+	for _, id := range s.recent.list() {
+		rs.add(id)
+	}
+	s.recent, s.shared = rs, true
+}
+
+// State returns what to keep for the next start. A scanner sharing its
+// repo's recorded commits leaves them out; the Watcher keeps them.
 func (s *Scanner) State() ScannerState {
-	st := s.st
-	st.Recent = slices.Clone(s.st.Recent)
+	st := ScannerState{Cursor: s.st.Cursor}
+	if !s.shared {
+		st.Recent = s.recent.list()
+	}
 	return st
 }
 
@@ -209,15 +280,7 @@ func (s *Scanner) head(ctx context.Context) string {
 	return ids[0]
 }
 
-func (s *Scanner) remember(sha string) {
-	if slices.Contains(s.st.Recent, sha) {
-		return
-	}
-	s.st.Recent = append(s.st.Recent, sha)
-	if len(s.st.Recent) > recentMax {
-		s.st.Recent = slices.Delete(s.st.Recent, 0, len(s.st.Recent)-recentMax)
-	}
-}
+func (s *Scanner) remember(sha string) { s.recent.add(sha) }
 
 // maybeRekey asks the resolver for the repo's identity again when these
 // operations may have changed it: a repo's first commit, or a shallow
@@ -603,9 +666,10 @@ func (s *Scanner) record(m *meta, kind event.GitOp, origin Origin, reflogTime in
 }
 
 // arrivals returns the commits a pull or merge brought into HEAD's
-// history, the ones reachable from tip and not from old, that this scanner
-// hasn't recorded: the newest maxArrived of them, oldest first. madeTip
-// says tip is a merge commit made here, which isn't an arrival.
+// history, the ones reachable from tip and not from old, that weren't
+// recorded already, here or in another worktree of the repo: the newest
+// maxArrived of them, oldest first. madeTip says tip is a merge commit made
+// here, which isn't an arrival.
 func (s *Scanner) arrivals(ctx context.Context, old, tip string, madeTip bool) ([]*meta, error) {
 	if old == "" || zeroID(old) || tip == "" || zeroID(tip) {
 		return nil, nil
@@ -620,7 +684,7 @@ func (s *Scanner) arrivals(ctx context.Context, old, tip string, madeTip bool) (
 	}
 	var want []string
 	for _, id := range ids {
-		if (madeTip && id == tip) || slices.Contains(s.st.Recent, id) {
+		if (madeTip && id == tip) || s.recent.has(id) {
 			continue
 		}
 		want = append(want, id)

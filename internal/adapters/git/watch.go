@@ -37,9 +37,33 @@ const (
 	DefaultMaxWatched = 64
 )
 
-// agentRunKeep is how long the watcher keeps an agent's git command for
-// matching, which only needs ActorWindow plus the hold.
-const agentRunKeep = 30 * time.Second
+// StaleAfter is how long after a change's last reflog entry a scan may
+// find it for the change to stay the person's. A change found later, by
+// the poll of a worktree without notifications or by the catch-up after a
+// restart, carries the scan's time as its event time (SM 1.1), so as a
+// human commit it would anchor credit at the moment pairtime noticed it
+// rather than when the person committed (SM 2.3). It goes out with actor
+// unknown instead, unless an agent's command explains it.
+const StaleAfter = 10 * time.Second
+
+const (
+	// agentRunKeep is how long an agent's finished git command stays
+	// matchable: longer than the slowest way to a scan, a poll about every
+	// minute plus Hold.
+	agentRunKeep = 3 * time.Minute
+	// maxCallHold is how long a change waits for an agent's shell call that
+	// started before it and hasn't reported its end. Claude Code's Bash
+	// tool stops a command after 10 minutes at most.
+	maxCallHold = 10 * time.Minute
+	// maxRuns bounds the agent commands kept.
+	maxRuns = 1024
+	// maxIdle bounds the worktrees kept after Poll lost sight of them.
+	maxIdle = 256
+	// firstRetry and maxRetry bound how long a failed scan waits before
+	// it is tried again; the wait doubles with each failure.
+	firstRetry = 5 * time.Second
+	maxRetry   = 5 * time.Minute
+)
 
 // WatcherOptions configure a Watcher.
 type WatcherOptions struct {
@@ -88,9 +112,19 @@ func newFsnotifier() (notifier, error) {
 }
 
 // WatcherState is what the watcher keeps in state.json: each worktree's
-// scanner, by its git directory. The paths are local.
+// cursor, by its git directory, and each repo's recorded commits, by its
+// common git directory. The paths are local.
 type WatcherState struct {
 	Worktrees map[string]ScannerState `json:"worktrees,omitempty"`
+	Repos     map[string]RepoState    `json:"repos,omitempty"`
+}
+
+// RepoState is what the scanners of one repo's worktrees share.
+type RepoState struct {
+	// Recent are the newest commits recorded in the repo, so that a merge
+	// in one worktree of a branch committed in another doesn't record them
+	// again as made elsewhere.
+	Recent []string `json:"recent,omitempty"`
 }
 
 // Watcher watches the git directories of the worktrees it is told about
@@ -119,10 +153,18 @@ type Watcher struct {
 	wdone chan struct{}
 
 	mu    sync.Mutex
-	trees map[string]*tree // by foldPath of the git directory
-	// saved are the states scanners resume from, by foldPath of the git
-	// directory: opts.State's, until a worktree is tracked or dropped.
-	saved    map[string]ScannerState
+	trees map[string]*tree // tracked worktrees, by foldPath of the git directory
+	// idle are worktrees Poll stopped watching because their HEAD couldn't
+	// be read, as when a network or USB drive drops out. Track resumes
+	// them where they were, instead of from the state the watcher started
+	// with, which would report their changes a second time.
+	idle map[string]*tree
+	// saved are the states from opts.State that no Track has taken up
+	// yet, by foldPath of the git directory.
+	saved map[string]savedState
+	// recent are the commits recorded in each repo, by foldPath of its
+	// common directory, shared by the scanners of its worktrees.
+	recent   map[string]*recentSet
 	byDir    map[string]*watchDir // by foldPath of each watched directory
 	wreqs    []*tree              // worktrees whose watches the watch goroutine should bring up to date
 	runs     []gitRun
@@ -132,18 +174,34 @@ type Watcher struct {
 	closed   bool
 }
 
+type savedState struct {
+	gitDir string
+	st     ScannerState
+}
+
 type tree struct {
 	key  string // foldPath of the git directory
 	loc  Location
 	scan *Scanner // used by the worker goroutine only
-	// state is the scanner's state after its last scan, for State.
+	// state is what State reports: the scanner's state as of the last of
+	// the worktree's changes that went to Sink. pending are the states of
+	// the scans after it, each waiting for its scan's changes to go out,
+	// so that an exit while changes are held can't lose them.
 	state    ScannerState
+	pending  []*pendingState
 	sig      signature
+	failures int       // scans in a row that failed
+	retryAt  time.Time // when a failed scan may be tried again
 	watched  []string
 	debounce *time.Timer
 	// dropped is set once the worktree is out of pairtime, so a scan of it
 	// that was already queued or running yields nothing.
 	dropped bool
+}
+
+type pendingState struct {
+	st   ScannerState
+	left int // the scan's changes not yet given to Sink
 }
 
 // watchDir is a directory with a file notification, and the worktrees it
@@ -156,6 +214,7 @@ type watchDir struct {
 type heldChange struct {
 	c       Change
 	t       *tree
+	p       *pendingState
 	common  string
 	until   time.Time
 	decided bool
@@ -176,12 +235,14 @@ func NewWatcher(opts WatcherOptions) (*Watcher, error) {
 		work:     make(chan func(), 64),
 		stop:     make(chan struct{}),
 		done:     make(chan struct{}),
-		trees:    make(map[string]*tree),
-		saved:    make(map[string]ScannerState),
-		byDir:    make(map[string]*watchDir),
 		wkick:    make(chan struct{}, 1),
 		wstop:    make(chan struct{}),
 		wdone:    make(chan struct{}),
+		trees:    make(map[string]*tree),
+		idle:     make(map[string]*tree),
+		saved:    make(map[string]savedState),
+		recent:   make(map[string]*recentSet),
+		byDir:    make(map[string]*watchDir),
 		problems: make(map[string]string),
 	}
 	if w.git == nil {
@@ -203,7 +264,10 @@ func NewWatcher(opts WatcherOptions) (*Watcher, error) {
 		w.opts.MaxWatched = DefaultMaxWatched
 	}
 	for gitDir, st := range opts.State.Worktrees {
-		w.saved[foldPath(gitDir)] = st
+		w.saved[foldPath(gitDir)] = savedState{gitDir: gitDir, st: st}
+	}
+	for common, rs := range opts.State.Repos {
+		w.recent[foldPath(common)] = newRecentSet(common, rs.Recent)
 	}
 	if !opts.NoNotify {
 		newNotifier := opts.newNotifier
@@ -264,15 +328,47 @@ func (w *Watcher) Problems() map[string]string {
 	return out
 }
 
-// State returns what to keep in state.json.
+// State returns what to keep in state.json. Each worktree's cursor is
+// where it stood after the last of its changes Sink got, and the commits
+// of changes still held don't count as recorded yet, so after an exit
+// that skips Close the next start reports those changes again rather than
+// never. A worktree Poll lost sight of is kept while its git directory is
+// there.
 func (w *Watcher) State() WatcherState {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	st := WatcherState{Worktrees: make(map[string]ScannerState, len(w.trees))}
+	st := WatcherState{Worktrees: make(map[string]ScannerState), Repos: make(map[string]RepoState)}
+	for _, s := range w.saved {
+		if hasHEAD(s.gitDir) {
+			st.Worktrees[s.gitDir] = s.st
+		}
+	}
+	for _, t := range w.idle {
+		if hasHEAD(t.loc.GitDir) {
+			st.Worktrees[t.loc.GitDir] = t.state
+		}
+	}
 	for _, t := range w.trees {
 		st.Worktrees[t.loc.GitDir] = t.state
 	}
+	held := make(map[string]bool)
+	for _, h := range w.held {
+		for _, c := range h.c.Commits {
+			held[c.SHA] = true
+		}
+	}
+	for _, rs := range w.recent {
+		ids := slices.DeleteFunc(rs.list(), func(id string) bool { return held[id] })
+		if len(ids) > 0 {
+			st.Repos[rs.dir] = RepoState{Recent: ids}
+		}
+	}
 	return st
+}
+
+func hasHEAD(gitDir string) bool {
+	_, err := os.Stat(filepath.Join(gitDir, "HEAD"))
+	return err == nil
 }
 
 // Track resolves dir and starts watching its worktree, once. It returns
@@ -308,15 +404,32 @@ func (w *Watcher) Track(ctx context.Context, dir string) (Location, error) {
 	if _, ok := w.trees[key]; ok {
 		return loc, nil
 	}
-	st := w.saved[key]
-	delete(w.saved, key)
-	t := &tree{key: key, loc: loc, state: st}
-	t.scan = NewScanner(w.git, loc, st, w.now, w.res.Rekey)
+	t, ok := w.idle[key]
+	delete(w.idle, key)
+	if !ok {
+		st := w.saved[key].st
+		delete(w.saved, key)
+		t = &tree{key: key, loc: loc, state: st}
+		t.scan = NewScanner(w.git, loc, st, w.now, w.res.Rekey)
+		t.scan.share(w.recentLocked(loc.CommonDir))
+	}
 	w.trees[key] = t
 	w.requestWatchLocked(t)
 	// The first scan sets the cursor, or catches up from a saved one.
 	w.queueLocked(t)
 	return loc, nil
+}
+
+// recentLocked returns the set of commits recorded in the repo whose
+// common directory is commonDir.
+func (w *Watcher) recentLocked(commonDir string) *recentSet {
+	k := foldPath(commonDir)
+	rs, ok := w.recent[k]
+	if !ok {
+		rs = newRecentSet(commonDir, nil)
+		w.recent[k] = rs
+	}
+	return rs
 }
 
 // requestWatchLocked asks the watch goroutine to bring t's file
@@ -515,10 +628,16 @@ func (w *Watcher) events() {
 func (w *Watcher) poke(t *tree) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	if w.closed {
-		return
+	if !w.closed && w.trees[t.key] == t {
+		w.queueIfChangedLocked(t)
 	}
-	if sig := signatureOf(t.loc); sig != t.sig {
+}
+
+// queueIfChangedLocked asks for a scan of t when its signature isn't the
+// one its last good scan saw, unless a failed scan of it is still waiting
+// out its retry.
+func (w *Watcher) queueIfChangedLocked(t *tree) {
+	if signatureOf(t.loc) != t.sig && !w.now().Before(t.retryAt) {
 		w.queueLocked(t)
 	}
 }
@@ -527,7 +646,8 @@ func (w *Watcher) poke(t *tree) {
 // the ones whose HEAD, refs or reflog changed. The agent calls it from its
 // scheduler, every minute or so (DESIGN 3.3); it is what finds changes on
 // file systems without notifications and past MaxWatched. It also stops
-// watching worktrees that are gone.
+// watching worktrees that are gone, and drops ones that are now out of
+// pairtime.
 func (w *Watcher) Poll() {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -539,22 +659,29 @@ func (w *Watcher) Poll() {
 			w.dropLocked(key, t)
 			continue
 		}
-		if _, err := os.Stat(filepath.Join(t.loc.GitDir, "HEAD")); err != nil {
+		if !hasHEAD(t.loc.GitDir) {
 			w.untrackLocked(key, t)
+			if len(w.idle) >= maxIdle {
+				for k := range w.idle {
+					delete(w.idle, k)
+					break
+				}
+			}
+			w.idle[key] = t
 			continue
 		}
-		if sig := signatureOf(t.loc); sig != t.sig {
-			w.queueLocked(t)
-		}
+		w.queueIfChangedLocked(t)
 	}
 }
 
-// dropIgnoredLocked drops every tracked worktree that is now out of
-// pairtime.
+// dropIgnoredLocked drops every tracked or idle worktree that is now out
+// of pairtime.
 func (w *Watcher) dropIgnoredLocked() {
-	for key, t := range w.trees {
-		if w.res.ignoredLoc(t.loc) {
-			w.dropLocked(key, t)
+	for _, m := range []map[string]*tree{w.trees, w.idle} {
+		for key, t := range m {
+			if w.res.ignoredLoc(t.loc) {
+				w.dropLocked(key, t)
+			}
 		}
 	}
 }
@@ -562,12 +689,23 @@ func (w *Watcher) dropIgnoredLocked() {
 // dropLocked stops watching a worktree that is now out of pairtime, as
 // DESIGN 8.8 asks of a .pairtime-ignore or an exclude pattern added while
 // it was tracked: its held changes never reach Sink, and nothing of its
-// state is kept.
+// state is kept, nor its repo's recorded commits once no worktree of the
+// repo is left.
 func (w *Watcher) dropLocked(key string, t *tree) {
 	w.untrackLocked(key, t)
+	delete(w.idle, key)
 	delete(w.saved, key)
 	t.dropped = true
 	w.held = slices.DeleteFunc(w.held, func(h *heldChange) bool { return h.t == t })
+	ck := foldPath(t.loc.CommonDir)
+	for _, m := range []map[string]*tree{w.trees, w.idle} {
+		for _, o := range m {
+			if foldPath(o.loc.CommonDir) == ck {
+				return
+			}
+		}
+	}
+	delete(w.recent, ck)
 }
 
 func (w *Watcher) untrackLocked(key string, t *tree) {
@@ -587,18 +725,20 @@ func (w *Watcher) queueLocked(t *tree) {
 	}
 }
 
-// NoteAgentCommand tells the watcher that an agent's tool ran a shell
-// command, line, in cwd, at t: what a Claude Code PostToolUse hook for
-// Bash reports. A git command in it marks a git operation in the same repo
-// within ActorWindow as the agent's (SM 1.2). The line is parsed here and
-// not kept.
-func (w *Watcher) NoteAgentCommand(t time.Time, cwd, line string) {
-	runs := parseGitRuns(t, cwd, line)
-	if len(runs) == 0 {
+// NoteAgentCommand tells the watcher about a shell command an agent's tool
+// ran. A git command in it marks a git operation in the same repo within
+// the call's span, widened by ActorWindow, as the agent's (SM 1.2). A call
+// reported as it starts holds the changes in its repo that come after its
+// start until it is reported again with its end. The command line is
+// parsed here and not kept.
+func (w *Watcher) NoteAgentCommand(c AgentCommand) {
+	runs := parseGitRuns(c)
+	ends := c.Call != "" && !c.End.IsZero()
+	if (len(runs) == 0 && !ends) || (c.Start.IsZero() && c.End.IsZero()) {
 		return
 	}
 	select {
-	case w.work <- func() { w.addRuns(runs) }:
+	case w.work <- func() { w.addRuns(c.Call, c.End, runs) }:
 	case <-w.stop:
 	}
 }
@@ -616,9 +756,29 @@ func (w *Watcher) loop() {
 	}
 }
 
+// scan scans t, after any other worktree of its repo whose HEAD moved too:
+// a merge here of a branch committed there has to find that branch's
+// commits recorded, as made there, before it looks for arrivals.
 func (w *Watcher) scan(t *tree) {
 	w.mu.Lock()
-	if t.dropped || w.closed {
+	var first []*tree
+	ck := foldPath(t.loc.CommonDir)
+	now := w.now()
+	for _, o := range w.trees {
+		if o != t && foldPath(o.loc.CommonDir) == ck && signatureOf(o.loc) != o.sig && !now.Before(o.retryAt) {
+			first = append(first, o)
+		}
+	}
+	w.mu.Unlock()
+	for _, o := range first {
+		w.scanOne(o)
+	}
+	w.scanOne(t)
+}
+
+func (w *Watcher) scanOne(t *tree) {
+	w.mu.Lock()
+	if t.dropped || w.closed || w.trees[t.key] != t {
 		w.mu.Unlock()
 		return
 	}
@@ -627,12 +787,14 @@ func (w *Watcher) scan(t *tree) {
 		w.mu.Unlock()
 		return
 	}
+	loc := t.loc
 	w.mu.Unlock()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	sig := signatureOf(t.loc)
+	sig := signatureOf(loc)
 	changes, err := t.scan.Scan(ctx)
 	loc, state := t.scan.Location(), t.scan.State()
+	now := w.now()
 	w.mu.Lock()
 	if t.dropped || w.res.ignoredLoc(loc) {
 		// Ignored while git was read: none of it counts.
@@ -642,28 +804,50 @@ func (w *Watcher) scan(t *tree) {
 		w.mu.Unlock()
 		return
 	}
-	t.sig = sig
-	t.loc, t.state = loc, state
+	t.loc = loc
 	if err != nil {
+		// The signature stays as it was, so the next look after the retry
+		// time scans again; the cursor stayed put.
+		t.failures++
+		t.retryAt = now.Add(retryAfter(t.failures))
 		w.problems["scan"] = fmt.Sprintf("reading a repo's reflog failed: %v", err)
 	} else {
+		t.failures, t.retryAt = 0, time.Time{}
+		t.sig = sig
 		delete(w.problems, "scan")
 	}
-	now := w.now()
-	for _, c := range changes {
-		h := &heldChange{c: c, t: t, common: t.loc.CommonDir, until: now.Add(w.opts.Hold)}
-		w.matchLocked(h)
-		w.held = append(w.held, h)
+	if len(changes) == 0 && len(t.pending) == 0 {
+		t.state = state
+	} else {
+		p := &pendingState{st: state, left: len(changes)}
+		t.pending = append(t.pending, p)
+		for _, c := range changes {
+			if c.actor() == event.ActorHuman && now.Sub(time.Unix(c.GitEnd+1, 0)) > StaleAfter {
+				c.SetActor(event.ActorUnknown)
+			}
+			h := &heldChange{c: c, t: t, p: p, common: loc.CommonDir, until: now.Add(w.opts.Hold)}
+			w.matchLocked(h)
+			w.held = append(w.held, h)
+		}
 	}
 	w.mu.Unlock()
 	w.release(false)
 }
 
-func (w *Watcher) addRuns(runs []gitRun) {
-	now := w.now()
-	w.mu.Lock()
-	w.runs = slices.DeleteFunc(w.runs, func(r gitRun) bool { return now.Sub(r.t) > agentRunKeep })
-	w.mu.Unlock()
+// retryAfter is how long a worktree waits after failures failed scans in
+// a row: firstRetry, doubling up to maxRetry.
+func retryAfter(failures int) time.Duration {
+	d := firstRetry
+	for i := 1; i < failures && d < maxRetry; i++ {
+		d *= 2
+	}
+	return min(d, maxRetry)
+}
+
+// addRuns keeps an agent's git runs for matching. A call that reports its
+// end replaces the runs it reported at its start, and takes their start
+// when the end came without one.
+func (w *Watcher) addRuns(call string, end time.Time, runs []gitRun) {
 	// Resolving a folder can run git, so it happens here, without the lock.
 	for i := range runs {
 		if runs[i].dir == "" {
@@ -676,8 +860,35 @@ func (w *Watcher) addRuns(runs []gitRun) {
 		}
 		runs[i].dir = loc.CommonDir
 	}
+	now := w.now()
 	w.mu.Lock()
+	if call != "" && !end.IsZero() {
+		var start time.Time
+		w.runs = slices.DeleteFunc(w.runs, func(r gitRun) bool {
+			if r.call != call || !r.end.IsZero() {
+				return false
+			}
+			if start.IsZero() || r.start.Before(start) {
+				start = r.start
+			}
+			return true
+		})
+		for i := range runs {
+			if runs[i].start.IsZero() {
+				runs[i].start = start
+			}
+		}
+	}
+	w.runs = slices.DeleteFunc(w.runs, func(r gitRun) bool {
+		if r.end.IsZero() {
+			return now.Sub(r.start) > maxCallHold
+		}
+		return now.Sub(r.end) > agentRunKeep
+	})
 	w.runs = append(w.runs, runs...)
+	if len(w.runs) > maxRuns {
+		w.runs = slices.Delete(w.runs, 0, len(w.runs)-maxRuns)
+	}
 	for _, h := range w.held {
 		w.matchLocked(h)
 	}
@@ -701,36 +912,95 @@ func (w *Watcher) matchLocked(h *heldChange) {
 	}
 }
 
-// release sends held changes to Sink, in order, while the first is
-// decided or has waited long enough; all of them when final is set. It
-// arms a timer for the next one.
+// openCallLocked returns how long h waits for an agent's shell call that
+// is still running: a call in h's repo that can run h's git command and
+// started before h's operation did, give or take ActorWindow.
+func (w *Watcher) openCallLocked(h *heldChange, now time.Time) (time.Time, bool) {
+	op := h.c.Op()
+	var until time.Time
+	for _, r := range w.runs {
+		if !r.end.IsZero() || r.dir == "" || foldPath(r.dir) != foldPath(h.common) || !slices.Contains(r.ops, op) {
+			continue
+		}
+		if !time.Unix(h.c.GitStart+1, 0).After(r.start.Add(-ActorWindow)) {
+			continue // the operation began before the call did
+		}
+		if u := r.start.Add(maxCallHold); u.After(now) && u.After(until) {
+			until = u
+		}
+	}
+	return until, !until.IsZero()
+}
+
+// release sends held changes to Sink: each one that is decided, or has
+// waited long enough and isn't waiting on an agent's running call, once
+// every earlier change of its worktree went; all of them when final is
+// set. It arms a timer for the next one due.
 func (w *Watcher) release(final bool) {
 	for {
 		w.mu.Lock()
-		if len(w.held) == 0 {
-			w.mu.Unlock()
-			return
-		}
-		h := w.held[0]
 		now := w.now()
-		if !final && !h.decided && now.Before(h.until) {
-			wait := h.until.Sub(now)
-			if w.timer == nil {
-				w.timer = time.AfterFunc(wait, func() {
-					select {
-					case w.work <- func() { w.release(false) }:
-					case <-w.stop:
-					}
-				})
-			} else {
-				w.timer.Reset(wait)
+		idx := -1
+		var next time.Time
+		waiting := make(map[*tree]bool)
+		for i, h := range w.held {
+			if waiting[h.t] {
+				continue // a worktree's changes go out in the order git made them
+			}
+			due := h.until
+			if u, open := w.openCallLocked(h, now); open && u.After(due) {
+				due = u
+			}
+			if final || h.decided || !now.Before(due) {
+				idx = i
+				break
+			}
+			waiting[h.t] = true
+			if next.IsZero() || due.Before(next) {
+				next = due
+			}
+		}
+		if idx < 0 {
+			if !next.IsZero() && !w.closed {
+				w.armLocked(next.Sub(now))
 			}
 			w.mu.Unlock()
 			return
 		}
-		w.held = w.held[1:]
+		h := w.held[idx]
+		w.held = slices.Delete(w.held, idx, idx+1)
 		w.mu.Unlock()
 		w.opts.Sink(h.c)
+		w.mu.Lock()
+		w.deliveredLocked(h)
+		w.mu.Unlock()
+	}
+}
+
+// armLocked has the worker look at the held changes again after wait.
+func (w *Watcher) armLocked(wait time.Duration) {
+	if w.timer == nil {
+		w.timer = time.AfterFunc(wait, func() {
+			select {
+			case w.work <- func() { w.release(false) }:
+			case <-w.stop:
+			}
+		})
+		return
+	}
+	w.timer.Reset(wait)
+}
+
+// deliveredLocked moves h's worktree's reported state on past each scan
+// whose changes have all gone to Sink.
+func (w *Watcher) deliveredLocked(h *heldChange) {
+	if h.p != nil {
+		h.p.left--
+	}
+	t := h.t
+	for len(t.pending) > 0 && t.pending[0].left <= 0 {
+		t.state = t.pending[0].st
+		t.pending = t.pending[1:]
 	}
 }
 

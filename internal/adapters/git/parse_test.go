@@ -438,14 +438,14 @@ func TestParseGitRuns(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			runs := parseGitRuns(at, cwd, tc.line)
+			runs := parseGitRuns(AgentCommand{Call: "toolu_1", Start: at.Add(-time.Second), End: at, Dir: cwd, Line: tc.line})
 			var dirs []string
 			var ops []event.GitOp
 			for _, r := range runs {
 				dirs = append(dirs, r.dir)
 				ops = append(ops, r.ops[0])
-				if !r.t.Equal(at) {
-					t.Errorf("run time %v, want %v", r.t, at)
+				if !r.end.Equal(at) || !r.start.Equal(at.Add(-time.Second)) || r.call != "toolu_1" {
+					t.Errorf("run %q from %v to %v, want the call's span", r.call, r.start, r.end)
 				}
 			}
 			if !slices.Equal(dirs, tc.wantDir) || !slices.Equal(ops, tc.wantSub) {
@@ -469,15 +469,24 @@ func TestRunMatches(t *testing.T) {
 		end       int64
 		want      bool
 	}{
-		{"an agent commit in the same repo in the same second is the agent's", gitRun{t: at(100, 500), ops: commit}, common, event.GitCommit, 100, 100, true},
-		{"one that ends 2 s after git's second is still the agent's", gitRun{t: at(102, 900), ops: commit}, common, event.GitCommit, 100, 100, true},
-		{"one 3 s after git's second isn't", gitRun{t: at(103, 100), ops: commit}, common, event.GitCommit, 100, 100, false},
-		{"one 2 s before the operation began is the agent's", gitRun{t: at(98, 0), ops: commit}, common, event.GitCommit, 100, 100, true},
-		{"one that began 3 s before isn't", gitRun{t: at(97, 0), ops: commit}, common, event.GitCommit, 100, 100, false},
-		{"a run in another repo isn't", gitRun{t: at(100, 0), ops: commit}, other, event.GitCommit, 100, 100, false},
-		{"a run of another git command isn't", gitRun{t: at(100, 0), ops: []event.GitOp{event.GitCheckout}}, common, event.GitCommit, 100, 100, false},
-		{"a run whose folder didn't resolve isn't", gitRun{t: at(100, 0), ops: commit}, "", event.GitCommit, 100, 100, false},
-		{"a long rebase matches at its end", gitRun{t: at(110, 200), ops: []event.GitOp{event.GitRebase}}, common, event.GitRebase, 100, 109, true},
+		// Only the call's end known, as from a PostToolUse hook alone.
+		{"an agent commit whose call ended in git's second is the agent's", gitRun{end: at(100, 500), ops: commit}, common, event.GitCommit, 100, 100, true},
+		{"one whose call ended 2 s after git's second is still the agent's", gitRun{end: at(102, 900), ops: commit}, common, event.GitCommit, 100, 100, true},
+		{"one whose call ended 3 s after git's second isn't", gitRun{end: at(103, 100), ops: commit}, common, event.GitCommit, 100, 100, false},
+		{"one whose call ended 2 s before git's second is the agent's", gitRun{end: at(98, 0), ops: commit}, common, event.GitCommit, 100, 100, true},
+		{"one whose call ended 3 s before isn't", gitRun{end: at(97, 0), ops: commit}, common, event.GitCommit, 100, 100, false},
+		{"a run in another repo isn't", gitRun{end: at(100, 0), ops: commit}, other, event.GitCommit, 100, 100, false},
+		{"a run of another git command isn't", gitRun{end: at(100, 0), ops: []event.GitOp{event.GitCheckout}}, common, event.GitCommit, 100, 100, false},
+		{"a run whose folder didn't resolve isn't", gitRun{end: at(100, 0), ops: commit}, "", event.GitCommit, 100, 100, false},
+		{"a long rebase matches a call that ended with it", gitRun{end: at(110, 200), ops: []event.GitOp{event.GitRebase}}, common, event.GitRebase, 100, 109, true},
+		// The call's start and end known, as agent.tool has them.
+		{"the commit of `git commit && git push` is the agent's though the push ran 12 s more", gitRun{start: at(99, 900), end: at(112, 0), ops: commit}, common, event.GitCommit, 100, 100, true},
+		{"a commit 3 s before the call began isn't the agent's", gitRun{start: at(103, 500), end: at(112, 0), ops: commit}, common, event.GitCommit, 100, 100, false},
+		{"a commit 2 s before the call began is", gitRun{start: at(102, 0), end: at(112, 0), ops: commit}, common, event.GitCommit, 100, 100, true},
+		{"a commit 3 s after the call ended isn't", gitRun{start: at(95, 0), end: at(97, 0), ops: commit}, common, event.GitCommit, 100, 100, false},
+		{"a long rebase inside the call is the agent's", gitRun{start: at(99, 500), end: at(110, 200), ops: []event.GitOp{event.GitRebase}}, common, event.GitRebase, 100, 109, true},
+		{"a rebase that began before the call isn't", gitRun{start: at(105, 0), end: at(110, 200), ops: []event.GitOp{event.GitRebase}}, common, event.GitRebase, 100, 109, false},
+		{"a call still running explains nothing yet", gitRun{start: at(99, 0), ops: commit}, common, event.GitCommit, 100, 100, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
