@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 // Package pages serves pairtimed's pages (WP-SV14): the home page at /,
-// the privacy notice at /privacy (DESIGN 4.4, 8.6) and the definition of
-// evidence levels and bands at /docs/evidence (DESIGN 6.4). It also holds
-// the sign-up gate that Hack Club Auth sign-in asks before it creates an
-// account (DESIGN 8.6, 10.2).
+// the privacy notice at /privacy (DESIGN 4.4, 8.6), the definition of
+// evidence levels and bands at /docs/evidence (DESIGN 6.4), and the
+// dashboard page, which /demo draws from a fixed sample (dashboard.go). It
+// also holds the sign-up gate that Hack Club Auth sign-in asks before it
+// creates an account (DESIGN 8.6, 10.2).
 //
 // Each page is a Markdown template in this directory: home.md, privacy.md
 // and evidence/<version>.md. New renders all of them once, from the
@@ -56,7 +57,7 @@ import (
 	"github.com/some-du6e/pairtime/internal/server/retention"
 )
 
-//go:embed layout.html style.css home.md privacy.md evidence/*.md
+//go:embed layout.html style.css home.md privacy.md evidence/*.md dashboard.html
 var files embed.FS
 
 // SourceURL is where the code this server runs is published, which AGPL-3.0
@@ -151,6 +152,10 @@ type Site struct {
 	// Signups is the sign-up gate. pairtimed passes its MayCreate to HCA
 	// sign-in (WP-SV2), which asks it before it creates an account.
 	Signups *Signups
+	// dash is dashboard.html, the dashboard page's body (dashboard.go),
+	// and signupsOpen what its sample's banner says about sign-ups.
+	dash        *template.Template
+	signupsOpen bool
 }
 
 type evidencePage struct {
@@ -213,6 +218,13 @@ func New(o Options) (*Site, error) {
 	s.Signups = &Signups{open: o.SignupsOpen, operators: make(map[string]bool)}
 	for _, sub := range o.Operators {
 		s.Signups.operators[sub] = true
+	}
+	if s.dash, err = template.ParseFS(files, "dashboard.html"); err != nil {
+		return nil, fmt.Errorf("pages: %w", err)
+	}
+	s.signupsOpen = o.SignupsOpen
+	if err := s.checkDashboard(); err != nil {
+		return nil, err
 	}
 	return s, nil
 }

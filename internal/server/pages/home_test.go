@@ -128,6 +128,11 @@ func TestHome(t *testing.T) {
 			notWant: []string{"<script>"},
 		},
 		{
+			name:   "the page links the sample dashboard at /demo",
+			signIn: signInOn(""),
+			want:   []string{`<p><a href="/demo">See a sample dashboard</a></p>`},
+		},
+		{
 			name:   "the browser tab says pairtime, and link previews get a description",
 			signIn: signInOn(""),
 			want: []string{
@@ -269,6 +274,19 @@ func TestNoExternalResources(t *testing.T) {
 		resp, body := getHome(t, Options{}, h.signIn)
 		pages = append(pages, page{name: h.name, body: body, csp: resp.Header.Get("Content-Security-Policy")})
 	}
+	demos := []struct {
+		name   string
+		opts   Options
+		signIn SignIn
+	}{
+		{name: "the sample dashboard without sign-in", signIn: SignIn{}},
+		{name: "the sample dashboard with sign-ups closed", signIn: signInOn("")},
+		{name: "the sample dashboard with sign-ups open", opts: Options{SignupsOpen: true}, signIn: signInOn("")},
+	}
+	for _, d := range demos {
+		resp, body := getDemo(t, d.opts, d.signIn)
+		pages = append(pages, page{name: d.name, body: body, csp: resp.Header.Get("Content-Security-Policy")})
+	}
 	for _, p := range pages {
 		t.Run(p.name+" loads nothing from anywhere, and its CSP would block anything it tried to", func(t *testing.T) {
 			if m := fetches.FindString(p.body); m != "" {
@@ -290,6 +308,7 @@ func TestNoExternalResources(t *testing.T) {
 func TestHeader(t *testing.T) {
 	s := newSite(t, Options{})
 	_, home := getHome(t, Options{}, signInOn(""))
+	_, demo := getDemo(t, Options{}, signInOn(""))
 	tests := []struct {
 		name string
 		page string
@@ -297,6 +316,7 @@ func TestHeader(t *testing.T) {
 		{name: "the privacy notice links the home page", page: string(s.privacy)},
 		{name: "the evidence page links the home page", page: string(s.current)},
 		{name: "the home page links itself", page: home},
+		{name: "the sample dashboard links the home page", page: demo},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
