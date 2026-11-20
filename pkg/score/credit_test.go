@@ -237,6 +237,9 @@ func TestCredit(t *testing.T) {
 				b.agentStops(at(61), "s_1", "t_1")
 				b.focus(at(90), event.AppTerminal, "p_1", "s_1", "s_2")
 				b.prompt(at(100), event.ViaHook, "s_2", "p_1", "t_2", 30)
+				// The agent samples at every hook event (DESIGN 3.3), which
+				// shows the input before this mid-slot prompt.
+				b.sample(at(100))
 				b.agentStops(at(200), "s_2", "t_2")
 				b.samples(at(0), at(300))
 			},
