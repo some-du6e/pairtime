@@ -238,6 +238,10 @@ func TestSecretsInProse(t *testing.T) {
 		{"a key between Chinese words with no space", "密钥是" + stripe + "请保密", stripe, "stripe-access-token"},
 		{"a key before a fullwidth comma", stripe + "，谢谢", stripe, "stripe-access-token"},
 		{"a key before a Devanagari danda", "मेरी कुंजी " + stripe + "।", stripe, "stripe-access-token"},
+		{"a key in single smart quotes", "it's ‘" + stripe + "’", stripe, "stripe-access-token"},
+		{"a key before a narrow no-break space", stripe + "\xe2\x80\xafis mine", stripe, "stripe-access-token"},
+		{"a key before a thin space, one of the spaces from U+2000 to U+200A", stripe + "\xe2\x80\x89is mine", stripe, "stripe-access-token"},
+		{"a key before an ideographic space", stripe + "\xe3\x80\x80是我的", stripe, "stripe-access-token"},
 	}
 	r := mustNew(t, Known{})
 	for _, tt := range tests {
