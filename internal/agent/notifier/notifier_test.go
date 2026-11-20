@@ -1641,3 +1641,53 @@ func TestCloseDoesntWaitOutAStuckSave(t *testing.T) {
 		})
 	}
 }
+
+// Options.Result is handed over from an outbox, outside the notifier's
+// lock, so it can call the notifier.
+func TestResultMayCallTheNotifier(t *testing.T) {
+	tests := []struct {
+		name string
+	}{
+		{name: "a Result callback that calls Notify gets its answer, and Result hears the second note after the first"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var n *Notifier
+			var mu sync.Mutex
+			var results []string
+			inner := make(chan Outcome, 1)
+			n = New(Options{
+				Backend:  &fakeBackend{},
+				Settings: func() config.Notifications { return config.Notifications{Off: true} },
+				Now:      func() time.Time { return at("20:00:00") },
+				Result: func(note Note, o Outcome) {
+					mu.Lock()
+					results = append(results, note.Session+": "+o.String())
+					mu.Unlock()
+					if note.Session == "s1" {
+						inner <- n.Notify(Note{Session: "s2"})
+					}
+				},
+			})
+			defer n.Close()
+			done := make(chan struct{})
+			go func() {
+				n.Notify(Note{Session: "s1"})
+				close(done)
+			}()
+			select {
+			case <-done:
+			case <-time.After(5 * time.Second):
+				t.Fatal("Notify from a Result callback never returned")
+			}
+			if got := <-inner; got != TurnedOff {
+				t.Errorf("Notify(s2) from the callback = %v, want %v", got, TurnedOff)
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			if want := []string{"s1: notifications are off", "s2: notifications are off"}; !slices.Equal(results, want) {
+				t.Errorf("results = %q, want %q", results, want)
+			}
+		})
+	}
+}

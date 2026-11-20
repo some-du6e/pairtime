@@ -296,8 +296,10 @@ type Options struct {
 	// or "" once one was. The agent passes it on to doctor.
 	Problem func(msg string)
 	// Result, when set, is called once for every note with its final
-	// outcome, from Notify itself or from the notifier's own goroutine. It
-	// must return quickly.
+	// outcome, in the order the outcomes came about. The call comes from
+	// Notify or Close, or from the notifier's own goroutine, and Notify may
+	// pass on another note's outcome that came about meanwhile. It must
+	// return quickly. It may call Notify or UserPresent.
 	Result func(Note, Outcome)
 }
 
