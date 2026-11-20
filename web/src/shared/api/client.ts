@@ -45,10 +45,16 @@ export type SuccessBody<Op> = Op extends { responses: infer R }
 		}[keyof R & Success]
 	: never;
 
+/**
+ * A request's query parameters. A parameter whose value is undefined is
+ * left out, so a caller can pass optional ones as they are.
+ */
+export type Query = Record<string, string | undefined>;
+
 export interface Client<Paths> {
 	get<P extends PathsFor<Paths, 'get'>>(
 		path: P,
-		init?: { signal?: AbortSignal },
+		init?: { query?: Query; signal?: AbortSignal },
 	): Promise<Result<SuccessBody<Operation<Paths, P, 'get'>>>>;
 	post<P extends PathsFor<Paths, 'post'>>(
 		path: P,
@@ -67,7 +73,13 @@ export function createClient<Paths>(options: ClientOptions = {}): Client<Paths> 
 	const base = options.base ?? '';
 	const send = options.fetch ?? ((input: RequestInfo | URL, init?: RequestInit) => fetch(input, init));
 
-	async function call<T>(method: string, path: string, body: unknown, signal: AbortSignal | undefined): Promise<Result<T>> {
+	async function call<T>(
+		method: string,
+		path: string,
+		query: Query | undefined,
+		body: unknown,
+		signal: AbortSignal | undefined,
+	): Promise<Result<T>> {
 		const headers: Record<string, string> = { Accept: 'application/json' };
 		const init: RequestInit = {
 			method,
@@ -85,9 +97,18 @@ export function createClient<Paths>(options: ClientOptions = {}): Client<Paths> 
 		if (signal) {
 			init.signal = signal;
 		}
+		const search = new URLSearchParams();
+		for (const [name, value] of Object.entries(query ?? {})) {
+			if (value !== undefined) {
+				search.append(name, value);
+			}
+		}
+		// Not search.size, which Safari 16.4 and Chrome 111 lack.
+		const qs = search.toString();
+		const url = qs === '' ? base + path : `${base}${path}?${qs}`;
 		let res: Response;
 		try {
-			res = await send(base + path, init);
+			res = await send(url, init);
 		} catch (err) {
 			// A caller that aborts has moved on; tell it so rather than report
 			// the agent as down.
@@ -112,11 +133,11 @@ export function createClient<Paths>(options: ClientOptions = {}): Client<Paths> 
 	}
 
 	const client: Client<Paths> = {
-		get<P extends PathsFor<Paths, 'get'>>(path: P, init?: { signal?: AbortSignal }) {
-			return call<SuccessBody<Operation<Paths, P, 'get'>>>('GET', path, undefined, init?.signal);
+		get<P extends PathsFor<Paths, 'get'>>(path: P, init?: { query?: Query; signal?: AbortSignal }) {
+			return call<SuccessBody<Operation<Paths, P, 'get'>>>('GET', path, init?.query, undefined, init?.signal);
 		},
 		post<P extends PathsFor<Paths, 'post'>>(path: P, init?: { body?: unknown; signal?: AbortSignal }) {
-			return call<SuccessBody<Operation<Paths, P, 'post'>>>('POST', path, init?.body, init?.signal);
+			return call<SuccessBody<Operation<Paths, P, 'post'>>>('POST', path, undefined, init?.body, init?.signal);
 		},
 	};
 	return client;

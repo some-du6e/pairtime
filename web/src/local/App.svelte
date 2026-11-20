@@ -1,68 +1,125 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script lang="ts">
-	import { onMount } from 'svelte';
 	import type { Result } from '$shared/api/client.ts';
 	import AppShell from '$shared/components/AppShell.svelte';
-	import { api, describeMode, type Status } from './api.ts';
+	import { api, type Days, type Status } from './api.ts';
+	import SignedOut from './components/SignedOut.svelte';
+	import { addDays } from './format.ts';
+	import Privacy from './pages/Privacy.svelte';
+	import Projects from './pages/Projects.svelte';
+	import Settings from './pages/Settings.svelte';
+	import Today from './pages/Today.svelte';
+	import { home, href, pages, parseRoute, type Route, titleOf } from './route.ts';
 
-	// The skeleton of the local dashboard (DESIGN 3.9). It asks the agent
-	// how it is; Today, Projects, Privacy and Settings grow from here
-	// (WP-UI1), which also adds the sign-in this page checks for. Until
-	// then no command opens the page signed in, so the signed-out card names
-	// none; WP-UI1 names `pairtime dashboard` there when it adds it.
-	let status: Result<Status> | undefined = $state();
+	// The local dashboard (DESIGN 3.9; docs/PLAN.md, WP-UI1). `pairtime
+	// dashboard` signs this browser in with a session cookie; until it has,
+	// GET /v1/status answers 401 and the page shows nothing but how to open
+	// it. Signed in, it reads the agent once a minute while the tab is
+	// visible, so pending minutes turn final on their own (DESIGN 3.7), and
+	// never while it is hidden.
+	const refreshMs = 60_000;
 
-	onMount(() => {
+	// Each is replaced whole and never changed in place, so none needs a
+	// deep proxy.
+	let route: Route = $state.raw(parseRoute(location.hash) ?? home);
+	let status: Result<Status> | undefined = $state.raw();
+	let week: Result<Days> | undefined = $state.raw();
+	let month: Result<Days> | undefined = $state.raw();
+
+	// GET /signin sends a used or old link to /?signin=expired. The page says
+	// so once, and takes it out of the address bar.
+	const expired = new URLSearchParams(location.search).get('signin') === 'expired';
+	if (expired) {
+		history.replaceState(null, '', location.pathname + location.hash);
+	}
+
+	const signedIn = $derived(status?.ok === true);
+	// The days the page shows: the last 30 for Projects' longer span, this
+	// week for everything else.
+	const shown = $derived(route.page === 'projects' && route.range === 'month' ? month : week);
+
+	async function refresh(r: Route, signal: AbortSignal): Promise<void> {
+		const s = await api.get('/v1/status', { signal });
+		status = s;
+		if (!s.ok) {
+			return;
+		}
+		const w = await api.get('/v1/days', { signal });
+		week = w;
+		if (r.page === 'projects' && r.range === 'month' && w.ok) {
+			const today = w.data.today;
+			month = await api.get('/v1/days', { signal, query: { from: addDays(today, -29), to: today } });
+		}
+	}
+
+	$effect(() => {
+		const r = route;
 		const stop = new AbortController();
-		api.get('/v1/status', { signal: stop.signal }).then(
-			(result) => {
-				status = result;
-			},
-			() => {
-				// Aborted: the page is going away.
-			},
-		);
-		return () => stop.abort();
+		const run = () => {
+			refresh(r, stop.signal).catch(() => {
+				// Aborted: the page changed, and its own refresh has started.
+			});
+		};
+		run();
+		const timer = setInterval(() => {
+			if (document.visibilityState !== 'hidden') {
+				run();
+			}
+		}, refreshMs);
+		const onVisible = () => {
+			if (document.visibilityState === 'visible') {
+				run();
+			}
+		};
+		document.addEventListener('visibilitychange', onVisible);
+		return () => {
+			stop.abort();
+			clearInterval(timer);
+			document.removeEventListener('visibilitychange', onVisible);
+		};
+	});
+
+	$effect(() => {
+		const onHash = () => {
+			const r = parseRoute(location.hash);
+			// A fragment that names no page, such as the skip link's, leaves
+			// the page as it is.
+			if (r) {
+				route = r;
+				document.getElementById('main')?.focus();
+			}
+		};
+		window.addEventListener('hashchange', onHash);
+		return () => window.removeEventListener('hashchange', onHash);
+	});
+
+	$effect(() => {
+		document.title = signedIn ? `${titleOf(route)} · pairtime` : 'pairtime';
 	});
 </script>
 
-<AppShell where="on this computer">
-	<h1>Your dashboard</h1>
-	<div aria-live="polite">
-		{#if status === undefined}
-			<p>Asking the pairtime agent…</p>
-		{:else if status.ok}
-			<section class="pt-card" aria-labelledby="agent-title" data-testid="agent-status">
-				<h2 id="agent-title">The pairtime agent</h2>
-				<dl>
-					<dt>Mode</dt>
-					<dd>{describeMode(status.data.mode)}</dd>
-					<dt>Version</dt>
-					<dd data-testid="agent-version">{status.data.version.version}</dd>
-					<dt>Running since</dt>
-					<dd><time datetime={status.data.started}>{new Date(status.data.started).toLocaleString()}</time></dd>
-				</dl>
-				{#if status.data.problems}
-					<h3>Needs your attention</h3>
-					<ul>
-						{#each Object.entries(status.data.problems) as [source, message] (source)}
-							<li>{message}</li>
-						{/each}
-					</ul>
-				{/if}
-			</section>
-		{:else if status.problem === 'signed-out'}
-			<section class="pt-card" aria-labelledby="signin-title" data-testid="signed-out">
-				<h2 id="signin-title">This version of pairtime can't open your dashboard yet</h2>
-				<p>
-					A later version adds the command that opens this page signed in. Until then the page shows nothing, so
-					other websites, and other people who use this computer, can't read your time.
-				</p>
-			</section>
+{#snippet links()}
+	<ul class="links">
+		{#each pages as p (p.page)}
+			<li>
+				<a href={href({ page: p.page, range: 'week' })} aria-current={route.page === p.page ? 'page' : undefined}>{p.label}</a>
+			</li>
+		{/each}
+	</ul>
+{/snippet}
+
+<AppShell where="on this computer" nav={signedIn ? links : undefined}>
+	{#if status === undefined}
+		<h1>Your dashboard</h1>
+		<p aria-live="polite">Asking the pairtime agent…</p>
+	{:else if !status.ok}
+		<h1>Your dashboard</h1>
+		{#if status.problem === 'signed-out'}
+			<SignedOut {expired} />
 		{:else if status.problem === 'unreachable'}
 			<section class="pt-card" aria-labelledby="down-title" data-testid="unreachable">
 				<h2 id="down-title">The pairtime agent isn't answering</h2>
-				<p>Start it with <code>pairtime agent</code>, then reload this page.</p>
+				<p>Run <code>pairtime dashboard</code> again. It starts the agent if it isn't running.</p>
 			</section>
 		{:else}
 			<section class="pt-card" aria-labelledby="error-title" data-testid="error">
@@ -70,22 +127,56 @@
 				<p>It said {status.status || 'nothing'}: {status.detail}</p>
 			</section>
 		{/if}
-	</div>
+	{:else if route.page === 'privacy'}
+		<Privacy mode={status.data.mode} />
+	{:else if route.page === 'settings'}
+		<Settings status={status.data} shadow={week?.ok ? week.data.shadow : undefined} />
+	{:else if shown === undefined}
+		<h1>{titleOf(route)}</h1>
+		<p aria-live="polite">Reading your time…</p>
+	{:else if !shown.ok}
+		<h1>{titleOf(route)}</h1>
+		{#if shown.problem === 'signed-out'}
+			<SignedOut expired={false} />
+		{:else}
+			<section class="pt-card" aria-labelledby="days-error-title" data-testid="days-error">
+				<h2 id="days-error-title">pairtime couldn't read your time</h2>
+				<p>{shown.detail || `The agent said ${shown.status}.`}</p>
+			</section>
+		{/if}
+	{:else if route.page === 'projects'}
+		<Projects days={shown.data} range={route.range} />
+	{:else}
+		<Today days={shown.data} focus={status.data.focus} />
+	{/if}
 </AppShell>
 
 <style>
-	dl {
-		display: grid;
-		grid-template-columns: max-content 1fr;
-		gap: 0.25rem 1rem;
+	.links {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.25rem 1.25rem;
 		margin: 0;
+		padding: 0;
+		list-style: none;
 	}
 
-	dt {
-		color: var(--pt-muted);
+	.links a {
+		display: inline-block;
+		padding: 0.5rem 0;
+		color: var(--pt-text);
+		text-decoration: none;
 	}
 
-	dd {
-		margin: 0;
+	.links a:hover {
+		text-decoration: underline;
+	}
+
+	.links a[aria-current='page'] {
+		font-weight: 700;
+		text-decoration: underline;
+		text-decoration-thickness: 3px;
+		text-underline-offset: 0.35em;
+		text-decoration-color: var(--pt-accent);
 	}
 </style>

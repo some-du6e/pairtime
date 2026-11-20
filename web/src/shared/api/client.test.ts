@@ -92,6 +92,16 @@ describe('requests', () => {
 			},
 		},
 		{
+			name: "a GET's query goes into the URL, leaving out parameters without a value",
+			send: (api) => api.get('/v1/thing', { query: { from: '2026-10-22', to: '2026-11-20', skip: undefined } }),
+			want: { url: '/v1/thing?from=2026-10-22&to=2026-11-20', method: 'GET' },
+		},
+		{
+			name: 'a GET with only empty parameters has no query at all',
+			send: (api) => api.get('/v1/thing', { query: { skip: undefined } }),
+			want: { url: '/v1/thing' },
+		},
+		{
 			name: 'a POST sends its body as JSON',
 			send: (api) => api.post('/v1/do', { body: { why: 'test' } }),
 			want: { url: '/v1/do', method: 'POST', body: '{"why":"test"}', contentType: 'application/json' },

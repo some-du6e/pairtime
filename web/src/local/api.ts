@@ -7,8 +7,27 @@
 import type { components, paths } from '$gen/local-api.ts';
 import { createClient } from '$shared/api/client.ts';
 
-export type Status = components['schemas']['Status'];
-export type Mode = components['schemas']['Mode'];
+type Schemas = components['schemas'];
+
+export type Status = Schemas['Status'];
+export type Mode = Schemas['Mode'];
+export type Focus = Schemas['Focus'];
+export type Days = Schemas['Days'];
+export type Day = Schemas['Day'];
+export type ProjectDay = Schemas['ProjectDay'];
+export type Project = Schemas['Project'];
+export type ByEvidence = Schemas['ByEvidence'];
+export type ByKind = Schemas['ByKind'];
+export type Uncredited = Schemas['Uncredited'];
+export type AgentTime = Schemas['AgentTime'];
+export type Harness = Schemas['Harness'];
+
+/** An activity kind (SM 5.1), as ByKind names it. */
+export type Kind = keyof ByKind;
+/** An uncredited reason code (SM 5.2), as Uncredited names it. */
+export type Reason = keyof Uncredited;
+/** An evidence level (SM 5.1, DESIGN 6.4). */
+export type Level = keyof ByEvidence;
 
 export const api = createClient<paths>();
 
