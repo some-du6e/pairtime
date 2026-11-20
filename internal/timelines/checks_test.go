@@ -148,8 +148,10 @@ func checksRoot(t *testing.T) string {
 	return filepath.Join(root, "..", "checks")
 }
 
-// loadScenarios reads every directory of testdata/checks that holds an
-// expected.json.
+// loadScenarios reads every scenario of testdata/checks. Every directory
+// there but Python's __pycache__ is a scenario and must hold an
+// expected.json (the plan's "one expected file per scenario"), so a
+// scenario can't go unchecked by missing one.
 func loadScenarios(t *testing.T) []*scenarioFixture {
 	t.Helper()
 	root := checksRoot(t)
@@ -160,11 +162,11 @@ func loadScenarios(t *testing.T) []*scenarioFixture {
 	var out []*scenarioFixture
 	for _, e := range entries {
 		dir := filepath.Join(root, e.Name())
-		if !e.IsDir() {
+		if !e.IsDir() || e.Name() == "__pycache__" {
 			continue
 		}
 		if _, err := os.Stat(filepath.Join(dir, ExpectedFile)); err != nil {
-			continue
+			t.Fatalf("testdata/checks/%s has no %s; every scenario has one", e.Name(), ExpectedFile)
 		}
 		s := &scenarioFixture{name: e.Name(), dir: dir}
 		if err := readJSON(filepath.Join(dir, ExpectedFile), &s.exp); err != nil {
@@ -624,9 +626,9 @@ func TestCheckGeneratorReproduces(t *testing.T) {
 			t.Fatal(err)
 		}
 		for _, sc := range entries {
-			// A scenario is a directory with an expected.json, so a stray
-			// directory such as __pycache__ isn't compared.
-			if _, err := os.Stat(filepath.Join(dir, sc.Name(), ExpectedFile)); !sc.IsDir() || err != nil {
+			// Every directory but __pycache__ is a scenario, which
+			// loadScenarios also requires to hold an expected.json.
+			if !sc.IsDir() || sc.Name() == "__pycache__" {
 				continue
 			}
 			inner, err := os.ReadDir(filepath.Join(dir, sc.Name()))
