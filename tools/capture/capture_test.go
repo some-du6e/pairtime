@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -117,10 +118,16 @@ type result struct {
 
 func run(t *testing.T, dir string, stdin []byte, env []string, argv ...string) result {
 	t.Helper()
+	return runEnv(t, dir, stdin, append(os.Environ(), env...), argv...)
+}
+
+// runEnv is run with environ as the script's whole environment.
+func runEnv(t *testing.T, dir string, stdin []byte, environ []string, argv ...string) result {
+	t.Helper()
 	cmd := exec.Command(argv[0], argv[1:]...)
 	cmd.Dir = dir
 	cmd.Stdin = bytes.NewReader(stdin)
-	cmd.Env = append(os.Environ(), env...)
+	cmd.Env = environ
 	var out, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errb
 	err := cmd.Run()
@@ -133,6 +140,18 @@ func run(t *testing.T, dir string, stdin []byte, env []string, argv ...string) r
 		t.Fatalf("%v: %v", argv, err)
 	}
 	return r
+}
+
+// without returns environ without the variables named.
+func without(environ []string, names ...string) []string {
+	var out []string
+	for _, kv := range environ {
+		name, _, _ := strings.Cut(kv, "=")
+		if !slices.Contains(names, name) {
+			out = append(out, kv)
+		}
+	}
+	return out
 }
 
 func python(t *testing.T, script string, args ...string) []string {
@@ -268,6 +287,11 @@ var dumpers = []dumper{
 const (
 	secretName  = "PAIRTIME_CAPTURE_TEST_SECRET"
 	secretValue = "value-that-must-never-be-written-7f3a"
+
+	// entrypointVar is the variable whose value the dumpers keep, and
+	// entrypointSentinel a value of it one character too long to keep.
+	entrypointVar      = "CLAUDE_CODE_ENTRYPOINT"
+	entrypointSentinel = "pairtime-sentinel-entrypoint-6d1f"
 )
 
 // A payload with the shapes that break naive copies: non-ASCII text, CRLF,
@@ -381,13 +405,21 @@ func TestDumpers(t *testing.T) {
 	for _, d := range dumpers {
 		t.Run(d.name, func(t *testing.T) {
 			base := d.argv(t)
-			// call runs one hook call in a fresh run directory and returns the
-			// run directory and what the dumper printed.
-			call := func(t *testing.T, stdin []byte, args ...string) (string, result) {
+			// callEnv runs one hook call in a fresh run directory, with env
+			// set on top of this process's environment, and returns the run
+			// directory and what the dumper printed. CLAUDE_CODE_ENTRYPOINT is
+			// set only when env sets it, so a test run from a Claude Code
+			// session sees what CI sees.
+			callEnv := func(t *testing.T, env []string, stdin []byte, args ...string) (string, result) {
 				t.Helper()
 				runDir := filepath.Join(t.TempDir(), "run")
 				argv := append(append([]string{}, base...), append([]string{runDir, "UserPromptSubmit"}, args...)...)
-				return runDir, run(t, t.TempDir(), stdin, []string{secretName + "=" + secretValue}, argv...)
+				return runDir, runEnv(t, t.TempDir(), stdin, append(without(os.Environ(), entrypointVar), env...), argv...)
+			}
+			// call is callEnv with a secret in a variable of its own.
+			call := func(t *testing.T, stdin []byte, args ...string) (string, result) {
+				t.Helper()
+				return callEnv(t, []string{secretName + "=" + secretValue}, stdin, args...)
 			}
 			first := func(runDir string) string { return filepath.Join(runDir, "hooks", "000001") }
 			// harnessCall runs one hook call under a fake harness and returns
@@ -561,6 +593,7 @@ func TestDumpers(t *testing.T) {
 					runDir := filepath.Join(t.TempDir(), "run")
 					cmd := exec.Command(base[0], append(append([]string{}, base[1:]...), runDir, "Stop")...)
 					cmd.Dir = t.TempDir()
+					cmd.Env = append(without(os.Environ(), entrypointVar), entrypointVar+"=cli")
 					stdin, err := cmd.StdinPipe()
 					if err != nil {
 						t.Fatal(err)
@@ -582,7 +615,7 @@ func TestDumpers(t *testing.T) {
 					}
 					_ = cmd.Process.Kill()
 					_ = cmd.Wait()
-					for _, name := range []string{"time", "argv", "env", "cwd", "parents"} {
+					for _, name := range []string{"time", "argv", "env", "entrypoint", "cwd", "parents"} {
 						if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
 							t.Errorf("%s is missing: %v", name, err)
 						}
@@ -624,6 +657,48 @@ func TestDumpers(t *testing.T) {
 						if strings.Contains(text, secretValue) {
 							t.Errorf("%s holds the value of %s", path, secretName)
 						}
+					}
+				}},
+				// CLAUDE_CODE_ENTRYPOINT is the one variable whose value a
+				// dumper writes (E-cc-transcript-labels).
+				{"entrypoint holds CLAUDE_CODE_ENTRYPOINT's value, and no other variable's value reaches the run folder", func(t *testing.T) {
+					runDir, _ := callEnv(t, []string{entrypointVar + "=sdk-cli", secretName + "=" + secretValue}, payload)
+					if got := read(t, filepath.Join(first(runDir), "entrypoint")); got != "sdk-cli\n" {
+						t.Fatalf("entrypoint = %q, want %q", got, "sdk-cli\n")
+					}
+					for path, text := range tree(t, runDir) {
+						if strings.Contains(text, secretValue) {
+							t.Errorf("%s holds the value of %s", path, secretName)
+						}
+					}
+				}},
+				{"a CLAUDE_CODE_ENTRYPOINT of 32 characters is kept, and one of 33 becomes other and reaches no file", func(t *testing.T) {
+					runDir, _ := callEnv(t, []string{entrypointVar + "=" + entrypointSentinel[:32]}, payload)
+					if got, want := read(t, filepath.Join(first(runDir), "entrypoint")), entrypointSentinel[:32]+"\n"; got != want {
+						t.Errorf("32 characters: entrypoint = %q, want %q", got, want)
+					}
+					runDir, _ = callEnv(t, []string{entrypointVar + "=" + entrypointSentinel}, payload)
+					if got := read(t, filepath.Join(first(runDir), "entrypoint")); got != "other\n" {
+						t.Errorf("33 characters: entrypoint = %q, want %q", got, "other\n")
+					}
+					for path, text := range tree(t, runDir) {
+						if strings.Contains(text, entrypointSentinel[:20]) {
+							t.Errorf("%s holds the over-long %s: %q", path, entrypointVar, text)
+						}
+					}
+				}},
+				{"a CLAUDE_CODE_ENTRYPOINT with a capital, a space, another character or nothing in it becomes other", func(t *testing.T) {
+					for _, value := range []string{"SDK-CLI", "sdk cli", "sdk.cli", ""} {
+						runDir, _ := callEnv(t, []string{entrypointVar + "=" + value}, payload)
+						if got := read(t, filepath.Join(first(runDir), "entrypoint")); got != "other\n" {
+							t.Errorf("%s=%q: entrypoint = %q, want %q", entrypointVar, value, got, "other\n")
+						}
+					}
+				}},
+				{"no entrypoint file is written when CLAUDE_CODE_ENTRYPOINT is unset", func(t *testing.T) {
+					runDir, _ := call(t, payload)
+					if _, err := os.Stat(filepath.Join(first(runDir), "entrypoint")); err == nil {
+						t.Fatalf("entrypoint = %q, want no file", read(t, filepath.Join(first(runDir), "entrypoint")))
 					}
 				}},
 				{"time holds unix_ns, utc and clock, taken during the call", func(t *testing.T) {

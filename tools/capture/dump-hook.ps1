@@ -5,11 +5,14 @@
 # The PowerShell twin of dump-hook.sh, for Windows machines without Git Bash.
 # It writes the same files in the same format: each call claims the next
 # number under RUN_DIR\hooks\ and writes time, argv, env (names only, never
-# values), cwd, parents (pid, terminal and executable name, never command
-# lines), stdin (the bytes, unchanged) and, last, flags (the harness's
-# executable name and yes or no for a print flag, stream-json and --bare
-# among its arguments, never the arguments), plus stderr if something here
-# failed. On Windows it also writes console: attached or none.
+# values), entrypoint (the value of CLAUDE_CODE_ENTRYPOINT when it is short
+# and plain, other when it isn't, and no file when it is unset: the only
+# value of a variable kept), cwd, parents (pid, terminal and executable
+# name, never command lines), stdin (the bytes, unchanged) and, last, flags
+# (the harness's executable name and yes or no for a print flag,
+# stream-json and --bare among its arguments, never the arguments), plus
+# stderr if something here failed. On Windows it also writes console:
+# attached or none.
 #
 # Register it as one command line, with the bare executable name first and
 # the paths in double quotes, which Git Bash, PowerShell and cmd all run:
@@ -230,6 +233,23 @@ try {
     Write-Lines (Join-Path $call 'env') $sorted
 } catch {
     Write-Problem "env: $($_.Exception.Message)"
+}
+
+# The one value of a variable kept: CLAUDE_CODE_ENTRYPOINT, the token Claude
+# Code gives its hooks, such as cli or sdk-cli (E-cc-transcript-labels). A
+# value that isn't 1 to 32 characters of a-z, 0-9, - and _ becomes other,
+# and an unset one writes no file. -cnotmatch keeps capitals out, and \z,
+# unlike $, doesn't match before a final line break.
+try {
+    $entrypoint = [Environment]::GetEnvironmentVariable('CLAUDE_CODE_ENTRYPOINT')
+    if ($null -ne $entrypoint) {
+        if ($entrypoint -cnotmatch '^[a-z0-9_-]{1,32}\z') {
+            $entrypoint = 'other'
+        }
+        Write-Lines (Join-Path $call 'entrypoint') @($entrypoint)
+    }
+} catch {
+    Write-Problem "entrypoint: $($_.Exception.Message)"
 }
 
 try {

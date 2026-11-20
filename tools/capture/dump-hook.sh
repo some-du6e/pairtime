@@ -9,7 +9,13 @@
 #
 #   time     when the call arrived: unix_ns, utc and the clock used
 #   argv     the arguments, one per line (RUN_DIR and LABEL first)
-#   env      the names of the environment variables, sorted. Never the values
+#   env      the names of the environment variables, sorted. Never the
+#            values, but for entrypoint's
+#   entrypoint
+#            the value of CLAUDE_CODE_ENTRYPOINT, the token Claude Code gives
+#            its hooks, when it is 1 to 32 characters of a-z, 0-9, - and _,
+#            or other when it isn't. No file when it is unset. The only
+#            value of a variable written
 #   cwd      the working directory
 #   parents  pid, controlling terminal and executable name of each parent
 #            process, nearest first: "1234 pts/3 claude". The terminal is ?
@@ -104,6 +110,24 @@ done >"$call/argv"
 # awk's ENVIRON holds the names apart from the values, so no value can be
 # mistaken for a name, whatever it contains.
 awk 'BEGIN { for (name in ENVIRON) print name }' | LC_ALL=C sort >"$call/env"
+
+# The one value of a variable kept: CLAUDE_CODE_ENTRYPOINT, the token Claude
+# Code gives its hooks, such as cli or sdk-cli (E-cc-transcript-labels). A
+# value that isn't 1 to 32 of the characters below becomes other, and an
+# unset one writes no file. The letters are spelled out, since in some
+# shells and locales a range such as a-z takes in capitals.
+if [ -n "${CLAUDE_CODE_ENTRYPOINT+set}" ]; then
+	entrypoint=other
+	case $CLAUDE_CODE_ENTRYPOINT in
+	'' | *[!abcdefghijklmnopqrstuvwxyz0123456789_-]*) ;;
+	*)
+		if [ "${#CLAUDE_CODE_ENTRYPOINT}" -le 32 ]; then
+			entrypoint=$CLAUDE_CODE_ENTRYPOINT
+		fi
+		;;
+	esac
+	printf '%s\n' "$entrypoint" >"$call/entrypoint"
+fi
 
 pwd >"$call/cwd"
 
