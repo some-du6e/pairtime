@@ -72,7 +72,8 @@ func (p *Plan) Diff() string {
 // PlanInstall plans items' edits. Each target is read once and every edit
 // for it applied in order, so two items can share a file. A target that
 // already holds what the items want isn't in the plan: planning again
-// right after Apply gives an empty plan.
+// right after Apply gives an empty plan. If the manifest doesn't know such
+// a target, Apply still records it (see adopt).
 func (in *Installer) PlanInstall(items []Item) (*Plan, error) {
 	m, oldSum, err := in.loadManifest()
 	if err != nil {
@@ -120,6 +121,9 @@ func (in *Installer) PlanInstall(items []Item) (*Plan, error) {
 			}
 		}
 		if next.Same(cur) {
+			if err := p.adopt(g.target, cur, g.recs); err != nil {
+				return nil, err
+			}
 			continue
 		}
 		if cur.Exists && !g.target.isRegistry() && cur.Mode&0o200 == 0 {
@@ -168,6 +172,28 @@ func (in *Installer) PlanInstall(items []Item) (*Plan, error) {
 		p.Changes = append(p.Changes, ch)
 	}
 	return p, nil
+}
+
+// adopt records a target that already holds what the items want when the
+// manifest doesn't know it, as after a reinstall with pairtime's data
+// directory gone. Without a record uninstall would leave pairtime's hooks
+// there, running a binary it deletes. What pairtime finds of its own
+// counts as pairtime's: uninstall takes it out, and removes an entry
+// pairtime owns whole.
+func (p *Plan) adopt(t Target, cur Content, recs []editRecord) error {
+	if p.manifest.find(t) != nil {
+		return nil
+	}
+	base, err := undoAll(cur, Content{}, recs)
+	if err != nil {
+		return fmt.Errorf("%s %w", t, err)
+	}
+	if base.Same(cur) {
+		return nil // nothing of pairtime's there
+	}
+	p.manifest.Targets = append(p.manifest.Targets, record{Target: t, Written: cur.digest(), Edits: append([]editRecord(nil), recs...)})
+	p.rebase(&p.manifest.Targets[len(p.manifest.Targets)-1], base)
+	return nil
 }
 
 // rebase makes base what uninstall puts back in rec's target.

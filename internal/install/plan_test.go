@@ -272,3 +272,62 @@ func TestNothingToDo(t *testing.T) {
 		})
 	}
 }
+
+func TestReinstallRecordsEntriesTheManifestForgot(t *testing.T) {
+	tests := []struct {
+		name string
+		// before is settings.json before the first install; nil for none.
+		before []byte
+		item   func(env Env) (Item, error)
+		path   func(env Env) string
+		// want is what uninstall leaves at path; nil for nothing.
+		want []byte
+	}{
+		{
+			name:   "hooks an install the manifest forgot left are taken out by uninstall after a reinstall",
+			before: golden(t, "settings-lf", "before.json"),
+			item:   ClaudeCode,
+			path:   ClaudeSettings,
+			want:   golden(t, "settings-lf", "before.json"),
+		},
+		{
+			name: "an autostart entry an install the manifest forgot left is removed by uninstall after a reinstall",
+			item: Autostart,
+			path: func(env Env) string { return filepath.Join(env.Home, ".config", "autostart", "pairtime.desktop") },
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			env := testEnv(t, "linux", nil)
+			if tt.before != nil {
+				writeFile(t, ClaudeSettings(env), tt.before)
+			}
+			item, err := tt.item(env)
+			if err != nil {
+				t.Fatal(err)
+			}
+			install(t, newInstaller(t), item)
+
+			// pairtime's data directory is gone: a new installer has no
+			// manifest. The reinstall has nothing to write, but records
+			// what it found.
+			in := newInstaller(t)
+			p, err := in.PlanInstall([]Item{item})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !p.Empty() {
+				t.Errorf("the reinstall plans changes:\n%s", p.Diff())
+			}
+			if err := p.Apply(); err != nil {
+				t.Fatal(err)
+			}
+			uninstall(t, in)
+			if tt.want == nil {
+				checkGone(t, tt.path(env), "the entry")
+			} else if got := readOrNil(t, tt.path(env)); !bytes.Equal(got, tt.want) {
+				t.Errorf("after uninstall the file holds\n%s\nwant\n%s", got, tt.want)
+			}
+		})
+	}
+}
