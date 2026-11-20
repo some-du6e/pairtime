@@ -431,6 +431,49 @@ func TestClaudeCodeUninstallWhenTheFileIsGoneOrBroken(t *testing.T) {
 	}
 }
 
+func TestUninstallKeepsWhatTheTeenAddedToAFilePairtimeCreated(t *testing.T) {
+	tests := []struct {
+		name string
+		// edit is what the teen does to the settings.json pairtime created.
+		edit func(installed []byte) []byte
+		// want is what uninstall leaves, nil for no file.
+		want []byte
+	}{
+		{"a comment the teen added above the object keeps the file, with the comment",
+			func(b []byte) []byte { return append([]byte("// managed by dotfiles\n"), b...) },
+			[]byte("// managed by dotfiles\n{}\n")},
+		{"a comment the teen added below the object keeps the file, with the comment",
+			func(b []byte) []byte { return append(b, "// managed by dotfiles\n"...) },
+			[]byte("{}\n// managed by dotfiles\n")},
+		{"a file the teen only reindented inside the object still goes, as nothing outside it changed",
+			func(b []byte) []byte { return bytes.ReplaceAll(b, []byte("\n  "), []byte("\n    ")) },
+			nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			env := testEnv(t, "linux", nil)
+			path := ClaudeSettings(env)
+			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			item, err := ClaudeCode(env)
+			if err != nil {
+				t.Fatal(err)
+			}
+			in := newInstaller(t)
+			install(t, in, item)
+			writeFile(t, path, tt.edit(readOrNil(t, path)))
+
+			uninstall(t, in)
+			if tt.want == nil {
+				checkGone(t, path, "the settings file pairtime created")
+			} else if got := readOrNil(t, path); !bytes.Equal(got, tt.want) {
+				t.Errorf("after uninstall the file holds %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 // oldHooks returns a settings file with n hooks from an older pairtime
 // install, at another binary path, each in a group of its own.
 func oldHooks(n int) string {

@@ -131,12 +131,9 @@ func (e *claudeEdit) ensure(src []byte, event, matcher string) ([]byte, error) {
 	}
 	group := e.group(event, matcher)
 	if root == nil {
-		st := jsonc.StyleOf(src, nil)
-		text := jsonc.Render(jsonc.Obj{{Key: "hooks", Val: jsonc.Obj{{Key: event, Val: []any{group}}}}}, st, "") + st.Newline
-		if len(src) > jsonc.BOMLen(src) && !bytes.HasSuffix(src, []byte("\n")) {
-			text = st.Newline + text // after a last line, which may be a // comment
-		}
-		return append(append([]byte(nil), src...), text...), nil
+		before, after := rootFrame(src)
+		obj := jsonc.Render(jsonc.Obj{{Key: "hooks", Val: jsonc.Obj{{Key: event, Val: []any{group}}}}}, jsonc.StyleOf(src, nil), "")
+		return []byte(before + obj + after), nil
 	}
 	st := jsonc.StyleOf(src, root)
 	hooks := root.Get("hooks")
@@ -383,10 +380,41 @@ func undoClaudeHooks(cur, base Content, _ json.RawMessage) (Content, error) {
 	if src, err = pruneHooks(src, before, held); err != nil {
 		return Content{}, err
 	}
-	if root, err := jsonc.Parse(src); err == nil && root.Kind == jsonc.Object && emptyInside(src, root) && noValue(base) {
+	if noValue(base) && isAddedRoot(src, base) {
 		return base, nil
 	}
 	return Content{Exists: true, Data: src, Mode: cur.Mode}, nil
+}
+
+// rootFrame returns what goes before and after the object pairtime adds to
+// src, a file that holds no value: src itself, with a line break after a
+// last line that has none, since it may be a // comment, and the file's
+// line ending after the object.
+func rootFrame(src []byte) (before, after string) {
+	st := jsonc.StyleOf(src, nil)
+	before = string(src)
+	if len(src) > jsonc.BOMLen(src) && !bytes.HasSuffix(src, []byte("\n")) {
+		before += st.Newline
+	}
+	return before, st.Newline
+}
+
+// isAddedRoot reports whether src is an empty object that pairtime added to
+// base, a target that holds no value, with nothing outside it changed. A
+// file pairtime created, or a blank one it added its object to, goes back
+// to base only then: a comment the teen wrote above or below the object
+// since, such as "managed by dotfiles", keeps the file.
+func isAddedRoot(src []byte, base Content) bool {
+	root, err := jsonc.Parse(src)
+	if err != nil || root.Kind != jsonc.Object || !emptyInside(src, root) {
+		return false
+	}
+	var was []byte
+	if base.Exists {
+		was = base.Data
+	}
+	before, after := rootFrame(was)
+	return string(src[:root.Start]) == before && string(src[root.End:]) == after
 }
 
 // pairtimeLists returns the events whose hook lists in src hold a pairtime
