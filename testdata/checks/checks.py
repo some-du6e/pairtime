@@ -534,17 +534,46 @@ def features(key, text, pc):
     return {"v": 1, "mh": mh, "th": keyed16(key, 0x02, " ".join(words)), "pc": pc}
 
 
+def touched_shingles(words, hidden):
+    """The shingles of words that touch a removed word (10.8): a word
+    3-shingle that holds one, or a character 5-shingle that overlaps one's
+    characters. A shingle text that occurs twice is touched if either
+    occurrence is. hidden holds the indexes, from 0, of the removed words."""
+    if not hidden:
+        return set()
+    if len(words) >= 6:
+        return {" ".join(words[i:i + 3]) for i in range(len(words) - 2) if any(i <= h <= i + 2 for h in hidden)}
+    norm = " ".join(words)
+    if len(norm) <= 4:
+        return {norm}
+    spans, pos = [], 0
+    for j, w in enumerate(words):
+        if j in hidden:
+            spans.append((pos, pos + len(w)))
+        pos += len(w) + 1
+    return {norm[i:i + 5] for i in range(len(norm) - 4) if any(i < b and a < i + 5 for a, b in spans)}
+
+
+def selftest():
+    """Checks what no scenario reaches: a short text's character shingles
+    beside a removed word (ledger-v1.md 10.8), so a future scenario can't
+    publish a removed word through them."""
+    words = "move the nav bar".split()
+    hidden = {"the n", "he na", "e nav", " nav ", "nav b", "av ba", "v bar"}
+    check(touched_shingles(words, (2,)) == hidden, "a removed word hides every character shingle over it")
+    shown = [x for x in shingle_reveal(sha256(b"selftest"), "move the nav bar", (2,)) if "x" in x]
+    check(sorted(bytes.fromhex(x["x"]).decode() for x in shown) == [" the ", "e the", "move ", "ove t", "ve th"],
+          "only the shingles clear of the removed word show their text")
+    check(touched_shingles(["ok"], (0,)) == {"ok"}, "a text of four characters or fewer is one shingle")
+
+
 def shingle_reveal(key, text, hidden=()):
     """What CC8 reveals for a text (10.8): each distinct shingle's value
     under key, ascending, with its text unless it touches a removed word.
     hidden holds the indexes, from 0, of the removed words."""
     words = plain_words(text)
     xs, tag = shingles(words)
-    touched = set()
-    if tag == 0x05:
-        for i in range(len(words) - 2):
-            if hidden and any(i <= h <= i + 2 for h in hidden):
-                touched.add(" ".join(words[i:i + 3]))
+    touched = touched_shingles(words, hidden)
     out = []
     for x in xs:
         v = shingle_value(key, tag, x)

@@ -1202,6 +1202,7 @@ SCENARIOS = [s_42_clean, s_42_cc1, s_42_cc2, s_42_cc5, s_42_cc7, s_42_cc7_batch,
 
 
 def main():
+    ck.selftest()
     out = tl.out_dir(HERE)
     for s in SCENARIOS:
         s(out)
