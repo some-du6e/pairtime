@@ -1,0 +1,430 @@
+{
+  "fixture": "6.3",
+  "title": "The five-project afternoon",
+  "sm": "docs/design/struggle-metric.md 6.3",
+  "date": "2026-11-28",
+  "timezone": "America/Los_Angeles",
+  "utc_offset": "-08:00",
+  "os": "macos",
+  "input_keys": true,
+  "evidence": "A",
+  "witness": "witnessed",
+  "device": "d_b3b8fb30978a",
+  "projects": {
+    "p_0e6a8e0b849e": "portfolio",
+    "p_a73dbaeaf36c": "discord-bot",
+    "p_74499229f1c6": "homework-helper",
+    "p_dedc43f1d319": "plant-sensor",
+    "p_418d8413d1cf": "rusty-cli"
+  },
+  "window": {"start": "2026-11-28T22:00:00Z", "end": "2026-11-28T22:30:00Z", "local": "14:00-14:30"},
+  "rows": [
+    {
+      "start": "2026-11-28T22:00:00Z",
+      "minutes": 1,
+      "local": "14:00",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0e6a8e0b849e": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "14:00"
+    },
+    {
+      "start": "2026-11-28T22:01:00Z",
+      "minutes": 1,
+      "local": "14:01",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0e6a8e0b849e": {"P": 30, "SUP": 30}
+      },
+      "uncredited": {},
+      "agent_running_s": 30,
+      "sm": "14:01"
+    },
+    {
+      "start": "2026-11-28T22:02:00Z",
+      "minutes": 1,
+      "local": "14:02",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_a73dbaeaf36c": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 60,
+      "sm": "14:02"
+    },
+    {
+      "start": "2026-11-28T22:03:00Z",
+      "minutes": 1,
+      "local": "14:03",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_a73dbaeaf36c": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 60,
+      "sm": "14:03"
+    },
+    {
+      "start": "2026-11-28T22:04:00Z",
+      "minutes": 1,
+      "local": "14:04",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_a73dbaeaf36c": {"P": 30, "SUP": 30}
+      },
+      "uncredited": {},
+      "agent_running_s": 60,
+      "sm": "14:04"
+    },
+    {
+      "start": "2026-11-28T22:05:00Z",
+      "minutes": 1,
+      "local": "14:05",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_418d8413d1cf": {"E": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 60,
+      "sm": "14:05"
+    },
+    {
+      "start": "2026-11-28T22:06:00Z",
+      "minutes": 1,
+      "local": "14:06",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_418d8413d1cf": {"E": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 60,
+      "sm": "14:06"
+    },
+    {
+      "start": "2026-11-28T22:07:00Z",
+      "minutes": 1,
+      "local": "14:07",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_418d8413d1cf": {"E": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 60,
+      "sm": "14:07"
+    },
+    {
+      "start": "2026-11-28T22:08:00Z",
+      "minutes": 1,
+      "local": "14:08",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_418d8413d1cf": {"P": 20, "E": 40}
+      },
+      "uncredited": {},
+      "agent_running_s": 60,
+      "sm": "14:08"
+    },
+    {
+      "start": "2026-11-28T22:09:00Z",
+      "minutes": 1,
+      "local": "14:09",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_418d8413d1cf": {"E": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 36,
+      "sm": "14:09",
+      "note": "E's Cursor turns aren't timed in SM; agent_running_s follows from the fixture's stops.",
+      "derived": ["agent_running_s"]
+    },
+    {
+      "start": "2026-11-28T22:10:00Z",
+      "minutes": 1,
+      "local": "14:10",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_418d8413d1cf": {"E": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "14:10"
+    },
+    {
+      "start": "2026-11-28T22:11:00Z",
+      "minutes": 1,
+      "local": "14:11",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_418d8413d1cf": {"E": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "14:11"
+    },
+    {
+      "start": "2026-11-28T22:12:00Z",
+      "minutes": 1,
+      "local": "14:12",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_418d8413d1cf": {"GO": 20, "E": 30, "READ": 10}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "14:12"
+    },
+    {
+      "start": "2026-11-28T22:13:00Z",
+      "minutes": 1,
+      "local": "14:13",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_418d8413d1cf": {"G": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 44,
+      "sm": "14:13",
+      "note": "E's Cursor turns aren't timed in SM; agent_running_s follows from the fixture's stops.",
+      "derived": ["agent_running_s"]
+    },
+    {
+      "start": "2026-11-28T22:14:00Z",
+      "minutes": 1,
+      "local": "14:14",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0e6a8e0b849e": {"READ": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "14:14"
+    },
+    {
+      "start": "2026-11-28T22:15:00Z",
+      "minutes": 1,
+      "local": "14:15",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0e6a8e0b849e": {"READ": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "14:15"
+    },
+    {
+      "start": "2026-11-28T22:16:00Z",
+      "minutes": 1,
+      "local": "14:16",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0e6a8e0b849e": {"READ": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "14:16"
+    },
+    {
+      "start": "2026-11-28T22:17:00Z",
+      "minutes": 1,
+      "local": "14:17",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0e6a8e0b849e": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "14:17"
+    },
+    {
+      "start": "2026-11-28T22:18:00Z",
+      "minutes": 1,
+      "local": "14:18",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0e6a8e0b849e": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "14:18"
+    },
+    {
+      "start": "2026-11-28T22:19:00Z",
+      "minutes": 1,
+      "local": "14:19",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0e6a8e0b849e": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "14:19"
+    },
+    {
+      "start": "2026-11-28T22:20:00Z",
+      "minutes": 1,
+      "local": "14:20",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0e6a8e0b849e": {"P": 30},
+        "p_a73dbaeaf36c": {"READ": 30}
+      },
+      "uncredited": {},
+      "agent_running_s": 30,
+      "sm": "14:20"
+    },
+    {
+      "start": "2026-11-28T22:21:00Z",
+      "minutes": 1,
+      "local": "14:21",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_a73dbaeaf36c": {"READ": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 60,
+      "sm": "14:21"
+    },
+    {
+      "start": "2026-11-28T22:22:00Z",
+      "minutes": 1,
+      "local": "14:22",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_a73dbaeaf36c": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 60,
+      "sm": "14:22"
+    },
+    {
+      "start": "2026-11-28T22:23:00Z",
+      "minutes": 1,
+      "local": "14:23",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_a73dbaeaf36c": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "14:23"
+    },
+    {
+      "start": "2026-11-28T22:24:00Z",
+      "minutes": 1,
+      "local": "14:24",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_a73dbaeaf36c": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "14:24"
+    },
+    {
+      "start": "2026-11-28T22:25:00Z",
+      "minutes": 1,
+      "local": "14:25",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_dedc43f1d319": {"E": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 60,
+      "sm": "14:25"
+    },
+    {
+      "start": "2026-11-28T22:26:00Z",
+      "minutes": 4,
+      "local": "14:26-14:29",
+      "bucket": true,
+      "bucket_minutes": 4,
+      "credited_s": 240,
+      "credit": {
+        "p_dedc43f1d319": {"E": 240}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "14:26-14:29"
+    }
+  ],
+  "totals": {
+    "credited_s": 1800,
+    "credited_by_project": {"p_0e6a8e0b849e": 510, "p_a73dbaeaf36c": 450, "p_418d8413d1cf": 540, "p_dedc43f1d319": 300},
+    "credited_by_reason": {"P": 650, "GO": 20, "E": 730, "G": 60, "SUP": 60, "READ": 280},
+    "uncredited": {},
+    "agent_running_s": 740,
+    "wall_s": 1800,
+    "agent_running_s.p_0e6a8e0b849e": 600,
+    "agent_running_s.p_a73dbaeaf36c": 210,
+    "agent_running_s.p_418d8413d1cf": 80,
+    "agent_only_s.p_0e6a8e0b849e": 570,
+    "agent_only_s.p_a73dbaeaf36c": 180,
+    "agent_only_s.p_418d8413d1cf": 0
+  },
+  "stated": ["credited_s", "wall_s", "agent_only_s.p_0e6a8e0b849e", "agent_only_s.p_a73dbaeaf36c"],
+  "approx": {},
+  "errata": [],
+  "notes": [
+    "credited_by_project is SM's: A 510, B 450, E 540, D 300. Every second goes to one project, so they add up to the 1,800 s total.",
+    "agent_running_s counts a second once however many agents run in it. agent_running_s.<project> is that project's agent time and agent_only_s.<project> the part of it the same project doesn't credit, the chess clock of SM 2.6: A's agent runs 600 s, 30 of them watched, B's 210 s, 30 watched. They sum to SM's 750 s, more than agent_running_s because A's and B's runs overlap from 14:04:30 to 14:07:00.",
+    "A's second turn stops at 14:23:00 and B's at 14:26:00. SM doesn't time them; its 570 s and 180 s of unwatched agent time do.",
+    "E's Cursor turns (14:09:00-14:09:36, 14:13:00-14:13:44) fall inside E's credited seconds, so E has no agent-only time.",
+    "C (homework-helper) has no records here: SM 6.3 says Sam works on it after 15:00."
+  ]
+}

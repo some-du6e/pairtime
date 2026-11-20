@@ -52,12 +52,14 @@ func resolve(getenv func(string) string, userHome string) (Dirs, error) {
 	return osDirs(getenv, userHome)
 }
 
-// Create makes the data and config directories, readable by this user only
-// where the OS has file modes (0700). Directories that exist are left as
-// they are. The runtime directory is the socket's business (WP-AG2).
+// Create makes the data and config directories, and the parents they need,
+// for this user only: mode 0700 on Unix, and on Windows a protected DACL
+// that lets only the current user in and that every file made inside
+// inherits. Directories that exist are left as they are. The runtime
+// directory is the socket's business (WP-AG2).
 func (d Dirs) Create() error {
 	for _, dir := range []string{d.Data, d.Config} {
-		if err := os.MkdirAll(dir, 0o700); err != nil {
+		if err := mkdirAll(dir); err != nil {
 			return err
 		}
 	}

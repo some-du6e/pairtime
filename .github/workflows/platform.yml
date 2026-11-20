@@ -15,11 +15,13 @@ on:
       - internal/install/**
       - internal/agent/ipc/**
       # The agent's platform code: the lock, the data directories and
-      # private files (home), the loopback server (localhttp), and the
-      # spool, which Windows file sharing makes OS-specific (inbox).
+      # private files (home), the loopback server (localhttp), the spool,
+      # which Windows file sharing makes OS-specific (inbox), and presence,
+      # whose smoke test runs on the real Windows sources.
       - internal/agent/inbox/**
       - internal/agent/home/**
       - internal/agent/localhttp/**
+      - internal/agent/presence/**
       # The notifier's per-OS backends (platform_*.go) and the rules they
       # share.
       - internal/agent/notifier/**
@@ -41,7 +43,7 @@ permissions:
 env:
   # pairtime never uses cgo (AGENTS.md).
   CGO_ENABLED: "0"
-  PLATFORM_DIRS: internal/platform internal/install internal/agent/ipc internal/agent/inbox internal/agent/home internal/agent/localhttp internal/agent/notifier cmd/pairtime
+  PLATFORM_DIRS: internal/platform internal/install internal/agent/ipc internal/agent/inbox internal/agent/home internal/agent/localhttp internal/agent/presence internal/agent/notifier cmd/pairtime
 
 jobs:
   windows:

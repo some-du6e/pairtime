@@ -18,6 +18,8 @@ One Go module holds the client, the server and the code they share.
 | `cmd/pairtimed` | The server: accounts, projects, rollups and the live dashboard, once they exist |
 | `pkg/event` | The event model from the [struggle-metric spec](docs/design/struggle-metric.md): the envelope, the 18 event kinds, the records the scorer derives from them, and validation for all of it |
 | `internal/agent` | The background agent: its data directories, the single-instance lock, `config.toml`, `state.json`, the scheduler every timer goes through, and the HTTP server on 127.0.0.1 |
+| `internal/agent/presence` | Presence and power: idle-time samples on each 15-second slot boundary and suspend, resume, lock and unlock, recorded only while a project context is live (DESIGN 3.3, D14) |
+| `internal/platform/windows` | Win32 calls without cgo: input idle time, suspend and lock notifications, EcoQoS. No keyboard listener of any kind |
 | `internal/webui` | The local dashboard's built files, embedded in the client. The repo carries a placeholder, so Go builds never need Node |
 | `web` | The web UI in Svelte 5 and TypeScript: the local dashboard the agent serves, the server UI, and the components they share. [web/README.md](web/README.md) says how it builds |
 | `docs/api` | OpenAPI specs of pairtime's HTTP APIs. The UI's TypeScript types are generated from them |
