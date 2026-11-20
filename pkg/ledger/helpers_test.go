@@ -164,7 +164,7 @@ func sampleEvent(k event.Kind) (event.Event, error) {
 	case event.KindCLITrack:
 		env.Source, env.Via = event.SourceCLI, event.ViaTrack
 		p = &event.CLITrack{Label: "fix the login redirect loop", TextLen: 27,
-			EnvHints: []string{"CLAUDECODE", "CLAUDE_CODE_SESSION_ID"}, LogMatch: event.LogMatched}
+			EnvHints: []event.EnvHint{"CLAUDECODE", "CLAUDE_CODE_SESSION_ID"}, LogMatch: event.LogMatched}
 	default:
 		return event.Event{}, fmt.Errorf("no sample event for kind %q; add one", k)
 	}

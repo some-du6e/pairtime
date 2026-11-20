@@ -180,12 +180,16 @@ var (
 	slotLabels = enum[Label]{values: []Label{LabelViaTrack, LabelViaPlugin, LabelViaBridge}}
 )
 
-// corroboratingVias are the vias of the records in DESIGN 6.4's pairs for
-// the corroborated band: a hook and a transcript line (log), a hook and an
-// OTel event, and an editor heartbeat that passed the peer-process check
-// plus a commit (git). No shell, side-door or unverified editor record is
-// in any pair.
-var corroboratingVias = enum[Via]{values: []Via{ViaHook, ViaLog, ViaOTel, ViaEditor, ViaGit}}
+// corroboratingVias are the vias an anchor can arrive by and still be
+// corroborated under DESIGN 6.4's pairs: a hook and a transcript line
+// (log), a hook and an OTel event, and an editor heartbeat that passed the
+// peer-process check plus a commit whose diffstat covers the file. In the
+// last pair the act both records saw is the edit, so the anchor is the
+// editor one; the commit is only the second record, and a commit anchor
+// (via git) is never corroborated by it. On macOS, where the check doesn't
+// run, `editor` doesn't mean it passed (docs/errata/2026-11-19-bridge-unverified.md).
+// No shell, git, side-door or unverified editor anchor is in any pair.
+var corroboratingVias = enum[Via]{values: []Via{ViaHook, ViaLog, ViaOTel, ViaEditor}}
 
 // sideDoorLabel returns the label an anchor that arrived via v carries, or
 // "" when v isn't a labeled side door. editor_unverified anchors are level
@@ -387,8 +391,9 @@ type Anchor struct {
 	// same act. 6.4 names three pairs: a hook and a transcript line, a hook
 	// and an OTel event, and an editor heartbeat that passed the
 	// peer-process check plus a commit whose diffstat covers the file. So
-	// only an anchor that arrived via hook, log, otel, editor or git can be
-	// corroborated. The band has other conditions, and Corroborated never
+	// only an anchor that arrived via hook, log, otel or editor can be
+	// corroborated; in the editor pair the commit is the second record, not
+	// the anchor. The band has other conditions, and Corroborated never
 	// changes the anchor's level.
 	//
 	// DESIGN 5.2 and 6.2 D2 also say "corroborate" for a different rule,

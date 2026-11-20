@@ -38,7 +38,7 @@ Both carry the `via_bridge` label, so the review page still shows that a minute 
 
 ## macOS, where the check doesn't run
 
-DESIGN 5.7 skips the peer-process check on macOS, and WP-OS13 builds it for Windows and Linux only. DESIGN doesn't say which `via` records get there. D19 counts only bridge records "from heartbeats that passed the peer-process check", and on a Mac no heartbeat passes a check that never runs. Giving them `bridge`, on the view that a check that didn't run didn't fail, would reopen the pump above on every Mac.
+DESIGN 5.7 skips the peer-process check on macOS, and WP-OS13 builds it for Windows and Linux only. DESIGN pulls two ways here. 5.2 says "Editor heartbeats are `via = editor` only when the peer-process check passes (5.7), and `editor_unverified`, level C, otherwise", which on a Mac would make every editor heartbeat `editor_unverified`. 5.7 skips the check because macOS gives keyboard evidence directly. The default below keeps `editor` for editor heartbeats on 5.7's reasoning, against 5.2's wording. D19 counts only bridge records "from heartbeats that passed the peer-process check", and on a Mac no heartbeat passes a check that never runs. Giving them `bridge`, on the view that a check that didn't run didn't fail, would reopen the pump above on every Mac.
 
 Until Karim decides, the default is the one that keeps the pump closed. WP-AD16 sets `via` from the peer check and has no macOS rule of its own, so it takes this default:
 
@@ -56,3 +56,5 @@ Until Karim decides, the default is the one that keeps the pump closed. WP-AD16 
    - (c) Bring the check to macOS through `libproc` with purego, as DESIGN 5.7 allows. Both pairs of values then apply there as on Windows and Linux, and the question goes away.
 
    (a) and (b) both leave macOS editor heartbeats unchecked, and that needs a look too. A macOS editor heartbeat counts toward `logged_s` and D15's `hackatime_logged_s`. D15 splits `hackatime_logged_s` by the category each heartbeat carries, and a heartbeat posted straight to the local port can claim `ai coding`. If D15's AI part sets the level-C ceiling, a script on a Mac can raise that ceiling with editor heartbeats.
+
+   Under (a) and (b), unchecked macOS editor heartbeats also meet DESIGN 6.4's editor-plus-commit pair by `via` alone, so the corroborated band, the only band a program preset may pre-approve, can rest on them. Accepting (a) or (b) therefore needs two DESIGN edits as well: 5.2's editor sentence gets a macOS exception, and 6.4's "an editor heartbeat that passed the peer-process check" pair says what stands in for the check on macOS (for example, key-down input in the editor's window). Under (c), neither edit is needed.

@@ -229,7 +229,8 @@ func TestAnchorValidate(t *testing.T) {
 		{"a transcript anchor corroborated by its hook", func(a *Anchor) { a.Via = ViaLog }, ""},
 		{"an OTel anchor corroborated by its hook", func(a *Anchor) { a.Via = ViaOTel }, ""},
 		{"an editor anchor corroborated by a commit", func(a *Anchor) { a.Kind, a.Via = AnchorTypedEdit, ViaEditor }, ""},
-		{"a commit corroborated by an editor heartbeat", func(a *Anchor) { a.Kind, a.Via = AnchorHumanCommit, ViaGit }, ""},
+		{"a commit anchor isn't corroborated by the editor pair", func(a *Anchor) { a.Kind, a.Via = AnchorHumanCommit, ViaGit },
+			`corroborated: is true, but an anchor that arrived via "git" can't be`},
 		{"keyboard input doesn't make a track anchor corroborated", func(a *Anchor) {
 			a.Via, a.Labels = ViaTrack, []Label{LabelViaTrack, LabelTypingModule}
 		}, `corroborated: is true, but an anchor that arrived via "track" can't be`},
@@ -437,7 +438,7 @@ func TestTier1FieldsCantBeChanged(t *testing.T) {
 		{"changing a copy of the slot fields leaves the list alone", Tier1SlotFields},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			want := tt.fields()
+			want := slices.Clone(tt.fields())
 			got := tt.fields()
 			got[0] = "anchors"
 			if again := tt.fields(); !slices.Equal(again, want) {
