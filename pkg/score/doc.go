@@ -105,6 +105,11 @@
 //   - The editor in focus on a session's project hosts a session only the
 //     WakaTime bridge reports, as it does an IDE session, since the bridge
 //     reads it from the editor's wakatime-cli (DESIGN 5.7).
+//   - unread_prose_words is SM 2.1's definition: the prose that arrived
+//     after the person's last input in a slot whose focus held the
+//     session. SM 6.1 cycle 6, where the answer comes 10 s before that
+//     input, says 173 s, which the definition doesn't give
+//     (docs/errata/2026-11-20-sm-6.1-return-unread-words.md).
 //   - SM 2.2 rule 2 reads a prompt's declared origin. A turn a stop hook
 //     continued has no prompt.submit and is self_continue as a
 //     continuation; a later stop with stop_hook_active doesn't change a

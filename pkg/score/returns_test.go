@@ -97,7 +97,7 @@ func TestReturnRule(t *testing.T) {
 	typedPrompt := func(resume int64) func(b *tl) {
 		return func(b *tl) { b.prompt(at(resume+19), event.ViaHook, "s_1", "p_1", "t_2", 30) }
 	}
-	t.Run("SM 2.1: a 6-minute silence after a 160-word answer, then a typed prompt, earns at most 53 + 120 = 173 s", func(t *testing.T) {
+	t.Run("SM 2.1: a 160-word answer after the last touch, a 6-minute silence, then a typed prompt, earns 53 + 120 = 173 s", func(t *testing.T) {
 		got := silence(event.AppTerminal, 451, typedPrompt(451)).run(t, Device{})
 		if len(got.Returns) != 1 {
 			t.Fatalf("%d returned runs, want 1", len(got.Returns))
@@ -143,15 +143,20 @@ func TestReturnRule(t *testing.T) {
 			t.Errorf("returned runs %+v, want none", got.Returns)
 		}
 	})
-	t.Run("output the person had seen before the silence isn't unread", func(t *testing.T) {
+	// SM 6.1 cycle 6 has the answer come 10 s before the last touch and
+	// says 173 s. By SM 2.1's definition the person had the session in
+	// focus with input after the answer came, so none of it is unread, and
+	// the scorer credits 120 s. docs/errata/2026-11-20-sm-6.1-return-unread-words.md
+	// asks Karim which is right; the code isn't fitted to 6.1's number.
+	t.Run("SM 6.1 cycle 6's timing: an answer 10 s before the last touch isn't unread under SM 2.1, so 120 s, not 6.1's 173 s (erratum)", func(t *testing.T) {
 		b := newTL(false)
 		b.focus(at(0), event.AppTerminal, "p_1", "s_1")
 		b.start(at(0), "s_1", "p_1", event.EntrypointCLI, event.ParentTerminalApp, true)
 		b.mouse(every(at(1), at(96), 5000)...)
 		b.mouse(at(100))
 		b.prompt(at(30), event.ViaHook, "s_1", "p_1", "t_1", 30)
-		b.harness(at(80), event.ViaLog, "s_1", "p_1", &event.AgentOutput{TurnKey: "t_1", Words: 160, IsFinal: true})
-		b.harness(at(80), event.ViaHook, "s_1", "p_1", &event.AgentStop{TurnKey: "t_1", StopReason: event.StopEndTurn})
+		b.harness(at(90), event.ViaLog, "s_1", "p_1", &event.AgentOutput{TurnKey: "t_1", Words: 160, IsFinal: true})
+		b.harness(at(90), event.ViaHook, "s_1", "p_1", &event.AgentStop{TurnKey: "t_1", StopReason: event.StopEndTurn})
 		b.press(every(atMS(451_500), atMS(469_500), 1000)...)
 		typedPrompt(451)(b)
 		b.samples(at(0), at(511))
