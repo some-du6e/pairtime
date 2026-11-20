@@ -269,7 +269,7 @@ func promptText(p *event.PromptSubmit) string {
 // gives it.
 func direct(table *params.Table, dev score.Device, device string, evs []event.Event) (map[int64]store.Bucket, int64) {
 	_, out := score.Step(score.NewState(table, dev), evs)
-	meta := bucketMeta{v: table.Version(), params: table.Hash(), device: device}
+	meta := bucketMeta{v: score.Version(), params: table.Hash(), device: device}
 	var all score.Derived
 	all.Append(out.Final)
 	all.Append(out.Pending)

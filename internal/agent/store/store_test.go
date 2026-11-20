@@ -281,6 +281,56 @@ func TestRangeAndPending(t *testing.T) {
 	}
 }
 
+func TestDayBounds(t *testing.T) {
+	tests := []struct {
+		name, zone, date string
+		start, end       string // RFC 3339, in UTC; "" when the date is refused
+	}{
+		{"an ordinary day runs from midnight to midnight", "America/New_York", "2026-11-20", "2026-11-20T05:00:00Z", "2026-11-21T05:00:00Z"},
+		{"the day the clocks go forward is 23 hours long", "America/New_York", "2027-03-14", "2027-03-14T05:00:00Z", "2027-03-15T04:00:00Z"},
+		{"the day before a skipped midnight keeps its last hour", "America/Santiago", "2027-09-04", "2027-09-04T04:00:00Z", "2027-09-05T04:00:00Z"},
+		{"a day whose midnight the clocks skip starts when they jump, at 01:00", "America/Santiago", "2027-09-05", "2027-09-05T04:00:00Z", "2027-09-06T03:00:00Z"},
+		{"the day the clocks go back at midnight is 25 hours long", "America/Santiago", "2027-04-03", "2027-04-03T03:00:00Z", "2027-04-04T04:00:00Z"},
+		{"in Havana the day before its skipped midnight keeps its last hour", "America/Havana", "2027-03-13", "2027-03-13T05:00:00Z", "2027-03-14T05:00:00Z"},
+		{"in Havana the day whose midnight is skipped starts at 01:00", "America/Havana", "2027-03-14", "2027-03-14T05:00:00Z", "2027-03-15T04:00:00Z"},
+		{"in the Azores the day before its skipped midnight keeps its last hour", "Atlantic/Azores", "2027-03-27", "2027-03-27T01:00:00Z", "2027-03-28T01:00:00Z"},
+		{"in the Azores the day whose midnight is skipped starts at 01:00", "Atlantic/Azores", "2027-03-28", "2027-03-28T01:00:00Z", "2027-03-29T00:00:00Z"},
+		{"the 30th of February isn't a date", "UTC", "2026-02-30", "", ""},
+		{"a date with anything after it isn't a date", "UTC", "2026-11-20x", "", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			loc, err := time.LoadLocation(tt.zone)
+			if err != nil {
+				t.Skip("no time zone data:", err)
+			}
+			start, end, err := DayBounds(tt.date, loc)
+			if tt.start == "" {
+				if err == nil {
+					t.Fatalf("DayBounds(%q) = %v, %v; want it refused", tt.date, start, end)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !start.Equal(minute(t, tt.start)) || !end.Equal(minute(t, tt.end)) {
+				t.Errorf("%s in %s runs from %s to %s, want %s to %s", tt.date, tt.zone,
+					start.UTC().Format(time.RFC3339), end.UTC().Format(time.RFC3339), tt.start, tt.end)
+			}
+			if got := DateOf(start.UnixMilli(), loc); got != tt.date {
+				t.Errorf("the day's first instant is on %s", got)
+			}
+			if got := DateOf(start.UnixMilli()-1, loc); got >= tt.date {
+				t.Errorf("the instant before the day's first is on %s", got)
+			}
+			if got := DateOf(end.UnixMilli()-1, loc); got != tt.date {
+				t.Errorf("the day's last instant is on %s", got)
+			}
+		})
+	}
+}
+
 // with returns b with fn applied to project key's part of it.
 func with(b Bucket, key string, fn func(*ProjectMinute)) Bucket {
 	pm := b.Projects[key]
@@ -305,7 +355,7 @@ func TestRollup(t *testing.T) {
 		check   func(t *testing.T, d Day)
 	}{
 		{
-			name: "credit sums by project, by kind and by level, and only levels and kinds with credit are named",
+			name: "credit sums by project, by kind, by level and by reason, and only the kinds, levels and reasons with credit are named",
 			buckets: func(t *testing.T) []Bucket {
 				return []Bucket{
 					bucket(t, "2026-11-20T15:00:00Z", event.StateFinal, map[string][]Credited{
@@ -331,6 +381,9 @@ func TestRollup(t *testing.T) {
 				}
 				if want := map[event.Activity]float64{event.ActivityPrompting: 15, event.ActivityReadingOutput: 70}; !maps.Equal(a.CreditedByKind, want) {
 					t.Errorf("p_a by kind %v, want %v", a.CreditedByKind, want)
+				}
+				if want := map[event.Reason]float64{event.ReasonPrompt: 15, event.ReasonRead: 70}; !maps.Equal(a.CreditedByReason, want) {
+					t.Errorf("p_a by reason %v, want %v", a.CreditedByReason, want)
 				}
 				if want := map[event.Evidence]float64{event.EvidenceC: 5}; !maps.Equal(b.CreditedByEvidence, want) {
 					t.Errorf("p_b by level %v, want %v", b.CreditedByEvidence, want)
@@ -413,6 +466,48 @@ func TestRollup(t *testing.T) {
 			},
 		},
 		{
+			name: "credit keeps its reason's suffix, and SM 5.4's AI-assisted reasons stay apart from the hand-work ones of the same kind",
+			buckets: func(t *testing.T) []Bucket {
+				return []Bucket{bucket(t, "2026-11-20T15:00:00Z", event.StateFinal, map[string][]Credited{
+					"p_a": {cr(event.ReasonRead+event.ReturnedSuffix, event.EvidenceA, 20), cr(event.ReasonPermission, event.EvidenceA, 10), cr(event.ReasonNavigate, event.EvidenceA, 6)},
+				}, nil)}
+			},
+			cap: 43200,
+			check: func(t *testing.T, d Day) {
+				p := d.Projects[0]
+				want := map[event.Reason]float64{"READ~r": 10, event.ReasonPermission: 5, event.ReasonNavigate: 3}
+				if !maps.Equal(p.CreditedByReason, want) {
+					t.Errorf("by reason %v, want %v", p.CreditedByReason, want)
+				}
+				if p.CreditedByKind[event.ActivityReviewing] != 8 {
+					t.Errorf("by kind %v, want 8 s of reviewing", p.CreditedByKind)
+				}
+			},
+		},
+		{
+			name: "X.noprog in pending and provisional minutes is on hold, and in final ones it isn't",
+			buckets: func(t *testing.T) []Bucket {
+				noprog := func(at string, state event.BucketState) Bucket {
+					b := bucket(t, at, state, map[string][]Credited{"p_a": {cr(event.ReasonPrompt, event.EvidenceA, 30)}}, nil)
+					return with(b, "p_a", func(pm *ProjectMinute) {
+						pm.Uncredited = map[event.Reason]int64{event.ReasonNoProgress: 7, event.ReasonAbsent: 4}
+					})
+				}
+				return []Bucket{
+					noprog("2026-11-20T15:00:00Z", event.StateFinal),
+					noprog("2026-11-20T15:01:00Z", event.StateProvisional),
+					noprog("2026-11-20T15:02:00Z", event.StatePending),
+				}
+			},
+			cap: 43200,
+			check: func(t *testing.T, d Day) {
+				p := d.Projects[0]
+				if p.OnHoldS != 14 || p.Uncredited[event.ReasonNoProgress] != 21 {
+					t.Errorf("on hold %v s of %v s of X.noprog, want 14 of 21", p.OnHoldS, p.Uncredited[event.ReasonNoProgress])
+				}
+			},
+		},
+		{
 			name: "uncredited seconds sum by project and reason",
 			buckets: func(t *testing.T) []Bucket {
 				b := bucket(t, "2026-11-20T15:00:00Z", event.StateFinal, map[string][]Credited{
@@ -443,6 +538,30 @@ func TestRollup(t *testing.T) {
 			tt.check(t, d)
 		})
 	}
+	t.Run("a minute belongs to the local day it starts in, where the clocks skip midnight", func(t *testing.T) {
+		santiago, err := time.LoadLocation("America/Santiago")
+		if err != nil {
+			t.Skip("no time zone data:", err)
+		}
+		// 03:59Z is 23:59 on 2027-09-04; at 04:00Z the clocks jump from
+		// midnight to 01:00 on 2027-09-05.
+		bs := []Bucket{
+			bucket(t, "2027-09-05T03:59:00Z", event.StateFinal, map[string][]Credited{"p_a": {cr(event.ReasonPrompt, event.EvidenceA, 30)}}, nil),
+			bucket(t, "2027-09-05T04:00:00Z", event.StateFinal, map[string][]Credited{"p_a": {cr(event.ReasonPrompt, event.EvidenceA, 10)}}, nil),
+		}
+		for _, x := range []struct {
+			date string
+			want float64
+		}{{"2027-09-04", 15}, {"2027-09-05", 5}} {
+			d, err := Rollup(x.date, santiago, bs, 43200)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(d.Projects) != 1 || d.Projects[0].CreditedS != x.want {
+				t.Errorf("%s: %+v, want %v s", x.date, d.Projects, x.want)
+			}
+		}
+	})
 }
 
 func TestLastSession(t *testing.T) {
@@ -457,7 +576,10 @@ func TestLastSession(t *testing.T) {
 		minutes            func(t *testing.T) []Bucket
 		to                 string
 		project, from, end string // "" project: no session
-		credited, agent    float64
+		// until is when the session's credit stopped, when the case checks
+		// it.
+		until           string
+		credited, agent float64
 	}{
 		{
 			name: "a session runs back over credited minutes no more than SESSION_GAP_S apart",
@@ -518,6 +640,18 @@ func TestLastSession(t *testing.T) {
 			project: "p_a", from: "2026-11-19T23:59:00Z", end: "2026-11-20T00:00:00Z", credited: 10,
 		},
 		{
+			name: "a session's credit stops at the end of the last slot of its last minute in which anything was credited",
+			minutes: func(t *testing.T) []Bucket {
+				b := bucket(t, "2026-11-20T10:00:00Z", event.StateFinal, a, nil)
+				for i := range 2 {
+					b.Slots[i] = event.BucketSlot{Project: "p_a", Credited: 5, Why: event.ReasonPrompt, Kind: event.ActivityPrompting, Ev: event.EvidenceA}
+				}
+				return []Bucket{b}
+			},
+			to:      "2026-11-21T00:00:00Z",
+			project: "p_a", from: "2026-11-20T10:00:00Z", end: "2026-11-20T10:01:00Z", until: "2026-11-20T10:00:30Z", credited: 10,
+		},
+		{
 			name: "a credited minute more than 30 days back isn't looked for",
 			minutes: func(t *testing.T) []Bucket {
 				return []Bucket{bucket(t, "2026-10-20T10:00:00Z", event.StateFinal, a, nil)}
@@ -553,6 +687,8 @@ func TestLastSession(t *testing.T) {
 				t.Errorf("session %s from %s to %s, want %s from %s to %s", got.Project, got.Start, got.End, tt.project, tt.from, tt.end)
 			case got.CreditedS != tt.credited || got.AgentOnlyS != tt.agent:
 				t.Errorf("session credits %v s with %v s agent-only, want %v and %v", got.CreditedS, got.AgentOnlyS, tt.credited, tt.agent)
+			case tt.until != "" && !got.CreditUntil.Equal(minute(t, tt.until)):
+				t.Errorf("the session's credit stops at %s, want %s", got.CreditUntil, tt.until)
 			}
 		})
 	}

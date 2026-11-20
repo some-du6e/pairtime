@@ -538,7 +538,7 @@ func (l *Loop) step(b uint64) {
 	}
 	prev := l.cur.FinalBefore
 	fb := max(prev, out.FinalBefore)
-	meta := bucketMeta{v: l.opts.Params.Version(), params: l.opts.Params.Hash(), device: l.cur.Device}
+	meta := bucketMeta{v: score.Version(), params: l.opts.Params.Hash(), device: l.cur.Device}
 	var all score.Derived
 	all.Append(out.Final)
 	all.Append(out.Pending)

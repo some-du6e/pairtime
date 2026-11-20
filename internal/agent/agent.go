@@ -80,6 +80,9 @@ type Options struct {
 	// that can pass, such as a locked keyring; 15 s otherwise. Tests set
 	// it so they needn't wait.
 	LedgerRetry time.Duration
+	// Zone, when set, replaces time.Local as the time zone the agent
+	// counts days in. Tests set it.
+	Zone *time.Location
 }
 
 // linked keeps heavyModules' entry points reachable (see heavy_linux.go).
@@ -133,6 +136,8 @@ type agent struct {
 	// store didn't open.
 	scorer  *scorer.Loop
 	buckets *store.Buckets
+	// loc is Options.Zone (zone).
+	loc *time.Location
 
 	stop     chan struct{} // closed when a client asks the agent to stop
 	stopOnce sync.Once
@@ -171,6 +176,7 @@ func Run(ctx context.Context, opts Options) error {
 		keyStores:   opts.KeyStores,
 		ledgerRetry: defaultLedgerRetry,
 		table:       newestTable(),
+		loc:         opts.Zone,
 		hooked:      newHookTies(),
 	}
 	if opts.LedgerRetry > 0 {
