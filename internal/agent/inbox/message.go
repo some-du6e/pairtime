@@ -73,7 +73,7 @@ func (m Message) Check() error {
 	case !validID(m.ID):
 		return errors.New("inbox: a message id must be 32 lowercase hex digits")
 	case !validKind(m.Kind):
-		return fmt.Errorf("inbox: message kind %q isn't 1 to 64 of a-z 0-9 . : _ -", m.Kind)
+		return errors.New("inbox: a message kind must be 1 to 64 of a-z 0-9 . : _ -")
 	case m.Sent.IsZero():
 		return errors.New("inbox: a message needs the time it was sent")
 	case len(m.Body) > 0 && !json.Valid(m.Body):
