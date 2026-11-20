@@ -5,9 +5,11 @@ package device_test
 import (
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -239,6 +241,46 @@ func TestGrant(t *testing.T) {
 					}
 					if rp := r.header.Get("Referrer-Policy"); rp != "same-origin" {
 						t.Errorf("Referrer-Policy = %q, want same-origin, so the form's POST carries this server's Origin", rp)
+					}
+				}},
+				{name: "wrong codes sent at once still get at most 10 tries", run: func(t *testing.T, h *harness) {
+					b := h.signIn(verified("ident!teen1", "U0TEEN1"))
+					form := url.Values{"csrf": {b.csrf(device.PagePath)}, "user_code": {"DDDD-DDDD"}, "decision": {"approve"}}.Encode()
+					statuses := make(chan int, 30)
+					var wg sync.WaitGroup
+					for range 30 {
+						wg.Go(func() {
+							req, err := http.NewRequest(http.MethodPost, h.srv.URL+device.DecisionPath, strings.NewReader(form))
+							if err != nil {
+								statuses <- 0
+								return
+							}
+							req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+							req.Header.Set("Origin", h.srv.URL)
+							resp, err := b.c.Do(req)
+							if err != nil {
+								statuses <- 0
+								return
+							}
+							io.Copy(io.Discard, resp.Body)
+							resp.Body.Close()
+							statuses <- resp.StatusCode
+						})
+					}
+					wg.Wait()
+					close(statuses)
+					through, failed := 0, 0
+					for st := range statuses {
+						switch st {
+						case http.StatusTooManyRequests:
+						case http.StatusOK:
+							through++
+						default:
+							failed++
+						}
+					}
+					if through > 10 || failed > 0 {
+						t.Errorf("of 30 wrong codes sent at once, %d were tried and %d failed otherwise; want at most 10 tried", through, failed)
 					}
 				}},
 				{name: "after 10 wrong codes an account gets no more tries, even with the right code, and signing in again doesn't reset it", run: func(t *testing.T, h *harness) {

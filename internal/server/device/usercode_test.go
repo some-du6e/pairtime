@@ -5,6 +5,8 @@ package device
 import (
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -83,46 +85,67 @@ func TestNewUserCode(t *testing.T) {
 func TestLimiter(t *testing.T) {
 	now := time.Date(2026, 11, 20, 20, 0, 0, 0, time.UTC)
 	tests := []struct {
-		name      string
-		fails     int
-		after     time.Duration
-		wantAllow bool
+		name     string
+		takes    int // wrong codes taken first
+		refunds  int // right codes among them, given back
+		after    time.Duration
+		wantTake bool
 	}{
-		{name: "a session with no wrong codes may try", fails: 0, wantAllow: true},
-		{name: "a session with 9 wrong codes may try once more", fails: 9, wantAllow: true},
-		{name: "a session with 10 wrong codes may not try", fails: 10, wantAllow: false},
-		{name: "a session with 10 wrong codes may not try a minute before its window ends", fails: 10, after: wrongCodeWindow - time.Minute, wantAllow: false},
-		{name: "a session may try again once its window has ended", fails: 10, after: wrongCodeWindow, wantAllow: true},
+		{name: "an account with no wrong codes may try", wantTake: true},
+		{name: "an account with 9 wrong codes may try once more", takes: 9, wantTake: true},
+		{name: "an account with 10 wrong codes may not try", takes: 10, wantTake: false},
+		{name: "a right code given back doesn't count", takes: 10, refunds: 1, wantTake: true},
+		{name: "an account with 10 wrong codes may not try a minute before its window ends", takes: 10, after: wrongCodeWindow - time.Minute, wantTake: false},
+		{name: "an account may try again once its window has ended", takes: 10, after: wrongCodeWindow, wantTake: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			at := now
 			l := newLimiter(maxWrongCodes, wrongCodeWindow, func() time.Time { return at })
-			for range tt.fails {
-				l.fail("s1")
+			for range tt.takes {
+				l.take("a1")
+			}
+			for range tt.refunds {
+				l.refund("a1")
 			}
 			at = at.Add(tt.after)
-			if got := l.allow("s1"); got != tt.wantAllow {
-				t.Errorf("allow = %v, want %v", got, tt.wantAllow)
+			if got := l.take("a1"); got != tt.wantTake {
+				t.Errorf("take = %v, want %v", got, tt.wantTake)
 			}
-			if !l.allow("s2") {
-				t.Error("another session's wrong codes counted against s2")
+			if !l.take("a2") {
+				t.Error("another account's wrong codes counted against a2")
 			}
 		})
 	}
+	t.Run("tries sent at once get at most 10 through", func(t *testing.T) {
+		l := newLimiter(maxWrongCodes, wrongCodeWindow, func() time.Time { return now })
+		var wg sync.WaitGroup
+		var passed atomic.Int64
+		for range 100 {
+			wg.Go(func() {
+				if l.take("a1") {
+					passed.Add(1)
+				}
+			})
+		}
+		wg.Wait()
+		if n := passed.Load(); n != maxWrongCodes {
+			t.Errorf("%d of 100 tries at once got through, want %d", n, maxWrongCodes)
+		}
+	})
 	t.Run("a full limiter drops ended windows first, and stays bounded", func(t *testing.T) {
 		at := now
 		l := newLimiter(maxWrongCodes, wrongCodeWindow, func() time.Time { return at })
 		for i := range maxTallies {
-			l.fail("a" + strconv.Itoa(i))
+			l.take("a" + strconv.Itoa(i))
 		}
 		at = at.Add(wrongCodeWindow)
-		l.fail("new")
+		l.take("new")
 		if len(l.tries) != 1 {
 			t.Errorf("%d tallies after every old window ended, want 1", len(l.tries))
 		}
 		for i := range maxTallies + 100 {
-			l.fail("b" + strconv.Itoa(i))
+			l.take("b" + strconv.Itoa(i))
 		}
 		if len(l.tries) > maxTallies {
 			t.Errorf("%d tallies, more than %d", len(l.tries), maxTallies)

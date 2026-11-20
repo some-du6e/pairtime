@@ -228,7 +228,10 @@ func (s *Service) enter(w http.ResponseWriter, r *http.Request) {
 func (s *Service) lookup(w http.ResponseWriter, r *http.Request, sess *accounts.Session, d *pageData, typed string) {
 	key := sess.User.ID
 	d.Typed = typed
-	if !s.tries.allow(key) {
+	// The try is taken before the lookup and given back for a code that
+	// exists, so tries sent at once can't all pass a check made before
+	// any of them failed.
+	if !s.tries.take(key) {
 		d.Locked = true
 		d.Problem = "That's too many wrong codes for now. Wait a quarter of an hour, then try again."
 		s.render(w, http.StatusTooManyRequests, "Link the pairtime app", "enter", d, sess)
@@ -240,9 +243,11 @@ func (s *Service) lookup(w http.ResponseWriter, r *http.Request, sess *accounts.
 	if ok {
 		p, err = s.store.Lookup(r.Context(), code)
 	}
+	if !errors.Is(err, ErrNoCode) {
+		s.tries.refund(key)
+	}
 	switch {
 	case errors.Is(err, ErrNoCode):
-		s.tries.fail(key)
 		d.Problem = "That code isn't right, or it has expired. Check it against your terminal, or run pairtime login again for a new one."
 		s.render(w, http.StatusOK, "Link the pairtime app", "enter", d, sess)
 	case err != nil:
@@ -283,7 +288,7 @@ func (s *Service) decide(w http.ResponseWriter, r *http.Request) {
 	// A decision names its code itself, so it is held to the same limit
 	// as a typed code.
 	key := sess.User.ID
-	if !s.tries.allow(key) {
+	if !s.tries.take(key) {
 		d.Locked = true
 		d.Problem = "That's too many wrong codes for now. Wait a quarter of an hour, then try again."
 		s.render(w, http.StatusTooManyRequests, "Link the pairtime app", "enter", d, sess)
@@ -294,9 +299,11 @@ func (s *Service) decide(w http.ResponseWriter, r *http.Request) {
 	if ok {
 		err = s.store.Decide(r.Context(), code, sess.User.ID, approve)
 	}
+	if !errors.Is(err, ErrNoCode) {
+		s.tries.refund(key)
+	}
 	switch {
 	case errors.Is(err, ErrNoCode):
-		s.tries.fail(key)
 		d.Problem = "That code has expired, or was answered already. Run pairtime login again for a new one."
 		s.render(w, http.StatusOK, "Link the pairtime app", "enter", d, sess)
 	case errors.Is(err, ErrOtherAccount):
@@ -391,28 +398,37 @@ func newLimiter(max int, window time.Duration, now func() time.Time) *limiter {
 	return &limiter{max: max, window: window, now: now, tries: make(map[string]*tally)}
 }
 
-// allow reports whether key may try another code.
-func (l *limiter) allow(key string) bool {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	t, ok := l.tries[key]
-	return !ok || l.now().Sub(t.start) >= l.window || t.n < l.max
-}
-
-// fail counts a wrong code for key.
-func (l *limiter) fail(key string) {
+// take counts a try for key and reports true, or reports false when key
+// has used up its tries in this window. The caller gives the try back
+// with refund once the code turns out right, so only wrong codes stay
+// counted. One lock covers the check and the count, so tries sent at
+// once can't pass together.
+func (l *limiter) take(key string) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	now := l.now()
 	t, ok := l.tries[key]
-	if ok && now.Sub(t.start) < l.window {
+	switch {
+	case ok && now.Sub(t.start) < l.window:
+		if t.n >= l.max {
+			return false
+		}
 		t.n++
-		return
-	}
-	if !ok && len(l.tries) >= maxTallies {
+		return true
+	case !ok && len(l.tries) >= maxTallies:
 		l.prune(now)
 	}
 	l.tries[key] = &tally{start: now, n: 1}
+	return true
+}
+
+// refund gives back a try take counted, for a code that was right.
+func (l *limiter) refund(key string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if t, ok := l.tries[key]; ok && t.n > 0 {
+		t.n--
+	}
 }
 
 // prune drops ended windows, or the oldest window when none has ended.
