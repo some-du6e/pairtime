@@ -122,11 +122,11 @@ func (d *deriver) buildBeats() {
 	}
 }
 
-// latest returns the heartbeat SM 3.2 rule 2 resolves an editor by, of
-// those in(b) holds for that came at from or later: the most recent
-// verified one, else the most recent other one (D-rule2-sidedoor). in must
-// hold for a prefix of each list, as a bound on time or record order does.
-func (bl *beatLine) latest(from int64, in func(beat) bool) (beat, bool) {
+// pick returns the heartbeat SM 3.2 rule 2 resolves an editor by, of those
+// in(b) holds for that came at from or later: the most recent verified one,
+// else the most recent other one (D-rule2-sidedoor). in must hold for a
+// prefix of each list, as a bound on time or record order does.
+func (bl *beatLine) pick(from int64, in func(beat) bool) (beat, bool) {
 	for _, bs := range [][]beat{bl.verified, bl.other} {
 		j := sort.Search(len(bs), func(j int) bool { return !in(bs[j]) }) - 1
 		if j >= 0 && bs[j].t >= from {
@@ -136,21 +136,23 @@ func (bl *beatLine) latest(from int64, in func(beat) bool) (beat, bool) {
 	return beat{}, false
 }
 
-// slotBeat returns the heartbeat that resolves editor slot s: the latest
-// with input in the same or the previous slot (SM 3.2 rule 2), as latest
-// prefers them.
+// slotBeat returns the heartbeat that resolves editor slot s: of those with
+// input in the same or the previous slot (SM 3.2 rule 2), the one pick
+// prefers.
 func (d *deriver) slotBeat(s *Slot) (beat, bool) {
-	return d.beats.latest(s.Start-event.SlotMS, func(b beat) bool { return b.t < s.End() })
+	return d.beats.pick(s.Start-event.SlotMS, func(b beat) bool { return b.t < s.End() })
 }
 
 // editorProject returns the project the editor in focus is on at the
-// record at pos, by SM 3.2 rule 2 in D-editor-heartbeat-first's order: the
-// project of the heartbeat with input in the same or the previous slot, at
-// or before the record, that latest picks; else the project the focus
-// record f names, which may be "". It is SC1's typed-edit focus test.
+// record at pos, for SC1's typed-edit focus test, by SM 3.2 rule 2 in
+// D-editor-heartbeat-first's order: the project of the heartbeat pick
+// prefers among those with input in the same or the previous slot, up to
+// the record; else the project the focus record f names, which may be "".
+// A typed edit is such a heartbeat itself, so another project's heartbeat
+// decides only when it is verified and the edit isn't.
 func (d *deriver) editorProject(f *focusRec, pos int) string {
 	from := floorSlot(d.recs[pos].T) - event.SlotMS
-	if b, ok := d.beats.latest(from, func(b beat) bool { return b.pos <= pos }); ok {
+	if b, ok := d.beats.pick(from, func(b beat) bool { return b.pos <= pos }); ok {
 		return b.proj
 	}
 	return f.project

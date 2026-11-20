@@ -244,15 +244,17 @@ func TestFixtureTotals(t *testing.T) {
 				t.Errorf("agent_running_s %v, want %v", tot.agentRunning, want.AgentRunningS)
 			}
 		})
-		t.Run(f.Name+" credits each project what SM says, and its projects add up to its total (SM 3.1)", func(t *testing.T) {
-			var sum float64
-			for _, s := range tot.byProject {
-				sum += s
+		// Summing tot.byProject would check nothing, since every entry adds
+		// the same seconds to it and to tot.credited. internal/timelines
+		// checks that an expected.json's rows add up to its totals and each
+		// row's reasons to its credited_s, so its projects add up to
+		// credited_s, which the test above compares with the scorer's: this
+		// test then says the scorer's projects add up to its total too.
+		t.Run(f.Name+" credits each project what SM says, so its projects add up to its total (SM 3.1)", func(t *testing.T) {
+			if want.CreditedByProject == nil {
+				t.Fatal("expected.json has no credited_by_project")
 			}
-			if sum != tot.credited {
-				t.Errorf("projects add up to %v of %v credited", sum, tot.credited)
-			}
-			if want.CreditedByProject != nil && !sameSeconds(tot.byProject, want.CreditedByProject) {
+			if !sameSeconds(tot.byProject, want.CreditedByProject) {
 				t.Errorf("credited by project %v, want %v", tot.byProject, want.CreditedByProject)
 			}
 		})
@@ -358,7 +360,10 @@ func TestCreditSlots(t *testing.T) {
 				}
 			}
 		})
-		t.Run(f.Name+": a slot's credited seconds all go to its project, and what resolved it is an anchor (SM 3.1, 3.2)", func(t *testing.T) {
+		// A slot's ProjectKey is the project SM 3.2 resolves it to, and only
+		// a slot that resolves to none takes its first credited second's, so
+		// this compares what each slot credits with its resolution.
+		t.Run(f.Name+": a slot's credited seconds all go to the project it resolves to, and what resolved it is an anchor (SM 3.1, 3.2)", func(t *testing.T) {
 			ids := map[string]bool{}
 			for _, a := range d.Anchors {
 				ids[a.ID] = true

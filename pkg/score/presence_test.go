@@ -195,6 +195,15 @@ func TestFocusLongest(t *testing.T) {
 			class: event.AppTerminal, hosted: []string{"s_1", "s_2"},
 		},
 		{
+			name: "a hosted set is a set: a record that lists a session twice hosts what one listing it once does, 4 + 5 s against 6 s",
+			focus: func(b *tl) {
+				b.focus(at(0), event.AppTerminal, "", "s_1", "s_2")
+				b.focus(at(4), event.AppTerminal, "", "s_1", "s_2", "s_3")
+				b.focus(at(10), event.AppTerminal, "", "s_2", "s_1", "s_1")
+			},
+			class: event.AppTerminal, hosted: []string{"s_1", "s_2"},
+		},
+		{
 			name: "on a tie the window that had focus first holds the slot",
 			focus: func(b *tl) {
 				b.focus(at(0), event.AppEditor, "p_1")
