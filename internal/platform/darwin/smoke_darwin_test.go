@@ -315,9 +315,21 @@ func TestLoopOnMac(t *testing.T) {
 			var rec *macRecorder
 			l, b, rec := startMacLoop(t, tt.mainThread, func(b *macBackend) {
 				b.lockNames = testLockNames()
-				b.testAck = func(id uintptr) { rec.note(fmt.Sprintf("ack %d", id)) }
+				b.testAck = func(id uintptr) {
+					if testPowerIDs[id] {
+						rec.note(fmt.Sprintf("ack %d", id))
+						return
+					}
+					// A real idle-sleep query during the test still gets its
+					// answer from IOKit.
+					iokit.allowPowerChange(b.rootPort, id)
+				}
 			})
 			tt.run(t, l, b, rec)
 		})
 	}
 }
+
+// testPowerIDs are the notification ids the tests' synthetic IOKit
+// messages carry.
+var testPowerIDs = map[uintptr]bool{42: true, 43: true}
