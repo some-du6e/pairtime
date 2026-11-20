@@ -212,6 +212,14 @@ func TestPrivacyNotice(t *testing.T) {
 			notWant: []string{"<p>This server never receives"},
 		},
 		{
+			name: "the notice says what a connected program can read, until you unlink it (DESIGN 3.10, 5.10)",
+			want: []string{
+				"From then until you unlink the program, it can read, for the projects you linked: your credited time, with the start and end time of each stretch",
+				"your email address, if you allow it.",
+			},
+			notWant: []string{"get your submissions and their outcomes."},
+		},
+		{
 			name: "the IP period in the prose is the schedule's",
 			want: []string{"the server deletes them after 30 days."},
 		},

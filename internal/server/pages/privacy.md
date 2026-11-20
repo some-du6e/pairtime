@@ -57,7 +57,7 @@ Some things reach the server only at particular moments:
 - **Sign-in.** When you sign in with Hack Club Auth, the server gets your Hack Club Auth ID, your Slack ID, your email address, and whether Hack Club has verified you. It stores your email encrypted.
 - **A new computer.** When you sign in on a computer, the server gives it a random device ID and stores its OS family and a device key that signs its uploads.
 - **A new project.** When pairtime first sees a git repository, it sends the ID of the repository's first commit. The server turns that into a keyed hash and throws the ID away. It gets the repository's address only if the repository is public or you publish the project.
-- **Programs.** When you connect a project to a program, the server stores keyed hashes of the Hackatime project names you choose to link.
+- **Programs.** When you connect a project to a program, the server stores keyed hashes of the Hackatime project names you choose to link. From then until you unlink the program, it can read, for the projects you linked: your credited time, with the start and end time of each stretch, which includes the time of day your public profile never shows; your totals and how much of them is at each evidence level, for any dates; your username and IDs; and your email address, if you allow it.
 - **Publishing.** When you publish a devlog, a project page or badges, the server gets exactly what the preview showed you.
 - **Backups.** Only if you turn them on, the server gets your device key, locked with your recovery code, and encrypted copies of your ledger and vault. It can't open them without your recovery code.
 
@@ -110,7 +110,7 @@ Submitting hours to a program is always your choice. This is what happens when y
 - **Cloudflare** sits in front of this server and handles its encrypted connections, so it sees everything that passes between your computer or browser and this server, such as the numbers your computer uploads and the pages you open. What you reveal when you submit hours passes through it encrypted, with the limit [When you submit hours](#when-you-submit-hours) describes.
 - **GitHub, GitLab and Forgejo.** The server looks up commits of your public repositories there to check them. Once a day it also publishes a day root to a public GitHub repository. A day root is one hash over that day's uploads, with a count and nothing about you.
 - **A storage provider** keeps this server's backups, and the evidence you reveal when you submit hours. The evidence and the nightly backups are encrypted before they reach it. The continuous backup isn't encrypted with a key of the operator's own, so the storage provider could read it.
-- **Programs** you connect a project to get your submissions and their outcomes.
+- **Programs** you connect a project to can read your time and details for the linked projects, as [What this server receives](#what-this-server-receives) lists, until you unlink them. They also get your submissions to them and their outcomes.
 - **Healthchecks.io** gets a ping every 5 minutes, so the operator knows the server is up. The pings carry nothing about you.
 
 Apart from these, this server sends your data nowhere.

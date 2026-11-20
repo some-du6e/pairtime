@@ -206,7 +206,7 @@ func TestDesignPeriods(t *testing.T) {
 			}
 		})
 	}
-	t.Run("every entry with days is checked against DESIGN 4.4", func(t *testing.T) {
+	t.Run("every entry with days is checked against DESIGN", func(t *testing.T) {
 		for _, e := range p.Entries {
 			if e.Days > 0 && !checked[e.ID] {
 				t.Errorf("%s has days %d and no case in TestDesignPeriods", e.ID, e.Days)
