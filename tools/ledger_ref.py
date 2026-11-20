@@ -2831,12 +2831,79 @@ def flip(hex_text):
     return hex_text[:-1] + ("1" if hex_text[-1] == "0" else "0")
 
 
+def reseal(doc, bodies=True, keep_prev=(), sync_rows=True):
+    """Recompute, in place, every value that check derives from another in
+    doc's chains and days, after a test changed an input, so that only the
+    rule the change breaks is left broken. With bodies, each body is
+    rewritten as the stand-in for its record's nonce, rtype and seq.
+    Headers are built without header()'s rules, so a broken header rule
+    stays broken. keep_prev lists (chain, batch) indices whose prev stays as
+    the file has it; every other prev is the head before it, or the file's
+    for a chain's first batch. With sync_rows, each day row of a batch in
+    the file takes that batch's head and received_at."""
+    heads = {}
+    for i, chain in enumerate(doc.get("chains", [])):
+        keys = derive_keys(bytes.fromhex(chain["k_dev"]))
+        prev = None
+        for j, batch in enumerate(chain["batches"]):
+            if prev is not None and (i, j) not in keep_prev:
+                batch["prev"] = prev.hex()
+            prev = bytes.fromhex(batch["prev"])
+            entries = []
+            for rec in batch["records"]:
+                n = nonce(keys["k_leaf"], rec["seq"])
+                rec["nonce"] = n.hex()
+                if bodies:
+                    name = RTYPES.get(rec["rtype"], "rtype 0x%02x" % rec["rtype"])
+                    rec["body"] = ('{"n":"%s","e":{"stand_in":"%s","seq":%d}}' % (n.hex(), name, rec["seq"])).encode().hex()
+                hdr = u64(rec["seq"]) + u8(rec["rtype"]) + project_digest(rec["project_key"]) + session_digest(rec["session_key"])
+                entries.append(hdr + sha256(bytes.fromhex(rec["body"])))
+                rec["entry"] = entries[-1].hex()
+            root = mth(entries)
+            head = sha256(CHAIN_PREFIX + prev + root + u64(len(entries)) + u64(batch["b"]))
+            batch.update(n=len(entries), root=root.hex(), head=head.hex())
+            if "received_at" in batch:
+                batch["receipt_msg"] = receipt_message(chain["device_id"], batch["b"], head, batch["received_at"]).hex()
+                heads[(chain["device_id"], batch["b"])] = (head, batch["received_at"])
+            hashes = [leaf_hash(e) for e in entries]
+            batch["proofs"] = [{"index": p["index"], "path": [h.hex() for h in inclusion_path(p["index"], hashes)]}
+                               for p in batch.get("proofs", []) if p["index"] < len(hashes)]
+            prev = head
+    prev = None
+    for day in doc.get("days", []):
+        if prev is not None:
+            day["prev"] = prev.hex()
+        prev = bytes.fromhex(day["prev"])
+        leaves = []
+        for row in day["rows"]:
+            if sync_rows and (row["device_id"], row["b"]) in heads:
+                h, t = heads[(row["device_id"], row["b"])]
+                row.update(head=h.hex(), received_at=t)
+            leaves.append(day_leaf(row["device_id"], row["b"], bytes.fromhex(row["head"]), row["received_at"]))
+            row["leaf"] = leaves[-1].hex()
+        root = mth(leaves)
+        head = day_head(prev, root, len(leaves), day["day"])
+        day.update(count=len(leaves), root=root.hex(), head=head.hex(), signed_msg=day_message(day["day"], head).hex())
+        if "date" in day:
+            day["date"] = day_date(day["day"])
+        hashes = [leaf_hash(x) for x in leaves]
+        day["proofs"] = [{"index": p["index"], "path": [h.hex() for h in inclusion_path(p["index"], hashes)]}
+                         for p in day.get("proofs", []) if p["index"] < len(hashes)]
+        prev = head
+    return doc
+
+
 def test_check_catches():
-    """check reports each kind of tampering, on a small slice of the vectors."""
+    """check reports each kind of tampering, on a small slice of the vectors,
+    with the message of the rule the change breaks. A change marked alone
+    comes with every value derived from it recomputed (reseal), so that
+    rule is the only one left to catch it, and every error check reports
+    must be that rule's."""
     full = load_json("testdata", "ledger", "vectors.json")
     base = {"format": FORMAT, "keys": full["keys"][:1], "digests": full["digests"][:2],
             "chains": [full["chains"][1]], "days": full["days"][1:]}
     expect(not check_document(json.loads(json.dumps(base))).errors, "the slice of the vectors doesn't pass check")
+    expect(reseal(json.loads(json.dumps(base))) == base, "resealing the unchanged slice changes it")
 
     def batch(doc, j=0):
         return doc["chains"][0]["batches"][j]
@@ -2844,8 +2911,11 @@ def test_check_catches():
     def rec(doc, j=0, k=0):
         return batch(doc, j)["records"][k]
 
+    def day(doc, i=0):
+        return doc["days"][i]
+
     def day_row(doc, j=0):
-        return doc["days"][0]["rows"][j]
+        return day(doc)["rows"][j]
 
     def setter(get, key, fn):
         def apply(doc):
@@ -2853,50 +2923,119 @@ def test_check_catches():
             obj[key] = fn(obj[key])
         return apply
 
+    def sealed(change, **opts):
+        def apply(doc):
+            change(doc)
+            reseal(doc, **opts)
+        return apply
+
     def swap_rows(doc):
-        rows = doc["days"][0]["rows"]
+        rows = day(doc)["rows"]
         rows[0], rows[1] = rows[1], rows[0]
 
-    def os_with_project(doc):
-        rec(doc).update(rtype=0x0E, project_key="p_x", session_key=NO_SESSION)
+    def renumber(doc):
+        # Batches 2 to 4 become 3 to 5, in the chain and in the day rows.
+        device_id = doc["chains"][0]["device_id"]
+        for bt in doc["chains"][0]["batches"][1:]:
+            bt["b"] += 1
+        for row in sorted((r for r in day(doc)["rows"] if r["device_id"] == device_id), key=lambda r: -r["b"]):
+            if row["b"] >= 2:
+                row["b"] += 1
 
+    def shift_seqs(doc):
+        for bt in doc["chains"][0]["batches"]:
+            for r in bt["records"]:
+                r["seq"] += 1
+
+    def other_nonce(doc):
+        r = rec(doc)
+        r["body"] = stand_in_body(bytes.fromhex(rec(doc, 0, 1)["nonce"]), r["rtype"], r["seq"]).hex()
+
+    def nonce_last(doc):
+        r = rec(doc)
+        r["body"] = ('{"e":{"stand_in":"%s","seq":%d},"n":"%s"}' % (RTYPES[r["rtype"]], r["seq"], r["nonce"])).encode().hex()
+
+    def repeat_row(doc):
+        rows = day(doc)["rows"]
+        rows.insert(1, dict(rows[0], received_at=rows[0]["received_at"] + 1))
+
+    def move_row(doc):
+        day(doc, 1)["rows"].append(day(doc)["rows"].pop())
+
+    def drop_chain_row(doc):
+        rows = day(doc)["rows"]
+        rows.remove(next(r for r in rows if r["device_id"] == doc["chains"][0]["device_id"]))
+
+    def empty_last_batch(doc):
+        doc["chains"][0]["batches"][-1]["records"] = []
+
+    def flip_prev(j):
+        def apply(doc):
+            batch(doc, j)["prev"] = flip(batch(doc, j)["prev"])
+        return apply
+
+    nonce_rule = "doesn't start with {\"n\":\", this record's nonce in hex and \",\"e\":"
+    # (name, change, a phrase of the error the rule reports, alone)
     mutations = (
-        ("a derived key", setter(lambda d: d["keys"][0], "k_leaf", flip)),
-        ("a project digest", setter(lambda d: d["digests"][1], "project", flip)),
-        ("a body byte", setter(rec, "body", flip)),
-        ("a nonce", setter(rec, "nonce", flip)),
-        ("a body without its nonce", setter(rec, "body", lambda b: b'{"e":{}}'.hex())),
-        ("an entry", setter(rec, "entry", flip)),
-        ("a seq", setter(lambda d: rec(d, 1, 0), "seq", lambda s: s + 1)),
-        ("a reserved rtype", setter(rec, "rtype", lambda _: 0x42)),
-        ("rtype 0x00", setter(rec, "rtype", lambda _: 0x00)),
-        ("an os.* record with a project", os_with_project),
-        ("a root", setter(batch, "root", flip)),
-        ("a head", setter(batch, "head", flip)),
-        ("a prev", setter(lambda d: batch(d, 1), "prev", flip)),
-        ("a batch number", setter(lambda d: batch(d, 1), "b", lambda b: b + 1)),
-        ("n", setter(batch, "n", lambda n: n + 1)),
-        ("a receipt message", setter(batch, "receipt_msg", flip)),
-        ("a received_at", setter(batch, "received_at", lambda t: t + 1)),
-        ("a batch proof", setter(lambda d: batch(d)["proofs"][0], "path", lambda p: [flip(p[0])] + p[1:])),
-        ("a day leaf", setter(day_row, "leaf", flip)),
-        ("the order of day rows", swap_rows),
-        ("a day count", setter(lambda d: d["days"][0], "count", lambda n: n + 1)),
-        ("a day root", setter(lambda d: d["days"][0], "root", flip)),
-        ("a day head", setter(lambda d: d["days"][0], "head", flip)),
-        ("a day's signed message", setter(lambda d: d["days"][0], "signed_msg", flip)),
-        ("a day proof", setter(lambda d: d["days"][0]["proofs"][1], "path", lambda p: p[:-1])),
-        ("a missing day row", setter(lambda d: d["days"][0], "rows", lambda rows: rows[1:])),
+        ("a derived key", setter(lambda d: d["keys"][0], "k_leaf", flip), "keys[0].k_leaf: file has", False),
+        ("a project digest", setter(lambda d: d["digests"][1], "project", flip), "digests[1].project: file has", False),
+        ("a body byte", setter(rec, "body", flip), "records[0].entry: file has", False),
+        ("a nonce", setter(rec, "nonce", flip), "records[0].nonce: file has", False),
+        ("an entry", setter(rec, "entry", flip), "records[0].entry: file has", False),
+        ("a body whose n is another record's nonce", sealed(other_nonce, bodies=False), nonce_rule, True),
+        ("a body with n after e", sealed(nonce_last, bodies=False), nonce_rule, True),
+        ("a body without its nonce", sealed(setter(rec, "body", lambda _: b'{"e":{}}'.hex()), bodies=False), nonce_rule, True),
+        ("a seq", sealed(setter(lambda d: rec(d, 1, 0), "seq", lambda x: x + 1)), "sequence numbers have no gaps", True),
+        ("a batch 1 that doesn't start at seq 1", sealed(shift_seqs), "but batch 1 starts at seq 1", True),
+        ("a reserved rtype", sealed(setter(rec, "rtype", lambda _: 0x42)), "rtype 0x42 is reserved", True),
+        ("rtype 0x00", sealed(setter(rec, "rtype", lambda _: 0x00)), "rtype 0x00 is reserved", True),
+        ("an os.* record with a project",
+         sealed(lambda d: rec(d).update(rtype=0x0E, project_key="p_x", session_key=NO_SESSION)), "records have no project", True),
+        ("a checkpoint without a project",
+         sealed(lambda d: rec(d).update(rtype=CHECKPOINT, project_key="", session_key=NO_SESSION)),
+         "a checkpoint has a project and no session", True),
+        ("a root", setter(batch, "root", flip), "batches[0].root: file has", False),
+        ("a head", setter(batch, "head", flip), "batches[0].head: file has", False),
+        ("a prev that isn't the head before it", sealed(flip_prev(1), keep_prev={(0, 1)}), "batches[1].prev: file has", True),
+        ("a batch 1 whose prev isn't zero", sealed(flip_prev(0), keep_prev={(0, 0)}), "batches[0].prev: file has", True),
+        ("a batch number", sealed(renumber), "batch numbers have no gaps", True),
+        ("n", setter(batch, "n", lambda n: n + 1), "but the batch lists", False),
+        ("an empty batch", sealed(empty_last_batch), "a batch has at least one record", True),
+        ("a receipt message", setter(batch, "receipt_msg", flip), "batches[0].receipt_msg: file has", False),
+        ("a received_at that isn't its day row's", sealed(setter(batch, "received_at", lambda t: t + 1), sync_rows=False),
+         "has a head or received_at other than its row", True),
+        ("a batch proof", setter(lambda d: batch(d)["proofs"][0], "path", lambda p: [flip(p[0])] + p[1:]),
+         "batches[0].proofs[0].path[0]: file has", False),
+        ("a day leaf", setter(day_row, "leaf", flip), "rows[0].leaf: file has", False),
+        ("the order of day rows", sealed(swap_rows), "is out of order", True),
+        ("a skipped day number", sealed(setter(lambda d: day(d, 1), "day", lambda x: x + 1)), "every day has a head", True),
+        ("a row on another day", sealed(move_row), "falls on day", True),
+        ("a batch listed twice in a day", sealed(repeat_row), "the server stores each batch once", True),
+        ("a batch missing from its day", sealed(drop_chain_row), "is missing from the rows of day", True),
+        ("a day count", setter(day, "count", lambda n: n + 1), "but the day lists", False),
+        ("a day root", setter(day, "root", flip), "days[0].root: file has", False),
+        ("a day head", setter(day, "head", flip), "days[0].head: file has", False),
+        ("a day's signed message", setter(day, "signed_msg", flip), "days[0].signed_msg: file has", False),
+        ("a day proof", setter(lambda d: day(d)["proofs"][1], "path", lambda p: p[:-1]), "days[0].proofs[1].path", False),
     )
-    for name, mutate in mutations:
+    alone = 0
+    for name, mutate, phrase, only in mutations:
         doc = json.loads(json.dumps(base))
         mutate(doc)
         try:
-            caught = bool(check_document(doc).errors)
-        except FormatError:
-            caught = True
-        expect(caught, "check doesn't notice a changed %s" % name)
-    return "%d kinds of tampering caught" % len(mutations)
+            errors = check_document(doc).errors
+        except FormatError as err:
+            errors = ["format: %s" % err]
+        expect(any(phrase in e for e in errors), "check misses the change %s: no error says %r: %s" % (name, phrase, errors[:3]))
+        if only:
+            alone += 1
+            expect(all(phrase in e for e in errors), "the change %s breaks other rules too: %s" % (name, errors[:3]))
+    doc = json.loads(json.dumps(base))
+    rec(doc)["rtype"] = 0x13
+    rep = check_document(reseal(doc))
+    expect(not rep.errors and rep.counts.get("records of later kinds") == 1,
+           "check doesn't take a record of rtype 0x13 as a later kind: %s" % rep.errors[:3])
+    return "%d kinds of tampering caught, %d of them alone" % (len(mutations), alone)
 
 
 def content_example():
