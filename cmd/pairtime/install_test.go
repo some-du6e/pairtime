@@ -839,11 +839,9 @@ func TestInstallCycle(t *testing.T) {
 				}
 				h.mustRun(h.bin, "", 0, args...)
 				pid := h.installed(true)
-				if runtime.GOOS == "windows" {
-					// The script made pairtime's data directory there, which
-					// took its parent's DACL, and install gives it home's.
-					checkUserOnlyDir(t, h.dirs.Data)
-				}
+				// On Windows the script made pairtime's data directory too,
+				// with its parent's entries, and install made it private.
+				checkPrivateDir(t, h.dirs.Data)
 				h.mustRun("", "", 0, "uninstall", "--yes", "--delete-data")
 				h.uninstalled(before, pid)
 			},

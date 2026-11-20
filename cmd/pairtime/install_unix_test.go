@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"syscall"
+	"testing"
 )
 
 // runValue is Windows' login item, which no other OS has.
@@ -34,4 +35,10 @@ func processAlive(pid int) bool {
 		}
 	}
 	return true
+}
+
+// checkPrivateDir checks that only this user may open dir.
+func checkPrivateDir(t *testing.T, dir string) {
+	t.Helper()
+	checkUserOnlyDir(t, dir)
 }
