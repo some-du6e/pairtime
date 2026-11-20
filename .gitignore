@@ -6,3 +6,7 @@
 # The capture kit's scrub report holds the original private values it
 # replaced (tools/capture/scrub.py). It never belongs in the repo.
 *-scrub-report.txt
+
+# Bytecode Python writes beside a script it imports, such as the kit's
+# scrub.py when a test or a person imports it.
+__pycache__/
