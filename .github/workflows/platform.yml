@@ -90,12 +90,26 @@ jobs:
         # the run above can't show what key-down idle does without it, which
         # is the question WP-OS3 has to answer (SM 1.2, DESIGN 5.7). This
         # revokes the grant on this job's throwaway VM and asks again; the
-        # finding's file name says which state the test saw.
+        # finding's file name says which state the test saw. tccutil alone
+        # leaves the image's grant in place, so the rows go from both TCC
+        # databases and tccd restarts to forget its cache. Nothing here is
+        # fatal: a grant that survives just gives a second -granted file.
         if: ${{ !cancelled() }}
         env:
           PAIRTIME_FINDINGS_DIR: ${{ runner.temp }}/findings
         run: |
-          sudo tccutil reset ListenEvent || echo "::warning::tccutil reset ListenEvent failed, so Input Monitoring may still be granted"
+          system_db="/Library/Application Support/com.apple.TCC/TCC.db"
+          user_db="$HOME/Library/Application Support/com.apple.TCC/TCC.db"
+          query="SELECT client, client_type, auth_value FROM access WHERE service = 'kTCCServiceListenEvent'"
+          echo "Input Monitoring grants before:"
+          sudo sqlite3 "$system_db" "$query" || true
+          sqlite3 "$user_db" "$query" || true
+          sudo tccutil reset ListenEvent || true
+          sudo sqlite3 "$system_db" "DELETE FROM access WHERE service = 'kTCCServiceListenEvent'" || echo "::warning::couldn't edit the system TCC database"
+          sqlite3 "$user_db" "DELETE FROM access WHERE service = 'kTCCServiceListenEvent'" || true
+          sudo killall tccd || true
+          echo "Input Monitoring grants after:"
+          sudo sqlite3 "$system_db" "$query" || true
           bash tools/ci/test_existing.sh -count=1 -run '^TestFindingKeyDownIdle$' -- internal/platform/darwin
 
       - name: Upload the findings

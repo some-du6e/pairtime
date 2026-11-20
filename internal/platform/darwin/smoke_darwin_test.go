@@ -118,14 +118,16 @@ func (r *macRecorder) waitPower(t *testing.T, op event.PowerOp) {
 func (r *macRecorder) waitFocus(t *testing.T, pid int) App {
 	t.Helper()
 	deadline := time.After(wait)
+	var others []App
 	for {
 		select {
 		case app := <-r.focus:
 			if app.PID == pid {
 				return app
 			}
+			others = append(others, app)
 		case <-deadline:
-			t.Fatalf("no Focus for pid %d within %v", pid, wait)
+			t.Fatalf("no Focus for pid %d within %v; Focus came for %+v", pid, wait, others)
 		}
 	}
 }
@@ -233,8 +235,19 @@ func deliverActivation(t *testing.T, b *macBackend) {
 	}
 	withPool(func() {
 		ws := objc.send(objc.clsNSWorkspace, objc.selSharedWorkspace)
-		note := testObjC.send3(testObjC.clsNSNotification, testObjC.selNoteWithName, objc.didActivateName, ws, activationInfo())
+		info := activationInfo()
+		// What the observer's method will find, logged so a failure says
+		// which step broke.
+		ra := objc.send1(info, objc.selObjectForKey, objc.applicationKey)
+		app, ok := appFrom(ra)
+		t.Logf("pid %d; userInfo %#x (%s); key %#x; value %#x (%s), kind of %s: %v; appFrom = %+v, %v",
+			os.Getpid(), info, testObjC.className(info), objc.applicationKey, ra, testObjC.className(ra),
+			testObjC.className(objc.clsNSRunningApplication), objc.sendBool1(ra, objc.selIsKindOfClass, objc.clsNSRunningApplication), app, ok)
+		note := testObjC.send3(testObjC.clsNSNotification, testObjC.selNoteWithName, objc.didActivateName, ws, info)
+		before := b.activations.Load()
 		objc.send1(b.observer, objc.selActivated, note)
+		t.Logf("note %#x (%s); the observer's method ran %d time(s); current is this backend: %v",
+			note, testObjC.className(note), b.activations.Load()-before, current.Load() == b)
 	})
 }
 
