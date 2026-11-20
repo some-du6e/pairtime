@@ -211,16 +211,15 @@ jobs:
         # internal/platform for all seven targets with CGO_ENABLED=0, such as
         # internal/platform/darwin for darwin/amd64 and darwin/arm64 (WP-OS3),
         # and the device keystore, which picks its store by OS (WP-OS7). The
-        # keystore's desktop tests build with -tags desktop on Linux alone.
-        # The Windows and macOS tests themselves run in platform.yml.
+        # desktop tests, which build with -tags desktop on Linux alone, are
+        # vetted in the Desktop test files step. The Windows and macOS tests
+        # themselves run in platform.yml.
         if: ${{ !cancelled() }}
         run: |
           for target in windows/amd64 windows/386 windows/arm64 darwin/amd64 darwin/arm64 linux/amd64 linux/arm64; do
             echo "go vet ./internal/platform/... ./internal/agent/keys/... for $target"
             GOOS=${target%/*} GOARCH=${target#*/} go vet ./internal/platform/... ./internal/agent/keys/...
           done
-          echo "go vet -tags desktop ./internal/agent/keys/... for linux/amd64"
-          GOOS=linux GOARCH=amd64 go vet -tags desktop ./internal/agent/keys/...
 
       - name: HCA sign-in against an independent OIDC server
         if: ${{ !cancelled() }}
@@ -312,7 +311,8 @@ jobs:
         # only with the tag but has another name, or one in a desktop test
         # file that isn't named TestDesktop*, would never run anywhere. A
         # *_desktop_test.go file without the desktop build line would run in
-        # go test above, with no X server or session bus.
+        # go test above, with no X server or session bus. And since nothing
+        # else here compiles the desktop test files, the step vets them.
         run: |
           export LC_ALL=C
           fail=0
@@ -355,6 +355,10 @@ jobs:
             echo "::error file=$file,line=$line::$text is in a desktop test file, where platform.yml runs only TestDesktop* functions. Give it a name that starts with TestDesktop, or move it to a plain _test.go file (AGENTS.md)."
             fail=1
           done <<<"$bad"
+
+          # Type-checks the desktop test files and what only they import,
+          # such as godbus's prop package, on every PR, with no X server.
+          go vet -tags desktop ./... || fail=1
           exit "$fail"
 
       - name: Oracle guard
