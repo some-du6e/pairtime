@@ -6,6 +6,7 @@ README.md in this directory."""
 
 import os
 import sys
+from fractions import Fraction
 
 sys.dont_write_bytecode = True
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -40,6 +41,7 @@ TURN = {name: tl.key("t", f"two-sessions {name}") for name in ("A1", "A2", "A3",
 FILE = {name: tl.key("f", f"two-sessions {name}") for name in ("quiz.py", "scores.py", "api.py", "index.html",
                                                                 "style.css")}
 BUILD = tl.key("c", "two-sessions npm run build")
+TESTS = tl.key("c", "two-sessions python -m pytest")
 
 
 def emit(s, t, kind, data):
@@ -80,6 +82,8 @@ def stop(s, t, turn):
 
 # Noor starts Claude Code in trivia-bot, then in portfolio, a few minutes
 # before the window. portfolio's session accepts edits without asking.
+# trivia-bot's asks until Noor answers A1's edit with "allow all edits this
+# session"; after that only its commands ask.
 start(SA, "15:52:10", "default")
 start(SB, "15:55:40", "acceptEdits")
 
@@ -99,7 +103,9 @@ stop(SA, "16:05:00", "A1")
 
 # Round 2. A2 at 16:09:40, with 300 pasted characters (a JSON sample of the
 # quiz format) and 90 typed, then B2 at 16:10:40, whose build asks
-# permission.
+# permission. A2's test run asks after that, at 16:12:00, and A2 stops at
+# 16:13:30, after B2: A ends round 2 with the later stop and the later human
+# act, and B with the later prompt.
 prompt(SA, "16:09:40", "A2", 390, pasted=300)
 output(SA, "16:10:05", "A2", 45)
 prompt(SB, "16:10:40", "B2", 60)
@@ -109,16 +115,20 @@ permission(SB, "16:11:20", "16:11:35")
 emit(SB, "16:11:40", "agent.tool", {"tool_class": "build", "lines_added": 0, "lines_removed": 0, "cmd_hash": BUILD,
                                     "exit_code": 0, "visible_output_lines": 4, "t_start": at("16:11:20"),
                                     "t_end": at("16:11:40")})
-output(SA, "16:12:10", "A2", 75, final=True)
-stop(SA, "16:12:10", "A2")
+permission(SA, "16:12:00", "16:12:20")
 edit(SB, "16:12:20", "16:12:19.600", "style.css", 9, 3)
 output(SB, "16:13:00", "B2", 45, final=True)
 stop(SB, "16:13:00", "B2")
+emit(SA, "16:13:10", "agent.tool", {"tool_class": "test", "lines_added": 0, "lines_removed": 0, "cmd_hash": TESTS,
+                                    "exit_code": 0, "visible_output_lines": 4, "t_start": at("16:12:00"),
+                                    "t_end": at("16:13:10")})
+output(SA, "16:13:30", "A2", 75, final=True)
+stop(SA, "16:13:30", "A2")
 
-# Round 3. A3 at 16:17:30 and B3 at 16:19:00, still running when the window
+# Round 3. A3 at 16:18:20 and B3 at 16:19:00, still running when the window
 # ends. Nothing follows their stops: the transcripts end there.
-prompt(SA, "16:17:30", "A3", 120)
-output(SA, "16:18:00", "A3", 50)
+prompt(SA, "16:18:20", "A3", 120)
+output(SA, "16:18:50", "A3", 50)
 prompt(SB, "16:19:00", "B3", 45)
 edit(SA, "16:19:10", "16:19:09.300", "api.py", 18, 7)
 output(SB, "16:19:30", "B3", 40)
@@ -149,7 +159,7 @@ row("16:00", {B: {"P": 60}}, {}, 0, "2.8: leads are typing time only",
     note="B1's 90 typed characters: 90 / 1.5 = 60 s, from 16:00:00.")
 row("16:01", {A: {"P": 40}}, {"X.agent_only": 20}, 60, "2.8: leads are typing time only",
     note="B1 runs from 16:01:00. A1's 60 characters: 40 s, from 16:01:20.")
-row("16:02", {}, {"X.agent_only": 60}, 60, "2.8: no reading while an agent runs")
+row("16:02", {}, {"X.agent_only": 60}, 60, "2.8: neither session reads while its agent runs")
 row("16:03", {A: {"PA": 20}, B: {"READ": 10}}, {"X.agent_only": 30}, 60, MOST_RECENT,
     note="B1 stops at 16:03:30 and B2 follows 430 s later, so B reads from the stop. A1's permission, asked at "
          "16:03:00 and answered at 16:04:40, keeps 60 s of its 100 s wait, from 16:03:40. A's last prompt, "
@@ -169,60 +179,113 @@ row("16:10", {B: {"P": 40}}, {"X.agent_only": 20}, 60, "2.8: leads are typing ti
     note="B2's 60 characters: 40 s, from 16:10:00, while A2 runs.")
 row("16:11", {B: {"PA": 25}}, {"X.agent_only": 35}, 60, "2.8: permission answers keep their wait", erratum=ER,
     note="B2's build asks at 16:11:20 and is answered at 16:11:35: its 15 s wait and 10 s trail.")
-row("16:12", {A: {"READ": 50}}, {"X.agent_only": 10}, 60, READING,
-    note="A2 stops at 16:12:10 and A3 follows 320 s later. B2 is still running, so A reads alone.")
-row("16:13", {B: {"READ": 60}}, {}, 0, MOST_RECENT,
-    note="B2 stops at 16:13:00 and B3 follows 360 s later. Both sessions have output to read; B's last prompt, "
-         "16:10:40, is later than A's, 16:09:40, so B reads its 120 s first, to 16:15:00.")
+row("16:12", {A: {"PA": 30}}, {"X.agent_only": 30}, 60, "2.8: permission answers keep their wait", erratum=ER,
+    note="A2's test run asks at 16:12:00 and is answered at 16:12:20: its 20 s wait and 10 s trail. The answer is "
+         "A's latest human act, later than B's at 16:11:35.")
+row("16:13", {B: {"READ": 60}}, {}, 30, MOST_RECENT,
+    note="B2 stops at 16:13:00 and B3 follows 360 s later, so B reads from its stop while A2 runs. A2 stops at "
+         "16:13:30 and A3 follows 290 s later, so from then both sessions have output to read. A has the later "
+         "stop and the later human act, but B's last prompt, 16:10:40, is later than A's, 16:09:40, so B reads "
+         "on, to 16:15:00. A rule by the latest stop or the latest human act would give A 16:13:30 to 16:15:30.")
 row("16:14", {B: {"READ": 60}}, {}, 0, MOST_RECENT)
-row("16:15", {A: {"READ": 60}}, {}, 0, READING, note="A reads its last 70 s, to 16:16:10.")
-row("16:16", {A: {"P": 50, "READ": 10}}, {}, 0, READING,
-    note="A3's 120 characters: 80 s, from 16:16:10.")
-row("16:17", {A: {"P": 30}}, {"X.agent_only": 30}, 30, "2.8: leads are typing time only")
-row("16:18", {B: {"P": 30}}, {"X.agent_only": 30}, 60, "2.8: leads are typing time only",
-    note="B3's 45 characters: 30 s, from 16:18:30, while A3 runs.")
-row("16:19", {}, {"X.agent_only": 60}, 60, "2.8: no reading while an agent runs",
+row("16:15", {A: {"READ": 60}}, {}, 0, READING, note="B's 120 s are read, so A reads its 120 s, to 16:17:00.")
+row("16:16", {A: {"READ": 60}}, {}, 0, READING)
+row("16:17", {A: {"P": 60}}, {}, 0, "2.8: leads are typing time only",
+    note="A3's 120 characters: 80 s, from 16:17:00, where A's reading ends.")
+row("16:18", {A: {"P": 20}, B: {"P": 30}}, {"X.agent_only": 10}, 40, "2.8: leads are typing time only",
+    note="A3 is sent at 16:18:20 and runs. B3's 45 characters: 30 s, from 16:18:30, while A3 runs.")
+row("16:19", {}, {"X.agent_only": 60}, 60, "2.8: neither session reads while its agent runs",
     note="A3 and B3 run past the window and stop at 16:21:40 and 16:22:00. No prompt follows either, so their "
          "output is never read as far as the rules can tell.")
 
 rp = lb.Replay(events, T0, END)
 lb.check_rows(exp, rp, PROJECT)
 
+
+def latest(times):
+    """The session whose time is latest. One with no time, such as a session
+    that hasn't stopped yet, counts as the earliest."""
+    have = {k: t for k, t in times.items() if t is not None}
+    return max(have, key=have.get)
+
+
+def runs(secs):
+    """Seconds, as Unix ms, grouped into runs of local [from, to)."""
+    out = []
+    for t in sorted(secs):
+        if out and out[-1][1] == t:
+            out[-1][1] = t + 1000
+        else:
+            out.append([t, t + 1000])
+    return [(fx.hhmmss(a), fx.hhmmss(b)) for a, b in out]
+
+
 # The seconds both sessions wanted: A's PA against B's reading, then reading
-# against reading twice, with a different winner each time. No typing lead
-# is ever contested (README.md: SM 2.8 doesn't say how a lead's seconds
+# against reading twice, with a different winner each time. Each span also
+# names the session that the latest stop and the latest human act would pick
+# instead of SM 2.8's latest prompt. From 16:13:30 both pick A while the
+# prompt picks B, so those 90 s tell SM 2.8's rule from the other two. At
+# 16:03:40 A hasn't stopped yet, and at 16:05:00 all three pick A. No typing
+# lead is ever contested (README.md: SM 2.8 doesn't say how a lead's seconds
 # compare with another session's, see the erratum's point 3).
 spans, cur = [], None
 for tau, cands, win in rp.conflicts:
-    what = (tuple(sorted((PROJECT[k], tuple(r for r, _ in c)) for k, c in cands.items())), PROJECT[win])
+    by_stop = latest({k: rp.sessions[k].last_stop(tau) for k in cands})
+    by_act = latest({k: rp.sessions[k].last_anchor(tau) for k in cands})
+    what = (tuple(sorted((PROJECT[k], tuple(r for r, _ in c)) for k, c in cands.items())),
+            PROJECT[win], PROJECT[by_stop], PROJECT[by_act])
     if cur and cur[1] == tau and cur[2] == what:
         cur[1] = tau + 1000
     else:
         cur = [tau, tau + 1000, what]
         spans.append(cur)
-got = [(fx.hhmmss(a), fx.hhmmss(b), exp.projects[w[1]]) for a, b, w in spans]
-tl.check(got == [("16:03:40", "16:04:50", "trivia-bot"), ("16:05:00", "16:07:00", "trivia-bot"),
-                 ("16:13:00", "16:15:00", "portfolio")], f"contested seconds {got}")
+got = [(fx.hhmmss(a), fx.hhmmss(b), *(exp.projects[p] for p in w[1:])) for a, b, w in spans]
+tl.check(got == [("16:03:40", "16:04:50", "trivia-bot", "portfolio", "trivia-bot"),
+                 ("16:05:00", "16:07:00", "trivia-bot", "trivia-bot", "trivia-bot"),
+                 ("16:13:30", "16:15:00", "portfolio", "trivia-bot", "trivia-bot")],
+         f"contested seconds, each with the sessions the latest prompt, stop and human act pick: {got}")
 tl.check(all(r != "P" for _, cands, _ in rp.conflicts for c in cands.values() for r, _ in c),
          "no typing lead is contested")
 
+# Every turn a prompt follows within 600 s fills its bucket past the 120 s
+# cap, and reads exactly 120 s between its stop and that prompt. A3 and B3,
+# which nothing follows, fill 254 1/6 s and 56 2/3 s.
+NAME_OF = {k: n for n, k in TURN.items()}
+SUBMIT = {(e["session_key"], e["t"]): e["data"]["turn_key"] for e in events if e["kind"] == "prompt.submit"}
+fills, reads = {}, {}
+for s in rp.sessions.values():
+    for a, b, _ in s.turns:
+        name = NAME_OF[SUBMIT[(s.key, a)]]
+        fills[name] = lb.R_TURN_BASE_S + sum(x for t, x in s.fills if a < t <= b)
+        nxt = [p for t0, p in rp.spans[s.key] if t0 == b]
+        if nxt:
+            reads[name] = sum(1 for t in range(b, nxt[0], 1000) if rp.credited.get(t) == (s.key, "READ"))
+tl.check(fills == {"B1": 175, "A1": 160, "A2": 240, "B2": 175, "A3": Fraction(1525, 6), "B3": Fraction(170, 3)},
+         f"each turn's fill {fills}")
+tl.check(reads == {"B1": 120, "A1": 120, "A2": 120, "B2": 120}, f"each turn's reading {reads}")
+
+# The erratum's point 2: the cap also cuts B's reading while A's agent runs,
+# 30 s in all. They are X.agent_only, since an agent turn runs.
+tl.check(runs(rp.capped) == [("16:09:40", "16:10:00"), ("16:18:20", "16:18:30")] and rp.capped <= rp.running,
+         f"the cap cuts B's reading in {runs(rp.capped)}, all while an agent runs")
+
 totals = exp.totals()
-tl.check(totals["credited_s"] == 885, f"credited {totals['credited_s']}")
-tl.check(totals["credited_by_project"] == {A: 490, B: 395}, f"by project {totals['credited_by_project']}")
+tl.check(totals["credited_s"] == 915, f"credited {totals['credited_s']}")
+tl.check(totals["credited_by_project"] == {A: 520, B: 395}, f"by project {totals['credited_by_project']}")
 by = {p: {} for p in (A, B)}
 for r in exp.rows:
     for p, reasons in r.get("credit", {}).items():
         for k, s in reasons.items():
             by[p][k] = by[p].get(k, 0) + s
-tl.check(by[A] == {"P": 40 + 60 + 80, "PA": 70, "READ": 120 + 120} and by[B] == {"P": 60 + 40 + 30, "PA": 25,
-                                                                                "READ": 120 + 120},
+tl.check(by[A] == {"P": 40 + 60 + 80, "PA": 60 + 10 + 20 + 10, "READ": 120 + 120}
+         and by[B] == {"P": 60 + 40 + 30, "PA": 15 + 10, "READ": 120 + 120},
          f"by project and reason {by}")
 agent_only = len(rp.running) - sum(1 for t in rp.running if t in rp.credited)
-tl.check(agent_only == totals["uncredited"]["X.agent_only"] == 315, f"agent-only {agent_only}")
+tl.check(agent_only == totals["uncredited"]["X.agent_only"] == 285, f"agent-only {agent_only}")
 
 expected = exp.doc(
     extra_totals={
-        "ai_credited_s": 885,
+        "ai_credited_s": 915,
         "hand_credited_s": 0,
         "agent_only_s": agent_only,
         "trivia_bot_p_s": by[A]["P"],
@@ -239,14 +302,13 @@ expected = exp.doc(
     notes=[
         "Every row is computed from SM 2.8; no SM section describes this case. Every credited second is level C "
         "and backfilled.",
-        "trivia-bot's six turns and portfolio's are in two Claude Code sessions in two projects, so a second "
-        "either one wants is wanted by a different project's session: SM 3.3's FIFO rule for buckets of one "
-        "project never applies.",
-        "contested_s counts the seconds both sessions wanted: 70 of A's PA against B's reading, and 240 of reading "
-        "against reading. The session with the most recent human prompt takes each (SM 2.8).",
-        "Every uncredited second here is X.agent_only: an agent turn ran and nothing credited it. Each turn's "
-        "output fills its bucket past the 120 s cap, so every turn followed by a prompt within 600 s reads "
-        "exactly 120 s.",
+        "The six turns are in two Claude Code sessions in two projects, three in each, so a second both sessions "
+        "want is wanted by two projects, and SM 3.3's FIFO rule for buckets of one project never applies.",
+        "contested_s counts the seconds both sessions wanted: 70 of A's PA against B's reading, and 210 of reading "
+        "against reading. The session with the most recent human prompt takes each (SM 2.8). In the last 90, from "
+        "16:13:30, A has the later stop and the later human act, so only the prompt rule gives them to B.",
+        "Every uncredited second here is X.agent_only: an agent turn ran and nothing credited it. Every turn a "
+        "prompt follows within 600 s fills its bucket past the 120 s cap and reads exactly 120 s.",
     ],
 )
 

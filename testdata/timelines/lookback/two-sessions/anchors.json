@@ -88,10 +88,23 @@
       "sm": "2.8: a permission answer keeps its wait, 15 s, up to UNKNOWN_PA_MAX_S = 60 s; the 10 s trail"
     },
     {
-      "event_id": "01a20555-f890-7131-9767-e1dd46436f1b",
+      "event_id": "01a20551-3da0-7717-982f-3f95e06be3ae",
+      "kind": "permission_answer",
+      "t": 1795385540000,
+      "local": "16:12:20",
+      "project_key": "p_339d54a04dbb",
+      "lead_s": 20,
+      "trail_s": 10,
+      "lead_from": "params",
+      "via": "log",
+      "level": "C",
+      "sm": "2.8: a permission answer keeps its wait, 20 s, up to UNKNOWN_PA_MAX_S = 60 s; the 10 s trail"
+    },
+    {
+      "event_id": "01a20556-bbe0-78ef-a0ed-f76c6d74d49e",
       "kind": "substantive_prompt",
-      "t": 1795385850000,
-      "local": "16:17:30",
+      "t": 1795385900000,
+      "local": "16:18:20",
       "project_key": "p_339d54a04dbb",
       "origin": "human_typed",
       "prompt_class": "substantive",
@@ -103,7 +116,7 @@
       "sm": "2.8: no input check, so human_typed; the lead is typing time only, 120 / 1.5 = 80 s"
     },
     {
-      "event_id": "01a20557-5820-78ef-a0ed-f76c6d74d49e",
+      "event_id": "01a20557-5820-7bc0-be7f-916a6b595e53",
       "kind": "substantive_prompt",
       "t": 1795385940000,
       "local": "16:19:00",
@@ -146,8 +159,8 @@
       "turn_key": "t_e4692de61164",
       "t_submit": 1795385380000,
       "local_submit": "16:09:40",
-      "t_stop": 1795385530000,
-      "local_stop": "16:12:10",
+      "t_stop": 1795385610000,
+      "local_stop": "16:13:30",
       "origin": "human_typed",
       "prompt_class": "substantive",
       "sm": "2.8: every prompt rules 1 to 5 don't label is human_typed"
@@ -166,8 +179,8 @@
     {
       "session_key": "s_04e7753377f2",
       "turn_key": "t_7762c2de4218",
-      "t_submit": 1795385850000,
-      "local_submit": "16:17:30",
+      "t_submit": 1795385900000,
+      "local_submit": "16:18:20",
       "t_stop": 1795386100000,
       "local_stop": "16:21:40",
       "origin": "human_typed",

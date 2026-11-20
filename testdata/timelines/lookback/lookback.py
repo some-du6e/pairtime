@@ -165,6 +165,16 @@ class Session:
         ts = [t for t, _ in self.prompts if t <= tau]
         return max(ts) if ts else None
 
+    def last_stop(self, tau):
+        ts = [t for t in self.stops if t <= tau]
+        return max(ts) if ts else None
+
+    def last_anchor(self, tau):
+        """The latest human act at or before tau that lookback can see: a
+        human prompt or a person's permission answer."""
+        ts = [t for t, _ in self.prompts if t <= tau] + [ans for _, ans in self.permissions if ans <= tau]
+        return max(ts) if ts else None
+
 
 def sessions_of(events):
     keys = []
