@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-// Command release turns built pairtime binaries into a release: one archive
-// per platform, checksums.txt, and manifest.json, the signed update
-// manifest. It also makes release keys and checks a finished release.
+// Command release turns built pairtime binaries into a release: each
+// binary's third-party notices, one archive per platform, checksums.txt,
+// and manifest.json, the signed update manifest. It also makes release
+// keys and checks a finished release.
 // .github/workflows/release.yml runs it, and docs/spec/update-manifest.md
 // specifies what it writes.
 //
@@ -12,6 +13,7 @@
 //	release keys
 //	release min-version [-file tools/release/minimum-version.txt]
 //	release check -version v [-min-version v]
+//	release notices -bin file -out file [-extra tools/release/extra-notices.txt]
 //	release dist -version v -commit hash -date time -min-version v -base-url url
 //	    -targets "os/arch ..." -bin dir -out dir -payload file [-extra files]
 //	release sign -payload file -out manifest.json (-key-env NAME | -throwaway) [-pub-out file]
@@ -50,6 +52,8 @@ Usage:
   release keys                 print the ids of the release keys compiled in
   release min-version          print the one version minimum-version.txt holds
   release check -version v     check a release version (and -min-version)
+  release notices -bin file    write the third-party notices for one built
+                               binary
   release dist ...             write the archives, checksums.txt and the
                                manifest payload
   release sign ...             sign the payload into manifest.json
@@ -72,6 +76,7 @@ var commands = map[string]func(args []string, stdout, stderr io.Writer) error{
 	"keys":        cmdKeys,
 	"min-version": cmdMinVersion,
 	"check":       cmdCheck,
+	"notices":     cmdNotices,
 	"dist":        cmdDist,
 	"sign":        cmdSign,
 	"verify":      cmdVerify,
@@ -342,7 +347,7 @@ func cmdDist(args []string, stdout, stderr io.Writer) error {
 	minVersion := flags.String("min-version", "", "the oldest client version the release supports")
 	baseURL := flags.String("base-url", "", "the URL the archives are published under")
 	targetList := flags.String("targets", "", "the targets, space-separated os/arch pairs")
-	binDir := flags.String("bin", "", "the directory holding <os>_<arch>/pairtime[.exe] for each target")
+	binDir := flags.String("bin", "", "the directory holding <os>_<arch>/pairtime[.exe] and <os>_<arch>/"+noticesName+" for each target")
 	extra := flags.String("extra", "", "comma-separated files every archive carries beside the binary, such as LICENSE,README.md")
 	outDir := flags.String("out", "", "the directory to create for the archives and checksums.txt; it must not exist")
 	payloadPath := flags.String("payload", "", "the file to write the unsigned manifest payload to")
@@ -383,11 +388,21 @@ func cmdDist(args []string, stdout, stderr io.Writer) error {
 	}
 	sums := map[string]string{}
 	for _, t := range targets {
-		bin, err := os.ReadFile(filepath.Join(*binDir, t.goos+"_"+t.goarch, t.exe()))
+		dir := filepath.Join(*binDir, t.goos+"_"+t.goarch)
+		bin, err := os.ReadFile(filepath.Join(dir, t.exe()))
 		if err != nil {
 			return fmt.Errorf("%s: %w", t, err)
 		}
+		// Every archive carries its own binary's third-party notices.
+		third, err := os.ReadFile(filepath.Join(dir, noticesName))
+		if err != nil {
+			return fmt.Errorf("%s: %w (tools/release notices writes it)", t, err)
+		}
 		files := append([]archiveFile{{name: t.exe(), mode: 0o755, data: bin}}, extras...)
+		files = append(files, archiveFile{name: noticesName, mode: 0o644, data: third})
+		if err := uniqueNames(files); err != nil {
+			return fmt.Errorf("%s: %w", t, err)
+		}
 		var buf bytes.Buffer
 		if t.goos == "windows" {
 			err = writeZip(&buf, files, mtime)
@@ -428,6 +443,19 @@ type archiveFile struct {
 	name string
 	mode fs.FileMode
 	data []byte
+}
+
+// uniqueNames refuses two archive entries with one name, which an unpacker
+// would write one over the other.
+func uniqueNames(files []archiveFile) error {
+	seen := map[string]bool{}
+	for _, f := range files {
+		if seen[f.name] {
+			return fmt.Errorf("two files are named %s", f.name)
+		}
+		seen[f.name] = true
+	}
+	return nil
 }
 
 // writeTarGz writes a reproducible tar.gz: fixed order, owner 0, the

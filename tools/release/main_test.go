@@ -67,7 +67,7 @@ func read(t *testing.T, p string) []byte {
 }
 
 // fixture is what release.yml's build job has before dist runs: a binary
-// per target, LICENSE and README.md.
+// and its notices per target, LICENSE and README.md.
 type fixture struct {
 	dir, bin, extra, out, payload, manifest, pub string
 }
@@ -87,6 +87,7 @@ func newFixture(t *testing.T) fixture {
 		goos, goarch, _ := strings.Cut(s, "/")
 		tg := target{goos, goarch}
 		write(t, filepath.Join(f.bin, goos+"_"+goarch, tg.exe()), "stand-in pairtime binary for "+s)
+		write(t, filepath.Join(f.bin, goos+"_"+goarch, noticesName), "stand-in notices for "+s+"\n")
 	}
 	license, readme := filepath.Join(dir, "LICENSE"), filepath.Join(dir, "README.md")
 	write(t, license, "GNU AFFERO GENERAL PUBLIC LICENSE (stand-in)\n")
@@ -240,7 +241,7 @@ func TestBuildWritesARelease(t *testing.T) {
 		}
 	})
 
-	t.Run("every archive holds the binary, LICENSE and README.md at its root with Unix modes and the commit time", func(t *testing.T) {
+	t.Run("every archive holds the binary, LICENSE, README.md and its own target's notices at its root with Unix modes and the commit time", func(t *testing.T) {
 		for _, a := range m.Artifacts {
 			tg := target{a.OS, a.Arch}
 			es := entries(t, filepath.Join(f.out, archiveName(testVersion, tg)))
@@ -248,6 +249,7 @@ func TestBuildWritesARelease(t *testing.T) {
 				{tg.exe(), 0o755, date, "stand-in pairtime binary for " + tg.String()},
 				{"LICENSE", 0o644, date, "GNU AFFERO GENERAL PUBLIC LICENSE (stand-in)\n"},
 				{"README.md", 0o644, date, "# pairtime\n"},
+				{noticesName, 0o644, date, "stand-in notices for " + tg.String() + "\n"},
 			}
 			if len(es) != len(want) {
 				t.Fatalf("%s: entries %+v", tg, es)
@@ -750,6 +752,15 @@ func with(args []string, flag, value string) []string {
 func TestDistRefuses(t *testing.T) {
 	f := newFixture(t)
 	exists := t.TempDir()
+	// Binaries with no notices beside them.
+	bare := t.TempDir()
+	for _, s := range strings.Fields(testTargets) {
+		goos, goarch, _ := strings.Cut(s, "/")
+		write(t, filepath.Join(bare, goos+"_"+goarch, target{goos, goarch}.exe()), "stand-in pairtime binary for "+s)
+	}
+	// An extra file with the notices' name.
+	clash := filepath.Join(t.TempDir(), noticesName)
+	write(t, clash, "not the notices\n")
 	tests := []struct {
 		name     string
 		flag     string
@@ -767,6 +778,8 @@ func TestDistRefuses(t *testing.T) {
 		{name: "a short commit", flag: "-commit", value: "68726d8", wantCode: 1, wantErr: "commit"},
 		{name: "a date with an offset", flag: "-date", value: "2026-11-19T11:49:00+01:00", wantCode: 1, wantErr: "date"},
 		{name: "an extra file that doesn't exist", flag: "-extra", value: filepath.Join(f.dir, "NOTICE"), wantCode: 1, wantErr: "NOTICE"},
+		{name: "a target without its notices", flag: "-bin", value: bare, wantCode: 1, wantErr: noticesName + ": no such file"},
+		{name: "two files with one name in an archive", flag: "-extra", value: f.extra + "," + clash, wantCode: 1, wantErr: "two files are named " + noticesName},
 		{name: "a required flag left out", flag: "-payload", value: "<none>", wantCode: 2, wantErr: "-payload is required"},
 	}
 	for _, tt := range tests {

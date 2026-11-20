@@ -156,6 +156,22 @@ jobs:
           esac
           exit "$fail"
 
+      - name: Third-party notices
+        # Each archive carries THIRD_PARTY_NOTICES.txt: the license and
+        # notice files of Go and of every module its binary links, from the
+        # module cache, and of the embedded material
+        # tools/release/extra-notices.txt lists. dist refuses a target
+        # without one (docs/spec/update-manifest.md).
+        run: |
+          for target in $TARGETS; do
+            goos=${target%/*}
+            goarch=${target#*/}
+            ext=""
+            if [ "$goos" = windows ]; then ext=".exe"; fi
+            dir="$STAGE/bin/${goos}_${goarch}"
+            "$TOOL" notices -bin "$dir/pairtime$ext" -out "$dir/THIRD_PARTY_NOTICES.txt"
+          done
+
       - name: Archives, checksums.txt and the manifest payload
         env:
           REPO: ${{ github.repository }}

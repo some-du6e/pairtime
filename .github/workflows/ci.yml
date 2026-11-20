@@ -154,6 +154,23 @@ jobs:
           done
           exit "$fail"
 
+      - name: Third-party notices
+        # release.yml packs each binary with the THIRD_PARTY_NOTICES.txt that
+        # tools/release notices writes from the modules it links
+        # (docs/spec/update-manifest.md). Writing them for all fourteen
+        # binaries above, the server's included, makes a module whose
+        # license files can't be found fail the PR that adds it, not a tag.
+        run: |
+          tool="$RUNNER_TEMP/release-tool"
+          go build -o "$tool" ./tools/release
+          for bin in "$RUNNER_TEMP"/dist/*/*; do
+            target=${bin%/*}
+            target=${target##*/}
+            name=${bin##*/}
+            mkdir -p "$RUNNER_TEMP/notices/$target"
+            "$tool" notices -bin "$bin" -out "$RUNNER_TEMP/notices/$target/${name%.exe}.txt"
+          done
+
       # The checks below run even when an earlier step failed, so one run
       # reports every problem.
 

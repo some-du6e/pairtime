@@ -17,7 +17,7 @@ Every pairtime release publishes one archive per platform, `checksums.txt` and `
 
 ### Archives
 
-An archive holds three files at its root and no directories: the binary (`pairtime`, or `pairtime.exe` on Windows) with mode 0755, then `LICENSE` and `README.md` with mode 0644. Every file has the release commit's time. The tar.gz archives are USTAR with owner 0 and no gzip timestamp, and the zip archives record Unix modes. The same commit built with the same Go version gives the same bytes.
+An archive holds four files at its root and no directories: the binary (`pairtime`, or `pairtime.exe` on Windows) with mode 0755, then `LICENSE`, `README.md` and `THIRD_PARTY_NOTICES.txt` with mode 0644. Every file has the release commit's time. The tar.gz archives are USTAR with owner 0 and no gzip timestamp, and the zip archives record Unix modes. The same commit built with the same Go version gives the same bytes.
 
 The binary is built the way `ci.yml` builds it, with the tag as the version:
 
@@ -28,6 +28,21 @@ CGO_ENABLED=0 GOOS=<os> GOARCH=<arch> go build -trimpath -buildvcs=false \
     -X github.com/some-du6e/pairtime/internal/version.Date=<commit time>" \
   ./cmd/pairtime
 ```
+
+### THIRD_PARTY_NOTICES.txt
+
+Every binary statically links Go's runtime and standard library and some third-party modules, and their licenses (BSD-3-Clause, BSD-2-Clause, MIT, Apache-2.0) require a binary to come with their copyright notices and license terms. `tools/release notices` writes the file for one built binary, so each archive lists what its own target links. go-keyring's vendored `internal/shellescape`, for one, is linked only on macOS, so only the macOS archives carry its MIT license.
+
+- The modules come from the binary's build info, the list `go version -m` prints. `go list -deps` then finds the binary's packages, with the GOOS, GOARCH, cgo setting and tags the build info records, and the two have to name the same modules, or the command fails.
+- From each module it copies every license and notice file in a linked package's directory and in each directory above it, up to the module root: the directories `tools/ci/licensecheck` reads. A file counts when its name, ignoring case, is `LICENSE`, `LICENCE`, `COPYING`, `UNLICENSE`, `MIT-LICENSE`, `NOTICE` or `PATENTS`, alone or followed by `.`, `-` or `_` and more, as in `LICENSE-APACHE` or `NOTICE.txt`, unless it's a file the go command compiles, like lib/pq's `notice.go`. A module without a license file at its root fails.
+- Go's part is `LICENSE` and `PATENTS` from the `GOROOT` of the go command running the tool, which must be the Go version that built the binary.
+- `tools/release/extra-notices.txt` lists material that pairtime's own packages embed, or that their code was ported from, and that isn't a module, so no build info points at it. Each line names the package's directory, the license file and what the material is, both paths from the repository root. A binary's notices include the file when the binary links the package. Every line is checked on every run, so a renamed file fails instead of dropping a notice. For gitleaks' rules embedded in `pkg/redact`, the line is:
+
+  ```text
+  pkg/redact pkg/redact/rules/LICENSE gitleaks v8.30.1's default rules, embedded in pkg/redact
+  ```
+
+The file opens with the binary's main package, platform and Go version and a list of what it contains, then copies each license and notice file word for word under a header naming its module and path. It names no directory on the build machine, so it's as reproducible as the archive. When `release.yml` ships the server (WP-OP1), `pairtimed` gets its own the same way; `ci.yml` already writes them for both binaries.
 
 ### checksums.txt
 
@@ -254,5 +269,6 @@ Every release has `manifest.json` as an asset. The newest stable one is at `http
 ## How it's checked
 
 - `internal/release`'s tests run RFC 8032 section 7.1's five vectors through the key parser and signer, use DSSE's own example of the encoding, use semver.org's regular expression and its precedence examples, refuse a signed manifest with a byte changed at any offset, and check that a secret key never prints.
-- `tools/release`'s tests run dist, sign and verify in a temporary directory, rebuild to check the archives are reproducible, and check what verify refuses.
+- `tools/release`'s tests run dist, sign and verify in a temporary directory, rebuild to check the archives are reproducible, check that no tar.gz header holds a time or an owner, and check what verify refuses. They build the notices for a fake binary over a fake module cache, refuse one whose modules go list doesn't confirm, and check the checked-in `minimum-version.txt` and `extra-notices.txt`.
+- `ci.yml` writes the notices for all fourteen binaries it cross-compiles, `pairtimed` included, so a new module whose license can't be found fails in the PR that adds it.
 - `release.yml` checks every build twice: with `tools/release verify`, then with `tools/release/check.sh`, which uses only `sha256sum`, jq, tar, unzip and OpenSSL. On a tag it also checks that the shipped linux/amd64 binary names the signing key.
