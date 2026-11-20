@@ -96,6 +96,43 @@ func TestApplyRefusesAStalePlan(t *testing.T) {
 	}
 }
 
+func TestApplyChecksWhatThePlanOnlyRecords(t *testing.T) {
+	settings := []byte("{\"model\": \"opus\"}\n")
+	tests := []struct {
+		name string
+		// rewrite is what another program writes to settings.json between
+		// planning and Apply.
+		rewrite []byte
+	}{
+		{"hooks another program takes out after a plan that only records them stop Apply before it writes the manifest", settings},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			env := testEnv(t, "linux", nil)
+			path := ClaudeSettings(env)
+			writeFile(t, path, settings)
+			item, err := ClaudeCode(env)
+			if err != nil {
+				t.Fatal(err)
+			}
+			install(t, newInstaller(t), item) // an install whose data directory is gone
+			in := newInstaller(t)
+			p, err := in.PlanInstall([]Item{item})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !p.Empty() {
+				t.Fatalf("the reinstall plans changes, so it records nothing by itself:\n%s", p.Diff())
+			}
+			writeFile(t, path, tt.rewrite)
+			if err := p.Apply(); !errors.Is(err, ErrStale) {
+				t.Fatalf("Apply = %v, want ErrStale", err)
+			}
+			checkGone(t, in.manifestPath(), "the manifest of the stopped Apply")
+		})
+	}
+}
+
 // errStopped is the error a test's Plan.stop returns to stop Apply.
 var errStopped = errors.New("stopped by the test")
 

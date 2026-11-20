@@ -33,6 +33,9 @@ type Plan struct {
 	manifest  *manifest // what manifest.json holds after Apply
 	backups   []pendingBackup
 	rmdirs    []string // directories uninstall removes if empty, innermost first
+	// adopted are the targets adopt records without changing them, with
+	// what planning read: Apply checks them as it checks the changes.
+	adopted []Change
 
 	// unlock drops the install lock the plan holds until Apply or Close;
 	// nil once dropped.
@@ -335,6 +338,7 @@ func (p *Plan) adopt(t Target, cur Content, recs []editRecord) error {
 	}
 	p.manifest.Targets = append(p.manifest.Targets, record{Target: t, Written: cur.digest(), Edits: append([]editRecord(nil), recs...)})
 	p.rebase(&p.manifest.Targets[len(p.manifest.Targets)-1], base)
+	p.adopted = append(p.adopted, Change{Target: t, Before: cur})
 	return nil
 }
 
@@ -598,7 +602,10 @@ func (p *Plan) Apply() error {
 	} else if oldSum != p.oldSum {
 		return fmt.Errorf("%s %w", in.manifestPath(), ErrStale)
 	}
-	for _, c := range p.Changes {
+	// Every target the plan read, those it changes and those it only
+	// records, must still hold what it read: a record of hooks that another
+	// program has taken out since would say install worked.
+	for _, c := range slices.Concat(p.Changes, p.adopted) {
 		cur, err := in.read(c.Target)
 		if err != nil {
 			return err
