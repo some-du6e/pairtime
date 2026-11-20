@@ -27,6 +27,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/some-du6e/pairtime/internal/agent/api"
 	"github.com/some-du6e/pairtime/internal/agent/config"
 	"github.com/some-du6e/pairtime/internal/agent/focus"
 	"github.com/some-du6e/pairtime/internal/agent/home"
@@ -108,6 +109,12 @@ type agent struct {
 	ledgerIn  *ledger.Presence
 	keyStores []keys.Store // Options.KeyStores
 
+	// sessions are the dashboard's sign-ins (DESIGN 3.9), and days serves
+	// its data from the scorer's day rollups, which WP-AG4 hands it as an
+	// api.Store; until then it serves api.Empty.
+	sessions *localhttp.Sessions
+	days     *api.Server
+
 	stop     chan struct{} // closed when a client asks the agent to stop
 	stopOnce sync.Once
 
@@ -143,6 +150,8 @@ func Run(ctx context.Context, opts Options) error {
 		stop:      make(chan struct{}),
 		problems:  make(map[string]string),
 		keyStores: opts.KeyStores,
+		sessions:  localhttp.NewSessions(nil),
+		days:      api.New(api.Options{Log: log.With("component", "api")}),
 	}
 	linkOnce.Do(func() { linked = heavyModules() })
 	if err := optIntoEcoQoS(); err != nil {

@@ -204,6 +204,10 @@ func TestRun(t *testing.T) {
 		{name: "stop needs POST", method: "GET", path: "/v1/agent/stop", token: true, wantCode: 405},
 		{name: "the placeholder dashboard is served without a token", method: "GET", path: "/", wantCode: 200, wantBody: "pairtime"},
 		{name: "the dashboard refuses POST", method: "POST", path: "/", wantCode: 405},
+		{name: "days with the token answers 200 with this week's days", method: "GET", path: "/v1/days", token: true, wantCode: 200, wantBody: `"days":[`},
+		{name: "days without the token or a session answers 401", method: "GET", path: "/v1/days", wantCode: 401},
+		{name: "a dashboard link needs the bearer token", method: "POST", path: "/v1/dashboard/link", wantCode: 401},
+		{name: "a dashboard link with the token answers 201 with a sign-in URL on 127.0.0.1", method: "POST", path: "/v1/dashboard/link", token: true, wantCode: 201, wantBody: fmt.Sprintf(`"url":"http://127.0.0.1:%d/signin?code=`, a.port.Port)},
 	}
 	for _, tt := range httpTests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -217,6 +221,56 @@ func TestRun(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("a dashboard link signs a browser in once, with a cookie that opens the API", func(t *testing.T) {
+		code, body := request(t, "POST", base+"/v1/dashboard/link", "", "", a.port.Token)
+		var link struct {
+			URL        string `json:"url"`
+			ExpiresInS int    `json:"expires_in_s"`
+		}
+		if err := json.Unmarshal([]byte(body), &link); code != http.StatusCreated || err != nil || link.ExpiresInS <= 0 {
+			t.Fatalf("POST /v1/dashboard/link = %d %q (%v)", code, body, err)
+		}
+		// A browser follows the 303 itself; this client stops at it.
+		client := &http.Client{
+			Timeout:       10 * time.Second,
+			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+		}
+		signIn := func() *http.Response {
+			resp, err := client.Get(link.URL)
+			if err != nil {
+				t.Fatal(err)
+			}
+			resp.Body.Close()
+			return resp
+		}
+		first := signIn()
+		var session *http.Cookie
+		for _, c := range first.Cookies() {
+			if c.Name == localhttp.CookieName {
+				session = c
+			}
+		}
+		if first.StatusCode != http.StatusSeeOther || first.Header.Get("Location") != "/" || session == nil || !session.HttpOnly || session.SameSite != http.SameSiteStrictMode {
+			t.Fatalf("GET /signin = %d to %q with cookie %v; want 303 to / with an HttpOnly, SameSite=Strict session", first.StatusCode, first.Header.Get("Location"), session)
+		}
+		req, err := http.NewRequest("GET", base+"/v1/days", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.AddCookie(session)
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Errorf("GET /v1/days with the session cookie = %d, want 200", resp.StatusCode)
+		}
+		if again := signIn(); again.Header.Get("Location") != "/?signin=expired" || len(again.Cookies()) != 0 {
+			t.Errorf("the link used a second time went to %q with %d cookies, want /?signin=expired and none", again.Header.Get("Location"), len(again.Cookies()))
+		}
+	})
 
 	t.Run("a second agent on the same data directory gets ErrAlreadyRunning", func(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
