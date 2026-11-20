@@ -93,6 +93,11 @@
 //   - "Input in its slot" is any input, and "input_keys where available"
 //     means key presses where the OS reports them, exactly as each row of
 //     SM 2.3 says.
+//   - A typed build command is TEST, as SM 5.2 defines it ("a typed test
+//     or build command") and as SM 2.3's activity column has it ("testing
+//     for tests and builds"); SM 2.3's reason column says "CMD, or TEST
+//     when cmd_class = test", which would give a build the reason CMD and
+//     the activity debugging under SM 5.2's map.
 //   - Level B is any anchor from a hook, log, shell, git or editor whose
 //     evidence shows input but no key press, whether or not the OS reports
 //     key presses (DESIGN 6.4 says "keyboard-specific input unavailable").

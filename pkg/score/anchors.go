@@ -381,6 +381,8 @@ func (d *deriver) otherAnchor(i int, e event.Event) {
 		if !p.Interactive || !d.pres.inputBefore(p.TStart, d.r.keysPre) {
 			return
 		}
+		// A build is TEST, as SM 5.2 and SM 2.3's activity column have it;
+		// SM 2.3's reason column names only tests (doc.go's readings).
 		a.Kind, a.Reason = event.AnchorTypedCommand, event.ReasonCommand
 		if p.CmdClass == event.CmdTest || p.CmdClass == event.CmdBuild {
 			a.Reason = event.ReasonTest
