@@ -96,7 +96,7 @@ func HookHost(goos string, chain []Proc) int {
 //
 // HasTTY is the harness's controlling terminal where the OS reports one.
 // Windows doesn't, so there it is set when a shell, a terminal, a
-// multiplexer or sshd sits in the chain before the ancestor that decided.
+// multiplexer or sshd is anywhere among the ancestors.
 func Classify(goos string, chain []Proc) Lineage {
 	l := Lineage{ParentClass: event.ParentUnknown, Entrypoint: event.EntrypointUnknown, By: -1}
 	if len(chain) == 0 {
@@ -104,7 +104,6 @@ func Classify(goos string, chain []Proc) Lineage {
 	}
 	h := chain[0]
 	self, _ := HarnessOf(goos, h)
-	sawShell := false
 	role := RoleNone
 walk:
 	for i := 1; i < len(chain); i++ {
@@ -112,7 +111,6 @@ walk:
 		e, _ := Identify(goos, a)
 		switch e.Role {
 		case RoleShell:
-			sawShell = true
 			if e.JobControl && runsScript(chain[i-1], a) {
 				l.ScriptShell = true
 			}
@@ -172,9 +170,24 @@ walk:
 	case TTYNone:
 		l.HasTTY = false
 	default:
-		l.HasTTY = sawShell || role == RoleTerminal || role == RoleMultiplexer || role == RoleRemote
+		l.HasTTY = consoleAbove(goos, chain)
 	}
 	return l
+}
+
+// consoleAbove reports whether a shell, a terminal, a multiplexer or sshd
+// is among chain[0]'s ancestors. Where the OS doesn't say whether a
+// process has a terminal (Windows), that is the sign it has a console: a
+// console program inherits the console of whatever started it.
+func consoleAbove(goos string, chain []Proc) bool {
+	for _, a := range chain[1:] {
+		e, _ := Identify(goos, a)
+		switch e.Role {
+		case RoleShell, RoleTerminal, RoleMultiplexer, RoleRemote:
+			return true
+		}
+	}
+	return false
 }
 
 // runsScript reports whether shell, a POSIX shell with job control, is
