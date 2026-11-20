@@ -361,6 +361,10 @@ func undoClaudeHooks(cur, base Content, _ json.RawMessage) (Content, error) {
 	if !cur.Exists {
 		return cur, nil
 	}
+	held, err := pairtimeLists(cur.Data)
+	if err != nil {
+		return Content{}, err
+	}
 	src, err := removeClaudeHooks(cur.Data, func(_ string, _, h *jsonc.Value) bool { return isPairtimeHook(h) })
 	if err != nil {
 		return Content{}, err
@@ -376,7 +380,7 @@ func undoClaudeHooks(cur, base Content, _ json.RawMessage) (Content, error) {
 			return Content{Exists: true, Data: src, Mode: cur.Mode}, nil
 		}
 	}
-	if src, err = pruneHooks(src, before); err != nil {
+	if src, err = pruneHooks(src, before, held); err != nil {
 		return Content{}, err
 	}
 	if root, err := jsonc.Parse(src); err == nil && root.Kind == jsonc.Object && emptyInside(src, root) && noValue(base) {
@@ -385,10 +389,38 @@ func undoClaudeHooks(cur, base Content, _ json.RawMessage) (Content, error) {
 	return Content{Exists: true, Data: src, Mode: cur.Mode}, nil
 }
 
-// pruneHooks takes out of src's "hooks" each empty list that before,
-// base's "hooks", doesn't have, and then "hooks" itself if it is empty and
-// base had none.
-func pruneHooks(src []byte, before *jsonc.Value) ([]byte, error) {
+// pairtimeLists returns the events whose hook lists in src hold a pairtime
+// hook.
+func pairtimeLists(src []byte) (map[string]bool, error) {
+	root, err := parseSettings(src)
+	if err != nil || root == nil {
+		return nil, err
+	}
+	hooks := root.Get("hooks")
+	if hooks == nil || hooks.Kind != jsonc.Object {
+		return nil, nil
+	}
+	held := map[string]bool{}
+	for _, ev := range hooks.Items {
+		if ev.Value.Kind != jsonc.Array {
+			continue
+		}
+		for _, g := range ev.Value.Items {
+			if hs := g.Value.Get("hooks"); hs != nil && hs.Kind == jsonc.Array && slices.ContainsFunc(hs.Items, func(h jsonc.Item) bool { return isPairtimeHook(h.Value) }) {
+				held[ev.Key] = true
+			}
+		}
+	}
+	return held, nil
+}
+
+// pruneHooks takes out of src's "hooks" each list that is empty, that
+// before, base's "hooks", doesn't have, and that held, the events whose
+// lists held a pairtime hook before it went, names; then "hooks" itself if
+// that leaves it empty and base had none. Only pairtime's hooks leaving a
+// list empty shows it is pairtime's: one the teen added empty after install
+// stays, and so does a "hooks" that held none of pairtime's.
+func pruneHooks(src []byte, before *jsonc.Value, held map[string]bool) ([]byte, error) {
 	for pruned := 0; ; pruned++ {
 		root, err := parseSettings(src)
 		if err != nil || root == nil {
@@ -400,12 +432,12 @@ func pruneHooks(src []byte, before *jsonc.Value) ([]byte, error) {
 		}
 		i := len(hooks.Items) - 1
 		for ; i >= 0; i-- {
-			if it := hooks.Items[i]; emptyInside(src, it.Value) && before.Find(it.Key) < 0 {
+			if it := hooks.Items[i]; held[it.Key] && emptyInside(src, it.Value) && before.Find(it.Key) < 0 {
 				break
 			}
 		}
 		if i < 0 {
-			if before == nil && emptyInside(src, hooks) {
+			if before == nil && len(held) > 0 && emptyInside(src, hooks) {
 				src = jsonc.Remove(src, root, root.Find("hooks"))
 			}
 			return src, nil

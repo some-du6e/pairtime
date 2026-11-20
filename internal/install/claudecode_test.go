@@ -299,6 +299,27 @@ func TestClaudeCodeUninstallKeepsChangesMadeAfterInstall(t *testing.T) {
 			},
 		},
 		{
+			name: "an empty hook list the teen added after install stays, as only pairtime's hooks leaving a list empty make it pairtime's",
+			change: func(t *testing.T, path string) {
+				src := readOrNil(t, path)
+				root, err := jsonc.Parse(src)
+				if err != nil {
+					t.Fatal(err)
+				}
+				writeFile(t, path, jsonc.AddMember(src, root.Get("hooks"), "PreCompact", []any{}, jsonc.StyleOf(src, root)))
+			},
+			check: func(t *testing.T, got, _ []byte) {
+				root, err := jsonc.Parse(before)
+				if err != nil {
+					t.Fatal(err)
+				}
+				want := jsonc.AddMember(before, root.Get("hooks"), "PreCompact", []any{}, jsonc.StyleOf(before, root))
+				if !bytes.Equal(got, want) {
+					t.Errorf("uninstall left\n%s\nwant\n%s", got, want)
+				}
+			},
+		},
+		{
 			name: "a pairtime hook the teen gave a timeout is still pairtime's, and goes",
 			change: func(t *testing.T, path string) {
 				src := readOrNil(t, path)
