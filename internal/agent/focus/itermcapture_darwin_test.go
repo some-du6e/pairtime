@@ -163,9 +163,9 @@ func (c *capture) iTerm2Session() (platform.Proc, int) {
 }
 
 // diagnose saves what explains a failed capture next to it, for the
-// artifact: this user's processes, iTerm2's preferences and, where the
-// runner lets a shell take one, a screenshot, which shows a dialog that
-// held an app up.
+// artifact: every process on the runner (ps -ax, whose comm column holds
+// paths), iTerm2's preferences and, where the runner lets a shell take
+// one, a screenshot, which shows a dialog that held an app up.
 func (c *capture) diagnose() {
 	if !c.t.Failed() {
 		return

@@ -91,9 +91,11 @@ func TestDesktopAgentOnX11(t *testing.T) {
 	}
 	// The process scan reports a harness process only once it has run
 	// for procs.Grace, so the scan a terminal's focus asks for as the
-	// agent starts finds the fake claude too young. One after that tells
-	// the agent its session, and focus on its xterm asks for one at once
-	// (procs.KickDelay) rather than on the minute.
+	// agent starts, and a minute scan that comes soon after, can find the
+	// fake claude too young. A scan after that tells the agent its
+	// session. Focus on its xterm asks for one (procs.kick), but the
+	// status reply counts only the minute scan, procs.scan, so the test
+	// waits for the next of those, at most procs.Interval away.
 	time.Sleep(time.Until(claudeAt.Add(procs.Grace + 2*time.Second)))
 	scans := readStatus(t, ptHome).runs("procs.scan")
 	activate(claude)

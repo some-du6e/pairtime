@@ -77,9 +77,11 @@ func TestITerm2Helpers(t *testing.T) {
 	}
 
 	t.Run("an iTerm2 whose owner the table doesn't know joins no iTermServer, since it can't tell whose they are", func(t *testing.T) {
+		// The adopted iTermServer's owner is unknown too, so only the rule,
+		// not a mismatch of owners, keeps it out.
 		procs := macITerm()
 		for i := range procs {
-			if procs[i].PID == 300 {
+			if procs[i].PID == 300 || procs[i].PID == 200 {
 				procs[i].Owner = ""
 			}
 		}

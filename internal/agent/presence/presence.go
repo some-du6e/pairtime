@@ -344,9 +344,10 @@ func (s *Sampler) HarnessProcesses(n int) {
 }
 
 // Power reports a suspend, resume, lock or unlock. The OS's watcher calls
-// it, and so may anything else that learns of one. In a live context it
-// records the event and a sample after it; suspends and locks call
-// Options.Seal in any case.
+// it, and so may anything else that learns of one. Once sampling has
+// started, a live context records the event and a sample after it. With no
+// idle source sampling never starts, so nothing is recorded. Between Start
+// and Stop, suspends and locks call Options.Seal in any case.
 func (s *Sampler) Power(op event.PowerOp) {
 	s.mu.Lock()
 	if !s.watching || s.stopped {
@@ -363,7 +364,8 @@ func (s *Sampler) Power(op event.PowerOp) {
 		s.setProblem("lock-state", "")
 	}
 	// While Start is still reading the lock state, an event only sets the
-	// state its first sample shows.
+	// state its first sample shows. With no idle source started stays
+	// false, so an event only seals.
 	if s.started {
 		if s.g.interval(wall(now)) != 0 {
 			s.emit(Record{At: now, Data: &event.OSPower{Op: op}})
