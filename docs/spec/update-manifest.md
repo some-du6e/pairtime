@@ -153,7 +153,7 @@ Karim does this once, before the first tag that should be signed (PLAN WP-RL1). 
      -f name='v*' -f type=tag
    ```
 
-   Run both even if `release` already exists. The publish job names the environment, so a tag pushed before this step creates it, and GitHub creates it with no deployment policy, which lets a workflow run on any branch deploy to it and read its secrets. `PUT` adds the policy to an environment that exists. Then check what it admits:
+   Run both even if `release` already exists. The publish job names the environment, so a tag pushed before this step creates it, and GitHub creates it with no deployment policy, which lets a workflow run on any branch deploy to it and read its secrets. `PUT` adds the policy to an environment that exists, and if the `POST` reports that the `v*` policy exists, the environment already has it. Then check what it admits:
 
    ```sh
    gh api repos/some-du6e/pairtime/environments/release/deployment-branch-policies \
