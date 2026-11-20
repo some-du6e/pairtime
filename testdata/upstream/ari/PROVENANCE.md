@@ -44,8 +44,20 @@ Fetched with `gh api -H "Accept: application/vnd.github.raw" "repos/hackclub/<re
 So that anything valid here is valid at Ari, the schema takes the spelling Ari tells new integrations to use where Ari accepts several:
 
 - `track` must be exactly `hardware` to waive `demo_url`. Ari also takes other casing and surrounding spaces.
-- The evidence floor counts program time only as `maker.program_seconds`. Ari also counts `program_minutes`, `program_hours` and collaborators' program time.
+- The evidence floor counts program time only as a solo ship's `maker.program_seconds`. Ari also counts `program_minutes` and `program_hours`, and on a ship that lists collaborators it counts their program time and their own `hackatime_projects` instead, never the maker's program time.
+- The floor counts a `hackatime_projects` list only when every name in it has a character that isn't a space. Ari drops the blank names and counts the rest.
 - A journal entry's `at` must be a string. Ari falls back to `date` when `at` is null.
 - A non-numeric `minutes` fails here. Ari skips it and tries `hours`.
 
-The schema doesn't express one cross-field rule: with `collaborators`, every journal entry needs an `email` matching one of them.
+## What the schema can't check
+
+A ship valid against `ingest.schema.json` is valid at Ari when it also keeps these four rules, which no schema in `check.py`'s subset can state:
+
+1. No two collaborators share an email, ignoring case and surrounding spaces, or Ari answers 422 `collaborators` (validate.go lines 171-174).
+2. On a ship that lists collaborators, every journal entry's `email` names one of them, again ignoring case and surrounding spaces, or Ari answers 422 `journals.email` (lines 247-257).
+3. `at`, `date` and `shipped_at` name a date and time that exist. The `when` pattern checks only their shape, so it takes `2026-02-30` or `25:00`, which Ari's parser refuses with 422 `journals.at` or `shipped_at` (payload.go lines 59-78). `shipped_at` must also fall between 2000-01-01 and a day after Ari receives the ship (payload.go lines 97-102).
+4. A string that mustn't be blank has a character that isn't whitespace in Unicode's sense. Ari tests with Go's `strings.TrimSpace`, which also strips characters such as U+00A0, while `check.py` runs `nonblank`'s `\S` in ASCII mode. A title made only of U+00A0 passes here and is blank to Ari, and the same goes for the floor's Hackatime names.
+
+For WP-PG8's bridge, 3 and 4 hold if it formats `at` from a real timestamp and writes its own `text`. 1 and 2 matter only if it sends collaborators.
+
+The evidence floor's `examples` and `x-invalid-examples` pin both sides of it: a solo ship's program time counts and a shared ship's maker time doesn't, and a list of blank names is no Hackatime project.
