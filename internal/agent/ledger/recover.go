@@ -3,10 +3,12 @@
 package ledger
 
 import (
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/crc32"
 	"io"
 	"io/fs"
 	"os"
@@ -17,6 +19,7 @@ import (
 	"github.com/some-du6e/pairtime/internal/agent/home"
 	"github.com/some-du6e/pairtime/pkg/event"
 	"github.com/some-du6e/pairtime/pkg/ledger"
+	"github.com/some-du6e/pairtime/pkg/score"
 )
 
 // batchesFile is batches.seg as read back.
@@ -37,9 +40,13 @@ func damaged(format string, args ...any) error {
 
 // readBatchesFile reads batches.seg. It stops at the first frame that
 // isn't whole, which only a crash or a power cut leaves at the end of a
-// file written without a flush, and says where that is. Its chain frame
-// was written whole before any other, so a file that doesn't start with
-// one is damaged.
+// file written without a flush, and says where that is. A receipt is
+// flushed with everything before it (StoreReceipt), so such a frame with a
+// whole receipt after it is damage instead. Its chain frame
+// was written whole, by atomic rename, before any other, so a file that
+// doesn't start with one is damaged, and so is an empty one: without its
+// chain frame nothing says which device or key the segments belong to,
+// and a new chain under this key would number them again.
 func readBatchesFile(name string) (*batchesFile, error) {
 	f, err := os.Open(name)
 	if err != nil {
@@ -51,6 +58,9 @@ func readBatchesFile(name string) (*batchesFile, error) {
 	for i := 0; ; i++ {
 		fm, err := fr.next()
 		if errors.Is(err, io.EOF) {
+			if i == 0 {
+				return nil, damaged("%s is empty", batchesName)
+			}
 			bf.good = fr.off
 			break
 		}
@@ -58,6 +68,15 @@ func readBatchesFile(name string) (*batchesFile, error) {
 		if errors.As(err, &torn) {
 			if i == 0 {
 				return nil, damaged("%s doesn't start with the chain it belongs to: %v", batchesName, err)
+			}
+			// StoreReceipt flushes the file before each receipt, so only
+			// what follows the last receipt can be a torn tail.
+			later, err := receiptAfter(f, torn.off+1)
+			if err != nil {
+				return nil, err
+			}
+			if later {
+				return nil, damaged("%s: %v, before a receipt that was flushed after it", batchesName, torn)
 			}
 			bf.good, bf.torn = torn.off, true
 			break
@@ -107,6 +126,44 @@ func readBatchesFile(name string) (*batchesFile, error) {
 		}
 	}
 	return bf, nil
+}
+
+// receiptAfter reports whether f holds a whole receipt frame anywhere from
+// off on, at any offset, since frames after one that isn't whole can't be
+// found by reading on. A receipt there was flushed after every byte before
+// it (StoreReceipt). Random bytes pass for one only if they have the
+// receipt's kind byte, a length that fits, a matching CRC-32C and a
+// receipt's JSON, which a torn tail's zeros or leftovers don't.
+func receiptAfter(f *os.File, off int64) (bool, error) {
+	fi, err := f.Stat()
+	if err != nil {
+		return false, err
+	}
+	if fi.Size() <= off {
+		return false, nil
+	}
+	buf := make([]byte, fi.Size()-off)
+	if _, err := f.ReadAt(buf, off); err != nil && !errors.Is(err, io.EOF) {
+		return false, err
+	}
+	for i := 0; i+frameHeadSize+frameTailSize <= len(buf); i++ {
+		if buf[i] != kindReceipt {
+			continue
+		}
+		size := binary.BigEndian.Uint32(buf[i+1:])
+		if size > maxPayload || int64(len(buf)-i) < frameSize(int(size)) {
+			continue
+		}
+		end := i + frameHeadSize + int(size)
+		if crc32.Checksum(buf[i:end], castagnoli) != binary.BigEndian.Uint32(buf[end:]) {
+			continue
+		}
+		var r receiptPayload
+		if json.Unmarshal(buf[i+frameHeadSize:end], &r) == nil && r.B > 0 && r.Signature != "" {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // isOpaqueKey reports whether s is a pkg/event opaque key: 1 to 128
@@ -160,6 +217,13 @@ func (w *Writer) recover() error {
 		}
 		return w.newChain()
 	}
+	// A chain the key started before keystore.json kept chains isn't on
+	// record yet. It goes on record before anything is written to it, and
+	// before scan can find the files damaged, so deleting a damaged ledger
+	// can't make the key start again from s = 1.
+	if err := w.ownChain(bf.chain.DeviceID); err != nil {
+		return err
+	}
 	w.device = bf.chain.DeviceID
 	if w.batches, err = openAppend(name, false); err != nil {
 		return err
@@ -175,6 +239,16 @@ func (w *Writer) recover() error {
 	if err != nil {
 		return err
 	}
+	if len(restored) > 0 {
+		// A crash between a seal frame and its flush leaves the frame, and
+		// the batch's records, in the page cache only. A row must never
+		// reach the disk before its batch, or a power cut would leave a
+		// row pointing past its segment's end, which every Open after
+		// refuses.
+		if err := w.syncSegments(restored[0].Start.Seg); err != nil {
+			return err
+		}
+	}
 	for _, rp := range restored {
 		if err := w.writeRow(rp); err != nil {
 			return err
@@ -186,9 +260,45 @@ func (w *Writer) recover() error {
 	return nil
 }
 
+// syncSegments flushes the segments of from's day and every later one, the
+// newest through w.seg.
+func (w *Writer) syncSegments(from string) error {
+	days, err := segments(w.dir)
+	if err != nil {
+		return err
+	}
+	for _, day := range days {
+		switch {
+		case day < from:
+		case w.seg != nil && day == w.segDay:
+			if err := w.seg.sync(); err != nil {
+				return err
+			}
+		default:
+			f, err := openAppend(segPath(w.dir, day), false)
+			if err != nil {
+				return err
+			}
+			err = f.sync()
+			f.close()
+			if err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 // newChain starts the chain of this writer's key: a new device id, and
 // batches.seg with nothing but its chain frame, written whole before any
-// record. It refuses a key that kept an old chain here (ErrKeyReuse).
+// record. It refuses a key that has a chain on record or kept an old chain
+// here (ErrKeyReuse), and records the new chain before Open writes any
+// record to it.
+//
+// The record comes after batches.seg and not before it. A chain is on
+// record before any record is written, which is all that keeps nonces
+// from repeating, and a record made first would lock the key out for good
+// if batches.seg then failed to write, as on a full disk.
 func (w *Writer) newChain() error {
 	if err := w.keyUnused(); err != nil {
 		return err
@@ -198,17 +308,49 @@ func (w *Writer) newChain() error {
 	if err != nil {
 		return err
 	}
-	name := filepath.Join(w.dir, batchesName)
-	if err := home.WriteFile(name, appendFrame(nil, kindChain, payload)); err != nil {
+	fr, err := frameOf(kindChain, payload)
+	if err != nil {
 		return err
 	}
-	w.batches, err = openAppend(name, false)
-	return err
+	name := filepath.Join(w.dir, batchesName)
+	if err := home.WriteFile(name, fr); err != nil {
+		return err
+	}
+	if w.batches, err = openAppend(name, false); err != nil {
+		return err
+	}
+	return w.ownChain(w.device)
 }
 
-// keyUnused returns ErrKeyReuse when the writer's key kept an old chain
-// here, so a chain under it would start again from s = 1.
+// ownChain checks that device's chain is the one Options.Chains records
+// for the writer's key, and records it when the key has none on record
+// yet. A key whose record names another chain gets ErrKeyReuse.
+func (w *Writer) ownChain(device string) error {
+	if w.chains == nil {
+		return nil
+	}
+	switch rec := w.chains.Chain(); rec {
+	case device:
+		return nil
+	case "":
+		if err := w.chains.RecordChain(device); err != nil {
+			return fmt.Errorf("ledger: recording the chain of device %s next to its key: %w", device, err)
+		}
+		return nil
+	default:
+		return fmt.Errorf("%w: the key writes the chain of device %s, and this ledger holds its chain of device %s", ErrKeyReuse, rec, device)
+	}
+}
+
+// keyUnused returns ErrKeyReuse when the writer's key has a chain on
+// record, which this ledger doesn't hold, or kept an old chain here, so a
+// chain under it would start again from s = 1.
 func (w *Writer) keyUnused() error {
+	if w.chains != nil {
+		if rec := w.chains.Chain(); rec != "" {
+			return fmt.Errorf("%w: the key started the chain of device %s, which this ledger doesn't hold", ErrKeyReuse, rec)
+		}
+	}
 	for _, name := range []string{w.keyID, w.keyID + partialSuffix} {
 		_, err := os.Stat(filepath.Join(w.dir, oldDir, name))
 		if err == nil {
@@ -288,10 +430,14 @@ func (w *Writer) finishArchives() error {
 	return nil
 }
 
-// questionRows is how many batches back Open reads the records it rebuilds
-// the prompt classes' questions from (score.Questions): about an hour of
-// work, at a batch a minute. A prompt that answers a question asked before
-// the agent restarted usually comes within minutes.
+// questionRows is how often a seal frame holds what the prompt classes'
+// questions remember (score.Questions): every questionRows-th batch's does.
+// Open restores them from the newest such frame and reads only the records
+// after it, so a restart changes no prompt's class: f.pc follows from the
+// chain's records in order, wherever the agent restarted. A ledger with no
+// such frame yet reads them from its first record. One written before seal
+// frames held them reads them from questionRows batches back, as near as
+// it gets.
 const questionRows = 64
 
 // before reports whether p comes before q in the segments.
@@ -307,23 +453,34 @@ func (p position) before(q position) bool {
 // A frame that isn't whole is a torn tail, which a crash or a power cut
 // leaves, only at the end of the newest segment and after the last row's
 // end, which was flushed before the row was written. scan cuts it off.
-// Anywhere else, the files are damaged. Reading starts questionRows
-// batches before the last row's end; the records before that end are
-// read only to rebuild what the prompt classes need.
+// Anywhere else, the files are damaged. Reading starts at the newest seal
+// frame that holds the prompt classes' questions (questionRows); the
+// records before the last row's end are read only to rebuild those.
 func (w *Writer) scan(rows []rowPayload) ([]rowPayload, error) {
 	days, err := segments(w.dir)
 	if err != nil {
 		return nil, err
 	}
-	var start, from position
+	var start, from, snap position
 	next, b, head := uint64(1), uint64(0), ledger.Hash{}
 	if n := len(rows); n > 0 {
 		last := rows[n-1]
-		start, next, b, head = last.End, last.LastSeq+1, last.B, last.Head
+		start, next, b, head, snap = last.End, last.LastSeq+1, last.B, last.Head, last.Snap
 		if !slices.Contains(days, start.Seg) {
 			return nil, damaged("batch %d ends in the segment of %s, which isn't there", last.B, start.Seg)
 		}
 		from = rows[max(0, n-questionRows)].Start
+		if snap != (position{}) {
+			// The newest seal frame that holds the questions, unless the
+			// last batch is the one it seals: then from that batch's first
+			// record, so a record is always read for the key check below,
+			// and the seal frame after the records restores the questions
+			// they gave.
+			from = snap
+			if last.Start.before(snap) {
+				from = last.Start
+			}
+		}
 		if !slices.Contains(days, from.Seg) {
 			from = position{Seg: start.Seg}
 		}
@@ -408,6 +565,12 @@ func (w *Writer) scan(rows []rowPayload) ([]rowPayload, error) {
 				w.pending = append(w.pending, pending{rec: rec, pos: position{Seg: day, Off: fm.off}})
 				next++
 			case kindSeal:
+				// What the questions remember after the batch's records,
+				// which reading those records gives too.
+				if err := w.restoreQuestions(fm.payload, position{Seg: day, Off: fm.off}, &snap); err != nil {
+					f.close()
+					return nil, fmt.Errorf("the segment of %s, offset %d: %w", day, fm.off, err)
+				}
 				if sealed {
 					continue
 				}
@@ -416,6 +579,7 @@ func (w *Writer) scan(rows []rowPayload) ([]rowPayload, error) {
 					f.close()
 					return nil, fmt.Errorf("the segment of %s, offset %d: %w", day, fm.off, err)
 				}
+				rp.Snap = snap
 				restored = append(restored, rp)
 				b, head = rp.B, rp.Head
 				w.pending = nil
@@ -430,8 +594,29 @@ func (w *Writer) scan(rows []rowPayload) ([]rowPayload, error) {
 			f.close()
 		}
 	}
-	w.next, w.b, w.head = next, b, head
+	w.next, w.b, w.head, w.snap = next, b, head, snap
 	return restored, nil
+}
+
+// restoreQuestions restores the prompt classes' questions from a seal
+// frame that holds them, and then says the frame, which starts at at, is
+// the newest that does.
+func (w *Writer) restoreQuestions(payload []byte, at position, snap *position) error {
+	var sp struct {
+		B uint64                `json:"b"`
+		Q *score.QuestionsState `json:"q"`
+	}
+	if err := json.Unmarshal(payload, &sp); err != nil {
+		return damaged("a seal frame: %v", err)
+	}
+	if sp.Q == nil {
+		return nil
+	}
+	if err := w.q.Restore(*sp.Q); err != nil {
+		return damaged("the seal of batch %d: %v", sp.B, err)
+	}
+	*snap = at
+	return nil
 }
 
 // recordOf reads a record frame's payload: a header that follows spec
@@ -472,6 +657,7 @@ func (w *Writer) sealFrame(payload []byte, b uint64, prev ledger.Hash, end posit
 	if row.Root != sp.Root || row.Head != sp.Head {
 		return rowPayload{}, damaged("the seal of batch %d has a root or head its records don't give", sp.B)
 	}
+	sp.Q = nil // rows leave it out
 	return rowPayload{sealPayload: sp, LastSeq: sp.FirstSeq + sp.N - 1, Start: w.pending[0].pos, End: end}, nil
 }
 
