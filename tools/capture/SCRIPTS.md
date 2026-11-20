@@ -4,7 +4,7 @@ One script per harness. Each lists the exact actions that make the harness fire 
 
 Type or paste each prompt exactly as written. The scrub flags any prompt line that isn't in this file, because a fixture should hold no text of yours. If you type something private by mistake, stop and quit the harness, delete the whole `ROOT` folder, which holds what you typed in its runs, history and transcripts, and start over with a new `ROOT`.
 
-Step numbers are shared across harnesses: step 4 is always "a permission accepted", even where a harness skips a step before it. Every script has step 3, the pasted prompt, right before step 4, whose prompt refers back to it. Steps 19 to 21 came later than the rest, so their numbers are higher than the steps around them: do every step in the order its script lists it. Before each step, type its number and Enter into the sink's terminal, so `STEPS.txt` says which step every hook call belongs to.
+Step numbers are shared across harnesses: step 4 is always "a permission accepted", even where a harness skips a step before it. Every script has step 3, the pasted prompt, right before step 4, whose prompt refers back to it. Steps 19 to 23 came later than the rest, so their numbers are higher than the steps around them: do every step in the order its script lists it. Before each step, type its number and Enter into the sink's terminal, so `STEPS.txt` says which step every hook call belongs to.
 
 ## Before any capture
 
@@ -26,7 +26,7 @@ Captured by WP-AD1. Run it once in the CLI (run `cli`) and once in the VS Code e
    python3 tools/capture/prepare.py claude_code ROOT cli
    ```
 
-   It makes `ROOT/projects/cli` (a tiny made-up Python project with one failing test, and a made-up git identity), `ROOT/runs/cli`, `ROOT/claude-home`, Claude Code's settings folder for the capture, and `ROOT/projects/cli/.claude/settings.local.json`, which points every DESIGN 5.1 hook at the dumper: `SessionStart`, `UserPromptSubmit`, `Stop`, `StopFailure`, `Notification`, `PermissionRequest`, `PostToolUse` (matcher `Edit|Write|Bash`), `SubagentStart`, `SubagentStop`, `SessionEnd`. Every run gets a scratch project of its own, so the VS Code run starts from the same files the CLI run did. It prints the commands below with your paths filled in.
+   It makes `ROOT/projects/cli` (a tiny made-up Python project with one failing test, and a made-up git identity), `ROOT/runs/cli`, `ROOT/claude-home`, Claude Code's settings folder for the capture, and `ROOT/projects/cli/.claude/settings.local.json`, which points every DESIGN 5.1 hook at the dumper: `SessionStart`, `UserPromptSubmit`, `Stop`, `StopFailure`, `Notification`, `PermissionRequest`, `PostToolUse` (matcher `Edit|Write|Bash`), `SubagentStart`, `SubagentStop`, `SessionEnd`. `PermissionRequest` runs `allow-once.sh` instead (`allow-once.ps1` on Windows), which records every call the way the dumper does and answers step 22's prompt itself; its calls' `parents` start with that script's shell. The same file starts Claude Code in manual permission mode: since 2.1.327 a session starts in auto mode, where a classifier answers most permission prompts, so steps 4 to 8 and 22 would ask nobody. Every run gets a scratch project of its own, so the VS Code run starts from the same files the CLI run did. It prints the commands below with your paths filled in.
 2. Terminal 1: start the sink, `python3 tools/capture/otlp_sink.py ROOT/runs/cli`.
 3. Terminal 2: set the variables `prepare.py` printed, then `cd ROOT/projects/cli`. `CLAUDE_CONFIG_DIR` points Claude Code at `ROOT/claude-home` instead of your `~/.claude`, and `CLAUDE_CODE_DISABLE_CLAUDE_MDS=1` stops it reading CLAUDE.md files from the folders above the project, where it would find `~/.claude/CLAUDE.md` again. The rest are telemetry: OTLP over `http/json` to the sink, `OTEL_METRICS_INCLUDE_ENTRYPOINT=true`, prompt, response and tool logging off. Claude Code ignores telemetry variables set in project settings, so they have to come from this shell.
 
@@ -39,14 +39,16 @@ If no `hooks/` folder appears in `ROOT/runs/cli` after step 2 below, open `/hook
 | 1 | Run `claude`. The first time, it asks you to pick a theme and sign in, because `ROOT/claude-home` is new: do both. Accept the folder trust dialog if it appears: hooks don't run in a folder until it's accepted | `SessionStart` (`source` startup) |
 | 2 | Type, don't paste, the first prompt below | `UserPromptSubmit`, `Stop` |
 | 3 | Copy the three-line block below and paste it as one prompt, then press Enter | `UserPromptSubmit` with the pasted text expanded, `Stop` |
-| 4 | Type the step 4 prompt. When Claude asks to edit `wordcount.py`, wait 10 seconds without touching anything, then accept once, not "always" | `PermissionRequest`, `Notification` (permission prompt), `PostToolUse` (Edit), `Stop` |
-| 5 | Type the step 5 prompt and accept the new file | `PermissionRequest`, `PostToolUse` (Write), `Stop` |
-| 6 | Type the step 6 prompt. When it asks to run `rm`, answer no | `PermissionRequest`, and no `PostToolUse` |
-| 7 | Type the step 7 prompt and accept the command | `PostToolUse` (Bash), `Stop` |
-| 8 | Type the step 8 prompt and accept the command. One test fails | `PostToolUse` (Bash) with the failure, `Stop` |
+| 4 | Type the step 4 prompt. When Claude asks to edit `wordcount.py`, wait 10 seconds without touching anything, then accept once, not "always" | `PermissionRequest`, `Notification` (permission prompt), `PostToolUse` (Edit), `Stop`, and `claude_code.tool_decision` in the sink's OTLP logs |
+| 5 | Type the step 5 prompt and accept the new file | `PermissionRequest`, `PostToolUse` (Write), `Stop`, `claude_code.tool_decision` |
+| 6 | Type the step 6 prompt. When it asks to run `rm`, answer no | `PermissionRequest`, a `claude_code.tool_decision` reject, and no `PostToolUse` |
+| 22 | Type the step 22 prompt and touch nothing. The capture's `PermissionRequest` hook allows the write after 2 seconds | `PermissionRequest`, a `claude_code.tool_decision` whose `source` says a hook decided, `PostToolUse` (Write), `Stop`, and the decision the hook sent in the run folder's `allow-once`. Whether `Notification` fires is one of the things this capture finds out |
+| 23 | In a third terminal, run the step 23 command, while Claude Code is still open | `connections` in the run folder: a `p` line (the pid) and a `c` line (the executable name) for each process holding one of the sink's connections, the sink and the harness. Whether that harness process is the `claude` the hooks name as their parent is what this step finds out |
+| 7 | Type the step 7 prompt and accept the command | `PermissionRequest`, `PostToolUse` (Bash), `Stop`, `claude_code.tool_decision` |
+| 8 | Type the step 8 prompt and accept the command. One test fails | `PermissionRequest`, `PostToolUse` (Bash) with the failure, `Stop`, `claude_code.tool_decision` |
 | 9 | Type the step 9 prompt. As soon as Claude starts working, press Esc once | `UserPromptSubmit`, and no `Stop` |
 | 10 | Type the step 10 prompt and accept what it asks | `SubagentStart`, `SubagentStop`, `Stop`, a subagent transcript |
-| 20 | Type the step 20 prompt and accept the command. Claude starts a second Claude Code with its Bash tool | `PermissionRequest` and `PostToolUse` (Bash) for the command, `Stop`. From the nested run: `SessionStart`, `UserPromptSubmit`, `Stop` and `SessionEnd` with a `session_id` of their own, whose `parents` show claude under claude, and a transcript of its own |
+| 20 | Type the step 20 prompt and accept the command. Claude starts a second Claude Code with its Bash tool | `PermissionRequest`, `claude_code.tool_decision` and `PostToolUse` (Bash) for the command, `Stop`. From the nested run: `SessionStart`, `UserPromptSubmit`, `Stop` and `SessionEnd` with a `session_id` of their own, whose `parents` show claude under claude, and a transcript of its own |
 | 11 | After Claude answers, don't type anything for 75 seconds | `Notification` (idle prompt) |
 | 12 | Type the step 12 command, then wait about two and a half minutes without typing, so the loop fires twice. Then type the step 12 follow-up | `UserPromptSubmit` per loop run with no human mark, `Stop` with `session_crons` |
 | 13 | Type the step 13 command. While it's still working, do step 21, then let it run to the end, accepting edits and test runs | `Stop` with `stop_hook_active` on the continued turns |
@@ -87,6 +89,24 @@ Step 6:
 
 ```text
 Delete README.md with a shell command.
+```
+
+Step 22, which the capture's hook answers:
+
+```text
+Create a file named hook-allowed.txt holding the single line: capture test
+```
+
+Step 23, in a third terminal. It names no user. On macOS and Linux:
+
+```sh
+lsof -nP -iTCP:4318 -sTCP:ESTABLISHED -Fpc >> ROOT/runs/cli/connections
+```
+
+On Windows, in PowerShell:
+
+```powershell
+Get-NetTCPConnection -RemotePort 4318 -State Established | ForEach-Object { Get-Process -Id $_.OwningProcess } | Select-Object Id, ProcessName | Out-File -Append -Encoding utf8 ROOT\runs\cli\connections
 ```
 
 Step 7:
@@ -161,7 +181,7 @@ claude -p "Reply with the number of functions in wordcount.py and nothing else."
 
 ### The VS Code run
 
-Quit VS Code completely, including any window in the background. Run `prepare.py claude_code ROOT vscode`, restart the sink on `ROOT/runs/vscode`, set the variables it printed in a terminal, and start VS Code from that terminal with `code ROOT/projects/vscode`, so the extension inherits them and uses `ROOT/claude-home` too. Open the Claude Code panel and do steps 1, 2, 3, 4, 7, 9, 10 and 16. Close the panel's session from its menu for step 16.
+Quit VS Code completely, including any window in the background. Run `prepare.py claude_code ROOT vscode`, restart the sink on `ROOT/runs/vscode`, set the variables it printed in a terminal, and start VS Code from that terminal with `code ROOT/projects/vscode`, so the extension inherits them and uses `ROOT/claude-home` too. Open the Claude Code panel and do steps 1, 2, 3, 4, 22, 23, 7, 9, 10 and 16, with step 23 writing to `ROOT/runs/vscode/connections`. Close the panel's session from its menu for step 16.
 
 The Desktop app's Code tab doesn't read a terminal's variables, so it can't be pointed at `ROOT/claude-home` and would load your own instructions and plugins. Don't capture it with this kit: `collect.py` refuses any session whose transcript is outside `ROOT/claude-home`.
 
