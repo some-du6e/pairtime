@@ -179,6 +179,16 @@ func TestRemove(t *testing.T) {
 			src: "[ // c\n  1]", i: 0, want: "[ // c\n  ]"},
 		{name: "an element followed by its own comment can join a commented line, comment to comment",
 			src: "[ // c\n  1, // one\n  2\n]", i: 0, want: "[ // c // one\n  2\n]"},
+		{name: "the last element on one line goes with the comma before it, and a comment after the element before stays",
+			src: "[1 /* keep */, 2]", i: 1, want: "[1 /* keep */]"},
+		{name: "the last element on one line goes with the comma before it, and a comment after that comma stays",
+			src: "[1, /* keep */ 2]", i: 1, want: "[1 /* keep */ ]"},
+		{name: "the last element with a trailing comma keeps a comment before it, and the comma before it stays",
+			src: "[1, /* keep */ 2,]", i: 1, want: "[1, /* keep */ ]"},
+		{name: "an element on one line goes with its comma, and a comment before the next element stays",
+			src: "[1, /* keep */ 2]", i: 0, want: "[/* keep */ 2]"},
+		{name: "a member goes with its comma, and a comment line before the next member stays on its line",
+			src: "{\"a\": 1,\n  // keep\n  \"b\": 2}", i: 0, want: "{\n  // keep\n  \"b\": 2}"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
