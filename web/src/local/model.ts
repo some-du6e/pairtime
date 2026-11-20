@@ -1,228 +1,192 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-// The dashboard's views of GET /v1/days: each project's chess clock summed
-// over a span of days, the day's and the week's clocks across projects,
-// the reasons and kinds in plain words, and the geometry of every bar.
-// Pure functions over the API's types, so vitest checks the arithmetic the
-// pages show.
+// The dashboard's views of the agent's tallies (GET /v1/days/{date}, GET
+// /v1/sessions/last): a project's time as `pairtime today` shows it
+// (cmd/pairtime/views.go's buildProject, one for one), tallies summed over
+// days and across projects, and the geometry of every bar. Pure functions,
+// so vitest checks the arithmetic the pages show.
 
-import type { ByEvidence, Day, Harness, Kind, Project, ProjectDay, Reason } from './api.ts';
-import { agentOnly, kinds, reasons } from './copy.ts';
-import { agentName } from './format.ts';
+import type { Day, Harness, Kind, Level, Reason, Tally } from './api.ts';
+import * as text from './text.ts';
 
-/** What the page calls a project the agent has no name for. */
-export const unnamed = 'A project without a name';
-
-/** One project's chess clock over a span of days (DESIGN 3.8), or several projects' together. */
-export interface ProjectClock {
+/** A project's time over a span, as the views show it. */
+export interface ProjectView {
 	key: string;
-	name: string;
-	/** Your time, pending minutes included. */
-	credited: number;
-	/** The part of credited that isn't final yet. */
+	/** Its name, or its key when the agent has none, as the CLI shows it. */
+	title: string;
+	/** Your time; absent while calibrating (display.shadow, DESIGN 6.7). */
+	you?: YourTime;
+	/** Each agent's time on its own, the most first. */
+	agents: AgentTime[];
+	/** The rest of the uncredited time by reason, the most first, without the agent's. */
+	other: OtherTime[];
+}
+
+export interface YourTime {
+	s: number;
+	/** The part of s that may still change. */
 	pending: number;
-	/** The final part of credited, by level. */
-	evidence: ByEvidence;
-	byKind: Partial<Record<Kind, number>>;
-	uncredited: Partial<Record<Reason, number>>;
-	/** Seconds in which any agent of the project ran; across projects, each project's added up. */
-	agentRunning: number;
-	/** Each agent's time, longest first. */
-	agents: { harness: Harness; running: number }[];
+	/** s by activity kind, the most first. */
+	kinds: { kind: Kind; words: string; s: number }[];
+	/** s by evidence level, in the order A, B, C, with whole-percent shares that add up to 100. */
+	levels: { level: Level; words: string; s: number; share: number }[];
 }
 
-/** A project's name, or what the page calls one without a name. */
-export function nameOf(key: string, projects: Project[]): string {
-	const name = projects.find((p) => p.key === key)?.name ?? '';
-	return name.trim() === '' ? unnamed : name;
-}
-
-function newClock(key: string, name: string): ProjectClock {
-	return {
-		key,
-		name,
-		credited: 0,
-		pending: 0,
-		evidence: { A: 0, B: 0, C: 0 },
-		byKind: {},
-		uncredited: {},
-		agentRunning: 0,
-		agents: [],
-	};
-}
-
-function addTo<K extends string>(sum: Partial<Record<K, number>>, more: Partial<Record<K, number>>): void {
-	for (const [k, v] of Object.entries(more) as [K, number | undefined][]) {
-		if (typeof v === 'number' && v > 0) {
-			sum[k] = (sum[k] ?? 0) + v;
-		}
-	}
-}
-
-function addAgent(c: ProjectClock, harness: Harness, running: number): void {
-	const same = c.agents.find((x) => x.harness === harness);
-	if (same) {
-		same.running += running;
-	} else {
-		c.agents.push({ harness, running });
-	}
-}
-
-function addDay(c: ProjectClock, pd: ProjectDay): void {
-	c.credited += pd.credited_s;
-	c.pending += pd.pending_s;
-	c.evidence = {
-		A: c.evidence.A + pd.by_evidence.A,
-		B: c.evidence.B + pd.by_evidence.B,
-		C: c.evidence.C + pd.by_evidence.C,
-	};
-	addTo(c.byKind, pd.by_kind);
-	addTo(c.uncredited, pd.uncredited);
-	c.agentRunning += pd.agent_running_s;
-	for (const a of pd.agents) {
-		addAgent(c, a.harness, a.running_s);
-	}
-}
-
-function sortAgents(c: ProjectClock): ProjectClock {
-	c.agents.sort((a, b) => b.running - a.running || a.harness.localeCompare(b.harness));
-	return c;
-}
-
-/**
- * Every project the days name, summed into one clock each. The busiest
- * come first: most of your time, then most agent time. While shadow is on
- * they go by name instead, so the order doesn't give away the hidden
- * numbers (DESIGN 6.7).
- */
-export function clocks(days: Day[], projects: Project[], shadow = false): ProjectClock[] {
-	const byKey = new Map<string, ProjectClock>();
-	for (const day of days) {
-		for (const pd of day.projects) {
-			let c = byKey.get(pd.project);
-			if (!c) {
-				c = newClock(pd.project, nameOf(pd.project, projects));
-				byKey.set(pd.project, c);
-			}
-			addDay(c, pd);
-		}
-	}
-	return [...byKey.values()]
-		.map(sortAgents)
-		.sort(
-			(a, b) =>
-				(shadow ? 0 : b.credited - a.credited || b.agentRunning - a.agentRunning) ||
-				a.name.localeCompare(b.name) ||
-				a.key.localeCompare(b.key),
-		);
-}
-
-/**
- * Several clocks as one, such as all of today's projects: your time added
- * up, and each agent's time added up across the projects it ran in.
- */
-export function combine(cs: ProjectClock[], key = 'all', name = 'All projects'): ProjectClock {
-	const all = newClock(key, name);
-	for (const c of cs) {
-		all.credited += c.credited;
-		all.pending += c.pending;
-		all.evidence = {
-			A: all.evidence.A + c.evidence.A,
-			B: all.evidence.B + c.evidence.B,
-			C: all.evidence.C + c.evidence.C,
-		};
-		addTo(all.byKind, c.byKind);
-		addTo(all.uncredited, c.uncredited);
-		all.agentRunning += c.agentRunning;
-		if (c.agents.length === 0 && c.agentRunning > 0) {
-			addAgent(all, 'other', c.agentRunning);
-		}
-		for (const a of c.agents) {
-			addAgent(all, a.harness, a.running);
-		}
-	}
-	return sortAgents(all);
-}
-
-/** One agent's hand on a clock, by the name its clock goes by. */
-export interface Hand {
-	key: string;
+export interface AgentTime {
+	harness: Harness;
 	name: string;
-	running: number;
+	s: number;
+}
+
+export interface OtherTime {
+	reason: Reason;
+	words: string;
+	s: number;
+}
+
+const levelOrder: Level[] = ['A', 'B', 'C'];
+
+/** Go's strings.Compare, which the CLI breaks ties with. */
+function byCode(a: string, b: string): number {
+	return a < b ? -1 : a > b ? 1 : 0;
+}
+
+/** The most seconds first, then by code (views.go's most). */
+function most(sa: number, sb: number, ca: string, cb: string): number {
+	return sb - sa || byCode(ca, cb);
+}
+
+function entries<K extends string>(m: Partial<Record<K, number>>): [K, number][] {
+	return (Object.entries(m) as [K, number | undefined][]).filter((e): e is [K, number] => typeof e[1] === 'number');
 }
 
 /**
- * The agents' hands on a clock. When the agent couldn't tell which agent
- * ran, they share one hand, "Your agents".
+ * The agent whose answers a project's credited time went with: the one
+ * harness that had a session there, or "your agent" when there were none
+ * or several (views.go's agentOf).
  */
-export function agentHands(c: ProjectClock): Hand[] {
-	const named = c.agents
-		.filter((a) => a.running > 0)
-		.map((a) => ({ key: a.harness, name: agentName(a.harness), running: a.running }));
-	if (named.length === 0 && c.agentRunning > 0) {
-		return [{ key: 'agents', name: 'Your agents', running: c.agentRunning }];
+export function agentOf(byHarness: Tally['agent_only_by_harness']): string {
+	const harnesses = Object.keys(byHarness);
+	return harnesses.length === 1 ? text.agent(harnesses[0] ?? 'other') : text.agent('other');
+}
+
+/** Each agent's time on its own, the most first, leaving out harnesses at 0 (views.go's agentList). */
+export function agentList(byHarness: Tally['agent_only_by_harness']): AgentTime[] {
+	const sum = new Map<Harness, number>();
+	for (const [h, s] of entries(byHarness)) {
+		if (s > 0) {
+			sum.set(h, (sum.get(h) ?? 0) + s);
+		}
 	}
-	return named;
+	return [...sum]
+		.map(([harness, s]) => ({ harness, name: text.agent(harness), s }))
+		.sort((a, b) => most(a.s, b.s, a.harness, b.harness));
 }
 
-/** The name of a clock's one agent, when it has exactly one. */
-export function soleAgent(c: ProjectClock): string | undefined {
-	const hands = agentHands(c);
-	return hands.length === 1 ? hands[0]?.name : undefined;
+/** A project's tally as the views show it (views.go's buildProject). */
+export function buildProject(key: string, name: string, t: Tally, calibrating: boolean): ProjectView {
+	const agentName = agentOf(t.agent_only_by_harness);
+	const view: ProjectView = { key, title: name !== '' ? name : key, agents: agentList(t.agent_only_by_harness), other: [] };
+	if (!calibrating) {
+		const kinds = entries(t.credited_by_kind)
+			.filter(([, s]) => s > 0)
+			.map(([k, s]) => ({ kind: k, words: text.kind(k, agentName), s }))
+			.sort((a, b) => most(a.s, b.s, a.kind, b.kind));
+		const shown = levelOrder
+			.map((l) => ({ level: l, s: t.credited_by_evidence[l] ?? 0 }))
+			.filter((l) => l.s > 0);
+		const shares = text.percentages(shown.map((l) => l.s));
+		view.you = {
+			s: t.credited_s,
+			pending: t.pending_s,
+			kinds,
+			levels: shown.map((l, i) => ({ ...l, words: text.level(l.level), share: shares[i] ?? 0 })),
+		};
+	}
+	view.other = entries(t.uncredited)
+		.filter(([r, s]) => s > 0 && !text.isAgentTime(r))
+		.map(([r, s]) => ({ reason: r, words: text.other(r, agentName) || r, s }))
+		.sort((a, b) => most(a.s, b.s, a.reason, b.reason));
+	return view;
 }
 
-/** One day of the week list. */
-export interface DayRow {
-	date: string;
-	clock: ProjectClock;
+/** An empty tally. */
+export function emptyTally(): Tally {
+	return {
+		credited_s: 0,
+		pending_s: 0,
+		credited_by_kind: {},
+		credited_by_evidence: {},
+		agent_only_s: 0,
+		agent_only_by_harness: {},
+		uncredited: {},
+	};
+}
+
+function addInto<K extends string>(sum: Partial<Record<K, number>>, more: Partial<Record<K, number>>): void {
+	for (const [k, v] of entries(more)) {
+		// A harness at 0 still names the agent, so a key is kept at 0.
+		sum[k] = (sum[k] ?? 0) + Math.max(0, v);
+	}
+}
+
+/** The sum of tallies: a project's over several days, or several projects' at once. */
+export function sum(tallies: Tally[]): Tally {
+	const out = emptyTally();
+	for (const t of tallies) {
+		out.credited_s += t.credited_s;
+		out.pending_s += t.pending_s;
+		out.agent_only_s += t.agent_only_s;
+		addInto(out.credited_by_kind, t.credited_by_kind);
+		addInto(out.credited_by_evidence, t.credited_by_evidence);
+		addInto(out.agent_only_by_harness, t.agent_only_by_harness);
+		addInto(out.uncredited, t.uncredited);
+	}
+	return out;
 }
 
 /**
- * The days with your time or an agent's on them, each as one clock, in
- * date order. Days without any are left out, so the week shows what you
- * did and never a gap to fill.
+ * Every project the days name, summed over them into one view each, in
+ * `pairtime today`'s order (today.go's buildToday): the most of your time
+ * first, then the most agent time, then by title. While calibrating, your
+ * time is left out of the order too, so it says nothing about the hidden
+ * numbers.
  */
-export function dayRows(days: Day[]): DayRow[] {
-	return days
-		.map((d) => ({ date: d.date, clock: combine(clocks([d], []), d.date, d.date) }))
-		.filter((r) => r.clock.credited > 0 || r.clock.agentRunning > 0);
+export function projects(days: Day[], calibrating: boolean): ProjectView[] {
+	const byKey = new Map<string, { name: string; tallies: Tally[] }>();
+	for (const d of days) {
+		for (const p of d.projects) {
+			const entry = byKey.get(p.project) ?? { name: p.name, tallies: [] };
+			if (entry.name === '' && p.name !== '') {
+				entry.name = p.name;
+			}
+			entry.tallies.push(p);
+			byKey.set(p.project, entry);
+		}
+	}
+	const summed = [...byKey].map(([key, e]) => ({ key, name: e.name, t: sum(e.tallies) }));
+	summed.sort(
+		(a, b) =>
+			(calibrating ? 0 : b.t.credited_s - a.t.credited_s) ||
+			b.t.agent_only_s - a.t.agent_only_s ||
+			byCode(a.name !== '' ? a.name : a.key, b.name !== '' ? b.name : b.key) ||
+			byCode(a.key, b.key),
+	);
+	return summed.map((p) => buildProject(p.key, p.name, p.t, calibrating));
 }
 
-/** Seconds of one kind or reason, in plain words. */
-export interface Row<K extends string> {
-	key: K;
-	label: string;
-	about: string;
-	seconds: number;
+/** All of the days' projects as one view: the day's or the week's whole clock. */
+export function whole(days: Day[], calibrating: boolean, title: string): ProjectView {
+	return buildProject('all', title, sum(days.flatMap((d) => d.projects)), calibrating);
 }
 
-/**
- * The uncredited seconds in plain words, most first, with only reasons
- * that have any. X.agent_only is named after the agent when one agent ran
- * (DESIGN 3.8).
- */
-export function reasonRows(uncredited: Partial<Record<Reason, number>>, agent?: string): Row<Reason>[] {
-	return reasons
-		.map((w) => ({
-			key: w.reason,
-			label: w.reason === 'X.agent_only' && agent ? agentOnly(agent) : w.label,
-			about: w.about,
-			seconds: uncredited[w.reason] ?? 0,
-		}))
-		.filter((r) => r.seconds > 0)
-		.sort((a, b) => b.seconds - a.seconds);
-}
-
-/** Your time by kind in plain words, most first, with only kinds that have any. */
-export function kindRows(byKind: Partial<Record<Kind, number>>): Row<Kind>[] {
-	return kinds
-		.map((w) => ({ key: w.kind, label: w.label, about: w.about, seconds: byKind[w.kind] ?? 0 }))
-		.filter((r) => r.seconds > 0)
-		.sort((a, b) => b.seconds - a.seconds);
+/** The chess clock line of a view: "you 1h 12m · Claude 2h 40m" (views.go's clock). */
+export function clockLine(v: ProjectView): string {
+	return text.clock(v.you?.s ?? 0, v.you === undefined, v.agents);
 }
 
 /** A bar's parts: your time by level, pending, or an agent's time. */
-export type Part = 'A' | 'B' | 'C' | 'pending' | 'agent';
+export type Part = Level | 'pending' | 'agent';
 
 /** One part of a bar, in a viewBox 100 units wide. */
 export interface Segment {
@@ -253,33 +217,87 @@ export function segments(parts: [Part, number][], scale: number): Segment[] {
 	return out;
 }
 
-/** The parts of a bar of your time: final time by level, then pending. */
-export function yourParts(c: { evidence: ByEvidence; pending: number }): [Part, number][] {
-	return [
-		['A', c.evidence.A],
-		['B', c.evidence.B],
-		['C', c.evidence.C],
-		['pending', c.pending],
-	];
+/**
+ * The parts of a bar of your time: the final part by level, then the
+ * pending part, drawn lighter. The agent counts pending seconds at the level
+ * they have so far, so each level's final part is its share of the final
+ * seconds.
+ */
+export function yourParts(you: YourTime): [Part, number][] {
+	const final = Math.max(0, you.s - you.pending);
+	const leveled = you.levels.reduce((a, l) => a + l.s, 0);
+	const k = leveled > 0 ? final / leveled : 0;
+	return [...you.levels.map((l): [Part, number] => [l.level, l.s * k]), ['pending', you.pending]];
 }
 
 /** The one part of a bar of an agent's time. */
-export function agentParts(running: number): [Part, number][] {
-	return [['agent', running]];
+export function agentParts(s: number): [Part, number][] {
+	return [['agent', s]];
 }
 
-/**
- * The seconds that fill a bar on a page of clocks: the longest hand on any
- * of them, so every bar on the page is drawn to the same scale.
- */
-export function scaleOf(cs: ProjectClock[]): number {
-	let most = 0;
-	for (const c of cs) {
-		most = Math.max(most, c.credited, ...agentHands(c).map((h) => h.running));
+/** The seconds that fill a bar on a page: the longest time any view on it shows, yours or an agent's. */
+export function scaleOf(views: ProjectView[]): number {
+	let longest = 0;
+	for (const v of views) {
+		longest = Math.max(longest, v.you?.s ?? 0, ...v.agents.map((a) => a.s));
 	}
-	return most;
+	return longest;
+}
+
+/** The note a view of your time ends with: how much is level C, and how much may still change. */
+export function notes(you: YourTime): { key: 'level-c' | 'pending'; words: string }[] {
+	const out: { key: 'level-c' | 'pending'; words: string }[] = [];
+	const c = you.levels.find((l) => l.level === 'C');
+	if (c && c.s >= 1) {
+		out.push({ key: 'level-c', words: text.phrase('level_c_note', { time: text.duration(c.s) }) });
+	}
+	if (you.pending >= 1) {
+		out.push({ key: 'pending', words: text.phrase('pending_note', { time: text.duration(you.pending) }) });
+	}
+	return out;
+}
+
+/** The dates from first to last, both included, YYYY-MM-DD. */
+export function dates(first: string, last: string): string[] {
+	const out: string[] = [];
+	const start = Date.parse(`${first}T00:00:00Z`);
+	const end = Date.parse(`${last}T00:00:00Z`);
+	if (Number.isNaN(start) || Number.isNaN(end)) {
+		return out;
+	}
+	for (let t = start; t <= end && out.length < 400; t += 86_400_000) {
+		out.push(new Date(t).toISOString().slice(0, 10));
+	}
+	return out;
+}
+
+/** date plus n days, YYYY-MM-DD. */
+export function addDays(date: string, n: number): string {
+	const t = Date.parse(`${date}T00:00:00Z`);
+	return Number.isNaN(t) ? date : new Date(t + n * 86_400_000).toISOString().slice(0, 10);
+}
+
+/** The Monday on or before date, YYYY-MM-DD: the first day of this week. */
+export function monday(date: string): string {
+	const t = Date.parse(`${date}T00:00:00Z`);
+	if (Number.isNaN(t)) {
+		return date;
+	}
+	const back = (new Date(t).getUTCDay() + 6) % 7;
+	return addDays(date, -back);
 }
 
 function round(n: number): number {
 	return Math.round(n * 100) / 100;
+}
+
+/** "Today", "Yesterday", or the day as the views head it, for a list of days. */
+export function dayLabel(date: string, today: string): string {
+	if (date === today) {
+		return 'Today';
+	}
+	if (date === addDays(today, -1)) {
+		return 'Yesterday';
+	}
+	return text.day(date);
 }

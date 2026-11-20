@@ -39,6 +39,20 @@ function gets(): [string, Operation][] {
 	);
 }
 
+/** Values for the spec's path parameters, so every GET can be asked. */
+const pathValues: Record<string, string> = { date: 'today' };
+
+/** path with each {name} filled from pathValues. */
+function filled(path: string): string {
+	return path.replace(/\{(\w+)\}/g, (m, name: string) => {
+		const value = pathValues[name];
+		if (value === undefined) {
+			throw new Error(`${path} takes {${name}}; give this test a value for it in pathValues`);
+		}
+		return value;
+	});
+}
+
 function bearer(): { Authorization: string } {
 	return { Authorization: `Bearer ${agentToken()}` };
 }
@@ -178,7 +192,7 @@ test('a sign-in link works once; a second browser lands on the expired card', as
 test("the session cookie opens every secured GET in the spec from the dashboard's own page", async ({ browser, request }) => {
 	const { context, page } = await signedIn(browser, request);
 	for (const [path] of gets()) {
-		const status = await page.evaluate(async (p) => (await fetch(p, { cache: 'no-store' })).status, path);
+		const status = await page.evaluate(async (p) => (await fetch(p, { cache: 'no-store' })).status, filled(path));
 		expect(status, path).toBe(200);
 	}
 	await context.close();
@@ -193,12 +207,9 @@ test("a signed-in browser can't get a sign-in link of its own", async ({ browser
 
 test('every secured GET in the spec answers 200 in the shape the spec gives', async ({ request }) => {
 	const ops = gets();
-	expect(ops.map(([path]) => path)).toContain('/v1/days');
+	expect(ops.map(([path]) => path)).toEqual(expect.arrayContaining(['/v1/days/{date}', '/v1/sessions/last']));
 	for (const [path, op] of ops) {
-		if (path.includes('{')) {
-			throw new Error(`${path} takes parameters; give this test values for them`);
-		}
-		const res = await request.get(new URL(path.slice(1), base).href, { headers: bearer() });
+		const res = await request.get(new URL(filled(path).slice(1), base).href, { headers: bearer() });
 		expect(res.status(), path).toBe(200);
 		const schema = op.responses?.['200']?.content?.['application/json']?.schema;
 		if (!schema) {
@@ -208,26 +219,29 @@ test('every secured GET in the spec answers 200 in the shape the spec gives', as
 	}
 });
 
-test('GET /v1/days takes a range and refuses one the spec refuses', async ({ request }) => {
-	const days = (q: string) => request.get(new URL(`v1/days?${q}`, base).href, { headers: bearer() });
-	const res = await days('from=2026-10-22&to=2026-11-20');
+test('GET /v1/days/{date} takes a date or today, and refuses anything else', async ({ request }) => {
+	const day = (date: string) => request.get(new URL(`v1/days/${date}`, base).href, { headers: bearer() });
+	const res = await day('2026-11-20');
 	expect(res.status()).toBe(200);
-	const body = (await res.json()) as { from: string; to: string; days: unknown[] };
-	expect([body.from, body.to, body.days.length]).toEqual(['2026-10-22', '2026-11-20', 30]);
-	expect((await days('from=2026-11-20&to=2026-11-19')).status()).toBe(400);
-	expect((await days('to=tomorrow')).status()).toBe(400);
+	const body: unknown = await res.json();
+	expect(check(body, { $ref: '#/components/schemas/Day' }, spec)).toEqual([]);
+	expect((body as { date: string }).date).toBe('2026-11-20');
+	const today = (await (await day('today')).json()) as { date: string };
+	expect(today.date).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+	expect((await day('2026-02-30')).status()).toBe(400);
+	expect((await day('tomorrow')).status()).toBe(400);
 });
 
 test('without the token or the cookie every secured GET in the spec answers 401, as the spec says', async ({ request }) => {
 	for (const [path] of gets()) {
-		const res = await request.get(new URL(path.slice(1), base).href);
+		const res = await request.get(new URL(filled(path).slice(1), base).href);
 		expect(res.status(), path).toBe(401);
 		expect(res.headers()['www-authenticate'], path).toBe('Bearer realm="pairtime"');
 	}
 });
 
 test('a request from another site gets 403, for the page and the API alike', async ({ request }) => {
-	for (const path of ['', 'v1/status', 'v1/days']) {
+	for (const path of ['', 'v1/status', 'v1/days/today']) {
 		const res = await request.get(new URL(path, base).href, {
 			headers: { Origin: 'https://example.com', Authorization: `Bearer ${agentToken()}` },
 		});

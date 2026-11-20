@@ -152,7 +152,14 @@ export default defineConfig(({ command, mode, isPreview }) => {
 			sourcemap: false,
 			reportCompressedSize: false,
 		},
-		server: { host: '127.0.0.1', port: 5173, strictPort: true },
+		server: {
+			host: '127.0.0.1',
+			port: 5173,
+			strictPort: true,
+			// The dashboard imports the words it shares with the CLI from
+			// internal/coach/text/en.json (src/local/text.ts), outside web/.
+			fs: { allow: [here('.'), here('../internal/coach/text')] },
+		},
 		preview: { host: '127.0.0.1', port: 4173, strictPort: true },
 	};
 });

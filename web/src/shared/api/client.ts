@@ -51,10 +51,16 @@ export type SuccessBody<Op> = Op extends { responses: infer R }
  */
 export type Query = Record<string, string | undefined>;
 
+/**
+ * Values for a path's {name} segments, such as { date: 'today' } for
+ * /v1/days/{date}. Each is URL-encoded into its segment.
+ */
+export type PathParams = Record<string, string>;
+
 export interface Client<Paths> {
 	get<P extends PathsFor<Paths, 'get'>>(
 		path: P,
-		init?: { query?: Query; signal?: AbortSignal },
+		init?: { params?: PathParams; query?: Query; signal?: AbortSignal },
 	): Promise<Result<SuccessBody<Operation<Paths, P, 'get'>>>>;
 	post<P extends PathsFor<Paths, 'post'>>(
 		path: P,
@@ -75,11 +81,26 @@ export function createClient<Paths>(options: ClientOptions = {}): Client<Paths> 
 
 	async function call<T>(
 		method: string,
-		path: string,
+		template: string,
+		params: PathParams | undefined,
 		query: Query | undefined,
 		body: unknown,
 		signal: AbortSignal | undefined,
 	): Promise<Result<T>> {
+		let missing = '';
+		const path = template.replace(/\{(\w+)\}/g, (m, name: string) => {
+			const value = params && Object.hasOwn(params, name) ? params[name] : undefined;
+			if (value === undefined) {
+				missing = name;
+				return m;
+			}
+			return encodeURIComponent(value);
+		});
+		if (missing !== '') {
+			// A caller's mistake, which the types can't catch: say so rather
+			// than send a request with a placeholder in it.
+			return { ok: false, problem: 'unexpected', status: 0, detail: `${template} needs a value for {${missing}}` };
+		}
 		const headers: Record<string, string> = { Accept: 'application/json' };
 		const init: RequestInit = {
 			method,
@@ -133,11 +154,18 @@ export function createClient<Paths>(options: ClientOptions = {}): Client<Paths> 
 	}
 
 	const client: Client<Paths> = {
-		get<P extends PathsFor<Paths, 'get'>>(path: P, init?: { query?: Query; signal?: AbortSignal }) {
-			return call<SuccessBody<Operation<Paths, P, 'get'>>>('GET', path, init?.query, undefined, init?.signal);
+		get<P extends PathsFor<Paths, 'get'>>(path: P, init?: { params?: PathParams; query?: Query; signal?: AbortSignal }) {
+			return call<SuccessBody<Operation<Paths, P, 'get'>>>(
+				'GET',
+				path,
+				init?.params,
+				init?.query,
+				undefined,
+				init?.signal,
+			);
 		},
 		post<P extends PathsFor<Paths, 'post'>>(path: P, init?: { body?: unknown; signal?: AbortSignal }) {
-			return call<SuccessBody<Operation<Paths, P, 'post'>>>('POST', path, undefined, init?.body, init?.signal);
+			return call<SuccessBody<Operation<Paths, P, 'post'>>>('POST', path, undefined, undefined, init?.body, init?.signal);
 		},
 	};
 	return client;

@@ -20,6 +20,8 @@ on:
       - web/**
       - extension/**
       - internal/webui/**
+      # The words the dashboard shares with the CLI views (src/local/text.ts).
+      - internal/coach/text/**
       - docs/api/**
       - internal/agent/**
       - internal/version/**

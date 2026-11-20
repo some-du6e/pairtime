@@ -16,8 +16,10 @@ vite.config.ts writes beside it. A package has code in the build when one of
 its modules renders code into a chunk or is a stylesheet, whose rules go to a
 CSS file, or when the build emits one of its files as an asset. It fails when:
 
-- the build has code from a module that is neither web/src's nor a package's
-  in web/node_modules, such as one a bundler or plugin writes itself;
+- the build has code from a module that is neither pairtime's own, in web/src
+  or in a directory OWN_OUTSIDE names, such as internal/coach/text, nor a
+  package's in web/node_modules, such as one a bundler or plugin writes
+  itself;
 - a package with code in the build is a dev dependency in
   web/package-lock.json, which npm_licenses.py holds only to the licenses
   build tools may have, or the lockfile has another version of it;
@@ -114,9 +116,25 @@ def locate(path):
     return "/".join(parts[: last + 1 + width]), "/".join(parts[last + 1 + width : -1])
 
 
+# Directories outside web/ whose files the dashboard may bundle as
+# pairtime's own code, under its AGPL like web/src: the words the coach, the
+# CLI views and the dashboard share (internal/coach/text, WP-CO0), so a
+# minute reads the same everywhere. Only these: a file elsewhere in the
+# repository may be another project's, such as gitleaks' rules in
+# pkg/redact/rules, and needs its notice.
+OWN_OUTSIDE = ("internal/coach/text/",)
+
+
 def is_own(path):
     parts = path.split("/")
-    return parts[0] == "src" and not {"", ".", ".."} & set(parts)
+    if {"", "."} & set(parts):
+        return False
+    if parts[0] == "src":
+        return ".." not in parts
+    if parts[0] == ".." and ".." not in parts[1:] and "node_modules" not in parts:
+        rest = "/".join(parts[1:])
+        return any(rest.startswith(d) for d in OWN_OUTSIDE)
+    return False
 
 
 def read_report(path):
@@ -551,6 +569,21 @@ def selftest():
             "code from outside web/src and web/node_modules fails",
             lambda w: module(w, "../docs/x.js", 10),
             ["10 bytes of code from ../docs/x.js"],
+        ),
+        (
+            "the words in internal/coach/text, which the dashboard shares with the CLI, are pairtime's own",
+            lambda w: module(w, "../internal/coach/text/en.json", 900),
+            [],
+        ),
+        (
+            "code from beside internal/coach/text fails",
+            lambda w: module(w, "../internal/coach/x.js", 10),
+            ["10 bytes of code from ../internal/coach/x.js"],
+        ),
+        (
+            "a path that climbs out of the repository fails, even through internal/coach/text",
+            lambda w: module(w, "../../internal/coach/text/en.json", 10),
+            ["10 bytes of code from ../../internal/coach/text/en.json"],
         ),
         (
             "a stylesheet from a package needs its notice though it renders no JavaScript",

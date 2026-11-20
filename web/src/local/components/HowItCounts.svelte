@@ -1,17 +1,14 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script lang="ts">
-	import { counts, levels, pendingWords } from '../copy.ts';
-	import { minutesWords } from '../format.ts';
+	import type { Level } from '../api.ts';
+	import { counts, levelWhy, pendingWords } from '../copy.ts';
+	import * as text from '../text.ts';
 
 	// What pairtime counts, why a minute counts at level A, B or C, and what
-	// pending means, in the words of copy.ts.
-	interface Props {
-		/** PENDING_WINDOW_S, from GET /v1/days. */
-		pendingWindowS: number;
-	}
-
-	let { pendingWindowS }: Props = $props();
+	// pending means. Each level is headed by en.json's words for it, which
+	// the CLI uses too, and explained in copy.ts's.
 	const uid = $props.id();
+	const levels: Level[] = ['A', 'B', 'C'];
 </script>
 
 <section class="pt-card how" aria-labelledby="{uid}-title" data-testid="how-it-counts">
@@ -21,17 +18,15 @@
 	{/each}
 	<h3>Why a minute counts at level A, B or C</h3>
 	<dl class="levels">
-		{#each levels as l (l.level)}
-			<div data-level={l.level}>
-				<dt><span class="pt-swatch pt-swatch-{l.level}" aria-hidden="true"></span>Level {l.level}, {l.name.toLowerCase()}</dt>
-				<dd>{l.why}</dd>
+		{#each levels as l (l)}
+			<div data-level={l}>
+				<dt><span class="pt-swatch pt-swatch-{l}" aria-hidden="true"></span>Level {l}: {text.level(l)}</dt>
+				<dd>{levelWhy[l]}</dd>
 			</div>
 		{/each}
 	</dl>
 	<h3>Pending minutes</h3>
-	<p data-testid="pending-words">
-		<span class="pt-swatch pt-swatch-pending" aria-hidden="true"></span>{pendingWords(minutesWords(pendingWindowS))}
-	</p>
+	<p data-testid="pending-words"><span class="pt-swatch pt-swatch-pending" aria-hidden="true"></span>{pendingWords}</p>
 </section>
 
 <style>

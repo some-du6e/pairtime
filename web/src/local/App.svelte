@@ -2,9 +2,9 @@
 <script lang="ts">
 	import type { Result } from '$shared/api/client.ts';
 	import AppShell from '$shared/components/AppShell.svelte';
-	import { api, type Days, type Status } from './api.ts';
+	import { api, type Day, type LastSession, type Status } from './api.ts';
 	import SignedOut from './components/SignedOut.svelte';
-	import { addDays } from './format.ts';
+	import { addDays, dates, monday } from './model.ts';
 	import Privacy from './pages/Privacy.svelte';
 	import Projects from './pages/Projects.svelte';
 	import Settings from './pages/Settings.svelte';
@@ -14,17 +14,21 @@
 	// The local dashboard (DESIGN 3.9; docs/PLAN.md, WP-UI1). `pairtime
 	// dashboard` signs this browser in with a session cookie; until it has,
 	// GET /v1/status answers 401 and the page shows nothing but how to open
-	// it. Signed in, it reads the agent once a minute while the tab is
-	// visible, so pending minutes turn final on their own (DESIGN 3.7), and
-	// never while it is hidden.
+	// it. Signed in, it asks the agent for today and the last session once a
+	// minute while the tab is visible, so pending minutes turn final on their
+	// own (DESIGN 3.7), and never while it is hidden. It reads the routes
+	// `pairtime today` and `recap` read (WP-CO0), GET /v1/days/{date} and
+	// GET /v1/sessions/last, and asks for each earlier day of the span once,
+	// and again only while that day still had pending minutes.
 	const refreshMs = 60_000;
 
 	// Each is replaced whole and never changed in place, so none needs a
 	// deep proxy.
 	let route: Route = $state.raw(parseRoute(location.hash) ?? home);
 	let status: Result<Status> | undefined = $state.raw();
-	let week: Result<Days> | undefined = $state.raw();
-	let month: Result<Days> | undefined = $state.raw();
+	let today: Result<Day> | undefined = $state.raw();
+	let session: Result<LastSession> | undefined = $state.raw();
+	let past: ReadonlyMap<string, Result<Day>> = $state.raw(new Map());
 
 	// GET /signin sends a used or old link to /?signin=expired. The page says
 	// so once, and takes it out of the address bar.
@@ -34,9 +38,27 @@
 	}
 
 	const signedIn = $derived(status?.ok === true);
-	// The days the page shows: the last 30 for Projects' longer span, this
-	// week for everything else.
-	const shown = $derived(route.page === 'projects' && route.range === 'month' ? month : week);
+
+	/** The first day of the span a route shows: this week's Monday, or 29 days before today. */
+	function firstDay(r: Route, date: string): string {
+		return r.page === 'projects' && r.range === 'month' ? addDays(date, -29) : monday(date);
+	}
+
+	/** The span's days that came back, in date order, today last. */
+	function span(first: string, t: Day): Day[] {
+		const out: Day[] = [];
+		for (const date of dates(first, addDays(t.date, -1))) {
+			const got = past.get(date);
+			if (got?.ok) {
+				out.push(got.data);
+			}
+		}
+		out.push(t);
+		return out;
+	}
+
+	const from = $derived(today?.ok ? firstDay(route, today.data.date) : '');
+	const shown = $derived(today?.ok ? span(from, today.data) : []);
 
 	async function refresh(r: Route, signal: AbortSignal): Promise<void> {
 		const s = await api.get('/v1/status', { signal });
@@ -44,12 +66,33 @@
 		if (!s.ok) {
 			return;
 		}
-		const w = await api.get('/v1/days', { signal });
-		week = w;
-		if (r.page === 'projects' && r.range === 'month' && w.ok) {
-			const today = w.data.today;
-			month = await api.get('/v1/days', { signal, query: { from: addDays(today, -29), to: today } });
+		const [t, last] = await Promise.all([
+			api.get('/v1/days/{date}', { params: { date: 'today' }, signal }),
+			api.get('/v1/sessions/last', { signal }),
+		]);
+		today = t;
+		session = last;
+		if (!t.ok || (r.page !== 'today' && r.page !== 'projects')) {
+			return;
 		}
+		// Earlier days change only while they have pending minutes, such as
+		// just after midnight; a day that didn't come back is asked again.
+		const ask = dates(firstDay(r, t.data.date), addDays(t.data.date, -1)).filter((date) => {
+			const got = past.get(date);
+			return !got?.ok || got.data.projects.some((p) => p.pending_s > 0);
+		});
+		if (ask.length === 0) {
+			return;
+		}
+		const got = await Promise.all(ask.map((date) => api.get('/v1/days/{date}', { params: { date }, signal })));
+		const next = new Map(past);
+		ask.forEach((date, i) => {
+			const day = got[i];
+			if (day) {
+				next.set(date, day);
+			}
+		});
+		past = next;
 	}
 
 	$effect(() => {
@@ -130,24 +173,24 @@
 	{:else if route.page === 'privacy'}
 		<Privacy mode={status.data.mode} />
 	{:else if route.page === 'settings'}
-		<Settings status={status.data} shadow={week?.ok ? week.data.shadow : undefined} />
-	{:else if shown === undefined}
+		<Settings status={status.data} shadow={today?.ok ? today.data.shadow : undefined} />
+	{:else if today === undefined}
 		<h1>{titleOf(route)}</h1>
 		<p aria-live="polite">Reading your time…</p>
-	{:else if !shown.ok}
+	{:else if !today.ok}
 		<h1>{titleOf(route)}</h1>
-		{#if shown.problem === 'signed-out'}
+		{#if today.problem === 'signed-out'}
 			<SignedOut expired={false} />
 		{:else}
 			<section class="pt-card" aria-labelledby="days-error-title" data-testid="days-error">
 				<h2 id="days-error-title">pairtime couldn't read your time</h2>
-				<p>{shown.detail || `The agent said ${shown.status}.`}</p>
+				<p>{today.detail || `The agent said ${today.status}.`}</p>
 			</section>
 		{/if}
 	{:else if route.page === 'projects'}
-		<Projects days={shown.data} range={route.range} />
+		<Projects days={shown} range={route.range} {from} to={today.data.date} />
 	{:else}
-		<Today days={shown.data} focus={status.data.focus} />
+		<Today today={today.data} week={shown} session={session?.ok ? session.data : undefined} focus={status.data.focus} />
 	{/if}
 </AppShell>
 

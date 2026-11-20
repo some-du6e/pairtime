@@ -1,40 +1,49 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script lang="ts">
-	import type { Days, Focus } from '../api.ts';
+	import type { Day, Focus, LastSession } from '../api.ts';
 	import Bar from '../components/Bar.svelte';
 	import Clock from '../components/Clock.svelte';
 	import Hands from '../components/Hands.svelte';
 	import HowItCounts from '../components/HowItCounts.svelte';
 	import Rows from '../components/Rows.svelte';
-	import { calibrating, focusWords, shadowWords } from '../copy.ts';
-	import { dayLabel, duration, longDate } from '../format.ts';
-	import { agentParts, clocks, combine, dayRows, reasonRows, scaleOf, yourParts } from '../model.ts';
+	import Session from '../components/Session.svelte';
+	import { focusWords } from '../copy.ts';
+	import { clockLine, dayLabel, projects, scaleOf, whole, yourParts } from '../model.ts';
+	import * as text from '../text.ts';
 
 	// Today (DESIGN 3.9; docs/PLAN.md, WP-UI1): the chess clock for the day
-	// and for each project (DESIGN 3.8), pending minutes drawn lighter,
-	// level-C time labeled, what pairtime didn't count in plain words, and
-	// the week so far. While the desktop hides which window is in front it
-	// says so first (D-focus-unknown).
+	// and for each project (DESIGN 3.8) in the words `pairtime today` uses,
+	// pending minutes drawn lighter, level-C time labeled, the last work
+	// session, the week so far, and how pairtime counts. While the desktop
+	// hides which window is in front it says so first (D-focus-unknown).
 	interface Props {
-		days: Days;
+		/** GET /v1/days/today. */
+		today: Day;
+		/** This week's days up to today, the ones that came back. */
+		week: Day[];
+		/** GET /v1/sessions/last, or undefined until it comes back. */
+		session?: LastSession | undefined;
 		/** From GET /v1/status; absent until the agent reports it (WP-AG6). */
 		focus?: Focus | undefined;
 	}
 
-	let { days, focus }: Props = $props();
+	let { today, week, session, focus }: Props = $props();
 
-	const day = $derived(days.days.find((d) => d.date === days.today));
-	const projects = $derived(day ? clocks([day], days.projects, days.shadow) : []);
-	const all = $derived(combine(projects));
-	const scale = $derived(scaleOf(projects));
-	const left = $derived(day ? reasonRows(day.uncredited) : []);
-	const week = $derived(dayRows(days.days));
-	const weekAll = $derived(combine(week.map((r) => r.clock)));
-	const weekScale = $derived(Math.max(0, ...week.map((r) => Math.max(r.clock.credited, r.clock.agentRunning))));
+	const calibrating = $derived(today.shadow);
+	const day = $derived(whole([today], calibrating, 'today'));
+	const list = $derived(projects([today], calibrating));
+	const scale = $derived(scaleOf(list));
+	// Only days with something on them, so the week shows what you did and
+	// never a gap to fill.
+	const days = $derived(
+		week.filter((d) => d.projects.length > 0).map((d) => ({ date: d.date, view: whole([d], calibrating, d.date) })),
+	);
+	const weekView = $derived(whole(week, calibrating, 'this week'));
+	const weekScale = $derived(scaleOf(days.map((r) => r.view)));
 </script>
 
 <h1>Today</h1>
-<p class="date"><time datetime={days.today}>{longDate(days.today)}</time></p>
+<p class="date"><time datetime={today.date}>{text.day(today.date)}</time></p>
 
 {#if focus && !focus.known}
 	<div class="pt-card note" data-testid="focus-unknown">
@@ -44,77 +53,63 @@
 	</div>
 {/if}
 
-{#if days.shadow}
+{#if calibrating}
 	<div class="pt-card note" data-testid="calibrating">
-		<p>{shadowWords}</p>
+		<p>{text.phrase('calibrating_note')}</p>
 	</div>
 {/if}
 
 <section class="pt-card wide" aria-labelledby="today-title" data-testid="today">
-	<h2 id="today-title">Your time today</h2>
-	{#if days.shadow}
-		<p class="big">{calibrating}</p>
+	<h2 id="today-title">{text.phrase('your_time')} today</h2>
+	{#if today.projects.length === 0}
+		<p data-testid="nothing-yet">{text.phrase('nothing_today')}</p>
 	{:else}
-		<p class="big" data-testid="today-you">{duration(all.credited)}</p>
-	{/if}
-	{#if all.credited > 0 || all.agentRunning > 0}
-		<Hands clock={all} scale={scaleOf([all])} shadow={days.shadow} />
+		<p class="big" data-testid="today-clock">{clockLine(day)}</p>
+		<Hands view={day} scale={scaleOf([day])} />
+		{#if day.other.length > 0}
+			<h3>The rest of the time</h3>
+			<Rows rows={day.other.map((o) => ({ key: o.reason, words: o.words, s: o.s }))} testid="other" />
+		{/if}
 	{/if}
 </section>
 
-<section aria-labelledby="projects-title" class="projects">
-	<h2 id="projects-title">Project by project</h2>
-	{#each projects as c (c.key)}
-		<Clock clock={c} {scale} shadow={days.shadow} />
-	{:else}
-		<p data-testid="nothing-yet">
-			Nothing yet today. When you work on a project with an AI agent, your time shows up here as you go.
-		</p>
-	{/each}
-</section>
-
-{#if !days.shadow && left.length > 0}
-	<section class="pt-card wide" aria-labelledby="left-title" data-testid="left-out">
-		<h2 id="left-title">What pairtime didn't count today</h2>
-		<p class="pt-note">pairtime looked at this time and left it out. Here is what it was.</p>
-		<Rows rows={left} />
+{#if list.length > 0}
+	<section aria-labelledby="projects-title" class="projects">
+		<h2 id="projects-title">Project by project</h2>
+		{#each list as v (v.key)}
+			<Clock view={v} {scale} />
+		{/each}
 	</section>
+{/if}
+
+{#if session}
+	<Session session={session.session} calibrating={session.shadow} />
 {/if}
 
 <section class="pt-card wide" aria-labelledby="week-title" data-testid="week">
 	<h2 id="week-title">This week</h2>
-	{#if week.length === 0}
-		<p>Nothing yet this week.</p>
+	{#if days.length === 0}
+		<p>Nothing tracked yet this week.</p>
 	{:else}
-		<p>
-			Since <time datetime={days.from}>{longDate(days.from)}</time>: you
-			<span data-testid="week-you">{days.shadow ? calibrating.toLowerCase() : duration(weekAll.credited)}</span>,
-			your agents <span data-testid="week-agents">{duration(weekAll.agentRunning)}</span>.
-		</p>
+		<p data-testid="week-clock">{clockLine(weekView)}</p>
 		<table>
-			<caption class="pt-visually-hidden">Each day this week with your time or your agents' time on it</caption>
+			<caption class="pt-visually-hidden">Each day this week with time on it</caption>
 			<thead>
 				<tr>
 					<th scope="col">Day</th>
-					<th scope="col">You</th>
-					<th scope="col">Your agents</th>
+					<th scope="col">Clock</th>
+					<th scope="col"><span class="pt-visually-hidden">Your time</span></th>
 				</tr>
 			</thead>
 			<tbody>
-				{#each week as r (r.date)}
+				{#each days as r (r.date)}
 					<tr data-date={r.date}>
-						<th scope="row">{dayLabel(r.date, days.today)}</th>
-						<td>
-							{#if days.shadow}
-								{calibrating}
-							{:else}
-								<span class="time">{duration(r.clock.credited)}</span>
-								<Bar parts={yourParts(r.clock)} scale={weekScale} />
+						<th scope="row">{dayLabel(r.date, today.date)}</th>
+						<td class="line">{clockLine(r.view)}</td>
+						<td class="bar">
+							{#if r.view.you}
+								<Bar parts={yourParts(r.view.you)} scale={weekScale} />
 							{/if}
-						</td>
-						<td>
-							<span class="time">{duration(r.clock.agentRunning)}</span>
-							<Bar parts={agentParts(r.clock.agentRunning)} scale={weekScale} />
 						</td>
 					</tr>
 				{/each}
@@ -123,7 +118,7 @@
 	{/if}
 </section>
 
-<HowItCounts pendingWindowS={days.pending_window_s} />
+<HowItCounts />
 
 <style>
 	.date {
@@ -145,10 +140,15 @@
 
 	.big {
 		margin: 0 0 0.75rem;
-		font-size: 2.25rem;
+		font-size: 1.5rem;
 		font-weight: 700;
-		line-height: 1.1;
+		line-height: 1.2;
 		font-variant-numeric: tabular-nums;
+	}
+
+	h3 {
+		margin-top: 1rem;
+		font-size: 1rem;
 	}
 
 	.projects {
@@ -177,13 +177,11 @@
 		white-space: nowrap;
 	}
 
-	td {
-		width: 40%;
+	.line {
+		font-variant-numeric: tabular-nums;
 	}
 
-	.time {
-		display: inline-block;
-		min-width: 4.5rem;
-		font-variant-numeric: tabular-nums;
+	.bar {
+		width: 35%;
 	}
 </style>

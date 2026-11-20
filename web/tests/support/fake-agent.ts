@@ -3,12 +3,12 @@
 // A fake pairtime agent for Playwright. The built dashboard runs under
 // `vite preview --mode agent`, and this answers its requests to /v1/ with
 // the answers in fake-days.ts, as the real agent will once WP-AG4's stores
-// serve GET /v1/days. It remembers every request, so a spec can check what
-// the page asked for.
+// serve GET /v1/days/{date} and GET /v1/sessions/last. It remembers every
+// request, so a spec can check what the page asked for.
 
 import type { Page } from '@playwright/test';
 import type { components } from '../../src/gen/local-api.ts';
-import { monthDays, status, weekDays } from './fake-days.ts';
+import { dayReply, lastSession, status } from './fake-days.ts';
 
 type Schemas = components['schemas'];
 
@@ -19,10 +19,10 @@ export interface FakeOptions {
 	focus?: Schemas['Focus'];
 	/** display.shadow. */
 	shadow?: boolean;
-	/** GET /v1/days without parameters; called for each request, so a spec can change it. */
-	week?: () => Schemas['Days'];
-	/** GET /v1/days with from and to. */
-	month?: () => Schemas['Days'];
+	/** GET /v1/days/{date}; called for each request, so a spec can change the answer. */
+	day?: (date: string) => Schemas['Day'];
+	/** GET /v1/sessions/last. */
+	session?: () => Schemas['LastSession'];
 }
 
 export interface Fake {
@@ -45,18 +45,18 @@ export async function fakeAgent(page: Page, options: FakeOptions = {}): Promise<
 			});
 			return;
 		}
-		switch (url.pathname) {
-			case '/v1/status':
-				await route.fulfill({ json: options.focus ? status({ focus: options.focus }) : status() });
-				return;
-			case '/v1/days': {
-				const ranged = url.searchParams.has('from') || url.searchParams.has('to');
-				const days = ranged ? (options.month ?? monthDays)() : (options.week ?? weekDays)();
-				await route.fulfill({ json: { ...days, shadow } });
-				return;
-			}
-			default:
-				await route.fulfill({ status: 404, contentType: 'text/plain; charset=utf-8', body: '404 page not found' });
+		const day = /^\/v1\/days\/([^/]+)$/.exec(url.pathname);
+		if (url.pathname === '/v1/status') {
+			await route.fulfill({ json: options.focus ? status({ focus: options.focus }) : status() });
+		} else if (day?.[1]) {
+			const date = decodeURIComponent(day[1]);
+			const reply = options.day ? options.day(date) : dayReply(date);
+			await route.fulfill({ json: { ...reply, shadow } });
+		} else if (url.pathname === '/v1/sessions/last') {
+			const reply = options.session ? options.session() : lastSession();
+			await route.fulfill({ json: { ...reply, shadow } });
+		} else {
+			await route.fulfill({ status: 404, contentType: 'text/plain; charset=utf-8', body: '404 page not found' });
 		}
 	});
 	return fake;

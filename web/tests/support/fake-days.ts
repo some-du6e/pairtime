@@ -1,193 +1,184 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-// What the fake agent answers, for vitest and Playwright: a week of Sam's
-// from SM 6.3, whose Friday is the five-project afternoon with SM's own
-// totals (207 credited minutes, 93 of the agents', 33 left out), plus a
-// little more for the last 30 days. tests/support/fake.test.ts holds every
-// answer to docs/api/local.openapi.yaml and to the sums the spec promises,
-// so the dashboard is tested against answers the agent may really give.
+// What the fake agent answers, for vitest and Playwright, in the shapes
+// `pairtime today` and `recap` read (cmd/pairtime/localapi.go): a week of
+// Sam's from SM 6.3, whose Friday is the five-project afternoon with SM's
+// credited totals (207 minutes) and agent-only times (93 minutes), a little
+// more for the last 30 days, and a last work session. Thursday has a Claude
+// session with no time of its own, which agent_only_by_harness lists at 0,
+// so its reading still says Claude's name. tests/support/fake.test.ts holds
+// every answer to docs/api/local.openapi.yaml and to the sums it promises.
 
 import type { components } from '../../src/gen/local-api.ts';
 
 type Schemas = components['schemas'];
-type Days = Schemas['Days'];
 type Day = Schemas['Day'];
-type ProjectDay = Schemas['ProjectDay'];
+type DayProject = Schemas['DayProject'];
 
 /** The fake agent's today, a Friday. */
 export const today = '2026-11-20';
 
-export const projects: Schemas['Project'][] = [
-	{ key: 'p_portfolio', name: 'portfolio' },
-	{ key: 'p_bot', name: 'discord-bot' },
-	{ key: 'p_homework', name: 'homework-helper' },
-	{ key: 'p_plant', name: 'plant-sensor' },
-	{ key: 'p_rusty', name: 'rusty-cli' },
-];
+const names: Record<string, string> = {
+	p_portfolio: 'portfolio',
+	p_bot: 'discord-bot',
+	p_homework: 'homework-helper',
+	p_plant: 'plant-sensor',
+	p_rusty: 'rusty-cli',
+};
 
 interface Spec {
 	project: string;
-	A?: number;
-	B?: number;
-	C?: number;
+	byEvidence: Schemas['ByEvidence'];
 	pending?: number;
 	byKind: Schemas['ByKind'];
-	uncredited?: Schemas['Uncredited'];
-	agents?: [Schemas['Harness'], number][];
+	agents?: Schemas['AgentOnlyByHarness'];
+	/** Uncredited seconds other than the agent's, which X.agent_only adds. */
+	other?: Schemas['Uncredited'];
 }
 
-/** A project's day, with credited_s and agent_running_s worked out from the parts. */
-function projectDay(s: Spec): ProjectDay {
-	const byEvidence = { A: s.A ?? 0, B: s.B ?? 0, C: s.C ?? 0 };
-	const agents = (s.agents ?? []).map(([harness, running_s]) => ({ harness, running_s }));
+/** A project's day, with credited_s and agent_only_s added up from the parts. */
+function project(s: Spec): DayProject {
+	const credited = (s.byEvidence.A ?? 0) + (s.byEvidence.B ?? 0) + (s.byEvidence.C ?? 0);
+	const agents = s.agents ?? {};
+	const agentOnly = Object.values(agents).reduce((a: number, b) => a + (b ?? 0), 0);
 	return {
 		project: s.project,
-		credited_s: byEvidence.A + byEvidence.B + byEvidence.C + (s.pending ?? 0),
+		name: names[s.project] ?? '',
+		credited_s: credited,
 		pending_s: s.pending ?? 0,
-		by_evidence: byEvidence,
-		by_kind: s.byKind,
-		uncredited: s.uncredited ?? {},
-		// One agent each, so the union is that agent's time.
-		agent_running_s: Math.max(0, ...agents.map((a) => a.running_s)),
-		agents,
+		credited_by_kind: s.byKind,
+		credited_by_evidence: s.byEvidence,
+		agent_only_s: agentOnly,
+		agent_only_by_harness: agents,
+		uncredited: agentOnly > 0 ? { ...s.other, 'X.agent_only': agentOnly } : { ...s.other },
 	};
 }
 
-function day(date: string, uncredited: Schemas['Uncredited'], specs: Spec[]): Day {
-	return { date, uncredited, projects: specs.map(projectDay) };
+function day(date: string, specs: Spec[], shadow = false): Day {
+	return { date, shadow, projects: specs.map(project) };
 }
 
-/** Friday: SM 6.3's afternoon, with 9 minutes still pending. */
-const friday = day(
-	'2026-11-20',
-	{ 'X.absent': 900, 'X.other_focus': 360, 'X.lookup_cap': 300, 'X.agent_only': 240, 'X.no_anchor': 180 },
-	[
+const days: Record<string, Day> = {
+	'2026-10-27': day('2026-10-27', [{ project: 'p_plant', byEvidence: { A: 2100 }, byKind: { hand_edit: 2100 } }]),
+	'2026-11-03': day('2026-11-03', [
+		{ project: 'p_rusty', byEvidence: { A: 1500 }, byKind: { hand_edit: 900, testing: 600 }, agents: { cursor: 600 } },
+	]),
+	'2026-11-10': day('2026-11-10', [
 		{
 			project: 'p_portfolio',
-			A: 2880,
+			byEvidence: { A: 2400 },
+			byKind: { prompting: 1500, reading_output: 900 },
+			agents: { claude_code: 3000 },
+			other: { 'X.same_error': 120 },
+		},
+	]),
+	'2026-11-16': day('2026-11-16', [
+		{
+			project: 'p_portfolio',
+			byEvidence: { A: 1800 },
+			byKind: { prompting: 1200, reading_output: 600 },
+			agents: { claude_code: 2400 },
+			other: { 'X.absent': 600 },
+		},
+	]),
+	'2026-11-17': day('2026-11-17', []),
+	'2026-11-18': day('2026-11-18', [
+		{
+			project: 'p_bot',
+			byEvidence: { B: 2700 },
+			byKind: { prompting: 1500, reading_output: 900, supervising: 300 },
+			agents: { codex: 600 },
+			other: { 'X.reroll': 240 },
+		},
+		{ project: 'p_rusty', byEvidence: { A: 900 }, byKind: { hand_edit: 900 }, agents: { cursor: 300 } },
+	]),
+	'2026-11-19': day('2026-11-19', [
+		{ project: 'p_plant', byEvidence: { A: 1200 }, byKind: { hand_edit: 1200 } },
+		{
+			project: 'p_homework',
+			byEvidence: { A: 300, C: 300 },
+			byKind: { prompting: 300, reading_output: 300 },
+			agents: { copilot: 900 },
+			other: { 'X.noprog': 150 },
+		},
+		// Reading what Claude wrote the night before: a Claude session, and no
+		// time of Claude's own today.
+		{ project: 'p_portfolio', byEvidence: { A: 600 }, byKind: { reading_output: 600 }, agents: { claude_code: 0 } },
+	]),
+	// SM 6.3's afternoon, with 9 minutes still pending.
+	'2026-11-20': day('2026-11-20', [
+		{
+			project: 'p_portfolio',
+			byEvidence: { A: 3120 },
 			pending: 240,
 			byKind: { prompting: 1500, reading_output: 1080, supervising: 540 },
-			uncredited: { 'X.agent_only': 240 },
-			agents: [['claude_code', 2460]],
+			agents: { claude_code: 2460 },
+			other: { 'X.absent': 900 },
 		},
 		{
 			project: 'p_bot',
-			A: 1800,
-			B: 480,
+			byEvidence: { A: 1800, B: 480 },
 			byKind: { prompting: 1200, reading_output: 780, supervising: 300 },
-			agents: [['codex', 1320]],
+			agents: { codex: 1320 },
+			other: { 'X.other_focus': 360 },
 		},
 		{
 			project: 'p_homework',
-			A: 2160,
-			C: 300,
+			byEvidence: { A: 2160, C: 300 },
 			byKind: { prompting: 900, reviewing: 600, hand_edit: 960 },
-			uncredited: { 'X.no_anchor': 180 },
-			agents: [['copilot', 1080]],
+			agents: { copilot: 1080 },
+			other: { 'X.no_anchor': 180 },
 		},
-		{ project: 'p_plant', A: 1740, byKind: { hand_edit: 1740 } },
+		{ project: 'p_plant', byEvidence: { A: 1740 }, byKind: { hand_edit: 1740 } },
 		{
 			project: 'p_rusty',
-			A: 2520,
+			byEvidence: { A: 2820 },
 			pending: 300,
 			byKind: { hand_edit: 1620, testing: 600, prompting: 360, reviewing: 240 },
-			uncredited: { 'X.lookup_cap': 300 },
-			agents: [['cursor', 720]],
-		},
-	],
-);
-
-const week: Day[] = [
-	day('2026-11-16', { 'X.absent': 600, 'X.agent_only': 300 }, [
-		{
-			project: 'p_portfolio',
-			A: 1800,
-			byKind: { prompting: 1200, reading_output: 600 },
-			uncredited: { 'X.agent_only': 300 },
-			agents: [['claude_code', 2400]],
-		},
-	]),
-	day('2026-11-17', {}, []),
-	day('2026-11-18', { 'X.reroll': 240, 'X.other_focus': 120 }, [
-		{
-			project: 'p_bot',
-			B: 2700,
-			byKind: { prompting: 1500, reading_output: 900, supervising: 300 },
-			uncredited: { 'X.reroll': 240 },
-			agents: [['codex', 600]],
-		},
-		{ project: 'p_rusty', A: 900, byKind: { hand_edit: 900 }, agents: [['cursor', 300]] },
-	]),
-	day('2026-11-19', { 'X.noprog': 150 }, [
-		{ project: 'p_plant', A: 1200, byKind: { hand_edit: 1200 } },
-		{
-			project: 'p_homework',
-			A: 300,
-			C: 300,
-			byKind: { prompting: 300, reading_output: 300 },
-			uncredited: { 'X.noprog': 150 },
-			agents: [['copilot', 900]],
-		},
-	]),
-	friday,
-];
-
-/** GET /v1/days without parameters: this week, Monday to today. */
-export function weekDays(overrides: Partial<Days> = {}): Days {
-	return {
-		today,
-		as_of: '2026-11-20T16:42:00Z',
-		from: '2026-11-16',
-		to: today,
-		pending_window_s: 900,
-		shadow: false,
-		projects,
-		days: week,
-		...overrides,
-	};
-}
-
-/** This week with every pending minute turned final at level A. */
-export function weekFinal(): Days {
-	return weekDays({
-		as_of: '2026-11-20T16:58:00Z',
-		days: week.map((d) => ({
-			...d,
-			projects: d.projects.map((p) => ({
-				...p,
-				pending_s: 0,
-				by_evidence: { ...p.by_evidence, A: p.by_evidence.A + p.pending_s },
-			})),
-		})),
-	});
-}
-
-/** Days before this week that the last 30 days take in, by date. */
-const earlier: Record<string, Day> = {
-	'2026-10-27': day('2026-10-27', {}, [{ project: 'p_plant', A: 2100, byKind: { hand_edit: 2100 } }]),
-	'2026-11-03': day('2026-11-03', {}, [
-		{ project: 'p_rusty', A: 1500, byKind: { hand_edit: 900, testing: 600 }, agents: [['cursor', 600]] },
-	]),
-	'2026-11-10': day('2026-11-10', { 'X.same_error': 120 }, [
-		{
-			project: 'p_portfolio',
-			A: 2400,
-			byKind: { prompting: 1500, reading_output: 900 },
-			uncredited: { 'X.same_error': 120 },
-			agents: [['claude_code', 3000]],
+			agents: { cursor: 720 },
+			other: { 'X.lookup_cap': 300 },
 		},
 	]),
 };
 
-/** The 30 days up to today, 2026-10-22 to 2026-11-20, as GET /v1/days?from=2026-10-22&to=2026-11-20 gives them. */
-export function monthDays(): Days {
-	const days: Day[] = [];
-	const byDate = new Map(week.map((d) => [d.date, d]));
-	for (let t = Date.UTC(2026, 9, 22); t <= Date.UTC(2026, 10, 20); t += 86_400_000) {
-		const date = new Date(t).toISOString().slice(0, 10);
-		days.push(byDate.get(date) ?? earlier[date] ?? { date, uncredited: {}, projects: [] });
+/**
+ * GET /v1/days/{date}: date is YYYY-MM-DD or "today". A day the fixture
+ * has nothing for is empty, as the agent answers for it.
+ */
+export function dayReply(date: string, shadow = false): Day {
+	const d = date === 'today' ? today : date;
+	const found = days[d] ?? day(d, []);
+	return { ...found, shadow };
+}
+
+/** Today with every pending minute turned final. */
+export function todayFinal(): Day {
+	const t = dayReply('today');
+	return { ...t, projects: t.projects.map((p) => ({ ...p, pending_s: 0 })) };
+}
+
+/** GET /v1/sessions/last: rusty-cli's nine minutes this afternoon, or none before the first. */
+export function lastSession(options: { shadow?: boolean; none?: boolean; open?: boolean } = {}): Schemas['LastSession'] {
+	if (options.none) {
+		return { shadow: options.shadow ?? false, session: null };
 	}
-	return weekDays({ from: '2026-10-22', days });
+	return {
+		shadow: options.shadow ?? false,
+		session: {
+			project: 'p_rusty',
+			name: 'rusty-cli',
+			start: '2026-11-20T14:05:00Z',
+			end: '2026-11-20T14:14:00Z',
+			open: options.open ?? false,
+			credited_s: 540,
+			pending_s: 0,
+			credited_by_kind: { hand_edit: 420, testing: 90, prompting: 20, reading_output: 10 },
+			credited_by_evidence: { A: 540 },
+			agent_only_s: 60,
+			agent_only_by_harness: { cursor: 60 },
+			uncredited: { 'X.agent_only': 60 },
+		},
+	};
 }
 
 /** GET /v1/status from an agent that has run since 08:00. */
@@ -205,3 +196,6 @@ export function status(overrides: Partial<Schemas['Status']> = {}): Schemas['Sta
 		...overrides,
 	};
 }
+
+/** The dates the fixture has, for the tests that check every answer. */
+export const fixtureDates = Object.keys(days);

@@ -1,143 +1,140 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-// The dashboard's words held to the spec and to DESIGN 3.8's copy rules.
+// The dashboard's words held to the same rules as the CLI's: en.json's,
+// which internal/coach/text's tests check in Go, and the ones only the
+// dashboard says, in copy.ts.
 
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { describe, expect, test } from 'vitest';
 import { parse } from 'yaml';
-import { agentOnly, calibrating, counts, focusWords, kinds, levels, pendingWords, reasons, shadowWords } from './copy.ts';
-import { agentName } from './format.ts';
+import { counts, focusWords, levelWhy, pendingWords } from './copy.ts';
+import * as text from './text.ts';
+
+// text_test.go's scolding list: words that would make a view nag, shame or
+// set a target (DESIGN 3.8; PA 4.3, 4.4).
+const scolding = [
+	'streak',
+	"don't break",
+	'keep it up',
+	'lose',
+	'lost',
+	'losing',
+	'miss',
+	'behind',
+	'lazy',
+	'wast',
+	'only counted',
+	'should',
+	'must',
+	'have to',
+	'need to',
+	'failed',
+	'goal',
+	'target',
+	'ratio',
+	'%',
+	'!',
+	'uncredited',
+	'not counted',
+	"doesn't count",
+];
+
+/** Every sentence only the dashboard says about your time. */
+const ours = [
+	...counts,
+	...Object.values(levelWhy),
+	pendingWords,
+	...focusWords({ known: false, gnome_extension: 'needs_login' }),
+	...focusWords({ known: false, gnome_extension: 'unticked' }),
+];
 
 interface Spec {
-	components: { schemas: Record<string, { properties?: Record<string, unknown>; enum?: string[] }> };
+	components: { schemas: Record<string, { properties?: Record<string, unknown> }> };
 }
 
 const spec = parse(readFileSync(new URL('../../../docs/api/local.openapi.yaml', import.meta.url), 'utf8')) as Spec;
-const schemas = spec.components.schemas;
 
 function names(schema: string): string[] {
-	const s = schemas[schema];
-	return s?.enum ?? Object.keys(s?.properties ?? {});
+	return Object.keys(spec.components.schemas[schema]?.properties ?? {});
 }
 
-/** Every sentence the dashboard can say about your time. */
-const everything = [
-	...counts,
-	...levels.flatMap((l) => [l.name, l.why]),
-	pendingWords('15 minutes'),
-	shadowWords,
-	calibrating,
-	...focusWords({ known: false, gnome_extension: 'needs_login' }),
-	...focusWords({ known: false, gnome_extension: 'unticked' }),
-	...kinds.flatMap((k) => [k.label, k.about]),
-	...reasons.flatMap((r) => [r.label, r.about]),
-	agentOnly('Claude'),
-];
+describe("the dashboard's words keep the CLI's rules", () => {
+	for (const s of [...ours, ...text.entries().map((e) => e.s)]) {
+		test(`"${s.slice(0, 48)}…" doesn't scold, set a target or count a streak`, () => {
+			const low = s.toLowerCase();
+			expect(scolding.filter((w) => low.includes(w))).toEqual([]);
+		});
+	}
+	test('no sentence uses an em dash or a curly quote', () => {
+		for (const s of ours) {
+			expect(s, s).not.toMatch(/[\u2014\u2013\u2018\u2019\u201c\u201d]/);
+		}
+	});
+});
 
 describe('the words cover the spec', () => {
-	const cases: { name: string; got: () => string[]; want: () => string[] }[] = [
-		{ name: 'every activity kind has words, in the spec\'s order', got: () => kinds.map((k) => k.kind), want: () => names('ByKind') },
+	const cases: { name: string; covered: (code: string) => boolean; schema: string }[] = [
+		{ name: 'every activity kind has words in en.json', covered: (k) => text.kind(k, 'Claude') !== k, schema: 'ByKind' },
+		{ name: 'every harness has a name in en.json', covered: (h) => h === 'other' || text.agent(h) !== text.agent('other'), schema: 'AgentOnlyByHarness' },
 		{
-			name: 'every uncredited reason has words, in the spec\'s order',
-			got: () => reasons.map((r) => r.reason),
-			want: () => names('Uncredited'),
+			name: "every uncredited reason is the agent's time or has words in en.json",
+			covered: (r) => text.isAgentTime(r) || text.other(r, 'Claude') !== '',
+			schema: 'Uncredited',
 		},
-		{ name: 'every evidence level has words, in the spec\'s order', got: () => levels.map((l) => l.level), want: () => names('ByEvidence') },
-		{
-			name: 'every harness has a name for its clock that is more than its code',
-			got: () => names('Harness').filter((h) => agentName(h as Parameters<typeof agentName>[0]) !== h),
-			want: () => names('Harness'),
-		},
+		{ name: 'every evidence level has words in en.json and an explanation here', covered: (l) => text.level(l) !== '' && l in levelWhy, schema: 'ByEvidence' },
 	];
 	for (const c of cases) {
 		test(c.name, () => {
-			expect(c.want().length).toBeGreaterThan(0);
-			expect(c.got()).toEqual(c.want());
+			const codes = names(c.schema);
+			expect(codes.length).toBeGreaterThan(0);
+			expect(codes.filter((code) => !c.covered(code))).toEqual([]);
 		});
 	}
 });
 
-describe("DESIGN 3.8's copy rules", () => {
+describe('the words say what is true', () => {
 	const cases: { name: string; check: () => void }[] = [
 		{
-			name: 'nothing talks about streaks, goals, targets, ratios or percentages',
+			name: "D-focus-unknown's sentence is the decided one, word for word",
+			check: () =>
+				expect(focusWords({ known: false })).toEqual([
+					"This desktop doesn't tell pairtime which window is in front, so your time here counts only on your own dashboard, not on your profile, build days or most programs.",
+				]),
+		},
+		{
+			name: 'on GNOME before the extension runs, it says to log out and back in',
+			check: () =>
+				expect(focusWords({ known: false, gnome_extension: 'needs_login' })[1]).toBe(
+					"Log out and back in once to turn on pairtime's GNOME extension.",
+				),
+		},
+		{
+			name: 'on GNOME with the extension left out, it says to install again',
+			check: () =>
+				expect(focusWords({ known: false, gnome_extension: 'unticked' })[1]).toBe(
+					"Run pairtime install again and keep pairtime's GNOME extension.",
+				),
+		},
+		{
+			name: "the pending words' 15 minutes are PENDING_WINDOW_S in every parameter table",
 			check: () => {
-				for (const s of everything) {
-					expect(s, s).not.toMatch(/streak|goal|target|ratio|percent|%|score\b|rank/i);
+				const dir = new URL('../../../pkg/params/tables/', import.meta.url);
+				const files = readdirSync(dir).filter((f) => f.endsWith('.json'));
+				expect(files.length).toBeGreaterThan(0);
+				for (const f of files) {
+					const t = JSON.parse(readFileSync(new URL(f, dir), 'utf8')) as { params: Record<string, unknown> };
+					expect(t.params.PENDING_WINDOW_S, f).toBe(900);
 				}
+				expect(pendingWords).toContain('15 minutes');
 			},
 		},
 		{
-			name: 'nothing scolds: no "only", "failed", "lazy", "cheat", "wasted" or "should have"',
-			check: () => {
-				for (const s of everything) {
-					expect(s, s).not.toMatch(/\bonly\s+\d|fail|lazy|cheat|wast|should have|you didn't|not enough/i);
-				}
-			},
-		},
-		{
-			name: 'half-weighted time says DESIGN 3.8\'s words: "on hold: these come back when you fix it"',
-			check: () => {
-				const noprog = reasons.find((r) => r.reason === 'X.noprog');
-				expect(noprog?.label).toBe('On hold');
-				expect(noprog?.about).toContain('On hold: these come back when you fix it.');
-			},
-		},
-		{
-			name: "agent-only time is named after the agent that ran",
-			check: () => {
-				expect(agentOnly('Claude')).toBe('Claude working on its own');
-			},
-		},
-		{
-			name: 'every loop says what ends it, so it reads as a lesson',
-			check: () => {
-				for (const reason of ['X.reroll', 'X.rewrite_loop', 'X.same_error', 'X.autopilot'] as const) {
-					expect(reasons.find((r) => r.reason === reason)?.about, reason).toMatch(/ends it|ends the loop|starts the count over/);
-				}
-			},
-		},
-		{
-			name: 'level C says where its time counts and where it doesn\'t (DESIGN 6.2 D11)',
-			check: () => {
-				expect(levels.find((l) => l.level === 'C')?.why).toContain(
-					'counts here on your dashboard, but not on your profile, your build days or most programs',
-				);
-			},
-		},
-		{
-			name: "no sentence uses an em dash or a curly quote",
-			check: () => {
-				for (const s of everything) {
-					expect(s, s).not.toMatch(/[\u2014\u2013\u2018\u2019\u201c\u201d]/);
-				}
-			},
+			name: 'level C says where its time shows and where it doesn\'t (DESIGN 6.2 D11)',
+			check: () =>
+				expect(levelWhy.C).toContain('shows here on your dashboard, but not on your profile, your build days or most programs'),
 		},
 	];
 	for (const c of cases) {
 		test(c.name, c.check);
-	}
-});
-
-describe("D-focus-unknown's sentence", () => {
-	const sentence =
-		"This desktop doesn't tell pairtime which window is in front, so your time here counts only on your own dashboard, not on your profile, build days or most programs.";
-	const cases: { name: string; focus: Parameters<typeof focusWords>[0]; want: string[] }[] = [
-		{ name: 'on a desktop that hides focus it is the decided sentence, word for word', focus: { known: false }, want: [sentence] },
-		{
-			name: "on GNOME before the extension runs it says to log out and back in",
-			focus: { known: false, gnome_extension: 'needs_login' },
-			want: [sentence, "Log out and back in once to turn on pairtime's GNOME extension."],
-		},
-		{
-			name: 'on GNOME with the extension left out it says to install again',
-			focus: { known: false, gnome_extension: 'unticked' },
-			want: [sentence, "Run pairtime install again and keep pairtime's GNOME extension."],
-		},
-	];
-	for (const c of cases) {
-		test(c.name, () => {
-			expect(focusWords(c.focus)).toEqual(c.want);
-		});
 	}
 });

@@ -1,49 +1,47 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script lang="ts">
-	import { calibrating } from '../copy.ts';
-	import { duration } from '../format.ts';
-	import { agentHands, agentParts, type ProjectClock, yourParts } from '../model.ts';
+	import { agentParts, type ProjectView, yourParts } from '../model.ts';
+	import * as text from '../text.ts';
 	import Bar from './Bar.svelte';
 	import Legend from './Legend.svelte';
 
-	// A chess clock's hands (DESIGN 3.8): your time beside each agent's, as
-	// information, never as a ratio to aim for (PA 4.3). While shadow is on,
-	// your time reads "Calibrating" and the agents' time stays (DESIGN 6.7).
+	// A chess clock's hands (DESIGN 3.8): your time beside each agent's time
+	// on its own, as information, never as a ratio to aim for (PA 4.3), each
+	// with a bar drawn to the page's scale. While calibrating, your time
+	// reads "calibrating" and the agents' time stays (DESIGN 6.7).
 	interface Props {
-		clock: ProjectClock;
+		view: ProjectView;
 		/** The seconds that fill a bar, the same for every clock on a page. */
 		scale: number;
-		shadow: boolean;
 	}
 
-	let { clock, scale, shadow }: Props = $props();
-	const hands = $derived(agentHands(clock));
+	let { view, scale }: Props = $props();
 </script>
 
 <dl class="hands">
 	<div class="hand">
-		<dt>You</dt>
+		<dt>{text.sentence(text.phrase('your_time'))}</dt>
 		<dd>
-			{#if shadow}
-				<span class="time" data-testid="you">{calibrating}</span>
+			{#if view.you}
+				<span class="time" data-testid="you">{text.duration(view.you.s)}</span>
+				<Bar parts={yourParts(view.you)} {scale} />
 			{:else}
-				<span class="time" data-testid="you">{duration(clock.credited)}</span>
-				<Bar parts={yourParts(clock)} {scale} />
+				<span class="time" data-testid="you">{text.phrase('calibrating')}</span>
 			{/if}
 		</dd>
 	</div>
-	{#each hands as h (h.key)}
+	{#each view.agents as a (a.harness)}
 		<div class="hand" data-testid="agent">
-			<dt>{h.name}</dt>
+			<dt>{text.sentence(text.agentTime(a.name))}</dt>
 			<dd>
-				<span class="time">{duration(h.running)}</span>
-				<Bar parts={agentParts(h.running)} {scale} />
+				<span class="time">{text.duration(a.s)}</span>
+				<Bar parts={agentParts(a.s)} {scale} />
 			</dd>
 		</div>
 	{/each}
 </dl>
-{#if !shadow}
-	<Legend evidence={clock.evidence} pending={clock.pending} />
+{#if view.you}
+	<Legend you={view.you} />
 {/if}
 
 <style>
@@ -55,7 +53,7 @@
 
 	.hand {
 		display: grid;
-		grid-template-columns: minmax(5rem, 8rem) 1fr;
+		grid-template-columns: minmax(7rem, 14rem) 1fr;
 		align-items: center;
 		gap: 0.75rem;
 	}
@@ -67,7 +65,7 @@
 
 	dd {
 		display: grid;
-		grid-template-columns: 4.5rem 1fr;
+		grid-template-columns: 4.75rem 1fr;
 		align-items: center;
 		gap: 0.75rem;
 		margin: 0;
@@ -75,5 +73,12 @@
 
 	.time {
 		font-variant-numeric: tabular-nums;
+	}
+
+	@media (max-width: 30rem) {
+		.hand {
+			grid-template-columns: 1fr;
+			gap: 0.25rem;
+		}
 	}
 </style>

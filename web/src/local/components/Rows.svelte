@@ -1,26 +1,29 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script lang="ts">
-	import { duration } from '../format.ts';
-	import type { Row } from '../model.ts';
+	import * as text from '../text.ts';
 
-	// Seconds by kind or by reason, each with what it was in plain words.
+	// Time by kind or by reason, each in en.json's words, as `pairtime today`
+	// lists them. Amounts under a second, which would read "0m", are left
+	// out, as the CLI leaves them out.
 	interface Props {
-		rows: Row<string>[];
+		rows: { key: string; words: string; s: number }[];
 		testid?: string;
 	}
 
 	let { rows, testid }: Props = $props();
+	const shown = $derived(rows.filter((r) => r.s >= 1));
 </script>
 
-<ul class="rows" data-testid={testid}>
-	{#each rows as r (r.key)}
-		<li data-key={r.key}>
-			<span class="label">{r.label}</span>
-			<span class="time">{duration(r.seconds)}</span>
-			<span class="about">{r.about}</span>
-		</li>
-	{/each}
-</ul>
+{#if shown.length > 0}
+	<ul class="rows" data-testid={testid}>
+		{#each shown as r (r.key)}
+			<li data-key={r.key}>
+				<span class="words">{text.sentence(r.words)}</span>
+				<span class="time">{text.duration(r.s)}</span>
+			</li>
+		{/each}
+	</ul>
+{/if}
 
 <style>
 	.rows {
@@ -30,10 +33,10 @@
 	}
 
 	li {
-		display: grid;
-		grid-template-columns: 1fr auto;
-		gap: 0 1rem;
-		padding: 0.5rem 0;
+		display: flex;
+		justify-content: space-between;
+		gap: 1rem;
+		padding: 0.375rem 0;
 		border-top: 1px solid var(--pt-track);
 	}
 
@@ -41,17 +44,8 @@
 		border-top: 0;
 	}
 
-	.label {
-		font-weight: 600;
-	}
-
 	.time {
 		font-variant-numeric: tabular-nums;
-		text-align: right;
-	}
-
-	.about {
-		grid-column: 1 / -1;
-		color: var(--pt-muted);
+		white-space: nowrap;
 	}
 </style>

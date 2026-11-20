@@ -12,22 +12,40 @@ type Schemas = components['schemas'];
 export type Status = Schemas['Status'];
 export type Mode = Schemas['Mode'];
 export type Focus = Schemas['Focus'];
-export type Days = Schemas['Days'];
+/** GET /v1/days/{date}. */
 export type Day = Schemas['Day'];
-export type ProjectDay = Schemas['ProjectDay'];
-export type Project = Schemas['Project'];
-export type ByEvidence = Schemas['ByEvidence'];
+export type DayProject = Schemas['DayProject'];
+/** GET /v1/sessions/last. */
+export type LastSession = Schemas['LastSession'];
+export type WorkSession = NonNullable<Schemas['WorkSession']>;
 export type ByKind = Schemas['ByKind'];
+export type ByEvidence = Schemas['ByEvidence'];
+export type ByHarness = Schemas['AgentOnlyByHarness'];
 export type Uncredited = Schemas['Uncredited'];
-export type AgentTime = Schemas['AgentTime'];
-export type Harness = Schemas['Harness'];
 
-/** An activity kind (SM 5.1), as ByKind names it. */
+/** An activity kind (SM 5.1). */
 export type Kind = keyof ByKind;
-/** An uncredited reason code (SM 5.2), as Uncredited names it. */
+/** An uncredited reason code (SM 5.2). */
 export type Reason = keyof Uncredited;
 /** An evidence level (SM 5.1, DESIGN 6.4). */
 export type Level = keyof ByEvidence;
+/** A harness (SM 1.1). */
+export type Harness = keyof ByHarness;
+
+/**
+ * What the agent counts for one project over a span, a local day or a work
+ * session: the fields DayProject and WorkSession share.
+ */
+export type Tally = Pick<
+	DayProject,
+	| 'credited_s'
+	| 'pending_s'
+	| 'credited_by_kind'
+	| 'credited_by_evidence'
+	| 'agent_only_s'
+	| 'agent_only_by_harness'
+	| 'uncredited'
+>;
 
 export const api = createClient<paths>();
 

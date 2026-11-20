@@ -1,26 +1,30 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script lang="ts">
-	import type { Days } from '../api.ts';
+	import type { Day } from '../api.ts';
 	import Hands from '../components/Hands.svelte';
 	import Rows from '../components/Rows.svelte';
-	import { shadowWords } from '../copy.ts';
-	import { longDate } from '../format.ts';
-	import { clocks, kindRows, reasonRows, scaleOf, soleAgent } from '../model.ts';
+	import { clockLine, projects, scaleOf } from '../model.ts';
 	import { href, type Range } from '../route.ts';
+	import * as text from '../text.ts';
 
 	// Projects (docs/PLAN.md, WP-UI1): each project's clock over this week or
-	// the last 30 days, your time by kind, and what pairtime didn't count,
-	// by reason, in plain words. While shadow is on only the agents' time
-	// shows (DESIGN 6.7).
+	// the last 30 days, your time by kind, and the rest of the time by
+	// reason, in en.json's words, as `pairtime today` lists them for a day.
+	// While calibrating only the agents' time and the rest show (DESIGN 6.7).
 	interface Props {
-		days: Days;
+		/** The span's days that came back, in date order. */
+		days: Day[];
 		range: Range;
+		/** The span's first and last dates. */
+		from: string;
+		to: string;
 	}
 
-	let { days, range }: Props = $props();
+	let { days, range, from, to }: Props = $props();
 	const uid = $props.id();
 
-	const list = $derived(clocks(days.days, days.projects, days.shadow));
+	const calibrating = $derived(days.some((d) => d.shadow));
+	const list = $derived(projects(days, calibrating));
 	const scale = $derived(scaleOf(list));
 	const spans: { range: Range; label: string }[] = [
 		{ range: 'week', label: 'This week' },
@@ -35,34 +39,33 @@
 	{/each}
 </nav>
 <p class="pt-note" data-testid="span">
-	From <time datetime={days.from}>{longDate(days.from)}</time> to <time datetime={days.to}>{longDate(days.to)}</time>
+	From <time datetime={from}>{text.day(from)}</time> to <time datetime={to}>{text.day(to)}</time>
 </p>
 
-{#if days.shadow}
+{#if calibrating}
 	<div class="pt-card note" data-testid="calibrating">
-		<p>{shadowWords}</p>
+		<p>{text.phrase('calibrating_note')}</p>
 	</div>
 {/if}
 
-{#each list as c, i (c.key)}
-	{@const left = reasonRows(c.uncredited, soleAgent(c))}
-	{@const byKind = kindRows(c.byKind)}
+{#each list as v, i (v.key)}
 	<section class="pt-card project" aria-labelledby="{uid}-{i}" data-testid="project">
-		<h2 id="{uid}-{i}">{c.name}</h2>
-		<Hands clock={c} {scale} shadow={days.shadow} />
-		{#if !days.shadow && byKind.length > 0}
-			<h3>Your time by kind</h3>
-			<Rows rows={byKind} testid="kinds" />
+		<h2 id="{uid}-{i}">{v.title}</h2>
+		<p class="line" data-testid="clock-line">{clockLine(v)}</p>
+		<Hands view={v} {scale} />
+		{#if v.you && v.you.kinds.length > 0}
+			<h3>What your time went on</h3>
+			<Rows rows={v.you.kinds.map((k) => ({ key: k.kind, words: k.words, s: k.s }))} testid="kinds" />
 		{/if}
-		{#if !days.shadow && left.length > 0}
-			<h3>What pairtime didn't count</h3>
-			<Rows rows={left} testid="reasons" />
+		{#if v.other.length > 0}
+			<h3>The rest of the time</h3>
+			<Rows rows={v.other.map((o) => ({ key: o.reason, words: o.words, s: o.s }))} testid="other" />
 		{/if}
 	</section>
 {:else}
 	<p data-testid="no-projects">
-		{range === 'week' ? 'No projects yet this week.' : 'No projects in the last 30 days.'} When you work on a project with
-		an AI agent, it shows up here.
+		{range === 'week' ? 'Nothing tracked yet this week.' : 'Nothing tracked in the last 30 days.'} When you work on a project
+		with an AI agent, it shows up here.
 	</p>
 {/each}
 
@@ -90,7 +93,12 @@
 	}
 
 	h2 {
+		margin-bottom: 0.125rem;
 		overflow-wrap: anywhere;
+	}
+
+	.line {
+		color: var(--pt-muted);
 	}
 
 	h3 {
