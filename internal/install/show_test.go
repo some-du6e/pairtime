@@ -79,7 +79,9 @@ func TestPlanDiffHidesWhatIsntPairtimes(t *testing.T) {
 	}{
 		{"a token and a base URL in the env block, right above where hooks go, aren't shown",
 			"{\n  \"env\": {\n    \"ANTHROPIC_AUTH_TOKEN\": \"sk-or-v1-SECRET\",\n    \"ANTHROPIC_BASE_URL\": \"https://SECRET.example/v1\"\n  }\n}\n",
-			"   \"env\": {\n     \"ANTHROPIC_AUTH_TOKEN\": \"***\",\n     \"ANTHROPIC_BASE_URL\": \"***\"\n-  }\n+  },\n"},
+			// Only the masked context lines: where the diff puts the
+			// closing brace of env depends on how it aligns the hunk.
+			"   \"env\": {\n     \"ANTHROPIC_AUTH_TOKEN\": \"***\",\n     \"ANTHROPIC_BASE_URL\": \"***\"\n"},
 		{"a webhook URL in another tool's Stop hook, right above pairtime's, isn't shown",
 			"{\n  \"hooks\": {\n    \"Stop\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"curl -d done https://ntfy.sh/SECRET\"\n          }\n        ]\n      }\n    ]\n  }\n}\n",
 			"             \"command\": \"***\"\n"},
