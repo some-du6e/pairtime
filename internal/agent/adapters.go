@@ -431,7 +431,9 @@ func (h *adapterHost) handle(d inbox.Delivery) {
 		ad = h.adapter(name)
 	}
 	st := h.statsOf(name, ad != nil)
-	h.count(func() { st.Calls++ })
+	// Counted once the call is done with, so a status that counts it
+	// finds its records in the ledger writer.
+	defer h.count(func() { st.Calls++ })
 	switch {
 	case err != nil:
 		h.fail(st, "the call's body isn't a hook call's")
@@ -674,26 +676,41 @@ func (h *adapterHost) dropHeld(n int, err error) {
 
 // replayHeld parses the calls held.jsonl holds, oldest first, then seals
 // their records and deletes the file, and reports whether it is done. It
-// renames the file first, so calls held meanwhile go to a new one; a
-// .replay file a crash left is replayed before it. A crash during a replay
+// renames the file first, so calls held meanwhile go to a new one, and a
+// .replay file a crash left goes before it. A crash during a replay
 // replays the file again at the next start, so its records that were
 // sealed by then come out twice, never none.
 func (h *adapterHost) replayHeld() bool {
 	name := h.a.dirs.Held()
 	replay := name + ".replay"
-	if _, err := os.Stat(replay); errors.Is(err, fs.ErrNotExist) {
-		if err := os.Rename(name, replay); err != nil {
-			if !errors.Is(err, fs.ErrNotExist) {
-				h.a.log.Warn("the held hook calls can't be read", "err", err)
-				return false
+	for {
+		if _, err := os.Stat(replay); errors.Is(err, fs.ErrNotExist) {
+			if err := os.Rename(name, replay); err != nil {
+				if !errors.Is(err, fs.ErrNotExist) {
+					h.a.log.Warn("the held hook calls can't be read", "err", err)
+					return false
+				}
+				return true // nothing is held
 			}
-			return true // nothing is held
+		}
+		read, gone := h.replayFile(replay)
+		switch {
+		case !read:
+			return false // the file stays, and the next step tries again
+		case !gone:
+			return true // parsed, and left for the next start
 		}
 	}
-	f, err := os.Open(replay)
+}
+
+// replayFile parses the held calls in name, seals their records and
+// deletes the file. It reports whether it read the whole file, and whether
+// the file is gone.
+func (h *adapterHost) replayFile(name string) (read, gone bool) {
+	f, err := os.Open(name)
 	if err != nil {
 		h.a.log.Warn("the held hook calls can't be read", "err", err)
-		return false
+		return false, false
 	}
 	n, bad := 0, 0
 	r := bufio.NewReader(f)
@@ -711,7 +728,7 @@ func (h *adapterHost) replayHeld() bool {
 			if !errors.Is(err, io.EOF) {
 				h.a.log.Warn("reading the held hook calls stopped early", "err", err)
 				f.Close()
-				return false // the file stays, and the next step tries again
+				return false, false
 			}
 			break
 		}
@@ -729,14 +746,17 @@ func (h *adapterHost) replayHeld() bool {
 			h.a.log.Warn("couldn't seal the held hook calls' records", "err", err)
 		}
 	}
-	if err := os.Remove(replay); err != nil {
-		h.a.log.Warn("couldn't delete the held hook calls once replayed", "err", err)
-		return false
-	}
 	if n > 0 || bad > 0 {
 		h.a.log.Info("parsed the hook calls held while the ledger wasn't open", "calls", n, "bad_lines", bad)
 	}
-	return true
+	if err := os.Remove(name); err != nil {
+		// Replayed again, it would write its records twice in this run;
+		// left for the next start, it does at most once more.
+		h.a.log.Warn("couldn't delete the held hook calls once replayed", "err", err)
+		h.a.setProblem("adapters", fmt.Sprintf("the hook calls held while the ledger wasn't open were parsed, but couldn't be deleted, so the next start parses them again: %v", err))
+		return true, false
+	}
+	return true, true
 }
 
 // readHeld reads a line of held.jsonl.

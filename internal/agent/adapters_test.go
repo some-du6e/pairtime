@@ -373,15 +373,25 @@ func TestHookCallsBeforeTheKeystore(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			calls := readCapture(t)[:2] // the session's start, and its first prompt
 			r := newHookReplay(t)
-			store := &lockedStore{items: map[string][]byte{}, locked: true}
+			store := &lockedStore{items: map[string][]byte{}}
 			stores := []keys.Store{store}
 			opts := r.options(stores)
 			opts.LedgerRetry = 20 * time.Millisecond
+			// The first run makes K_dev in the store, so keystore.json names
+			// it: from then on a locked keyring keeps the keystore shut,
+			// where on a first run a key file would stand in for it.
+			first := startAgent(t, opts)
+			waitChain(t, first, r.dirs)
+			first.cancel()
+			if err := first.waitExit(t); err != nil {
+				t.Fatal(err)
+			}
+			store.setLocked(true)
 			a := startAgent(t, opts)
 			for _, call := range calls {
 				r.send(t, event.HarnessClaudeCode, call, calls[0].Arrived)
 			}
-			waiting := waitStatus(t, a, func(s statusReply) bool { return s.Adapters.Waiting == len(calls) })
+			waiting := waitStatus(t, a, func(s statusReply) bool { return s.Adapters.Waiting == len(calls) && store.refusals() > 0 })
 			if c.stop {
 				a.cancel()
 				if err := a.waitExit(t); err != nil {
