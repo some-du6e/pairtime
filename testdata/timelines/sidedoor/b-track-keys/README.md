@@ -1,6 +1,6 @@
 # Side door (b): the track loop on macOS, with key presses before each call
 
-Case (a) on a Mac. The loop, the labels and the jiggler are the same, and in the 8 s before each call a key is pressed once a second in the host window. macOS reports key-down idle time with no typing module, so `input_keys` shows that typing, and every track anchor is level A. The keyboard is the corroboration DESIGN 5.2 asks for, so these seconds count as credited, and nothing else about the loop changes.
+Case (a) on a Mac. The loop, the labels and the jiggler are the same, and before each call a key is pressed eight times in the host window, a second apart. macOS reports key-down idle time with no typing module, so `input_keys` shows that typing, and every track anchor is level A. The keyboard is the corroboration DESIGN 5.2 asks for, so these seconds count as credited, and nothing else about the loop changes.
 
 | | |
 |---|---|
@@ -13,13 +13,13 @@ Case (a) on a Mac. The loop, the labels and the jiggler are the same, and in the
 ## Events
 
 - `os.focus` at 13:58:00: Terminal, hosting the Goose session.
-- `os.presence` every 15 s and at each call. The sample at each call shows `idle_keys_s` 1: the last key press came 1 s before.
+- `os.presence` every 15 s and at each call. The sample at each call shows `idle_keys_s` 1.3: the last key press came 1.3 s before.
 - The ten `cli.track` records of (a), at the same local times, with `text_len` 90 and `log_match` `no_reader`.
 
 ## Timing choices
 
-- Key presses at 8, 7, 6, 5, 4, 3, 2 and 1 s before each call. Between the last press before one call and the first press before the next there are 14 s, less than a slot, so every slot from 14:03:45 to the last call has a key press.
-- Before 14:03:52 only the jiggler moves. The last key press before the fixture is at 13:41:07.3.
+- Key presses at 8.3, 7.3, 6.3, 5.3, 4.3, 3.3, 2.3 and 1.3 s before each call. The extra 300 ms keeps every press off a slot boundary, as testdata/timelines/README.md requires, so the sample at each slot's end shows whether the slot had a key press. It also keeps them clear of the jiggler, which moves on the half second. Between the last press before one call and the first press before the next there are 14 s, less than a slot, so every slot from 14:03:45 to the last call has a key press.
+- Before 14:03:51.7 only the jiggler moves. The last key press before the fixture is at 13:41:07.3.
 
 ## How the numbers follow
 

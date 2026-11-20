@@ -46,9 +46,11 @@ STOP = at("14:05:30")
 WORDS = 120
 
 # The person's own input: the touchpad every 10 s, and the prompt typed
-# from 14:03:31 to the Enter at 14:04:39.5. Windows can't tell the two apart.
+# from 14:03:30.7 to the Enter at 14:04:39.2. Windows can't tell the two
+# apart. The key presses land on .2 and .7, so none falls on a slot
+# boundary (sidedoor.py checks).
 fx.pointer_every("13:58:04", "14:08:00", 10_000)
-fx.typing("14:03:31", "14:04:39.500", 500)
+fx.typing("14:03:30.700", "14:04:39.200", 500)
 fx.ticks("13:58:00", "14:08:00", tl.SLOT_MS)
 
 fx.emit(at("13:58:00"), "os.focus", {"app_class": "terminal", "app_hash": APP},

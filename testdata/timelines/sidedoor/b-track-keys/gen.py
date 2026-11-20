@@ -52,13 +52,15 @@ LABELS = [
 ]
 CALLS = [at("14:04:00") + 21_000 * k for k in range(len(LABELS))]
 
-# The jiggler as in (a), and a key press every second for the 8 s before
-# each call: 8 to 1 s before it. Key-down idle time is macOS's own and needs
-# no typing module (SM 1.2, os.presence).
+# The jiggler as in (a), and eight key presses a second apart before each
+# call, from 8.3 to 1.3 s before it. The 300 ms keeps them off whole
+# seconds, so none falls on a slot boundary (sidedoor.py checks), and off
+# the jiggler's moves at .5. Key-down idle time is macOS's own and needs no
+# typing module (SM 1.2, os.presence).
 fx.pointer_every("13:58:00.500", "14:09:00", 12_000)
 for t in CALLS:
     for back in range(8, 0, -1):
-        fx.inputs.append((t - back * 1000, True))
+        fx.inputs.append((t - back * 1000 - 300, True))
 fx.ticks("13:58:00", "14:09:00", tl.SLOT_MS)
 
 fx.emit(at("13:58:00"), "os.focus",
@@ -78,8 +80,9 @@ for t in CALLS:
     sample = next(e for e in events if e["kind"] == "os.presence" and e["t"] == t)
     tl.check(sample["data"]["idle_keys_s"].ms <= sd.KEYS_PRE_S * 1000,
              f"the sample at the {fx.hhmmss(t)} call shows a key press in the 10 s before it")
-first_key_slot = CALLS[0] - 8_000 - (CALLS[0] - 8_000) % tl.SLOT_MS
-for slot in range(first_key_slot, CALLS[-1], tl.SLOT_MS):
+first_key = min(t for t, k in fx.inputs if k)
+tl.check(fx.hhmmss(first_key) == "14:03:51.7", "the first key press before the first call")
+for slot in range(first_key - first_key % tl.SLOT_MS, CALLS[-1], tl.SLOT_MS):
     tl.check(sd.keys_in_slot(fx, slot), f"keys in the slot at {fx.hhmmss(slot)}: 14 s at most between presses")
 for a, b in zip(CALLS, CALLS[1:]):
     tl.check(b - a > sd.TRACK_MIN_GAP_S * 1000, "condition 3 never stops a call")

@@ -41,8 +41,10 @@ STOP = at("14:05:30")
 CALL = at("14:07:30")
 WORDS = 120
 
+# Input as in (f): the touchpad every 10 s, and the prompt typed from
+# 14:03:30.7 to the Enter at 14:04:39.2, off every slot boundary.
 fx.pointer_every("13:58:04", "14:09:00", 10_000)
-fx.typing("14:03:31", "14:04:39.500", 500)
+fx.typing("14:03:30.700", "14:04:39.200", 500)
 fx.ticks("13:58:00", "14:09:00", tl.SLOT_MS)
 
 fx.emit(at("13:58:00"), "os.focus", {"app_class": "terminal", "app_hash": APP},

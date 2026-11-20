@@ -304,7 +304,22 @@ class SideDoor:
         return sum(self.log.values()), sum(self.ai_log.values())
 
 
+def check_inputs_off_boundaries(fx):
+    """FX1's convention (../README.md, Presence): no input falls on a slot
+    boundary, so the sample at a slot's end says whether the slot had input.
+    A slot starts on :00, :15, :30 or :45 (SM 1.3), so a press at 14:06:45.000
+    is in the slot that starts there. The sample at 14:06:45 would report it
+    as the last press, and a scorer that rebuilds slots from the samples
+    would see no key in 14:06:30 to 14:06:45 even if there was one. The
+    sweep reads fx.inputs, which can't tell, so write() runs this for every
+    case, inputs before the fixture included."""
+    times = [t for t, _ in fx.inputs] + [t for t in (fx.last_input, fx.last_key) if t is not None]
+    for t in times:
+        tl.check(t % tl.SLOT_MS != 0, f"{fx.name}: input at {fx.hhmmss(t)} falls on a slot boundary")
+
+
 def write(fx, out, expected, anchors, prompts, sidedoor):
+    check_inputs_off_boundaries(fx)
     fx.write(out, expected, anchors, prompts)
     with open(os.path.join(out, "sidedoor.json"), "w", encoding="utf-8", newline="\n") as f:
         f.write(tl.pretty(sidedoor) + "\n")

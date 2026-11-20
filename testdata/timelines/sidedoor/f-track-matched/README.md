@@ -20,7 +20,7 @@ Karim's AGENTS.md entry doing its job beside hooks. On a Windows laptop, a perso
 
 ## Timing choices
 
-- The person's touchpad moves every 10 s, and they type the prompt from 14:03:31 to the Enter at 14:04:39.5. Windows can't tell the two apart.
+- The person's touchpad moves every 10 s, and they type the prompt from 14:03:30.7 to the Enter at 14:04:39.2, a key every 0.5 s. Windows can't tell the two apart. The presses land on .2 and .7, so none falls on a slot boundary (testdata/timelines/README.md).
 - The model passes 141 of the 150 characters. `text_len` doesn't decide anything here.
 - The Bash call starts at 14:04:43.9 and `pairtime track` runs inside it at 14:04:44.0. DESIGN 5.1 registers `PostToolUse` for `Bash`, so the call leaves an `agent.tool` record that counts toward `logged_s`.
 
