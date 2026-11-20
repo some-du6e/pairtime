@@ -2069,6 +2069,49 @@
         {"salt": "8fafe366392a38120c27824ff7cb6ee1cce445e2187de05f63729725b49d9560", "token": "20"}
       ],
       "verdict": "alternation"
+    },
+    {
+      "note": "an empty token, and the last token dropped: bad_item comes before count",
+      "n": 7,
+      "root": "bc4f693871b2cf5d6bf7bfc1afde991dd3f9efdc28ac9075e161fdc2ac277803",
+      "items": [
+        {"salt": "4c8b731bcf2db7c94c6db06fb21f42b33ad297b515a60ea98c8b748be38c6533", "token": "666978"},
+        {"salt": "43f6c04b4d122d1b5d4696559f2b5a39ba49148ee8c747f077b93e1ea5f72fdf", "token": "20"},
+        {"salt": "08d3836fe2db808a5e3a0d0edd53dc4e872bfe5bab8a256cc66b447d6958a88e", "token": ""},
+        {"salt": "b9899df1ba021526a3a87e6448eff2bca21a9dc893f7468a30d99debdd7e3aa6", "token": "20"},
+        {"salt": "a39a1917815e339db67ce585714d5b36ea4c1afd582e66abf55955849a2760e2", "token": "6c6f67696e"},
+        {"salt": "2847b8fc00640d3a0a0e797b27f51621ea9fb1f74230bcd3b5f6359c784126bd", "token": "20"}
+      ],
+      "verdict": "bad_item"
+    },
+    {
+      "note": "two words swapped with their space, and the last token dropped: count comes before alternation",
+      "n": 7,
+      "root": "bc4f693871b2cf5d6bf7bfc1afde991dd3f9efdc28ac9075e161fdc2ac277803",
+      "items": [
+        {"salt": "43f6c04b4d122d1b5d4696559f2b5a39ba49148ee8c747f077b93e1ea5f72fdf", "token": "20"},
+        {"salt": "4c8b731bcf2db7c94c6db06fb21f42b33ad297b515a60ea98c8b748be38c6533", "token": "666978"},
+        {"salt": "08d3836fe2db808a5e3a0d0edd53dc4e872bfe5bab8a256cc66b447d6958a88e", "token": "746865"},
+        {"salt": "b9899df1ba021526a3a87e6448eff2bca21a9dc893f7468a30d99debdd7e3aa6", "token": "20"},
+        {"salt": "a39a1917815e339db67ce585714d5b36ea4c1afd582e66abf55955849a2760e2", "token": "6c6f67696e"},
+        {"salt": "2847b8fc00640d3a0a0e797b27f51621ea9fb1f74230bcd3b5f6359c784126bd", "token": "20"}
+      ],
+      "verdict": "count"
+    },
+    {
+      "note": "the word 'the' replaced by a kept space: alternation comes before root",
+      "n": 7,
+      "root": "bc4f693871b2cf5d6bf7bfc1afde991dd3f9efdc28ac9075e161fdc2ac277803",
+      "items": [
+        {"salt": "4c8b731bcf2db7c94c6db06fb21f42b33ad297b515a60ea98c8b748be38c6533", "token": "666978"},
+        {"salt": "43f6c04b4d122d1b5d4696559f2b5a39ba49148ee8c747f077b93e1ea5f72fdf", "token": "20"},
+        {"salt": "08d3836fe2db808a5e3a0d0edd53dc4e872bfe5bab8a256cc66b447d6958a88e", "token": "20"},
+        {"salt": "b9899df1ba021526a3a87e6448eff2bca21a9dc893f7468a30d99debdd7e3aa6", "token": "20"},
+        {"salt": "a39a1917815e339db67ce585714d5b36ea4c1afd582e66abf55955849a2760e2", "token": "6c6f67696e"},
+        {"salt": "2847b8fc00640d3a0a0e797b27f51621ea9fb1f74230bcd3b5f6359c784126bd", "token": "20"},
+        {"salt": "1a972187c53bab142467a5686fc29ddcb60d78aaddc381e46cfbec7554469406", "token": "627567"}
+      ],
+      "verdict": "alternation"
     }
   ],
   "normalizations": [
@@ -2735,6 +2778,28 @@
         {"v": "111740bc0838c2ce0b72286f7d95c57272cbe5d81b24d1288ef30770ca9c2a7c", "x": "7472793e20"},
         {"v": "1b23b154e57d6de464ffca66639b2b7d8d392cdc195ffd2cf53ff21b8a468602", "x": "706174683e"},
         {"v": "2b9114b868e8064e86217de5350e3cbff4a502ed380bd5815673373b83cf788d", "x": "2073656520"},
+        {"v": "40dad1b024e5ab71b57c9ac0f3d09cf7de200b2d84c4358488a6739d1db752b4", "x": "736565203c"},
+        {"v": "554160056ae4a0cf397eae55ca32a1c123f3526eef0170e9438a8967eb677831", "x": "7265747279"},
+        {"v": "68c58fd6ee53f8d188572272bc2ef53703164c9d591c22db994a5cdcdf1bb373", "x": "6565203c70"},
+        {"v": "69352a325278bfac69ee1e537b1e28715f0cd7c40477684914f0214abc8537a9", "x": "203c706174"},
+        {"v": "986171b514280b63d094951f8ce246c39c6716315155d532269699c0201f2762", "x": "793e207365"},
+        {"v": "abc8608f7f2bcffcb12e7565a2946de4335d49285cf7a634b96e7d5b27f942f4", "x": "3c70617468"},
+        {"v": "c707a916f3078aad7437d83cf412cb707f79b3da0c56bc6650fd529301552ace", "x": "3e20736565"},
+        {"v": "c9295f5d77031bbdc113001f7c71d034e0130dc5a2d54c2b77683be059e4ca04", "x": "657472793e"},
+        {"v": "de82c3d650778682b3e982bae93e97c99744c4b3ab1e9d9647ee0568437adec8", "x": "65203c7061"},
+        {"v": "eda1e8d69e0da85d9e65a2f4733801cfd92c326a9cca656db085c55827f94a44", "x": "3c72657472"},
+        {"v": "f06868b193da842da73d83d1b48844e4040fed5a022c5df3fedd33556a63277f", "x": "72793e2073"}
+      ],
+      "verdict": "bad_entry"
+    },
+    {
+      "note": "out of order, and a shingle missing: bad_entry comes before sketch",
+      "mh": "07540c860141e09a119167f4062c3cfb13f553490589ed800da6a0bc291b04ea0fc49ad1178a920624d5d504011f1c5905230df00bd7c95e1ca5c6c7021aafa10c4a194a0868b6230127337e02e5b4fe0aaa6b2200a43a8b0b85137b00d225870dd927ce060b778400aa713f0463e8c00c9535f00875dd2e020601cb01f49dfc0587c97e04ba2bf71eef626f0f851cf60be3adb33654ceec3f00da0e0fcfabe10365cd7a03c39a101b88673900fd3d540023f223148661ed0b15416f308bc4a800c2c371142aa13717cb4e5101ca39dd05b465d01fe1215f0be7067511171e3d49c4d5a60fd921d0197a150a01166afa10e3b80600f5948a05446cb60e176988",
+      "kind": "char5",
+      "removed": false,
+      "entries": [
+        {"v": "1b23b154e57d6de464ffca66639b2b7d8d392cdc195ffd2cf53ff21b8a468602", "x": "706174683e"},
+        {"v": "111740bc0838c2ce0b72286f7d95c57272cbe5d81b24d1288ef30770ca9c2a7c", "x": "7472793e20"},
         {"v": "40dad1b024e5ab71b57c9ac0f3d09cf7de200b2d84c4358488a6739d1db752b4", "x": "736565203c"},
         {"v": "554160056ae4a0cf397eae55ca32a1c123f3526eef0170e9438a8967eb677831", "x": "7265747279"},
         {"v": "68c58fd6ee53f8d188572272bc2ef53703164c9d591c22db994a5cdcdf1bb373", "x": "6565203c70"},

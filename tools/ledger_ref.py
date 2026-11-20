@@ -2224,6 +2224,14 @@ def make_reveals(k_dev, commitments):
     bad = [token_leaf(salt[0], b"fix"), token_leaf(salt[1], b" "), token_leaf(salt[2], b" ")]
     fail("whitespace two places after a word", [("kept", salt[0], b"fix"), ("removed", "teen", 1, [bad[1]], None),
                                                  ("kept", salt[2], b" ")], "alternation", (3, tree_root(bad)))
+    # Reveals that fail two checks at once, so a verifier that checks them
+    # in another order than 10.3's gets another verdict.
+    fail("an empty token, and the last token dropped: bad_item comes before count",
+         keep[:2] + [("kept", salts[2], b"")] + keep[3:6], "bad_item")
+    fail("two words swapped with their space, and the last token dropped: count comes before alternation",
+         [keep[1], keep[0]] + keep[2:6], "count")
+    fail("the word 'the' replaced by a kept space: alternation comes before root",
+         keep[:2] + [("kept", salts[2], b" ")] + keep[3:], "alternation")
     return out
 
 
@@ -2412,6 +2420,8 @@ def make_shingle_reveals(features):
     fail("a value that sets a minimum, replaced", changed, "sketch")
     fail("out of order", entries[1:2] + entries[:1] + entries[2:], "bad_entry")
     fail("a value twice", entries[:1] + entries[:1] + entries[1:], "bad_entry")
+    fail("out of order, and a shingle missing: bad_entry comes before sketch",
+         entries[1:2] + entries[:1] + entries[3:], "bad_entry")
     fail("a 31-byte value", [(entries[0][0][:31], entries[0][1])] + entries[1:], "bad_entry")
     fail("an empty x", entries[:3] + [(entries[3][0], b"")] + entries[4:], "bad_entry")
     fail("an x that isn't UTF-8", entries[:3] + [(entries[3][0], b"\xff")] + entries[4:], "bad_entry")
