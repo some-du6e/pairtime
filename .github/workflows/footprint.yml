@@ -179,6 +179,8 @@ jobs:
               $psi.UseShellExecute = $false
               $psi.CreateNoWindow = $true
               $psi.RedirectStandardInput = $true
+              # UTF-8 with no byte-order mark, as a harness writes its event.
+              $psi.StandardInputEncoding = [System.Text.UTF8Encoding]::new($false)
               $psi.RedirectStandardOutput = $true
               $psi.RedirectStandardError = $true
               $sw = [System.Diagnostics.Stopwatch]::StartNew()
