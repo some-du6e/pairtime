@@ -335,7 +335,17 @@ func (r *Resolver) resolve(ctx context.Context, abs string) (Location, error) {
 	info, err := r.revParse(ctx, abs)
 	switch {
 	case errors.Is(err, ErrNotRepo), errors.Is(err, ErrUnsafeRepo), errors.Is(err, ErrNoGit):
-		return Location{Project: folderKey(r.secret, abs), Kind: KindFolder, Dir: abs}, nil
+		// The key comes from the folder's canonical path, the form git
+		// prints for a top level: symlinks resolved, and on Windows short
+		// names expanded. So `git init` in the folder keeps its key.
+		dir := abs
+		if canon, err := filepath.EvalSymlinks(abs); err == nil {
+			dir = canon
+		}
+		if r.ignored(dir) {
+			return Location{}, ErrIgnored
+		}
+		return Location{Project: folderKey(r.secret, dir), Kind: KindFolder, Dir: dir}, nil
 	case err != nil:
 		return Location{}, err
 	}
