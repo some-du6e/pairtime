@@ -7,6 +7,7 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import { describe, expect, test } from 'vitest';
 import { parse } from 'yaml';
+import en from '../../../internal/coach/text/en.json';
 import { counts, focusWords, levelWhy, pendingWords } from './copy.ts';
 import * as text from './text.ts';
 
@@ -74,8 +75,9 @@ describe("the dashboard's words keep the CLI's rules", () => {
 
 describe('the words cover the spec', () => {
 	const cases: { name: string; covered: (code: string) => boolean; schema: string }[] = [
-		{ name: 'every activity kind has words in en.json', covered: (k) => text.kind(k, 'Claude') !== k, schema: 'ByKind' },
-		{ name: 'every harness has a name in en.json', covered: (h) => h === 'other' || text.agent(h) !== text.agent('other'), schema: 'AgentOnlyByHarness' },
+		// Some words are their code, as "testing" is, so the catalog's keys decide.
+		{ name: 'every activity kind has words in en.json', covered: (k) => Object.hasOwn(en.kinds, k), schema: 'ByKind' },
+		{ name: 'every harness has a name in en.json', covered: (h) => Object.hasOwn(en.agents, h), schema: 'AgentOnlyByHarness' },
 		{
 			name: "every uncredited reason is the agent's time or has words in en.json",
 			covered: (r) => text.isAgentTime(r) || text.other(r, 'Claude') !== '',

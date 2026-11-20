@@ -10,7 +10,6 @@ import (
 	"io"
 	"io/fs"
 	"net/http"
-	"os"
 	"os/exec"
 	"runtime"
 	"strconv"
@@ -59,11 +58,15 @@ type dashboardDeps struct {
 
 func runDashboard(args []string, stdout, stderr io.Writer) int {
 	return dashboard(args, stdout, stderr, dashboardDeps{
-		dirs:       home.Default,
-		startAgent: startAgent,
-		openURL:    openBrowser,
-		wait:       15 * time.Second,
-		client:     &http.Client{Timeout: 5 * time.Second},
+		dirs: home.Default,
+		// The agent starts the way `agent --detach` starts it (agent.go).
+		startAgent: func() error {
+			_, err := startAgent("")
+			return err
+		},
+		openURL: openBrowser,
+		wait:    15 * time.Second,
+		client:  &http.Client{Timeout: 5 * time.Second},
 	})
 }
 
@@ -192,21 +195,6 @@ func words(d time.Duration) string {
 		unit += "s"
 	}
 	return strconv.Itoa(n) + " " + unit
-}
-
-// startAgent starts `pairtime agent` in a process of its own, as `agent
-// --detach` does, and returns without waiting for it.
-func startAgent() error {
-	exe, err := os.Executable()
-	if err != nil {
-		return err
-	}
-	cmd := exec.Command(exe, "agent")
-	cmd.SysProcAttr = detachedAttr()
-	if err := cmd.Start(); err != nil {
-		return err
-	}
-	return cmd.Process.Release()
 }
 
 // openBrowser asks the OS to open u in the default browser. A launcher
