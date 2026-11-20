@@ -694,12 +694,13 @@ func uptime() *float64 {
 }
 
 // TestFindingRunLoop records two facts about where macOS delivers what a
-// Loop listens to, for WP-OS9, which wires the Loop into the agent: whether a
-// notification posted to NSWorkspace's notification center reaches the
-// observer's method, which says whether the center can be tested by
-// posting to it, and whether distributed notifications reach a Loop that
-// isn't on the main thread. It writes macos-run-loop.json and fails only
-// when it can't.
+// Loop listens to, for WP-OS9, which wires the Loop into the agent: whether
+// a notification posted to NSWorkspace's notification center reaches the
+// observer's method, and whether distributed notifications reach a Loop
+// that isn't on the main thread. It writes macos-run-loop.json. It fails
+// when it can't write the file, and when the post didn't reach the
+// observer, since TestLoopOnMac tests app switches by posting to the
+// center.
 func TestFindingRunLoop(t *testing.T) {
 	if os.Getenv(findingsEnv) == "" {
 		t.Skipf("%s isn't set; platform.yml sets it on macos-latest", findingsEnv)
@@ -708,7 +709,7 @@ func TestFindingRunLoop(t *testing.T) {
 		t.Fatal(err)
 	}
 	f := runLoopFinding{MacOS: sysctl("kern.osproductversion")}
-	t.Run("a post to NSWorkspace's notification center", func(t *testing.T) {
+	t.Run("a post to NSWorkspace's notification center reaches the observer's method", func(t *testing.T) {
 		_, b, _ := startMacLoop(t, true, nil)
 		withPool(func() {
 			ws := objc.send(objc.clsNSWorkspace, objc.selSharedWorkspace)
@@ -717,6 +718,9 @@ func TestFindingRunLoop(t *testing.T) {
 		before := b.activations.Load()
 		postActivation(t)
 		f.PostReachedObserver = eventually(2*time.Second, func() bool { return b.activations.Load() > before })
+		if !f.PostReachedObserver {
+			t.Errorf("an activation posted to the %s didn't reach the observer's method within 2 s", f.CenterClass)
+		}
 	})
 	t.Run("a distributed notification to a Loop off the main thread", func(t *testing.T) {
 		names := testLockNames("offmain")

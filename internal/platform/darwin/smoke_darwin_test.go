@@ -294,11 +294,11 @@ func activationTarget(t *testing.T) (uintptr, App) {
 	return 0, App{}
 }
 
-// deliverActivation hands the observer's method the
-// NSWorkspaceDidActivateApplicationNotification NSWorkspace would send if
-// the app activationTarget picks came to the front, the way NSWorkspace's
-// notification center calls it, and returns that app. No app's focus
-// changes.
+// deliverActivation calls the observer's method directly with the
+// NSWorkspaceDidActivateApplicationNotification NSWorkspace would post if
+// the app activationTarget picks came to the front, and returns that app.
+// It skips NSWorkspace's notification center, which postActivation goes
+// through. No app's focus changes.
 func deliverActivation(t *testing.T, b *macBackend) App {
 	t.Helper()
 	if err := loadTestObjC(); err != nil {
@@ -323,18 +323,24 @@ func deliverActivation(t *testing.T, b *macBackend) App {
 }
 
 // postActivation posts that same notification to NSWorkspace's
-// notification center, for TestFindingRunLoop.
-func postActivation(t *testing.T) {
+// notification center, which hands it to every observer of the name, and
+// returns the app it names. The post goes through the registration that
+// openFocus makes, so it checks the center, the name and the selector as
+// well as the observer's method. No app's focus changes.
+func postActivation(t *testing.T) App {
 	t.Helper()
 	if err := loadTestObjC(); err != nil {
 		t.Fatal(err)
 	}
+	var want App
 	withPool(func() {
 		ws := objc.send(objc.clsNSWorkspace, objc.selSharedWorkspace)
 		nc := objc.send(ws, objc.selNotificationCenter)
-		ra, _ := activationTarget(t)
+		ra, app := activationTarget(t)
+		want = app
 		testObjC.send3(nc, testObjC.selPostNotification, objc.didActivateName, ws, activationInfo(ra))
 	})
+	return want
 }
 
 // postDistributed posts a distributed notification, as loginwindow posts
@@ -370,10 +376,13 @@ func TestLoopOnMac(t *testing.T) {
 			},
 		},
 		{
-			name:       "the observer's method turns a synthetic activation of this process into its App",
+			name:       "on the main thread an activation posted to NSWorkspace's notification center reaches the handler as the named app",
 			mainThread: true,
 			run: func(t *testing.T, l *Loop, b *macBackend, rec *macRecorder) {
-				want := deliverActivation(t, b)
+				if b.observer == 0 {
+					t.Fatalf("the Loop has no NSWorkspace observer: %v", l.Status().Focus)
+				}
+				want := postActivation(t)
 				if got := rec.waitFocus(t, want.PID); got != want {
 					t.Errorf("Focus(%+v), want Focus(%+v)", got, want)
 				}
@@ -411,7 +420,7 @@ func TestLoopOnMac(t *testing.T) {
 			},
 		},
 		{
-			name:       "off the main thread IOKit still registers, Status says where the Loop runs, and the observer still turns an activation into an App",
+			name:       "off the main thread IOKit still registers, Status says where the Loop runs, and the observer's method, called directly, still turns an activation into an App",
 			mainThread: false,
 			run: func(t *testing.T, l *Loop, b *macBackend, rec *macRecorder) {
 				st := l.Status()
@@ -446,3 +455,38 @@ func TestLoopOnMac(t *testing.T) {
 // testPowerIDs are the notification ids the tests' synthetic IOKit
 // messages carry.
 var testPowerIDs = map[uintptr]bool{42: true, 43: true}
+
+// TestAppKitConstantsOnMac pins the two AppKit constants the NSWorkspace
+// observer reads to Apple's names. The synthetic activations are built from
+// the same values the Loop registers and reads, so they would still pass if
+// a binding read the wrong symbol; these cases wouldn't.
+func TestAppKitConstantsOnMac(t *testing.T) {
+	tests := []struct {
+		name string
+		str  *uintptr // an NSString bound by loadObjC
+		want string
+	}{
+		{
+			name: "the notification the observer registers for is NSWorkspaceDidActivateApplicationNotification",
+			str:  &objc.didActivateName,
+			want: "NSWorkspaceDidActivateApplicationNotification",
+		},
+		{
+			name: "the userInfo key the observer reads the app from is NSWorkspaceApplicationKey",
+			str:  &objc.applicationKey,
+			want: "NSWorkspaceApplicationKey",
+		},
+	}
+	if err := loadObjC(); err != nil {
+		t.Fatal(err)
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var got string
+			withPool(func() { got = nsString(*tt.str) })
+			if got != tt.want {
+				t.Errorf("the constant reads %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
