@@ -79,12 +79,12 @@ func TestMinIO(t *testing.T) {
 				t.Errorf("got %q, %+v", got, info)
 			}
 		}},
-		{name: "head reports the size and ETag", run: func(t *testing.T) {
+		{name: "head reports the size, the ETag and the SHA-256 put stored", run: func(t *testing.T) {
 			info, err := main.Head(ctx, run+"hello")
 			if err != nil {
 				t.Fatal(err)
 			}
-			if info.Size != int64(len("hello, minio")) || info.ETag == "" || info.LastModified.IsZero() {
+			if info.Size != int64(len("hello, minio")) || info.ETag == "" || info.LastModified.IsZero() || info.SHA256 != sigv4.PayloadHash([]byte("hello, minio")) {
 				t.Errorf("head = %+v", info)
 			}
 		}},
@@ -133,6 +133,17 @@ func TestMinIO(t *testing.T) {
 			defer body.Close()
 			if got, _ := io.ReadAll(body); string(got) != "first" {
 				t.Errorf("stored %q, want first", got)
+			}
+		}},
+		{name: "the HEAD after a retried write-once put tells its own body from other bytes of the same size", run: func(t *testing.T) {
+			for _, body := range []struct {
+				text string
+				ours bool
+			}{{text: "first", ours: true}, {text: "other", ours: false}} {
+				_, ours, err := main.holds(ctx, run+"once", int64(len(body.text)), sigv4.PayloadHash([]byte(body.text)))
+				if err != nil || ours != body.ours {
+					t.Errorf("holds(%q) = %v, %v; want %v", body.text, ours, err, body.ours)
+				}
 			}
 		}},
 		{name: "an evidence put stores the blob under its SHA-256", run: func(t *testing.T) {
