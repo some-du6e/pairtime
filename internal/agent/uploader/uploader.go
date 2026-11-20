@@ -474,8 +474,8 @@ func (u *Uploader) cycle() bool {
 	if !u.synced && !u.sync(c) {
 		return false
 	}
-	if u.opts.Flush != nil {
-		u.opts.Flush()
+	if !u.flush() {
+		return false // stopping
 	}
 	u.takeSealed()
 	p, key, err := u.next()
@@ -491,6 +491,34 @@ func (u *Uploader) cycle() bool {
 		return false
 	}
 	return u.send(c, p, key)
+}
+
+// flushWait bounds how long an upload waits for the scorer to score the
+// batches sealed before it. A long rebuild of the scorer's place goes on
+// meanwhile, and the batch roots shouldn't wait for it.
+const flushWait = 10 * time.Second
+
+// flush waits, up to flushWait, until the scorer has scored every batch
+// sealed so far, so the upload carries their buckets. It returns false
+// when the uploader is stopping.
+func (u *Uploader) flush() bool {
+	if u.opts.Flush == nil {
+		return true
+	}
+	done := make(chan struct{})
+	go func() {
+		u.opts.Flush()
+		close(done)
+	}()
+	t := time.NewTimer(flushWait)
+	defer t.Stop()
+	select {
+	case <-done:
+	case <-t.C:
+	case <-u.stop:
+		return false
+	}
+	return true
 }
 
 // load reads the uploader's place from state.json and the chain's rows
