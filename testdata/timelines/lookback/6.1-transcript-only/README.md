@@ -9,7 +9,7 @@ Rowan's three hours of flow (SM 6.1) as pairtime would score them if he installe
 | Date and zone | Saturday 2026-11-21, Asia/Kolkata, UTC+05:30, as in 6.1 |
 | Evidence | Level C, witness `backfilled`, presence `unknown` in every slot |
 | Window | 14:00:00 to 17:00:00. The session starts at 13:58:05.5 and isn't checked |
-| Errata | [lookback](../../../../docs/errata/2026-11-19-sm-2.8-lookback.md): point 1 for the reading, 2 for the open codes, 5 for the permission trail, and 4 for the session's fields |
+| Errata | [lookback](../../../../docs/errata/2026-11-19-sm-2.8-lookback.md): point 1 for the reading, 2 for the open codes and 5 for the permission trail. Point 4 covers the session's fields |
 
 ## What the transcript holds
 
