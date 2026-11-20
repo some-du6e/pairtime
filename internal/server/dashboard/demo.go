@@ -75,8 +75,8 @@ type demoDay struct {
 	// ago counts days before today.
 	ago int
 	// you and agent are the teen's credited minutes and the minutes
-	// Claude Code ran; youPending and agentPending are how many of them
-	// are still pending.
+	// Claude Code worked on its own (agent_only, SM 2.6); youPending and
+	// agentPending are how many of them are still pending.
 	you, agent               [3]int
 	youPending, agentPending [3]int
 	// levelC marks a project's time that day as level C: uploads that

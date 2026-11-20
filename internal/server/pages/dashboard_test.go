@@ -81,7 +81,7 @@ func TestDemoPage(t *testing.T) {
 			name:    "today leads with your time, and says the agent's time and what is still pending",
 			signIn:  signInOn(""),
 			section: "today",
-			want:    []string{`<p class="hero"><strong>1h 53m</strong> of your time</p>`, "Claude Code ran for 3h 32m. 9m of your time is still pending."},
+			want:    []string{`<p class="hero"><strong>1h 53m</strong> of your time</p>`, "Claude Code worked on its own for 3h 32m. 9m of your time is still pending."},
 		},
 		{
 			name:    "today's chess clock shows each project's time and Claude Code's side by side, DESIGN 3.8's You 1h 12m, Claude 2h 40m included",
@@ -101,7 +101,7 @@ func TestDemoPage(t *testing.T) {
 			name:    "the chess clock is information, never a target ratio: no share, no ratio and no goal between the two clocks",
 			signIn:  signInOn(""),
 			section: "today",
-			want:    []string{"Two clocks, not a score.", "there&#39;s no right ratio between them."},
+			want:    []string{"Two clocks, not a score. Claude Code&#39;s clock counts the time it worked on a project with none of your time counted there, so the two never run at once, and there&#39;s no right ratio between them."},
 			notWant: []string{"%", "goal", "target", `class="bar`, `class="seg`},
 		},
 		{
@@ -109,7 +109,7 @@ func TestDemoPage(t *testing.T) {
 			signIn:  signInOn(""),
 			section: "week",
 			want: []string{
-				"<strong>12h 13m</strong> of your time. Claude Code ran for 21h 2m.",
+				"<strong>12h 13m</strong> of your time. Claude Code worked on its own for 21h 2m.",
 				`<div class="yaxis"><span class="at25">1h</span><span class="at50">2h</span><span class="at75">3h</span><span class="at100">4h</span></div>`,
 				`<li class="col"><span class="seg c1 f58" title="chip8-emulator, 2h 20m"></span><span class="seg c3 f15" title="portfolio-site, 35m"></span><small class="cap">2h 55m</small></li>`,
 				`<li><span>Sat</span><span class="dom">14</span></li>`,
@@ -312,8 +312,8 @@ func TestDemoNumbers(t *testing.T) {
 		name, section, want string
 	}{
 		{name: "the hero is today's time", section: "today", want: "<strong>" + duration(today.You.Total()) + "</strong> of your time"},
-		{name: "the agent's time today is the view's", section: "today", want: "Claude Code ran for " + duration(today.Agent.Total()) + "."},
-		{name: "the week's time is the view's", section: "week", want: "<strong>" + duration(v.Week.You.Total()) + "</strong> of your time. Claude Code ran for " + duration(v.Week.Agent.Total()) + "."},
+		{name: "the agent's time today is the view's", section: "today", want: "Claude Code worked on its own for " + duration(today.Agent.Total()) + "."},
+		{name: "the week's time is the view's", section: "week", want: "<strong>" + duration(v.Week.You.Total()) + "</strong> of your time. Claude Code worked on its own for " + duration(v.Week.Agent.Total()) + "."},
 		{name: "the month's total is the view's", section: "projects", want: "<strong>" + duration(v.Month.You.Total()) + "</strong> <span class=\"agent\">Claude Code " + duration(v.Month.Agent.Total()) + "</span></td></tr>\n</tfoot>"},
 		{name: "level A's time is the view's", section: "levels", want: "Your keyboard backs it up.</span><span class=\"lt\">" + duration(v.Week.Levels[0].Total()) + ","},
 		{name: "the longest kind's time is the view's", section: "kinds", want: "<span class=\"kt\">" + duration(v.Week.Kinds[0].Total()) + "</span>"},

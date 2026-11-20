@@ -18,7 +18,7 @@
 <section aria-labelledby="today">
 <h2 id="today">Today <span class="when">{{.Today.Date}}</span></h2>
 <p class="hero"><strong>{{.Today.You}}</strong> of your time</p>
-<p class="lede">{{.Agent}} ran for {{.Today.Agent}}.{{with .Today.YouPending}} {{.}} of your time is still pending.{{end}}</p>
+<p class="lede">{{.Agent}} worked on its own for {{.Today.Agent}}.{{with .Today.YouPending}} {{.}} of your time is still pending.{{end}}</p>
 {{- if .Today.Clocks}}
 <ul class="clocks">
 {{- range .Today.Clocks}}
@@ -29,7 +29,7 @@
 </li>
 {{- end}}
 </ul>
-<p class="note">Two clocks, not a score. Your time and {{.Agent}}&#39;s overlap whenever you watch it work, and there&#39;s no right ratio between them.</p>
+<p class="note">Two clocks, not a score. {{.Agent}}&#39;s clock counts the time it worked on a project with none of your time counted there, so the two never run at once, and there&#39;s no right ratio between them.</p>
 {{- else}}
 <p class="note">Nothing counted yet today.</p>
 {{- end}}
@@ -37,7 +37,7 @@
 
 <section aria-labelledby="week">
 <h2 id="week">Last 7 days</h2>
-<p class="lede"><strong>{{.Week.You}}</strong> of your time. {{.Agent}} ran for {{.Week.Agent}}.</p>
+<p class="lede"><strong>{{.Week.You}}</strong> of your time. {{.Agent}} worked on its own for {{.Week.Agent}}.</p>
 <div class="chart" aria-hidden="true">
 <div class="yaxis">
 {{- range .Week.Ticks}}<span class="{{.At}}">{{.Label}}</span>{{end -}}

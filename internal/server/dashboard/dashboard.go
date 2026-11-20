@@ -43,7 +43,7 @@ type View struct {
 	TZ string `json:"tz"`
 	// Today is the account's local date, as YYYY-MM-DD.
 	Today string `json:"today"`
-	// Agent names the agent whose running time shows beside the owner's,
+	// Agent names the agent whose time on its own shows beside the owner's,
 	// such as "Claude Code" (DESIGN 3.8: agent-only time is named after
 	// the agent that ran).
 	Agent string `json:"agent"`
@@ -80,7 +80,7 @@ func (t Time) Add(u Time) Time {
 	return Time{FinalS: t.FinalS + u.FinalS, PendingS: t.PendingS + u.PendingS}
 }
 
-// ProjectTime is the owner's credited time and the agent's running time
+// ProjectTime is the owner's credited time and the agent's time on its own
 // in one project.
 type ProjectTime struct {
 	// Project is the Project's Key.
@@ -107,8 +107,10 @@ type Totals struct {
 	From string `json:"from"`
 	To   string `json:"to"`
 	You  Time   `json:"you"`
-	// Agent is the agent's running time. It overlaps the owner's time
-	// whenever they watched it work, so the two never add up to anything.
+	// Agent is the agent's time on its own: the seconds it ran in a
+	// project that none of the owner's credited time there covers (SM 2.6,
+	// D-bucket-agent-only). In a project it never overlaps the owner's
+	// time, as on a chess clock.
 	Agent Time `json:"agent"`
 	// Projects has an entry for each project with time in the window, in
 	// View.Projects order.

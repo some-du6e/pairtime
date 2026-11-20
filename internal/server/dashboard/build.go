@@ -23,12 +23,12 @@ const DateLayout = "2006-01-02"
 
 // Row is one rollup row a View sums: seconds in one local day and one
 // project. It is either the owner's credited time at one activity kind and
-// evidence level, or the agent's running time, which has neither.
+// evidence level, or the agent's time on its own, which has neither.
 type Row struct {
 	// Day is the local date, YYYY-MM-DD.
 	Day     string
 	Project string
-	// Agent marks the agent's running time. Kind and Level are then "".
+	// Agent marks the agent's time on its own. Kind and Level are then "".
 	Agent bool
 	Kind  string
 	Level string
