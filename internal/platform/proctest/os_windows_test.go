@@ -19,6 +19,9 @@ const goos = platform.Windows
 
 func readOS() ([]platform.Proc, error) { return windows.Processes() }
 
+// readSelf reads this process alone, as a hook reads its own chain entry.
+func readSelf() (platform.Proc, error) { return windows.Self() }
+
 // ownPGID is 0: Windows has no process groups.
 func ownPGID() int { return 0 }
 

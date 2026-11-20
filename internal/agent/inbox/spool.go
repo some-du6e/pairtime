@@ -14,6 +14,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/some-du6e/pairtime/internal/platform/clock"
 )
 
 // SpoolName is the file in the inbox directory that senders append to.
@@ -203,7 +205,7 @@ const maxFileFailures = 3
 type Drainer struct {
 	dir  string
 	sink Sink
-	now  func() time.Time
+	now  func() clock.Stamp
 	left map[string]*leftOver
 }
 
@@ -214,13 +216,15 @@ type leftOver struct {
 }
 
 // NewDrainer returns a Drainer that hands the messages waiting in dir, the
-// inbox directory, to sink. now stamps each delivery.
-func NewDrainer(dir string, sink Sink, now func() time.Time) *Drainer {
+// inbox directory, to sink. now is the agent's clock, clock.Now, which
+// stamps each delivery as Delivery.Received, and whose wall time dates the
+// files a drain sets aside.
+func NewDrainer(dir string, sink Sink, now func() clock.Stamp) *Drainer {
 	return &Drainer{dir: dir, sink: sink, now: now, left: make(map[string]*leftOver)}
 }
 
 // Drain drains dir into sink once, as a new Drainer's first Drain does.
-func Drain(dir string, sink Sink, now func() time.Time) (DrainResult, error) {
+func Drain(dir string, sink Sink, now func() clock.Stamp) (DrainResult, error) {
 	return NewDrainer(dir, sink, now).Drain()
 }
 
@@ -322,7 +326,7 @@ func (d *Drainer) drainFile(name string, res *DrainResult) (stop bool, err error
 		return false, fmt.Errorf("inbox: reading %s, which waits for the next drain: %w", filepath.Base(name), err)
 	}
 	delete(d.left, name)
-	if serr := setAside(name, d.now()); serr != nil {
+	if serr := setAside(name, d.now().Wall); serr != nil {
 		return false, fmt.Errorf("inbox: reading %s: %w; and setting it aside: %w", filepath.Base(name), err, serr)
 	}
 	res.SetAside++
@@ -381,7 +385,8 @@ func (d *Drainer) deliver(name string, left *leftOver, res *DrainResult) (sinkEr
 				break
 			}
 			// The spool doesn't say who wrote the line or when, so there is
-			// no PeerPID, and Received is now (ViaInbox, Delivery).
+			// no PeerPID, and Received is the agent's stamp from now
+			// (ViaInbox, Delivery).
 			if err := d.sink.Deliver(Delivery{Message: m, Via: ViaInbox, Received: d.now()}); err != nil {
 				if !errors.Is(err, ErrRejected) {
 					return err, nil
@@ -446,7 +451,7 @@ func (d *Drainer) taken() ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	cutoff := d.now().Add(-KeepDays * 24 * time.Hour)
+	cutoff := d.now().Wall.Add(-KeepDays * 24 * time.Hour)
 	var names []string
 	for _, e := range entries {
 		n := e.Name()

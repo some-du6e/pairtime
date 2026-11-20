@@ -23,6 +23,7 @@ import (
 	"github.com/some-du6e/pairtime/internal/agent/home"
 	"github.com/some-du6e/pairtime/internal/agent/inbox"
 	"github.com/some-du6e/pairtime/internal/agent/ipc"
+	"github.com/some-du6e/pairtime/internal/platform/clock"
 )
 
 // nobody is the uid and gid of the second user: nobody and nogroup on
@@ -427,7 +428,7 @@ func TestOtherUser(t *testing.T) {
 					t.Fatal(err)
 				}
 				sink := &countSink{}
-				res, err := inbox.Drain(in, sink, time.Now)
+				res, err := inbox.Drain(in, sink, clock.Now)
 				if err == nil {
 					t.Error("Drain passed over nobody's file without a word")
 				}

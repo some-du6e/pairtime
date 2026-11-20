@@ -18,6 +18,8 @@ import (
 
 	"github.com/some-du6e/pairtime/internal/agent/home"
 	"github.com/some-du6e/pairtime/internal/agent/inbox"
+	"github.com/some-du6e/pairtime/internal/platform"
+	"github.com/some-du6e/pairtime/internal/platform/clock"
 )
 
 // shortDir makes a directory whose path leaves room for a socket name.
@@ -100,6 +102,26 @@ func serve(t *testing.T, ep Endpoint, opts Options, before func(*Server)) (*Serv
 		}
 	})
 	return srv, sink
+}
+
+// walker records the pids Options.Walk is called with, and walks each to a
+// chain of the pid alone, named "walked".
+type walker struct {
+	mu   sync.Mutex
+	pids []int
+}
+
+func (w *walker) walk(pid int) []platform.Proc {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.pids = append(w.pids, pid)
+	return []platform.Proc{{PID: pid, Name: "walked"}}
+}
+
+func (w *walker) calls() []int {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return append([]int(nil), w.pids...)
 }
 
 func sendOne(t *testing.T, ep Endpoint, m inbox.Message) error {
@@ -190,8 +212,54 @@ func TestServer(t *testing.T) {
 				if len(got) != 1 || got[0].ID != m.ID || got[0].Via != inbox.ViaSocket || got[0].PeerPID != os.Getpid() {
 					t.Fatalf("the sink has %+v, want only %s via the socket from pid %d", got, m.ID, os.Getpid())
 				}
-				if got[0].Received.IsZero() || got[0].Received.Location() != time.UTC {
-					t.Errorf("Received = %v, want the UTC time it arrived", got[0].Received)
+				if r := got[0].Received; r.Wall.IsZero() || r.Wall.Location() != time.UTC {
+					t.Errorf("Received = %+v, want the agent's stamp from when it arrived, by the UTC wall clock", r)
+				}
+			},
+		},
+		{
+			name: "every message carries the walk the server read for its connection, from the pid the OS reported",
+			run: func(t *testing.T, ep Endpoint) {
+				w := &walker{}
+				_, sink := serve(t, ep, Options{Walk: w.walk}, nil)
+				if got := w.calls(); len(got) != 0 {
+					t.Fatalf("the self-test was walked: %v", got)
+				}
+				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cancel()
+				c, err := Dial(ctx, ep)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer c.Close()
+				for n := range 2 {
+					if err := c.Send(ctx, message(n)); err != nil {
+						t.Fatalf("message %d: %v", n, err)
+					}
+				}
+				if got := w.calls(); len(got) != 1 || got[0] != os.Getpid() {
+					t.Errorf("walked pids %v, want this process, %d, once for the connection", got, os.Getpid())
+				}
+				got := sink.deliveries()
+				if len(got) != 2 {
+					t.Fatalf("the sink has %d messages, want 2", len(got))
+				}
+				for _, d := range got {
+					if len(d.Walk) != 1 || d.Walk[0].PID != os.Getpid() || d.Walk[0].Name != "walked" {
+						t.Errorf("message %s carries the walk %+v, want the one the server read", d.ID, d.Walk)
+					}
+				}
+			},
+		},
+		{
+			name: "without Walk a message carries no walk",
+			run: func(t *testing.T, ep Endpoint) {
+				_, sink := serve(t, ep, Options{}, nil)
+				if err := sendOne(t, ep, message(1)); err != nil {
+					t.Fatal(err)
+				}
+				if got := sink.deliveries(); len(got) != 1 || got[0].Walk != nil {
+					t.Errorf("the sink has %+v, want one message with no walk", got)
 				}
 			},
 		},
@@ -293,7 +361,7 @@ func TestServer(t *testing.T) {
 					t.Fatalf("Send = %q, %v; want the inbox", via, err)
 				}
 				sink := &memSink{}
-				if _, err := inbox.Drain(ep.Inbox, sink, time.Now); err != nil {
+				if _, err := inbox.Drain(ep.Inbox, sink, clock.Now); err != nil {
 					t.Fatal(err)
 				}
 				if got := sink.deliveries(); len(got) != 1 || got[0].ID != m.ID {
@@ -370,7 +438,7 @@ func TestServer(t *testing.T) {
 				// Close returns once the handler is done, so the message is
 				// in the journal before the drain brings its copy.
 				srv.Close()
-				res, err := inbox.Drain(ep.Inbox, j, time.Now)
+				res, err := inbox.Drain(ep.Inbox, j, clock.Now)
 				if err != nil || res.Delivered != 1 {
 					t.Fatalf("Drain = %+v, %v; want the spooled copy delivered", res, err)
 				}

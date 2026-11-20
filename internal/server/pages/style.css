@@ -5,6 +5,7 @@
   --bg: #ffffff;
   --line: #d9d9de;
   --link: #0a58b8;
+  --on-link: #ffffff;
   --note-bg: #fff6dc;
   --note-line: #c99400;
   --code-bg: #f1f1f4;
@@ -16,6 +17,7 @@
     --bg: #141417;
     --line: #34343a;
     --link: #7ab4ff;
+    --on-link: #0b1220;
     --note-bg: #2c2510;
     --note-line: #b88a1e;
     --code-bg: #25252b;
@@ -28,7 +30,50 @@ body {
   color: var(--fg);
   font: 17px/1.6 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
 }
-main, footer { max-width: 46rem; margin: 0 auto; padding: 0 16px; }
+header, main, footer { max-width: 46rem; margin: 0 auto; padding: 0 16px; }
+header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+  padding-top: 0.9rem;
+  padding-bottom: 0.9rem;
+  border-bottom: 1px solid var(--line);
+}
+.name { color: var(--fg); font-weight: 700; font-size: 1.1rem; letter-spacing: -0.01em; text-decoration: none; }
+/* Two dots side by side, the pair in pairtime. */
+.name::before {
+  content: "";
+  display: inline-block;
+  width: 0.62em;
+  height: 0.62em;
+  margin-right: 0.85em;
+  border-radius: 50%;
+  background: var(--link);
+  box-shadow: 0.4em 0 0 var(--note-line);
+}
+.account { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 0.75rem; }
+.account p { margin: 0; color: var(--muted); font-size: 0.95rem; overflow-wrap: anywhere; }
+.account strong { color: var(--fg); }
+.account form { margin: 0; }
+.button, button {
+  display: inline-block;
+  font: inherit;
+  font-size: 0.95rem;
+  font-weight: 600;
+  line-height: 1.25;
+  padding: 0.5rem 0.9rem;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  text-decoration: none;
+  cursor: pointer;
+}
+.button { background: var(--link); color: var(--on-link); }
+.button:hover { filter: brightness(1.1); }
+button { background: transparent; color: var(--fg); border-color: var(--line); }
+button:hover { border-color: var(--muted); }
+a:focus-visible, button:focus-visible { outline: 3px solid var(--link); outline-offset: 2px; }
 main { padding-top: 1.5rem; }
 h1 { font-size: 2rem; line-height: 1.2; }
 h2 { font-size: 1.4rem; line-height: 1.3; margin-top: 2.2rem; }
@@ -42,3 +87,11 @@ table { border-collapse: collapse; width: 100%; font-size: 0.95rem; }
 th, td { text-align: left; vertical-align: top; padding: 0.5rem 0.75rem 0.5rem 0; border-bottom: 1px solid var(--line); }
 th { font-weight: 600; }
 footer { margin-top: 3rem; padding-bottom: 2rem; color: var(--muted); font-size: 0.9rem; border-top: 1px solid var(--line); }
+.home main { padding-top: 2.5rem; }
+.home h1 { font-size: clamp(2rem, 1.3rem + 3.2vw, 2.9rem); line-height: 1.12; letter-spacing: -0.025em; margin: 0 0 1rem; text-wrap: balance; }
+.home h1 + p { font-size: 1.35rem; line-height: 1.4; color: var(--muted); margin: 0 0 1.25rem; }
+.home h2 { font-size: 1.25rem; margin-top: 2.4rem; }
+.home blockquote { border-radius: 0 10px 10px 0; padding: 0.3rem 1.1rem; }
+.home ul { list-style: none; padding: 0; margin: 1rem 0 0; display: grid; gap: 0.6rem; }
+.home li { margin: 0; padding: 0.8rem 1rem; border: 1px solid var(--line); border-radius: 10px; }
+.home li a { font-weight: 600; }
