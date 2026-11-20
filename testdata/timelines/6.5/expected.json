@@ -68,7 +68,8 @@
       },
       "uncredited": {"X.agent_only": 20},
       "agent_running_s": 60,
-      "sm": "20:03"
+      "sm": "20:03",
+      "erratum": "2026-11-19-sm-6.5-loop-codes"
     },
     {
       "start": "2026-11-25T12:04:00Z",
@@ -94,7 +95,8 @@
       "credit": {},
       "uncredited": {"X.rewrite_loop": 60},
       "agent_running_s": 60,
-      "sm": "20:05"
+      "sm": "20:05",
+      "erratum": "2026-11-19-sm-6.5-loop-codes"
     },
     {
       "start": "2026-11-25T12:06:00Z",
@@ -677,6 +679,7 @@
   "notes": [
     "excluded_loops_s is X.reroll + X.rewrite_loop from 20:05:00 to 20:38:30 (SM 5.3). The rows 20:08 to 20:37 give SM's codes without seconds, so totals.uncredited holds only the loop seconds of 20:05, 20:06, 20:07 and 20:38.",
     "Read as SM's 20:05, 20:06, 20:07 and 20:38 rows read (each second from a discounted prompt's submit to the next prompt carries that turn's code), this fixture's prompts give, by minute: 20:05 X.rewrite_loop 60; 20:06 X.rewrite_loop 60; 20:07 X.reroll 60; 20:08 X.reroll 60; 20:09 X.rewrite_loop 60; 20:10 X.rewrite_loop 60; 20:11 X.rewrite_loop 60; 20:12 X.rewrite_loop 60; 20:13 X.reroll 60; 20:14 X.reroll 60; 20:15 X.rewrite_loop 60; 20:16 X.rewrite_loop 60; 20:17 X.rewrite_loop 60; 20:18 X.rewrite_loop 60; 20:19 X.rewrite_loop 60; 20:20 X.rewrite_loop 60; 20:21 X.rewrite_loop 60; 20:22 X.rewrite_loop 60; 20:23 X.reroll 60; 20:24 X.reroll 60; 20:25 X.rewrite_loop 60; 20:26 X.rewrite_loop 60; 20:27 X.rewrite_loop 60; 20:28 X.rewrite_loop 60; 20:29 X.rewrite_loop 60; 20:30 X.rewrite_loop 60; 20:31 X.reroll 60; 20:32 X.reroll 60; 20:33 X.rewrite_loop 60; 20:34 X.rewrite_loop 60; 20:35 X.rewrite_loop 60; 20:36 X.rewrite_loop 60; 20:37 X.rewrite_loop 60; 20:38 X.rewrite_loop 30. That is X.reroll 480 and X.rewrite_loop 1530; see the loop-codes erratum.",
+    "Read literally (SM 4.2: seconds that would have been credited carry their discount code), 20:03:20-:40 would be X.rewrite_loop, because T3's lead would have covered it, and 20:13:20-:40 X.agent_only, because nothing would have: T7's bucket holds only its 20 s base until its edit at 20:13:40, and T8 is a go-ahead with a 20 s lead. 20:05 and 20:06 would be X.reroll and 20:07 X.rewrite_loop. excluded_loops_s and X.agent_only stay 2,010 and 100; see the loop-codes erratum.",
     "SM's X.agent_only total of 100 s is totals.uncredited: 20 s at 20:03 and 80 s in 20:43-20:59.",
     "T3 to T19 are discounted: T3 as rewrite repeat 2 (attempt 2), T4 as attempt 3, and from T5 on the paraphrases as rewrite repeats and the exact repeats (T7, T12, T16) as attempts 4, 5 and 6. Where both rules fire, the code is X.reroll, as in SM's 20:07 row.",
     "This fixture's events replay to 2700 s of ai coding and 340 s of coding inside the hour under min(gap, 120 s); SM says about 50 and 5 minutes.",

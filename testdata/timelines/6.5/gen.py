@@ -462,6 +462,78 @@ for a, b in [("20:04:00", "20:04:30"), ("20:38:00", "20:38:30"), ("20:41:15", "2
              ("20:53:00", "20:54:00"), ("20:02:30", "20:02:45")]:
     tl.check(agent_seconds(at(a), at(b)) == 0, f"no agent runs during the lookup {a}-{b}")
 
+# The loop-codes erratum's other reading: SM 4.2's "seconds that would have
+# been credited are reported under their discount code", taken literally.
+# For each second the rows leave uncredited, 20:03:20-:40 and 20:05:00 to
+# 20:38:30, what would have credited it had no turn been discounted: the lead
+# of the next anchor (SM 3.3 rule 3), else the session's bucket, else a
+# bracketed lookup (SM 2.5). The second then carries the code of the turn
+# behind that lead or bucket, or behind the second before the lookup.
+# Without T19's discount the 20:39:20 NAV lead isn't cut at T19's stop.
+UNCREDITED = [(at("20:03:20"), at("20:03:40")), (at("20:05:00"), at("20:38:30"))]
+leads = [(SENT[k] - lead(k) * 1000, SENT[k], k) for k in range(2, 20)] + [(at("20:37:20"), at("20:39:20"), 19)]
+would = {}  # second -> the discounted turn that keeps it from being credited
+undiscounted = tl.Bucket()
+j = 0
+for tau in range(at("20:03:00"), at("20:39:00"), 1000):
+    while j < len(fills) and fills[j][0] <= tau:
+        t, amount, tk = fills[j]
+        if amount == "reset":
+            undiscounted.reset(t, tl.Bucket.BASE_S)
+            owner = TURN.index(tk)
+        else:
+            undiscounted.fill(t, amount)
+        j += 1
+    if tau - tau % tl.SLOT_MS in browser_slots:
+        continue
+    covering = [(b, k) for a, b, k in leads if a <= tau < b]
+    if covering:
+        would[tau] = min(covering)[1]
+        continue
+    got = undiscounted.drain(1)
+    tl.check(got in (0, 1), f"whole seconds from the bucket at {fx.hhmmss(tau)}")
+    if got:
+        would[tau] = owner
+looks = [s for s in browser_slots if at("20:03:00") <= s < at("20:39:00")]
+for s in looks:
+    if s - tl.SLOT_MS in looks:
+        continue
+    end = s
+    while end in looks:
+        end += tl.SLOT_MS
+    if s - 1000 in would and end in would and agent_seconds(s, end) == 0:
+        for tau in range(s, end, 1000):
+            would[tau] = would[s - 1000]
+unc_seconds = [tau for a, b in UNCREDITED for tau in range(a, b, 1000)]
+nothing = [tau for tau in unc_seconds if tau not in would]
+tl.check(all(would[tau] in code for tau in unc_seconds if tau in would),
+         "only discounted turns stand behind the uncredited seconds")
+# T7's bucket holds only its 20 s base until its edit at 20:13:40, and T8,
+# "pls fix the overlap", is a go-ahead with a 20 s lead, so 20:13:20-:40 is
+# the one stretch nothing would have credited. T7's agent runs through it.
+tl.check(lead(8) == LOW_LEAD_S and RUNS[7][1][1][:2] == ("20:13:40", "edit"),
+         "T8 is a go-ahead and T7's edit lands at 20:13:40")
+tl.check(nothing == list(range(at("20:13:20"), at("20:13:40"), 1000))
+         and agent_seconds(at("20:13:20"), at("20:13:40")) == 20,
+         f"only 20:13:20-:40 would have had no credit: {[fx.hhmmss(t) for t in nothing]}")
+
+
+def would_codes(minute):
+    """A minute's uncredited seconds by code under the literal reading."""
+    m = at(minute)
+    got = {}
+    for tau in range(m, m + tl.MINUTE_MS, 1000):
+        if any(a <= tau < b for a, b in UNCREDITED):
+            c = code[would[tau]] if tau in would else "X.agent_only"
+            got[c] = got.get(c, 0) + 1
+    return got
+
+
+tl.check(would_codes("20:03") == {"X.rewrite_loop": 20} and would_codes("20:05") == {"X.reroll": 60}
+         and would_codes("20:06") == {"X.reroll": 60} and would_codes("20:07") == {"X.rewrite_loop": 60}
+         and would_codes("20:13")["X.agent_only"] == 20,
+         "the literal reading gives the erratum's codes for 20:03, 20:05, 20:06, 20:07 and 20:13")
+
 # What Hackatime would log for the hour (SM 6.5's last paragraph): agent
 # events as ai coding, editor heartbeats as coding, each replayed with
 # min(gap, 120 s), and the handbook's third.
@@ -489,9 +561,9 @@ def row(minute, credit=None, unc=None, codes=None, **kw):
 row("20:00", {"P": 60}, {})
 row("20:01", {"P": 60}, {})
 row("20:02", {"P": 40, "LOOKUP": 20}, {}, erratum=LOOKUP_ERRATUM)
-row("20:03", {"SUP": 40}, {"X.agent_only": 20})
+row("20:03", {"SUP": 40}, {"X.agent_only": 20}, erratum=LOOP_ERRATUM)
 row("20:04", {"LOOKUP": 30, "READ": 30}, {})
-row("20:05", None, {"X.rewrite_loop": 60})
+row("20:05", None, {"X.rewrite_loop": 60}, erratum=LOOP_ERRATUM)
 row("20:06", None, {"X.rewrite_loop": 60}, erratum=LOOP_ERRATUM)
 row("20:07", None, {"X.reroll": 60}, erratum=LOOP_ERRATUM)
 for m in range(at("20:08"), at("20:38"), tl.MINUTE_MS):
@@ -510,8 +582,45 @@ exp.row("20:43", "21:00", credit={P: {"P": 240, "E": 180, "G": 60, "SUP": 160, "
              "20:46 and 20:53 (LOOKUP); T21's lead 20:47-20:49 and T22's 20:58-21:00 (P); a hand edit "
              "20:54-20:57 (E) and the commit's lead (G).")
 
+# SM's stated numbers, tied to the rows so that an edited row can't move
+# them silently: excluded_loops_s 2,010 from the rows' loop codes, X.agent_only
+# 100 from the stretches with an agent running and nothing on screen, and
+# the 20:43 to 20:59 row's 940 s credited and 80 s X.agent_only.
+LOOP_CODES = ("X.reroll", "X.rewrite_loop", "X.same_error", "X.autopilot")  # excluded_loops_s (SM 5.3)
+
+
+def loop_seconds(r):
+    """A row's loop seconds. Rows 20:08 to 20:37 give SM's codes without
+    seconds; they credit nothing and both codes are loop codes, so every
+    second of them counts."""
+    if r["uncredited"] is None:
+        tl.check(r["credited_s"] == 0 and set(r["codes"]) <= set(LOOP_CODES), f"row {r['local']}: loop codes only")
+        return 60 * r["bucket_minutes"]
+    return sum(n for c, n in r["uncredited"].items() if c in LOOP_CODES)
+
+
+excluded = sum(loop_seconds(r) for r in exp.rows)
+tl.check(excluded == 2010 == sum(span_totals.values()), f"excluded_loops_s: the rows give {excluded}")
+agent_only = exp.totals()["uncredited"]["X.agent_only"]
+tl.check(agent_only == 100 == sum(b - a for a, b in empty) // 1000, f"X.agent_only: the rows give {agent_only}")
+for a, b in empty:
+    tl.check(agent_seconds(a, b) == (b - a) // 1000, f"an agent runs while nothing is on screen at {fx.hhmmss(a)}")
+# The literal reading makes 20:03:20-:40 X.rewrite_loop and leaves
+# 20:13:20-:40 X.agent_only, so its totals come out the same.
+at_2003 = next(r for r in exp.rows if r["local"] == "20:03")["uncredited"]["X.agent_only"]
+literal = (len(unc_seconds) - len(nothing), agent_only - at_2003 + len(nothing))
+tl.check(literal == (excluded, agent_only), f"the literal reading gives excluded_loops_s and X.agent_only {literal}")
+rest = exp.rows[-1]
+split = rest["credit"][P]
+tl.check(rest["local"] == "20:43-20:59" and rest["credited_s"] == 940 and rest["uncredited"] == {"X.agent_only": 80}
+         and sum(b - a for a, b in empty if a >= at("20:43")) // 1000 == 80,
+         f"20:43 to 20:59: SM's 940 s credited and 80 s X.agent_only, not {rest['credited_s']} and {rest['uncredited']}")
+tl.check(split["SUP"] + split["READ"] == sum(b - a for a, b in drain if a >= at("20:43")) // 1000
+         and split["LOOKUP"] == 15 * sum(at("20:43") <= s < at("21:00") for s in browser_slots),
+         f"20:43 to 20:59: SUP and READ are the bucket's seconds and LOOKUP the browser's: {split}")
+
 expected = exp.doc(
-    extra_totals={"credited_s": 1490, "excluded_loops_s": 2010},
+    extra_totals={"credited_s": 1490, "excluded_loops_s": excluded},
     stated=["credited_s", "excluded_loops_s"],
     approx={
         "ai_logged_s": {"about": 3000, "sm": "Hackatime would log about 50 minutes of ai coding"},
@@ -527,6 +636,11 @@ expected = exp.doc(
         "the next prompt carries that turn's code), this fixture's prompts give, by minute: " + reading +
         f". That is X.reroll {span_totals['X.reroll']} and X.rewrite_loop {span_totals['X.rewrite_loop']}; see "
         "the loop-codes erratum.",
+        "Read literally (SM 4.2: seconds that would have been credited carry their discount code), 20:03:20-:40 "
+        "would be X.rewrite_loop, because T3's lead would have covered it, and 20:13:20-:40 X.agent_only, because "
+        "nothing would have: T7's bucket holds only its 20 s base until its edit at 20:13:40, and T8 is a "
+        "go-ahead with a 20 s lead. 20:05 and 20:06 would be X.reroll and 20:07 X.rewrite_loop. excluded_loops_s "
+        "and X.agent_only stay 2,010 and 100; see the loop-codes erratum.",
         "SM's X.agent_only total of 100 s is totals.uncredited: 20 s at 20:03 and 80 s in 20:43-20:59.",
         "T3 to T19 are discounted: T3 as rewrite repeat 2 (attempt 2), T4 as attempt 3, and from T5 on the "
         "paraphrases as rewrite repeats and the exact repeats (T7, T12, T16) as attempts 4, 5 and 6. Where both "
