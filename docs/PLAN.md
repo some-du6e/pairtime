@@ -377,6 +377,7 @@ Exit check: `e2e-install.yml` green on three runners; SM 6.1, 6.2, 6.3, 6.4 and 
 - Touches: `internal/agent/scorer/`, `internal/agent/store/`.
 - Build: step `pkg/score` every 60 s and after each prompt or stop hook over new ledger records; write `buckets/YYYY-MM-DD.jsonl` with revisions and `days/YYYY-MM-DD.json` rollups (DESIGN 3.5); keep scorer state and the project map in `state.json` and rebuild both from the ledger when it is missing. Add `display.shadow` (DESIGN 6.7 step 2): when on, every view shows credited totals as "calibrating" and keeps moments, loops and the agent's time. Calibration volunteers get it on from 12-01 until the scoring freeze, through `pairtime install --calibration-volunteer`; other alpha testers get it off. Give presence (WP-OS1) the parameter table the scorer runs with, as `presence.Options.Params`, so the sampler slows down where the scorer expects it to (D14).
 - CI checks: the 6.2 fixture's events sent through the socket produce the same buckets as calling `pkg/score` directly; deleting `state.json` and restarting rebuilds identical buckets; `kill -9` mid-run loses nothing.
+- Open (#69): the git adapter's project map (`Resolver.Map`: each repo's key, kind, roots and aliases) has no ledger record, so it can't be rebuilt from the ledger as Build asks. Either this WP adds a local project-binding record, written whenever the map changes, or DESIGN 3.5 says the map lives only in `state.json` and decides how a session that crosses its repo's first commit keeps one project. DESIGN is an oracle, so Karim decides.
 - Oracle: `pkg/score` output on the SM fixtures, which is itself checked against SM.
 
 ### WP-AD0. Harness capture kit
@@ -505,6 +506,7 @@ Exit check: `e2e-wakatime.yml` green on three runners; SM 6.5 reproduces; `web.y
 - Touches: `pkg/score/`, `pkg/score/VERSION` (`0.2.0`).
 - Build: SM 4.2's four detectors (re-roll, fix-it, autopilot, rewrite loop) reading content only through the keyed features `f` (DESIGN 6.2 D18); SM 4.3's progress events, the `NO_PROGRESS_LIMIT_S` half rate and its restore within `PROGRESS_RESTORE_S`; `DAY_CAP_S`; `UNCOMMITTED_CAP_S` in submission totals; a discounted turn resets the reading bucket to zero (SM 2.4). The detector counters join `ProjectState`.
 - CI checks: 6.5 reproduces minute by minute to 20:42 and in aggregate after (1,490 credited; `excluded_loops_s` 2,010, from 20:05:00 to 20:38:30; `X.agent_only` 100); the `4.2-alternation` fixture from WP-FX2 is caught at the third A; 6.1's cycles 9 and 10 stay undiscounted; every other fixture's output is unchanged apart from the version.
+- Needs from the git adapter (#69): each commit's files as WP-AD2's file keys, in `CommitLocal`, which `edit_survives` (SM 4.3) and DESIGN 6.4's editor-plus-commit pair read, with git-ai's `h_` ranges per file key. WP-AD5 couldn't key them before WP-AD2 fixed the form, so whichever of WP-AD2 and this WP lands second adds them to `internal/adapters/git`, from the `diff-tree` pass that counts the shortstat.
 - Oracle: SM 6.5 and SM 4.2.
 
 ### WP-FX5. Lookback fixtures

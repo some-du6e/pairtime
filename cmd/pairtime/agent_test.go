@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -21,11 +22,132 @@ import (
 // real command in a process of its own.
 const runEnv = "PAIRTIME_TEST_RUN"
 
+// ownArgs as runEnv's value makes the test binary run `pairtime` with its
+// own command-line arguments, as the real binary does. A process it starts
+// in turn, as `agent --detach` starts `agent`, inherits the setting and
+// runs pairtime too.
+const ownArgs = "@args"
+
+// helpers are other jobs a test can give the test binary in a process of
+// its own: when the environment variable a helper is filed under is set,
+// the binary runs the helper with its value and exits with what it
+// returns.
+var helpers = map[string]func(value string) int{}
+
 func TestMain(m *testing.M) {
-	if args := os.Getenv(runEnv); args != "" {
+	for env, helper := range helpers {
+		if v := os.Getenv(env); v != "" {
+			os.Exit(helper(v))
+		}
+	}
+	switch args := os.Getenv(runEnv); args {
+	case "":
+	case ownArgs:
+		os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
+	default:
 		os.Exit(run(strings.Fields(args), os.Stdout, os.Stderr))
 	}
 	os.Exit(m.Run())
+}
+
+// waitForAgent waits up to 30 s for the agent using the data directory
+// ptHome to write its port.json.
+func waitForAgent(t *testing.T, ptHome string) {
+	t.Helper()
+	portFile := filepath.Join(ptHome, "port.json")
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		if _, err := os.Stat(portFile); err == nil {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the agent wrote no port.json within 30 s")
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+// startedPid returns the process ID that `agent --detach` printed.
+func startedPid(t *testing.T, out string) int {
+	t.Helper()
+	const said = "started the agent, process "
+	i := strings.Index(out, said)
+	if i < 0 {
+		t.Fatalf("agent --detach printed %q, which names no process", out)
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(out[i+len(said):]))
+	if err != nil {
+		t.Fatalf("agent --detach printed %q: %v", out, err)
+	}
+	return pid
+}
+
+// stopAtCleanup kills the process pid when the test ends. Call it after
+// t.TempDir, so it runs before the temporary directories go: Windows can't
+// delete a directory while the agent has files in it open.
+func stopAtCleanup(t *testing.T, pid int) {
+	t.Helper()
+	p, err := os.FindProcess(pid)
+	if err != nil {
+		t.Fatalf("finding the agent, process %d: %v", pid, err)
+	}
+	t.Cleanup(func() {
+		p.Kill()
+		// On Windows this waits for the process to end. On Unix a process
+		// that isn't this one's child can't be waited for, and that's fine.
+		p.Wait()
+	})
+}
+
+// waitWithin waits up to d for cmd to exit.
+func waitWithin(t *testing.T, cmd *exec.Cmd, d time.Duration) error {
+	t.Helper()
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(d):
+		cmd.Process.Kill()
+		<-done
+		t.Fatalf("%s was still running after %v", cmd, d)
+		return nil
+	}
+}
+
+func TestAgentDetach(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+	}{
+		{"agent --detach starts the agent in a process of its own and returns at once", []string{"agent", "--detach"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			exe, err := os.Executable()
+			if err != nil {
+				t.Fatal(err)
+			}
+			ptHome := t.TempDir()
+			cmd := exec.Command(exe, tt.args...)
+			cmd.Env = append(os.Environ(), runEnv+"="+ownArgs, home.EnvHome+"="+ptHome)
+			var out bytes.Buffer
+			cmd.Stdout = &out
+			cmd.Stderr = &out
+			if err := cmd.Start(); err != nil {
+				t.Fatal(err)
+			}
+			if err := waitWithin(t, cmd, 30*time.Second); err != nil {
+				t.Fatalf("agent --detach ended with %v; output:\n%s", err, out.String())
+			}
+			pid := startedPid(t, out.String())
+			stopAtCleanup(t, pid)
+			if pid == cmd.Process.Pid {
+				t.Fatalf("agent --detach says it is the agent itself, process %d", pid)
+			}
+			waitForAgent(t, ptHome)
+		})
+	}
 }
 
 // startPairtime starts `pairtime <args>` as a separate process with its
@@ -61,17 +183,7 @@ func TestAgentProcess(t *testing.T) {
 			t.Logf("the first agent's output:\n%s", firstOut.String())
 		}
 	})
-	portFile := filepath.Join(ptHome, "port.json")
-	deadline := time.Now().Add(30 * time.Second)
-	for {
-		if _, err := os.Stat(portFile); err == nil {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("the first agent wrote no port.json within 30 s")
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
+	waitForAgent(t, ptHome)
 
 	tests := []struct {
 		name  string

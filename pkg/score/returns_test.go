@@ -28,11 +28,88 @@ func silence(app event.AppClass, resume int64, act func(b *tl)) *tl {
 	return b
 }
 
+// TestActsEndingASilence checks SM 2.3's presence tests in the slot whose
+// input ends a silence longer than PRESENCE_GAP_S, where a sample taken at
+// a focus event later in the slot dates the input (presence.markStarts).
+// The tests read SM 2.1's presence for the slot, which has input, so an act
+// early in it still opens its anchor, and an interrupt that comes first
+// still keeps the return rule from crediting the silence.
+func TestActsEndingASilence(t *testing.T) {
+	// The person watches the agent after its answer at 102 s and touches
+	// nothing from 100 s until 330 s.
+	watch := func(b *tl) {
+		b.focus(at(0), event.AppTerminal, "p_1", "s_1")
+		b.start(at(0), "s_1", "p_1", event.EntrypointCLI, event.ParentTerminalApp, true)
+		b.mouse(every(at(1), at(96), 5000)...)
+		b.mouse(at(100))
+		b.prompt(at(30), event.ViaHook, "s_1", "p_1", "t_1", 30)
+		b.harness(at(102), event.ViaLog, "s_1", "p_1", &event.AgentOutput{TurnKey: "t_1", Words: 160})
+	}
+	// redrawn is the agent writing the terminal's window again at 336 s,
+	// as it does when a session starts under it, with the sample it takes
+	// then: that sample reports a mouse move at 335.5 s, which dates the
+	// slot's input after the act at 333 s.
+	redrawn := func(b *tl) {
+		b.mouse(atMS(335_500))
+		b.focus(at(336), event.AppTerminal, "p_1", "s_1", "s_2")
+		b.sample(at(336))
+	}
+	cases := []struct {
+		name string
+		act  func(b *tl) event.Event
+		kind event.AnchorKind
+	}{
+		{
+			name: "an interrupt at 333 s, before a focus sample dates the slot's input, is INT, and the correction after it ends no returned run",
+			act: func(b *tl) event.Event {
+				b.press(at(333))
+				e := b.harness(at(333), event.ViaLog, "s_1", "p_1", &event.AgentInterrupt{TurnKey: "t_1"})
+				redrawn(b)
+				b.press(atMS(339_500))
+				b.prompt(at(340), event.ViaHook, "s_1", "p_1", "t_2", 20)
+				b.sample(at(340))
+				return e
+			},
+			kind: event.AnchorInterrupt,
+		},
+		{
+			name: "a permission answered at 333 s, before a focus sample dates the slot's input, is PA",
+			act: func(b *tl) event.Event {
+				b.press(at(333))
+				redrawn(b)
+				e := b.harness(at(338), event.ViaHook, "s_1", "p_1", &event.AgentPermission{RequestedAt: at(320),
+					AnsweredAt: at(333), Decision: event.DecisionAccept, DecidedBy: event.DecidedByUser})
+				b.sample(at(338))
+				return e
+			},
+			kind: event.AnchorPermissionAnswer,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			b := newTL(false)
+			watch(b)
+			e := c.act(b)
+			b.samples(at(0), at(400))
+			d := b.run(t, Device{})
+			if a, ok := anchorByID(d, e.EventID); !ok || a.Kind != c.kind {
+				t.Errorf("anchor %+v (found %v), want %s", a, ok, c.kind)
+			}
+			if len(d.Returns) != 0 {
+				t.Errorf("returns %+v, want none", d.Returns)
+			}
+			if s, _ := slotAt(d, at(330)); s.PresentUntil != at(335) {
+				t.Errorf("slot at 330 s is %+v; the test needs its input dated at 335 s by the focus sample", s)
+			}
+		})
+	}
+}
+
 func TestReturnRule(t *testing.T) {
 	typedPrompt := func(resume int64) func(b *tl) {
 		return func(b *tl) { b.prompt(at(resume+19), event.ViaHook, "s_1", "p_1", "t_2", 30) }
 	}
-	t.Run("SM 2.1: a 6-minute silence after a 160-word answer, then a typed prompt, earns at most 53 + 120 = 173 s", func(t *testing.T) {
+	t.Run("SM 2.1: a 160-word answer after the last touch, a 6-minute silence, then a typed prompt, earns 53 + 120 = 173 s", func(t *testing.T) {
 		got := silence(event.AppTerminal, 451, typedPrompt(451)).run(t, Device{})
 		if len(got.Returns) != 1 {
 			t.Fatalf("%d returned runs, want 1", len(got.Returns))
@@ -51,6 +128,27 @@ func TestReturnRule(t *testing.T) {
 			{at: 450, present: event.PresentYes},
 		})
 	})
+	t.Run("prose a plugin claims during the silence isn't unread prose, however many words it claims (DESIGN 5.2)", func(t *testing.T) {
+		// VS Code on p_1 hosts no session, so every session of p_1 counts:
+		// s_1, which hooks and a log reader see, and s_9, a plugin's.
+		b := newTL(false)
+		b.focus(at(0), event.AppEditor, "p_1")
+		b.start(at(0), "s_1", "p_1", event.EntrypointCLI, event.ParentTerminalApp, true)
+		b.mouse(every(at(1), at(96), 5000)...)
+		b.mouse(at(100))
+		b.prompt(at(30), event.ViaHook, "s_1", "p_1", "t_1", 30)
+		b.harness(at(102), event.ViaLog, "s_1", "p_1", &event.AgentOutput{TurnKey: "t_1", Words: 160, IsFinal: true})
+		b.harness(at(102), event.ViaHook, "s_1", "p_1", &event.AgentStop{TurnKey: "t_1", StopReason: event.StopEndTurn})
+		b.emit(at(200), event.Envelope{Source: event.SourceHook, Via: event.ViaPlugin, Harness: event.HarnessOther,
+			SessionKey: "s_9", ProjectKey: "p_1"}, &event.AgentOutput{TurnKey: "t_9", Words: 50_000})
+		b.press(every(atMS(451_500), atMS(456_500), 1000)...)
+		b.editor(at(457), event.ViaEditor, "p_1", event.ActEdit, event.EditSourceHuman)
+		b.samples(at(0), at(511))
+		got := b.run(t, Device{})
+		if len(got.Returns) != 1 || got.Returns[0].UnreadWords != 160 || got.Returns[0].ReadUntil != at(130+53) {
+			t.Errorf("returned runs %+v, want one with the 160 hooked words read until 183 s", got.Returns)
+		}
+	})
 	t.Run("SM 2.1: the same silence followed by editor navigation earns only the tail", func(t *testing.T) {
 		got := silence(event.AppEditor, 451, func(b *tl) {
 			b.editor(at(455), event.ViaEditor, "p_1", event.ActNavigate, event.EditSourceUnknown)
@@ -68,6 +166,16 @@ func TestReturnRule(t *testing.T) {
 			t.Errorf("returned runs %+v, want none", got.Returns)
 		}
 	})
+	t.Run("a switch to another editor on the same project isn't a focus change, since app_hash is local (DESIGN 6.5)", func(t *testing.T) {
+		got := silence(event.AppEditor, 451, func(b *tl) {
+			b.os(at(300), &event.OSFocus{AppClass: event.AppEditor, AppHash: "a_cursor", FocusProject: "p_1",
+				HostedSessions: []string{"s_1"}})
+			typedPrompt(451)(b)
+		}).run(t, Device{})
+		if len(got.Returns) != 1 {
+			t.Errorf("returned runs %+v, want one", got.Returns)
+		}
+	})
 	t.Run("a focus change during the silence rules the return out", func(t *testing.T) {
 		got := silence(event.AppTerminal, 451, func(b *tl) {
 			b.focus(at(300), event.AppBrowser, "")
@@ -78,15 +186,20 @@ func TestReturnRule(t *testing.T) {
 			t.Errorf("returned runs %+v, want none", got.Returns)
 		}
 	})
-	t.Run("output the person had seen before the silence isn't unread", func(t *testing.T) {
+	// SM 6.1 cycle 6 has the answer come 10 s before the last touch and
+	// says 173 s. By SM 2.1's definition the person had the session in
+	// focus with input after the answer came, so none of it is unread, and
+	// the scorer credits 120 s. docs/errata/2026-11-20-sm-6.1-return-unread-words.md
+	// asks Karim which is right; the code isn't fitted to 6.1's number.
+	t.Run("SM 6.1 cycle 6's timing: an answer 10 s before the last touch isn't unread under SM 2.1, so 120 s, not 6.1's 173 s (erratum)", func(t *testing.T) {
 		b := newTL(false)
 		b.focus(at(0), event.AppTerminal, "p_1", "s_1")
 		b.start(at(0), "s_1", "p_1", event.EntrypointCLI, event.ParentTerminalApp, true)
 		b.mouse(every(at(1), at(96), 5000)...)
 		b.mouse(at(100))
 		b.prompt(at(30), event.ViaHook, "s_1", "p_1", "t_1", 30)
-		b.harness(at(80), event.ViaLog, "s_1", "p_1", &event.AgentOutput{TurnKey: "t_1", Words: 160, IsFinal: true})
-		b.harness(at(80), event.ViaHook, "s_1", "p_1", &event.AgentStop{TurnKey: "t_1", StopReason: event.StopEndTurn})
+		b.harness(at(90), event.ViaLog, "s_1", "p_1", &event.AgentOutput{TurnKey: "t_1", Words: 160, IsFinal: true})
+		b.harness(at(90), event.ViaHook, "s_1", "p_1", &event.AgentStop{TurnKey: "t_1", StopReason: event.StopEndTurn})
 		b.press(every(atMS(451_500), atMS(469_500), 1000)...)
 		typedPrompt(451)(b)
 		b.samples(at(0), at(511))

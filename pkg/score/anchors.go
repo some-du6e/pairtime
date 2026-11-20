@@ -52,7 +52,17 @@ type Anchor struct {
 	// 6.4).
 	Corroborated bool          `json:"corroborated,omitempty"`
 	Labels       []event.Label `json:"labels,omitempty"`
+	// decided is when the anchor is decided: the latest t of the records it
+	// goes by, and no earlier than T. A typed command's record is written
+	// when the command ends, and a permission's when the request pairs with
+	// the next tool event, both after T. The anchor is final, and can
+	// change what was derived, from there (rules.reach).
+	decided int64
 }
+
+// from returns the earliest time the anchor can credit, qualify a drain or
+// end a returned run: rules.reach before it is decided.
+func (a *Anchor) from(r rules) int64 { return a.decided - r.reach }
 
 // Event returns the anchor as pkg/event's derived record.
 func (a Anchor) Event() event.Anchor {
@@ -70,12 +80,23 @@ func anchorCmp(a, b Anchor) int {
 
 // add keeps an anchor that belongs to a project. One with no project can't
 // be credited: its windows are realized only on its project (SM 2.5).
-func (d *deriver) add(a Anchor) bool {
+// decided is the latest t of the records behind the anchor.
+func (d *deriver) add(a Anchor, decided int64) bool {
 	if a.ProjectKey == "" {
 		return false
 	}
+	a.decided = max(a.T, decided)
 	d.anchors = append(d.anchors, a)
 	return true
+}
+
+// latest returns the latest t of the records at the given indexes.
+func (d *deriver) latest(pos []int) int64 {
+	var t int64
+	for _, i := range pos {
+		t = max(t, d.recs[i].T)
+	}
+	return t
 }
 
 // promptKind returns the anchor kind and reason of a person's prompt of
@@ -95,6 +116,15 @@ func promptKind(c event.PromptClass) (event.AnchorKind, event.Reason) {
 func (d *deriver) promptAnchors() {
 	for _, tb := range d.turns {
 		t := tb.turn
+		if tb.primary >= 0 && t.Origin == event.OriginNoInput {
+			// Not an anchor (SM 2.2 rule 8). The seconds its lead would
+			// have covered are where X.no_input goes (SM 5.2).
+			e := d.recs[tb.primary]
+			p := e.Data.(*event.PromptSubmit)
+			think, typing := d.leadParts(d.classify(tb.sess, tb.primary, p), e.Via, count(p.TypedLenEst))
+			d.noInputLeads = append(d.noInputLeads, projLead{t.ProjectKey, span{e.T - think - typing, e.T}})
+			continue
+		}
 		if tb.primary < 0 || !t.Origin.Human() {
 			continue
 		}
@@ -105,7 +135,7 @@ func (d *deriver) promptAnchors() {
 			TrailFrom: e.T, Via: e.Via, Corroborated: d.corroborated(tb.prompts)}
 		a.Kind, a.Reason = promptKind(t.PromptClass)
 		d.level(&a, e.T-d.r.keysPre, e.T, d.sessionHost(tb.sess, tb.primary))
-		d.add(a)
+		d.add(a, d.latest(tb.prompts))
 	}
 }
 
@@ -167,6 +197,14 @@ func (d *deriver) eventAnchors() {
 	// its most trusted record, the first in record order on a tie.
 	groups := map[actKey][]int{}
 	var order []actKey
+	// perms holds each session's permission groups. The PermissionRequest
+	// hook stamps arrival times and Claude's tool.blocked_on_user span its
+	// own clock (SM 1.2), so two reports of one answer differ by a few
+	// milliseconds. Records whose request and answer times are both within
+	// PA_MIN_LATENCY_MS of a group's are that answer: two answers can't be
+	// that close, since a person takes at least that long over each (SM
+	// 2.3).
+	perms := map[string][]actKey{}
 	for i, e := range d.recs {
 		var k actKey
 		switch p := e.Data.(type) {
@@ -188,8 +226,19 @@ func (d *deriver) eventAnchors() {
 			// paths cover the session (DESIGN 5.7).
 			continue
 		}
+		if k.kind == event.KindAgentPermission {
+			for _, g := range perms[k.sess] {
+				if absDiff(g.from, k.from) < d.r.paMinLatencyMS && absDiff(g.to, k.to) < d.r.paMinLatencyMS {
+					k = g
+					break
+				}
+			}
+		}
 		if _, ok := groups[k]; !ok {
 			order = append(order, k)
+			if k.kind == event.KindAgentPermission {
+				perms[k.sess] = append(perms[k.sess], k)
+			}
 		}
 		groups[k] = append(groups[k], i)
 	}
@@ -203,6 +252,14 @@ func (d *deriver) eventAnchors() {
 		}
 		d.harnessAnchor(best, pos)
 	}
+}
+
+// absDiff returns |a - b|.
+func absDiff(a, b int64) int64 {
+	if a < b {
+		return b - a
+	}
+	return a - b
 }
 
 // harnessAnchor makes the anchor of a harness act, if it passes its
@@ -227,7 +284,7 @@ func (d *deriver) harnessAnchor(best int, pos []int) {
 		if !d.pres.slotInput(e.T, false) || !d.hostedBy(d.focus.before(best), s, best) {
 			return
 		}
-		typed := int64(p.LenChars)
+		typed := count(p.LenChars)
 		class := event.ClassLowEffort
 		switch {
 		case s.askedBefore(best):
@@ -235,9 +292,19 @@ func (d *deriver) harnessAnchor(best int, pos []int) {
 		case typed >= d.r.substantive:
 			class = event.ClassSubstantive
 		}
+		// SM 2.2 rule 7, as for a prompt of its class (SM 2.3): more than
+		// the lead's input slots could have typed at TYPING_MAX_CPS is
+		// pasted, and the typing part is computed from what they could.
+		// agent.queue carries no pasted_chars, so this is its only bound.
 		think, typing := d.leadParts(class, e.Via, typed)
+		a.Origin = event.OriginHumanTyped
+		active := d.pres.inputSlots(e.T-think-typing, e.T) * event.SlotMS / 1000
+		if most := d.r.typingMaxCPS * active; typed > most {
+			a.Origin = event.OriginHumanPasted
+			_, typing = d.leadParts(class, e.Via, most)
+		}
 		a.Kind, a.Reason, a.TurnKey = event.AnchorQueuedMessage, event.ReasonQueued, p.TurnKey
-		a.Origin, a.PromptClass = event.OriginHumanTyped, class
+		a.PromptClass = class
 		a.LeadMS, a.TypingMS = think+typing, typing
 	case *event.AgentPermission:
 		// decided_by user, an answer no faster than PA_MIN_LATENCY_MS, and
@@ -250,7 +317,7 @@ func (d *deriver) harnessAnchor(best int, pos []int) {
 			d.flag(FlagPermissionTooFast, e)
 			return
 		}
-		if !present(d.pres.presentAt(p.AnsweredAt)) {
+		if !d.pres.presentFor(p.AnsweredAt) {
 			return
 		}
 		a.Kind, a.Reason = event.AnchorPermissionAnswer, event.ReasonPermission
@@ -258,7 +325,7 @@ func (d *deriver) harnessAnchor(best int, pos []int) {
 		a.LeadMS, a.TrailMS = min(wait, d.r.paMax), d.r.paTrail
 		from, to = slotWindow(p.AnsweredAt)
 	case *event.AgentInterrupt:
-		if !present(d.pres.presentAt(e.T)) {
+		if !d.pres.presentFor(e.T) {
 			return
 		}
 		a.Kind, a.Reason, a.TurnKey = event.AnchorInterrupt, event.ReasonInterrupt, p.TurnKey
@@ -267,7 +334,7 @@ func (d *deriver) harnessAnchor(best int, pos []int) {
 		return
 	}
 	d.level(&a, from, to, host)
-	d.add(a)
+	d.add(a, d.latest(pos))
 }
 
 // otherAnchor makes the anchor of an editor, shell or git act, if it
@@ -314,6 +381,8 @@ func (d *deriver) otherAnchor(i int, e event.Event) {
 		if !p.Interactive || !d.pres.inputBefore(p.TStart, d.r.keysPre) {
 			return
 		}
+		// A build is TEST, as SM 5.2 and SM 2.3's activity column have it;
+		// SM 2.3's reason column names only tests (doc.go's readings).
 		a.Kind, a.Reason = event.AnchorTypedCommand, event.ReasonCommand
 		if p.CmdClass == event.CmdTest || p.CmdClass == event.CmdBuild {
 			a.Reason = event.ReasonTest
@@ -330,7 +399,7 @@ func (d *deriver) otherAnchor(i int, e event.Event) {
 		return
 	}
 	d.level(&a, from, to, host)
-	d.add(a)
+	d.add(a, e.T)
 }
 
 // levelVia reports whether an anchor that arrived via v can be level A or

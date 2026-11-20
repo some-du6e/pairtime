@@ -114,18 +114,26 @@ func checkAnchors(t *testing.T, f *timelines.Fixture, got Derived) {
 	for _, a := range got.Anchors {
 		byID[a.ID] = a
 	}
-	t.Run(f.Name+" yields the anchors its oracle names and no others", func(t *testing.T) {
-		var want, have []string
+	t.Run(f.Name+" yields the anchors its oracle names and no others whose windows reach its window", func(t *testing.T) {
+		// anchors.json lists the acts SM names. Records before and after a
+		// fixture's window set up state and aren't checked
+		// (testdata/timelines/README.md), so an act there whose windows
+		// credit nothing inside the window, such as 6.1's editor heartbeat
+		// at 13:57:05, needn't be listed.
+		from, to := f.Expected.Window.Start.UnixMilli(), f.Expected.Window.End.UnixMilli()
+		want := map[string]bool{}
 		for _, a := range f.Anchors.Anchors {
-			want = append(want, a.EventID)
+			want[a.EventID] = true
 		}
 		for _, a := range got.Anchors {
-			have = append(have, a.ID)
+			if !want[a.ID] && reaches(a, from, to) {
+				t.Errorf("anchor %s, a %s at %d, isn't in anchors.json", a.ID, a.Kind, a.T)
+			}
 		}
-		slices.Sort(want)
-		slices.Sort(have)
-		if !slices.Equal(want, have) {
-			t.Errorf("anchors %q, want %q", have, want)
+		for _, a := range f.Anchors.Anchors {
+			if _, ok := byID[a.EventID]; !ok {
+				t.Errorf("no anchor for %s, the %s at %s", a.EventID, a.Kind, a.Local)
+			}
 		}
 	})
 	for _, want := range f.Anchors.Anchors {
@@ -159,6 +167,12 @@ func checkAnchors(t *testing.T, f *timelines.Fixture, got Derived) {
 			}
 		})
 	}
+}
+
+// reaches reports whether any of an anchor's windows, its lead, its run or
+// its trail, overlaps [from, to).
+func reaches(a Anchor, from, to int64) bool {
+	return a.T-a.LeadMS < to && max(a.T+a.WatchMS, a.TrailFrom+a.TrailMS) > from
 }
 
 // checkTurns compares the turns the scorer derived for a fixture with its

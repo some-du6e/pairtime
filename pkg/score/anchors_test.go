@@ -96,6 +96,55 @@ func TestSideDoorCrossChecks(t *testing.T) {
 	})
 }
 
+// TestPermissionReports checks that the reports of one permission answer
+// from two code paths are one act (SM 1.2, DESIGN 6.4).
+func TestPermissionReports(t *testing.T) {
+	type report struct {
+		via      event.Via
+		req, ans int64 // milliseconds after base
+	}
+	cases := []struct {
+		name         string
+		reports      []report
+		anchors      int
+		corroborated bool
+	}{
+		{"the hook's and Claude's OTel span's reports of one answer, a few milliseconds apart, are one PA anchor, corroborated",
+			[]report{{event.ViaHook, 43_120, 58_480}, {event.ViaOTel, 43_118, 58_476}}, 1, true},
+		{"two answers whose times differ by PA_MIN_LATENCY_MS are two acts",
+			[]report{{event.ViaHook, 43_000, 50_000}, {event.ViaHook, 43_300, 50_300}}, 2, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			b := newTL(false)
+			terminalSession(b)
+			b.press(atMS(55_500))
+			var first event.Event
+			for i, r := range c.reports {
+				e := b.harness(atMS(r.ans), r.via, "s_1", "p_1", &event.AgentPermission{RequestedAt: atMS(r.req),
+					AnsweredAt: atMS(r.ans), Decision: event.DecisionAccept, DecidedBy: event.DecidedByUser})
+				if i == 0 {
+					first = e
+				}
+			}
+			b.samples(at(0), at(90))
+			d := b.run(t, Device{})
+			var pas []Anchor
+			for _, a := range d.Anchors {
+				if a.Kind == event.AnchorPermissionAnswer {
+					pas = append(pas, a)
+				}
+			}
+			if len(pas) != c.anchors {
+				t.Fatalf("%d PA anchors %+v, want %d", len(pas), pas, c.anchors)
+			}
+			if c.corroborated && (pas[0].ID != first.EventID || !pas[0].Corroborated) {
+				t.Errorf("anchor %+v, want the hook's, corroborated", pas[0])
+			}
+		})
+	}
+}
+
 // actCase is one human act other than a prompt, at 58 s, with input at
 // 55.5 s unless input says otherwise.
 type actCase struct {
@@ -169,13 +218,26 @@ func TestActs(t *testing.T) {
 				return b.harness(at(58), event.ViaHook, "s_1", "p_1", &event.AgentQueue{TurnKey: "t_q", LenChars: 40})
 			},
 			// 40 / 1.5 = 26.67 s, rounded to 27.
-			want: Anchor{Kind: event.AnchorQueuedMessage, Reason: event.ReasonQueued, LeadMS: 147_000, Level: event.EvidenceB}},
+			want: Anchor{Kind: event.AnchorQueuedMessage, Reason: event.ReasonQueued, LeadMS: 147_000, Level: event.EvidenceB,
+				Origin: event.OriginHumanTyped}},
+		{name: "a queued message longer than its lead's input slots could type is human_pasted, its typing part cut by rule 7",
+			app: event.AppTerminal, act: func(b *tl) event.Event {
+				return b.harness(at(58), event.ViaHook, "s_1", "p_1", &event.AgentQueue{TurnKey: "t_q", LenChars: 450})
+			},
+			// One input slot: 15 s at 15 characters a second is 225, and
+			// 225 / 1.5 = 150 s of typing.
+			want: Anchor{Kind: event.AnchorQueuedMessage, Reason: event.ReasonQueued, LeadMS: 120_000 + 150_000,
+				Level: event.EvidenceB, Origin: event.OriginHumanPasted}},
 		{name: "an interactive command typed in a shell credits CMD_LEAD_S, its run up to CMD_WATCH_MAX_S and CMD_TRAIL_S after it",
 			app: event.AppTerminal, act: shell(event.CmdRun, true),
 			want: Anchor{Kind: event.AnchorTypedCommand, Reason: event.ReasonCommand, LeadMS: 60_000, WatchMS: 300_000,
 				TrailMS: 60_000, Level: event.EvidenceB}},
 		{name: "a typed test command is TEST",
 			app: event.AppTerminal, act: shell(event.CmdTest, true),
+			want: Anchor{Kind: event.AnchorTypedCommand, Reason: event.ReasonTest, LeadMS: 60_000, WatchMS: 300_000,
+				TrailMS: 60_000, Level: event.EvidenceB}},
+		{name: "a typed build command is TEST, as SM 5.2 defines it",
+			app: event.AppTerminal, act: shell(event.CmdBuild, true),
 			want: Anchor{Kind: event.AnchorTypedCommand, Reason: event.ReasonTest, LeadMS: 60_000, WatchMS: 300_000,
 				TrailMS: 60_000, Level: event.EvidenceB}},
 		{name: "a command that wasn't typed in an interactive shell opens nothing",
@@ -207,7 +269,8 @@ func TestActs(t *testing.T) {
 				t.Fatalf("no anchor, want %s", c.want.Kind)
 			case ok:
 				if a.Kind != c.want.Kind || a.Reason != c.want.Reason || a.LeadMS != c.want.LeadMS ||
-					a.TrailMS != c.want.TrailMS || a.WatchMS != c.want.WatchMS || a.Level != c.want.Level {
+					a.TrailMS != c.want.TrailMS || a.WatchMS != c.want.WatchMS || a.Level != c.want.Level ||
+					(c.want.Origin != "" && a.Origin != c.want.Origin) {
 					t.Errorf("anchor %+v, want kind %s reason %s lead %d trail %d watch %d level %s", a, c.want.Kind,
 						c.want.Reason, c.want.LeadMS, c.want.TrailMS, c.want.WatchMS, c.want.Level)
 				}
