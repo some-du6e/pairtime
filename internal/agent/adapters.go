@@ -448,7 +448,8 @@ func (h *adapterHost) step(last bool) {
 	h.saveDue = false
 	h.mu.Unlock()
 
-	if !h.prepare() {
+	// The last step, at the agent's stop, doesn't wait on the keyring.
+	if !h.prepare(!last) {
 		h.hold(batch)
 		h.donePending(false)
 		return
@@ -457,7 +458,16 @@ func (h *adapterHost) step(last bool) {
 	held := h.held
 	h.mu.Unlock()
 	if !h.replayed || held > 0 {
-		h.replayed = h.replayHeld()
+		if h.replayed = h.replayHeld(); !h.replayed {
+			// The calls held before these come first: these wait in the
+			// queue, and in held.jsonl.pending, until the replay works.
+			h.mu.Lock()
+			h.queue = append(batch, h.queue...)
+			h.mu.Unlock()
+			h.a.setProblem("adapters.held", "the hook calls held while the ledger wasn't open can't be read yet, and the calls after them wait; the agent's log says why")
+			return
+		}
+		h.a.setProblem("adapters.held", "")
 	}
 	for _, d := range batch {
 		h.handle(d)
@@ -472,8 +482,10 @@ func (h *adapterHost) step(last bool) {
 // are there, and reports whether the adapters can run: the git host, and
 // the memory state.json kept of the adapters. It never makes an adapter
 // before K_session is known: Keys under a secret anybody has would key
-// every session, turn and subagent so a reader could test a guess.
-func (h *adapterHost) prepare() bool {
+// every session, turn and subagent so a reader could test a guess. With
+// retry set, it derives keys it lacks again, which can wait on a keyring
+// prompt (keyRetry).
+func (h *adapterHost) prepare(retry bool) bool {
 	if h.ready {
 		return true
 	}
@@ -486,7 +498,7 @@ func (h *adapterHost) prepare() bool {
 	if k == nil || len(h.a.sessionSecret()) != hookpath.SessionSecretLen {
 		// The keystore opened, and the ledger with it, but reading K_dev
 		// for these keys failed: try again, now and then.
-		if time.Since(h.keyTried) < keyRetry {
+		if !retry || time.Since(h.keyTried) < keyRetry {
 			return false
 		}
 		h.keyTried = time.Now()

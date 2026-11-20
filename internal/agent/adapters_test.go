@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/some-du6e/pairtime/internal/adapters"
+	"github.com/some-du6e/pairtime/internal/adapters/git"
 	"github.com/some-du6e/pairtime/internal/agent/home"
 	"github.com/some-du6e/pairtime/internal/agent/hookpath"
 	"github.com/some-du6e/pairtime/internal/agent/inbox"
@@ -219,12 +220,41 @@ func deviceKeys(t *testing.T, dirs home.Dirs, stores []keys.Store) (*pkgledger.K
 	return ks.Keys(), secret
 }
 
+// projectKeyOf returns the project key a stopped agent's installation gives
+// folder: the git adapter's, under the K_project of its device key.
+func projectKeyOf(t *testing.T, dirs home.Dirs, stores []keys.Store, folder string) string {
+	t.Helper()
+	ks, err := keys.Open(keys.Options{Dir: dirs.Data, Stores: stores})
+	if err != nil {
+		t.Fatalf("opening the installation's keystore: %v", err)
+	}
+	var secret []byte
+	if err := ks.WithDeviceKey(func(kDev []byte) error {
+		var err error
+		secret, err = git.ProjectSecret(kDev)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	res, err := git.NewResolver(git.ResolverOptions{Secret: secret}, git.ProjectMap{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	loc, err := res.Resolve(context.Background(), folder)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return loc.Project
+}
+
 // checkExpected checks the ledger's hook records against expected.jsonl:
 // the same events in the same order once their keys are symbols
-// (adapters.Normalize), as the ledger keeps them (Event.Shareable), and
-// for each record whose line has content, a commitment or features made
-// from exactly that content under the device's keys.
-func checkExpected(t *testing.T, got []ledgerRecord, k *pkgledger.Keys) {
+// (adapters.Normalize), as the ledger keeps them (Event.Shareable); for
+// each record whose line has content, a commitment or features made from
+// exactly that content under the device's keys; and the project and file
+// keys this installation's keys give, project being its key of the
+// capture's folder.
+func checkExpected(t *testing.T, got []ledgerRecord, k *pkgledger.Keys, project string) {
 	t.Helper()
 	raw, err := os.ReadFile(expectedRun)
 	if err != nil {
@@ -304,6 +334,26 @@ func checkExpected(t *testing.T, got []ledgerRecord, k *pkgledger.Keys) {
 			}
 		}
 	})
+	t.Run("each record's project, and each edited file, is keyed under this installation's K_project and K_feat", func(t *testing.T) {
+		fk := k.Features()
+		for i := 0; i < min(len(got), len(want)); i++ {
+			r, l := got[i], want[i]
+			if r.ev.ProjectKey != project {
+				t.Errorf("hooks/%s: project_key %q, want %q", l.From, r.ev.ProjectKey, project)
+			}
+			tool, ok := r.ev.Data.(*event.AgentTool)
+			if !ok || len(l.Edits) == 0 {
+				continue
+			}
+			v, err := fk.Path(l.Edits[0].Path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !slices.Equal(tool.Files, []string{v.String()}) {
+				t.Errorf("hooks/%s: files %v, want the edited file's key under K_feat", l.From, tool.Files)
+			}
+		}
+	})
 }
 
 // TestHookCallsReachTheLedger drives a real agent with WP-AD1's captured
@@ -329,9 +379,15 @@ func TestHookCallsReachTheLedger(t *testing.T) {
 			opts := r.options([]keys.Store{})
 			a := startAgent(t, opts)
 			sent := uint64(0)
+			var failures harnessStats // summed over the runs
+			sum := func(s statusReply) {
+				st := s.Adapters.Harnesses[event.HarnessClaudeCode]
+				failures.ParseFailures += st.ParseFailures
+				failures.WriteFailures += st.WriteFailures
+			}
 			for _, call := range calls {
 				if slices.Contains(c.restarts, call.Dir) {
-					waitParsed(t, a, sent)
+					sum(waitParsed(t, a, sent))
 					a.cancel()
 					if err := a.waitExit(t); err != nil {
 						t.Fatalf("stopping the agent before hooks/%s: %v", call.Dir, err)
@@ -341,14 +397,14 @@ func TestHookCallsReachTheLedger(t *testing.T) {
 				r.send(t, event.HarnessClaudeCode, call, calls[0].Arrived)
 				sent++
 			}
-			s := waitParsed(t, a, sent)
+			sum(waitParsed(t, a, sent))
 			a.cancel()
 			if err := a.waitExit(t); err != nil {
 				t.Fatalf("stopping the agent: %v", err)
 			}
-			t.Run("no captured call is a parse failure", func(t *testing.T) {
-				if st := s.Adapters.Harnesses[event.HarnessClaudeCode]; st.ParseFailures != 0 || st.WriteFailures != 0 {
-					t.Errorf("counts %+v", st)
+			t.Run("no captured call is a parse failure, in any of the agent's runs", func(t *testing.T) {
+				if failures.ParseFailures != 0 || failures.WriteFailures != 0 {
+					t.Errorf("counts %+v", failures)
 				}
 			})
 			t.Run("once the agent stops, no call is left pending or held on disk", func(t *testing.T) {
@@ -359,7 +415,7 @@ func TestHookCallsReachTheLedger(t *testing.T) {
 				}
 			})
 			k, _ := deviceKeys(t, r.dirs, []keys.Store{})
-			checkExpected(t, readLedger(t, r.dirs, event.SourceHook), k)
+			checkExpected(t, readLedger(t, r.dirs, event.SourceHook), k, projectKeyOf(t, r.dirs, []keys.Store{}, r.folder()))
 		})
 	}
 }
@@ -535,15 +591,45 @@ func TestMalformedHookCalls(t *testing.T) {
 	stranger.Stdin, _ = json.Marshal(unknown)
 	other := prompt
 	other.Dir = "f00003"
+	// A call the adapter reads into: its reason is no reason's name, so the
+	// failure is about a value the adapter read, and the call's record
+	// still comes, without it.
+	end := capture[78] // the first session's own SessionEnd
+	if end.Dir != "000079" || end.Event != "SessionEnd" {
+		t.Fatalf("hooks/%s is a %s, want the session's SessionEnd at 000079", end.Dir, end.Event)
+	}
+	var endPayload map[string]any
+	if err := json.Unmarshal(end.Stdin, &endPayload); err != nil {
+		t.Fatal(err)
+	}
+	endPayload["reason"] = secretText
+	end.Dir = "f00004"
+	end.Stdin, _ = json.Marshal(endPayload)
 
 	r := newHookReplay(t)
 	a := startAgent(t, r.options([]keys.Store{}))
-	r.send(t, event.HarnessClaudeCode, start, start.Arrived)
-	r.send(t, event.HarnessClaudeCode, cut, start.Arrived)
-	r.send(t, event.HarnessClaudeCode, stranger, start.Arrived)
-	r.send(t, event.HarnessCursor, other, start.Arrived)
-	r.send(t, event.HarnessClaudeCode, prompt, start.Arrived)
-	s := waitParsed(t, a, 5)
+	sends := []struct {
+		h     event.Harness
+		call  adapters.Call
+		fails bool // a Claude Code parse failure
+	}{
+		{event.HarnessClaudeCode, start, false},
+		{event.HarnessClaudeCode, cut, true},
+		{event.HarnessClaudeCode, stranger, true},
+		{event.HarnessCursor, other, false},
+		{event.HarnessClaudeCode, end, true},
+		{event.HarnessClaudeCode, prompt, false},
+	}
+	// Each failure's words, read as it comes: the status keeps the last.
+	var failures []string
+	var s statusReply
+	for i, sd := range sends {
+		r.send(t, sd.h, sd.call, start.Arrived)
+		s = waitParsed(t, a, uint64(i+1))
+		if sd.fails {
+			failures = append(failures, s.Adapters.Harnesses[event.HarnessClaudeCode].LastFailure)
+		}
+	}
 	a.cancel()
 	if err := a.waitExit(t); err != nil {
 		t.Fatal(err)
@@ -554,17 +640,20 @@ func TestMalformedHookCalls(t *testing.T) {
 		name string
 		ok   bool
 	}{
-		{"a payload that isn't JSON and an event pairtime doesn't install are Claude Code's parse failures", st.ParseFailures == 2},
+		{"a payload that isn't JSON, an event pairtime doesn't install and a field with no valid value are Claude Code's parse failures", st.ParseFailures == 3},
 		{"a call of a harness with no adapter counts apart from them", s.Adapters.Other.Calls == 1 && s.Adapters.Other.ParseFailures == 1},
-		{"the last failure says what went wrong without the call's content",
-			st.LastFailure != "" && !strings.Contains(st.LastFailure, secretText)},
-		{"the agent keeps running and parses the call after them: the session's start and its prompt are in the ledger",
-			len(recs) == 2 && recs[0].ev.Kind() == event.KindSessionStart && recs[1].ev.Kind() == event.KindPromptSubmit},
+		{"each failure says what went wrong without the call's content, the bad reason's included, which the adapter read",
+			len(failures) == 3 && strings.Contains(failures[2], "reason") && !slices.ContainsFunc(failures, func(f string) bool {
+				return f == "" || strings.Contains(f, secretText)
+			})},
+		{"the call with the bad value still makes its record, and the agent parses the call after it: start, end and prompt are in the ledger",
+			len(recs) == 3 && recs[0].ev.Kind() == event.KindSessionStart && recs[1].ev.Kind() == event.KindSessionEnd &&
+				recs[2].ev.Kind() == event.KindPromptSubmit},
 	}
 	for _, c := range checks {
 		t.Run(c.name, func(t *testing.T) {
 			if !c.ok {
-				t.Errorf("no: status %+v, %d records", s.Adapters, len(recs))
+				t.Errorf("no: status %+v, failures %q, %d records", s.Adapters, failures, len(recs))
 			}
 		})
 	}
@@ -664,12 +753,14 @@ func TestCommitsInAHookedSession(t *testing.T) {
 	}
 	g1, e1 := change(0)
 	g2, e2 := change(1)
+	want := projectKeyOf(t, r.dirs, []keys.Store{}, repo)
 	checks := []struct {
 		name string
 		ok   bool
 	}{
-		{"the session's records carry the repo's project, keyed from its root commit", strings.HasPrefix(project, "g") &&
-			!slices.ContainsFunc(hooked, func(r ledgerRecord) bool { return r.ev.ProjectKey != project })},
+		{"the session's records carry the repo's project, keyed from its root commit under this installation's K_project",
+			strings.HasPrefix(project, "g") && project == want &&
+				!slices.ContainsFunc(hooked, func(r ledgerRecord) bool { return r.ev.ProjectKey != project })},
 		{"each commit made one git.change record", len(changes) == 2},
 		{"the commit made at the terminal is the person's, in the session's project",
 			g1.Op == event.GitCommit && g1.SHA == human && g1.Actor == event.ActorHuman && e1.ProjectKey == project},

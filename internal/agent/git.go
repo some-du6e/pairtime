@@ -29,6 +29,9 @@ const (
 	gitwatchKey = "gitwatch"
 )
 
+// maxResting bounds the folders that rest at once (trackRest).
+const maxResting = 256
+
 // gitPollEvery is how often the watcher looks at the repos it watches
 // with a few stats each, which finds what file notifications missed
 // (DESIGN 3.3; git.Watcher.Poll).
@@ -40,9 +43,13 @@ const gitPollEvery = time.Minute
 // minutes, walking its whole history for the root commits; its calls then
 // go on without a project, and the walk goes on without them, for up to
 // trackLimit, so the session's later calls find its answer cached.
+// A folder whose resolve ran out of trackLimit isn't cached, and the
+// resolver would walk the history again for its next call; it sits out
+// trackRest first.
 const (
 	trackWait  = 3 * time.Second
 	trackLimit = 5 * time.Minute
+	trackRest  = 10 * time.Minute
 )
 
 // gitHost is the git adapter in the agent (DESIGN 5.8; PLAN WP-AD5,
@@ -76,6 +83,7 @@ type gitHost struct {
 	// resolve outlasted trackWait and goes on (project).
 	tracked map[string]bool
 	slow    map[string]bool
+	rest    map[string]time.Time // folders whose resolve timed out, until when they rest
 	// logged are the watcher's own problems as last logged.
 	logged map[string]string
 }
@@ -119,7 +127,8 @@ func newGitHost(a *agent, secret []byte, w *ledger.Writer) (*gitHost, error) {
 	if err != nil {
 		return nil, err
 	}
-	g := &gitHost{a: a, res: res, writer: w, tracked: make(map[string]bool), slow: make(map[string]bool)}
+	g := &gitHost{a: a, res: res, writer: w, tracked: make(map[string]bool), slow: make(map[string]bool),
+		rest: make(map[string]time.Time)}
 	g.w, err = git.NewWatcher(git.WatcherOptions{
 		Resolver: res,
 		Sink:     g.sink,
@@ -153,8 +162,9 @@ type tracked struct {
 func (g *gitHost) project(dir string) (p adapters.Project, ok, ignored bool) {
 	g.mu.Lock()
 	slow := g.slow[dir]
+	resting := time.Now().Before(g.rest[dir])
 	g.mu.Unlock()
-	if slow {
+	if slow || resting {
 		return adapters.Project{}, false, false
 	}
 	done := make(chan tracked, 1)
@@ -162,11 +172,17 @@ func (g *gitHost) project(dir string) (p adapters.Project, ok, ignored bool) {
 		ctx, cancel := context.WithTimeout(context.Background(), trackLimit)
 		defer cancel()
 		loc, err := g.w.Track(ctx, dir)
-		if err == nil && loc.GitDir != "" && !loc.Bare {
-			g.mu.Lock()
+		g.mu.Lock()
+		switch {
+		case err == nil && loc.GitDir != "" && !loc.Bare:
 			g.tracked[loc.GitDir] = true
-			g.mu.Unlock()
+		case errors.Is(err, context.DeadlineExceeded):
+			if len(g.rest) >= maxResting {
+				clear(g.rest)
+			}
+			g.rest[dir] = time.Now().Add(trackRest)
 		}
+		g.mu.Unlock()
 		// Sent before slow is cleared: project then either takes the
 		// answer or marks the folder slow, and never leaves it marked.
 		done <- tracked{loc, err}
