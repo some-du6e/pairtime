@@ -7,7 +7,10 @@ package linux
 import (
 	"context"
 	"errors"
+	"net"
+	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -22,7 +25,8 @@ func TestNotifyBusAddress(t *testing.T) {
 	tests := []struct {
 		name    string
 		env     map[string]string
-		sockets []string
+		sockets []string // bus sockets this user owns
+		others  []string // bus sockets another user owns
 		want    string
 		wantOK  bool
 	}{
@@ -64,21 +68,79 @@ func TestNotifyBusAddress(t *testing.T) {
 			env:    map[string]string{"XDG_RUNTIME_DIR": "/run/user/1000"},
 			wantOK: false,
 		},
+		{
+			name:    "a bus socket in XDG_RUNTIME_DIR that another user owns is passed over for this user's own",
+			env:     map[string]string{"XDG_RUNTIME_DIR": "/tmp"},
+			sockets: []string{"/run/user/1000/bus"},
+			others:  []string{"/tmp/bus"},
+			want:    "unix:path=/run/user/1000/bus",
+			wantOK:  true,
+		},
+		{
+			name:   "another user's bus sockets are never used, which leaves no session bus",
+			env:    map[string]string{"XDG_RUNTIME_DIR": "/tmp"},
+			others: []string{"/tmp/bus", "/run/user/1000/bus"},
+			wantOK: false,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			getenv := func(k string) string { return tt.env[k] }
-			isSocket := func(p string) bool {
-				for _, s := range tt.sockets {
-					if p == s {
-						return true
-					}
+			// The fake answers as notifyUserSocket would: sockets are this
+			// user's, others belong to someone else.
+			isSocket := func(p string, uid int) bool {
+				if uid != 1000 {
+					t.Errorf("isSocket(%q) was asked about uid %d, want 1000", p, uid)
 				}
-				return false
+				return slices.Contains(tt.sockets, p) && !slices.Contains(tt.others, p)
 			}
 			got, ok := notifyBusAddress(getenv, isSocket, 1000)
 			if ok != tt.wantOK || got != tt.want {
 				t.Errorf("notifyBusAddress() = %q, %v, want %q, %v", got, ok, tt.want, tt.wantOK)
+			}
+		})
+	}
+}
+
+// The real check, on real files. Sockets go in a short directory of their
+// own, because a socket's path must fit in sun_path.
+func TestNotifyUserSocket(t *testing.T) {
+	dir, err := os.MkdirTemp("", "pt-bus")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	sock := filepath.Join(dir, "bus")
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ln.Close() })
+	link := filepath.Join(dir, "link")
+	if err := os.Symlink(sock, link); err != nil {
+		t.Fatal(err)
+	}
+	plain := filepath.Join(dir, "plain")
+	if err := os.WriteFile(plain, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	me := os.Getuid()
+	tests := []struct {
+		name string
+		path string
+		uid  int
+		want bool
+	}{
+		{name: "a socket this user owns counts", path: sock, uid: me, want: true},
+		{name: "a socket owned by another uid doesn't count, as libdbus checks", path: sock, uid: me + 1, want: false},
+		{name: "a symlink to this user's own socket doesn't count, because libdbus uses lstat", path: link, uid: me, want: false},
+		{name: "a file that isn't a socket doesn't count", path: plain, uid: me, want: false},
+		{name: "a path that doesn't exist doesn't count", path: filepath.Join(dir, "missing"), uid: me, want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := notifyUserSocket(tt.path, tt.uid); got != tt.want {
+				t.Errorf("notifyUserSocket(%q, %d) = %v, want %v", tt.path, tt.uid, got, tt.want)
 			}
 		})
 	}
