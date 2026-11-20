@@ -3,48 +3,41 @@
 package home
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"os"
-	"path/filepath"
-	"strings"
 
 	"golang.org/x/sys/windows"
 )
 
-// The lock is the existence of a named mutex: the first process creates
-// it, a later one gets ERROR_ALREADY_EXISTS, and the kernel deletes it when
-// the last handle closes, which includes the holder dying. Nobody waits on
-// it or owns it, so the goroutine and OS thread that created it don't
-// matter.
-func acquire(dir string) (func() error, error) {
-	name, err := windows.UTF16PtrFromString(mutexName(dir))
-	if err != nil {
-		return nil, err
-	}
-	h, err := windows.CreateMutex(nil, false, name)
+// allBytes, as both halves of the length, makes the lock cover every byte
+// a file can have, from offset 0, as Go's own cmd/go locks its files. No
+// one reads agent.lock, so it doesn't matter that the lock keeps readers
+// out of it too.
+const allBytes = ^uint32(0)
+
+// tryLock takes an exclusive LockFileEx lock on f, or returns ErrLocked at
+// once when another open file holds one. The file is opened for
+// synchronous I/O, so LockFileEx answers straight away.
+func tryLock(f *os.File) error {
+	err := windows.LockFileEx(windows.Handle(f.Fd()), windows.LOCKFILE_EXCLUSIVE_LOCK|windows.LOCKFILE_FAIL_IMMEDIATELY,
+		0, allBytes, allBytes, new(windows.Overlapped))
 	switch {
 	case err == nil:
-		return func() error { return windows.CloseHandle(h) }, nil
-	case errors.Is(err, windows.ERROR_ALREADY_EXISTS), errors.Is(err, windows.ERROR_ACCESS_DENIED):
-		// Access denied means a mutex of that name exists and isn't ours
-		// to open, so it is held all the same.
-		if h != 0 {
-			windows.CloseHandle(h)
-		}
-		return nil, ErrLocked
+		return nil
+	case errors.Is(err, windows.ERROR_LOCK_VIOLATION):
+		return ErrLocked
 	default:
-		return nil, os.NewSyscallError("CreateMutex", err)
+		return &os.PathError{Op: "LockFileEx", Path: f.Name(), Err: err}
 	}
 }
 
-// mutexName is the lock's name for the data directory dir. Mutex names
-// can't contain backslashes, so it uses a hash of the path, lowercased
-// because Windows paths ignore case. The Local\ prefix keeps the name in
-// this logon session's namespace, where processes of other sessions can't
-// create it first.
-func mutexName(dir string) string {
-	sum := sha256.Sum256([]byte(strings.ToLower(filepath.Clean(dir))))
-	return `Local\pairtime-agent-` + hex.EncodeToString(sum[:16])
+// unlock drops f's lock before f is closed. Windows drops a closed file's
+// locks as well, but LockFileEx's documentation says how soon depends on
+// the system's resources and recommends unlocking explicitly, so the next
+// agent finds the lock free at once.
+func unlock(f *os.File) error {
+	if err := windows.UnlockFileEx(windows.Handle(f.Fd()), 0, allBytes, allBytes, new(windows.Overlapped)); err != nil {
+		return &os.PathError{Op: "UnlockFileEx", Path: f.Name(), Err: err}
+	}
+	return nil
 }

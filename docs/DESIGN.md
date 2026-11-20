@@ -154,7 +154,7 @@ One signed binary with subcommands, so there is one thing to ship, sign and upda
 
 | Process | Started by | Does |
 |---|---|---|
-| `pairtime agent` | Login: HKCU Run key, a LaunchAgent, or XDG autostart, none needing admin (CP 2.1); or a hook that finds it down. Single-instance lock: a named mutex on Windows, `flock` elsewhere | Everything in 3.3. Opts into EcoQoS on Windows and leaves `ProcessType` at `Background` on macOS (TE 3.2) |
+| `pairtime agent` | Login: HKCU Run key, a LaunchAgent, or XDG autostart, none needing admin (CP 2.1); or a hook that finds it down. Single-instance lock on `agent.lock` in the data directory: `LockFileEx` on Windows, `flock` elsewhere, so it holds across Windows sessions and path spellings, which a named mutex doesn't | Everything in 3.3. Opts into EcoQoS on Windows and leaves `ProcessType` at `Background` on macOS (TE 3.2) |
 | `pairtime hook --harness <h> --event <e>` | A harness, in exec form | Reads stdin up to 1 MiB, stamps arrival time, records its parent chain, sends one framed message over the agent's socket with a 100 ms timeout, else appends one line to `inbox/` and starts the agent detached. Always exits 0 and prints nothing (CP 6.2) |
 | `pairtime track` | The coding agent, following Karim's AGENTS.md entry | Same path as `hook`, with `source = cli` (5.4) |
 | `pairtime emit --source plugin:<name>` | An out-of-process plugin | Reads SM 1 events as JSON Lines on stdin and forwards them over the socket (5.3) |

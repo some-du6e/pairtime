@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"testing"
@@ -18,19 +19,47 @@ import (
 // until its stdin closes or it is killed.
 const holderEnv = "PAIRTIME_TEST_LOCK_HOLDER"
 
+// holderReportEnv, set to a file name beside holderEnv, is for a holder
+// that no test can reach over stdin and stdout, such as one a scheduled
+// task starts. It writes "locked <pid>" to that file instead, and holds
+// the lock until the file is deleted, for two minutes at most.
+const holderReportEnv = "PAIRTIME_TEST_LOCK_REPORT"
+
 func TestMain(m *testing.M) {
 	if dir := os.Getenv(holderEnv); dir != "" {
-		l, err := Acquire(dir)
-		if err != nil {
-			fmt.Println("error:", err)
-			os.Exit(1)
-		}
-		fmt.Println("locked")
-		io.Copy(io.Discard, os.Stdin)
-		l.Release()
-		os.Exit(0)
+		os.Exit(holdLock(dir, os.Getenv(holderReportEnv)))
 	}
 	os.Exit(m.Run())
+}
+
+// holdLock is the lock holder's main (see holderEnv and holderReportEnv).
+func holdLock(dir, report string) int {
+	l, err := Acquire(dir)
+	if err != nil {
+		if report != "" {
+			WriteFile(report, []byte("error: "+err.Error()+"\n"))
+		}
+		fmt.Println("error:", err)
+		return 1
+	}
+	defer l.Release()
+	if report == "" {
+		fmt.Println("locked")
+		io.Copy(io.Discard, os.Stdin)
+		return 0
+	}
+	if err := WriteFile(report, fmt.Appendf(nil, "locked %d\n", os.Getpid())); err != nil {
+		fmt.Println("error:", err)
+		return 1
+	}
+	deadline := time.Now().Add(2 * time.Minute)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(report); errors.Is(err, fs.ErrNotExist) {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	return 0
 }
 
 func TestLock(t *testing.T) {
