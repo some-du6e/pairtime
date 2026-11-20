@@ -47,7 +47,7 @@ jobs:
         shell: bash
     steps:
       # Actions are pinned to commit SHAs; tags can be moved. Dependabot bumps them.
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: npm licenses
         # From the lockfiles alone, before anything is installed. Lockfiles
@@ -59,7 +59,7 @@ jobs:
             python3 -I tools/ci/npm_licenses.py $locks
           fi
 
-      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
           cache: npm
@@ -101,7 +101,7 @@ jobs:
             exit 1
           fi
 
-      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         with:
           go-version-file: go.mod

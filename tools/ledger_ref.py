@@ -143,6 +143,10 @@ RTYPES = {
     0x41: "upload_failure",
 }
 EVENT_RTYPES = tuple(range(0x01, 0x13))
+# Codes reserved for event kinds added later. A verifier that meets one
+# reports its kind as unknown and still checks the batch; 0x00 and 0x42 to
+# 0xff fail.
+LATER_RTYPES = range(0x13, 0x40)
 OS_RTYPES = (0x0E, 0x0F, 0x10)
 CHECKPOINT = 0x40
 UPLOAD_FAILURE = 0x41
@@ -176,8 +180,8 @@ def header(seq, rtype, project_key, session_key):
     """hdr = u64(seq) || u8(rtype) || project (16) || session (8): 33 bytes."""
     if not 1 <= seq < 1 << 64:
         raise LedgerError("seq %d is out of range; sequence numbers start at 1" % seq)
-    if rtype not in RTYPES:
-        raise LedgerError("rtype 0x%02x isn't in the table" % rtype)
+    if rtype not in RTYPES and rtype not in LATER_RTYPES:
+        raise LedgerError("rtype 0x%02x is reserved; version 1 never assigns it" % rtype)
     if rtype in OS_RTYPES and project_key != "":
         raise LedgerError("%s records have no project" % RTYPES[rtype])
     if rtype == CHECKPOINT and (project_key == "" or session_key != NO_SESSION):
@@ -538,18 +542,28 @@ TRACEBACK = "Traceback (most recent call last):"
 FENCE_OPEN_RE = re.compile(r" {0,3}(`{3,}|~{3,})(.*)")
 FENCE_CLOSE_RE = re.compile(r" {0,3}(`{3,}|~{3,})[ \t]*")
 PASTE_OPEN_RE = re.compile(r"<pasted_content(?: [^>]*)?>")
-PASTE_CLOSE = "</pasted_content>"
+# P2. Claude Code 2.1.327 closes a paste with </pasted_content id="1a2b">,
+# repeating the opener's id; older sessions wrote </pasted_content>. Ids
+# aren't compared.
+PASTE_CLOSE_RE = re.compile(r"</pasted_content(?: [^>]*)?>")
 # SM 4.2's first error lines, matched against a whole line with its leading
 # and trailing whitespace removed. ASCII classes only; nothing here needs
 # lookaround or backreferences, so Go's regexp runs the same patterns.
 ERROR_LINE_RES = tuple(re.compile(p) for p in (
-    r"(?:Uncaught )?(?:[A-Za-z_$][A-Za-z0-9_$]*\.)*[A-Za-z0-9_$]*(?:Error|Exception)(?::.*)?",
+    r"(?:Uncaught (?:\(in promise\) )?|Exception in thread \"[^\"]*\" |Caused by: )?"
+    r"(?:[A-Za-z_$][A-Za-z0-9_$]*\.)*[A-Za-z0-9_$]*(?:Error|Exception)(?::.*)?",
     r"error\[E[0-9]{4}\](?::.*)?",
     r"[^ \t]+:[0-9]+:[0-9]+: (?:fatal )?error:.*",
     r"FAILED .+",
     r"--- FAIL: .+",
     r"panic: .+",
 ))
+# R: a compiler's gutter line with its line number at column 0, which rustc
+# writes for the widest line number, as in "2 |     let x: i32 = 1;". It
+# goes with an E2 or E3 line, whose other gutter lines are indented.
+GUTTER_RE = re.compile(r"[0-9]+ +\|.*")
+# G: the first line of a goroutine's stack in a Go panic.
+GOROUTINE_RE = re.compile(r"goroutine [0-9]+ [^\[]*\[[^\]]*\]:")
 
 
 def split_lines(text):
@@ -579,7 +593,15 @@ def closes_fence(line, fence):
 
 
 def is_error_line(s):
-    return any(r.fullmatch(s) is not None for r in ERROR_LINE_RES)
+    return error_pattern(s) is not None
+
+
+def error_pattern(s):
+    """The number, 1 to 6, of the first of E1 to E6 that s matches, or None."""
+    for k, r in enumerate(ERROR_LINE_RES, 1):
+        if r.fullmatch(s) is not None:
+            return k
+    return None
 
 
 def indented(line):
@@ -600,13 +622,27 @@ def removed_lines(lines):
             i = min(i + 1, len(lines))
         elif PASTE_OPEN_RE.fullmatch(s) is not None:
             i += 1
-            while i < len(lines) and strip_space(lines[i]) != PASTE_CLOSE:
+            while i < len(lines) and PASTE_CLOSE_RE.fullmatch(strip_space(lines[i])) is None:
                 i += 1
             i = min(i + 1, len(lines))
         elif s == TRACEBACK or is_error_line(s):
+            k = error_pattern(s)
             i += 1
-            while i < len(lines) and indented(lines[i]):
+            while i < len(lines) and (indented(lines[i]) or k in (2, 3) and GUTTER_RE.fullmatch(lines[i])
+                                      or k == 6 and lines[i].startswith("[signal ")):
                 i += 1
+            while k == 6:
+                # A goroutine block: the blank lines before it, its first
+                # line, then each frame and the tab-indented file line
+                # under it.
+                j = i
+                while j < len(lines) and strip_space(lines[j]) == "":
+                    j += 1
+                if j == len(lines) or GOROUTINE_RE.fullmatch(strip_space(lines[j])) is None:
+                    break
+                i = j + 1
+                while i < len(lines) and (lines[i].startswith("\t") or i + 1 < len(lines) and lines[i + 1].startswith("\t")):
+                    i += 1
         else:
             i += 1
             continue
@@ -775,43 +811,68 @@ def substitute(word):
 RETRY_PHRASES = (("still", "not", "working"), ("try", "again"), ("fix", "it"), ("still", "broken"),
                  ("doesnt", "work"), ("again",), ("retry",))
 EDGE_PUNCT = frozenset("!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~\u2018\u2019\u201c\u201d")
+PLACEHOLDERS = ("<url>", "<id>", "<path>", "<hex>", "<n>")
 
 
 def bare(word):
-    """A word as retry phrases compare it: edge punctuation and apostrophes gone."""
+    """Step 6: the word without its edge punctuation, except a placeholder
+    of step 5 at either end, and without the apostrophes left inside."""
     i, j = 0, len(word)
-    while i < j and word[i] in EDGE_PUNCT:
+    while i < j and word[i] in EDGE_PUNCT and not word[i:j].startswith(PLACEHOLDERS):
         i += 1
-    while j > i and word[j - 1] in EDGE_PUNCT:
+    while j > i and word[j - 1] in EDGE_PUNCT and not word[i:j].endswith(PLACEHOLDERS):
         j -= 1
     return word[i:j].replace("'", "").replace("\u2019", "")
 
 
-def replace_retries(words):
-    out, i = [], 0
+def replace_retries(words, sources):
+    """Step 7, carrying each word's source tokens: a <retry> comes from
+    every token of the words it replaced."""
+    out, out_sources, i = [], [], 0
     while i < len(words):
         for phrase in RETRY_PHRASES:
-            if tuple(bare(w) for w in words[i:i + len(phrase)]) == phrase:
+            if tuple(words[i:i + len(phrase)]) == phrase:
                 out.append("<retry>")
+                out_sources.append(frozenset().union(*sources[i:i + len(phrase)]))
                 i += len(phrase)
                 break
         else:
             out.append(words[i])
+            out_sources.append(sources[i])
             i += 1
-    return out
+    return out, out_sources
+
+
+def normalize_sources(text):
+    """10.4, with the tokens (10.2, numbered from 0) each normalized word
+    comes from. A word of step 3 is one token of the whole text, since LF
+    and CR are whitespace, so walking the text's tokens and counting LFs
+    gives the same words as walking its lines."""
+    lines = split_lines(text)
+    removed = removed_lines(lines)
+    gone = set(removed)
+    words, sources, line = [], [], 0
+    for j, tok in enumerate(tokenize(text)):
+        if is_space(tok[0]):
+            line += tok.count("\n")
+            continue
+        if line in gone:
+            continue
+        w = bare(substitute(lowercase(tok)))
+        if w:
+            words.append(w)
+            sources.append(frozenset([j]))
+    words, sources = replace_retries(words, sources)
+    return removed, words, sources
 
 
 def normalize(text):
     """10.4. Returns the removed line indices and the normalized words; the
-    normalized text is the words joined by single spaces."""
-    lines = split_lines(text)
-    removed = removed_lines(lines)
-    gone = set(removed)
-    words = []
-    for i, line in enumerate(lines):
-        if i not in gone:
-            words += [substitute(lowercase(w)) for w in words_of(line)]
-    return removed, replace_retries(words)
+    normalized text is the words joined by single spaces. Each word is
+    lowercased, substituted and stripped to its bare form, and a word left
+    empty goes."""
+    removed, words, _ = normalize_sources(text)
+    return removed, words
 
 
 def error_signature(text):
@@ -937,6 +998,78 @@ def hunk(k_feat, path, old_start, old_lines, new_start, new_lines):
             "os": old_start, "ol": old_lines, "ns": new_start, "nl": new_lines}
 
 
+def file_lines(text):
+    """A file's lines: each piece up to and including an LF, and a last
+    piece without one when the text doesn't end with LF."""
+    out, start = [], 0
+    while start < len(text):
+        end = text.find("\n", start)
+        if end < 0:
+            out.append(text[start:])
+            break
+        out.append(text[start:end + 1])
+        start = end + 1
+    return out
+
+
+def hunk_from_texts(before, after):
+    """The zero-context hunk of one edit, from the file's text before and
+    after it: what is left once the longest shared leading run of lines,
+    then the longest shared trailing run, are dropped. None when no line
+    changed."""
+    a, b = file_lines(before), file_lines(after)
+    p = 0
+    while p < len(a) and p < len(b) and a[p] == b[p]:
+        p += 1
+    q = 0
+    while q < len(a) - p and q < len(b) - p and a[len(a) - 1 - q] == b[len(b) - 1 - q]:
+        q += 1
+    old_lines, new_lines = len(a) - p - q, len(b) - p - q
+    if not old_lines and not new_lines:
+        return None
+    return (p + 1 if old_lines else p, old_lines, p + 1 if new_lines else p, new_lines)
+
+
+def hunks_from_patch(old_start, old_lines, new_start, new_lines, lines):
+    """The zero-context hunks of one unified-diff hunk, from its header's
+    four numbers and its lines, each starting with ' ', '-', '+' or '\\'.
+    Each maximal run of '-' and '+' lines is one hunk."""
+    o = old_start if old_lines else old_start + 1
+    n = new_start if new_lines else new_start + 1
+    seen_old = seen_new = 0
+    out, run = [], None
+
+    def close():
+        ro, rn, removed, added = run
+        out.append((ro if removed else ro - 1, removed, rn if added else rn - 1, added))
+
+    for line in lines:
+        op = line[:1]
+        if op == "\\":
+            continue
+        if op not in (" ", "-", "+"):
+            raise LedgerError("a patch line starts with ' ', '-', '+' or '\\'")
+        if op == " ":
+            if run is not None:
+                close()
+                run = None
+            o, n, seen_old, seen_new = o + 1, n + 1, seen_old + 1, seen_new + 1
+            continue
+        if run is None:
+            run = [o, n, 0, 0]
+        if op == "-":
+            run[2] += 1
+            o, seen_old = o + 1, seen_old + 1
+        else:
+            run[3] += 1
+            n, seen_new = n + 1, seen_new + 1
+    if run is not None:
+        close()
+    if (seen_old, seen_new) != (old_lines, new_lines):
+        raise LedgerError("the patch hunk's lines don't add up to its header's counts")
+    return out
+
+
 # 10.7 The feature map f, version 1. Members in this order: v, mh, th, es,
 # pc, h, ch, each present only where 10.7 says.
 
@@ -946,9 +1079,13 @@ FEATURE_RTYPES = (PROMPT_SUBMIT, AGENT_TOOL, SHELL_COMMAND, CLI_TRACK)
 
 
 def prompt_features(k_feat, text, prompt_class):
-    """f for prompt.submit and cli.track, and the per-shingle values."""
+    """f for prompt.submit and cli.track, and the per-shingle values. text
+    is None for a prompt whose text the device never had (10.1), whose f
+    holds only v and pc."""
     if prompt_class not in PROMPT_CLASSES:
         raise LedgerError("prompt class %s isn't one of %s" % (json.dumps(prompt_class), ", ".join(PROMPT_CLASSES)))
+    if text is None:
+        return {"v": FEATURES_V, "pc": prompt_class}, []
     _, words = normalize(text)
     tag, xs = shingles(words)
     values = [shingle_value(k_feat, tag, x) for x in xs]
@@ -972,24 +1109,63 @@ def tool_features(k_feat, hunks, command):
     return f
 
 
-# 10.8 What CC8 reveals: every distinct shingle's value, ascending, each
-# with the shingle's text unless it touches a removed span.
+# 10.8 What CC8 reveals: the value and text of every distinct shingle that
+# touches no removed span, ascending by value. A shingle that touches one
+# sends nothing.
 
 SHINGLE_VERDICTS = ("ok", "bad_entry", "sketch")
 
 
-def verify_shingle_reveal(mh, entries):
-    """entries are (v, x) with x None when hidden. Returns (verdict, index)."""
+def shown_shingles(words, sources, removed_tokens):
+    """(tag, shown, hidden): the text's shingles split by whether they touch
+    a removed span. A shingle touches one when every place it occurs holds
+    a code point of a word that comes from a removed token; the spaces
+    between words come from no token."""
+    dirty = [bool(src & removed_tokens) for src in sources]
+    tag, xs = shingles(words)
+    clean = set()
+    if tag == WORD_SHINGLE:
+        for i in range(len(words) - 2):
+            if not any(dirty[i:i + 3]):
+                clean.add(" ".join(words[i:i + 3]))
+    else:
+        owner = []
+        for i, w in enumerate(words):
+            if i:
+                owner.append(None)
+            owner += [i] * len(w)
+        text = " ".join(words)
+        size = min(5, len(text))
+        for i in range(len(text) - size + 1 if text else 0):
+            if not any(owner[k] is not None and dirty[owner[k]] for k in range(i, i + size)):
+                clean.add(text[i:i + size])
+    return tag, [x for x in xs if x in clean], [x for x in xs if x not in clean]
+
+
+def shingle_reveal(k_feat, text, removed_tokens):
+    """The CC8 reveal the client sends for text whose reveal removed the
+    tokens removed_tokens (numbered from 0): (kind, [(v, x)]) ascending by
+    v, for the shingles that touch no removed span."""
+    _, words, sources = normalize_sources(text)
+    tag, shown, _ = shown_shingles(words, sources, frozenset(removed_tokens))
+    return SHINGLE_KINDS[tag], sorted((shingle_value(k_feat, tag, x), x.encode("utf-8")) for x in shown)
+
+
+def verify_shingle_reveal(mh, entries, removed):
+    """entries are (v, x). removed says whether the text's reveal removed a
+    span. Returns (verdict, index, unexplained): the index of the bad
+    entry, and for ok the number of places no shown value reaches."""
     prev = None
     for i, (v, x) in enumerate(entries):
         if len(v) != 32 or (prev is not None and not prev < v):
-            return "bad_entry", i
-        if x is not None and (not x or utf8_or_none(x) is None):
-            return "bad_entry", i
+            return "bad_entry", i, None
+        if not x or utf8_or_none(x) is None:
+            return "bad_entry", i, None
         prev = v
-    if sketch([v for v, _ in entries]) != mh:
-        return "sketch", None
-    return "ok", None
+    shown = sketch([v for v, _ in entries])
+    if (any(a < b for a, b in zip(shown, mh)) if removed else shown != mh):
+        return "sketch", None, None
+    return "ok", None, sum(1 for a, b in zip(shown, mh) if a != b)
 
 
 def utf8_or_none(x):
@@ -1227,14 +1403,14 @@ def check_chain(rep, chain, path, received):
             entries.append(got_entry)
             want_nonce = nonce(keys["k_leaf"], seq)
             rep.same(rp + ".nonce", got_nonce, want_nonce)
-            if body.startswith(BODY_PREFIX):
-                inner = body[len(BODY_PREFIX):len(BODY_PREFIX) + 64]
-                if inner != want_nonce.hex().encode("ascii"):
-                    rep.fail(rp + ".body", "has an \"n\" other than this record's nonce")
+            if not body.startswith(BODY_PREFIX + want_nonce.hex().encode("ascii") + b'","e":'):
+                rep.fail(rp + ".body", "doesn't start with {\"n\":\", this record's nonce in hex and \",\"e\":")
             try:
                 rep.same(rp + ".entry", got_entry, entry(header(seq, rtype, project_key, session_key), body))
             except LedgerError as err:
                 rep.fail(rp, str(err))
+            if rtype in LATER_RTYPES:
+                rep.count("records of later kinds")
             rep.count("records")
         if not entries:
             rep.fail(bp + ".records", "a batch has at least one record")
@@ -1332,7 +1508,7 @@ def get_choice(obj, key, path, choices):
 
 
 def check_lowercase(rep, obj, path):
-    fields(obj, path, ("unicode", "runs"), ("later_unicode", "later"))
+    fields(obj, path, ("unicode", "runs"), ("later_unicode", "later", "note"))
     if get_str(obj, "unicode", path) != LOWER_UNICODE:
         rep.fail(path + ".unicode", "is %s; f.v = 1 lowercases with Unicode %s" % (json.dumps(obj["unicode"]), LOWER_UNICODE))
     runs = []
@@ -1448,7 +1624,11 @@ def check_features(rep, obj, path):
     rtype = get_int(obj, "rtype", path, 0, 0xFF)
     common = ("k_dev", "rtype", "f")
     if rtype in (PROMPT_SUBMIT, CLI_TRACK):
-        fields(obj, path, common + ("text", "prompt_class", "shingle_values"), ("note",))
+        fields(obj, path, common + ("prompt_class",), ("text", "shingle_values", "note"))
+        if ("text" in obj) != ("shingle_values" in obj):
+            raise FormatError("%s: text and shingle_values come together" % path)
+        if rtype == CLI_TRACK and "text" not in obj:
+            raise FormatError("%s: a track label always has its text (10.1)" % path)
     elif rtype == AGENT_TOOL:
         fields(obj, path, common + ("hunks",), ("command", "note"))
     elif rtype == SHELL_COMMAND:
@@ -1461,10 +1641,10 @@ def check_features(rep, obj, path):
     rep.count("feature sets")
     try:
         if rtype in (PROMPT_SUBMIT, CLI_TRACK):
-            _, text = get_hex_text(obj, "text", path)
+            text = get_hex_text(obj, "text", path)[1] if "text" in obj else None
             want, values = prompt_features(keys["k_feat"], text, get_str(obj, "prompt_class", path))
             given = [from_hex(v, "%s.shingle_values[%d]" % (path, i), 32)
-                     for i, v in enumerate(get_list(obj, "shingle_values", path))]
+                     for i, v in enumerate(get_list(obj, "shingle_values", path))] if "text" in obj else []
             rep.same_list(path + ".shingle_values", given, values)
         else:
             hunks = None
@@ -1483,6 +1663,46 @@ def check_features(rep, obj, path):
     rep.same(path + ".f", obj["f"], want)
 
 
+HUNK_FIELDS = ("old_start", "old_lines", "new_start", "new_lines")
+
+
+def check_diff(rep, obj, path):
+    fields(obj, path, (), ("patch", "before", "after", "hunks", "malformed", "note"))
+    if ("hunks" in obj) == ("malformed" in obj):
+        raise FormatError("%s: a diff has hunks or malformed, not both" % path)
+    rep.count("diffs")
+    if "patch" in obj:
+        if "before" in obj or "after" in obj:
+            raise FormatError("%s: a diff is a patch or a before and after, not both" % path)
+        pp = path + ".patch"
+        patch = fields(obj["patch"], pp, HUNK_FIELDS + ("lines",))
+        lines = [get_hex_text({"line": x}, "line", "%s.lines[%d]" % (pp, i))[1]
+                 for i, x in enumerate(get_list(patch, "lines", pp))]
+        try:
+            want = hunks_from_patch(*[get_int(patch, k, pp, 0, (1 << 31) - 1) for k in HUNK_FIELDS], lines)
+        except LedgerError:
+            want = None
+    else:
+        fields(obj, path, ("before", "after"), ("hunks", "malformed", "note"))
+        h = hunk_from_texts(get_hex_text(obj, "before", path)[1], get_hex_text(obj, "after", path)[1])
+        want = [] if h is None else [h]
+    if "malformed" in obj:
+        if obj["malformed"] is not True:
+            raise FormatError("%s.malformed: want true" % path)
+        if want is not None:
+            rep.fail(path + ".malformed", "the reference reads the patch as %s" % show([list(h) for h in want]))
+        return
+    given = []
+    for i, h in enumerate(get_list(obj, "hunks", path)):
+        hp = "%s.hunks[%d]" % (path, i)
+        fields(h, hp, HUNK_FIELDS)
+        given.append(tuple(get_int(h, k, hp) for k in HUNK_FIELDS))
+    if want is None:
+        rep.fail(path + ".hunks", "the reference finds the patch malformed")
+    else:
+        rep.same(path + ".hunks", [list(h) for h in given], [list(h) for h in want])
+
+
 def get_sketch(obj, key, path):
     return sketch_from_bytes(get_hex(obj, key, path, 4 * MINHASH_SIZE))
 
@@ -1495,15 +1715,36 @@ def check_jaccard(rep, obj, path):
 
 
 def check_shingle_reveal(rep, obj, path):
-    fields(obj, path, ("mh", "entries", "verdict"), ("note",))
+    fields(obj, path, ("mh", "kind", "removed", "entries", "verdict"),
+           ("unexplained", "k_dev", "text", "removed_tokens", "note"))
     mh = get_sketch(obj, "mh", path)
+    kind = get_choice(obj, "kind", path, tuple(SHINGLE_KINDS.values()))
+    removed = obj["removed"]
+    if not isinstance(removed, bool):
+        raise FormatError("%s.removed: want true or false" % path)
     entries = []
     for i, e in enumerate(get_list(obj, "entries", path)):
         ep = "%s.entries[%d]" % (path, i)
-        fields(e, ep, ("v",), ("x",))
-        entries.append((get_hex(e, "v", ep), get_hex(e, "x", ep) if "x" in e else None))
-    got, _ = verify_shingle_reveal(mh, entries)
+        fields(e, ep, ("v", "x"))
+        entries.append((get_hex(e, "v", ep), get_hex(e, "x", ep)))
+    got, _, unexplained = verify_shingle_reveal(mh, entries, removed)
     rep.same(path + ".verdict", get_choice(obj, "verdict", path, SHINGLE_VERDICTS), got)
+    if ("unexplained" in obj) != (got == "ok"):
+        rep.fail(path + ".unexplained", "comes with an ok verdict, and only with one")
+    elif got == "ok":
+        rep.same(path + ".unexplained", get_int(obj, "unexplained", path, 0, MINHASH_SIZE), unexplained)
+    build = ("k_dev", "text", "removed_tokens")
+    if any(k in obj for k in build):
+        if not all(k in obj for k in build):
+            raise FormatError("%s: k_dev, text and removed_tokens come together" % path)
+        k_feat = derive_keys(get_hex(obj, "k_dev", path, 32))["k_feat"]
+        text = get_hex_text(obj, "text", path)[1]
+        tokens = [get_int({"t": t}, "t", "%s.removed_tokens[%d]" % (path, i)) for i, t in
+                  enumerate(get_list(obj, "removed_tokens", path))]
+        want_kind, want = shingle_reveal(k_feat, text, tokens)
+        rep.same(path + ".kind", kind, want_kind)
+        rep.same(path + ".entries", [[v.hex(), x.hex()] for v, x in entries], [[v.hex(), x.hex()] for v, x in want])
+        rep.same(path + ".removed", removed, bool(tokens))
     rep.count("shingle reveals")
 
 
@@ -1556,7 +1797,7 @@ def check_draw(rep, obj, path):
 
 
 def check_challenge_k(rep, obj, path):
-    fields(obj, path, ("pool", "k", "drawn"))
+    fields(obj, path, ("pool", "k", "drawn"), ("note",))
     pool = get_int(obj, "pool", path)
     rep.same(path + ".k", get_int(obj, "k", path), challenge_k(pool))
     rep.same(path + ".drawn", get_int(obj, "drawn", path), min(challenge_k(pool), pool))
@@ -1568,6 +1809,7 @@ CONTENT_SECTIONS = (
     ("reveals", check_reveal),
     ("normalizations", check_normalization),
     ("features", check_features),
+    ("diffs", check_diff),
     ("jaccard", check_jaccard),
     ("shingle_reveals", check_shingle_reveal),
     ("draws", check_draw),
@@ -1612,8 +1854,8 @@ def check_document(doc):
 
 
 def summary(counts):
-    order = ("key sets", "digests", "chains", "batches", "records", "days", "day rows", "inclusion proofs",
-             "lowercase tables", "commitments", "reveals", "normalizations", "feature sets", "jaccard pairs",
+    order = ("key sets", "digests", "chains", "batches", "records", "records of later kinds", "days", "day rows", "inclusion proofs",
+             "lowercase tables", "commitments", "reveals", "normalizations", "feature sets", "diffs", "jaccard pairs",
              "shingle reveals", "draws", "challenge sizes")
     return ", ".join("%d %s" % (counts[k], k) for k in order if k in counts)
 
@@ -1755,6 +1997,15 @@ def make_days(s, chains, first_day, days):
         (after, 7, tie),
         (mid, 1, d1 + s.below(DAY_MS)),
         (mid, 2, d2 + s.below(DAY_MS)),
+        # Ids whose byte order isn't their order with case folded or under
+        # a locale's collation, which skips '-' and '_' at first: Zq before
+        # aB, a- before aB before a_, and w before w_.
+        ("Zq", 1, tie),
+        ("aB", 1, tie),
+        ("a-", 1, tie),
+        ("a_", 1, tie),
+        ("w", 1, tie),
+        ("w_", 1, tie),
     ):
         rows.append((device_id, b, s.take(32), received_at))
     out, prev = [], ZERO32
@@ -2002,6 +2253,14 @@ def make_reveals(k_dev, commitments):
     bad = [token_leaf(salt[0], b"fix"), token_leaf(salt[1], b" "), token_leaf(salt[2], b" ")]
     fail("whitespace two places after a word", [("kept", salt[0], b"fix"), ("removed", "teen", 1, [bad[1]], None),
                                                  ("kept", salt[2], b" ")], "alternation", (3, tree_root(bad)))
+    # Reveals that fail two checks at once, so a verifier that checks them
+    # in another order than 10.3's gets another verdict.
+    fail("an empty token, and the last token dropped: bad_item comes before count",
+         keep[:2] + [("kept", salts[2], b"")] + keep[3:6], "bad_item")
+    fail("two words swapped with their space, and the last token dropped: count comes before alternation",
+         [keep[1], keep[0]] + keep[2:6], "count")
+    fail("the word 'the' replaced by a kept space: alternation comes before root",
+         keep[:2] + [("kept", salts[2], b" ")] + keep[3:], "alternation")
     return out
 
 
@@ -2029,20 +2288,56 @@ NORMALIZATION_TEXTS = (
     ("four spaces of indent aren't a fence", "    ```\nindented\n   ```\ninside"),
     ("pasted_content blocks", "<pasted_content id=\"1\">\nfoo bar\n</pasted_content>\nstill broken\n"
                               "  <pasted_content id=\"2\" lines=\"3\">  \nbaz"),
+    # The wrapper as Claude Code 2.1.327 writes it: the paste starts on its
+    # own line after a blank one, and the closer repeats the opener's id.
+    ("Claude Code's paste wrapper, then typed text", "here's the error:\n\n<pasted_content id=\"1a2b\">\n"
+                                                    "TypeError: x is undefined\n    at parse (src/parse.js:4:11)\n"
+                                                    "</pasted_content id=\"1a2b\">\nwhy does it fail on empty input?"),
+    ("two pastes with ids, text between and after", "compare\n\n<pasted_content id=\"00ff\">\nfirst log\n"
+                                                    "</pasted_content id=\"00ff\">\nwith\n\n<pasted_content id=\"c0de\">\n"
+                                                    "second log\n</pasted_content id=\"c0de\">\nand tell me which is right"),
+    ("a closer with another id still closes a paste", "<pasted_content id=\"aaaa\">\nlog\n"
+                                                      "</pasted_content id=\"bbbb\">\nthe typed part stays"),
     ("a Python traceback", "still broken\nTraceback (most recent call last):\n  File \"app.py\", line 3, in <module>\n"
                            "    main()\nValueError: invalid literal for int() with base 10: 'abc'\nany ideas?"),
     ("a JavaScript error and its stack", "TypeError: Cannot read properties of undefined (reading 'map')\n"
                                          "    at App (App.jsx:12:5)\n    at render (react-dom.js:99:1)\nwhy"),
-    ("Rust", "error[E0308]: mismatched types\n --> src/main.rs:4:5\n  |\nhelp me"),
+    # rustc's own output: its gutter puts the widest line number at column 0.
+    ("Rust, as rustc prints it", "error[E0308]: mismatched types\n --> src/main.rs:2:18\n  |\n"
+                                 "2 |     let x: i32 = \"a\";\n  |            ---   ^^^ expected `i32`, found `&str`\n"
+                                 "  |            |\n  |            expected due to this\n\nwhy won't this compile?"),
+    ("Rust with a two-digit line number", "error[E0425]: cannot find value `y` in this scope\n  --> src/lib.rs:12:5\n"
+                                          "   |\n12 |     y + 1\n   |     ^ not found in this scope\n"
+                                          "13 | }\nwhere did y go"),
     ("a C compiler", "main.c:3:5: error: 'x' undeclared (first use in this function)\nwhat now"),
     ("pytest", "FAILED tests/test_api.py::test_login - AssertionError: 401 != 200\nfix it"),
     ("go test", "--- FAIL: TestParse (0.00s)\n    parse_test.go:14: got 3, want 4\nhmm"),
-    ("a Go panic", "panic: runtime error: index out of range [5] with length 3\n\ngoroutine 1 [running]:"),
+    # go run's own output, with the exit status go run adds.
+    ("a Go panic, as go run prints it", "the slice code panics:\n\npanic: runtime error: index out of range [5] with "
+                                       "length 3\n\ngoroutine 1 [running]:\nmain.main()\n\t/home/teen/x/main.go:8 +0x1d\n"
+                                       "exit status 2\nhow do I fix this?"),
+    ("a Go nil dereference: its signal line and two goroutines", "panic: runtime error: invalid memory address or nil "
+                                       "pointer dereference\n[signal SIGSEGV: segmentation violation code=0x1 addr=0x0 "
+                                       "pc=0x47e1b6]\n\ngoroutine 6 [running]:\nmain.worker(0x0)\n"
+                                       "\t/home/teen/x/main.go:14 +0x16\ncreated by main.main in goroutine 1\n"
+                                       "\t/home/teen/x/main.go:9 +0x25\n\ngoroutine 1 [chan receive]:\nmain.main()\n"
+                                       "\t/home/teen/x/main.go:10 +0x3a\nwhy is it nil"),
+    ("a JVM exception with its cause", "Exception in thread \"main\" java.lang.IllegalStateException: boom\n"
+                                      "\tat Main.run(Main.java:7)\n\tat Main.main(Main.java:3)\nCaused by: "
+                                      "java.lang.NumberFormatException: For input string: \"x\"\n"
+                                      "\tat java.base/java.lang.Integer.parseInt(Integer.java:661)\n\t... 1 more\n"
+                                      "what is going on"),
     ("an uncaught browser error", "Uncaught ReferenceError: foo is not defined\nat line 3"),
+    ("an uncaught promise rejection", "Uncaught (in promise) TypeError: Failed to fetch\n"
+                                     "    at loadUser (app.js:12:9)\nthe API is up though"),
     ("the error only inside a fence", "it fails:\n```\nKeyError: 'user_id'\n```\nhelp"),
     ("an error line with CRLF", "still broken\r\nModuleNotFoundError: No module named 'requests'\r\n"),
     ("prose that isn't an error", "the error is that terror and Errors happen, error: none"),
     ("five words, so character shingles", "make the button bigger please"),
+    ("SM 6.5's 20:02 prompt", "still overlapping on mobile. fix it"),
+    ("SM 6.5's 20:07 prompt, one text with 20:02's", "still overlapping on mobile, fix it!!"),
+    ("edge punctuation goes, a placeholder's stays, and a word of punctuation goes",
+     "(see \u201cmain.go:12\u201d) -- it's 42. \u2018quoted\u2019, e.g. [x], <tag> and !!"),
     ("six words, so word shingles", "make the button a bit bigger"),
     ("the worked example of 10.10", "still broken, see src/nav.js:12\r\nTypeError: x is undefined"),
 )
@@ -2060,8 +2355,14 @@ def normalization_json(note, text):
 
 def prompt_feature_json(k_dev, rtype, note, text, prompt_class):
     f, values = prompt_features(derive_keys(k_dev)["k_feat"], text, prompt_class)
-    return {"note": note, "k_dev": k_dev.hex(), "rtype": rtype, "text": text.encode("utf-8").hex(),
-            "prompt_class": prompt_class, "shingle_values": [v.hex() for v in values], "f": f}
+    out = {"note": note, "k_dev": k_dev.hex(), "rtype": rtype}
+    if text is not None:
+        out["text"] = text.encode("utf-8").hex()
+    out["prompt_class"] = prompt_class
+    if text is not None:
+        out["shingle_values"] = [v.hex() for v in values]
+    out["f"] = f
+    return out
 
 
 def tool_feature_json(k_dev, rtype, note, hunks, command):
@@ -2085,13 +2386,21 @@ FEATURE_PROMPTS = (
     ("empty", "", "low_effort"),
     ("only pasted content", "<pasted_content id=\"7\">\nTraceback (most recent call last):\n  File \"x.py\", line 1\n"
                             "NameError: name 'y' is not defined\n</pasted_content>", "error_paste"),
+    ("a paste in Claude Code's wrapper, then a question", "it fails like this\n\n<pasted_content id=\"9e41\">\n"
+                                                         "Traceback (most recent call last):\n  File \"app.py\", line 3, in <module>\n"
+                                                         "KeyError: 'user_id'\n</pasted_content id=\"9e41\">\n"
+                                                         "why is user_id missing after login?", "error_paste"),
     ("non-ASCII", "\u0415\u0449\u0451 \u0440\u0430\u0437 \u2014 \u043f\u043e\u0447\u0438\u043d\u0438 "
                   "\u043a\u043d\u043e\u043f\u043a\u0443 \U0001f64f", "substantive"),
+    ("SM 6.5's 20:02 prompt", "still overlapping on mobile. fix it", "substantive"),
+    ("SM 6.5's 20:07 prompt", "still overlapping on mobile, fix it!!", "substantive"),
 )
 
 
 def make_features(k_dev):
     out = [prompt_feature_json(k_dev, PROMPT_SUBMIT, note, text, pc) for note, text, pc in FEATURE_PROMPTS]
+    out.append(prompt_feature_json(k_dev, PROMPT_SUBMIT, "a bridge prompt, whose text the device never had", None,
+                                   "substantive"))
     out.append(prompt_feature_json(k_dev, CLI_TRACK, "a track label", "make the navbar sticky on mobile", "substantive"))
     out.append(tool_feature_json(k_dev, AGENT_TOOL, "an edit across two files, with an insertion and a deletion", [
         ("src/nav.js", 10, 3, 10, 5), ("src/nav.js", 40, 0, 43, 2), ("web/app.tsx", 1, 4, 0, 0)], None))
@@ -2104,41 +2413,132 @@ def make_features(k_dev):
     return out
 
 
-def make_shingle_reveals(features):
-    """CC8 reveals for some of the prompts above, and one of each failure."""
-    out = []
-    for item in features[:5] + features[7:8]:
-        mh = bytes.fromhex(item["f"]["mh"])
-        text = bytes.fromhex(item["text"]).decode("utf-8")
-        _, words = normalize(text)
-        xs = shingles(words)[1]
-        pairs = sorted(zip((bytes.fromhex(v) for v in item["shingle_values"]), (x.encode("utf-8") for x in xs)))
-        entries = [{"v": v.hex(), "x": x.hex()} for v, x in pairs]
-        out.append({"note": "%s: every shingle shown" % item["note"], "mh": mh.hex(), "entries": entries,
-                    "verdict": "ok"})
-    first = out[0]
-    hidden = [{"v": e["v"]} if i % 3 == 0 else e for i, e in enumerate(first["entries"])]
-    out.append(dict(first, note="the worked example with every third shingle hidden", entries=hidden))
-    mh = sketch_from_bytes(bytes.fromhex(first["mh"]))
-    entries = first["entries"]
-    # A value that is the minimum somewhere, so changing it shows.
-    pick = next(i for i, e in enumerate(entries) if any(
-        h == m for h, m in zip(minhash_values(bytes.fromhex(e["v"])), mh)))
-    changed = [dict(e) for e in entries]
-    changed[pick]["v"] = sha256(b"not the shingle's value").hex()
-    changed.sort(key=lambda e: e["v"])
-    out.append(dict(first, note="a value that sets a minimum, replaced", entries=changed, verdict="sketch"))
-    out.append(dict(first, note="out of order", entries=entries[1:2] + entries[:1] + entries[2:], verdict="bad_entry"))
-    out.append(dict(first, note="a value twice", entries=entries[:1] + entries[:1] + entries[1:], verdict="bad_entry"))
-    out.append(dict(first, note="a 31-byte value", entries=[{"v": entries[0]["v"][:62]}] + entries[1:],
-                    verdict="bad_entry"))
-    out.append(dict(first, note="a shingle missing", entries=entries[:pick] + entries[pick + 1:], verdict="sketch"))
-    for item in out:
-        mh = sketch_from_bytes(bytes.fromhex(item["mh"]))
-        entries = [(bytes.fromhex(e["v"]), bytes.fromhex(e["x"]) if "x" in e else None) for e in item["entries"]]
-        if verify_shingle_reveal(mh, entries)[0] != item["verdict"]:
-            raise LedgerError("shingle reveal %s isn't %s" % (item["note"], item["verdict"]))
+def shingle_reveal_json(note, mh, kind, removed, entries, verdict, build=None):
+    """A CC8 reveal vector. build is (k_dev, text, removed_tokens) for a
+    reveal that is what the client would send for that text."""
+    got, _, unexplained = verify_shingle_reveal(mh, entries, removed)
+    if got != verdict:
+        raise LedgerError("shingle reveal %s is %s, not %s" % (note, got, verdict))
+    out = {"note": note, "mh": sketch_bytes(mh).hex(), "kind": kind, "removed": removed}
+    if build is not None:
+        k_dev, text, tokens = build
+        out.update(k_dev=k_dev.hex(), text=text.encode("utf-8").hex(), removed_tokens=sorted(tokens))
+    out["entries"] = [{"v": v.hex(), "x": x.hex()} for v, x in entries]
+    out["verdict"] = got
+    if got == "ok":
+        out["unexplained"] = unexplained
     return out
+
+
+def make_shingle_reveals(features):
+    """CC8 reveals of some of the prompts above, whole and with spans
+    removed, and one of each failure."""
+    out = []
+    k_dev = bytes.fromhex(features[0]["k_dev"])
+    k_feat = derive_keys(k_dev)["k_feat"]
+
+    def client(note, text, tokens, prompt_class="substantive"):
+        f, _ = prompt_features(k_feat, text, prompt_class)
+        kind, entries = shingle_reveal(k_feat, text, tokens)
+        mh = sketch_from_bytes(bytes.fromhex(f["mh"]))
+        out.append(shingle_reveal_json(note, mh, kind, bool(tokens), entries, "ok", (k_dev, text, tokens)))
+        return mh, kind, entries
+
+    for item in features[:5] + features[7:8]:
+        client("%s: every shingle shown" % item["note"], bytes.fromhex(item["text"]).decode("utf-8"), [])
+    example = bytes.fromhex(features[0]["text"]).decode("utf-8")
+    client("the worked example with src/nav.js:12, token 7, removed: shingles touching <path> send nothing",
+           example, [6])
+    client("fix it for bob with bob removed", "fix it for bob", [6])
+    client("a shingle shown because one place it occurs is made of kept tokens", "hi bob hi bob", [6])
+    client("a word shingle next to a removed token goes, and the rest stay",
+           "please make the header sticky and ask bob about the footer", [14])
+    client("a removed token on a line that step 2 removes touches nothing",
+           "fix the login page\nTypeError: bob is undefined", [10])
+    client("everything removed: nothing is shown", example, list(range(15)))
+
+    # Failures, on the worked example shown whole.
+    mh, kind = sketch_from_bytes(bytes.fromhex(features[0]["f"]["mh"])), "char5"
+    _, entries = shingle_reveal(k_feat, example, [])
+
+    def fail(note, entries, verdict, removed=False):
+        out.append(shingle_reveal_json(note, mh, kind, removed, entries, verdict))
+
+    # A value that is the minimum somewhere, so changing it shows.
+    pick = next(i for i, (v, _) in enumerate(entries) if any(
+        h == m for h, m in zip(minhash_values(v), mh)))
+    changed = sorted(entries[:pick] + [(sha256(b"not the shingle's value"), entries[pick][1])] + entries[pick + 1:])
+    fail("a value that sets a minimum, replaced", changed, "sketch")
+    fail("out of order", entries[1:2] + entries[:1] + entries[2:], "bad_entry")
+    fail("a value twice", entries[:1] + entries[:1] + entries[1:], "bad_entry")
+    fail("out of order, and a shingle missing: bad_entry comes before sketch",
+         entries[1:2] + entries[:1] + entries[3:], "bad_entry")
+    fail("a 31-byte value", [(entries[0][0][:31], entries[0][1])] + entries[1:], "bad_entry")
+    fail("an empty x", entries[:3] + [(entries[3][0], b"")] + entries[4:], "bad_entry")
+    fail("an x that isn't UTF-8", entries[:3] + [(entries[3][0], b"\xff")] + entries[4:], "bad_entry")
+    fail("a shingle missing, with nothing removed", entries[:pick] + entries[pick + 1:], "sketch")
+    fail("a shingle missing, with a span removed: its minima are unexplained, not wrong",
+         entries[:pick] + entries[pick + 1:], "ok", removed=True)
+    # A value whose hash is below the committed minimum somewhere can't
+    # belong to the text, removed spans or not.
+    low = next(v for v in (sha256(b"too low %d" % i) for i in range(1000))
+               if any(h < m for h, m in zip(minhash_values(v), mh)) and v not in [e[0] for e in entries])
+    fail("a value below a committed minimum, with a span removed", sorted(entries + [(low, b"made up")]), "sketch",
+         removed=True)
+    return out
+
+
+def context(first, last, text="line %d"):
+    return [" " + text % i + "\n" for i in range(first, last)]
+
+
+def patch_diff(note, old_start, old_lines, new_start, new_lines, lines):
+    out = {"note": note, "patch": {"old_start": old_start, "old_lines": old_lines, "new_start": new_start,
+                                   "new_lines": new_lines, "lines": [x.encode("utf-8").hex() for x in lines]}}
+    try:
+        out["hunks"] = [dict(zip(HUNK_FIELDS, h)) for h in hunks_from_patch(old_start, old_lines, new_start, new_lines, lines)]
+    except LedgerError:
+        out["malformed"] = True
+    return out
+
+
+def text_diff(note, before, after):
+    h = hunk_from_texts(before, after)
+    return {"note": note, "before": before.encode("utf-8").hex(), "after": after.encode("utf-8").hex(),
+            "hunks": [] if h is None else [dict(zip(HUNK_FIELDS, h))]}
+
+
+def make_diffs():
+    """Zero-context hunks from patches with context and from the text
+    before and after an edit (10.6)."""
+    file20 = "".join("line %d\n" % i for i in range(1, 21))
+    return [
+        patch_diff("three lines of context around three lines added after line 9", 7, 6, 7, 9,
+                   context(7, 10) + ["+added %d\n" % i for i in (1, 2, 3)] + context(10, 13)),
+        patch_diff("the next turn appends three more below them: no line overlaps once context is gone", 10, 6, 10, 9,
+                   [" added %d\n" % i for i in (1, 2, 3)] + ["+added %d\n" % i for i in (4, 5, 6)] + context(10, 13)),
+        patch_diff("a run of removed and added lines is one hunk", 17, 8, 17, 7,
+                   context(17, 20) + ["-old 20\n", "-old 21\n", "+new 20\n"] + context(22, 25)),
+        patch_diff("two runs in one patch hunk, split at the unchanged line between them", 4, 7, 4, 8,
+                   context(4, 6) + ["-line 6\n", "+line six\n"] + context(7, 8) + ["+inserted\n"] + context(8, 11)),
+        patch_diff("a run that adds before it removes is still one hunk", 1, 3, 1, 3,
+                   [" a\n", "+b2\n", "-b\n", " c\n"]),
+        patch_diff("a new file", 0, 0, 1, 3, ["+one\n", "+two\n", "+three\n"]),
+        patch_diff("a deleted file", 1, 2, 0, 0, ["-one\n", "-two\n"]),
+        patch_diff("a last line without its LF, and the marker line counts in neither file", 8, 3, 8, 3,
+                   [" eight\n", " nine\n", "-ten", "\\ No newline at end of file", "+ten\n"]),
+        patch_diff("a patch whose lines don't add up to its header is malformed", 1, 3, 1, 3,
+                   [" a\n", "-b\n", "+B\n"]),
+        patch_diff("a patch line with no marker is malformed", 1, 1, 1, 1, ["a\n"]),
+        text_diff("an edit inside one line", file20, file20.replace("line 12\n", "line twelve\n")),
+        text_diff("an edit that removes two lines and adds one", file20,
+                  file20.replace("line 5\nline 6\n", "lines 5 and 6\n")),
+        text_diff("an insertion between two equal lines starts after the shared leading lines", "a\nb\n", "a\nb\nb\n"),
+        text_diff("an edit that adds the final LF changes the last line", "a\nb", "a\nb\n"),
+        text_diff("CRLF lines compare by their bytes", "a\r\nb\r\n", "a\r\nB\r\n"),
+        text_diff("an edit that changes nothing has no hunk", file20, file20),
+        text_diff("an edit of an empty file", "", "first\n"),
+    ]
 
 
 def make_jaccard(features):
@@ -2146,6 +2546,8 @@ def make_jaccard(features):
     pairs = (
         ("identical after normalization", "a re-roll, first", "a re-roll, same words in other case"),
         ("one word changed", "a re-roll, first", "a re-roll, one word changed"),
+        ("SM 6.5's 20:02 and 20:07 prompts, one text after edge punctuation goes", "SM 6.5's 20:02 prompt",
+         "SM 6.5's 20:07 prompt"),
         ("unrelated prompts", "a re-roll, first", "unrelated"),
         ("two empty sets", "empty", "only pasted content"),
         ("an empty set and a prompt", "empty", "a go-ahead"),
@@ -2230,6 +2632,7 @@ def make_content_vectors():
         "reveals": reveals,
         "normalizations": normalizations,
         "features": features,
+        "diffs": make_diffs(),
         "jaccard": make_jaccard(features),
         "shingle_reveals": make_shingle_reveals(features),
         "draws": draws,
@@ -2331,16 +2734,24 @@ def test_ct_sums():
 
 
 def test_rfc4231():
+    """RFC 4231's seven HMAC-SHA-256 cases. Only test case 5 is truncated,
+    to 16 bytes, and says so; every other case gives all 32 bytes, so a
+    re-extraction that lost a line of a value can't pass."""
     cases = load_json("testdata", "ledger", "rfc4231.json")["cases"]
-    for c in cases:
+    expect(len(cases) == 7, "rfc4231.json has %d cases, want test cases 1 to 7" % len(cases))
+    for i, c in enumerate(cases, 1):
         want = bytes.fromhex(c["hmac_sha256"])
-        got = hmac_sha256(bytes.fromhex(c["key"]), bytes.fromhex(c["data"]))[:len(want)]
+        size = c.get("truncate_bytes", 32)
+        expect((size == 16) == (i == 5), "%s: truncate_bytes is %s; only test case 5 is truncated" % (c["name"], size))
+        expect(len(want) == size, "%s: the expected value is %d bytes, want %d" % (c["name"], len(want), size))
+        got = hmac_sha256(bytes.fromhex(c["key"]), bytes.fromhex(c["data"]))[:size]
         expect(got == want, "%s: got %s" % (c["name"], got.hex()))
     return "%d cases" % len(cases)
 
 
 def test_rfc5869():
     cases = load_json("testdata", "ledger", "rfc5869.json")["cases"]
+    expect(len(cases) == 3, "rfc5869.json has %d cases, want test cases 1 to 3" % len(cases))
     for c in cases:
         prk = hkdf_extract(bytes.fromhex(c["salt"]), bytes.fromhex(c["ikm"]))
         expect(prk.hex() == c["prk"], "%s: PRK is %s" % (c["name"], prk.hex()))
@@ -2462,14 +2873,66 @@ def test_rtypes():
     return "%d kinds" % len(table)
 
 
+def example_blocks():
+    """Section 12's code blocks, in order, as example()'s values render
+    them, so selftest can compare each block with the spec's text whole."""
+    v = dict(example())
+    h = lambda label: v[label].hex()
+
+    def spaced(data, *cuts):
+        """data's hex with a space at each of the byte offsets cuts."""
+        parts, last = [], 0
+        for c in cuts + (len(data),):
+            parts.append(data[last:c].hex())
+            last = c
+        return " ".join(parts)
+
+    blocks = ["".join("%-7s = %s\n" % (k, h(k)) for k in ("K_dev", "PRK", "K_leaf", "K_tok", "K_feat", "K_vault")),
+              'project = SHA-256(ascii("p_example"))[0:16] = %s\n' % h("project digest of p_example")
+              + 'session = SHA-256(ascii("s_example"))[0:8]  = %s\n' % h("session digest of s_example")]
+    for seq in (1, 2, 3):
+        hdr = v["header %d" % seq]
+        blocks.append("nonce     = %s\nbody      = %s\nbody hash = %s\nhdr       = %s\n          = %s\nentry     = %s\n" % (
+            h("nonce %d" % seq), v["body %d" % seq], h("body hash %d" % seq), spaced(hdr, 8, 9, 25), hdr.hex(),
+            h("entry %d" % seq)))
+    blocks.append("".join("L%d = LEAF(entry %d) = %s\n" % (i, i, h("leaf hash %d" % i)) for i in (1, 2, 3))
+                  + "NODE(L1, L2)       = %s\n" % h("node over leaves 1 and 2")
+                  + "R_1                = %s\n" % h("R_1")
+                  + "H_1 = SHA-256(0x03 || zero(32) || R_1 || u64(3) || u64(1))\n    = %s\n" % h("H_1"))
+    blocks.append("".join("%s\n" % h("path of record 2, element %d" % i) for i in (0, 1)))
+    m = v["receipt message"]
+    fields = ((m[:19], '"pairtime-receipt-v1"'), (m[19:20], 'len("d_example")'), (m[20:29], '"d_example"'),
+              (m[29:37], "b"), (m[37:69], "H_1"), (m[69:], "received_at"))
+    blocks.append("".join("%s%-38s    %s\n" % ("M_1 = " if i == 0 else "      ", f.hex(), note)
+                          for i, (f, note) in enumerate(fields)) + "    = %s\n" % m.hex())
+    leaf1, leaf2 = v["day leaf 1"], v["day leaf 2"]
+    blocks.append("leaf 1 = %s\n       = %s\nleaf 2 = %s\n" % (spaced(leaf1, 1, 8, 16, 48), leaf1.hex(), leaf2.hex())
+                  + "LEAF(leaf 1) = %s\nLEAF(leaf 2) = %s\n" % (h("day leaf hash 1"), h("day leaf hash 2"))
+                  + "T_d     = NODE(LEAF(leaf 1), LEAF(leaf 2))\n        = %s\n" % h("T_d")
+                  + "count_d = 2\n"
+                  + "G_d     = SHA-256(0x04 || zero(32) || T_d || u64(2) || u64(%d))\n        = %s\n" % (v["day"], h("G_d"))
+                  + "D_d     = %s\n        = %s\n" % (spaced(v["day message"], 15, 23), h("day message")))
+    return blocks
+
+
 def test_example():
+    """Section 12's code blocks are, in order and byte for byte, what
+    example() renders, so a swapped proof line or a typo in a spaced
+    breakdown fails; and every value example() computes appears in the
+    spec, which covers the ones the prose gives."""
     with open(repo_path("docs", "spec", "ledger-v1.md"), encoding="utf-8") as f:
         spec = f.read()
+    section = spec[spec.index("## 12. Worked example"):spec.index("## 13. ")]
+    shown = re.findall(r"```text\n(.*?)```", section, re.S)
+    want = example_blocks()
+    expect(len(shown) == len(want), "section 12 has %d code blocks, the example renders %d" % (len(shown), len(want)))
+    for i, (got, w) in enumerate(zip(shown, want)):
+        expect(got == w, "section 12's code block %d isn't what the example renders:\n%s\nwant:\n%s" % (i + 1, got, w))
     values = example()
     for label, v in values:
         text = v.hex() if isinstance(v, bytes) else str(v)
         expect(text in spec, "the spec doesn't show the example's %s, %s" % (label, text))
-    return "%d values" % len(values)
+    return "%d code blocks, %d values" % (len(want), len(values))
 
 
 def test_vectors_regenerate():
@@ -2490,12 +2953,79 @@ def flip(hex_text):
     return hex_text[:-1] + ("1" if hex_text[-1] == "0" else "0")
 
 
+def reseal(doc, bodies=True, keep_prev=(), sync_rows=True):
+    """Recompute, in place, every value that check derives from another in
+    doc's chains and days, after a test changed an input, so that only the
+    rule the change breaks is left broken. With bodies, each body is
+    rewritten as the stand-in for its record's nonce, rtype and seq.
+    Headers are built without header()'s rules, so a broken header rule
+    stays broken. keep_prev lists (chain, batch) indices whose prev stays as
+    the file has it; every other prev is the head before it, or the file's
+    for a chain's first batch. With sync_rows, each day row of a batch in
+    the file takes that batch's head and received_at."""
+    heads = {}
+    for i, chain in enumerate(doc.get("chains", [])):
+        keys = derive_keys(bytes.fromhex(chain["k_dev"]))
+        prev = None
+        for j, batch in enumerate(chain["batches"]):
+            if prev is not None and (i, j) not in keep_prev:
+                batch["prev"] = prev.hex()
+            prev = bytes.fromhex(batch["prev"])
+            entries = []
+            for rec in batch["records"]:
+                n = nonce(keys["k_leaf"], rec["seq"])
+                rec["nonce"] = n.hex()
+                if bodies:
+                    name = RTYPES.get(rec["rtype"], "rtype 0x%02x" % rec["rtype"])
+                    rec["body"] = ('{"n":"%s","e":{"stand_in":"%s","seq":%d}}' % (n.hex(), name, rec["seq"])).encode().hex()
+                hdr = u64(rec["seq"]) + u8(rec["rtype"]) + project_digest(rec["project_key"]) + session_digest(rec["session_key"])
+                entries.append(hdr + sha256(bytes.fromhex(rec["body"])))
+                rec["entry"] = entries[-1].hex()
+            root = mth(entries)
+            head = sha256(CHAIN_PREFIX + prev + root + u64(len(entries)) + u64(batch["b"]))
+            batch.update(n=len(entries), root=root.hex(), head=head.hex())
+            if "received_at" in batch:
+                batch["receipt_msg"] = receipt_message(chain["device_id"], batch["b"], head, batch["received_at"]).hex()
+                heads[(chain["device_id"], batch["b"])] = (head, batch["received_at"])
+            hashes = [leaf_hash(e) for e in entries]
+            batch["proofs"] = [{"index": p["index"], "path": [h.hex() for h in inclusion_path(p["index"], hashes)]}
+                               for p in batch.get("proofs", []) if p["index"] < len(hashes)]
+            prev = head
+    prev = None
+    for day in doc.get("days", []):
+        if prev is not None:
+            day["prev"] = prev.hex()
+        prev = bytes.fromhex(day["prev"])
+        leaves = []
+        for row in day["rows"]:
+            if sync_rows and (row["device_id"], row["b"]) in heads:
+                h, t = heads[(row["device_id"], row["b"])]
+                row.update(head=h.hex(), received_at=t)
+            leaves.append(day_leaf(row["device_id"], row["b"], bytes.fromhex(row["head"]), row["received_at"]))
+            row["leaf"] = leaves[-1].hex()
+        root = mth(leaves)
+        head = day_head(prev, root, len(leaves), day["day"])
+        day.update(count=len(leaves), root=root.hex(), head=head.hex(), signed_msg=day_message(day["day"], head).hex())
+        if "date" in day:
+            day["date"] = day_date(day["day"])
+        hashes = [leaf_hash(x) for x in leaves]
+        day["proofs"] = [{"index": p["index"], "path": [h.hex() for h in inclusion_path(p["index"], hashes)]}
+                         for p in day.get("proofs", []) if p["index"] < len(hashes)]
+        prev = head
+    return doc
+
+
 def test_check_catches():
-    """check reports each kind of tampering, on a small slice of the vectors."""
+    """check reports each kind of tampering, on a small slice of the vectors,
+    with the message of the rule the change breaks. A change marked alone
+    comes with every value derived from it recomputed (reseal), so that
+    rule is the only one left to catch it, and every error check reports
+    must be that rule's."""
     full = load_json("testdata", "ledger", "vectors.json")
     base = {"format": FORMAT, "keys": full["keys"][:1], "digests": full["digests"][:2],
             "chains": [full["chains"][1]], "days": full["days"][1:]}
     expect(not check_document(json.loads(json.dumps(base))).errors, "the slice of the vectors doesn't pass check")
+    expect(reseal(json.loads(json.dumps(base))) == base, "resealing the unchanged slice changes it")
 
     def batch(doc, j=0):
         return doc["chains"][0]["batches"][j]
@@ -2503,8 +3033,11 @@ def test_check_catches():
     def rec(doc, j=0, k=0):
         return batch(doc, j)["records"][k]
 
+    def day(doc, i=0):
+        return doc["days"][i]
+
     def day_row(doc, j=0):
-        return doc["days"][0]["rows"][j]
+        return day(doc)["rows"][j]
 
     def setter(get, key, fn):
         def apply(doc):
@@ -2512,48 +3045,119 @@ def test_check_catches():
             obj[key] = fn(obj[key])
         return apply
 
+    def sealed(change, **opts):
+        def apply(doc):
+            change(doc)
+            reseal(doc, **opts)
+        return apply
+
     def swap_rows(doc):
-        rows = doc["days"][0]["rows"]
+        rows = day(doc)["rows"]
         rows[0], rows[1] = rows[1], rows[0]
 
-    def os_with_project(doc):
-        rec(doc).update(rtype=0x0E, project_key="p_x", session_key=NO_SESSION)
+    def renumber(doc):
+        # Batches 2 to 4 become 3 to 5, in the chain and in the day rows.
+        device_id = doc["chains"][0]["device_id"]
+        for bt in doc["chains"][0]["batches"][1:]:
+            bt["b"] += 1
+        for row in sorted((r for r in day(doc)["rows"] if r["device_id"] == device_id), key=lambda r: -r["b"]):
+            if row["b"] >= 2:
+                row["b"] += 1
 
+    def shift_seqs(doc):
+        for bt in doc["chains"][0]["batches"]:
+            for r in bt["records"]:
+                r["seq"] += 1
+
+    def other_nonce(doc):
+        r = rec(doc)
+        r["body"] = stand_in_body(bytes.fromhex(rec(doc, 0, 1)["nonce"]), r["rtype"], r["seq"]).hex()
+
+    def nonce_last(doc):
+        r = rec(doc)
+        r["body"] = ('{"e":{"stand_in":"%s","seq":%d},"n":"%s"}' % (RTYPES[r["rtype"]], r["seq"], r["nonce"])).encode().hex()
+
+    def repeat_row(doc):
+        rows = day(doc)["rows"]
+        rows.insert(1, dict(rows[0], received_at=rows[0]["received_at"] + 1))
+
+    def move_row(doc):
+        day(doc, 1)["rows"].append(day(doc)["rows"].pop())
+
+    def drop_chain_row(doc):
+        rows = day(doc)["rows"]
+        rows.remove(next(r for r in rows if r["device_id"] == doc["chains"][0]["device_id"]))
+
+    def empty_last_batch(doc):
+        doc["chains"][0]["batches"][-1]["records"] = []
+
+    def flip_prev(j):
+        def apply(doc):
+            batch(doc, j)["prev"] = flip(batch(doc, j)["prev"])
+        return apply
+
+    nonce_rule = "doesn't start with {\"n\":\", this record's nonce in hex and \",\"e\":"
+    # (name, change, a phrase of the error the rule reports, alone)
     mutations = (
-        ("a derived key", setter(lambda d: d["keys"][0], "k_leaf", flip)),
-        ("a project digest", setter(lambda d: d["digests"][1], "project", flip)),
-        ("a body byte", setter(rec, "body", flip)),
-        ("a nonce", setter(rec, "nonce", flip)),
-        ("an entry", setter(rec, "entry", flip)),
-        ("a seq", setter(lambda d: rec(d, 1, 0), "seq", lambda s: s + 1)),
-        ("a reserved rtype", setter(rec, "rtype", lambda _: 0x13)),
-        ("an os.* record with a project", os_with_project),
-        ("a root", setter(batch, "root", flip)),
-        ("a head", setter(batch, "head", flip)),
-        ("a prev", setter(lambda d: batch(d, 1), "prev", flip)),
-        ("a batch number", setter(lambda d: batch(d, 1), "b", lambda b: b + 1)),
-        ("n", setter(batch, "n", lambda n: n + 1)),
-        ("a receipt message", setter(batch, "receipt_msg", flip)),
-        ("a received_at", setter(batch, "received_at", lambda t: t + 1)),
-        ("a batch proof", setter(lambda d: batch(d)["proofs"][0], "path", lambda p: [flip(p[0])] + p[1:])),
-        ("a day leaf", setter(day_row, "leaf", flip)),
-        ("the order of day rows", swap_rows),
-        ("a day count", setter(lambda d: d["days"][0], "count", lambda n: n + 1)),
-        ("a day root", setter(lambda d: d["days"][0], "root", flip)),
-        ("a day head", setter(lambda d: d["days"][0], "head", flip)),
-        ("a day's signed message", setter(lambda d: d["days"][0], "signed_msg", flip)),
-        ("a day proof", setter(lambda d: d["days"][0]["proofs"][1], "path", lambda p: p[:-1])),
-        ("a missing day row", setter(lambda d: d["days"][0], "rows", lambda rows: rows[1:])),
+        ("a derived key", setter(lambda d: d["keys"][0], "k_leaf", flip), "keys[0].k_leaf: file has", False),
+        ("a project digest", setter(lambda d: d["digests"][1], "project", flip), "digests[1].project: file has", False),
+        ("a body byte", setter(rec, "body", flip), "records[0].entry: file has", False),
+        ("a nonce", setter(rec, "nonce", flip), "records[0].nonce: file has", False),
+        ("an entry", setter(rec, "entry", flip), "records[0].entry: file has", False),
+        ("a body whose n is another record's nonce", sealed(other_nonce, bodies=False), nonce_rule, True),
+        ("a body with n after e", sealed(nonce_last, bodies=False), nonce_rule, True),
+        ("a body without its nonce", sealed(setter(rec, "body", lambda _: b'{"e":{}}'.hex()), bodies=False), nonce_rule, True),
+        ("a seq", sealed(setter(lambda d: rec(d, 1, 0), "seq", lambda x: x + 1)), "sequence numbers have no gaps", True),
+        ("a batch 1 that doesn't start at seq 1", sealed(shift_seqs), "but batch 1 starts at seq 1", True),
+        ("a reserved rtype", sealed(setter(rec, "rtype", lambda _: 0x42)), "rtype 0x42 is reserved", True),
+        ("rtype 0x00", sealed(setter(rec, "rtype", lambda _: 0x00)), "rtype 0x00 is reserved", True),
+        ("an os.* record with a project",
+         sealed(lambda d: rec(d).update(rtype=0x0E, project_key="p_x", session_key=NO_SESSION)), "records have no project", True),
+        ("a checkpoint without a project",
+         sealed(lambda d: rec(d).update(rtype=CHECKPOINT, project_key="", session_key=NO_SESSION)),
+         "a checkpoint has a project and no session", True),
+        ("a root", setter(batch, "root", flip), "batches[0].root: file has", False),
+        ("a head", setter(batch, "head", flip), "batches[0].head: file has", False),
+        ("a prev that isn't the head before it", sealed(flip_prev(1), keep_prev={(0, 1)}), "batches[1].prev: file has", True),
+        ("a batch 1 whose prev isn't zero", sealed(flip_prev(0), keep_prev={(0, 0)}), "batches[0].prev: file has", True),
+        ("a batch number", sealed(renumber), "batch numbers have no gaps", True),
+        ("n", setter(batch, "n", lambda n: n + 1), "but the batch lists", False),
+        ("an empty batch", sealed(empty_last_batch), "a batch has at least one record", True),
+        ("a receipt message", setter(batch, "receipt_msg", flip), "batches[0].receipt_msg: file has", False),
+        ("a received_at that isn't its day row's", sealed(setter(batch, "received_at", lambda t: t + 1), sync_rows=False),
+         "has a head or received_at other than its row", True),
+        ("a batch proof", setter(lambda d: batch(d)["proofs"][0], "path", lambda p: [flip(p[0])] + p[1:]),
+         "batches[0].proofs[0].path[0]: file has", False),
+        ("a day leaf", setter(day_row, "leaf", flip), "rows[0].leaf: file has", False),
+        ("the order of day rows", sealed(swap_rows), "is out of order", True),
+        ("a skipped day number", sealed(setter(lambda d: day(d, 1), "day", lambda x: x + 1)), "every day has a head", True),
+        ("a row on another day", sealed(move_row), "falls on day", True),
+        ("a batch listed twice in a day", sealed(repeat_row), "the server stores each batch once", True),
+        ("a batch missing from its day", sealed(drop_chain_row), "is missing from the rows of day", True),
+        ("a day count", setter(day, "count", lambda n: n + 1), "but the day lists", False),
+        ("a day root", setter(day, "root", flip), "days[0].root: file has", False),
+        ("a day head", setter(day, "head", flip), "days[0].head: file has", False),
+        ("a day's signed message", setter(day, "signed_msg", flip), "days[0].signed_msg: file has", False),
+        ("a day proof", setter(lambda d: day(d)["proofs"][1], "path", lambda p: p[:-1]), "days[0].proofs[1].path", False),
     )
-    for name, mutate in mutations:
+    alone = 0
+    for name, mutate, phrase, only in mutations:
         doc = json.loads(json.dumps(base))
         mutate(doc)
         try:
-            caught = bool(check_document(doc).errors)
-        except FormatError:
-            caught = True
-        expect(caught, "check doesn't notice a changed %s" % name)
-    return "%d kinds of tampering caught" % len(mutations)
+            errors = check_document(doc).errors
+        except FormatError as err:
+            errors = ["format: %s" % err]
+        expect(any(phrase in e for e in errors), "check misses the change %s: no error says %r: %s" % (name, phrase, errors[:3]))
+        if only:
+            alone += 1
+            expect(all(phrase in e for e in errors), "the change %s breaks other rules too: %s" % (name, errors[:3]))
+    doc = json.loads(json.dumps(base))
+    rec(doc)["rtype"] = 0x13
+    rep = check_document(reseal(doc))
+    expect(not rep.errors and rep.counts.get("records of later kinds") == 1,
+           "check doesn't take a record of rtype 0x13 as a later kind: %s" % rep.errors[:3])
+    return "%d kinds of tampering caught, %d of them alone" % (len(mutations), alone)
 
 
 def content_example():
@@ -2566,8 +3170,6 @@ def content_example():
     for j in (1, 2, 7, 15):
         out += [("salt %d" % j, salts[j - 1]), ("leaf %d" % j, leaves[j - 1])]
     out += [("n", n), ("C", root)]
-    items = reveal_items(salts, toks, leaves, [(6, 1, "known", None)])
-    out.append(("reveal verdict", verify_reveal(n, root, items)[0]))
     removed, words = normalize(text)
     out += [("normalized", " ".join(words)), ("signature", error_signature(text))]
     tag, xs = shingles(words)
@@ -2592,13 +3194,20 @@ def content_example():
 
 
 def test_content_example():
+    """Every value of 10.10 appears in the spec, and the reveal that removes
+    token 7 as known verifies ok, as 10.10 says: the verdict is checked
+    itself, because every verdict's name appears in 10.3 anyway."""
     with open(repo_path("docs", "spec", "ledger-v1.md"), encoding="utf-8") as f:
         spec = f.read()
     values = content_example()
     for label, v in values:
         text = v.hex() if isinstance(v, bytes) else str(v)
         expect(text in spec, "the spec doesn't show part 2's %s, %s" % (label, text))
-    return "%d values" % len(values)
+    keys = derive_keys(bytes(range(32)))
+    toks, salts, leaves, n, root = commit_text(keys["k_tok"], 2, "still broken, see src/nav.js:12\r\nTypeError: x is undefined".encode("utf-8"))
+    got = verify_reveal(n, root, reveal_items(salts, toks, leaves, [(6, 1, "known", None)]))
+    expect(got == ("ok", None), "10.10's reveal without token 7 gets %s, and the spec says it verifies ok" % (got,))
+    return "%d values and the reveal's ok" % len(values)
 
 
 def test_whitespace_set():
@@ -2730,6 +3339,34 @@ def test_minhash_estimates():
     return "mean error %.3f, bias %+.3f over 100 pairs" % (total / 100, signed / 100)
 
 
+def test_hunk_properties():
+    """For random single edits of random files, the hunks of a patch with
+    three lines of context, as Claude Code writes it, are the one hunk the
+    text before and after gives, and the hunk counts changed lines only."""
+    s = Stream("selftest-hunks")
+    checked = 0
+    for _ in range(300):
+        before = ["line %d %s\n" % (i, s.take(2).hex()) for i in range(s.below(40))]
+        at = s.below(len(before) + 1)
+        removed = s.below(min(4, len(before) - at) + 1)
+        added = ["new %s\n" % s.take(3).hex() for _ in range(s.below(4))]
+        if not removed and not added:
+            continue
+        after = before[:at] + added + before[at + removed:]
+        lo, hi = max(0, at - 3), min(len(before), at + removed + 3)
+        lines = ([" " + x for x in before[lo:at]] + ["-" + x for x in before[at:at + removed]]
+                 + ["+" + x for x in added] + [" " + x for x in before[at + removed:hi]])
+        old_lines, new_lines = hi - lo, hi - lo - removed + len(added)
+        old_start = lo + 1 if old_lines else lo
+        new_start = lo + 1 if new_lines else lo
+        got = hunks_from_patch(old_start, old_lines, new_start, new_lines, lines)
+        want = hunk_from_texts("".join(before), "".join(after))
+        expect(got == [want], "a patch's hunks %s aren't the text's %s" % (got, want))
+        expect(want[1] == removed and want[3] == len(added), "the hunk %s counts lines that didn't change" % (want,))
+        checked += 1
+    return "%d random edits" % checked
+
+
 def test_draw_properties():
     """The draw takes the CHALLENGE_K smallest scores whatever the pool's
     order, and CHALLENGE_K steps at the rounding boundaries."""
@@ -2776,14 +3413,24 @@ def test_check_catches_content():
         "normalizations": ["the worked example of 10.10"],
         "features": ["the worked example of 10.10", "an edit across two files, with an insertion and a deletion",
                      "a command typed in a shell"],
+        "diffs": ["three lines of context around three lines added after line 9", "an edit inside one line",
+                  "a patch whose lines don't add up to its header is malformed"],
         "jaccard": ["one word changed"],
-        "shingle_reveals": ["the worked example of 10.10: every shingle shown"],
+        "shingle_reveals": ["the worked example of 10.10: every shingle shown", "fix it for bob with bob removed"],
         "draws": ["a pool of 12 on two devices"],
     }
     base = {"format": FORMAT, "lowercase": full["lowercase"], "challenge_k": full["challenge_k"]}
     for name, notes in picks.items():
         base[name] = [full[name][note_index(name, note)] for note in notes]
     expect(not check_document(json.loads(json.dumps(base))).errors, "the slice of the content vectors doesn't pass check")
+    # 11.3 lets every object of the part 2 sections carry a note.
+    noted = json.loads(json.dumps(base))
+    noted["lowercase"]["note"] = "a note"
+    noted["challenge_k"][0]["note"] = "a note"
+    try:
+        expect(not check_document(noted).errors, "a note on the lowercase table or a CHALLENGE_K size changes a value")
+    except FormatError as err:
+        raise SelftestError("check refuses a note that 11.3 allows: %s" % err)
 
     def at(section, i, *keys):
         def get(doc):
@@ -2835,8 +3482,16 @@ def test_check_catches_content():
         ("a hunk's path", setter(at("features", tool, "f", "h", 0), "p", flip)),
         ("a hunk's numbers", setter(at("features", tool, "f", "h", 0), "nl", lambda x: x + 1)),
         ("a command hash", setter(at("features", shell, "f"), "ch", flip)),
+        ("a hunk from a patch", setter(at("diffs", 0, "hunks", 0), "new_start", lambda x: x + 1)),
+        ("a hunk from the text before and after", setter(at("diffs", 1, "hunks", 0), "old_lines", lambda x: x + 1)),
+        ("a malformed patch read as well formed", lambda d: d["diffs"][2].pop("malformed") and d["diffs"][2].update(hunks=[])),
         ("a Jaccard count", setter(at("jaccard", 0), "matches", lambda x: x + 1)),
         ("a shingle reveal's verdict", setter(at("shingle_reveals", 0), "verdict", lambda _: "sketch")),
+        ("a shingle reveal's count of unexplained places", setter(at("shingle_reveals", 1), "unexplained", lambda x: x + 1)),
+        ("a hidden shingle sent anyway", lambda d: d["shingle_reveals"][1].update(entries=sorted(
+            d["shingle_reveals"][1]["entries"] + [{"v": d["shingle_reveals"][0]["entries"][0]["v"], "x": "666f722062"}],
+            key=lambda e: e["v"]))),
+        ("a shingle reveal's kind", setter(at("shingle_reveals", 0), "kind", lambda _: "word3")),
         ("a draw seed", setter(at("draws", 0), "seed", flip)),
         ("a pool score", setter(at("draws", 0, "pool", 3), "score", flip)),
         ("the drawn order", swap("drawn")),
@@ -2871,6 +3526,7 @@ SELFTESTS = (
     ("tokens and the 16 KiB cut", test_tokens),
     ("reveal properties", test_reveal_properties),
     ("MinHash estimates", test_minhash_estimates),
+    ("hunk properties", test_hunk_properties),
     ("draw properties", test_draw_properties),
     ("part 2 worked example", test_content_example),
     ("content vectors regenerate", test_content_vectors_regenerate),

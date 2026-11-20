@@ -36,7 +36,8 @@
 // the reveal against the record's [Commitment] with [VerifyReveal], which
 // returns the first verdict of spec 10.3 that applies. [DrawSeed] and
 // [Draw] give the challenge draw of DESIGN 7.5 step 4, which an auditor
-// recomputes from the bundle.
+// recomputes from the bundle, through [DrawSeedFromDigest] from the
+// SHA-256(M) the bundle carries.
 //
 // # Verifying
 //

@@ -420,7 +420,7 @@ func TestVectorDays(t *testing.T) {
 		if len(published) != len(days) {
 			t.Fatalf("%d of %d days built", len(published), len(days))
 		}
-		if err := VerifyDays(testServerPub(), published); err != nil {
+		if err := VerifyDays(serverKeyAlways(testServerPub()), published); err != nil {
 			t.Error(err)
 		}
 	})

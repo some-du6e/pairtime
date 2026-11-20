@@ -4,7 +4,9 @@ package features
 
 import (
 	"regexp"
+	"slices"
 	"strings"
+	"unicode/utf8"
 )
 
 // The patterns of spec 10.4 step 2. Each is matched against a whole line,
@@ -17,26 +19,58 @@ var (
 	fenceOpen = regexp.MustCompile("^ {0,3}(`{3,}|~{3,})(.*)$")
 	// fenceClose is F2.
 	fenceClose = regexp.MustCompile("^ {0,3}(`{3,}|~{3,})[ \t]*$")
-	// pasteOpen is P1, the wrapper Claude Code puts around pastes (SM 1.2).
+	// pasteOpen is P1, the opening line of the wrapper Claude Code puts
+	// around pastes (SM 1.2).
 	pasteOpen = regexp.MustCompile(`^<pasted_content(?: [^>]*)?>$`)
+	// pasteClose is P2, its closing line. Claude Code 2.1.327 writes
+	// </pasted_content id="1a2b">, repeating the opener's id, and older
+	// sessions wrote </pasted_content>. Ids aren't compared.
+	pasteClose = regexp.MustCompile(`^</pasted_content(?: [^>]*)?>$`)
 	// errorLine is E1 to E6, SM 4.2's first error lines: an exception in
 	// Python, JavaScript or Java, Rust's error[E0xxx], a compiler's
 	// file:line:col: error:, pytest's FAILED, go test's --- FAIL: and a Go
 	// panic.
-	errorLine = regexp.MustCompile(`^(?:` + strings.Join([]string{
-		`(?:Uncaught )?(?:[A-Za-z_$][A-Za-z0-9_$]*\.)*[A-Za-z0-9_$]*(?:Error|Exception)(?::.*)?`,
-		`error\[E[0-9]{4}\](?::.*)?`,
-		`[^ \t]+:[0-9]+:[0-9]+: (?:fatal )?error:.*`,
-		`FAILED .+`,
-		`--- FAIL: .+`,
-		`panic: .+`,
-	}, "|") + `)$`)
+	errorLine = regexp.MustCompile(`^(?:` + strings.Join(errorPatterns[:], "|") + `)$`)
+	// errorLines are E1 to E6 one by one, so the walk knows which matched.
+	errorLines = func() (out [len(errorPatterns)]*regexp.Regexp) {
+		for i, p := range errorPatterns {
+			out[i] = regexp.MustCompile(`^(?:` + p + `)$`)
+		}
+		return out
+	}()
+	// gutterLine is R, a compiler's gutter line with its line number at
+	// column 0, where rustc writes the widest number. It goes with an E2 or
+	// E3 line, whose other gutter lines are indented.
+	gutterLine = regexp.MustCompile(`^[0-9]+ +\|.*$`)
+	// goroutineLine is G, the first line of a goroutine's stack in a Go
+	// panic.
+	goroutineLine = regexp.MustCompile(`^goroutine [0-9]+ [^\[]*\[[^\]]*\]:$`)
 )
 
-const (
-	pasteClose = "</pasted_content>"
-	traceback  = "Traceback (most recent call last):"
-)
+// errorPatterns are E1 to E6 (spec 10.4). E1 takes the JVM's
+// Exception in thread "main" and Caused by:, and a browser's Uncaught and
+// Uncaught (in promise), before an exception line.
+var errorPatterns = [...]string{
+	`(?:Uncaught (?:\(in promise\) )?|Exception in thread "[^"]*" |Caused by: )?(?:[A-Za-z_$][A-Za-z0-9_$]*\.)*[A-Za-z0-9_$]*(?:Error|Exception)(?::.*)?`,
+	`error\[E[0-9]{4}\](?::.*)?`,
+	`[^ \t]+:[0-9]+:[0-9]+: (?:fatal )?error:.*`,
+	`FAILED .+`,
+	`--- FAIL: .+`,
+	`panic: .+`,
+}
+
+// errorKind returns which of E1 to E6, 1 to 6, the stripped line s matches
+// first, or 0 for none.
+func errorKind(s string) int {
+	for i, re := range errorLines {
+		if re.MatchString(s) {
+			return i + 1
+		}
+	}
+	return 0
+}
+
+const traceback = "Traceback (most recent call last):"
 
 // splitLines splits text at every LF and removes one CR from the end of
 // each line that ends with one (spec 10.4 step 1).
@@ -73,6 +107,38 @@ func indented(line string) bool {
 	return strings.HasPrefix(line, " ") || strings.HasPrefix(line, "\t")
 }
 
+// errorTextEnd returns the index of the first line after the error text
+// that starts at line i, a traceback's first line or a line that matches E
+// kind (spec 10.4 step 2; kind is 0 for a traceback). The text runs on
+// over every indented line; after E2 or E3 over every gutter line R too;
+// and after E6 over [signal lines and then each goroutine block: the blank
+// lines before it, its first line G, and every line that starts with a tab
+// or comes just before one that does.
+func errorTextEnd(lines []string, i, kind int) int {
+	i++
+	for i < len(lines) {
+		l := lines[i]
+		if !indented(l) && !((kind == 2 || kind == 3) && gutterLine.MatchString(l)) && !(kind == 6 && strings.HasPrefix(l, "[signal ")) {
+			break
+		}
+		i++
+	}
+	for kind == 6 {
+		j := i
+		for j < len(lines) && strip(lines[j]) == "" {
+			j++
+		}
+		if j == len(lines) || !goroutineLine.MatchString(strip(lines[j])) {
+			break
+		}
+		i = j + 1
+		for i < len(lines) && (strings.HasPrefix(lines[i], "\t") || i+1 < len(lines) && strings.HasPrefix(lines[i+1], "\t")) {
+			i++
+		}
+	}
+	return i
+}
+
 // removedLines returns the indices of the lines that spec 10.4 step 2
 // removes: fenced blocks, pasted blocks, tracebacks and error lines with
 // the indented lines after them. At each line the first rule that applies
@@ -90,15 +156,12 @@ func removedLines(lines []string) []int {
 			i = min(i+1, len(lines))
 		case pasteOpen.MatchString(s):
 			i++
-			for i < len(lines) && strip(lines[i]) != pasteClose {
+			for i < len(lines) && !pasteClose.MatchString(strip(lines[i])) {
 				i++
 			}
 			i = min(i+1, len(lines))
 		case s == traceback || isErrorLine(s):
-			i++
-			for i < len(lines) && indented(lines[i]) {
-				i++
-			}
+			i = errorTextEnd(lines, i, errorKind(s))
 		default:
 			i++
 			continue
@@ -125,9 +188,22 @@ func (n Normalized) Text() string { return strings.Join(n.Words, " ") }
 // Normalize applies spec 10.4 to text, a committed text (spec 10.1): it
 // splits the lines, removes pasted blocks and error text by line, takes
 // the words of the lines that stay, lowercases them with Unicode 15.0.0's
-// simple mapping, applies the substitutions within each word, and marks
+// simple mapping, applies the substitutions within each word, strips each
+// word to its bare form, dropping a word that is left empty, and marks
 // retry phrases. text should be valid UTF-8, as every committed text is.
 func Normalize(text string) Normalized {
+	n, _ := normalizeSources(text)
+	return n
+}
+
+// normalizeSources is Normalize, and also returns the tokens of text that
+// each normalized word comes from (spec 10.8), numbered from 0 in the order
+// Tokens gives them. A word of step 3 is one token, since LF and CR are
+// whitespace and so no other token holds one, and a <retry> of step 7
+// comes from every token of the words it replaced. So walking the text's
+// tokens and counting the LFs between them gives the words of step 3 and
+// the line each is on.
+func normalizeSources(text string) (Normalized, [][]int) {
 	lines := splitLines(text)
 	removed := removedLines(lines)
 	gone := make([]bool, len(lines))
@@ -135,15 +211,23 @@ func Normalize(text string) Normalized {
 		gone[i] = true
 	}
 	var words []string
-	for i, line := range lines {
-		if gone[i] {
+	var sources [][]int
+	line := 0
+	for j, tok := range Tokens(text) {
+		if isSpaceToken(tok) {
+			line += strings.Count(tok, "\n")
 			continue
 		}
-		for _, w := range Words(line) {
-			words = append(words, substitute(strings.Map(Lower, w)))
+		if gone[line] {
+			continue
+		}
+		if w := bare(substitute(strings.Map(Lower, tok))); w != "" {
+			words = append(words, w)
+			sources = append(sources, []int{j})
 		}
 	}
-	return Normalized{RemovedLines: removed, Words: replaceRetries(words)}
+	words, sources = replaceRetries(words, sources)
+	return Normalized{RemovedLines: removed, Words: words}, sources
 }
 
 // ErrorSignature returns the error signature of text (spec 10.6): its first
@@ -291,7 +375,7 @@ func containsByte(s string, f func(byte) bool) bool {
 }
 
 // retryPhrases are SM 4.2's retry phrases, longest first, as spec 10.4
-// step 6 tries them.
+// step 7 tries them.
 var retryPhrases = [][]string{
 	{"still", "not", "working"},
 	{"try", "again"}, {"fix", "it"}, {"still", "broken"}, {"doesnt", "work"},
@@ -299,50 +383,69 @@ var retryPhrases = [][]string{
 }
 
 // replaceRetries walks the words from the left and turns each retry phrase
-// into the single word <retry> (spec 10.4 step 6).
-func replaceRetries(words []string) []string {
+// into the single word <retry> (spec 10.4 step 7). sources are the tokens
+// each word comes from, and a <retry> comes from those of every word it
+// replaced.
+func replaceRetries(words []string, sources [][]int) ([]string, [][]int) {
 	out := make([]string, 0, len(words))
+	outSources := make([][]int, 0, len(words))
 	for i := 0; i < len(words); {
 		k := retryAt(words[i:])
 		if k == 0 {
-			out = append(out, words[i])
+			out, outSources = append(out, words[i]), append(outSources, sources[i])
 			i++
 			continue
 		}
-		out = append(out, "<retry>")
+		out, outSources = append(out, "<retry>"), append(outSources, slices.Concat(sources[i:i+k]...))
 		i += k
 	}
-	return out
+	return out, outSources
 }
 
 // retryAt returns the number of words of the retry phrase that words
-// starts with, trying the longest phrases first, or 0 for none.
+// starts with, trying the longest phrases first, or 0 for none. The words
+// are bare already (spec 10.4 step 6), so they compare as they are.
 func retryAt(words []string) int {
 	for _, p := range retryPhrases {
-		if len(words) < len(p) {
-			continue
-		}
-		match := true
-		for j, pw := range p {
-			if bare(words[j]) != pw {
-				match = false
-				break
-			}
-		}
-		if match {
+		if len(words) >= len(p) && slices.Equal(words[:len(p)], p) {
 			return len(p)
 		}
 	}
 	return 0
 }
 
-// bare returns a word as retry phrases compare it: without its leading and
-// trailing punctuation, then without every ' and U+2019 left inside, so
-// doesn't, doesn’t and doesnt compare equal.
+// placeholders are the words step 5's substitutions write (spec 10.4).
+var placeholders = []string{"<url>", "<id>", "<path>", "<hex>", "<n>"}
+
+// bare returns a word's bare form (spec 10.4 step 6): without its leading
+// and trailing punctuation, though never a placeholder at either end, then
+// without every ' and U+2019 left inside, so doesn't, doesn’t and doesnt
+// are one word.
 func bare(w string) string {
-	w = strings.TrimFunc(w, isEdgePunct)
+	for w != "" {
+		r, size := utf8.DecodeRuneInString(w)
+		if !isEdgePunct(r) || startsWithAny(w, placeholders) {
+			break
+		}
+		w = w[size:]
+	}
+	for w != "" {
+		r, size := utf8.DecodeLastRuneInString(w)
+		if !isEdgePunct(r) || endsWithAny(w, placeholders) {
+			break
+		}
+		w = w[:len(w)-size]
+	}
 	w = strings.ReplaceAll(w, "'", "")
 	return strings.ReplaceAll(w, "\U00002019", "")
+}
+
+func startsWithAny(s string, prefixes []string) bool {
+	return slices.ContainsFunc(prefixes, func(p string) bool { return strings.HasPrefix(s, p) })
+}
+
+func endsWithAny(s string, suffixes []string) bool {
+	return slices.ContainsFunc(suffixes, func(p string) bool { return strings.HasSuffix(s, p) })
 }
 
 // isEdgePunct accepts the 32 printable ASCII characters that are neither

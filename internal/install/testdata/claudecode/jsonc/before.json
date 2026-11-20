@@ -1,0 +1,22 @@
+// Claude Code settings, kept by hand.
+{
+	// The model for new sessions.
+	"model": "sonnet",
+	"permissions": {
+		"allow": ["Bash(npm test)", "Read(~/notes/**)",], // trailing comma on purpose
+	},
+	/* Hooks other tools added. */
+	"hooks": {
+		"Stop": [
+			{
+				"hooks": [{ "type": "command", "command": "say done" }],
+			},
+		],
+		"PostToolUse": [
+			{
+				"matcher": "Write|Edit|MultiEdit",
+				"hooks": [{ "type": "command", "command": "/home/teen/.git-ai/bin/git-ai checkpoint claude --hook-input stdin" }]
+			}
+		] // git-ai
+	},
+}

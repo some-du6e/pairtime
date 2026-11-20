@@ -22,7 +22,14 @@ import (
 // server's 32 random bytes from the freeze and metadata is M, the metadata
 // reveal as the client sent it, before sealing (spec 10.9).
 func DrawSeed(r Hash, metadata []byte) Hash {
-	m := sha256.Sum256(metadata)
+	return DrawSeedFromDigest(r, sha256.Sum256(metadata))
+}
+
+// DrawSeedFromDigest returns seed = SHA-256(r || m), where m is SHA-256(M),
+// the digest of the metadata reveal. A bundle carries r and SHA-256(M),
+// not M as the client sent it (spec 10.9; DESIGN 7.8), so an auditor
+// recomputes the seed from those.
+func DrawSeedFromDigest(r, m Hash) Hash {
 	return sum(r[:], m[:])
 }
 

@@ -1,0 +1,25 @@
+{
+  "model": "opus",
+  "hooks": {
+    "SessionStart": [],
+    "UserPromptSubmit": [],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "say done"
+          }
+        ]
+      }
+    ],
+    "StopFailure": [],
+    "Notification": [],
+    "PermissionRequest": [],
+    "PostToolUse": [],
+    "SubagentStart": [],
+    "SubagentStop": [],
+    "SessionEnd": [],
+    "PreCompact": []
+  }
+}
