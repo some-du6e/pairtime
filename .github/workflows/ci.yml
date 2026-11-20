@@ -8,8 +8,8 @@ name: ci
 
 on:
   pull_request:
-    # labeled and unlabeled rerun the job when Karim adds or removes the
-    # oracle-change label, which the oracle guard reads.
+    # labeled and unlabeled rerun the job when Karim or the orchestrator adds
+    # or removes the oracle-change label, which the oracle guard reads.
     types: [opened, synchronize, reopened, labeled, unlabeled]
   push:
     branches: [main]
@@ -320,8 +320,9 @@ jobs:
 
       - name: Oracle guard
         # A PR may not change an existing oracle together with the code it
-        # checks, unless Karim adds the oracle-change label (docs/PLAN.md,
-        # ground rule 5). The labels come from the event payload.
+        # checks, unless Karim or the orchestrator adds the oracle-change label to
+        # apply a decision made outside the PR (AGENTS.md; docs/PLAN.md, ground
+        # rule 5). The labels come from the event payload.
         if: ${{ !cancelled() && github.event_name == 'pull_request' }}
         run: |
           git -c core.quotePath=false diff --name-status -M HEAD^1 HEAD | bash tools/ci/oracle_guard.sh

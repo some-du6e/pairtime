@@ -14,8 +14,9 @@
 #
 # A PR fails when it modifies, deletes, renames or retypes an oracle path and
 # also touches cmd/, internal/, pkg/, web/, extension/ or integrations/,
-# unless it carries the oracle-change label, which only Karim adds. Adding a
-# new oracle file next to new code passes.
+# unless it carries the oracle-change label. Only Karim or the orchestrator
+# adds it, to apply a decision made outside the PR (AGENTS.md). Adding a new
+# oracle file next to new code passes.
 #
 # Exit status: 0 pass, 1 blocked, 2 bad input or a missing tool.
 set -euo pipefail
@@ -139,6 +140,7 @@ This PR changes an existing oracle and the code it checks. An oracle decides
 whether code is right, so the two change in separate PRs. Either move the
 oracle change into its own PR, or, when an SM worked example or fixture
 disagrees with the spec, write docs/errata/<date>-<topic>.md, add the erratum
-label and stop. Karim adds the $label label when both really belong in one PR.
+label and stop. Only Karim or the orchestrator adds the $label label, to
+apply a decision made outside this PR, such as a decided erratum.
 EOF
 exit 1
