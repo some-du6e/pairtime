@@ -4,6 +4,7 @@ package presence
 
 import (
 	"math"
+	"slices"
 	"testing"
 	"time"
 
@@ -41,14 +42,27 @@ func want(at, interval time.Duration) step {
 	return step{at: at, check: true, want: interval}
 }
 
+// toolCalls returns a tool hook from session key at from and then every
+// every until to, each followed halfway to the next by a check that the
+// interval is want.
+func toolCalls(key string, from, to, every, want time.Duration) []step {
+	var steps []step
+	for t := from; t <= to; t += every {
+		steps = append(steps, step{at: t, do: hook(key, event.KindAgentTool)}, step{at: t + every/2, check: true, want: want})
+	}
+	return steps
+}
+
 // s returns d seconds, rounded to the nanosecond, so s(23.2) is exactly
 // 23.2 s.
 func s(d float64) time.Duration { return time.Duration(math.Round(d * float64(time.Second))) }
 
 // TestGate checks D14's rule text and DESIGN 3.3's definition of a project
-// context, step by step on a fake wall clock.
+// context, step by step on a fake wall clock, with table 0.1.0's 15 s, 60 s
+// and 600 s.
 func TestGate(t *testing.T) {
-	const fast, slow = SampleInterval, SlowInterval
+	d14 := cadenceOf(table010(t))
+	fast, slow := d14.sample, d14.slow
 	tests := []struct {
 		name  string
 		steps []step
@@ -115,11 +129,27 @@ func TestGate(t *testing.T) {
 			},
 		},
 		{
-			name: "a hook keeps its session's context live for 600 s",
+			name: "a session start hook keeps its session's context live for 600 s",
 			steps: []step{
-				{at: 0, do: hook("s_a", event.KindAgentTool)},
+				{at: 0, do: hook("s_a", event.KindSessionStart)},
 				want(s(599), fast),
 				want(s(600), 0),
+			},
+		},
+		{
+			name: "a tool call comes only in a running turn, so it keeps the context live past 600 s",
+			steps: []step{
+				{at: 0, do: hook("s_a", event.KindAgentTool)},
+				want(s(1200), fast),
+				want(s(1799), fast),
+				want(s(1800), 0),
+			},
+		},
+		{
+			name: "a permission request comes only in a running turn too",
+			steps: []step{
+				{at: 0, do: hook("s_a", event.KindAgentPermission)},
+				want(s(1200), fast),
 			},
 		},
 		{
@@ -238,6 +268,31 @@ func TestGate(t *testing.T) {
 			},
 		},
 		{
+			name: "a turn a stop hook continues has no prompt, and its tool calls keep 15 s sampling for 40 minutes with no input",
+			steps: slices.Concat(
+				[]step{
+					{at: 0, do: focus(event.AppTerminal)},
+					{at: 0, do: sampled(0)},
+					{at: s(10), do: hook("s_a", event.KindPromptSubmit)},
+					{at: s(100), do: hook("s_a", event.KindAgentStop)},
+				},
+				toolCalls("s_a", s(200), s(2600), s(100), fast),
+			),
+		},
+		{
+			name: "the stop of a turn a stop hook continued starts the 600 s again",
+			steps: []step{
+				{at: 0, do: focus(event.AppTerminal)},
+				{at: 0, do: sampled(0)},
+				{at: s(10), do: hook("s_a", event.KindPromptSubmit)},
+				{at: s(100), do: hook("s_a", event.KindAgentStop)},
+				{at: s(200), do: hook("s_a", event.KindAgentTool)},
+				{at: s(300), do: hook("s_a", event.KindAgentStop)},
+				want(s(899), fast),
+				want(s(900), slow),
+			},
+		},
+		{
 			name: "a turn that goes stale counts as stopped 30 minutes after its last hook",
 			steps: []step{
 				{at: 0, do: focus(event.AppTerminal)},
@@ -263,7 +318,7 @@ func TestGate(t *testing.T) {
 	origin := time.Date(2026, 11, 19, 10, 0, 0, 0, time.UTC)
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			var g gate
+			g := gate{cadence: d14}
 			for i, st := range tt.steps {
 				now := origin.Add(st.at)
 				if st.do != nil {

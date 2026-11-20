@@ -109,7 +109,8 @@ func TestSmokeWindows(t *testing.T) {
 				}
 				// A timer may fire a moment late, or up to the scheduler's
 				// 50 ms early.
-				if off := time.Duration(r.At.UnixNano() % int64(SampleInterval)); off > 500*time.Millisecond && off < SampleInterval-100*time.Millisecond {
+				every := s.g.cadence.sample
+				if off := time.Duration(r.At.UnixNano() % int64(every)); off > 500*time.Millisecond && off < every-100*time.Millisecond {
 					t.Errorf("sample %d at %v is %v past a slot boundary", i, r.At.UTC(), off)
 				}
 			}

@@ -11,11 +11,13 @@
 // In a context it samples on every 15-second slot boundary of the wall
 // clock (:00, :15, :30, :45), because SM 2.1 decides each slot's input
 // from the sample that ends it, and after 600 s with no input and no
-// running agent turn, on every minute boundary. Any hook, focus or power
-// event takes a sample at once, so the 10 s check before a prompt (SM 2.2
-// rule 6) always has data. Idle APIs return the time since the last
-// input, so a sample after a pause reconstructs the gap exactly, and gaps
-// come from wall-clock values, never from time.Since (CP 2.2).
+// running agent turn, on every minute boundary. Those three numbers are
+// SAMPLE_S, CONTEXT_IDLE_S and SLOW_SAMPLE_S from the parameter table
+// (pkg/params). Any hook, focus or power event takes a sample at once, so
+// the 10 s check before a prompt (SM 2.2 rule 6) always has data. Idle
+// APIs return the time since the last input, so a sample after a pause
+// reconstructs the gap exactly, and gaps come from wall-clock values,
+// never from time.Since (CP 2.2).
 //
 // The OS sources live under internal/platform; ThisOS picks the ones for
 // the OS the agent runs on. The focus watcher (WP-OS2), the process
@@ -33,13 +35,23 @@ import (
 
 	"github.com/some-du6e/pairtime/internal/agent/sched"
 	"github.com/some-du6e/pairtime/pkg/event"
+	"github.com/some-du6e/pairtime/pkg/params"
 )
 
 // minGap is the least time between an immediate sample and the sample
-// before it. A harness can fire several hooks in the same second, and a
-// second sample a moment after the first says nothing new. Periodic and
-// power samples are always taken.
+// before it, unless it shows input since that one. A harness can fire
+// several hooks in the same second, and a sample a moment after the last
+// that shows the same last input says nothing new. One that shows newer
+// input is kept: it may be the only record of the Enter that submitted a
+// prompt, which SM 2.2 rule 6 looks for. Periodic and power samples are
+// always taken.
 const minGap = time.Second
+
+// inputSlop is how much later a reading may place the same input than the
+// reading before it did. Windows counts idle time in GetTickCount's steps
+// of about 16 ms, so a reading can be a step off, plus the moment between
+// the sampler reading the clock and the OS reading its tick.
+const inputSlop = 32 * time.Millisecond
 
 // slack keeps a timer that fires a moment early, which the scheduler
 // allows, from arming itself again for the boundary it is about to reach.
@@ -67,8 +79,8 @@ type OS struct {
 	// so the sampler records nothing and presence stays unknown (SM 2.1).
 	Idle func() (Idle, error)
 	// Locked reports whether the session is locked. The sampler asks once,
-	// at Start, and follows lock and unlock events from then on. Nil means
-	// unlocked.
+	// at Start, after the lock watch has started, and follows lock and
+	// unlock events from then on. Nil means unlocked.
 	Locked func() (bool, error)
 	// WatchSuspend calls fn on every suspend and resume until the returned
 	// stop is called. Nil means none are seen.
@@ -98,6 +110,11 @@ type Options struct {
 	// Sched runs the sampler's timer. It must be set.
 	Sched *sched.Scheduler
 	OS    OS
+	// Params is the parameter table SAMPLE_S, SLOW_SAMPLE_S and
+	// CONTEXT_IDLE_S come from, which should be the one the scorer runs
+	// with. Nil means the newest table pkg/params embeds, until the agent
+	// picks a scoring version.
+	Params *params.Table
 	// Record gets every record, in order. It runs on the goroutine or
 	// thread that took the record, while the sampler is locked, so it must
 	// return quickly and must not call the Sampler. Nil drops records.
@@ -118,9 +135,15 @@ type Options struct {
 type Sampler struct {
 	opts Options
 
-	mu       sync.Mutex
-	g        gate
-	locked   bool
+	mu sync.Mutex
+	g  gate
+	// locked is the session's lock state. lockEvent is set once a lock or
+	// unlock has set it, after which the state Start read no longer counts.
+	locked    bool
+	lockEvent bool
+	// watching is set when Start starts the power watches, and started
+	// once it has read the lock state and sampling begins.
+	watching bool
 	started  bool
 	stopped  bool
 	stops    []func()      // stop the power watches
@@ -137,36 +160,57 @@ func New(opts Options) *Sampler {
 	if opts.Sched == nil {
 		panic("presence: Options.Sched must be set")
 	}
-	return &Sampler{opts: opts, problems: make(map[string]string)}
+	tab := opts.Params
+	if tab == nil {
+		tables := params.Tables()
+		tab = tables[len(tables)-1]
+	}
+	return &Sampler{opts: opts, g: gate{cadence: cadenceOf(tab)}, problems: make(map[string]string)}
 }
 
-// Start reads the session's lock state and starts the power watches. A
-// source that fails is reported through Options.Problem, and the sampler
-// carries on without it. With no idle source, Start does nothing. Focus,
-// Hook and HarnessProcesses may come before Start: the gate keeps what
-// they report, and sampling starts with Start.
+// Start starts the power watches, reads the session's lock state and
+// starts sampling. A source that fails is reported through
+// Options.Problem, and the sampler carries on without it. With no idle
+// source, Start does nothing. Focus, Hook and HarnessProcesses may come
+// before Start: the gate keeps what they report, and sampling starts with
+// Start.
 func (s *Sampler) Start() {
 	if s.opts.OS.Idle == nil {
 		return
 	}
+	s.mu.Lock()
+	if s.watching || s.stopped {
+		s.mu.Unlock()
+		return
+	}
+	s.watching = true
+	s.mu.Unlock()
+
+	s.watch("suspend", "suspend and resume go unrecorded", s.opts.OS.WatchSuspend)
+	s.watch("lock", "lock and unlock go unrecorded", s.opts.OS.WatchLock)
+
+	// The lock state is read only now, because Windows tells a new
+	// registration nothing about the state it starts in: read before the
+	// watch, a lock in between would be lost. A lock or unlock the watch
+	// delivers from here on is at least as new as the read, so the read
+	// counts only if none came.
 	locked, lockErr := false, error(nil)
 	if f := s.opts.OS.Locked; f != nil {
 		locked, lockErr = f()
 	}
 	s.mu.Lock()
-	if s.started || s.stopped {
+	if s.stopped {
 		s.mu.Unlock()
 		return
 	}
-	s.started = true
-	s.locked = locked
-	if lockErr != nil {
-		s.setProblem("lock-state", fmt.Sprintf("couldn't read whether the session is locked, so presence takes it as unlocked until the next lock: %v", lockErr))
+	if !s.lockEvent {
+		s.locked = locked
+		if lockErr != nil {
+			s.setProblem("lock-state", fmt.Sprintf("couldn't read whether the session is locked, so presence takes it as unlocked until the next lock or unlock: %v", lockErr))
+		}
 	}
+	s.started = true
 	s.mu.Unlock()
-
-	s.watch("suspend", "suspend and resume go unrecorded", s.opts.OS.WatchSuspend)
-	s.watch("lock", "lock and unlock go unrecorded", s.opts.OS.WatchLock)
 	// A context that went live before Start gets its first sample now.
 	s.update(func(time.Time) {}, false)
 }
@@ -222,9 +266,9 @@ func (s *Sampler) Focus(c event.AppClass) {
 
 // Hook reports a hook or track message of kind k from the harness session
 // with key session (an opaque key, or "" when the message names none). It
-// makes a project context live, starts a turn on a prompt and ends it on a
-// stop, an interrupt or a session end. A live context takes a sample at
-// once.
+// makes a project context live, starts a turn on a prompt, a tool call or a
+// permission request, and ends it on a stop, an interrupt or a session end.
+// A live context takes a sample at once.
 func (s *Sampler) Hook(session string, k event.Kind) {
 	s.update(func(now time.Time) { s.g.hook(now, session, k) }, true)
 }
@@ -242,23 +286,28 @@ func (s *Sampler) HarnessProcesses(n int) {
 // Options.Seal in any case.
 func (s *Sampler) Power(op event.PowerOp) {
 	s.mu.Lock()
-	if !s.started || s.stopped {
+	if !s.watching || s.stopped {
 		// Before Start, the lock state Start reads is the one that counts.
 		s.mu.Unlock()
 		return
 	}
 	now := time.Now()
 	switch op {
-	case event.PowerLock:
-		s.locked = true
-	case event.PowerUnlock:
-		s.locked = false
+	case event.PowerLock, event.PowerUnlock:
+		// The lock state is known from here on, whatever Start read.
+		s.locked = op == event.PowerLock
+		s.lockEvent = true
+		s.setProblem("lock-state", "")
 	}
-	if s.g.interval(wall(now)) != 0 {
-		s.emit(Record{At: now, Data: &event.OSPower{Op: op}})
-		s.sample(now, false)
+	// While Start is still reading the lock state, an event only sets the
+	// state its first sample shows.
+	if s.started {
+		if s.g.interval(wall(now)) != 0 {
+			s.emit(Record{At: now, Data: &event.OSPower{Op: op}})
+			s.sample(now, false)
+		}
+		s.arm(now)
 	}
-	s.arm(now)
 	s.mu.Unlock()
 	if s.opts.Seal != nil && (op == event.PowerSuspend || op == event.PowerLock) {
 		s.opts.Seal(op)
@@ -323,19 +372,17 @@ func (s *Sampler) tick(time.Time) {
 }
 
 // sample reads the idle time and records an os.presence sample. An
-// immediate sample is skipped when the last one is less than minGap old.
+// immediate sample that would repeat the last one is left out (minGap).
 func (s *Sampler) sample(now time.Time, immediate bool) {
-	if immediate && !s.last.IsZero() {
-		if since := wall(now).Sub(wall(s.last)); since >= 0 && since < minGap {
-			return
-		}
-	}
 	idle, err := s.opts.OS.Idle()
 	if err != nil {
 		s.setProblem("idle", fmt.Sprintf("couldn't read the input idle time, so presence has gaps: %v", err))
 		return
 	}
 	s.setProblem("idle", "")
+	if immediate && s.repeats(now, idle.Any) {
+		return
+	}
 	p := &event.OSPresence{IdleAnyS: seconds(idle.Any), Locked: s.locked}
 	if idle.HasKeys {
 		keys := seconds(idle.Keys)
@@ -345,6 +392,19 @@ func (s *Sampler) sample(now time.Time, immediate bool) {
 	s.samples++
 	s.g.sampled(wall(now), idle.Any)
 	s.emit(Record{At: now, Data: p})
+}
+
+// repeats reports whether a sample at now that shows idle since the last
+// input would repeat the last sample: it comes less than minGap after that
+// one and shows no input since, allowing for inputSlop.
+func (s *Sampler) repeats(now time.Time, idle time.Duration) bool {
+	if s.last.IsZero() {
+		return false
+	}
+	if since := wall(now).Sub(wall(s.last)); since < 0 || since >= minGap {
+		return false
+	}
+	return !wall(now).Add(-max(idle, 0)).After(s.g.input.Add(inputSlop))
 }
 
 // arm sets the timer for the next boundary of the cadence the gate wants,

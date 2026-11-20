@@ -6,39 +6,56 @@ import (
 	"time"
 
 	"github.com/some-du6e/pairtime/pkg/event"
+	"github.com/some-du6e/pairtime/pkg/params"
 )
 
-// The sampling parameters of DESIGN 3.3, D14 and 6.3. The public parameter
-// table (pkg/params, WP-PA1) has them under the names in each comment. The
-// sampler scores nothing, so it doesn't read the table.
-const (
-	// SampleInterval is SAMPLE_S: one sample every 15 s while a project
-	// context is live (SM 2.1).
-	SampleInterval = 15 * time.Second
-	// SlowInterval is SLOW_SAMPLE_S, the cadence once a context has gone
-	// ContextIdle with no input and no running turn (D14).
-	SlowInterval = 60 * time.Second
-	// ContextIdle is CONTEXT_IDLE_S (D14).
-	ContextIdle = 600 * time.Second
-	// ContextWindow is how long a sign of a project context keeps it live:
-	// a terminal, editor or agent app that had focus, or a hook from a
-	// harness session (DESIGN 3.3, "in the last 600 s").
-	ContextWindow = 600 * time.Second
-)
+// cadence holds the sampling parameters of DESIGN 3.3, D14 and 6.3, read
+// from the public parameter table. The scorer reads CONTEXT_IDLE_S and
+// SLOW_SAMPLE_S from the same table to tell a gap that slow sampling
+// explains from sleep (SM 2.1's SLEEP_GAP_S), so the sampler has to slow
+// down when the table says, and a new table moves both with no code
+// (DESIGN 6.6).
+type cadence struct {
+	// sample is SAMPLE_S: one sample every 15 s while a project context is
+	// live (SM 2.1).
+	sample time.Duration
+	// slow is SLOW_SAMPLE_S, the cadence once a context has gone idle with
+	// no input and no running turn (D14).
+	slow time.Duration
+	// idle is CONTEXT_IDLE_S, how long that takes (D14).
+	idle time.Duration
+}
+
+// cadenceOf reads the sampling parameters from a parameter table.
+func cadenceOf(t *params.Table) cadence {
+	sec := func(p params.IntParam) time.Duration { return time.Duration(t.Int(p)) * time.Second }
+	return cadence{
+		sample: sec(params.SAMPLE_S),
+		slow:   sec(params.SLOW_SAMPLE_S),
+		idle:   sec(params.CONTEXT_IDLE_S),
+	}
+}
+
+// ContextWindow is how long a sign of a project context keeps it live: a
+// terminal, editor or agent app that had focus, or a hook from a harness
+// session (DESIGN 3.3, "in the last 600 s"). DESIGN names no parameter for
+// it, so it isn't in the table.
+const ContextWindow = 600 * time.Second
 
 // staleTurn is how long a turn counts as running after its session's last
 // hook. A turn ends at its stop, interrupt or session end hook; this only
 // covers a hook that never came, because the harness crashed or was killed,
 // which would otherwise keep a context live and sampled every 15 s for good.
 // It is longer than any tool call a harness runs between hooks in practice,
-// and it changes no credit: D14's cadence never does.
+// and a turn it ends only lets sampling slow down (D14).
 const staleTurn = 30 * time.Minute
 
 // gate decides whether a project context is live and how often to sample
 // in it (DESIGN 3.3, D14). It reads no clock: every method takes the wall
-// clock's time, so tests drive it with a fake one. The zero gate has no
-// context.
+// clock's time, so tests drive it with a fake one. A gate with only its
+// cadence set has no context.
 type gate struct {
+	cadence cadence
 	// procs is how many harness session processes the process scanner
 	// counted last (WP-OS6).
 	procs int
@@ -58,7 +75,7 @@ type gate struct {
 
 type session struct {
 	last time.Time // the session's latest hook
-	turn bool      // a prompt was submitted and its turn hasn't stopped
+	turn bool      // a turn is running: see hook
 }
 
 // projectApp reports whether focus on an app of class c makes a project
@@ -80,8 +97,11 @@ func (g *gate) focus(now time.Time, c event.AppClass) {
 }
 
 // hook records a hook of kind k from the harness session key. A prompt
-// starts a turn; a stop or an interrupt ends it; a session end forgets the
-// session at once.
+// starts a turn, and so does a tool call or a permission request: those
+// come only inside a turn, and a turn that a stop hook continues has no
+// prompt (HS 3.5, SM 6.4), so its first tool call is where it shows. A
+// stop or an interrupt ends the turn; a session end forgets the session at
+// once.
 func (g *gate) hook(now time.Time, key string, k event.Kind) {
 	g.settle(now)
 	s := g.sessions[key]
@@ -101,7 +121,7 @@ func (g *gate) hook(now time.Time, key string, k event.Kind) {
 	}
 	s.last = now
 	switch k {
-	case event.KindPromptSubmit:
+	case event.KindPromptSubmit, event.KindAgentTool, event.KindAgentPermission:
 		s.turn = true
 	case event.KindAgentStop, event.KindAgentInterrupt:
 		if s.turn {
@@ -125,26 +145,26 @@ func (g *gate) sampled(now time.Time, idle time.Duration) {
 	g.input = now.Add(-max(idle, 0))
 }
 
-// interval returns how often to sample at now: SampleInterval, or
-// SlowInterval once ContextIdle has passed with no input and no running
-// turn, or 0 when no project context is live, which means nothing may be
-// sampled or recorded.
+// interval returns how often to sample at now: SAMPLE_S, or SLOW_SAMPLE_S
+// once CONTEXT_IDLE_S has passed with no input and no running turn, or 0
+// when no project context is live, which means nothing may be sampled or
+// recorded.
 func (g *gate) interval(now time.Time) time.Duration {
 	g.settle(now)
 	if !g.live(now) {
 		return 0
 	}
 	if g.turnRunning(now) || g.input.IsZero() {
-		return SampleInterval
+		return g.cadence.sample
 	}
 	quiet := g.input
 	if g.turnEnd.After(quiet) {
 		quiet = g.turnEnd
 	}
-	if now.Sub(quiet) < ContextIdle {
-		return SampleInterval
+	if now.Sub(quiet) < g.cadence.idle {
+		return g.cadence.sample
 	}
-	return SlowInterval
+	return g.cadence.slow
 }
 
 // live reports whether a project context is live at now: a harness session

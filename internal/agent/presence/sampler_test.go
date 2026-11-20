@@ -4,9 +4,11 @@ package presence
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
+	"strconv"
 	"sync"
 	"testing"
 	"testing/synctest"
@@ -14,7 +16,49 @@ import (
 
 	"github.com/some-du6e/pairtime/internal/agent/sched"
 	"github.com/some-du6e/pairtime/pkg/event"
+	"github.com/some-du6e/pairtime/pkg/params"
 )
+
+// table010 returns parameter table 0.1.0, whose sampling parameters are
+// D14's 15 s, 60 s and 600 s. These tests pin it, as pkg/score's fixture
+// tests do, so that a newer table doesn't change what they expect.
+func table010(t *testing.T) *params.Table {
+	t.Helper()
+	tab, err := params.ByVersion("0.1.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return tab
+}
+
+// tableWith returns table 0.1.0 with the given parameters changed, as a
+// later table might change them, under a version no real table has.
+func tableWith(t *testing.T, change map[params.IntParam]int64) *params.Table {
+	t.Helper()
+	if len(change) == 0 {
+		return table010(t)
+	}
+	var doc struct {
+		Version string                     `json:"version"`
+		Params  map[string]json.RawMessage `json:"params"`
+	}
+	if err := json.Unmarshal(table010(t).Canonical(), &doc); err != nil {
+		t.Fatal(err)
+	}
+	doc.Version = "9.9.9"
+	for p, v := range change {
+		doc.Params[p.String()] = json.RawMessage(strconv.FormatInt(v, 10))
+	}
+	data, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tab, err := params.Parse(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return tab
+}
 
 // person is a fake OS input queue: the moments someone touched the
 // keyboard or mouse, as offsets from the test's start. Before the first
@@ -101,17 +145,22 @@ func describe(start time.Time, r Record) string {
 // exact. The bubble's clock starts at midnight, a slot boundary.
 func TestSampler(t *testing.T) {
 	tests := []struct {
-		name         string
-		inputs       []time.Duration
-		keys         bool
-		failIdle     func(at time.Duration) error
-		noIdle       bool           // the OS has no idle source
-		locked       bool           // the session is locked at the start
-		lockErr      error          // reading the lock state fails
-		lockWatchErr error          // the lock watch fails to start
-		before       []func(e *env) // calls made before Start
-		acts         []act
-		end          time.Duration
+		name     string
+		inputs   []time.Duration
+		keys     bool
+		failIdle func(at time.Duration) error
+		noIdle   bool  // the OS has no idle source
+		locked   bool  // the session is locked at the start
+		lockErr  error // reading the lock state fails
+		// lockDuringRead, when set, comes through the lock watch while
+		// Start reads the lock state, after which the read returns locked
+		// and lockErr.
+		lockDuringRead event.PowerOp
+		lockWatchErr   error                     // the lock watch fails to start
+		table          map[params.IntParam]int64 // parameters that differ from table 0.1.0
+		before         []func(e *env)            // calls made before Start
+		acts           []act
+		end            time.Duration
 		// want lists every record. When it is nil, wantSamples lists the
 		// times of the samples, and there must be no other records.
 		want         []string
@@ -170,7 +219,7 @@ func TestSampler(t *testing.T) {
 			},
 		},
 		{
-			name:   "a hook less than a second after the last sample takes none",
+			name:   "a hook less than a second after the last sample, with no input since, takes none",
 			inputs: []time.Duration{s(0.5)},
 			acts: []act{
 				at(s(1), focusOn(event.AppTerminal)),
@@ -186,6 +235,39 @@ func TestSampler(t *testing.T) {
 				"22s presence idle=21.5",
 				"23.2s presence idle=22.7",
 				"30s presence idle=29.5",
+			},
+		},
+		{
+			name:   "input between a tick and a prompt hook half a second after it gets the hook's sample, which shows the Enter",
+			inputs: []time.Duration{s(0.5), s(15.3)},
+			acts: []act{
+				at(s(1), focusOn(event.AppTerminal)),
+				at(s(15.5), hookOf("s_a", event.KindPromptSubmit)),
+			},
+			end: s(31),
+			want: []string{
+				"1s presence idle=0.5",
+				"15s presence idle=14.5",
+				"15.5s presence idle=0.2",
+				"30s presence idle=14.7",
+			},
+		},
+		{
+			name:   "in a burst of hooks, one after new input takes a sample and the rest take none",
+			inputs: []time.Duration{s(0.5), s(22.3)},
+			acts: []act{
+				at(s(1), focusOn(event.AppTerminal)),
+				at(s(22), hookOf("s_a", event.KindPromptSubmit)),
+				at(s(22.6), hookOf("s_a", event.KindAgentTool)),
+				at(s(22.8), hookOf("s_a", event.KindAgentTool)),
+			},
+			end: s(31),
+			want: []string{
+				"1s presence idle=0.5",
+				"15s presence idle=14.5",
+				"22s presence idle=21.5",
+				"22.6s presence idle=0.3",
+				"30s presence idle=7.7",
 			},
 		},
 		{
@@ -271,6 +353,18 @@ func TestSampler(t *testing.T) {
 			),
 		},
 		{
+			name:   "a table with a longer CONTEXT_IDLE_S slows sampling only once that has passed",
+			inputs: []time.Duration{s(0.5)},
+			table:  map[params.IntParam]int64{params.CONTEXT_IDLE_S: 900},
+			acts:   []act{at(s(1), focusOn(event.AppTerminal))},
+			end:    s(961),
+			wantSamples: slices.Concat(
+				[]time.Duration{s(1)},
+				every(s(15), s(915), s(15)),
+				[]time.Duration{s(960)},
+			),
+		},
+		{
 			name: "with nobody at the keyboard a context samples every minute and stops 600 s after the terminal lost focus",
 			acts: []act{
 				at(s(1), focusOn(event.AppTerminal)),
@@ -345,8 +439,52 @@ func TestSampler(t *testing.T) {
 			end:     s(2),
 			want:    []string{"1s presence idle=3601"},
 			wantProblems: []string{
-				"couldn't read whether the session is locked, so presence takes it as unlocked until the next lock: no such session",
+				"couldn't read whether the session is locked, so presence takes it as unlocked until the next lock or unlock: no such session",
 			},
+		},
+		{
+			name:    "a lock state that couldn't be read stops being a problem at the first lock or unlock",
+			lockErr: errors.New("no such session"),
+			acts: []act{
+				at(s(1), focusOn(event.AppTerminal)),
+				at(s(5), func(e *env) { e.lock(event.PowerLock) }),
+			},
+			end: s(6),
+			want: []string{
+				"1s presence idle=3601",
+				"5s power lock",
+				"5s presence idle=3605 locked",
+			},
+			wantSeals: []event.PowerOp{event.PowerLock},
+			wantProblems: []string{
+				"couldn't read whether the session is locked, so presence takes it as unlocked until the next lock or unlock: no such session",
+				"",
+			},
+		},
+		{
+			name:           "a lock that comes while Start reads the lock state counts over what the read returns",
+			lockDuringRead: event.PowerLock,
+			acts:           []act{at(s(1), focusOn(event.AppTerminal))},
+			end:            s(2),
+			want:           []string{"1s presence idle=3601 locked"},
+			wantSeals:      []event.PowerOp{event.PowerLock},
+		},
+		{
+			name:           "an unlock that comes while Start reads the lock state counts over what the read returns",
+			locked:         true,
+			lockDuringRead: event.PowerUnlock,
+			acts:           []act{at(s(1), focusOn(event.AppTerminal))},
+			end:            s(2),
+			want:           []string{"1s presence idle=3601"},
+		},
+		{
+			name:           "a lock state that can't be read is no problem when a lock came during the read",
+			lockErr:        errors.New("no such session"),
+			lockDuringRead: event.PowerLock,
+			acts:           []act{at(s(1), focusOn(event.AppTerminal))},
+			end:            s(2),
+			want:           []string{"1s presence idle=3601 locked"},
+			wantSeals:      []event.PowerOp{event.PowerLock},
 		},
 		{
 			name:         "a power watch that fails to start is reported, and sampling goes on without it",
@@ -399,8 +537,17 @@ func TestSampler(t *testing.T) {
 				p := &person{start: start, inputs: tt.inputs, keys: tt.keys, fail: tt.failIdle}
 				e := &env{t: t}
 				osys := OS{
-					Idle:   p.idle,
-					Locked: func() (bool, error) { return tt.locked, tt.lockErr },
+					Idle: p.idle,
+					Locked: func() (bool, error) {
+						if tt.lockDuringRead != "" {
+							if e.lock == nil {
+								t.Error("Start read the lock state before it started the lock watch")
+							} else {
+								e.lock(tt.lockDuringRead)
+							}
+						}
+						return tt.locked, tt.lockErr
+					},
 					WatchSuspend: func(fn func(event.PowerOp)) (func(), error) {
 						e.suspend = fn
 						return func() { e.suspendStopped = true }, nil
@@ -417,8 +564,9 @@ func TestSampler(t *testing.T) {
 					osys.Idle = nil
 				}
 				e.s = New(Options{
-					Sched: sch,
-					OS:    osys,
+					Sched:  sch,
+					OS:     osys,
+					Params: tableWith(t, tt.table),
 					Record: func(r Record) {
 						if err := r.Data.Validate(); err != nil {
 							t.Errorf("%s doesn't validate: %v", describe(start, r), err)
@@ -519,13 +667,13 @@ func TestStatus(t *testing.T) {
 			name: "in a context with recent input it samples every 15 s",
 			acts: []act{at(s(1), focusOn(event.AppTerminal))},
 			at:   s(31),
-			want: Status{Live: true, Every: SampleInterval, Samples: 3},
+			want: Status{Live: true, Every: 15 * time.Second, Samples: 3},
 		},
 		{
 			name: "a locked session shows as locked",
 			acts: []act{at(s(1), focusOn(event.AppTerminal)), at(s(2), power(event.PowerLock))},
 			at:   s(3),
-			want: Status{Live: true, Every: SampleInterval, Locked: true, Samples: 2},
+			want: Status{Live: true, Every: 15 * time.Second, Locked: true, Samples: 2},
 		},
 	}
 	for _, tt := range tests {
@@ -540,7 +688,7 @@ func TestStatus(t *testing.T) {
 					close(done)
 				}()
 				p := &person{start: start, inputs: []time.Duration{s(0.5)}}
-				e := &env{t: t, s: New(Options{Sched: sch, OS: OS{Idle: p.idle}})}
+				e := &env{t: t, s: New(Options{Sched: sch, OS: OS{Idle: p.idle}, Params: table010(t)})}
 				e.s.Start()
 				for _, a := range tt.acts {
 					time.Sleep(time.Until(start.Add(a.at)))
@@ -561,6 +709,79 @@ func TestStatus(t *testing.T) {
 	}
 }
 
+// TestRepeats checks which immediate samples the sampler leaves out: one
+// less than minGap after the last sample that shows no input since it.
+func TestRepeats(t *testing.T) {
+	last := time.Date(2026, 11, 19, 10, 0, 0, 0, time.UTC)
+	input := last.Add(-s(5)) // the input the last sample showed
+	tests := []struct {
+		name   string
+		noLast bool          // there is no sample before this one
+		after  time.Duration // this sample's time after the last
+		later  time.Duration // how much later than input this one puts the last input
+		want   bool
+	}{
+		{name: "with no sample before it, a sample repeats nothing", noLast: true, after: s(0.5), want: false},
+		{name: "less than a second later, the same last input is a repeat", after: s(0.5), want: true},
+		{name: "an older last input is a repeat too", after: s(0.5), later: -s(1), want: true},
+		{name: "a last input up to 32 ms later is a repeat, since a tick step can move a reading that far", after: s(0.5), later: inputSlop, want: true},
+		{name: "a last input more than 32 ms later is new input, so no repeat", after: s(0.5), later: inputSlop + time.Millisecond, want: false},
+		{name: "input a moment before the sample is new input", after: s(0.9), later: s(5.8), want: false},
+		{name: "a second after the last sample nothing is a repeat", after: minGap, want: false},
+		{name: "a sample timed before the last, as after the clock was set back, is no repeat", after: -s(0.5), want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			smp := &Sampler{}
+			if !tt.noLast {
+				smp.last, smp.g.input = last, input
+			}
+			now := last.Add(tt.after)
+			idle := now.Sub(input.Add(tt.later))
+			if got := smp.repeats(now, idle); got != tt.want {
+				t.Errorf("repeats(last+%v, idle %v) = %v, want %v", tt.after, idle, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestCadence checks where the sampler's cadence comes from: the parameter
+// table it is given, or else the newest one pkg/params embeds.
+func TestCadence(t *testing.T) {
+	tables := params.Tables()
+	tests := []struct {
+		name string
+		got  func(t *testing.T) cadence
+		want cadence
+	}{
+		{
+			name: "table 0.1.0 has D14's 15 s, 60 s and 600 s",
+			got:  func(t *testing.T) cadence { return cadenceOf(table010(t)) },
+			want: cadence{sample: 15 * time.Second, slow: time.Minute, idle: 600 * time.Second},
+		},
+		{
+			name: "a sampler reads SAMPLE_S, SLOW_SAMPLE_S and CONTEXT_IDLE_S from the table it is given",
+			got: func(t *testing.T) cadence {
+				tab := tableWith(t, map[params.IntParam]int64{params.SAMPLE_S: 10, params.SLOW_SAMPLE_S: 30, params.CONTEXT_IDLE_S: 900})
+				return New(Options{Sched: sched.New(), Params: tab}).g.cadence
+			},
+			want: cadence{sample: 10 * time.Second, slow: 30 * time.Second, idle: 900 * time.Second},
+		},
+		{
+			name: "a sampler given no table reads the newest one",
+			got:  func(t *testing.T) cadence { return New(Options{Sched: sched.New()}).g.cadence },
+			want: cadenceOf(tables[len(tables)-1]),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.got(t); got != tt.want {
+				t.Errorf("cadence %+v, want %+v", got, tt.want)
+			}
+		})
+	}
+}
+
 // TestBoundaryAfter checks the slot boundaries the timer is armed for.
 func TestBoundaryAfter(t *testing.T) {
 	epoch := time.Unix(0, 0)
@@ -570,14 +791,14 @@ func TestBoundaryAfter(t *testing.T) {
 		every time.Duration
 		want  time.Time
 	}{
-		{"a time on a boundary moves to the next one", epoch.Add(s(30)), SampleInterval, epoch.Add(s(45))},
-		{"a time between boundaries moves to the next one", epoch.Add(s(31)), SampleInterval, epoch.Add(s(45))},
-		{"minute boundaries fall on the minute", epoch.Add(s(61)), SlowInterval, epoch.Add(s(120))},
-		{"a time before 1970 still rounds up", epoch.Add(-s(7)), SampleInterval, epoch},
-		{"a time one interval before 1970 rounds up to the next boundary", epoch.Add(-s(15)), SampleInterval, epoch},
+		{"a time on a boundary moves to the next one", epoch.Add(s(30)), 15 * time.Second, epoch.Add(s(45))},
+		{"a time between boundaries moves to the next one", epoch.Add(s(31)), 15 * time.Second, epoch.Add(s(45))},
+		{"minute boundaries fall on the minute", epoch.Add(s(61)), time.Minute, epoch.Add(s(120))},
+		{"a time before 1970 still rounds up", epoch.Add(-s(7)), 15 * time.Second, epoch},
+		{"a time one interval before 1970 rounds up to the next boundary", epoch.Add(-s(15)), 15 * time.Second, epoch},
 		{
 			"a local time's boundary is the same instant as in UTC",
-			time.Date(2026, 11, 19, 10, 0, 7, 0, time.FixedZone("UTC+5:45", 5*3600+45*60)), SampleInterval,
+			time.Date(2026, 11, 19, 10, 0, 7, 0, time.FixedZone("UTC+5:45", 5*3600+45*60)), 15 * time.Second,
 			time.Date(2026, 11, 19, 4, 15, 15, 0, time.UTC),
 		},
 	}
