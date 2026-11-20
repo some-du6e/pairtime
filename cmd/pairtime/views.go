@@ -4,12 +4,11 @@ package main
 
 // What `pairtime today`, `recap` and `statusline` share: a project's time
 // as their --json prints it (docs/schema/cli-today.schema.json), built
-// from the agent's tally with the words of internal/coach/text, and the
-// text layout that prints it.
+// from the agent's tally (stores.go) with the words of
+// internal/coach/text, and the text layout that prints it.
 
 import (
 	"cmp"
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -26,13 +25,21 @@ import (
 // jsonVersion is the "v" of every view's --json.
 const jsonVersion = 1
 
-// viewTimeout bounds how long today and recap wait for the agent. A person
-// is waiting, but the agent answers from small files it already keeps.
-// Tests shorten it.
+// viewTimeout bounds how long recap waits for the agent's answer. A person
+// is waiting, but the agent answers from what it already holds. Tests
+// shorten it.
 var viewTimeout = 3 * time.Second
 
-// viewZone is the time zone the views give times of day in. Tests set it.
+// viewZone is the time zone the views give times of day and days in: the
+// device's own, which the agent counts its days in too. Tests set it.
 var viewZone = func() *time.Location { return time.Local }
+
+// viewNow is the views' clock. Tests set it.
+var viewNow = time.Now
+
+// localToday is today's date in viewZone, as the agent names its day
+// rollups.
+func localToday() string { return viewNow().In(viewZone()).Format(time.DateOnly) }
 
 // projectJSON is one project's time over a span.
 type projectJSON struct {
@@ -43,7 +50,8 @@ type projectJSON struct {
 	You *youJSON `json:"you,omitempty"`
 	// Agents is each agent's time on its own, the most first. Other is the
 	// rest of the uncredited time by reason, the most first, without the
-	// agent's time (X.agent_only, X.automated), which Agents names.
+	// agent's time (X.agent_only, X.automated), which Agents names. While
+	// calibrating, Other holds SM 4.2's loops alone.
 	Agents []agentJSON `json:"agents"`
 	Other  []otherJSON `json:"other"`
 }
@@ -83,20 +91,28 @@ type otherJSON struct {
 	Reason event.Reason `json:"reason"`
 	Words  string       `json:"words"`
 	S      float64      `json:"s"`
+	// OnHold is set on the part of X.noprog that progress can still bring
+	// back (SM 4.3; D5). The rest of X.noprog has an entry without it.
+	OnHold bool `json:"on_hold,omitempty"`
 }
 
 // levels are the evidence levels in the order the views list them.
 var levels = []event.Evidence{event.EvidenceA, event.EvidenceB, event.EvidenceC}
 
 // buildProject turns the agent's tally for a project into what the views
-// show. With calibrating set, your time is left out.
+// show. With calibrating set (display.shadow), your time is left out, and
+// so is the other time but SM 4.2's loops: with what was left out, and
+// what the day or session took, your hidden time could be worked out
+// (DESIGN 6.7 step 2; SM 7.5). A code this build has no words for, from a
+// newer agent, is left out too, so --json keeps to its schema and no raw
+// code reaches the terminal; its seconds stay in your time and the agent's.
 func buildProject(key, name string, t tally, calibrating bool) projectJSON {
 	agent := agentOf(t.AgentOnlyByHarness)
 	p := projectJSON{Project: key, Name: name, Agents: []agentJSON{}, Other: []otherJSON{}}
 	if !calibrating {
 		you := &youJSON{S: t.CreditedS, PendingS: t.PendingS, Kinds: []kindJSON{}, Levels: []levelJSON{}}
 		for k, s := range t.CreditedByKind {
-			if s > 0 {
+			if _, known := text.English().Kinds[k]; s > 0 && known {
 				you.Kinds = append(you.Kinds, kindJSON{Kind: k, Words: text.Kind(k, agent), S: s})
 			}
 		}
@@ -115,27 +131,44 @@ func buildProject(key, name string, t tally, calibrating bool) projectJSON {
 	}
 	p.Agents = agentList(t.AgentOnlyByHarness)
 	for r, s := range t.Uncredited {
-		if s <= 0 || text.IsAgentTime(r) {
+		words := text.Other(r, agent)
+		if s <= 0 || text.IsAgentTime(r) || words == "" || (calibrating && !r.DarkFlow()) {
 			continue
 		}
-		words := text.Other(r, agent)
-		if words == "" {
-			// A reason this build doesn't know yet, from a newer agent.
-			words = string(r)
+		if r != event.ReasonNoProgress {
+			p.Other = append(p.Other, otherJSON{Reason: r, Words: words, S: s})
+			continue
 		}
-		p.Other = append(p.Other, otherJSON{Reason: r, Words: words, S: s})
+		// The part progress can still bring back is on hold; the rest
+		// can't come back any more, and says what it was.
+		held := min(max(t.OnHoldS, 0), s)
+		if held > 0 {
+			p.Other = append(p.Other, otherJSON{Reason: r, Words: text.OnHold(), S: held, OnHold: true})
+		}
+		if s > held {
+			p.Other = append(p.Other, otherJSON{Reason: r, Words: words, S: s - held})
+		}
 	}
-	slices.SortFunc(p.Other, func(a, b otherJSON) int { return most(a.S, b.S, string(a.Reason), string(b.Reason)) })
+	slices.SortFunc(p.Other, func(a, b otherJSON) int {
+		if c := most(a.S, b.S, string(a.Reason), string(b.Reason)); c != 0 || a.OnHold == b.OnHold {
+			return c
+		}
+		if a.OnHold {
+			return -1
+		}
+		return 1
+	})
 	return p
 }
 
 // agentList lists each agent's time on its own, the most first. Time the
-// agent files under no harness is your agent's.
+// agent files under no harness, or under one en.json has no name for, is
+// "your agent"'s.
 func agentList(byHarness map[event.Harness]float64) []agentJSON {
 	sum := map[event.Harness]float64{}
 	for h, s := range byHarness {
 		if s > 0 {
-			if h == event.HarnessNone || h == "" {
+			if _, named := text.English().Agents[h]; !named {
 				h = event.HarnessOther
 			}
 			sum[h] += s
@@ -169,25 +202,36 @@ func agentOf(harnesses map[event.Harness]float64) string {
 	return text.Agent(event.HarnessOther)
 }
 
-// clock is a project's chess clock (text.Clock).
+// clock is a project's chess clock (text.Clock), with its level-C time.
 func (p projectJSON) clock() string {
 	agents := make([]text.AgentClock, len(p.Agents))
 	for i, a := range p.Agents {
 		agents[i] = text.AgentClock{Name: a.Name, S: a.S}
 	}
 	if p.You == nil {
-		return text.Clock(0, true, agents)
+		return text.Clock(0, 0, true, agents)
 	}
-	return text.Clock(p.You.S, false, agents)
+	return text.Clock(p.You.S, p.You.levelC(), false, agents)
+}
+
+// levelC is the part of your time at evidence level C.
+func (y *youJSON) levelC() float64 {
+	for _, l := range y.Levels {
+		if l.Level == event.EvidenceC {
+			return l.S
+		}
+	}
+	return 0
 }
 
 // title is what a project is called on screen: its name, or its key when
-// the agent has no name for it.
+// the agent has no name for it, made Printable, since a name can come from
+// a folder's.
 func (p projectJSON) title() string {
 	if p.Name != "" {
-		return p.Name
+		return text.Printable(p.Name)
 	}
-	return p.Project
+	return text.Printable(p.Project)
 }
 
 // row is a line of a view: a label, and a value right-aligned in a column
@@ -265,25 +309,20 @@ func writeJSON(w io.Writer, v any) error {
 	return err
 }
 
-// dayTitle heads a day: "Tuesday, November 24", or the date as the agent
-// gave it if it doesn't parse.
+// dayTitle heads a day: "Tuesday, November 24", or the date, made
+// Printable, if it doesn't parse.
 func dayTitle(date string) string {
 	d, err := time.Parse(time.DateOnly, date)
 	if err != nil {
-		return date
+		return text.Printable(date)
 	}
 	return text.Day(d)
 }
 
-// askView asks the agent for path within viewTimeout and, when that fails,
-// says why on stderr in the views' words and returns false.
-func askView(path string, v any, stderr io.Writer) bool {
-	ctx, cancel := context.WithTimeout(context.Background(), viewTimeout)
-	defer cancel()
-	err := askAgent(ctx, path, v)
+// sayAgentFailure says on stderr, in the views' words, why the agent
+// couldn't give what a view asked for.
+func sayAgentFailure(stderr io.Writer, err error) {
 	switch {
-	case err == nil:
-		return true
 	case errors.Is(err, errAgentDown):
 		fmt.Fprintln(stderr, text.Phrase(text.KeyAgentDown))
 	case errors.Is(err, errAgentOld):
@@ -291,7 +330,12 @@ func askView(path string, v any, stderr io.Writer) bool {
 	case errors.Is(err, errAgentSlow):
 		fmt.Fprintln(stderr, text.Phrase(text.KeyAgentSlow))
 	default:
-		fmt.Fprintln(stderr, text.Phrase(text.KeyAgentError, "error", err.Error()))
+		fmt.Fprintln(stderr, text.Phrase(text.KeyAgentError, "error", text.Printable(err.Error())))
 	}
-	return false
+}
+
+// sayStoreFailure says on stderr that what the agent stored couldn't be
+// read, and why.
+func sayStoreFailure(stderr io.Writer, err error) {
+	fmt.Fprintln(stderr, text.Phrase(text.KeyStoreError, "error", text.Printable(err.Error())))
 }

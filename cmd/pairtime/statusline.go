@@ -3,7 +3,6 @@
 package main
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -11,6 +10,7 @@ import (
 	"io"
 	"time"
 
+	"github.com/some-du6e/pairtime/internal/agent/home"
 	"github.com/some-du6e/pairtime/internal/coach/text"
 	"github.com/some-du6e/pairtime/pkg/event"
 )
@@ -23,20 +23,21 @@ in settings.json:
 
   "statusLine": {"type": "command", "command": "pairtime statusline"}
 
-It never holds the harness up: when the agent isn't running, or doesn't
-answer within the timeout, it prints nothing and exits 0.
+It reads only the day the agent has stored, and never holds the harness
+up: when the agent isn't running, or the day can't be read within the
+timeout, it prints nothing and exits 0.
 
   --json     Print the line and its numbers as JSON.
-  --timeout  How long to wait for the agent (default 40ms).
+  --timeout  How long reading the day may take (default 40ms).
 
 Exit status:
   0  the line was printed, or nothing was
   2  usage error
 `
 
-// statuslineTimeout is how long the status line waits for the agent by
-// default. A harness runs the command every time its status line
-// refreshes, so a slow answer is worth less than none (PLAN WP-CO0: under
+// statuslineTimeout is how long the status line may take to read the day
+// by default. A harness runs the command every time its status line
+// refreshes, so a slow line is worth less than none (PLAN WP-CO0: under
 // 50 ms).
 const statuslineTimeout = 40 * time.Millisecond
 
@@ -60,6 +61,10 @@ type statusJSON struct {
 	Calibrating bool   `json:"calibrating"`
 	// YouS is your time today, absent while calibrating.
 	YouS *float64 `json:"you_s,omitempty"`
+	// YouByLevel splits YouS by evidence level, with only the levels that
+	// have time; the line labels level C (DESIGN 6.2 D11). Absent while
+	// calibrating, or with no time yet.
+	YouByLevel map[event.Evidence]float64 `json:"you_by_level,omitempty"`
 	// Agents is each agent's time on its own today, the most first.
 	Agents []agentJSON `json:"agents"`
 	Line   string      `json:"line"`
@@ -92,13 +97,28 @@ func runStatusline(args []string, stdout, stderr io.Writer) (code int) {
 			code = 0
 		}
 	}()
-	ctx, cancel := context.WithTimeout(context.Background(), *timeout)
-	defer cancel()
-	var reply dayReply
-	if err := askAgent(ctx, "/v1/days/today", &reply); err != nil {
+	// The day is read on a goroutine of its own, so a slow disk or home
+	// directory can't hold the line past the timeout.
+	read, done := statusRead, make(chan *statusJSON, 1)
+	go func() {
+		var s *statusJSON
+		defer func() {
+			recover()
+			done <- s
+		}()
+		s, _ = read()
+	}()
+	timer := time.NewTimer(*timeout)
+	defer timer.Stop()
+	var s *statusJSON
+	select {
+	case s = <-done:
+	case <-timer.C:
+		// A disk or a home directory that is slow to answer.
+	}
+	if s == nil {
 		return 0
 	}
-	s := buildStatus(reply)
 	if *asJSON {
 		b, err := json.Marshal(s)
 		if err == nil {
@@ -110,24 +130,58 @@ func runStatusline(args []string, stdout, stderr io.Writer) (code int) {
 	return 0
 }
 
-// buildStatus sums the day's projects into the line's numbers.
-func buildStatus(r dayReply) statusJSON {
+// statusRead reads today's numbers for the line, or nil with the reason
+// when there is nothing to print. Tests replace it.
+var statusRead = readStatus
+
+// readStatus reads today's rollup and display.shadow, and makes the line:
+// nothing while the agent is known to be stopped, and "you 0m" before its
+// first minute today.
+func readStatus() (*statusJSON, error) {
+	dirs, err := home.Default()
+	if err != nil {
+		return nil, err
+	}
+	if agentStopped(dirs) {
+		return nil, errAgentDown
+	}
+	shadow, err := readShadow(dirs)
+	if err != nil {
+		return nil, err
+	}
+	d, _, err := dayStore{dirs.Days()}.day(localToday())
+	if err != nil {
+		return nil, err
+	}
+	s := buildStatus(d, shadow)
+	return &s, nil
+}
+
+// buildStatus sums the day's projects into the line's numbers. With shadow
+// set, your time is calibrating.
+func buildStatus(d dayFile, shadow bool) statusJSON {
 	you := 0.0
+	byLevel := map[event.Evidence]float64{}
 	byHarness := map[event.Harness]float64{}
-	for _, p := range r.Projects {
+	for _, p := range d.Projects {
 		you += p.CreditedS
+		for _, l := range levels {
+			if s := p.CreditedByEvidence[l]; s > 0 {
+				byLevel[l] += s
+			}
+		}
 		for h, s := range p.AgentOnlyByHarness {
 			byHarness[h] += s
 		}
 	}
-	out := statusJSON{V: jsonVersion, Date: r.Date, Calibrating: r.Shadow, Agents: agentList(byHarness)}
-	if !r.Shadow {
-		out.YouS = &you
+	out := statusJSON{V: jsonVersion, Date: d.Date, Calibrating: shadow, Agents: agentList(byHarness)}
+	if !shadow {
+		out.YouS, out.YouByLevel = &you, byLevel
 	}
 	clock := make([]text.AgentClock, 0, statuslineAgents)
 	for _, a := range out.Agents[:min(len(out.Agents), statuslineAgents)] {
 		clock = append(clock, text.AgentClock{Name: a.Name, S: a.S})
 	}
-	out.Line = text.Clock(you, r.Shadow, clock)
+	out.Line = text.Clock(you, byLevel[event.EvidenceC], shadow, clock)
 	return out
 }

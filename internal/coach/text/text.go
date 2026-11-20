@@ -15,8 +15,11 @@
 //     agent's time;
 //   - other uncredited time is described for what it was ("away", "in
 //     other apps"), and the no-progress half as "on hold: these come back
-//     when you fix it";
-//   - level-C time is labeled as such (DESIGN 6.2 D11);
+//     when you fix it" while progress can still bring it back, its minutes
+//     still pending or provisional (SM 4.3, 5.1), and as what it was once
+//     it can't;
+//   - level-C time is labeled as such, on the chess clock too (DESIGN 6.2
+//     D11, as D-focus-unknown amends it);
 //   - nothing scolds, sets a target, turns you and the agent into a ratio,
 //     or counts a streak (PA 4.3, 4.4).
 //
@@ -58,6 +61,10 @@ type Catalog struct {
 	// Other describes uncredited time of each reason that isn't the
 	// agent's time (SM 5.2; IsAgentTime). An entry may use {agent}.
 	Other map[event.Reason]string `json:"other"`
+	// OnHold describes the part of X.noprog that progress can still bring
+	// back (SM 4.3; approach-teen.md D5), where Other's X.noprog entry
+	// describes the rest.
+	OnHold string `json:"on_hold"`
 	// Levels describes each evidence level (SM 5.1, DESIGN 6.4).
 	Levels map[event.Evidence]string `json:"levels"`
 	// Phrases holds the views' other words, by Key.
@@ -93,6 +100,7 @@ type Key string
 // The phrases, in en.json's order.
 const (
 	KeyYou             Key = "you"
+	KeyYouLevelC       Key = "you_level_c"
 	KeyYouCalibrating  Key = "you_calibrating"
 	KeyAgent           Key = "agent"
 	KeySeparator       Key = "separator"
@@ -114,12 +122,14 @@ const (
 	KeyAgentOld        Key = "agent_old"
 	KeyAgentSlow       Key = "agent_slow"
 	KeyAgentError      Key = "agent_error"
+	KeyStoreError      Key = "store_error"
 )
 
 // placeholders lists the placeholders each phrase may use. A phrase that
 // isn't listed uses none.
 var placeholders = map[Key][]string{
 	KeyYou:          {"time"},
+	KeyYouLevelC:    {"time", "level_c"},
 	KeyAgent:        {"agent", "time"},
 	KeyLevelCNote:   {"time"},
 	KeyPendingNote:  {"time"},
@@ -129,6 +139,7 @@ var placeholders = map[Key][]string{
 	KeySessionSince: {"day", "start"},
 	KeyLevelLine:    {"level", "words"},
 	KeyAgentError:   {"error"},
+	KeyStoreError:   {"error"},
 }
 
 // Phrase returns phrase key with its placeholders filled from vars, which
@@ -163,11 +174,12 @@ func Agent(h event.Harness) string {
 }
 
 // Kind describes credited time of activity a, which went with the agent
-// named agent: "reading Claude's answers".
+// named agent: "reading Claude's answers". A kind en.json doesn't describe
+// is its code, made Printable.
 func Kind(a event.Activity, agent string) string {
 	s, ok := english().Kinds[a]
 	if !ok {
-		return string(a)
+		return Printable(string(a))
 	}
 	return Fill(s, "agent", agent)
 }
@@ -198,9 +210,27 @@ func Other(r event.Reason, agent string) string {
 	return Fill(s, "agent", agent)
 }
 
+// OnHold describes the X.noprog seconds that progress can still bring back:
+// "on hold: these come back when you fix it" (D5).
+func OnHold() string { return english().OnHold }
+
 // Level describes evidence level e, or returns "" for a level that isn't
 // one.
 func Level(e event.Evidence) string { return english().Levels[e] }
+
+// Printable returns s with each control character and each bidirectional
+// formatting character replaced by U+FFFD, and so are bytes that aren't
+// UTF-8. Text a view prints that didn't come from this catalog, such as a
+// project's name, goes through it, so it can't move a terminal's cursor,
+// write its clipboard, ring its bell or turn the rest of a line around.
+func Printable(s string) string {
+	return strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) || unicode.Is(unicode.Bidi_Control, r) {
+			return utf8.RuneError
+		}
+		return r
+	}, s)
+}
 
 // maxSeconds bounds what Duration spells, far past any real total, so a
 // damaged number can't overflow it.
@@ -239,14 +269,20 @@ type AgentClock struct {
 
 // Clock is the chess clock (DESIGN 3.8): "you 1h 12m · Claude 2h 40m",
 // your time and then each agent's time on its own, as information and
-// never as a ratio or a target. With calibrating set, your time reads
-// "calibrating" (display.shadow), and the agents' times still show. An
-// agent with less than a second is left out; the rest keep their order.
-func Clock(you float64, calibrating bool, agents []AgentClock) string {
+// never as a ratio or a target. levelC is the part of your time at
+// evidence level C, which the clock labels from a second up: "you 1h 12m,
+// 20m level C · Claude 2h 40m" (DESIGN 6.2 D11). With calibrating set, your
+// time reads "calibrating" (display.shadow), with no level, and the
+// agents' times still show. An agent with less than a second is left out;
+// the rest keep their order.
+func Clock(you, levelC float64, calibrating bool, agents []AgentClock) string {
 	parts := make([]string, 0, 1+len(agents))
-	if calibrating {
+	switch {
+	case calibrating:
 		parts = append(parts, Phrase(KeyYouCalibrating))
-	} else {
+	case levelC >= 1:
+		parts = append(parts, Phrase(KeyYouLevelC, "time", Duration(you), "level_c", Duration(levelC)))
+	default:
 		parts = append(parts, Phrase(KeyYou, "time", Duration(you)))
 	}
 	for _, a := range agents {
