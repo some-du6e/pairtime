@@ -3109,8 +3109,6 @@ def content_example():
     for j in (1, 2, 7, 15):
         out += [("salt %d" % j, salts[j - 1]), ("leaf %d" % j, leaves[j - 1])]
     out += [("n", n), ("C", root)]
-    items = reveal_items(salts, toks, leaves, [(6, 1, "known", None)])
-    out.append(("reveal verdict", verify_reveal(n, root, items)[0]))
     removed, words = normalize(text)
     out += [("normalized", " ".join(words)), ("signature", error_signature(text))]
     tag, xs = shingles(words)
@@ -3135,13 +3133,20 @@ def content_example():
 
 
 def test_content_example():
+    """Every value of 10.10 appears in the spec, and the reveal that removes
+    token 7 as known verifies ok, as 10.10 says: the verdict is checked
+    itself, because every verdict's name appears in 10.3 anyway."""
     with open(repo_path("docs", "spec", "ledger-v1.md"), encoding="utf-8") as f:
         spec = f.read()
     values = content_example()
     for label, v in values:
         text = v.hex() if isinstance(v, bytes) else str(v)
         expect(text in spec, "the spec doesn't show part 2's %s, %s" % (label, text))
-    return "%d values" % len(values)
+    keys = derive_keys(bytes(range(32)))
+    toks, salts, leaves, n, root = commit_text(keys["k_tok"], 2, "still broken, see src/nav.js:12\r\nTypeError: x is undefined".encode("utf-8"))
+    got = verify_reveal(n, root, reveal_items(salts, toks, leaves, [(6, 1, "known", None)]))
+    expect(got == ("ok", None), "10.10's reveal without token 7 gets %s, and the spec says it verifies ok" % (got,))
+    return "%d values and the reveal's ok" % len(values)
 
 
 def test_whitespace_set():
