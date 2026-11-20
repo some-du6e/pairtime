@@ -10,6 +10,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"os"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
@@ -76,8 +77,9 @@ type Server struct {
 // behind, listens, and runs a self-test: a message sent to itself through
 // the same checks that every sender and connection go through. On
 // Windows, when any of that fails, or opts.ForcePipe is set, it listens on
-// the named pipe instead (CP 6.3; DESIGN 3.3). Elsewhere the failure is the
-// error.
+// the named pipe instead (CP 6.3; DESIGN 3.3), and writes the note without
+// which senders don't try the pipe (Endpoint.PipeNote). Elsewhere the
+// failure is the error.
 func Listen(ep Endpoint, opts Options) (*Server, error) {
 	me, err := self()
 	if err != nil {
@@ -105,6 +107,10 @@ func Listen(ep Endpoint, opts Options) (*Server, error) {
 		removeStale(ep.Socket)
 	default:
 		if sockErr = s.listenSocket(); sockErr == nil {
+			// A note left by an agent that was on the pipe would send
+			// senders whose socket dial fails to a pipe that is gone, or
+			// that someone else has made since.
+			removePipeNote(ep)
 			return s, nil
 		}
 		// An agent that already answers on the socket gets every message
@@ -117,8 +123,20 @@ func Listen(ep Endpoint, opts Options) (*Server, error) {
 	if err != nil {
 		return nil, errors.Join(sockErr, err)
 	}
+	if err := writePipeNote(ep); err != nil {
+		ln.Close()
+		return nil, errors.Join(sockErr, fmt.Errorf("ipc: noting that the agent listens on the pipe: %w", err))
+	}
 	s.ln, s.via, s.fallback = ln, inbox.ViaPipe, sockErr.Error()
 	return s, nil
+}
+
+// removePipeNote deletes the note that says an agent listens on ep's pipe,
+// so senders stop trying the pipe.
+func removePipeNote(ep Endpoint) {
+	if ep.PipeNote != "" {
+		os.Remove(ep.PipeNote)
+	}
 }
 
 func (s *Server) listenSocket() error {
@@ -271,6 +289,7 @@ func (s *Server) isClosed() bool {
 // Close stops listening, drops open connections, and returns once every
 // handler has finished, so no Deliver runs after it. A message whose ack
 // it cuts off is spooled by its sender, and arrives through the drain.
+// On the pipe it deletes its note first, so senders stop trying the pipe.
 func (s *Server) Close() error {
 	s.mu.Lock()
 	if s.closed {
@@ -282,6 +301,9 @@ func (s *Server) Close() error {
 		c.Close()
 	}
 	s.mu.Unlock()
+	if s.via == inbox.ViaPipe {
+		removePipeNote(s.ep)
+	}
 	err := s.ln.Close()
 	s.wg.Wait()
 	return err
