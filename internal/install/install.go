@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -109,13 +110,29 @@ type Edit interface {
 	Apply(cur Content) (Content, error)
 }
 
-// undoers undo each kind of edit. An undo returns cur without pairtime's
+// An undoer undoes one kind of edit. It returns cur without pairtime's
 // change, given base, what the target held before pairtime first touched
-// it. Uninstall uses it when the target changed since pairtime wrote it;
-// otherwise it puts base back as it was.
-var undoers = map[string]func(cur, base Content) (Content, error){
+// it, and data, what the edit recorded for its undo (Recorder), nil if
+// nothing. Uninstall uses it when the target changed since pairtime wrote
+// it; otherwise it puts base back as it was.
+type undoer func(cur, base Content, data json.RawMessage) (Content, error)
+
+// undoers undo each kind of edit.
+var undoers = map[string]undoer{
 	kindOwned:       undoOwned,
 	kindClaudeHooks: undoClaudeHooks,
+}
+
+// Recorder is an Edit that keeps, in the manifest, something its undo needs
+// that neither the target nor what it held before tells: the key that
+// identifies the line WP-IN3 adds to ~/.wakatime.cfg (DESIGN 5.6), which the
+// agent rewrites when its port changes, so that uninstall takes out that
+// line and no other. Each install records what its edit returns, in place
+// of what an earlier install of the same item recorded.
+type Recorder interface {
+	Edit
+	// Record returns the data as JSON, or nil for none.
+	Record() json.RawMessage
 }
 
 // Target is one thing install changes: a file, or a value under a key of

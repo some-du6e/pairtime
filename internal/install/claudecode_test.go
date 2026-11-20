@@ -210,7 +210,7 @@ func TestClaudeCodeGoldens(t *testing.T) {
 			// Taking pairtime's hooks out of after.json, without the backup,
 			// gives what uninstall puts back, byte for byte.
 			base := Content{Exists: gone != nil, Data: gone}
-			undone, err := undoClaudeHooks(Content{Exists: true, Data: want}, base)
+			undone, err := undoClaudeHooks(Content{Exists: true, Data: want}, base, nil)
 			if err != nil {
 				t.Fatalf("undoClaudeHooks: %v", err)
 			}

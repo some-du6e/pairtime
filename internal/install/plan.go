@@ -4,6 +4,7 @@ package install
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -218,7 +219,9 @@ func (in *Installer) planInstall(groups []*group) (*Plan, error) {
 		rec.Dirs = addDirs(rec.Dirs, ch.mkdirs)
 		rec.Written = next.digest()
 		for _, r := range g.recs {
-			if !slices.Contains(rec.Edits, r) {
+			if i := slices.IndexFunc(rec.Edits, r.same); i >= 0 {
+				rec.Edits[i].Data = r.Data // what this install's edit recorded
+			} else {
 				rec.Edits = append(rec.Edits, r)
 			}
 		}
@@ -283,8 +286,15 @@ func groupEdits(items []Item) ([]*group, error) {
 				byTarget[t] = g
 				groups = append(groups, g)
 			}
+			r := editRecord{Item: it.ID, Kind: e.Kind()}
+			if rd, ok := e.(Recorder); ok {
+				r.Data = rd.Record()
+				if r.Data != nil && !json.Valid(r.Data) {
+					return nil, fmt.Errorf("install item %s has an edit of kind %q that records data that isn't JSON", it.ID, e.Kind())
+				}
+			}
 			g.edits = append(g.edits, e)
-			g.recs = append(g.recs, editRecord{Item: it.ID, Kind: e.Kind()})
+			g.recs = append(g.recs, r)
 		}
 	}
 	return groups, nil
@@ -520,7 +530,7 @@ func undoAll(cur, base Content, edits []editRecord) (Content, error) {
 			return Content{}, fmt.Errorf("pairtime doesn't know how to undo an edit of kind %q", edits[i].Kind)
 		}
 		var err error
-		if cur, err = undo(cur, base); err != nil {
+		if cur, err = undo(cur, base, edits[i].Data); err != nil {
 			return Content{}, err
 		}
 	}

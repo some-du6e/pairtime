@@ -4,6 +4,7 @@ package install
 
 import (
 	"bytes"
+	"encoding/json"
 	"encoding/xml"
 	"fmt"
 	"path/filepath"
@@ -231,7 +232,7 @@ func (e ownedEdit) Apply(cur Content) (Content, error) {
 
 // undoOwned puts back what was there before pairtime, which for an entry
 // pairtime created means nothing. An entry the teen deleted stays deleted.
-func undoOwned(cur, base Content) (Content, error) {
+func undoOwned(cur, base Content, _ json.RawMessage) (Content, error) {
 	if !cur.Exists {
 		return cur, nil
 	}

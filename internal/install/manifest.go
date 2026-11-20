@@ -53,11 +53,17 @@ type saved struct {
 	Type   uint32 `json:"type,omitempty"`
 }
 
-// editRecord names one edit: the item it belongs to and its kind.
+// editRecord names one edit: the item it belongs to and its kind, and holds
+// what the edit recorded for its undo (Recorder).
 type editRecord struct {
-	Item string `json:"item"`
-	Kind string `json:"kind"`
+	Item string          `json:"item"`
+	Kind string          `json:"kind"`
+	Data json.RawMessage `json:"data,omitempty"`
 }
+
+// same reports whether r and s are the same item's edit of the same kind,
+// whatever they recorded.
+func (r editRecord) same(s editRecord) bool { return r.Item == s.Item && r.Kind == s.Kind }
 
 // pendingBackup is a copy Apply writes before it changes anything.
 type pendingBackup struct {
