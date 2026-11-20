@@ -6,11 +6,15 @@
 // A config.toml that doesn't parse is ignored as a whole, and a setting
 // with a bad value keeps its default. Every default is the private choice:
 // nothing is uploaded, and nothing optional is turned on. So a typo can
-// make pairtime more private, never less.
+// make pairtime more private, never less. Notifications are on by default
+// (DESIGN 1.2), so an ignored file, or quiet hours that don't parse, turn
+// them off instead: the file may be where the teen turned them off.
 package config
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 
 	"github.com/BurntSushi/toml"
@@ -31,6 +35,17 @@ const Local Mode = "local"
 type Config struct {
 	Mode Mode `toml:"mode"`
 	HTTP HTTP `toml:"http"`
+	// Notifications is [notifications], which Parse reads through
+	// notificationsFile.
+	Notifications Notifications `toml:"-"`
+}
+
+// fileConfig is config.toml as written. Parse checks each value before it
+// goes into a Config.
+type fileConfig struct {
+	Mode          Mode              `toml:"mode"`
+	HTTP          HTTP              `toml:"http"`
+	Notifications notificationsFile `toml:"notifications"`
 }
 
 // HTTP configures the agent's HTTP server on 127.0.0.1.
@@ -48,10 +63,10 @@ func Default() Config {
 // always usable; problems says what was ignored and why.
 func Parse(data []byte) (cfg Config, problems []string) {
 	cfg = Default()
-	var file Config
+	var file fileConfig
 	md, err := toml.Decode(string(data), &file)
 	if err != nil {
-		return cfg, []string{fmt.Sprintf("config.toml was ignored, so every setting has its default: %v", err)}
+		return ignored(), []string{fmt.Sprintf("config.toml was ignored, so every setting has its default and notifications are off: %v", err)}
 	}
 	// Probably a typo, or a setting from a newer release.
 	for _, key := range md.Undecoded() {
@@ -71,15 +86,21 @@ func Parse(data []byte) (cfg Config, problems []string) {
 			problems = append(problems, fmt.Sprintf("config.toml: http.port %d isn't 0 or from 1024 to 65535, so the default port is used", p))
 		}
 	}
+	problems = append(problems, parseNotifications(&cfg, file.Notifications, md.IsDefined)...)
 	return cfg, problems
 }
 
 // Load reads and parses the file name. When the file is missing it returns
-// the defaults and an error that wraps fs.ErrNotExist.
+// the defaults and an error that wraps fs.ErrNotExist. When it can't be
+// read for another reason, it returns the defaults with notifications off,
+// like a file that doesn't parse, and the error.
 func Load(name string) (Config, []string, error) {
 	data, err := os.ReadFile(name)
-	if err != nil {
+	if errors.Is(err, fs.ErrNotExist) {
 		return Default(), nil, err
+	}
+	if err != nil {
+		return ignored(), nil, err
 	}
 	cfg, problems := Parse(data)
 	return cfg, problems, nil
@@ -103,4 +124,12 @@ mode = "local"
 # The port of pairtime's web server, which listens on 127.0.0.1 only.
 # 0 means the default, 7247, or a free port near it when that one is taken.
 port = 0
+
+[notifications]
+# One quiet notification when a work session ends, to say its recap is
+# ready. false turns them off.
+enabled = true
+# A time of day with no notifications, in this computer's local time, such
+# as "22:00-07:00". "" means none.
+quiet_hours = ""
 `
