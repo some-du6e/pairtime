@@ -2,13 +2,15 @@
 <h1>{{if .Sample}}Sample dashboard{{else}}Your dashboard{{end}}</h1>
 {{- if .Sample}}
 <div class="sample" role="note">
-<p><strong class="tag">Sample data</strong> These are thirty made-up days of a teen building three projects with {{.Agent}}. No real person&#39;s time is on this page.</p>
-{{- if not .SignIn}}
-<p>Sign-in isn&#39;t open on this server yet. Once it is, you sign in with Hack Club, run <code>pairtime login</code> on your computer, and your own dashboard shows your time the way this one does.</p>
-{{- else if .SignupsOpen}}
+<p><strong class="tag">Sample data</strong> These are thirty made-up days of a teen building three projects with {{.Agent}}. No real person&#39;s time is on this page. The project names are made up too, and your own dashboard shows each project by a short code instead, since your project names stay on your computer.</p>
+{{- if and .SignIn .SignupsOpen}}
 <p><a class="button" href="{{.Login}}">Sign in with Hack Club</a> and run <code>pairtime login</code> on your computer, and your own dashboard shows your time the way this one does.</p>
+{{- else if .SignupsOpen}}
+<p>Sign-ups on this server are open, but sign-in isn&#39;t set up on it yet.</p>
+{{- else if .SignIn}}
+<p>Sign-ups are closed for now, and testers join by invitation. Until sign-ups open, this server makes accounts only for the people who run it, and testers use pairtime on their own computers.</p>
 {{- else}}
-<p>Sign-ups are closed for now, and testers join by invitation. Once you&#39;re in, <code>pairtime login</code> links the app on your computer, and your own dashboard shows your time the way this one does.</p>
+<p>Sign-ups are closed for now, and testers join by invitation, using pairtime on their own computers until sign-ups open. Sign-in isn&#39;t set up on this server yet.</p>
 {{- end}}
 </div>
 {{- end}}
@@ -62,7 +64,7 @@
 </ul>
 {{- end}}
 {{- if .Week.HasPending}}
-<p class="note">Pending minutes are from the last 15 minutes. pairtime can still change them while late events arrive, so they stay faded until they settle.</p>
+<p class="note">Pending minutes can still change until your computer sends their final version, usually within 15 minutes, so they stay faded until then.</p>
 {{- end}}
 <details>
 <summary>The last 7 days as a table</summary>

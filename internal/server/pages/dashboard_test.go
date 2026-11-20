@@ -67,6 +67,11 @@ func TestDemoPage(t *testing.T) {
 			},
 		},
 		{
+			name:   "the banner says a real dashboard shows projects by a short code, since project names never reach the server (DESIGN 4.3)",
+			signIn: signInOn(""),
+			want:   []string{"The project names are made up too, and your own dashboard shows each project by a short code instead, since your project names stay on your computer."},
+		},
+		{
 			name:    "the page has every section: today, the last 7 days, projects, evidence levels and activity kinds",
 			signIn:  signInOn(""),
 			want:    []string{`<h2 id="today">Today <span class="when">Friday 20 November</span></h2>`, `<h2 id="week">Last 7 days</h2>`, `<h2 id="projects">Projects</h2>`, `<h2 id="levels">Evidence levels</h2>`, `<h2 id="kinds">What you spent it on</h2>`},
@@ -124,7 +129,7 @@ func TestDemoPage(t *testing.T) {
 			want: []string{
 				`<span class="seg c1 f26" title="chip8-emulator, 1h 3m"></span><span class="seg c1 pend f4" title="chip8-emulator, 9m pending"></span><span class="seg c2 f17" title="robotics-scouting, 41m"></span><small class="cap">1h 53m</small>`,
 				`<li><span class="key c1 pend"></span>Faded means pending</li>`,
-				"Pending minutes are from the last 15 minutes.",
+				"Pending minutes can still change until your computer sends their final version, usually within 15 minutes, so they stay faded until then.",
 			},
 		},
 		{
@@ -176,23 +181,30 @@ func TestDemoPage(t *testing.T) {
 			},
 		},
 		{
-			name:    "without sign-in the banner says sign-in isn't open yet, and how a visitor would get a dashboard",
+			name:    "without sign-in and with sign-ups closed, as on the live server, the banner says both, as the home page does, and promises no dashboard of your own",
 			signIn:  SignIn{},
-			want:    []string{"Sign-in isn&#39;t open on this server yet. Once it is, you sign in with Hack Club, run <code>pairtime login</code> on your computer, and your own dashboard shows your time the way this one does."},
-			notWant: []string{"Sign in with Hack Club</a>", "Sign-ups are closed"},
+			want:    []string{"Sign-ups are closed for now, and testers join by invitation, using pairtime on their own computers until sign-ups open. Sign-in isn&#39;t set up on this server yet."},
+			notWant: []string{"Sign in with Hack Club</a>", "your own dashboard shows your time"},
 		},
 		{
-			name:    "with sign-in but sign-ups closed the banner says testers join by invitation, and offers no sign-in",
+			name:    "with sign-in but sign-ups closed the banner says only the people who run the server get accounts, and offers no sign-in",
 			signIn:  signInOn(""),
-			want:    []string{"Sign-ups are closed for now, and testers join by invitation."},
-			notWant: []string{"Sign in with Hack Club</a>", "isn&#39;t open"},
+			want:    []string{"Sign-ups are closed for now, and testers join by invitation. Until sign-ups open, this server makes accounts only for the people who run it, and testers use pairtime on their own computers."},
+			notWant: []string{"Sign in with Hack Club</a>", "isn&#39;t set up", "your own dashboard shows your time"},
+		},
+		{
+			name:    "with sign-ups open but no sign-in set up the banner says so, and offers no sign-in",
+			opts:    Options{SignupsOpen: true},
+			signIn:  SignIn{},
+			want:    []string{"Sign-ups on this server are open, but sign-in isn&#39;t set up on it yet."},
+			notWant: []string{"Sign in with Hack Club</a>", "your own dashboard shows your time"},
 		},
 		{
 			name:    "with sign-ups open the banner offers Hack Club sign-in",
 			opts:    Options{SignupsOpen: true},
 			signIn:  signInOn(""),
 			want:    []string{`<a class="button" href="/auth/hca/login">Sign in with Hack Club</a> and run <code>pairtime login</code>`},
-			notWant: []string{"Sign-ups are closed", "isn&#39;t open"},
+			notWant: []string{"Sign-ups are closed", "isn&#39;t set up"},
 		},
 		{
 			name:    "the page has no script, no form, no style attribute and no SVG",
@@ -446,7 +458,10 @@ func TestPercents(t *testing.T) {
 	}{
 		{name: "shares add up to exactly 100", values: []float64{1, 1, 1}, want: []int{34, 33, 33}},
 		{name: "the points left over go to the largest remainders", values: []float64{66.6, 20.3, 13.1}, want: []int{67, 20, 13}},
+		{name: "the point left over goes to the largest remainder, not the first value", values: []float64{20.1, 13.8, 66.1}, want: []int{20, 14, 66}},
 		{name: "a level with no time gets 0", values: []float64{5, 0, 0}, want: []int{100, 0, 0}},
+		{name: "a level with a sliver of time gets 1%, taken from the largest, so none reads 0% and none 100% beside it", values: []float64{99.72, 0, 0.28}, want: []int{99, 0, 1}},
+		{name: "two slivers each get 1%", values: []float64{99.5, 0.25, 0.25}, want: []int{98, 1, 1}},
 		{name: "with no time at all every share is 0", values: []float64{0, 0, 0}, want: []int{0, 0, 0}},
 	}
 	for _, tt := range tests {

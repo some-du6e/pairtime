@@ -10,12 +10,12 @@ import (
 )
 
 // Demo is the fixed sample /demo shows: thirty made-up days of a teen
-// building three projects with Claude Code. Most of it is level A. One
-// project was built partly on a laptop where pairtime sees input but can't
-// tell whether it was typing (level B). One day's uploads reached the
-// server late, and the oldest days were read back from Claude Code's
-// transcripts at install (both level C). The last few minutes of today are
-// still pending.
+// building three projects with Claude Code. Most of it is level A. Some
+// is level B, most of that from a project built partly on a laptop where
+// pairtime sees input but can't tell whether it was typing. One day's
+// uploads reached the server late with no record of why, and the oldest
+// days were read back from Claude Code's transcripts at install (both
+// level C). The last few minutes of today are still pending.
 //
 // The numbers never change. The last day is always today in UTC, so the
 // page reads the way a dashboard does on the day it is opened.

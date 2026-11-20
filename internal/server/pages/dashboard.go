@@ -60,7 +60,7 @@ const demoDescription = "A sample pairtime dashboard: a made-up teen's time buil
 var levelText = map[string]string{
 	"A": "Your keyboard backs it up.",
 	"B": "Your computer saw you there but can't tell whether you were typing.",
-	"C": "pairtime can check it less closely, like time read back later from your tools' history, or uploads that reached the server late.",
+	"C": "pairtime can check it less closely, like time it reads back later from your tools' history.",
 }
 
 // kindName names an activity kind (SM 5.1, 5.2) for the page. agent is
@@ -488,8 +488,10 @@ func stack(sizes []float64, top float64) []int {
 
 // percents returns values as whole percentages of their sum that add up
 // to exactly 100: each gets its floor, and the points left over go to the
-// largest remainders, earlier values first on a tie. With nothing to
-// share, every percentage is 0.
+// largest remainders, earlier values first on a tie. A value above zero
+// then gets at least 1, taken from the largest, so a level with time never
+// reads 0% and none reads 100% beside another. With nothing to share,
+// every percentage is 0.
 func percents(values []float64) []int {
 	out := make([]int, len(values))
 	sum := 0.0
@@ -515,6 +517,18 @@ func percents(values []float64) []int {
 	for k := 0; given < 100 && k < len(rems); k++ {
 		out[rems[k].i]++
 		given++
+	}
+	for i, v := range values {
+		if v > 0 && out[i] == 0 {
+			largest := 0
+			for j := range out {
+				if out[j] > out[largest] {
+					largest = j
+				}
+			}
+			out[largest]--
+			out[i] = 1
+		}
 	}
 	return out
 }

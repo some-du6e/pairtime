@@ -181,7 +181,7 @@ footer { margin-top: 3rem; padding-bottom: 2rem; color: var(--muted); font-size:
 .col { display: flex; flex-direction: column-reverse; align-items: center; height: 100%; }
 .seg { flex: none; width: min(24px, 60%); height: var(--f); }
 /* The 2px gap between stacked parts, in the page's own color. */
-.seg + .seg { border-bottom: 2px solid var(--bg); }
+.seg + .seg { border-bottom: 2px solid var(--bg); min-height: 4px; }
 .seg:last-of-type { border-radius: 4px 4px 0 0; }
 .cap { flex: none; padding-bottom: 0.2rem; font-size: 0.75rem; color: var(--muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
 .xaxis { grid-column: 2; padding-top: 0.4rem; text-align: center; font-size: 0.8rem; line-height: 1.25; color: var(--muted); }
