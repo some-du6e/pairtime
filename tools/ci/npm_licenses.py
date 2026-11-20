@@ -18,7 +18,8 @@ neither Node nor an install.
 
 SPDX expressions are evaluated: OR needs one allowed side, AND needs both,
 and "X WITH exception" counts as X. Exit status 1 means a license isn't
-allowed or is missing, and each is printed as a GitHub error annotation.
+allowed or is missing, or a lockfile can't be read (lockfileVersion 1, or no
+packages listed), and each is printed as a GitHub error annotation.
 """
 
 import json
@@ -102,6 +103,27 @@ def allowed(expression, licenses):
     if peek() is not None:
         raise ValueError("unexpected %r in %r" % (peek(), expression))
     return ok
+
+
+def unreadable(lock):
+    """Says why a parsed lockfile can't be checked, or returns None.
+
+    lockfileVersion 2 and 3 list every package under "packages". Version 1
+    keeps its tree under "dependencies", which problems() doesn't read, so
+    such a file would pass with nothing checked.
+    """
+    if not isinstance(lock, dict):
+        return "it isn't a JSON object"
+    version = lock.get("lockfileVersion")
+    if isinstance(version, bool) or not isinstance(version, int) or version < 2:
+        return (
+            "its lockfileVersion is %s, and only 2 and later list every package under \"packages\"; "
+            "rewrite it with npm 7 or later, as tidy.yml does" % json.dumps(version)
+        )
+    packages = lock.get("packages")
+    if not isinstance(packages, dict) or not any(path != "" for path in packages):
+        return "it lists no packages besides the project itself"
+    return None
 
 
 def problems(lock):
@@ -209,7 +231,27 @@ def selftest():
         if got != want:
             print("FAIL %s: %d problems, want %d: %s" % (name, got, want, problems(parsed)))
             failed += 1
-    total = len(cases) + len(bad_expressions) + len(lockfiles)
+
+    packages = {"": {}, "node_modules/a": {"version": "1.0.0", "license": "MIT"}}
+    readable = [
+        ("lockfileVersion 3 can be checked", {"lockfileVersion": 3, "packages": packages}, True),
+        ("lockfileVersion 2 can be checked", {"lockfileVersion": 2, "packages": packages, "dependencies": {}}, True),
+        (
+            "a lockfileVersion 1 file, which keeps its tree under dependencies, can't be checked",
+            {"lockfileVersion": 1, "dependencies": {"a": {"version": "1.0.0"}}},
+            False,
+        ),
+        ("a file with no lockfileVersion can't be checked", {"packages": packages}, False),
+        ("a file with no packages can't be checked", {"lockfileVersion": 3}, False),
+        ("a file listing only the project can't be checked", {"lockfileVersion": 3, "packages": {"": {}}}, False),
+        ("a file that isn't a JSON object can't be checked", [], False),
+    ]
+    for name, parsed, want in readable:
+        got = unreadable(parsed) is None
+        if got != want:
+            print("FAIL %s: unreadable(%r) = %r" % (name, parsed, unreadable(parsed)))
+            failed += 1
+    total = len(cases) + len(bad_expressions) + len(lockfiles) + len(readable)
     print("%d of %d selftest cases passed" % (total - failed, total))
     return 1 if failed else 0
 
@@ -224,6 +266,11 @@ def main(args):
     for name in args:
         with open(name, encoding="utf-8") as f:
             lock = json.load(f)
+        why = unreadable(lock)
+        if why:
+            print("::error file=%s::this lockfile can't be checked: %s" % (name, why))
+            status = 1
+            continue
         found = problems(lock)
         for p in found:
             print("::error file=%s::%s" % (name, p))
