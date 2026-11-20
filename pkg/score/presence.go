@@ -24,10 +24,13 @@ type Slot struct {
 	// time, else whether a sample shows a key press during the slot.
 	InputKeys *bool `json:"input_keys"`
 	// Present holds from Start until PresentUntil, and Then from there to
-	// the slot's end. They differ only in the slot where a tail ends: SM
-	// 2.1's tail runs PRESENCE_TAIL_S from the last input, to the
-	// millisecond, so it can end inside a slot, and what follows in that
-	// slot is no or returned.
+	// the slot's end. They differ in two kinds of slot. In the slot where a
+	// tail ends: SM 2.1's tail runs PRESENCE_TAIL_S from the last input, to
+	// the millisecond, so it can end inside a slot, and what follows in that
+	// slot is no or returned. And in the slot whose input ends a silence
+	// longer than PRESENCE_GAP_S, when a sample taken inside the slot dates
+	// that input: the silence's no or returned holds until the second of
+	// the input, and yes from there (presence.markStarts).
 	Present      event.Presence `json:"present"`
 	PresentUntil int64          `json:"present_until"`
 	Then         event.Presence `json:"then"`
@@ -56,13 +59,19 @@ func (s Slot) At(t int64) event.Presence {
 }
 
 // Event returns the slot as pkg/event's derived record. Its single present
-// value is the one the slot starts with.
+// value is SM 2.1's for the whole slot: yes for a slot with input, even one
+// whose first seconds still belong to the silence before it, and otherwise
+// the one the slot starts with.
 func (s Slot) Event() event.Slot {
 	var keys *bool
 	if s.InputKeys != nil {
 		keys = ptr(*s.InputKeys)
 	}
-	return event.Slot{Start: s.Start, InputAny: s.InputAny, InputKeys: keys, Present: s.Present,
+	present := s.Present
+	if s.Then == event.PresentYes {
+		present = event.PresentYes
+	}
+	return event.Slot{Start: s.Start, InputAny: s.InputAny, InputKeys: keys, Present: present,
 		FocusClass: s.FocusClass, FocusProject: s.FocusProject, Asleep: s.Asleep, Locked: s.Locked}
 }
 
@@ -285,7 +294,60 @@ func buildPresence(r rules, recs []event.Event, high int64, fl *focusLine) *pres
 	}
 	p.lastIn = lastIn
 	p.classifyRuns(lastIn)
+	p.markStarts()
 	return p
+}
+
+// markStarts dates the end of every silence longer than PRESENCE_GAP_S,
+// where the samples can (SM 2.1, docs/errata/2026-11-19-sm-6.1-presence-edges.md).
+// SM 2.1 makes a slot with input present from its start, and the regular
+// sample at the slot's end can't say more. But the agent also samples at
+// hook, focus and power events (DESIGN 3.3), and a sample taken inside the
+// slot dates what it reports. So the silence lasts into the slot until the
+// first input such a sample reports, to the second, or, when none reports
+// one, until the last of them that still shows the silence. SM 6.1's drink
+// needs the first: Rowan clicks at 15:12:40, which a focus sample reports,
+// and SM credits from there. SM 6.4's 23:37 row needs the second half: only
+// the sample at the slot's end reports his return, and SM credits the slot
+// from its start. docs/errata/2026-11-19-presence-start-after-silence.md
+// asks Karim to confirm the rule.
+func (p *presence) markStarts() {
+	for _, run := range p.runs {
+		if !run.right || (run.left && int64(run.j-run.i)*event.SlotMS <= p.r.presenceGap) {
+			continue
+		}
+		s := &p.slots[run.j]
+		from := p.firstInputInside(s.Start, s.End())
+		if from > s.Start {
+			s.Present, s.PresentUntil, s.Then = event.PresentNo, from, event.PresentYes
+		}
+	}
+}
+
+// firstInputInside returns when the samples taken inside (a, b) let the
+// slot [a, b) start to count as present: at the second holding the first
+// input one of them reports in the slot, else at the last of them, which
+// still shows no input in it, else at a.
+func (p *presence) firstInputInside(a, b int64) int64 {
+	from := a
+	i := sort.Search(len(p.samples), func(i int) bool { return p.samples[i].t > a })
+	for ; i < len(p.samples) && p.samples[i].t < b; i++ {
+		s := p.samples[i]
+		if s.lastAny >= a {
+			return max(a, floorSecond(s.lastAny))
+		}
+		from = s.t
+	}
+	return from
+}
+
+// floorSecond returns the start of the second holding t.
+func floorSecond(t int64) int64 {
+	q := t / 1000
+	if t%1000 < 0 {
+		q--
+	}
+	return q * 1000
 }
 
 // unsampled reports whether t falls before the presence sampler ran: there

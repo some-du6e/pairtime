@@ -36,9 +36,20 @@ type rules struct {
 	cmdWatchMax int64
 	commitLead  int64
 
-	// SM 8.3, reading.
-	readWPM     int64
-	readHorizon int64
+	// SM 8.3, the reading bucket and lookups. The bucket counts in units
+	// of 1 / (READ_WPM * DIFF_LPM) of a second, in which every fill is a
+	// whole number: a word of prose is 60 * DIFF_LPM units and a line of
+	// code or diff 60 * READ_WPM (SM 2.4).
+	turnBase      int64 // ms
+	readWPM       int64
+	diffLPM       int64
+	toolLinesMax  int64 // lines
+	bucketMax     int64 // ms
+	bucketTTL     int64 // ms
+	readHorizon   int64
+	lookupBracket int64
+	lookupMax     int64
+	unitsPerS     int64
 
 	// DESIGN 6.3.
 	pendingWindow int64
@@ -51,6 +62,9 @@ type rules struct {
 	trackMinGap   int64
 	trackLogMatch int64
 	trackDedupe   int64
+	// composeNeedsKeys realizes the typing part of every lead only in
+	// slots with key presses, on every machine (DESIGN 6.3, 6.7).
+	composeNeedsKeys bool
 
 	// settle is how long after a time the scorer may still change what it
 	// derived for that time: the pending window for late records (DESIGN
@@ -88,8 +102,15 @@ func newRules(t *params.Table) rules {
 		cmdWatchMax: ms(params.CMD_WATCH_MAX_S),
 		commitLead:  ms(params.COMMIT_LEAD_S),
 
-		readWPM:     t.Int(params.READ_WPM),
-		readHorizon: ms(params.READ_HORIZON_S),
+		turnBase:      ms(params.R_TURN_BASE_S),
+		readWPM:       t.Int(params.READ_WPM),
+		diffLPM:       t.Int(params.DIFF_LPM),
+		toolLinesMax:  t.Int(params.TOOL_LINES_MAX),
+		bucketMax:     ms(params.BUCKET_MAX_S),
+		bucketTTL:     ms(params.BUCKET_TTL_S),
+		readHorizon:   ms(params.READ_HORIZON_S),
+		lookupBracket: ms(params.LOOKUP_BRACKET_S),
+		lookupMax:     ms(params.LOOKUP_MAX_S),
 
 		pendingWindow: ms(params.PENDING_WINDOW_S),
 		contextIdle:   ms(params.CONTEXT_IDLE_S),
@@ -98,10 +119,32 @@ func newRules(t *params.Table) rules {
 		trackMinGap:   ms(params.TRACK_MIN_GAP_S),
 		trackLogMatch: ms(params.TRACK_LOG_MATCH_S),
 		trackDedupe:   ms(params.TRACK_DEDUPE_S),
+
+		composeNeedsKeys: t.Bool(params.COMPOSE_NEEDS_KEYS),
 	}
+	r.unitsPerS = r.readWPM * r.diffLPM
+	// The return rule looks furthest ahead of SC1's and SC2's rules. A
+	// lead reaches back at most THINK_LEAD_S + COMPOSE_MAX_S and reading
+	// needs an anchor within READ_HORIZON_S, both inside it. Lookups,
+	// which wait for the end of a browser run, hold FinalBefore back on
+	// their own (Step).
 	r.settle = r.pendingWindow + r.returnGapMax + r.readHorizon
 	return r
 }
+
+// units converts milliseconds to reading-bucket units.
+func (r rules) units(ms int64) int64 { return ms * r.unitsPerS / 1000 }
+
+// proseUnits is what words of prose fill: 60 * words / READ_WPM seconds.
+func (r rules) proseUnits(words int64) int64 { return 60 * words * r.diffLPM }
+
+// lineUnits is what lines of code, diff or tool output fill: 60 * lines /
+// DIFF_LPM seconds.
+func (r rules) lineUnits(lines int64) int64 { return 60 * lines * r.readWPM }
+
+// unitsMS converts reading-bucket units to milliseconds, rounded to the
+// nearest.
+func (r rules) unitsMS(u int64) int64 { return roundDiv(u*1000, r.unitsPerS) }
 
 // roundDiv returns a / b rounded to the nearest integer, halves away from
 // zero, for b > 0. SM states its leads in whole seconds and rounds a
