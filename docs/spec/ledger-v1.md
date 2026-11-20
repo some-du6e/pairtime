@@ -664,7 +664,7 @@ python3 -I tools/ledger_ref.py vectors-content [--out PATH]
 python3 -I tools/ledger_ref.py check FILE
 ```
 
-`selftest` checks the RFC 5869, RFC 4231 and Certificate Transparency vectors, the rtype table against `pkg/event`'s `kindTable`, and the worked example in section 12 against this file. Then it checks that `vectors.json` is byte for byte what `vectors` writes, that it passes `check`, and that `check` catches each of 25 kinds of tampering with it. For part 2 it checks the whitespace set of 10.2 against Python's `str.isspace`, the lowercase table of 10.4 against Python's `unicodedata`, the tokenizer, the 16 KiB cut, reveals with random removals and every single-item change to them, the MinHash estimate's error and bias on random sets, hunks from patches with context against hunks from the text before and after, and the draw. Then it checks the worked example in 10.10 against this file, that `vectors-content.json` is byte for byte what `vectors-content` writes, that it passes `check`, and that `check` catches 35 kinds of change to it. `ci.yml` runs it on every PR.
+`selftest` checks the RFC 5869, RFC 4231 and Certificate Transparency vectors, the rtype table against `pkg/event`'s `kindTable`, and the worked example in section 12 against this file. Then it checks that `vectors.json` is byte for byte what `vectors` writes, that it passes `check`, and that `check` catches each of 26 kinds of tampering with it. For part 2 it checks the whitespace set of 10.2 against Python's `str.isspace`, the lowercase table of 10.4 against Python's `unicodedata`, the tokenizer, the 16 KiB cut, reveals with random removals and every single-item change to them, the MinHash estimate's error and bias on random sets, hunks from patches with context against hunks from the text before and after, and the draw. Then it checks the worked example in 10.10 against this file, that `vectors-content.json` is byte for byte what `vectors-content` writes, that it passes `check`, and that `check` catches 35 kinds of change to it. `ci.yml` runs it on every PR.
 
 `check FILE` recomputes every value in a file in the format of 11.3 and prints each mismatch with its JSON path. `pkg/ledger`'s tests write such files and run `check` on them (WP-LG2, WP-LG4).
 
@@ -704,7 +704,7 @@ Besides recomputing each value from the file's own inputs, `check` applies these
 - Each day after the first has the next day number and chains to the day before. The first day's `prev` is taken as given.
 - A batch whose `received_at` falls on a day the file lists appears in that day's rows with the same head and time, and no `(device_id, b)` appears twice.
 - A record of rtype `0x00` or `0x42` to `0xff` fails. One from `0x13` to `0x3f` is of a kind added after this reference, which `check` counts as such and doesn't fail (4.2).
-- A body that starts with `{"n":"` carries its own record's nonce there.
+- Every body starts with `{"n":"`, its own record's nonce as 64 lowercase hex digits, and `","e":`, as 4.5 has every body begin. A writer that dropped `n`, put it after `e` or wrote it in another form fails here, though the hashes over its own output agree.
 - A commitment with `raw` is an agent message, and its `text` is the cut of `raw` (10.1). An agent message without `raw` is at most 16,384 bytes.
 - A features object's `f` equals, as JSON, the map 10.7 builds from its inputs.
 

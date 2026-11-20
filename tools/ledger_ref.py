@@ -1374,10 +1374,8 @@ def check_chain(rep, chain, path, received):
             entries.append(got_entry)
             want_nonce = nonce(keys["k_leaf"], seq)
             rep.same(rp + ".nonce", got_nonce, want_nonce)
-            if body.startswith(BODY_PREFIX):
-                inner = body[len(BODY_PREFIX):len(BODY_PREFIX) + 64]
-                if inner != want_nonce.hex().encode("ascii"):
-                    rep.fail(rp + ".body", "has an \"n\" other than this record's nonce")
+            if not body.startswith(BODY_PREFIX + want_nonce.hex().encode("ascii") + b'","e":'):
+                rep.fail(rp + ".body", "doesn't start with {\"n\":\", this record's nonce in hex and \",\"e\":")
             try:
                 rep.same(rp + ".entry", got_entry, entry(header(seq, rtype, project_key, session_key), body))
             except LedgerError as err:
@@ -2867,6 +2865,7 @@ def test_check_catches():
         ("a project digest", setter(lambda d: d["digests"][1], "project", flip)),
         ("a body byte", setter(rec, "body", flip)),
         ("a nonce", setter(rec, "nonce", flip)),
+        ("a body without its nonce", setter(rec, "body", lambda b: b'{"e":{}}'.hex())),
         ("an entry", setter(rec, "entry", flip)),
         ("a seq", setter(lambda d: rec(d, 1, 0), "seq", lambda s: s + 1)),
         ("a reserved rtype", setter(rec, "rtype", lambda _: 0x42)),
