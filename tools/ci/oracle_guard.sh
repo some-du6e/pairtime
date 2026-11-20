@@ -13,9 +13,9 @@
 # in GitHub's documented payload). Without a payload there are no labels.
 #
 # A PR fails when it modifies, deletes, renames or retypes an oracle path and
-# also touches cmd/, internal/, pkg/, web/ or extension/, unless it carries
-# the oracle-change label, which only Karim adds. Adding a new oracle file
-# next to new code passes.
+# also touches cmd/, internal/, pkg/, web/, extension/ or integrations/,
+# unless it carries the oracle-change label, which only Karim adds. Adding a
+# new oracle file next to new code passes.
 #
 # Exit status: 0 pass, 1 blocked, 2 bad input or a missing tool.
 set -euo pipefail
@@ -33,9 +33,11 @@ is_oracle() {
 	return 1
 }
 
+# integrations/ holds the program kit, which testdata/upstream's captures
+# check (docs/PLAN.md, WP-PG0, WP-PG2, WP-PG8, WP-PG10).
 is_code() {
 	case "$1" in
-	cmd/* | internal/* | pkg/* | web/* | extension/*) return 0 ;;
+	cmd/* | internal/* | pkg/* | web/* | extension/* | integrations/*) return 0 ;;
 	esac
 	return 1
 }

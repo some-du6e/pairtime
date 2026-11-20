@@ -43,6 +43,7 @@ var codePaths = []string{
 	"pkg/score/score.go",
 	"web/src/app.ts",
 	"extension/vscode/package.json",
+	"integrations/airtable-automation.js",
 }
 
 type guardCase struct {
