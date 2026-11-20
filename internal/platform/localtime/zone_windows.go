@@ -18,8 +18,12 @@ import (
 // which is all a caller of Now reads. When the call fails, Zone returns
 // time.Local.
 func Zone() *time.Location {
+	return zoneFrom(windows.GetTimeZoneInformation)
+}
+
+func zoneFrom(query func(*windows.Timezoneinformation) (uint32, error)) *time.Location {
 	var tzi windows.Timezoneinformation
-	rc, err := windows.GetTimeZoneInformation(&tzi)
+	rc, err := query(&tzi)
 	if err != nil {
 		return time.Local
 	}

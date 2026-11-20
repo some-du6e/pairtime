@@ -454,7 +454,10 @@ func (n *Notifier) run(ctx context.Context, cancel context.CancelFunc, note Note
 		var reports []report
 		n.mu.Lock()
 		o := classify(err)
-		if o == Failed && n.closed {
+		// After Close, a note that didn't reach the screen is Stopped.
+		// Parking it would lose it: Close has already let go of the
+		// waiting note, and nothing will look again.
+		if n.closed && (o == Failed || o == Waiting) {
 			o = Stopped
 		}
 		// What this Show found out about the screen is the latest news.
@@ -514,7 +517,9 @@ func (n *Notifier) run(ctx context.Context, cancel context.CancelFunc, note Note
 // of a project context: WP-CO1 adds a hook there beside Options.Seal, which
 // hears suspends and locks the same way, and reads the same events to end
 // work sessions. Until then nothing calls UserPresent, and a note that
-// found the screen locked waits until a newer note takes its place.
+// found the screen locked waits until a newer note takes its place. A
+// screen saver that doesn't lock the session sends no unlock, so a note
+// that met one waits for the next unlock or resume, or for a newer note.
 func (n *Notifier) UserPresent() {
 	set := n.settings()
 	now := n.clock()
@@ -584,11 +589,12 @@ func (n *Notifier) snapshot() remembered {
 
 // persist has what the notifier remembers saved to Memory as soon as it
 // changes, a decision or a notification shown, so a crash, a kill or a
-// power cut forgets nothing that happened before it. The save runs on a
-// goroutine, off the caller's path, since Memory's Save writes a file and
-// Put may wait for another component's Save. Changes that come while it
-// works go in its next round, so there is one such goroutine at most, and
-// none once Memory has the latest. n.mu is held.
+// power cut after the save forgets none of it. The save runs a moment
+// later on a goroutine, off the caller's path, since Memory's Save writes a
+// file and Put may wait for another component's Save; a crash inside that
+// moment can still forget the change. Changes that come while it works go
+// in its next round, so there is one such goroutine at most, and none once
+// Memory has the latest. n.mu is held.
 func (n *Notifier) persist() {
 	if n.memory == nil {
 		return

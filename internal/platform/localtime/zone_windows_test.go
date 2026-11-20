@@ -35,20 +35,74 @@ func TestOffset(t *testing.T) {
 	}
 }
 
-func TestZoneIsTheOneWindowsReportsNow(t *testing.T) {
+func TestZoneAsksWindowsEachTime(t *testing.T) {
+	pacific := windows.Timezoneinformation{Bias: 480, DaylightBias: -60}
+	tokyo := windows.Timezoneinformation{Bias: -540}
+	type answer struct {
+		tzi windows.Timezoneinformation
+		rc  uint32
+		err error
+	}
 	tests := []struct {
-		name string
+		name    string
+		answers []answer // what GetTimeZoneInformation says at each call
+		// wantOffsets are the offsets, in seconds, of the zones the calls
+		// return; nil means the call returns time.Local.
+		wantOffsets []*int
 	}{
-		{name: "on a computer whose zone hasn't changed since the test started, Zone agrees with time.Local about now"},
+		{
+			name: "a zone changed between two calls is the zone of the second",
+			answers: []answer{
+				{tzi: pacific, rc: windows.TIME_ZONE_ID_STANDARD},
+				{tzi: tokyo, rc: windows.TIME_ZONE_ID_UNKNOWN},
+			},
+			wantOffsets: []*int{intp(-8 * 3600), intp(9 * 3600)},
+		},
+		{
+			name:        "a failed call gives time.Local",
+			answers:     []answer{{rc: 0xffffffff, err: windows.ERROR_INVALID_PARAMETER}},
+			wantOffsets: []*int{nil},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			now := time.Now()
-			_, want := now.Zone()
-			_, got := now.In(Zone()).Zone()
-			if got != want {
-				t.Errorf("Zone()'s offset now = %d s, time.Local's = %d s", got, want)
+			for i, a := range tt.answers {
+				query := func(tzi *windows.Timezoneinformation) (uint32, error) {
+					*tzi = a.tzi
+					return a.rc, a.err
+				}
+				got := zoneFrom(query)
+				switch want := tt.wantOffsets[i]; {
+				case want == nil && got != time.Local:
+					t.Errorf("call %d: zoneFrom() = %v, want time.Local", i, got)
+				case want != nil:
+					if _, off := time.Now().In(got).Zone(); off != *want {
+						t.Errorf("call %d: zoneFrom()'s offset = %d s, want %d s", i, off, *want)
+					}
+				}
 			}
 		})
 	}
 }
+
+func TestZoneIsTheOneWindowsReportsNow(t *testing.T) {
+	tests := []struct {
+		name string
+	}{
+		{name: "the real GetTimeZoneInformation answers, and Zone's offset is the one it reports"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var tzi windows.Timezoneinformation
+			rc, err := windows.GetTimeZoneInformation(&tzi)
+			if err != nil {
+				t.Fatalf("GetTimeZoneInformation() error = %v", err)
+			}
+			if _, got := time.Now().In(Zone()).Zone(); got != offset(&tzi, rc) {
+				t.Errorf("Zone()'s offset = %d s, GetTimeZoneInformation's = %d s", got, offset(&tzi, rc))
+			}
+		})
+	}
+}
+
+func intp(n int) *int { return &n }

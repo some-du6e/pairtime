@@ -762,71 +762,126 @@ func TestDecisionsAreSavedWhenMade(t *testing.T) {
 	}
 }
 
-// putLog is a Memory that keeps every snapshot put into it, and takes a
-// moment over each, so that two Puts in flight at once would likely land
-// out of order.
-type putLog struct {
-	mu   sync.Mutex
-	puts []remembered
+// stuckMemory is a Memory whose first Put waits for release, as a Put
+// does behind a Save stuck on a slow disk, and that keeps every snapshot
+// put into it, in the order the Puts finish.
+type stuckMemory struct {
+	entered chan struct{} // gets a value as the first Put starts
+	release chan struct{} // closed to let the first Put finish
+
+	mu      sync.Mutex
+	started bool // the first Put has begun; later ones don't wait
+	puts    []remembered
 }
 
-func (m *putLog) Get(string, any) (bool, error) { return false, nil }
+func (m *stuckMemory) Get(string, any) (bool, error) { return false, nil }
 
-func (m *putLog) Put(_ string, v any) error {
+func (m *stuckMemory) Put(_ string, v any) error {
 	r, ok := v.(remembered)
 	if !ok {
 		return fmt.Errorf("Put(%T), want a remembered", v)
 	}
-	time.Sleep(time.Millisecond)
+	m.mu.Lock()
+	first := !m.started
+	m.started = true
+	m.mu.Unlock()
+	if first {
+		m.entered <- struct{}{}
+		<-m.release
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.puts = append(m.puts, r)
 	return nil
 }
 
-func (m *putLog) Save() error { return nil }
+func (m *stuckMemory) Save() error { return nil }
 
 func TestMemoryNeverGoesBack(t *testing.T) {
 	tests := []struct {
-		name  string
-		notes int
+		name string
 	}{
-		{name: "every Put holds the newest session and last notification of the one before, or newer ones", notes: 40},
+		{name: "Close's last Put lands after a save that was stuck in Put when the agent stopped, so the newest snapshot stays"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			mem := &putLog{}
-			clock := &fakeClock{t: at("08:00:00")}
-			n := New(Options{Backend: &fakeBackend{}, Memory: mem, Now: clock.Now})
-			for i := range tt.notes {
-				// Fresh apart, so that every note that finds the notifier
-				// free is shown and moves the last notification on.
-				clock.Set(at("08:00:00").Add(time.Duration(i) * Fresh()))
-				n.Notify(Note{Session: fmt.Sprintf("s%03d", i), Ended: clock.Now()})
-			}
-			n.wg.Wait()
+			mem := &stuckMemory{entered: make(chan struct{}, 1), release: make(chan struct{})}
+			n := New(Options{
+				Backend: &fakeBackend{},
+				// Off, so every note is decided at once and none is shown.
+				Settings: func() config.Notifications { return config.Notifications{Off: true} },
+				Memory:   mem,
+				Now:      func() time.Time { return at("20:00:00") },
+			})
+			n.Notify(Note{Session: "s1"})
+			<-mem.entered // the save of [s1] is stuck in its Put
+			n.Notify(Note{Session: "s2"})
+			// The stuck Put finishes only after Close has stopped waiting
+			// for it and gone on to its own Put of [s1 s2].
+			time.AfterFunc(closeWait+500*time.Millisecond, func() { close(mem.release) })
 			n.Close()
+			n.wg.Wait()
 
 			mem.mu.Lock()
 			defer mem.mu.Unlock()
-			if len(mem.puts) == 0 {
-				t.Fatal("nothing was put into Memory")
-			}
-			newest := func(r remembered) string {
-				if len(r.Sessions) == 0 {
-					return ""
-				}
-				return r.Sessions[len(r.Sessions)-1]
-			}
 			for i := 1; i < len(mem.puts); i++ {
-				prev, cur := mem.puts[i-1], mem.puts[i]
-				if newest(cur) < newest(prev) || cur.LastShown.Before(prev.LastShown) {
-					t.Errorf("Put %d has newest session %s and last notification %s, after Put %d's %s and %s",
-						i, newest(cur), cur.LastShown.Format(time.TimeOnly), i-1, newest(prev), prev.LastShown.Format(time.TimeOnly))
+				if len(mem.puts[i].Sessions) < len(mem.puts[i-1].Sessions) {
+					t.Errorf("Put %d holds %q, after Put %d's %q", i, mem.puts[i].Sessions, i-1, mem.puts[i-1].Sessions)
 				}
 			}
-			if last, want := newest(mem.puts[len(mem.puts)-1]), fmt.Sprintf("s%03d", tt.notes-1); last != want {
-				t.Errorf("the last Put's newest session = %s, want %s", last, want)
+			if len(mem.puts) == 0 || strings.Join(mem.puts[len(mem.puts)-1].Sessions, " ") != "s1 s2" {
+				t.Errorf("Puts = %+v, want the last to hold [s1 s2]", mem.puts)
+			}
+		})
+	}
+}
+
+// lateAway is a Backend whose Show ignores ctx, as an OS call that is slow
+// to give up does, and finds the screen locked once released.
+type lateAway struct {
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (b *lateAway) Show(context.Context, Message) error {
+	b.entered <- struct{}{}
+	<-b.release
+	return ErrAway
+}
+
+func TestALockedScreenFoundAfterCloseIsStopped(t *testing.T) {
+	tests := []struct {
+		name string
+	}{
+		{name: "a note whose Show finds the screen locked after Close is reported Stopped, not parked"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			b := &lateAway{entered: make(chan struct{}, 1), release: make(chan struct{})}
+			rec := &recorder{}
+			n := New(Options{Backend: b, Result: rec.result, Now: func() time.Time { return at("20:00:00") }})
+			n.Notify(Note{Session: "s1", Ended: at("20:00:00")})
+			<-b.entered
+			closed := make(chan struct{})
+			go func() {
+				n.Close()
+				close(closed)
+			}()
+			for {
+				n.mu.Lock()
+				c := n.closed
+				n.mu.Unlock()
+				if c {
+					break
+				}
+				time.Sleep(time.Millisecond)
+			}
+			close(b.release)
+			<-closed
+			n.wg.Wait()
+			results, _ := rec.got()
+			if got, want := strings.Join(results, "\n"), "s1: the agent stopped"; got != want {
+				t.Errorf("results:\n%s\nwant:\n%s", got, want)
 			}
 		})
 	}

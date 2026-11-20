@@ -33,16 +33,19 @@ func TestZoneFollowsTheComputer(t *testing.T) {
 	noon := time.Date(2026, 11, 19, 12, 0, 0, 0, time.UTC)
 	pacific, tokyo := tzif(-8*3600, "PST"), tzif(9*3600, "JST")
 	tests := []struct {
-		name  string
-		tz    *string  // $TZ; nil means unset
-		files [][]byte // what /etc/localtime holds at each call; nil means unreadable
+		name     string
+		tz       *string  // $TZ; nil means unset
+		wantFile string   // the file read; "" means /etc/localtime
+		files    [][]byte // what that file holds at each call; nil means unreadable
 		// wantHours are the clock hours of noon UTC in the zone each call
 		// returns; -1 means the call returns time.Local.
 		wantHours []int
 	}{
 		{name: "with TZ unset, /etc/localtime gives the zone", files: [][]byte{pacific}, wantHours: []int{4}},
 		{name: "a zone changed while the agent runs is the zone of the next call", files: [][]byte{pacific, tokyo}, wantHours: []int{4, 21}},
-		{name: "TZ set means time.Local, which Go already read from TZ", tz: ptr("Asia/Tokyo"), files: [][]byte{pacific}, wantHours: []int{-1}},
+		{name: "TZ=:/etc/localtime names a file, which is read again on each call", tz: ptr(":/etc/localtime"), files: [][]byte{pacific, tokyo}, wantHours: []int{4, 21}},
+		{name: "a TZ path without the colon is read too", tz: ptr("/usr/share/zoneinfo/Asia/Tokyo"), wantFile: "/usr/share/zoneinfo/Asia/Tokyo", files: [][]byte{tokyo}, wantHours: []int{21}},
+		{name: "TZ naming a zone means time.Local, which Go already read from TZ", tz: ptr("Asia/Tokyo"), files: [][]byte{pacific}, wantHours: []int{-1}},
 		{name: "TZ set but empty means time.Local, which is UTC", tz: ptr(""), files: [][]byte{pacific}, wantHours: []int{-1}},
 		{name: "an /etc/localtime that can't be read gives time.Local", files: [][]byte{nil}, wantHours: []int{-1}},
 		{name: "an /etc/localtime that isn't TZif data gives time.Local", files: [][]byte{[]byte("not a zone")}, wantHours: []int{-1}},
@@ -57,8 +60,12 @@ func TestZoneFollowsTheComputer(t *testing.T) {
 			}
 			for i, data := range tt.files {
 				readFile := func(name string) ([]byte, error) {
-					if name != "/etc/localtime" {
-						t.Errorf("read %s, want /etc/localtime", name)
+					want := tt.wantFile
+					if want == "" {
+						want = "/etc/localtime"
+					}
+					if name != want {
+						t.Errorf("read %s, want %s", name, want)
 					}
 					if data == nil {
 						return nil, &fs.PathError{Op: "open", Path: name, Err: errors.ErrUnsupported}
