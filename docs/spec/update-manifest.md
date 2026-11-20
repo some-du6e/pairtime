@@ -65,7 +65,7 @@ The envelope's payload is this JSON object, indented by two spaces, with a final
 | `version` | The release version: `v` and a SemVer 2.0.0 version without build metadata. It's the tag, and what `pairtime version` prints |
 | `commit` | The full git commit hash, 40 or 64 lowercase hex digits |
 | `date` | The commit time in RFC 3339, UTC, whole seconds |
-| `minimum_version` | The oldest client version the release still supports, at most `version`. A client older than this should update before it does anything else. Tags take it from `tools/release/minimum-version.txt` |
+| `minimum_version` | The oldest client version the release still supports, at most `version`. A client older than this should update before it does anything else. Tags take it from `tools/release/minimum-version.txt`, which holds exactly one version; `release.yml` and `tools/release`'s tests check it on every run. A prerelease sorts before its release, so to require 0.3.0 while its prereleases ship, the file says `v0.3.0-alpha.1` |
 | `artifacts` | One entry per platform, at least one, no platform twice |
 | `os`, `arch` | Go's `GOOS` and `GOARCH`: lowercase letters and digits. A client skips platforms it doesn't know |
 | `url` | Where the archive is published: absolute `https`, no credentials, ending in a file name. Plain `http` is allowed only for a loopback host, which test fixtures use |

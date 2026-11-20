@@ -72,10 +72,13 @@ jobs:
         run: |
           tool=$RUNNER_TEMP/release-tool
           go build -o "$tool" ./tools/release
+          # The oldest client version a tag supports. It's read and checked
+          # on every run, so the PR that raises it gets checked too.
+          filemin=$("$tool" min-version)
+          echo "tools/release/minimum-version.txt holds $filemin"
           if [ "$EVENT" = push ] && [ "$REF_TYPE" = tag ]; then
             version=$REF_NAME
-            # The oldest client version this release still supports.
-            min=$(grep -v '^#' tools/release/minimum-version.txt | tr -d '[:space:]')
+            min=$filemin
           else
             # A snapshot is never published, so it supports only itself.
             version=v0.0.0-snapshot.$RUN_NUMBER

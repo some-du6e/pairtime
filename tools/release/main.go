@@ -10,6 +10,7 @@
 //
 //	release keygen [-pub internal/release/release-keys.txt]
 //	release keys
+//	release min-version [-file tools/release/minimum-version.txt]
 //	release check -version v [-min-version v]
 //	release dist -version v -commit hash -date time -min-version v -base-url url
 //	    -targets "os/arch ..." -bin dir -out dir -payload file [-extra files]
@@ -47,6 +48,7 @@ Usage:
   release keygen [-pub file]   make a release key: append its public half to the
                                key list, print its secret half once
   release keys                 print the ids of the release keys compiled in
+  release min-version          print the one version minimum-version.txt holds
   release check -version v     check a release version (and -min-version)
   release dist ...             write the archives, checksums.txt and the
                                manifest payload
@@ -66,12 +68,13 @@ type usageError string
 func (e usageError) Error() string { return string(e) }
 
 var commands = map[string]func(args []string, stdout, stderr io.Writer) error{
-	"keygen": cmdKeygen,
-	"keys":   cmdKeys,
-	"check":  cmdCheck,
-	"dist":   cmdDist,
-	"sign":   cmdSign,
-	"verify": cmdVerify,
+	"keygen":      cmdKeygen,
+	"keys":        cmdKeys,
+	"min-version": cmdMinVersion,
+	"check":       cmdCheck,
+	"dist":        cmdDist,
+	"sign":        cmdSign,
+	"verify":      cmdVerify,
 }
 
 // run executes one command line and returns the exit code: 0 on success,
@@ -192,6 +195,46 @@ func cmdKeys(args []string, stdout, stderr io.Writer) error {
 		fmt.Fprintln(stdout, k.ID())
 	}
 	return nil
+}
+
+func cmdMinVersion(args []string, stdout, stderr io.Writer) error {
+	flags := newFlags("min-version", stderr)
+	file := flags.String("file", "tools/release/minimum-version.txt", "the file holding the oldest client version a tagged release supports")
+	if err := parse(flags, args); err != nil {
+		return err
+	}
+	v, err := readMinVersion(*file)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintln(stdout, v)
+	return nil
+}
+
+// readMinVersion returns the version a minimum-version.txt holds. Blank
+// lines and lines starting with # are skipped, and exactly one other line
+// must be left, holding a pairtime version and nothing else.
+func readMinVersion(p string) (release.Version, error) {
+	data, err := os.ReadFile(p)
+	if err != nil {
+		return release.Version{}, err
+	}
+	var versions []release.Version
+	for i, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		v, err := release.ParseVersion(line)
+		if err != nil {
+			return release.Version{}, fmt.Errorf("%s line %d: %w", p, i+1, err)
+		}
+		versions = append(versions, v)
+	}
+	if len(versions) != 1 {
+		return release.Version{}, fmt.Errorf("%s holds %d versions; it must hold exactly one", p, len(versions))
+	}
+	return versions[0], nil
 }
 
 func cmdCheck(args []string, stdout, stderr io.Writer) error {

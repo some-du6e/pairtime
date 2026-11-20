@@ -676,6 +676,45 @@ func TestCheck(t *testing.T) {
 	}
 }
 
+func TestMinVersion(t *testing.T) {
+	tests := []struct {
+		name     string
+		content  string
+		wantCode int
+		want     string // all of stdout for exit 0, part of stderr otherwise
+	}{
+		{name: "comments and blank lines are skipped", content: "# a comment\n\nv0.3.0-alpha.1\n", want: "v0.3.0-alpha.1\n"},
+		{name: "spaces and a CR around the version are ignored", content: "  v1.2.3 \r\n", want: "v1.2.3\n"},
+		{name: "a file with no version fails", content: "# only a comment\n", wantCode: 1, want: "holds 0 versions"},
+		{name: "a file with two versions fails", content: "v0.1.0\nv0.2.0\n", wantCode: 1, want: "holds 2 versions"},
+		{name: "a comment after the version fails", content: "v0.3.0 # older clients must update\n", wantCode: 1, want: "line 1:"},
+		{name: "a version without v fails", content: "# min\n0.3.0\n", wantCode: 1, want: "line 2: version \"0.3.0\" doesn't start with v"},
+		{name: "build metadata fails", content: "v0.3.0+build.1\n", wantCode: 1, want: "build metadata"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := filepath.Join(t.TempDir(), "minimum-version.txt")
+			write(t, p, tt.content)
+			code, out, errOut := cli(t, "min-version", "-file", p)
+			if code != tt.wantCode {
+				t.Fatalf("exit %d, stdout %q, stderr %q; want exit %d", code, out, errOut, tt.wantCode)
+			}
+			if (code == 0 && out != tt.want) || (code != 0 && !strings.Contains(errOut, tt.want)) {
+				t.Fatalf("stdout %q, stderr %q; want %q", out, errOut, tt.want)
+			}
+		})
+	}
+
+	// release.yml reads the same file on every run, but only for PRs that
+	// touch the release code. This checks it on every PR.
+	t.Run("the checked-in minimum-version.txt holds one pairtime version", func(t *testing.T) {
+		out := mustCLI(t, "min-version", "-file", "minimum-version.txt")
+		if _, err := release.ParseVersion(strings.TrimSuffix(out, "\n")); err != nil {
+			t.Fatalf("printed %q: %v", out, err)
+		}
+	})
+}
+
 // with returns args with flag's value replaced, or the flag removed when
 // value is "<none>".
 func with(args []string, flag, value string) []string {
