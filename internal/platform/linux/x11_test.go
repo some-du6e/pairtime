@@ -357,12 +357,19 @@ func TestX11Focus(t *testing.T) {
 				}
 				return Focus{}
 			}
+			// Each report is awaited before the next change, so the client
+			// can't read a later value for an earlier notification.
 			if tc.wm == "ewmh" {
-				got = append(got, next()) // the start, before any step races it
+				got = append(got, next())
 			}
+			current := tc.start
 			for _, s := range tc.steps {
 				f.setCardinal(root, "_NET_ACTIVE_WINDOW", atomWindow, s.active)
 				f.notify(root, s.notify)
+				if tc.wm == "ewmh" && s.notify == "_NET_ACTIVE_WINDOW" && s.active != current {
+					got = append(got, next())
+				}
+				current = s.active
 			}
 			f.setCardinal(root, "_NET_ACTIVE_WINDOW", atomWindow, winLast)
 			f.notify(root, "_NET_ACTIVE_WINDOW")

@@ -81,8 +81,10 @@ func (w *x11Focus) setup(timeout time.Duration) error {
 	if err != nil {
 		return err
 	}
-	w.ewmh = ok
-	w.dirty = ok
+	// A PropertyNotify during the check may have set both already.
+	if ok {
+		w.ewmh, w.dirty = true, true
+	}
 	return w.c.conn.SetDeadline(time.Time{})
 }
 
