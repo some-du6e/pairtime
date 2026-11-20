@@ -222,6 +222,33 @@ func missingDirs(dir string) []string {
 	return out
 }
 
+// notThere returns pairtime's data and config directories, the folder of
+// its binary, and the folders above them, that aren't there, outermost
+// first. install and uninstall take it before anything else, since even
+// planning makes the data directory, for the installer's lock file
+// (install.Installer.LockFile).
+func notThere(env install.Env, dirs home.Dirs) []string {
+	var missing []string
+	for _, d := range []string{dirs.Data, dirs.Config, filepath.Dir(env.Exe)} {
+		missing = addMade(missing, missingDirs(d))
+	}
+	return missing
+}
+
+// tidy takes away what a command that changed nothing made anyway, given
+// missing, what notThere said before it began: in a data directory that
+// wasn't there, the installer's lock file, which planning makes, and the
+// agent's, which looking for an agent makes, then each folder of missing
+// that is empty by then.
+func tidy(in *install.Installer, dirs home.Dirs, missing []string) {
+	if slices.Contains(missing, dirs.Data) {
+		os.Remove(in.LockFile())
+		os.Remove(filepath.Join(dirs.Data, "agent.lock"))
+		os.Remove(in.Dir)
+	}
+	removeEmptyDirs(missing)
+}
+
 // addMade returns made with each of more it lacks, outermost first.
 func addMade(made, more []string) []string {
 	for _, d := range more {

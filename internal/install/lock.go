@@ -32,3 +32,10 @@ func (in *Installer) lock() (func() error, error) {
 	}
 	return lockFile(in.lockPath())
 }
+
+// LockFile is the install lock's file. Planning makes it, with pairtime's
+// data directory if that isn't there yet, and it stays after Apply and
+// Close. A command that ends up changing nothing, such as a dry run or an
+// install the teen declined, deletes it when the data directory wasn't
+// there before the command began, so that it leaves nothing behind.
+func (in *Installer) LockFile() string { return in.lockPath() }

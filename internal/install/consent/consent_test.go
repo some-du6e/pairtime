@@ -130,7 +130,7 @@ func TestCards(t *testing.T) {
 			}},
 		{"the hooks card carries the self-test's time as its cost line", []string{".claude"},
 			func(t *testing.T, s *Screen, shown string) {
-				if !strings.Contains(shown, "a test call just now took 12 ms") {
+				if !strings.Contains(strings.Join(strings.Fields(shown), " "), "a test call just now took 12 ms") {
 					t.Errorf("the screen has no cost line:\n%s", shown)
 				}
 			}},

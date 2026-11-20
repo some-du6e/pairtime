@@ -120,6 +120,16 @@ func runInstall(args []string, stdout, stderr io.Writer) int {
 		return fail(err)
 	}
 	in := install.New(dirs)
+	// Planning makes the data directory, for the installer's lock, so what
+	// isn't there has to be known first: setup.json records it once install
+	// changes something, and until then tidy takes it away again.
+	missing := notThere(env, dirs)
+	changed := false
+	defer func() {
+		if !changed {
+			tidy(in, dirs, missing)
+		}
+	}()
 
 	// 1. What there is, and what install would change.
 	harnesses := install.Detect(env)
@@ -205,7 +215,8 @@ func runInstall(args []string, stdout, stderr io.Writer) int {
 			restart = true
 		}
 	}
-	if err := makeHome(env, dirs); err != nil {
+	changed = true
+	if err := makeHome(env, dirs, missing); err != nil {
 		return fail(err)
 	}
 	if !same {
@@ -278,15 +289,11 @@ func runInstall(args []string, stdout, stderr io.Writer) int {
 }
 
 // makeHome makes pairtime's directories and the folder of its binary, and
-// records in setup.json each folder that wasn't there, for uninstall to
-// take away. The data and config directories are made by home first, so
+// records in setup.json each folder of made, which weren't there when
+// install began (notThere), for uninstall to take away. The data and config directories are made by home first, so
 // they are this user's only (DESIGN 3.5), and on Windows the binary's
 // folder inside the data directory inherits that.
-func makeHome(env install.Env, dirs home.Dirs) error {
-	var made []string
-	for _, d := range []string{dirs.Data, dirs.Config, filepath.Dir(env.Exe)} {
-		made = addMade(made, missingDirs(d))
-	}
+func makeHome(env install.Env, dirs home.Dirs, made []string) error {
 	if err := dirs.Create(); err != nil {
 		return err
 	}

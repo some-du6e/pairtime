@@ -128,7 +128,10 @@ func newTestHome(t *testing.T, hookMode string) *testHome {
 	switch runtime.GOOS {
 	case "windows":
 		local, roaming := filepath.Join(h.home, "AppData", "Local"), filepath.Join(h.home, "AppData", "Roaming")
-		for _, d := range []string{local, roaming} {
+		// Windows PowerShell, which deletes a binary that uninstall ran
+		// from, keeps a startup cache here (psCache), as it does for any
+		// user who runs it.
+		for _, d := range []string{local, roaming, filepath.Join(local, psCacheDir)} {
 			if err := os.MkdirAll(d, 0o700); err != nil {
 				t.Fatal(err)
 			}
@@ -256,6 +259,9 @@ func (h *testHome) snapshot() map[string]string {
 			return err
 		}
 		rel, _ := filepath.Rel(h.root, p)
+		if isPSCache(rel) {
+			return nil
+		}
 		info, err := d.Info()
 		if err != nil {
 			return err
@@ -286,6 +292,19 @@ func (h *testHome) snapshot() map[string]string {
 		m[`HKCU\`+install.RunKey+`\`+install.RunValue] = v
 	}
 	return m
+}
+
+// psCacheDir is where in LOCALAPPDATA Windows PowerShell keeps the cache
+// it writes at every start, StartupProfileData-NonInteractive among them.
+// It is PowerShell's file, in every account that has run PowerShell, so
+// the snapshots leave it out.
+var psCacheDir = filepath.Join("Microsoft", "Windows", "PowerShell")
+
+// isPSCache reports whether rel, a path in a test's folders, is one of
+// PowerShell's startup caches.
+func isPSCache(rel string) bool {
+	return runtime.GOOS == "windows" && strings.HasPrefix(filepath.Base(rel), "StartupProfileData-") &&
+		strings.HasSuffix(filepath.Dir(rel), psCacheDir)
 }
 
 // changes lists how after differs from before, one path a line.

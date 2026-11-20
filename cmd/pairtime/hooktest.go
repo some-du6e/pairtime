@@ -116,13 +116,20 @@ func hookTest(exe string) (took time.Duration, err error) {
 	start := time.Now()
 	runErr := cmd.Run()
 	took = time.Since(start)
+	// The agent acks a message once it has it, and the hook exits after
+	// the ack, so a hook that exited 0 has handed its event over by now,
+	// or spooled it. The wait is for one whose ack came too late.
+	wait := time.Second
+	if runErr != nil {
+		wait = 0
+	}
 	select {
 	case m := <-got:
 		reached = true
 		if err := checkHookMessage(m); err != nil {
 			return 0, err
 		}
-	case <-time.After(time.Second):
+	case <-time.After(wait):
 	}
 	switch {
 	case ctx.Err() != nil:

@@ -112,6 +112,13 @@ func runUninstall(args []string, stdout, stderr io.Writer) int {
 		}
 	}
 	in := install.New(dirs)
+	// Planning makes the data directory, for the installer's lock, so what
+	// is there has to be known first, and tidy takes away again what
+	// uninstall made of it.
+	missing := notThere(env, dirs)
+	data := existing(dirs.Data, dirs.Config)
+	running := agentLocked(dirs)
+	defer tidy(in, dirs, missing)
 	p, err := in.PlanUninstall(items...)
 	if err != nil {
 		return fail(err)
@@ -123,8 +130,6 @@ func runUninstall(args []string, stdout, stderr io.Writer) int {
 			binaries = append(binaries, b)
 		}
 	}
-	data := existing(dirs.Data, dirs.Config)
-	running := agentLocked(dirs)
 	if p.Empty() && len(p.Problems) == 0 && len(binaries) == 0 && len(data) == 0 && !running {
 		fmt.Fprintln(stdout, "pairtime isn't installed here, so there is nothing to take out.")
 		return 0
@@ -164,17 +169,25 @@ func runUninstall(args []string, stdout, stderr io.Writer) int {
 
 	// The agent, then the binary and the data, with the agent's lock held
 	// so that a hook already on its way can't start an agent in between.
-	if err := stopAgent(dirs); err != nil {
-		return fail(err)
+	// One that started before the hooks came out is stopped too.
+	var lock *home.Lock
+	for try := 0; ; try++ {
+		if err := stopAgent(dirs); err != nil {
+			return fail(err)
+		}
+		info, err := os.Stat(dirs.Data)
+		if err != nil || !info.IsDir() {
+			break
+		}
+		if lock, err = home.Acquire(dirs.Data); err == nil {
+			break
+		}
+		if !errors.Is(err, home.ErrLocked) || try == 2 {
+			return fail(fmt.Errorf("pairtime's agent keeps starting again (%v); run pairtime uninstall again", err))
+		}
 	}
 	if running {
 		fmt.Fprintln(stdout, "Stopped pairtime's agent.")
-	}
-	var lock *home.Lock
-	if info, err := os.Stat(dirs.Data); err == nil && info.IsDir() {
-		if lock, err = home.Acquire(dirs.Data); err != nil {
-			return fail(fmt.Errorf("an agent started again while uninstall ran (%v); run pairtime uninstall again", err))
-		}
 	}
 	release := func() {
 		if lock != nil {
