@@ -166,20 +166,25 @@ func addDirs(dirs, more []string) []string {
 	return dirs
 }
 
-// makeDirs makes dirs, outermost first. A real directory that is already
-// there is fine; anything else at its name is an error.
-func makeDirs(dirs []string) error {
+// makeDirs makes dirs, outermost first, and returns those that were there
+// already: someone else made them since the plan, such as the desktop
+// making ~/.config/autostart while the teen read the consent screen, so
+// they aren't pairtime's. A real directory that is already there is fine;
+// anything else at its name is an error.
+func makeDirs(dirs []string) ([]string, error) {
+	var existed []string
 	for _, d := range dirs {
 		err := os.Mkdir(d, newDirMode)
 		if errors.Is(err, fs.ErrExist) {
 			if info, lerr := os.Lstat(d); lerr == nil && info.Mode().Type() == fs.ModeDir {
+				existed = append(existed, d)
 				continue
 			}
-			return fmt.Errorf("%s was made since the plan, and isn't a folder", d)
+			return existed, fmt.Errorf("%s was made since the plan, and isn't a folder", d)
 		}
 		if err != nil {
-			return err
+			return existed, err
 		}
 	}
-	return nil
+	return existed, nil
 }

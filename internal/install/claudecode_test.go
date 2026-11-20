@@ -703,6 +703,52 @@ func TestInstallMakesFoldersAndUninstallRemovesThem(t *testing.T) {
 	}
 }
 
+func TestApplyRecordsOnlyTheFoldersItMakes(t *testing.T) {
+	autostart := filepath.Join(".config", "autostart")
+	tests := []struct {
+		name string
+		// made are the folders, under the home directory, that the teen
+		// makes between planning and Apply, outermost first.
+		made []string
+		// gone are the folders uninstall takes away: those Apply made.
+		gone []string
+	}{
+		{"folders the teen made between planning and Apply stay at uninstall", []string{".config", autostart}, nil},
+		{"a folder the teen made between planning and Apply stays at uninstall, and the one Apply made in it goes", []string{".config"}, []string{autostart}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			env := testEnv(t, "linux", nil)
+			item, err := Autostart(env)
+			if err != nil {
+				t.Fatal(err)
+			}
+			in := newInstaller(t)
+			p, err := in.PlanInstall([]Item{item})
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, d := range tt.made {
+				if err := os.Mkdir(filepath.Join(env.Home, d), 0o755); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := p.Apply(); err != nil {
+				t.Fatalf("Apply: %v", err)
+			}
+			uninstall(t, in)
+			for _, d := range tt.gone {
+				checkGone(t, filepath.Join(env.Home, d), "the folder Apply made")
+			}
+			for _, d := range tt.made {
+				if info, err := os.Stat(filepath.Join(env.Home, d)); err != nil || !info.IsDir() {
+					t.Errorf("uninstall took away %s, which the teen made: %v", d, err)
+				}
+			}
+		})
+	}
+}
+
 func TestReinstallAfterAnotherToolChangedTheFile(t *testing.T) {
 	tests := []struct {
 		name   string

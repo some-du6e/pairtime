@@ -653,8 +653,21 @@ func (p *Plan) Apply() error {
 		} else if !cur.unchanged(c.Before) {
 			return fmt.Errorf("%s %w", c.Target, ErrStale)
 		}
-		if err := makeDirs(c.mkdirs); err != nil {
+		existed, err := makeDirs(c.mkdirs)
+		if err != nil {
 			return err
+		}
+		if rec := p.manifest.find(c.Target); len(existed) > 0 && rec != nil {
+			// The manifest, written before the folders were made, names
+			// these as pairtime's. They aren't, so uninstall mustn't take
+			// them away: it stops naming them before the target is written.
+			rec.Dirs = slices.DeleteFunc(rec.Dirs, func(d string) bool { return slices.Contains(existed, d) })
+			if data, err = encodeManifest(p.manifest); err != nil {
+				return err
+			}
+			if err := in.writeManifest(data, ""); err != nil {
+				return err
+			}
 		}
 		if err := in.write(c.Target, c.After); err != nil {
 			return fmt.Errorf("writing %s: %w", c.Target, err)
