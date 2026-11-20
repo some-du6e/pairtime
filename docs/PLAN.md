@@ -302,15 +302,15 @@ Exit check: `e2e-install.yml` green on three runners; SM 6.1, 6.2, 6.3, 6.4 and 
 
 - Depends on: WP-AG1.
 - Touches: `internal/platform/{windows,darwin,linux}/`, `internal/agent/procs/`, `internal/platform/appclass.json`.
-- Build: a process-table reader per OS (Toolhelp32 and `QueryFullProcessImageNameW`; `sysctl` and `libproc` through purego; `/proc`); the parent chain of a pid with executable names and start times; SM 2.2 rule 4's `parent_class` classifier, which skips shells; the app-class table as data shared by all three OSes (terminal, editor, agent_app, browser, chat_app, other), each entry citing HS or CP; and the `procs` scanner (`PROC_SCAN_S`), which emits `session.start` for harness processes that fire no hooks (`claude --bare`, `claude -p`, `codex exec`) with `entrypoint` and `has_tty` (DESIGN 3.3).
+- Build: a process-table reader per OS (Toolhelp32 and `QueryFullProcessImageNameW`; `sysctl` and `libproc` through purego; `/proc`); the parent chain of a pid with executable names and start times; SM 2.2 rule 4's `parent_class` classifier, which skips shells; the app-class table as data shared by all three OSes (terminal, editor, agent_app, browser, chat_app, other), each entry citing HS or CP; and the `procs` scanner (`PROC_SCAN_S`), which emits `session.start` for harness processes that fire no hooks (`claude --bare`, `claude -p`, `codex exec`) with `entrypoint` and `has_tty` (DESIGN 3.3). The scanner also gives `presence.Sampler.HarnessProcesses` (WP-OS1) its count of harness session processes after each scan, which keeps a project context live while one runs (DESIGN 3.3); whichever of this WP and WP-OS1 merges second does that wiring.
 - CI checks: real child chains spawned by the test (`python3` to `bash` to a stub classifies `script_runtime`; a shell alone does not) on Linux in `ci.yml` and on Windows and macOS in `platform.yml`; a golden classifier test over recorded process tables for SM 6.6 and its three variants.
 - Oracle: real processes; SM 2.2 rule 4 and SM 6.6.
 
 ### WP-AG3. `pairtime hook`, the fast path
 
-- Depends on: WP-AG2, WP-OS6.
+- Depends on: WP-AG2, WP-OS6, WP-OS1.
 - Touches: `cmd/pairtime/`, `internal/agent/hookpath/`, `.github/workflows/footprint.yml`.
-- Build: `pairtime hook --harness <h> --event <e>` as CP 6.2 and DESIGN 3.2 describe: read stdin up to 1 MiB, stamp wall time, monotonic time and boot id, capture the raw parent chain (WP-OS6), send one frame with a 100 ms timeout, otherwise append one inbox line and start the agent detached (`DETACHED_PROCESS` on Windows, `setsid` elsewhere), always exit 0 and print nothing. `track` and `emit` reuse this path later (WP-AD18, WP-AD19).
+- Build: `pairtime hook --harness <h> --event <e>` as CP 6.2 and DESIGN 3.2 describe: read stdin up to 1 MiB, stamp wall time, monotonic time and boot id, capture the raw parent chain (WP-OS6), send one frame with a 100 ms timeout, otherwise append one inbox line and start the agent detached (`DETACHED_PROCESS` on Windows, `setsid` elsewhere), always exit 0 and print nothing. `track` and `emit` reuse this path later (WP-AD18, WP-AD19). In the agent, each hook and track message also goes to `presence.Sampler.Hook` (WP-OS1) with its session key and kind, so a prompt gets the sample SM 2.2 rule 6 reads and turns set D14's cadence.
 - CI checks: `footprint.yml` adds hook p95 under 25 ms over 200 warm calls on `windows-latest`, which DESIGN 9.7 sets at half the R8 claim (the 50 ms claim on a 2016 laptop is a 1.0 gate, WP-RL9); with the agent stopped, one call appends one line and exits 0; 2 MiB of stdin is cut at 1 MiB and still exits 0; malformed stdin exits 0 with empty stdout and stderr.
 - Oracle: timing measured by the workflow around the process; Claude Code's hook contract (exit code 2 blocks, stdout is parsed as JSON; CP 6.2).
 
@@ -326,7 +326,7 @@ Exit check: `e2e-install.yml` green on three runners; SM 6.1, 6.2, 6.3, 6.4 and 
 
 - Depends on: WP-OS1, WP-OS6.
 - Touches: `internal/platform/windows/`, `internal/agent/focus/`.
-- Build: `SetWinEventHook(EVENT_SYSTEM_FOREGROUND)` on a locked OS thread with its own message loop; `app_class` from the shared table; `hosted_sessions` from the focused window's process tree (WP-OS6); `os.focus` events. Window titles are never read (DESIGN 3.3).
+- Build: `SetWinEventHook(EVENT_SYSTEM_FOREGROUND)` on a locked OS thread with its own message loop; `app_class` from the shared table; `hosted_sessions` from the focused window's process tree (WP-OS6); `os.focus` events. Window titles are never read (DESIGN 3.3). Each focus change also goes to `presence.Sampler.Focus` with its `app_class`, which is what makes a focused terminal, editor or agent app a project context (DESIGN 3.3).
 - CI checks: injected-fake tests on `windows-latest` turning a sequence of foreground changes into the expected `os.focus` events; no test moves real focus (JE must-fix 11).
 - Oracle: SM 3.2's hosting rule; the shared app-class table.
 
@@ -356,9 +356,9 @@ Exit check: `e2e-install.yml` green on three runners; SM 6.1, 6.2, 6.3, 6.4 and 
 
 ### WP-LG5. Ledger writer
 
-- Depends on: WP-LG2, WP-AG1, WP-OS7.
+- Depends on: WP-LG2, WP-AG1, WP-OS7, WP-OS1.
 - Touches: `internal/agent/ledger/`.
-- Build: `ledger/YYYY-MM-DD.seg` with length-prefixed `{hdr, body}` records and `ledger/batches.seg` (DESIGN 3.5, 3.6); bodies from `Event.Shareable()`; sealing every `BATCH_S` while there are new records and at once on lock, suspend, prompt and stop; a gapless per-device `seq`; recovery of a torn tail at start; one fsync per seal, which suits a spinning disk; APIs for upload-failure notes (rtype 0x41, used by WP-AG5) and scorer checkpoints (rtype 0x40, used by WP-SC5). Race: yes.
+- Build: `ledger/YYYY-MM-DD.seg` with length-prefixed `{hdr, body}` records and `ledger/batches.seg` (DESIGN 3.5, 3.6); bodies from `Event.Shareable()`; sealing every `BATCH_S` while there are new records and at once on lock, suspend, prompt and stop; a gapless per-device `seq`; recovery of a torn tail at start; one fsync per seal, which suits a spinning disk; APIs for upload-failure notes (rtype 0x41, used by WP-AG5) and scorer checkpoints (rtype 0x40, used by WP-SC5); and presence's wiring (WP-OS1): the writer takes its `os.presence` and `os.power` records through `presence.Options.Record` and seals at once on `presence.Options.Seal`. Race: yes.
 - CI checks: a crash loop kills the writer at random points 200 times on Linux (`ci.yml`) and Windows (`platform.yml`); after every restart `pkg/ledger` verifies the chain, `seq` has no gap apart from a truncated tail, no sealed batch changed, and `tools/ledger_ref.py check` agrees.
 - Oracle: `pkg/ledger` verification and the Python reference.
 
@@ -366,7 +366,7 @@ Exit check: `e2e-install.yml` green on three runners; SM 6.1, 6.2, 6.3, 6.4 and 
 
 - Depends on: WP-SC4, WP-LG5, WP-AG2.
 - Touches: `internal/agent/scorer/`, `internal/agent/store/`.
-- Build: step `pkg/score` every 60 s and after each prompt or stop hook over new ledger records; write `buckets/YYYY-MM-DD.jsonl` with revisions and `days/YYYY-MM-DD.json` rollups (DESIGN 3.5); keep scorer state and the project map in `state.json` and rebuild both from the ledger when it is missing. Add `display.shadow` (DESIGN 6.7 step 2): when on, every view shows credited totals as "calibrating" and keeps moments, loops and the agent's time. Calibration volunteers get it on from 12-01 until the scoring freeze, through `pairtime install --calibration-volunteer`; other alpha testers get it off.
+- Build: step `pkg/score` every 60 s and after each prompt or stop hook over new ledger records; write `buckets/YYYY-MM-DD.jsonl` with revisions and `days/YYYY-MM-DD.json` rollups (DESIGN 3.5); keep scorer state and the project map in `state.json` and rebuild both from the ledger when it is missing. Add `display.shadow` (DESIGN 6.7 step 2): when on, every view shows credited totals as "calibrating" and keeps moments, loops and the agent's time. Calibration volunteers get it on from 12-01 until the scoring freeze, through `pairtime install --calibration-volunteer`; other alpha testers get it off. Give presence (WP-OS1) the parameter table the scorer runs with, as `presence.Options.Params`, so the sampler slows down where the scorer expects it to (D14).
 - CI checks: the 6.2 fixture's events sent through the socket produce the same buckets as calling `pkg/score` directly; deleting `state.json` and restarting rebuilds identical buckets; `kill -9` mid-run loses nothing.
 - Oracle: `pkg/score` output on the SM fixtures, which is itself checked against SM.
 
