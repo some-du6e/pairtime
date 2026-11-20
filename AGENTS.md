@@ -22,7 +22,8 @@ A change is done when every workflow its PR started is green. A WP marked "Race:
 | postgres.yml | the server tests on Postgres 18 as well as SQLite | PRs touching its paths, the packages that hold SQL; daily, 03:30 UTC |
 | web.yml | npm licenses, svelte-check, vitest, the UI build and the notices of the npm code in it, Playwright on Chromium against a `pairtime agent` built with that UI embedded, and SPDX headers | PRs touching web/, extension/, internal/webui/, docs/api/, tools/release/extra-notices.txt, or the agent code the smoke test runs (internal/agent/, internal/version/, cmd/pairtime/); release tags |
 | objstore.yml | the object storage client against a MinIO service container | PRs touching internal/server/objstore/, weekly |
-| release.yml | the seven targets' archives, checksums.txt and the signed manifest.json | release tags, signed with the release key and published; PRs touching internal/release or tools/release, as a snapshot signed with a throwaway key and never published |
+| release.yml | the seven targets' archives, checksums.txt, the signed manifest.json and the install scripts | release tags, signed with the release key and published; PRs touching internal/release or tools/release, as a snapshot signed with a throwaway key and never published |
+| e2e-install.yml | install.sh on Linux and macOS and install.ps1 on Windows, against a snapshot release built like release.yml's and broken copies of it | PRs touching install/, internal/install/, internal/release/ or tools/release/; release tags |
 | tidy.yml | `go mod tidy` and npm lockfiles, committed to the branch | by hand |
 | fixtures.yml | the fixture provenance check | by hand |
 
