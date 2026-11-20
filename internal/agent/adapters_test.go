@@ -426,6 +426,7 @@ func TestHookCallsBeforeTheKeystore(t *testing.T) {
 			}
 			prompt = payload.PromptID
 			_, heldErr := os.Stat(r.dirs.Held())
+			_, replayErr := os.Stat(r.dirs.Held() + ".replay")
 			checks := []struct {
 				name string
 				ok   bool
@@ -441,7 +442,8 @@ func TestHookCallsBeforeTheKeystore(t *testing.T) {
 					})},
 				{"the prompt's turn_key is its prompt_id's under this installation's K_session, and not FixtureKeys'",
 					p.TurnKey == mine.Turn(captureSession, prompt) && p.TurnKey != public.Turn(captureSession, prompt)},
-				{"no held call is left on disk", errors.Is(heldErr, fs.ErrNotExist)},
+				{"no held call is left on disk, in held.jsonl or the file its replay renames it to",
+					errors.Is(heldErr, fs.ErrNotExist) && errors.Is(replayErr, fs.ErrNotExist)},
 			}
 			for _, ch := range checks {
 				t.Run(ch.name, func(t *testing.T) {

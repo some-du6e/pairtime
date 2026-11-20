@@ -41,6 +41,11 @@ const adaptersKey = "adapters"
 // tail is about as long (BATCH_S).
 const adaptersSaveEvery = time.Minute
 
+// keyRetry is how often the adapters try again to derive their keys when
+// the device key couldn't be read for them, as after a dismissed keyring
+// prompt: each try may ask the person again.
+const keyRetry = time.Minute
+
 // adapterHost runs the harness adapters inside the agent (WP-AG7; DESIGN
 // 3.3, 3.4). The hook sink hands it every hook call it stored (hooks.go),
 // and it does the rest on a goroutine of its own, off the hook's ack path:
@@ -63,6 +68,10 @@ const adaptersSaveEvery = time.Minute
 // held stays under inbox.MaxSpool. The calls are parsed in the order the
 // agent took them in once the keys and the writer are there, in this run
 // or, after a stop, in the next.
+//
+// A call is acked once the journal has its id and the host its copy in
+// memory, and the worker parses or holds it moments later. An agent killed
+// in between loses it, as a crash loses the ledger's unsealed records.
 type adapterHost struct {
 	a    *agent
 	goos string
@@ -70,6 +79,7 @@ type adapterHost struct {
 	mu      sync.Mutex
 	queue   []inbox.Delivery // calls stored and not yet taken, oldest first
 	keys    *adapterKeys     // from the keystore, once it opened (keyAdapters)
+	ks      *keys.Keystore   // the keystore, to derive them again from
 	writer  *ledger.Writer   // once the ledger is open (attach)
 	closed  bool
 	started bool
@@ -86,8 +96,10 @@ type adapterHost struct {
 
 	// The rest belong to the worker goroutine, and to close once the
 	// worker is gone.
-	ready    bool // the adapters and the git host are made
-	replayed bool // held.jsonl was read, and nothing has been held since
+	ready    bool      // the adapters and the git host are made
+	replayed bool      // held.jsonl was read, and nothing has been held since
+	replayAt int64     // how far into the .replay file the calls are parsed
+	keyTried time.Time // the last try at deriving the keys again
 	built    map[event.Harness]adapters.Adapter
 	ignored  bool // the call being parsed ran in a folder out of pairtime
 	memory   adaptersState
@@ -195,24 +207,38 @@ func (a *agent) startAdapters() func() {
 }
 
 // keyAdapters derives the adapters' keys from the device key, for the
-// adapter host. openLedger calls it once the keystore has opened. If it
-// fails, calls wait for a later open.
+// adapter host, and keeps the keystore to derive them again from.
+// openLedger calls it once the keystore has opened. WithDeviceKey reads
+// K_dev from the OS's store each time, and when that fails the host tries
+// again every keyRetry (prepare).
 func (a *agent) keyAdapters(ks *keys.Keystore) {
-	var k adapterKeys
+	h := a.adaptersHost()
+	k, err := deriveAdapterKeys(ks)
+	h.mu.Lock()
+	h.ks = ks
+	if err == nil {
+		h.keys = k
+	}
+	h.mu.Unlock()
+	if err != nil {
+		a.log.Warn("hook calls wait unparsed, because the adapters' keys couldn't be derived", "err", err)
+		a.setProblem("adapters.keys", fmt.Sprintf("hook calls wait unparsed, because the device key couldn't be read for the adapters' keys, and the agent tries again: %v", err))
+	}
+}
+
+// deriveAdapterKeys derives K_project from the device key and takes K_feat
+// from the keystore's ledger keys.
+func deriveAdapterKeys(ks *keys.Keystore) (*adapterKeys, error) {
+	k := &adapterKeys{feat: ks.Keys().Features()}
 	err := ks.WithDeviceKey(func(kDev []byte) error {
 		var err error
 		k.project, err = projectSecret(kDev)
 		return err
 	})
 	if err != nil {
-		a.log.Warn("hook calls wait unparsed, because the adapters' keys couldn't be derived", "err", err)
-		return
+		return nil, err
 	}
-	k.feat = ks.Keys().Features()
-	h := a.adaptersHost()
-	h.mu.Lock()
-	h.keys = &k
-	h.mu.Unlock()
+	return k, nil
 }
 
 // attach gives the host the ledger writer, once it is open (startLedger).
@@ -276,6 +302,7 @@ func (h *adapterHost) close() {
 
 func (h *adapterHost) run() {
 	defer close(h.done)
+	h.countHeld()
 	for {
 		select {
 		case <-h.kick:
@@ -333,10 +360,36 @@ func (h *adapterHost) prepare() bool {
 		return true
 	}
 	h.mu.Lock()
-	k, w := h.keys, h.writer
+	k, w, ks := h.keys, h.writer, h.ks
 	h.mu.Unlock()
-	if k == nil || w == nil || k.feat == nil || len(h.a.sessionSecret()) != hookpath.SessionSecretLen {
+	if w == nil || ks == nil {
 		return false
+	}
+	if k == nil || len(h.a.sessionSecret()) != hookpath.SessionSecretLen {
+		// The keystore opened, and the ledger with it, but reading K_dev
+		// for these keys failed: try again, now and then.
+		if time.Since(h.keyTried) < keyRetry {
+			return false
+		}
+		h.keyTried = time.Now()
+		if k == nil {
+			var err error
+			if k, err = deriveAdapterKeys(ks); err != nil {
+				h.a.setProblem("adapters.keys", fmt.Sprintf("hook calls wait unparsed, because the device key couldn't be read for the adapters' keys, and the agent tries again: %v", err))
+				return false
+			}
+			h.mu.Lock()
+			h.keys = k
+			h.mu.Unlock()
+		}
+		if len(h.a.sessionSecret()) != hookpath.SessionSecretLen {
+			h.a.keySessions(ks)
+			if len(h.a.sessionSecret()) != hookpath.SessionSecretLen {
+				h.a.setProblem("adapters.keys", "hook calls wait unparsed, because the device key couldn't be read for K_session, and the agent tries again")
+				return false
+			}
+		}
+		h.a.setProblem("adapters.keys", "")
 	}
 	if g, err := newGitHost(h.a, k.project, w); err != nil {
 		h.a.setProblem("git", fmt.Sprintf("no commit is recorded and no folder becomes a project, because the git adapter couldn't start: %v", err))
@@ -454,6 +507,12 @@ func (h *adapterHost) handle(d inbox.Delivery) {
 	}
 	if h.ignored {
 		h.count(func() { st.Ignored++ })
+		// Its session's window shows no project any more (focus_project).
+		for _, r := range recs {
+			if k := r.Event.SessionKey; k != "" && k != event.NoSession && h.a.hooked.dropProject(k) {
+				h.a.refreshFocus()
+			}
+		}
 		return
 	}
 	for _, r := range recs {
@@ -476,7 +535,7 @@ func (h *adapterHost) write(st *harnessStats, r adapters.Record) {
 			st.WriteFailures++
 			st.LastFailure = clip(fmt.Sprintf("the ledger refused a %s record: %v", ev.Kind(), err))
 		})
-		h.a.setProblem("adapters", fmt.Sprintf("the ledger refused a %s record of a hook call: %v", ev.Kind(), err))
+		h.a.setProblem("adapters.ledger", fmt.Sprintf("the ledger refused a %s record of a hook call: %v", ev.Kind(), err))
 		return
 	}
 	h.count(func() {
@@ -651,7 +710,7 @@ func (h *adapterHost) hold(calls []inbox.Delivery) {
 	}
 }
 
-// heldLine is d as a line of held.jsonl.
+// heldLine is d as a line of held.jsonl, with a newline on each side.
 func heldLine(d inbox.Delivery) ([]byte, error) {
 	m, err := d.Message.Encode()
 	if err != nil {
@@ -662,7 +721,13 @@ func heldLine(d inbox.Delivery) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	return append(b, '\n'), nil
+	// A newline before it as well as after, as the inbox's spool has: a
+	// line a full disk or a power cut left short then can't take the next
+	// call with it.
+	line := make([]byte, 0, len(b)+2)
+	line = append(line, '\n')
+	line = append(line, b...)
+	return append(line, '\n'), nil
 }
 
 func (h *adapterHost) dropHeld(n int, err error) {
@@ -671,7 +736,7 @@ func (h *adapterHost) dropHeld(n int, err error) {
 	dropped := h.dropped
 	h.mu.Unlock()
 	h.a.log.Warn("hook calls that wait for the ledger couldn't be held", "calls", n, "err", err)
-	h.a.setProblem("adapters", fmt.Sprintf("%d hook calls that waited for the ledger to open were lost: %v", dropped, err))
+	h.a.setProblem("adapters.held", fmt.Sprintf("%d hook calls that waited for the ledger to open were lost: %v", dropped, err))
 }
 
 // replayHeld parses the calls held.jsonl holds, oldest first, then seals
@@ -712,10 +777,23 @@ func (h *adapterHost) replayFile(name string) (read, gone bool) {
 		h.a.log.Warn("the held hook calls can't be read", "err", err)
 		return false, false
 	}
+	// A read that failed partway resumes after the last call it parsed,
+	// so none is parsed twice in a run.
+	if _, err := f.Seek(h.replayAt, io.SeekStart); err != nil {
+		h.a.log.Warn("the held hook calls can't be read", "err", err)
+		f.Close()
+		return false, false
+	}
 	n, bad := 0, 0
 	r := bufio.NewReader(f)
 	for {
 		line, err := r.ReadBytes('\n')
+		if err != nil && !errors.Is(err, io.EOF) {
+			h.a.log.Warn("reading the held hook calls stopped early", "err", err)
+			f.Close()
+			h.count(func() { h.held = max(h.held-n-bad, 0) })
+			return false, false
+		}
 		if len(bytes.TrimSpace(line)) > 0 {
 			if d, ok := readHeld(line); ok {
 				h.handle(d)
@@ -724,19 +802,15 @@ func (h *adapterHost) replayFile(name string) (read, gone bool) {
 				bad++
 			}
 		}
+		h.replayAt += int64(len(line))
 		if err != nil {
-			if !errors.Is(err, io.EOF) {
-				h.a.log.Warn("reading the held hook calls stopped early", "err", err)
-				f.Close()
-				return false, false
-			}
-			break
+			break // EOF
 		}
 	}
 	f.Close()
 	h.mu.Lock()
 	w := h.writer
-	h.held = 0
+	h.held = max(h.held-n-bad, 0)
 	h.mu.Unlock()
 	if n > 0 {
 		// Their records are written; replaying the file again would write
@@ -753,10 +827,34 @@ func (h *adapterHost) replayFile(name string) (read, gone bool) {
 		// Replayed again, it would write its records twice in this run;
 		// left for the next start, it does at most once more.
 		h.a.log.Warn("couldn't delete the held hook calls once replayed", "err", err)
-		h.a.setProblem("adapters", fmt.Sprintf("the hook calls held while the ledger wasn't open were parsed, but couldn't be deleted, so the next start parses them again: %v", err))
+		h.a.setProblem("adapters.held", fmt.Sprintf("the hook calls held while the ledger wasn't open were parsed, but couldn't be deleted, so the next start parses them again: %v", err))
 		return true, false
 	}
+	h.replayAt = 0
 	return true, true
+}
+
+// countHeld counts the calls an earlier run left held, for the status.
+func (h *adapterHost) countHeld() {
+	n := 0
+	for _, name := range []string{h.a.dirs.Held() + ".replay", h.a.dirs.Held()} {
+		f, err := os.Open(name)
+		if err != nil {
+			continue
+		}
+		r := bufio.NewReader(f)
+		for {
+			line, err := r.ReadBytes('\n')
+			if len(bytes.TrimSpace(line)) > 0 {
+				n++
+			}
+			if err != nil {
+				break
+			}
+		}
+		f.Close()
+	}
+	h.count(func() { h.held += n })
 }
 
 // readHeld reads a line of held.jsonl.

@@ -272,6 +272,21 @@ func (t *hookTies) setProject(session, project string) bool {
 	return true
 }
 
+// dropProject forgets the project session works in, as when its folder
+// turns out of pairtime (DESIGN 8.8), and reports whether it had one.
+func (t *hookTies) dropProject(session string) bool {
+	if t == nil {
+		return false
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if _, ok := t.projects[session]; !ok {
+		return false
+	}
+	delete(t.projects, session)
+	return true
+}
+
 // runsLocked reports whether a process runs session. t.mu must be held.
 func (t *hookTies) runsLocked(session string) bool {
 	for _, s := range t.sessions {

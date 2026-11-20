@@ -34,10 +34,16 @@ const (
 // (DESIGN 3.3; git.Watcher.Poll).
 const gitPollEvery = time.Minute
 
-// trackWait bounds how long the adapters wait for a folder to resolve to
-// a project. The first sight of a big repo walks its history for the root
-// commits, and the call waits for that rather than go without its project.
-const trackWait = time.Minute
+// trackWait bounds how long a call waits for its folder to resolve to a
+// project. A folder resolves in a few git calls, well within it, and once
+// resolved its answer is cached. The first sight of a big repo can take
+// minutes, walking its whole history for the root commits; its calls then
+// go on without a project, and the walk goes on without them, for up to
+// trackLimit, so the session's later calls find its answer cached.
+const (
+	trackWait  = 3 * time.Second
+	trackLimit = 5 * time.Minute
+)
 
 // gitHost is the git adapter in the agent (DESIGN 5.8; PLAN WP-AD5,
 // WP-AG7). Its resolver turns each hooked session's folder into a project
@@ -65,11 +71,19 @@ type gitHost struct {
 	writer  *ledger.Writer
 	changes uint64 // git.change records written
 	saved   []byte // the project map and cursors as last put in state.json
+	// tracked are the git directories of the worktrees sessions worked in
+	// this run, which the watcher reads, and slow the folders whose first
+	// resolve outlasted trackWait and goes on (project).
+	tracked map[string]bool
+	slow    map[string]bool
+	// logged are the watcher's own problems as last logged.
+	logged map[string]string
 }
 
 // gitReply is the git adapter's part of GET /v1/status.
 type gitReply struct {
-	// Watched counts the worktrees whose reflog the watcher reads.
+	// Watched counts the worktrees sessions worked in this run whose
+	// reflog the watcher has read.
 	Watched int `json:"watched"`
 	// Changes counts the git.change records written since the start.
 	Changes uint64 `json:"changes"`
@@ -105,7 +119,7 @@ func newGitHost(a *agent, secret []byte, w *ledger.Writer) (*gitHost, error) {
 	if err != nil {
 		return nil, err
 	}
-	g := &gitHost{a: a, res: res, writer: w}
+	g := &gitHost{a: a, res: res, writer: w, tracked: make(map[string]bool), slow: make(map[string]bool)}
 	g.w, err = git.NewWatcher(git.WatcherOptions{
 		Resolver: res,
 		Sink:     g.sink,
@@ -124,22 +138,65 @@ func newGitHost(a *agent, secret []byte, w *ledger.Writer) (*gitHost, error) {
 	return g, nil
 }
 
+// tracked is what one Track gave.
+type tracked struct {
+	loc git.Location
+	err error
+}
+
 // project resolves dir, a session's working directory, to its project and
 // starts watching its repo, once. It reports whether dir has one, and
 // whether it is out of pairtime (a .pairtime-ignore, DESIGN 8.8). A folder
-// that is gone, or that git can't answer for in time, has no project for
-// this call, and the next call asks again.
+// that is gone has no project for this call, and the next call asks again.
+// One git can't answer for within trackWait has none yet either: its
+// resolve goes on, and until it ends the folder's calls don't wait again.
 func (g *gitHost) project(dir string) (p adapters.Project, ok, ignored bool) {
-	ctx, cancel := context.WithTimeout(context.Background(), trackWait)
-	defer cancel()
-	loc, err := g.w.Track(ctx, dir)
-	switch {
-	case errors.Is(err, git.ErrIgnored):
-		return adapters.Project{}, false, true
-	case err != nil || loc.Project == "":
+	g.mu.Lock()
+	slow := g.slow[dir]
+	g.mu.Unlock()
+	if slow {
 		return adapters.Project{}, false, false
 	}
-	return adapters.Project{Key: loc.Project, Root: loc.Dir}, true, false
+	done := make(chan tracked, 1)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), trackLimit)
+		defer cancel()
+		loc, err := g.w.Track(ctx, dir)
+		if err == nil && loc.GitDir != "" && !loc.Bare {
+			g.mu.Lock()
+			g.tracked[loc.GitDir] = true
+			g.mu.Unlock()
+		}
+		// Sent before slow is cleared: project then either takes the
+		// answer or marks the folder slow, and never leaves it marked.
+		done <- tracked{loc, err}
+		g.mu.Lock()
+		delete(g.slow, dir)
+		g.mu.Unlock()
+	}()
+	t := time.NewTimer(trackWait)
+	defer t.Stop()
+	var r tracked
+	select {
+	case r = <-done:
+	case <-t.C:
+		g.mu.Lock()
+		select {
+		case r = <-done:
+			g.mu.Unlock()
+		default:
+			g.slow[dir] = true
+			g.mu.Unlock()
+			return adapters.Project{}, false, false
+		}
+	}
+	switch {
+	case errors.Is(r.err, git.ErrIgnored):
+		return adapters.Project{}, false, true
+	case r.err != nil || r.loc.Project == "":
+		return adapters.Project{}, false, false
+	}
+	return adapters.Project{Key: r.loc.Project, Root: r.loc.Dir}, true, false
 }
 
 // noteCommand tells the watcher about the command an agent's bash call
@@ -161,16 +218,20 @@ func (g *gitHost) noteCommand(r adapters.Record, t *event.AgentTool) {
 // watcher gives it the envelope's t, source, harness, session and
 // project; the agent adds the rest: the id, via git, and the run's mono
 // and boot_id, as its other own events have them (ledger.RunClock). The
-// writer adds the device and the sequence number. The record is sealed at
-// once, so a cursor saved after it never runs ahead of the ledger.
+// mono is read now, from the clock presence's records are read from, less
+// how long ago t was by the wall clock: a few seconds of hold, which no
+// sleep or clock step falls in. The writer adds the device and the
+// sequence number. The record is sealed at once, so a cursor saved after
+// it never runs ahead of the ledger.
 func (g *gitHost) sink(c git.Change) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	ev := c.Event
-	at := time.UnixMilli(ev.T)
-	ev.EventID = event.NewEventID(at)
+	now := time.Now()
+	ev.EventID = event.NewEventID(time.UnixMilli(ev.T))
 	ev.Via = event.ViaGit
-	ev.Mono, ev.BootID = ledger.RunClock(at)
+	ev.Mono, ev.BootID = ledger.RunClock(now)
+	ev.Mono = max(ev.Mono-max(now.UnixMilli()-ev.T, 0), 0)
 	if _, err := g.writer.Write(ledger.Input{Event: ev}); err != nil {
 		g.a.log.Warn("the ledger refused a git.change record", "op", c.Op(), "err", err)
 		g.a.setProblem("git.ledger", fmt.Sprintf("the ledger refused a git.change record: %v", err))
@@ -205,27 +266,47 @@ func (g *gitHost) put() bool {
 	return true
 }
 
-// problems passes the watcher's problems on to doctor.
+// problems passes the watcher's problems on to doctor, in words of the
+// agent's own: the watcher's carry git's errors, whose stderr can name a
+// repo's folder (git.ExitError), and status and doctor show what they get.
+// The watcher's own words go to the agent's log, which stays on the device,
+// once each.
 func (g *gitHost) problems() {
 	ps := g.w.Problems()
 	msgs := make([]string, 0, len(ps))
 	for _, k := range slices.Sorted(maps.Keys(ps)) {
-		msgs = append(msgs, ps[k])
+		msgs = append(msgs, gitProblem(k))
+		if g.logged[k] != ps[k] {
+			g.a.log.Warn("the git adapter has a problem", "kind", k, "problem", ps[k])
+		}
 	}
+	g.logged = ps
 	g.a.setProblem("git", strings.Join(msgs, "; "))
+}
+
+// gitProblem is what doctor hears of a problem of the watcher's, by its
+// kind (git.Watcher.Problems).
+func gitProblem(kind string) string {
+	switch kind {
+	case "notify":
+		return "repos are looked at once a minute rather than watched, because file notifications didn't start"
+	case "scan":
+		return "reading a repo's reflog failed, and the agent tries again; its log says which repo"
+	}
+	return "the git adapter has a problem, and the agent's log says what"
 }
 
 // status is the git adapter's part of GET /v1/status.
 func (g *gitHost) status() gitReply {
-	r := gitReply{}
-	for _, st := range g.w.State().Worktrees {
-		if st.Cursor.Set {
+	worktrees := g.w.State().Worktrees
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	r := gitReply{Changes: g.changes}
+	for dir := range g.tracked {
+		if st, ok := worktrees[dir]; ok && st.Cursor.Set {
 			r.Watched++
 		}
 	}
-	g.mu.Lock()
-	r.Changes = g.changes
-	g.mu.Unlock()
 	return r
 }
 

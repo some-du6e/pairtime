@@ -315,6 +315,21 @@ func TestHookTies(t *testing.T) {
 				t.Error("tie reported news wrongly")
 			}
 		}},
+		{"a session gets a project only while a process runs it, a project is news once, and a dropped one is forgotten", func(t *testing.T, ties *hookTies) {
+			if ties.setProject("s1", "g1") || ties.projectOf("s1") != "" {
+				t.Error("a session no process runs got a project")
+			}
+			ties.tie(a, "s1")
+			if !ties.setProject("s1", "g1") || ties.setProject("s1", "g1") || !ties.setProject("s1", "g2") {
+				t.Error("setProject reported news wrongly")
+			}
+			if got := ties.projectOf("s1"); got != "g2" {
+				t.Errorf("project %q, want the newest, g2", got)
+			}
+			if !ties.dropProject("s1") || ties.dropProject("s1") || ties.projectOf("s1") != "" {
+				t.Error("dropProject didn't forget the project once")
+			}
+		}},
 		{"a session's end unties only that session from the process", func(t *testing.T, ties *hookTies) {
 			ties.tie(a, "s2")
 			ties.end(a, "s1")
