@@ -115,11 +115,13 @@ type agent struct {
 	keyStores   []keys.Store  // Options.KeyStores
 	ledgerRetry time.Duration // the first wait before the ledger opens again
 
-	// sessions are the dashboard's sign-ins (DESIGN 3.9), and days serves
-	// its data from the scorer's day rollups, which WP-AG4 hands it as an
-	// api.Store; until then it serves api.Empty.
+	// sessions are the dashboard's sign-ins (DESIGN 3.9), and views serves
+	// the tallies the dashboard and `pairtime today`, `recap` and
+	// `statusline` read, from the scorer's day rollups and work sessions,
+	// which WP-AG4 hands it as an api.Store. Until then it serves
+	// api.Empty.
 	sessions *localhttp.Sessions
-	days     *api.Server
+	views    *api.Server
 
 	stop     chan struct{} // closed when a client asks the agent to stop
 	stopOnce sync.Once
@@ -158,7 +160,7 @@ func Run(ctx context.Context, opts Options) error {
 		keyStores:   opts.KeyStores,
 		ledgerRetry: defaultLedgerRetry,
 		sessions:    localhttp.NewSessions(nil),
-		days:        api.New(api.Options{Log: log.With("component", "api")}),
+		views:       api.New(api.Options{Log: log.With("component", "api")}),
 	}
 	if opts.LedgerRetry > 0 {
 		a.ledgerRetry = opts.LedgerRetry

@@ -73,41 +73,33 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "403":
           $ref: "#/components/responses/Forbidden"
-  /v1/days:
+  /v1/days/{date}:
     get:
-      operationId: getDays
-      summary: Your time, day by day and project by project
+      operationId: getDay
+      summary: One local day, project by project
       description: >
-        The scorer's day rollups (DESIGN 3.5 `days/`, SM 5.3) for every
-        local day from `from` to `to`, both included, in the agent's time
-        zone. Without parameters it is this week: from Monday to today. The
-        dashboard reads it about once a minute while it is open, so
-        minutes that were pending become final on the page. The answer is
-        never cached. Until WP-AG4's stores serve it, every day is empty.
+        The scorer's rollup of one local day in the profile's time zone
+        (DESIGN 3.5 `days/`, SM 5.3), with a tally for each project that has
+        anything in it. `pairtime today` and `pairtime statusline` read it
+        (WP-CO0), and so does the dashboard, which asks for today about once a
+        minute while it is open, so pending minutes turn final on the page.
+        The agent answers from its day rollups, quickly enough for a status
+        line, and the answer is never cached. Until WP-AG4's stores serve it,
+        every day is empty.
       parameters:
-        - name: from
-          in: query
-          required: false
-          description: >
-            The first day, `YYYY-MM-DD`. Without it, the Monday of the week
-            `to` is in.
+        - name: date
+          in: path
+          required: true
+          description: The day, `YYYY-MM-DD`, or `today`, which the agent resolves.
           schema:
             type: string
-            format: date
-        - name: to
-          in: query
-          required: false
-          description: The last day, `YYYY-MM-DD`. Without it, today.
-          schema:
-            type: string
-            format: date
       responses:
         "200":
-          description: One entry per day from `from` to `to`, in order.
+          description: The day's tallies.
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/Days"
+                $ref: "#/components/schemas/Day"
         "400":
           $ref: "#/components/responses/BadRequest"
         "401":
@@ -115,11 +107,30 @@ paths:
         "403":
           $ref: "#/components/responses/Forbidden"
         "503":
-          description: The agent couldn't read its stores; the text says why, for the teen.
+          $ref: "#/components/responses/Unavailable"
+  /v1/sessions/last:
+    get:
+      operationId: getLastSession
+      summary: The most recent work session
+      description: >
+        The last work session (SM 5.3: credited minutes in one project, split
+        where two are more than `SESSION_GAP_S` apart), or the one still
+        going. `pairtime recap` reads it (WP-CO0), and so does the
+        dashboard's Today page. Before the first session, `session` is null.
+        The answer is never cached.
+      responses:
+        "200":
+          description: The session, or null.
           content:
-            text/plain:
+            application/json:
               schema:
-                type: string
+                $ref: "#/components/schemas/LastSession"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "503":
+          $ref: "#/components/responses/Unavailable"
   /v1/dashboard/link:
     post:
       operationId: dashboardLink
@@ -213,6 +224,12 @@ components:
             type: string
     BadRequest:
       description: A parameter isn't what the route takes; the text says which.
+      content:
+        text/plain:
+          schema:
+            type: string
+    Unavailable:
+      description: The agent couldn't read its stores; the text says why, for the teen.
       content:
         text/plain:
           schema:
@@ -383,134 +400,132 @@ components:
           type: integer
           minimum: 1
           description: How long the link works, in seconds.
-    Days:
-      type: object
-      additionalProperties: false
-      required: [today, as_of, from, to, pending_window_s, shadow, projects, days]
-      properties:
-        today:
-          type: string
-          format: date
-          description: The agent's local date when it answered.
-        as_of:
-          type: string
-          format: date-time
-          description: When the agent read its stores, in UTC.
-        from:
-          type: string
-          format: date
-        to:
-          type: string
-          format: date
-        pending_window_s:
-          type: integer
-          minimum: 0
-          description: >
-            `PENDING_WINDOW_S`: how long after a minute ends it stays
-            pending, and can still change (DESIGN 3.7, 6.2 D1).
-        shadow:
-          type: boolean
-          description: >
-            `display.shadow` (DESIGN 6.7 step 2). While it is on, every view
-            shows credited time as "calibrating" and keeps the agent's time.
-        projects:
-          type: array
-          description: Every project the days name, once each.
-          items:
-            $ref: "#/components/schemas/Project"
-        days:
-          type: array
-          description: One entry per day from `from` to `to`, in order, empty days included.
-          items:
-            $ref: "#/components/schemas/Day"
-    Project:
-      type: object
-      additionalProperties: false
-      required: [key, name]
-      properties:
-        key:
-          type: string
-          description: The project's opaque key (AGENTS.md), as the days name it.
-        name:
-          type: string
-          description: >
-            What the dashboard calls the project: its repository's folder
-            name, or the name the teen gave it. Like everything this API
-            serves, it stays on this computer.
     Day:
       type: object
       additionalProperties: false
-      required: [date, uncredited, projects]
+      required: [date, shadow, projects]
+      description: One local day, as GET /v1/days/{date} gives it.
       properties:
         date:
           type: string
           format: date
-        uncredited:
-          $ref: "#/components/schemas/Uncredited"
+          description: The day. Asked for `today`, the agent says which day that is.
+        shadow:
+          $ref: "#/components/schemas/Shadow"
         projects:
           type: array
-          description: Each project with your time or an agent's time that day.
+          description: A tally for each project with anything in it that day.
           items:
-            $ref: "#/components/schemas/ProjectDay"
-    ProjectDay:
+            $ref: "#/components/schemas/DayProject"
+    DayProject:
       type: object
       additionalProperties: false
-      required: [project, credited_s, pending_s, by_evidence, by_kind, uncredited, agent_running_s, agents]
+      required: [project, name, credited_s, pending_s, credited_by_kind, credited_by_evidence, agent_only_s, agent_only_by_harness, uncredited]
+      description: One project's tally over a day (SM 5.1, 5.3). Seconds may be halves.
       properties:
         project:
           type: string
-          description: The project's key, one of `projects`.
+          description: The project's opaque key (AGENTS.md).
+        name:
+          $ref: "#/components/schemas/ProjectName"
         credited_s:
-          type: number
-          minimum: 0
-          description: Your time, pending minutes included.
+          $ref: "#/components/schemas/CreditedS"
         pending_s:
-          type: number
-          minimum: 0
-          description: >
-            The part of `credited_s` in minutes that are still pending
-            (DESIGN 3.7). Late events can still change it, and its level.
-        by_evidence:
-          $ref: "#/components/schemas/ByEvidence"
-        by_kind:
+          $ref: "#/components/schemas/PendingS"
+        credited_by_kind:
           $ref: "#/components/schemas/ByKind"
+        credited_by_evidence:
+          $ref: "#/components/schemas/ByEvidence"
+        agent_only_s:
+          $ref: "#/components/schemas/AgentOnlyS"
+        agent_only_by_harness:
+          $ref: "#/components/schemas/AgentOnlyByHarness"
         uncredited:
           $ref: "#/components/schemas/Uncredited"
-        agent_running_s:
-          type: number
-          minimum: 0
-          description: Seconds in which any agent turn of this project was running.
-        agents:
-          type: array
-          description: >
-            `agent_running_s` by the harness that ran, each agent once.
-            Agents that ran at the same time add up to more than
-            `agent_running_s`.
-          items:
-            $ref: "#/components/schemas/AgentTime"
-    ByEvidence:
+    LastSession:
       type: object
       additionalProperties: false
-      required: [A, B, C]
-      description: >
-        The final seconds of `credited_s` by evidence level (SM 5.1,
-        DESIGN 6.4). With `pending_s` they add up to `credited_s`.
+      required: [shadow, session]
       properties:
-        A:
-          type: number
-          minimum: 0
-        B:
-          type: number
-          minimum: 0
-        C:
-          type: number
-          minimum: 0
+        shadow:
+          $ref: "#/components/schemas/Shadow"
+        session:
+          $ref: "#/components/schemas/WorkSession"
+    WorkSession:
+      type: [object, "null"]
+      additionalProperties: false
+      required: [project, name, start, end, open, credited_s, pending_s, credited_by_kind, credited_by_evidence, agent_only_s, agent_only_by_harness, uncredited]
+      description: >
+        A work session (SM 5.3) with the same tally as a project's day, or
+        null before the first one.
+      properties:
+        project:
+          type: string
+          description: The project's opaque key (AGENTS.md).
+        name:
+          $ref: "#/components/schemas/ProjectName"
+        start:
+          type: string
+          format: date-time
+          description: The session's first credited second, in UTC.
+        end:
+          type: string
+          format: date-time
+          description: Its last credited second so far, in UTC.
+        open:
+          type: boolean
+          description: >
+            The session is still going: no `SESSION_GAP_S` without credit since
+            `end`, and no lock or suspend (DESIGN 3.8).
+        credited_s:
+          $ref: "#/components/schemas/CreditedS"
+        pending_s:
+          $ref: "#/components/schemas/PendingS"
+        credited_by_kind:
+          $ref: "#/components/schemas/ByKind"
+        credited_by_evidence:
+          $ref: "#/components/schemas/ByEvidence"
+        agent_only_s:
+          $ref: "#/components/schemas/AgentOnlyS"
+        agent_only_by_harness:
+          $ref: "#/components/schemas/AgentOnlyByHarness"
+        uncredited:
+          $ref: "#/components/schemas/Uncredited"
+    Shadow:
+      type: boolean
+      description: >
+        `display.shadow` (DESIGN 6.7 step 2). While it is on, every view shows
+        your time as "calibrating" and keeps the agent's time.
+    ProjectName:
+      type: string
+      description: >
+        The project's display name from the local project map: its
+        repository's folder name, or the name the teen gave it. Like everything
+        this API serves, it stays on this computer. Empty when the map has
+        none, and then the views show the key.
+    CreditedS:
+      type: number
+      minimum: 0
+      description: Credited seconds, your time, pending minutes included.
+    PendingS:
+      type: number
+      minimum: 0
+      description: >
+        The part of `credited_s` in minutes that are still pending (DESIGN
+        3.7), which late records may change.
+    AgentOnlyS:
+      type: number
+      minimum: 0
+      description: >
+        SM 5.3's `agent_only_s`: the seconds an agent turn in the project ran
+        and nothing credited, whatever their reason code. The agent's side of
+        the chess clock (DESIGN 3.8).
     ByKind:
       type: object
       additionalProperties: false
       description: >
-        `credited_s` by activity kind (SM 5.1), pending minutes included.
-        A kind with no seconds may be left out.
+        `credited_s` by activity kind (SM 5.1), pending minutes included. A
+        kind with no seconds may be left out.
       properties:
         prompting:
           type: number
@@ -536,13 +551,67 @@ components:
         lookup:
           type: number
           minimum: 0
+    ByEvidence:
+      type: object
+      additionalProperties: false
+      description: >
+        `credited_s` by evidence level (SM 5.1, DESIGN 6.4), pending minutes
+        included at the level they have so far. A level with no seconds may be
+        left out.
+      properties:
+        A:
+          type: number
+          minimum: 0
+        B:
+          type: number
+          minimum: 0
+        C:
+          type: number
+          minimum: 0
+    AgentOnlyByHarness:
+      type: object
+      additionalProperties: false
+      description: >
+        `agent_only_s` by the harness whose turn ran (SM 1.1). It lists every
+        harness that had a session in the project in the span, with 0 for one
+        that had no time on its own, so the views can name the agent whose
+        answers were read: "reading Claude's answers".
+      properties:
+        claude_code:
+          type: number
+          minimum: 0
+        cursor:
+          type: number
+          minimum: 0
+        copilot:
+          type: number
+          minimum: 0
+        codex:
+          type: number
+          minimum: 0
+        gemini:
+          type: number
+          minimum: 0
+        devin:
+          type: number
+          minimum: 0
+        cline:
+          type: number
+          minimum: 0
+        opencode:
+          type: number
+          minimum: 0
+        other:
+          type: number
+          minimum: 0
     Uncredited:
       type: object
       additionalProperties: false
       description: >
-        Seconds pairtime looked at and didn't credit, by reason code
-        (SM 5.2). A reason with no seconds may be left out. A day's counts
-        all of that day's, and a project's those that belong to it.
+        The project's seconds pairtime looked at and didn't credit, by
+        reason code (SM 5.2). Agent-only seconds are in it too, under their
+        own codes, such as `X.agent_only`. A reason with no seconds may be
+        left out.
       properties:
         X.absent:
           type: number
@@ -589,17 +658,3 @@ components:
         X.day_cap:
           type: number
           minimum: 0
-    AgentTime:
-      type: object
-      additionalProperties: false
-      required: [harness, running_s]
-      properties:
-        harness:
-          $ref: "#/components/schemas/Harness"
-        running_s:
-          type: number
-          minimum: 0
-    Harness:
-      type: string
-      description: The AI coding tool that ran (SM 1.1), as pkg/event names it.
-      enum: [claude_code, cursor, copilot, codex, gemini, devin, cline, opencode, other]

@@ -173,7 +173,7 @@ func TestRequireAuth(t *testing.T) {
 				// The live session is used by every other case; keep it so.
 				t.Cleanup(func() { c.t = c.t.Add(-tt.later) })
 			}
-			r := httptest.NewRequest(tt.method, "http://127.0.0.1:7247/v1/days", nil)
+			r := httptest.NewRequest(tt.method, "http://127.0.0.1:7247/v1/days/today", nil)
 			r.RemoteAddr = "127.0.0.1:50000"
 			if tt.auth != "" {
 				r.Header.Set("Authorization", tt.auth)

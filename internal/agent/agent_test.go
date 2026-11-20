@@ -204,8 +204,10 @@ func TestRun(t *testing.T) {
 		{name: "stop needs POST", method: "GET", path: "/v1/agent/stop", token: true, wantCode: 405},
 		{name: "the placeholder dashboard is served without a token", method: "GET", path: "/", wantCode: 200, wantBody: "pairtime"},
 		{name: "the dashboard refuses POST", method: "POST", path: "/", wantCode: 405},
-		{name: "days with the token answers 200 with this week's days", method: "GET", path: "/v1/days", token: true, wantCode: 200, wantBody: `"days":[`},
-		{name: "days without the token or a session answers 401", method: "GET", path: "/v1/days", wantCode: 401},
+		{name: "today with the token answers 200 with no projects until WP-AG4's stores", method: "GET", path: "/v1/days/today", token: true, wantCode: 200, wantBody: `"projects":[]`},
+		{name: "a day that isn't a date answers 400", method: "GET", path: "/v1/days/someday", token: true, wantCode: 400},
+		{name: "a day without the token or a session answers 401", method: "GET", path: "/v1/days/today", wantCode: 401},
+		{name: "the last session with the token answers 200 with none yet", method: "GET", path: "/v1/sessions/last", token: true, wantCode: 200, wantBody: `"session":null`},
 		{name: "a dashboard link needs the bearer token", method: "POST", path: "/v1/dashboard/link", wantCode: 401},
 		{name: "a dashboard link with the token answers 201 with a sign-in URL on 127.0.0.1", method: "POST", path: "/v1/dashboard/link", token: true, wantCode: 201, wantBody: fmt.Sprintf(`"url":"http://127.0.0.1:%d/signin?code=`, a.port.Port)},
 	}
@@ -254,7 +256,7 @@ func TestRun(t *testing.T) {
 		if first.StatusCode != http.StatusSeeOther || first.Header.Get("Location") != "/" || session == nil || !session.HttpOnly || session.SameSite != http.SameSiteStrictMode {
 			t.Fatalf("GET /signin = %d to %q with cookie %v; want 303 to / with an HttpOnly, SameSite=Strict session", first.StatusCode, first.Header.Get("Location"), session)
 		}
-		req, err := http.NewRequest("GET", base+"/v1/days", nil)
+		req, err := http.NewRequest("GET", base+"/v1/days/today", nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -265,7 +267,7 @@ func TestRun(t *testing.T) {
 		}
 		resp.Body.Close()
 		if resp.StatusCode != http.StatusOK {
-			t.Errorf("GET /v1/days with the session cookie = %d, want 200", resp.StatusCode)
+			t.Errorf("GET /v1/days/today with the session cookie = %d, want 200", resp.StatusCode)
 		}
 		if again := signIn(); again.Header.Get("Location") != "/?signin=expired" || len(again.Cookies()) != 0 {
 			t.Errorf("the link used a second time went to %q with %d cookies, want /?signin=expired and none", again.Header.Get("Location"), len(again.Cookies()))
