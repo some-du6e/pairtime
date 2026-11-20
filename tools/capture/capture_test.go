@@ -1076,6 +1076,48 @@ func TestScrub(t *testing.T) {
 				t.Fatalf("exit %d, want 2:\n%s", r.code, r.stderr)
 			}
 		}},
+		{"a report inside the pairtime checkout is refused, and nothing is written", func(t *testing.T) {
+			report := filepath.Join(kit(t, "."), "inside-scrub-report.txt")
+			out := filepath.Join(t.TempDir(), "out")
+			r := run(t, ".", nil, quiet, python(t, "scrub.py", "--no-detect", "--report", report, runDir, out)...)
+			if r.code != 2 || !strings.Contains(r.stderr, "inside the pairtime checkout") {
+				t.Fatalf("exit %d, want 2:\n%s", r.code, r.stderr)
+			}
+			for _, p := range []string{report, out} {
+				if _, err := os.Stat(p); err == nil {
+					t.Errorf("%s was written", p)
+				}
+			}
+		}},
+		{"scrubbing a fixture already in the checkout needs --report outside it", func(t *testing.T) {
+			repo := filepath.Join(t.TempDir(), "pairtime")
+			scrub := filepath.Join(copyKit(t, repo), "scrub.py")
+			fixture := filepath.Join(repo, "testdata", "fixtures", "claude_code", "2.1.328", "linux", "cli")
+			write(t, filepath.Join(fixture, "notes.txt"), "nothing private\n")
+			py := []string{need(t, "python3"), "-I", "-B", scrub, "--no-detect"}
+			r := run(t, ".", nil, quiet, append(py, fixture, filepath.Join(t.TempDir(), "check"))...)
+			if r.code != 2 || !strings.Contains(r.stderr, "--report") {
+				t.Fatalf("the default report beside the fixture: exit %d, want 2 and a pointer to --report:\n%s", r.code, r.stderr)
+			}
+			if _, err := os.Stat(fixture + "-scrub-report.txt"); err == nil {
+				t.Fatal("a report was written beside the fixture")
+			}
+			r = run(t, ".", nil, quiet, append(py, "--report", filepath.Join(t.TempDir(), "r.txt"), fixture, filepath.Join(t.TempDir(), "check"))...)
+			if r.code != 0 {
+				t.Fatalf("with --report outside: exit %d:\n%s%s", r.code, r.stdout, r.stderr)
+			}
+		}},
+		{"git ignores scrub reports anywhere in the checkout", func(t *testing.T) {
+			git := need(t, "git")
+			if r := run(t, ".", nil, nil, git, "rev-parse", "--is-inside-work-tree"); r.code != 0 {
+				t.Skip("not a git checkout")
+			}
+			r := run(t, ".", nil, nil, git, "check-ignore", "-q", filepath.Join("..", "..", "testdata", "fixtures", "claude_code",
+				"2.1.328", "linux", "cli-scrub-report.txt"))
+			if r.code != 0 {
+				t.Fatalf("git check-ignore exit %d: a report beside a fixture isn't ignored", r.code)
+			}
+		}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, c.check)

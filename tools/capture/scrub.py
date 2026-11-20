@@ -41,8 +41,10 @@ leftover of either kind, the scrub writes nothing to OUT_DIR and exits 1;
 and found none private.
 
 The report, which holds the original values, is printed and saved beside
-RUN_DIR as RUN_DIR-scrub-report.txt, never inside OUT_DIR: it must not be
-committed. Read it, then read every file in OUT_DIR yourself.
+RUN_DIR as RUN_DIR-scrub-report.txt, never inside OUT_DIR or anywhere in the
+pairtime checkout: it must not be committed. Scrubbing a fixture that is
+already in the repo needs --report with a path outside it. Read the report,
+then read every file in OUT_DIR yourself.
 
 This is the kit's stopgap until `pairtime fixtures scrub` (pkg/redact, WP-PV1)
 exists. Standard library only, Python 3.8+.
@@ -61,6 +63,7 @@ import sys
 import urllib.parse
 
 KIT_DIR = os.path.dirname(os.path.abspath(__file__))
+REPO_DIR = os.path.dirname(os.path.dirname(KIT_DIR))
 
 USER = "capture"
 HOST = "capture-host"
@@ -696,6 +699,9 @@ def main(argv=None):
     report_path = os.path.abspath(args.report or run_dir.rstrip(os.sep) + "-scrub-report.txt")
     if inside(report_path, out_dir) or inside(report_path, run_dir):
         ap.error("the report must go outside RUN_DIR and OUT_DIR")
+    if inside(report_path, REPO_DIR):
+        ap.error("the report would go to %s, inside the pairtime checkout, and it holds the original values. Give "
+                 "--report a path outside the checkout, such as one beside your capture folder." % report_path)
 
     known = [] if args.no_detect else detect()
     for kind, values in (("home", args.home), ("user", args.user), ("host", args.host),
