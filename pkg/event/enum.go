@@ -44,7 +44,7 @@ var sources = enum[Source]{name: "source", values: []Source{
 // with via hook, log, otel, editor or bridge count toward logged_s,
 // ai_logged_s and hackatime_logged_s (DESIGN 6.2 D19). A track, plugin or
 // bridge record whose entry a pairtime log reader also holds opens no
-// anchor of its own: the log record's anchor counts instead, and the
+// anchor of its own. The log record's anchor counts instead, and the
 // side-door record is a cross-check (DESIGN 5.2, 6.4).
 type Via string
 
@@ -67,7 +67,8 @@ const (
 	ViaShell Via = "shell"
 	// ViaEditor is an editor heartbeat that passed the peer-process check:
 	// the connection came from wakatime-cli, whose parent chain reaches an
-	// editor (DESIGN 5.7).
+	// editor (DESIGN 5.7). macOS skips the check, and for now its editor
+	// heartbeats get ViaEditor (docs/errata/2026-11-19-bridge-unverified.md).
 	ViaEditor Via = "editor"
 	// ViaEditorUnverified is an editor heartbeat that failed the
 	// peer-process check. Its anchors are level C and it never counts
@@ -80,11 +81,13 @@ const (
 	// 6.4).
 	ViaBridge Via = "bridge"
 	// ViaBridgeUnverified is a bridge record from a heartbeat that failed
-	// the peer-process check. Like ViaBridge, its anchors are level C
+	// the peer-process check, and for now every bridge record on macOS,
+	// where the check doesn't run. Like ViaBridge, its anchors are level C
 	// unless keyboard input in the host window in the 10 s before them
 	// makes them level A, and like ViaEditorUnverified it never counts
 	// toward logged_s. DESIGN 4.1 E-2 has no value for it;
-	// docs/errata/2026-11-19-bridge-unverified.md records why it was added.
+	// docs/errata/2026-11-19-bridge-unverified.md records why it was added
+	// and why macOS gets it.
 	ViaBridgeUnverified Via = "bridge_unverified"
 	// ViaTrack is `pairtime track`, called by an agent following the
 	// AGENTS.md entry (DESIGN 5.4). Like ViaBridge, its anchors are level C
@@ -436,7 +439,7 @@ var logMatches = enum[LogMatch]{name: "log_match", values: []LogMatch{
 // EnvHint is the name of a harness environment variable that `pairtime
 // track` looks for in its caller's environment (cli.track's env_hints,
 // DESIGN 4.1 E-8). The list is closed, so a variable's value can't pass as
-// a name: env_hints can only carry these names off the device. A
+// a name, and env_hints can carry only these names off the device. A
 // collector that looks for another variable adds its constant here and in
 // the schema, as with Harness.
 type EnvHint string

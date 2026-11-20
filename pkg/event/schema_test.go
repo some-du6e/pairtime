@@ -291,10 +291,10 @@ func jsonType(t reflect.Type) string {
 
 // jsonTypes compares the JSON types a property allows with the ones its Go
 // field writes, null included. encoding/json writes null for a nil
-// pointer, slice or map, []byte included, unless the field has omitempty,
-// which leaves the field out instead; so the schema allows null exactly
-// for such a field without omitempty. A list's items are compared too,
-// unless they are enums.
+// pointer, slice or map, []byte included, when the field has no
+// omitempty, and leaves the field out when it has one. So the schema
+// allows null exactly for those fields without omitempty. A list's items
+// are compared too, unless they are enums.
 func (c *schemaCheck) jsonTypes(path string, prop map[string]any, f field) {
 	typ := f.typ
 	want := []string{}
