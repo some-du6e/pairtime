@@ -308,7 +308,7 @@ Then each one:
 - puts it at the per-user path, `~/.local/bin/pairtime` or `%LOCALAPPDATA%\pairtime\bin\pairtime.exe`, without admin rights. On Windows a running `pairtime.exe` is renamed to `pairtime.old.exe` first, since it can't be replaced;
 - runs `pairtime install` if the binary has that command, with the terminal as its input when the script came through a pipe. It passes `--made <folder>` for each folder it made for the binary, `~/.local` and `~/.local/bin` or `pairtime` and `pairtime\bin` in `%LOCALAPPDATA%`, so that `pairtime uninstall` removes those too.
 
-The scripts install for the person running them. They refuse to run as root, or with the elevated half of a split Windows token, as from "Run as administrator", before downloading anything, as `pairtime hook` and `pairtime install` do.
+The scripts install for the person running them. They refuse to run as root, or with the elevated half of a split Windows token, as from "Run as administrator", before downloading anything. On Windows that is the test `pairtime hook` makes before it starts the agent, so an administrator whose token isn't split, as with UAC off, can still install.
 
 While no key is listed, every release is unsigned, and the scripts refuse it unless told to allow it: `--allow-unsigned`, which under a pipe is `sh -s -- --allow-unsigned`, or for `install.ps1` `-AllowUnsigned` or `$env:PAIRTIME_ALLOW_UNSIGNED = '1'`. `install.ps1` removes that variable from the session once it has read it, and `install.sh` reads no variable for it, so it lasts for one install. It applies only to a script that trusts no key: once a script trusts one, pinned or given with `--release-keys`, a manifest that no trusted key signed is always refused (D-allow-unsigned-scope).
 
