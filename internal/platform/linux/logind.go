@@ -35,19 +35,23 @@ const (
 // doesn't is broken, and pairtime goes on without what it asked for.
 const callWait = 2 * time.Second
 
-// lockVia names the source of lock state, as Status.Lock gives it.
-const lockVia = "logind LockedHint"
+// lockVia names the source of lock state, as Status.Lock gives it, and
+// what it can't see.
+const lockVia = "logind LockedHint, which GNOME Shell and KDE's kscreenlocker set; lockers that don't, such as i3lock, slock and xsecurelock, go unseen"
 
 // logind reports suspend and resume from the Manager's PrepareForSleep
 // signal, and lock and unlock from the LockedHint property of the user's
 // session. Before each sleep it holds a delay lock, so the agent can seal
 // the last minutes first (DESIGN 3.3).
 //
-// The session's Lock and Unlock signals aren't used: they ask a screen
-// locker to act, and say nothing about whether one did. Lockers that do
-// lock set LockedHint (GNOME Shell and KDE's kscreenlocker do), which
-// logind announces with PropertiesChanged. A locker that doesn't leaves
-// lock unknown rather than stuck on a lock no unlock ever follows.
+// GNOME Shell and KDE's kscreenlocker set LockedHint while they lock the
+// screen, and logind announces each change with PropertiesChanged. Lockers
+// that never call SetLockedHint, such as i3lock, slock and xsecurelock
+// started by xss-lock on X11, go unseen: the session reads as unlocked
+// while they lock it, and Status.Lock says so. The session's Lock and
+// Unlock signals would be no better. They ask a locker to act and say
+// nothing about whether one did, and xss-lock's Lock is never followed by
+// an Unlock, so the session would read as locked for good.
 //
 // The agent can outlive the session it follows. A systemd user unit stays
 // up after a logout, and so does an autostarted agent when logind keeps a

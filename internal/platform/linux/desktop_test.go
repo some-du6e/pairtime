@@ -134,7 +134,7 @@ func TestOpenWithoutSignals(t *testing.T) {
 		{
 			name:    "Wayland without Mutter has no idle time and no focus signal",
 			env:     map[string]string{"XDG_SESSION_TYPE": "wayland", "WAYLAND_DISPLAY": "wayland-0", "DISPLAY": ":0"},
-			session: SessionWayland, idleReason: "ext-idle-notify-v1", focusReason: "SM 3.2",
+			session: SessionWayland, idleReason: "ext-idle-notify-v1", focusReason: "no focus signal",
 		},
 		{
 			name:    "a display on another host isn't measured",

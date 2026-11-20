@@ -90,7 +90,7 @@ func TestDesktopMutterIdle(t *testing.T) {
 			})
 			defer d.Close()
 			s := d.Status()
-			if !strings.Contains(s.Focus.Unknown, "SM 3.2") {
+			if s.Focus.Known() || !strings.Contains(s.Focus.Unknown, "no focus signal") {
 				t.Errorf("focus on Wayland is %+v, want unknown", s.Focus)
 			}
 			if !tc.mutter {

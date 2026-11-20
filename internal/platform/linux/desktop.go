@@ -151,8 +151,8 @@ type idleSource interface {
 type Desktop struct {
 	idleSrc idleSource // nil when idle time is unknown
 	logind  *logind    // nil when logind isn't reachable
-	focus   chan Focus // nil when focus is unknown
-	power   chan Power // nil when power events are unknown
+	focus   chan Focus // nil when no X11 watcher runs
+	power   chan Power // nil when logind isn't reachable
 
 	mu     sync.Mutex
 	status Status
@@ -171,9 +171,11 @@ const openTimeout = 2 * time.Second
 
 // Open finds the session's signals and starts watching focus and power.
 // It doesn't fail: a signal the desktop doesn't give is unknown in Status,
-// and the matching method reports ErrUnknown or returns a nil channel.
-// Watching stops when ctx ends or Close is called: the Focus and Power
-// channels close, and so do the connections that fed them.
+// and Idle reports ErrUnknown, Locked ErrLockUnknown, and Focus or Power a
+// nil channel when nothing watches for it. Status is what says whether a
+// signal is known: a channel can be open while its signal is unknown (see
+// Focus). Watching stops when ctx ends or Close is called: the Focus and
+// Power channels close, and so do the connections that fed them.
 func Open(ctx context.Context, cfg Config) *Desktop {
 	getenv := cfg.Getenv
 	if getenv == nil {
@@ -279,7 +281,11 @@ func Open(ctx context.Context, cfg Config) *Desktop {
 	case SessionX11:
 		d.startFocus(ctx, disp, dispErr, getenv, hostname, log)
 	case SessionWayland:
-		d.status.Focus = unknown("Wayland gives other programs no focus signal, so focus is ambiguous (SM 3.2)")
+		// SM 3.2 wants these slots ambiguous, so that anchors still
+		// count. Recording that takes an os.focus that says focus is
+		// unknown, which the event model doesn't have yet, so for now
+		// focus is only unknown here.
+		d.status.Focus = unknown("Wayland gives other programs no focus signal")
 	default:
 		d.status.Focus = unknown("no graphical session")
 	}
