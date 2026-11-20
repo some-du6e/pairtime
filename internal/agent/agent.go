@@ -31,6 +31,7 @@ import (
 	"github.com/some-du6e/pairtime/internal/agent/inbox"
 	"github.com/some-du6e/pairtime/internal/agent/ipc"
 	"github.com/some-du6e/pairtime/internal/agent/localhttp"
+	"github.com/some-du6e/pairtime/internal/agent/presence"
 	"github.com/some-du6e/pairtime/internal/agent/sched"
 	"github.com/some-du6e/pairtime/internal/agent/state"
 	"github.com/some-du6e/pairtime/internal/version"
@@ -81,6 +82,8 @@ type agent struct {
 	journal *inbox.Journal // nil when it couldn't be opened
 	ipcSrv  *ipc.Server    // nil when hooks can't reach the agent
 
+	presence *presence.Sampler // presence and power (DESIGN 3.3)
+
 	stop     chan struct{} // closed when a client asks the agent to stop
 	stopOnce sync.Once
 
@@ -117,10 +120,13 @@ func Run(ctx context.Context, opts Options) error {
 		problems: make(map[string]string),
 	}
 	linkOnce.Do(func() { linked = heavyModules() })
+	if err := optIntoEcoQoS(); err != nil {
+		log.Info("the agent runs without EcoQoS", "err", err)
+	}
 
 	// Each part that starts adds the step that stops it, and they stop in
 	// reverse order: the HTTP server, port.json, the socket and the inbox,
-	// the config watch, the scheduler, state.json.
+	// the config watch, presence, the scheduler, state.json.
 	var closers []func()
 	defer func() {
 		for i := len(closers) - 1; i >= 0; i-- {
@@ -145,6 +151,7 @@ func Run(ctx context.Context, opts Options) error {
 		stopSched()
 		<-schedDone
 	})
+	closers = append(closers, a.startPresence())
 
 	closers = append(closers, a.watchConfig())
 	closers = append(closers, a.startIPC(opts))

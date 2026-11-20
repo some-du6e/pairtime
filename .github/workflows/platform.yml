@@ -16,12 +16,14 @@ on:
       - internal/agent/ipc/**
       # The agent's platform code: the lock, the data directories and
       # private files (home), the loopback server (localhttp), the spool,
-      # which Windows file sharing makes OS-specific (inbox), and the
-      # device keystore, which picks DPAPI, the Keychain or the Secret
-      # Service by OS (keys).
+      # which Windows file sharing makes OS-specific (inbox), presence,
+      # whose smoke test runs on the real Windows sources, and the device
+      # keystore, which picks DPAPI, the Keychain or the Secret Service by
+      # OS (keys).
       - internal/agent/inbox/**
       - internal/agent/home/**
       - internal/agent/localhttp/**
+      - internal/agent/presence/**
       - internal/agent/keys/**
       - cmd/pairtime/**
       - .github/workflows/platform.yml
@@ -41,7 +43,7 @@ permissions:
 env:
   # pairtime never uses cgo (AGENTS.md).
   CGO_ENABLED: "0"
-  PLATFORM_DIRS: internal/platform internal/install internal/agent/ipc internal/agent/inbox internal/agent/home internal/agent/localhttp internal/agent/keys cmd/pairtime
+  PLATFORM_DIRS: internal/platform internal/install internal/agent/ipc internal/agent/inbox internal/agent/home internal/agent/localhttp internal/agent/presence internal/agent/keys cmd/pairtime
 
 jobs:
   windows:
