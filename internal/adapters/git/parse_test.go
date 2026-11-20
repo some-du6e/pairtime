@@ -361,6 +361,33 @@ func TestMatchRewrites(t *testing.T) {
 			want:      []Rewrite{{"x", "nx"}, {"y", "ny"}},
 		},
 		{
+			name:      "a fixup! commit folds into the commit its subject names, though another commit sat between them",
+			originals: []*meta{m("a", "a", 100, "add the wall"), m("b", "a", 200, "add the door"), m("f", "a", 300, "fixup! add the wall")},
+			rebased:   []*meta{m("na", "a", 100, "add the wall"), m("nb", "a", 200, "add the door")},
+			folds:     map[string]int{"na": 1},
+			want:      []Rewrite{{"a", "na"}, {"b", "nb"}, {"f", "na"}},
+		},
+		{
+			name:      "a squash! commit can name its target by the start of its subject, and fixup! fixup! names the same target",
+			originals: []*meta{m("a", "a", 100, "add the wall"), m("b", "a", 200, "add the door"), m("s", "a", 300, "squash! add the w"), m("f", "a", 400, "fixup! fixup! add the wall")},
+			rebased:   []*meta{m("na", "a", 100, "add the wall"), m("nb", "a", 200, "add the door")},
+			folds:     map[string]int{"na": 2},
+			want:      []Rewrite{{"a", "na"}, {"b", "nb"}, {"s", "na"}, {"f", "na"}},
+		},
+		{
+			name:      "a fixup! commit whose target took no fold was dropped",
+			originals: []*meta{m("a", "a", 100, "add the wall"), m("b", "a", 200, "add the door"), m("f", "a", 300, "fixup! add the wall")},
+			rebased:   []*meta{m("na", "a", 100, "add the wall"), m("nb", "a", 200, "add the door")},
+			want:      []Rewrite{{"a", "na"}, {"b", "nb"}},
+		},
+		{
+			name:      "a fold passes over a matched commit to reach the unmatched one after it",
+			originals: []*meta{o1, o2, o3},
+			rebased:   []*meta{m("n1", "a", 100, "one"), m("n2", "a", 200, "two")},
+			folds:     map[string]int{"n1": 1},
+			want:      []Rewrite{{"o1", "n1"}, {"o2", "n2"}, {"o3", "n1"}},
+		},
+		{
 			name:      "a commit with a reset author date matches nothing",
 			originals: []*meta{o1},
 			rebased:   []*meta{m("n1", "a", 999, "one")},

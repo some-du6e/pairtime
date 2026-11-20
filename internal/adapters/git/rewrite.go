@@ -5,6 +5,7 @@ package git
 import (
 	"context"
 	"strconv"
+	"strings"
 )
 
 // rebased returns the commits a rebase made, oldest first, and the
@@ -103,11 +104,20 @@ func keyOf(m *meta) authorKey { return authorKey{m.author, m.AuthorTime, m.Autho
 //     date are the same commit: a pick, a reword, an edit, or the commit a
 //     squash or fixup folded into. When several share both, the subject
 //     decides, and then the order.
-//  2. A rebased commit that folds took that many more originals: the
-//     unmatched ones nearest after its own original, up to the next
-//     matched one, then the nearest before it. This is how git's own
-//     list reads, where every commit of a squash maps to the result.
-//  3. Any original still unmatched was dropped and maps to nothing.
+//  2. A rebased commit that folds took that many more originals. An
+//     original whose subject is "fixup! X", "squash! X" or "amend! X"
+//     folded into whatever the commit X became, found the way git's
+//     --autosquash finds it, wherever the two sat.
+//  3. The rest of the folds took the unmatched originals nearest after the
+//     fold's own original, then the nearest before it, passing over
+//     matched ones. This is how git's own list reads, where every commit
+//     of a squash maps to the result.
+//  4. Any original still unmatched was dropped and maps to nothing.
+//
+// Pairing a fold step with the original whose patch-id equals its diff's
+// would also place a fold that a person moved by hand, but it would read
+// the diffs, code included, into pairtime, which takes only counts from
+// git.
 func matchRewrites(originals, rebased []*meta, folds map[string]int) []Rewrite {
 	target := make([]string, len(originals))
 	used := make([]bool, len(rebased))
@@ -136,21 +146,34 @@ func matchRewrites(originals, rebased []*meta, folds map[string]int) []Rewrite {
 	for i := range target {
 		matched[i] = target[i] != ""
 	}
+	left := make(map[string]int, len(folds))
+	for k, v := range folds {
+		left[k] = v
+	}
+	for i, o := range originals {
+		if target[i] != "" {
+			continue
+		}
+		if j := autosquashTarget(originals, i, o.subject); j >= 0 && target[j] != "" && left[target[j]] > 0 {
+			target[i] = target[j]
+			left[target[j]]--
+		}
+	}
 	for i := range originals {
 		if !matched[i] {
 			continue
 		}
-		left := folds[target[i]]
-		for j := i + 1; j < len(originals) && left > 0 && !matched[j]; j++ {
+		into := target[i]
+		for j := i + 1; j < len(originals) && left[into] > 0; j++ {
 			if target[j] == "" {
-				target[j] = target[i]
-				left--
+				target[j] = into
+				left[into]--
 			}
 		}
-		for j := i - 1; j >= 0 && left > 0 && !matched[j]; j-- {
+		for j := i - 1; j >= 0 && left[into] > 0; j-- {
 			if target[j] == "" {
-				target[j] = target[i]
-				left--
+				target[j] = into
+				left[into]--
 			}
 		}
 	}
@@ -162,4 +185,47 @@ func matchRewrites(originals, rebased []*meta, folds map[string]int) []Rewrite {
 		}
 	}
 	return out
+}
+
+// autosquashTarget returns the index of the original that the commit at i
+// fixes up, squashes into or amends, by its subject, as git's --autosquash
+// reads "fixup! X": an earlier commit whose subject is X, else one whose id
+// starts with X, else the first whose subject starts with X. It returns -1
+// for a subject without the prefix, or with no such commit.
+func autosquashTarget(originals []*meta, i int, subject string) int {
+	x, found := subject, false
+	for {
+		rest, ok := strings.CutPrefix(x, "fixup! ")
+		if !ok {
+			rest, ok = strings.CutPrefix(x, "squash! ")
+		}
+		if !ok {
+			rest, ok = strings.CutPrefix(x, "amend! ")
+		}
+		if !ok {
+			break
+		}
+		x, found = rest, true
+	}
+	if !found || x == "" {
+		return -1
+	}
+	for j := 0; j < i; j++ {
+		if originals[j].subject == x {
+			return j
+		}
+	}
+	if len(x) >= 4 && !strings.Contains(x, " ") {
+		for j := 0; j < i; j++ {
+			if strings.HasPrefix(originals[j].SHA, strings.ToLower(x)) {
+				return j
+			}
+		}
+	}
+	for j := 0; j < i; j++ {
+		if strings.HasPrefix(originals[j].subject, x) {
+			return j
+		}
+	}
+	return -1
 }

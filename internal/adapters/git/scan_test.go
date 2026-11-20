@@ -247,6 +247,37 @@ func TestScanAgainstGit(t *testing.T) {
 			},
 		},
 		{
+			name: "an --autosquash rebase maps a fixup of a commit that isn't next to it to the commit it fixed, as git's post-rewrite list does",
+			run: func(t *testing.T, g *gitEnv) {
+				r := g.initRepo()
+				r.recordRewrites()
+				base := r.commit("base", map[string]string{"base.txt": "base\n"})
+				wall := r.commit("add the wall", map[string]string{"wall.txt": lines("w", 3)})
+				r.commit("add the door", map[string]string{"door.txt": lines("d", 2)})
+				r.write(map[string]string{"wall.txt": lines("w", 4)})
+				r.git("add", "-A")
+				r.git("commit", "-q", "--fixup="+wall)
+				s := g.scanner(g.resolver(ProjectMap{}, Excludes{}), r.dir)
+				// GIT_SEQUENCE_EDITOR=true keeps the todo list --autosquash
+				// wrote: pick the wall, fixup the fix, pick the door.
+				r.git("rebase", "-q", "-i", "--autosquash", base)
+				c := one(t, mustScan(t, s))
+				if c.Op() != event.GitRebase {
+					t.Fatalf("op %s, want rebase", c.Op())
+				}
+				want := sortedRewrites(r.readRewrites("rebase"))
+				if len(want) != 3 {
+					t.Fatalf("git's post-rewrite list is %v, want the wall, its fixup and the door mapped", want)
+				}
+				if got := allRewrites(c.Commits); !slices.Equal(got, want) {
+					t.Errorf("rewrites %v, git says %v", got, want)
+				}
+				for _, cm := range c.Commits {
+					checkAgainstGit(t, r, cm)
+				}
+			},
+		},
+		{
 			name: "a rebase onto a moved main maps each commit to its copy and records none of main's commits",
 			run: func(t *testing.T, g *gitEnv) {
 				r := g.initRepo()
