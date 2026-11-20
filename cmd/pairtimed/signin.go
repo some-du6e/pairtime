@@ -3,8 +3,10 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 
 	"github.com/some-du6e/pairtime/internal/server/accounts"
 	"github.com/some-du6e/pairtime/internal/server/auth"
@@ -59,4 +61,31 @@ func newSignIn(cfg *config.Config, db *store.DB, w *writer.Writer, logger *slog.
 	}
 	logger.Info("sign-in with Hack Club Auth is on", "issuer", cfg.HCA.Issuer, "redirect_uri", svc.RedirectURI(), "signups_open", cfg.SignupsOpen)
 	return svc, nil
+}
+
+// visitor tells the home page who a request is signed in as. A session
+// that can't be read is logged, and the page shows the visitor as signed
+// out, so / never fails because the database does.
+func visitor(svc *auth.Service, logger *slog.Logger) func(*http.Request) (string, bool) {
+	return func(r *http.Request) (string, bool) {
+		sess, err := svc.Session(r)
+		if err != nil {
+			if !errors.Is(err, accounts.ErrNoSession) {
+				logger.Error("reading a session for the home page", "err", err)
+			}
+			return "", false
+		}
+		return handle(&sess.User), true
+	}
+}
+
+// handle is the name the home page shows for an account: its Slack ID, or
+// its HCA subject when HCA sent no Slack ID. pairtime has no handles of its
+// own until profiles come (DESIGN 8.3). The page never shows the email
+// address, which a screenshot of the page would otherwise carry.
+func handle(u *accounts.User) string {
+	if u.SlackID != "" {
+		return u.SlackID
+	}
+	return u.HCASub
 }
