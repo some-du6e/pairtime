@@ -11,18 +11,28 @@
 // Presence takes one os.presence sample. idle_any_s comes from
 // CGEventSourceSecondsSinceLastEventType with kCGAnyInputEventType, and
 // idle_keys_s from the same call with kCGEventKeyDown (SM 1.2), both for
-// the HID system state, which is hardware input rather than events other
-// apps post into the session. When CoreGraphics can't answer, idle_any_s
-// falls back to IOKit's HIDIdleTime, read from the IOHIDSystem service
-// without spawning ioreg, and idle_keys_s is null. locked comes from the
-// session dictionary of CGSessionCopyCurrentDictionary. Each sample is a
-// few calls into the OS with no thread or timer of its own, so the agent's
-// scheduler decides how often it runs (DESIGN 3.3, D14).
+// the HID system state. When CoreGraphics can't answer, idle_any_s falls
+// back to IOKit's HIDIdleTime, read from the IOHIDSystem service without
+// spawning ioreg, and idle_keys_s is null. locked comes from the session
+// dictionary of CGSessionCopyCurrentDictionary. Each sample is a few calls
+// into the OS with no thread or timer of its own, so the agent's scheduler
+// decides how often it runs (DESIGN 3.3, D14).
 //
-// Whether the key-down variant needs the Input Monitoring permission is
-// open (SM 1.2, DESIGN 5.7). The package reports what the call returns and
-// never asks for the permission; the macOS test in platform.yml records
-// the answer on macos-latest as an artifact (finding_darwin_test.go).
+// The HID system state isn't hardware input alone. It also counts events
+// that another process posts from a HID-state event source. On
+// macos-latest (macOS 26.7.2, platform.yml run 44656311435), one F20
+// key-down that the test process posted with CGEventPost reset both idle
+// times for a child process that had no Input Monitoring. Posting needs a
+// permission of its own, which CGPreflightPostEventAccess reports and the
+// test process had. So a small idle_keys_s shows that a key event reached
+// the session, not that a person pressed a key; DESIGN 6.4 decides what
+// that is worth as keyboard evidence.
+//
+// The same run settles the question SM 1.2 and DESIGN 5.7 left open:
+// reading key-down idle needs no Input Monitoring permission, since the
+// child read it without one. The package never asks for a permission. The
+// macOS job in platform.yml records both answers on every run, in the
+// macos-findings artifact (TestFindingKeyDownIdle).
 //
 // # Power and focus
 //
@@ -48,13 +58,14 @@
 // Notification Programming Topics; the NSWorkspace and NSRunningApplication
 // references). On macos-latest a distributed notification never reached a
 // Loop off the main thread (TestFindingRunLoop). So the Loop has to run on
-// the process's main thread to see locks and app switches. The agent has to
-// arrange that: runtime.LockOSThread in an init function of its main
-// package keeps the main goroutine on the main thread, and the main
-// goroutine then calls Loop.Run while the rest of the agent runs elsewhere.
-// IOKit's messages arrive on whatever thread runs the loop, so off the main
-// thread a Loop still reports sleep and wake, and its Status says that locks
-// and app switches may not arrive.
+// the process's main thread to see locks and app switches. WP-OS9 in
+// docs/PLAN.md wires the package into the agent that way:
+// runtime.LockOSThread in an init function of cmd/pairtime keeps the main
+// goroutine on the main thread, and the main goroutine then calls Loop.Run
+// while the rest of the agent runs elsewhere. IOKit's messages arrive on
+// whatever thread runs the loop, so off the main thread a Loop still
+// reports sleep and wake, and its Status says that locks and app switches
+// may not arrive.
 //
 // # Focus granularity
 //

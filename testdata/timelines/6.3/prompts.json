@@ -1,0 +1,61 @@
+{
+  "fixture": "6.3",
+  "prompts": [
+    {
+      "turn_key": "t_c4044fb9cf4c",
+      "t": 1795902940000,
+      "local": "13:55:40",
+      "text": null,
+      "len_chars": 64,
+      "source": "not in SM; the turn whose 13:58 answer he rereads at 14:02"
+    },
+    {
+      "turn_key": "t_c66c1761dc96",
+      "t": 1795903290000,
+      "local": "14:01:30",
+      "text": null,
+      "len_chars": 180,
+      "source": "SM 6.3's 14:00 row gives the length, 180 characters, not the text"
+    },
+    {
+      "turn_key": "t_d83dc68309f4",
+      "t": 1795903470000,
+      "local": "14:04:30",
+      "text": null,
+      "len_chars": 150,
+      "source": "SM 6.3's 14:03 row gives the length, 150 characters, not the text"
+    },
+    {
+      "turn_key": "t_1a04ac19492b",
+      "t": 1795903740000,
+      "local": "14:09:00",
+      "text": null,
+      "len_chars": 50,
+      "source": "SM 6.3's 14:08 row describes the request (run the tests without fixing anything, 50 characters) without quoting it"
+    },
+    {
+      "turn_key": "t_108c975d8196",
+      "t": 1795903980000,
+      "local": "14:13:00",
+      "text": "run the tests again",
+      "len_chars": 19,
+      "source": "quoted in SM 6.3's 14:12 row"
+    },
+    {
+      "turn_key": "t_95161e03c19a",
+      "t": 1795904430000,
+      "local": "14:20:30",
+      "text": null,
+      "len_chars": 135,
+      "source": "SM 6.3's 14:17 row gives the length, 135 characters, not the text"
+    },
+    {
+      "turn_key": "t_2161b4f78872",
+      "t": 1795904700000,
+      "local": "14:25:00",
+      "text": null,
+      "len_chars": 90,
+      "source": "SM 6.3's 14:22 row gives the length, 90 characters, not the text"
+    }
+  ]
+}

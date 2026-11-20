@@ -19,7 +19,8 @@
 //	path   = "<data_dir>/pairtime.db"
 //
 //	[hca]
-//	client_id = ""
+//	client_id = ""                      # empty: nobody can sign in
+//	issuer    = "https://auth.hackclub.com"
 //
 //	[privacy_hub]
 //	aud      = ""
@@ -33,7 +34,7 @@
 //	region          = "auto"            # R2's; AWS and Hetzner take the bucket's region
 //	bucket          = ""                # Litestream's replica and evidence/
 //	snapshot_bucket = ""                # nightly snapshots, 30-day lifecycle; never the same as bucket
-//	virtual_host    = false             # true: <bucket>.<endpoint host>/<key>; false: <endpoint>/<bucket>/<key>
+//	virtual_host    = false             # true: <bucket>.<endpoint host>/<key>, https and a host name only; false: <endpoint>/<bucket>/<key>
 //
 //	[[reviewers]]                       # one table per HCA sub
 //	sub   = "..."
@@ -75,6 +76,10 @@ const (
 	// DefaultDatabaseFile is the SQLite file's name inside data_dir.
 	DefaultDatabaseFile = "pairtime.db"
 )
+
+// DefaultHCAIssuer is Hack Club Auth's issuer (SP 3.1). Tests point
+// hca.issuer at a fake.
+const DefaultHCAIssuer = "https://auth.hackclub.com"
 
 // The values profile_default takes (DESIGN 8.3). Public is the code
 // default, as R5 asks; Karim's instance launches with Ask.
@@ -128,9 +133,11 @@ type Reviewer struct {
 }
 
 // HCA configures the Hack Club Auth client (DESIGN 3.10). Its secret is
-// in secrets.env.
+// PAIRTIME_HCA_CLIENT_SECRET in secrets.env.
 type HCA struct {
 	ClientID string `toml:"client_id"`
+	// Issuer is HCA's issuer URL, DefaultHCAIssuer unless set.
+	Issuer string `toml:"issuer"`
 }
 
 // PrivacyHub configures the privacy hub endpoints (DESIGN 8.9).
@@ -254,6 +261,13 @@ func (c *Config) finish(dir string) error {
 		fail("reviewers: %v", err)
 	}
 
+	if c.HCA.Issuer == "" {
+		c.HCA.Issuer = DefaultHCAIssuer
+	}
+	if err := checkIssuer(c.HCA.Issuer); err != nil {
+		fail("hca.issuer: %v", err)
+	}
+
 	if u := c.PrivacyHub.JWKSURL; u != "" {
 		if p, err := url.Parse(u); err != nil || p.Scheme != "https" || p.Host == "" {
 			fail("privacy_hub.jwks_url is %q; it must be an https URL", u)
@@ -325,6 +339,11 @@ func checkObjectStorage(o *ObjectStorage, secrets Secrets) []error {
 		errs = append(errs, fmt.Errorf("object_storage.endpoint: %v", err))
 	} else {
 		o.Endpoint = u.String()
+		if o.VirtualHost {
+			if err := objstore.CheckVirtualHost(u); err != nil {
+				errs = append(errs, fmt.Errorf("object_storage.virtual_host: %v", err))
+			}
+		}
 	}
 	if o.Region == "" {
 		o.Region = objstore.DefaultRegion
@@ -356,8 +375,10 @@ var semver = regexp.MustCompile(`^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9
 // programName is the <program> of program_reviewer:<program>.
 var programName = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,63}$`)
 
-// checkBaseURL returns base_url without a trailing slash. It must be an
-// https origin, or http on a loopback host for local runs.
+// checkBaseURL returns base_url as an origin in the form browsers send in
+// an Origin header (CanonicalOrigin), which is what POST /auth/logout
+// compares with. It must be an https origin, or http on a loopback host
+// for local runs.
 func checkBaseURL(raw string) (string, error) {
 	if raw == "" {
 		return "", errors.New(`it is required, such as "https://pairtime.example.org"`)
@@ -379,7 +400,67 @@ func checkBaseURL(raw string) (string, error) {
 	default:
 		return raw, fmt.Errorf("%q must start with https://", raw)
 	}
-	return strings.TrimSuffix(raw, "/"), nil
+	if strings.ContainsFunc(u.Hostname(), func(r rune) bool { return r >= 0x80 }) {
+		return raw, fmt.Errorf("%q has a host that isn't ASCII; write it in its xn-- form, which is what browsers send", raw)
+	}
+	return CanonicalOrigin(raw), nil
+}
+
+// CanonicalOrigin returns the origin of an http or https URL the way
+// browsers write it in an Origin header (RFC 6454 6.1): the scheme and host
+// in lowercase, and no port when it is the scheme's default. It returns ""
+// for anything else, such as a URL with a path, a query or a user.
+func CanonicalOrigin(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil || u.Opaque != "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || (u.Path != "" && u.Path != "/") {
+		return ""
+	}
+	var defaultPort string
+	switch u.Scheme {
+	case "https":
+		defaultPort = "443"
+	case "http":
+		defaultPort = "80"
+	default:
+		return ""
+	}
+	host, port := strings.ToLower(u.Hostname()), u.Port()
+	if host == "" {
+		return ""
+	}
+	if port == defaultPort {
+		port = ""
+	}
+	switch {
+	case port != "":
+		host = net.JoinHostPort(host, port)
+	case strings.Contains(host, ":"):
+		host = "[" + host + "]"
+	}
+	return u.Scheme + "://" + host
+}
+
+// checkIssuer checks hca.issuer: an https URL with a host and no query or
+// fragment, or http on a loopback host, where tests run a fake HCA. Its
+// path may be anything, and it is compared with the discovery document's
+// issuer exactly (OIDC Discovery 4.3).
+func checkIssuer(raw string) error {
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+		return fmt.Errorf("%q must be a URL such as %q, with no query or user", raw, DefaultHCAIssuer)
+	}
+	switch u.Scheme {
+	case "https":
+		return nil
+	case "http":
+		host := u.Hostname()
+		if ip := net.ParseIP(host); host == "localhost" || (ip != nil && ip.IsLoopback()) {
+			return nil
+		}
+		return fmt.Errorf("%q uses http; only https is allowed, except on localhost", raw)
+	default:
+		return fmt.Errorf("%q must start with https://", raw)
+	}
 }
 
 // checkReviewers checks the allowlist: each sub once, each role known.

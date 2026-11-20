@@ -55,7 +55,9 @@ func (a *agent) startIPC(opts Options) func() {
 	}
 
 	// Drains run on a goroutine of their own, because a long spool takes a
-	// while and scheduler jobs must return at once.
+	// while and scheduler jobs must return at once. That goroutine is the
+	// only one that uses the Drainer.
+	drainer := inbox.NewDrainer(a.dirs.Inbox(), j, func() time.Time { return time.Now().UTC() })
 	kick := make(chan struct{}, 1)
 	stop := make(chan struct{})
 	drained := make(chan struct{})
@@ -66,7 +68,7 @@ func (a *agent) startIPC(opts Options) func() {
 			case <-stop:
 				return
 			case <-kick:
-				a.drain(j)
+				a.drain(drainer)
 			}
 		}
 	}()
@@ -97,16 +99,17 @@ func (a *agent) startIPC(opts Options) func() {
 }
 
 // drain moves what the inbox holds into the journal.
-func (a *agent) drain(j *inbox.Journal) {
-	res, err := inbox.Drain(a.dirs.Inbox(), j, func() time.Time { return time.Now().UTC() })
+func (a *agent) drain(d *inbox.Drainer) {
+	res, err := d.Drain()
 	if err != nil {
 		a.log.Warn("draining the inbox", "err", err)
 	}
 	if res.Busy != nil {
 		a.log.Warn("the inbox's spool waits for the next drain", "err", res.Busy)
 	}
-	if res.Delivered > 0 || res.Bad > 0 {
-		a.log.Info("drained the inbox", "files", res.Files, "messages", res.Delivered, "bad_lines", res.Bad)
+	if res.Delivered > 0 || res.Bad > 0 || res.Rejected > 0 || res.Failed > 0 || res.SetAside > 0 {
+		a.log.Info("drained the inbox", "files", res.Files, "messages", res.Delivered, "bad_lines", res.Bad,
+			"rejected", res.Rejected, "failed_files", res.Failed, "set_aside", res.SetAside)
 	}
 }
 
@@ -131,6 +134,8 @@ func (a *agent) ipcStatus() ipcReply {
 		r.Stored, r.Duplicates = a.journal.Stats()
 	}
 	if a.ipcSrv != nil {
+		// Via is "" once the server stopped listening, as it does when
+		// Serve gives up.
 		r.Via, r.Refused = a.ipcSrv.Via(), a.ipcSrv.Refused()
 	}
 	return r

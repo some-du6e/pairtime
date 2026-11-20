@@ -10,6 +10,11 @@
 #   snapshot signed with a throwaway key and keep it as a workflow
 #   artifact. They never publish and never read the secret.
 #
+# npm and Vite run only in the dashboard job, on a runner of their own.
+# The build job, which compiles, hashes and signs the binaries, runs no
+# package code from npm: it takes the built dashboard as an artifact and
+# checks it before embedding it.
+#
 # The server image (WP-OP1), code signing (DESIGN 9.7 WP 4.10) and the VSIX
 # packages (WP 4.11) join this workflow later.
 name: release
@@ -43,8 +48,53 @@ env:
   TARGETS: windows/amd64 windows/386 windows/arm64 darwin/amd64 darwin/arm64 linux/amd64 linux/arm64
 
 jobs:
+  dashboard:
+    name: build the local dashboard
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        shell: bash
+    steps:
+      # Actions are pinned to commit SHAs; tags can be moved. Dependabot bumps them.
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: 24
+          # No cache, as for Go: npm ci installs from the lockfile alone.
+          package-manager-cache: false
+
+      - name: The local dashboard
+        # internal/webui embeds whatever dist/ holds, which in a checkout is
+        # a placeholder; releases embed the real dashboard, built from web/
+        # (DESIGN 3.12; docs/PLAN.md, WP-UI0). Only the agent's UI: the server
+        # UI and the component gallery aren't part of the client. The API
+        # types are generated first, as web.yml does before its build, so a
+        # release builds the way web.yml tested.
+        working-directory: web
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          npm run gen
+          ./node_modules/.bin/vite build --mode agent
+          grep -q '<meta name="pairtime-ui" content="local"' ../internal/webui/dist/index.html
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dashboard
+          path: internal/webui/dist
+          if-no-files-found: error
+          # Dotfiles too, so dist/ reaches the build job as Vite wrote it.
+          include-hidden-files: true
+          retention-days: 7
+          # A re-run of a failed attempt uploads under the same name.
+          overwrite: true
+
   build:
     name: build, archive, sign with a throwaway key, check
+    needs: dashboard
     runs-on: ubuntu-latest
     timeout-minutes: 15
     defaults:
@@ -81,7 +131,7 @@ jobs:
             version=v0.0.0-snapshot.$RUN_NUMBER
             min=$version
           fi
-          # Refuses a tag that isn't a pairtime version before anything is built.
+          # Refuses a tag that isn't a pairtime version before any binary is built.
           "$tool" check -version "$version" -min-version "$min"
           {
             echo "TOOL=$tool"
@@ -92,22 +142,22 @@ jobs:
             echo "STAGE=$RUNNER_TEMP/stage"
           } >> "$GITHUB_ENV"
 
-      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
-        with:
-          node-version: 24
-          # No cache, as for Go: npm ci installs from the lockfile alone.
-          package-manager-cache: false
+      - name: Make room for the dashboard
+        # The placeholder goes, so dist/ holds exactly the files the
+        # dashboard job built.
+        run: rm -r internal/webui/dist
 
-      - name: The local dashboard
-        # internal/webui embeds whatever dist/ holds, which in a checkout is
-        # a placeholder; releases embed the real dashboard, built from web/
-        # (DESIGN 3.12; docs/PLAN.md, WP-UI0). Only the agent's UI: the server
-        # UI and the component gallery aren't part of the client.
-        working-directory: web
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: dashboard
+          path: internal/webui/dist
+
+      - name: Check the dashboard
+        # internal/webui's tests, on exactly the files go build embeds next:
+        # the CSP, and nothing loaded from another host or missing (TestFS).
         run: |
-          npm ci --ignore-scripts --no-audit --no-fund
-          ./node_modules/.bin/vite build --mode agent
-          grep -q '<meta name="pairtime-ui" content="local"' ../internal/webui/dist/index.html
+          grep -q '<meta name="pairtime-ui" content="local"' internal/webui/dist/index.html
+          go test ./internal/webui/
 
       - name: Build
         run: |

@@ -11,8 +11,10 @@
 #   argv     the arguments, one per line (RUN_DIR and LABEL first)
 #   env      the names of the environment variables, sorted. Never the values
 #   cwd      the working directory
-#   parents  pid and executable name of each parent process, nearest first.
-#            Never command lines, which can hold prompts
+#   parents  pid, controlling terminal and executable name of each parent
+#            process, nearest first: "1234 pts/3 claude". The terminal is ?
+#            (?? on macOS) when the process has none. Never command lines,
+#            which can hold prompts
 #   stdin    the bytes on stdin, unchanged
 #   stderr   only if something in this script failed
 #
@@ -48,7 +50,9 @@ if [ "$#" -lt 2 ] || [ -z "$1" ]; then
 	exit 0
 fi
 hooks=$1/hooks
-mkdir -p "$hooks" || exit 0
+# Whether the folder is there afterwards is what counts, not what mkdir says.
+mkdir -p "$hooks"
+[ -d "$hooks" ] || exit 0
 
 # entries DIR prints how many entries DIR has. Positional parameters are
 # local to a function call, so set -- here leaves the script's alone.
@@ -61,8 +65,15 @@ entries() {
 	fi
 }
 
-# Claim the next number. mkdir is atomic, so two hooks that fire at the same
-# moment never share a directory.
+# Claim the next number by creating its time file, as dump-hook.ps1 does.
+# Under set -C the shell itself opens the file with O_CREAT|O_EXCL, so of
+# two hooks that fire at the same moment only one can make it. What mkdir
+# says can't decide that: uutils mkdir before 0.11, Ubuntu 26.04's, can tell
+# two processes racing for one folder that each of them made it (uutils
+# issue 13970), and then both calls wrote into one directory. A number is
+# taken only when its time file is really there: any other failure (a full
+# disk, a read-only folder, one another account owns) ends the call at
+# once, instead of trying every number up to 999999 while the harness waits.
 n=$(entries "$hooks")
 while :; do
 	n=$((n + 1))
@@ -70,13 +81,14 @@ while :; do
 		exit 0
 	fi
 	call=$hooks/$(printf '%06d' "$n")
-	if mkdir "$call"; then
+	mkdir "$call"
+	if (set -C && printf 'unix_ns=%s\nutc=%s\nclock=%s\n' "$now_ns" "$utc" "$clock" >"$call/time"); then
 		break
+	elif [ ! -e "$call/time" ]; then
+		exit 0
 	fi
 done
 exec 2>>"$call/stderr"
-
-printf 'unix_ns=%s\nutc=%s\nclock=%s\n' "$now_ns" "$utc" "$clock" >"$call/time"
 
 for arg in "$@"; do
 	printf '%s\n' "$arg"
@@ -88,15 +100,18 @@ awk 'BEGIN { for (name in ENVIRON) print name }' | LC_ALL=C sort >"$call/env"
 
 pwd >"$call/cwd"
 
-# Walk up from our parent through one ps listing. comm is the executable
-# name (a full path on macOS, so keep only its last part); unlike args it
-# never includes the command line.
-ps -A -o pid= -o ppid= -o comm= 2>/dev/null | awk -v start="$PPID" '
+# Walk up from our parent through one ps listing. tty is the controlling
+# terminal, which tells a session someone types into from a headless one
+# (SM 1.2 has_tty). comm is the executable name (a full path on macOS, so
+# keep only its last part); unlike args it never includes the command line.
+# It comes last because it can hold spaces.
+ps -A -o pid= -o ppid= -o tty= -o comm= 2>/dev/null | awk -v start="$PPID" '
 	{
 		pid = $1
 		ppid[pid] = $2
+		tty[pid] = $3
 		line = $0
-		sub(/^[ \t]*[0-9]+[ \t]+[0-9]+[ \t]*/, "", line)
+		sub(/^[ \t]*[0-9]+[ \t]+[0-9]+[ \t]+[^ \t]+[ \t]*/, "", line)
 		sub(/.*\//, "", line)
 		name[pid] = line
 	}
@@ -104,10 +119,10 @@ ps -A -o pid= -o ppid= -o comm= 2>/dev/null | awk -v start="$PPID" '
 		p = start
 		for (i = 0; i < 12 && p != "" && p != 0; i++) {
 			if (!(p in name)) {
-				print p " ?"
+				print p " ? ?"
 				break
 			}
-			print p " " name[p]
+			print p " " tty[p] " " name[p]
 			if (ppid[p] == p) {
 				break
 			}

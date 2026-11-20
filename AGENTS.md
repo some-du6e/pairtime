@@ -18,7 +18,7 @@ A change is done when every workflow its PR started is green. A WP marked "Race:
 | ci.yml | the one Linux job: lint, `go test ./...`, the seven-target cross-compile with the 15 MB client budget, and the license, oracle and provenance guards | every PR, pushes to main |
 | platform.yml | `go test` of the platform packages on Windows and macOS, and the desktop tests on Linux | PRs touching its paths, release tags |
 | nightly.yml | `go test -race` over internal/agent and internal/server | daily, 03:00 UTC |
-| web.yml | npm licenses, svelte-check, vitest, the UI build, and Playwright on Chromium against a `pairtime agent` built with that UI embedded | PRs touching web/, extension/, internal/webui/, docs/api/ or the agent's HTTP code; release tags |
+| web.yml | npm licenses, svelte-check, vitest, the UI build, Playwright on Chromium against a `pairtime agent` built with that UI embedded, and SPDX headers | PRs touching web/, extension/, internal/webui/, docs/api/, or the agent code the smoke test runs (internal/agent/, internal/version/, cmd/pairtime/); release tags |
 | objstore.yml | the object storage client against a MinIO service container | PRs touching internal/server/objstore/, weekly |
 | tidy.yml | `go mod tidy` and npm lockfiles, committed to the branch | by hand |
 | fixtures.yml | the fixture provenance check | by hand |
@@ -51,11 +51,11 @@ An oracle decides whether code is right, so the code it checks never changes it:
 
 web/ is Svelte 5 and TypeScript built by Vite: the local dashboard (src/local, built into internal/webui/dist for the agent to embed), the server UI (src/server) and the components both use (src/shared). web/README.md has the layout and the commands, which run in web.yml only.
 
-- package.json pins exact versions, each released at least two weeks earlier unless it fixes a security advisory. A runtime dependency ships in the bundle, so it has to be MIT, BSD-2-Clause, BSD-3-Clause, Apache-2.0 or ISC; tools/ci/npm_licenses.py checks every package in the lockfile.
+- package.json pins exact versions. Every package in package-lock.json, transitive ones included, was released at least two weeks before it was locked, unless it fixes a security advisory or is required by a package that does: Vite 8.3.8 fixes GHSA-p4f5-76q4-ffq7 and requires rolldown `~1.2.18`. tidy.yml locks the newest release in each range, so after it runs, hold a younger package to an older release in its range with an entry in package.json's `overrides`, and drop entries that no longer hold anything back. A runtime dependency ships in the bundle, so it has to be MIT, BSD-2-Clause, BSD-3-Clause, Apache-2.0 or ISC; tools/ci/npm_licenses.py checks every package in the lockfile.
 - docs/api/*.openapi.yaml is the API contract. `npm run gen` writes the TypeScript types into web/src/gen/, which isn't checked in, so read the YAML and import the types with `import type`. A route or field changes in the YAML and in Go in the same PR; web/tests/smoke.spec.ts holds the running agent to the YAML.
 - Built pages carry a Content-Security-Policy that allows only their own origin: no CDN, web font, inline script, inline style or `style=` attribute. Fonts are system fonts, and colors are hex tokens in web/src/shared/styles/base.css.
 - Consent and profile questions use ConsentCard and ProfileChoice from web/src/shared. They fix "Not now" as the most prominent button and keep anything from being preselected (DESIGN 8.3, 8.4), and web/tests/consent.spec.ts checks that on the rendered page.
-- The first line of every .ts, .svelte, .css and .html file is an SPDX-License-Identifier comment for AGPL-3.0-or-later.
+- Every .ts, .js, .svelte, .css and .html file under web/ opens with an SPDX-License-Identifier comment for AGPL-3.0-or-later. An .html file has `<!doctype html>` on line 1, which TestFS needs the built page to start with, and the comment on line 2; every other file has it on line 1. web.yml's SPDX step checks them, and internal/webui's placeholder too.
 
 ## The struggle-metric spec decides scoring
 

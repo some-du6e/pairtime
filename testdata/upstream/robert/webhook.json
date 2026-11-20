@@ -207,6 +207,7 @@
       "signature": "sha256=25416ca11cb9b2a76ad93a55585a8b2b747e15379ef89104851ce440062e11cf",
       "body": "{\"event\":\"ping\",\"deliveryId\":\"6f1d2a3b-4c5d-4e6f-8a9b-0c1d2e3f4a5b\",\"eventId\":\"pairtime-test\"}",
       "now": 1793728800,
+      "mac_valid": true,
       "expect": "accept"
     },
     {
@@ -216,6 +217,7 @@
       "signature": "sha256=25416ca11cb9b2a76ad93a55585a8b2b747e15379ef89104851ce440062e11cf",
       "body": "{\"event\":\"ping\",\"deliveryId\":\"6f1d2a3b-4c5d-4e6f-8a9b-0c1d2e3f4a5b\",\"eventId\":\"pairtime-test\"}",
       "now": 1793729100,
+      "mac_valid": true,
       "expect": "accept"
     },
     {
@@ -225,6 +227,7 @@
       "signature": "sha256=25416ca11cb9b2a76ad93a55585a8b2b747e15379ef89104851ce440062e11cf",
       "body": "{\"event\":\"ping\",\"deliveryId\":\"6f1d2a3b-4c5d-4e6f-8a9b-0c1d2e3f4a5b\",\"eventId\":\"pairtime-test\"}",
       "now": 1793729101,
+      "mac_valid": true,
       "expect": "reject"
     },
     {
@@ -234,6 +237,7 @@
       "signature": "sha256=25416ca11cb9b2a76ad93a55585a8b2b747e15379ef89104851ce440062e11cf",
       "body": "{\"event\":\"ping\",\"deliveryId\":\"6f1d2a3b-4c5d-4e6f-8a9b-0c1d2e3f4a5b\",\"eventId\":\"pairtime-test\"}",
       "now": 1793729100.5,
+      "mac_valid": true,
       "expect": "reject"
     },
     {
@@ -243,6 +247,7 @@
       "signature": "sha256=25416ca11cb9b2a76ad93a55585a8b2b747e15379ef89104851ce440062e11cf",
       "body": "{\"event\":\"ping\",\"deliveryId\":\"6f1d2a3b-4c5d-4e6f-8a9b-0c1d2e3f4a5b\",\"eventId\":\"pairtime-test\"}",
       "now": 1793728500,
+      "mac_valid": true,
       "expect": "accept"
     },
     {
@@ -252,6 +257,7 @@
       "signature": "sha256=25416ca11cb9b2a76ad93a55585a8b2b747e15379ef89104851ce440062e11cf",
       "body": "{\"event\":\"ping\",\"deliveryId\":\"6f1d2a3b-4c5d-4e6f-8a9b-0c1d2e3f4a5b\",\"eventId\":\"pairtime-test\"}",
       "now": 1793728499,
+      "mac_valid": true,
       "expect": "reject"
     },
     {
@@ -261,6 +267,7 @@
       "signature": "sha256=25416CA11CB9B2A76AD93A55585A8B2B747E15379EF89104851CE440062E11CF",
       "body": "{\"event\":\"ping\",\"deliveryId\":\"6f1d2a3b-4c5d-4e6f-8a9b-0c1d2e3f4a5b\",\"eventId\":\"pairtime-test\"}",
       "now": 1793728800,
+      "mac_valid": false,
       "expect": "reject"
     },
     {
@@ -270,6 +277,7 @@
       "signature": "25416ca11cb9b2a76ad93a55585a8b2b747e15379ef89104851ce440062e11cf",
       "body": "{\"event\":\"ping\",\"deliveryId\":\"6f1d2a3b-4c5d-4e6f-8a9b-0c1d2e3f4a5b\",\"eventId\":\"pairtime-test\"}",
       "now": 1793728800,
+      "mac_valid": false,
       "expect": "reject"
     },
     {
@@ -279,6 +287,7 @@
       "signature": "sha256=357b33ecb6a84cccb2101d45295955d820cd8e93484eea8b33b9e64826884c86",
       "body": "{\"event\":\"ping\",\"deliveryId\":\"6f1d2a3b-4c5d-4e6f-8a9b-0c1d2e3f4a5b\",\"eventId\":\"pairtime-test\"}",
       "now": 1793728800,
+      "mac_valid": true,
       "expect": "reject"
     },
     {
@@ -288,6 +297,7 @@
       "signature": "sha256=ceefb0871398a9fed51f35a9ee1ee5086d0dc6fa2571de89cdf745859de7f5f7",
       "body": "{\"event\":\"ping\",\"deliveryId\":\"6f1d2a3b-4c5d-4e6f-8a9b-0c1d2e3f4a5b\",\"eventId\":\"pairtime-test\"}",
       "now": 1793728800,
+      "mac_valid": true,
       "expect": "reject"
     },
     {
@@ -297,6 +307,7 @@
       "signature": "sha256=25416ca11cb9b2a76ad93a55585a8b2b747e15379ef89104851ce440062e11cf",
       "body": "{\"event\": \"ping\",\"deliveryId\":\"6f1d2a3b-4c5d-4e6f-8a9b-0c1d2e3f4a5b\",\"eventId\":\"pairtime-test\"}",
       "now": 1793728800,
+      "mac_valid": false,
       "expect": "reject"
     },
     {
@@ -306,6 +317,7 @@
       "signature": "sha256=25416ca11cb9b2a76ad93a55585a8b2b747e15379ef89104851ce440062e11cf",
       "body": "{\"event\":\"ping\",\"deliveryId\":\"6f1d2a3b-4c5d-4e6f-8a9b-0c1d2e3f4a5b\",\"eventId\":\"pairtime-test\"}",
       "now": 1793728800,
+      "mac_valid": false,
       "expect": "reject"
     },
     {
@@ -315,6 +327,7 @@
       "signature": null,
       "body": "{\"event\":\"ping\",\"deliveryId\":\"6f1d2a3b-4c5d-4e6f-8a9b-0c1d2e3f4a5b\",\"eventId\":\"pairtime-test\"}",
       "now": 1793728800,
+      "mac_valid": null,
       "expect": "reject"
     },
     {
@@ -324,6 +337,7 @@
       "signature": "sha256=25416ca11cb9b2a76ad93a55585a8b2b747e15379ef89104851ce440062e11cf",
       "body": "{\"event\":\"ping\",\"deliveryId\":\"6f1d2a3b-4c5d-4e6f-8a9b-0c1d2e3f4a5b\",\"eventId\":\"pairtime-test\"}",
       "now": 1793728800,
+      "mac_valid": null,
       "expect": "reject"
     },
     {
@@ -333,6 +347,7 @@
       "signature": "sha256=cf6e51c2bc01247c810dc4067b1c05ec353e09095bc3d70fcd863c55a39f713e",
       "body": "{\"event\":\"ping\",\"deliveryId\":\"6f1d2a3b-4c5d-4e6f-8a9b-0c1d2e3f4a5b\",\"eventId\":\"pairtime-test\"}",
       "now": 1793728800,
+      "mac_valid": true,
       "expect": "reject"
     }
   ]

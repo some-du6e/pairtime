@@ -55,7 +55,13 @@ func isSnapshotKey(key string) bool {
 
 // Put uploads one encrypted snapshot under SnapshotKey(takenAt), from the
 // file's current offset to its end. It is write-once: a second snapshot
-// with the same time fails with ErrExists and leaves the first.
+// with the same time fails with ErrExists and leaves the first. When an
+// attempt fails and the retry finds the key taken, Put checks whether the
+// failed attempt stored this file after all (PutOptions.IfNoneMatch), so
+// a lost answer doesn't turn the night's own upload into ErrExists. A job
+// that calls Put again after it failed can still get ErrExists for its
+// first call's upload; Head's ObjectInfo.SHA256 tells whether that holds
+// the same file.
 func (s *Snapshots) Put(ctx context.Context, takenAt time.Time, file io.ReadSeeker) (ObjectInfo, error) {
 	return s.b.Put(ctx, SnapshotKey(takenAt), file, PutOptions{IfNoneMatch: true})
 }

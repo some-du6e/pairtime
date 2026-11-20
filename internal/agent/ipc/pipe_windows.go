@@ -6,8 +6,11 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"io/fs"
 	"net"
 	"os"
 	"path/filepath"
@@ -17,6 +20,8 @@ import (
 	"unsafe"
 
 	"golang.org/x/sys/windows"
+
+	"github.com/some-du6e/pairtime/internal/agent/home"
 )
 
 // The named pipe is the agent's fallback on Windows builds whose AF_UNIX
@@ -260,10 +265,74 @@ func (c *pipeConn) SetReadDeadline(t time.Time) error  { return c.f.SetReadDeadl
 func (c *pipeConn) SetWriteDeadline(t time.Time) error { return c.f.SetWriteDeadline(t) }
 func (c *pipeConn) peer() (identity, int, error)       { return c.id, c.pid, c.peerErr }
 
-// dialPipe opens the agent's pipe and checks that the process serving it
-// runs as want.
-func dialPipe(ctx context.Context, name string, want identity) (net.Conn, error) {
-	p, err := windows.UTF16PtrFromString(name)
+// pipeNote is what Endpoint.PipeNote holds while an agent listens on the
+// pipe.
+type pipeNote struct {
+	Pipe string `json:"pipe"`
+	PID  uint32 `json:"pid"`
+	// Started is when the agent's process started, in 100 ns units since
+	// 1601 (a FILETIME), so that the note names one process even after
+	// Windows gives its pid to another.
+	Started uint64 `json:"started"`
+}
+
+// maxPipeNote bounds what a sender reads of a note, which is under 200
+// bytes.
+const maxPipeNote = 4 << 10
+
+// errNoPipeNote means no agent says it listens on the pipe, so a sender
+// doesn't try it.
+var errNoPipeNote = errors.New("ipc: no agent says it listens on the named pipe")
+
+// writePipeNote records in ep.PipeNote that this process listens on
+// ep.Pipe, in a file only this user can open.
+func writePipeNote(ep Endpoint) error {
+	started, err := processStart(windows.CurrentProcess())
+	if err != nil {
+		return err
+	}
+	b, err := json.Marshal(pipeNote{Pipe: ep.Pipe, PID: windows.GetCurrentProcessId(), Started: started})
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(ep.PipeNote), 0o700); err != nil {
+		return err
+	}
+	return home.WritePrivate(ep.PipeNote, b)
+}
+
+// readPipeNote reads the note of the agent on ep's pipe.
+func readPipeNote(ep Endpoint) (pipeNote, error) {
+	if ep.PipeNote == "" {
+		return pipeNote{}, errNoPipeNote
+	}
+	f, err := os.Open(ep.PipeNote)
+	if errors.Is(err, fs.ErrNotExist) {
+		return pipeNote{}, errNoPipeNote
+	}
+	if err != nil {
+		return pipeNote{}, err
+	}
+	b, err := io.ReadAll(io.LimitReader(f, maxPipeNote))
+	f.Close()
+	if err != nil {
+		return pipeNote{}, err
+	}
+	var n pipeNote
+	if err := json.Unmarshal(b, &n); err != nil || n.Pipe != ep.Pipe || n.PID == 0 || n.Started == 0 {
+		return pipeNote{}, fmt.Errorf("ipc: %s doesn't name the pipe %s and the process that listens on it", ep.PipeNote, ep.Pipe)
+	}
+	return n, nil
+}
+
+// dialPipe opens the agent's pipe, if the agent's note says it listens
+// there, and checks that the agent made it (checkPipe).
+func dialPipe(ctx context.Context, ep Endpoint, want identity) (net.Conn, error) {
+	note, err := readPipeNote(ep)
+	if err != nil {
+		return nil, err
+	}
+	p, err := windows.UTF16PtrFromString(ep.Pipe)
 	if err != nil {
 		return nil, err
 	}
@@ -277,7 +346,7 @@ func dialPipe(ctx context.Context, name string, want identity) (net.Conn, error)
 			break
 		}
 		if !errors.Is(err, windows.ERROR_PIPE_BUSY) {
-			return nil, &os.PathError{Op: "open", Path: name, Err: err}
+			return nil, &os.PathError{Op: "open", Path: ep.Pipe, Err: err}
 		}
 		// Every instance is taken for the moment, and the agent makes a
 		// new one as it accepts.
@@ -287,18 +356,56 @@ func dialPipe(ctx context.Context, name string, want identity) (net.Conn, error)
 		case <-time.After(time.Millisecond):
 		}
 	}
-	var pid uint32
-	if err := windows.GetNamedPipeServerProcessId(h, &pid); err != nil {
-		windows.CloseHandle(h)
-		return nil, fmt.Errorf("%w: %w", ErrNotAgent, os.NewSyscallError("GetNamedPipeServerProcessId", err))
-	}
-	id, err := pidIdentity(pid)
-	if err == nil && id != want {
-		err = fmt.Errorf("it runs as %s", id)
-	}
-	if err != nil {
+	if err := checkPipe(h, want, note); err != nil {
 		windows.CloseHandle(h)
 		return nil, fmt.Errorf("%w: %w", ErrNotAgent, err)
 	}
-	return &pipeConn{f: os.NewFile(uintptr(h), name), addr: pipeAddr(name), id: id, pid: int(pid)}, nil
+	return &pipeConn{f: os.NewFile(uintptr(h), ep.Pipe), addr: pipeAddr(ep.Pipe), id: want, pid: int(note.PID)}, nil
+}
+
+// checkPipe checks that the pipe h, just opened, is the agent's, before
+// anything is written to it.
+//
+// The pipe's owner must be want. Windows lets a process make an object
+// owned by its own user, or by a group it may own, and by nobody else
+// without a privilege that only administrators hold, and pipeSecurity
+// makes want the owner of the agent's pipe at any elevation. So another
+// account may make a pipe of the agent's name, but not one that passes.
+//
+// The process that serves the pipe must also be the one the note names,
+// and still run as want. Its pid alone proves little: it comes from the
+// pipe, and Windows gives the pids of processes that have exited to new
+// ones. With the start time it ties the pipe to the agent that wrote the
+// note, which also keeps out a process of this user's, such as a
+// sandboxed one, that made the pipe after the agent died.
+func checkPipe(h windows.Handle, want identity, note pipeNote) error {
+	sd, err := windows.GetSecurityInfo(h, windows.SE_KERNEL_OBJECT, windows.OWNER_SECURITY_INFORMATION)
+	if err != nil {
+		return fmt.Errorf("reading who owns the pipe: %w", err)
+	}
+	owner, _, err := sd.Owner()
+	if err != nil {
+		return fmt.Errorf("reading who owns the pipe: %w", err)
+	}
+	if o := owner.String(); o != want.sid {
+		return fmt.Errorf("the pipe belongs to %q", o)
+	}
+	var pid uint32
+	if err := windows.GetNamedPipeServerProcessId(h, &pid); err != nil {
+		return os.NewSyscallError("GetNamedPipeServerProcessId", err)
+	}
+	if pid != note.PID {
+		return fmt.Errorf("process %d serves the pipe, and the note names process %d", pid, note.PID)
+	}
+	id, started, err := pidInfo(pid)
+	if err != nil {
+		return err
+	}
+	switch {
+	case id != want:
+		return fmt.Errorf("it runs as %s", id)
+	case started != note.Started:
+		return fmt.Errorf("process %d isn't the agent that wrote the note, which started at another time", pid)
+	}
+	return nil
 }
