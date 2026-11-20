@@ -38,7 +38,7 @@
 					<dt>Mode</dt>
 					<dd>{describeMode(status.data.mode)}</dd>
 					<dt>Version</dt>
-					<dd>{status.data.version.version}</dd>
+					<dd data-testid="agent-version">{status.data.version.version}</dd>
 					<dt>Running since</dt>
 					<dd><time datetime={status.data.started}>{new Date(status.data.started).toLocaleString()}</time></dd>
 				</dl>

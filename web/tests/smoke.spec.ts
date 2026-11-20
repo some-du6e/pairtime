@@ -71,14 +71,24 @@ test("signed out, the page says this version can't open it, names no command, an
 	await expect(page.getByTestId('agent-status')).toHaveCount(0);
 });
 
-test('signed in, the page shows what GET /v1/status says', async ({ browser }) => {
+test('signed in, the page shows what GET /v1/status says', async ({ browser, request }) => {
 	// The bearer token stands in for the sign-in cookie WP-UI1 adds.
-	const context = await browser.newContext({ extraHTTPHeaders: { Authorization: `Bearer ${agentToken()}` } });
+	const authorization = `Bearer ${agentToken()}`;
+	const res = await request.get(new URL('v1/status', base).href, { headers: { Authorization: authorization } });
+	expect(res.status()).toBe(200);
+	const body = (await res.json()) as { version: { version: string }; started: string };
+	const context = await browser.newContext({ extraHTTPHeaders: { Authorization: authorization } });
 	const page = await context.newPage();
 	await page.goto(base);
 	const status = page.getByTestId('agent-status');
 	await expect(status).toContainText('Local only: nothing leaves this computer');
-	await expect(status).toContainText('Running since');
+	await expect(status.getByTestId('agent-version')).toHaveText(body.version.version);
+	// The start time, as the page's own browser writes it.
+	const time = status.locator('time');
+	await expect(time).toHaveAttribute('datetime', body.started);
+	const shown = await page.evaluate((started) => new Date(started).toLocaleString(), body.started);
+	expect(shown).not.toBe('Invalid Date');
+	await expect(time).toHaveText(shown);
 	await context.close();
 });
 
