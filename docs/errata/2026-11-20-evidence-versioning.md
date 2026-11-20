@@ -34,7 +34,7 @@ The row promises that no evidence blob is lost, so its RPO is "n/a", and that th
 
 1. **Drop versioning from the row.** Evidence rests on write-once puts, the digest check and keys scoped to the two buckets, and the RPO says that a blob deleted with the bucket's key is lost. Purge, retention and rotation stay plain deletes. This is what R2 can do and what pairtimed does today.
 2. **Versioning where the store has it, and deletes that remove every version.** The row says "versioning on where the store offers it". WP-RV5, the retention delete and WP-SB2 each delete every version of a key. On R2 nothing changes from option 1. On Hetzner the conditional-put limit above has to be resolved first.
-3. **A second copy that pairtimed controls.** pairtimed copies each new blob to a second bucket whose key the main bucket's key can't use, and every delete removes both copies. This works on every store. It costs a second write per blob and a second copy that each of the three deletes has to remove.
+3. **A second copy that pairtimed controls.** pairtimed also writes each new blob to a third bucket under its own key, and every delete removes both copies. This works on every store and survives losing one bucket or one key. It doesn't stop a deliberate delete, because whoever holds pairtimed's `secrets.env` holds both keys. It costs a second write per blob and a second copy that each of the three deletes has to remove.
 4. **R2 bucket locks.** A lock rule blocks deletes and overwrites under a prefix for a set period (developers.cloudflare.com/r2/buckets/bucket-locks/, modified 2026-10-28). It would block the purge's "at once" too, so it doesn't fit evidence as DESIGN defines it.
 
 ## For Karim
