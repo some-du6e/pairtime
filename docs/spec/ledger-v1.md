@@ -231,9 +231,9 @@ H_0 = zero(32)
 
 Each head depends on every batch before it, so no record can be added, dropped, reordered or changed after its batch is uploaded without changing every later head (DESIGN 3.6, CC7 in DESIGN 7.3).
 
-The client uploads `{b, n, R_b, H_b, prev}` with `prev = H_(b-1)` (DESIGN 4.3); the upload's JSON is WP-SV4's. The server refuses a batch whose `H_b` isn't `SHA-256(0x03 || prev || R_b || u64(n) || u64(b))` for the values it received, a batch 1 whose `prev` isn't `zero(32)`, and a batch whose `prev` differs from the head it stored for batch `b - 1` (DESIGN 4.5's chain link). It then stores `(device_id, b, n_b, R_b, H_b, received_at)`, where `received_at` is the server's clock, in Unix milliseconds, when it stored the row.
+The client uploads `{b, n, R_b, H_b, prev}` with `prev = H_(b-1)` (DESIGN 4.3); the upload's JSON is WP-SV4's. The server refuses a batch with `n = 0`, which no writer seals, and a batch whose `H_b` isn't `SHA-256(0x03 || prev || R_b || u64(n) || u64(b))` for the values it received. It also checks DESIGN 3.10's chain link, `prev` equals the stored head: it refuses a batch 1 whose `prev` isn't `zero(32)`, and once it has stored any batch of a device, it refuses that device's batch `b` unless it stored batch `b - 1` with head `prev`. So a device that has stored batches 1 to 3 can't upload batch 5 until batch 4 is in, and batch 4 gets a `received_at`, a receipt and a day leaf like any other. The server then stores `(device_id, b, n_b, R_b, H_b, received_at)`, where `received_at` is the server's clock, in Unix milliseconds, when it stored the row.
 
-A device's first upload can start after batch 1, for example when it leaves local-only mode with batches it never sent (DESIGN 4.2). Whether the server then asks for the earlier batches or starts the device's witnessed chain at that batch is WP-SV4's decision. This spec only fixes the bytes either way.
+The one exception is a device's first upload, which can start after batch 1, for example when the device leaves local-only mode with batches it never sent (DESIGN 4.2). Whether the server then asks for the earlier batches or starts the device's witnessed chain at that batch is WP-SV4's decision, and from then on every batch links to the one before it. This spec only fixes the bytes either way.
 
 ## 7. Receipts
 
@@ -280,7 +280,7 @@ It commits `d`, `G_(d-1)`, `T_d`, `count_d`, `G_d` and `signature_d` to the publ
 
 A verifier that holds a run of a device's batches, with headers and body hashes for every record in them, checks:
 
-1. Batch numbers rise by 1 with no gap. A run that starts at `b = 1` has `prev = zero(32)`. A run that starts later links its first `prev` to the head the server stored for the batch before it, when the server stored one.
+1. Batch numbers rise by 1 with no gap. A run that starts at `b = 1` has `prev = zero(32)`. A run that starts later links its first `prev` to the head the server stored for the batch before it. Only a run that starts at a device's first witnessed batch, where WP-SV4 started the chain after batch 1 (6), takes its first `prev` as given.
 2. Sequence numbers rise by 1 with no gap, within and across batches. Batch 1 starts at `s = 1`.
 3. Every header follows 4.3: its rtype is in the table, an `os.*` header has the zero project, and checkpoints and upload-failure notes have the fields their row in 4.3 gives them.
 4. Every entry is its header followed by the SHA-256 of the record's stored body, and every revealed body is valid JSON by 4.5's rule, agrees with its header, names the chain's device in an event's `device_id`, and has `f` and `c` exactly where 4.5, 4.7, 10.1 and 10.7 put them.
@@ -881,3 +881,4 @@ The review of parts 1 and 2 (issue #19) decided these, before any device witness
 27. Body-header agreement includes the event's `device_id`, which must name the device whose chain holds the record (4.5, 9).
 28. A checkpoint's `e` is `{"project_key", "t", "state"}` and an upload-failure note's `{"t", "reason"}`, so a verifier can check a checkpoint's project without parsing `score.ProjectState` (4.7).
 29. An `f` with a `v` below 1 or not an integer, a `null` member, or a member version 1 doesn't list under `v = 1` is malformed. A `v` above a reader's own is unknown, and a server refuses or holds such a record (10.7).
+30. The server refuses an empty batch, and once it holds a batch of a device it refuses that device's batch `b` unless it stored batch `b - 1` with head `prev`, DESIGN 3.10's chain link. Only a device's first upload may start after batch 1. An earlier draft refused only a `prev` that differed from a stored head, which let a device skip a batch (6, 9).
