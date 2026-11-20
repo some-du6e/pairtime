@@ -227,7 +227,7 @@ func (d *deriver) harnessAnchor(best int, pos []int) {
 		if !d.pres.slotInput(e.T, false) || !d.hostedBy(d.focus.before(best), s, best) {
 			return
 		}
-		typed := int64(p.LenChars)
+		typed := count(p.LenChars)
 		class := event.ClassLowEffort
 		switch {
 		case s.askedBefore(best):

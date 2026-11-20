@@ -117,7 +117,7 @@ func (d *deriver) trackGate(i int, e event.Event, p *event.CLITrack, s *session,
 	if len(failed) > 0 {
 		return TrackRejected, failed
 	}
-	typed := int64(p.TextLen)
+	typed := count(p.TextLen)
 	class := event.ClassSubstantive
 	if typed < d.r.substantive || (p.Label != "" && LowEffort(p.Label)) {
 		class = event.ClassLowEffort

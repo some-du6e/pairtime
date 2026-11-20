@@ -180,11 +180,11 @@ type turnFill struct {
 // buildBuckets drops it wherever a hook or a transcript record covers the
 // session, so what reaches here has nothing behind it.
 func (f *turnFill) add(r rules, u int64, sideDoor bool) int64 {
-	f.output += u
+	f.output = addUnits(f.output, u)
 	if sideDoor {
 		u = min(u, max(0, r.units(r.turnBase)-f.base-f.filled))
 	}
-	f.filled += u
+	f.filled = addUnits(f.filled, u)
 	return u
 }
 
@@ -279,12 +279,12 @@ func (d *deriver) buildBuckets() {
 		switch p := e.Data.(type) {
 		case *event.AgentOutput:
 			tb = s.turnByKey(p.TurnKey)
-			prose, lines = d.r.proseUnits(int64(p.Words)), d.r.lineUnits(int64(p.CodeLines))
+			prose, lines = d.r.proseUnits(count(p.Words)), d.r.lineUnits(count(p.CodeLines))
 		case *event.AgentTool:
 			tb = s.runningAt(e.T)
-			n := min(int64(p.VisibleOutputLines), d.r.toolLinesMax)
+			n := min(count(p.VisibleOutputLines), d.r.toolLinesMax)
 			if isEdit(p) {
-				n += int64(p.LinesAdded + p.LinesRemoved)
+				n += addCount(count(p.LinesAdded), count(p.LinesRemoved))
 			}
 			lines = d.r.lineUnits(n)
 		default:

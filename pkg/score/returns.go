@@ -139,7 +139,7 @@ func (d *deriver) unreadWords(f *focusRec, run silentRun, end int64) int64 {
 		seen := d.lastSeen(s, run.i)
 		for _, o := range s.outputs {
 			if o.t > seen && o.t <= end && !(s.native && sideDoor(d.recs[o.pos].Via)) {
-				words += int64(o.d.Words)
+				words = addCount(words, count(o.d.Words))
 			}
 		}
 	}

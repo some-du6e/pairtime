@@ -153,12 +153,13 @@ type turnBuild struct {
 	prompts []int
 	// primary is the index of the prompt.submit the turn goes by, or -1
 	// for a continuation.
-	primary   int
-	tSubmit   int64
-	tStop     int64
-	stopHook  bool
-	words     int
-	diffLines int
+	primary  int
+	tSubmit  int64
+	tStop    int64
+	stopHook bool
+	// words and diffLines are clamped counts, summed up to countMax.
+	words     int64
+	diffLines int64
 	// lastAgent is the time of the turn's last agent.output, agent.tool or
 	// agent.stop, or 0.
 	lastAgent int64
@@ -344,7 +345,7 @@ func (d *deriver) buildTurns() {
 		}
 		switch p := e.Data.(type) {
 		case *event.AgentOutput:
-			tb.words += p.Words
+			tb.words = addCount(tb.words, count(p.Words))
 		case *event.AgentStop:
 			if tb.tStop == 0 {
 				tb.tStop, tb.stopHook = e.T, p.StopHookActive
@@ -369,7 +370,7 @@ func (d *deriver) buildTurns() {
 		}
 		if tb := s.runningAt(e.T); tb != nil {
 			if isEdit(p) {
-				tb.diffLines += p.LinesAdded + p.LinesRemoved
+				tb.diffLines = addCount(tb.diffLines, addCount(count(p.LinesAdded), count(p.LinesRemoved)))
 			}
 			tb.lastAgent = max(tb.lastAgent, e.T)
 		}
@@ -423,7 +424,7 @@ func (s *session) runningAt(t int64) *turnBuild {
 // finishTurn gives a turn its origin, class and typed length.
 func (d *deriver) finishTurn(tb *turnBuild) {
 	tb.turn = Turn{SessionKey: tb.sess.key, TurnKey: tb.key, Harness: tb.sess.harness, ProjectKey: tb.sess.project,
-		TSubmit: tb.tSubmit, TStop: tb.tStop, WordsOut: tb.words, DiffLines: tb.diffLines}
+		TSubmit: tb.tSubmit, TStop: tb.tStop, WordsOut: int(tb.words), DiffLines: int(tb.diffLines)}
 	if tb.primary < 0 {
 		// SM 2.2 rule 2: the turn went on without a new prompt.
 		tb.turn.Origin = event.OriginSelfContinue
@@ -465,7 +466,7 @@ func (d *deriver) origin(tb *turnBuild, e event.Event) (event.Origin, event.Prom
 		return event.OriginNoInput, "", 0
 	}
 	class := d.classify(tb.sess, tb.primary, p)
-	typed := int64(p.TypedLenEst)
+	typed := count(p.TypedLenEst)
 	think, typing := d.leadParts(class, e.Via, typed)
 	active := d.pres.inputSlots(e.T-think-typing, e.T) * event.SlotMS / 1000
 	most := d.r.typingMaxCPS * active
@@ -522,7 +523,7 @@ func (d *deriver) hostedBy(f *focusRec, s *session, pos int) bool {
 // is local, so the class reads what the agent derived from it when it
 // recorded the prompt: low_effort, from LowEffort below, and error_sig.
 func (d *deriver) classify(s *session, pos int, p *event.PromptSubmit) event.PromptClass {
-	typed := int64(p.TypedLenEst)
+	typed := count(p.TypedLenEst)
 	switch {
 	case p.AnswersQuestion || s.askedBefore(pos):
 		return event.ClassAnswer
