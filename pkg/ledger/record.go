@@ -7,10 +7,12 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 
 	"github.com/some-du6e/pairtime/pkg/event"
+	"github.com/some-du6e/pairtime/pkg/ledger/features"
 )
 
 // RType is a record type, the header byte that says what a record holds
@@ -300,8 +302,8 @@ var bodyPrefix = []byte(`{"n":"`)
 
 // Body is a record body (spec 4.5). The writer stores what Encode returns,
 // which is encoding/json's output for Body: one object, no insignificant
-// whitespace, the members in field order. Part 2 of the spec adds "f" and
-// "c" after "e" (WP-LG4).
+// whitespace, the members in field order, "f" and "c" absent where the
+// record has none.
 type Body struct {
 	// N is the record's nonce, written as 64 lowercase hex digits.
 	N Hash `json:"n"`
@@ -310,14 +312,27 @@ type Body struct {
 	// serialized score.ProjectState (WP-SC5); for an upload-failure note,
 	// the note (WP-AG5). It holds no text (DESIGN 3.6).
 	E json.RawMessage `json:"e"`
+	// F is the record's keyed scorer features, versioned by f.v (spec
+	// 10.7): on every prompt.submit, agent.tool, shell.command and
+	// cli.track record from version 1's writers on, and on no other. It
+	// is kept as stored, because a reader that meets a version or a member
+	// it doesn't know reports the features as unknown and doesn't guess;
+	// Features reads it.
+	F json.RawMessage `json:"f,omitempty"`
+	// C is the record's content commitment (spec 10.2), on prompt.submit,
+	// a final agent.output and cli.track from version 1's writers on.
+	C *Commitment `json:"c,omitempty"`
 }
 
 // Encode returns b's bytes as the writer stores them. encoding/json
-// compacts E on the way, so a record given with spaces or newlines is
-// stored without them.
+// compacts E and F on the way, so a record given with spaces or newlines
+// is stored without them.
 func (b Body) Encode() ([]byte, error) {
 	if isNull(b.E) {
 		return nil, fmt.Errorf("%w: no record", ErrBody)
+	}
+	if b.F != nil && isNull(b.F) {
+		return nil, fmt.Errorf("%w: f is null", ErrBody)
 	}
 	out, err := json.Marshal(b)
 	if err != nil {
@@ -331,26 +346,84 @@ func isNull(raw json.RawMessage) bool {
 	return len(t) == 0 || bytes.Equal(t, []byte("null"))
 }
 
+// storedBody is a body as ParseBody first reads it, with "f" and "c" kept
+// raw so that a null in either is refused rather than read as absent.
+type storedBody struct {
+	N Hash            `json:"n"`
+	E json.RawMessage `json:"e"`
+	F json.RawMessage `json:"f"`
+	C json.RawMessage `json:"c"`
+}
+
 // ParseBody decodes a stored body. It refuses a body that doesn't start
 // with the "n" member, a member that Body doesn't have, a missing or null
-// record, and anything after the object. Errors wrap ErrBody.
+// record, a null "f" or "c", a "c" that isn't {"n": count, "r": root}, and
+// anything after the object. It doesn't read "f", which Features does.
+// Errors wrap ErrBody.
 func ParseBody(data []byte) (Body, error) {
 	if !bytes.HasPrefix(data, bodyPrefix) {
 		return Body{}, fmt.Errorf("%w: doesn't start with %s", ErrBody, bodyPrefix)
 	}
 	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.DisallowUnknownFields()
-	var b Body
-	if err := dec.Decode(&b); err != nil {
+	var sb storedBody
+	if err := dec.Decode(&sb); err != nil {
 		return Body{}, fmt.Errorf("%w: %v", ErrBody, err)
 	}
 	if _, err := dec.Token(); err != io.EOF {
 		return Body{}, fmt.Errorf("%w: data after the object", ErrBody)
 	}
-	if isNull(b.E) {
+	if isNull(sb.E) {
 		return Body{}, fmt.Errorf("%w: no record", ErrBody)
 	}
+	b := Body{N: sb.N, E: sb.E, F: sb.F}
+	if sb.F != nil && isNull(sb.F) {
+		return Body{}, fmt.Errorf("%w: f is null", ErrBody)
+	}
+	if sb.C != nil {
+		c, err := parseCommitment(sb.C)
+		if err != nil {
+			return Body{}, err
+		}
+		b.C = &c
+	}
 	return b, nil
+}
+
+// parseCommitment reads a body's "c" member, which must be exactly
+// {"n": count, "r": root}.
+func parseCommitment(raw json.RawMessage) (Commitment, error) {
+	if isNull(raw) {
+		return Commitment{}, fmt.Errorf("%w: c is null", ErrBody)
+	}
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
+	var c struct {
+		N *uint64 `json:"n"`
+		R *Hash   `json:"r"`
+	}
+	if err := dec.Decode(&c); err != nil {
+		return Commitment{}, fmt.Errorf("%w: c: %v", ErrBody, err)
+	}
+	if c.N == nil || c.R == nil {
+		return Commitment{}, fmt.Errorf("%w: c is {\"n\": count, \"r\": root}", ErrBody)
+	}
+	return Commitment{N: *c.N, R: *c.R}, nil
+}
+
+// Features reads the body's feature map as the features of a record of
+// type r (spec 10.7). present is false for a body without "f": a record of
+// a kind that carries none, or one written before features existed. An f
+// whose version or members the reader doesn't know gives an error wrapping
+// features.ErrUnknown, which isn't a fault in the record: its features are
+// unknown, and the caller mustn't guess at them.
+func (b Body) Features(r RType) (f features.F, present bool, err error) {
+	if len(b.F) == 0 {
+		return features.F{}, false, nil
+	}
+	kind, _ := r.EventKind()
+	f, err = features.Parse(kind, b.F)
+	return f, true, err
 }
 
 // Event decodes the event that b, the body of an event record, holds.
@@ -362,12 +435,43 @@ func (b Body) Event() (event.Event, error) {
 	return ev, nil
 }
 
+// Content is what spec section 10 adds to an event record's body: the text
+// the record commits and the inputs of its keyed features. The text never
+// enters the body; only its commitment and keyed values do. Each kind takes
+// these fields and no others:
+//
+//   - prompt.submit: Text, the prompt as the harness delivered it, pasted
+//     blocks expanded, and Class.
+//   - agent.output: when IsFinal is set, Text, the turn's final agent
+//     message, which EventRecord cuts to its first MessageMax bytes;
+//     otherwise nothing.
+//   - agent.tool: Edits, in the order the patch lists them, and Command,
+//     the command line the tool ran.
+//   - shell.command: Command, the command line as run.
+//   - cli.track: Text, the label after pkg/redact (DESIGN 5.4), and Class.
+//
+// Every other kind takes none. Text must be valid UTF-8 (spec 10.1).
+type Content struct {
+	Text    []byte
+	Class   features.Class
+	Edits   []features.Edit
+	Command string
+}
+
 // EventRecord returns the record that holds ev, whose sequence number is
-// ev.Seq. The body holds ev.Shareable(), so none of ev's local fields
-// reach the ledger (spec 4.5). EventRecord refuses an event that fails
-// Validate, and an os.* event with a project_key, which pkg/event doesn't
-// refuse yet (spec 4.3, decision 6).
-func EventRecord(k *Keys, ev event.Event) (Record, error) {
+// ev.Seq, with c, the content spec section 10 adds for ev's kind. The body
+// holds ev.Shareable(), so none of ev's local fields reach the ledger
+// (spec 4.5); its "f" holds the features of version 1, on every kind that
+// carries them, even when f holds only v (spec 10.7); and its "c" commits
+// the text of a prompt, a final agent message or a track label (spec
+// 10.1, 10.2).
+//
+// EventRecord refuses an event that fails Validate, an os.* event with a
+// project_key, which pkg/event doesn't refuse yet (spec 4.3, decision 6),
+// content ev's kind doesn't take, text that isn't valid UTF-8, a prompt
+// with no class, and an empty text for a prompt whose len_chars, or a
+// final message whose words or code_lines, say it isn't empty.
+func EventRecord(k *Keys, ev event.Event, c Content) (Record, error) {
 	kind := ev.Kind()
 	rtype, ok := RTypeOf(kind)
 	if !ok {
@@ -389,7 +493,105 @@ func EventRecord(k *Keys, ev event.Event) (Record, error) {
 	if err != nil {
 		return Record{}, fmt.Errorf("ledger: %s event %d: %w", kind, ev.Seq, err)
 	}
-	return newRecord(k, h, e)
+	b := Body{N: k.Nonce(h.Seq()), E: e}
+	if b.F, b.C, err = k.content(ev, c); err != nil {
+		return Record{}, fmt.Errorf("ledger: %s event %d: %w", kind, ev.Seq, err)
+	}
+	body, err := b.Encode()
+	if err != nil {
+		return Record{}, fmt.Errorf("ledger: %s record %d: %w", h.RType(), h.Seq(), err)
+	}
+	return Record{Header: h, Body: body}, nil
+}
+
+// content returns the "f" and "c" members of the body of the record that
+// holds ev, a valid event, from c (spec 10.1, 10.7). The errors say which
+// field is wrong and never quote the text.
+func (k *Keys) content(ev event.Event, c Content) (json.RawMessage, *Commitment, error) {
+	kind := ev.Kind()
+	takes := func(text, class, edits, command bool) error {
+		switch {
+		case !text && len(c.Text) > 0:
+			return fmt.Errorf("%s records commit no text", kind)
+		case !class && c.Class != "":
+			return fmt.Errorf("%s records have no prompt class", kind)
+		case !edits && len(c.Edits) > 0:
+			return fmt.Errorf("%s records have no edit hunks", kind)
+		case !command && c.Command != "":
+			return fmt.Errorf("%s records have no command", kind)
+		}
+		return nil
+	}
+	fk := k.Features()
+	var f features.F
+	var commit *Commitment
+	switch p := ev.Data.(type) {
+	case *event.PromptSubmit:
+		if err := takes(true, true, false, false); err != nil {
+			return nil, nil, err
+		}
+		if len(c.Text) == 0 && p.LenChars > 0 {
+			return nil, nil, fmt.Errorf("the prompt's len_chars is %d, and its content has no text", p.LenChars)
+		}
+		cm, err := k.Commit(ev.Seq, c.Text)
+		if err != nil {
+			return nil, nil, err
+		}
+		commit = &cm
+		if f, err = fk.Prompt(string(c.Text), c.Class); err != nil {
+			return nil, nil, err
+		}
+	case *event.CLITrack:
+		if err := takes(true, true, false, false); err != nil {
+			return nil, nil, err
+		}
+		cm, err := k.Commit(ev.Seq, c.Text)
+		if err != nil {
+			return nil, nil, err
+		}
+		commit = &cm
+		if f, err = fk.Prompt(string(c.Text), c.Class); err != nil {
+			return nil, nil, err
+		}
+	case *event.AgentOutput:
+		if !p.IsFinal {
+			if err := takes(false, false, false, false); err != nil {
+				return nil, nil, fmt.Errorf("%w; only a turn's final message does", err)
+			}
+			return nil, nil, nil
+		}
+		if err := takes(true, false, false, false); err != nil {
+			return nil, nil, err
+		}
+		if len(c.Text) == 0 && (p.Words > 0 || p.CodeLines > 0) {
+			return nil, nil, fmt.Errorf("the message has %d words and %d code lines, and its content has no text", p.Words, p.CodeLines)
+		}
+		cm, err := k.Commit(ev.Seq, CommittedMessage(c.Text))
+		if err != nil {
+			return nil, nil, err
+		}
+		return nil, &cm, nil
+	case *event.AgentTool:
+		if err := takes(false, false, true, true); err != nil {
+			return nil, nil, err
+		}
+		var err error
+		if f, err = fk.Tool(c.Edits, c.Command); err != nil {
+			return nil, nil, err
+		}
+	case *event.ShellCommand:
+		if err := takes(false, false, false, true); err != nil {
+			return nil, nil, err
+		}
+		f = fk.Shell(c.Command)
+	default:
+		return nil, nil, takes(false, false, false, false)
+	}
+	raw, err := json.Marshal(f)
+	if err != nil {
+		return nil, nil, err
+	}
+	return raw, commit, nil
 }
 
 // CheckpointRecord returns checkpoint record s of projectKey's scorer
@@ -424,13 +626,17 @@ func newRecord(k *Keys, h Header, e json.RawMessage) (Record, error) {
 // CheckBody reports whether body, the stored body of the record with
 // header h, agrees with h (spec 4.5). It must parse, and an event record's
 // body must hold an event of h's kind whose seq is h's s and whose
-// project_key and session_key have h's digests. A checkpoint's or an
-// upload-failure note's body only has to parse: how a score.ProjectState
-// names its project is WP-SC5's to define. Errors wrap ErrBody,
-// ErrBodyHeader or ErrUnknownRType.
+// project_key and session_key have h's digests. "f" may appear only on the
+// kinds that carry features and "c" only on the kinds that commit a text,
+// an agent.output's only when it is the turn's final message (spec 10.1,
+// 10.7). A version 1 "f" must fit its kind; an "f" of a version or with a
+// member version 1 doesn't define passes, since its features are unknown,
+// not wrong. A checkpoint's or an upload-failure note's body only has to
+// parse: how a score.ProjectState names its project is WP-SC5's to define.
+// Errors wrap ErrBody, ErrBodyHeader or ErrUnknownRType.
 //
 // CheckBody doesn't check the nonce, which only the device can compute;
-// Keys.CheckNonce does.
+// Keys.CheckNonce does. Nor does it open "c": a reveal does (spec 10.3).
 func CheckBody(h Header, body []byte) error {
 	b, err := ParseBody(body)
 	if err != nil {
@@ -441,6 +647,9 @@ func CheckBody(h Header, body []byte) error {
 	if !isEvent {
 		if !r.Known() {
 			return fmt.Errorf("%w: %s", ErrUnknownRType, r)
+		}
+		if b.F != nil || b.C != nil {
+			return fmt.Errorf("%w: %s records carry no f and no c", ErrBodyHeader, r)
 		}
 		return nil
 	}
@@ -459,6 +668,26 @@ func CheckBody(h Header, body []byte) error {
 	}
 	if d, err := SessionDigest(ev.SessionKey); err != nil || d != h.Session() {
 		return fmt.Errorf("%w: the event's session_key doesn't have the header's session digest", ErrBodyHeader)
+	}
+	if b.F != nil {
+		if !features.Carries(kind) {
+			return fmt.Errorf("%w: %s records carry no f", ErrBodyHeader, kind)
+		}
+		switch _, err := features.Parse(kind, b.F); {
+		case err == nil, errors.Is(err, features.ErrUnknown):
+		case errors.Is(err, features.ErrKind):
+			return fmt.Errorf("%w: %v", ErrBodyHeader, err)
+		default:
+			return fmt.Errorf("%w: %v", ErrBody, err)
+		}
+	}
+	if b.C != nil {
+		if !CommitsText(kind) {
+			return fmt.Errorf("%w: %s records commit no text", ErrBodyHeader, kind)
+		}
+		if out, ok := ev.Data.(*event.AgentOutput); ok && !out.IsFinal {
+			return fmt.Errorf("%w: only a turn's final agent message commits its text", ErrBodyHeader)
+		}
 	}
 	return nil
 }

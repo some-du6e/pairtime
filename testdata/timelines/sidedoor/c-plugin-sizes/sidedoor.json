@@ -1,0 +1,115 @@
+{
+  "fixture": "sidedoor/c-plugin-sizes",
+  "case": "c",
+  "title": "A plugin reporting 50,000-word outputs, with a jiggler on Windows",
+  "wp": "docs/PLAN.md WP-FX4 (c)",
+  "rules": ["DESIGN 5.2", "DESIGN 5.3", "DESIGN 6.2 D2", "DESIGN 6.2 D19", "DESIGN 6.4"],
+  "records": [
+    {
+      "event_id": "01a2144f-6fc0-7885-bd07-d667456c5b9b",
+      "t": 1795637080000,
+      "local": "14:04:40",
+      "kind": "prompt.submit",
+      "via": "plugin",
+      "anchor": true,
+      "level": "C",
+      "labels": ["via_plugin"],
+      "flags": [],
+      "logged_s": 0,
+      "ai_logged_s": 0,
+      "why": "SM 2.2 rule 6 holds, as DESIGN 5.3 requires of a plugin prompt: the jiggler gave input in the 10 s before it and the focused window hosts the session. 150 typed characters, substantive. Level C: a plugin anchor without keyboard input (5.2, 6.4). Plugin records never count toward logged_s or ai_logged_s (D19)."
+    },
+    {
+      "event_id": "01a21450-0c00-785e-a909-4c3a0e2617f3",
+      "t": 1795637120000,
+      "local": "14:05:20",
+      "kind": "agent.output",
+      "via": "plugin",
+      "anchor": false,
+      "flags": [],
+      "logged_s": 0,
+      "ai_logged_s": 0,
+      "why": "Claims 50,000 words, which would fill 16,666.667 s. DESIGN 5.2 stops a plugin turn's fill at R_TURN_BASE_S, which the base already reaches, so it adds nothing. Never counts toward logged_s (D19)."
+    },
+    {
+      "event_id": "01a21450-0c00-74c8-a0ae-60210a3af4fb",
+      "t": 1795637120000,
+      "local": "14:05:20",
+      "kind": "agent.stop",
+      "via": "plugin",
+      "anchor": false,
+      "flags": [],
+      "logged_s": 0,
+      "ai_logged_s": 0,
+      "why": "Ends the turn the plugin claims. Never counts toward logged_s (D19)."
+    },
+    {
+      "event_id": "01a21454-ee00-7544-8194-7af6f2f7b99d",
+      "t": 1795637440000,
+      "local": "14:10:40",
+      "kind": "prompt.submit",
+      "via": "plugin",
+      "anchor": true,
+      "level": "C",
+      "labels": ["via_plugin"],
+      "flags": [],
+      "logged_s": 0,
+      "ai_logged_s": 0,
+      "why": "SM 2.2 rule 6 holds, as DESIGN 5.3 requires of a plugin prompt: the jiggler gave input in the 10 s before it and the focused window hosts the session. 150 typed characters, substantive. Level C: a plugin anchor without keyboard input (5.2, 6.4). Plugin records never count toward logged_s or ai_logged_s (D19)."
+    },
+    {
+      "event_id": "01a21455-8a40-7ed6-a72f-fcd0f270a20d",
+      "t": 1795637480000,
+      "local": "14:11:20",
+      "kind": "agent.output",
+      "via": "plugin",
+      "anchor": false,
+      "flags": [],
+      "logged_s": 0,
+      "ai_logged_s": 0,
+      "why": "Claims 50,000 words, which would fill 16,666.667 s. DESIGN 5.2 stops a plugin turn's fill at R_TURN_BASE_S, which the base already reaches, so it adds nothing. Never counts toward logged_s (D19)."
+    },
+    {
+      "event_id": "01a21455-8a40-7d6e-ab03-bc0609a0d825",
+      "t": 1795637480000,
+      "local": "14:11:20",
+      "kind": "agent.stop",
+      "via": "plugin",
+      "anchor": false,
+      "flags": [],
+      "logged_s": 0,
+      "ai_logged_s": 0,
+      "why": "Ends the turn the plugin claims. Never counts toward logged_s (D19)."
+    }
+  ],
+  "turns": [
+    {
+      "opened_by": "01a2144f-6fc0-7885-bd07-d667456c5b9b",
+      "turn_key": "t_17828ca8fe9a",
+      "session_key": "s_1158c4091219",
+      "t": 1795637080000,
+      "local": "14:04:40",
+      "via": "plugin",
+      "backed": false,
+      "output_fill_s": 16666.667,
+      "fill_s": 20,
+      "why": "DESIGN 5.2: output sizes from via plugin fill the bucket only up to R_TURN_BASE_S = 20 s per turn when no hook or transcript record backs the turn, and none does."
+    },
+    {
+      "opened_by": "01a21454-ee00-7544-8194-7af6f2f7b99d",
+      "turn_key": "t_823c721f67be",
+      "session_key": "s_1158c4091219",
+      "t": 1795637440000,
+      "local": "14:10:40",
+      "via": "plugin",
+      "backed": false,
+      "output_fill_s": 16666.667,
+      "fill_s": 20,
+      "why": "DESIGN 5.2: output sizes from via plugin fill the bucket only up to R_TURN_BASE_S = 20 s per turn when no hook or transcript record backs the turn, and none does."
+    }
+  ],
+  "errata": [],
+  "notes": [
+    "fill_s is each turn's whole fill, the 20 s base included; output_fill_s is what the claimed words alone would add without the side-door cap, rounded to the millisecond."
+  ]
+}

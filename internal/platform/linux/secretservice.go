@@ -8,7 +8,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"os"
-	"strconv"
 
 	"github.com/zalando/go-keyring"
 )
@@ -46,35 +45,15 @@ type SecretService struct {
 
 // Available reports whether there is a session bus to ask, without asking
 // it anything. It returns ErrNoSessionBus when there is none. Each method
-// checks this first, because go-keyring would otherwise run dbus-launch,
-// which starts a bus of its own that outlives the agent.
+// checks this first, because go-keyring would otherwise make godbus run
+// dbus-launch, which starts a bus of its own that outlives the agent.
+// sessionBusAddress looks for the bus where godbus does, so where it finds
+// none, godbus would find none either.
 func (SecretService) Available() error {
-	if _, ok := sessionBusAddress(os.Getenv, fileExists, os.Getuid()); !ok {
+	if _, err := sessionBusAddress(os.Getenv, currentUID, isSocket); err != nil {
 		return ErrNoSessionBus
 	}
 	return nil
-}
-
-// sessionBusAddress returns the session bus address godbus connects to
-// (godbus/dbus v5.2.4, getSessionBusAddress): DBUS_SESSION_BUS_ADDRESS
-// unless it is empty or "autolaunch:", else the socket systemd keeps at
-// /run/user/<uid>/bus. Where it reports false, godbus would run
-// dbus-launch. godbus also reads /run/user/<uid>/dbus-session, which
-// Ubuntu 16.04 wrote and later releases don't; a system that has only that
-// file gets the key file instead.
-func sessionBusAddress(getenv func(string) string, exists func(string) bool, uid int) (string, bool) {
-	if a := getenv("DBUS_SESSION_BUS_ADDRESS"); a != "" && a != "autolaunch:" {
-		return a, true
-	}
-	if bus := "/run/user/" + strconv.Itoa(uid) + "/bus"; exists(bus) {
-		return "unix:path=" + bus, true
-	}
-	return "", false
-}
-
-func fileExists(name string) bool {
-	_, err := os.Stat(name)
-	return err == nil
 }
 
 // Get returns the secret saved under account. It returns ErrNotFound when

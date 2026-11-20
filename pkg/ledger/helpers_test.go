@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/some-du6e/pairtime/pkg/event"
+	"github.com/some-du6e/pairtime/pkg/ledger/features"
 )
 
 // testT is 2026-11-19T00:41:40Z in Unix ms.
@@ -171,6 +172,28 @@ func sampleEvent(k event.Kind) (event.Event, error) {
 	return event.Event{Envelope: env, Data: p}, nil
 }
 
+// sampleContent returns the content EventRecord takes for sampleEvent's
+// event of kind k (spec 10): texts that agree with the sample's len_chars,
+// words and code_lines, edit hunks and commands. It is zero for the kinds
+// that take none.
+func sampleContent(k event.Kind) Content {
+	switch k {
+	case event.KindPromptSubmit:
+		return Content{Text: []byte("the navbar still overlaps the hero on mobile\r\n```css\n.nav { z-index: 10 }\n```\nTypeError: x is undefined"),
+			Class: features.ErrorPaste}
+	case event.KindAgentOutput:
+		return Content{Text: []byte("Here's the fix:\n```js\nconst x = 1;\n```\nRun the tests again.")}
+	case event.KindAgentTool:
+		return Content{Edits: []features.Edit{{Path: "src/nav.js", OldStart: 10, OldLines: 3, NewStart: 10, NewLines: 5}},
+			Command: "npm  test"}
+	case event.KindShellCommand:
+		return Content{Command: "pytest -k test_login"}
+	case event.KindCLITrack:
+		return Content{Text: []byte("fix the login redirect loop"), Class: features.Substantive}
+	}
+	return Content{}
+}
+
 // testEventID returns a UUIDv7 for time t with bits from rng, so the
 // tests' files come out the same every run.
 func testEventID(rng *rand.Rand, t int64) string {
@@ -260,7 +283,7 @@ func testRecord(rng *rand.Rand, k *Keys, spec recordSpec) (rec Record, projectKe
 	if ev.ProjectKey != "" {
 		ev.ProjectKey = spec.projectKey
 	}
-	rec, err = EventRecord(k, ev)
+	rec, err = EventRecord(k, ev, sampleContent(kind))
 	return rec, ev.ProjectKey, ev.SessionKey, err
 }
 

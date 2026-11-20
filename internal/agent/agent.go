@@ -5,7 +5,9 @@
 //
 // This is the skeleton from WP-AG1: the single-instance lock, the data and
 // config directories, config.toml, state.json, the scheduler that every
-// timer goes through, and the HTTP server on 127.0.0.1. The components of
+// timer goes through, and the HTTP server on 127.0.0.1. WP-AG2 added the
+// socket that hooks hand their messages to and the inbox they spool to
+// when the agent is down (packages ipc and inbox). The other components of
 // DESIGN 3.3 arrive in later work packages, each as a package under
 // internal/agent that Run starts.
 package agent
@@ -26,6 +28,8 @@ import (
 
 	"github.com/some-du6e/pairtime/internal/agent/config"
 	"github.com/some-du6e/pairtime/internal/agent/home"
+	"github.com/some-du6e/pairtime/internal/agent/inbox"
+	"github.com/some-du6e/pairtime/internal/agent/ipc"
 	"github.com/some-du6e/pairtime/internal/agent/localhttp"
 	"github.com/some-du6e/pairtime/internal/agent/sched"
 	"github.com/some-du6e/pairtime/internal/agent/state"
@@ -44,9 +48,16 @@ type Options struct {
 	// Ports, when set, replaces the ports the HTTP server tries, which
 	// otherwise come from localhttp.Candidates. Tests use []int{0}.
 	Ports []int
-	// Ready, when set, is called once the HTTP server is listening and
-	// port.json is written.
+	// Ready, when set, is called once the socket and the HTTP server are
+	// listening and port.json is written.
 	Ready func()
+	// ForcePipe makes the agent take hook messages on the named pipe
+	// instead of the socket. It works on Windows only, where tests use it
+	// to run the fallback (WP-AG2).
+	ForcePipe bool
+	// DrainEvery, when set, replaces how often the agent drains the inbox,
+	// once a minute otherwise. Tests set it so they needn't wait a minute.
+	DrainEvery time.Duration
 }
 
 // linked keeps heavyModules' entry points reachable (see heavy_linux.go).
@@ -67,6 +78,8 @@ type agent struct {
 	state   *state.Store
 	cfg     atomic.Pointer[config.Config]
 	port    int
+	journal *inbox.Journal // nil when it couldn't be opened
+	ipcSrv  *ipc.Server    // nil when hooks can't reach the agent
 
 	stop     chan struct{} // closed when a client asks the agent to stop
 	stopOnce sync.Once
@@ -106,8 +119,8 @@ func Run(ctx context.Context, opts Options) error {
 	linkOnce.Do(func() { linked = heavyModules() })
 
 	// Each part that starts adds the step that stops it, and they stop in
-	// reverse order: the HTTP server, port.json, the config watch, the
-	// scheduler, state.json.
+	// reverse order: the HTTP server, port.json, the socket and the inbox,
+	// the config watch, the scheduler, state.json.
 	var closers []func()
 	defer func() {
 		for i := len(closers) - 1; i >= 0; i-- {
@@ -134,6 +147,7 @@ func Run(ctx context.Context, opts Options) error {
 	})
 
 	closers = append(closers, a.watchConfig())
+	closers = append(closers, a.startIPC(opts))
 
 	ln, pf, err := a.listen(opts.Ports)
 	if err != nil {

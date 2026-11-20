@@ -1,0 +1,165 @@
+{
+  "fixture": "sidedoor/e-bridge-lines",
+  "case": "e",
+  "title": "Bridge records of 5,000-line agent edits, with a jiggler on Windows",
+  "wp": "docs/PLAN.md WP-FX4 (e)",
+  "rules": ["DESIGN 5.2", "DESIGN 5.7", "DESIGN 6.2 D2", "DESIGN 6.2 D4", "DESIGN 6.2 D19", "DESIGN 6.4"],
+  "records": [
+    {
+      "event_id": "01a2144d-f4d8-74dc-ad74-fd2b926d75e7",
+      "t": 1795636983000,
+      "local": "14:03:03",
+      "kind": "prompt.submit",
+      "via": "bridge",
+      "anchor": true,
+      "level": "C",
+      "labels": ["via_bridge"],
+      "flags": [],
+      "logged_s": 0,
+      "ai_logged_s": 0,
+      "why": "A transcript-derived heartbeat with ai_prompt_length 90 becomes a prompt with no text (DESIGN 5.7). SM 2.2 rule 6 holds: the jiggler gave input in the 10 s before it and VS Code, which hosts the extension, has focus. 90 characters: substantive, with the typing lead only (D4). Level C: a bridge anchor with no keyboard input and no log reader for the harness (5.2, 6.4). It passed the peer-process check, so it counts toward logged_s and ai_logged_s (D19)."
+    },
+    {
+      "event_id": "01a2144e-0090-77fe-9463-98e25513698a",
+      "t": 1795636986000,
+      "local": "14:03:06",
+      "kind": "agent.tool",
+      "via": "bridge",
+      "anchor": false,
+      "flags": [],
+      "logged_s": 3,
+      "ai_logged_s": 3,
+      "why": "5,000 changed lines would fill 37,500 s. The bridge's lines fill a turn only up to R_TURN_BASE_S, which the base already reaches (DESIGN 5.2, 5.7). An agent edit, so it counts toward both logged_s and ai_logged_s (D19)."
+    },
+    {
+      "event_id": "01a2144e-0090-747d-a823-92250bbba080",
+      "t": 1795636986000,
+      "local": "14:03:06",
+      "kind": "editor.activity",
+      "via": "editor",
+      "anchor": false,
+      "flags": [],
+      "logged_s": 0,
+      "ai_logged_s": 0,
+      "why": "The editor plugin's heartbeat for the agent's change: edit_source agent, so it opens no anchor (DESIGN 5.7). An editor heartbeat that passed the check: it counts toward logged_s, and not toward ai_logged_s, which counts agent events only (SM 5.4)."
+    },
+    {
+      "event_id": "01a2144f-c998-755d-b76e-8369c1f9bbac",
+      "t": 1795637103000,
+      "local": "14:05:03",
+      "kind": "prompt.submit",
+      "via": "bridge",
+      "anchor": true,
+      "level": "C",
+      "labels": ["via_bridge"],
+      "flags": [],
+      "logged_s": 117,
+      "ai_logged_s": 117,
+      "why": "A transcript-derived heartbeat with ai_prompt_length 90 becomes a prompt with no text (DESIGN 5.7). SM 2.2 rule 6 holds: the jiggler gave input in the 10 s before it and VS Code, which hosts the extension, has focus. 90 characters: substantive, with the typing lead only (D4). Level C: a bridge anchor with no keyboard input and no log reader for the harness (5.2, 6.4). It passed the peer-process check, so it counts toward logged_s and ai_logged_s (D19)."
+    },
+    {
+      "event_id": "01a2144f-d550-7075-bee1-a12f2884dae6",
+      "t": 1795637106000,
+      "local": "14:05:06",
+      "kind": "agent.tool",
+      "via": "bridge",
+      "anchor": false,
+      "flags": [],
+      "logged_s": 3,
+      "ai_logged_s": 3,
+      "why": "5,000 changed lines would fill 37,500 s. The bridge's lines fill a turn only up to R_TURN_BASE_S, which the base already reaches (DESIGN 5.2, 5.7). An agent edit, so it counts toward both logged_s and ai_logged_s (D19)."
+    },
+    {
+      "event_id": "01a2144f-d550-7c4a-9357-7109ecbf2703",
+      "t": 1795637106000,
+      "local": "14:05:06",
+      "kind": "editor.activity",
+      "via": "editor",
+      "anchor": false,
+      "flags": [],
+      "logged_s": 0,
+      "ai_logged_s": 0,
+      "why": "The editor plugin's heartbeat for the agent's change: edit_source agent, so it opens no anchor (DESIGN 5.7). An editor heartbeat that passed the check: it counts toward logged_s, and not toward ai_logged_s, which counts agent events only (SM 5.4)."
+    },
+    {
+      "event_id": "01a21451-9e58-759b-879e-8ed555bf0552",
+      "t": 1795637223000,
+      "local": "14:07:03",
+      "kind": "prompt.submit",
+      "via": "bridge",
+      "anchor": true,
+      "level": "C",
+      "labels": ["via_bridge"],
+      "flags": [],
+      "logged_s": 117,
+      "ai_logged_s": 117,
+      "why": "A transcript-derived heartbeat with ai_prompt_length 90 becomes a prompt with no text (DESIGN 5.7). SM 2.2 rule 6 holds: the jiggler gave input in the 10 s before it and VS Code, which hosts the extension, has focus. 90 characters: substantive, with the typing lead only (D4). Level C: a bridge anchor with no keyboard input and no log reader for the harness (5.2, 6.4). It passed the peer-process check, so it counts toward logged_s and ai_logged_s (D19)."
+    },
+    {
+      "event_id": "01a21451-aa10-7eb8-9c74-2b2230dd03ac",
+      "t": 1795637226000,
+      "local": "14:07:06",
+      "kind": "agent.tool",
+      "via": "bridge",
+      "anchor": false,
+      "flags": [],
+      "logged_s": 3,
+      "ai_logged_s": 3,
+      "why": "5,000 changed lines would fill 37,500 s. The bridge's lines fill a turn only up to R_TURN_BASE_S, which the base already reaches (DESIGN 5.2, 5.7). An agent edit, so it counts toward both logged_s and ai_logged_s (D19)."
+    },
+    {
+      "event_id": "01a21451-aa10-7883-a9c8-c301cb9898a6",
+      "t": 1795637226000,
+      "local": "14:07:06",
+      "kind": "editor.activity",
+      "via": "editor",
+      "anchor": false,
+      "flags": [],
+      "logged_s": 0,
+      "ai_logged_s": 0,
+      "why": "The editor plugin's heartbeat for the agent's change: edit_source agent, so it opens no anchor (DESIGN 5.7). An editor heartbeat that passed the check: it counts toward logged_s, and not toward ai_logged_s, which counts agent events only (SM 5.4)."
+    }
+  ],
+  "turns": [
+    {
+      "opened_by": "01a2144d-f4d8-74dc-ad74-fd2b926d75e7",
+      "turn_key": "t_dbf0560dea6e",
+      "session_key": "s_41ff1deef415",
+      "t": 1795636983000,
+      "local": "14:03:03",
+      "via": "bridge",
+      "backed": false,
+      "output_fill_s": 37500,
+      "fill_s": 20,
+      "why": "DESIGN 5.2 and 5.7: bridge output fills the bucket only up to R_TURN_BASE_S = 20 s per turn when no hook or transcript record backs the turn, and no pairtime adapter reads this one."
+    },
+    {
+      "opened_by": "01a2144f-c998-755d-b76e-8369c1f9bbac",
+      "turn_key": "t_fe396482f8d7",
+      "session_key": "s_41ff1deef415",
+      "t": 1795637103000,
+      "local": "14:05:03",
+      "via": "bridge",
+      "backed": false,
+      "output_fill_s": 37500,
+      "fill_s": 20,
+      "why": "DESIGN 5.2 and 5.7: bridge output fills the bucket only up to R_TURN_BASE_S = 20 s per turn when no hook or transcript record backs the turn, and no pairtime adapter reads this one."
+    },
+    {
+      "opened_by": "01a21451-9e58-759b-879e-8ed555bf0552",
+      "turn_key": "t_d45947d7c466",
+      "session_key": "s_41ff1deef415",
+      "t": 1795637223000,
+      "local": "14:07:03",
+      "via": "bridge",
+      "backed": false,
+      "output_fill_s": 37500,
+      "fill_s": 20,
+      "why": "DESIGN 5.2 and 5.7: bridge output fills the bucket only up to R_TURN_BASE_S = 20 s per turn when no hook or transcript record backs the turn, and no pairtime adapter reads this one."
+    }
+  ],
+  "errata": ["2026-11-19-turns-without-a-stop"],
+  "notes": [
+    "fill_s is each turn's whole fill, the 20 s base included; output_fill_s is what the 5,000 diff lines alone would add without the side-door cap."
+  ]
+}
