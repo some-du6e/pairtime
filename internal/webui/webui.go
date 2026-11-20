@@ -7,8 +7,10 @@
 // writes it (vite build --mode agent), and web.yml and release.yml run that
 // before they build Go (DESIGN 3.12; JE must-fix 8). The repo carries only
 // a placeholder dist/index.html, so go build, go test and every Go-only CI
-// job work without Node. Don't commit a build over it; .gitignore keeps
-// out the assets a build writes beside it.
+// job work without Node. A build overwrites it; `git checkout --
+// internal/webui/dist` puts it back. .gitignore keeps out the assets a
+// build writes, so a built index.html committed by mistake fails TestFS in
+// ci.yml, which finds the files it loads missing.
 //
 // The <meta name="pairtime-ui"> in index.html says which one is embedded:
 // "placeholder" or "local".

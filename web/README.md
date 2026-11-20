@@ -40,7 +40,7 @@ The smoke test runs that agent in a data directory of its own, on port 17247 (`P
 ## How the pieces fit
 
 - **Builds are picked by mode.** `vite build --mode agent` builds `src/local/` for the agent; Vite reserves the mode name `local`. `server` and `gallery` build the other two. Only builds get the Content-Security-Policy `<meta>` that `vite.config.ts` adds, because the dev server injects inline styles.
-- **The placeholder stays checked in.** `go build` embeds whatever `internal/webui/dist/` holds, so a plain checkout builds without Node. `npm run build` overwrites `index.html` there; commit the placeholder, never a build. `internal/webui`'s tests run on both.
+- **The placeholder stays checked in.** `go build` embeds whatever `internal/webui/dist/` holds, so a plain checkout builds without Node. `npm run build` overwrites `index.html` there, and `git checkout -- internal/webui/dist` puts the placeholder back. `.gitignore` keeps the built assets out, so a built `index.html` committed by mistake fails `internal/webui`'s tests in ci.yml, which run on both.
 - **Types come from the spec.** `src/local/api.ts` binds `createClient` from `src/shared/api/client.ts` to the generated `paths` type. Imports from `src/gen/` are `import type`, so `vite build` works before `npm run gen` has run.
 - **Decisions use the shared components.** `ConsentCard` (DESIGN 8.4) and `ProfileChoice` (DESIGN 8.3) fix the button labels, which one is prominent, and that nothing is preselected. `tests/consent.spec.ts` and `tests/profile-choice.spec.ts` read those rules from the rendered page's computed styles.
 
