@@ -187,7 +187,9 @@ func TestCredit(t *testing.T) {
 			want: []secondsWant{
 				{60, 75, map[event.Reason]int64{rSUP: 2, rREAD: 13}},
 				{75, 660, map[event.Reason]int64{rREAD: 585}},
-				{660, 675, map[event.Reason]int64{rREAD: 1, xNoAnch: 14}},
+				// The second at 660 s starts READ_HORIZON_S after the
+				// prompt, outside its horizon.
+				{660, 675, map[event.Reason]int64{xNoAnch: 15}},
 				{675, 1140, map[event.Reason]int64{xNoAnch: 465}},
 				{1140, 1200, map[event.Reason]int64{rG: 60}},
 			},
@@ -224,7 +226,7 @@ func TestCredit(t *testing.T) {
 				{60, 75, map[event.Reason]int64{rSUP: 2, rREAD: 13}},
 				{75, 495, map[event.Reason]int64{xOther: 420}},
 				{495, 660, map[event.Reason]int64{rREAD: 165}},
-				{660, 675, map[event.Reason]int64{rREAD: 1, xNoAnch: 14}},
+				{660, 675, map[event.Reason]int64{xNoAnch: 15}},
 				{675, 795, map[event.Reason]int64{xNoAnch: 120}},
 			},
 		},

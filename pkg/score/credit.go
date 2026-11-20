@@ -379,14 +379,18 @@ func (c *creditor) typingOK(a *Anchor, s *Slot) bool {
 
 // nearest returns the anchor of project p nearest t within READ_HORIZON_S,
 // the earlier on a tie, or -1: the human act that lets a second drain the
-// bucket and gives it its level (SM 2.4, DESIGN 6.4). An anchor qualifies
-// only seconds it can credit (Anchor.from).
+// bucket and gives it its level (SM 2.4, DESIGN 6.4). A second belongs to
+// the horizon after an act when its start does, so the second that starts
+// READ_HORIZON_S after it is outside, as SM 6.4's "the reading horizon
+// closes at 23:50" has it; the one that starts READ_HORIZON_S before an act
+// is inside its lead-side horizon. An anchor qualifies only seconds it can
+// credit (Anchor.from).
 func (c *creditor) nearest(p string, t int64) int {
 	idx := c.byProject[p]
 	as := c.d.anchors
 	i := sort.Search(len(idx), func(i int) bool { return as[idx[i]].T >= t })
 	best, dist := -1, c.r.readHorizon+1
-	for j := i - 1; j >= 0 && t-as[idx[j]].T < dist; j-- {
+	for j := i - 1; j >= 0 && t-as[idx[j]].T < c.r.readHorizon; j-- {
 		if as[idx[j]].from(c.r) <= t {
 			best, dist = idx[j], t-as[idx[j]].T
 			break
