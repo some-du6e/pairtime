@@ -52,19 +52,23 @@ RFC 8628 3.4. A form: `grant_type=urn:ietf:params:oauth:grant-type:device_code`,
 `200 OK`, JSON, `Cache-Control: no-store`, `Pragma: no-cache`:
 
 ```json
-{"access_token": "ptd_...", "token_type": "Bearer", "scope": "ingest read:self", "device_id": "d_..."}
+{"access_token": "ptd_...", "token_type": "Bearer", "scope": "ingest read:self", "device_id": "d_...", "account": "U0123ABCD"}
 ```
 
-The token doesn't expire; it works until the device is removed. Errors, each `400` JSON (RFC 8628 3.5):
+`account` names the account that approved the code, as the server's pages show it: its Slack ID, or its Hack Club Auth ID without one. `pairtime login` prints it, so a teen whose code someone else approved finds out at once (RFC 8628 5.4). The token doesn't expire; it works until the device is removed. Errors, each `400` JSON (RFC 8628 3.5):
 
 | `error` | When | The app |
 |---|---|---|
 | `authorization_pending` | Nobody has approved or denied the code yet | waits `interval` seconds and asks again |
 | `slow_down` | It asked again less than `interval` seconds after its last request (with 0.5 s of slack); the server raises this code's interval by 5 s | adds 5 s to its interval, waits, asks again |
-| `access_denied` | The teen chose Deny, or the device id belongs to another account | stops |
+| `access_denied` | The teen chose Deny, or the device id came to belong to another account between the approval and this poll | stops |
 | `expired_token` | 15 minutes passed, or the server restarted, before the app got its token | stops; `pairtime login` starts over |
 | `invalid_grant` | No such device code, or its token was already handed out | stops |
 | `unsupported_grant_type`, `invalid_request`, `invalid_client` | RFC 6749 5.2 | stops |
+
+When the device id already belongs to another account, the page shows whoever types the code that it can't be linked to their account, and the code stays pending, since only that other account may approve it. If nobody does, the app gets `expired_token` after 15 minutes.
+
+The app never follows a redirect from these endpoints: a redirect could carry the device code to another host, or the token over plain http. A 3xx is an error.
 
 ## 5. The `ptd_` token
 
@@ -104,7 +108,9 @@ A device that `pairtime login` links again (after `pairtime logout`, or after it
 | `{v, server, device_id, public_key, linked_at}` | `account.json` in the data directory, readable by the user only |
 | `mode = "online"` and `[server] url` | config.toml, the settings the teen can edit |
 
-An upload goes out only while config.toml's mode is `online` and the keystore holds a token, and only to the server `account.json` names: a token is never sent to a server it didn't come from, even when `[server] url` changes later. `pairtime logout` sends section 7's `DELETE`, then deletes `account.json`, the token and the key whatever the server answered, and sets the mode back to `local`. The ledger and everything else stay. When the keystore can't be opened, as with a locked keyring, logout still deletes `account.json` and sets the mode to `local`, so nothing uploads, and says the token stays in the keystore and the device on the server until it runs again.
+An upload goes out only while config.toml's mode is `online` and the keystore holds a token, and only to the server `account.json` names: a token is never sent to a server it didn't come from, even when `[server] url` changes later. `pairtime login` uses `--server`, else `[server] url`, else https://pairtime.karimeltaib.com; a config.toml that doesn't parse, or a url that isn't a server's, stops it rather than falling back to the default.
+
+`pairtime logout` sends section 7's `DELETE`, but only when the keystore's key is the one `account.json` says was registered. Then it deletes `account.json`, the token and the key whatever the server answered, and sets the mode back to `local`. The ledger and everything else stay. When the keystore can't be read, as with a locked keyring, logout only sets the mode to `local`, so nothing uploads, and keeps `account.json`, so running it again once the keystore opens still tells the right server. Login and logout hold a lock in the data directory (`account/agent.lock`), so two of them can't run at once.
 
 ## 9. On the server
 

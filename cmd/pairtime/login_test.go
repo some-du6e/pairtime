@@ -108,7 +108,7 @@ func testLoginEndToEnd(t *testing.T, p oidcProvider) {
 	if approveErr != nil || code != 0 {
 		t.Fatalf("pairtime login exited %d (approving: %v)\nstdout:\n%s\nstderr:\n%s", code, approveErr, out, errOut)
 	}
-	if !strings.Contains(out, "Linked. This computer is device "+deviceID) {
+	if !strings.Contains(out, "Linked. This computer is device "+deviceID) || !strings.Contains(out, "It's linked to the account U0") {
 		t.Errorf("pairtime login printed:\n%s", out)
 	}
 

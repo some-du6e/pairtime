@@ -101,6 +101,11 @@ type Token struct {
 	// AccessToken is the device's ptd_ token.
 	AccessToken string
 	DeviceID    string
+	// SlackID and HCASub name the account that approved the code, so the
+	// app can say whose account it is linked to: someone who got hold of
+	// a teen's code and approved it would otherwise get the teen's
+	// uploads unnoticed (RFC 8628 5.4).
+	SlackID, HCASub string
 }
 
 // maxCodeTries bounds how many user codes NewCode draws before giving up,
@@ -263,11 +268,13 @@ func (s *Store) Poll(ctx context.Context, deviceCode string) (tok Token, interva
 	codeHash := tokenHash(deviceCode)
 	token := devtoken.New()
 	var (
-		outcome error
-		linked  string
+		outcome         error
+		linked          string
+		slackID, hcaSub sql.NullString
 	)
 	err = s.w.Do(ctx, 2, func(ctx context.Context, tx writer.Tx) error {
 		outcome, interval, linked = nil, 0, ""
+		slackID, hcaSub = sql.NullString{}, sql.NullString{}
 		var (
 			deviceID, osFamily, build, status string
 			account                           sql.NullString
@@ -341,6 +348,9 @@ WHERE device_id = $1`,
 			codeHash, statusRedeemed, nowMs); err != nil {
 			return fmt.Errorf("device: redeeming the code: %w", err)
 		}
+		if err := tx.QueryRowContext(ctx, `SELECT slack_id, hca_sub FROM users WHERE id = $1`, account.String).Scan(&slackID, &hcaSub); err != nil {
+			return fmt.Errorf("device: reading the approving account: %w", err)
+		}
 		linked = deviceID
 		return nil
 	})
@@ -350,7 +360,7 @@ WHERE device_id = $1`,
 	if outcome != nil {
 		return Token{}, interval, outcome
 	}
-	return Token{AccessToken: token, DeviceID: linked}, interval, nil
+	return Token{AccessToken: token, DeviceID: linked, SlackID: slackID.String, HCASub: hcaSub.String}, interval, nil
 }
 
 // DeleteExpiredCodes deletes the rows of codes that expired more than

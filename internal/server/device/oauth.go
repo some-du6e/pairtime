@@ -8,6 +8,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/some-du6e/pairtime/internal/server/accounts"
 )
 
 // codeReply is the body of a device authorization response (RFC 8628
@@ -27,6 +29,9 @@ type tokenReply struct {
 	TokenType   string `json:"token_type"`
 	Scope       string `json:"scope"`
 	DeviceID    string `json:"device_id"`
+	// Account names the account that approved the code, as the pages
+	// show it, so pairtime login can say whose account it is linked to.
+	Account string `json:"account"`
 }
 
 // deviceCode answers a device authorization request: POST
@@ -158,7 +163,8 @@ func (s *Service) token(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case err == nil:
 		s.log.Info("linked a device", "device", tok.DeviceID)
-		writeJSON(w, http.StatusOK, tokenReply{AccessToken: tok.AccessToken, TokenType: "Bearer", Scope: Scope, DeviceID: tok.DeviceID})
+		writeJSON(w, http.StatusOK, tokenReply{AccessToken: tok.AccessToken, TokenType: "Bearer", Scope: Scope, DeviceID: tok.DeviceID,
+			Account: s.handle(&accounts.User{SlackID: tok.SlackID, HCASub: tok.HCASub})})
 	case errors.Is(err, ErrPending):
 		writeOAuthError(w, http.StatusBadRequest, "authorization_pending", "Nobody has approved this code yet.")
 	case errors.Is(err, ErrSlowDown):

@@ -3,6 +3,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"flag"
@@ -114,14 +115,17 @@ func runLogin(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "pairtime login: %v\n", err)
 		return 1
 	}
-	// A config.toml that is missing or doesn't parse gives the defaults.
-	cfg, _, _ := config.Load(dirs.ConfigFile())
 	raw := *server
 	if raw == "" {
-		raw = cfg.Server.URL
-	}
-	if raw == "" {
-		raw = config.DefaultServer
+		// A config.toml that doesn't parse, or names a server that can't be
+		// one, stops the login: falling back to the default server would
+		// link the teen somewhere they didn't mean.
+		u, err := config.ServerFromFile(dirs.ConfigFile())
+		if err != nil {
+			fmt.Fprintf(stderr, "pairtime login: %v; fix it, or name the server with --server\n", err)
+			return 2
+		}
+		raw = cmp.Or(u, config.DefaultServer)
 	}
 	srv, err := config.CheckServerURL(raw)
 	if err != nil {
@@ -144,6 +148,9 @@ func runLogin(args []string, stdout, stderr io.Writer) int {
 	}
 	ctx, stop := signal.NotifyContext(loginContext(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	// After the first Ctrl-C stops the login, a second one kills it the
+	// usual way, as when a keyring call doesn't return.
+	context.AfterFunc(ctx, stop)
 	dev := account.Device{ID: id, OS: account.OSFamily(), Build: account.Build(version.Get().Version)}
 	r, err := account.Login(ctx, loginOptions(srv, dirs, ks), dev, func(c account.Code) {
 		fmt.Fprintf(stdout, "To link this computer to your pairtime account, open\n\n    %s\n\nand enter the code\n\n    %s\n\n", c.VerificationURI, c.UserCode)
@@ -162,9 +169,12 @@ func runLogin(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stdout, "The code was turned down, so this computer isn't linked.")
 		return 1
 	case errors.Is(err, account.ErrExpired):
-		fmt.Fprintln(stdout, "The code expired before anyone approved it. Run pairtime login again for a new one.")
+		fmt.Fprintln(stdout, "The code expired before anyone approved it. Run pairtime login again for a new one. If the page said this computer is linked to another account, sign in there as that account.")
 		return 1
-	case ctx.Err() != nil:
+	case errors.Is(err, account.ErrBusy):
+		fmt.Fprintln(stderr, "pairtime login: another pairtime login or logout is running on this computer; let it finish first.")
+		return 1
+	case err != nil && ctx.Err() != nil:
 		fmt.Fprintln(stdout, "\nStopped. This computer isn't linked.")
 		return 1
 	case err != nil:
@@ -172,6 +182,9 @@ func runLogin(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	fmt.Fprintf(stdout, "\nLinked. This computer is device %s on %s.\n", r.Linked.DeviceID, srv)
+	if r.Account != "" {
+		fmt.Fprintf(stdout, "It's linked to the account %s. If that isn't yours, run pairtime logout now.\n", r.Account)
+	}
 	fmt.Fprintf(stdout, "pairtime uploads the minutes it counts here to that server, as numbers. What you type stays on this computer.\nSee your linked computers at %s/account/devices, and unlink this one with pairtime logout.\n", srv)
 	if r.ConfigErr != nil {
 		fmt.Fprintf(stderr, "pairtime login: %v\n", r.ConfigErr)
@@ -202,6 +215,7 @@ func runLogout(args []string, stdout, stderr io.Writer) int {
 	}
 	ctx, stop := signal.NotifyContext(loginContext(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	context.AfterFunc(ctx, stop)
 	var secrets account.Secrets
 	ks, kerr := keys.Open(keys.Options{Dir: dirs.Data, Stores: agentKeyStores})
 	if kerr == nil {
@@ -213,7 +227,17 @@ func runLogout(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stdout, "This computer isn't linked to a pairtime server.")
 		return 0
 	case errors.Is(err, account.ErrNoKeystore):
-		fmt.Fprintf(stderr, "pairtime logout: this computer stopped uploading and is back in local mode, but the device keystore can't be opened (%v), so its token is still in it and the server still lists it. Run pairtime logout again once the keystore opens, or remove the computer on the server's devices page.\n", kerr)
+		why := err
+		if kerr != nil {
+			why = kerr
+		}
+		fmt.Fprintf(stderr, "pairtime logout: pairtime is back in local mode, so nothing uploads, but the device keystore couldn't be read (%v), so this computer couldn't tell the server or forget its token. Run pairtime logout again once the keystore opens.\n", why)
+		return 1
+	case errors.Is(err, account.ErrBusy):
+		fmt.Fprintln(stderr, "pairtime logout: another pairtime login or logout is running on this computer; let it finish first.")
+		return 1
+	case err != nil && ctx.Err() != nil:
+		fmt.Fprintln(stderr, "pairtime logout: stopped before anything changed.")
 		return 1
 	case err != nil:
 		fmt.Fprintf(stderr, "pairtime logout: %v\n", err)
@@ -259,7 +283,12 @@ func loginDeviceID(dirs home.Dirs, stdout io.Writer) (string, error) {
 		return id, err
 	}
 	fmt.Fprintln(stdout, "Starting pairtime's agent, which hasn't run on this computer yet...")
-	if _, err := startAgent(""); err != nil {
+	// As a hook does it: in the data directory, and never from an
+	// elevated or another user's shell, whose agent couldn't use the
+	// data directory.
+	if err := startHookAgent(dirs); errors.Is(err, errNotTheUsers) {
+		return "", errors.New("this shell runs as another user or as an administrator; run pairtime login from your own terminal, without sudo or admin rights")
+	} else if err != nil {
 		return "", fmt.Errorf("starting the agent: %w", err)
 	}
 	for deadline := time.Now().Add(chainWait); time.Now().Before(deadline); {

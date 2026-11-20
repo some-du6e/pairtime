@@ -133,11 +133,15 @@ func (c *Client) wait(ctx context.Context, d time.Duration) error {
 const maxReply = 64 << 10
 
 // send sends req and decodes a JSON answer with a 2xx status into out,
-// when out isn't nil. Any other status becomes a *ServerError.
+// when out isn't nil. Any other status becomes a *ServerError, a redirect
+// too: the device API never redirects, and following one could send the
+// token over plain http, or the device code to another host.
 func (c *Client) send(req *http.Request, out any) (int, error) {
 	req.Header.Set("User-Agent", c.UserAgent)
 	req.Header.Set("Accept", "application/json")
-	resp, err := c.httpClient().Do(req)
+	hc := *c.httpClient()
+	hc.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	resp, err := hc.Do(req)
 	if err != nil {
 		return 0, err
 	}
@@ -224,6 +228,9 @@ type Token struct {
 	AccessToken string `json:"access_token"`
 	TokenType   string `json:"token_type"`
 	DeviceID    string `json:"device_id"`
+	// Account names the account that approved the code, as the server's
+	// pages show it.
+	Account string `json:"account"`
 }
 
 // Poll asks for the token of code until the teen answers or the code
@@ -264,6 +271,10 @@ func (c *Client) Poll(ctx context.Context, code Code) (Token, error) {
 			if !strings.EqualFold(tok.TokenType, "Bearer") || devtoken.Check(tok.AccessToken) != nil {
 				return Token{}, errors.New("account: the server's token isn't a pairtime device token")
 			}
+			if tok.DeviceID != "" && !validDeviceID(tok.DeviceID) {
+				return Token{}, errors.New("account: the server's token answer names a device id that isn't one")
+			}
+			tok.Account = printable(tok.Account)
 			return tok, nil
 		case errors.As(err, &se):
 			switch se.Code {
@@ -282,8 +293,9 @@ func (c *Client) Poll(ctx context.Context, code Code) (Token, error) {
 		case ctx.Err() != nil:
 			return Token{}, ctx.Err()
 		default:
-			// The network, not the server: slow down before trying again.
-			wait = min(2*max(wait, interval), maxBackoff)
+			// The network, not the server: slow down before trying again,
+			// never below the server's interval.
+			wait = max(min(2*max(wait, interval), maxBackoff), interval)
 		}
 	}
 }
@@ -334,3 +346,19 @@ func (c *Client) RemoveDevice(ctx context.Context, token string) error {
 
 // isNotFound reports whether the keystore has no sign-in.
 func isNotFound(err error) bool { return errors.Is(err, keys.ErrNotFound) }
+
+// validDeviceID reports whether id can be a device id, by the server's
+// rule: 16 to 128 letters, digits, '_' and '-' (docs/spec/device-auth-v1.md
+// section 1).
+func validDeviceID(id string) bool {
+	if len(id) < 16 || len(id) > 128 {
+		return false
+	}
+	for i := 0; i < len(id); i++ {
+		c := id[i]
+		if !('a' <= c && c <= 'z' || 'A' <= c && c <= 'Z' || '0' <= c && c <= '9' || c == '_' || c == '-') {
+			return false
+		}
+	}
+	return true
+}

@@ -704,6 +704,13 @@ func Destroy(opts Options) error {
 		if !slices.Contains(named, key{m.deviceItem(), s.Kind()}) {
 			quick.del(s, m.deviceItem())
 		}
+		// The device's sign-in too: a save that timed out may have
+		// landed after ForgetAccount stopped listing it.
+		for _, item := range m.accountItems() {
+			if !slices.Contains(named, key{item, s.Kind()}) {
+				quick.del(s, item)
+			}
+		}
 	}
 	if len(retry) > 0 {
 		return errors.Join(append(retry, stays...)...)

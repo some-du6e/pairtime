@@ -123,6 +123,25 @@ func TestAccount(t *testing.T) {
 			}
 			checkCleared(t, dir)
 		}},
+		{"Destroy deletes a sign-in that keystore.json no longer lists, as a save that landed late leaves", func(t *testing.T, dir string) {
+			osStore := newFake(KindKeychain)
+			opts := Options{Dir: dir, Stores: []Store{osStore}}
+			ks := mustOpen(t, opts)
+			if err := ks.SetAccount(token, seed); err != nil {
+				t.Fatal(err)
+			}
+			m := markerIn(t, dir)
+			m.Account = ""
+			if err := writeMarker(keysDir(dir), m); err != nil {
+				t.Fatal(err)
+			}
+			if err := Destroy(opts); err != nil {
+				t.Fatal(err)
+			}
+			if osStore.size() != 0 {
+				t.Errorf("the store still has %d items after Destroy", osStore.size())
+			}
+		}},
 		{"with K_dev in the key file, the sign-in is in files beside it, which Destroy deletes", func(t *testing.T, dir string) {
 			opts := Options{Dir: dir, Stores: []Store{}}
 			ks := mustOpen(t, opts)

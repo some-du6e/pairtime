@@ -461,33 +461,135 @@ func TestLogoutWithoutKeystore(t *testing.T) {
 	if _, err := Login(context.Background(), o, testDevice, func(Code) {}); err != nil {
 		t.Fatal(err)
 	}
+	// The keystore can't be opened, so logout gets no Secrets.
+	_, first := Logout(context.Background(), Options{DataDir: o.DataDir, ConfigFile: o.ConfigFile})
+	cfg, _, _ := config.Load(o.ConfigFile)
+	_, loadErr := Load(o.DataDir)
+	sentFirst := fake.count("DELETE " + mePath)
+	// Once the keystore opens again, logout finishes.
+	_, second := Logout(context.Background(), Options{DataDir: o.DataDir, ConfigFile: o.ConfigFile, Secrets: sec, HTTP: o.HTTP})
+	_, loadAfter := Load(o.DataDir)
 	tests := []struct {
 		name string
-		ok   func() bool
+		ok   bool
 	}{
-		{name: "a logout whose keystore can't be opened says so", ok: func() bool {
-			_, err := Logout(context.Background(), Options{DataDir: o.DataDir, ConfigFile: o.ConfigFile})
-			return errors.Is(err, ErrNoKeystore)
-		}},
-		{name: "it still deletes account.json, so nothing uploads", ok: func() bool {
-			_, err := Load(o.DataDir)
-			return errors.Is(err, ErrNotLinked)
-		}},
-		{name: "it still switches config.toml to local", ok: func() bool {
-			cfg, _, _ := config.Load(o.ConfigFile)
-			return cfg.Mode == config.Local
-		}},
-		{name: "it sends nothing to the server without the token", ok: func() bool {
-			return fake.count("DELETE "+mePath) == 0
-		}},
+		{name: "a logout whose keystore can't be opened says so", ok: errors.Is(first, ErrNoKeystore)},
+		{name: "it switches config.toml to local, so nothing uploads", ok: cfg.Mode == config.Local},
+		{name: "it keeps account.json, the record of which server to tell", ok: loadErr == nil},
+		{name: "it sends nothing to the server without the token", ok: sentFirst == 0},
+		{name: "the next logout, with the keystore, finishes without an error", ok: second == nil},
+		{name: "the next logout removes the device on the server", ok: fake.count("DELETE "+mePath) == 1},
+		{name: "the next logout deletes account.json and forgets the token", ok: errors.Is(loadAfter, ErrNotLinked) && sec.token == nil},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if !tt.ok() {
-				t.Error("it didn't")
+			if !tt.ok {
+				t.Errorf("it didn't: first logout %v, second %v", first, second)
 			}
 		})
 	}
+}
+
+func TestLogoutChecks(t *testing.T) {
+	tests := []struct {
+		name string
+		run  func(t *testing.T)
+	}{
+		{name: "an install that isn't linked, with a keystore that can't be opened, is reported as not linked", run: func(t *testing.T) {
+			o := testOptions(t, &fakeServer{replies: map[string][]reply{}}, nil)
+			if _, err := Logout(context.Background(), Options{DataDir: o.DataDir, ConfigFile: o.ConfigFile}); !errors.Is(err, ErrNotLinked) {
+				t.Errorf("Logout = %v, want ErrNotLinked", err)
+			}
+		}},
+		{name: "a keystore whose key isn't the registered one keeps its token from the server", run: func(t *testing.T) {
+			fake := loginServer(http.StatusCreated)
+			sec := &memSecrets{}
+			o := testOptions(t, fake, sec)
+			if _, err := Login(context.Background(), o, testDevice, func(Code) {}); err != nil {
+				t.Fatal(err)
+			}
+			sec.seed = bytes.Repeat([]byte{1}, ed25519.SeedSize) // another login's key
+			r, err := Logout(context.Background(), Options{DataDir: o.DataDir, ConfigFile: o.ConfigFile, Secrets: sec, HTTP: o.HTTP})
+			if err != nil || r.ServerErr == nil || fake.count("DELETE "+mePath) != 0 {
+				t.Errorf("Logout = %+v, %v, with %d removals sent; want the token kept from the server", r, err, fake.count("DELETE "+mePath))
+			}
+		}},
+		{name: "a logout whose context has ended changes nothing", run: func(t *testing.T) {
+			fake := loginServer(http.StatusCreated)
+			sec := &memSecrets{}
+			o := testOptions(t, fake, sec)
+			if _, err := Login(context.Background(), o, testDevice, func(Code) {}); err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+			if _, err := Logout(ctx, Options{DataDir: o.DataDir, ConfigFile: o.ConfigFile, Secrets: sec, HTTP: o.HTTP}); !errors.Is(err, context.Canceled) {
+				t.Errorf("Logout = %v, want context.Canceled", err)
+			}
+			if _, err := Load(o.DataDir); err != nil || sec.token == nil {
+				t.Errorf("a cancelled logout changed things: account.json %v, token %q", err, sec.token)
+			}
+		}},
+		{name: "a login while another holds the lock is refused at once", run: func(t *testing.T) {
+			o := testOptions(t, loginServer(http.StatusCreated), &memSecrets{})
+			unlock, err := lock(o.DataDir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer unlock()
+			if _, err := Login(context.Background(), o, testDevice, func(Code) { t.Error("a code was shown") }); !errors.Is(err, ErrBusy) {
+				t.Errorf("Login = %v, want ErrBusy", err)
+			}
+			if _, err := Logout(context.Background(), Options{DataDir: o.DataDir, ConfigFile: o.ConfigFile, Secrets: &memSecrets{}}); !errors.Is(err, ErrBusy) {
+				t.Errorf("Logout = %v, want ErrBusy", err)
+			}
+		}},
+		{name: "a 503 from the server while the key registers is tried again", run: func(t *testing.T) {
+			fake := loginServer(http.StatusCreated)
+			fake.replies["POST "+keyPath] = []reply{{status: http.StatusServiceUnavailable, body: `{}`}, {status: http.StatusCreated, body: `{}`}}
+			sec := &memSecrets{}
+			o := testOptions(t, fake, sec)
+			if _, err := Login(context.Background(), o, testDevice, func(Code) {}); err != nil {
+				t.Fatalf("Login = %v", err)
+			}
+			if n := fake.count("POST " + keyPath); n != 2 {
+				t.Errorf("the key was sent %d times, want 2", n)
+			}
+		}},
+		{name: "the account that approved comes back with the login", run: func(t *testing.T) {
+			fake := loginServer(http.StatusCreated)
+			fake.replies["POST "+tokenPath] = []reply{{status: http.StatusOK, body: `{"access_token":"` + testToken + `","token_type":"Bearer","device_id":"d_testdevice00000000000000a","account":"U0TEEN1\u001b[2J"}`}}
+			o := testOptions(t, fake, &memSecrets{})
+			r, err := Login(context.Background(), o, testDevice, func(Code) {})
+			if err != nil || r.Account != "U0TEEN1[2J" {
+				t.Errorf("Login = %+v, %v; want the account, with its control bytes dropped", r, err)
+			}
+		}},
+		{name: "a redirect from the server is an error, not followed with the token", run: func(t *testing.T) {
+			fake := &fakeServer{replies: map[string][]reply{"DELETE " + mePath: {{status: http.StatusFound, body: ``}}}}
+			c := &Client{Server: testServer, HTTP: &http.Client{Transport: redirecting{fake}}}
+			err := c.RemoveDevice(context.Background(), testToken)
+			var se *ServerError
+			if !errors.As(err, &se) || se.Status != http.StatusFound || fake.count("DELETE "+mePath) != 1 {
+				t.Errorf("RemoveDevice = %v after %d requests; want the 302 as an error and one request", err, fake.count("DELETE "+mePath))
+			}
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, tt.run)
+	}
+}
+
+// redirecting adds a Location to every 3xx the fake answers, sending the
+// client to plain http on the same host.
+type redirecting struct{ f *fakeServer }
+
+func (r redirecting) RoundTrip(req *http.Request) (*http.Response, error) {
+	resp, err := r.f.RoundTrip(req)
+	if err == nil && resp.StatusCode/100 == 3 {
+		resp.Header.Set("Location", "http://pairtime.example.org"+req.URL.Path)
+	}
+	return resp, err
 }
 
 func TestBrowserURL(t *testing.T) {

@@ -271,6 +271,7 @@ type tokenReply struct {
 	TokenType   string `json:"token_type"`
 	Scope       string `json:"scope"`
 	DeviceID    string `json:"device_id"`
+	Account     string `json:"account"`
 	Error       string `json:"error"`
 }
 

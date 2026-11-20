@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 
@@ -49,17 +50,46 @@ func CheckServerURL(raw string) (string, error) {
 	return out, nil
 }
 
+// ServerFromFile returns the [server] url of the config.toml at name, as
+// CheckServerURL returns it, or "" when the file or the setting is missing
+// or empty. A file that doesn't parse, or a url CheckServerURL refuses, is
+// an error rather than "", so a typo can't send pairtime login to the
+// default server instead of the one the teen meant.
+func ServerFromFile(name string) (string, error) {
+	data, err := os.ReadFile(name)
+	if errors.Is(err, fs.ErrNotExist) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	var file fileConfig
+	if _, err := toml.Decode(string(data), &file); err != nil {
+		return "", fmt.Errorf("config.toml doesn't parse: %v", err)
+	}
+	if file.Server.URL == "" {
+		return "", nil
+	}
+	u, err := CheckServerURL(file.Server.URL)
+	if err != nil {
+		return "", fmt.Errorf("config.toml's server url %q %v", file.Server.URL, err)
+	}
+	return u, nil
+}
+
 // SetOnline switches the config.toml at name to mode "online" with [server]
 // url serverURL, which CheckServerURL must accept: what `pairtime login`
 // does once it has linked the install (DESIGN 3.2). SetLocal switches it
 // back to mode "local" and leaves [server] as it is: what `pairtime
 // logout` does. A missing file is written from the default first.
 //
-// Both change only those lines, so the teen's comments, order, line
-// endings and other settings stay byte for byte. They refuse to write a
-// file they can't change that way, such as one that doesn't parse, or one
-// where the edit would change any other setting; then the teen edits it by
-// hand, and the error says what to write.
+// Both change only those values, so the teen's comments, a comment after
+// the value included, order, line endings and other settings stay byte for
+// byte, and a config.toml that is a symlink stays one: the file it points
+// to is the one rewritten. They refuse to write a file they can't change
+// that way, such as one that doesn't parse, or one where the edit would
+// change any other setting; then the teen edits it by hand, and the error
+// says what to write.
 func SetOnline(name, serverURL string) error {
 	u, err := CheckServerURL(serverURL)
 	if err != nil {
@@ -75,6 +105,13 @@ func SetLocal(name string) error {
 
 // edit sets mode, and [server] url when serverURL isn't "", in the file.
 func edit(name string, mode Mode, serverURL string) error {
+	if fi, err := os.Lstat(name); err == nil && fi.Mode()&fs.ModeSymlink != 0 {
+		target, err := filepath.EvalSymlinks(name)
+		if err != nil {
+			return fmt.Errorf("config: config.toml is a link pairtime can't follow (%v), so it didn't change it", err)
+		}
+		name = target
+	}
 	data, err := os.ReadFile(name)
 	if errors.Is(err, fs.ErrNotExist) {
 		data, err = []byte(defaultFile), nil
@@ -135,10 +172,10 @@ func patch(text string, mode Mode, serverURL string) string {
 				serverHeader = i
 			}
 		case table == "" && isKey(t, "mode"):
-			lines[i] = indentOf(line) + modeLine + endingOf(line)
+			lines[i] = setValue(line, string(mode), modeLine)
 			modeDone = true
 		case table == "server" && !urlDone && isKey(t, "url"):
-			lines[i] = indentOf(line) + urlLine + endingOf(line)
+			lines[i] = setValue(line, serverURL, urlLine)
 			urlDone = true
 		}
 	}
@@ -157,6 +194,46 @@ func patch(text string, mode Mode, serverURL string) string {
 		out += nl + "[server]" + nl + urlLine + nl
 	}
 	return out
+}
+
+// setValue rewrites the value of a key = "value" line, keeping its
+// indentation, the blanks around "=", and whatever follows the value, such
+// as a comment, and its line ending. When the old value isn't a string on
+// one line, it writes whole instead, and edit's check catches anything
+// that changes.
+func setValue(line, value, whole string) string {
+	body := strings.TrimRight(line, "\r\n")
+	ending := line[len(body):]
+	eq := strings.IndexByte(body, '=')
+	if eq < 0 {
+		return indentOf(line) + whole + ending
+	}
+	start := eq + 1
+	for start < len(body) && (body[start] == ' ' || body[start] == '\t') {
+		start++
+	}
+	end := -1
+	switch {
+	case start < len(body) && body[start] == '"':
+		for j := start + 1; j < len(body); j++ {
+			if body[j] == '\\' {
+				j++
+				continue
+			}
+			if body[j] == '"' {
+				end = j + 1
+				break
+			}
+		}
+	case start < len(body) && body[start] == '\'':
+		if j := strings.IndexByte(body[start+1:], '\''); j >= 0 {
+			end = start + 1 + j + 1
+		}
+	}
+	if end < 0 {
+		return indentOf(line) + whole + ending
+	}
+	return body[:start] + `"` + value + `"` + body[end:] + ending
 }
 
 // tableName returns the name a [table] header line opens, as written, or

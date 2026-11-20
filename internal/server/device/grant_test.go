@@ -39,7 +39,7 @@ func TestGrant(t *testing.T) {
 						t.Fatalf("approving answered %d:\n%s", r.status, r.body)
 					}
 					status, tr := h.poll(c.DeviceCode)
-					if status != http.StatusOK || tr.TokenType != "Bearer" || tr.DeviceID != testDeviceID || tr.Scope != device.Scope {
+					if status != http.StatusOK || tr.TokenType != "Bearer" || tr.DeviceID != testDeviceID || tr.Scope != device.Scope || tr.Account != "U0TEEN1" {
 						t.Fatalf("token reply %d: %+v", status, tr)
 					}
 					if err := devtoken.Check(tr.AccessToken); err != nil {

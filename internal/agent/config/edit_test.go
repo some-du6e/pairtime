@@ -39,6 +39,74 @@ func TestCheckServerURL(t *testing.T) {
 	}
 }
 
+func TestServerFromFile(t *testing.T) {
+	tests := []struct {
+		name    string
+		file    string // "" means no file
+		want    string
+		wantErr bool
+	}{
+		{name: "no file names no server", want: ""},
+		{name: "a file without [server] names no server", file: "mode = \"local\"\n", want: ""},
+		{name: "an empty url names no server", file: "[server]\nurl = \"\"\n", want: ""},
+		{name: "a url comes back as CheckServerURL writes it", file: "[server]\nurl = \"https://Pairtime.Example.org/\"\n", want: "https://pairtime.example.org"},
+		{name: "a url CheckServerURL refuses is an error, not the default server", file: "[server]\nurl = \"http://pairtime.example.org\"\n", wantErr: true},
+		{name: "a file that doesn't parse is an error, not the default server", file: "[server\nurl = \"https://pairtime.example.org\"\n", wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			name := filepath.Join(t.TempDir(), "config.toml")
+			if tt.file != "" {
+				if err := os.WriteFile(name, []byte(tt.file), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			got, err := ServerFromFile(name)
+			if (err != nil) != tt.wantErr || got != tt.want {
+				t.Errorf("ServerFromFile = %q, %v; want %q, error %v", got, err, tt.want, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestSetModeThroughSymlink(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "dotfiles", "pairtime.toml")
+	if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(target, []byte("mode = \"local\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "config.toml")
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("this system can't make a symlink here: %v", err)
+	}
+	if err := SetOnline(link, "https://pairtime.example.org"); err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name string
+		ok   func() bool
+	}{
+		{name: "config.toml is still a symlink", ok: func() bool {
+			fi, err := os.Lstat(link)
+			return err == nil && fi.Mode()&os.ModeSymlink != 0
+		}},
+		{name: "the file it points to is the one switched online", ok: func() bool {
+			b, err := os.ReadFile(target)
+			return err == nil && strings.HasPrefix(string(b), "mode = \"online\"\n")
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if !tt.ok() {
+				t.Error("it isn't")
+			}
+		})
+	}
+}
+
 func TestSetMode(t *testing.T) {
 	const server = "https://pairtime.example.org"
 	online := func(name string) error { return SetOnline(name, server) }
@@ -83,6 +151,12 @@ func TestSetMode(t *testing.T) {
 			file: "# a\r\n  mode = \"local\"\r\n[notifications]\r\nenabled = false\r\n[server]\r\n  url = \"https://old.example.org\"\r\n",
 			set:  online,
 			want: "# a\r\n  mode = \"online\"\r\n[notifications]\r\nenabled = false\r\n[server]\r\n  url = \"" + server + "\"\r\n",
+		},
+		{
+			name: "a comment after the value stays, on the mode line and the url line",
+			file: "mode = \"local\"   # set by me\n[server]\nurl = 'https://old.example.org' # my club's\n",
+			set:  online,
+			want: "mode = \"online\"   # set by me\n[server]\nurl = \"" + server + "\" # my club's\n",
 		},
 		{
 			name: "a url under another table isn't touched",
