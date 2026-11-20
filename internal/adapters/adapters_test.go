@@ -82,7 +82,7 @@ func TestRegistry(t *testing.T) {
 }
 
 // delivery is a hook call of h's from under parents, by way.
-func delivery(h event.Harness, way Delivery, parents ...platform.Proc) (inbox.Delivery, hookpath.Stamp) {
+func delivery(h event.Harness, way Delivery, parents ...platform.Proc) inbox.Delivery {
 	c := Call{Dir: "000001", Event: "Stop", Stdin: []byte(`{"session_id":"x","hook_event_name":"Stop"}`),
 		Arrived: time.UnixMilli(1795193284378).UTC(), Parents: parents}
 	return DeliveryOf(h, c, way, c.Arrived.Add(-time.Second))
@@ -114,8 +114,7 @@ func TestHookRecord(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			d, took := delivery(event.HarnessClaudeCode, tc.way, tc.parents...)
-			raw, err := HookRecord(a, "linux", d, took)
+			raw, err := HookRecord(a, "linux", delivery(event.HarnessClaudeCode, tc.way, tc.parents...))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -131,32 +130,41 @@ func TestHookRecord(t *testing.T) {
 		})
 	}
 	t.Run("a call another adapter's --harness names isn't this one's", func(t *testing.T) {
-		d, took := delivery(event.HarnessCursor, Walked, claude)
-		if _, err := HookRecord(a, "linux", d, took); err == nil {
+		if _, err := HookRecord(a, "linux", delivery(event.HarnessCursor, Walked, claude)); err == nil {
 			t.Error("no error")
 		}
 	})
 }
 
-func TestStamp(t *testing.T) {
-	took := hookpath.Stamp{Wall: time.UnixMilli(1795193300000).UTC(), Mono: 90000, BootID: "agent-boot"}
-	m := inbox.Message{Sent: time.UnixMilli(1795193290000).UTC(), Mono: 80000, BootID: "hook-boot"}
+func TestHookRecordTimes(t *testing.T) {
+	claude := platform.Proc{PID: 10, Name: "claude", TTY: platform.TTYAttached}
+	a := &fake{harness: event.HarnessClaudeCode, hosts: claudeHosts()}
+	const sent = 1795193284378
 	cases := []struct {
 		name string
-		m    inbox.Message
-		want hookpath.Stamp
+		edit func(d *inbox.Delivery)
+		want int64
 	}{
-		{name: "a call keeps the sender's own stamp when it is no later than the agent took it in", m: m,
-			want: hookpath.Stamp{Wall: m.Sent, Mono: 80000, BootID: "hook-boot"}},
-		{name: "a call stamped after the agent took it in gets the agent's stamp", want: took,
-			m: inbox.Message{Sent: took.Wall.Add(time.Hour), Mono: 80000, BootID: "hook-boot"}},
-		{name: "a call with no monotonic reading gets the agent's stamp", want: took,
-			m: inbox.Message{Sent: m.Sent}},
+		{name: "a call keeps the sender's own stamp when it is no later than the agent took it in",
+			edit: func(d *inbox.Delivery) { d.Received.Wall = d.Sent.Add(time.Minute) }, want: sent},
+		{name: "a call stamped after the agent took it in gets the agent's stamp",
+			edit: func(d *inbox.Delivery) { d.Received.Wall = d.Sent.Add(-time.Hour) }, want: sent - 3_600_000},
+		{name: "a spooled call stamped after its drain gets the drain's stamp",
+			edit: func(d *inbox.Delivery) {
+				d.Via, d.Walk, d.PeerPID = inbox.ViaInbox, nil, 0
+				d.Received.Wall = d.Sent.Add(-time.Hour)
+			}, want: sent - 3_600_000},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := Stamp(tc.m, took); got != tc.want {
-				t.Errorf("Stamp = %+v, want %+v", got, tc.want)
+			d := delivery(event.HarnessClaudeCode, Walked, claude)
+			tc.edit(&d)
+			raw, err := HookRecord(a, "linux", d)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if raw.Arrival.T != tc.want || raw.Arrival.BootID == "" {
+				t.Errorf("t %d boot %q, want t %d", raw.Arrival.T, raw.Arrival.BootID, tc.want)
 			}
 		})
 	}
@@ -165,18 +173,19 @@ func TestStamp(t *testing.T) {
 func TestKeys(t *testing.T) {
 	k := FixtureKeys()
 	const sid = "617e16a3-ddb4-44ca-af68-72cf58ed1a34"
-	// The vectors were computed apart from this code, with Python's hmac.
+	// The vectors were computed apart from this code, with Python's hmac,
+	// from ledger-v1.md section 3's formulas.
 	cases := []struct {
 		name, got, want string
 	}{
-		{"a session key is s and 32 hex digits of the HMAC over its domain, harness and id",
-			k.Session(event.HarnessClaudeCode, sid), "sb389e93d1317b314749776618f45af8c"},
-		{"a turn key adds the turn's id", k.Turn(event.HarnessClaudeCode, sid, "42d241bb-6c23-458c-917f-eec07efb607a"),
-			"t8868ea25b2581cb14fdba702c350249d"},
-		{"an agent key adds the subagent's id", k.Agent(event.HarnessClaudeCode, sid, "a627b317dcd2e5387"),
-			"ae43056a086e038437930706d03a0251a"},
-		{"a cron key adds the scheduled prompt's prefix", k.Cron(event.HarnessClaudeCode, sid, "Reply with the word tick and nothing else."),
-			"c05dbd3335bf3c24233fc0ec75ab177ec"},
+		{"a session key is the hook path's: s and 32 hex digits of the HMAC over its domain and id",
+			k.Session(sid), "s99375ed85934f6e841690aed815dead1"},
+		{"a turn key is t and the HMAC over its domain, the session's id and the turn's",
+			k.Turn(sid, "42d241bb-6c23-458c-917f-eec07efb607a"), "t17d6a1183b68c111c8277953cbae0109"},
+		{"an agent key is a and the HMAC over its domain, the session's id and the subagent's",
+			k.Agent(sid, "a627b317dcd2e5387"), "a18edd018233f21d701ec5411b03a6e4a"},
+		{"a cron key is c and the HMAC over its domain, the session's id and the scheduled prompt's prefix",
+			k.Cron(sid, "Reply with the word tick and nothing else."), "c81715e31a20c0bb3f23196f4f3b0e3c5"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -185,11 +194,15 @@ func TestKeys(t *testing.T) {
 			}
 		})
 	}
-	t.Run("one id gives different keys in different domains and harnesses", func(t *testing.T) {
+	t.Run("the session key is hookpath.SessionKey, which os.focus lists in hosted_sessions", func(t *testing.T) {
+		if got, want := k.Session(sid), hookpath.SessionKey([]byte("pairtime adapters test keys v1.."), sid); got != want {
+			t.Errorf("Session = %s, hookpath.SessionKey = %s", got, want)
+		}
+	})
+	t.Run("one id gives different keys in different domains, and one pair of ids in different orders", func(t *testing.T) {
 		seen := map[string]bool{}
-		for _, key := range []string{k.Session(event.HarnessClaudeCode, "x"), k.Session(event.HarnessCodex, "x"),
-			k.Turn(event.HarnessClaudeCode, "x", ""), k.Agent(event.HarnessClaudeCode, "x", ""),
-			k.Turn(event.HarnessClaudeCode, "", "x")} {
+		for _, key := range []string{k.Session("x"), k.Turn("x", ""), k.Agent("x", ""), k.Cron("x", ""),
+			k.Turn("", "x"), k.Turn("x", "y"), k.Turn("y", "x"), k.Turn("xy", "")} {
 			if seen[key[1:]] {
 				t.Errorf("%s repeats", key)
 			}
@@ -201,22 +214,6 @@ func TestKeys(t *testing.T) {
 			if s := fmt.Sprintf(verb, k); strings.Contains(s, "pairtime adapters") || strings.Contains(s, hex.EncodeToString([]byte("pairtime"))) {
 				t.Errorf("%s shows the secret: %s", verb, s)
 			}
-		}
-	})
-	t.Run("the id secret is HKDF-SHA256 of K_dev under its label", func(t *testing.T) {
-		var kDev [32]byte
-		for i := range kDev {
-			kDev[i] = byte(i)
-		}
-		s, err := IDSecret(kDev[:])
-		if err != nil {
-			t.Fatal(err)
-		}
-		if got := hex.EncodeToString(s[:]); got != "3db213a7c804ab779a9d75771bf9626040f5a988131a541cbb8b2538d7abecc7" {
-			t.Errorf("IDSecret = %s", got)
-		}
-		if _, err := IDSecret(kDev[:31]); err == nil {
-			t.Error("a short K_dev was taken")
 		}
 	})
 }

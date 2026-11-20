@@ -75,7 +75,7 @@ func (a *Adapter) Parse(raw adapters.RawRecord) ([]adapters.Record, error) {
 	c.env = event.Envelope{
 		T: raw.Arrival.T, Mono: raw.Arrival.Mono, BootID: raw.Arrival.BootID,
 		Source: event.SourceHook, Via: raw.Arrival.Via, Harness: harness,
-		SessionKey: a.keys.Session(harness, sid), ProjectKey: c.proj.Key,
+		SessionKey: a.keys.Session(sid), ProjectKey: c.proj.Key,
 	}
 	if w := raw.Arrival.Walk; w != nil && raw.Arrival.Via == event.ViaHook && !c.s.hookStart && name != EventSessionStart {
 		// D-spool-via: a walked call of a session with no session.start
@@ -115,7 +115,7 @@ func (c *call) add(p event.Payload, text []byte) *adapters.Record {
 }
 
 // turnKey returns the turn_key of Claude Code's turn id.
-func (c *call) turnKey(id string) string { return c.a.keys.Turn(harness, c.s.id, id) }
+func (c *call) turnKey(id string) string { return c.a.keys.Turn(c.s.id, id) }
 
 // entrypointOf is the entrypoint a walk found: ide or desktop, else
 // unknown, since the chain can't tell `claude` from `claude -p`
@@ -305,7 +305,7 @@ func (c *call) stop(failed bool) {
 				continue
 			}
 			st.PendingCrons = append(st.PendingCrons, event.PendingCron{
-				PrefixHash: c.a.keys.Cron(harness, c.s.id, prefix), Schedule: cr.Schedule})
+				PrefixHash: c.a.keys.Cron(c.s.id, prefix), Schedule: cr.Schedule})
 		}
 	}
 	c.add(st, nil)
@@ -385,5 +385,5 @@ func (c *call) subagent(start bool) {
 	if start {
 		phase = event.SubagentStart
 	}
-	c.add(&event.AgentSubagent{Phase: phase, AgentKey: c.a.keys.Agent(harness, c.s.id, id)}, nil)
+	c.add(&event.AgentSubagent{Phase: phase, AgentKey: c.a.keys.Agent(c.s.id, id)}, nil)
 }

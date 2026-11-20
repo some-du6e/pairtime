@@ -18,6 +18,7 @@ import (
 
 	"github.com/some-du6e/pairtime/internal/agent/inbox"
 	"github.com/some-du6e/pairtime/internal/platform"
+	"github.com/some-du6e/pairtime/internal/platform/clock"
 )
 
 const (
@@ -61,11 +62,14 @@ type Options struct {
 	// Walk, when set, reads the parent chain of each connection's peer
 	// from the pid the OS reports for it, nearest first. Serve calls it as
 	// soon as it has accepted a connection and checked who runs its peer,
-	// before it reads a message, while the sender waits for its ack and so
-	// is surely alive; every Delivery from the connection carries what it
-	// returned as Walk. Only this walk vouches for where a message came
-	// from (D-spool-via; internal/agent/hookpath). It isn't called when the
-	// OS gives no pid, nor for the self-test.
+	// before it reads a message, while a sender that waits for its ack is
+	// still alive; every Delivery from the connection carries what it
+	// returned as Walk. A sender that doesn't wait may be gone by then,
+	// and Windows may have given its pid to another process, so the walk
+	// counts only when its first process has the pid and start time the
+	// sender recorded for itself (DESIGN 3.4; internal/agent/hookpath).
+	// Only a walk that counts vouches for where a message came from. Walk
+	// isn't called when the OS gives no pid, nor for the self-test.
 	Walk func(pid int) []platform.Proc
 }
 
@@ -411,7 +415,7 @@ func (s *Server) take(body []byte, sink inbox.Sink, pid int, chain []platform.Pr
 		}
 		return reply{Error: msg}, false
 	}
-	d := inbox.Delivery{Message: m, Via: s.via, PeerPID: pid, Walk: chain, Received: time.Now().UTC()}
+	d := inbox.Delivery{Message: m, Via: s.via, PeerPID: pid, Walk: chain, Received: clock.Now()}
 	if err := sink.Deliver(d); err != nil {
 		s.log.Warn("ipc: couldn't store a message", "err", err)
 		return reply{ID: m.ID, Error: "the agent couldn't store the message"}, true

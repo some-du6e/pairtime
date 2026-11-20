@@ -19,6 +19,7 @@ import (
 	"github.com/some-du6e/pairtime/internal/agent/hookpath"
 	"github.com/some-du6e/pairtime/internal/agent/inbox"
 	"github.com/some-du6e/pairtime/internal/platform"
+	"github.com/some-du6e/pairtime/internal/platform/clock"
 	"github.com/some-du6e/pairtime/pkg/event"
 )
 
@@ -159,10 +160,11 @@ const hookPID = 1 << 30
 // replayBoot is the boot id of every replayed call.
 const replayBoot = "replay"
 
-// DeliveryOf returns the delivery the agent would have taken call c in
-// as, by way, with c's arrival as both the sender's stamp and the
-// agent's: the message, and the agent's stamp for HookRecord.
-func DeliveryOf(h event.Harness, c Call, way Delivery, base time.Time) (inbox.Delivery, hookpath.Stamp) {
+// DeliveryOf returns the delivery the agent would have taken call c of
+// harness h in as, by way, with c's arrival as both the sender's stamp and
+// the agent's. base is the run's first call's arrival, from which the
+// replay's monotonic readings count.
+func DeliveryOf(h event.Harness, c Call, way Delivery, base time.Time) inbox.Delivery {
 	self := platform.Proc{PID: hookPID, Name: "pairtime", TTY: platform.TTYNone, Start: c.Arrived}
 	if len(c.Parents) > 0 {
 		self.PPID = c.Parents[0].PID
@@ -172,11 +174,11 @@ func DeliveryOf(h event.Harness, c Call, way Delivery, base time.Time) (inbox.De
 	if !json.Valid(c.Stdin) {
 		body, _ = json.Marshal(hookpath.Body{Harness: string(h), Event: c.Event, Text: string(c.Stdin), Bytes: len(c.Stdin)})
 	}
-	stamp := hookpath.Stamp{Wall: c.Arrived, Mono: c.Arrived.Sub(base).Milliseconds() + 1000, BootID: replayBoot}
+	stamp := clock.Stamp{Wall: c.Arrived, Mono: c.Arrived.Sub(base).Milliseconds() + 1000, BootID: replayBoot}
 	m := inbox.Message{ID: strings.Repeat("0", 26) + c.Dir, Kind: hookpath.Kind, Sent: stamp.Wall, Mono: stamp.Mono,
 		BootID: stamp.BootID, Body: body}
 	m.Chain = []inbox.Proc{{PID: self.PID, Name: self.Name, Start: self.Start}}
-	d := inbox.Delivery{Message: m, Received: c.Arrived}
+	d := inbox.Delivery{Message: m, Received: stamp}
 	switch way {
 	case Walked:
 		d.Via, d.PeerPID, d.Walk = inbox.ViaSocket, self.PID, chain
@@ -186,7 +188,7 @@ func DeliveryOf(h event.Harness, c Call, way Delivery, base time.Time) (inbox.De
 			d.Message.Chain = append(d.Message.Chain, inbox.Proc{PID: p.PID, Name: p.Name, Start: p.Start})
 		}
 	}
-	return d, stamp
+	return d
 }
 
 // compactJSON returns b without insignificant whitespace, as the hook's
@@ -229,8 +231,7 @@ func Replay(a Adapter, calls []Call, opts ReplayOptions) ([]Replayed, map[string
 		if opts.Ways != nil {
 			way = opts.Ways(c.Dir)
 		}
-		d, took := DeliveryOf(a.Name(), c, way, base)
-		raw, err := HookRecord(a, opts.GOOS, d, took)
+		raw, err := HookRecord(a, opts.GOOS, DeliveryOf(a.Name(), c, way, base))
 		if err != nil {
 			fails[c.Dir] = err
 			continue

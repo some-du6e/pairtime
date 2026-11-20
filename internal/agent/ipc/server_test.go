@@ -19,6 +19,7 @@ import (
 	"github.com/some-du6e/pairtime/internal/agent/home"
 	"github.com/some-du6e/pairtime/internal/agent/inbox"
 	"github.com/some-du6e/pairtime/internal/platform"
+	"github.com/some-du6e/pairtime/internal/platform/clock"
 )
 
 // shortDir makes a directory whose path leaves room for a socket name.
@@ -211,8 +212,8 @@ func TestServer(t *testing.T) {
 				if len(got) != 1 || got[0].ID != m.ID || got[0].Via != inbox.ViaSocket || got[0].PeerPID != os.Getpid() {
 					t.Fatalf("the sink has %+v, want only %s via the socket from pid %d", got, m.ID, os.Getpid())
 				}
-				if got[0].Received.IsZero() || got[0].Received.Location() != time.UTC {
-					t.Errorf("Received = %v, want the UTC time it arrived", got[0].Received)
+				if r := got[0].Received; r.Wall.IsZero() || r.Wall.Location() != time.UTC {
+					t.Errorf("Received = %+v, want the agent's stamp from when it arrived, by the UTC wall clock", r)
 				}
 			},
 		},
@@ -360,7 +361,7 @@ func TestServer(t *testing.T) {
 					t.Fatalf("Send = %q, %v; want the inbox", via, err)
 				}
 				sink := &memSink{}
-				if _, err := inbox.Drain(ep.Inbox, sink, time.Now); err != nil {
+				if _, err := inbox.Drain(ep.Inbox, sink, clock.Now); err != nil {
 					t.Fatal(err)
 				}
 				if got := sink.deliveries(); len(got) != 1 || got[0].ID != m.ID {
@@ -437,7 +438,7 @@ func TestServer(t *testing.T) {
 				// Close returns once the handler is done, so the message is
 				// in the journal before the drain brings its copy.
 				srv.Close()
-				res, err := inbox.Drain(ep.Inbox, j, time.Now)
+				res, err := inbox.Drain(ep.Inbox, j, clock.Now)
 				if err != nil || res.Delivered != 1 {
 					t.Fatalf("Drain = %+v, %v; want the spooled copy delivered", res, err)
 				}

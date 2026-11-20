@@ -17,12 +17,15 @@ A change is done when every workflow its PR started is green. A WP marked "Race:
 |---|---|---|
 | ci.yml | the one Linux job: lint, `go test ./...`, the seven-target cross-compile with the 15 MB client budget, and the license, oracle and provenance guards | every PR, pushes to main |
 | platform.yml | `go test` of the platform packages on Windows and macOS, and the desktop tests on Linux | PRs touching its paths, release tags |
-| footprint.yml | the release-built agent idle on Windows: working set under 25 MB, CPU time under 0.1% of wall time; then 200 warm `pairtime hook` calls, timed around each process, with p95 under 25 ms | PRs touching internal/agent, internal/platform/windows, cmd/pairtime, go.mod or go.sum (3 minutes idle); daily, 03:30 UTC, and release tags (10 minutes) |
+| footprint.yml | the release-built agent idle on Windows: working set under 25 MB, CPU time under 0.1% of wall time; then 200 warm `pairtime hook` calls and 200 of an empty Go program, timed around each process, with the hook's p95 at most 10 ms over the empty program's and at most 50 ms | PRs touching internal/agent, internal/platform/windows, cmd/pairtime, go.mod or go.sum (3 minutes idle); daily, 03:30 UTC, and release tags (10 minutes) |
 | nightly.yml | `go test -race` over internal/agent and internal/server | daily, 03:00 UTC |
 | postgres.yml | the server tests on Postgres 18 as well as SQLite | PRs touching its paths, the packages that hold SQL; daily, 03:30 UTC |
 | web.yml | npm licenses, svelte-check, vitest, the UI build and the notices of the npm code in it, Playwright on Chromium against a `pairtime agent` built with that UI embedded, and SPDX headers | PRs touching web/, extension/, internal/webui/, docs/api/, tools/release/extra-notices.txt, or the agent code the smoke test runs (internal/agent/, internal/version/, cmd/pairtime/); release tags |
-| objstore.yml | the object storage client against a MinIO service container | PRs touching internal/server/objstore/, weekly |
+| objstore.yml | the object storage client against a MinIO service container, or with `-f minio=source` against MinIO built from its source | PRs touching internal/server/objstore/, weekly |
+| restore-drill.yml | the deploy bundle against MinIO: deploy with compose.yml, back up, destroy, restore from the replica and the key backup, checked with the age and sqlite3 tools and the server's pages; with `-f target=production`, a read-only restore of the real replica | PRs touching deploy/, Dockerfile.pairtimed or internal/server/backup/; weekly |
+| probe.yml | a deployed server from GitHub's network: TLS, `/healthz` and `/.well-known/pairtime-keys.json` | by hand, `-f host=<host>` |
 | release.yml | the seven targets' archives, checksums.txt and the signed manifest.json | release tags, signed with the release key and published; PRs touching internal/release or tools/release, as a snapshot signed with a throwaway key and never published |
+| server-image.yml | the server image for linux/amd64 and linux/arm64, pushed to ghcr.io/some-du6e/pairtimed as `sha-<commit>`, and as `main` from main | pushes to main touching cmd/pairtimed/, internal/server/, deploy/, Dockerfile.pairtimed, go.mod or go.sum; by hand |
 | tidy.yml | `go mod tidy` and npm lockfiles, committed to the branch | by hand |
 | fixtures.yml | the fixture provenance check | by hand |
 
@@ -48,7 +51,7 @@ An oracle decides whether code is right, so the code it checks never changes it:
 - Standard library first. A third-party module has to be cgo-free and licensed MIT, BSD-2-Clause, BSD-3-Clause, Apache-2.0 or ISC, and so do the modules it pulls in; ci.yml's module license step checks all of them. Its PR says why the standard library falls short, and a module missing from DESIGN 3.12's list also needs a reason the list falls short.
 - The `go` directive stays at 1.26 until Go 1.26 leaves support in February 2027. Go 1.27 dropped macOS 12, where 2015-2016 Macs top out (client-platform.md 1.5), so write nothing that needs a newer Go.
 - gofmt every Go file.
-- The first line of every .go file is `// SPDX-License-Identifier: AGPL-3.0-or-later`.
+- The first line of every .go file is `// SPDX-License-Identifier: AGPL-3.0-or-later`, except under third_party/. That holds patched copies of modules, which go.mod's `replace` builds instead of the originals. Each keeps its own license file and headers, and has a PROVENANCE.md naming the upstream commit and the patch. ci.yml's license gate skips it.
 - Tests are table tests: a slice of named cases, each run with `t.Run`, each name stating the rule it checks.
 
 ## Web UI

@@ -35,13 +35,13 @@
 // # Keys
 //
 // Harness ids become opaque keys keyed per device (AGENTS.md): sessions,
-// turns and subagents with [Keys], under a secret derived from K_dev with
-// its own label, and file paths, error signatures and commands with K_feat,
-// as the ledger keys them (pkg/ledger/features; ledger-v1 10.6).
+// turns and subagents with [Keys], under the hook path's K_session, and
+// file paths, error signatures and commands with K_feat, as the ledger
+// keys them (pkg/ledger/features; ledger-v1 3, 10.6).
 package adapters
 
 import (
-	"crypto/hkdf"
+	"bytes"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/binary"
@@ -52,6 +52,7 @@ import (
 	"io/fs"
 	"strings"
 
+	"github.com/some-du6e/pairtime/internal/agent/hookpath"
 	"github.com/some-du6e/pairtime/internal/install"
 	"github.com/some-du6e/pairtime/internal/platform"
 	"github.com/some-du6e/pairtime/pkg/event"
@@ -294,47 +295,26 @@ func (e *ParseError) Err() error {
 	return e
 }
 
-// IDSecretLabel is the HKDF label of the harness id secret, from which the
-// keys of sessions, turns and subagents are made. ledger-v1.md section 3
-// lists it beside the git adapter's project secret.
-const IDSecretLabel = "pairtime/v1/harness-ids"
-
-// IDSecret derives the harness id secret from the device key K_dev the way
-// ledger-v1.md section 3 derives the ledger's keys: HKDF-SHA256 with RFC
-// 5869's default salt, info IDSecretLabel, and 32 bytes of output.
-func IDSecret(kDev []byte) ([32]byte, error) {
-	var s [32]byte
-	if len(kDev) != 32 {
-		return s, errors.New("adapters: K_dev must be 32 bytes")
-	}
-	k, err := hkdf.Key(sha256.New, kDev, nil, IDSecretLabel, len(s))
-	if err != nil {
-		return s, err
-	}
-	copy(s[:], k)
-	return s, nil
-}
-
 // Keys keys a harness's own ids per device, so no one without the device's
-// secret can tell which session, turn or subagent a key names, or test a
-// guess (AGENTS.md). Each key is a prefix and 32 hex digits of an HMAC
-// under the secret, over a domain string and the ids, each with its length,
-// so no two kinds or pairs of ids can give the same key.
+// key can tell which session, turn or subagent a key names, or test a
+// guess (AGENTS.md). They are HMACs under K_session, the hook path's
+// session secret (hookpath.SessionSecret), whose label and formulas
+// ledger-v1.md section 3 lists: the session key exactly as the hook path
+// and the focus component make it, so a session's events and the
+// hosted_sessions of the window it runs in name it alike, and the others
+// over domain strings of their own. No key depends on the harness, so the
+// copies of one call that two harnesses make (DESIGN 5.1) key alike.
 type Keys struct {
-	secret [32]byte
+	secret []byte
 }
 
-// NewKeys returns the Keys for an id secret, from IDSecret.
-func NewKeys(secret [32]byte) *Keys { return &Keys{secret: secret} }
+// NewKeys returns the Keys for K_session, from hookpath.SessionSecret.
+func NewKeys(kSession []byte) *Keys { return &Keys{secret: bytes.Clone(kSession)} }
 
 // FixtureKeys returns Keys under a fixed, public secret, for tests and for
 // `pairtime adapters test`, whose output must be the same everywhere. The
 // agent never uses it.
-func FixtureKeys() *Keys {
-	var s [32]byte
-	copy(s[:], "pairtime adapters test keys v1..")
-	return NewKeys(s)
-}
+func FixtureKeys() *Keys { return NewKeys([]byte("pairtime adapters test keys v1..")) }
 
 // FixtureOptions are Options under FixtureKeys and a fixed, public K_feat, with
 // every folder its own project, rooted there. The conformance runner's
@@ -358,8 +338,9 @@ func folderProject(dir string) (Project, bool) {
 func (Keys) Format(f fmt.State, _ rune) { fmt.Fprint(f, "adapters.Keys{redacted}") }
 
 func (k *Keys) key(prefix, domain string, parts ...string) string {
-	m := hmac.New(sha256.New, k.secret[:])
-	writePart(m, "pairtime/v1/harness-ids/"+domain)
+	m := hmac.New(sha256.New, k.secret)
+	m.Write([]byte("pairtime/v1/session/" + domain))
+	m.Write([]byte{0})
 	for _, p := range parts {
 		writePart(m, p)
 	}
@@ -373,24 +354,18 @@ func writePart(h hash.Hash, s string) {
 	h.Write([]byte(s))
 }
 
-// Session returns the session_key of harness h's session id.
-func (k *Keys) Session(h event.Harness, id string) string {
-	return k.key("s", "session", string(h), id)
-}
+// Session returns the session_key of a harness's session id: the hook
+// path's (hookpath.SessionKey).
+func (k *Keys) Session(id string) string { return hookpath.SessionKey(k.secret, id) }
 
-// Turn returns the turn_key of turn id in session id session.
-func (k *Keys) Turn(h event.Harness, session, id string) string {
-	return k.key("t", "turn", string(h), session, id)
-}
+// Turn returns the turn_key of turn id in the harness session session.
+func (k *Keys) Turn(session, id string) string { return k.key("t", "turn", session, id) }
 
-// Agent returns the agent_key of subagent id in session id session.
-func (k *Keys) Agent(h event.Harness, session, id string) string {
-	return k.key("a", "agent", string(h), session, id)
-}
+// Agent returns the agent_key of subagent id in the harness session
+// session.
+func (k *Keys) Agent(session, id string) string { return k.key("a", "agent", session, id) }
 
 // Cron returns the prefix_hash of a scheduled prompt's first 1,000
-// characters in session id session (agent.stop's pending_crons, which stay
-// on the device).
-func (k *Keys) Cron(h event.Harness, session, prefix string) string {
-	return k.key("c", "cron", string(h), session, prefix)
-}
+// characters in the harness session session (agent.stop's pending_crons,
+// which stay on the device).
+func (k *Keys) Cron(session, prefix string) string { return k.key("c", "cron", session, prefix) }

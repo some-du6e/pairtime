@@ -1,11 +1,17 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-package hookpath
+// Package clock reads a moment the way an event records it: by the wall
+// clock, by the OS's monotonic clock, and with the id of the boot that the
+// monotonic clock counts from, which are an event's t, mono and boot_id
+// (SM 1; DESIGN 7.4). `pairtime hook` stamps each call with Now as the
+// harness makes it (internal/agent/hookpath), and the agent stamps each
+// message with Now as it takes the message in (internal/agent/inbox), so a
+// time a sender gives can be held to the agent's own.
+package clock
 
 import "time"
 
-// Stamp is when a hook call came in, by the wall clock and by the OS's
-// monotonic clock: an event's t, mono and boot_id (SM 1).
+// Stamp is a moment by the wall clock and by the OS's monotonic clock.
 type Stamp struct {
 	// Wall is the wall-clock time in UTC, without Go's own monotonic
 	// reading, which means nothing outside this process.
@@ -14,10 +20,14 @@ type Stamp struct {
 	// an arbitrary point in the boot BootID names and goes on counting
 	// while the machine sleeps, so the difference between two readings in
 	// one boot is the real time between them, whatever the wall clock did
-	// (DESIGN 7.4). Mono is 0 and BootID "" when this OS gives neither.
+	// (DESIGN 7.4). Mono is 0 and BootID "" when the OS gave neither.
 	Mono   int64
 	BootID string
 }
+
+// HasMono reports whether s has a monotonic reading and the boot it was
+// read in.
+func (s Stamp) HasMono() bool { return s.Mono > 0 && s.BootID != "" }
 
 // Now reads the boot id and both clocks, the two clocks back to back.
 //

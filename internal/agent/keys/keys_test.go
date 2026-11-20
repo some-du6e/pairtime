@@ -990,3 +990,88 @@ func TestWithDeviceKey(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) { tt.run(t, t.TempDir()) })
 	}
 }
+
+// TestRecordChain checks that keystore.json keeps the device id of the one
+// ledger chain K_dev writes (ledger-v1 3), so the ledger writer can refuse
+// to start a second chain under the key when the ledger directory is gone.
+func TestRecordChain(t *testing.T) {
+	file := func(dir string) Options { return Options{Dir: dir, Stores: []Store{}} }
+	tests := []struct {
+		name string
+		run  func(t *testing.T, dir string)
+	}{
+		{"a new key has no chain on record", func(t *testing.T, dir string) {
+			if c := mustOpen(t, file(dir)).Chain(); c != "" {
+				t.Errorf("Chain() = %q, want none", c)
+			}
+		}},
+		{"a recorded chain is in keystore.json, and the next Open reads it back", func(t *testing.T, dir string) {
+			ks := mustOpen(t, file(dir))
+			if err := ks.RecordChain("d_first"); err != nil {
+				t.Fatal(err)
+			}
+			if got := markerIn(t, dir).Chain; ks.Chain() != "d_first" || got != "d_first" {
+				t.Errorf("Chain() = %q and keystore.json has %q, want d_first", ks.Chain(), got)
+			}
+			if c := mustOpen(t, file(dir)).Chain(); c != "d_first" {
+				t.Errorf("after Open again, Chain() = %q, want d_first", c)
+			}
+		}},
+		{"recording the same chain again does nothing, and a second chain is refused", func(t *testing.T, dir string) {
+			ks := mustOpen(t, file(dir))
+			if err := ks.RecordChain("d_first"); err != nil {
+				t.Fatal(err)
+			}
+			if err := ks.RecordChain("d_first"); err != nil {
+				t.Errorf("recording it again: %v", err)
+			}
+			if err := ks.RecordChain("d_second"); err == nil || ks.Chain() != "d_first" || markerIn(t, dir).Chain != "d_first" {
+				t.Errorf("recording a second chain: %v, and the chain is now %q; want an error and d_first", err, ks.Chain())
+			}
+		}},
+		{"a chain another process recorded stops this one recording a second", func(t *testing.T, dir string) {
+			one := mustOpen(t, file(dir))
+			two := mustOpen(t, file(dir))
+			if err := one.RecordChain("d_first"); err != nil {
+				t.Fatal(err)
+			}
+			if err := two.RecordChain("d_second"); err == nil || markerIn(t, dir).Chain != "d_first" {
+				t.Errorf("the second process recorded its chain: %v; keystore.json has %q", err, markerIn(t, dir).Chain)
+			}
+		}},
+		{"a chain that isn't a device id isn't recorded", func(t *testing.T, dir string) {
+			ks := mustOpen(t, file(dir))
+			if err := ks.RecordChain("../d_first"); err == nil || markerIn(t, dir).Chain != "" {
+				t.Errorf("RecordChain took a path: %v", err)
+			}
+		}},
+		{"Archive keeps the recorded chain", func(t *testing.T, dir string) {
+			ks := mustOpen(t, file(dir))
+			if err := ks.RecordChain("d_first"); err != nil {
+				t.Fatal(err)
+			}
+			restored := make([]byte, keySize)
+			rand.Read(restored)
+			if _, err := ks.Archive(restored); err != nil {
+				t.Fatal(err)
+			}
+			if got := markerIn(t, dir).Chain; got != "d_first" {
+				t.Errorf("after Archive, keystore.json's chain is %q, want d_first", got)
+			}
+		}},
+		{"a keystore.json whose chain isn't a device id is damaged", func(t *testing.T, dir string) {
+			mustOpen(t, file(dir))
+			m := markerIn(t, dir)
+			m.Chain = "not a device id"
+			if err := writeMarker(keysDir(dir), m); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := Open(file(dir)); !errors.Is(err, ErrDamaged) {
+				t.Errorf("Open: %v, want ErrDamaged", err)
+			}
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) { tt.run(t, t.TempDir()) })
+	}
+}

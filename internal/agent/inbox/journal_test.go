@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/some-du6e/pairtime/internal/platform"
+	"github.com/some-du6e/pairtime/internal/platform/clock"
 	"github.com/some-du6e/pairtime/pkg/event"
 )
 
@@ -19,7 +20,7 @@ func TestJournal(t *testing.T) {
 	day := time.Date(2026, 11, 19, 15, 0, 0, 0, time.UTC)
 	deliver := func(t *testing.T, j *Journal, m Message, at time.Time) {
 		t.Helper()
-		if err := j.Deliver(Delivery{Message: m, Via: ViaSocket, PeerPID: 42, Received: at}); err != nil {
+		if err := j.Deliver(Delivery{Message: m, Via: ViaSocket, PeerPID: 42, Received: clock.Stamp{Wall: at}}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -162,7 +163,7 @@ func TestJournal(t *testing.T) {
 				j := open(t, dir, day)
 				m := newMessage(t, 1)
 				walk := []platform.Proc{{PID: 42, Name: "pairtime"}, {PID: 41, Name: "claude"}}
-				d := Delivery{Message: m, Via: ViaSocket, PeerPID: 42, Walk: walk, EventVia: event.ViaHook, Harness: event.HarnessClaudeCode, Received: day}
+				d := Delivery{Message: m, Via: ViaSocket, PeerPID: 42, Walk: walk, EventVia: event.ViaHook, Harness: event.HarnessClaudeCode, Received: clock.Stamp{Wall: day}}
 				if err := j.Deliver(d); err != nil {
 					t.Fatal(err)
 				}
@@ -188,7 +189,7 @@ func TestJournal(t *testing.T) {
 				j := open(t, dir, day)
 				m := newMessage(t, 1)
 				m.ID = "nope"
-				if err := j.Deliver(Delivery{Message: m, Received: day}); !errors.Is(err, ErrRejected) {
+				if err := j.Deliver(Delivery{Message: m, Received: clock.Stamp{Wall: day}}); !errors.Is(err, ErrRejected) {
 					t.Errorf("Deliver = %v, want ErrRejected", err)
 				}
 			},
@@ -198,7 +199,7 @@ func TestJournal(t *testing.T) {
 			run: func(t *testing.T, dir string) {
 				j := open(t, dir, day)
 				j.Close()
-				if err := j.Deliver(Delivery{Message: newMessage(t, 1), Received: day}); err == nil {
+				if err := j.Deliver(Delivery{Message: newMessage(t, 1), Received: clock.Stamp{Wall: day}}); err == nil {
 					t.Error("Deliver after Close returned nil")
 				}
 			},

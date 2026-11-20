@@ -5,6 +5,7 @@
 package darwin
 
 import (
+	"fmt"
 	"os"
 	"sync"
 	"time"
@@ -54,46 +55,76 @@ func Processes() ([]platform.Proc, error) {
 	if err != nil {
 		return nil, err
 	}
-	path := pidPath()
-	buf := make([]byte, pathMax)
-	me := uint32(os.Geteuid())
+	r := newReader()
 	procs := make([]platform.Proc, 0, len(kps))
 	for i := range kps {
-		kp := &kps[i]
-		if kp.Proc.P_stat == sZomb {
+		if kps[i].Proc.P_stat == sZomb {
 			continue
 		}
-		uid := kp.Eproc.Ucred.Uid
-		p := platform.Proc{
-			PID:   int(kp.Proc.P_pid),
-			PPID:  int(kp.Eproc.Ppid),
-			PGID:  int(kp.Eproc.Pgid),
-			TTY:   platform.TTYNone,
-			Owner: platform.UIDOwner(uid),
-		}
-		if kp.Proc.P_flag&pControlT != 0 && kp.Eproc.Tdev != noDev {
-			p.TTY = platform.TTYAttached
-			if kp.Eproc.Tpgid > 0 {
-				p.TPGID = int(kp.Eproc.Tpgid)
-			}
-		}
-		if sec, nsec := kp.Proc.P_starttime.Unix(); sec > 0 {
-			p.Start = time.Unix(sec, nsec)
-		}
-		comm := cString(kp.Proc.P_comm[:])
-		if path != nil && p.PID > 0 && uid == me {
-			if n := path(int32(p.PID), &buf[0], uint32(len(buf))); n > 0 && int(n) <= len(buf) {
-				exe := string(buf[:n])
-				p.Name = platform.ExeName(platform.Darwin, exe)
-				p.Alias = platform.AliasOf(platform.Darwin, exe, p.Name, comm)
-			}
-		}
-		if p.Name == "" {
-			p.Name = comm
-		}
-		procs = append(procs, p)
+		procs = append(procs, r.proc(&kps[i]))
 	}
 	return procs, nil
+}
+
+// Self reads this process alone, with sysctl(kern.proc.pid), the way
+// Processes reads each process, so its ID is the one the table gives it. A
+// hook records itself with it, for the agent to check its own walk against
+// (internal/agent/hookpath).
+func Self() (platform.Proc, error) {
+	pid := os.Getpid()
+	kp, err := unix.SysctlKinfoProc("kern.proc.pid", pid)
+	if err != nil {
+		return platform.Proc{}, err
+	}
+	if int(kp.Proc.P_pid) != pid {
+		return platform.Proc{}, fmt.Errorf("sysctl kern.proc.pid.%d answered for process %d", pid, kp.Proc.P_pid)
+	}
+	return newReader().proc(kp), nil
+}
+
+// reader turns kinfo_proc entries into Procs.
+type reader struct {
+	path func(pid int32, buf *byte, size uint32) int32 // proc_pidpath, or nil
+	buf  []byte
+	me   uint32 // this process's effective uid
+}
+
+func newReader() *reader {
+	return &reader{path: pidPath(), buf: make([]byte, pathMax), me: uint32(os.Geteuid())}
+}
+
+// proc reads one process's entry, and the path of its executable when it
+// runs as this user.
+func (r *reader) proc(kp *unix.KinfoProc) platform.Proc {
+	uid := kp.Eproc.Ucred.Uid
+	p := platform.Proc{
+		PID:   int(kp.Proc.P_pid),
+		PPID:  int(kp.Eproc.Ppid),
+		PGID:  int(kp.Eproc.Pgid),
+		TTY:   platform.TTYNone,
+		Owner: platform.UIDOwner(uid),
+	}
+	if kp.Proc.P_flag&pControlT != 0 && kp.Eproc.Tdev != noDev {
+		p.TTY = platform.TTYAttached
+		if kp.Eproc.Tpgid > 0 {
+			p.TPGID = int(kp.Eproc.Tpgid)
+		}
+	}
+	if sec, nsec := kp.Proc.P_starttime.Unix(); sec > 0 {
+		p.Start = time.Unix(sec, nsec)
+	}
+	comm := cString(kp.Proc.P_comm[:])
+	if r.path != nil && p.PID > 0 && uid == r.me {
+		if n := r.path(int32(p.PID), &r.buf[0], uint32(len(r.buf))); n > 0 && int(n) <= len(r.buf) {
+			exe := string(r.buf[:n])
+			p.Name = platform.ExeName(platform.Darwin, exe)
+			p.Alias = platform.AliasOf(platform.Darwin, exe, p.Name, comm)
+		}
+	}
+	if p.Name == "" {
+		p.Name = comm
+	}
+	return p
 }
 
 // cString returns the bytes of b up to its first NUL.

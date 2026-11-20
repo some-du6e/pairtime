@@ -118,6 +118,43 @@ func TestParseHook(t *testing.T) {
 	}
 }
 
+func TestOwnsPath(t *testing.T) {
+	const user, root, other = 1000, 0, 501
+	data := filepath.Join("home", "teen", ".local", "share", "pairtime")
+	parent := filepath.Dir(data)
+	tests := []struct {
+		name   string
+		euid   int
+		owners map[string]int // paths that exist, with their owners
+		denied bool           // reading an owner fails
+		want   bool
+	}{
+		{name: "a hook may write a data directory its user owns", euid: user, owners: map[string]int{data: user}, want: true},
+		{name: "a hook as root may not write the user's data directory, as under sudo", euid: root, owners: map[string]int{data: user}},
+		{name: "before the data directory exists, the nearest directory above it decides", euid: user, owners: map[string]int{parent: user}, want: true},
+		{name: "a hook as root may not make the data directory in the user's home", euid: root, owners: map[string]int{parent: user}},
+		{name: "another user's data directory is not this hook's", euid: user, owners: map[string]int{data: other}},
+		{name: "with no directory above that exists, nothing is written", euid: user, owners: map[string]int{}},
+		{name: "an owner that can't be read refuses", euid: user, owners: map[string]int{data: user}, denied: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			owner := func(p string) (int, error) {
+				if tt.denied {
+					return 0, os.ErrPermission
+				}
+				if uid, ok := tt.owners[p]; ok {
+					return uid, nil
+				}
+				return 0, os.ErrNotExist
+			}
+			if got := ownsPath(data, tt.euid, owner); got != tt.want {
+				t.Errorf("ownsPath = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 // spoolOf returns the messages in the spool of the data directory ptHome.
 func spoolOf(t *testing.T, ptHome string) []inbox.Message {
 	t.Helper()
@@ -160,12 +197,22 @@ func TestHook(t *testing.T) {
 		check     func(t *testing.T, b hookpath.Body)
 		wantStart bool   // the agent is to be started
 		wantOut   string // substring of stdout; "" means stdout must be empty
+		fresh     bool   // no data directory exists yet
 	}{
 		{
 			name: "with the agent stopped one call appends one line, starts the agent, exits 0 and prints nothing",
 			args: args, stdin: stubPayload, wantStart: true,
 			check: func(t *testing.T, b hookpath.Body) {
 				if string(b.Payload) != stubPayload || b.Cut || b.Problem != "" {
+					t.Errorf("the body is %+v, want the event whole", b)
+				}
+			},
+		},
+		{
+			name: "the first call ever, before any agent made the data directory, makes it for this user only and spools there",
+			args: args, stdin: stubPayload, wantStart: true, fresh: true,
+			check: func(t *testing.T, b hookpath.Body) {
+				if string(b.Payload) != stubPayload {
 					t.Errorf("the body is %+v, want the event whole", b)
 				}
 			},
@@ -205,6 +252,9 @@ func TestHook(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			ptHome := shortHome(t)
+			if tt.fresh {
+				ptHome = filepath.Join(ptHome, "pairtime")
+			}
 			t.Setenv(home.EnvHome, ptHome)
 			oldStdin, oldStart := hookStdin, hookStartAgent
 			t.Cleanup(func() { hookStdin, hookStartAgent = oldStdin, oldStart })
@@ -220,6 +270,9 @@ func TestHook(t *testing.T) {
 			check(t, "stderr", stderr.String(), "")
 			if got := started > 0; got != tt.wantStart {
 				t.Errorf("the agent was started %d times, want a start: %v", started, tt.wantStart)
+			}
+			if tt.fresh {
+				checkUserOnlyDir(t, ptHome)
 			}
 			got := spoolOf(t, ptHome)
 			if tt.check == nil {
@@ -453,13 +506,14 @@ func agentPid(t *testing.T, ptHome string) int {
 	return pf.PID
 }
 
-// TestHookProvenance checks D-spool-via with real processes: an agent, a
-// stub harness named like Claude Code, and `pairtime hook`. A call made
-// while the agent is stopped, and a spool line a test process appends with
-// the stub harness's chain copied in, are both drained with no walk of
-// their own, as plugin calls, and claim nothing from the process scan. The
-// same call made over the socket from under the stub carries the agent's
-// own walk, is a hook call, and claims the stub's process.
+// TestHookProvenance checks DESIGN 3.4's and 5.2's rules for where a hook
+// call came from with real processes: an agent, a stub harness named like
+// Claude Code, and `pairtime hook`. A call made while the agent is
+// stopped, and a spool line a test process appends with the stub harness's
+// chain copied in, are both drained with no walk of their own, as plugin
+// calls, and claim nothing from the process scan. The same call made over
+// the socket from under the stub carries the agent's own walk, is a hook
+// call, and claims the stub's process.
 func TestHookProvenance(t *testing.T) {
 	ptHome := shortHome(t)
 	path := copyStub(t)

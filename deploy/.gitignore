@@ -1,0 +1,8 @@
+# What the host keeps next to compose.yml, which never goes in git: the
+# database and keys, and the filled-in configuration with its secrets
+# (deploy/runbook.md).
+/data/
+/config/
+/witness-roots/
+# Values compose interpolates into compose.yml on this host, if any.
+/.env

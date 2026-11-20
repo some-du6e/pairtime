@@ -5,10 +5,26 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="light dark">
-<title>{{.Title}} · pairtime</title>
+{{- with .Description}}
+<meta name="description" content="{{.}}">
+{{- end}}
+<title>{{with .Title}}{{.}} · {{end}}pairtime</title>
 <style>{{.CSS}}</style>
 </head>
-<body>
+<body{{with .Class}} class="{{.}}"{{end}}>
+<header>
+<a class="name" href="/">pairtime</a>
+{{- with .Account}}
+<div class="account">
+{{- if .SignedIn}}
+<p>Signed in{{with .Handle}} as <strong>{{.}}</strong>{{end}}</p>
+<form method="post" action="{{.Logout}}"><button type="submit">Sign out</button></form>
+{{- else}}
+<a class="button" href="{{.Login}}">Sign in with Hack Club</a>
+{{- end}}
+</div>
+{{- end}}
+</header>
 <main>
 {{.Body}}</main>
 <footer>

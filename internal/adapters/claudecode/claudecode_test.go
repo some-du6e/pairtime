@@ -215,8 +215,8 @@ func TestDeliveries(t *testing.T) {
 
 	t.Run("a call another harness's process ran is that harness's to record", func(t *testing.T) {
 		cursor := []platform.Proc{{PID: 5151, Name: "cursor-agent", TTY: platform.TTYAttached}, {PID: 5150, Name: "zsh"}}
-		d, took := adapters.DeliveryOf(event.HarnessClaudeCode, withParents(prompt, cursor), adapters.Walked, prompt.Arrived)
-		raw, err := adapters.HookRecord(newTest(), "linux", d, took)
+		d := adapters.DeliveryOf(event.HarnessClaudeCode, withParents(prompt, cursor), adapters.Walked, prompt.Arrived)
+		raw, err := adapters.HookRecord(newTest(), "linux", d)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -263,8 +263,8 @@ func parse(t *testing.T, a *Adapter, c adapters.Call, way adapters.Delivery, par
 	if parents != nil {
 		c = withParents(c, parents)
 	}
-	d, took := adapters.DeliveryOf(event.HarnessClaudeCode, c, way, c.Arrived)
-	raw, err := adapters.HookRecord(a, "linux", d, took)
+	d := adapters.DeliveryOf(event.HarnessClaudeCode, c, way, c.Arrived)
+	raw, err := adapters.HookRecord(a, "linux", d)
 	if err != nil {
 		t.Fatal(err)
 	}

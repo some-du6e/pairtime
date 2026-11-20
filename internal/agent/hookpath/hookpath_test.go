@@ -19,19 +19,28 @@ import (
 	"github.com/some-du6e/pairtime/internal/agent/inbox"
 	"github.com/some-du6e/pairtime/internal/agent/ipc"
 	"github.com/some-du6e/pairtime/internal/platform"
+	"github.com/some-du6e/pairtime/internal/platform/clock"
 )
 
-var testStamp = Stamp{Wall: time.Date(2026, 11, 20, 9, 30, 0, 0, time.UTC), Mono: 81163000, BootID: "b-51c2"}
+var testStamp = clock.Stamp{Wall: time.Date(2026, 11, 20, 9, 30, 0, 0, time.UTC), Mono: 81163000, BootID: "b-51c2"}
 
-func fixedStamp() Stamp { return testStamp }
+func fixedStamp() clock.Stamp { return testStamp }
 
 // testChain is a hook under Claude Code in a terminal, as the hook would
 // read its own.
 var testChain = []platform.Proc{
-	{PID: 300, PPID: 200, Name: "pairtime", Start: testStamp.Wall},
+	{PID: 300, PPID: 200, Name: "pairtime", Start: testStamp.Wall, Ticks: 8116290},
 	{PID: 200, PPID: 100, Name: "claude", Start: testStamp.Wall.Add(-time.Hour)},
 	{PID: 100, PPID: 1, Name: "kitty", Start: testStamp.Wall.Add(-2 * time.Hour)},
 }
+
+// testSelf reads the hook's own process, as testChain has it.
+func testSelf() (platform.Proc, error) { return testChain[0], nil }
+
+// panicReader is a reader of stdin, or of the process table, with a bug.
+type panicReader struct{}
+
+func (panicReader) Read([]byte) (int, error) { panic("a reader with a bug") }
 
 // shortDir makes a directory whose path leaves room for a socket name,
 // which t.TempDir's can't on macOS (sun_path is 104 bytes there).
@@ -124,8 +133,9 @@ func spooled(t *testing.T, ep ipc.Endpoint) []inbox.Message {
 }
 
 // checkMessage checks that m is the hook call made with stdin
-// `{"session_id":"s1"}`, with the hook's own chain when wantChain is set,
-// as it is for a spooled call.
+// `{"session_id":"s1"}`: its first chain entry is the hook itself, and the
+// rest of the hook's chain follows when wantChain is set, as it does for a
+// spooled call.
 func checkMessage(t *testing.T, m inbox.Message, id string, wantChain bool) {
 	t.Helper()
 	if m.ID != id || m.Kind != Kind {
@@ -134,9 +144,12 @@ func checkMessage(t *testing.T, m inbox.Message, id string, wantChain bool) {
 	if !m.Sent.Equal(testStamp.Wall) || m.Mono != testStamp.Mono || m.BootID != testStamp.BootID {
 		t.Errorf("stamped %v, %d, %q, want the hook's own %v, %d, %q", m.Sent, m.Mono, m.BootID, testStamp.Wall, testStamp.Mono, testStamp.BootID)
 	}
+	if len(m.Chain) == 0 || m.Chain[0].PID != 300 || !m.Chain[0].Start.Equal(testChain[0].Start) || m.Chain[0].Ticks != testChain[0].Ticks {
+		t.Fatalf("the message's chain is %+v, want the hook's own pid, start and ticks first", m.Chain)
+	}
 	switch {
-	case !wantChain && m.Chain != nil:
-		t.Errorf("the message carries the chain %+v, want none: the agent walks the chain of a call over the socket itself", m.Chain)
+	case !wantChain && len(m.Chain) != 1:
+		t.Errorf("the message carries the chain %+v, want the hook's own entry alone: the agent walks the chain of a call over the socket itself", m.Chain)
 	case wantChain && (len(m.Chain) != len(testChain) || m.Chain[1].PID != 200 || m.Chain[1].Name != "claude" || !m.Chain[1].Start.Equal(testChain[1].Start)):
 		t.Errorf("the spooled message's chain is %+v, want the hook's own", m.Chain)
 	}
@@ -153,18 +166,21 @@ func TestSend(t *testing.T) {
 	call := func() Call {
 		return Call{Harness: "claude_code", Event: "UserPromptSubmit", Stdin: strings.NewReader(`{"session_id":"s1"}`)}
 	}
-	// reads counts the reads of the hook's own chain.
-	var reads int
+	// reads counts the reads of the hook's own chain, and prepared the
+	// calls to Prepare.
+	var reads, prepared int
 	opts := func(ep ipc.Endpoint) Options {
-		reads = 0
-		return Options{Endpoint: ep, Now: fixedStamp, Chain: func() ([]platform.Proc, error) { reads++; return testChain, nil }}
+		reads, prepared = 0, 0
+		return Options{Endpoint: ep, Now: fixedStamp, Self: testSelf,
+			Chain:   func() ([]platform.Proc, error) { reads++; return testChain, nil },
+			Prepare: func() error { prepared++; return nil }}
 	}
 	tests := []struct {
 		name string
 		run  func(t *testing.T, ep ipc.Endpoint)
 	}{
 		{
-			name: "with no agent listening the call is spooled once, and the agent is to be started",
+			name: "with no agent listening the call is spooled once, after Prepare, and the agent is to be started",
 			run: func(t *testing.T, ep ipc.Endpoint) {
 				res := Send(call(), opts(ep))
 				if res.Via != inbox.ViaInbox || !res.StartAgent {
@@ -175,10 +191,27 @@ func TestSend(t *testing.T) {
 					t.Fatalf("the spool has %d messages, want 1", len(got))
 				}
 				checkMessage(t, got[0], res.ID, true)
+				if prepared != 1 {
+					t.Errorf("Prepare ran %d times, want once before the spool", prepared)
+				}
 			},
 		},
 		{
-			name: "an agent that acks takes the call over the socket, with no chain of the hook's own, and nothing is spooled",
+			name: "a call Prepare refuses isn't spooled, and says why",
+			run: func(t *testing.T, ep ipc.Endpoint) {
+				o := opts(ep)
+				o.Prepare = func() error { return errors.New("another user owns the data directory") }
+				res := Send(call(), o)
+				if res.Via != "" || res.Err == nil || !strings.Contains(res.Err.Error(), "another user") {
+					t.Errorf("Send = %+v, want a lost call with Prepare's error", res)
+				}
+				if n := len(spooled(t, ep)); n != 0 {
+					t.Errorf("the spool has %d messages, want none", n)
+				}
+			},
+		},
+		{
+			name: "an agent that acks takes the call over the socket, with only the hook's own entry in its chain, and nothing is spooled or prepared",
 			run: func(t *testing.T, ep ipc.Endpoint) {
 				s := &sink{}
 				serve(t, ep, s)
@@ -194,8 +227,8 @@ func TestSend(t *testing.T) {
 				if n := len(spooled(t, ep)); n != 0 {
 					t.Errorf("the spool has %d messages, want none", n)
 				}
-				if reads != 0 {
-					t.Errorf("the hook read its own chain %d times, want none on the way to a running agent", reads)
+				if reads != 0 || prepared != 0 {
+					t.Errorf("the hook read its own chain %d times and prepared the spool %d times, want neither on the way to a running agent", reads, prepared)
 				}
 			},
 		},
@@ -236,7 +269,8 @@ func TestSend(t *testing.T) {
 			name: "the hook's own chain goes in the message at most inbox.MaxChain long",
 			run: func(t *testing.T, ep ipc.Endpoint) {
 				long := make([]platform.Proc, 100)
-				for i := range long {
+				long[0] = testChain[0]
+				for i := 1; i < len(long); i++ {
 					long[i] = platform.Proc{PID: 1000 - i, PPID: 999 - i, Name: "sh"}
 				}
 				o := opts(ep)
@@ -252,14 +286,83 @@ func TestSend(t *testing.T) {
 			},
 		},
 		{
-			name: "a chain that can't be read is left out, and the call still goes",
+			name: "a chain that can't be read leaves the hook's own entry alone, and the call still goes",
 			run: func(t *testing.T, ep ipc.Endpoint) {
 				o := opts(ep)
 				o.Chain = func() ([]platform.Proc, error) { return nil, errors.New("no /proc") }
 				res := Send(call(), o)
 				got := spooled(t, ep)
-				if res.Via != inbox.ViaInbox || len(got) != 1 || got[0].Chain != nil {
-					t.Fatalf("Send = %+v and the spool has %+v, want one message with no chain", res, got)
+				if res.Via != inbox.ViaInbox || len(got) != 1 {
+					t.Fatalf("Send = %+v and the spool has %+v, want one message", res, got)
+				}
+				checkMessage(t, got[0], res.ID, false)
+			},
+		},
+		{
+			name: "a reader of the chain that panics leaves the hook's own entry alone, and the call still goes",
+			run: func(t *testing.T, ep ipc.Endpoint) {
+				o := opts(ep)
+				o.Chain = func() ([]platform.Proc, error) { panic("a reader with a bug") }
+				res := Send(call(), o)
+				got := spooled(t, ep)
+				if res.Via != inbox.ViaInbox || len(got) != 1 {
+					t.Fatalf("Send = %+v and the spool has %+v, want one message", res, got)
+				}
+				checkMessage(t, got[0], res.ID, false)
+			},
+		},
+		{
+			name: "a chain that starts with another process adds nothing to the hook's own entry",
+			run: func(t *testing.T, ep ipc.Endpoint) {
+				o := opts(ep)
+				o.Chain = func() ([]platform.Proc, error) { return testChain[1:], nil }
+				res := Send(call(), o)
+				got := spooled(t, ep)
+				if len(got) != 1 {
+					t.Fatalf("the spool has %d messages, want 1", len(got))
+				}
+				checkMessage(t, got[0], res.ID, false)
+			},
+		},
+		{
+			name: "a hook that can't read its own process records its pid alone",
+			run: func(t *testing.T, ep ipc.Endpoint) {
+				o := opts(ep)
+				o.Self = func() (platform.Proc, error) { return platform.Proc{}, errors.New("no /proc") }
+				Send(call(), o)
+				got := spooled(t, ep)
+				if len(got) != 1 || len(got[0].Chain) == 0 {
+					t.Fatalf("the spool has %+v, want one message with a chain", got)
+				}
+				if c := got[0].Chain[0]; c.PID != os.Getpid() || !c.Start.IsZero() || c.Ticks != 0 {
+					t.Errorf("the first chain entry is %+v, want this process's pid %d and no start", c, os.Getpid())
+				}
+			},
+		},
+		{
+			name: "a reader of its own process that panics leaves the pid alone, and the call still goes",
+			run: func(t *testing.T, ep ipc.Endpoint) {
+				o := opts(ep)
+				o.Self = func() (platform.Proc, error) { panic("a reader with a bug") }
+				res := Send(call(), o)
+				got := spooled(t, ep)
+				if res.Via != inbox.ViaInbox || len(got) != 1 || got[0].Chain[0].PID != os.Getpid() {
+					t.Fatalf("Send = %+v and the spool has %+v, want one message from this process", res, got)
+				}
+			},
+		},
+		{
+			name: "stdin whose reader panics is read as empty, and the call still goes",
+			run: func(t *testing.T, ep ipc.Endpoint) {
+				c := call()
+				c.Stdin = panicReader{}
+				res := Send(c, opts(ep))
+				got := spooled(t, ep)
+				if res.Via != inbox.ViaInbox || len(got) != 1 {
+					t.Fatalf("Send = %+v and the spool has %+v, want one message", res, got)
+				}
+				if b, err := DecodeBody(got[0]); err != nil || b.Bytes != 0 || b.Payload != nil {
+					t.Errorf("the body is %+v (%v), want no stdin", b, err)
 				}
 			},
 		},
@@ -341,54 +444,6 @@ func TestDecodeBody(t *testing.T) {
 	}
 }
 
-func TestNow(t *testing.T) {
-	switch runtime.GOOS {
-	case platform.Linux, platform.Darwin, platform.Windows:
-	default:
-		t.Skipf("pairtime reads no monotonic clock on %s", runtime.GOOS)
-	}
-	tests := []struct {
-		name  string
-		check func(t *testing.T, a, b Stamp)
-	}{
-		{"every stamp has a boot id the inbox takes, and a monotonic reading", func(t *testing.T, a, b Stamp) {
-			for _, s := range []Stamp{a, b} {
-				if s.Mono <= 0 || !validBootID(s.BootID) {
-					t.Errorf("stamp %+v has no monotonic reading or no boot id", s)
-				}
-				m := inbox.Message{ID: inbox.NewID(), Kind: Kind, Sent: s.Wall, Mono: s.Mono, BootID: s.BootID}
-				if err := m.Check(); err != nil {
-					t.Errorf("the inbox doesn't take the stamp: %v", err)
-				}
-			}
-		}},
-		{"the boot id is the same from one stamp to the next", func(t *testing.T, a, b Stamp) {
-			if a.BootID != b.BootID {
-				t.Errorf("boot ids %q and %q, want one boot", a.BootID, b.BootID)
-			}
-		}},
-		{"the monotonic clock moves on with the wall clock", func(t *testing.T, a, b Stamp) {
-			mono := time.Duration(b.Mono-a.Mono) * time.Millisecond
-			wall := b.Wall.Sub(a.Wall)
-			if mono <= 0 || mono-wall > time.Second || wall-mono > time.Second {
-				t.Errorf("the monotonic clock moved %v while the wall clock moved %v", mono, wall)
-			}
-		}},
-		{"the wall time is UTC with no Go monotonic reading", func(t *testing.T, a, _ Stamp) {
-			if a.Wall.Location() != time.UTC || strings.Contains(a.Wall.String(), "m=") {
-				t.Errorf("wall time %s isn't plain UTC", a.Wall)
-			}
-		}},
-	}
-	a := Now()
-	time.Sleep(100 * time.Millisecond)
-	b := Now()
-	t.Logf("stamps %+v and %+v", a, b)
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) { tt.check(t, a, b) })
-	}
-}
-
 func TestReadChain(t *testing.T) {
 	switch runtime.GOOS {
 	case platform.Linux, platform.Darwin, platform.Windows:
@@ -407,6 +462,16 @@ func TestReadChain(t *testing.T) {
 		{"the chain goes on to the parent", func(t *testing.T, chain []platform.Proc) {
 			if len(chain) < 2 || chain[1].PID != os.Getppid() {
 				t.Errorf("the chain %+v doesn't go on to the parent, pid %d", chain, os.Getppid())
+			}
+		}},
+		{"the hook's own entry has the pid and start the agent's table read gives it, so the agent's walk counts", func(t *testing.T, chain []platform.Proc) {
+			me := ownEntry(nil)
+			if len(chain) == 0 || me.ID() != chain[0].ID() || me.ID().Start == 0 {
+				t.Errorf("the hook records itself as %+v (%+v), and the table has %+v", me, me.ID(), chain)
+			}
+			d := inbox.Delivery{Via: inbox.ViaSocket, Walk: chain, Message: inbox.Message{Chain: []inbox.Proc{me}}}
+			if !counts(d) {
+				t.Error("the agent's walk of this process doesn't count")
 			}
 		}},
 	}

@@ -74,7 +74,7 @@ K_x = HMAC-SHA256(PRK, ascii(label) || 0x01)
 
 HMAC pads a key shorter than SHA-256's 64-byte block with zeros, so an empty salt and `zero(32)` give the same `PRK`. RFC 5869's test case 3 runs through that path.
 
-Other parts of pairtime derive keys under the same `pairtime/v1/` prefix: `backup` and `recovery` in DESIGN 7.11, `seal` in DESIGN 7.6, and `project` in the git adapter (WP-AD5). Their own specs define them, and the git adapter's is below. A new ledger key takes a new label, and no label is ever used for two keys. `K_dev` and the keys derived from it never leave the device unencrypted (DESIGN 4.3, 7.11).
+Other parts of pairtime derive keys under the same `pairtime/v1/` prefix: `backup` and `recovery` in DESIGN 7.11, `seal` in DESIGN 7.6, `project` in the git adapter (WP-AD5), `app` in the focus component (WP-OS2) and `session` in the hook path (WP-AG3). Their own specs define them, and the git adapter's and the hook path's are below. A new ledger key takes a new label, and no label is ever used for two keys. `K_dev` and the keys derived from it never leave the device unencrypted (DESIGN 4.3, 7.11).
 
 The git adapter's project secret is `K_project`, derived as above with the label `pairtime/v1/project`. Project keys are HMACs under it, each over a domain string of its own, so a root commit and a folder can never give the same key:
 
@@ -87,15 +87,24 @@ folder key = "d" || hex(HMAC-SHA256(K_project, ascii("pairtime/v1/project/folder
 
 `root_1` to `root_n` are the repo's root commit ids in lowercase hex, sorted and without repeats. `folder` is the folder's canonical path with forward slashes, lowercased on Windows and macOS. `internal/adapters/git/keys.go` has the code, and `TestProjectKeyVectors` pins a vector for each form.
 
-The harness adapters' id secret is `K_ids`, derived as above with the label `pairtime/v1/harness-ids` (`internal/adapters`, WP-AD2). It keys the ids a harness gives its sessions, turns and subagents, and the scheduled prompts a Claude Code `Stop` hook lists, so `session_key`, `turn_key`, `agent_key` and `pending_crons[].prefix_hash` hold keys no one without the device can recompute:
+The hook path's session secret is `K_session`, derived as above with the label `pairtime/v1/session`. A harness session's `session_key` is an HMAC under it, over a domain string of its own:
 
 ```text
-key     = prefix || hex(HMAC-SHA256(K_ids, part(ascii("pairtime/v1/harness-ids/") || domain)
-                                   || part(harness) || part(id_1) || ... || part(id_n))[0:16])
-part(x) = u32be(len(x)) || x
+session key = "s" || hex(HMAC-SHA256(K_session, ascii("pairtime/v1/session/id") || 0x00 || utf8(id))[0:16])
 ```
 
-`harness` is the `pkg/event` harness, such as `claude_code`. A session is prefix `s`, domain `session` and its id. A turn is `t`, `turn`, the session's id and the turn's. A subagent is `a`, `agent`, the session's id and the subagent's. A scheduled prompt is `c`, `cron`, the session's id and the prompt's first 1,000 characters. `TestKeys` in `internal/adapters` pins a vector for each, computed apart from the code.
+`id` is the harness's own session id, as its hook payload names it (`session_id`, `sessionId` or Cursor's `conversation_id`). The key depends on the id alone, so the copies of one session's calls that two harnesses make have one key. The events of the session carry it, and `os.focus` lists it in `hosted_sessions`. `internal/agent/hookpath` has the code, and `TestSessionKey` pins a vector.
+
+The harness adapters key a session's turns, subagents and scheduled prompts under `K_session` too, each over a domain string of its own (`internal/adapters`, WP-AD2):
+
+```text
+turn key  = "t" || hex(HMAC-SHA256(K_session, ascii("pairtime/v1/session/turn")  || 0x00 || part(session) || part(id))[0:16])
+agent key = "a" || hex(HMAC-SHA256(K_session, ascii("pairtime/v1/session/agent") || 0x00 || part(session) || part(id))[0:16])
+cron key  = "c" || hex(HMAC-SHA256(K_session, ascii("pairtime/v1/session/cron")  || 0x00 || part(session) || part(prefix))[0:16])
+part(x)   = u32be(len(utf8(x))) || utf8(x)
+```
+
+`session` is the harness's own session id, `id` a turn's id (Claude Code's `prompt_id`, which its transcripts and OTel share) or a subagent's (`agent_id`), and `prefix` a scheduled prompt's first 1,000 characters as a `Stop` hook lists them. The keys go in `turn_key`, `agent_key` and `pending_crons[].prefix_hash`. None depends on the harness, so, as with the session key, the copies of one turn that two harnesses make have one key. `TestKeys` in `internal/adapters` pins a vector for each, computed apart from the code.
 
 One `K_dev` writes one chain. The nonce (4.4) and the token salts (10.2) are keyed by `s` alone, so they stay unique only while no `s` repeats under one `K_dev`. A `K_dev` that `pairtime restore` unwraps onto a new install (DESIGN 7.11) only verifies and opens the old chain's records. The restored install writes its own chain, under its own `device_id` and a `K_dev` generated for it, from `s = 1`, and keeps the old key for reading. A second chain under the old key would repeat every nonce and salt: a body or a salt revealed from the old chain would let a reader confirm guesses of the new chain's hidden bodies, or of its removed tokens, at the same `s`.
 
