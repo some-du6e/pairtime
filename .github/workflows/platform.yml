@@ -18,6 +18,9 @@ on:
       # private files (home), and the loopback server (localhttp).
       - internal/agent/home/**
       - internal/agent/localhttp/**
+      # The notifier's per-OS backends (platform_*.go) and the rules they
+      # share.
+      - internal/agent/notifier/**
       - cmd/pairtime/**
       - .github/workflows/platform.yml
       - tools/ci/test_existing.sh
@@ -36,7 +39,7 @@ permissions:
 env:
   # pairtime never uses cgo (AGENTS.md).
   CGO_ENABLED: "0"
-  PLATFORM_DIRS: internal/platform internal/install internal/agent/ipc internal/agent/home internal/agent/localhttp cmd/pairtime
+  PLATFORM_DIRS: internal/platform internal/install internal/agent/ipc internal/agent/home internal/agent/localhttp internal/agent/notifier cmd/pairtime
 
 jobs:
   windows:

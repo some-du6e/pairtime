@@ -27,6 +27,7 @@ import (
 	"github.com/some-du6e/pairtime/internal/agent/config"
 	"github.com/some-du6e/pairtime/internal/agent/home"
 	"github.com/some-du6e/pairtime/internal/agent/localhttp"
+	"github.com/some-du6e/pairtime/internal/agent/notifier"
 	"github.com/some-du6e/pairtime/internal/agent/sched"
 	"github.com/some-du6e/pairtime/internal/agent/state"
 	"github.com/some-du6e/pairtime/internal/version"
@@ -67,6 +68,9 @@ type agent struct {
 	state   *state.Store
 	cfg     atomic.Pointer[config.Config]
 	port    int
+	// notifier shows the coach's notification when a work session ends
+	// (WP-OS8); the coach calls it (WP-CO1).
+	notifier *notifier.Notifier
 
 	stop     chan struct{} // closed when a client asks the agent to stop
 	stopOnce sync.Once
@@ -121,6 +125,16 @@ func Run(ctx context.Context, opts Options) error {
 		return err
 	}
 	closers = append(closers, markStopped)
+
+	// Idle, the notifier holds no goroutine, timer or connection. It stops
+	// before state.json is saved, so what it remembers is in the file.
+	a.notifier = notifier.New(notifier.Options{
+		Settings: func() config.Notifications { return a.config().Notifications },
+		Memory:   a.state,
+		Log:      log.With("component", "notifier"),
+		Problem:  func(msg string) { a.setProblem("notifications", msg) },
+	})
+	closers = append(closers, a.notifier.Close)
 
 	schedCtx, stopSched := context.WithCancel(context.Background())
 	schedDone := make(chan struct{})
@@ -223,7 +237,7 @@ func (a *agent) loadConfig(first bool) {
 		}
 	case errors.Is(err, fs.ErrNotExist):
 	case err != nil:
-		problems = append(problems, fmt.Sprintf("couldn't read config.toml, so every setting has its default: %v", err))
+		problems = append(problems, fmt.Sprintf("couldn't read config.toml, so every setting has its default and notifications are off: %v", err))
 	}
 	a.cfg.Store(&cfg)
 	a.setProblem("config", strings.Join(problems, "; "))
