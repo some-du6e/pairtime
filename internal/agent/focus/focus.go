@@ -18,8 +18,11 @@
 //
 // Window titles are never read, and nothing the OS says about a window
 // leaves the device: not its title, its executable's name or path, or its
-// process id. The app goes out only as app_hash, a local field keyed with
-// a secret derived from the device key (AGENTS.md).
+// process id. What leaves about the app is its app_class. Its app_hash is
+// a local field, which Event.Shareable clears, so it is in no ledger body
+// and no upload; it is keyed with a secret derived from the device key
+// all the same, so that a full record kept on the device doesn't let
+// anyone test a guess of the app (AGENTS.md).
 //
 // Like presence, it records nothing outside a project context (DESIGN 3.3,
 // D14): a change while none is live updates what the component knows, and
@@ -77,8 +80,10 @@ func ThisOS() OS {
 type Record struct {
 	// At is when focus moved to the window, or, for a record that the
 	// sessions under a window changing or a project context going live
-	// wrote, when that was noticed. Its wall clock goes in the event's t,
-	// and its monotonic reading can go in mono.
+	// wrote, when that was noticed. Presence dates the sample it takes for
+	// a change the same, and a record is never dated before the one before
+	// it (Options.Presence). Its wall clock goes in the event's t, and its
+	// monotonic reading can go in mono.
 	At   time.Time
 	Data *event.OSFocus
 }
@@ -97,24 +102,39 @@ type Options struct {
 	// ProjectOf returns the project key of a harness session, or "" when
 	// it isn't known. Nil leaves focus_project empty.
 	ProjectOf func(session string) string
-	// AppSecret is K_app (AppSecret), which keys app_hash. Nil leaves
-	// app_hash out: a plain hash would let anyone with the ledger test a
-	// guess of the app.
-	AppSecret []byte
-	// Live reports whether a project context is live, after Presence has
-	// heard of the change: records are written only then (D14). Nil means
-	// always.
+	// AppSecret returns K_app (AppSecret), which keys app_hash, or nil
+	// while it isn't known, as before the device keystore has opened. A
+	// record made without it leaves app_hash out. app_hash never leaves
+	// the device, but a plain hash would let anyone who reads a full
+	// record kept on the device test a guess of the app. Nil means K_app
+	// is never known.
+	AppSecret func() []byte
+	// Live reports whether a project context is live. A refresh writes a
+	// record only then (D14), and so does a change when Presence is nil.
+	// Nil means always.
 	Live func() bool
-	// Presence gets the app class of each change, or event.AppNone when
-	// the window in front is unknown, before the record is written. The
-	// agent passes presence.Sampler.Focus.
-	Presence func(event.AppClass)
+	// Presence hears each change: when it was seen, or when the record
+	// written last is dated if that is later, and the app class, or
+	// event.AppNone when the window in front is unknown. It calls write,
+	// unless write is nil, once, with the time the change's record takes
+	// and whether a project context is live now that it has heard of the
+	// change; a record is written only then (D14). Then it takes the
+	// sample the change asks for, dated that same time, so the record and
+	// its sample share a millisecond, the sample after the record
+	// (testdata/timelines/README.md). The time is the one Presence was
+	// given, or the time of its own latest record if that is later. The
+	// agent passes presence.Sampler.FocusAt. Nil means no presence: a
+	// change's record takes the time it was given, and is written while
+	// Live says so.
+	Presence func(at time.Time, c event.AppClass, write func(at time.Time, live bool))
 	// Kick asks the process scan to run soon. The agent passes
 	// procs.Scanner.Kick, and calls Refresh after every scan, so a session
 	// the scan finds under the window in front gets into a new record.
 	Kick func()
 	// Record gets every record, in order, on the component's goroutine.
-	// Nil drops them.
+	// For a change it runs inside Presence's write, while presence is
+	// locked, so it must return quickly and must not call presence. Nil
+	// drops them.
 	Record func(Record)
 	// Problem gets a description of what is wrong, for doctor and the
 	// status endpoint, each time it changes; "" means nothing is.
@@ -166,11 +186,11 @@ type Watcher struct {
 	// Only the worker touches these.
 	cur     *front // the window in front; nil while unknown
 	written *event.OSFocus
+	lastAt  time.Time // when the record written last is dated
 }
 
 // front is the window in front, as the last change or refresh found it.
 type front struct {
-	at   time.Time
 	pid  int
 	id   platform.ID
 	data *event.OSFocus
@@ -353,32 +373,57 @@ func (w *Watcher) release() {
 // context, a record.
 func (w *Watcher) handle(c Change) {
 	if c.Unknown != "" {
-		w.unknown(c.Unknown)
+		w.unknown(c.At, c.Unknown)
 		return
 	}
 	t, err := w.table()
 	if err != nil {
-		w.unknown("couldn't read the process table: " + err.Error())
+		w.unknown(c.At, "couldn't read the process table: "+err.Error())
 		return
 	}
 	win, ok := windowOf(t, c.PID)
 	if !ok {
-		w.unknown("the process of the window in front exited before pairtime read the process table")
+		w.unknown(c.At, "the process of the window in front exited before pairtime read the process table")
 		return
 	}
 	sessions := w.sessions()
-	f := &front{at: c.At, pid: c.PID, id: win.proc.ID(), data: w.payload(t, win, sessions), sessions: sessions}
+	f := &front{pid: c.PID, id: win.proc.ID(), data: w.payload(t, win, sessions), sessions: sessions}
 	w.cur = f
 	w.known(f)
-	if w.opts.Presence != nil {
-		w.opts.Presence(f.data.AppClass)
-	}
-	if w.live() {
-		w.write(f, f.at)
-		if w.opts.Kick != nil {
-			w.opts.Kick()
+	live := false
+	w.tell(c.At, f.data.AppClass, func(at time.Time, l bool) {
+		if live = l; live {
+			w.write(f, at)
 		}
+	})
+	if live && w.opts.Kick != nil {
+		w.opts.Kick()
 	}
+}
+
+// tell gives presence a change of class c seen at at, and has it call
+// write, unless write is nil, with the time the change's record takes and
+// whether a project context is live (Options.Presence). The time is never
+// before that of the last record. Without presence, write gets at and
+// what Live says.
+func (w *Watcher) tell(at time.Time, c event.AppClass, write func(at time.Time, live bool)) {
+	at = w.notBefore(at)
+	if w.opts.Presence != nil {
+		w.opts.Presence(at, c, write)
+		return
+	}
+	if write != nil {
+		write(at, w.live())
+	}
+}
+
+// notBefore returns at, or the time of the record written last if that is
+// later.
+func (w *Watcher) notBefore(at time.Time) time.Time {
+	if w.lastAt.After(at) {
+		return w.lastAt
+	}
+	return at
 }
 
 // reconsider walks the process table again for the window in front and
@@ -408,6 +453,13 @@ func (w *Watcher) reconsider() {
 		return
 	}
 	data := w.payload(t, win, sessions)
+	if w.changePending() {
+		// Focus moved while the table was read. The change replaces this
+		// window, and its own record goes next: a record of this window
+		// dated now would come after that change and put this window back
+		// in front.
+		return
+	}
 	f.sessions = sessions
 	if f.written && samePayload(data, f.data) {
 		return
@@ -415,6 +467,13 @@ func (w *Watcher) reconsider() {
 	f.data = data
 	w.known(f)
 	w.write(f, w.opts.Now())
+}
+
+// changePending reports whether a change is waiting for the worker.
+func (w *Watcher) changePending() bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.pending != nil
 }
 
 // table reads the process table.
@@ -441,7 +500,9 @@ func (w *Watcher) sessions() map[platform.ID]string {
 func (w *Watcher) payload(t *platform.Table, win window, sessions map[platform.ID]string) *event.OSFocus {
 	d := &event.OSFocus{AppClass: win.class}
 	if w.opts.AppSecret != nil && win.name != "" {
-		d.AppHash = appHash(w.opts.AppSecret, t.OS(), win.name)
+		if secret := w.opts.AppSecret(); secret != nil {
+			d.AppHash = appHash(secret, t.OS(), win.name)
+		}
 	}
 	d.HostedSessions = validKeys(hostedSessions(t, win, sessions))
 	if p := focusProject(win.class, d.HostedSessions, w.opts.ProjectOf); validKey(p) {
@@ -452,13 +513,16 @@ func (w *Watcher) payload(t *platform.Table, win window, sessions map[platform.I
 
 // write records f's payload, dated at, unless it is the record written
 // last: a change between two windows of one app, or a refresh that found
-// nothing new, adds nothing.
+// nothing new, adds nothing. No record is dated before the one written
+// before it: pkg/score orders records by time, so one dated earlier would
+// leave the window of the one before it in front after it.
 func (w *Watcher) write(f *front, at time.Time) {
 	f.written = true
 	if w.written != nil && samePayload(w.written, f.data) {
 		return
 	}
-	w.written = f.data
+	at = w.notBefore(at)
+	w.written, w.lastAt = f.data, at
 	w.mu.Lock()
 	w.status.Records++
 	w.mu.Unlock()
@@ -473,14 +537,12 @@ func (w *Watcher) write(f *front, at time.Time) {
 // TODO(D-focus-unknown): write an os.focus record of the class that says
 // focus is unknown once pkg/event, the schema and SM have it, so the slots
 // are ambiguous instead of crediting the window that was in front before.
-func (w *Watcher) unknown(reason string) {
+func (w *Watcher) unknown(at time.Time, reason string) {
 	w.cur = nil
 	w.mu.Lock()
 	w.status.Unknown, w.status.Class, w.status.Hosted = reason, "", 0
 	w.mu.Unlock()
-	if w.opts.Presence != nil {
-		w.opts.Presence(event.AppNone)
-	}
+	w.tell(at, event.AppNone, nil)
 }
 
 func (w *Watcher) known(f *front) {

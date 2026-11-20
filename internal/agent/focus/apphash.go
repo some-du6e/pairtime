@@ -36,9 +36,12 @@ const appDomain = "pairtime/v1/app/exe\x00"
 // appHash is os.focus's app_hash for an app on goos whose executable is
 // called name, as appName spells it: "a" and the first 16 bytes of
 // HMAC-SHA256(K_app, appDomain || goos || 0x00 || name), in hex. It is a
-// local field (SM 1.2), and keyed besides, so that nobody who has the
-// ledger but not the device's key can test a guess of which app it was
-// (AGENTS.md). Two windows of one app have the same app_hash.
+// local field (SM 1.2): Event.Shareable clears it, so it is in no ledger
+// body and never leaves the device, and what leaves about the app is its
+// app_class. It is keyed besides, so that a full record kept on the
+// device doesn't let anyone without the device's key test a guess of
+// which app it was (AGENTS.md). Two windows of one app have the same
+// app_hash.
 func appHash(secret []byte, goos, name string) string {
 	m := hmac.New(sha256.New, secret)
 	m.Write([]byte(appDomain))

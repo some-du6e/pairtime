@@ -4,9 +4,11 @@ package focus
 
 import (
 	"errors"
+	"maps"
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -77,6 +79,11 @@ type rig struct {
 	live     bool
 	sessions map[platform.ID]string
 	projects map[string]string
+	// secret is K_app once the device key has opened, nil before.
+	secret []byte
+	// sampled is when presence's latest record is dated: presence moves a
+	// change's time up to it, as FocusAt does.
+	sampled  time.Time
 	now      time.Time
 	recs     []Record
 	presence []event.AppClass
@@ -84,7 +91,7 @@ type rig struct {
 	problems []string
 }
 
-func newRig(t *testing.T, change func(*Options)) *rig {
+func newRig(t *testing.T) *rig {
 	t.Helper()
 	r := &rig{os: &fakeOS{procs: desktop()}, live: true, now: t0.Add(time.Hour)}
 	tab := platform.NewTable(platform.Windows, r.os.procs)
@@ -105,15 +112,27 @@ func newRig(t *testing.T, change func(*Options)) *rig {
 			defer r.mu.Unlock()
 			return r.projects[s]
 		},
+		AppSecret: func() []byte {
+			r.mu.Lock()
+			defer r.mu.Unlock()
+			return r.secret
+		},
 		Live: func() bool {
 			r.mu.Lock()
 			defer r.mu.Unlock()
 			return r.live
 		},
-		Presence: func(c event.AppClass) {
+		Presence: func(at time.Time, c event.AppClass, write func(time.Time, bool)) {
 			r.mu.Lock()
-			defer r.mu.Unlock()
 			r.presence = append(r.presence, c)
+			live := r.live
+			if r.sampled.After(at) {
+				at = r.sampled
+			}
+			r.mu.Unlock()
+			if write != nil {
+				write(at, live)
+			}
 		},
 		Kick: func() {
 			r.mu.Lock()
@@ -136,9 +155,6 @@ func newRig(t *testing.T, change func(*Options)) *rig {
 			return r.now
 		},
 	}
-	if change != nil {
-		change(&opts)
-	}
 	r.w = New(opts)
 	r.w.Start()
 	t.Cleanup(r.w.Stop)
@@ -154,8 +170,10 @@ type step struct {
 	recs     []Record
 	kicks    int
 	presence []event.AppClass
-	// unknown is what Status.Unknown should hold after the step.
-	unknown string
+	// unknown is what Status.Unknown should hold after the step, and
+	// problem the last message Options.Problem has had by then, "" when
+	// nothing is wrong.
+	unknown, problem string
 }
 
 func focusRec(at time.Time, class event.AppClass, hosted ...string) Record {
@@ -166,46 +184,45 @@ func TestWatcherSequences(t *testing.T) {
 	at := func(s int) time.Time { return t0.Add(time.Duration(s) * time.Second) }
 	front := func(s, pid int) func(*rig) { return func(r *rig) { r.os.front(at(s), pid) } }
 	tests := []struct {
-		name   string
-		change func(*Options)
-		steps  []step
+		name  string
+		steps []step
 	}{
 		{
 			name: "a sequence of foreground changes becomes one os.focus per change, dated when focus moved",
 			steps: []step{
-				{"Windows Terminal comes to the front", front(0, 6100), []Record{focusRec(at(0), event.AppTerminal, "s_tab1", "s_tab2")}, 1, []event.AppClass{event.AppTerminal}, ""},
-				{"Chrome comes to the front", front(5, 9600), []Record{focusRec(at(5), event.AppBrowser)}, 1, []event.AppClass{event.AppBrowser}, ""},
-				{"VS Code comes to the front", front(9, 9000), []Record{focusRec(at(9), event.AppEditor, "s_code")}, 1, []event.AppClass{event.AppEditor}, ""},
-				{"a classic cmd window comes to the front", front(20, 7000), []Record{focusRec(at(20), event.AppTerminal, "s_cmd")}, 1, []event.AppClass{event.AppTerminal}, ""},
-				{"the Claude desktop app comes to the front", front(31, 9500), []Record{focusRec(at(31), event.AppAgentApp, "s_desk")}, 1, []event.AppClass{event.AppAgentApp}, ""},
-				{"Notepad comes to the front", front(40, 9700), []Record{focusRec(at(40), event.AppOther)}, 1, []event.AppClass{event.AppOther}, ""},
+				{"Windows Terminal comes to the front", front(0, 6100), []Record{focusRec(at(0), event.AppTerminal, "s_tab1", "s_tab2")}, 1, []event.AppClass{event.AppTerminal}, "", ""},
+				{"Chrome comes to the front", front(5, 9600), []Record{focusRec(at(5), event.AppBrowser)}, 1, []event.AppClass{event.AppBrowser}, "", ""},
+				{"VS Code comes to the front", front(9, 9000), []Record{focusRec(at(9), event.AppEditor, "s_code")}, 1, []event.AppClass{event.AppEditor}, "", ""},
+				{"a classic cmd window comes to the front", front(20, 7000), []Record{focusRec(at(20), event.AppTerminal, "s_cmd")}, 1, []event.AppClass{event.AppTerminal}, "", ""},
+				{"the Claude desktop app comes to the front", front(31, 9500), []Record{focusRec(at(31), event.AppAgentApp, "s_desk")}, 1, []event.AppClass{event.AppAgentApp}, "", ""},
+				{"Notepad comes to the front", front(40, 9700), []Record{focusRec(at(40), event.AppOther)}, 1, []event.AppClass{event.AppOther}, "", ""},
 			},
 		},
 		{
 			name: "a switch to another window of the app in front writes nothing new",
 			steps: []step{
-				{"Windows Terminal comes to the front", front(0, 6100), []Record{focusRec(at(0), event.AppTerminal, "s_tab1", "s_tab2")}, 1, []event.AppClass{event.AppTerminal}, ""},
-				{"its other window comes to the front", front(3, 6100), nil, 1, []event.AppClass{event.AppTerminal}, ""},
-				{"Windows names the OpenConsole of one of its tabs", front(4, 6144), nil, 1, []event.AppClass{event.AppTerminal}, ""},
+				{"Windows Terminal comes to the front", front(0, 6100), []Record{focusRec(at(0), event.AppTerminal, "s_tab1", "s_tab2")}, 1, []event.AppClass{event.AppTerminal}, "", ""},
+				{"its other window comes to the front", front(3, 6100), nil, 1, []event.AppClass{event.AppTerminal}, "", ""},
+				{"Windows names the OpenConsole of one of its tabs", front(4, 6144), nil, 1, []event.AppClass{event.AppTerminal}, "", ""},
 			},
 		},
 		{
 			name: "focus pairtime can't name writes no os.focus and Status says why (decision 2)",
 			steps: []step{
-				{"Windows Terminal comes to the front", front(0, 6100), []Record{focusRec(at(0), event.AppTerminal, "s_tab1", "s_tab2")}, 1, []event.AppClass{event.AppTerminal}, ""},
-				{"a UAC prompt's secure desktop takes the input", func(r *rig) { r.os.send(Change{At: at(5), Unknown: "the secure desktop"}) }, nil, 0, []event.AppClass{event.AppNone}, "the secure desktop"},
-				{"the terminal is back in front, which is what the record before says", front(9, 6100), nil, 1, []event.AppClass{event.AppTerminal}, ""},
-				{"Chrome comes to the front", front(12, 9600), []Record{focusRec(at(12), event.AppBrowser)}, 1, []event.AppClass{event.AppBrowser}, ""},
-				{"a window whose process exited at once comes to the front", front(15, 31337), nil, 0, []event.AppClass{event.AppNone}, "the process of the window in front exited before pairtime read the process table"},
+				{"Windows Terminal comes to the front", front(0, 6100), []Record{focusRec(at(0), event.AppTerminal, "s_tab1", "s_tab2")}, 1, []event.AppClass{event.AppTerminal}, "", ""},
+				{"a UAC prompt's secure desktop takes the input", func(r *rig) { r.os.send(Change{At: at(5), Unknown: "the secure desktop"}) }, nil, 0, []event.AppClass{event.AppNone}, "the secure desktop", ""},
+				{"the terminal is back in front, which is what the record before says", front(9, 6100), nil, 1, []event.AppClass{event.AppTerminal}, "", ""},
+				{"Chrome comes to the front", front(12, 9600), []Record{focusRec(at(12), event.AppBrowser)}, 1, []event.AppClass{event.AppBrowser}, "", ""},
+				{"a window whose process exited at once comes to the front", front(15, 31337), nil, 0, []event.AppClass{event.AppNone}, "the process of the window in front exited before pairtime read the process table", ""},
 			},
 		},
 		{
 			name: "nothing is recorded outside a project context, and the window in front is recorded when one goes live (D14)",
 			steps: []step{
-				{"with no context live, Chrome comes to the front", func(r *rig) { r.setLive(false); r.os.front(at(0), 9600) }, nil, 0, []event.AppClass{event.AppBrowser}, ""},
-				{"Notepad comes to the front", front(4, 9700), nil, 0, []event.AppClass{event.AppOther}, ""},
-				{"a hook makes a context live and the agent refreshes", func(r *rig) { r.setLive(true); r.w.Refresh() }, []Record{focusRec(t0.Add(time.Hour), event.AppOther)}, 0, nil, ""},
-				{"another refresh finds nothing new", func(r *rig) { r.w.Refresh() }, nil, 0, nil, ""},
+				{"with no context live, Chrome comes to the front", func(r *rig) { r.setLive(false); r.os.front(at(0), 9600) }, nil, 0, []event.AppClass{event.AppBrowser}, "", ""},
+				{"Notepad comes to the front", front(4, 9700), nil, 0, []event.AppClass{event.AppOther}, "", ""},
+				{"a hook makes a context live and the agent refreshes", func(r *rig) { r.setLive(true); r.w.Refresh() }, []Record{focusRec(t0.Add(time.Hour), event.AppOther)}, 0, nil, "", ""},
+				{"another refresh finds nothing new", func(r *rig) { r.w.Refresh() }, nil, 0, nil, "", ""},
 			},
 		},
 		{
@@ -220,14 +237,14 @@ func TestWatcherSequences(t *testing.T) {
 					}
 					r.mu.Unlock()
 					r.os.front(at(0), 6100)
-				}, []Record{focusRec(at(0), event.AppTerminal, "s_tab1")}, 1, []event.AppClass{event.AppTerminal}, ""},
+				}, []Record{focusRec(at(0), event.AppTerminal, "s_tab1")}, 1, []event.AppClass{event.AppTerminal}, "", ""},
 				{"the scan finds the other tab's session", func(r *rig) {
 					r.mu.Lock()
 					r.sessions = keyed(platform.NewTable(platform.Windows, desktop()), desktopSessions)
 					r.mu.Unlock()
 					r.w.Refresh()
-				}, []Record{focusRec(t0.Add(time.Hour), event.AppTerminal, "s_tab1", "s_tab2")}, 0, nil, ""},
-				{"a refresh with nothing new writes nothing", func(r *rig) { r.w.Refresh() }, nil, 0, nil, ""},
+				}, []Record{focusRec(t0.Add(time.Hour), event.AppTerminal, "s_tab1", "s_tab2")}, 0, nil, "", ""},
+				{"a refresh with nothing new writes nothing", func(r *rig) { r.w.Refresh() }, nil, 0, nil, "", ""},
 				{"the first tab's claude exits, and the scan forgets its session", func(r *rig) {
 					r.os.mu.Lock()
 					r.os.procs = slices.DeleteFunc(r.os.procs, func(p platform.Proc) bool { return p.PID == 6210 })
@@ -241,25 +258,51 @@ func TestWatcherSequences(t *testing.T) {
 					r.now = r.now.Add(time.Minute)
 					r.mu.Unlock()
 					r.w.Refresh()
-				}, []Record{focusRec(t0.Add(time.Hour+time.Minute), event.AppTerminal, "s_tab2")}, 0, nil, ""},
+				}, []Record{focusRec(t0.Add(time.Hour+time.Minute), event.AppTerminal, "s_tab2")}, 0, nil, "", ""},
 			},
 		},
 		{
-			name: "focus_project is the project of the sessions the terminal hosts",
+			name: "focus_project is the project of the sessions a terminal or an editor hosts",
 			steps: []step{
 				{"a cmd window whose one session is in a known project comes to the front", func(r *rig) {
 					r.mu.Lock()
-					r.projects = map[string]string{"s_cmd": "p_9f2c"}
+					r.projects = map[string]string{"s_cmd": "p_9f2c", "s_code": "p_41ab"}
 					r.mu.Unlock()
 					r.os.front(at(0), 7000)
-				}, []Record{{At: at(0), Data: &event.OSFocus{AppClass: event.AppTerminal, HostedSessions: []string{"s_cmd"}, FocusProject: "p_9f2c"}}}, 1, []event.AppClass{event.AppTerminal}, ""},
+				}, []Record{{At: at(0), Data: &event.OSFocus{AppClass: event.AppTerminal, HostedSessions: []string{"s_cmd"}, FocusProject: "p_9f2c"}}}, 1, []event.AppClass{event.AppTerminal}, "", ""},
+				{"VS Code, whose integrated terminal runs a session in another project, comes to the front", front(9, 9000), []Record{{At: at(9), Data: &event.OSFocus{AppClass: event.AppEditor, HostedSessions: []string{"s_code"}, FocusProject: "p_41ab"}}}, 1, []event.AppClass{event.AppEditor}, "", ""},
 			},
 		},
 		{
-			name:   "app_hash is keyed with K_app, and absent without it",
-			change: func(o *Options) { o.AppSecret = testSecret() },
+			name: "app_hash is keyed with K_app once the agent has it, and left out before",
 			steps: []step{
-				{"Chrome comes to the front", front(0, 9600), []Record{{At: at(0), Data: &event.OSFocus{AppClass: event.AppBrowser, AppHash: "a18ecfcc1abf15c0fce0859c46e557fa6"}}}, 1, []event.AppClass{event.AppBrowser}, ""},
+				{"Chrome comes to the front before the device key has opened", front(0, 9600), []Record{focusRec(at(0), event.AppBrowser)}, 1, []event.AppClass{event.AppBrowser}, "", ""},
+				{"the key opens, and Windows Terminal comes to the front", func(r *rig) {
+					r.mu.Lock()
+					r.secret = testSecret()
+					r.mu.Unlock()
+					r.os.front(at(4), 6100)
+				}, []Record{{At: at(4), Data: &event.OSFocus{AppClass: event.AppTerminal, AppHash: "af96f58c5388218fcd6f6cd72bb8e793f", HostedSessions: []string{"s_tab1", "s_tab2"}}}}, 1, []event.AppClass{event.AppTerminal}, "", ""},
+				{"Chrome comes to the front again", front(9, 9600), []Record{{At: at(9), Data: &event.OSFocus{AppClass: event.AppBrowser, AppHash: "a18ecfcc1abf15c0fce0859c46e557fa6"}}}, 1, []event.AppClass{event.AppBrowser}, "", ""},
+			},
+		},
+		{
+			name: "a change's record takes the time presence dates the change's sample, which a record presence took meanwhile moves up",
+			steps: []step{
+				{"presence samples while the table is read for Windows Terminal, which came to the front a moment before", func(r *rig) {
+					r.mu.Lock()
+					r.sampled = at(0).Add(20 * time.Millisecond)
+					r.mu.Unlock()
+					r.os.front(at(0), 6100)
+				}, []Record{focusRec(at(0).Add(20*time.Millisecond), event.AppTerminal, "s_tab1", "s_tab2")}, 1, []event.AppClass{event.AppTerminal}, "", ""},
+			},
+		},
+		{
+			name: "a change the OS dates before the record written last is recorded at that record's time, so records stay in time order",
+			steps: []step{
+				{"with no context live, Chrome comes to the front", func(r *rig) { r.setLive(false); r.os.front(at(0), 9600) }, nil, 0, []event.AppClass{event.AppBrowser}, "", ""},
+				{"a context goes live, and the refresh records Chrome as of then", func(r *rig) { r.setLive(true); r.w.Refresh() }, []Record{focusRec(t0.Add(time.Hour), event.AppBrowser)}, 0, nil, "", ""},
+				{"Windows Terminal comes to the front at a time dated before that refresh", front(5, 6100), []Record{focusRec(t0.Add(time.Hour), event.AppTerminal, "s_tab1", "s_tab2")}, 1, []event.AppClass{event.AppTerminal}, "", ""},
 			},
 		},
 		{
@@ -271,7 +314,7 @@ func TestWatcherSequences(t *testing.T) {
 					r.sessions[p.ID()] = "pid 7010"
 					r.mu.Unlock()
 					r.os.front(at(0), 7000)
-				}, []Record{focusRec(at(0), event.AppTerminal)}, 1, []event.AppClass{event.AppTerminal}, ""},
+				}, []Record{focusRec(at(0), event.AppTerminal)}, 1, []event.AppClass{event.AppTerminal}, "", ""},
 			},
 		},
 		{
@@ -282,19 +325,19 @@ func TestWatcherSequences(t *testing.T) {
 					r.os.readErr = errors.New("access denied")
 					r.os.mu.Unlock()
 					r.os.front(at(0), 6100)
-				}, nil, 0, []event.AppClass{event.AppNone}, "couldn't read the process table: access denied"},
+				}, nil, 0, []event.AppClass{event.AppNone}, "couldn't read the process table: access denied", "couldn't read the process table, so focus changes go unrecorded: access denied"},
 				{"the read works again as Chrome comes to the front", func(r *rig) {
 					r.os.mu.Lock()
 					r.os.readErr = nil
 					r.os.mu.Unlock()
 					r.os.front(at(3), 9600)
-				}, []Record{focusRec(at(3), event.AppBrowser)}, 1, []event.AppClass{event.AppBrowser}, ""},
+				}, []Record{focusRec(at(3), event.AppBrowser)}, 1, []event.AppClass{event.AppBrowser}, "", ""},
 			},
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			r := newRig(t, tt.change)
+			r := newRig(t)
 			for _, st := range tt.steps {
 				r.mu.Lock()
 				nRecs, nKicks, nPres := len(r.recs), r.kicks, len(r.presence)
@@ -303,6 +346,10 @@ func TestWatcherSequences(t *testing.T) {
 				r.w.sync()
 				r.mu.Lock()
 				recs, kicks, pres := slices.Clone(r.recs[nRecs:]), r.kicks-nKicks, slices.Clone(r.presence[nPres:])
+				problem := ""
+				if n := len(r.problems); n > 0 {
+					problem = r.problems[n-1]
+				}
 				r.mu.Unlock()
 				if !sameRecords(recs, st.recs) {
 					t.Errorf("%s: records %s, want %s", st.name, show(recs), show(st.recs))
@@ -320,6 +367,9 @@ func TestWatcherSequences(t *testing.T) {
 				}
 				if got := r.w.Status().Unknown; got != st.unknown {
 					t.Errorf("%s: Status.Unknown %q, want %q", st.name, got, st.unknown)
+				}
+				if problem != st.problem {
+					t.Errorf("%s: the last problem is %q, want %q", st.name, problem, st.problem)
 				}
 			}
 		})
@@ -386,7 +436,7 @@ func TestWatcherLifecycle(t *testing.T) {
 		w.Stop()
 	})
 	t.Run("Stop stops the source and nothing is recorded after it", func(t *testing.T) {
-		r := newRig(t, nil)
+		r := newRig(t)
 		r.os.front(t0, 6100)
 		r.w.sync()
 		r.w.Stop()
@@ -415,7 +465,7 @@ func TestWatcherLifecycle(t *testing.T) {
 		}
 	})
 	t.Run("a refresh while the known sessions are unchanged doesn't walk the process table", func(t *testing.T) {
-		r := newRig(t, nil)
+		r := newRig(t)
 		r.os.front(t0, 6100)
 		r.w.sync()
 		reads := func() int {
@@ -444,7 +494,7 @@ func TestWatcherLifecycle(t *testing.T) {
 		}
 	})
 	t.Run("Status counts the changes the OS reported and the records written", func(t *testing.T) {
-		r := newRig(t, nil)
+		r := newRig(t)
 		r.os.front(t0, 6100)
 		r.w.sync()
 		r.os.front(t0.Add(time.Second), 6100)
@@ -498,6 +548,93 @@ func TestWatcherCoalesces(t *testing.T) {
 			}
 			if last := recs[1]; last.Data.AppClass != tt.want || !last.At.Equal(t0.Add(time.Duration(len(tt.burst))*time.Second)) {
 				t.Errorf("the last record is %s, want %s at the last switch", show(recs[1:]), tt.want)
+			}
+		})
+	}
+}
+
+// TestWatcherRefreshMeetsChange checks a refresh that a focus change
+// interrupts: the change comes while the refresh reads the process table.
+// The refresh writes no record of the window that has left the front,
+// because one dated after the change would put that window back in front
+// (pkg/score orders records by time), and the change's own record comes
+// next, dated when focus moved.
+func TestWatcherRefreshMeetsChange(t *testing.T) {
+	tests := []struct {
+		name string
+		// known are the sessions the agent knows when the window comes to
+		// the front, and found those the scan finds before the refresh.
+		known, found []string
+		want         []Record
+	}{
+		{
+			name:  "a refresh that a focus change interrupts writes nothing, and the change's record follows",
+			known: []string{"s_tab1"},
+			found: []string{"s_tab1", "s_tab2"},
+			want: []Record{
+				focusRec(t0, event.AppTerminal, "s_tab1"),
+				focusRec(t0.Add(30*time.Minute), event.AppBrowser),
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			all := keyed(platform.NewTable(platform.Windows, desktop()), desktopSessions)
+			only := func(keys []string) map[platform.ID]string {
+				out := make(map[platform.ID]string)
+				for id, k := range all {
+					if slices.Contains(keys, k) {
+						out[id] = k
+					}
+				}
+				return out
+			}
+			f := &fakeOS{procs: desktop()}
+			fos := f.os()
+			read := fos.Read
+			var gated atomic.Bool
+			gate := make(chan struct{})
+			entered := make(chan struct{}, 1)
+			fos.Read = func() ([]platform.Proc, error) {
+				if gated.Load() {
+					entered <- struct{}{}
+					<-gate
+				}
+				return read()
+			}
+			var mu sync.Mutex
+			sessions := only(tt.known)
+			var recs []Record
+			w := New(Options{
+				OS: fos,
+				Sessions: func() map[platform.ID]string {
+					mu.Lock()
+					defer mu.Unlock()
+					return maps.Clone(sessions)
+				},
+				Record: func(r Record) { mu.Lock(); recs = append(recs, r); mu.Unlock() },
+				Now:    func() time.Time { return t0.Add(time.Hour) },
+			})
+			w.Start()
+			defer w.Stop()
+			f.front(t0, 6100)
+			w.sync()
+
+			mu.Lock()
+			sessions = only(tt.found)
+			mu.Unlock()
+			gated.Store(true)
+			w.Refresh()
+			<-entered // the refresh is reading the table
+			f.front(t0.Add(30*time.Minute), 9600)
+			gated.Store(false)
+			close(gate)
+			w.sync()
+
+			mu.Lock()
+			defer mu.Unlock()
+			if !sameRecords(recs, tt.want) {
+				t.Errorf("records %s, want %s", show(recs), show(tt.want))
 			}
 		})
 	}

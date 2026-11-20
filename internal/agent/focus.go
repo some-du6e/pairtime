@@ -12,10 +12,11 @@ import (
 // refreshes it, and started after it, because each focus change asks the
 // scan to run and reads the sessions the scan found.
 //
-//   - Each change goes to presence's Focus with its app class, which is
+//   - Each change goes to presence's FocusAt with its app class, which is
 //     what makes a focused terminal, editor or agent app a project
 //     context, and a record is written only while a context is live
-//     (D14).
+//     (D14). Presence dates the sample it takes for the change the same as
+//     the change's record.
 //   - hosted_sessions come from the sessions the process scan found. The
 //     hook path (WP-AG3) adds the processes its hooks come from, with
 //     their session keys and the projects focus_project needs, and calls
@@ -30,7 +31,7 @@ func (a *agent) newFocus(src focus.OS) {
 		OS:       src,
 		Sessions: func() map[platform.ID]string { return a.procs.Sessions() },
 		Live:     func() bool { return a.presence.Status().Live },
-		Presence: a.presence.Focus,
+		Presence: a.presence.FocusAt,
 		Kick:     func() { a.procs.Kick() },
 		Problem:  func(msg string) { a.setProblem("focus", msg) },
 		Log:      a.log.With("component", "focus"),
