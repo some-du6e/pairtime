@@ -10,6 +10,7 @@ import (
 	"math/rand/v2"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -274,7 +275,7 @@ func TestWriteKeepsInput(t *testing.T) {
 	if _, err := w.Write(in); err != nil {
 		t.Fatal(err)
 	}
-	if *p != before || in.Event.Seq != 0 || in.Event.DeviceID != "" {
+	if !reflect.DeepEqual(*p, before) || in.Event.Seq != 0 || in.Event.DeviceID != "" {
 		t.Errorf("the caller's event changed: %+v, seq %d, device %q", *p, in.Event.Seq, in.Event.DeviceID)
 	}
 }
