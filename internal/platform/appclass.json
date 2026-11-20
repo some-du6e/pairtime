@@ -60,7 +60,7 @@
       "os": ["darwin"],
       "app_class": "terminal",
       "role": "terminal",
-      "cite": "HS 13.2 (iTerm2); HS 3.3 (terminal.type iTerm.app); SM 6.3 (two iTerm windows); CP 3.3 (foreground app on macOS)"
+      "cite": "HS 13.2 (iTerm2); HS 3.3 (terminal.type iTerm.app); SM 6.3 (A in iTerm, B in Terminal); CP 3.3 (foreground app on macOS)"
     },
     {
       "names": ["gnome-terminal-server", "gnome-terminal", "kgx", "ptyxis", "ptyxis-agent", "konsole", "xterm", "uxterm", "xfce4-terminal", "mate-terminal", "lxterminal", "qterminal", "tilix", "terminator", "guake", "yakuake", "foot", "st", "urxvt", "rxvt", "sakura", "terminology", "warp-terminal"],
