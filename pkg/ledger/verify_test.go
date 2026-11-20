@@ -300,7 +300,7 @@ func TestVerifyErrorTypes(t *testing.T) {
 		{
 			name: "a record rewritten after sealing, still well formed, is a root mismatch and nothing else",
 			mutate: func(m *smallChain) Chain {
-				rec, err := UploadFailureRecord(k, 5, []byte(`{"reason":"connect"}`))
+				rec, err := UploadFailureRecord(k, 5, testT, "connect")
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -315,7 +315,7 @@ func TestVerifyErrorTypes(t *testing.T) {
 		{
 			name: "an earlier batch rewritten and resealed is a head mismatch in the batch after it",
 			mutate: func(m *smallChain) Chain {
-				rec, err := CheckpointRecord(k, 3, "p_small", []byte(`{"project_key":"p_small","rewritten":true}`))
+				rec, err := CheckpointRecord(k, 3, "p_small", 1795089600000, []byte(`{"rewritten":true}`))
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -409,7 +409,7 @@ func TestVerifyErrorTypes(t *testing.T) {
 		{
 			name: "a body with another record's nonce is a record error wrapping ErrNonce",
 			mutate: func(m *smallChain) Chain {
-				rec, err := UploadFailureRecord(k, 99, []byte(`{"reason":"dns"}`))
+				rec, err := UploadFailureRecord(k, 99, testT, "dns")
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -492,7 +492,7 @@ func sealUnchecked(prev Hash, b uint64, entries []Entry) (BatchRow, error) {
 func TestSealRefuses(t *testing.T) {
 	k := testKeys(t)
 	rec := func(s uint64) Entry {
-		r, err := UploadFailureRecord(k, s, []byte(`{"reason":"dns"}`))
+		r, err := UploadFailureRecord(k, s, testT, "dns")
 		if err != nil {
 			t.Fatal(err)
 		}

@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
+	"slices"
 
 	"github.com/some-du6e/pairtime/pkg/event"
 )
@@ -45,15 +47,16 @@ type F struct {
 	// V is the version, 1.
 	V int `json:"v"`
 	// MH is the prompt's sketch (spec 10.5), on prompt.submit and
-	// cli.track.
+	// cli.track records that commit their text.
 	MH *Sketch `json:"mh,omitempty"`
 	// TH is the template value (spec 10.6), on prompt.submit and
-	// cli.track.
+	// cli.track records that commit their text.
 	TH *Value `json:"th,omitempty"`
 	// ES is the error signature value (spec 10.6), on prompt.submit and
-	// cli.track when the text has a signature.
+	// cli.track records that commit their text, when the text has a
+	// signature.
 	ES *Value `json:"es,omitempty"`
-	// PC is the prompt class, on prompt.submit and cli.track.
+	// PC is the prompt class, on every prompt.submit and cli.track.
 	PC Class `json:"pc,omitempty"`
 	// H are the edit hunks (spec 10.6), in the order the patch lists
 	// them, on agent.tool when the tool edited a file.
@@ -83,11 +86,10 @@ func carries(kind event.Kind) int {
 	return carriesNone
 }
 
-// Carries reports whether a version 1 writer puts f in the body of records
-// of kind k: prompt.submit, agent.tool, shell.command and cli.track, even
-// when f holds only v, and no other kind (spec 10.7). A record of one of
-// those kinds without f was written before features existed (WP-LG4),
-// which isn't the same as a record that has none.
+// Carries reports whether the body of every record of kind k has f:
+// prompt.submit, agent.tool, shell.command and cli.track, even when f holds
+// only v, and no other kind (spec 4.5, 10.7). A body of one of those kinds
+// without f fails verification.
 func Carries(k event.Kind) bool { return carries(k) != carriesNone }
 
 // Prompt returns the features of a prompt.submit or cli.track record whose
@@ -108,6 +110,22 @@ func (k *Key) Prompt(text string, class Class) (F, error) {
 	}
 	return f, nil
 }
+
+// Textless returns the features of a prompt.submit whose text the device
+// never had: one from the WakaTime bridge, or a plugin's that came without
+// its text (spec 10.1). It holds only v and the class, and the record
+// commits nothing.
+func Textless(class Class) (F, error) {
+	if !class.Valid() {
+		return F{}, fmt.Errorf("features: %q isn't a prompt class", class)
+	}
+	return F{V: Version, PC: class}, nil
+}
+
+// HasText reports whether f, a prompt's features, was computed from its
+// text: it has a sketch, which a prompt record carries exactly when it
+// commits its text (spec 10.7). A Textless map has none.
+func (f F) HasText() bool { return f.MH != nil }
 
 // Tool returns the features of an agent.tool record: its edit hunks, in
 // the order the patch lists them, and the value of the command it ran,
@@ -140,28 +158,38 @@ func (k *Key) Shell(cmd string) F {
 
 // Errors from Parse. Test for them with errors.Is.
 var (
-	// ErrUnknown is an f whose v isn't 1 or that holds a member spec
-	// 10.7's table doesn't list. The record's features are unknown, and a
-	// reader doesn't guess at them (spec 10.7).
-	ErrUnknown = errors.New("features: f is of a version or holds a member version 1 doesn't define")
+	// ErrUnknown is an f whose v is above Version: a later writer's, whose
+	// features this reader doesn't know and mustn't guess at (spec 10.7). A
+	// server is never older than the clients writing to it, so for a server
+	// it is a fault, and it refuses or holds the record.
+	ErrUnknown = errors.New("features: f is of a version newer than this reader's")
 	// ErrKind is a version 1 f that doesn't fit its record's kind: a
 	// member on a kind that doesn't carry it, a member that kind always
 	// carries missing, or an f on a kind that carries none.
 	ErrKind = errors.New("features: f doesn't fit its record's kind")
-	// ErrMalformed is an f that isn't a feature map of any version, or a
-	// version 1 f with a value that breaks spec 10.7.
+	// ErrMalformed is an f that isn't a feature map of any version: no v, a
+	// v that isn't an integer or is below 1, a null member, a member
+	// version 1 doesn't list, or a value that breaks spec 10.6 or 10.7.
 	ErrMalformed = errors.New("features: f is malformed")
 )
 
 // members are the members of spec 10.7's table, version 1.
 var members = map[string]bool{"v": true, "mh": true, "th": true, "es": true, "pc": true, "h": true, "ch": true}
 
+// hunkMembers are the members of a hunk (spec 10.6).
+var hunkMembers = []string{"p", "os", "ol", "ns", "nl"}
+
+func isNull(raw json.RawMessage) bool { return bytes.Equal(bytes.TrimSpace(raw), []byte("null")) }
+
 // Parse reads raw, the "f" member of the body of a record of kind kind. It
-// returns an error wrapping ErrUnknown for an f whose v isn't 1 or that
-// holds a member version 1 doesn't list, which isn't a fault: the record's
-// features are unknown, and the caller mustn't guess (spec 10.7). An f of
-// version 1 that doesn't fit kind wraps ErrKind, and anything else that
-// isn't a version 1 feature map wraps ErrMalformed.
+// returns an error wrapping ErrUnknown for an f whose v is above Version:
+// the record's features are unknown, and the caller mustn't guess at them
+// (spec 10.7). An f of version 1 that doesn't fit kind wraps ErrKind, and
+// anything else that isn't a version 1 feature map wraps ErrMalformed: no
+// v, a v that isn't an integer or is below 1, a null member, a member
+// version 1 doesn't list, or a hunk that isn't exactly spec 10.6's five
+// members. Member names match exactly, never in another letter case, and
+// the verdict doesn't depend on the order of the members.
 func Parse(kind event.Kind, raw []byte) (F, error) {
 	var obj map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &obj); err != nil || obj == nil {
@@ -171,19 +199,30 @@ func Parse(kind event.Kind, raw []byte) (F, error) {
 	if !ok {
 		return F{}, fmt.Errorf("%w: no v", ErrMalformed)
 	}
-	var v int
-	if err := json.Unmarshal(rawV, &v); err != nil {
+	var v int64
+	if isNull(rawV) || json.Unmarshal(rawV, &v) != nil {
 		return F{}, fmt.Errorf("%w: v isn't an integer", ErrMalformed)
 	}
-	if v != Version {
+	switch {
+	case v < 1:
+		return F{}, fmt.Errorf("%w: v is %d, and versions start at 1", ErrMalformed, v)
+	case v > Version:
 		return F{}, fmt.Errorf("%w: v is %d", ErrUnknown, v)
 	}
-	for name, val := range obj {
+	names := slices.Sorted(maps.Keys(obj))
+	for _, name := range names {
 		if !members[name] {
-			return F{}, fmt.Errorf("%w: member %q", ErrUnknown, name)
+			return F{}, fmt.Errorf("%w: version 1 has no member %q", ErrMalformed, name)
 		}
-		if bytes.Equal(bytes.TrimSpace(val), []byte("null")) {
+	}
+	for _, name := range names {
+		if isNull(obj[name]) {
 			return F{}, fmt.Errorf("%w: %s is null", ErrMalformed, name)
+		}
+	}
+	if h, ok := obj["h"]; ok {
+		if err := checkHunks(h); err != nil {
+			return F{}, err
 		}
 	}
 	var f F
@@ -196,6 +235,32 @@ func Parse(kind event.Kind, raw []byte) (F, error) {
 	return f, nil
 }
 
+// checkHunks refuses an h that isn't a list of objects with exactly the
+// members p, os, ol, ns and nl, none of them null (spec 10.6), so that a
+// null element, a missing member or a member in another case can't become a
+// hunk at line 0 of path value zero.
+func checkHunks(raw json.RawMessage) error {
+	var elems []json.RawMessage
+	if err := json.Unmarshal(raw, &elems); err != nil {
+		return fmt.Errorf("%w: h isn't a list", ErrMalformed)
+	}
+	for i, e := range elems {
+		var obj map[string]json.RawMessage
+		if isNull(e) || json.Unmarshal(e, &obj) != nil {
+			return fmt.Errorf("%w: hunk %d isn't an object", ErrMalformed, i)
+		}
+		for _, name := range hunkMembers {
+			if v, ok := obj[name]; !ok || isNull(v) {
+				return fmt.Errorf("%w: hunk %d has no %s", ErrMalformed, i, name)
+			}
+		}
+		if len(obj) != len(hunkMembers) {
+			return fmt.Errorf("%w: hunk %d has a member besides p, os, ol, ns and nl", ErrMalformed, i)
+		}
+	}
+	return nil
+}
+
 // fits checks a version 1 f against the kind of its record (spec 10.7).
 // obj is f's members as parsed, which tell a member that is present from
 // one that is absent.
@@ -203,7 +268,13 @@ func (f F) fits(kind event.Kind, obj map[string]json.RawMessage) error {
 	has := func(name string) bool { _, ok := obj[name]; return ok }
 	switch carries(kind) {
 	case carriesPrompt:
-		for _, name := range []string{"mh", "th", "pc"} {
+		// With its text, a prompt's f has mh, th and pc, and es when the
+		// text has a signature; without it, pc alone (spec 10.7).
+		need := []string{"pc"}
+		if has("mh") || has("th") || has("es") {
+			need = []string{"mh", "th", "pc"}
+		}
+		for _, name := range need {
 			if !has(name) {
 				return fmt.Errorf("%w: %s f has no %s", ErrKind, kind, name)
 			}
