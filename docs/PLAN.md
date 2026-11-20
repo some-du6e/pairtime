@@ -751,7 +751,7 @@ Exit check: `restore-drill.yml` green; `probe.yml` green against `https://<host>
 ### WP-SV10. Projects, commits and forge verification
 
 - Depends on: WP-SV4.
-- Touches: `internal/server/project/`, `internal/server/forge/`, `testdata/fixtures/forges/`.
+- Touches: `internal/server/project/`, `internal/server/forge/`, `testdata/forges/` (not under `testdata/fixtures/`, whose `<harness>/<version>/<os>/` layout is for harness captures).
 - Build: project registration (root-commit SHAs turned into `HMAC(pepper, root_sha)` and discarded; a normalized remote only for public repos or published projects; SP 4.2); commit records with three clocks: `observed_at`, `server_first_seen_at` and the forge time (DESIGN 5.8); verification of public-repo commits on GitHub, GitLab and Forgejo with one lookup per SHA and a diffstat check, GitHub's compare API for ranges, retries with backoff for 24 hours, and a server token within GitHub's 5,000 requests an hour (SP 4.1); the `backdated` and `few_commits` flags; rewrites that move credited time to the new SHA (SP 4.4). A `workflow_dispatch` job records real API responses for a few commits of well-known public repos on each forge, and the tests replay those recordings.
 - CI checks: recorded responses replay; a diffstat mismatch is caught; a commit first seen weeks after its author date is flagged `backdated`; a 20-hour project with one commit gets `few_commits`; a rebase moves credited seconds to the rewritten SHA.
 - Oracle: real forge responses, recorded once.

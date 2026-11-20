@@ -27,6 +27,14 @@ func osStoreForTest(t *testing.T) Kind {
 	return KindSecretService
 }
 
+// TestThisOSStore and TestVectorsThroughThisOSStore go through this OS's
+// stores, so in this build they reach the Secret Service. platform.yml's
+// Linux job runs only TestDesktop* tests (AGENTS.md), so these names run
+// them there.
+func TestDesktopThisOSStore(t *testing.T) { TestThisOSStore(t) }
+
+func TestDesktopVectorsThroughThisOSStore(t *testing.T) { TestVectorsThroughThisOSStore(t) }
+
 func startFakeSecretService(t *testing.T) *fakesecret.Service {
 	t.Helper()
 	fake, err := fakesecret.Start()
@@ -55,7 +63,7 @@ func deviceItems(t *testing.T, fake *fakesecret.Service, dir string) []fakesecre
 	return out
 }
 
-func TestSecretService(t *testing.T) {
+func TestDesktopSecretService(t *testing.T) {
 	tests := []struct {
 		name string
 		run  func(t *testing.T, fake *fakesecret.Service, opts Options)

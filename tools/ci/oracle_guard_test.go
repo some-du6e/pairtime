@@ -20,13 +20,14 @@ import (
 // pull_request.labels to label objects of the same shape.
 const payloadFile = "testdata/pull_request.labeled.json"
 
-// oraclePaths has one path under each oracle pattern of docs/PLAN.md,
-// ground rule 5.
+// oraclePaths has one path under each of is_oracle's patterns, the oracle
+// paths AGENTS.md lists.
 var oraclePaths = []string{
 	"docs/DESIGN.md",
 	"docs/BOUNTY.md",
 	"docs/design/struggle-metric.md",
 	"docs/research/notes/hackatime.md",
+	"docs/errata/2026-11-19-bridge-unverified.md",
 	"testdata/timelines/6.1/events.jsonl",
 	"testdata/ledger/vectors.json",
 	"tools/ledger_ref.py",
@@ -37,12 +38,15 @@ var oraclePaths = []string{
 }
 
 // codePaths has one path under each code directory the guard watches.
-var codePaths = []string{
-	"cmd/pairtime/main.go",
-	"internal/agent/agent.go",
-	"pkg/score/score.go",
-	"web/src/app.ts",
-	"extension/vscode/package.json",
+var codePaths = []struct{ dir, path string }{
+	{"cmd/", "cmd/pairtime/main.go"},
+	{"internal/", "internal/agent/agent.go"},
+	{"pkg/", "pkg/score/score.go"},
+	{"web/", "web/src/app.ts"},
+	{"extension/", "extension/vscode/package.json"},
+	{"integrations/", "integrations/airtable-automation.js"},
+	{"tools/capture/", "tools/capture/scrub.py"},
+	{"tools/loadtest/", "tools/loadtest/main.go"},
 }
 
 type guardCase struct {
@@ -65,6 +69,7 @@ func TestOracleGuard(t *testing.T) {
 	tests := []guardCase{
 		{name: "a modified oracle with code fails", diff: []string{"M\tdocs/design/struggle-metric.md", "M\tpkg/score/score.go"}, wantCode: 1, wantOut: "::error file=docs/design/struggle-metric.md::oracle modified"},
 		{name: "an added oracle with code passes", diff: []string{"A\ttestdata/timelines/6.1/expected.json", "A\tpkg/score/score.go"}},
+		{name: "a new erratum beside code passes", diff: []string{"A\tdocs/errata/2026-11-21-new-question.md", "M\tpkg/score/score.go"}},
 		{name: "the oracle-change label lets an oracle change with code", diff: []string{"M\tdocs/design/struggle-metric.md", "M\tpkg/score/score.go"}, labels: []string{"bug", "oracle-change"}, wantOut: "the oracle-change label allows this PR"},
 		{name: "a deleted oracle with code fails", diff: []string{"D\ttestdata/fixtures/claude_code/2.0.14/linux/hooks/001.json", "M\tinternal/adapters/claudecode/hooks.go"}, wantCode: 1, wantOut: "oracle deleted"},
 		{name: "a renamed oracle with code fails", diff: []string{"R100\ttestdata/ledger/v1.json\ttestdata/ledger/v2.json", "M\tpkg/ledger/ledger.go"}, wantCode: 1, wantOut: "oracle renamed"},
@@ -76,6 +81,7 @@ func TestOracleGuard(t *testing.T) {
 		{name: "code without an oracle change passes", diff: []string{"M\tpkg/event/event.go", "A\tpkg/event/new_test.go"}},
 		{name: "docs/PLAN.md is not an oracle", diff: []string{"M\tdocs/PLAN.md", "M\tpkg/score/score.go"}},
 		{name: "workflows and CI tools are not code", diff: []string{"M\tdocs/research/client-platform.md", "M\t.github/workflows/ci.yml", "M\ttools/ci/oracle_guard.sh"}},
+		{name: "tools/ outside capture/ and loadtest/ is not code, so ledger_ref.py can change beside the release tool", diff: []string{"M\ttools/ledger_ref.py", "M\ttools/release/main.go"}},
 		{name: "a look-alike path is not an oracle", diff: []string{"M\tdocs/designs/notes.md", "M\ttestdata/fixtures-old/x.json", "M\tpkg/score/score.go"}},
 		{name: "a label with a similar name doesn't count", diff: []string{"M\tdocs/BOUNTY.md", "M\tcmd/pairtime/main.go"}, labels: []string{"oracle-changes", "Oracle-Change"}, wantCode: 1},
 		{
@@ -99,10 +105,10 @@ func TestOracleGuard(t *testing.T) {
 			wantCode: 1,
 		})
 	}
-	for _, p := range codePaths {
+	for _, c := range codePaths {
 		tests = append(tests, guardCase{
-			name:     "an oracle modified with a change under " + strings.SplitN(p, "/", 2)[0] + "/ fails",
-			diff:     []string{"M\tdocs/design/struggle-metric.md", "M\t" + p},
+			name:     "an oracle modified with a change under " + c.dir + " fails",
+			diff:     []string{"M\tdocs/design/struggle-metric.md", "M\t" + c.path},
 			wantCode: 1,
 		})
 	}

@@ -13,29 +13,40 @@
 # in GitHub's documented payload). Without a payload there are no labels.
 #
 # A PR fails when it modifies, deletes, renames or retypes an oracle path and
-# also touches cmd/, internal/, pkg/, web/ or extension/, unless it carries
-# the oracle-change label, which only Karim adds. Adding a new oracle file
-# next to new code passes.
+# also touches cmd/, internal/, pkg/, web/, extension/, integrations/,
+# tools/capture/ or tools/loadtest/, unless it carries the oracle-change
+# label. Only Karim or the orchestrator adds it, to apply a decision made
+# outside the PR (AGENTS.md). Adding a new oracle file next to new code
+# passes.
 #
 # Exit status: 0 pass, 1 blocked, 2 bad input or a missing tool.
 set -euo pipefail
 
 label=oracle-change
 
-# The oracle paths of ground rule 5. In a case pattern * also matches /.
+# The oracle paths AGENTS.md lists: ground rule 5's, and docs/errata/, so an
+# erratum's decision can't change beside the code it governs. In a case
+# pattern * also matches /.
 is_oracle() {
 	case "$1" in
 	docs/DESIGN.md | docs/BOUNTY.md | tools/ledger_ref.py) return 0 ;;
-	docs/design/* | docs/research/*) return 0 ;;
+	docs/design/* | docs/research/* | docs/errata/*) return 0 ;;
 	testdata/timelines/* | testdata/ledger/* | testdata/fixtures/*) return 0 ;;
 	testdata/upstream/* | testdata/checks/* | testdata/redteam/*) return 0 ;;
 	esac
 	return 1
 }
 
+# integrations/ holds the program kit, which testdata/upstream's captures
+# check (docs/PLAN.md, WP-PG0, WP-PG2, WP-PG8, WP-PG10). Two directories of
+# tools/ are graded by oracles too: the capture kit by the hook contracts in
+# docs/research (WP-AD0) and the load test by DESIGN 10.6 (WP-OP3). The rest
+# of tools/ isn't code here, because tools/ledger_ref.py is an oracle itself
+# and a PR that changes only it (WP-LG3) must pass.
 is_code() {
 	case "$1" in
-	cmd/* | internal/* | pkg/* | web/* | extension/*) return 0 ;;
+	cmd/* | internal/* | pkg/* | web/* | extension/* | integrations/*) return 0 ;;
+	tools/capture/* | tools/loadtest/*) return 0 ;;
 	esac
 	return 1
 }
@@ -135,6 +146,7 @@ This PR changes an existing oracle and the code it checks. An oracle decides
 whether code is right, so the two change in separate PRs. Either move the
 oracle change into its own PR, or, when an SM worked example or fixture
 disagrees with the spec, write docs/errata/<date>-<topic>.md, add the erratum
-label and stop. Karim adds the $label label when both really belong in one PR.
+label and stop. Only Karim or the orchestrator adds the $label label, to
+apply a decision made outside this PR, such as a decided erratum.
 EOF
 exit 1

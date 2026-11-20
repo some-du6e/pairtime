@@ -123,7 +123,9 @@ jobs:
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         with:
           go-version-file: go.mod
-          cache-dependency-path: go.sum
+          cache-dependency-path: |
+            go.mod
+            go.sum
 
       - name: The agent, with the real UI embedded
         id: agent
