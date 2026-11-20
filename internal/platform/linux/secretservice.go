@@ -8,7 +8,9 @@ import (
 	"encoding/hex"
 	"errors"
 	"os"
-	"strconv"
+	"os/user"
+	"path"
+	"strings"
 
 	"github.com/zalando/go-keyring"
 )
@@ -49,32 +51,75 @@ type SecretService struct {
 // checks this first, because go-keyring would otherwise run dbus-launch,
 // which starts a bus of its own that outlives the agent.
 func (SecretService) Available() error {
-	if _, ok := sessionBusAddress(os.Getenv, fileExists, os.Getuid()); !ok {
+	if _, ok := sessionBusAddress(thisSystem); !ok {
 		return ErrNoSessionBus
 	}
 	return nil
 }
 
-// sessionBusAddress returns the session bus address godbus connects to
-// (godbus/dbus v5.2.4, getSessionBusAddress): DBUS_SESSION_BUS_ADDRESS
-// unless it is empty or "autolaunch:", else the socket systemd keeps at
-// /run/user/<uid>/bus. Where it reports false, godbus would run
-// dbus-launch. godbus also reads /run/user/<uid>/dbus-session, which
-// Ubuntu 16.04 wrote and later releases don't; a system that has only that
-// file gets the key file instead.
-func sessionBusAddress(getenv func(string) string, exists func(string) bool, uid int) (string, bool) {
-	if a := getenv("DBUS_SESSION_BUS_ADDRESS"); a != "" && a != "autolaunch:" {
-		return a, true
-	}
-	if bus := "/run/user/" + strconv.Itoa(uid) + "/bus"; exists(bus) {
-		return "unix:path=" + bus, true
-	}
-	return "", false
+// busFinder is what godbus reads to find the session bus, so tests can
+// give sessionBusAddress another system.
+type busFinder struct {
+	getenv func(string) string
+	// uid is the Uid of user.Current, which godbus reads instead of
+	// os.Getuid. Without cgo, user.Current fails for a uid that
+	// /etc/passwd doesn't list when $USER or $HOME is unset, as in a
+	// container run under an arbitrary uid.
+	uid func() (string, error)
+	// exists is godbus's fileExists: true unless stat says the file
+	// doesn't exist, so a file stat can't reach counts.
+	exists   func(string) bool
+	readFile func(string) ([]byte, error)
 }
 
-func fileExists(name string) bool {
-	_, err := os.Stat(name)
-	return err == nil
+// thisSystem finds the bus the way godbus does on this system.
+var thisSystem = busFinder{
+	getenv: os.Getenv,
+	uid: func() (string, error) {
+		u, err := user.Current()
+		if err != nil {
+			return "", err
+		}
+		return u.Uid, nil
+	},
+	exists: func(name string) bool {
+		_, err := os.Stat(name)
+		return !os.IsNotExist(err)
+	},
+	readFile: os.ReadFile,
+}
+
+// sessionBusAddress returns the session bus address godbus connects to
+// without starting a bus (godbus/dbus v5.2.4: getSessionBusAddress in
+// conn.go; tryDiscoverDbusSessionBusAddress and getRuntimeDirectory in
+// conn_other.go). That is DBUS_SESSION_BUS_ADDRESS unless it is empty or
+// "autolaunch:"; else, in the runtime directory /run/user/<uid> with the
+// uid from user.Current, the socket "bus", or the address the file
+// "dbus-session" gives after "DBUS_SESSION_BUS_ADDRESS=", which Ubuntu
+// 16.04 wrote. When it reports false, godbus would run dbus-launch, and so
+// it does when user.Current fails, without looking in /run/user at all.
+func sessionBusAddress(f busFinder) (string, bool) {
+	if a := f.getenv("DBUS_SESSION_BUS_ADDRESS"); a != "" && a != "autolaunch:" {
+		return a, true
+	}
+	uid, err := f.uid()
+	if err != nil {
+		return "", false
+	}
+	dir := path.Join("/run/user", uid)
+	if bus := path.Join(dir, "bus"); f.exists(bus) {
+		return "unix:path=" + bus, true
+	}
+	if file := path.Join(dir, "dbus-session"); f.exists(file) {
+		if b, err := f.readFile(file); err == nil {
+			if a, ok := strings.CutPrefix(string(b), "DBUS_SESSION_BUS_ADDRESS="); ok {
+				if a = strings.TrimRight(a, "\r\n"); a != "" {
+					return a, true
+				}
+			}
+		}
+	}
+	return "", false
 }
 
 // Get returns the secret saved under account. It returns ErrNotFound when
@@ -109,6 +154,12 @@ func (s SecretService) Set(account string, secret []byte) error {
 
 // Delete removes the item saved under account. It returns ErrNotFound when
 // there is none.
+//
+// A nil error doesn't prove the item is gone. A Secret Service may ask the
+// user to allow a delete, and go-keyring v0.2.8 throws away the prompt's
+// dismissed flag, so a delete the user declined also returns nil. A caller
+// that must know reads the item back. KeePassXC, by default, moves a
+// deleted item to its recycle bin, where reading it back can't see it.
 func (s SecretService) Delete(account string) error {
 	if err := s.Available(); err != nil {
 		return err

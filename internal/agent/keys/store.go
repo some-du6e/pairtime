@@ -21,21 +21,24 @@ import (
 // id, so two installations on one account never share an item.
 //
 // A Store's methods may be slow, and may wait for the user, as when a
-// locked keyring asks for its password. The keystore runs each call with a
-// deadline (Options.Timeout).
+// locked keyring asks for its password. The keystore runs each call to a
+// store but the key file with a deadline (Options.Timeout).
 type Store interface {
 	// Kind says which store this is. keystore.json records it, so the
 	// key is looked for in the same store next time.
 	Kind() Kind
 	// Get returns the secret saved under name. Its error wraps
-	// ErrNotFound when there is none, and ErrUnreadable when there is one
-	// this account can't decrypt.
+	// ErrNotFound when there is none, ErrUnreadable when there is one
+	// this account can't decrypt, and ErrDamaged when the item under the
+	// name isn't in the form Set writes.
 	Get(name string) ([]byte, error)
 	// Set saves secret under name, replacing what was there. It neither
-	// keeps nor changes secret.
+	// keeps nor changes secret. When it returns an error, it saved
+	// nothing.
 	Set(name string, secret []byte) error
 	// Delete removes the secret saved under name. Its error wraps
-	// ErrNotFound when there was none.
+	// ErrNotFound when there was none. A nil error doesn't prove the
+	// secret is gone, so the keystore reads it back (remove).
 	Delete(name string) error
 }
 
@@ -54,9 +57,11 @@ const (
 	// session D-Bus (GNOME Keyring, KWallet, KeePassXC), through
 	// go-keyring.
 	KindSecretService Kind = "secret-service"
-	// KindFile is the key file of last resort: the secret as it is, in a
-	// file only the user can open (keys/*.key, mode 0600, or a user-only
-	// DACL on Windows), used when the OS store failed (CP 5.2).
+	// KindFile is the key file of last resort, used when the OS store
+	// failed (CP 5.2): the secret as it is, in a file that the user and
+	// the system's administrators can open, and no other account
+	// (keys/*.key, mode 0600, or a user-only DACL on Windows). Unlike the
+	// OS stores, it doesn't encrypt the secret at rest.
 	KindFile Kind = "file"
 )
 
@@ -83,22 +88,37 @@ func (k Kind) known() bool {
 	return false
 }
 
+// inDir reports whether the store keeps its secrets in files in the
+// keystore's directory, as DPAPI's blobs and the key file are, so deleting
+// the directory deletes them.
+func (k Kind) inDir() bool { return k == KindDPAPI || k == KindFile }
+
 // keyringService is the service go-keyring files the keystore's items
 // under, in the Keychain and the Secret Service. Each item's account is its
 // name, which starts with the installation's id.
 const keyringService = "pairtime"
 
-// notFound turns a platform store's not-found error into ErrNotFound.
-func notFound(err, platformNotFound error) error {
-	if errors.Is(err, platformNotFound) {
+// osStores returns this OS's secret stores, in first-run order, for the
+// keystore whose directory is dir. It is platformStores, which each OS's
+// store_*.go defines. Tests replace it to watch what reaches the OS store.
+var osStores = platformStores
+
+// storeErr turns a platform store's errors into the keystore's: its
+// not-found error into ErrNotFound, and its error for an item that isn't in
+// the form it writes into ErrDamaged.
+func storeErr(err, platformNotFound, platformBadItem error) error {
+	switch {
+	case errors.Is(err, platformNotFound):
 		return fmt.Errorf("%w: %v", ErrNotFound, err)
+	case errors.Is(err, platformBadItem):
+		return fmt.Errorf("%w: %v", ErrDamaged, err)
 	}
 	return err
 }
 
 // fileStore keeps each secret in its own file in the keystore's directory,
-// replaced by atomic rename and readable by the user only
-// (home.WritePrivate). With seal and open set it is the DPAPI store and
+// replaced by atomic rename, which no account but the user's and an
+// administrator's can read (home.WritePrivate). With seal and open set it is the DPAPI store and
 // its files hold DPAPI blobs; without them it is the key file of last
 // resort and its files hold the secret as it is.
 type fileStore struct {
@@ -238,26 +258,85 @@ func (o *options) await(s Store, call func() error) error {
 }
 
 func (o *options) late(s Store) error {
-	return fmt.Errorf("%w: %s didn't answer within %v", ErrUnavailable, s.Kind().Description(), o.timeout)
+	return &lateError{kind: s.Kind(), timeout: o.timeout}
+}
+
+// lateError is a store call that didn't answer within the deadline. Go
+// can't stop the call, so it may still finish: a Set may yet save its
+// secret.
+type lateError struct {
+	kind    Kind
+	timeout time.Duration
+}
+
+func (e *lateError) Error() string {
+	return fmt.Sprintf("%v: %s didn't answer within %v", ErrUnavailable, e.kind.Description(), e.timeout)
+}
+
+func (e *lateError) Unwrap() error { return ErrUnavailable }
+
+// isLate reports whether err is a store call that missed its deadline.
+func isLate(err error) bool {
+	var l *lateError
+	return errors.As(err, &l)
 }
 
 // put saves secret in s and reads it back, so a store that takes a secret
 // and loses or changes it is caught before anything depends on the secret.
-func (o *options) put(s Store, name string, secret []byte) error {
+// held says whether s may hold the secret afterwards: always when put
+// succeeds, and when it fails, if a call missed its deadline or s took the
+// secret and the delete that follows a failed read-back didn't work.
+//
+// A failed Set saved nothing (Store), so it leaves nothing to delete. A
+// read-back that missed its deadline isn't followed by a delete either,
+// because the delete would most likely wait as long again. The caller
+// records such a store in keystore.json, so Destroy deletes the secret
+// there.
+func (o *options) put(s Store, name string, secret []byte) (held bool, err error) {
 	if err := o.set(s, name, secret); err != nil {
-		return err
+		return isLate(err), err
 	}
 	got, err := o.get(s, name)
+	switch {
+	case isLate(err):
+		return true, fmt.Errorf("reading it back: %w", err)
+	case err != nil:
+		err = fmt.Errorf("reading it back: %w", err)
+	default:
+		same := subtle.ConstantTimeCompare(got, secret) == 1
+		clear(got)
+		if same {
+			return true, nil
+		}
+		err = errors.New("it gave back other bytes than it was given")
+	}
+	if rerr := o.remove(s, name); rerr != nil {
+		return true, fmt.Errorf("%w, and then deleting it failed: %w", err, rerr)
+	}
+	return false, err
+}
+
+// remove deletes the secret saved under name in s and reads it back to
+// check that it's gone. A delete that returns nil doesn't prove that: a
+// Secret Service delete whose prompt the user dismissed returns nil too,
+// because go-keyring drops the prompt's dismissed flag.
+func (o *options) remove(s Store, name string) error {
+	err := o.del(s, name)
+	if errors.Is(err, ErrNotFound) {
+		return nil
+	}
 	if err != nil {
-		return fmt.Errorf("reading it back: %w", err)
+		return err
 	}
-	same := subtle.ConstantTimeCompare(got, secret) == 1
-	clear(got)
-	if !same {
-		o.del(s, name)
-		return errors.New("it gave back other bytes than it was given")
+	b, err := o.get(s, name)
+	clear(b)
+	switch {
+	case errors.Is(err, ErrNotFound):
+		return nil
+	case err == nil:
+		return fmt.Errorf("%s still has the secret after deleting it, as when a prompt to allow the delete is dismissed", s.Kind().Description())
 	}
-	return nil
+	return fmt.Errorf("checking that the secret is gone: %w", err)
 }
 
 // fetch reads the device key saved under name in s, and checks that it is
@@ -272,7 +351,9 @@ func (o *options) fetch(s Store, name, wantID string) ([]byte, error) {
 		return nil, fmt.Errorf("%w: %s has no device key for this installation", ErrKeyLost, where)
 	case errors.Is(err, ErrUnreadable):
 		return nil, fmt.Errorf("%w: %s has the device key, but this account can't decrypt it (%v)", ErrKeyLost, where, err)
-	case errors.Is(err, ErrUnavailable):
+	case errors.Is(err, ErrUnavailable), errors.Is(err, ErrDamaged):
+		// ErrDamaged: the store has an item under the name that isn't in
+		// the form it writes, which waiting won't change.
 		return nil, err
 	case err != nil:
 		return nil, fmt.Errorf("%w: %s: %v", ErrUnavailable, where, err)

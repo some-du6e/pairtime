@@ -72,6 +72,20 @@ func TestThisOSStore(t *testing.T) {
 				t.Fatal(err)
 			}
 		}},
+		{"an item that isn't in the form the store writes is ErrDamaged, not ErrUnavailable", func(t *testing.T, c osCase) {
+			st := c.ks.Status()
+			m, err := readMarker(keysDir(c.opts.Dir))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !overwriteRaw(t, st.Store, m.deviceItem(), "QQQQ") {
+				t.Skipf("%s keeps raw bytes, so it has no other form", st.Store.Description())
+			}
+			_, err = Open(c.opts)
+			if !errors.Is(err, ErrDamaged) || errors.Is(err, ErrUnavailable) {
+				t.Fatalf("got %v, want ErrDamaged alone", err)
+			}
+		}},
 		{"Destroy removes the key from this OS's store", func(t *testing.T, c osCase) {
 			st := c.ks.Status()
 			m, err := readMarker(keysDir(c.opts.Dir))

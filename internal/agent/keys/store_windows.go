@@ -13,11 +13,11 @@ import (
 // blob unreadable.
 var dpapiEntropy = []byte("pairtime keystore v1")
 
-// osStores is DPAPI (DESIGN 3.6). It never prompts, so there is no wait,
-// and its blobs sit in the keystore's directory. Windows Credential
-// Manager, go-keyring's Windows store, isn't used: DPAPI needs no module
-// beyond golang.org/x/sys and has no size limit.
-func osStores(dir string) []Store {
+// platformStores is DPAPI (DESIGN 3.6). It never prompts, and its blobs
+// sit in the keystore's directory. Windows Credential Manager, go-keyring's
+// Windows store, isn't used: DPAPI needs no module beyond golang.org/x/sys
+// and has no size limit.
+func platformStores(dir string) []Store {
 	return []Store{fileStore{
 		kind: KindDPAPI,
 		dir:  dir,

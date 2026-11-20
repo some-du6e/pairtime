@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/some-du6e/pairtime/pkg/ledger"
 )
@@ -23,8 +24,10 @@ type fakeStore struct {
 	failGet error
 	failSet error
 	failDel error
-	alter   bool          // Get gives the secret back with a bit flipped
-	hang    chan struct{} // when set, each call waits until it is closed
+	alter   bool              // Get gives the secret back with a bit flipped
+	keep    bool              // Delete reports success and keeps the item, as a dismissed prompt does
+	hang    chan struct{}     // when set, each call waits until it is closed
+	onSet   func(name string) // when set, Set calls it before it saves anything
 }
 
 func newFake(kind Kind) *fakeStore {
@@ -64,6 +67,12 @@ func (f *fakeStore) Get(name string) ([]byte, error) {
 func (f *fakeStore) Set(name string, secret []byte) error {
 	f.enter("set")
 	f.mu.Lock()
+	onSet := f.onSet
+	f.mu.Unlock()
+	if onSet != nil {
+		onSet(name)
+	}
+	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.failSet != nil {
 		return f.failSet
@@ -82,7 +91,9 @@ func (f *fakeStore) Delete(name string) error {
 	if _, ok := f.items[name]; !ok {
 		return ErrNotFound
 	}
-	delete(f.items, name)
+	if !f.keep {
+		delete(f.items, name)
+	}
 	return nil
 }
 
@@ -97,6 +108,37 @@ func (f *fakeStore) count(method string) int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.calls[method]
+}
+
+// total returns how many calls of any method the fake has had.
+func (f *fakeStore) total() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	n := 0
+	for _, c := range f.calls {
+		n += c
+	}
+	return n
+}
+
+// resetCounts forgets the calls made so far.
+func (f *fakeStore) resetCounts() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	clear(f.calls)
+}
+
+// waitFor waits up to 10 seconds for the fake to hold name, as when a call
+// that missed its deadline finishes late.
+func (f *fakeStore) waitFor(t *testing.T, name string) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for !f.has(name) {
+		if time.Now().After(deadline) {
+			t.Fatalf("the store never got %s", name)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
 }
 
 func (f *fakeStore) has(name string) bool {
@@ -116,6 +158,26 @@ func (f *fakeStore) size() int {
 // tests that need to know K_dev.
 func fixedKey(k []byte) func([]byte) {
 	return func(b []byte) { copy(b, k) }
+}
+
+// useOSStores makes stores this OS's stores until the test ends, so a call
+// that reaches the OS store, as through Open with no Stores, reaches a fake
+// the test can watch.
+func useOSStores(t *testing.T, stores ...Store) {
+	t.Helper()
+	saved := osStores
+	osStores = func(string) []Store { return stores }
+	t.Cleanup(func() { osStores = saved })
+}
+
+// markerOf reads keystore.json from the data directory dir.
+func markerOf(t *testing.T, dir string) marker {
+	t.Helper()
+	m, err := readMarker(keysDir(dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return m
 }
 
 func mustOpen(t *testing.T, opts Options) *Keystore {

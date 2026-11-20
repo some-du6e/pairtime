@@ -6,10 +6,10 @@ import (
 	"github.com/some-du6e/pairtime/internal/platform/linux"
 )
 
-// osStores is the desktop's Secret Service, through go-keyring (DESIGN
-// 3.6). Where there is no session bus it fails at once, and the first run
-// puts the key in the key file.
-func osStores(string) []Store {
+// platformStores is the desktop's Secret Service, through go-keyring
+// (DESIGN 3.6). Where there is no session bus it fails at once, and the
+// first run puts the key in the key file.
+func platformStores(string) []Store {
 	return []Store{secretServiceStore{linux.SecretService{Service: keyringService}}}
 }
 
@@ -19,7 +19,7 @@ func (secretServiceStore) Kind() Kind { return KindSecretService }
 
 func (s secretServiceStore) Get(name string) ([]byte, error) {
 	b, err := s.ss.Get(name)
-	return b, notFound(err, linux.ErrNotFound)
+	return b, storeErr(err, linux.ErrNotFound, linux.ErrBadItem)
 }
 
 func (s secretServiceStore) Set(name string, secret []byte) error {
@@ -27,5 +27,5 @@ func (s secretServiceStore) Set(name string, secret []byte) error {
 }
 
 func (s secretServiceStore) Delete(name string) error {
-	return notFound(s.ss.Delete(name), linux.ErrNotFound)
+	return storeErr(s.ss.Delete(name), linux.ErrNotFound, linux.ErrBadItem)
 }

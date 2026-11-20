@@ -65,6 +65,11 @@ type marker struct {
 	Created time.Time `json:"created,omitzero"`
 	// Reason says why the OS store wasn't used, when Store is KindFile.
 	Reason string `json:"fallback_reason,omitempty"`
+	// Unconfirmed lists the stores besides Store that may hold a copy of
+	// K_dev, which Destroy must delete: stores the first run tried whose
+	// call missed its deadline and may yet finish, or that took the key,
+	// failed to give it back, and failed to delete it.
+	Unconfirmed []Kind `json:"unconfirmed,omitempty"`
 	// Archived lists the device keys restored from other installations.
 	Archived []archivedKey `json:"archived,omitempty"`
 }
@@ -73,21 +78,60 @@ type archivedKey struct {
 	ID    string    `json:"key_id"`
 	Store Kind      `json:"store"`
 	Added time.Time `json:"added"`
+	// Pending is true from just before Archive puts the key in Store until
+	// it has read the key back, so keystore.json names every item Archive
+	// may have made, and Destroy deletes it even when Archive was cut off.
+	// ArchivedKeys doesn't use a pending key, and Status doesn't list it.
+	Pending bool `json:"pending,omitempty"`
 }
 
 func (m marker) complete() bool { return m.Store != "" && m.KeyID != "" }
+
+// sameInstallation reports whether m and n are keystore.json of one
+// installation with one device key, so that a keystore opened as n can
+// take in what another process wrote as m.
+func (m marker) sameInstallation(n marker) bool {
+	return m.Install == n.Install && sameID(m.KeyID, n.KeyID) && m.Store == n.Store
+}
+
+// holder is an item in a store that may hold one of the installation's
+// device keys.
+type holder struct {
+	item  string
+	store Kind
+}
+
+// holders lists every item that may hold one of the installation's device
+// keys, according to keystore.json: K_dev in its store and in the stores
+// listed as unconfirmed, and each archived key in its store, pending ones
+// included.
+func (m marker) holders() []holder {
+	var hs []holder
+	if m.Store != "" {
+		hs = append(hs, holder{m.deviceItem(), m.Store})
+	}
+	for _, k := range m.Unconfirmed {
+		hs = append(hs, holder{m.deviceItem(), k})
+	}
+	for _, a := range m.Archived {
+		hs = append(hs, holder{m.archivedItem(a.ID), a.Store})
+	}
+	return hs
+}
 
 func (m marker) deviceItem() string { return m.Install + "." + itemDevice }
 
 func (m marker) archivedItem(id string) string { return m.Install + "." + itemArchived + id }
 
-func (m marker) archived(id string) (archivedKey, bool) {
-	for _, a := range m.Archived {
+// archivedIndex returns the index of the archived key id in m.Archived,
+// pending or not, or -1 when there is none.
+func (m marker) archivedIndex(id string) int {
+	for i, a := range m.Archived {
 		if sameID(a.ID, id) {
-			return a, true
+			return i
 		}
 	}
-	return archivedKey{}, false
+	return -1
 }
 
 func (m marker) validate() error {
@@ -104,6 +148,13 @@ func (m marker) validate() error {
 		return fmt.Errorf("%w: keystore.json names %s", ErrDamaged, m.Store.Description())
 	case m.KeyID != "" && !isHexID(m.KeyID):
 		return fmt.Errorf("%w: keystore.json has no valid key id", ErrDamaged)
+	}
+	listed := map[Kind]bool{m.Store: true}
+	for _, k := range m.Unconfirmed {
+		if !k.known() || listed[k] {
+			return fmt.Errorf("%w: keystore.json lists an unconfirmed store that isn't valid", ErrDamaged)
+		}
+		listed[k] = true
 	}
 	seen := make(map[string]bool, len(m.Archived))
 	for _, a := range m.Archived {

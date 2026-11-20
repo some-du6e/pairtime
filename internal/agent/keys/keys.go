@@ -15,8 +15,10 @@
 // go-keyring (DESIGN 3.12), filed under the service "pairtime" with the
 // account <install>.kdev. When that store fails at the first run, as on a
 // headless Linux box with no Secret Service, K_dev goes in
-// keys/<install>.kdev.key, a file only the user can read, and Status
-// carries a warning that doctor and the dashboard repeat (CP 5.2).
+// keys/<install>.kdev.key, a file that no other account but an
+// administrator can read, and that unlike the OS store doesn't encrypt the
+// key at rest. Status then carries a warning that doctor and the dashboard
+// repeat (CP 5.2).
 //
 // keys/keystore.json says which store holds K_dev, with the installation's
 // random id and K_dev's id, a public fingerprint: HKDF-SHA256 of K_dev with
@@ -87,10 +89,6 @@ var (
 // A locked keyring asks for its password and go-keyring waits for the
 // answer, so it gives a person time to type it.
 const DefaultTimeout = time.Minute
-
-// quickTimeout bounds Destroy's calls to stores that keystore.json doesn't
-// name.
-const quickTimeout = 5 * time.Second
 
 // Options say where a keystore is and which stores it may use.
 type Options struct {
@@ -199,7 +197,9 @@ func (m marker) status(dir string) Status {
 		s.File = keyFile(dir).path(m.deviceItem())
 	}
 	for _, a := range m.Archived {
-		s.Archived = append(s.Archived, a.ID)
+		if !a.Pending {
+			s.Archived = append(s.Archived, a.ID)
+		}
 	}
 	return s
 }
@@ -211,7 +211,7 @@ func (s Status) Warning() string {
 		return ""
 	}
 	var b strings.Builder
-	b.WriteString("pairtime keeps its device key in a file that only your account can read")
+	b.WriteString("pairtime keeps its device key in a file, not in a secret store")
 	if s.File != "" {
 		fmt.Fprintf(&b, " (%s)", s.File)
 	}
@@ -220,7 +220,7 @@ func (s Status) Warning() string {
 	} else {
 		b.WriteString(", because this system has no secret store pairtime can use")
 	}
-	b.WriteString(". Other accounts on this computer can't read the key, but any program you run can, and so can anyone with a copy of your home folder, such as a backup or a synced folder.")
+	b.WriteString(". Other non-admin accounts on this computer can't read the file, but administrators can, and so can any program you run. A secret store would also keep the key encrypted at rest, and the file doesn't, so anyone with a copy of your home folder, such as a backup or a synced folder, has the key.")
 	return b.String()
 }
 
@@ -296,6 +296,12 @@ func open(opts Options, newKey func([]byte)) (*Keystore, error) {
 
 // create makes K_dev and keeps it in the first store that takes it. The
 // caller holds the lock, and m is keystore.json with its installation id.
+// A store that failed but may hold the key anyway (put) goes in
+// keystore.json as unconfirmed, so Destroy deletes the key there too.
+//
+// A run cut off before it writes keystore.json with the store never hands
+// its key to anyone, so a copy it left in a store protects no record; the
+// next run replaces it under the same item name, or leaves it unrecorded.
 func (o *options) create(m marker, newKey func([]byte)) (*Keystore, error) {
 	kDev := make([]byte, keySize)
 	defer clear(kDev)
@@ -305,8 +311,13 @@ func (o *options) create(m marker, newKey func([]byte)) (*Keystore, error) {
 		return nil, err
 	}
 	var reasons []string
+	m.Unconfirmed = nil
 	for _, s := range o.stores {
-		if err := o.put(s, m.deviceItem(), kDev); err != nil {
+		held, err := o.put(s, m.deviceItem(), kDev)
+		if err != nil {
+			if held {
+				m.Unconfirmed = append(m.Unconfirmed, s.Kind())
+			}
 			reasons = append(reasons, fmt.Sprintf("%s isn't available (%v)", s.Kind().Description(), err))
 			continue
 		}
@@ -316,7 +327,7 @@ func (o *options) create(m marker, newKey func([]byte)) (*Keystore, error) {
 			m.Reason = strings.Join(reasons, "; ")
 		}
 		if err := writeMarker(o.dir, m); err != nil {
-			o.del(s, m.deviceItem())
+			o.remove(s, m.deviceItem())
 			return nil, fmt.Errorf("keys: writing keystore.json: %w", err)
 		}
 		if s.Kind() != KindFile {
@@ -395,6 +406,12 @@ func (k *Keystore) WithDeviceKey(fn func(kDev []byte) error) error {
 // returns the key's id, which ArchivedKeys takes; archiving a key twice
 // returns the same id. Archive copies kDev and doesn't change it.
 //
+// keystore.json lists the key, as pending, before the store gets it, so
+// Destroy finds the item even if Archive fails or is cut off. A failed
+// Archive leaves the entry pending when the store may hold the key, and
+// drops it when the store holds nothing. Archiving the key again finishes
+// a pending entry.
+//
 // An archived key is only ever read, never written with. Nonces and token
 // salts are keyed by K_dev and the sequence number alone (ledger-v1.md
 // 4.4; DESIGN 3.6), so a restored key that wrote a new chain from s = 1
@@ -423,24 +440,50 @@ func (k *Keystore) Archive(kDev []byte) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if !sameID(m.KeyID, k.m.KeyID) || m.Install != k.m.Install {
-		return "", fmt.Errorf("%w: keystore.json changed under the open keystore", ErrDamaged)
+	if !m.sameInstallation(k.m) {
+		return "", errChanged
 	}
-	if a, ok := m.archived(id); ok {
+	i := m.archivedIndex(id)
+	switch {
+	case i < 0:
+		m.Archived = append(m.Archived, archivedKey{ID: id, Store: k.store.Kind(), Added: time.Now().UTC(), Pending: true})
+		i = len(m.Archived) - 1
+		if err := writeMarker(k.o.dir, m); err != nil {
+			return "", fmt.Errorf("keys: writing keystore.json: %w", err)
+		}
 		k.m = m
-		return a.ID, nil
+	case !m.Archived[i].Pending:
+		k.m = m
+		return id, nil
+	case m.Archived[i].Store != k.store.Kind():
+		return "", fmt.Errorf("%w: keystore.json lists the archived key as pending in %s, not in %s with the device key", ErrDamaged, m.Archived[i].Store.Description(), k.store.Kind().Description())
 	}
-	if err := k.o.put(k.store, m.archivedItem(id), kDev); err != nil {
-		return "", fmt.Errorf("keys: keeping the restored key in %s: %w", k.store.Kind().Description(), err)
+	held, err := k.o.put(k.store, m.archivedItem(id), kDev)
+	if err != nil {
+		err = fmt.Errorf("keys: keeping the restored key in %s: %w", k.store.Kind().Description(), err)
+		if held {
+			return "", err // the entry stays pending, so Destroy deletes the key
+		}
+		m.Archived = slices.Delete(m.Archived, i, i+1)
+		if werr := writeMarker(k.o.dir, m); werr != nil {
+			return "", errors.Join(err, fmt.Errorf("keys: writing keystore.json: %w", werr))
+		}
+		k.m = m
+		return "", err
 	}
-	m.Archived = append(m.Archived, archivedKey{ID: id, Store: k.store.Kind(), Added: time.Now().UTC()})
+	m.Archived[i].Pending = false
 	if err := writeMarker(k.o.dir, m); err != nil {
-		k.o.del(k.store, m.archivedItem(id))
+		// The entry stays pending: Destroy deletes the key, and archiving
+		// it again finishes the entry.
 		return "", fmt.Errorf("keys: writing keystore.json: %w", err)
 	}
 	k.m = m
 	return id, nil
 }
+
+// errChanged is the error for a keystore.json that another installation,
+// or another first run, wrote while this keystore was open.
+var errChanged = fmt.Errorf("%w: keystore.json changed under the open keystore, and now names another installation or device key", ErrDamaged)
 
 // ArchivedKeys returns the ledger keys of the archived device key id, for
 // reading the records it wrote. Nothing may write records with them.
@@ -449,13 +492,22 @@ func (k *Keystore) ArchivedKeys(id string) (*ledger.Keys, error) {
 	if err != nil {
 		return nil, err
 	}
-	a, ok := m.archived(id)
-	if !ok {
+	// Only keystore.json of this installation and this device key is taken
+	// in, or WithDeviceKey would read whatever key a swapped file names.
+	k.mu.Lock()
+	same := m.sameInstallation(k.m)
+	if same {
+		k.m = m
+	}
+	k.mu.Unlock()
+	if !same {
+		return nil, errChanged
+	}
+	i := m.archivedIndex(id)
+	if i < 0 || m.Archived[i].Pending {
 		return nil, fmt.Errorf("%w: no archived device key has the id %q", ErrNotFound, id)
 	}
-	k.mu.Lock()
-	k.m = m
-	k.mu.Unlock()
+	a := m.Archived[i]
 	s := k.o.storeOf(a.Store)
 	if s == nil {
 		return nil, fmt.Errorf("%w: keystore.json says the archived key is in %s, which this system doesn't have", ErrUnavailable, a.Store.Description())
@@ -494,10 +546,26 @@ func Inspect(dir string) (Status, error) {
 // and the next Open makes a new K_dev. It is "delete everything" (DESIGN
 // 8.8; WP-LG6) and uninstall's last step, so a person asks for it.
 //
-// When the store that holds a key fails to delete it, Destroy returns the
-// error and leaves keystore.json, so a later Destroy can finish. Stores
-// that were never given a key are tried too, in case a first run that timed
-// out on one left an item there, but their errors don't stop Destroy.
+// The stores that may hold a key are the ones keystore.json names: the
+// store K_dev is in; any store the first run listed as unconfirmed, because
+// a call there missed its deadline, or because the store took the key and
+// then failed both to give it back and to delete it; and each archived
+// key's store. Other stores never got a key, or refused it, so Destroy
+// doesn't ask them, and a headless box without a Secret Service doesn't
+// fail on one. Every delete is read back, because a Secret Service delete
+// whose prompt was dismissed reports success. When one fails, Destroy
+// returns the error and keeps keystore.json, the only record of the items'
+// names, so a later Destroy can finish.
+//
+// A store this system doesn't have can't be reached from here, as when a
+// data directory moved from a Mac to a Linux box. DPAPI blobs are files in
+// the keystore's directory and go with it. For a key in the Keychain or the
+// Secret Service of another system, Destroy deletes everything else and
+// returns an error that names the item left there.
+//
+// Some stores keep what a client deletes. KeePassXC moves the entry to the
+// database's recycle bin, which is on by default, so there the key stays
+// in the database until the recycle bin is emptied.
 func Destroy(opts Options) error {
 	o, err := opts.resolve()
 	if err != nil {
@@ -521,36 +589,23 @@ func Destroy(opts Options) error {
 		}
 		return fmt.Errorf("%w; the keystore's files are deleted, but any item it put in the OS's secret store remains, because keystore.json named it", err)
 	}
-	type key struct {
-		item  string
-		store Kind
-	}
-	keys := []key{{m.deviceItem(), m.Store}}
-	for _, a := range m.Archived {
-		keys = append(keys, key{m.archivedItem(a.ID), a.Store})
-	}
-	// A store keystore.json doesn't name for a key can hold it only if a
-	// first run's call there timed out and finished late. It gets a short
-	// deadline, so a locked keyring can't hold up "delete everything".
-	quick := *o
-	quick.timeout = min(o.timeout, quickTimeout)
-	var errs []error
-	for _, s := range o.stores {
-		for _, kk := range keys {
-			holds := s.Kind() == kk.store
-			call := o
-			if !holds {
-				call = &quick
+	var failed, elsewhere []error
+	for _, h := range m.holders() {
+		s := o.storeOf(h.store)
+		switch {
+		case s != nil:
+			if err := o.remove(s, h.item); err != nil {
+				failed = append(failed, fmt.Errorf("keys: deleting a device key from %s: %w", h.store.Description(), err))
 			}
-			err := call.del(s, kk.item)
-			if err == nil || errors.Is(err, ErrNotFound) || !holds {
-				continue
-			}
-			errs = append(errs, fmt.Errorf("keys: deleting a device key from %s: %w", s.Kind().Description(), err))
+		case !h.store.inDir():
+			elsewhere = append(elsewhere, fmt.Errorf("keys: keystore.json says %s may hold a device key, as the item %q of the service %q, but this system doesn't have that store, so the key is still there", h.store.Description(), h.item, keyringService))
 		}
 	}
-	if len(errs) > 0 {
-		return errors.Join(errs...)
+	if len(failed) > 0 {
+		return errors.Join(append(failed, elsewhere...)...)
 	}
-	return os.RemoveAll(o.dir)
+	if err := os.RemoveAll(o.dir); err != nil {
+		return err
+	}
+	return errors.Join(elsewhere...)
 }

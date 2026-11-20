@@ -9,7 +9,10 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"strings"
 	"testing"
+
+	"github.com/zalando/go-keyring"
 )
 
 // These run on macos-latest in platform.yml, against the runner's login
@@ -54,6 +57,20 @@ func TestKeychain(t *testing.T) {
 			}
 			if err := k.Delete(account); !errors.Is(err, ErrNotFound) {
 				t.Errorf("Delete: got %v, want ErrNotFound", err)
+			}
+		}},
+		{"an item that isn't hex is ErrBadItem, and the error doesn't quote it", func(t *testing.T, account string, _ []byte) {
+			// Written through go-keyring as it is, not hex, as another
+			// program could.
+			if err := keyring.Set(k.Service, account, "QQQQ"); err != nil {
+				t.Fatal(err)
+			}
+			got, err := k.Get(account)
+			if !errors.Is(err, ErrBadItem) {
+				t.Fatalf("got %v, want ErrBadItem", err)
+			}
+			if got != nil || strings.Contains(err.Error(), "Q") {
+				t.Errorf("Get gave back bytes or quoted the item: %v", err)
 			}
 		}},
 		{"Delete removes the item", func(t *testing.T, account string, secret []byte) {

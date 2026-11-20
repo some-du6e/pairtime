@@ -7,9 +7,9 @@
 // implementing the part of the freedesktop.org Secret Service API that
 // go-keyring v0.2.8 calls: Service.OpenSession and Service.Unlock, the
 // Service's Collections property, Collection.SearchItems and
-// Collection.CreateItem, Item.GetSecret and Item.Delete, and
-// Session.Close. It never prompts, and it supports only the "plain"
-// session algorithm, as go-keyring does.
+// Collection.CreateItem, Item.GetSecret and Item.Delete, Session.Close,
+// and Prompt.Prompt. It prompts only when told to dismiss deletes, and it
+// supports only the "plain" session algorithm, as go-keyring does.
 //
 // The tests that use it are *_desktop_test.go files, which platform.yml
 // runs inside a private bus from dbus-run-session (AGENTS.md), so it never
@@ -44,10 +44,12 @@ const (
 	servicePath     = dbus.ObjectPath("/org/freedesktop/secrets")
 	loginPath       = dbus.ObjectPath("/org/freedesktop/secrets/collection/login")
 	sessionPrefix   = "/org/freedesktop/secrets/session/"
+	promptPrefix    = "/org/freedesktop/secrets/prompt/"
 	ifaceService    = "org.freedesktop.Secret.Service"
 	ifaceCollection = "org.freedesktop.Secret.Collection"
 	ifaceItem       = "org.freedesktop.Secret.Item"
 	ifaceSession    = "org.freedesktop.Secret.Session"
+	ifacePrompt     = "org.freedesktop.Secret.Prompt"
 	ifaceProps      = "org.freedesktop.DBus.Properties"
 	// noPrompt is the path the API returns when no prompt is needed.
 	noPrompt = dbus.ObjectPath("/")
@@ -94,6 +96,7 @@ type Service struct {
 	sessions map[dbus.ObjectPath]bool
 	next     int
 	refuse   bool
+	dismiss  bool
 	calls    int
 }
 
@@ -181,6 +184,16 @@ func (s *Service) Refuse(on bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.refuse = on
+}
+
+// DismissDeletes makes every later Item.Delete ask for a prompt, which the
+// user dismisses, while on is true: the item stays, and the prompt's
+// Completed signal says it was dismissed. go-keyring v0.2.8 drops that
+// flag, so its Delete returns nil all the same.
+func (s *Service) DismissDeletes(on bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.dismiss = on
 }
 
 // Calls returns how many Secret Service methods have been called.
@@ -381,9 +394,44 @@ func (o itemObj) Delete() (dbus.ObjectPath, *dbus.Error) {
 	if _, ok := s.items[o.path]; !ok {
 		return noPrompt, errNoObject
 	}
+	if s.dismiss {
+		s.next++
+		path := dbus.ObjectPath(promptPrefix + strconv.Itoa(s.next))
+		if err := s.conn.Export(promptObj{s, path}, path, ifacePrompt); err != nil {
+			return noPrompt, dbus.MakeFailedError(err)
+		}
+		return path, nil
+	}
 	delete(s.items, o.path)
 	s.conn.Export(nil, o.path, ifaceItem)
 	return noPrompt, nil
+}
+
+// promptObj is a prompt the user dismisses: it shows nothing, and answers
+// Prompt with the Completed signal, dismissed, leaving the item.
+type promptObj struct {
+	s    *Service
+	path dbus.ObjectPath
+}
+
+func (o promptObj) Prompt(windowID string) *dbus.Error {
+	o.s.mu.Lock()
+	o.s.calls++
+	o.s.mu.Unlock()
+	// go-keyring listens for Completed before it calls Prompt, so the
+	// signal can go out before or after Prompt's reply.
+	go o.complete()
+	return nil
+}
+
+func (o promptObj) Dismiss() *dbus.Error {
+	go o.complete()
+	return nil
+}
+
+func (o promptObj) complete() {
+	o.s.conn.Emit(o.path, ifacePrompt+".Completed", true, dbus.MakeVariant(""))
+	o.s.conn.Export(nil, o.path, ifacePrompt)
 }
 
 type sessionObj struct {

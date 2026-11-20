@@ -6,8 +6,9 @@ import (
 	"github.com/some-du6e/pairtime/internal/platform/darwin"
 )
 
-// osStores is the user's login Keychain, through go-keyring (DESIGN 3.6).
-func osStores(string) []Store {
+// platformStores is the user's login Keychain, through go-keyring (DESIGN
+// 3.6).
+func platformStores(string) []Store {
 	return []Store{keychainStore{darwin.Keychain{Service: keyringService}}}
 }
 
@@ -17,7 +18,7 @@ func (keychainStore) Kind() Kind { return KindKeychain }
 
 func (s keychainStore) Get(name string) ([]byte, error) {
 	b, err := s.k.Get(name)
-	return b, notFound(err, darwin.ErrNotFound)
+	return b, storeErr(err, darwin.ErrNotFound, darwin.ErrBadItem)
 }
 
 func (s keychainStore) Set(name string, secret []byte) error {
@@ -25,5 +26,5 @@ func (s keychainStore) Set(name string, secret []byte) error {
 }
 
 func (s keychainStore) Delete(name string) error {
-	return notFound(s.k.Delete(name), darwin.ErrNotFound)
+	return storeErr(s.k.Delete(name), darwin.ErrNotFound, darwin.ErrBadItem)
 }

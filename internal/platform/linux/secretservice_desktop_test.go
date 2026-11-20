@@ -10,9 +10,11 @@ import (
 	"encoding/hex"
 	"errors"
 	"maps"
+	"strings"
 	"testing"
 
 	"github.com/some-du6e/pairtime/internal/platform/linux/fakesecret"
+	"github.com/zalando/go-keyring"
 )
 
 // These run in platform.yml's Linux job, inside the private session bus
@@ -118,6 +120,38 @@ func TestSecretServiceAgainstFake(t *testing.T) {
 			}
 			if n := len(itemsFor(fake, ss.Service, account)); n != 0 {
 				t.Errorf("%d items left for the account", n)
+			}
+		}},
+		{"an item that isn't hex is ErrBadItem, and the error doesn't quote it", func(t *testing.T, account string, _ []byte) {
+			// Written through go-keyring as it is, not hex, as another
+			// program could.
+			if err := keyring.Set(ss.Service, account, "QQQQ"); err != nil {
+				t.Fatal(err)
+			}
+			got, err := ss.Get(account)
+			if !errors.Is(err, ErrBadItem) {
+				t.Fatalf("got %v, want ErrBadItem", err)
+			}
+			if got != nil || strings.Contains(err.Error(), "Q") {
+				t.Errorf("Get gave back bytes or quoted the item: %v", err)
+			}
+		}},
+		{"go-keyring reports a delete whose prompt is dismissed as done, and the item stays", func(t *testing.T, account string, secret []byte) {
+			// Why the keystore reads an item back after deleting it. If
+			// go-keyring starts returning the dismissal, this fails, and
+			// Delete's doc should say so.
+			if err := ss.Set(account, secret); err != nil {
+				t.Fatal(err)
+			}
+			fake.DismissDeletes(true)
+			err := ss.Delete(account)
+			fake.DismissDeletes(false)
+			if err != nil {
+				t.Fatalf("Delete with a dismissed prompt: %v", err)
+			}
+			got, err := ss.Get(account)
+			if err != nil || !bytes.Equal(got, secret) {
+				t.Errorf("after the dismissed delete, Get gives %v, want the secret", err)
 			}
 		}},
 		{"a refusing service fails Get and Set, and neither is ErrNotFound", func(t *testing.T, account string, secret []byte) {
