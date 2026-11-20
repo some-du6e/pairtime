@@ -8,8 +8,8 @@ name: ci
 
 on:
   pull_request:
-    # labeled and unlabeled rerun the job when Karim adds or removes the
-    # oracle-change label, which the oracle guard reads.
+    # labeled and unlabeled rerun the job when Karim or the orchestrator adds
+    # or removes the oracle-change label, which the oracle guard reads.
     types: [opened, synchronize, reopened, labeled, unlabeled]
   push:
     branches: [main]
@@ -45,8 +45,11 @@ jobs:
       - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: go.mod
-          # There is no go.sum (stdlib only), so key the build cache on go.mod.
-          cache-dependency-path: go.mod
+          # Key the module and build cache on both files: go.sum alone
+          # misses a change only go.mod shows, such as a replace directive.
+          cache-dependency-path: |
+            go.mod
+            go.sum
 
       - name: License gate
         run: |
@@ -210,17 +213,15 @@ jobs:
         # the procs scan's per-OS readers (WP-OS6), and the device keystore,
         # which picks its store by OS (WP-OS7), and the notifier, whose
         # backends call internal/platform's balloon, osascript and D-Bus code
-        # (WP-OS8). The keystore's and the notifier's desktop tests build with
-        # -tags desktop on Linux alone. The Windows and macOS tests themselves run in
-        # platform.yml.
+        # (WP-OS8). The desktop tests, which build with -tags desktop on Linux
+        # alone, are vetted in the Desktop test files step. The Windows and
+        # macOS tests themselves run in platform.yml.
         if: ${{ !cancelled() }}
         run: |
           for target in windows/amd64 windows/386 windows/arm64 darwin/amd64 darwin/arm64 linux/amd64 linux/arm64; do
             echo "go vet ./internal/platform/... ./internal/agent/procs/... ./internal/agent/keys/... ./internal/agent/notifier/... for $target"
             GOOS=${target%/*} GOARCH=${target#*/} go vet ./internal/platform/... ./internal/agent/procs/... ./internal/agent/keys/... ./internal/agent/notifier/...
           done
-          echo "go vet -tags desktop ./internal/agent/keys/... ./internal/agent/notifier/... for linux/amd64"
-          GOOS=linux GOARCH=amd64 go vet -tags desktop ./internal/agent/keys/... ./internal/agent/notifier/...
 
       - name: HCA sign-in against an independent OIDC server
         if: ${{ !cancelled() }}
@@ -261,7 +262,8 @@ jobs:
         if: ${{ !cancelled() }}
         run: |
           # Every module pairtime's packages and tests import, for each of
-          # the seven targets above, must be MIT, BSD-2-Clause, BSD-3-Clause,
+          # the seven targets above, for the desktop tests and for
+          # nightly.yml's -race run, must be MIT, BSD-2-Clause, BSD-3-Clause,
           # Apache-2.0 or ISC (DESIGN 3.12). licensecheck exits 1 on a bad
           # license.
           tool="$RUNNER_TEMP/licensecheck"
@@ -269,20 +271,24 @@ jobs:
           "$tool"
 
           # The check must keep catching a GPL-3.0 module pulled in through a
-          # replace, and keep passing an MIT one (testdata/licensecheck).
+          # replace, whether a package imports it (bad), only a desktop test
+          # does (desktop) or only a race-tagged test does (race), and keep
+          # passing an MIT one (testdata/licensecheck).
           "$tool" -C testdata/licensecheck/good
-          set +e
-          out=$("$tool" -C testdata/licensecheck/bad 2>&1)
-          code=$?
-          set -e
-          # Rewritten, so the expected errors don't become PR annotations: the
-          # runner reads ::error:: even after leading spaces.
-          sed 's/^::error::/expected error: /' <<<"$out"
-          if [ "$code" -ne 1 ] || ! grep -q '^::error::example.com/licensecheck/gpl@v0.0.0 => ../gpl: LICENSE:' <<<"$out"; then
-            echo "::error::licensecheck no longer rejects the GPL-3.0 module seeded in testdata/licensecheck/bad (exit $code)"
-            exit 1
-          fi
-          echo "the seeded GPL-3.0 module was rejected, as it should be"
+          for seeded in bad desktop race; do
+            set +e
+            out=$("$tool" -C "testdata/licensecheck/$seeded" 2>&1)
+            code=$?
+            set -e
+            # Rewritten, so the expected errors don't become PR annotations:
+            # the runner reads ::error:: even after leading spaces.
+            sed 's/^::error::/expected error: /' <<<"$out"
+            if [ "$code" -ne 1 ] || ! grep -q '^::error::example.com/licensecheck/gpl@v0.0.0 => ../gpl: LICENSE:' <<<"$out"; then
+              echo "::error::licensecheck no longer rejects the GPL-3.0 module seeded in testdata/licensecheck/$seeded (exit $code)"
+              exit 1
+            fi
+            echo "the GPL-3.0 module seeded in $seeded was rejected, as it should be"
+          done
 
       - name: Fixture provenance
         if: ${{ !cancelled() }}
@@ -299,10 +305,74 @@ jobs:
             shellcheck $scripts
           fi
 
+      - name: Desktop test files
+        if: ${{ !cancelled() }}
+        # platform.yml's Linux job finds desktop tests by file name,
+        # *_desktop_test.go, and runs only their TestDesktop* functions with
+        # -tags desktop, while go vet and go test above build without the
+        # tag (AGENTS.md). So a test function in a file that builds on Linux
+        # only with the tag but has another name, or one in a desktop test
+        # file that isn't named TestDesktop*, would never run anywhere. A
+        # *_desktop_test.go file without the desktop build line would run in
+        # go test above, with no X server or session bus. And since nothing
+        # else here compiles the desktop test files, the step vets them.
+        run: |
+          export LC_ALL=C
+          fail=0
+          funcs='^func (Test|Example|Benchmark|Fuzz)[^a-z]'
+          # Each search below may find nothing (exit 1); anything else that
+          # fails stops the step.
+
+          # Which files a build includes is the go command's call: build
+          # lines such as !(linux && desktop) or darwin || (linux &&
+          # desktop) don't yield to a pattern. These are the test files
+          # that build on Linux only with -tags desktop.
+          testfiles() {
+            go list "$@" -f '{{$d := .Dir}}{{range .TestGoFiles}}{{$d}}/{{.}}{{"\n"}}{{end}}{{range .XTestGoFiles}}{{$d}}/{{.}}{{"\n"}}{{end}}' ./... | sed "s|^$PWD/||" | sort
+          }
+          plain=$(testfiles)
+          tagged=$(testfiles -tags desktop)
+          only_desktop=$(comm -13 <(printf '%s\n' "$plain") <(printf '%s\n' "$tagged"))
+          # Printed, so the log shows the check had files to look at.
+          echo "Test files that build on Linux only with -tags desktop:"
+          sed 's/^/  /' <<<"$only_desktop"
+          while IFS= read -r f; do
+            case "$f" in "" | *_desktop_test.go) continue ;; esac
+            # A file of helpers, such as one shared with darwin, is fine.
+            hits=$(grep -n -E "$funcs" "$f") || [ $? -eq 1 ]
+            while IFS=: read -r line text; do
+              [ -n "$line" ] || continue
+              echo "::error file=$f,line=$line::$text builds on Linux only with -tags desktop, but platform.yml runs desktop tests only from *_desktop_test.go files. Move it into one (AGENTS.md)."
+              fail=1
+            done <<<"$hits"
+          done <<<"$only_desktop"
+
+          untagged=$(git grep -L -E '^//go:build linux && desktop$' -- '*_desktop_test.go') || [ $? -eq 1 ]
+          while IFS= read -r f; do
+            [ -n "$f" ] || continue
+            echo "::error file=$f::a desktop test file needs the build line //go:build linux && desktop, or go test above runs it with no X server or session bus (AGENTS.md)."
+            fail=1
+          done <<<"$untagged"
+
+          named=$(git grep -n -E "$funcs" -- '*_desktop_test.go') || [ $? -eq 1 ]
+          bad=$(printf '%s\n' "$named" | grep -v -E '^[^:]+:[0-9]+:func (TestDesktop|TestMain\()') || [ $? -eq 1 ]
+          while IFS=: read -r file line text; do
+            [ -n "$file" ] || continue
+            echo "::error file=$file,line=$line::$text is in a desktop test file, where platform.yml runs only TestDesktop* functions. Give it a name that starts with TestDesktop, or move it to a plain _test.go file (AGENTS.md)."
+            fail=1
+          done <<<"$bad"
+
+          # Type-checks the desktop test files and what only they import,
+          # such as godbus's prop package, on every PR, with no X server.
+          echo "go vet -tags desktop ./..."
+          go vet -tags desktop ./... || fail=1
+          exit "$fail"
+
       - name: Oracle guard
         # A PR may not change an existing oracle together with the code it
-        # checks, unless Karim adds the oracle-change label (docs/PLAN.md,
-        # ground rule 5). The labels come from the event payload.
+        # checks, unless Karim or the orchestrator adds the oracle-change label to
+        # apply a decision made outside the PR (AGENTS.md; docs/PLAN.md, ground
+        # rule 5). The labels come from the event payload.
         if: ${{ !cancelled() && github.event_name == 'pull_request' }}
         run: |
           git -c core.quotePath=false diff --name-status -M HEAD^1 HEAD | bash tools/ci/oracle_guard.sh
