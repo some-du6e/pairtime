@@ -214,6 +214,9 @@ func TestParseRejects(t *testing.T) {
 		{"a flag is true or false", doc("version", v, "params", with("COMPOSE_NEEDS_KEYS", "0")), "params.COMPOSE_NEEDS_KEYS: must be true or false, got 0"},
 		{"numbers in a table are plain decimals", doc("version", v, "params", with("COMPOSE_CPS", "1.50")), "plain decimal"},
 		{"numbers in a table have no exponent", doc("version", v, "params", with("THINK_LEAD_S", "1.2e2")), "plain decimal"},
+		{"a rational parameter below 0.000001 is refused, as jq writes it with an exponent", doc("version", v, "params", with("AUDIT_BASE_P", "0.0000001")), "plain decimal"},
+		{"a megabyte-long rational is refused before big.Rat parses it", doc("version", v, "params", with("COMPOSE_CPS", "1."+strings.Repeat("3", 1<<20))), "characters long"},
+		{"a table nests at most maxDepth levels deep", doc("version", v, "params", with("THINK_LEAD_S", strings.Repeat("[", maxDepth)+strings.Repeat("]", maxDepth))), "nested more than"},
 		{"a parameter appears once", doc("version", v, "params", strings.Replace(ps, "{", `{"THINK_LEAD_S": 120,`, 1)), `key "THINK_LEAD_S" appears twice`},
 	}
 	for _, c := range cases {
