@@ -19,6 +19,7 @@ import (
 
 	"github.com/some-du6e/pairtime/internal/agent/config"
 	"github.com/some-du6e/pairtime/internal/agent/home"
+	"github.com/some-du6e/pairtime/internal/agent/keys"
 	"github.com/some-du6e/pairtime/internal/agent/localhttp"
 	"github.com/some-du6e/pairtime/internal/agent/state"
 )
@@ -175,7 +176,7 @@ func TestRun(t *testing.T) {
 			t.Logf("agent log:\n%s", logs.String())
 		}
 	})
-	opts := Options{Dirs: dirs, Log: slog.New(slog.NewTextHandler(logs, nil)), Ports: []int{0}}
+	opts := Options{Dirs: dirs, Log: slog.New(slog.NewTextHandler(logs, nil)), Ports: []int{0}, KeyStores: []keys.Store{}}
 
 	a := startAgent(t, opts)
 	base := fmt.Sprintf("http://127.0.0.1:%d", a.port.Port)

@@ -31,6 +31,7 @@ import (
 	"github.com/some-du6e/pairtime/internal/agent/home"
 	"github.com/some-du6e/pairtime/internal/agent/inbox"
 	"github.com/some-du6e/pairtime/internal/agent/ipc"
+	"github.com/some-du6e/pairtime/internal/agent/keys"
 	"github.com/some-du6e/pairtime/internal/agent/ledger"
 	"github.com/some-du6e/pairtime/internal/agent/localhttp"
 	"github.com/some-du6e/pairtime/internal/agent/notifier"
@@ -63,6 +64,11 @@ type Options struct {
 	// DrainEvery, when set, replaces how often the agent drains the inbox,
 	// once a minute otherwise. Tests set it so they needn't wait a minute.
 	DrainEvery time.Duration
+	// KeyStores, when not nil, replaces the OS's secret store that keeps
+	// the device key, as keys.Options.Stores does. Tests pass an empty
+	// slice, which keeps K_dev in a key file in the data directory and
+	// off the OS's store.
+	KeyStores []keys.Store
 }
 
 // linked keeps heavyModules' entry points reachable (see heavy_linux.go).
@@ -94,7 +100,8 @@ type agent struct {
 	presence *presence.Sampler // presence and power (DESIGN 3.3)
 	// ledgerIn takes presence's records and seals to the ledger writer
 	// once it opens (WP-LG5).
-	ledgerIn *ledger.Presence
+	ledgerIn  *ledger.Presence
+	keyStores []keys.Store // Options.KeyStores
 
 	stop     chan struct{} // closed when a client asks the agent to stop
 	stopOnce sync.Once
@@ -124,12 +131,13 @@ func Run(ctx context.Context, opts Options) error {
 	defer lock.Release()
 
 	a := &agent{
-		dirs:     opts.Dirs,
-		log:      log,
-		started:  time.Now(),
-		sched:    sched.New(),
-		stop:     make(chan struct{}),
-		problems: make(map[string]string),
+		dirs:      opts.Dirs,
+		log:       log,
+		started:   time.Now(),
+		sched:     sched.New(),
+		stop:      make(chan struct{}),
+		problems:  make(map[string]string),
+		keyStores: opts.KeyStores,
 	}
 	linkOnce.Do(func() { linked = heavyModules() })
 	if err := optIntoEcoQoS(); err != nil {

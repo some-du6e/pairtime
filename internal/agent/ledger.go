@@ -71,7 +71,7 @@ func (a *agent) startLedger() func() {
 // openLedger opens the keystore, making K_dev at an installation's first
 // run, and the ledger writer with the keys derived from it.
 func (a *agent) openLedger() (*ledger.Writer, error) {
-	ks, err := keys.Open(keys.Options{Dir: a.dirs.Data})
+	ks, err := keys.Open(keys.Options{Dir: a.dirs.Data, Stores: a.keyStores})
 	if err != nil {
 		return nil, fmt.Errorf("the device key can't be opened: %w", err)
 	}
