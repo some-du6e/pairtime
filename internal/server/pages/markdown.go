@@ -37,6 +37,10 @@ func render(src string) (string, error) {
 		if err != nil {
 			return "", fmt.Errorf("markdown line %d: %w", i+1, err)
 		}
+		if n < 1 {
+			// A block that used no line would loop here for ever.
+			return "", fmt.Errorf("markdown line %d: the renderer can't read this line", i+1)
+		}
 		i += n
 	}
 	return r.b.String(), nil
@@ -56,11 +60,12 @@ type renderer struct {
 }
 
 // block renders the block that starts at lines[0] and returns how many
-// lines it used.
+// lines it used. A line of nothing but whitespace, a no-break space or a
+// stray \r included, is blank, as it is to paragraph.
 func (r *renderer) block(lines []string) (int, error) {
 	line := strings.TrimRight(lines[0], " \t")
 	switch {
-	case line == "":
+	case strings.TrimSpace(line) == "":
 		return 1, nil
 	case strings.HasPrefix(line, "#"):
 		return 1, r.heading(line)
