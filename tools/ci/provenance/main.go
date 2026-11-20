@@ -24,7 +24,12 @@
 // its PROVENANCE.md covers it. Only notes may sit above them: a README.md
 // at any level, and the root's PROVENANCE.template.md (WP-AD0). So a
 // capture saved without its <os> level is reported, and so is a symbolic
-// link where a directory should be.
+// link where a directory should be. An <os> directory is named windows,
+// macos or linux (testdata/fixtures/README.md), so a run directory saved
+// one level too high, such as claude_code/2.1.328/cli, is reported even
+// with a PROVENANCE.md in it. And the front matter's harness and
+// harness_version must be the directory's first two names, as
+// PROVENANCE.template.md says.
 //
 // Usage:
 //
@@ -56,6 +61,13 @@ const FileName = "PROVENANCE.md"
 // fixtureDepth is how far below the fixtures root a <harness>/<version>/<os>
 // directory sits.
 const fixtureDepth = 3
+
+// osDirs are the names an <os> directory may have
+// (testdata/fixtures/README.md).
+var osDirs = map[string]bool{"windows": true, "macos": true, "linux": true}
+
+// badOS is the problem with an <os> directory of another name.
+const badOS = "<os> directory must be windows, macos or linux"
 
 // isNote reports whether a file above the fixture directories, at a
 // slash-separated path relative to the tree, is one of the notes allowed
@@ -121,7 +133,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 				fmt.Fprintln(stderr, err)
 				return 2
 			}
-			for _, msg := range checkFile(data) {
+			for _, msg := range checkFile(data, "") {
 				problems = append(problems, problem{path: filepath.ToSlash(p), msg: msg})
 			}
 		}
@@ -130,7 +142,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stdout, "::error file=%s::%s\n", pr.path, pr.msg)
 	}
 	if len(problems) > 0 {
-		fmt.Fprintf(stdout, "%d provenance problems. Each testdata/fixtures/<harness>/<version>/<os>/ directory needs a %s whose front matter sets %s, and every fixture file goes in one of those directories (see tools/ci/provenance).\n",
+		fmt.Fprintf(stdout, "%d provenance problems. Each testdata/fixtures/<harness>/<version>/<os>/ directory, where <os> is windows, macos or linux, needs a %s whose front matter sets %s, and every fixture file goes in one of those directories (see tools/ci/provenance).\n",
 			len(problems), FileName, strings.Join(required, ", "))
 		return 1
 	}
@@ -162,6 +174,12 @@ func checkTree(fsys fs.FS) ([]problem, int, error) {
 		if depth < fixtureDepth {
 			return nil
 		}
+		if !osDirs[d.Name()] {
+			// Not a fixture directory at all: most likely a run saved
+			// without its <os> level, so it's reported as one problem.
+			problems = append(problems, problem{path: p, msg: badOS})
+			return fs.SkipDir
+		}
 		dirs++
 		file := path.Join(p, FileName)
 		data, err := fs.ReadFile(fsys, file)
@@ -171,7 +189,7 @@ func checkTree(fsys fs.FS) ([]problem, int, error) {
 		case err != nil:
 			return err
 		default:
-			for _, msg := range checkFile(data) {
+			for _, msg := range checkFile(data, p) {
 				problems = append(problems, problem{path: file, msg: msg})
 			}
 		}
@@ -186,7 +204,9 @@ func checkTree(fsys fs.FS) ([]problem, int, error) {
 }
 
 // checkFile checks one provenance file and describes each problem with it.
-func checkFile(data []byte) []string {
+// dir is the fixture directory the file sits in, <harness>/<version>/<os>
+// relative to the fixtures root, or "" for a file checked on its own.
+func checkFile(data []byte, dir string) []string {
 	fields, err := frontMatter(data)
 	if err != nil {
 		return []string{err.Error()}
@@ -207,6 +227,14 @@ func checkFile(data []byte) []string {
 	if v, ok := fields["captured_on"]; ok && v != "" {
 		if _, err := time.Parse(time.DateOnly, v); err != nil {
 			msgs = append(msgs, fmt.Sprintf("captured_on is %q, want a date like 2026-11-21", v))
+		}
+	}
+	if dir != "" {
+		names := strings.Split(dir, "/")
+		for i, key := range []string{"harness", "harness_version"} {
+			if v := fields[key]; v != "" && i < len(names) && v != names[i] {
+				msgs = append(msgs, fmt.Sprintf("%s is %q, but the fixture directory says %q", key, v, names[i]))
+			}
 		}
 	}
 	return msgs

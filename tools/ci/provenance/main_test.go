@@ -52,6 +52,11 @@ func with(key, value string) string {
 
 func file(s string) *fstest.MapFile { return &fstest.MapFile{Data: []byte(s)} }
 
+// moved returns text, a variant of good, for another harness and version.
+func moved(text, harness, version string) string {
+	return strings.NewReplacer("harness: claude_code", "harness: "+harness, "harness_version: 2.0.14", "harness_version: "+version).Replace(text)
+}
+
 func TestCheckTree(t *testing.T) {
 	const dir = "claude_code/2.0.14/windows"
 	const stray = "not inside a <harness>/<version>/<os>/ fixture directory, so no PROVENANCE.md covers it"
@@ -116,14 +121,51 @@ func TestCheckTree(t *testing.T) {
 			},
 			want: []problem{
 				{path: "claude_code/2.0.14/PROVENANCE.md", msg: stray},
-				{path: "claude_code/2.0.14/hooks", msg: "fixture directory has no PROVENANCE.md"},
+				{path: "claude_code/2.0.14/hooks", msg: badOS},
 			},
+		},
+		{
+			name: "a run directory saved without its os level fails, even with a PROVENANCE.md in it",
+			files: fstest.MapFS{
+				"claude_code/2.1.328/cli/PROVENANCE.md":      file(moved(good, "claude_code", "2.1.328")),
+				"claude_code/2.1.328/cli/hooks/000001/stdin": file("{}"),
+			},
+			want: []problem{{path: "claude_code/2.1.328/cli", msg: badOS}},
+		},
+		{
+			name: "an os directory takes the README's name for macOS, not Go's",
+			files: fstest.MapFS{
+				"claude_code/2.0.14/darwin/PROVENANCE.md": file(good),
+			},
+			want: []problem{{path: "claude_code/2.0.14/darwin", msg: badOS}},
+		},
+		{
+			name: "an os directory name is lower case",
+			files: fstest.MapFS{
+				"claude_code/2.0.14/Windows/PROVENANCE.md": file(good),
+			},
+			want: []problem{{path: "claude_code/2.0.14/Windows", msg: badOS}},
+		},
+		{
+			name: "the front matter's harness must be the directory's",
+			files: fstest.MapFS{
+				"codex/2.0.14/linux/PROVENANCE.md": file(good),
+			},
+			want:     []problem{{path: "codex/2.0.14/linux/PROVENANCE.md", msg: `harness is "claude_code", but the fixture directory says "codex"`}},
+			wantDirs: 1,
+		},
+		{
+			name: "the front matter's harness_version must be the directory's",
+			files: fstest.MapFS{
+				"claude_code/2.0.15/macos/PROVENANCE.md": file(good),
+			},
+			want:     []problem{{path: "claude_code/2.0.15/macos/PROVENANCE.md", msg: `harness_version is "2.0.14", but the fixture directory says "2.0.15"`}},
 			wantDirs: 1,
 		},
 		{
 			name: "a symbolic link in place of an os directory fails",
 			files: fstest.MapFS{
-				"claude_code/2.0.13/windows/PROVENANCE.md": file(good),
+				"claude_code/2.0.13/windows/PROVENANCE.md": file(moved(good, "claude_code", "2.0.13")),
 				dir: &fstest.MapFile{Mode: fs.ModeSymlink, Data: []byte("../2.0.13/windows")},
 			},
 			want:     []problem{{path: dir, msg: stray}},
@@ -152,7 +194,7 @@ func TestCheckTree(t *testing.T) {
 			files: fstest.MapFS{
 				dir + "/PROVENANCE.md":             file(good),
 				"claude_code/2.0.14/macos/x.json":  file("{}"),
-				"codex/0.63.0/linux/PROVENANCE.md": file(without("os")),
+				"codex/0.63.0/linux/PROVENANCE.md": file(moved(without("os"), "codex", "0.63.0")),
 			},
 			want: []problem{
 				{path: "claude_code/2.0.14/macos", msg: "fixture directory has no PROVENANCE.md"},
@@ -258,7 +300,7 @@ func TestCheckFile(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := checkFile([]byte(tt.text))
+			got := checkFile([]byte(tt.text), "")
 			if !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("checkFile() = %q, want %q", got, tt.want)
 			}
