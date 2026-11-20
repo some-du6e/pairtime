@@ -575,6 +575,30 @@ func TestSweep(t *testing.T) {
 					}
 				})
 			}
+			// The cases above run on tables shaped from the bindings. This
+			// runs the jobs that are on against the tables the migrations
+			// really create, so a binding that doesn't fit them fails here.
+			t.Run("every job that is on runs against the migrated schema", func(t *testing.T) {
+				ctx := context.Background()
+				db := storetest.Open(t, engine)
+				ms, err := migrations.Embedded()
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := migrations.Apply(ctx, db, ms, time.Now); err != nil {
+					t.Fatal(err)
+				}
+				on, _ := p.Jobs()
+				w := writer.Start(db.Write, writer.Options{})
+				results := Sweep(ctx, w, on, utc(2027, 7, 1, 12, 0), 2)
+				w.Close()
+				for _, r := range results {
+					if r.Err != nil {
+						t.Errorf("%s: %v", r.ID, r.Err)
+					}
+				}
+				t.Logf("%d of the schedule's %d jobs are on", len(on), len(jobs))
+			})
 		})
 	}
 }
@@ -762,6 +786,41 @@ func TestTables(t *testing.T) {
 				for _, n := range tables {
 					if !claimed[n] {
 						t.Errorf("table %s isn't in docs/retention.json; add it to the entry for the data it holds, as a job's table, in lifetime_tables or, for an entry without a period, in tables; or add it to no_personal_data", n)
+					}
+				}
+			},
+		},
+		{
+			name: "no foreign key points at a table a job deletes from",
+			check: func(t *testing.T) {
+				// A delete would fail, or cascade into rows that must stay
+				// longer, such as the witness rows of a device removed 90
+				// days ago.
+				deletes := make(map[string]string)
+				for _, j := range p.AllJobs() {
+					deletes[j.Table] = j.ID
+				}
+				for _, n := range tables {
+					rows, err := db.Read.QueryContext(ctx, `SELECT "table" FROM pragma_foreign_key_list($1)`, n)
+					if err != nil {
+						t.Fatal(err)
+					}
+					var refs []string
+					for rows.Next() {
+						var ref string
+						if err := rows.Scan(&ref); err != nil {
+							t.Fatal(err)
+						}
+						refs = append(refs, ref)
+					}
+					if err := rows.Err(); err != nil {
+						t.Fatal(err)
+					}
+					rows.Close()
+					for _, ref := range refs {
+						if job, ok := deletes[ref]; ok {
+							t.Errorf("table %s has a foreign key to %s, whose rows %s deletes; drop the foreign key (AGENTS.md, Retention)", n, ref, job)
+						}
 					}
 				}
 			},
