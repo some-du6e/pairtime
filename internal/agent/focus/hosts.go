@@ -26,7 +26,8 @@ type window struct {
 	// name as the table spells it, lowercase and without ".exe".
 	name string
 	// hosts are the processes a harness session's parent chain has to
-	// reach for the window to host it (SM 3.2 rule 1).
+	// reach for the window to host it (SM 3.2 rule 1). It is empty for a
+	// window that hosts no sessions.
 	hosts map[platform.ID]bool
 }
 
@@ -67,27 +68,49 @@ func consoleHelper(goos string, p platform.Proc) bool {
 // console: it belongs to the process the helper serves, its parent, which
 // is the console's client for a classic console and the terminal for a
 // pseudo console. Such a window is a terminal whatever its owner is.
+//
+// Only terminals, editors and agent desktop apps host sessions (SM 3.2
+// rules 1 to 3). A browser, a chat app or anything else hosts none, even
+// when a harness runs under its process (rules 4 and 5). That matters most
+// for explorer.exe, which owns the desktop and the taskbar and is an
+// ancestor of nearly every program the person starts: focus on the desktop
+// is focus on no session.
 func windowOf(t *platform.Table, pid int) (window, bool) {
 	p, ok := t.Get(pid)
 	if !ok {
 		return window{}, false
 	}
 	goos := t.OS()
-	w := window{proc: p, hosts: map[platform.ID]bool{p.ID(): true}}
+	w := window{proc: p, class: event.AppOther}
 	if consoleHelper(goos, p) {
 		w.class = event.AppTerminal
-		if owner, ok := t.Parent(p); ok {
+		// explorer only starts programs, so a console it would own is the
+		// helper's alone.
+		if owner, ok := t.Parent(p); ok && !givesConsole(goos, owner) {
 			w.proc = owner
-			w.hosts[owner.ID()] = true
 		}
-	} else {
-		w.class = event.AppOther
-		if e, ok := platform.Identify(goos, p); ok && e.AppClass != "" {
-			w.class = e.AppClass
-		}
+	} else if e, ok := platform.Identify(goos, p); ok && e.AppClass != "" {
+		w.class = e.AppClass
 	}
 	w.name = appName(w.proc)
+	if hosting(w.class) {
+		w.hosts = map[platform.ID]bool{p.ID(): true, w.proc.ID(): true}
+	}
 	return w, true
+}
+
+// hosting reports whether a window of class c can host harness sessions:
+// terminals, editors and agent desktop apps (SM 3.2 rules 1 to 3).
+func hosting(c event.AppClass) bool {
+	return c == event.AppTerminal || c == event.AppEditor || c == event.AppAgentApp
+}
+
+// givesConsole reports whether p is the Windows shell, explorer, which the
+// app-class table marks gives_console: it starts programs, and its own
+// windows, the desktop and the taskbar among them, host nothing.
+func givesConsole(goos string, p platform.Proc) bool {
+	e, ok := platform.Identify(goos, p)
+	return ok && e.GivesConsole
 }
 
 // appName is the identity of the app a process runs: its executable's
@@ -104,6 +127,9 @@ func appName(p platform.Proc) string {
 // reaches one of the window's hosts. The keys come sorted, without
 // repeats, and at most maxHosted of them.
 func hostedSessions(t *platform.Table, w window, sessions map[platform.ID]string) []string {
+	if len(w.hosts) == 0 {
+		return nil
+	}
 	var keys []string
 	for id, key := range sessions {
 		if key == "" {

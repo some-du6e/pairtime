@@ -30,6 +30,7 @@ package focus
 import (
 	"fmt"
 	"log/slog"
+	"maps"
 	"slices"
 	"strings"
 	"sync"
@@ -89,7 +90,9 @@ type Options struct {
 	// knows, by process: the sessions the process scan found
 	// (procs.Scanner.Sessions) and the processes that hooks came from. The
 	// window in front hosts those whose parent chain reaches its process
-	// (SM 3.2). Nil means none are known, so hosted_sessions stays empty.
+	// (SM 3.2). A process that has exited should leave the map, as the
+	// scan's do: Refresh skips the walk while the map is unchanged. Nil
+	// means none are known, so hosted_sessions stays empty.
 	Sessions func() map[platform.ID]string
 	// ProjectOf returns the project key of a harness session, or "" when
 	// it isn't known. Nil leaves focus_project empty.
@@ -167,11 +170,13 @@ type Watcher struct {
 
 // front is the window in front, as the last change or refresh found it.
 type front struct {
-	at      time.Time
-	pid     int
-	id      platform.ID
-	data    *event.OSFocus
-	written bool // a record of data was written
+	at   time.Time
+	pid  int
+	id   platform.ID
+	data *event.OSFocus
+	// sessions are the sessions data was worked out from.
+	sessions map[platform.ID]string
+	written  bool // a record of data was written
 }
 
 // New returns a watcher that does nothing until Start.
@@ -361,7 +366,8 @@ func (w *Watcher) handle(c Change) {
 		w.unknown("the process of the window in front exited before pairtime read the process table")
 		return
 	}
-	f := &front{at: c.At, pid: c.PID, id: win.proc.ID(), data: w.payload(t, win)}
+	sessions := w.sessions()
+	f := &front{at: c.At, pid: c.PID, id: win.proc.ID(), data: w.payload(t, win, sessions), sessions: sessions}
 	w.cur = f
 	w.known(f)
 	if w.opts.Presence != nil {
@@ -377,10 +383,18 @@ func (w *Watcher) handle(c Change) {
 
 // reconsider walks the process table again for the window in front and
 // writes a new record when what it hosts has changed, or when a context
-// has gone live since the window came to the front.
+// has gone live since the window came to the front. While the sessions
+// the agent knows are the ones the record was worked out from, no session
+// can have started or ended under the window, so it skips the walk: the
+// agent refreshes after every process scan, and on an old laptop a walk a
+// minute for nothing is waste.
 func (w *Watcher) reconsider() {
 	f := w.cur
 	if f == nil || !w.live() {
+		return
+	}
+	sessions := w.sessions()
+	if f.written && maps.Equal(sessions, f.sessions) {
 		return
 	}
 	t, err := w.table()
@@ -393,7 +407,8 @@ func (w *Watcher) reconsider() {
 		// comes to the front next, and that change takes over.
 		return
 	}
-	data := w.payload(t, win)
+	data := w.payload(t, win, sessions)
+	f.sessions = sessions
 	if f.written && samePayload(data, f.data) {
 		return
 	}
@@ -413,15 +428,20 @@ func (w *Watcher) table() (*platform.Table, error) {
 	return platform.NewTable(w.opts.OS.GOOS, procs), nil
 }
 
-// payload is the os.focus record of window win.
-func (w *Watcher) payload(t *platform.Table, win window) *event.OSFocus {
+// sessions returns the sessions the agent knows, by process.
+func (w *Watcher) sessions() map[platform.ID]string {
+	if w.opts.Sessions == nil {
+		return nil
+	}
+	return w.opts.Sessions()
+}
+
+// payload is the os.focus record of window win, which hosts those of
+// sessions that run under it.
+func (w *Watcher) payload(t *platform.Table, win window, sessions map[platform.ID]string) *event.OSFocus {
 	d := &event.OSFocus{AppClass: win.class}
 	if w.opts.AppSecret != nil && win.name != "" {
 		d.AppHash = appHash(w.opts.AppSecret, t.OS(), win.name)
-	}
-	var sessions map[platform.ID]string
-	if w.opts.Sessions != nil {
-		sessions = w.opts.Sessions()
 	}
 	d.HostedSessions = validKeys(hostedSessions(t, win, sessions))
 	if p := focusProject(win.class, d.HostedSessions, w.opts.ProjectOf); validKey(p) {

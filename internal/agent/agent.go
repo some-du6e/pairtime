@@ -175,7 +175,7 @@ func Run(ctx context.Context, opts Options) error {
 	closers = append(closers, a.startPresence())
 
 	closers = append(closers, a.watchConfig())
-	a.newFocus()
+	a.newFocus(focus.ThisOS())
 	closers = append(closers, a.startProcs())
 	closers = append(closers, a.startFocus())
 	closers = append(closers, a.startIPC(opts))

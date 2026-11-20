@@ -23,9 +23,11 @@ import (
 //   - Until the ledger writer exists (WP-LG5), records are dropped, as
 //     presence's are; WP-LG5 also passes AppSecret, derived from K_dev,
 //     until when app_hash stays out of the records.
-func (a *agent) newFocus() {
+//
+// src is the focus source: focus.ThisOS(), or a fake in tests.
+func (a *agent) newFocus(src focus.OS) {
 	a.focus = focus.New(focus.Options{
-		OS:       focus.ThisOS(),
+		OS:       src,
 		Sessions: func() map[platform.ID]string { return a.procs.Sessions() },
 		Live:     func() bool { return a.presence.Status().Live },
 		Presence: a.presence.Focus,
