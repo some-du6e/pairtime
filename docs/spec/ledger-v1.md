@@ -695,7 +695,7 @@ Each command exits 0 when everything matches, 1 when a value doesn't, and 2 for 
 | `draws[]` | `r`, `metadata` (`M`), `seed`, `pool[]`, each `device_id`, `seq`, `score`, `drawn[]`, each `device_id`, `seq`, smallest score first, and optional `commits[]`, each `commit`, `score`, with `drawn_commits[]`, each `commit` (10.9) |
 | `challenge_k[]` | `pool` (`P`), `k` (`CHALLENGE_K`), `drawn` (`min(K, P)`) |
 
-Texts, tokens, commands and shingles are hex of their UTF-8 bytes, like every other byte string here, and must be valid UTF-8. Every object of the part 2 sections may carry a `note` string, which `check` ignores. A reveal or shingle reveal states the verdict it should get, so a file can hold failing cases as well as passing ones.
+Texts, tokens, commands and shingles are hex of their UTF-8 bytes, like every other byte string here. The texts of commitments, normalizations and features, a commitment's tokens and commands must be valid UTF-8: `check` reports a commitment text that isn't as a mismatch, because no writer can commit it (10.1), and any other such bytes as a format error. A reveal's tokens and a CC8 reveal's `x` values are the exception. A failing case may hold bytes that aren't UTF-8 there, because a verifier has to give them a verdict: `bad_item` for a token (10.3) and `bad_entry` for an `x` (10.8). Every object of the part 2 sections may carry a `note` string, which `check` ignores. A reveal or shingle reveal states the verdict it should get, so a file can hold failing cases as well as passing ones.
 
 Besides recomputing each value from the file's own inputs, `check` applies these rules:
 
