@@ -229,7 +229,9 @@ func startTaskHolder(t *testing.T, dir string, logon []string) uint32 {
 		}
 		if time.Now().After(deadline) {
 			out, _ := exec.Command("schtasks", "/Query", "/V", "/FO", "LIST", "/TN", task).CombinedOutput()
-			t.Fatalf("the holder's task wrote no report within a minute (%v); schtasks /Query says:\n%s", err, out)
+			// An S4U logon needs the "Log on as a batch job" right, which
+			// Administrators have and standard users usually don't.
+			t.Fatalf("the holder's task wrote no report within a minute (%v); an S4U task needs the user to have the Log on as a batch job right. schtasks /Query says:\n%s", err, out)
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
