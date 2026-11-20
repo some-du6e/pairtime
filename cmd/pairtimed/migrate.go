@@ -33,6 +33,9 @@ func runMigrate(ctx context.Context, e *env, args []string) int {
 	if err != nil {
 		return fail(err)
 	}
+	for _, w := range cfg.Warnings {
+		fmt.Fprintf(e.stderr, "pairtimed migrate: warning: %s\n", w)
+	}
 	// Neither form creates a database. Litestream restores the database
 	// from the replica only when the file is missing, and then starts
 	// serve, which creates a new one where there is no replica (DESIGN

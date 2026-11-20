@@ -57,6 +57,7 @@ func TestLoad(t *testing.T) {
 			toml: full,
 			check: func(t *testing.T, c *Config, _ string) {
 				want := Config{
+					ConfigVersion:  1,
 					BaseURL:        "https://pairtime.example.org",
 					SignupsOpen:    true,
 					ProfileDefault: ProfileAsk,
@@ -108,6 +109,30 @@ func TestLoad(t *testing.T) {
 		{name: "an unknown key inside a table is refused", toml: base + "[hca]\nclient = \"x\"\n", wantErr: "unknown keys: hca.client"},
 		{name: "an unknown key inside a reviewer is refused", toml: base + "[[reviewers]]\nsub = \"a\"\nrole = \"qi\"\n", wantErr: "reviewers.role"},
 		{name: "a value of the wrong type is refused", toml: base + "signups_open = \"no\"\n", wantErr: "signups_open"},
+		{
+			name: "config_version is 1 when the file leaves it out",
+			toml: base,
+			check: func(t *testing.T, c *Config, _ string) {
+				if c.ConfigVersion != 1 || len(c.Warnings) != 0 {
+					t.Errorf("config_version = %d, warnings %q; want 1 and none", c.ConfigVersion, c.Warnings)
+				}
+			},
+		},
+		{name: "a file for this release refuses an unknown key", toml: base + "config_version = 1\nsignup_open = true\n", wantErr: "unknown keys: signup_open"},
+		{
+			name: "a file for a newer release loads, with its unknown keys as warnings, so a rollback starts on it",
+			toml: base + "config_version = 2\nsignups_open = true\nfrom_a_newer_release = true\n[hca]\nnewer_key = \"x\"\n",
+			check: func(t *testing.T, c *Config, _ string) {
+				if c.ConfigVersion != 2 || !c.SignupsOpen {
+					t.Errorf("config_version = %d, signups_open = %v; want 2 and true, read as usual", c.ConfigVersion, c.SignupsOpen)
+				}
+				if len(c.Warnings) != 1 || !strings.Contains(c.Warnings[0], "from_a_newer_release, hca.newer_key") {
+					t.Errorf("warnings = %q, want one naming from_a_newer_release and hca.newer_key", c.Warnings)
+				}
+			},
+		},
+		{name: "a file for a newer release still has its values checked", toml: base + "config_version = 2\nprofile_default = \"private\"\n", wantErr: "profile_default"},
+		{name: "config_version starts at 1", toml: base + "config_version = 0\n", wantErr: "config_version is 0"},
 		{name: "base_url over plain http is refused", toml: "base_url = \"http://pairtime.example.org\"\n", wantErr: "only https"},
 		{name: "base_url over http is allowed on localhost", toml: "base_url = \"http://localhost:8080\"\n"},
 		{name: "base_url over http is allowed on a loopback address", toml: "base_url = \"http://127.0.0.1:8080\"\n"},

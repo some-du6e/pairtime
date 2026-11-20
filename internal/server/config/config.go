@@ -13,6 +13,7 @@
 //	listen          = ":8080"           # the API, behind cloudflared (DESIGN 10.5)
 //	ops_listen      = "127.0.0.1:9091"  # /healthz, /readyz and /metrics; never tunneled (DESIGN 10.4)
 //	data_dir        = "/data"           # DESIGN 10.1
+//	config_version  = 1                 # see below
 //
 //	[database]
 //	engine = "sqlite"                   # or "postgres", with PAIRTIME_DATABASE_URL as a secret
@@ -32,9 +33,16 @@
 //	sub   = "..."
 //	roles = ["qi", "program_reviewer:<program>"]
 //
-// A key the file doesn't need can be left out. A key this package doesn't
+// A key the file doesn't need can be left out. A key this release doesn't
 // know is an error, so a misspelt key can't silently fall back to its
-// default. Relative paths are relative to the directory of pairtime.toml.
+// default, unless the file's config_version is above ConfigVersion. Such a
+// file was written for a newer release, so this one ignores the keys it
+// doesn't know, with a warning, and a rollback to the previous image tag
+// starts on the newer release's file (DESIGN 10.5 step 6). When a file
+// starts using a key a release added, set config_version to that release's
+// ConfigVersion. Values are checked either way: an older release has no
+// safe stand-in for a value only a newer one knows. Relative paths are
+// relative to the directory of pairtime.toml.
 package config
 
 import (
@@ -53,6 +61,13 @@ import (
 
 // DefaultPath is where the deploy bundle mounts pairtime.toml (DESIGN 10.1).
 const DefaultPath = "/etc/pairtime/pairtime.toml"
+
+// ConfigVersion is the version of this release's set of keys. A file
+// whose config_version is higher is for a newer release, and Load ignores
+// its unknown keys instead of refusing them. A release that adds a key
+// raises ConfigVersion by one: the first PR after a release tag to add a
+// key does it, and later PRs before the next tag leave it.
+const ConfigVersion = 1
 
 // Defaults for keys pairtime.toml leaves out.
 const (
@@ -84,6 +99,9 @@ const ProgramReviewerPrefix = "program_reviewer:"
 
 // Config is a loaded and checked pairtime.toml.
 type Config struct {
+	// ConfigVersion is the file's config_version, 1 when it has none.
+	ConfigVersion int `toml:"config_version"`
+
 	BaseURL        string     `toml:"base_url"`
 	SignupsOpen    bool       `toml:"signups_open"`
 	ProfileDefault string     `toml:"profile_default"`
@@ -103,6 +121,9 @@ type Config struct {
 	Secrets Secrets `toml:"-"`
 	// Path is the file the configuration was loaded from.
 	Path string `toml:"-"`
+	// Warnings are for the caller to log: the keys Load ignored in a file
+	// for a newer release.
+	Warnings []string `toml:"-"`
 }
 
 // Reviewer is one entry of the reviewer allowlist: an HCA subject and its
@@ -150,12 +171,22 @@ func Load(path, secretsFile string, environ []string) (*Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("config: %s: %w", path, err)
 	}
+	if !md.IsDefined("config_version") {
+		c.ConfigVersion = 1
+	}
+	if c.ConfigVersion < 1 {
+		return nil, fmt.Errorf("config: %s: config_version is %d; it starts at 1", path, c.ConfigVersion)
+	}
 	if undecoded := md.Undecoded(); len(undecoded) > 0 {
 		keys := make([]string, len(undecoded))
 		for i, k := range undecoded {
 			keys[i] = k.String()
 		}
-		return nil, fmt.Errorf("config: %s: unknown keys: %s", path, strings.Join(keys, ", "))
+		if c.ConfigVersion <= ConfigVersion {
+			return nil, fmt.Errorf("config: %s: unknown keys: %s", path, strings.Join(keys, ", "))
+		}
+		c.Warnings = append(c.Warnings, fmt.Sprintf("%s has config_version %d, above this release's %d, so this release ignores the keys it doesn't know: %s",
+			path, c.ConfigVersion, ConfigVersion, strings.Join(keys, ", ")))
 	}
 	c.Path = path
 	c.Secrets, err = LoadSecrets(secretsFile, environ)

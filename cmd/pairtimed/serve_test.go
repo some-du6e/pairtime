@@ -256,6 +256,41 @@ func TestMigrate(t *testing.T) {
 	}
 }
 
+func TestConfigVersion(t *testing.T) {
+	tests := []struct {
+		name       string
+		extra      string // appended to writeConfig's pairtime.toml
+		wantCode   int
+		wantStderr string // substring
+	}{
+		{name: "a rollback runs on a newer release's pairtime.toml, warning about the keys it ignores", extra: "config_version = 2\nfrom_a_newer_release = true\n", wantStderr: "ignores the keys it doesn't know: from_a_newer_release"},
+		{name: "a pairtime.toml for this release still refuses a misspelt key", extra: "signup_open = true\n", wantCode: 1, wantStderr: "unknown keys: signup_open"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			configPath, dbPath := writeConfig(t)
+			f, err := os.OpenFile(configPath, os.O_APPEND|os.O_WRONLY, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := f.WriteString(tt.extra); err != nil {
+				t.Fatal(err)
+			}
+			if err := f.Close(); err != nil {
+				t.Fatal(err)
+			}
+			createDatabase(t, dbPath)
+			e, _, stderr := testEnv()
+			if code := run(context.Background(), []string{"migrate", "-config", configPath}, e); code != tt.wantCode {
+				t.Errorf("migrate exit code = %d, want %d; stderr:\n%s", code, tt.wantCode, stderr.String())
+			}
+			if !strings.Contains(stderr.String(), tt.wantStderr) {
+				t.Errorf("stderr = %q, want it to contain %q", stderr.String(), tt.wantStderr)
+			}
+		})
+	}
+}
+
 func TestDialAddr(t *testing.T) {
 	tests := []struct {
 		name, listen, want string
