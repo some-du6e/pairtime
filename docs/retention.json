@@ -1,0 +1,178 @@
+{
+  "about": "How long pairtime keeps each kind of data, from DESIGN 4.4. This file is the one copy the code reads. The privacy notice at /privacy renders its retention table from it, and pairtimed's retention jobs take their periods, tables and columns from it. In kept, {days} stands for the entry's days and {window} for the spot-check window, so a number is never written twice. Every table pairtimed's migrations create belongs to an entry, as its job's table or in its tables, or is listed in no_personal_data. A job or hold with awaits set is off until the work package named there creates its table, and that package removes awaits.",
+  "version": 1,
+  "source": "DESIGN 4.4",
+  "spot_check_window": {
+    "months": 12,
+    "provisional": "DESIGN 4.4 and 13.2 item 4: 12 months after the decision until Hack Club HQ sets the spot-check window"
+  },
+  "no_personal_data": ["schema_migrations", "ops_probe"],
+  "entries": [
+    {
+      "id": "device.prompt_text",
+      "where": "device",
+      "data": "The text of your prompts, and the agent's final reply to each one",
+      "kept": "{days}, or until a submission that covers them is decided, whichever is later. You can shorten this, or turn off \"keep prompt text\"",
+      "days": 90
+    },
+    {
+      "id": "device.transcripts",
+      "where": "device",
+      "data": "Your AI tool's transcripts and output",
+      "kept": "Not copied. pairtime reads them where your AI tool keeps them, so the tool's own setting applies (Claude Code keeps them for 30 days unless you change it)"
+    },
+    {
+      "id": "device.paths_commands",
+      "where": "device",
+      "data": "File paths kept for your recaps, and the commands your agent ran",
+      "kept": "{days}",
+      "days": 30
+    },
+    {
+      "id": "device.activity",
+      "where": "device",
+      "data": "Presence and focus samples, typing counts if you turned on the typing module, and prompt similarity sketches (MinHash)",
+      "kept": "{days}",
+      "days": 90
+    },
+    {
+      "id": "device.ledger",
+      "where": "device",
+      "data": "Ledger records and batch roots: the sealed log of what pairtime recorded",
+      "kept": "{days}, or longer while a submission that uses them is inside its spot-check window ({window})",
+      "days": 180
+    },
+    {
+      "id": "device.buckets",
+      "where": "device",
+      "data": "Minute buckets",
+      "kept": "{days}. Daily totals and coach records stay until you delete them",
+      "days": 180
+    },
+    {
+      "id": "device.key",
+      "where": "device",
+      "data": "Your device key",
+      "kept": "Until you uninstall pairtime or the key is replaced"
+    },
+    {
+      "id": "server.account",
+      "where": "server",
+      "data": "Your account: your Hack Club Auth ID, Slack ID and handle, your email address (stored encrypted), and your GitHub user ID if you link GitHub",
+      "kept": "While your account exists"
+    },
+    {
+      "id": "server.devices",
+      "where": "server",
+      "data": "Your devices: a random device ID, the OS family, the pairtime build, and the names and versions of your AI tools",
+      "kept": "Until you remove the device, then {days} more",
+      "days": 90,
+      "job": {
+        "table": "devices",
+        "key": ["device_id"],
+        "time_column": "removed_at_ms",
+        "awaits": "WP-SV3"
+      }
+    },
+    {
+      "id": "server.ip_ja4",
+      "where": "server",
+      "data": "The IP address each upload comes from, and its TLS fingerprint (JA4)",
+      "kept": "{days}, then deleted outright, not shortened",
+      "days": 30,
+      "job": {
+        "table": "request_origins",
+        "key": ["id"],
+        "time_column": "seen_at_ms",
+        "awaits": "WP-SV4"
+      }
+    },
+    {
+      "id": "server.minute_buckets",
+      "where": "server",
+      "data": "Minute buckets: the credited and uncredited seconds of each minute, by project key",
+      "kept": "Per-minute detail for {days}, the furthest back a submission can reach. After that only daily totals per project stay, for as long as your account exists",
+      "days": 180,
+      "tables": ["rollups_daily"],
+      "job": {
+        "table": "minute_buckets",
+        "key": ["device_id", "minute_ms"],
+        "time_column": "minute_ms",
+        "awaits": "WP-SV7"
+      }
+    },
+    {
+      "id": "server.witness",
+      "where": "server",
+      "data": "Witness rows and batch roots: the hash of each upload batch, and when the server received it",
+      "kept": "{days}. Rows that a submission uses stay until its spot-check window closes ({window})",
+      "days": 180,
+      "job": {
+        "table": "witness_rows",
+        "key": ["device_id", "b"],
+        "time_column": "received_at_ms",
+        "awaits": "WP-SV4",
+        "hold": {
+          "table": "submission_batches",
+          "decided_column": "decided_at_ms",
+          "awaits": "WP-SB4"
+        }
+      }
+    },
+    {
+      "id": "server.commits",
+      "where": "server",
+      "data": "Commit records (commit IDs, times and line counts, with file paths only as keyed hashes) and project fingerprints",
+      "kept": "While your account exists"
+    },
+    {
+      "id": "server.program_links",
+      "where": "server",
+      "data": "Keyed hashes of the Hackatime project names you link to a program",
+      "kept": "Until you unlink the program"
+    },
+    {
+      "id": "server.backups",
+      "where": "server",
+      "data": "Backups, only if you turn them on: your device key, locked with your recovery code, and encrypted copies of your ledger and vault",
+      "kept": "Until you turn backups off or delete your account. Backup segments older than {days} are deleted",
+      "days": 180
+    },
+    {
+      "id": "evidence.revealed",
+      "where": "evidence",
+      "data": "What you reveal when you submit hours: the records behind them, the prompts drawn for review, and any risk flags",
+      "kept": "Until the spot-check window closes ({window}). You can delete any revealed item yourself, at once"
+    },
+    {
+      "id": "server.decisions",
+      "where": "server",
+      "data": "Reviewer decisions and the reasons for cuts, written without personal data",
+      "kept": "As long as the program's record of the submission exists in Hack Club's Unified DB"
+    },
+    {
+      "id": "server.access_log",
+      "where": "server",
+      "data": "The evidence access log: who opened your submitted evidence, and when. You can see it",
+      "kept": "2 years"
+    },
+    {
+      "id": "server.interview_notes",
+      "where": "server",
+      "data": "Notes from an audit call. Calls are never recorded",
+      "kept": "As long as the decision they belong to"
+    },
+    {
+      "id": "server.fraud_record",
+      "where": "server",
+      "data": "After you delete your account: a minimal fraud record (your Hack Club Auth ID, the verdict, its date and a reason category)",
+      "kept": "For a period Hack Club sets, which isn't decided yet. The deletion report lists it as kept"
+    },
+    {
+      "id": "public.day_roots",
+      "where": "public",
+      "data": "Day roots: one hash a day over every batch the server received, with a count, published in the public pairtime-witness repository",
+      "kept": "Permanently. They hold only hashes and a daily count"
+    }
+  ]
+}
