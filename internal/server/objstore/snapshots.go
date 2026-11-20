@@ -20,8 +20,9 @@ const snapshotTime = "20060102T150405Z"
 // copy of the database, encrypted with age to Karim's offline key, written
 // once under the time it was taken. The bucket's own 30-day lifecycle rule
 // deletes old snapshots; it is set on the bucket when it is created
-// (DESIGN 10.5 item 4), not by pairtimed. WP-OP1's nightly job makes the
-// encrypted file and hands it to Put.
+// (DESIGN 10.5 item 4), not by pairtimed. pairtimed's nightly job
+// (internal/server/backup) encrypts the snapshot as it streams it to
+// PutStream.
 //
 // It must not be the main bucket: that lifecycle rule would delete the
 // evidence and Litestream's replica too. The configuration refuses one
@@ -64,6 +65,14 @@ func isSnapshotKey(key string) bool {
 // the same file.
 func (s *Snapshots) Put(ctx context.Context, takenAt time.Time, file io.ReadSeeker) (ObjectInfo, error) {
 	return s.b.Put(ctx, SnapshotKey(takenAt), file, PutOptions{IfNoneMatch: true})
+}
+
+// PutStream uploads one encrypted snapshot under SnapshotKey(takenAt) as
+// it reads it from r, in parts of partSize bytes, 0 meaning
+// DefaultPartSize (Bucket.PutStream). Like Put it is write-once, and a
+// failed upload is aborted, so the bucket keeps no parts of it.
+func (s *Snapshots) PutStream(ctx context.Context, takenAt time.Time, r io.Reader, partSize int64) (ObjectInfo, error) {
+	return s.b.PutStream(ctx, SnapshotKey(takenAt), r, StreamOptions{IfNoneMatch: true, PartSize: partSize})
 }
 
 // Latest returns the newest snapshot, or an error wrapping ErrNotFound

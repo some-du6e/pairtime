@@ -9,6 +9,7 @@ go 1.26
 require golang.org/x/sys v0.47.0
 
 require (
+	filippo.io/age v1.3.2
 	github.com/BurntSushi/toml v1.6.0
 	github.com/ebitengine/purego v0.11.3
 	github.com/fsnotify/fsnotify v1.10.1
