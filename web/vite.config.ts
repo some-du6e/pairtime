@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import { mkdirSync, writeFileSync } from 'node:fs';
-import { relative, sep } from 'node:path';
+import { isAbsolute, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { svelte } from '@sveltejs/vite-plugin-svelte';
 import { defineConfig, type Plugin } from 'vite';
@@ -67,29 +67,37 @@ function csp(): Plugin {
 
 // Writes dist/bundle-<mode>.json, the record of where a build's code came
 // from: every module in its chunks with the length of the code it rendered
-// there, and every file it emitted as an asset. Paths are from web/, and
-// the modules a bundler or plugin writes itself keep their ids, which start
-// with \0. tools/ci/npm_notices.py reads the dashboard's record to check
-// that release archives carry the license of every npm package with code in
-// it. The record sits beside the builds, outside every outDir, so no binary
-// embeds it.
+// there, and every file it emitted as an asset. Files are named by their
+// paths from web/; a module that isn't a file, such as one a bundler or
+// plugin writes itself, whose id starts with \0, keeps its id.
+// tools/ci/npm_notices.py reads the dashboard's record to check that release
+// archives carry the license of every npm package with code in it. The
+// record sits beside the builds, outside every outDir, so no binary embeds
+// it.
 function bundleReport(mode: AppName): Plugin {
 	const web = here('.');
-	const name = (id: string) => (id.startsWith('\0') ? id : relative(web, id).split(sep).join('/'));
+	const fromWeb = (path: string) => relative(web, path).split(sep).join('/');
+	// A file's module id is its absolute path, and an asset's original file
+	// names are relative to the Vite root. Any other id, such as a plugin's
+	// "virtual:x", stays as it is, so the check counts it as nobody's.
+	let root = web;
 	return {
 		name: 'pairtime-bundle-report',
 		apply: 'build',
+		configResolved(config) {
+			root = config.root;
+		},
 		writeBundle(_, bundle) {
 			const modules: { id: string; rendered: number }[] = [];
 			const assets = new Set<string>();
 			for (const file of Object.values(bundle)) {
 				if (file.type === 'chunk') {
 					for (const [id, { renderedLength }] of Object.entries(file.modules)) {
-						modules.push({ id: name(id), rendered: renderedLength });
+						modules.push({ id: isAbsolute(id) ? fromWeb(id) : id, rendered: renderedLength });
 					}
 				} else {
 					for (const original of file.originalFileNames) {
-						assets.add(name(original));
+						assets.add(fromWeb(resolve(root, original)));
 					}
 				}
 			}
