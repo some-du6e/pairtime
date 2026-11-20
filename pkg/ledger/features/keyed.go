@@ -189,17 +189,134 @@ func CheckPath(path string) error {
 	return nil
 }
 
-// Edit is one edit hunk as an edit tool's patch reports it (Claude Code's
-// structuredPatch, Codex's patch_apply_end, Cursor's afterFileEdit): the
-// file's path, in the form CheckPath accepts, and the four numbers of its
-// unified diff header, @@ -OldStart,OldLines +NewStart,NewLines @@.
+// Edit is one edit hunk: the file's path, in the form CheckPath accepts,
+// and the four numbers of a hunk as diff -U0 writes it, @@
+// -OldStart,OldLines +NewStart,NewLines @@ (spec 10.6). It holds changed
+// lines only, never context: EditsFromPatch makes edits from a patch's
+// lines (Claude Code's structuredPatch, Codex's patch_apply_end), and
+// EditFromTexts from the file's text before and after an edit (Cursor's
+// afterFileEdit, which gives old and new strings but no line numbers).
 type Edit struct {
 	Path                                   string
 	OldStart, OldLines, NewStart, NewLines int
 }
 
+// ErrPatch is a patch hunk that EditsFromPatch can't read: a line that
+// doesn't start with ' ', '-', '+' or '\', or lines that don't add up to
+// the header's counts.
+var ErrPatch = errors.New("features: patch hunk is malformed")
+
+// EditsFromPatch returns the edits of one hunk of a unified diff with
+// context, for the file path (spec 10.6): oldStart, oldLines, newStart and
+// newLines are its header's numbers, and each of lines starts with ' ' for
+// an unchanged line, '-' for a removed one, '+' for an added one, or '\'
+// for a marker such as "\ No newline at end of file", which counts in
+// neither file. Each maximal run of '-' and '+' lines is one edit, without
+// the context around it, so the edits count changed lines only. It returns
+// ErrPatch for a line with another first byte, or for lines that don't add
+// up to the header's counts.
+func EditsFromPatch(path string, oldStart, oldLines, newStart, newLines int, lines []string) ([]Edit, error) {
+	o, n := oldStart, newStart
+	if oldLines == 0 {
+		o++
+	}
+	if newLines == 0 {
+		n++
+	}
+	var out []Edit
+	var run *Edit
+	seenOld, seenNew := 0, 0
+	closeRun := func() {
+		if run.OldLines == 0 {
+			run.OldStart--
+		}
+		if run.NewLines == 0 {
+			run.NewStart--
+		}
+		out = append(out, *run)
+		run = nil
+	}
+	for _, line := range lines {
+		if line == "" {
+			return nil, fmt.Errorf("%w: an empty line has no marker", ErrPatch)
+		}
+		switch line[0] {
+		case '\\':
+			continue
+		case ' ':
+			if run != nil {
+				closeRun()
+			}
+			o, n, seenOld, seenNew = o+1, n+1, seenOld+1, seenNew+1
+			continue
+		case '-', '+':
+		default:
+			return nil, fmt.Errorf("%w: a line starts with neither ' ', '-', '+' nor '\\'", ErrPatch)
+		}
+		if run == nil {
+			run = &Edit{Path: path, OldStart: o, NewStart: n}
+		}
+		if line[0] == '-' {
+			run.OldLines++
+			o, seenOld = o+1, seenOld+1
+		} else {
+			run.NewLines++
+			n, seenNew = n+1, seenNew+1
+		}
+	}
+	if run != nil {
+		closeRun()
+	}
+	if seenOld != oldLines || seenNew != newLines {
+		return nil, fmt.Errorf("%w: its lines give %d old and %d new, and its header %d and %d", ErrPatch, seenOld, seenNew, oldLines, newLines)
+	}
+	return out, nil
+}
+
+// fileLines returns a file's lines: each piece up to and including an LF,
+// and a last piece without one when text doesn't end with LF (spec 10.6).
+func fileLines(text string) []string {
+	var out []string
+	for text != "" {
+		i := strings.IndexByte(text, '\n')
+		if i < 0 {
+			return append(out, text)
+		}
+		out, text = append(out, text[:i+1]), text[i+1:]
+	}
+	return out
+}
+
+// EditFromTexts returns the edit of one change to the file path, from the
+// file's text before and after it (spec 10.6): what is left of their lines
+// once the longest run of leading lines they share, and then the longest
+// run of trailing lines they share among the rest, are dropped. ok is
+// false for a change that leaves every line as it was.
+func EditFromTexts(path, before, after string) (e Edit, ok bool) {
+	a, b := fileLines(before), fileLines(after)
+	p := 0
+	for p < len(a) && p < len(b) && a[p] == b[p] {
+		p++
+	}
+	q := 0
+	for q < len(a)-p && q < len(b)-p && a[len(a)-1-q] == b[len(b)-1-q] {
+		q++
+	}
+	e = Edit{Path: path, OldStart: p, OldLines: len(a) - p - q, NewStart: p, NewLines: len(b) - p - q}
+	if e.OldLines == 0 && e.NewLines == 0 {
+		return Edit{}, false
+	}
+	if e.OldLines > 0 {
+		e.OldStart++
+	}
+	if e.NewLines > 0 {
+		e.NewStart++
+	}
+	return e, true
+}
+
 // Hunk is an edit hunk as f carries it: the path's keyed value and the
-// four numbers of the unified diff header (spec 10.6).
+// four numbers of a zero-context hunk (spec 10.6).
 type Hunk struct {
 	P  Value `json:"p"`
 	OS int   `json:"os"`
