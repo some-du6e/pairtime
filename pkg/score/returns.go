@@ -56,6 +56,16 @@ func returnsFor(k event.AnchorKind, c event.PromptClass) bool {
 	return false
 }
 
+// projectWindow reports whether SM 3.2 can resolve a window of class c to a
+// project: a terminal, an editor or an agent app (rules 1 to 3).
+func projectWindow(c event.AppClass) bool {
+	switch c {
+	case event.AppTerminal, event.AppEditor, event.AppAgentApp:
+		return true
+	}
+	return false
+}
+
 // markReturns applies the return rule to every silent run (SM 2.1).
 func (d *deriver) markReturns() {
 	p := d.pres
@@ -68,8 +78,13 @@ func (d *deriver) markReturns() {
 			continue
 		}
 		start, end := p.slots[run.i].Start, p.slots[run.j-1].End()
+		// The act must be in the project that held focus through the run,
+		// so the window must resolve to one. SM 3.2 gives a browser, a chat
+		// app or any other app none, whatever its focus record names, so a
+		// silence there is no returned run, and no lookup shares a returned
+		// slot with another project (SM 5.1).
 		focus := d.focus.at(start)
-		if focus.project == "" {
+		if focus.project == "" || !projectWindow(focus.class) {
 			continue
 		}
 		// Of the anchors after the run, the first one on record within

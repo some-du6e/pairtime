@@ -86,7 +86,11 @@
 // project and whether or not its act has a session, in SM 3.3's order. The
 // window that credits the slot's first credited second gives the slot its
 // project, only that project's windows credit the rest of it, and what they
-// don't credit is X.ambiguous.
+// don't credit is X.ambiguous. A terminal hosting no harness is ambiguous
+// too, as SM 3.2 rule 1 has it until v1.5's shell hook reports a cwd, and
+// the orchestrator extended D-ambiguous-anchors to it on 2026-11-20, so
+// anchors count there as well. An agent app hosting no session keeps rule
+// 3 and resolves to no project.
 //
 // Rule 2 prefers verified heartbeats (D-rule2-sidedoor). A side-door one,
 // from a plugin, the bridge or a heartbeat that failed the peer-process
@@ -120,12 +124,15 @@
 //   - SC1's typed-edit focus test takes the editor's project the same way,
 //     at the edit: the latest heartbeat with input in the same or previous
 //     slot, up to the edit itself, a verified one first, then the record.
-//   - The return rule (SM 2.1) still needs a window that names one
-//     project, so a long silence in a window hosting several ends with its
-//     tail. Its think part credits a slot only when the slot resolves to
-//     the run's project or to none, so that a slot keeps one project (SM
-//     5.1) when a heartbeat after the input that ends the run gives an
-//     editor slot to another one.
+//   - The return rule (SM 2.1) still needs a window that SM 3.2 resolves
+//     to one project: a terminal, an editor or an agent app whose focus
+//     record names it. So a long silence in a window hosting several ends
+//     with its tail, and so does one in a browser, a chat app or another
+//     app, whatever its record names. Its think part credits a slot only
+//     when the slot resolves to the run's project, so that a slot keeps one
+//     project (SM 5.1) when a heartbeat after the input that ends the run
+//     gives an editor slot to another one, and no lookup shares a returned
+//     slot with another project.
 //
 // # What WP-SC4 builds
 //

@@ -109,6 +109,21 @@ func TestReturnRule(t *testing.T) {
 	typedPrompt := func(resume int64) func(b *tl) {
 		return func(b *tl) { b.prompt(at(resume+19), event.ViaHook, "s_1", "p_1", "t_2", 30) }
 	}
+	t.Run("SM 2.1, 3.2 rule 4: a silence in a browser returns nothing, though its focus record names the prompt's project, since a browser resolves to none", func(t *testing.T) {
+		got := silence(event.AppBrowser, 451, typedPrompt(451)).run(t, Device{})
+		// The prompt is still a substantive anchor, the one that returns
+		// the same silence in a terminal (below).
+		prompt := false
+		for _, a := range got.Anchors {
+			prompt = prompt || a.T == at(470) && a.Kind == event.AnchorSubstantivePrompt
+		}
+		if !prompt {
+			t.Fatalf("anchors %+v, want the substantive prompt at 470 s", got.Anchors)
+		}
+		if len(got.Returns) != 0 {
+			t.Errorf("returned runs %+v, want none", got.Returns)
+		}
+	})
 	t.Run("SM 2.1: a 160-word answer after the last touch, a 6-minute silence, then a typed prompt, earns 53 + 120 = 173 s", func(t *testing.T) {
 		got := silence(event.AppTerminal, 451, typedPrompt(451)).run(t, Device{})
 		if len(got.Returns) != 1 {
