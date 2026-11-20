@@ -745,14 +745,6 @@ func TestScrub(t *testing.T) {
 				}
 			}
 		}},
-		{"a home path is replaced in every spelling", func(t *testing.T) {
-			for _, want := range []string{`/home/capture/pairtime-capture/project`, `C:\\Users\\capture\\pairtime-capture`,
-				`C%3A/Users/capture/pairtime-capture`, `C:\\\\Users\\\\capture\\\\x`, `-home-capture-pairtime-capture-project`} {
-				if !strings.Contains(all.String(), want) {
-					t.Errorf("no %s in the output", want)
-				}
-			}
-		}},
 		{"names and addresses get their placeholders", func(t *testing.T) {
 			for _, want := range []string{"capture@capture-host", "Capture User <capture@example.invalid>", `"school":"REDACTED"`, "capture_TOKEN"} {
 				if !strings.Contains(all.String(), want) {
@@ -790,12 +782,6 @@ func TestScrub(t *testing.T) {
 						t.Errorf("%s: invalid JSON after the scrub: %s", path, line)
 					}
 				}
-			}
-		}},
-		{"folder names are scrubbed like file contents", func(t *testing.T) {
-			want := "transcripts/home/.claude/projects/-home-capture-pairtime-capture-project/" + plantedSession + ".jsonl"
-			if _, ok := out[want]; !ok {
-				t.Fatalf("no %s; got %v", want, keys(out))
 			}
 		}},
 		{"a file that isn't UTF-8 text is left out", func(t *testing.T) {
@@ -845,6 +831,62 @@ func TestScrub(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, c.check)
 	}
+
+	// Every spelling of a home folder, from a scrub that knows only the home
+	// folders. Their last parts aren't account names, so nothing but the
+	// home rules can replace them, and a spelling the scrub doesn't make
+	// survives.
+	t.Run("a home folder is replaced in every spelling the files use", func(t *testing.T) {
+		spellings := []struct{ name, in, want string }{
+			{"as is", `/srv/homes/qz9-casa/pairtime-capture/project`, `/home/capture/pairtime-capture/project`},
+			{"as is, on Windows", `C:\Profiles\Qz9 Casa\x`, `C:\Users\capture\x`},
+			{"JSON-escaped", `"C:\\Profiles\\Qz9 Casa\\pairtime-capture"`, `"C:\\Users\\capture\\pairtime-capture"`},
+			{"escaped twice, in JSON inside a JSON string", `"{\"cwd\":\"C:\\\\Profiles\\\\Qz9 Casa\\\\x\"}"`,
+				`\"C:\\\\Users\\\\capture\\\\x\"`},
+			{"with forward slashes", `C:/Profiles/Qz9 Casa/x`, `C:/Users/capture/x`},
+			{"in a file URL", `file:///c%3A/Profiles/Qz9%20Casa/x`, `file:///C%3A/Users/capture/x`},
+			{"URL-encoded with its backslashes", `C%3A%5CProfiles%5CQz9%20Casa%5Cx`, `C%3A%5CUsers%5Ccapture%5Cx`},
+			{"with JSON's escaped slashes", `"\/srv\/homes\/qz9-casa\/x"`, `"\/home\/capture\/x"`},
+			{"as Claude Code names a project folder", `-srv-homes-qz9-casa-pairtime-capture-project`,
+				`-home-capture-pairtime-capture-project`},
+			{"as Claude Code names a Windows project folder", `C--Profiles-Qz9-Casa-pairtime-capture-project`,
+				`C--Users-capture-pairtime-capture-project`},
+		}
+		var lines []string
+		for _, c := range spellings {
+			lines = append(lines, c.in)
+		}
+		dir := t.TempDir()
+		folder := "transcripts/home/.claude/projects/-srv-homes-qz9-casa-pairtime-capture-project/s.jsonl"
+		write(t, filepath.Join(dir, "run", "notes.txt"), strings.Join(lines, "\n")+"\n")
+		write(t, filepath.Join(dir, "run", filepath.FromSlash(folder)), "{}\n")
+		r := run(t, ".", nil, quiet, python(t, "scrub.py", "--no-detect", "--home", "/srv/homes/qz9-casa", "--home", `C:\Profiles\Qz9 Casa`,
+			filepath.Join(dir, "run"), filepath.Join(dir, "out"))...)
+		if r.code != 0 {
+			t.Fatalf("exit %d:\n%s%s", r.code, r.stdout, r.stderr)
+		}
+		out := tree(t, filepath.Join(dir, "out"))
+		got := out["notes.txt"]
+		for _, c := range spellings {
+			t.Run(c.name, func(t *testing.T) {
+				if !strings.Contains(got, c.want) {
+					t.Errorf("no %s in:\n%s", c.want, got)
+				}
+			})
+		}
+		t.Run("folder names are scrubbed like file contents", func(t *testing.T) {
+			if _, ok := out["transcripts/home/.claude/projects/-home-capture-pairtime-capture-project/s.jsonl"]; !ok {
+				t.Fatalf("got %v", keys(out))
+			}
+		})
+		t.Run("no spelling of either home survives", func(t *testing.T) {
+			for path, text := range out {
+				if strings.Contains(strings.ToLower(path+text), "qz9") {
+					t.Errorf("%s still holds qz9:\n%s", path, text)
+				}
+			}
+		})
+	})
 
 	// The person's own instruction files: a line of one in the capture means
 	// the harness loaded it, whatever the isolation was meant to do. The
