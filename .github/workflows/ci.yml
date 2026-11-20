@@ -332,6 +332,9 @@ jobs:
           plain=$(testfiles)
           tagged=$(testfiles -tags desktop)
           only_desktop=$(comm -13 <(printf '%s\n' "$plain") <(printf '%s\n' "$tagged"))
+          # Printed, so the log shows the check had files to look at.
+          echo "Test files that build on Linux only with -tags desktop:"
+          sed 's/^/  /' <<<"$only_desktop"
           while IFS= read -r f; do
             case "$f" in "" | *_desktop_test.go) continue ;; esac
             # A file of helpers, such as one shared with darwin, is fine.
@@ -360,6 +363,7 @@ jobs:
 
           # Type-checks the desktop test files and what only they import,
           # such as godbus's prop package, on every PR, with no X server.
+          echo "go vet -tags desktop ./..."
           go vet -tags desktop ./... || fail=1
           exit "$fail"
 
