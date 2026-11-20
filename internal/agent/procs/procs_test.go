@@ -5,10 +5,12 @@ package procs
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
 	"slices"
+	"sync"
 	"testing"
 	"time"
 
@@ -303,6 +305,58 @@ func TestScanOverTime(t *testing.T) {
 		// The new 121 and 132 are left; 111 and the old 121 have exited.
 		if len(s.reported) != 2 || len(s.claimed) != 0 {
 			t.Errorf("remembers %d reported and %d claimed processes, want 2 and 0", len(s.reported), len(s.claimed))
+		}
+	})
+}
+
+// TestClaimDuringAScan has a hook claim a process while the scan that
+// found it is still reporting, which the hook path can do from its own
+// goroutine at any moment.
+func TestClaimDuringAScan(t *testing.T) {
+	f := &fake{procs: terminal()}
+	var mu sync.Mutex
+	var order []string
+	note := func(what string, s Session) {
+		mu.Lock()
+		defer mu.Unlock()
+		order = append(order, fmt.Sprintf("%s %d", what, s.PID))
+	}
+	claimed := make(chan struct{})
+	first := true
+	var s *Scanner
+	s = New(Options{
+		Read: f.read,
+		OS:   platform.Linux,
+		Self: me,
+		Boot: boot,
+		Now:  func() time.Time { return sec(0) },
+		Report: func(sess Session) {
+			note("report", sess)
+			if !first {
+				return
+			}
+			first = false
+			// The hook for 121 comes while the scan reports 111, before it
+			// has reported 121.
+			go func() {
+				defer close(claimed)
+				p, _ := platform.NewTable(platform.Linux, f.procs).Get(121)
+				s.Claim(boot, p)
+			}()
+			time.Sleep(50 * time.Millisecond)
+		},
+		Withdraw: func(sess Session) { note("withdraw", sess) },
+	})
+	if _, err := s.Scan(); err != nil {
+		t.Fatal(err)
+	}
+	<-claimed
+	t.Run("the session is withdrawn after Report has it, never before", func(t *testing.T) {
+		mu.Lock()
+		defer mu.Unlock()
+		want := []string{"report 111", "report 121", "report 132", "withdraw 121"}
+		if !slices.Equal(order, want) {
+			t.Errorf("the scanner called %q, want %q", order, want)
 		}
 	})
 }

@@ -85,11 +85,15 @@ type Store interface {
 // Options configure a Scanner.
 type Options struct {
 	// Report gets each session, once, on the goroutine that ran the scan.
+	// It runs with the Scanner locked, so that a Claim of the same process
+	// can't withdraw the session before Report has it, and so it must
+	// return quickly and must not call the Scanner.
 	Report func(Session)
 	// Withdraw gets each reported session whose process a hook claimed
-	// afterwards, on the goroutine that called Claim. The session fires
-	// hooks after all, so the hookless session.start Report gave for it
-	// should be withdrawn, or merged into the session its hooks name.
+	// afterwards, on the goroutine that called Claim, after Report had it.
+	// The session fires hooks after all, so the hookless session.start
+	// Report gave for it should be withdrawn, or merged into the session
+	// its hooks name.
 	Withdraw func(Session)
 	// Running, when set, gets the number of this user's harness session
 	// processes after every scan, on the goroutine that ran it: hooked or
@@ -308,11 +312,11 @@ func (s *Scanner) Scan() ([]Session, error) {
 	if changed {
 		s.putLocked()
 	}
-	s.mu.Unlock()
-
 	for _, sess := range found {
 		s.opts.Report(sess)
 	}
+	s.mu.Unlock()
+
 	// After Report, so an agent killed in between reports the session
 	// again rather than not at all.
 	if changed {
