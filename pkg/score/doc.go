@@ -152,8 +152,10 @@
 //   - An uncredited second takes the first reason that applies in the order
 //     docs/errata/2026-11-19-sm-6.6-uncredited-codes.md proposes, with
 //     X.no_input on the seconds a no-input prompt's lead would have
-//     covered, as it says, and X.lookup_cap for a lookup's seconds past
-//     LOOKUP_MAX_S. The erratum's rule 4 names no code for the run of a
+//     covered, as it says, X.lookup_cap for a lookup's seconds past
+//     LOOKUP_MAX_S, and X.bucket_cap for a present, focused second within
+//     READ_HORIZON_S of an act whose bucket is empty only because
+//     BUCKET_MAX_S evicted output that hasn't expired. The erratum's rule 4 names no code for the run of a
 //     no-input turn, which is X.agent_only, SM 5.2's code for an agent turn
 //     that ran with nothing credited. Seconds before the presence sampler
 //     ran are X.absent until lookback (WP-SC7).

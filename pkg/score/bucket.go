@@ -103,6 +103,11 @@ type bucket struct {
 	ops     []bucketOp
 	next    int
 	entries []entry
+	// evicted is what BUCKET_MAX_S evicted that would still be in the
+	// bucket without the cap: it expires and resets as the entries do, and
+	// a second that finds the bucket empty takes from it instead, as
+	// X.bucket_cap (SM 5.2).
+	evicted []entry
 	// spans are the times the session's turns ran, sorted and merged, for
 	// SUP against READ, and cur indexes the first of them that hadn't ended
 	// at the last time runningAt was asked about.
@@ -117,7 +122,7 @@ func (b *bucket) advance(r rules, t int64) {
 		op := b.ops[b.next]
 		b.expire(r, op.t)
 		if op.reset {
-			b.entries = b.entries[:0]
+			b.entries, b.evicted = b.entries[:0], b.evicted[:0]
 		}
 		if op.units > 0 {
 			b.entries = append(b.entries, entry{t: op.t, units: op.units, prose: op.prose, src: op.src})
@@ -129,6 +134,7 @@ func (b *bucket) advance(r rules, t int64) {
 			take := min(over, b.entries[0].units)
 			b.entries[0].units -= take
 			over -= take
+			b.evicted = append(b.evicted, entry{t: b.entries[0].t, units: take})
 			if b.entries[0].units == 0 {
 				b.entries = b.entries[1:]
 			}
@@ -143,6 +149,28 @@ func (b *bucket) expire(r rules, t int64) {
 		i++
 	}
 	b.entries = b.entries[i:]
+	i = 0
+	for i < len(b.evicted) && t-b.evicted[i].t > r.bucketTTL {
+		i++
+	}
+	b.evicted = b.evicted[i:]
+}
+
+// takeEvicted takes up to u units of what BUCKET_MAX_S evicted, oldest
+// first, and reports whether there was any.
+func (b *bucket) takeEvicted(u int64) bool {
+	if len(b.evicted) == 0 {
+		return false
+	}
+	for u > 0 && len(b.evicted) > 0 {
+		take := min(u, b.evicted[0].units)
+		b.evicted[0].units -= take
+		u -= take
+		if b.evicted[0].units == 0 {
+			b.evicted = b.evicted[1:]
+		}
+	}
+	return true
 }
 
 // total is what the bucket holds, or only its prose.

@@ -112,8 +112,9 @@ type second struct {
 	// label is the side-door label of what a drained second took from the
 	// bucket, or "" (DESIGN 6.4).
 	label event.Label
-	// capped marks a present second of a lookup run past LOOKUP_MAX_S.
-	capped bool
+	// capped marks a present second of a lookup run past LOOKUP_MAX_S, and
+	// bucketCap one the bucket would have credited but for BUCKET_MAX_S.
+	capped, bucketCap bool
 }
 
 // secSpan is the half-open interval [from, to) of second indexes.
@@ -490,6 +491,17 @@ func (c *creditor) anchorsAndBuckets() {
 			}
 		}
 		if pick == nil {
+			// The buckets are empty. If one of them is only because
+			// BUCKET_MAX_S evicted output that would still be there, the
+			// cap is why the second isn't credited (SM 5.2).
+			if !proseOnly {
+				for _, b := range c.buckets[proj] {
+					if b.takeEvicted(oneSecond) {
+						sec.bucketCap = true
+						break
+					}
+				}
+			}
 			continue
 		}
 		// SM 2.7 credits the second when the bucket holds anything and
@@ -624,8 +636,10 @@ func lowerLevel(a, b event.Evidence) event.Evidence {
 // lookup's cap, X.other_focus with focus outside every project's windows,
 // X.ambiguous when the focus resolves to no single project, X.no_input on
 // a second the lead of a no-input prompt of the focused project would have
-// covered, then, while a turn of the focused project runs, X.automated if
-// automation started it and X.agent_only otherwise, and X.no_anchor last.
+// covered, X.bucket_cap on one the bucket would have credited but for
+// BUCKET_MAX_S, then, while a turn of the focused project runs, X.automated
+// if automation started it and X.agent_only otherwise, and X.no_anchor
+// last.
 // This is the order docs/errata/2026-11-19-sm-6.6-uncredited-codes.md
 // proposes, with X.no_input where it puts it. Its rule 4 names no code for
 // the run of a no-input turn, which gets SM 5.2's code for an agent turn
@@ -647,6 +661,9 @@ func (c *creditor) uncredited(k int, s *Slot) event.Reason {
 	}
 	if covers(c.noInputLeads[s.FocusProject], k) {
 		return event.ReasonNoInput
+	}
+	if sec := c.state(k); sec != nil && sec.bucketCap {
+		return event.ReasonBucketCap
 	}
 	if r := c.runs[s.FocusProject]; r != nil {
 		switch {
