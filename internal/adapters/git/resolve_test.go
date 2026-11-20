@@ -270,7 +270,9 @@ func TestResolve(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if !linked.Linked || linked.CommonDir != main[0].CommonDir || linked.Project != main[0].Project {
+				// Keys compare folded paths: on Windows the two spellings may
+				// differ in the case of a letter, as git and Go each read it.
+				if !linked.Linked || foldPath(linked.CommonDir) != foldPath(main[0].CommonDir) || linked.Project != main[0].Project {
 					t.Errorf("linked worktree %+v, want a linked worktree with the common dir %q", linked, main[0].CommonDir)
 				}
 				if m := res.Map(); len(m.Repos) != 1 {
