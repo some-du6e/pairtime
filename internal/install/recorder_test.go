@@ -111,3 +111,31 @@ type badRecord struct {
 }
 
 func (e badRecord) Record() json.RawMessage { return e.data }
+
+func TestPlanInstallRefusesTwoEditsOfAKindForOneTarget(t *testing.T) {
+	undoers[kindKeyed] = undoKeyed
+	t.Cleanup(func() { delete(undoers, kindKeyed) })
+	tests := []struct {
+		name  string
+		edits func(dir string) []Edit
+		ok    bool
+	}{
+		{"an item with two edits of one kind for one file is refused, since the manifest keeps one record for both", func(dir string) []Edit {
+			return []Edit{keyedEdit{filepath.Join(dir, "app.cfg"), "k1"}, keyedEdit{filepath.Join(dir, "app.cfg"), "k2"}}
+		}, false},
+		{"an item with edits of one kind for two files is planned", func(dir string) []Edit {
+			return []Edit{keyedEdit{filepath.Join(dir, "a.cfg"), "k1"}, keyedEdit{filepath.Join(dir, "b.cfg"), "k2"}}
+		}, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p, err := newInstaller(t).PlanInstall([]Item{{ID: "keyed", Edits: tt.edits(t.TempDir())}})
+			if p != nil {
+				p.Close()
+			}
+			if (err == nil) != tt.ok {
+				t.Errorf("PlanInstall = %v, want it to plan: %v", err, tt.ok)
+			}
+		})
+	}
+}

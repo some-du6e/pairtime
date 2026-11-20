@@ -54,7 +54,13 @@ const balloonLifetime = 30 * time.Second
 // rather than queued when Windows can't show it at once (NIF_REALTIME).
 // Focus Assist, or Do Not Disturb on Windows 11, holds it back like any
 // other notification.
-func ShowBalloon(ctx context.Context, title, text string) error {
+//
+// shown, when not nil, is called on the balloon's thread as soon as the
+// shell has taken the balloon, before the wait for it to go. An error
+// ShowBalloon returns after that is about the wait or the cleanup, such as
+// SetTimer failing: the balloon went up. A caller that has stopped
+// listening by then, after ctx and balloonCleanupWait, may still hear it.
+func ShowBalloon(ctx context.Context, title, text string, shown func()) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -80,7 +86,7 @@ func ShowBalloon(ctx context.Context, title, text string) error {
 		// This goroutine never unlocks it, so the thread ends with the
 		// goroutine and carries nothing of the window's to other work.
 		runtime.LockOSThread()
-		done <- showBalloonOnThisThread(ctx, title, text, balloonLifetime)
+		done <- showBalloonOnThisThread(ctx, title, text, balloonLifetime, shown)
 	}()
 	return awaitBalloon(ctx, done, balloonCleanupWait)
 }
@@ -114,8 +120,9 @@ func awaitBalloon(ctx context.Context, done <-chan error, cleanup time.Duration)
 }
 
 // showBalloonOnThisThread makes the window and icon, shows the balloon,
-// waits, and removes both. The caller has locked its OS thread.
-func showBalloonOnThisThread(ctx context.Context, title, text string, lifetime time.Duration) error {
+// calls shown if it isn't nil, waits, and removes both. The caller has
+// locked its OS thread.
+func showBalloonOnThisThread(ctx context.Context, title, text string, lifetime time.Duration, shown func()) error {
 	b, err := newBalloon()
 	if err != nil {
 		return err
@@ -130,6 +137,9 @@ func showBalloonOnThisThread(ctx context.Context, title, text string, lifetime t
 	}
 	if err := b.show(title, text); err != nil {
 		return err
+	}
+	if shown != nil {
+		shown()
 	}
 	return b.wait(ctx, lifetime)
 }

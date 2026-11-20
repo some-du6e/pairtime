@@ -260,6 +260,10 @@ func insertLast(src []byte, c *Value, item func(indent string, st Style) string,
 // line to the line before. When a // comment ends that line and the rest
 // holds a value or a bracket, the comment would swallow it, so then only
 // the item and its separator go, and the line break stays.
+//
+// A comment beside the separator stays: after the item before, or before
+// the item after, it belongs to that item. Only white space around the
+// separator goes with it.
 func Remove(src []byte, c *Value, i int) []byte {
 	closeAt := c.End - 1
 	it := c.Items[i]
@@ -304,10 +308,26 @@ func Remove(src []byte, c *Value, i int) []byte {
 			}
 			return splice(out, sep, sep+1, "")
 		}
+		// The item shares its line with the comma before it, and goes with
+		// that comma. The comma after prev stays when the file writes
+		// trailing commas, as prev's trailing comma again.
+		blankBefore := isBlank(src[prev.Value.End:sep]) // between prev and the comma
+		blankAfter := isBlank(src[sep+1 : start])       // between the comma and the item
 		if trailing >= 0 {
-			return splice(src, sep+1, trailing+1, "")
+			if blankAfter {
+				return splice(src, sep+1, trailing+1, "")
+			}
+			return splice(src, start, trailing+1, "")
 		}
-		return splice(src, prev.Value.End, end, "")
+		from := sep // where the comma's deletion starts
+		if blankBefore {
+			from = prev.Value.End
+		}
+		if blankAfter {
+			return splice(src, from, end, "")
+		}
+		out := splice(src, start, end, "") // the later offset first, so from stays right
+		return splice(out, from, sep+1, "")
 	default:
 		next := c.Items[i+1]
 		from := c.Start + 1 // where the last token before the item ends
@@ -317,7 +337,16 @@ func Remove(src []byte, c *Value, i int) []byte {
 		if trailing >= 0 && joins(from, next.Start) {
 			return splice(src, lb, trailing+1, "")
 		}
-		return splice(src, start, next.Start, "")
+		to := next.Start
+		if trailing >= 0 && !isBlank(src[trailing+1:next.Start]) {
+			// A comment before next is next's: the deletion stops at the
+			// comma, and takes only the spaces after it on its line.
+			to = trailing + 1
+			for to < next.Start && (src[to] == ' ' || src[to] == '\t') {
+				to++
+			}
+		}
+		return splice(src, start, to, "")
 	}
 }
 
@@ -335,11 +364,11 @@ func endsInLineComment(src []byte, from, lb int) bool {
 	for i := from; i+1 < lb; {
 		switch {
 		case src[i] == '/' && src[i+1] == '/':
-			n := bytes.IndexByte(src[i:lb], '\n')
-			if n < 0 {
+			end := lineCommentEnd(src[:lb], i)
+			if end == lb {
 				return true
 			}
-			i += n + 1
+			i = end + 1
 		case src[i] == '/' && src[i+1] == '*':
 			n := bytes.Index(src[i+2:lb], []byte("*/"))
 			if n < 0 {
@@ -386,11 +415,7 @@ func skipBlank(src []byte, i int) int {
 			i++
 		case '/':
 			if i+1 < len(src) && src[i+1] == '/' {
-				n := bytes.IndexByte(src[i:], '\n')
-				if n < 0 {
-					return len(src)
-				}
-				i += n
+				i = lineCommentEnd(src, i)
 			} else if i+1 < len(src) && src[i+1] == '*' {
 				n := bytes.Index(src[i+2:], []byte("*/"))
 				if n < 0 {
@@ -425,15 +450,16 @@ func lineEnd(src []byte, i, limit int) int {
 			return i
 		case '/':
 			if j+1 < limit && src[j+1] == '/' {
-				n := bytes.IndexByte(src[j:], '\n')
-				if n < 0 {
+				switch e := lineCommentEnd(src, j); {
+				case e >= limit:
+					return i
+				case src[e] == '\n', e+1 < len(src) && src[e+1] == '\n':
+					return e // "\n" or "\r\n"
+				default:
+					// A carriage return alone ends the comment, but the edits
+					// lay lines out by "\n", so the line goes on.
 					return i
 				}
-				n += j
-				if src[n-1] == '\r' {
-					return n - 1
-				}
-				return n
 			}
 			if j+1 < limit && src[j+1] == '*' {
 				n := bytes.Index(src[j+2:], []byte("*/"))

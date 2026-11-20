@@ -25,7 +25,9 @@ type linuxBackend struct {
 	n linux.Notifications
 }
 
-func (b linuxBackend) Show(ctx context.Context, m Message) error {
+// Show returns as soon as the server has the notification, so it never
+// calls shown.
+func (b linuxBackend) Show(ctx context.Context, m Message, _ func()) error {
 	_, err := b.n.Notify(ctx, m.Title, m.Body)
 	if errors.Is(err, linux.ErrNotifyNoBus) || errors.Is(err, linux.ErrNotifyNoServer) {
 		return fmt.Errorf("%w: %w", ErrUnavailable, err)

@@ -5,6 +5,7 @@ package install
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -299,6 +300,27 @@ func TestClaudeCodeUninstallKeepsChangesMadeAfterInstall(t *testing.T) {
 			},
 		},
 		{
+			name: "an empty hook list the teen added after install stays, as only pairtime's hooks leaving a list empty make it pairtime's",
+			change: func(t *testing.T, path string) {
+				src := readOrNil(t, path)
+				root, err := jsonc.Parse(src)
+				if err != nil {
+					t.Fatal(err)
+				}
+				writeFile(t, path, jsonc.AddMember(src, root.Get("hooks"), "PreCompact", []any{}, jsonc.StyleOf(src, root)))
+			},
+			check: func(t *testing.T, got, _ []byte) {
+				root, err := jsonc.Parse(before)
+				if err != nil {
+					t.Fatal(err)
+				}
+				want := jsonc.AddMember(before, root.Get("hooks"), "PreCompact", []any{}, jsonc.StyleOf(before, root))
+				if !bytes.Equal(got, want) {
+					t.Errorf("uninstall left\n%s\nwant\n%s", got, want)
+				}
+			},
+		},
+		{
 			name: "a pairtime hook the teen gave a timeout is still pairtime's, and goes",
 			change: func(t *testing.T, path string) {
 				src := readOrNil(t, path)
@@ -410,6 +432,49 @@ func TestClaudeCodeUninstallWhenTheFileIsGoneOrBroken(t *testing.T) {
 	}
 }
 
+func TestUninstallKeepsWhatTheTeenAddedToAFilePairtimeCreated(t *testing.T) {
+	tests := []struct {
+		name string
+		// edit is what the teen does to the settings.json pairtime created.
+		edit func(installed []byte) []byte
+		// want is what uninstall leaves, nil for no file.
+		want []byte
+	}{
+		{"a comment the teen added above the object keeps the file, with the comment",
+			func(b []byte) []byte { return append([]byte("// managed by dotfiles\n"), b...) },
+			[]byte("// managed by dotfiles\n{}\n")},
+		{"a comment the teen added below the object keeps the file, with the comment",
+			func(b []byte) []byte { return append(b, "// managed by dotfiles\n"...) },
+			[]byte("{}\n// managed by dotfiles\n")},
+		{"a file the teen only reindented inside the object still goes, as nothing outside it changed",
+			func(b []byte) []byte { return bytes.ReplaceAll(b, []byte("\n  "), []byte("\n    ")) },
+			nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			env := testEnv(t, "linux", nil)
+			path := ClaudeSettings(env)
+			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			item, err := ClaudeCode(env)
+			if err != nil {
+				t.Fatal(err)
+			}
+			in := newInstaller(t)
+			install(t, in, item)
+			writeFile(t, path, tt.edit(readOrNil(t, path)))
+
+			uninstall(t, in)
+			if tt.want == nil {
+				checkGone(t, path, "the settings file pairtime created")
+			} else if got := readOrNil(t, path); !bytes.Equal(got, tt.want) {
+				t.Errorf("after uninstall the file holds %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 // oldHooks returns a settings file with n hooks from an older pairtime
 // install, at another binary path, each in a group of its own.
 func oldHooks(n int) string {
@@ -425,6 +490,77 @@ func oldHooks(n int) string {
 	return b.String()
 }
 
+// oldGroup returns a settings file with one group of n hooks from an older
+// pairtime install, at another binary path.
+func oldGroup(n int) string {
+	var b strings.Builder
+	b.WriteString(`{"hooks": {"Stop": [{"hooks": [`)
+	for i := range n {
+		if i > 0 {
+			b.WriteString(", ")
+		}
+		fmt.Fprintf(&b, `{"type": "command", "command": "/opt/pairtime/bin/pairtime", "args": ["hook", "--harness", "claude_code", "--event", "Stop%d"]}`, i)
+	}
+	b.WriteString("]}]}}\n")
+	return b.String()
+}
+
+// pairtimeOnlyLists returns a settings file with n hook lists, each holding
+// one pairtime hook and nothing else.
+func pairtimeOnlyLists(n int) string {
+	var b strings.Builder
+	b.WriteString(`{"hooks": {`)
+	for i := range n {
+		if i > 0 {
+			b.WriteString(", ")
+		}
+		fmt.Fprintf(&b, `"Event%d": [{"hooks": [{"type": "command", "command": "/home/teen/.local/bin/pairtime", "args": ["hook", "--harness", "claude_code", "--event", "Event%d"]}]}]`, i, i)
+	}
+	b.WriteString("}}\n")
+	return b.String()
+}
+
+func TestClaudeCodeTakesOutAsManyHooksAsItAllows(t *testing.T) {
+	tests := []struct {
+		name string
+		src  string
+		// undo takes every pairtime hook out of src, as uninstall does for a
+		// file pairtime created; otherwise install merges into src.
+		undo bool
+	}{
+		{"exactly maxRemovals old pairtime hooks, each in a group of its own, are all replaced", oldHooks(maxRemovals), false},
+		{"a group of exactly maxRemovals old pairtime hooks is replaced", oldGroup(maxRemovals), false},
+		{"exactly maxRemovals lists of pairtime's hooks alone all go at uninstall, with the file pairtime created", pairtimeOnlyLists(maxRemovals), true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cur := Content{Exists: true, Data: []byte(tt.src), Mode: 0o644}
+			if tt.undo {
+				got, err := undoClaudeHooks(cur, Content{}, nil)
+				if err != nil {
+					t.Fatalf("undoClaudeHooks: %v", err)
+				}
+				if got.Exists {
+					t.Errorf("undoClaudeHooks leaves\n%s\nwant no file", got.Data)
+				}
+				return
+			}
+			env := testEnv(t, "linux", nil)
+			item, err := ClaudeCode(env)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, err := item.Edits[0].Apply(cur)
+			if err != nil {
+				t.Fatalf("Apply: %v", err)
+			}
+			if bytes.Contains(got.Data, []byte("/opt/pairtime")) || bytes.Count(got.Data, []byte(env.Exe)) != len(claudeHooks) {
+				t.Errorf("after Apply the file holds\n%s\nwant only the %d new hooks", got.Data, len(claudeHooks))
+			}
+		})
+	}
+}
+
 func TestClaudeCodeLeavesFilesItCantMergeAlone(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -433,7 +569,9 @@ func TestClaudeCodeLeavesFilesItCantMergeAlone(t *testing.T) {
 		want    string // in the error
 	}{
 		{"a file bigger than 4 MiB is left alone", `{"x": "` + strings.Repeat("a", 4<<20) + `"}`, 0o644, "bigger than the 4 MiB"},
+		{"a file under 4 MiB that pairtime's hooks would push past it is left alone", `{"x": "` + strings.Repeat("a", 4<<20-100) + `"}`, 0o644, "grow past the 4 MiB"},
 		{"a file with more pairtime hooks than pairtime ever writes is left alone", oldHooks(maxRemovals + 1), 0o644, "more pairtime hooks than pairtime ever writes"},
+		{"a group of more pairtime hooks than pairtime ever writes is left alone, though it would go in one removal", oldGroup(maxRemovals + 1), 0o644, "more pairtime hooks than pairtime ever writes"},
 		{"a file that isn't JSON is left alone", `{"model": }`, 0o644, "isn't valid JSON"},
 		{"a top level that isn't an object is left alone", `["model"]`, 0o644, "doesn't hold a JSON object"},
 		{"hooks that aren't an object are left alone", `{"hooks": ["x"]}`, 0o644, `"hooks" that isn't an object`},
@@ -462,6 +600,33 @@ func TestClaudeCodeLeavesFilesItCantMergeAlone(t *testing.T) {
 				t.Errorf("the file changed to %q", got)
 			}
 			checkGone(t, in.Dir, "pairtime's install directory")
+		})
+	}
+}
+
+func TestClaudeCodeReadsCommentsAsOtherReadersDo(t *testing.T) {
+	tests := []struct {
+		name string
+		src  string
+	}{
+		{"a line comment ended by a carriage return alone, as an old Mac editor saves it, doesn't hide the object after it", "// note\r{\"model\": \"x\"}"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			item, err := ClaudeCode(testEnv(t, "linux", nil))
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, err := item.Edits[0].Apply(Content{Exists: true, Data: []byte(tt.src), Mode: 0o644})
+			if err != nil {
+				t.Fatal(err)
+			}
+			// One object, the file's own, with the hooks merged in: a second
+			// object after it would make the file one no reader accepts.
+			root, err := jsonc.Parse(got.Data)
+			if err != nil || root.Kind != jsonc.Object || root.Get("model") == nil || root.Get("hooks").Find("Stop") < 0 {
+				t.Errorf("Apply gives\n%q\nwant the hooks merged into the object after the comment (%v)", got.Data, err)
+			}
 		})
 	}
 }
@@ -538,6 +703,52 @@ func TestInstallMakesFoldersAndUninstallRemovesThem(t *testing.T) {
 	}
 }
 
+func TestApplyRecordsOnlyTheFoldersItMakes(t *testing.T) {
+	autostart := filepath.Join(".config", "autostart")
+	tests := []struct {
+		name string
+		// made are the folders, under the home directory, that the teen
+		// makes between planning and Apply, outermost first.
+		made []string
+		// gone are the folders uninstall takes away: those Apply made.
+		gone []string
+	}{
+		{"folders the teen made between planning and Apply stay at uninstall", []string{".config", autostart}, nil},
+		{"a folder the teen made between planning and Apply stays at uninstall, and the one Apply made in it goes", []string{".config"}, []string{autostart}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			env := testEnv(t, "linux", nil)
+			item, err := Autostart(env)
+			if err != nil {
+				t.Fatal(err)
+			}
+			in := newInstaller(t)
+			p, err := in.PlanInstall([]Item{item})
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, d := range tt.made {
+				if err := os.Mkdir(filepath.Join(env.Home, d), 0o755); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := p.Apply(); err != nil {
+				t.Fatalf("Apply: %v", err)
+			}
+			uninstall(t, in)
+			for _, d := range tt.gone {
+				checkGone(t, filepath.Join(env.Home, d), "the folder Apply made")
+			}
+			for _, d := range tt.made {
+				if info, err := os.Stat(filepath.Join(env.Home, d)); err != nil || !info.IsDir() {
+					t.Errorf("uninstall took away %s, which the teen made: %v", d, err)
+				}
+			}
+		})
+	}
+}
+
 func TestReinstallAfterAnotherToolChangedTheFile(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -593,9 +804,13 @@ func TestInstallKeepsHowTheFileIsStored(t *testing.T) {
 		name string
 		link bool // settings.json links to a file in a dotfiles folder
 		mode fs.FileMode
+		// chmod, when set, is the mode the teen gives the file after
+		// install, which uninstall must keep.
+		chmod fs.FileMode
 	}{
-		{"a settings.json that links to a dotfiles folder stays a link, and the file it points to is edited", true, 0o644},
-		{"the file's mode is kept through install and uninstall", false, 0o640},
+		{"a settings.json that links to a dotfiles folder stays a link, and the file it points to is edited", true, 0o644, 0},
+		{"the file's mode is kept through install and uninstall", false, 0o640, 0},
+		{"a mode the teen gave the file after install is kept when uninstall puts its bytes back", false, 0o644, 0o600},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -622,7 +837,7 @@ func TestInstallKeepsHowTheFileIsStored(t *testing.T) {
 				t.Fatal(err)
 			}
 			in := newInstaller(t)
-			check := func(when string, want []byte) {
+			check := func(when string, want []byte, mode fs.FileMode) {
 				t.Helper()
 				if info, err := os.Lstat(path); err != nil || (info.Mode()&fs.ModeSymlink != 0) != tt.link {
 					t.Errorf("%s, settings.json is a link: %v, want %v (%v)", when, err == nil && info.Mode()&fs.ModeSymlink != 0, tt.link, err)
@@ -631,17 +846,24 @@ func TestInstallKeepsHowTheFileIsStored(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if info.Mode().Perm() != tt.mode {
-					t.Errorf("%s, the file's mode is %v, want %v", when, info.Mode().Perm(), tt.mode)
+				if info.Mode().Perm() != mode {
+					t.Errorf("%s, the file's mode is %v, want %v", when, info.Mode().Perm(), mode)
 				}
 				if got := readOrNil(t, real); !bytes.Equal(got, want) {
 					t.Errorf("%s, the file holds\n%s\nwant\n%s", when, got, want)
 				}
 			}
 			install(t, in, item)
-			check("after install", after)
+			check("after install", after, tt.mode)
+			mode := tt.mode
+			if tt.chmod != 0 {
+				if err := os.Chmod(real, tt.chmod); err != nil {
+					t.Fatal(err)
+				}
+				mode = tt.chmod
+			}
 			uninstall(t, in)
-			check("after uninstall", before)
+			check("after uninstall", before, mode)
 		})
 	}
 }
@@ -736,6 +958,31 @@ func TestUninstallKeepsLinks(t *testing.T) {
 				}
 				if got := readOrNil(t, moved); string(got) != "{}\n" {
 					t.Errorf("after uninstall the linked file holds\n%s\nwant {} and a newline", got)
+				}
+			},
+		},
+		{
+			name: "a settings.json pairtime created that becomes a link after the uninstall plan stops Apply, and the link stays",
+			run: func(t *testing.T, env Env, in *Installer) {
+				path := ClaudeSettings(env)
+				if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				item, err := ClaudeCode(env)
+				if err != nil {
+					t.Fatal(err)
+				}
+				install(t, in, item)
+				p, err := in.PlanUninstall() // deletes the file pairtime created
+				if err != nil {
+					t.Fatal(err)
+				}
+				moved := moveAndLink(t, env, path)
+				if err := p.Apply(); !errors.Is(err, ErrStale) {
+					t.Fatalf("Apply = %v, want ErrStale", err)
+				}
+				if !isLink(t, path) || readOrNil(t, moved) == nil {
+					t.Errorf("Apply took away the link %s or the file it points to", path)
 				}
 			},
 		},

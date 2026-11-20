@@ -26,7 +26,8 @@ const (
 // maxFileSize bounds a file target pairtime reads: 4 MiB, far more than
 // any real settings file or login item holds. A bigger one is refused
 // before it is parsed, since its parse tree would take many times its size
-// in memory.
+// in memory, and install refuses an edit that would make a file bigger,
+// since uninstall couldn't read it back.
 const maxFileSize = 4 << 20
 
 // read returns what t holds.
@@ -50,9 +51,11 @@ func (in *Installer) read(t Target) (Content, error) {
 // readFile returns what the file at path holds. A symbolic link is
 // followed, as the program that reads the file follows it.
 func readFile(path string) (Content, error) {
+	linfo, lerr := os.Lstat(path)
+	link := lerr == nil && linfo.Mode()&fs.ModeSymlink != 0
 	info, err := os.Stat(path)
 	if errors.Is(err, fs.ErrNotExist) {
-		if _, lerr := os.Lstat(path); lerr == nil {
+		if lerr == nil {
 			return Content{}, fmt.Errorf("%s is a link to a file that isn't there, so pairtime leaves it alone", path)
 		}
 		return Content{}, nil
@@ -77,7 +80,7 @@ func readFile(path string) (Content, error) {
 	if info.Size() > maxFileSize || len(data) > maxFileSize {
 		return Content{}, fmt.Errorf("%s is bigger than the %d MiB a settings file or login item could need, so pairtime leaves it alone", path, maxFileSize>>20)
 	}
-	return Content{Exists: true, Data: data, Mode: info.Mode().Perm()}, nil
+	return Content{Exists: true, Data: data, Mode: info.Mode().Perm(), link: link}, nil
 }
 
 // write makes t hold c. A file is replaced by an atomic rename with c's
@@ -164,20 +167,25 @@ func addDirs(dirs, more []string) []string {
 	return dirs
 }
 
-// makeDirs makes dirs, outermost first. A real directory that is already
-// there is fine; anything else at its name is an error.
-func makeDirs(dirs []string) error {
+// makeDirs makes dirs, outermost first, and returns those that were there
+// already: someone else made them since the plan, such as the desktop
+// making ~/.config/autostart while the teen read the consent screen, so
+// they aren't pairtime's. A real directory that is already there is fine;
+// anything else at its name is an error.
+func makeDirs(dirs []string) ([]string, error) {
+	var existed []string
 	for _, d := range dirs {
 		err := os.Mkdir(d, newDirMode)
 		if errors.Is(err, fs.ErrExist) {
 			if info, lerr := os.Lstat(d); lerr == nil && info.Mode().Type() == fs.ModeDir {
+				existed = append(existed, d)
 				continue
 			}
-			return fmt.Errorf("%s was made since the plan, and isn't a folder", d)
+			return existed, fmt.Errorf("%s was made since the plan, and isn't a folder", d)
 		}
 		if err != nil {
-			return err
+			return existed, err
 		}
 	}
-	return nil
+	return existed, nil
 }
