@@ -119,6 +119,8 @@ jobs:
               ;;
           esac
           echo "PINNED=$IMAGE:$TAG@$digest" >> "$GITHUB_ENV"
+          # gh run view shows annotations, so the line can be read without a browser.
+          echo "::notice title=Pin this image in deploy/compose.yml::image: $IMAGE:$TAG@$digest"
 
       - name: The pushed image starts
         # Pulled back by digest and run: both programs answer, and it runs

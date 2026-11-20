@@ -4,7 +4,7 @@ This is the procedure for the agent that runs pairtime's server on a host (DESIG
 
 The host builds nothing. It runs three containers from images pinned in `compose.yml`:
 
-- `pairtimed`, which is pairtimed under Litestream. Litestream restores the database from the bucket when the disk has none, then copies every change to the bucket within about 10 seconds.
+- `pairtimed`, which is pairtimed under Litestream. Litestream restores the database from the bucket when the disk has none, then copies every change to the bucket within about 20 seconds.
 - `cloudflared`, which carries `https://<host>` to pairtimed with no open port on the host.
 - `witness`, which pushes the signed day roots pairtimed writes to the public repository `some-du6e/pairtime-witness` with a deploy key.
 
@@ -27,7 +27,7 @@ curl -fsS -A "$UA" https://pairtime.karimeltaib.com/healthz
 
 ```sh
 gh run list --repo some-du6e/pairtime --workflow server-image.yml --branch main --status success --limit 1
-gh run view <run id> --repo some-du6e/pairtime   # the summary shows the image: line
+gh run view <run id> --repo some-du6e/pairtime   # its notice is the image: line
 ```
 
 Until the first push is pinned, the line reads `ghcr.io/some-du6e/pairtimed:UNRELEASED`, which can't be pulled. If you see that, ask the orchestrator for the PR that pins it, and deploy once it has merged. The orchestrator makes the package public once, after its first push, so the host pulls it without logging in.
@@ -55,7 +55,7 @@ Ask for anything on this list you don't have before step 1 (DESIGN 10.5):
 5. His age public key, `age1...`. The private key stays with him and never comes near the host.
 6. The three push-monitor URLs (step 4).
 7. The HCA subs of the people who run the instance, for `operators` (step 9). Alpha testers aren't operators.
-8. Admin rights on `some-du6e/pairtime-witness`, or Karim adding the deploy key himself (step 5).
+8. A deploy key with write access to `some-du6e/pairtime-witness`. The pilot host has one staged already (step 5).
 
 ## First deploy
 
@@ -106,7 +106,7 @@ Make three push monitors in Uptime Kuma and put their URLs in `config/secrets.en
 
 | Variable | Who pings it | Set the monitor to expect a ping every |
 |---|---|---|
-| `PAIRTIME_LITESTREAM_HEARTBEAT_URL` | Litestream, while the database has synced in the last 5 minutes | 5 minutes, with a few retries |
+| `PAIRTIME_LITESTREAM_HEARTBEAT_URL` | Litestream, while the database has synced in the last 5 minutes | 5 minutes, with 10 minutes of grace: on an idle server Litestream syncs only after pairtimed's 5-minute heartbeat writes, so its pings can come a little late |
 | `PAIRTIME_HEARTBEAT_URL` | pairtimed, every 5 minutes while `/readyz` passes | 5 minutes, with a few retries |
 | `PAIRTIME_SNAPSHOT_HEARTBEAT_URL` | pairtimed, after each nightly snapshot is stored, at about 03:10 UTC | 26 hours |
 
