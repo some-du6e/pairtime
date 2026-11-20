@@ -16,6 +16,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/some-du6e/pairtime/internal/platform/clock"
 )
 
 func newMessage(t *testing.T, n int) Message {
@@ -24,6 +26,10 @@ func newMessage(t *testing.T, n int) Message {
 }
 
 func utcNow() time.Time { return time.Now().UTC() }
+
+// stampNow is the drain's clock in tests: the wall time, with no monotonic
+// reading.
+func stampNow() clock.Stamp { return clock.Stamp{Wall: utcNow()} }
 
 // spoolFiles lists what is in the inbox directory.
 func spoolFiles(t *testing.T, dir string) []string {
@@ -90,7 +96,7 @@ func (k *keepSink) Deliver(d Delivery) error {
 
 func drain(t *testing.T, dir string, sink Sink) DrainResult {
 	t.Helper()
-	res, err := Drain(dir, sink, utcNow)
+	res, err := Drain(dir, sink, stampNow)
 	if err != nil {
 		t.Fatalf("Drain: %v", err)
 	}
@@ -135,9 +141,9 @@ func TestAppendDrain(t *testing.T) {
 					{PID: 1},
 				}
 				appendAll(t, inbox, m)
-				read := m.Sent.Add(36 * time.Hour) // the agent was down for a day and a half
+				read := clock.Stamp{Wall: m.Sent.Add(36 * time.Hour), Mono: 9000, BootID: "b-drain"} // the agent was down for a day and a half
 				k := &keepSink{}
-				if _, err := Drain(inbox, k, func() time.Time { return read }); err != nil {
+				if _, err := Drain(inbox, k, func() clock.Stamp { return read }); err != nil {
 					t.Fatal(err)
 				}
 				if len(k.got) != 1 {
@@ -147,8 +153,8 @@ func TestAppendDrain(t *testing.T) {
 				if d.ID != m.ID || !d.Sent.Equal(m.Sent) || d.Mono != m.Mono || d.BootID != m.BootID || !slices.EqualFunc(d.Chain, m.Chain, sameProc) {
 					t.Errorf("the drain delivered %+v, want the sender's id, Sent, Mono, BootID and Chain in %+v", d.Message, m)
 				}
-				if d.Via != ViaInbox || d.PeerPID != 0 || !d.Received.Equal(read) {
-					t.Errorf("Via, PeerPID, Received = %q, %d, %v; want the inbox, 0 and the time the drain read it, %v", d.Via, d.PeerPID, d.Received, read)
+				if d.Via != ViaInbox || d.PeerPID != 0 || d.Received != read {
+					t.Errorf("Via, PeerPID, Received = %q, %d, %+v; want the inbox, 0 and the agent's stamp from when the drain read it, %+v", d.Via, d.PeerPID, d.Received, read)
 				}
 			},
 		},
@@ -167,7 +173,7 @@ func TestAppendDrain(t *testing.T) {
 					t.Fatal(err)
 				}
 				j := openJournal(t, journal)
-				if err := j.Deliver(Delivery{Message: m1, Via: ViaInbox, Received: utcNow()}); err != nil {
+				if err := j.Deliver(Delivery{Message: m1, Via: ViaInbox, Received: stampNow()}); err != nil {
 					t.Fatal(err)
 				}
 				if res := drain(t, inbox, j); res.Delivered != 2 || res.Files != 1 {
@@ -245,7 +251,7 @@ func TestAppendDrain(t *testing.T) {
 					t.Fatal(err)
 				}
 				afterWrite = nil
-				names, err := NewDrainer(inbox, nil, utcNow).taken()
+				names, err := NewDrainer(inbox, nil, stampNow).taken()
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -316,7 +322,7 @@ func TestAppendDrain(t *testing.T) {
 							return
 						default:
 						}
-						if _, err := Drain(inbox, j, utcNow); err != nil {
+						if _, err := Drain(inbox, j, stampNow); err != nil {
 							drained <- err
 							return
 						}
@@ -423,7 +429,7 @@ func TestDrainer(t *testing.T) {
 				appendAll(t, inbox, a, x, b)
 				s := newScript(openJournal(t, journal))
 				s.reject[x.ID] = true
-				res, err := Drain(inbox, s, utcNow)
+				res, err := Drain(inbox, s, stampNow)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -443,7 +449,7 @@ func TestDrainer(t *testing.T) {
 			run: func(t *testing.T, inbox, journal string) {
 				s := newScript(openJournal(t, journal))
 				s.setDown(errors.New("received/ can't be written"))
-				d := NewDrainer(inbox, s, utcNow)
+				d := NewDrainer(inbox, s, stampNow)
 				appendAll(t, inbox, newMessage(t, 1))
 				if _, err := d.Drain(); err == nil {
 					t.Fatal("Drain = nil with a sink that fails")
@@ -491,7 +497,7 @@ func TestDrainer(t *testing.T) {
 				appendAll(t, inbox, m1, m2, m3)
 				s := newScript(openJournal(t, journal))
 				s.failOnce[m2.ID] = true
-				d := NewDrainer(inbox, s, utcNow)
+				d := NewDrainer(inbox, s, stampNow)
 				if res, err := d.Drain(); err == nil || res.Delivered != 1 {
 					t.Fatalf("the first Drain = %+v, %v; want one message in and the sink's failure", res, err)
 				}
@@ -533,7 +539,7 @@ func TestDrainer(t *testing.T) {
 					t.Fatal(err)
 				}
 				appendAll(t, inbox, m2)
-				d := NewDrainer(inbox, openJournal(t, journal), utcNow)
+				d := NewDrainer(inbox, openJournal(t, journal), stampNow)
 				for i := 1; i <= maxFileFailures; i++ {
 					res, err := d.Drain()
 					if err == nil || res.Failed != 1 {
@@ -572,7 +578,7 @@ func TestDrainer(t *testing.T) {
 				if err := os.Chtimes(old, then, then); err != nil {
 					t.Fatal(err)
 				}
-				if _, err := Drain(inbox, openJournal(t, journal), utcNow); err != nil {
+				if _, err := Drain(inbox, openJournal(t, journal), stampNow); err != nil {
 					t.Fatal(err)
 				}
 				if _, err := os.Lstat(old); !os.IsNotExist(err) {

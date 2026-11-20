@@ -17,6 +17,8 @@ import (
 	"time"
 
 	"github.com/some-du6e/pairtime/internal/agent/inbox"
+	"github.com/some-du6e/pairtime/internal/platform"
+	"github.com/some-du6e/pairtime/internal/platform/clock"
 )
 
 const (
@@ -57,6 +59,18 @@ type Options struct {
 	ForcePipe bool
 	// Log gets connection problems. Nil discards them.
 	Log *slog.Logger
+	// Walk, when set, reads the parent chain of each connection's peer
+	// from the pid the OS reports for it, nearest first. Serve calls it as
+	// soon as it has accepted a connection and checked who runs its peer,
+	// before it reads a message, while a sender that waits for its ack is
+	// still alive; every Delivery from the connection carries what it
+	// returned as Walk. A sender that doesn't wait may be gone by then,
+	// and Windows may have given its pid to another process, so the walk
+	// counts only when its first process has the pid and start time the
+	// sender recorded for itself (DESIGN 3.4; internal/agent/hookpath).
+	// Only a walk that counts vouches for where a message came from. Walk
+	// isn't called when the OS gives no pid, nor for the self-test.
+	Walk func(pid int) []platform.Proc
 }
 
 // Server is the agent's end of the socket or the pipe.
@@ -67,6 +81,7 @@ type Server struct {
 	want     identity // the user every peer must run as
 	fallback string   // why the server is on the pipe, when it is
 	log      *slog.Logger
+	walk     func(pid int) []platform.Proc
 	sem      chan struct{}
 	refused  atomic.Uint64
 
@@ -103,6 +118,7 @@ func Listen(ep Endpoint, opts Options) (*Server, error) {
 		ep:    ep,
 		want:  me,
 		log:   log,
+		walk:  opts.Walk,
 		sem:   make(chan struct{}, maxConns),
 		conns: make(map[net.Conn]struct{}),
 	}
@@ -203,7 +219,7 @@ func (s *Server) selfTest(ln *net.UnixListener) error {
 			return errors.Join(err, <-sent)
 		}
 		// handle runs on this goroutine, so got needs no lock.
-		s.handle(c, sink, deadline)
+		s.handle(c, sink, deadline, nil)
 	}
 	return <-sent
 }
@@ -280,7 +296,7 @@ func (s *Server) Serve(sink inbox.Sink) error {
 			defer s.wg.Done()
 			defer func() { <-s.sem }()
 			defer s.untrack(c)
-			s.handle(c, sink, time.Time{})
+			s.handle(c, sink, time.Time{}, s.walk)
 		}()
 	}
 }
@@ -345,8 +361,9 @@ func (s *Server) stopListening() error {
 
 // handle serves one connection until the sender hangs up, sends a bad
 // frame or goes quiet for idleTimeout. until, when not zero, is a deadline
-// for all of it.
-func (s *Server) handle(c net.Conn, sink inbox.Sink, until time.Time) {
+// for all of it. walk, when set, reads the peer's parent chain first
+// (Options.Walk).
+func (s *Server) handle(c net.Conn, sink inbox.Sink, until time.Time, walk func(int) []platform.Proc) {
 	defer c.Close()
 	id, pid, err := peerOf(c)
 	if err == nil && id != s.want {
@@ -356,6 +373,10 @@ func (s *Server) handle(c net.Conn, sink inbox.Sink, until time.Time) {
 		s.refused.Add(1)
 		s.log.Warn("ipc: refused a connection that isn't from this user", "peer_pid", pid, "err", err)
 		return
+	}
+	var chain []platform.Proc
+	if walk != nil && pid > 0 {
+		chain = walk(pid)
 	}
 	for {
 		if err := c.SetReadDeadline(earliest(time.Now().Add(idleTimeout), until)); err != nil {
@@ -368,7 +389,7 @@ func (s *Server) handle(c net.Conn, sink inbox.Sink, until time.Time) {
 			}
 			return
 		}
-		rep, keep := s.take(body, sink, pid)
+		rep, keep := s.take(body, sink, pid, chain)
 		b, err := json.Marshal(rep)
 		if err != nil {
 			return
@@ -385,7 +406,7 @@ func (s *Server) handle(c net.Conn, sink inbox.Sink, until time.Time) {
 // take delivers the message in one frame and returns the reply, and
 // whether the connection may carry on. One that sent something other than
 // a message may not.
-func (s *Server) take(body []byte, sink inbox.Sink, pid int) (reply, bool) {
+func (s *Server) take(body []byte, sink inbox.Sink, pid int, chain []platform.Proc) (reply, bool) {
 	m, err := inbox.Decode(body)
 	if err != nil {
 		msg := err.Error()
@@ -394,7 +415,7 @@ func (s *Server) take(body []byte, sink inbox.Sink, pid int) (reply, bool) {
 		}
 		return reply{Error: msg}, false
 	}
-	d := inbox.Delivery{Message: m, Via: s.via, PeerPID: pid, Received: time.Now().UTC()}
+	d := inbox.Delivery{Message: m, Via: s.via, PeerPID: pid, Walk: chain, Received: clock.Now()}
 	if err := sink.Deliver(d); err != nil {
 		s.log.Warn("ipc: couldn't store a message", "err", err)
 		return reply{ID: m.ID, Error: "the agent couldn't store the message"}, true

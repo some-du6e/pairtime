@@ -137,10 +137,10 @@ func hasContext(text string, i int, words []string) bool {
 // group also takes 22 to 27, which Presidio's pattern leaves out:
 // Mastercard has issued 2221 to 2720 since 2017, and Mir uses 2200 to
 // 2204. Luhn still drops nine in ten other numbers that start that way.
-var cardRE = regexp.MustCompile(`^((4\d{3})|(5[0-5]\d{2})|(6\d{3})|(1\d{3})|(3\d{3})|(2[2-7]\d{2}))[- ]?(\d{3,4})[- ]?(\d{3,4})[- ]?(\d{3,5})\b`)
+var cardRE = lazy(`^((4\d{3})|(5[0-5]\d{2})|(6\d{3})|(1\d{3})|(3\d{3})|(2[2-7]\d{2}))[- ]?(\d{3,4})[- ]?(\d{3,4})[- ]?(\d{3,5})\b`)
 
 func findCards(text string, emit func(int, int, Type)) {
-	finditer(text, cardRE, func(i int) bool {
+	finditer(text, cardRE.get(), func(i int) bool {
 		// \b(?!1\d{12}(?!\d)): not a 13-digit number that starts with 1,
 		// which is what a timestamp in milliseconds looks like.
 		return digitStart(text)(i) && !thirteenFromOne(text, i)
@@ -277,21 +277,21 @@ func validIBAN(v string) bool {
 // US Social Security numbers: UsSsnRecognizer's five patterns, each run on
 // its own as Presidio does, and its invalidate_result.
 var ssnPatterns = []struct {
-	re    *regexp.Regexp
+	re    *lazyRE
 	score float64
 }{
-	{regexp.MustCompile(`^([0-9]{5})-([0-9]{4})\b`), 0.05},
-	{regexp.MustCompile(`^([0-9]{3})-([0-9]{6})\b`), 0.05},
-	{regexp.MustCompile(`^(([0-9]{3})-([0-9]{2})-([0-9]{4}))\b`), 0.05},
-	{regexp.MustCompile(`^[0-9]{9}\b`), 0.05},
-	{regexp.MustCompile(`^([0-9]{3})[- .]([0-9]{2})[- .]([0-9]{4})\b`), 0.5},
+	{lazy(`^([0-9]{5})-([0-9]{4})\b`), 0.05},
+	{lazy(`^([0-9]{3})-([0-9]{6})\b`), 0.05},
+	{lazy(`^(([0-9]{3})-([0-9]{2})-([0-9]{4}))\b`), 0.05},
+	{lazy(`^[0-9]{9}\b`), 0.05},
+	{lazy(`^([0-9]{3})[- .]([0-9]{2})[- .]([0-9]{4})\b`), 0.5},
 }
 
 var ssnContext = []string{"social", "security", "ssn", "ssns", "ssid"}
 
 func findSSNs(text string, emit func(int, int, Type)) {
 	for _, p := range ssnPatterns {
-		finditer(text, p.re, digitStart(text), func(m []int) {
+		finditer(text, p.re.get(), digitStart(text), func(m []int) {
 			if ssnInvalid(text[m[0]:m[1]]) {
 				return
 			}
@@ -332,10 +332,10 @@ func ssnInvalid(v string) bool {
 
 // UK National Insurance numbers: UkNinoRecognizer, "NINO (medium)", 0.5,
 // with re.IGNORECASE as every Presidio pattern recognizer has.
-var ninoRE = regexp.MustCompile(`(?i)^([a-ceghj-pr-tw-z][a-ceghj-npr-tw-z]) ?([0-9]{2}) ?([0-9]{2}) ?([0-9]{2}) ?([a-d])\b`)
+var ninoRE = lazy(`(?i)^([a-ceghj-pr-tw-z][a-ceghj-npr-tw-z]) ?([0-9]{2}) ?([0-9]{2}) ?([0-9]{2}) ?([a-d])\b`)
 
 func findNINOs(text string, emit func(int, int, Type)) {
-	finditer(text, ninoRE, func(i int) bool {
+	finditer(text, ninoRE.get(), func(i int) bool {
 		if i+2 > len(text) || !boundary(text, i) {
 			return false
 		}
@@ -353,14 +353,14 @@ func findNINOs(text string, emit func(int, int, Type)) {
 // Aadhaar numbers: InAadhaarRecognizer's two patterns, 0.01, and its
 // validate_result: twelve digits, the first at least 2, a valid Verhoeff
 // check digit, and not a palindrome.
-var aadhaarPatterns = []*regexp.Regexp{
-	regexp.MustCompile(`^[0-9]{12}\b`),
-	regexp.MustCompile(`^[0-9]{4}[- :][0-9]{4}[- :][0-9]{4}\b`),
+var aadhaarPatterns = []*lazyRE{
+	lazy(`^[0-9]{12}\b`),
+	lazy(`^[0-9]{4}[- :][0-9]{4}[- :][0-9]{4}\b`),
 }
 
 func findAadhaars(text string, emit func(int, int, Type)) {
 	for _, re := range aadhaarPatterns {
-		finditer(text, re, digitStart(text), func(m []int) {
+		finditer(text, re.get(), digitStart(text), func(m []int) {
 			if validAadhaar(strip(text[m[0]:m[1]], "- :")) {
 				emit(m[0], m[1], TypeAadhaar)
 			}
@@ -437,7 +437,7 @@ const (
 	emailWord = `[\p{L}\p{N}_]`
 )
 
-var emailRE = regexp.MustCompile(`(?i)^((([` + emailChar + `])|([` + emailChar + `][` + emailChar + `.]*[` + emailChar + `]))@` +
+var emailRE = lazy(`(?i)^((([` + emailChar + `])|([` + emailChar + `][` + emailChar + `.]*[` + emailChar + `]))@` +
 	emailWord + `+(?:-+` + emailWord + `+)*(?:\.` + emailWord + `+(?:-+` + emailWord + `+)*)+)`)
 
 // maxLocal bounds how far before an @ a match may start. RFC 5321 allows
@@ -474,7 +474,7 @@ func findEmails(text string, emit func(int, int, Type)) {
 		next := at + 1
 		for i := s; i < at; {
 			if boundary(text, i) || i == s && escaped {
-				if m := emailRE.FindStringIndex(text[i:]); m != nil {
+				if m := emailRE.get().FindStringIndex(text[i:]); m != nil {
 					start, end := i, i+m[1]
 					// The pattern's trailing \b.
 					if (end == len(text) || boundary(text, end)) && emailDomainOK(text[start:end]) {
