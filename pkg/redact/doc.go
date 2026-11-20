@@ -14,7 +14,10 @@
 // secret, pii, code or teen (docs/spec/ledger-v1.md 10.2 and 10.3,
 // WP-LG3). [Preview] draws a text the way its reveal will look to the
 // reviewer, which is what the teen previews. [Render] draws the finer
-// markers, unrounded, for diagnostics and tests.
+// markers, unrounded, for diagnostics and tests. [Respell] is for
+// `pairtime fixtures scrub`, which rewrites fixtures with the fixed
+// placeholders of testdata/fixtures/README.md: it writes a known value's
+// placeholder in the spelling the fixture gave the value.
 //
 // # The pipeline
 //
@@ -28,12 +31,13 @@
 //     escapes, once or twice for JSON inside JSON; URL escapes, as %20 or
 //     in a query string; the name Claude Code gives a project folder,
 //     with every character but an ASCII letter or digit turned into a
-//     dash (C--Users-Maya-Chen-robot); and for a Windows home its
-//     forward-slash, Git Bash and WSL forms and the path of a file URI,
-//     VS Code's /c%3A/Users/... included. Right after a JSON escape such
-//     as \n or \t is a word edge, since that's where an embedded line
-//     starts. Short and generic names such as "user" or "app" are skipped
-//     unless the teen put them on the deny list.
+//     dash (C--Users-Maya-Chen-robot); and for a Windows home, whichever
+//     separator it was given with, its backslash and forward-slash forms,
+//     its Git Bash and WSL forms and the path of a file URI, VS Code's
+//     /c%3A/Users/... included. Right after a JSON escape such as \n or \t
+//     is a word edge, since that's where an embedded line starts. Short
+//     and generic names such as "user" or "app" are skipped unless the
+//     teen put them on the deny list.
 //  2. gitleaks' rules as data: rules/gitleaks.json.gz, converted from
 //     gitleaks' default config at a pinned tag by rules/convert.py. The
 //     engine follows gitleaks' detectRule: the keyword prefilter, the
