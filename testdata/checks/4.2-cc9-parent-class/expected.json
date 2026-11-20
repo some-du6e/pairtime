@@ -1,11 +1,11 @@
 {
   "scenario": "4.2-cc9-parent-class",
   "title": "A session whose parent class changes",
-  "story": "At 19:40:31 a script starts a second Claude Code process inside tmux, and the client files its SessionStart under the first session's key. The session began in Terminal, and now one of its session.start records names a multiplexer parent.",
+  "story": "At 19:40:31 a script starts a second Claude Code process inside tmux, and the client files its SessionStart, a fresh startup, under the first session's key while that session is still live. The session began in Terminal, and now one of its session.start records names a multiplexer parent.",
   "base": "4.2-alternation",
   "edits": [
     "The transcript's user entry for each prompt, read by the log reader 0.7 to 4.5 s after the hook (via log, same turn_key and lengths), as a real Claude Code client records it.",
-    "A session.start at 19:40:31.2 with the session's key, start_kind resume and parent_class multiplexer, and the presence sample the agent takes at it."
+    "A session.start at 19:40:31.2 with the session's key, start_kind startup and parent_class multiplexer, and the presence sample the agent takes at it."
   ],
   "devices": [
     {
@@ -109,6 +109,7 @@
   "known_limit": null,
   "errata": ["2026-11-19-check-readings"],
   "notes": [
+    "No harness records this. A new process gets a new session, and a startup names a session no other process holds. A `claude --resume` in tmux would be start_kind resume, and the erratum leaves open whether a resume under another parent fails CC9; this scenario doesn't rest on it.",
     "A multiplexer isn't one of SM 2.2 rule 4's headless parents, so every prompt keeps its origin and CC2 still counts all five."
   ]
 }

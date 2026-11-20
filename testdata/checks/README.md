@@ -40,7 +40,7 @@ Each failing scenario fails one check. Every other check passes on the same data
 | `4.2-cc8-false-class` | 4.2-alternation | B2 is the go-ahead `looks good`, committed with class substantive |
 | `4.2-cc8-inflated-length` | 4.2-alternation | B2's `len_chars` and `typed_len_est` say 450 for its 60 characters; the typing module is off |
 | `4.2-cc8-removed-spans` | 4.2-alternation | As the made-up key, with three words of A3 removed by hand so no shingle of A3 shows its text |
-| `4.2-cc9-parent-class` | 4.2-alternation | A second session.start under the session's key names a multiplexer parent; the first named Terminal |
+| `4.2-cc9-parent-class` | 4.2-alternation | A second process files a startup under the live session's key and names a multiplexer parent; the first named Terminal |
 | `4.2-cc11-pasted` | 4.2-alternation | B2 was pasted with Cmd-V and the paste wasn't marked: three key-downs for 60 typed characters |
 | `6.2-clean` | 6.2 | Nothing the checks object to: the base with its commit's server clocks and forge lookup |
 | `6.2-cc3-copied-lines` | 6.2 | The commit adds 299 lines copied in outside anything pairtime watches |

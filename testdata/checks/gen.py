@@ -1083,19 +1083,21 @@ def s_63_cc10_project(out):
 def s_42_cc9(out):
     sc = Scenario("4.2-cc9-parent-class", "A session whose parent class changes",
                   "At 19:40:31 a script starts a second Claude Code process inside tmux, and the client files its "
-                  "SessionStart under the first session's key. The session began in Terminal, and now one of its "
-                  "session.start records names a multiplexer parent.",
+                  "SessionStart, a fresh startup, under the first session's key while that session is still "
+                  "live. The session began in Terminal, and now one of its session.start records names a "
+                  "multiplexer parent.",
                   base=ALT, projects=[DASH], window=ALT_W)
     dev = alt(sc)
     st = dev.one("session.start")
+    check(st["data"]["start_kind"] == "startup", "the session began with a startup")
     t = 1795423231200  # 19:40:31.2, between two 15 s samples
-    dev.insert(dev.like(st, t, "session.start", dict(st["data"], start_kind="resume", parent_class="multiplexer")))
+    dev.insert(dev.like(st, t, "session.start", dict(st["data"], parent_class="multiplexer")))
     # The agent takes a presence sample at every hook event (DESIGN 3.3).
     dev.insert(dev.like(dev.find("os.presence")[0], t, "os.presence",
                         {"idle_any_s": 0, "idle_keys_s": 0, "locked": False}))
     dev.presence_dirty = True
-    sc.edit("A session.start at 19:40:31.2 with the session's key, start_kind resume and parent_class multiplexer, "
-            "and the presence sample the agent takes at it.")
+    sc.edit("A session.start at 19:40:31.2 with the session's key, start_kind startup and parent_class "
+            "multiplexer, and the presence sample the agent takes at it.")
     dev.finish()
     keys = alt_features(sc, dev)
     sc.typing = alt_typing(dev)
@@ -1104,6 +1106,10 @@ def s_42_cc9(out):
     alt_clean_state(sc, cc5=False)
     sc.state("CC5", "pass", devices=1, slots_credited_twice=0)
     sc.state("CC9", "fail", sessions=1, multi_project_sessions=0, orphan_turns=0, parent_class_changes=1)
+    sc.notes.append("No harness records this. A new process gets a new session, and a startup names a session no "
+                    "other process holds. A `claude --resume` in tmux would be start_kind resume, and the erratum "
+                    "leaves open whether a resume under another parent fails CC9; this scenario doesn't rest on "
+                    "it.")
     sc.notes.append("A multiplexer isn't one of SM 2.2 rule 4's headless parents, so every prompt keeps its origin "
                     "and CC2 still counts all five.")
     sc.build(out)
