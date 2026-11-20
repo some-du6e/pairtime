@@ -5,6 +5,7 @@ package install
 import (
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -21,6 +22,12 @@ const (
 	newFileMode fs.FileMode = 0o600
 	newDirMode  fs.FileMode = 0o700
 )
+
+// maxFileSize bounds a file target pairtime reads: 4 MiB, far more than
+// any real settings file or login item holds. A bigger one is refused
+// before it is parsed, since its parse tree would take many times its size
+// in memory.
+const maxFileSize = 4 << 20
 
 // read returns what t holds.
 func (in *Installer) read(t Target) (Content, error) {
@@ -56,9 +63,19 @@ func readFile(path string) (Content, error) {
 	if !info.Mode().IsRegular() {
 		return Content{}, fmt.Errorf("%s isn't a regular file, so pairtime leaves it alone", path)
 	}
-	data, err := os.ReadFile(path)
+	f, err := os.Open(path)
 	if err != nil {
 		return Content{}, err
+	}
+	defer f.Close()
+	// Reading one byte more than the limit catches a file that grew after
+	// the Stat.
+	data, err := io.ReadAll(io.LimitReader(f, maxFileSize+1))
+	if err != nil {
+		return Content{}, err
+	}
+	if info.Size() > maxFileSize || len(data) > maxFileSize {
+		return Content{}, fmt.Errorf("%s is bigger than the %d MiB a settings file or login item could need, so pairtime leaves it alone", path, maxFileSize>>20)
 	}
 	return Content{Exists: true, Data: data, Mode: info.Mode().Perm()}, nil
 }

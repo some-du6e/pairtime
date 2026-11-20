@@ -5,6 +5,7 @@ package install
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -408,6 +409,21 @@ func TestClaudeCodeUninstallWhenTheFileIsGoneOrBroken(t *testing.T) {
 	}
 }
 
+// oldHooks returns a settings file with n hooks from an older pairtime
+// install, at another binary path, each in a group of its own.
+func oldHooks(n int) string {
+	var b strings.Builder
+	b.WriteString(`{"hooks": {"Stop": [`)
+	for i := range n {
+		if i > 0 {
+			b.WriteString(", ")
+		}
+		fmt.Fprintf(&b, `{"hooks": [{"type": "command", "command": "/opt/pairtime/bin/pairtime", "args": ["hook", "--harness", "claude_code", "--event", "Stop%d"]}]}`, i)
+	}
+	b.WriteString("]}}\n")
+	return b.String()
+}
+
 func TestClaudeCodeLeavesFilesItCantMergeAlone(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -415,6 +431,8 @@ func TestClaudeCodeLeavesFilesItCantMergeAlone(t *testing.T) {
 		mode    fs.FileMode
 		want    string // in the error
 	}{
+		{"a file bigger than 4 MiB is left alone", `{"x": "` + strings.Repeat("a", 4<<20) + `"}`, 0o644, "bigger than the 4 MiB"},
+		{"a file with more pairtime hooks than pairtime ever writes is left alone", oldHooks(maxRemovals + 1), 0o644, "more pairtime hooks than pairtime ever writes"},
 		{"a file that isn't JSON is left alone", `{"model": }`, 0o644, "isn't valid JSON"},
 		{"a top level that isn't an object is left alone", `["model"]`, 0o644, "doesn't hold a JSON object"},
 		{"hooks that aren't an object are left alone", `{"hooks": ["x"]}`, 0o644, `"hooks" that isn't an object`},

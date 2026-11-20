@@ -257,9 +257,14 @@ func parseSettings(src []byte) (*jsonc.Value, error) {
 	return root, nil
 }
 
-// maxRemovals bounds how many hooks one pass takes out, so a mistake can't
-// loop forever.
-const maxRemovals = 10000
+// maxRemovals bounds how many hooks, or empty lists, removeClaudeHooks and
+// pruneHooks take out of one file. pairtime writes 10 hooks, so a file
+// with more than this many of its hooks is broken, and refusing it keeps
+// the work small: each removal parses the file again, because every
+// removal moves the bytes after it and Remove's rules for the separator
+// and the line around an item depend on its neighbours. With readFile's
+// 4 MiB cap, that is at most a few hundred MiB of parsing.
+const maxRemovals = 100
 
 // removeClaudeHooks takes out every hook handler match accepts, one at a
 // time. A group whose handlers all match goes as a whole; otherwise only
