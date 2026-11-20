@@ -269,12 +269,19 @@ func claimed(edits []Edit, cur Content) bool {
 }
 
 // groupEdits groups items' edits by target, in the order the targets first
-// appear. It refuses an item without an ID, one listed twice, and an edit
-// of a kind uninstall can't undo.
+// appear. It refuses an item without an ID, one listed twice, an edit of a
+// kind uninstall can't undo, and two edits of one kind from one item for
+// one target: the manifest keeps one record for each, which a reinstall
+// finds by item and kind, so uninstall could undo only one of them.
 func groupEdits(items []Item) ([]*group, error) {
+	type edit struct {
+		item, kind string
+		target     Target
+	}
 	var groups []*group
 	byTarget := map[Target]*group{}
 	ids := map[string]bool{}
+	seen := map[edit]bool{}
 	for _, it := range items {
 		if it.ID == "" || ids[it.ID] {
 			return nil, fmt.Errorf("install item %q is missing its ID or listed twice", it.ID)
@@ -285,6 +292,11 @@ func groupEdits(items []Item) ([]*group, error) {
 				return nil, fmt.Errorf("install item %s has an edit of kind %q, which uninstall can't undo", it.ID, e.Kind())
 			}
 			t := e.Target()
+			k := edit{it.ID, e.Kind(), t}
+			if seen[k] {
+				return nil, fmt.Errorf("install item %s has two edits of kind %q for %s, and uninstall could undo only one", it.ID, e.Kind(), t)
+			}
+			seen[k] = true
 			g := byTarget[t]
 			if g == nil {
 				g = &group{target: t}
