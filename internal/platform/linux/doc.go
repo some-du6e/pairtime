@@ -41,4 +41,15 @@
 // D-Bus signals on blocked reads, so between changes the package wakes the
 // CPU not at all and owns no timers, apart from one armed while a suspend
 // waits for Power.Ready.
+//
+// # The Secret Service
+//
+// SecretService is the device keystore's Linux half (internal/agent/keys;
+// DESIGN 3.6, 3.12; CP 5.2): items in the desktop's Secret Service, which
+// GNOME Keyring, KWallet and KeePassXC provide, through go-keyring over
+// godbus. It and Mutter's idle time look for the session bus the same way,
+// in sessionBusAddress, and neither ever starts one. Its tests that need a
+// session bus are in secretservice_desktop_test.go, which platform.yml runs
+// inside a private bus like the other *_desktop_test.go files; fakesecret
+// is the Secret Service they talk to.
 package linux

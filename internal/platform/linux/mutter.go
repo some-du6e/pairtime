@@ -6,9 +6,6 @@ package linux
 
 import (
 	"context"
-	"errors"
-	"os"
-	"path/filepath"
 	"sync"
 	"time"
 
@@ -76,23 +73,6 @@ func (m *mutterIdle) close() {
 		m.conn.Close()
 		m.conn = nil
 	}
-}
-
-// sessionBusAddress is the session bus the desktop gave its programs:
-// DBUS_SESSION_BUS_ADDRESS, else the socket systemd's user manager keeps
-// at $XDG_RUNTIME_DIR/bus. Unlike dbus.ConnectSessionBus, it never runs
-// dbus-launch to start a bus of its own when there is none.
-func sessionBusAddress(getenv func(string) string) (string, error) {
-	if a := getenv("DBUS_SESSION_BUS_ADDRESS"); a != "" && a != "autolaunch:" {
-		return a, nil
-	}
-	if dir := getenv("XDG_RUNTIME_DIR"); dir != "" {
-		path := filepath.Join(dir, "bus")
-		if fi, err := os.Stat(path); err == nil && fi.Mode()&os.ModeSocket != 0 {
-			return "unix:path=" + path, nil
-		}
-	}
-	return "", errors.New("no session bus: DBUS_SESSION_BUS_ADDRESS is unset and $XDG_RUNTIME_DIR/bus doesn't exist")
 }
 
 // connectBus opens a private connection to the bus at address: dial,

@@ -80,4 +80,11 @@
 // device. They are content (AGENTS.md): the agent turns them into an
 // app_class and a keyed app_hash for os.focus, and neither the App nor a
 // plain hash of it leaves the device.
+//
+// # The Keychain
+//
+// Keychain is the device keystore's macOS half (internal/agent/keys;
+// DESIGN 3.6, 3.12; CP 5.2): generic password items in the user's login
+// Keychain, through go-keyring, which runs /usr/bin/security and so needs
+// no cgo either. It builds on macOS only (keychain.go).
 package darwin

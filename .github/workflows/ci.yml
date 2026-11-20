@@ -189,14 +189,18 @@ jobs:
         # platform code lands before the agent calls it. go vet type-checks a
         # package and its tests for one GOOS/GOARCH, so this compiles
         # internal/platform for all seven targets with CGO_ENABLED=0, such as
-        # internal/platform/darwin for darwin/amd64 and darwin/arm64 (WP-OS3).
+        # internal/platform/darwin for darwin/amd64 and darwin/arm64 (WP-OS3),
+        # and the device keystore, which picks its store by OS (WP-OS7). The
+        # keystore's desktop tests build with -tags desktop on Linux alone.
         # The Windows and macOS tests themselves run in platform.yml.
         if: ${{ !cancelled() }}
         run: |
           for target in windows/amd64 windows/386 windows/arm64 darwin/amd64 darwin/arm64 linux/amd64 linux/arm64; do
-            echo "go vet ./internal/platform/... for $target"
-            GOOS=${target%/*} GOARCH=${target#*/} go vet ./internal/platform/...
+            echo "go vet ./internal/platform/... ./internal/agent/keys/... for $target"
+            GOOS=${target%/*} GOARCH=${target#*/} go vet ./internal/platform/... ./internal/agent/keys/...
           done
+          echo "go vet -tags desktop ./internal/agent/keys/... for linux/amd64"
+          GOOS=linux GOARCH=amd64 go vet -tags desktop ./internal/agent/keys/...
 
       - name: HCA sign-in against an independent OIDC server
         if: ${{ !cancelled() }}
