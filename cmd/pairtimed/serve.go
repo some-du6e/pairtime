@@ -247,13 +247,16 @@ func serve(ctx context.Context, cfg *config.Config, logger *slog.Logger, e *env,
 	public.HandleFunc("GET /healthz", ops.Healthz)
 	site.Register(public)
 	signIn.Register(public)
-	// The home page at /, where a sign-in without return_to lands.
-	site.RegisterHome(public, pages.SignIn{
+	visit := pages.SignIn{
 		Enabled:    signIn.Enabled(),
 		LoginPath:  auth.LoginPath,
 		LogoutPath: auth.LogoutPath,
 		Visitor:    visitor(signIn, logger),
-	})
+	}
+	// The home page at /, where a sign-in without return_to lands.
+	site.RegisterHome(public, visit)
+	// /demo, the dashboard page drawn from a fixed, labelled sample.
+	site.RegisterDemo(public, visit, time.Now)
 	maintainCtx, stopMaintain := context.WithCancel(ctx)
 	defer stopMaintain()
 	go signIn.Maintain(maintainCtx)
