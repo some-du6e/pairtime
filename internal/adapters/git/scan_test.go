@@ -305,6 +305,31 @@ func TestScanAgainstGit(t *testing.T) {
 			},
 		},
 		{
+			name: "an amend of a repo's first commit keeps the project's key, and a fresh clone of the amended history joins it, after a restart too",
+			run: func(t *testing.T, g *gitEnv) {
+				r := g.initRepo()
+				r.commit("first", map[string]string{"a.txt": "a\n"})
+				res := g.resolver(ProjectMap{}, Excludes{})
+				s := g.scanner(res, r.dir)
+				key := s.Location().Project
+				r.write(map[string]string{"a.txt": "a, amended\n"})
+				r.git("add", "-A")
+				r.git("commit", "-q", "--amend", "-m", "first, amended")
+				amended := r.head()
+				c := one(t, mustScan(t, s))
+				if c.Op() != event.GitAmend || c.Event.ProjectKey != key || !slices.Equal(s.Location().Roots, []string{amended}) {
+					t.Fatalf("got %s in %s with roots %v; want the amend in %s, rooted at %s now", c.Op(), c.Event.ProjectKey, s.Location().Roots, key, amended)
+				}
+				clone := filepath.Join(t.TempDir(), "clone")
+				g.git(filepath.Dir(clone), "clone", "-q", r.dir, clone)
+				for _, rr := range []*Resolver{res, g.resolver(res.Map(), Excludes{})} {
+					if loc, err := rr.Resolve(ctx, clone); err != nil || loc.Project != key {
+						t.Errorf("a fresh clone resolves to %s, %v; want the project %s", loc.Project, err, key)
+					}
+				}
+			},
+		},
+		{
 			name: "a rebase that stops for an edit is held until it continues, then maps every commit as git does",
 			run: func(t *testing.T, g *gitEnv) {
 				r := g.initRepo()

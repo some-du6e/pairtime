@@ -114,6 +114,9 @@ type dirEntry struct {
 	loc     Location
 	err     error
 	checked time.Time
+	// gitDir is the git directory's FileInfo when it was resolved, so a
+	// repo deleted and made again at the same path is looked at afresh.
+	gitDir os.FileInfo
 }
 
 type flight struct {
@@ -242,11 +245,21 @@ func (r *Resolver) Resolve(ctx context.Context, dir string) (Location, error) {
 	if err != nil && !errors.Is(err, ErrIgnored) {
 		return Location{}, err // a missing folder or a git that timed out: try again next time
 	}
+	entry := dirEntry{loc: loc, err: err, checked: now}
+	if loc.GitDir != "" {
+		if fi, err := os.Stat(loc.GitDir); err == nil {
+			// On Windows a FileInfo reads its file id lazily, from its path,
+			// at the first SameFile. Reading it now keeps it this folder's,
+			// whatever the path names later.
+			os.SameFile(fi, fi)
+			entry.gitDir = fi
+		}
+	}
 	r.mu.Lock()
 	if len(r.dirs) >= maxCachedDirs {
 		clear(r.dirs)
 	}
-	r.dirs[key] = dirEntry{loc: loc, err: err, checked: now}
+	r.dirs[key] = entry
 	r.mu.Unlock()
 	return cloneLoc(loc), err
 }
@@ -274,7 +287,8 @@ func (r *Resolver) forgetRepo(commonDir string) {
 
 // stillValid looks again, with stats only, at what a cached answer rests
 // on: no .pairtime-ignore or exclude pattern has appeared, a repo's git
-// directory is still there, and a folder without git hasn't gained one.
+// directory is still the one that was resolved, and a folder without git
+// hasn't gained one.
 func (r *Resolver) stillValid(abs string, e dirEntry) bool {
 	if errors.Is(e.err, ErrIgnored) {
 		return r.ignored(abs)
@@ -283,8 +297,11 @@ func (r *Resolver) stillValid(abs string, e dirEntry) bool {
 		return false
 	}
 	if e.loc.GitDir != "" {
-		_, err := os.Stat(filepath.Join(e.loc.GitDir, "HEAD"))
-		return err == nil
+		if _, err := os.Stat(filepath.Join(e.loc.GitDir, "HEAD")); err != nil {
+			return false
+		}
+		fi, err := os.Stat(e.loc.GitDir)
+		return err == nil && (e.gitDir == nil || os.SameFile(fi, e.gitDir))
 	}
 	return gitAbove(abs) == ""
 }
@@ -499,12 +516,26 @@ func (r *Resolver) identify(ctx context.Context, abs string, info revParseInfo, 
 	ck := foldPath(info.commonDir)
 	r.mu.Lock()
 	known, ok := r.repos[ck]
-	if ok && (known.Kind == KindRepo || (known.Kind == KindShallow && info.shallow)) {
-		p := *known
-		r.mu.Unlock()
-		return p, nil
+	var was RepoProject
+	if ok {
+		was = *known
+		was.Roots = slices.Clone(known.Roots)
 	}
 	r.mu.Unlock()
+	if ok && was.Kind == KindShallow && info.shallow {
+		return was, nil
+	}
+	replaced := false
+	if ok && was.Kind == KindRepo {
+		// Identities are kept by common dir path, and the repo there can be
+		// another one now: the teen deleted a project and made a new one by
+		// the same name. One of the known roots still being a commit here
+		// says it is the same repo.
+		if r.holdsAny(ctx, abs, was.Roots) {
+			return was, nil
+		}
+		replaced = true
+	}
 
 	next := RepoProject{CommonDir: info.commonDir}
 	if info.shallow {
@@ -521,8 +552,24 @@ func (r *Resolver) identify(ctx context.Context, abs string, info revParseInfo, 
 		}
 	}
 
+	// A history that joins two known projects, through git subtree add or
+	// a merge of unrelated histories, stays with the project of its
+	// first-parent chain.
+	var firstParent string
+	if next.Kind == KindRepo {
+		r.mu.Lock()
+		several := len(r.keysOf(next.Roots)) > 1
+		r.mu.Unlock()
+		if several {
+			firstParent = r.firstParentRoot(ctx, abs)
+		}
+	}
+
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if cur, ok := r.repos[ck]; ok && replaced && cur.Key == was.Key {
+		delete(r.repos, ck) // another repo's identity, at this path before
+	}
 	if known, ok := r.repos[ck]; ok {
 		if known.Kind == KindRepo || known.Kind == next.Kind {
 			return *known, nil // someone else got there first, or nothing changed
@@ -531,9 +578,11 @@ func (r *Resolver) identify(ctx context.Context, abs string, info revParseInfo, 
 		next.Aliases = appendNew(next.Aliases, known.Key)
 	}
 	if next.Kind == KindRepo {
-		next.Key = r.keyForRoots(next.Roots)
+		next.Key = r.keyForRoots(next.Roots, firstParent)
 		for _, root := range next.Roots {
-			r.byRoot[root] = next.Key
+			if _, taken := r.byRoot[root]; !taken {
+				r.byRoot[root] = next.Key // a root another project owns stays its
+			}
 		}
 		if next.Key != rootsKey(r.secret, next.Roots) {
 			// The roots overlap a project seen before, which keeps its key
@@ -554,23 +603,127 @@ func (r *Resolver) identify(ctx context.Context, abs string, info revParseInfo, 
 // keyForRoots returns the key of the project that already owns one of
 // roots, or the key of roots themselves. So a repo whose history gained a
 // root, say through `git subtree add`, stays one project across a fresh
-// clone, which lists both roots. Called with r.mu held.
-func (r *Resolver) keyForRoots(roots []string) string {
+// clone, which lists both roots. When the roots belong to several known
+// projects, the one owning firstParent, the first-parent chain's root,
+// wins, then the one owning the most roots, then the first. Called with
+// r.mu held.
+func (r *Resolver) keyForRoots(roots []string, firstParent string) string {
+	keys := r.keysOf(roots)
+	switch len(keys) {
+	case 0:
+		return rootsKey(r.secret, roots)
+	case 1:
+		return keys[0]
+	}
+	if k, ok := r.byRoot[firstParent]; ok && slices.Contains(keys, k) {
+		return k
+	}
+	count := make(map[string]int)
 	for _, root := range roots {
-		if k, ok := r.byRoot[root]; ok {
-			return k
+		count[r.byRoot[root]]++
+	}
+	best := keys[0]
+	for _, k := range keys[1:] {
+		if count[k] > count[best] {
+			best = k
 		}
 	}
-	return rootsKey(r.secret, roots)
+	return best
+}
+
+// keysOf returns the known projects that own any of roots, in the order
+// of roots. Called with r.mu held.
+func (r *Resolver) keysOf(roots []string) []string {
+	var keys []string
+	for _, root := range roots {
+		if k, ok := r.byRoot[root]; ok {
+			keys = appendNew(keys, k)
+		}
+	}
+	return keys
+}
+
+// firstParentRoot returns the root of HEAD's first-parent chain, or "".
+func (r *Resolver) firstParentRoot(ctx context.Context, worktree string) string {
+	cctx, cancel := context.WithTimeout(ctx, rootsTimeout)
+	defer cancel()
+	out, err := r.git.Run(cctx, worktree, "rev-list", "--max-parents=0", "--first-parent", "HEAD")
+	if err != nil {
+		return ""
+	}
+	ids, err := parseIDs(string(out))
+	if err != nil || len(ids) != 1 {
+		return ""
+	}
+	return ids[0]
+}
+
+// holdsAny reports whether any of roots is a commit in the repo at dir, in
+// one git call. When that can't be told, or asking could fetch a missing
+// object from a partial clone's remote, it says yes, and the identity
+// stays.
+func (r *Resolver) holdsAny(ctx context.Context, dir string, roots []string) bool {
+	if len(roots) == 0 {
+		return true
+	}
+	if v, err := r.git.Version(); err == nil && !HonorsNoLazyFetch(v) && partialClone(ctx, r.git, dir) {
+		return true
+	}
+	var in strings.Builder
+	for _, root := range roots {
+		in.WriteString(root)
+		in.WriteString("\n")
+	}
+	out, err := r.git.RunInput(ctx, dir, []byte(in.String()), "cat-file", "--batch-check")
+	if err != nil {
+		return true
+	}
+	for _, line := range strings.Split(string(out), "\n") {
+		if f := strings.Fields(line); len(f) >= 2 && f[1] == "commit" {
+			return true
+		}
+	}
+	return false
 }
 
 // Rekey looks again at the identity of loc's repo. The watcher calls it
-// when a repo with no commit makes its first one, and when a shallow clone
-// loses its shallow file. It returns the location with the new key; the
-// old key is in Aliases.
+// when a repo with no commit makes its first one, when a shallow clone
+// loses its shallow file, and when an amend or a rebase rewrote one of a
+// repo's root commits. It returns the location with the new key, and the
+// old key is in Aliases; a repo whose root was rewritten keeps its key,
+// with its new roots.
 func (r *Resolver) Rekey(ctx context.Context, loc Location) (Location, error) {
 	r.forgetRepo(loc.CommonDir)
+	if loc.Kind == KindRepo {
+		if err := r.reroot(ctx, loc); err != nil {
+			return Location{}, err
+		}
+	}
 	return r.Resolve(ctx, loc.Dir)
+}
+
+// reroot gives a known repo the roots its history has now, keeping its
+// key, and points the new roots at that key, so a fresh clone of the
+// rewritten history joins the project. The replaced roots keep pointing
+// at it too, for clones made before the rewrite.
+func (r *Resolver) reroot(ctx context.Context, loc Location) error {
+	roots, err := r.roots(ctx, loc.Dir)
+	if err != nil {
+		return err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	p, ok := r.repos[foldPath(loc.CommonDir)]
+	if !ok || p.Kind != KindRepo {
+		return nil
+	}
+	p.Roots = roots
+	for _, root := range roots {
+		if _, taken := r.byRoot[root]; !taken {
+			r.byRoot[root] = p.Key
+		}
+	}
+	return nil
 }
 
 var errUnborn = errors.New("the repo has no commit yet")

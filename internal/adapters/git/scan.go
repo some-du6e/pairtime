@@ -227,6 +227,9 @@ func (s *Scanner) Scan(ctx context.Context) ([]Change, error) {
 		changes = nil // give up on these entries
 	}
 	s.failed = 0
+	if err == nil {
+		s.rerootIfRewritten(ctx, changes)
+	}
 	last := fresh[used-1]
 	s.st.Cursor = cursorAt(last)
 	if last.Msg == "" { // made up from HEAD, for a repo without a reflog
@@ -307,6 +310,29 @@ func (s *Scanner) maybeRekey(ctx context.Context, ops []op) error {
 	}
 	s.loc = loc
 	return nil
+}
+
+// rerootIfRewritten has the resolver look at the repo's roots again when an
+// amend or a rebase replaced one of them, as is common in a project's first
+// minutes, so the project keeps its key and a fresh clone of the new
+// history still joins it. When that fails the old roots stay, and the next
+// rewrite of a root tries again.
+func (s *Scanner) rerootIfRewritten(ctx context.Context, changes []Change) {
+	if s.rekey == nil || s.loc.Kind != KindRepo {
+		return
+	}
+	for _, c := range changes {
+		for _, cm := range c.Commits {
+			for _, rw := range cm.Rewrites {
+				if slices.Contains(s.loc.Roots, rw.OldSHA) {
+					if loc, err := s.rekey(ctx, s.loc); err == nil {
+						s.loc = loc
+					}
+					return
+				}
+			}
+		}
+	}
 }
 
 // rebaseInProgress reports whether a rebase has stopped partway, for an
@@ -426,7 +452,7 @@ func rebaseEnd(entries []entry, start int) (end int, aborted, closed bool) {
 func (s *Scanner) build(ctx context.Context, ops []op, now time.Time) ([]Change, error) {
 	s.lazy = false
 	if v, err := s.git.Version(); err == nil && !HonorsNoLazyFetch(v) {
-		s.lazy = s.partialClone(ctx)
+		s.lazy = partialClone(ctx, s.git, s.loc.Dir)
 	}
 	// The commit each operation moved HEAD to, in one read.
 	var tips []string
@@ -548,12 +574,12 @@ func (s *Scanner) readMeta(ctx context.Context, shas []string) (map[string]*meta
 	return readMeta(ctx, s.git, s.loc.Dir, shas, !s.lazy)
 }
 
-// partialClone reports whether the repo is a partial clone, which lacks
-// objects its promisor remote has: extensions.partialClone names that
+// partialClone reports whether the repo at dir is a partial clone, which
+// lacks objects its promisor remote has: extensions.partialClone names that
 // remote, or a remote has promisor set, which is what git clone --filter
 // writes since git 2.2x. When git can't say, the repo counts as one.
-func (s *Scanner) partialClone(ctx context.Context) bool {
-	out, err := s.git.Run(ctx, s.loc.Dir, "config", "--get-regexp", `^(extensions\.partialclone|remote\..*\.promisor)$`)
+func partialClone(ctx context.Context, g *Runner, dir string) bool {
+	out, err := g.Run(ctx, dir, "config", "--get-regexp", `^(extensions\.partialclone|remote\..*\.promisor)$`)
 	if exitCode(err) == 1 {
 		return false // neither key is set
 	}

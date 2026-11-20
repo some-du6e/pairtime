@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -346,6 +347,79 @@ func TestResolve(t *testing.T) {
 					if got := res.Aliases(repo.Project); !slices.Equal(got, []string{folder.Project}) {
 						t.Fatalf("aliases %v, want the folder key %s", got, folder.Project)
 					}
+				}
+			},
+		},
+		{
+			name: "a new repo made where a deleted one was gets a key of its own, from the same resolver and after a restart",
+			run: func(t *testing.T, g *gitEnv) {
+				r := g.initRepo()
+				r.commit("the old project", map[string]string{"a.txt": "old\n"})
+				res := g.resolver(ProjectMap{}, Excludes{})
+				old, err := res.Resolve(ctx, r.dir)
+				if err != nil {
+					t.Fatal(err)
+				}
+				saved := res.Map()
+				// The teen moves the old project away and starts another
+				// by the same name.
+				if err := os.Rename(r.dir, r.dir+"-old"); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Mkdir(r.dir, 0o755); err != nil {
+					t.Fatal(err)
+				}
+				r.git("init", "-q")
+				r.commit("the new project", map[string]string{"b.txt": "new\n"})
+				want := rootsKey(testSecret, strings.Fields(r.git("rev-list", "--max-parents=0", "HEAD")))
+				if want == old.Project {
+					t.Fatal("the two repos have one root")
+				}
+				res.recheck = -1 // as if DefaultRecheck had passed
+				if loc, err := res.Resolve(ctx, r.dir); err != nil || loc.Project != want {
+					t.Errorf("the same resolver says %s, %v; want the new repo's key %s, not the old %s", loc.Project, err, want, old.Project)
+				}
+				if loc, err := g.resolver(saved, Excludes{}).Resolve(ctx, r.dir); err != nil || loc.Project != want {
+					t.Errorf("a restarted resolver says %s, %v; want the new repo's key %s, not the old %s", loc.Project, err, want, old.Project)
+				}
+			},
+		},
+		{
+			name: "a fresh clone whose roots belong to two known projects joins the one its first-parent history comes from, and the other keeps its root",
+			run: func(t *testing.T, g *gitEnv) {
+				a := g.initRepo()
+				rootA := a.commit("a", map[string]string{"a.txt": "a\n"})
+				// B's root has to sort before A's: an order-based pick
+				// then went to B.
+				var b *testRepo
+				for i := 0; i < 64 && b == nil; i++ {
+					c := g.initRepo()
+					if c.commit(fmt.Sprint("b ", i), map[string]string{"b.txt": fmt.Sprint(i, "\n")}) < rootA {
+						b = c
+					}
+				}
+				if b == nil {
+					t.Skip("no root sorted before A's")
+				}
+				res := g.resolver(ProjectMap{}, Excludes{})
+				la, err := res.Resolve(ctx, a.dir)
+				if err != nil {
+					t.Fatal(err)
+				}
+				lb, err := res.Resolve(ctx, b.dir)
+				if err != nil {
+					t.Fatal(err)
+				}
+				a.git("pull", "-q", "--no-rebase", "--allow-unrelated-histories", "--no-edit", b.dir, "main")
+				cloneA := filepath.Join(t.TempDir(), "clone-a")
+				g.git(filepath.Dir(cloneA), "clone", "-q", a.dir, cloneA)
+				if got, err := res.Resolve(ctx, cloneA); err != nil || got.Project != la.Project {
+					t.Errorf("a clone of the merged history is in %s, %v; want A's %s, not B's %s", got.Project, err, la.Project, lb.Project)
+				}
+				cloneB := filepath.Join(t.TempDir(), "clone-b")
+				g.git(filepath.Dir(cloneB), "clone", "-q", b.dir, cloneB)
+				if got, err := res.Resolve(ctx, cloneB); err != nil || got.Project != lb.Project {
+					t.Errorf("a clone of B is in %s, %v; want B's %s", got.Project, err, lb.Project)
 				}
 			},
 		},
