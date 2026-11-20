@@ -58,6 +58,13 @@ Raw prompt text, agent output, code, file paths, command lines and window titles
 - Identifiers of devices, sessions, turns, projects and files are opaque keys and may be shared. They must be keyed per device (an HMAC under a device secret, or a random id), never a plain hash a reader could recompute from a guess. They pass `isKey`, which checks only their shape. It turns away a path or an email address but passes a bare name like `Makefile`, so the keying is what keeps them private.
 - `TestLocalFields` pins the local fields. Changing that list changes what pairtime may upload, so the PR description calls it out.
 
+## Retention
+
+docs/retention.json is the one source for how long pairtime keeps each kind of data (DESIGN 4.4). The privacy notice at /privacy renders it, and pairtimed's retention jobs run it.
+
+- A migration that creates a table gives it a place there in the same PR: as an entry's job table, in an entry's `tables`, or in `no_personal_data`. TestTables in internal/server/retention checks every table.
+- A job whose table doesn't exist yet names the WP that creates it in `awaits`. That WP creates the table with the columns the job names and removes `awaits`, which turns the job on.
+
 ## Changing the event model
 
 pkg/event and docs/schema/event.schema.json describe the same events, written by hand on both sides, and pkg/event/schema_test.go fails when they drift. Change both in the same commit. To add an event kind:
