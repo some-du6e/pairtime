@@ -187,6 +187,71 @@ func TestWatcher(t *testing.T) {
 			},
 		},
 		{
+			name: "a .pairtime-ignore added to a tracked repo stops the watch at the next poll: the commit after it reaches no sink, and nothing of the repo is kept",
+			run: func(t *testing.T, g *gitEnv) {
+				r := g.initRepo()
+				r.commit("one", map[string]string{"a.txt": "a\n"})
+				sink := make(testSink, 16)
+				w := g.watcher(g.resolver(ProjectMap{}, Excludes{}), sink, WatcherOptions{NoNotify: true, Hold: time.Millisecond})
+				track(t, w, r.dir)
+				r.write(map[string]string{IgnoreFile: ""})
+				r.commit("two", map[string]string{"a.txt": "b\n"})
+				w.Poll()
+				w.flush()
+				time.Sleep(20 * time.Millisecond)
+				w.flush()
+				sink.none(t)
+				if n := len(w.State().Worktrees); n != 0 {
+					t.Errorf("the watcher keeps %d worktrees, want none", n)
+				}
+				if _, err := w.Track(context.Background(), r.dir); !errors.Is(err, ErrIgnored) {
+					t.Errorf("Track again: %v, want ErrIgnored", err)
+				}
+			},
+		},
+		{
+			name: "a change held for an agent never goes out once its repo turns ignored, not even at Close",
+			run: func(t *testing.T, g *gitEnv) {
+				r := g.initRepo()
+				r.commit("one", map[string]string{"a.txt": "a\n"})
+				sink := make(testSink, 16)
+				w := g.watcher(g.resolver(ProjectMap{}, Excludes{}), sink, WatcherOptions{NoNotify: true, Hold: time.Minute})
+				track(t, w, r.dir)
+				r.commit("two", map[string]string{"a.txt": "b\n"})
+				w.Poll()
+				w.flush()
+				r.write(map[string]string{IgnoreFile: ""})
+				w.Poll()
+				w.flush()
+				w.Close()
+				sink.none(t)
+			},
+		},
+		{
+			name: "a .pairtime-ignore that comes with a commit stops the scan that commit's notification starts",
+			run: func(t *testing.T, g *gitEnv) {
+				g.realDates = true
+				r := g.initRepo()
+				r.commit("one", map[string]string{"a.txt": "a\n"})
+				sink := make(testSink, 16)
+				w := g.watcher(g.resolver(ProjectMap{}, Excludes{}), sink, WatcherOptions{Hold: 50 * time.Millisecond, Debounce: 50 * time.Millisecond})
+				if p := w.Problems()["notify"]; p != "" {
+					t.Skip(p)
+				}
+				track(t, w, r.dir)
+				r.commit("two", map[string]string{"a.txt": "b\n", IgnoreFile: ""})
+				deadline := time.Now().Add(20 * time.Second)
+				for len(w.State().Worktrees) != 0 && time.Now().Before(deadline) {
+					time.Sleep(20 * time.Millisecond)
+				}
+				if n := len(w.State().Worktrees); n != 0 {
+					t.Fatalf("the watcher still keeps %d worktrees, want none", n)
+				}
+				w.Close()
+				sink.none(t)
+			},
+		},
+		{
 			name: "a linked worktree that is removed stops being watched",
 			run: func(t *testing.T, g *gitEnv) {
 				r := g.initRepo()

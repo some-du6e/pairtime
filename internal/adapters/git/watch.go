@@ -87,8 +87,11 @@ type Watcher struct {
 	stop chan struct{}
 	done chan struct{}
 
-	mu       sync.Mutex
-	trees    map[string]*tree // by foldPath of the git directory
+	mu    sync.Mutex
+	trees map[string]*tree // by foldPath of the git directory
+	// saved are the states scanners resume from, by foldPath of the git
+	// directory: opts.State's, until a worktree is tracked or dropped.
+	saved    map[string]ScannerState
 	byDir    map[string]*tree // by foldPath of each watched directory
 	runs     []gitRun
 	held     []*heldChange
@@ -98,6 +101,7 @@ type Watcher struct {
 }
 
 type tree struct {
+	key  string // foldPath of the git directory
 	loc  Location
 	scan *Scanner // used by the worker goroutine only
 	// state is the scanner's state after its last scan, for State.
@@ -105,10 +109,14 @@ type tree struct {
 	sig      signature
 	watched  []string
 	debounce *time.Timer
+	// dropped is set once the worktree is out of pairtime, so a scan of it
+	// that was already queued or running yields nothing.
+	dropped bool
 }
 
 type heldChange struct {
 	c       Change
+	t       *tree
 	common  string
 	until   time.Time
 	decided bool
@@ -130,6 +138,7 @@ func NewWatcher(opts WatcherOptions) (*Watcher, error) {
 		stop:     make(chan struct{}),
 		done:     make(chan struct{}),
 		trees:    make(map[string]*tree),
+		saved:    make(map[string]ScannerState),
 		byDir:    make(map[string]*tree),
 		problems: make(map[string]string),
 	}
@@ -150,6 +159,9 @@ func NewWatcher(opts WatcherOptions) (*Watcher, error) {
 	}
 	if w.opts.MaxWatched <= 0 {
 		w.opts.MaxWatched = DefaultMaxWatched
+	}
+	for gitDir, st := range opts.State.Worktrees {
+		w.saved[foldPath(gitDir)] = st
 	}
 	if !opts.NoNotify {
 		fsw, err := fsnotify.NewWatcher()
@@ -218,6 +230,18 @@ func (w *Watcher) State() WatcherState {
 // nothing to watch.
 func (w *Watcher) Track(ctx context.Context, dir string) (Location, error) {
 	loc, err := w.res.Resolve(ctx, dir)
+	if err == nil && w.res.ignoredLoc(loc) {
+		// The resolver trusts its answer for a minute; a .pairtime-ignore
+		// counts from the moment it appears.
+		err = ErrIgnored
+	}
+	if errors.Is(err, ErrIgnored) {
+		// A folder that turned ignored may be a tracked worktree's.
+		w.mu.Lock()
+		w.dropIgnoredLocked()
+		w.mu.Unlock()
+		return Location{}, err
+	}
 	if err != nil {
 		return loc, err
 	}
@@ -233,8 +257,9 @@ func (w *Watcher) Track(ctx context.Context, dir string) (Location, error) {
 	if _, ok := w.trees[key]; ok {
 		return loc, nil
 	}
-	st := w.opts.State.Worktrees[loc.GitDir]
-	t := &tree{loc: loc, state: st}
+	st := w.saved[key]
+	delete(w.saved, key)
+	t := &tree{key: key, loc: loc, state: st}
 	t.scan = NewScanner(w.git, loc, st, w.now, w.res.Rekey)
 	w.trees[key] = t
 	w.watchLocked(t)
@@ -341,6 +366,10 @@ func (w *Watcher) Poll() {
 		return
 	}
 	for key, t := range w.trees {
+		if w.res.ignoredLoc(t.loc) {
+			w.dropLocked(key, t)
+			continue
+		}
 		if _, err := os.Stat(filepath.Join(t.loc.GitDir, "HEAD")); err != nil {
 			w.untrackLocked(key, t)
 			continue
@@ -349,6 +378,27 @@ func (w *Watcher) Poll() {
 			w.queueLocked(t)
 		}
 	}
+}
+
+// dropIgnoredLocked drops every tracked worktree that is now out of
+// pairtime.
+func (w *Watcher) dropIgnoredLocked() {
+	for key, t := range w.trees {
+		if w.res.ignoredLoc(t.loc) {
+			w.dropLocked(key, t)
+		}
+	}
+}
+
+// dropLocked stops watching a worktree that is now out of pairtime, as
+// DESIGN 8.8 asks of a .pairtime-ignore or an exclude pattern added while
+// it was tracked: its held changes never reach Sink, and nothing of its
+// state is kept.
+func (w *Watcher) dropLocked(key string, t *tree) {
+	w.untrackLocked(key, t)
+	delete(w.saved, key)
+	t.dropped = true
+	w.held = slices.DeleteFunc(w.held, func(h *heldChange) bool { return h.t == t })
 }
 
 func (w *Watcher) untrackLocked(key string, t *tree) {
@@ -403,12 +453,31 @@ func (w *Watcher) loop() {
 }
 
 func (w *Watcher) scan(t *tree) {
+	w.mu.Lock()
+	if t.dropped || w.closed {
+		w.mu.Unlock()
+		return
+	}
+	if w.res.ignoredLoc(t.loc) {
+		w.dropLocked(t.key, t)
+		w.mu.Unlock()
+		return
+	}
+	w.mu.Unlock()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	sig := signatureOf(t.loc)
 	changes, err := t.scan.Scan(ctx)
 	loc, state := t.scan.Location(), t.scan.State()
 	w.mu.Lock()
+	if t.dropped || w.res.ignoredLoc(loc) {
+		// Ignored while git was read: none of it counts.
+		if !t.dropped {
+			w.dropLocked(t.key, t)
+		}
+		w.mu.Unlock()
+		return
+	}
 	t.sig = sig
 	t.loc, t.state = loc, state
 	if err != nil {
@@ -418,7 +487,7 @@ func (w *Watcher) scan(t *tree) {
 	}
 	now := w.now()
 	for _, c := range changes {
-		h := &heldChange{c: c, common: t.loc.CommonDir, until: now.Add(w.opts.Hold)}
+		h := &heldChange{c: c, t: t, common: t.loc.CommonDir, until: now.Add(w.opts.Hold)}
 		w.matchLocked(h)
 		w.held = append(w.held, h)
 	}

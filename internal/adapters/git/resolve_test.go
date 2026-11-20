@@ -141,6 +141,43 @@ func TestResolve(t *testing.T) {
 			},
 		},
 		{
+			name: "a linked worktree far from an ignored repo is out too, by the main folder's .pairtime-ignore or by an exclude pattern",
+			run: func(t *testing.T, g *gitEnv) {
+				// The pattern is written the way git prints the path, since
+				// macOS's temporary folders sit behind /var's symlink.
+				root := canonicalDir(t.TempDir())
+				school := filepath.Join(root, "school")
+				if err := os.Mkdir(school, 0o755); err != nil {
+					t.Fatal(err)
+				}
+				essay := &testRepo{g: g, dir: filepath.Join(school, "essay")}
+				if err := os.Mkdir(essay.dir, 0o755); err != nil {
+					t.Fatal(err)
+				}
+				essay.git("init", "-q")
+				essay.commit("one", map[string]string{"essay.md": "draft\n"})
+				wt := filepath.Join(t.TempDir(), "worktrees", "essay-feature")
+				essay.git("worktree", "add", "-q", wt, "-b", "feature")
+				ex, problems := NewExcludes([]string{filepath.Join(root, "school")}, "")
+				if len(problems) > 0 {
+					t.Fatal(problems)
+				}
+				if _, err := g.resolver(ProjectMap{}, ex).Resolve(ctx, wt); !errors.Is(err, ErrIgnored) {
+					t.Errorf("with an exclude pattern for the main folder: %v, want ErrIgnored", err)
+				}
+				res := g.resolver(ProjectMap{}, Excludes{})
+				if _, err := res.Resolve(ctx, wt); err != nil {
+					t.Fatalf("before any .pairtime-ignore: %v", err)
+				}
+				// Not committed, so the linked worktree has no copy.
+				essay.write(map[string]string{IgnoreFile: ""})
+				res.recheck = -1 // as if DefaultRecheck had passed
+				if _, err := res.Resolve(ctx, wt); !errors.Is(err, ErrIgnored) {
+					t.Errorf("with a .pairtime-ignore in the main folder: %v, want ErrIgnored", err)
+				}
+			},
+		},
+		{
 			name: "an exclude pattern keeps a folder and the folders below it out, and leaves its neighbours in",
 			run: func(t *testing.T, g *gitEnv) {
 				root := t.TempDir()

@@ -273,7 +273,7 @@ func (r *Resolver) stillValid(abs string, e dirEntry) bool {
 	if errors.Is(e.err, ErrIgnored) {
 		return r.ignored(abs)
 	}
-	if e.err != nil || r.ignored(abs) || (e.loc.Dir != "" && r.ignored(e.loc.Dir)) {
+	if e.err != nil || r.ignored(abs) || r.ignoredLoc(e.loc) {
 		return false
 	}
 	if e.loc.GitDir != "" {
@@ -300,6 +300,18 @@ func gitAbove(dir string) string {
 // ignored reports whether dir is out of pairtime.
 func (r *Resolver) ignored(dir string) bool {
 	return r.ex.Match(dir) || ignoreFileAbove(dir) != ""
+}
+
+// ignoredLoc reports whether a resolved location is out of pairtime now:
+// its folder is, or, for a linked worktree, its repo's main worktree is.
+// Agent tools put worktrees far from the repo (~/.cursor/worktrees/...,
+// ../essay-feature), where the main folder's .pairtime-ignore and an
+// exclude pattern for it don't reach. It costs a few stats, no git call.
+func (r *Resolver) ignoredLoc(loc Location) bool {
+	if loc.Dir != "" && r.ignored(loc.Dir) {
+		return true
+	}
+	return loc.Linked && loc.CommonDir != "" && r.ignored(mainWorktree(loc.CommonDir))
 }
 
 // resolveOnce resolves abs, sharing the work with concurrent callers.
@@ -360,7 +372,7 @@ func (r *Resolver) resolve(ctx context.Context, abs string) (Location, error) {
 	if loc.Dir == "" {
 		loc.Dir = mainWorktree(info.commonDir)
 	}
-	if r.ignored(loc.Dir) {
+	if r.ignoredLoc(loc) {
 		return Location{}, ErrIgnored
 	}
 	p, err := r.identify(ctx, abs, info, loc.Dir)
