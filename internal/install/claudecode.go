@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"path/filepath"
 	"slices"
-	"strings"
 
 	"github.com/some-du6e/pairtime/internal/install/jsonc"
 )
@@ -226,11 +225,7 @@ func sameMatcher(group *jsonc.Value, want string) bool {
 // with arguments starting "hook" and naming --harness claude_code.
 func isPairtimeHook(h *jsonc.Value) bool {
 	cmd := h.Get("command")
-	if cmd == nil || cmd.Kind != jsonc.String {
-		return false
-	}
-	name := cmd.Text[strings.LastIndexAny(cmd.Text, `/\`)+1:]
-	if !strings.EqualFold(name, "pairtime") && !strings.EqualFold(name, "pairtime.exe") {
+	if cmd == nil || cmd.Kind != jsonc.String || !isPairtimeBinary(cmd.Text) {
 		return false
 	}
 	args := strs(h.Get("args"))

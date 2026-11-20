@@ -278,6 +278,9 @@ func TestEnvCheck(t *testing.T) {
 		{"a path that isn't UTF-8 is refused", "linux", home, "/home/teen/\xff/pairtime", false},
 		{"no binary path is refused", "linux", home, "", false},
 		{"a relative home directory is refused", "linux", "teen", "/home/teen/.local/bin/pairtime", false},
+		{"a binary called something else is refused, as uninstall knows pairtime's hooks by the name", "linux", home, "/home/teen/bin/pairtime-dev", false},
+		{"a Windows binary called something else is refused", "windows", home, `C:\Users\teen\bin\pt.exe`, false},
+		{"PAIRTIME.EXE is pairtime's name on Windows, where names ignore case", "windows", home, `C:\Users\teen\bin\PAIRTIME.EXE`, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

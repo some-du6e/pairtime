@@ -51,8 +51,11 @@ func (e Env) getenv(key string) string {
 }
 
 // check says what makes e unusable for planning: a home directory that
-// isn't absolute, or a binary path that isn't an absolute path on e.GOOS
-// or holds a character no hook config or login item can carry.
+// isn't absolute, or a binary path that isn't an absolute path on e.GOOS,
+// holds a character no hook config or login item can carry, or names a
+// binary that isn't called pairtime or pairtime.exe. Uninstall recognizes
+// pairtime's hooks and login items by that name (isPairtimeBinary), so a
+// hook written for another name would stay behind once its file changed.
 func (e Env) check() error {
 	if !filepath.IsAbs(e.Home) {
 		return fmt.Errorf("the home directory %q isn't an absolute path", e.Home)
@@ -66,6 +69,8 @@ func (e Env) check() error {
 		return fmt.Errorf("the binary's path %q holds a control character", e.Exe)
 	case !isAbs(e.GOOS, e.Exe):
 		return fmt.Errorf("the binary's path %q isn't an absolute path on %s", e.Exe, e.GOOS)
+	case !isPairtimeBinary(e.Exe):
+		return fmt.Errorf("the binary %q isn't called pairtime or pairtime.exe, the name uninstall knows pairtime's hooks and login items by", e.Exe)
 	}
 	return nil
 }
