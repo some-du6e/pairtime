@@ -131,8 +131,9 @@ func TestServe(t *testing.T) {
 		{name: "the privacy notice marks the controller as not named yet", url: public + "/privacy", wantCode: 200, wantBody: `This notice isn&#39;t final\.`},
 		{name: "the public listener serves the evidence definition", url: public + "/docs/evidence", wantCode: 200, wantBody: `This server runs scoring 0\.1\.0\.`},
 		{name: "the ops listener doesn't serve the pages", url: private + "/privacy", wantCode: 404},
-		{name: "the public listener serves the home page at /", url: public + "/", wantCode: 200, wantBody: `<h1 id="pairtime-counts-the-time-you-spend-building-with-ai">`},
+		{name: "the public listener serves the home page at /, so a sign-in without return_to never ends on a 404", url: public + "/", wantCode: 200, wantBody: `<h1 id="pairtime-counts-the-time-you-spend-building-with-ai">`},
 		{name: "without hca.client_id the home page says sign-in isn't set up, and offers none", url: public + "/", wantCode: 200, wantBody: `(?s)<header>\n<a class="name" href="/">pairtime</a>\n</header>.*Sign-in isn&#39;t set up on this server yet\.`},
+		{name: "/ links to the privacy notice", url: public + "/", wantCode: 200, wantBody: `href="/privacy"`},
 		{name: "a path nothing serves is still a 404, not the home page", url: public + "/nothing-here", wantCode: 404},
 		{name: "the ops listener doesn't serve the home page", url: private + "/", wantCode: 404},
 	}
