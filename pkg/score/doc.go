@@ -72,8 +72,9 @@
 // credit nothing, in every Step alike, and the anchor is final from its
 // record's time. A browser run with credit just before it may be a lookup,
 // whose credit waits for the run's end, so nothing from such a run on is
-// final until its end bracket is. Until WP-SC5 adds checkpoints, a State
-// holds every record it was given.
+// final until its end bracket is, however long the run lasts
+// (docs/errata/2026-11-20-lookup-lookahead.md). Until WP-SC5 adds
+// checkpoints, a State holds every record it was given.
 //
 // # Readings of the spec
 //
@@ -145,7 +146,8 @@
 //     RETURN_GAP_MAX_S + READ_HORIZON_S ends any other turn's at the last
 //     one, so no record reaches further back than the scorer's look-ahead.
 //     A continuation whose first record comes later than that after the
-//     previous stop starts at the record.
+//     previous stop starts at the record. The rules for hooked turns and
+//     for silences are docs/errata/2026-11-20-hooked-turn-runs.md.
 //   - A queued message resets the bucket when the agent picks it up, which
 //     no record says, so at the session's first agent record after the
 //     enqueue, the next point an agent takes up queued input, or at the
@@ -160,8 +162,10 @@
 //     covered, as it says, X.lookup_cap for a lookup's seconds past
 //     LOOKUP_MAX_S, and X.bucket_cap for a present, focused second within
 //     READ_HORIZON_S of an act whose bucket is empty only because
-//     BUCKET_MAX_S evicted output that hasn't expired. The erratum's rule 4 names no code for the run of a
-//     no-input turn, which is X.agent_only, SM 5.2's code for an agent turn
-//     that ran with nothing credited. Seconds before the presence sampler
-//     ran are X.absent until lookback (WP-SC7).
+//     BUCKET_MAX_S evicted output that hasn't expired. The erratum's rule 4
+//     names no code for the run of a no-input turn, which is X.agent_only,
+//     SM 5.2's code for an agent turn that ran with nothing credited.
+//     docs/errata/2026-11-20-uncredited-code-placement.md asks about these
+//     placements. Seconds before the presence sampler ran are X.absent
+//     until lookback (WP-SC7).
 package score

@@ -637,13 +637,15 @@ func lowerLevel(a, b event.Evidence) event.Evidence {
 // X.ambiguous when the focus resolves to no single project, X.no_input on
 // a second the lead of a no-input prompt of the focused project would have
 // covered, X.bucket_cap on one the bucket would have credited but for
-// BUCKET_MAX_S, then, while a turn of the focused project runs, X.automated
-// if automation started it and X.agent_only otherwise, and X.no_anchor
-// last.
+// BUCKET_MAX_S, then, while a turn of the focused project runs, X.agent_only
+// if a person started it, X.automated if automation did, and X.agent_only
+// for a no-input turn, and X.no_anchor last.
+//
 // This is the order docs/errata/2026-11-19-sm-6.6-uncredited-codes.md
 // proposes, with X.no_input where it puts it. Its rule 4 names no code for
 // the run of a no-input turn, which gets SM 5.2's code for an agent turn
-// that ran with nothing credited, X.agent_only.
+// that ran with nothing credited, X.agent_only. Where the cap codes,
+// X.no_input and that run go is docs/errata/2026-11-20-uncredited-code-placement.md.
 func (c *creditor) uncredited(k int, s *Slot) event.Reason {
 	if s.Asleep || s.Locked || !present(s.At(c.at(k))) {
 		return event.ReasonAbsent

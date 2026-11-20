@@ -165,7 +165,7 @@ func Step(s State, records []event.Event) (State, Output) {
 		// start is final, so is the bracket before it, and a run with none
 		// there is no lookup whatever follows. SM 2.5 sets no bound on a
 		// run's length, so the hold has none either
-		// (docs/errata/2026-11-19-return-rule-lookahead.md).
+		// (docs/errata/2026-11-20-lookup-lookahead.md).
 		for _, sp := range lookups {
 			if sp.from < to && sp.to+r.lookupBracket > to {
 				to = min(to, sp.from)

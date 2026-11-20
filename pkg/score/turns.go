@@ -30,8 +30,8 @@ type Turn struct {
 	// never runs (docs/errata/2026-11-19-turns-without-a-stop.md). A silence
 	// of the turn's agent records longer than BUCKET_TTL_S, or longer than
 	// RETURN_GAP_MAX_S + READ_HORIZON_S outside hooked sessions, ends it
-	// (turnBuild.runUntil). It decides SUP against READ (SM 2.4) and
-	// agent_running_s (SM 5.1).
+	// (turnBuild.runUntil, docs/errata/2026-11-20-hooked-turn-runs.md). It
+	// decides SUP against READ (SM 2.4) and agent_running_s (SM 5.1).
 	RunUntil int64        `json:"run_until"`
 	Origin   event.Origin `json:"origin"`
 	// PromptClass is set for turns a person started.
@@ -459,7 +459,8 @@ func isEdit(p *event.AgentTool) bool {
 // session a silence of its records longer than BUCKET_TTL_S ends the run
 // BUCKET_TTL_S after the last one; elsewhere a silence longer than reach
 // ends it at the last one. A later record of the turn doesn't start it
-// again.
+// again. docs/errata/2026-11-20-hooked-turn-runs.md asks about both
+// additions to the turns-without-a-stop rule.
 func (tb *turnBuild) runUntil(r rules, later []*turnBuild, now int64) int64 {
 	native := tb.sess.native
 	gap := r.reach

@@ -79,7 +79,8 @@ type rules struct {
 	// reach, in every Step alike: a typed command's lead and run, when its
 	// record comes at the end of a run longer than that; a permission's
 	// wait, when its record comes long after the answer; and a turn's run,
-	// across a longer silence of its agent's records (turnBuild.runUntil).
+	// across a longer silence of its agent's records (turnBuild.runUntil,
+	// docs/errata/2026-11-20-hooked-turn-runs.md).
 	reach int64
 	// settle is how long after a time the scorer may still change what it
 	// derived for that time: the pending window for late records (DESIGN
@@ -87,7 +88,7 @@ type rules struct {
 	// the record arrives, up to PENDING_WINDOW_S late, and the Finals of a
 	// Step per minute are what one Step gives. A browser run's lookup waits
 	// for its end, which can be later still, and Step holds FinalBefore for
-	// it on its own.
+	// it on its own (docs/errata/2026-11-20-lookup-lookahead.md).
 	settle int64
 }
 

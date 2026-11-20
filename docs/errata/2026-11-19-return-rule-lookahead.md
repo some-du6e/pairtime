@@ -30,17 +30,3 @@ WP-SC1 derives slots, anchors and the returned runs, not buckets. Its own output
 ## For Karim
 
 1. Pick one of the three, or another rule. The first changes D1's number, the second SM 2.1's rule, the third what `final` means.
-
-## SM 2.5's lookups look ahead without a bound
-
-Added by the WP-SC2 review fix-up (#80), 2026-11-20.
-
-A run of browser or chat-app slots is a lookup for project `p` only if a credited slot of `p` starts within `LOOKUP_BRACKET_S` after the run ends (SM 2.5). SM puts no bound on how long the run is, so whether its first second is credited is decided only at its end. A two-hour video right after a credited slot is a lookup if the person comes back to the project within 30 s, and its first 180 s are then `LOOKUP`, credited two hours after they happened. That reaches further than both the pending window and the return rule's 1,200 s.
-
-`pkg/score` holds `FinalBefore` at the start of such a run until its end bracket is final, so every Step agrees with one Step over the same records. It holds only for runs with a credited second in the `LOOKUP_BRACKET_S` before them: once a run's start is final, that bracket is too, and a run with nothing there can't be a lookup. The hold still has no bound for a run that does have one, and WP-SC4's pending rule needs one.
-
-For Karim, alongside the three choices above:
-
-1. Cap the run: a browser or chat-app run longer than some bound, for example `PENDING_WINDOW_S`, is no lookup. SM 8.3 already calls `LOOKUP_MAX_S` "a documentation lookup, not an evening of video".
-2. Or keep the hold, and let a lookup's minutes be pending for as long as its run lasts.
-3. Or let a lookup's credit land in a later revision of a final bucket, as choice 3 above would for the return rule.

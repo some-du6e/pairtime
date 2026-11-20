@@ -50,12 +50,3 @@ Two alternatives:
 
 1. Accept the rule above, or pick another. It belongs in SM 1.3, where turns are built, so that SM 2.4, 2.5, 5.1, 5.2 and 5.4 all read the same answer.
 2. The rows in (a), (b) and (e) then lose the erratum, or change in a PR with the `oracle-change` label.
-
-## What `pkg/score` does
-
-Added by the WP-SC2 review fix-up (#80), 2026-11-20. The scorer keeps the rule above for turns that no hook or log reader sees, which are the track, plugin and bridge turns this erratum is about. Two things are added to it:
-
-- A turn in a session that hooks or a log reader see runs up to "now" until its stop comes, capped at `BUCKET_TTL_S` after its last agent record. Its hooks will report the stop, and a Claude Code turn that runs one 40-minute build, or waits 40 minutes on a permission prompt, is running throughout. Under the last-record rule its minutes went final as if it had stopped, and the stop that came later changed what one Step over all the records gives.
-- "Received so far" is made exact. A record changes nothing derived more than `RETURN_GAP_MAX_S` + `READ_HORIZON_S` = 1,200 s before its own time, the return rule's reach that the pending window already allows for. So a silence of a turn's agent records longer than that ends its run at the last record before it, and a later record doesn't start it again. The live scorer and a re-score from the same records then agree, which is what this erratum's last paragraph found they don't.
-
-No fixture row changes: every turn in (a), (b) and (e) keeps its run.
