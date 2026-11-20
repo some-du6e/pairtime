@@ -34,7 +34,9 @@ function isApp(mode: string): mode is AppName {
 // the policy travels with the files whichever binary serves them. Only
 // builds get it, because the dev server injects inline styles.
 // frame-ancestors can't be set from a <meta>; the agent sends
-// X-Frame-Options: DENY instead (internal/agent/localhttp).
+// X-Frame-Options: DENY instead (internal/agent/localhttp). TestFS in
+// internal/webui holds the built dashboard to exactly these directives, so
+// a change here changes cspWant there too.
 const contentSecurityPolicy = [
 	"default-src 'none'",
 	"script-src 'self'",
