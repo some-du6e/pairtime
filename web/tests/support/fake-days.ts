@@ -1,19 +1,28 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 // What the fake agent answers, for vitest and Playwright, in the shapes
-// `pairtime today` and `recap` read (cmd/pairtime/localapi.go): a week of
-// Sam's from SM 6.3, whose Friday is the five-project afternoon with SM's
-// credited totals (207 minutes) and agent-only times (93 minutes), a little
-// more for the last 30 days, and a last work session. Thursday has a Claude
-// session with no time of its own, which agent_only_by_harness lists at 0,
-// so its reading still says Claude's name. tests/support/fake.test.ts holds
-// every answer to docs/api/local.openapi.yaml and to the sums it promises.
+// docs/api/local.openapi.yaml gives GET /v1/days/{date} and GET
+// /v1/sessions/last: a week of Sam's from SM 6.3, whose Friday is the
+// five-project afternoon with SM's credited totals (207 minutes), each
+// project's agent time (93 minutes) and the 33 uncredited minutes, a
+// little more for the last 30 days, and a last work session. A project's
+// agent time is SM 5.3's agent_only_s, the seconds its turns ran that it
+// didn't credit; most of it another project credited (SM 6.3), and only
+// the small part nothing credited is X.agent_only. Thursday has a Claude
+// session with no time of its own, which agent_only_by_harness lists at
+// 0, so its reading still says Claude's name, and minutes past two hours
+// without progress, some still on hold. While display.shadow is on the
+// agent leaves out what D-shadow-scope hides (shadowDay, shadowSession).
+// tests/support/fake.test.ts holds every answer to the spec and to the
+// sums it promises.
 
 import type { components } from '../../src/gen/local-api.ts';
 
 type Schemas = components['schemas'];
 type Day = Schemas['Day'];
 type DayProject = Schemas['DayProject'];
+type LastSession = Schemas['LastSession'];
+type Uncredited = Schemas['Uncredited'];
 
 /** The fake agent's today, a Friday. */
 export const today = '2026-11-20';
@@ -31,9 +40,14 @@ interface Spec {
 	byEvidence: Schemas['ByEvidence'];
 	pending?: number;
 	byKind: Schemas['ByKind'];
+	/** The project's agent time, agent_only_s, by harness. */
 	agents?: Schemas['AgentOnlyByHarness'];
-	/** Uncredited seconds other than the agent's, which X.agent_only adds. */
-	other?: Schemas['Uncredited'];
+	/** The part of the agent time that no project credited, X.agent_only. */
+	agentOnly?: number;
+	/** Uncredited seconds other than X.agent_only. */
+	other?: Uncredited;
+	/** The part of X.noprog that progress can still bring back. */
+	onHold?: number;
 }
 
 /** A project's day, with credited_s and agent_only_s added up from the parts. */
@@ -41,7 +55,7 @@ function project(s: Spec): DayProject {
 	const credited = (s.byEvidence.A ?? 0) + (s.byEvidence.B ?? 0) + (s.byEvidence.C ?? 0);
 	const agents = s.agents ?? {};
 	const agentOnly = Object.values(agents).reduce((a: number, b) => a + (b ?? 0), 0);
-	return {
+	const p: DayProject = {
 		project: s.project,
 		name: names[s.project] ?? '',
 		credited_s: credited,
@@ -50,18 +64,35 @@ function project(s: Spec): DayProject {
 		credited_by_evidence: s.byEvidence,
 		agent_only_s: agentOnly,
 		agent_only_by_harness: agents,
-		uncredited: agentOnly > 0 ? { ...s.other, 'X.agent_only': agentOnly } : { ...s.other },
+		uncredited: s.agentOnly ? { ...s.other, 'X.agent_only': s.agentOnly } : { ...s.other },
 	};
+	if (s.onHold !== undefined) {
+		p.on_hold_s = s.onHold;
+	}
+	return p;
 }
 
-function day(date: string, specs: Spec[], shadow = false): Day {
-	return { date, shadow, projects: specs.map(project) };
+/** The start of date's day, and of the next, in UTC: the fake agent's zone is UTC. */
+function bounds(date: string): { start: string; end: string } {
+	const t = Date.parse(`${date}T00:00:00Z`);
+	const next = Number.isNaN(t) ? date : new Date(t + 86_400_000).toISOString().slice(0, 10);
+	return { start: `${date}T00:00:00Z`, end: `${next}T00:00:00Z` };
+}
+
+function day(date: string, specs: Spec[]): Day {
+	return { date, zone: 'Local', ...bounds(date), shadow: false, projects: specs.map(project) };
 }
 
 const days: Record<string, Day> = {
 	'2026-10-27': day('2026-10-27', [{ project: 'p_plant', byEvidence: { A: 2100 }, byKind: { hand_edit: 2100 } }]),
 	'2026-11-03': day('2026-11-03', [
-		{ project: 'p_rusty', byEvidence: { A: 1500 }, byKind: { hand_edit: 900, testing: 600 }, agents: { cursor: 600 } },
+		{
+			project: 'p_rusty',
+			byEvidence: { A: 1500 },
+			byKind: { hand_edit: 900, testing: 600 },
+			agents: { cursor: 600 },
+			agentOnly: 60,
+		},
 	]),
 	'2026-11-10': day('2026-11-10', [
 		{
@@ -69,6 +100,7 @@ const days: Record<string, Day> = {
 			byEvidence: { A: 2400 },
 			byKind: { prompting: 1500, reading_output: 900 },
 			agents: { claude_code: 3000 },
+			agentOnly: 120,
 			other: { 'X.same_error': 120 },
 		},
 	]),
@@ -78,6 +110,7 @@ const days: Record<string, Day> = {
 			byEvidence: { A: 1800 },
 			byKind: { prompting: 1200, reading_output: 600 },
 			agents: { claude_code: 2400 },
+			agentOnly: 60,
 			other: { 'X.absent': 600 },
 		},
 	]),
@@ -99,13 +132,20 @@ const days: Record<string, Day> = {
 			byEvidence: { A: 300, C: 300 },
 			byKind: { prompting: 300, reading_output: 300 },
 			agents: { copilot: 900 },
+			agentOnly: 60,
+			// Past two hours without progress: 150 s the half rate didn't
+			// credit, 90 of them in minutes still provisional, which progress
+			// within PROGRESS_RESTORE_S can still bring back (SM 4.3).
 			other: { 'X.noprog': 150 },
+			onHold: 90,
 		},
 		// Reading what Claude wrote the night before: a Claude session, and no
 		// time of Claude's own today.
 		{ project: 'p_portfolio', byEvidence: { A: 600 }, byKind: { reading_output: 600 }, agents: { claude_code: 0 } },
 	]),
-	// SM 6.3's afternoon, with 9 minutes still pending.
+	// SM 6.3's afternoon, with 9 minutes still pending. The 33 uncredited
+	// minutes are SM's: away 15, other apps 6, past the lookup cap 5,
+	// X.agent_only 4 and between steps 3.
 	'2026-11-20': day('2026-11-20', [
 		{
 			project: 'p_portfolio',
@@ -113,6 +153,7 @@ const days: Record<string, Day> = {
 			pending: 240,
 			byKind: { prompting: 1500, reading_output: 1080, supervising: 540 },
 			agents: { claude_code: 2460 },
+			agentOnly: 120,
 			other: { 'X.absent': 900 },
 		},
 		{
@@ -120,6 +161,7 @@ const days: Record<string, Day> = {
 			byEvidence: { A: 1800, B: 480 },
 			byKind: { prompting: 1200, reading_output: 780, supervising: 300 },
 			agents: { codex: 1320 },
+			agentOnly: 60,
 			other: { 'X.other_focus': 360 },
 		},
 		{
@@ -127,6 +169,7 @@ const days: Record<string, Day> = {
 			byEvidence: { A: 2160, C: 300 },
 			byKind: { prompting: 900, reviewing: 600, hand_edit: 960 },
 			agents: { copilot: 1080 },
+			agentOnly: 60,
 			other: { 'X.no_anchor': 180 },
 		},
 		{ project: 'p_plant', byEvidence: { A: 1740 }, byKind: { hand_edit: 1740 } },
@@ -142,13 +185,89 @@ const days: Record<string, Day> = {
 };
 
 /**
+ * The uncredited codes an answer keeps while display.shadow is on
+ * (D-shadow-scope): the agent's own and SM 4.2's loops.
+ */
+export const shadowCodes: readonly (keyof Uncredited)[] = [
+	'X.agent_only',
+	'X.automated',
+	'X.reroll',
+	'X.rewrite_loop',
+	'X.same_error',
+	'X.autopilot',
+];
+
+/** The fields a tally leaves out while display.shadow is on (D-shadow-scope). */
+export const shadowHides = ['credited_s', 'pending_s', 'credited_by_kind', 'credited_by_evidence', 'on_hold_s'] as const;
+
+/** A session's fields that a shadow answer leaves out too (D-shadow-scope). */
+export const shadowHidesOfSession = ['start', 'end', 'open'] as const;
+
+function shadowUncredited(u: Uncredited): Uncredited {
+	const out: Uncredited = {};
+	for (const code of shadowCodes) {
+		const s = u[code];
+		if (s !== undefined) {
+			out[code] = s;
+		}
+	}
+	return out;
+}
+
+/**
+ * A day as the agent gives it while display.shadow is on (D-shadow-scope):
+ * each project's agent time and the uncredited codes shadowCodes keeps, and
+ * nothing credited.
+ */
+export function shadowDay(d: Day): Day {
+	return {
+		date: d.date,
+		zone: d.zone,
+		start: d.start,
+		end: d.end,
+		shadow: true,
+		projects: d.projects.map((p) => ({
+			project: p.project,
+			name: p.name,
+			agent_only_s: p.agent_only_s,
+			agent_only_by_harness: { ...p.agent_only_by_harness },
+			uncredited: shadowUncredited(p.uncredited),
+		})),
+	};
+}
+
+/**
+ * The last session as the agent gives it while display.shadow is on
+ * (D-shadow-scope): its project, name and local date, and the tally
+ * shadowDay keeps, with no start, end or open.
+ */
+export function shadowSession(r: LastSession): LastSession {
+	const s = r.session;
+	if (!s) {
+		return { shadow: true, session: null };
+	}
+	return {
+		shadow: true,
+		session: {
+			project: s.project,
+			name: s.name,
+			...(s.date === undefined ? {} : { date: s.date }),
+			agent_only_s: s.agent_only_s,
+			agent_only_by_harness: { ...s.agent_only_by_harness },
+			uncredited: shadowUncredited(s.uncredited),
+		},
+	};
+}
+
+/**
  * GET /v1/days/{date}: date is YYYY-MM-DD or "today". A day the fixture
- * has nothing for is empty, as the agent answers for it.
+ * has nothing for is empty, as the agent answers for it. Each call gives a
+ * copy of its own, so a test can change it.
  */
 export function dayReply(date: string, shadow = false): Day {
 	const d = date === 'today' ? today : date;
-	const found = days[d] ?? day(d, []);
-	return { ...found, shadow };
+	const found = structuredClone(days[d] ?? day(d, []));
+	return shadow ? shadowDay(found) : found;
 }
 
 /** Today with every pending minute turned final. */
@@ -157,28 +276,35 @@ export function todayFinal(): Day {
 	return { ...t, projects: t.projects.map((p) => ({ ...p, pending_s: 0 })) };
 }
 
-/** GET /v1/sessions/last: rusty-cli's nine minutes this afternoon, or none before the first. */
-export function lastSession(options: { shadow?: boolean; none?: boolean; open?: boolean } = {}): Schemas['LastSession'] {
-	if (options.none) {
-		return { shadow: options.shadow ?? false, session: null };
-	}
-	return {
-		shadow: options.shadow ?? false,
-		session: {
-			project: 'p_rusty',
-			name: 'rusty-cli',
-			start: '2026-11-20T14:05:00Z',
-			end: '2026-11-20T14:14:00Z',
-			open: options.open ?? false,
-			credited_s: 540,
-			pending_s: 0,
-			credited_by_kind: { hand_edit: 420, testing: 90, prompting: 20, reading_output: 10 },
-			credited_by_evidence: { A: 540 },
-			agent_only_s: 60,
-			agent_only_by_harness: { cursor: 60 },
-			uncredited: { 'X.agent_only': 60 },
-		},
-	};
+/**
+ * GET /v1/sessions/last: rusty-cli's nine minutes this afternoon, or none
+ * before the first. Cursor's turns fall inside credited minutes, so
+ * Cursor has no time of its own in it (testdata/timelines/6.3's
+ * agent_only_s for rusty-cli is 0), and agent_only_by_harness names it at
+ * 0, so its reading says Cursor's name.
+ */
+export function lastSession(options: { shadow?: boolean; none?: boolean; open?: boolean } = {}): LastSession {
+	const reply: LastSession = options.none
+		? { shadow: false, session: null }
+		: {
+				shadow: false,
+				session: {
+					project: 'p_rusty',
+					name: 'rusty-cli',
+					date: '2026-11-20',
+					start: '2026-11-20T14:05:00Z',
+					end: '2026-11-20T14:14:00Z',
+					open: options.open ?? false,
+					credited_s: 540,
+					pending_s: 0,
+					credited_by_kind: { hand_edit: 420, testing: 90, prompting: 20, reading_output: 10 },
+					credited_by_evidence: { A: 540 },
+					agent_only_s: 0,
+					agent_only_by_harness: { cursor: 0 },
+					uncredited: {},
+				},
+			};
+	return options.shadow ? shadowSession(reply) : reply;
 }
 
 /** GET /v1/status from an agent that has run since 08:00. */
