@@ -757,9 +757,13 @@ func TestInstallKeepsHowTheFileIsStored(t *testing.T) {
 		name string
 		link bool // settings.json links to a file in a dotfiles folder
 		mode fs.FileMode
+		// chmod, when set, is the mode the teen gives the file after
+		// install, which uninstall must keep.
+		chmod fs.FileMode
 	}{
-		{"a settings.json that links to a dotfiles folder stays a link, and the file it points to is edited", true, 0o644},
-		{"the file's mode is kept through install and uninstall", false, 0o640},
+		{"a settings.json that links to a dotfiles folder stays a link, and the file it points to is edited", true, 0o644, 0},
+		{"the file's mode is kept through install and uninstall", false, 0o640, 0},
+		{"a mode the teen gave the file after install is kept when uninstall puts its bytes back", false, 0o644, 0o600},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -786,7 +790,7 @@ func TestInstallKeepsHowTheFileIsStored(t *testing.T) {
 				t.Fatal(err)
 			}
 			in := newInstaller(t)
-			check := func(when string, want []byte) {
+			check := func(when string, want []byte, mode fs.FileMode) {
 				t.Helper()
 				if info, err := os.Lstat(path); err != nil || (info.Mode()&fs.ModeSymlink != 0) != tt.link {
 					t.Errorf("%s, settings.json is a link: %v, want %v (%v)", when, err == nil && info.Mode()&fs.ModeSymlink != 0, tt.link, err)
@@ -795,17 +799,24 @@ func TestInstallKeepsHowTheFileIsStored(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if info.Mode().Perm() != tt.mode {
-					t.Errorf("%s, the file's mode is %v, want %v", when, info.Mode().Perm(), tt.mode)
+				if info.Mode().Perm() != mode {
+					t.Errorf("%s, the file's mode is %v, want %v", when, info.Mode().Perm(), mode)
 				}
 				if got := readOrNil(t, real); !bytes.Equal(got, want) {
 					t.Errorf("%s, the file holds\n%s\nwant\n%s", when, got, want)
 				}
 			}
 			install(t, in, item)
-			check("after install", after)
+			check("after install", after, tt.mode)
+			mode := tt.mode
+			if tt.chmod != 0 {
+				if err := os.Chmod(real, tt.chmod); err != nil {
+					t.Fatal(err)
+				}
+				mode = tt.chmod
+			}
 			uninstall(t, in)
-			check("after uninstall", before)
+			check("after uninstall", before, mode)
 		})
 	}
 }

@@ -436,6 +436,12 @@ func (in *Installer) planUndo(rec record) (Change, error) {
 			ch.Notes = append(ch.Notes, "This changed since pairtime wrote it, so only pairtime's own entries come out.")
 		}
 	}
+	if ch.After.Exists && cur.Exists && !rec.Target.isRegistry() {
+		// The file keeps the mode it has now, which the digest doesn't
+		// cover: a settings.json the teen made private since install
+		// stays private.
+		ch.After.Mode = cur.Mode
+	}
 	// checkUndo may change ch, so it runs before ch is returned.
 	err = checkUndo(&ch, rec.Edits)
 	return ch, err
