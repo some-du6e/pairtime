@@ -409,16 +409,22 @@ func (w *Writer) usable() error {
 }
 
 // append writes rec's frame to the segment of today, or of the newest day
-// a segment has if the clock went back. w.mu is held.
+// a segment has if the clock went back. A record too large for a frame,
+// such as a checkpoint of a huge state, is refused before anything is
+// written, so it takes no number. w.mu is held.
 func (w *Writer) append(rec ledger.Record) error {
-	if err := w.toSegment(); err != nil {
-		return err
-	}
 	payload := make([]byte, 0, ledger.HeaderSize+len(rec.Body))
 	payload = append(payload, rec.Header[:]...)
 	payload = append(payload, rec.Body...)
+	fr, err := frameOf(kindRecord, payload)
+	if err != nil {
+		return err
+	}
+	if err := w.toSegment(); err != nil {
+		return err
+	}
 	pos := position{Seg: w.segDay, Off: w.seg.size}
-	if err := w.seg.write(appendFrame(nil, kindRecord, payload)); err != nil {
+	if err := w.seg.write(fr); err != nil {
 		return w.writeFailed(err)
 	}
 	w.pending = append(w.pending, pending{rec: rec, pos: pos})
@@ -566,7 +572,12 @@ func (w *Writer) seal() (Batch, bool, error) {
 		w.mu.Unlock()
 		return Batch{}, false, err
 	}
-	if err := w.seg.write(appendFrame(nil, kindSeal, payload)); err != nil {
+	fr, err := frameOf(kindSeal, payload)
+	if err != nil {
+		w.mu.Unlock()
+		return Batch{}, false, err
+	}
+	if err := w.seg.write(fr); err != nil {
 		err = w.writeFailed(err)
 		w.mu.Unlock()
 		return Batch{}, false, err
@@ -631,7 +642,11 @@ func (w *Writer) writeRow(rp rowPayload) error {
 	if err != nil {
 		return err
 	}
-	return w.batches.write(appendFrame(nil, kindBatch, payload))
+	fr, err := frameOf(kindBatch, payload)
+	if err != nil {
+		return err
+	}
+	return w.batches.write(fr)
 }
 
 // StoreReceipt keeps the server's receipt for batch b in batches.seg, with
@@ -657,11 +672,15 @@ func (w *Writer) StoreReceipt(b uint64, r ledger.Receipt) error {
 	if err != nil {
 		return err
 	}
+	fr, err := frameOf(kindReceipt, payload)
+	if err != nil {
+		return err
+	}
 	if err := w.batches.sync(); err != nil {
 		w.fail(err)
 		return err
 	}
-	if err := w.batches.write(appendFrame(nil, kindReceipt, payload)); err != nil {
+	if err := w.batches.write(fr); err != nil {
 		w.fail(err)
 		return err
 	}

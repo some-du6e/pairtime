@@ -266,8 +266,12 @@ func (w *Writer) newChain() error {
 	if err != nil {
 		return err
 	}
+	fr, err := frameOf(kindChain, payload)
+	if err != nil {
+		return err
+	}
 	name := filepath.Join(w.dir, batchesName)
-	if err := home.WriteFile(name, appendFrame(nil, kindChain, payload)); err != nil {
+	if err := home.WriteFile(name, fr); err != nil {
 		return err
 	}
 	if w.batches, err = openAppend(name, false); err != nil {

@@ -265,6 +265,43 @@ func TestRefusals(t *testing.T) {
 	}
 }
 
+// TestFrameLimit checks that the writer refuses a record whose frame would
+// be more than a frame holds (maxPayload), which every reader takes for
+// damage: a refused record takes no number and changes nothing on disk.
+func TestFrameLimit(t *testing.T) {
+	dir := t.TempDir()
+	w := open(t, dir, newClock(testT))
+	rng := rand.New(rand.NewPCG(27, 28))
+	if _, _, err := write(w, rng, "os.presence", testT); err != nil {
+		t.Fatal(err)
+	}
+	seg := segPath(dir, "2026-11-19")
+	before := fileSize(t, seg)
+	huge := json.RawMessage(`{"blob":"` + strings.Repeat("a", maxPayload) + `"}`)
+	s, err := w.Checkpoint("p_web", uint64(testT)/ledger.CheckpointMS*ledger.CheckpointMS, huge)
+	after := fileSize(t, seg)
+	next, _, nextErr := write(w, rng, "os.presence", testT)
+	closeErr := w.Close()
+
+	cases := []struct {
+		name string
+		ok   bool
+	}{
+		{"a checkpoint whose frame would be more than a frame holds is refused", err != nil && s == 0},
+		{"the refused checkpoint leaves the segment as it was", after == before},
+		{"the next record takes the number the refused one would have", nextErr == nil && next == 2},
+		{"the ledger still reads back whole", closeErr == nil && len(records(verify(t, dir, keysOf(t, testKDev)))) == 2},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if !c.ok {
+				t.Errorf("no: Checkpoint gave s = %d and %v; the segment went from %d to %d bytes; the next record got s = %d and %v; Close %v",
+					s, err, before, after, next, nextErr, closeErr)
+			}
+		})
+	}
+}
+
 // TestWriteKeepsInput checks that Write changes nothing the caller holds,
 // though it stores the prompt with the low_effort and error_sig it derives.
 func TestWriteKeepsInput(t *testing.T) {
