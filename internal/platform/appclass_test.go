@@ -74,6 +74,12 @@ func checkEntry(e Entry) []string {
 	if e.JSRuntime && e.Role != RoleRuntime {
 		bad = append(bad, "js_runtime is set on an entry that isn't a runtime")
 	}
+	if e.NodeLauncher && e.Role != RoleHarness {
+		bad = append(bad, "node_launcher is set on an entry whose role isn't harness")
+	}
+	if e.GivesConsole && !slices.Equal(e.OS, []string{Windows}) {
+		bad = append(bad, "gives_console is set on an entry that isn't for Windows alone")
+	}
 	if !citeRE.MatchString(e.Cite) {
 		bad = append(bad, fmt.Sprintf("cite %q names no HS, CP or SM section", e.Cite))
 	}
@@ -148,6 +154,9 @@ func TestAppClassRejectsBadEntries(t *testing.T) {
 		{"only harness entries name a harness", func(e *Entry) { e.Harness = event.HarnessCodex }, "isn't harness"},
 		{"job_control is for shells", func(e *Entry) { e.JobControl = true }, "isn't a shell"},
 		{"js_runtime is for runtimes", func(e *Entry) { e.JSRuntime = true }, "isn't a runtime"},
+		{"node_launcher is for harnesses", func(e *Entry) { e.NodeLauncher = true }, "node_launcher is set"},
+		{"gives_console is for Windows entries", func(e *Entry) { e.GivesConsole = true }, "gives_console is set"},
+		{"gives_console on a Windows entry passes", func(e *Entry) { e.GivesConsole, e.OS = true, []string{Windows} }, ""},
 		{"an entry cites HS, CP or SM", func(e *Entry) { e.Cite = "common knowledge" }, "names no HS"},
 	}
 	for _, tt := range tests {
@@ -174,11 +183,15 @@ func TestLookup(t *testing.T) {
 		{"case doesn't matter", Windows, "WindowsTerminal", true, RoleTerminal, event.AppTerminal},
 		{"a .exe suffix is dropped", Windows, "Code.exe", true, RoleIDE, event.AppEditor},
 		{"an entry holds only on its OS", Linux, "windowsterminal", false, "", ""},
-		{"an entry without os holds everywhere", Darwin, "bash", true, RoleShell, event.AppOther},
+		{"an entry without os holds everywhere", Darwin, "bash", true, RoleShell, event.AppTerminal},
 		{"a pattern matches the rest", Linux, "python3.12", true, RoleRuntime, event.AppOther},
 		{"a pattern matches a macOS helper", Darwin, "Code Helper (Plugin)", true, RoleIDE, event.AppEditor},
 		{"the same name can differ by OS", Darwin, "launchd", true, RoleScheduler, event.AppOther},
-		{"claude is Claude Code", Linux, "claude", true, RoleHarness, event.AppOther},
+		{"login is a wrapper on macOS", Darwin, "login", true, RoleWrapper, event.AppOther},
+		{"login is a text console's terminal on Linux", Linux, "login", true, RoleTerminal, event.AppTerminal},
+		{"the bare name agent isn't the Cursor CLI", Windows, "Agent.exe", false, "", ""},
+		{"conhost isn't listed, since it never owns a console window or starts a process", Windows, "conhost.exe", false, "", ""},
+		{"claude is Claude Code", Linux, "claude", true, RoleHarness, event.AppTerminal},
 		{"the desktop app is not Claude Code", Darwin, "claude-desktop", true, RoleDesktop, event.AppAgentApp},
 		{"an unknown name isn't found", Linux, "gen_prompt.py", false, "", ""},
 		{"an empty name isn't found", Linux, "", false, "", ""},
@@ -204,6 +217,14 @@ func TestAppClassOf(t *testing.T) {
 		{"a browser is browser", Windows, "msedge.exe", event.AppBrowser},
 		{"ChatGPT is a chat app", Darwin, "ChatGPT", event.AppChatApp},
 		{"an unknown app is other", Windows, "steam.exe", event.AppOther},
+		{"a PowerShell console window, which powershell.exe owns, is a terminal", Windows, "powershell.exe", event.AppTerminal},
+		{"a cmd console window is a terminal", Windows, "cmd.exe", event.AppTerminal},
+		{"the console window of a claude.exe started from Win+R is a terminal", Windows, "claude.exe", event.AppTerminal},
+		{"the console window of Git Bash's bash.exe is a terminal", Windows, "bash.exe", event.AppTerminal},
+		{"File Explorer is other", Windows, "explorer.exe", event.AppOther},
+		{"Neovim is an editor", Linux, "nvim", event.AppEditor},
+		{"Helix is an editor", Darwin, "hx", event.AppEditor},
+		{"Devin Desktop is an editor", Linux, "devin-desktop", event.AppEditor},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -234,11 +255,47 @@ func TestExeName(t *testing.T) {
 		{"its launcher is the desktop app too", Windows, `C:\Users\u\AppData\Local\AnthropicClaude\claude.exe`, "claude-desktop"},
 		{"claude.exe elsewhere is Claude Code", Windows, `C:\Users\u\.local\bin\claude.exe`, "claude"},
 		{"a bare name is its own base name", Linux, "bash", "bash"},
+		{"the Cursor CLI's versioned image is cursor-agent", Linux, "/home/u/.local/share/cursor-agent/versions/2026.11.19-f005e9d/cursor-agent", "cursor-agent"},
+		{"a node the Cursor CLI bundles is cursor-agent", Darwin, "/Users/u/.local/share/cursor-agent/versions/2026.11.19-f005e9d/node", "cursor-agent"},
+		{"the Cursor CLI's node is cursor-agent on Windows too", Windows, `C:\Users\u\AppData\Local\cursor-agent\versions\2026.11.19-f005e9d\node.exe`, "cursor-agent"},
+		{"another program in the Cursor CLI's version directory keeps its name", Linux, "/home/u/.local/share/cursor-agent/versions/2026.11.19-f005e9d/rg", "rg"},
+		{"Battle.net's Agent.exe stays Agent", Windows, `C:\ProgramData\Battle.net\Agent\Agent.9124\Agent.exe`, "Agent"},
+		{"a node elsewhere stays node", Windows, `C:\Program Files\nodejs\node.exe`, "node"},
+		{"the Devin CLI in Devin Desktop's resources is devin", Windows, `C:\Users\u\AppData\Local\Programs\Devin\resources\app\extensions\windsurf\devin\bin\devin.exe`, "devin"},
+		{"a devin.exe outside a bin directory is taken for Devin Desktop", Windows, `C:\Users\u\AppData\Local\Programs\Devin\Devin.exe`, "devin-desktop"},
+		{"a bare devin.exe, before its path is read, is devin", Windows, "devin.exe", "devin"},
+		{"a macOS app's main executable called Devin is Devin Desktop", Darwin, "/Applications/Devin.app/Contents/MacOS/Devin", "devin-desktop"},
+		{"the Devin CLI inside the app bundle is devin", Darwin, "/Applications/Devin.app/Contents/Resources/app/extensions/windsurf/devin/bin/devin", "devin"},
+		{"the Devin CLI on Linux is devin", Linux, "/home/u/.local/bin/devin", "devin"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := ExeName(tt.goos, tt.path); got != tt.want {
 				t.Errorf("ExeName(%q, %q) = %q, want %q", tt.goos, tt.path, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestNeedsPath(t *testing.T) {
+	tests := []struct {
+		name string
+		exe  string
+		want bool
+	}{
+		{"claude may be Claude Code or the desktop app", "claude.exe", true},
+		{"devin may be the CLI or Devin Desktop", "Devin.exe", true},
+		{"node may be the Cursor CLI's", "node.exe", true},
+		{"agent may be the Cursor CLI's", "agent.exe", true},
+		{"a version number may be Claude Code", "2.1.328", true},
+		{"bash is bash wherever it is", "bash.exe", false},
+		{"codex is codex wherever it is", "codex.exe", false},
+		{"cursor-agent needs no path", "cursor-agent.exe", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := NeedsPath(tt.exe); got != tt.want {
+				t.Errorf("NeedsPath(%q) = %v, want %v", tt.exe, got, tt.want)
 			}
 		})
 	}

@@ -85,10 +85,22 @@ type Entry struct {
 	// shells a child in the shell's own group means the shell is running a
 	// script, not taking commands from a person.
 	JobControl bool `json:"job_control,omitempty"`
-	// JSRuntime marks Node-style runtimes. One that is a harness's direct
-	// parent and started just before it is the harness's own launcher (an
-	// npm wrapper), and one whose parent is an IDE belongs to the IDE.
+	// JSRuntime marks Node-style runtimes. One that is a NodeLauncher
+	// harness's direct parent and started just before it is the harness's
+	// own launcher (an npm wrapper), and one whose parent is an IDE belongs
+	// to the IDE.
 	JSRuntime bool `json:"js_runtime,omitempty"`
+	// NodeLauncher marks a harness whose npm package starts it through a
+	// Node wrapper that runs the native harness as its child, as codex's
+	// does. Only for these is a Node-style runtime just above the harness
+	// taken for its launcher (LauncherOf): Claude Code's npm install runs
+	// no Node at all (CP 4.1), so a node above claude is a script.
+	NodeLauncher bool `json:"node_launcher,omitempty"`
+	// GivesConsole marks the Windows shell, explorer: a console program it
+	// starts gets a console window of its own, so a harness it starts
+	// directly (from the address bar, Win+R, a shortcut or a double-click)
+	// has a terminal.
+	GivesConsole bool `json:"gives_console,omitempty"`
 	// Cite says where the class comes from: an HS, CP or SM section.
 	Cite string `json:"cite"`
 }
@@ -213,27 +225,49 @@ func normalizeName(name string) string {
 //   - Claude Code's native install runs from claude/versions/<version>
 //     through a claude symlink (CP 4.1), so on Linux and macOS the image's
 //     own name is a version number. Such an image is named "claude".
+//   - The Cursor CLI's install script puts it at
+//     cursor-agent/versions/<version>/cursor-agent and links both agent
+//     and cursor-agent in ~/.local/bin to it (HS 4.1; cursor.com/install,
+//     read 2026-11-19). An image in such a version directory called
+//     cursor-agent, agent or node, a runtime the CLI may bundle, is named
+//     "cursor-agent". The bare name agent names nothing, because other
+//     programs use it: Battle.net's updater is Agent.exe.
 //   - The Claude desktop app's executable is also called claude.exe on
 //     Windows (under AnthropicClaude) and Claude on macOS (Claude.app). It
 //     hosts sessions rather than being one (SM 3.2), so it is named
 //     "claude-desktop". Likewise Codex.app is "codex-desktop".
+//   - The Devin CLI is devin, and Devin Desktop carries its own copy in
+//     resources/app/extensions/windsurf/devin/bin (HS 8; docs.devin.ai's
+//     air-gapped install page, read 2026-11-19). The docs don't name Devin
+//     Desktop's own executable, which may be Devin too, so the main
+//     executable of a macOS app bundle called devin, and on Windows a
+//     devin.exe outside a bin directory, are named "devin-desktop". A
+//     missed CLI session costs less than every Electron process of the
+//     editor reported as one.
 //
 // Linux marks an image deleted since it started, as after an update, with
 // " (deleted)"; that is dropped.
 func ExeName(goos, path string) string {
 	p, dir, base := splitPath(goos, path)
 	lower := strings.ToLower(p)
-	parent, grand := lastTwo(strings.ToLower(dir))
+	parent, grand, great := lastThree(strings.ToLower(dir))
+	lbase := strings.ToLower(base)
 	switch {
 	case goos == Darwin && strings.HasSuffix(lower, "/claude.app/contents/macos/claude"):
 		return "claude-desktop"
 	case goos == Darwin && strings.HasSuffix(lower, "/codex.app/contents/macos/codex"):
 		return "codex-desktop"
-	case goos == Windows && strings.EqualFold(base, "claude") &&
+	case goos == Darwin && strings.HasSuffix(lower, ".app/contents/macos/devin"):
+		return "devin-desktop"
+	case goos == Windows && lbase == "claude" &&
 		(parent == "anthropicclaude" || grand == "anthropicclaude" && strings.HasPrefix(parent, "app-")):
 		return "claude-desktop"
+	case goos == Windows && lbase == "devin" && dir != "" && parent != "bin":
+		return "devin-desktop"
 	case isVersion(base) && parent == "versions" && grand == "claude":
 		return "claude"
+	case grand == "versions" && great == "cursor-agent" && (lbase == "cursor-agent" || lbase == "agent" || lbase == "node"):
+		return "cursor-agent"
 	}
 	return base
 }
@@ -284,15 +318,22 @@ func AliasOf(goos, path, name, comm string) string {
 	return comm
 }
 
-// lastTwo returns the last and second-to-last components of a slash path.
-func lastTwo(dir string) (last, second string) {
-	i := strings.LastIndexByte(dir, '/')
-	last = dir[i+1:]
-	if i < 0 {
-		return last, ""
+// lastThree returns the last three components of a slash path, last
+// first, with "" for those it doesn't have.
+func lastThree(dir string) (last, second, third string) {
+	parts := [3]string{}
+	for k := range parts {
+		if dir == "" {
+			break
+		}
+		i := strings.LastIndexByte(dir, '/')
+		parts[k] = dir[i+1:]
+		if i < 0 {
+			break
+		}
+		dir = dir[:i]
 	}
-	rest := dir[:i]
-	return last, rest[strings.LastIndexByte(rest, '/')+1:]
+	return parts[0], parts[1], parts[2]
 }
 
 // isVersion reports whether s looks like 2.1.328: digits and dots, starting
@@ -318,8 +359,17 @@ func isVersion(s string) bool {
 
 func isDigit(b byte) bool { return '0' <= b && b <= '9' }
 
-// LooksLikeVersion reports whether an executable's base name is a version
-// number, the case ExeName needs the full path for. Readers that get only
-// base names cheaply (Toolhelp32) fetch the full path for these and for
-// "claude" alone.
-func LooksLikeVersion(name string) bool { return isVersion(normalizeName(name)) }
+// NeedsPath reports whether ExeName may name an executable whose base name
+// is name differently once it has the full path: claude (Claude Code or the
+// Claude desktop app), devin (the Devin CLI or Devin Desktop), agent and
+// node (the Cursor CLI's image or another program's), and a version number.
+// A reader that gets base names cheaply, as Windows' process snapshot gives
+// them, reads the full path of these alone.
+func NeedsPath(name string) bool {
+	switch n := normalizeName(name); n {
+	case "claude", "devin", "agent", "node":
+		return true
+	default:
+		return isVersion(n)
+	}
+}

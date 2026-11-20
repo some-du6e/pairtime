@@ -1,12 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-// The Windows process table, from Toolhelp32 (WP-OS6).
+// The Windows process table, from NtQuerySystemInformation (WP-OS6).
 
 package windows
 
 import (
 	"errors"
-	"strings"
 	"time"
 	"unsafe"
 
@@ -15,61 +14,111 @@ import (
 	"github.com/some-du6e/pairtime/internal/platform"
 )
 
-// Processes reads the process table: one Toolhelp32 snapshot for every
-// process's ID, parent ID and executable file name, then, per process,
-// OpenProcess with PROCESS_QUERY_LIMITED_INFORMATION and GetProcessTimes
-// for its start time. That right is the least a query needs, and protected
-// processes still grant it (CP 3.3). Only for an image called claude.exe,
-// or named like a version number, is the full path read too, with
-// QueryFullProcessImageNameW, because the base name alone can't tell the
-// Claude desktop app from Claude Code (ExeName). Nothing else is read: not
-// the command line or the environment, which sit in the process's memory.
+// Processes reads the process table with one
+// NtQuerySystemInformation(SystemProcessInformation) call. It gives every
+// process's ID, parent ID, image file name, creation time and logon
+// session without opening any process, so the processes of SYSTEM and of
+// other users have a start time too, which Table.Parent needs to see that
+// a parent's PID was reused.
+//
+// A process is opened, with PROCESS_QUERY_LIMITED_INFORMATION, only when
+// it may be a harness or its name needs its path (platform.NeedsPath).
+// QueryFullProcessImageNameW then reads the full path, because the base
+// name alone can't tell the Claude desktop app from Claude Code (ExeName).
+// A harness the reader can't open, or whose PID went to a newer process
+// since the snapshot, or whose path it needed and couldn't read, gets no
+// Owner, so the scan never reports it: the processes of other users are
+// among those it can't open. Nothing else is read: not the command line
+// or the environment, which sit in the process's memory.
 //
 // Windows has no process groups and doesn't say whether a process has a
-// terminal, so PGID is 0 and TTY TTYUnknown. A process whose start time
-// can't be read (another user's, or System) has a zero Start.
+// terminal, so PGID is 0 and TTY TTYUnknown. Owner is the logon session.
 func Processes() ([]platform.Proc, error) {
-	snap, err := win.CreateToolhelp32Snapshot(win.TH32CS_SNAPPROCESS, 0)
+	buf, err := processInformation()
 	if err != nil {
 		return nil, err
 	}
-	defer win.CloseHandle(snap)
-	var e win.ProcessEntry32
-	e.Size = uint32(unsafe.Sizeof(e))
+	size := int(unsafe.Sizeof(win.SYSTEM_PROCESS_INFORMATION{}))
 	var procs []platform.Proc
-	for err = win.Process32First(snap, &e); err == nil; err = win.Process32Next(snap, &e) {
-		procs = append(procs, fromEntry(&e))
-	}
-	if !errors.Is(err, win.ERROR_NO_MORE_FILES) {
-		return nil, err
+	for off := 0; off+size <= len(buf); {
+		info := (*win.SYSTEM_PROCESS_INFORMATION)(unsafe.Pointer(&buf[off]))
+		if info.UniqueProcessID != 0 { // not the System Idle Process
+			procs = append(procs, fromInfo(info))
+		}
+		if info.NextEntryOffset == 0 {
+			break
+		}
+		off += int(info.NextEntryOffset)
 	}
 	return procs, nil
 }
 
-func fromEntry(e *win.ProcessEntry32) platform.Proc {
+// processInformation returns what SystemProcessInformation fills in. The
+// size it asks for can be out of date by the next call, when processes
+// start in between, so it tries a few times with room to spare.
+func processInformation() ([]byte, error) {
+	size := uint32(256 << 10)
+	for range 8 {
+		buf := make([]byte, size)
+		var need uint32
+		err := win.NtQuerySystemInformation(win.SystemProcessInformation, unsafe.Pointer(&buf[0]), size, &need)
+		switch {
+		case err == nil:
+			return buf, nil
+		case errors.Is(err, win.STATUS_INFO_LENGTH_MISMATCH):
+			size = max(size, need) + 64<<10
+		default:
+			return nil, err
+		}
+	}
+	return nil, errors.New("SystemProcessInformation: the process list kept outgrowing the buffer")
+}
+
+func fromInfo(info *win.SYSTEM_PROCESS_INFORMATION) platform.Proc {
 	p := platform.Proc{
-		PID:  int(e.ProcessID),
-		PPID: int(e.ParentProcessID),
-		Name: platform.ExeName(platform.Windows, win.UTF16ToString(e.ExeFile[:])),
+		PID:   int(info.UniqueProcessID),
+		PPID:  int(info.InheritedFromUniqueProcessID),
+		Name:  platform.ExeName(platform.Windows, info.ImageName.String()),
+		Owner: platform.SessionOwner(info.SessionID),
 	}
-	if e.ProcessID == 0 {
-		return p // the System Idle Process
+	if info.CreateTime > 0 {
+		p.Start = fromFiletime(info.CreateTime)
 	}
-	h, err := win.OpenProcess(win.PROCESS_QUERY_LIMITED_INFORMATION, false, e.ProcessID)
+	_, harness := platform.HarnessOf(platform.Windows, p)
+	needPath := platform.NeedsPath(p.Name)
+	if !harness && !needPath {
+		return p
+	}
+	// Whatever goes wrong below, a harness keeps no Owner.
+	owner := p.Owner
+	if harness {
+		p.Owner = ""
+	}
+	h, err := win.OpenProcess(win.PROCESS_QUERY_LIMITED_INFORMATION, false, uint32(p.PID))
 	if err != nil {
 		return p
 	}
 	defer win.CloseHandle(h)
 	var created, exited, kernel, user win.Filetime
-	if win.GetProcessTimes(h, &created, &exited, &kernel, &user) == nil {
-		p.Start = time.Unix(0, created.Nanoseconds())
+	if win.GetProcessTimes(h, &created, &exited, &kernel, &user) != nil ||
+		int64(created.HighDateTime)<<32|int64(created.LowDateTime) != info.CreateTime {
+		return p
 	}
-	if strings.EqualFold(p.Name, "claude") || platform.LooksLikeVersion(p.Name) {
-		if path, ok := imagePath(h); ok {
-			p.Name = platform.ExeName(platform.Windows, path)
+	if needPath {
+		path, ok := imagePath(h)
+		if !ok {
+			return p
 		}
+		p.Name = platform.ExeName(platform.Windows, path)
 	}
+	p.Owner = owner
 	return p
+}
+
+// fromFiletime converts a FILETIME count, 100 ns intervals since 1601.
+func fromFiletime(ft int64) time.Time {
+	f := win.Filetime{LowDateTime: uint32(ft), HighDateTime: uint32(ft >> 32)}
+	return time.Unix(0, f.Nanoseconds())
 }
 
 // imagePath returns the full path of the process's executable image.
@@ -80,4 +129,14 @@ func imagePath(h win.Handle) (string, bool) {
 		return "", false
 	}
 	return win.UTF16ToString(buf[:n]), true
+}
+
+// SelfOwner is this process's Owner, its logon session, or "" if Windows
+// won't say.
+func SelfOwner() string {
+	var id uint32
+	if err := win.ProcessIdToSessionId(win.GetCurrentProcessId(), &id); err != nil {
+		return ""
+	}
+	return platform.SessionOwner(id)
 }

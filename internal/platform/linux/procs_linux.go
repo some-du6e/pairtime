@@ -24,14 +24,38 @@ const userHZ = 100
 // pfKthread is PF_KTHREAD in a stat line's flags: a kernel thread.
 const pfKthread = 0x00200000
 
-// Processes reads the process table from /proc. Per process it reads two
-// things: the stat line (parent, process group, controlling terminal,
-// start time and comm) and the target of the exe link, which names the
+// Processes reads the process table from /proc. Per process it reads
+// three things: the owner of the /proc/<pid> directory, which is the user
+// the process runs as (its effective uid, proc(5)); the stat line (parent,
+// process group, controlling terminal and its foreground group, start
+// time and comm); and the target of the exe link, which names the
 // executable. Nothing else under /proc/<pid> is opened: not cmdline,
 // environ, fd or maps. The exe link of another user's process can't be
 // read, and then the name is comm. Kernel threads and zombies are left out.
+//
+// Start is the boot time plus the start ticks. The kernel derives the boot
+// time from the wall clock, so a step of the clock moves every Start, while
+// Ticks, which Proc.ID uses, stay put.
 func Processes() ([]platform.Proc, error) {
 	return readProc("/proc")
+}
+
+// BootID returns the kernel's random id for this boot, which names the
+// boot that Proc.Ticks count from.
+func BootID() (string, error) {
+	return bootID("/proc")
+}
+
+func bootID(root string) (string, error) {
+	data, err := os.ReadFile(root + "/sys/kernel/random/boot_id")
+	if err != nil {
+		return "", err
+	}
+	id := string(bytes.TrimSpace(data))
+	if id == "" {
+		return "", fmt.Errorf("%s/sys/kernel/random/boot_id is empty", root)
+	}
+	return id, nil
 }
 
 func readProc(root string) ([]platform.Proc, error) {
@@ -67,6 +91,13 @@ func readProc(root string) ([]platform.Proc, error) {
 // is a kernel thread or a zombie, or its stat line doesn't parse.
 func readPid(root string, pid int, boot time.Time, buf, link []byte) (platform.Proc, bool) {
 	dir := root + "/" + strconv.Itoa(pid)
+	// The directory, not the files in it: the kernel hands the files of a
+	// process that made itself undumpable to root, but the directory always
+	// to the process's effective uid.
+	var fi unix.Stat_t
+	if err := unix.Stat(dir, &fi); err != nil {
+		return platform.Proc{}, false
+	}
 	line, err := readSmall(dir+"/stat", buf)
 	if err != nil {
 		return platform.Proc{}, false
@@ -81,9 +112,14 @@ func readPid(root string, pid int, boot time.Time, buf, link []byte) (platform.P
 		PGID:  st.pgrp,
 		TTY:   platform.TTYNone,
 		Start: boot.Add(time.Duration(st.start) * (time.Second / userHZ)),
+		Ticks: st.start,
+		Owner: platform.UIDOwner(fi.Uid),
 	}
 	if st.ttyNr != 0 {
 		p.TTY = platform.TTYAttached
+		if st.tpgid > 0 {
+			p.TPGID = st.tpgid
+		}
 	}
 	if n, err := unix.Readlink(dir+"/exe", link); err == nil && n > 0 {
 		target := string(link[:n])
@@ -101,6 +137,7 @@ type stat struct {
 	state           byte
 	comm            string
 	ttyNr           int64
+	tpgid           int // -1 without a controlling terminal
 	flags           uint64
 	start           uint64 // clock ticks after boot
 }
@@ -135,6 +172,9 @@ func parseStat(line []byte) (stat, error) {
 	}
 	if s.ttyNr, err = strconv.ParseInt(string(f[4]), 10, 64); err != nil {
 		return s, fmt.Errorf("stat: tty_nr: %w", err)
+	}
+	if s.tpgid, err = strconv.Atoi(string(f[5])); err != nil {
+		return s, fmt.Errorf("stat: tpgid: %w", err)
 	}
 	if s.flags, err = strconv.ParseUint(string(f[6]), 10, 64); err != nil {
 		return s, fmt.Errorf("stat: flags: %w", err)
@@ -190,3 +230,7 @@ func readSmall(name string, buf []byte) ([]byte, error) {
 		n += m
 	}
 }
+
+// SelfOwner is this process's Owner: the user it runs as, its effective
+// uid, as the reader records other processes' owners.
+func SelfOwner() string { return platform.UIDOwner(uint32(os.Geteuid())) }

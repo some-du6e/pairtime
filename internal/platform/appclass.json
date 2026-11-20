@@ -1,32 +1,46 @@
 {
-  "about": "What pairtime knows about an executable, shared by the Windows, macOS and Linux code. app_class is the os.focus class of a window the executable owns (SM 1.2, 2.5, 3.2). role is its part in a parent chain, which decides a harness session's parent_class (SM 1.2, 2.2 rule 4). Names are lowercase executable base names without .exe; a trailing * matches any rest. appclass.go documents every field, and appclass_test.go checks every entry.",
+  "about": "What pairtime knows about an executable, shared by the Windows, macOS and Linux code. app_class is the os.focus class of a window the executable owns (SM 1.2, 2.5, 3.2). role is its part in a parent chain, which decides a harness session's parent_class (SM 1.2, 2.2 rule 4). Names are lowercase executable base names without .exe; a trailing * matches any rest. Shells and harnesses carry app_class terminal because on Windows a classic console window belongs to its first client process, such as powershell.exe or claude.exe, and not to conhost.exe, which is why conhost isn't listed; on Linux and macOS they own no window. appclass.go documents every field, and appclass_test.go checks every entry.",
   "entries": [
     {
       "names": ["bash", "sh", "dash", "zsh", "ksh", "mksh", "ash", "fish", "tcsh", "csh"],
-      "app_class": "other",
+      "app_class": "terminal",
       "role": "shell",
       "job_control": true,
-      "cite": "SM 2.2 rule 4 (shells in between are skipped); HS 13.2 (bash, zsh, fish); HS 3.1 (Git Bash runs Claude Code's shell-form hooks on Windows)"
+      "cite": "SM 2.2 rule 4 (shells in between are skipped); HS 13.2 (bash, zsh, fish); HS 3.1 (Git Bash runs Claude Code's shell-form hooks on Windows); CP 3.3 (on Windows the foreground window of a console is its first client's)"
     },
     {
       "names": ["pwsh", "nu"],
-      "app_class": "other",
+      "app_class": "terminal",
       "role": "shell",
       "cite": "SM 2.2 rule 4; HS 13.2 (PowerShell, the Windows default shell). Neither puts jobs in process groups of their own, so a script they run looks like typing"
     },
     {
       "names": ["powershell", "cmd"],
       "os": ["windows"],
-      "app_class": "other",
+      "app_class": "terminal",
       "role": "shell",
-      "cite": "SM 2.2 rule 4; HS 13.2 (PowerShell); HS 3.1 (PowerShell runs hooks when Git Bash is missing)"
+      "cite": "SM 2.2 rule 4; HS 13.2 (PowerShell); HS 3.1 (PowerShell runs hooks when Git Bash is missing); CP 3.3 (a PowerShell or cmd window opened from the Start menu is a classic console window that GetWindowThreadProcessId gives to powershell.exe or cmd.exe)"
     },
     {
-      "names": ["login", "sudo", "su", "doas", "env", "nohup", "nice", "time", "timeout", "stdbuf", "setsid", "caffeinate"],
+      "names": ["sudo", "su", "doas", "env", "nohup", "nice", "time", "timeout", "stdbuf", "setsid", "caffeinate"],
       "os": ["linux", "darwin"],
       "app_class": "other",
       "role": "wrapper",
-      "cite": "SM 1.2 (parent_class is the nearest ancestor that started the session; a program that only runs another, such as login under macOS Terminal, is passed over)"
+      "cite": "pairtime's rule, by analogy with SM 1.2's skipped shells: a program that only runs another is passed over. timeout and setsid move the command into a process group or session of its own, which classify.go handles through the terminal's foreground group and has_tty"
+    },
+    {
+      "names": ["login"],
+      "os": ["darwin"],
+      "app_class": "other",
+      "role": "wrapper",
+      "cite": "pairtime's rule (see the entry above): macOS Terminal and iTerm2 start the shell through login, so the terminal above it decides (SM 1.2, terminal_app)"
+    },
+    {
+      "names": ["login"],
+      "os": ["linux"],
+      "app_class": "terminal",
+      "role": "terminal",
+      "cite": "SM 1.2 (terminal_app): on a Linux text console agetty runs login, whose parent is systemd, so login is the terminal there; passing over it would let systemd make a person's session scheduler"
     },
     {
       "names": ["wezterm-gui", "alacritty", "kitty", "ghostty", "warp", "tabby", "hyper"],
@@ -35,7 +49,7 @@
       "cite": "HS 13.2 (WezTerm, kitty, Warp); CP 3.3 (foreground app)"
     },
     {
-      "names": ["windowsterminal", "mintty", "conemu", "conemu64", "conemuc", "conemuc64", "conhost"],
+      "names": ["windowsterminal", "mintty", "conemu", "conemu64", "conemuc", "conemuc64"],
       "os": ["windows"],
       "app_class": "terminal",
       "role": "terminal",
@@ -56,10 +70,16 @@
       "cite": "CP 3.3 (foreground app on Linux, X11 _NET_ACTIVE_WINDOW); SM 6.4 (an X11 laptop)"
     },
     {
-      "names": ["code", "code - insiders", "code-insiders", "codium", "cursor", "windsurf", "zed", "zed-editor", "kiro", "trae", "antigravity", "sublime_text", "emacs", "gvim", "neovide", "nvim-qt"],
+      "names": ["code", "code - insiders", "code-insiders", "codium", "cursor", "windsurf", "devin-desktop", "devin desktop", "zed", "zed-editor", "kiro", "trae", "antigravity", "sublime_text", "emacs", "gvim", "neovide", "nvim-qt"],
       "app_class": "editor",
       "role": "ide",
-      "cite": "HS 13.1 (editor activity); HS 4 (Cursor); HS 8 (Windsurf); HS 9 (Zed, Kiro, Trae, Antigravity)"
+      "cite": "HS 13.1 (editor activity); HS 4 (Cursor); HS 8 (Windsurf, now Devin Desktop, whose Linux package is devin-desktop); HS 9 (Zed, Kiro, Trae, Antigravity). emacs -nw runs the same emacs"
+    },
+    {
+      "names": ["vi", "vim", "nvim", "hx", "helix", "kak", "nano", "micro"],
+      "app_class": "editor",
+      "role": "ide",
+      "cite": "HS 13.1 (editor activity through WakaTime's editor plugins, Vim's among them); TE 4.3 (editor time from the WakaTime dual-send). Terminal editors: DESIGN 5.7's peer check passes a heartbeat whose wakatime-cli has one of these above it, and a harness started from nvim's :terminal is an editor session. Helix is hx, or helix on Arch"
     },
     {
       "names": ["idea", "idea64", "pycharm", "pycharm64", "webstorm", "webstorm64", "goland", "goland64", "clion", "clion64", "rider", "rider64", "phpstorm", "phpstorm64", "rubymine", "rubymine64", "studio", "studio64"],
@@ -68,11 +88,11 @@
       "cite": "HS 9 (JetBrains IDEs, whose terminal and agent plugins run harnesses)"
     },
     {
-      "names": ["electron", "code helper*", "code - insiders helper*", "codium helper*", "cursor helper*", "windsurf helper*", "kiro helper*", "macvim"],
+      "names": ["electron", "code helper*", "code - insiders helper*", "codium helper*", "cursor helper*", "windsurf helper*", "devin helper*", "devin desktop helper*", "kiro helper*", "macvim"],
       "os": ["darwin"],
       "app_class": "editor",
       "role": "ide",
-      "cite": "HS 13.1 (VS Code and its forks; on macOS the extension host and the terminal's pty host run as the app's Helper processes); HS 4 (Cursor)"
+      "cite": "HS 13.1 (VS Code and its forks; on macOS the extension host and the terminal's pty host run as the app's Helper processes); HS 4 (Cursor); HS 8 (Devin Desktop)"
     },
     {
       "names": ["claude-desktop", "codex-desktop"],
@@ -91,6 +111,14 @@
       "app_class": "browser",
       "role": "none",
       "cite": "HS 10.1 (browser chat); SM 2.5 (browsers credit only as lookups)"
+    },
+    {
+      "names": ["explorer"],
+      "os": ["windows"],
+      "app_class": "other",
+      "role": "none",
+      "gives_console": true,
+      "cite": "SM 2.2 rule 4 (has_tty): Windows gives a console program that explorer starts, from the address bar, Win+R, a shortcut or a double-click, a console window of its own, so a harness explorer starts has a terminal. explorer says nothing about who started the session, so parent_class stays unknown"
     },
     {
       "names": ["tmux", "screen", "zellij", "dtach", "abduco"],
@@ -154,49 +182,57 @@
     },
     {
       "names": ["claude"],
-      "app_class": "other",
+      "app_class": "terminal",
       "role": "harness",
       "harness": "claude_code",
-      "cite": "HS 3.5 (claude -p and --bare runs); CP 4.1 (the native install)"
+      "cite": "HS 3.5 (claude -p and --bare runs); CP 4.1 (the native install, and the npm install, which runs no Node)"
     },
     {
       "names": ["codex"],
-      "app_class": "other",
+      "app_class": "terminal",
       "role": "harness",
       "harness": "codex",
-      "cite": "HS 6.5 (codex exec)"
+      "node_launcher": true,
+      "cite": "HS 6.5 (codex exec); HS 6 (openai/codex: the npm package's codex.js runs the native codex as its child)"
     },
     {
-      "names": ["agent", "cursor-agent"],
-      "app_class": "other",
+      "names": ["cursor-agent"],
+      "app_class": "terminal",
       "role": "harness",
       "harness": "cursor",
-      "cite": "HS 4.1 (the Cursor CLI, binary agent, formerly cursor-agent); HS 4.5 (agent -p)"
+      "cite": "HS 4.1 (the Cursor CLI, binary agent, formerly cursor-agent; ExeName names its versioned image cursor-agent, so the bare name agent isn't listed); HS 4.5 (agent -p)"
     },
     {
       "names": ["copilot"],
-      "app_class": "other",
+      "app_class": "terminal",
       "role": "harness",
       "harness": "copilot",
       "cite": "HS 5.5 (copilot -p)"
     },
     {
       "names": ["gemini"],
-      "app_class": "other",
+      "app_class": "terminal",
       "role": "harness",
       "harness": "gemini",
       "cite": "HS 7.5 (gemini -p)"
     },
     {
+      "names": ["devin"],
+      "app_class": "terminal",
+      "role": "harness",
+      "harness": "devin",
+      "cite": "HS 8.1 (the Devin CLI's hooks, which don't load in Restricted Mode); HS 8.3 (devin --cloud)"
+    },
+    {
       "names": ["opencode"],
-      "app_class": "other",
+      "app_class": "terminal",
       "role": "harness",
       "harness": "opencode",
       "cite": "HS 9 (OpenCode)"
     },
     {
       "names": ["cline"],
-      "app_class": "other",
+      "app_class": "terminal",
       "role": "harness",
       "harness": "cline",
       "cite": "HS 9 (the Cline CLI)"

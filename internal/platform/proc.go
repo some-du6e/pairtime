@@ -3,9 +3,10 @@
 // The process table, read by the OS packages (internal/platform/windows,
 // darwin and linux) and walked by the classifier in classify.go. A Proc
 // holds only what classification needs: ids, the executable's name, the
-// start time and, where the OS has them, the process group and whether a
-// terminal is attached. Command lines, environments and memory of other
-// processes are never read, because they can hold prompt text and secrets.
+// start time, the owner and, where the OS has them, the process group and
+// whether a terminal is attached. Command lines, environments and memory of
+// other processes are never read, because they can hold prompt text and
+// secrets.
 
 package platform
 
@@ -13,6 +14,7 @@ import (
 	"cmp"
 	"fmt"
 	"slices"
+	"strconv"
 	"time"
 )
 
@@ -68,12 +70,59 @@ type Proc struct {
 	// program's chosen title sets (a Node app that sets process.title). It
 	// is empty where the OS has no such name or it equals Name.
 	Alias string `json:"alias,omitempty"`
-	// Start is when the process started, zero when the OS wouldn't say.
-	// With PID it names one process even after the PID is reused.
+	// Start is when the process started, in wall-clock time, zero when the
+	// OS wouldn't say. Windows and macOS record it when the process starts.
+	// Linux keeps the start as Ticks after boot, and the reader adds the
+	// boot time, which moves whenever the wall clock is stepped, so on Linux
+	// two reads of one process can give different Starts. ID, not Start,
+	// names a process.
 	Start time.Time `json:"start,omitzero"`
+	// Ticks is the start in clock ticks after boot, where the OS keeps it
+	// that way: Linux's starttime (proc(5)). It is 0 elsewhere. No clock
+	// step changes it, but it counts from boot, so it names a process only
+	// together with the boot (BootID in internal/platform/linux).
+	Ticks uint64 `json:"ticks,omitempty"`
 	// PGID is the process group, 0 where the OS has none (Windows).
 	PGID int `json:"pgid,omitempty"`
 	TTY  TTY `json:"tty,omitempty"`
+	// TPGID is the foreground process group of the process's controlling
+	// terminal: the group that reads what is typed there. It is 0 when the
+	// process has no terminal or the OS doesn't say (Windows).
+	TPGID int `json:"tpgid,omitempty"`
+	// Owner is whose process it is, from UIDOwner or SessionOwner: on Linux
+	// and macOS the user it runs as (its effective uid), on Windows the
+	// logon session it runs in. It is empty when the reader couldn't tell,
+	// which on Windows includes a harness process the reader couldn't open.
+	// Owners compare as plain strings, and never leave the device.
+	Owner string `json:"owner,omitempty"`
+}
+
+// UIDOwner is the Owner of a process that runs as uid, on Linux and macOS.
+func UIDOwner(uid uint32) string { return "uid:" + strconv.FormatUint(uint64(uid), 10) }
+
+// SessionOwner is the Owner of a process that runs in the Windows logon
+// session id.
+func SessionOwner(id uint32) string { return "session:" + strconv.FormatUint(uint64(id), 10) }
+
+// ID names one process for as long as it runs: its PID, and its start in
+// the reader's own terms, so a reused PID gets a new ID and a wall-clock
+// step changes none. Two reads of a process on one boot give equal IDs.
+type ID struct {
+	PID int `json:"pid"`
+	// Start is Ticks where the reader sets them (Linux), else Start in Unix
+	// nanoseconds, and 0 when the start is unknown.
+	Start int64 `json:"start"`
+}
+
+// ID returns p's ID.
+func (p Proc) ID() ID {
+	switch {
+	case p.Ticks != 0:
+		return ID{PID: p.PID, Start: int64(p.Ticks)}
+	case !p.Start.IsZero():
+		return ID{PID: p.PID, Start: p.Start.UnixNano()}
+	}
+	return ID{PID: p.PID}
 }
 
 // MaxChain caps a parent chain. Real chains are under 20 long; the cap
@@ -121,7 +170,9 @@ func (t *Table) Procs() []Proc {
 // Parent returns p's parent. It reports false at the root, when the parent
 // has exited, and when the PID p names now belongs to a process that
 // started after p did: Windows keeps a process's parent PID after the
-// parent exits, and the PID can be reused (CP 3.3).
+// parent exits, and the PID can be reused (CP 3.3). The check needs both
+// start times, so the readers give every process one, the Windows reader
+// without opening the process.
 func (t *Table) Parent(p Proc) (Proc, bool) {
 	if p.PPID <= 0 || p.PPID == p.PID {
 		return Proc{}, false

@@ -13,3 +13,7 @@ import (
 func readOS() ([]platform.Proc, error) {
 	return nil, errors.New("pairtime can't read the process table on this OS")
 }
+
+func selfOS() string { return "" }
+
+func bootOS() string { return "" }
