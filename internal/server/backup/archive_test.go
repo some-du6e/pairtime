@@ -81,7 +81,7 @@ func TestWriteKeyBackup(t *testing.T) {
 			identity:  karim,
 			wantFiles: []string{"pairtime-keys/", "pairtime-keys/server.ed25519", "pairtime-keys/evidence.p256", "pairtime-keys/pepper", "pairtime-keys/README.txt"}},
 		{name: "another identity can't decrypt the backup",
-			identity: stranger, wantErr: "no identity matched"},
+			identity: stranger, wantErr: "did not match any of the recipients"},
 		{name: "keys pairtimed can't load aren't backed up",
 			edit:    func(t *testing.T, keys string) { rewrite(t, filepath.Join(keys, PepperFile), "short\n") },
 			wantErr: "64 hex digits"},

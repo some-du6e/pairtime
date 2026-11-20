@@ -6,13 +6,15 @@
 # binaries (CGO_ENABLED=0).
 #
 # The host never builds this. release.yml builds it from a v* tag and
-# pushes it to ghcr.io/some-du6e/pairtimed, and restore-drill.yml builds it
-# to test. Both compile pairtimed first, the way ci.yml does, and pass it in
-# the build context, so the image holds the binary release.yml built and
-# the toolchain setup-go installed from go.mod:
+# pushes it to ghcr.io/some-du6e/pairtimed, for linux/amd64 and
+# linux/arm64, and restore-drill.yml builds it to test. Both compile
+# pairtimed first, the way ci.yml does, and pass it in the build context, so
+# the image holds the binary release.yml built, with the Go that setup-go
+# installed from go.mod:
 #
 #   dist/linux_amd64/pairtimed   dist/linux_arm64/pairtimed
 #   dist/THIRD_PARTY_NOTICES.txt  (tools/release notices for pairtimed)
+#   LICENSE
 #
 #   docker buildx build -f Dockerfile.pairtimed --platform linux/amd64 .
 #
@@ -20,6 +22,7 @@
 # records for the asset. A bump changes the version and both sums together.
 
 ARG TARGETARCH
+ARG BUILDPLATFORM
 
 # Litestream v0.5.18, 2026-11-03. GitHub's asset digests:
 #   gh api repos/benbjohnson/litestream/releases/tags/v0.5.18 --jq '.assets[] | [.name, .digest] | @tsv'
@@ -35,9 +38,12 @@ ADD --checksum=sha256:922a09e6a7ac67f2095571894dc6382e94e1dd4cdd9674883ddf1a8e74
 
 FROM litestream-${TARGETARCH} AS litestream-archive
 
-# The same distroless release, with busybox, only to unpack the archive.
-FROM gcr.io/distroless/static-debian13:debug-nonroot@sha256:7df9fac2f5d3927260696af33fc2391da26366825838a47337088ed78f854a0c AS unpack
-COPY --from=litestream-archive /litestream.tar.gz /tmp/litestream.tar.gz
+# The same distroless release, with busybox, only to unpack the archive. It
+# runs on the build machine's own platform, so an arm64 image needs no
+# emulator: tar doesn't care whose binary it unpacks.
+FROM --platform=$BUILDPLATFORM gcr.io/distroless/static-debian13:debug-nonroot@sha256:7df9fac2f5d3927260696af33fc2391da26366825838a47337088ed78f854a0c AS unpack
+# ADD gives a downloaded file mode 0600, and this stage runs as nonroot.
+COPY --from=litestream-archive --chmod=0644 /litestream.tar.gz /tmp/litestream.tar.gz
 RUN ["/busybox/sh", "-c", "mkdir /tmp/litestream && tar -xzf /tmp/litestream.tar.gz -C /tmp/litestream && test -x /tmp/litestream/litestream && test -f /tmp/litestream/LICENSE"]
 
 FROM gcr.io/distroless/static-debian13:nonroot@sha256:aafe993665bf6200db38a02c11a9351e782a84b6a45e7f33b6695638c88e3931
@@ -54,11 +60,13 @@ LABEL org.opencontainers.image.title="pairtimed" \
       org.opencontainers.image.version="${VERSION}" \
       org.opencontainers.image.revision="${COMMIT}"
 
-COPY --from=unpack /tmp/litestream/litestream /usr/local/bin/litestream
-COPY --from=unpack /tmp/litestream/LICENSE /usr/share/doc/litestream/LICENSE
-COPY dist/linux_${TARGETARCH}/pairtimed /usr/local/bin/pairtimed
-COPY LICENSE /usr/share/doc/pairtimed/LICENSE
-COPY dist/THIRD_PARTY_NOTICES.txt /usr/share/doc/pairtimed/THIRD_PARTY_NOTICES.txt
+# Modes are set here, since a workflow artifact, which release.yml passes
+# the binaries in, keeps none.
+COPY --from=unpack --chmod=0755 /tmp/litestream/litestream /usr/local/bin/litestream
+COPY --from=unpack --chmod=0644 /tmp/litestream/LICENSE /usr/share/doc/litestream/LICENSE
+COPY --chmod=0755 dist/linux_${TARGETARCH}/pairtimed /usr/local/bin/pairtimed
+COPY --chmod=0644 LICENSE /usr/share/doc/pairtimed/LICENSE
+COPY --chmod=0644 dist/THIRD_PARTY_NOTICES.txt /usr/share/doc/pairtimed/THIRD_PARTY_NOTICES.txt
 
 # Both programs by name: compose's command and healthcheck, and
 # litestream.yml's exec, find them on this PATH.
