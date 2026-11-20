@@ -150,33 +150,33 @@ row("16:00", {B: {"P": 60}}, {}, 0, "2.8: leads are typing time only",
 row("16:01", {A: {"P": 40}}, {"X.agent_only": 20}, 60, "2.8: leads are typing time only",
     note="B1 runs from 16:01:00. A1's 60 characters: 40 s, from 16:01:20.")
 row("16:02", {}, {"X.agent_only": 60}, 60, "2.8: no reading while an agent runs")
-row("16:03", {A: {"PA": 20}, B: {"READ": 10}}, {"X.agent_only": 30}, 60, MOST_RECENT, erratum=ER,
+row("16:03", {A: {"PA": 20}, B: {"READ": 10}}, {"X.agent_only": 30}, 60, MOST_RECENT,
     note="B1 stops at 16:03:30 and B2 follows 430 s later, so B reads from the stop. A1's permission, asked at "
          "16:03:00 and answered at 16:04:40, keeps 60 s of its 100 s wait, from 16:03:40. A's last prompt, "
          "16:02:00, is later than B's, 16:01:00, so A's PA wins the seconds both want.")
 row("16:04", {A: {"PA": 50}, B: {"READ": 10}}, {}, 60, MOST_RECENT, erratum=ER,
     note="A's PA runs to 16:04:50 with its 10 s trail; B reads again until A1 stops at 16:05:00.")
-row("16:05", {A: {"READ": 60}}, {}, 0, MOST_RECENT, erratum=ER,
+row("16:05", {A: {"READ": 60}}, {}, 0, MOST_RECENT,
     note="From A1's stop at 16:05:00 both sessions have output to read. A's last prompt is the more recent, so A "
          "reads first: 120 s, to 16:07:00. B still has 100 s.")
-row("16:06", {A: {"READ": 60}}, {}, 0, MOST_RECENT, erratum=ER)
-row("16:07", {B: {"READ": 60}}, {}, 0, READING, erratum=ER,
+row("16:06", {A: {"READ": 60}}, {}, 0, MOST_RECENT)
+row("16:07", {B: {"READ": 60}}, {}, 0, READING,
     note="A's 120 s are read, so B reads its last 100 s, to 16:08:40.")
 row("16:08", {A: {"P": 20}, B: {"READ": 40}}, {}, 0, READING, erratum=ER,
     note="A2 has 390 characters, 300 of them pasted. Its lead is typing time only, 90 / 1.5 = 60 s, from 16:08:40.")
 row("16:09", {A: {"P": 40}}, {"X.agent_only": 20}, 20, "2.8: leads are typing time only")
 row("16:10", {B: {"P": 40}}, {"X.agent_only": 20}, 60, "2.8: leads are typing time only",
     note="B2's 60 characters: 40 s, from 16:10:00, while A2 runs.")
-row("16:11", {B: {"PA": 25}}, {"X.agent_only": 35}, 60, "2.8: permission answers keep their wait",
+row("16:11", {B: {"PA": 25}}, {"X.agent_only": 35}, 60, "2.8: permission answers keep their wait", erratum=ER,
     note="B2's build asks at 16:11:20 and is answered at 16:11:35: its 15 s wait and 10 s trail.")
-row("16:12", {A: {"READ": 50}}, {"X.agent_only": 10}, 60, READING, erratum=ER,
+row("16:12", {A: {"READ": 50}}, {"X.agent_only": 10}, 60, READING,
     note="A2 stops at 16:12:10 and A3 follows 320 s later. B2 is still running, so A reads alone.")
-row("16:13", {B: {"READ": 60}}, {}, 0, MOST_RECENT, erratum=ER,
+row("16:13", {B: {"READ": 60}}, {}, 0, MOST_RECENT,
     note="B2 stops at 16:13:00 and B3 follows 360 s later. Both sessions have output to read; B's last prompt, "
          "16:10:40, is later than A's, 16:09:40, so B reads its 120 s first, to 16:15:00.")
-row("16:14", {B: {"READ": 60}}, {}, 0, MOST_RECENT, erratum=ER)
-row("16:15", {A: {"READ": 60}}, {}, 0, READING, erratum=ER, note="A reads its last 70 s, to 16:16:10.")
-row("16:16", {A: {"P": 50, "READ": 10}}, {}, 0, READING, erratum=ER,
+row("16:14", {B: {"READ": 60}}, {}, 0, MOST_RECENT)
+row("16:15", {A: {"READ": 60}}, {}, 0, READING, note="A reads its last 70 s, to 16:16:10.")
+row("16:16", {A: {"P": 50, "READ": 10}}, {}, 0, READING,
     note="A3's 120 characters: 80 s, from 16:16:10.")
 row("16:17", {A: {"P": 30}}, {"X.agent_only": 30}, 30, "2.8: leads are typing time only")
 row("16:18", {B: {"P": 30}}, {"X.agent_only": 30}, 60, "2.8: leads are typing time only",
@@ -283,6 +283,12 @@ for e in events:
             src += ": 90 typed characters and a pasted 300-character JSON sample"
         prompt_entries.append({"turn_key": e["data"]["turn_key"], "t": e["t"], "local": fx.hhmmss(e["t"]),
                                "text": None, "len_chars": e["data"]["len_chars"], "source": src})
+
+# README.md works the same rows out by hand; its minute tables and totals
+# must say what expected.json says. internal/timelines checks this too.
+readme = os.path.join(HERE, "README.md")
+lb.check_readme(readme, expected, exp.projects)
+lb.check_readme_totals(readme, expected, exp.projects)
 
 fx.write(tl.out_dir(HERE), expected, {"fixture": NAME, "anchors": anchors, "turns": turns},
          {"fixture": NAME, "prompts": prompt_entries})

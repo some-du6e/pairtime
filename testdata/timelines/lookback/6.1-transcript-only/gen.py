@@ -105,7 +105,7 @@ for k in range(1, CYCLES + 1):
     row(3, credit={P: {"P": 60}}, uncredited={})
     row(4, credit={}, uncredited={"X.agent_only": 60}, agent=60,
         note="Lookback credits no reading while the agent runs (SM 2.8), so no SUP." if k == 1 else None)
-    row(5, credit={P: {"PA": 25}}, uncredited={"X.agent_only": 35}, agent=60,
+    row(5, credit={P: {"PA": 25}}, uncredited={"X.agent_only": 35}, agent=60, erratum=ER,
         note="The permission asked at 14:05:10 is answered at 14:05:25: its 15 s wait, under 60 s, and its "
              "10 s trail, 14:05:10 to 14:05:35." if k == 1 else None)
     if not last:
@@ -209,6 +209,12 @@ prompt_entries = []
 for p in lb.read_prompts("6.1"):
     prompt_entries.append({"turn_key": p["turn_key"], "t": p["t"], "local": p["local"], "text": p["text"],
                            "len_chars": p["len_chars"], "source": p["source"]})
+
+# README.md works the same rows out by hand; its minute tables and totals
+# must say what expected.json says. internal/timelines checks this too.
+readme = os.path.join(HERE, "README.md")
+lb.check_readme(readme, expected, exp.projects)
+lb.check_readme_totals(readme, expected, exp.projects)
 
 fx.write(tl.out_dir(HERE), expected, {"fixture": NAME, "anchors": anchors, "turns": turns},
          {"fixture": NAME, "prompts": prompt_entries})

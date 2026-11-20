@@ -151,5 +151,11 @@ for t in live_turns:
     turns.append(t)
 
 prompt_entries = [dict(p) for p in lb.read_prompts("6.4")]
+# README.md works the same rows out by hand; its minute tables and totals
+# must say what expected.json says. internal/timelines checks this too.
+readme = os.path.join(HERE, "README.md")
+lb.check_readme(readme, expected, exp.projects)
+lb.check_readme_totals(readme, expected, exp.projects)
+
 fx.write(tl.out_dir(HERE), expected, {"fixture": NAME, "anchors": anchors, "turns": turns},
          {"fixture": NAME, "prompts": prompt_entries})

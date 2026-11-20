@@ -356,3 +356,100 @@ def check_readme(path, exp_doc, names):
                 got.setdefault(key, {})[parts[-2]] = float(parts[-1])
         want = {p: {k: float(v) for k, v in c.items()} for p, c in r.get("credit", {}).items()}
         tl.check(got == want, f"{path}: {minute} has {got} in the README, {want} in expected.json")
+
+
+def arithmetic(expr):
+    """Evaluates a README total's arithmetic: whole numbers with thousands
+    commas, +, -, × and parentheses."""
+    s = expr.replace("×", "*").replace("−", "-").replace(",", "")
+    toks, i = [], 0
+    while i < len(s):
+        c = s[i]
+        if c.isdigit():
+            j = i
+            while j < len(s) and s[j].isdigit():
+                j += 1
+            toks.append(int(s[i:j]))
+            i = j
+        elif c in "+-*()":
+            toks.append(c)
+            i += 1
+        elif c == " ":
+            i += 1
+        else:
+            raise SystemExit(f"arithmetic {expr!r}: unexpected {c!r}")
+    pos = [0]
+
+    def peek():
+        return toks[pos[0]] if pos[0] < len(toks) else None
+
+    def take():
+        pos[0] += 1
+        return toks[pos[0] - 1]
+
+    def factor():
+        t = take()
+        if t == "(":
+            v = total()
+            tl.check(take() == ")", f"arithmetic {expr!r}: a closing parenthesis")
+            return v
+        tl.check(isinstance(t, int), f"arithmetic {expr!r}: a number, not {t!r}")
+        return t
+
+    def term():
+        v = factor()
+        while peek() == "*":
+            take()
+            v *= factor()
+        return v
+
+    def total():
+        v = term()
+        while peek() in ("+", "-"):
+            v = v + term() if take() == "+" else v - term()
+        return v
+
+    v = total()
+    tl.check(pos[0] == len(toks), f"arithmetic {expr!r}: nothing after the expression")
+    return v
+
+
+def readme_totals(path):
+    """The rows of the README's totals tables: (key, seconds, arithmetic)."""
+    rows = []
+    with open(path, encoding="utf-8") as f:
+        table = False
+        for line in f:
+            cells = [c.strip().replace("`", "") for c in line.strip().strip("|").split("|")]
+            if line.startswith("| Total | Seconds | Arithmetic |"):
+                table = True
+                continue
+            if not line.startswith("|"):
+                table = False
+                continue
+            if table and not set(cells[0]) <= set("-: "):
+                rows.append((cells[0], cells[1], cells[2]))
+    return rows
+
+
+def check_readme_totals(path, exp_doc, names):
+    """Checks each README total: its arithmetic gives its seconds, and the
+    seconds are expected.json's total of that name, a credit reason's
+    total, an uncredited code's, or a project's."""
+    tot = exp_doc["totals"]
+    rows = readme_totals(path)
+    tl.check(any(k == "credited_s" for k, _, _ in rows), f"{path} has a credited_s total")
+    for key, seconds, expr in rows:
+        n = int(seconds.replace(",", ""))
+        tl.check(arithmetic(expr) == n, f"{path}: {key}: {expr} is {arithmetic(expr)}, not {n}")
+        if key in tot and not isinstance(tot[key], dict):
+            want = tot[key]
+        elif key in tot["credited_by_reason"]:
+            want = tot["credited_by_reason"][key]
+        elif key in tot["uncredited"]:
+            want = tot["uncredited"][key]
+        elif key in names.values():
+            want = tot["credited_by_project"][[k for k, v in names.items() if v == key][0]]
+        else:
+            raise SystemExit(f"{path}: total {key} isn't in expected.json")
+        tl.check(want == n, f"{path}: {key} is {n} in the README, {want} in expected.json")

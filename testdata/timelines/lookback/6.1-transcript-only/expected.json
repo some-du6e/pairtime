@@ -104,7 +104,8 @@
       "agent_running_s": 60,
       "sm": "2.8; the events of 6.1's 14:05 row",
       "note": "The permission asked at 14:05:10 is answered at 14:05:25: its 15 s wait, under 60 s, and its 10 s trail, 14:05:10 to 14:05:35.",
-      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"],
+      "erratum": "2026-11-19-sm-2.8-lookback"
     },
     {
       "start": "2026-11-21T08:36:00Z",
@@ -254,7 +255,8 @@
       "uncredited": {"X.agent_only": 35},
       "agent_running_s": 60,
       "sm": "2.8; the events of 6.1's 14:05 row; cycles 2 to 15 have the same events, 12 minutes apart",
-      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"],
+      "erratum": "2026-11-19-sm-2.8-lookback"
     },
     {
       "start": "2026-11-21T08:48:00Z",
@@ -401,7 +403,8 @@
       "uncredited": {"X.agent_only": 35},
       "agent_running_s": 60,
       "sm": "2.8; the events of 6.1's 14:05 row; cycles 2 to 15 have the same events, 12 minutes apart",
-      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"],
+      "erratum": "2026-11-19-sm-2.8-lookback"
     },
     {
       "start": "2026-11-21T09:00:00Z",
@@ -548,7 +551,8 @@
       "uncredited": {"X.agent_only": 35},
       "agent_running_s": 60,
       "sm": "2.8; the events of 6.1's 14:05 row; cycles 2 to 15 have the same events, 12 minutes apart",
-      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"],
+      "erratum": "2026-11-19-sm-2.8-lookback"
     },
     {
       "start": "2026-11-21T09:12:00Z",
@@ -695,7 +699,8 @@
       "uncredited": {"X.agent_only": 35},
       "agent_running_s": 60,
       "sm": "2.8; the events of 6.1's 14:05 row; cycles 2 to 15 have the same events, 12 minutes apart",
-      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"],
+      "erratum": "2026-11-19-sm-2.8-lookback"
     },
     {
       "start": "2026-11-21T09:24:00Z",
@@ -842,7 +847,8 @@
       "uncredited": {"X.agent_only": 35},
       "agent_running_s": 60,
       "sm": "2.8; the events of 6.1's 14:05 row; cycles 2 to 15 have the same events, 12 minutes apart",
-      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"],
+      "erratum": "2026-11-19-sm-2.8-lookback"
     },
     {
       "start": "2026-11-21T09:36:00Z",
@@ -990,7 +996,8 @@
       "uncredited": {"X.agent_only": 35},
       "agent_running_s": 60,
       "sm": "2.8; the events of 6.1's 14:05 row; cycles 2 to 15 have the same events, 12 minutes apart",
-      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"],
+      "erratum": "2026-11-19-sm-2.8-lookback"
     },
     {
       "start": "2026-11-21T09:48:00Z",
@@ -1137,7 +1144,8 @@
       "uncredited": {"X.agent_only": 35},
       "agent_running_s": 60,
       "sm": "2.8; the events of 6.1's 14:05 row; cycles 2 to 15 have the same events, 12 minutes apart",
-      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"],
+      "erratum": "2026-11-19-sm-2.8-lookback"
     },
     {
       "start": "2026-11-21T10:00:00Z",
@@ -1284,7 +1292,8 @@
       "uncredited": {"X.agent_only": 35},
       "agent_running_s": 60,
       "sm": "2.8; the events of 6.1's 14:05 row; cycles 2 to 15 have the same events, 12 minutes apart",
-      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"],
+      "erratum": "2026-11-19-sm-2.8-lookback"
     },
     {
       "start": "2026-11-21T10:12:00Z",
@@ -1431,7 +1440,8 @@
       "uncredited": {"X.agent_only": 35},
       "agent_running_s": 60,
       "sm": "2.8; the events of 6.1's 14:05 row; cycles 2 to 15 have the same events, 12 minutes apart",
-      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"],
+      "erratum": "2026-11-19-sm-2.8-lookback"
     },
     {
       "start": "2026-11-21T10:24:00Z",
@@ -1578,7 +1588,8 @@
       "uncredited": {"X.agent_only": 35},
       "agent_running_s": 60,
       "sm": "2.8; the events of 6.1's 14:05 row; cycles 2 to 15 have the same events, 12 minutes apart",
-      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"],
+      "erratum": "2026-11-19-sm-2.8-lookback"
     },
     {
       "start": "2026-11-21T10:36:00Z",
@@ -1725,7 +1736,8 @@
       "uncredited": {"X.agent_only": 35},
       "agent_running_s": 60,
       "sm": "2.8; the events of 6.1's 14:05 row; cycles 2 to 15 have the same events, 12 minutes apart",
-      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"],
+      "erratum": "2026-11-19-sm-2.8-lookback"
     },
     {
       "start": "2026-11-21T10:48:00Z",
@@ -1872,7 +1884,8 @@
       "uncredited": {"X.agent_only": 35},
       "agent_running_s": 60,
       "sm": "2.8; the events of 6.1's 14:05 row; cycles 2 to 15 have the same events, 12 minutes apart",
-      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"],
+      "erratum": "2026-11-19-sm-2.8-lookback"
     },
     {
       "start": "2026-11-21T11:00:00Z",
@@ -2019,7 +2032,8 @@
       "uncredited": {"X.agent_only": 35},
       "agent_running_s": 60,
       "sm": "2.8; the events of 6.1's 14:05 row; cycles 2 to 15 have the same events, 12 minutes apart",
-      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"],
+      "erratum": "2026-11-19-sm-2.8-lookback"
     },
     {
       "start": "2026-11-21T11:12:00Z",
@@ -2166,7 +2180,8 @@
       "uncredited": {"X.agent_only": 35},
       "agent_running_s": 60,
       "sm": "2.8; the events of 6.1's 14:05 row; cycles 2 to 15 have the same events, 12 minutes apart",
-      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"],
+      "erratum": "2026-11-19-sm-2.8-lookback"
     },
     {
       "start": "2026-11-21T11:24:00Z",
