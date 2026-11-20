@@ -19,8 +19,10 @@
 // reconstructs the gap exactly, and gaps come from wall-clock values,
 // never from time.Since (CP 2.2).
 //
-// The OS sources live under internal/platform; ThisOS picks the ones for
-// the OS the agent runs on. The focus watcher (WP-OS2), the process
+// The OS sources live under internal/platform. ThisOS picks the ones for
+// Windows. On macOS and Linux presence shares one connection to the OS
+// with the focus component, so the agent opens it and builds the sources
+// with MacOS or LinuxOS (WP-OS9). The focus watcher (WP-OS2), the process
 // scanner (WP-OS6) and the hook path (WP-AG3) report to a Sampler through
 // FocusAt, HarnessProcesses and Hook.
 package presence
@@ -65,10 +67,13 @@ type Idle struct {
 	// Any is the time since the last keyboard or mouse input in this
 	// session.
 	Any time.Duration
-	// Keys is the time since the last key press. It is valid only when
-	// HasKeys is set: Windows can't tell keys from other input without a
-	// keyboard listener, which pairtime doesn't run before its builds are
-	// signed (DESIGN 7.2 item 5, 11 risk 18).
+	// Keys is the time since the last key-down the OS saw. It is valid only
+	// when HasKeys is set: Windows and Linux can't tell keys from other
+	// input without a keyboard listener, which pairtime doesn't run before
+	// its builds are signed (DESIGN 7.2 item 5, 11 risk 18). macOS gives it,
+	// but its count includes key-downs other processes post, so it says a
+	// key event reached the session, not that a person pressed a key
+	// (internal/platform/darwin, D-macos-hid-posted).
 	Keys    time.Duration
 	HasKeys bool
 }
@@ -146,11 +151,12 @@ type Sampler struct {
 	watching bool
 	started  bool
 	stopped  bool
-	stops    []func()      // stop the power watches
-	timer    *sched.Job    // nil until a context first goes live
-	due      time.Time     // when timer fires; zero while it is stopped
-	every    time.Duration // the cadence timer was armed for
-	last     time.Time     // the time of the latest sample
+	stops    []func()        // stop the power watches
+	watched  map[string]bool // the power watches that run, by source
+	timer    *sched.Job      // nil until a context first goes live
+	due      time.Time       // when timer fires; zero while it is stopped
+	every    time.Duration   // the cadence timer was armed for
+	last     time.Time       // the time of the latest sample
 	// recAt is the time of the latest record, the sampler's own or one a
 	// FocusAt caller wrote, which no later record goes before.
 	recAt    time.Time
@@ -168,7 +174,7 @@ func New(opts Options) *Sampler {
 		tables := params.Tables()
 		tab = tables[len(tables)-1]
 	}
-	return &Sampler{opts: opts, g: gate{cadence: cadenceOf(tab)}, problems: make(map[string]string)}
+	return &Sampler{opts: opts, g: gate{cadence: cadenceOf(tab)}, problems: make(map[string]string), watched: make(map[string]bool)}
 }
 
 // Start starts the power watches, reads the session's lock state and
@@ -239,6 +245,7 @@ func (s *Sampler) watch(source, loss string, start func(func(event.PowerOp)) (fu
 		return
 	}
 	s.stops = append(s.stops, stop)
+	s.watched[source] = true
 	s.mu.Unlock()
 }
 
@@ -253,6 +260,7 @@ func (s *Sampler) Stop() {
 	s.due, s.every = time.Time{}, 0
 	stops := s.stops
 	s.stops = nil
+	clear(s.watched)
 	s.mu.Unlock()
 	for _, stop := range stops {
 		stop()
@@ -369,6 +377,10 @@ type Status struct {
 	Every   time.Duration
 	Locked  bool
 	Samples uint64
+	// Watching names the power watches that run, "suspend" and "lock", in
+	// that order. A watch the OS has none of, or that failed to start, is
+	// missing, and so is every watch before Start and after Stop.
+	Watching []string
 	// Problems are what is wrong, by source.
 	Problems []string
 }
@@ -378,7 +390,20 @@ func (s *Sampler) Status() Status {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	every := s.g.interval(wall(time.Now()))
-	return Status{Live: every != 0, Every: every, Locked: s.locked, Samples: s.samples, Problems: s.problemList()}
+	return Status{Live: every != 0, Every: every, Locked: s.locked, Samples: s.samples,
+		Watching: s.watchingList(), Problems: s.problemList()}
+}
+
+// watchingList returns the names of the power watches that run, in the
+// order Start starts them.
+func (s *Sampler) watchingList() []string {
+	var names []string
+	for _, name := range []string{"suspend", "lock"} {
+		if s.watched[name] {
+			names = append(names, name)
+		}
+	}
+	return names
 }
 
 // update applies change to the gate, takes a sample at once if a context
