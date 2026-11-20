@@ -200,6 +200,7 @@ func TestNormalize(t *testing.T) {
 		{"a backtick fence whose line holds another backtick isn't a fence", "```js x = 1``` still here", "```js x = <n>``` still here", []int{}},
 		{"four spaces of indent aren't a fence", "    ```\nkept", "``` kept", []int{}},
 		{"a pasted block goes with its wrapper lines", "<pasted_content id=\"1\">\nfoo\n</pasted_content>\nbar", "bar", []int{0, 1, 2}},
+		{"a pasted block closes on Claude Code's closer, which repeats the opener's id (spec 10.4 P2)", "why\n\n<pasted_content id=\"1a2b\">\nfoo\n</pasted_content id=\"1a2b\">\nbar", "why bar", []int{2, 3, 4}},
 		{"a traceback goes with its indented frames, then its exception line goes as an error", "x\nTraceback (most recent call last):\n  File \"a.py\", line 1\nValueError: bad\ny", "x y", []int{1, 2, 3}},
 		{"an error line takes the indented lines after it", "TypeError: no\n    at f (a.js:1:2)\nwhy", "why", []int{0, 1}},
 		{"CRLF splits lines like LF, and one CR goes", "a\r\nb\r\r\nc", "a b c", []int{}},

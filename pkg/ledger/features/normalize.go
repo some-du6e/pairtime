@@ -17,8 +17,13 @@ var (
 	fenceOpen = regexp.MustCompile("^ {0,3}(`{3,}|~{3,})(.*)$")
 	// fenceClose is F2.
 	fenceClose = regexp.MustCompile("^ {0,3}(`{3,}|~{3,})[ \t]*$")
-	// pasteOpen is P1, the wrapper Claude Code puts around pastes (SM 1.2).
+	// pasteOpen is P1, the opening line of the wrapper Claude Code puts
+	// around pastes (SM 1.2).
 	pasteOpen = regexp.MustCompile(`^<pasted_content(?: [^>]*)?>$`)
+	// pasteClose is P2, its closing line. Claude Code 2.1.327 writes
+	// </pasted_content id="1a2b">, repeating the opener's id, and older
+	// sessions wrote </pasted_content>. Ids aren't compared.
+	pasteClose = regexp.MustCompile(`^</pasted_content(?: [^>]*)?>$`)
 	// errorLine is E1 to E6, SM 4.2's first error lines: an exception in
 	// Python, JavaScript or Java, Rust's error[E0xxx], a compiler's
 	// file:line:col: error:, pytest's FAILED, go test's --- FAIL: and a Go
@@ -33,10 +38,7 @@ var (
 	}, "|") + `)$`)
 )
 
-const (
-	pasteClose = "</pasted_content>"
-	traceback  = "Traceback (most recent call last):"
-)
+const traceback = "Traceback (most recent call last):"
 
 // splitLines splits text at every LF and removes one CR from the end of
 // each line that ends with one (spec 10.4 step 1).
@@ -90,7 +92,7 @@ func removedLines(lines []string) []int {
 			i = min(i+1, len(lines))
 		case pasteOpen.MatchString(s):
 			i++
-			for i < len(lines) && strip(lines[i]) != pasteClose {
+			for i < len(lines) && !pasteClose.MatchString(strip(lines[i])) {
 				i++
 			}
 			i = min(i+1, len(lines))

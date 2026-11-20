@@ -210,8 +210,8 @@ func TestContentVectorsHaveWhatSpec11Lists(t *testing.T) {
 		{"the lowercase table lists 55 later mappings", len(f.Lowercase.Later), 55},
 		{"the vectors hold 22 commitments", len(f.Commitments), 22},
 		{"the vectors hold 55 reveals", len(f.Reveals), 55},
-		{"the vectors hold 44 normalizations", len(f.Normalizations), 44},
-		{"the vectors hold 17 feature maps", len(f.Features), 17},
+		{"the vectors hold 47 normalizations", len(f.Normalizations), 47},
+		{"the vectors hold 19 feature maps", len(f.Features), 19},
 		{"the vectors hold 5 Jaccard pairs", len(f.Jaccard), 5},
 		{"the vectors hold 12 CC8 reveals", len(f.ShingleReveals), 12},
 		{"the vectors hold 5 draws", len(f.Draws), 5},
@@ -419,8 +419,18 @@ func checkFeatureVector(t *testing.T, fv featureVec) {
 	var f features.F
 	switch kind {
 	case event.KindPromptSubmit, event.KindCLITrack:
-		if fv.Text == nil || fv.PromptClass == nil || fv.ShingleValues == nil {
-			t.Fatal("a prompt's features object lacks text, prompt_class or shingle_values")
+		if fv.PromptClass == nil || (fv.Text == nil) != (fv.ShingleValues == nil) {
+			t.Fatal("a prompt's features object lacks prompt_class, or has only one of text and shingle_values")
+		}
+		if fv.Text == nil {
+			// A prompt whose text the device never had (spec 10.1).
+			if kind != event.KindPromptSubmit {
+				t.Fatal("a track label always has its text")
+			}
+			if f, err = features.Textless(*fv.PromptClass); err != nil {
+				t.Fatal(err)
+			}
+			break
 		}
 		if f, err = fk.Prompt(string(*fv.Text), *fv.PromptClass); err != nil {
 			t.Fatal(err)

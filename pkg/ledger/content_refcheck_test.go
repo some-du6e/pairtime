@@ -154,7 +154,8 @@ var (
 	sampleLines = []string{
 		"```", "```python", "```js const x = 1```", "~~~~", "~~~", "    ```", "   ```", "``` ", "````", "~~~~~ ",
 		"```\t", "<pasted_content>", `<pasted_content id="1">`, `  <pasted_content id="2" lines="3">  `,
-		"</pasted_content>", " </pasted_content> ", "<pasted_content id>", "Traceback (most recent call last):",
+		"</pasted_content>", " </pasted_content> ", "<pasted_content id>", `<pasted_content id="1a2b">`,
+		`</pasted_content id="1a2b">`, `</pasted_content id="ffff"> `, "</pasted_content id>", "Traceback (most recent call last):",
 		`  File "app.py", line 3, in <module>`, "    main()", "\tat x", " at App (App.jsx:12:5)",
 		"ValueError: invalid literal for int() with base 10: 'abc'",
 		"TypeError: Cannot read properties of undefined (reading 'map')", "Uncaught ReferenceError: foo is not defined",
