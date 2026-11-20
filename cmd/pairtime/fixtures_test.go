@@ -64,6 +64,28 @@ func TestFixturesScrub(t *testing.T) {
 			notOut: []string{stripe},
 		},
 		{
+			name: "values and an email address right after a JSON escape are found, and the escape stays",
+			files: map[string]string{
+				"ps.jsonl":   `{"stdout":"USER  PID\nmaya  4242"}` + "\n",
+				"mail.jsonl": `{"text":"hi\njonah@westfield.edu"}` + "\n",
+				"log.jsonl":  `{"stdout":"    42\tMaya Kowalski"}` + "\n",
+			},
+			args:     []string{"--account", "maya", "--git-name", "Maya Kowalski"},
+			wantCode: 0,
+			wantFiles: map[string]string{
+				"ps.jsonl":   `{"stdout":"USER  PID\n[ACCOUNT]  4242"}` + "\n",
+				"mail.jsonl": `{"text":"hi\n[EMAIL]"}` + "\n",
+				"log.jsonl":  `{"stdout":"    42\t[GIT_NAME]"}` + "\n",
+			},
+			wantOut: []string{
+				"ps.jsonl:1:23: account, 4 bytes\n",
+				"mail.jsonl:1:14: email, 19 bytes\n",
+				"log.jsonl:1:20: git_name, 13 bytes\n",
+				"removed 3 spans from 3 of 3 files",
+			},
+			notOut: []string{"maya", "Maya", "jonah"},
+		},
+		{
 			name:     "-n lists the spans and changes nothing",
 			files:    map[string]string{"a.txt": "home is /home/maya\n"},
 			args:     append([]string{"-n"}, maya...),

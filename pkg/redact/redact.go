@@ -31,9 +31,11 @@ func New(k Known) (*Redactor, error) {
 // makes them disjoint. Find doesn't collapse code blocks, which is a
 // separate choice for agent messages (CodeBlocks).
 //
-// Text with backslash escapes, such as a raw JSON capture, is also read
-// through its JSON view (jsonView), so a key quoted as \"...\" or a value at
-// the start of an embedded line is found. A span never ends halfway
+// In text with backslash escapes, such as a raw JSON capture, gitleaks'
+// rules and the PII patterns also read its JSON view (jsonView), and a
+// known value may start right after an escape such as \n. So a key quoted
+// as \"...\", a name or a card number at the start of an embedded line,
+// and an email address after one are found. A span never ends halfway
 // through an escape, so removing it from JSON text leaves JSON.
 func (r *Redactor) Find(text string) []Span {
 	var spans []Span
@@ -51,9 +53,11 @@ func (r *Redactor) Find(text string) []Span {
 			spans = append(spans, Span{Start: s, End: e, Type: TypeSecret, Rule: id})
 		})
 	}
-	findPII(text, func(s, e int, t Type) {
-		spans = append(spans, Span{Start: s, End: e, Type: t})
-	})
+	for _, v := range views {
+		findPII(v, func(s, e int, t Type) {
+			spans = append(spans, Span{Start: s, End: e, Type: t})
+		})
+	}
 	keepEscapesWhole(text, spans)
 	return sortSpans(spans)
 }

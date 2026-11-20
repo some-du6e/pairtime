@@ -393,6 +393,10 @@ func TestChecksumNearMisses(t *testing.T) {
 			[]Span{{Start: 5, End: 34, Type: TypeEmail}}},
 		{"retina image name is not an email", "use logo@2x.png here", []Span{}},
 		{"npm version spec is not an email", "install react@18.3.1", []Span{}},
+		{"an email address after an escaped line break starts after the escape", `hi\nbob@westfield.edu`,
+			[]Span{{Start: 4, End: 21, Type: TypeEmail}}},
+		{"an email address after a unicode escape starts after the escape", "\x5cu003cbob@westfield.edu\x5cu003e",
+			[]Span{{Start: 6, End: 23, Type: TypeEmail}}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

@@ -444,7 +444,10 @@ const maxLocal = 256
 
 // findEmails gives the matches finditer would, but only tries the starts
 // that can reach an @: those in the run of local-part characters right
-// before it.
+// before it. The run stops at a backslash escape, and the start right after
+// one counts as a word edge, so in a raw capture "hi\nmaya@example.com"
+// gives maya@example.com, not nmaya@example.com, whose removal would leave
+// a broken \ escape behind.
 func findEmails(text string, emit func(int, int, Type)) {
 	for from := 0; from < len(text); {
 		k := strings.IndexByte(text[from:], '@')
@@ -453,7 +456,12 @@ func findEmails(text string, emit func(int, int, Type)) {
 		}
 		at := from + k
 		s := at
+		escaped := false
 		for s > from && at-s < maxLocal {
+			if escapedBefore(text, s) {
+				escaped = true
+				break
+			}
 			r, size := utf8.DecodeLastRuneInString(text[from:s])
 			if !isLocal(r) {
 				break
@@ -462,7 +470,7 @@ func findEmails(text string, emit func(int, int, Type)) {
 		}
 		next := at + 1
 		for i := s; i < at; {
-			if boundary(text, i) {
+			if boundary(text, i) || i == s && escaped {
 				if m := emailRE.FindStringIndex(text[i:]); m != nil {
 					start, end := i, i+m[1]
 					// The pattern's trailing \b.

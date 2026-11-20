@@ -222,8 +222,11 @@ func (p knownPattern) find(text string, emit func(start, end int)) {
 	}
 }
 
+// edgesOK checks the word edges a match needs. Right after a JSON escape
+// such as \n or \t is an edge, though the byte before it is a letter: in a
+// raw capture, "USER\nmaya" holds the account at the start of a line.
 func (p knownPattern) edgesOK(text string, s, e int) bool {
-	if p.left && s > 0 {
+	if p.left && s > 0 && !afterEscape(text, s) {
 		if r, _ := utf8.DecodeLastRuneInString(text[:s]); isAlnum(r) {
 			return false
 		}

@@ -70,6 +70,31 @@ func jsonView(text string) (string, bool) {
 	return string(b), true
 }
 
+// afterEscape reports whether text[:i] ends with a JSON escape that stands
+// for a character outside any word: \n, \t, \r, \b, \f or a \u escape. In
+// a raw capture that's where an embedded line or field starts, so it's a
+// word edge even though the byte before i is a letter or a hex digit. As
+// in jsonView, a run of backslashes before the letter counts as one.
+func afterEscape(text string, i int) bool {
+	if i >= 2 && text[i-2] == '\\' && strings.IndexByte("ntrbf", text[i-1]) >= 0 {
+		return true
+	}
+	return endsUnicodeEscape(text, i)
+}
+
+// escapedBefore reports whether the byte before i is part of a backslash
+// escape: it follows a backslash, or it's the last hex digit of a \u
+// escape. The email scan stops there, so an address never takes the n of
+// \n or the digits of a \u escape with it.
+func escapedBefore(text string, i int) bool {
+	return i >= 2 && text[i-2] == '\\' || endsUnicodeEscape(text, i)
+}
+
+func endsUnicodeEscape(text string, i int) bool {
+	_, ok := hex4(text, i-4)
+	return ok && i >= 6 && text[i-6] == '\\' && text[i-5] == 'u'
+}
+
 // unicodeEscape decodes the \u escape at text[at:], with the second half of
 // a surrogate pair when one follows, and returns the character and where
 // the escape ends. A lone surrogate decodes to U+FFFD.

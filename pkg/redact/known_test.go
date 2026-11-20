@@ -69,6 +69,22 @@ func TestKnownValues(t *testing.T) {
 			"by José Núñez", "by [GIT_NAME]"},
 		{"generic names and short values are skipped, except on the deny list", generic,
 			"the app owner al on localhost at /", "the [DENY] owner [DENY] on localhost at /"},
+		{"the account goes at the start of an embedded line of ps output", teen,
+			`{"stdout":"USER  PID\nmaya  4242"}`, `{"stdout":"USER  PID\n[ACCOUNT]  4242"}`},
+		{"a name goes after a sign-off's escaped line break", teen,
+			`"thanks,\nMaya"`, `"thanks,\n[ACCOUNT]"`},
+		{"the git name goes after an escaped tab, as in git shortlog", teen,
+			`"    42\tMaya Kowalski"`, `"    42\t[GIT_NAME]"`},
+		{"the deny list catches a name after an escaped return", teen,
+			`"hi\r\nJonah"`, `"hi\r\n[DENY]"`},
+		{"the account goes between unicode escapes, as Go writes angle brackets", teen,
+			"\x5cu003cmaya\x5cu003e", "\x5cu003c[ACCOUNT]\x5cu003e"},
+		{"a value after a doubled backslash and an n goes too, as in JSON inside JSON", teen,
+			`"a\\nmaya"`, `"a\\n[ACCOUNT]"`},
+		{"a letter after a backslash that no JSON escape uses still joins the word", teen,
+			`C:\xmaya`, `C:\xmaya`},
+		{"an escaped name goes after an escaped line break", accented,
+			"{\"by\": \"x\x5cnJos\x5cu00e9 N\x5cu00fa\x5cu00f1ez\"}", `{"by": "x\n[GIT_NAME]"}`},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

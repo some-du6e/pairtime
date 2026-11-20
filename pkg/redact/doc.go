@@ -24,8 +24,10 @@
 //     needs a word edge where the value starts or ends with a letter or
 //     digit, and also finds the spellings a raw capture file uses: JSON
 //     escapes, and for a Windows home its forward-slash, Git Bash, WSL and
-//     file URL forms. Short and generic names such as "user" or "app" are
-//     skipped unless the teen put them on the deny list.
+//     file URL forms. Right after a JSON escape such as \n or \t is a word
+//     edge, since that's where an embedded line starts. Short and generic
+//     names such as "user" or "app" are skipped unless the teen put them
+//     on the deny list.
 //  2. gitleaks' rules as data: rules/gitleaks.json.gz, converted from
 //     gitleaks' default config at a pinned tag by rules/convert.py. The
 //     engine follows gitleaks' detectRule: the keyword prefilter, the
@@ -34,7 +36,9 @@
 //     recognizers: payment cards with Luhn, IBANs with mod-97 and the
 //     country's format, US Social Security numbers with Presidio's
 //     invalidation rules, UK National Insurance numbers, Aadhaar numbers
-//     with Verhoeff, and email addresses.
+//     with Verhoeff, and email addresses. Like gitleaks' rules, they also
+//     run over the JSON view of text with escapes, and an email address
+//     never takes in the letter of an escape before it.
 //
 // [CodeBlocks] is separate: an agent message's fenced code blocks collapse
 // to a marker with a line count by default, and the teen can add any back,
