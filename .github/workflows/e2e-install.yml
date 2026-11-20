@@ -6,12 +6,15 @@
 # Then a job on each OS serves those over HTTP on the runner and installs
 # from them with install.sh or install.ps1, in an empty home each time.
 #
-# The scripts trust only the release keys in internal/release/release-keys.txt,
-# and there are none yet, so the tests hand them each throwaway key
-# explicitly. pairtime install doesn't exist yet either (WP-IN2), so the
-# real binary's runs stop where the scripts would hand over to it, and a
-# fake build with an install command (install/e2e/fakepairtime) checks the
-# handover itself.
+# The scripts a release carries trust only the release keys in
+# internal/release/release-keys.txt, so the tests hand them each throwaway
+# key explicitly, and the cases that need a script trusting no key run the
+# repository's copy, which pins none. A fake build with an install command
+# (install/e2e/fakepairtime) checks the handover to pairtime install. Once
+# the real binary has that command (WP-IN2), one case runs it through the
+# script with --yes in an empty home, then pairtime uninstall --yes
+# --delete-data, and checks the home is empty again and no agent is left;
+# until then the real binary's runs stop where the scripts would hand over.
 #
 # Windows and macOS runners are scarce, so this runs only for the paths
 # below, on release tags and by hand. Neither of those jobs needs Go.
