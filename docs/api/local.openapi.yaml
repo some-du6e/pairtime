@@ -7,7 +7,7 @@
 openapi: 3.1.0
 info:
   title: pairtime agent, local API
-  version: 0.1.0
+  version: 0.2.0
   license:
     name: AGPL-3.0-or-later
     identifier: AGPL-3.0-or-later
@@ -20,16 +20,21 @@ info:
     gets 403, which stops DNS rebinding and cross-site requests.
 
     The dashboard's static files at `/` need nothing more. Routes under
-    `/v1/` also need the bearer token from port.json, which only the user who
-    runs the agent can read. The dashboard's own sign-in, a one-time URL that
-    sets a `SameSite=Strict`, `HttpOnly` cookie, comes with WP-UI1. Until
-    then the dashboard calls GET /v1/status with no token, gets 401, and
-    says this version can't open it yet.
+    `/v1/` also need one of two credentials. Local tools send the bearer
+    token from port.json, which only the user who runs the agent can read.
+    The dashboard sends the `pairtime_session` cookie, which
+    `pairtime dashboard` gets it: the command asks POST /v1/dashboard/link
+    for a one-time URL and opens it in the teen's browser, and GET /signin
+    sets the cookie, `SameSite=Strict` and `HttpOnly`, and sends the browser
+    on to the dashboard (DESIGN 3.9). A request the cookie signs in that
+    changes anything must also carry the dashboard's own Origin, which
+    browsers send with every fetch that isn't a GET.
 servers:
   - url: http://127.0.0.1:7247
     description: the default port; port.json has the real one
 security:
   - bearer: []
+  - session: []
 paths:
   /v1/status:
     get:
@@ -68,15 +73,126 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "403":
           $ref: "#/components/responses/Forbidden"
+  /v1/days:
+    get:
+      operationId: getDays
+      summary: Your time, day by day and project by project
+      description: >
+        The scorer's day rollups (DESIGN 3.5 `days/`, SM 5.3) for every
+        local day from `from` to `to`, both included, in the agent's time
+        zone. Without parameters it is this week: from Monday to today. The
+        dashboard reads it about once a minute while it is open, so
+        minutes that were pending become final on the page. The answer is
+        never cached. Until WP-AG4's stores serve it, every day is empty.
+      parameters:
+        - name: from
+          in: query
+          required: false
+          description: >
+            The first day, `YYYY-MM-DD`. Without it, the Monday of the week
+            `to` is in.
+          schema:
+            type: string
+            format: date
+        - name: to
+          in: query
+          required: false
+          description: The last day, `YYYY-MM-DD`. Without it, today.
+          schema:
+            type: string
+            format: date
+      responses:
+        "200":
+          description: One entry per day from `from` to `to`, in order.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Days"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "503":
+          description: The agent couldn't read its stores; the text says why, for the teen.
+          content:
+            text/plain:
+              schema:
+                type: string
+  /v1/dashboard/link:
+    post:
+      operationId: dashboardLink
+      summary: A one-time URL that signs a browser in to the dashboard
+      description: >
+        `pairtime dashboard` asks for one and opens it. The link works
+        once, within `expires_in_s` seconds, and only on 127.0.0.1. Only the
+        bearer token gets one, so a signed-in browser can't hand out more.
+      security:
+        - bearer: []
+      responses:
+        "201":
+          description: A new link.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DashboardLink"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+  /signin:
+    get:
+      operationId: signIn
+      summary: Sign this browser in to the dashboard
+      description: >
+        The one-time URL from POST /v1/dashboard/link. A good code sets the
+        session cookie and sends the browser to the dashboard. A used, old
+        or wrong one sends it to `/?signin=expired`, where the dashboard
+        says to run `pairtime dashboard` again. Either way the answer is a
+        303 and never cached.
+      security: []
+      parameters:
+        - name: code
+          in: query
+          required: true
+          description: The code POST /v1/dashboard/link put in the URL.
+          schema:
+            type: string
+      responses:
+        "303":
+          description: >
+            To `/` with a `Set-Cookie` for the session, or to
+            `/?signin=expired` without one.
+          headers:
+            Location:
+              schema:
+                type: string
+            Set-Cookie:
+              description: >
+                `pairtime_session=<id>; Path=/; HttpOnly; SameSite=Strict`,
+                only for a good code. The session lasts until the agent
+                stops, or until 8 hours pass with no request that uses it.
+              schema:
+                type: string
+        "403":
+          $ref: "#/components/responses/Forbidden"
 components:
   securitySchemes:
     bearer:
       type: http
       scheme: bearer
       description: The `token` field of port.json, 32 random bytes in unpadded base64url.
+    session:
+      type: apiKey
+      in: cookie
+      name: pairtime_session
+      description: >
+        The dashboard's sign-in, which GET /signin sets: 32 random bytes in
+        unpadded base64url. The agent keeps its sessions in memory only.
   responses:
     Unauthorized:
-      description: The request had no bearer token, or the wrong one.
+      description: The request had no bearer token or session cookie, or a wrong one.
       headers:
         WWW-Authenticate:
           schema:
@@ -89,7 +205,14 @@ components:
     Forbidden:
       description: >
         The request came from another computer, or its Host or Origin wasn't
-        the agent's own.
+        the agent's own, or the session cookie signed in a change without
+        the dashboard's Origin.
+      content:
+        text/plain:
+          schema:
+            type: string
+    BadRequest:
+      description: A parameter isn't what the route takes; the text says which.
       content:
         text/plain:
           schema:
@@ -130,6 +253,8 @@ components:
             $ref: "#/components/schemas/Job"
         ipc:
           $ref: "#/components/schemas/IPC"
+        focus:
+          $ref: "#/components/schemas/Focus"
         problems:
           type: object
           description: >
@@ -212,6 +337,30 @@ components:
           type: integer
           minimum: 0
           description: Connections turned away because they didn't come from this user.
+    Focus:
+      type: object
+      additionalProperties: false
+      required: [known]
+      description: >
+        Whether the agent can tell which window is in front (DESIGN 3.3,
+        5.9). WP-AG6 adds it to the reply with the idle signal
+        (D-design-5.9). While `known` is false the dashboard's Today page
+        says D-focus-unknown's sentence, because time on such a desktop is
+        level C (SM 2.5).
+      properties:
+        known:
+          type: boolean
+          description: False while the desktop doesn't say which window is in front.
+        via:
+          type: string
+          description: The focus source, when there is one, such as `SetWinEventHook`.
+        gnome_extension:
+          type: string
+          enum: [needs_login, unticked]
+          description: >
+            On GNOME, why pairtime's Shell extension isn't reporting:
+            `needs_login` until the teen logs out and back in once after
+            install, `unticked` when install left it out. Absent elsewhere.
     Stopping:
       type: object
       additionalProperties: false
@@ -220,3 +369,237 @@ components:
         status:
           type: string
           const: stopping
+    DashboardLink:
+      type: object
+      additionalProperties: false
+      required: [url, expires_in_s]
+      properties:
+        url:
+          type: string
+          description: >
+            `http://127.0.0.1:<port>/signin?code=<code>`, where the code is 32
+            random bytes in unpadded base64url.
+        expires_in_s:
+          type: integer
+          minimum: 1
+          description: How long the link works, in seconds.
+    Days:
+      type: object
+      additionalProperties: false
+      required: [today, as_of, from, to, pending_window_s, shadow, projects, days]
+      properties:
+        today:
+          type: string
+          format: date
+          description: The agent's local date when it answered.
+        as_of:
+          type: string
+          format: date-time
+          description: When the agent read its stores, in UTC.
+        from:
+          type: string
+          format: date
+        to:
+          type: string
+          format: date
+        pending_window_s:
+          type: integer
+          minimum: 0
+          description: >
+            `PENDING_WINDOW_S`: how long after a minute ends it stays
+            pending, and can still change (DESIGN 3.7, 6.2 D1).
+        shadow:
+          type: boolean
+          description: >
+            `display.shadow` (DESIGN 6.7 step 2). While it is on, every view
+            shows credited time as "calibrating" and keeps the agent's time.
+        projects:
+          type: array
+          description: Every project the days name, once each.
+          items:
+            $ref: "#/components/schemas/Project"
+        days:
+          type: array
+          description: One entry per day from `from` to `to`, in order, empty days included.
+          items:
+            $ref: "#/components/schemas/Day"
+    Project:
+      type: object
+      additionalProperties: false
+      required: [key, name]
+      properties:
+        key:
+          type: string
+          description: The project's opaque key (AGENTS.md), as the days name it.
+        name:
+          type: string
+          description: >
+            What the dashboard calls the project: its repository's folder
+            name, or the name the teen gave it. Like everything this API
+            serves, it stays on this computer.
+    Day:
+      type: object
+      additionalProperties: false
+      required: [date, uncredited, projects]
+      properties:
+        date:
+          type: string
+          format: date
+        uncredited:
+          $ref: "#/components/schemas/Uncredited"
+        projects:
+          type: array
+          description: Each project with your time or an agent's time that day.
+          items:
+            $ref: "#/components/schemas/ProjectDay"
+    ProjectDay:
+      type: object
+      additionalProperties: false
+      required: [project, credited_s, pending_s, by_evidence, by_kind, uncredited, agent_running_s, agents]
+      properties:
+        project:
+          type: string
+          description: The project's key, one of `projects`.
+        credited_s:
+          type: number
+          minimum: 0
+          description: Your time, pending minutes included.
+        pending_s:
+          type: number
+          minimum: 0
+          description: >
+            The part of `credited_s` in minutes that are still pending
+            (DESIGN 3.7). Late events can still change it, and its level.
+        by_evidence:
+          $ref: "#/components/schemas/ByEvidence"
+        by_kind:
+          $ref: "#/components/schemas/ByKind"
+        uncredited:
+          $ref: "#/components/schemas/Uncredited"
+        agent_running_s:
+          type: number
+          minimum: 0
+          description: Seconds in which any agent turn of this project was running.
+        agents:
+          type: array
+          description: >
+            `agent_running_s` by the harness that ran, each agent once.
+            Agents that ran at the same time add up to more than
+            `agent_running_s`.
+          items:
+            $ref: "#/components/schemas/AgentTime"
+    ByEvidence:
+      type: object
+      additionalProperties: false
+      required: [A, B, C]
+      description: >
+        The final seconds of `credited_s` by evidence level (SM 5.1,
+        DESIGN 6.4). With `pending_s` they add up to `credited_s`.
+      properties:
+        A:
+          type: number
+          minimum: 0
+        B:
+          type: number
+          minimum: 0
+        C:
+          type: number
+          minimum: 0
+    ByKind:
+      type: object
+      additionalProperties: false
+      description: >
+        `credited_s` by activity kind (SM 5.1), pending minutes included.
+        A kind with no seconds may be left out.
+      properties:
+        prompting:
+          type: number
+          minimum: 0
+        reading_output:
+          type: number
+          minimum: 0
+        supervising:
+          type: number
+          minimum: 0
+        reviewing:
+          type: number
+          minimum: 0
+        testing:
+          type: number
+          minimum: 0
+        debugging:
+          type: number
+          minimum: 0
+        hand_edit:
+          type: number
+          minimum: 0
+        lookup:
+          type: number
+          minimum: 0
+    Uncredited:
+      type: object
+      additionalProperties: false
+      description: >
+        Seconds pairtime looked at and didn't credit, by reason code
+        (SM 5.2). A reason with no seconds may be left out. A day's counts
+        all of that day's, and a project's those that belong to it.
+      properties:
+        X.absent:
+          type: number
+          minimum: 0
+        X.other_focus:
+          type: number
+          minimum: 0
+        X.ambiguous:
+          type: number
+          minimum: 0
+        X.no_anchor:
+          type: number
+          minimum: 0
+        X.agent_only:
+          type: number
+          minimum: 0
+        X.automated:
+          type: number
+          minimum: 0
+        X.no_input:
+          type: number
+          minimum: 0
+        X.reroll:
+          type: number
+          minimum: 0
+        X.rewrite_loop:
+          type: number
+          minimum: 0
+        X.same_error:
+          type: number
+          minimum: 0
+        X.autopilot:
+          type: number
+          minimum: 0
+        X.noprog:
+          type: number
+          minimum: 0
+        X.lookup_cap:
+          type: number
+          minimum: 0
+        X.bucket_cap:
+          type: number
+          minimum: 0
+        X.day_cap:
+          type: number
+          minimum: 0
+    AgentTime:
+      type: object
+      additionalProperties: false
+      required: [harness, running_s]
+      properties:
+        harness:
+          $ref: "#/components/schemas/Harness"
+        running_s:
+          type: number
+          minimum: 0
+    Harness:
+      type: string
+      description: The AI coding tool that ran (SM 1.1), as pkg/event names it.
+      enum: [claude_code, cursor, copilot, codex, gemini, devin, cline, opencode, other]
