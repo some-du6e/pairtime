@@ -78,9 +78,11 @@ type Options struct {
 // A gap in b or seq is a *GapError, a root mismatch a *RootMismatchError
 // and a head mismatch a *HeadMismatchError; the other problems are
 // *RecordError and *BatchError. errors.As picks each type out. A record
-// whose rtype isn't in the table is a RecordError wrapping
-// ErrUnknownRType, and its batch is still checked, since roots and heads
-// never read rtype.
+// whose rtype is a kind added after this package (RType.Later) is a
+// RecordError wrapping ErrUnknownRType, and its batch is still checked,
+// since roots and heads never read rtype: an auditor reports the kind as
+// unknown, and a server refuses or holds it (spec 4.2). A code version 1
+// never assigns is a RecordError wrapping ErrHeader.
 func (c Chain) Verify(opt Options) error {
 	v := &chainCheck{opt: opt, deviceID: c.DeviceID}
 	prev := c.Prev

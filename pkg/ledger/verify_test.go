@@ -432,7 +432,7 @@ func TestVerifyErrorTypes(t *testing.T) {
 			alone: true,
 		},
 		{
-			name: "a record of an rtype not in the table is reported as unknown, and its batch's root and head still verify",
+			name: "a record of rtype 0x13, a kind added later, is reported as unknown, and its batch's root and head still verify",
 			mutate: func(m *smallChain) Chain {
 				h := &m.records[1][0].Header
 				h[offRType] = 0x13
@@ -452,6 +452,32 @@ func TestVerifyErrorTypes(t *testing.T) {
 			},
 			want: func(err error) bool {
 				return wants(err, func(e *RecordError) bool { return e.B == 2 && errors.Is(e, ErrUnknownRType) })
+			},
+			alone: true,
+		},
+		{
+			name: "a record of rtype 0x42, which version 1 never assigns, is a header error, and its batch's root and head still verify",
+			mutate: func(m *smallChain) Chain {
+				h := &m.records[1][0].Header
+				h[offRType] = 0x42
+				row, err := sealUnchecked(m.rows[0].Head, 2, entriesOf(m.records[1]))
+				if err != nil {
+					t.Fatal(err)
+				}
+				m.rows[1] = row
+				row3, err := Seal(row.Head, 3, entriesOf(m.records[2]))
+				if err != nil {
+					t.Fatal(err)
+				}
+				m.rows[2] = row3
+				ch := m.chain()
+				ch.Batches[1].Bodies = nil
+				return ch
+			},
+			want: func(err error) bool {
+				return wants(err, func(e *RecordError) bool {
+					return e.B == 2 && errors.Is(e, ErrHeader) && !errors.Is(e, ErrUnknownRType)
+				})
 			},
 			alone: true,
 		},

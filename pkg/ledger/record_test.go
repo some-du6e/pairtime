@@ -269,8 +269,12 @@ func TestWritersRefuse(t *testing.T) {
 			_, err := UploadFailureRecord(k, 1, 1795089612345, "the wifi was down")
 			return err
 		}},
-		{"a header of reserved rtype 0x13 is refused", func() error {
+		{"a header of rtype 0x13, kept for a kind added later, is refused", func() error {
 			_, err := NewHeader(1, 0x13, "", event.NoSession)
+			return err
+		}},
+		{"a header of rtype 0x42, which version 1 never assigns, is refused", func() error {
+			_, err := NewHeader(1, 0x42, "", event.NoSession)
 			return err
 		}},
 		{"a header of rtype 0x00 is refused", func() error {
@@ -386,7 +390,8 @@ func TestCheckBody(t *testing.T) {
 		{"a body whose event repeats a member isn't a body", rec.Header, []byte(n + `,"e":` + strings.Replace(e, `"seq":7`, `"seq":7,"seq":8`, 1) + `,"f":` + f + `,"c":` + c + `}`), ErrBody},
 		{"a body with f after c isn't a body; the members come in the table's order", rec.Header, []byte(n + `,"e":` + e + `,"c":` + c + `,"f":` + f + `}`), ErrBody},
 		{"a body that isn't valid UTF-8 isn't a body", rec.Header, []byte(n + `,"e":` + strings.Replace(e, `"p_9f2c"`, "\"p_9f2c\xff\"", 1) + `,"f":` + f + `,"c":` + c + `}`), ErrBody},
-		{"a body under an rtype not in the table is reported as unknown", header(7, 0x13, "", event.NoSession), []byte(n + `,"e":{}}`), ErrUnknownRType},
+		{"a body under rtype 0x13, a kind added later, is reported as unknown", header(7, 0x13, "", event.NoSession), []byte(n + `,"e":{}}`), ErrUnknownRType},
+		{"a body under rtype 0x42, which version 1 never assigns, is a header error", header(7, 0x42, "", event.NoSession), []byte(n + `,"e":{}}`), ErrHeader},
 		{"a checkpoint body that names its header's project agrees (spec 4.7)", checkpoint, []byte(n + `,"e":{"project_key":"p_x","t":1795089600000,"state":{"any":"state"}}}`), nil},
 		{"a checkpoint body that names another project disagrees", checkpoint, []byte(n + `,"e":{"project_key":"p_y","t":1795089600000,"state":{}}}`), ErrBodyHeader},
 		{"a checkpoint body with only a state isn't a body", checkpoint, []byte(n + `,"e":{"any":"state"}}`), ErrBody},

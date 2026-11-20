@@ -79,12 +79,25 @@ func (r RType) EventKind() (event.Kind, bool) {
 }
 
 // Known reports whether r is in spec 4.2's table. A writer never emits
-// any other code. A reader that meets one reports the record as unknown
-// and can still check its batch, because roots and heads never read rtype.
+// any other code.
 func (r RType) Known() bool {
 	_, ok := r.EventKind()
 	return ok || r == RTypeCheckpoint || r == RTypeUploadFailure
 }
+
+// Later reports whether r is one of the codes from 0x13 to 0x3f that spec
+// 4.2 keeps for event kinds added later and that this package doesn't
+// know. A reader that meets one reports the record's kind as unknown and
+// still checks its batch, because roots and heads never read rtype. Every
+// other code outside the table, 0x00 and 0x42 to 0xff, is one version 1
+// never assigns, and a record that has one fails.
+func (r RType) Later() bool {
+	return !r.Known() && r >= firstLaterRType && r < RTypeCheckpoint
+}
+
+// firstLaterRType is the first code spec 4.2 keeps for event kinds added
+// later.
+const firstLaterRType RType = 0x13
 
 // String returns the name of what r holds, such as "os.presence" or
 // "checkpoint", or "rtype 0x13" for a code not in the table.
@@ -238,15 +251,18 @@ func (h Header) hasSession() bool { return h.Session() != [SessionDigestSize]byt
 // Check reports whether h follows spec 4.3: s is at least 1, the rtype is
 // in the table, an os.* header has the zero project, a checkpoint has a
 // project and no session, and an upload-failure note has neither. An rtype
-// not in the table gives an error wrapping ErrUnknownRType, and every other
-// broken rule one wrapping ErrHeader.
+// from 0x13 to 0x3f that this package doesn't know, a kind added later
+// (spec 4.2), gives an error wrapping ErrUnknownRType; every other broken
+// rule, a code version 1 never assigns included, one wrapping ErrHeader.
 func (h Header) Check() error {
 	r := h.RType()
 	switch {
 	case h.Seq() == 0:
 		return fmt.Errorf("%w: sequence numbers start at 1", ErrHeader)
-	case !r.Known():
+	case r.Later():
 		return fmt.Errorf("%w: %s", ErrUnknownRType, r)
+	case !r.Known():
+		return fmt.Errorf("%w: %s is reserved; version 1 never assigns it", ErrHeader, r)
 	case r.osRecord() && h.hasProject():
 		return fmt.Errorf("%w: %s records have no project", ErrHeader, r)
 	case r == RTypeCheckpoint && (!h.hasProject() || h.hasSession()):
@@ -827,7 +843,7 @@ func newRecord(k *Keys, h Header, e json.RawMessage) (Record, error) {
 // A checkpoint's and an upload-failure note's e must be the object of spec
 // 4.7, and a checkpoint's project_key must have h's digest.
 //
-// Errors wrap ErrBody, ErrBodyHeader or ErrUnknownRType, except for an f
+// Errors wrap ErrBody, ErrBodyHeader, ErrHeader or ErrUnknownRType, except for an f
 // of a version newer than this package's, which wraps features.ErrUnknown
 // only: the record isn't wrong, but this reader can't check its features,
 // so a server refuses or holds it, and an older auditor reports its
@@ -843,8 +859,11 @@ func CheckBody(deviceID string, h Header, body []byte) error {
 	r := h.RType()
 	kind, isEvent := r.EventKind()
 	if !isEvent {
-		if !r.Known() {
+		if r.Later() {
 			return fmt.Errorf("%w: %s", ErrUnknownRType, r)
+		}
+		if !r.Known() {
+			return fmt.Errorf("%w: %s is reserved; version 1 never assigns it", ErrHeader, r)
 		}
 		if b.F != nil || b.C != nil {
 			return fmt.Errorf("%w: %s records carry no f and no c", ErrBodyHeader, r)
