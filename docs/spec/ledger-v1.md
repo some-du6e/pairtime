@@ -290,7 +290,7 @@ A verifier that holds a run of a device's batches, with headers and body hashes 
 8. Each inclusion proof verifies (5.2), with `n` taken from a verified head.
 9. Each day tree has its rows in order and on its own day, its `count_d`, `T_d` and `G_d` follow from them, its signature verifies over `D_d`, and the day chain has no gaps.
 10. Each revealed text verifies `ok` against its record's `c` (10.3).
-11. Each CC8 reveal verifies `ok` against its record's `f.mh` (10.8), and the draw follows from `r`, `SHA-256(M)` and the pool (10.9).
+11. Each CC8 reveal verifies `ok` against its record's `f.mh`, given whether the text's reveal removed a span (10.8), and the draw follows from `r`, `SHA-256(M)` and the pool (10.9).
 
 `pkg/ledger` reports a gap in `b` or `s`, a root mismatch and a head mismatch as distinct errors (WP-LG2). Each one points at a different fault: a batch that was hidden or dropped, a record that was changed or moved, a chain that was rewritten.
 
@@ -525,24 +525,29 @@ A later version adds keys and raises `v`, and its rules apply only to records th
 
 ### 10.8 What CC8 reveals
 
-For each challenged prompt or `track` call, the client reveals every distinct shingle's per-shingle value, in ascending order of `v` compared byte by byte. Each value comes with its shingle's text, unless the shingle touches a removed span:
+For each challenged prompt or `track` call, the client reveals the per-shingle value of every distinct shingle that touches no removed span, with the shingle's text, in ascending order of `v` compared byte by byte, and names the kind of its shingles:
 
 ```json
-{"v": "8bb3f386a2bdedcd87146997843e177a9fd5e405272bdf1005f3eb37b499a41e", "x": "203c706174"}
-{"v": "...a value whose shingle touches a removed span..."}
+{"kind": "char5", "entries": [{"v": "8bb3f386a2bdedcd87146997843e177a9fd5e405272bdf1005f3eb37b499a41e", "x": "203c706174"}, ...]}
 ```
 
-`x` is the shingle's UTF-8 bytes in hex. Against the record's committed `mh`, the server checks:
+`x` is the shingle's UTF-8 bytes in hex, and `kind` is `word3` or `char5` (10.5). A shingle that touches a removed span gets no entry at all, value included. `v(x)` is the same in every text the device writes, so a value sent without its text would undo the removal: the server could match it against the same shingle shown in another reveal of the device, or test it against the minima of every committed sketch it holds, and learn the removed words. 10.2 salts each token separately so that a removed token's leaf can't be matched; a hidden shingle's value would give that back.
 
-1. `bad_entry`: a value isn't 32 bytes, isn't greater than the value before it, or comes with an `x` that is empty or isn't valid UTF-8.
-2. `sketch`: the sketch computed from the values as in 10.5 isn't `mh`.
-3. `ok`: neither of the above.
+**Touching.** Each normalized word comes from tokens of the text (10.2): a word of step 3 from the one token it is, since LF and CR are whitespace and no token crosses a line, and a `<retry>` of step 7 from every token of the words it replaced. A character shingle touches a removed span when every place it occurs in the normalized text holds a code point of a word that comes from a token in the span; the single spaces between words come from no token. A word shingle touches one when every run of three words that makes it holds such a word. So a shingle is shown exactly when it occurs somewhere built from kept tokens alone, and its text then reveals nothing the kept text doesn't. A token that step 2 removed, with its whole line, makes no word, and nothing touches it. For `fix it for bob` with `bob` removed, the normalized text is `<retry> for bob`, and the shingles `for b`, `or bo` and `r bob` touch the span and go, while `<retr`, `retry`, `etry>`, `try> `, `ry> f`, `y> fo`, `> for` and ` for ` stay.
 
-CC8 (WP-TR2) then checks the shown shingles against the revealed text. When nothing was removed, the `x` values must be exactly the shingles the server computes from the text, and every entry must have one. CC8 also keeps one value per shingle across all of a device's reveals, so a shingle shown with two different values in two reveals fails.
+Against the record's committed `mh`, and knowing from the text's reveal whether it removed any span, the server checks:
 
-These checks are weaker than DESIGN 7.3 assumes. The server can't check a value against `K_feat`. A client that commits each prompt's sketch under a different made-up key can reveal values under that key, and they reproduce its sketch. CC8 catches that client only when two revealed turns share a shingle and show different values for it, and a span removed by hand over the shared words hides even that. A value that sets no minimum can also change without changing the sketch. DESIGN 7.3 says a draw of 10 turns catches a client that falsifies 10% of prompts with probability 0.65. That figure assumes each falsified turn fails on its own, which holds only for a client that falsifies sketches and then reveals true values.
+1. `bad_entry`: a value isn't 32 bytes or isn't greater than the value before it, or its `x` is empty or isn't valid UTF-8.
+2. `sketch`: with nothing removed, the sketch computed from the values as in 10.5 isn't `mh`. With spans removed, some value's hash is below `mh` at a place `i`, which no shingle of the text could give, because `mh[i]` is the least of them.
+3. `ok`: neither of the above. With spans removed, the places at which no shown value reaches `mh` are the ones hidden shingles set, and the server reports how many there are.
 
-Revealing `v(x)` also lets the server test which other committed sketches have `x` as a minimum somewhere. So it learns that other prompts probably contain a shingle it saw in a challenged one. The shingle's text is revealed anyway; the fact that it recurs is what's new.
+CC8 (WP-TR2) then checks the shown shingles against the revealed text. When nothing was removed, the server normalizes the text itself, and `kind` and the `x` values must be exactly the text's kind and shingles. When spans were removed, the kept tokens alone don't fix the normalization, because a removed token can change which lines step 2 removes, which words step 7 merges and which shingles neighbour, so CC8 relies on the verdict above and the count it reports.
+
+Across a device's reveals, CC8 checks what needs no key. The same `(kind, x)` must come with the same `v` in every reveal; the kind is part of the key, because `0x05` and `0x06` give one text two honest values. Two revealed prompts whose normalized texts are equal must carry the same `th`, and two whose error signatures are equal must carry the same `es`; a revealed prompt with no signature carries no `es`, and one with a signature carries one. These comparisons use only reveals the evidence store still holds, so DESIGN 4.4's retention and 7.11's purge apply to them as to the reveals: a purged or expired reveal leaves nothing behind for CC8 to match later texts against.
+
+These checks are weaker than DESIGN 7.3 assumes, and nothing checks the `es` of `agent.tool` and `shell.command`, which comes from output that is never revealed. The server can't check a value against `K_feat`. A client that commits each prompt's sketch under a different made-up key can reveal values under that key, and they reproduce its sketch. CC8 catches that client only when two revealed turns share a shingle and show different values for it, and a span removed by hand over the shared words hides even that. A value that sets no minimum can also change without changing the sketch. A client that keeps honest sketches but writes a fresh made-up `es` with each pasted error resets SM 4.2's error count and makes each paste a change event, and CC8 sees it only when two revealed prompts share a signature. DESIGN 7.3 says a draw of 10 turns catches a client that falsifies 10% of prompts with probability 0.65. That figure assumes each falsified turn fails on its own, which holds only for a client that falsifies sketches and then reveals true values; `docs/errata/2026-11-19-cc8-detection.md` records the difference for Karim, who decides in issue #15 what CC8 is for.
+
+A shown value still lets the server test which other committed sketches have `x` as a minimum somewhere, and so learn that other prompts probably contain a shingle it saw in a challenged one. That shingle's text was shown, so what the server learns is only that it recurs.
 
 ### 10.9 The challenge draw
 
@@ -679,7 +684,7 @@ Each command exits 0 when everything matches, 1 when a value doesn't, and 2 for 
 | `features[]` | `k_dev`, `rtype`, `f`, and by kind: for `prompt.submit` and `cli.track`, `prompt_class`, and `text` and `shingle_values` (in the order of the shingles) unless the record is a `prompt.submit` whose text the device never had (10.1), which has neither; for `agent.tool`, `hunks[]`, each `path`, `old_start`, `old_lines`, `new_start`, `new_lines`, and optional `command`; for `shell.command`, optional `command` (10.5 to 10.7) |
 | `diffs[]` | `hunks[]`, each `old_start`, `old_lines`, `new_start`, `new_lines`, and either `patch`, an object of `old_start`, `old_lines`, `new_start`, `new_lines` and `lines[]`, each the hex of one line with its leading ` `, `-`, `+` or `\`, or `before` and `after`, the file's text before and after one edit (10.6) |
 | `jaccard[]` | `a`, `b` (sketches), `matches` (`m` of 10.5) |
-| `shingle_reveals[]` | `mh`, `entries[]`, each `v` and optional `x`, `verdict`: `ok`, `bad_entry` or `sketch` (10.8) |
+| `shingle_reveals[]` | `mh`, `kind` (`word3` or `char5`), `removed` (whether the text's reveal removed a span), `entries[]`, each `v` and `x`, `verdict`: `ok`, `bad_entry` or `sketch`, and with `ok`, `unexplained`, the number of places no shown value reaches (10.8) |
 | `draws[]` | `r`, `metadata` (`M`), `seed`, `pool[]`, each `device_id`, `seq`, `score`, `drawn[]`, each `device_id`, `seq`, smallest score first, and optional `commits[]`, each `commit`, `score`, with `drawn_commits[]`, each `commit` (10.9) |
 | `challenge_k[]` | `pool` (`P`), `k` (`CHALLENGE_K`), `drawn` (`min(K, P)`) |
 
@@ -713,6 +718,7 @@ The bodies are stand-ins: the real envelope with the record's real nonce, and `"
 - `normalizations`: each rule of 10.4 and each pattern `F1` to `E6`, the cases where a rule doesn't apply, pastes in the wrapper Claude Code 2.1.327 writes with typed text after them, SM 6.5's 20:02 and 20:07 prompts, which normalize to one text, edge punctuation around placeholders, and 10 random texts.
 - `features`: prompts with and without an error signature, three versions of one re-roll, an empty prompt, a prompt of nothing but a paste, a paste in Claude Code's wrapper followed by a question, a bridge prompt with no text, SM 6.5's 20:02 and 20:07 prompts, a `track` label, `agent.tool` records with hunks across two files, an insertion, a deletion, a file outside the project and a Windows path, a command, and a read with neither, and `shell.command` records with and without a command.
 - `diffs`: patch hunks with three lines of context, among them the two appends of 10.6, a run with removed and added lines, two runs in one patch hunk, a new file, a deleted file, a line without its LF, and a patch whose counts don't add up; and edits given as text before and after, among them one inside a line, an insertion between two equal lines, and an edit that changes nothing.
+- `shingle_reveals`: whole CC8 reveals, and reveals of texts with spans removed as the client builds them, among them `fix it for bob`, a shingle that occurs both beside a removed token and among kept ones, a word shingle beside a removed token, a removed token on a line step 2 removes, and everything removed; then each failing verdict, among them an empty `x`, an `x` that isn't UTF-8, and a value below a committed minimum with spans removed.
 - `jaccard`, `shingle_reveals` and `draws`: the pairs, CC8 reveals and draws built from those, including each failing verdict, a pool smaller than `CHALLENGE_K`, a pool of 300 where the cap applies, and an empty pool.
 
 ## 12. Worked example
@@ -865,7 +871,7 @@ Part 2 decides these, for DESIGN 3.6, 5.4, 7.3 and 7.5 and SM 4.2 and 8.5:
 20. Each 16-byte keyed value has a tag for its kind. The template is the normalized text. The error signature is the first line matching `E1` to `E6`, substituted but not lowercased, and the same function fills `agent.tool` and `shell.command` `error_sig`. Commands collapse whitespace; paths are relative to the project root with `/` (10.6).
 21. A hunk carries the four numbers of a `diff -U0` hunk, changed lines only, taken from a patch's lines without its context or from the file's lines before and after an edit. DESIGN 3.6 gives a start and an end line, but SM 4.2's rewrite rule shifts ranges by later diffs, which needs both extents (10.6).
 22. `f`'s members, their order, their encodings, and `f` on every record of the four kinds from version 1 on, even when it holds only `v` (10.7).
-23. CC8 reveals one value per distinct shingle, ascending, with the shingle's text where no removed span touches it. 10.8 also states what that can't prove, which is less than DESIGN 7.3 assumes.
+23. CC8 reveals one value per distinct shingle that touches no removed span, ascending, always with its text, and names the shingles' kind; a shingle that touches a removed span sends nothing, because its value would undo the removal. 10.8 defines touching, says what CC8 checks with and without removed spans and across reveals, and states what that can't prove, which is less than DESIGN 7.3 assumes.
 24. The draw: the seed hashes the metadata reveal as sent, before sealing; `device_id` carries part 1's length byte; commits are scored with a `0x00` first byte; `CHALLENGE_K` rounds 10% up (10.9).
 
 The review of parts 1 and 2 (issue #19) decided these, before any device witnessed data:

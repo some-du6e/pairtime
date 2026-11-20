@@ -792,18 +792,45 @@ def bare(word):
     return word[i:j].replace("'", "").replace("\u2019", "")
 
 
-def replace_retries(words):
-    out, i = [], 0
+def replace_retries(words, sources):
+    """Step 7, carrying each word's source tokens: a <retry> comes from
+    every token of the words it replaced."""
+    out, out_sources, i = [], [], 0
     while i < len(words):
         for phrase in RETRY_PHRASES:
             if tuple(words[i:i + len(phrase)]) == phrase:
                 out.append("<retry>")
+                out_sources.append(frozenset().union(*sources[i:i + len(phrase)]))
                 i += len(phrase)
                 break
         else:
             out.append(words[i])
+            out_sources.append(sources[i])
             i += 1
-    return out
+    return out, out_sources
+
+
+def normalize_sources(text):
+    """10.4, with the tokens (10.2, numbered from 0) each normalized word
+    comes from. A word of step 3 is one token of the whole text, since LF
+    and CR are whitespace, so walking the text's tokens and counting LFs
+    gives the same words as walking its lines."""
+    lines = split_lines(text)
+    removed = removed_lines(lines)
+    gone = set(removed)
+    words, sources, line = [], [], 0
+    for j, tok in enumerate(tokenize(text)):
+        if is_space(tok[0]):
+            line += tok.count("\n")
+            continue
+        if line in gone:
+            continue
+        w = bare(substitute(lowercase(tok)))
+        if w:
+            words.append(w)
+            sources.append(frozenset([j]))
+    words, sources = replace_retries(words, sources)
+    return removed, words, sources
 
 
 def normalize(text):
@@ -811,14 +838,8 @@ def normalize(text):
     normalized text is the words joined by single spaces. Each word is
     lowercased, substituted and stripped to its bare form, and a word left
     empty goes."""
-    lines = split_lines(text)
-    removed = removed_lines(lines)
-    gone = set(removed)
-    words = []
-    for i, line in enumerate(lines):
-        if i not in gone:
-            words += [w for w in (bare(substitute(lowercase(x))) for x in words_of(line)) if w]
-    return removed, replace_retries(words)
+    removed, words, _ = normalize_sources(text)
+    return removed, words
 
 
 def error_signature(text):
@@ -1055,24 +1076,63 @@ def tool_features(k_feat, hunks, command):
     return f
 
 
-# 10.8 What CC8 reveals: every distinct shingle's value, ascending, each
-# with the shingle's text unless it touches a removed span.
+# 10.8 What CC8 reveals: the value and text of every distinct shingle that
+# touches no removed span, ascending by value. A shingle that touches one
+# sends nothing.
 
 SHINGLE_VERDICTS = ("ok", "bad_entry", "sketch")
 
 
-def verify_shingle_reveal(mh, entries):
-    """entries are (v, x) with x None when hidden. Returns (verdict, index)."""
+def shown_shingles(words, sources, removed_tokens):
+    """(tag, shown, hidden): the text's shingles split by whether they touch
+    a removed span. A shingle touches one when every place it occurs holds
+    a code point of a word that comes from a removed token; the spaces
+    between words come from no token."""
+    dirty = [bool(src & removed_tokens) for src in sources]
+    tag, xs = shingles(words)
+    clean = set()
+    if tag == WORD_SHINGLE:
+        for i in range(len(words) - 2):
+            if not any(dirty[i:i + 3]):
+                clean.add(" ".join(words[i:i + 3]))
+    else:
+        owner = []
+        for i, w in enumerate(words):
+            if i:
+                owner.append(None)
+            owner += [i] * len(w)
+        text = " ".join(words)
+        size = min(5, len(text))
+        for i in range(len(text) - size + 1 if text else 0):
+            if not any(owner[k] is not None and dirty[owner[k]] for k in range(i, i + size)):
+                clean.add(text[i:i + size])
+    return tag, [x for x in xs if x in clean], [x for x in xs if x not in clean]
+
+
+def shingle_reveal(k_feat, text, removed_tokens):
+    """The CC8 reveal the client sends for text whose reveal removed the
+    tokens removed_tokens (numbered from 0): (kind, [(v, x)]) ascending by
+    v, for the shingles that touch no removed span."""
+    _, words, sources = normalize_sources(text)
+    tag, shown, _ = shown_shingles(words, sources, frozenset(removed_tokens))
+    return SHINGLE_KINDS[tag], sorted((shingle_value(k_feat, tag, x), x.encode("utf-8")) for x in shown)
+
+
+def verify_shingle_reveal(mh, entries, removed):
+    """entries are (v, x). removed says whether the text's reveal removed a
+    span. Returns (verdict, index, unexplained): the index of the bad
+    entry, and for ok the number of places no shown value reaches."""
     prev = None
     for i, (v, x) in enumerate(entries):
         if len(v) != 32 or (prev is not None and not prev < v):
-            return "bad_entry", i
-        if x is not None and (not x or utf8_or_none(x) is None):
-            return "bad_entry", i
+            return "bad_entry", i, None
+        if not x or utf8_or_none(x) is None:
+            return "bad_entry", i, None
         prev = v
-    if sketch([v for v, _ in entries]) != mh:
-        return "sketch", None
-    return "ok", None
+    shown = sketch([v for v, _ in entries])
+    if (any(a < b for a, b in zip(shown, mh)) if removed else shown != mh):
+        return "sketch", None, None
+    return "ok", None, sum(1 for a, b in zip(shown, mh) if a != b)
 
 
 def utf8_or_none(x):
@@ -1622,15 +1682,36 @@ def check_jaccard(rep, obj, path):
 
 
 def check_shingle_reveal(rep, obj, path):
-    fields(obj, path, ("mh", "entries", "verdict"), ("note",))
+    fields(obj, path, ("mh", "kind", "removed", "entries", "verdict"),
+           ("unexplained", "k_dev", "text", "removed_tokens", "note"))
     mh = get_sketch(obj, "mh", path)
+    kind = get_choice(obj, "kind", path, tuple(SHINGLE_KINDS.values()))
+    removed = obj["removed"]
+    if not isinstance(removed, bool):
+        raise FormatError("%s.removed: want true or false" % path)
     entries = []
     for i, e in enumerate(get_list(obj, "entries", path)):
         ep = "%s.entries[%d]" % (path, i)
-        fields(e, ep, ("v",), ("x",))
-        entries.append((get_hex(e, "v", ep), get_hex(e, "x", ep) if "x" in e else None))
-    got, _ = verify_shingle_reveal(mh, entries)
+        fields(e, ep, ("v", "x"))
+        entries.append((get_hex(e, "v", ep), get_hex(e, "x", ep)))
+    got, _, unexplained = verify_shingle_reveal(mh, entries, removed)
     rep.same(path + ".verdict", get_choice(obj, "verdict", path, SHINGLE_VERDICTS), got)
+    if ("unexplained" in obj) != (got == "ok"):
+        rep.fail(path + ".unexplained", "comes with an ok verdict, and only with one")
+    elif got == "ok":
+        rep.same(path + ".unexplained", get_int(obj, "unexplained", path, 0, MINHASH_SIZE), unexplained)
+    build = ("k_dev", "text", "removed_tokens")
+    if any(k in obj for k in build):
+        if not all(k in obj for k in build):
+            raise FormatError("%s: k_dev, text and removed_tokens come together" % path)
+        k_feat = derive_keys(get_hex(obj, "k_dev", path, 32))["k_feat"]
+        text = get_hex_text(obj, "text", path)[1]
+        tokens = [get_int({"t": t}, "t", "%s.removed_tokens[%d]" % (path, i)) for i, t in
+                  enumerate(get_list(obj, "removed_tokens", path))]
+        want_kind, want = shingle_reveal(k_feat, text, tokens)
+        rep.same(path + ".kind", kind, want_kind)
+        rep.same(path + ".entries", [[v.hex(), x.hex()] for v, x in entries], [[v.hex(), x.hex()] for v, x in want])
+        rep.same(path + ".removed", removed, bool(tokens))
     rep.count("shingle reveals")
 
 
@@ -2260,40 +2341,76 @@ def make_features(k_dev):
     return out
 
 
+def shingle_reveal_json(note, mh, kind, removed, entries, verdict, build=None):
+    """A CC8 reveal vector. build is (k_dev, text, removed_tokens) for a
+    reveal that is what the client would send for that text."""
+    got, _, unexplained = verify_shingle_reveal(mh, entries, removed)
+    if got != verdict:
+        raise LedgerError("shingle reveal %s is %s, not %s" % (note, got, verdict))
+    out = {"note": note, "mh": sketch_bytes(mh).hex(), "kind": kind, "removed": removed}
+    if build is not None:
+        k_dev, text, tokens = build
+        out.update(k_dev=k_dev.hex(), text=text.encode("utf-8").hex(), removed_tokens=sorted(tokens))
+    out["entries"] = [{"v": v.hex(), "x": x.hex()} for v, x in entries]
+    out["verdict"] = got
+    if got == "ok":
+        out["unexplained"] = unexplained
+    return out
+
+
 def make_shingle_reveals(features):
-    """CC8 reveals for some of the prompts above, and one of each failure."""
+    """CC8 reveals of some of the prompts above, whole and with spans
+    removed, and one of each failure."""
     out = []
+    k_dev = bytes.fromhex(features[0]["k_dev"])
+    k_feat = derive_keys(k_dev)["k_feat"]
+
+    def client(note, text, tokens, prompt_class="substantive"):
+        f, _ = prompt_features(k_feat, text, prompt_class)
+        kind, entries = shingle_reveal(k_feat, text, tokens)
+        mh = sketch_from_bytes(bytes.fromhex(f["mh"]))
+        out.append(shingle_reveal_json(note, mh, kind, bool(tokens), entries, "ok", (k_dev, text, tokens)))
+        return mh, kind, entries
+
     for item in features[:5] + features[7:8]:
-        mh = bytes.fromhex(item["f"]["mh"])
-        text = bytes.fromhex(item["text"]).decode("utf-8")
-        _, words = normalize(text)
-        xs = shingles(words)[1]
-        pairs = sorted(zip((bytes.fromhex(v) for v in item["shingle_values"]), (x.encode("utf-8") for x in xs)))
-        entries = [{"v": v.hex(), "x": x.hex()} for v, x in pairs]
-        out.append({"note": "%s: every shingle shown" % item["note"], "mh": mh.hex(), "entries": entries,
-                    "verdict": "ok"})
-    first = out[0]
-    hidden = [{"v": e["v"]} if i % 3 == 0 else e for i, e in enumerate(first["entries"])]
-    out.append(dict(first, note="the worked example with every third shingle hidden", entries=hidden))
-    mh = sketch_from_bytes(bytes.fromhex(first["mh"]))
-    entries = first["entries"]
+        client("%s: every shingle shown" % item["note"], bytes.fromhex(item["text"]).decode("utf-8"), [])
+    example = bytes.fromhex(features[0]["text"]).decode("utf-8")
+    client("the worked example with src/nav.js:12, token 7, removed: shingles touching <path> send nothing",
+           example, [6])
+    client("fix it for bob with bob removed", "fix it for bob", [6])
+    client("a shingle shown because one place it occurs is made of kept tokens", "hi bob hi bob", [6])
+    client("a word shingle next to a removed token goes, and the rest stay",
+           "please make the header sticky and ask bob about the footer", [14])
+    client("a removed token on a line that step 2 removes touches nothing",
+           "fix the login page\nTypeError: bob is undefined", [10])
+    client("everything removed: nothing is shown", example, list(range(15)))
+
+    # Failures, on the worked example shown whole.
+    mh, kind = sketch_from_bytes(bytes.fromhex(features[0]["f"]["mh"])), "char5"
+    _, entries = shingle_reveal(k_feat, example, [])
+
+    def fail(note, entries, verdict, removed=False):
+        out.append(shingle_reveal_json(note, mh, kind, removed, entries, verdict))
+
     # A value that is the minimum somewhere, so changing it shows.
-    pick = next(i for i, e in enumerate(entries) if any(
-        h == m for h, m in zip(minhash_values(bytes.fromhex(e["v"])), mh)))
-    changed = [dict(e) for e in entries]
-    changed[pick]["v"] = sha256(b"not the shingle's value").hex()
-    changed.sort(key=lambda e: e["v"])
-    out.append(dict(first, note="a value that sets a minimum, replaced", entries=changed, verdict="sketch"))
-    out.append(dict(first, note="out of order", entries=entries[1:2] + entries[:1] + entries[2:], verdict="bad_entry"))
-    out.append(dict(first, note="a value twice", entries=entries[:1] + entries[:1] + entries[1:], verdict="bad_entry"))
-    out.append(dict(first, note="a 31-byte value", entries=[{"v": entries[0]["v"][:62]}] + entries[1:],
-                    verdict="bad_entry"))
-    out.append(dict(first, note="a shingle missing", entries=entries[:pick] + entries[pick + 1:], verdict="sketch"))
-    for item in out:
-        mh = sketch_from_bytes(bytes.fromhex(item["mh"]))
-        entries = [(bytes.fromhex(e["v"]), bytes.fromhex(e["x"]) if "x" in e else None) for e in item["entries"]]
-        if verify_shingle_reveal(mh, entries)[0] != item["verdict"]:
-            raise LedgerError("shingle reveal %s isn't %s" % (item["note"], item["verdict"]))
+    pick = next(i for i, (v, _) in enumerate(entries) if any(
+        h == m for h, m in zip(minhash_values(v), mh)))
+    changed = sorted(entries[:pick] + [(sha256(b"not the shingle's value"), entries[pick][1])] + entries[pick + 1:])
+    fail("a value that sets a minimum, replaced", changed, "sketch")
+    fail("out of order", entries[1:2] + entries[:1] + entries[2:], "bad_entry")
+    fail("a value twice", entries[:1] + entries[:1] + entries[1:], "bad_entry")
+    fail("a 31-byte value", [(entries[0][0][:31], entries[0][1])] + entries[1:], "bad_entry")
+    fail("an empty x", entries[:3] + [(entries[3][0], b"")] + entries[4:], "bad_entry")
+    fail("an x that isn't UTF-8", entries[:3] + [(entries[3][0], b"\xff")] + entries[4:], "bad_entry")
+    fail("a shingle missing, with nothing removed", entries[:pick] + entries[pick + 1:], "sketch")
+    fail("a shingle missing, with a span removed: its minima are unexplained, not wrong",
+         entries[:pick] + entries[pick + 1:], "ok", removed=True)
+    # A value whose hash is below the committed minimum somewhere can't
+    # belong to the text, removed spans or not.
+    low = next(v for v in (sha256(b"too low %d" % i) for i in range(1000))
+               if any(h < m for h, m in zip(minhash_values(v), mh)) and v not in [e[0] for e in entries])
+    fail("a value below a committed minimum, with a span removed", sorted(entries + [(low, b"made up")]), "sketch",
+         removed=True)
     return out
 
 
@@ -3019,7 +3136,7 @@ def test_check_catches_content():
         "diffs": ["three lines of context around three lines added after line 9", "an edit inside one line",
                   "a patch whose lines don't add up to its header is malformed"],
         "jaccard": ["one word changed"],
-        "shingle_reveals": ["the worked example of 10.10: every shingle shown"],
+        "shingle_reveals": ["the worked example of 10.10: every shingle shown", "fix it for bob with bob removed"],
         "draws": ["a pool of 12 on two devices"],
     }
     base = {"format": FORMAT, "lowercase": full["lowercase"], "challenge_k": full["challenge_k"]}
@@ -3082,6 +3199,11 @@ def test_check_catches_content():
         ("a malformed patch read as well formed", lambda d: d["diffs"][2].pop("malformed") and d["diffs"][2].update(hunks=[])),
         ("a Jaccard count", setter(at("jaccard", 0), "matches", lambda x: x + 1)),
         ("a shingle reveal's verdict", setter(at("shingle_reveals", 0), "verdict", lambda _: "sketch")),
+        ("a shingle reveal's count of unexplained places", setter(at("shingle_reveals", 1), "unexplained", lambda x: x + 1)),
+        ("a hidden shingle sent anyway", lambda d: d["shingle_reveals"][1].update(entries=sorted(
+            d["shingle_reveals"][1]["entries"] + [{"v": d["shingle_reveals"][0]["entries"][0]["v"], "x": "666f722062"}],
+            key=lambda e: e["v"]))),
+        ("a shingle reveal's kind", setter(at("shingle_reveals", 0), "kind", lambda _: "word3")),
         ("a draw seed", setter(at("draws", 0), "seed", flip)),
         ("a pool score", setter(at("draws", 0, "pool", 3), "score", flip)),
         ("the drawn order", swap("drawn")),
