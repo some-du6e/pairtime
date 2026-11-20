@@ -41,12 +41,15 @@ function tags(html: string): string[] {
 
 const what = createRawSnippet(() => ({ render: () => '<p>Counts keys, never which keys.</p>' }));
 
-function consentCard(): string {
+const lostComputer = 'Without a backup, if you lose this computer or wipe it, the evidence for the time you tracked on it is gone.';
+
+function consentCard(declining?: string): string {
 	return render(ConsentCard, {
 		props: {
 			title: 'Typing evidence',
 			turnOff: 'Settings, under Typing evidence',
 			accept: 'Turn on typing evidence',
+			declining,
 			onanswer: () => {},
 			children: what,
 		},
@@ -58,7 +61,7 @@ function profileChoice(mode: ProfileMode): () => string {
 }
 
 describe('ConsentCard (DESIGN 8.4)', () => {
-	const cases: { name: string; check: (html: string) => void }[] = [
+	const cases: { name: string; html?: () => string; check: (html: string) => void }[] = [
 		{
 			name: 'the only primary-styled button is "Not now"',
 			check: (html) => {
@@ -87,16 +90,35 @@ describe('ConsentCard (DESIGN 8.4)', () => {
 			},
 		},
 		{
-			name: 'the card says what the item does, that saying no changes nothing, and where to turn it off',
+			name: "the card says what the item does, that saying no doesn't stop anyone using pairtime, and where to turn it off",
 			check: (html) => {
 				expect(html).toContain('Counts keys, never which keys.');
-				expect(html).toContain('stop you from using pairtime');
+				expect(html).toContain('stop you from using pairtime.</p>');
 				expect(html).toContain('turn it off any time in Settings, under Typing evidence');
+			},
+		},
+		{
+			name: 'without a declining sentence, the card claims nothing about what else saying no changes',
+			check: (html) => {
+				expect(html).not.toContain('nothing else changes');
+				expect(html).not.toContain('data-declining');
+			},
+		},
+		{
+			name: "the caller's declining sentence comes after the fixed one and before where to turn it off",
+			html: () => consentCard(lostComputer),
+			check: (html) => {
+				const fixed = html.indexOf('stop you from using pairtime.</p>');
+				const declining = html.indexOf(lostComputer);
+				const turnOff = html.indexOf('turn it off any time in');
+				expect(fixed).toBeGreaterThan(-1);
+				expect(declining).toBeGreaterThan(fixed);
+				expect(turnOff).toBeGreaterThan(declining);
 			},
 		},
 	];
 	for (const c of cases) {
-		test(c.name, () => c.check(consentCard()));
+		test(c.name, () => c.check((c.html ?? consentCard)()));
 	}
 });
 
