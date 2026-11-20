@@ -27,9 +27,9 @@ import (
 func (a *agent) handler(token string) http.Handler {
 	api := http.NewServeMux()
 	api.HandleFunc("GET /v1/status", a.serveStatus)
+	api.HandleFunc("GET /v1/days/{date}", a.serveDay)
+	api.HandleFunc("GET /v1/sessions/last", a.serveLastSession)
 	api.HandleFunc("POST /v1/agent/stop", a.serveStop)
-	api.HandleFunc("GET /v1/days/{date}", a.views.ServeDay)
-	api.HandleFunc("GET /v1/sessions/last", a.views.ServeLastSession)
 
 	mux := http.NewServeMux()
 	mux.Handle("POST /v1/dashboard/link", localhttp.RequireToken(token, http.HandlerFunc(a.serveLink)))

@@ -15,13 +15,15 @@ import (
 // call that comes over the socket or the pipe, which hooks.go reports
 // through Hook (WP-AG3). docs/PLAN.md names who wires the rest: WP-AD18
 // each track message through Hook (its entry's "Left by WP-AG3" line,
-// since track messages came after WP-AG3), and WP-AG4 passes the parameter
-// table it scores with as Params; until then the sampler reads the newest
-// table. Its records go to the ledger, which seals a batch after every
-// suspend and lock (startLedger, WP-LG5), so startLedger must run first.
+// since track messages came after WP-AG3). It gets the parameter table the
+// scorer runs with as Params, so it slows down where the scorer expects it
+// to (WP-AG4; DESIGN 6.2 D14). Its records go to the ledger, which seals a
+// batch after every suspend and lock (startLedger, WP-LG5), so startLedger
+// must run first.
 func (a *agent) startPresence() func() {
 	a.presence = presence.New(presence.Options{
 		Sched:   a.sched,
+		Params:  a.table,
 		OS:      presence.ThisOS(),
 		Record:  a.ledgerIn.Record,
 		Seal:    a.ledgerIn.Seal,
