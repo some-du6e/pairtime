@@ -91,8 +91,8 @@ type Flag struct {
 const (
 	// FlagTrackWithoutPrompt is a `pairtime track` call from a session that
 	// pairtime sees through hooks or a log reader, with no prompt from it
-	// near the call: something outside the agent's turn ran the CLI
-	// (DESIGN 5.4).
+	// within TRACK_DEDUPE_S of the call. Such a call likely came from outside
+	// the agent's turn (DESIGN 5.4).
 	FlagTrackWithoutPrompt = "track_without_prompt"
 	// FlagPermissionTooFast is a permission answer faster than
 	// PA_MIN_LATENCY_MS, which a script gives, not a person. It opens no

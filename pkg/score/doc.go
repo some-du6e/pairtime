@@ -106,9 +106,6 @@
 //   - A message from another session (origin_declared cross_session) is
 //     origin subagent: SM 2.2 has no rule for it, and like a subagent's it
 //     is one agent prompting another (TP DI 26).
-//   - A `pairtime track` call 10 to 30 s from a prompt of its session is
-//     track_matched and raises no flag, as
-//     docs/errata/2026-11-19-track-match-windows.md proposes.
 //   - The editor in focus on a session's project hosts a session only the
 //     WakaTime bridge reports, as it does an IDE session, since the bridge
 //     reads it from the editor's wakatime-cli (DESIGN 5.7).

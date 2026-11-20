@@ -150,6 +150,28 @@ func TestStepsAgree(t *testing.T) {
 			},
 		},
 		{
+			// Before the track-windows decision, a hook record of any date
+			// made the session seen, so one Step called this call
+			// track_without_prompt while the Finals kept its anchor
+			// (E-track-windows).
+			name: "a hook record 40 minutes after a track call leaves the call's anchor in place, in a Step per minute as in one Step",
+			build: func(b *tl) {
+				b.focus(at(0), event.AppTerminal, "p_1", "s_t")
+				b.mouse(every(at(1), at(2696), 5000)...)
+				b.track(at(60), "s_t", 30, event.LogNoReader, "")
+				b.start(at(2460), "s_t", "p_1", event.EntrypointCLI, event.ParentTerminalApp, true)
+				b.samples(at(0), at(2700))
+			},
+			check: func(t *testing.T, d Derived) {
+				if len(d.Tracks) != 1 || d.Tracks[0].Outcome != TrackAnchor {
+					t.Errorf("track calls %+v, want one that opened an anchor", d.Tracks)
+				}
+				if slices.ContainsFunc(d.Flags, func(f Flag) bool { return f.Name == FlagTrackWithoutPrompt }) {
+					t.Errorf("flags %+v, want no track_without_prompt", d.Flags)
+				}
+			},
+		},
+		{
 			// With the 1,200 s reach the scorer had before the return-rule
 			// decision, this command returned the run (E-return-lookahead).
 			name: "a typed command recorded 700 s after a silence began ends no returned run, in a Step per minute as in one Step",

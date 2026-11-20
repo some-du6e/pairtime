@@ -89,6 +89,10 @@ type session struct {
 	// native is set when any of its records came through a hook or a log
 	// reader, the code paths the harness itself feeds (DESIGN 5.2).
 	native bool
+	// firstNative is the t of its first record through a hook or a log
+	// reader, set with native. Records come in record order, so it is the
+	// earliest.
+	firstNative int64
 	// bridged is set when any of its records came through the WakaTime
 	// bridge, which reads them from an editor's wakatime-cli (DESIGN 5.7).
 	bridged bool
@@ -261,8 +265,8 @@ func (d *deriver) buildSessions() {
 			s = &session{key: key}
 			d.sessions[key] = s
 		}
-		if nativeVia(e.Via) {
-			s.native = true
+		if nativeVia(e.Via) && !s.native {
+			s.native, s.firstNative = true, e.T
 		}
 	}
 	seen := map[*session]bool{}
