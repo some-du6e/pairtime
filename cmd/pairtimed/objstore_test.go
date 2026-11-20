@@ -125,6 +125,7 @@ func TestServeRunsWithoutObjectStorage(t *testing.T) {
 			up := make(chan struct{}, 1)
 			e.listening = func(_, _ string) { up <- struct{}{} }
 			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
 			exited := make(chan int, 1)
 			go func() { exited <- run(ctx, []string{"serve", "-config", configPath}, e) }()
 			select {
