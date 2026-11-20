@@ -34,7 +34,7 @@ const sockEnv = "PAIRTIME_TEST_SOCKET"
 
 func init() {
 	children["nobody-sender"] = nobodySender
-	children["nobody-agent"] = nobodyAgent
+	children["nobody-squatter"] = nobodySquatter
 }
 
 // nobodySender connects to the socket that sockEnv names and sends one
@@ -67,41 +67,50 @@ func nobodySender() int {
 	return 0
 }
 
-// printSink prints each message it takes.
-type printSink struct{ mu sync.Mutex }
-
-func (p *printSink) Deliver(d inbox.Delivery) error {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	fmt.Println("got", d.ID)
-	return nil
-}
-
-// nobodyAgent is an agent's socket in a directory of its own. It prints
-// "listening <path>" once it serves, then "got <id>" for each message it
-// takes, until its stdin closes.
-func nobodyAgent() int {
+// nobodySquatter is a socket of another user's where an agent's would be,
+// as someone waiting for hooks whose agent is down would make one. It is a
+// bare listener in a directory of its own that anyone may enter, so a
+// sender's own check is all that keeps a message from it. It prints
+// "listening <path>", then "read <n> bytes" for each connection once its
+// sender hangs up, until its stdin closes. It never answers.
+func nobodySquatter() int {
 	dir, err := os.MkdirTemp("", "pt")
 	if err != nil {
 		fmt.Println("error:", err)
 		return 1
 	}
 	defer os.RemoveAll(dir)
-	ep, err := ipc.EndpointFor(home.Dirs{Data: dir, Config: dir, Runtime: dir})
+	if err := os.Chmod(dir, 0o755); err != nil {
+		fmt.Println("error:", err)
+		return 1
+	}
+	path := filepath.Join(dir, ipc.SocketName)
+	ln, err := net.Listen("unix", path)
 	if err != nil {
 		fmt.Println("error:", err)
 		return 1
 	}
-	srv, err := ipc.Listen(ep, ipc.Options{})
-	if err != nil {
+	if err := os.Chmod(path, 0o777); err != nil {
 		fmt.Println("error:", err)
 		return 1
 	}
-	go srv.Serve(&printSink{})
-	fmt.Println("listening", ep.Socket)
-	io.Copy(io.Discard, os.Stdin)
-	srv.Close()
-	return 0
+	go func() {
+		io.Copy(io.Discard, os.Stdin)
+		ln.Close()
+	}()
+	fmt.Println("listening", path)
+	for {
+		c, err := ln.Accept()
+		if err != nil {
+			return 0
+		}
+		// Longer than a sender waits for an ack, so one that wrote and
+		// then waited is counted once it gives up and hangs up.
+		c.SetReadDeadline(time.Now().Add(30 * time.Second))
+		n, _ := io.Copy(io.Discard, c)
+		c.Close()
+		fmt.Printf("read %d bytes\n", n)
+	}
 }
 
 // nobodyCmd runs part of the test binary at exe as nobody.
@@ -222,11 +231,11 @@ func TestOtherUser(t *testing.T) {
 			},
 		},
 		{
-			name: "a sender refuses to hand a message to a socket another uid listens on",
+			name: "a sender writes nothing to a socket another uid listens on, and spools the message instead",
 			run: func(t *testing.T) {
 				ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 				defer cancel()
-				cmd := nobodyCmd(ctx, exe, "nobody-agent")
+				cmd := nobodyCmd(ctx, exe, "nobody-squatter")
 				cmd.Stderr = os.Stderr
 				stdin, err := cmd.StdinPipe()
 				if err != nil {
@@ -245,7 +254,19 @@ func TestOtherUser(t *testing.T) {
 				line, err := r.ReadString('\n')
 				path, ok := strings.CutPrefix(strings.TrimSpace(line), "listening ")
 				if err != nil || !ok {
-					t.Fatalf("nobody's agent said %q (%v), want it to be listening", line, err)
+					t.Fatalf("nobody's socket said %q (%v), want it to be listening", line, err)
+				}
+				// readNothing waits for nobody's report on the connection
+				// that what made, and wants no byte of it read.
+				readNothing := func(what string) {
+					t.Helper()
+					line, err := r.ReadString('\n')
+					if err != nil {
+						t.Fatalf("nobody's socket said nothing of the connection %s made: %v", what, err)
+					}
+					if got := strings.TrimSpace(line); got != "read 0 bytes" {
+						t.Errorf("after %s, nobody's socket said %q, want it to have read nothing", what, got)
+					}
 				}
 
 				ep := ipc.Endpoint{Socket: path, Inbox: filepath.Join(shortDir(t), "inbox")}
@@ -257,18 +278,11 @@ func TestOtherUser(t *testing.T) {
 					}
 					t.Errorf("Dial = %v, want ErrNotAgent", err)
 				}
+				readNothing("Dial")
 				if via, err := ipc.Send(ep, inbox.New("test", nil), 10*time.Second); err != nil || via != inbox.ViaInbox {
 					t.Errorf("Send = %q, %v; want the message spooled instead", via, err)
 				}
-
-				stdin.Close()
-				rest, err := io.ReadAll(r)
-				if err != nil {
-					t.Fatal(err)
-				}
-				if strings.Contains(string(rest), "got ") {
-					t.Errorf("nobody's agent got a message: %s", rest)
-				}
+				readNothing("Send")
 			},
 		},
 		{
@@ -296,6 +310,129 @@ func TestOtherUser(t *testing.T) {
 				}
 				if _, err := os.Lstat(ep.Socket); !os.IsNotExist(err) {
 					t.Errorf("a socket was made anyway: %v", err)
+				}
+			},
+		},
+		{
+			name: "the agent won't follow a symbolic link that another uid put where its socket's directory goes",
+			run: func(t *testing.T) {
+				// The link's target is root's own, so a check made through
+				// the link would pass, and its chmod would land on the
+				// target.
+				dir := shortDir(t)
+				target := filepath.Join(dir, "target")
+				if err := os.Mkdir(target, 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Chmod(target, 0o755); err != nil {
+					t.Fatal(err)
+				}
+				link := filepath.Join(dir, "run")
+				if err := os.Symlink(target, link); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Lchown(link, nobody, nobody); err != nil {
+					t.Fatal(err)
+				}
+				ep, err := ipc.EndpointFor(home.Dirs{Data: dir, Config: dir, Runtime: link})
+				if err != nil {
+					t.Fatal(err)
+				}
+				srv, err := ipc.Listen(ep, ipc.Options{})
+				if err == nil {
+					srv.Close()
+					t.Fatal("Listen put its socket behind nobody's link")
+				}
+				if !strings.Contains(err.Error(), "symbolic link") {
+					t.Errorf("Listen = %v, want it to refuse the link", err)
+				}
+				fi, err := os.Stat(target)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if perm := fi.Mode().Perm(); perm != 0o755 {
+					t.Errorf("the link's target has mode %v now, want it left at 0755", perm)
+				}
+				if _, err := os.Lstat(filepath.Join(target, ipc.SocketName)); !os.IsNotExist(err) {
+					t.Errorf("a socket was made behind the link: %v", err)
+				}
+			},
+		},
+		{
+			name: "a sender won't spool into an inbox that another uid owns",
+			run: func(t *testing.T) {
+				in := filepath.Join(shortDir(t), "inbox")
+				if err := os.Mkdir(in, 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Chown(in, nobody, nobody); err != nil {
+					t.Fatal(err)
+				}
+				// No agent listens, so Send falls back to the spool.
+				ep := ipc.Endpoint{Socket: filepath.Join(shortDir(t), ipc.SocketName), Inbox: in}
+				if via, err := ipc.Send(ep, inbox.New("test", nil), time.Second); err == nil {
+					t.Errorf("Send = %q, nil; want it to fail rather than spool into nobody's inbox", via)
+				}
+				entries, err := os.ReadDir(in)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(entries) != 0 {
+					t.Errorf("nobody's inbox has %d files now, want none", len(entries))
+				}
+			},
+		},
+		{
+			name: "a sender won't append to a spool file that another uid owns",
+			run: func(t *testing.T) {
+				in := filepath.Join(shortDir(t), "inbox")
+				if err := os.Mkdir(in, 0o700); err != nil {
+					t.Fatal(err)
+				}
+				spool := filepath.Join(in, inbox.SpoolName)
+				if err := os.WriteFile(spool, nil, 0o600); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Chown(spool, nobody, nobody); err != nil {
+					t.Fatal(err)
+				}
+				if err := inbox.Append(in, inbox.New("test", nil)); err == nil {
+					t.Error("Append wrote to nobody's spool file")
+				}
+				fi, err := os.Stat(spool)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if fi.Size() != 0 {
+					t.Errorf("nobody's spool file has %d bytes, want 0", fi.Size())
+				}
+			},
+		},
+		{
+			name: "a drain delivers nothing from a spool file that another uid wrote",
+			run: func(t *testing.T) {
+				in := filepath.Join(shortDir(t), "inbox")
+				if err := os.Mkdir(in, 0o700); err != nil {
+					t.Fatal(err)
+				}
+				b, err := inbox.New("test", nil).Encode()
+				if err != nil {
+					t.Fatal(err)
+				}
+				name := filepath.Join(in, "spool-00000000000000000001-0badc0de.drain")
+				if err := os.WriteFile(name, []byte("\n"+string(b)+"\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Chown(name, nobody, nobody); err != nil {
+					t.Fatal(err)
+				}
+				sink := &countSink{}
+				res, err := inbox.Drain(in, sink, time.Now)
+				if err == nil {
+					t.Error("Drain passed over nobody's file without a word")
+				}
+				if n := sink.count(); n != 0 || res.Delivered != 0 {
+					t.Errorf("Drain = %+v and the sink took %d messages, want none", res, n)
 				}
 			},
 		},

@@ -4,6 +4,7 @@ package inbox
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -149,6 +150,17 @@ func TestJournal(t *testing.T) {
 				}
 				if l.ID != m.ID || l.Via != ViaSocket || l.PeerPID != 42 || l.Bytes != len(m.Body) {
 					t.Errorf("the journal line is %+v", l)
+				}
+			},
+		},
+		{
+			name: "a message whose id the journal can't keep is rejected for good",
+			run: func(t *testing.T, dir string) {
+				j := open(t, dir, day)
+				m := newMessage(t, 1)
+				m.ID = "nope"
+				if err := j.Deliver(Delivery{Message: m, Received: day}); !errors.Is(err, ErrRejected) {
+					t.Errorf("Deliver = %v, want ErrRejected", err)
 				}
 			},
 		},

@@ -30,6 +30,8 @@ describe('check', () => {
 		{ name: 'an object with every required field passes', value: { n: 1, at: '2026-11-19T10:49:00Z' }, errors: 0 },
 		{ name: 'a missing required field fails', value: { n: 1 }, errors: 1 },
 		{ name: 'a field the spec lacks fails when additionalProperties is false', value: { n: 1, at: '2026-11-19T10:49:00Z', x: 1 }, errors: 1 },
+		{ name: 'a field named after an Object.prototype member fails when the spec lacks it', value: { n: 1, at: '2026-11-19T10:49:00Z', constructor: 1 }, errors: 1 },
+		{ name: 'a __proto__ field in parsed JSON fails when the spec lacks it', value: JSON.parse('{"n": 1, "at": "2026-11-19T10:49:00Z", "__proto__": 1}'), errors: 1 },
 		{ name: 'additionalProperties as a schema checks every extra value', value: { n: 1, at: '2026-11-19T10:49:00Z', notes: { a: 'ok', b: 2 } }, errors: 1 },
 		{ name: 'integer refuses 1.5', value: { n: 1.5, at: '2026-11-19T10:49:00Z' }, errors: 1 },
 		{ name: 'number takes an integer', value: { n: 1, at: '2026-11-19T10:49:00Z', list: [1, 2.5] }, errors: 0 },

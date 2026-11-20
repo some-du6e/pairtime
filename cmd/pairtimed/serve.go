@@ -107,8 +107,17 @@ func serve(ctx context.Context, cfg *config.Config, logger *slog.Logger, e *env)
 		logger.Info("object storage", "endpoint", cfg.ObjectStorage.Endpoint, "bucket", objs.main.Name(), "snapshot_bucket", objs.snapshots.Name())
 	}
 
+	signIn, err := newSignIn(cfg, db, w, logger)
+	if err != nil {
+		return err
+	}
+
 	public := http.NewServeMux()
 	public.HandleFunc("GET /healthz", ops.Healthz)
+	signIn.Register(public)
+	maintainCtx, stopMaintain := context.WithCancel(ctx)
+	defer stopMaintain()
+	go signIn.Maintain(maintainCtx)
 
 	pubLn, err := net.Listen("tcp", cfg.Listen)
 	if err != nil {

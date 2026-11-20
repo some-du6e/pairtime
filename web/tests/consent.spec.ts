@@ -48,6 +48,7 @@ for (const colorScheme of ['light', 'dark'] as const) {
 			// Enter before the teen picks anything answers nothing.
 			await page.keyboard.press('Enter');
 			await expect(page.getByTestId('consent-answer')).toHaveText('none');
+			await expect(page.getByTestId('consent-backups-answer')).toHaveText('none');
 		});
 
 		test('each button reports its own answer', async ({ page }) => {
@@ -56,6 +57,8 @@ for (const colorScheme of ['light', 'dark'] as const) {
 			await expect(page.getByTestId('consent-answer')).toHaveText('not_now');
 			await card.getByRole('button', { name: 'Turn on typing evidence' }).click();
 			await expect(page.getByTestId('consent-answer')).toHaveText('yes');
+			await page.getByTestId('consent-backups').getByRole('button', { name: 'Not now' }).click();
+			await expect(page.getByTestId('consent-backups-answer')).toHaveText('not_now');
 		});
 	});
 }

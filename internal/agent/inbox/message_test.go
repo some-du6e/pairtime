@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -13,11 +14,32 @@ import (
 
 func goodMessage() Message {
 	return Message{
-		ID:   "0123456789abcdef0123456789abcdef",
-		Kind: "hook",
-		Sent: time.Date(2026, 11, 19, 12, 0, 0, 0, time.UTC),
+		ID:     "0123456789abcdef0123456789abcdef",
+		Kind:   "hook",
+		Sent:   time.Date(2026, 11, 19, 12, 0, 0, 0, time.UTC),
+		Mono:   81163000,
+		BootID: "6f0f6f6e-2b1c-4c5e-9d07-0e3c1b2a4f55",
+		Chain: []Proc{
+			{PID: 4242, Name: "pairtime", Start: time.Date(2026, 11, 19, 11, 59, 59, 0, time.UTC)},
+			{PID: 4100, Name: "claude", Start: time.Date(2026, 11, 19, 9, 0, 0, 0, time.UTC)},
+			{PID: 1},
+		},
 		Body: json.RawMessage("{\"prompt\": \"line one\\nline two\",\n \"n\": 1}"),
 	}
+}
+
+// sameProc reports whether a and b are the same entry of a parent chain.
+func sameProc(a, b Proc) bool {
+	return a.PID == b.PID && a.Name == b.Name && a.Start.Equal(b.Start)
+}
+
+// chainOf returns a parent chain of n processes.
+func chainOf(n int) []Proc {
+	chain := make([]Proc, n)
+	for i := range chain {
+		chain[i] = Proc{PID: 1000 + i, Name: "sh"}
+	}
+	return chain
 }
 
 func TestMessageCheck(t *testing.T) {
@@ -26,8 +48,17 @@ func TestMessageCheck(t *testing.T) {
 		edit    func(m *Message)
 		wantErr bool
 	}{
-		{name: "a message with a hex id, a kind, a time and a JSON body is taken", edit: func(*Message) {}},
+		{name: "a message with a hex id, a kind, its sender's clock and parent chain and a JSON body is taken", edit: func(*Message) {}},
 		{name: "a message without a body is taken", edit: func(m *Message) { m.Body = nil }},
+		{name: "a message without its sender's monotonic clock or parent chain is taken", edit: func(m *Message) { m.Mono, m.BootID, m.Chain = 0, "", nil }},
+		{name: "a negative monotonic reading is refused", edit: func(m *Message) { m.Mono = -1 }, wantErr: true},
+		{name: "a monotonic reading without its boot id is refused", edit: func(m *Message) { m.BootID = "" }, wantErr: true},
+		{name: "a boot id without a monotonic reading is refused", edit: func(m *Message) { m.Mono = 0 }, wantErr: true},
+		{name: "a boot id with a character outside a-z A-Z 0-9 _ - is refused", edit: func(m *Message) { m.BootID = "boot 7" }, wantErr: true},
+		{name: "a boot id over 128 characters is refused", edit: func(m *Message) { m.BootID = strings.Repeat("b", 129) }, wantErr: true},
+		{name: "a parent chain of MaxChain processes is taken", edit: func(m *Message) { m.Chain = chainOf(MaxChain) }},
+		{name: "a parent chain longer than MaxChain is refused", edit: func(m *Message) { m.Chain = chainOf(MaxChain + 1) }, wantErr: true},
+		{name: "a process in the parent chain without a pid is refused", edit: func(m *Message) { m.Chain[1].PID = 0 }, wantErr: true},
 		{name: "a kind may have dots, colons, dashes and underscores", edit: func(m *Message) { m.Kind = "plugin:my-tool_2.event" }},
 		{name: "an id shorter than 32 digits is refused", edit: func(m *Message) { m.ID = "0123456789abcdef" }, wantErr: true},
 		{name: "an id with capital hex digits is refused", edit: func(m *Message) { m.ID = strings.ToUpper(m.ID) }, wantErr: true},
@@ -71,7 +102,8 @@ func TestMessageEncoding(t *testing.T) {
 				if err := json.Compact(&want, m.Body); err != nil {
 					t.Fatal(err)
 				}
-				if got.ID != m.ID || got.Kind != m.Kind || !got.Sent.Equal(m.Sent) || !bytes.Equal(got.Body, want.Bytes()) {
+				if got.ID != m.ID || got.Kind != m.Kind || !got.Sent.Equal(m.Sent) || got.Mono != m.Mono || got.BootID != m.BootID ||
+					!slices.EqualFunc(got.Chain, m.Chain, sameProc) || !bytes.Equal(got.Body, want.Bytes()) {
 					t.Errorf("Decode(Encode(m)) = %+v, want %+v", got, m)
 				}
 			},

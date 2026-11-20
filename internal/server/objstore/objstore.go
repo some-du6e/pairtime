@@ -16,8 +16,10 @@
 //   - a readiness check for /readyz (Bucket.Check; DESIGN 10.4).
 //
 // Requests use path-style URLs, https://<endpoint>/<bucket>/<key>, unless
-// the configuration asks for virtual-hosted ones. A single put is capped
-// at 5 GiB, as S3 and R2 cap PutObject; there is no multipart upload yet.
+// the configuration asks for virtual-hosted ones, which need https and a
+// host name. A single put is capped at MaxPutSize, R2's cap, which is
+// 5 MiB under S3's 5 GiB. There is no multipart upload yet; PLAN WP-OP1
+// adds it for the nightly snapshots.
 //
 // The package never logs. Its errors name the call, the bucket, the key,
 // the HTTP status and the S3 error code, and never a credential, a
@@ -30,6 +32,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"math/rand/v2"
 	"net"
 	"net/http"
@@ -49,14 +52,19 @@ var (
 	// ErrNoSuchBucket: the bucket doesn't exist at the endpoint.
 	ErrNoSuchBucket = errors.New("objstore: no such bucket")
 	// ErrExists: a write-once put found the key already there, and the
-	// store kept what it had.
+	// store kept what it had. After a retry, Put first checks that the
+	// key doesn't hold its own upload (PutOptions.IfNoneMatch).
 	ErrExists = errors.New("objstore: the key already exists")
-	// ErrTooLarge: the body is bigger than one PutObject may be.
+	// ErrTooLarge: the body is bigger than one PutObject may be. Put
+	// refuses a body over MaxPutSize before sending it, and a store's own
+	// EntityTooLarge answer wraps ErrTooLarge too.
 	ErrTooLarge = errors.New("objstore: too large for a single put")
 )
 
-// MaxPutSize is the largest body one PutObject takes on S3 and R2: 5 GiB.
-const MaxPutSize = 5 << 30
+// MaxPutSize is the largest body one PutObject takes on every store
+// pairtimed uses. R2 takes at most 5 MiB less than 5 GiB in one request
+// (R2's limits page, modified 2026-10-30), which is under S3's 5 GiB.
+const MaxPutSize = 5<<30 - 5<<20
 
 // DefaultRegion is R2's region, which it asks every client to sign with.
 const DefaultRegion = "auto"
@@ -79,7 +87,8 @@ type Config struct {
 	// DefaultRegion.
 	Region string
 	// VirtualHost puts the bucket in the host name,
-	// https://<bucket>.<endpoint host>/<key>, instead of the path.
+	// https://<bucket>.<endpoint host>/<key>, instead of the path. It
+	// needs an https endpoint with a host name (CheckVirtualHost).
 	VirtualHost bool
 	// Credentials sign the requests.
 	Credentials sigv4.Credentials
@@ -98,13 +107,19 @@ type Config struct {
 }
 
 // Client makes S3 calls to one endpoint with one set of credentials.
+// Formatting a *Client prints its endpoint and region, never a
+// credential.
 type Client struct {
 	endpoint    *url.URL
 	virtualHost bool
-	signer      sigv4.Signer
-	http        *http.Client
-	now         func() time.Time
-	attempts    int
+	// signer holds the credentials. It is a pointer so that formatting a
+	// Client value, which skips String, prints an address here: fmt never
+	// calls Credentials.String through an unexported field, so a Signer
+	// value would print the secret.
+	signer   *sigv4.Signer
+	http     *http.Client
+	now      func() time.Time
+	attempts int
 	// sleep waits between attempts; tests replace it.
 	sleep func(context.Context, time.Duration) error
 }
@@ -114,6 +129,11 @@ func New(cfg Config) (*Client, error) {
 	u, err := ParseEndpoint(cfg.Endpoint)
 	if err != nil {
 		return nil, err
+	}
+	if cfg.VirtualHost {
+		if err := CheckVirtualHost(u); err != nil {
+			return nil, err
+		}
 	}
 	region := cfg.Region
 	if region == "" {
@@ -142,13 +162,25 @@ func New(cfg Config) (*Client, error) {
 	return &Client{
 		endpoint:    u,
 		virtualHost: cfg.VirtualHost,
-		signer:      sigv4.Signer{Credentials: cfg.Credentials, Region: region, Service: "s3"},
+		signer:      &sigv4.Signer{Credentials: cfg.Credentials, Region: region, Service: "s3"},
 		http:        hc,
 		now:         now,
 		attempts:    attempts,
 		sleep:       sleepCtx,
 	}, nil
 }
+
+// String names the client's endpoint and region. It prints no credential,
+// not even the access key id.
+func (c *Client) String() string {
+	return "objstore.Client{endpoint " + c.endpoint.String() + ", region " + c.signer.Region + "}"
+}
+
+// GoString is String, for %#v.
+func (c *Client) GoString() string { return c.String() }
+
+// LogValue is String, for log/slog.
+func (c *Client) LogValue() slog.Value { return slog.StringValue(c.String()) }
 
 func defaultHTTPClient() *http.Client {
 	t := http.DefaultTransport.(*http.Transport).Clone()
@@ -160,7 +192,7 @@ func defaultHTTPClient() *http.Client {
 // ParseEndpoint checks an endpoint and returns it as a URL: https, or http
 // on a loopback host such as MinIO in CI; a host; no user, path, query or
 // fragment. A default port is dropped, so the signed host is the one Go
-// sends.
+// sends. CheckVirtualHost says what virtual-hosted URLs need on top.
 func ParseEndpoint(raw string) (*url.URL, error) {
 	if raw == "" {
 		return nil, errors.New("objstore: the endpoint is required, such as https://<account id>.r2.cloudflarestorage.com")
@@ -207,6 +239,25 @@ func isLoopback(host string) bool {
 	}
 	ip := net.ParseIP(host)
 	return ip != nil && ip.IsLoopback()
+}
+
+// CheckVirtualHost checks that an endpoint from ParseEndpoint can take
+// virtual-hosted URLs, which put the bucket in front of its host. That
+// needs https and a host name. Over http the requests would go to
+// <bucket>.localhost or <bucket>.127.0.0.1, which aren't the loopback
+// host that ParseEndpoint allows http on. pairtimed builds without cgo,
+// and Go's own resolver looks such a name up in DNS like any other, while
+// a proxy set in HTTP_PROXY gets every request for it. Either way the
+// signed requests and their bodies could leave the machine in plaintext.
+// An IP address can't take a bucket in front of it at all.
+func CheckVirtualHost(endpoint *url.URL) error {
+	if endpoint.Scheme != "https" {
+		return errors.New("objstore: virtual-hosted URLs need an https endpoint; over http they would go to <bucket>.<host>, which isn't a loopback host, so requests could leave the machine in plaintext")
+	}
+	if host := endpoint.Hostname(); net.ParseIP(host) != nil {
+		return fmt.Errorf("objstore: virtual-hosted URLs need a host name to put the bucket in front of, not the IP address %s", host)
+	}
+	return nil
 }
 
 // CheckRegion checks a region name: lowercase letters, digits and '-'.
@@ -290,7 +341,8 @@ type Error struct {
 	// RequestID is the store's id for the request, for its support.
 	RequestID string
 	// Err is what the error wraps: ErrNotFound, ErrNoSuchBucket,
-	// ErrExists, or the transport's error when no answer came.
+	// ErrExists, ErrTooLarge, or the transport's error when no answer
+	// came.
 	Err error
 }
 
@@ -337,6 +389,10 @@ type request struct {
 	payloadHash string
 	// attempts overrides the client's MaxAttempts when positive.
 	attempts int
+	// retried, when not nil, is set when an attempt fails in a way worth
+	// retrying and another is sent. The store may have carried out the
+	// failed attempt anyway, with only its answer lost.
+	retried *bool
 }
 
 // url returns the request's URL, path-style or virtual-hosted. The path
@@ -383,6 +439,9 @@ func (c *Client) do(ctx context.Context, r request) (*http.Response, error) {
 		backoff = backoff/2 + rand.N(backoff)
 		if serr := c.sleep(ctx, backoff); serr != nil {
 			return nil, err
+		}
+		if r.retried != nil {
+			*r.retried = true
 		}
 	}
 }
@@ -459,6 +518,9 @@ func (c *Client) answerError(r request, resp *http.Response) *Error {
 		e.Err = ErrNotFound
 	case resp.StatusCode == http.StatusPreconditionFailed:
 		e.Err = ErrExists
+	case e.Code == "EntityTooLarge":
+		// A store whose cap is under MaxPutSize says so this way.
+		e.Err = ErrTooLarge
 	}
 	return e
 }

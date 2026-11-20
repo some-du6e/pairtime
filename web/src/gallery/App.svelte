@@ -10,6 +10,7 @@
 	// Never shipped. Each <output> shows the last answer its component
 	// reported.
 	let consent: ConsentAnswer | undefined = $state();
+	let backups: ConsentAnswer | undefined = $state();
 	let publicMode: ProfileVisibility | undefined = $state();
 	let askMode: ProfileVisibility | undefined = $state();
 </script>
@@ -32,6 +33,22 @@
 		<p>Answer: <output data-testid="consent-answer">{consent ?? 'none'}</output></p>
 	</div>
 
+	<div data-testid="consent-backups">
+		<ConsentCard
+			title="Backups"
+			turnOff="Settings, under Backups"
+			accept="Turn on backups"
+			declining="Without a backup, if you lose this computer or wipe it, the evidence for the time you tracked on it is gone."
+			onanswer={(answer) => (backups = answer)}
+		>
+			<p>
+				Saves an encrypted copy of your pairtime records every day, so you can bring them back on a new computer
+				with your recovery code.
+			</p>
+		</ConsentCard>
+		<p>Answer: <output data-testid="consent-backups-answer">{backups ?? 'none'}</output></p>
+	</div>
+
 	<div data-testid="profile-public">
 		<ProfileChoice mode="public" onchoose={(choice) => (publicMode = choice)}>
 			{#snippet preview()}
@@ -42,7 +59,11 @@
 	</div>
 
 	<div data-testid="profile-ask">
-		<ProfileChoice mode="ask" onchoose={(choice) => (askMode = choice)} />
+		<ProfileChoice mode="ask" onchoose={(choice) => (askMode = choice)}>
+			{#snippet preview()}
+				<p><strong>@sample</strong>: 4 build days this week, Python and Svelte, 2 public projects.</p>
+			{/snippet}
+		</ProfileChoice>
 		<p>Choice: <output data-testid="profile-ask-choice">{askMode ?? 'none'}</output></p>
 	</div>
 </AppShell>
