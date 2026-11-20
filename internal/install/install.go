@@ -182,6 +182,11 @@ type Content struct {
 	Mode fs.FileMode
 	// Type is a registry value's type, such as RegSZ, and 0 for a file.
 	Type uint32
+
+	// link is true when the file's path is a symbolic link, which reading
+	// followed. Only read sets it, so that Apply can check that a path it
+	// writes or deletes is still what the plan found there.
+	link bool
 }
 
 // Same reports whether c and d hold the same thing. A file's mode doesn't
@@ -195,12 +200,15 @@ func (c Content) Same(d Content) bool {
 
 // unchanged reports whether c, what a target holds when Apply reads it
 // again, is still d, what it held when the plan read it: the same thing,
-// and for a file the same mode, since Apply writes the file with the mode
-// the plan read. A mode changed in between, such as settings.json made
-// private, would otherwise be undone. Same, which tells whether an edit
-// changes anything, ignores the mode.
+// and for a file the same mode and a path that is a link or not as it
+// was. Apply writes the file with the mode the plan read, so a mode
+// changed in between, such as settings.json made private, would otherwise
+// be undone; and it deletes a file pairtime created by its path, which
+// would delete a link the teen put there since, and leave pairtime's hooks
+// in the file it points to. Same, which tells whether an edit changes
+// anything, ignores both.
 func (c Content) unchanged(d Content) bool {
-	return c.Same(d) && c.Mode == d.Mode
+	return c.Same(d) && c.Mode == d.Mode && c.link == d.link
 }
 
 // digest identifies c in the manifest: "" for nothing there, and otherwise

@@ -5,6 +5,7 @@ package install
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -911,6 +912,31 @@ func TestUninstallKeepsLinks(t *testing.T) {
 				}
 				if got := readOrNil(t, moved); string(got) != "{}\n" {
 					t.Errorf("after uninstall the linked file holds\n%s\nwant {} and a newline", got)
+				}
+			},
+		},
+		{
+			name: "a settings.json pairtime created that becomes a link after the uninstall plan stops Apply, and the link stays",
+			run: func(t *testing.T, env Env, in *Installer) {
+				path := ClaudeSettings(env)
+				if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				item, err := ClaudeCode(env)
+				if err != nil {
+					t.Fatal(err)
+				}
+				install(t, in, item)
+				p, err := in.PlanUninstall() // deletes the file pairtime created
+				if err != nil {
+					t.Fatal(err)
+				}
+				moved := moveAndLink(t, env, path)
+				if err := p.Apply(); !errors.Is(err, ErrStale) {
+					t.Fatalf("Apply = %v, want ErrStale", err)
+				}
+				if !isLink(t, path) || readOrNil(t, moved) == nil {
+					t.Errorf("Apply took away the link %s or the file it points to", path)
 				}
 			},
 		},

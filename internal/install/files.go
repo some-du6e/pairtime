@@ -50,9 +50,11 @@ func (in *Installer) read(t Target) (Content, error) {
 // readFile returns what the file at path holds. A symbolic link is
 // followed, as the program that reads the file follows it.
 func readFile(path string) (Content, error) {
+	linfo, lerr := os.Lstat(path)
+	link := lerr == nil && linfo.Mode()&fs.ModeSymlink != 0
 	info, err := os.Stat(path)
 	if errors.Is(err, fs.ErrNotExist) {
-		if _, lerr := os.Lstat(path); lerr == nil {
+		if lerr == nil {
 			return Content{}, fmt.Errorf("%s is a link to a file that isn't there, so pairtime leaves it alone", path)
 		}
 		return Content{}, nil
@@ -77,7 +79,7 @@ func readFile(path string) (Content, error) {
 	if info.Size() > maxFileSize || len(data) > maxFileSize {
 		return Content{}, fmt.Errorf("%s is bigger than the %d MiB a settings file or login item could need, so pairtime leaves it alone", path, maxFileSize>>20)
 	}
-	return Content{Exists: true, Data: data, Mode: info.Mode().Perm()}, nil
+	return Content{Exists: true, Data: data, Mode: info.Mode().Perm(), link: link}, nil
 }
 
 // write makes t hold c. A file is replaced by an atomic rename with c's

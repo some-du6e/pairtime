@@ -510,7 +510,7 @@ func checkUndo(ch *Change, recs []editRecord) error {
 		return nil
 	}
 	if !ch.After.Exists {
-		if info, err := os.Lstat(ch.Target.Path); err != nil || info.Mode()&fs.ModeSymlink == 0 {
+		if !ch.Before.link {
 			return nil
 		}
 		empty, ok := emptyFile(recs)
