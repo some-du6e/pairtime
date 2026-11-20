@@ -73,6 +73,10 @@ NAME = "Capture User"
 EMAIL = "capture@example.invalid"
 OTHER = "REDACTED"
 ACCOUNT_ID = "00000000-0000-4000-8000-000000000000"
+# What a scrubbed file holds in place of a value. A rule that finds one, as
+# URL_PASSWORD finds the capture in capture@example.invalid, leaves it, so
+# scrubbing twice changes nothing.
+PLACEHOLDERS = {USER, HOST, NAME, EMAIL, ACCOUNT_ID}
 
 # Public addresses that tools write into commits and remotes, and domains
 # reserved for examples, as testdata/fixtures/README.md lists them. Keeping
@@ -143,7 +147,11 @@ SECRET_PATTERNS = [
     ("HUGGINGFACE_TOKEN", B + r"hf_[A-Za-z0-9]{30,}"),
     ("NPM_TOKEN", B + r"npm_[A-Za-z0-9]{36}"),
     ("JWT", B + r"eyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}"),
-    ("URL_PASSWORD", r"(?i)(?<![a-z0-9+.-])[a-z][a-z0-9+.-]*://[^/\s:@\"']+:(?P<secret>[^/\s@\"']+)@"),
+    # A password after scheme:// or after a bare //, with the slashes also
+    # written as JSON writes them, \/\/, or JSON inside a JSON string, \\/\\/.
+    # The user may be empty, as in redis://:pw@cache.
+    ("URL_PASSWORD", r"(?i)(?:(?<![a-z0-9+.-])[a-z][a-z0-9+.-]*:)?(?<![/\\])(?:\\*/){2}(?![/\\])"
+                     r"[^/\s:@\"']*:(?P<secret>[^/\s@\"']+)@"),
     ("BEARER_TOKEN", r"(?i)(?:\b|" + ESC + r")bearer\s+(?P<secret>[A-Za-z0-9._~+/-]{16,}=*)"),
     ("SECRET", r"(?i)(?:api[_-]?key|access[_-]?key|secret(?:[_-]?key)?|(?:access|auth|refresh|session|bearer)?[_-]?token"
                r"|passwd|password|pwd)[\"']?\s*[:=]\s*[\"']?(?P<secret>[A-Za-z0-9_\-./+=]{12,})"),
@@ -460,7 +468,7 @@ def find_hits(text, rules):
                 start, end = m.span()
             found = text[start:end]
             # Never replace a placeholder, so scrubbing twice changes nothing.
-            if start == end or found == rule.placeholder or found.startswith("REDACTED"):
+            if start == end or found == rule.placeholder or found.startswith("REDACTED") or found in PLACEHOLDERS:
                 continue
             if rule.keep and rule.keep(found):
                 continue

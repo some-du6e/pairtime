@@ -154,23 +154,90 @@ func TestFixturesScrub(t *testing.T) {
 			notOut: []string{stripe, anthropic, "oauth"},
 		},
 		{
+			// The address after the key, if there is one, isn't kept here:
+			// it covered only the password. The second URL has no password
+			// and so no address, and the third's host isn't an address.
+			name: "a key that is a URL's user is replaced whatever the host",
+			files: map[string]string{
+				"real.txt": "https://" + stripe + ":x-oauth-basic@api.stripe.com/v1/charges\n" +
+					"https://" + anthropic + ":@api.anthropic.com/v1/messages\n" +
+					"postgres://" + stripe + ":pw@db:5432/app\n",
+			},
+			wantCode: 0,
+			wantFiles: map[string]string{
+				"real.txt": "https://REDACTED_STRIPE_ACCESS_TOKEN:capture@example.invalid/v1/charges\n" +
+					"https://REDACTED_ANTHROPIC_API_KEY:@api.anthropic.com/v1/messages\n" +
+					"postgres://REDACTED_STRIPE_ACCESS_TOKEN:REDACTED_URL_PASSWORD@db:5432/app\n",
+			},
+			wantOut: []string{
+				"real.txt:1:9: secret stripe-access-token, 38 bytes\n",
+				"real.txt:1:48: email, 28 bytes\n",
+				"real.txt:2:9: secret anthropic-api-key, 108 bytes\n",
+				"real.txt:3:12: secret stripe-access-token, 38 bytes\n",
+				"real.txt:3:51: secret url-password, 2 bytes\n",
+				"removed 5 spans from 1 of 1 files",
+			},
+			notOut: []string{stripe, anthropic, "oauth"},
+		},
+		{
+			// pkg/redact's url-password rule needs scheme://, which JSON's
+			// \/\/, JSON inside JSON's \\/\\/ and a URL with no scheme
+			// don't have, and the address after the password is kept. The
+			// rule already takes a password with no user before it.
+			name: "a URL's user and password at a kept address are replaced however the URL is written",
+			files: map[string]string{
+				"urls.txt": `{"url":"postgres:\/\/app:Tr0ub4dor3x@db.example.com\/app"}` + "\n" +
+					"//app:Tr0ub4dor3x@db.example.com/app\n" +
+					"redis://:hunter2hunter2@cache.example.com:6379\n" +
+					`{"stdout":"{\"url\":\"https:\\/\\/` + stripe + `:x@api.example.com\"}"}` + "\n",
+			},
+			wantCode: 0,
+			wantFiles: map[string]string{
+				"urls.txt": `{"url":"postgres:\/\/app:REDACTED_URL_PASSWORD@db.example.com\/app"}` + "\n" +
+					"//app:REDACTED_URL_PASSWORD@db.example.com/app\n" +
+					"redis://:REDACTED_URL_PASSWORD@cache.example.com:6379\n" +
+					`{"stdout":"{\"url\":\"https:\\/\\/REDACTED_STRIPE_ACCESS_TOKEN:REDACTED_URL_PASSWORD@api.example.com\"}"}` + "\n",
+			},
+			wantOut: []string{
+				"urls.txt:1:26: secret url-password, 11 bytes\n",
+				"urls.txt:2:7: secret url-password, 11 bytes\n",
+				"urls.txt:3:10: secret url-password, 14 bytes\n",
+				"urls.txt:4:35: secret stripe-access-token, 38 bytes\n",
+				"urls.txt:4:74: secret url-password, 1 bytes\n",
+				"removed 5 spans from 1 of 1 files",
+			},
+			notOut: []string{stripe, "Tr0ub4dor3x", "hunter2"},
+		},
+		{
+			// What a first run writes for postgres://app:KEY@db.example.com,
+			// postgres://app:pw@db.westfield.edu and the first line of the
+			// case for a URL's user at any host. url-password finds a
+			// password in each, so it would put its own placeholder in
+			// place of the one there.
+			name:     "a placeholder an earlier run wrote is left alone, even where another rule finds it",
+			files:    map[string]string{"again.txt": "postgres://app:REDACTED_STRIPE_ACCESS_TOKEN@db.example.com/app\npostgres://app:capture@example.invalid/app\nhttps://REDACTED_STRIPE_ACCESS_TOKEN:capture@example.invalid/v1/charges\n"},
+			wantCode: 0,
+			wantOut:  []string{"removed 0 spans from 0 of 1 files"},
+		},
+		{
 			// A sandbox anonymizer disables a real address by appending a
 			// reserved label, and it still names someone
 			// (D-email-redaction-tld).
 			name: "under a reserved top-level domain only a one-label name is kept, so a real address with .invalid appended is replaced",
 			files: map[string]string{
-				"owners.txt": "Owner: jane.doe@westfield.edu.invalid\nci@runner.ci.test\n" +
+				"owners.txt": "Owner: jane.doe@westfield.edu.invalid\nci@runner.ci.test ci@build.example.invalid\n" +
 					"user@myapp.test dev@build.localhost a@b.example capture@example.invalid\n",
 			},
 			wantCode: 0,
 			wantFiles: map[string]string{
-				"owners.txt": "Owner: capture@example.invalid\ncapture@example.invalid\n" +
+				"owners.txt": "Owner: capture@example.invalid\ncapture@example.invalid capture@example.invalid\n" +
 					"user@myapp.test dev@build.localhost a@b.example capture@example.invalid\n",
 			},
 			wantOut: []string{
 				"owners.txt:1:8: email, 30 bytes\n",
 				"owners.txt:2:1: email, 17 bytes\n",
-				"removed 2 spans from 1 of 1 files",
+				"owners.txt:2:19: email, 24 bytes\n",
+				"removed 3 spans from 1 of 1 files",
 			},
 			notOut: []string{"jane", "westfield", "runner"},
 		},

@@ -1636,47 +1636,6 @@ func TestScrub(t *testing.T) {
 				t.Fatalf("notes.txt = %q, want %q", got, "capture@ci.example.com\n")
 			}
 		}},
-		// The same lines as TestFixturesScrub's case for the rule
-		// (D-email-redaction-tld).
-		{"under a reserved top-level domain only a one-label name is kept, so a real address with .invalid appended is replaced", func(t *testing.T) {
-			dir := t.TempDir()
-			write(t, filepath.Join(dir, "run", "owners.txt"), "Owner: jane.doe@westfield.edu.invalid\nci@runner.ci.test\n"+
-				"user@myapp.test dev@build.localhost a@b.example capture@example.invalid\n")
-			r := run(t, ".", nil, quiet, python(t, "scrub.py", "--no-detect", filepath.Join(dir, "run"), filepath.Join(dir, "out"))...)
-			if r.code != 0 {
-				t.Fatalf("exit %d:\n%s%s", r.code, r.stdout, r.stderr)
-			}
-			want := "Owner: capture@example.invalid\ncapture@example.invalid\n" +
-				"user@myapp.test dev@build.localhost a@b.example capture@example.invalid\n"
-			if got := read(t, filepath.Join(dir, "out", "owners.txt")); got != want {
-				t.Fatalf("owners.txt = %q, want %q", got, want)
-			}
-		}},
-		// The lines of two TestFixturesScrub cases in cmd/pairtime. scrub.py's
-		// key patterns need nothing after a key, so a key followed by an
-		// address's @ or a URL's colon is found in place, and both scrubs
-		// remove it and keep the address.
-		{"a key that is a kept address's local part, or the user of its URL, is still replaced", func(t *testing.T) {
-			// Built at run time, so no file in the repo looks like a leaked key.
-			stripe := "sk_" + "live_" + strings.Repeat("Qw81Zx4LmN", 3)
-			anthropic := "sk-ant-" + "api03-" + strings.Repeat("aB3_x9Kq-Z", 10)[:93] + "AA"
-			dir := t.TempDir()
-			write(t, filepath.Join(dir, "run", "keys.txt"), "https://"+stripe+"@api.example.com/v1/charges\n"+
-				"https://"+anthropic+"@api.example.com/v1/messages\n"+
-				"https://"+stripe+":x-oauth-basic@api.example.com/v1/charges\n"+
-				"https://"+anthropic+":x-oauth-basic@api.example.com/v1/messages\n")
-			r := run(t, ".", nil, quiet, python(t, "scrub.py", "--no-detect", filepath.Join(dir, "run"), filepath.Join(dir, "out"))...)
-			if r.code != 0 {
-				t.Fatalf("exit %d:\n%s%s", r.code, r.stdout, r.stderr)
-			}
-			want := "https://REDACTED_STRIPE_KEY@api.example.com/v1/charges\n" +
-				"https://REDACTED_ANTHROPIC_KEY@api.example.com/v1/messages\n" +
-				"https://REDACTED_STRIPE_KEY:REDACTED_URL_PASSWORD@api.example.com/v1/charges\n" +
-				"https://REDACTED_ANTHROPIC_KEY:REDACTED_URL_PASSWORD@api.example.com/v1/messages\n"
-			if got := read(t, filepath.Join(dir, "out", "keys.txt")); got != want {
-				t.Fatalf("keys.txt = %q, want %q", got, want)
-			}
-		}},
 		{"a known value inside a longer word is reported, fails the run, and nothing is written", func(t *testing.T) {
 			dir := t.TempDir()
 			write(t, filepath.Join(dir, "run", "notes.txt"), "rowanqsLaptop\n")
@@ -1752,6 +1711,66 @@ func TestScrub(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, c.check)
+	}
+
+	// The lines of TestFixturesScrub's cases of the same names, in
+	// cmd/pairtime, so both scrubs keep the same addresses and remove the same
+	// keys and passwords. scrub.py's key patterns need nothing after a key, so
+	// it finds one followed by an @ or a colon where it stands. Its
+	// placeholders name its own patterns.
+	stripe := "sk_" + "live_" + strings.Repeat("Qw81Zx4LmN", 3) // built at run time, so no file in the repo looks like a leaked key
+	anthropic := "sk-ant-" + "api03-" + strings.Repeat("aB3_x9Kq-Z", 10)[:93] + "AA"
+	agree := []struct{ name, in, want string }{
+		{"a key that is a kept address's local part, as a URL's user, is still replaced",
+			"https://" + stripe + "@api.example.com/v1/charges\n" +
+				"https://" + anthropic + "@api.example.com/v1/messages\n",
+			"https://REDACTED_STRIPE_KEY@api.example.com/v1/charges\n" +
+				"https://REDACTED_ANTHROPIC_KEY@api.example.com/v1/messages\n"},
+		{"a key that is the user of a URL before its password, at a kept address, is still replaced",
+			"https://" + stripe + ":x-oauth-basic@api.example.com/v1/charges\n" +
+				"https://" + anthropic + ":x-oauth-basic@api.example.com/v1/messages\n",
+			"https://REDACTED_STRIPE_KEY:REDACTED_URL_PASSWORD@api.example.com/v1/charges\n" +
+				"https://REDACTED_ANTHROPIC_KEY:REDACTED_URL_PASSWORD@api.example.com/v1/messages\n"},
+		{"a key that is a URL's user is replaced whatever the host",
+			"https://" + stripe + ":x-oauth-basic@api.stripe.com/v1/charges\n" +
+				"https://" + anthropic + ":@api.anthropic.com/v1/messages\n" +
+				"postgres://" + stripe + ":pw@db:5432/app\n",
+			"https://REDACTED_STRIPE_KEY:capture@example.invalid/v1/charges\n" +
+				"https://REDACTED_ANTHROPIC_KEY:@api.anthropic.com/v1/messages\n" +
+				"postgres://REDACTED_STRIPE_KEY:REDACTED_URL_PASSWORD@db:5432/app\n"},
+		{"a URL's user and password at a kept address are replaced however the URL is written",
+			`{"url":"postgres:\/\/app:Tr0ub4dor3x@db.example.com\/app"}` + "\n" +
+				"//app:Tr0ub4dor3x@db.example.com/app\n" +
+				"redis://:hunter2hunter2@cache.example.com:6379\n" +
+				`{"stdout":"{\"url\":\"https:\\/\\/` + stripe + `:x@api.example.com\"}"}` + "\n",
+			`{"url":"postgres:\/\/app:REDACTED_URL_PASSWORD@db.example.com\/app"}` + "\n" +
+				"//app:REDACTED_URL_PASSWORD@db.example.com/app\n" +
+				"redis://:REDACTED_URL_PASSWORD@cache.example.com:6379\n" +
+				`{"stdout":"{\"url\":\"https:\\/\\/REDACTED_STRIPE_KEY:REDACTED_URL_PASSWORD@api.example.com\"}"}` + "\n"},
+		{"a placeholder an earlier run wrote is left alone, even where another rule finds it",
+			"postgres://app:REDACTED_STRIPE_KEY@db.example.com/app\npostgres://app:capture@example.invalid/app\n" +
+				"https://REDACTED_STRIPE_KEY:capture@example.invalid/v1/charges\n",
+			"postgres://app:REDACTED_STRIPE_KEY@db.example.com/app\npostgres://app:capture@example.invalid/app\n" +
+				"https://REDACTED_STRIPE_KEY:capture@example.invalid/v1/charges\n"},
+		// D-email-redaction-tld.
+		{"under a reserved top-level domain only a one-label name is kept, so a real address with .invalid appended is replaced",
+			"Owner: jane.doe@westfield.edu.invalid\nci@runner.ci.test ci@build.example.invalid\n" +
+				"user@myapp.test dev@build.localhost a@b.example capture@example.invalid\n",
+			"Owner: capture@example.invalid\ncapture@example.invalid capture@example.invalid\n" +
+				"user@myapp.test dev@build.localhost a@b.example capture@example.invalid\n"},
+	}
+	for _, c := range agree {
+		t.Run(c.name, func(t *testing.T) {
+			dir := t.TempDir()
+			write(t, filepath.Join(dir, "run", "notes.txt"), c.in)
+			r := run(t, ".", nil, quiet, python(t, "scrub.py", "--no-detect", filepath.Join(dir, "run"), filepath.Join(dir, "out"))...)
+			if r.code != 0 {
+				t.Fatalf("exit %d:\n%s%s", r.code, r.stdout, r.stderr)
+			}
+			if got := read(t, filepath.Join(dir, "out", "notes.txt")); got != c.want {
+				t.Fatalf("notes.txt = %q, want %q", got, c.want)
+			}
+		})
 	}
 
 	// Every spelling of a home folder, from a scrub that knows only the home
