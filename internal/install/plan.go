@@ -32,7 +32,6 @@ type Plan struct {
 	oldSum    string    // the digest of manifest.json when planned, "" if absent
 	manifest  *manifest // what manifest.json holds after Apply
 	backups   []pendingBackup
-	drops     []string // backup files Apply deletes once it is done
 	rmdirs    []string // directories uninstall removes if empty, innermost first
 
 	// unlock drops the install lock the plan holds until Apply or Close;
@@ -339,11 +338,10 @@ func (p *Plan) adopt(t Target, cur Content, recs []editRecord) error {
 	return nil
 }
 
-// rebase makes base what uninstall puts back in rec's target.
+// rebase makes base what uninstall puts back in rec's target. The copy of
+// the base it replaces goes once the manifest no longer names it
+// (dropBackups).
 func (p *Plan) rebase(rec *record, base Content) {
-	if rec.Base.Backup != "" {
-		p.drops = append(p.drops, rec.Base.Backup)
-	}
 	s, b := save(rec.Target, base)
 	rec.Base = s
 	if b != nil {
@@ -396,9 +394,6 @@ func (in *Installer) planUninstall(groups []*group) (*Plan, error) {
 		}
 		for j := len(rec.Dirs) - 1; j >= 0; j-- {
 			p.rmdirs = append(p.rmdirs, rec.Dirs[j])
-		}
-		if rec.Base.Backup != "" {
-			p.drops = append(p.drops, rec.Base.Backup)
 		}
 	}
 	slices.Reverse(kept)
@@ -687,15 +682,37 @@ func (p *Plan) removeBackups() {
 	os.Remove(p.in.backupsDir()) // if it is empty now
 }
 
-// dropBackups deletes the backups the manifest no longer names.
+// dropBackups deletes every backup that the manifest Apply wrote doesn't
+// name, and the temporary files of a backup's write. Those are the
+// backups this plan replaced, and any an earlier Apply couldn't delete
+// once it had written its manifest, because it stopped there or the
+// backups folder didn't let it: they hold copies of settings files, tokens
+// and all, and this way the next Apply finishes the job. The install lock
+// keeps any other Apply from writing a backup meanwhile.
 func (p *Plan) dropBackups() error {
-	for _, name := range p.drops {
-		if err := os.Remove(filepath.Join(p.in.backupsDir(), name)); err != nil && !errors.Is(err, fs.ErrNotExist) {
-			return err
+	named := map[string]bool{}
+	for _, r := range p.manifest.Targets {
+		named[r.Base.Backup] = true
+	}
+	dir := p.in.backupsDir()
+	entries, err := os.ReadDir(dir)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	var first error
+	for _, e := range entries {
+		name := e.Name()
+		if named[name] || !e.Type().IsRegular() || !(isBackupName(name) || isTempName(name)) {
+			continue
+		}
+		if err := os.Remove(filepath.Join(dir, name)); err != nil && !errors.Is(err, fs.ErrNotExist) && first == nil {
+			first = err
 		}
 	}
-	p.drops = nil
-	return nil
+	return first
 }
 
 // removeLeftovers takes away the install directory once the manifest is

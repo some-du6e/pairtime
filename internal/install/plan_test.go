@@ -839,6 +839,65 @@ func TestFailedInstallLeavesNoOrphanedBackups(t *testing.T) {
 	}
 }
 
+func TestApplyDeletesBackupsTheManifestNoLongerNames(t *testing.T) {
+	tests := []struct {
+		name string
+		// leave leaves a backup or its temporary file that the manifest
+		// doesn't name, in the backups folder of in, which holds item.
+		leave func(t *testing.T, env Env, in *Installer, item Item)
+	}{
+		{
+			name: "a backup an Apply couldn't delete after it wrote its manifest, as the backups folder didn't let it, is deleted by the next Apply",
+			leave: func(t *testing.T, env Env, in *Installer, item Item) {
+				if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+					t.Skip("only a non-root account on Unix can be kept from deleting a file in its own folder")
+				}
+				// The teen deletes settings.json, so the reinstall's base is
+				// no file, and the backup of the old one is to go.
+				if err := os.Remove(ClaudeSettings(env)); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Chmod(in.backupsDir(), 0o500); err != nil {
+					t.Fatal(err)
+				}
+				defer os.Chmod(in.backupsDir(), 0o700)
+				p, err := in.PlanInstall([]Item{item})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := p.Apply(); err == nil {
+					t.Fatal("Apply deleted a backup in a folder that doesn't allow it")
+				}
+			},
+		},
+		{
+			name: "a backup's temporary file that a stopped write left is deleted by the next Apply",
+			leave: func(t *testing.T, _ Env, in *Installer, _ Item) {
+				writeFile(t, filepath.Join(in.backupsDir(), ".abcdefghijk2-settings.json.tmp-12345"), []byte("{\"model\": \"opus\"}\n"))
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			env := testEnv(t, "linux", nil)
+			path := ClaudeSettings(env)
+			writeFile(t, path, []byte("{\"model\": \"opus\"}\n"))
+			item, err := ClaudeCode(env)
+			if err != nil {
+				t.Fatal(err)
+			}
+			in := newInstaller(t)
+			install(t, in, item)
+			tt.leave(t, env, in, item)
+
+			install(t, in, item)
+			if got, want := backupFiles(t, in), namedBackups(t, in); !slices.Equal(got, want) {
+				t.Errorf("the backups folder holds %q, and the manifest names %q", got, want)
+			}
+		})
+	}
+}
+
 func TestUninstallTakesAwayLeftovers(t *testing.T) {
 	tests := []struct {
 		name string
