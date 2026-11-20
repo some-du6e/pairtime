@@ -177,58 +177,74 @@ jobs:
 
             # The hook's round trip, as a harness sees it: 200 warm calls of
             # pairtime hook in exec form with an event on stdin, each timed
-            # from process start to exit, with the agent up. Ten calls first
-            # warm the file cache and aren't counted. Each must exit 0 and
-            # print nothing, which a harness reads as hook output (CP 6.2).
+            # from process start to exit, with the agent up. Each must exit 0
+            # and print nothing, which a harness reads as hook output (CP 6.2).
+            # Between them run 200 calls of an empty Go program, built the same
+            # way, which is what any process costs on this runner and what the
+            # hook's gate is over, and 200 of `pairtime hook -h`, which shows
+            # what pairtime's own start costs before the hook does anything.
+            # Interleaved, the three see the same runner: windows-latest
+            # machines differ, and one machine slows down and speeds up over a
+            # job. Ten rounds first warm the file cache and aren't counted.
             #
-            # Measure-Calls starts $path with $argList the way a harness runs
-            # an exec-form hook, with stdin, stdout and stderr on pipes, writes
-            # $stdin and closes it. For each counted call it keeps the time
-            # from start to exit as this workflow sees it, and the process's
-            # lifetime as Windows records it, from creation to exit, which
-            # leaves out what starting a process costs the caller. With
-            # $quiet, a call that exits non-zero or prints anything is bad.
-            function Measure-Calls($path, $argList, $stdin, $warmup, $calls, $envVars = @{}, $quiet = $true) {
-              $r = [pscustomobject]@{
-                Times  = [System.Collections.Generic.List[double]]::new()
-                Lives  = [System.Collections.Generic.List[double]]::new()
-                Bad    = 0
-                Stderr = ''
+            # New-Prog describes a program to time: started with $argList the
+            # way a harness runs an exec-form hook, with stdin, stdout and
+            # stderr on pipes, $stdin written and stdin closed. Measure-Calls
+            # starts each of $progs in turn, $warmup + $calls times. For each
+            # counted call it keeps the time from start to exit as this
+            # workflow sees it, and the process's lifetime as Windows records
+            # it, from creation to exit, which leaves out what starting a
+            # process costs the caller. For a $quiet program, a call that exits
+            # non-zero or prints anything is bad.
+            function New-Prog($path, $argList, $stdin, $quiet = $true, $envVars = @{}) {
+              [pscustomobject]@{
+                Path    = $path
+                ArgList = $argList
+                Stdin   = $stdin
+                Quiet   = $quiet
+                EnvVars = $envVars
+                Times   = [System.Collections.Generic.List[double]]::new()
+                Lives   = [System.Collections.Generic.List[double]]::new()
+                Bad     = 0
+                Stderr  = ''
               }
+            }
+            function Measure-Calls($progs, $warmup, $calls) {
               for ($i = 0; $i -lt $warmup + $calls; $i++) {
-                $psi = [System.Diagnostics.ProcessStartInfo]::new($path)
-                foreach ($a in $argList) { $psi.ArgumentList.Add($a) }
-                foreach ($k in $envVars.Keys) { $psi.Environment[$k] = $envVars[$k] }
-                $psi.UseShellExecute = $false
-                $psi.CreateNoWindow = $true
-                $psi.RedirectStandardInput = $true
-                # UTF-8 with no byte-order mark, as a harness writes its event.
-                $psi.StandardInputEncoding = [System.Text.UTF8Encoding]::new($false)
-                $psi.RedirectStandardOutput = $true
-                $psi.RedirectStandardError = $true
-                $sw = [System.Diagnostics.Stopwatch]::StartNew()
-                $p = [System.Diagnostics.Process]::Start($psi)
-                # stderr is read while stdout is, or a child that fills the
-                # stderr pipe first, as inittrace does, would never exit.
-                $errRead = $p.StandardError.ReadToEndAsync()
-                $p.StandardInput.Write($stdin)
-                $p.StandardInput.Close()
-                $out = $p.StandardOutput.ReadToEnd()
-                $errText = $errRead.GetAwaiter().GetResult()
-                $p.WaitForExit()
-                $sw.Stop()
-                if ($quiet -and ($p.ExitCode -ne 0 -or $out -ne '' -or $errText -ne '')) {
-                  $r.Bad++
-                  if ($r.Bad -le 3) { Write-Host "call $i of $path exited $($p.ExitCode), stdout '$out', stderr '$errText'" }
+                foreach ($g in $progs) {
+                  $psi = [System.Diagnostics.ProcessStartInfo]::new($g.Path)
+                  foreach ($a in $g.ArgList) { $psi.ArgumentList.Add($a) }
+                  foreach ($k in $g.EnvVars.Keys) { $psi.Environment[$k] = $g.EnvVars[$k] }
+                  $psi.UseShellExecute = $false
+                  $psi.CreateNoWindow = $true
+                  $psi.RedirectStandardInput = $true
+                  # UTF-8 with no byte-order mark, as a harness writes its event.
+                  $psi.StandardInputEncoding = [System.Text.UTF8Encoding]::new($false)
+                  $psi.RedirectStandardOutput = $true
+                  $psi.RedirectStandardError = $true
+                  $sw = [System.Diagnostics.Stopwatch]::StartNew()
+                  $p = [System.Diagnostics.Process]::Start($psi)
+                  # stderr is read while stdout is, or a child that fills the
+                  # stderr pipe first, as inittrace does, would never exit.
+                  $errRead = $p.StandardError.ReadToEndAsync()
+                  $p.StandardInput.Write($g.Stdin)
+                  $p.StandardInput.Close()
+                  $out = $p.StandardOutput.ReadToEnd()
+                  $errText = $errRead.GetAwaiter().GetResult()
+                  $p.WaitForExit()
+                  $sw.Stop()
+                  if ($g.Quiet -and ($p.ExitCode -ne 0 -or $out -ne '' -or $errText -ne '')) {
+                    $g.Bad++
+                    if ($g.Bad -le 3) { Write-Host "call $i of $($g.Path) exited $($p.ExitCode), stdout '$out', stderr '$errText'" }
+                  }
+                  $g.Stderr = $errText
+                  if ($i -ge $warmup) {
+                    $g.Times.Add($sw.Elapsed.TotalMilliseconds)
+                    $g.Lives.Add(($p.ExitTime - $p.StartTime).TotalMilliseconds)
+                  }
+                  $p.Dispose()
                 }
-                $r.Stderr = $errText
-                if ($i -ge $warmup) {
-                  $r.Times.Add($sw.Elapsed.TotalMilliseconds)
-                  $r.Lives.Add(($p.ExitTime - $p.StartTime).TotalMilliseconds)
-                }
-                $p.Dispose()
               }
-              $r
             }
             function Quantile($list, $q) {
               $sorted = @($list | Sort-Object)
@@ -240,21 +256,21 @@ jobs:
             $hookArgs = @('hook', '--harness', 'claude_code', '--event', 'UserPromptSubmit')
             $warmup = 10
             $hookCalls = 200
-            $hook = Measure-Calls $exe $hookArgs $hookEvent $warmup $hookCalls
+            $hook = New-Prog $exe $hookArgs $hookEvent
+            $empty = New-Prog $emptyExe @() ''
+            $start = New-Prog $exe @('hook', '-h') '' $false
+            Measure-Calls @($hook, $empty, $start) $warmup $hookCalls
             $hookP95 = Quantile $hook.Times 0.95
             $hookP50 = Quantile $hook.Times 0.50
             $hookMax = Quantile $hook.Times 1
             $hookBad = $hook.Bad
-
-            # What a process costs on this runner, which differs from one
-            # windows-latest machine to the next: an empty Go program, started
-            # and timed the same way, as many times. The hook's gate is its
-            # p95 over this one's. And what pairtime spends before main, by
-            # GODEBUG=inittrace=1, with the slowest packages in the log.
-            $empty = Measure-Calls $emptyExe @() '' $warmup $hookCalls
             $emptyP95 = Quantile $empty.Times 0.95
             $hookOver = $hookP95 - $emptyP95
-            $trace = Measure-Calls $exe @('hook', '-h') '' 1 1 @{ GODEBUG = 'inittrace=1' } $false
+
+            # What pairtime spends before main, by GODEBUG=inittrace=1, with
+            # the slowest packages in the log.
+            $trace = New-Prog $exe @('hook', '-h') '' $false @{ GODEBUG = 'inittrace=1' }
+            Measure-Calls @($trace) 1 1
             $inits = foreach ($l in ($trace.Stderr -split "`n")) {
               if ($l -match '^init (\S+) @[0-9.]+ ms, ([0-9.]+) ms clock') {
                 [pscustomobject]@{ Pkg = $Matches[1]; Ms = [double]$Matches[2] }
@@ -335,7 +351,8 @@ jobs:
               "| clean stop: exit status, pid in port.json | $stopStatus, $pidAfter | 0, 0: $(Verdict $stopOk) |",
               "| the hook's own cost: its p95 over $hookCalls warm calls less an empty Go program's p95, both timed around the process | $(Ms $hookOver) | at most $budgetHookOverMs ms: $(Verdict $hookOverOk) |",
               "| hook p95 over $hookCalls warm calls, timed around the process | $(Ms $hookP95) | at most $budgetHookMs ms (R8): $(Verdict $hookCapOk) |",
-              "| an empty Go program over $hookCalls calls, timed the same way: p50, p95 | $(Ms (Quantile $empty.Times 0.5)), $(Ms $emptyP95) | none |",
+              "| an empty Go program over $hookCalls calls, timed the same way between the hook's: p50, p95 | $(Ms (Quantile $empty.Times 0.5)), $(Ms $emptyP95) | none |",
+              "| pairtime's start alone, ``pairtime hook -h`` timed the same way: p50, p95 | $(Ms (Quantile $start.Times 0.5)), $(Ms (Quantile $start.Times 0.95)) | none |",
               "| hook p50, slowest | $(Ms $hookP50), $(Ms $hookMax) | none |",
               "| hook lifetime from creation to exit, as Windows records it: p50, p95 | $(Ms (Quantile $hook.Lives 0.5)), $(Ms (Quantile $hook.Lives 0.95)) | none |",
               "| pairtime's package init (GODEBUG=inittrace=1): in all, slowest | $(Ms $initTotal); $initTop | none |",
