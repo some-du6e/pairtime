@@ -8,3 +8,6 @@ src/gen/
 # Playwright's output.
 test-results/
 playwright-report/
+# The agent binary the README builds for the smoke test.
+/pairtime
+/pairtime.exe

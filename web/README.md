@@ -1,0 +1,47 @@
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
+
+# web
+
+pairtime's web UI, in Svelte 5 and TypeScript, built by Vite (DESIGN 3.11, 3.12). Each UI is its own Vite build over the same shared components:
+
+| Path | What it is | Built into |
+|---|---|---|
+| `src/local/` | The local dashboard. The agent embeds it and serves it on 127.0.0.1 to the teen's own browser (DESIGN 3.9) | `../internal/webui/dist/`, over the placeholder |
+| `src/server/` | The server UI, which `pairtimed` will embed (WP-SV8, WP-SV9) | `dist/server/` |
+| `src/shared/` | Components, styles and the typed API client the UIs share | |
+| `src/gallery/` | Every shared component on one page, for Playwright and for looking at them. Never shipped | `dist/gallery/` |
+| `src/gen/` | TypeScript types generated from `../docs/api/*.openapi.yaml` by `npm run gen`. Not checked in | |
+| `tests/` | Playwright specs (`*.spec.ts`) and the helpers they share. Unit tests sit next to the code as `*.test.ts` | |
+
+## Commands
+
+These run in CI (`.github/workflows/web.yml`); a person with Node 22.12 or later can run them too.
+
+```sh
+npm ci                # install exactly what package-lock.json says
+npm run check         # generate the API types, then svelte-check
+npm run test:unit     # vitest
+npm run build         # all three builds
+npm run dev           # the local dashboard on http://127.0.0.1:5173
+npm run dev:gallery   # the component gallery
+```
+
+Playwright needs the builds and Chromium, and its smoke test needs an agent built with the dashboard embedded:
+
+```sh
+npm run build
+(cd .. && CGO_ENABLED=0 go build -o "$PWD/web/pairtime" ./cmd/pairtime)
+./node_modules/.bin/playwright install chromium
+PAIRTIME_BIN="$PWD/pairtime" npm run e2e
+```
+
+The smoke test runs that agent in a data directory of its own, on port 17247 (`PAIRTIME_E2E_PORT` changes it). Without `PAIRTIME_BIN` it is skipped locally and fails in CI.
+
+## How the pieces fit
+
+- **Builds are picked by mode.** `vite build --mode agent` builds `src/local/` for the agent; Vite reserves the mode name `local`. `server` and `gallery` build the other two. Only builds get the Content-Security-Policy `<meta>` that `vite.config.ts` adds, because the dev server injects inline styles.
+- **The placeholder stays checked in.** `go build` embeds whatever `internal/webui/dist/` holds, so a plain checkout builds without Node. `npm run build` overwrites `index.html` there; commit the placeholder, never a build. `internal/webui`'s tests run on both.
+- **Types come from the spec.** `src/local/api.ts` binds `createClient` from `src/shared/api/client.ts` to the generated `paths` type. Imports from `src/gen/` are `import type`, so `vite build` works before `npm run gen` has run.
+- **Decisions use the shared components.** `ConsentCard` (DESIGN 8.4) and `ProfileChoice` (DESIGN 8.3) fix the button labels, which one is prominent, and that nothing is preselected. `tests/consent.spec.ts` and `tests/profile-choice.spec.ts` read those rules from the rendered page's computed styles.
+
+AGENTS.md's "Web UI" section has the rules for changing anything here.
