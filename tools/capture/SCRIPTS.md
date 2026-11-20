@@ -228,6 +228,8 @@ Setup: run `prepare.py cursor ROOT cursor`. Cursor can't be pointed at a setting
 
 Repeat the entry for `beforeSubmitPrompt`, `afterAgentResponse`, `afterFileEdit`, `afterTabFileEdit`, `stop` and `sessionEnd`. On Windows, Cursor runs hook commands through PowerShell: use `powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "KIT\dump-hook.ps1" "ROOT\runs\cursor" sessionStart`.
 
+On macOS and Linux, check after step 2 that Cursor ran both halves: `awk 'FNR == 2' ROOT/runs/cursor/hooks/*/argv | sort | uniq -c` counts the events, and Claude Code's (`UserPromptSubmit`, `Stop`) should be there beside Cursor's (`beforeSubmitPrompt`, `stop`). If Claude Code's aren't, while Third-Party Imports is on, Cursor ran those hooks without their `args`, so the dumper recorded nothing for them. Quit Cursor, run `prepare.py cursor ROOT cursor2 --shell-form`, write `ROOT/projects/cursor2/.cursor/hooks.json` for `ROOT/runs/cursor2`, and start again there.
+
 Steps: open `ROOT/projects/cursor` in Cursor and start a new agent chat (step 1). Do steps 2, 3, 4 (`afterFileEdit`), 7, 8 and 9 (stop the generation). For a Tab edit, open `wordcount.py`, type `def count_chars(` on a new line at the end and accept a Tab suggestion. Close the chat (step 16). Start a background agent if your plan has them; its hooks run on Cursor's machines, so record in the notes whether any local hook fired. Then in the `agent` CLI, in `ROOT/projects/cursor`: steps 1, 2 and 16, and step 18 as `agent -p "Reply with the number of functions in wordcount.py and nothing else."`.
 
 Collect without `--history`. Transcripts the hooks named are copied on their own; don't add `state.vscdb`.
@@ -301,6 +303,8 @@ Collect with `--extra` for `ROOT/gemini-home/.gemini/tmp/<hash>/logs.json`, the 
 Captured by WP-AD14. Devin Desktop and the Devin CLI read Claude-format hooks from the project's `.claude/` settings, so `prepare.py devin ROOT devin` is the whole setup. Devin can't be pointed at a settings folder of its own, so `prepare.py` refuses while your Devin config, rules, skills or MCP servers, or Claude-format hooks in your `~/.claude`, hold something, and prints the commands to move each aside.
 
 Steps: Devin Desktop with `ROOT/projects/devin` open, steps 1, 2, 3, 4, 6, 7, 8, 9 and 16. Then the Devin CLI, run as `devin` in `ROOT/projects/devin`: steps 1, 2, 7 and 16, then step 17 as `devin --continue` with the step 17 prompt, quitting it the same way, and step 18 as `devin -p "Reply with the number of functions in wordcount.py and nothing else."`. Print mode can't show the folder trust prompt, so it only runs once the interactive steps have trusted the folder.
+
+On macOS and Linux, if no `hooks/` folder appears in `ROOT/runs/devin` after step 2, Devin didn't run the hooks, or ran them without their `args`, so the dumper recorded nothing. Check that Devin trusts the folder, then quit Devin, run `prepare.py devin ROOT devin2 --shell-form`, and start again in `ROOT/projects/devin2`.
 
 Collect with `--extra` for this session's files in `~/.local/share/devin/transcripts/`. The Windows path isn't known yet (HS 15); if you find it, put it in the provenance notes.
 
