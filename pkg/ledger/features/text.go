@@ -2,7 +2,10 @@
 
 package features
 
-import "strings"
+import (
+	"strings"
+	"unicode/utf8"
+)
 
 // IsSpace reports whether r is whitespace in the sense of spec 10.2: one of
 // the 25 code points of Unicode's White_Space property, which is the same
@@ -56,10 +59,8 @@ func Words(text string) []string {
 // isSpaceToken reports whether a token is a whitespace token. A token is
 // all of one kind, so its first code point decides.
 func isSpaceToken(t string) bool {
-	for _, r := range t {
-		return IsSpace(r)
-	}
-	return false
+	r, _ := utf8.DecodeRuneInString(t)
+	return t != "" && IsSpace(r)
 }
 
 // strip returns s with its leading and trailing whitespace removed, in the
