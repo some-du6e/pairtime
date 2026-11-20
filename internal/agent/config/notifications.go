@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/BurntSushi/toml"
 )
 
 // Notifications is config.toml's [notifications] table: the one quiet
@@ -102,10 +104,11 @@ func (q QuietHours) String() string {
 	return fmt.Sprintf("%02d:%02d-%02d:%02d", q.from/60, q.from%60, q.to/60, q.to%60)
 }
 
-// notificationsFile is the [notifications] table as written.
+// notificationsFile is the [notifications] table as written. Like every
+// setting in fileConfig, each field is nil when the file doesn't have it.
 type notificationsFile struct {
-	Enabled    bool   `toml:"enabled"`
-	QuietHours string `toml:"quiet_hours"`
+	Enabled    *bool   `toml:"enabled"`
+	QuietHours *string `toml:"quiet_hours"`
 }
 
 // ignored is the configuration in force when config.toml exists but can't
@@ -119,19 +122,68 @@ func ignored() Config {
 }
 
 // parseNotifications checks the [notifications] table and puts it in cfg.
-func parseNotifications(cfg *Config, file notificationsFile, defined func(key ...string) bool) (problems []string) {
-	if defined("notifications", "enabled") {
-		cfg.Notifications.Off = !file.Enabled
+// keys are every key in the file, in its own spelling. Each rule here only
+// ever turns notifications off, never back on, so no order among them, or
+// with Parse's rule for unknown settings, can leave them on.
+func parseNotifications(cfg *Config, file notificationsFile, keys []toml.Key) (problems []string) {
+	off := func(why string) {
+		cfg.Notifications.Off = true
+		problems = append(problems, "config.toml: "+why+", so notifications are off until it's fixed")
 	}
-	if defined("notifications", "quiet_hours") {
-		q, err := ParseQuietHours(file.QuietHours)
+	// TOML keys are case-sensitive, so `enabled` and `Enabled` are two
+	// settings to TOML, but the decoder fills one field from both, in no
+	// fixed order. Which one counts would then be chance.
+	if s := spellings(keys, "notifications", "enabled"); len(s) > 1 {
+		off(fmt.Sprintf("notifications.enabled is written more than once, as %s", strings.Join(s, " and ")))
+	} else if file.Enabled != nil && !*file.Enabled {
+		cfg.Notifications.Off = true
+	}
+	if s := spellings(keys, "notifications", "quiet_hours"); len(s) > 1 {
+		off(fmt.Sprintf("notifications.quiet_hours is written more than once, as %s", strings.Join(s, " and ")))
+	} else if file.QuietHours != nil {
+		q, err := ParseQuietHours(*file.QuietHours)
 		if err != nil {
 			// The teen asked for quiet at some hours, and pairtime can't
 			// tell which, so it stays quiet at all of them.
-			cfg.Notifications.Off = true
-			return []string{fmt.Sprintf("config.toml: notifications.quiet_hours %q %v, so notifications are off until it's fixed", file.QuietHours, err)}
+			off(fmt.Sprintf("notifications.quiet_hours %q %v", *file.QuietHours, err))
+		} else {
+			cfg.Notifications.Quiet = q
 		}
-		cfg.Notifications.Quiet = q
 	}
-	return nil
+	return problems
+}
+
+// spellings returns each way keys spell the setting at path, quoted, when
+// its parts are compared without regard to case.
+func spellings(keys []toml.Key, path ...string) []string {
+	var out []string
+	for _, k := range keys {
+		if len(k) != len(path) {
+			continue
+		}
+		same := true
+		for i := range k {
+			if !strings.EqualFold(k[i], path[i]) {
+				same = false
+				break
+			}
+		}
+		if same {
+			out = append(out, fmt.Sprintf("%q", k.String()))
+		}
+	}
+	return out
+}
+
+// aboutNotifications reports whether an unknown setting seems to be about
+// notifications: its table, or its own name at the top level, mentions
+// notifications or quiet hours in any case, as `enable` under
+// [notifications], `enabled` under [Notification], or a quiet_hours written
+// above every table.
+func aboutNotifications(key toml.Key) bool {
+	if len(key) == 0 {
+		return false
+	}
+	first := strings.ToLower(key[0])
+	return strings.Contains(first, "notif") || strings.Contains(first, "quiet")
 }

@@ -13,59 +13,75 @@ import (
 )
 
 func TestParse(t *testing.T) {
+	off := Config{Mode: Local, Notifications: Notifications{Off: true}}
 	tests := []struct {
-		name        string
-		file        string
-		want        Config
-		wantProblem string // a substring of the one problem expected; "" for none
+		name         string
+		file         string
+		want         Config
+		wantProblems []string // a substring of each problem expected, in order
 	}{
 		{name: "the default file parses to the defaults with no problems", file: defaultFile, want: Default()},
 		{name: "an empty file gives the defaults", file: "", want: Default()},
 		{name: "the defaults are local mode and the default port", file: "", want: Config{Mode: Local, HTTP: HTTP{Port: 0}}},
 		{name: "mode local is kept", file: `mode = "local"`, want: Default()},
 		{
-			name:        "a mode this release lacks falls back to local and is reported",
-			file:        `mode = "online"`,
-			want:        Default(),
-			wantProblem: `no mode "online"`,
+			name:         "a mode this release lacks falls back to local and is reported",
+			file:         `mode = "online"`,
+			want:         Default(),
+			wantProblems: []string{`no mode "online"`},
 		},
 		{
-			name:        "a file that doesn't parse is ignored as a whole, with notifications off",
-			file:        "[http]\nport = 8123\n[unclosed\n",
-			want:        ignored(),
-			wantProblem: "was ignored, so every setting has its default and notifications are off",
+			name:         "a mode is checked under any case of its name",
+			file:         `Mode = "online"`,
+			want:         Default(),
+			wantProblems: []string{`no mode "online"`},
 		},
 		{
-			name:        "a value of the wrong type makes the whole file ignored, with notifications off",
-			file:        "mode = \"local\"\n[http]\nport = \"eighty\"\n",
-			want:        ignored(),
-			wantProblem: "was ignored, so every setting has its default and notifications are off",
+			name:         "a file that doesn't parse is ignored as a whole, with notifications off",
+			file:         "[http]\nport = 8123\n[unclosed\n",
+			want:         ignored(),
+			wantProblems: []string{"was ignored, so every setting has its default and notifications are off"},
 		},
 		{
-			name:        "an unknown setting is reported and ignored",
-			file:        "colour = \"blue\"\n",
-			want:        Default(),
-			wantProblem: `unknown setting "colour"`,
+			name:         "a value of the wrong type makes the whole file ignored, with notifications off",
+			file:         "mode = \"local\"\n[http]\nport = \"eighty\"\n",
+			want:         ignored(),
+			wantProblems: []string{"was ignored, so every setting has its default and notifications are off"},
+		},
+		{
+			name:         "an unknown setting is reported and ignored",
+			file:         "colour = \"blue\"\n",
+			want:         Default(),
+			wantProblems: []string{`unknown setting "colour" was ignored`},
 		},
 		{name: "a port from 1024 up is used", file: "[http]\nport = 8123\n", want: Config{Mode: Local, HTTP: HTTP{Port: 8123}}},
+		{name: "a port is used under any case of its table and name", file: "[HTTP]\nPort = 8123\n", want: Config{Mode: Local, HTTP: HTTP{Port: 8123}}},
 		{
-			name:        "a port below 1024 keeps the default and is reported",
-			file:        "[http]\nport = 80\n",
-			want:        Default(),
-			wantProblem: "http.port 80",
+			name:         "a port below 1024 keeps the default and is reported",
+			file:         "[http]\nport = 80\n",
+			want:         Default(),
+			wantProblems: []string{"http.port 80"},
 		},
 		{
-			name:        "a port above 65535 keeps the default and is reported",
-			file:        "[http]\nport = 70000\n",
-			want:        Default(),
-			wantProblem: "http.port 70000",
+			name:         "a port above 65535 keeps the default and is reported",
+			file:         "[http]\nport = 70000\n",
+			want:         Default(),
+			wantProblems: []string{"http.port 70000"},
 		},
 		{name: "notifications are on with no quiet hours by default", file: "", want: Config{Mode: Local, Notifications: Notifications{}}},
-		{name: "enabled = false turns notifications off", file: "[notifications]\nenabled = false\n", want: Config{Mode: Local, Notifications: Notifications{Off: true}}},
+		{name: "enabled = false turns notifications off", file: "[notifications]\nenabled = false\n", want: off},
 		{name: "enabled = true keeps notifications on", file: "[notifications]\nenabled = true\n", want: Default()},
+		{name: "enabled = false turns notifications off under a [Notifications] table", file: "[Notifications]\nenabled = false\n", want: off},
+		{name: "Enabled = false turns notifications off, whatever the case of the name", file: "[notifications]\nEnabled = false\n", want: off},
+		{name: "a dotted notifications.enabled = false turns notifications off", file: "notifications.enabled = false\n", want: off},
 		{
 			name: "quiet hours that cross midnight are kept",
 			file: "[notifications]\nquiet_hours = \"22:00-07:00\"\n",
+			want: Config{Mode: Local, Notifications: Notifications{Quiet: quiet("22:00-07:00")}},
+		},
+		{
+			name: "quiet hours are kept under any case of their table and name",
+			file: "[NOTIFICATIONS]\nQuiet_Hours = \"22:00-07:00\"\n",
 			want: Config{Mode: Local, Notifications: Notifications{Quiet: quiet("22:00-07:00")}},
 		},
 		{
@@ -75,28 +91,69 @@ func TestParse(t *testing.T) {
 		},
 		{name: "empty quiet hours mean none", file: "[notifications]\nquiet_hours = \"\"\n", want: Default()},
 		{
-			name:        "quiet hours that don't parse turn notifications off and are reported",
-			file:        "[notifications]\nquiet_hours = \"10pm-7am\"\n",
-			want:        Config{Mode: Local, Notifications: Notifications{Off: true}},
-			wantProblem: `notifications.quiet_hours "10pm-7am"`,
+			name:         "quiet hours that don't parse turn notifications off and are reported",
+			file:         "[notifications]\nquiet_hours = \"10pm-7am\"\n",
+			want:         off,
+			wantProblems: []string{`notifications.quiet_hours "10pm-7am"`},
 		},
 		{
-			name:        "quiet hours that start and end together turn notifications off and are reported",
-			file:        "[notifications]\nquiet_hours = \"07:00-07:00\"\n",
-			want:        Config{Mode: Local, Notifications: Notifications{Off: true}},
-			wantProblem: "starts and ends at the same time",
+			name:         "quiet hours that start and end together turn notifications off and are reported",
+			file:         "[notifications]\nquiet_hours = \"07:00-07:00\"\n",
+			want:         off,
+			wantProblems: []string{"starts and ends at the same time"},
 		},
 		{
-			name:        "an enabled switch that isn't true or false makes the whole file ignored, with notifications off",
-			file:        "[notifications]\nenabled = \"no\"\n",
-			want:        ignored(),
-			wantProblem: "notifications are off",
+			name:         "an enabled switch that isn't true or false makes the whole file ignored, with notifications off",
+			file:         "[notifications]\nenabled = \"no\"\n",
+			want:         ignored(),
+			wantProblems: []string{"notifications are off"},
 		},
 		{
-			name:        "an unknown notification setting is reported and ignored",
-			file:        "[notifications]\nsound = true\n",
-			want:        Default(),
-			wantProblem: `unknown setting "notifications.sound"`,
+			name:         "a misspelled off switch turns notifications off and is reported",
+			file:         "[notifications]\nenable = false\n",
+			want:         off,
+			wantProblems: []string{`unknown setting "notifications.enable" was ignored, so notifications are off until it's fixed`},
+		},
+		{
+			name:         "an unknown setting under [notifications] turns them off even beside enabled = true",
+			file:         "[notifications]\nenabled = true\nsound = true\n",
+			want:         off,
+			wantProblems: []string{`unknown setting "notifications.sound" was ignored, so notifications are off until it's fixed`},
+		},
+		{
+			name:         "a misspelled quiet_hours turns notifications off, since pairtime can't tell when to be quiet",
+			file:         "[notifications]\nquiet-hours = \"22:00-07:00\"\n",
+			want:         off,
+			wantProblems: []string{`unknown setting "notifications.quiet-hours" was ignored, so notifications are off`},
+		},
+		{
+			name: "a misspelled [notifications] table turns notifications off, and the table and its setting are reported",
+			file: "[notification]\nenabled = false\n",
+			want: off,
+			wantProblems: []string{
+				`unknown setting "notification" was ignored, so notifications are off`,
+				`unknown setting "notification.enabled" was ignored, so notifications are off`,
+			},
+		},
+		{
+			name:         "quiet hours written above every table turn notifications off",
+			file:         "quiet_hours = \"22:00-07:00\"\n",
+			want:         off,
+			wantProblems: []string{`unknown setting "quiet_hours" was ignored, so notifications are off`},
+		},
+		{
+			name:         "an off switch written twice in two cases turns notifications off, since which one the decoder takes is chance",
+			file:         "[notifications]\nenabled = true\nEnabled = false\n",
+			want:         off,
+			wantProblems: []string{`notifications.enabled is written more than once, as "notifications.enabled" and "notifications.Enabled", so notifications are off until it's fixed`},
+		},
+		{
+			name: "quiet hours written in two tables of different case turn notifications off",
+			file: "[notifications]\nquiet_hours = \"22:00-07:00\"\n[Notifications]\nquiet_hours = \"23:00-06:00\"\n",
+			want: off,
+			wantProblems: []string{
+				`notifications.quiet_hours is written more than once, as "notifications.quiet_hours" and "Notifications.quiet_hours"`,
+			},
 		},
 	}
 	for _, tt := range tests {
@@ -105,11 +162,13 @@ func TestParse(t *testing.T) {
 			if got != tt.want {
 				t.Errorf("Parse() = %+v, want %+v", got, tt.want)
 			}
-			switch {
-			case tt.wantProblem == "" && len(problems) != 0:
-				t.Errorf("problems = %q, want none", problems)
-			case tt.wantProblem != "" && (len(problems) != 1 || !strings.Contains(problems[0], tt.wantProblem)):
-				t.Errorf("problems = %q, want one containing %q", problems, tt.wantProblem)
+			if len(problems) != len(tt.wantProblems) {
+				t.Fatalf("problems = %q, want %d like %q", problems, len(tt.wantProblems), tt.wantProblems)
+			}
+			for i, want := range tt.wantProblems {
+				if !strings.Contains(problems[i], want) {
+					t.Errorf("problem %d = %q, want it to contain %q", i, problems[i], want)
+				}
 			}
 		})
 	}

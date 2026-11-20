@@ -7,8 +7,15 @@
 // with a bad value keeps its default. Every default is the private choice:
 // nothing is uploaded, and nothing optional is turned on. So a typo can
 // make pairtime more private, never less. Notifications are on by default
-// (DESIGN 1.2), so an ignored file, or quiet hours that don't parse, turn
-// them off instead: the file may be where the teen turned them off.
+// (DESIGN 1.2), so anything about them that pairtime can't read turns them
+// off instead, because the file may be where the teen turned them off: a
+// file that is ignored, quiet hours that don't parse, an unknown setting
+// that seems to be about notifications, and a notification setting written
+// twice.
+//
+// Setting names match without regard to case, as the TOML decoder matches
+// them, so `Enabled = false` under `[Notifications]` turns notifications off
+// too.
 package config
 
 import (
@@ -42,10 +49,20 @@ type Config struct {
 
 // fileConfig is config.toml as written. Parse checks each value before it
 // goes into a Config.
+//
+// Every setting is a pointer, nil when the file doesn't have it. The decoder
+// matches a setting's name without regard to case and fills the field from
+// `Mode` or `[HTTP]` as well, while MetaData.IsDefined looks names up
+// exactly, so a nil check is how Parse sees every spelling the decoder took.
 type fileConfig struct {
-	Mode          Mode              `toml:"mode"`
-	HTTP          HTTP              `toml:"http"`
+	Mode          *Mode             `toml:"mode"`
+	HTTP          httpFile          `toml:"http"`
 	Notifications notificationsFile `toml:"notifications"`
+}
+
+// httpFile is the [http] table as written.
+type httpFile struct {
+	Port *int `toml:"port"`
 }
 
 // HTTP configures the agent's HTTP server on 127.0.0.1.
@@ -68,25 +85,31 @@ func Parse(data []byte) (cfg Config, problems []string) {
 	if err != nil {
 		return ignored(), []string{fmt.Sprintf("config.toml was ignored, so every setting has its default and notifications are off: %v", err)}
 	}
-	// Probably a typo, or a setting from a newer release.
+	// Probably a typo, or a setting from a newer release. One that seems to
+	// be about notifications may be the teen's attempt to turn them off.
 	for _, key := range md.Undecoded() {
+		if aboutNotifications(key) {
+			cfg.Notifications.Off = true
+			problems = append(problems, fmt.Sprintf("config.toml: the unknown setting %q was ignored, so notifications are off until it's fixed", key.String()))
+			continue
+		}
 		problems = append(problems, fmt.Sprintf("config.toml: the unknown setting %q was ignored", key.String()))
 	}
-	if md.IsDefined("mode") {
-		if file.Mode == Local {
-			cfg.Mode = file.Mode
+	if m := file.Mode; m != nil {
+		if *m == Local {
+			cfg.Mode = *m
 		} else {
-			problems = append(problems, fmt.Sprintf("config.toml: this release has no mode %q, so pairtime runs in mode %q", file.Mode, Local))
+			problems = append(problems, fmt.Sprintf("config.toml: this release has no mode %q, so pairtime runs in mode %q", *m, Local))
 		}
 	}
-	if md.IsDefined("http", "port") {
-		if p := file.HTTP.Port; p == 0 || (p >= 1024 && p <= 65535) {
-			cfg.HTTP.Port = p
+	if p := file.HTTP.Port; p != nil {
+		if *p == 0 || (*p >= 1024 && *p <= 65535) {
+			cfg.HTTP.Port = *p
 		} else {
-			problems = append(problems, fmt.Sprintf("config.toml: http.port %d isn't 0 or from 1024 to 65535, so the default port is used", p))
+			problems = append(problems, fmt.Sprintf("config.toml: http.port %d isn't 0 or from 1024 to 65535, so the default port is used", *p))
 		}
 	}
-	problems = append(problems, parseNotifications(&cfg, file.Notifications, md.IsDefined)...)
+	problems = append(problems, parseNotifications(&cfg, file.Notifications, md.Keys())...)
 	return cfg, problems
 }
 
