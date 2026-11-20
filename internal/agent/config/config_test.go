@@ -93,10 +93,60 @@ func TestParse(t *testing.T) {
 			wantProblem: "notifications are off",
 		},
 		{
-			name:        "an unknown notification setting is reported and ignored",
+			name:        "an unknown setting in [notifications] turns notifications off and is reported",
 			file:        "[notifications]\nsound = true\n",
-			want:        Default(),
-			wantProblem: `unknown setting "notifications.sound"`,
+			want:        Config{Mode: Local, Notifications: Notifications{Off: true}},
+			wantProblem: `unknown setting "notifications.sound" was ignored, so notifications are off until it's fixed`,
+		},
+		{name: "the off switch in a table spelled [Notifications] turns notifications off", file: "[Notifications]\nenabled = false\n", want: Config{Mode: Local, Notifications: Notifications{Off: true}}},
+		{name: "the off switch spelled Enabled turns notifications off", file: "[notifications]\nEnabled = false\n", want: Config{Mode: Local, Notifications: Notifications{Off: true}}},
+		{name: "the switch spelled Enabled = true keeps notifications on", file: "[Notifications]\nEnabled = true\n", want: Default()},
+		{
+			name: "quiet hours written in capitals are kept",
+			file: "[NOTIFICATIONS]\nQUIET_HOURS = \"22:00-07:00\"\n",
+			want: Config{Mode: Local, Notifications: Notifications{Quiet: quiet("22:00-07:00")}},
+		},
+		{
+			name:        "a misspelled off switch turns notifications off and is reported",
+			file:        "[notifications]\nenable = false\n",
+			want:        Config{Mode: Local, Notifications: Notifications{Off: true}},
+			wantProblem: `unknown setting "notifications.enable" was ignored, so notifications are off until it's fixed`,
+		},
+		{
+			name:        "an unknown key in a table spelled [Notifications] turns notifications off and is reported",
+			file:        "[Notifications]\ndisabled = true\n",
+			want:        Config{Mode: Local, Notifications: Notifications{Off: true}},
+			wantProblem: `unknown setting "Notifications.disabled" was ignored, so notifications are off`,
+		},
+		{
+			name:        "a misspelled dotted key turns notifications off and is reported",
+			file:        "notifications.off = true\n",
+			want:        Config{Mode: Local, Notifications: Notifications{Off: true}},
+			wantProblem: `unknown setting "notifications.off" was ignored, so notifications are off`,
+		},
+		{
+			name:        "an unknown key next to enabled = true still turns notifications off",
+			file:        "[notifications]\nenabled = true\nquiet = \"22:00-07:00\"\n",
+			want:        Config{Mode: Local, Notifications: Notifications{Off: true}},
+			wantProblem: `unknown setting "notifications.quiet" was ignored, so notifications are off`,
+		},
+		{
+			name:        "the switch written twice in different case turns notifications off and is reported",
+			file:        "[notifications]\nenabled = true\nEnabled = false\n",
+			want:        Config{Mode: Local, Notifications: Notifications{Off: true}},
+			wantProblem: "notifications.enabled is set more than once",
+		},
+		{
+			name:        "the switch in two spellings of the table turns notifications off and is reported",
+			file:        "[notifications]\nenabled = true\n[Notifications]\nenabled = true\n",
+			want:        Config{Mode: Local, Notifications: Notifications{Off: true}},
+			wantProblem: "notifications.enabled is set more than once",
+		},
+		{
+			name:        "quiet hours written twice in different case turn notifications off and are reported",
+			file:        "[notifications]\nquiet_hours = \"22:00-07:00\"\nQuiet_Hours = \"\"\n",
+			want:        Config{Mode: Local, Notifications: Notifications{Off: true}},
+			wantProblem: "notifications.quiet_hours is set more than once",
 		},
 	}
 	for _, tt := range tests {

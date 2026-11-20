@@ -5,8 +5,11 @@ package config
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
+
+	"github.com/BurntSushi/toml"
 )
 
 // Notifications is config.toml's [notifications] table: the one quiet
@@ -102,10 +105,14 @@ func (q QuietHours) String() string {
 	return fmt.Sprintf("%02d:%02d-%02d:%02d", q.from/60, q.from%60, q.to/60, q.to%60)
 }
 
-// notificationsFile is the [notifications] table as written.
+// notificationsFile is the [notifications] table as written. The fields
+// are pointers so that parseNotifications can tell a key that is there
+// from one that isn't, however the file spells it: the decoder matches
+// keys to fields whatever their case, as in [Notifications] or
+// Enabled = false, while MetaData.IsDefined is case-sensitive.
 type notificationsFile struct {
-	Enabled    bool   `toml:"enabled"`
-	QuietHours string `toml:"quiet_hours"`
+	Enabled    *bool   `toml:"enabled"`
+	QuietHours *string `toml:"quiet_hours"`
 }
 
 // ignored is the configuration in force when config.toml exists but can't
@@ -119,19 +126,50 @@ func ignored() Config {
 }
 
 // parseNotifications checks the [notifications] table and puts it in cfg.
-func parseNotifications(cfg *Config, file notificationsFile, defined func(key ...string) bool) (problems []string) {
-	if defined("notifications", "enabled") {
-		cfg.Notifications.Off = !file.Enabled
+// keys are every key in the file. Each rule can only turn notifications
+// off, so none of them undoes another's.
+func parseNotifications(cfg *Config, file notificationsFile, keys []toml.Key) (problems []string) {
+	// The decoder put one of the spellings in file, and which one depends
+	// on map order, so a setting written twice counts as one it can't read.
+	twice := func(key string) bool {
+		if spellings(keys, "notifications", key) < 2 {
+			return false
+		}
+		cfg.Notifications.Off = true
+		problems = append(problems, fmt.Sprintf("config.toml: notifications.%s is set more than once, in different upper and lower case, so notifications are off until it's fixed", key))
+		return true
 	}
-	if defined("notifications", "quiet_hours") {
-		q, err := ParseQuietHours(file.QuietHours)
+	if !twice("enabled") && file.Enabled != nil && !*file.Enabled {
+		cfg.Notifications.Off = true
+	}
+	if !twice("quiet_hours") && file.QuietHours != nil {
+		q, err := ParseQuietHours(*file.QuietHours)
 		if err != nil {
 			// The teen asked for quiet at some hours, and pairtime can't
 			// tell which, so it stays quiet at all of them.
 			cfg.Notifications.Off = true
-			return []string{fmt.Sprintf("config.toml: notifications.quiet_hours %q %v, so notifications are off until it's fixed", file.QuietHours, err)}
+			problems = append(problems, fmt.Sprintf("config.toml: notifications.quiet_hours %q %v, so notifications are off until it's fixed", *file.QuietHours, err))
+		} else {
+			cfg.Notifications.Quiet = q
 		}
-		cfg.Notifications.Quiet = q
 	}
-	return nil
+	return problems
+}
+
+// spellings counts the keys that name the setting at path, matched the
+// way the decoder matches keys to fields, whatever their case.
+func spellings(keys []toml.Key, path ...string) int {
+	n := 0
+	for _, k := range keys {
+		if slices.EqualFunc(k, path, strings.EqualFold) {
+			n++
+		}
+	}
+	return n
+}
+
+// inNotifications reports whether key is in the [notifications] table,
+// however the file spells the table's name.
+func inNotifications(key toml.Key) bool {
+	return len(key) > 1 && strings.EqualFold(key[0], "notifications")
 }

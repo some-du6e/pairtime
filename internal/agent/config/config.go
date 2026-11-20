@@ -7,8 +7,9 @@
 // with a bad value keeps its default. Every default is the private choice:
 // nothing is uploaded, and nothing optional is turned on. So a typo can
 // make pairtime more private, never less. Notifications are on by default
-// (DESIGN 1.2), so an ignored file, or quiet hours that don't parse, turn
-// them off instead: the file may be where the teen turned them off.
+// (DESIGN 1.2), so an ignored file, quiet hours that don't parse, an
+// unknown key in [notifications] and a notification setting written twice
+// turn them off instead: the file may be where the teen turned them off.
 package config
 
 import (
@@ -70,6 +71,13 @@ func Parse(data []byte) (cfg Config, problems []string) {
 	}
 	// Probably a typo, or a setting from a newer release.
 	for _, key := range md.Undecoded() {
+		if inNotifications(key) {
+			// Such as enable = false: it may be how the teen turned
+			// notifications off, so they stay off.
+			cfg.Notifications.Off = true
+			problems = append(problems, fmt.Sprintf("config.toml: the unknown setting %q was ignored, so notifications are off until it's fixed", key.String()))
+			continue
+		}
 		problems = append(problems, fmt.Sprintf("config.toml: the unknown setting %q was ignored", key.String()))
 	}
 	if md.IsDefined("mode") {
@@ -86,7 +94,7 @@ func Parse(data []byte) (cfg Config, problems []string) {
 			problems = append(problems, fmt.Sprintf("config.toml: http.port %d isn't 0 or from 1024 to 65535, so the default port is used", p))
 		}
 	}
-	problems = append(problems, parseNotifications(&cfg, file.Notifications, md.IsDefined)...)
+	problems = append(problems, parseNotifications(&cfg, file.Notifications, md.Keys())...)
 	return cfg, problems
 }
 
