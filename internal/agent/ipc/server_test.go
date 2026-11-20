@@ -211,8 +211,8 @@ func TestServer(t *testing.T) {
 				if len(got) != 1 || got[0].ID != m.ID || got[0].Via != inbox.ViaSocket || got[0].PeerPID != os.Getpid() {
 					t.Fatalf("the sink has %+v, want only %s via the socket from pid %d", got, m.ID, os.Getpid())
 				}
-				if got[0].Received.IsZero() || got[0].Received.Location() != time.UTC {
-					t.Errorf("Received = %v, want the UTC time it arrived", got[0].Received)
+				if r := got[0].Received; r.Wall.IsZero() || r.Wall.Location() != time.UTC {
+					t.Errorf("Received = %+v, want the agent's stamp from when it arrived, by the UTC wall clock", r)
 				}
 			},
 		},

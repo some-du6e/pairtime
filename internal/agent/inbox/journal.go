@@ -186,7 +186,7 @@ func (j *Journal) Deliver(d Delivery) error {
 		j.dups++
 		return nil
 	}
-	day := d.Received.UTC().Format(time.DateOnly)
+	day := d.Received.Wall.UTC().Format(time.DateOnly)
 	if err := j.openDay(day); err != nil {
 		return err
 	}
@@ -196,7 +196,7 @@ func (j *Journal) Deliver(d Delivery) error {
 		Via:      d.Via,
 		PeerPID:  d.PeerPID,
 		Sent:     d.Sent.UTC(),
-		Received: d.Received.UTC(),
+		Received: d.Received.Wall.UTC(),
 		Bytes:    len(d.Body),
 		Walk:     len(d.Walk),
 		EventVia: d.EventVia,

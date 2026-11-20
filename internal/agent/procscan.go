@@ -24,7 +24,9 @@ func (a *agent) startProcs() func() {
 //     project context is live (DESIGN 3.3), including for a hookless
 //     `claude --bare` session that nothing else would show.
 //   - After every scan the focus component looks again at the window in
-//     front, which may host a session the scan just found (focus.go).
+//     front, which may host a session the scan just found (focus.go), and
+//     forgets the hooked sessions of processes the scan saw exit
+//     (hookTies.prune).
 //   - Until the ledger writer exists (WP-LG5), a session the scan finds,
 //     or withdraws because a hook claimed it late, goes to the log. The
 //     hook sink (hooks.go, WP-AG3) claims the harness process each hook
@@ -43,6 +45,9 @@ func (a *agent) procsOptions(opts procs.Options) procs.Options {
 	}
 	opts.Running = func(n int) {
 		a.presence.HarnessProcesses(n)
+		if a.procs != nil {
+			a.hooked.prune(a.procs.Claimed)
+		}
 		a.refreshFocus()
 	}
 	opts.Scanned = func(err error) {

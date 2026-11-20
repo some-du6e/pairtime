@@ -4,6 +4,7 @@ package hookpath
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"time"
 )
@@ -31,13 +32,20 @@ type part struct {
 // isn't one whole JSON value.
 //
 // The reads run on a goroutine of their own, which is left blocked in Read
-// when stdin stays open. The process exits soon after anyway.
+// when stdin stays open. The process exits soon after anyway. A panic in a
+// Read ends stdin like a read error: on that goroutine it would kill the
+// process with status 2, which runHook's recover can't stop.
 func readStdin(r io.Reader, limit int, wait time.Duration) (data []byte, whole, cut bool) {
 	if r == nil {
 		return nil, false, false
 	}
 	parts := make(chan part, 16)
 	go func() {
+		defer func() {
+			if v := recover(); v != nil {
+				parts <- part{err: fmt.Errorf("hookpath: reading stdin panicked: %v", v)}
+			}
+		}()
 		var free []byte
 		total := 0
 		for total <= limit {

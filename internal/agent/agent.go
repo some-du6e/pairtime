@@ -106,6 +106,11 @@ type agent struct {
 	// kApp is K_app, which keys os.focus's app_hash, once keyFocus has
 	// derived it from the device key.
 	kApp atomic.Pointer[[]byte]
+	// hooked are the processes hooks came from, with their sessions, for
+	// focus (hooks.go), and kSession is K_session, which keys those
+	// sessions, once keySessions has derived it from the device key.
+	hooked   *hookTies
+	kSession atomic.Pointer[[]byte]
 	// ledgerIn takes presence's and focus's records, and presence's
 	// seals, to the ledger writer once it opens (WP-LG5).
 	ledgerIn  *ledger.Presence
@@ -146,6 +151,7 @@ func Run(ctx context.Context, opts Options) error {
 		stop:      make(chan struct{}),
 		problems:  make(map[string]string),
 		keyStores: opts.KeyStores,
+		hooked:    newHookTies(),
 	}
 	linkOnce.Do(func() { linked = heavyModules() })
 	if err := optIntoEcoQoS(); err != nil {

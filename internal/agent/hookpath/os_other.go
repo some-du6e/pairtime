@@ -10,9 +10,8 @@ import (
 	"github.com/some-du6e/pairtime/internal/platform"
 )
 
-func readOS() ([]platform.Proc, error) {
-	return nil, errors.New("pairtime can't read the process table on this OS")
-}
+var errNoTable = errors.New("pairtime can't read the process table on this OS")
 
-// monoNow gives no monotonic reading, so messages carry neither one.
-func monoNow() (int64, string) { return 0, "" }
+func readOS() ([]platform.Proc, error) { return nil, errNoTable }
+
+func selfOS() (platform.Proc, error) { return platform.Proc{}, errNoTable }

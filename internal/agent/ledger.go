@@ -72,7 +72,8 @@ func (a *agent) startLedger() func() {
 
 // openLedger opens the keystore, making K_dev at an installation's first
 // run, and the ledger writer with the keys derived from it. It also gives
-// the focus component K_app (keyFocus).
+// the focus component K_app (keyFocus), and the hook sink K_session, which
+// keys the hooked sessions focus lists (keySessions).
 func (a *agent) openLedger() (*ledger.Writer, error) {
 	ks, err := keys.Open(keys.Options{Dir: a.dirs.Data, Stores: a.keyStores})
 	if err != nil {
@@ -82,6 +83,7 @@ func (a *agent) openLedger() (*ledger.Writer, error) {
 	// doctor and the dashboard repeat it (DESIGN 3.6; CP 5.2).
 	a.setProblem("keystore", st.Warning())
 	a.keyFocus(ks)
+	a.keySessions(ks)
 	return ledger.Open(ledger.Options{
 		Dir:     a.dirs.Ledger(),
 		Keys:    ks.Keys(),

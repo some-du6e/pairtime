@@ -5,10 +5,12 @@ package agent
 import (
 	"fmt"
 	"path/filepath"
+	"runtime"
 	"time"
 
 	"github.com/some-du6e/pairtime/internal/agent/inbox"
 	"github.com/some-du6e/pairtime/internal/agent/ipc"
+	"github.com/some-du6e/pairtime/internal/platform/clock"
 )
 
 // drainEvery is how often the agent drains the inbox (DESIGN 3.5).
@@ -24,8 +26,9 @@ func (a *agent) journalDir() string { return filepath.Join(a.dirs.Data, "receive
 // spools its message, and the drain picks it up once the agent can store
 // it. While the agent has no listener, because Listen failed or Serve gave
 // up, it tries to listen again at every drain, since a spooled hook call
-// loses its via = hook (D-spool-via). It returns the step that stops all
-// of it.
+// loses its via = hook (DESIGN 5.2). It returns the step that stops all
+// of it. The process scan, presence and focus must have started, for the
+// hook sink to hand calls to (hookSteps).
 func (a *agent) startIPC(opts Options) func() {
 	j, err := inbox.OpenJournal(a.journalDir(), time.Now())
 	if err != nil {
@@ -34,14 +37,14 @@ func (a *agent) startIPC(opts Options) func() {
 	}
 	a.journal = j
 	// Hook calls go through the hook sink, whichever way they come.
-	sink := newHookSink(a, j)
+	sink := newHookSink(j, runtime.GOOS, a.hooked, a.hookSteps())
 	l := &ipcListener{a: a, sink: sink, opts: ipc.Options{ForcePipe: opts.ForcePipe, Log: a.log, Walk: a.walkPeer}}
 	l.listen()
 
 	// Drains run on a goroutine of their own, because a long spool takes a
 	// while and scheduler jobs must return at once. That goroutine is the
 	// only one that uses the Drainer, and the only one that listens again.
-	drainer := inbox.NewDrainer(a.dirs.Inbox(), sink, func() time.Time { return time.Now().UTC() })
+	drainer := inbox.NewDrainer(a.dirs.Inbox(), sink, clock.Now)
 	kick := make(chan struct{}, 1)
 	stop := make(chan struct{})
 	drained := make(chan struct{})
