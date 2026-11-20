@@ -13,8 +13,10 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"net"
 	"os"
 	"os/user"
+	"strings"
 
 	"github.com/godbus/dbus/v5"
 )
@@ -94,13 +96,13 @@ func systemBusAddress(getenv func(string) string) (string, error) {
 // authenticate as this user, and say hello, all before ctx ends. godbus's
 // Auth and Hello take no context and wait for as long as the bus stays
 // silent, so the connection is closed when ctx ends, which makes them
-// return. Dial doesn't wait: connecting to a Unix socket succeeds or fails
-// at once.
-func connectBus(ctx context.Context, address string) (*dbus.Conn, error) {
+// return. dialBus bounds the dial by ctx. opts go to godbus's connection,
+// as Dial's do.
+func connectBus(ctx context.Context, address string, opts ...dbus.ConnOption) (*dbus.Conn, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	conn, err := dbus.Dial(address)
+	conn, err := dialBus(ctx, address, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -118,4 +120,100 @@ func connectBus(ctx context.Context, address string) (*dbus.Conn, error) {
 		return nil, err
 	}
 	return conn, nil
+}
+
+// dialBus opens a connection to the bus at address before ctx ends,
+// without authenticating, as godbus's Dial does. An address may list
+// several, separated by semicolons, which are tried in turn, as godbus
+// tries them. Dial takes no context, and its tcp and nonce-tcp transports
+// call net.Dial, which waits as long as the kernel resends a connection
+// request that gets no answer, about two minutes on Linux, for a host that
+// drops it. So those two are dialed here with ctx, and the socket is handed
+// to godbus. Every other transport is godbus's own: a Unix socket connects
+// or fails at once.
+func dialBus(ctx context.Context, address string, opts ...dbus.ConnOption) (*dbus.Conn, error) {
+	var err error
+	for _, a := range strings.Split(address, ";") {
+		if ctx.Err() != nil {
+			break
+		}
+		var conn *dbus.Conn
+		if conn, err = dialBusAddress(ctx, a, opts); err == nil {
+			return conn, nil
+		}
+	}
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+	return nil, err
+}
+
+// dialBusAddress dials one bus address, as dialBus describes.
+func dialBusAddress(ctx context.Context, address string, opts []dbus.ConnOption) (*dbus.Conn, error) {
+	transport, keys, _ := strings.Cut(address, ":")
+	if transport != "tcp" && transport != "nonce-tcp" {
+		return dbus.Dial(address, opts...)
+	}
+	// The checks and the messages are godbus v5.2.4's (transport_tcp.go,
+	// transport_nonce_tcp.go).
+	host, port := busAddressKey(keys, "host"), busAddressKey(keys, "port")
+	noncefile := busAddressKey(keys, "noncefile")
+	switch {
+	case transport == "tcp" && (host == "" || port == ""):
+		return nil, errors.New("dbus: unsupported address (must set host and port)")
+	case transport == "nonce-tcp" && (host == "" || port == "" || noncefile == ""):
+		return nil, errors.New("dbus: unsupported address (must set host, port and noncefile)")
+	}
+	network := "tcp"
+	switch busAddressKey(keys, "family") {
+	case "":
+	case "ipv4":
+		network = "tcp4"
+	case "ipv6":
+		network = "tcp6"
+	default:
+		return nil, errors.New("dbus: invalid tcp family (must be ipv4 or ipv6)")
+	}
+	var d net.Dialer
+	c, err := d.DialContext(ctx, network, net.JoinHostPort(host, port))
+	if err != nil {
+		return nil, err
+	}
+	if transport == "nonce-tcp" {
+		// The nonce goes first, before authentication.
+		nonce, err := os.ReadFile(noncefile)
+		if err == nil {
+			stop := context.AfterFunc(ctx, func() { c.Close() })
+			_, err = c.Write(nonce)
+			if !stop() {
+				err = ctx.Err()
+			}
+		}
+		if err != nil {
+			c.Close()
+			return nil, err
+		}
+	}
+	conn, err := dbus.NewConn(c, opts...)
+	if err != nil {
+		c.Close()
+		return nil, err
+	}
+	return conn, nil
+}
+
+// busAddressKey returns the value of key in a bus address's
+// comma-separated key=value list, unescaped, or "" when it isn't there or
+// can't be unescaped, as godbus's getKey reads it.
+func busAddressKey(keys, key string) string {
+	for _, kv := range strings.Split(keys, ",") {
+		if v, ok := strings.CutPrefix(kv, key+"="); ok {
+			val, err := dbus.UnescapeBusAddressValue(v)
+			if err != nil {
+				return ""
+			}
+			return val
+		}
+	}
+	return ""
 }

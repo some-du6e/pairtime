@@ -5,15 +5,24 @@
 package linux
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"io"
 	"net"
+	"os"
+	"path/filepath"
 	"slices"
+	"strconv"
+	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
+
+	"github.com/godbus/dbus/v5"
 )
 
 // silentBus listens on an abstract Unix socket and accepts connections
@@ -50,6 +59,184 @@ func silentBus(t *testing.T) string {
 		}
 	})
 	return "unix:abstract=" + name
+}
+
+// unansweredTCP returns a loopback TCP port that never answers a
+// connection request, as a host behind a firewall that drops packets
+// doesn't: a listening socket with a backlog of 0, whose accept queue holds
+// one connection nobody accepts. Linux drops every SYN that comes to a full
+// accept queue, so a connect to the port waits as long as the kernel
+// resends its SYN, about two minutes.
+func unansweredTCP(t *testing.T) string {
+	t.Helper()
+	fd, err := syscall.Socket(syscall.AF_INET, syscall.SOCK_STREAM|syscall.SOCK_CLOEXEC, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { syscall.Close(fd) })
+	if err := syscall.Bind(fd, &syscall.SockaddrInet4{Addr: [4]byte{127, 0, 0, 1}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := syscall.Listen(fd, 0); err != nil {
+		t.Fatal(err)
+	}
+	sa, err := syscall.Getsockname(fd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := strconv.Itoa(sa.(*syscall.SockaddrInet4).Port)
+	addr := net.JoinHostPort("127.0.0.1", port)
+	filler, err := net.DialTimeout("tcp", addr, 5*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { filler.Close() })
+	// The oracle's own check: with the queue full, a connect must hang.
+	if c, err := net.DialTimeout("tcp", addr, 300*time.Millisecond); err == nil {
+		c.Close()
+		t.Fatal("a connect to a full accept queue got through, so this kernel can't stand in for a host that never answers")
+	}
+	return port
+}
+
+// acceptingTCP listens on a loopback TCP port and accepts every connection,
+// reading up to want bytes from each, which it sends on the channel. It
+// never answers, so a dial succeeds and nothing after it does.
+func acceptingTCP(t *testing.T, want int) (port string, first <-chan []byte) {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := make(chan []byte, 8)
+	var mu sync.Mutex
+	var conns []net.Conn
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			mu.Lock()
+			conns = append(conns, c)
+			mu.Unlock()
+			go func() {
+				buf := make([]byte, want)
+				c.SetReadDeadline(time.Now().Add(5 * time.Second))
+				n, _ := io.ReadFull(c, buf)
+				got <- buf[:n]
+			}()
+		}
+	}()
+	t.Cleanup(func() {
+		ln.Close()
+		mu.Lock()
+		defer mu.Unlock()
+		for _, c := range conns {
+			c.Close()
+		}
+	})
+	_, port, _ = net.SplitHostPort(ln.Addr().String())
+	return port, got
+}
+
+// godbus's Dial takes no context, and its tcp transport calls net.Dial,
+// which a host that never answers holds for about two minutes. dialBus
+// dials TCP itself, with ctx (#86).
+func TestDialBus(t *testing.T) {
+	silent := unansweredTCP(t)
+	nonce := []byte("0123456789abcdef")
+	noncefile := filepath.Join(t.TempDir(), "nonce")
+	if err := os.WriteFile(noncefile, nonce, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name string
+		// address is the bus address; PORT in it is a port that accepts.
+		address string
+		// wantNonce: the bus reads the nonce file's bytes first.
+		wantNonce bool
+		wantErr   bool
+		// wantCtxErr: dialBus gives up, with ctx's error, at its deadline.
+		wantCtxErr bool
+	}{
+		{
+			name:       "a tcp address whose host never answers is given up at ctx's deadline",
+			address:    "tcp:host=127.0.0.1,port=" + silent,
+			wantCtxErr: true,
+		},
+		{
+			name:       "a nonce-tcp address whose host never answers is given up at ctx's deadline",
+			address:    "nonce-tcp:host=127.0.0.1,port=" + silent + ",noncefile=" + dbus.EscapeBusAddressValue(noncefile),
+			wantCtxErr: true,
+		},
+		{
+			name:       "an IPv4 tcp address whose host never answers is given up at ctx's deadline",
+			address:    "tcp:host=127.0.0.1,port=" + silent + ",family=ipv4",
+			wantCtxErr: true,
+		},
+		{name: "a tcp address whose host answers is dialed", address: "tcp:host=127.0.0.1,port=PORT"},
+		{
+			name:      "a nonce-tcp address gets the nonce file's bytes first",
+			address:   "nonce-tcp:host=127.0.0.1,port=PORT,noncefile=" + dbus.EscapeBusAddressValue(noncefile),
+			wantNonce: true,
+		},
+		{
+			name:    "the next address is tried when one can't be reached",
+			address: "unix:path=" + dbus.EscapeBusAddressValue(filepath.Join(t.TempDir(), "no-bus-here")) + ";tcp:host=127.0.0.1,port=PORT",
+		},
+		{name: "a tcp address without a port is refused", address: "tcp:host=127.0.0.1", wantErr: true},
+		{name: "a nonce-tcp address without a nonce file is refused", address: "nonce-tcp:host=127.0.0.1,port=PORT", wantErr: true},
+		{name: "a tcp address with a family that isn't ipv4 or ipv6 is refused", address: "tcp:host=127.0.0.1,port=PORT,family=ipx", wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			port, first := acceptingTCP(t, len(nonce))
+			address := strings.ReplaceAll(tt.address, "PORT", port)
+			ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+			defer cancel()
+			type result struct {
+				conn *dbus.Conn
+				err  error
+			}
+			done := make(chan result, 1)
+			go func() {
+				conn, err := dialBus(ctx, address)
+				done <- result{conn, err}
+			}()
+			var r result
+			select {
+			case r = <-done:
+			case <-time.After(5 * time.Second):
+				t.Fatal("dialBus was still dialing 5 s after a deadline of 300 ms")
+			}
+			if r.conn != nil {
+				defer r.conn.Close()
+			}
+			switch {
+			case tt.wantCtxErr:
+				if !errors.Is(r.err, context.DeadlineExceeded) {
+					t.Errorf("dialBus() error = %v, want ctx's deadline", r.err)
+				}
+			case tt.wantErr:
+				if r.err == nil {
+					t.Error("dialBus() succeeded, want an error")
+				}
+			case r.err != nil:
+				t.Fatalf("dialBus() error = %v", r.err)
+			}
+			if tt.wantNonce {
+				select {
+				case got := <-first:
+					if !bytes.Equal(got, nonce) {
+						t.Errorf("the bus read %q first, want the nonce %q", got, nonce)
+					}
+				case <-time.After(5 * time.Second):
+					t.Error("the bus got no nonce")
+				}
+			}
+		})
+	}
 }
 
 func TestConnectBusGivesUp(t *testing.T) {
