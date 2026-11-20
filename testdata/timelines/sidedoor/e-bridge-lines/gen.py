@@ -105,8 +105,8 @@ for t in TURNS:
     sweep.anchor(t, lead_s=lead, typing_part_s=lead, reason="P", level="C")
     sweep.reset(t, sd.R_TURN_BASE_S)
     sweep.fill(t + EDIT_AFTER, 0)
-    # The erratum: a turn with no agent.stop runs until its last agent
-    # record, here the edit.
+    # The erratum: a turn with no agent.stop runs until the latest agent
+    # record received for it, here the edit, 3 s after the prompt.
     sweep.run(t, t + EDIT_AFTER)
 
 exp = tl.Expected(fx, sm="docs/PLAN.md WP-FX4 (e); DESIGN 5.2, 5.7, 6.2 D2, D4 and D19, 6.4", evidence="C",

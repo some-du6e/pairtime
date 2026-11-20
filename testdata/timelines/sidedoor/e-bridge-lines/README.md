@@ -36,4 +36,4 @@ Each turn credits its 60 s lead and its 20 s base. The 5,000 lines add nothing, 
 
 ## Errata
 
-[Turns without a stop](../../../../docs/errata/2026-11-19-turns-without-a-stop.md). No `agent.stop` says when a bridge turn ends. Under the proposed rule it runs to its last agent record, the edit at :06, so each base drains as 3 s of `SUP` and 17 s of `READ`, `agent_running_s` is 3 in each turn's minute, and the idle seconds after it are `X.no_anchor`. Rows 14:03 to 14:08 name it. The 240 s, their level, the fills and both logged totals don't depend on it.
+[Turns without a stop](../../../../docs/errata/2026-11-19-turns-without-a-stop.md). No `agent.stop` says when a bridge turn ends. Under the proposed rule it runs to the latest agent record the scorer has received for it, the edit at :06, which arrives long before any minute it touches is final. So each base drains as 3 s of `SUP` and 17 s of `READ`, `agent_running_s` is 3 in each turn's minute, and the idle seconds after it are `X.no_anchor`. Rows 14:03 to 14:08 name it. The 240 s, their level, the fills and both logged totals don't depend on it.
