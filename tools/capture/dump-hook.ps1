@@ -54,10 +54,10 @@ function Write-Problem([string]$what) {
 $harnesses = @('claude', 'codex', 'cursor-agent', 'copilot', 'gemini', 'devin', 'opencode', 'cline')
 
 # The options codex takes a value with before its subcommand, as in
-# codex -c key=value exec or codex -p work exec: the root options of
-# codex-rs/cli/src/main.rs and codex-rs/utils/cli/src at d64451b. A value
-# joined to its option with = needs no skipping. -c and -C differ, so they
-# are compared with case.
+# codex -c key=value exec or codex -p work exec: the root options in
+# codex-rs/cli/src/main.rs, codex-rs/tui/src/cli.rs and codex-rs/utils/cli
+# at d64451b. A value joined to its option with = needs no skipping. -c and
+# -C differ, so they are compared with case.
 $codexValues = @('-c', '--config', '--enable', '--disable', '--remote', '--remote-auth-token-env', '-a', '--ask-for-approval', '-i', '--image', '-m', '--model', '--local-provider', '-p', '--profile', '-s', '--sandbox', '-C', '--cd', '--add-dir')
 
 # Split-CommandLine splits a Windows command line into its arguments the

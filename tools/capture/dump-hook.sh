@@ -155,9 +155,9 @@ fi
 # flags.tmp and renamed into place, so flags is whole or missing.
 harnesses='claude codex cursor-agent copilot gemini devin opencode cline'
 # The options codex takes a value with before its subcommand, as in
-# codex -c key=value exec or codex -p work exec: the root options of
-# codex-rs/cli/src/main.rs and codex-rs/utils/cli/src at d64451b. A value
-# joined to its option with = needs no skipping.
+# codex -c key=value exec or codex -p work exec: the root options in
+# codex-rs/cli/src/main.rs, codex-rs/tui/src/cli.rs and codex-rs/utils/cli
+# at d64451b. A value joined to its option with = needs no skipping.
 codex_values='-c --config --enable --disable --remote --remote-auth-token-env -a --ask-for-approval -i --image -m --model --local-provider -p --profile -s --sandbox -C --cd --add-dir'
 found=$(awk -v harnesses="$harnesses" '
 	BEGIN {

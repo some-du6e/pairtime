@@ -520,7 +520,13 @@ func publicAddress(addr string) bool {
 // and the address's span was the only one that covered it. Each part is
 // scanned again on its own, where the end of the text ends the key.
 func (s *scrubber) insideKept(text string, sp redact.Span) []redact.Span {
-	at := sp.Start + strings.LastIndexByte(text[sp.Start:sp.End], '@')
+	i := strings.LastIndexByte(text[sp.Start:sp.End], '@')
+	if i < 0 {
+		// Not reached: jsonView blanks an escaped @, so every address Find
+		// gives holds a real one.
+		return nil
+	}
+	at := sp.Start + i
 	parts := [][2]int{{sp.Start, at}}
 	if start, end, ok := urlUser(text, at); ok {
 		parts = append(parts, [2]int{start, end})
