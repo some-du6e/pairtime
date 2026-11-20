@@ -35,7 +35,7 @@ Any workflow also runs by hand: `gh workflow run <file> --ref <branch>`.
 
 ## Oracles and errata
 
-An oracle decides whether code is right, so the code it checks never changes it: docs/DESIGN.md, docs/BOUNTY.md, docs/design/** (SM included), docs/research/**, tools/ledger_ref.py, and testdata/ under timelines, ledger, fixtures, upstream, checks and redteam.
+An oracle decides whether code is right, so the code it checks never changes it: docs/DESIGN.md, docs/BOUNTY.md, docs/design/** (SM included), docs/research/**, docs/errata/**, tools/ledger_ref.py, and testdata/ under timelines, ledger, fixtures, upstream, checks and redteam.
 
 - New oracle files may arrive beside new code. An existing oracle changes in a PR of its own. ci.yml's oracle guard fails a PR that modifies, deletes or renames an oracle and also touches cmd/, internal/, pkg/, web/, extension/ or integrations/, unless Karim adds the `oracle-change` label. A scoring-rule change, SM and code together, is such a PR.
 - When an SM worked example, a design number or a captured fixture disagrees with what the spec says should happen, write docs/errata/<YYYY-MM-DD>-<topic>.md with the input, the expected value, the computed value and your reasoning, add the `erratum` label, and stop there. Karim decides what is wrong; until then the code, the spec and the fixture stay as they are (DESIGN 6.6).

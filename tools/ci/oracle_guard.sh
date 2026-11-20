@@ -22,11 +22,13 @@ set -euo pipefail
 
 label=oracle-change
 
-# The oracle paths of ground rule 5. In a case pattern * also matches /.
+# The oracle paths AGENTS.md lists: ground rule 5's, and docs/errata/, so an
+# erratum's decision can't change beside the code it governs. In a case
+# pattern * also matches /.
 is_oracle() {
 	case "$1" in
 	docs/DESIGN.md | docs/BOUNTY.md | tools/ledger_ref.py) return 0 ;;
-	docs/design/* | docs/research/*) return 0 ;;
+	docs/design/* | docs/research/* | docs/errata/*) return 0 ;;
 	testdata/timelines/* | testdata/ledger/* | testdata/fixtures/*) return 0 ;;
 	testdata/upstream/* | testdata/checks/* | testdata/redteam/*) return 0 ;;
 	esac

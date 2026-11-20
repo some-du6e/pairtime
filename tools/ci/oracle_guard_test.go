@@ -20,13 +20,14 @@ import (
 // pull_request.labels to label objects of the same shape.
 const payloadFile = "testdata/pull_request.labeled.json"
 
-// oraclePaths has one path under each oracle pattern of docs/PLAN.md,
-// ground rule 5.
+// oraclePaths has one path under each of is_oracle's patterns, the oracle
+// paths AGENTS.md lists.
 var oraclePaths = []string{
 	"docs/DESIGN.md",
 	"docs/BOUNTY.md",
 	"docs/design/struggle-metric.md",
 	"docs/research/notes/hackatime.md",
+	"docs/errata/2026-11-19-bridge-unverified.md",
 	"testdata/timelines/6.1/events.jsonl",
 	"testdata/ledger/vectors.json",
 	"tools/ledger_ref.py",
@@ -66,6 +67,7 @@ func TestOracleGuard(t *testing.T) {
 	tests := []guardCase{
 		{name: "a modified oracle with code fails", diff: []string{"M\tdocs/design/struggle-metric.md", "M\tpkg/score/score.go"}, wantCode: 1, wantOut: "::error file=docs/design/struggle-metric.md::oracle modified"},
 		{name: "an added oracle with code passes", diff: []string{"A\ttestdata/timelines/6.1/expected.json", "A\tpkg/score/score.go"}},
+		{name: "a new erratum beside code passes", diff: []string{"A\tdocs/errata/2026-11-21-new-question.md", "M\tpkg/score/score.go"}},
 		{name: "the oracle-change label lets an oracle change with code", diff: []string{"M\tdocs/design/struggle-metric.md", "M\tpkg/score/score.go"}, labels: []string{"bug", "oracle-change"}, wantOut: "the oracle-change label allows this PR"},
 		{name: "a deleted oracle with code fails", diff: []string{"D\ttestdata/fixtures/claude_code/2.0.14/linux/hooks/001.json", "M\tinternal/adapters/claudecode/hooks.go"}, wantCode: 1, wantOut: "oracle deleted"},
 		{name: "a renamed oracle with code fails", diff: []string{"R100\ttestdata/ledger/v1.json\ttestdata/ledger/v2.json", "M\tpkg/ledger/ledger.go"}, wantCode: 1, wantOut: "oracle renamed"},
