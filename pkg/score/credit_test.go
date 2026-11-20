@@ -188,8 +188,9 @@ func TestCredit(t *testing.T) {
 				{60, 75, map[event.Reason]int64{rSUP: 2, rREAD: 13}},
 				{75, 660, map[event.Reason]int64{rREAD: 585}},
 				// The second at 660 s starts READ_HORIZON_S after the
-				// prompt, outside its horizon.
-				{660, 675, map[event.Reason]int64{xNoAnch: 15}},
+				// prompt, outside its horizon, but the commit at 1,200 s is
+				// within READ_HORIZON_S after it.
+				{660, 675, map[event.Reason]int64{rREAD: 1, xNoAnch: 14}},
 				{675, 1140, map[event.Reason]int64{xNoAnch: 465}},
 				{1140, 1200, map[event.Reason]int64{rG: 60}},
 			},
