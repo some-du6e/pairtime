@@ -71,10 +71,13 @@ jobs:
         # internal/webui embeds whatever dist/ holds, which in a checkout is
         # a placeholder; releases embed the real dashboard, built from web/
         # (DESIGN 3.12; docs/PLAN.md, WP-UI0). Only the agent's UI: the server
-        # UI and the component gallery aren't part of the client.
+        # UI and the component gallery aren't part of the client. The API
+        # types are generated first, as web.yml does before its build, so a
+        # release builds the way web.yml tested.
         working-directory: web
         run: |
           npm ci --ignore-scripts --no-audit --no-fund
+          npm run gen
           ./node_modules/.bin/vite build --mode agent
           grep -q '<meta name="pairtime-ui" content="local"' ../internal/webui/dist/index.html
 
