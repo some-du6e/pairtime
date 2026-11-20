@@ -80,6 +80,14 @@ func openJournal(t *testing.T, dir string) *Journal {
 	return j
 }
 
+// keepSink keeps every delivery it gets.
+type keepSink struct{ got []Delivery }
+
+func (k *keepSink) Deliver(d Delivery) error {
+	k.got = append(k.got, d)
+	return nil
+}
+
 func drain(t *testing.T, dir string, sink Sink) DrainResult {
 	t.Helper()
 	res, err := Drain(dir, sink, utcNow)
@@ -113,6 +121,34 @@ func TestAppendDrain(t *testing.T) {
 				}
 				if got := journalIDs(t, journal); got[m.ID] != 1 || len(got) != 1 {
 					t.Errorf("the journal has %v, want %s once", got, m.ID)
+				}
+			},
+		},
+		{
+			name: "a drained message keeps its sender's clock and parent chain, has no peer pid, and was received when the drain read it",
+			run: func(t *testing.T, inbox, journal string) {
+				m := newMessage(t, 1)
+				m.Mono, m.BootID = 81163000, "6f0f6f6e-2b1c-4c5e-9d07-0e3c1b2a4f55"
+				m.Chain = []Proc{
+					{PID: 4242, Name: "pairtime", Start: m.Sent.Add(-time.Second)},
+					{PID: 4100, Name: "claude", Start: m.Sent.Add(-time.Hour)},
+					{PID: 1},
+				}
+				appendAll(t, inbox, m)
+				read := m.Sent.Add(36 * time.Hour) // the agent was down for a day and a half
+				k := &keepSink{}
+				if _, err := Drain(inbox, k, func() time.Time { return read }); err != nil {
+					t.Fatal(err)
+				}
+				if len(k.got) != 1 {
+					t.Fatalf("the sink got %d messages, want 1", len(k.got))
+				}
+				d := k.got[0]
+				if d.ID != m.ID || !d.Sent.Equal(m.Sent) || d.Mono != m.Mono || d.BootID != m.BootID || !slices.EqualFunc(d.Chain, m.Chain, sameProc) {
+					t.Errorf("the drain delivered %+v, want the sender's id, Sent, Mono, BootID and Chain in %+v", d.Message, m)
+				}
+				if d.Via != ViaInbox || d.PeerPID != 0 || !d.Received.Equal(read) {
+					t.Errorf("Via, PeerPID, Received = %q, %d, %v; want the inbox, 0 and the time the drain read it, %v", d.Via, d.PeerPID, d.Received, read)
 				}
 			},
 		},

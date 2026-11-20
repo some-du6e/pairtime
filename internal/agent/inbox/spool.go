@@ -380,6 +380,8 @@ func (d *Drainer) deliver(name string, left *leftOver, res *DrainResult) (sinkEr
 				res.Bad++
 				break
 			}
+			// The spool doesn't say who wrote the line or when, so there is
+			// no PeerPID, and Received is now (ViaInbox, Delivery).
 			if err := d.sink.Deliver(Delivery{Message: m, Via: ViaInbox, Received: d.now()}); err != nil {
 				if !errors.Is(err, ErrRejected) {
 					return err, nil
