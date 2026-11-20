@@ -51,6 +51,18 @@ func consoleHelper(goos string, p platform.Proc) bool {
 	return false
 }
 
+// helpers names, by OS and app, the helper processes an app runs harness
+// sessions under that need not descend from the app's own process, each as
+// a prefix of the helper's name. iTerm2 can run a session's job in an
+// iTermServer process, whose name carries iTerm2's version, so that the
+// session outlives iTerm2: when iTerm2 quits or crashes, launchd adopts the
+// server, and a later iTerm2 can restore the session from it (DESIGN 3.3;
+// decision E-6.3-two-tabs). appclass.json's darwin terminal entry lists
+// the same names as itermserver*.
+var helpers = map[string]map[string]string{
+	platform.Darwin: {"iterm2": "itermserver"},
+}
+
 // windowOf describes the window whose process is pid, or reports false
 // when pid isn't in the table.
 //
@@ -62,7 +74,11 @@ func consoleHelper(goos string, p platform.Proc) bool {
 // because the OS can't see which tab is in front (decision 1 of WP-OS2;
 // SM 3.2 rule 1 picks among them by look-ahead, decision E-6.3-two-tabs).
 // Its helpers, the OpenConsole.exe that serves each tab's console, are its
-// children, so a session under one of them is under the terminal too.
+// children, so a session under one of them is under the terminal too. On
+// macOS every window of an app is one window, since macOS reports app
+// activations (MacFocus), and iTerm2's window also hosts the sessions
+// under the user's iTermServer processes, which may not descend from
+// iTerm2 (helpers).
 //
 // When Windows names a console helper itself, the window is that helper's
 // console: it belongs to the process the helper serves, its parent, which
@@ -95,8 +111,25 @@ func windowOf(t *platform.Table, pid int) (window, bool) {
 	w.name = appName(w.proc)
 	if hosting(w.class) {
 		w.hosts = map[platform.ID]bool{p.ID(): true, w.proc.ID(): true}
+		addHelpers(t, &w)
 	}
 	return w, true
+}
+
+// addHelpers adds to w's hosts the helper processes its app runs sessions
+// under (helpers), wherever they sit in the table, as long as they belong
+// to the user the app runs as. Another user's iTermServer, left by fast
+// user switching, serves that user's iTerm2, not the one in front.
+func addHelpers(t *platform.Table, w *window) {
+	prefix := helpers[t.OS()][w.name]
+	if prefix == "" || w.proc.Owner == "" {
+		return
+	}
+	for _, q := range t.Procs() {
+		if q.Owner == w.proc.Owner && strings.HasPrefix(appName(q), prefix) {
+			w.hosts[q.ID()] = true
+		}
+	}
 }
 
 // hosting reports whether a window of class c can host harness sessions:
