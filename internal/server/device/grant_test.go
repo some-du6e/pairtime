@@ -6,7 +6,6 @@ import (
 	"context"
 	"errors"
 	"net/http"
-	"net/http/cookiejar"
 	"net/url"
 	"strings"
 	"testing"
@@ -138,10 +137,7 @@ func TestGrant(t *testing.T) {
 				}},
 				{name: "approving needs a signed-in session: without one the browser is sent to sign in, and the code stays pending", run: func(t *testing.T, h *harness) {
 					c := h.requestCode(testDeviceID)
-					jar, _ := cookiejar.New(nil)
-					anon := h.srv.Client()
-					anon.Jar = jar
-					anon.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+					anon := h.anonymous()
 					r := h.postForm(anon, device.DecisionPath, url.Values{"user_code": {c.UserCode}, "decision": {"approve"}}, http.Header{"Origin": {h.srv.URL}})
 					if r.status != http.StatusSeeOther || !strings.HasPrefix(r.header.Get("Location"), auth.LoginPath+"?return_to=") {
 						t.Errorf("a signed-out approval answered %d, Location %q; want a 303 to sign-in", r.status, r.header.Get("Location"))
@@ -222,10 +218,7 @@ func TestGrant(t *testing.T) {
 					}
 				}},
 				{name: "signed out, /device sends the browser through sign-in and back with the code", run: func(t *testing.T, h *harness) {
-					jar, _ := cookiejar.New(nil)
-					anon := h.srv.Client()
-					anon.Jar = jar
-					anon.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+					anon := h.anonymous()
 					req, _ := http.NewRequest(http.MethodGet, h.srv.URL+device.PagePath+"?user_code=wdjb+mjht", nil)
 					r := do(t, anon, req)
 					want := auth.LoginPath + "?return_to=" + url.QueryEscape(device.PagePath+"?user_code=WDJB-MJHT")

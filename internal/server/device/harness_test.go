@@ -119,10 +119,30 @@ func newHarness(t *testing.T, c harnessConfig) *harness {
 	if srv.URL != base {
 		t.Fatalf("the server's URL is %s, not %s", srv.URL, base)
 	}
-	h.app = srv.Client()
-	h.app.Timeout = 30 * time.Second
-	h.app.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	h.app = h.newClient(nil)
 	return h
+}
+
+// newClient returns a client of its own for the test server, with jar,
+// that follows no redirects. srv.Client returns one shared client, so a
+// jar set on it would give every browser the same cookies.
+func (h *harness) newClient(jar http.CookieJar) *http.Client {
+	return &http.Client{
+		Transport:     h.srv.Client().Transport,
+		Jar:           jar,
+		Timeout:       30 * time.Second,
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}
+}
+
+// anonymous returns a browser that isn't signed in.
+func (h *harness) anonymous() *http.Client {
+	h.t.Helper()
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	return h.newClient(jar)
 }
 
 // newSignIn returns HCA sign-in through a fresh fake HCA, which it puts in
@@ -305,10 +325,7 @@ func (h *harness) signIn(id hcafake.Identity) *browser {
 	if err != nil {
 		h.t.Fatal(err)
 	}
-	c := h.srv.Client()
-	c.Jar = jar
-	c.Timeout = 30 * time.Second
-	c.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	c := h.newClient(jar)
 	h.hca.SetIdentity(id)
 	b := &browser{h: h, c: c}
 	// The login page sends the browser to HCA, and HCA back to the

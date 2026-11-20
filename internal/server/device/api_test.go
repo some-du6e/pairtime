@@ -118,7 +118,9 @@ func TestDeviceAPI(t *testing.T) {
 				}},
 				{name: "an account can't remove another account's device", run: func(t *testing.T, h *harness, _ *browser, tok string) {
 					other := h.signIn(verified("ident!teen2", "U0TEEN2"))
-					if r := other.post(device.RemovePath, url.Values{"csrf": {other.csrf(device.DevicesPath)}, "device_id": {testDeviceID}}); r.status != http.StatusNotFound {
+					// other has no device, so its devices page has no form; /device
+					// carries the same session's token.
+					if r := other.post(device.RemovePath, url.Values{"csrf": {other.csrf(device.PagePath)}, "device_id": {testDeviceID}}); r.status != http.StatusNotFound {
 						t.Errorf("removing another account's device answered %d, want 404", r.status)
 					}
 					if r := h.call(http.MethodGet, device.MePath, tok, nil); r.status != http.StatusOK {
