@@ -676,6 +676,11 @@ func Destroy(opts Options) error {
 	for _, a := range m.Archived {
 		named = append(named, key{m.archivedItem(a.ID), a.Store})
 	}
+	if m.Account != "" {
+		for _, item := range m.accountItems() {
+			named = append(named, key{item, m.Account})
+		}
+	}
 	var retry, stays []error
 	for _, k := range named {
 		s := o.storeOf(k.store)
