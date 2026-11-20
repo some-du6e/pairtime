@@ -9,8 +9,9 @@
 // socket that hooks hand their messages to and the inbox they spool to
 // when the agent is down (packages ipc and inbox), WP-AG3 what the agent
 // makes of each hook call (hooks.go, package hookpath), WP-OS8 the
-// notifier that shows the coach's notification, and WP-AG4 the scorer loop
-// and the stores it writes (packages scorer and store). The other
+// notifier that shows the coach's notification, WP-AG4 the scorer loop
+// and the stores it writes (packages scorer and store), and WP-AG5 the
+// uploader (package uploader). The other
 // components of DESIGN 3.3 arrive in later work packages, each as a
 // package under internal/agent that Run starts.
 package agent
@@ -44,6 +45,7 @@ import (
 	"github.com/some-du6e/pairtime/internal/agent/scorer"
 	"github.com/some-du6e/pairtime/internal/agent/state"
 	"github.com/some-du6e/pairtime/internal/agent/store"
+	"github.com/some-du6e/pairtime/internal/agent/uploader"
 	"github.com/some-du6e/pairtime/internal/version"
 	"github.com/some-du6e/pairtime/pkg/params"
 )
@@ -133,6 +135,9 @@ type agent struct {
 	// store didn't open.
 	scorer  *scorer.Loop
 	buckets *store.Buckets
+	// upload sends the device's tier-1 data once the ledger is open and
+	// the device is signed in (WP-AG5). It is nil before the ledger opens.
+	upload atomic.Pointer[uploader.Uploader]
 
 	stop     chan struct{} // closed when a client asks the agent to stop
 	stopOnce sync.Once

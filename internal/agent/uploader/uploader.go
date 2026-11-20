@@ -244,7 +244,7 @@ func New(opts Options) (*Uploader, error) {
 	}
 	build := opts.Version
 	if build == "" {
-		build = version.Get().Version
+		build = defaultBuild()
 	}
 	started := opts.Started
 	if started.IsZero() {
@@ -274,6 +274,10 @@ func New(opts Options) (*Uploader, error) {
 	}
 	return u, nil
 }
+
+// defaultBuild is the running binary's version, the client build the
+// labels and the User-Agent name.
+func defaultBuild() string { return version.Get().Version }
 
 // Sealed takes a batch the ledger writer sealed. It never blocks, so it
 // can be called from ledger.Options.Sealed. A batch that holds a prompt
