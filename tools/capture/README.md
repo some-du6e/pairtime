@@ -20,6 +20,7 @@ Delete the capture folder when you're done; that removes the scratch project, th
 |---|---|
 | `dump-hook.sh RUN_DIR LABEL` | The hook command on macOS and Linux (and on Windows under Git Bash). Each call writes `hooks/NNNNNN/` with `time`, `argv`, `env`, `cwd`, `parents` and `stdin` |
 | `dump-hook.ps1 RUN_DIR LABEL` | The same in PowerShell, for Windows. Same files, same format |
+| `deny-once.sh RUN_DIR LABEL` | Gemini CLI's `AfterAgent` hook: records the call with `dump-hook.sh`, and turns step 19's first answer down once, so the capture holds a deny-retry |
 | `otlp_sink.py RUN_DIR` | Saves each OTLP/HTTP JSON request as `otlp/NNNNNN.json` with a `.meta` file, and records step numbers typed into its terminal in `STEPS.txt` |
 | `prepare.py HARNESS ROOT RUN` | Makes the scratch project, the run folder and the harness's settings folder, writes the Claude Code hook config for the harnesses that read it, and prints the commands for the rest |
 | `collect.py RUN_DIR` | Copies the transcripts the captured hooks name, with `--history` and `--extra` for history files and harness logs |

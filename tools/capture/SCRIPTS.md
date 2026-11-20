@@ -258,9 +258,27 @@ Setup: run `prepare.py gemini ROOT gemini`. It makes `ROOT/gemini-home`, which G
 }
 ```
 
-Repeat it for `BeforeAgent`, `AfterAgent`, `BeforeTool`, `AfterTool`, `Notification`, `PreCompress` and `SessionEnd`.
+Repeat it for `BeforeAgent`, `BeforeTool`, `AfterTool`, `Notification`, `PreCompress` and `SessionEnd`, changing the last word to match. `AfterAgent` runs `deny-once.sh` instead of the dumper, so the capture holds one deny-retry at step 19:
 
-Steps: `gemini` in `ROOT/projects/gemini`, steps 1, 2, 3, 4, 6, 7, 8, 9 and 16. Step 18 twice: `gemini -p "Reply with the number of functions in wordcount.py and nothing else."`, and the same prompt piped in with no `-p`, which is also a non-TTY run. The `AfterAgent` deny-retry needs a hook that denies once, which the kit doesn't have yet; WP-AD12 adds it.
+```json
+"AfterAgent": [{ "matcher": "*", "hooks": [{ "type": "command", "name": "capture", "command": "/bin/sh 'KIT/deny-once.sh' 'ROOT/runs/gemini' AfterAgent", "timeout": 60000 }] }]
+```
+
+`deny-once.sh` records every `AfterAgent` call with the dumper, like the other hooks. The first time a call's prompt is step 19's, it also tells Gemini to turn its answer down with the reason below, and Gemini sends that reason back to the model as a new prompt (HS 7.1). These commands are for macOS and Linux.
+
+Steps: `gemini` in `ROOT/projects/gemini`, steps 1, 2, 3, 4, 6, 7, 8 and 9, then step 19, then step 16. Step 18 twice: `gemini -p "Reply with the number of functions in wordcount.py and nothing else."`, and the same prompt piped in with no `-p`, which is also a non-TTY run.
+
+Step 19, Gemini only: type the prompt below. Gemini answers, the hook turns that answer down once, and Gemini answers again, so it should fire `BeforeAgent`, `AfterAgent`, then a second `AfterAgent` with `stop_hook_active`.
+
+```text
+Name one fruit, in one word.
+```
+
+The reason `deny-once.sh` sends back, which Gemini treats as the next prompt:
+
+```text
+Name a different fruit, in one word.
+```
 
 Collect with `--extra` for `ROOT/gemini-home/.gemini/tmp/<hash>/logs.json`, the one whose `<hash>` folder holds the captured chats.
 

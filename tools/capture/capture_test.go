@@ -146,6 +146,7 @@ func TestShellcheck(t *testing.T) {
 		name, file string
 	}{
 		{"the sh dumper passes shellcheck as POSIX sh", "dump-hook.sh"},
+		{"Gemini's deny-once hook passes shellcheck as POSIX sh", "deny-once.sh"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -407,6 +408,115 @@ func TestDumpers(t *testing.T) {
 				t.Run(c.name, c.check)
 			}
 		})
+	}
+}
+
+// TestDenyOnce checks deny-once.sh, the AfterAgent hook that gives the
+// Gemini CLI capture its one deny-retry (SCRIPTS.md, step 19; HS 7.1).
+func TestDenyOnce(t *testing.T) {
+	unixOnly(t)
+	sh := need(t, "sh")
+	script := kit(t, "deny-once.sh")
+	source, scripts := read(t, script), read(t, "SCRIPTS.md")
+	quoted := func(name string) string {
+		m := regexp.MustCompile(`(?m)^` + name + `='([^']*)'$`).FindStringSubmatch(source)
+		if m == nil {
+			t.Fatalf("deny-once.sh sets no %s", name)
+		}
+		return m[1]
+	}
+	prompt, reason := quoted("prompt"), quoted("reason")
+	step19 := jsonText(t, map[string]any{"hook_event_name": "AfterAgent", "prompt": prompt, "prompt_response": "Apple"})
+	other := jsonText(t, map[string]any{"hook_event_name": "AfterAgent", "prompt": "What does count_words do? Answer in one sentence."})
+	call := func(t *testing.T, runDir, payload string) result {
+		t.Helper()
+		r := run(t, t.TempDir(), []byte(payload), nil, sh, script, runDir, "AfterAgent")
+		if r.code != 0 || r.stderr != "" {
+			t.Fatalf("exit %d, stderr %q; want 0 and nothing", r.code, r.stderr)
+		}
+		return r
+	}
+	denied := func(t *testing.T, r result) bool {
+		t.Helper()
+		if r.stdout == "" {
+			return false
+		}
+		var d struct{ Decision, Reason string }
+		if err := json.Unmarshal([]byte(r.stdout), &d); err != nil || d.Decision != "deny" || d.Reason != reason {
+			t.Fatalf("stdout %q, want Gemini's deny decision with the reason %q", r.stdout, reason)
+		}
+		return true
+	}
+
+	cases := []struct {
+		name  string
+		check func(t *testing.T)
+	}{
+		{"step 19's prompt and the reason are SCRIPTS.md text, so the scrub doesn't flag them", func(t *testing.T) {
+			for _, text := range []string{prompt, reason} {
+				if !strings.Contains(scripts, "```text\n"+text+"\n```") {
+					t.Errorf("SCRIPTS.md has no text block holding %q", text)
+				}
+			}
+		}},
+		{"the first call with step 19's prompt is turned down", func(t *testing.T) {
+			if !denied(t, call(t, filepath.Join(t.TempDir(), "run"), step19)) {
+				t.Fatal("not turned down")
+			}
+		}},
+		{"a later call with step 19's prompt isn't turned down", func(t *testing.T) {
+			runDir := filepath.Join(t.TempDir(), "run")
+			call(t, runDir, step19)
+			if denied(t, call(t, runDir, step19)) {
+				t.Fatal("turned down twice")
+			}
+		}},
+		{"a call with another prompt isn't turned down and leaves the denial for step 19", func(t *testing.T) {
+			runDir := filepath.Join(t.TempDir(), "run")
+			if denied(t, call(t, runDir, other)) {
+				t.Fatal("another prompt was turned down")
+			}
+			if !denied(t, call(t, runDir, step19)) {
+				t.Fatal("step 19 wasn't turned down after another prompt")
+			}
+		}},
+		{"every call is recorded like any other hook, and no temporary file stays", func(t *testing.T) {
+			runDir := filepath.Join(t.TempDir(), "run")
+			call(t, runDir, other)
+			call(t, runDir, step19)
+			for i, want := range []string{other, step19} {
+				dir := filepath.Join(runDir, "hooks", "00000"+strconv.Itoa(i+1))
+				if got := read(t, filepath.Join(dir, "stdin")); got != want {
+					t.Errorf("call %d stdin = %q, want %q", i+1, got, want)
+				}
+				if got := read(t, filepath.Join(dir, "argv")); got != runDir+"\nAfterAgent\n" {
+					t.Errorf("call %d argv = %q", i+1, got)
+				}
+			}
+			entries, _ := os.ReadDir(runDir)
+			for _, e := range entries {
+				if strings.HasPrefix(e.Name(), ".deny-once.") {
+					t.Errorf("%s left in the run", e.Name())
+				}
+			}
+		}},
+		{"without arguments it exits 0 without reading the payload", func(t *testing.T) {
+			dir := t.TempDir()
+			r := run(t, dir, hostile, nil, sh, script)
+			if r.code != 0 || r.stdout != "" || len(tree(t, dir)) != 0 {
+				t.Fatalf("exit %d, stdout %q, files %v; want 0 and nothing", r.code, r.stdout, keys(tree(t, dir)))
+			}
+		}},
+		{"it exits 0 and turns nothing down when the run folder can't be made", func(t *testing.T) {
+			file := filepath.Join(t.TempDir(), "file")
+			write(t, file, "")
+			if denied(t, call(t, filepath.Join(file, "run"), step19)) {
+				t.Fatal("turned down without a run folder to record it in")
+			}
+		}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, c.check)
 	}
 }
 
