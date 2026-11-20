@@ -1,0 +1,190 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# The agent's local API: what the agent serves on 127.0.0.1 to the local
+# dashboard and to local tools such as `pairtime doctor` (DESIGN 3.9; CP 6.3).
+# web/ generates its TypeScript types from this file (SP 7.3), so a route or
+# field changes here and in internal/agent in the same PR.
+openapi: 3.1.0
+info:
+  title: pairtime agent, local API
+  version: 0.1.0
+  license:
+    name: AGPL-3.0-or-later
+    identifier: AGPL-3.0-or-later
+  description: |
+    The agent listens on 127.0.0.1 only, on the port in port.json (7247 when
+    it is free). Every request, the dashboard's files included, must come from
+    a loopback address, carry a Host of `127.0.0.1:<port>` or
+    `localhost:<port>`, and, when it has an Origin, have the dashboard's own
+    (`http://127.0.0.1:<port>` or `http://localhost:<port>`). Anything else
+    gets 403, which stops DNS rebinding and cross-site requests.
+
+    The dashboard's static files at `/` need nothing more. Routes under
+    `/v1/` also need the bearer token from port.json, which only the user who
+    runs the agent can read. The dashboard's own sign-in, a one-time URL that
+    sets a `SameSite=Strict`, `HttpOnly` cookie, comes with WP-UI1; until then
+    the dashboard shows how to open it and calls nothing that needs a token.
+servers:
+  - url: http://127.0.0.1:7247
+    description: the default port; port.json has the real one
+security:
+  - bearer: []
+paths:
+  /v1/status:
+    get:
+      operationId: getStatus
+      summary: What the running agent is doing
+      description: >
+        Read by `pairtime doctor`, footprint.yml and the dashboard. The
+        answer is never cached.
+      responses:
+        "200":
+          description: The agent's build, uptime, mode and scheduler.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Status"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+  /v1/agent/stop:
+    post:
+      operationId: stopAgent
+      summary: Stop the agent
+      description: >
+        Answers first, then stops the agent the same way on every OS.
+        Windows has no signal for a process without a console, so this is how
+        `pairtime agent stop` and footprint.yml stop it cleanly.
+      responses:
+        "202":
+          description: The agent is stopping.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Stopping"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+components:
+  securitySchemes:
+    bearer:
+      type: http
+      scheme: bearer
+      description: The `token` field of port.json, 32 random bytes in unpadded base64url.
+  responses:
+    Unauthorized:
+      description: The request had no bearer token, or the wrong one.
+      headers:
+        WWW-Authenticate:
+          schema:
+            type: string
+            const: Bearer realm="pairtime"
+      content:
+        text/plain:
+          schema:
+            type: string
+    Forbidden:
+      description: >
+        The request came from another computer, or its Host or Origin wasn't
+        the agent's own.
+      content:
+        text/plain:
+          schema:
+            type: string
+  schemas:
+    Status:
+      type: object
+      additionalProperties: false
+      required: [version, pid, started, uptime_s, mode, port, wakeups, jobs]
+      properties:
+        version:
+          $ref: "#/components/schemas/Version"
+        pid:
+          type: integer
+          description: The agent's process id.
+        started:
+          type: string
+          format: date-time
+          description: When the agent started, in UTC.
+        uptime_s:
+          type: integer
+          minimum: 0
+          description: Whole seconds since `started`.
+        mode:
+          $ref: "#/components/schemas/Mode"
+        port:
+          type: integer
+          minimum: 1
+          maximum: 65535
+          description: The port the agent listens on.
+        wakeups:
+          type: integer
+          minimum: 0
+          description: The scheduler's timer firings since the start.
+        jobs:
+          type: array
+          items:
+            $ref: "#/components/schemas/Job"
+        problems:
+          type: object
+          description: >
+            What isn't working, keyed by where it comes from (`config`,
+            `config-watch`, `state`), in words for the teen. Absent when
+            nothing is wrong.
+          additionalProperties:
+            type: string
+    Version:
+      type: object
+      additionalProperties: false
+      required: [version, go_version, platform]
+      properties:
+        version:
+          type: string
+          description: The release, such as `v0.1.0`, or `dev`.
+          examples: [v0.1.0, dev]
+        commit:
+          type: string
+          description: The full git commit the binary was built from.
+        date:
+          type: string
+          description: The commit or build time, RFC 3339 in UTC.
+        modified:
+          type: boolean
+          description: The checkout had uncommitted changes.
+        go_version:
+          type: string
+          examples: [go1.26.0]
+        platform:
+          type: string
+          description: GOOS/GOARCH.
+          examples: [windows/amd64, darwin/arm64, linux/amd64]
+    Mode:
+      type: string
+      description: >
+        Whether anything leaves the device (DESIGN 4.2). `local` uploads
+        nothing, and it is the only mode until signing in exists (WP-SV3).
+      enum: [local]
+    Job:
+      type: object
+      additionalProperties: false
+      required: [name, runs]
+      properties:
+        name:
+          type: string
+        every_s:
+          type: number
+          minimum: 0
+          description: The job's period in seconds. Absent for a job that runs once.
+        runs:
+          type: integer
+          minimum: 0
+    Stopping:
+      type: object
+      additionalProperties: false
+      required: [status]
+      properties:
+        status:
+          type: string
+          const: stopping

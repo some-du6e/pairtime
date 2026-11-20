@@ -1,0 +1,90 @@
+{
+  "fixture": "sidedoor/f-track-matched",
+  "case": "f",
+  "title": "A track call 4 s after the hook prompt it copies",
+  "wp": "docs/PLAN.md WP-FX4 (f)",
+  "rules": ["DESIGN 5.2", "DESIGN 5.4", "DESIGN 6.2 D19", "DESIGN 6.4"],
+  "records": [
+    {
+      "event_id": "01a2144f-6fc0-7fd9-bf06-f7c5644e06b5",
+      "t": 1795637080000,
+      "local": "14:04:40",
+      "kind": "prompt.submit",
+      "via": "hook",
+      "anchor": true,
+      "level": "B",
+      "labels": [],
+      "flags": [],
+      "logged_s": 0,
+      "ai_logged_s": 0,
+      "why": "A hook prompt that passes SM 2.2 rule 6, substantive, lead 120 + 150 / 1.5 = 220 s. Level B: presence from input_any only (6.4)."
+    },
+    {
+      "event_id": "01a2144f-7f60-7029-adca-a9b036e53ab7",
+      "t": 1795637084000,
+      "local": "14:04:44",
+      "kind": "cli.track",
+      "via": "track",
+      "anchor": false,
+      "track": "matched",
+      "flags": [],
+      "logged_s": 0,
+      "ai_logged_s": 0,
+      "why": "DESIGN 5.4: pairtime sees the session through hooks and a log reader, and the call comes 4 s after the session's hook prompt, within TRACK_DEDUPE_S = 30 s: track_matched. It opens nothing, resets nothing and fills nothing; it feeds the compliance counter. Never counts toward logged_s (D19)."
+    },
+    {
+      "event_id": "01a2144f-808c-7196-bc88-29062b0e11c5",
+      "t": 1795637084300,
+      "local": "14:04:44.3",
+      "kind": "agent.tool",
+      "via": "hook",
+      "anchor": false,
+      "flags": [],
+      "logged_s": 4.3,
+      "ai_logged_s": 4.3,
+      "why": "The Bash call that ran pairtime track, from the PostToolUse hook: an agent event, so it counts toward logged_s and ai_logged_s. No output lines, so it fills nothing."
+    },
+    {
+      "event_id": "01a21450-3310-76ec-813e-c8aa19ff661c",
+      "t": 1795637130000,
+      "local": "14:05:30",
+      "kind": "agent.output",
+      "via": "log",
+      "anchor": false,
+      "flags": [],
+      "logged_s": 0,
+      "ai_logged_s": 0,
+      "why": "The answer from the transcript: 120 words fill 40 s. Not one of SM 5.4's agent events (prompt submits, tool calls, agent edits, stops), and it shares the stop's millisecond."
+    },
+    {
+      "event_id": "01a21450-3310-7178-8322-5a3d78ad3e68",
+      "t": 1795637130000,
+      "local": "14:05:30",
+      "kind": "agent.stop",
+      "via": "hook",
+      "anchor": false,
+      "flags": [],
+      "logged_s": 45.7,
+      "ai_logged_s": 45.7,
+      "why": "The Stop hook: an agent event, counted in both series."
+    }
+  ],
+  "turns": [
+    {
+      "opened_by": "01a2144f-6fc0-7fd9-bf06-f7c5644e06b5",
+      "turn_key": "t_ed0fb3ae34ca",
+      "session_key": "s_eab9bcb37e4f",
+      "t": 1795637080000,
+      "local": "14:04:40",
+      "via": "hook",
+      "backed": true,
+      "output_fill_s": 40,
+      "fill_s": 60,
+      "why": "SM 2.4: the 20 s base, then 60 * 120 / 180 = 40 s for the answer. Hooks and the transcript back the turn, so no side-door cap applies, and the track call starts no turn."
+    }
+  ],
+  "errata": [],
+  "notes": [
+    "A wrong scorer that opened an anchor for the call would reset the bucket at 14:04:44 and credit the drain after it at level C, the level of the nearest anchor (DESIGN 6.4)."
+  ]
+}

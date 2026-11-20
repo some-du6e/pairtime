@@ -110,6 +110,23 @@ jobs:
             echo "STAGE=$RUNNER_TEMP/stage"
           } >> "$GITHUB_ENV"
 
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: 24
+          # No cache, as for Go: npm ci installs from the lockfile alone.
+          package-manager-cache: false
+
+      - name: The local dashboard
+        # internal/webui embeds whatever dist/ holds, which in a checkout is
+        # a placeholder; releases embed the real dashboard, built from web/
+        # (DESIGN 3.12; docs/PLAN.md, WP-UI0). Only the agent's UI: the server
+        # UI and the component gallery aren't part of the client.
+        working-directory: web
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          ./node_modules/.bin/vite build --mode agent
+          grep -q '<meta name="pairtime-ui" content="local"' ../internal/webui/dist/index.html
+
       - name: Build
         run: |
           pkg=github.com/some-du6e/pairtime/internal/version

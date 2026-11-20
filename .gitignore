@@ -2,3 +2,6 @@
 # git, not even encrypted (DESIGN 10.2; docs/spec/update-manifest.md).
 *.age
 /bin/
+# What `npm run build` in web/ writes next to the placeholder: only
+# internal/webui/dist/index.html is checked in (DESIGN 3.12).
+/internal/webui/dist/assets/

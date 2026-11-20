@@ -22,6 +22,11 @@ const (
 	// DatabaseURL is the Postgres connection URL, for database.engine =
 	// "postgres".
 	DatabaseURL = "PAIRTIME_DATABASE_URL"
+	// S3AccessKeyID and S3SecretAccessKey are object storage's access key,
+	// scoped to its two buckets (DESIGN 10.5 item 4). litestream.yml can
+	// name the same variables, since both run from one secrets.env.
+	S3AccessKeyID     = "PAIRTIME_S3_ACCESS_KEY_ID"
+	S3SecretAccessKey = "PAIRTIME_S3_SECRET_ACCESS_KEY"
 )
 
 // Environment variables that say where the configuration is. They aren't
