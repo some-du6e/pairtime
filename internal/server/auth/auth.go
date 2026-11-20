@@ -12,7 +12,7 @@
 //     the scopes "openid email slack_id verification_status". They are
 //     named explicitly, because HCA's discovery document lists only "openid
 //     profile phone birthdate" (SP 3.1). With fresh=1 it also sends
-//     prompt=login and max_age=0, for the fresh login a submission freeze
+//     prompt=login, and no max_age, for the fresh login a submission freeze
 //     asks for (DESIGN 7.5 step 2).
 //   - GET /auth/hca/callback checks the state against the cookie before it
 //     redeems the code, redeems it at the token endpoint with the client

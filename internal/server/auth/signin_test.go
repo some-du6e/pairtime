@@ -354,12 +354,12 @@ func testSignIn(t *testing.T, engine store.Engine) {
 			},
 		},
 		{
-			name: "a fresh login sends prompt=login and max_age=0 and keeps HCA's auth_time",
+			name: "a fresh login sends prompt=login without max_age and keeps HCA's auth_time",
 			opts: signInOptions{query: "?fresh=1"},
 			check: func(t *testing.T, h *harness, _ *hcafake.Server, f *flow, me auth.Me) {
 				q := f.authorize.Query()
-				if q.Get("prompt") != "login" || q.Get("max_age") != "0" {
-					t.Errorf("authorize prompt = %q, max_age = %q; want login and 0", q.Get("prompt"), q.Get("max_age"))
+				if q.Get("prompt") != "login" || q.Has("max_age") {
+					t.Errorf("authorize prompt = %q, max_age = %q; want prompt=login and no max_age", q.Get("prompt"), q.Get("max_age"))
 				}
 				at := me.Session.AuthTime
 				if at == nil || time.Since(*at) > time.Minute || time.Since(*at) < -time.Minute {
@@ -373,6 +373,24 @@ func testSignIn(t *testing.T, engine store.Engine) {
 			hook:       resign(func(c map[string]any) { c["auth_time"] = now() - 3600 }),
 			wantStatus: http.StatusUnauthorized,
 			wantCode:   auth.CodeLoginNotFresh,
+		},
+		{
+			name: "the fake HCA refuses prompt=login sent with max_age, a pair HCA's guide never uses",
+			opts: signInOptions{query: "?fresh=1", editAuthorize: func(u *url.URL) {
+				q := u.Query()
+				q.Set("max_age", "0")
+				u.RawQuery = q.Encode()
+			}},
+			wantStatus: http.StatusBadGateway,
+			wantCode:   auth.CodeHCAError,
+			check: func(t *testing.T, _ *harness, hca *hcafake.Server, f *flow, _ auth.Me) {
+				if got := f.callback.Query().Get("error"); got != "invalid_request" {
+					t.Errorf("the fake answered error=%q, want invalid_request", got)
+				}
+				if n := hca.TokenCalls(); n != 0 {
+					t.Errorf("a code was redeemed %d times, want never", n)
+				}
+			},
 		},
 		{
 			name:       "a fresh login without auth_time is refused",

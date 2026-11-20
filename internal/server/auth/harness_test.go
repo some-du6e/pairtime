@@ -213,16 +213,24 @@ type flow struct {
 type signInOptions struct {
 	// query is the login page's query, such as "?fresh=1".
 	query string
+	// editAuthorize changes the authorization request before the browser
+	// follows it.
+	editAuthorize func(*url.URL)
 	// edit changes the callback URL before the browser follows it.
 	edit func(*url.URL)
 	// otherBrowser follows the callback without the login cookie.
 	otherBrowser bool
+	// loginClaims, when set, is posted as the claims field of the login
+	// form mock-oauth2-server shows for prompt=login, which adds those
+	// claims to its ID token. It is called as the form is submitted, the
+	// moment the person authenticates.
+	loginClaims func() string
 }
 
 // signIn runs a sign-in as a browser would: the login page, HCA's
 // authorization endpoint, and the callback. When the authorization
 // endpoint shows a login form, as mock-oauth2-server does for prompt=login,
-// it posts a username to it.
+// it posts a username, and the loginClaims option, to it.
 func (h *harness) signIn(o signInOptions) *flow {
 	h.t.Helper()
 	f := &flow{}
@@ -231,10 +239,17 @@ func (h *harness) signIn(o signInOptions) *flow {
 		h.t.Fatalf("the login page answered %d, want 302; body:\n%s", r.status, r.body)
 	}
 	f.authorize = h.location(r)
+	if o.editAuthorize != nil {
+		o.editAuthorize(f.authorize)
+	}
 	r = h.get(f.authorize.String())
 	if r.status == http.StatusOK {
 		f.prompted = true
-		r = h.postForm(f.authorize.String(), url.Values{"username": {"pairtime-test"}}, nil)
+		form := url.Values{"username": {"pairtime-test"}}
+		if o.loginClaims != nil {
+			form.Set("claims", o.loginClaims())
+		}
+		r = h.postForm(f.authorize.String(), form, nil)
 	}
 	if r.status != http.StatusFound {
 		h.t.Fatalf("HCA's authorization endpoint answered %d, want 302; body:\n%s", r.status, r.body)

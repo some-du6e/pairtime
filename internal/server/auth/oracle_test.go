@@ -3,6 +3,7 @@
 package auth_test
 
 import (
+	"fmt"
 	"net/http"
 	"net/url"
 	"os"
@@ -26,7 +27,16 @@ const mockEnv = "PAIRTIME_TEST_OIDC_URL"
 // testdata/mock-oauth2-server.json, and sets PAIRTIME_TEST_OIDC_URL. The
 // config gives each client id the claims one case needs: an HCA-shaped
 // verified or ineligible identity, or a token with a wrong nonce, issuer,
-// audience or expiry. Locally:
+// audience or expiry.
+//
+// A fresh login sends prompt=login and no max_age, and the server answers
+// prompt=login with its login form, which shows the request reached it. The
+// server puts auth_time in an ID token only when the request has max_age,
+// so the harness fills in the form's claims field, which the server adds to
+// its ID token, with an auth_time of the moment the form is sent: when the
+// person authenticated. pairtimed has to accept that login, and refuse one
+// whose ID token has no auth_time or an auth_time from before the sign-in
+// started. Locally:
 //
 //	docker run -d -p 8080:8080 -e JSON_CONFIG_PATH=/c/mock-oauth2-server.json \
 //	  -v "$PWD/internal/server/auth/testdata:/c:ro" ghcr.io/navikt/mock-oauth2-server:6.1.4
@@ -37,6 +47,7 @@ func TestMockOAuth2Server(t *testing.T) {
 		t.Skipf("%s isn't set; ci.yml starts navikt/mock-oauth2-server and sets it", mockEnv)
 	}
 	issuer := strings.TrimSuffix(base, "/") + "/hca"
+	const fresh = "?fresh=1"
 	tests := []struct {
 		name       string
 		clientID   string
@@ -45,7 +56,25 @@ func TestMockOAuth2Server(t *testing.T) {
 		wantCode   string // "" means the sign-in succeeds
 	}{
 		{name: "a verified identity signs in", clientID: "pairtime-verified"},
-		{name: "a fresh login gets the provider's login form and comes back with a recent auth_time", clientID: "pairtime-verified", opts: signInOptions{query: "?fresh=1"}},
+		{
+			name:     "a fresh login sends prompt=login without max_age, gets the provider's login form, and keeps that login's auth_time",
+			clientID: "pairtime-verified",
+			opts:     signInOptions{query: fresh, loginClaims: authTimeAt(0)},
+		},
+		{
+			name:       "a fresh login whose ID token has no auth_time is refused",
+			clientID:   "pairtime-verified",
+			opts:       signInOptions{query: fresh},
+			wantStatus: http.StatusUnauthorized,
+			wantCode:   auth.CodeNoAuthTime,
+		},
+		{
+			name:       "a fresh login whose auth_time is from before the sign-in started is refused",
+			clientID:   "pairtime-verified",
+			opts:       signInOptions{query: fresh, loginClaims: authTimeAt(-10 * time.Minute)},
+			wantStatus: http.StatusUnauthorized,
+			wantCode:   auth.CodeLoginNotFresh,
+		},
 		{name: "an ineligible identity is refused", clientID: "pairtime-ineligible", wantStatus: http.StatusForbidden, wantCode: auth.CodeIneligible},
 		{name: "a callback with a wrong state is refused", clientID: "pairtime-verified", opts: signInOptions{edit: appendToState}, wantStatus: http.StatusBadRequest, wantCode: auth.CodeStateMismatch},
 		{name: "an ID token with a wrong nonce is refused", clientID: "pairtime-wrong-nonce", wantStatus: http.StatusUnauthorized, wantCode: auth.CodeWrongNonce},
@@ -63,6 +92,14 @@ func TestMockOAuth2Server(t *testing.T) {
 				signupsOpen:  true,
 			})
 			f := h.signIn(tt.opts)
+			if tt.opts.query == fresh {
+				if q := f.authorize.Query(); q.Get("prompt") != "login" || q.Has("max_age") {
+					t.Errorf("authorize prompt = %q, max_age = %q; want prompt=login and no max_age", q.Get("prompt"), q.Get("max_age"))
+				}
+				if !f.prompted {
+					t.Error("the provider didn't show its login form, so prompt=login didn't reach it")
+				}
+			}
 			if tt.wantCode != "" {
 				checkRefused(t, h, f, tt.wantStatus, tt.wantCode)
 				if tt.wantCode == auth.CodeIneligible && h.count(`SELECT count(*) FROM users`) != 0 {
@@ -75,13 +112,7 @@ func TestMockOAuth2Server(t *testing.T) {
 				me.Email != "verified@example.org" || me.SlackID != "U0MOCKVERIFIED" {
 				t.Errorf("me = %+v", me)
 			}
-			if tt.opts.query == "?fresh=1" {
-				if q := f.authorize.Query(); q.Get("prompt") != "login" || q.Get("max_age") != "0" {
-					t.Errorf("authorize prompt = %q, max_age = %q; want login and 0", q.Get("prompt"), q.Get("max_age"))
-				}
-				if !f.prompted {
-					t.Error("the provider didn't ask for a login, so prompt=login didn't reach it")
-				}
+			if tt.opts.query == fresh {
 				at := me.Session.AuthTime
 				if at == nil || time.Since(*at) > time.Minute || time.Since(*at) < -time.Minute {
 					t.Errorf("session auth_time = %v, want about now", at)
@@ -89,6 +120,12 @@ func TestMockOAuth2Server(t *testing.T) {
 			}
 		})
 	}
+}
+
+// authTimeAt returns a login form's claims field: an auth_time d from the
+// moment the form is sent.
+func authTimeAt(d time.Duration) func() string {
+	return func() string { return fmt.Sprintf(`{"auth_time": %d}`, time.Now().Add(d).Unix()) }
 }
 
 // appendToState makes the callback's state differ from the cookie's.

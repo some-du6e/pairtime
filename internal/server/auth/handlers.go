@@ -93,12 +93,13 @@ func (s *Service) authorizeURL(p *provider, st loginState) (string, error) {
 	q.Set("state", st.State)
 	q.Set("nonce", st.Nonce)
 	if st.Fresh {
-		// prompt=login makes HCA authenticate the person again (SP 3.1).
-		// max_age=0 means the same and also obliges the provider to send
-		// auth_time, which is how the callback checks it happened (OIDC
-		// Core 3.1.2.1).
+		// prompt=login asks HCA to authenticate the person again before it
+		// answers (OIDC Core 3.1.2.1). It goes alone, as HCA's OIDC guide
+		// shows it (SP 3.1): the guide offers prompt=login and max_age as
+		// two separate ways to ask, so pairtime never adds max_age. The
+		// callback then needs the ID token's auth_time to show the person
+		// authenticated after this sign-in started.
 		q.Set("prompt", "login")
-		q.Set("max_age", "0")
 	}
 	u.RawQuery = q.Encode()
 	return u.String(), nil

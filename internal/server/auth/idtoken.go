@@ -17,8 +17,7 @@ import (
 )
 
 // ClockSkew is how far pairtimed's clock and HCA's may disagree when an ID
-// token's times are checked. HCA's ID tokens live 120 s, the
-// doorkeeper-openid_connect default, which HCA keeps.
+// token's times are checked. HCA's ID tokens live 120 s.
 const ClockSkew = 60 * time.Second
 
 // FreshLoginMaxAge is how long before the callback HCA may have
