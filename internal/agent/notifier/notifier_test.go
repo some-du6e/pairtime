@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -28,13 +29,15 @@ type fakeBackend struct {
 	mu      sync.Mutex
 	errs    []error
 	calls   []Message
-	block   chan struct{} // when set, Show waits for it to close, or for ctx
-	entered chan struct{} // when set, Show sends on it as it starts
+	ctxs    []context.Context // each call's
+	block   chan struct{}     // when set, Show waits for it to close, or for ctx
+	entered chan struct{}     // when set, Show sends on it as it starts
 }
 
-func (f *fakeBackend) Show(ctx context.Context, m Message) error {
+func (f *fakeBackend) Show(ctx context.Context, m Message, _ func()) error {
 	f.mu.Lock()
 	f.calls = append(f.calls, m)
+	f.ctxs = append(f.ctxs, ctx)
 	var err error
 	if len(f.errs) > 0 {
 		err, f.errs = f.errs[0], f.errs[1:]
@@ -564,8 +567,33 @@ func TestNotifyNeverWaitsForTheOS(t *testing.T) {
 	}
 }
 
+// notifierGoroutines counts the goroutines with a frame in notifier.go: the
+// notifiers' own workers, whatever else the test binary runs, such as
+// another package's goroutines or the testing package's. The goroutine
+// that calls it has frames in this test file only.
+func notifierGoroutines() int {
+	buf := make([]byte, 1<<16)
+	for {
+		n := runtime.Stack(buf, true)
+		if n < len(buf) {
+			buf = buf[:n]
+			break
+		}
+		buf = make([]byte, 2*len(buf))
+	}
+	count := 0
+	for _, g := range strings.Split(string(buf), "\n\n") {
+		if strings.Contains(g, "internal/agent/notifier/notifier.go:") {
+			count++
+		}
+	}
+	return count
+}
+
 // DESIGN 3.3: never a polling loop. An idle notifier has no goroutine and
-// no timer of its own, before its first note and after each one.
+// no timer of its own, before its first note and after each one. Its only
+// timers are its attempts' deadlines, and an attempt's context is done once
+// the attempt is over, which stops its timer.
 func TestIdleNotifierRunsNothing(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -573,28 +601,48 @@ func TestIdleNotifierRunsNothing(t *testing.T) {
 		steps []step
 	}{
 		{name: "a new notifier starts no goroutine"},
-		{name: "a notifier that showed a note keeps no goroutine", steps: []step{{at: "20:00:00", notify: "s1", want: Queued}}},
+		{name: "a notifier that showed a note keeps no goroutine and no timer", steps: []step{{at: "20:00:00", notify: "s1", want: Queued}}},
 		{
-			name:  "a notifier whose note waits for the screen keeps no goroutine",
+			name:  "a notifier whose note waits for the screen keeps no goroutine and no timer",
 			errs:  []error{ErrAway},
 			steps: []step{{at: "20:00:00", notify: "s1", want: Queued}},
+		},
+		{
+			name: "a notifier that asked the OS again for a user who came back keeps no goroutine and no timer",
+			errs: []error{ErrAway},
+			steps: []step{
+				{at: "20:00:00", notify: "s1", want: Queued},
+				{at: "20:05:00", present: true},
+			},
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			before := runtime.NumGoroutine()
 			r := newRig(config.Notifications{}, tt.errs, nil)
+			defer r.n.Close()
 			r.run(t, tt.steps)
 			// A goroutine that has returned may take a moment to leave the
-			// count.
+			// stacks.
 			deadline := time.Now().Add(2 * time.Second)
-			for runtime.NumGoroutine() > before && time.Now().Before(deadline) {
+			for notifierGoroutines() > 0 && time.Now().Before(deadline) {
 				time.Sleep(10 * time.Millisecond)
 			}
-			if after := runtime.NumGoroutine(); after > before {
-				t.Errorf("%d goroutines before, %d once the notifier was idle", before, after)
+			if got := notifierGoroutines(); got != 0 {
+				t.Errorf("%d goroutines run notifier code once the notifier is idle, want none", got)
 			}
-			r.n.Close()
+			r.n.mu.Lock()
+			pending := r.n.cancel != nil
+			r.n.mu.Unlock()
+			if pending {
+				t.Error("the idle notifier still holds an attempt's deadline")
+			}
+			r.backend.mu.Lock()
+			defer r.backend.mu.Unlock()
+			for i, ctx := range r.backend.ctxs {
+				if ctx.Err() == nil {
+					t.Errorf("Show call %d's context isn't done, so its deadline's timer still runs", i)
+				}
+			}
 		})
 	}
 }
@@ -663,7 +711,7 @@ func TestMemoryAcrossRestarts(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := st.Put(memoryKey, remembered{LastShown: at(tt.lastShown), Sessions: []string{"seen"}}); err != nil {
+			if err := st.Put(memoryKey, remembered{LastShown: at(tt.lastShown), Sessions: []decided{{Session: "seen"}}}); err != nil {
 				t.Fatal(err)
 			}
 			r := newRig(config.Notifications{}, nil, st)
@@ -797,6 +845,15 @@ func (m *stuckMemory) Put(_ string, v any) error {
 
 func (m *stuckMemory) Save() error { return nil }
 
+// sessionKeys lists the sessions r holds, oldest first.
+func sessionKeys(r remembered) []string {
+	var keys []string
+	for _, s := range r.Sessions {
+		keys = append(keys, s.Session)
+	}
+	return keys
+}
+
 func TestMemoryNeverGoesBack(t *testing.T) {
 	tests := []struct {
 		name string
@@ -826,10 +883,10 @@ func TestMemoryNeverGoesBack(t *testing.T) {
 			defer mem.mu.Unlock()
 			for i := 1; i < len(mem.puts); i++ {
 				if len(mem.puts[i].Sessions) < len(mem.puts[i-1].Sessions) {
-					t.Errorf("Put %d holds %q, after Put %d's %q", i, mem.puts[i].Sessions, i-1, mem.puts[i-1].Sessions)
+					t.Errorf("Put %d holds %q, after Put %d's %q", i, sessionKeys(mem.puts[i]), i-1, sessionKeys(mem.puts[i-1]))
 				}
 			}
-			if len(mem.puts) == 0 || strings.Join(mem.puts[len(mem.puts)-1].Sessions, " ") != "s1 s2" {
+			if len(mem.puts) == 0 || strings.Join(sessionKeys(mem.puts[len(mem.puts)-1]), " ") != "s1 s2" {
 				t.Errorf("Puts = %+v, want the last to hold [s1 s2]", mem.puts)
 			}
 		})
@@ -843,7 +900,7 @@ type lateAway struct {
 	release chan struct{}
 }
 
-func (b *lateAway) Show(context.Context, Message) error {
+func (b *lateAway) Show(context.Context, Message, func()) error {
 	b.entered <- struct{}{}
 	<-b.release
 	return ErrAway
@@ -911,8 +968,21 @@ func TestOutcomeString(t *testing.T) {
 		o    Outcome
 		want string
 	}{
-		{name: "every outcome has a name", o: Stopped, want: "the agent stopped"},
-		{name: "an outcome out of range says so", o: Outcome(99), want: "Outcome(99)"},
+		{name: "Queued reads as queued", o: Queued, want: "queued"},
+		{name: "Waiting reads as waiting", o: Waiting, want: "waiting"},
+		{name: "Shown reads as shown", o: Shown, want: "shown"},
+		{name: "TurnedOff says notifications are off", o: TurnedOff, want: "notifications are off"},
+		{name: "InQuietHours says it is quiet hours", o: InQuietHours, want: "quiet hours"},
+		{name: "Repeated says the session had its decision", o: Repeated, want: "already decided for this session"},
+		{name: "Stale says the session ended too long ago", o: Stale, want: "the session ended too long ago"},
+		{name: "TooSoon says the last notification was too recent", o: TooSoon, want: "too soon after the last notification"},
+		{name: "Replaced says a newer note took the place", o: Replaced, want: "replaced by a newer note"},
+		{name: "Busy says the OS isn't showing notifications", o: Busy, want: "the OS isn't showing notifications now"},
+		{name: "Unavailable says this desktop can't show them", o: Unavailable, want: "this desktop can't show notifications"},
+		{name: "Failed reads as failed", o: Failed, want: "failed"},
+		{name: "Stopped says the agent stopped", o: Stopped, want: "the agent stopped"},
+		{name: "an outcome past the last says so", o: Stopped + 1, want: fmt.Sprintf("Outcome(%d)", int(Stopped)+1)},
+		{name: "a negative outcome says so", o: Outcome(-1), want: "Outcome(-1)"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -921,9 +991,653 @@ func TestOutcomeString(t *testing.T) {
 			}
 		})
 	}
-	for o := Queued; o <= Stopped; o++ {
-		if outcomeNames[o] == "" {
-			t.Errorf("Outcome %d has no name", int(o))
-		}
+}
+
+// slowMemory is a Memory whose Save takes delay, as a Save to a slow disk
+// does, and keeps what the last finished Save wrote. With saveErr set,
+// every Save fails.
+type slowMemory struct {
+	delay   time.Duration
+	saveErr error
+
+	mu    sync.Mutex
+	put   remembered // the last Put
+	saved remembered // what the last Save that succeeded wrote
+}
+
+func (m *slowMemory) Get(string, any) (bool, error) { return false, nil }
+
+func (m *slowMemory) Put(_ string, v any) error {
+	r, ok := v.(remembered)
+	if !ok {
+		return fmt.Errorf("Put(%T), want a remembered", v)
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.put = r
+	return nil
+}
+
+func (m *slowMemory) Save() error {
+	m.mu.Lock()
+	r := m.put
+	m.mu.Unlock()
+	time.Sleep(m.delay)
+	if m.saveErr != nil {
+		return m.saveErr
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.saved = r
+	return nil
+}
+
+// onDisk lists the sessions the last successful Save wrote.
+func (m *slowMemory) onDisk() []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return sessionKeys(m.saved)
+}
+
+// diskCheckingBackend notes, at each Show, which sessions mem has on disk.
+type diskCheckingBackend struct {
+	mem *slowMemory
+
+	mu     sync.Mutex
+	atShow [][]string
+}
+
+func (b *diskCheckingBackend) Show(context.Context, Message, func()) error {
+	keys := b.mem.onDisk()
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.atShow = append(b.atShow, keys)
+	return nil
+}
+
+// A note's decision is on disk before the OS gets the note, so an agent
+// that crashes after the note went up can't show it again on its next
+// start (#86).
+func TestADecisionIsSavedBeforeTheOSGetsTheNote(t *testing.T) {
+	tests := []struct {
+		name        string
+		saveErr     error
+		wantShows   int
+		wantResult  string
+		wantProblem string
+	}{
+		{
+			name:       "the note's session is on disk when Show is called, however slow the disk is",
+			wantShows:  1,
+			wantResult: "s1: shown",
+		},
+		{
+			name:        "a note whose decision can't be saved isn't shown, and doctor hears why",
+			saveErr:     errors.New("disk full"),
+			wantResult:  "s1: failed",
+			wantProblem: "couldn't save the note's decision before showing it: disk full",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mem := &slowMemory{delay: 200 * time.Millisecond, saveErr: tt.saveErr}
+			b := &diskCheckingBackend{mem: mem}
+			rec := &recorder{}
+			n := New(Options{Backend: b, Memory: mem, Now: func() time.Time { return at("20:00:00") }, Problem: rec.problem, Result: rec.result})
+			defer n.Close()
+			if got := n.Notify(Note{Session: "s1", Ended: at("20:00:00")}); got != Queued {
+				t.Fatalf("Notify(s1) = %v, want %v", got, Queued)
+			}
+			n.wg.Wait()
+
+			b.mu.Lock()
+			atShow := append([][]string(nil), b.atShow...)
+			b.mu.Unlock()
+			if len(atShow) != tt.wantShows {
+				t.Fatalf("Show was called %d times, want %d", len(atShow), tt.wantShows)
+			}
+			for i, keys := range atShow {
+				if !slices.Contains(keys, "s1") {
+					t.Errorf("Show call %d came while the disk held %q, without s1", i, keys)
+				}
+			}
+			results, problems := rec.got()
+			if got := strings.Join(results, "\n"); got != tt.wantResult {
+				t.Errorf("results:\n%s\nwant:\n%s", got, tt.wantResult)
+			}
+			if tt.wantProblem != "" && (len(problems) != 1 || !strings.Contains(problems[0], tt.wantProblem)) {
+				t.Errorf("problems = %q, want one containing %q", problems, tt.wantProblem)
+			}
+			// The session had its decision either way.
+			if got := n.Notify(Note{Session: "s1", Ended: at("20:00:00")}); got != Repeated {
+				t.Errorf("Notify(s1) again = %v, want %v", got, Repeated)
+			}
+		})
+	}
+}
+
+// The settings and the clock are read again right before a note goes to
+// the OS, after the callbacks that ran since the note passed the rules
+// (#86). Here the agent changes them from Options.Result, which is the
+// last thing to run before the next attempt.
+func TestRulesAreCheckedAgainRightBeforeShow(t *testing.T) {
+	off := config.Notifications{Off: true}
+	quiet := config.Notifications{Quiet: mustQuiet("20:10-07:00")}
+	tests := []struct {
+		name string
+		// behind: s2 comes while s1's Show is out, and goes when s1's
+		// ends. Otherwise s1 finds the screen locked, and s2 takes its
+		// place.
+		behind    bool
+		errs      []error
+		trigger   string                // the Result line on which things change
+		settings  *config.Notifications // the settings from then on
+		clock     string                // the clock from then on, when set
+		want      []string
+		wantCalls int
+	}{
+		{
+			name:   "a note behind one the OS refused isn't shown once notifications are turned off",
+			behind: true, errs: []error{ErrBusy},
+			trigger: "s1: the OS isn't showing notifications now", settings: &off,
+			want:      []string{"s1: the OS isn't showing notifications now", "s2: notifications are off"},
+			wantCalls: 1,
+		},
+		{
+			name:   "a note behind one the OS refused isn't shown once quiet hours have begun",
+			behind: true, errs: []error{ErrBusy},
+			trigger: "s1: the OS isn't showing notifications now", settings: &quiet, clock: "20:10:00",
+			want:      []string{"s1: the OS isn't showing notifications now", "s2: quiet hours"},
+			wantCalls: 1,
+		},
+		{
+			name: "a note that replaced a waiting one isn't shown once notifications are turned off",
+			errs: []error{ErrAway}, trigger: "s1: replaced by a newer note", settings: &off,
+			want:      []string{"s1: replaced by a newer note", "s2: notifications are off"},
+			wantCalls: 1,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			clock := &fakeClock{t: at("20:00:00")}
+			b := &fakeBackend{errs: tt.errs}
+			var mu sync.Mutex
+			settings := config.Notifications{}
+			var results []string
+			n := New(Options{
+				Backend: b,
+				Settings: func() config.Notifications {
+					mu.Lock()
+					defer mu.Unlock()
+					return settings
+				},
+				Now: clock.Now,
+				Result: func(note Note, o Outcome) {
+					line := note.Session + ": " + o.String()
+					mu.Lock()
+					defer mu.Unlock()
+					results = append(results, line)
+					if line == tt.trigger {
+						settings = *tt.settings
+						if tt.clock != "" {
+							clock.Set(at(tt.clock))
+						}
+					}
+				},
+			})
+			defer n.Close()
+			if tt.behind {
+				b.block = make(chan struct{})
+				b.entered = make(chan struct{}, 2)
+			}
+			if got := n.Notify(Note{Session: "s1", Ended: clock.Now()}); got != Queued {
+				t.Fatalf("Notify(s1) = %v, want %v", got, Queued)
+			}
+			if tt.behind {
+				<-b.entered
+				if got := n.Notify(Note{Session: "s2", Ended: clock.Now()}); got != Waiting {
+					t.Fatalf("Notify(s2) = %v, want %v", got, Waiting)
+				}
+				close(b.block)
+			} else {
+				n.wg.Wait()
+				if got := n.Notify(Note{Session: "s2", Ended: clock.Now()}); got != Queued {
+					t.Fatalf("Notify(s2) = %v, want %v", got, Queued)
+				}
+			}
+			n.wg.Wait()
+			mu.Lock()
+			got := strings.Join(results, "\n")
+			mu.Unlock()
+			if want := strings.Join(tt.want, "\n"); got != want {
+				t.Errorf("results:\n%s\nwant:\n%s", got, want)
+			}
+			if calls := len(b.shown()); calls != tt.wantCalls {
+				t.Errorf("Show was called %d times, want %d", calls, tt.wantCalls)
+			}
+		})
+	}
+}
+
+// An unlock that comes while the OS is being asked about a note isn't lost
+// when the OS answers that the screen is locked, as Windows can when it
+// read the lock state just before the unlock (#86).
+func TestAnUnlockDuringShowIsKept(t *testing.T) {
+	tests := []struct {
+		name string
+		errs []error
+		// want and wantCalls are once the unlock during Show has played
+		// out; wantLater and wantLaterCalls after one more unlock.
+		want, wantLater           []string
+		wantCalls, wantLaterCalls int
+	}{
+		{
+			name:      "a note the OS found locked as the user came back asks the OS once more, and is shown",
+			errs:      []error{ErrAway},
+			want:      []string{"s1: shown"},
+			wantCalls: 2,
+			wantLater: []string{"s1: shown"}, wantLaterCalls: 2,
+		},
+		{
+			name:      "a note the OS still finds locked when it asks again waits for the next unlock",
+			errs:      []error{ErrAway, ErrAway},
+			wantCalls: 2,
+			wantLater: []string{"s1: shown"}, wantLaterCalls: 3,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := newRig(config.Notifications{}, tt.errs, nil)
+			defer r.n.Close()
+			r.backend.block = make(chan struct{})
+			r.backend.entered = make(chan struct{}, 3)
+			if got := r.n.Notify(Note{Session: "s1", Ended: r.clock.Now()}); got != Queued {
+				t.Fatalf("Notify(s1) = %v, want %v", got, Queued)
+			}
+			<-r.backend.entered
+			r.n.UserPresent()
+			close(r.backend.block)
+			r.n.wg.Wait()
+			results, _ := r.rec.got()
+			if got, want := strings.Join(results, "\n"), strings.Join(tt.want, "\n"); got != want {
+				t.Errorf("results:\n%s\nwant:\n%s", got, want)
+			}
+			if calls := len(r.backend.shown()); calls != tt.wantCalls {
+				t.Errorf("Show was called %d times, want %d", calls, tt.wantCalls)
+			}
+
+			r.run(t, []step{{at: "20:05:00", present: true}})
+			results, _ = r.rec.got()
+			if got, want := strings.Join(results, "\n"), strings.Join(tt.wantLater, "\n"); got != want {
+				t.Errorf("after the next unlock, results:\n%s\nwant:\n%s", got, want)
+			}
+			if calls := len(r.backend.shown()); calls != tt.wantLaterCalls {
+				t.Errorf("after the next unlock, Show was called %d times, want %d", calls, tt.wantLaterCalls)
+			}
+		})
+	}
+}
+
+// A note that came while the OS was being asked about an older one gets
+// the OS's answer for itself when the older one found the screen locked,
+// as it would have had it come a moment later (#86).
+func TestANewerNoteGetsItsOwnOSCheck(t *testing.T) {
+	tests := []struct {
+		name                      string
+		errs                      []error
+		want, wantLater           []string
+		wantCalls, wantLaterCalls int
+	}{
+		{
+			name:      "a note that came while the older one found the screen locked is shown when the screen is unlocked by then",
+			errs:      []error{ErrAway},
+			want:      []string{"s1: replaced by a newer note", "s2: shown"},
+			wantCalls: 2,
+			wantLater: []string{"s1: replaced by a newer note", "s2: shown"}, wantLaterCalls: 2,
+		},
+		{
+			name:      "a newer note that finds the screen locked too waits for the user",
+			errs:      []error{ErrAway, ErrAway},
+			want:      []string{"s1: replaced by a newer note"},
+			wantCalls: 2,
+			wantLater: []string{"s1: replaced by a newer note", "s2: shown"}, wantLaterCalls: 3,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := newRig(config.Notifications{}, tt.errs, nil)
+			defer r.n.Close()
+			r.backend.block = make(chan struct{})
+			r.backend.entered = make(chan struct{}, 3)
+			if got := r.n.Notify(Note{Session: "s1", Ended: r.clock.Now()}); got != Queued {
+				t.Fatalf("Notify(s1) = %v, want %v", got, Queued)
+			}
+			<-r.backend.entered
+			if got := r.n.Notify(Note{Session: "s2", Ended: r.clock.Now()}); got != Waiting {
+				t.Fatalf("Notify(s2) = %v, want %v", got, Waiting)
+			}
+			close(r.backend.block)
+			r.n.wg.Wait()
+			results, _ := r.rec.got()
+			if got, want := strings.Join(results, "\n"), strings.Join(tt.want, "\n"); got != want {
+				t.Errorf("results:\n%s\nwant:\n%s", got, want)
+			}
+			if calls := len(r.backend.shown()); calls != tt.wantCalls {
+				t.Errorf("Show was called %d times, want %d", calls, tt.wantCalls)
+			}
+
+			r.run(t, []step{{at: "20:05:00", present: true}})
+			results, _ = r.rec.got()
+			if got, want := strings.Join(results, "\n"), strings.Join(tt.wantLater, "\n"); got != want {
+				t.Errorf("after the next unlock, results:\n%s\nwant:\n%s", got, want)
+			}
+			if calls := len(r.backend.shown()); calls != tt.wantLaterCalls {
+				t.Errorf("after the next unlock, Show was called %d times, want %d", calls, tt.wantLaterCalls)
+			}
+		})
+	}
+}
+
+// burst is a note about s0 at 20:00:00, then one each minute about s1 to
+// sN, too soon after it.
+func burst(sessions int) []step {
+	steps := []step{{at: "20:00:00", notify: "s0", want: Queued}}
+	for i := 1; i <= sessions; i++ {
+		steps = append(steps, step{after: time.Duration(i) * time.Minute, notify: fmt.Sprintf("s%d", i), want: TooSoon})
+	}
+	return steps
+}
+
+// A session is remembered for as long as a note about it could pass the
+// rules again, not only while it is among the newest sessions (#86).
+func TestSessionsAreKeptWhileTheirNoteCouldBeShown(t *testing.T) {
+	tests := []struct {
+		name      string
+		steps     []step
+		wantCalls int
+		wantKept  int    // sessions remembered at the end
+		wantGone  string // a session no longer remembered, if any
+	}{
+		{
+			name: "a session shown before sessionsKept newer ones still has its decision when its note comes again Fresh after it ended",
+			steps: append(burst(sessionsKept),
+				step{after: Fresh(), ago: Fresh(), notify: "s0", want: Repeated}),
+			wantCalls: 1,
+			wantKept:  sessionsKept + 1,
+		},
+		{
+			name: "sessions whose notes can't pass the rules any more are forgotten beyond the newest sessionsKept",
+			steps: append(burst(sessionsKept),
+				step{after: 2 * Fresh(), notify: "late", want: Queued}),
+			wantCalls: 2,
+			wantKept:  sessionsKept,
+			wantGone:  "s0",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := newRig(config.Notifications{}, nil, nil)
+			defer r.n.Close()
+			r.run(t, tt.steps)
+			if calls := len(r.backend.shown()); calls != tt.wantCalls {
+				t.Errorf("Show was called %d times, want %d", calls, tt.wantCalls)
+			}
+			r.n.mu.Lock()
+			kept := sessionKeys(r.n.snapshot())
+			r.n.mu.Unlock()
+			if len(kept) != tt.wantKept {
+				t.Errorf("%d sessions remembered, want %d: %q", len(kept), tt.wantKept, kept)
+			}
+			if tt.wantGone != "" && slices.Contains(kept, tt.wantGone) {
+				t.Errorf("%s is still remembered: %q", tt.wantGone, kept)
+			}
+		})
+	}
+}
+
+func TestSessionsKeptHaveABound(t *testing.T) {
+	tests := []struct {
+		name     string
+		sessions int
+	}{
+		{name: "no more than sessionsMax sessions are remembered, however many end within Fresh", sessions: sessionsMax + 40},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := newRig(config.Notifications{Off: true}, nil, nil)
+			defer r.n.Close()
+			for i := range tt.sessions {
+				r.n.Notify(Note{Session: fmt.Sprintf("s%d", i), Ended: r.clock.Now()})
+			}
+			r.n.mu.Lock()
+			kept := sessionKeys(r.n.snapshot())
+			r.n.mu.Unlock()
+			if len(kept) != sessionsMax {
+				t.Fatalf("%d sessions remembered, want %d", len(kept), sessionsMax)
+			}
+			if want := fmt.Sprintf("s%d", tt.sessions-1); kept[len(kept)-1] != want {
+				t.Errorf("the newest session remembered is %s, want %s", kept[len(kept)-1], want)
+			}
+		})
+	}
+}
+
+// acceptingBackend has the OS take each message, then keeps it on screen
+// for up by the fake clock, as the Windows balloon stays up, and returns
+// err.
+type acceptingBackend struct {
+	clock *fakeClock
+	up    time.Duration
+	err   error
+}
+
+func (b *acceptingBackend) Show(_ context.Context, _ Message, shown func()) error {
+	shown()
+	b.clock.Set(b.clock.Now().Add(b.up))
+	return b.err
+}
+
+// The gap between notifications counts from when the OS took a note, and a
+// note the OS took counts as shown whatever happens after that (#86).
+func TestTheOSTakingANoteIsWhatCounts(t *testing.T) {
+	tests := []struct {
+		name         string
+		up           time.Duration // how long the message stays up
+		err          error         // what Show returns afterwards
+		second       time.Duration // when s2 comes, after s1 at 20:00:00
+		want         []string
+		wantProblems []string
+	}{
+		{
+			name: "a note Fresh after the OS took the last one is shown, though that one's balloon stayed up a while",
+			up:   5 * time.Second, second: Fresh(),
+			want:         []string{"s1: shown", "s2: shown"},
+			wantProblems: []string{"", ""},
+		},
+		{
+			name: "a note less than Fresh after the OS took the last one is still too soon",
+			up:   5 * time.Second, second: Fresh() - time.Second,
+			want:         []string{"s1: shown", "s2: too soon after the last notification"},
+			wantProblems: []string{""},
+		},
+		{
+			name: "a note the OS took is shown even when taking its balloon down failed, so the next one is too soon",
+			err:  errors.New("SetTimer: Not enough quota is available to process this command."), second: time.Minute,
+			want:         []string{"s1: shown", "s2: too soon after the last notification"},
+			wantProblems: []string{""},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			clock := &fakeClock{t: at("20:00:00")}
+			rec := &recorder{}
+			n := New(Options{
+				Backend: &acceptingBackend{clock: clock, up: tt.up, err: tt.err},
+				Now:     clock.Now,
+				Problem: rec.problem,
+				Result:  rec.result,
+			})
+			defer n.Close()
+			if got := n.Notify(Note{Session: "s1", Ended: clock.Now()}); got != Queued {
+				t.Fatalf("Notify(s1) = %v, want %v", got, Queued)
+			}
+			n.wg.Wait()
+			clock.Set(at("20:00:00").Add(tt.second))
+			n.Notify(Note{Session: "s2", Ended: clock.Now()})
+			n.wg.Wait()
+			results, problems := rec.got()
+			if got, want := strings.Join(results, "\n"), strings.Join(tt.want, "\n"); got != want {
+				t.Errorf("results:\n%s\nwant:\n%s", got, want)
+			}
+			if !slices.Equal(problems, tt.wantProblems) {
+				t.Errorf("problems = %q, want %q", problems, tt.wantProblems)
+			}
+		})
+	}
+}
+
+// Doctor and Options.Result hear attempts in the order they ended, even
+// when the next attempt ends while the last one's callbacks still run
+// (#86).
+func TestAttemptsAreToldInTheOrderTheyEnded(t *testing.T) {
+	tests := []struct {
+		name         string
+		wantResults  []string
+		wantProblems []string
+	}{
+		{
+			name:         "a note shown after a failed one leaves doctor with no problem, and Result hears the two in turn",
+			wantResults:  []string{"s1: failed", "s2: shown"},
+			wantProblems: []string{"the last notification failed: boom", ""},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			failedTold := make(chan struct{})
+			release := make(chan struct{})
+			cleared := make(chan struct{}, 1)
+			var mu sync.Mutex
+			var results, problems []string
+			n := New(Options{
+				Backend: &fakeBackend{errs: []error{errors.New("boom")}},
+				Now:     func() time.Time { return at("20:00:00") },
+				Problem: func(msg string) {
+					if msg != "" {
+						// s1's problem: hold it until s2 has had its chance
+						// to overtake it.
+						close(failedTold)
+						<-release
+					}
+					mu.Lock()
+					problems = append(problems, msg)
+					mu.Unlock()
+					if msg == "" {
+						cleared <- struct{}{}
+					}
+				},
+				Result: func(note Note, o Outcome) {
+					mu.Lock()
+					defer mu.Unlock()
+					results = append(results, note.Session+": "+o.String())
+				},
+			})
+			defer n.Close()
+			if got := n.Notify(Note{Session: "s1", Ended: at("20:00:00")}); got != Queued {
+				t.Fatalf("Notify(s1) = %v, want %v", got, Queued)
+			}
+			// s1's attempt is over and doctor is about to hear why.
+			<-failedTold
+			if got := n.Notify(Note{Session: "s2", Ended: at("20:00:00")}); got != Queued {
+				t.Fatalf("Notify(s2) = %v, want %v", got, Queued)
+			}
+			// Told out of order, s2's success would reach doctor here,
+			// ahead of s1's failure.
+			select {
+			case <-cleared:
+			case <-time.After(500 * time.Millisecond):
+			}
+			close(release)
+			n.wg.Wait()
+			mu.Lock()
+			defer mu.Unlock()
+			if !slices.Equal(problems, tt.wantProblems) {
+				t.Errorf("problems = %q, want %q", problems, tt.wantProblems)
+			}
+			if !slices.Equal(results, tt.wantResults) {
+				t.Errorf("results = %q, want %q", results, tt.wantResults)
+			}
+		})
+	}
+}
+
+// stalledMemory is a Memory like state.Store, whose Save holds the lock
+// that Put needs for as long as it writes. Its first Save stalls, as one
+// on a stuck disk does, until release is closed.
+type stalledMemory struct {
+	entered chan struct{} // gets a value as the first Save stalls
+	release chan struct{}
+
+	mu      sync.Mutex // state.Store's lock
+	stalled bool
+	puts    []remembered
+}
+
+func (m *stalledMemory) Get(string, any) (bool, error) { return false, nil }
+
+func (m *stalledMemory) Put(_ string, v any) error {
+	r, ok := v.(remembered)
+	if !ok {
+		return fmt.Errorf("Put(%T), want a remembered", v)
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.puts = append(m.puts, r)
+	return nil
+}
+
+func (m *stalledMemory) Save() error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if !m.stalled {
+		m.stalled = true
+		m.entered <- struct{}{}
+		<-m.release
+	}
+	return nil
+}
+
+func TestCloseDoesntWaitOutAStuckSave(t *testing.T) {
+	tests := []struct {
+		name string
+	}{
+		{name: "Close returns within closeWait while a Save is stuck holding Memory's lock, and its last Put lands once that Save ends"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mem := &stalledMemory{entered: make(chan struct{}, 1), release: make(chan struct{})}
+			n := New(Options{
+				Backend: &fakeBackend{},
+				// Off, so every note is decided at once and none is shown.
+				Settings: func() config.Notifications { return config.Notifications{Off: true} },
+				Memory:   mem,
+				Now:      func() time.Time { return at("20:00:00") },
+			})
+			n.Notify(Note{Session: "s1"})
+			<-mem.entered // the save of [s1] is stuck, holding the lock
+			n.Notify(Note{Session: "s2"})
+			// The disk comes back well after closeWait.
+			time.AfterFunc(closeWait+1500*time.Millisecond, func() { close(mem.release) })
+			start := time.Now()
+			n.Close()
+			if took := time.Since(start); took > closeWait+time.Second {
+				t.Errorf("Close took %v with a Save stuck, want about closeWait, %v", took, closeWait)
+			}
+			n.wg.Wait()
+			mem.mu.Lock()
+			defer mem.mu.Unlock()
+			if len(mem.puts) == 0 || strings.Join(sessionKeys(mem.puts[len(mem.puts)-1]), " ") != "s1 s2" {
+				t.Errorf("Puts = %+v, want the last to hold [s1 s2]", mem.puts)
+			}
+		})
 	}
 }

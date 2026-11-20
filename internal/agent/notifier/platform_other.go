@@ -14,6 +14,6 @@ func Platform() Backend {
 
 type noBackend struct{}
 
-func (noBackend) Show(context.Context, Message) error {
+func (noBackend) Show(context.Context, Message, func()) error {
 	return ErrUnavailable
 }

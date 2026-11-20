@@ -29,7 +29,9 @@ type darwinBackend struct {
 	o darwin.Osascript
 }
 
-func (b darwinBackend) Show(ctx context.Context, m Message) error {
+// Show returns as soon as osascript has posted the notification, so it
+// never calls shown.
+func (b darwinBackend) Show(ctx context.Context, m Message, _ func()) error {
 	err := b.o.DisplayNotification(ctx, "pairtime", m.Title, m.Body)
 	if errors.Is(err, darwin.ErrNoOsascript) {
 		return fmt.Errorf("%w: %w", ErrUnavailable, err)

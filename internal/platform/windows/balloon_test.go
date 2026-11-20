@@ -321,9 +321,47 @@ func TestShowBalloonGivesUpOnADoneContext(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			cancel()
-			if err := ShowBalloon(ctx, "pairtime test", "never shown"); !errors.Is(err, context.Canceled) {
+			called := false
+			if err := ShowBalloon(ctx, "pairtime test", "never shown", func() { called = true }); !errors.Is(err, context.Canceled) {
 				t.Errorf("ShowBalloon() = %v, want context.Canceled", err)
 			}
+			if called {
+				t.Error("ShowBalloon called shown for a balloon it never showed")
+			}
+		})
+	}
+}
+
+// The notifier counts the gap to the next notification from the moment the
+// shell takes a balloon, not from the balloon's end, so ShowBalloon says
+// when that is (#86).
+func TestBalloonSaysWhenTheShellTookIt(t *testing.T) {
+	tests := []struct {
+		name string
+	}{
+		{name: "shown is called once, as the balloon goes up and before the wait for it to go, which a caller that gives up then ends at once"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			onLockedThread(t, func() {
+				ctx, cancel := context.WithCancel(context.Background())
+				defer cancel()
+				calls := 0
+				start := time.Now()
+				err := showBalloonOnThisThread(ctx, "pairtime test", "This balloon comes from pairtime's CI. It goes away by itself.", time.Minute, func() {
+					calls++
+					cancel()
+				})
+				if err != nil {
+					t.Errorf("showBalloonOnThisThread() error = %v", err)
+				}
+				if calls != 1 {
+					t.Errorf("shown was called %d times, want once", calls)
+				}
+				if d := time.Since(start); d > 10*time.Second {
+					t.Errorf("the balloon's wait took %v after shown gave up, so shown came after the wait", d)
+				}
+			})
 		})
 	}
 }
