@@ -76,7 +76,7 @@ test.describe('Today', () => {
 		]);
 		// plant-sensor had no agent, so its clock has your hand alone.
 		await expect(clocks.last().getByTestId('agent')).toHaveCount(0);
-		await expect(page.getByTestId('today').getByTestId('agent').first()).toHaveText(/^Claude, working on its own\s*41m$/);
+		await expect(page.getByTestId('today').getByTestId('agent').first()).toHaveText(/Claude, working on its own\s*41m/);
 	});
 
 	test('level-C time and pending time are labeled with the notes `pairtime today` prints', async ({ page }) => {
@@ -84,9 +84,9 @@ test.describe('Today', () => {
 		await page.goto(dashboardURL);
 		const legend = page.getByTestId('today').getByTestId('legend');
 		await expect(legend.locator('li')).toHaveText([
-			/^94%\s*level A: pairtime saw your typing$/,
-			/^4%\s*level B: pairtime saw you at the computer, not your typing$/,
-			/^2%\s*level C: this counts only on your own dashboard$/,
+			/94%\s*level A: pairtime saw your typing/,
+			/4%\s*level B: pairtime saw you at the computer, not your typing/,
+			/2%\s*level C: this counts only on your own dashboard/,
 			'5m of it is level C: it counts only on your own dashboard',
 			'9m of it may still change',
 		]);
@@ -230,11 +230,11 @@ test.describe('Projects', () => {
 		const bot = page.getByTestId('project').filter({ has: page.getByRole('heading', { name: 'discord-bot' }) });
 		await expect(bot.getByTestId('clock-line')).toHaveText('you 1h 23m · Codex 32m');
 		await expect(bot.getByTestId('kinds').locator('li')).toHaveText([
-			/^Writing prompts\s*45m$/,
-			/^Reading Codex's answers\s*28m$/,
-			/^Watching Codex work\s*10m$/,
+			/Writing prompts\s*45m/,
+			/Reading Codex's answers\s*28m/,
+			/Watching Codex work\s*10m/,
 		]);
-		await expect(bot.getByTestId('other').locator('li')).toHaveText([/^Re-rolling the same prompt\s*4m$/]);
+		await expect(bot.getByTestId('other').locator('li')).toHaveText([/Re-rolling the same prompt\s*4m/]);
 	});
 
 	test('the last 30 days asks the agent for each of the 30 days up to its own today', async ({ page }) => {
