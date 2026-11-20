@@ -35,7 +35,9 @@ import (
 // It writes macos-key-down-idle.json to $PAIRTIME_FINDINGS_DIR, which
 // platform.yml uploads as an artifact, and fails only when it can't write
 // the file. It never asks for a permission. Posting events is a test-only
-// tool: the client never posts, taps or listens to input (DESIGN 7.2).
+// tool: this package never posts, taps or listens to input, and the only
+// tap pairtime plans is the opt-in typing module's (DESIGN 7.2 rank 5, 6.2
+// D16).
 func TestFindingKeyDownIdle(t *testing.T) {
 	if os.Getenv(findingsEnv) == "" {
 		t.Skipf("%s isn't set; platform.yml sets it on macos-latest", findingsEnv)
