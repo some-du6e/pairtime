@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"syscall"
+	"testing"
 
 	"golang.org/x/sys/unix"
 
@@ -25,6 +26,20 @@ func ownPGID() int { return syscall.Getpgrp() }
 
 func bashPath() (string, error)   { return exec.LookPath("bash") }
 func pythonPath() (string, error) { return exec.LookPath("python3") }
+
+func selfOwner() string { return linux.SelfOwner() }
+
+// osPID is a process the OS runs as root: init.
+const osPID = 1
+
+func runsAsOS() bool { return os.Geteuid() == 0 }
+
+// regroup returns a script line that runs the helper the way GNU timeout
+// without --foreground runs a command: in a process group of its own.
+var regroup = func(t *testing.T, _ *rig) string {
+	timeout := need(t, "timeout", func() (string, error) { return exec.LookPath("timeout") })
+	return `"` + timeout + `" 60 "$` + envExe + `"`
+}
 
 var scriptCase = struct {
 	name        string

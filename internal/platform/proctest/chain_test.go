@@ -229,6 +229,29 @@ func indexOf(chain []platform.Proc, pid int) int {
 	return -1
 }
 
+// checkTTY checks the terminal the reader reports for the helper and what
+// Classify makes of it: attached, in a foreground group, when the chain
+// runs on a terminal the test opened; none in CI, whose processes have no
+// terminal; unknown on Windows, which doesn't say.
+func checkTTY(t *testing.T, r result, onTerminal bool) {
+	t.Helper()
+	h := r.Chain[0]
+	switch {
+	case goos == platform.Windows:
+		if h.TTY != platform.TTYUnknown || h.TPGID != 0 {
+			t.Errorf("TTY = %s, TPGID = %d on Windows, want unknown and 0", h.TTY, h.TPGID)
+		}
+	case onTerminal:
+		if h.TTY != platform.TTYAttached || !r.Lineage.HasTTY || h.TPGID <= 0 {
+			t.Errorf("TTY = %s, TPGID = %d, has_tty %v on a terminal, want attached, a foreground group and has_tty", h.TTY, h.TPGID, r.Lineage.HasTTY)
+		}
+	case os.Getenv("CI") != "":
+		if h.TTY != platform.TTYNone || r.Lineage.HasTTY || h.TPGID != 0 {
+			t.Errorf("TTY = %s, TPGID = %d, has_tty %v in CI, which has no terminal; want none, 0 and no has_tty", h.TTY, h.TPGID, r.Lineage.HasTTY)
+		}
+	}
+}
+
 func decider(r result) platform.Proc {
 	if r.Lineage.By < 0 {
 		return platform.Proc{}
@@ -243,6 +266,7 @@ func TestRealChains(t *testing.T) {
 	t.Run("python running bash running a harness is script_runtime, the shell skipped", func(t *testing.T) {
 		res := r.run(t, r.python, "-c", "import subprocess, sys; sys.exit(subprocess.call(sys.argv[1:]))", r.bash, r.script)
 		checkChain(t, res)
+		checkTTY(t, res, false)
 		if res.Lineage.ParentClass != event.ParentScriptRuntime {
 			t.Errorf("parent_class = %s, want script_runtime", res.Lineage.ParentClass)
 		}
@@ -257,6 +281,7 @@ func TestRealChains(t *testing.T) {
 	t.Run("a harness straight under a program the table doesn't know is unknown", func(t *testing.T) {
 		res := r.run(t, r.helper)
 		checkChain(t, res)
+		checkTTY(t, res, false)
 		if res.Lineage.ParentClass != event.ParentUnknown || decider(res).PID != self {
 			t.Errorf("parent_class = %s decided by pid %d, want unknown decided by the test, pid %d", res.Lineage.ParentClass, decider(res).PID, self)
 		}
@@ -265,6 +290,7 @@ func TestRealChains(t *testing.T) {
 	t.Run(scriptCase.name, func(t *testing.T) {
 		res := r.run(t, r.bash, r.script)
 		checkChain(t, res)
+		checkTTY(t, res, false)
 		if res.Lineage.ParentClass != scriptCase.class || res.Lineage.ScriptShell != scriptCase.scriptShell {
 			t.Errorf("parent_class = %s, script shell %v; want %s, %v", res.Lineage.ParentClass, res.Lineage.ScriptShell, scriptCase.class, scriptCase.scriptShell)
 		}
@@ -276,6 +302,10 @@ func TestRealChains(t *testing.T) {
 		}
 		res := r.interact(t, `"$`+envExe+`"; exit`)
 		checkChain(t, res)
+		checkTTY(t, res, true)
+		if h := res.Chain[0]; h.PGID != h.TPGID {
+			t.Errorf("the helper is in group %d, but the terminal's foreground group is %d; a command typed into a shell is its foreground job", h.PGID, h.TPGID)
+		}
 		if res.Lineage.ParentClass == event.ParentScriptRuntime || res.Lineage.ScriptShell {
 			t.Errorf("parent_class = %s, script shell %v; an interactive shell must not count as a script", res.Lineage.ParentClass, res.Lineage.ScriptShell)
 		}
@@ -287,8 +317,29 @@ func TestRealChains(t *testing.T) {
 		}
 		res := r.interact(t, `"`+r.bash+`" "$`+envScript+`"; exit`)
 		checkChain(t, res)
+		checkTTY(t, res, true)
 		if res.Lineage.ParentClass != event.ParentScriptRuntime || !res.Lineage.ScriptShell {
 			t.Errorf("parent_class = %s, script shell %v; want script_runtime from the shell running chain.sh", res.Lineage.ParentClass, res.Lineage.ScriptShell)
+		}
+	})
+
+	t.Run("a script whose command leaves the script's process group is still script_runtime", func(t *testing.T) {
+		if interactive == nil || regroup == nil {
+			t.Skipf("no process groups on %s", goos)
+		}
+		script := filepath.Join(r.dir, "regroup.sh")
+		body := regroup(t, r) + "\nstatus=$?\nexit $status\n"
+		if err := os.WriteFile(script, []byte(body), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		res := r.interact(t, `"`+r.bash+`" "`+filepath.ToSlash(script)+`"; exit`)
+		checkChain(t, res)
+		checkTTY(t, res, true)
+		if h := res.Chain[0]; h.PGID == h.TPGID {
+			t.Errorf("the helper is in the terminal's foreground group %d; regroup.sh's command should have moved it out", h.TPGID)
+		}
+		if res.Lineage.ParentClass != event.ParentScriptRuntime || !res.Lineage.ScriptShell {
+			t.Errorf("parent_class = %s, script shell %v; want script_runtime from the shell running regroup.sh, which holds the terminal", res.Lineage.ParentClass, res.Lineage.ScriptShell)
 		}
 	})
 }
@@ -329,6 +380,53 @@ func TestReadsThisProcess(t *testing.T) {
 		if (me.TTY == platform.TTYUnknown) != (goos == platform.Windows) {
 			t.Errorf("TTY = %s on %s", me.TTY, goos)
 		}
+		if me.TTY != platform.TTYAttached && me.TPGID != 0 {
+			t.Errorf("TPGID = %d for a process with no terminal", me.TPGID)
+		}
+	})
+	t.Run("this process is this user's", func(t *testing.T) {
+		if want := selfOwner(); me.Owner == "" || me.Owner != want {
+			t.Errorf("Owner = %q, want %q", me.Owner, want)
+		}
+	})
+	t.Run("a process the OS runs has another owner", func(t *testing.T) {
+		if runsAsOS() {
+			t.Skip("this test runs as the OS's own user or session")
+		}
+		p, ok := tab.Get(osPID)
+		if !ok {
+			t.Fatalf("pid %d isn't in the table", osPID)
+		}
+		if p.Owner == "" || p.Owner == me.Owner {
+			t.Errorf("pid %d (%s) has Owner %q, this process %q; want another owner", p.PID, p.Name, p.Owner, me.Owner)
+		}
+	})
+	t.Run("a second read gives this process the same ID", func(t *testing.T) {
+		again, err := readOS()
+		if err != nil {
+			t.Fatal(err)
+		}
+		p, ok := platform.NewTable(goos, again).Get(os.Getpid())
+		if !ok || p.ID() != me.ID() || me.ID().Start == 0 {
+			t.Errorf("ID = %+v, then %+v (found %v); want the same, with a start", me.ID(), p.ID(), ok)
+		}
+		if goos == platform.Linux && me.Ticks == 0 {
+			t.Error("Ticks = 0 on Linux")
+		}
+	})
+	t.Run("a process this user can't open still has a start time", func(t *testing.T) {
+		if goos != platform.Windows {
+			t.Skip("only the Windows reader opens processes")
+		}
+		for _, p := range procs {
+			if strings.EqualFold(p.Name, "services") {
+				if p.Start.IsZero() {
+					t.Errorf("services.exe, pid %d, has no start time", p.PID)
+				}
+				return
+			}
+		}
+		t.Error("services.exe isn't in the table")
 	})
 	t.Run("the parent is in the table and started first", func(t *testing.T) {
 		parent, ok := tab.Parent(me)

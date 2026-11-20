@@ -325,6 +325,7 @@ func TestLauncherOf(t *testing.T) {
 		{"a plain node that started claude at once is a script, since claude has no Node launcher", Windows, Proc{Name: "node", Start: at(100)}, Proc{Name: "claude", Start: at(101)}, false},
 		{"a native codex above codex is another session", Linux, Proc{Name: "codex", Start: at(100)}, Proc{Name: "codex", Start: at(101)}, false},
 		{"a node titled as another harness isn't this one's launcher", Linux, Proc{Name: "node", Alias: "gemini"}, Proc{Name: "codex"}, false},
+		{"a Node harness above the same Node harness is a session that started another", Linux, Proc{Name: "node", Alias: "claude"}, Proc{Name: "node", Alias: "claude"}, false},
 		{"a node above a program that isn't a harness is no launcher", Linux, Proc{Name: "node", Alias: "codex"}, Proc{Name: "bash"}, false},
 	}
 	for _, tt := range tests {

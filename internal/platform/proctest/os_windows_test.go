@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"testing"
 
 	"github.com/some-du6e/pairtime/internal/platform"
 	"github.com/some-du6e/pairtime/internal/platform/windows"
@@ -37,6 +38,16 @@ func bashPath() (string, error) {
 }
 
 func pythonPath() (string, error) { return exec.LookPath("python") }
+
+func selfOwner() string { return windows.SelfOwner() }
+
+// osPID is a process the OS runs in session 0: System.
+const osPID = 4
+
+func runsAsOS() bool { return windows.SelfOwner() == platform.SessionOwner(0) }
+
+// regroup is nil: Windows has no process groups.
+var regroup func(t *testing.T, r *rig) string
 
 var scriptCase = struct {
 	name        string

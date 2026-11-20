@@ -97,16 +97,6 @@ jobs:
       - name: go vet
         run: go vet ./...
 
-      - name: go vet for Windows and macOS
-        # The platform code and its tests for the other two OSes, type-checked
-        # on this runner, so a mistake in them shows up here before
-        # platform.yml spends a scarce Windows or macOS runner on it.
-        run: |
-          for goos in windows darwin; do
-            echo "GOOS=$goos"
-            GOOS=$goos go vet ./internal/platform/... ./internal/agent/procs/...
-          done
-
       - name: go test
         run: go test ./...
 
@@ -199,13 +189,14 @@ jobs:
         # platform code lands before the agent calls it. go vet type-checks a
         # package and its tests for one GOOS/GOARCH, so this compiles
         # internal/platform for all seven targets with CGO_ENABLED=0, such as
-        # internal/platform/darwin for darwin/amd64 and darwin/arm64 (WP-OS3).
-        # The Windows and macOS tests themselves run in platform.yml.
+        # internal/platform/darwin for darwin/amd64 and darwin/arm64 (WP-OS3),
+        # and the procs scan's per-OS readers with it (WP-OS6). The Windows
+        # and macOS tests themselves run in platform.yml.
         if: ${{ !cancelled() }}
         run: |
           for target in windows/amd64 windows/386 windows/arm64 darwin/amd64 darwin/arm64 linux/amd64 linux/arm64; do
-            echo "go vet ./internal/platform/... for $target"
-            GOOS=${target%/*} GOARCH=${target#*/} go vet ./internal/platform/...
+            echo "go vet ./internal/platform/... ./internal/agent/procs/... for $target"
+            GOOS=${target%/*} GOARCH=${target#*/} go vet ./internal/platform/... ./internal/agent/procs/...
           done
 
       - name: Module licenses

@@ -74,16 +74,19 @@ func HookHost(goos string, chain []Proc) int {
 }
 
 // LauncherOf reports whether parent is child's own launcher rather than
-// what started child's session: a Node-style runtime directly above the
-// harness that either runs that harness itself, as npm's wrapper does under
-// a title naming it (Linux's comm), or, for a NodeLauncher harness, started
-// at most LauncherWindow before it, as the plain node of the same wrapper
-// does on macOS and Windows. The classifier skips a launcher, and the scan
-// reports the child rather than the launcher, because the child is what a
-// hook claims. A native harness above the same native harness is no
-// launcher: it is another session that started this one (agent).
+// what started child's session: a Node-style runtime directly above a
+// native harness that either goes by that harness's name itself, as a
+// wrapper titled after it does (Linux's comm), or, for a NodeLauncher
+// harness, started at most LauncherWindow before it, as npm's plain node
+// wrapper in front of codex does. The classifier skips a launcher, and
+// the scan reports the child rather than the launcher, because the child
+// is what a hook claims. A harness above the same harness, native or Node,
+// is no launcher: it is another session that started this one (agent).
 func LauncherOf(goos string, parent, child Proc) bool {
 	if rt, _ := Lookup(goos, parent.Name); !rt.JSRuntime {
+		return false
+	}
+	if cr, _ := Lookup(goos, child.Name); cr.JSRuntime {
 		return false
 	}
 	h, ok := HarnessOf(goos, child)

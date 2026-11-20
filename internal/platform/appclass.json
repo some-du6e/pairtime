@@ -193,7 +193,7 @@
       "role": "harness",
       "harness": "codex",
       "node_launcher": true,
-      "cite": "HS 6.5 (codex exec); HS 6 (openai/codex: the npm package's codex.js runs the native codex as its child)"
+      "cite": "HS 6.5 (codex exec); HS 6 (openai/codex. The npm package's bin/codex.js, read at 0.171.0 on 2026-11-19, starts the native codex as its child on Windows, and on Linux and macOS replaces itself with it through process.execve where Node has that)"
     },
     {
       "names": ["cursor-agent"],

@@ -92,9 +92,10 @@ type Entry struct {
 	JSRuntime bool `json:"js_runtime,omitempty"`
 	// NodeLauncher marks a harness whose npm package starts it through a
 	// Node wrapper that runs the native harness as its child, as codex's
-	// does. Only for these is a Node-style runtime just above the harness
-	// taken for its launcher (LauncherOf): Claude Code's npm install runs
-	// no Node at all (CP 4.1), so a node above claude is a script.
+	// does. Only for these is a plain node just above the harness taken
+	// for its launcher (LauncherOf): Claude Code's npm install runs no Node
+	// at all (CP 4.1), and OpenCode's links its native binary in place, so
+	// a node above claude or opencode is a script.
 	NodeLauncher bool `json:"node_launcher,omitempty"`
 	// GivesConsole marks the Windows shell, explorer: a console program it
 	// starts gets a console window of its own, so a harness it starts
