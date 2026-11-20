@@ -28,6 +28,9 @@ const (
 	markerName = "keystore.json"
 	// markerVersion is keystore.json's format.
 	markerVersion = 1
+	// lockName is the file home.Acquire locks in the keystore's directory,
+	// home's agent.lock. Destroy leaves it.
+	lockName = "agent.lock"
 )
 
 // Item names. Each is prefixed with the installation's id and a dot.

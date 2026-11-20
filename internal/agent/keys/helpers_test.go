@@ -145,6 +145,23 @@ func useOSStore(t *testing.T, s Store) {
 	t.Cleanup(func() { thisOSStores = saved })
 }
 
+// checkCleared checks that the keystore's directory in the data directory
+// dir holds nothing but home's lock file, as Destroy leaves it.
+func checkCleared(t *testing.T, dir string) {
+	t.Helper()
+	entries, err := os.ReadDir(keysDir(dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, e := range entries {
+		names = append(names, e.Name())
+	}
+	if len(names) != 1 || names[0] != lockName {
+		t.Errorf("the keystore's directory holds %v, want only %s", names, lockName)
+	}
+}
+
 // markerIn reads keystore.json in the data directory dir.
 func markerIn(t *testing.T, dir string) marker {
 	t.Helper()

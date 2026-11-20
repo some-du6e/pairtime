@@ -556,9 +556,7 @@ func TestDestroy(t *testing.T) {
 			if osStore.size() != 0 {
 				t.Errorf("the store still has %d items", osStore.size())
 			}
-			if _, err := os.Stat(keysDir(dir)); !os.IsNotExist(err) {
-				t.Errorf("the keystore's directory is still there (%v)", err)
-			}
+			checkCleared(t, dir)
 			if _, err := Inspect(dir); !errors.Is(err, fs.ErrNotExist) {
 				t.Errorf("Inspect after Destroy: %v", err)
 			}
@@ -695,18 +693,14 @@ func TestDestroy(t *testing.T) {
 					t.Errorf("error %q doesn't name %q", err, want)
 				}
 			}
-			if _, err := os.Stat(keysDir(dir)); !os.IsNotExist(err) {
-				t.Errorf("the keystore's directory is still there (%v)", err)
-			}
+			checkCleared(t, dir)
 		}},
 		{"a DPAPI blob keystore.json names goes with the directory on a system without DPAPI", func(t *testing.T, dir string) {
 			mustOpen(t, Options{Dir: dir, Stores: []Store{newFake(KindDPAPI)}})
 			if err := Destroy(Options{Dir: dir, Stores: []Store{}}); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := os.Stat(keysDir(dir)); !os.IsNotExist(err) {
-				t.Errorf("the keystore's directory is still there (%v)", err)
-			}
+			checkCleared(t, dir)
 		}},
 		{"a store that was never given the key doesn't stop Destroy", func(t *testing.T, dir string) {
 			refused := newFake(KindSecretService)
@@ -728,9 +722,7 @@ func TestDestroy(t *testing.T) {
 			if err := Destroy(Options{Dir: dir, Stores: []Store{}}); !errors.Is(err, ErrDamaged) {
 				t.Errorf("got %v, want ErrDamaged", err)
 			}
-			if _, err := os.Stat(keysDir(dir)); !os.IsNotExist(err) {
-				t.Errorf("the keystore's directory is still there (%v)", err)
-			}
+			checkCleared(t, dir)
 		}},
 	}
 	for _, tt := range tests {

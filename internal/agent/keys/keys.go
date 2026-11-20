@@ -162,7 +162,8 @@ func (o *options) lockWait() time.Duration { return 4*o.timeout + 10*time.Second
 // lock takes the keystore's lock, which serializes first runs, archives and
 // Destroy across processes: the agent, `pairtime install`, `pairtime
 // restore`. It is home's single-instance lock taken on the keys directory,
-// so it is a file named agent.lock in there, or a named mutex on Windows.
+// a lock on the file agent.lock in there, and on Windows a named mutex
+// too.
 func (o *options) lock() (func(), error) {
 	deadline := time.Now().Add(o.lockWait())
 	for {
@@ -549,8 +550,9 @@ func Inspect(dir string) (Status, error) {
 }
 
 // Destroy deletes the installation's device keys, its own and any it
-// archived, from every store that may hold them, then the keystore's
-// directory. After it, the records those keys wrote can't be opened, and
+// archived, from every store that may hold them, then the keystore's files:
+// everything in its directory but the lock, keystore.json last. After it,
+// the records those keys wrote can't be opened, and
 // their nonces can't be checked, by anyone (crypto-shredding, DESIGN 3.5),
 // and the next Open makes a new K_dev. It is "delete everything" (DESIGN
 // 8.8; WP-LG6) and uninstall's last step, so a person asks for it.
@@ -564,8 +566,8 @@ func Inspect(dir string) (Status, error) {
 // any of them fails, Destroy returns the error and leaves keystore.json,
 // so a later Destroy can finish. When keystore.json names a keyring this
 // system doesn't have, as when the data directory came from another OS,
-// Destroy still deletes the rest and the directory, and its error says
-// where the key stays.
+// Destroy still deletes the rest and the keystore's files, and its error
+// says where the key stays.
 //
 // Stores keystore.json doesn't name were never given a key, except by a
 // first run that died between saving the key and writing keystore.json.
@@ -578,6 +580,10 @@ func Inspect(dir string) (Status, error) {
 // provides the Secret Service on some desktops, by default moves a
 // deleted entry to its database's recycle bin, where K_dev stays until the
 // recycle bin is emptied, though the Secret Service no longer shows it.
+//
+// The directory and its lock file stay. home never deletes a lock file,
+// because that races with the next process to open it, and Windows can't
+// delete one that is open, as Destroy's own is.
 func Destroy(opts Options) error {
 	o, err := opts.resolve()
 	if err != nil {
@@ -593,10 +599,10 @@ func Destroy(opts Options) error {
 	defer unlock()
 	m, err := readMarker(o.dir)
 	if isNotExist(err) {
-		return os.RemoveAll(o.dir)
+		return o.clearDir()
 	}
 	if err != nil {
-		if rerr := os.RemoveAll(o.dir); rerr != nil {
+		if rerr := o.clearDir(); rerr != nil {
 			return rerr
 		}
 		return fmt.Errorf("%w; the keystore's files are deleted, but any item it put in the OS's secret store remains, because keystore.json named it", err)
@@ -624,7 +630,8 @@ func Destroy(opts Options) error {
 				retry = append(retry, fmt.Errorf("keys: deleting a device key from %s: %w", s.Kind().Description(), err))
 			}
 		case k.store.inDir():
-			// A DPAPI blob from another system goes with the directory.
+			// A DPAPI blob from another system goes with the keystore's
+			// files.
 		default:
 			stays = append(stays, fmt.Errorf("%w: keystore.json names %s for a device key (service %q, account %q), which this system doesn't have, so the key stays there", ErrUnavailable, k.store.Description(), keyringService, k.item))
 		}
@@ -641,8 +648,33 @@ func Destroy(opts Options) error {
 	if len(retry) > 0 {
 		return errors.Join(append(retry, stays...)...)
 	}
-	if err := os.RemoveAll(o.dir); err != nil {
+	if err := o.clearDir(); err != nil {
 		return err
 	}
 	return errors.Join(stays...)
+}
+
+// clearDir deletes everything in the keystore's directory but the lock
+// file, and keystore.json last, so a Destroy cut off halfway leaves
+// keystore.json naming whatever is left. The caller holds the lock.
+func (o *options) clearDir() error {
+	entries, err := os.ReadDir(o.dir)
+	if err != nil {
+		return err
+	}
+	var errs []error
+	for _, e := range entries {
+		if n := e.Name(); n != lockName && n != markerName {
+			if err := os.RemoveAll(filepath.Join(o.dir, n)); err != nil {
+				errs = append(errs, err)
+			}
+		}
+	}
+	if len(errs) > 0 {
+		return errors.Join(errs...)
+	}
+	if err := os.Remove(filepath.Join(o.dir, markerName)); err != nil && !isNotExist(err) {
+		return err
+	}
+	return nil
 }
