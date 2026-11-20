@@ -77,7 +77,11 @@ const MaxText = 200
 
 // Title is the title of every notification. Lock screens and notification
 // lists show titles, so it never names a project or quotes anything; the
-// coach's text goes in the body.
+// coach's text goes in the body. It says a session recap is ready, so
+// Notify is for work sessions only. DESIGN 3.3's other trigger, the weekly
+// story (M5), needs a title of its own, and spacing of its own from the
+// session notes. The WP that adds it can give Note a kind whose zero value
+// is the session recap, which changes no caller.
 const Title = "Your session recap is ready"
 
 // fallbackText is the body when the coach gives no text.

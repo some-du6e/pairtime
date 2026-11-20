@@ -40,8 +40,9 @@ type Osascript struct {
 // notification belongs to, and the user's notification settings for Script
 // Editor apply: its notifications may be off, or go only to Notification
 // Center. DisplayNotification returns nil either way, because macOS doesn't
-// tell osascript. Errors don't repeat what osascript printed, which can
-// quote the script.
+// tell osascript. A click on the notification opens Script Editor; there
+// is no way to give it a URL or an action. Errors don't repeat what
+// osascript printed, which can quote the script.
 func (o Osascript) DisplayNotification(ctx context.Context, title, subtitle, body string) error {
 	path := o.Path
 	if path == "" {
