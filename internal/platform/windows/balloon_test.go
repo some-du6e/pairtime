@@ -19,27 +19,10 @@ import (
 )
 
 // balloonsAloneEnv makes this test binary a process whose only GUI
-// threads are balloons' (see balloonsAlone). It holds how many balloons to
-// make. TestBalloonsInAProcessWithNoOtherGUIThread sets it.
+// threads are balloons' (see balloonsAlone and main_test.go). It holds how
+// many balloons to make. TestBalloonsInAProcessWithNoOtherGUIThread sets
+// it.
 const balloonsAloneEnv = "PAIRTIME_TEST_BALLOONS_ALONE"
-
-func init() {
-	// Package initialization runs on the main thread, and locking it here
-	// keeps it for the main goroutine, which makes no window. Otherwise a
-	// balloon's goroutine could run there, and when a goroutine locked to
-	// the main thread ends, Go parks the thread for good instead of ending
-	// it (runtime.mexit), which would leave a GUI thread behind.
-	if os.Getenv(balloonsAloneEnv) != "" {
-		runtime.LockOSThread()
-	}
-}
-
-func TestMain(m *testing.M) {
-	if n := os.Getenv(balloonsAloneEnv); n != "" {
-		os.Exit(balloonsAlone(n))
-	}
-	os.Exit(m.Run())
-}
 
 // balloonsAlone makes n balloons' windows, each on a thread of its own
 // that ends before the next one starts, as ShowBalloon's threads do. It
