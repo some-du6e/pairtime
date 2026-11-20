@@ -133,10 +133,18 @@ class Scenario:
             "CC11": ck.cc11(dev.events, sub, dev.keys, self.typing, self.classes),
         }
         if self.challenge is not None and self.challenge["drawn"]:
-            flipped = ck.cc8(dict(self.challenge, drawn=self.challenge["drawn"][::-1]), led)
-            check(flipped["counts"] == computed["CC8"]["counts"]
-                  and sorted(map(str, flipped.get("items", []))) == sorted(map(str, computed["CC8"].get("items", []))),
-                  f"{self.name}: CC8's result doesn't depend on the order of the reveals")
+            # CC8 again over every rotation of the draw and of its reverse,
+            # so each reveal is walked first and last. A count or a failed
+            # item that hangs on which value of a shingle came first can't
+            # agree with all of them.
+            def verdict(r):
+                return r["result"], r["counts"], sorted(map(str, r.get("items", [])))
+
+            for walk in (self.challenge["drawn"], self.challenge["drawn"][::-1]):
+                for i in range(len(walk)):
+                    again = ck.cc8(dict(self.challenge, drawn=walk[i:] + walk[:i]), led)
+                    check(verdict(again) == verdict(computed["CC8"]),
+                          f"{self.name}: CC8's result doesn't depend on the order of the reveals")
         results, not_exercised = {}, {}
         for cc in ck.CHECKS:
             want = self.stated.get(cc)
