@@ -256,15 +256,17 @@ func TestCredit(t *testing.T) {
 				b.start(at(0), "s_1", "p_1", event.EntrypointCLI, event.ParentTerminalApp, true)
 				b.start(at(0), "s_2", "p_1", event.EntrypointCLI, event.ParentTerminalApp, true)
 				b.mouse(every(at(1), at(296), 5000)...)
-				b.prompt(at(60), event.ViaHook, "s_1", "p_1", "t_1", 30)
+				// The older entry is in s_2, the session with the higher
+				// key, so draining by key order instead would differ.
+				b.prompt(at(60), event.ViaHook, "s_2", "p_1", "t_1", 30)
 				b.focus(atMS(60_500), event.AppOther, "")
-				b.agentStops(at(61), "s_1", "t_1")
+				b.agentStops(at(61), "s_2", "t_1")
 				b.focus(at(90), event.AppTerminal, "p_1", "s_1", "s_2")
-				b.prompt(at(100), event.ViaHook, "s_2", "p_1", "t_2", 30)
+				b.prompt(at(100), event.ViaHook, "s_1", "p_1", "t_2", 30)
 				// The agent samples at every hook event (DESIGN 3.3), which
 				// shows the input before this mid-slot prompt.
 				b.sample(at(100))
-				b.agentStops(at(200), "s_2", "t_2")
+				b.agentStops(at(200), "s_1", "t_2")
 				b.samples(at(0), at(300))
 			},
 			want: []secondsWant{
