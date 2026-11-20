@@ -51,8 +51,11 @@ func (e Env) getenv(key string) string {
 }
 
 // check says what makes e unusable for planning: a home directory that
-// isn't absolute, or a binary path that isn't an absolute path on e.GOOS
-// or holds a character no hook config or login item can carry.
+// isn't absolute, or a binary path that isn't an absolute path on e.GOOS,
+// holds a character no hook config or login item can carry, or names a
+// binary that isn't called pairtime or pairtime.exe. Uninstall recognizes
+// pairtime's hooks and login items by that name (isPairtimeBinary), so a
+// hook written for another name would stay behind once its file changed.
 func (e Env) check() error {
 	if !filepath.IsAbs(e.Home) {
 		return fmt.Errorf("the home directory %q isn't an absolute path", e.Home)
@@ -66,6 +69,8 @@ func (e Env) check() error {
 		return fmt.Errorf("the binary's path %q holds a control character", e.Exe)
 	case !isAbs(e.GOOS, e.Exe):
 		return fmt.Errorf("the binary's path %q isn't an absolute path on %s", e.Exe, e.GOOS)
+	case !isPairtimeBinary(e.Exe):
+		return fmt.Errorf("the binary %q isn't called pairtime or pairtime.exe, the name uninstall knows pairtime's hooks and login items by", e.Exe)
 	}
 	return nil
 }
@@ -124,11 +129,13 @@ var undoers = map[string]undoer{
 }
 
 // Recorder is an Edit that keeps, in the manifest, something its undo needs
-// that neither the target nor what it held before tells: the key that
-// identifies the line WP-IN3 adds to ~/.wakatime.cfg (DESIGN 5.6), which the
-// agent rewrites when its port changes, so that uninstall takes out that
-// line and no other. Each install records what its edit returns, in place
-// of what an earlier install of the same item recorded.
+// that neither the target nor what it held before tells: the kind of entry
+// an autostart edit writes, so that uninstall can tell pairtime's entry from
+// another program's that took its place, or the key that identifies the
+// line WP-IN3 adds to ~/.wakatime.cfg (DESIGN 5.6), which the agent rewrites
+// when its port changes, so that uninstall takes out that line and no
+// other. Each install records what its edit returns, in place of what an
+// earlier install of the same item recorded.
 type Recorder interface {
 	Edit
 	// Record returns the data as JSON, or nil for none.
@@ -175,15 +182,33 @@ type Content struct {
 	Mode fs.FileMode
 	// Type is a registry value's type, such as RegSZ, and 0 for a file.
 	Type uint32
+
+	// link is true when the file's path is a symbolic link, which reading
+	// followed. Only read sets it, so that Apply can check that a path it
+	// writes or deletes is still what the plan found there.
+	link bool
 }
 
 // Same reports whether c and d hold the same thing. A file's mode doesn't
-// count.
+// count, and nor does whether its path is a link (unchanged).
 func (c Content) Same(d Content) bool {
 	if c.Exists != d.Exists {
 		return false
 	}
 	return !c.Exists || (bytes.Equal(c.Data, d.Data) && c.Type == d.Type)
+}
+
+// unchanged reports whether c, what a target holds when Apply reads it
+// again, is still d, what it held when the plan read it: the same thing,
+// and for a file the same mode and a path that is a link or not as it
+// was. Apply writes the file with the mode the plan read, so a mode
+// changed in between, such as settings.json made private, would otherwise
+// be undone; and it deletes a file pairtime created by its path, which
+// would delete a link the teen put there since, and leave pairtime's hooks
+// in the file it points to. Same, which tells whether an edit changes
+// anything, ignores both.
+func (c Content) unchanged(d Content) bool {
+	return c.Same(d) && c.Mode == d.Mode && c.link == d.link
 }
 
 // digest identifies c in the manifest: "" for nothing there, and otherwise

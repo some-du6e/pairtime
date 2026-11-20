@@ -64,6 +64,7 @@ func TestParseAcceptsCommentsAndTrailingCommas(t *testing.T) {
 		{"a byte order mark is skipped", "\xef\xbb\xbf{\"a\": 1}", `{"a": 1}`},
 		{"comment marks inside a string are text", `{"u": "http://x/*y*/ //z"}`, `{"u": "http://x/*y*/ //z"}`},
 		{"CRLF line endings end a line comment", "{\r\n  \"a\": 1 // one\r\n}\r\n", `{"a": 1}`},
+		{"a carriage return alone ends a line comment, as JavaScript and VS Code read it", "// note\r{\"model\": \"x\"}", `{"model": "x"}`},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -73,6 +74,31 @@ func TestParseAcceptsCommentsAndTrailingCommas(t *testing.T) {
 			}
 			if got, want := v.Interface(), decodeStd(t, tt.strict); !reflect.DeepEqual(got, want) {
 				t.Errorf("Parse gives %#v, want %#v", got, want)
+			}
+		})
+	}
+}
+
+func TestComments(t *testing.T) {
+	tests := []struct {
+		name string
+		src  string
+		want [][2]int
+	}{
+		{"a line comment ends before its line feed", "{} // a\n", [][2]int{{3, 7}}},
+		{"a line comment ends before the carriage return of a CRLF", "{} // a\r\n", [][2]int{{3, 7}}},
+		{"a line comment ends at a carriage return alone", "// a\r{}", [][2]int{{0, 4}}},
+		{"a line comment at the end of the file ends there", "{} // a", [][2]int{{3, 7}}},
+		{"a block comment ends after its star and slash", "{/* a */}", [][2]int{{1, 8}}},
+		{"comment marks inside a string aren't a comment", `{"u": "http://x/*y*/"}`, nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if _, err := Parse([]byte(tt.src)); err != nil {
+				t.Fatalf("Parse(%q): %v", tt.src, err)
+			}
+			if got := Comments([]byte(tt.src)); !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("Comments(%q) = %v, want %v", tt.src, got, tt.want)
 			}
 		})
 	}

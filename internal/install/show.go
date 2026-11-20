@@ -34,9 +34,10 @@ func (ch Change) shown(c Content) []byte {
 // an env block, as the setup guides of third-party providers have it, or a
 // webhook URL in another tool's hook, in any form, so the mask takes every
 // value rather than what looks like a secret. Member names, numbers, true,
-// false and null stay, and so do pairtime's own hook handlers, so the diff
-// shows the file's shape and what pairtime adds or takes out. Every line
-// stays a line, so the diff of two masked files lines up as the files do.
+// false and null stay, and so do the strings pairtime writes in its own
+// hook handlers (keepPairtime), so the diff shows the file's shape and what
+// pairtime adds or takes out. Every line stays a line, so the diff of two
+// masked files lines up as the files do.
 func maskSettings(src []byte) []byte {
 	root, err := jsonc.Parse(src)
 	if err != nil && !errors.Is(err, jsonc.ErrEmpty) {
@@ -102,8 +103,12 @@ func maskLines(b []byte) []byte {
 }
 
 // keepPairtime marks in keep the string values pairtime writes in a
-// settings file: those of its hook handlers, and the matcher of a group
-// that holds only pairtime handlers.
+// settings file: in each of its hook handlers, "type": "command", the
+// binary's path and the arguments of `pairtime hook`, and the matcher
+// pairtime gives the event, on a group that holds only pairtime handlers.
+// Anything else stays masked, even inside a pairtime handler: a handler
+// the teen gave a status message, or an argument, is still pairtime's, and
+// what was added to it isn't.
 func keepPairtime(root *jsonc.Value, keep map[*jsonc.Value]bool) {
 	hooks := root.Get("hooks")
 	if hooks == nil || hooks.Kind != jsonc.Object {
@@ -124,13 +129,42 @@ func keepPairtime(root *jsonc.Value, keep map[*jsonc.Value]bool) {
 					all = false
 					continue
 				}
-				eachString(h.Value, func(v *jsonc.Value) { keep[v] = true })
+				keepHandler(h.Value, keep)
 			}
-			if m := g.Value.Get("matcher"); all && m != nil {
+			if m := g.Value.Get("matcher"); all && m != nil && m.Kind == jsonc.String && m.Text == claudeMatcher(ev.Key) {
 				keep[m] = true
 			}
 		}
 	}
+}
+
+// keepHandler marks in keep the strings pairtime writes in h, one of its
+// hook handlers.
+func keepHandler(h *jsonc.Value, keep map[*jsonc.Value]bool) {
+	if typ := h.Get("type"); typ != nil && typ.Kind == jsonc.String && typ.Text == "command" {
+		keep[typ] = true
+	}
+	if cmd := h.Get("command"); cmd != nil && cmd.Kind == jsonc.String {
+		keep[cmd] = true // a pairtime binary's path, which isPairtimeHook checked
+	}
+	if args := h.Get("args"); args != nil && args.Kind == jsonc.Array {
+		for _, a := range args.Items {
+			if a.Value.Kind == jsonc.String && isHookArg(a.Value.Text) {
+				keep[a.Value] = true
+			}
+		}
+	}
+}
+
+// isHookArg reports whether s is one of the words of pairtime's hook
+// arguments: hook, --harness, claude_code, --event and the names of the
+// events pairtime installs.
+func isHookArg(s string) bool {
+	switch s {
+	case "hook", "--harness", claudeHarness, "--event":
+		return true
+	}
+	return slices.ContainsFunc(claudeHooks, func(hk claudeHook) bool { return hk.event == s })
 }
 
 // eachString calls f for every string value under v, v included. Member
