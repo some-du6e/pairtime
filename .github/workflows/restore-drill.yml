@@ -345,12 +345,16 @@ jobs:
         run: |
           cd "$D"
           docker compose -f compose.yml -f drill.yml down
-          db="file:$D/data/pairtime.db?immutable=1"
-          test "$(sudo sqlite3 "$db" 'PRAGMA integrity_check')" = ok
-          test "$(sudo sqlite3 "$db" 'SELECT token FROM drill_marker')" = "$TOKEN"
-          sudo sqlite3 "$db" 'SELECT id FROM schema_migrations ORDER BY id' || sudo sqlite3 "$db" '.tables'
           # pairtimed takes group and other access away from a restored file.
           test "$(sudo stat -c %a "$D/data/pairtime.db")" = 600
+          # A copy with its WAL, which sqlite3 reads as SQLite would.
+          mkdir "$RUNNER_TEMP/final"
+          sudo sh -c "cp '$D'/data/pairtime.db* '$RUNNER_TEMP/final/'"
+          sudo chown -R "$(id -u):$(id -g)" "$RUNNER_TEMP/final"
+          db=$RUNNER_TEMP/final/pairtime.db
+          test "$(sqlite3 "$db" 'PRAGMA integrity_check')" = ok
+          test "$(sqlite3 "$db" 'SELECT token FROM drill_marker')" = "$TOKEN"
+          sqlite3 "$db" 'SELECT id FROM schema_migrations ORDER BY id'
           echo "the restored database passes integrity_check, holds the marker and has mode 0600"
 
       - name: The logs
@@ -437,8 +441,10 @@ jobs:
           compose() { docker compose -f compose.yml -f drill.yml "$@"; }
           # litestream restore reads the replica and writes only here.
           compose run --rm -T pairtimed litestream restore -config /etc/litestream.yml -o /data/pairtime.db /data/pairtime.db
-          db="file:$D/data/pairtime.db?immutable=1"
-          test "$(sudo sqlite3 "$db" 'PRAGMA integrity_check')" = ok
+          mkdir "$RUNNER_TEMP/restored"
+          sudo sh -c "cp '$D'/data/pairtime.db* '$RUNNER_TEMP/restored/'"
+          sudo chown -R "$(id -u):$(id -g)" "$RUNNER_TEMP/restored"
+          test "$(sqlite3 "$RUNNER_TEMP/restored/pairtime.db" 'PRAGMA integrity_check')" = ok
           echo "the replica restores to a database that passes integrity_check"
 
       - name: Serve the copy and check the backups exist

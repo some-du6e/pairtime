@@ -21,8 +21,10 @@ A change is done when every workflow its PR started is green. A WP marked "Race:
 | nightly.yml | `go test -race` over internal/agent and internal/server | daily, 03:00 UTC |
 | postgres.yml | the server tests on Postgres 18 as well as SQLite | PRs touching its paths, the packages that hold SQL; daily, 03:30 UTC |
 | web.yml | npm licenses, svelte-check, vitest, the UI build, Playwright on Chromium against a `pairtime agent` built with that UI embedded, and SPDX headers | PRs touching web/, extension/, internal/webui/, docs/api/, or the agent code the smoke test runs (internal/agent/, internal/version/, cmd/pairtime/); release tags |
-| objstore.yml | the object storage client against a MinIO service container | PRs touching internal/server/objstore/, weekly |
-| release.yml | the seven targets' archives, checksums.txt and the signed manifest.json | release tags, signed with the release key and published; PRs touching internal/release or tools/release, as a snapshot signed with a throwaway key and never published |
+| objstore.yml | the object storage client against a MinIO service container, or with `-f minio=source` against MinIO built from its source | PRs touching internal/server/objstore/, weekly |
+| restore-drill.yml | the deploy bundle against MinIO: deploy with compose.yml, back up, destroy, restore from the replica and the key backup, checked with the age and sqlite3 tools and the server's pages; with `-f target=production`, a read-only restore of the real replica | PRs touching deploy/, Dockerfile.pairtimed or internal/server/backup/; weekly |
+| probe.yml | a deployed server from GitHub's network: TLS, `/healthz` and `/.well-known/pairtime-keys.json` | by hand, `-f host=<host>` |
+| release.yml | the seven targets' archives, checksums.txt and the signed manifest.json, and the server image, built and started on every run | release tags, signed with the release key and published, and the image pushed to ghcr.io/some-du6e/pairtimed; PRs touching internal/release, tools/release or Dockerfile.pairtimed, as a snapshot signed with a throwaway key and never published |
 | tidy.yml | `go mod tidy` and npm lockfiles, committed to the branch | by hand |
 | fixtures.yml | the fixture provenance check | by hand |
 

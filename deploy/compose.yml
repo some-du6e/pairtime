@@ -83,7 +83,9 @@ services:
     env_file: ./config/tunnel.env
     depends_on:
       - pairtimed
-    read_only: true
+    # The image is distroless and runs as nonroot already. It keeps a
+    # writable root filesystem, since no CI job starts a real tunnel to
+    # show cloudflared runs without one.
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
 

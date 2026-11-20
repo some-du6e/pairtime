@@ -408,13 +408,23 @@ func (d *doctor) checkVersioning(ctx context.Context, b *objstore.Bucket) result
 	switch {
 	case errors.Is(err, objstore.ErrNotImplemented):
 		return ok("the store doesn't implement GetBucketVersioning, as R2 doesn't, so the bucket keeps no versions")
+	case err != nil && isR2(d.cfg.ObjectStorage.Endpoint):
+		// R2 has no bucket versioning to turn on, and a key scoped to
+		// objects may not even ask (DESIGN 10.5 item 4).
+		return ok("R2 has no bucket versioning, so the bucket keeps no versions (asking said: %v)", err)
 	case err != nil:
-		return bad("%v", err)
+		return bad("%v. A key that may not read the versioning state needs s3:GetBucketVersioning, or someone must check by hand that versioning was never on", err)
 	case state == "":
 		return ok("versioning was never turned on")
 	default:
 		return bad("versioning is %s. Neither bucket may keep versions: a purged or expired blob would survive as an old version (docs/errata/2026-11-20-evidence-versioning.md). Use a bucket that never had versioning", state)
 	}
+}
+
+// isR2 reports whether the endpoint is Cloudflare R2's S3 API.
+func isR2(endpoint string) bool {
+	u, err := url.Parse(endpoint)
+	return err == nil && strings.HasSuffix(strings.ToLower(u.Hostname()), ".r2.cloudflarestorage.com")
 }
 
 func (d *doctor) checkWriteOnce(ctx context.Context, b *objstore.Bucket) result {

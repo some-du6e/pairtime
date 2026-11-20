@@ -338,3 +338,23 @@ func TestDoctor(t *testing.T) {
 		})
 	}
 }
+
+func TestIsR2(t *testing.T) {
+	tests := []struct {
+		name     string
+		endpoint string
+		want     bool
+	}{
+		{name: "R2's account endpoint is R2", endpoint: "https://0123456789abcdef.r2.cloudflarestorage.com", want: true},
+		{name: "R2's jurisdiction endpoints are R2 too", endpoint: "https://0123456789abcdef.eu.r2.cloudflarestorage.com", want: true},
+		{name: "Hetzner's object storage isn't", endpoint: "https://fsn1.your-objectstorage.com", want: false},
+		{name: "a host that only starts like R2's isn't", endpoint: "https://r2.cloudflarestorage.com.example.org", want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isR2(tt.endpoint); got != tt.want {
+				t.Errorf("isR2(%q) = %v, want %v", tt.endpoint, got, tt.want)
+			}
+		})
+	}
+}
