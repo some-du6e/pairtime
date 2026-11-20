@@ -937,23 +937,23 @@ Exit check: a test submission from the deployed instance round-trips into a sand
 
 - Depends on: WP-FX6, WP-SV10, WP-SC4.
 - Touches: `pkg/check/` (new).
-- Build: CC1 to CC5 as public code, run by the client before a submission and by the server on the reveal; results are pass, fail or not computable, with counts; failures change the band and review priority, never credited seconds (DESIGN 7.3).
-- CI checks: each check fails its failing fixture and passes its clean one; not computable is never counted as a failure.
+- Build: CC1 to CC5 as public code, run by the client before a submission and by the server on the reveal; results are pass, fail or not computable, with counts; failures change the band and review priority, never credited seconds (DESIGN 7.3). CC2's focus half is not computable for a prompt whose window in front was unknown (SM 2.5).
+- CI checks: each check fails its failing fixture and passes its clean one; not computable is never counted as a failure or as a pass; table tests put CC2's share on both sides of its threshold: 1 of 4 and 2 of 9 prompts lacking input pass, 2 of 8 fails (DESIGN 7.3); a table test with focus unknown reports CC2's focus half not computable.
 - Oracle: WP-FX6.
 
 ### WP-TR2. `pkg/check`, CC6 to CC11
 
 - Depends on: WP-FX6, WP-SB5, WP-TR1.
 - Touches: `pkg/check/`.
-- Build: CC8 to CC11, and CC6 and CC7 reported through the same result type from WP-SB4's re-score and chain check. CC8 recomputes the keyed sketch and `prompt_class` of challenged turns from revealed text and per-shingle HMACs (DESIGN 7.3).
-- CI checks: as WP-TR1 for CC6 to CC11.
+- Build: CC8 to CC11, and CC6 and CC7 reported through the same result type from WP-SB4's re-score and chain check. CC8 checks challenged turns' committed features against their revealed text without the device's keys, as ledger-v1.md 10.8 states (DESIGN 7.3). CC10 is not computable for editor anchors while focus was unknown (SM 2.5).
+- CI checks: as WP-TR1 for CC6 to CC11, plus a table test for each rule of DESIGN 7.3 that no WP-FX6 scenario reaches: each CC8 rule, such as `es` on a reveal that removed a path; a reveal that leaves out a batch's last record, which fails that batch and not the next; a minute outside a failing batch's span whose re-score depends on its revealed records, which CC7 holds; a resume from Terminal into tmux, which passes CC9, and one after a `script_runtime` start, which fails it; and CC11's injected clause and its 450-character cap; CC10 is not computable where focus was unknown.
 - Oracle: WP-FX6.
 
 ### WP-TR3. Tier-2 detectors, the audit formula and the sentinel stub
 
 - Depends on: WP-TR1, WP-SB4.
-- Touches: `internal/server/risk/`, `internal/server/sentinelapi/`.
-- Build: SM 8.7's eight flags as public code with SM's starting points as defaults, and deployed thresholds and weights read from `config/tier2.toml`, which is never committed (TE D13); detectors run only on submitted windows (TP B2 point 6); `hackatime_mismatch` with a private threshold (DESIGN 7.2); the audit probability `p = min(0.6, max(AUDIT_BASE_P, 1.1 * h / (0.6 * h + 120)) + risk)` and its draw, with the risk inputs named publicly (DESIGN 7.9); the sentinel socket client and a stub sentinel, off unless configured (DESIGN 3.10).
+- Touches: `internal/server/risk/`, `internal/server/sentinelapi/`, `docs/retention.json`.
+- Build: SM 8.7's eight flags as public code with SM's starting points as defaults, and deployed thresholds and weights read from `config/tier2.toml`, which is never committed (TE D13); detectors run only on submitted windows (TP B2 point 6); `hackatime_mismatch` with a private threshold (DESIGN 7.2); the audit probability `p = min(0.6, max(AUDIT_BASE_P, 1.1 * h / (0.6 * h + 120)) + risk)` and its draw, with the risk inputs named publicly (DESIGN 7.9); the sentinel socket client and a stub sentinel, off unless configured (DESIGN 3.10). Its risk-flag tables are window jobs of `evidence.revealed`, with a `submission_id` column (DESIGN 4.4; AGENTS.md, Retention). The audit probability and draw aren't risk flags, and they aren't deleted with the evidence.
 - CI checks: no detector runs for an unsubmitted window; with zero risk, `p` is 0.08 at 5 h, 0.087 at 10 h and 0.306 at 40 h; SM 6.6's timeline raises `regular_timing` (SM gives burstiness of about -0.6) and `periodic_input`; over 10,000 trials the audit draw rate is within 1 point of `p`.
 - Oracle: DESIGN 7.9's numbers; SM 6.6.
 
@@ -969,7 +969,7 @@ Exit check: a test submission from the deployed instance round-trips into a sand
 
 - Depends on: WP-RV1, WP-SB7, WP-SV10.
 - Touches: `web/src/server/review/`, `internal/server/review/`, `web/src/local/submit/`.
-- Build: DESIGN 7.7 items 5 to 12: revealed turns at their markers (agent message left, prompt right, removed spans as typed markers, "matches commitment, witnessed hh:mm:ss"), with withheld, expired and purged items shown as such; commits with three clocks, diffstat, credited time since the parent and a forge link; checks per row with counts; flags as codes and categories, never thresholds; the story column below the evidence; cross-checks (`hackatime_logged_s` against Hackatime's figure, the Telescreen link, earlier decided submissions scoped by role, JT must-fix 14); the handbook text with copy buttons once WP-PG1 exists; a link to the teen's Lookout session when the submission carries one, for large claims (DESIGN 5.10); the access log, which the teen also sees on the submission page.
+- Build: DESIGN 7.7 items 5 to 12: revealed turns at their markers (agent message left, prompt right, removed spans as typed markers, "matches commitment, witnessed hh:mm:ss"), with withheld, expired, purged and unavailable items shown as such; commits with three clocks, diffstat, credited time since the parent and a forge link; checks per row with counts; flags as codes and categories, never thresholds; the story column below the evidence; cross-checks (`hackatime_logged_s` against Hackatime's figure, the Telescreen link, earlier decided submissions scoped by role, JT must-fix 14); the handbook text with copy buttons once WP-PG1 exists; a link to the teen's Lookout session when the submission carries one, for large claims (DESIGN 5.10); the access log, which the teen also sees on the submission page.
 - CI checks: Playwright: the teen sees the reviewer's access-log entry; a program reviewer sees only their program's earlier submissions and a `qi` reviewer sees all; seeded threshold values never appear in the DOM.
 - Oracle: DESIGN 7.7 and JT must-fix 14.
 
@@ -985,24 +985,24 @@ Exit check: a test submission from the deployed instance round-trips into a sand
 
 - Depends on: WP-RV1.
 - Touches: `internal/server/review/`.
-- Build: the roles of DESIGN 10.2 (`program_reviewer:<program>`, `qi`, `fraud_squad`, `spot_checker`, `admin`); random assignment from a pool, never a claim queue; conflicts (the reviewer's own club by self-declaration, a shared GitHub repository or organization; DESIGN 7.10); `POST .../review` with cuts, raises and reasons; `POST .../outcome`, which returns `409 scoring_not_frozen` until the instance runs scoring 1.0.0 (DESIGN 6.7 step 5); outcomes written to the outcome ledger (WP-PG9); deflation text with no personal data.
-- CI checks: an outcome before 1.0.0 gets 409; a reviewer is never assigned someone from their own club or a shared repository; over 1,000 assignments the spread across a pool is uniform within tolerance.
+- Build: the roles of DESIGN 10.2 (`program_reviewer:<program>`, `qi`, `fraud_squad`, `spot_checker`, `admin`); random assignment from a pool, never a claim queue; conflicts (the reviewer's own club by self-declaration, a shared GitHub repository or organization; DESIGN 7.10); `POST .../review` with cuts, raises and reasons; `POST .../outcome`, which returns `409 scoring_not_frozen` until the instance runs scoring 1.0.0 (DESIGN 6.7 step 5); outcomes written to the outcome ledger (WP-PG9); deflation text with no personal data. The submission keeps its latest outcome's time, a re-decision's included, because its spot-check window opens there (DESIGN 4.4). A revocation (WP-RV5) doesn't change it.
+- CI checks: an outcome before 1.0.0 gets 409; a reviewer is never assigned someone from their own club or a shared repository; over 1,000 assignments the spread across a pool is uniform within tolerance; a second outcome moves the submission's decision time, and a revocation leaves it.
 - Oracle: DESIGN 6.7 and 7.10.
 
 ### WP-RV5. Purge, exposure reports and revocation
 
-- Depends on: WP-RV2, WP-SV15.
-- Touches: `internal/server/reveal/`, `web/src/server/review/`, `web/src/local/submit/`, `internal/server/objstore/`.
-- Build: DESIGN 7.11: the teen's "This revealed something it shouldn't have" button (`POST .../purge`) deletes the item from the evidence store at once, uncredits its minutes and gives the program a revision; the reviewer's "Report an exposure" (`POST .../exposure`) hides the item from every viewer at once and asks the teen to purge or keep it; revocation through the spot-check window emits `submission.revoked` (DESIGN 7.9). Neither bucket keeps versions (D-evidence-versioning; `pairtimed doctor` fails on one that does), so the purge is a plain DeleteObject, and it commits its database change before it deletes the blob: a crash between the two leaves an unreferenced blob, never a row whose blob is gone (`docs/errata/2026-11-20-evidence-versioning.md`).
-- CI checks: a purged item is gone from object storage and the database and its minutes are uncredited; an exposure report hides the item for every role at once; a revocation emits the event.
+- Depends on: WP-RV2, WP-SV14, WP-SV15.
+- Touches: `internal/server/reveal/`, `web/src/server/review/`, `web/src/local/submit/`.
+- Build: DESIGN 7.11: the teen's "This revealed something it shouldn't have" button (`POST .../purge`) deletes the item from the evidence store at once, in any state of the submission, a withdrawn one included, uncredits its minutes and gives the program a revision; the reviewer's "Report an exposure" (`POST .../exposure`) hides the item from every viewer at once and asks the teen to purge or keep it; revocation through the spot-check window emits `submission.revoked` (DESIGN 7.9), and once the window that opened at the latest decision has closed (`Window.Closes`) it is refused. The purge deletes the blob with `objstore.Evidence.Delete` (WP-SB2) before its index row. It deletes every blob that holds the item, in each submission that revealed it, and the minutes the item supported stop being credited in each, so purging through a later submission can't strip an earlier one's evidence and keep its credit.
+- CI checks: a purged item is gone from object storage and the database and its minutes are uncredited; an item revealed in two submissions and purged in one is gone from both and uncredited in both; an exposure report hides the item for every role at once; a revocation emits the event; a withdrawn submission's item can be purged; a revocation after the window has closed is refused.
 - Oracle: DESIGN 7.11.
 
 ### WP-PG11. `pkg/wakacompat`: Hackatime-equivalent seconds
 
 - Depends on: WP-AD16, WP-PG0.
 - Touches: `pkg/wakacompat/`, `.github/workflows/postgres.yml`.
-- Build: DESIGN 6.2 D15: `hackatime_logged_s` over the linked Hackatime names in one global order, `min(gap, 120 s)`, the heartbeat just before the window included as Hackatime's boundary-aware path does, `browsing`, `meeting` and `communicating` excluded, split by WakaTime's `ai coding` category; `handbook_s` from that split; SM 5.4's reconstruction as the fallback when no heartbeats exist.
-- CI checks: on generated heartbeat sets, the Go numbers equal what Hackatime's own duration SQL, copied in WP-PG0, returns on the Postgres service container (a `postgres.yml` job path-filtered to `pkg/wakacompat/**`).
+- Build: DESIGN 6.2 D15: `hackatime_logged_s` over the linked Hackatime names in one global order, `min(gap, 120 s)`, the heartbeat just before the window included as Hackatime's boundary-aware path does, `browsing`, `meeting` and `communicating` excluded, split by WakaTime's `ai coding` category with each gap, the opening one included, going to the category of the heartbeat that ends it (SM 5.4); `handbook_s` from that split; SM 5.4's reconstruction as the fallback when no heartbeats exist.
+- CI checks: on generated heartbeat sets, the Go numbers equal what Hackatime's own duration SQL, copied in WP-PG0, returns on the Postgres service container (a `postgres.yml` job path-filtered to `pkg/wakacompat/**`); each category's seconds equal what `hackatime_seconds_by_category` returns for the window plus the gaps that only `hackatime_seconds_boundary_aware` counts, each in the category of the heartbeat that ends it.
 - Oracle: Hackatime's SQL at `43bde10b02db`.
 
 ### WP-PG1. Handbook text and the deflation draft
@@ -1056,10 +1056,10 @@ Exit check: a test submission from the deployed instance round-trips into a sand
 ### WP-PG8. Program kit
 
 - Depends on: WP-PG1, WP-PG2, WP-PG5.
-- Touches: `integrations/`.
-- Build: DESIGN 9.4's kit: a one-page "switch on pairtime in a day" guide for each tier; the Rails snippet for a second `HackatimeService` pointed at `https://<host>`; the Robert note ("change nothing; send the same Hackatime names") and a draft of the `kind: "pairtime"` proposal for the Telescreen team (DESIGN 5.10); the Ari `journals[]` bridge as a function that emits one entry per devlog window with `at`, `seconds` and `markdown` naming pairtime and the evidence link, never `hackatime_projects[]` or `program_seconds` (HC 3.6); the handbook text; the attribution rule of DESIGN 9.2; a 10-minute reviewer walkthrough of the review page.
-- CI checks: the bridge's output validates against the schema WP-PG0 wrote from Ari's documented keys.
-- Oracle: WP-PG0's Ari capture; DESIGN 9.2.
+- Touches: `integrations/`, and `internal/server/submission/` for each row's value per UTC day.
+- Build: DESIGN 9.4's kit: a one-page "switch on pairtime in a day" guide for each tier; the Rails snippet for a second `HackatimeService` pointed at `https://<host>`; the Robert note ("change nothing; send the same Hackatime names") and a draft of the `kind: "pairtime"` proposal for the Telescreen team (DESIGN 5.10); the Ari `journals[]` bridge of DESIGN 5.10 as a function: one entry per row at its value in pairtime's review, with `at`, `seconds` rounded down, `text` and `markdown`; rows that round to 0 left out; a row over 86,400 s cut at each UTC midnight into parts labeled "part k of n"; one entry per person per UTC day when a ship would pass 200 entries, and an error past that or when no row is left; devlog entries the program passes in sent at 0 s and counted toward the 200; never `hackatime_projects[]` or `program_seconds` (HC 3.6); each row's value per UTC day, from the frozen minute buckets, added to `GET /api/v1/submissions/:id` for it; the handbook text; the attribution rule of DESIGN 9.2; a 10-minute reviewer walkthrough of the review page, which says to record each decision there, because pairtime keeps a submission's evidence for the spot-check window after its decision, and after its freeze when it never sees one (DESIGN 4.4).
+- CI checks: the bridge's output validates against `testdata/upstream/ari/ingest.schema.json` and keeps the four rules its `PROVENANCE.md` lists that the schema can't state, in each of these cases: the erratum's ship, 30 credited hours in one devlog window with no devlogs, gives one entry per work session; a 6,840.5 s row sends 6,840; a row that rounds to 0 and a loop row nobody raised send nothing, and a submission with no row left is an error; a loop row raised to 1,200 s sends 1,200; a row cut on the review page sends its cut value; a row over 86,400 s becomes parts cut at UTC midnight, each with "part k of n" and the whole row's start, end and seconds; 201 rows on 30 UTC days become 30 day entries with DESIGN 5.10's `at`, `seconds`, `text` and `markdown`, and rows on 201 UTC days are an error; on a two-person ship every entry carries its person's email and day entries stay per person; a devlog entry the program passes in goes out at 0 s and counts toward the 200.
+- Oracle: WP-PG0's Ari capture; DESIGN 5.10 and 9.2.
 
 ### WP-PG9. Outcome ledger, progress page and R3 metrics
 
@@ -1073,7 +1073,7 @@ Exit check: a test submission from the deployed instance round-trips into a sand
 
 - Depends on: WP-SB6, WP-UI3.
 - Touches: `internal/server/calibration/`, `internal/agent/submit/`, `web/src/local/onboarding/`.
-- Build: how a volunteer's labeled session reaches the raters (DESIGN 6.7 step 3; SM 7.2): a `calibration` program on the instance; a research-use consent card with "Not now" first; `pairtime submit --program calibration --session <id>`, which submits one work session with every prompt drawn, redacted and reviewed by the volunteer, plus a link to the volunteer's own recording; access for assigned labelers only; deletion 30 days after labeling; never visible to any program.
+- Build: how a volunteer's labeled session reaches the raters (DESIGN 6.7 step 3; SM 7.2): a `calibration` program on the instance; a research-use consent card with "Not now" first; `pairtime submit --program calibration --session <id>`, which submits one work session with every prompt drawn, redacted and reviewed by the volunteer, plus a link to the volunteer's own recording; access for assigned labelers only; deletion 30 days after labeling, each blob with `objstore.Evidence.Delete` before its index row; never visible to any program.
 - CI checks: without the consent record the submission is refused; a non-labeler gets 403; under a fake clock the reveal is deleted 30 days after its labels are saved.
 - Oracle: DESIGN 6.7's last paragraph and SM 7.2's privacy rules.
 
