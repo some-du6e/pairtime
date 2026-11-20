@@ -58,7 +58,7 @@
     {
       "id": "server.account",
       "where": "server",
-      "data": "Your account: your Hack Club Auth ID, Slack ID and handle, your email address (stored encrypted, with a keyed hash so a deletion request can find it), whether Hack Club Auth has verified you and says you're eligible for its programs, when you signed up and last signed in, and your GitHub user ID if you link GitHub",
+      "data": "Your account: your Hack Club Auth ID, Slack ID and handle, your email address (stored encrypted, with a keyed hash so a deletion request can find it), whether Hack Club Auth has verified you and says you're eligible for its programs, when you signed up and last signed in, the time zone your dashboard counts your days in, and your GitHub user ID if you link GitHub",
       "kept": "While your account exists",
       "tables": ["users"]
     },
@@ -98,7 +98,7 @@
     {
       "id": "server.minute_buckets",
       "where": "server",
-      "data": "Minute buckets: for each 15 seconds, the credited seconds by project key, why they were credited and what kind of work they counted as, with the reasons for seconds that weren't credited and how long an AI agent was running",
+      "data": "Minute buckets: for each 15 seconds, the credited seconds by project key, why they were credited and what kind of work they counted as, with the reasons for seconds that weren't credited and how long an AI agent was running, and a note on each minute in which two of your devices counted the same 15 seconds",
       "kept": "Per-minute detail for {days}, the furthest back a submission can reach. Minutes a submission uses stay until its spot-check window closes ({window}). After that only daily totals per project and kind of work stay, for as long as your account exists",
       "days": 180,
       "lifetime_tables": ["rollups_daily"],
@@ -118,6 +118,14 @@
         "time_column": "decided_at_ms",
         "period": "window",
         "awaits": "WP-SB4"
+      }, {
+        "table": "rollup_minutes",
+        "key": ["user_id", "minute_ms", "device_id"],
+        "time_column": "minute_ms"
+      }, {
+        "table": "rollup_flags",
+        "key": ["user_id", "minute_ms", "flag"],
+        "time_column": "minute_ms"
       }]
     },
     {

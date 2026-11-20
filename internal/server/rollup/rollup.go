@@ -13,6 +13,20 @@
 // minute per account, with concurrent_devices raised when two devices
 // credit the same slot (SM 3.4).
 //
+// Apply keeps its own copy of each device's latest revision of each minute
+// (rollup_minutes), and moves the rollups from that copy, never from the
+// prev a caller passes. So the rollups depend only on the latest revision
+// of each device's minutes: a revision that arrives twice, late or out of
+// order changes nothing it shouldn't.
+//
+// A minute counts toward the account's local day, in the time zone the
+// owner set (users.tz, UTC until set). A minute's day comes from the
+// minute itself, time.Unix(minute, 0).In(zone).Date(), never from a
+// midnight made with time.Date, which doesn't exist where daylight saving
+// time starts at midnight (America/Santiago on 2027-09-05). Changing the
+// zone moves the minutes counted after the change; days already counted
+// stay where they are.
+//
 // This file is the contract between ingest (WP-SV4) and the rollups, fixed
 // by the dashboard wave. Three fields differ from the wave's first sketch:
 //
@@ -29,9 +43,11 @@ package rollup
 
 import (
 	"context"
-	"errors"
+	"fmt"
+	"time"
 
 	"github.com/some-du6e/pairtime/internal/server/writer"
+	"github.com/some-du6e/pairtime/pkg/event"
 )
 
 // Bucket is one stored minute-bucket revision (DESIGN 4.3), already
@@ -84,14 +100,120 @@ type Slot struct {
 	Labels []string
 }
 
-// ErrNotBuilt is what Apply returns until WP-SV7's rollups land. It
-// changes nothing, so a caller wired early must not treat it as a failed
-// ingest; the dashboard wave keeps the call behind TODO(WP-SV7) until then.
-var ErrNotBuilt = errors.New("rollup: Apply isn't built yet (WP-SV7)")
-
-// Apply moves the rollups from prev (nil for a first revision) to next. It
-// runs inside the writer transaction tx that stores next, so either both
-// land or neither does.
+// Apply moves the rollups from the account's minute as it stood to the
+// minute with next, inside tx, the writer transaction that stores next.
+// prev is the revision next replaces, or nil; Apply reads what it applied
+// before from rollup_minutes instead, so prev only has to name the same
+// device and minute when it is set. A revision no newer than the one
+// Apply holds for that device and minute changes nothing. Apply refuses a
+// bucket that breaks the shapes Bucket describes, which fails the caller's
+// transaction.
 func Apply(ctx context.Context, tx writer.Tx, prev *Bucket, next Bucket) error {
-	return ErrNotBuilt
+	if prev != nil && (prev.Account != next.Account || prev.Device != next.Device || prev.Minute != next.Minute) {
+		return fmt.Errorf("rollup: prev is %s's minute %d on %s, but next is %s's minute %d on %s", prev.Account, prev.Minute, prev.Device, next.Account, next.Minute, next.Device)
+	}
+	in, err := minuteOf(next)
+	if err != nil {
+		return err
+	}
+	minuteMS := next.Minute * 1000
+	rows, err := loadMinute(ctx, tx, next.Account, minuteMS)
+	if err != nil {
+		return err
+	}
+	before := make([]device, 0, len(rows)+1)
+	after := make([]device, 0, len(rows)+1)
+	oldDay := ""
+	for _, r := range rows {
+		oldDay = r.day
+		before = append(before, r)
+		if r.id == next.Device {
+			if r.rev >= in.rev {
+				return nil
+			}
+			continue
+		}
+		after = append(after, r)
+	}
+	zone, _, err := zoneOf(ctx, tx, next.Account)
+	if err != nil {
+		return err
+	}
+	day := LocalDay(next.Minute, zone)
+	in.day = day
+	after = append(after, in)
+
+	was, now := merge(before), merge(after)
+	delta := now.contribution(day)
+	if oldDay != "" {
+		delta.subtract(was.contribution(oldDay))
+	}
+	if err := addDaily(ctx, tx, next.Account, delta); err != nil {
+		return err
+	}
+	if err := saveDevice(ctx, tx, next.Account, minuteMS, in); err != nil {
+		return err
+	}
+	if oldDay != "" && oldDay != day {
+		if err := moveMinute(ctx, tx, next.Account, minuteMS, day); err != nil {
+			return err
+		}
+	}
+	if was.concurrent != now.concurrent {
+		if err := setFlag(ctx, tx, next.Account, minuteMS, FlagConcurrentDevices, now.concurrent); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// FlagConcurrentDevices is the flag rollup_flags holds for a minute in
+// which two of an account's devices credit the same slot (SM 3.4).
+const FlagConcurrentDevices = "concurrent_devices"
+
+// ApplyEvent is Apply for ingest, which holds buckets as pkg/event's
+// MinuteBucket and the account apart: its signature is ingest's
+// RollupFunc, so serve.go passes it as it is.
+func ApplyEvent(ctx context.Context, tx writer.Tx, account string, prev *event.MinuteBucket, next event.MinuteBucket) error {
+	var p *Bucket
+	if prev != nil {
+		b := FromEvent(account, *prev)
+		p = &b
+	}
+	return Apply(ctx, tx, p, FromEvent(account, next))
+}
+
+// FromEvent turns a minute bucket as pkg/event holds it into a Bucket of
+// account's.
+func FromEvent(account string, m event.MinuteBucket) Bucket {
+	b := Bucket{
+		Account:       account,
+		Device:        m.Device,
+		Minute:        m.Minute.Unix(),
+		Rev:           int(m.Rev),
+		State:         string(m.State),
+		CreditedS:     m.CreditedS,
+		AgentRunningS: m.AgentRunningS,
+	}
+	for _, s := range m.Slots {
+		slot := Slot{Project: s.Project, CreditedS: s.Credited, Why: string(s.Why), Kind: string(s.Kind), Level: string(s.Ev)}
+		for _, l := range s.Lbl {
+			slot.Labels = append(slot.Labels, string(l))
+		}
+		b.Slots = append(b.Slots, slot)
+	}
+	if len(m.Uncredited) > 0 {
+		b.Uncredited = make(map[string]float64, len(m.Uncredited))
+		for r, s := range m.Uncredited {
+			b.Uncredited[string(r)] = s
+		}
+	}
+	return b
+}
+
+// LocalDay is the local date, YYYY-MM-DD in zone, of the minute that
+// starts minute seconds after the Unix epoch.
+func LocalDay(minute int64, zone *time.Location) string {
+	y, m, d := time.Unix(minute, 0).In(zone).Date()
+	return fmt.Sprintf("%04d-%02d-%02d", y, int(m), d)
 }
