@@ -213,7 +213,9 @@ func Open(ctx context.Context, cfg Config) *Desktop {
 			x11Status = unknownErr(dispErr)
 			break
 		}
-		src := &x11Idle{disp: disp, getenv: getenv, hostname: hostname}
+		src := &x11Idle{open: func(timeout time.Duration) (*xconn, error) {
+			return openX11(disp, getenv, hostname, timeout)
+		}}
 		src.mu.Lock()
 		err := src.connect(openTimeout)
 		src.mu.Unlock()
@@ -256,36 +258,42 @@ func Open(ctx context.Context, cfg Config) *Desktop {
 		d.closers = append(d.closers, d.idleSrc.close)
 	}
 
-	// Focus.
+	// From here on goroutines run, and the status changes only through
+	// setStatus.
 	switch d.status.Session {
 	case SessionX11:
-		d.status.Focus = d.startFocus(ctx, disp, dispErr, getenv, hostname, log)
+		d.startFocus(ctx, disp, dispErr, getenv, hostname, log)
 	case SessionWayland:
 		d.status.Focus = unknown("Wayland gives other programs no focus signal, so focus is ambiguous (SM 3.2)")
 	default:
 		d.status.Focus = unknown("no graphical session")
 	}
-
-	// Power and lock.
-	d.status.Power, d.status.Lock = d.startPower(ctx, systemBus, readyTimeout, log)
+	d.startPower(ctx, systemBus, readyTimeout, log)
 	return d
 }
 
 // startFocus starts following _NET_ACTIVE_WINDOW on its own connection.
-func (d *Desktop) startFocus(ctx context.Context, disp xDisplay, dispErr error, getenv func(string) string, hostname string, log *slog.Logger) Signal {
+func (d *Desktop) startFocus(ctx context.Context, disp xDisplay, dispErr error, getenv func(string) string, hostname string, log *slog.Logger) {
 	if dispErr != nil {
-		return unknownErr(dispErr)
+		d.status.Focus = unknownErr(dispErr)
+		return
 	}
-	w, err := openX11Focus(disp, getenv, hostname, openTimeout)
+	c, err := openX11(disp, getenv, hostname, openTimeout)
 	if err != nil {
-		return unknownErr(err)
+		d.status.Focus = unknownErr(err)
+		return
+	}
+	w, err := newX11Focus(c, hostname, openTimeout)
+	if err != nil {
+		d.status.Focus = unknownErr(err)
+		return
 	}
 	const name = "_NET_ACTIVE_WINDOW"
-	status := via(name)
+	d.status.Focus = via(name)
 	if !w.ewmh {
 		// Keep listening: a window manager that starts later sets the
 		// property, and the first change makes focus known.
-		status = unknown("the window manager doesn't keep _NET_ACTIVE_WINDOW")
+		d.status.Focus = unknown("the window manager doesn't keep _NET_ACTIVE_WINDOW")
 		w.onEWMH = func() { d.setStatus(func(s *Status) { s.Focus = via(name) }) }
 	}
 	d.focus = make(chan Focus, 16)
@@ -300,27 +308,30 @@ func (d *Desktop) startFocus(ctx context.Context, disp xDisplay, dispErr error, 
 			d.setStatus(func(s *Status) { s.Focus = unknown("lost the X connection") })
 		}
 	}()
-	return status
 }
 
-// startPower subscribes to logind.
-func (d *Desktop) startPower(ctx context.Context, systemBus func() (*dbus.Conn, error), readyTimeout time.Duration, log *slog.Logger) (power, lock Signal) {
+// startPower subscribes to logind. The focus goroutine may be running, so
+// it sets the status through setStatus.
+func (d *Desktop) startPower(ctx context.Context, systemBus func() (*dbus.Conn, error), readyTimeout time.Duration, log *slog.Logger) {
 	conn, err := systemBus()
 	if err != nil {
 		reason := unknown("no system bus, so no logind: suspends show only as gaps between samples")
-		return reason, reason
+		d.setStatus(func(s *Status) { s.Power, s.Lock = reason, reason })
+		return
 	}
 	l, lockErr, err := openLogind(conn, readyTimeout, log)
 	if err != nil {
 		conn.Close()
 		reason := unknown(err.Error() + ": suspends show only as gaps between samples")
-		return reason, reason
+		d.setStatus(func(s *Status) { s.Power, s.Lock = reason, reason })
+		return
 	}
 	d.logind = l
-	lock = via("logind LockedHint")
+	lock := via("logind LockedHint")
 	if lockErr != nil {
 		lock = unknownErr(lockErr)
 	}
+	d.setStatus(func(s *Status) { s.Power, s.Lock = via("logind PrepareForSleep"), lock })
 	d.power = make(chan Power, 8)
 	d.closers = append(d.closers, func() { conn.Close() })
 	d.wg.Add(1)
@@ -336,7 +347,6 @@ func (d *Desktop) startPower(ctx context.Context, systemBus func() (*dbus.Conn, 
 			})
 		}
 	}()
-	return via("logind PrepareForSleep"), lock
 }
 
 func (d *Desktop) setStatus(f func(*Status)) {

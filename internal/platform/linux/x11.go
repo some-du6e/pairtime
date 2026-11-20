@@ -147,8 +147,6 @@ func (e *xProtoError) Error() string {
 	return fmt.Sprintf("X error %d for request %d.%d", e.code, e.major, e.minor)
 }
 
-const xBadWindow = 3
-
 // isProtoError reports whether err is the server refusing one request,
 // which leaves the connection usable, rather than the connection failing.
 func isProtoError(err error) bool {

@@ -19,9 +19,8 @@ var errNoScreenSaver = errors.New("the X server has no MIT-SCREEN-SAVER extensio
 // (XScreenSaverQueryInfo's request, CP 3.3). It keeps one connection open
 // between samples, and reconnects on the next sample after any failure.
 type x11Idle struct {
-	disp     xDisplay
-	getenv   func(string) string
-	hostname string
+	// open connects to the display; openX11 outside tests.
+	open func(timeout time.Duration) (*xconn, error)
 
 	mu    sync.Mutex
 	c     *xconn
@@ -30,7 +29,7 @@ type x11Idle struct {
 
 // connect opens the connection and checks for the extension. s.mu is held.
 func (s *x11Idle) connect(timeout time.Duration) error {
-	c, err := openX11(s.disp, s.getenv, s.hostname, timeout)
+	c, err := s.open(timeout)
 	if err != nil {
 		return err
 	}

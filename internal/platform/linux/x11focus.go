@@ -40,13 +40,10 @@ type x11Focus struct {
 	last  uint32 // the window last reported
 }
 
-// openX11Focus connects, interns the atoms and starts listening for
-// property changes on the root window.
-func openX11Focus(disp xDisplay, getenv func(string) string, hostname string, timeout time.Duration) (*x11Focus, error) {
-	c, err := openX11(disp, getenv, hostname, timeout)
-	if err != nil {
-		return nil, err
-	}
+// newX11Focus takes over c, interns the atoms, starts listening for
+// property changes on the root window and checks for a window manager
+// that keeps _NET_ACTIVE_WINDOW. It closes c if it fails.
+func newX11Focus(c *xconn, hostname string, timeout time.Duration) (*x11Focus, error) {
 	w := &x11Focus{c: c, hostname: hostname}
 	if err := w.setup(timeout); err != nil {
 		c.close()
