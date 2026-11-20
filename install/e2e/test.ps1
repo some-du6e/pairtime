@@ -255,13 +255,18 @@ try {
 }
 if (@(& $realExe help) -cmatch '^  install ') {
   # The real pairtime install and uninstall, through the script
-  # (docs/PLAN.md, WP-RL2): set up with -Yes in an empty LOCALAPPDATA,
+  # (docs/PLAN.md, WP-RL2): set up with -Yes in a new LOCALAPPDATA,
   # APPDATA and USERPROFILE, then taken out with --delete-data, they must
-  # leave all three as empty as they found them, the folders the script
-  # made included, with no Run value and no agent left.
+  # leave all three as they found them, the folders the script made
+  # included, with no Run value and no agent left. Windows PowerShell makes
+  # AppData\Roaming in whatever USERPROFILE it starts with, even to run
+  # nothing, and a real profile always has it, so the new one starts with
+  # it (measured on windows-latest, 2026-11-20).
   New-Case
   $roaming = New-Dir 'roaming'
   $profileDir = New-Dir 'profile'
+  New-Item -ItemType Directory -Path (Join-Path $profileDir 'AppData\Roaming') | Out-Null
+  $profileBefore = Get-Tree $profileDir
   $caseEnvironment = @{ APPDATA = $roaming; USERPROFILE = $profileDir }
   $runBefore = Get-RunValue
   $setUp = Invoke-File $stamped (Real real real.pub @('-Yes')) $caseEnvironment
@@ -273,10 +278,10 @@ if (@(& $realExe help) -cmatch '^  install ') {
   if ($code -eq 0) { $code = $takenOut.Code }
   Test-Case 'with -Yes in an empty profile, the script and pairtime install set pairtime up, and pairtime uninstall --yes --delete-data leaves it empty again' `
     ok 'Running pairtime install' '' @{ Code = $code; Output = $setUp.Output + $takenOut.Output }
-  foreach ($dir in @($roaming, $profileDir)) {
-    $left = Get-Tree $dir
-    if ($left) { Add-Failure "pairtime uninstall left [$left] in $dir" }
-  }
+  $left = Get-Tree $roaming
+  if ($left) { Add-Failure "pairtime uninstall left [$left] in APPDATA" }
+  $left = Get-Tree $profileDir
+  if ($left -ne $profileBefore) { Add-Failure "USERPROFILE holds [$left] after pairtime uninstall, not the [$profileBefore] it started with" }
   Test-NoAgent $script:appData
   if ($null -eq $runBefore -and $null -ne (Get-RunValue)) { Add-Failure "pairtime uninstall left the Run value pairtime" }
 } else {
