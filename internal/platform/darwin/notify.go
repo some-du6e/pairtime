@@ -11,7 +11,6 @@ import (
 	"fmt"
 	"io/fs"
 	"os/exec"
-	"regexp"
 	"strconv"
 	"strings"
 )
@@ -107,16 +106,19 @@ func appleScriptText(s string) string {
 	return strings.Join(parts, " & ")
 }
 
-// appleScriptErrorRE finds the error number osascript puts at the end of
-// its message, as in "execution error: ... (-1743)".
-var appleScriptErrorRE = regexp.MustCompile(`\((-?[0-9]+)\)\s*$`)
-
-// appleScriptErrorNumber returns ", AppleScript error N" for the number at
-// the end of osascript's message, or "" when there is none. The rest of the
+// appleScriptErrorNumber returns ", AppleScript error N" for the number
+// osascript puts in parentheses at the end of its message, as in
+// "execution error: ... (-1743)", or "" when there is none. The rest of the
 // message isn't kept.
 func appleScriptErrorNumber(stderr string) string {
-	if m := appleScriptErrorRE.FindStringSubmatch(stderr); m != nil {
-		return ", AppleScript error " + m[1]
+	s := strings.TrimSpace(stderr)
+	open := strings.LastIndexByte(s, '(')
+	if open < 0 || !strings.HasSuffix(s, ")") {
+		return ""
 	}
-	return ""
+	num := strings.TrimPrefix(s[open+1:len(s)-1], "-")
+	if num == "" || strings.Trim(num, "0123456789") != "" {
+		return ""
+	}
+	return ", AppleScript error " + s[open+1:len(s)-1]
 }

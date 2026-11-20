@@ -218,3 +218,25 @@ func readFile(t *testing.T, name string) string {
 	}
 	return string(b)
 }
+
+func TestAppleScriptErrorNumber(t *testing.T) {
+	tests := []struct {
+		name   string
+		stderr string
+		want   string
+	}{
+		{name: "the number at the end is kept and the message isn't", stderr: "0:42: execution error: Not authorized to send Apple events. (-1743)\n", want: ", AppleScript error -1743"},
+		{name: "a positive number is kept", stderr: "execution error: something (2)", want: ", AppleScript error 2"},
+		{name: "a message without a number gives nothing", stderr: "osascript: couldn't read the script", want: ""},
+		{name: "words in the last parentheses give nothing", stderr: "found (secret-project)", want: ""},
+		{name: "empty parentheses give nothing", stderr: "error ()", want: ""},
+		{name: "no output gives nothing", stderr: "", want: ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := appleScriptErrorNumber(tt.stderr); got != tt.want {
+				t.Errorf("appleScriptErrorNumber(%q) = %q, want %q", tt.stderr, got, tt.want)
+			}
+		})
+	}
+}
