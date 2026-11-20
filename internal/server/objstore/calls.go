@@ -119,14 +119,14 @@ func (b *Bucket) Put(ctx context.Context, key string, body io.ReadSeeker, opts P
 		}
 		// An attempt failed without saying whether the store carried it
 		// out, and the retry found the key taken, perhaps by that attempt.
-		info, ours, herr := b.holds(ctx, key, size, sum)
+		head, ours, herr := b.holds(ctx, key, size, sum)
 		if herr != nil {
 			return fail(fmt.Errorf("a retry found the key taken, and checking whether an earlier attempt stored this body failed: %w", herr))
 		}
 		if !ours {
 			return ObjectInfo{}, err
 		}
-		return info, nil
+		return head, nil
 	}
 	defer drain(resp)
 	return ObjectInfo{Key: key, Size: size, ETag: strings.Trim(resp.Header.Get("ETag"), `"`), ContentType: ctype, SHA256: sum}, nil
@@ -135,11 +135,11 @@ func (b *Bucket) Put(ctx context.Context, key string, body io.ReadSeeker, opts P
 // holds reports whether key holds size bytes whose SHA-256, as Put stored
 // it, is sum, and returns what Head says about the object.
 func (b *Bucket) holds(ctx context.Context, key string, size int64, sum string) (ObjectInfo, bool, error) {
-	info, err := b.Head(ctx, key)
+	head, err := b.Head(ctx, key)
 	if err != nil {
 		return ObjectInfo{}, false, err
 	}
-	return info, info.Size == size && info.SHA256 == sum, nil
+	return head, head.Size == size && head.SHA256 == sum, nil
 }
 
 // Get returns key's body, which the caller reads and closes, and what the
