@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"log/slog"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -152,6 +153,15 @@ func openSQLite(ctx context.Context, o Options) (*DB, error) {
 	if err := f.Close(); err != nil {
 		return nil, fmt.Errorf("store: %w", err)
 	}
+	if runtime.GOOS != "windows" {
+		logger := o.Logger
+		if logger == nil {
+			logger = slog.Default()
+		}
+		if err := tighten(o.Path, logger); err != nil {
+			return nil, err
+		}
+	}
 
 	w, err := sql.Open("sqlite", sqliteDSN(o.Path, true))
 	if err != nil {
@@ -182,6 +192,35 @@ func openSQLite(ctx context.Context, o Options) (*DB, error) {
 		return nil, fmt.Errorf("store: opening %s: %w", o.Path, err)
 	}
 	return &DB{Engine: SQLite, Version: have, Write: w, Read: r}, nil
+}
+
+// tighten takes group and other access away from the database file and
+// from its -wal and -shm files where they exist, before SQLite opens them.
+// A file pairtimed creates is already 0600, but one it didn't keeps its own
+// mode: Litestream's restore writes the database with os.Create, which
+// gives 0644 under the usual umask, on exactly the recovery path of DESIGN
+// 10.1. Litestream gives its later copies the database file's mode, so
+// this fixes those too.
+func tighten(path string, logger *slog.Logger) error {
+	for _, p := range []string{path, path + "-wal", path + "-shm"} {
+		fi, err := os.Stat(p)
+		if errors.Is(err, fs.ErrNotExist) {
+			continue // no -wal or -shm yet
+		}
+		if err != nil {
+			return fmt.Errorf("store: %w", err)
+		}
+		perm := fi.Mode().Perm()
+		if perm&0o077 == 0 {
+			continue
+		}
+		if err := os.Chmod(p, perm&^0o077); err != nil {
+			return fmt.Errorf("store: %s has mode %04o, so group or others can read it, and pairtimed can't change that: %w. Run chmod 600 %s", p, perm, err, p)
+		}
+		logger.Warn("tightened a database file that group or others could read, as a restore leaves it",
+			"file", p, "was", fmt.Sprintf("%04o", perm), "now", fmt.Sprintf("%04o", perm&^0o077))
+	}
+	return nil
 }
 
 // librarySQLiteVersion asks the linked SQLite library for its version.

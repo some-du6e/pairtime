@@ -32,6 +32,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log/slog"
 )
 
 // Engine names a database engine.
@@ -49,7 +50,9 @@ type Options struct {
 	Engine Engine
 	// Path is the SQLite database file. A missing file is created with
 	// mode 0600, and a missing directory with mode 0700, unless NoCreate
-	// is set.
+	// is set. An existing file that group or others can read, as a
+	// Litestream restore leaves it, loses that access, and so do its -wal
+	// and -shm files (not on Windows).
 	Path string
 	// NoCreate makes Open fail with ErrNoDatabase, and create nothing,
 	// when the SQLite file is missing. Only serve creates the database:
@@ -60,6 +63,9 @@ type Options struct {
 	// URL is the Postgres connection URL,
 	// postgres://user:password@host:port/database?sslmode=....
 	URL string
+	// Logger gets a warning when Open changes a database file's mode.
+	// Nil means slog.Default().
+	Logger *slog.Logger
 	// SQLiteVersion, when set, stands in for what sqlite_version() reports.
 	// It exists for the test that checks the refusal of an old SQLite
 	// (WP-SV1); leave it empty everywhere else.
