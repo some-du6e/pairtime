@@ -23,6 +23,7 @@ testdata/fixtures/<harness>/<version>/<os>/
     transcripts/        the harness's own session files for the sessions the hooks saw, under home/ by their path
       INDEX.txt         each copied file with its source path, size and modification time
     STEPS.txt           which SCRIPTS.md step the person was on, with the time they started it
+    deny-once           Gemini CLI only: the decision tools/capture/deny-once.sh sent back at step 19, which turned that answer down once
 ```
 
 - `<harness>` is the id `pkg/event` uses: `claude_code`, `codex`, `cursor`, `copilot`, `gemini`, `devin`, `cline` or `opencode`.

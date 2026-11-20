@@ -270,6 +270,23 @@ var payload = []byte("{\"session_id\":\"3f9c\",\"hook_event_name\":\"UserPromptS
 // runs both and creates the two files.
 var hostile = []byte("{\"session_id\":\"x\",\"last_assistant_message\":\"I ran \x60touch backtick-ran\x60 and $(touch dollar-ran)\"}")
 
+// lyingMkdir returns a PATH setting whose mkdir reports success for a
+// folder that is already there. uutils mkdir before 0.11, Ubuntu 26.04's,
+// can tell a process that lost a race for a folder just that (uutils issue
+// 13970), so the hooks must never take mkdir's answer as a claim. With this
+// mkdir a test sees that answer every time, on any machine.
+func lyingMkdir(t *testing.T) string {
+	t.Helper()
+	real := need(t, "mkdir")
+	bin := t.TempDir()
+	script := "#!/bin/sh\nfor last; do :; done\nif [ -d \"$last\" ]; then\n\texit 0\nfi\nexec '" +
+		strings.ReplaceAll(real, "'", `'\''`) + "' \"$@\"\n"
+	if err := os.WriteFile(filepath.Join(bin, "mkdir"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return "PATH=" + bin + string(os.PathListSeparator) + os.Getenv("PATH")
+}
+
 func TestDumpers(t *testing.T) {
 	unixOnly(t)
 	for _, d := range dumpers {
@@ -433,14 +450,34 @@ func TestDumpers(t *testing.T) {
 						}
 					}
 				}},
+				// Two calls that race for one number: the other call has
+				// claimed 000002, and mkdir tells this one it made that
+				// folder, as uutils mkdir can tell the call that lost.
+				{"a number whose time file is there is taken, even when mkdir says this call made its folder", func(t *testing.T) {
+					runDir := filepath.Join(t.TempDir(), "run")
+					taken := filepath.Join(runDir, "hooks", "000002")
+					write(t, filepath.Join(taken, "time"), "the other call's\n")
+					run(t, t.TempDir(), payload, []string{lyingMkdir(t)}, append(append([]string{}, base...), runDir, "Stop")...)
+					if got := read(t, filepath.Join(taken, "time")); got != "the other call's\n" {
+						t.Errorf("the other call's time file now holds %q", got)
+					}
+					if _, err := os.Stat(filepath.Join(taken, "stdin")); err == nil {
+						t.Error("it wrote its stdin into the other call's folder")
+					}
+					if got := read(t, filepath.Join(runDir, "hooks", "000003", "stdin")); got != string(payload) {
+						t.Errorf("hooks/000003/stdin = %q, want the payload", got)
+					}
+				}},
 				{"concurrent calls each get their own directory", func(t *testing.T) {
 					runDir := filepath.Join(t.TempDir(), "run")
+					env := append(os.Environ(), lyingMkdir(t))
 					var wg sync.WaitGroup
 					for i := 0; i < 8; i++ {
 						wg.Add(1)
 						go func(i int) {
 							defer wg.Done()
 							cmd := exec.Command(base[0], append(append([]string{}, base[1:]...), runDir, "PostToolUse")...)
+							cmd.Env = env
 							cmd.Stdin = strings.NewReader("call " + strconv.Itoa(i))
 							if err := cmd.Run(); err != nil {
 								t.Errorf("call %d: %v", i, err)
@@ -485,9 +522,9 @@ func TestDenyOnce(t *testing.T) {
 	prompt, reason := quoted("prompt"), quoted("reason")
 	step19 := jsonText(t, map[string]any{"hook_event_name": "AfterAgent", "prompt": prompt, "prompt_response": "Apple"})
 	other := jsonText(t, map[string]any{"hook_event_name": "AfterAgent", "prompt": "What does count_words do? Answer in one sentence."})
-	call := func(t *testing.T, runDir, payload string) result {
+	call := func(t *testing.T, runDir, payload string, env ...string) result {
 		t.Helper()
-		r := run(t, t.TempDir(), []byte(payload), nil, sh, script, runDir, "AfterAgent")
+		r := run(t, t.TempDir(), []byte(payload), env, sh, script, runDir, "AfterAgent")
 		if r.code != 0 || r.stderr != "" {
 			t.Fatalf("exit %d, stderr %q; want 0 and nothing", r.code, r.stderr)
 		}
@@ -526,6 +563,22 @@ func TestDenyOnce(t *testing.T) {
 			call(t, runDir, step19)
 			if denied(t, call(t, runDir, step19)) {
 				t.Fatal("turned down twice")
+			}
+		}},
+		{"step 19 is turned down once, even when mkdir says each call made the marker", func(t *testing.T) {
+			runDir, path := filepath.Join(t.TempDir(), "run"), lyingMkdir(t)
+			if !denied(t, call(t, runDir, step19, path)) {
+				t.Fatal("not turned down")
+			}
+			if denied(t, call(t, runDir, step19, path)) {
+				t.Fatal("turned down twice")
+			}
+		}},
+		{"the decision it sends is kept in the run as deny-once", func(t *testing.T) {
+			runDir := filepath.Join(t.TempDir(), "run")
+			r := call(t, runDir, step19)
+			if got := read(t, filepath.Join(runDir, "deny-once")); r.stdout == "" || got != r.stdout {
+				t.Fatalf("deny-once = %q, want what it printed, %q", got, r.stdout)
 			}
 		}},
 		{"a call with another prompt isn't turned down and leaves the denial for step 19", func(t *testing.T) {

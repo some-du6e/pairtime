@@ -50,7 +50,9 @@ if [ "$#" -lt 2 ] || [ -z "$1" ]; then
 	exit 0
 fi
 hooks=$1/hooks
-mkdir -p "$hooks" || exit 0
+# Whether the folder is there afterwards is what counts, not what mkdir says.
+mkdir -p "$hooks"
+[ -d "$hooks" ] || exit 0
 
 # entries DIR prints how many entries DIR has. Positional parameters are
 # local to a function call, so set -- here leaves the script's alone.
@@ -63,11 +65,15 @@ entries() {
 	fi
 }
 
-# Claim the next number. mkdir is atomic, so two hooks that fire at the same
-# moment never share a directory. A number is taken only when its directory
-# is really there: any other failure (a full disk, a read-only folder, one
-# another account owns) ends the call at once, instead of trying every
-# number up to 999999 while the harness waits.
+# Claim the next number by creating its time file, as dump-hook.ps1 does.
+# Under set -C the shell itself opens the file with O_CREAT|O_EXCL, so of
+# two hooks that fire at the same moment only one can make it. What mkdir
+# says can't decide that: uutils mkdir before 0.11, Ubuntu 26.04's, can tell
+# two processes racing for one folder that each of them made it (uutils
+# issue 13970), and then both calls wrote into one directory. A number is
+# taken only when its time file is really there: any other failure (a full
+# disk, a read-only folder, one another account owns) ends the call at
+# once, instead of trying every number up to 999999 while the harness waits.
 n=$(entries "$hooks")
 while :; do
 	n=$((n + 1))
@@ -75,15 +81,14 @@ while :; do
 		exit 0
 	fi
 	call=$hooks/$(printf '%06d' "$n")
-	if mkdir "$call"; then
+	mkdir "$call"
+	if (set -C && printf 'unix_ns=%s\nutc=%s\nclock=%s\n' "$now_ns" "$utc" "$clock" >"$call/time"); then
 		break
-	elif [ ! -e "$call" ]; then
+	elif [ ! -e "$call/time" ]; then
 		exit 0
 	fi
 done
 exec 2>>"$call/stderr"
-
-printf 'unix_ns=%s\nutc=%s\nclock=%s\n' "$now_ns" "$utc" "$clock" >"$call/time"
 
 for arg in "$@"; do
 	printf '%s\n' "$arg"
