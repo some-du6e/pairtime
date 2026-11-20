@@ -19,6 +19,11 @@ import (
 // osascript is ErrUnavailable. This backend can't tell a locked screen;
 // macOS hides notification previews on its lock screen unless the user
 // changed that.
+//
+// A click on the notification opens Script Editor, the app it belongs to.
+// display notification takes no URL and no action, so on this backend a
+// click can never open the recap, whatever URL the dashboard (WP-UI1)
+// offers, and the coach's text mustn't invite one on macOS (WP-CO1).
 func Platform() Backend {
 	return darwinBackend{}
 }

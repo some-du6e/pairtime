@@ -16,14 +16,14 @@
 //     Asking again about a session does nothing.
 //   - Nothing is shown while the teen has notifications off, or during their
 //     quiet hours (config.toml [notifications]; DESIGN 3.9; TE 11.1 risk 2).
-//   - Nothing is shown about a session that ended more than Fresh ago. By
-//     then the recap is old news, and it waits in the dashboard.
-//   - Nothing is shown within Fresh of the last notification. A session
-//     ends SESSION_GAP_S after its last credited minute, or sooner at a lock
-//     or a suspend, and each project has its own sessions (SM 5.3). So
-//     short sessions cut by locks, or sessions in two projects ending
-//     together, can't become a run of notifications. pairtime never nags
-//     (PA 4.4).
+//   - Nothing is shown about a session found to be over more than Fresh
+//     ago (Note.Ended). By then the recap is old news, and it waits in the
+//     dashboard.
+//   - Nothing is shown within Fresh of the last notification. Each project
+//     has its own work sessions (SM 5.3), and a lock or a suspend ends one
+//     early, so short sessions cut by locks, or sessions in two projects
+//     ending together, can't become a run of notifications. pairtime never
+//     nags (PA 4.4).
 //   - A note that finds the screen locked waits instead of appearing on the
 //     lock screen, where anyone near the computer could read it. It goes out
 //     on UserPresent, if it is still fresh then. A newer note takes its
@@ -32,13 +32,22 @@
 //     so far; on macOS and Linux the desktop's own lock-screen settings
 //     decide what a locked screen shows.
 //
+// Each decision is saved to Memory when it is made, shown or not, so a
+// crash or a power cut can't make the notifier forget a session and decide
+// it again after a restart.
+//
 // Notify never blocks. Show runs on a goroutine that exists only while a
-// note is on its way to the screen, under a deadline, and an idle notifier
-// has no goroutine, no timer and no connection, so it costs nothing between
-// sessions (DESIGN 9.7). When the desktop can't show notifications at all,
-// such as a Linux machine with no session bus or no notification server,
-// the note is dropped without a retry, and doctor hears why through
-// Options.Problem.
+// note is on its way to the screen, under a deadline, and saving runs on
+// one that exists only while it writes. An idle notifier has no goroutine,
+// no timer and no connection, so it costs nothing between sessions
+// (DESIGN 9.7). When the desktop can't show notifications at all, such as a
+// Linux machine with no session bus or no notification server, the note is
+// dropped without a retry, and doctor hears why through Options.Problem.
+//
+// Every note is a work session's recap. DESIGN 3.3's other notification,
+// the weekly story (M5), needs a title and a spacing of its own, so it will
+// come as a kind of note this package doesn't have yet, not as a Notify
+// with another key.
 package notifier
 
 import (
@@ -99,7 +108,14 @@ type Note struct {
 	// Session is the work session's opaque key (AGENTS.md). At most one
 	// notification is shown for each key.
 	Session string
-	// Ended is when the session ended. A note goes stale Fresh after it.
+	// Ended is when the session was found to be over, and a note goes stale
+	// Fresh after it. For a session that a lock or a suspend ended, it is
+	// that moment. For one that ended because no credited minute followed,
+	// it is the end of the last credited minute plus SESSION_GAP_S, the
+	// first moment the coach can know no credited minute followed (DESIGN
+	// 3.8; PLAN WP-CO1). It is not SM 5.3's work-session end, the end of
+	// that last credited minute: measured from there, a note would already
+	// be stale when the coach found the session over.
 	Ended time.Time
 	// Text is the body: a sentence or two from the coach, such as "52 min
 	// on remind-bot. You fixed the timezone bug yourself. See recap."
@@ -229,8 +245,12 @@ type Options struct {
 	// Memory keeps the last notification time and recent sessions across
 	// restarts. Nil keeps them for this process only.
 	Memory Memory
-	// Now is the clock. Nil means time.Now. Quiet hours read the clock time
-	// in the location of the times it returns.
+	// Now is the clock. Quiet hours read the clock time in the location of
+	// the times it returns. Nil means the system clock in the computer's
+	// time zone as it is at each call. Go reads time.Local once per process,
+	// and the agent runs from login to logout, across sleeps and trips, so
+	// with time.Now quiet hours would keep the time zone the agent started
+	// in.
 	Now func() time.Time
 	// Log gets one line per note, without its text. Nil discards it.
 	Log *slog.Logger
@@ -254,12 +274,21 @@ type Notifier struct {
 	problem  func(string)
 	result   func(Note, Outcome)
 
-	wg sync.WaitGroup // the goroutine that runs Show, while there is one
+	// wg counts the goroutine that runs Show, while there is one, and the
+	// ones that save to Memory.
+	wg sync.WaitGroup
+
+	// putMu puts writes to Memory in order, and putGen and savedGen are the
+	// changes that the newest Put and Save hold. Both are guarded by putMu.
+	putMu    sync.Mutex
+	putGen   uint64
+	savedGen uint64
 
 	mu        sync.Mutex
 	closed    bool
 	lastShown time.Time
 	sessions  []string
+	gen       uint64             // counts changes to lastShown and sessions
 	showing   bool               // a goroutine is running Show
 	cancel    context.CancelFunc // ends that Show early
 	away      bool               // the last Show found the screen locked
@@ -290,7 +319,7 @@ func New(opts Options) *Notifier {
 		n.settings = func() config.Notifications { return config.Notifications{} }
 	}
 	if n.now == nil {
-		n.now = time.Now
+		n.now = localNow
 	}
 	if n.log == nil {
 		n.log = slog.New(slog.DiscardHandler)
@@ -315,6 +344,13 @@ func (n *Notifier) clock() time.Time {
 	return n.now().Round(0)
 }
 
+// localNow is the time now in the computer's time zone as it is now, read
+// afresh on each call (currentZone). The notifier reads its clock once or
+// twice per work session, so that costs nothing that matters.
+func localNow() time.Time {
+	return time.Now().In(currentZone())
+}
+
 // Notify asks for note to be shown and returns at once, without waiting
 // for the OS. Its result is Queued or Waiting when the note goes on, or the
 // final outcome when it was dropped; Options.Result hears the final outcome
@@ -325,12 +361,26 @@ func (n *Notifier) Notify(note Note) Outcome {
 	note.Ended = note.Ended.Round(0)
 	var reports []report
 	n.mu.Lock()
+	gen := n.gen
 	o, launch := n.decide(note, set, now, &reports)
+	// A decision was made, so it is saved now, whether or not the note
+	// reaches Show. The goroutine is counted while n.mu is held, so Close,
+	// which sets closed under n.mu before it waits, waits for it too.
+	save := n.gen != gen && n.memory != nil
+	if save {
+		n.wg.Add(1)
+	}
 	n.mu.Unlock()
 	if o != Queued && o != Waiting {
 		reports = append(reports, report{note, o})
 	}
 	n.finish(reports)
+	if save {
+		go func() {
+			defer n.wg.Done()
+			n.persist(true)
+		}()
+	}
 	if launch != nil {
 		launch()
 	}
@@ -355,6 +405,7 @@ func (n *Notifier) decide(note Note, set config.Notifications, now time.Time, re
 	if len(n.sessions) > sessionsKept {
 		n.sessions = n.sessions[len(n.sessions)-sessionsKept:]
 	}
+	n.gen++
 	if g := n.gate(note, set, now); g != Queued {
 		return g, nil
 	}
@@ -431,6 +482,7 @@ func (n *Notifier) run(ctx context.Context, cancel context.CancelFunc, note Note
 		switch o {
 		case Shown:
 			n.lastShown = now
+			n.gen++
 		case Waiting:
 			if n.waiting == nil {
 				n.waiting = &note
@@ -460,12 +512,11 @@ func (n *Notifier) run(ctx context.Context, cancel context.CancelFunc, note Note
 			n.showing = false
 			n.cancel = nil
 		}
-		mem := n.snapshot()
 		n.mu.Unlock()
 
 		n.logOutcome(o, err)
 		n.tellProblem(o, err)
-		n.save(mem)
+		n.persist(true)
 		n.finish(reports)
 		if !more {
 			return
@@ -475,9 +526,11 @@ func (n *Notifier) run(ctx context.Context, cancel context.CancelFunc, note Note
 }
 
 // UserPresent tells the notifier that someone is at the screen again: the
-// screen was unlocked, or the computer woke. The presence and power
-// components call it (WP-OS1, WP-OS3, WP-OS4). A note that waited for the
-// screen goes out now, unless it went stale or quiet hours began meanwhile.
+// screen was unlocked, or the computer woke. The coach calls it on unlock
+// and resume (PLAN WP-CO1), because it already follows locks, unlocks,
+// suspends and resumes to find where work sessions end, and a lock is the
+// usual way a note comes to wait. A note that waited for the screen goes
+// out now, unless it went stale or quiet hours began meanwhile.
 func (n *Notifier) UserPresent() {
 	set := n.settings()
 	now := n.clock()
@@ -502,9 +555,10 @@ func (n *Notifier) UserPresent() {
 }
 
 // Close stops a Show in progress, which takes down whatever it put on
-// screen, such as the Windows tray icon, and waits a moment for it to end.
-// Notes after Close are Stopped. Close keeps what the notifier remembers in
-// Memory without saving it; the agent saves state.json as it stops.
+// screen, such as the Windows tray icon, and waits a moment for it and for
+// any save to end. Notes after Close are Stopped. Anything the notifier
+// remembers that isn't in Memory yet goes there without a Save; the agent
+// saves state.json as it stops.
 func (n *Notifier) Close() {
 	var reports []report
 	n.mu.Lock()
@@ -533,15 +587,8 @@ func (n *Notifier) Close() {
 	case <-time.After(closeWait):
 		n.log.Warn("a notification was still on its way when the agent stopped")
 	}
-	if n.memory != nil {
-		// After the wait, so a Show that ended meanwhile is counted.
-		n.mu.Lock()
-		mem := n.snapshot()
-		n.mu.Unlock()
-		if err := n.memory.Put(memoryKey, mem); err != nil {
-			n.log.Warn("couldn't keep the notifier's state", "err", err)
-		}
-	}
+	// After the wait, so a Show that ended meanwhile is counted.
+	n.persist(false)
 }
 
 // snapshot copies what Memory keeps. n.mu is held.
@@ -549,17 +596,34 @@ func (n *Notifier) snapshot() remembered {
 	return remembered{LastShown: n.lastShown, Sessions: append([]string(nil), n.sessions...)}
 }
 
-// save writes mem to Memory, off the caller's path.
-func (n *Notifier) save(mem remembered) {
+// persist puts what the notifier remembers now into Memory, and saves
+// state.json when save is set. Calls go one at a time, and each takes its
+// snapshot only once it is its turn, so a Put never replaces a newer
+// snapshot with an older one. A change that is already put, or saved, isn't
+// again. persist never runs on Notify's path: Save waits for the disk, and
+// the Store holds its lock while it does, so a Put can wait as long.
+func (n *Notifier) persist(save bool) {
 	if n.memory == nil {
 		return
 	}
-	err := n.memory.Put(memoryKey, mem)
-	if err == nil {
-		err = n.memory.Save()
+	n.putMu.Lock()
+	defer n.putMu.Unlock()
+	n.mu.Lock()
+	mem, gen := n.snapshot(), n.gen
+	n.mu.Unlock()
+	if gen != n.putGen {
+		if err := n.memory.Put(memoryKey, mem); err != nil {
+			n.log.Warn("couldn't keep the notifier's state", "err", err)
+			return
+		}
+		n.putGen = gen
 	}
-	if err != nil {
-		n.log.Warn("couldn't save the notifier's state", "err", err)
+	if save && gen != n.savedGen {
+		if err := n.memory.Save(); err != nil {
+			n.log.Warn("couldn't save the notifier's state", "err", err)
+			return
+		}
+		n.savedGen = gen
 	}
 }
 

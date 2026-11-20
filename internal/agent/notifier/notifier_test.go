@@ -126,7 +126,8 @@ type step struct {
 	after    time.Duration         // with no at, how long after 20:00:00
 	settings *config.Notifications // when set, the settings from now on
 	notify   string                // Notify about this session ("" with present: nothing)
-	ago      time.Duration         // how long before the clock time the session ended
+	ago      time.Duration         // how long before the clock time the session was found over
+	ended    time.Time             // when set, Note.Ended instead of the clock time less ago
 	text     string
 	want     Outcome // what Notify returns
 	present  bool    // call UserPresent instead of Notify
@@ -183,6 +184,9 @@ func (r *rig) run(t *testing.T, steps []step) {
 			r.n.UserPresent()
 		} else {
 			note := Note{Session: s.notify, Ended: r.clock.Now().Add(-s.ago), Text: s.text}
+			if !s.ended.IsZero() {
+				note.Ended = s.ended
+			}
 			if got := r.n.Notify(note); got != s.want {
 				t.Errorf("step %d at %s: Notify(%q) = %v, want %v", i, when.Format("15:04:05"), s.notify, got, s.want)
 			}
@@ -281,6 +285,21 @@ func TestNotifyRules(t *testing.T) {
 			wantResults:  []string{"s1: shown"},
 			wantCalls:    1,
 			wantProblems: []string{""},
+		},
+		{
+			// Its last credited minute ended at 19:40:00. The coach finds it
+			// over SESSION_GAP_S later with no credited minute since, at the
+			// scorer step that follows (DESIGN 3.7), and passes that moment.
+			name:         "a session that no credited minute followed is shown when the coach finds it over at the next scorer step",
+			steps:        []step{{at: "20:00:30", notify: "s1", ended: at("19:40:00").Add(Fresh()), want: Queued}},
+			wantResults:  []string{"s1: shown"},
+			wantCalls:    1,
+			wantProblems: []string{""},
+		},
+		{
+			name:        "the same session's note measured from SM 5.3's end, its last credited minute, would be stale, so Ended isn't that end",
+			steps:       []step{{at: "20:00:30", notify: "s1", ended: at("19:40:00"), want: Stale}},
+			wantResults: []string{"s1: the session ended too long ago"},
 		},
 		{
 			name: "a note within SESSION_GAP_S of the last one shown is dropped",
@@ -499,9 +518,11 @@ func TestNotifyNeverWaitsForTheOS(t *testing.T) {
 // no timer of its own, before its first note and after each one.
 func TestIdleNotifierRunsNothing(t *testing.T) {
 	tests := []struct {
-		name  string
-		errs  []error
-		steps []step
+		name     string
+		settings config.Notifications
+		errs     []error
+		memory   bool // the notifier saves its decisions
+		steps    []step
 	}{
 		{name: "a new notifier starts no goroutine"},
 		{name: "a notifier that showed a note keeps no goroutine", steps: []step{{at: "20:00:00", notify: "s1", want: Queued}}},
@@ -510,11 +531,26 @@ func TestIdleNotifierRunsNothing(t *testing.T) {
 			errs:  []error{ErrAway},
 			steps: []step{{at: "20:00:00", notify: "s1", want: Queued}},
 		},
+		{
+			name:     "a notifier that saved a decision keeps no goroutine",
+			settings: config.Notifications{Off: true},
+			memory:   true,
+			steps:    []step{{at: "20:00:00", notify: "s1", want: TurnedOff}},
+		},
+		{
+			name:   "a notifier that showed a note and saved it keeps no goroutine",
+			memory: true,
+			steps:  []step{{at: "20:00:00", notify: "s1", want: Queued}},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			before := runtime.NumGoroutine()
-			r := newRig(config.Notifications{}, tt.errs, nil)
+			var memory Memory
+			if tt.memory {
+				memory = &recordingMemory{}
+			}
+			r := newRig(tt.settings, tt.errs, memory)
 			r.run(t, tt.steps)
 			// A goroutine that has returned may take a moment to leave the
 			// count.
@@ -642,6 +678,137 @@ func TestShownNotificationIsSavedForTheNextStart(t *testing.T) {
 			want := "s1: already decided for this session\ns2: shown"
 			if got := strings.Join(results, "\n"); got != want {
 				t.Errorf("results:\n%s\nwant:\n%s", got, want)
+			}
+		})
+	}
+}
+
+// A crash or a power cut can come right after any decision, so each one is
+// in state.json as soon as it is made, not only after a clean stop (#70).
+func TestEveryDecisionIsSavedWhenMade(t *testing.T) {
+	tests := []struct {
+		name     string
+		settings config.Notifications
+		steps    []step // in the agent that dies without stopping cleanly
+		again    step   // in the agent that starts next, with notifications on
+	}{
+		{
+			name:     "a session dropped while notifications were off isn't shown after a crash",
+			settings: config.Notifications{Off: true},
+			steps:    []step{{at: "20:00:00", notify: "s7", want: TurnedOff}},
+			again:    step{at: "20:05:00", notify: "s7", want: Repeated},
+		},
+		{
+			name:     "a session dropped for quiet hours isn't shown after a crash once they end",
+			settings: config.Notifications{Quiet: mustQuiet("22:00-07:00")},
+			steps:    []step{{at: "06:55:00", notify: "s7", want: InQuietHours}},
+			again:    step{at: "07:05:00", notify: "s7", want: Repeated},
+		},
+		{
+			name:  "a session dropped as stale isn't shown after a crash",
+			steps: []step{{at: "20:00:00", notify: "s7", ago: Fresh() + time.Second, want: Stale}},
+			again: step{at: "20:05:00", notify: "s7", want: Repeated},
+		},
+		{
+			name: "a session dropped as too soon after the last notification isn't shown after a crash",
+			steps: []step{
+				{at: "20:00:00", notify: "s1", want: Queued},
+				{at: "20:10:00", notify: "s7", want: TooSoon},
+			},
+			again: step{at: "20:25:00", notify: "s7", want: Repeated},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			name := filepath.Join(t.TempDir(), "state.json")
+			st, _, err := state.Open(name)
+			if err != nil {
+				t.Fatal(err)
+			}
+			crashed := newRig(tt.settings, nil, st)
+			defer crashed.n.Close()
+			crashed.run(t, tt.steps)
+			// No Close and no Save by the agent: what the next agent finds
+			// is what the notifier saved as it decided.
+			reopened, _, err := state.Open(name)
+			if err != nil {
+				t.Fatal(err)
+			}
+			next := newRig(config.Notifications{}, nil, reopened)
+			defer next.n.Close()
+			next.run(t, []step{tt.again})
+			results, _ := next.rec.got()
+			if want := tt.again.notify + ": " + tt.again.want.String(); strings.Join(results, "\n") != want {
+				t.Errorf("the next agent's results = %q, want %q", results, want)
+			}
+		})
+	}
+}
+
+// recordingMemory is a Memory that keeps every Put in order.
+type recordingMemory struct {
+	mu    sync.Mutex
+	puts  []remembered
+	saves int
+}
+
+func (m *recordingMemory) Get(string, any) (bool, error) { return false, nil }
+
+func (m *recordingMemory) Put(_ string, v any) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.puts = append(m.puts, v.(remembered))
+	return nil
+}
+
+func (m *recordingMemory) Save() error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.saves++
+	return nil
+}
+
+func TestMemoryNeverGoesBack(t *testing.T) {
+	tests := []struct {
+		name  string
+		notes int // each from its own goroutine, all at once
+	}{
+		{name: "notes from many goroutines at once leave every session in Memory, and no Put undoes an earlier one", notes: sessionsKept - 1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mem := &recordingMemory{}
+			r := newRig(config.Notifications{}, nil, mem)
+			defer r.n.Close()
+			// Show answers at once, so Shows and saves overlap all they can.
+			var notes sync.WaitGroup
+			for i := range tt.notes {
+				notes.Add(1)
+				go func() {
+					defer notes.Done()
+					r.n.Notify(Note{Session: fmt.Sprintf("s%d", i), Ended: r.clock.Now()})
+				}()
+			}
+			notes.Wait()
+			r.n.wg.Wait()
+
+			mem.mu.Lock()
+			defer mem.mu.Unlock()
+			if len(mem.puts) == 0 {
+				t.Fatal("nothing was put in Memory")
+			}
+			for i := 1; i < len(mem.puts); i++ {
+				prev, cur := mem.puts[i-1], mem.puts[i]
+				if len(cur.Sessions) < len(prev.Sessions) || cur.LastShown.Before(prev.LastShown) {
+					t.Errorf("Put %d went back: %d sessions and last shown %v, after %d and %v", i, len(cur.Sessions), cur.LastShown, len(prev.Sessions), prev.LastShown)
+				}
+			}
+			last := mem.puts[len(mem.puts)-1]
+			if len(last.Sessions) != tt.notes || last.LastShown.IsZero() {
+				t.Errorf("the last Put holds %d sessions and last shown %v, want %d and the one note that was shown", len(last.Sessions), last.LastShown, tt.notes)
+			}
+			if mem.saves == 0 {
+				t.Error("Memory was never saved")
 			}
 		})
 	}
