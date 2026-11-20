@@ -9,8 +9,10 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"sync"
 	"time"
 
+	"github.com/some-du6e/pairtime/internal/server/backup"
 	"github.com/some-du6e/pairtime/internal/server/config"
 	"github.com/some-du6e/pairtime/internal/server/migrations"
 	"github.com/some-du6e/pairtime/internal/server/ops"
@@ -38,6 +40,7 @@ const retentionEvery = time.Hour
 func runServe(ctx context.Context, e *env, args []string) int {
 	fs := newFlagSet("serve", serveSummary, e)
 	load := configFlags(fs, e)
+	replica := fs.String("litestream-replica", "", "the path in the main bucket that Litestream replicates the database to, as litestream.yml's replica path; /readyz then checks the replica's lag (DESIGN 10.4)")
 	if code, done := parse(fs, args); done {
 		return code
 	}
@@ -50,17 +53,24 @@ func runServe(ctx context.Context, e *env, args []string) int {
 	for _, w := range cfg.Warnings {
 		logger.Warn(w)
 	}
-	if err := serve(ctx, cfg, logger, e); err != nil {
+	if err := serve(ctx, cfg, logger, e, serveOptions{replica: *replica}); err != nil {
 		logger.Error("pairtimed stopped", "err", err)
 		return 1
 	}
 	return 0
 }
 
+// serveOptions are serve's choices besides the configuration.
+type serveOptions struct {
+	// replica is the replica's path in the main bucket when Litestream
+	// runs serve, or "".
+	replica string
+}
+
 // serve runs the server until ctx ends or a listener fails. The order
 // matters: the SQLite version check comes before anything touches the
 // database file, and migrations finish before the first request.
-func serve(ctx context.Context, cfg *config.Config, logger *slog.Logger, e *env) error {
+func serve(ctx context.Context, cfg *config.Config, logger *slog.Logger, e *env, so serveOptions) error {
 	logger.Info("starting", "version", version.Get().String(), "config", cfg.Path, "engine", cfg.Database.Engine)
 
 	// The pages render before the database opens, so a bad template or
@@ -168,6 +178,52 @@ func serve(ctx context.Context, cfg *config.Config, logger *slog.Logger, e *env)
 	} else {
 		checks = append(checks, objs.checks()...)
 		logger.Info("object storage", "endpoint", cfg.ObjectStorage.Endpoint, "bucket", objs.main.Name(), "snapshot_bucket", objs.snapshots.Name())
+	}
+	switch {
+	case so.replica != "" && objs == nil:
+		return fmt.Errorf("-litestream-replica says Litestream replicates to the main bucket, but [object_storage] in %s is off", cfg.Path)
+	case so.replica != "" && cfg.Database.Engine != config.EngineSQLite:
+		return fmt.Errorf("-litestream-replica is for SQLite, and database.engine is %q", cfg.Database.Engine)
+	case so.replica != "":
+		repl := backup.NewReplication(cfg.Database.Path, objs.main, so.replica)
+		checks = append(checks, ops.Check{Name: "replication", Run: repl.Check})
+		reg.GaugeFunc("pairtime_replication_lag_seconds", "How long the oldest change Litestream's replica lacks has waited, -1 before the first measure (DESIGN 10.4).", repl.LastLag)
+		logger.Info("under Litestream: /readyz checks the replica's lag", "replica", objs.main.Name()+"/"+so.replica, "max_lag", backup.MaxLag.String())
+	case objs != nil:
+		logger.Warn("serve runs without -litestream-replica, so /readyz doesn't check replication; litestream.yml's exec passes it (deploy/litestream.yml)")
+	}
+
+	// The jobs below stop before the database closes: each is deferred
+	// after db.Close and w.Close, so it runs first.
+	bctx, stopBackground := context.WithCancel(ctx)
+	var background sync.WaitGroup
+	defer func() {
+		stopBackground()
+		background.Wait()
+	}()
+	if objs != nil && cfg.Database.Engine == config.EngineSQLite {
+		if err := backup.RemoveStaleCopies(backup.SnapshotDir(cfg.DataDir)); err != nil {
+			logger.Warn("couldn't remove the copies an unfinished snapshot left", "err", err)
+		}
+		job, err := newSnapshotJob(cfg, objs)
+		if err != nil {
+			logger.Warn("no nightly snapshots", "reason", err.Error())
+		} else {
+			last := reg.Gauge("pairtime_snapshot_last_success_timestamp_seconds", "When the last nightly snapshot was stored, in Unix seconds (DESIGN 10.3).")
+			failed := reg.Counter("pairtime_snapshot_failures_total", "Nightly snapshots that failed.")
+			background.Go(func() { runSnapshots(bctx, job, logger, last, failed) })
+		}
+	}
+	if raw := cfg.Secrets.Get(envHeartbeatURL); raw != "" {
+		if err := checkPushURL(envHeartbeatURL, raw); err != nil {
+			return err
+		}
+		last := reg.Gauge("pairtime_heartbeat_last_ping_timestamp_seconds", "When pairtimed last pinged its push monitor, in Unix seconds (DESIGN 10.4).")
+		failed := reg.Counter("pairtime_heartbeat_failures_total", "Push-monitor pings that failed.")
+		background.Go(func() { runHeartbeat(bctx, raw, checks, logger, last, failed) })
+		logger.Info("the heartbeat pings its push monitor every 5 minutes while /readyz passes", "every", heartbeatEvery.String())
+	} else if objs != nil {
+		logger.Warn(envHeartbeatURL + " isn't set, so no push monitor hears from pairtimed (DESIGN 10.4)")
 	}
 
 	signIn, err := newSignIn(cfg, db, w, logger, site.Signups.MayCreate)

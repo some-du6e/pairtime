@@ -8,8 +8,9 @@
 //   - GET /readyz runs the readiness checks and answers 200 when they all
 //     pass, 503 when one fails, with a JSON body saying which. pairtimed's
 //     first check writes a row through the writer goroutine, so "ready"
-//     means the database takes writes and the writer is committing. WP-OP1
-//     and WP-SV15 add Litestream lag and object storage.
+//     means the database takes writes and the writer is committing. serve
+//     adds both buckets and, under Litestream, the replica's lag (WP-SV15,
+//     WP-OP1).
 //   - GET /metrics writes the Prometheus text format: ingest rate, batch
 //     latency, open streams and writer queue depth, among others.
 //
@@ -56,36 +57,44 @@ type CheckResult struct {
 	Ms int64 `json:"ms"`
 }
 
-// Readyz runs every check at once, each bounded by timeout, and answers
-// 200 when all pass or 503 when any fails.
-func Readyz(checks []Check, timeout time.Duration) http.HandlerFunc {
+// Run runs every check at once, each bounded by timeout, and says which
+// passed. Readyz answers with it, and serve's heartbeat pings its push
+// monitor only when it is ready (DESIGN 10.4).
+func Run(ctx context.Context, checks []Check, timeout time.Duration) Readiness {
 	if timeout <= 0 {
 		timeout = DefaultCheckTimeout
 	}
-	return func(w http.ResponseWriter, r *http.Request) {
-		res := Readiness{Ready: true, Checks: make([]CheckResult, len(checks))}
-		var wg sync.WaitGroup
-		for i, c := range checks {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				ctx, cancel := context.WithTimeout(r.Context(), timeout)
-				defer cancel()
-				start := time.Now()
-				err := runCheck(ctx, c)
-				cr := CheckResult{Name: c.Name, OK: err == nil, Ms: time.Since(start).Milliseconds()}
-				if err != nil {
-					cr.Error = err.Error()
-				}
-				res.Checks[i] = cr
-			}()
-		}
-		wg.Wait()
-		for _, c := range res.Checks {
-			if !c.OK {
-				res.Ready = false
+	res := Readiness{Ready: true, Checks: make([]CheckResult, len(checks))}
+	var wg sync.WaitGroup
+	for i, c := range checks {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			ctx, cancel := context.WithTimeout(ctx, timeout)
+			defer cancel()
+			start := time.Now()
+			err := runCheck(ctx, c)
+			cr := CheckResult{Name: c.Name, OK: err == nil, Ms: time.Since(start).Milliseconds()}
+			if err != nil {
+				cr.Error = err.Error()
 			}
+			res.Checks[i] = cr
+		}()
+	}
+	wg.Wait()
+	for _, c := range res.Checks {
+		if !c.OK {
+			res.Ready = false
 		}
+	}
+	return res
+}
+
+// Readyz runs every check at once, each bounded by timeout, and answers
+// 200 when all pass or 503 when any fails.
+func Readyz(checks []Check, timeout time.Duration) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		res := Run(r.Context(), checks, timeout)
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Cache-Control", "no-store")
 		if !res.Ready {

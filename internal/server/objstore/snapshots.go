@@ -34,6 +34,9 @@ type Snapshots struct {
 // NewSnapshots returns the snapshot store in bucket b.
 func NewSnapshots(b *Bucket) *Snapshots { return &Snapshots{b: b} }
 
+// Bucket is the snapshot bucket.
+func (s *Snapshots) Bucket() *Bucket { return s.b }
+
 // SnapshotKey is the key of the snapshot taken at t, such as
 // snapshots/pairtime-20261119T031000Z.db.age.
 func SnapshotKey(t time.Time) string {
