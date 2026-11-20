@@ -68,6 +68,14 @@
 // vendor's rule rather than generic-api-key. A span never ends inside an
 // escape of a JSON string, so taking it out leaves the file parseable.
 //
+// Two secret rules are pairtime's own, run after gitleaks' over the same
+// views: url-password takes the password out of a URL such as
+// postgres://app:PASSWORD@localhost:5432, and authorization-header the
+// credential out of an Authorization header with the Basic, Bearer or
+// token scheme. gitleaks v8.30.1 finds a URL's password only after a
+// keyword such as "password", and a header's credential only in a curl
+// command, so a pasted DATABASE_URL or HTTP request kept both.
+//
 // From Presidio: a result needs a score of 0.4, Presidio's floor for a
 // result with a context word, where Presidio keeps anything above zero; in
 // practice only the very weak SSN shapes need a context word. The context

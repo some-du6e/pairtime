@@ -62,8 +62,8 @@ func (r *Redactor) Find(text string) []Span {
 	return sortSpans(spans)
 }
 
-// secrets runs every gitleaks rule over text, and again over its prose
-// view when that differs.
+// secrets runs every gitleaks rule, then pairtime's own (ownRules), over
+// text, and again over its prose view when that differs.
 func (r *Redactor) secrets(text string, emit func(start, end int, rule string)) {
 	run := func(s string) {
 		lower := strings.ToLower(s)
@@ -74,6 +74,7 @@ func (r *Redactor) secrets(text string, emit func(start, end int, rule string)) 
 				}
 			})
 		}
+		ownSecrets(s, emit)
 	}
 	run(text)
 	if view, ok := proseView(text); ok {
