@@ -16,11 +16,13 @@
 #      fails or takes over 60 seconds.
 #   4. Puts it at %LOCALAPPDATA%\pairtime\bin\pairtime.exe.
 #   5. Runs 'pairtime install', which lists every change it would make and
-#      asks before making any.
+#      asks before making any. It names the folders this script made, so
+#      that 'pairtime uninstall' takes those away too.
 #
-# It needs no administrator rights, and it sends nothing anywhere: its only
-# requests are the downloads. It runs in Windows PowerShell 5.1, which
-# Windows 10 and 11 come with, and in PowerShell 7.
+# It needs no administrator rights, and it stops before downloading
+# anything when PowerShell runs as administrator. It sends nothing
+# anywhere: its only requests are the downloads. It runs in Windows
+# PowerShell 5.1, which Windows 10 and 11 come with, and in PowerShell 7.
 #
 # Options are environment variables, set before 'irm ... | iex', or
 # parameters when the script is saved and run as a file:
@@ -28,9 +30,16 @@
 #   $env:PAIRTIME_VERSION = 'V'          -Version V          install release V instead of this script's
 #   $env:PAIRTIME_BASE_URL = 'URL'       -BaseUrl URL        download the release files from URL
 #   $env:PAIRTIME_RELEASE_KEYS = 'FILE'  -ReleaseKeys FILE   trust the public keys in FILE instead of pairtime's
-#   $env:PAIRTIME_ALLOW_UNSIGNED = '1'   -AllowUnsigned      install even if no trusted key signed the release
+#   $env:PAIRTIME_ALLOW_UNSIGNED = '1'   -AllowUnsigned      install an unsigned release; see below
 #   $env:PAIRTIME_NO_INSTALL = '1'       -NoInstall          stop after step 4
 #                                        -Yes                answer yes for 'pairtime install'
+#
+# Allowing unsigned installs lets a script that trusts no release key
+# install a release that no key signed, checked only against its own
+# manifest's SHA-256s. Once the script trusts a key, pinned or given, a
+# manifest that no trusted key signed is always refused. The script removes
+# PAIRTIME_ALLOW_UNSIGNED from the session once it has read it, so it
+# lasts for one install.
 
 # Everything runs inside this script block, so that pasting the script with
 # irm | iex leaves no functions or variables behind in the session.
@@ -72,6 +81,40 @@ $installPairtime = {
   function Get-Start([string]$Text, [int]$Length) {
     if ($Text.Length -le $Length) { return $Text }
     $Text.Substring(0, $Length)
+  }
+
+  # Text as a PowerShell string in single quotes, which nothing in it can
+  # end early: CodeGeneration doubles each kind of single quote PowerShell
+  # reads, the straight one and the curly ones. Commands this script prints
+  # for you to run go through it, so a profile folder such as
+  # C:\Users\D'Angelo stays one string.
+  function ConvertTo-Quoted([string]$Text) {
+    "'" + [System.Management.Automation.Language.CodeGeneration]::EscapeSingleQuotedStringContent($Text) + "'"
+  }
+
+  # The command the PATH hint prints, which adds Dir to the end of the
+  # user's Path in HKCU\Key (Environment, unless a test names another
+  # key). That Path is REG_EXPAND_SZ, with references such as %USERPROFILE%
+  # in it. Through [Environment]::SetEnvironmentVariable it would come back
+  # expanded by this session's variables and be stored as REG_SZ, so a
+  # reference to a variable set later would never expand again. The command
+  # reads the value as it's stored and writes it back with its type. Then
+  # it sets a variable that doesn't exist to nothing, for which .NET tells
+  # Windows the environment changed, so a new terminal sees the new Path.
+  function Get-PathCommand([string]$Dir, [string]$Key = 'Environment') {
+    "`$k = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey($(ConvertTo-Quoted $Key)); " +
+    "`$k.SetValue('Path', (`$k.GetValue('Path', '', 'DoNotExpandEnvironmentNames').TrimEnd(';') + ';' + $(ConvertTo-Quoted $Dir)).TrimStart(';'), 'ExpandString'); " +
+    "`$k.Close(); [Environment]::SetEnvironmentVariable('PAIRTIME_NO_SUCH_VARIABLE', '', 'User')"
+  }
+
+  # The bytes Text encodes in padded standard base64, or $null unless Text
+  # is exactly how base64 writes those bytes, as internal/release requires
+  # (keys.go, decodeB64): FromBase64String ignores the unused bits of the
+  # last character, and reads QR== as QQ==.
+  function ConvertFrom-StrictBase64([string]$Text) {
+    try { $raw = [Convert]::FromBase64String($Text) } catch { return $null }
+    if ([Convert]::ToBase64String($raw) -cne $Text) { return $null }
+    , $raw
   }
 
   # RFC 8032's Ed25519 verification (section 5.1.7). Windows PowerShell 5.1
@@ -202,7 +245,12 @@ $installPairtime = {
     $stdout = $process.StandardOutput.ReadToEndAsync()
     $stderr = $process.StandardError.ReadToEndAsync()
     if (-not $process.WaitForExit($Seconds * 1000)) {
-      try { $process.Kill() } catch { }
+      # Kill only asks Windows to end the process. Until it has ended, its
+      # exe can't be deleted, and the cleanup would leave it behind.
+      try {
+        $process.Kill()
+        [void]$process.WaitForExit(10000)
+      } catch { }
       return @{ Ok = $false; TimedOut = $true; Output = '' }
     }
     # This one also waits for the output to be read.
@@ -225,12 +273,59 @@ $installPairtime = {
   }
 
   # Whether the environment variable Name is 1. Anything but 1, 0 or unset
-  # is refused, so a typo doesn't quietly mean no.
-  function Test-Flag([string]$Name) {
+  # is refused, so a typo doesn't quietly mean no. With -Remove, the
+  # variable is gone from the session afterwards, whatever it held.
+  function Test-Flag([string]$Name, [switch]$Remove) {
     $value = [Environment]::GetEnvironmentVariable($Name)
+    if ($Remove) { Remove-Item -LiteralPath "Env:$Name" -ErrorAction SilentlyContinue }
     if ($value -eq '1') { return $true }
     if ($value -and $value -ne '0') { Fail "set $Name to 1, or leave it unset" }
     $false
+  }
+
+  # This process's TOKEN_ELEVATION_TYPE (GetTokenInformation's class 18,
+  # TokenElevationType), the test pairtime hook makes too: 1 for a token
+  # that isn't split, as with UAC off; 2 for the elevated half of a split
+  # token, as from "Run as administrator"; 3 for the filtered half, what a
+  # user normally runs with. 0 when Windows won't say. .NET has no call for
+  # it, and Add-Type would compile one with csc and leave files in TEMP, so
+  # Reflection.Emit defines the call in memory.
+  function Get-ElevationType {
+    try {
+      $name = New-Object System.Reflection.AssemblyName 'PairtimeInstallToken'
+      $assembly = [System.Reflection.Emit.AssemblyBuilder]::DefineDynamicAssembly($name, [System.Reflection.Emit.AssemblyBuilderAccess]::Run)
+      $builder = $assembly.DefineDynamicModule('PairtimeInstallToken').DefineType('PairtimeInstallToken.Advapi32', 'Public, Class, Sealed')
+      $method = $builder.DefinePInvokeMethod('GetTokenInformation', 'advapi32.dll', 'Public, Static, PinvokeImpl',
+        [System.Reflection.CallingConventions]::Standard, [bool], [type[]]@([IntPtr], [int], [IntPtr], [int], [int].MakeByRefType()),
+        [System.Runtime.InteropServices.CallingConvention]::Winapi, [System.Runtime.InteropServices.CharSet]::Unicode)
+      $method.SetImplementationFlags('PreserveSig')
+      $advapi32 = $builder.CreateType()
+      $identity = [System.Security.Principal.WindowsIdentity]::GetCurrent()
+      $buffer = [System.Runtime.InteropServices.Marshal]::AllocHGlobal(4)
+      try {
+        $length = 0
+        if ($advapi32::GetTokenInformation($identity.Token, 18, $buffer, 4, [ref]$length) -and $length -eq 4) {
+          return [System.Runtime.InteropServices.Marshal]::ReadInt32($buffer)
+        }
+      } finally {
+        [System.Runtime.InteropServices.Marshal]::FreeHGlobal($buffer)
+        $identity.Dispose()
+      }
+    } catch { }
+    0
+  }
+
+  # Stops the install when Type, from Get-ElevationType, is 2, the elevated
+  # half of a split token. pairtime is set up for the person running it,
+  # without admin rights: run as administrator, pairtime install and the
+  # agent it starts would have them, and on a standard account they would
+  # be the administrator's who typed the password. A token that isn't split
+  # is the only one its user has, so the install goes on, as pairtime hook
+  # and pairtime install do.
+  function Assert-NotElevated([int]$Type) {
+    if ($Type -eq 2) {
+      Fail "don't run install.ps1 as administrator: pairtime installs into your own folders without admin rights, so open PowerShell again without 'Run as administrator' and run the command there."
+    }
   }
 
   function Get-Arch {
@@ -284,7 +379,16 @@ $installPairtime = {
       '","signatures":\[(' + $signature + '(?:,' + $signature + ')*)\]\}\n\z'
     $match = [regex]::Match($text, $form)
     if (-not $match.Success) { Fail $bad }
-    try { $payload = [Convert]::FromBase64String($match.Groups[1].Value) } catch { Fail $bad }
+    $payload = ConvertFrom-StrictBase64 $match.Groups[1].Value
+    if ($null -eq $payload) { Fail $bad }
+    # As in internal/release, every signature has to be 64 bytes in that
+    # base64, whichever key it names, or the file isn't in the form.
+    $signatures = @()
+    foreach ($m in [regex]::Matches($match.Groups[2].Value, '\{"keyid":"([^"]*)","sig":"([^"]*)"\}')) {
+      $sig = ConvertFrom-StrictBase64 $m.Groups[2].Value
+      if ($null -eq $sig -or $sig.Length -ne 64) { Fail $bad }
+      $signatures += @{ Id = $m.Groups[1].Value; Sig = $sig }
+    }
 
     # DSSE's pre-authentication encoding of the payload is what was signed.
     $head = [System.Text.Encoding]::ASCII.GetBytes("DSSEv1 $($PayloadType.Length) $PayloadType $($payload.Length) ")
@@ -293,19 +397,13 @@ $installPairtime = {
     # The key id only picks which key to try (DSSE); any one signature that
     # verifies under a trusted key is enough.
     $signer = $null
-    $signedBy = @()
-    foreach ($m in [regex]::Matches($match.Groups[2].Value, '\{"keyid":"([^"]*)","sig":"([^"]*)"\}')) {
-      $id = $m.Groups[1].Value
-      $signedBy += $id
-      if (-not $Keys.ContainsKey($id)) { continue }
-      $sig = $null
-      try { $sig = [Convert]::FromBase64String($m.Groups[2].Value) } catch { }
-      if ($null -ne $sig -and (Test-Ed25519 $Keys[$id] $signed $sig)) {
-        $signer = $id
+    foreach ($s in $signatures) {
+      if ($Keys.ContainsKey($s.Id) -and (Test-Ed25519 $Keys[$s.Id] $signed $s.Sig)) {
+        $signer = $s.Id
         break
       }
     }
-    @{ Payload = $payload; Signer = $signer; SignedBy = $signedBy }
+    @{ Payload = $payload; Signer = $signer; SignedBy = @($signatures | ForEach-Object { $_.Id }) }
   }
 
   # Unpacks pairtime.exe, and nothing else, from the zip archive.
@@ -345,8 +443,13 @@ $installPairtime = {
   function Install-Pairtime {
     if ($PSVersionTable.PSVersion.Major -lt 5) { Fail 'pairtime needs Windows PowerShell 5.1 or PowerShell 7' }
     if ([System.Environment]::OSVersion.Platform -ne 'Win32NT') { Fail 'install.ps1 is for Windows; on macOS and Linux, use install.sh' }
-    $acceptUnsigned = $AllowUnsigned.IsPresent -or (Test-Flag 'PAIRTIME_ALLOW_UNSIGNED')
+    # PAIRTIME_ALLOW_UNSIGNED is read and then removed, or under irm | iex
+    # it would stay set for the rest of the session and every install in
+    # it, and pairtime install would inherit it (D-allow-unsigned-scope).
+    $unsignedFromEnvironment = Test-Flag 'PAIRTIME_ALLOW_UNSIGNED' -Remove
+    $acceptUnsigned = $AllowUnsigned.IsPresent -or $unsignedFromEnvironment
     $placeOnly = $NoInstall.IsPresent -or (Test-Flag 'PAIRTIME_NO_INSTALL')
+    Assert-NotElevated (Get-ElevationType)
 
     # Assigning a parameter here makes a copy local to this function.
     if (-not $Version) { $Version = $PinnedVersion }
@@ -391,10 +494,13 @@ $installPairtime = {
       $signedBy = $opened.SignedBy -join ', '
       if ($opened.Signer) {
         Say "manifest.json is signed by release key $($opened.Signer)."
-      } elseif ($acceptUnsigned) {
-        Write-Warning "no key this script trusts signed manifest.json (signed by: $signedBy; trusted: $trusted). PAIRTIME_ALLOW_UNSIGNED is set, so the install goes on, but only the manifest's SHA-256s check the download: nothing shows the files are pairtime's."
+      } elseif ($keys.Count -eq 0 -and $acceptUnsigned) {
+        # Only a script that trusts no key gets here (D-allow-unsigned-scope).
+        Write-Warning "no key this script trusts signed manifest.json (signed by: $signedBy; this script trusts none). Unsigned installs are allowed, so the install goes on, but only the manifest's SHA-256s check the download: nothing shows the files are pairtime's."
       } else {
-        Fail "manifest.json isn't signed by a key this script trusts (signed by: $signedBy; trusted: $trusted), so nothing was installed."
+        $refusal = "manifest.json isn't signed by a key this script trusts (signed by: $signedBy; trusted: $trusted), so nothing was installed."
+        if ($acceptUnsigned) { $refusal += " Allowing unsigned installs doesn't change that: it applies only when this script trusts no release key." }
+        Fail $refusal
       }
 
       $manifest = [System.Text.Encoding]::UTF8.GetString($opened.Payload) | ConvertFrom-Json
@@ -453,20 +559,25 @@ $installPairtime = {
     }
 
     if ($placeOnly) {
-      Say "To finish setting it up, run: & '$target' install"
+      Say "To finish setting it up, run: & $(ConvertTo-Quoted $target) install"
     } elseif (@(& $target help) -cmatch '^  install ') {
       Say 'Running pairtime install. It lists every change it would make and asks before making any.'
       $installArgs = @('install')
       if ($Yes) { $installArgs += '--yes' }
+      # pairtime install records the folders it makes, so that pairtime
+      # uninstall can take them away again. The ones this script made for
+      # the binary exist by the time it starts, so it's told which they are
+      # (pairtime install --made), outermost first.
+      for ($i = $made.Count - 1; $i -ge 0; $i--) { $installArgs += @('--made', $made[$i]) }
       & $target @installArgs
-      if ($LASTEXITCODE -ne 0) { Fail "'pairtime install' stopped with status $LASTEXITCODE. pairtime is at $target; run & '$target' install to try again." }
+      if ($LASTEXITCODE -ne 0) { Fail "'pairtime install' stopped with status $LASTEXITCODE. pairtime is at $target; run & $(ConvertTo-Quoted $target) install to try again." }
     } else {
       Say 'This build of pairtime has no install command yet, so setup stops here.'
     }
 
     if (-not (@($env:Path -split ';') -contains $binDir)) {
-      Say "$binDir isn't on your PATH. To run pairtime by name, run this once, then open a new terminal:"
-      Say "  [Environment]::SetEnvironmentVariable('Path', [Environment]::GetEnvironmentVariable('Path', 'User') + ';$binDir', 'User')"
+      Say "$binDir isn't on your PATH. To run pairtime by name, run this once in PowerShell, then open a new terminal:"
+      Say "  $(Get-PathCommand $binDir)"
     }
   }
 
