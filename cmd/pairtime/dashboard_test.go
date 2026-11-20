@@ -17,9 +17,9 @@ import (
 	"github.com/some-du6e/pairtime/internal/agent/localhttp"
 )
 
-// fakeAgent answers POST /v1/dashboard/link the way the agent does, with
+// fakeLinkAgent answers POST /v1/dashboard/link the way the agent does, with
 // the link a test picks, and only with the token.
-func fakeAgent(t *testing.T, token string, reply func(port string) (int, string)) int {
+func fakeLinkAgent(t *testing.T, token string, reply func(port string) (int, string)) int {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost || r.URL.Path != "/v1/dashboard/link" {
@@ -187,7 +187,7 @@ func TestDashboard(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			w := &world{dir: t.TempDir()}
 			if tt.reply != nil {
-				w.port = fakeAgent(t, token, tt.reply)
+				w.port = fakeLinkAgent(t, token, tt.reply)
 			}
 			if tt.setup != nil {
 				tt.setup(t, w)

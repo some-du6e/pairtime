@@ -112,10 +112,6 @@ func dashboard(args []string, stdout, stderr io.Writer, deps dashboardDeps) int 
 	return 0
 }
 
-// errAgentDown means no agent answers for the data directory: port.json is
-// missing, says the agent stopped, or names a port nothing answers on.
-var errAgentDown = errors.New("the pairtime agent isn't running")
-
 // dashboardLink is the agent's answer to POST /v1/dashboard/link.
 type dashboardLink struct {
 	URL        string `json:"url"`
@@ -124,7 +120,9 @@ type dashboardLink struct {
 
 // askLink asks the agent port.json names for a one-time sign-in link. It
 // returns only a link to that agent's own /signin on 127.0.0.1, so nothing
-// else is ever handed to the browser.
+// else is ever handed to the browser. It returns errAgentDown (localapi.go)
+// when port.json is missing or says the agent stopped, or nothing answers
+// on its port.
 func askLink(client *http.Client, portFile string) (dashboardLink, error) {
 	pf, err := localhttp.ReadPortFile(portFile)
 	switch {
