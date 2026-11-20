@@ -363,6 +363,10 @@ func gitleaksLine(raw string, start, end int) string {
 // token rules end in (?:[\x60'"\s;]|\\[nr]|$), so a key at the end of a
 // sentence, "my key is sk-...AA.", doesn't match. Running the rules over
 // this view as well catches it. Every byte keeps its offset.
+//
+// Punctuation counts when whitespace, a quote or a backslash follows it, or
+// nothing does. The last two are how a sentence ends inside a raw JSON
+// string: "...AA.\"" or "...AA.\nthanks".
 func proseView(text string) (string, bool) {
 	var b []byte
 	for i := len(text) - 1; i >= 0; i-- {
@@ -376,7 +380,7 @@ func proseView(text string) (string, bool) {
 				next = b[i+1]
 			}
 		}
-		if next != ' ' && next != '\t' && next != '\n' && next != '\r' {
+		if next != ' ' && next != '\t' && next != '\n' && next != '\r' && next != '"' && next != '\\' {
 			continue
 		}
 		if b == nil {

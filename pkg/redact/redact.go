@@ -30,6 +30,11 @@ func New(k Known) (*Redactor, error) {
 // gets on a tie. The spans are sorted by start and can overlap; Merge
 // makes them disjoint. Find doesn't collapse code blocks, which is a
 // separate choice for agent messages (CodeBlocks).
+//
+// Text with backslash escapes, such as a raw JSON capture, is also read
+// through its JSON view (jsonView), so a key quoted as \"...\" or a value at
+// the start of an embedded line is found. A span never ends halfway
+// through an escape, so removing it from JSON text leaves JSON.
 func (r *Redactor) Find(text string) []Span {
 	var spans []Span
 	for _, p := range r.known {
@@ -37,12 +42,19 @@ func (r *Redactor) Find(text string) []Span {
 			spans = append(spans, Span{Start: s, End: e, Type: p.t})
 		})
 	}
-	r.secrets(text, func(s, e int, id string) {
-		spans = append(spans, Span{Start: s, End: e, Type: TypeSecret, Rule: id})
-	})
+	views := []string{text}
+	if view, ok := jsonView(text); ok {
+		views = append(views, view)
+	}
+	for _, v := range views {
+		r.secrets(v, func(s, e int, id string) {
+			spans = append(spans, Span{Start: s, End: e, Type: TypeSecret, Rule: id})
+		})
+	}
 	findPII(text, func(s, e int, t Type) {
 		spans = append(spans, Span{Start: s, End: e, Type: t})
 	})
+	keepEscapesWhole(text, spans)
 	return sortSpans(spans)
 }
 

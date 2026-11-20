@@ -48,7 +48,15 @@
 // percent-decoded first; and the rules also run over a copy of the text
 // with sentence punctuation after a token turned into spaces, because a
 // token rule needs whitespace, a quote or a semicolon after the secret and
-// a key at the end of a sentence is followed by a period.
+// a key at the end of a sentence is followed by a period. Text with
+// backslash escapes, which is what a raw JSON capture is, is read a second
+// time through a copy with each escape blanked to spaces, and each \n to a
+// line break, at the same offsets: there a key quoted as \"...\" is
+// followed by a quote, a key at the start of an embedded line follows a
+// line break, and a line-target allowlist sees that line rather than the
+// whole JSON record. When two rules find the same secret, the span names a
+// vendor's rule rather than generic-api-key. A span never ends inside an
+// escape of a JSON string, so taking it out leaves the file parseable.
 //
 // From Presidio: a result needs a score of 0.4, Presidio's floor for a
 // result with a context word, where Presidio keeps anything above zero; in

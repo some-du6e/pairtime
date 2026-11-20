@@ -121,8 +121,10 @@ func (s Span) Marker() string {
 // Merge turns spans that may overlap into the sorted, disjoint set a reveal
 // removes. Spans that overlap become one span covering all of them, which
 // takes the type, rule and code details of its longest member; a tie goes
-// to the type that comes first in pipeline order, then to the earlier span.
-// Spans that only touch stay apart. Empty and inverted spans are dropped.
+// to the type that comes first in pipeline order, then to the earlier span,
+// then to a vendor's own rule over generic-api-key, then to the rule whose
+// id sorts first. Spans that only touch stay apart. Empty and inverted
+// spans are dropped.
 func Merge(spans []Span) []Span {
 	in := make([]Span, 0, len(spans))
 	for _, s := range spans {
@@ -131,7 +133,8 @@ func Merge(spans []Span) []Span {
 		}
 	}
 	slices.SortFunc(in, func(a, b Span) int {
-		return cmp.Or(cmp.Compare(a.Start, b.Start), cmp.Compare(b.End, a.End), cmp.Compare(a.Type.rank(), b.Type.rank()))
+		return cmp.Or(cmp.Compare(a.Start, b.Start), cmp.Compare(b.End, a.End), cmp.Compare(a.Type.rank(), b.Type.rank()),
+			compareRules(a.Rule, b.Rule))
 	})
 	var out []Span
 	for i := 0; i < len(in); {
@@ -226,7 +229,25 @@ func tokenEnd(text string, e int) int {
 func sortSpans(spans []Span) []Span {
 	slices.SortFunc(spans, func(a, b Span) int {
 		return cmp.Or(cmp.Compare(a.Start, b.Start), cmp.Compare(b.End, a.End),
-			cmp.Compare(a.Type.rank(), b.Type.rank()), strings.Compare(a.Rule, b.Rule))
+			cmp.Compare(a.Type.rank(), b.Type.rank()), compareRules(a.Rule, b.Rule))
 	})
 	return slices.Compact(spans)
+}
+
+// genericRule is gitleaks' catch-all rule. It often finds the same secret
+// as a vendor's rule, which says more about which key to rotate.
+const genericRule = "generic-api-key"
+
+// compareRules orders the rules of two spans that tie on everything else:
+// any rule before genericRule, then by id. Merge keeps the first, so which
+// rule a merged span names doesn't depend on how the sort orders equals.
+func compareRules(a, b string) int {
+	ga, gb := 0, 0
+	if a == genericRule {
+		ga = 1
+	}
+	if b == genericRule {
+		gb = 1
+	}
+	return cmp.Or(cmp.Compare(ga, gb), strings.Compare(a, b))
 }

@@ -42,6 +42,28 @@ func TestFixturesScrub(t *testing.T) {
 			notOut: []string{"maya", stripe},
 		},
 		{
+			name: "a key inside a JSON string is found through the escapes around it",
+			files: map[string]string{
+				"write.jsonl":  `{"input":{"content":"STRIPE_KEY=\"` + stripe + `\"\n"}}` + "\n",
+				"prompt.jsonl": `{"text":"my key:\n` + stripe + `"}` + "\n",
+				"end.jsonl":    `{"text":"it is ` + stripe + `.\""}` + "\n" + `{"text":"` + stripe + `.\nthanks"}` + "\n",
+			},
+			wantCode: 0,
+			wantFiles: map[string]string{
+				"write.jsonl":  `{"input":{"content":"STRIPE_KEY=\"[SECRET]\"\n"}}` + "\n",
+				"prompt.jsonl": `{"text":"my key:\n[SECRET]"}` + "\n",
+				"end.jsonl":    `{"text":"it is [SECRET].\""}` + "\n" + `{"text":"[SECRET].\nthanks"}` + "\n",
+			},
+			wantOut: []string{
+				"write.jsonl:1:35: secret stripe-access-token, 38 bytes\n",
+				"prompt.jsonl:1:19: secret stripe-access-token, 38 bytes\n",
+				"end.jsonl:1:16: secret stripe-access-token, 38 bytes\n",
+				"end.jsonl:2:10: secret stripe-access-token, 38 bytes\n",
+				"removed 4 spans from 3 of 3 files",
+			},
+			notOut: []string{stripe},
+		},
+		{
 			name:     "-n lists the spans and changes nothing",
 			files:    map[string]string{"a.txt": "home is /home/maya\n"},
 			args:     append([]string{"-n"}, maya...),

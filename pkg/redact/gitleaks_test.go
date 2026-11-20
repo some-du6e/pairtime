@@ -245,6 +245,45 @@ func TestSecretsInProse(t *testing.T) {
 	}
 }
 
+// TestSecretsInJSON covers keys in raw JSON captures, where a quoted value
+// is written \"...\" and a line break \n, so the byte after a key is a
+// backslash and the byte before one that starts a line is an n.
+func TestSecretsInJSON(t *testing.T) {
+	stripe := fakeKey("sk_"+"live_", "Qw81Zx4LmN", 24, "")
+	hexKey := "a1b2c3d4e5f6" + "0718293a4b5c6d7e8f90"
+	tests := []struct {
+		name string
+		text string
+		key  string
+		rule string
+	}{
+		{"a key quoted inside a JSON string", `{"input":{"content":"STRIPE_KEY=\"` + stripe + `\"\n"}}`, stripe, "stripe-access-token"},
+		{"a key at the start of an embedded line", `{"text":"my key:\n` + stripe + `"}`, stripe, "stripe-access-token"},
+		{"a key that ends an embedded sentence before the closing quote", `{"text":"it is ` + stripe + `.\""}`, stripe, "stripe-access-token"},
+		{"a key that ends an embedded sentence before a line break", `{"text":"` + stripe + `.\nthanks"}`, stripe, "stripe-access-token"},
+		{"an allowlisted embedded line doesn't hide a key on the next one",
+			`{"content":"RUN --mount=type=secret,id=npmrc npm ci\nENV API_TOKEN=` + hexKey + `\n"}`, hexKey, "generic-api-key"},
+	}
+	r := mustNew(t, Known{})
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			start := strings.Index(tt.text, tt.key)
+			want := Span{Start: start, End: start + len(tt.key), Type: TypeSecret, Rule: tt.rule}
+			spans := r.Find(tt.text)
+			if !slices.Contains(spans, want) {
+				t.Errorf("Find = %v, want it to contain %v", spans, want)
+			}
+			out := Render(tt.text, spans)
+			if strings.Contains(out, tt.key) {
+				t.Errorf("Render = %q, still holds the key", out)
+			}
+			if !json.Valid([]byte(out)) {
+				t.Errorf("Render = %q, which isn't JSON any more", out)
+			}
+		})
+	}
+}
+
 func TestProseView(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -258,6 +297,8 @@ func TestProseView(t *testing.T) {
 		{"punctuation before a line break goes", "abc,\ndef", "abc \ndef", true},
 		{"bold markers after a token go and before it stay", "**abc** x", "**abc   x", true},
 		{"text without punctuation comes back unchanged", "plain words", "plain words", false},
+		{"punctuation before a quote goes", `"key abc."`, `"key abc "`, true},
+		{"punctuation before a backslash goes, as at the end of a JSON string", `key abc.\"`, `key abc \"`, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
