@@ -53,7 +53,9 @@ jobs:
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
           go-version-file: go.mod
-          cache-dependency-path: go.mod
+          cache-dependency-path: |
+            go.mod
+            go.sum
 
       - name: go test (platform packages)
         # Hosted runners get injected fakes, never real focus switching
@@ -73,7 +75,9 @@ jobs:
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
           go-version-file: go.mod
-          cache-dependency-path: go.mod
+          cache-dependency-path: |
+            go.mod
+            go.sum
 
       - name: go test (platform packages)
         run: bash tools/ci/test_existing.sh -- $PLATFORM_DIRS
@@ -109,7 +113,9 @@ jobs:
         if: steps.find.outputs.run == 'true'
         with:
           go-version-file: go.mod
-          cache-dependency-path: go.mod
+          cache-dependency-path: |
+            go.mod
+            go.sum
 
       - name: Install Xvfb, openbox, xterm, xdotool and D-Bus
         if: steps.find.outputs.run == 'true'

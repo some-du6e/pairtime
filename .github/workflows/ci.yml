@@ -45,8 +45,11 @@ jobs:
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
           go-version-file: go.mod
-          # There is no go.sum (stdlib only), so key the build cache on go.mod.
-          cache-dependency-path: go.mod
+          # Key the module and build cache on both files: go.sum alone
+          # misses a change only go.mod shows, such as a replace directive.
+          cache-dependency-path: |
+            go.mod
+            go.sum
 
       - name: License gate
         run: |
