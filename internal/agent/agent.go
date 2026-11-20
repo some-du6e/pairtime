@@ -27,6 +27,7 @@ import (
 	"github.com/some-du6e/pairtime/internal/agent/config"
 	"github.com/some-du6e/pairtime/internal/agent/home"
 	"github.com/some-du6e/pairtime/internal/agent/localhttp"
+	"github.com/some-du6e/pairtime/internal/agent/procs"
 	"github.com/some-du6e/pairtime/internal/agent/sched"
 	"github.com/some-du6e/pairtime/internal/agent/state"
 	"github.com/some-du6e/pairtime/internal/version"
@@ -67,6 +68,7 @@ type agent struct {
 	state   *state.Store
 	cfg     atomic.Pointer[config.Config]
 	port    int
+	procs   *procs.Scanner
 
 	stop     chan struct{} // closed when a client asks the agent to stop
 	stopOnce sync.Once
@@ -134,6 +136,7 @@ func Run(ctx context.Context, opts Options) error {
 	})
 
 	closers = append(closers, a.watchConfig())
+	closers = append(closers, a.startProcs())
 
 	ln, pf, err := a.listen(opts.Ports)
 	if err != nil {
