@@ -6,6 +6,7 @@ package linux
 
 import (
 	"context"
+	"net"
 	"sync"
 	"time"
 
@@ -29,8 +30,9 @@ type mutterIdle struct {
 	// connect connects to the session bus before ctx ends.
 	connect func(ctx context.Context) (*dbus.Conn, error)
 
-	mu   sync.Mutex
-	conn *dbus.Conn
+	mu     sync.Mutex
+	conn   *dbus.Conn
+	closed bool // after close, samples fail rather than reconnect
 }
 
 func (m *mutterIdle) idle(ctx context.Context) (time.Duration, error) {
@@ -49,6 +51,9 @@ func (m *mutterIdle) sample(ctx context.Context, limit time.Duration) (time.Dura
 	defer cancel()
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.closed {
+		return 0, net.ErrClosed
+	}
 	if m.conn != nil && !m.conn.Connected() {
 		m.conn.Close()
 		m.conn = nil
@@ -77,6 +82,7 @@ func (m *mutterIdle) name() string { return mutterName }
 func (m *mutterIdle) close() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.closed = true
 	if m.conn != nil {
 		m.conn.Close()
 		m.conn = nil

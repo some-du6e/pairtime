@@ -7,6 +7,7 @@ package linux
 import (
 	"context"
 	"errors"
+	"net"
 	"strings"
 	"testing"
 	"time"
@@ -401,6 +402,74 @@ func TestDesktopFocusOnFakeX(t *testing.T) {
 			defer cancel()
 			d, f := openOnFakeX(t, ctx)
 			tc.run(t, d, f, cancel)
+		})
+	}
+}
+
+func TestIdleAfterClose(t *testing.T) {
+	cases := []struct {
+		name string
+		// start returns a sample, the close that ends it, and a count of
+		// the connections it has made.
+		start func(t *testing.T) (sample func() error, close func(), dials func() int)
+	}{
+		{
+			name: "an X11 sample after close fails and opens no connection",
+			start: func(t *testing.T) (func() error, func(), func() int) {
+				f := newFakeX(t, fakeXConfig{roots: []uint32{testRoot}})
+				src := &x11Idle{open: func(deadline time.Time) (*xconn, error) { return f.dialBy(0, nil, deadline) }}
+				sample := func() error {
+					_, err := src.idle(context.Background())
+					return err
+				}
+				return sample, src.close, func() int {
+					n, _ := f.connections()
+					return n
+				}
+			},
+		},
+		{
+			name: "a Mutter sample after close fails and connects to no bus",
+			start: func(t *testing.T) (func() error, func(), func() int) {
+				n := 0
+				src := &mutterIdle{connect: func(context.Context) (*dbus.Conn, error) {
+					n++
+					return nil, errors.New("no bus here")
+				}}
+				sample := func() error {
+					_, err := src.idle(context.Background())
+					return err
+				}
+				return sample, src.close, func() int { return n }
+			},
+		},
+		{
+			name: "Desktop.Idle after Close fails and opens no connection",
+			start: func(t *testing.T) (func() error, func(), func() int) {
+				d, f := openOnFakeX(t, context.Background())
+				sample := func() error {
+					_, err := d.Idle(context.Background())
+					return err
+				}
+				return sample, func() { d.Close() }, func() int {
+					n, _ := f.connections()
+					return n
+				}
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			sample, closeSource, dials := tc.start(t)
+			sample() // connects, where there is something to connect to
+			closeSource()
+			before := dials()
+			if err := sample(); !errors.Is(err, net.ErrClosed) {
+				t.Errorf("a sample after close: %v, want net.ErrClosed", err)
+			}
+			if after := dials(); after != before {
+				t.Errorf("the sample after close made %d connections", after-before)
+			}
 		})
 	}
 }

@@ -139,22 +139,36 @@ func xpropPID(t *testing.T, wid uint32) int {
 	return pid
 }
 
-// nextFocus waits for the next report of a focused window. openbox may
-// report no window for a moment between two, which is skipped.
+// nextFocus waits for the next focus report, whatever window it names,
+// none included.
 func nextFocus(t *testing.T, ch <-chan Focus) Focus {
 	t.Helper()
-	timeout := time.After(10 * time.Second)
+	select {
+	case f, ok := <-ch:
+		if !ok {
+			t.Fatal("the focus channel closed")
+		}
+		return f
+	case <-time.After(10 * time.Second):
+		t.Fatal("no focus report in 10 s")
+	}
+	return Focus{}
+}
+
+// moreFocus returns the focus reports that come before 500 ms pass with
+// none.
+func moreFocus(t *testing.T, ch <-chan Focus) []Focus {
+	t.Helper()
+	var more []Focus
 	for {
 		select {
 		case f, ok := <-ch:
 			if !ok {
 				t.Fatal("the focus channel closed")
 			}
-			if f.Window != 0 {
-				return f
-			}
-		case <-timeout:
-			t.Fatal("no focus report in 10 s")
+			more = append(more, f)
+		case <-time.After(500 * time.Millisecond):
+			return more
 		}
 	}
 }
@@ -165,10 +179,12 @@ func TestDesktopX11FocusFollowsActiveWindow(t *testing.T) {
 	d := openX11Desktop(t)
 	focus := d.Focus()
 
-	// Start from A, whatever had focus before.
+	// Start from A, whatever had focus before, and let the reports of
+	// getting there pass.
 	runTool(t, "xdotool", "windowactivate", "--sync", fmt.Sprint(winA))
 	for f := nextFocus(t, focus); f.Window != winA; f = nextFocus(t, focus) {
 	}
+	moreFocus(t, focus)
 
 	cases := []struct {
 		name string
@@ -181,7 +197,12 @@ func TestDesktopX11FocusFollowsActiveWindow(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			runTool(t, "xdotool", "windowactivate", "--sync", fmt.Sprint(tc.win))
+			// Every report counts, a window of none included: PLAN's
+			// check is that each switch is one os.focus event.
 			got := nextFocus(t, focus)
+			if more := moreFocus(t, focus); len(more) > 0 {
+				t.Fatalf("one switch gave %d reports: %+v, then %+v", 1+len(more), got, more)
+			}
 			active := runTool(t, "xdotool", "getactivewindow")
 			if got.Window != tc.win || active != fmt.Sprint(tc.win) {
 				t.Fatalf("reported window %d; xdotool activated %d and reads %s as active", got.Window, tc.win, active)
@@ -200,15 +221,6 @@ func TestDesktopX11FocusFollowsActiveWindow(t *testing.T) {
 				t.Errorf("os.focus: %v", err)
 			}
 		})
-	}
-
-	// Two switches made exactly two reports: nothing else is queued.
-	select {
-	case f := <-focus:
-		if f.Window != 0 {
-			t.Errorf("an extra focus report: %+v", f)
-		}
-	case <-time.After(500 * time.Millisecond):
 	}
 }
 

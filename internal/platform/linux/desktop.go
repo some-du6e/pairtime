@@ -449,8 +449,9 @@ func (d *Desktop) Status() Status {
 // Idle reads the time since the last input, with one round trip to the
 // X server or Mutter. It gives up after 1 s, or at ctx's deadline if that
 // is sooner, reconnecting included, and a Mutter sample also stops when ctx
-// is canceled. It returns ErrUnknown when the desktop gives no idle time;
-// any other error is a failed sample, and the next call tries again.
+// is canceled. It returns ErrUnknown when the desktop gives no idle time,
+// and net.ErrClosed after Close; any other error is a failed sample, and
+// the next call tries again.
 func (d *Desktop) Idle(ctx context.Context) (Idle, error) {
 	if d.idleSrc == nil {
 		return Idle{}, ErrUnknown

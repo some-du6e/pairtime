@@ -7,6 +7,7 @@ package linux
 import (
 	"context"
 	"errors"
+	"net"
 	"sync"
 	"time"
 )
@@ -22,9 +23,10 @@ type x11Idle struct {
 	// open connects to the display by deadline; openX11 outside tests.
 	open func(deadline time.Time) (*xconn, error)
 
-	mu    sync.Mutex
-	c     *xconn
-	major byte // MIT-SCREEN-SAVER's major opcode on c
+	mu     sync.Mutex
+	c      *xconn
+	major  byte // MIT-SCREEN-SAVER's major opcode on c
+	closed bool // after close, samples fail rather than reconnect
 }
 
 // connect opens the connection and checks for the extension, all by
@@ -63,6 +65,9 @@ func (s *x11Idle) idle(ctx context.Context) (time.Duration, error) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.closed {
+		return 0, net.ErrClosed
+	}
 	if s.c == nil {
 		if err := s.connect(deadline); err != nil {
 			return 0, err
@@ -89,6 +94,7 @@ func (s *x11Idle) name() string { return screenSaverExtension }
 func (s *x11Idle) close() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.closed = true
 	if s.c != nil {
 		s.c.close()
 		s.c = nil

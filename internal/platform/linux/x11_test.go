@@ -332,7 +332,7 @@ func TestX11Focus(t *testing.T) {
 			want:  []Focus{{Window: winA, PID: 4242}, {Window: winB, PID: 777}},
 		},
 		{
-			name: "a change of another root property reports nothing",
+			name: "a change of another root property reports nothing and reads nothing",
 			wm:   "ewmh", start: winA,
 			steps: []focusStep{{active: winA, notify: "_NET_CLIENT_LIST_STACKING"}},
 			want:  []Focus{{Window: winA, PID: 4242}},
@@ -488,6 +488,21 @@ func TestX11Focus(t *testing.T) {
 			}
 			if n := f.readsOfAny("_NET_WM_PID"); tc.xres == "" && n != 0 {
 				t.Errorf("read _NET_WM_PID %d times on a server with X-Resource 1.2", n)
+			}
+			// _NET_ACTIVE_WINDOW is read once at start when a window
+			// manager keeps it, once per notification of it, the
+			// sentinel's included, and never for another property.
+			wantReads := 1
+			if tc.wm == "ewmh" {
+				wantReads++
+			}
+			for _, s := range tc.steps {
+				if s.notify == "_NET_ACTIVE_WINDOW" {
+					wantReads++
+				}
+			}
+			if got := f.readsOf(root, "_NET_ACTIVE_WINDOW"); got != wantReads {
+				t.Errorf("read _NET_ACTIVE_WINDOW %d times, want %d", got, wantReads)
 			}
 			cancel()
 			w.close()
