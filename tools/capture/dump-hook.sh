@@ -64,7 +64,10 @@ entries() {
 }
 
 # Claim the next number. mkdir is atomic, so two hooks that fire at the same
-# moment never share a directory.
+# moment never share a directory. A number is taken only when its directory
+# is really there: any other failure (a full disk, a read-only folder, one
+# another account owns) ends the call at once, instead of trying every
+# number up to 999999 while the harness waits.
 n=$(entries "$hooks")
 while :; do
 	n=$((n + 1))
@@ -74,6 +77,8 @@ while :; do
 	call=$hooks/$(printf '%06d' "$n")
 	if mkdir "$call"; then
 		break
+	elif [ ! -e "$call" ]; then
+		exit 0
 	fi
 done
 exec 2>>"$call/stderr"

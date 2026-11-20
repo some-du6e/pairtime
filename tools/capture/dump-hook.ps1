@@ -60,7 +60,10 @@ try {
     $timeBytes = $utf8.GetBytes($timeText)
 
     # Claim the next number. Opening time with CreateNew is atomic, so two
-    # hooks that fire at the same moment never share a directory.
+    # hooks that fire at the same moment never share a directory. A number
+    # is taken only when its time file is really there: any other failure
+    # ends the call at once, instead of trying (and making a directory for)
+    # every number up to 999999 while the harness waits.
     $n = @([System.IO.Directory]::GetFileSystemEntries($hooks)).Count
     while ($true) {
         $n++
@@ -72,7 +75,10 @@ try {
         try {
             $f = [System.IO.File]::Open((Join-Path $dir 'time'), [System.IO.FileMode]::CreateNew)
         } catch {
-            continue
+            if ([System.IO.File]::Exists((Join-Path $dir 'time'))) {
+                continue
+            }
+            exit 0
         }
         try {
             $f.Write($timeBytes, 0, $timeBytes.Length)

@@ -6,6 +6,7 @@ import (
 	"bufio"
 	"bytes"
 	"compress/gzip"
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -391,6 +392,34 @@ func TestDumpers(t *testing.T) {
 					}
 					if files := tree(t, dir); len(files) != 0 {
 						t.Fatalf("wrote %v", files)
+					}
+				}},
+				{"a hooks folder it can't write to ends the call at once, not after a million numbers", func(t *testing.T) {
+					if os.Geteuid() == 0 {
+						t.Skip("root can write to a read-only folder")
+					}
+					runDir := filepath.Join(t.TempDir(), "run")
+					hooks := filepath.Join(runDir, "hooks")
+					if err := os.MkdirAll(hooks, 0o755); err != nil {
+						t.Fatal(err)
+					}
+					if err := os.Chmod(hooks, 0o555); err != nil {
+						t.Fatal(err)
+					}
+					t.Cleanup(func() { _ = os.Chmod(hooks, 0o755) })
+					ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+					defer cancel()
+					cmd := exec.CommandContext(ctx, base[0], append(append([]string{}, base[1:]...), runDir, "Stop")...)
+					cmd.Stdin = bytes.NewReader(payload)
+					err := cmd.Run()
+					if ctx.Err() != nil {
+						t.Fatal("still trying numbers after 30 s")
+					}
+					if err != nil {
+						t.Fatalf("exit: %v, want 0", err)
+					}
+					if entries, _ := os.ReadDir(hooks); len(entries) != 0 {
+						t.Fatalf("wrote %d entries into a read-only folder", len(entries))
 					}
 				}},
 				{"calls are numbered in arrival order", func(t *testing.T) {
