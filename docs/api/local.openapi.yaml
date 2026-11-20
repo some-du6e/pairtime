@@ -49,29 +49,67 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "403":
           $ref: "#/components/responses/Forbidden"
-  /v1/today:
+  /v1/days/{date}:
     get:
-      operationId: getToday
-      summary: This device's time today, by project and evidence level
+      operationId: getDay
+      summary: One local day of this device, by project
       description: >
-        The first thing the dashboard and `pairtime today` show (DESIGN 3.8):
-        today's credited seconds per project and per evidence level, the
-        agent's time per project, and what wasn't credited. Today is the
-        device's local day (SM 5.3). The numbers sum the latest revision of
-        each minute's bucket, which the scorer writes every 60 s while
-        anything is recorded (DESIGN 3.7). A minute is pending until
-        `final_before` passes its end, and the part of the credit in pending
-        minutes, which later records can still change, is `pending_s`. While
-        `shadow` is true the reply leaves out every credited and uncredited
-        number and keeps the agent's time (DESIGN 6.7). The answer is never
-        cached.
+        What `pairtime today` and `statusline` print and the dashboard's
+        Today page shows (DESIGN 3.8): for each project with anything in the
+        day, your time by activity kind and by evidence level, the agent's
+        time on its own by harness, and the time that wasn't credited, by
+        reason (SM 5.2, 5.3). The day is the device's local day. The answer
+        comes from the day's rollup in `days/`, which the scorer rewrites
+        each time one of the day's minute buckets changes, every 60 s while
+        anything is recorded (DESIGN 3.5, 3.7). While `shadow` is true the
+        credited numbers are left out. The answer is never cached.
+      parameters:
+        - name: date
+          in: path
+          required: true
+          description: A day as YYYY-MM-DD, or `today` for today in the device's time zone.
+          schema:
+            type: string
+          examples:
+            today:
+              value: today
+            date:
+              value: "2026-11-24"
       responses:
         "200":
-          description: Today's rollup.
+          description: The day's rollup.
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/Today"
+                $ref: "#/components/schemas/Day"
+        "400":
+          description: The date isn't YYYY-MM-DD or `today`.
+          content:
+            text/plain:
+              schema:
+                type: string
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+  /v1/sessions/last:
+    get:
+      operationId: getLastSession
+      summary: The last work session, or the one still going
+      description: >
+        What `pairtime recap` prints: the most recent work session (SM 5.3),
+        a run of one project's credited minutes split where one ends more
+        than SESSION_GAP_S (1,200 s) before the next starts, with the same
+        tally as a day. `session` is null before the first. While `shadow`
+        is true the credited numbers are left out. The answer is never
+        cached.
+      responses:
+        "200":
+          description: The last work session.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LastSession"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
@@ -247,15 +285,15 @@ components:
         status:
           type: string
           const: stopping
-    Today:
+    Day:
       type: object
       additionalProperties: false
-      required: [date, zone, start, end, shadow, agent_running_s, projects, minutes, pending_minutes]
+      required: [date, zone, start, end, shadow, projects]
       properties:
         date:
           type: string
-          description: Today in the device's time zone, as YYYY-MM-DD.
-          examples: ["2026-11-20"]
+          description: The day, as YYYY-MM-DD. Asked for `today`, the agent says which day that is.
+          examples: ["2026-11-24"]
         zone:
           type: string
           description: The name of the time zone the day is counted in, as the device's clock gives it.
@@ -269,102 +307,150 @@ components:
           format: date-time
           description: The end of the day, in UTC. A day is 23 or 25 hours long where the clocks change.
         shadow:
-          type: boolean
+          $ref: "#/components/schemas/Shadow"
+        projects:
+          type: array
+          description: A row for each project with credit, agent time or uncredited time in the day, in project key order.
+          items:
+            $ref: "#/components/schemas/DayProject"
+    DayProject:
+      type: object
+      additionalProperties: false
+      required: [project, name, agent_only_s, agent_only_by_harness, uncredited]
+      properties:
+        project:
+          type: string
+          description: The project's opaque key.
+        name:
+          type: string
           description: >
-            `display.shadow` in config.toml. While it is true, the credited and
-            uncredited numbers are left out, and views show credited time as
-            "calibrating".
+            The project's name from the local project map, which never leaves
+            the device. Empty until there is one; views show the key then.
         credited_s:
           type: number
           minimum: 0
-          description: Your time today, in seconds. Absent while `shadow` is true.
+          description: Your time, in seconds. Absent while `shadow` is true.
         pending_s:
           type: number
           minimum: 0
-          description: The part of `credited_s` in minutes that are still pending. Absent while `shadow` is true.
-        by_level:
-          $ref: "#/components/schemas/ByLevel"
+          description: >
+            The part of `credited_s` in minutes that are still pending, which
+            later records can change (DESIGN 3.7). Absent while `shadow` is
+            true.
+        credited_by_kind:
+          $ref: "#/components/schemas/ByKind"
+        credited_by_evidence:
+          $ref: "#/components/schemas/ByEvidence"
+        agent_only_s:
+          type: number
+          minimum: 0
+          description: >
+            SM 5.3's agent_only_s: the seconds a turn in the project ran that
+            the project wasn't credited, whatever their reason code.
+        agent_only_by_harness:
+          type: object
+          description: >
+            `agent_only_s` by the harness whose turn ran, such as
+            `claude_code`, with every harness that had a session in the
+            project in the span, at 0 when it had no time on its own.
+          additionalProperties:
+            type: number
+            minimum: 0
         uncredited:
           type: object
           description: >
             Seconds that were looked at and not credited, by reason code (SM
-            5.2), such as `X.no_anchor`. Absent when there were none, and while
-            `shadow` is true.
+            5.2), such as `X.absent`. Agent-only seconds are in it under
+            their own codes, and credit past the day's cap under
+            `X.day_cap`.
           additionalProperties:
             type: number
             minimum: 0
-        agent_running_s:
-          type: number
-          minimum: 0
-          description: Seconds an agent ran today, in any project.
-        projects:
-          type: array
-          description: One row for each project with credit or agent time today, in project key order.
-          items:
-            $ref: "#/components/schemas/TodayProject"
-        final_before:
-          type: string
-          format: date-time
-          description: >
-            Every minute before this time is final and won't change again.
-            Absent before the scorer has scored anything.
-        minutes:
-          type: integer
-          minimum: 0
-          description: Today's minutes in which anything was credited or an agent ran.
-        pending_minutes:
-          type: integer
-          minimum: 0
-          description: How many of `minutes` are still pending.
-    TodayProject:
+    LastSession:
       type: object
       additionalProperties: false
-      required: [project_key, agent_s, agent_only_s]
+      required: [shadow, session]
       properties:
-        project_key:
-          type: string
-          description: The project's opaque key. Names come with the project map.
-        credited_s:
-          type: number
-          minimum: 0
-          description: Your time in the project today, in seconds. Absent while `shadow` is true.
-        pending_s:
-          type: number
-          minimum: 0
-          description: The part of `credited_s` in pending minutes. Absent while `shadow` is true.
-        by_level:
-          $ref: "#/components/schemas/ByLevel"
-        by_kind:
-          $ref: "#/components/schemas/ByKind"
-        agent_s:
-          type: integer
-          minimum: 0
-          description: Seconds a turn of an agent ran in the project today.
-        agent_only_s:
-          type: integer
-          minimum: 0
-          description: The part of `agent_s` that nothing credited you for (SM 2.6).
-    ByLevel:
-      type: object
-      additionalProperties: false
+        shadow:
+          $ref: "#/components/schemas/Shadow"
+        session:
+          description: The last work session, or null before the first.
+          type: [object, "null"]
+          additionalProperties: false
+          required: [project, name, start, end, open, agent_only_s, agent_only_by_harness, uncredited]
+          properties:
+            project:
+              type: string
+              description: The session's project key.
+            name:
+              type: string
+              description: The project's name from the local project map, or empty.
+            start:
+              type: string
+              format: date-time
+              description: The start of the session's first credited minute, in UTC.
+            end:
+              type: string
+              format: date-time
+              description: The end of its last credited minute, in UTC.
+            open:
+              type: boolean
+              description: >
+                True while the session goes on: SESSION_GAP_S hasn't passed
+                since `end`, and no lock or suspend came after it (DESIGN 3.8).
+            credited_s:
+              type: number
+              minimum: 0
+              description: Your time, in seconds. Absent while `shadow` is true.
+            pending_s:
+              type: number
+              minimum: 0
+              description: >
+                The part of `credited_s` in minutes that are still pending, which
+                later records can change (DESIGN 3.7). Absent while `shadow` is
+                true.
+            credited_by_kind:
+              $ref: "#/components/schemas/ByKind"
+            credited_by_evidence:
+              $ref: "#/components/schemas/ByEvidence"
+            agent_only_s:
+              type: number
+              minimum: 0
+              description: >
+                SM 5.3's agent_only_s: the seconds a turn in the project ran that
+                the project wasn't credited, whatever their reason code.
+            agent_only_by_harness:
+              type: object
+              description: >
+                `agent_only_s` by the harness whose turn ran, such as
+                `claude_code`, with every harness that had a session in the
+                project in the span, at 0 when it had no time on its own.
+              additionalProperties:
+                type: number
+                minimum: 0
+            uncredited:
+              type: object
+              description: >
+                Seconds that were looked at and not credited, by reason code (SM
+                5.2), such as `X.absent`. Agent-only seconds are in it under
+                their own codes, and credit past the day's cap under
+                `X.day_cap`.
+              additionalProperties:
+                type: number
+                minimum: 0
+    Shadow:
+      type: boolean
       description: >
-        Credited seconds by evidence level (DESIGN 6.4), each level present.
-        Absent while `shadow` is true.
-      required: [A, B, C]
-      properties:
-        A:
-          type: number
-          minimum: 0
-        B:
-          type: number
-          minimum: 0
-        C:
-          type: number
-          minimum: 0
+        `display.shadow` in config.toml (DESIGN 6.7). While it is true the
+        credited numbers are left out, views show your time as
+        "calibrating", and the agent's time and the uncredited time still
+        show.
     ByKind:
       type: object
       additionalProperties: false
-      description: Credited seconds by activity kind (SM 5.1). Absent while `shadow` is true.
+      description: >
+        Credited seconds by activity kind (SM 5.1), only the kinds with
+        credit. Absent while `shadow` is true.
       properties:
         prompting:
           type: number
@@ -388,5 +474,21 @@ components:
           type: number
           minimum: 0
         lookup:
+          type: number
+          minimum: 0
+    ByEvidence:
+      type: object
+      additionalProperties: false
+      description: >
+        Credited seconds by evidence level (DESIGN 6.4), only the levels with
+        credit. Absent while `shadow` is true.
+      properties:
+        A:
+          type: number
+          minimum: 0
+        B:
+          type: number
+          minimum: 0
+        C:
           type: number
           minimum: 0

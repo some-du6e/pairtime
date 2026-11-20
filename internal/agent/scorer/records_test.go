@@ -215,7 +215,7 @@ func TestCarry(t *testing.T) {
 			},
 		},
 		{
-			name: "a session with no record for a week before the window is dropped",
+			name: "a session with no record for a day before the window is dropped",
 			fold: []event.Event{ev(100, 1, "s_1", &event.SessionStart{})},
 			from: 100 + carrySessionMS + 1,
 			check: func(t *testing.T, c carry) {
@@ -306,6 +306,23 @@ func TestWindow(t *testing.T) {
 			check: func(t *testing.T, w *window) {
 				if w.from != 50 || len(w.recs) != 1 || w.carry.Focus != nil {
 					t.Errorf("from %d, %d records, carry focus %v", w.from, len(w.recs), w.carry.Focus)
+				}
+			},
+		},
+		{
+			name: "a carried record older than carryGraceMS before the window is scored as if it came then",
+			run: func(w *window) {
+				w.add(ev(100, 1, event.NoSession, focus), 1)
+				w.add(ev(10*carryGraceMS, 2, event.NoSession, &event.OSPresence{}), 2)
+				w.slide(10*carryGraceMS - 1)
+			},
+			check: func(t *testing.T, w *window) {
+				recs := w.records()
+				if len(recs) != 2 || recs[0].T != 9*carryGraceMS-1 || recs[1].T != 10*carryGraceMS {
+					t.Errorf("records %+v", recs)
+				}
+				if w.carry.Focus.T != 100 {
+					t.Errorf("the carry itself now dates the focus at %d, want 100", w.carry.Focus.T)
 				}
 			},
 		},

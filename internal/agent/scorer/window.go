@@ -56,10 +56,22 @@ func (w *window) slide(from int64) {
 	w.carry.prune(from)
 }
 
+// carryGraceMS bounds how long before the window a carried record is
+// dated. pkg/score derives every slot from its earliest record on, so a
+// focus record from three days ago would have every Step derive three
+// days. A record older than that is scored as if it came carryGraceMS
+// before the window, keeping its place among the others by seq: what it
+// says holds until a later record changes it, and no rule derives a
+// second at or after FinalBefore from a record's time that far back.
+const carryGraceMS = 3600 * 1000
+
 // records returns what a Step scores: the carry's records, then the
 // window's.
 func (w *window) records() []event.Event {
 	out := w.carry.records(make([]event.Event, 0, len(w.recs)+16))
+	for i := range out {
+		out[i].T = max(out[i].T, w.from-carryGraceMS)
+	}
 	for _, h := range w.recs {
 		out = append(out, h.ev)
 	}
@@ -108,11 +120,11 @@ type sessionCarry struct {
 
 // carrySessions bounds how many sessions the carry keeps, and
 // carrySessionMS how long it keeps one that has had no record. A session
-// left open longer than a week without a record starts again from what
-// the window holds.
+// left open longer than a day without a record starts again from what the
+// window holds.
 const (
 	carrySessions  = 64
-	carrySessionMS = 7 * 24 * 3600 * 1000
+	carrySessionMS = 24 * 3600 * 1000
 )
 
 // recordCmp orders records as pkg/score does: by t, then seq, then event

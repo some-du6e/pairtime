@@ -270,7 +270,10 @@ func promptText(p *event.PromptSubmit) string {
 func direct(table *params.Table, dev score.Device, device string, evs []event.Event) (map[int64]store.Bucket, int64) {
 	_, out := score.Step(score.NewState(table, dev), evs)
 	meta := bucketMeta{v: table.Version(), params: table.Hash(), device: device}
-	bs := minuteBuckets(meta, slices.Concat(out.Final.Credits, out.Pending.Credits))
+	var all score.Derived
+	all.Append(out.Final)
+	all.Append(out.Pending)
+	bs := minuteBuckets(meta, all, evs)
 	for m, b := range bs {
 		b.State = event.StatePending
 		if m+minuteMS <= out.FinalBefore {
@@ -355,21 +358,57 @@ func TestFixturesThroughTheLedger(t *testing.T) {
 			if !slices.Contains(creditFixtures, f.Name) {
 				return
 			}
-			t.Run("the stored minutes of SM's window sum to SM's credited and agent totals", func(t *testing.T) {
+			t.Run("the stored minutes of SM's window sum to SM's totals, and every uncredited second has a project", func(t *testing.T) {
 				wfrom, wto := f.Expected.Window.Start.UnixMilli(), f.Expected.Window.End.UnixMilli()
-				var halves int64
+				var halves, agentOnly int64
 				var agent float64
+				listed := map[event.Harness]bool{}
+				byMinute, byProject := map[event.Reason]float64{}, map[event.Reason]float64{}
 				for _, b := range got {
-					if b.At() >= wfrom && b.At() < wto {
-						halves += b.Halves()
-						agent += b.AgentRunningS
+					if b.At() < wfrom || b.At() >= wto {
+						continue
+					}
+					halves += b.Halves()
+					agent += b.AgentRunningS
+					for r, s := range b.Uncredited {
+						byMinute[r] += s
+					}
+					for _, pm := range b.Projects {
+						agentOnly += pm.AgentOnlyS
+						for h := range pm.Harnesses {
+							listed[h] = true
+						}
+						for r, s := range pm.Uncredited {
+							byProject[r] += float64(s)
+						}
 					}
 				}
-				if want := f.Expected.Totals.CreditedS; float64(halves)/2 != want {
-					t.Errorf("credited %v s, SM says %v s", float64(halves)/2, want)
+				tot := f.Expected.Totals
+				if float64(halves)/2 != tot.CreditedS {
+					t.Errorf("credited %v s, SM says %v s", float64(halves)/2, tot.CreditedS)
 				}
-				if want := f.Expected.Totals.AgentRunningS; agent != want {
-					t.Errorf("agent ran %v s, SM says %v s", agent, want)
+				if agent != tot.AgentRunningS {
+					t.Errorf("an agent ran %v s, SM says %v s", agent, tot.AgentRunningS)
+				}
+				if want, ok := tot.Other["agent_only_s"]; ok && float64(agentOnly) != want {
+					t.Errorf("agent-only %v s, SM says %v s", agentOnly, want)
+				}
+				if !maps.Equal(byMinute, byProject) {
+					t.Errorf("the minutes leave %v uncredited, and their projects %v", byMinute, byProject)
+				}
+				harnesses := map[event.Harness]bool{}
+				for _, e := range f.Events {
+					if isHarness(e.Harness) {
+						harnesses[e.Harness] = true
+					}
+				}
+				for h := range listed {
+					if !harnesses[h] {
+						t.Errorf("the minutes list harness %s, which has no record in the fixture", h)
+					}
+				}
+				if agentOnly > 0 && len(listed) == 0 {
+					t.Error("agent-only time with no harness listed")
 				}
 			})
 		})

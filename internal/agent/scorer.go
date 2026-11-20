@@ -3,7 +3,9 @@
 package agent
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"net/http"
 	"time"
 
@@ -56,101 +58,153 @@ func (a *agent) startScorer() func() {
 	}
 }
 
-// todayReply is GET /v1/today: this device's time today, by project and
-// evidence level (DESIGN 3.8's chess clock; SM 5.3's day), summed from the
-// latest revision of each minute's bucket.
-type todayReply struct {
-	// Date is today in the device's time zone, Zone its name, and Start
-	// and End the day's bounds in UTC.
+// tallyReply is a project's tally over a span, as the local API gives it
+// (store.Tally). While display.shadow is on, it leaves out every credited
+// number: views show credited time as "calibrating" then, and keep the
+// agent's time and the time that wasn't credited (DESIGN 6.7 step 2).
+type tallyReply struct {
+	CreditedS          *float64                   `json:"credited_s,omitempty"`
+	PendingS           *float64                   `json:"pending_s,omitempty"`
+	CreditedByKind     map[event.Activity]float64 `json:"credited_by_kind,omitempty"`
+	CreditedByEvidence map[event.Evidence]float64 `json:"credited_by_evidence,omitempty"`
+	AgentOnlyS         float64                    `json:"agent_only_s"`
+	AgentOnlyByHarness map[event.Harness]float64  `json:"agent_only_by_harness"`
+	Uncredited         map[event.Reason]float64   `json:"uncredited"`
+}
+
+func tallyOf(t store.Tally, shadow bool) tallyReply {
+	r := tallyReply{AgentOnlyS: t.AgentOnlyS, AgentOnlyByHarness: t.AgentOnlyByHarness, Uncredited: t.Uncredited}
+	if r.AgentOnlyByHarness == nil {
+		r.AgentOnlyByHarness = map[event.Harness]float64{}
+	}
+	if r.Uncredited == nil {
+		r.Uncredited = map[event.Reason]float64{}
+	}
+	if !shadow {
+		credited, pending := t.CreditedS, t.PendingS
+		r.CreditedS, r.PendingS = &credited, &pending
+		r.CreditedByKind, r.CreditedByEvidence = t.CreditedByKind, t.CreditedByEvidence
+	}
+	return r
+}
+
+// dayReply is GET /v1/days/{date}: one local day of this device, with a
+// tally for each project that has anything in it (SM 5.3).
+type dayReply struct {
+	// Date is the day, YYYY-MM-DD; asked for "today", the agent says which
+	// day that is in the device's time zone. Zone names the zone, and
+	// Start and End are the day's bounds in UTC.
 	Date  string    `json:"date"`
 	Zone  string    `json:"zone"`
 	Start time.Time `json:"start"`
 	End   time.Time `json:"end"`
-	// Shadow is display.shadow. While it is on, the reply leaves out every
-	// credited and uncredited number, and keeps the agent's time
-	// (DESIGN 6.7).
-	Shadow bool `json:"shadow"`
-	// CreditedS is your time today, and PendingS the part of it in minutes
-	// that are still pending, which later records can change.
-	CreditedS *float64 `json:"credited_s,omitempty"`
-	PendingS  *float64 `json:"pending_s,omitempty"`
-	// ByLevel splits CreditedS by evidence level.
-	ByLevel    map[event.Evidence]float64 `json:"by_level,omitempty"`
-	Uncredited map[event.Reason]float64   `json:"uncredited,omitempty"`
-	// AgentRunningS is how long an agent ran today, in any project.
-	AgentRunningS float64        `json:"agent_running_s"`
-	Projects      []todayProject `json:"projects"`
-	// FinalBefore is the time before which every minute is final; absent
-	// before the scorer has scored anything.
-	FinalBefore *time.Time `json:"final_before,omitempty"`
-	// Minutes counts today's minutes with a bucket, and PendingMinutes
-	// the pending ones.
-	Minutes        int `json:"minutes"`
-	PendingMinutes int `json:"pending_minutes"`
+	// Shadow is display.shadow.
+	Shadow   bool              `json:"shadow"`
+	Projects []dayProjectReply `json:"projects"`
 }
 
-// todayProject is one project's part of today.
-type todayProject struct {
-	ProjectKey string                     `json:"project_key"`
-	CreditedS  *float64                   `json:"credited_s,omitempty"`
-	PendingS   *float64                   `json:"pending_s,omitempty"`
-	ByLevel    map[event.Evidence]float64 `json:"by_level,omitempty"`
-	ByKind     map[event.Activity]float64 `json:"by_kind,omitempty"`
-	// AgentS is how long a turn of the project ran, and AgentOnlyS the
-	// part of that nothing credited you for.
-	AgentS     int64 `json:"agent_s"`
-	AgentOnlyS int64 `json:"agent_only_s"`
+type dayProjectReply struct {
+	Project string `json:"project"`
+	Name    string `json:"name"`
+	tallyReply
 }
 
-func (a *agent) serveToday(w http.ResponseWriter, r *http.Request) {
-	reply, err := a.today(time.Now(), time.Local)
-	if err != nil {
-		a.log.Warn("GET /v1/today", "err", err)
-		http.Error(w, "the agent couldn't read today's buckets", http.StatusInternalServerError)
+// sessionReply is GET /v1/sessions/last: the last work session (SM 5.3),
+// or the one still going, and null before the first.
+type sessionReply struct {
+	Shadow  bool               `json:"shadow"`
+	Session *sessionTallyReply `json:"session"`
+}
+
+type sessionTallyReply struct {
+	Project string    `json:"project"`
+	Name    string    `json:"name"`
+	Start   time.Time `json:"start"`
+	End     time.Time `json:"end"`
+	// Open is set while the session goes on: SESSION_GAP_S hasn't passed
+	// since End, and no lock or suspend came after it (DESIGN 3.8).
+	Open bool `json:"open"`
+	tallyReply
+}
+
+// serveDay answers GET /v1/days/{date}. A date, or today's, comes from
+// its rollup in days/, which the scorer rewrites whenever one of the day's
+// buckets changes, so the answer is quick enough for a status line. A day
+// with no rollup is summed from the bucket store, or is empty.
+func (a *agent) serveDay(w http.ResponseWriter, r *http.Request) {
+	date := r.PathValue("date")
+	loc := time.Local
+	if date == "today" {
+		date = time.Now().In(loc).Format(time.DateOnly)
+	}
+	day, err := a.day(date, loc)
+	switch {
+	case errors.Is(err, errBadDate):
+		http.Error(w, "the date must be YYYY-MM-DD or today", http.StatusBadRequest)
 		return
+	case err != nil:
+		a.log.Warn("GET /v1/days", "date", date, "err", err)
+		http.Error(w, "the agent couldn't read that day", http.StatusInternalServerError)
+		return
+	}
+	shadow := a.config().Display.Shadow
+	reply := dayReply{Date: day.Date, Zone: day.Zone, Start: day.Start, End: day.End, Shadow: shadow,
+		Projects: []dayProjectReply{}}
+	for _, p := range day.Projects {
+		reply.Projects = append(reply.Projects, dayProjectReply{Project: p.Project, Name: p.Name, tallyReply: tallyOf(p.Tally, shadow)})
 	}
 	writeJSON(w, http.StatusOK, reply)
 }
 
-// today sums the local day of now in loc from the bucket store.
-func (a *agent) today(now time.Time, loc *time.Location) (todayReply, error) {
-	date := now.In(loc).Format(time.DateOnly)
+// errBadDate is a date that isn't YYYY-MM-DD.
+var errBadDate = errors.New("not a date")
+
+// day returns the rollup of the local day date in loc: its file in days/,
+// or the sum of the bucket store's minutes of the day when there is none.
+func (a *agent) day(date string, loc *time.Location) (store.Day, error) {
 	start, end, err := store.DayBounds(date, loc)
 	if err != nil {
-		return todayReply{}, err
+		return store.Day{}, errBadDate
+	}
+	d, err := store.ReadDay(a.dirs.Days(), date)
+	if err == nil {
+		return d, nil
+	}
+	if !errors.Is(err, fs.ErrNotExist) {
+		a.log.Warn("a day's rollup doesn't read, so the agent sums its buckets", "date", date, "err", err)
 	}
 	var bs []store.Bucket
 	if a.buckets != nil {
 		if bs, err = a.buckets.Range(start.UnixMilli(), end.UnixMilli()); err != nil {
-			return todayReply{}, err
+			return store.Day{}, err
 		}
 	}
-	day, err := store.Rollup(date, loc, bs, a.table.Int(params.DAY_CAP_S))
-	if err != nil {
-		return todayReply{}, err
-	}
+	return store.Rollup(date, loc, bs, a.table.Int(params.DAY_CAP_S))
+}
+
+// serveLastSession answers GET /v1/sessions/last.
+func (a *agent) serveLastSession(w http.ResponseWriter, r *http.Request) {
 	shadow := a.config().Display.Shadow
-	reply := todayReply{Date: day.Date, Zone: day.Zone, Start: day.Start, End: day.End, Shadow: shadow,
-		AgentRunningS: day.AgentRunningS, Projects: []todayProject{}, Minutes: day.Minutes,
-		PendingMinutes: day.PendingMinutes}
-	if a.scorer != nil {
-		if fb := a.scorer.Status().FinalBefore; fb > 0 {
-			t := time.UnixMilli(fb).UTC()
-			reply.FinalBefore = &t
+	reply := sessionReply{Shadow: shadow}
+	if a.buckets != nil {
+		now := time.Now()
+		gap := a.table.Int(params.SESSION_GAP_S) * 1000
+		s, err := store.LastSession(a.buckets, now.UnixMilli()+60_000, gap)
+		if err != nil {
+			a.log.Warn("GET /v1/sessions/last", "err", err)
+			http.Error(w, "the agent couldn't read its buckets", http.StatusInternalServerError)
+			return
+		}
+		if s != nil {
+			var lastBreak int64
+			if a.scorer != nil {
+				lastBreak = a.scorer.Status().LastBreak
+			}
+			end := s.End.UnixMilli()
+			reply.Session = &sessionTallyReply{Project: s.Project, Name: s.Name, Start: s.Start, End: s.End,
+				Open:       now.UnixMilli()-end <= gap && lastBreak < end,
+				tallyReply: tallyOf(s.Tally, shadow)}
 		}
 	}
-	if !shadow {
-		reply.CreditedS, reply.PendingS = &day.CreditedS, &day.PendingS
-		reply.ByLevel, reply.Uncredited = day.ByLevel, day.Uncredited
-	}
-	for _, p := range day.Projects {
-		row := todayProject{ProjectKey: p.ProjectKey, AgentS: p.AgentS, AgentOnlyS: p.AgentOnlyS}
-		if !shadow {
-			credited, pending := p.CreditedS, p.PendingS
-			row.CreditedS, row.PendingS = &credited, &pending
-			row.ByLevel, row.ByKind = p.ByLevel, p.ByKind
-		}
-		reply.Projects = append(reply.Projects, row)
-	}
-	return reply, nil
+	writeJSON(w, http.StatusOK, reply)
 }

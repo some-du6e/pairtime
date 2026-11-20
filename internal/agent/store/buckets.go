@@ -249,35 +249,17 @@ func (s *Buckets) Range(from, to int64) ([]Bucket, error) {
 }
 
 // Pending returns the latest revision of every minute from from on, in
-// Unix ms, that is still pending, in minute order. It reads every day file
-// in the directory from from's day on, without keeping the ones it hadn't
-// read, so a scan from far back costs no memory.
+// Unix ms, that is still pending, in minute order.
 func (s *Buckets) Pending(from int64) ([]Bucket, error) {
-	entries, err := os.ReadDir(s.dir)
+	days, err := s.dayNames(DayOf(from), "9999-12-31")
 	if err != nil {
 		return nil, err
 	}
-	first := DayOf(from)
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	var out []Bucket
-	for _, e := range entries {
-		day, ok := strings.CutSuffix(e.Name(), ".jsonl")
-		if !ok || e.IsDir() || day < first {
-			continue
-		}
-		if _, err := time.Parse(time.DateOnly, day); err != nil {
-			continue
-		}
-		latest := map[int64]Bucket{}
-		if d, ok := s.days[day]; ok {
-			latest = d.latest
-		} else {
-			data, err := os.ReadFile(s.path(day))
-			if err != nil {
-				return nil, err
-			}
-			readLines(data, latest)
+	for _, day := range days {
+		latest, err := s.peek(day)
+		if err != nil {
+			return nil, err
 		}
 		for ms, b := range latest {
 			if ms >= from && b.State == event.StatePending {
@@ -287,6 +269,72 @@ func (s *Buckets) Pending(from int64) ([]Bucket, error) {
 	}
 	slices.SortFunc(out, func(a, b Bucket) int { return cmp.Compare(a.At(), b.At()) })
 	return out, nil
+}
+
+// Before calls fn with the latest revision of each minute before to, in
+// Unix ms, newest first, until fn returns false. fn may call the store.
+func (s *Buckets) Before(to int64, fn func(Bucket) bool) error {
+	days, err := s.dayNames("0000-01-01", DayOf(to-1))
+	if err != nil {
+		return err
+	}
+	slices.Reverse(days)
+	for _, day := range days {
+		latest, err := s.peek(day)
+		if err != nil {
+			return err
+		}
+		ms := slices.Sorted(maps.Keys(latest))
+		slices.Reverse(ms)
+		for _, m := range ms {
+			if m < to && !fn(latest[m]) {
+				return nil
+			}
+		}
+	}
+	return nil
+}
+
+// dayNames returns the days, YYYY-MM-DD, from first to last that have a
+// file in the store, in order.
+func (s *Buckets) dayNames(first, last string) ([]string, error) {
+	entries, err := os.ReadDir(s.dir)
+	if err != nil {
+		return nil, err
+	}
+	var days []string
+	for _, e := range entries {
+		day, ok := strings.CutSuffix(e.Name(), ".jsonl")
+		if !ok || e.IsDir() || day < first || day > last {
+			continue
+		}
+		if _, err := time.Parse(time.DateOnly, day); err == nil {
+			days = append(days, day)
+		}
+	}
+	slices.Sort(days)
+	return days, nil
+}
+
+// peek returns day's latest revisions: a copy of what the store holds when
+// it has read the day, and otherwise what the day's file holds, which it
+// doesn't keep, so a walk over many days costs no memory.
+func (s *Buckets) peek(day string) (map[int64]Bucket, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if d, ok := s.days[day]; ok {
+		return maps.Clone(d.latest), nil
+	}
+	latest := map[int64]Bucket{}
+	data, err := os.ReadFile(s.path(day))
+	if errors.Is(err, fs.ErrNotExist) {
+		return latest, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	readLines(data, latest)
+	return latest, nil
 }
 
 // Forget drops from memory the days that end at or before before, closing

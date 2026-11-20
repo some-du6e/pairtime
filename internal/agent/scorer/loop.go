@@ -152,6 +152,10 @@ type Status struct {
 	// since the start that the loop couldn't read and didn't score.
 	Records int
 	Skipped uint64
+	// LastBreak is the time, in Unix ms, of the latest lock or suspend the
+	// loop has seen, 0 for none: a work session that ended before it is
+	// over (DESIGN 3.8).
+	LastBreak int64
 	// Stopped says why the loop stopped scoring, when it did.
 	Stopped string
 }
@@ -188,8 +192,9 @@ type Loop struct {
 	// rebuild is set while the loop scores the ledger from its first
 	// batch because state.json had no place for it. It then rewrites the
 	// rollup of every day it scores, which a lost days/ needs.
-	rebuild bool
-	skipped uint64
+	rebuild   bool
+	skipped   uint64
+	lastBreak int64
 	// batching is set while the loop scores the batches it found in the
 	// ledger at start. It saves its place and writes rollups once at the
 	// end, rather than at every Step.
@@ -520,15 +525,24 @@ func (l *Loop) apply(b ledger.Batch) {
 
 // step scores the window after batch b and stores what changed.
 func (l *Loop) step(b uint64) {
-	out, err := l.score()
+	recs := l.win.records()
+	out, err := l.score(recs)
 	if err != nil {
 		l.halt(fmt.Errorf("batch %d: %w", b, err))
 		return
 	}
+	for _, e := range recs {
+		if p, ok := e.Data.(*event.OSPower); ok && (p.Op == event.PowerLock || p.Op == event.PowerSuspend) {
+			l.lastBreak = max(l.lastBreak, e.T)
+		}
+	}
 	prev := l.cur.FinalBefore
 	fb := max(prev, out.FinalBefore)
 	meta := bucketMeta{v: l.opts.Params.Version(), params: l.opts.Params.Hash(), device: l.cur.Device}
-	view := minuteBuckets(meta, slices.Concat(out.Final.Credits, out.Pending.Credits))
+	var all score.Derived
+	all.Append(out.Final)
+	all.Append(out.Pending)
+	view := minuteBuckets(meta, all, recs)
 	// The minutes this Step can change: every one that wasn't final before
 	// it, as far as the view or the store has anything for them.
 	visit := make(map[int64]bool, len(l.pending))
@@ -570,16 +584,16 @@ func (l *Loop) step(b uint64) {
 	}
 }
 
-// score steps a new State over the window. pkg/score has no I/O and no
-// errors, so a panic is a bug in it; the loop stops scoring rather than
-// take the agent down.
-func (l *Loop) score() (out score.Output, err error) {
+// score steps a new State over recs, the window's records. pkg/score has
+// no I/O and no errors, so a panic is a bug in it; the loop stops scoring
+// rather than take the agent down.
+func (l *Loop) score(recs []event.Event) (out score.Output, err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			err = fmt.Errorf("pkg/score panicked: %v", r)
 		}
 	}()
-	_, out = score.Step(score.NewState(l.opts.Params, l.opts.Device), l.win.records())
+	_, out = score.Step(score.NewState(l.opts.Params, l.opts.Device), recs)
 	return out, nil
 }
 
@@ -702,7 +716,7 @@ func (l *Loop) zone() *time.Location {
 // report publishes the loop's status.
 func (l *Loop) report() {
 	s := &Status{Device: l.cur.Device, Batch: l.cur.Batch, FinalBefore: l.cur.FinalBefore, Records: len(l.win.recs),
-		Skipped: l.skipped}
+		Skipped: l.skipped, LastBreak: l.lastBreak}
 	if l.stuck != nil {
 		s.Stopped = l.stuck.Error()
 	}

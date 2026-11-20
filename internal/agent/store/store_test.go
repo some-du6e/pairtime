@@ -281,12 +281,20 @@ func TestRangeAndPending(t *testing.T) {
 	}
 }
 
+// with returns b with fn applied to project key's part of it.
+func with(b Bucket, key string, fn func(*ProjectMinute)) Bucket {
+	pm := b.Projects[key]
+	fn(&pm)
+	b.Projects[key] = pm
+	return b
+}
+
 func TestRollup(t *testing.T) {
 	ny, err := time.LoadLocation("America/New_York")
 	if err != nil {
 		t.Skip("no time zone data:", err)
 	}
-	const date = "2026-11-20" // 05:00Z to 05:00Z next day in New York
+	const date = "2026-11-20" // 05:00Z to 05:00Z the next day in New York
 	cr := func(why event.Reason, ev event.Evidence, halves int64) Credited {
 		return Credited{Why: why, Ev: ev, Halves: halves}
 	}
@@ -297,7 +305,7 @@ func TestRollup(t *testing.T) {
 		check   func(t *testing.T, d Day)
 	}{
 		{
-			name: "credit sums by project and by level, and every level is present",
+			name: "credit sums by project, by kind and by level, and only levels and kinds with credit are named",
 			buckets: func(t *testing.T) []Bucket {
 				return []Bucket{
 					bucket(t, "2026-11-20T15:00:00Z", event.StateFinal, map[string][]Credited{
@@ -311,21 +319,21 @@ func TestRollup(t *testing.T) {
 			},
 			cap: 43200,
 			check: func(t *testing.T, d Day) {
-				if d.CreditedS != 90 || len(d.Projects) != 2 {
-					t.Fatalf("credited %v s in %d projects, want 90 s in 2", d.CreditedS, len(d.Projects))
+				if len(d.Projects) != 2 || d.Projects[0].Project != "p_a" || d.Projects[1].Project != "p_b" {
+					t.Fatalf("projects %+v, want p_a and p_b", d.Projects)
 				}
-				want := map[event.Evidence]float64{event.EvidenceA: 75, event.EvidenceB: 10, event.EvidenceC: 5}
-				if !maps.Equal(d.ByLevel, want) {
-					t.Errorf("day by level %v, want %v", d.ByLevel, want)
+				a, b := d.Projects[0], d.Projects[1]
+				if a.CreditedS != 85 || b.CreditedS != 5 {
+					t.Errorf("p_a %v s, p_b %v s; want 85 and 5", a.CreditedS, b.CreditedS)
 				}
-				pa := d.Projects[0]
-				wantA := map[event.Evidence]float64{event.EvidenceA: 75, event.EvidenceB: 10, event.EvidenceC: 0}
-				if pa.ProjectKey != "p_a" || pa.CreditedS != 85 || !maps.Equal(pa.ByLevel, wantA) {
-					t.Errorf("p_a: %+v, want 85 s by level %v", pa, wantA)
+				if want := map[event.Evidence]float64{event.EvidenceA: 75, event.EvidenceB: 10}; !maps.Equal(a.CreditedByEvidence, want) {
+					t.Errorf("p_a by level %v, want %v", a.CreditedByEvidence, want)
 				}
-				wantKind := map[event.Activity]float64{event.ActivityPrompting: 15, event.ActivityReadingOutput: 70}
-				if !maps.Equal(pa.ByKind, wantKind) {
-					t.Errorf("p_a by kind %v, want %v", pa.ByKind, wantKind)
+				if want := map[event.Activity]float64{event.ActivityPrompting: 15, event.ActivityReadingOutput: 70}; !maps.Equal(a.CreditedByKind, want) {
+					t.Errorf("p_a by kind %v, want %v", a.CreditedByKind, want)
+				}
+				if want := map[event.Evidence]float64{event.EvidenceC: 5}; !maps.Equal(b.CreditedByEvidence, want) {
+					t.Errorf("p_b by level %v, want %v", b.CreditedByEvidence, want)
 				}
 			},
 		},
@@ -339,14 +347,13 @@ func TestRollup(t *testing.T) {
 			},
 			cap: 43200,
 			check: func(t *testing.T, d Day) {
-				if d.CreditedS != 20 || d.PendingS != 5 || d.Projects[0].PendingS != 5 || d.PendingMinutes != 1 || d.Minutes != 2 {
-					t.Errorf("credited %v, pending %v (project %v), %d of %d minutes pending; want 20, 5, 5, 1 of 2",
-						d.CreditedS, d.PendingS, d.Projects[0].PendingS, d.PendingMinutes, d.Minutes)
+				if p := d.Projects[0]; p.CreditedS != 20 || p.PendingS != 5 {
+					t.Errorf("credited %v s with %v s pending, want 20 and 5", p.CreditedS, p.PendingS)
 				}
 			},
 		},
 		{
-			name: "past DAY_CAP_S the credit of later minutes is X.day_cap",
+			name: "past DAY_CAP_S the credit of later minutes is X.day_cap of their project",
 			buckets: func(t *testing.T) []Bucket {
 				return []Bucket{
 					bucket(t, "2026-11-20T15:00:00Z", event.StateFinal, map[string][]Credited{"p_a": {cr(event.ReasonPrompt, event.EvidenceA, 100)}}, nil),
@@ -355,11 +362,9 @@ func TestRollup(t *testing.T) {
 			},
 			cap: 60,
 			check: func(t *testing.T, d Day) {
-				if d.CreditedS != 60 || d.Uncredited[event.ReasonDayCap] != 40 {
-					t.Fatalf("credited %v s with %v s of X.day_cap, want 60 and 40", d.CreditedS, d.Uncredited[event.ReasonDayCap])
-				}
-				if d.Projects[0].CreditedS != 50 || d.Projects[1].CreditedS != 10 {
-					t.Errorf("p_a %v s, p_b %v s; want 50 and 10", d.Projects[0].CreditedS, d.Projects[1].CreditedS)
+				a, b := d.Projects[0], d.Projects[1]
+				if a.CreditedS != 50 || b.CreditedS != 10 || b.Uncredited[event.ReasonDayCap] != 40 || len(a.Uncredited) != 0 {
+					t.Errorf("p_a %v s %v, p_b %v s %v; want 50 s, and 10 s with 40 s of X.day_cap", a.CreditedS, a.Uncredited, b.CreditedS, b.Uncredited)
 				}
 			},
 		},
@@ -374,8 +379,8 @@ func TestRollup(t *testing.T) {
 			},
 			cap: 43200,
 			check: func(t *testing.T, d Day) {
-				if d.CreditedS != 5 || d.Minutes != 1 {
-					t.Errorf("credited %v s in %d minutes, want 5 s in 1", d.CreditedS, d.Minutes)
+				if len(d.Projects) != 1 || d.Projects[0].CreditedS != 5 {
+					t.Errorf("projects %+v, want p_a with 5 s", d.Projects)
 				}
 				if !d.Start.Equal(minute(t, "2026-11-20T05:00:00Z")) || !d.End.Equal(minute(t, "2026-11-21T05:00:00Z")) {
 					t.Errorf("the day runs %v to %v", d.Start, d.End)
@@ -383,21 +388,48 @@ func TestRollup(t *testing.T) {
 			},
 		},
 		{
-			name: "agent time sums by project, and a project with only agent time has a row",
+			name: "agent-only time sums by project and by harness, and a harness with none of it is listed with 0",
 			buckets: func(t *testing.T) []Bucket {
-				b := bucket(t, "2026-11-20T15:00:00Z", event.StateFinal, nil, map[string]int64{"p_a": 60})
-				pm := b.Projects["p_a"]
-				pm.AgentOnlyS = 60
-				b.Projects["p_a"] = pm
-				return []Bucket{b, bucket(t, "2026-11-20T15:01:00Z", event.StateFinal, nil, map[string]int64{"p_a": 30})}
+				b1 := with(bucket(t, "2026-11-20T15:00:00Z", event.StateFinal, nil, map[string]int64{"p_a": 60}), "p_a", func(pm *ProjectMinute) {
+					pm.AgentOnlyS = 60
+					pm.Harnesses = map[event.Harness]int64{event.HarnessClaudeCode: 60, event.HarnessCodex: 0}
+				})
+				b2 := with(bucket(t, "2026-11-20T15:01:00Z", event.StateFinal, nil, map[string]int64{"p_a": 30}), "p_a", func(pm *ProjectMinute) {
+					pm.AgentOnlyS = 30
+					pm.Harnesses = map[event.Harness]int64{event.HarnessClaudeCode: 30}
+				})
+				return []Bucket{b1, b2}
 			},
 			cap: 43200,
 			check: func(t *testing.T, d Day) {
-				if len(d.Projects) != 1 || d.Projects[0].AgentS != 90 || d.Projects[0].AgentOnlyS != 60 || d.AgentRunningS != 90 {
-					t.Errorf("projects %+v, agent %v s; want p_a with 90 s, 60 of them agent-only", d.Projects, d.AgentRunningS)
+				if len(d.Projects) != 1 {
+					t.Fatalf("projects %+v, want p_a", d.Projects)
 				}
-				if d.CreditedS != 0 || d.Projects[0].CreditedS != 0 {
-					t.Errorf("credited %v s, want 0", d.CreditedS)
+				p := d.Projects[0]
+				want := map[event.Harness]float64{event.HarnessClaudeCode: 90, event.HarnessCodex: 0}
+				if p.AgentOnlyS != 90 || !maps.Equal(p.AgentOnlyByHarness, want) || p.CreditedS != 0 {
+					t.Errorf("p_a %+v, want 90 s of agent-only time, %v, and no credit", p, want)
+				}
+			},
+		},
+		{
+			name: "uncredited seconds sum by project and reason",
+			buckets: func(t *testing.T) []Bucket {
+				b := bucket(t, "2026-11-20T15:00:00Z", event.StateFinal, map[string][]Credited{
+					"p_a": {cr(event.ReasonPrompt, event.EvidenceA, 30)},
+					"p_b": {cr(event.ReasonEdit, event.EvidenceA, 10)},
+				}, nil)
+				b = with(b, "p_a", func(pm *ProjectMinute) {
+					pm.Uncredited = map[event.Reason]int64{event.ReasonAbsent: 15, event.ReasonNoAnchor: 5}
+				})
+				b = with(b, "p_b", func(pm *ProjectMinute) { pm.Uncredited = map[event.Reason]int64{event.ReasonOtherFocus: 15} })
+				return []Bucket{b}
+			},
+			cap: 43200,
+			check: func(t *testing.T, d Day) {
+				a, b := d.Projects[0], d.Projects[1]
+				if a.Uncredited[event.ReasonAbsent] != 15 || a.Uncredited[event.ReasonNoAnchor] != 5 || b.Uncredited[event.ReasonOtherFocus] != 15 {
+					t.Errorf("p_a %v, p_b %v", a.Uncredited, b.Uncredited)
 				}
 			},
 		},
@@ -413,13 +445,120 @@ func TestRollup(t *testing.T) {
 	}
 }
 
+func TestLastSession(t *testing.T) {
+	const gap = 20 * 60 * 1000 // SESSION_GAP_S
+	a := map[string][]Credited{"p_a": {{Why: event.ReasonPrompt, Ev: event.EvidenceA, Halves: 20}}}
+	b := map[string][]Credited{"p_b": {{Why: event.ReasonEdit, Ev: event.EvidenceB, Halves: 30}}}
+	agentOnly := func(t *testing.T, at string) Bucket {
+		return with(bucket(t, at, event.StateFinal, nil, map[string]int64{"p_a": 60}), "p_a", func(pm *ProjectMinute) { pm.AgentOnlyS = 60 })
+	}
+	tests := []struct {
+		name               string
+		minutes            func(t *testing.T) []Bucket
+		to                 string
+		project, from, end string // "" project: no session
+		credited, agent    float64
+	}{
+		{
+			name: "a session runs back over credited minutes no more than SESSION_GAP_S apart",
+			minutes: func(t *testing.T) []Bucket {
+				return []Bucket{
+					bucket(t, "2026-11-20T10:00:00Z", event.StateFinal, a, nil),
+					bucket(t, "2026-11-20T10:10:00Z", event.StateFinal, a, nil),
+					bucket(t, "2026-11-20T10:31:00Z", event.StateFinal, a, nil),
+				}
+			},
+			to:      "2026-11-21T00:00:00Z",
+			project: "p_a", from: "2026-11-20T10:00:00Z", end: "2026-11-20T10:32:00Z", credited: 30,
+		},
+		{
+			name: "a gap longer than SESSION_GAP_S between credited minutes starts a new session",
+			minutes: func(t *testing.T) []Bucket {
+				return []Bucket{
+					bucket(t, "2026-11-20T10:00:00Z", event.StateFinal, a, nil),
+					bucket(t, "2026-11-20T10:22:00Z", event.StateFinal, a, nil),
+				}
+			},
+			to:      "2026-11-21T00:00:00Z",
+			project: "p_a", from: "2026-11-20T10:22:00Z", end: "2026-11-20T10:23:00Z", credited: 10,
+		},
+		{
+			name: "another project's minutes don't split a session, and the session sums its own project's part of every minute in it",
+			minutes: func(t *testing.T) []Bucket {
+				return []Bucket{
+					bucket(t, "2026-11-20T10:00:00Z", event.StateFinal, a, nil),
+					agentOnly(t, "2026-11-20T10:05:00Z"),
+					bucket(t, "2026-11-20T10:06:00Z", event.StateFinal, b, nil),
+					bucket(t, "2026-11-20T10:15:00Z", event.StateFinal, a, nil),
+				}
+			},
+			to:      "2026-11-21T00:00:00Z",
+			project: "p_a", from: "2026-11-20T10:00:00Z", end: "2026-11-20T10:16:00Z", credited: 20, agent: 60,
+		},
+		{
+			name: "the latest credited minute decides the session's project",
+			minutes: func(t *testing.T) []Bucket {
+				return []Bucket{
+					bucket(t, "2026-11-20T10:00:00Z", event.StateFinal, a, nil),
+					bucket(t, "2026-11-20T10:05:00Z", event.StateFinal, b, nil),
+				}
+			},
+			to:      "2026-11-21T00:00:00Z",
+			project: "p_b", from: "2026-11-20T10:05:00Z", end: "2026-11-20T10:06:00Z", credited: 15,
+		},
+		{
+			name: "minutes at or after to are left out",
+			minutes: func(t *testing.T) []Bucket {
+				return []Bucket{
+					bucket(t, "2026-11-19T23:59:00Z", event.StateFinal, a, nil),
+					bucket(t, "2026-11-20T10:05:00Z", event.StateFinal, b, nil),
+				}
+			},
+			to:      "2026-11-20T10:05:00Z",
+			project: "p_a", from: "2026-11-19T23:59:00Z", end: "2026-11-20T00:00:00Z", credited: 10,
+		},
+		{
+			name:    "with no credited minute there is no session",
+			minutes: func(t *testing.T) []Bucket { return []Bucket{agentOnly(t, "2026-11-20T10:05:00Z")} },
+			to:      "2026-11-21T00:00:00Z",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := open(t, t.TempDir())
+			for _, bk := range tt.minutes(t) {
+				if _, _, err := s.Put(bk); err != nil {
+					t.Fatal(err)
+				}
+			}
+			got, err := LastSession(s, minute(t, tt.to).UnixMilli(), gap)
+			if err != nil {
+				t.Fatal(err)
+			}
+			switch {
+			case tt.project == "":
+				if got != nil {
+					t.Errorf("session %+v, want none", got)
+				}
+			case got == nil:
+				t.Fatal("no session")
+			case got.Project != tt.project || !got.Start.Equal(minute(t, tt.from)) || !got.End.Equal(minute(t, tt.end)):
+				t.Errorf("session %s from %s to %s, want %s from %s to %s", got.Project, got.Start, got.End, tt.project, tt.from, tt.end)
+			case got.CreditedS != tt.credited || got.AgentOnlyS != tt.agent:
+				t.Errorf("session credits %v s with %v s agent-only, want %v and %v", got.CreditedS, got.AgentOnlyS, tt.credited, tt.agent)
+			}
+		})
+	}
+}
+
 func TestWriteDay(t *testing.T) {
 	tests := []struct {
 		name string
 		day  Day
 		ok   bool
 	}{
-		{"a day's rollup reads back as written", Day{Date: "2026-11-20", Zone: "UTC", ByLevel: byLevel(), Projects: []DayProject{{ProjectKey: "p_a", CreditedS: 12.5, ByLevel: byLevel(), AgentS: 3}}}, true},
+		{"a day's rollup reads back as written", Day{Date: "2026-11-20", Zone: "UTC", Projects: []DayProject{{Project: "p_a",
+			Tally: Tally{CreditedS: 12.5, AgentOnlyS: 3, AgentOnlyByHarness: map[event.Harness]float64{event.HarnessCursor: 3}}}}}, true},
 		{"a rollup whose date isn't a date isn't written", Day{Date: "../x"}, false},
 	}
 	for _, tt := range tests {
@@ -439,7 +578,7 @@ func TestWriteDay(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got.Date != tt.day.Date || len(got.Projects) != 1 || got.Projects[0].CreditedS != 12.5 || got.Projects[0].AgentS != 3 {
+			if got.Date != tt.day.Date || len(got.Projects) != 1 || got.Projects[0].CreditedS != 12.5 || got.Projects[0].AgentOnlyByHarness[event.HarnessCursor] != 3 {
 				t.Errorf("read back %+v", got)
 			}
 		})

@@ -68,9 +68,18 @@ type ProjectMinute struct {
 	Credited []Credited `json:"credited,omitempty"`
 	// AgentS is how many of the minute's seconds a turn of the project was
 	// running, and AgentOnlyS how many of those the project wasn't
-	// credited: SM 2.6's agent-only time.
+	// credited: SM 5.3's agent-only time, whatever the seconds' reason code.
 	AgentS     int64 `json:"agent_s,omitempty"`
 	AgentOnlyS int64 `json:"agent_only_s,omitempty"`
+	// Harnesses splits AgentOnlyS by the harness whose turn ran, and names
+	// every harness that had a session in the project in the minute, with
+	// 0 for one that had no agent-only time, so a view can name the agent
+	// whose answers were read.
+	Harnesses map[event.Harness]int64 `json:"harnesses,omitempty"`
+	// Uncredited holds the minute's uncredited seconds that belong to the
+	// project, by reason (SM 5.2). Each slot's go to the project its focus
+	// resolves to, else to the one whose agent or credit has most of it.
+	Uncredited map[event.Reason]int64 `json:"uncredited,omitempty"`
 }
 
 // Credited is a project's credit in one minute under one reason at one
