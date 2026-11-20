@@ -38,7 +38,7 @@ One Go module holds the client, the server and the code they share.
 
 ## Build from source
 
-You need Go 1.26 or later and nothing else. pairtime never uses cgo, so there's no C compiler to install. Besides the standard library, it uses a few modules, all listed in `go.mod`. The client uses `golang.org/x/sys` for Windows and Unix system calls, `purego` on macOS, `godbus` and `go-keyring` on Linux, `fsnotify` to watch files and `BurntSushi/toml` for its config file. The server uses `modernc.org/sqlite`, `lib/pq` for Postgres and the same TOML parser. Each of them, and each module they pull in, is pure Go and MIT, BSD-2-Clause, BSD-3-Clause, Apache-2.0 or ISC licensed (DESIGN 3.12). ci.yml checks those licenses on every PR.
+You need Go 1.26 or later and nothing else. pairtime never uses cgo, so there's no C compiler to install. Besides the standard library, it uses a few modules, all listed in `go.mod`. The client uses `golang.org/x/sys` for Windows and Unix system calls, `purego` on macOS, `godbus` on Linux, `go-keyring` on macOS and Linux (Keychain and Secret Service), `fsnotify` to watch files and `BurntSushi/toml` for its config file. The server uses `modernc.org/sqlite`, `lib/pq` for Postgres and the same TOML parser. Each of them, and each module they pull in, is pure Go and MIT, BSD-2-Clause, BSD-3-Clause, Apache-2.0 or ISC licensed (DESIGN 3.12). ci.yml checks those licenses on every PR.
 
 ```sh
 CGO_ENABLED=0 go build -o bin/ ./cmd/...
