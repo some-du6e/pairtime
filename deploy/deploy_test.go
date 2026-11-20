@@ -22,6 +22,16 @@ func line(re, text string) string {
 	return m[1]
 }
 
+// all returns every first submatch of re, a multi-line pattern, in text,
+// joined by commas.
+func all(re, text string) string {
+	var got []string
+	for _, m := range regexp.MustCompile(`(?m)`+re).FindAllStringSubmatch(text, -1) {
+		got = append(got, m[1])
+	}
+	return strings.Join(got, ",")
+}
+
 func TestBundleFilesAgree(t *testing.T) {
 	db := path.Join(config.DefaultDataDir, config.DefaultDatabaseFile)
 	tests := []struct {
@@ -49,8 +59,14 @@ func TestBundleFilesAgree(t *testing.T) {
 			got: line(`^\s*- \./data:(\S+)\s*$`, ComposeYAML), want: config.DefaultDataDir},
 		{name: "compose mounts config/, read-only, where pairtimed looks for pairtime.toml",
 			got: line(`^\s*- \./config:(\S+):ro\s*$`, ComposeYAML) + "/pairtime.toml", want: config.DefaultPath},
-		{name: "compose's health check is pairtimed healthcheck, since the image has no shell",
-			got: line(`^\s*test: (\[.*\])\s*$`, ComposeYAML), want: `["CMD", "pairtimed", "healthcheck"]`},
+		{name: "compose's health check is pairtimed healthcheck on /healthz, which writes nothing, so Docker's checks cost no uploads",
+			got: line(`^\s*test: (\[.*\])\s*$`, ComposeYAML), want: `["CMD", "pairtimed", "healthcheck", "-live"]`},
+		{name: "Litestream reads new WAL every 10 s, so a busy minute is 6 uploads and not 60",
+			got: line(`^\s*monitor-interval:\s*(\S+)\s*$`, LitestreamYAML), want: "10s"},
+		{name: "Litestream lists level 0 and level 1 for removal every 5 minutes, not every 15 s",
+			got: line(`^l0-retention-check-interval:\s*(\S+)\s*$`, LitestreamYAML), want: "5m"},
+		{name: "Litestream compacts L1, L2 and L3 every 5 minutes, hour and 6 hours, which keeps L1 small",
+			got: all(`^[ \t]*-[ \t]*interval:[ \t]*(\S+)[ \t]*$`, LitestreamYAML), want: "5m,1h,6h"},
 		{name: "compose gives the server secrets.env, where pairtimed and Litestream read their variables",
 			got: line(`^\s*env_file: (\./config/secrets\.env)\s*$`, ComposeYAML), want: "./config/secrets.env"},
 		{name: "compose gives cloudflared only tunnel.env",

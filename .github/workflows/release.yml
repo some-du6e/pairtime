@@ -18,11 +18,7 @@
 # package code from npm: it takes the built dashboard as an artifact and
 # checks it before embedding it.
 #
-# The server image (WP-OP1) is built here too: the build job compiles
-# pairtimed for linux/amd64 and linux/arm64 and checks that the image starts,
-# on every run; the publish job pushes it to ghcr.io/some-du6e/pairtimed under
-# the tag, and the release notes give the tag and digest that
-# deploy/compose.yml pins. Code signing (DESIGN 9.7 WP 4.10) and the VSIX
+# The server image (WP-OP1), code signing (DESIGN 9.7 WP 4.10) and the VSIX
 # packages (WP 4.11) join this workflow later.
 name: release
 
@@ -36,7 +32,6 @@ on:
       - .github/workflows/release.yml
       - internal/release/**
       - tools/release/**
-      - Dockerfile.pairtimed
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -254,45 +249,6 @@ jobs:
             "$TOOL" notices -bin "$dir/pairtime$ext" -out "$dir/THIRD_PARTY_NOTICES.txt"
           done
 
-      - name: The server image's files
-        # pairtimed for both Linux targets, built as the client is, with
-        # its notices, in the build context Dockerfile.pairtimed reads. The
-        # publish job pushes the image from exactly these files.
-        run: |
-          pkg=github.com/some-du6e/pairtime/internal/version
-          ldflags="-s -w -X $pkg.Version=$VERSION -X $pkg.Commit=$COMMIT -X $pkg.Date=$DATE"
-          ctx="$STAGE/image"
-          for goarch in amd64 arm64; do
-            GOOS=linux GOARCH=$goarch go build -trimpath -buildvcs=false -ldflags="$ldflags" \
-              -o "$ctx/dist/linux_$goarch/pairtimed" ./cmd/pairtimed
-          done
-          "$TOOL" notices -bin "$ctx/dist/linux_amd64/pairtimed" -out "$ctx/dist/THIRD_PARTY_NOTICES.txt"
-          cp Dockerfile.pairtimed LICENSE "$ctx/"
-          got=$("$ctx/dist/linux_amd64/pairtimed" version | head -n 1)
-          case "$got" in
-            "pairtimed $VERSION (commit ${COMMIT:0:12}, $DATE, "*) ;;
-            *)
-              echo "::error::pairtimed version didn't report the -ldflags values: $got"
-              exit 1
-              ;;
-          esac
-
-      - name: The server image starts
-        # Built for amd64, the runner's own, and run: both programs answer
-        # inside it, and it runs as the nonroot user. The publish job builds
-        # both platforms and pushes.
-        run: |
-          ctx="$STAGE/image"
-          docker buildx build -f "$ctx/Dockerfile.pairtimed" --platform linux/amd64 --load \
-            --build-arg VERSION="$VERSION" --build-arg COMMIT="$COMMIT" -t pairtimed:check "$ctx"
-          docker run --rm pairtimed:check pairtimed version
-          docker run --rm pairtimed:check litestream version
-          user=$(docker image inspect pairtimed:check --format '{{.Config.User}}')
-          if [ "$user" != "65532:65532" ]; then
-            echo "::error::the image runs as '$user', not 65532:65532"
-            exit 1
-          fi
-
       - name: Archives, checksums.txt and the manifest payload
         env:
           REPO: ${{ github.repository }}
@@ -406,7 +362,6 @@ jobs:
           name: pairtime-${{ env.VERSION }}
           path: |
             ${{ env.STAGE }}/dist
-            ${{ env.STAGE }}/image
             ${{ env.STAGE }}/payload.json
             ${{ env.STAGE }}/snapshot-key.pub
           if-no-files-found: error
@@ -431,8 +386,6 @@ jobs:
     permissions:
       # To create the release and upload its files.
       contents: write
-      # To push the server image to ghcr.io/some-du6e/pairtimed.
-      packages: write
     defaults:
       run:
         shell: bash
@@ -519,38 +472,6 @@ jobs:
             esac
           fi
 
-      - name: Push the server image
-        # Both platforms from the build job's files, under the tag. A
-        # published release's image is never pushed over: the next step
-        # refuses that release as well, but only after this one.
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-          ACTOR: ${{ github.actor }}
-          TOKEN: ${{ github.token }}
-        run: |
-          if draft=$(gh release view "$VERSION" --json isDraft --jq .isDraft 2>/dev/null) && [ "$draft" != true ]; then
-            echo "::error::release $VERSION is already published, so its image isn't pushed again"
-            exit 1
-          fi
-          ctx=$RUNNER_TEMP/stage/image
-          image=ghcr.io/some-du6e/pairtimed
-          docker login ghcr.io -u "$ACTOR" --password-stdin <<<"$TOKEN"
-          docker buildx create --use --driver docker-container --name release > /dev/null
-          docker buildx build -f "$ctx/Dockerfile.pairtimed" --platform linux/amd64,linux/arm64 --push \
-            --build-arg VERSION="$VERSION" --build-arg COMMIT="$GITHUB_SHA" \
-            --metadata-file "$RUNNER_TEMP/image.json" -t "$image:$VERSION" "$ctx"
-          digest=$(jq -r '."containerimage.digest"' "$RUNNER_TEMP/image.json")
-          case "$digest" in
-            sha256:*) ;;
-            *)
-              echo "::error::the push gave no digest"
-              exit 1
-              ;;
-          esac
-          echo "IMAGE=$image:$VERSION@$digest" >> "$GITHUB_ENV"
-          docker buildx imagetools inspect "$image:$VERSION@$digest"
-
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
@@ -567,12 +488,6 @@ jobs:
             else
               echo "**Unsigned.** No release signing key exists yet, so manifest.json is signed with a throwaway key that no pairtime client trusts. Check downloads against checksums.txt."
             fi
-            echo
-            echo "The server image is \`$IMAGE\`. deploy/compose.yml pins it with this line (deploy/runbook.md, Upgrades):"
-            echo
-            echo '```yaml'
-            echo "    image: $IMAGE"
-            echo '```'
             echo
             if [ "$(git cat-file -t "refs/tags/$VERSION")" = tag ]; then
               git for-each-ref --format='%(contents:subject)%0a%0a%(contents:body)' "refs/tags/$VERSION"

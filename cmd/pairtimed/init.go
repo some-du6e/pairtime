@@ -57,7 +57,8 @@ func runInit(ctx context.Context, e *env, args []string) int {
 	if defaultOut == "" {
 		defaultOut = config.DefaultPath
 	}
-	out := fs.String("config-out", defaultOut, `where to write pairtime.toml, never over an existing file; "-" writes it to standard output, which compose's read-only config mount needs`)
+	out := fs.String("config-out", defaultOut, `where to write pairtime.toml; "-" writes it to standard output, which compose's read-only config mount needs`)
+	force := fs.Bool("force", false, "write pairtime.toml even where one exists, losing operators and every edit made to it; the keys are never replaced")
 	if code, done := parse(fs, args); done {
 		return code
 	}
@@ -81,9 +82,15 @@ func runInit(ctx context.Context, e *env, args []string) int {
 	if err := checkDataDir(dir); err != nil {
 		return fail("%v", err)
 	}
-	if *out != "-" {
-		if _, err := os.Lstat(*out); err == nil {
-			return fail("%s exists, and init never replaces a pairtime.toml. Move it aside to write a new one", *out)
+	// The file init would replace: -config-out, or with "-" the one
+	// pairtimed reads, where the shell's redirect will put it.
+	target := *out
+	if target == "-" {
+		target = defaultOut
+	}
+	if !*force {
+		if _, err := os.Lstat(target); err == nil {
+			return fail("%s exists, and init doesn't replace a pairtime.toml unless -force: a new one would lose operators and every edit. To add something init would have written, such as hca.client_id, edit the file by hand (deploy/runbook.md, step 7)", target)
 		} else if !errors.Is(err, os.ErrNotExist) {
 			return fail("%v", err)
 		}
@@ -127,7 +134,7 @@ func runInit(ctx context.Context, e *env, args []string) int {
 		if _, err := e.stdout.Write(toml); err != nil {
 			return fail("%v", err)
 		}
-	} else if err := writeConfigFile(*out, toml); err != nil {
+	} else if err := writeConfigFile(*out, toml, *force); err != nil {
 		return fail("%v. The keys in %s are in place; run init again, which keeps them, once it can write the file", err, keysDir)
 	} else {
 		fmt.Fprintf(notes, "wrote %s\n", *out)
@@ -200,19 +207,30 @@ func ensureKeys(dir string) (keys *backup.Keys, made bool, err error) {
 	}
 }
 
-// writeConfigFile writes pairtime.toml, which must not exist, with mode 0644:
-// it holds no secret, and the container's user reads it.
-func writeConfigFile(path string, data []byte) error {
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+// writeConfigFile writes pairtime.toml with mode 0644: it holds no secret,
+// and the container's user reads it. The file must not exist unless
+// replace is set, and then the new file takes its place in one rename.
+func writeConfigFile(path string, data []byte, replace bool) error {
+	name := path
+	if replace {
+		name = path + ".new"
+		os.Remove(name)
+	}
+	f, err := os.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
 	if err != nil {
 		return err
 	}
-	if _, err := f.Write(data); err != nil {
-		f.Close()
-		os.Remove(path)
-		return err
+	_, err = f.Write(data)
+	if cerr := f.Close(); err == nil {
+		err = cerr
 	}
-	return f.Close()
+	if err == nil && replace {
+		err = os.Rename(name, path)
+	}
+	if err != nil {
+		os.Remove(name)
+	}
+	return err
 }
 
 // checkDataDir refuses a data directory that is missing, or that group or

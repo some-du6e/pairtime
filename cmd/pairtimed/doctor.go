@@ -55,12 +55,19 @@ const snapshotMaxAge = 26 * time.Hour
 // objects, and deletes them.
 const doctorProbePrefix = "pairtime-doctor/"
 
-// Results of a check.
+// Results of a check. A warning says doctor couldn't tell; it doesn't fail
+// the run.
 const (
 	statusOK   = "ok"
+	statusWarn = "warn"
 	statusFail = "FAIL"
 	statusSkip = "skip"
 )
+
+// writeGap is the wait between the write-once check's two puts to one key:
+// R2 takes one write a second to a key and answers a faster second with
+// 429, which isn't the refusal the check looks for.
+const writeGap = 1100 * time.Millisecond
 
 type result struct {
 	status, detail string
@@ -69,6 +76,7 @@ type result struct {
 func ok(format string, a ...any) result   { return result{statusOK, fmt.Sprintf(format, a...)} }
 func bad(format string, a ...any) result  { return result{statusFail, fmt.Sprintf(format, a...)} }
 func skip(format string, a ...any) result { return result{statusSkip, fmt.Sprintf(format, a...)} }
+func warn(format string, a ...any) result { return result{statusWarn, fmt.Sprintf(format, a...)} }
 
 // doctor holds what the checks share.
 type doctor struct {
@@ -86,6 +94,8 @@ type doctor struct {
 	readiness *ops.Readiness
 	// snapshotFresh says the newest snapshot is under snapshotMaxAge.
 	snapshotFresh bool
+	// writeGap is the write-once check's wait; tests shorten it.
+	writeGap time.Duration
 }
 
 func runDoctor(ctx context.Context, e *env, args []string) int {
@@ -109,6 +119,10 @@ func runDoctor(ctx context.Context, e *env, args []string) int {
 		litestreamPath: *litestreamConfig, github: "https://api.github.com", witnessDir: *witnessDir}
 	if e.githubURL != "" {
 		d.github = e.githubURL
+	}
+	d.writeGap = writeGap
+	if e.doctorWriteGap > 0 {
+		d.writeGap = e.doctorWriteGap
 	}
 	skipped, only := nameSet(*skipList), nameSet(*onlyList)
 
@@ -150,7 +164,7 @@ func runDoctor(ctx context.Context, e *env, args []string) int {
 		check{"tunnel", d.checkTunnel},
 	)
 
-	var failed, skips, oks int
+	var failed, skips, oks, warns int
 	for _, c := range checks {
 		var r result
 		switch {
@@ -168,12 +182,14 @@ func runDoctor(ctx context.Context, e *env, args []string) int {
 			oks++
 		case statusFail:
 			failed++
+		case statusWarn:
+			warns++
 		default:
 			skips++
 		}
 		fmt.Fprintf(e.stdout, "%-4s  %-28s  %s\n", r.status, c.name, r.detail)
 	}
-	fmt.Fprintf(e.stdout, "doctor: %d ok, %d failed, %d skipped\n", oks, failed, skips)
+	fmt.Fprintf(e.stdout, "doctor: %d ok, %d warnings, %d failed, %d skipped\n", oks, warns, failed, skips)
 	if failed > 0 {
 		return 1
 	}
@@ -408,26 +424,21 @@ func (d *doctor) readyCheck(name string) bool {
 
 func (d *doctor) checkVersioning(ctx context.Context, b *objstore.Bucket) result {
 	state, err := b.Versioning(ctx)
+	var e *objstore.Error
 	switch {
 	case errors.Is(err, objstore.ErrNotImplemented):
 		return ok("the store doesn't implement GetBucketVersioning, as R2 doesn't, so the bucket keeps no versions")
-	case err != nil && isR2(d.cfg.ObjectStorage.Endpoint):
-		// R2 has no bucket versioning to turn on, and a key scoped to
-		// objects may not even ask (DESIGN 10.5 item 4).
-		return ok("R2 has no bucket versioning, so the bucket keeps no versions (asking said: %v)", err)
+	case errors.As(err, &e) && e.Status == http.StatusForbidden:
+		// An object-scoped key, such as an R2 token for two buckets, may
+		// not ask.
+		return warn("can't tell: the key may not read the bucket's versioning state (%s). R2 has no versioning; elsewhere, check that it was never turned on, and then leave this out with -skip versioning", e.Code)
 	case err != nil:
-		return bad("%v. A key that may not read the versioning state needs s3:GetBucketVersioning, or someone must check by hand that versioning was never on", err)
+		return bad("%v", err)
 	case state == "":
 		return ok("versioning was never turned on")
 	default:
 		return bad("versioning is %s. Neither bucket may keep versions: a purged or expired blob would survive as an old version (docs/errata/2026-11-20-evidence-versioning.md). Use a bucket that never had versioning", state)
 	}
-}
-
-// isR2 reports whether the endpoint is Cloudflare R2's S3 API.
-func isR2(endpoint string) bool {
-	u, err := url.Parse(endpoint)
-	return err == nil && strings.HasSuffix(strings.ToLower(u.Hostname()), ".r2.cloudflarestorage.com")
 }
 
 func (d *doctor) checkWriteOnce(ctx context.Context, b *objstore.Bucket) result {
@@ -436,6 +447,10 @@ func (d *doctor) checkWriteOnce(ctx context.Context, b *objstore.Bucket) result 
 	key := doctorProbePrefix + hex.EncodeToString(r[:])
 	if _, err := b.Put(ctx, key, strings.NewReader("first"), objstore.PutOptions{IfNoneMatch: true}); err != nil {
 		return bad("a write-once put of %s failed: %v", key, err)
+	}
+	select {
+	case <-time.After(d.writeGap):
+	case <-ctx.Done():
 	}
 	_, err := b.Put(ctx, key, strings.NewReader("second"), objstore.PutOptions{IfNoneMatch: true})
 	// The probe goes whatever the second put did, on a clock of its own,
@@ -495,7 +510,8 @@ func (d *doctor) checkHCA(ctx context.Context) result {
 	if d.cfg.HCA.ClientID == "" {
 		return skip("hca.client_id isn't set yet, so nobody can sign in")
 	}
-	if d.cfg.Secrets.Get(config.HCAClientSecret) == "" || d.cfg.Secrets.Get(config.EmailKey) == "" {
+	secret := d.cfg.Secrets.Get(config.HCAClientSecret)
+	if secret == "" || d.cfg.Secrets.Get(config.EmailKey) == "" {
 		return bad("hca.client_id is set, so %s and %s must be too", config.HCAClientSecret, config.EmailKey)
 	}
 	u := strings.TrimSuffix(d.cfg.HCA.Issuer, "/") + "/.well-known/openid-configuration"
@@ -511,10 +527,12 @@ func (d *doctor) checkHCA(ctx context.Context) result {
 		return bad("%s answered %d%s", u, status, hint)
 	}
 	var doc struct {
-		Issuer                string `json:"issuer"`
-		AuthorizationEndpoint string `json:"authorization_endpoint"`
-		TokenEndpoint         string `json:"token_endpoint"`
-		JWKSURI               string `json:"jwks_uri"`
+		Issuer                string   `json:"issuer"`
+		AuthorizationEndpoint string   `json:"authorization_endpoint"`
+		TokenEndpoint         string   `json:"token_endpoint"`
+		JWKSURI               string   `json:"jwks_uri"`
+		GrantTypes            []string `json:"grant_types_supported"`
+		AuthMethods           []string `json:"token_endpoint_auth_methods_supported"`
 	}
 	if err := json.Unmarshal(body, &doc); err != nil {
 		return bad("%s isn't a discovery document: %v", u, err)
@@ -522,7 +540,80 @@ func (d *doctor) checkHCA(ctx context.Context) result {
 	if doc.Issuer != d.cfg.HCA.Issuer || doc.AuthorizationEndpoint == "" || doc.TokenEndpoint == "" || doc.JWKSURI == "" {
 		return bad("%s names issuer %q and lacks an endpoint, or doesn't name hca.issuer %q", u, doc.Issuer, d.cfg.HCA.Issuer)
 	}
-	return ok("discovery at %s names issuer %s; redirect URI %s/auth/hca/callback", u, doc.Issuer, d.cfg.BaseURL)
+	found := fmt.Sprintf("discovery names issuer %s; redirect URI %s/auth/hca/callback", doc.Issuer, d.cfg.BaseURL)
+	if !slices.Contains(doc.GrantTypes, "client_credentials") {
+		return warn("%s, but lists no client_credentials grant, so doctor can't check the client secret; an operator's first sign-in will", found)
+	}
+	// One client_credentials grant proves the id and the secret without a
+	// person signing in. The token it returns is never kept or shown.
+	if err := secretURL(doc.TokenEndpoint); err != nil {
+		return bad("the token endpoint %s: %v", doc.TokenEndpoint, err)
+	}
+	form := url.Values{"grant_type": {"client_credentials"}}
+	post := slices.Contains(doc.AuthMethods, "client_secret_post")
+	if post {
+		form.Set("client_id", d.cfg.HCA.ClientID)
+		form.Set("client_secret", secret)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, doc.TokenEndpoint, strings.NewReader(form.Encode()))
+	if err != nil {
+		return bad("%v", err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("User-Agent", d.agent)
+	if !post {
+		req.SetBasicAuth(url.QueryEscape(d.cfg.HCA.ClientID), url.QueryEscape(secret))
+	}
+	resp, err := d.client.Do(req)
+	if err != nil {
+		var uerr *url.Error
+		if errors.As(err, &uerr) {
+			err = uerr.Err
+		}
+		return bad("%s; the token endpoint didn't answer: %v", found, err)
+	}
+	defer resp.Body.Close()
+	var answer struct {
+		Error string `json:"error"`
+	}
+	json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&answer)
+	switch {
+	case resp.StatusCode == http.StatusOK:
+		return ok("%s; the token endpoint took the client id and secret (one client_credentials grant)", found)
+	case answer.Error == "unauthorized_client":
+		// Authenticated, and not allowed this grant: the secret is right.
+		return ok("%s; the token endpoint took the client id and secret, and this client may not use client_credentials, which sign-in doesn't need", found)
+	case answer.Error == "invalid_client":
+		return bad("%s; HCA refused the client id or secret (invalid_client): check hca.client_id and %s", found, config.HCAClientSecret)
+	default:
+		return bad("%s; the token endpoint answered %d %s", found, resp.StatusCode, token(answer.Error))
+	}
+}
+
+// secretURL refuses a URL that a secret mustn't be sent to: anything but
+// https, except http on the loopback host, where tests run a fake HCA.
+func secretURL(raw string) error {
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return errors.New("it isn't a URL")
+	}
+	switch h := u.Hostname(); {
+	case u.Scheme == "https":
+		return nil
+	case u.Scheme == "http" && (h == "localhost" || h == "127.0.0.1" || h == "::1"):
+		return nil
+	default:
+		return errors.New("it isn't https, so doctor won't send the client secret there")
+	}
+}
+
+// token keeps v when it is a short run of printable ASCII without spaces,
+// as OAuth error codes are, for quoting an answer safely.
+func token(v string) string {
+	if len(v) > 64 || strings.ContainsFunc(v, func(r rune) bool { return r <= ' ' || r > '~' }) {
+		return ""
+	}
+	return v
 }
 
 // witnessRepo matches owner/name.

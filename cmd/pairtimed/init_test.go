@@ -111,7 +111,30 @@ func TestInit(t *testing.T) {
 					t.Fatal(err)
 				}
 			},
-			wantCode: 1, wantErr: "never replaces a pairtime.toml"},
+			wantCode: 1, wantErr: "doesn't replace a pairtime.toml unless -force"},
+		{name: "with -config-out -, a pairtime.toml where pairtimed reads it is never replaced, since the shell's redirect would wipe its operators",
+			environ: append([]string{"PAIRTIME_CONFIG=OUT"}, s3Environ...), stdout: true,
+			setup: func(t *testing.T, _, out string) {
+				if err := os.WriteFile(out, []byte("base_url = \"https://kept.example.org\"\noperators = [\"op\"]\n"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			},
+			wantCode: 1, wantErr: "unless -force"},
+		{name: "-force writes a new pairtime.toml over the old one, and keeps the keys",
+			args: []string{"-force"}, environ: s3Environ, wantKeys: true,
+			setup: func(t *testing.T, data, out string) {
+				if _, err := backup.Generate(backup.KeysDir(data), rand.Reader); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(out, []byte("base_url = \"https://old.example.org\"\n"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			},
+			check: func(t *testing.T, cfg *config.Config, _ string) {
+				if cfg.BaseURL != "https://pairtime.example.org" {
+					t.Errorf("base_url = %q, want the new file's", cfg.BaseURL)
+				}
+			}},
 		{name: "keys that are all there are kept, so init can run again after it failed to write the file",
 			environ: s3Environ, wantKeys: true,
 			setup: func(t *testing.T, data, _ string) {
@@ -175,7 +198,11 @@ func TestInit(t *testing.T) {
 				args = append(args, "-config-out", out)
 			}
 			args = append(args, tt.args...)
-			e, stdout, stderr := testEnv(tt.environ...)
+			environ := make([]string, len(tt.environ))
+			for i, v := range tt.environ {
+				environ[i] = strings.Replace(v, "=OUT", "="+out, 1)
+			}
+			e, stdout, stderr := testEnv(environ...)
 			code := run(context.Background(), args, e)
 			if code != tt.wantCode {
 				t.Fatalf("exit code = %d, want %d; stderr:\n%s", code, tt.wantCode, stderr)

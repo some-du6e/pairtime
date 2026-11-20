@@ -5,12 +5,12 @@
 # 65532. No shell, no package manager, no libc: both programs are static Go
 # binaries (CGO_ENABLED=0).
 #
-# The host never builds this. release.yml builds it from a v* tag and
-# pushes it to ghcr.io/some-du6e/pairtimed, for linux/amd64 and
-# linux/arm64, and restore-drill.yml builds it to test. Both compile
-# pairtimed first, the way ci.yml does, and pass it in the build context, so
-# the image holds the binary release.yml built, with the Go that setup-go
-# installed from go.mod:
+# The host never builds this. server-image.yml builds it from each commit on
+# main that changes the server and pushes it to ghcr.io/some-du6e/pairtimed
+# as sha-<commit>, for linux/amd64 and linux/arm64, and restore-drill.yml
+# builds it to test. Both compile pairtimed first, the way ci.yml does, and
+# pass it in the build context, so the image holds the binary the workflow
+# built, with the Go that setup-go installed from go.mod:
 #
 #   dist/linux_amd64/pairtimed   dist/linux_arm64/pairtimed
 #   dist/THIRD_PARTY_NOTICES.txt  (tools/release notices for pairtimed)
@@ -49,7 +49,7 @@ RUN ["/busybox/sh", "-c", "mkdir /tmp/litestream && tar -xzf /tmp/litestream.tar
 FROM gcr.io/distroless/static-debian13:nonroot@sha256:aafe993665bf6200db38a02c11a9351e782a84b6a45e7f33b6695638c88e3931
 
 ARG TARGETARCH
-# The release's version, for the labels; release.yml sets it.
+# The version and commit, for the labels; server-image.yml sets them.
 ARG VERSION=v0.0.0-dev
 ARG COMMIT=unknown
 
@@ -60,8 +60,8 @@ LABEL org.opencontainers.image.title="pairtimed" \
       org.opencontainers.image.version="${VERSION}" \
       org.opencontainers.image.revision="${COMMIT}"
 
-# Modes are set here, since a workflow artifact, which release.yml passes
-# the binaries in, keeps none.
+# Modes are set here, since nothing that passes the binaries in, such as a
+# workflow artifact, has to keep them.
 COPY --from=unpack --chmod=0755 /tmp/litestream/litestream /usr/local/bin/litestream
 COPY --from=unpack --chmod=0644 /tmp/litestream/LICENSE /usr/share/doc/litestream/LICENSE
 COPY --chmod=0755 dist/linux_${TARGETARCH}/pairtimed /usr/local/bin/pairtimed

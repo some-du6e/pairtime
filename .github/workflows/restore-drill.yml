@@ -296,9 +296,15 @@ jobs:
           git --git-dir="$RUNNER_TEMP/witness.git" log --format='%h %an %s' main
           compose stop witness
 
-          # Litestream has had the marker for longer than a sync interval:
-          # wait until /readyz says the replica has caught up.
-          timeout 120 bash -c 'until curl -fsS http://127.0.0.1:9091/metrics | grep -qx "pairtime_replication_lag_seconds 0"; do curl -fsS -o /dev/null http://127.0.0.1:9091/readyz || true; sleep 3; done'
+          # Nothing writes for 30 s, while Litestream reads the WAL (every
+          # 10 s) and uploads (every 10 s); then one /readyz, whose own probe
+          # row is the only change, finds the replica caught up.
+          sleep 30
+          curl -fsS http://127.0.0.1:9091/readyz | tee "$RUNNER_TEMP/readyz-synced.json"
+          grep -q '"name":"replication","ok":true' "$RUNNER_TEMP/readyz-synced.json"
+          lag=$(curl -fsS http://127.0.0.1:9091/metrics | awk '$1 == "pairtime_replication_lag_seconds" { print $2 }')
+          echo "replication lag: ${lag}s"
+          awk -v lag="$lag" 'BEGIN { exit !(lag != "" && lag >= 0 && lag < 5) }'
 
       - name: Destroy the server and its disk
         run: |

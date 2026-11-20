@@ -245,6 +245,8 @@ func serve(ctx context.Context, cfg *config.Config, logger *slog.Logger, e *env,
 	public.HandleFunc("GET /healthz", ops.Healthz)
 	site.Register(public)
 	signIn.Register(public)
+	// Where a sign-in without return_to lands.
+	public.HandleFunc("GET /{$}", home(signIn, logger))
 	maintainCtx, stopMaintain := context.WithCancel(ctx)
 	defer stopMaintain()
 	go signIn.Maintain(maintainCtx)

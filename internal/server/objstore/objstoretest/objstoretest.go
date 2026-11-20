@@ -86,6 +86,10 @@ type Server struct {
 // answer 501 NotImplemented, as R2 does.
 const NotImplemented = "not implemented"
 
+// AccessDenied is the versioning state that makes GetBucketVersioning
+// answer 403 AccessDenied, as a store does to a key scoped to objects.
+const AccessDenied = "access denied"
+
 // CutBody, as the status of FailAfter or FailMatching with after set,
 // answers 200 and then closes the connection halfway through the body, as
 // when a store's answer is lost after its headers.
@@ -450,8 +454,11 @@ func (s *Server) precondition(r *http.Request, objects map[string]*object, bucke
 // versioningAnswer answers GetBucketVersioning. Call it with s.mu held.
 func (s *Server) versioningAnswer(bucket, id string) answer {
 	state := s.versioning[bucket]
-	if state == NotImplemented {
+	switch state {
+	case NotImplemented:
 		return s3error(http.StatusNotImplemented, "NotImplemented", "GetBucketVersioning not implemented", id)
+	case AccessDenied:
+		return s3error(http.StatusForbidden, "AccessDenied", "Access Denied", id)
 	}
 	var b bytes.Buffer
 	b.WriteString(xml.Header + `<VersioningConfiguration xmlns="http://s3.amazonaws.com/doc/2006-03-01/">`)

@@ -16,6 +16,7 @@ import (
 	"slices"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/some-du6e/pairtime/internal/server/store"
 )
@@ -48,6 +49,9 @@ type env struct {
 	// githubURL stands in for https://api.github.com in doctor's
 	// witness check.
 	githubURL string
+	// doctorWriteGap, when positive, replaces doctor's wait between its
+	// two write-once puts.
+	doctorWriteGap time.Duration
 }
 
 // getenv looks name up in e.environ.

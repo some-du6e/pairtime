@@ -76,7 +76,17 @@ func newDeployed(t *testing.T) *deployed {
 	t.Cleanup(tunnel.Close)
 	var hcaURL string
 	hca := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprintf(w, `{"issuer":%q,"authorization_endpoint":"%s/oauth/authorize","token_endpoint":"%s/oauth/token","jwks_uri":"%s/oauth/discovery/keys"}`, hcaURL, hcaURL, hcaURL, hcaURL)
+		if r.Method == http.MethodPost && r.URL.Path == "/oauth/token" {
+			// HCA's token endpoint, for the one client_credentials grant.
+			if r.FormValue("grant_type") != "client_credentials" || r.FormValue("client_id") != "app-123" || r.FormValue("client_secret") != "hca-secret" || !strings.HasPrefix(r.UserAgent(), "pairtimed-doctor/") {
+				w.WriteHeader(http.StatusUnauthorized)
+				fmt.Fprint(w, `{"error":"invalid_client"}`)
+				return
+			}
+			fmt.Fprint(w, `{"access_token":"never-shown","token_type":"Bearer","expires_in":3600}`)
+			return
+		}
+		fmt.Fprintf(w, `{"issuer":%q,"authorization_endpoint":"%s/oauth/authorize","token_endpoint":"%s/oauth/token","jwks_uri":"%s/oauth/discovery/keys","grant_types_supported":["authorization_code","client_credentials"],"token_endpoint_auth_methods_supported":["client_secret_post"]}`, hcaURL, hcaURL, hcaURL, hcaURL)
 	}))
 	hca.Start()
 	hcaURL = hca.URL
@@ -192,9 +202,13 @@ func (d *deployed) run(t *testing.T, extra ...string) (map[string][2]string, int
 	t.Helper()
 	e, stdout, _ := testEnv(d.environ...)
 	e.githubURL = d.github
+	e.doctorWriteGap = time.Millisecond
 	args := append([]string{"doctor", "-config", d.config, "-witness-dir", d.witness,
 		"-litestream-config", filepath.Join(filepath.Dir(d.config), "litestream.yml"), "-timeout", "10s"}, extra...)
 	code := run(context.Background(), args, e)
+	if strings.Contains(stdout.String(), "never-shown") || strings.Contains(stdout.String(), "hca-secret") {
+		t.Error("doctor printed HCA's token or the client secret")
+	}
 	lines := make(map[string][2]string)
 	for _, line := range strings.Split(strings.TrimSpace(stdout.String()), "\n") {
 		f := strings.Fields(line)
@@ -230,6 +244,12 @@ func TestDoctor(t *testing.T) {
 		{name: "a store without GetBucketVersioning passes, as R2 does",
 			setup: func(_ *testing.T, d *deployed) { d.s3.SetVersioning("pairtime-data", objstoretest.NotImplemented) },
 			want:  map[string][2]string{"bucket.pairtime-data.versioning": {statusOK, "doesn't implement GetBucketVersioning"}}},
+		{name: "a key that may not ask about versioning is a warning naming -skip versioning, not a failure",
+			setup: func(_ *testing.T, d *deployed) { d.s3.SetVersioning("pairtime-data", objstoretest.AccessDenied) },
+			want:  map[string][2]string{"bucket.pairtime-data.versioning": {statusWarn, "-skip versioning"}}},
+		{name: "a client secret HCA refuses fails the hca check, and the token never shows",
+			setup: func(_ *testing.T, d *deployed) { d.environ = append(d.environ, "PAIRTIME_HCA_CLIENT_SECRET=wrong") },
+			want:  map[string][2]string{"hca": {statusFail, "refused the client id or secret"}}, wantCode: 1},
 		{name: "a store that takes a second write-once put fails",
 			setup: func(_ *testing.T, d *deployed) { d.s3.WriteOnceIgnored("pairtime-snapshots") },
 			want:  map[string][2]string{"bucket.pairtime-snapshots.write_once": {statusFail, "took a second If-None-Match"}}, wantCode: 1},
@@ -334,26 +354,6 @@ func TestDoctor(t *testing.T) {
 				if !strings.HasPrefix(a, "pairtimed-doctor/") {
 					t.Errorf("a ping's User-Agent is %q, not doctor's", a)
 				}
-			}
-		})
-	}
-}
-
-func TestIsR2(t *testing.T) {
-	tests := []struct {
-		name     string
-		endpoint string
-		want     bool
-	}{
-		{name: "R2's account endpoint is R2", endpoint: "https://0123456789abcdef.r2.cloudflarestorage.com", want: true},
-		{name: "R2's jurisdiction endpoints are R2 too", endpoint: "https://0123456789abcdef.eu.r2.cloudflarestorage.com", want: true},
-		{name: "Hetzner's object storage isn't", endpoint: "https://fsn1.your-objectstorage.com", want: false},
-		{name: "a host that only starts like R2's isn't", endpoint: "https://r2.cloudflarestorage.com.example.org", want: false},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := isR2(tt.endpoint); got != tt.want {
-				t.Errorf("isR2(%q) = %v, want %v", tt.endpoint, got, tt.want)
 			}
 		})
 	}

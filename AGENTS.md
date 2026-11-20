@@ -24,7 +24,8 @@ A change is done when every workflow its PR started is green. A WP marked "Race:
 | objstore.yml | the object storage client against a MinIO service container, or with `-f minio=source` against MinIO built from its source | PRs touching internal/server/objstore/, weekly |
 | restore-drill.yml | the deploy bundle against MinIO: deploy with compose.yml, back up, destroy, restore from the replica and the key backup, checked with the age and sqlite3 tools and the server's pages; with `-f target=production`, a read-only restore of the real replica | PRs touching deploy/, Dockerfile.pairtimed or internal/server/backup/; weekly |
 | probe.yml | a deployed server from GitHub's network: TLS, `/healthz` and `/.well-known/pairtime-keys.json` | by hand, `-f host=<host>` |
-| release.yml | the seven targets' archives, checksums.txt and the signed manifest.json, and the server image, built and started on every run | release tags, signed with the release key and published, and the image pushed to ghcr.io/some-du6e/pairtimed; PRs touching internal/release, tools/release or Dockerfile.pairtimed, as a snapshot signed with a throwaway key and never published |
+| release.yml | the seven targets' archives, checksums.txt and the signed manifest.json | release tags, signed with the release key and published; PRs touching internal/release or tools/release, as a snapshot signed with a throwaway key and never published |
+| server-image.yml | the server image for linux/amd64 and linux/arm64, pushed to ghcr.io/some-du6e/pairtimed as `sha-<commit>`, and as `main` from main | pushes to main touching cmd/pairtimed/, internal/server/, deploy/, Dockerfile.pairtimed, go.mod or go.sum; by hand |
 | tidy.yml | `go mod tidy` and npm lockfiles, committed to the branch | by hand |
 | fixtures.yml | the fixture provenance check | by hand |
 

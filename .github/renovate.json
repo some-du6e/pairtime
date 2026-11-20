@@ -8,10 +8,9 @@
   "prConcurrentLimit": 3,
   "packageRules": [
     {
-      "description": "pairtimed's own releases, including prereleases such as v0.1.0-alpha.2.",
+      "description": "pairtimed's images are tagged sha-<commit> by server-image.yml, which have no order Renovate can follow, so a PR pins a newer one by hand (deploy/runbook.md, The image pin).",
       "matchPackageNames": ["ghcr.io/some-du6e/pairtimed"],
-      "versioning": "semver",
-      "ignoreUnstable": false
+      "enabled": false
     }
   ]
 }

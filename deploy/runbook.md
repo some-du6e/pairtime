@@ -17,7 +17,20 @@ UA="pairtime-deploy/1 (+https://github.com/some-du6e/pairtime)"
 curl -fsS -A "$UA" https://pairtime.karimeltaib.com/healthz
 ```
 
-**The image pin.** `compose.yml` pins pairtimed's image by tag and digest. Until the first release that line reads `ghcr.io/some-du6e/pairtimed:UNRELEASED`, which can't be pulled. If you see that, stop and ask the orchestrator for a release: Karim pushes a `v*` tag and approves the release run, its notes give the `image:` line, and a PR pins it in `compose.yml`, which runs the restore drill on the new image. Deploy once that PR has merged.
+**The image pin.** `server-image.yml` builds the server image from each commit on main that changes the server and pushes it to `ghcr.io/some-du6e/pairtimed` as `sha-<12 hex digits of the commit>`. Each run's summary gives the line that pins it, tag and digest:
+
+```yaml
+    image: ghcr.io/some-du6e/pairtimed:sha-0123456789ab@sha256:<digest>
+```
+
+`compose.yml` carries one such line, and a bump is a PR that replaces it with a newer run's, whose restore drill must pass before it merges. To find the newest:
+
+```sh
+gh run list --repo some-du6e/pairtime --workflow server-image.yml --branch main --status success --limit 1
+gh run view <run id> --repo some-du6e/pairtime   # the summary shows the image: line
+```
+
+Until the first push is pinned, the line reads `ghcr.io/some-du6e/pairtimed:UNRELEASED`, which can't be pulled. If you see that, ask the orchestrator for the PR that pins it, and deploy once it has merged. The orchestrator makes the package public once, after its first push, so the host pulls it without logging in.
 
 ## The pilot
 
@@ -35,7 +48,7 @@ Neither bucket may keep versions. R2 has no versioning, and `pairtimed doctor` f
 
 Ask for anything on this list you don't have before step 1 (DESIGN 10.5):
 
-1. The host: Linux, Docker with Compose v2, at least 40 GB of local disk (never NFS or SMB), outbound HTTPS, always on.
+1. The host: Linux, Docker with Compose v2, local disk (never NFS or SMB), outbound HTTPS, always on. DESIGN 10.5 asks for 40 GB, which is for R11 scale. The pilot runs in CT 118 with 20 GB on purpose: its database is small, and a snapshot needs free space about the database's size while it is taken. The bundle lives in `/srv/pairtime`, and every compose command runs from `/srv/pairtime/deploy`.
 2. The tunnel's token.
 3. The Hack Club Auth app's client id and secret, with redirect URI `https://pairtime.karimeltaib.com/auth/hca/callback`. Without them the server runs, but nobody can sign in.
 4. The R2 endpoint, `https://<account id>.r2.cloudflarestorage.com`, and one access key with read and write on the two buckets and nothing else.
@@ -101,6 +114,8 @@ A push URL looks like `http://<kuma host>:3001/api/push/<token>?status=up&msg=OK
 
 ### 5. The witness deploy key
 
+If `config/witness_deploy_key` is already there, mode 0600, as on the pilot host, where it is staged with write access to `some-du6e/pairtime-witness`, use it and skip to step 6. A second key would be a second credential to the repository. Otherwise make one:
+
 ```sh
 ssh-keygen -t ed25519 -N '' -C "pairtimed witness, pairtime.karimeltaib.com" -f config/witness_deploy_key
 chmod 600 config/witness_deploy_key
@@ -108,7 +123,7 @@ gh repo deploy-key add config/witness_deploy_key.pub --repo some-du6e/pairtime-w
   --allow-write --title "pairtimed witness, pairtime.karimeltaib.com"
 ```
 
-Without admin rights on the repository, send `config/witness_deploy_key.pub` to Karim to add as a deploy key with write access. The key must exist before step 10: if it's missing when compose starts the witness container, Docker makes a directory in its place (see "When something fails").
+Without admin rights on the repository, send `config/witness_deploy_key.pub` to Karim to add as a deploy key with write access. The key must be a file before step 10. If it's missing when compose starts the witness container, Docker makes an empty directory at `config/witness_deploy_key` in its place, and the sidecar can't push (see "When something fails").
 
 ### 6. Pull the images
 
@@ -128,7 +143,16 @@ docker compose run --rm -T pairtimed pairtimed init \
   -config-out - > config/pairtime.toml.new && mv config/pairtime.toml.new config/pairtime.toml
 ```
 
-Leave out `-hca-client-id` if there is none yet. init makes `server.ed25519`, `evidence.p256` and `pepper` in `data/keys`, each mode 0600, and prints each key's id and public key to the terminal. Copy those two lines into the deploy issue. It reads the buckets from the `PAIRTIME_S3_*` lines of step 3, which Litestream reads too, and it checks that the file it wrote loads. If it fails, it has written nothing, so remove `config/pairtime.toml.new`, fix what it names and run it again. init never replaces a key or an existing `pairtime.toml`. When all three keys are there it keeps them.
+Leave out `-hca-client-id` if there is none yet. init makes `server.ed25519`, `evidence.p256` and `pepper` in `data/keys`, each mode 0600, and prints each key's id and public key to the terminal. Copy those two lines into the deploy log, issue #103. It reads the buckets from the `PAIRTIME_S3_*` lines of step 3, which Litestream reads too, and it checks that the file loads before it writes anything. If it fails, it has written nothing, so remove `config/pairtime.toml.new`, fix what it names and run it again.
+
+init never replaces a key. It refuses to write `pairtime.toml` when one is already in `config/`, since the new file would lose the operators of step 9 and every edit made since. To add something later, such as the HCA client id once Karim has it, edit the file by hand:
+
+```toml
+[hca]
+client_id = "<client id>"
+```
+
+then `docker compose up -d pairtimed`. Only to start the file over, run init with `-force`.
 
 ### 8. Back up the keys
 
@@ -158,7 +182,15 @@ docker compose up -d
 docker compose ps
 ```
 
-Within two minutes `pairtimed` should show `healthy`. `docker compose logs pairtimed` shows Litestream starting, `pairtimed serve` applying the migrations, then `serving`. On an empty bucket Litestream logs `no backup found, starting fresh`. `docker compose logs cloudflared` should show four connections registered.
+Within two minutes `pairtimed` should show `healthy`. Docker's health check asks `/healthz`, which writes nothing; `/readyz`, which writes a row to prove the database takes writes, runs from pairtimed's 5-minute heartbeat and from doctor, so Litestream doesn't upload for every health check (litestream.yml, Cost). `docker compose logs pairtimed` shows Litestream starting, `pairtimed serve` applying the migrations, then `serving`. On an empty bucket Litestream logs `no backup found, starting fresh`. `docker compose logs cloudflared` should show four connections registered.
+
+Once the HCA client id is in, an operator checks sign-in in a browser:
+
+```text
+https://pairtime.karimeltaib.com/auth/hca/login?return_to=/api/v1/users/me
+```
+
+After Hack Club Auth, the browser shows the account as JSON, with the operator's `hca_sub`. A sign-in without `return_to` lands on `/`, which says it's signed in.
 
 ### 11. The first snapshot
 
@@ -181,7 +213,7 @@ Every line should say `ok`, except these, which may say `skip`:
 - `witness`, until WP-SV17's publisher writes day roots to `witness-roots/`. Before then the sidecar runs and finds nothing to push.
 - `hca`, while there is no client id.
 
-doctor checks the configuration, the keys and their modes, the database and its migrations, that `litestream.yml` and `pairtime.toml` name the same database and bucket, `/readyz` with the replica's lag, that neither bucket keeps versions and both refuse a second write-once put, the newest snapshot and key backup, HCA's discovery document, the witness repository through GitHub's public API, each push monitor, and `https://<host>/healthz` through the tunnel. It pings a monitor only when that monitor's owner would. Paste its output into the deploy issue.
+doctor checks the configuration, the keys and their modes, the database and its migrations, that `litestream.yml` and `pairtime.toml` name the same database and bucket, `/readyz` with the replica's lag, that neither bucket keeps versions and both refuse a second write-once put, the newest snapshot and key backup, HCA's discovery document, the witness repository through GitHub's public API, each push monitor, and `https://<host>/healthz` through the tunnel. It pings a monitor only when that monitor's owner would, and checks the HCA client id and secret with one client_credentials grant. A `warn` line means doctor couldn't tell, and doesn't fail the run: an R2 key scoped to the two buckets may get 403 for GetBucketVersioning, and R2 has no versioning, so `-skip versioning` leaves that check out. Paste the output into the deploy log, issue #103.
 
 ### 13. From outside
 
@@ -212,7 +244,7 @@ It restores the replica in a throwaway container, runs `PRAGMA integrity_check`,
 
 ## Upgrades
 
-Each upgrade is a PR that changes an image line in `compose.yml`, from Renovate or by hand after a release, and its restore drill must pass before it merges. Once it has:
+Each upgrade is a PR that changes an image line in `compose.yml`: pairtimed's by hand from a newer `server-image.yml` run ("The image pin"), cloudflared's and the sidecar's from Renovate. Its restore drill must pass before it merges. Once it has:
 
 ```sh
 cd /srv/pairtime/deploy
@@ -260,7 +292,7 @@ sudo install -m 0600 -o 65532 -g 65532 pairtime-keys/server.ed25519 \
   pairtime-keys/evidence.p256 pairtime-keys/pepper data/keys/
 ```
 
-Put `pairtime-keys/PAIRTIME_EMAIL_KEY`'s one line back into `config/secrets.env` as `PAIRTIME_EMAIL_KEY=<value>`, then `shred -u` every file under `pairtime-keys/` and remove the directory, here and on Karim's side. `docker compose run --rm -T pairtimed pairtimed keys show` should print the same key ids as the deploy issue.
+Put `pairtime-keys/PAIRTIME_EMAIL_KEY`'s one line back into `config/secrets.env` as `PAIRTIME_EMAIL_KEY=<value>`, then `shred -u` every file under `pairtime-keys/` and remove the directory, here and on Karim's side. `docker compose run --rm -T pairtimed pairtimed keys show` should print the same key ids as the deploy log, issue #103.
 
 ## Moving to a VPS
 
