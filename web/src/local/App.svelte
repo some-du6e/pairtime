@@ -7,7 +7,9 @@
 
 	// The skeleton of the local dashboard (DESIGN 3.9). It asks the agent
 	// how it is; Today, Projects, Privacy and Settings grow from here
-	// (WP-UI1), which also adds the sign-in this page checks for.
+	// (WP-UI1), which also adds the sign-in this page checks for. Until
+	// then no command opens the page signed in, so the signed-out card names
+	// none; WP-UI1 names `pairtime dashboard` there when it adds it.
 	let status: Result<Status> | undefined = $state();
 
 	onMount(() => {
@@ -51,10 +53,10 @@
 			</section>
 		{:else if status.problem === 'signed-out'}
 			<section class="pt-card" aria-labelledby="signin-title" data-testid="signed-out">
-				<h2 id="signin-title">Open your dashboard from pairtime</h2>
+				<h2 id="signin-title">This version of pairtime can't open your dashboard yet</h2>
 				<p>
-					Run <code>pairtime dashboard</code> and it opens this page signed in. Until then the page shows nothing,
-					so other websites, and other people who use this computer, can't read your time.
+					A later version adds the command that opens this page signed in. Until then the page shows nothing, so
+					other websites, and other people who use this computer, can't read your time.
 				</p>
 			</section>
 		{:else if status.problem === 'unreachable'}

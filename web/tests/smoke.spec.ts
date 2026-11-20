@@ -61,9 +61,13 @@ test('everything the page loads comes from the agent, with no errors', async ({ 
 	expect(errors).toEqual([]);
 });
 
-test('signed out, the page says how to open it and shows no data', async ({ page }) => {
+test("signed out, the page says this version can't open it, names no command, and shows no data", async ({ page }) => {
 	await page.goto(base);
-	await expect(page.getByTestId('signed-out')).toContainText('pairtime dashboard');
+	const signedOut = page.getByTestId('signed-out');
+	await expect(signedOut).toContainText("can't open your dashboard yet");
+	// No command opens the page signed in until WP-UI1 adds one, which
+	// then names it here.
+	await expect(signedOut.locator('code')).toHaveCount(0);
 	await expect(page.getByTestId('agent-status')).toHaveCount(0);
 });
 
