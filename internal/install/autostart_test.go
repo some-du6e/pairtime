@@ -33,7 +33,7 @@ func TestAutostartEntries(t *testing.T) {
 			goos:   "windows",
 			target: func(string) Target { return RegistryValue(`Software\Microsoft\Windows\CurrentVersion\Run`, "pairtime") },
 			want: func(*testing.T) []byte {
-				return []byte(`"C:\Users\teen\AppData\Local\pairtime\bin\pairtime.exe" agent`)
+				return []byte(`"C:\Users\teen\AppData\Local\pairtime\bin\pairtime.exe" agent --detach`)
 			},
 			typ: RegSZ,
 		},
@@ -168,17 +168,17 @@ func TestAutostartInstallAndUninstall(t *testing.T) {
 }
 
 func TestRunCommand(t *testing.T) {
-	long := `C:\` + strings.Repeat("d", 260-len(`C:\`)-len(`"" agent`)) // exactly 260 with the quotes and " agent"
+	long := `C:\` + strings.Repeat("d", 260-len(`C:\`)-len(`"" agent --detach`)) // exactly 260 with the quotes and the arguments
 	tests := []struct {
 		name    string
 		exe     string
 		want    string
 		wantErr string
 	}{
-		{name: "the path is quoted and the agent command follows", exe: `C:\Users\teen\AppData\Local\pairtime\bin\pairtime.exe`,
-			want: `"C:\Users\teen\AppData\Local\pairtime\bin\pairtime.exe" agent`},
-		{name: "a path with spaces is quoted", exe: `C:\Users\Te En\pairtime.exe`, want: `"C:\Users\Te En\pairtime.exe" agent`},
-		{name: "a command of exactly 260 characters is allowed", exe: long, want: `"` + long + `" agent`},
+		{name: "the path is quoted and the agent command follows, detached so no console window stays open", exe: `C:\Users\teen\AppData\Local\pairtime\bin\pairtime.exe`,
+			want: `"C:\Users\teen\AppData\Local\pairtime\bin\pairtime.exe" agent --detach`},
+		{name: "a path with spaces is quoted", exe: `C:\Users\Te En\pairtime.exe`, want: `"C:\Users\Te En\pairtime.exe" agent --detach`},
+		{name: "a command of exactly 260 characters is allowed", exe: long, want: `"` + long + `" agent --detach`},
 		{name: "a command over the Run key's 260 characters is refused", exe: long + "d", wantErr: "260"},
 		{name: "a path with a double quote is refused", exe: `C:\a"b\pairtime.exe`, wantErr: "double quote"},
 	}

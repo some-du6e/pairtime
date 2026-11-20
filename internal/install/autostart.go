@@ -35,8 +35,9 @@ const runCommandMax = 260
 
 // Autostart returns the item that starts `pairtime agent` when the teen
 // logs in, without admin rights (DESIGN 3.2; CP 2.1): the Run value under
-// HKEY_CURRENT_USER on Windows, a LaunchAgent on macOS, and an XDG
-// autostart entry on Linux. The entry is pairtime's whole, so install
+// HKEY_CURRENT_USER on Windows, which runs `pairtime agent --detach` so
+// that no console window stays open (runArgs), a LaunchAgent on macOS, and
+// an XDG autostart entry on Linux. The entry is pairtime's whole, so install
 // writes all of it and uninstall takes all of it away. Starting the agent
 // now, rather than at the next login, is the caller's job.
 func Autostart(env Env) (Item, error) {
@@ -79,13 +80,21 @@ func configHome(env Env) string {
 	return filepath.Join(env.Home, ".config")
 }
 
-// runCommand is the Run value's data: the quoted binary path and the
-// agent command.
+// runArgs are what the Run value passes the binary. pairtime.exe is a
+// console program, and Explorer, which runs the Run key at login, has no
+// console to share, so Windows opens a console window for it. `pairtime
+// agent` would keep that window open, full of the agent's log, for as long
+// as the agent runs, and closing it would stop the agent. `agent --detach`
+// starts the agent in a process of its own with no console window and
+// exits, so the window closes at once (cmd/pairtime/agent.go).
+const runArgs = "agent --detach"
+
+// runCommand is the Run value's data: the quoted binary path and runArgs.
 func runCommand(exe string) (string, error) {
 	if strings.Contains(exe, `"`) {
 		return "", fmt.Errorf("the binary's path %q holds a double quote, which a Windows command line can't quote", exe)
 	}
-	cmd := `"` + exe + `" agent`
+	cmd := `"` + exe + `" ` + runArgs
 	n := 0 // in UTF-16 code units, as Windows counts
 	for _, r := range cmd {
 		n++
