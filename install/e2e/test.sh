@@ -10,7 +10,8 @@
 #
 #   bash install/e2e/test.sh <fixture dir>
 #
-# It needs curl, jq and python3. install.sh runs with /bin/sh, the shell
+# It needs curl, jq and python3, which runs the HTTP server,
+# install/e2e/serve.py. install.sh runs with /bin/sh, the shell
 # `curl ... | sh` gets, unless a case says otherwise.
 set -euo pipefail
 
@@ -38,7 +39,7 @@ port=47615
 server=http://127.0.0.1:$port
 failures=0
 
-python3 -I -m http.server "$port" --bind 127.0.0.1 --directory "$fixture" > "$scratch/server.log" 2>&1 &
+python3 -I install/e2e/serve.py "$port" "$fixture" > "$scratch/server.log" 2>&1 &
 server_pid=$!
 trap 'kill "$server_pid" 2> /dev/null || :' EXIT
 for _ in $(seq 100); do

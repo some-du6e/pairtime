@@ -10,7 +10,7 @@
 #
 #   powershell -NoProfile -ExecutionPolicy Bypass -File install/e2e/test.ps1 <fixture dir>
 #
-# It needs python for the HTTP server.
+# It needs python for the HTTP server, install/e2e/serve.py.
 param([Parameter(Mandatory = $true)][string]$Fixture)
 Set-StrictMode -Version 2
 $ErrorActionPreference = 'Stop'
@@ -33,7 +33,7 @@ $script:record = $null
 
 $python = (Get-Command python).Source
 $serverProcess = Start-Process -FilePath $python -PassThru -NoNewWindow `
-  -ArgumentList @('-I', '-m', 'http.server', "$port", '--bind', '127.0.0.1', '--directory', "`"$Fixture`"") `
+  -ArgumentList @('-I', 'install/e2e/serve.py', "$port", "`"$Fixture`"") `
   -RedirectStandardOutput (Join-Path $scratch 'server.out') -RedirectStandardError (Join-Path $scratch 'server.err')
 $ready = $false
 foreach ($i in 1..100) {
