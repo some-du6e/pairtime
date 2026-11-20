@@ -26,7 +26,12 @@
 //     nothing to a process of another user.
 //   - The named pipe has a DACL that admits this user only, is created with
 //     FILE_FLAG_FIRST_PIPE_INSTANCE so a pipe someone else made first is
-//     noticed, and refuses remote clients.
+//     noticed, and refuses remote clients. The agent makes it only when
+//     its socket fails, so while the socket works anyone could make a pipe
+//     of that name. A sender therefore tries the pipe only while the
+//     agent's note says it listens there (Endpoint.PipeNote), and sends
+//     nothing to a pipe that this user doesn't own or that a process other
+//     than the one in the note serves.
 //
 // A hook must never slow its harness down, so every wait is bounded:
 // Send gives up on the agent after its timeout, DESIGN 3.2's 100 ms for a

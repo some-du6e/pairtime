@@ -4,11 +4,14 @@ package ipc
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
+	"unsafe"
 
 	"golang.org/x/sys/windows"
 
@@ -39,6 +42,38 @@ func checkPrivateDir(t *testing.T, dir string) {
 	}
 	if !sameDACL(got, want) {
 		t.Errorf("%s has the DACL %s, want %s", dir, got, want)
+	}
+}
+
+// editNote changes the note of the agent on ep's pipe as edit says.
+func editNote(t *testing.T, ep Endpoint, edit func(n *pipeNote)) {
+	t.Helper()
+	n, err := readPipeNote(ep)
+	if err != nil {
+		t.Fatal(err)
+	}
+	edit(&n)
+	b, err := json.Marshal(n)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(ep.PipeNote, b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// dialAs dials ep as a sender of user want would, and wants it refused
+// with ErrNotAgent for the reason why names.
+func dialAs(t *testing.T, ep Endpoint, want identity, why string) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	c, err := dial(ctx, ep, want)
+	if c != nil {
+		c.Close()
+	}
+	if !errors.Is(err, ErrNotAgent) || !strings.Contains(err.Error(), why) {
+		t.Errorf("dial = %v, want ErrNotAgent because %s", err, why)
 	}
 }
 
@@ -100,13 +135,138 @@ func TestPipe(t *testing.T) {
 			name: "a sender refuses a pipe served by another user",
 			run: func(t *testing.T, ep Endpoint) {
 				serve(t, ep, Options{ForcePipe: true}, nil)
+				dialAs(t, ep, otherUser(t), "belongs to")
+			},
+		},
+		{
+			name: "a sender refuses a pipe this user doesn't own, even one whose note names the process serving it",
+			run: func(t *testing.T, ep Endpoint) {
+				me, err := self()
+				if err != nil {
+					t.Fatal(err)
+				}
+				// A pipe that Administrators own stands for one another
+				// account made. This process makes it and writes its note,
+				// so the pid and start-time checks pass and only the owner
+				// is wrong.
+				sd, err := windows.SecurityDescriptorFromString("O:BAD:P(A;;GA;;;" + me.sid + ")")
+				if err != nil {
+					t.Fatal(err)
+				}
+				sa := &windows.SecurityAttributes{SecurityDescriptor: sd}
+				sa.Length = uint32(unsafe.Sizeof(*sa))
+				h, err := createPipe(ep.Pipe, sa, true)
+				if errors.Is(err, windows.ERROR_INVALID_OWNER) {
+					t.Skip("only an elevated process may make an object that Administrators own")
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer windows.CloseHandle(h)
+				if err := writePipeNote(ep); err != nil {
+					t.Fatal(err)
+				}
+				dialAs(t, ep, me, "belongs to")
+			},
+		},
+		{
+			name: "a sender refuses a pipe that a process other than the one in the note serves",
+			run: func(t *testing.T, ep Endpoint) {
+				me, err := self()
+				if err != nil {
+					t.Fatal(err)
+				}
+				serve(t, ep, Options{ForcePipe: true}, nil)
+				editNote(t, ep, func(n *pipeNote) { n.PID += 4 })
+				dialAs(t, ep, me, "the note names process")
+			},
+		},
+		{
+			name: "a sender refuses a pipe whose process has the note's pid but started at another time",
+			run: func(t *testing.T, ep Endpoint) {
+				me, err := self()
+				if err != nil {
+					t.Fatal(err)
+				}
+				serve(t, ep, Options{ForcePipe: true}, nil)
+				editNote(t, ep, func(n *pipeNote) { n.Started-- })
+				dialAs(t, ep, me, "started at another time")
+			},
+		},
+		{
+			name: "a sender doesn't try the pipe when no agent's note says it listens there",
+			run: func(t *testing.T, ep Endpoint) {
+				_, sink := serve(t, ep, Options{ForcePipe: true}, nil)
+				if err := os.Remove(ep.PipeNote); err != nil {
+					t.Fatal(err)
+				}
 				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 				defer cancel()
-				if c, err := dial(ctx, ep, otherUser(t)); !errors.Is(err, ErrNotAgent) {
+				if c, err := Dial(ctx, ep); !errors.Is(err, errNoPipeNote) {
 					if c != nil {
 						c.Close()
 					}
-					t.Errorf("dial = %v, want ErrNotAgent", err)
+					t.Errorf("Dial = %v, want errNoPipeNote", err)
+				}
+				if via, err := Send(ep, message(1), 10*time.Second); err != nil || via != inbox.ViaInbox {
+					t.Errorf("Send = %q, %v; want the message spooled", via, err)
+				}
+				if n := len(sink.deliveries()); n != 0 {
+					t.Errorf("the pipe took %d messages", n)
+				}
+			},
+		},
+		{
+			name: "the agent on the pipe writes a note naming itself, and deletes it when it closes",
+			run: func(t *testing.T, ep Endpoint) {
+				srv, _ := serve(t, ep, Options{ForcePipe: true}, nil)
+				n, err := readPipeNote(ep)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if n.Pipe != ep.Pipe || n.PID != windows.GetCurrentProcessId() {
+					t.Errorf("the note is %+v, want pipe %s and pid %d", n, ep.Pipe, windows.GetCurrentProcessId())
+				}
+				if err := srv.Close(); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := os.Stat(ep.PipeNote); !os.IsNotExist(err) {
+					t.Errorf("the note outlived the server: %v", err)
+				}
+			},
+		},
+		{
+			name: "when accepting keeps failing, the agent on the pipe stops listening and deletes its note",
+			run: func(t *testing.T, ep Endpoint) {
+				srv, err := Listen(ep, Options{ForcePipe: true})
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer srv.Close()
+				giveUp(t, srv)
+				if via := srv.Via(); via != "" {
+					t.Errorf("Via() = %q after Serve gave up, want none", via)
+				}
+				if _, err := os.Stat(ep.PipeNote); !os.IsNotExist(err) {
+					t.Errorf("the note outlived the listener: %v", err)
+				}
+				if via, err := Send(ep, message(1), 10*time.Second); err != nil || via != inbox.ViaInbox {
+					t.Errorf("Send = %q, %v; want the message spooled", via, err)
+				}
+			},
+		},
+		{
+			name: "an agent on the socket deletes the note that an agent on the pipe left",
+			run: func(t *testing.T, ep Endpoint) {
+				if err := os.WriteFile(ep.PipeNote, []byte(`{"pipe":"x","pid":4,"started":1}`), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				srv, _ := serve(t, ep, Options{}, nil)
+				if srv.Via() != inbox.ViaSocket {
+					t.Fatalf("Via() = %q, want the socket", srv.Via())
+				}
+				if _, err := os.Stat(ep.PipeNote); !os.IsNotExist(err) {
+					t.Errorf("the old note is still there: %v", err)
 				}
 			},
 		},

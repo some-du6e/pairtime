@@ -59,9 +59,10 @@ type Conn struct {
 }
 
 // Dial connects to the agent at ep: to its socket, or on Windows to its
-// named pipe when the socket isn't there or doesn't answer. Before it
-// returns it checks that the agent runs as this user, and fails with
-// ErrNotAgent when it doesn't.
+// named pipe when the socket isn't there or doesn't answer and the agent's
+// note says it listens on the pipe (Endpoint.PipeNote). Before it returns
+// it checks that the agent runs as this user, and fails with ErrNotAgent
+// when it doesn't.
 func Dial(ctx context.Context, ep Endpoint) (*Conn, error) {
 	me, err := self()
 	if err != nil {
@@ -79,7 +80,7 @@ func dial(ctx context.Context, ep Endpoint, want identity) (*Conn, error) {
 	if ep.Pipe == "" {
 		return nil, err
 	}
-	pc, perr := dialPipe(ctx, ep.Pipe, want)
+	pc, perr := dialPipe(ctx, ep, want)
 	if perr != nil {
 		return nil, errors.Join(err, perr)
 	}
