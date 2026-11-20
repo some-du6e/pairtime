@@ -1,0 +1,135 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Writes the lockfiles nobody can write by hand: go.sum from `go mod tidy`,
+# and package-lock.json from `npm install --package-lock-only` wherever a
+# package.json exists. It commits them to the branch it was started on and
+# pushes (docs/PLAN.md, ground rule 3):
+#
+#   gh workflow run tidy.yml --ref <branch>
+#
+# Pushes made with GITHUB_TOKEN don't start other workflows, so afterwards
+# pull, then push again (an empty commit will do) to get a CI run.
+name: tidy
+
+on:
+  # Dispatch only. A pull_request trigger would run this job, which holds a
+  # contents: write token, on PRs nobody has reviewed yet, including
+  # Dependabot's action bumps, which edit this file. Try a changed tidy.yml
+  # by dispatching it on its own branch: gh workflow run tidy.yml --ref <branch>
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  tidy:
+    name: go mod tidy, npm lockfiles, push
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      # The one job besides releases that writes to the repo.
+      contents: write
+    defaults:
+      run:
+        shell: bash
+    env:
+      BRANCH: ${{ github.ref_name }}
+      DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+      REF_TYPE: ${{ github.ref_type }}
+    steps:
+      - name: Refuse the default branch and tags
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          if [ "$REF_TYPE" != branch ] || [ "$BRANCH" = "$DEFAULT_BRANCH" ]; then
+            echo "::error::run tidy.yml on a PR branch: gh workflow run tidy.yml --ref <branch>. $DEFAULT_BRANCH and tags change only through PRs."
+            exit 1
+          fi
+
+      # Actions are pinned to commit SHAs; tags can be moved. Dependabot bumps them.
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: go mod tidy
+        env:
+          # Never download a newer toolchain or raise a go line to fit a
+          # dependency: the go directive stays at 1.26 (AGENTS.md).
+          GOTOOLCHAIN: local
+        run: |
+          # Every module in the repo except test data, which keeps the
+          # go.mod it was written with.
+          mods=$(git ls-files -- 'go.mod' '*/go.mod' | { grep -v -e '^testdata/' -e '/testdata/' || true; } | xargs -r -n 1 dirname)
+          for dir in $mods; do
+            echo "::group::go mod tidy in $dir"
+            before=$(grep -E '^(go|toolchain) ' "$dir/go.mod" || true)
+            (cd "$dir" && go mod tidy)
+            after=$(grep -E '^(go|toolchain) ' "$dir/go.mod" || true)
+            if [ "$before" != "$after" ]; then
+              echo "::error file=$dir/go.mod::go mod tidy would change '$before' to '$after' because a dependency asks for a newer Go. The go directive stays at 1.26 (AGENTS.md): pick an older version of that dependency, or ask Karim."
+              exit 1
+            fi
+            echo "::endgroup::"
+          done
+
+      - name: Find npm projects
+        id: npm
+        run: |
+          dirs=$(git ls-files -- 'package.json' '*/package.json' | { grep -v -e '^testdata/' -e '/testdata/' || true; } | xargs -r -n 1 dirname | tr '\n' ' ')
+          echo "dirs=$dirs" >> "$GITHUB_OUTPUT"
+          echo "npm projects: ${dirs:-none}"
+
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        if: steps.npm.outputs.dirs != ''
+        with:
+          node-version: 24
+          # This run may be the one that creates the lockfile, so setup-node
+          # mustn't go looking for one to key a cache on.
+          package-manager-cache: false
+
+      - name: npm lockfiles
+        if: steps.npm.outputs.dirs != ''
+        env:
+          DIRS: ${{ steps.npm.outputs.dirs }}
+        run: |
+          for dir in $DIRS; do
+            echo "::group::npm install --package-lock-only in $dir"
+            # --ignore-scripts: resolving versions must not run package code.
+            (cd "$dir" && npm install --package-lock-only --ignore-scripts --no-audit --no-fund)
+            echo "::endgroup::"
+          done
+
+      - name: Commit and push
+        run: |
+          changed=$(git status --porcelain --untracked-files=all | cut -c4-)
+          if [ -z "$changed" ]; then
+            echo "::notice::lockfiles already up to date; nothing to push"
+            exit 0
+          fi
+          # Only lockfiles and go.mod may change here. Anything else means a
+          # tool did something unexpected, and a person should look.
+          bad=$(printf '%s\n' "$changed" | grep -v -E '(^|/)(go\.mod|go\.sum|package-lock\.json)$' || true)
+          if [ -n "$bad" ]; then
+            echo "::error::tidy changed files it shouldn't touch:"
+            printf '%s\n' "$bad"
+            exit 1
+          fi
+          printf '%s\n' "$changed"
+          if [ "$GITHUB_EVENT_NAME" != workflow_dispatch ]; then
+            echo "::notice::dry run on a PR: these files would be committed and pushed"
+            git diff
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -q -m "tidy: refresh go.sum and npm lockfiles" \
+            -m "Written by tidy.yml: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          git push origin "HEAD:refs/heads/$BRANCH"
+          echo "::notice::pushed $(git rev-parse --short HEAD) to $BRANCH. This push starts no CI run: pull, then push again (an empty commit will do)."

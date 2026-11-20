@@ -1,0 +1,126 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# OS-specific client tests. Windows and macOS runners are scarce and shared
+# with another busy project, so they run only here, only when platform code
+# changes, on release tags and by hand (DESIGN 3.13). Each job tests the
+# platform packages, not the whole module: ci.yml already does that on Linux.
+name: platform
+
+on:
+  pull_request:
+    # DESIGN 3.13's paths, plus the files this workflow runs. Keep the code
+    # paths in step with PLATFORM_DIRS below.
+    paths:
+      - internal/platform/**
+      - internal/install/**
+      - internal/agent/ipc/**
+      - cmd/pairtime/**
+      - .github/workflows/platform.yml
+      - tools/ci/test_existing.sh
+      - tools/ci/desktop_session.sh
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  # pairtime never uses cgo (AGENTS.md).
+  CGO_ENABLED: "0"
+  PLATFORM_DIRS: internal/platform internal/install internal/agent/ipc cmd/pairtime
+
+jobs:
+  windows:
+    name: windows
+    runs-on: windows-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+    steps:
+      # Actions are pinned to commit SHAs; tags can be moved. Dependabot bumps them.
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.mod
+
+      - name: go test (platform packages)
+        # Hosted runners get injected fakes, never real focus switching
+        # (JE must-fix 11).
+        run: bash tools/ci/test_existing.sh -- $PLATFORM_DIRS
+
+  macos:
+    name: macos
+    runs-on: macos-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.mod
+
+      - name: go test (platform packages)
+        run: bash tools/ci/test_existing.sh -- $PLATFORM_DIRS
+
+  linux-desktop:
+    # Only the Linux tests that need an X server or a session D-Bus: files
+    # named *_desktop_test.go, built with -tags desktop (AGENTS.md). Every
+    # other Linux test runs in ci.yml.
+    name: linux desktop (Xvfb, D-Bus)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+
+      - name: Find desktop tests
+        id: find
+        run: |
+          dirs=$(git ls-files -- '*_desktop_test.go' | xargs -r -n 1 dirname | sort -u | tr '\n' ' ')
+          echo "dirs=$dirs" >> "$GITHUB_OUTPUT"
+          # A run by hand sets up the desktop even with no tests, to prove
+          # the runner image still has what the tests need.
+          if [ -n "$dirs" ] || [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            echo "desktop test packages: ${dirs:-none yet}"
+          else
+            echo "::notice::no *_desktop_test.go files yet, so there is nothing to run"
+          fi
+
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        if: steps.find.outputs.run == 'true'
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.mod
+
+      - name: Install Xvfb, openbox, xterm, xdotool and D-Bus
+        if: steps.find.outputs.run == 'true'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends \
+            xvfb openbox xterm xdotool x11-utils dbus dbus-bin
+
+      - name: go test -tags desktop, under Xvfb and a private D-Bus
+        if: steps.find.outputs.run == 'true'
+        env:
+          DIRS: ${{ steps.find.outputs.dirs }}
+        run: |
+          if [ -z "$DIRS" ]; then
+            bash tools/ci/desktop_session.sh true
+          else
+            bash tools/ci/desktop_session.sh bash tools/ci/test_existing.sh -tags desktop -- $DIRS
+          fi

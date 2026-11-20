@@ -4,19 +4,43 @@ pairtime is an AGPL-3.0 tracker for the human time spent building with AI. READM
 
 ## Build and test in CI
 
-GitHub Actions is the only place pairtime gets built and tested. Locally, gofmt is the only Go tool to run. To check a change, push the branch, open or update its PR, and read the run:
+GitHub Actions is the only place pairtime gets built and tested. Locally, gofmt is the only Go tool to run. To check a change, push the branch, open or update its PR, and read the runs:
 
 ```sh
 gh run list --branch <branch>
 gh run view <run-id> --log-failed
 ```
 
-A change is done when CI is green. The one job in .github/workflows/ci.yml runs the license gate, gofmt, go vet, go test, and a cross-compile of both binaries for seven targets with a 15 MB budget on the client. A check CI lacks goes into ci.yml in the same PR, still as one job with no matrix, because the account's Actions capacity is shared with another busy project.
+A change is done when every workflow its PR started is green. A WP marked "Race: yes" also needs one green `gh workflow run nightly.yml --ref <branch>`. The account's Actions capacity is shared with another busy project, so Linux is the default and the rest is path-filtered or manual (DESIGN 3.13):
+
+| Workflow | What it runs | When |
+|---|---|---|
+| ci.yml | the one Linux job: lint, `go test ./...`, the seven-target cross-compile with the 15 MB client budget, and the license, oracle and provenance guards | every PR, pushes to main |
+| platform.yml | `go test` of the platform packages on Windows and macOS, and the desktop tests on Linux | PRs touching its paths, release tags |
+| nightly.yml | `go test -race` over internal/agent and internal/server | daily, 03:00 UTC |
+| web.yml | npm ci, vitest, the UI build, Playwright on Chromium | PRs touching web/ or extension/, release tags |
+| tidy.yml | `go mod tidy` and npm lockfiles, committed to the branch | by hand |
+| fixtures.yml | the fixture provenance check | by hand |
+
+Any workflow also runs by hand: `gh workflow run <file> --ref <branch>`.
+
+- A check CI lacks becomes a step of ci.yml's one job, with no matrix. A new workflow gets `workflow_dispatch`, a `concurrency` group that cancels stale runs, `timeout-minutes`, `permissions: contents: read` unless it pushes, and actions pinned to a full commit SHA with the version in a comment.
+- Windows and macOS runners are the scarce ones, so read every failure in a run before pushing again. Tests there use injected fakes. Code needing them outside platform.yml's paths adds its path to that filter in the same PR.
+- Tests that need an X server or a session D-Bus go in `*_desktop_test.go` files under `//go:build linux && desktop`. platform.yml's Linux job runs them with `-tags desktop` inside Xvfb, openbox and a private bus (tools/ci/desktop_session.sh); real focus switching with xdotool happens only there.
+- go.sum and package-lock.json come from CI: `gh workflow run tidy.yml --ref <branch>`. Its push starts no CI run, so pull, then push again (an empty commit will do).
+
+## Oracles and errata
+
+An oracle decides whether code is right, so the code it checks never changes it: docs/DESIGN.md, docs/BOUNTY.md, docs/design/** (SM included), docs/research/**, tools/ledger_ref.py, and testdata/ under timelines, ledger, fixtures, upstream, checks and redteam.
+
+- New oracle files may arrive beside new code. An existing oracle changes in a PR of its own. ci.yml's oracle guard fails a PR that modifies, deletes or renames an oracle and also touches cmd/, internal/, pkg/, web/ or extension/, unless Karim adds the `oracle-change` label. A scoring-rule change, SM and code together, is such a PR.
+- When an SM worked example, a design number or a captured fixture disagrees with what the spec says should happen, write docs/errata/<YYYY-MM-DD>-<topic>.md with the input, the expected value, the computed value and your reasoning, add the `erratum` label, and stop there. Karim decides what is wrong; until then the code, the spec and the fixture stay as they are (DESIGN 6.6).
+- Every testdata/fixtures/<harness>/<version>/<os>/ directory has a PROVENANCE.md, which ci.yml checks (tools/ci/provenance says what it holds).
 
 ## Go
 
-- Pure Go: every build and test runs with `CGO_ENABLED=0`, and the client cross-compiles from one Linux job to the targets in docs/research/client-platform.md section 7, `windows/386` included. For OS APIs, that research names the cgo-free route (`golang.org/x/sys`, purego, godbus).
-- Standard library first. A third-party module has to be cgo-free and permissively licensed, and its PR says why the standard library falls short. The first PR that adds one also adds a dependency license check to CI.
+- Pure Go: every build and test runs with `CGO_ENABLED=0`, and the client cross-compiles from one Linux job to the targets in docs/research/client-platform.md section 7, `windows/386` included. For OS APIs, that research names the cgo-free route (`golang.org/x/sys`, purego, godbus). The one exception is nightly.yml's `go test -race` on Linux, because the race detector needs cgo. Nothing that ships is built that way.
+- Standard library first. A third-party module has to be cgo-free and licensed MIT, BSD-2-Clause, BSD-3-Clause, Apache-2.0 or ISC, and so do the modules it pulls in; ci.yml's module license step checks all of them. Its PR says why the standard library falls short, and a module missing from DESIGN 3.12's list also needs a reason the list falls short.
 - The `go` directive stays at 1.26 until Go 1.26 leaves support in February 2027. Go 1.27 dropped macOS 12, where 2015-2016 Macs top out (client-platform.md 1.5), so write nothing that needs a newer Go.
 - gofmt every Go file.
 - The first line of every .go file is `// SPDX-License-Identifier: AGPL-3.0-or-later`.
@@ -24,7 +48,7 @@ A change is done when CI is green. The one job in .github/workflows/ci.yml runs 
 
 ## The struggle-metric spec decides scoring
 
-docs/design/struggle-metric.md (SM) is the source of truth for what pairtime credits and why. pkg/event follows SM sections 1 and 5 field for field, and the scorer will follow sections 2 to 5 and the parameter table in section 8. Change a scoring rule in SM and in code in the same PR. Where they disagree, fix whichever is wrong and say which in the PR.
+docs/design/struggle-metric.md (SM) is the source of truth for what pairtime credits and why. pkg/event follows SM sections 1 and 5 field for field, and the scorer will follow sections 2 to 5 and the parameter table in section 8. Change a scoring rule in SM and in code in the same PR, which needs the `oracle-change` label. Where code disagrees with SM, fix the code; where SM looks wrong, file an erratum (Oracles and errata).
 
 ## Content stays on the device
 
