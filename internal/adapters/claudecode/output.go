@@ -21,9 +21,10 @@ type output struct {
 //     pkg/redact's CodeBlocks finds and counts them (CommonMark fences);
 //   - words are the words of the prose outside them, by spec 10.2's
 //     whitespace (features.Words), so fenced code isn't counted twice;
-//   - asks_question is set when its last line of prose that isn't blank
-//     ends with a question mark, once closing quotes, brackets and
-//     Markdown emphasis are set aside;
+//   - asks_question is set when its last line of prose that is neither
+//     blank nor a list item ends with a question mark, once closing
+//     quotes, brackets and Markdown emphasis are set aside, so a question
+//     followed by the choices it offers still asks;
 //   - offers_options is set when it asks and its prose holds a numbered
 //     list with items 1 and 2, the options it asks the person to pick
 //     from.
@@ -43,7 +44,7 @@ func outputOf(msg string) output {
 	lines := strings.Split(text, "\n")
 	for i := len(lines) - 1; i >= 0; i-- {
 		l := strings.TrimRight(lines[i], " \t\r*_`\"')]}\u201d\u2019")
-		if strings.TrimSpace(l) == "" {
+		if strings.TrimSpace(l) == "" || listItem(lines[i]) {
 			continue
 		}
 		o.asks = strings.HasSuffix(l, "?") || strings.HasSuffix(l, "\uFF1F")
@@ -77,4 +78,14 @@ func listNumber(line string) int {
 		return 0
 	}
 	return n
+}
+
+// listItem reports whether a line is a list item: a bullet ("- ", "* ",
+// "+ ") or a number ("1. ", "1) ") after any indent.
+func listItem(line string) bool {
+	l := strings.TrimLeft(line, " \t")
+	if len(l) >= 2 && strings.IndexByte("-*+", l[0]) >= 0 && l[1] == ' ' {
+		return true
+	}
+	return listNumber(line) > 0
 }

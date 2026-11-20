@@ -336,6 +336,23 @@ func TestKeys() *Keys {
 	return NewKeys(s)
 }
 
+// TestOptions are Options under TestKeys and a fixed, public K_feat, with
+// every folder its own project, rooted there. The conformance runner's
+// replays and `pairtime adapters test` use them, and the agent never does.
+func TestOptions() Options {
+	var k [features.KeySize]byte
+	copy(k[:], "pairtime adapters test K_feat v1")
+	return Options{Keys: TestKeys(), Features: features.NewKey(k), Project: folderProject}
+}
+
+// folderProject makes dir a project of its own, keyed by its path under a
+// public key: for tests only, where every key becomes a symbol anyway.
+func folderProject(dir string) (Project, bool) {
+	m := hmac.New(sha256.New, []byte("pairtime adapters test projects"))
+	m.Write([]byte(dir))
+	return Project{Key: "p" + hex.EncodeToString(m.Sum(nil)[:8]), Root: dir}, true
+}
+
 // Format writes a placeholder whatever the verb, so a Keys never prints
 // its secret.
 func (Keys) Format(f fmt.State, _ rune) { fmt.Fprint(f, "adapters.Keys{redacted}") }

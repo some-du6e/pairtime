@@ -107,8 +107,9 @@ func verdict(source, decision string) (event.Decision, event.DecidedBy, bool) {
 //     user, and hook and config are decided_by hook and config, with the
 //     report's own decision. Any other source writes no record.
 //   - The request is the most recent one held of the same session,
-//     subagent and tool, and a report that matches none writes no record:
-//     a call Claude Code allowed on its own asked nobody.
+//     subagent and tool that came before the report's event.timestamp, and
+//     a report that matches none writes no record: a call Claude Code
+//     allowed on its own asked nobody.
 //   - requested_at is the request hook's arrival. answered_at is the
 //     earliest of the report's event.timestamp, its arrival and the
 //     arrival of the call's PostToolUse, by tool_use_id, and never before
@@ -136,7 +137,11 @@ func (a *Adapter) Decide(d ToolDecision) (adapters.Record, bool) {
 	at := -1
 	for i := len(s.requests) - 1; i >= 0; i-- {
 		r := s.requests[i]
-		if r.tool == d.ToolName && r.agent == d.AgentID {
+		// A decision Claude Code made before a request came can't answer
+		// it: OTLP exports come in batches, so a config rule's decision on
+		// an earlier call can arrive while a later request waits (WP-AD1's
+		// step 10, whose subagent asked 3 s after one).
+		if r.tool == d.ToolName && r.agent == d.AgentID && (d.Timestamp == 0 || r.env.T <= d.Timestamp) {
 			at = i
 			break
 		}
