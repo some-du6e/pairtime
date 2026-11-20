@@ -156,21 +156,21 @@ func TestCredit(t *testing.T) {
 				terminalSession(b)
 				b.mouse(every(at(1), at(296), 5000)...)
 				b.prompt(at(60), event.ViaHook, "s_1", "p_1", "t_1", 30)
-				b.agentSays(at(65), "s_1", "t_1", 60)
+				// 300 words are 100 s of reading, so with the base 60 s are
+				// still unread when the scheduled prompt comes at 120 s. A
+				// reset that cleared them would make [120, 135) X.automated.
+				b.agentSays(at(65), "s_1", "t_1", 300)
 				b.agentStops(at(65), "s_1", "t_1")
 				scheduled(b.prompt(at(120), event.ViaHook, "s_1", "p_1", "t_2", 30))
 				b.agentSays(at(135), "s_1", "t_2", 30)
-				b.agentStops(at(150), "s_1", "t_2")
+				b.agentStops(at(200), "s_1", "t_2")
 				b.samples(at(0), at(300))
 			},
 			want: []secondsWant{
 				{60, 75, map[event.Reason]int64{rSUP: 5, rREAD: 10}},
-				{75, 90, map[event.Reason]int64{rREAD: 15}},
-				{90, 105, map[event.Reason]int64{rREAD: 10, xNoAnch: 5}},
-				{105, 120, map[event.Reason]int64{xNoAnch: 15}},
-				{120, 135, map[event.Reason]int64{xAuto: 15}},
-				{135, 150, map[event.Reason]int64{rSUP: 10, xAuto: 5}},
-				{150, 165, map[event.Reason]int64{xNoAnch: 15}},
+				{75, 120, map[event.Reason]int64{rREAD: 45}},
+				{120, 195, map[event.Reason]int64{rSUP: 70, xAuto: 5}},
+				{195, 210, map[event.Reason]int64{xAuto: 5, xNoAnch: 10}},
 			},
 		},
 		{
