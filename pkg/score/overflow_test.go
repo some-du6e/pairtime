@@ -228,6 +228,40 @@ func TestHugeCounts(t *testing.T) {
 	}
 }
 
+// TestTurnFillAdd checks DESIGN 5.2's side-door cap against amounts no
+// clamped count produces: a negative or zero amount adds nothing, so it
+// can't make room under the cap for the output after it.
+func TestTurnFillAdd(t *testing.T) {
+	r := newRules(testTable(t))
+	base := r.units(r.turnBase)
+	cases := []struct {
+		name           string
+		side           bool
+		amounts        []int64
+		want           []int64 // what each call lets in
+		output, filled int64   // units
+	}{
+		{"a negative amount adds nothing, and the side-door output after it fills only what the base leaves", true,
+			[]int64{-1 << 60, r.lineUnits(2000)}, []int64{0, 0}, r.lineUnits(2000), 0},
+		{"a zero amount adds nothing", true, []int64{0}, []int64{0}, 0, 0},
+		{"a hooked turn's output goes in whole, and a negative amount takes none of it back", false,
+			[]int64{r.lineUnits(8), -1 << 60}, []int64{r.lineUnits(8), 0}, r.lineUnits(8), r.lineUnits(8)},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			f := &turnFill{base: base}
+			for i, u := range c.amounts {
+				if got := f.add(r, u, c.side); got != c.want[i] {
+					t.Errorf("add(%d) let in %d, want %d", u, got, c.want[i])
+				}
+			}
+			if f.output != c.output || f.filled != c.filled {
+				t.Errorf("output %d filled %d units, want %d and %d", f.output, f.filled, c.output, c.filled)
+			}
+		})
+	}
+}
+
 func TestRoundDiv(t *testing.T) {
 	cases := []struct {
 		name    string

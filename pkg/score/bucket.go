@@ -178,8 +178,13 @@ type turnFill struct {
 // goes in the bucket. Output a plugin or the bridge reports, sideDoor, goes
 // in only up to R_TURN_BASE_S for the turn, base included (DESIGN 5.2):
 // buildBuckets drops it wherever a hook or a transcript record covers the
-// session, so what reaches here has nothing behind it.
+// session, so what reaches here has nothing behind it. An amount that
+// isn't positive adds nothing, so it can't lower what the turn has filled
+// and with it the side-door cap.
 func (f *turnFill) add(r rules, u int64, sideDoor bool) int64 {
+	if u <= 0 {
+		return 0
+	}
 	f.output = addUnits(f.output, u)
 	if sideDoor {
 		u = min(u, max(0, r.units(r.turnBase)-f.base-f.filled))
