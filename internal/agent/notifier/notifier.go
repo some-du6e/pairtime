@@ -29,10 +29,21 @@
 //     lock screen, where anyone near the computer could read it. It goes out
 //     on UserPresent, which the coach calls on unlock and resume, if it is
 //     still fresh then. A newer note takes its place and asks the OS
-//     afresh, so one missed unlock can't hold back more than one note. Only
-//     the Windows backend can tell a locked screen so far; on macOS and
+//     afresh, even one that came while the OS was being asked about the
+//     older one, so one missed unlock can't hold back more than one note.
+//     Only the Windows backend can tell a locked screen so far; on macOS and
 //     Linux the desktop's own lock-screen settings decide what a locked
 //     screen shows.
+//
+// The rules that can change while a note waits its turn (the settings, the
+// clock and the gap since the last notification) are checked again right
+// before the note goes to the OS.
+//
+// A note is shown at most once, across restarts too. With Options.Memory
+// set, a note's decision is saved before the OS gets the note, and a note
+// whose decision can't be saved isn't shown. A crash between that save and
+// the OS taking the note loses the note, which waits in the dashboard like
+// any note that wasn't shown.
 //
 // Notify never blocks. Show runs on a goroutine that exists only while a
 // note is on its way to the screen, under a deadline, and an idle notifier
@@ -87,19 +98,27 @@ const Title = "Your session recap is ready"
 // fallbackText is the body when the coach gives no text.
 const fallbackText = "Open the pairtime dashboard to see it."
 
-// showTimeout bounds one Show call. The Windows balloon keeps its icon up
-// while the balloon is on screen, which it ends sooner on its own.
+// showTimeout bounds one attempt at showing a note: saving its decision,
+// then the Show call. The Windows balloon keeps its icon up while the
+// balloon is on screen, which it ends sooner on its own.
 const showTimeout = 45 * time.Second
 
-// closeWait is how long Close waits for a Show to end.
+// closeWait is how long Close waits, for a Show to end and for Memory to
+// take what the notifier remembers.
 const closeWait = 3 * time.Second
 
 // memoryKey is the notifier's key in Memory.
 const memoryKey = "notifier"
 
-// sessionsKept is how many recent session keys the notifier remembers.
-// Sessions end one after another, so a few cover any repeat.
+// sessionsKept is how many of the newest sessions the notifier remembers
+// whatever their age. Older ones are remembered for as long as a note about
+// them could still pass the freshness rule (prune).
 const sessionsKept = 16
+
+// sessionsMax is the most sessions the notifier remembers. Sessions end
+// one after another, so far fewer than this can end within Fresh; the bound
+// keeps a coach gone wrong from growing state.json without end.
+const sessionsMax = 256
 
 // Note asks for the notification about one work session.
 type Note struct {
@@ -141,8 +160,15 @@ type Message struct {
 // ErrBusy or ErrUnavailable when it didn't take it, and gives up when ctx is
 // done. Whatever Show puts on screen of its own, such as the Windows tray
 // icon, is gone when it returns.
+//
+// A Show that goes on after the OS took the message, as the Windows
+// balloon's does while the balloon stays up, calls shown at that moment,
+// once. The gap to the next notification counts from there, and an error
+// Show returns after calling shown is about its own cleanup: the message
+// still counts as shown. A Show that returns as soon as the OS has the
+// message needn't call it.
 type Backend interface {
-	Show(ctx context.Context, m Message) error
+	Show(ctx context.Context, m Message, shown func()) error
 }
 
 var (
@@ -189,7 +215,8 @@ const (
 	Busy
 	// Unavailable: this desktop can't show notifications (ErrUnavailable).
 	Unavailable
-	// Failed: Show failed for another reason, or timed out.
+	// Failed: Show failed for another reason or timed out, or the note's
+	// decision couldn't be saved before it went to the OS.
 	Failed
 	// Stopped: the notifier was closed first.
 	Stopped
@@ -229,8 +256,17 @@ type Memory interface {
 // remembered is what the notifier keeps in Memory.
 type remembered struct {
 	LastShown time.Time `json:"last_shown,omitzero"`
-	// Sessions are the last sessions a note came for, oldest first.
-	Sessions []string `json:"sessions,omitempty"`
+	// Sessions are the sessions a note came for, oldest first.
+	Sessions []decided `json:"sessions,omitempty"`
+}
+
+// decided is a session that had its decision.
+type decided struct {
+	Session string `json:"session"`
+	// At is the later of the note's Ended and the moment it was decided. A
+	// note about the session with an Ended no later than At is Stale once
+	// Fresh has passed since At, so the session is kept until then.
+	At time.Time `json:"at"`
 }
 
 // Options configure New.
@@ -238,13 +274,15 @@ type Options struct {
 	// Backend shows messages. Nil means Platform().
 	Backend Backend
 	// Settings returns the teen's settings in force. It is read for every
-	// note, so an edit to config.toml applies to the next one. Nil means
-	// the defaults: on, with no quiet hours.
+	// note, and again right before the note goes to the OS, so an edit to
+	// config.toml applies to the next one, and to a note already on its
+	// way. Nil means the defaults: on, with no quiet hours.
 	Settings func() config.Notifications
 	// Memory keeps the last notification time and recent sessions across
-	// restarts. Each decision and each notification shown is put and saved
-	// there as it happens, off the caller's path. Nil keeps them for this
-	// process only.
+	// restarts. A note's decision is saved there before the OS gets the
+	// note, on the notifier's own goroutine, and every other decision and
+	// each notification shown a moment after it happens, also off the
+	// caller's path. Nil keeps them for this process only.
 	Memory Memory
 	// Now is the clock. Quiet hours read the clock time in the location of
 	// the times it returns. Nil means localtime.Now, which reads the
@@ -258,8 +296,10 @@ type Options struct {
 	// or "" once one was. The agent passes it on to doctor.
 	Problem func(msg string)
 	// Result, when set, is called once for every note with its final
-	// outcome, from Notify itself or from the notifier's own goroutine. It
-	// must return quickly.
+	// outcome, in the order the outcomes came about. The call comes from
+	// Notify or Close, or from the notifier's own goroutine, and Notify may
+	// pass on another note's outcome that came about meanwhile. It must
+	// return quickly. It may call Notify or UserPresent.
 	Result func(Note, Outcome)
 }
 
@@ -274,8 +314,9 @@ type Notifier struct {
 	problem  func(string)
 	result   func(Note, Outcome)
 
-	// wg counts the goroutines that run Show and save Memory, while there
-	// are any.
+	// wg counts the goroutines that show notes and save Memory, and the
+	// one that hands Memory the last snapshot after Close, while there are
+	// any.
 	wg sync.WaitGroup
 	// putMu is held from each snapshot of what Memory keeps to its Put, so
 	// the Puts land in the order of their snapshots and Memory never goes
@@ -285,19 +326,23 @@ type Notifier struct {
 	mu        sync.Mutex
 	closed    bool
 	lastShown time.Time
-	sessions  []string
-	showing   bool               // a goroutine is running Show
-	cancel    context.CancelFunc // ends that Show early
-	away      bool               // the last Show found the screen locked
-	waiting   *Note              // the newest note not yet shown
-	saving    bool               // a goroutine is saving Memory
-	dirty     bool               // what Memory keeps changed since that goroutine last looked
-}
-
-// report is a final outcome to hand to Options.Result outside the lock.
-type report struct {
-	note Note
-	o    Outcome
+	sessions  []decided
+	showing   bool               // the worker is taking notes to the OS
+	cancel    context.CancelFunc // ends the worker's attempt early
+	// waiting is the newest note not yet shown. While showing, it came
+	// during the worker's current attempt and hasn't been to the OS yet;
+	// otherwise the OS found the screen locked for it.
+	waiting *Note
+	// present counts the UserPresent calls, so that an attempt can tell the
+	// user came back while it was out.
+	present uint64
+	saving  bool // a goroutine is saving Memory
+	dirty   bool // what Memory keeps changed since that goroutine last looked
+	// outbox is what Log, Problem and Result have still to hear, in the
+	// order it happened. One goroutine at a time hands it over, outside
+	// mu (flush).
+	outbox   []func()
+	flushing bool
 }
 
 // New returns a notifier. It reads Memory once, here.
@@ -327,10 +372,10 @@ func New(opts Options) *Notifier {
 		var r remembered
 		if ok, err := n.memory.Get(memoryKey, &r); ok && err == nil {
 			n.lastShown = r.LastShown.Round(0)
-			n.sessions = r.Sessions
-			if len(n.sessions) > sessionsKept {
-				n.sessions = n.sessions[len(n.sessions)-sessionsKept:]
+			for _, s := range r.Sessions {
+				n.sessions = append(n.sessions, decided{Session: s.Session, At: s.At.Round(0)})
 			}
+			n.prune(n.clock())
 		}
 	}
 	return n
@@ -351,23 +396,22 @@ func (n *Notifier) Notify(note Note) Outcome {
 	set := n.settings()
 	now := n.clock()
 	note.Ended = note.Ended.Round(0)
-	var reports []report
 	n.mu.Lock()
-	o, launch := n.decide(note, set, now, &reports)
-	n.mu.Unlock()
+	o, launch := n.decide(note, set, now)
 	if o != Queued && o != Waiting {
-		reports = append(reports, report{note, o})
+		n.tell(note, o)
 	}
-	n.finish(reports)
+	n.mu.Unlock()
+	n.flush()
 	if launch != nil {
 		launch()
 	}
 	return o
 }
 
-// decide applies the rules to a new note, and parks it or reserves a Show
-// for it, which launch starts. n.mu is held.
-func (n *Notifier) decide(note Note, set config.Notifications, now time.Time, reports *[]report) (o Outcome, launch func()) {
+// decide applies the rules to a new note, and parks it or reserves the
+// worker for it, which launch starts. n.mu is held.
+func (n *Notifier) decide(note Note, set config.Notifications, now time.Time) (o Outcome, launch func()) {
 	if n.closed {
 		return Stopped, nil
 	}
@@ -375,32 +419,55 @@ func (n *Notifier) decide(note Note, set config.Notifications, now time.Time, re
 		return Repeated, nil
 	}
 	for _, s := range n.sessions {
-		if s == note.Session {
+		if s.Session == note.Session {
 			return Repeated, nil
 		}
 	}
-	n.sessions = append(n.sessions, note.Session)
-	if len(n.sessions) > sessionsKept {
-		n.sessions = n.sessions[len(n.sessions)-sessionsKept:]
+	at := now
+	if note.Ended.After(at) {
+		at = note.Ended
 	}
-	// The decision is made, whatever it is, so a crash before the next
-	// clean stop mustn't forget it.
-	n.persist()
+	n.sessions = append(n.sessions, decided{Session: note.Session, At: at})
+	n.prune(now)
 	if g := n.gate(note, set, now); g != Queued {
+		// The decision is made, so a crash before the next clean stop
+		// mustn't forget it.
+		n.persist()
 		return g, nil
 	}
 	if n.showing {
-		n.park(note, reports)
+		n.park(note)
+		n.persist()
 		return Waiting, nil
 	}
 	// A note waiting for the screen gives way to this newer one, which
 	// asks the OS afresh. So a lock that nobody reported the end of holds
 	// back no more than one note.
 	if n.waiting != nil {
-		*reports = append(*reports, report{*n.waiting, Replaced})
+		n.tell(*n.waiting, Replaced)
 		n.waiting = nil
 	}
+	// The worker saves the decision before the OS gets the note.
 	return Queued, n.start(note)
+}
+
+// prune forgets the sessions that no note can be shown about now: those
+// whose At is more than Fresh ago, since a note about one of them would be
+// Stale. The newest sessionsKept stay whatever their age, which covers a
+// note with no Ended, as it never goes stale, and at most sessionsMax stay.
+// n.mu is held.
+func (n *Notifier) prune(now time.Time) {
+	old := len(n.sessions) - sessionsKept
+	kept := n.sessions[:0]
+	for i, s := range n.sessions {
+		if i >= old || now.Sub(s.At) <= Fresh() {
+			kept = append(kept, s)
+		}
+	}
+	if len(kept) > sessionsMax {
+		kept = kept[len(kept)-sessionsMax:]
+	}
+	n.sessions = kept
 }
 
 // gate applies the rules that don't depend on the OS, and returns Queued
@@ -423,83 +490,82 @@ func (n *Notifier) gate(note Note, set config.Notifications, now time.Time) Outc
 }
 
 // park makes note the waiting note, replacing an older one. n.mu is held.
-func (n *Notifier) park(note Note, reports *[]report) {
+func (n *Notifier) park(note Note) {
 	if n.waiting != nil {
-		*reports = append(*reports, report{*n.waiting, Replaced})
+		n.tell(*n.waiting, Replaced)
 	}
 	n.waiting = &note
 }
 
-// start reserves the notifier for note's Show and returns the step that
-// starts it on a new goroutine. The caller runs that step after it has let
-// go of n.mu and reported the outcomes it collected, so Options.Result
-// hears outcomes in the order they happened. n.mu is held.
+// start reserves the worker for note and returns the step that starts it.
+// The caller runs that step after it has let go of n.mu and flushed what
+// it told, so the attempt applies the rules after the callbacks that ran
+// first, which may have changed the settings. n.mu is held.
 func (n *Notifier) start(note Note) (launch func()) {
 	ctx, cancel := context.WithTimeout(context.Background(), showTimeout)
 	n.showing = true
 	n.cancel = cancel
+	seen := n.present
 	n.wg.Add(1)
-	return func() { go n.run(ctx, cancel, note) }
+	return func() { go n.run(ctx, cancel, note, seen) }
 }
 
-// run shows note, then any note that came while it did, one at a time.
-func (n *Notifier) run(ctx context.Context, cancel context.CancelFunc, note Note) {
+// run is the worker. It takes note to the OS, then each note that came
+// while it did, one at a time, and returns when none is left. seen is
+// n.present as note's attempt began.
+func (n *Notifier) run(ctx context.Context, cancel context.CancelFunc, note Note, seen uint64) {
 	defer n.wg.Done()
 	for {
-		err := n.backend.Show(ctx, Compose(note))
+		t := n.attempt(ctx, note)
 		cancel()
-		set := n.settings()
-		now := n.clock()
 
-		var reports []report
 		n.mu.Lock()
-		o := classify(err)
+		o := t.o
+		if o == Shown {
+			n.lastShown = t.at
+			n.persist()
+		}
 		// After Close, a note that didn't reach the screen is Stopped.
 		// Parking it would lose it: Close has already let go of the
 		// waiting note, and nothing will look again.
 		if n.closed && (o == Failed || o == Waiting) {
 			o = Stopped
 		}
-		// What this Show found out about the screen is the latest news.
-		n.away = o == Waiting
-		switch o {
-		case Shown:
-			n.lastShown = now
-			n.persist()
-		case Waiting:
-			if n.waiting == nil {
-				n.waiting = &note
-			} else {
-				// A newer note came while this one was out, and it waits
-				// in this one's place.
-				reports = append(reports, report{note, Replaced})
-			}
+		if t.asked {
+			n.diagnose(o, t.err)
 		}
-		if o != Waiting {
-			reports = append(reports, report{note, o})
-		}
-		// The next note, if one waits and nothing holds it back.
 		next, more := Note{}, false
-		if n.waiting != nil && !n.away && !n.closed {
+		switch {
+		case o == Waiting && n.waiting != nil:
+			// A newer note came while this one was out. It takes this
+			// one's place and asks the OS for itself: the screen may
+			// have been unlocked meanwhile, and the unlock missed.
+			n.tell(note, Replaced)
 			next, more = *n.waiting, true
 			n.waiting = nil
-			if g := n.gate(next, set, now); g != Queued {
-				reports = append(reports, report{next, g})
-				more = false
+		case o == Waiting && n.present != seen:
+			// The user came back while this note was out, so the OS's
+			// answer may be older than the unlock: ask once more.
+			next, more = note, true
+		case o == Waiting:
+			n.waiting = &note
+		default:
+			n.tell(note, o)
+			if n.waiting != nil && !n.closed {
+				next, more = *n.waiting, true
+				n.waiting = nil
 			}
 		}
 		if more {
 			ctx, cancel = context.WithTimeout(context.Background(), showTimeout)
 			n.cancel = cancel
+			seen = n.present
 		} else {
 			n.showing = false
 			n.cancel = nil
 		}
 		n.mu.Unlock()
-
-		n.logOutcome(o, err)
-		n.tellProblem(o, err)
-		n.finish(reports)
+		n.flush()
 		if !more {
 			return
 		}
@@ -507,9 +573,86 @@ func (n *Notifier) run(ctx context.Context, cancel context.CancelFunc, note Note
 	}
 }
 
+// tried is what one attempt came to.
+type tried struct {
+	o     Outcome
+	at    time.Time // for Shown, when the OS took the note
+	err   error     // for the log and doctor
+	asked bool      // the OS was asked, or the save before it failed
+}
+
+// attempt takes note to the OS: it applies the rules with the settings
+// and the time now, saves the note's decision, applies the rules once
+// more, since the save takes a moment, and calls Show.
+func (n *Notifier) attempt(ctx context.Context, note Note) tried {
+	if o := n.recheck(note); o != Queued {
+		return tried{o: o}
+	}
+	if n.memory != nil {
+		if err := n.saveNow(); err != nil {
+			return tried{o: Failed, err: fmt.Errorf("couldn't save the note's decision before showing it: %w", err), asked: true}
+		}
+		if o := n.recheck(note); o != Queued {
+			return tried{o: o}
+		}
+	}
+	acc := acceptance{clock: n.clock}
+	err := n.backend.Show(ctx, Compose(note), acc.shown)
+	switch at, ok := acc.end(); {
+	case ok:
+		return tried{o: Shown, at: at, err: err, asked: true}
+	case err == nil:
+		return tried{o: Shown, at: n.clock(), asked: true}
+	}
+	return tried{o: classify(err), err: err, asked: true}
+}
+
+// recheck applies the rules to note again, with the settings in force and
+// the time now. n.mu isn't held.
+func (n *Notifier) recheck(note Note) Outcome {
+	set := n.settings()
+	now := n.clock()
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if n.closed {
+		return Stopped
+	}
+	return n.gate(note, set, now)
+}
+
+// acceptance is when the OS took a message, as Backend.Show's shown says.
+// A call after Show has returned, from a balloon thread that gave up late,
+// changes nothing.
+type acceptance struct {
+	clock func() time.Time
+
+	mu     sync.Mutex
+	at     time.Time
+	marked bool
+	over   bool
+}
+
+func (a *acceptance) shown() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if !a.over && !a.marked {
+		a.at, a.marked = a.clock(), true
+	}
+}
+
+// end reports when shown was called, if it was, and stops later calls.
+func (a *acceptance) end() (time.Time, bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.over = true
+	return a.at, a.marked
+}
+
 // UserPresent tells the notifier that someone is at the screen again: the
 // screen was unlocked, or the computer woke. A note that waited for the
 // screen goes out now, unless it went stale or quiet hours began meanwhile.
+// One that is with the OS as the user comes back asks the OS once more if
+// the OS found the screen locked.
 //
 // The coach calls it, on every unlock and resume (WP-CO1 in docs/PLAN.md).
 // It hears them from internal/agent/presence, whose Sampler.Power gets
@@ -521,23 +664,16 @@ func (n *Notifier) run(ctx context.Context, cancel context.CancelFunc, note Note
 // screen saver that doesn't lock the session sends no unlock, so a note
 // that met one waits for the next unlock or resume, or for a newer note.
 func (n *Notifier) UserPresent() {
-	set := n.settings()
-	now := n.clock()
-	var reports []report
 	var launch func()
 	n.mu.Lock()
-	n.away = false
+	n.present++
 	if !n.closed && !n.showing && n.waiting != nil {
 		note := *n.waiting
 		n.waiting = nil
-		if o := n.gate(note, set, now); o != Queued {
-			reports = append(reports, report{note, o})
-		} else {
-			launch = n.start(note)
-		}
+		// The worker applies the rules before the note goes out.
+		launch = n.start(note)
 	}
 	n.mu.Unlock()
-	n.finish(reports)
 	if launch != nil {
 		launch()
 	}
@@ -545,11 +681,12 @@ func (n *Notifier) UserPresent() {
 
 // Close stops a Show in progress, which takes down whatever it put on
 // screen, such as the Windows tray icon, and waits a moment for it and for
-// a save of Memory to end. Notes after Close are Stopped. Close puts what
-// the notifier remembers in Memory without saving it; the agent saves
-// state.json as it stops.
+// a save of Memory to end. Notes after Close are Stopped. Close then puts
+// what the notifier remembers in Memory without saving it; the agent saves
+// state.json as it stops. Close returns within closeWait even when a Save
+// is stuck on a slow disk and holds Memory's lock: the last Put then lands
+// once that Save ends, still after every older Put.
 func (n *Notifier) Close() {
-	var reports []report
 	n.mu.Lock()
 	if n.closed {
 		n.mu.Unlock()
@@ -560,41 +697,64 @@ func (n *Notifier) Close() {
 		n.cancel()
 	}
 	if n.waiting != nil {
-		reports = append(reports, report{*n.waiting, Stopped})
+		n.tell(*n.waiting, Stopped)
 		n.waiting = nil
 	}
 	n.mu.Unlock()
-	n.finish(reports)
+	n.flush()
 
+	ctx, cancel := context.WithTimeout(context.Background(), closeWait)
+	defer cancel()
+	if !within(ctx, n.wg.Wait) {
+		n.log.Warn("a notification, or a save of what the notifier remembers, was still running when the agent stopped")
+	}
+	if n.memory == nil {
+		return
+	}
+	// After the wait, so a Show that ended meanwhile is counted.
+	n.wg.Add(1)
+	put := func() {
+		defer n.wg.Done()
+		if err := n.putMemory(); err != nil {
+			n.log.Warn("couldn't keep the notifier's state", "err", err)
+		}
+	}
+	if !within(ctx, put) {
+		n.log.Warn("state.json was still busy when the agent stopped, so the notifier's state goes in once it's free")
+	}
+}
+
+// within runs f on a goroutine of its own and reports whether it returned
+// before ctx was done.
+func within(ctx context.Context, f func()) bool {
 	done := make(chan struct{})
 	go func() {
-		n.wg.Wait()
+		f()
 		close(done)
 	}()
 	select {
 	case <-done:
-	case <-time.After(closeWait):
-		n.log.Warn("a notification, or a save of what the notifier remembers, was still running when the agent stopped")
-	}
-	if n.memory != nil {
-		// After the wait, so a Show that ended meanwhile is counted.
-		n.putMemory()
+		return true
+	case <-ctx.Done():
+		return false
 	}
 }
 
 // snapshot copies what Memory keeps. n.mu is held.
 func (n *Notifier) snapshot() remembered {
-	return remembered{LastShown: n.lastShown, Sessions: append([]string(nil), n.sessions...)}
+	return remembered{LastShown: n.lastShown, Sessions: append([]decided(nil), n.sessions...)}
 }
 
-// persist has what the notifier remembers saved to Memory as soon as it
+// persist has what the notifier remembers saved to Memory soon after it
 // changes, a decision or a notification shown, so a crash, a kill or a
 // power cut after the save forgets none of it. The save runs a moment
 // later on a goroutine, off the caller's path, since Memory's Save writes a
 // file and Put may wait for another component's Save; a crash inside that
-// moment can still forget the change. Changes that come while it works go
-// in its next round, so there is one such goroutine at most, and none once
-// Memory has the latest. n.mu is held.
+// moment can still forget the change. A note on its way to the OS doesn't
+// rely on this: its attempt saves first (saveNow). Changes that come while
+// the goroutine works go in its next round, so there is one such goroutine
+// at most, and none once Memory has the latest. A failed Save is logged,
+// and the next one, whoever makes it, writes every key. n.mu is held.
 func (n *Notifier) persist() {
 	if n.memory == nil {
 		return
@@ -621,38 +781,78 @@ func (n *Notifier) saveLoop() {
 		}
 		n.dirty = false
 		n.mu.Unlock()
-		n.putMemory()
-		if err := n.memory.Save(); err != nil {
+		if err := n.saveNow(); err != nil {
 			n.log.Warn("couldn't save the notifier's state", "err", err)
 		}
 	}
+}
+
+// saveNow puts what the notifier remembers now in Memory and saves it.
+func (n *Notifier) saveNow() error {
+	if err := n.putMemory(); err != nil {
+		return err
+	}
+	return n.memory.Save()
 }
 
 // putMemory puts what the notifier remembers now into Memory. The snapshot
 // and the Put happen under putMu, so a Put never lands after a newer one.
 // n.mu isn't held: Put may wait for a Save that holds Memory's lock, and
 // Notify must not wait with it.
-func (n *Notifier) putMemory() {
+func (n *Notifier) putMemory() error {
 	n.putMu.Lock()
 	defer n.putMu.Unlock()
 	n.mu.Lock()
 	mem := n.snapshot()
 	n.mu.Unlock()
-	if err := n.memory.Put(memoryKey, mem); err != nil {
-		n.log.Warn("couldn't keep the notifier's state", "err", err)
-	}
+	return n.memory.Put(memoryKey, mem)
 }
 
-// finish hands final outcomes to Options.Result.
-func (n *Notifier) finish(reports []report) {
-	for _, r := range reports {
-		if r.o != Shown && r.o != Waiting && r.o != Queued {
-			n.log.Info("no notification for a work session", "why", r.o.String())
+// tell has Options.Result hear note's final outcome, after everything
+// told before it. n.mu is held.
+func (n *Notifier) tell(note Note, o Outcome) {
+	n.outbox = append(n.outbox, func() {
+		if o != Shown {
+			n.log.Info("no notification for a work session", "why", o.String())
 		}
 		if n.result != nil {
-			n.result(r.note, r.o)
+			n.result(note, o)
 		}
+	})
+}
+
+// diagnose has the log and doctor hear what an attempt came to, after
+// everything told before it. n.mu is held.
+func (n *Notifier) diagnose(o Outcome, err error) {
+	n.outbox = append(n.outbox, func() {
+		n.logOutcome(o, err)
+		n.tellProblem(o, err)
+	})
+}
+
+// flush hands what the outbox holds to the callbacks, in order, outside
+// n.mu. When another goroutine is already at it, that one hands this
+// goroutine's part over too, so two goroutines finishing at once can't
+// swap what doctor or Options.Result hear, and nobody waits for anybody's
+// callbacks. n.mu isn't held.
+func (n *Notifier) flush() {
+	n.mu.Lock()
+	if n.flushing {
+		n.mu.Unlock()
+		return
 	}
+	n.flushing = true
+	for len(n.outbox) > 0 {
+		batch := n.outbox
+		n.outbox = nil
+		n.mu.Unlock()
+		for _, f := range batch {
+			f()
+		}
+		n.mu.Lock()
+	}
+	n.flushing = false
+	n.mu.Unlock()
 }
 
 // classify turns Show's error into an outcome.
@@ -671,12 +871,14 @@ func classify(err error) Outcome {
 }
 
 func (n *Notifier) logOutcome(o Outcome, err error) {
-	switch o {
-	case Shown:
+	switch {
+	case o == Shown && err != nil:
+		n.log.Warn("notification shown, but taking down what showed it failed", "err", err)
+	case o == Shown:
 		n.log.Info("notification shown")
-	case Waiting:
+	case o == Waiting:
 		n.log.Info("the screen is locked, so the notification waits for the user")
-	case Failed:
+	case o == Failed:
 		n.log.Warn("notification failed", "err", err)
 	}
 }

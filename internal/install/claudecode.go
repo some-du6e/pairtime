@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"path/filepath"
 	"slices"
-	"strings"
 
 	"github.com/some-du6e/pairtime/internal/install/jsonc"
 )
@@ -22,10 +21,14 @@ const ItemClaudeCode = "hooks/claude_code"
 // (DESIGN 3.4).
 const claudeHarness = "claude_code"
 
-// claudeHooks are DESIGN 5.1's Claude Code hook events, each with the
-// matcher pairtime installs it under. "" is no matcher, which matches
+// claudeHook is one of the hooks pairtime installs in Claude Code: the
+// event, and the matcher it goes under. "" is no matcher, which matches
 // everything.
-var claudeHooks = []struct{ event, matcher string }{
+type claudeHook struct{ event, matcher string }
+
+// claudeHooks are DESIGN 5.1's Claude Code hook events, each with the
+// matcher pairtime installs it under.
+var claudeHooks = []claudeHook{
 	{"SessionStart", ""},
 	{"UserPromptSubmit", ""},
 	{"Stop", ""},
@@ -52,8 +55,8 @@ func ClaudeSettings(env Env) string {
 
 // ClaudeCode returns the item that adds pairtime's hooks to Claude Code's
 // user settings (DESIGN 5.1). Each hook is a group of its own in exec form,
-// the binary's absolute path as "command" and the rest as "args", which
-// every program that reads the file runs (HS 16):
+// the binary's absolute path as "command" and the rest as "args", the one
+// hook type every program that reads the file runs (HS 16):
 //
 //	{"hooks": [{"type": "command", "command": "<exe>",
 //	  "args": ["hook", "--harness", "claude_code", "--event", "<event>"]}]}
@@ -62,6 +65,16 @@ func ClaudeSettings(env Env) string {
 // the ones already there, which stay as they are: git-ai rewrites its own
 // entries in the same file every day (HS 13.3). A pairtime hook from an
 // older install, such as one with another binary path, is replaced.
+//
+// cursor-agent loads these hooks too, and runs "command" without "args"
+// (Cursor forum, "imported Claude Code plugin hooks get a Cursor-shaped
+// payload", against cursor-agent 2026.09.26). The binary started with no
+// arguments and its stdin from a program exits 0 and prints nothing
+// (cmd/pairtime, start), so the hook does no harm there and records
+// nothing. Cursor's events come from the hooks in ~/.cursor/hooks.json
+// (DESIGN 5.1), which these would duplicate anyway. The arguments can't go
+// in "command" instead: without "args", Claude Code runs "command" through
+// a shell, which CP 8 rules out.
 func ClaudeCode(env Env) (Item, error) {
 	if err := env.check(); err != nil {
 		return Item{}, err
@@ -117,12 +130,9 @@ func (e *claudeEdit) ensure(src []byte, event, matcher string) ([]byte, error) {
 	}
 	group := e.group(event, matcher)
 	if root == nil {
-		st := jsonc.StyleOf(src, nil)
-		text := jsonc.Render(jsonc.Obj{{Key: "hooks", Val: jsonc.Obj{{Key: event, Val: []any{group}}}}}, st, "") + st.Newline
-		if len(src) > jsonc.BOMLen(src) && !bytes.HasSuffix(src, []byte("\n")) {
-			text = st.Newline + text // after a last line, which may be a // comment
-		}
-		return append(append([]byte(nil), src...), text...), nil
+		before, after := rootFrame(src)
+		obj := jsonc.Render(jsonc.Obj{{Key: "hooks", Val: jsonc.Obj{{Key: event, Val: []any{group}}}}}, jsonc.StyleOf(src, nil), "")
+		return []byte(before + obj + after), nil
 	}
 	st := jsonc.StyleOf(src, root)
 	hooks := root.Get("hooks")
@@ -175,7 +185,7 @@ func hookArgs(event string) []string {
 // one of the hooks this edit installs. Fields pairtime doesn't write, such
 // as a timeout the teen added, don't matter.
 func (e *claudeEdit) isWanted(event string, group, h *jsonc.Value) bool {
-	i := slices.IndexFunc(claudeHooks, func(hk struct{ event, matcher string }) bool { return hk.event == event })
+	i := slices.IndexFunc(claudeHooks, func(hk claudeHook) bool { return hk.event == event })
 	if i < 0 || !sameMatcher(group, claudeHooks[i].matcher) {
 		return false
 	}
@@ -183,6 +193,15 @@ func (e *claudeEdit) isWanted(event string, group, h *jsonc.Value) bool {
 	return typ != nil && typ.Kind == jsonc.String && typ.Text == "command" &&
 		cmd != nil && cmd.Kind == jsonc.String && cmd.Text == e.exe &&
 		slices.Equal(strs(h.Get("args")), hookArgs(event))
+}
+
+// claudeMatcher returns the matcher pairtime installs event's hook under,
+// "" for none or for an event it doesn't install.
+func claudeMatcher(event string) string {
+	if i := slices.IndexFunc(claudeHooks, func(hk claudeHook) bool { return hk.event == event }); i >= 0 {
+		return claudeHooks[i].matcher
+	}
+	return ""
 }
 
 // sameMatcher reports whether group's matcher is want. No matcher, "" and
@@ -206,11 +225,7 @@ func sameMatcher(group *jsonc.Value, want string) bool {
 // with arguments starting "hook" and naming --harness claude_code.
 func isPairtimeHook(h *jsonc.Value) bool {
 	cmd := h.Get("command")
-	if cmd == nil || cmd.Kind != jsonc.String {
-		return false
-	}
-	name := cmd.Text[strings.LastIndexAny(cmd.Text, `/\`)+1:]
-	if !strings.EqualFold(name, "pairtime") && !strings.EqualFold(name, "pairtime.exe") {
+	if cmd == nil || cmd.Kind != jsonc.String || !isPairtimeBinary(cmd.Text) {
 		return false
 	}
 	args := strs(h.Get("args"))
@@ -258,20 +273,23 @@ func parseSettings(src []byte) (*jsonc.Value, error) {
 	return root, nil
 }
 
-// maxRemovals bounds how many hooks, or empty lists, removeClaudeHooks and
-// pruneHooks take out of one file. pairtime writes 10 hooks, so a file
-// with more than this many of its hooks is broken, and refusing it keeps
-// the work small: each removal parses the file again, because every
-// removal moves the bytes after it and Remove's rules for the separator
-// and the line around an item depend on its neighbours. With readFile's
-// 4 MiB cap, that is at most a few hundred MiB of parsing.
+// maxRemovals bounds how many hook handlers removeClaudeHooks, and how many
+// empty lists pruneHooks, take out of one file: that many go, and a file
+// that needs one more is refused. pairtime writes 10 hooks, so a file with
+// more than this many of its hooks is broken, and refusing it keeps the
+// work small: each removal parses the file again, because every removal
+// moves the bytes after it and Remove's rules for the separator and the
+// line around an item depend on its neighbours. With readFile's 4 MiB cap,
+// that is at most a few hundred MiB of parsing. A group whose handlers all
+// go is one removal, but each of its handlers counts.
 const maxRemovals = 100
 
 // removeClaudeHooks takes out every hook handler match accepts, one at a
 // time. A group whose handlers all match goes as a whole; otherwise only
 // the matching handler goes, and the group keeps the others.
 func removeClaudeHooks(src []byte, match func(event string, group, h *jsonc.Value) bool) ([]byte, error) {
-	for range maxRemovals {
+	removed := 0
+	for {
 		root, err := parseSettings(src)
 		if err != nil || root == nil {
 			return src, err
@@ -280,18 +298,21 @@ func removeClaudeHooks(src []byte, match func(event string, group, h *jsonc.Valu
 		if hooks == nil || hooks.Kind != jsonc.Object {
 			return src, nil
 		}
-		next := removeOneHook(src, hooks, match)
-		if next == nil {
+		next, n := removeOneHook(src, hooks, match)
+		if n == 0 {
 			return src, nil
+		}
+		if removed += n; removed > maxRemovals {
+			return nil, errors.New("holds more pairtime hooks than pairtime ever writes")
 		}
 		src = next
 	}
-	return nil, errors.New("holds more pairtime hooks than pairtime ever writes")
 }
 
 // removeOneHook returns src without the first hook handler under hooks
-// that match accepts, or nil when there is none.
-func removeOneHook(src []byte, hooks *jsonc.Value, match func(event string, group, h *jsonc.Value) bool) []byte {
+// that match accepts, or without its whole group when match accepts every
+// handler in it, and how many handlers went: 0 when match accepts none.
+func removeOneHook(src []byte, hooks *jsonc.Value, match func(event string, group, h *jsonc.Value) bool) ([]byte, int) {
 	for _, ev := range hooks.Items {
 		list := ev.Value
 		if list.Kind != jsonc.Array {
@@ -315,22 +336,27 @@ func removeOneHook(src []byte, hooks *jsonc.Value, match func(event string, grou
 			case matched == 0:
 				continue
 			case matched == len(hs.Items):
-				return jsonc.Remove(src, list, gi)
+				return jsonc.Remove(src, list, gi), matched
 			default:
-				return jsonc.Remove(src, hs, first)
+				return jsonc.Remove(src, hs, first), 1
 			}
 		}
 	}
-	return nil
+	return nil, 0
 }
 
 // undoClaudeHooks takes every pairtime hook out of the settings cur holds,
 // then the lists and the "hooks" object that pairtime's hooks left empty
 // and that base, the file before pairtime, didn't have. A file left with
-// only an empty object, where base had no value, becomes base again.
+// only an empty object, where base had no value, becomes base again when
+// nothing outside the object changed since pairtime added it.
 func undoClaudeHooks(cur, base Content, _ json.RawMessage) (Content, error) {
 	if !cur.Exists {
 		return cur, nil
+	}
+	held, err := pairtimeLists(cur.Data)
+	if err != nil {
+		return Content{}, err
 	}
 	src, err := removeClaudeHooks(cur.Data, func(_ string, _, h *jsonc.Value) bool { return isPairtimeHook(h) })
 	if err != nil {
@@ -347,20 +373,79 @@ func undoClaudeHooks(cur, base Content, _ json.RawMessage) (Content, error) {
 			return Content{Exists: true, Data: src, Mode: cur.Mode}, nil
 		}
 	}
-	if src, err = pruneHooks(src, before); err != nil {
+	if src, err = pruneHooks(src, before, held); err != nil {
 		return Content{}, err
 	}
-	if root, err := jsonc.Parse(src); err == nil && root.Kind == jsonc.Object && emptyInside(src, root) && noValue(base) {
+	if noValue(base) && isAddedRoot(src, base) {
 		return base, nil
 	}
 	return Content{Exists: true, Data: src, Mode: cur.Mode}, nil
 }
 
-// pruneHooks takes out of src's "hooks" each empty list that before,
-// base's "hooks", doesn't have, and then "hooks" itself if it is empty and
-// base had none.
-func pruneHooks(src []byte, before *jsonc.Value) ([]byte, error) {
-	for range maxRemovals {
+// rootFrame returns what goes before and after the object pairtime adds to
+// src, a file that holds no value: src itself, with a line break after a
+// last line that has none, since it may be a // comment, and the file's
+// line ending after the object.
+func rootFrame(src []byte) (before, after string) {
+	st := jsonc.StyleOf(src, nil)
+	before = string(src)
+	if len(src) > jsonc.BOMLen(src) && !bytes.HasSuffix(src, []byte("\n")) {
+		before += st.Newline
+	}
+	return before, st.Newline
+}
+
+// isAddedRoot reports whether src is an empty object that pairtime added to
+// base, a target that holds no value, with nothing outside it changed. A
+// file pairtime created, or a blank one it added its object to, goes back
+// to base only then: a comment the teen wrote above or below the object
+// since, such as "managed by dotfiles", keeps the file.
+func isAddedRoot(src []byte, base Content) bool {
+	root, err := jsonc.Parse(src)
+	if err != nil || root.Kind != jsonc.Object || !emptyInside(src, root) {
+		return false
+	}
+	var was []byte
+	if base.Exists {
+		was = base.Data
+	}
+	before, after := rootFrame(was)
+	return string(src[:root.Start]) == before && string(src[root.End:]) == after
+}
+
+// pairtimeLists returns the events whose hook lists in src hold a pairtime
+// hook.
+func pairtimeLists(src []byte) (map[string]bool, error) {
+	root, err := parseSettings(src)
+	if err != nil || root == nil {
+		return nil, err
+	}
+	hooks := root.Get("hooks")
+	if hooks == nil || hooks.Kind != jsonc.Object {
+		return nil, nil
+	}
+	held := map[string]bool{}
+	for _, ev := range hooks.Items {
+		if ev.Value.Kind != jsonc.Array {
+			continue
+		}
+		for _, g := range ev.Value.Items {
+			if hs := g.Value.Get("hooks"); hs != nil && hs.Kind == jsonc.Array && slices.ContainsFunc(hs.Items, func(h jsonc.Item) bool { return isPairtimeHook(h.Value) }) {
+				held[ev.Key] = true
+			}
+		}
+	}
+	return held, nil
+}
+
+// pruneHooks takes out of src's "hooks" each list that is empty, that
+// before, base's "hooks", doesn't have, and that held, the events whose
+// lists held a pairtime hook before it went, names; then "hooks" itself if
+// that leaves it empty and base had none. Only pairtime's hooks leaving a
+// list empty shows it is pairtime's: one the teen added empty after install
+// stays, and so does a "hooks" that held none of pairtime's.
+func pruneHooks(src []byte, before *jsonc.Value, held map[string]bool) ([]byte, error) {
+	for pruned := 0; ; pruned++ {
 		root, err := parseSettings(src)
 		if err != nil || root == nil {
 			return src, err
@@ -369,24 +454,23 @@ func pruneHooks(src []byte, before *jsonc.Value) ([]byte, error) {
 		if hooks == nil || hooks.Kind != jsonc.Object {
 			return src, nil
 		}
-		gone := false
-		for i := len(hooks.Items) - 1; i >= 0; i-- {
-			it := hooks.Items[i]
-			if emptyInside(src, it.Value) && before.Find(it.Key) < 0 {
-				src = jsonc.Remove(src, hooks, i)
-				gone = true
+		i := len(hooks.Items) - 1
+		for ; i >= 0; i-- {
+			if it := hooks.Items[i]; held[it.Key] && emptyInside(src, it.Value) && before.Find(it.Key) < 0 {
 				break
 			}
 		}
-		if gone {
-			continue
+		if i < 0 {
+			if before == nil && len(held) > 0 && emptyInside(src, hooks) {
+				src = jsonc.Remove(src, root, root.Find("hooks"))
+			}
+			return src, nil
 		}
-		if before == nil && emptyInside(src, hooks) {
-			src = jsonc.Remove(src, root, root.Find("hooks"))
+		if pruned == maxRemovals {
+			return nil, errors.New("has more empty hook lists than pairtime ever writes")
 		}
-		return src, nil
+		src = jsonc.Remove(src, hooks, i)
 	}
-	return nil, errors.New("has more empty hook lists than pairtime ever writes")
 }
 
 // emptyInside reports whether v is an object or array with nothing

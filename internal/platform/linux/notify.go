@@ -63,7 +63,8 @@ type Notifications struct {
 // and asks the server not to play a sound: it is DESIGN 1.2's one quiet
 // notification.
 //
-// The call gives up when ctx is done, the connection included. Errors wrap
+// The call gives up when ctx is done, the connection included, even to a
+// tcp: bus address whose host never answers. Errors wrap
 // ErrNotifyNoBus or ErrNotifyNoServer when the desktop can't show
 // notifications at all. They name D-Bus errors without repeating the
 // server's message.
@@ -75,9 +76,10 @@ func (n Notifications) Notify(ctx context.Context, summary, body string) (uint32
 			return 0, ErrNotifyNoBus
 		}
 	}
-	// WithContext closes the connection when ctx is done, which ends a
-	// dial, authentication or call stuck on a bus that doesn't answer.
-	conn, err := dbus.Connect(addr, dbus.WithContext(ctx))
+	// connectBus bounds the dial and the handshake by ctx. WithContext then
+	// closes the connection when ctx is done, which ends a call stuck on a
+	// bus that doesn't answer.
+	conn, err := connectBus(ctx, addr, dbus.WithContext(ctx))
 	if err != nil {
 		if ctx.Err() != nil {
 			return 0, ctx.Err()

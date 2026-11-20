@@ -33,7 +33,33 @@ Source and status: https://github.com/some-du6e/pairtime
 `
 
 func main() {
-	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
+	os.Exit(start(os.Args[1:], os.Stdin, os.Stdout, os.Stderr))
+}
+
+// start runs the command line args, with stdin the process's standard
+// input. Started with no arguments, pairtime is more often a harness's
+// hook than a person's command. cursor-agent loads the hooks install
+// writes to Claude Code's settings.json and runs each one's "command"
+// without its "args" (internal/install, ClaudeCode), so the binary starts
+// alone with the event on a pipe. The usage error it would give then exits
+// 2, which Cursor and Claude Code take as blocking the prompt or the tool
+// call the hook fired for, and its text could be read as the hook's answer.
+// So with no arguments and stdin from a program, pairtime exits 0 and
+// prints nothing, as `pairtime hook` does (DESIGN 3.2; CP 6.2). A person
+// who types pairtime alone has a terminal on stdin and gets the usage.
+func start(args []string, stdin *os.File, stdout, stderr io.Writer) int {
+	if len(args) == 0 && fromProgram(stdin) {
+		return 0
+	}
+	return run(args, stdout, stderr)
+}
+
+// fromProgram reports whether f, standard input, comes from a program: a
+// pipe, a file, or a handle Stat can't read. A terminal is a character
+// device, and so is /dev/null.
+func fromProgram(f *os.File) bool {
+	info, err := f.Stat()
+	return err != nil || info.Mode()&os.ModeCharDevice == 0
 }
 
 // run executes one command line and returns the process exit code:

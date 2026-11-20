@@ -89,6 +89,14 @@ jobs:
           ./node_modules/.bin/vite build --mode agent
           grep -q '<meta name="pairtime-ui" content="local"' ../internal/webui/dist/index.html
 
+      - name: Notices for the dashboard's npm code
+        # web.yml's check, on the build this release embeds: each npm
+        # package with code in it has its license and notice files copied
+        # into internal/webui/notices byte for byte, and listed in
+        # tools/release/extra-notices.txt, from which the build job writes
+        # every archive's THIRD_PARTY_NOTICES.txt (tools/ci/npm_notices.py).
+        run: python3 -I tools/ci/npm_notices.py web/dist/bundle-agent.json
+
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: dashboard
@@ -233,8 +241,9 @@ jobs:
         # Each archive carries THIRD_PARTY_NOTICES.txt: the license and
         # notice files of Go and of every module its binary links, from the
         # module cache, and of the embedded material
-        # tools/release/extra-notices.txt lists. dist refuses a target
-        # without one (docs/spec/update-manifest.md).
+        # tools/release/extra-notices.txt lists, the dashboard's npm
+        # packages among it. dist refuses a target without one
+        # (docs/spec/update-manifest.md).
         run: |
           for target in $TARGETS; do
             goos=${target%/*}
@@ -315,6 +324,48 @@ jobs:
             cat "$STAGE/dist/checksums.txt"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: The dashboard's notices are in every archive
+        # Every archive embeds the dashboard the dashboard job built and
+        # held to the internal/webui lines of tools/release/extra-notices.txt.
+        # Each archive's THIRD_PARTY_NOTICES.txt must carry every one of
+        # those files, under the header notices gives it: the title, ": "
+        # and the file's path.
+        run: |
+          v=${VERSION#v}
+          mapfile -t headers < <(awk '$1 == "internal/webui" { file = $2; $1 = $2 = ""; sub(/^ +/, ""); print $0 ": " file }' tools/release/extra-notices.txt)
+          if [ "${#headers[@]}" -eq 0 ]; then
+            echo "::error::tools/release/extra-notices.txt has no internal/webui lines, though the dashboard bundles Svelte"
+            exit 1
+          fi
+          fail=0
+          for target in $TARGETS; do
+            goos=${target%/*}
+            goarch=${target#*/}
+            archive="$STAGE/dist/pairtime_${v}_${goos}_${goarch}"
+            if [ "$goos" = windows ]; then
+              notices=$(unzip -p "$archive.zip" THIRD_PARTY_NOTICES.txt)
+            else
+              notices=$(tar -xzOf "$archive.tar.gz" THIRD_PARTY_NOTICES.txt)
+            fi
+            found=0
+            for header in "${headers[@]}"; do
+              if grep -qxF -- "$header" <<<"$notices"; then
+                found=$((found + 1))
+              else
+                echo "::error::the $target archive's THIRD_PARTY_NOTICES.txt has no $header"
+                fail=1
+              fi
+            done
+            echo "$target: $found of ${#headers[@]} dashboard notices"
+          done
+          {
+            echo
+            echo "Every archive's THIRD_PARTY_NOTICES.txt carries the dashboard's npm notices:"
+            echo
+            printf -- '- %s\n' "${headers[@]}"
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$fail"
 
       - name: Check that both checks catch tampering
         # A check that can't fail proves nothing. Each copy below breaks one

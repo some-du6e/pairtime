@@ -32,8 +32,10 @@ type Plan struct {
 	oldSum    string    // the digest of manifest.json when planned, "" if absent
 	manifest  *manifest // what manifest.json holds after Apply
 	backups   []pendingBackup
-	drops     []string // backup files Apply deletes once it is done
 	rmdirs    []string // directories uninstall removes if empty, innermost first
+	// adopted are the targets adopt records without changing them, with
+	// what planning read: Apply checks them as it checks the changes.
+	adopted []Change
 
 	// unlock drops the install lock the plan holds until Apply or Close;
 	// nil once dropped.
@@ -170,6 +172,11 @@ func (in *Installer) planInstall(groups []*group) (*Plan, error) {
 		if cur.Exists && !g.target.isRegistry() && cur.Mode&0o200 == 0 {
 			return nil, fmt.Errorf("%s is read-only, so pairtime leaves it alone; make it writable and run install again", g.target)
 		}
+		if !g.target.isRegistry() && len(next.Data) > maxFileSize {
+			// Uninstall would refuse to read the file it has to take
+			// pairtime's entries out of.
+			return nil, fmt.Errorf("%s would grow past the %d MiB pairtime reads back, so uninstall couldn't take pairtime's entries out of it; pairtime leaves it alone", g.target, maxFileSize>>20)
+		}
 		ch := Change{Target: g.target, Items: itemIDs(g.recs), Before: cur, After: next, kinds: kindsOf(g.recs)}
 		if !g.target.isRegistry() && !cur.Exists {
 			// A file that isn't there may be missing its folders too: on a
@@ -264,12 +271,19 @@ func claimed(edits []Edit, cur Content) bool {
 }
 
 // groupEdits groups items' edits by target, in the order the targets first
-// appear. It refuses an item without an ID, one listed twice, and an edit
-// of a kind uninstall can't undo.
+// appear. It refuses an item without an ID, one listed twice, an edit of a
+// kind uninstall can't undo, and two edits of one kind from one item for
+// one target: the manifest keeps one record for each, which a reinstall
+// finds by item and kind, so uninstall could undo only one of them.
 func groupEdits(items []Item) ([]*group, error) {
+	type edit struct {
+		item, kind string
+		target     Target
+	}
 	var groups []*group
 	byTarget := map[Target]*group{}
 	ids := map[string]bool{}
+	seen := map[edit]bool{}
 	for _, it := range items {
 		if it.ID == "" || ids[it.ID] {
 			return nil, fmt.Errorf("install item %q is missing its ID or listed twice", it.ID)
@@ -280,6 +294,11 @@ func groupEdits(items []Item) ([]*group, error) {
 				return nil, fmt.Errorf("install item %s has an edit of kind %q, which uninstall can't undo", it.ID, e.Kind())
 			}
 			t := e.Target()
+			k := edit{it.ID, e.Kind(), t}
+			if seen[k] {
+				return nil, fmt.Errorf("install item %s has two edits of kind %q for %s, and uninstall could undo only one", it.ID, e.Kind(), t)
+			}
+			seen[k] = true
 			g := byTarget[t]
 			if g == nil {
 				g = &group{target: t}
@@ -319,14 +338,14 @@ func (p *Plan) adopt(t Target, cur Content, recs []editRecord) error {
 	}
 	p.manifest.Targets = append(p.manifest.Targets, record{Target: t, Written: cur.digest(), Edits: append([]editRecord(nil), recs...)})
 	p.rebase(&p.manifest.Targets[len(p.manifest.Targets)-1], base)
+	p.adopted = append(p.adopted, Change{Target: t, Before: cur})
 	return nil
 }
 
-// rebase makes base what uninstall puts back in rec's target.
+// rebase makes base what uninstall puts back in rec's target. The copy of
+// the base it replaces goes once the manifest no longer names it
+// (dropBackups).
 func (p *Plan) rebase(rec *record, base Content) {
-	if rec.Base.Backup != "" {
-		p.drops = append(p.drops, rec.Base.Backup)
-	}
 	s, b := save(rec.Target, base)
 	rec.Base = s
 	if b != nil {
@@ -380,9 +399,6 @@ func (in *Installer) planUninstall(groups []*group) (*Plan, error) {
 		for j := len(rec.Dirs) - 1; j >= 0; j-- {
 			p.rmdirs = append(p.rmdirs, rec.Dirs[j])
 		}
-		if rec.Base.Backup != "" {
-			p.drops = append(p.drops, rec.Base.Backup)
-		}
 	}
 	slices.Reverse(kept)
 	p.manifest.Targets = kept
@@ -423,6 +439,12 @@ func (in *Installer) planUndo(rec record) (Change, error) {
 		if !ch.After.Same(cur) {
 			ch.Notes = append(ch.Notes, "This changed since pairtime wrote it, so only pairtime's own entries come out.")
 		}
+	}
+	if ch.After.Exists && cur.Exists && !rec.Target.isRegistry() {
+		// The file keeps the mode it has now, which the digest doesn't
+		// cover: a settings.json the teen made private since install
+		// stays private.
+		ch.After.Mode = cur.Mode
 	}
 	// checkUndo may change ch, so it runs before ch is returned.
 	err = checkUndo(&ch, rec.Edits)
@@ -488,7 +510,7 @@ func checkUndo(ch *Change, recs []editRecord) error {
 		return nil
 	}
 	if !ch.After.Exists {
-		if info, err := os.Lstat(ch.Target.Path); err != nil || info.Mode()&fs.ModeSymlink == 0 {
+		if !ch.Before.link {
 			return nil
 		}
 		empty, ok := emptyFile(recs)
@@ -580,12 +602,15 @@ func (p *Plan) Apply() error {
 	} else if oldSum != p.oldSum {
 		return fmt.Errorf("%s %w", in.manifestPath(), ErrStale)
 	}
-	for _, c := range p.Changes {
+	// Every target the plan read, those it changes and those it only
+	// records, must still hold what it read: a record of hooks that another
+	// program has taken out since would say install worked.
+	for _, c := range slices.Concat(p.Changes, p.adopted) {
 		cur, err := in.read(c.Target)
 		if err != nil {
 			return err
 		}
-		if !cur.Same(c.Before) {
+		if !cur.unchanged(c.Before) {
 			return fmt.Errorf("%s %w", c.Target, ErrStale)
 		}
 	}
@@ -625,11 +650,24 @@ func (p *Plan) Apply() error {
 		}
 		if cur, err := in.read(c.Target); err != nil {
 			return err
-		} else if !cur.Same(c.Before) {
+		} else if !cur.unchanged(c.Before) {
 			return fmt.Errorf("%s %w", c.Target, ErrStale)
 		}
-		if err := makeDirs(c.mkdirs); err != nil {
+		existed, err := makeDirs(c.mkdirs)
+		if err != nil {
 			return err
+		}
+		if rec := p.manifest.find(c.Target); len(existed) > 0 && rec != nil {
+			// The manifest, written before the folders were made, names
+			// these as pairtime's. They aren't, so uninstall mustn't take
+			// them away: it stops naming them before the target is written.
+			rec.Dirs = slices.DeleteFunc(rec.Dirs, func(d string) bool { return slices.Contains(existed, d) })
+			if data, err = encodeManifest(p.manifest); err != nil {
+				return err
+			}
+			if err := in.writeManifest(data, ""); err != nil {
+				return err
+			}
 		}
 		if err := in.write(c.Target, c.After); err != nil {
 			return fmt.Errorf("writing %s: %w", c.Target, err)
@@ -670,15 +708,37 @@ func (p *Plan) removeBackups() {
 	os.Remove(p.in.backupsDir()) // if it is empty now
 }
 
-// dropBackups deletes the backups the manifest no longer names.
+// dropBackups deletes every backup that the manifest Apply wrote doesn't
+// name, and the temporary files of a backup's write. Those are the
+// backups this plan replaced, and any an earlier Apply couldn't delete
+// once it had written its manifest, because it stopped there or the
+// backups folder didn't let it: they hold copies of settings files, tokens
+// and all, and this way the next Apply finishes the job. The install lock
+// keeps any other Apply from writing a backup meanwhile.
 func (p *Plan) dropBackups() error {
-	for _, name := range p.drops {
-		if err := os.Remove(filepath.Join(p.in.backupsDir(), name)); err != nil && !errors.Is(err, fs.ErrNotExist) {
-			return err
+	named := map[string]bool{}
+	for _, r := range p.manifest.Targets {
+		named[r.Base.Backup] = true
+	}
+	dir := p.in.backupsDir()
+	entries, err := os.ReadDir(dir)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	var first error
+	for _, e := range entries {
+		name := e.Name()
+		if named[name] || !e.Type().IsRegular() || !(isBackupName(name) || isTempName(name)) {
+			continue
+		}
+		if err := os.Remove(filepath.Join(dir, name)); err != nil && !errors.Is(err, fs.ErrNotExist) && first == nil {
+			first = err
 		}
 	}
-	p.drops = nil
-	return nil
+	return first
 }
 
 // removeLeftovers takes away the install directory once the manifest is

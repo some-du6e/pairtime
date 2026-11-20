@@ -23,6 +23,11 @@ func TestMaskSettings(t *testing.T) {
 		{"pairtime's handlers and the matcher of a group of its own stay, and another tool's command is masked",
 			`{"hooks": {"Stop": [{"matcher": "", "hooks": [{"type": "command", "command": "curl https://ntfy.sh/topic"}]}, ` + pairtime + `]}}`,
 			`{"hooks": {"Stop": [{"matcher": "", "hooks": [{"type": "***", "command": "***"}]}, ` + pairtime + `]}}`},
+		{"in a pairtime handler, a string the teen added, an argument pairtime doesn't write and a matcher it doesn't give the event are masked, and pairtime's own strings stay",
+			`{"hooks": {"PostToolUse": [{"matcher": "token-1", "hooks": [{"type": "command", "command": "/home/teen/.local/bin/pairtime", "args": ["hook", "--harness", "claude_code", "--event", "PostToolUse", "token-2"], "statusMessage": "token-3"}]}, ` +
+				`{"matcher": "Edit|Write|Bash", "hooks": [{"type": "command", "command": "/home/teen/.local/bin/pairtime", "args": ["hook", "--harness", "claude_code", "--event", "PostToolUse"]}]}]}}`,
+			`{"hooks": {"PostToolUse": [{"matcher": "***", "hooks": [{"type": "command", "command": "/home/teen/.local/bin/pairtime", "args": ["hook", "--harness", "claude_code", "--event", "PostToolUse", "***"], "statusMessage": "***"}]}, ` +
+				`{"matcher": "Edit|Write|Bash", "hooks": [{"type": "command", "command": "/home/teen/.local/bin/pairtime", "args": ["hook", "--harness", "claude_code", "--event", "PostToolUse"]}]}]}}`},
 		{"a line comment keeps its slashes and the space after them",
 			"{\n  // token sk-secret\n  \"a\": 1\n}",
 			"{\n  // ***\n  \"a\": 1\n}"},

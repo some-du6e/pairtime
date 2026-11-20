@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -34,12 +35,25 @@ func TestApplyRefusesAStalePlan(t *testing.T) {
 		name string
 		// between runs between planning and Apply.
 		between func(t *testing.T, env Env, in *Installer, items []Item)
+		// modes is true for a case that needs Unix file modes. It is
+		// skipped on Windows before planning, since the plan's install
+		// lock would keep the test's folder from being removed.
+		modes bool
 	}{
 		{
 			name: "a target that changed after planning stops Apply before it writes anything",
 			between: func(t *testing.T, env Env, _ *Installer, _ []Item) {
 				writeFile(t, ClaudeSettings(env), []byte("{\"model\": \"haiku\"}\n"))
 			},
+		},
+		{
+			name: "a settings file made private after planning stops Apply before it writes anything, so its mode stays",
+			between: func(t *testing.T, env Env, _ *Installer, _ []Item) {
+				if err := os.Chmod(ClaudeSettings(env), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			},
+			modes: true,
 		},
 		{
 			name: "a manifest that changed after planning stops Apply before it writes anything",
@@ -52,6 +66,9 @@ func TestApplyRefusesAStalePlan(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			if tt.modes && runtime.GOOS == "windows" {
+				t.Skip("Windows has no mode bits to make a file private with")
+			}
 			env := testEnv(t, "linux", nil)
 			items := linuxItems(t, env, []byte("{}\n"))
 			in := newInstaller(t)
@@ -80,6 +97,43 @@ func TestApplyRefusesAStalePlan(t *testing.T) {
 			if got := readOrNil(t, in.manifestPath()); !bytes.Equal(got, manifest) {
 				t.Errorf("Apply wrote the manifest:\n%s", got)
 			}
+		})
+	}
+}
+
+func TestApplyChecksWhatThePlanOnlyRecords(t *testing.T) {
+	settings := []byte("{\"model\": \"opus\"}\n")
+	tests := []struct {
+		name string
+		// rewrite is what another program writes to settings.json between
+		// planning and Apply.
+		rewrite []byte
+	}{
+		{"hooks another program takes out after a plan that only records them stop Apply before it writes the manifest", settings},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			env := testEnv(t, "linux", nil)
+			path := ClaudeSettings(env)
+			writeFile(t, path, settings)
+			item, err := ClaudeCode(env)
+			if err != nil {
+				t.Fatal(err)
+			}
+			install(t, newInstaller(t), item) // an install whose data directory is gone
+			in := newInstaller(t)
+			p, err := in.PlanInstall([]Item{item})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !p.Empty() {
+				t.Fatalf("the reinstall plans changes, so it records nothing by itself:\n%s", p.Diff())
+			}
+			writeFile(t, path, tt.rewrite)
+			if err := p.Apply(); !errors.Is(err, ErrStale) {
+				t.Fatalf("Apply = %v, want ErrStale", err)
+			}
+			checkGone(t, in.manifestPath(), "the manifest of the stopped Apply")
 		})
 	}
 }
@@ -823,6 +877,65 @@ func TestFailedInstallLeavesNoOrphanedBackups(t *testing.T) {
 				t.Errorf("after uninstall the file holds\n%s\nwant the other tool's hook and none of pairtime's", got)
 			}
 			checkGone(t, in.Dir, "pairtime's install directory")
+		})
+	}
+}
+
+func TestApplyDeletesBackupsTheManifestNoLongerNames(t *testing.T) {
+	tests := []struct {
+		name string
+		// leave leaves a backup or its temporary file that the manifest
+		// doesn't name, in the backups folder of in, which holds item.
+		leave func(t *testing.T, env Env, in *Installer, item Item)
+	}{
+		{
+			name: "a backup an Apply couldn't delete after it wrote its manifest, as the backups folder didn't let it, is deleted by the next Apply",
+			leave: func(t *testing.T, env Env, in *Installer, item Item) {
+				if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+					t.Skip("only a non-root account on Unix can be kept from deleting a file in its own folder")
+				}
+				// The teen deletes settings.json, so the reinstall's base is
+				// no file, and the backup of the old one is to go.
+				if err := os.Remove(ClaudeSettings(env)); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Chmod(in.backupsDir(), 0o500); err != nil {
+					t.Fatal(err)
+				}
+				defer os.Chmod(in.backupsDir(), 0o700)
+				p, err := in.PlanInstall([]Item{item})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := p.Apply(); err == nil {
+					t.Fatal("Apply deleted a backup in a folder that doesn't allow it")
+				}
+			},
+		},
+		{
+			name: "a backup's temporary file that a stopped write left is deleted by the next Apply",
+			leave: func(t *testing.T, _ Env, in *Installer, _ Item) {
+				writeFile(t, filepath.Join(in.backupsDir(), ".abcdefghijk2-settings.json.tmp-12345"), []byte("{\"model\": \"opus\"}\n"))
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			env := testEnv(t, "linux", nil)
+			path := ClaudeSettings(env)
+			writeFile(t, path, []byte("{\"model\": \"opus\"}\n"))
+			item, err := ClaudeCode(env)
+			if err != nil {
+				t.Fatal(err)
+			}
+			in := newInstaller(t)
+			install(t, in, item)
+			tt.leave(t, env, in, item)
+
+			install(t, in, item)
+			if got, want := backupFiles(t, in), namedBackups(t, in); !slices.Equal(got, want) {
+				t.Errorf("the backups folder holds %q, and the manifest names %q", got, want)
+			}
 		})
 	}
 }

@@ -33,8 +33,12 @@ holds something, and prints the commands to move each one aside and back.
 For the harnesses that read Claude Code's hook format (claude_code, cursor,
 devin), it registers the dumper for every hook DESIGN 5.1 installs, in the
 scratch project's own settings (ROOT/projects/RUN/.claude/settings.local.json),
-so only sessions in that folder are captured. SCRIPTS.md has the hook config
-the other harnesses read.
+so only sessions in that folder are captured. PermissionRequest runs
+allow-once.sh (allow-once.ps1 on Windows) instead, which records every call
+the same way and answers step 22's prompt itself. For Claude Code the same
+file starts the session in manual permission mode, since 2.1.327 starts in
+auto mode, where a classifier answers most prompts. SCRIPTS.md has the hook
+config the other harnesses read.
 
 On macOS and Linux, hooks are registered in exec form, the way pairtime
 installs its own: the command is dump-hook.sh itself and the run and label
@@ -84,21 +88,33 @@ ROOT_ENTRIES = {"projects", "runs", "claude-home", "codex-home", "copilot-home",
 class Refusal(Exception):
     """A setup prepare.py won't write, with the reason to show the person."""
 
-# DESIGN 5.1's Claude Code hooks, with the matcher pairtime installs.
-# SessionEnd hooks share a 1.5 s budget unless a hook sets a longer timeout,
-# and PowerShell can take most of that just to start.
+# DESIGN 5.1's Claude Code hooks, with the matcher pairtime installs, the
+# timeout and the kit script each one runs. SessionEnd hooks share a 1.5 s
+# budget unless a hook sets a longer timeout, and PowerShell can take most
+# of that just to start. PermissionRequest runs allow-once, which records
+# every call as the dumper does and answers step 22's prompt itself after
+# 2 s (SCRIPTS.md), so its timeout leaves room for that.
 CLAUDE_CODE_HOOKS = [
-    ("SessionStart", None, None),
-    ("UserPromptSubmit", None, None),
-    ("Stop", None, None),
-    ("StopFailure", None, None),
-    ("Notification", None, None),
-    ("PermissionRequest", None, None),
-    ("PostToolUse", "Edit|Write|Bash", None),
-    ("SubagentStart", None, None),
-    ("SubagentStop", None, None),
-    ("SessionEnd", None, 10),
+    ("SessionStart", None, None, "dump-hook"),
+    ("UserPromptSubmit", None, None, "dump-hook"),
+    ("Stop", None, None, "dump-hook"),
+    ("StopFailure", None, None, "dump-hook"),
+    ("Notification", None, None, "dump-hook"),
+    ("PermissionRequest", None, 10, "allow-once"),
+    ("PostToolUse", "Edit|Write|Bash", None, "dump-hook"),
+    ("SubagentStart", None, None, "dump-hook"),
+    ("SubagentStop", None, None, "dump-hook"),
+    ("SessionEnd", None, 10, "dump-hook"),
 ]
+
+# The kit scripts a hook command names, which check_dumper checks.
+HOOK_SCRIPTS = ("dump-hook", "allow-once")
+
+# Claude Code 2.1.327 starts every session in auto mode, where a classifier
+# answers most permission prompts, so the script's permission steps would
+# never ask anyone. The scratch project's settings start it in manual mode,
+# whose name in settings is "default", the mode those steps are written for.
+CLAUDE_CODE_PERMISSIONS = {"defaultMode": "default"}
 
 OTEL_ENV = [
     ("CLAUDE_CODE_ENABLE_TELEMETRY", "1"),
@@ -318,13 +334,14 @@ def quote(s, windows=None):
     return s if SHELL_SAFE.match(s) else sh_quote(s)
 
 
-def hook_command(run_dir, label, shell_form, windows=None):
-    """The handler fields that run the dumper for one hook event."""
+def hook_command(run_dir, label, shell_form, windows=None, script="dump-hook"):
+    """The handler fields that run a kit script, the dumper unless script
+    names another, for one hook event."""
     if windows is None:
         windows = WINDOWS
     if windows:
-        return {"command": powershell_command(os.path.join(KIT_DIR, "dump-hook.ps1"), run_dir, label)}
-    script = os.path.join(KIT_DIR, "dump-hook.sh")
+        return {"command": powershell_command(os.path.join(KIT_DIR, script + ".ps1"), run_dir, label)}
+    script = os.path.join(KIT_DIR, script + ".sh")
     if shell_form:
         return {"command": " ".join(["/bin/sh", sh_quote(script), sh_quote(run_dir), label])}
     # Exec form names the dumper itself. If a harness drops "args", it runs
@@ -338,35 +355,45 @@ def hook_command(run_dir, label, shell_form, windows=None):
 
 
 def check_dumper(windows=None):
-    """Refuse a dumper that can't run as a hook command: one that lost its
-    executable bit (a ZIP download) or got Windows line endings (a checkout
-    with core.autocrlf), which would make it fail instead of exiting 0."""
+    """Refuse a hook script that can't run as a hook command: one that lost
+    its executable bit (a ZIP download) or got Windows line endings (a
+    checkout with core.autocrlf), which would make it fail instead of
+    exiting 0."""
     if windows is None:
         windows = WINDOWS
     if windows:
         return
-    script = os.path.join(KIT_DIR, "dump-hook.sh")
-    with open(script, "rb") as f:
-        if b"\r" in f.read():
-            raise Refusal("%s has Windows line endings, so sh can't run it. Pull the latest kit, then check the file out "
-                          "again with Unix line endings: cd %s && rm tools/capture/dump-hook.sh && git checkout -- tools/capture/dump-hook.sh"
-                          % (script, sh_quote(REPO_DIR)))
-    if not os.access(script, os.X_OK):
-        raise Refusal("%s isn't executable, so a harness can't run it as a hook. Run: chmod +x %s" % (script, sh_quote(script)))
+    for name in HOOK_SCRIPTS:
+        script = os.path.join(KIT_DIR, name + ".sh")
+        rel = "tools/capture/%s.sh" % name
+        with open(script, "rb") as f:
+            if b"\r" in f.read():
+                raise Refusal("%s has Windows line endings, so sh can't run it. Pull the latest kit, then check the file "
+                              "out again with Unix line endings: cd %s && rm %s && git checkout -- %s"
+                              % (script, sh_quote(REPO_DIR), rel, rel))
+        if not os.access(script, os.X_OK):
+            raise Refusal("%s isn't executable, so a harness can't run it as a hook. Run: chmod +x %s"
+                          % (script, sh_quote(script)))
 
 
-def claude_settings(run_dir, shell_form):
+def claude_settings(run_dir, shell_form, manual=False):
+    """The scratch project's Claude Code-format settings: the hooks, and,
+    with manual, the permission mode the script's steps need, which only
+    Claude Code itself is given."""
     hooks = {}
-    for event, matcher, timeout in CLAUDE_CODE_HOOKS:
+    for event, matcher, timeout, script in CLAUDE_CODE_HOOKS:
         handler = {"type": "command"}
-        handler.update(hook_command(run_dir, event, shell_form))
+        handler.update(hook_command(run_dir, event, shell_form, script=script))
         if timeout:
             handler["timeout"] = timeout
         entry = {"hooks": [handler]}
         if matcher:
             entry = {"matcher": matcher, "hooks": [handler]}
         hooks[event] = [entry]
-    return {"hooks": hooks}
+    settings = {"hooks": hooks}
+    if manual:
+        settings["permissions"] = dict(CLAUDE_CODE_PERMISSIONS)
+    return settings
 
 
 def user_path(rel, home, environ):
@@ -575,7 +602,7 @@ def main(argv=None):
             raise Refusal("prepare.py needs git, to make the scratch project. Install git, then run it again.")
         check_dumper()
         preflight(h)
-        config = claude_settings(run_dir, args.shell_form) if h.claude_hooks else None
+        config = claude_settings(run_dir, args.shell_form, manual=args.harness == "claude_code") if h.claude_hooks else None
         note = make_private(root)
         if note:
             print(note)
