@@ -1137,9 +1137,27 @@ func TestViewsWhenTheAgentFails(t *testing.T) {
 	}
 }
 
-func TestStatuslineDefaultTimeoutIsUnder50ms(t *testing.T) {
-	if statuslineTimeout >= 50*time.Millisecond {
-		t.Errorf("the default timeout is %v; PLAN WP-CO0 wants the line in under 50 ms", statuslineTimeout)
+func TestStatuslineDefaultTimeout(t *testing.T) {
+	cases := []struct {
+		name  string
+		check func(t *testing.T)
+	}{
+		{"the default leaves room for the line in PLAN WP-CO0's 50 ms", func(t *testing.T) {
+			if statuslineTimeout >= 50*time.Millisecond {
+				t.Errorf("the default timeout is %v", statuslineTimeout)
+			}
+		}},
+		{"with no --timeout, a hung agent gets nothing printed within a second", func(t *testing.T) {
+			fakeAgent{days: map[string]dayReply{}, hang: true}.start(t)
+			begin := time.Now()
+			code, out, errOut := runCmd("statusline")
+			if took := time.Since(begin); code != 0 || out != "" || errOut != "" || took > time.Second {
+				t.Errorf("exit %d, stdout %q, stderr %q after %v", code, out, errOut, took)
+			}
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, tc.check)
 	}
 }
 

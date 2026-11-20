@@ -47,8 +47,8 @@ type recapJSON struct {
 type sessionJSON struct {
 	Start time.Time `json:"start"`
 	End   time.Time `json:"end"`
-	// Open is set while the session goes on, and End is then its last
-	// counted minute so far.
+	// Open is set while the session goes on, and End is then the end of
+	// its last counted minute so far.
 	Open bool `json:"open"`
 	projectJSON
 }
