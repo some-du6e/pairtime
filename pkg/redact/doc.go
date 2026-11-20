@@ -54,9 +54,11 @@
 // since a prompt has no path and a pasted .tf file is still a secret; a
 // "gitleaks:allow" comment doesn't hide anything; nothing is base64- or
 // percent-decoded first; and the rules also run over a copy of the text
-// with sentence punctuation after a token turned into spaces, because a
-// token rule needs whitespace, a quote or a semicolon after the secret and
-// a key at the end of a sentence is followed by a period. Text with
+// with sentence punctuation after a token, and every character outside
+// ASCII, turned into spaces, because a token rule needs ASCII whitespace, a
+// quote or a semicolon after the secret, and a key ends a sentence with a
+// period, sits in smart quotes or before a no-break space, or runs into
+// Chinese text with no space at all. Text with
 // backslash escapes, which is what a raw JSON capture is, is read a second
 // time through a copy with each escape blanked to spaces, and each \n to a
 // line break, at the same offsets: there a key quoted as \"...\" is

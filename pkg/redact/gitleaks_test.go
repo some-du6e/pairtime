@@ -231,6 +231,13 @@ func TestSecretsInProse(t *testing.T) {
 		{"a key in a JSON string with an escaped newline", `{"text": "key ` + stripe + `\nthanks"}`, stripe, "stripe-access-token"},
 		{"a key on a prompt's last line isn't hidden by an allowlisted line before it",
 			"RUN --mount=type=secret,id=npmrc npm ci\nENV API_TOKEN=" + hexKey, hexKey, "generic-api-key"},
+		{"a key in smart quotes", "my key is “" + stripe + "”", stripe, "stripe-access-token"},
+		{"a key before a no-break space", stripe + "\xc2\xa0is mine", stripe, "stripe-access-token"},
+		{"a key before an ellipsis", "try " + stripe + "… it fails", stripe, "stripe-access-token"},
+		{"a key before a CJK full stop", "我的密钥是" + stripe + "。", stripe, "stripe-access-token"},
+		{"a key between Chinese words with no space", "密钥是" + stripe + "请保密", stripe, "stripe-access-token"},
+		{"a key before a fullwidth comma", stripe + "，谢谢", stripe, "stripe-access-token"},
+		{"a key before a Devanagari danda", "मेरी कुंजी " + stripe + "।", stripe, "stripe-access-token"},
 	}
 	r := mustNew(t, Known{})
 	for _, tt := range tests {
@@ -304,6 +311,14 @@ func TestProseView(t *testing.T) {
 		{"text without punctuation comes back unchanged", "plain words", "plain words", false},
 		{"punctuation before a quote goes", `"key abc."`, `"key abc "`, true},
 		{"punctuation before a backslash goes, as at the end of a JSON string", `key abc.\"`, `key abc \"`, true},
+		{"punctuation before a semicolon goes", "abc.;", "abc ;", true},
+		{"smart quotes become spaces, every byte of them", "“abc”", "   abc   ", true},
+		{"an ellipsis becomes spaces", "abc… x", "abc    x", true},
+		{"a CJK full stop becomes spaces", "abc。", "abc   ", true},
+		{"a Devanagari danda becomes spaces", "abc।", "abc   ", true},
+		{"a no-break space becomes plain spaces", "abc\xc2\xa0x", "abc  x", true},
+		{"Chinese text right after a token becomes spaces", "abc请", "abc   ", true},
+		{"punctuation before a no-break space goes", "abc.\xc2\xa0x", "abc   x", true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

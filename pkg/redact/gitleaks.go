@@ -13,6 +13,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"unicode/utf8"
 )
 
 // rules/gitleaks.json.gz is gitleaks' default config at a pinned tag,
@@ -363,19 +364,38 @@ func gitleaksLine(raw string, start, end int) string {
 	return raw[from:to]
 }
 
-// proseView returns text with sentence punctuation that directly follows a
-// token turned into spaces, and whether it changed anything. gitleaks'
-// token rules end in (?:[\x60'"\s;]|\\[nr]|$), so a key at the end of a
-// sentence, "my key is sk-...AA.", doesn't match. Running the rules over
-// this view as well catches it. Every byte keeps its offset.
+// proseView returns text with every character outside ASCII, and the
+// sentence punctuation that directly follows a token, turned into spaces,
+// and whether that changed anything. gitleaks' token rules end in
+// (?:[\x60'"\s;]|\\[nr]|$), where \s is ASCII whitespace only, so a key at
+// the end of a sentence, "my key is sk-...AA.", doesn't match, and nor
+// does one before a smart quote, an ellipsis, a no-break space, the
+// Chinese 。 or ，, the Devanagari । or a Chinese word with no space before
+// it. Running the rules over this view as well catches them. Every byte of
+// a character becomes a space, so every offset stays.
 //
-// Punctuation counts when whitespace, a quote or a backslash follows it, or
-// nothing does. The last two are how a sentence ends inside a raw JSON
-// string: "...AA.\"" or "...AA.\nthanks".
+// ASCII punctuation, .,!?:)]}>*, counts when nothing follows it or what
+// does would end a token for gitleaks: whitespace, a quote, a backtick, a
+// semicolon or a backslash, the last as in "...AA.\nthanks" inside a raw
+// JSON string. So a.b and 1,000 stay as they are.
 func proseView(text string) (string, bool) {
 	var b []byte
-	for i := len(text) - 1; i >= 0; i-- {
-		if !strings.ContainsRune(".,!?:)]}>*", rune(text[i])) {
+	blank := func(i, n int) {
+		if b == nil {
+			b = []byte(text)
+		}
+		for k := i; k < i+n; k++ {
+			b[k] = ' '
+		}
+	}
+	for i := len(text); i > 0; {
+		r, size := utf8.DecodeLastRuneInString(text[:i])
+		i -= size
+		if r >= utf8.RuneSelf {
+			blank(i, size)
+			continue
+		}
+		if !strings.ContainsRune(".,!?:)]}>*", r) {
 			continue
 		}
 		next := byte(' ')
@@ -385,13 +405,9 @@ func proseView(text string) (string, bool) {
 				next = b[i+1]
 			}
 		}
-		if next != ' ' && next != '\t' && next != '\n' && next != '\r' && next != '"' && next != '\\' {
-			continue
+		if strings.IndexByte(" \t\n\r\f\"'`;\\", next) >= 0 {
+			blank(i, 1)
 		}
-		if b == nil {
-			b = []byte(text)
-		}
-		b[i] = ' '
 	}
 	if b == nil {
 		return text, false
