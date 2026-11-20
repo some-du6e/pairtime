@@ -5,6 +5,7 @@ package ingest
 import (
 	"encoding/json"
 	"maps"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -532,3 +533,97 @@ func TestRuleField(t *testing.T) {
 type errString string
 
 func (e errString) Error() string { return string(e) }
+
+// lenientForms are the forms of ingest-v1 2.3, written again as regular
+// expressions that accept at least what the server does. FuzzFreeText
+// holds the server to them: text outside a member's form must be refused,
+// whatever the shape check's own code says.
+var lenientForms = map[string]*regexp.Regexp{
+	"key":     regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`),
+	"hash":    regexp.MustCompile(`^[0-9a-f]{64}$`),
+	"gitid":   regexp.MustCompile(`^(?:[0-9a-f]{40}|[0-9a-f]{64})$`),
+	"semver":  regexp.MustCompile(`^[0-9]{1,9}\.[0-9]{1,9}\.[0-9]{1,9}$`),
+	"params":  regexp.MustCompile(`^sha256:[0-9a-f]{64}$`),
+	"minute":  regexp.MustCompile(`^20[2-9][0-9]-[01][0-9]-[0-3][0-9]T[0-2][0-9]:[0-5][0-9]:00Z$`),
+	"reason":  regexp.MustCompile(`^[A-Za-z_.]{1,40}$`),
+	"lower":   regexp.MustCompile(`^[a-z_]{1,32}$`),
+	"level":   regexp.MustCompile(`^[ABC]$`),
+	"version": regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$`),
+}
+
+// uncreditedForm accepts at least the uncredited reason codes of SM 5.2.
+var uncreditedForm = regexp.MustCompile(`^X\.[a-z_]{1,32}$`)
+
+// FuzzFreeText puts any text in every string member of every item kind.
+// Text outside the member's form is refused for that item with 422
+// bad_string naming the member, so no field can carry free text into the
+// database (DESIGN 4.5's firewall; PLAN WP-SV5). Its seeds run with every
+// go test, and nightly.yml fuzzes it for 60 s.
+func FuzzFreeText(f *testing.F) {
+	for _, s := range freeText {
+		f.Add(s)
+	}
+	for _, s := range []string{"p_one", "1.0.0", "v0.1.0", "P", "X.absent", "via_track", "final", "human", "A",
+		strings.Repeat("a", 40), strings.Repeat("0", 64), "sha256:" + strings.Repeat("ab", 32), "2026-11-19T12:00:00Z"} {
+		f.Add(s)
+	}
+	type member struct {
+		kind, field, form string
+	}
+	members := []member{
+		{"root", "R_b", "hash"}, {"root", "H_b", "hash"}, {"root", "prev", "hash"},
+		{"bucket", "v", "semver"}, {"bucket", "params", "params"}, {"bucket", "minute", "minute"}, {"bucket", "device", "key"},
+		{"bucket", "slots[0].p", "key"}, {"bucket", "slots[0].why", "reason"}, {"bucket", "slots[0].kind", "lower"},
+		{"bucket", "slots[0].ev", "level"}, {"bucket", "slots[0].lbl[0]", "lower"}, {"bucket", "state", "lower"}, {"bucket", "witness", "lower"},
+		{"commit", "sha", "gitid"}, {"commit", "parents[0]", "gitid"}, {"commit", "project", "key"}, {"commit", "path_hmacs[0]", "key"},
+		{"commit", "rewrites[0].old_sha", "gitid"}, {"commit", "rewrites[0].new_sha", "gitid"}, {"commit", "actor", "lower"},
+		{"commit", "agent_trailer", "key"},
+		{"labels", "client_build", "version"}, {"labels", "scoring_version", "semver"}, {"labels", "params", "params"},
+		{"labels", "harnesses[0].name", "lower"}, {"labels", "harnesses[0].version", "version"},
+	}
+	check := func(t *testing.T, kind string, m map[string]any) *itemErr {
+		raw := marshal(t, m)
+		var e *itemErr
+		switch kind {
+		case "root":
+			_, e = parseBatchRoot(raw)
+		case "bucket":
+			_, e = checkBucket(raw)
+		case "commit":
+			_, e = parseCommit(raw)
+		case "labels":
+			_, e = parseLabels(raw)
+		}
+		return e
+	}
+	samples := map[string]func(t *testing.T) map[string]any{
+		"root": func(*testing.T) map[string]any { return sampleRoot() },
+		"bucket": func(t *testing.T) map[string]any {
+			return asMap(t, shareableJSON(t, sampleBucket("d_test", sampleMinute, 1)))
+		},
+		"commit": func(*testing.T) map[string]any { return sampleCommit() },
+		"labels": func(*testing.T) map[string]any { return sampleLabels() },
+	}
+	f.Fuzz(func(t *testing.T, text string) {
+		for _, mb := range members {
+			if lenientForms[mb.form].MatchString(text) {
+				continue
+			}
+			m := samples[mb.kind](t)
+			setPath(t, m, mb.field, text)
+			got := outcomeOf(check(t, mb.kind, m))
+			if want := (shapeResult{CodeBadString, mb.field}); got != want {
+				t.Errorf("%s with %q in %s: got %+v, want %+v", mb.kind, text, mb.field, got, want)
+			}
+		}
+		if !uncreditedForm.MatchString(text) {
+			m := samples["bucket"](t)
+			u := maps.Clone(m["uncredited"].(map[string]any))
+			u[text] = 1
+			m["uncredited"] = u
+			if got, want := outcomeOf(check(t, "bucket", m)), (shapeResult{CodeBadString, "uncredited"}); got != want {
+				t.Errorf("bucket with %q as an uncredited reason: got %+v, want %+v", text, got, want)
+			}
+		}
+	})
+}
