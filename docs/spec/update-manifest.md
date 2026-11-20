@@ -12,6 +12,7 @@ Every pairtime release publishes one archive per platform, `checksums.txt` and `
 | `pairtime_<version>_<os>_<arch>.tar.gz` | The macOS and Linux clients |
 | `checksums.txt` | The SHA-256 of every archive |
 | `manifest.json` | The signed manifest |
+| `install.sh`, `install.ps1` | The install scripts for macOS and Linux and for Windows, which install this release (Install scripts) |
 
 `<version>` is the tag without its `v`, as in `pairtime_0.1.0-alpha.1_windows_amd64.zip`. There is one archive for each target in CP section 7: `windows/amd64`, `windows/386`, `windows/arm64`, `darwin/amd64`, `darwin/arm64`, `linux/amd64` and `linux/arm64`.
 
@@ -283,6 +284,20 @@ A leaked secret key can sign manifests that every client trusting it accepts, un
 ## Where clients find it
 
 Every release has `manifest.json` as an asset. The newest stable one is at `https://github.com/some-du6e/pairtime/releases/latest/download/manifest.json`. GitHub's latest-release redirect skips prereleases, so while every release is an alpha, the updater (DESIGN 3.3) has to list releases through the API. Its work package decides how.
+
+## Install scripts
+
+`install/install.sh` (POSIX sh) and `install/install.ps1` (Windows PowerShell 5.1 and PowerShell 7) are the one-line installs, `curl -fsSL <release>/install.sh | sh` and `irm <release>/install.ps1 | iex` (docs/PLAN.md, WP-RL2). `tools/release scripts` writes the copies a release carries: each repository copy with two lines filled in, the release's version and the keys in `release-keys.txt`. So a release's scripts install that release and trust exactly the keys its binaries trust. The repository's copies have neither and need both given.
+
+Each script does Verifying steps 1 to 6 itself, before it runs anything it downloaded, because a downloaded binary can't vouch for itself. macOS's `openssl` can't check Ed25519 and Windows PowerShell 5.1 has no Ed25519, so each carries RFC 8032's verification: `install.sh` in POSIX `bc`, `install.ps1` with .NET's big integers. Then each one:
+
+- refuses a manifest whose `version` isn't the one it was asked for, so an older signed manifest can't stand in for it;
+- downloads the archive from the directory `manifest.json` came from, after checking that the manifest's `url` names the same file, since the signed SHA-256 decides whether it's good;
+- runs the new binary's `version` beside its final place, for at most 60 seconds, and puts it in place only if that exits 0 and names the release (DESIGN 3.12);
+- puts it at the per-user path, `~/.local/bin/pairtime` or `%LOCALAPPDATA%\pairtime\bin\pairtime.exe`, without admin rights. On Windows a running `pairtime.exe` is renamed to `pairtime.old.exe` first, since it can't be replaced;
+- runs `pairtime install` if the binary has that command, with the terminal as its input when the script came through a pipe.
+
+While no key is listed, every release is unsigned and the scripts refuse it unless told otherwise (`--allow-unsigned`, or `PAIRTIME_ALLOW_UNSIGNED=1`). A failure stops the script with a message, removes whatever it downloaded and the folders it made, and leaves any installed binary alone. The scripts make no request but the downloads, which carry a `User-Agent` naming the script and pairtime's repository. `e2e-install.yml` runs both against a snapshot release built the way `release.yml` builds one, and against broken copies of it.
 
 ## How it's checked
 

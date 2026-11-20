@@ -345,8 +345,8 @@ $installPairtime = {
   function Install-Pairtime {
     if ($PSVersionTable.PSVersion.Major -lt 5) { Fail 'pairtime needs Windows PowerShell 5.1 or PowerShell 7' }
     if ([System.Environment]::OSVersion.Platform -ne 'Win32NT') { Fail 'install.ps1 is for Windows; on macOS and Linux, use install.sh' }
-    $allowUnsigned = $AllowUnsigned.IsPresent -or (Test-Flag 'PAIRTIME_ALLOW_UNSIGNED')
-    $noInstall = $NoInstall.IsPresent -or (Test-Flag 'PAIRTIME_NO_INSTALL')
+    $acceptUnsigned = $AllowUnsigned.IsPresent -or (Test-Flag 'PAIRTIME_ALLOW_UNSIGNED')
+    $placeOnly = $NoInstall.IsPresent -or (Test-Flag 'PAIRTIME_NO_INSTALL')
 
     # Assigning a parameter here makes a copy local to this function.
     if (-not $Version) { $Version = $PinnedVersion }
@@ -368,7 +368,7 @@ $installPairtime = {
 
     $arch = Get-Arch
     $keys = Read-ReleaseKeys
-    if ($keys.Count -eq 0 -and -not $allowUnsigned) {
+    if ($keys.Count -eq 0 -and -not $acceptUnsigned) {
       Fail "this script trusts no release key, so it can't check that pairtime $Version is pairtime's. Releases made before pairtime had a release key are unsigned, and their notes say so. To install one anyway, set `$env:PAIRTIME_ALLOW_UNSIGNED = '1' first: the download is then checked only against the SHA-256s in its own manifest."
     }
 
@@ -376,6 +376,10 @@ $installPairtime = {
     $target = Join-Path $binDir 'pairtime.exe'
     $work = Join-Path ([System.IO.Path]::GetTempPath()) ('pairtime-install-' + [guid]::NewGuid().ToString('N'))
     $new = $null
+    $installed = $false
+    # The folders this install makes, innermost first. A failed install
+    # removes them again; they're empty then.
+    $made = @()
     New-Item -ItemType Directory -Path $work | Out-Null
     try {
       Say "Installing pairtime $Version for windows/$arch."
@@ -387,7 +391,7 @@ $installPairtime = {
       $signedBy = $opened.SignedBy -join ', '
       if ($opened.Signer) {
         Say "manifest.json is signed by release key $($opened.Signer)."
-      } elseif ($allowUnsigned) {
+      } elseif ($acceptUnsigned) {
         Write-Warning "no key this script trusts signed manifest.json (signed by: $signedBy; trusted: $trusted). PAIRTIME_ALLOW_UNSIGNED is set, so the install goes on, but only the manifest's SHA-256s check the download: nothing shows the files are pairtime's."
       } else {
         Fail "manifest.json isn't signed by a key this script trusts (signed by: $signedBy; trusted: $trusted), so nothing was installed."
@@ -421,6 +425,9 @@ $installPairtime = {
       Say "$name and the pairtime.exe in it match manifest.json."
 
       # The binary waits beside its place until it has shown it runs here.
+      foreach ($dir in @((Split-Path -Parent $binDir), $binDir)) {
+        if (-not (Test-Path -LiteralPath $dir)) { $made = @($dir) + $made }
+      }
       New-Item -ItemType Directory -Force -Path $binDir | Out-Null
       if (Test-Path -LiteralPath $target -PathType Container) { Fail "$target is a folder, so pairtime can't go there" }
       $new = Join-Path $binDir ".pairtime.new.$PID.exe"
@@ -433,13 +440,19 @@ $installPairtime = {
       if (-not $first.StartsWith("pairtime $Version ")) { Fail "the new binary says it's $(Get-Start $first 200), not pairtime $Version, so it wasn't installed" }
       Move-IntoPlace $new $target
       $new = $null
+      $installed = $true
       Say "Installed pairtime $Version at $target."
     } finally {
       if ($new -and (Test-Path -LiteralPath $new)) { Remove-Item -LiteralPath $new -Force -ErrorAction SilentlyContinue }
       Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
+      if (-not $installed) {
+        foreach ($dir in $made) {
+          if (-not (Get-ChildItem -LiteralPath $dir -Force -ErrorAction SilentlyContinue)) { Remove-Item -LiteralPath $dir -Force -ErrorAction SilentlyContinue }
+        }
+      }
     }
 
-    if ($noInstall) {
+    if ($placeOnly) {
       Say "To finish setting it up, run: & '$target' install"
     } elseif (@(& $target help) -cmatch '^  install ') {
       Say 'Running pairtime install. It lists every change it would make and asks before making any.'

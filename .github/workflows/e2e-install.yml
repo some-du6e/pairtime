@@ -1,0 +1,145 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# The install scripts, end to end (docs/PLAN.md, WP-RL2). One Linux job
+# builds a snapshot release the way release.yml's build job does, signed
+# with a throwaway key, plus broken copies of it (install/e2e/fixture.sh).
+# Then a job on each OS serves those over HTTP on the runner and installs
+# from them with install.sh or install.ps1, in an empty home each time.
+#
+# The scripts trust only the release keys in internal/release/release-keys.txt,
+# and there are none yet, so the tests hand them each throwaway key
+# explicitly. pairtime install doesn't exist yet either (WP-IN2), so the
+# real binary's runs stop where the scripts would hand over to it, and a
+# fake build with an install command (install/e2e/fakepairtime) checks the
+# handover itself.
+#
+# Windows and macOS runners are scarce, so this runs only for the paths
+# below, on release tags and by hand. Neither of those jobs needs Go.
+name: e2e-install
+
+on:
+  pull_request:
+    paths:
+      - install/**
+      - internal/install/**
+      - internal/release/**
+      - tools/release/**
+      - .github/workflows/e2e-install.yml
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  # pairtime never uses cgo (AGENTS.md).
+  CGO_ENABLED: "0"
+
+jobs:
+  fixture:
+    name: build the releases to install
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: bash
+    steps:
+      # Actions are pinned to commit SHAs; tags can be moved. Dependabot bumps them.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: |
+            go.mod
+            go.sum
+
+      - name: Build the fixture
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+          RUN_NUMBER: ${{ github.run_number }}
+        run: |
+          # A tag's scripts are stamped with the tag, as release.yml's are.
+          version=v0.0.0-snapshot.$RUN_NUMBER
+          if [ "$REF_TYPE" = tag ]; then version=$REF_NAME; fi
+          bash install/e2e/fixture.sh "$RUNNER_TEMP/fixture" "$version"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: install-fixture
+          path: ${{ runner.temp }}/fixture
+          if-no-files-found: error
+          retention-days: 3
+          # A re-run of a failed attempt uploads under the same name.
+          overwrite: true
+
+  linux:
+    name: install.sh on Linux
+    needs: fixture
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: install-fixture
+          path: ${{ runner.temp }}/fixture
+
+      - name: install.sh end to end
+        run: bash install/e2e/test.sh "$RUNNER_TEMP/fixture"
+
+  macos:
+    name: install.sh on macOS
+    needs: fixture
+    runs-on: macos-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: install-fixture
+          path: ${{ runner.temp }}/fixture
+
+      - name: install.sh end to end
+        run: bash install/e2e/test.sh "$RUNNER_TEMP/fixture"
+
+  windows:
+    name: install.ps1 on Windows
+    needs: fixture
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: install-fixture
+          path: ${{ runner.temp }}/fixture
+
+      - name: install.ps1 end to end, in Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File install/e2e/test.ps1 "$env:RUNNER_TEMP\fixture"
+          exit $LASTEXITCODE

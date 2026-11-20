@@ -182,14 +182,19 @@ die() {
   exit 1
 }
 
-# Cleanup, and a message for any failure die didn't explain.
+# Cleanup, and a message for any failure die didn't explain. A failed
+# install also removes the folders it made, which are empty then.
 work=''
 new=''
+made_bin=''
+made_local=''
 step='starting'
 on_exit() {
   status=$?
   if [ -n "$new" ] && [ -f "$new" ]; then rm -f "$new"; fi
   if [ -n "$work" ] && [ -d "$work" ]; then rm -rf "$work"; fi
+  if [ -n "$made_bin" ]; then rmdir "$HOME/.local/bin" 2> /dev/null || :; fi
+  if [ -n "$made_local" ]; then rmdir "$HOME/.local" 2> /dev/null || :; fi
   if [ "$status" != 0 ] && [ -z "$died" ]; then
     printf 'install.sh: stopped by an unexpected error while %s (status %s). Nothing was installed.\n' "$step" "$status" >&2
   fi
@@ -345,18 +350,19 @@ load_keys() {
     [ -f "$keys_file" ] || die "--release-keys: $keys_file isn't a file"
     # Blank lines and lines starting with # don't count, as in
     # internal/release/release-keys.txt.
-    keys=$(grep -v '^[[:space:]]*#' "$keys_file" | tr -d ' \t\r' || :)
+    grep -v '^[[:space:]]*#' "$keys_file" | tr -d ' \t\r' > "$work/keys.txt" || :
     keys_from=$keys_file
   else
-    keys=$pinned_keys
+    # One key per line: keys hold no spaces.
+    printf '%s\n' "$pinned_keys" | tr ' ' '\n' > "$work/keys.txt"
     keys_from='this script'
   fi
   key_count=0
   key_ids=''
-  # Keys hold no spaces, so splitting on them is safe.
-  # shellcheck disable=SC2086
-  for key in $keys; do
+  # The test after || reads a last line that has no newline.
+  while IFS= read -r key || [ -n "$key" ]; do
     case $key in
+      '') continue ;;
       pairtime-release-ed25519-public:?*) ;;
       # Never print it: it's a secret.
       pairtime-release-ed25519-secret:*) die "$keys_from holds a release secret key, not a public key. Keep it secret, and replace it if anyone else could have seen it." ;;
@@ -370,7 +376,7 @@ load_keys() {
     mv "$work/key" "$work/keys/$id"
     key_count=$((key_count + 1))
     key_ids="$key_ids $id"
-  done
+  done < "$work/keys.txt"
 }
 
 # open_manifest checks $work/manifest.json as docs/spec/update-manifest.md's
@@ -581,6 +587,8 @@ main() {
   step='trying the new binary'
   bin_dir=$HOME/.local/bin
   target=$bin_dir/pairtime
+  if [ ! -d "$HOME/.local" ]; then made_local=1; fi
+  if [ ! -d "$bin_dir" ]; then made_bin=1; fi
   mkdir -p "$bin_dir" || die "couldn't create $bin_dir"
   [ ! -d "$target" ] || die "$target is a directory, so pairtime can't go there"
   new=$bin_dir/.pairtime.new.$$
@@ -600,6 +608,8 @@ main() {
   step="moving pairtime to $target"
   mv -f "$new" "$target" || die "couldn't move pairtime to $target"
   new=''
+  made_bin=''
+  made_local=''
   say "Installed pairtime $version at $target."
 
   step='running pairtime install'
