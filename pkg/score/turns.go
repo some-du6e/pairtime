@@ -624,18 +624,27 @@ func (d *deriver) hostedBy(f *focusRec, s *session, pos int) bool {
 // classify gives a person's prompt its class (SM 2.2). The prompt's text
 // is local, so the class reads what the agent derived from it when it
 // recorded the prompt: low_effort, from LowEffort below, and error_sig.
+// PromptClass (class.go) gives the same class from the same rule.
 func (d *deriver) classify(s *session, pos int, p *event.PromptSubmit) event.PromptClass {
+	return promptClass(p, s.askedBefore(pos), d.r.substantive, d.r.errorPasteMax)
+}
+
+// promptClass is SM 2.2's class of prompt p, where asked says whether the
+// session's last agent output before it asked a question or its last turn
+// stopped on one, and substantive and errorPasteMax are SUBSTANTIVE_CHARS
+// and ERROR_PASTE_TEXT_MAX.
+func promptClass(p *event.PromptSubmit, asked bool, substantive, errorPasteMax int64) event.PromptClass {
 	typed := count(p.TypedLenEst)
 	switch {
-	case p.AnswersQuestion || s.askedBefore(pos):
+	case p.AnswersQuestion || asked:
 		return event.ClassAnswer
 	case p.LowEffort:
 		return event.ClassLowEffort
-	case p.ErrorSig != "" && typed < d.r.errorPasteMax:
+	case p.ErrorSig != "" && typed < errorPasteMax:
 		// The pasted error is in pasted_chars, so typed_len_est is what
 		// was typed around it.
 		return event.ClassErrorPaste
-	case typed >= d.r.substantive:
+	case typed >= substantive:
 		return event.ClassSubstantive
 	}
 	return event.ClassLowEffort
