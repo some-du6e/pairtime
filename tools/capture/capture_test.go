@@ -829,6 +829,79 @@ func TestScrub(t *testing.T) {
 			}
 		})
 	}
+	// An account named User, a common Windows default, scrubbed with no
+	// --home: the field values and keys that hold the word stay, and the
+	// name is still replaced where it stands as a path or an identity.
+	t.Run("a common account name such as Windows' User", func(t *testing.T) {
+		common := []struct{ name, in, want string }{
+			{`"type":"user" and "role":"user" stay`, `{"type":"user","message":{"role":"user"}}`,
+				`{"type":"user","message":{"role":"user"}}`},
+			{"a telemetry key named user.email stays", `{"key":"user.email","value":{"stringValue":"a@b.example"}}`,
+				`{"key":"user.email",`},
+			{"a home folder holding it is replaced in its JSON spelling", `{"cwd":"C:\\Users\\User\\pairtime-capture"}`,
+				`{"cwd":"C:\\Users\\capture\\pairtime-capture"}`},
+			{"name@host and HOST\\name are replaced", `{"stdout":"User@DESKTOP-AB12CD:~$ whoami\nDESKTOP-AB12CD\\User"}`,
+				`capture@capture-host:~$ whoami\ncapture-host\\capture`},
+			{"words that hold it stay", `{"text":"Username and users stay"}`, `Username and users stay`},
+		}
+		var lines []string
+		for _, c := range common {
+			lines = append(lines, c.in)
+		}
+		dir := t.TempDir()
+		folder := "transcripts/home/.claude/projects/C--Users-User-pairtime-capture-project/s.jsonl"
+		write(t, filepath.Join(dir, "run", filepath.FromSlash(folder)), strings.Join(lines, "\n")+"\n")
+		r := run(t, ".", nil, quiet, python(t, "scrub.py", "--no-detect", "--user", "User", "--host", "DESKTOP-AB12CD",
+			filepath.Join(dir, "run"), filepath.Join(dir, "out"))...)
+		if r.code != 0 || !strings.Contains(r.stdout, "never as words on their own: User") {
+			t.Fatalf("exit %d, want 0 and User reported as a common word:\n%s%s", r.code, r.stdout, r.stderr)
+		}
+		out := tree(t, filepath.Join(dir, "out"))
+		got, ok := out["transcripts/home/.claude/projects/C--Users-capture-pairtime-capture-project/s.jsonl"]
+		if !ok {
+			t.Fatalf("the project folder name wasn't scrubbed: %v", keys(out))
+		}
+		for _, c := range common {
+			t.Run(c.name, func(t *testing.T) {
+				if !strings.Contains(got, c.want) {
+					t.Errorf("no %s in:\n%s", c.want, got)
+				}
+			})
+		}
+	})
+
+	// A name that is only common for this person goes the same way with
+	// --common, and one under four characters without it.
+	names := []struct {
+		name  string
+		args  []string
+		code  int
+		stays string
+	}{
+		{"an account name inside ordinary words fails the scrub", []string{"--user", "mark"}, 1, ""},
+		{"--common replaces it only in paths and as name@host", []string{"--user", "mark", "--common", "mark"}, 0, "markdown"},
+		{"a name under four characters is replaced only in paths and as name@host", []string{"--user", "al"}, 0, "always"},
+	}
+	for _, c := range names {
+		t.Run(c.name, func(t *testing.T) {
+			dir := t.TempDir()
+			user := c.args[1]
+			write(t, filepath.Join(dir, "run", "notes.txt"), "/home/"+user+"/x "+user+"@box always markdown\n")
+			r := run(t, ".", nil, quiet, python(t, "scrub.py", append(append([]string{"--no-detect"}, c.args...),
+				filepath.Join(dir, "run"), filepath.Join(dir, "out"))...)...)
+			if r.code != c.code {
+				t.Fatalf("exit %d, want %d:\n%s%s", r.code, c.code, r.stdout, r.stderr)
+			}
+			if c.code != 0 {
+				return
+			}
+			got := read(t, filepath.Join(dir, "out", "notes.txt"))
+			if !strings.Contains(got, "/home/capture/x capture@box") || !strings.Contains(got, c.stays) {
+				t.Fatalf("notes.txt = %q, want the path and name@box replaced and %q kept", got, c.stays)
+			}
+		})
+	}
+
 	t.Run("a capture without a line of your instruction files passes", func(t *testing.T) {
 		own, dir := t.TempDir(), t.TempDir()
 		write(t, filepath.Join(own, ".claude", "CLAUDE.md"), mine+"\n")

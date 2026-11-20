@@ -12,7 +12,12 @@ with the fixed placeholders in testdata/fixtures/README.md:
     anything passed with --also (your real name, your school, a folder name).
     Each one is replaced in every spelling the files use: as is, JSON-escaped,
     with forward slashes, URL-encoded, and the way Claude Code names project
-    folders (every character that isn't a letter or digit becomes -);
+    folders (every character that isn't a letter or digit becomes -). An
+    account name, hostname or git name that is also an everyday word or a
+    harness field (User, admin, laptop) or is under four characters is
+    replaced only as a path or an identity (a home folder, name@host,
+    HOST\\name, Name <email>), so "type":"user" stays as it is; --common
+    treats another value that way;
   - anything shaped like an API key, token, password or private key;
   - email addresses, apart from a few public tool addresses;
   - the account, user and organization ids harnesses put in telemetry.
@@ -116,6 +121,27 @@ SECRET_PATTERNS = [
 EMAIL_PATTERN = r"(?:(?<![A-Za-z0-9._%+\\-])|" + ESC + r")[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}"
 
 SKIP_NAMES = {".DS_Store", "Thumbs.db", "desktop.ini"}
+
+# Account names, hostnames and git names that are also everyday words or the
+# values of harness fields. Replaced as whole words, an account named User,
+# the default behind many a C:\Users\User, would turn every "type":"user" and
+# "role":"user" in a transcript into "capture", and the key user.email in a
+# telemetry body into capture.email. These, and any such value under four
+# characters, are replaced only where they stand as a path or an identity.
+COMMON_KINDS = ("user", "host", "git name")
+COMMON_NAMES = {
+    # accounts that Windows, a laptop maker, a distro or a cloud image sets up
+    "user", "users", "owner", "admin", "administrator", "guest", "student", "test", "tester", "testuser", "root",
+    "ubuntu", "debian", "fedora", "centos", "kali", "pi", "vagrant", "runner", "default", "defaultuser0", "public",
+    "home", "dev", "developer", "demo", "temp", "work", "school", "family", "codespace", "azureuser", "ec2-user",
+    "android", "chronos",
+    # hostnames a machine gets when nobody names it
+    "laptop", "desktop", "pc", "computer", "workstation", "server", "macbook", "macbook-pro", "macbook-air", "imac",
+    "mac-mini", "mac", "raspberrypi", "penguin",
+    # words harnesses use as field names and values
+    "assistant", "system", "tool", "agent", "model", "human", "type", "role", "content", "text", "message", "session",
+    "prompt", "source", "name", "id", "file", "input", "output", "result", "error",
+}
 
 # Instruction files the harnesses load into every session (HS 3.4, 4.4, 5.4,
 # 6.4, 7.4, 8.3, 9): below your home folder, and, for Claude Code, in every
@@ -260,15 +286,50 @@ def placeholder_for(kind, value):
     }.get(kind, OTHER)
 
 
-def build_rules(known):
+def is_common(kind, value, extra=()):
+    """Whether a known value is too common a word to replace on its own."""
+    v = value.lower()
+    return kind in COMMON_KINDS and (len(value) < 4 or v in COMMON_NAMES or v in extra)
+
+
+def identity_rules(kind, value):
+    """Rules that replace a common value only where it stands as a path or
+    an identity: a home folder in every spelling and name@host or HOST\\name
+    for an account name, @host, HOST\\ and host.local for a hostname, and
+    Name <email> for a git name."""
+    v = re.escape(value)
+    start = r"(?:(?<![A-Za-z0-9._%+-])|" + ESC + ")"
+    if kind == "user":
+        rules = []
+        for home in ("C:\\Users\\" + value, "/Users/" + value, "/home/" + value):
+            for s, p in spellings(home, home_placeholder(home)):
+                rules.append(Rule("home", bounded(s), p, priority=0, original=value))
+        rules.append(Rule("user", "(?i)" + start + v + r"(?=@[A-Za-z0-9])", USER, priority=0, original=value))
+        rules.append(Rule("user", r"(?i)(?:(?<=[A-Za-z0-9-]\\)|(?<=[A-Za-z0-9-]\\\\))" + v + r"(?![A-Za-z0-9])",
+                          USER, priority=0, original=value))
+        return rules
+    if kind == "host":
+        return [
+            Rule("host", r"(?i)(?<=@)" + v + r"(?![A-Za-z0-9-])", HOST, priority=0, original=value),
+            Rule("host", "(?i)" + start + v + r"(?=\\{1,2}[A-Za-z0-9]|\.local(?![A-Za-z0-9]))", HOST, priority=0,
+                 original=value),
+        ]
+    return [Rule(kind, "(?i)" + start + v + r"(?=\s*<)", NAME, priority=0, original=value)]
+
+
+def build_rules(known, common=()):
     """Rules for the known values (each spelling, longest first) and the
-    patterns. Known values outrank patterns on a tie."""
+    patterns. Known values outrank patterns on a tie. A value is_common
+    names gets only identity_rules."""
     rules = []
     seen = set()
     for kind, value in sorted(known, key=lambda kv: -len(kv[1])):
         if value.lower() in seen:
             continue
         seen.add(value.lower())
+        if is_common(kind, value, common):
+            rules.extend(identity_rules(kind, value))
+            continue
         for v, p in spellings(value, placeholder_for(kind, value)):
             rules.append(Rule(kind, bounded(v), p, priority=0, original=value))
 
@@ -524,7 +585,10 @@ def main(argv=None):
     ap.add_argument("--git-name", action="append", default=[], help="a git user.name to replace")
     ap.add_argument("--git-email", action="append", default=[], help="a git user.email to replace")
     ap.add_argument("--drop", action="append", default=[], metavar="VALUE",
-                    help="a detected value not to replace, such as an account name that is also a common word")
+                    help="a detected value not to replace at all, because it isn't private")
+    ap.add_argument("--common", action="append", default=[], metavar="VALUE",
+                    help="an account name, hostname or git name that is also an everyday word or a harness field "
+                         "name, such as will or mark: replaced only in paths and as name@host")
     ap.add_argument("--no-detect", action="store_true", help="use only the values given with flags")
     ap.add_argument("--dry-run", action="store_true", help="print the report without writing OUT_DIR")
     ap.add_argument("--report", metavar="FILE", help="where to save the report (default: beside RUN_DIR)")
@@ -556,8 +620,10 @@ def main(argv=None):
         if v and v.lower() not in dropped and v.lower() not in unique:
             unique[v.lower()] = (k, v)
     known = list(unique.values())
-    short = sorted({v for _, v in known if len(v) < 3})
-    rules = build_rules(known)
+    extra = {c.lower() for c in args.common}
+    known += [("user", c) for c in args.common if c.strip() and c.lower() not in unique and c.lower() not in dropped]
+    common = sorted({v for k, v in known if is_common(k, v, extra)}, key=str.lower)
+    rules = build_rules(known, extra)
     placeholders = sorted({r.placeholder.lower() for r in rules}, key=len, reverse=True)
     written = {}
 
@@ -606,7 +672,9 @@ def main(argv=None):
         lower = clean.lower()
         for ph in placeholders:
             lower = lower.replace(ph, "\0" * len(ph))
-        for _, value in known:
+        for kind, value in known:
+            if is_common(kind, value, extra):
+                continue
             i = lower.find(value.lower())
             while i >= 0:
                 leftovers.append("%s:%d  %r in %r" % (new_rel.replace(os.sep, "/"), line_of(clean_starts, i) + 1, value,
@@ -640,8 +708,9 @@ def main(argv=None):
             summary.append("  %-17s %-40s -> %-28s x%d" % (kind, shown, placeholder, n))
     else:
         summary.append("Nothing was replaced.")
-    if short:
-        summary += ["", "Values under 3 characters, replaced wherever they stand alone, so expect noise: " + ", ".join(short)]
+    if common:
+        summary += ["", "Common words or short values, replaced only in home folder paths and as name@host, HOST\\name "
+                        "or Name <email>, never as words on their own: " + ", ".join(common)]
     for title, rows in (
         ("Renamed paths", ["%s -> %s" % (a.replace(os.sep, "/"), b.replace(os.sep, "/")) for a, b in renamed]),
         ("Left out", ["%s: %s" % (a.replace(os.sep, "/"), why) for a, why in skipped]),
