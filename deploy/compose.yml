@@ -1,0 +1,76 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# pairtime's server on one host (DESIGN 10.1): pairtimed and Litestream in
+# one container, and cloudflared, which carries https://<host> to it with no
+# open ports. deploy/runbook.md is the procedure: first deploy, upgrades,
+# rollback and the move to a VPS.
+#
+# The host builds nothing. release.yml builds the pairtimed image from a v*
+# tag and pushes it to GHCR, and every image here is pinned by tag and
+# digest, so an upgrade is a reviewed diff to this file, whose restore drill
+# has passed (DESIGN 10.4).
+#
+# Next to this file, and never in git (deploy/.gitignore):
+#
+#   data/     SQLite, its WAL, Litestream's state, /data/keys. Mode 0700 and
+#             owned by 65532, the image's user: pairtimed refuses a data
+#             directory that group or others can enter (runbook, step 3).
+#   config/   pairtime.toml from `pairtimed init`, tier2.toml, and
+#             secrets.env and tunnel.env, both mode 0600.
+name: pairtime
+
+services:
+  pairtimed:
+    # The release's image, by tag and digest. Before the first release this
+    # is a placeholder that can't be pulled; the runbook's step 1 says what
+    # to do then.
+    image: ghcr.io/some-du6e/pairtimed:UNRELEASED
+    restart: unless-stopped
+    # Litestream restores /data/pairtime.db from the replica when the file
+    # is missing, then runs "pairtimed serve" as its subprocess and copies
+    # every change to the bucket (deploy/litestream.yml). When pairtimed
+    # exits, Litestream syncs once more and exits too.
+    command: ["litestream", "replicate", "-config", "/etc/litestream.yml"]
+    volumes:
+      # Local disk only, never NFS or SMB: SQLite's locks don't hold there.
+      - ./data:/data
+      - ./config:/etc/pairtime:ro
+      # From git, next to this file, so it changes with the release.
+      - ./litestream.yml:/etc/litestream.yml:ro
+    # compose reads this file on the host and passes each line to the
+    # container as an environment variable; pairtimed and litestream.yml
+    # read their PAIRTIME_* variables from there.
+    env_file: ./config/secrets.env
+    healthcheck:
+      # /readyz on the private ops port: the database takes writes, the
+      # replica is current, both buckets answer (DESIGN 10.4). The image
+      # has no shell or curl.
+      test: ["CMD", "pairtimed", "healthcheck"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      # A restore from the replica on a new host can take minutes.
+      start_period: 10m
+    # Time for pairtimed to finish its requests and for Litestream's last
+    # sync before Docker kills them.
+    stop_grace_period: 90s
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+
+  cloudflared:
+    # 2026.10.7, 2026-10-30.
+    image: cloudflare/cloudflared:2026.10.7@sha256:4955524aeaa379e154023d5a027c250f7b35041a2e7e950cf13f144bc9b9c5ba
+    restart: unless-stopped
+    # A tunnel managed in the Cloudflare dashboard: its token comes from
+    # tunnel.env, and its one public hostname points at
+    # http://pairtimed:8080 (deploy/cloudflared/README.md).
+    command: ["tunnel", "--no-autoupdate", "run"]
+    env_file: ./config/tunnel.env
+    depends_on:
+      - pairtimed
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]

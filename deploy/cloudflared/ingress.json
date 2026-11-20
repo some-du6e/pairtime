@@ -1,0 +1,14 @@
+{
+  "config": {
+    "ingress": [
+      {
+        "hostname": "<host>",
+        "service": "http://pairtimed:8080",
+        "originRequest": {}
+      },
+      {
+        "service": "http_status:404"
+      }
+    ]
+  }
+}

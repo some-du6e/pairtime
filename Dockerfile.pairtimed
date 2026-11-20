@@ -1,0 +1,72 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# The pairtimed server image (DESIGN 10.1; docs/PLAN.md, WP-OP1): pairtimed
+# and Litestream on distroless static, run as the image's nonroot user,
+# 65532. No shell, no package manager, no libc: both programs are static Go
+# binaries (CGO_ENABLED=0).
+#
+# The host never builds this. release.yml builds it from a v* tag and
+# pushes it to ghcr.io/some-du6e/pairtimed, and restore-drill.yml builds it
+# to test. Both compile pairtimed first, the way ci.yml does, and pass it in
+# the build context, so the image holds the binary release.yml built and
+# the toolchain setup-go installed from go.mod:
+#
+#   dist/linux_amd64/pairtimed   dist/linux_arm64/pairtimed
+#   dist/THIRD_PARTY_NOTICES.txt  (tools/release notices for pairtimed)
+#
+#   docker buildx build -f Dockerfile.pairtimed --platform linux/amd64 .
+#
+# Litestream is the release binary, checked against the SHA-256 GitHub
+# records for the asset. A bump changes the version and both sums together.
+
+ARG TARGETARCH
+
+# Litestream v0.5.18, 2026-11-03. GitHub's asset digests:
+#   gh api repos/benbjohnson/litestream/releases/tags/v0.5.18 --jq '.assets[] | [.name, .digest] | @tsv'
+FROM scratch AS litestream-amd64
+ADD --checksum=sha256:d3687b9fd0f2e9426bbd3da828429ff3f1dfc5c9b74d54fdf028e4ee510e7dea \
+    https://github.com/benbjohnson/litestream/releases/download/v0.5.18/litestream-0.5.18-linux-x86_64.tar.gz \
+    /litestream.tar.gz
+
+FROM scratch AS litestream-arm64
+ADD --checksum=sha256:922a09e6a7ac67f2095571894dc6382e94e1dd4cdd9674883ddf1a8e74ab982d \
+    https://github.com/benbjohnson/litestream/releases/download/v0.5.18/litestream-0.5.18-linux-arm64.tar.gz \
+    /litestream.tar.gz
+
+FROM litestream-${TARGETARCH} AS litestream-archive
+
+# The same distroless release, with busybox, only to unpack the archive.
+FROM gcr.io/distroless/static-debian13:debug-nonroot@sha256:7df9fac2f5d3927260696af33fc2391da26366825838a47337088ed78f854a0c AS unpack
+COPY --from=litestream-archive /litestream.tar.gz /tmp/litestream.tar.gz
+RUN ["/busybox/sh", "-c", "mkdir /tmp/litestream && tar -xzf /tmp/litestream.tar.gz -C /tmp/litestream && test -x /tmp/litestream/litestream && test -f /tmp/litestream/LICENSE"]
+
+FROM gcr.io/distroless/static-debian13:nonroot@sha256:aafe993665bf6200db38a02c11a9351e782a84b6a45e7f33b6695638c88e3931
+
+ARG TARGETARCH
+# The release's version, for the labels; release.yml sets it.
+ARG VERSION=v0.0.0-dev
+ARG COMMIT=unknown
+
+LABEL org.opencontainers.image.title="pairtimed" \
+      org.opencontainers.image.description="The pairtime server: pairtimed and Litestream (DESIGN 10.1)" \
+      org.opencontainers.image.source="https://github.com/some-du6e/pairtime" \
+      org.opencontainers.image.licenses="AGPL-3.0-or-later" \
+      org.opencontainers.image.version="${VERSION}" \
+      org.opencontainers.image.revision="${COMMIT}"
+
+COPY --from=unpack /tmp/litestream/litestream /usr/local/bin/litestream
+COPY --from=unpack /tmp/litestream/LICENSE /usr/share/doc/litestream/LICENSE
+COPY dist/linux_${TARGETARCH}/pairtimed /usr/local/bin/pairtimed
+COPY LICENSE /usr/share/doc/pairtimed/LICENSE
+COPY dist/THIRD_PARTY_NOTICES.txt /usr/share/doc/pairtimed/THIRD_PARTY_NOTICES.txt
+
+# Both programs by name: compose's command and healthcheck, and
+# litestream.yml's exec, find them on this PATH.
+ENV PATH=/usr/local/bin:/usr/bin:/bin \
+    PAIRTIME_CONFIG=/etc/pairtime/pairtime.toml
+
+USER 65532:65532
+EXPOSE 8080
+
+# compose.yml sets the same command; this is what a bare docker run does.
+CMD ["litestream", "replicate", "-config", "/etc/litestream.yml"]
