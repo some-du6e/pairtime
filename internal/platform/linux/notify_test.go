@@ -1,0 +1,181 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
+//go:build linux
+
+package linux
+
+import (
+	"context"
+	"errors"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/godbus/dbus/v5"
+)
+
+// These need no session bus, so ci.yml runs them. The calls against a
+// notification server are in notify_desktop_test.go.
+
+func TestNotifyBusAddress(t *testing.T) {
+	tests := []struct {
+		name    string
+		env     map[string]string
+		sockets []string
+		want    string
+		wantOK  bool
+	}{
+		{
+			name:   "DBUS_SESSION_BUS_ADDRESS is used as it is",
+			env:    map[string]string{"DBUS_SESSION_BUS_ADDRESS": "unix:path=/tmp/dbus-test,guid=1", "XDG_RUNTIME_DIR": "/run/user/1000"},
+			want:   "unix:path=/tmp/dbus-test,guid=1",
+			wantOK: true,
+		},
+		{
+			name:    "without it, the bus socket in XDG_RUNTIME_DIR is used",
+			env:     map[string]string{"XDG_RUNTIME_DIR": "/run/user/1000"},
+			sockets: []string{"/run/user/1000/bus"},
+			want:    "unix:path=/run/user/1000/bus",
+			wantOK:  true,
+		},
+		{
+			name:    "without XDG_RUNTIME_DIR, the bus socket in /run/user/<uid> is used",
+			env:     map[string]string{},
+			sockets: []string{"/run/user/1000/bus"},
+			want:    "unix:path=/run/user/1000/bus",
+			wantOK:  true,
+		},
+		{
+			name:    "XDG_RUNTIME_DIR's socket comes before /run/user/<uid>'s",
+			env:     map[string]string{"XDG_RUNTIME_DIR": "/tmp/runtime"},
+			sockets: []string{"/tmp/runtime/bus", "/run/user/1000/bus"},
+			want:    "unix:path=/tmp/runtime/bus",
+			wantOK:  true,
+		},
+		{
+			name:    "autolaunch counts as no address, because pairtime never starts a bus",
+			env:     map[string]string{"DBUS_SESSION_BUS_ADDRESS": "autolaunch:"},
+			sockets: nil,
+			wantOK:  false,
+		},
+		{
+			name:   "no address and no socket means no session bus, as on a machine with no desktop",
+			env:    map[string]string{"XDG_RUNTIME_DIR": "/run/user/1000"},
+			wantOK: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			getenv := func(k string) string { return tt.env[k] }
+			isSocket := func(p string) bool {
+				for _, s := range tt.sockets {
+					if p == s {
+						return true
+					}
+				}
+				return false
+			}
+			got, ok := notifyBusAddress(getenv, isSocket, 1000)
+			if ok != tt.wantOK || got != tt.want {
+				t.Errorf("notifyBusAddress() = %q, %v, want %q, %v", got, ok, tt.want, tt.wantOK)
+			}
+		})
+	}
+}
+
+func TestEscapeNotifyMarkup(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{name: "plain text is unchanged", in: "52 min on remind-bot.", want: "52 min on remind-bot."},
+		{name: "a tag can't start, so it shows as text", in: "<b>bold</b>", want: "&lt;b&gt;bold&lt;/b&gt;"},
+		{name: "an ampersand can't start an entity", in: "Tom & Jerry &amp;", want: "Tom &amp; Jerry &amp;amp;"},
+		{name: "non-ASCII text is unchanged", in: "café ✓", want: "café ✓"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := escapeNotifyMarkup(tt.in); got != tt.want {
+				t.Errorf("escapeNotifyMarkup(%q) = %q, want %q", tt.in, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestNotifyCallError(t *testing.T) {
+	serverSaid := "the server's own words, which pairtime doesn't repeat"
+	tests := []struct {
+		name         string
+		err          error
+		wantNoServer bool
+		wantName     string // a substring the error must have
+	}{
+		{
+			name:         "an unknown service means no notification server",
+			err:          dbus.Error{Name: "org.freedesktop.DBus.Error.ServiceUnknown", Body: []any{serverSaid}},
+			wantNoServer: true,
+			wantName:     "ServiceUnknown",
+		},
+		{
+			name:         "a name with no owner means no notification server",
+			err:          dbus.Error{Name: "org.freedesktop.DBus.Error.NameHasNoOwner", Body: []any{serverSaid}},
+			wantNoServer: true,
+			wantName:     "NameHasNoOwner",
+		},
+		{
+			name:         "a server the bus failed to start means no notification server",
+			err:          &dbus.Error{Name: "org.freedesktop.DBus.Error.Spawn.ChildExited", Body: []any{serverSaid}},
+			wantNoServer: true,
+			wantName:     "Spawn.ChildExited",
+		},
+		{
+			name:     "another D-Bus error keeps its name and not the server's message",
+			err:      dbus.Error{Name: "org.freedesktop.DBus.Error.AccessDenied", Body: []any{serverSaid}},
+			wantName: "AccessDenied",
+		},
+		{
+			name:     "an error that isn't from D-Bus is kept",
+			err:      errors.New("dbus: connection closed by user"),
+			wantName: "connection closed",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := notifyCallError(context.Background(), "Notify", tt.err)
+			if errors.Is(got, ErrNotifyNoServer) != tt.wantNoServer {
+				t.Errorf("notifyCallError() = %v, wraps ErrNotifyNoServer: %v, want %v", got, !tt.wantNoServer, tt.wantNoServer)
+			}
+			if !strings.Contains(got.Error(), tt.wantName) {
+				t.Errorf("notifyCallError() = %q, want it to contain %q", got, tt.wantName)
+			}
+			if strings.Contains(got.Error(), serverSaid) {
+				t.Errorf("notifyCallError() = %q repeats the server's message", got)
+			}
+		})
+	}
+}
+
+func TestNotifyFailsQuicklyWithoutABus(t *testing.T) {
+	tests := []struct {
+		name string
+		n    Notifications
+	}{
+		{name: "a bus address whose socket doesn't exist means no session bus", n: Notifications{Address: "unix:path=" + filepath.Join(t.TempDir(), "no-bus-here")}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			start := time.Now()
+			_, err := tt.n.Notify(ctx, "summary", "body")
+			if !errors.Is(err, ErrNotifyNoBus) {
+				t.Fatalf("Notify() error = %v, want ErrNotifyNoBus", err)
+			}
+			if d := time.Since(start); d > 5*time.Second {
+				t.Errorf("Notify() took %v to find there is no bus", d)
+			}
+		})
+	}
+}
