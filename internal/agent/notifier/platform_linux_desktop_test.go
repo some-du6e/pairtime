@@ -18,7 +18,7 @@ import (
 // the rules, and the real D-Bus call, answered by fakenotify (docs/PLAN.md,
 // WP-OS8: the Linux job delivers to a fake notification service on a
 // private bus).
-func TestLinuxNoteReachesTheNotificationServer(t *testing.T) {
+func TestDesktopLinuxNoteReachesTheNotificationServer(t *testing.T) {
 	const text = "52 min on remind-bot. You fixed the timezone bug yourself. See recap."
 	tests := []struct {
 		name        string

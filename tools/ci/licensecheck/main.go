@@ -8,10 +8,17 @@
 // It asks the go command for every package the module's packages and tests
 // import, for each of the seven targets ci.yml cross-compiles, so a module
 // imported only on Windows, only on arm64 or only by a test still counts,
-// and so does a module swapped in with a replace directive. For each package from another module it reads
-// the license files in the package's directory and every directory above
-// it up to the module root, and the module root must have one. Every
-// license file found must be one of the allowed licenses (see identify.go).
+// and so does a module swapped in with a replace directive. The linux
+// targets are listed a second time with -tags desktop, the way
+// platform.yml builds the *_desktop_test.go tests (AGENTS.md), so a module
+// only a desktop test imports counts too. linux/amd64 is listed a third
+// time with -race and CGO_ENABLED=1, the way nightly.yml builds its tests,
+// so a module imported only from a file under //go:build race or cgo
+// counts as well. For each package from another
+// module it reads the license files in the package's directory and every
+// directory above it up to the module root, and the module root must have
+// one. Every license file found must be one of the allowed licenses (see
+// identify.go).
 //
 // Usage:
 //
@@ -119,18 +126,22 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	var pkgs []goPackage
+	var builds []string
 	for _, target := range strings.Split(*targets, ",") {
 		goos, goarch, ok := strings.Cut(strings.TrimSpace(target), "/")
 		if !ok || goos == "" || goarch == "" {
 			fmt.Fprintf(stderr, "licensecheck: target %q isn't GOOS/GOARCH\n", target)
 			return 2
 		}
-		p, err := listPackages(*dir, goos, goarch)
-		if err != nil {
-			fmt.Fprintf(stderr, "licensecheck: %v\n", err)
-			return 2
+		for _, v := range variants(goos, goarch) {
+			p, err := listPackages(*dir, goos, goarch, v)
+			if err != nil {
+				fmt.Fprintf(stderr, "licensecheck: %v\n", err)
+				return 2
+			}
+			pkgs = append(pkgs, p...)
+			builds = append(builds, build(goos, goarch, v))
 		}
-		pkgs = append(pkgs, p...)
 	}
 	verdicts := check(pkgs)
 	failed := 0
@@ -144,7 +155,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintf(stdout, "::error::%s: %s\n", v.module, p)
 		}
 	}
-	fmt.Fprintf(stdout, "licensecheck: %d dependency modules of %s for %s, %d failed\n", len(verdicts), *dir, *targets, failed)
+	fmt.Fprintf(stdout, "licensecheck: %d dependency modules of %s for %s, %d failed\n", len(verdicts), *dir, strings.Join(builds, ", "), failed)
 	if failed > 0 {
 		fmt.Fprintf(stdout, "Dependencies must be %s (DESIGN 3.12). Replace a failing module, or, if its license really is one of these, extend tools/ci/licensecheck with a test case from that file.\n", orList(Allowed))
 		return 1
@@ -152,18 +163,66 @@ func run(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
+// variant is one way a target's packages are listed.
+type variant struct {
+	tags string // the -tags value; "" is the default build
+	race bool   // -race with CGO_ENABLED=1, which sets the race and cgo tags
+}
+
+// variants returns the ways a target is listed. Every target is listed the
+// way it ships. platform.yml's Linux job runs the *_desktop_test.go tests with
+// -tags desktop, and those files are under //go:build linux && desktop
+// (AGENTS.md), so linux targets are listed with the tag too; listing the
+// default build as well keeps any file under //go:build !desktop in the
+// check. nightly.yml runs go test -race with CGO_ENABLED=1 on a linux/amd64
+// runner (AGENTS.md's one exception to the cgo rule), so linux/amd64 is
+// also listed that way.
+func variants(goos, goarch string) []variant {
+	vs := []variant{{}}
+	if goos == "linux" {
+		vs = append(vs, variant{tags: "desktop"})
+		if goarch == "amd64" {
+			vs = append(vs, variant{race: true})
+		}
+	}
+	return vs
+}
+
+// build names one listing in messages: linux/amd64,
+// linux/amd64 -tags desktop or linux/amd64 -race.
+func build(goos, goarch string, v variant) string {
+	s := goos + "/" + goarch
+	if v.tags != "" {
+		s += " -tags " + v.tags
+	}
+	if v.race {
+		s += " -race"
+	}
+	return s
+}
+
 // listPackages lists every package the module in dir builds or tests with
-// for one target, with its module.
-func listPackages(dir, goos, goarch string) ([]goPackage, error) {
-	cmd := exec.Command("go", "list", "-deps", "-test", "-json=ImportPath,Dir,Standard,Module", "./...")
+// for one target and variant, with its module.
+func listPackages(dir, goos, goarch string, v variant) ([]goPackage, error) {
+	args := []string{"list", "-deps", "-test", "-json=ImportPath,Dir,Standard,Module"}
+	if v.tags != "" {
+		args = append(args, "-tags="+v.tags)
+	}
+	cgo := "0"
+	if v.race {
+		// The race detector needs cgo everywhere but macOS.
+		args = append(args, "-race")
+		cgo = "1"
+	}
+	cmd := exec.Command("go", append(args, "./...")...)
 	cmd.Dir = dir
 	// GOWORK=off: a stray go.work must not change the module graph.
-	cmd.Env = append(os.Environ(), "GOOS="+goos, "GOARCH="+goarch, "CGO_ENABLED=0", "GOWORK=off")
+	cmd.Env = append(os.Environ(), "GOOS="+goos, "GOARCH="+goarch, "CGO_ENABLED="+cgo, "GOWORK=off")
 	var out, errOut bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = &errOut
 	if err := cmd.Run(); err != nil {
-		return nil, fmt.Errorf("go list for %s/%s in %s: %v\n%s", goos, goarch, dir, err, errOut.String())
+		return nil, fmt.Errorf("go list for %s in %s: %v\n%s", build(goos, goarch, v), dir, err, errOut.String())
 	}
 	var pkgs []goPackage
 	dec := json.NewDecoder(&out)

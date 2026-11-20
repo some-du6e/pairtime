@@ -23,13 +23,29 @@ fi
 shift
 
 pkgs=""
+missing=""
 for dir in "$@"; do
 	if [ -d "$dir" ]; then
 		pkgs="$pkgs ./$dir/..."
 	else
 		echo "skipping $dir: not in the tree yet"
+		missing="$missing $dir"
 	fi
 done
+
+# The job summary says what this step tested, so a run can be checked
+# against the directories its PR meant to test (AGENTS.md, PLATFORM_DIRS).
+if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+	{
+		echo "### go test$flags"
+		echo
+		echo "Tested:${pkgs:- nothing}"
+		if [ -n "$missing" ]; then
+			echo
+			echo "Not in the tree yet:$missing"
+		fi
+	} >>"$GITHUB_STEP_SUMMARY"
+fi
 
 if [ -z "$pkgs" ]; then
 	echo "::notice::none of these packages exist yet, so there is nothing to test: $*"
