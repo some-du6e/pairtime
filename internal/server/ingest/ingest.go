@@ -459,13 +459,9 @@ func (s *Service) batch(ctx context.Context, tx writer.Tx, dev Device, st *devic
 // bucket checks one minute bucket and stores it as a revision (ingest-v1
 // 2.7).
 func (s *Service) bucket(ctx context.Context, tx writer.Tx, dev Device, raw json.RawMessage, now int64) (itemResult, error) {
-	mb, e := parseBucket(raw)
+	mb, e := checkBucket(raw)
 	if e != nil {
 		return resultOf(e), nil
-	}
-	if err := mb.Validate(); err != nil {
-		f := ruleField(err)
-		return itemResult{Status: http.StatusUnprocessableEntity, Code: CodeBadRule, Field: &f}, nil
 	}
 	minute := mb.Minute.UnixMilli()
 	switch {

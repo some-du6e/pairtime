@@ -489,6 +489,20 @@ func parseUncredited(raw json.RawMessage) (map[event.Reason]float64, *itemErr) {
 	return out, nil
 }
 
+// checkBucket checks a bucket's forms, then the rules across its fields
+// that event.MinuteBucket.Validate holds, which fail as bad_rule
+// (ingest-v1 2.3.2).
+func checkBucket(raw json.RawMessage) (event.MinuteBucket, *itemErr) {
+	mb, e := parseBucket(raw)
+	if e != nil {
+		return mb, e
+	}
+	if err := mb.Validate(); err != nil {
+		return mb, shapeErr(CodeBadRule, ruleField(err))
+	}
+	return mb, nil
+}
+
 // ruleField returns the field pkg/event's first error names, or "" when
 // it isn't a plain JSON path. Each of its errors reads "field: message",
 // and the message, which can quote values, is dropped.
