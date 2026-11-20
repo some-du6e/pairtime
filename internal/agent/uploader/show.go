@@ -96,6 +96,7 @@ func Next(o PreviewOptions) (Preview, error) {
 		lag:        o.Params.Int(params.WITNESS_LAG_S) * 1000,
 		maxRoots:   o.maxRoots,
 		maxBuckets: o.maxBuckets,
+		notAfter:   now.Add(time.Duration(st.Offset) * time.Millisecond).Add(futureMargin).UnixMilli(),
 	}
 	l := currentLabels(build, o.Params, o.Device, st.Harnesses)
 	due, err := labelsDue(l, st, started, now)

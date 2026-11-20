@@ -17,6 +17,8 @@ import (
 	"github.com/some-du6e/pairtime/internal/agent/home"
 	"github.com/some-du6e/pairtime/internal/agent/ledger"
 	"github.com/some-du6e/pairtime/internal/agent/state"
+	"github.com/some-du6e/pairtime/internal/agent/store"
+	"github.com/some-du6e/pairtime/pkg/event"
 	pkgledger "github.com/some-du6e/pairtime/pkg/ledger"
 )
 
@@ -259,5 +261,119 @@ func TestSignedOutQueue(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, tc.run)
+	}
+}
+
+// TestFastClock is a device whose clock runs 10 minutes ahead of the
+// server's: its uploads go with the server's time, which the answers
+// carry, and its newest minutes wait until the server's clock reaches
+// them rather than being refused as future_minute and lost.
+func TestFastClock(t *testing.T) {
+	dir := t.TempDir()
+	dirs := home.Dirs{Data: dir, Config: dir, Runtime: dir}
+	table := newestTable()
+	end := time.Now().UTC().Truncate(time.Minute)
+	kDev := sha256.Sum256([]byte("uploader fast clock K_dev"))
+	keys, err := pkgledger.DeriveKeys(kDev[:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var (
+		mu  sync.Mutex
+		now = end.Add(-30 * time.Minute)
+	)
+	w, err := ledger.Open(ledger.Options{
+		Dir: dirs.Ledger(), Keys: keys, KeyID: "0123456789abcdef", Params: table,
+		Now: func() time.Time { mu.Lock(); defer mu.Unlock(); return now },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { w.Close() })
+	quarter := uint64(end.Truncate(time.Hour).UnixMilli())
+	for _, ago := range []time.Duration{25 * time.Minute, 15 * time.Minute, 8 * time.Minute, 0} {
+		mu.Lock()
+		now = end.Add(-ago)
+		mu.Unlock()
+		if _, err := w.Checkpoint("p_test", quarter, json.RawMessage(`{}`)); err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := w.Seal(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	bs, err := store.OpenBuckets(dirs.Buckets())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for m := 20; m >= 1; m-- {
+		if _, _, err := bs.Put(testBucket(table, w.DeviceID(), end.Add(-time.Duration(m)*time.Minute), 30, event.StateFinal)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := bs.Close(); err != nil {
+		t.Fatal(err)
+	}
+	devKey := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{6}, 32))
+	f := newFakeIngest(w.DeviceID(), testToken, devKey.Public().(ed25519.PublicKey))
+	f.now = func() time.Time { return time.Now().Add(-10 * time.Minute) }
+	srv := httptest.NewServer(f)
+	t.Cleanup(srv.Close)
+	st, _, err := state.Open(dirs.StateFile())
+	if err != nil {
+		t.Fatal(err)
+	}
+	creds := Credentials{Server: srv.URL, Token: testToken, DeviceID: w.DeviceID(), Sign: KeySigner(devKey)}
+	u, err := New(Options{
+		Ledger: w, LedgerDir: dirs.Ledger(), BucketDir: dirs.Buckets(), DataDir: dirs.Data, State: st,
+		Login:  LoginFunc(func() (Credentials, bool) { return creds, true }),
+		Params: table, Client: srv.Client(), Draw: func(int64) int64 { return 0 },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	u.Start()
+	t.Cleanup(u.Close)
+	oldest, newest := end.Add(-20*time.Minute).UnixMilli(), end.Add(-time.Minute).UnixMilli()
+	tests := []struct {
+		name string
+		run  func(t *testing.T)
+	}{
+		{"the minutes the server's clock has reached go up", func(t *testing.T) {
+			waitFor(t, "the oldest minute", func() bool {
+				f.mu.Lock()
+				defer f.mu.Unlock()
+				_, ok := f.buckets[oldest]
+				return ok && len(f.buckets) >= 14
+			})
+		}},
+		{"no minute is refused as future_minute, and the newest wait", func(t *testing.T) {
+			for range 2 {
+				u.Wake()
+				time.Sleep(100 * time.Millisecond)
+			}
+			f.mu.Lock()
+			defer f.mu.Unlock()
+			if f.futures != 0 {
+				t.Errorf("%d buckets were refused as future_minute", f.futures)
+			}
+			if _, ok := f.buckets[newest]; ok {
+				t.Error("the newest minute went before the server's clock reached it")
+			}
+		}},
+		{"the offset the answers measured is kept for privacy show", func(t *testing.T) {
+			var sv saved
+			if _, err := st.Get(StateKey, &sv); err != nil {
+				t.Fatal(err)
+			}
+			if d := time.Duration(sv.Offset) * time.Millisecond; d > -9*time.Minute || d < -11*time.Minute {
+				t.Errorf("offset %v", d)
+			}
+		}},
+	}
+	for _, tc := range tests {
+		if !t.Run(tc.name, tc.run) {
+			break
+		}
 	}
 }

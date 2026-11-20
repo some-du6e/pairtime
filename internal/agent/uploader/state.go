@@ -77,6 +77,10 @@ type saved struct {
 	// Offline are the stretches the uploader couldn't reach the server, as
 	// its upload-failure notes say, oldest first.
 	Offline []span `json:"offline,omitempty"`
+	// Offset is the server's clock less the device's, in ms, as the last
+	// answer measured: what X-Pairtime-Time is corrected by, and how far
+	// ahead of the server's clock a minute may be before it waits.
+	Offset int64 `json:"offset_ms,omitempty"`
 	// ServerKey is the receipt key GET /api/v1/ingest/state gave.
 	ServerKey *ServerKey `json:"server_key,omitempty"`
 	// Outbox is the request a retry sends again, when one is waiting.

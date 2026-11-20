@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"maps"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -24,6 +25,7 @@ import (
 	"github.com/some-du6e/pairtime/internal/agent/ledger"
 	"github.com/some-du6e/pairtime/internal/agent/sched"
 	"github.com/some-du6e/pairtime/internal/agent/state"
+	"github.com/some-du6e/pairtime/internal/agent/store"
 	"github.com/some-du6e/pairtime/internal/version"
 	"github.com/some-du6e/pairtime/pkg/event"
 	pkgledger "github.com/some-du6e/pairtime/pkg/ledger"
@@ -40,6 +42,15 @@ const Every = 60 * time.Second
 // batch and its buckets are ready by then, and several hooks in a row go
 // in one upload. DESIGN 3.3 asks for at most 10 s.
 const SoonDelay = 5 * time.Second
+
+// futureMargin is how far past the server's clock a bucket's minute may
+// start before it waits: under the 300 s after which the server refuses it
+// as future_minute (ingest-v1 2.7).
+const futureMargin = 240 * time.Second
+
+// errBodyUnreadable is the server's body_unreadable, a body that broke
+// off on the way, which goes again as it is (ingest-v1 2.6).
+var errBodyUnreadable = errors.New("uploader: the server couldn't read the whole body")
 
 // OutboxName is the file in the data directory where a request waiting
 // for its retry keeps its body.
@@ -636,6 +647,7 @@ func (u *Uploader) next() (plan, string, error) {
 		labels:     u.labelsDue(),
 		maxRoots:   u.maxRoots,
 		maxBuckets: u.maxBuckets,
+		notAfter:   u.clock.serverNow().Add(futureMargin).UnixMilli(),
 	})
 	if err != nil {
 		return plan{}, "", err
@@ -822,6 +834,9 @@ func (u *Uploader) send(c Credentials, p plan, key string) bool {
 			continue
 		case a.refusal.Error == refusalBodyHash:
 			continue // the body changed on the way
+		case a.refusal.Error == refusalBodyUnreadable:
+			u.failed(c, errBodyUnreadable, a, &pendingReq{plan: p, key: key})
+			return false
 		}
 		u.refused(c, p, a)
 		return false
@@ -965,9 +980,25 @@ func (u *Uploader) answered(c Credentials, p plan, a answer) bool {
 		u.setProblem("chain", fmt.Sprintf("the server's record of this computer's ledger differs from it at batch %d, so pairtime sends no more batch roots; this is a bug, or the ledger was changed", u.st.Fork))
 	}
 	refused := map[string]int{}
-	for _, res := range resp.Buckets {
+	marks, held := p.marks, false
+	for i, res := range resp.Buckets {
 		switch res.Code {
 		case codeAccepted, codeDuplicate, codeSuperseded:
+		case codeFutureMinute:
+			// The server's clock hasn't reached the minute yet, so it goes
+			// again later: its day keeps the mark it had (ingest-v1 2.9).
+			// The lines of the day that went are sent again with it, and
+			// come back duplicates.
+			if !held {
+				marks, held = maps.Clone(p.marks), true
+			}
+			day := store.DayOf(p.body.Buckets[i].Minute.UnixMilli())
+			if m, ok := u.st.Marks[day]; ok {
+				marks[day] = m
+			} else {
+				delete(marks, day)
+			}
+			refused[res.Code]++
 		default:
 			refused[res.Code]++
 		}
@@ -978,15 +1009,20 @@ func (u *Uploader) answered(c Credentials, p plan, a answer) bool {
 	} else {
 		u.setProblem("buckets", "")
 	}
-	u.st.Marks = p.marks
+	u.st.Marks = marks
+	if off, ok := u.clock.Offset(); ok {
+		u.st.Offset = off.Milliseconds()
+	}
 	if p.body.Labels != nil {
 		u.st.Labels, u.st.LabelsAt = p.labels, u.now().UnixMilli()
 		if resp.Labels.Code != codeAccepted {
 			u.log.Warn("the server refused the labels", "code", resp.Labels.Code, "field", resp.Labels.Field)
 		}
 	}
-	if len(p.body.Buckets) > 0 {
-		// More revisions may wait behind the ones that went.
+	if len(p.body.Buckets) > 0 && refused[codeFutureMinute] == 0 {
+		// More revisions may wait behind the ones that went. After a
+		// future_minute they wait for the next wake instead, by when the
+		// clock's offset holds them back.
 		more = true
 	}
 	u.pending = nil

@@ -141,6 +141,13 @@ func TestPlan(t *testing.T) {
 				t.Errorf("body %s", p.js)
 			}
 		}},
+		{"a minute that starts after notAfter waits, and the lines after it with it", saved{Next: 4}, func(in *planInput) {
+			in.notAfter = at(0) - 1
+		}, func(t *testing.T, p plan, in planInput) {
+			if len(p.body.Buckets) != 0 || p.marks[day].Off != 0 {
+				t.Errorf("%d buckets went, mark %+v", len(p.body.Buckets), p.marks[day])
+			}
+		}},
 		{"a mark of a day the store no longer has goes", saved{Next: 4, Marks: map[string]store.Mark{"2020-01-01": {Off: 10, Line: "x"}}}, nil, func(t *testing.T, p plan, in planInput) {
 			if _, ok := p.marks["2020-01-01"]; ok {
 				t.Error("the mark stayed")

@@ -49,6 +49,7 @@ type fakeIngest struct {
 	buckets           map[int64]event.MinuteBucket // current revision by minute
 	revs              int                          // revisions accepted
 	labels            int                          // labels accepted
+	futures           int                          // buckets answered future_minute
 	lastKey, lastHash string
 	lastResp          []byte
 	replays           int
@@ -407,6 +408,7 @@ func (f *fakeIngest) bucket(raw json.RawMessage) map[string]any {
 	}
 	now := f.now()
 	if mb.Minute.After(now.Add(300 * time.Second)) {
+		f.futures++
 		return map[string]any{"status": 422, "code": "future_minute"}
 	}
 	if !mb.Minute.After(now.Add(-180 * 24 * time.Hour)) {

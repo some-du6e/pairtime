@@ -15,12 +15,14 @@ import (
 	"github.com/some-du6e/pairtime/pkg/ledger"
 )
 
-// The worked example of docs/spec/ingest-v1.md 2.2.
+// The worked example of docs/spec/ingest-v1.md 2.2, as of wp-sv4-ingest's
+// d53500d: a valid batch 1 with n = 3 and R_b = 32 bytes of 0xaa.
 const (
-	exampleRaw = "1f8b0800000000000203ab564a4a2c49ce482d56b28aae564a52b232d451ca53b232d6510a8a07f2941229044a3a4a1e608392280440830a8a52cb8026195008946a636b0146d4783bf7000000"
-	exampleM   = "7061697274696d652d696e676573742d76310a645f6578616d706c650a34320a313739353038393636303235300a37303633646337343864343032363332393761356135613934613731663331316562316161386366663135306665313338356537643539633538376433353933"
-	exampleSig = "ed25519=VTusonN24ztn8ApkJahEbIOmr2W+2irhsCNohTx7rZoUAFFcKnq2PkfLnI7kMY/eZTk++qX7g7AWLzB8ItpICg=="
-	exampleJS  = `{"batches":[{"b":1,"n":3,"R_b":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","H_b":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","prev":"0000000000000000000000000000000000000000000000000000000000000000"}]}`
+	exampleRaw  = "1f8b0800000000000203a5cc310e02310c44d1bb4c9d22b683b3c909a86911424e1c448510209ad5de9d882becaf669ab7a2d9a7dfc71bf5bca2a152c00355024ed7f9603b43c0f10fe5588cd2489ab51cbc99fb2d7369a24ea9b3ce69224ca49d4ae2be18932d839c49622196093d5fe33ba5b8336c97ed07d5b9d682f7000000"
+	exampleHash = "c8e78a7463f88a78d206683e69e3f847fe3d83715ad7ec2845e997167ddf4e15"
+	exampleM    = "7061697274696d652d696e676573742d76310a645f6578616d706c650a34320a313739353038393636303235300a63386537386137343633663838613738643230363638336536396533663834376665336438333731356164376563323834356539393731363764646634653135"
+	exampleSig  = "ed25519=H/zgh89iWdWyhYT9m8CX5DM/uM35gYzHsGDd29ZvI2L1CPh2j1PGHr5y51DmoP70iHC4z+9t7wH3ijZAvPNVAA=="
+	exampleJS   = `{"batches":[{"b":1,"n":3,"R_b":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","H_b":"709a14e467695dbaddf729b36d14c2629ba332116c1942c8a21a8e1d21309123","prev":"0000000000000000000000000000000000000000000000000000000000000000"}]}`
 )
 
 func exampleKey() ed25519.PrivateKey {
@@ -52,7 +54,7 @@ func TestSigning(t *testing.T) {
 			}
 		}},
 		{"the body hash is hex SHA-256 of the raw gzip bytes", func(t *testing.T) {
-			if got := bodyHash(raw); got != "7063dc748d40263297a5a5a94a71f311eb1aa8cff150fe1385e7d59c587d3593" {
+			if got := bodyHash(raw); got != exampleHash {
 				t.Errorf("bodyHash = %s", got)
 			}
 		}},
@@ -71,8 +73,9 @@ func TestSigning(t *testing.T) {
 				t.Errorf("signature %s", sg.signature)
 			}
 		}},
-		{"a batch root encodes as the spec's JSON, members in its order", func(t *testing.T) {
-			js, err := encodeBody(Body{Batches: []Root{{B: 1, N: 3, Root: repeated(0xaa), Head: repeated(0xbb)}}})
+		{"a batch root encodes as the spec's JSON, members in its order, with its head from ledger-v1 6", func(t *testing.T) {
+			root := repeated(0xaa)
+			js, err := encodeBody(Body{Batches: []Root{{B: 1, N: 3, Root: root, Head: ledger.BatchHead(ledger.Hash{}, root, 3, 1)}}})
 			if err != nil {
 				t.Fatal(err)
 			}

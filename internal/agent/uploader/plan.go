@@ -48,6 +48,11 @@ type planInput struct {
 	lag int64
 	// labels go when set.
 	labels *Labels
+	// notAfter holds back the buckets of minutes that start after it, in
+	// Unix ms: the server refuses a minute that starts more than 300 s
+	// after its clock (future_minute), as a device whose clock runs fast
+	// would send. 0 holds back nothing.
+	notAfter int64
 	// maxRoots and maxBuckets replace the spec's limits when set. Tests
 	// use them to split an upload.
 	maxRoots, maxBuckets int
@@ -150,6 +155,9 @@ func bucketsOf(in planInput, n int) ([]entry, map[string]bool, error) {
 				out = append(out, entry{day: f.Day, mark: r.Mark})
 				took++
 				return true
+			}
+			if in.notAfter != 0 && b.At() > in.notAfter {
+				return false // it waits until the server's clock reaches it
 			}
 			w, ok := witnessOf(in.rows, b.At(), in.lag, start, in.st.Offline)
 			if !ok {

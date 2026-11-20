@@ -132,6 +132,7 @@ const (
 	codePrevMismatch  = "prev_mismatch"
 	codeChainGap      = "chain_gap"
 	codeBeforeChain   = "before_chain"
+	codeFutureMinute  = "future_minute"
 )
 
 // The request refusals the uploader acts on (ingest-v1 2.6).
@@ -148,6 +149,7 @@ const (
 	refusalKeyMissing   = "device_key_missing"
 	refusalKeyReused    = "idempotency_key_reused"
 
+	refusalBodyUnreadable = "body_unreadable"
 	refusalBodyTooLarge   = "body_too_large"
 	refusalDecompressed   = "decompressed_too_large"
 	refusalTooManyBatches = "too_many_batches"
