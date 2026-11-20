@@ -180,6 +180,7 @@ type Writer struct {
 	head    ledger.Hash   // its H_b, zero(32) before the first
 	pending []pending     // the records since the last seal
 	q       score.Questions
+	snap    position // where the newest seal frame that holds q starts
 	failed  error
 	closed  bool
 
@@ -496,6 +497,11 @@ type sealPayload struct {
 	Head     ledger.Hash `json:"head"`
 	// SealedAt is when the batch was sealed, in Unix ms.
 	SealedAt int64 `json:"sealed_at"`
+	// Q is what the prompt classes' questions remember after the batch's
+	// last record (score.Questions), in the seal frame of every
+	// questionRows-th batch, so Open can restore them exactly rather than
+	// read every record again. Rows leave it out.
+	Q *score.QuestionsState `json:"q,omitempty"`
 }
 
 // rowPayload is a batch frame's payload in batches.seg: DESIGN 3.5's row,
@@ -509,6 +515,9 @@ type rowPayload struct {
 	// its seal frame ends.
 	Start position `json:"start"`
 	End   position `json:"end"`
+	// Snap is where the newest seal frame that holds Q starts, this
+	// batch's or an earlier one's, or zero before the first.
+	Snap position `json:"snap,omitzero"`
 }
 
 // receiptPayload is a receipt frame's payload in batches.seg.
@@ -581,6 +590,13 @@ func (w *Writer) seal() (Batch, bool, error) {
 	at := w.now()
 	sp := sealPayload{B: row.B, FirstSeq: row.FirstSeq, N: row.N, Prev: w.head, Root: row.Root, Head: row.Head,
 		SealedAt: at.UnixMilli()}
+	snap := w.snap
+	if row.B%questionRows == 0 {
+		// w.q has taken every record the batch holds and none after.
+		st := w.q.State()
+		sp.Q = &st
+		snap = position{Seg: w.segDay, Off: w.seg.size}
+	}
 	payload, err := json.Marshal(sp)
 	if err != nil {
 		w.mu.Unlock()
@@ -600,7 +616,7 @@ func (w *Writer) seal() (Batch, bool, error) {
 	seg := w.seg
 	retired := w.takeRetired()
 	w.pending = nil
-	w.b, w.head = row.B, row.Head
+	w.b, w.head, w.snap = row.B, row.Head, snap
 	w.mu.Unlock()
 
 	// The one flush of the seal. Records written since the seal frame go
@@ -611,7 +627,8 @@ func (w *Writer) seal() (Batch, bool, error) {
 		w.fail(err)
 		return Batch{}, false, err
 	}
-	rp := rowPayload{sealPayload: sp, LastSeq: row.FirstSeq + row.N - 1, Start: start, End: end}
+	rp := rowPayload{sealPayload: sp, LastSeq: row.FirstSeq + row.N - 1, Start: start, End: end, Snap: snap}
+	rp.Q = nil
 	if err := w.writeRow(rp); err != nil {
 		// The batch is sealed and on disk, and the next Open writes its
 		// row from the seal frame. Until then nothing more goes in

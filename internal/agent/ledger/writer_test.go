@@ -192,6 +192,67 @@ func TestContent(t *testing.T) {
 	}
 }
 
+// TestQuestionsAfterRestart checks that a restart changes no prompt's
+// f.pc: a prompt that answers a question asked before the agent restarted
+// is an answer however many batches came between, as it is in a writer that
+// never stopped (SM 2.2), and rows don't carry the questions the seal
+// frames keep.
+func TestQuestionsAfterRestart(t *testing.T) {
+	cases := []struct {
+		name    string
+		asks    bool // the session's last output asked a question
+		batches int  // batches sealed after it, before the restart
+		want    features.Class
+	}{
+		{"an answer to a question asked just before a restart is an answer", true, 0, features.Answer},
+		{"an answer to a question asked more than questionRows batches before a restart is an answer", true, questionRows + 5, features.Answer},
+		{"an answer to a question asked two seal frames of questions before a restart is an answer", true, 2*questionRows + 1, features.Answer},
+		{"a go-ahead after an output that asked nothing is low_effort after a restart too", false, questionRows + 5, features.LowEffort},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			dir := t.TempDir()
+			w := open(t, dir, newClock(testT))
+			if _, err := w.Write(harness(&event.AgentOutput{TurnKey: "t_0", Words: 7, IsFinal: true, AsksQuestion: c.asks},
+				[]byte("Which one, the modal or the drawer?"))); err != nil {
+				t.Fatal(err)
+			}
+			rng := rand.New(rand.NewPCG(29, 30))
+			for range c.batches {
+				if _, _, err := write(w, rng, "os.presence", testT); err != nil {
+					t.Fatal(err)
+				}
+				if _, _, err := w.Seal(); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := w.Close(); err != nil {
+				t.Fatal(err)
+			}
+			w = open(t, dir, newClock(testT))
+			s, err := w.Write(prompt("ok", 0))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := w.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if f, _ := featuresOf(t, records(verify(t, dir, keysOf(t, testKDev)))[s-1]); f.PC != c.want {
+				t.Errorf("f.pc is %q, want %q", f.PC, c.want)
+			}
+			bf, err := readBatchesFile(filepath.Join(dir, batchesName))
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, rp := range bf.rows {
+				if rp.Q != nil {
+					t.Fatalf("the row of batch %d carries the questions", rp.B)
+				}
+			}
+		})
+	}
+}
+
 // harness is a hook record of session s_1 in project p_web.
 func harness(p event.Payload, text []byte) Input {
 	rng := rand.New(rand.NewPCG(3, 4))

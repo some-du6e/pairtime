@@ -19,6 +19,7 @@ import (
 	"github.com/some-du6e/pairtime/internal/agent/home"
 	"github.com/some-du6e/pairtime/pkg/event"
 	"github.com/some-du6e/pairtime/pkg/ledger"
+	"github.com/some-du6e/pairtime/pkg/score"
 )
 
 // batchesFile is batches.seg as read back.
@@ -427,10 +428,14 @@ func (w *Writer) finishArchives() error {
 	return nil
 }
 
-// questionRows is how many batches back Open reads the records it rebuilds
-// the prompt classes' questions from (score.Questions): about an hour of
-// work, at a batch a minute. A prompt that answers a question asked before
-// the agent restarted usually comes within minutes.
+// questionRows is how often a seal frame holds what the prompt classes'
+// questions remember (score.Questions): every questionRows-th batch's does.
+// Open restores them from the newest such frame and reads only the records
+// after it, so a restart changes no prompt's class: f.pc follows from the
+// chain's records in order, wherever the agent restarted. A ledger with no
+// such frame yet reads them from its first record. One written before seal
+// frames held them reads them from questionRows batches back, as near as
+// it gets.
 const questionRows = 64
 
 // before reports whether p comes before q in the segments.
@@ -446,23 +451,26 @@ func (p position) before(q position) bool {
 // A frame that isn't whole is a torn tail, which a crash or a power cut
 // leaves, only at the end of the newest segment and after the last row's
 // end, which was flushed before the row was written. scan cuts it off.
-// Anywhere else, the files are damaged. Reading starts questionRows
-// batches before the last row's end; the records before that end are
-// read only to rebuild what the prompt classes need.
+// Anywhere else, the files are damaged. Reading starts at the newest seal
+// frame that holds the prompt classes' questions (questionRows); the
+// records before the last row's end are read only to rebuild those.
 func (w *Writer) scan(rows []rowPayload) ([]rowPayload, error) {
 	days, err := segments(w.dir)
 	if err != nil {
 		return nil, err
 	}
-	var start, from position
+	var start, from, snap position
 	next, b, head := uint64(1), uint64(0), ledger.Hash{}
 	if n := len(rows); n > 0 {
 		last := rows[n-1]
-		start, next, b, head = last.End, last.LastSeq+1, last.B, last.Head
+		start, next, b, head, snap = last.End, last.LastSeq+1, last.B, last.Head, last.Snap
 		if !slices.Contains(days, start.Seg) {
 			return nil, damaged("batch %d ends in the segment of %s, which isn't there", last.B, start.Seg)
 		}
 		from = rows[max(0, n-questionRows)].Start
+		if snap != (position{}) {
+			from = snap
+		}
 		if !slices.Contains(days, from.Seg) {
 			from = position{Seg: start.Seg}
 		}
@@ -547,6 +555,12 @@ func (w *Writer) scan(rows []rowPayload) ([]rowPayload, error) {
 				w.pending = append(w.pending, pending{rec: rec, pos: position{Seg: day, Off: fm.off}})
 				next++
 			case kindSeal:
+				// What the questions remember after the batch's records,
+				// which reading those records gives too.
+				if err := w.restoreQuestions(fm.payload, position{Seg: day, Off: fm.off}, &snap); err != nil {
+					f.close()
+					return nil, fmt.Errorf("the segment of %s, offset %d: %w", day, fm.off, err)
+				}
 				if sealed {
 					continue
 				}
@@ -555,6 +569,7 @@ func (w *Writer) scan(rows []rowPayload) ([]rowPayload, error) {
 					f.close()
 					return nil, fmt.Errorf("the segment of %s, offset %d: %w", day, fm.off, err)
 				}
+				rp.Snap = snap
 				restored = append(restored, rp)
 				b, head = rp.B, rp.Head
 				w.pending = nil
@@ -569,8 +584,29 @@ func (w *Writer) scan(rows []rowPayload) ([]rowPayload, error) {
 			f.close()
 		}
 	}
-	w.next, w.b, w.head = next, b, head
+	w.next, w.b, w.head, w.snap = next, b, head, snap
 	return restored, nil
+}
+
+// restoreQuestions restores the prompt classes' questions from a seal
+// frame that holds them, and then says the frame, which starts at at, is
+// the newest that does.
+func (w *Writer) restoreQuestions(payload []byte, at position, snap *position) error {
+	var sp struct {
+		B uint64                `json:"b"`
+		Q *score.QuestionsState `json:"q"`
+	}
+	if err := json.Unmarshal(payload, &sp); err != nil {
+		return damaged("a seal frame: %v", err)
+	}
+	if sp.Q == nil {
+		return nil
+	}
+	if err := w.q.Restore(*sp.Q); err != nil {
+		return damaged("the seal of batch %d: %v", sp.B, err)
+	}
+	*snap = at
+	return nil
 }
 
 // recordOf reads a record frame's payload: a header that follows spec
@@ -611,6 +647,7 @@ func (w *Writer) sealFrame(payload []byte, b uint64, prev ledger.Hash, end posit
 	if row.Root != sp.Root || row.Head != sp.Head {
 		return rowPayload{}, damaged("the seal of batch %d has a root or head its records don't give", sp.B)
 	}
+	sp.Q = nil // rows leave it out
 	return rowPayload{sealPayload: sp, LastSeq: sp.FirstSeq + sp.N - 1, Start: w.pending[0].pos, End: end}, nil
 }
 
