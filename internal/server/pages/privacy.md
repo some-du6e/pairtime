@@ -23,7 +23,7 @@ pairtime is open source under the AGPL-3.0 license, and [the code this server ru
 
 ## What pairtime does
 
-pairtime counts the time you spend building with AI tools: thinking, writing prompts, reading what the agent did, testing and fixing. Time your agent spends working on its own doesn't count. The pairtime program on your computer does the tracking and the scoring, and this server receives the results as numbers. That lets you see your time from anywhere, show a profile if you want one, and submit hours to a Hack Club program.
+pairtime counts the time you spend building with AI tools: thinking, writing prompts, reading what the agent did, testing and fixing. Time your agent spends working on its own doesn't count. The pairtime program on your computer does the tracking and the scoring, and this server receives the results, mostly as numbers. That lets you see your time from anywhere, show a profile if you want one, and submit hours to a Hack Club program.
 
 ## What stays on your computer
 
@@ -35,7 +35,9 @@ pairtime keeps these on your computer:
 - the names of other apps you use
 - your keystrokes. pairtime never records which keys you press or when you press them. If you turn on the typing module, it keeps per-minute counts and summaries, never the keys.
 
-None of it is uploaded, with one exception that you control. When you submit hours, a few of your prompts and the agent messages they answered go to the program's reviewers, after you've seen exactly what they will see. [When you submit hours](#when-you-submit-hours) explains how.
+pairtime encrypts what it keeps of your prompts, the agent's replies and your file paths. That keeps them from other people who use this computer under their own account, from apps that sync your home folder to the cloud, and from casual reading. It doesn't protect them from malware running as you.
+
+None of it is uploaded, except in two cases you control. When you submit hours, a few of your prompts and the agent messages they answered go to the program's reviewers, after you've seen exactly what they will see. [When you submit hours](#when-you-submit-hours) explains how. And if you turn on backups, encrypted copies go to this server, which can't open them without your recovery code.
 
 If you also use Hackatime, your editor keeps sending Hackatime what it sent before. pairtime adds nothing to it and removes nothing from it.
 
@@ -59,7 +61,7 @@ Some things reach the server only at particular moments:
 - **Publishing.** When you publish a devlog, a project page or badges, the server gets exactly what the preview showed you.
 - **Backups.** Only if you turn them on, the server gets your device key, locked with your recovery code, and encrypted copies of your ledger and vault. It can't open them without your recovery code.
 
-This server never receives your prompts or the agent's output, file names or paths, window titles, the names of other programs you run, branch names of private repositories, keystrokes or their timing, prompt similarity sketches, error messages, your computer's name, or your username on it.
+Apart from a submission, and the encrypted backups if you turn them on, this server never receives your prompts or the agent's output, file names or paths, window titles, the names of other programs you run, branch names of private repositories, keystrokes or their timing, prompt similarity sketches, error messages, your computer's name, or your username on it.
 
 There's no analytics or telemetry. Apart from what this notice lists, the only request pairtime makes is a daily check with GitHub for updates, and that carries none of your data. To see exactly what the next upload will send, run `pairtime privacy show`.
 
@@ -95,14 +97,17 @@ Submitting hours to a program is always your choice. This is what happens when y
 - The server draws some of your prompts at random. For each one, you reveal the prompt and the agent message it answered. pairtime first removes the secrets and personal details it can find, then shows you exactly what a reviewer will see. You can remove more, or withhold any item. If you withhold one, the minutes it supports aren't credited.
 - Redaction sometimes misses things, names especially, so read the preview before you send it.
 - The preview also says what the check reveals about your other projects. That's counts and times, never content.
-- What you reveal is sealed end to end, so Cloudflare and anything else in between can't read it. Only the reviewers assigned to your submission, Hack Club's Fraud Squad, its Quality and Integrity team and HQ spot-checkers can open it. Every view is logged, and you can read the log.
+- What you reveal is encrypted on your computer, to a key that belongs to this server, and the evidence store keeps it encrypted. Cloudflare, and the logs and caches along the way, only ever see it encrypted.
+- This server holds the key that opens it. It decrypts each item in memory to check it, and again each time a reviewer opens it, when it encrypts the item once more for that reviewer's browser alone. So whoever runs this server could read what you reveal. The operator also keeps an encrypted copy of the key offline.
+- The encryption doesn't protect against someone at Cloudflare who actively replaces the keys, because the key your computer encrypts to, and the review page reviewers open it with, both come through Cloudflare.
+- The people who may open what you reveal are the reviewers assigned to your submission, Hack Club's Fraud Squad, its Quality and Integrity team and HQ spot-checkers. Every view is logged, and you can read the log.
 - If a revealed item shows something it shouldn't, the "This revealed something it shouldn't have" button deletes it at once. The minutes it supported stop counting.
 - A person may audit your submission in a 15-minute walk-through on a Slack huddle. It's never recorded, your camera is never needed, and you can bring a parent or club leader, or choose a written audit instead. Hack Club's safeguarding rules come first where they differ.
 
 ## Who else is involved
 
 - **Hack Club Auth** signs you in.
-- **Cloudflare** sits in front of this server and handles its encrypted connections. It can see the numbers your computer uploads, but not the evidence you reveal when you submit.
+- **Cloudflare** sits in front of this server and handles its encrypted connections, so it sees everything that passes between your computer or browser and this server, such as the numbers your computer uploads and the pages you open. What you reveal when you submit hours passes through it encrypted, with the limit [When you submit hours](#when-you-submit-hours) describes.
 - **GitHub, GitLab and Forgejo.** The server looks up commits of your public repositories there to check them. Once a day it also publishes a day root to a public GitHub repository. A day root is one hash over that day's uploads, with a count and nothing about you.
 - **A storage provider** keeps backup copies of this server's database.
 - **Programs** you connect a project to get your submissions and their outcomes.

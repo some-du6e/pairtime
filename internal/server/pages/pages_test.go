@@ -198,6 +198,20 @@ func TestPrivacyNotice(t *testing.T) {
 			want: []string{"through the same privacy hub it uses for Hackatime"},
 		},
 		{
+			name:    "the notice says this server can read what you reveal, and where the sealing stops (DESIGN 7.6)",
+			want:    []string{"So whoever runs this server could read what you reveal.", "doesn&#39;t protect against someone at Cloudflare who actively replaces the keys"},
+			notWant: []string{"end to end", "anything else in between can&#39;t read it"},
+		},
+		{
+			name: "the notice says the vault's encryption doesn't stop malware running as you (DESIGN 3.5)",
+			want: []string{"It doesn&#39;t protect them from malware running as you."},
+		},
+		{
+			name:    "the notice limits never receiving prompts to outside a submission and backups",
+			want:    []string{"Apart from a submission, and the encrypted backups if you turn them on, this server never receives your prompts"},
+			notWant: []string{"<p>This server never receives"},
+		},
+		{
 			name: "the IP period in the prose is the schedule's",
 			want: []string{"the server deletes them after 30 days."},
 		},
