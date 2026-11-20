@@ -520,7 +520,7 @@ func (d *doctor) checkWitness(ctx context.Context) result {
 	var problems []string
 	keyPath := filepath.Join(filepath.Dir(d.cfg.Path), witnessKey)
 	if fi, err := os.Lstat(keyPath); err != nil {
-		problems = append(problems, fmt.Sprintf("there is no deploy key at config/%s, so the sidecar can't push (deploy/runbook.md, step 6)", witnessKey))
+		problems = append(problems, fmt.Sprintf("there is no deploy key at config/%s, so the sidecar can't push (deploy/runbook.md, step 5)", witnessKey))
 	} else if fi.Mode().Perm()&0o077 != 0 {
 		problems = append(problems, fmt.Sprintf("config/%s has mode %04o; ssh refuses a key others can read: chmod 600 it", witnessKey, fi.Mode().Perm()))
 	}

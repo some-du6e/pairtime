@@ -218,7 +218,7 @@ func writeConfigFile(path string, data []byte) error {
 func checkDataDir(dir string) error {
 	fi, err := os.Stat(dir)
 	if errors.Is(err, fs.ErrNotExist) {
-		return fmt.Errorf("the data directory %s doesn't exist; make it first with mode 0700 (deploy/runbook.md, step 3)", dir)
+		return fmt.Errorf("the data directory %s doesn't exist; make it first with mode 0700, owned by the server's user (deploy/runbook.md, step 2)", dir)
 	}
 	if err != nil {
 		return err
