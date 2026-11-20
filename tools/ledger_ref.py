@@ -946,9 +946,13 @@ FEATURE_RTYPES = (PROMPT_SUBMIT, AGENT_TOOL, SHELL_COMMAND, CLI_TRACK)
 
 
 def prompt_features(k_feat, text, prompt_class):
-    """f for prompt.submit and cli.track, and the per-shingle values."""
+    """f for prompt.submit and cli.track, and the per-shingle values. text
+    is None for a prompt whose text the device never had (10.1), whose f
+    holds only v and pc."""
     if prompt_class not in PROMPT_CLASSES:
         raise LedgerError("prompt class %s isn't one of %s" % (json.dumps(prompt_class), ", ".join(PROMPT_CLASSES)))
+    if text is None:
+        return {"v": FEATURES_V, "pc": prompt_class}, []
     _, words = normalize(text)
     tag, xs = shingles(words)
     values = [shingle_value(k_feat, tag, x) for x in xs]
@@ -1448,7 +1452,11 @@ def check_features(rep, obj, path):
     rtype = get_int(obj, "rtype", path, 0, 0xFF)
     common = ("k_dev", "rtype", "f")
     if rtype in (PROMPT_SUBMIT, CLI_TRACK):
-        fields(obj, path, common + ("text", "prompt_class", "shingle_values"), ("note",))
+        fields(obj, path, common + ("prompt_class",), ("text", "shingle_values", "note"))
+        if ("text" in obj) != ("shingle_values" in obj):
+            raise FormatError("%s: text and shingle_values come together" % path)
+        if rtype == CLI_TRACK and "text" not in obj:
+            raise FormatError("%s: a track label always has its text (10.1)" % path)
     elif rtype == AGENT_TOOL:
         fields(obj, path, common + ("hunks",), ("command", "note"))
     elif rtype == SHELL_COMMAND:
@@ -1461,10 +1469,10 @@ def check_features(rep, obj, path):
     rep.count("feature sets")
     try:
         if rtype in (PROMPT_SUBMIT, CLI_TRACK):
-            _, text = get_hex_text(obj, "text", path)
+            text = get_hex_text(obj, "text", path)[1] if "text" in obj else None
             want, values = prompt_features(keys["k_feat"], text, get_str(obj, "prompt_class", path))
             given = [from_hex(v, "%s.shingle_values[%d]" % (path, i), 32)
-                     for i, v in enumerate(get_list(obj, "shingle_values", path))]
+                     for i, v in enumerate(get_list(obj, "shingle_values", path))] if "text" in obj else []
             rep.same_list(path + ".shingle_values", given, values)
         else:
             hunks = None
@@ -2060,8 +2068,14 @@ def normalization_json(note, text):
 
 def prompt_feature_json(k_dev, rtype, note, text, prompt_class):
     f, values = prompt_features(derive_keys(k_dev)["k_feat"], text, prompt_class)
-    return {"note": note, "k_dev": k_dev.hex(), "rtype": rtype, "text": text.encode("utf-8").hex(),
-            "prompt_class": prompt_class, "shingle_values": [v.hex() for v in values], "f": f}
+    out = {"note": note, "k_dev": k_dev.hex(), "rtype": rtype}
+    if text is not None:
+        out["text"] = text.encode("utf-8").hex()
+    out["prompt_class"] = prompt_class
+    if text is not None:
+        out["shingle_values"] = [v.hex() for v in values]
+    out["f"] = f
+    return out
 
 
 def tool_feature_json(k_dev, rtype, note, hunks, command):
@@ -2092,6 +2106,8 @@ FEATURE_PROMPTS = (
 
 def make_features(k_dev):
     out = [prompt_feature_json(k_dev, PROMPT_SUBMIT, note, text, pc) for note, text, pc in FEATURE_PROMPTS]
+    out.append(prompt_feature_json(k_dev, PROMPT_SUBMIT, "a bridge prompt, whose text the device never had", None,
+                                   "substantive"))
     out.append(prompt_feature_json(k_dev, CLI_TRACK, "a track label", "make the navbar sticky on mobile", "substantive"))
     out.append(tool_feature_json(k_dev, AGENT_TOOL, "an edit across two files, with an insertion and a deletion", [
         ("src/nav.js", 10, 3, 10, 5), ("src/nav.js", 40, 0, 43, 2), ("web/app.tsx", 1, 4, 0, 0)], None))

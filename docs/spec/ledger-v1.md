@@ -150,13 +150,19 @@ The writer emits each body the way Go's `encoding/json` writes `pkg/ledger`'s bo
 | Member | Holds | Present |
 |---|---|---|
 | `n` | the nonce, as 64 lowercase hex digits | always, first |
-| `e` | the record. For `0x01` to `0x12`, the event after `Event.Shareable()`, as `Event.MarshalJSON` writes it. For `0x40`, the serialized `score.ProjectState` (WP-SC5). For `0x41`, the note (WP-AG5) | always |
-| `f` | the record's keyed scorer features, versioned by `f.v` (10.7) | on `prompt.submit`, `agent.tool`, `shell.command` and `cli.track`, from writers of version 1 on |
-| `c` | the record's content commitment, `{"n": token count, "r": C}` (10.2) | on `prompt.submit`, a final `agent.output` and `cli.track` (10.1) |
+| `e` | the record. For `0x01` to `0x12`, the event after `Event.Shareable()`, as `Event.MarshalJSON` writes it. For `0x40` and `0x41`, the objects of 4.7 | always |
+| `f` | the record's keyed scorer features, versioned by `f.v` (10.7) | on every `prompt.submit`, `agent.tool`, `shell.command` and `cli.track`, and on no other record |
+| `c` | the record's content commitment, `{"n": token count, "r": C}` (10.2) | on every `prompt.submit`, final `agent.output` and `cli.track` apart from the ones 10.1 lists whose text the device never had, and on no other record |
 
-So every body starts with the six bytes `{"n":"` and then the nonce in hex. A body holds no text: `e` comes from `Shareable()`, and `f` and `c` hold keyed values only (DESIGN 3.6, 4.2). Part 1 writers emit `n` and `e`; `f` and `c` start with WP-LG4.
+So every body starts with the six bytes `{"n":"`, then the nonce in hex and a closing `"`. A body holds no text: `e` comes from `Shareable()`, and `f` and `c` hold keyed values, counts and the prompt class (DESIGN 3.6, 4.2). The counts and the class are plain values: `c.n`, the line numbers of `f.h`'s hunks, and `f.pc`. A metadata reveal shows them with each body it carries, so it tells the server every revealed prompt's token count, about twice its word count, which `len_chars` doesn't give.
 
-A verifier that parses a revealed body also checks that the body agrees with its header: `e` is a record of type `rtype`; for an event, `e`'s `seq` is `s`, and the digests of `e`'s `project_key` and `session_key` are the header's `project` and `session`; for a checkpoint, the digest of the project it names is the header's `project`. It also checks that `f` and `c` appear only on the kinds 10.7 and 10.1 name. A body that disagrees with its header fails verification, as a body whose hash differs would.
+No ledger was written before `f` and `c` existed, so a body that lacks one where the table puts it fails verification. A writer that left them off would keep its prompts out of the challenge pool, which takes only records that commit their text (DESIGN 7.5 step 4), and out of the server's dark-flow re-score, which reads only `f` (DESIGN 6.2 D18).
+
+A body is a JSON text (RFC 8259) in valid UTF-8 (RFC 3629). Verifiers in different languages must read the same values from it, so a body is invalid when any object in it has two members whose names are equal once ASCII letters are lowercased, and when its top level isn't exactly the members of the table above, named exactly so, in the table's order. Without that rule one stored body could hold two records. Go's `encoding/json` matches member names without regard to case and keeps the last of two, so a body holding both `locked` and `LOCKED` reads one way in Go, and another way in Python or JavaScript, which keep the two names apart. An honest writer never emits such a body: every member name `pkg/event` and this spec use is lowercase, and a checkpoint's state writes no two names that fold together (4.7).
+
+A verifier that parses a revealed body also checks that it agrees with its header and its chain. `e` is a record of type `rtype`. For an event, `e`'s `seq` is `s`, its `device_id` is the device whose chain holds the record, and the digests of its `project_key` and `session_key` are the header's `project` and `session`. For a checkpoint, the digest of `e.project_key` is the header's `project` (4.7). `f` and `c` appear exactly where the table and 10.1 put them, and `f` fits its kind (10.7). A body that disagrees fails verification, as a body whose hash differs would.
+
+The `device_id` check is what binds a chain to one install. Headers, entries, `R_b` and `H_b` name no device, so without it one account could upload another device's batch rows `{b, n, R_b, H_b, prev}` under its own `device_id` as that device produces them, collect receipts and day leaves for them, and later reveal the other device's headers and bodies with every check passing (DESIGN 4.5). With it, the first revealed event body shows the replay. A server may also refuse a batch whose `H_b` it already stored for another device. Honest heads never collide, because every entry hashes a body that carries a device-keyed nonce.
 
 ### 4.6 Entry
 
@@ -165,6 +171,14 @@ entry = hdr || SHA-256(body)        65 bytes
 ```
 
 Entries are what the batch tree is built from. A revealed batch shows the header of every record in it, and each body's hash stands in for the body until the body itself is revealed (DESIGN 4.2).
+
+### 4.7 Checkpoints and upload-failure notes
+
+A checkpoint's `e` is `{"project_key": p, "t": t, "state": S}`, members in that order. `p` is the project whose state it holds, the key whose digest the header carries. `t` is the checkpoint's UTC minute in Unix milliseconds, a multiple of 900,000, because the scorer seals checkpoints at the minutes divisible by 15 (DESIGN 3.6, 6.5). `S` is the serialized `score.ProjectState` (WP-SC5), keyed values only. DESIGN 6.5's range rule needs `t` and the header check needs `p`, and neither should depend on parsing `S`, whose layout belongs to `pkg/score`. `S` follows 4.5's rule like the rest of the body, so it writes no two member names that fold together: a map keyed by opaque keys, which may differ only in case, goes in as a list of pairs.
+
+An upload-failure note's `e` is `{"t": t, "reason": r}`. `t` is when the upload failed, in Unix milliseconds, and `r` is one of `dns`, `connect`, `tls`, `http_5xx` and `http_429` (DESIGN 3.6). The note is the client's own claim (DESIGN 7.4).
+
+A verifier refuses a checkpoint or note whose `e` has other members, a `t` that isn't an integer (or, for a checkpoint, isn't a multiple of 900,000), a `p` that isn't an opaque key, or an `r` not in the list.
 
 ## 5. Merkle trees
 
@@ -269,7 +283,7 @@ A verifier that holds a run of a device's batches, with headers and body hashes 
 1. Batch numbers rise by 1 with no gap. A run that starts at `b = 1` has `prev = zero(32)`. A run that starts later links its first `prev` to the head the server stored for the batch before it, when the server stored one.
 2. Sequence numbers rise by 1 with no gap, within and across batches. Batch 1 starts at `s = 1`.
 3. Every header follows 4.3: its rtype is in the table, an `os.*` header has the zero project, and checkpoints and upload-failure notes have the fields their row in 4.3 gives them.
-4. Every entry is its header followed by the SHA-256 of the record's stored body, and every revealed body agrees with its header (4.5).
+4. Every entry is its header followed by the SHA-256 of the record's stored body, and every revealed body is valid JSON by 4.5's rule, agrees with its header, names the chain's device in an event's `device_id`, and has `f` and `c` exactly where 4.5, 4.7, 10.1 and 10.7 put them.
 5. `n_b` is the number of the batch's records, and `R_b` is the `MTH` of their entries.
 6. `H_b` follows from `H_(b-1)`, `R_b`, `n_b` and `b`.
 7. Each receipt verifies over `M_b` under the server key that was valid at `received_at` (DESIGN 10.2).
@@ -298,6 +312,13 @@ Three kinds of record commit a text, one text each:
 
 No other record has a `c` member. DESIGN 3.6 names prompts and final agent messages. `cli.track` joins them because DESIGN 5.4 stores and commits the label "so a `track`-anchored turn can be drawn by the challenge like any prompt", and DESIGN 7.5 step 4 puts `track` calls in the pool.
 
+Some records of these kinds reach the device without their text, and only these may lack `c`:
+
+- a `prompt.submit` from the WakaTime bridge, `via` `bridge` or `bridge_unverified`, which carries only the prompt's length (DESIGN 5.7);
+- a `prompt.submit` or final `agent.output` from a plugin, `via` `plugin`, whose event came without its text (DESIGN 5.3).
+
+Such a record has no `c`. A prompt's `f` then holds only `v` and `pc` (10.7), so scorers have no sketch, template or error signature for it, and SM 4.2's re-roll and fix-it rules can't count it (DESIGN 6.2 D4). The challenge can't draw it (DESIGN 5.7). Every other `prompt.submit`, every final `agent.output` and every `cli.track` has `c`, and a verifier fails a body that lacks it (4.5): `via` is in `e`, so a verifier can tell the two cases apart, and a client can't escape the draw by leaving `c` off a hook or log prompt. A client that labels its prompts `bridge` or `plugin` instead does escape it, as DESIGN 5.7 accepts for every text-less prompt: a bridge prompt gets no think lead (DESIGN 6.2 D4), and a bridge or plugin anchor is level C unless keyboard input in the host window corroborates it (DESIGN 6.4).
+
 The committed text is a byte string of valid UTF-8 as RFC 3629 defines it: no surrogates, no overlong forms, nothing above U+10FFFF. A writer holding text that isn't valid UTF-8 makes it valid before committing. How it does that isn't part of the format, because nobody recomputes it. The vault keeps the committed bytes (DESIGN 3.5, WP-LG6), and a reveal opens those. Nothing in part 2 applies Unicode normalization such as NFC.
 
 An agent message longer than 16,384 bytes commits its longest prefix of at most 16,384 bytes that ends on a character boundary. In bytes: start with `k = 16,384`, lower `k` by one while byte `k` of the message is a continuation byte (`0x80` to `0xbf`), then commit bytes `0` to `k - 1`. That prefix is the "first 16 KiB" the vault keeps (DESIGN 3.5). Prompts and labels commit in full.
@@ -321,7 +342,7 @@ t_j    = SHA-256(0x00 || salt_j || w_j)               = LEAF(salt_j || w_j), 5.1
 C      = ROOT(t_1, ..., t_n)
 ```
 
-`s` is the record's sequence number, and `w_j` is the UTF-8 bytes of token `j`. `C` is a `ROOT` over leaf hashes the writer computes itself (5.1), so each `t_j` carries the leaf prefix once. With `n = 0`, `C` is the SHA-256 of no bytes, the same for every empty text. That reveals nothing new: `len_chars` in a prompt, `words` and `code_lines` in an agent message, and `text_len` in a `track` call already show that a text is empty.
+`s` is the record's sequence number, and `w_j` is the UTF-8 bytes of token `j`. `C` is a `ROOT` over leaf hashes the writer computes itself (5.1), so each `t_j` carries the leaf prefix once. With `n = 0`, `C` is the SHA-256 of no bytes, the same for every empty text, so `c` shows that a text is empty. For a prompt that is nothing new, because its `len_chars` is 0, nor for an agent message, whose `words` and `code_lines` are 0. A `track` label that `pkg/redact` emptied is the exception: its `text_len` counts what the model passed, so its empty `c` shows that redaction removed all of it. A record with no `c` at all is one whose text the device never had (10.1), not an empty text.
 
 The body's `c` member holds the token count next to the root, `n` as a JSON number and `C` as 64 hex digits:
 
@@ -467,14 +488,14 @@ DESIGN 3.6 writes a hunk as `(HMAC(K_feat, path), start line, end line)`. This s
 | Member | Value | On |
 |---|---|---|
 | `v` | the version, `1` | every `f` |
-| `mh` | the sketch (10.5), 512 hex digits | `prompt.submit`, `cli.track` |
-| `th` | the template value (10.6) | `prompt.submit`, `cli.track` |
-| `es` | the error signature value (10.6) | `prompt.submit`, `cli.track`, when the text has a signature |
+| `mh` | the sketch (10.5), 512 hex digits | `prompt.submit`, `cli.track`, when the record has `c` |
+| `th` | the template value (10.6) | `prompt.submit`, `cli.track`, when the record has `c` |
+| `es` | the error signature value (10.6) | `prompt.submit`, `cli.track`, when the record has `c` and its text has a signature |
 | `pc` | the prompt class: `substantive`, `low_effort`, `answer` or `error_paste` | `prompt.submit`, `cli.track` |
-| `h` | the edit hunks (10.6), a list | `agent.tool`, when the tool edited a file |
+| `h` | the edit hunks (10.6), a non-empty list | `agent.tool`, when the tool edited a file |
 | `ch` | the command value (10.6) | `agent.tool`, `shell.command`, when there is a command |
 
-A version 1 writer puts `f` in the body of every `prompt.submit`, `agent.tool`, `shell.command` and `cli.track` record, even when it holds only `v`, and in no other record. A record of one of those kinds without `f` was written before features existed (WP-LG4), which isn't the same as a record that has none.
+The writer puts `f` in the body of every `prompt.submit`, `agent.tool`, `shell.command` and `cli.track` record, even when it holds only `v`, and in no other record (4.5). A prompt whose text the device never had, and so has no `c` (10.1), has an `f` of only `v` and `pc`. So an `f` fits its kind when it holds `v` and, for `prompt.submit` and `cli.track`, either `mh`, `th` and `pc` and maybe `es`, on a record with `c`, or `pc` alone, on one without; for `agent.tool`, maybe `h` and `ch`; for `shell.command`, maybe `ch`. Each hunk in `h` has exactly the five members of 10.6.
 
 `pc` is SM 2.2's class of the text, as the writer computed it when it wrote the record, whatever origin the prompt later turns out to have (DESIGN 3.6 calls it "prompt_class as computed"). SM 2.2 and `pkg/score` own that rule, and CC8 recomputes it for challenged turns. `cli.track` carries the prompt features because DESIGN 5.4 classes a `track` anchor "like a prompt from its text length and content", while the server re-scores from bodies, never from text (DESIGN 6.5 and D18).
 
@@ -490,7 +511,7 @@ with `mh` shortened here. An `agent.tool` record that ran `npm test` and changed
 {"v":1,"h":[{"p":"c8b26d53782c22f46eb418e7716dcc97","os":10,"ol":3,"ns":10,"nl":5}],"ch":"3235767396764538f6473785ffd467f8"}
 ```
 
-A later version adds keys and raises `v`, and its rules apply only to records that carry the new keys (DESIGN 3.6, 6.6). A refit of SM's parameters never changes `f`. A reader that meets a `v` it doesn't know, or a member this table doesn't list, reports the record's features as unknown and doesn't guess.
+A later version adds keys and raises `v`, and its rules apply only to records that carry the new keys (DESIGN 3.6, 6.6). A refit of SM's parameters never changes `f`. So `v` is an integer from 1 up, and a version 1 map holds only this table's members. An `f` whose `v` is missing, isn't an integer or is below 1, that holds a member the table doesn't list under `v = 1`, or whose `v`, `mh`, `th`, `es`, `pc`, `h` or `ch` is `null`, is malformed, and its body fails verification. A reader that meets a `v` above its own reports the record's features as unknown and doesn't guess at them. For a server that is still a fault: a server is never older than the clients that write to it, so it refuses or holds a record whose `f.v` is newer than its own, and a modified client can't switch off the re-score of D18 by writing `{"v":2}`.
 
 ### 10.8 What CC8 reveals
 
@@ -645,7 +666,7 @@ Each command exits 0 when everything matches, 1 when a value doesn't, and 2 for 
 | `commitments[]` | `k_dev`, `seq` (`s`), `rtype`, `text` (the committed bytes), `n`, `root` (`C`), optional `raw` (an agent message before its cut), optional `tokens[]`, each `token`, `salt`, `leaf` (10.1, 10.2) |
 | `reveals[]` | `n`, `root`, `items` (10.3), `verdict`: `ok`, `bad_item`, `count`, `alternation` or `root` |
 | `normalizations[]` | `text`, `removed_lines` (line indices from 0), `normalized` (the normalized text), `shingle_kind` (`word3` or `char5`), `shingles` (ascending by UTF-8 bytes), `signature` (the error signature, or `null`) (10.4 to 10.6) |
-| `features[]` | `k_dev`, `rtype`, `f`, and by kind: for `prompt.submit` and `cli.track`, `text`, `prompt_class` and `shingle_values` (in the order of the shingles); for `agent.tool`, `hunks[]`, each `path`, `old_start`, `old_lines`, `new_start`, `new_lines`, and optional `command`; for `shell.command`, optional `command` (10.5 to 10.7) |
+| `features[]` | `k_dev`, `rtype`, `f`, and by kind: for `prompt.submit` and `cli.track`, `prompt_class`, and `text` and `shingle_values` (in the order of the shingles) unless the record is a `prompt.submit` whose text the device never had (10.1), which has neither; for `agent.tool`, `hunks[]`, each `path`, `old_start`, `old_lines`, `new_start`, `new_lines`, and optional `command`; for `shell.command`, optional `command` (10.5 to 10.7) |
 | `jaccard[]` | `a`, `b` (sketches), `matches` (`m` of 10.5) |
 | `shingle_reveals[]` | `mh`, `entries[]`, each `v` and optional `x`, `verdict`: `ok`, `bad_entry` or `sketch` (10.8) |
 | `draws[]` | `r`, `metadata` (`M`), `seed`, `pool[]`, each `device_id`, `seq`, `score`, `drawn[]`, each `device_id`, `seq`, smallest score first, and optional `commits[]`, each `commit`, `score`, with `drawn_commits[]`, each `commit` (10.9) |
@@ -679,7 +700,7 @@ The bodies are stand-ins: the real envelope with the record's real nonce, and `"
 - `commitments`: an empty prompt, a short prompt, CRLF, whitespace at both ends, Cyrillic, an emoji, a no-break space, an ideographic space and Chinese in one prompt, a secret and an email address, a whitespace-only text, an agent message with a code block, a `track` label, an agent message over 16 KiB whose cut falls inside a three-byte character, and 12 random texts.
 - `reveals`: removals at the start, in the middle and at the end, everything removed, nothing removed, adjacent spans of two types, a code span with its line count, two random removals of each random text, and one or more cases of each failing verdict. Among them is a reveal whose leaves still hash to `C` but cover too few tokens, the case the committed `n` exists for (10.2).
 - `normalizations`: each rule of 10.4 and each pattern `F1` to `E6`, the cases where a rule doesn't apply, and 10 random texts.
-- `features`: prompts with and without an error signature, three versions of one re-roll, an empty prompt, a prompt of nothing but a paste, a `track` label, `agent.tool` records with hunks across two files, an insertion, a deletion, a file outside the project and a Windows path, a command, and a read with neither, and `shell.command` records with and without a command.
+- `features`: prompts with and without an error signature, three versions of one re-roll, an empty prompt, a prompt of nothing but a paste, a bridge prompt with no text, a `track` label, `agent.tool` records with hunks across two files, an insertion, a deletion, a file outside the project and a Windows path, a command, and a read with neither, and `shell.command` records with and without a command.
 - `jaccard`, `shingle_reveals` and `draws`: the pairs, CC8 reveals and draws built from those, including each failing verdict, a pool smaller than `CHALLENGE_K`, a pool of 300 where the cap applies, and an empty pool.
 
 ## 12. Worked example
@@ -834,3 +855,11 @@ Part 2 decides these, for DESIGN 3.6, 5.4, 7.3 and 7.5 and SM 4.2 and 8.5:
 22. `f`'s members, their order, their encodings, and `f` on every record of the four kinds from version 1 on, even when it holds only `v` (10.7).
 23. CC8 reveals one value per distinct shingle, ascending, with the shingle's text where no removed span touches it. 10.8 also states what that can't prove, which is less than DESIGN 7.3 assumes.
 24. The draw: the seed hashes the metadata reveal as sent, before sealing; `device_id` carries part 1's length byte; commits are scored with a `0x00` first byte; `CHALLENGE_K` rounds 10% up (10.9).
+
+The review of parts 1 and 2 (issue #19) decided these, before any device witnessed data:
+
+25. Every `prompt.submit`, final `agent.output` and `cli.track` has `c`, and every record of the four feature kinds has `f`. Only the records 10.1 lists, whose text the device never had, lack `c`, and a prompt among them has an `f` of `v` and `pc` alone. Earlier drafts let a body without `f` and `c` pass as written before features existed, which let a modified client keep any prompt out of the draw and the re-score (4.5, 10.1, 10.7).
+26. A body is valid UTF-8, no object in it has two member names that are equal once ASCII letters are lowercased, and its top level is exactly `n`, `e`, `f`, `c`, in that order, where present (4.5).
+27. Body-header agreement includes the event's `device_id`, which must name the device whose chain holds the record (4.5, 9).
+28. A checkpoint's `e` is `{"project_key", "t", "state"}` and an upload-failure note's `{"t", "reason"}`, so a verifier can check a checkpoint's project without parsing `score.ProjectState` (4.7).
+29. An `f` with a `v` below 1 or not an integer, a `null` member, or a member version 1 doesn't list under `v = 1` is malformed. A `v` above a reader's own is unknown, and a server refuses or holds such a record (10.7).
