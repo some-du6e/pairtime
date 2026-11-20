@@ -3,7 +3,6 @@
 package home
 
 import (
-	"strings"
 	"testing"
 
 	"golang.org/x/sys/windows"
@@ -17,7 +16,7 @@ func checkOwnerOnly(t *testing.T, name string, private bool) {
 	if !private {
 		return
 	}
-	sd, err := windows.GetNamedSecurityInfo(name, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION)
+	got, err := windows.GetNamedSecurityInfo(name, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -25,9 +24,14 @@ func checkOwnerOnly(t *testing.T, name string, private bool) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sddl := sd.String()
-	want := "(A;;FA;;;" + user.User.Sid.String() + ")"
-	if !strings.HasPrefix(sddl, "D:P") || !strings.HasSuffix(sddl, want) || strings.Count(sddl, "(") != 1 {
-		t.Errorf("%s has the DACL %s, want a protected one with the single entry %s", name, sddl, want)
+	// SDDL writes well-known accounts as aliases: the CI runner's built-in
+	// Administrator comes out as LA, not as its SID. So the wanted DACL goes
+	// through the same conversion before the two are compared.
+	want, err := windows.SecurityDescriptorFromString("D:P(A;;FA;;;" + user.User.Sid.String() + ")")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.String() != want.String() {
+		t.Errorf("%s has the DACL %s, want %s: protected, with one entry that gives the current user full access", name, got, want)
 	}
 }
