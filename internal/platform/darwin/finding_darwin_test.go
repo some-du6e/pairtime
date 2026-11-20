@@ -32,6 +32,11 @@ import (
 //     so TCC judges the child alone, as it will judge a pairtime agent that
 //     its LaunchAgent starts. This process posts the key for it.
 //
+// The child's readings give a second result, posted_keys_reset_key_down_idle:
+// whether a key that another process posts resets key-down idle at all. If
+// it does, key-down idle can't tell a key a person pressed from one a
+// program posted.
+//
 // It writes macos-key-down-idle.json to $PAIRTIME_FINDINGS_DIR, which
 // platform.yml uploads as an artifact, and fails only when it can't write
 // the file. It never asks for a permission. Posting events is a test-only
@@ -82,6 +87,9 @@ func TestFindingKeyDownIdle(t *testing.T) {
 	f.Probe = p.post(f.Before)
 	f.OwnProcess = p.ownProcessRun(t)
 	f.Answer, f.Detail = f.conclude()
+	var posted string
+	f.PostedKeysReset, posted = f.postedKeys()
+	f.Detail += ". " + posted
 	if !writeFinding(t, "macos-key-down-idle.json", f) {
 		t.Fatalf("%s is set but nothing was written", findingsEnv)
 	}
@@ -93,7 +101,11 @@ func TestFindingKeyDownIdle(t *testing.T) {
 type keyFinding struct {
 	Question string `json:"question"`
 	Answer   string `json:"answer"`
-	Detail   string `json:"detail"`
+	// PostedKeysReset is the second result (postedKeys): whether the
+	// key-down the test process posted reset the child's key-down idle. It
+	// is null when the child has no reading that saw the post.
+	PostedKeysReset *bool  `json:"posted_keys_reset_key_down_idle"`
+	Detail          string `json:"detail"`
 
 	MacOS   string   `json:"macos_version"`
 	Build   string   `json:"macos_build"`
@@ -215,6 +227,83 @@ func verdict(who string, r resets, keysAfter *float64) (answer, detail string) {
 	}
 	return "permission needed, or posted keys don't count", who + " saw any-input idle drop after a posted key-down, but key-down idle stayed at " + secs(keysAfter) +
 		". The call needs the permission, or it counts only hardware keys; one hardware key press on a Mac without the permission tells the two apart"
+}
+
+// postedKeys is the finding's second result, from the child's readings:
+// whether the key-down the test process posted reset the child's key-down
+// idle, which says whether key-down idle counts keys a program posts. A
+// child that failed, or that didn't see the post at all because its
+// any-input idle didn't drop, gives no answer.
+func (f keyFinding) postedKeys() (reset *bool, detail string) {
+	o := f.OwnProcess
+	switch {
+	case o == nil:
+		return nil, "Whether posted keys reset key-down idle is unknown: the child wasn't run"
+	case o.Error != "" || o.Reader == nil:
+		return nil, "Whether posted keys reset key-down idle is unknown: the child run failed"
+	case !o.AnyReset:
+		return nil, "Whether posted keys reset key-down idle is unknown: the child's any-input idle didn't drop, so it didn't see the post"
+	}
+	who := "the child"
+	if isFalse(o.Reader.InputMonitoring) {
+		who = "the child, which has no Input Monitoring"
+	}
+	r := o.KeysReset
+	if r {
+		return &r, "Posted keys reset key-down idle: for " + who + ", the key-down the test process posted counted as a key press, " +
+			"so key-down idle can't tell a key a person pressed from one a program posted"
+	}
+	return &r, "Posted keys didn't reset key-down idle for " + who + ": any-input idle dropped after the posted key-down, but key-down idle stayed at " +
+		secs(o.Reader.After.KeysHIDS)
+}
+
+func TestPostedKeysResult(t *testing.T) {
+	noGrant := false
+	child := func(r resets, err string) *ownRun {
+		return &ownRun{Error: err, Reader: &readerResult{InputMonitoring: &noGrant}, resets: r}
+	}
+	tests := []struct {
+		name string
+		run  *ownRun
+		want string
+	}{
+		{
+			name: "key-down idle that dropped with any-input idle for the child means posted keys reset it",
+			run:  child(resets{AnyReset: true, KeysReset: true}, ""),
+			want: "true",
+		},
+		{
+			name: "any-input idle that dropped alone for the child means posted keys didn't reset key-down idle",
+			run:  child(resets{AnyReset: true}, ""),
+			want: "false",
+		},
+		{
+			name: "a child whose any-input idle didn't drop didn't see the post, so there is no answer",
+			run:  child(resets{KeysReset: true}, ""),
+			want: "null",
+		},
+		{
+			name: "a child run that failed gives no answer",
+			run:  child(resets{AnyReset: true, KeysReset: true}, "the child wrote no result"),
+			want: "null",
+		},
+		{
+			name: "a finding without a child run gives no answer",
+			want: "null",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reset, detail := keyFinding{OwnProcess: tt.run}.postedKeys()
+			got := "null"
+			if reset != nil {
+				got = fmt.Sprint(*reset)
+			}
+			if got != tt.want {
+				t.Errorf("postedKeys() = %s (%q), want %s", got, detail, tt.want)
+			}
+		})
+	}
 }
 
 func isFalse(b *bool) bool { return b != nil && !*b }
