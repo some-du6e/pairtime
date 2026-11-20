@@ -71,6 +71,11 @@ type Options struct {
 	// slice, which keeps K_dev in a key file in the data directory and
 	// off the OS's store.
 	KeyStores []keys.Store
+	// LedgerRetry, when set, replaces how long the agent first waits
+	// before it tries again to open a ledger that didn't open for a reason
+	// that can pass, such as a locked keyring; 15 s otherwise. Tests set
+	// it so they needn't wait.
+	LedgerRetry time.Duration
 }
 
 // linked keeps heavyModules' entry points reachable (see heavy_linux.go).
@@ -106,8 +111,9 @@ type agent struct {
 	kApp atomic.Pointer[[]byte]
 	// ledgerIn takes presence's and focus's records, and presence's
 	// seals, to the ledger writer once it opens (WP-LG5).
-	ledgerIn  *ledger.Presence
-	keyStores []keys.Store // Options.KeyStores
+	ledgerIn    *ledger.Presence
+	keyStores   []keys.Store  // Options.KeyStores
+	ledgerRetry time.Duration // the first wait before the ledger opens again
 
 	// sessions are the dashboard's sign-ins (DESIGN 3.9), and days serves
 	// its data from the scorer's day rollups, which WP-AG4 hands it as an
@@ -143,15 +149,19 @@ func Run(ctx context.Context, opts Options) error {
 	defer lock.Release()
 
 	a := &agent{
-		dirs:      opts.Dirs,
-		log:       log,
-		started:   time.Now(),
-		sched:     sched.New(),
-		stop:      make(chan struct{}),
-		problems:  make(map[string]string),
-		keyStores: opts.KeyStores,
-		sessions:  localhttp.NewSessions(nil),
-		days:      api.New(api.Options{Log: log.With("component", "api")}),
+		dirs:        opts.Dirs,
+		log:         log,
+		started:     time.Now(),
+		sched:       sched.New(),
+		stop:        make(chan struct{}),
+		problems:    make(map[string]string),
+		keyStores:   opts.KeyStores,
+		ledgerRetry: defaultLedgerRetry,
+		sessions:    localhttp.NewSessions(nil),
+		days:        api.New(api.Options{Log: log.With("component", "api")}),
+	}
+	if opts.LedgerRetry > 0 {
+		a.ledgerRetry = opts.LedgerRetry
 	}
 	linkOnce.Do(func() { linked = heavyModules() })
 	if err := optIntoEcoQoS(); err != nil {

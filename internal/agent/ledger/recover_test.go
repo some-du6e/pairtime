@@ -5,9 +5,12 @@ package ledger
 import (
 	"bytes"
 	"errors"
+	"io/fs"
 	"math/rand/v2"
 	"os"
 	"path/filepath"
+	"slices"
+	"sync"
 	"testing"
 )
 
@@ -97,7 +100,8 @@ func flipByte(t *testing.T, name string, off int64) {
 }
 
 // TestRecover checks what Open does with each thing a crash or a power cut
-// can leave, and refuses what neither can (decision E-sm-1.1-seq-gaps).
+// can leave, and refuses what neither can (decision E-sm-1.1-seq-gaps,
+// decided; spec wording pending).
 func TestRecover(t *testing.T) {
 	batches := func(c crashed) string { return filepath.Join(c.dir, batchesName) }
 	cases := []struct {
@@ -187,6 +191,17 @@ func TestRecoverRefuses(t *testing.T) {
 		{name: "the chain's key id with another key's keys is damage",
 			opts: func(o *Options) { o.Keys = keysOf(t, otherKDev) },
 			want: ErrDamaged},
+		{name: "an empty batches.seg beside segments is damage, not a chain of no key, since a new chain under the same key would number them again",
+			edit: func(t *testing.T, c crashed) { truncate(t, filepath.Join(c.dir, batchesName), 0) },
+			want: ErrDamaged},
+		{name: "an empty batches.seg with no segments is damage too, since its chain frame was written whole before any record",
+			edit: func(t *testing.T, c crashed) {
+				truncate(t, filepath.Join(c.dir, batchesName), 0)
+				if err := os.Remove(c.seg); err != nil {
+					t.Fatal(err)
+				}
+			},
+			want: ErrDamaged},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -207,6 +222,74 @@ func TestRecoverRefuses(t *testing.T) {
 			}
 		})
 	}
+
+	// A ledger that ends with the seal frame of a batch that holds the
+	// prompt classes' questions, which Open restores from, with no record
+	// after it.
+	atSnapshot := t.TempDir()
+	{
+		w := open(t, atSnapshot, newClock(testT))
+		rng := rand.New(rand.NewPCG(31, 32))
+		for range questionRows {
+			if _, _, err := write(w, rng, "os.presence", testT); err != nil {
+				t.Fatal(err)
+			}
+			if _, _, err := w.Seal(); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := w.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	keyCases := []struct {
+		name string
+		opts func(*Options)
+		want error
+	}{
+		{"a ledger that ends at a seal frame holding the questions opens with its own keys", nil, nil},
+		{"a ledger that ends at a seal frame holding the questions still refuses another key's keys",
+			func(o *Options) { o.Keys = keysOf(t, otherKDev) }, ErrDamaged},
+	}
+	for _, kc := range keyCases {
+		t.Run(kc.name, func(t *testing.T) {
+			var edit []func(*Options)
+			if kc.opts != nil {
+				edit = append(edit, kc.opts)
+			}
+			w, err := openErr(atSnapshot, newClock(testT+60_000), edit...)
+			if err == nil {
+				err = w.Close()
+			}
+			if !errors.Is(err, kc.want) {
+				t.Fatalf("Open: %v, want %v", err, kc.want)
+			}
+		})
+	}
+
+	t.Run("an empty batches.seg leaves every file where it is, and ReadChain refuses it too", func(t *testing.T) {
+		c := crash(t)
+		name := filepath.Join(c.dir, batchesName)
+		truncate(t, name, 0)
+		if w, err := openErr(c.dir, newClock(testT+60_000)); !errors.Is(err, ErrDamaged) {
+			if err == nil {
+				w.Close()
+			}
+			t.Fatalf("Open: %v, want ErrDamaged", err)
+		}
+		if _, err := os.Stat(filepath.Join(c.dir, oldDir)); !errors.Is(err, fs.ErrNotExist) {
+			t.Errorf("Open made %s: %v", oldDir, err)
+		}
+		if _, err := os.Stat(name); err != nil {
+			t.Errorf("batches.seg moved: %v", err)
+		}
+		if _, err := os.Stat(c.seg); err != nil {
+			t.Errorf("the segment moved: %v", err)
+		}
+		if info, err := ReadChain(c.dir); !errors.Is(err, ErrDamaged) {
+			t.Errorf("ReadChain: %+v, %v; want ErrDamaged", info, err)
+		}
+	})
 
 	t.Run("a torn frame in a segment older than the newest is damage", func(t *testing.T) {
 		dir := t.TempDir()
@@ -243,8 +326,9 @@ func TestRecoverRefuses(t *testing.T) {
 	})
 }
 
-// TestKeyChange checks decision E-sm-1.1-seq-gaps for a new K_dev: the old
-// chain is kept for reading, and a new device starts at 1.
+// TestKeyChange checks decision E-sm-1.1-seq-gaps (decided; spec wording
+// pending) for a new K_dev: the old chain is kept for reading, and a new
+// device starts at 1.
 func TestKeyChange(t *testing.T) {
 	dir := t.TempDir()
 	clk := newClock(testT)
@@ -352,5 +436,249 @@ func TestReadBatchesFrom(t *testing.T) {
 	}
 	if n := len(records(all)); n != 10 {
 		t.Errorf("%d sealed records, want 10", n)
+	}
+}
+
+// memChains is an Options.Chains in memory, as the keystore keeps one.
+type memChains struct {
+	chain string
+	fail  error // what RecordChain returns, when set
+	calls int   // RecordChain calls
+}
+
+func (m *memChains) Chain() string { return m.chain }
+
+func (m *memChains) RecordChain(id string) error {
+	m.calls++
+	switch {
+	case m.fail != nil:
+		return m.fail
+	case m.chain != "" && m.chain != id:
+		return errors.New("the key already has a chain")
+	}
+	m.chain = id
+	return nil
+}
+
+// TestChains checks that the chain a key writes is on record beside the key
+// before any record is written to it, and that a key with a chain on record
+// never starts a second one (ledger-v1 3).
+func TestChains(t *testing.T) {
+	withChains := func(m *memChains) func(*Options) { return func(o *Options) { o.Chains = m } }
+	// started is a ledger whose key started its chain with m, or with no
+	// record when m is nil, wrote records and closed.
+	started := func(t *testing.T, m *memChains) (dir, device string) {
+		t.Helper()
+		dir = t.TempDir()
+		var edit []func(*Options)
+		if m != nil {
+			edit = append(edit, withChains(m))
+		}
+		w := open(t, dir, newClock(testT), edit...)
+		writeRandom(t, w, rand.New(rand.NewPCG(21, 22)), 10, 3, testT)
+		if err := w.Close(); err != nil {
+			t.Fatal(err)
+		}
+		return dir, w.DeviceID()
+	}
+
+	t.Run("a new chain is on record when Open returns, and Open after that records nothing more", func(t *testing.T) {
+		m := &memChains{}
+		dir, device := started(t, m)
+		if m.chain != device || m.calls != 1 {
+			t.Fatalf("on record %q after %d calls, want %s after 1", m.chain, m.calls, device)
+		}
+		w := open(t, dir, newClock(testT+60_000), withChains(m))
+		if err := w.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if m.calls != 1 {
+			t.Errorf("Open recorded the chain again: %d calls", m.calls)
+		}
+	})
+
+	gone := []struct {
+		name string
+		edit func(t *testing.T, dir string)
+		want error
+	}{
+		{"a deleted ledger directory can't make the key start a second chain",
+			func(t *testing.T, dir string) {
+				if err := os.RemoveAll(dir); err != nil {
+					t.Fatal(err)
+				}
+			}, ErrKeyReuse},
+		{"a ledger directory whose files were deleted can't either",
+			func(t *testing.T, dir string) {
+				days, err := segments(dir)
+				if err != nil {
+					t.Fatal(err)
+				}
+				for _, day := range days {
+					if err := os.Remove(segPath(dir, day)); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if err := os.Remove(filepath.Join(dir, batchesName)); err != nil {
+					t.Fatal(err)
+				}
+			}, ErrKeyReuse},
+		{"an emptied batches.seg is damage, and starts nothing",
+			func(t *testing.T, dir string) { truncate(t, filepath.Join(dir, batchesName), 0) }, ErrDamaged},
+	}
+	for _, tc := range gone {
+		t.Run(tc.name, func(t *testing.T) {
+			m := &memChains{}
+			dir, _ := started(t, m)
+			tc.edit(t, dir)
+			if w, err := openErr(dir, newClock(testT+60_000), withChains(m)); !errors.Is(err, tc.want) {
+				if err == nil {
+					w.Close()
+				}
+				t.Fatalf("Open: %v, want %v", err, tc.want)
+			}
+			if days, err := segments(dir); err != nil || len(days) > 0 && tc.want == ErrKeyReuse {
+				t.Errorf("Open wrote segments %v (%v) for a key it refused", days, err)
+			}
+			if tc.want == ErrKeyReuse {
+				if _, err := os.Stat(filepath.Join(dir, batchesName)); !errors.Is(err, fs.ErrNotExist) {
+					t.Errorf("Open started a chain under the key: %v", err)
+				}
+			}
+		})
+	}
+
+	t.Run("a chain written before the record existed is recorded before Open writes to it", func(t *testing.T) {
+		dir, device := started(t, nil)
+		m := &memChains{}
+		w := open(t, dir, newClock(testT+60_000), withChains(m))
+		if m.chain != device {
+			t.Errorf("on record %q, want %s", m.chain, device)
+		}
+		if err := w.Close(); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	t.Run("a ledger holding another chain of the key than the one on record is refused, and nothing is written to it", func(t *testing.T) {
+		dir, _ := started(t, nil)
+		seg := segPath(dir, "2026-11-19")
+		size := fileSize(t, seg)
+		if w, err := openErr(dir, newClock(testT+60_000), withChains(&memChains{chain: "d_elsewhere"})); !errors.Is(err, ErrKeyReuse) {
+			if err == nil {
+				w.Close()
+			}
+			t.Fatalf("Open: %v, want ErrKeyReuse", err)
+		}
+		if got := fileSize(t, seg); got != size {
+			t.Errorf("the segment went from %d to %d bytes", size, got)
+		}
+	})
+
+	t.Run("a key with a chain on record elsewhere leaves another key's chain where it is", func(t *testing.T) {
+		dir, device := started(t, nil)
+		other := func(o *Options) {
+			o.Keys, o.KeyID, o.Chains = keysOf(t, otherKDev), otherKeyID, &memChains{chain: "d_elsewhere"}
+		}
+		if w, err := openErr(dir, newClock(testT+60_000), other); !errors.Is(err, ErrKeyReuse) {
+			if err == nil {
+				w.Close()
+			}
+			t.Fatalf("Open: %v, want ErrKeyReuse", err)
+		}
+		info, err := ReadChain(dir)
+		if err != nil || info.DeviceID != device || info.KeyID != testKeyID {
+			t.Errorf("the ledger's chain is now %+v, %v; want device %s of the first key", info, err, device)
+		}
+		if _, err := os.Stat(filepath.Join(dir, oldDir)); !errors.Is(err, fs.ErrNotExist) {
+			t.Errorf("Open archived the chain: %v", err)
+		}
+	})
+
+	t.Run("a record that fails stops Open before any record, and the next Open records the chain it started", func(t *testing.T) {
+		dir := t.TempDir()
+		boom := errors.New("the keystore is locked")
+		m := &memChains{fail: boom}
+		if w, err := openErr(dir, newClock(testT), withChains(m)); !errors.Is(err, boom) {
+			if err == nil {
+				w.Close()
+			}
+			t.Fatalf("Open: %v, want the record's error", err)
+		}
+		m.fail = nil
+		w := open(t, dir, newClock(testT), withChains(m))
+		info, err := ReadChain(dir)
+		if err != nil || m.chain != info.DeviceID || w.DeviceID() != info.DeviceID {
+			t.Errorf("on record %q, and the ledger's chain is %+v, %v; want them the same", m.chain, info, err)
+		}
+		if s, _, err := write(w, rand.New(rand.NewPCG(23, 24)), "os.presence", testT); err != nil || s != 1 {
+			t.Errorf("the chain's first record got s = %d and %v, want 1", s, err)
+		}
+	})
+}
+
+// flush is one flush syncHook heard of.
+type flush struct {
+	name string
+	size int64
+}
+
+// TestRestoredRowOrder checks that Open flushes a segment before it writes
+// the rows of batches whose seal frames it found there without one. A
+// crash between a seal frame and its flush leaves the frame in the page
+// cache only, and a row that reached the disk first would point past the
+// segment's end after a power cut, which every Open after refuses.
+func TestRestoredRowOrder(t *testing.T) {
+	lostRow := func(t *testing.T, c crashed) {
+		name := filepath.Join(c.dir, batchesName)
+		truncate(t, name, framesOf(t, name)[0].end)
+	}
+	cases := []struct {
+		name string
+		edit func(t *testing.T, c crashed)
+	}{
+		{"a lost row whose batch is the last thing in the segment goes to disk after its segment", func(t *testing.T, c crashed) {
+			lostRow(t, c)
+			truncate(t, c.seg, framesOf(t, c.seg)[5].end)
+		}},
+		{"a lost row with unsealed records after its batch goes to disk after its segment", lostRow},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := crash(t)
+			tc.edit(t, c)
+			end := framesOf(t, c.seg)[5].end // batch 1's seal frame
+			var mu sync.Mutex
+			var flushes []flush
+			syncHook = func(name string, size int64) {
+				mu.Lock()
+				flushes = append(flushes, flush{filepath.Base(name), size})
+				mu.Unlock()
+			}
+			defer func() { syncHook = nil }()
+			w := open(t, c.dir, newClock(testT+60_000))
+			mu.Lock()
+			got := slices.Clone(flushes)
+			mu.Unlock()
+			if err := w.Close(); err != nil {
+				t.Fatal(err)
+			}
+			covered, rowFlushed := false, false
+			for _, f := range got {
+				if f.name == batchesName {
+					rowFlushed = true
+					break
+				}
+				if f.name == filepath.Base(c.seg) && f.size >= end {
+					covered = true
+				}
+			}
+			if !rowFlushed || !covered {
+				t.Errorf("Open's flushes were %v; want the segment flushed past batch 1's end, %d bytes, before batches.seg", got, end)
+			}
+			if b := verify(t, c.dir, keysOf(t, testKDev)); b[0].Row.Head != c.batch1.Row.Head {
+				t.Errorf("batch 1 came back as %+v, want %+v", b[0].Row, c.batch1.Row)
+			}
+		})
 	}
 }

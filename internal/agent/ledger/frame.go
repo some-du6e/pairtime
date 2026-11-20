@@ -54,6 +54,16 @@ func appendFrame(dst []byte, kind byte, payload []byte) []byte {
 	return binary.BigEndian.AppendUint32(dst, crc32.Checksum(dst[start:], castagnoli))
 }
 
+// frameOf returns a frame of kind with payload, or an error when the
+// payload is more than a frame holds (maxPayload): every reader would take
+// such a frame for damage, so the writer never writes one.
+func frameOf(kind byte, payload []byte) ([]byte, error) {
+	if len(payload) > maxPayload {
+		return nil, fmt.Errorf("ledger: a %q frame of %d bytes is more than the %d bytes a frame holds", kind, len(payload), maxPayload)
+	}
+	return appendFrame(nil, kind, payload), nil
+}
+
 // frameSize is the size of a frame with a payload of n bytes.
 func frameSize(n int) int64 { return int64(frameHeadSize + n + frameTailSize) }
 

@@ -32,12 +32,26 @@ var (
 	// ledger, because the only ways to go on would drop sealed records or
 	// number records again, which repeats nonces (ledger-v1 3).
 	ErrDamaged = errors.New("ledger: the ledger's files are damaged")
-	// ErrKeyReuse is a ledger directory that kept an old chain of the
-	// device key the writer was given. A new chain under that key would
-	// start again from s = 1 and repeat every nonce and token salt of the
-	// old one (ledger-v1 3).
-	ErrKeyReuse = errors.New("ledger: the ledger already holds an old chain of this device key")
+	// ErrKeyReuse is a device key that already has a chain the writer
+	// can't go on with here: the chain Options.Chains records for the key
+	// isn't the one this ledger directory holds, as when the directory was
+	// deleted or emptied, or the directory kept an old chain of the key in
+	// old/. A new chain under that key would start again from s = 1 and
+	// repeat every nonce and token salt of the old one (ledger-v1 3), so
+	// going on takes a new device key.
+	ErrKeyReuse = errors.New("ledger: this device key already has a chain, and a second one would repeat its nonces")
 )
+
+// ChainRecord keeps, next to a device key and out of the ledger directory,
+// the device id of the one chain the key writes, so deleting the directory
+// doesn't delete the record. *keys.Keystore is one.
+type ChainRecord interface {
+	// Chain returns the device id of the key's chain, or "" when the key
+	// has started none.
+	Chain() string
+	// RecordChain records deviceID as the key's chain.
+	RecordChain(deviceID string) error
+}
 
 // pendingMax is how many records the writer holds unsealed before it seals
 // at once rather than wait for BATCH_S: a long backfill or an inbox drain
@@ -56,8 +70,19 @@ type Options struct {
 	// whose chain another key wrote gets its files moved to old/<key id>,
 	// and a new chain starts at s = 1 under a new device id: a restore, or
 	// anything else that gives the installation a new K_dev, starts a new
-	// device (ledger-v1 3; decision E-sm-1.1-seq-gaps).
+	// device (ledger-v1 3; decision E-sm-1.1-seq-gaps, decided; spec
+	// wording pending).
 	KeyID string
+	// Chains, when set, records next to K_dev which chain the key writes:
+	// the agent passes its keystore. Open refuses with ErrKeyReuse to start
+	// a chain for a key that has one on record, or to write to a chain of
+	// the key that isn't that one, and it records the chain it writes
+	// before the chain's first record and before it writes to a chain it
+	// finds unrecorded. So no record exists under a key whose chain isn't
+	// on record, and a ledger directory that is deleted or emptied can't
+	// make the key number records from s = 1 again. Without it, Open can
+	// tell a used key only from the directory's own old/.
+	Chains ChainRecord
 	// Params is the table BATCH_S, SUBSTANTIVE_CHARS and
 	// ERROR_PASTE_TEXT_MAX come from, which should be the one the scorer
 	// runs with. Nil means the newest table pkg/params embeds.
@@ -70,7 +95,8 @@ type Options struct {
 	// disk, in batch order, on the goroutine that sealed it, so it must
 	// return quickly. The scorer takes its records from here, and only
 	// from sealed batches, so nothing it scores or uploads rests on a
-	// record a crash could still cut (decision E-sm-1.1-seq-gaps).
+	// record a crash could still cut (decision E-sm-1.1-seq-gaps,
+	// decided; spec wording pending).
 	// Batches sealed before Open are on disk for ReadBatches.
 	Sealed func(Batch)
 	// Problem gets a description of what went wrong when a seal that no
@@ -124,12 +150,14 @@ type Input struct {
 // on while a seal waits for its fsync. The row needs no flush of its own,
 // because Open rebuilds a lost row from the seal frame. Records a crash
 // cuts were never in a sealed batch, and the next record takes the number
-// after the last one that survived (decision E-sm-1.1-seq-gaps).
+// after the last one that survived (decision E-sm-1.1-seq-gaps, decided;
+// spec wording pending).
 type Writer struct {
 	dir      string
 	keys     *ledger.Keys
 	feat     *features.Key
 	keyID    string
+	chains   ChainRecord
 	table    *params.Table
 	batchS   time.Duration
 	now      func() time.Time
@@ -152,6 +180,7 @@ type Writer struct {
 	head    ledger.Hash   // its H_b, zero(32) before the first
 	pending []pending     // the records since the last seal
 	q       score.Questions
+	snap    position // where the newest seal frame that holds q starts
 	failed  error
 	closed  bool
 
@@ -205,6 +234,7 @@ func Open(opts Options) (*Writer, error) {
 		keys:     opts.Keys,
 		feat:     opts.Keys.Features(),
 		keyID:    opts.KeyID,
+		chains:   opts.Chains,
 		table:    table,
 		batchS:   time.Duration(table.Int(params.BATCH_S)) * time.Second,
 		now:      now,
@@ -272,6 +302,14 @@ func (w *Writer) DeviceID() string { return w.device }
 //
 // A record Write refuses, such as an event that fails Validate, takes no
 // sequence number. The error leaves the event's content out.
+//
+// The number is final only once Options.Sealed delivers the record's
+// batch. A crash or a power cut before the next seal can cut the record,
+// and after the restart the next record takes its number (decision
+// E-sm-1.1-seq-gaps, decided; spec wording pending). So whatever is kept
+// by the number, such as a vault entry, whose associated data it is
+// (WP-LG6), is keyed from Sealed, or checked against the sealed record's
+// c before it is revealed.
 func (w *Writer) Write(in Input) (uint64, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -334,7 +372,9 @@ func (w *Writer) prepare(in Input) (event.Event, ledger.Content) {
 // Checkpoint appends a scorer checkpoint (rtype 0x40): projectKey's
 // serialized score.ProjectState at the UTC minute t, in Unix ms, a
 // multiple of 900,000 (ledger-v1 4.7; DESIGN 3.6, 6.5). It returns the
-// record's sequence number.
+// record's sequence number, which is final only once Options.Sealed
+// delivers its batch, as Write's is: a reference to the checkpoint takes
+// its number from Sealed.
 func (w *Writer) Checkpoint(projectKey string, t uint64, state json.RawMessage) (uint64, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -354,7 +394,8 @@ func (w *Writer) Checkpoint(projectKey string, t uint64, state json.RawMessage) 
 // UploadFailure appends an upload-failure note (rtype 0x41): an upload
 // failed at t, in Unix ms, for reason, one of dns, connect, tls, http_5xx
 // and http_429 (ledger-v1 4.7; DESIGN 3.6, 7.4). It returns the record's
-// sequence number.
+// sequence number, which is final only once Options.Sealed delivers its
+// batch, as Write's is.
 func (w *Writer) UploadFailure(t uint64, reason string) (uint64, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -383,16 +424,22 @@ func (w *Writer) usable() error {
 }
 
 // append writes rec's frame to the segment of today, or of the newest day
-// a segment has if the clock went back. w.mu is held.
+// a segment has if the clock went back. A record too large for a frame,
+// such as a checkpoint of a huge state, is refused before anything is
+// written, so it takes no number. w.mu is held.
 func (w *Writer) append(rec ledger.Record) error {
-	if err := w.toSegment(); err != nil {
-		return err
-	}
 	payload := make([]byte, 0, ledger.HeaderSize+len(rec.Body))
 	payload = append(payload, rec.Header[:]...)
 	payload = append(payload, rec.Body...)
+	fr, err := frameOf(kindRecord, payload)
+	if err != nil {
+		return err
+	}
+	if err := w.toSegment(); err != nil {
+		return err
+	}
 	pos := position{Seg: w.segDay, Off: w.seg.size}
-	if err := w.seg.write(appendFrame(nil, kindRecord, payload)); err != nil {
+	if err := w.seg.write(fr); err != nil {
 		return w.writeFailed(err)
 	}
 	w.pending = append(w.pending, pending{rec: rec, pos: pos})
@@ -450,6 +497,11 @@ type sealPayload struct {
 	Head     ledger.Hash `json:"head"`
 	// SealedAt is when the batch was sealed, in Unix ms.
 	SealedAt int64 `json:"sealed_at"`
+	// Q is what the prompt classes' questions remember after the batch's
+	// last record (score.Questions), in the seal frame of every
+	// questionRows-th batch, so Open can restore them exactly rather than
+	// read every record again. Rows leave it out.
+	Q *score.QuestionsState `json:"q,omitempty"`
 }
 
 // rowPayload is a batch frame's payload in batches.seg: DESIGN 3.5's row,
@@ -463,6 +515,9 @@ type rowPayload struct {
 	// its seal frame ends.
 	Start position `json:"start"`
 	End   position `json:"end"`
+	// Snap is where the newest seal frame that holds Q starts, this
+	// batch's or an earlier one's, or zero before the first.
+	Snap position `json:"snap,omitzero"`
 }
 
 // receiptPayload is a receipt frame's payload in batches.seg.
@@ -535,12 +590,24 @@ func (w *Writer) seal() (Batch, bool, error) {
 	at := w.now()
 	sp := sealPayload{B: row.B, FirstSeq: row.FirstSeq, N: row.N, Prev: w.head, Root: row.Root, Head: row.Head,
 		SealedAt: at.UnixMilli()}
+	snap := w.snap
+	if row.B%questionRows == 0 {
+		// w.q has taken every record the batch holds and none after.
+		st := w.q.State()
+		sp.Q = &st
+		snap = position{Seg: w.segDay, Off: w.seg.size}
+	}
 	payload, err := json.Marshal(sp)
 	if err != nil {
 		w.mu.Unlock()
 		return Batch{}, false, err
 	}
-	if err := w.seg.write(appendFrame(nil, kindSeal, payload)); err != nil {
+	fr, err := frameOf(kindSeal, payload)
+	if err != nil {
+		w.mu.Unlock()
+		return Batch{}, false, err
+	}
+	if err := w.seg.write(fr); err != nil {
 		err = w.writeFailed(err)
 		w.mu.Unlock()
 		return Batch{}, false, err
@@ -549,18 +616,19 @@ func (w *Writer) seal() (Batch, bool, error) {
 	seg := w.seg
 	retired := w.takeRetired()
 	w.pending = nil
-	w.b, w.head = row.B, row.Head
+	w.b, w.head, w.snap = row.B, row.Head, snap
 	w.mu.Unlock()
 
 	// The one flush of the seal. Records written since the seal frame go
 	// to disk with it, which does no harm.
-	err = seg.sync()
+	err = seg.syncTo(end.Off)
 	closeAll(retired)
 	if err != nil {
 		w.fail(err)
 		return Batch{}, false, err
 	}
-	rp := rowPayload{sealPayload: sp, LastSeq: row.FirstSeq + row.N - 1, Start: start, End: end}
+	rp := rowPayload{sealPayload: sp, LastSeq: row.FirstSeq + row.N - 1, Start: start, End: end, Snap: snap}
+	rp.Q = nil
 	if err := w.writeRow(rp); err != nil {
 		// The batch is sealed and on disk, and the next Open writes its
 		// row from the seal frame. Until then nothing more goes in
@@ -605,13 +673,20 @@ func (w *Writer) writeRow(rp rowPayload) error {
 	if err != nil {
 		return err
 	}
-	return w.batches.write(appendFrame(nil, kindBatch, payload))
+	fr, err := frameOf(kindBatch, payload)
+	if err != nil {
+		return err
+	}
+	return w.batches.write(fr)
 }
 
 // StoreReceipt keeps the server's receipt for batch b in batches.seg, with
 // its received_at (ledger-v1 7; DESIGN 3.5). The uploader checks it under
 // the server key before it calls StoreReceipt (WP-AG5). A receipt can't be
-// made again from what the device holds, so it is flushed at once.
+// made again from what the device holds, so it is flushed at once. So is
+// everything before it, first: a frame before a receipt that isn't whole
+// is then damage, which Open refuses, and never a crash's torn tail, which
+// Open would cut off with the receipts after it (readBatchesFile).
 func (w *Writer) StoreReceipt(b uint64, r ledger.Receipt) error {
 	w.sealMu.Lock()
 	defer w.sealMu.Unlock()
@@ -628,7 +703,15 @@ func (w *Writer) StoreReceipt(b uint64, r ledger.Receipt) error {
 	if err != nil {
 		return err
 	}
-	if err := w.batches.write(appendFrame(nil, kindReceipt, payload)); err != nil {
+	fr, err := frameOf(kindReceipt, payload)
+	if err != nil {
+		return err
+	}
+	if err := w.batches.sync(); err != nil {
+		w.fail(err)
+		return err
+	}
+	if err := w.batches.write(fr); err != nil {
 		w.fail(err)
 		return err
 	}

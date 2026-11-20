@@ -79,6 +79,12 @@ type marker struct {
 	// Archived lists the device keys restored from other installations.
 	// Archive lists each one here before it puts the key in a store.
 	Archived []archivedKey `json:"archived,omitempty"`
+	// Chain is the device id of the ledger chain K_dev writes, once the
+	// ledger writer has started it (RecordChain). One K_dev writes one
+	// chain (ledger-v1 3), and the id is kept here rather than only in the
+	// ledger directory, so a ledger directory that is deleted or emptied
+	// can't make the key number records from s = 1 again.
+	Chain string `json:"chain,omitempty"`
 }
 
 type archivedKey struct {
@@ -116,6 +122,8 @@ func (m marker) validate() error {
 		return fmt.Errorf("%w: keystore.json names %s", ErrDamaged, m.Store.Description())
 	case m.KeyID != "" && !isHexID(m.KeyID):
 		return fmt.Errorf("%w: keystore.json has no valid key id", ErrDamaged)
+	case m.Chain != "" && (m.Store == "" || !isDeviceID(m.Chain)):
+		return fmt.Errorf("%w: keystore.json names a ledger chain that isn't a device id, or one for a device key it doesn't have", ErrDamaged)
 	}
 	for i, k := range m.Unconfirmed {
 		if !k.known() || slices.Contains(m.Unconfirmed[:i], k) {
@@ -139,6 +147,21 @@ func isHexID(s string) bool {
 	}
 	for i := 0; i < len(s); i++ {
 		if c := s[i]; (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
+}
+
+// isDeviceID reports whether s can be a device id, a pkg/event opaque key:
+// 1 to 128 ASCII letters, digits, '_' or '-'.
+func isDeviceID(s string) bool {
+	if len(s) == 0 || len(s) > 128 {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if !('a' <= c && c <= 'z' || 'A' <= c && c <= 'Z' || '0' <= c && c <= '9' || c == '_' || c == '-') {
 			return false
 		}
 	}
