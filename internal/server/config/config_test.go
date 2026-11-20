@@ -3,9 +3,12 @@
 package config
 
 import (
+	"encoding"
+	"maps"
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -60,8 +63,11 @@ func TestLoad(t *testing.T) {
 		name    string
 		toml    string
 		environ []string
-		wantErr string // substring; "" means Load must succeed
-		check   func(t *testing.T, c *Config, dir string)
+		// keyVersions are lines to add to keyVersions for the case, as a
+		// later release adds its keys.
+		keyVersions map[string]int
+		wantErr     string // substring; "" means Load must succeed
+		check       func(t *testing.T, c *Config, dir string)
 	}{
 		{
 			name: "a full file sets every DESIGN 10.2 key",
@@ -146,6 +152,34 @@ func TestLoad(t *testing.T) {
 		},
 		{name: "a file for a newer release still has its values checked", toml: base + "config_version = 2\nprofile_default = \"private\"\n", wantErr: "profile_default"},
 		{name: "config_version starts at 1", toml: base + "config_version = 0\n", wantErr: "config_version is 0"},
+		{
+			name:        "a key from a later config_version than the file's is refused, with the config_version to set, so the release before that key can start on the file",
+			toml:        base + "[sentinel]\nsocket = \"/run/pairtime/sentinel.sock\"\n",
+			keyVersions: map[string]int{"sentinel.socket": 2},
+			wantErr:     "uses keys added after it: sentinel.socket (config_version 2). Set config_version = 2,",
+		},
+		{
+			name:        "the config_version to set covers the latest key the file uses",
+			toml:        base + "config_version = 2\n[sentinel]\nsocket = \"/run/pairtime/sentinel.sock\"\n[privacy_hub]\naud = \"pairtime\"\n",
+			keyVersions: map[string]int{"sentinel.socket": 3, "privacy_hub.aud": 4},
+			wantErr:     "has config_version 2 but uses keys added after it: sentinel.socket (config_version 3), privacy_hub.aud (config_version 4). Set config_version = 4,",
+		},
+		{
+			name:        "a later key in an array of tables is named once",
+			toml:        base + "[[reviewers]]\nsub = \"a\"\nroles = [\"qi\"]\n[[reviewers]]\nsub = \"b\"\nroles = [\"admin\"]\n",
+			keyVersions: map[string]int{"reviewers.roles": 2},
+			wantErr:     "added after it: reviewers.roles (config_version 2). Set",
+		},
+		{
+			name:        "a file whose config_version covers its keys loads",
+			toml:        base + "config_version = 2\n[sentinel]\nsocket = \"/run/pairtime/sentinel.sock\"\n",
+			keyVersions: map[string]int{"sentinel.socket": 2},
+			check: func(t *testing.T, c *Config, _ string) {
+				if c.Sentinel.Socket != "/run/pairtime/sentinel.sock" || len(c.Warnings) != 0 {
+					t.Errorf("sentinel.socket = %q, warnings %q; want it read, with no warning", c.Sentinel.Socket, c.Warnings)
+				}
+			},
+		},
 		{name: "base_url over plain http is refused", toml: "base_url = \"http://pairtime.example.org\"\n", wantErr: "only https"},
 		{name: "base_url over http is allowed on localhost", toml: "base_url = \"http://localhost:8080\"\n"},
 		{name: "base_url over http is allowed on a loopback address", toml: "base_url = \"http://127.0.0.1:8080\"\n"},
@@ -307,6 +341,12 @@ func TestLoad(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			if tt.keyVersions != nil {
+				saved := keyVersions
+				keyVersions = maps.Clone(saved)
+				maps.Copy(keyVersions, tt.keyVersions)
+				t.Cleanup(func() { keyVersions = saved })
+			}
 			dir := t.TempDir()
 			path := filepath.Join(dir, "pairtime.toml")
 			if err := os.WriteFile(path, []byte(tt.toml), 0o600); err != nil {
@@ -333,6 +373,94 @@ func TestLoad(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestKeyVersions pins keyVersions to Config, as TestPinnedChecksums pins
+// the migrations: a key added to Config fails here until it has a line,
+// and the line shows a reviewer the config_version it arrived in.
+func TestKeyVersions(t *testing.T) {
+	keys := tomlKeys(t, reflect.TypeFor[Config](), "")
+	tests := []struct {
+		name  string
+		check func(t *testing.T)
+	}{
+		{
+			name: "every key Config reads has the config_version that added it",
+			check: func(t *testing.T) {
+				for _, k := range keys {
+					if _, ok := keyVersions[k]; !ok {
+						t.Errorf("%s has no line in keyVersions. Add %q: %d if no release has shipped ConfigVersion %d yet; otherwise raise ConfigVersion to %d and add it with that", k, k, ConfigVersion, ConfigVersion, ConfigVersion+1)
+					}
+				}
+			},
+		},
+		{
+			name: "keyVersions lists only keys Config reads",
+			check: func(t *testing.T) {
+				for _, k := range slices.Sorted(maps.Keys(keyVersions)) {
+					if !slices.Contains(keys, k) {
+						t.Errorf("keyVersions lists %s, which Config doesn't read. A release never renames or moves a key, since the release before it would read the file without it", k)
+					}
+				}
+			},
+		},
+		{
+			name: "config_version starts at 1",
+			check: func(t *testing.T) {
+				for k, v := range keyVersions {
+					if v < 1 {
+						t.Errorf("keyVersions gives %s config_version %d; versions start at 1", k, v)
+					}
+				}
+			},
+		},
+		{
+			name: "ConfigVersion is the latest key's config_version, so a release that adds a key raises it",
+			check: func(t *testing.T) {
+				latest := 0
+				for _, v := range keyVersions {
+					latest = max(latest, v)
+				}
+				if latest != ConfigVersion {
+					t.Errorf("the latest key in keyVersions arrived in config_version %d, but ConfigVersion is %d; they move together", latest, ConfigVersion)
+				}
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, tt.check)
+	}
+}
+
+// tomlKeys lists the keys typ reads from TOML, as paths such as
+// "hca.client_id": each field's toml name, and under a table or an array of
+// tables, that table's own keys.
+func tomlKeys(t *testing.T, typ reflect.Type, prefix string) []string {
+	t.Helper()
+	var keys []string
+	for i := range typ.NumField() {
+		f := typ.Field(i)
+		if !f.IsExported() {
+			continue
+		}
+		name, _, _ := strings.Cut(f.Tag.Get("toml"), ",")
+		switch name {
+		case "-":
+			continue
+		case "":
+			t.Errorf("%s%s has no toml tag, so keyVersions can't name its key", prefix, f.Name)
+			continue
+		}
+		keys = append(keys, prefix+name)
+		ft := f.Type
+		if ft.Kind() == reflect.Slice {
+			ft = ft.Elem()
+		}
+		if ft.Kind() == reflect.Struct && !reflect.PointerTo(ft).Implements(reflect.TypeFor[encoding.TextUnmarshaler]()) {
+			keys = append(keys, tomlKeys(t, ft, prefix+name+".")...)
+		}
+	}
+	return keys
 }
 
 // wantBaseURL checks that Load left base_url as want.
