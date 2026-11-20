@@ -163,7 +163,7 @@ func TestStamp(t *testing.T) {
 }
 
 func TestKeys(t *testing.T) {
-	k := TestKeys()
+	k := FixtureKeys()
 	const sid = "617e16a3-ddb4-44ca-af68-72cf58ed1a34"
 	// The vectors were computed apart from this code, with Python's hmac.
 	cases := []struct {

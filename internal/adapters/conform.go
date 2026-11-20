@@ -396,14 +396,11 @@ func ReadLines(b []byte) ([]Line, error) {
 }
 
 // Diff compares replayed Lines with expected ones and returns a
-// description of each difference, at most max of them.
-func Diff(got, want []Line, max int) []string {
+// description of each difference, at most limit of them.
+func Diff(got, want []Line, limit int) []string {
 	var diffs []string
-	n := len(got)
-	if len(want) > n {
-		n = len(want)
-	}
-	for i := 0; i < n && len(diffs) < max; i++ {
+	n := max(len(got), len(want))
+	for i := 0; i < n && len(diffs) < limit; i++ {
 		var g, w string
 		if i < len(got) {
 			g = canonical(got[i])

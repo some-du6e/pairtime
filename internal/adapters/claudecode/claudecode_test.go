@@ -24,7 +24,7 @@ const captures = "../../../testdata/fixtures/claude_code"
 // cliRun is the 2.1.327 Linux CLI capture's run, under captures.
 const cliRun = "2.1.327/linux/cli"
 
-func newTest() *Adapter { return New(adapters.TestOptions()) }
+func newTest() *Adapter { return New(adapters.FixtureOptions()) }
 
 func mk() adapters.Adapter { return newTest() }
 

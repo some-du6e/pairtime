@@ -241,7 +241,7 @@ type Record struct {
 // Options are what an adapter needs from the agent to make records.
 type Options struct {
 	// Keys keys the harness's own ids: sessions, turns and subagents. Nil
-	// means a key that only tests should use (TestKeys).
+	// means a key that only tests should use (FixtureKeys).
 	Keys *Keys
 	// Features is K_feat, which keys file paths, error signatures and
 	// commands as the ledger does. Nil leaves out what needs it: files,
@@ -327,22 +327,22 @@ type Keys struct {
 // NewKeys returns the Keys for an id secret, from IDSecret.
 func NewKeys(secret [32]byte) *Keys { return &Keys{secret: secret} }
 
-// TestKeys returns Keys under a fixed, public secret, for tests and for
+// FixtureKeys returns Keys under a fixed, public secret, for tests and for
 // `pairtime adapters test`, whose output must be the same everywhere. The
 // agent never uses it.
-func TestKeys() *Keys {
+func FixtureKeys() *Keys {
 	var s [32]byte
 	copy(s[:], "pairtime adapters test keys v1..")
 	return NewKeys(s)
 }
 
-// TestOptions are Options under TestKeys and a fixed, public K_feat, with
+// FixtureOptions are Options under FixtureKeys and a fixed, public K_feat, with
 // every folder its own project, rooted there. The conformance runner's
 // replays and `pairtime adapters test` use them, and the agent never does.
-func TestOptions() Options {
+func FixtureOptions() Options {
 	var k [features.KeySize]byte
 	copy(k[:], "pairtime adapters test K_feat v1")
-	return Options{Keys: TestKeys(), Features: features.NewKey(k), Project: folderProject}
+	return Options{Keys: FixtureKeys(), Features: features.NewKey(k), Project: folderProject}
 }
 
 // folderProject makes dir a project of its own, keyed by its path under a

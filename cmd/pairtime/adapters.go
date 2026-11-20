@@ -65,7 +65,7 @@ func runAdapters(args []string, stdout, stderr io.Writer) int {
 
 func adaptersList(stdout io.Writer) int {
 	for _, h := range adapters.Default.Harnesses() {
-		a, _ := adapters.Default.New(h, adapters.TestOptions())
+		a, _ := adapters.Default.New(h, adapters.FixtureOptions())
 		var events []string
 		for _, s := range a.Sources() {
 			if s.Kind == adapters.SourceHook {
@@ -154,7 +154,7 @@ func adaptersTest(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	h := event.Harness(prov.harness)
-	if _, ok := adapters.Default.New(h, adapters.TestOptions()); !ok {
+	if _, ok := adapters.Default.New(h, adapters.FixtureOptions()); !ok {
 		fmt.Fprintf(stderr, "pairtime adapters test: pairtime has no adapter for %q\n", prov.harness)
 		return 1
 	}
@@ -166,7 +166,7 @@ func adaptersTest(args []string, stdout, stderr io.Writer) int {
 		if *expectedFile != "" {
 			want, err = os.ReadFile(*expectedFile)
 		} else {
-			a, _ := adapters.Default.New(h, adapters.TestOptions())
+			a, _ := adapters.Default.New(h, adapters.FixtureOptions())
 			want, err = fs.ReadFile(a.Fixtures(), prov.version+"/"+filepath.Base(osDir)+"/"+run+"/expected.jsonl")
 		}
 		if err != nil {
@@ -180,7 +180,7 @@ func adaptersTest(args []string, stdout, stderr io.Writer) int {
 			failed = true
 			continue
 		}
-		a, _ := adapters.Default.New(h, adapters.TestOptions())
+		a, _ := adapters.Default.New(h, adapters.FixtureOptions())
 		r := adapters.CheckRun(a, os.DirFS(filepath.Join(osDir, run)), goos, lines)
 		if r.OK() {
 			fmt.Fprintf(stdout, "ok   %s/%s/%s/%s: %d records\n", prov.harness, prov.version, filepath.Base(osDir), run, r.Records)

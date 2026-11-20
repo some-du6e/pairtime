@@ -112,7 +112,7 @@ type Adapter struct {
 func New(opts adapters.Options) *Adapter {
 	k := opts.Keys
 	if k == nil {
-		k = adapters.TestKeys()
+		k = adapters.FixtureKeys()
 	}
 	return &Adapter{opts: opts, keys: k, sessions: map[string]*session{}}
 }
