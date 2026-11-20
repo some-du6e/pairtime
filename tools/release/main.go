@@ -2,8 +2,9 @@
 
 // Command release turns built pairtime binaries into a release: each
 // binary's third-party notices, one archive per platform, checksums.txt,
-// and manifest.json, the signed update manifest. It also makes release
-// keys and checks a finished release.
+// manifest.json, the signed update manifest, and the install scripts with
+// the release's version and keys in them. It also makes release keys and
+// checks a finished release.
 // .github/workflows/release.yml runs it, and docs/spec/update-manifest.md
 // specifies what it writes.
 //
@@ -18,6 +19,7 @@
 //	    -targets "os/arch ..." -bin dir -out dir -payload file [-extra files]
 //	release sign -payload file -out manifest.json (-key-env NAME | -throwaway) [-pub-out file]
 //	release verify -dir dir [-pub file] [-targets "os/arch ..."]
+//	release scripts -version v -out dir [-in install]
 package main
 
 import (
@@ -58,6 +60,8 @@ Usage:
                                manifest payload
   release sign ...             sign the payload into manifest.json
   release verify -dir dir      check manifest.json, checksums.txt and the archives
+  release scripts ...          write install.sh and install.ps1 with the release's
+                               version and the release keys compiled in
 
 "release <command> -h" lists a command's flags.
 `
@@ -80,6 +84,7 @@ var commands = map[string]func(args []string, stdout, stderr io.Writer) error{
 	"dist":        cmdDist,
 	"sign":        cmdSign,
 	"verify":      cmdVerify,
+	"scripts":     cmdScripts,
 }
 
 // run executes one command line and returns the exit code: 0 on success,
