@@ -1,0 +1,113 @@
+{
+  "scenario": "4.2-cc1-no-transcript",
+  "title": "A hook prompt with no transcript entry",
+  "story": "B1's whole turn came from a script calling `pairtime hook` with invented payloads: its prompt, tool call and stop reached the hook, and Claude Code's transcript has no trace of it.",
+  "base": "4.2-alternation",
+  "edits": [
+    "The transcript's user entry for each prompt, read by the log reader 0.7 to 4.5 s after the hook (via log, same turn_key and lengths), as a real Claude Code client records it.",
+    "No transcript entry for B1's prompt, and B1's two agent.output records, which came from the transcript, are gone too: the transcript has nothing of B1's turn."
+  ],
+  "devices": [
+    {
+      "device_id": "d_61e266631200",
+      "base": "4.2-alternation",
+      "os": "macos",
+      "input_keys": true,
+      "typing_module": true,
+      "vm": false,
+      "reveals": true
+    }
+  ],
+  "submission": {
+    "projects": ["p_b2738424d7c2"],
+    "window": {"start": "2026-11-23T08:31:00Z", "end": "2026-11-23T08:46:00Z"}
+  },
+  "live": {
+    "from": "rescore",
+    "mutations": []
+  },
+  "fails": ["CC1"],
+  "checks": {
+    "CC1": {
+      "result": "fail",
+      "counts": {"hook_prompts": 5, "log_entries": 4, "matched": 4, "hook_only": 1, "log_only": 0, "not_computable": 0},
+      "items": [
+        {
+          "turn_key": "t_e96fa5b99b6d",
+          "t": 1795422960000,
+          "status": "hook_only",
+          "why": "no transcript entry for this turn"
+        }
+      ]
+    },
+    "CC2": {
+      "result": "pass",
+      "counts": {"prompts": 5, "with_input_and_focus": 5, "no_input": 0, "no_focus": 0}
+    },
+    "CC3": {
+      "result": "not_computable",
+      "counts": {"commits": 0, "flagged": 0},
+      "reason": "no commit in the submission"
+    },
+    "CC4": {
+      "result": "not_computable",
+      "counts": {"commits": 0, "seen_out_of_order": 0, "pushed_before_observed": 0, "forge_mismatch": 0},
+      "reason": "no commit in the submission"
+    },
+    "CC5": {
+      "result": "pass",
+      "counts": {"devices": 1, "slots_credited_twice": 0},
+      "basis": "one device, whose scorer credits each slot to at most one project (SM 3.1)"
+    },
+    "CC6": {
+      "result": "pass",
+      "counts": {"minutes_mismatched": 0, "held_s": 0}
+    },
+    "CC7": {
+      "result": "pass",
+      "counts": {
+        "batches": 28,
+        "records": 103,
+        "batch_gaps": 0,
+        "seq_gaps": 0,
+        "count_mismatches": 0,
+        "root_mismatches": 0,
+        "head_mismatches": 0,
+        "body_mismatches": 0,
+        "held_minutes": 0
+      }
+    },
+    "CC8": {
+      "result": "pass",
+      "counts": {
+        "challenged": 4,
+        "sketch_ok": 4,
+        "bad_entry": 0,
+        "sketch_mismatch": 0,
+        "shingle_mismatch": 0,
+        "shingle_conflicts": 0,
+        "class_mismatch": 0,
+        "hidden_shingles": 0
+      }
+    },
+    "CC9": {
+      "result": "pass",
+      "counts": {"sessions": 1, "multi_project_sessions": 0, "orphan_turns": 0, "parent_class_changes": 0}
+    },
+    "CC10": {
+      "result": "not_computable",
+      "counts": {"editor_acts": 0, "with_focus": 0, "without_focus": 0},
+      "reason": "no editor act in the submission"
+    },
+    "CC11": {
+      "result": "pass",
+      "counts": {"prompts": 5, "typed_chars": 300, "key_downs": 330, "injected": 0, "too_few_keys": 0, "injected_prompts": 0}
+    }
+  },
+  "not_exercised": {},
+  "known_limit": null,
+  "errata": ["2026-11-19-check-readings"],
+  "notes": [
+    "B1's turn still has its hook prompt, tool call and stop, so CC9 finds its prompt. B1 still opens a credited anchor, so it is still drawn."
+  ]
+}

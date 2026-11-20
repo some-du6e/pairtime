@@ -1,0 +1,109 @@
+{
+  "scenario": "6.2-cc3-copied-lines",
+  "title": "A commit with 300 lines no recorded edit explains",
+  "story": "Before committing, she copied five files from an old project into the repo outside anything pairtime watches. The commit has 341 changed lines; pairtime recorded 41 in its interval.",
+  "base": "6.2",
+  "edits": [
+    "The commit's --shortstat is 7 files, 328 insertions and 13 deletions: 299 copied lines on top of 6.2's 29 + 13."
+  ],
+  "devices": [
+    {
+      "device_id": "d_c0fe658255f8",
+      "base": "6.2",
+      "os": "windows",
+      "input_keys": false,
+      "typing_module": false,
+      "vm": false,
+      "reveals": true
+    }
+  ],
+  "submission": {
+    "projects": ["p_be4901c04a84"],
+    "window": {"start": "2026-11-24T12:40:00Z", "end": "2026-11-24T12:45:00Z"}
+  },
+  "live": {
+    "from": "rescore",
+    "mutations": []
+  },
+  "fails": ["CC3"],
+  "checks": {
+    "CC1": {
+      "result": "not_computable",
+      "counts": {"hook_prompts": 1, "log_entries": 0, "matched": 0, "hook_only": 0, "log_only": 0, "not_computable": 1},
+      "items": [
+        {
+          "turn_key": "t_9bdf9be6133e",
+          "t": 1795524060000,
+          "harness": "cursor",
+          "status": "not_computable",
+          "why": "no v1 log reader for this harness (DESIGN 5.1)"
+        }
+      ],
+      "reason": "no session of the submission has a v1 log reader"
+    },
+    "CC2": {
+      "result": "pass",
+      "counts": {"prompts": 1, "with_input_and_focus": 1, "no_input": 0, "no_focus": 0}
+    },
+    "CC3": {
+      "result": "fail",
+      "counts": {"commits": 1, "flagged": 1},
+      "items": [
+        {
+          "sha": "99d45dfe857548da524bb234c7ce7c29f267c9df",
+          "t": 1795524270000,
+          "changed_lines": 341,
+          "recorded_lines": 41,
+          "unexplained_lines": 300,
+          "flagged": true
+        }
+      ]
+    },
+    "CC4": {
+      "result": "pass",
+      "counts": {"commits": 1, "seen_out_of_order": 0, "pushed_before_observed": 0, "forge_mismatch": 0}
+    },
+    "CC5": {
+      "result": "pass",
+      "counts": {"devices": 1, "slots_credited_twice": 0, "slots_credited": 19, "merge_dropped_s": 0}
+    },
+    "CC6": {
+      "result": "pass",
+      "counts": {"minutes_mismatched": 0, "held_s": 0}
+    },
+    "CC7": {
+      "result": "pass",
+      "counts": {
+        "batches": 8,
+        "records": 34,
+        "batch_gaps": 0,
+        "seq_gaps": 0,
+        "count_mismatches": 0,
+        "root_mismatches": 0,
+        "head_mismatches": 0,
+        "body_mismatches": 0,
+        "held_minutes": 0
+      }
+    },
+    "CC9": {
+      "result": "pass",
+      "counts": {"sessions": 1, "multi_project_sessions": 0, "orphan_turns": 0, "parent_class_changes": 0}
+    },
+    "CC10": {
+      "result": "pass",
+      "counts": {"editor_acts": 1, "with_focus": 1, "without_focus": 0}
+    },
+    "CC11": {
+      "result": "not_computable",
+      "counts": {"prompts": 0, "typed_chars": 0, "key_downs": 0, "injected": 0, "too_few_keys": 0, "injected_prompts": 0},
+      "reason": "the typing module is off on this device"
+    }
+  },
+  "not_exercised": {"CC8": "SM 6.2 doesn't quote the prompt, so there is no text to commit or reveal"},
+  "known_limit": null,
+  "errata": ["2026-11-19-check-readings"],
+  "notes": [
+    "300 of 341 lines are unexplained, more than half and more than 200, so CC3 raises unexplained_lines. With the agent's heartbeat counted too it would be 260, still both.",
+    "The forge has the same 7 files and 328 + 13 lines, so CC4 passes: the commit is real, its lines just weren't written where pairtime could see."
+  ]
+}

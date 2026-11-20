@@ -1,0 +1,116 @@
+{
+  "scenario": "4.2-cc2-send-keys",
+  "title": "Prompts typed into the TUI with tmux send-keys",
+  "story": "Claude Code runs inside tmux, and a script in another pane types all five prompts into it with `tmux send-keys`. The person only moves the mouse, so the OS sees no key press after `claude` is started.",
+  "base": "4.2-alternation",
+  "edits": [
+    "The transcript's user entry for each prompt, read by the log reader 0.7 to 4.5 s after the hook (via log, same turn_key and lengths), as a real Claude Code client records it.",
+    "session.start's parent_class is multiplexer (tmux), which SM 2.2 rule 4 doesn't count as headless.",
+    "No key press after 19:29:42: every typing run before a prompt is gone from the samples' idle_keys_s. Pointer input stays, so presence and the 15 s sampling don't change."
+  ],
+  "devices": [
+    {
+      "device_id": "d_61e266631200",
+      "base": "4.2-alternation",
+      "os": "macos",
+      "input_keys": true,
+      "typing_module": true,
+      "vm": false,
+      "reveals": true
+    }
+  ],
+  "submission": {
+    "projects": ["p_b2738424d7c2"],
+    "window": {"start": "2026-11-23T08:31:00Z", "end": "2026-11-23T08:46:00Z"}
+  },
+  "live": {
+    "from": "rescore",
+    "mutations": []
+  },
+  "fails": ["CC2"],
+  "checks": {
+    "CC1": {
+      "result": "pass",
+      "counts": {"hook_prompts": 5, "log_entries": 5, "matched": 5, "hook_only": 0, "log_only": 0, "not_computable": 0}
+    },
+    "CC2": {
+      "result": "fail",
+      "counts": {"prompts": 5, "with_input_and_focus": 0, "no_input": 5, "no_focus": 0},
+      "items": [
+        {"turn_key": "t_a3b5a765ea66", "t": 1795422780000, "input": false, "focus": true, "idle_s": 199},
+        {"turn_key": "t_e96fa5b99b6d", "t": 1795422960000, "input": false, "focus": true, "idle_s": 379},
+        {"turn_key": "t_1db5ec5bbe29", "t": 1795423140000, "input": false, "focus": true, "idle_s": 559},
+        {"turn_key": "t_a433d069cb4d", "t": 1795423320000, "input": false, "focus": true, "idle_s": 739},
+        {"turn_key": "t_9e975cfb61c8", "t": 1795423500000, "input": false, "focus": true, "idle_s": 919}
+      ]
+    },
+    "CC3": {
+      "result": "not_computable",
+      "counts": {"commits": 0, "flagged": 0},
+      "reason": "no commit in the submission"
+    },
+    "CC4": {
+      "result": "not_computable",
+      "counts": {"commits": 0, "seen_out_of_order": 0, "pushed_before_observed": 0, "forge_mismatch": 0},
+      "reason": "no commit in the submission"
+    },
+    "CC5": {
+      "result": "not_computable",
+      "counts": {"devices": 1, "slots_credited_twice": 0},
+      "reason": "no slot credited: every prompt is no_input, so nothing opened a window"
+    },
+    "CC6": {
+      "result": "pass",
+      "counts": {"minutes_mismatched": 0, "held_s": 0}
+    },
+    "CC7": {
+      "result": "pass",
+      "counts": {
+        "batches": 28,
+        "records": 106,
+        "batch_gaps": 0,
+        "seq_gaps": 0,
+        "count_mismatches": 0,
+        "root_mismatches": 0,
+        "head_mismatches": 0,
+        "body_mismatches": 0,
+        "held_minutes": 0
+      }
+    },
+    "CC8": {
+      "result": "not_computable",
+      "counts": {
+        "challenged": 0,
+        "sketch_ok": 0,
+        "bad_entry": 0,
+        "sketch_mismatch": 0,
+        "shingle_mismatch": 0,
+        "shingle_conflicts": 0,
+        "class_mismatch": 0,
+        "hidden_shingles": 0
+      },
+      "reason": "nothing drawn: no human prompt opened a credited anchor"
+    },
+    "CC9": {
+      "result": "pass",
+      "counts": {"sessions": 1, "multi_project_sessions": 0, "orphan_turns": 0, "parent_class_changes": 0}
+    },
+    "CC10": {
+      "result": "not_computable",
+      "counts": {"editor_acts": 0, "with_focus": 0, "without_focus": 0},
+      "reason": "no editor act in the submission"
+    },
+    "CC11": {
+      "result": "not_computable",
+      "counts": {"prompts": 0, "typed_chars": 0, "key_downs": 0, "injected": 0, "too_few_keys": 0, "injected_prompts": 0},
+      "reason": "no human prompt with typed characters"
+    }
+  },
+  "not_exercised": {},
+  "known_limit": null,
+  "errata": ["2026-11-19-check-readings"],
+  "notes": [
+    "tmux send-keys writes to the pty, so neither the OS idle time nor the typing module sees the keys. The module's only count is `claude` and its Enter.",
+    "Every prompt is origin no_input (SM 2.2 rule 8), so no anchor opens and nothing is credited: CC5, CC8 and CC11 have nothing to compare. The buckets that exist hold agent_running_s only, and the live ones equal the re-score."
+  ]
+}

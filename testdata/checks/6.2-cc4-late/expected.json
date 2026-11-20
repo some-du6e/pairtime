@@ -1,0 +1,114 @@
+{
+  "scenario": "6.2-cc4-late",
+  "title": "A commit the server first saw 18 minutes after observed_at",
+  "story": "pairtimed first heard of the commit at 08:02:30.6, from the laptop's commit record, 18 minutes after the observed_at the record gives. The ledger batches, the commit's included, arrived on time, so only the commit's clocks disagree.",
+  "base": "6.2",
+  "edits": ["server_first_seen_at is observed_at plus 18 minutes and 0.6 s."],
+  "devices": [
+    {
+      "device_id": "d_c0fe658255f8",
+      "base": "6.2",
+      "os": "windows",
+      "input_keys": false,
+      "typing_module": false,
+      "vm": false,
+      "reveals": true
+    }
+  ],
+  "submission": {
+    "projects": ["p_be4901c04a84"],
+    "window": {"start": "2026-11-24T12:40:00Z", "end": "2026-11-24T12:45:00Z"}
+  },
+  "live": {
+    "from": "rescore",
+    "mutations": []
+  },
+  "fails": ["CC4"],
+  "checks": {
+    "CC1": {
+      "result": "not_computable",
+      "counts": {"hook_prompts": 1, "log_entries": 0, "matched": 0, "hook_only": 0, "log_only": 0, "not_computable": 1},
+      "items": [
+        {
+          "turn_key": "t_9bdf9be6133e",
+          "t": 1795524060000,
+          "harness": "cursor",
+          "status": "not_computable",
+          "why": "no v1 log reader for this harness (DESIGN 5.1)"
+        }
+      ],
+      "reason": "no session of the submission has a v1 log reader"
+    },
+    "CC2": {
+      "result": "pass",
+      "counts": {"prompts": 1, "with_input_and_focus": 1, "no_input": 0, "no_focus": 0}
+    },
+    "CC3": {
+      "result": "pass",
+      "counts": {"commits": 1, "flagged": 0},
+      "items": [
+        {
+          "sha": "99d45dfe857548da524bb234c7ce7c29f267c9df",
+          "t": 1795524270000,
+          "changed_lines": 42,
+          "recorded_lines": 41,
+          "unexplained_lines": 1,
+          "flagged": false
+        }
+      ]
+    },
+    "CC4": {
+      "result": "fail",
+      "counts": {"commits": 1, "seen_out_of_order": 1, "pushed_before_observed": 0, "forge_mismatch": 0},
+      "items": [
+        {
+          "sha": "99d45dfe857548da524bb234c7ce7c29f267c9df",
+          "observed_at": 1795524270000,
+          "server_first_seen_at": 1795525350600,
+          "seen_in_order": false,
+          "push_ok": true,
+          "forge_matches": true
+        }
+      ]
+    },
+    "CC5": {
+      "result": "pass",
+      "counts": {"devices": 1, "slots_credited_twice": 0, "slots_credited": 19, "merge_dropped_s": 0}
+    },
+    "CC6": {
+      "result": "pass",
+      "counts": {"minutes_mismatched": 0, "held_s": 0}
+    },
+    "CC7": {
+      "result": "pass",
+      "counts": {
+        "batches": 8,
+        "records": 34,
+        "batch_gaps": 0,
+        "seq_gaps": 0,
+        "count_mismatches": 0,
+        "root_mismatches": 0,
+        "head_mismatches": 0,
+        "body_mismatches": 0,
+        "held_minutes": 0
+      }
+    },
+    "CC9": {
+      "result": "pass",
+      "counts": {"sessions": 1, "multi_project_sessions": 0, "orphan_turns": 0, "parent_class_changes": 0}
+    },
+    "CC10": {
+      "result": "pass",
+      "counts": {"editor_acts": 1, "with_focus": 1, "without_focus": 0}
+    },
+    "CC11": {
+      "result": "not_computable",
+      "counts": {"prompts": 0, "typed_chars": 0, "key_downs": 0, "injected": 0, "too_few_keys": 0, "injected_prompts": 0},
+      "reason": "the typing module is off on this device"
+    }
+  },
+  "not_exercised": {"CC8": "SM 6.2 doesn't quote the prompt, so there is no text to commit or reveal"},
+  "known_limit": null,
+  "errata": ["2026-11-19-check-readings"],
+  "notes": []
+}

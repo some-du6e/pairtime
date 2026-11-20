@@ -1,0 +1,22 @@
+{
+  "note": "What the server holds for each commit: the observed_at the laptop sent (the git.change's t), server_first_seen_at by its own clock, and what the forge returned for the SHA.",
+  "commits": [
+    {
+      "sha": "99d45dfe857548da524bb234c7ce7c29f267c9df",
+      "project_key": "p_be4901c04a84",
+      "observed_at": 1795524270000,
+      "server_first_seen_at": 1795524286157,
+      "seen_via": "device",
+      "forge": {
+        "host": "github",
+        "app_installed": false,
+        "push_time": null,
+        "found_at": 1795525924300,
+        "sha_found": true,
+        "files_changed": 2,
+        "insertions": 29,
+        "deletions": 13
+      }
+    }
+  ]
+}

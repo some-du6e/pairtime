@@ -1,0 +1,107 @@
+{
+  "scenario": "6.2-clean",
+  "title": "SM 6.2, five minutes before school, on Cursor with no log reader",
+  "story": "The base timeline with its commit's server clocks and forge lookup. CC1 is not computable: Cursor has hooks but no v1 log reader (DESIGN 5.1), so there is no second record to compare.",
+  "base": "6.2",
+  "edits": [],
+  "devices": [
+    {
+      "device_id": "d_c0fe658255f8",
+      "base": "6.2",
+      "os": "windows",
+      "input_keys": false,
+      "typing_module": false,
+      "vm": false,
+      "reveals": true
+    }
+  ],
+  "submission": {
+    "projects": ["p_be4901c04a84"],
+    "window": {"start": "2026-11-24T12:40:00Z", "end": "2026-11-24T12:45:00Z"}
+  },
+  "live": {
+    "from": "rescore",
+    "mutations": []
+  },
+  "fails": [],
+  "checks": {
+    "CC1": {
+      "result": "not_computable",
+      "counts": {"hook_prompts": 1, "log_entries": 0, "matched": 0, "hook_only": 0, "log_only": 0, "not_computable": 1},
+      "items": [
+        {
+          "turn_key": "t_9bdf9be6133e",
+          "t": 1795524060000,
+          "harness": "cursor",
+          "status": "not_computable",
+          "why": "no v1 log reader for this harness (DESIGN 5.1)"
+        }
+      ],
+      "reason": "no session of the submission has a v1 log reader"
+    },
+    "CC2": {
+      "result": "pass",
+      "counts": {"prompts": 1, "with_input_and_focus": 1, "no_input": 0, "no_focus": 0}
+    },
+    "CC3": {
+      "result": "pass",
+      "counts": {"commits": 1, "flagged": 0},
+      "items": [
+        {
+          "sha": "99d45dfe857548da524bb234c7ce7c29f267c9df",
+          "t": 1795524270000,
+          "changed_lines": 42,
+          "recorded_lines": 41,
+          "unexplained_lines": 1,
+          "flagged": false
+        }
+      ]
+    },
+    "CC4": {
+      "result": "pass",
+      "counts": {"commits": 1, "seen_out_of_order": 0, "pushed_before_observed": 0, "forge_mismatch": 0}
+    },
+    "CC5": {
+      "result": "pass",
+      "counts": {"devices": 1, "slots_credited_twice": 0, "slots_credited": 19, "merge_dropped_s": 0}
+    },
+    "CC6": {
+      "result": "pass",
+      "counts": {"minutes_mismatched": 0, "held_s": 0}
+    },
+    "CC7": {
+      "result": "pass",
+      "counts": {
+        "batches": 8,
+        "records": 34,
+        "batch_gaps": 0,
+        "seq_gaps": 0,
+        "count_mismatches": 0,
+        "root_mismatches": 0,
+        "head_mismatches": 0,
+        "body_mismatches": 0,
+        "held_minutes": 0
+      }
+    },
+    "CC9": {
+      "result": "pass",
+      "counts": {"sessions": 1, "multi_project_sessions": 0, "orphan_turns": 0, "parent_class_changes": 0}
+    },
+    "CC10": {
+      "result": "pass",
+      "counts": {"editor_acts": 1, "with_focus": 1, "without_focus": 0}
+    },
+    "CC11": {
+      "result": "not_computable",
+      "counts": {"prompts": 0, "typed_chars": 0, "key_downs": 0, "injected": 0, "too_few_keys": 0, "injected_prompts": 0},
+      "reason": "the typing module is off on this device"
+    }
+  },
+  "not_exercised": {"CC8": "SM 6.2 doesn't quote the prompt, so there is no text to commit or reveal"},
+  "known_limit": null,
+  "errata": ["2026-11-19-check-readings"],
+  "notes": [
+    "CC3: the commit's 29 + 13 lines against 41 recorded in its interval, the agent's 28 + 12 and her 1-line fix. The heartbeat Cursor sent for the agent's edit is edit_source agent, and counting it as well would give 81, which changes nothing here.",
+    "CC4: the laptop sent the commit with the batch sealed at the suspend; the forge lookup found it at 08:12:04 local, when she pushed at school. remind-bot has no GitHub App, so the push-time rule doesn't apply."
+  ]
+}
