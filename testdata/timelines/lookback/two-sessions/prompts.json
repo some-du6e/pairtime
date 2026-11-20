@@ -1,0 +1,53 @@
+{
+  "fixture": "lookback/two-sessions",
+  "prompts": [
+    {
+      "turn_key": "t_2b2717fc0078",
+      "t": 1795384860000,
+      "local": "16:01:00",
+      "text": null,
+      "len_chars": 90,
+      "source": "invented for this case, which no SM section describes; only its length matters"
+    },
+    {
+      "turn_key": "t_4227496294de",
+      "t": 1795384920000,
+      "local": "16:02:00",
+      "text": null,
+      "len_chars": 60,
+      "source": "invented for this case, which no SM section describes; only its length matters"
+    },
+    {
+      "turn_key": "t_e4692de61164",
+      "t": 1795385380000,
+      "local": "16:09:40",
+      "text": null,
+      "len_chars": 390,
+      "source": "invented for this case, which no SM section describes; only its length matters: 90 typed characters and a pasted 300-character JSON sample"
+    },
+    {
+      "turn_key": "t_a6b4518f316e",
+      "t": 1795385440000,
+      "local": "16:10:40",
+      "text": null,
+      "len_chars": 60,
+      "source": "invented for this case, which no SM section describes; only its length matters"
+    },
+    {
+      "turn_key": "t_7762c2de4218",
+      "t": 1795385850000,
+      "local": "16:17:30",
+      "text": null,
+      "len_chars": 120,
+      "source": "invented for this case, which no SM section describes; only its length matters"
+    },
+    {
+      "turn_key": "t_8500b00e5402",
+      "t": 1795385940000,
+      "local": "16:19:00",
+      "text": null,
+      "len_chars": 45,
+      "source": "invented for this case, which no SM section describes; only its length matters"
+    }
+  ]
+}
