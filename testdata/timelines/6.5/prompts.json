@@ -1,0 +1,182 @@
+{
+  "fixture": "6.5",
+  "prompts": [
+    {
+      "turn_key": "t_4a1edc4a6c03",
+      "t": 1795608060000,
+      "local": "20:01:00",
+      "text": "the navbar overlaps the hero on mobile, fix the css so the hero starts below the navbar",
+      "len_chars": 95,
+      "source": "quoted in SM 6.5's 20:00 row, which gives its length as 95 characters",
+      "erratum": "2026-11-19-sm-6.5-prompt-length"
+    },
+    {
+      "turn_key": "t_2e748f8fb238",
+      "t": 1795608180000,
+      "local": "20:03:00",
+      "text": "still overlapping on mobile. fix it",
+      "len_chars": 35,
+      "source": "quoted in SM 6.5's 20:02 row"
+    },
+    {
+      "turn_key": "t_d92b34825bd3",
+      "t": 1795608300000,
+      "local": "20:05:00",
+      "text": "still overlapping on mobile. fix it",
+      "len_chars": 35,
+      "source": "SM 6.5's 20:05 row: the identical prompt"
+    },
+    {
+      "turn_key": "t_c982a2face13",
+      "t": 1795608420000,
+      "local": "20:07:00",
+      "text": "still overlapping on mobile, fix it!!",
+      "len_chars": 37,
+      "source": "quoted in SM 6.5's 20:07 row"
+    },
+    {
+      "turn_key": "t_ddcad73bce68",
+      "t": 1795608540000,
+      "local": "20:09:00",
+      "text": "the navbar STILL covers the hero",
+      "len_chars": 32,
+      "source": "quoted in SM 6.5's 20:08 to 20:37 row"
+    },
+    {
+      "turn_key": "t_058127dc2169",
+      "t": 1795608660000,
+      "local": "20:11:00",
+      "text": "can you make the hero start under the nav bar on phones",
+      "len_chars": 55,
+      "source": "invented: SM says the prompts from 20:09 to 20:37 are mostly in new words and quotes three"
+    },
+    {
+      "turn_key": "t_36fc14531023",
+      "t": 1795608780000,
+      "local": "20:13:00",
+      "text": "still overlapping on mobile. fix it",
+      "len_chars": 35,
+      "source": "invented: one of the prompts in that range whose wording repeats, here T2's text again"
+    },
+    {
+      "turn_key": "t_e4684582067a",
+      "t": 1795608900000,
+      "local": "20:15:00",
+      "text": "pls fix the overlap",
+      "len_chars": 19,
+      "source": "quoted in SM 6.5's 20:08 to 20:37 row"
+    },
+    {
+      "turn_key": "t_c6af816c2eb2",
+      "t": 1795609020000,
+      "local": "20:17:00",
+      "text": "the top of the hero is hidden behind the navbar",
+      "len_chars": 47,
+      "source": "invented: SM says the prompts from 20:09 to 20:37 are mostly in new words and quotes three"
+    },
+    {
+      "turn_key": "t_f29baea24498",
+      "t": 1795609140000,
+      "local": "20:19:00",
+      "text": "it's not working, try again",
+      "len_chars": 27,
+      "source": "quoted in SM 6.5's 20:08 to 20:37 row"
+    },
+    {
+      "turn_key": "t_6ffee72257ff",
+      "t": 1795609260000,
+      "local": "20:21:00",
+      "text": "why is the hero still under the navbar on my phone",
+      "len_chars": 50,
+      "source": "invented: SM says the prompts from 20:09 to 20:37 are mostly in new words and quotes three"
+    },
+    {
+      "turn_key": "t_7d1dabe19639",
+      "t": 1795609380000,
+      "local": "20:23:00",
+      "text": "still overlapping on mobile. fix it",
+      "len_chars": 35,
+      "source": "invented: one of the prompts in that range whose wording repeats, here T2's text again"
+    },
+    {
+      "turn_key": "t_c540d93fb811",
+      "t": 1795609500000,
+      "local": "20:25:00",
+      "text": "push the hero down so the navbar doesn't cover it",
+      "len_chars": 49,
+      "source": "invented: SM says the prompts from 20:09 to 20:37 are mostly in new words and quotes three"
+    },
+    {
+      "turn_key": "t_1dc6cfc972c1",
+      "t": 1795609620000,
+      "local": "20:27:00",
+      "text": "nope, same problem on mobile",
+      "len_chars": 28,
+      "source": "invented: SM says the prompts from 20:09 to 20:37 are mostly in new words and quotes three"
+    },
+    {
+      "turn_key": "t_8742ed2402cc",
+      "t": 1795609740000,
+      "local": "20:29:00",
+      "text": "make sure nothing is behind the navbar on small screens",
+      "len_chars": 55,
+      "source": "invented: SM says the prompts from 20:09 to 20:37 are mostly in new words and quotes three"
+    },
+    {
+      "turn_key": "t_6e94ea908b06",
+      "t": 1795609860000,
+      "local": "20:31:00",
+      "text": "still overlapping on mobile, fix it",
+      "len_chars": 35,
+      "source": "invented: one of the prompts in that range whose wording repeats, here T2's text again"
+    },
+    {
+      "turn_key": "t_e6a0effb1ee4",
+      "t": 1795609980000,
+      "local": "20:33:00",
+      "text": "the hero text is cut off by the navbar again",
+      "len_chars": 44,
+      "source": "invented: SM says the prompts from 20:09 to 20:37 are mostly in new words and quotes three"
+    },
+    {
+      "turn_key": "t_98ec05b65e1f",
+      "t": 1795610100000,
+      "local": "20:35:00",
+      "text": "try a different way to stop the overlap",
+      "len_chars": 39,
+      "source": "invented: SM says the prompts from 20:09 to 20:37 are mostly in new words and quotes three"
+    },
+    {
+      "turn_key": "t_13b6a412fd8d",
+      "t": 1795610220000,
+      "local": "20:37:00",
+      "text": "the navbar is on top of the hero, fix the spacing",
+      "len_chars": 49,
+      "source": "invented: SM says the prompts from 20:09 to 20:37 are mostly in new words and quotes three"
+    },
+    {
+      "turn_key": "t_0e7ff4d531ca",
+      "t": 1795610580000,
+      "local": "20:43:00",
+      "text": "now the hero is right on mobile but there's a big gap on desktop. only apply the margin under 768px",
+      "len_chars": 99,
+      "source": "quoted in SM 6.5's 20:42 row"
+    },
+    {
+      "turn_key": "t_61613602832a",
+      "t": 1795610940000,
+      "local": "20:49:00",
+      "text": "the gap is gone. give the footer the same breakpoint so they line up",
+      "len_chars": 68,
+      "source": "invented: one of the two turns in SM 6.5's 20:43 to 20:59 row"
+    },
+    {
+      "turn_key": "t_02b7a454b834",
+      "t": 1795611630000,
+      "local": "21:00:30",
+      "text": "next thing: the pantry cards overflow on small phones, fix that",
+      "len_chars": 63,
+      "source": "invented: the next request, sent after the window; its lead covers 20:58 to 21:00"
+    }
+  ]
+}

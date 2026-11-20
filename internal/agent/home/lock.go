@@ -8,12 +8,20 @@ import "errors"
 // the lock.
 var ErrLocked = errors.New("the data directory is locked by another agent")
 
-// Lock is the single-instance lock on a data directory: a named mutex on
-// Windows and an flock on the file agent.lock elsewhere (DESIGN 3.2; CP
-// 2.1). The login item, a hook that finds the agent down and a teen
+// lockFile is the file in the data directory whose lock is the agent's. It
+// stays on disk after Release: deleting a lock file races with the next
+// process that opens it.
+const lockFile = "agent.lock"
+
+// Lock is the single-instance lock on a data directory: an exclusive lock
+// on the file agent.lock in it, an flock on Unix and a LockFileEx lock on
+// Windows, where the agent also holds a named mutex (DESIGN 3.2; CP 2.1).
+// The login item, a hook that finds the agent down and a teen
 // double-clicking the binary can all start an agent at once, and only one
-// may run. The OS drops the lock when its holder exits, crashes or is
-// killed, so a dead agent never blocks the next one.
+// may run. Because the lock is on the file, it keeps out every other
+// process that uses the directory, whatever Windows session it runs in and
+// however it spells the path (#46). The OS drops the lock when its holder
+// exits, crashes or is killed, so a dead agent never blocks the next one.
 type Lock struct {
 	release func() error
 }

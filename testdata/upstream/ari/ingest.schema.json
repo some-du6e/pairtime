@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Ari ship payload, the body of POST /api/ingest/:program",
-  "description": "The keys Ari documents for a ship at hackclub/ari 637233962a0f (src/routes/docs/webhooks/inboundFields.ts), checked against the validator that enforces them, hackclub/ari-webhooks 01a47d67aa91 (internal/ingest/validate.go and payload.go). Ari has no license, so the names and limits are stated here in our own words. Where Ari accepts more than one spelling, this schema asks for the one Ari tells new integrations to use, so it is a little stricter than Ari and anything valid here is valid there. Ari answers an invalid ship with 422 and the name of the field at fault. Those names are part of Ari's contract (validate.go line 18) and are listed in each description.",
+  "description": "The keys Ari documents for a ship at hackclub/ari 637233962a0f (src/routes/docs/webhooks/inboundFields.ts), checked against the validator that enforces them, hackclub/ari-webhooks 01a47d67aa91 (internal/ingest/validate.go and payload.go). Ari has no license, so the names and limits are stated here in our own words. Where Ari accepts more than one spelling, this schema asks for the one Ari tells new integrations to use, so it is a little stricter than Ari. A ship valid here is valid at Ari when it also keeps four rules this schema can't state, which PROVENANCE.md lists: collaborators' emails differ, journal entries on a shared ship name a collaborator, dates and times exist, and text that mustn't be blank has a character that isn't Unicode whitespace. Ari answers an invalid ship with 422 and the name of the field at fault. Those names are part of Ari's contract (validate.go line 18) and are listed in each description.",
   "type": "object",
   "required": ["external_id", "maker", "title", "description", "repo_url", "thumbnail_url"],
   "properties": {
@@ -11,7 +11,7 @@
       "type": "array",
       "maxItems": 10,
       "items": {"$ref": "#/$defs/collaborator"},
-      "description": "Only for programs with collaboration on, otherwise 422 collaborators_not_enabled. When present, these people are the ship, each gets their own verified time, and every journal entry needs an email naming one of them. 422 collaborators."
+      "description": "Only for programs with collaboration on, otherwise 422 collaborators_not_enabled. When the list has anyone in it, these people are the ship, each gets their own verified time, and every journal entry needs an email naming one of them. An empty list is a solo ship, as Ari's docs say and its validator treats it (validate.go lines 117-123). 422 collaborators."
     },
     "title": {"$ref": "#/$defs/nonblank", "description": "422 title."},
     "description": {"$ref": "#/$defs/nonblank", "description": "Shown under the title. 422 description."},
@@ -52,21 +52,33 @@
       ]
     },
     {
-      "description": "The evidence floor: at least one Hackatime project, one journal entry or some program time, otherwise 422 hackatime_projects_or_journals_or_program_hours. Ari also counts program_minutes, program_hours and collaborators' program time; this schema accepts only maker.program_seconds, the form Ari asks new integrations to send.",
+      "description": "The evidence floor: at least one Hackatime project name that isn't blank, one journal entry or some program time, otherwise 422 hackatime_projects_or_journals_or_program_hours. Ari drops blank names before it applies the floor (validate.go lines 102-114, 356). Program time counts only from the people who make up the ship: the maker on a solo ship, which sends no collaborators or an empty list, and only the collaborators when the list has anyone in it (lines 345-355). Ari also counts program_minutes, program_hours, collaborators' program time and collaborators' own hackatime_projects (lines 185-197); this schema accepts only a solo ship's maker.program_seconds, the form Ari asks new integrations to send. The examples are ships cut down to the keys the floor reads.",
       "anyOf": [
-        {"required": ["hackatime_projects"], "properties": {"hackatime_projects": {"minItems": 1}}},
+        {"required": ["hackatime_projects"], "properties": {"hackatime_projects": {"minItems": 1, "items": {"$ref": "#/$defs/nonblank"}}}},
         {"required": ["journals"], "properties": {"journals": {"minItems": 1}}},
-        {"properties": {"maker": {"required": ["program_seconds"], "properties": {"program_seconds": {"minimum": 1}}}}}
+        {"required": ["maker"], "properties": {"maker": {"required": ["program_seconds"], "properties": {"program_seconds": {"minimum": 1}}}, "collaborators": {"maxItems": 0}}}
+      ],
+      "examples": [
+        {"hackatime_projects": ["cs2go"]},
+        {"journals": [{"at": "2026-11-03T20:11:00Z", "seconds": 6840, "text": "Tracked by pairtime"}]},
+        {"maker": {"program_seconds": 3600}},
+        {"maker": {"program_seconds": 3600}, "collaborators": []}
+      ],
+      "x-invalid-examples": [
+        {},
+        {"hackatime_projects": ["", "  "]},
+        {"maker": {"program_seconds": 0}},
+        {"maker": {"program_seconds": 3600}, "collaborators": [{"email": "sam@example.org"}]}
       ]
     }
   ],
   "$defs": {
-    "nonblank": {"type": "string", "pattern": "\\S", "description": "A string with at least one character that isn't whitespace."},
+    "nonblank": {"type": "string", "pattern": "\\S", "description": "A string with at least one character that isn't whitespace. Ari tests with Go's strings.TrimSpace, which also strips Unicode spaces such as U+00A0, while check.py runs this pattern in ASCII mode, so a string made only of those passes here and is blank at Ari (PROVENANCE.md)."},
     "http_url": {"type": "string", "pattern": "^\\s*[Hh][Tt][Tt][Pp][Ss]?://", "description": "Ari checks only that the trimmed value starts with http:// or https://, in any case (ari-webhooks internal/ingest/payload.go line 54)."},
     "when": {
       "type": "string",
       "pattern": "^\\s*[0-9]{4}-[0-9]{2}-[0-9]{2}(T[0-9]{2}:[0-9]{2}(:[0-9]{2}(\\.[0-9]+)?(Z|[+-][0-9]{2}:[0-9]{2})?)?)?\\s*$",
-      "description": "An ISO 8601 date or date-time, as Ari's parseJsDate reads it (payload.go lines 56-78): RFC 3339 with an offset, a date-time without one, read as Ari's local time, or a bare date, read as UTC. Send RFC 3339 in UTC to leave nothing to the server's zone.",
+      "description": "An ISO 8601 date or date-time, as Ari's parseJsDate reads it (payload.go lines 56-78): RFC 3339 with an offset, a date-time without one, read as Ari's local time, or a bare date, read as UTC. Send RFC 3339 in UTC to leave nothing to the server's zone. The pattern checks the shape, not the calendar: Ari's parser also refuses a date or time that doesn't exist, such as 2026-02-30 or 25:00 (PROVENANCE.md).",
       "examples": ["2026-11-03T20:11:00Z", "2026-11-03", "2026-11-03T20:11"]
     },
     "program_time": {
@@ -93,7 +105,7 @@
       "required": ["email"],
       "allOf": [{"$ref": "#/$defs/program_time"}],
       "properties": {
-        "email": {"$ref": "#/$defs/nonblank", "description": "Unique within the ship. 422 collaborators.email."},
+        "email": {"$ref": "#/$defs/nonblank", "description": "422 collaborators.email when blank. No two collaborators may share one, ignoring case and surrounding spaces, or Ari answers 422 collaborators (validate.go lines 171-174), which this schema can't check."},
         "name": {"type": "string", "description": "422 collaborators.name."},
         "slack_id": {"type": "string", "description": "422 collaborators.slack_id."},
         "hackatime_id": {"type": "string", "description": "422 collaborators.hackatime_id."},
