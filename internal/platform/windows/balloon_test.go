@@ -91,6 +91,95 @@ func TestTransientIconIsCreatedAndRemoved(t *testing.T) {
 	}
 }
 
+// The hidden window ends its message loop however it goes, and only its
+// own code destroys it.
+func TestHiddenWindowEndsItsLoop(t *testing.T) {
+	tests := []struct {
+		name string
+		// do runs on the window's thread before its message loop does.
+		do         func(b *balloon)
+		wantWindow bool // the window still exists once the loop has ended
+	}{
+		{
+			name: "a WM_CLOSE from outside, as taskkill sends, leaves the window for close to destroy",
+			do: func(b *balloon) {
+				balloonAPI.postMessage.Call(uintptr(b.hwnd), wmClose, 0, 0)
+				balloonAPI.postMessage.Call(uintptr(b.hwnd), balloonWMStop, 0, 0)
+			},
+			wantWindow: true,
+		},
+		{
+			name: "a window destroyed under the loop ends the loop",
+			do: func(b *balloon) {
+				balloonAPI.destroyWindow.Call(uintptr(b.hwnd))
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			onLockedThread(t, func() {
+				b, err := newBalloon()
+				if err != nil {
+					t.Errorf("newBalloon() error = %v", err)
+					return
+				}
+				defer b.close()
+				tt.do(b)
+				// Before the fix this never returned, and onLockedThread
+				// gave up after 60 s.
+				if err := pumpBalloonMessages(); err != nil {
+					t.Errorf("pumpBalloonMessages() error = %v", err)
+				}
+				if got := windows.IsWindow(b.hwnd); got != tt.wantWindow {
+					t.Errorf("the window exists after the loop: %v, want %v", got, tt.wantWindow)
+				}
+			})
+		})
+	}
+}
+
+func TestAwaitBalloon(t *testing.T) {
+	failed := errors.New("SetTimer failed")
+	tests := []struct {
+		name string
+		// result is what the balloon's thread sends, after delay; a negative
+		// delay means it never finishes.
+		result  error
+		delay   time.Duration
+		cancel  bool // the caller has given up
+		cleanup time.Duration
+		want    error
+		// How long awaitBalloon may take.
+		minWait, maxWait time.Duration
+	}{
+		{name: "the thread's result comes back when it finishes first", result: failed, cleanup: time.Minute, want: failed, maxWait: 5 * time.Second},
+		{name: "a thread that finishes during the cleanup wait after the caller gave up has its result returned", result: nil, delay: 50 * time.Millisecond, cancel: true, cleanup: time.Minute, want: nil, maxWait: 5 * time.Second},
+		{name: "a thread that never finishes holds a caller who gave up only for the cleanup wait", delay: -1, cancel: true, cleanup: 300 * time.Millisecond, want: context.Canceled, minWait: 200 * time.Millisecond, maxWait: 10 * time.Second},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			if tt.cancel {
+				cancel()
+			}
+			done := make(chan error, 1)
+			if tt.delay >= 0 {
+				time.AfterFunc(tt.delay, func() { done <- tt.result })
+			}
+			start := time.Now()
+			err := awaitBalloon(ctx, done, tt.cleanup)
+			waited := time.Since(start)
+			if !errors.Is(err, tt.want) || (tt.want == nil && err != nil) {
+				t.Errorf("awaitBalloon() = %v, want %v", err, tt.want)
+			}
+			if waited < tt.minWait || waited > tt.maxWait {
+				t.Errorf("awaitBalloon() took %v, want from %v to %v", waited, tt.minWait, tt.maxWait)
+			}
+		})
+	}
+}
+
 func TestQueryUserNotificationState(t *testing.T) {
 	tests := []struct {
 		name string

@@ -45,14 +45,15 @@ var (
 const balloonLifetime = 30 * time.Second
 
 // ShowBalloon shows title and text in a balloon and returns when the
-// balloon is gone, after at most balloonLifetime, or when ctx is done; the
-// icon and its window are removed either way. It first asks Windows whether
-// this is a time for a notification (SHQueryUserNotificationState), and
-// returns ErrUserAway or ErrUserBusy without showing anything when it isn't.
-// The balloon plays no sound, respects the quiet hour after a first
-// sign-in, and is dropped rather than queued when Windows can't show it at
-// once (NIF_REALTIME). Focus Assist, or Do Not Disturb on Windows 11, holds
-// it back like any other notification.
+// balloon is gone, after at most balloonLifetime, or when ctx is done. The
+// icon and its window are removed either way, within balloonCleanupWait of
+// ctx ending. It first asks Windows whether this is a time for a
+// notification (SHQueryUserNotificationState), and returns ErrUserAway or
+// ErrUserBusy without showing anything when it isn't. The balloon plays no
+// sound, respects the quiet hour after a first sign-in, and is dropped
+// rather than queued when Windows can't show it at once (NIF_REALTIME).
+// Focus Assist, or Do Not Disturb on Windows 11, holds it back like any
+// other notification.
 func ShowBalloon(ctx context.Context, title, text string) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -71,6 +72,8 @@ func ShowBalloon(ctx context.Context, title, text string) error {
 	if text == "" {
 		text = title
 	}
+	// Buffered, so the thread can always finish, even after ShowBalloon
+	// has stopped waiting for it.
 	done := make(chan error, 1)
 	go func() {
 		// The window, its icon and its messages belong to one OS thread.
@@ -79,7 +82,35 @@ func ShowBalloon(ctx context.Context, title, text string) error {
 		runtime.LockOSThread()
 		done <- showBalloonOnThisThread(ctx, title, text, balloonLifetime)
 	}()
-	return <-done
+	return awaitBalloon(ctx, done, balloonCleanupWait)
+}
+
+// balloonCleanupWait is how long ShowBalloon waits, once ctx is done, for
+// the balloon's thread to take its icon and window down, which the thread
+// starts on as soon as it sees ctx. A caller that waits a little longer,
+// as the notifier does when the agent stops, finds the icon gone.
+const balloonCleanupWait = 2 * time.Second
+
+// awaitBalloon returns what the balloon's thread sends on done. When ctx
+// is done first, it waits up to cleanup more for the thread, so that the
+// icon is gone when ShowBalloon returns, and returns what the thread sends
+// or, once cleanup has passed, ctx's error. A thread that is stuck, in the
+// shell or in a message loop that never ends, holds the caller no longer.
+func awaitBalloon(ctx context.Context, done <-chan error, cleanup time.Duration) error {
+	select {
+	case err := <-done:
+		return err
+	case <-ctx.Done():
+	}
+	t := time.NewTimer(cleanup)
+	defer t.Stop()
+	select {
+	case err := <-done:
+		// The thread finished: nil if the balloon was up before ctx ended.
+		return err
+	case <-t.C:
+		return ctx.Err()
+	}
 }
 
 // showBalloonOnThisThread makes the window and icon, shows the balloon,
@@ -91,6 +122,10 @@ func showBalloonOnThisThread(ctx context.Context, title, text string, lifetime t
 	}
 	defer b.close()
 	if err := b.addIcon(); err != nil {
+		return err
+	}
+	// A caller that gave up meanwhile gets no balloon.
+	if err := ctx.Err(); err != nil {
 		return err
 	}
 	if err := b.show(title, text); err != nil {
@@ -330,7 +365,7 @@ func registerBalloonClass() error {
 
 // balloonWndProc is the window procedure of every hidden window. It ends
 // the message loop when the balloon is gone, when the lifetime timer fires,
-// or when the caller gives up.
+// when the caller gives up, or when the window is destroyed.
 func balloonWndProc(hwnd windows.HWND, msg uint32, wparam, lparam uintptr) uintptr {
 	switch msg {
 	case balloonWMCallback:
@@ -340,6 +375,17 @@ func balloonWndProc(hwnd windows.HWND, msg uint32, wparam, lparam uintptr) uintp
 		}
 		return 0
 	case balloonWMTimer, balloonWMStop:
+		balloonAPI.postQuitMessage.Call(0)
+		return 0
+	case wmClose:
+		// Only close destroys the window, once the icon is gone. Passed to
+		// DefWindowProc, a WM_CLOSE from outside, such as the one taskkill
+		// sends every top-level window, would destroy it, and its timer,
+		// under the message loop.
+		return 0
+	case wmDestroy:
+		// However the window went, nothing will post to it again, so the
+		// loop ends here.
 		balloonAPI.postQuitMessage.Call(0)
 		return 0
 	}
