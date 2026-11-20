@@ -139,14 +139,23 @@ func TestLoad(t *testing.T) {
 		},
 		{name: "a file for this release refuses an unknown key", toml: base + "config_version = 1\nsignup_open = true\n", wantErr: "unknown keys: signup_open"},
 		{
+			// signups_open = true needs [controller] in a release that reads
+			// that table (DESIGN 8.6). A release that doesn't ignores it with
+			// the other keys it doesn't know.
 			name: "a file for a newer release loads, with its unknown keys as warnings, so a rollback starts on it",
-			toml: base + "config_version = 2\nsignups_open = true\nfrom_a_newer_release = true\n[hca]\nnewer_key = \"x\"\n",
+			toml: base + "config_version = 2\nsignups_open = true\nfrom_a_newer_release = true\n[controller]\nname = \"Hack Club\"\ncontact = \"privacy@example.org\"\n[hca]\nnewer_key = \"x\"\n",
 			check: func(t *testing.T, c *Config, _ string) {
 				if c.ConfigVersion != 2 || !c.SignupsOpen {
 					t.Errorf("config_version = %d, signups_open = %v; want 2 and true, read as usual", c.ConfigVersion, c.SignupsOpen)
 				}
-				if len(c.Warnings) != 1 || !strings.Contains(c.Warnings[0], "from_a_newer_release, hca.newer_key") {
-					t.Errorf("warnings = %q, want one naming from_a_newer_release and hca.newer_key", c.Warnings)
+				var unknown []string
+				for _, k := range []string{"from_a_newer_release", "controller", "controller.name", "controller.contact", "hca.newer_key"} {
+					if _, known := keyVersions[k]; !known {
+						unknown = append(unknown, k)
+					}
+				}
+				if want := ": " + strings.Join(unknown, ", "); len(c.Warnings) != 1 || !strings.HasSuffix(c.Warnings[0], want) {
+					t.Errorf("warnings = %q, want one naming the keys this release doesn't read, ending %q", c.Warnings, want)
 				}
 			},
 		},
