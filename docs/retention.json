@@ -135,7 +135,7 @@
     {
       "id": "server.commits",
       "where": "server",
-      "data": "Commit records (commit IDs, times and line counts, with file paths only as keyed hashes) and project fingerprints",
+      "data": "Commit records (commit IDs, times and line counts, with file paths only as keyed hashes), project fingerprints, and the pushes pairtime's GitHub App reports if you install it",
       "kept": "While your account exists"
     },
     {

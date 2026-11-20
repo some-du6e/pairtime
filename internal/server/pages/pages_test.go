@@ -234,6 +234,13 @@ func TestPrivacyNotice(t *testing.T) {
 			},
 		},
 		{
+			name: "the notice says what the optional GitHub App keeps of a private repository's pushes (DESIGN 3.10)",
+			want: []string{
+				"For a private one it drops the lists of files each commit changed and keeps the rest: the repository&#39;s name, the branch, each commit&#39;s ID, message and times, and the names and email addresses",
+				"branch names or commit messages of private repositories (unless you install pairtime&#39;s GitHub App on one)",
+			},
+		},
+		{
 			name: "the IP period in the prose is the schedule's",
 			want: []string{"the server deletes them after 30 days."},
 		},
