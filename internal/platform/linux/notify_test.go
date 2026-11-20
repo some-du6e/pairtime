@@ -199,6 +199,38 @@ func TestNotifyCallError(t *testing.T) {
 	}
 }
 
+// godbus's Connect dials before it applies WithContext, so a session bus
+// address whose TCP host never answered held Notify for about two minutes,
+// past any deadline (#86).
+func TestNotifyGivesUpOnATCPBusThatNeverAnswers(t *testing.T) {
+	port := unansweredTCP(t)
+	tests := []struct {
+		name string
+		n    Notifications
+	}{
+		{name: "a tcp: session bus whose host never answers is given up at ctx's deadline", n: Notifications{Address: "tcp:host=127.0.0.1,port=" + port}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+			defer cancel()
+			done := make(chan error, 1)
+			go func() {
+				_, err := tt.n.Notify(ctx, "summary", "body")
+				done <- err
+			}()
+			select {
+			case err := <-done:
+				if !errors.Is(err, context.DeadlineExceeded) {
+					t.Errorf("Notify() error = %v, want ctx's deadline", err)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("Notify was still connecting 5 s after a deadline of 300 ms")
+			}
+		})
+	}
+}
+
 func TestNotifyFailsQuicklyWithoutABus(t *testing.T) {
 	tests := []struct {
 		name string

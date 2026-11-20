@@ -12,14 +12,18 @@ import (
 // count of harness session processes through HarnessProcesses (procscan.go,
 // WP-OS6), and so does every hook call that comes over the socket or the
 // pipe, which hooks.go reports through Hook (WP-AG3). docs/PLAN.md names who
-// wires the rest: WP-OS2 reports focus changes through Focus, WP-AD18 track
-// messages through Hook, WP-LG5 sets Record and Seal, and WP-AG4 passes the
-// parameter table it scores with as Params. Until then records are dropped
-// and the sampler reads the newest table.
+// wires the rest: WP-OS2 reports focus changes through Focus, WP-AD18 each
+// track message through Hook (its Build says so, since WP-AG3 came before
+// track messages existed), and WP-AG4 passes the parameter table it scores
+// with as Params; until then the sampler reads the newest table. Its records
+// go to the ledger, which seals a batch after every suspend and lock
+// (startLedger, WP-LG5), so startLedger must run first.
 func (a *agent) startPresence() func() {
 	a.presence = presence.New(presence.Options{
 		Sched:   a.sched,
 		OS:      presence.ThisOS(),
+		Record:  a.ledgerIn.Record,
+		Seal:    a.ledgerIn.Seal,
 		Problem: func(msg string) { a.setProblem("presence", msg) },
 	})
 	a.presence.Start()

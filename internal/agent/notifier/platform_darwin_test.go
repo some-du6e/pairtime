@@ -26,7 +26,7 @@ func TestDarwinBackendErrors(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
-			err := darwinBackend{o: darwin.Osascript{Path: tt.path}}.Show(ctx, Message{Title: Title, Body: "52 min on remind-bot."})
+			err := darwinBackend{o: darwin.Osascript{Path: tt.path}}.Show(ctx, Message{Title: Title, Body: "52 min on remind-bot."}, func() {})
 			if !errors.Is(err, tt.want) {
 				t.Errorf("Show() = %v, want %v", err, tt.want)
 			}

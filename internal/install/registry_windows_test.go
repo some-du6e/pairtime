@@ -43,7 +43,7 @@ func TestRunValueOnThisAccount(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			item := Item{ID: ItemAutostart, Edits: []Edit{ownedEdit{target: RegistryValue(RunKey, name), data: []byte(cmd), typ: RegSZ, claim: isAgentRunValue}}}
+			item := Item{ID: ItemAutostart, Edits: []Edit{ownedEdit{target: RegistryValue(RunKey, name), data: []byte(cmd), typ: RegSZ, entry: entryRunValue}}}
 			in := &Installer{Dir: filepath.Join(t.TempDir(), "install"), Registry: reg}
 
 			install(t, in, item)

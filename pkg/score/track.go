@@ -117,13 +117,8 @@ func (d *deriver) trackGate(i int, e event.Event, p *event.CLITrack, s *session,
 	if len(failed) > 0 {
 		return TrackRejected, failed
 	}
-	// The label is local, so the server's exact re-score (DESIGN 6.5)
-	// never sees it: the call is classed by its length alone.
 	typed := count(p.TextLen)
-	class := event.ClassSubstantive
-	if typed < d.r.substantive {
-		class = event.ClassLowEffort
-	}
+	class := trackClass(p, d.r.substantive)
 	think, typing := d.leadParts(class, e.Via, typed)
 	project := e.ProjectKey
 	if project == "" {

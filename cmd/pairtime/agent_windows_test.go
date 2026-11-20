@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"slices"
 	"strconv"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -100,13 +101,21 @@ func TestRunValueStartsTheAgentWithoutAConsoleWindow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	item, err := install.Autostart(install.Env{GOOS: "windows", Home: t.TempDir(), Exe: exe})
+	// install only writes entries for a binary called pairtime.exe, the
+	// name uninstall knows them by, so the Run value is made for one, and
+	// the test binary's path takes its place in the command.
+	const stand = `C:\pairtime\bin\pairtime.exe`
+	item, err := install.Autostart(install.Env{GOOS: "windows", Home: t.TempDir(), Exe: stand})
 	if err != nil {
 		t.Fatal(err)
 	}
 	value, err := item.Edits[0].Apply(install.Content{})
 	if err != nil {
 		t.Fatal(err)
+	}
+	cmdline := strings.Replace(string(value.Data), `"`+stand+`"`, `"`+exe+`"`, 1)
+	if cmdline == string(value.Data) {
+		t.Fatalf("the Run value %q doesn't start with the quoted binary", value.Data)
 	}
 	tests := []struct {
 		name    string
@@ -118,7 +127,7 @@ func TestRunValueStartsTheAgentWithoutAConsoleWindow(t *testing.T) {
 	}{
 		{
 			name:     "the Run value's command leaves the agent running without a console window",
-			cmdline:  string(value.Data),
+			cmdline:  cmdline,
 			detaches: true,
 			want:     []int{noConsole, noWindow, hiddenWindow},
 		},

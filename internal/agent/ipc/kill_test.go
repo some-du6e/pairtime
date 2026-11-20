@@ -26,6 +26,7 @@ import (
 	"github.com/some-du6e/pairtime/internal/agent/home"
 	"github.com/some-du6e/pairtime/internal/agent/inbox"
 	"github.com/some-du6e/pairtime/internal/agent/ipc"
+	"github.com/some-du6e/pairtime/internal/agent/keys"
 	"github.com/some-du6e/pairtime/internal/agent/localhttp"
 )
 
@@ -73,6 +74,8 @@ func runAgent() int {
 		ForcePipe:  os.Getenv(pipeEnv) == "1",
 		DrainEvery: 100 * time.Millisecond,
 		Ready:      func() { fmt.Println("ready") },
+		// The device key goes in a key file here, not the OS's store.
+		KeyStores: []keys.Store{},
 	})
 	switch {
 	case errors.Is(err, agent.ErrAlreadyRunning):

@@ -25,8 +25,12 @@ func Platform() Backend {
 
 type windowsBackend struct{}
 
-func (windowsBackend) Show(ctx context.Context, m Message) error {
-	return mapWindowsError(windows.ShowBalloon(ctx, m.Title, m.Body))
+// Show returns once the balloon is gone, so it calls shown as the shell
+// takes the balloon: the next notification's gap counts from there, not
+// from the balloon's end, and a failure after it, such as SetTimer's, is
+// about taking the icon down.
+func (windowsBackend) Show(ctx context.Context, m Message, shown func()) error {
+	return mapWindowsError(windows.ShowBalloon(ctx, m.Title, m.Body, shown))
 }
 
 func mapWindowsError(err error) error {

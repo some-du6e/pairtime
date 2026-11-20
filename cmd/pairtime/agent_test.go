@@ -43,7 +43,7 @@ func TestMain(m *testing.M) {
 	switch args := os.Getenv(runEnv); args {
 	case "":
 	case ownArgs:
-		os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
+		os.Exit(start(os.Args[1:], os.Stdin, os.Stdout, os.Stderr))
 	default:
 		os.Exit(run(strings.Fields(args), os.Stdout, os.Stderr))
 	}

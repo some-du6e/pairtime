@@ -79,14 +79,16 @@ type winMsg struct {
 	lPrivate uint32
 }
 
-// The window class every lock watch uses, registered once per process with
-// the one window procedure, for the same reason the suspend watch shares a
-// callback.
+// The window class every lock watch uses, and its one window procedure,
+// made once for the same reason the suspend watch shares a callback: Go can
+// make only so many callbacks, and never frees them. The class itself is
+// registered before each window (registerLockClass).
 var (
 	lockClassOnce sync.Once
 	lockClassErr  error
 	lockClassName *uint16
 	lockInstance  windows.Handle
+	lockProc      uintptr // lockWndProc, as a callback
 
 	lockMu      sync.Mutex
 	lockWatches = make(map[uintptr]*lockWatch) // by window handle
@@ -115,9 +117,6 @@ func WatchLock(fn func(event.PowerOp)) (stop func(), err error) {
 }
 
 func startLockWatch(fn func(event.PowerOp)) (*lockWatch, error) {
-	if err := registerLockClass(); err != nil {
-		return nil, err
-	}
 	w := &lockWatch{fn: fn, done: make(chan struct{})}
 	ready := make(chan error, 1)
 	go w.run(ready)
@@ -128,6 +127,15 @@ func startLockWatch(fn func(event.PowerOp)) (*lockWatch, error) {
 	return w, nil
 }
 
+// registerLockClass registers the lock watches' window class before each
+// window, on the thread that makes it, as registerBalloonClass does.
+// Windows destroys every class a process registered when the last of the
+// process's GUI threads ends, and a lock watch's thread, which ends with
+// the watch, can be that thread, as can the thread that stopped the watch.
+// A class registered once per process could then be gone by the next
+// watch, which would fail with "Cannot find window class". The agent starts
+// one watch per run, but nothing else has to know that. A class that is
+// still there is fine.
 func registerLockClass() error {
 	lockClassOnce.Do(func() {
 		for _, p := range []*windows.LazyProc{
@@ -146,18 +154,21 @@ func registerLockClass() error {
 			lockClassErr = fmt.Errorf("GetModuleHandleEx: %w", lockClassErr)
 			return
 		}
-		wc := wndClassEx{
-			lpfnWndProc:   windows.NewCallback(lockWndProc),
-			hInstance:     lockInstance,
-			lpszClassName: lockClassName,
-		}
-		wc.cbSize = uint32(unsafe.Sizeof(wc))
-		r, _, err := procRegisterClassExW.Call(uintptr(unsafe.Pointer(&wc)))
-		if r == 0 && !errors.Is(err, windows.ERROR_CLASS_ALREADY_EXISTS) {
-			lockClassErr = fmt.Errorf("RegisterClassExW: %w", err)
-		}
+		lockProc = windows.NewCallback(lockWndProc)
 	})
-	return lockClassErr
+	if lockClassErr != nil {
+		return lockClassErr
+	}
+	wc := wndClassEx{
+		lpfnWndProc:   lockProc,
+		hInstance:     lockInstance,
+		lpszClassName: lockClassName,
+	}
+	wc.cbSize = uint32(unsafe.Sizeof(wc))
+	if r, _, err := procRegisterClassExW.Call(uintptr(unsafe.Pointer(&wc))); r == 0 && !errors.Is(err, windows.ERROR_CLASS_ALREADY_EXISTS) {
+		return fmt.Errorf("RegisterClassExW: %w", err)
+	}
+	return nil
 }
 
 // run owns the window from creation to destruction. A window belongs to
@@ -168,6 +179,10 @@ func (w *lockWatch) run(ready chan<- error) {
 	runtime.LockOSThread()
 	defer close(w.done)
 
+	if err := registerLockClass(); err != nil {
+		ready <- err
+		return
+	}
 	hwnd, _, err := procCreateWindowExW.Call(0, uintptr(unsafe.Pointer(lockClassName)), 0, 0,
 		0, 0, 0, 0, hwndMessage, 0, uintptr(lockInstance), 0)
 	if hwnd == 0 {
