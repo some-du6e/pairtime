@@ -165,13 +165,13 @@ func ParseEndpoint(raw string) (*url.URL, error) {
 	if raw == "" {
 		return nil, errors.New("objstore: the endpoint is required, such as https://<account id>.r2.cloudflarestorage.com")
 	}
+	if strings.Contains(raw, "@") {
+		// Checked before anything quotes raw: the user part may hold a key.
+		return nil, errors.New("objstore: the endpoint must not carry a user or password; credentials are secrets, not part of the URL")
+	}
 	u, err := url.Parse(raw)
 	if err != nil || u.Host == "" || u.Opaque != "" {
 		return nil, fmt.Errorf("objstore: endpoint %q isn't an http(s) URL with a host", raw)
-	}
-	if u.User != nil {
-		// Never echo it: the user part may hold a key.
-		return nil, errors.New("objstore: the endpoint must not carry a user or password; credentials are secrets, not part of the URL")
 	}
 	if (u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" {
 		return nil, fmt.Errorf("objstore: endpoint %q must be an origin, with no path, query or fragment", raw)
