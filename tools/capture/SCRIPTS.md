@@ -26,9 +26,9 @@ Captured by WP-AD1. Run it once in the CLI (run `cli`) and once in the VS Code e
    python3 tools/capture/prepare.py claude_code ROOT cli
    ```
 
-   It makes `ROOT/project` (a tiny made-up Python project with one failing test, and a made-up git identity), `ROOT/runs/cli`, `ROOT/claude-home`, Claude Code's settings folder for the capture, and `ROOT/project/.claude/settings.local.json`, which points every DESIGN 5.1 hook at the dumper: `SessionStart`, `UserPromptSubmit`, `Stop`, `StopFailure`, `Notification`, `PermissionRequest`, `PostToolUse` (matcher `Edit|Write|Bash`), `SubagentStart`, `SubagentStop`, `SessionEnd`. It prints the commands below with your paths filled in.
+   It makes `ROOT/projects/cli` (a tiny made-up Python project with one failing test, and a made-up git identity), `ROOT/runs/cli`, `ROOT/claude-home`, Claude Code's settings folder for the capture, and `ROOT/projects/cli/.claude/settings.local.json`, which points every DESIGN 5.1 hook at the dumper: `SessionStart`, `UserPromptSubmit`, `Stop`, `StopFailure`, `Notification`, `PermissionRequest`, `PostToolUse` (matcher `Edit|Write|Bash`), `SubagentStart`, `SubagentStop`, `SessionEnd`. Every run gets a scratch project of its own, so the VS Code run starts from the same files the CLI run did. It prints the commands below with your paths filled in.
 2. Terminal 1: start the sink, `python3 tools/capture/otlp_sink.py ROOT/runs/cli`.
-3. Terminal 2: set the variables `prepare.py` printed, then `cd ROOT/project`. `CLAUDE_CONFIG_DIR` points Claude Code at `ROOT/claude-home` instead of your `~/.claude`, and `CLAUDE_CODE_DISABLE_CLAUDE_MDS=1` stops it reading CLAUDE.md files from the folders above the project, where it would find `~/.claude/CLAUDE.md` again. The rest are telemetry: OTLP over `http/json` to the sink, `OTEL_METRICS_INCLUDE_ENTRYPOINT=true`, prompt, response and tool logging off. Claude Code ignores telemetry variables set in project settings, so they have to come from this shell.
+3. Terminal 2: set the variables `prepare.py` printed, then `cd ROOT/projects/cli`. `CLAUDE_CONFIG_DIR` points Claude Code at `ROOT/claude-home` instead of your `~/.claude`, and `CLAUDE_CODE_DISABLE_CLAUDE_MDS=1` stops it reading CLAUDE.md files from the folders above the project, where it would find `~/.claude/CLAUDE.md` again. The rest are telemetry: OTLP over `http/json` to the sink, `OTEL_METRICS_INCLUDE_ENTRYPOINT=true`, prompt, response and tool logging off. Claude Code ignores telemetry variables set in project settings, so they have to come from this shell.
 
 If no `hooks/` folder appears in `ROOT/runs/cli` after step 2 below, open `/hooks` in Claude Code to see whether the hooks loaded. On macOS and Linux each hook names the dumper itself as its command, with the run folder and the event as its `args`. A version that doesn't take `args` either rejects the hooks or runs the dumper without them, and without them it records nothing and reads nothing. Either way, run `prepare.py` again with `--shell-form` under a new run name. On Windows every hook is already one `powershell.exe` command line, so there is no `args` to drop.
 
@@ -147,7 +147,7 @@ claude -p "Reply with the number of functions in wordcount.py and nothing else."
 
 ### The VS Code run
 
-Quit VS Code completely, including any window in the background. Run `prepare.py claude_code ROOT vscode`, restart the sink on `ROOT/runs/vscode`, set the variables it printed in a terminal, and start VS Code from that terminal with `code ROOT/project`, so the extension inherits them and uses `ROOT/claude-home` too. Open the Claude Code panel and do steps 1, 2, 4, 7, 9, 10 and 16. Close the panel's session from its menu for step 16.
+Quit VS Code completely, including any window in the background. Run `prepare.py claude_code ROOT vscode`, restart the sink on `ROOT/runs/vscode`, set the variables it printed in a terminal, and start VS Code from that terminal with `code ROOT/projects/vscode`, so the extension inherits them and uses `ROOT/claude-home` too. Open the Claude Code panel and do steps 1, 2, 4, 7, 9, 10 and 16. Close the panel's session from its menu for step 16.
 
 The Desktop app's Code tab doesn't read a terminal's variables, so it can't be pointed at `ROOT/claude-home` and would load your own instructions and plugins. Don't capture it with this kit: `collect.py` refuses any session whose transcript is outside `ROOT/claude-home`.
 
@@ -179,7 +179,7 @@ The Desktop app's Code tab doesn't read a terminal's variables, so it can't be p
 
 Captured by WP-AD6. Codex runs a hook only after you trust that exact hook in `/hooks`, so this script captures the same steps with hooks trusted and untrusted.
 
-Setup: run `prepare.py codex ROOT codex` to make the scratch project, the run folder and `ROOT/codex-home`, Codex's settings folder for the capture. In the terminal you run Codex from, set the `CODEX_HOME` line it printed, so your own `~/.codex` (its `AGENTS.md`, config, hooks and MCP servers) stays out of the capture, then run `codex login` once, since the new folder has no sign-in. Then write `ROOT/project/.codex/hooks.json`, with one entry per event below. Codex reads project hooks only in a trusted folder; accept its folder trust prompt.
+Setup: run `prepare.py codex ROOT codex` to make the scratch project, the run folder and `ROOT/codex-home`, Codex's settings folder for the capture. In the terminal you run Codex from, set the `CODEX_HOME` line it printed, so your own `~/.codex` (its `AGENTS.md`, config, hooks and MCP servers) stays out of the capture, then run `codex login` once, since the new folder has no sign-in. Then write `ROOT/projects/codex/.codex/hooks.json`, with one entry per event below. Codex reads project hooks only in a trusted folder; accept its folder trust prompt.
 
 ```json
 {
@@ -191,7 +191,7 @@ Setup: run `prepare.py codex ROOT codex` to make the scratch project, the run fo
 
 Repeat the entry for `UserPromptSubmit`, `PreToolUse`, `PermissionRequest`, `PostToolUse`, `Stop`, `Interrupt`, `SubagentStart`, `SubagentStop` and `SessionEnd`, changing the last word to match. `KIT` is this folder's absolute path. On Windows, the command is `powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "KIT\dump-hook.ps1" "ROOT\runs\codex" SessionStart`.
 
-Steps, with hooks trusted: run `codex` in `ROOT/project`, open `/hooks`, trust every hook, then `/exit` and start `codex` again so step 1 fires. Do steps 1, 2, 3, 4 (Codex edits through `apply_patch`), 6, 7, 8, 9 (Esc fires `Interrupt`), 10, 13 and 16, with the Claude Code prompts. Then step 18 as `codex exec "Reply with the number of functions in wordcount.py and nothing else."`. If the IDE extension is installed, quit VS Code completely, start it from the same terminal with `code ROOT/project` so the extension uses `ROOT/codex-home` too, and do steps 1, 2, 7 and 16 there.
+Steps, with hooks trusted: run `codex` in `ROOT/projects/codex`, open `/hooks`, trust every hook, then `/exit` and start `codex` again so step 1 fires. Do steps 1, 2, 3, 4 (Codex edits through `apply_patch`), 6, 7, 8, 9 (Esc fires `Interrupt`), 10, 13 and 16, with the Claude Code prompts. Then step 18 as `codex exec "Reply with the number of functions in wordcount.py and nothing else."`. If the IDE extension is installed, quit VS Code completely, start it from the same terminal with `code ROOT/projects/codex` so the extension uses `ROOT/codex-home` too, and do steps 1, 2, 7 and 16 there.
 
 Steps, with hooks untrusted: untrust the hooks in `/hooks`, then do steps 1, 2, 7 and 16. No hook fires, so the rollout file is the only record: find it under `ROOT/codex-home/sessions/YYYY/MM/DD/` by its time and pass it with `--extra`.
 
@@ -201,7 +201,7 @@ Collect with `--history ROOT/codex-home/history.jsonl`. Rollouts the hooks named
 
 Captured by WP-AD8. Cursor also runs Claude-format hooks, so this capture puts both on record for the same prompts.
 
-Setup: run `prepare.py cursor ROOT cursor`. Cursor can't be pointed at a settings folder of its own, so `prepare.py` refuses while your `~/.cursor/hooks.json`, the hooks in your `~/.claude/settings.json`, your `~/.cursor/mcp.json` or a skills folder holds something, and prints the commands to move each aside. Then open Cursor's settings, find Rules, and check that User Rules is empty. If it isn't, copy the text somewhere safe, clear the box for the capture, and paste it back afterwards. The scratch project's `.claude/settings.local.json` is the Claude-format half: Cursor loads it while Settings > Agents > Third-Party Imports is on, its default. Then write `ROOT/project/.cursor/hooks.json`:
+Setup: run `prepare.py cursor ROOT cursor`. Cursor can't be pointed at a settings folder of its own, so `prepare.py` refuses while your `~/.cursor/hooks.json`, the hooks in your `~/.claude/settings.json`, your `~/.cursor/mcp.json` or a skills folder holds something, and prints the commands to move each aside. Then open Cursor's settings, find Rules, and check that User Rules is empty. If it isn't, copy the text somewhere safe, clear the box for the capture, and paste it back afterwards. The scratch project's `.claude/settings.local.json` is the Claude-format half: Cursor loads it while Settings > Agents > Third-Party Imports is on, its default. Then write `ROOT/projects/cursor/.cursor/hooks.json`:
 
 ```json
 {
@@ -214,7 +214,7 @@ Setup: run `prepare.py cursor ROOT cursor`. Cursor can't be pointed at a setting
 
 Repeat the entry for `beforeSubmitPrompt`, `afterAgentResponse`, `afterFileEdit`, `afterTabFileEdit`, `stop` and `sessionEnd`. On Windows, Cursor runs hook commands through PowerShell: use `powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "KIT\dump-hook.ps1" "ROOT\runs\cursor" sessionStart`.
 
-Steps: open `ROOT/project` in Cursor and start a new agent chat (step 1). Do steps 2, 4 (`afterFileEdit`), 7, 8 and 9 (stop the generation). For a Tab edit, open `wordcount.py`, type `def count_chars(` on a new line at the end and accept a Tab suggestion. Close the chat (step 16). Start a background agent if your plan has them; its hooks run on Cursor's machines, so record in the notes whether any local hook fired. Then in the `agent` CLI, in `ROOT/project`: steps 1, 2 and 16, and step 18 as `agent -p "Reply with the number of functions in wordcount.py and nothing else."`.
+Steps: open `ROOT/projects/cursor` in Cursor and start a new agent chat (step 1). Do steps 2, 4 (`afterFileEdit`), 7, 8 and 9 (stop the generation). For a Tab edit, open `wordcount.py`, type `def count_chars(` on a new line at the end and accept a Tab suggestion. Close the chat (step 16). Start a background agent if your plan has them; its hooks run on Cursor's machines, so record in the notes whether any local hook fired. Then in the `agent` CLI, in `ROOT/projects/cursor`: steps 1, 2 and 16, and step 18 as `agent -p "Reply with the number of functions in wordcount.py and nothing else."`.
 
 Collect without `--history`. Transcripts the hooks named are copied on their own; don't add `state.vscdb`.
 
@@ -222,7 +222,7 @@ Collect without `--history`. Transcripts the hooks named are copied on their own
 
 Captured by WP-AD10. pairtime installs Copilot's hooks in `~/.copilot/hooks/`; the capture uses the repo-level folder Copilot also reads, so only the scratch project is captured. The camelCase event names are the ones whose payloads carry timestamps.
 
-Setup: run `prepare.py copilot ROOT copilot`. It makes `ROOT/copilot-home`, the Copilot CLI's settings folder for the capture, and prints the `COPILOT_HOME` line that points the CLI at it. VS Code reads your own `~/.copilot` all the same, so `prepare.py` refuses while its hooks or instructions hold something, and prints the commands to move them aside. Then write `ROOT/project/.github/hooks/capture.json`:
+Setup: run `prepare.py copilot ROOT copilot`. It makes `ROOT/copilot-home`, the Copilot CLI's settings folder for the capture, and prints the `COPILOT_HOME` line that points the CLI at it. VS Code reads your own `~/.copilot` all the same, so `prepare.py` refuses while its hooks or instructions hold something, and prints the commands to move them aside. Then write `ROOT/projects/copilot/.github/hooks/capture.json`:
 
 ```json
 {
@@ -240,15 +240,15 @@ Setup: run `prepare.py copilot ROOT copilot`. It makes `ROOT/copilot-home`, the 
 
 Repeat it for `userPromptSubmitted`, `preToolUse`, `postToolUse`, `permissionRequest`, `agentStop`, `subagentStart`, `subagentStop`, `notification`, `errorOccurred` and `sessionEnd`.
 
-Steps: start VS Code with a profile of its own, so your VS Code instructions, prompt files and MCP servers stay out: `code --profile pairtime-capture ROOT/project`. Install GitHub Copilot Chat in that profile, sign in, and in agent mode do steps 1, 2, 4, 6, 7, 8, 9, 10 and 16. In the Copilot CLI, in the terminal where you set `COPILOT_HOME`, in `ROOT/project`: start it as `copilot --no-custom-instructions` and sign in with `/login` if it asks, then steps 1, 2, 7 and 16; one autopilot run with `/autopilot` and the step 13 goal; step 18 as `copilot --no-custom-instructions -p "Reply with the number of functions in wordcount.py and nothing else."`.
+Steps: start VS Code with a profile of its own, so your VS Code instructions, prompt files and MCP servers stay out: `code --profile pairtime-capture ROOT/projects/copilot`. Install GitHub Copilot Chat in that profile, sign in, and in agent mode do steps 1, 2, 4, 6, 7, 8, 9, 10 and 16. In the Copilot CLI, in the terminal where you set `COPILOT_HOME`, in `ROOT/projects/copilot`: start it as `copilot --no-custom-instructions` and sign in with `/login` if it asks, then steps 1, 2, 7 and 16; one autopilot run with `/autopilot` and the step 13 goal; step 18 as `copilot --no-custom-instructions -p "Reply with the number of functions in wordcount.py and nothing else."`.
 
-Collect: the CLI's `ROOT/copilot-home/session-state/<sessionId>/events.jsonl` for each `sessionId` in the hook payloads, and for VS Code the one `workspaceStorage/<hash>/chatSessions/` folder whose `workspace.json` names `ROOT/project`, each with `--extra`.
+Collect: the CLI's `ROOT/copilot-home/session-state/<sessionId>/events.jsonl` for each `sessionId` in the hook payloads, and for VS Code the one `workspaceStorage/<hash>/chatSessions/` folder whose `workspace.json` names `ROOT/projects/copilot`, each with `--extra`.
 
 ## Gemini CLI
 
 Captured by WP-AD12.
 
-Setup: run `prepare.py gemini ROOT gemini`. It makes `ROOT/gemini-home`, which Gemini CLI uses in place of your home folder once you set the `GEMINI_CLI_HOME` line it printed, so your `~/.gemini` (`GEMINI.md`, settings, hooks, extensions and MCP servers) stays out of the capture. Sign in again when Gemini asks. Then write `ROOT/project/.gemini/settings.json`. Gemini fingerprints project hooks and asks before running new ones; accept once.
+Setup: run `prepare.py gemini ROOT gemini`. It makes `ROOT/gemini-home`, which Gemini CLI uses in place of your home folder once you set the `GEMINI_CLI_HOME` line it printed, so your `~/.gemini` (`GEMINI.md`, settings, hooks, extensions and MCP servers) stays out of the capture. Sign in again when Gemini asks. Then write `ROOT/projects/gemini/.gemini/settings.json`. Gemini fingerprints project hooks and asks before running new ones; accept once.
 
 ```json
 {
@@ -260,7 +260,7 @@ Setup: run `prepare.py gemini ROOT gemini`. It makes `ROOT/gemini-home`, which G
 
 Repeat it for `BeforeAgent`, `AfterAgent`, `BeforeTool`, `AfterTool`, `Notification`, `PreCompress` and `SessionEnd`.
 
-Steps: `gemini` in `ROOT/project`, steps 1, 2, 3, 4, 6, 7, 8, 9 and 16. Step 18 twice: `gemini -p "Reply with the number of functions in wordcount.py and nothing else."`, and the same prompt piped in with no `-p`, which is also a non-TTY run. The `AfterAgent` deny-retry needs a hook that denies once, which the kit doesn't have yet; WP-AD12 adds it.
+Steps: `gemini` in `ROOT/projects/gemini`, steps 1, 2, 3, 4, 6, 7, 8, 9 and 16. Step 18 twice: `gemini -p "Reply with the number of functions in wordcount.py and nothing else."`, and the same prompt piped in with no `-p`, which is also a non-TTY run. The `AfterAgent` deny-retry needs a hook that denies once, which the kit doesn't have yet; WP-AD12 adds it.
 
 Collect with `--extra` for `ROOT/gemini-home/.gemini/tmp/<hash>/logs.json`, the one whose `<hash>` folder holds the captured chats.
 
@@ -268,7 +268,7 @@ Collect with `--extra` for `ROOT/gemini-home/.gemini/tmp/<hash>/logs.json`, the 
 
 Captured by WP-AD14. Devin Desktop and the Devin CLI read Claude-format hooks from the project's `.claude/` settings, so `prepare.py devin ROOT devin` is the whole setup. Devin can't be pointed at a settings folder of its own, so `prepare.py` refuses while your Devin config, rules, skills or MCP servers, or Claude-format hooks in your `~/.claude`, hold something, and prints the commands to move each aside.
 
-Steps: Devin Desktop with `ROOT/project` open, steps 1, 2, 4, 7 and 16. The Devin CLI in `ROOT/project`, steps 1, 2, 7 and 16.
+Steps: Devin Desktop with `ROOT/projects/devin` open, steps 1, 2, 4, 7 and 16. The Devin CLI in `ROOT/projects/devin`, steps 1, 2, 7 and 16.
 
 Collect with `--extra` for this session's files in `~/.local/share/devin/transcripts/`. The Windows path isn't known yet (HS 15); if you find it, put it in the provenance notes.
 
@@ -276,7 +276,7 @@ Collect with `--extra` for this session's files in `~/.local/share/devin/transcr
 
 Captured by WP-AD14. Cline's file hooks run on macOS and Linux only, after you tick "Enable Hooks" in its settings. Each hook is an executable named after its event.
 
-Setup: run `prepare.py cline ROOT cline`. Cline can't be pointed at a settings folder of its own, so `prepare.py` refuses while your `~/Documents/Cline/Hooks`, `~/Documents/Cline/Rules` or `~/.agents/AGENTS.md` holds something, and prints the commands to move each aside. If you've added MCP servers in Cline, turn them off for the capture. Then, in `ROOT/project`:
+Setup: run `prepare.py cline ROOT cline`. Cline can't be pointed at a settings folder of its own, so `prepare.py` refuses while your `~/Documents/Cline/Hooks`, `~/Documents/Cline/Rules` or `~/.agents/AGENTS.md` holds something, and prints the commands to move each aside. If you've added MCP servers in Cline, turn them off for the capture. Then, in `ROOT/projects/cline`:
 
 ```sh
 mkdir -p .clinerules/hooks
@@ -286,6 +286,6 @@ for e in TaskStart TaskResume TaskCancel TaskComplete UserPromptSubmit PreToolUs
 done
 ```
 
-Steps: open `ROOT/project` in VS Code and start a Cline task (`TaskStart`). Do steps 2, 4, 7 and 8, cancel the task (`TaskCancel`), resume it (`TaskResume`), and let one task finish (`TaskComplete`). On Windows, do the same steps with no hooks.
+Steps: open `ROOT/projects/cline` in VS Code and start a Cline task (`TaskStart`). Do steps 2, 4, 7 and 8, cancel the task (`TaskCancel`), resume it (`TaskResume`), and let one task finish (`TaskComplete`). On Windows, do the same steps with no hooks.
 
 Collect with `--extra` for each captured task's folder, `<editor user dir>/globalStorage/saoudrizwan.claude-dev/tasks/<taskId>/` (the `taskId`s are in the hook payloads), and for the CLI `~/.cline/data/sessions/<id>.json`.

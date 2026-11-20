@@ -1037,7 +1037,7 @@ func TestPrepare(t *testing.T) {
 	if r.code != 0 {
 		t.Fatalf("prepare.py exit %d:\n%s%s", r.code, r.stdout, r.stderr)
 	}
-	project := filepath.Join(root, "project")
+	project := filepath.Join(root, "projects", "cli")
 	runDir := filepath.Join(root, "runs", "cli")
 	settings := filepath.Join(project, ".claude", "settings.local.json")
 	hooks := readSettings(t, settings)
@@ -1152,17 +1152,56 @@ func TestPrepare(t *testing.T) {
 				t.Fatalf("exit %d: %s", r.code, r.stderr)
 			}
 		}},
-		{"a new run keeps the old settings file as a backup", func(t *testing.T) {
+		{"each run gets a scratch project of its own, starting from the first commit", func(t *testing.T) {
+			// What the CLI run's agent left: step 4's edit, committed.
+			write(t, filepath.Join(project, "wordcount.py"), "def count_lines(text):\n    return 0\n")
+			run(t, project, nil, env, "git", "commit", "-qam", "Add count_lines")
 			r := run(t, ".", nil, env, python(t, "prepare.py", "claude_code", root, "vscode")...)
 			if r.code != 0 {
 				t.Fatalf("exit %d: %s", r.code, r.stderr)
 			}
-			matches, _ := filepath.Glob(settings + ".bak-*")
-			if len(matches) != 1 {
-				t.Fatalf("backups: %v", matches)
+			vscode := filepath.Join(root, "projects", "vscode")
+			if got := read(t, filepath.Join(vscode, "wordcount.py")); strings.Contains(got, "count_lines") {
+				t.Errorf("the VS Code run starts from the CLI run's edit:\n%s", got)
 			}
-			if h := readSettings(t, settings)["Stop"][0].Hooks[0]; h.Args[0] != filepath.Join(root, "runs", "vscode") {
-				t.Fatalf("Stop hook writes to %s", h.Args[0])
+			if h := readSettings(t, filepath.Join(vscode, ".claude", "settings.local.json"))["Stop"][0].Hooks[0]; h.Args[0] != filepath.Join(root, "runs", "vscode") {
+				t.Errorf("the VS Code run's Stop hook writes to %s", h.Args[0])
+			}
+			if h := readSettings(t, settings)["Stop"][0].Hooks[0]; h.Args[0] != runDir {
+				t.Errorf("the CLI run's Stop hook now writes to %s", h.Args[0])
+			}
+		}},
+		{"preparing a run again resets its project to the first commit", func(t *testing.T) {
+			vscode := filepath.Join(root, "projects", "vscode")
+			write(t, filepath.Join(vscode, "notes.txt"), "capture test\n")
+			write(t, filepath.Join(vscode, "wordcount.py"), "edited\n")
+			run(t, vscode, nil, env, "git", "commit", "-qam", "An edit during the run")
+			r := run(t, ".", nil, env, python(t, "prepare.py", "claude_code", root, "vscode")...)
+			if r.code != 0 || !strings.Contains(r.stdout, "Reset the scratch project") {
+				t.Fatalf("exit %d, want 0 and a reset:\n%s%s", r.code, r.stdout, r.stderr)
+			}
+			if _, err := os.Stat(filepath.Join(vscode, "notes.txt")); err == nil {
+				t.Errorf("notes.txt survived the reset")
+			}
+			if got := read(t, filepath.Join(vscode, "wordcount.py")); !strings.Contains(got, "def count_words") {
+				t.Errorf("wordcount.py = %q, want the first commit's", got)
+			}
+			if r := run(t, vscode, nil, env, "git", "rev-list", "--count", "HEAD"); strings.TrimSpace(r.stdout) != "1" {
+				t.Errorf("%s commits after the reset, want 1", strings.TrimSpace(r.stdout))
+			}
+			if _, err := os.Stat(filepath.Join(vscode, ".claude", "settings.local.json")); err != nil {
+				t.Errorf("the hooks weren't written again: %v", err)
+			}
+		}},
+		{"a project folder prepare.py didn't make is never reset", func(t *testing.T) {
+			mine := filepath.Join(root, "projects", "mine")
+			write(t, filepath.Join(mine, "precious.txt"), "keep me\n")
+			r := run(t, ".", nil, env, python(t, "prepare.py", "claude_code", root, "mine")...)
+			if r.code != 2 || !strings.Contains(r.stderr, "isn't a scratch project") {
+				t.Fatalf("exit %d, want 2: %s", r.code, r.stderr)
+			}
+			if got := read(t, filepath.Join(mine, "precious.txt")); got != "keep me\n" {
+				t.Fatalf("precious.txt = %q", got)
 			}
 		}},
 		{"--shell-form writes one command string that works in a shell", func(t *testing.T) {
@@ -1170,7 +1209,7 @@ func TestPrepare(t *testing.T) {
 			if r.code != 0 {
 				t.Fatalf("exit %d: %s", r.code, r.stderr)
 			}
-			h := readSettings(t, settings)["Stop"][0].Hooks[0]
+			h := readSettings(t, filepath.Join(root, "projects", "shell", ".claude", "settings.local.json"))["Stop"][0].Hooks[0]
 			if len(h.Args) != 0 || !strings.Contains(h.Command, "dump-hook.sh") {
 				t.Fatalf("handler %+v", h)
 			}
@@ -1256,8 +1295,8 @@ func TestPrepare(t *testing.T) {
 			if r.code != 0 {
 				t.Fatalf("exit %d: %s", r.code, r.stderr)
 			}
-			if _, err := os.Stat(settings); err == nil {
-				t.Errorf("%s is still there for a Codex run", settings)
+			if _, err := os.Stat(filepath.Join(root, "projects", "codex", ".claude")); err == nil {
+				t.Errorf("the Codex run's project has Claude Code hooks")
 			}
 			codexHome := filepath.Join(root, "codex-home")
 			if !strings.Contains(r.stdout, "export CODEX_HOME="+codexHome) ||
@@ -1277,7 +1316,7 @@ func TestPrepare(t *testing.T) {
 					t.Errorf("%s: exit %d, want 2: %s", dir, r.code, r.stderr)
 				}
 			}
-			if _, err := os.Stat(filepath.Join(full, "project")); err == nil {
+			if _, err := os.Stat(filepath.Join(full, "projects")); err == nil {
 				t.Errorf("a scratch project was made in a refused ROOT")
 			}
 		}},

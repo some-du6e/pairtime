@@ -9,13 +9,16 @@ gemini, devin or cline. ROOT is a folder outside any repo, such as
 ~/pairtime-capture. RUN names the run after the surface it captures, such as
 cli or vscode. This makes:
 
-  ROOT/project/      a small made-up git project for the harness to work in,
-                     so nothing it reads or edits is yours
-  ROOT/runs/RUN/     where the dumper, the sink and the collector write, with
-                     capture.json saying how the run was set up
-  ROOT/claude-home/  the harness's own settings folder for the capture
-                     (codex-home, copilot-home and gemini-home for the
-                     harnesses that have one)
+  ROOT/projects/RUN/  a small made-up git project for this run's harness to
+                      work in, so nothing it reads or edits is yours. Each run
+                      gets its own, so no run starts from what another left,
+                      and preparing a run again resets its project to the
+                      first commit
+  ROOT/runs/RUN/      where the dumper, the sink and the collector write,
+                      with capture.json saying how the run was set up
+  ROOT/claude-home/   the harness's own settings folder for the capture
+                      (codex-home, copilot-home and gemini-home for the
+                      harnesses that have one)
 
 The settings folder keeps your own instructions, hooks, plugins, skills and
 MCP servers out of the captured sessions, where their text, or what they
@@ -29,7 +32,7 @@ holds something, and prints the commands to move each one aside and back.
 
 For the harnesses that read Claude Code's hook format (claude_code, cursor,
 devin), it registers the dumper for every hook DESIGN 5.1 installs, in the
-scratch project's own settings (ROOT/project/.claude/settings.local.json),
+scratch project's own settings (ROOT/projects/RUN/.claude/settings.local.json),
 so only sessions in that folder are captured. SCRIPTS.md has the hook config
 the other harnesses read.
 
@@ -74,7 +77,7 @@ ASIDE = ".pairtime-aside"
 
 # What ROOT may hold: what prepare.py makes there, and the files a file
 # manager adds when you look at a folder.
-ROOT_ENTRIES = {"project", "projects", "runs", "claude-home", "codex-home", "copilot-home", "gemini-home",
+ROOT_ENTRIES = {"projects", "runs", "claude-home", "codex-home", "copilot-home", "gemini-home",
                 ".DS_Store", "Thumbs.db", "desktop.ini"}
 
 
@@ -233,10 +236,42 @@ def git(project, *args):
                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
+def git_output(project, *args):
+    """What a git command prints, or None if it fails."""
+    try:
+        r = subprocess.run(["git"] + list(args), cwd=project, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, check=False)
+    except OSError:
+        return None
+    return r.stdout.decode("utf-8", "replace").strip() if r.returncode == 0 else None
+
+
+def first_commit(project):
+    """The first commit of a scratch project make_project made, or None if
+    project is anything else: not a repo of its own, or one whose first
+    commit isn't the kit's."""
+    top = git_output(project, "rev-parse", "--show-toplevel")
+    if top is None or os.path.realpath(top) != os.path.realpath(project):
+        return None
+    roots = (git_output(project, "rev-list", "--max-parents=0", "HEAD") or "").split()
+    if len(roots) != 1 or git_output(project, "log", "-1", "--format=%ae %s", roots[0]) != "capture@example.invalid Start wordcount":
+        return None
+    return roots[0]
+
+
 def make_project(project):
-    if os.path.isdir(os.path.join(project, ".git")):
+    """Make the run's scratch project. If an earlier prepare.py made it,
+    reset it to its first commit and delete everything else in it, so the
+    run starts from the same files as every other run. Returns whether it
+    was made new."""
+    if os.path.lexists(project):
+        first = first_commit(project)
+        if first is None:
+            raise Refusal("%s is already there and isn't a scratch project prepare.py made, so it won't be touched. "
+                          "Pick a new ROOT." % project)
+        git(project, "reset", "-q", "--hard", first)
+        git(project, "clean", "-q", "-ffdx")
         return False
-    os.makedirs(project, exist_ok=True)
+    os.makedirs(project)
     for name, text in SCRATCH_FILES.items():
         with open(os.path.join(project, name), "w", encoding="utf-8", newline="\n") as f:
             f.write(text)
@@ -476,7 +511,12 @@ def instructions(name, h, project, run_dir, home_dir, settings, fixture, created
     py = "py" if WINDOWS else "python3"
     sep = "\n    "
     env = ([(h.home[0], home_dir)] if h.home else []) + h.env
-    out = ["", "%s the scratch project %s" % ("Made" if created else "Reusing", project)]
+    out = [""]
+    if created:
+        out.append("Made the scratch project " + project)
+    else:
+        out.append("Reset the scratch project %s to its first commit, so this run starts from the same files as "
+                   "every other run" % project)
     if settings:
         out.append("Wrote the Claude Code-format hooks to %s, pointing at %s" % (settings, run_dir))
     if home_dir:
@@ -524,33 +564,28 @@ def main(argv=None):
         ap.error("ROOT must be outside the pairtime checkout, so raw captures can't be committed by accident")
     if not args.run.replace("-", "").replace("_", "").isalnum():
         ap.error("RUN must be a plain name such as cli or vscode")
-    project = os.path.join(root, "project")
+    project = os.path.join(root, "projects", args.run)
     run_dir = os.path.join(root, "runs", args.run)
     if os.path.isdir(os.path.join(run_dir, "hooks")) and os.listdir(os.path.join(run_dir, "hooks")):
         ap.error("%s already holds a capture; pick another RUN name or delete it" % run_dir)
     home_dir = os.path.join(root, h.home[1]) if h.home else None
 
     try:
+        if shutil.which("git") is None:
+            raise Refusal("prepare.py needs git, to make the scratch project. Install git, then run it again.")
         check_dumper()
         preflight(h)
         config = claude_settings(run_dir, args.shell_form) if h.claude_hooks else None
         note = make_private(root)
+        if note:
+            print(note)
+        created = make_project(project)
     except Refusal as e:
         ap.error(str(e))
-    if note:
-        print(note)
-
-    created = make_project(project)
     os.makedirs(run_dir, exist_ok=True)
     if home_dir:
         os.makedirs(home_dir, exist_ok=True)
     settings = os.path.join(project, ".claude", "settings.local.json")
-    if os.path.exists(settings):
-        # An earlier run's hooks would write into that run, and a harness
-        # that doesn't read this file in real use mustn't see it here.
-        backup = settings + ".bak-" + time.strftime("%Y%m%dT%H%M%S")
-        shutil.move(settings, backup)
-        print("moved the old %s to %s" % (settings, backup))
     if config is not None:
         os.makedirs(os.path.dirname(settings), exist_ok=True)
         with open(settings, "w", encoding="utf-8", newline="\n") as f:
