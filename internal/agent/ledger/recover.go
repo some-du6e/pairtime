@@ -150,6 +150,11 @@ func (w *Writer) recover() error {
 		return err
 	}
 	if bf.chain.KeyID != w.keyID {
+		// Checked before anything moves, so a key that can't write here
+		// leaves the chain where it is.
+		if err := w.keyUnused(); err != nil {
+			return err
+		}
 		if err := w.archive(bf.chain.KeyID); err != nil {
 			return err
 		}
@@ -185,9 +190,7 @@ func (w *Writer) recover() error {
 // batches.seg with nothing but its chain frame, written whole before any
 // record. It refuses a key that kept an old chain here (ErrKeyReuse).
 func (w *Writer) newChain() error {
-	if _, err := os.Stat(filepath.Join(w.dir, oldDir, w.keyID)); err == nil {
-		return ErrKeyReuse
-	} else if !errors.Is(err, fs.ErrNotExist) {
+	if err := w.keyUnused(); err != nil {
 		return err
 	}
 	w.device = newDeviceID()
@@ -201,6 +204,21 @@ func (w *Writer) newChain() error {
 	}
 	w.batches, err = openAppend(name, false)
 	return err
+}
+
+// keyUnused returns ErrKeyReuse when the writer's key kept an old chain
+// here, so a chain under it would start again from s = 1.
+func (w *Writer) keyUnused() error {
+	for _, name := range []string{w.keyID, w.keyID + partialSuffix} {
+		_, err := os.Stat(filepath.Join(w.dir, oldDir, name))
+		if err == nil {
+			return ErrKeyReuse
+		}
+		if !errors.Is(err, fs.ErrNotExist) {
+			return err
+		}
+	}
+	return nil
 }
 
 // archive moves the chain another device key wrote to old/<its key id>,
