@@ -328,12 +328,18 @@ var balloonClass struct {
 	once sync.Once
 	err  error
 	inst windows.Handle
-	name *uint16 // kept for every CreateWindowExW
+	name *uint16 // kept for every RegisterClassExW and CreateWindowExW
+	proc uintptr // balloonWndProc, as a callback
 }
 
-// registerBalloonClass registers the hidden windows' class, once per
-// process, with one callback for the window procedure: Go can make only so
-// many callbacks, and never frees them.
+// registerBalloonClass registers the hidden windows' class before each
+// window, on the thread that makes it. Windows destroys every class a
+// process registered when the last of the process's GUI threads ends, and
+// a balloon's thread, which ends with its balloon, can be that thread. A
+// class registered once per process could then be gone by the next
+// balloon, which would fail with "Cannot find window class". A class that
+// is still there is fine. The window procedure is one callback, made once:
+// Go can make only so many callbacks, and never frees them.
 func registerBalloonClass() error {
 	c := &balloonClass
 	c.once.Do(func() {
@@ -344,23 +350,24 @@ func registerBalloonClass() error {
 			c.err = fmt.Errorf("GetModuleHandleExW: %w", err)
 			return
 		}
-		name, err := windows.UTF16PtrFromString(balloonClassName)
-		if err != nil {
-			c.err = err
+		if c.name, c.err = windows.UTF16PtrFromString(balloonClassName); c.err != nil {
 			return
 		}
-		c.name = name
-		wc := balloonWndClass{
-			WndProc:   windows.NewCallback(balloonWndProc),
-			Instance:  c.inst,
-			ClassName: c.name,
-		}
-		wc.Size = uint32(unsafe.Sizeof(wc))
-		if r, _, err := balloonAPI.registerClassEx.Call(uintptr(unsafe.Pointer(&wc))); r == 0 {
-			c.err = fmt.Errorf("RegisterClassExW: %w", err)
-		}
+		c.proc = windows.NewCallback(balloonWndProc)
 	})
-	return c.err
+	if c.err != nil {
+		return c.err
+	}
+	wc := balloonWndClass{
+		WndProc:   c.proc,
+		Instance:  c.inst,
+		ClassName: c.name,
+	}
+	wc.Size = uint32(unsafe.Sizeof(wc))
+	if r, _, err := balloonAPI.registerClassEx.Call(uintptr(unsafe.Pointer(&wc))); r == 0 && !errors.Is(err, windows.ERROR_CLASS_ALREADY_EXISTS) {
+		return fmt.Errorf("RegisterClassExW: %w", err)
+	}
+	return nil
 }
 
 // balloonWndProc is the window procedure of every hidden window. It ends

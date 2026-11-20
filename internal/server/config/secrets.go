@@ -4,6 +4,7 @@ package config
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"log/slog"
 	"maps"
@@ -12,6 +13,7 @@ import (
 	"runtime"
 	"slices"
 	"strings"
+	"unicode"
 )
 
 // SecretPrefix starts the name of every secret pairtimed reads.
@@ -106,10 +108,28 @@ func LoadSecrets(file string, environ []string) (Secrets, error) {
 // envName is a variable name as compose's env_file accepts it.
 var envName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
-// readSecretsFile reads the subset of compose's env_file format that means
-// the same thing to compose and to pairtimed: blank lines, lines starting
-// with '#', and NAME=value lines, where a value wrapped in matching single
-// or double quotes loses them and anything else is taken as written.
+// readSecretsFile reads the part of compose's env_file format that compose
+// and pairtimed read the same way, and refuses every line outside it, so
+// -secrets and compose's env_file can't hand pairtimed different secrets.
+// That part is blank lines, comment lines starting with '#', and
+// NAME=value lines, where NAME is letters, digits and '_', not starting
+// with a digit. Spaces and tabs at the ends of a line and around NAME and
+// value don't count. The value is one of:
+//
+//   - in single quotes, taken as written. It can't hold a ' or end in a
+//     '\', since compose reads \' as a quote inside the value.
+//   - in double quotes, with no '$' or '\', which compose expands.
+//   - unquoted, with no '$' or '\', and no '#' after a space or a tab.
+//     Compose cuts an unquoted value at " #" and reads the rest as a
+//     comment. It keeps a '#' after a tab, but godotenv, which compose's
+//     parser is a port of, cuts there too, and such a line reads as a
+//     comment, so it is refused as well.
+//
+// Nothing may follow a closing quote, and no line may hold a control
+// character other than tab or a space other than ' ' and tab. Every line is
+// checked, even the ones pairtimed skips, since an unclosed quote makes
+// compose read the next lines into its value. Single quotes keep '$' and
+// '\'; a value that needs a ' as well goes in the environment instead.
 // Variables without the PAIRTIME_ prefix, such as Litestream's, are
 // skipped. Errors name the line, never its text, which may hold a secret.
 func readSecretsFile(path string) (map[string]string, error) {
@@ -133,12 +153,15 @@ func readSecretsFile(path string) (map[string]string, error) {
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 0, 64*1024), 1<<20)
 	for n := 1; sc.Scan(); n++ {
-		line := strings.TrimSpace(sc.Text())
+		line := strings.Trim(sc.Text(), " \t")
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
-		name, value, ok := strings.Cut(line, "=")
-		name = strings.TrimSpace(name)
+		if strings.ContainsFunc(line, oddSpace) {
+			return nil, fmt.Errorf("config: %s line %d holds a control character or a space other than ' ' and tab, which compose and pairtimed trim differently", path, n)
+		}
+		name, raw, ok := strings.Cut(line, "=")
+		name = strings.Trim(name, " \t")
 		if !ok || !envName.MatchString(name) {
 			return nil, fmt.Errorf("config: %s line %d: want NAME=value", path, n)
 		}
@@ -146,8 +169,12 @@ func readSecretsFile(path string) (map[string]string, error) {
 			return nil, fmt.Errorf("config: %s line %d: %s is set twice", path, n, name)
 		}
 		seen[name] = true
+		value, err := envValue(raw)
+		if err != nil {
+			return nil, fmt.Errorf("config: %s line %d: %w", path, n, err)
+		}
 		if strings.HasPrefix(name, SecretPrefix) {
-			values[name] = unquote(strings.TrimSpace(value))
+			values[name] = value
 		}
 	}
 	if err := sc.Err(); err != nil {
@@ -156,10 +183,43 @@ func readSecretsFile(path string) (map[string]string, error) {
 	return values, nil
 }
 
-// unquote removes one pair of matching quotes around v.
-func unquote(v string) string {
-	if len(v) >= 2 && (v[0] == '"' || v[0] == '\'') && v[len(v)-1] == v[0] {
-		return v[1 : len(v)-1]
+// oddSpace reports a character compose and pairtimed trim differently: a
+// control character other than tab, or a space other than ' ' and tab.
+func oddSpace(r rune) bool {
+	return r != ' ' && r != '\t' && (unicode.IsControl(r) || unicode.IsSpace(r))
+}
+
+// envValue returns the value the text after a line's '=' holds, or an
+// error when compose would read the text differently (compose-go's
+// dotenv parser). Errors never quote the text.
+func envValue(raw string) (string, error) {
+	v := strings.Trim(raw, " \t")
+	if v == "" || (v[0] != '\'' && v[0] != '"') {
+		if strings.ContainsAny(v, `$\`) {
+			return "", errors.New(`an unquoted value can't hold '$' or '\', which compose expands; put the value in single quotes`)
+		}
+		if strings.Contains(v, " #") {
+			return "", errors.New("compose cuts an unquoted value at ' #' and reads the rest as a comment; put the value in single quotes")
+		}
+		if strings.Contains(v, "\t#") {
+			return "", errors.New("a '#' after a tab in an unquoted value reads as a comment, though compose keeps it in the value; put the value in single quotes")
+		}
+		return v, nil
 	}
-	return v
+	quote := v[0]
+	end := strings.IndexByte(v[1:], quote) + 1
+	switch {
+	case end == 0:
+		return "", errors.New("the value's quote doesn't close on this line, so compose would read the next lines into it")
+	case end != len(v)-1:
+		return "", errors.New("the line goes on past the value's first closing quote, which compose reads as a comment, another variable or an escape; put a comment on a line of its own, and wrap a value that holds this quote in the other kind")
+	}
+	inner := v[1:end]
+	if quote == '"' && strings.ContainsAny(inner, `$\`) {
+		return "", errors.New(`a double-quoted value can't hold '$' or '\', which compose expands; use single quotes`)
+	}
+	if quote == '\'' && strings.HasSuffix(inner, `\`) {
+		return "", errors.New(`a single-quoted value can't end in '\', since compose reads \' as a quote inside the value`)
+	}
+	return inner, nil
 }

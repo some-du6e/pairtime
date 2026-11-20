@@ -6,6 +6,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"log/slog"
 
 	"github.com/some-du6e/pairtime/internal/server/config"
 	"github.com/some-du6e/pairtime/internal/server/store"
@@ -56,7 +57,7 @@ func configFlags(fs *flag.FlagSet, e *env) func() (*config.Config, error) {
 
 // storeOptions says how to open the database cfg names.
 func storeOptions(cfg *config.Config, e *env) store.Options {
-	o := store.Options{Path: cfg.Database.Path}
+	o := store.Options{Path: cfg.Database.Path, Logger: slog.New(slog.NewTextHandler(e.stderr, nil))}
 	switch cfg.Database.Engine {
 	case config.EnginePostgres:
 		o.Engine = store.Postgres

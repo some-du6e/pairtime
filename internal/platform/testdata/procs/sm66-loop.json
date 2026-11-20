@@ -1,0 +1,44 @@
+{
+  "case": "SM 6.6 as written: farm.sh loops python gen_prompt.py and claude -p, started as bash farm.sh in an interactive shell. The table is at 22:00:06, one second into the first claude -p; gen_prompt.py has already exited, because $(...) waits for it.",
+  "source": "Written by hand from SM 6.6, not recorded on a machine. The Windows table has Git Bash's launcher bash.exe (Git\\bin) in front of the interactive bash (Git\\usr\\bin) and the bash.exe that MSYS2 keeps while a native program it started runs; all three are shells, so the classifier skips them whether or not a real install has them. The macOS table is the same loop typed into Terminal, with the process groups an interactive zsh gives its jobs.",
+  "tables": [
+    {
+      "os": "windows",
+      "harness_pid": 6488,
+      "want": {"harness": "claude_code", "parent_class": "terminal_app", "entrypoint": "unknown", "has_tty": true, "decided_by": "WindowsTerminal", "script_shell": false},
+      "sm_parent_class": "script_runtime",
+      "erratum": "docs/errata/2026-11-19-procs-command-lines.md",
+      "procs": [
+        {"pid": 4, "ppid": 0, "name": "System", "start": "2026-11-19T17:58:00Z"},
+        {"pid": 412, "ppid": 4, "name": "smss", "start": "2026-11-19T17:58:01Z"},
+        {"pid": 588, "ppid": 500, "name": "wininit", "start": "2026-11-19T17:58:03Z"},
+        {"pid": 732, "ppid": 588, "name": "services", "start": "2026-11-19T17:58:03Z"},
+        {"pid": 1020, "ppid": 732, "name": "svchost", "start": "2026-11-19T17:58:04Z"},
+        {"pid": 4520, "ppid": 4480, "name": "explorer", "start": "2026-11-19T18:00:10Z"},
+        {"pid": 6100, "ppid": 4520, "name": "WindowsTerminal", "start": "2026-11-19T21:58:02Z"},
+        {"pid": 6144, "ppid": 6100, "name": "OpenConsole", "start": "2026-11-19T21:58:03Z"},
+        {"pid": 6200, "ppid": 6100, "name": "bash", "start": "2026-11-19T21:58:03Z"},
+        {"pid": 6232, "ppid": 6200, "name": "bash", "start": "2026-11-19T21:58:03Z"},
+        {"pid": 6400, "ppid": 6232, "name": "bash", "start": "2026-11-19T21:59:58Z"},
+        {"pid": 6460, "ppid": 6400, "name": "bash", "start": "2026-11-19T22:00:05Z"},
+        {"pid": 6488, "ppid": 6460, "name": "claude", "start": "2026-11-19T22:00:05Z"},
+        {"pid": 7012, "ppid": 4520, "name": "chrome", "start": "2026-11-19T19:30:00Z"}
+      ]
+    },
+    {
+      "os": "darwin",
+      "harness_pid": 730,
+      "want": {"harness": "claude_code", "parent_class": "script_runtime", "entrypoint": "unknown", "has_tty": true, "decided_by": "Terminal", "script_shell": true},
+      "sm_parent_class": "script_runtime",
+      "procs": [
+        {"pid": 1, "ppid": 0, "name": "launchd", "pgid": 1, "tty": "none", "start": "2026-11-19T17:58:00Z"},
+        {"pid": 612, "ppid": 1, "name": "Terminal", "pgid": 612, "tty": "none", "start": "2026-11-19T21:58:00Z"},
+        {"pid": 640, "ppid": 612, "name": "login", "pgid": 640, "tty": "attached", "start": "2026-11-19T21:58:01Z"},
+        {"pid": 641, "ppid": 640, "name": "zsh", "pgid": 641, "tty": "attached", "start": "2026-11-19T21:58:01Z"},
+        {"pid": 700, "ppid": 641, "name": "bash", "pgid": 700, "tty": "attached", "start": "2026-11-19T21:59:58Z"},
+        {"pid": 730, "ppid": 700, "name": "claude", "pgid": 700, "tty": "attached", "start": "2026-11-19T22:00:05Z"},
+        {"pid": 812, "ppid": 1, "name": "Google Chrome", "pgid": 812, "tty": "none", "start": "2026-11-19T19:30:00Z"}
+      ]
+    }
+  ]
+}

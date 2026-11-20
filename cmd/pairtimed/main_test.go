@@ -5,9 +5,12 @@ package main
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/some-du6e/pairtime/internal/server/config"
 )
 
 // syncBuffer is a bytes.Buffer that serve's goroutines can log to while a
@@ -47,6 +50,7 @@ func TestRun(t *testing.T) {
 		{name: "no arguments print the usage and fail", args: nil, wantCode: 2, wantStderr: "Usage:"},
 		{name: "version prints the build", args: []string{"version"}, wantCode: 0, wantStdout: "pairtimed "},
 		{name: "--version is version", args: []string{"--version"}, wantCode: 0, wantStdout: "pairtimed "},
+		{name: "version prints the config_version a pairtime.toml that uses this release's keys sets", args: []string{"version"}, wantCode: 0, wantStdout: fmt.Sprintf("\npairtime.toml config_version %d\n", config.ConfigVersion)},
 		{name: "version takes no arguments", args: []string{"version", "extra"}, wantCode: 2, wantStderr: "takes no arguments"},
 		{name: "help lists the commands", args: []string{"help"}, wantCode: 0, wantStdout: "Commands:"},
 		{name: "an unknown command fails with the usage", args: []string{"frobnicate"}, wantCode: 2, wantStderr: `unknown command "frobnicate"`},

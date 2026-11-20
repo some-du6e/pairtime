@@ -14,6 +14,7 @@
 //	listen          = ":8080"           # the API, behind cloudflared (DESIGN 10.5)
 //	ops_listen      = "127.0.0.1:9091"  # /healthz, /readyz and /metrics; never tunneled (DESIGN 10.4)
 //	data_dir        = "/data"           # DESIGN 10.1
+//	config_version  = 1                 # see below
 //
 //	[database]
 //	engine = "sqlite"                   # or "postgres", with PAIRTIME_DATABASE_URL as a secret
@@ -49,9 +50,17 @@
 // With object storage on, the secrets PAIRTIME_S3_ACCESS_KEY_ID and
 // PAIRTIME_S3_SECRET_ACCESS_KEY hold the access key for both buckets.
 //
-// A key the file doesn't need can be left out. A key this package doesn't
+// A key the file doesn't need can be left out. A key this release doesn't
 // know is an error, so a misspelt key can't silently fall back to its
-// default. Relative paths are relative to the directory of pairtime.toml.
+// default, unless the file's config_version is above ConfigVersion. Such a
+// file was written for a newer release, so this one ignores the keys it
+// doesn't know, with a warning, and a rollback to the previous image tag
+// starts on the newer release's file (DESIGN 10.5 step 6). A file that
+// starts using a key a release added must raise config_version to that
+// release's ConfigVersion, which `pairtimed version` prints, and Load
+// refuses it until it does. Values are checked either way: an older
+// release has no safe stand-in for a value only a newer one knows.
+// Relative paths are relative to the directory of pairtime.toml.
 package config
 
 import (
@@ -73,6 +82,62 @@ import (
 
 // DefaultPath is where the deploy bundle mounts pairtime.toml (DESIGN 10.1).
 const DefaultPath = "/etc/pairtime/pairtime.toml"
+
+// ConfigVersion is the version of this release's set of keys. A file
+// whose config_version is higher is for a newer release, and Load ignores
+// its unknown keys instead of refusing them. A release that adds a key
+// raises ConfigVersion by one: the first PR after a release tag to add a
+// key does it, and later PRs before the next tag leave it. keyVersions
+// records the config_version each key arrived in.
+//
+// A release reading a file for a newer one ignores the keys it doesn't
+// know, so a release may add only keys whose absence is the safe setting,
+// and may never rename or move a key: the release before it would read
+// the file as if the key weren't there. profile_default predates this
+// rule, and its default publishes profiles, so Load refuses a file for a
+// newer release that has keys this release ignores and doesn't set
+// profile_default.
+const ConfigVersion = 1
+
+// keyVersions maps every key pairtime.toml can hold to the config_version
+// that added it. Load refuses a file that uses a key from above its own
+// config_version and names the config_version to set. Otherwise the file
+// would load on the release that added the key, and the release before
+// it, which reads the file as one of its own, would refuse the key as
+// unknown, so a rollback wouldn't start. A new key goes in with the
+// ConfigVersion of the first release that has it, and a line never
+// changes once a release has shipped it. TestKeyVersions fails until
+// every key in Config has a line and ConfigVersion is the highest one.
+var keyVersions = map[string]int{
+	"config_version":                 1,
+	"base_url":                       1,
+	"signups_open":                   1,
+	"profile_default":                1,
+	"scoring_version":                1,
+	"reviewers":                      1,
+	"reviewers.sub":                  1,
+	"reviewers.roles":                1,
+	"hca":                            1,
+	"hca.client_id":                  1,
+	"hca.issuer":                     1,
+	"privacy_hub":                    1,
+	"privacy_hub.aud":                1,
+	"privacy_hub.jwks_url":           1,
+	"sentinel":                       1,
+	"sentinel.socket":                1,
+	"object_storage":                 1,
+	"object_storage.endpoint":        1,
+	"object_storage.region":          1,
+	"object_storage.bucket":          1,
+	"object_storage.snapshot_bucket": 1,
+	"object_storage.virtual_host":    1,
+	"listen":                         1,
+	"ops_listen":                     1,
+	"data_dir":                       1,
+	"database":                       1,
+	"database.engine":                1,
+	"database.path":                  1,
+}
 
 // Defaults for keys pairtime.toml leaves out.
 const (
@@ -108,6 +173,9 @@ const ProgramReviewerPrefix = "program_reviewer:"
 
 // Config is a loaded and checked pairtime.toml.
 type Config struct {
+	// ConfigVersion is the file's config_version, 1 when it has none.
+	ConfigVersion int `toml:"config_version"`
+
 	BaseURL        string     `toml:"base_url"`
 	SignupsOpen    bool       `toml:"signups_open"`
 	ProfileDefault string     `toml:"profile_default"`
@@ -134,6 +202,9 @@ type Config struct {
 	Secrets Secrets `toml:"-"`
 	// Path is the file the configuration was loaded from.
 	Path string `toml:"-"`
+	// Warnings are for the caller to log: the keys Load ignored in a file
+	// for a newer release.
+	Warnings []string `toml:"-"`
 }
 
 // Reviewer is one entry of the reviewer allowlist: an HCA subject and its
@@ -233,12 +304,25 @@ func Load(path, secretsFile string, environ []string) (*Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("config: %s: %w", path, err)
 	}
-	if undecoded := md.Undecoded(); len(undecoded) > 0 {
-		keys := make([]string, len(undecoded))
-		for i, k := range undecoded {
-			keys[i] = k.String()
+	if !md.IsDefined("config_version") {
+		c.ConfigVersion = 1
+	}
+	if c.ConfigVersion < 1 {
+		return nil, fmt.Errorf("config: %s: config_version is %d; it starts at 1", path, c.ConfigVersion)
+	}
+	if unknown := keyNames(md.Undecoded()); len(unknown) > 0 {
+		if c.ConfigVersion <= ConfigVersion {
+			return nil, fmt.Errorf("config: %s: unknown keys: %s", path, strings.Join(unknown, ", "))
 		}
-		return nil, fmt.Errorf("config: %s: unknown keys: %s", path, strings.Join(keys, ", "))
+		if !md.IsDefined("profile_default") {
+			return nil, fmt.Errorf("config: %s: profile_default isn't set, and the file has config_version %d, above this release's %d, so this release ignores the keys it doesn't know: %s. One of them may be a misspelt or misplaced profile_default, which would leave this release on %q; set profile_default to %q or %q (DESIGN 8.3)",
+				path, c.ConfigVersion, ConfigVersion, strings.Join(unknown, ", "), ProfilePublic, ProfileAsk, ProfilePublic)
+		}
+		c.Warnings = append(c.Warnings, fmt.Sprintf("%s has config_version %d, above this release's %d, so this release ignores the keys it doesn't know: %s",
+			path, c.ConfigVersion, ConfigVersion, strings.Join(unknown, ", ")))
+	}
+	if err := checkKeyVersions(keyNames(md.Keys()), c.ConfigVersion); err != nil {
+		return nil, fmt.Errorf("config: %s: %w", path, err)
 	}
 	c.Path = path
 	c.Secrets, err = LoadSecrets(secretsFile, environ)
@@ -250,9 +334,45 @@ func Load(path, secretsFile string, environ []string) (*Config, error) {
 		dir = abs
 	}
 	if err := c.finish(dir); err != nil {
+		if c.ConfigVersion > ConfigVersion {
+			return nil, fmt.Errorf("config: %s: %w\nThe file has config_version %d, above this release's %d: a newer release wrote it, and may have added a value this release doesn't know. For a rollback, restore the pairtime.toml this release ran with (DESIGN 10.5 step 6)",
+				path, err, c.ConfigVersion, ConfigVersion)
+		}
 		return nil, fmt.Errorf("config: %s: %w", path, err)
 	}
 	return &c, nil
+}
+
+// keyNames names each key once, in the order the file first has it. A key
+// in an array of tables, such as reviewers.sub, comes once per table.
+func keyNames(keys []toml.Key) []string {
+	var names []string
+	seen := make(map[string]bool, len(keys))
+	for _, k := range keys {
+		if name := k.String(); !seen[name] {
+			seen[name] = true
+			names = append(names, name)
+		}
+	}
+	return names
+}
+
+// checkKeyVersions refuses keys that keyVersions says arrived after the
+// file's config_version, and names the config_version that covers them.
+func checkKeyVersions(keys []string, fileVersion int) error {
+	var later []string
+	need := fileVersion
+	for _, k := range keys {
+		if v := keyVersions[k]; v > fileVersion {
+			later = append(later, fmt.Sprintf("%s (config_version %d)", k, v))
+			need = max(need, v)
+		}
+	}
+	if len(later) == 0 {
+		return nil
+	}
+	return fmt.Errorf("the file has config_version %d but uses keys added after it: %s. Set config_version = %d, so that a release from before those keys ignores them instead of refusing the file, and a rollback starts on it (DESIGN 10.5 step 6)",
+		fileVersion, strings.Join(later, ", "), need)
 }
 
 // finish fills in defaults and checks every value. Relative paths are

@@ -74,7 +74,8 @@ func TestStartupRefusesOldSQLite(t *testing.T) {
 		})
 	}
 	t.Run("3.51.3 is accepted", func(t *testing.T) {
-		configPath, _ := writeConfig(t)
+		configPath, dbPath := writeConfig(t)
+		createDatabase(t, dbPath)
 		e, _, stderr := testEnv()
 		e.storeOptions = func(o *store.Options) { o.SQLiteVersion = "3.51.3" }
 		if code := run(context.Background(), []string{"migrate", "-config", configPath}, e); code != 0 {
@@ -211,28 +212,93 @@ func TestServe(t *testing.T) {
 	}
 }
 
+// createDatabase creates an empty database at path, as serve does before
+// it migrates, for the commands that open only a database that exists.
+func createDatabase(t *testing.T, path string) {
+	t.Helper()
+	db, err := store.Open(context.Background(), store.Options{Engine: store.SQLite, Path: path})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestMigrate(t *testing.T) {
-	configPath, _ := writeConfig(t)
-	// Each step runs on the database the step before it left.
+	configPath, dbPath := writeConfig(t)
+	// Each step runs on what the step before it left.
 	steps := []struct {
 		name       string
 		args       []string
-		wantStdout string
+		before     func(t *testing.T)
+		wantCode   int
+		wantStdout string // substring
+		wantStderr string // substring
 	}{
-		{name: "before migrating, status shows every migration pending", args: []string{"-status"}, wantStdout: "0001_ops_probe  pending"},
-		{name: "migrate applies every migration to an empty database", args: nil, wantStdout: "applied 0001_ops_probe"},
-		{name: "a second migrate has nothing to do", args: nil, wantStdout: "up to date"},
+		{name: "status on a host without a database creates none, so Litestream can still restore one", args: []string{"-status"}, wantCode: 1, wantStderr: "no database at"},
+		{name: "migrate on a host without a database creates none either; serve creates it", wantCode: 1, wantStderr: "no database at"},
+		{name: "on a database without migrations, status shows every migration pending", args: []string{"-status"}, before: func(t *testing.T) { createDatabase(t, dbPath) }, wantStdout: "0001_ops_probe  pending"},
+		{name: "migrate applies every migration to a database without them", wantStdout: "applied 0001_ops_probe"},
+		{name: "a second migrate has nothing to do", wantStdout: "up to date"},
 		{name: "after migrating, status shows each one applied", args: []string{"-status"}, wantStdout: "0001_ops_probe  applied 20"},
 	}
 	for _, tt := range steps {
 		t.Run(tt.name, func(t *testing.T) {
+			if tt.before != nil {
+				tt.before(t)
+			}
 			e, stdout, stderr := testEnv()
 			args := append([]string{"migrate", "-config", configPath}, tt.args...)
-			if code := run(context.Background(), args, e); code != 0 {
-				t.Fatalf("exit code = %d, want 0; stderr:\n%s", code, stderr.String())
+			if code := run(context.Background(), args, e); code != tt.wantCode {
+				t.Fatalf("exit code = %d, want %d; stderr:\n%s", code, tt.wantCode, stderr.String())
 			}
 			if !strings.Contains(stdout.String(), tt.wantStdout) {
 				t.Errorf("stdout = %q, want it to contain %q", stdout.String(), tt.wantStdout)
+			}
+			if !strings.Contains(stderr.String(), tt.wantStderr) {
+				t.Errorf("stderr = %q, want it to contain %q", stderr.String(), tt.wantStderr)
+			}
+			if tt.wantCode != 0 {
+				if _, err := os.Stat(filepath.Dir(dbPath)); !errors.Is(err, fs.ErrNotExist) {
+					t.Errorf("the refused command left %s behind (stat: %v)", filepath.Dir(dbPath), err)
+				}
+			}
+		})
+	}
+}
+
+func TestConfigVersion(t *testing.T) {
+	tests := []struct {
+		name       string
+		extra      string // appended to writeConfig's pairtime.toml
+		wantCode   int
+		wantStderr string // substring
+	}{
+		{name: "a rollback runs on a newer release's pairtime.toml, warning about the keys it ignores", extra: "config_version = 2\nprofile_default = \"ask\"\nfrom_a_newer_release = true\n", wantStderr: "ignores the keys it doesn't know: from_a_newer_release"},
+		{name: "a newer release's pairtime.toml that leaves out profile_default is refused while keys are ignored, since one may be it misspelt", extra: "config_version = 2\nprofile_defualt = \"ask\"\n", wantCode: 1, wantStderr: "may be a misspelt or misplaced profile_default"},
+		{name: "a pairtime.toml for this release still refuses a misspelt key", extra: "signup_open = true\n", wantCode: 1, wantStderr: "unknown keys: signup_open"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			configPath, dbPath := writeConfig(t)
+			f, err := os.OpenFile(configPath, os.O_APPEND|os.O_WRONLY, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := f.WriteString(tt.extra); err != nil {
+				t.Fatal(err)
+			}
+			if err := f.Close(); err != nil {
+				t.Fatal(err)
+			}
+			createDatabase(t, dbPath)
+			e, _, stderr := testEnv()
+			if code := run(context.Background(), []string{"migrate", "-config", configPath}, e); code != tt.wantCode {
+				t.Errorf("migrate exit code = %d, want %d; stderr:\n%s", code, tt.wantCode, stderr.String())
+			}
+			if !strings.Contains(stderr.String(), tt.wantStderr) {
+				t.Errorf("stderr = %q, want it to contain %q", stderr.String(), tt.wantStderr)
 			}
 		})
 	}

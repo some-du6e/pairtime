@@ -3,10 +3,12 @@
 package store_test
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"errors"
 	"io/fs"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -83,6 +85,48 @@ func TestOpenRefusesOldSQLite(t *testing.T) {
 			}
 			if _, err := os.Stat(filepath.Dir(path)); !errors.Is(err, fs.ErrNotExist) {
 				t.Errorf("Open created %s before refusing (stat: %v)", filepath.Dir(path), err)
+			}
+		})
+	}
+}
+
+func TestOpenNoCreate(t *testing.T) {
+	tests := []struct {
+		name    string
+		create  bool // create the database before opening it with NoCreate
+		wantErr error
+	}{
+		{name: "NoCreate refuses a missing database and creates neither it nor its directory", wantErr: store.ErrNoDatabase},
+		{name: "NoCreate opens a database that exists", create: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			path := filepath.Join(t.TempDir(), "sub", "pairtime.db")
+			if tt.create {
+				db, err := store.Open(ctx, store.Options{Engine: store.SQLite, Path: path})
+				if err != nil {
+					t.Fatal(err)
+				}
+				db.Close()
+			}
+			db, err := store.Open(ctx, store.Options{Engine: store.SQLite, Path: path, NoCreate: true})
+			if tt.wantErr == nil {
+				if err != nil {
+					t.Fatalf("Open: %v", err)
+				}
+				db.Close()
+				return
+			}
+			if err == nil {
+				db.Close()
+				t.Fatal("Open succeeded")
+			}
+			if !errors.Is(err, tt.wantErr) || !strings.Contains(err.Error(), path) {
+				t.Errorf("Open error = %v, want one wrapping %v that names %s", err, tt.wantErr, path)
+			}
+			if _, err := os.Stat(filepath.Dir(path)); !errors.Is(err, fs.ErrNotExist) {
+				t.Errorf("Open created %s (stat: %v)", filepath.Dir(path), err)
 			}
 		})
 	}
@@ -213,6 +257,64 @@ func TestOpenSQLite(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, tt.run)
+	}
+}
+
+func TestOpenTightensModes(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("file modes are a Unix check")
+	}
+	tests := []struct {
+		name    string
+		mode    fs.FileMode // the three files' mode before Open
+		want    fs.FileMode
+		wantLog bool
+	}{
+		{name: "a database a restore left readable by everyone is made 0600, with its -wal and -shm", mode: 0o644, want: 0o600, wantLog: true},
+		{name: "a database the group can read is made 0600, with its -wal and -shm", mode: 0o640, want: 0o600, wantLog: true},
+		{name: "a 0600 database is left as it is, without a warning", mode: 0o600, want: 0o600},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			path := filepath.Join(t.TempDir(), "pairtime.db")
+			// This handle stays open, so the -wal and -shm files exist when
+			// the second Open finds the database, as they do when Litestream
+			// holds it.
+			first, err := store.Open(ctx, store.Options{Engine: store.SQLite, Path: path})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer first.Close()
+			if _, err := first.Write.ExecContext(ctx, "CREATE TABLE t (id BIGINT)"); err != nil {
+				t.Fatal(err)
+			}
+			files := []string{path, path + "-wal", path + "-shm"}
+			for _, f := range files {
+				if err := os.Chmod(f, tt.mode); err != nil {
+					t.Fatalf("setting %s to %04o: %v", filepath.Base(f), tt.mode, err)
+				}
+			}
+
+			var logged bytes.Buffer
+			second, err := store.Open(ctx, store.Options{Engine: store.SQLite, Path: path, Logger: slog.New(slog.NewTextHandler(&logged, nil))})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer second.Close()
+			for _, f := range files {
+				fi, err := os.Stat(f)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if perm := fi.Mode().Perm(); perm != tt.want {
+					t.Errorf("%s has mode %04o after Open, want %04o", filepath.Base(f), perm, tt.want)
+				}
+			}
+			if got := strings.Contains(logged.String(), "tightened"); got != tt.wantLog {
+				t.Errorf("logged a tightening = %v, want %v; log:\n%s", got, tt.wantLog, logged.String())
+			}
+		})
 	}
 }
 

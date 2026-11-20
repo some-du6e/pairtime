@@ -47,6 +47,9 @@ func runServe(ctx context.Context, e *env, args []string) int {
 		logger.Error("pairtimed can't start", "err", err)
 		return 1
 	}
+	for _, w := range cfg.Warnings {
+		logger.Warn(w)
+	}
 	if err := serve(ctx, cfg, logger, e); err != nil {
 		logger.Error("pairtimed stopped", "err", err)
 		return 1
