@@ -52,7 +52,8 @@ var (
 	// ErrNoSuchBucket: the bucket doesn't exist at the endpoint.
 	ErrNoSuchBucket = errors.New("objstore: no such bucket")
 	// ErrExists: a write-once put found the key already there, and the
-	// store kept what it had.
+	// store kept what it had. After a retry, Put first checks that the
+	// key doesn't hold its own upload (PutOptions.IfNoneMatch).
 	ErrExists = errors.New("objstore: the key already exists")
 	// ErrTooLarge: the body is bigger than one PutObject may be. Put
 	// refuses a body over MaxPutSize before sending it, and a store's own
@@ -388,6 +389,10 @@ type request struct {
 	payloadHash string
 	// attempts overrides the client's MaxAttempts when positive.
 	attempts int
+	// retried, when not nil, is set when an attempt fails in a way worth
+	// retrying and another is sent. The store may have carried out the
+	// failed attempt anyway, with only its answer lost.
+	retried *bool
 }
 
 // url returns the request's URL, path-style or virtual-hosted. The path
@@ -434,6 +439,9 @@ func (c *Client) do(ctx context.Context, r request) (*http.Response, error) {
 		backoff = backoff/2 + rand.N(backoff)
 		if serr := c.sleep(ctx, backoff); serr != nil {
 			return nil, err
+		}
+		if r.retried != nil {
+			*r.retried = true
 		}
 	}
 }

@@ -230,12 +230,12 @@ func TestCalls(t *testing.T) {
 				t.Errorf("got %q with %+v", got, info)
 			}
 		}},
-		{name: "head returns the size, ETag and time without the body", run: func(t *testing.T) {
+		{name: "head returns the size, ETag, time and the SHA-256 put stored, without the body", run: func(t *testing.T) {
 			info, err := b.Head(ctx, "notes/one")
 			if err != nil {
 				t.Fatal(err)
 			}
-			if info.Size != 5 || info.ETag == "" || info.LastModified.IsZero() {
+			if info.Size != 5 || info.ETag == "" || info.LastModified.IsZero() || info.SHA256 != sigv4.PayloadHash([]byte("hello")) {
 				t.Errorf("head = %+v", info)
 			}
 		}},
@@ -553,33 +553,92 @@ func TestSnapshots(t *testing.T) {
 	}
 }
 
+// mustPut stores data under key with a plain put.
+func mustPut(t *testing.T, b *Bucket, key, data string) {
+	t.Helper()
+	if _, err := b.Put(context.Background(), key, strings.NewReader(data), PutOptions{}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestRetries(t *testing.T) {
+	const key = "retry/k"
+	writeOnce := PutOptions{IfNoneMatch: true}
 	tests := []struct {
 		name string
-		// status 0 drops the connection.
-		status, failures int
-		code             string
-		call             func(*Bucket) error
-		wantRequests     int
-		wantErr          bool
+		// setup prepares the fresh server before the faults; its requests
+		// aren't counted.
+		setup func(*testing.T, *objstoretest.Server, *Bucket)
+		// fail injects the faults.
+		fail func(*objstoretest.Server)
+		// opts are the options of the call, a put of "body" under key.
+		opts PutOptions
+		// call replaces the put.
+		call func(*Bucket) error
+		// wantMethods are the requests the call sends, in order.
+		wantMethods []string
+		wantErr     bool
+		// wantIs is a sentinel the error must wrap.
+		wantIs error
+		// wantStored is what the key holds after the call; "" skips the
+		// check.
+		wantStored string
 	}{
-		{name: "a 503 SlowDown is retried and the put then succeeds", status: 503, code: "SlowDown", failures: 1, wantRequests: 2},
-		{name: "a dropped connection is retried", status: 0, failures: 1, wantRequests: 2},
-		{name: "a 500 is retried up to three attempts, then fails", status: 500, code: "InternalError", failures: 3, wantRequests: 3, wantErr: true},
-		{name: "a 403 isn't retried", status: 403, code: "AccessDenied", failures: 1, wantRequests: 1, wantErr: true},
-		{name: "a 400 isn't retried", status: 400, code: "InvalidArgument", failures: 1, wantRequests: 1, wantErr: true},
-		{name: "the readiness check is tried once", status: 503, code: "SlowDown", failures: 1, wantRequests: 1, wantErr: true,
-			call: func(b *Bucket) error { return b.Check(context.Background()) }},
+		{name: "a 503 SlowDown is retried and the put then succeeds", fail: func(s *objstoretest.Server) { s.Fail(1, 503, "SlowDown") },
+			wantMethods: []string{"PUT", "PUT"}, wantStored: "body"},
+		{name: "a dropped connection is retried", fail: func(s *objstoretest.Server) { s.Fail(1, 0, "") },
+			wantMethods: []string{"PUT", "PUT"}, wantStored: "body"},
+		{name: "a 500 is retried up to three attempts, then fails", fail: func(s *objstoretest.Server) { s.Fail(3, 500, "InternalError") },
+			wantMethods: []string{"PUT", "PUT", "PUT"}, wantErr: true},
+		{name: "a 403 isn't retried", fail: func(s *objstoretest.Server) { s.Fail(1, 403, "AccessDenied") },
+			wantMethods: []string{"PUT"}, wantErr: true},
+		{name: "a 400 isn't retried", fail: func(s *objstoretest.Server) { s.Fail(1, 400, "InvalidArgument") },
+			wantMethods: []string{"PUT"}, wantErr: true},
+		{name: "the readiness check is tried once", fail: func(s *objstoretest.Server) { s.Fail(1, 503, "SlowDown") },
+			call:        func(b *Bucket) error { return b.Check(context.Background()) },
+			wantMethods: []string{"GET"}, wantErr: true},
+		{name: "a write-once put whose stored first attempt lost its answer succeeds once a HEAD finds its own body",
+			fail: func(s *objstoretest.Server) { s.FailAfter(1, 0, "") }, opts: writeOnce,
+			wantMethods: []string{"PUT", "PUT", "HEAD"}, wantStored: "body"},
+		{name: "a write-once put whose stored first attempt was answered with a 500 succeeds once a HEAD finds its own body",
+			fail: func(s *objstoretest.Server) { s.FailAfter(1, 500, "InternalError") }, opts: writeOnce,
+			wantMethods: []string{"PUT", "PUT", "HEAD"}, wantStored: "body"},
+		{name: "a retried write-once put that finds other bytes of the same size fails with ErrExists",
+			setup: func(t *testing.T, _ *objstoretest.Server, b *Bucket) { mustPut(t, b, key, "BODY") },
+			fail:  func(s *objstoretest.Server) { s.Fail(1, 503, "SlowDown") }, opts: writeOnce,
+			wantMethods: []string{"PUT", "PUT", "HEAD"}, wantErr: true, wantIs: ErrExists, wantStored: "BODY"},
+		{name: "a retried write-once put fails with ErrExists when the stored object has no SHA-256 to compare",
+			setup: func(_ *testing.T, s *objstoretest.Server, _ *Bucket) { s.SetObject(mainBucket, key, []byte("body")) },
+			fail:  func(s *objstoretest.Server) { s.Fail(1, 503, "SlowDown") }, opts: writeOnce,
+			wantMethods: []string{"PUT", "PUT", "HEAD"}, wantErr: true, wantIs: ErrExists, wantStored: "body"},
+		{name: "a write-once put refused on its first attempt fails with ErrExists and sends no HEAD",
+			setup: func(t *testing.T, _ *objstoretest.Server, b *Bucket) { mustPut(t, b, key, "body") }, opts: writeOnce,
+			wantMethods: []string{"PUT"}, wantErr: true, wantIs: ErrExists, wantStored: "body"},
+		{name: "a retried write-once put whose HEAD fails returns that error, not ErrExists",
+			fail: func(s *objstoretest.Server) {
+				// The first attempt is stored and its answer lost, the
+				// retry is refused, and the HEAD is denied.
+				s.FailAfter(1, 0, "")
+				s.Fail(1, 412, "PreconditionFailed")
+				s.Fail(1, 403, "AccessDenied")
+			},
+			opts: writeOnce, wantMethods: []string{"PUT", "PUT", "HEAD"}, wantErr: true, wantStored: "body"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			srv := objstoretest.New(t, mainBucket)
 			b := bucket(t, newTestClient(t, srv), mainBucket)
-			srv.Fail(tt.failures, tt.status, tt.code)
+			if tt.setup != nil {
+				tt.setup(t, srv, b)
+			}
+			before := len(srv.Requests())
+			if tt.fail != nil {
+				tt.fail(srv)
+			}
 			call := tt.call
 			if call == nil {
 				call = func(b *Bucket) error {
-					_, err := b.Put(context.Background(), "retry/k", strings.NewReader("body"), PutOptions{})
+					_, err := b.Put(context.Background(), key, strings.NewReader("body"), tt.opts)
 					return err
 				}
 			}
@@ -587,12 +646,27 @@ func TestRetries(t *testing.T) {
 			if (err != nil) != tt.wantErr {
 				t.Errorf("error = %v, want an error: %v", err, tt.wantErr)
 			}
-			if n := len(srv.Requests()); n != tt.wantRequests {
-				t.Errorf("%d requests, want %d", n, tt.wantRequests)
+			if tt.wantIs != nil && !errors.Is(err, tt.wantIs) {
+				t.Errorf("error = %v, want %v", err, tt.wantIs)
 			}
-			if !tt.wantErr {
-				if got, _ := srv.Object(mainBucket, "retry/k"); string(got) != "body" {
-					t.Errorf("stored %q after the retry, want the whole body", got)
+			if tt.wantIs == nil && errors.Is(err, ErrExists) {
+				// ErrExists says the key held something else, which none
+				// of these cases has shown.
+				t.Errorf("error = %v, which wraps ErrExists", err)
+			}
+			var methods []string
+			for _, r := range srv.Requests()[before:] {
+				methods = append(methods, r.Method)
+				if r.Method == http.MethodPut && tt.opts.IfNoneMatch && r.Header.Get("If-None-Match") != "*" {
+					t.Error("a write-once attempt went without If-None-Match: *")
+				}
+			}
+			if !slices.Equal(methods, tt.wantMethods) {
+				t.Errorf("requests %q, want %q", methods, tt.wantMethods)
+			}
+			if tt.wantStored != "" {
+				if got, _ := srv.Object(mainBucket, key); string(got) != tt.wantStored {
+					t.Errorf("the key holds %q, want %q", got, tt.wantStored)
 				}
 			}
 		})

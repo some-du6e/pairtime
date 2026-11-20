@@ -23,6 +23,11 @@ import (
 // ProbeKey is the key Check fetches. pairtimed never writes it.
 const ProbeKey = "pairtime-readyz-probe"
 
+// metaSHA256 is the user metadata header Put stores the body's hex
+// SHA-256 in. S3, R2 and MinIO keep x-amz-meta-* headers with the object
+// and return them on GET and HEAD.
+const metaSHA256 = "X-Amz-Meta-Sha256"
+
 // ObjectInfo describes a stored object.
 type ObjectInfo struct {
 	Key  string
@@ -32,6 +37,12 @@ type ObjectInfo struct {
 	LastModified time.Time
 	// ContentType is set by Get and Head only; listings don't carry it.
 	ContentType string
+	// SHA256 is the hex SHA-256 that Put stored with the object, in its
+	// x-amz-meta-sha256. Get and Head set it; listings don't carry it,
+	// and an object written some other way has none. The store doesn't
+	// check it against the bytes, so it is only the writer's word, which
+	// is why Evidence.Get hashes the bytes it reads.
+	SHA256 string
 }
 
 // PutOptions are the choices of a put.
@@ -42,13 +53,25 @@ type PutOptions struct {
 	// IfNoneMatch makes the put write-once: it sends If-None-Match: *,
 	// and when the key already exists the store keeps what it has and
 	// Put fails with ErrExists.
+	//
+	// A retried put can find its own upload there. An attempt that got no
+	// answer, or a 5xx, may have been stored all the same, with only its
+	// answer lost, and then the retry gets ErrExists. So when ErrExists
+	// follows a retry, Put sends a HEAD and succeeds if the key holds
+	// this body: the same size and the same SHA-256 in ObjectInfo.SHA256.
+	// ErrExists on the first attempt means the key was there before this
+	// call, and Put doesn't check. A caller that repeats a failed
+	// write-once put can get ErrExists for its own earlier upload; Head
+	// and ObjectInfo.SHA256 tell whether the key holds the same body.
 	IfNoneMatch bool
 }
 
 // Put stores body under key, from body's current offset to its end. It
 // reads the body twice: once for its size and SHA-256, which is signed
 // into the request so the store refuses a body that changed on the way,
-// and once to send it. Bodies over MaxPutSize fail with ErrTooLarge.
+// and once to send it. The SHA-256 is also stored with the object, as
+// x-amz-meta-sha256, and Get and Head return it in ObjectInfo.SHA256.
+// Bodies over MaxPutSize fail with ErrTooLarge.
 func (b *Bucket) Put(ctx context.Context, key string, body io.ReadSeeker, opts PutOptions) (ObjectInfo, error) {
 	if err := CheckKey(key); err != nil {
 		return ObjectInfo{}, err
@@ -75,24 +98,48 @@ func (b *Bucket) Put(ctx context.Context, key string, body io.ReadSeeker, opts P
 	if n, err := io.Copy(h, io.LimitReader(body, size)); err != nil || n != size {
 		return fail(fmt.Errorf("reading the body: got %d of %d bytes: %v", n, size, err))
 	}
+	sum := hex.EncodeToString(h.Sum(nil))
 	ctype := opts.ContentType
 	if ctype == "" {
 		ctype = "application/octet-stream"
 	}
-	header := http.Header{"Content-Type": {ctype}}
+	header := http.Header{"Content-Type": {ctype}, metaSHA256: {sum}}
 	if opts.IfNoneMatch {
 		header.Set("If-None-Match", "*")
 	}
+	var retried bool
 	resp, err := b.c.do(ctx, request{
 		op: "PutObject", method: http.MethodPut, bucket: b.name, key: key,
 		header: header, body: body, start: start, size: size,
-		payloadHash: hex.EncodeToString(h.Sum(nil)),
+		payloadHash: sum, retried: &retried,
 	})
 	if err != nil {
-		return ObjectInfo{}, err
+		if !opts.IfNoneMatch || !retried || !errors.Is(err, ErrExists) {
+			return ObjectInfo{}, err
+		}
+		// An attempt failed without saying whether the store carried it
+		// out, and the retry found the key taken, perhaps by that attempt.
+		info, ours, herr := b.holds(ctx, key, size, sum)
+		if herr != nil {
+			return fail(fmt.Errorf("a retry found the key taken, and checking whether an earlier attempt stored this body failed: %w", herr))
+		}
+		if !ours {
+			return ObjectInfo{}, err
+		}
+		return info, nil
 	}
 	defer drain(resp)
-	return ObjectInfo{Key: key, Size: size, ETag: strings.Trim(resp.Header.Get("ETag"), `"`), ContentType: ctype}, nil
+	return ObjectInfo{Key: key, Size: size, ETag: strings.Trim(resp.Header.Get("ETag"), `"`), ContentType: ctype, SHA256: sum}, nil
+}
+
+// holds reports whether key holds size bytes whose SHA-256, as Put stored
+// it, is sum, and returns what Head says about the object.
+func (b *Bucket) holds(ctx context.Context, key string, size int64, sum string) (ObjectInfo, bool, error) {
+	info, err := b.Head(ctx, key)
+	if err != nil {
+		return ObjectInfo{}, false, err
+	}
+	return info, info.Size == size && info.SHA256 == sum, nil
 }
 
 // Get returns key's body, which the caller reads and closes, and what the
@@ -144,6 +191,7 @@ func info(key string, resp *http.Response) ObjectInfo {
 		Size:        resp.ContentLength,
 		ETag:        strings.Trim(resp.Header.Get("ETag"), `"`),
 		ContentType: resp.Header.Get("Content-Type"),
+		SHA256:      resp.Header.Get(metaSHA256),
 	}
 	if t, err := http.ParseTime(resp.Header.Get("Last-Modified")); err == nil {
 		i.LastModified = t
