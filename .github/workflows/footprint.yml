@@ -4,9 +4,15 @@
 # process rather than by the agent (DESIGN 9.7; docs/PLAN.md, WP-AG1). An
 # idle agent's working set must stay under 25 MB and its CPU time under
 # 0.1% of the wall time. Private bytes, threads, handles and wakeups are
-# reported with no gate yet, and ci.yml gates the binary size. A PR that
-# touches the client gets a 3-minute idle span; the nightly run, release
-# tags and runs by hand get 10 minutes:
+# reported with no gate yet, and ci.yml gates the binary size. After the
+# idle span, this workflow times 200 warm `pairtime hook` calls from
+# process start to exit, and 200 calls of an empty Go program built the
+# same way, which is what any process costs on this runner. The hook's own
+# cost, its p95 less the empty program's, must be at most 10 ms, and its
+# p95 at most R8's 50 ms (DESIGN 9.7; docs/PLAN.md, WP-AG3;
+# docs/errata/2026-11-20-hook-p95-gate.md). A PR that touches the client
+# gets a 3-minute idle span; the nightly run, release tags and runs by hand
+# get 10 minutes:
 #
 #   gh workflow run footprint.yml --ref <branch> [-f minutes=N]
 name: footprint
@@ -66,11 +72,21 @@ jobs:
         run: |
           go build -trimpath '-ldflags=-s -w' -o "$env:RUNNER_TEMP\pairtime.exe" ./cmd/pairtime
           "pairtime.exe is $((Get-Item "$env:RUNNER_TEMP\pairtime.exe").Length) bytes"
+          # An empty Go program, built the same way, whose timing the hook's
+          # own cost is measured over.
+          $emptyDir = Join-Path $env:RUNNER_TEMP 'empty'
+          New-Item -ItemType Directory -Force -Path $emptyDir | Out-Null
+          Set-Content -Path (Join-Path $emptyDir 'go.mod') -Value "module empty`n`ngo 1.26`n"
+          Set-Content -Path (Join-Path $emptyDir 'main.go') -Value "package main`n`nfunc main() {}`n"
+          Push-Location $emptyDir
+          go build -trimpath '-ldflags=-s -w' -o empty.exe .
+          Pop-Location
 
       - name: Measure an idle agent
         run: |
           $ErrorActionPreference = 'Stop'
           $exe = Join-Path $env:RUNNER_TEMP 'pairtime.exe'
+          $emptyExe = Join-Path $env:RUNNER_TEMP 'empty\empty.exe'
           $ptHome = Join-Path $env:RUNNER_TEMP 'pairtime-home'
           New-Item -ItemType Directory -Force -Path $ptHome | Out-Null
           # Every pairtime file goes in this directory (internal/agent/home).
@@ -159,6 +175,112 @@ jobs:
             if ($after.Peak -gt $before.Peak -and $after.Peak -gt $highest) { $highest = $after.Peak }
             $status = Invoke-RestMethod -Uri "$base/v1/status" -Headers $headers
 
+            # The hook's round trip, as a harness sees it: 200 warm calls of
+            # pairtime hook in exec form with an event on stdin, each timed
+            # from process start to exit, with the agent up. Each must exit 0
+            # and print nothing, which a harness reads as hook output (CP 6.2).
+            # Between them run 200 calls of an empty Go program, built the same
+            # way, which is what any process costs on this runner and what the
+            # hook's gate is over, and 200 of `pairtime hook -h`, which shows
+            # what pairtime's own start costs before the hook does anything.
+            # Interleaved, the three see the same runner: windows-latest
+            # machines differ, and one machine slows down and speeds up over a
+            # job. Ten rounds first warm the file cache and aren't counted.
+            #
+            # New-Prog describes a program to time: started with $argList the
+            # way a harness runs an exec-form hook, with stdin, stdout and
+            # stderr on pipes, $stdin written and stdin closed. Measure-Calls
+            # starts each of $progs in turn, $warmup + $calls times. For each
+            # counted call it keeps the time from start to exit as this
+            # workflow sees it, and the process's lifetime as Windows records
+            # it, from creation to exit, which leaves out what starting a
+            # process costs the caller. For a $quiet program, a call that exits
+            # non-zero or prints anything is bad.
+            function New-Prog($path, $argList, $stdin, $quiet = $true, $envVars = @{}) {
+              [pscustomobject]@{
+                Path    = $path
+                ArgList = $argList
+                Stdin   = $stdin
+                Quiet   = $quiet
+                EnvVars = $envVars
+                Times   = [System.Collections.Generic.List[double]]::new()
+                Lives   = [System.Collections.Generic.List[double]]::new()
+                Bad     = 0
+                Stderr  = ''
+              }
+            }
+            function Measure-Calls($progs, $warmup, $calls) {
+              for ($i = 0; $i -lt $warmup + $calls; $i++) {
+                foreach ($g in $progs) {
+                  $psi = [System.Diagnostics.ProcessStartInfo]::new($g.Path)
+                  foreach ($a in $g.ArgList) { $psi.ArgumentList.Add($a) }
+                  foreach ($k in $g.EnvVars.Keys) { $psi.Environment[$k] = $g.EnvVars[$k] }
+                  $psi.UseShellExecute = $false
+                  $psi.CreateNoWindow = $true
+                  $psi.RedirectStandardInput = $true
+                  # UTF-8 with no byte-order mark, as a harness writes its event.
+                  $psi.StandardInputEncoding = [System.Text.UTF8Encoding]::new($false)
+                  $psi.RedirectStandardOutput = $true
+                  $psi.RedirectStandardError = $true
+                  $sw = [System.Diagnostics.Stopwatch]::StartNew()
+                  $p = [System.Diagnostics.Process]::Start($psi)
+                  # stderr is read while stdout is, or a child that fills the
+                  # stderr pipe first, as inittrace does, would never exit.
+                  $errRead = $p.StandardError.ReadToEndAsync()
+                  $p.StandardInput.Write($g.Stdin)
+                  $p.StandardInput.Close()
+                  $out = $p.StandardOutput.ReadToEnd()
+                  $errText = $errRead.GetAwaiter().GetResult()
+                  $p.WaitForExit()
+                  $sw.Stop()
+                  if ($g.Quiet -and ($p.ExitCode -ne 0 -or $out -ne '' -or $errText -ne '')) {
+                    $g.Bad++
+                    if ($g.Bad -le 3) { Write-Host "call $i of $($g.Path) exited $($p.ExitCode), stdout '$out', stderr '$errText'" }
+                  }
+                  $g.Stderr = $errText
+                  if ($i -ge $warmup) {
+                    $g.Times.Add($sw.Elapsed.TotalMilliseconds)
+                    $g.Lives.Add(($p.ExitTime - $p.StartTime).TotalMilliseconds)
+                  }
+                  $p.Dispose()
+                }
+              }
+            }
+            function Quantile($list, $q) {
+              $sorted = @($list | Sort-Object)
+              $sorted[[math]::Ceiling($q * $sorted.Count) - 1]
+            }
+            function Ms($v) { "$([math]::Round($v, 1)) ms" }
+
+            $hookEvent = '{"session_id":"footprint","hook_event_name":"UserPromptSubmit","prompt":"time this hook"}'
+            $hookArgs = @('hook', '--harness', 'claude_code', '--event', 'UserPromptSubmit')
+            $warmup = 10
+            $hookCalls = 200
+            $hook = New-Prog $exe $hookArgs $hookEvent
+            $empty = New-Prog $emptyExe @() ''
+            $start = New-Prog $exe @('hook', '-h') '' $false
+            Measure-Calls @($hook, $empty, $start) $warmup $hookCalls
+            $hookP95 = Quantile $hook.Times 0.95
+            $hookP50 = Quantile $hook.Times 0.50
+            $hookMax = Quantile $hook.Times 1
+            $hookBad = $hook.Bad
+            $emptyP95 = Quantile $empty.Times 0.95
+            $hookOver = $hookP95 - $emptyP95
+
+            # What pairtime spends before main, by GODEBUG=inittrace=1, with
+            # the slowest packages in the log.
+            $trace = New-Prog $exe @('hook', '-h') '' $false @{ GODEBUG = 'inittrace=1' }
+            Measure-Calls @($trace) 1 1
+            $inits = foreach ($l in ($trace.Stderr -split "`n")) {
+              if ($l -match '^init (\S+) @[0-9.]+ ms, ([0-9.]+) ms clock') {
+                [pscustomobject]@{ Pkg = $Matches[1]; Ms = [double]$Matches[2] }
+              }
+            }
+            $initTotal = ($inits | Measure-Object -Property Ms -Sum).Sum
+            $initTop = ($inits | Sort-Object Ms -Descending | Select-Object -First 3 | ForEach-Object { "$($_.Pkg) $($_.Ms) ms" }) -join ', '
+            Write-Host "--- pairtime's slowest package inits (GODEBUG=inittrace=1), in all $initTotal ms ---"
+            $inits | Sort-Object Ms -Descending | Select-Object -First 15 | ForEach-Object { Write-Host "$($_.Ms) ms  $($_.Pkg)" }
+
             $wall = ($after.Time - $before.Time).TotalSeconds
             $cpuShare = ($after.Cpu - $before.Cpu) / $wall
             $minutes = $wall / 60
@@ -184,12 +306,32 @@ jobs:
             $stopStatus = $agent.ExitCode
             $pidAfter = (Get-Content $portFile -Raw | ConvertFrom-Json).pid
 
+            # The calls the agent took over its socket: the journal's lines for
+            # hook calls that came that way, read once the agent has stopped.
+            # ipc.stored can't tell: a call the agent acks late is spooled,
+            # and a drain during the run stores it too.
+            $hookSocket = 0
+            foreach ($f in @(Get-ChildItem -Path (Join-Path $ptHome 'received') -Filter '*.jsonl' -ErrorAction SilentlyContinue)) {
+              foreach ($line in [System.IO.File]::ReadAllLines($f.FullName)) {
+                if ($line.Trim() -eq '') { continue }
+                try { $entry = $line | ConvertFrom-Json } catch { continue }
+                if ($entry.kind -eq 'hook' -and $entry.via -eq 'socket') { $hookSocket++ }
+              }
+            }
+
             $budgetRss = 25000000
             $budgetCpu = 0.001
+            # The hook's own cost over the runner's floor, and R8's claim for a
+            # warm round trip, which no call may come near on a runner.
+            $budgetHookOverMs = 10
+            $budgetHookMs = 50
             $rssOk = $highest -lt $budgetRss
             $cpuOk = $cpuShare -lt $budgetCpu
             $secondOk = $secondStatus -eq 3
             $stopOk = ($stopStatus -eq 0) -and ($pidAfter -eq 0)
+            $hookOverOk = $hookOver -le $budgetHookOverMs
+            $hookCapOk = $hookP95 -le $budgetHookMs
+            $hookQuietOk = $hookBad -eq 0
             $rows = @(
               "### Idle agent on windows-latest, $([math]::Round($minutes, 1)) minutes",
               '',
@@ -206,12 +348,21 @@ jobs:
               "| runs of each scheduler job | $jobRuns | none |",
               "| binary size | $((Get-Item $exe).Length) bytes | ci.yml |",
               "| a second agent's exit status | $secondStatus | 3: $(Verdict $secondOk) |",
-              "| clean stop: exit status, pid in port.json | $stopStatus, $pidAfter | 0, 0: $(Verdict $stopOk) |"
+              "| clean stop: exit status, pid in port.json | $stopStatus, $pidAfter | 0, 0: $(Verdict $stopOk) |",
+              "| the hook's own cost: its p95 over $hookCalls warm calls less an empty Go program's p95, both timed around the process | $(Ms $hookOver) | at most $budgetHookOverMs ms: $(Verdict $hookOverOk) |",
+              "| hook p95 over $hookCalls warm calls, timed around the process | $(Ms $hookP95) | at most $budgetHookMs ms (R8): $(Verdict $hookCapOk) |",
+              "| an empty Go program over $hookCalls calls, timed the same way between the hook's: p50, p95 | $(Ms (Quantile $empty.Times 0.5)), $(Ms $emptyP95) | none |",
+              "| pairtime's start alone, ``pairtime hook -h`` timed the same way: p50, p95 | $(Ms (Quantile $start.Times 0.5)), $(Ms (Quantile $start.Times 0.95)) | none |",
+              "| hook p50, slowest | $(Ms $hookP50), $(Ms $hookMax) | none |",
+              "| hook lifetime from creation to exit, as Windows records it: p50, p95 | $(Ms (Quantile $hook.Lives 0.5)), $(Ms (Quantile $hook.Lives 0.95)) | none |",
+              "| pairtime's package init (GODEBUG=inittrace=1): in all, slowest | $(Ms $initTotal); $initTop | none |",
+              "| hook calls that exited non-zero or printed anything | $hookBad | 0: $(Verdict $hookQuietOk) |",
+              "| hook calls the agent took over its socket, by its journal | $hookSocket of $($warmup + $hookCalls) | none: a call acked late is spooled, and a drain journals it as from the inbox |"
             )
             $summary = $rows -join "`n"
             $summary | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
             Write-Host $summary
-            if (-not ($rssOk -and $cpuOk -and $secondOk -and $stopOk)) {
+            if (-not ($rssOk -and $cpuOk -and $secondOk -and $stopOk -and $hookOverOk -and $hookCapOk -and $hookQuietOk)) {
               throw 'the agent failed a footprint gate; see the table above'
             }
           } catch {

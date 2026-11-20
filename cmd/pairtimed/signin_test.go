@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/some-du6e/pairtime/internal/server/accounts"
 	"github.com/some-du6e/pairtime/internal/server/auth"
 	"github.com/some-du6e/pairtime/internal/server/auth/hcafake"
 	"github.com/some-du6e/pairtime/internal/server/store"
@@ -231,6 +232,15 @@ func TestServeSignups(t *testing.T) {
 		return get(t, callback.String(), login)
 	}
 
+	t.Run("the home page offers a visitor who isn't signed in the Sign in with Hack Club button, and says who may get an account while sign-ups are closed", func(t *testing.T) {
+		resp, body := get(t, "http://"+public+"/")
+		button := `<a class="button" href="` + auth.LoginPath + `">Sign in with Hack Club</a>`
+		closed := "Until sign-ups open, this server makes accounts only for the people who run it."
+		if resp.StatusCode != http.StatusOK || !strings.Contains(body, button) || !strings.Contains(body, closed) || strings.Contains(body, "Signed in") {
+			t.Errorf("/ without a session answered %d, want 200 with the sign-in button and %q; body:\n%s", resp.StatusCode, closed, body)
+		}
+	})
+
 	tests := []struct {
 		name     string
 		identity hcafake.Identity
@@ -258,21 +268,46 @@ func TestServeSignups(t *testing.T) {
 			if resp.StatusCode != http.StatusSeeOther || session == nil {
 				t.Fatalf("the callback answered %d, session cookie %v; want 303 with a session; body:\n%s\nstderr:\n%s", resp.StatusCode, session, body, stderr.String())
 			}
-			// A sign-in without return_to lands on /, which says so,
-			// instead of a 404.
+			// Without return_to, the sign-in lands on the home page, which
+			// names the account and offers to sign out.
 			if landing := resp.Header.Get("Location"); landing != "/" {
 				t.Errorf("the callback sent the browser to %q, want /", landing)
 			}
-			if resp, body := get(t, "http://"+public+"/", session); resp.StatusCode != http.StatusOK || !strings.Contains(body, "You're signed in with Hack Club Auth") {
-				t.Errorf("/ after a sign-in answered %d: %s", resp.StatusCode, body)
+			resp, body = get(t, "http://"+public+"/", session)
+			signedIn := "<p>Signed in as <strong>" + tt.identity.SlackID + "</strong></p>"
+			signOut := `<form method="post" action="` + auth.LogoutPath + `"><button type="submit">Sign out</button></form>`
+			if resp.StatusCode != http.StatusOK || !strings.Contains(body, signedIn) || !strings.Contains(body, signOut) {
+				t.Errorf("/ with the session answered %d, want 200 with %q and the sign-out form; body:\n%s", resp.StatusCode, signedIn, body)
 			}
-			if resp, body := get(t, "http://"+public+"/"); resp.StatusCode != http.StatusOK || !strings.Contains(body, `href="`+auth.LoginPath+`"`) {
-				t.Errorf("/ without a session answered %d: %s", resp.StatusCode, body)
+			if csp := resp.Header.Get("Content-Security-Policy"); !strings.Contains(csp, "form-action 'self'") {
+				t.Errorf("the signed-in home page's CSP is %q, which doesn't let its sign-out form post", csp)
 			}
 			resp, body = get(t, "http://"+public+auth.MePath, session)
 			var me auth.Me
 			if resp.StatusCode != http.StatusOK || json.Unmarshal([]byte(body), &me) != nil || me.HCASub != tt.identity.Sub {
 				t.Errorf("%s answered %d: %s; want the account of %s", auth.MePath, resp.StatusCode, body, tt.identity.Sub)
+			}
+
+			// The sign-out form posts with the Origin a browser sends under
+			// the home page's same-origin referrer policy, and lands back on
+			// the home page, signed out.
+			req, err := http.NewRequest(http.MethodPost, "http://"+public+auth.LogoutPath, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			req.AddCookie(session)
+			req.Header.Set("Origin", "http://localhost:8080")
+			out, err := client.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			out.Body.Close()
+			if out.StatusCode != http.StatusSeeOther || out.Header.Get("Location") != "/" {
+				t.Errorf("signing out answered %d to %q, want 303 to /", out.StatusCode, out.Header.Get("Location"))
+			}
+			resp, body = get(t, "http://"+public+"/", session)
+			if resp.StatusCode != http.StatusOK || strings.Contains(body, "Signed in") || !strings.Contains(body, `href="`+auth.LoginPath+`"`) {
+				t.Errorf("/ after signing out answered %d, want 200 with the sign-in button again; body:\n%s", resp.StatusCode, body)
 			}
 		})
 	}
@@ -308,6 +343,25 @@ func TestServeSignups(t *testing.T) {
 			}
 			if n != tt.want {
 				t.Errorf("%d account rows for %s, want %d", n, tt.sub, tt.want)
+			}
+		})
+	}
+}
+
+// TestHandle checks the name the home page gives a signed-in account.
+func TestHandle(t *testing.T) {
+	tests := []struct {
+		name string
+		user accounts.User
+		want string
+	}{
+		{name: "an account with a Slack ID is named by it, even when it has an email address", user: accounts.User{HCASub: "ident!fakeVerified1", SlackID: "U0FAKEVERIFIED", HasEmail: true}, want: "U0FAKEVERIFIED"},
+		{name: "an account without a Slack ID is named by its HCA subject", user: accounts.User{HCASub: "ident!fakeVerified1", HasEmail: true}, want: "ident!fakeVerified1"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := handle(&tt.user); got != tt.want {
+				t.Errorf("handle(%+v) = %q, want %q", tt.user, got, tt.want)
 			}
 		})
 	}
