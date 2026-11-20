@@ -45,6 +45,7 @@ LICENSE_ID = re.compile(r"none|[A-Za-z0-9][A-Za-z0-9.+-]*")
 DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
 
 DRAFT = "https://json-schema.org/draft/2020-12/schema"
+DEF_REF = re.compile(r"#/\$defs/[^/]+")
 TYPES = ("object", "array", "string", "integer", "number", "boolean", "null")
 FORMATS = ("date", "date-time", "email", "uri", "uuid")
 
@@ -193,8 +194,12 @@ def schema_problems(schema, root, at):
             except (re.error, TypeError) as err:
                 out.append(f"{where}: bad pattern: {err}")
         elif kind == "ref":
-            if resolve(root, value) is None:
-                out.append(f"{where}: must be a local reference like #/$defs/name that resolves")
+            # Only a $defs entry is sure to be a schema this function checks.
+            # "#/$defs" or "#/properties" resolve to a map of schemas, which
+            # problems() would take for a schema with no keywords, one that
+            # lets every value through.
+            if not (isinstance(value, str) and DEF_REF.fullmatch(value)) or resolve(root, value) is None:
+                out.append(f"{where}: must be #/$defs/<name>, naming an entry of this file's $defs")
         elif kind == "schema":
             out += schema_problems(value, root, where)
         elif kind == "schema_map":
@@ -357,6 +362,17 @@ SELFTEST = [
     ("x-file-ref refuses an absolute path", {"x-file-ref": True}, "/" + os.path.basename(__file__), False),
 ]
 
+# What a schema may say is checked the same way: (name, schema, allowed).
+SCHEMA_SELFTEST = [
+    ("a $ref to an entry of $defs is allowed", {"$defs": {"n": {}}, "$ref": "#/$defs/n"}, True),
+    ("a $ref to the $defs map itself is refused", {"$defs": {"n": {}}, "$ref": "#/$defs"}, False),
+    ("a $ref to properties is refused", {"properties": {"a": {}}, "$ref": "#/properties"}, False),
+    ("a $ref past a $defs entry is refused", {"$defs": {"n": {"items": {}}}, "$ref": "#/$defs/n/items"}, False),
+    ("a $ref to a missing entry is refused", {"$ref": "#/$defs/n"}, False),
+    ("a keyword check.py doesn't implement is refused", {"contains": {}}, False),
+    ("an x- keyword is a note", {"x-note": "anything"}, True),
+]
+
 
 def robert_signature(secret, timestamp, body):
     """X-Robert-Signature for a delivery: sha256= and the lowercase hex
@@ -414,6 +430,10 @@ class Checker:
             got = not problems(inst, schema, "#", schema, HERE)
             if got != valid:
                 self.fail(__file__, f"validator selftest {name!r}: got valid={got}, want {valid}")
+        for name, schema, allowed in SCHEMA_SELFTEST:
+            got = not schema_problems(schema, schema, "#")
+            if got != allowed:
+                self.fail(__file__, f"schema selftest {name!r}: got allowed={got}, want {allowed}")
 
     def provenance(self, top):
         path = os.path.join(top, "PROVENANCE.md")
