@@ -680,8 +680,8 @@ expected = exp.doc(
         "the next prompt carries that turn's code), this fixture's prompts give, by minute: " + reading +
         f". That is X.reroll {span_totals['X.reroll']} and X.rewrite_loop {span_totals['X.rewrite_loop']}; see "
         "the loop-codes erratum.",
-        "Read literally (SM 4.2: seconds that would have been credited carry their discount code), 20:03:20-:40 "
-        "would be X.rewrite_loop, because T3's lead would have covered it, and 20:13:20-:40 X.agent_only, because "
+        "Read literally (SM 4.2: seconds that would have been credited carry their discount code), with every "
+        "loop turn's discount taken away at once, 20:03:20-:40 would be X.rewrite_loop, because T3's lead would have covered it, and 20:13:20-:40 X.agent_only, because "
         "nothing would have: T7's bucket holds only its 20 s base until its edit at 20:13:40, and T8 is a "
         "go-ahead with a 20 s lead. 20:05 and 20:06 would be X.reroll and 20:07 X.rewrite_loop. excluded_loops_s "
         "and X.agent_only stay 2,010 and 100; see the loop-codes erratum.",
