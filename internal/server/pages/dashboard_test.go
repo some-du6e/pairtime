@@ -37,9 +37,9 @@ func getDemo(t *testing.T, o Options, in SignIn) (*http.Response, string) {
 	return resp, string(body)
 }
 
-// section returns the part of page from the section labelled by id to its
+// sectionOf returns the part of page from the section labelled by id to its
 // end, or "" when there is none.
-func section(page, id string) string {
+func sectionOf(page, id string) string {
 	_, rest, ok := strings.Cut(page, `<section aria-labelledby="`+id+`">`)
 	if !ok {
 		return ""
@@ -207,7 +207,7 @@ func TestDemoPage(t *testing.T) {
 				t.Fatalf("GET /demo = %d, want 200", resp.StatusCode)
 			}
 			if tt.section != "" {
-				if page = section(page, tt.section); page == "" {
+				if page = sectionOf(page, tt.section); page == "" {
 					t.Fatalf("the page has no section %q", tt.section)
 				}
 			}
@@ -308,7 +308,7 @@ func TestDemoNumbers(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if s := section(page, tt.section); !strings.Contains(s, tt.want) {
+			if s := sectionOf(page, tt.section); !strings.Contains(s, tt.want) {
 				t.Errorf("section %s doesn't contain %q", tt.section, tt.want)
 			}
 		})

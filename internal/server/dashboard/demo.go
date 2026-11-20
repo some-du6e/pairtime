@@ -10,10 +10,10 @@ import (
 )
 
 // Demo is the fixed sample /demo shows: thirty made-up days of a teen
-// building three projects with Claude Code. Most of it is level A, one
-// project was built on a laptop where pairtime sees input but can't tell
-// typing from the mouse (level B), and one day's uploads reached the
-// server late, while the oldest days were read back from Claude Code's
+// building three projects with Claude Code. Most of it is level A. One
+// project was built partly on a laptop where pairtime sees input but can't
+// tell whether it was typing (level B). One day's uploads reached the
+// server late, and the oldest days were read back from Claude Code's
 // transcripts at install (both level C). The last few minutes of today are
 // still pending.
 //
