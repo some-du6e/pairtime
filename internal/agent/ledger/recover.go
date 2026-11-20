@@ -38,8 +38,10 @@ func damaged(format string, args ...any) error {
 // readBatchesFile reads batches.seg. It stops at the first frame that
 // isn't whole, which only a crash or a power cut leaves at the end of a
 // file written without a flush, and says where that is. Its chain frame
-// was written whole before any other, so a file that doesn't start with
-// one is damaged.
+// was written whole, by atomic rename, before any other, so a file that
+// doesn't start with one is damaged, and so is an empty one: without its
+// chain frame nothing says which device or key the segments belong to,
+// and a new chain under this key would number them again.
 func readBatchesFile(name string) (*batchesFile, error) {
 	f, err := os.Open(name)
 	if err != nil {
@@ -51,6 +53,9 @@ func readBatchesFile(name string) (*batchesFile, error) {
 	for i := 0; ; i++ {
 		fm, err := fr.next()
 		if errors.Is(err, io.EOF) {
+			if i == 0 {
+				return nil, damaged("%s is empty", batchesName)
+			}
 			bf.good = fr.off
 			break
 		}

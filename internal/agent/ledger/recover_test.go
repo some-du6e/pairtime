@@ -5,6 +5,7 @@ package ledger
 import (
 	"bytes"
 	"errors"
+	"io/fs"
 	"math/rand/v2"
 	"os"
 	"path/filepath"
@@ -187,6 +188,17 @@ func TestRecoverRefuses(t *testing.T) {
 		{name: "the chain's key id with another key's keys is damage",
 			opts: func(o *Options) { o.Keys = keysOf(t, otherKDev) },
 			want: ErrDamaged},
+		{name: "an empty batches.seg beside segments is damage, not a chain of no key, since a new chain under the same key would number them again",
+			edit: func(t *testing.T, c crashed) { truncate(t, filepath.Join(c.dir, batchesName), 0) },
+			want: ErrDamaged},
+		{name: "an empty batches.seg with no segments is damage too, since its chain frame was written whole before any record",
+			edit: func(t *testing.T, c crashed) {
+				truncate(t, filepath.Join(c.dir, batchesName), 0)
+				if err := os.Remove(c.seg); err != nil {
+					t.Fatal(err)
+				}
+			},
+			want: ErrDamaged},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -207,6 +219,30 @@ func TestRecoverRefuses(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("an empty batches.seg leaves every file where it is, and ReadChain refuses it too", func(t *testing.T) {
+		c := crash(t)
+		name := filepath.Join(c.dir, batchesName)
+		truncate(t, name, 0)
+		if w, err := openErr(c.dir, newClock(testT+60_000)); !errors.Is(err, ErrDamaged) {
+			if err == nil {
+				w.Close()
+			}
+			t.Fatalf("Open: %v, want ErrDamaged", err)
+		}
+		if _, err := os.Stat(filepath.Join(c.dir, oldDir)); !errors.Is(err, fs.ErrNotExist) {
+			t.Errorf("Open made %s: %v", oldDir, err)
+		}
+		if _, err := os.Stat(name); err != nil {
+			t.Errorf("batches.seg moved: %v", err)
+		}
+		if _, err := os.Stat(c.seg); err != nil {
+			t.Errorf("the segment moved: %v", err)
+		}
+		if info, err := ReadChain(c.dir); !errors.Is(err, ErrDamaged) {
+			t.Errorf("ReadChain: %+v, %v; want ErrDamaged", info, err)
+		}
+	})
 
 	t.Run("a torn frame in a segment older than the newest is damage", func(t *testing.T) {
 		dir := t.TempDir()
