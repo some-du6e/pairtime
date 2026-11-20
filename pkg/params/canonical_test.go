@@ -80,7 +80,9 @@ func TestCanonicalMatchesJq(t *testing.T) {
 }
 
 // TestCanonicalForm checks the canonical form on documents that exercise
-// each rule, and that jq writes the same bytes for each of them.
+// each rule, and that jq writes the same bytes for each of them. A case
+// with a JSON escape spells the escape's backslash \x5c, so the source
+// holds the escape and not the character it stands for.
 func TestCanonicalForm(t *testing.T) {
 	cases := []struct {
 		name string
@@ -118,6 +120,11 @@ func TestCanonicalForm(t *testing.T) {
 			`["a\"b","c\\d","A/","/"]`,
 		},
 		{
+			"escapes are decoded, so an escaped key sorts as its character and both come out plain",
+			"{\"\x5cu0062\":\"\x5cu0041\",\"a\":2}",
+			`{"a":2,"b":"A"}`,
+		},
+		{
 			"true, false and null stay",
 			`[true,false,null]`,
 			`[true,false,null]`,
@@ -152,7 +159,7 @@ func TestCanonicalForm(t *testing.T) {
 // TestCanonicalRejects checks that decode refuses every document whose
 // canonical form would be ambiguous or might differ from jq's. An empty
 // want accepts any error, for malformed JSON whose message is the JSON
-// decoder's own.
+// decoder's own. JSON escapes are spelled as in TestCanonicalForm.
 func TestCanonicalRejects(t *testing.T) {
 	cases := []struct {
 		name string
@@ -160,7 +167,7 @@ func TestCanonicalRejects(t *testing.T) {
 		want string
 	}{
 		{"a key can't appear twice", `{"a":1,"a":2}`, `key "a" appears twice`},
-		{"a key can't appear twice under two spellings", `{"a":1,"a":2}`, `key "a" appears twice`},
+		{"a key can't appear twice under two spellings", "{\"\x5cu0061\":1,\"a\":2}", `key "a" appears twice`},
 		{"a key can't appear twice in a nested object", `{"a":{"b":1,"b":1}}`, `key "b" appears twice`},
 		{"numbers have no exponent", `[1e2]`, "plain decimal"},
 		{"numbers have no capital exponent", `[1E2]`, "plain decimal"},
@@ -168,10 +175,10 @@ func TestCanonicalRejects(t *testing.T) {
 		{"whole numbers have no fraction", `[2.0]`, "plain decimal"},
 		{"there is no negative zero", `[-0]`, "plain decimal"},
 		{"strings are ASCII", `["é"]`, "printable ASCII"},
-		{"escaped non-ASCII counts too", `["é"]`, "printable ASCII"},
+		{"escaped non-ASCII counts too", "[\"\x5cu00e9\"]", "printable ASCII"},
 		{"strings have no control characters", `["a\nb"]`, "printable ASCII"},
 		{"strings have no raw DEL", "[\"\x7f\"]", "printable ASCII"},
-		{"strings have no escaped DEL", `["\u007f"]`, "printable ASCII"},
+		{"strings have no escaped DEL", "[\"\x5cu007f\"]", "printable ASCII"},
 		{"keys are ASCII", `{"é":1}`, "printable ASCII"},
 		{"one document only", `{} {}`, "more than one JSON document"},
 		{"there is a document", ``, "no JSON document"},
