@@ -1,0 +1,41 @@
+{
+  "name": "pairtime-web",
+  "version": "0.0.0",
+  "private": true,
+  "description": "pairtime's web UI: the local dashboard the agent serves, the server UI, and the components they share",
+  "license": "AGPL-3.0-or-later",
+  "type": "module",
+  "engines": {
+    "node": ">=22.12"
+  },
+  "scripts": {
+    "gen": "openapi-typescript ../docs/api/local.openapi.yaml --output src/gen/local-api.ts",
+    "check": "npm run gen && svelte-check --tsconfig ./tsconfig.json --fail-on-warnings",
+    "test:unit": "vitest run",
+    "test": "npm run check && npm run test:unit",
+    "build": "vite build --mode agent && vite build --mode server && vite build --mode gallery",
+    "e2e": "playwright test",
+    "dev": "vite --mode agent",
+    "dev:gallery": "vite --mode gallery"
+  },
+  "dependencies": {
+    "svelte": "5.57.3"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.64.1",
+    "@sveltejs/vite-plugin-svelte": "7.3.1",
+    "@types/node": "24.19.2",
+    "openapi-typescript": "7.13.0",
+    "svelte-check": "4.7.8",
+    "typescript": "5.9.3",
+    "vite": "8.3.8",
+    "vitest": "5.1.0",
+    "yaml": "2.9.1"
+  },
+  "overrides": {
+    "@rolldown/pluginutils": "1.0.1",
+    "esrap": "2.4.0",
+    "postcss": "8.5.32",
+    "vitefu": "1.1.3"
+  }
+}

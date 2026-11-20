@@ -1,0 +1,85 @@
+{
+  "fixture": "sidedoor/b-track-keys",
+  "prompts": [
+    {
+      "turn_key": "t_670c5a86673a",
+      "t": 1795637040000,
+      "local": "14:04:00",
+      "text": "make the leaderboard command page results ten at a time and add next and previous buttons.",
+      "len_chars": 90,
+      "source": "invented, as in (a); turn_key is this fixture's name for the track turn"
+    },
+    {
+      "turn_key": "t_85623d3b3b57",
+      "t": 1795637061000,
+      "local": "14:04:21",
+      "text": "the reminder job fires twice after a restart, store the last run time and skip duplicates.",
+      "len_chars": 90,
+      "source": "invented, as in (a); turn_key is this fixture's name for the track turn"
+    },
+    {
+      "turn_key": "t_d1036e2da8c1",
+      "t": 1795637082000,
+      "local": "14:04:42",
+      "text": "add a slash command that shows the five most recent reminders for whoever runs it, please.",
+      "len_chars": 90,
+      "source": "invented, as in (a); turn_key is this fixture's name for the track turn"
+    },
+    {
+      "turn_key": "t_9b26b9dcfd94",
+      "t": 1795637103000,
+      "local": "14:05:03",
+      "text": "refactor the database helpers into one module and give every query a short docstring, too.",
+      "len_chars": 90,
+      "source": "invented, as in (a); turn_key is this fixture's name for the track turn"
+    },
+    {
+      "turn_key": "t_184fb6c3e36a",
+      "t": 1795637124000,
+      "local": "14:05:24",
+      "text": "write tests for the time parser that cover tomorrow, next friday and dates without a year.",
+      "len_chars": 90,
+      "source": "invented, as in (a); turn_key is this fixture's name for the track turn"
+    },
+    {
+      "turn_key": "t_31e2d83aa16a",
+      "t": 1795637145000,
+      "local": "14:05:45",
+      "text": "the bot crashes when a channel is deleted, so catch that and remove its saved settings too",
+      "len_chars": 90,
+      "source": "invented, as in (a); turn_key is this fixture's name for the track turn"
+    },
+    {
+      "turn_key": "t_c6d488252103",
+      "t": 1795637166000,
+      "local": "14:06:06",
+      "text": "add a config option for the default time zone and use it when a user has not set one, okay",
+      "len_chars": 90,
+      "source": "invented, as in (a); turn_key is this fixture's name for the track turn"
+    },
+    {
+      "turn_key": "t_6632daff8f76",
+      "t": 1795637187000,
+      "local": "14:06:27",
+      "text": "make the help command list commands by category and hide the admin ones from normal users.",
+      "len_chars": 90,
+      "source": "invented, as in (a); turn_key is this fixture's name for the track turn"
+    },
+    {
+      "turn_key": "t_e2a1b8e2436e",
+      "t": 1795637208000,
+      "local": "14:06:48",
+      "text": "cache the guild settings for a minute so we stop hitting the database on every new message",
+      "len_chars": 90,
+      "source": "invented, as in (a); turn_key is this fixture's name for the track turn"
+    },
+    {
+      "turn_key": "t_47762cdd5106",
+      "t": 1795637229000,
+      "local": "14:07:09",
+      "text": "add logging around the scheduler so we can see when each job starts, ends, and its runtime",
+      "len_chars": 90,
+      "source": "invented, as in (a); turn_key is this fixture's name for the track turn"
+    }
+  ]
+}

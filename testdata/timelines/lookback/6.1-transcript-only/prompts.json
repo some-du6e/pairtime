@@ -1,0 +1,125 @@
+{
+  "fixture": "lookback/6.1-transcript-only",
+  "prompts": [
+    {
+      "turn_key": "t_f93f609fd1df",
+      "t": 1795250040000,
+      "local": "14:04:00",
+      "text": null,
+      "len_chars": 300,
+      "source": "SM 6.1 gives each cycle's prompt 300 characters and quotes none"
+    },
+    {
+      "turn_key": "t_86c13621fc4d",
+      "t": 1795250760000,
+      "local": "14:16:00",
+      "text": null,
+      "len_chars": 300,
+      "source": "SM 6.1 gives each cycle's prompt 300 characters and quotes none"
+    },
+    {
+      "turn_key": "t_afe2dd79067c",
+      "t": 1795251480000,
+      "local": "14:28:00",
+      "text": null,
+      "len_chars": 300,
+      "source": "SM 6.1 gives each cycle's prompt 300 characters and quotes none"
+    },
+    {
+      "turn_key": "t_c59633994efe",
+      "t": 1795252200000,
+      "local": "14:40:00",
+      "text": null,
+      "len_chars": 300,
+      "source": "SM 6.1 gives each cycle's prompt 300 characters and quotes none"
+    },
+    {
+      "turn_key": "t_690c43513a35",
+      "t": 1795252920000,
+      "local": "14:52:00",
+      "text": null,
+      "len_chars": 300,
+      "source": "SM 6.1 gives each cycle's prompt 300 characters and quotes none"
+    },
+    {
+      "turn_key": "t_5be675835b44",
+      "t": 1795253640000,
+      "local": "15:04:00",
+      "text": null,
+      "len_chars": 300,
+      "source": "SM 6.1 gives each cycle's prompt 300 characters and quotes none"
+    },
+    {
+      "turn_key": "t_19db1cfbb690",
+      "t": 1795254360000,
+      "local": "15:16:00",
+      "text": null,
+      "len_chars": 300,
+      "source": "SM 6.1 gives each cycle's prompt 300 characters and quotes none"
+    },
+    {
+      "turn_key": "t_1cdd15aab998",
+      "t": 1795255080000,
+      "local": "15:28:00",
+      "text": null,
+      "len_chars": 300,
+      "source": "SM 6.1 gives each cycle's prompt 300 characters and quotes none"
+    },
+    {
+      "turn_key": "t_33447a34b1f4",
+      "t": 1795255800000,
+      "local": "15:40:00",
+      "text": null,
+      "len_chars": 300,
+      "source": "SM 6.1 gives each cycle's prompt 300 characters and quotes none"
+    },
+    {
+      "turn_key": "t_42b756b2932e",
+      "t": 1795256520000,
+      "local": "15:52:00",
+      "text": null,
+      "len_chars": 300,
+      "source": "SM 6.1 quotes the hypothesis Rowan answers the failing test with, \"the hitbox updates before the position in tick(), swap them\", as part of a 300-character prompt, not the prompt itself"
+    },
+    {
+      "turn_key": "t_e45cb3b537f0",
+      "t": 1795257240000,
+      "local": "16:04:00",
+      "text": null,
+      "len_chars": 300,
+      "source": "SM 6.1 gives each cycle's prompt 300 characters and quotes none"
+    },
+    {
+      "turn_key": "t_f071cbac37bf",
+      "t": 1795257960000,
+      "local": "16:16:00",
+      "text": null,
+      "len_chars": 300,
+      "source": "SM 6.1 gives each cycle's prompt 300 characters and quotes none"
+    },
+    {
+      "turn_key": "t_c02ed7862fc2",
+      "t": 1795258680000,
+      "local": "16:28:00",
+      "text": null,
+      "len_chars": 300,
+      "source": "SM 6.1 gives each cycle's prompt 300 characters and quotes none"
+    },
+    {
+      "turn_key": "t_ef54d1f35b51",
+      "t": 1795259400000,
+      "local": "16:40:00",
+      "text": null,
+      "len_chars": 300,
+      "source": "SM 6.1 gives each cycle's prompt 300 characters and quotes none"
+    },
+    {
+      "turn_key": "t_0d7eb9282200",
+      "t": 1795260120000,
+      "local": "16:52:00",
+      "text": null,
+      "len_chars": 300,
+      "source": "SM 6.1 gives each cycle's prompt 300 characters and quotes none"
+    }
+  ]
+}

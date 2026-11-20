@@ -1,0 +1,79 @@
+{
+  "fixture": "sidedoor/e-bridge-lines",
+  "anchors": [
+    {
+      "event_id": "01a2144d-f4d8-74dc-ad74-fd2b926d75e7",
+      "kind": "substantive_prompt",
+      "t": 1795636983000,
+      "local": "14:03:03",
+      "project_key": "p_544dbca0f073",
+      "origin": "human_typed",
+      "prompt_class": "substantive",
+      "lead_s": 60,
+      "trail_s": 0,
+      "lead_from": "params",
+      "via": "bridge",
+      "level": "C",
+      "sm": "DESIGN 6.2 D4: a bridge prompt gets the typing lead only, 90 / 1.5 = 60 s; level C by 6.4"
+    },
+    {
+      "event_id": "01a2144f-c998-755d-b76e-8369c1f9bbac",
+      "kind": "substantive_prompt",
+      "t": 1795637103000,
+      "local": "14:05:03",
+      "project_key": "p_544dbca0f073",
+      "origin": "human_typed",
+      "prompt_class": "substantive",
+      "lead_s": 60,
+      "trail_s": 0,
+      "lead_from": "params",
+      "via": "bridge",
+      "level": "C",
+      "sm": "DESIGN 6.2 D4: a bridge prompt gets the typing lead only, 90 / 1.5 = 60 s; level C by 6.4"
+    },
+    {
+      "event_id": "01a21451-9e58-759b-879e-8ed555bf0552",
+      "kind": "substantive_prompt",
+      "t": 1795637223000,
+      "local": "14:07:03",
+      "project_key": "p_544dbca0f073",
+      "origin": "human_typed",
+      "prompt_class": "substantive",
+      "lead_s": 60,
+      "trail_s": 0,
+      "lead_from": "params",
+      "via": "bridge",
+      "level": "C",
+      "sm": "DESIGN 6.2 D4: a bridge prompt gets the typing lead only, 90 / 1.5 = 60 s; level C by 6.4"
+    }
+  ],
+  "turns": [
+    {
+      "session_key": "s_41ff1deef415",
+      "turn_key": "t_dbf0560dea6e",
+      "t_submit": 1795636983000,
+      "local_submit": "14:03:03",
+      "origin": "human_typed",
+      "prompt_class": "substantive",
+      "sm": "no agent.stop: the bridge maps no heartbeat to one"
+    },
+    {
+      "session_key": "s_41ff1deef415",
+      "turn_key": "t_fe396482f8d7",
+      "t_submit": 1795637103000,
+      "local_submit": "14:05:03",
+      "origin": "human_typed",
+      "prompt_class": "substantive",
+      "sm": "no agent.stop: the bridge maps no heartbeat to one"
+    },
+    {
+      "session_key": "s_41ff1deef415",
+      "turn_key": "t_d45947d7c466",
+      "t_submit": 1795637223000,
+      "local_submit": "14:07:03",
+      "origin": "human_typed",
+      "prompt_class": "substantive",
+      "sm": "no agent.stop: the bridge maps no heartbeat to one"
+    }
+  ]
+}

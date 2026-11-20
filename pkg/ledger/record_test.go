@@ -87,7 +87,7 @@ func localFieldsSet(p event.Payload) []string {
 func TestEventRecordBodies(t *testing.T) {
 	k := testKeys(t)
 	for i, kind := range event.Kinds() {
-		t.Run(string(kind)+": the body is the nonce then the shareable event, and decoding then encoding it gives the same bytes", func(t *testing.T) {
+		t.Run(string(kind)+": the body is the nonce, the shareable event, then f and c where the kind has them, and decoding then encoding it gives the same bytes", func(t *testing.T) {
 			ev, err := sampleEvent(kind)
 			if err != nil {
 				t.Fatal(err)
@@ -96,7 +96,7 @@ func TestEventRecordBodies(t *testing.T) {
 			if len(localFieldsSet(ev.Data)) == 0 && hasLocalFields(ev.Data) {
 				t.Fatal("the sample sets none of its local fields, so it can't show they are cleared")
 			}
-			rec, err := EventRecord(k, ev)
+			rec, err := EventRecord(k, ev, sampleContent(kind))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -108,7 +108,7 @@ func TestEventRecordBodies(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if want := `{"n":"` + n.String() + `","e":` + string(shareable) + `}`; string(rec.Body) != want {
+			if want := `{"n":"` + n.String() + `","e":` + string(shareable) + contentMembers(t, k, ev, sampleContent(kind)) + `}`; string(rec.Body) != want {
 				t.Errorf("body is\n%s\nwant\n%s", rec.Body, want)
 			}
 
@@ -132,7 +132,7 @@ func TestEventRecordBodies(t *testing.T) {
 			if set := localFieldsSet(got.Data); len(set) != 0 {
 				t.Errorf("the stored event keeps local fields %v", set)
 			}
-			rec2, err := EventRecord(k, got)
+			rec2, err := EventRecord(k, got, sampleContent(kind))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -234,7 +234,7 @@ func TestWritersRefuse(t *testing.T) {
 			}
 			ev.Seq = 1
 			edit(&ev)
-			_, err = EventRecord(k, ev)
+			_, err = EventRecord(k, ev, sampleContent(kind))
 			return err
 		}
 	}
@@ -310,7 +310,7 @@ func TestCheckBody(t *testing.T) {
 		t.Fatal(err)
 	}
 	ev.Seq = 7
-	rec, err := EventRecord(k, ev)
+	rec, err := EventRecord(k, ev, sampleContent(event.KindPromptSubmit))
 	if err != nil {
 		t.Fatal(err)
 	}

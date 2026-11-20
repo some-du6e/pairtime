@@ -127,9 +127,9 @@
               "name": "Justification - Deflation Justification",
               "line": 3292,
               "role": "justification",
-              "filled_by": "pairtime",
+              "filled_by": "reviewer",
               "handbook": "Deflation Justification",
-              "note": "A factual draft from reason codes that the reviewer confirms or rewrites (DESIGN 9.3)."
+              "note": "The handbook asks for a person to write this field (written_by human in ../handbook/fields.json), so it is the reviewer's. DESIGN 9.3 has pairtime draft it from reason codes for the reviewer to confirm or rewrite. Until Karim settles docs/errata/2026-11-20-deflation-justification.md, the Airtable script leaves it out of its default mapping (WP-PG2), and the reviewer sees the draft on pairtime's review page."
             },
             {
               "name": "Justification - Alternate Tracking Method",

@@ -1,0 +1,71 @@
+{
+  "fixture": "sidedoor/d-editor-script",
+  "anchors": [
+    {
+      "event_id": "01a2144d-e920-7d35-aa01-2542845230b0",
+      "kind": "typed_edit",
+      "t": 1795636980000,
+      "local": "14:03:00",
+      "project_key": "p_fa9d9f85d14b",
+      "lead_s": 120,
+      "trail_s": 0,
+      "lead_from": "params",
+      "via": "editor_unverified",
+      "level": "C",
+      "sm": "SM 2.3: EDIT_LEAD_S = 120 s; level C by DESIGN 5.7 and 6.4"
+    },
+    {
+      "event_id": "01a2144f-6fc0-7848-bbfe-23b01672d4f8",
+      "kind": "typed_edit",
+      "t": 1795637080000,
+      "local": "14:04:40",
+      "project_key": "p_fa9d9f85d14b",
+      "lead_s": 120,
+      "trail_s": 0,
+      "lead_from": "params",
+      "via": "editor_unverified",
+      "level": "C",
+      "sm": "SM 2.3: EDIT_LEAD_S = 120 s; level C by DESIGN 5.7 and 6.4"
+    },
+    {
+      "event_id": "01a21450-f660-726e-b997-7883bbdea850",
+      "kind": "typed_edit",
+      "t": 1795637180000,
+      "local": "14:06:20",
+      "project_key": "p_fa9d9f85d14b",
+      "lead_s": 120,
+      "trail_s": 0,
+      "lead_from": "params",
+      "via": "editor_unverified",
+      "level": "C",
+      "sm": "SM 2.3: EDIT_LEAD_S = 120 s; level C by DESIGN 5.7 and 6.4"
+    },
+    {
+      "event_id": "01a21452-7d00-7ae1-b19c-8da390bac84a",
+      "kind": "typed_edit",
+      "t": 1795637280000,
+      "local": "14:08:00",
+      "project_key": "p_fa9d9f85d14b",
+      "lead_s": 120,
+      "trail_s": 0,
+      "lead_from": "params",
+      "via": "editor_unverified",
+      "level": "C",
+      "sm": "SM 2.3: EDIT_LEAD_S = 120 s; level C by DESIGN 5.7 and 6.4"
+    },
+    {
+      "event_id": "01a21454-03a0-74e3-aeec-b3e0f9eb3500",
+      "kind": "typed_edit",
+      "t": 1795637380000,
+      "local": "14:09:40",
+      "project_key": "p_fa9d9f85d14b",
+      "lead_s": 120,
+      "trail_s": 0,
+      "lead_from": "params",
+      "via": "editor_unverified",
+      "level": "C",
+      "sm": "SM 2.3: EDIT_LEAD_S = 120 s; level C by DESIGN 5.7 and 6.4"
+    }
+  ],
+  "turns": []
+}

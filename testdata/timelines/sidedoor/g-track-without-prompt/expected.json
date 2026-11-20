@@ -1,0 +1,141 @@
+{
+  "fixture": "sidedoor/g-track-without-prompt",
+  "title": "A track call on a hooked session with no prompt near it",
+  "sm": "docs/PLAN.md WP-FX4 (g); DESIGN 5.2, 5.4, 6.2 D3 and D19, 6.4",
+  "date": "2026-11-25",
+  "timezone": "America/Chicago",
+  "utc_offset": "-06:00",
+  "os": "windows",
+  "input_keys": false,
+  "evidence": "B",
+  "witness": "witnessed",
+  "device": "d_bda985075475",
+  "projects": {"p_12881ddc2949": "the project Claude Code runs in"},
+  "window": {"start": "2026-11-25T20:00:00Z", "end": "2026-11-25T20:09:00Z", "local": "14:00-14:09"},
+  "rows": [
+    {
+      "start": "2026-11-25T20:00:00Z",
+      "minutes": 1,
+      "local": "14:00",
+      "bucket": false,
+      "codes": ["X.no_anchor"]
+    },
+    {
+      "start": "2026-11-25T20:01:00Z",
+      "minutes": 1,
+      "local": "14:01",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_12881ddc2949": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "note": "The prompt's 220 s lead, from 14:01:00."
+    },
+    {
+      "start": "2026-11-25T20:02:00Z",
+      "minutes": 1,
+      "local": "14:02",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_12881ddc2949": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "note": "The prompt's 220 s lead, from 14:01:00."
+    },
+    {
+      "start": "2026-11-25T20:03:00Z",
+      "minutes": 1,
+      "local": "14:03",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_12881ddc2949": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "note": "The prompt's 220 s lead, from 14:01:00."
+    },
+    {
+      "start": "2026-11-25T20:04:00Z",
+      "minutes": 1,
+      "local": "14:04",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_12881ddc2949": {"P": 40, "SUP": 20}
+      },
+      "uncredited": {},
+      "agent_running_s": 20
+    },
+    {
+      "start": "2026-11-25T20:05:00Z",
+      "minutes": 1,
+      "local": "14:05",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 30,
+      "credit": {
+        "p_12881ddc2949": {"READ": 30}
+      },
+      "uncredited": {"X.agent_only": 30},
+      "agent_running_s": 30
+    },
+    {
+      "start": "2026-11-25T20:06:00Z",
+      "minutes": 1,
+      "local": "14:06",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 10,
+      "credit": {
+        "p_12881ddc2949": {"READ": 10}
+      },
+      "uncredited": {"X.no_anchor": 50},
+      "agent_running_s": 0
+    },
+    {
+      "start": "2026-11-25T20:07:00Z",
+      "minutes": 1,
+      "local": "14:07",
+      "bucket": false,
+      "codes": ["X.no_anchor"],
+      "note": "The track call at 14:07:30 opens nothing and starts no turn, so nothing is credited around it."
+    },
+    {
+      "start": "2026-11-25T20:08:00Z",
+      "minutes": 1,
+      "local": "14:08",
+      "bucket": false,
+      "codes": ["X.no_anchor"]
+    }
+  ],
+  "totals": {
+    "credited_s": 280,
+    "credited_by_project": {"p_12881ddc2949": 280},
+    "credited_by_reason": {"P": 220, "SUP": 20, "READ": 40},
+    "uncredited": {"X.no_anchor": 50, "X.agent_only": 30},
+    "agent_running_s": 50,
+    "level_a_s": 0,
+    "level_b_s": 280,
+    "level_c_s": 0,
+    "via_track_s": 0,
+    "logged_s": 50,
+    "ai_logged_s": 50,
+    "level_c_cap_s": 0
+  },
+  "stated": ["level_c_s", "via_track_s"],
+  "approx": {},
+  "errata": [],
+  "notes": [
+    "The same 280 s at level B as the session would earn with no track call; the flag changes review priority, never credit (SM 4.5).",
+    "logged_s = ai_logged_s = 50 s, from the prompt to the stop."
+  ]
+}
