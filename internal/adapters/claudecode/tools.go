@@ -77,7 +77,13 @@ func (c *call) tool() {
 	if r != nil {
 		rec.Edits, rec.Command = r.edits, r.command
 	}
-	if id, _ := c.f.str("tool_use_id"); id != "" {
+	id, _ := c.f.str("tool_use_id")
+	if rec.Command != "" {
+		// For the git watcher, which tells an agent's commit from the
+		// person's by the command that made it (NoteAgentCommand).
+		rec.Dir, rec.Call = c.cwd, id
+	}
+	if id != "" {
 		agent, _ := c.f.str("agent_id")
 		c.s.post(post{t: c.env.T, toolUseID: id, tool: name, agent: agent})
 	}

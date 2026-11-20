@@ -46,6 +46,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"hash"
@@ -237,6 +238,30 @@ type Record struct {
 	Edits []features.Edit
 	// Command is the command line an agent.tool ran.
 	Command string
+	// Dir and Call go with Command: the folder the command ran in, the
+	// session's working directory, and what tells the tool call from
+	// another, such as Claude Code's tool_use_id. The agent hands them to
+	// the git watcher, which matches a git command to the commit it made
+	// (git.Watcher.NoteAgentCommand). Both stay on the device, like the
+	// command: Dir is a path, and neither goes in the event.
+	Dir, Call string
+}
+
+// Stateful is an adapter whose memory of the sessions it parses can
+// outlive one run of the agent (DESIGN 3.5, state.json). Without it, a
+// restarted agent would take a queued message for a new prompt, miss a
+// scheduled prompt that an earlier stop listed (SM 2.2 rule 1) and record
+// a second session.start from the walk. The agent keeps what SaveState
+// returns on the device, readable by its user alone, and hands it to
+// LoadState before the adapter's first Parse.
+type Stateful interface {
+	// SaveState returns the adapter's memory as JSON. It holds no content:
+	// no prompt text, nor anything a reader could turn back into some.
+	SaveState() (json.RawMessage, error)
+	// LoadState replaces the adapter's memory with what SaveState
+	// returned, from this build or an older one. Memory it can't read is
+	// an error, and the adapter then starts empty, as on a first run.
+	LoadState(json.RawMessage) error
 }
 
 // Options are what an adapter needs from the agent to make records.
