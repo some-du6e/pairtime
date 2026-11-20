@@ -15,6 +15,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/some-du6e/pairtime/pkg/event"
 )
 
 // KeepDays is how many days of ids a Journal remembers, and how long it
@@ -33,7 +35,8 @@ var errClosed = errors.New("inbox: the journal is closed")
 // YYYY-MM-DD.jsonl in its directory, by the UTC day the agent took the
 // message in, and it keeps no bodies: a body can hold prompt text, which
 // only the vault may keep (DESIGN 3.5). A line says which message arrived,
-// when, how, from which process and how big its body was.
+// when, how, from which process and how big its body was, and what the
+// agent made of where it came from (Delivery.Walk, EventVia, Harness).
 //
 // A line is written before Deliver returns, so it survives the agent being
 // killed. It isn't flushed to the disk, so a power cut can lose it, and
@@ -69,6 +72,12 @@ type journalLine struct {
 	Sent     time.Time `json:"sent"`
 	Received time.Time `json:"received"`
 	Bytes    int       `json:"body_bytes"`
+	// Walk is how many processes the agent's own walk of the sender's
+	// parent chain held, and EventVia and Harness what the agent made of
+	// them (Delivery).
+	Walk     int           `json:"walk,omitempty"`
+	EventVia event.Via     `json:"event_via,omitempty"`
+	Harness  event.Harness `json:"harness,omitempty"`
 }
 
 // OpenJournal opens the journal in dir, making dir if it has to, readable
@@ -189,6 +198,9 @@ func (j *Journal) Deliver(d Delivery) error {
 		Sent:     d.Sent.UTC(),
 		Received: d.Received.UTC(),
 		Bytes:    len(d.Body),
+		Walk:     len(d.Walk),
+		EventVia: d.EventVia,
+		Harness:  d.Harness,
 	})
 	if err != nil {
 		return err

@@ -27,8 +27,8 @@ func (a *agent) startProcs() func() {
 //     front, which may host a session the scan just found (focus.go).
 //   - Until the ledger writer exists (WP-LG5), a session the scan finds,
 //     or withdraws because a hook claimed it late, goes to the log. The
-//     hook path (WP-AG3) will claim the processes its hooks come from
-//     through a.procs.
+//     hook sink (hooks.go, WP-AG3) claims the harness process each hook
+//     came from, as the agent's own walk of the connection found it.
 func (a *agent) procsOptions(opts procs.Options) procs.Options {
 	opts.Log = a.log
 	opts.Store = a.state

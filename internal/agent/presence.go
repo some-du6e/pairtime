@@ -10,13 +10,15 @@ import (
 // returns the step that stops it. It records nothing until a project
 // context goes live. The process scan makes one live by reporting its
 // count of harness session processes through HarnessProcesses (procscan.go,
-// WP-OS6), and so does focus on a terminal, editor or agent app, which the
-// focus component reports through FocusAt (focus.go, WP-OS2). docs/PLAN.md
-// names who wires the rest: WP-AG3 reports every hook and track message
-// through Hook; WP-AG4 passes the parameter table it scores with as
-// Params, and until then the sampler reads the newest table. Its records
-// go to the ledger, which seals a batch after every suspend and lock
-// (startLedger, WP-LG5), so startLedger must run first.
+// WP-OS6), and so do focus on a terminal, editor or agent app, which the
+// focus component reports through FocusAt (focus.go, WP-OS2), and every hook
+// call that comes over the socket or the pipe, which hooks.go reports
+// through Hook (WP-AG3). docs/PLAN.md names who wires the rest: WP-AD18
+// each track message through Hook (its Build says so, since WP-AG3 came
+// before track messages existed), and WP-AG4 passes the parameter table it
+// scores with as Params; until then the sampler reads the newest table.
+// Its records go to the ledger, which seals a batch after every suspend
+// and lock (startLedger, WP-LG5), so startLedger must run first.
 func (a *agent) startPresence() func() {
 	a.presence = presence.New(presence.Options{
 		Sched:   a.sched,

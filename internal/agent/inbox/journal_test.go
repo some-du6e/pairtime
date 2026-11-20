@@ -10,6 +10,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/some-du6e/pairtime/internal/platform"
+	"github.com/some-du6e/pairtime/pkg/event"
 )
 
 func TestJournal(t *testing.T) {
@@ -150,6 +153,32 @@ func TestJournal(t *testing.T) {
 				}
 				if l.ID != m.ID || l.Via != ViaSocket || l.PeerPID != 42 || l.Bytes != len(m.Body) {
 					t.Errorf("the journal line is %+v", l)
+				}
+			},
+		},
+		{
+			name: "the journal records how long the agent's own walk was and what the agent made of it",
+			run: func(t *testing.T, dir string) {
+				j := open(t, dir, day)
+				m := newMessage(t, 1)
+				walk := []platform.Proc{{PID: 42, Name: "pairtime"}, {PID: 41, Name: "claude"}}
+				d := Delivery{Message: m, Via: ViaSocket, PeerPID: 42, Walk: walk, EventVia: event.ViaHook, Harness: event.HarnessClaudeCode, Received: day}
+				if err := j.Deliver(d); err != nil {
+					t.Fatal(err)
+				}
+				b, err := os.ReadFile(filepath.Join(dir, "2026-11-19.jsonl"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				var l journalLine
+				if err := json.Unmarshal([]byte(strings.TrimSpace(string(b))), &l); err != nil {
+					t.Fatal(err)
+				}
+				if l.Walk != 2 || l.EventVia != event.ViaHook || l.Harness != event.HarnessClaudeCode {
+					t.Errorf("the journal line is %+v, want a walk of 2, via hook and claude_code", l)
+				}
+				if strings.Contains(string(b), "claude\"") {
+					t.Errorf("the journal has the walk's process names: %s", b)
 				}
 			},
 		},

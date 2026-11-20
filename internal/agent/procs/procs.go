@@ -224,6 +224,11 @@ func (s *Scanner) Claim(boot string, host platform.Proc) {
 	}
 }
 
+// ClaimLive is Claim for a process read on the boot the scanner runs on, as
+// the agent's own walk of a hook's connection reads it (D-spool-via;
+// internal/agent/hookpath).
+func (s *Scanner) ClaimLive(host platform.Proc) { s.Claim(s.boot, host) }
+
 // Scan reads the process table once and reports every harness process of
 // this user (Options.Self) that started at least Grace ago, that no hook
 // claimed and that no earlier scan reported. A harness's own launcher,
