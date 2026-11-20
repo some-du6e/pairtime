@@ -10,7 +10,7 @@ This notice covers the pairtime server at {{.BaseURL}} and the pairtime program 
 ## The short version
 
 - Your prompts, your code, your file names and your window titles stay on your computer.
-- This server gets numbers: how many seconds of each minute were credited, to which project (as a key, not its name), and why the rest weren't.
+- This server gets numbers: for every 15 seconds you work, how many were credited, to which project (as a key, not its name), what kind of work it was, and why the rest weren't.
 - Nothing about you is public until you choose what to show.
 - Hours are checked for fraud only when you submit them to a program.
 - Every kind of data has a time limit, listed under [How long we keep things](#how-long-we-keep-things). Deleted data is gone from the server's backups too within {{days "server.db_snapshots"}}.
@@ -45,7 +45,7 @@ If you also use Hackatime, your editor keeps sending Hackatime what it sent befo
 
 About once a minute while you work, your computer uploads these:
 
-- **Minute buckets.** For each minute, how many seconds were credited, to which project key, at which evidence level, and a reason code for each second that wasn't credited.
+- **Minute buckets.** For each minute, how long an AI agent was running, and for each 15 seconds of it: how many seconds were credited, to which project key, at which evidence level, why they were credited (such as a prompt you typed, a command you ran or a test run), what kind of work they counted as (prompting, reading the agent's output, supervising it, reviewing, testing, debugging, editing by hand or looking something up), and whether the credit rests on `pairtime track`, an editor plugin or the WakaTime bridge. Each second that wasn't credited gets a reason code. So this server learns what kind of work you were doing every 15 seconds, though never what it was about.
 - **Batch roots.** Hashes that seal what your computer recorded, so the record can't be changed later without it showing.
 - **Commit records.** For each commit, its ID and its parents, its times, how many files and lines changed, the credited time since the commit before it, and whether an AI agent made it. File paths go only as keyed hashes, never as names.
 - **Labels.** Your pairtime version, the scoring version, the names and versions of your AI tools, whether the typing module is on, and whether pairtime thinks it runs in a virtual machine.
@@ -63,7 +63,7 @@ Some things reach the server only at particular moments:
 
 Apart from a submission, and the encrypted backups if you turn them on, this server never receives your prompts or the agent's output, file names or paths, window titles, the names of other programs you run, branch names of private repositories, keystrokes or their timing, prompt similarity sketches, error messages, your computer's name, or your username on it.
 
-There's no analytics or telemetry. Apart from what this notice lists, the only request pairtime makes is a daily check with GitHub for updates, and that carries none of your data. To see exactly what the next upload will send, run `pairtime privacy show`.
+These lists are a summary, and `pairtime privacy show` prints every field of the next upload exactly as it will be sent. There's no analytics or telemetry. Apart from what this notice lists, the only request pairtime makes is a daily check with GitHub for updates, and that carries none of your data.
 
 If you'd rather upload nothing, use local-only mode. pairtime still tracks your time and shows it on your computer, but hours tracked that way can never be submitted to a program.
 

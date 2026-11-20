@@ -98,8 +98,8 @@
     {
       "id": "server.minute_buckets",
       "where": "server",
-      "data": "Minute buckets: the credited and uncredited seconds of each minute, by project key",
-      "kept": "Per-minute detail for {days}, the furthest back a submission can reach. After that only daily totals per project stay, for as long as your account exists",
+      "data": "Minute buckets: for each 15 seconds, the credited seconds by project key, why they were credited and what kind of work they counted as, with the reasons for seconds that weren't credited and how long an AI agent was running",
+      "kept": "Per-minute detail for {days}, the furthest back a submission can reach. After that only daily totals per project and kind of work stay, for as long as your account exists",
       "days": 180,
       "tables": ["rollups_daily"],
       "job": {

@@ -220,6 +220,15 @@ func TestPrivacyNotice(t *testing.T) {
 			notWant: []string{"get your submissions and their outcomes."},
 		},
 		{
+			name: "the notice says each 15-second slot records the kind of work and why it was credited (DESIGN 4.3)",
+			want: []string{
+				"what kind of work it was, and why the rest weren&#39;t.",
+				"what kind of work they counted as (prompting, reading the agent&#39;s output,",
+				"how long an AI agent was running",
+				"<code>pairtime privacy show</code> prints every field of the next upload",
+			},
+		},
+		{
 			name: "the IP period in the prose is the schedule's",
 			want: []string{"the server deletes them after 30 days."},
 		},
