@@ -138,7 +138,7 @@ func runInit(ctx context.Context, e *env, args []string) int {
 	}
 	fmt.Fprintf(notes, "server key (Ed25519)  id %s  public key %s\n", pub.ServerKeyID(), base64.StdEncoding.EncodeToString(pub.Server))
 	fmt.Fprintf(notes, "evidence key (P-256)  id %s  public key %s\n", pub.EvidenceKeyID(), base64.StdEncoding.EncodeToString(pub.Evidence.Bytes()))
-	fmt.Fprintf(notes, "Back the keys up to Karim's age key before anything else (deploy/runbook.md):\n  pairtimed keys backup -upload -o <file>\n")
+	fmt.Fprintf(notes, "Back the keys up to Karim's age key before anything else (deploy/runbook.md, step 8):\n  docker compose run --rm -T pairtimed pairtimed keys backup -upload > pairtime-keys-<time>.tar.age\n")
 	return 0
 }
 

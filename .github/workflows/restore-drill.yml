@@ -211,7 +211,8 @@ jobs:
           grep -qx 'signups_open = false' config/pairtime.toml
           grep -qx 'profile_default = "ask"' config/pairtime.toml
           # Each key mode 0600 and the image's user's (PLAN WP-OP1).
-          sudo stat -c '%a %u %n' data/keys data/keys/*
+          # The runner's shell can't list data/, so root expands the glob.
+          sudo sh -c 'stat -c "%a %u %n" data/keys data/keys/*'
           bad=$(sudo find data/keys -type f \( ! -perm 0600 -o ! -uid "$UID65532" \) -print)
           if [ -n "$bad" ] || [ "$(sudo stat -c %a data/keys)" != 700 ]; then
             echo "::error::init's keys aren't mode 0600 in a mode 0700 directory: $bad"
