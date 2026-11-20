@@ -166,6 +166,16 @@ func TestReturnRule(t *testing.T) {
 			t.Errorf("returned runs %+v, want none", got.Returns)
 		}
 	})
+	t.Run("a switch to another editor on the same project isn't a focus change, since app_hash is local (DESIGN 6.5)", func(t *testing.T) {
+		got := silence(event.AppEditor, 451, func(b *tl) {
+			b.os(at(300), &event.OSFocus{AppClass: event.AppEditor, AppHash: "a_cursor", FocusProject: "p_1",
+				HostedSessions: []string{"s_1"}})
+			typedPrompt(451)(b)
+		}).run(t, Device{})
+		if len(got.Returns) != 1 {
+			t.Errorf("returned runs %+v, want one", got.Returns)
+		}
+	})
 	t.Run("a focus change during the silence rules the return out", func(t *testing.T) {
 		got := silence(event.AppTerminal, 451, func(b *tl) {
 			b.focus(at(300), event.AppBrowser, "")

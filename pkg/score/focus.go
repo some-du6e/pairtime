@@ -17,7 +17,6 @@ type focusRec struct {
 	class   event.AppClass
 	project string
 	hosted  []string
-	app     string // app_hash; local, so absent from shareable records
 }
 
 // noFocus is what holds the foreground before the first os.focus record.
@@ -31,9 +30,12 @@ func (f *focusRec) hosts(key string) bool {
 // sameWindow reports whether g is the same foreground window as f, so
 // that moving from f to g is no focus change. A new record for the same
 // window, which the agent writes when a harness session starts or ends
-// under it, isn't one.
+// under it, isn't one. It compares only what a ledger record shares, the
+// app class and the project: app_hash is local, so the server's exact
+// re-score (DESIGN 6.5) never sees it, and two apps of one class on one
+// project count as one window on both sides.
 func (f *focusRec) sameWindow(g *focusRec) bool {
-	return f.class == g.class && f.project == g.project && f.app == g.app
+	return f.class == g.class && f.project == g.project
 }
 
 // focusLine is the foreground over time, from os.focus records.
@@ -46,7 +48,7 @@ func buildFocus(recs []event.Event) *focusLine {
 	for i, e := range recs {
 		if d, ok := e.Data.(*event.OSFocus); ok {
 			fl.recs = append(fl.recs, &focusRec{pos: i, t: e.T, class: d.AppClass,
-				project: d.FocusProject, hosted: d.HostedSessions, app: d.AppHash})
+				project: d.FocusProject, hosted: d.HostedSessions})
 		}
 	}
 	return fl
