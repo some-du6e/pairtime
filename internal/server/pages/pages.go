@@ -1,16 +1,17 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-// Package pages serves pairtimed's static pages (WP-SV14): the privacy
-// notice at /privacy (DESIGN 4.4, 8.6) and the definition of evidence
-// levels and bands at /docs/evidence (DESIGN 6.4). It also holds the
-// sign-up gate that Hack Club Auth sign-in asks before it creates an
+// Package pages serves pairtimed's pages (WP-SV14): the home page at /,
+// the privacy notice at /privacy (DESIGN 4.4, 8.6) and the definition of
+// evidence levels and bands at /docs/evidence (DESIGN 6.4). It also holds
+// the sign-up gate that Hack Club Auth sign-in asks before it creates an
 // account (DESIGN 8.6, 10.2).
 //
-// Each page is a Markdown template in this directory: privacy.md and
-// evidence/<version>.md. New renders all of them once, from the
-// configuration and the retention schedule, so serving a page only copies
-// bytes, and a mistake in a template stops pairtimed at start instead of
-// reaching a reader.
+// Each page is a Markdown template in this directory: home.md, privacy.md
+// and evidence/<version>.md. New renders all of them once, from the
+// configuration and the retention schedule, so serving a static page only
+// copies bytes, and a mistake in a template stops pairtimed at start
+// instead of reaching a reader. The home page's header shows the visitor's
+// sign-in, so that one page goes through the layout per request (home.go).
 //
 // The privacy notice's retention tables come from the same
 // retention.Policy the retention jobs run. The controller's name and
@@ -42,6 +43,7 @@ import (
 	"errors"
 	"fmt"
 	"html/template"
+	"io"
 	"io/fs"
 	"net/http"
 	"path"
@@ -54,7 +56,7 @@ import (
 	"github.com/some-du6e/pairtime/internal/server/retention"
 )
 
-//go:embed layout.html style.css privacy.md evidence/*.md
+//go:embed layout.html style.css home.md privacy.md evidence/*.md
 var files embed.FS
 
 // SourceURL is where the code this server runs is published, which AGPL-3.0
@@ -140,7 +142,12 @@ type Site struct {
 	// server runs.
 	current  []byte
 	evidence []evidencePage // oldest first
-	csp      string
+	// homeSignIn and homeNoSignIn are home.md rendered, for a server with
+	// sign-in and one without.
+	homeSignIn, homeNoSignIn template.HTML
+	layout                   *layout
+	// csp allows no form, and cspForm lets a form post to this server.
+	csp, cspForm string
 	// Signups is the sign-up gate. pairtimed passes its MayCreate to HCA
 	// sign-in (WP-SV2), which asks it before it creates an account.
 	Signups *Signups
@@ -190,7 +197,7 @@ func New(o Options) (*Site, error) {
 			return retention.Days(e.Days), nil
 		},
 	}
-	s := &Site{csp: l.csp}
+	s := &Site{csp: l.csp, cspForm: l.cspForm, layout: l}
 	if s.privacy, err = l.page("Privacy notice", "privacy.md", data, funcs); err != nil {
 		return nil, err
 	}
@@ -199,6 +206,9 @@ func New(o Options) (*Site, error) {
 	}
 	if s.current, ok = s.evidenceFor(rv); !ok {
 		return nil, fmt.Errorf("pages: no evidence definition covers scoring %s; add internal/server/pages/evidence/%s.md (DESIGN 6.4, 6.6)", rv, rv)
+	}
+	if err := s.renderHome(o); err != nil {
+		return nil, err
 	}
 	s.Signups = &Signups{open: o.SignupsOpen, operators: make(map[string]bool)}
 	for _, sub := range o.Operators {
@@ -210,15 +220,15 @@ func New(o Options) (*Site, error) {
 // Register adds the pages to mux.
 func (s *Site) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /privacy", func(w http.ResponseWriter, _ *http.Request) {
-		writePage(w, http.StatusOK, s.privacy, s.csp, "no-cache")
+		writePage(w, http.StatusOK, s.privacy, s.csp, "no-cache", "no-referrer")
 	})
 	mux.HandleFunc("GET /docs/evidence", func(w http.ResponseWriter, _ *http.Request) {
-		writePage(w, http.StatusOK, s.current, s.csp, "no-cache")
+		writePage(w, http.StatusOK, s.current, s.csp, "no-cache", "no-referrer")
 	})
 	mux.HandleFunc("GET /docs/evidence/{version}", func(w http.ResponseWriter, r *http.Request) {
 		if v, ok := parseVersion(r.PathValue("version")); ok {
 			if page, found := s.evidenceFor(v); found {
-				writePage(w, http.StatusOK, page, s.csp, "no-cache")
+				writePage(w, http.StatusOK, page, s.csp, "no-cache", "no-referrer")
 				return
 			}
 		}
@@ -239,13 +249,13 @@ func (s *Site) evidenceFor(v version) ([]byte, bool) {
 }
 
 // writePage writes a rendered page. The CSP allows nothing but the page's
-// own stylesheet.
-func writePage(w http.ResponseWriter, code int, page []byte, csp, cache string) {
+// own stylesheet, and a form only where csp says so.
+func writePage(w http.ResponseWriter, code int, page []byte, csp, cache, referrer string) {
 	h := w.Header()
 	h.Set("Content-Type", "text/html; charset=utf-8")
 	h.Set("Content-Security-Policy", csp)
 	h.Set("X-Content-Type-Options", "nosniff")
-	h.Set("Referrer-Policy", "no-referrer")
+	h.Set("Referrer-Policy", referrer)
 	h.Set("Cache-Control", cache)
 	w.WriteHeader(code)
 	w.Write(page)
@@ -253,20 +263,30 @@ func writePage(w http.ResponseWriter, code int, page []byte, csp, cache string) 
 
 // layout wraps rendered Markdown in layout.html.
 type layout struct {
-	tmpl    *template.Template
-	css     string
-	csp     string
-	version string
+	tmpl *template.Template
+	css  string
+	// csp allows no form, and cspForm lets a form post to this server.
+	csp, cspForm string
+	version      string
 	// code is where the footer links the code this server runs.
 	code string
 }
 
 type layoutData struct {
-	Title   string
+	// Title heads the browser tab, before "pairtime". The home page has
+	// none, so its tab says "pairtime" alone.
+	Title string
+	// Description is the page's meta description, or "" for none.
+	Description string
+	// Class is the body's class, or "" for none.
+	Class   string
 	CSS     template.CSS
 	Body    template.HTML
 	Version string
 	Source  string
+	// Account is the sign-in area in the header, which only the home page
+	// has.
+	Account *account
 }
 
 func newLayout(version, code string) (*layout, error) {
@@ -280,42 +300,58 @@ func newLayout(version, code string) (*layout, error) {
 	}
 	// The stylesheet is inline, so the CSP names it by its hash.
 	sum := sha256.Sum256(css)
-	csp := "default-src 'none'; style-src 'sha256-" + base64.StdEncoding.EncodeToString(sum[:]) +
-		"'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
-	return &layout{tmpl: t, css: string(css), csp: csp, version: version, code: code}, nil
+	policy := func(formAction string) string {
+		return "default-src 'none'; style-src 'sha256-" + base64.StdEncoding.EncodeToString(sum[:]) +
+			"'; base-uri 'none'; form-action " + formAction + "; frame-ancestors 'none'"
+	}
+	return &layout{tmpl: t, css: string(css), csp: policy("'none'"), cspForm: policy("'self'"), version: version, code: code}, nil
 }
 
 // page executes the Markdown template name with data, renders it and wraps
 // it in the layout.
 func (l *layout) page(title, name string, data any, funcs texttemplate.FuncMap) ([]byte, error) {
+	body, err := l.body(name, data, funcs)
+	if err != nil {
+		return nil, err
+	}
+	var out bytes.Buffer
+	if err := l.wrap(&out, layoutData{Title: title, Body: body}); err != nil {
+		return nil, err
+	}
+	return out.Bytes(), nil
+}
+
+// body executes the Markdown template name with data and renders it.
+func (l *layout) body(name string, data any, funcs texttemplate.FuncMap) (template.HTML, error) {
 	src, err := fs.ReadFile(files, name)
 	if err != nil {
-		return nil, fmt.Errorf("pages: %w", err)
+		return "", fmt.Errorf("pages: %w", err)
 	}
 	t, err := texttemplate.New(path.Base(name)).Funcs(funcs).Parse(string(src))
 	if err != nil {
-		return nil, fmt.Errorf("pages: %w", err)
+		return "", fmt.Errorf("pages: %w", err)
 	}
 	var md strings.Builder
 	if err := t.Execute(&md, data); err != nil {
-		return nil, fmt.Errorf("pages: %w", err)
+		return "", fmt.Errorf("pages: %w", err)
 	}
 	body, err := render(md.String())
 	if err != nil {
-		return nil, fmt.Errorf("pages: %s: %w", name, err)
+		return "", fmt.Errorf("pages: %s: %w", name, err)
 	}
-	var out bytes.Buffer
-	err = l.tmpl.Execute(&out, layoutData{
-		Title:   title,
-		CSS:     template.CSS(l.css),
-		Body:    template.HTML(body),
-		Version: l.version,
-		Source:  l.code,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("pages: %w", err)
+	return template.HTML(body), nil
+}
+
+// wrap writes d to w through layout.html, with the stylesheet, the version
+// and the code link filled in.
+func (l *layout) wrap(w io.Writer, d layoutData) error {
+	d.CSS = template.CSS(l.css)
+	d.Version = l.version
+	d.Source = l.code
+	if err := l.tmpl.Execute(w, d); err != nil {
+		return fmt.Errorf("pages: %w", err)
 	}
-	return out.Bytes(), nil
+	return nil
 }
 
 // evidenceData is what an evidence definition's template reads.
