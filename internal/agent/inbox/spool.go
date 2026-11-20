@@ -32,6 +32,9 @@ const MaxSpool = 256 << 20
 // ErrSpoolFull means the spool is over MaxSpool.
 var ErrSpoolFull = errors.New("inbox: the spool is full")
 
+// maxSpool is MaxSpool, as a variable that tests can lower.
+var maxSpool int64 = MaxSpool
+
 // appendTries bounds how often Append writes a message again because a
 // drain took the spool while it was writing.
 const appendTries = 4
@@ -91,7 +94,7 @@ func appendOnce(dir, name string, rec []byte) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	if opened.Size()+int64(len(rec)) > MaxSpool {
+	if opened.Size()+int64(len(rec)) > maxSpool {
 		return false, ErrSpoolFull
 	}
 	if _, err := f.Write(rec); err != nil {
@@ -123,6 +126,10 @@ type DrainResult struct {
 	// Bad is how many lines weren't a message the agent takes, such as a
 	// record cut short by a killed sender. They are skipped.
 	Bad int
+	// Busy is why the spool couldn't be taken this time, as when senders
+	// on Windows kept it open throughout. Its messages wait for the next
+	// drain.
+	Busy error
 }
 
 // renameTries and renameWait bound how long Drain waits for a sender on
@@ -144,27 +151,27 @@ const (
 // (DESIGN 3.5).
 //
 // When the sink fails, Drain stops and returns the error. The file stays,
-// and the next Drain reads it again.
+// and the next Drain reads it again. A spool it couldn't take is not an
+// error but res.Busy, and waits for the next Drain.
 func Drain(dir string, sink Sink, now func() time.Time) (DrainResult, error) {
-	var res DrainResult
-	takeErr := take(dir)
+	res := DrainResult{Busy: take(dir)}
 	names, err := taken(dir)
 	if err != nil {
-		return res, errors.Join(takeErr, err)
+		return res, err
 	}
 	for _, name := range names {
 		delivered, bad, err := drainFile(name, sink, now)
 		res.Delivered += delivered
 		res.Bad += bad
 		if err != nil {
-			return res, errors.Join(takeErr, err)
+			return res, err
 		}
 		if err := retry(func() error { return os.Remove(name) }); err != nil && !errors.Is(err, fs.ErrNotExist) {
-			return res, errors.Join(takeErr, err)
+			return res, err
 		}
 		res.Files++
 	}
-	return res, takeErr
+	return res, nil
 }
 
 // take renames the spool to a name that sorts after every file taken

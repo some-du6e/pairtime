@@ -107,7 +107,9 @@ func Listen(ep Endpoint, opts Options) (*Server, error) {
 		if sockErr = s.listenSocket(); sockErr == nil {
 			return s, nil
 		}
-		if ep.Pipe == "" {
+		// An agent that already answers on the socket gets every message
+		// first, so a pipe of this one's would carry nothing.
+		if ep.Pipe == "" || errors.Is(sockErr, ErrInUse) {
 			return nil, sockErr
 		}
 	}
@@ -147,21 +149,18 @@ func (s *Server) selfTest(ln *net.UnixListener) error {
 	deadline := time.Now().Add(selfTestTimeout)
 	ctx, cancel := context.WithDeadline(context.Background(), deadline)
 	defer cancel()
-	sent := make(chan error, 1)
-	go func() {
-		c, err := dialSocket(ctx, s.ep.Socket, s.want)
-		if err != nil {
-			sent <- err
-			return
-		}
-		conn := &Conn{c: c, via: inbox.ViaSocket}
-		defer conn.Close()
-		sent <- conn.Send(ctx, probe)
-	}()
 	if err := ln.SetDeadline(deadline); err != nil {
 		return err
 	}
 	defer ln.SetDeadline(time.Time{})
+	sent := make(chan error, 1)
+	go func() {
+		err := s.probe(ctx, probe)
+		if err != nil {
+			ln.SetDeadline(time.Now()) // wakes the Accept below
+		}
+		sent <- err
+	}()
 	got := false
 	sink := sinkFunc(func(d inbox.Delivery) error {
 		if d.ID != probe.ID {
@@ -179,6 +178,17 @@ func (s *Server) selfTest(ln *net.UnixListener) error {
 		s.handle(c, sink, deadline)
 	}
 	return <-sent
+}
+
+// probe is the sender's half of the self-test.
+func (s *Server) probe(ctx context.Context, m inbox.Message) error {
+	c, err := dialSocket(ctx, s.ep.Socket, s.want)
+	if err != nil {
+		return err
+	}
+	conn := &Conn{c: c, via: inbox.ViaSocket}
+	defer conn.Close()
+	return conn.Send(ctx, m)
 }
 
 // Via says whether the server is on the socket or on the pipe.

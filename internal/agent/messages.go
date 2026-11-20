@@ -102,6 +102,9 @@ func (a *agent) drain(j *inbox.Journal) {
 	if err != nil {
 		a.log.Warn("draining the inbox", "err", err)
 	}
+	if res.Busy != nil {
+		a.log.Warn("the inbox's spool waits for the next drain", "err", res.Busy)
+	}
 	if res.Delivered > 0 || res.Bad > 0 {
 		a.log.Info("drained the inbox", "files", res.Files, "messages", res.Delivered, "bad_lines", res.Bad)
 	}
