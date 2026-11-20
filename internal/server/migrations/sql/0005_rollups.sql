@@ -8,8 +8,10 @@
 --
 -- rollup_minutes is each device's latest revision of each minute, as the
 -- rollups applied it: its state, its four slots as JSON (project key,
--- credited milliseconds, activity kind, evidence level), the agent's
--- running time, and the local day the minute counts toward. Apply merges
+-- credited milliseconds, activity kind, evidence level), the agent's time
+-- on its own as a JSON object of milliseconds by project key (the bucket's
+-- agent_only, D-bucket-agent-only), and the local day the minute counts
+-- toward. Apply merges
 -- an account's devices from these rows, one human minute per wall-clock
 -- minute (SM 3.4), so the rollups come out the same whatever order the
 -- revisions arrive in. Its retention job deletes rows with the minute
@@ -22,7 +24,7 @@ CREATE TABLE rollup_minutes (
     rev BIGINT NOT NULL,
     state TEXT NOT NULL,
     slots TEXT NOT NULL,
-    agent_ms BIGINT NOT NULL,
+    agent_only TEXT NOT NULL,
     day TEXT NOT NULL,
     PRIMARY KEY (user_id, minute_ms, device_id)
 );
@@ -32,9 +34,10 @@ CREATE INDEX rollup_minutes_minute_ms ON rollup_minutes (minute_ms);
 -- rollups_daily is an account's time per project key, local day
 -- (YYYY-MM-DD in the account's time zone) and activity kind: credited
 -- milliseconds by evidence level, with pending minutes kept apart from
--- final ones. The row whose activity_kind is empty holds the agent's
--- running time in that project and day, which has no kind or level. Apply
--- moves it by additive upserts; it stays as long as the account.
+-- final ones. The row whose activity_kind is empty holds the agent's time
+-- on its own in that project and day, the chess clock's other side (SM
+-- 2.6), which has no kind or level. Apply moves it by additive upserts; it
+-- stays as long as the account.
 CREATE TABLE rollups_daily (
     user_id TEXT NOT NULL REFERENCES users (id),
     project TEXT NOT NULL,
@@ -46,8 +49,8 @@ CREATE TABLE rollups_daily (
     pending_a_ms BIGINT NOT NULL DEFAULT 0,
     pending_b_ms BIGINT NOT NULL DEFAULT 0,
     pending_c_ms BIGINT NOT NULL DEFAULT 0,
-    agent_final_ms BIGINT NOT NULL DEFAULT 0,
-    agent_pending_ms BIGINT NOT NULL DEFAULT 0,
+    agent_only_final_ms BIGINT NOT NULL DEFAULT 0,
+    agent_only_pending_ms BIGINT NOT NULL DEFAULT 0,
     PRIMARY KEY (user_id, project, day, activity_kind)
 );
 

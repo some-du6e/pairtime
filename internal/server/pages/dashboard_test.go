@@ -217,12 +217,6 @@ func TestDemoPage(t *testing.T) {
 			notWant: []string{"Sign in with Hack Club</a>", "Sign-ups are closed"},
 		},
 		{
-			name:    "the agent's time is said to go to the project you were working in, which is all a bucket can tell (docs/errata/2026-11-20-server-chess-clock.md)",
-			signIn:  signInOn(""),
-			section: "today",
-			want:    []string{"Claude Code&#39;s time goes to the project you were working in at the time."},
-		},
-		{
 			name:    "the page has no script, no form, no style attribute and no SVG",
 			signIn:  signInOn(""),
 			notWant: []string{"<script", "<form", " style=", "<svg"},
@@ -613,9 +607,9 @@ func TestOwnerDashboard(t *testing.T) {
 			want: []string{
 				"<title>Your dashboard · pairtime</title>",
 				"<h1>Your dashboard</h1>",
-				"Your agent ran for 3h 32m.",
+				"Your agent worked on its own for 3h 32m.",
 				`<p class="face"><span>Your agent</span> <strong>2h 40m</strong>`,
-				"Two clocks, not a score. Your time and your agent&#39;s overlap",
+				"Two clocks, not a score. Your agent&#39;s clock counts the time it worked on a project with none of your time counted there",
 				`<span class="kname">Following your agent as it works</span>`,
 				`<span class="agent">Your agent 15h 5m</span>`,
 			},

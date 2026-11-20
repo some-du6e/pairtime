@@ -31,7 +31,9 @@ type device struct {
 	rev     int64
 	pending bool
 	slots   [slotsPerMinute]slot
-	agentMS int64
+	// agentOnly is the agent's time on its own, in milliseconds by project
+	// key, as the bucket's agent_only says; nil when it says none.
+	agentOnly map[string]int64
 	// day is the local day the minute counts toward.
 	day string
 }
@@ -45,8 +47,8 @@ type slot struct {
 }
 
 // minuteOf checks b and turns it into the device row Apply stores. Seconds
-// become whole milliseconds: credit moves in steps of 0.5 s and agent time
-// in whole seconds, so nothing rounds away.
+// become whole milliseconds: credit and agent_only move in steps of 0.5 s,
+// so nothing rounds away.
 func minuteOf(b Bucket) (device, error) {
 	bad := func(format string, args ...any) (device, error) {
 		return device{}, fmt.Errorf("rollup: %s's minute %d on %s: %s", b.Account, b.Minute, b.Device, fmt.Sprintf(format, args...))
@@ -67,16 +69,26 @@ func minuteOf(b Bucket) (device, error) {
 	case !finite(b.AgentRunningS) || b.AgentRunningS < 0 || b.AgentRunningS > 60:
 		return bad("agent_running_s is %v, not 0 to 60", b.AgentRunningS)
 	}
-	d := device{id: b.Device, rev: int64(b.Rev), pending: b.State == "pending", agentMS: int64(math.Round(b.AgentRunningS * 1000))}
+	d := device{id: b.Device, rev: int64(b.Rev), pending: b.State == "pending"}
+	for p, s := range b.AgentOnly {
+		switch {
+		case p == "":
+			return bad("agent_only gives seconds to no project")
+		case !finite(s) || s < 0 || s > 60 || s*2 != math.Trunc(s*2):
+			return bad("agent_only gives %s %v seconds, not 0 to 60 in steps of 0.5", p, s)
+		case s > 0:
+			if d.agentOnly == nil {
+				d.agentOnly = make(map[string]int64, len(b.AgentOnly))
+			}
+			d.agentOnly[p] = int64(math.Round(s * 1000))
+		}
+	}
 	for i, s := range b.Slots {
 		cr := s.CreditedS
 		if !finite(cr) || cr < 0 || cr > 15 || cr*2 != math.Trunc(cr*2) {
 			return bad("slot %d credits %v seconds, not 0 to 15 in steps of 0.5", i, cr)
 		}
 		if cr == 0 {
-			// An uncredited slot keeps only its project, which places the
-			// agent's time.
-			d.slots[i] = slot{Project: s.Project}
 			continue
 		}
 		switch {
@@ -103,28 +115,33 @@ type merged struct {
 		slot
 		pending bool
 	}
-	// agent is the agent time that counts, from the device that ran the
-	// most of it, split over the projects that device's slots name.
+	// agent is the agent's time on its own that counts, by project, in
+	// project key order.
 	agent []share
-	// agentPending says whether that device's bucket is pending.
-	agentPending bool
 	// concurrent says two devices credit the same slot.
 	concurrent bool
 }
 
-// share is the agent's milliseconds in one project.
+// share is the agent's milliseconds on its own in one project, and
+// whether the bucket they came from is pending.
 type share struct {
 	project string
 	ms      int64
+	pending bool
 }
 
 // merge merges devs' revisions of one minute. In each slot the device
 // with the most credited seconds wins, then the one whose credit is
 // keyboard-backed (level A, input_keys), then the lower device_id, and the
 // others are dropped; two devices crediting a slot raise
-// concurrent_devices (SM 3.4). The agent's time is a wall-clock measure
-// too, so the device that ran an agent longest counts and the others
-// don't add to it.
+// concurrent_devices (SM 3.4).
+//
+// The agent's time on its own is wall-clock time too. In each project the
+// device that reports the most of it counts, the lower device_id on a tie,
+// and the others don't add to it. It never takes more than the part of the
+// minute that the merged credit in that project leaves: a second another
+// device credited to the project is covered by a person, so it isn't the
+// agent's alone (SM 2.6).
 func merge(devs []device) merged {
 	var m merged
 	for i := range slotsPerMinute {
@@ -148,16 +165,30 @@ func merge(devs []device) merged {
 			m.slots[i].pending = win.pending
 		}
 	}
-	var agent *device
+	credited := make(map[string]int64)
+	for _, s := range m.slots {
+		credited[s.Project] += s.MS
+	}
+	best := make(map[string]*device)
+	var projects []string
 	for j := range devs {
 		d := &devs[j]
-		if d.agentMS > 0 && (agent == nil || d.agentMS > agent.agentMS || (d.agentMS == agent.agentMS && d.id < agent.id)) {
-			agent = d
+		for p, ms := range d.agentOnly {
+			w, ok := best[p]
+			if !ok {
+				projects = append(projects, p)
+			}
+			if !ok || ms > w.agentOnly[p] || (ms == w.agentOnly[p] && d.id < w.id) {
+				best[p] = d
+			}
 		}
 	}
-	if agent != nil {
-		m.agent = split(agent.agentMS, agent.slots)
-		m.agentPending = agent.pending
+	slices.Sort(projects)
+	for _, p := range projects {
+		w := best[p]
+		if ms := min(w.agentOnly[p], 60_000-credited[p]); ms > 0 {
+			m.agent = append(m.agent, share{project: p, ms: ms, pending: w.pending})
+		}
 	}
 	return m
 }
@@ -174,44 +205,12 @@ func beats(d, w *device, i int) bool {
 	return d.id < w.id
 }
 
-// split shares ms out over the projects slots name, by how many slots name
-// each, in the order they first appear; the milliseconds that don't divide
-// evenly go to the first. With no project named, it all goes to "", which
-// the dashboard shows as no project.
-func split(ms int64, slots [slotsPerMinute]slot) []share {
-	var out []share
-	named := int64(0)
-	for _, s := range slots {
-		if s.Project == "" {
-			continue
-		}
-		named++
-		i := slices.IndexFunc(out, func(x share) bool { return x.project == s.Project })
-		if i < 0 {
-			out = append(out, share{project: s.Project})
-			i = len(out) - 1
-		}
-		out[i].ms++ // counts slots until the shares are worked out
-	}
-	if named == 0 {
-		return []share{{project: "", ms: ms}}
-	}
-	given := int64(0)
-	for i := range out {
-		n := out[i].ms
-		out[i].ms = ms * n / named
-		given += out[i].ms
-	}
-	out[0].ms += ms - given
-	return out
-}
-
 // dayKey is a rollups_daily row's key, within an account.
 type dayKey struct{ project, day, kind string }
 
 // columns are a rollups_daily row's values, in its column order:
 // final_a_ms, final_b_ms, final_c_ms, pending_a_ms, pending_b_ms,
-// pending_c_ms, agent_final_ms, agent_pending_ms.
+// pending_c_ms, agent_only_final_ms, agent_only_pending_ms.
 type columns [8]int64
 
 // The index of the agent's final and pending columns.
@@ -242,7 +241,7 @@ func (m merged) contribution(day string) delta {
 	for _, a := range m.agent {
 		k := dayKey{project: a.project, day: day}
 		c := out[k]
-		if m.agentPending {
+		if a.pending {
 			c[agentPending] += a.ms
 		} else {
 			c[agentFinal] += a.ms

@@ -112,7 +112,7 @@ type dashPage struct {
 	// ZonePath is where the time zone form posts.
 	ZonePath string
 	// Agent names the agent in a sentence, and AgentStart at its start or
-	// alone, as in "Your agent ran for 2h".
+	// alone, as in "Your agent worked on its own for 2h".
 	Agent, AgentStart string
 	Today             todayPart
 	Week              weekPart

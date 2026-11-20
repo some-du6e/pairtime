@@ -28,7 +28,7 @@ type Querier interface {
 // loadMinute returns the account's device rows for one minute, in
 // device_id order.
 func loadMinute(ctx context.Context, q Querier, account string, minuteMS int64) ([]device, error) {
-	rows, err := q.QueryContext(ctx, `SELECT device_id, rev, state, slots, agent_ms, day FROM rollup_minutes
+	rows, err := q.QueryContext(ctx, `SELECT device_id, rev, state, slots, agent_only, day FROM rollup_minutes
 WHERE user_id = $1 AND minute_ms = $2 ORDER BY device_id`, account, minuteMS)
 	if err != nil {
 		return nil, fmt.Errorf("rollup: reading a minute: %w", err)
@@ -37,9 +37,12 @@ WHERE user_id = $1 AND minute_ms = $2 ORDER BY device_id`, account, minuteMS)
 	var out []device
 	for rows.Next() {
 		var d device
-		var state, slots string
-		if err := rows.Scan(&d.id, &d.rev, &state, &slots, &d.agentMS, &d.day); err != nil {
+		var state, slots, agentOnly string
+		if err := rows.Scan(&d.id, &d.rev, &state, &slots, &agentOnly, &d.day); err != nil {
 			return nil, fmt.Errorf("rollup: reading a minute: %w", err)
+		}
+		if err := json.Unmarshal([]byte(agentOnly), &d.agentOnly); err != nil {
+			return nil, fmt.Errorf("rollup: minute %d of %s on %s has agent_only %q", minuteMS, account, d.id, agentOnly)
 		}
 		d.pending = state == "pending"
 		var s []slot
@@ -62,15 +65,21 @@ func saveDevice(ctx context.Context, tx writer.Tx, account string, minuteMS int6
 	if err != nil {
 		return err
 	}
+	agentOnly := []byte("{}")
+	if len(d.agentOnly) > 0 {
+		if agentOnly, err = json.Marshal(d.agentOnly); err != nil {
+			return err
+		}
+	}
 	state := "final"
 	if d.pending {
 		state = "pending"
 	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO rollup_minutes (user_id, minute_ms, device_id, rev, state, slots, agent_ms, day)
+	_, err = tx.ExecContext(ctx, `INSERT INTO rollup_minutes (user_id, minute_ms, device_id, rev, state, slots, agent_only, day)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 ON CONFLICT (user_id, minute_ms, device_id) DO UPDATE SET rev = excluded.rev, state = excluded.state,
-slots = excluded.slots, agent_ms = excluded.agent_ms, day = excluded.day`,
-		account, minuteMS, d.id, d.rev, state, string(slots), d.agentMS, d.day)
+slots = excluded.slots, agent_only = excluded.agent_only, day = excluded.day`,
+		account, minuteMS, d.id, d.rev, state, string(slots), string(agentOnly), d.day)
 	if err != nil {
 		return fmt.Errorf("rollup: storing a minute: %w", err)
 	}
@@ -93,7 +102,7 @@ func addDaily(ctx context.Context, tx writer.Tx, account string, d delta) error 
 			continue
 		}
 		_, err := tx.ExecContext(ctx, `INSERT INTO rollups_daily (user_id, project, day, activity_kind,
-final_a_ms, final_b_ms, final_c_ms, pending_a_ms, pending_b_ms, pending_c_ms, agent_final_ms, agent_pending_ms)
+final_a_ms, final_b_ms, final_c_ms, pending_a_ms, pending_b_ms, pending_c_ms, agent_only_final_ms, agent_only_pending_ms)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 ON CONFLICT (user_id, project, day, activity_kind) DO UPDATE SET
 final_a_ms = rollups_daily.final_a_ms + excluded.final_a_ms,
@@ -102,8 +111,8 @@ final_c_ms = rollups_daily.final_c_ms + excluded.final_c_ms,
 pending_a_ms = rollups_daily.pending_a_ms + excluded.pending_a_ms,
 pending_b_ms = rollups_daily.pending_b_ms + excluded.pending_b_ms,
 pending_c_ms = rollups_daily.pending_c_ms + excluded.pending_c_ms,
-agent_final_ms = rollups_daily.agent_final_ms + excluded.agent_final_ms,
-agent_pending_ms = rollups_daily.agent_pending_ms + excluded.agent_pending_ms`,
+agent_only_final_ms = rollups_daily.agent_only_final_ms + excluded.agent_only_final_ms,
+agent_only_pending_ms = rollups_daily.agent_only_pending_ms + excluded.agent_only_pending_ms`,
 			account, k.project, k.day, k.kind, c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7])
 		if err != nil {
 			return fmt.Errorf("rollup: adding to %s's %s: %w", account, k.day, err)
@@ -202,21 +211,22 @@ func SetZone(ctx context.Context, tx writer.Tx, account, name string) error {
 
 // Day is one rollups_daily row: an account's time in one project, local
 // day and activity kind, in milliseconds. The row whose Kind is "" holds
-// the agent's running time in that project and day.
+// the agent's time on its own in that project and day.
 type Day struct {
 	Project, Day, Kind string
 	// FinalMS and PendingMS are credited time by evidence level, in
 	// Levels order.
 	FinalMS, PendingMS [3]int64
-	// AgentFinalMS and AgentPendingMS are the agent's running time.
-	AgentFinalMS, AgentPendingMS int64
+	// AgentOnlyFinalMS and AgentOnlyPendingMS are the agent's time on its
+	// own (SM 2.6, D-bucket-agent-only).
+	AgentOnlyFinalMS, AgentOnlyPendingMS int64
 }
 
 // Read returns the account's rollups_daily rows for the days from to to,
 // both YYYY-MM-DD and included.
 func Read(ctx context.Context, q Querier, account, from, to string) ([]Day, error) {
 	rows, err := q.QueryContext(ctx, `SELECT project, day, activity_kind,
-final_a_ms, final_b_ms, final_c_ms, pending_a_ms, pending_b_ms, pending_c_ms, agent_final_ms, agent_pending_ms
+final_a_ms, final_b_ms, final_c_ms, pending_a_ms, pending_b_ms, pending_c_ms, agent_only_final_ms, agent_only_pending_ms
 FROM rollups_daily WHERE user_id = $1 AND day >= $2 AND day <= $3
 ORDER BY day, project, activity_kind`, account, from, to)
 	if err != nil {
@@ -228,7 +238,7 @@ ORDER BY day, project, activity_kind`, account, from, to)
 		var d Day
 		if err := rows.Scan(&d.Project, &d.Day, &d.Kind,
 			&d.FinalMS[0], &d.FinalMS[1], &d.FinalMS[2], &d.PendingMS[0], &d.PendingMS[1], &d.PendingMS[2],
-			&d.AgentFinalMS, &d.AgentPendingMS); err != nil {
+			&d.AgentOnlyFinalMS, &d.AgentOnlyPendingMS); err != nil {
 			return nil, fmt.Errorf("rollup: reading %s's days: %w", account, err)
 		}
 		out = append(out, d)

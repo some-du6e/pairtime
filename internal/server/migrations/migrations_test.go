@@ -187,7 +187,7 @@ func TestChecksum(t *testing.T) {
 var pinned = []struct{ id, sha256 string }{
 	{"0001_ops_probe", "03e43c38a5ae6670785d28dd6926750ec177a35eba1ec04a94537a7d07fd2738"},
 	{"0002_accounts", "ca7374033c9d51e025ce6a6ee719b4d288d8896801ea811d83cb2e6a505a03b2"},
-	{"0005_rollups", "d4b95e512a9d899b52b47f715adbf7fdda182c87d6daaeec9967c0300fa46596"},
+	{"0005_rollups", "b8577cc0e685c6369eed74e2f0d85014e7a2da7203dfaedd09db1aedfc0dba95"},
 }
 
 func TestPinnedChecksums(t *testing.T) {

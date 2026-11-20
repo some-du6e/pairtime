@@ -27,8 +27,15 @@
 // zone moves the minutes counted after the change; days already counted
 // stay where they are.
 //
+// The agent's side of the chess clock is the bucket's agent_only: per
+// project key, the seconds a turn of that project ran in the minute that
+// weren't credited to it (SM 2.6, D-bucket-agent-only). The rollups count
+// it per project, so the server's clock is the device's. agent_running_s,
+// which overlaps the owner's time and names no project, counts toward
+// nothing here.
+//
 // This file is the contract between ingest (WP-SV4) and the rollups, fixed
-// by the dashboard wave. Three fields differ from the wave's first sketch:
+// by the dashboard wave. Four fields differ from the wave's first sketch:
 //
 //   - Account is a string, the users row's id. Accounts are keyed by a
 //     UUIDv7 in TEXT (migration 0002, package store's rules), so there is
@@ -39,6 +46,8 @@
 //     the uncredited seconds are float64 in pkg/event too.
 //   - A slot's lbl is a list, as in pkg/event: a slot can rest on more than
 //     one side door (DESIGN 4.1 E-6).
+//   - AgentOnly is the bucket's agent_only, which D-bucket-agent-only added
+//     after the sketch.
 package rollup
 
 import (
@@ -74,8 +83,12 @@ type Bucket struct {
 	// CreditedS is the sum of the slots' CreditedS, at most 60.
 	CreditedS float64
 	// AgentRunningS is the seconds an agent turn was running in this
-	// minute, in any project (SM 5.1).
+	// minute, in any project (SM 5.1). The rollups don't count it.
 	AgentRunningS float64
+	// AgentOnly is agent_only: for each project key, the seconds a turn of
+	// that project ran in this minute that weren't credited to it, 0 to 60
+	// in steps of 0.5 (SM 2.6, D-bucket-agent-only).
+	AgentOnly map[string]float64
 	// Uncredited is the seconds looked at and not credited, by uncredited
 	// reason code (SM 5.2).
 	Uncredited map[string]float64
@@ -208,6 +221,9 @@ func FromEvent(account string, m event.MinuteBucket) Bucket {
 			b.Uncredited[string(r)] = s
 		}
 	}
+	// TODO(WP-EV3): copy m's agent_only into b.AgentOnly once pkg/event's
+	// MinuteBucket has it (D-bucket-agent-only). Until then a bucket from
+	// ingest has no agent time on its own.
 	return b
 }
 

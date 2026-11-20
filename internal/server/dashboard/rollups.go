@@ -12,7 +12,8 @@ import (
 // AgentName is what a real dashboard calls the agent. Tier-1 buckets
 // don't say which harness ran in a minute (DESIGN 4.3), so until the
 // dashboard reads the harness names the devices' labels list, it names
-// the agent this way rather than guess.
+// the agent this way rather than guess. Its time is the bucket's
+// agent_only, per project (SM 2.6, D-bucket-agent-only).
 const AgentName = "your agent"
 
 // Rollups is the Source of a signed-in account's dashboard: its
@@ -46,8 +47,8 @@ func (r Rollups) View(ctx context.Context, account string, now time.Time) (View,
 		}
 		if day.Kind == "" {
 			rows = append(rows,
-				Row{Day: day.Day, Project: day.Project, Agent: true, Seconds: seconds(day.AgentFinalMS)},
-				Row{Day: day.Day, Project: day.Project, Agent: true, Pending: true, Seconds: seconds(day.AgentPendingMS)})
+				Row{Day: day.Day, Project: day.Project, Agent: true, Seconds: seconds(day.AgentOnlyFinalMS)},
+				Row{Day: day.Day, Project: day.Project, Agent: true, Pending: true, Seconds: seconds(day.AgentOnlyPendingMS)})
 			continue
 		}
 		for i, level := range rollup.Levels {

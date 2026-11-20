@@ -66,7 +66,8 @@ func TestRollupsSumOfBuckets(t *testing.T) {
 	for i := range 300 {
 		// Minutes spread over the 30 days, two devices each crediting
 		// slots of its own, and a minute drawn twice gets a new revision.
-		// Only d1 runs an agent, so its time is the minute's.
+		// Only d1 reports agent_only, so its time is the minute's, less
+		// what both devices credited in that project.
 		minute := monthStart + int64(gen.IntN(MonthDays*1440))*60
 		for _, dev := range []struct {
 			id  string
@@ -77,7 +78,7 @@ func TestRollupsSumOfBuckets(t *testing.T) {
 				b.State = "pending"
 			}
 			if dev.id == "d1" {
-				b.AgentRunningS = float64(gen.IntN(61))
+				b.AgentOnly = map[string]float64{[]string{"p1", "p2"}[gen.IntN(2)]: float64(gen.IntN(121)) / 2}
 			}
 			for _, s := range dev.own {
 				cr := float64(gen.IntN(31)) / 2
@@ -94,6 +95,7 @@ func TestRollupsSumOfBuckets(t *testing.T) {
 	for _, b := range buckets {
 		latest[[2]any{b.Device, b.Minute}] = b
 	}
+	credited := make(map[[2]any]float64) // minute and project to seconds
 	for _, b := range latest {
 		for _, s := range b.Slots {
 			if b.State == "pending" {
@@ -101,8 +103,14 @@ func TestRollupsSumOfBuckets(t *testing.T) {
 			} else {
 				final += s.CreditedS
 			}
+			credited[[2]any{b.Minute, s.Project}] += s.CreditedS
 		}
-		agentTotal += b.AgentRunningS
+	}
+	// A second credited to a project isn't the agent's alone there (SM 2.6).
+	for _, b := range latest {
+		for p, a := range b.AgentOnly {
+			agentTotal += max(0, min(a, 60-credited[[2]any{b.Minute, p}]))
+		}
 	}
 	for _, engine := range storetest.Engines() {
 		t.Run(string(engine)+"/the month's totals are the sum of the latest revisions' credit, final apart from pending", func(t *testing.T) {
@@ -175,7 +183,7 @@ func TestRollupsView(t *testing.T) {
 			zone: "UTC",
 			now:  time.Date(2026, 11, 20, 18, 0, 0, 0, time.UTC),
 			buckets: []rollup.Bucket{
-				{Account: "u1", Device: "d1", Minute: time.Date(2026, 11, 20, 17, 0, 0, 0, time.UTC).Unix(), State: "final", AgentRunningS: 30,
+				{Account: "u1", Device: "d1", Minute: time.Date(2026, 11, 20, 17, 0, 0, 0, time.UTC).Unix(), State: "final", AgentOnly: map[string]float64{"p_0123456789abcdef": 30},
 					Slots: []rollup.Slot{{Project: "p_0123456789abcdef", CreditedS: 15, Kind: "prompting", Level: "A"}}},
 			},
 			check: func(t *testing.T, v View) {
