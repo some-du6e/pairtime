@@ -25,6 +25,7 @@ type fakeOS struct {
 	startErr error
 	started  int
 	stopped  int
+	reads    int
 }
 
 func (f *fakeOS) os() OS {
@@ -49,6 +50,7 @@ func (f *fakeOS) os() OS {
 		Read: func() ([]platform.Proc, error) {
 			f.mu.Lock()
 			defer f.mu.Unlock()
+			f.reads++
 			return slices.Clone(f.procs), f.readErr
 		},
 	}
@@ -240,12 +242,6 @@ func TestWatcherSequences(t *testing.T) {
 					r.mu.Unlock()
 					r.w.Refresh()
 				}, []Record{focusRec(t0.Add(time.Hour+time.Minute), event.AppTerminal, "s_tab2")}, 0, nil, ""},
-				{"a refresh after a scan that changed nothing skips the walk", func(r *rig) {
-					r.os.mu.Lock()
-					r.os.readErr = errors.New("a walk that should not happen")
-					r.os.mu.Unlock()
-					r.w.Refresh()
-				}, nil, 0, nil, ""},
 			},
 		},
 		{
@@ -416,6 +412,35 @@ func TestWatcherLifecycle(t *testing.T) {
 		w.Start()
 		if f.started != 0 {
 			t.Errorf("the source started %d times after Stop", f.started)
+		}
+	})
+	t.Run("a refresh while the known sessions are unchanged doesn't walk the process table", func(t *testing.T) {
+		r := newRig(t, nil)
+		r.os.front(t0, 6100)
+		r.w.sync()
+		reads := func() int {
+			r.os.mu.Lock()
+			defer r.os.mu.Unlock()
+			return r.os.reads
+		}
+		before := reads()
+		for range 3 {
+			r.w.Refresh()
+			r.w.sync()
+		}
+		if n := reads() - before; n != 0 {
+			t.Errorf("%d walks for three refreshes that had nothing new, want none", n)
+		}
+		r.mu.Lock()
+		for id := range r.sessions {
+			delete(r.sessions, id)
+			break
+		}
+		r.mu.Unlock()
+		r.w.Refresh()
+		r.w.sync()
+		if n := reads() - before; n != 1 {
+			t.Errorf("%d walks after a session went, want 1", n)
 		}
 	})
 	t.Run("Status counts the changes the OS reported and the records written", func(t *testing.T) {
