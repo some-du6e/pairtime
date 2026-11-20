@@ -56,6 +56,10 @@ CC4_PUSH_MS = 60_000
 THINK_LEAD_S, ANSWER_LEAD_S, COMPOSE_MAX_S = 120, 60, 300
 COMPOSE_CPS = Fraction(3, 2)
 SUBSTANTIVE_CHARS = 20
+# CC11's threshold, pending Karim's decision (erratum): a prompt fails with
+# fewer key-downs than this share of the characters its typing part
+# credits.
+CC11_SHARE = Fraction(1, 4)
 # DESIGN 6.3: CHALLENGE_K = max(10, 10% of the pool), at most 30.
 CHALLENGE_K_MIN, CHALLENGE_K_MAX = 10, 30
 # DESIGN 6.5: re-scoring starts from a checkpoint at or before W's start
@@ -1072,48 +1076,68 @@ def prompt_lead_ms(p, pc):
     return int(lead * 1000)
 
 
+def hosts(f, p, starts):
+    """Whether a focus record is on the window hosting p's session: a
+    window whose hosted_sessions holds it, or the editor for an IDE
+    session (SM 2.2 rule 6)."""
+    if f is None:
+        return False
+    if p["session_key"] in f["data"].get("hosted_sessions", []):
+        return True
+    return f["data"]["app_class"] == "editor" and ide_session(starts, p["session_key"])
+
+
 def cc11(events, sub, keys, typing, classes):
-    """Typing, module on: in each human prompt's lead window, the key-downs
-    the typing module counted, injected ones aside, against the prompt's
-    typed length, and the injected share. DESIGN gives neither threshold;
-    the scenarios sit where any sensible one agrees (README, errata)."""
+    """Typing, module on: for each human prompt with a typing part, the
+    key-downs the module counted, injected ones aside, in the slots its
+    lead window overlaps whose focus is the window hosting its session,
+    leaving out slots an earlier prompt counted, against the characters
+    its typing part credits, min(typed_len_est, COMPOSE_CPS *
+    COMPOSE_MAX_S), and the injected share. DESIGN gives no threshold, and
+    the one pkg/check will use is pending (README, erratum). The scenarios
+    keep to counts that are at least the credited characters or under a
+    quarter of them, which the erratum's proposal and every stricter reading
+    up to all of them agree on, and a count in between is refused here."""
     counts = {"prompts": 0, "typed_chars": 0, "key_downs": 0, "injected": 0, "too_few_keys": 0,
               "injected_prompts": 0}
     if typing is None:
         return outcome("not_computable", counts, reason="the typing module is off on this device")
     slots = {s["start"]: s for s in typing["slots"]}
     starts = sessions_of(events)
-    items = []
+    used, items = set(), []
     for p in prompts_in(events, sub):
         if automated(p, starts):
             continue
         s = sample_at(events, p["t"])
         idle = s["data"]["idle_keys_s"] if keys else s["data"]["idle_any_s"]
-        f = focus_at(events, p["t"])
-        human = ms(idle) <= KEYS_PRE_MS and f is not None and p["session_key"] in f["data"].get("hosted_sessions", [])
+        human = ms(idle) <= KEYS_PRE_MS and hosts(focus_at(events, p["t"]), p, starts)
         typed = p["data"]["typed_len_est"]
         lead = prompt_lead_ms(p, classes[p["data"]["turn_key"]])
         if not human or not typed or lead is None:
             continue
         counts["prompts"] += 1
         a, b = p["t"] - lead, p["t"]
-        first = a - a % SLOT_MS
         k = inj = 0
-        for st in range(first, b, SLOT_MS):
-            if st in slots:
-                k += slots[st]["keys"]
-                inj += slots[st]["injected"]
+        for st in range(a - a % SLOT_MS, b, SLOT_MS):
+            if st not in slots or st in used or not hosts(focus_at(events, st + SLOT_MS - 1), p, starts):
+                continue
+            used.add(st)
+            k += slots[st]["keys"]
+            inj += slots[st]["injected"]
         hardware = k - inj
+        credited = min(typed, int(COMPOSE_CPS * COMPOSE_MAX_S))
+        few = hardware < CC11_SHARE * credited
+        check(few or hardware >= credited, f"CC11's threshold is pending, and {hardware} key-downs for {credited} "
+                                           "credited characters would rest on it")
         counts["typed_chars"] += typed
         counts["key_downs"] += k
         counts["injected"] += inj
-        few = hardware < typed
         injected = inj > 0
         counts["too_few_keys"] += few
         counts["injected_prompts"] += injected
         if few or injected:
-            items.append({"turn_key": p["data"]["turn_key"], "t": p["t"], "typed_len_est": typed, "key_downs": k,
-                          "injected": inj, "lead_from": a})
+            items.append({"turn_key": p["data"]["turn_key"], "t": p["t"], "typed_len_est": typed,
+                          "credited_chars": credited, "key_downs": k, "injected": inj, "lead_from": a})
     if not counts["prompts"]:
         return outcome("not_computable", counts, reason="no human prompt with typed characters")
     return outcome("fail" if items else "pass", counts, items)

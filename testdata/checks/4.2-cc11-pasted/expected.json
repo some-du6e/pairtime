@@ -102,6 +102,7 @@
           "turn_key": "t_a433d069cb4d",
           "t": 1795423320000,
           "typed_len_est": 60,
+          "credited_chars": 60,
           "key_downs": 3,
           "injected": 0,
           "lead_from": 1795423160000
