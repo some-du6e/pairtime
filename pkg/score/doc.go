@@ -64,10 +64,15 @@
 // rules look ahead: the return rule up to RETURN_GAP_MAX_S plus
 // READ_HORIZON_S, which covers a lead's reach and the reading horizon. So
 // what Step derives for a time stays pending until the latest record is
-// that much later, then becomes final and is output once. A browser run's
-// lookup credit waits for the run's end, so nothing from the run on is
-// final until its end bracket is. Until WP-SC5 adds checkpoints, a State
-// holds every record it was given.
+// that much later, then becomes final and is output once. No record
+// changes what was derived for a time further back than that look-ahead
+// before its own t, so whatever it changes is still pending when it
+// arrives. Where an act's record comes later than that, as a long typed
+// command's does at its end, the windows the act would open before then
+// credit nothing, in every Step alike, and the anchor is final from its
+// record's time. A browser run's lookup credit waits for the run's end, so
+// nothing from the run on is final until its end bracket is. Until WP-SC5
+// adds checkpoints, a State holds every record it was given.
 //
 // # Readings of the spec
 //
@@ -96,9 +101,14 @@
 //   - A `pairtime track` call 10 to 30 s from a prompt of its session is
 //     track_matched and raises no flag, as
 //     docs/errata/2026-11-19-track-match-windows.md proposes.
-//   - The editor in focus on a session's project hosts a session the
+//   - The editor in focus on a session's project hosts a session only the
 //     WakaTime bridge reports, as it does an IDE session, since the bridge
 //     reads it from the editor's wakatime-cli (DESIGN 5.7).
+//   - SM 2.2 rule 2 reads a prompt's declared origin. A turn a stop hook
+//     continued has no prompt.submit and is self_continue as a
+//     continuation; a later stop with stop_hook_active doesn't change a
+//     typed prompt's origin, since it can come long after the prompt's
+//     minutes are final.
 //
 // WP-SC2 adds these:
 //

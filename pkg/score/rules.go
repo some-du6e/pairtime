@@ -70,11 +70,23 @@ type rules struct {
 	// slots with key presses, on every machine (DESIGN 6.3, 6.7).
 	composeNeedsKeys bool
 
+	// reach is the furthest back from its own t that a record may change
+	// what the scorer derived. It is the return rule's look-ahead, the
+	// longest of SM's: a silent run of up to RETURN_GAP_MAX_S whose deciding
+	// anchor comes up to READ_HORIZON_S after it (SM 2.1). A lead (at most
+	// THINK_LEAD_S + COMPOSE_MAX_S) and the reading horizon fit inside it.
+	// Where a record would reach further, its effect is cut at its t minus
+	// reach, in every Step alike: a typed command's lead and run, when its
+	// record comes at the end of a run longer than that, and a permission's
+	// wait, when its record comes long after the answer.
+	reach int64
 	// settle is how long after a time the scorer may still change what it
 	// derived for that time: the pending window for late records (DESIGN
-	// 6.2 D1), plus the furthest any SC1 rule looks ahead, which is the
-	// return rule's: a silent run of up to RETURN_GAP_MAX_S whose deciding
-	// anchor may come READ_HORIZON_S after it (SM 2.1).
+	// 6.2 D1) plus reach. So whatever a record changes is still pending when
+	// the record arrives, up to PENDING_WINDOW_S late, and the Finals of a
+	// Step per minute are what one Step gives. A browser run's lookup waits
+	// for its end, which can be later still, and Step holds FinalBefore for
+	// it on its own.
 	settle int64
 }
 
@@ -127,12 +139,8 @@ func newRules(t *params.Table) rules {
 		composeNeedsKeys: t.Bool(params.COMPOSE_NEEDS_KEYS),
 	}
 	r.unitsPerS = r.readWPM * r.diffLPM
-	// The return rule looks furthest ahead of SC1's and SC2's rules. A
-	// lead reaches back at most THINK_LEAD_S + COMPOSE_MAX_S and reading
-	// needs an anchor within READ_HORIZON_S, both inside it. Lookups,
-	// which wait for the end of a browser run, hold FinalBefore back on
-	// their own (Step).
-	r.settle = r.pendingWindow + r.returnGapMax + r.readHorizon
+	r.reach = r.returnGapMax + r.readHorizon
+	r.settle = r.pendingWindow + r.reach
 	return r
 }
 

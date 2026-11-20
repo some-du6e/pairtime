@@ -73,7 +73,12 @@ func (d *deriver) markReturns() {
 		// The first anchor after the run must be substantive, in the
 		// focused project, and within READ_HORIZON_S of the run's end,
 		// with no lock, sleep or focus change from the run's start to it.
+		// An anchor decided too late to reach the run's start (Anchor.from)
+		// doesn't count for it.
 		k := sort.Search(len(d.anchors), func(k int) bool { return d.anchors[k].T >= end })
+		for k < len(d.anchors) && d.anchors[k].T <= end+d.r.readHorizon && d.anchors[k].from(d.r) > start {
+			k++
+		}
 		if k == len(d.anchors) {
 			continue
 		}

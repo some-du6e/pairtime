@@ -153,10 +153,9 @@ type turnBuild struct {
 	prompts []int
 	// primary is the index of the prompt.submit the turn goes by, or -1
 	// for a continuation.
-	primary  int
-	tSubmit  int64
-	tStop    int64
-	stopHook bool
+	primary int
+	tSubmit int64
+	tStop   int64
 	// words and diffLines are clamped counts, summed up to countMax.
 	words     int64
 	diffLines int64
@@ -370,7 +369,7 @@ func (d *deriver) buildTurns() {
 			tb.words = addCount(tb.words, count(p.Words))
 		case *event.AgentStop:
 			if tb.tStop == 0 {
-				tb.tStop, tb.stopHook = e.T, p.StopHookActive
+				tb.tStop = e.T
 			}
 			s.lastStop = max(s.lastStop, e.T)
 		}
@@ -470,7 +469,12 @@ func (d *deriver) origin(tb *turnBuild, e event.Event) (event.Origin, event.Prom
 	switch {
 	case p.MatchesPendingCron || p.OriginDeclared == event.DeclaredCron || p.OriginDeclared == event.DeclaredLoop:
 		return event.OriginScheduled, "", 0
-	case p.OriginDeclared == event.DeclaredGoal || p.OriginDeclared == event.DeclaredFollowup || tb.stopHook:
+	case p.OriginDeclared == event.DeclaredGoal || p.OriginDeclared == event.DeclaredFollowup:
+		// SM 2.2 rule 2 for a prompt. A turn a stop hook continued has no
+		// prompt.submit (testdata/timelines/README.md, Turns), so it is
+		// self_continue as a continuation. A stop with stop_hook_active
+		// later in a prompted turn doesn't change the prompt's origin: it
+		// can come long after the anchor is final.
 		return event.OriginSelfContinue, "", 0
 	case p.OriginDeclared == event.DeclaredSubagent || p.OriginDeclared == event.DeclaredCrossSession:
 		// SM 2.2 names no rule for a message another session sent; like a

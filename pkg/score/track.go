@@ -131,7 +131,7 @@ func (d *deriver) trackGate(i int, e event.Event, p *event.CLITrack, s *session,
 		Via: e.Via}
 	a.Kind, a.Reason = promptKind(class)
 	d.level(&a, e.T-d.r.keysPre, e.T, host)
-	if !d.add(a) {
+	if !d.add(a, e.T) {
 		return TrackRejected, nil
 	}
 	lastAnchor[s.key] = e.T

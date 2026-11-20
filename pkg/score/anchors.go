@@ -52,7 +52,17 @@ type Anchor struct {
 	// 6.4).
 	Corroborated bool          `json:"corroborated,omitempty"`
 	Labels       []event.Label `json:"labels,omitempty"`
+	// decided is when the anchor is decided: the latest t of the records it
+	// goes by, and no earlier than T. A typed command's record is written
+	// when the command ends, and a permission's when the request pairs with
+	// the next tool event, both after T. The anchor is final, and can
+	// change what was derived, from there (rules.reach).
+	decided int64
 }
+
+// from returns the earliest time the anchor can credit, qualify a drain or
+// end a returned run: rules.reach before it is decided.
+func (a *Anchor) from(r rules) int64 { return a.decided - r.reach }
 
 // Event returns the anchor as pkg/event's derived record.
 func (a Anchor) Event() event.Anchor {
@@ -70,12 +80,23 @@ func anchorCmp(a, b Anchor) int {
 
 // add keeps an anchor that belongs to a project. One with no project can't
 // be credited: its windows are realized only on its project (SM 2.5).
-func (d *deriver) add(a Anchor) bool {
+// decided is the latest t of the records behind the anchor.
+func (d *deriver) add(a Anchor, decided int64) bool {
 	if a.ProjectKey == "" {
 		return false
 	}
+	a.decided = max(a.T, decided)
 	d.anchors = append(d.anchors, a)
 	return true
+}
+
+// latest returns the latest t of the records at the given indexes.
+func (d *deriver) latest(pos []int) int64 {
+	var t int64
+	for _, i := range pos {
+		t = max(t, d.recs[i].T)
+	}
+	return t
 }
 
 // promptKind returns the anchor kind and reason of a person's prompt of
@@ -105,7 +126,7 @@ func (d *deriver) promptAnchors() {
 			TrailFrom: e.T, Via: e.Via, Corroborated: d.corroborated(tb.prompts)}
 		a.Kind, a.Reason = promptKind(t.PromptClass)
 		d.level(&a, e.T-d.r.keysPre, e.T, d.sessionHost(tb.sess, tb.primary))
-		d.add(a)
+		d.add(a, d.latest(tb.prompts))
 	}
 }
 
@@ -267,7 +288,7 @@ func (d *deriver) harnessAnchor(best int, pos []int) {
 		return
 	}
 	d.level(&a, from, to, host)
-	d.add(a)
+	d.add(a, d.latest(pos))
 }
 
 // otherAnchor makes the anchor of an editor, shell or git act, if it
@@ -330,7 +351,7 @@ func (d *deriver) otherAnchor(i int, e event.Event) {
 		return
 	}
 	d.level(&a, from, to, host)
-	d.add(a)
+	d.add(a, e.T)
 }
 
 // levelVia reports whether an anchor that arrived via v can be level A or

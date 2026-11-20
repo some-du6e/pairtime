@@ -310,20 +310,23 @@ func (c *creditor) returnAt(t int64) *returned {
 	return nil
 }
 
-// windows returns every anchor's windows as whole seconds, by start.
+// windows returns every anchor's windows as whole seconds, by start. A
+// window starts no earlier than the anchor can credit (Anchor.from).
 func (c *creditor) windows() []window {
 	var ws []window
-	add := func(from, to int64, i, part int) {
-		if from, to = ceilSecond(from), ceilSecond(to); from < to {
-			ws = append(ws, window{from: from, to: to, anchor: i, part: part})
+	for i := range c.d.anchors {
+		a := &c.d.anchors[i]
+		lo := a.from(c.r)
+		add := func(from, to int64, part int) {
+			if from, to = ceilSecond(max(from, lo)), ceilSecond(to); from < to {
+				ws = append(ws, window{from: from, to: to, anchor: i, part: part})
+			}
 		}
-	}
-	for i, a := range c.d.anchors {
 		typing := a.T - a.TypingMS
-		add(a.T-a.LeadMS, typing, i, partThink)
-		add(typing, a.T, i, partTyping)
-		add(a.T, a.T+a.WatchMS, i, partAfter)
-		add(a.TrailFrom, a.TrailFrom+a.TrailMS, i, partAfter)
+		add(a.T-a.LeadMS, typing, partThink)
+		add(typing, a.T, partTyping)
+		add(a.T, a.T+a.WatchMS, partAfter)
+		add(a.TrailFrom, a.TrailFrom+a.TrailMS, partAfter)
 	}
 	slices.SortStableFunc(ws, func(x, y window) int { return cmp.Compare(x.from, y.from) })
 	return ws
@@ -362,20 +365,22 @@ func (c *creditor) typingOK(a *Anchor, s *Slot) bool {
 
 // nearest returns the anchor of project p nearest t within READ_HORIZON_S,
 // the earlier on a tie, or -1: the human act that lets a second drain the
-// bucket and gives it its level (SM 2.4, DESIGN 6.4).
+// bucket and gives it its level (SM 2.4, DESIGN 6.4). An anchor qualifies
+// only seconds it can credit (Anchor.from).
 func (c *creditor) nearest(p string, t int64) int {
 	idx := c.byProject[p]
 	as := c.d.anchors
 	i := sort.Search(len(idx), func(i int) bool { return as[idx[i]].T >= t })
 	best, dist := -1, c.r.readHorizon+1
-	if i > 0 {
-		if d := t - as[idx[i-1]].T; d < dist {
-			best, dist = idx[i-1], d
+	for j := i - 1; j >= 0 && t-as[idx[j]].T < dist; j-- {
+		if as[idx[j]].from(c.r) <= t {
+			best, dist = idx[j], t-as[idx[j]].T
+			break
 		}
 	}
-	if i < len(idx) {
-		if d := as[idx[i]].T - t; d < dist {
-			best = idx[i]
+	for j := i; j < len(idx) && as[idx[j]].T-t < dist; j++ {
+		if as[idx[j]].from(c.r) <= t {
+			return idx[j]
 		}
 	}
 	return best

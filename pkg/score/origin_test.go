@@ -71,11 +71,11 @@ func TestOrigin(t *testing.T) {
 		{name: "rule 2: a /goal continuation the harness declares is self_continue",
 			edit:   func(b *tl, p *event.PromptSubmit) { p.OriginDeclared = event.DeclaredGoal },
 			origin: event.OriginSelfContinue},
-		{name: "rule 2: a turn whose stop says a stop hook continued it is self_continue",
+		{name: "rule 2 reads the prompt: a later stop of its turn with stop_hook_active doesn't change a typed prompt's origin",
 			edit: func(b *tl, p *event.PromptSubmit) {
 				b.harness(at(90), event.ViaHook, "s_1", "p_1", &event.AgentStop{TurnKey: "t_p", StopReason: event.StopEndTurn, StopHookActive: true})
 			},
-			origin: event.OriginSelfContinue},
+			origin: event.OriginHumanTyped, class: event.ClassSubstantive, kind: event.AnchorSubstantivePrompt, lead: 120 + 20},
 		{name: "rule 3: a subagent's prompt is subagent",
 			edit:   func(b *tl, p *event.PromptSubmit) { p.OriginDeclared = event.DeclaredSubagent },
 			origin: event.OriginSubagent},
