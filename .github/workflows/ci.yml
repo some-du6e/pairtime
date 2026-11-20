@@ -206,6 +206,21 @@ jobs:
             shellcheck $scripts
           fi
 
+      - name: Desktop test names
+        if: ${{ !cancelled() }}
+        # platform.yml's Linux job runs only the TestDesktop* tests of a
+        # *_desktop_test.go file, and nothing else builds those files with
+        # the desktop tag (AGENTS.md). Any other test, example, benchmark or
+        # fuzz function in one would never run anywhere.
+        run: |
+          bad=$(git grep -n -E '^func (Test|Example|Benchmark|Fuzz)[^a-z]' -- '*_desktop_test.go' | grep -v -E '^[^:]+:[0-9]+:func (TestDesktop|TestMain\()' || true)
+          if [ -n "$bad" ]; then
+            while IFS=: read -r file line text; do
+              echo "::error file=$file,line=$line::$text is in a desktop test file, where platform.yml runs only TestDesktop* functions. Give it a name that starts with TestDesktop, or move it to a plain _test.go file (AGENTS.md)."
+            done <<<"$bad"
+            exit 1
+          fi
+
       - name: Oracle guard
         # A PR may not change an existing oracle together with the code it
         # checks, unless Karim adds the oracle-change label (docs/PLAN.md,
