@@ -4,24 +4,35 @@
 # backups restore, made in GitHub Actions instead of on the home server.
 #
 # The minio job runs on PRs that change the deploy bundle or the image,
-# weekly, and by hand. It builds the image, deploys it with
-# deploy/compose.yml against MinIO the way deploy/runbook.md does, writes
-# data, backs the keys up and takes a snapshot, then destroys the container
-# and its disk, restores the keys from their backup and the database from
-# Litestream's replica into a fresh container, and checks the result with
-# SQLite's own integrity_check, the sqlite3 tool and the server's pages. The
-# snapshot and the key backup are decrypted with the age tool and a test
-# identity, never with pairtime's code. The witness sidecar pushes a root to
-# a local bare repository.
+# weekly, and by hand. It deploys the image with deploy/compose.yml against
+# MinIO the way deploy/runbook.md does, writes data, backs the keys up and
+# takes a snapshot, then destroys the container and its disk, restores the
+# keys from their backup and the database from Litestream's replica into a
+# fresh container, and checks the result with SQLite's own integrity_check,
+# the sqlite3 tool and the server's pages. The snapshot and the key backup
+# are decrypted with the age tool and a test identity, never with
+# pairtime's code. The witness sidecar pushes a root to a local bare
+# repository. Last, it runs the production job's read-only restore against
+# MinIO, so those steps run on every PR too.
 #
-# The production job runs by hand once WP-OP2 has deployed: it restores the
-# real replica with read-only keys, the restore-drill environment's secrets,
-# serves it in a throwaway container and checks that the newest snapshot
-# and key backup exist. It writes nothing to the buckets, and Karim's age key
-# stays offline, so the snapshot's age header is all it can check.
+# The production job restores the real replica weekly, with the minio job,
+# and by hand: with read-only keys, the restore-drill environment's
+# secrets, it restores the replica into a throwaway container, serves it
+# and checks that the newest snapshot and key backup exist. It writes
+# nothing to the buckets, and Karim's age key stays offline, so the
+# snapshot's age header is all it can check. Until the environment has its
+# secrets (deploy/runbook.md, step 14), the weekly run skips it with a
+# notice. The environment admits only main.
+#
+# Which image both jobs run is tools/ci/restore_drill.sh's choice: the one
+# compose.yml pins, which hosts run, unless the checkout changes what goes
+# into the image, as a PR to the server does, when it builds one from
+# source. The weekly run always takes the pinned one. The pairtimed input
+# makes the choice by hand.
 #
 #   gh workflow run restore-drill.yml --ref <branch>
 #   gh workflow run restore-drill.yml --ref <branch> -f minio=source
+#   gh workflow run restore-drill.yml --ref <branch> -f pairtimed=pinned
 #   gh workflow run restore-drill.yml --ref main -f target=production
 name: restore-drill
 
@@ -31,6 +42,7 @@ on:
       - deploy/**
       - Dockerfile.pairtimed
       - internal/server/backup/**
+      - tools/ci/restore_drill.sh
       - .github/workflows/restore-drill.yml
   schedule:
     # Mondays, after objstore.yml.
@@ -47,6 +59,11 @@ on:
         type: choice
         options: [image, source]
         default: image
+      pairtimed:
+        description: "auto: the image compose.yml pins, unless the ref changes what goes into the image; pinned: always that one; source: built from the ref"
+        type: choice
+        options: [auto, pinned, source]
+        default: auto
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}-${{ inputs.target }}
@@ -130,23 +147,13 @@ jobs:
             echo "made bucket $b"
           done
 
-      - name: Build pairtimed and the image
-        run: |
-          pkg=github.com/some-du6e/pairtime/internal/version
-          commit=$(git rev-parse HEAD)
-          date=$(TZ=UTC git log -1 --format=%cd --date=format-local:%Y-%m-%dT%H:%M:%SZ)
-          mkdir -p dist/linux_amd64
-          GOOS=linux GOARCH=amd64 go build -trimpath -buildvcs=false \
-            -ldflags="-s -w -X $pkg.Version=v0.0.0-drill -X $pkg.Commit=$commit -X $pkg.Date=$date" \
-            -o dist/linux_amd64/pairtimed ./cmd/pairtimed
-          go run ./tools/release notices -bin dist/linux_amd64/pairtimed -out dist/THIRD_PARTY_NOTICES.txt
-          docker buildx build -f Dockerfile.pairtimed --platform linux/amd64 --load -t pairtimed:drill .
-          docker run --rm pairtimed:drill pairtimed version
-          docker run --rm pairtimed:drill litestream version
-          if [ "$(docker image inspect pairtimed:drill --format '{{.Config.User}}')" != "65532:65532" ]; then
-            echo "::error::the image doesn't run as 65532"
-            exit 1
-          fi
+      - name: The image the drill runs
+        # The pinned image, or one built from the checkout
+        # (tools/ci/restore_drill.sh says which and why).
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PAIRTIME_DRILL_IMAGE: ${{ inputs.pairtimed }}
+        run: bash tools/ci/restore_drill.sh image
 
       - name: Lay out the host as the runbook does
         run: |
@@ -363,29 +370,93 @@ jobs:
           sqlite3 "$db" 'SELECT id FROM schema_migrations ORDER BY id'
           echo "the restored database passes integrity_check, holds the marker and has mode 0600"
 
+      - name: The production job's read-only restore, against MinIO
+        # The steps the production job runs on the real replica, here with
+        # MinIO's own key, which could write. So the check that they write
+        # nothing is that both buckets list the same object for object
+        # afterwards; nothing else runs against them by now.
+        env:
+          S3_ENDPOINT: http://127.0.0.1:9000
+          S3_REGION: us-east-1
+          S3_BUCKET: pairtime-data
+          S3_SNAPSHOT_BUCKET: pairtime-snapshots
+          S3_ACCESS_KEY_ID: pairtime-ci
+          S3_SECRET_ACCESS_KEY: pairtime-ci-not-a-secret
+        run: |
+          listing() {
+            for b in "$S3_BUCKET" "$S3_SNAPSHOT_BUCKET"; do
+              # ListObjectsV2, whose 1,000 keys a page hold every object here.
+              xml=$(curl -fsS --aws-sigv4 "aws:amz:us-east-1:s3" --user "$S3_ACCESS_KEY_ID:$S3_SECRET_ACCESS_KEY" \
+                -H "x-amz-content-sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855" \
+                "$S3_ENDPOINT/$b?list-type=2")
+              if ! grep -q '<IsTruncated>false</IsTruncated>' <<< "$xml"; then
+                echo "::error::$b lists more than one page"
+                exit 1
+              fi
+              # One line per object: its key, time, ETag and size.
+              sed 's/<Contents>/\n&/g' <<< "$xml" | grep '^<Contents>' | sed 's|</Contents>.*|</Contents>|'
+            done
+          }
+          listing > "$RUNNER_TEMP/buckets-before.txt"
+          test -s "$RUNNER_TEMP/buckets-before.txt"
+          bash tools/ci/restore_drill.sh read-only
+          listing > "$RUNNER_TEMP/buckets-after.txt"
+          diff "$RUNNER_TEMP/buckets-before.txt" "$RUNNER_TEMP/buckets-after.txt"
+          echo "the read-only restore left all $(wc -l < "$RUNNER_TEMP/buckets-after.txt") objects in both buckets as they were"
+
       - name: The logs
         if: failure()
         run: |
           cd "$D" 2> /dev/null && docker compose -f compose.yml -f drill.yml logs --no-color | tail -n 300 || true
+          docker logs drill-serve 2>&1 | tail -n 100 || true
           tail -n 50 "$RUNNER_TEMP/minio.log" 2> /dev/null || true
 
   production:
     name: restore drill from the real replica, read-only
-    if: github.event_name == 'workflow_dispatch' && inputs.target == 'production'
+    if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.target == 'production')
     runs-on: ubuntu-latest
     timeout-minutes: 40
     # Read-only keys for the two real buckets, as the restore-drill
-    # environment's secrets (WP-OP2).
+    # environment's secrets (deploy/runbook.md, step 14). The environment
+    # admits only main.
     environment: restore-drill
     defaults:
       run:
         shell: bash
     steps:
+      - name: The restore-drill environment's secrets
+        id: secrets
+        env:
+          EVENT: ${{ github.event_name }}
+          PAIRTIME_S3_ENDPOINT: ${{ secrets.PAIRTIME_S3_ENDPOINT }}
+          PAIRTIME_S3_BUCKET: ${{ secrets.PAIRTIME_S3_BUCKET }}
+          PAIRTIME_S3_SNAPSHOT_BUCKET: ${{ secrets.PAIRTIME_S3_SNAPSHOT_BUCKET }}
+          PAIRTIME_S3_READONLY_ACCESS_KEY_ID: ${{ secrets.PAIRTIME_S3_READONLY_ACCESS_KEY_ID }}
+          PAIRTIME_S3_READONLY_SECRET_ACCESS_KEY: ${{ secrets.PAIRTIME_S3_READONLY_SECRET_ACCESS_KEY }}
+        run: |
+          missing=""
+          for v in PAIRTIME_S3_ENDPOINT PAIRTIME_S3_BUCKET PAIRTIME_S3_SNAPSHOT_BUCKET \
+            PAIRTIME_S3_READONLY_ACCESS_KEY_ID PAIRTIME_S3_READONLY_SECRET_ACCESS_KEY; do
+            if [ -z "${!v}" ]; then
+              missing="$missing $v"
+            fi
+          done
+          if [ -z "$missing" ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          elif [ "$EVENT" = schedule ]; then
+            echo "::notice::The restore-drill environment has no$missing secret yet, so this week's drill restored only MinIO's replica (deploy/runbook.md, step 14)"
+          else
+            echo "::error::The restore-drill environment has no$missing secret (deploy/runbook.md, step 14)"
+            exit 1
+          fi
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: steps.secrets.outputs.ready == 'true'
         with:
           persist-credentials: false
 
       - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        if: steps.secrets.outputs.ready == 'true'
         with:
           go-version-file: go.mod
           cache-dependency-path: |
@@ -393,21 +464,20 @@ jobs:
             go.sum
 
       - name: The checking tools
+        if: steps.secrets.outputs.ready == 'true'
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq --no-install-recommends sqlite3 > /dev/null
 
-      - name: Build pairtimed and the image
-        run: |
-          pkg=github.com/some-du6e/pairtime/internal/version
-          mkdir -p dist/linux_amd64
-          GOOS=linux GOARCH=amd64 go build -trimpath -buildvcs=false \
-            -ldflags="-s -w -X $pkg.Version=v0.0.0-drill -X $pkg.Commit=$(git rev-parse HEAD)" \
-            -o dist/linux_amd64/pairtimed ./cmd/pairtimed
-          go run ./tools/release notices -bin dist/linux_amd64/pairtimed -out dist/THIRD_PARTY_NOTICES.txt
-          docker buildx build -f Dockerfile.pairtimed --platform linux/amd64 --load -t pairtimed:drill .
+      - name: The image the drill runs
+        if: steps.secrets.outputs.ready == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PAIRTIME_DRILL_IMAGE: ${{ inputs.pairtimed }}
+        run: bash tools/ci/restore_drill.sh image
 
-      - name: A throwaway host with read-only keys
+      - name: Restore the real replica, read-only, serve it and check the backups exist
+        if: steps.secrets.outputs.ready == 'true'
         env:
           S3_ENDPOINT: ${{ secrets.PAIRTIME_S3_ENDPOINT }}
           S3_REGION: ${{ secrets.PAIRTIME_S3_REGION }}
@@ -415,73 +485,8 @@ jobs:
           S3_SNAPSHOT_BUCKET: ${{ secrets.PAIRTIME_S3_SNAPSHOT_BUCKET }}
           S3_ACCESS_KEY_ID: ${{ secrets.PAIRTIME_S3_READONLY_ACCESS_KEY_ID }}
           S3_SECRET_ACCESS_KEY: ${{ secrets.PAIRTIME_S3_READONLY_SECRET_ACCESS_KEY }}
-        run: |
-          for v in S3_ENDPOINT S3_BUCKET S3_SNAPSHOT_BUCKET S3_ACCESS_KEY_ID S3_SECRET_ACCESS_KEY; do
-            if [ -z "${!v}" ]; then
-              echo "::error::the restore-drill environment has no PAIRTIME_$v secret (deploy/runbook.md, step 14)"
-              exit 1
-            fi
-          done
-          d=$RUNNER_TEMP/pairtime
-          cp -r deploy "$d"
-          echo "D=$d" >> "$GITHUB_ENV"
-          cd "$d"
-          sudo install -d -m 0700 -o "$UID65532" -g "$UID65532" data witness-roots
-          mkdir config
-          # Only the two env files are private: compose reads them on the
-          # host. pairtime.toml must stay readable by 65532, the image's user.
-          (
-            umask 077
-            {
-              echo "PAIRTIME_S3_ENDPOINT=$S3_ENDPOINT"
-              echo "PAIRTIME_S3_REGION=${S3_REGION:-auto}"
-              echo "PAIRTIME_S3_BUCKET=$S3_BUCKET"
-              echo "PAIRTIME_S3_SNAPSHOT_BUCKET=$S3_SNAPSHOT_BUCKET"
-              echo "PAIRTIME_S3_ACCESS_KEY_ID='$S3_ACCESS_KEY_ID'"
-              echo "PAIRTIME_S3_SECRET_ACCESS_KEY='$S3_SECRET_ACCESS_KEY'"
-            } > config/secrets.env
-            : > config/tunnel.env
-          )
-          printf 'services:\n  pairtimed:\n    image: pairtimed:drill\n    pull_policy: never\n    network_mode: host\n' > drill.yml
-          # To a new name and then moved, as runbook step 7 does: a redirect
-          # straight to pairtime.toml would make the file before init runs,
-          # and init refuses to replace one.
-          docker compose -f compose.yml -f drill.yml run --rm -T pairtimed pairtimed init -base-url http://localhost:8080 -config-out - > config/pairtime.toml.new
-          install -m 0644 config/pairtime.toml.new config/pairtime.toml
-          rm config/pairtime.toml.new
+        run: bash tools/ci/restore_drill.sh read-only
 
-      - name: Restore the real replica, read-only
-        run: |
-          cd "$D"
-          compose() { docker compose -f compose.yml -f drill.yml "$@"; }
-          # litestream restore reads the replica and writes only here.
-          compose run --rm -T pairtimed litestream restore -config /etc/litestream.yml -o /data/pairtime.db /data/pairtime.db
-          mkdir "$RUNNER_TEMP/restored"
-          sudo sh -c "cp '$D'/data/pairtime.db* '$RUNNER_TEMP/restored/'"
-          sudo chown -R "$(id -u):$(id -g)" "$RUNNER_TEMP/restored"
-          test "$(sqlite3 "$RUNNER_TEMP/restored/pairtime.db" 'PRAGMA integrity_check')" = ok
-          echo "the replica restores to a database that passes integrity_check"
-
-      - name: Serve the copy and check the backups exist
-        run: |
-          cd "$D"
-          compose() { docker compose -f compose.yml -f drill.yml "$@"; }
-          # pairtimed serve alone, without Litestream, so nothing writes to
-          # the bucket; with no age recipient it takes no snapshot.
-          compose run -d --name drill-serve pairtimed pairtimed serve
-          if ! timeout 180 bash -c 'until curl -fsS -o /dev/null http://127.0.0.1:9091/readyz; do sleep 2; done'; then
-            docker logs drill-serve
-            exit 1
-          fi
-          agent="pairtime-drill/${GITHUB_SHA::12} (+https://github.com/some-du6e/pairtime)"
-          test "$(curl -fsS -A "$agent" http://127.0.0.1:8080/healthz)" = ok
-          curl -fsS -A "$agent" -o /dev/null http://127.0.0.1:8080/privacy
-          # Reads only: the newest snapshot and key backup exist and are
-          # recent. Karim's key stays offline, so the snapshot is checked
-          # for age's header alone.
-          # -skip push: "snapshot" in -only also names push.snapshot, which
-          # would fail on the missing monitor URL, or ping the real monitor.
-          docker exec drill-serve pairtimed doctor -only snapshot,keys_backup,database,keys,config -skip push
-          docker exec drill-serve pairtimed snapshot fetch -o /data/latest.db.age
-          sudo head -c 21 data/latest.db.age | grep -q 'age-encryption.org/v1'
-          docker rm -f drill-serve
+      - name: The logs
+        if: failure() && steps.secrets.outputs.ready == 'true'
+        run: docker logs drill-serve 2>&1 | tail -n 100 || true

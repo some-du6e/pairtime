@@ -43,7 +43,12 @@ services:
       # Local disk only, never NFS or SMB: SQLite's locks don't hold there.
       - ./data:/data
       - ./config:/etc/pairtime:ro
-      # From git, next to this file, so it changes with the release.
+      # Images built from #123 on carry litestream.yml at this path, so each
+      # runs the copy it was built and drilled with. This mount of the
+      # checkout's copy is for the older image pinned above, which has none.
+      # The PR that first pins a newer image deletes these lines, and
+      # restore-drill.yml fails it until it does (deploy/runbook.md, The
+      # image pin).
       - ./litestream.yml:/etc/litestream.yml:ro
       # Where pairtimed writes each day's signed witness root (WP-SV17).
       - ./witness-roots:/witness

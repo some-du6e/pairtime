@@ -3,6 +3,7 @@
 package deploy
 
 import (
+	"cmp"
 	"os"
 	"path"
 	"regexp"
@@ -34,6 +35,13 @@ func all(re, text string) string {
 
 func TestBundleFilesAgree(t *testing.T) {
 	db := path.Join(config.DefaultDataDir, config.DefaultDatabaseFile)
+	// The image's Dockerfile, at the repository's root.
+	data, err := os.ReadFile("../Dockerfile.pairtimed")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dockerfile := string(data)
+	litestreamConfig := line(`^\s*command: \["litestream", "replicate", "-config", "([^"]+)"\]`, ComposeYAML)
 	tests := []struct {
 		name string
 		got  string
@@ -52,9 +60,12 @@ func TestBundleFilesAgree(t *testing.T) {
 			got: line(`^\s*interval:\s*(\S+)\s*$`, LitestreamYAML), want: "24h"},
 		{name: "Litestream keeps snapshots 72 h (DESIGN 10.3)",
 			got: line(`^\s*retention:\s*(\S+)\s*$`, LitestreamYAML), want: "72h"},
-		{name: "compose runs Litestream on the litestream.yml it mounts",
-			got:  line(`^\s*command: \["litestream", "replicate", "-config", "([^"]+)"\]`, ComposeYAML),
-			want: line(`^\s*- \./litestream\.yml:([^:]+):ro\s*$`, ComposeYAML)},
+		{name: "compose runs Litestream on the litestream.yml the image carries",
+			got:  litestreamConfig,
+			want: line(`^COPY --chmod=0644 deploy/litestream\.yml (\S+)\s*$`, dockerfile)},
+		{name: "a litestream.yml compose mounts, for an image from before it carried one, goes where the image keeps its own",
+			got:  cmp.Or(line(`^\s*- \./litestream\.yml:([^:]+):ro\s*$`, ComposeYAML), litestreamConfig),
+			want: litestreamConfig},
 		{name: "compose mounts the data directory at pairtime.toml's default data_dir",
 			got: line(`^\s*- \./data:(\S+)\s*$`, ComposeYAML), want: config.DefaultDataDir},
 		{name: "compose mounts config/, read-only, where pairtimed looks for pairtime.toml",

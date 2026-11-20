@@ -17,13 +17,13 @@ UA="pairtime-deploy/1 (+https://github.com/some-du6e/pairtime)"
 curl -fsS -A "$UA" https://pairtime.karimeltaib.com/healthz
 ```
 
-**The image pin.** `server-image.yml` builds the server image from each commit on main that changes the server and pushes it to `ghcr.io/some-du6e/pairtimed` as `sha-<12 hex digits of the commit>`. Each run's summary gives the line that pins it, tag and digest:
+**The image pin.** `server-image.yml` builds the server image from each commit on main that changes what goes into it, which is pairtimed's code and the files it embeds, never the rest of `deploy/`, and pushes it to `ghcr.io/some-du6e/pairtimed` as `sha-<12 hex digits of the commit>`. Each run's summary gives the line that pins it, tag and digest:
 
 ```yaml
     image: ghcr.io/some-du6e/pairtimed:sha-0123456789ab@sha256:<digest>
 ```
 
-`compose.yml` carries one such line, and a bump is a PR that replaces it with a newer run's, whose restore drill must pass before it merges. To find the newest:
+`compose.yml` carries one such line, and a bump is a PR that replaces it with a newer run's and changes nothing that goes into the image. Its restore drill runs the pinned image itself, after checking that the image was built from a commit on main, and must pass before the PR merges. To find the newest:
 
 ```sh
 gh run list --repo some-du6e/pairtime --workflow server-image.yml --branch main --status success --limit 1
@@ -31,6 +31,8 @@ gh run view <run id> --repo some-du6e/pairtime   # its notice is the image: line
 ```
 
 Until the first push is pinned, the line reads `ghcr.io/some-du6e/pairtimed:UNRELEASED`, which can't be pulled. If you see that, ask the orchestrator for the PR that pins it, and deploy once it has merged. The orchestrator makes the package public once, after its first push, so the host pulls it without logging in.
+
+Images built from #123 on carry their own `litestream.yml` at `/etc/litestream.yml`, so each runs the Litestream settings and `exec` line it was built and drilled with. Older images have none, and `compose.yml` mounts the checkout's copy for them. The first PR that pins a newer image also deletes that mount, the `./litestream.yml` line under the pairtimed service and its comment; its restore drill fails until it does.
 
 ## The pilot
 
@@ -225,7 +227,7 @@ The probe checks TLS, `/healthz` and `/.well-known/pairtime-keys.json` from GitH
 
 ### 14. The restore drill against the real buckets
 
-The weekly drill in `restore-drill.yml` restores a MinIO deploy. Once this host is up, prove the real replica restores too, with keys that can only read. Make an R2 API token with Object Read only on `pairtime-data` and `pairtime-snapshots`. Then, in the repository's Settings, create the environment `restore-drill` with these secrets:
+The weekly drill in `restore-drill.yml` restores a MinIO deploy, and the real replica too, with keys that can only read, once they are there. Make an R2 API token with Object Read only on `pairtime-data` and `pairtime-snapshots`. Then, in the repository's Settings, give the environment `restore-drill`, which admits only `main`, these secrets:
 
 | Secret | Value |
 |---|---|
@@ -240,7 +242,7 @@ The weekly drill in `restore-drill.yml` restores a MinIO deploy. Once this host 
 gh workflow run restore-drill.yml --repo some-du6e/pairtime --ref main -f target=production
 ```
 
-It restores the replica in a throwaway container, runs `PRAGMA integrity_check`, serves the copy, and checks that the newest snapshot and key backup exist. It writes nothing to either bucket.
+It restores the replica in a throwaway container with the image `compose.yml` pins, runs `PRAGMA integrity_check`, serves the copy, and checks that the newest snapshot and key backup exist. It writes nothing to either bucket. From then on it runs every Monday with the MinIO drill. Until both read-only secrets are set, the weekly run skips it with a notice saying which are missing, and a run by hand fails.
 
 ## Upgrades
 
@@ -259,13 +261,15 @@ Keep the copy of `pairtime.toml`: a rollback can need it. Migrations only add in
 
 ## Rolling back
 
-A rollback is the previous image. Find the commit before the bump and put its `compose.yml` back:
+A rollback is the previous image. Find the commit before the bump and put its `compose.yml` and `litestream.yml` back:
 
 ```sh
 git -C /srv/pairtime log --oneline -5 -- deploy/compose.yml
-git -C /srv/pairtime checkout <commit before the bump> -- deploy/compose.yml
+git -C /srv/pairtime checkout <commit before the bump> -- deploy/compose.yml deploy/litestream.yml
 docker compose up -d
 ```
+
+An image from before #123 has no `litestream.yml` of its own, so that commit's `compose.yml` mounts the checkout's copy, and it has to be the copy that image was drilled with. Newer images ignore it.
 
 The previous release starts on the newer `pairtime.toml`: a release that adds a key raises `config_version`, and an older release ignores the keys it doesn't know in such a file, with a warning in its log. The exception is a release that added a value to an existing key. The previous release refuses that value and doesn't start, so put the copy back and start again:
 
@@ -274,7 +278,7 @@ cp config/pairtime.toml.before-<date> config/pairtime.toml
 docker compose up -d
 ```
 
-The older release also runs on a database a newer one migrated, since v1 migrations only add, and its log names them. Then open a PR that reverts the bump, and once it merges, `git -C /srv/pairtime checkout deploy/compose.yml && git -C /srv/pairtime pull --ff-only`.
+The older release also runs on a database a newer one migrated, since v1 migrations only add, and its log names them. Then open a PR that reverts the bump, and once it merges, `git -C /srv/pairtime checkout deploy/compose.yml deploy/litestream.yml && git -C /srv/pairtime pull --ff-only`.
 
 ## Restoring the keys
 
@@ -332,7 +336,8 @@ Before the native program pays out, the server moves to a Hetzner CCX13, or an A
 | `config/pairtime.toml` | you, 0644 | `/etc/pairtime/pairtime.toml` |
 | `config/secrets.env`, `config/tunnel.env` | you, 0600 | read by compose on the host and passed in as environment variables |
 | `config/witness_deploy_key` | you, 0600 | `/run/witness/deploy_key` in the sidecar, which reads it with its one capability |
-| `litestream.yml`, `witness/` | from git | `/etc/litestream.yml`, `/etc/witness/` |
+| `litestream.yml` | in the image from #123 on; from git, mounted, while `compose.yml` pins an older image | `/etc/litestream.yml` |
+| `witness/` | from git | `/etc/witness/` |
 
 pairtimed listens on 8080, which only cloudflared reaches, and on 127.0.0.1:9091 inside its container for `/healthz`, `/readyz` and `/metrics`. compose publishes no port on the host. Never route the tunnel to 9091.
 
