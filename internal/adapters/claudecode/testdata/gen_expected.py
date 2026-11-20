@@ -471,6 +471,8 @@ def main(capture, out_path):
                 es = ledger_ref.error_signature(out)
                 if es is not None:
                     data["error_sig"] = ("error", es)
+            if j.get("agent_id"):
+                data["visible_output_lines"] = 0  # a subagent's output isn't shown (SM 2.4)
             add("agent.tool", data, command=command, edits=edits)
         elif name in ("SubagentStart", "SubagentStop"):
             add("agent.subagent", {"phase": "start" if name == "SubagentStart" else "stop",

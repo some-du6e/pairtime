@@ -66,6 +66,13 @@ func (c *call) tool() {
 	case "Bash":
 		r = c.bash(t, in, resp)
 	}
+	if agent, _ := c.f.str("agent_id"); agent != "" {
+		// A subagent's tool output never reaches the conversation the
+		// person reads, and SM 2.4 fills the reading bucket only with what
+		// the harness shows (WP-AD1's step 10 ran its subagent in the
+		// background). Its edits still count, through their lines.
+		t.VisibleOutputLines = 0
+	}
 	rec := c.add(t, nil)
 	if r != nil {
 		rec.Edits, rec.Command = r.edits, r.command
