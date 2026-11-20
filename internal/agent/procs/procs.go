@@ -353,6 +353,20 @@ func (s *Scanner) Scan() ([]Session, error) {
 	return found, nil
 }
 
+// Sessions returns the key of each session the scan has reported, by its
+// process, until a scan sees the process gone or a hook claims it. The
+// focus component reads it to find the sessions the window in front hosts
+// (SM 3.2, DESIGN 3.3).
+func (s *Scanner) Sessions() map[platform.ID]string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make(map[platform.ID]string, len(s.reported))
+	for id, sess := range s.reported {
+		out[id] = sess.Key
+	}
+	return out
+}
+
 func (s *Scanner) running(n int) {
 	if s.opts.Running != nil {
 		s.opts.Running(n)

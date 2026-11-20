@@ -29,6 +29,7 @@ import (
 	"time"
 
 	"github.com/some-du6e/pairtime/internal/agent/config"
+	"github.com/some-du6e/pairtime/internal/agent/focus"
 	"github.com/some-du6e/pairtime/internal/agent/home"
 	"github.com/some-du6e/pairtime/internal/agent/inbox"
 	"github.com/some-du6e/pairtime/internal/agent/ipc"
@@ -101,8 +102,12 @@ type agent struct {
 	notifier *notifier.Notifier
 
 	presence *presence.Sampler // presence and power (DESIGN 3.3)
-	// ledgerIn takes presence's records and seals to the ledger writer
-	// once it opens (WP-LG5).
+	focus    *focus.Watcher    // the window in front (DESIGN 3.3)
+	// kApp is K_app, which keys os.focus's app_hash, once keyFocus has
+	// derived it from the device key.
+	kApp atomic.Pointer[[]byte]
+	// ledgerIn takes presence's and focus's records, and presence's
+	// seals, to the ledger writer once it opens (WP-LG5).
 	ledgerIn  *ledger.Presence
 	keyStores []keys.Store // Options.KeyStores
 
@@ -149,7 +154,7 @@ func Run(ctx context.Context, opts Options) error {
 
 	// Each part that starts adds the step that stops it, and they stop in
 	// reverse order: the HTTP server, port.json, the socket and the inbox,
-	// the process scan, the config watch, presence, the ledger, the
+	// focus, the process scan, the config watch, presence, the ledger, the
 	// scheduler, the notifier, state.json.
 	var closers []func()
 	defer func() {
@@ -189,7 +194,9 @@ func Run(ctx context.Context, opts Options) error {
 	closers = append(closers, a.startPresence())
 
 	closers = append(closers, a.watchConfig())
+	a.newFocus(focus.ThisOS())
 	closers = append(closers, a.startProcs())
+	closers = append(closers, a.startFocus())
 	closers = append(closers, a.startIPC(opts))
 
 	ln, pf, err := a.listen(opts.Ports)

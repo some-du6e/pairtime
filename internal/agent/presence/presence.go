@@ -22,7 +22,7 @@
 // The OS sources live under internal/platform; ThisOS picks the ones for
 // the OS the agent runs on. The focus watcher (WP-OS2), the process
 // scanner (WP-OS6) and the hook path (WP-AG3) report to a Sampler through
-// Focus, HarnessProcesses and Hook.
+// FocusAt, HarnessProcesses and Hook.
 package presence
 
 import (
@@ -150,7 +150,10 @@ type Sampler struct {
 	timer    *sched.Job    // nil until a context first goes live
 	due      time.Time     // when timer fires; zero while it is stopped
 	every    time.Duration // the cadence timer was armed for
-	last     time.Time     // when the latest sample was taken
+	last     time.Time     // the time of the latest sample
+	// recAt is the time of the latest record, the sampler's own or one a
+	// FocusAt caller wrote, which no later record goes before.
+	recAt    time.Time
 	samples  uint64
 	problems map[string]string
 }
@@ -261,7 +264,51 @@ func (s *Sampler) Stop() {
 // ContextWindow after one loses focus. A live context takes a sample at
 // once.
 func (s *Sampler) Focus(c event.AppClass) {
-	s.update(func(now time.Time) { s.g.focus(now, c) }, true)
+	s.FocusAt(time.Now(), c, nil)
+}
+
+// FocusAt is Focus for a caller that records the change itself, as the
+// focus component writes an os.focus record of each one (WP-OS2). at is
+// when the change was seen, from time.Now. Under the sampler's lock the
+// gate hears the change, then write, unless it is nil, gets the time the
+// change is dated and whether a project context is live, and then a live
+// context takes its sample, dated that same time. So the caller's record
+// and the sample share a millisecond, with the sample after the record,
+// as the scorer expects of a sample taken at an event
+// (testdata/timelines/README.md).
+//
+// The change is dated at, or at the time of the latest record if that is
+// later, so records never go back in time. The sample reads the idle time
+// when it is taken and moves it back to the time it is dated, so it still
+// says when the last input was. write runs while the sampler is locked,
+// so it must return quickly and must not call the Sampler. Once the
+// sampler has stopped, write gets false.
+func (s *Sampler) FocusAt(at time.Time, c event.AppClass, write func(at time.Time, live bool)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.recAt.After(at) {
+		at = s.recAt
+	}
+	if s.stopped {
+		if write != nil {
+			write(at, false)
+		}
+		return
+	}
+	now := time.Now()
+	s.g.focus(wall(now), c)
+	live := s.g.interval(wall(now)) != 0
+	if write != nil {
+		write(at, live)
+		s.recAt = at
+	}
+	if !s.started {
+		return
+	}
+	if live {
+		s.sampleAt(at, now, true)
+	}
+	s.arm(now)
 }
 
 // Hook reports a hook or track message of kind k from the harness session
@@ -374,6 +421,15 @@ func (s *Sampler) tick(time.Time) {
 // sample reads the idle time and records an os.presence sample. An
 // immediate sample that would repeat the last one is left out (minGap).
 func (s *Sampler) sample(now time.Time, immediate bool) {
+	s.sampleAt(now, now, immediate)
+}
+
+// sampleAt is sample for a sample dated at, which may be a moment before
+// now, when the idle time is read: FocusAt dates a focus change's sample
+// at the time of the caller's record. The idle times are moved back by
+// the difference, so the sample still says when the last input was. An
+// input after at shows as idle 0, the most a sample dated at can say.
+func (s *Sampler) sampleAt(at, now time.Time, immediate bool) {
 	idle, err := s.opts.OS.Idle()
 	if err != nil {
 		s.setProblem("idle", fmt.Sprintf("couldn't read the input idle time, so presence has gaps: %v", err))
@@ -383,15 +439,16 @@ func (s *Sampler) sample(now time.Time, immediate bool) {
 	if immediate && s.repeats(now, idle.Any) {
 		return
 	}
-	p := &event.OSPresence{IdleAnyS: seconds(idle.Any), Locked: s.locked}
+	late := max(now.Sub(at), 0)
+	p := &event.OSPresence{IdleAnyS: seconds(idle.Any - late), Locked: s.locked}
 	if idle.HasKeys {
-		keys := seconds(idle.Keys)
+		keys := seconds(idle.Keys - late)
 		p.IdleKeysS = &keys
 	}
-	s.last = now
+	s.last = at
 	s.samples++
 	s.g.sampled(wall(now), idle.Any)
-	s.emit(Record{At: now, Data: p})
+	s.emit(Record{At: at, Data: p})
 }
 
 // repeats reports whether a sample at now that shows idle since the last
@@ -433,6 +490,9 @@ func (s *Sampler) arm(now time.Time) {
 }
 
 func (s *Sampler) emit(r Record) {
+	if r.At.After(s.recAt) {
+		s.recAt = r.At
+	}
 	if s.opts.Record != nil {
 		s.opts.Record(r)
 	}

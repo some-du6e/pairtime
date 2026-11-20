@@ -93,6 +93,9 @@ type env struct {
 	s                           *Sampler
 	suspend, lock               func(event.PowerOp)
 	suspendStopped, lockStopped bool
+	// note lists what a FocusAt caller records among the sampler's
+	// records, described as describe would, at its time after the start.
+	note func(at time.Time, what string)
 }
 
 type act struct {
@@ -103,6 +106,19 @@ type act struct {
 func at(d time.Duration, do func(e *env)) act { return act{at: d, do: do} }
 
 func focusOn(c event.AppClass) func(*env) { return func(e *env) { e.s.Focus(c) } }
+
+// focusSeen is a change to an app of class c that the focus component saw
+// at the act's time and reports walk later, once it has read the process
+// table. The record it writes in FocusAt's callback shows as "focus".
+func focusSeen(walk time.Duration, c event.AppClass) func(*env) {
+	return func(e *env) {
+		seen := time.Now()
+		time.Sleep(walk)
+		e.s.FocusAt(seen, c, func(at time.Time, live bool) {
+			e.note(at, fmt.Sprintf("focus %s live=%v", c, live))
+		})
+	}
+}
 
 func hookOf(session string, k event.Kind) func(*env) {
 	return func(e *env) { e.s.Hook(session, k) }
@@ -279,6 +295,66 @@ func TestSampler(t *testing.T) {
 			},
 			end:  s(16),
 			want: []string{"1s presence idle=0.5", "8s presence idle=7.5", "15s presence idle=14.5"},
+		},
+		{
+			name:   "a focus change its caller records is dated when it was seen, and the sample after the record says when the last input was",
+			inputs: []time.Duration{s(0.5), s(6.5)},
+			acts: []act{
+				at(s(1), focusOn(event.AppTerminal)),
+				at(s(7), focusSeen(30*time.Millisecond, event.AppBrowser)),
+			},
+			end: s(16),
+			want: []string{
+				"1s presence idle=0.5",
+				"7s focus browser live=true",
+				"7s presence idle=0.5",
+				"15s presence idle=8.5",
+			},
+		},
+		{
+			name:   "an input after a focus change was seen shows in the change's sample as idle 0",
+			inputs: []time.Duration{s(0.5), s(7.01)},
+			acts: []act{
+				at(s(1), focusOn(event.AppTerminal)),
+				at(s(7), focusSeen(30*time.Millisecond, event.AppBrowser)),
+			},
+			end: s(16),
+			want: []string{
+				"1s presence idle=0.5",
+				"7s focus browser live=true",
+				"7s presence idle=0",
+				"15s presence idle=7.99",
+			},
+		},
+		{
+			name:   "a sample taken between a focus change and its report dates the change, so no record goes back in time",
+			inputs: []time.Duration{s(0.5), s(14.99)},
+			acts: []act{
+				at(s(1), focusOn(event.AppTerminal)),
+				at(s(14.995), focusSeen(30*time.Millisecond, event.AppBrowser)),
+			},
+			end: s(31),
+			want: []string{
+				"1s presence idle=0.5",
+				"15s presence idle=0.01",
+				"15s focus browser live=true",
+				"30s presence idle=15.01",
+			},
+		},
+		{
+			name:   "a focus change outside a project context tells its caller none is live, and takes no sample",
+			inputs: []time.Duration{s(0.5)},
+			acts: []act{
+				at(s(3), focusSeen(0, event.AppBrowser)),
+				at(s(8), focusSeen(0, event.AppTerminal)),
+			},
+			end: s(16),
+			want: []string{
+				"3s focus browser live=false",
+				"8s focus terminal live=true",
+				"8s presence idle=7.5",
+				"15s presence idle=14.5",
+			},
 		},
 		{
 			name:   "a lock and an unlock are recorded, each with a sample after it, and the lock seals",
@@ -535,7 +611,11 @@ func TestSampler(t *testing.T) {
 				var seals []event.PowerOp
 				var problems []string
 				p := &person{start: start, inputs: tt.inputs, keys: tt.keys, fail: tt.failIdle}
-				e := &env{t: t}
+				e := &env{t: t, note: func(at time.Time, what string) {
+					mu.Lock()
+					defer mu.Unlock()
+					got = append(got, fmt.Sprintf("%v %s", at.Sub(start), what))
+				}}
 				osys := OS{
 					Idle: p.idle,
 					Locked: func() (bool, error) {
@@ -703,6 +783,47 @@ func TestStatus(t *testing.T) {
 				if got.Live != tt.want.Live || got.Every != tt.want.Every || got.Locked != tt.want.Locked ||
 					got.Samples != tt.want.Samples || len(got.Problems) != 0 {
 					t.Errorf("Status() = %+v, want %+v", got, tt.want)
+				}
+			})
+		})
+	}
+}
+
+// TestFocusAtOutsideSampling checks what a FocusAt caller hears while the
+// sampler isn't sampling: before Start the gate already counts the
+// change, and after Stop nothing is live. Neither takes a sample.
+func TestFocusAtOutsideSampling(t *testing.T) {
+	tests := []struct {
+		name        string
+		start, stop bool
+		wantLive    bool
+	}{
+		{"before Start, focus on a terminal is a live context for the caller, and nothing is sampled", false, false, true},
+		{"after Stop, the caller hears that no context is live, and nothing is sampled", true, true, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				p := &person{start: time.Now(), inputs: []time.Duration{0}}
+				recs := 0
+				smp := New(Options{Sched: sched.New(), OS: OS{Idle: p.idle}, Params: table010(t), Record: func(Record) { recs++ }})
+				if tt.start {
+					smp.Start()
+				}
+				if tt.stop {
+					smp.Stop()
+				}
+				seen := time.Now()
+				calls := 0
+				smp.FocusAt(seen, event.AppTerminal, func(at time.Time, live bool) {
+					calls++
+					if !at.Equal(seen) || live != tt.wantLive {
+						t.Errorf("write(%v, %v), want write(%v, %v)", at, live, seen, tt.wantLive)
+					}
+				})
+				smp.Stop()
+				if calls != 1 || recs != 0 {
+					t.Errorf("write ran %d times and the sampler wrote %d records, want once and none", calls, recs)
 				}
 			})
 		})
