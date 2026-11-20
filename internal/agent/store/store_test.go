@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -218,6 +219,156 @@ func TestReopen(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestFlushes(t *testing.T) {
+	const day = "2026-11-20"
+	a := map[string][]Credited{"p_a": {{Why: event.ReasonPrompt, Ev: event.EvidenceA, Halves: 30}}}
+	more := map[string][]Credited{"p_a": {{Why: event.ReasonPrompt, Ev: event.EvidenceA, Halves: 40}}}
+	put := func(t *testing.T, s *Buckets, at string, c map[string][]Credited) {
+		t.Helper()
+		if _, _, err := s.Put(bucket(t, at, event.StatePending, c, nil)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// lines returns the file's lines, each of which must be a whole revision.
+	lines := func(t *testing.T, name string) []string {
+		t.Helper()
+		data, err := os.ReadFile(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ls := strings.Split(strings.TrimSuffix(string(data), "\n"), "\n")
+		for i, l := range ls {
+			if !strings.HasPrefix(l, `{"v":`) || !strings.HasSuffix(l, "}") {
+				t.Errorf("line %d isn't a whole revision: %q", i, l)
+			}
+		}
+		return ls
+	}
+	tests := []struct {
+		name string
+		// after runs once a flush has failed, with fail still set.
+		after func(t *testing.T, s *Buckets, fail *atomic.Bool, name string)
+	}{
+		{
+			name: "after a flush that failed, the next one writes the file again whole",
+			after: func(t *testing.T, s *Buckets, fail *atomic.Bool, name string) {
+				fail.Store(false)
+				if err := s.Sync(); err != nil {
+					t.Fatal(err)
+				}
+				if got := lines(t, name); len(got) != 4 {
+					t.Errorf("the file holds %d lines, want the 4 revisions", len(got))
+				}
+			},
+		},
+		{
+			name: "a revision whose line the failed flush lost is written again",
+			after: func(t *testing.T, s *Buckets, fail *atomic.Bool, name string) {
+				// The pages the failed flush held never reached the disk.
+				ls := lines(t, name)
+				if err := os.Truncate(name, int64(len(ls[0])+len(ls[1])+2)); err != nil {
+					t.Fatal(err)
+				}
+				fail.Store(false)
+				if err := s.Sync(); err != nil {
+					t.Fatal(err)
+				}
+				if got := lines(t, name); len(got) != 4 {
+					t.Errorf("the file holds %d lines, want the 2 that were flushed and the 2 latest revisions again", len(got))
+				}
+				s2 := open(t, filepath.Dir(name))
+				if b, ok, err := s2.Latest(minute(t, day+"T10:00:00Z").UnixMilli()); err != nil || !ok || b.Rev != 1 || b.CreditedS != 20 {
+					t.Errorf("10:00 reads back as rev %d with %v s (%v, %v), want rev 1 with 20 s", b.Rev, b.CreditedS, ok, err)
+				}
+				if _, ok, err := s2.Latest(minute(t, day+"T10:02:00Z").UnixMilli()); err != nil || !ok {
+					t.Errorf("10:02 doesn't read back: %v, %v", ok, err)
+				}
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			s := open(t, dir)
+			var fail atomic.Bool
+			s.syncFile = func(f *os.File) error {
+				if fail.Load() {
+					return errors.New("injected: input/output error")
+				}
+				return f.Sync()
+			}
+			put(t, s, day+"T10:00:00Z", a)
+			put(t, s, day+"T10:01:00Z", a)
+			if err := s.Sync(); err != nil {
+				t.Fatal(err)
+			}
+			put(t, s, day+"T10:00:00Z", more)
+			put(t, s, day+"T10:02:00Z", a)
+			fail.Store(true)
+			if err := s.Sync(); err == nil {
+				t.Fatal("the injected flush failure didn't fail Sync")
+			}
+			tt.after(t, s, &fail, filepath.Join(dir, day+".jsonl"))
+		})
+	}
+	t.Run("Forget keeps a day whose flush fails, and the next Sync flushes it", func(t *testing.T) {
+		dir := t.TempDir()
+		s := open(t, dir)
+		var fail atomic.Bool
+		s.syncFile = func(f *os.File) error {
+			if fail.Load() {
+				return errors.New("injected: input/output error")
+			}
+			return f.Sync()
+		}
+		put(t, s, day+"T10:00:00Z", a)
+		future := minute(t, "2027-01-01T00:00:00Z").UnixMilli()
+		fail.Store(true)
+		if err := s.Forget(future); err == nil {
+			t.Error("Forget reported no error for a flush that failed")
+		}
+		if _, ok := s.days[day]; !ok {
+			t.Fatal("Forget dropped a day whose flush failed")
+		}
+		fail.Store(false)
+		if err := s.Sync(); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.Forget(future); err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := s.days[day]; ok {
+			t.Error("Forget kept a day that flushed")
+		}
+		if got := lines(t, filepath.Join(dir, day+".jsonl")); len(got) != 1 {
+			t.Errorf("the file holds %d lines, want 1", len(got))
+		}
+	})
+	t.Run("Unflushed has the next Sync flush a file another run appended to", func(t *testing.T) {
+		dir := t.TempDir()
+		first := open(t, dir)
+		put(t, first, day+"T10:00:00Z", a)
+		if err := first.Close(); err != nil {
+			t.Fatal(err)
+		}
+		s := open(t, dir)
+		var flushed int
+		s.syncFile = func(f *os.File) error {
+			flushed++
+			return f.Sync()
+		}
+		if err := s.Sync(); err != nil || flushed != 0 {
+			t.Fatalf("Sync flushed %d files (%v) before Unflushed, want none", flushed, err)
+		}
+		if err := s.Unflushed(minute(t, day+"T10:00:00Z").UnixMilli()); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.Sync(); err != nil || flushed != 1 {
+			t.Errorf("Sync flushed %d files (%v) after Unflushed, want 1", flushed, err)
+		}
+	})
 }
 
 func TestRangeAndPending(t *testing.T) {
