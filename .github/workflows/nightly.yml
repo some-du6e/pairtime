@@ -54,5 +54,7 @@ jobs:
       - name: 60 s of fuzzing on ingest's free-text firewall
         # WP-SV5: FuzzFreeText's seeds run with every go test; this hunts for
         # text the shape check lets into a field. A failing input is printed
-        # in the log and kept under testdata/fuzz on the runner.
+        # in the log and kept under testdata/fuzz on the runner. It is a
+        # check of its own, so it runs when the race step fails too.
+        if: ${{ !cancelled() }}
         run: go test -run '^$' -fuzz '^FuzzFreeText$' -fuzztime 60s ./internal/server/ingest
