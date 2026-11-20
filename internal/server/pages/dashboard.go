@@ -545,7 +545,7 @@ func (s *Site) dashboardPage(v dashboard.View, in SignIn) ([]byte, error) {
 // mistake in dashboard.html stops pairtimed at start instead of reaching a
 // reader.
 func (s *Site) checkDashboard() error {
-	v, err := dashboard.Demo{}.View(context.Background(), 0, time.Date(2026, 11, 20, 12, 0, 0, 0, time.UTC))
+	v, err := dashboard.Demo{}.View(context.Background(), "", time.Date(2026, 11, 20, 12, 0, 0, 0, time.UTC))
 	if err != nil {
 		return err
 	}
@@ -566,7 +566,7 @@ func (s *Site) checkDashboard() error {
 // visitor does to get a dashboard of their own, which depends on in.
 func (s *Site) RegisterDemo(mux *http.ServeMux, in SignIn, now func() time.Time) {
 	mux.HandleFunc("GET /demo", func(w http.ResponseWriter, r *http.Request) {
-		v, err := dashboard.Demo{}.View(r.Context(), 0, now())
+		v, err := dashboard.Demo{}.View(r.Context(), "", now())
 		var page []byte
 		if err == nil {
 			page, err = s.dashboardPage(v, in)

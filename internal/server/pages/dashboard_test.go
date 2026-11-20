@@ -290,7 +290,7 @@ func TestDemoRoute(t *testing.T) {
 // TestDemoNumbers checks the page's figures against the sample's View, so
 // the page shows the numbers dashboard.Build summed and no others.
 func TestDemoNumbers(t *testing.T) {
-	v, err := dashboard.Demo{}.View(context.Background(), 0, demoClock)
+	v, err := dashboard.Demo{}.View(context.Background(), "", demoClock)
 	if err != nil {
 		t.Fatal(err)
 	}

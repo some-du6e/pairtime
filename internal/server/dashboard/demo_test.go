@@ -14,7 +14,7 @@ var demoNow = time.Date(2026, 11, 20, 18, 30, 0, 0, time.UTC)
 
 func demoView(t *testing.T, now time.Time) View {
 	t.Helper()
-	v, err := Demo{}.View(context.Background(), 0, now)
+	v, err := Demo{}.View(context.Background(), "", now)
 	if err != nil {
 		t.Fatalf("Demo.View: %v", err)
 	}

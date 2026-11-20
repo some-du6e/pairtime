@@ -14,9 +14,11 @@
 // credit the same slot (SM 3.4).
 //
 // This file is the contract between ingest (WP-SV4) and the rollups, fixed
-// by the dashboard wave. Two fields differ from the wave's first sketch, so
-// that nothing the client uploads is lost on the way in:
+// by the dashboard wave. Three fields differ from the wave's first sketch:
 //
+//   - Account is a string, the users row's id. Accounts are keyed by a
+//     UUIDv7 in TEXT (migration 0002, package store's rules), so there is
+//     no int64 row id to carry.
 //   - Seconds are float64, as in pkg/event. A slot's cr is 0 to 15 seconds
 //     in steps of 0.5, because a half-weight second credits half a second
 //     (SM 4.3, 5.1), so an int would drop the halves. agent_running_s and
@@ -35,8 +37,8 @@ import (
 // Bucket is one stored minute-bucket revision (DESIGN 4.3), already
 // through ingest's shape check.
 type Bucket struct {
-	// Account is the users row of the device's owner.
-	Account int64
+	// Account is the id of the device owner's users row, a UUIDv7.
+	Account string
 	// Device is the opaque device_id.
 	Device string
 	// Minute is Unix seconds at the start of the minute, UTC.

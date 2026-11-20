@@ -33,7 +33,7 @@ const (
 )
 
 // View returns the sample as of now, whatever the account.
-func (Demo) View(_ context.Context, _ int64, now time.Time) (View, error) {
+func (Demo) View(_ context.Context, _ string, now time.Time) (View, error) {
 	today := now.UTC().Format(DateLayout)
 	return Build(Meta{
 		Sample: true,

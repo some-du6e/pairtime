@@ -27,9 +27,9 @@ const (
 // Source is where views come from: the demo's fixed sample, or an
 // account's rollups.
 type Source interface {
-	// View returns account's dashboard as of now. The demo's sample
-	// ignores account.
-	View(ctx context.Context, account int64, now time.Time) (View, error)
+	// View returns the dashboard of account, a users row's id, as of now.
+	// The demo's sample ignores account.
+	View(ctx context.Context, account string, now time.Time) (View, error)
 }
 
 // View is the owner's dashboard.
