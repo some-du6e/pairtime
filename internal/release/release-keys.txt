@@ -4,5 +4,8 @@
 # are comments.
 #
 # To add a key, run `go run ./tools/release keygen` from the repository
-# root. It appends the public half here and prints the secret half once,
-# for the RELEASE_SIGNING_KEY secret. Never put a secret key in this file.
+# root. It appends the public half here and prints the secret half once.
+# The first key's secret half becomes the RELEASE_SIGNING_KEY secret. A key
+# that replaces another stays offline until clients trust it, because the
+# release that adds it must be signed with the current key (the spec's
+# Replacing a key). Never put a secret key in this file.

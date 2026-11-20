@@ -218,11 +218,27 @@ Each publish job then waits for his approval on the run's page.
 
 ### Replacing a key
 
-1. Make a new key with `keygen` and ship a release whose `release-keys.txt` lists both keys.
-2. Sign the following manifests with both. A client that trusts either key accepts them. `internal/release.Sign` takes several keys; `tools/release sign` takes one today and needs a second `-key-env` when this happens.
-3. Once clients have updated, remove the old key from the list and stop signing with it.
+An installed client trusts only the keys compiled into it, so the release that brings a new key has to be signed with the old one.
 
-A leaked secret key can sign manifests that every client trusting it accepts, until those clients update to a build without it. Replace it at once.
+1. Make the new key with `keygen`, with its secret half going only to an offline copy. `RELEASE_SIGNING_KEY` keeps the old key. `keygen` says so when the list already holds a key.
+
+   ```sh
+   go run ./tools/release keygen | age -r <your age recipient> -o "$HOME/release-signing-key-next.age"
+   ```
+
+   Commit `release-keys.txt`, which now lists both keys, in a PR.
+2. Once that PR merges, tag a release. The old key signs it, so installed clients accept it, and its binaries trust both keys. Had the new key replaced `RELEASE_SIGNING_KEY` already, no installed client could verify this release or any after it, and GitHub would never show the old key again to undo that.
+3. Keep signing with the old key until clients run a build that trusts the new one. Raising `minimum-version.txt` to step 2's version in the last release the old key signs tells clients still older than that to update first. Then move the new key into the environment:
+
+   ```sh
+   age -d -i <your age identity> "$HOME/release-signing-key-next.age" \
+     | gh secret set RELEASE_SIGNING_KEY --env release --repo some-du6e/pairtime
+   ```
+
+   A client that never got a build with the new key can't verify a release from here on. Signing with both keys for a while would keep such clients updating: `internal/release.Sign` takes several keys, but `tools/release sign` takes one, so it would need a second `-key-env`, such as `RELEASE_SIGNING_KEY_NEXT`, first.
+4. Remove the old key from `release-keys.txt` in a PR.
+
+A leaked secret key can sign manifests that every client trusting it accepts, until those clients update to a build without it. Replace it at once, without waiting at step 3: the release after step 2's can already be signed with the new key and drop the leaked one from the list.
 
 ## Snapshots and unsigned releases
 

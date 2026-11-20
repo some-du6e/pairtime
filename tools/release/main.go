@@ -148,7 +148,8 @@ func cmdKeygen(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("%w (run keygen from the repository root, or pass -pub)", err)
 	}
-	if _, err := release.ParsePublicKeys(string(old)); err != nil {
+	listed, err := release.ParsePublicKeys(string(old))
+	if err != nil {
 		return fmt.Errorf("%s: %w", *pubPath, err)
 	}
 	key, err := release.GenerateSecretKey(rand.Reader)
@@ -176,9 +177,26 @@ func cmdKeygen(args []string, stdout, stderr io.Writer) error {
 	if _, err := fmt.Fprintln(stdout, key.Text()); err != nil {
 		return fmt.Errorf("printing the secret key: %w; delete key %s from %s and run keygen again", err, pub.ID(), *pubPath)
 	}
-	fmt.Fprintf(stderr, "Added release public key %s to %s. Commit that file.\n"+
-		"The secret key went to standard output and is stored nowhere else: save it as the\n"+
-		"RELEASE_SIGNING_KEY secret and keep an offline copy (docs/spec/update-manifest.md).\n", pub.ID(), *pubPath)
+	if len(listed) == 0 {
+		fmt.Fprintf(stderr, "Added release public key %s to %s. Commit that file.\n"+
+			"The secret key went to standard output and is stored nowhere else.\n"+
+			"Save it as the RELEASE_SIGNING_KEY secret of the release environment, and keep an offline copy.\n"+
+			"See docs/spec/update-manifest.md, Making the key.\n", pub.ID(), *pubPath)
+		return nil
+	}
+	// A replacement. Installed clients trust only the keys already listed,
+	// so storing this key as RELEASE_SIGNING_KEY now would sign the next
+	// release with a key none of them trusts, and GitHub never shows the
+	// old secret again.
+	var ids []string
+	for _, k := range listed {
+		ids = append(ids, k.ID())
+	}
+	fmt.Fprintf(stderr, "Added release public key %s to %s, which already listed %s. Commit that file.\n"+
+		"The secret key went to standard output and is stored nowhere else. Keep it offline for now.\n"+
+		"Leave RELEASE_SIGNING_KEY as it is: installed clients trust only the keys already listed, so the release that adds this one must be signed with the current key.\n"+
+		"Move this key into RELEASE_SIGNING_KEY once clients run a build that trusts it.\n"+
+		"See docs/spec/update-manifest.md, Replacing a key.\n", pub.ID(), *pubPath, strings.Join(ids, ", "))
 	return nil
 }
 

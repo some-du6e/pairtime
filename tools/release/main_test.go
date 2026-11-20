@@ -561,6 +561,7 @@ func TestKeygen(t *testing.T) {
 		{name: "a comment names the key id", ok: strings.Contains(text, "# Key "+secret.Public().ID()+", made ")},
 		{name: "stdout is the secret key and nothing else", ok: out == secret.Text()+"\n"},
 		{name: "stderr names the key id", ok: strings.Contains(errOut, secret.Public().ID())},
+		{name: "stderr says to store a first key as RELEASE_SIGNING_KEY", ok: strings.Contains(errOut, "Save it as the RELEASE_SIGNING_KEY secret of the release environment")},
 		{name: "stderr never shows the secret key", ok: !strings.Contains(errOut, strings.TrimPrefix(secret.Text(), "pairtime-release-ed25519-secret:"))},
 		{name: "the list never holds the secret key", ok: !strings.Contains(text, strings.TrimPrefix(secret.Text(), "pairtime-release-ed25519-secret:"))},
 	}
@@ -572,11 +573,30 @@ func TestKeygen(t *testing.T) {
 		})
 	}
 
-	t.Run("a second key is appended after the first", func(t *testing.T) {
-		mustCLI(t, "keygen", "-pub", list)
+	t.Run("a second key is appended and kept out of RELEASE_SIGNING_KEY until clients trust it", func(t *testing.T) {
+		code, out, errOut := cli(t, "keygen", "-pub", list)
+		if code != 0 {
+			t.Fatalf("exit %d: %s", code, errOut)
+		}
 		keys, err := release.ParsePublicKeys(string(read(t, list)))
-		if err != nil || len(keys) != 2 {
-			t.Fatalf("%d keys, err %v", len(keys), err)
+		next, nextErr := release.ParseSecretKey(out)
+		checks := []struct {
+			name string
+			ok   bool
+		}{
+			{name: "the list holds both keys", ok: err == nil && len(keys) == 2},
+			{name: "stdout is the new secret key", ok: nextErr == nil && next.Public().ID() != secret.Public().ID()},
+			{name: "stderr names the key already listed", ok: strings.Contains(errOut, "already listed "+secret.Public().ID())},
+			{name: "stderr says to leave RELEASE_SIGNING_KEY as it is", ok: strings.Contains(errOut, "Leave RELEASE_SIGNING_KEY as it is")},
+			{name: "stderr says the current key signs the release that adds this one", ok: strings.Contains(errOut, "must be signed with the current key")},
+			{name: "stderr doesn't say to store it as RELEASE_SIGNING_KEY now", ok: !strings.Contains(errOut, "Save it as")},
+		}
+		for _, c := range checks {
+			t.Run(c.name, func(t *testing.T) {
+				if !c.ok {
+					t.Errorf("failed; %d keys (err %v), stdout %q, stderr %q", len(keys), err, out, errOut)
+				}
+			})
 		}
 	})
 	t.Run("a missing key list is an error, not a new file", func(t *testing.T) {
