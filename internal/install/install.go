@@ -124,11 +124,13 @@ var undoers = map[string]undoer{
 }
 
 // Recorder is an Edit that keeps, in the manifest, something its undo needs
-// that neither the target nor what it held before tells: the key that
-// identifies the line WP-IN3 adds to ~/.wakatime.cfg (DESIGN 5.6), which the
-// agent rewrites when its port changes, so that uninstall takes out that
-// line and no other. Each install records what its edit returns, in place
-// of what an earlier install of the same item recorded.
+// that neither the target nor what it held before tells: the kind of entry
+// an autostart edit writes, so that uninstall can tell pairtime's entry from
+// another program's that took its place, or the key that identifies the
+// line WP-IN3 adds to ~/.wakatime.cfg (DESIGN 5.6), which the agent rewrites
+// when its port changes, so that uninstall takes out that line and no
+// other. Each install records what its edit returns, in place of what an
+// earlier install of the same item recorded.
 type Recorder interface {
 	Edit
 	// Record returns the data as JSON, or nil for none.

@@ -345,3 +345,106 @@ func TestReinstallKeepsLinuxAutostartOff(t *testing.T) {
 		})
 	}
 }
+
+// setEntry makes env's autostart entry hold data, as a file or a value of
+// type typ in in's registry.
+func setEntry(t *testing.T, env Env, in *Installer, data string, typ uint32) {
+	t.Helper()
+	item, err := Autostart(env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if target := item.Edits[0].Target(); target.isRegistry() {
+		if err := in.Registry.Set(target.Key, target.Name, data, typ); err != nil {
+			t.Fatal(err)
+		}
+	} else {
+		writeFile(t, target.Path, []byte(data))
+	}
+}
+
+// otherEntries are entries of other programs at pairtime's autostart
+// names, with their registry type on Windows.
+var otherEntries = map[string]struct {
+	data string
+	typ  uint32
+}{
+	"windows": {`"C:\Program Files\Other\other.exe" --tray`, RegSZ},
+	"darwin":  {string(launchAgent("/usr/local/bin/other")), 0},
+	"linux":   {"[Desktop Entry]\nType=Application\nExec=/usr/bin/other --tray\n", 0},
+}
+
+func TestUninstallKeepsAnEntryThatTookPairtimesPlace(t *testing.T) {
+	tests := []struct {
+		name string
+		goos string
+		// off, when set, is appended to pairtime's own entry instead: the
+		// teen turned it off, and it is still pairtime's.
+		off string
+	}{
+		{name: "a Run value another program wrote over pairtime's after install stays", goos: "windows"},
+		{name: "a LaunchAgent another program wrote over pairtime's after install stays", goos: "darwin"},
+		{name: "a desktop entry another program wrote over pairtime's after install stays", goos: "linux"},
+		{name: "pairtime's desktop entry the teen turned off after install still goes", goos: "linux", off: "Hidden=true\n"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			env := testEnv(t, tt.goos, nil)
+			in := newInstaller(t)
+			item, err := Autostart(env)
+			if err != nil {
+				t.Fatal(err)
+			}
+			install(t, in, item)
+			other := otherEntries[tt.goos]
+			if tt.off != "" {
+				other.data, other.typ = string(autostartEntry(t, env, in).Data)+tt.off, 0
+			}
+			setEntry(t, env, in, other.data, other.typ)
+
+			uninstall(t, in)
+			got := autostartEntry(t, env, in)
+			switch {
+			case tt.off != "" && got.Exists:
+				t.Errorf("after uninstall pairtime's entry, turned off, is still there:\n%s", got.Data)
+			case tt.off == "" && (!got.Exists || string(got.Data) != other.data):
+				t.Errorf("after uninstall the entry holds %q (there: %v), want the other program's %q", got.Data, got.Exists, other.data)
+			}
+			checkGone(t, in.Dir, "pairtime's install directory")
+		})
+	}
+}
+
+func TestReinstallSavesAnEntryThatTookPairtimesPlace(t *testing.T) {
+	tests := []struct {
+		name string
+		goos string
+	}{
+		{"a Run value another program wrote over pairtime's comes back when uninstall follows a reinstall", "windows"},
+		{"a LaunchAgent another program wrote over pairtime's comes back when uninstall follows a reinstall", "darwin"},
+		{"a desktop entry another program wrote over pairtime's comes back when uninstall follows a reinstall", "linux"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			env := testEnv(t, tt.goos, nil)
+			in := newInstaller(t)
+			item, err := Autostart(env)
+			if err != nil {
+				t.Fatal(err)
+			}
+			install(t, in, item)
+			other := otherEntries[tt.goos]
+			setEntry(t, env, in, other.data, other.typ)
+
+			install(t, in, item) // writes pairtime's entry over the other one
+			if got := autostartEntry(t, env, in); !bytes.Equal(got.Data, item.Edits[0].(ownedEdit).data) {
+				t.Fatalf("after the reinstall the entry holds %q, want pairtime's", got.Data)
+			}
+			uninstall(t, in)
+			if got := autostartEntry(t, env, in); !got.Exists || string(got.Data) != other.data || got.Type != other.typ {
+				t.Errorf("after uninstall the entry holds %q (type %d, there: %v), want the other program's %q (type %d)", got.Data, got.Type, got.Exists, other.data, other.typ)
+			}
+			checkGone(t, in.Dir, "pairtime's install directory")
+		})
+	}
+}

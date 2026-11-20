@@ -52,16 +52,16 @@ func Autostart(env Env) (Item, error) {
 		if err != nil {
 			return Item{}, err
 		}
-		e = ownedEdit{target: RegistryValue(RunKey, RunValue), data: []byte(cmd), typ: RegSZ, claim: isAgentRunValue}
+		e = ownedEdit{target: RegistryValue(RunKey, RunValue), data: []byte(cmd), typ: RegSZ, entry: entryRunValue}
 	case "darwin":
 		path := filepath.Join(env.Home, "Library", "LaunchAgents", LaunchAgentLabel+".plist")
-		e = ownedEdit{target: File(path), data: launchAgent(env.Exe), claim: isAgentLaunchAgent}
+		e = ownedEdit{target: File(path), data: launchAgent(env.Exe), entry: entryLaunchAgent}
 	case "linux":
 		data, err := desktopEntry(env.Exe)
 		if err != nil {
 			return Item{}, err
 		}
-		e = ownedEdit{target: File(filepath.Join(configHome(env), "autostart", DesktopFile)), data: data, claim: isAgentDesktopEntry, keep: keepOffSwitch}
+		e = ownedEdit{target: File(filepath.Join(configHome(env), "autostart", DesktopFile)), data: data, entry: entryDesktop, keep: keepOffSwitch}
 	default:
 		return Item{}, fmt.Errorf("pairtime can't start itself at login on %s", env.GOOS)
 	}
@@ -196,44 +196,92 @@ type ownedEdit struct {
 	target Target
 	data   []byte
 	typ    uint32 // a registry value's type; 0 for a file
-	// claim reports whether content at the target is an entry some
-	// pairtime wrote: one that starts the agent of a binary called
-	// pairtime, at any path. nil claims only what this edit writes.
-	claim func(Content) bool
+	// entry is the kind of entry the edit writes, which picks the function
+	// that recognizes an entry some pairtime wrote (agentEntries). ""
+	// recognizes only what this edit writes.
+	entry string
 	// keep, when set, returns data with what the teen set in cur, an entry
 	// pairtime wrote, carried over, such as autostart turned off.
 	keep func(cur, data []byte) []byte
+}
+
+// The kinds of entry an owned edit writes. The manifest records the kind
+// (ownedData), so that uninstall, working from the manifest alone, can
+// tell an entry some pairtime wrote from one that took its place.
+const (
+	entryRunValue    = "run_value"
+	entryLaunchAgent = "launch_agent"
+	entryDesktop     = "desktop_entry"
+)
+
+// agentEntries recognize, for each kind of entry, one that starts the agent
+// of a binary called pairtime, at any path, turned off or not.
+var agentEntries = map[string]func(Content) bool{
+	entryRunValue:    isAgentRunValue,
+	entryLaunchAgent: isAgentLaunchAgent,
+	entryDesktop:     isAgentDesktopEntry,
+}
+
+// isAgentEntry reports whether c, an entry of the kind entry, is one some
+// pairtime wrote.
+func isAgentEntry(entry string, c Content) bool {
+	f := agentEntries[entry]
+	return f != nil && f(c)
+}
+
+// ownedData is what an owned edit records for its undo.
+type ownedData struct {
+	Entry string `json:"entry"`
 }
 
 func (e ownedEdit) Target() Target { return e.target }
 
 func (e ownedEdit) Kind() string { return kindOwned }
 
+// Record makes ownedEdit a Recorder of the kind of entry it writes, which
+// undoOwned needs and neither the target nor what it held before tells.
+func (e ownedEdit) Record() json.RawMessage {
+	if e.entry == "" {
+		return nil
+	}
+	data, _ := json.Marshal(ownedData{Entry: e.entry}) // a string field always marshals
+	return data
+}
+
+// claim reports whether cur is an entry some pairtime wrote, such as the
+// entry of an install whose binary was somewhere else.
+func (e ownedEdit) claim(cur Content) bool { return isAgentEntry(e.entry, cur) }
+
 // claims makes ownedEdit a claimer: an entry is pairtime's when it is what
-// this edit writes, or what claim recognizes, such as the entry of an
-// install whose binary was somewhere else.
+// this edit writes, or what claim recognizes.
 func (e ownedEdit) claims(cur Content) bool {
 	if next, err := e.Apply(cur); err == nil && next.Same(cur) {
 		return true
 	}
-	return e.claim != nil && e.claim(cur)
+	return e.claim(cur)
 }
 
 func (e ownedEdit) Apply(cur Content) (Content, error) {
 	next := Content{Exists: true, Data: e.data, Type: e.typ}
 	if cur.Exists {
 		next.Mode = cur.Mode
-		if e.keep != nil && e.claim != nil && e.claim(cur) {
+		if e.keep != nil && e.claim(cur) {
 			next.Data = e.keep(cur.Data, e.data)
 		}
 	}
 	return next, nil
 }
 
-// undoOwned puts back what was there before pairtime, which for an entry
-// pairtime created means nothing. An entry the teen deleted stays deleted.
-func undoOwned(cur, base Content, _ json.RawMessage) (Content, error) {
-	if !cur.Exists {
+// undoOwned takes an owned edit out of cur, a target that changed since
+// pairtime wrote it. An entry that is still recognizably pairtime's, such
+// as its autostart turned off, gives way to base, what was there before
+// pairtime, which for an entry pairtime created means nothing. Anything
+// else at the name stays, such as another program's entry that took
+// pairtime's place, and so does an entry whose kind data doesn't name. An
+// entry the teen deleted stays deleted.
+func undoOwned(cur, base Content, data json.RawMessage) (Content, error) {
+	var d ownedData
+	if !cur.Exists || json.Unmarshal(data, &d) != nil || !isAgentEntry(d.Entry, cur) {
 		return cur, nil
 	}
 	return base, nil
