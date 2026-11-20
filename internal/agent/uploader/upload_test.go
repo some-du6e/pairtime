@@ -265,6 +265,9 @@ func TestUploadDay(t *testing.T) {
 			if labels != 1 {
 				t.Errorf("the labels went %d times", labels)
 			}
+			// The failure notes aren't sealed yet, so once the uploader has
+			// saved its place nothing is left to send.
+			waitFor(t, "the uploader's place on disk", func() bool { return preview(t).JSON == nil })
 		}},
 		{"every receipt is in batches.seg and checks out under the server key", func(t *testing.T) {
 			_, rows, err := ledger.ReadRows(dirs.Ledger(), 1)
