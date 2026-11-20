@@ -1,0 +1,215 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# The client's footprint on windows-latest, measured by the OS around the
+# process rather than by the agent (DESIGN 9.7; docs/PLAN.md, WP-AG1). An
+# idle agent's working set must stay under 25 MB and its CPU time under
+# 0.1% of the wall time. Private bytes, threads, handles and wakeups are
+# reported with no gate yet, and ci.yml gates the binary size. A PR that
+# touches the client gets a 3-minute idle span; the nightly run, release
+# tags and runs by hand get 10 minutes:
+#
+#   gh workflow run footprint.yml --ref <branch> [-f minutes=N]
+name: footprint
+
+on:
+  pull_request:
+    # docs/PLAN.md's paths for this workflow, plus go.sum and this file.
+    paths:
+      - internal/agent/**
+      - internal/platform/windows/**
+      - cmd/pairtime/**
+      - go.mod
+      - go.sum
+      - .github/workflows/footprint.yml
+  push:
+    tags: ["v*"]
+  schedule:
+    # Half an hour after nightly.yml, so the two don't queue together.
+    - cron: "30 3 * * *"
+  workflow_dispatch:
+    inputs:
+      minutes:
+        description: Minutes the agent sits idle while it is measured (up to 20)
+        default: "10"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  footprint:
+    name: idle agent on Windows
+    runs-on: windows-latest
+    timeout-minutes: 30
+    env:
+      # pairtime never uses cgo (AGENTS.md).
+      CGO_ENABLED: "0"
+      IDLE_MINUTES: ${{ github.event_name == 'pull_request' && '3' || inputs.minutes || '10' }}
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      # Actions are pinned to commit SHAs; tags can be moved. Dependabot bumps them.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.mod
+
+      - name: Build pairtime.exe the way releases build it
+        run: |
+          go build -trimpath '-ldflags=-s -w' -o "$env:RUNNER_TEMP\pairtime.exe" ./cmd/pairtime
+          "pairtime.exe is $((Get-Item "$env:RUNNER_TEMP\pairtime.exe").Length) bytes"
+
+      - name: Measure an idle agent
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $exe = Join-Path $env:RUNNER_TEMP 'pairtime.exe'
+          $ptHome = Join-Path $env:RUNNER_TEMP 'pairtime-home'
+          New-Item -ItemType Directory -Force -Path $ptHome | Out-Null
+          # Every pairtime file goes in this directory (internal/agent/home).
+          $env:PAIRTIME_HOME = $ptHome
+          $outLog = Join-Path $env:RUNNER_TEMP 'agent.out.log'
+          $errLog = Join-Path $env:RUNNER_TEMP 'agent.err.log'
+
+          function Show-AgentLog {
+            Write-Host '--- the agent log ---'
+            Get-Content $errLog -ErrorAction SilentlyContinue | Write-Host
+            Get-Content $outLog -ErrorAction SilentlyContinue | Write-Host
+          }
+
+          # The OS's view of the agent. Write-Host, not Write-Output, so the
+          # warning doesn't become part of the returned sample.
+          function Get-Sample($id) {
+            $p = Get-Process -Id $id
+            $switches = $null
+            try {
+              $threads = @(Get-CimInstance -ClassName Win32_PerfRawData_PerfProc_Thread -Filter "IDProcess = $id")
+              if ($threads.Count -gt 0) {
+                $switches = ($threads | Measure-Object -Property ContextSwitchesPersec -Sum).Sum
+              }
+            } catch {
+              Write-Host "::warning::couldn't read the agent's thread context switches: $_"
+            }
+            [pscustomobject]@{
+              Time       = [DateTime]::UtcNow
+              Cpu        = $p.TotalProcessorTime.TotalSeconds
+              WorkingSet = $p.WorkingSet64
+              Private    = $p.PrivateMemorySize64
+              Peak       = $p.PeakWorkingSet64
+              Threads    = $p.Threads.Count
+              Handles    = $p.HandleCount
+              Switches   = $switches
+            }
+          }
+
+          function Verdict($ok) { if ($ok) { 'pass' } else { '**FAIL**' } }
+
+          $agent = Start-Process -FilePath $exe -ArgumentList 'agent' -PassThru -NoNewWindow `
+            -RedirectStandardOutput $outLog -RedirectStandardError $errLog
+          # Holding the handle keeps ExitCode readable after the agent exits.
+          $null = $agent.Handle
+          try {
+            # The agent writes port.json once its HTTP server listens.
+            $portFile = Join-Path $ptHome 'port.json'
+            $deadline = (Get-Date).AddSeconds(60)
+            while (-not (Test-Path $portFile)) {
+              if ($agent.HasExited) { throw "the agent exited with status $($agent.ExitCode) before it was ready" }
+              if ((Get-Date) -gt $deadline) { throw 'the agent wrote no port.json within 60 s' }
+              Start-Sleep -Milliseconds 200
+            }
+            $pf = Get-Content $portFile -Raw | ConvertFrom-Json
+            $headers = @{ Authorization = "Bearer $($pf.token)" }
+            $base = "http://127.0.0.1:$($pf.port)"
+            $status = Invoke-RestMethod -Uri "$base/v1/status" -Headers $headers
+            Write-Host "agent $($status.version.version) is up on port $($pf.port) with pid $($agent.Id)"
+
+            # Let start-up settle, then measure the idle span alone. Nothing
+            # talks to the agent during it.
+            Start-Sleep -Seconds 15
+            $before = Get-Sample $agent.Id
+
+            # The RSS budget holds over the whole span (DESIGN 9.7), and Go
+            # hands freed memory back to Windows, so a rise in the middle
+            # can be gone by the end. So the working set is read every 2 s,
+            # which reads the OS's counters and wakes nothing in the agent.
+            $end = $before.Time.AddMinutes([int]$env:IDLE_MINUTES)
+            $highest = $before.WorkingSet
+            $readings = 1
+            while ($true) {
+              $left = ($end - [DateTime]::UtcNow).TotalMilliseconds
+              if ($left -le 0) { break }
+              Start-Sleep -Milliseconds ([math]::Min(2000, [math]::Ceiling($left)))
+              $ws = (Get-Process -Id $agent.Id).WorkingSet64
+              $readings++
+              if ($ws -gt $highest) { $highest = $ws }
+            }
+            $after = Get-Sample $agent.Id
+            $readings++
+            if ($after.WorkingSet -gt $highest) { $highest = $after.WorkingSet }
+            # The peak counter only rises. If it rose during the span, the
+            # working set reached the new peak then, so that is the span's
+            # highest, even if it came and went between two readings.
+            if ($after.Peak -gt $before.Peak -and $after.Peak -gt $highest) { $highest = $after.Peak }
+            $status = Invoke-RestMethod -Uri "$base/v1/status" -Headers $headers
+
+            $wall = ($after.Time - $before.Time).TotalSeconds
+            $cpuShare = ($after.Cpu - $before.Cpu) / $wall
+            $minutes = $wall / 60
+            $switchesPerMinute = 'n/a'
+            if ($null -ne $before.Switches -and $null -ne $after.Switches) {
+              $switchesPerMinute = [math]::Round(($after.Switches - $before.Switches) / $minutes, 1)
+            }
+
+            # A second agent on the same data directory exits at once with
+            # status 3 (pairtime agent -h).
+            $second = Start-Process -FilePath $exe -ArgumentList 'agent' -PassThru -NoNewWindow -Wait `
+              -RedirectStandardOutput (Join-Path $env:RUNNER_TEMP 'second.out.log') `
+              -RedirectStandardError (Join-Path $env:RUNNER_TEMP 'second.err.log')
+            $secondStatus = $second.ExitCode
+
+            # A clean stop: the agent exits 0 and leaves pid 0 in port.json.
+            $null = Invoke-RestMethod -Method Post -Uri "$base/v1/agent/stop" -Headers $headers
+            if (-not $agent.WaitForExit(20000)) { throw 'the agent was still running 20 s after POST /v1/agent/stop' }
+            $stopStatus = $agent.ExitCode
+            $pidAfter = (Get-Content $portFile -Raw | ConvertFrom-Json).pid
+
+            $budgetRss = 25000000
+            $budgetCpu = 0.001
+            $rssOk = $highest -lt $budgetRss
+            $cpuOk = $cpuShare -lt $budgetCpu
+            $secondOk = $secondStatus -eq 3
+            $stopOk = ($stopStatus -eq 0) -and ($pidAfter -eq 0)
+            $rows = @(
+              "### Idle agent on windows-latest, $([math]::Round($minutes, 1)) minutes",
+              '',
+              '| measure | value | gate |',
+              '|---|---:|---|',
+              "| highest working set over the span ($readings readings and the peak counter) | $highest bytes | under $budgetRss bytes: $(Verdict $rssOk) |",
+              "| CPU time over wall time | $([math]::Round($cpuShare, 6)) | under ${budgetCpu}: $(Verdict $cpuOk) |",
+              "| working set at the start and end of the span | $($before.WorkingSet), $($after.WorkingSet) bytes | none |",
+              "| peak working set since start-up | $($after.Peak) bytes | none |",
+              "| private bytes | $($after.Private) bytes | none |",
+              "| threads, handles | $($after.Threads), $($after.Handles) | none |",
+              "| thread context switches per minute | $switchesPerMinute | none |",
+              "| scheduler wakeups | $($status.wakeups) | none |",
+              "| binary size | $((Get-Item $exe).Length) bytes | ci.yml |",
+              "| a second agent's exit status | $secondStatus | 3: $(Verdict $secondOk) |",
+              "| clean stop: exit status, pid in port.json | $stopStatus, $pidAfter | 0, 0: $(Verdict $stopOk) |"
+            )
+            $summary = $rows -join "`n"
+            $summary | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+            Write-Host $summary
+            if (-not ($rssOk -and $cpuOk -and $secondOk -and $stopOk)) {
+              throw 'the agent failed a footprint gate; see the table above'
+            }
+          } catch {
+            Show-AgentLog
+            throw
+          } finally {
+            if (-not $agent.HasExited) { Stop-Process -Id $agent.Id -Force }
+          }

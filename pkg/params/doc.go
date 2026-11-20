@@ -25,22 +25,36 @@
 // bytewise, no whitespace, and every number exactly as the file writes it.
 // So that the text of a number is a function of its value, numbers are
 // plain decimals with no exponent and no trailing zeros after the point,
-// and strings are printable ASCII. jq produces the same bytes, so anyone
-// can check a hash without pairtime:
+// and strings are printable ASCII. No number but 0 is closer to 0 than
+// 0.000001, which jq would write with an exponent. So jq produces the same
+// bytes, and anyone can check a hash without pairtime:
 //
 //	jq -cSj . pkg/params/tables/0.1.0.json | sha256sum
 //
+// The -j matters: without it jq ends its output with a newline, which the
+// hash doesn't cover.
+//
 // # Reading parameters
 //
-// Each parameter is a constant named exactly as SM writes it, such as
+// Each parameter is a variable named exactly as SM writes it, such as
 // [THINK_LEAD_S], rather than in Go's usual MixedCaps, so that one search
 // finds the spec, the table and every rule that reads it. Its type says how
 // to read it: [Table.Int] for integers, [Table.Rat] for exact rationals and
 // [Table.Bool] for flags. No parameter is ever read as a float64, so
 // pkg/score can stay in integer arithmetic (DESIGN 3.7).
 //
-// A test in this package lists every params.NAME selector in pkg/score
+// The three types are opaque, so these variables are the only names other
+// packages have. A string doesn't convert to one, so tab.Int("THINK_LEAD_S")
+// doesn't compile, and a composite literal outside this package can only
+// make the zero value, which names no parameter and panics when read. The
+// parameters are variables only because a Go constant can't be a struct;
+// nothing assigns them.
+//
+// So every parameter pkg/score reads through Int, Rat or Bool is a
+// params.NAME selector there. A test in this package lists those selectors
 // with go/ast and fails if a table lacks one of the names (TE WP0.6).
+// Table.Text still takes a string, for code that shows a whole table, and
+// the test doesn't see reads through it, so rules don't use it.
 //
 // # Names that differ from SM 8
 //

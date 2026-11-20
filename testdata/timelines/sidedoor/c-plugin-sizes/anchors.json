@@ -1,0 +1,59 @@
+{
+  "fixture": "sidedoor/c-plugin-sizes",
+  "anchors": [
+    {
+      "event_id": "01a2144f-6fc0-7885-bd07-d667456c5b9b",
+      "kind": "substantive_prompt",
+      "t": 1795637080000,
+      "local": "14:04:40",
+      "project_key": "p_3f9b82e02f0c",
+      "origin": "human_typed",
+      "prompt_class": "substantive",
+      "lead_s": 220,
+      "trail_s": 0,
+      "lead_from": "params",
+      "via": "plugin",
+      "level": "C",
+      "sm": "SM 2.2 rule 6 and SM 2.3: lead 120 + 150 / 1.5 = 220 s; level C by DESIGN 6.4"
+    },
+    {
+      "event_id": "01a21454-ee00-7544-8194-7af6f2f7b99d",
+      "kind": "substantive_prompt",
+      "t": 1795637440000,
+      "local": "14:10:40",
+      "project_key": "p_3f9b82e02f0c",
+      "origin": "human_typed",
+      "prompt_class": "substantive",
+      "lead_s": 220,
+      "trail_s": 0,
+      "lead_from": "params",
+      "via": "plugin",
+      "level": "C",
+      "sm": "SM 2.2 rule 6 and SM 2.3: lead 120 + 150 / 1.5 = 220 s; level C by DESIGN 6.4"
+    }
+  ],
+  "turns": [
+    {
+      "session_key": "s_1158c4091219",
+      "turn_key": "t_17828ca8fe9a",
+      "t_submit": 1795637080000,
+      "local_submit": "14:04:40",
+      "t_stop": 1795637120000,
+      "local_stop": "14:05:20",
+      "origin": "human_typed",
+      "prompt_class": "substantive",
+      "sm": "the plugin's own prompt, output and stop"
+    },
+    {
+      "session_key": "s_1158c4091219",
+      "turn_key": "t_823c721f67be",
+      "t_submit": 1795637440000,
+      "local_submit": "14:10:40",
+      "t_stop": 1795637480000,
+      "local_stop": "14:11:20",
+      "origin": "human_typed",
+      "prompt_class": "substantive",
+      "sm": "the plugin's own prompt, output and stop"
+    }
+  ]
+}

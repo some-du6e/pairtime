@@ -43,29 +43,26 @@ func run(t *testing.T, stdin []byte, name string, args ...string) []byte {
 	return out
 }
 
-// jq runs jq -cS . on stdin, or on the file named in args, and returns
-// what it writes without the newline it ends with.
+// jq runs jq -cSj . on stdin, or on the file named in args, and returns
+// what it writes, as doc.go's hash recipe does. The -j leaves out the
+// newline jq -cS ends with. It would also print a top-level string without
+// its quotes, so every document given to jq is an object or an array.
 func jq(t *testing.T, stdin []byte, args ...string) []byte {
 	t.Helper()
-	out := run(t, stdin, "jq", append([]string{"-cS", "."}, args...)...)
-	b, ok := bytes.CutSuffix(out, []byte("\n"))
-	if !ok {
-		t.Fatalf("jq's output doesn't end in a newline: %q", out)
-	}
-	return b
+	return run(t, stdin, "jq", append([]string{"-cSj", "."}, args...)...)
 }
 
 // TestCanonicalMatchesJq is the plan's oracle for the canonical form and
-// the hash: for every embedded table, Canonical is byte for byte what
-// jq -cS . writes for the file, and Hash is what sha256sum prints for
-// those bytes.
+// the hash, run the way doc.go tells readers to run it: for every embedded
+// table, Canonical is byte for byte what jq -cSj . writes for the file,
+// and Hash is what sha256sum prints for those bytes.
 func TestCanonicalMatchesJq(t *testing.T) {
 	for _, tab := range Tables() {
-		t.Run("jq and sha256sum agree with table "+tab.Version(), func(t *testing.T) {
-			file := filepath.Join("tables", tab.Version()+".json")
+		file := filepath.Join("tables", tab.Version()+".json")
+		t.Run("jq -cSj and sha256sum agree with table "+tab.Version(), func(t *testing.T) {
 			want := jq(t, nil, file)
 			if got := tab.Canonical(); !bytes.Equal(got, want) {
-				t.Errorf("Canonical() differs from jq -cS . %s\n got: %s\nwant: %s", file, got, want)
+				t.Errorf("Canonical() differs from jq -cSj . %s\n got: %s\nwant: %s", file, got, want)
 			}
 			out := string(run(t, want, "sha256sum"))
 			sum, _, _ := strings.Cut(out, " ")
@@ -76,11 +73,19 @@ func TestCanonicalMatchesJq(t *testing.T) {
 				t.Errorf("Hash() = %s, but sha256sum of jq's output is %s", got, sum)
 			}
 		})
+		t.Run("jq -cS writes table "+tab.Version()+" with a final newline the hash leaves out", func(t *testing.T) {
+			out := run(t, nil, "jq", "-cS", ".", file)
+			if want := append(tab.Canonical(), '\n'); !bytes.Equal(out, want) {
+				t.Errorf("jq -cS . %s wrote %q, want the canonical bytes and a newline", file, out)
+			}
+		})
 	}
 }
 
 // TestCanonicalForm checks the canonical form on documents that exercise
-// each rule, and that jq writes the same bytes for each of them.
+// each rule, and that jq writes the same bytes for each of them. A case
+// with a JSON escape spells the escape's backslash \x5c, so the source
+// holds the escape and not the character it stands for.
 func TestCanonicalForm(t *testing.T) {
 	cases := []struct {
 		name string
@@ -113,9 +118,24 @@ func TestCanonicalForm(t *testing.T) {
 			`[0,-1,1.5,0.25,0.08,86400,-0.5,9007199254740993]`,
 		},
 		{
+			"numbers at least 0.000001 from 0 stay plain, as jq writes them",
+			`[0.000001,-0.000001,0.0000012,1.0000001,-0.0000012]`,
+			`[0.000001,-0.000001,0.0000012,1.0000001,-0.0000012]`,
+		},
+		{
+			"a number may have maxNumberLen characters",
+			"[" + strings.Repeat("1", maxNumberLen) + "]",
+			"[" + strings.Repeat("1", maxNumberLen) + "]",
+		},
+		{
 			"strings escape only quote and backslash",
 			`["a\"b","c\\d","A/","\/"]`,
 			`["a\"b","c\\d","A/","/"]`,
+		},
+		{
+			"escapes are decoded, so an escaped key sorts as its character and both come out plain",
+			"{\"\x5cu0062\":\"\x5cu0041\",\"a\":2}",
+			`{"a":2,"b":"A"}`,
 		},
 		{
 			"true, false and null stay",
@@ -126,6 +146,11 @@ func TestCanonicalForm(t *testing.T) {
 			"empty objects and arrays stay",
 			`{"a":[],"b":{}}`,
 			`{"a":[],"b":{}}`,
+		},
+		{
+			"nesting may go maxDepth levels deep",
+			strings.Repeat("[", maxDepth) + strings.Repeat("]", maxDepth),
+			strings.Repeat("[", maxDepth) + strings.Repeat("]", maxDepth),
 		},
 		{
 			"a table puts params before version",
@@ -143,7 +168,7 @@ func TestCanonicalForm(t *testing.T) {
 				t.Errorf("canonical form of %q\n got: %s\nwant: %s", c.in, got, c.want)
 			}
 			if got := string(jq(t, []byte(c.in))); got != c.want {
-				t.Errorf("jq -cS . of %q\n got: %s\nwant: %s", c.in, got, c.want)
+				t.Errorf("jq -cSj . of %q\n got: %s\nwant: %s", c.in, got, c.want)
 			}
 		})
 	}
@@ -152,7 +177,7 @@ func TestCanonicalForm(t *testing.T) {
 // TestCanonicalRejects checks that decode refuses every document whose
 // canonical form would be ambiguous or might differ from jq's. An empty
 // want accepts any error, for malformed JSON whose message is the JSON
-// decoder's own.
+// decoder's own. JSON escapes are spelled as in TestCanonicalForm.
 func TestCanonicalRejects(t *testing.T) {
 	cases := []struct {
 		name string
@@ -160,19 +185,24 @@ func TestCanonicalRejects(t *testing.T) {
 		want string
 	}{
 		{"a key can't appear twice", `{"a":1,"a":2}`, `key "a" appears twice`},
-		{"a key can't appear twice under two spellings", `{"a":1,"a":2}`, `key "a" appears twice`},
+		{"a key can't appear twice under two spellings", "{\"\x5cu0061\":1,\"a\":2}", `key "a" appears twice`},
 		{"a key can't appear twice in a nested object", `{"a":{"b":1,"b":1}}`, `key "b" appears twice`},
 		{"numbers have no exponent", `[1e2]`, "plain decimal"},
 		{"numbers have no capital exponent", `[1E2]`, "plain decimal"},
 		{"fractions don't end in zero", `[1.50]`, "plain decimal"},
 		{"whole numbers have no fraction", `[2.0]`, "plain decimal"},
 		{"there is no negative zero", `[-0]`, "plain decimal"},
+		{"a number closer to 0 than 0.000001 is refused, as jq writes it with an exponent", `[0.0000001]`, "plain decimal"},
+		{"a negative number closer to 0 than -0.000001 is refused too", `[-0.0000005]`, "plain decimal"},
+		{"a number has at most maxNumberLen characters", "[" + strings.Repeat("1", maxNumberLen+1) + "]", "characters long"},
 		{"strings are ASCII", `["é"]`, "printable ASCII"},
-		{"escaped non-ASCII counts too", `["é"]`, "printable ASCII"},
+		{"escaped non-ASCII counts too", "[\"\x5cu00e9\"]", "printable ASCII"},
 		{"strings have no control characters", `["a\nb"]`, "printable ASCII"},
 		{"strings have no raw DEL", "[\"\x7f\"]", "printable ASCII"},
-		{"strings have no escaped DEL", `["\u007f"]`, "printable ASCII"},
+		{"strings have no escaped DEL", "[\"\x5cu007f\"]", "printable ASCII"},
 		{"keys are ASCII", `{"é":1}`, "printable ASCII"},
+		{"nesting goes at most maxDepth levels deep", strings.Repeat("[", maxDepth+1) + strings.Repeat("]", maxDepth+1), "nested more than"},
+		{"a million open brackets are refused before they exhaust the stack", strings.Repeat("[", 1<<20), "nested more than"},
 		{"one document only", `{} {}`, "more than one JSON document"},
 		{"there is a document", ``, "no JSON document"},
 		{"whitespace isn't a document", " \n", "no JSON document"},
@@ -203,6 +233,11 @@ func TestPlainDecimal(t *testing.T) {
 		{"a decimal is plain", "1.5", true},
 		{"a decimal below one is plain", "0.08", true},
 		{"a negative decimal is plain", "-0.5", true},
+		{"a millionth is plain", "0.000001", true},
+		{"a first nonzero digit sixth after the point is plain", "0.0000012", true},
+		{"six zeros after a nonzero integer part are plain", "1.0000001", true},
+		{"a number closer to 0 than a millionth isn't, as jq writes it with an exponent", "0.0000001", false},
+		{"a negative number closer to 0 than a millionth isn't either", "-0.0000005", false},
 		{"negative zero isn't", "-0", false},
 		{"a trailing zero isn't", "0.250", false},
 		{"a zero fraction isn't", "1.0", false},

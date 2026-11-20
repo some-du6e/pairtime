@@ -3,6 +3,9 @@
 # (docs/spec/update-manifest.md). One key per line; lines starting with #
 # are comments.
 #
-# To add a key, run `go run ./tools/release keygen` from the repository
-# root. It appends the public half here and prints the secret half once,
-# for the RELEASE_SIGNING_KEY secret. Never put a secret key in this file.
+# To add a key, follow the spec's Making the key, or Replacing a key when
+# this file already lists one, instead of running tools/release keygen by
+# hand. keygen appends the public half here and prints the secret half
+# once. The spec's steps pipe it into an encrypted backup and check that
+# the backup decrypts, where a bare run leaves it in your terminal with no
+# copy. Never put a secret key in this file.

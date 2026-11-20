@@ -1,0 +1,2209 @@
+{
+  "fixture": "lookback/6.1-transcript-only",
+  "title": "Three hours of deep flow with Claude Code, from the transcript alone",
+  "sm": "docs/design/struggle-metric.md 2.8 and 6.1",
+  "date": "2026-11-21",
+  "timezone": "Asia/Kolkata",
+  "utc_offset": "+05:30",
+  "os": "macos",
+  "input_keys": false,
+  "evidence": "C",
+  "witness": "backfilled",
+  "device": "d_d8f6b2257b69",
+  "projects": {"p_0eccb85aa257": "cs2go"},
+  "window": {"start": "2026-11-21T08:30:00Z", "end": "2026-11-21T11:30:00Z", "local": "14:00-17:00"},
+  "rows": [
+    {
+      "start": "2026-11-21T08:30:00Z",
+      "minutes": 1,
+      "local": "14:00",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 20,
+      "credit": {
+        "p_0eccb85aa257": {"P": 20}
+      },
+      "uncredited": null,
+      "codes": ["X.no_anchor"],
+      "agent_running_s": 0,
+      "sm": "2.8; the events of 6.1's 14:00 row",
+      "note": "The prompt at 14:04:00 has 300 typed characters. Its lead is typing time only, 300 / 1.5 = 200 s, from 14:00:40. No think lead, no editor anchors and no stop before it: nothing covers 14:00:00 to 14:00:40.",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"],
+      "erratum": "2026-11-19-sm-2.8-lookback"
+    },
+    {
+      "start": "2026-11-21T08:31:00Z",
+      "minutes": 1,
+      "local": "14:01",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "2.8; the events of 6.1's 14:01 row",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-21T08:32:00Z",
+      "minutes": 1,
+      "local": "14:02",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "2.8; the events of 6.1's 14:02 row",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-21T08:33:00Z",
+      "minutes": 1,
+      "local": "14:03",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "2.8; the events of 6.1's 14:03 row",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-21T08:34:00Z",
+      "minutes": 1,
+      "local": "14:04",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 0,
+      "credit": {},
+      "uncredited": {"X.agent_only": 60},
+      "agent_running_s": 60,
+      "sm": "2.8; the events of 6.1's 14:04 row",
+      "note": "Lookback credits no reading while the agent runs (SM 2.8), so no SUP.",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-21T08:35:00Z",
+      "minutes": 1,
+      "local": "14:05",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 25,
+      "credit": {
+        "p_0eccb85aa257": {"PA": 25}
+      },
+      "uncredited": {"X.agent_only": 35},
+      "agent_running_s": 60,
+      "sm": "2.8; the events of 6.1's 14:05 row",
+      "note": "The permission asked at 14:05:10 is answered at 14:05:25: its 15 s wait, under 60 s, and its 10 s trail, 14:05:10 to 14:05:35.",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"],
+      "erratum": "2026-11-19-sm-2.8-lookback"
+    },
+    {
+      "start": "2026-11-21T08:36:00Z",
+      "minutes": 1,
+      "local": "14:06",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 30,
+      "credit": {
+        "p_0eccb85aa257": {"READ": 30}
+      },
+      "uncredited": {"X.agent_only": 30},
+      "agent_running_s": 30,
+      "sm": "2.8; the events of 6.1's 14:06 row",
+      "note": "The agent stops at 14:06:30 and the next prompt comes at 14:16:00, 570 s later, so the turn's reading counts: 120 s of its 553 1/3 s of output, from the stop to 14:08:30.",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-21T08:37:00Z",
+      "minutes": 1,
+      "local": "14:07",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"READ": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "2.8; the events of 6.1's 14:07 row",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-21T08:38:00Z",
+      "minutes": 1,
+      "local": "14:08",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 30,
+      "credit": {
+        "p_0eccb85aa257": {"READ": 30}
+      },
+      "uncredited": null,
+      "codes": ["X.bucket_cap"],
+      "agent_running_s": 0,
+      "sm": "2.8; the events of 6.1's 14:08 row",
+      "note": "The 120 s of reading end at 14:08:30. The turn's output would last to the next prompt's lead, so only the cap keeps the other 30 s from being read: X.bucket_cap.",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"],
+      "erratum": "2026-11-19-sm-2.8-lookback"
+    },
+    {
+      "start": "2026-11-21T08:39:00Z",
+      "minutes": 3,
+      "local": "14:09-14:11",
+      "bucket": false,
+      "sm": "2.8; the events of 6.1's 14:09 to 14:11 row",
+      "note": "Nothing is credited and no agent runs, so these minutes have no bucket (SM 5.1). The live fixture's browser run and commit or hand edit leave no record in a transcript.",
+      "derived": ["bucket"]
+    },
+    {
+      "start": "2026-11-21T08:42:00Z",
+      "minutes": 1,
+      "local": "14:12",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 20,
+      "credit": {
+        "p_0eccb85aa257": {"P": 20}
+      },
+      "uncredited": null,
+      "codes": ["X.bucket_cap"],
+      "agent_running_s": 0,
+      "sm": "2.8; the events of 6.1's 14:00 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "note": "14:12:00 to 14:12:40 lie between cycle 1's stop and this prompt, so the session would read them but for the 120 s cap: X.bucket_cap, as in the last 30 s of 14:08.",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"],
+      "erratum": "2026-11-19-sm-2.8-lookback"
+    },
+    {
+      "start": "2026-11-21T08:43:00Z",
+      "minutes": 1,
+      "local": "14:13",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "2.8; the events of 6.1's 14:01 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-21T08:44:00Z",
+      "minutes": 1,
+      "local": "14:14",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "2.8; the events of 6.1's 14:02 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-21T08:45:00Z",
+      "minutes": 1,
+      "local": "14:15",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "2.8; the events of 6.1's 14:03 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-21T08:46:00Z",
+      "minutes": 1,
+      "local": "14:16",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 0,
+      "credit": {},
+      "uncredited": {"X.agent_only": 60},
+      "agent_running_s": 60,
+      "sm": "2.8; the events of 6.1's 14:04 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-21T08:47:00Z",
+      "minutes": 1,
+      "local": "14:17",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 25,
+      "credit": {
+        "p_0eccb85aa257": {"PA": 25}
+      },
+      "uncredited": {"X.agent_only": 35},
+      "agent_running_s": 60,
+      "sm": "2.8; the events of 6.1's 14:05 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"],
+      "erratum": "2026-11-19-sm-2.8-lookback"
+    },
+    {
+      "start": "2026-11-21T08:48:00Z",
+      "minutes": 1,
+      "local": "14:18",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 30,
+      "credit": {
+        "p_0eccb85aa257": {"READ": 30}
+      },
+      "uncredited": {"X.agent_only": 30},
+      "agent_running_s": 30,
+      "sm": "2.8; the events of 6.1's 14:06 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-21T08:49:00Z",
+      "minutes": 1,
+      "local": "14:19",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"READ": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "2.8; the events of 6.1's 14:07 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-21T08:50:00Z",
+      "minutes": 1,
+      "local": "14:20",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 30,
+      "credit": {
+        "p_0eccb85aa257": {"READ": 30}
+      },
+      "uncredited": null,
+      "codes": ["X.bucket_cap"],
+      "agent_running_s": 0,
+      "sm": "2.8; the events of 6.1's 14:08 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"],
+      "erratum": "2026-11-19-sm-2.8-lookback"
+    },
+    {
+      "start": "2026-11-21T08:51:00Z",
+      "minutes": 3,
+      "local": "14:21-14:23",
+      "bucket": false,
+      "sm": "2.8; the events of 6.1's 14:09 to 14:11 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "derived": ["bucket"]
+    },
+    {
+      "start": "2026-11-21T08:54:00Z",
+      "minutes": 1,
+      "local": "14:24",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 20,
+      "credit": {
+        "p_0eccb85aa257": {"P": 20}
+      },
+      "uncredited": null,
+      "codes": ["X.bucket_cap"],
+      "agent_running_s": 0,
+      "sm": "2.8; the events of 6.1's 14:00 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"],
+      "erratum": "2026-11-19-sm-2.8-lookback"
+    },
+    {
+      "start": "2026-11-21T08:55:00Z",
+      "minutes": 1,
+      "local": "14:25",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "2.8; the events of 6.1's 14:01 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-21T08:56:00Z",
+      "minutes": 1,
+      "local": "14:26",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "2.8; the events of 6.1's 14:02 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-21T08:57:00Z",
+      "minutes": 1,
+      "local": "14:27",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "2.8; the events of 6.1's 14:03 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-21T08:58:00Z",
+      "minutes": 1,
+      "local": "14:28",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 0,
+      "credit": {},
+      "uncredited": {"X.agent_only": 60},
+      "agent_running_s": 60,
+      "sm": "2.8; the events of 6.1's 14:04 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-21T08:59:00Z",
+      "minutes": 1,
+      "local": "14:29",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 25,
+      "credit": {
+        "p_0eccb85aa257": {"PA": 25}
+      },
+      "uncredited": {"X.agent_only": 35},
+      "agent_running_s": 60,
+      "sm": "2.8; the events of 6.1's 14:05 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"],
+      "erratum": "2026-11-19-sm-2.8-lookback"
+    },
+    {
+      "start": "2026-11-21T09:00:00Z",
+      "minutes": 1,
+      "local": "14:30",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 30,
+      "credit": {
+        "p_0eccb85aa257": {"READ": 30}
+      },
+      "uncredited": {"X.agent_only": 30},
+      "agent_running_s": 30,
+      "sm": "2.8; the events of 6.1's 14:06 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-21T09:01:00Z",
+      "minutes": 1,
+      "local": "14:31",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"READ": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "2.8; the events of 6.1's 14:07 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-21T09:02:00Z",
+      "minutes": 1,
+      "local": "14:32",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 30,
+      "credit": {
+        "p_0eccb85aa257": {"READ": 30}
+      },
+      "uncredited": null,
+      "codes": ["X.bucket_cap"],
+      "agent_running_s": 0,
+      "sm": "2.8; the events of 6.1's 14:08 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"],
+      "erratum": "2026-11-19-sm-2.8-lookback"
+    },
+    {
+      "start": "2026-11-21T09:03:00Z",
+      "minutes": 3,
+      "local": "14:33-14:35",
+      "bucket": false,
+      "sm": "2.8; the events of 6.1's 14:09 to 14:11 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "derived": ["bucket"]
+    },
+    {
+      "start": "2026-11-21T09:06:00Z",
+      "minutes": 1,
+      "local": "14:36",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 20,
+      "credit": {
+        "p_0eccb85aa257": {"P": 20}
+      },
+      "uncredited": null,
+      "codes": ["X.bucket_cap"],
+      "agent_running_s": 0,
+      "sm": "2.8; the events of 6.1's 14:00 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"],
+      "erratum": "2026-11-19-sm-2.8-lookback"
+    },
+    {
+      "start": "2026-11-21T09:07:00Z",
+      "minutes": 1,
+      "local": "14:37",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "2.8; the events of 6.1's 14:01 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-21T09:08:00Z",
+      "minutes": 1,
+      "local": "14:38",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "2.8; the events of 6.1's 14:02 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-21T09:09:00Z",
+      "minutes": 1,
+      "local": "14:39",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "2.8; the events of 6.1's 14:03 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-21T09:10:00Z",
+      "minutes": 1,
+      "local": "14:40",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 0,
+      "credit": {},
+      "uncredited": {"X.agent_only": 60},
+      "agent_running_s": 60,
+      "sm": "2.8; the events of 6.1's 14:04 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-21T09:11:00Z",
+      "minutes": 1,
+      "local": "14:41",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 25,
+      "credit": {
+        "p_0eccb85aa257": {"PA": 25}
+      },
+      "uncredited": {"X.agent_only": 35},
+      "agent_running_s": 60,
+      "sm": "2.8; the events of 6.1's 14:05 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"],
+      "erratum": "2026-11-19-sm-2.8-lookback"
+    },
+    {
+      "start": "2026-11-21T09:12:00Z",
+      "minutes": 1,
+      "local": "14:42",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 30,
+      "credit": {
+        "p_0eccb85aa257": {"READ": 30}
+      },
+      "uncredited": {"X.agent_only": 30},
+      "agent_running_s": 30,
+      "sm": "2.8; the events of 6.1's 14:06 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-21T09:13:00Z",
+      "minutes": 1,
+      "local": "14:43",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"READ": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "2.8; the events of 6.1's 14:07 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-21T09:14:00Z",
+      "minutes": 1,
+      "local": "14:44",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 30,
+      "credit": {
+        "p_0eccb85aa257": {"READ": 30}
+      },
+      "uncredited": null,
+      "codes": ["X.bucket_cap"],
+      "agent_running_s": 0,
+      "sm": "2.8; the events of 6.1's 14:08 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"],
+      "erratum": "2026-11-19-sm-2.8-lookback"
+    },
+    {
+      "start": "2026-11-21T09:15:00Z",
+      "minutes": 3,
+      "local": "14:45-14:47",
+      "bucket": false,
+      "sm": "2.8; the events of 6.1's 14:09 to 14:11 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "derived": ["bucket"]
+    },
+    {
+      "start": "2026-11-21T09:18:00Z",
+      "minutes": 1,
+      "local": "14:48",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 20,
+      "credit": {
+        "p_0eccb85aa257": {"P": 20}
+      },
+      "uncredited": null,
+      "codes": ["X.bucket_cap"],
+      "agent_running_s": 0,
+      "sm": "2.8; the events of 6.1's 14:00 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"],
+      "erratum": "2026-11-19-sm-2.8-lookback"
+    },
+    {
+      "start": "2026-11-21T09:19:00Z",
+      "minutes": 1,
+      "local": "14:49",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "2.8; the events of 6.1's 14:01 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-21T09:20:00Z",
+      "minutes": 1,
+      "local": "14:50",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "2.8; the events of 6.1's 14:02 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-21T09:21:00Z",
+      "minutes": 1,
+      "local": "14:51",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "2.8; the events of 6.1's 14:03 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-21T09:22:00Z",
+      "minutes": 1,
+      "local": "14:52",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 0,
+      "credit": {},
+      "uncredited": {"X.agent_only": 60},
+      "agent_running_s": 60,
+      "sm": "2.8; the events of 6.1's 14:04 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-21T09:23:00Z",
+      "minutes": 1,
+      "local": "14:53",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 25,
+      "credit": {
+        "p_0eccb85aa257": {"PA": 25}
+      },
+      "uncredited": {"X.agent_only": 35},
+      "agent_running_s": 60,
+      "sm": "2.8; the events of 6.1's 14:05 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"],
+      "erratum": "2026-11-19-sm-2.8-lookback"
+    },
+    {
+      "start": "2026-11-21T09:24:00Z",
+      "minutes": 1,
+      "local": "14:54",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 30,
+      "credit": {
+        "p_0eccb85aa257": {"READ": 30}
+      },
+      "uncredited": {"X.agent_only": 30},
+      "agent_running_s": 30,
+      "sm": "2.8; the events of 6.1's 14:06 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-21T09:25:00Z",
+      "minutes": 1,
+      "local": "14:55",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"READ": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "2.8; the events of 6.1's 14:07 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-21T09:26:00Z",
+      "minutes": 1,
+      "local": "14:56",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 30,
+      "credit": {
+        "p_0eccb85aa257": {"READ": 30}
+      },
+      "uncredited": null,
+      "codes": ["X.bucket_cap"],
+      "agent_running_s": 0,
+      "sm": "2.8; the events of 6.1's 14:08 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"],
+      "erratum": "2026-11-19-sm-2.8-lookback"
+    },
+    {
+      "start": "2026-11-21T09:27:00Z",
+      "minutes": 3,
+      "local": "14:57-14:59",
+      "bucket": false,
+      "sm": "2.8; the events of 6.1's 14:09 to 14:11 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "derived": ["bucket"]
+    },
+    {
+      "start": "2026-11-21T09:30:00Z",
+      "minutes": 1,
+      "local": "15:00",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 20,
+      "credit": {
+        "p_0eccb85aa257": {"P": 20}
+      },
+      "uncredited": null,
+      "codes": ["X.bucket_cap"],
+      "agent_running_s": 0,
+      "sm": "2.8; the events of 6.1's 14:00 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"],
+      "erratum": "2026-11-19-sm-2.8-lookback"
+    },
+    {
+      "start": "2026-11-21T09:31:00Z",
+      "minutes": 1,
+      "local": "15:01",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "2.8; the events of 6.1's 14:01 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-21T09:32:00Z",
+      "minutes": 1,
+      "local": "15:02",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "2.8; the events of 6.1's 14:02 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-21T09:33:00Z",
+      "minutes": 1,
+      "local": "15:03",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "2.8; the events of 6.1's 14:03 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-21T09:34:00Z",
+      "minutes": 1,
+      "local": "15:04",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 0,
+      "credit": {},
+      "uncredited": {"X.agent_only": 60},
+      "agent_running_s": 60,
+      "sm": "2.8; the events of 6.1's 14:04 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-21T09:35:00Z",
+      "minutes": 1,
+      "local": "15:05",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 25,
+      "credit": {
+        "p_0eccb85aa257": {"PA": 25}
+      },
+      "uncredited": {"X.agent_only": 35},
+      "agent_running_s": 60,
+      "sm": "2.8; the events of 6.1's 14:05 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"],
+      "erratum": "2026-11-19-sm-2.8-lookback"
+    },
+    {
+      "start": "2026-11-21T09:36:00Z",
+      "minutes": 1,
+      "local": "15:06",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 30,
+      "credit": {
+        "p_0eccb85aa257": {"READ": 30}
+      },
+      "uncredited": {"X.agent_only": 30},
+      "agent_running_s": 30,
+      "sm": "2.8; the events of 6.1's 14:06 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "note": "The live fixture's drink, 15:06:40 to 15:12:40, leaves no record in a transcript, so this cycle reads like the others.",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-21T09:37:00Z",
+      "minutes": 1,
+      "local": "15:07",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"READ": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "2.8; the events of 6.1's 14:07 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-21T09:38:00Z",
+      "minutes": 1,
+      "local": "15:08",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 30,
+      "credit": {
+        "p_0eccb85aa257": {"READ": 30}
+      },
+      "uncredited": null,
+      "codes": ["X.bucket_cap"],
+      "agent_running_s": 0,
+      "sm": "2.8; the events of 6.1's 14:08 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"],
+      "erratum": "2026-11-19-sm-2.8-lookback"
+    },
+    {
+      "start": "2026-11-21T09:39:00Z",
+      "minutes": 3,
+      "local": "15:09-15:11",
+      "bucket": false,
+      "sm": "2.8; the events of 6.1's 14:09 to 14:11 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "derived": ["bucket"]
+    },
+    {
+      "start": "2026-11-21T09:42:00Z",
+      "minutes": 1,
+      "local": "15:12",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 20,
+      "credit": {
+        "p_0eccb85aa257": {"P": 20}
+      },
+      "uncredited": null,
+      "codes": ["X.bucket_cap"],
+      "agent_running_s": 0,
+      "sm": "2.8; the events of 6.1's 14:00 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"],
+      "erratum": "2026-11-19-sm-2.8-lookback"
+    },
+    {
+      "start": "2026-11-21T09:43:00Z",
+      "minutes": 1,
+      "local": "15:13",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "2.8; the events of 6.1's 14:01 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-21T09:44:00Z",
+      "minutes": 1,
+      "local": "15:14",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "2.8; the events of 6.1's 14:02 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-21T09:45:00Z",
+      "minutes": 1,
+      "local": "15:15",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "2.8; the events of 6.1's 14:03 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-21T09:46:00Z",
+      "minutes": 1,
+      "local": "15:16",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 0,
+      "credit": {},
+      "uncredited": {"X.agent_only": 60},
+      "agent_running_s": 60,
+      "sm": "2.8; the events of 6.1's 14:04 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-21T09:47:00Z",
+      "minutes": 1,
+      "local": "15:17",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 25,
+      "credit": {
+        "p_0eccb85aa257": {"PA": 25}
+      },
+      "uncredited": {"X.agent_only": 35},
+      "agent_running_s": 60,
+      "sm": "2.8; the events of 6.1's 14:05 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"],
+      "erratum": "2026-11-19-sm-2.8-lookback"
+    },
+    {
+      "start": "2026-11-21T09:48:00Z",
+      "minutes": 1,
+      "local": "15:18",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 30,
+      "credit": {
+        "p_0eccb85aa257": {"READ": 30}
+      },
+      "uncredited": {"X.agent_only": 30},
+      "agent_running_s": 30,
+      "sm": "2.8; the events of 6.1's 14:06 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-21T09:49:00Z",
+      "minutes": 1,
+      "local": "15:19",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"READ": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "2.8; the events of 6.1's 14:07 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-21T09:50:00Z",
+      "minutes": 1,
+      "local": "15:20",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 30,
+      "credit": {
+        "p_0eccb85aa257": {"READ": 30}
+      },
+      "uncredited": null,
+      "codes": ["X.bucket_cap"],
+      "agent_running_s": 0,
+      "sm": "2.8; the events of 6.1's 14:08 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"],
+      "erratum": "2026-11-19-sm-2.8-lookback"
+    },
+    {
+      "start": "2026-11-21T09:51:00Z",
+      "minutes": 3,
+      "local": "15:21-15:23",
+      "bucket": false,
+      "sm": "2.8; the events of 6.1's 14:09 to 14:11 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "derived": ["bucket"]
+    },
+    {
+      "start": "2026-11-21T09:54:00Z",
+      "minutes": 1,
+      "local": "15:24",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 20,
+      "credit": {
+        "p_0eccb85aa257": {"P": 20}
+      },
+      "uncredited": null,
+      "codes": ["X.bucket_cap"],
+      "agent_running_s": 0,
+      "sm": "2.8; the events of 6.1's 14:00 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"],
+      "erratum": "2026-11-19-sm-2.8-lookback"
+    },
+    {
+      "start": "2026-11-21T09:55:00Z",
+      "minutes": 1,
+      "local": "15:25",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "2.8; the events of 6.1's 14:01 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-21T09:56:00Z",
+      "minutes": 1,
+      "local": "15:26",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "2.8; the events of 6.1's 14:02 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-21T09:57:00Z",
+      "minutes": 1,
+      "local": "15:27",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "2.8; the events of 6.1's 14:03 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-21T09:58:00Z",
+      "minutes": 1,
+      "local": "15:28",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 0,
+      "credit": {},
+      "uncredited": {"X.agent_only": 60},
+      "agent_running_s": 60,
+      "sm": "2.8; the events of 6.1's 14:04 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-21T09:59:00Z",
+      "minutes": 1,
+      "local": "15:29",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 25,
+      "credit": {
+        "p_0eccb85aa257": {"PA": 25}
+      },
+      "uncredited": {"X.agent_only": 35},
+      "agent_running_s": 60,
+      "sm": "2.8; the events of 6.1's 14:05 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"],
+      "erratum": "2026-11-19-sm-2.8-lookback"
+    },
+    {
+      "start": "2026-11-21T10:00:00Z",
+      "minutes": 1,
+      "local": "15:30",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 30,
+      "credit": {
+        "p_0eccb85aa257": {"READ": 30}
+      },
+      "uncredited": {"X.agent_only": 30},
+      "agent_running_s": 30,
+      "sm": "2.8; the events of 6.1's 14:06 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-21T10:01:00Z",
+      "minutes": 1,
+      "local": "15:31",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"READ": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "2.8; the events of 6.1's 14:07 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-21T10:02:00Z",
+      "minutes": 1,
+      "local": "15:32",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 30,
+      "credit": {
+        "p_0eccb85aa257": {"READ": 30}
+      },
+      "uncredited": null,
+      "codes": ["X.bucket_cap"],
+      "agent_running_s": 0,
+      "sm": "2.8; the events of 6.1's 14:08 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"],
+      "erratum": "2026-11-19-sm-2.8-lookback"
+    },
+    {
+      "start": "2026-11-21T10:03:00Z",
+      "minutes": 3,
+      "local": "15:33-15:35",
+      "bucket": false,
+      "sm": "2.8; the events of 6.1's 14:09 to 14:11 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "derived": ["bucket"]
+    },
+    {
+      "start": "2026-11-21T10:06:00Z",
+      "minutes": 1,
+      "local": "15:36",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 20,
+      "credit": {
+        "p_0eccb85aa257": {"P": 20}
+      },
+      "uncredited": null,
+      "codes": ["X.bucket_cap"],
+      "agent_running_s": 0,
+      "sm": "2.8; the events of 6.1's 14:00 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"],
+      "erratum": "2026-11-19-sm-2.8-lookback"
+    },
+    {
+      "start": "2026-11-21T10:07:00Z",
+      "minutes": 1,
+      "local": "15:37",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "2.8; the events of 6.1's 14:01 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-21T10:08:00Z",
+      "minutes": 1,
+      "local": "15:38",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "2.8; the events of 6.1's 14:02 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-21T10:09:00Z",
+      "minutes": 1,
+      "local": "15:39",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "2.8; the events of 6.1's 14:03 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-21T10:10:00Z",
+      "minutes": 1,
+      "local": "15:40",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 0,
+      "credit": {},
+      "uncredited": {"X.agent_only": 60},
+      "agent_running_s": 60,
+      "sm": "2.8; the events of 6.1's 14:04 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-21T10:11:00Z",
+      "minutes": 1,
+      "local": "15:41",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 25,
+      "credit": {
+        "p_0eccb85aa257": {"PA": 25}
+      },
+      "uncredited": {"X.agent_only": 35},
+      "agent_running_s": 60,
+      "sm": "2.8; the events of 6.1's 14:05 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"],
+      "erratum": "2026-11-19-sm-2.8-lookback"
+    },
+    {
+      "start": "2026-11-21T10:12:00Z",
+      "minutes": 1,
+      "local": "15:42",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 30,
+      "credit": {
+        "p_0eccb85aa257": {"READ": 30}
+      },
+      "uncredited": {"X.agent_only": 30},
+      "agent_running_s": 30,
+      "sm": "2.8; the events of 6.1's 14:06 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-21T10:13:00Z",
+      "minutes": 1,
+      "local": "15:43",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"READ": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "2.8; the events of 6.1's 14:07 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-21T10:14:00Z",
+      "minutes": 1,
+      "local": "15:44",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 30,
+      "credit": {
+        "p_0eccb85aa257": {"READ": 30}
+      },
+      "uncredited": null,
+      "codes": ["X.bucket_cap"],
+      "agent_running_s": 0,
+      "sm": "2.8; the events of 6.1's 14:08 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"],
+      "erratum": "2026-11-19-sm-2.8-lookback"
+    },
+    {
+      "start": "2026-11-21T10:15:00Z",
+      "minutes": 3,
+      "local": "15:45-15:47",
+      "bucket": false,
+      "sm": "2.8; the events of 6.1's 14:09 to 14:11 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "derived": ["bucket"]
+    },
+    {
+      "start": "2026-11-21T10:18:00Z",
+      "minutes": 1,
+      "local": "15:48",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 20,
+      "credit": {
+        "p_0eccb85aa257": {"P": 20}
+      },
+      "uncredited": null,
+      "codes": ["X.bucket_cap"],
+      "agent_running_s": 0,
+      "sm": "2.8; the events of 6.1's 14:00 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"],
+      "erratum": "2026-11-19-sm-2.8-lookback"
+    },
+    {
+      "start": "2026-11-21T10:19:00Z",
+      "minutes": 1,
+      "local": "15:49",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "2.8; the events of 6.1's 14:01 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-21T10:20:00Z",
+      "minutes": 1,
+      "local": "15:50",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "2.8; the events of 6.1's 14:02 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-21T10:21:00Z",
+      "minutes": 1,
+      "local": "15:51",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "2.8; the events of 6.1's 14:03 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-21T10:22:00Z",
+      "minutes": 1,
+      "local": "15:52",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 0,
+      "credit": {},
+      "uncredited": {"X.agent_only": 60},
+      "agent_running_s": 60,
+      "sm": "2.8; the events of 6.1's 14:04 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-21T10:23:00Z",
+      "minutes": 1,
+      "local": "15:53",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 25,
+      "credit": {
+        "p_0eccb85aa257": {"PA": 25}
+      },
+      "uncredited": {"X.agent_only": 35},
+      "agent_running_s": 60,
+      "sm": "2.8; the events of 6.1's 14:05 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"],
+      "erratum": "2026-11-19-sm-2.8-lookback"
+    },
+    {
+      "start": "2026-11-21T10:24:00Z",
+      "minutes": 1,
+      "local": "15:54",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 30,
+      "credit": {
+        "p_0eccb85aa257": {"READ": 30}
+      },
+      "uncredited": {"X.agent_only": 30},
+      "agent_running_s": 30,
+      "sm": "2.8; the events of 6.1's 14:06 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-21T10:25:00Z",
+      "minutes": 1,
+      "local": "15:55",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"READ": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "2.8; the events of 6.1's 14:07 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-21T10:26:00Z",
+      "minutes": 1,
+      "local": "15:56",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 30,
+      "credit": {
+        "p_0eccb85aa257": {"READ": 30}
+      },
+      "uncredited": null,
+      "codes": ["X.bucket_cap"],
+      "agent_running_s": 0,
+      "sm": "2.8; the events of 6.1's 14:08 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"],
+      "erratum": "2026-11-19-sm-2.8-lookback"
+    },
+    {
+      "start": "2026-11-21T10:27:00Z",
+      "minutes": 3,
+      "local": "15:57-15:59",
+      "bucket": false,
+      "sm": "2.8; the events of 6.1's 14:09 to 14:11 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "derived": ["bucket"]
+    },
+    {
+      "start": "2026-11-21T10:30:00Z",
+      "minutes": 1,
+      "local": "16:00",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 20,
+      "credit": {
+        "p_0eccb85aa257": {"P": 20}
+      },
+      "uncredited": null,
+      "codes": ["X.bucket_cap"],
+      "agent_running_s": 0,
+      "sm": "2.8; the events of 6.1's 14:00 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"],
+      "erratum": "2026-11-19-sm-2.8-lookback"
+    },
+    {
+      "start": "2026-11-21T10:31:00Z",
+      "minutes": 1,
+      "local": "16:01",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "2.8; the events of 6.1's 14:01 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-21T10:32:00Z",
+      "minutes": 1,
+      "local": "16:02",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "2.8; the events of 6.1's 14:02 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-21T10:33:00Z",
+      "minutes": 1,
+      "local": "16:03",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "2.8; the events of 6.1's 14:03 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-21T10:34:00Z",
+      "minutes": 1,
+      "local": "16:04",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 0,
+      "credit": {},
+      "uncredited": {"X.agent_only": 60},
+      "agent_running_s": 60,
+      "sm": "2.8; the events of 6.1's 14:04 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-21T10:35:00Z",
+      "minutes": 1,
+      "local": "16:05",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 25,
+      "credit": {
+        "p_0eccb85aa257": {"PA": 25}
+      },
+      "uncredited": {"X.agent_only": 35},
+      "agent_running_s": 60,
+      "sm": "2.8; the events of 6.1's 14:05 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"],
+      "erratum": "2026-11-19-sm-2.8-lookback"
+    },
+    {
+      "start": "2026-11-21T10:36:00Z",
+      "minutes": 1,
+      "local": "16:06",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 30,
+      "credit": {
+        "p_0eccb85aa257": {"READ": 30}
+      },
+      "uncredited": {"X.agent_only": 30},
+      "agent_running_s": 30,
+      "sm": "2.8; the events of 6.1's 14:06 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-21T10:37:00Z",
+      "minutes": 1,
+      "local": "16:07",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"READ": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "2.8; the events of 6.1's 14:07 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-21T10:38:00Z",
+      "minutes": 1,
+      "local": "16:08",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 30,
+      "credit": {
+        "p_0eccb85aa257": {"READ": 30}
+      },
+      "uncredited": null,
+      "codes": ["X.bucket_cap"],
+      "agent_running_s": 0,
+      "sm": "2.8; the events of 6.1's 14:08 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"],
+      "erratum": "2026-11-19-sm-2.8-lookback"
+    },
+    {
+      "start": "2026-11-21T10:39:00Z",
+      "minutes": 3,
+      "local": "16:09-16:11",
+      "bucket": false,
+      "sm": "2.8; the events of 6.1's 14:09 to 14:11 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "derived": ["bucket"]
+    },
+    {
+      "start": "2026-11-21T10:42:00Z",
+      "minutes": 1,
+      "local": "16:12",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 20,
+      "credit": {
+        "p_0eccb85aa257": {"P": 20}
+      },
+      "uncredited": null,
+      "codes": ["X.bucket_cap"],
+      "agent_running_s": 0,
+      "sm": "2.8; the events of 6.1's 14:00 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"],
+      "erratum": "2026-11-19-sm-2.8-lookback"
+    },
+    {
+      "start": "2026-11-21T10:43:00Z",
+      "minutes": 1,
+      "local": "16:13",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "2.8; the events of 6.1's 14:01 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-21T10:44:00Z",
+      "minutes": 1,
+      "local": "16:14",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "2.8; the events of 6.1's 14:02 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-21T10:45:00Z",
+      "minutes": 1,
+      "local": "16:15",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "2.8; the events of 6.1's 14:03 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-21T10:46:00Z",
+      "minutes": 1,
+      "local": "16:16",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 0,
+      "credit": {},
+      "uncredited": {"X.agent_only": 60},
+      "agent_running_s": 60,
+      "sm": "2.8; the events of 6.1's 14:04 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-21T10:47:00Z",
+      "minutes": 1,
+      "local": "16:17",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 25,
+      "credit": {
+        "p_0eccb85aa257": {"PA": 25}
+      },
+      "uncredited": {"X.agent_only": 35},
+      "agent_running_s": 60,
+      "sm": "2.8; the events of 6.1's 14:05 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"],
+      "erratum": "2026-11-19-sm-2.8-lookback"
+    },
+    {
+      "start": "2026-11-21T10:48:00Z",
+      "minutes": 1,
+      "local": "16:18",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 30,
+      "credit": {
+        "p_0eccb85aa257": {"READ": 30}
+      },
+      "uncredited": {"X.agent_only": 30},
+      "agent_running_s": 30,
+      "sm": "2.8; the events of 6.1's 14:06 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-21T10:49:00Z",
+      "minutes": 1,
+      "local": "16:19",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"READ": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "2.8; the events of 6.1's 14:07 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-21T10:50:00Z",
+      "minutes": 1,
+      "local": "16:20",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 30,
+      "credit": {
+        "p_0eccb85aa257": {"READ": 30}
+      },
+      "uncredited": null,
+      "codes": ["X.bucket_cap"],
+      "agent_running_s": 0,
+      "sm": "2.8; the events of 6.1's 14:08 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"],
+      "erratum": "2026-11-19-sm-2.8-lookback"
+    },
+    {
+      "start": "2026-11-21T10:51:00Z",
+      "minutes": 3,
+      "local": "16:21-16:23",
+      "bucket": false,
+      "sm": "2.8; the events of 6.1's 14:09 to 14:11 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "derived": ["bucket"]
+    },
+    {
+      "start": "2026-11-21T10:54:00Z",
+      "minutes": 1,
+      "local": "16:24",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 20,
+      "credit": {
+        "p_0eccb85aa257": {"P": 20}
+      },
+      "uncredited": null,
+      "codes": ["X.bucket_cap"],
+      "agent_running_s": 0,
+      "sm": "2.8; the events of 6.1's 14:00 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"],
+      "erratum": "2026-11-19-sm-2.8-lookback"
+    },
+    {
+      "start": "2026-11-21T10:55:00Z",
+      "minutes": 1,
+      "local": "16:25",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "2.8; the events of 6.1's 14:01 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-21T10:56:00Z",
+      "minutes": 1,
+      "local": "16:26",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "2.8; the events of 6.1's 14:02 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-21T10:57:00Z",
+      "minutes": 1,
+      "local": "16:27",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "2.8; the events of 6.1's 14:03 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-21T10:58:00Z",
+      "minutes": 1,
+      "local": "16:28",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 0,
+      "credit": {},
+      "uncredited": {"X.agent_only": 60},
+      "agent_running_s": 60,
+      "sm": "2.8; the events of 6.1's 14:04 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-21T10:59:00Z",
+      "minutes": 1,
+      "local": "16:29",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 25,
+      "credit": {
+        "p_0eccb85aa257": {"PA": 25}
+      },
+      "uncredited": {"X.agent_only": 35},
+      "agent_running_s": 60,
+      "sm": "2.8; the events of 6.1's 14:05 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"],
+      "erratum": "2026-11-19-sm-2.8-lookback"
+    },
+    {
+      "start": "2026-11-21T11:00:00Z",
+      "minutes": 1,
+      "local": "16:30",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 30,
+      "credit": {
+        "p_0eccb85aa257": {"READ": 30}
+      },
+      "uncredited": {"X.agent_only": 30},
+      "agent_running_s": 30,
+      "sm": "2.8; the events of 6.1's 14:06 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-21T11:01:00Z",
+      "minutes": 1,
+      "local": "16:31",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"READ": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "2.8; the events of 6.1's 14:07 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-21T11:02:00Z",
+      "minutes": 1,
+      "local": "16:32",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 30,
+      "credit": {
+        "p_0eccb85aa257": {"READ": 30}
+      },
+      "uncredited": null,
+      "codes": ["X.bucket_cap"],
+      "agent_running_s": 0,
+      "sm": "2.8; the events of 6.1's 14:08 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"],
+      "erratum": "2026-11-19-sm-2.8-lookback"
+    },
+    {
+      "start": "2026-11-21T11:03:00Z",
+      "minutes": 3,
+      "local": "16:33-16:35",
+      "bucket": false,
+      "sm": "2.8; the events of 6.1's 14:09 to 14:11 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "derived": ["bucket"]
+    },
+    {
+      "start": "2026-11-21T11:06:00Z",
+      "minutes": 1,
+      "local": "16:36",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 20,
+      "credit": {
+        "p_0eccb85aa257": {"P": 20}
+      },
+      "uncredited": null,
+      "codes": ["X.bucket_cap"],
+      "agent_running_s": 0,
+      "sm": "2.8; the events of 6.1's 14:00 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"],
+      "erratum": "2026-11-19-sm-2.8-lookback"
+    },
+    {
+      "start": "2026-11-21T11:07:00Z",
+      "minutes": 1,
+      "local": "16:37",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "2.8; the events of 6.1's 14:01 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-21T11:08:00Z",
+      "minutes": 1,
+      "local": "16:38",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "2.8; the events of 6.1's 14:02 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-21T11:09:00Z",
+      "minutes": 1,
+      "local": "16:39",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "2.8; the events of 6.1's 14:03 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-21T11:10:00Z",
+      "minutes": 1,
+      "local": "16:40",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 0,
+      "credit": {},
+      "uncredited": {"X.agent_only": 60},
+      "agent_running_s": 60,
+      "sm": "2.8; the events of 6.1's 14:04 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-21T11:11:00Z",
+      "minutes": 1,
+      "local": "16:41",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 25,
+      "credit": {
+        "p_0eccb85aa257": {"PA": 25}
+      },
+      "uncredited": {"X.agent_only": 35},
+      "agent_running_s": 60,
+      "sm": "2.8; the events of 6.1's 14:05 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"],
+      "erratum": "2026-11-19-sm-2.8-lookback"
+    },
+    {
+      "start": "2026-11-21T11:12:00Z",
+      "minutes": 1,
+      "local": "16:42",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 30,
+      "credit": {
+        "p_0eccb85aa257": {"READ": 30}
+      },
+      "uncredited": {"X.agent_only": 30},
+      "agent_running_s": 30,
+      "sm": "2.8; the events of 6.1's 14:06 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-21T11:13:00Z",
+      "minutes": 1,
+      "local": "16:43",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"READ": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "2.8; the events of 6.1's 14:07 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-21T11:14:00Z",
+      "minutes": 1,
+      "local": "16:44",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 30,
+      "credit": {
+        "p_0eccb85aa257": {"READ": 30}
+      },
+      "uncredited": null,
+      "codes": ["X.bucket_cap"],
+      "agent_running_s": 0,
+      "sm": "2.8; the events of 6.1's 14:08 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"],
+      "erratum": "2026-11-19-sm-2.8-lookback"
+    },
+    {
+      "start": "2026-11-21T11:15:00Z",
+      "minutes": 3,
+      "local": "16:45-16:47",
+      "bucket": false,
+      "sm": "2.8; the events of 6.1's 14:09 to 14:11 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "derived": ["bucket"]
+    },
+    {
+      "start": "2026-11-21T11:18:00Z",
+      "minutes": 1,
+      "local": "16:48",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 20,
+      "credit": {
+        "p_0eccb85aa257": {"P": 20}
+      },
+      "uncredited": null,
+      "codes": ["X.bucket_cap"],
+      "agent_running_s": 0,
+      "sm": "2.8; the events of 6.1's 14:00 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"],
+      "erratum": "2026-11-19-sm-2.8-lookback"
+    },
+    {
+      "start": "2026-11-21T11:19:00Z",
+      "minutes": 1,
+      "local": "16:49",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "2.8; the events of 6.1's 14:01 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-21T11:20:00Z",
+      "minutes": 1,
+      "local": "16:50",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "2.8; the events of 6.1's 14:02 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-21T11:21:00Z",
+      "minutes": 1,
+      "local": "16:51",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0eccb85aa257": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "2.8; the events of 6.1's 14:03 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-21T11:22:00Z",
+      "minutes": 1,
+      "local": "16:52",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 0,
+      "credit": {},
+      "uncredited": {"X.agent_only": 60},
+      "agent_running_s": 60,
+      "sm": "2.8; the events of 6.1's 14:04 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-21T11:23:00Z",
+      "minutes": 1,
+      "local": "16:53",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 25,
+      "credit": {
+        "p_0eccb85aa257": {"PA": 25}
+      },
+      "uncredited": {"X.agent_only": 35},
+      "agent_running_s": 60,
+      "sm": "2.8; the events of 6.1's 14:05 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"],
+      "erratum": "2026-11-19-sm-2.8-lookback"
+    },
+    {
+      "start": "2026-11-21T11:24:00Z",
+      "minutes": 1,
+      "local": "16:54",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 0,
+      "credit": {},
+      "uncredited": null,
+      "codes": ["X.agent_only", "X.no_anchor"],
+      "agent_running_s": 30,
+      "sm": "2.8; the events of 6.1's 14:06 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "note": "Cycle 15's turn stops at 16:54:30 and the transcript holds no later prompt, so its reading doesn't count (SM 2.8). 16:54:00 to 16:54:30 is X.agent_only; the code of the 30 s after the stop is open.",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"],
+      "erratum": "2026-11-19-sm-2.8-lookback"
+    },
+    {
+      "start": "2026-11-21T11:25:00Z",
+      "minutes": 5,
+      "local": "16:55-16:59",
+      "bucket": false,
+      "sm": "2.8; the events of 6.1's 14:07 to 14:11 row; cycles 2 to 15 have the same events, 12 minutes apart",
+      "note": "No reading, no anchor and no agent, so no bucket.",
+      "derived": ["bucket"]
+    }
+  ],
+  "totals": {
+    "credited_s": 5055,
+    "credited_by_project": {"p_0eccb85aa257": 5055},
+    "credited_by_reason": {"P": 3000, "PA": 375, "READ": 1680},
+    "uncredited": {"X.agent_only": 1845},
+    "agent_running_s": 2250,
+    "wall_s": 10800,
+    "ai_credited_s": 5055,
+    "hand_credited_s": 0,
+    "agent_only_s": 1875,
+    "first_cycle_credited_s": 345,
+    "last_cycle_credited_s": 225
+  },
+  "stated": [],
+  "approx": {},
+  "errata": ["2026-11-19-sm-2.8-lookback"],
+  "notes": [
+    "Every row is computed from SM 2.8; SM states no lookback rows, so every bucket row's fields are derived. Every credited second is level C and backfilled.",
+    "input_keys is false because the fixture has no presence sample at all. The Mac reports key presses (testdata/timelines/6.1 has idle_keys_s on every sample), but no sampler ran before pairtime did.",
+    "uncredited sums only the rows whose codes SM decides. agent_only_s is the agent's 2,250 s less the 25 s of PA credited inside each turn: 1,875. The open codes are the erratum's point 2.",
+    "Cycles 1 to 14 credit 120 s of reading each, 1,680 s in all, because each stop is followed by the next prompt 570 s later, inside SM 2.8's 600 s.",
+    "The live fixture credits 10,095 s of the same afternoon. Lookback keeps 5,055: no think leads, no editor, browser or commit time, no reading while the agent runs, at most 120 s of reading a turn.",
+    "The agent events replay to ai_logged_s 3930 under min(gap, 120 s) (SM 5.4), so DESIGN 6.2 D5 would let a program that opts in to level C count at most 1310 s of this, and only inside forge-verified commit intervals."
+  ]
+}

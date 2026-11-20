@@ -3,6 +3,7 @@
 package ledger
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/binary"
@@ -157,10 +158,18 @@ func VerifyReceipt(pub ed25519.PublicKey, deviceID string, b uint64, head Hash, 
 // sign returns Ed25519(key, msg) as RFC 8032 section 5.1 defines it,
 // PureEdDSA with no context, which is what crypto/ed25519.Sign computes
 // (spec section 1). Receipts and day heads are signed through it.
+//
+// It refuses a key whose public half, bytes 32 to 63, isn't the one its
+// seed gives. crypto/ed25519 doesn't check that half and hashes it as A
+// into k = H(R || A || M), so such a key would sign receipts and day heads
+// that verify under no key at all.
 func sign(key ed25519.PrivateKey, msg []byte) ([SignatureSize]byte, error) {
 	var sig [SignatureSize]byte
 	if len(key) != ed25519.PrivateKeySize {
 		return sig, fmt.Errorf("ledger: an Ed25519 private key is %d bytes, got %d", ed25519.PrivateKeySize, len(key))
+	}
+	if !bytes.Equal(key[ed25519.SeedSize:], ed25519.NewKeyFromSeed(key.Seed())[ed25519.SeedSize:]) {
+		return sig, errors.New("ledger: the Ed25519 private key's public half isn't the one its seed gives")
 	}
 	copy(sig[:], ed25519.Sign(key, msg))
 	return sig, nil

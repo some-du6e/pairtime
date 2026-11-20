@@ -1,0 +1,137 @@
+{
+  "fixture": "lookback/6.4-transcript-only",
+  "anchors": [
+    {
+      "event_id": "01a1fb1d-da00-72ac-b060-b9eba9f4fff4",
+      "kind": "substantive_prompt",
+      "t": 1795214400000,
+      "local": "23:40:00",
+      "project_key": "p_b1de4629be47",
+      "origin": "human_typed",
+      "prompt_class": "substantive",
+      "lead_s": 50,
+      "trail_s": 0,
+      "lead_from": "params",
+      "via": "log",
+      "level": "C",
+      "sm": "2.8: no input check, so human_typed; a typed /goal with an objective is substantive (SM 6.4); the lead is typing time only, 75 / 1.5 = 50 s"
+    },
+    {
+      "event_id": "01a1fcd2-8ee0-7767-95f6-07d3cc46253d",
+      "kind": "substantive_prompt",
+      "t": 1795243020000,
+      "local": "07:37:00",
+      "project_key": "p_b1de4629be47",
+      "origin": "human_typed",
+      "prompt_class": "substantive",
+      "lead_s": 41,
+      "trail_s": 0,
+      "lead_from": "params",
+      "via": "log",
+      "level": "C",
+      "sm": "2.8: the lead is typing time only, 61 / 1.5 = 40.67 s, rounded to 41 as SM 6.4 rounds 160.67"
+    }
+  ],
+  "turns": [
+    {
+      "session_key": "s_2efd92c080ce",
+      "turn_key": "t_5ad1469cc115",
+      "t_submit": 1795214400000,
+      "local_submit": "23:40:00",
+      "t_stop": 1795217000000,
+      "local_stop": "00:23:20",
+      "origin": "human_typed",
+      "prompt_class": "substantive",
+      "sm": "2.8 keeps origin rules 1 to 5; 23:39"
+    },
+    {
+      "session_key": "s_2efd92c080ce",
+      "turn_key": "t_dd3dde8248bb",
+      "t_submit": 1795217000000,
+      "local_submit": "00:23:20",
+      "t_stop": 1795219600000,
+      "local_stop": "01:06:40",
+      "origin": "self_continue",
+      "sm": "2.8 keeps origin rules 1 to 5; 23:44 to 07:29: every continuation is a Stop-hook turn"
+    },
+    {
+      "session_key": "s_2efd92c080ce",
+      "turn_key": "t_b669cdffdadd",
+      "t_submit": 1795219600000,
+      "local_submit": "01:06:40",
+      "t_stop": 1795222200000,
+      "local_stop": "01:50:00",
+      "origin": "self_continue",
+      "sm": "2.8 keeps origin rules 1 to 5; 23:44 to 07:29: every continuation is a Stop-hook turn"
+    },
+    {
+      "session_key": "s_2efd92c080ce",
+      "turn_key": "t_a40e03db24a0",
+      "t_submit": 1795222200000,
+      "local_submit": "01:50:00",
+      "t_stop": 1795224800000,
+      "local_stop": "02:33:20",
+      "origin": "self_continue",
+      "sm": "2.8 keeps origin rules 1 to 5; 23:44 to 07:29: every continuation is a Stop-hook turn"
+    },
+    {
+      "session_key": "s_2efd92c080ce",
+      "turn_key": "t_aab8c68aa1e5",
+      "t_submit": 1795224800000,
+      "local_submit": "02:33:20",
+      "t_stop": 1795227400000,
+      "local_stop": "03:16:40",
+      "origin": "self_continue",
+      "sm": "2.8 keeps origin rules 1 to 5; 23:44 to 07:29: every continuation is a Stop-hook turn"
+    },
+    {
+      "session_key": "s_2efd92c080ce",
+      "turn_key": "t_c0074a7eef95",
+      "t_submit": 1795227400000,
+      "local_submit": "03:16:40",
+      "t_stop": 1795230000000,
+      "local_stop": "04:00:00",
+      "origin": "self_continue",
+      "sm": "2.8 keeps origin rules 1 to 5; 23:44 to 07:29: every continuation is a Stop-hook turn"
+    },
+    {
+      "session_key": "s_2efd92c080ce",
+      "turn_key": "t_471bd72f5245",
+      "t_submit": 1795230000000,
+      "local_submit": "04:00:00",
+      "t_stop": 1795232600000,
+      "local_stop": "04:43:20",
+      "origin": "self_continue",
+      "sm": "2.8 keeps origin rules 1 to 5; 23:44 to 07:29: every continuation is a Stop-hook turn"
+    },
+    {
+      "session_key": "s_2efd92c080ce",
+      "turn_key": "t_5b4c964dfe1c",
+      "t_submit": 1795232600000,
+      "local_submit": "04:43:20",
+      "t_stop": 1795235200000,
+      "local_stop": "05:26:40",
+      "origin": "self_continue",
+      "sm": "2.8 keeps origin rules 1 to 5; 23:44 to 07:29: every continuation is a Stop-hook turn"
+    },
+    {
+      "session_key": "s_2efd92c080ce",
+      "turn_key": "t_30ce5b1d86d6",
+      "t_submit": 1795235200000,
+      "local_submit": "05:26:40",
+      "t_stop": 1795237800000,
+      "local_stop": "06:10:00",
+      "origin": "self_continue",
+      "sm": "2.8 keeps origin rules 1 to 5; 23:44 to 07:29: every continuation is a Stop-hook turn"
+    },
+    {
+      "session_key": "s_2efd92c080ce",
+      "turn_key": "t_3fd9c736e165",
+      "t_submit": 1795243020000,
+      "local_submit": "07:37:00",
+      "origin": "human_typed",
+      "prompt_class": "substantive",
+      "sm": "2.8 keeps origin rules 1 to 5; 07:36"
+    }
+  ]
+}

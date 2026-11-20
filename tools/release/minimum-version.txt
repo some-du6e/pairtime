@@ -2,4 +2,12 @@
 # manifest's minimum_version (docs/spec/update-manifest.md). Raise it in a
 # PR when older clients must update first, for example after the server
 # stops accepting what they send. v0.0.0 means no client is too old.
+#
+# The file holds one version on a line of its own and nothing else besides
+# comments. `tools/release min-version` reads it, and release.yml and
+# tools/release's tests check it on every run, PRs included.
+#
+# A prerelease sorts before its release, so v0.3.0 here would refuse the
+# tag v0.3.0-alpha.1. To require 0.3.0 while its prereleases ship, write
+# the first of them: v0.3.0-alpha.1.
 v0.0.0

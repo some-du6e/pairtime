@@ -1,0 +1,2489 @@
+{
+  "note": "devices[].batches is the client's metadata reveal: each batch's records with their header fields and stored body. devices[].witnessed is what the server stored when each batch arrived. The device keys are test keys from checks.device_keys; the body's nonce is the only value that needs them.",
+  "devices": [
+    {
+      "device_id": "d_b3b8fb30978a",
+      "rescore_range": {"start": 1795902300000, "end": 1795905900000, "first_b": 17391, "last_b": 17441},
+      "batches": [
+        {
+          "b": 17391,
+          "records": [
+            {
+              "seq": 52174,
+              "rtype": 15,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"8dc47a3ade13937fc8fcfdbf7bb861fe85c98e2dbc4a52541b9f5dc12f4f5795\",\"e\":{\"event_id\":\"01a22427-4c88-714e-9052-31b7639011f0\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52174,\"t\":1795902885000,\"mono\":20518000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.focus\",\"data\":{\"app_class\":\"terminal\"}}}"
+            },
+            {
+              "seq": 52175,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"4adcfde64623bb79a4ee99baec70490652cd3004d46fef8e085edb34a1958251\",\"e\":{\"event_id\":\"01a22427-4c88-7052-947d-014e49d8c72d\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52175,\"t\":1795902885000,\"mono\":20518000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":0.4,\"idle_keys_s\":8.1,\"locked\":false}}}"
+            },
+            {
+              "seq": 52176,
+              "rtype": 1,
+              "project_key": "p_a73dbaeaf36c",
+              "session_key": "s_429df3acb00a",
+              "body": "{\"n\":\"1dd2a1406a64466460da72f7c195fdc3313224e63c7a9e1796eda5aa53341738\",\"e\":{\"event_id\":\"01a22427-5c28-75c8-91ba-314225a52a8e\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52176,\"t\":1795902889000,\"mono\":20522000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"hook\",\"via\":\"hook\",\"harness\":\"codex\",\"harness_version\":\"0.170.0\",\"session_key\":\"s_429df3acb00a\",\"project_key\":\"p_a73dbaeaf36c\",\"kind\":\"session.start\",\"data\":{\"start_kind\":\"startup\",\"entrypoint\":\"cli\",\"parent_class\":\"terminal_app\",\"has_tty\":true,\"permission_mode\":\"on-request\"}}}"
+            },
+            {
+              "seq": 52177,
+              "rtype": 15,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"2a01951edd17cbb15413f3e3a21cba8d6bddf52b66c3844850f57bc2f5b4fb4e\",\"e\":{\"event_id\":\"01a22427-5c28-75d5-aeff-1ba2a195c97a\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52177,\"t\":1795902889000,\"mono\":20522000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.focus\",\"data\":{\"app_class\":\"terminal\",\"hosted_sessions\":[\"s_429df3acb00a\"],\"focus_project\":\"p_a73dbaeaf36c\"}}}"
+            },
+            {
+              "seq": 52178,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"31b78f319672cf6a842281593955ed6442c2f86a3f67063eb32a9a3c844d3912\",\"e\":{\"event_id\":\"01a22427-5c28-7eb0-97fc-12c0abbae528\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52178,\"t\":1795902889000,\"mono\":20522000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":0.6,\"idle_keys_s\":0.6,\"locked\":false}}}"
+            }
+          ]
+        },
+        {
+          "b": 17392,
+          "records": [
+            {
+              "seq": 52179,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"e162effe7336a81d9e5f4733145fab6919c395f3160f2de7b434e3f54a94bcf9\",\"e\":{\"event_id\":\"01a22427-8720-7c48-9b46-0cb6004f94b6\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52179,\"t\":1795902900000,\"mono\":20533000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":0.1,\"idle_keys_s\":0.1,\"locked\":false}}}"
+            },
+            {
+              "seq": 52180,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"3c410f6e3eadbe8bf2d4db086cab46c14dfac18c527b4db566029abe305e5902\",\"e\":{\"event_id\":\"01a22427-c1b8-7821-b549-a80ba126c67d\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52180,\"t\":1795902915000,\"mono\":20548000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":0.4,\"idle_keys_s\":0.4,\"locked\":false}}}"
+            },
+            {
+              "seq": 52181,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"f9f754b85a5204af65ca64e3089c303b684050b2af873ed436e1cd6f5737dc0b\",\"e\":{\"event_id\":\"01a22427-fc50-75c0-bce6-248035f496bb\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52181,\"t\":1795902930000,\"mono\":20563000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":0.7,\"idle_keys_s\":0.7,\"locked\":false}}}"
+            },
+            {
+              "seq": 52182,
+              "rtype": 3,
+              "project_key": "p_a73dbaeaf36c",
+              "session_key": "s_429df3acb00a",
+              "body": "{\"n\":\"e65a06390d4540d9db5efb60f5f712910863c5fc0eeeab93bbb0fe72221cc4df\",\"e\":{\"event_id\":\"01a22428-2360-7930-a5e3-40456ba99194\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52182,\"t\":1795902940000,\"mono\":20573000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"hook\",\"via\":\"hook\",\"harness\":\"codex\",\"harness_version\":\"0.170.0\",\"session_key\":\"s_429df3acb00a\",\"project_key\":\"p_a73dbaeaf36c\",\"kind\":\"prompt.submit\",\"data\":{\"turn_key\":\"t_c4044fb9cf4c\",\"len_chars\":64,\"pasted_chars\":0,\"typed_len_est\":64,\"origin_declared\":\"none\",\"matches_pending_cron\":false,\"answers_question\":false,\"low_effort\":false}}}"
+            },
+            {
+              "seq": 52183,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"6eaaac95ef9c7b0cf63ece30cf49a2ba24afa465324472746e494012f4e64f94\",\"e\":{\"event_id\":\"01a22428-2360-747d-a2cf-be0b2f94d0f5\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52183,\"t\":1795902940000,\"mono\":20573000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":0.2,\"idle_keys_s\":0.2,\"locked\":false}}}"
+            }
+          ]
+        },
+        {
+          "b": 17393,
+          "records": [
+            {
+              "seq": 52184,
+              "rtype": 3,
+              "project_key": "p_a73dbaeaf36c",
+              "session_key": "s_429df3acb00a",
+              "body": "{\"n\":\"69222ad1d7fbb6f863f2d27efb2ff074e810f150efb86264923085bc010afafc\",\"e\":{\"event_id\":\"01a22428-2810-7b8c-be3a-f3d27054b66f\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52184,\"t\":1795902941200,\"mono\":20574200,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"log\",\"via\":\"log\",\"harness\":\"codex\",\"harness_version\":\"0.170.0\",\"session_key\":\"s_429df3acb00a\",\"project_key\":\"p_a73dbaeaf36c\",\"kind\":\"prompt.submit\",\"data\":{\"turn_key\":\"t_c4044fb9cf4c\",\"len_chars\":64,\"pasted_chars\":0,\"typed_len_est\":64,\"origin_declared\":\"none\",\"matches_pending_cron\":false,\"answers_question\":false,\"low_effort\":false}}}"
+            },
+            {
+              "seq": 52185,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"bff6b9558e98a3ae12af0bb77f17a8ff002d86c13096952ba520cc046bc1414b\",\"e\":{\"event_id\":\"01a22428-36e8-7797-89f0-f4a39a8310e5\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52185,\"t\":1795902945000,\"mono\":20578000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":5.2,\"idle_keys_s\":5.2,\"locked\":false}}}"
+            },
+            {
+              "seq": 52186,
+              "rtype": 4,
+              "project_key": "p_a73dbaeaf36c",
+              "session_key": "s_429df3acb00a",
+              "body": "{\"n\":\"7615f4dfe30373fdfcb123f9f71f76c2d7590f76468332d07dc44707d4663974\",\"e\":{\"event_id\":\"01a22428-4e58-73fd-a0de-b4a5370856f8\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52186,\"t\":1795902951000,\"mono\":20584000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"log\",\"via\":\"log\",\"harness\":\"codex\",\"harness_version\":\"0.170.0\",\"session_key\":\"s_429df3acb00a\",\"project_key\":\"p_a73dbaeaf36c\",\"kind\":\"agent.output\",\"data\":{\"turn_key\":\"t_c4044fb9cf4c\",\"words\":40,\"code_lines\":0,\"is_final\":false,\"asks_question\":false,\"offers_options\":false}}}"
+            }
+          ]
+        },
+        {
+          "b": 17394,
+          "records": [
+            {
+              "seq": 52187,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"8262d7e4050dd7393355a70ac3b461b86314b1d0f6b79833592e64e02f26668a\",\"e\":{\"event_id\":\"01a22428-7180-73ee-9859-429521020185\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52187,\"t\":1795902960000,\"mono\":20593000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":2.7,\"idle_keys_s\":20.2,\"locked\":false}}}"
+            },
+            {
+              "seq": 52188,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"0bce51de2e73ded86fe4f4a7a07245c81b1cedabbb1905c710d205478329a9c8\",\"e\":{\"event_id\":\"01a22428-ac18-73a7-a689-28348c70db24\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52188,\"t\":1795902975000,\"mono\":20608000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":7.7,\"idle_keys_s\":35.2,\"locked\":false}}}"
+            },
+            {
+              "seq": 52189,
+              "rtype": 5,
+              "project_key": "p_a73dbaeaf36c",
+              "session_key": "s_429df3acb00a",
+              "body": "{\"n\":\"b0532b1e934dd3a9778bbbe703f5def63b065454409da2a6e66849ff5eeb023b\",\"e\":{\"event_id\":\"01a22428-bfa0-739d-8bd0-8f3f61417dcf\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52189,\"t\":1795902980000,\"mono\":20613000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"hook\",\"via\":\"hook\",\"harness\":\"codex\",\"harness_version\":\"0.170.0\",\"session_key\":\"s_429df3acb00a\",\"project_key\":\"p_a73dbaeaf36c\",\"kind\":\"agent.tool\",\"data\":{\"tool_class\":\"read\",\"files\":[\"f_451f54417375\"],\"lines_added\":0,\"lines_removed\":0,\"visible_output_lines\":0,\"t_start\":1795902979400,\"t_end\":1795902980000}}}"
+            },
+            {
+              "seq": 52190,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"d2f1c23496cec864a08fc1fa3a69aa10c55b5fc039c7e6fd4b4183aabe8f02b3\",\"e\":{\"event_id\":\"01a22428-bfa0-7336-b55c-7968d8505163\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52190,\"t\":1795902980000,\"mono\":20613000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":2.7,\"idle_keys_s\":40.2,\"locked\":false}}}"
+            },
+            {
+              "seq": 52191,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"f4e74babd8119c286f13d1d270871803ddde6e88ee0ce9427898de11ab1b1b5f\",\"e\":{\"event_id\":\"01a22428-e6b0-73c1-b084-4366753d293f\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52191,\"t\":1795902990000,\"mono\":20623000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":2.7,\"idle_keys_s\":50.2,\"locked\":false}}}"
+            },
+            {
+              "seq": 52192,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"08ac18c033d50741ce89ae687ae56f8166887a561370d0f13ea3ee81f026543b\",\"e\":{\"event_id\":\"01a22429-2148-7392-8f30-aaa6ac913bfc\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52192,\"t\":1795903005000,\"mono\":20638000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":7.7,\"idle_keys_s\":65.2,\"locked\":false}}}"
+            },
+            {
+              "seq": 52193,
+              "rtype": 5,
+              "project_key": "p_a73dbaeaf36c",
+              "session_key": "s_429df3acb00a",
+              "body": "{\"n\":\"3067629cd223c9eefdf06f90316a441f424b1e2b43ba890265c01763546ab55c\",\"e\":{\"event_id\":\"01a22429-5410-7d84-903b-c3ffb3ec8fa3\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52193,\"t\":1795903018000,\"mono\":20651000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"hook\",\"via\":\"hook\",\"harness\":\"codex\",\"harness_version\":\"0.170.0\",\"session_key\":\"s_429df3acb00a\",\"project_key\":\"p_a73dbaeaf36c\",\"kind\":\"agent.tool\",\"data\":{\"tool_class\":\"edit\",\"files\":[\"f_451f54417375\"],\"lines_added\":12,\"lines_removed\":6,\"visible_output_lines\":0,\"t_start\":1795903017600,\"t_end\":1795903018000}}}"
+            },
+            {
+              "seq": 52194,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"fe44023955d0d79dacd5df085840ffbaa5b4241895072e8392339df62969122a\",\"e\":{\"event_id\":\"01a22429-5410-7d40-834a-80bbbabc35c7\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52194,\"t\":1795903018000,\"mono\":20651000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":0.7,\"idle_keys_s\":78.2,\"locked\":false}}}"
+            }
+          ]
+        },
+        {
+          "b": 17395,
+          "records": [
+            {
+              "seq": 52195,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"42c4826ab9e06c09b678d147dea12b13bac9b3088d9683eb5b0cd1070798ef09\",\"e\":{\"event_id\":\"01a22429-5be0-770a-97da-7f5cd0b20fc0\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52195,\"t\":1795903020000,\"mono\":20653000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":2.7,\"idle_keys_s\":80.2,\"locked\":false}}}"
+            },
+            {
+              "seq": 52196,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"039467b86ca39a2e2f10ca1932f07d0e665bf3d041243ced47bdf3eadc8ea610\",\"e\":{\"event_id\":\"01a22429-9678-7d42-9540-b525c37939c8\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52196,\"t\":1795903035000,\"mono\":20668000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":7.7,\"idle_keys_s\":95.2,\"locked\":false}}}"
+            },
+            {
+              "seq": 52197,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"417a4197bfb281b5739b440e46a0a7a4d54cb3aa94394b5f2c2a7eefc0ece09e\",\"e\":{\"event_id\":\"01a22429-d110-75f2-8690-2aac07687bec\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52197,\"t\":1795903050000,\"mono\":20683000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":2.7,\"idle_keys_s\":110.2,\"locked\":false}}}"
+            },
+            {
+              "seq": 52198,
+              "rtype": 5,
+              "project_key": "p_a73dbaeaf36c",
+              "session_key": "s_429df3acb00a",
+              "body": "{\"n\":\"cc0cca56ab49f7af6c1b18710d77f7b558f90a1e8597890fe6c639b1a234ed89\",\"e\":{\"event_id\":\"01a22429-d4f8-7ead-9651-9098d14b197f\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52198,\"t\":1795903051000,\"mono\":20684000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"hook\",\"via\":\"hook\",\"harness\":\"codex\",\"harness_version\":\"0.170.0\",\"session_key\":\"s_429df3acb00a\",\"project_key\":\"p_a73dbaeaf36c\",\"kind\":\"agent.tool\",\"data\":{\"tool_class\":\"test\",\"lines_added\":0,\"lines_removed\":0,\"exit_code\":0,\"visible_output_lines\":4,\"t_start\":1795903037000,\"t_end\":1795903051000}}}"
+            },
+            {
+              "seq": 52199,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"00959583cff29a0e6b8c00d6956c567d5b55f6e632b792fda8632c40a51d06fd\",\"e\":{\"event_id\":\"01a22429-d4f8-7950-98e5-9c1148fac587\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52199,\"t\":1795903051000,\"mono\":20684000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":3.7,\"idle_keys_s\":111.2,\"locked\":false}}}"
+            },
+            {
+              "seq": 52200,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"ed1e8419875ebac4721257bf1b73d3bc2ae2eb388334e3843f852a8f2f0843b2\",\"e\":{\"event_id\":\"01a2242a-0ba8-75a3-8a2c-0c99e225453c\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52200,\"t\":1795903065000,\"mono\":20698000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":7.7,\"idle_keys_s\":125.2,\"locked\":false}}}"
+            },
+            {
+              "seq": 52201,
+              "rtype": 4,
+              "project_key": "p_a73dbaeaf36c",
+              "session_key": "s_429df3acb00a",
+              "body": "{\"n\":\"fd5d77ed2071db6b0e6062a98e1dd3af284a8163a14c108b3991cce5076a63a1\",\"e\":{\"event_id\":\"01a2242a-44b0-7c72-95a6-cc1150d6a802\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52201,\"t\":1795903079600,\"mono\":20712600,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"log\",\"via\":\"log\",\"harness\":\"codex\",\"harness_version\":\"0.170.0\",\"session_key\":\"s_429df3acb00a\",\"project_key\":\"p_a73dbaeaf36c\",\"kind\":\"agent.output\",\"data\":{\"turn_key\":\"t_c4044fb9cf4c\",\"words\":160,\"code_lines\":0,\"is_final\":true,\"asks_question\":false,\"offers_options\":false}}}"
+            }
+          ]
+        },
+        {
+          "b": 17396,
+          "records": [
+            {
+              "seq": 52202,
+              "rtype": 9,
+              "project_key": "p_a73dbaeaf36c",
+              "session_key": "s_429df3acb00a",
+              "body": "{\"n\":\"8dd946d7f5db12ac8f69c6b62a4310ffee6b68cf7611f3d0747f53ad2779d06c\",\"e\":{\"event_id\":\"01a2242a-4640-7058-9aa0-a811bec52d77\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52202,\"t\":1795903080000,\"mono\":20713000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"hook\",\"via\":\"hook\",\"harness\":\"codex\",\"harness_version\":\"0.170.0\",\"session_key\":\"s_429df3acb00a\",\"project_key\":\"p_a73dbaeaf36c\",\"kind\":\"agent.stop\",\"data\":{\"turn_key\":\"t_c4044fb9cf4c\",\"stop_reason\":\"end_turn\",\"stop_hook_active\":false}}}"
+            },
+            {
+              "seq": 52203,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"0b0796c8c5e67dbff393aa3ac79004b8240d91dfddadfbd4ec0e43a8ffe4d881\",\"e\":{\"event_id\":\"01a2242a-4640-705a-9bef-c66853ce9a04\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52203,\"t\":1795903080000,\"mono\":20713000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":2.7,\"idle_keys_s\":140.2,\"locked\":false}}}"
+            }
+          ]
+        },
+        {
+          "b": 17397,
+          "records": [
+            {
+              "seq": 52204,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"a54e4d8ef3cfb75df395085e10c61e6fb52b437daabaa91b5160327ff326b06a\",\"e\":{\"event_id\":\"01a2242a-80d8-7422-b347-ace89ed144ed\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52204,\"t\":1795903095000,\"mono\":20728000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":8.9,\"idle_keys_s\":155.2,\"locked\":false}}}"
+            },
+            {
+              "seq": 52205,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"b24d80a0b914e82650c3d757e3c47eee51e0efefe98f7a0eeeb0a41587547465\",\"e\":{\"event_id\":\"01a2242a-bb70-7119-b658-b0298f078804\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52205,\"t\":1795903110000,\"mono\":20743000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":3.9,\"idle_keys_s\":170.2,\"locked\":false}}}"
+            },
+            {
+              "seq": 52206,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"5412ac33e448b7ef0aa13f31e7b441842ddde7077521b3a33ea1b69a3294a331\",\"e\":{\"event_id\":\"01a2242a-f608-79ec-ba6f-b41980ae0ffd\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52206,\"t\":1795903125000,\"mono\":20758000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":8.9,\"idle_keys_s\":185.2,\"locked\":false}}}"
+            }
+          ]
+        },
+        {
+          "b": 17398,
+          "records": [
+            {
+              "seq": 52207,
+              "rtype": 15,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"8c4359972c1e3aa9016af89e6cdb6ab34c618ba594f3420ac5524f770bf38a51\",\"e\":{\"event_id\":\"01a2242b-30a0-7835-9bd3-50491205006f\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52207,\"t\":1795903140000,\"mono\":20773000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.focus\",\"data\":{\"app_class\":\"terminal\"}}}"
+            },
+            {
+              "seq": 52208,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"c12d20cef3dcd70b62c8c5c726ab2658b4c5a21bea3b969ebef2f0e2060e9d29\",\"e\":{\"event_id\":\"01a2242b-30a0-71e2-b436-b9a037688a5b\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52208,\"t\":1795903140000,\"mono\":20773000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":0.2,\"idle_keys_s\":200.2,\"locked\":false}}}"
+            },
+            {
+              "seq": 52209,
+              "rtype": 1,
+              "project_key": "p_0e6a8e0b849e",
+              "session_key": "s_f9d2c9433adf",
+              "body": "{\"n\":\"427dcc688cf904f82645a307ef32f2c7e9fb44ff5842aecf8cdc75d863513996\",\"e\":{\"event_id\":\"01a2242b-4428-7d94-b991-ce77f315f4f2\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52209,\"t\":1795903145000,\"mono\":20778000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"hook\",\"via\":\"hook\",\"harness\":\"claude_code\",\"harness_version\":\"2.1.328\",\"session_key\":\"s_f9d2c9433adf\",\"project_key\":\"p_0e6a8e0b849e\",\"kind\":\"session.start\",\"data\":{\"start_kind\":\"startup\",\"entrypoint\":\"cli\",\"parent_class\":\"terminal_app\",\"has_tty\":true,\"permission_mode\":\"auto\"}}}"
+            },
+            {
+              "seq": 52210,
+              "rtype": 15,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"9ce42b0aaed69c5b69be0039c5f6c744a305ca67ec473d18253df3fedba2263c\",\"e\":{\"event_id\":\"01a2242b-4428-76d4-8954-a1b1bb7587e7\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52210,\"t\":1795903145000,\"mono\":20778000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.focus\",\"data\":{\"app_class\":\"terminal\",\"hosted_sessions\":[\"s_f9d2c9433adf\"],\"focus_project\":\"p_0e6a8e0b849e\"}}}"
+            },
+            {
+              "seq": 52211,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"c7dcfe5976d5dda1465f1261423f82db9f132770310c408d9d94cc28d8f8623c\",\"e\":{\"event_id\":\"01a2242b-4428-7a0a-b7eb-9d275deb36b4\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52211,\"t\":1795903145000,\"mono\":20778000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":1.2,\"idle_keys_s\":1.2,\"locked\":false}}}"
+            },
+            {
+              "seq": 52212,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"ce5251363e7df4a31214283f0148ed9936ff3541f8f0eba2885c0abc47c61e2e\",\"e\":{\"event_id\":\"01a2242b-6b38-7898-aa8f-ee8ea08a122c\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52212,\"t\":1795903155000,\"mono\":20788000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":11.2,\"idle_keys_s\":11.2,\"locked\":false}}}"
+            },
+            {
+              "seq": 52213,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"51cdca496717ca096fc65a828ac3e6bbe1c576c9549d45ae7bc7ec9a0fae6399\",\"e\":{\"event_id\":\"01a2242b-a5d0-77ed-8bfb-44615cac4d0c\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52213,\"t\":1795903170000,\"mono\":20803000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":26.2,\"idle_keys_s\":26.2,\"locked\":false}}}"
+            },
+            {
+              "seq": 52214,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"727b7ffe6845c4faa090893ca9c64015aa53c1163e0854db65f4008011317079\",\"e\":{\"event_id\":\"01a2242b-e068-7d2a-9ff5-0c5c3475c9f2\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52214,\"t\":1795903185000,\"mono\":20818000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":0.2,\"idle_keys_s\":0.2,\"locked\":false}}}"
+            }
+          ]
+        },
+        {
+          "b": 17399,
+          "records": [
+            {
+              "seq": 52215,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"22ea0a9d159e1a9109c13fa826b1b921510f9b197945ea68d73f7419370e5dd8\",\"e\":{\"event_id\":\"01a2242c-1b00-75ca-8a16-122246160cdc\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52215,\"t\":1795903200000,\"mono\":20833000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":0.2,\"idle_keys_s\":0.2,\"locked\":false}}}"
+            },
+            {
+              "seq": 52216,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"bc869933829f7cd35b67e513f9e504058abc80ab0132a8c102cec365ef3f15c4\",\"e\":{\"event_id\":\"01a2242c-5598-7c4f-b3dd-5577009ba424\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52216,\"t\":1795903215000,\"mono\":20848000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":0.2,\"idle_keys_s\":0.2,\"locked\":false}}}"
+            },
+            {
+              "seq": 52217,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"f79f3e40af493656d9b6e8c2b593a6473e079d6a9d611b79d3d939903f8a7254\",\"e\":{\"event_id\":\"01a2242c-9030-7390-b75d-36cd5b7237a5\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52217,\"t\":1795903230000,\"mono\":20863000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":0.2,\"idle_keys_s\":0.2,\"locked\":false}}}"
+            },
+            {
+              "seq": 52218,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"11e7b4cdbcd5acbf4ef3b5b5632529ea524f0d64edb9348c45a67d29a94e350f\",\"e\":{\"event_id\":\"01a2242c-cac8-7397-b8ec-3f2185e18ae1\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52218,\"t\":1795903245000,\"mono\":20878000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":0.2,\"idle_keys_s\":0.2,\"locked\":false}}}"
+            }
+          ]
+        },
+        {
+          "b": 17400,
+          "records": [
+            {
+              "seq": 52219,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"1c4e7612ce8f5ad61e312581491b8879f187a8453cef874856676377003130e1\",\"e\":{\"event_id\":\"01a2242d-0560-7592-87e7-7ca78efe54a0\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52219,\"t\":1795903260000,\"mono\":20893000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":0.2,\"idle_keys_s\":0.2,\"locked\":false}}}"
+            },
+            {
+              "seq": 52220,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"b9bde49f4ce6f98838cca9a327149d639d87c7e6a54c331fd126b9dfe530f64f\",\"e\":{\"event_id\":\"01a2242d-3ff8-7e91-8c5a-bee55f5aeeb2\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52220,\"t\":1795903275000,\"mono\":20908000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":0.2,\"idle_keys_s\":0.2,\"locked\":false}}}"
+            },
+            {
+              "seq": 52221,
+              "rtype": 3,
+              "project_key": "p_0e6a8e0b849e",
+              "session_key": "s_f9d2c9433adf",
+              "body": "{\"n\":\"fb8c97ea52065a45d97c45ba820ecde64c026a3d01c53745d6b2db4894635cbe\",\"e\":{\"event_id\":\"01a2242d-7a90-7826-a0dc-a9323a0ca6f0\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52221,\"t\":1795903290000,\"mono\":20923000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"hook\",\"via\":\"hook\",\"harness\":\"claude_code\",\"harness_version\":\"2.1.328\",\"session_key\":\"s_f9d2c9433adf\",\"project_key\":\"p_0e6a8e0b849e\",\"kind\":\"prompt.submit\",\"data\":{\"turn_key\":\"t_c66c1761dc96\",\"len_chars\":180,\"pasted_chars\":0,\"typed_len_est\":180,\"origin_declared\":\"none\",\"matches_pending_cron\":false,\"answers_question\":false,\"low_effort\":false}}}"
+            },
+            {
+              "seq": 52222,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"c0181fcd026a7511c7c87c341582c43d52445b5ed9fe488f5947ba82c1553799\",\"e\":{\"event_id\":\"01a2242d-7a90-7536-90e8-d76de62ed02d\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52222,\"t\":1795903290000,\"mono\":20923000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":0.2,\"idle_keys_s\":0.2,\"locked\":false}}}"
+            }
+          ]
+        },
+        {
+          "b": 17401,
+          "records": [
+            {
+              "seq": 52223,
+              "rtype": 3,
+              "project_key": "p_0e6a8e0b849e",
+              "session_key": "s_f9d2c9433adf",
+              "body": "{\"n\":\"517c506c58a187e20e041b9469764c494e770d04903f2449ed540e4a8faa3086\",\"e\":{\"event_id\":\"01a2242d-7db0-785d-b04b-f354f7a22c72\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52223,\"t\":1795903290800,\"mono\":20923800,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"log\",\"via\":\"log\",\"harness\":\"claude_code\",\"harness_version\":\"2.1.328\",\"session_key\":\"s_f9d2c9433adf\",\"project_key\":\"p_0e6a8e0b849e\",\"kind\":\"prompt.submit\",\"data\":{\"turn_key\":\"t_c66c1761dc96\",\"len_chars\":180,\"pasted_chars\":0,\"typed_len_est\":180,\"origin_declared\":\"none\",\"matches_pending_cron\":false,\"answers_question\":false,\"low_effort\":false}}}"
+            },
+            {
+              "seq": 52224,
+              "rtype": 4,
+              "project_key": "p_0e6a8e0b849e",
+              "session_key": "s_f9d2c9433adf",
+              "body": "{\"n\":\"9e72d72acd8d21e2b017add64d11c83f117bf3954ef0d0789ab16aaf9fa657a3\",\"e\":{\"event_id\":\"01a2242d-99d0-737d-b77d-a86abb0cd31e\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52224,\"t\":1795903298000,\"mono\":20931000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"log\",\"via\":\"log\",\"harness\":\"claude_code\",\"harness_version\":\"2.1.328\",\"session_key\":\"s_f9d2c9433adf\",\"project_key\":\"p_0e6a8e0b849e\",\"kind\":\"agent.output\",\"data\":{\"turn_key\":\"t_c66c1761dc96\",\"words\":90,\"code_lines\":0,\"is_final\":false,\"asks_question\":false,\"offers_options\":false}}}"
+            },
+            {
+              "seq": 52225,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"f7053f2e9ad8ff42781562386ea01b36d160df4e1f82edee8bc9d758d65c56f3\",\"e\":{\"event_id\":\"01a2242d-b528-77c6-9c73-382f7f3bc406\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52225,\"t\":1795903305000,\"mono\":20938000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":6.5,\"idle_keys_s\":15.2,\"locked\":false}}}"
+            },
+            {
+              "seq": 52226,
+              "rtype": 5,
+              "project_key": "p_0e6a8e0b849e",
+              "session_key": "s_f9d2c9433adf",
+              "body": "{\"n\":\"c376618850c343b45ea50e57066a335f1fb25d1a3e45ba560f3556c003e77532\",\"e\":{\"event_id\":\"01a2242d-bcf8-70c6-954f-975b4f1518d3\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52226,\"t\":1795903307000,\"mono\":20940000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"hook\",\"via\":\"hook\",\"harness\":\"claude_code\",\"harness_version\":\"2.1.328\",\"session_key\":\"s_f9d2c9433adf\",\"project_key\":\"p_0e6a8e0b849e\",\"kind\":\"agent.tool\",\"data\":{\"tool_class\":\"read\",\"files\":[\"f_94d947913850\"],\"lines_added\":0,\"lines_removed\":0,\"visible_output_lines\":0,\"t_start\":1795903306400,\"t_end\":1795903307000}}}"
+            },
+            {
+              "seq": 52227,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"7aca535509ef2266ce4a353d8b09e705ce2ec3e64d4767866518b055d8daac39\",\"e\":{\"event_id\":\"01a2242d-bcf8-7f1b-9974-d8607201fae7\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52227,\"t\":1795903307000,\"mono\":20940000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":8.5,\"idle_keys_s\":17.2,\"locked\":false}}}"
+            },
+            {
+              "seq": 52228,
+              "rtype": 5,
+              "project_key": "p_0e6a8e0b849e",
+              "session_key": "s_f9d2c9433adf",
+              "body": "{\"n\":\"28b06dc6eeb42f286b5252201042ddbc3b9d0b07c4c2bf0a364dc8281e0dc054\",\"e\":{\"event_id\":\"01a2242d-e020-7db5-8b72-1e00527554ef\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52228,\"t\":1795903316000,\"mono\":20949000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"hook\",\"via\":\"hook\",\"harness\":\"claude_code\",\"harness_version\":\"2.1.328\",\"session_key\":\"s_f9d2c9433adf\",\"project_key\":\"p_0e6a8e0b849e\",\"kind\":\"agent.tool\",\"data\":{\"tool_class\":\"read\",\"files\":[\"f_66290f4a37b2\"],\"lines_added\":0,\"lines_removed\":0,\"visible_output_lines\":0,\"t_start\":1795903315400,\"t_end\":1795903316000}}}"
+            },
+            {
+              "seq": 52229,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"82d5e24da629dcebc829ae33525ad7c3f597c09274a5bf30b07d29861770e50a\",\"e\":{\"event_id\":\"01a2242d-e020-702c-baa7-9dec3a0d9783\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52229,\"t\":1795903316000,\"mono\":20949000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":4.8,\"idle_keys_s\":26.2,\"locked\":false}}}"
+            }
+          ]
+        },
+        {
+          "b": 17402,
+          "records": [
+            {
+              "seq": 52230,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"b51b49e05cf114e4c9af71396b55ac7d1aa1037723bc4fc0981765df2031d782\",\"e\":{\"event_id\":\"01a2242d-efc0-7d3e-b3e7-f46519a1f637\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52230,\"t\":1795903320000,\"mono\":20953000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":8.8,\"idle_keys_s\":30.2,\"locked\":false}}}"
+            },
+            {
+              "seq": 52231,
+              "rtype": 15,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"85dfd29a40539eae616daea28d1197a437e50908714ccc7169f172f7fea3f22b\",\"e\":{\"event_id\":\"01a2242d-f088-7df7-8755-27d858d22a92\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52231,\"t\":1795903320200,\"mono\":20953200,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.focus\",\"data\":{\"app_class\":\"terminal\",\"hosted_sessions\":[\"s_429df3acb00a\"],\"focus_project\":\"p_a73dbaeaf36c\"}}}"
+            },
+            {
+              "seq": 52232,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"45f6bf1579a8af201f846ae34d2ca959b483dff87c186c673d139089566f825f\",\"e\":{\"event_id\":\"01a2242d-f088-7db1-bcf8-cd45ae93a03a\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52232,\"t\":1795903320200,\"mono\":20953200,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":0.1,\"idle_keys_s\":30.4,\"locked\":false}}}"
+            },
+            {
+              "seq": 52233,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"607c07be08dc94f236efa45ee153d67825eb5903bac6456f4fa37d3247500cbf\",\"e\":{\"event_id\":\"01a2242e-2a58-7c84-8d2f-3278566908c1\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52233,\"t\":1795903335000,\"mono\":20968000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":6.7,\"idle_keys_s\":45.2,\"locked\":false}}}"
+            },
+            {
+              "seq": 52234,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"b0be6add84b0971029318327df2e3f1e02d45e17ad386694bbe1aa212c0982ed\",\"e\":{\"event_id\":\"01a2242e-64f0-7dda-99d7-809572217945\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52234,\"t\":1795903350000,\"mono\":20983000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":10.4,\"idle_keys_s\":60.2,\"locked\":false}}}"
+            },
+            {
+              "seq": 52235,
+              "rtype": 5,
+              "project_key": "p_0e6a8e0b849e",
+              "session_key": "s_f9d2c9433adf",
+              "body": "{\"n\":\"8c441112b41b3fc7a0007ef3275c46e61815f39830bb0dbaea67ced832179b77\",\"e\":{\"event_id\":\"01a2242e-68d8-7856-ad85-b6ef3e14faf8\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52235,\"t\":1795903351000,\"mono\":20984000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"hook\",\"via\":\"hook\",\"harness\":\"claude_code\",\"harness_version\":\"2.1.328\",\"session_key\":\"s_f9d2c9433adf\",\"project_key\":\"p_0e6a8e0b849e\",\"kind\":\"agent.tool\",\"data\":{\"tool_class\":\"edit\",\"files\":[\"f_94d947913850\"],\"lines_added\":48,\"lines_removed\":16,\"visible_output_lines\":0,\"t_start\":1795903350600,\"t_end\":1795903351000}}}"
+            },
+            {
+              "seq": 52236,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"aac3ed4873c103e53a1068ce0c1eb8c412e7bfaa893b4d1d072411b7922c3e67\",\"e\":{\"event_id\":\"01a2242e-68d8-7866-a222-d4876f4ee6a5\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52236,\"t\":1795903351000,\"mono\":20984000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":0,\"idle_keys_s\":61.2,\"locked\":false}}}"
+            },
+            {
+              "seq": 52237,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"158c6bc08badd3f70cf5c2ef6a2491b204fb7f19ddc4d351a27d049e0c1bbab8\",\"e\":{\"event_id\":\"01a2242e-9f88-7911-bf83-2f61feac88bd\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52237,\"t\":1795903365000,\"mono\":20998000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":2.3,\"idle_keys_s\":75.2,\"locked\":false}}}"
+            }
+          ]
+        },
+        {
+          "b": 17403,
+          "records": [
+            {
+              "seq": 52238,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"3031c339969599322fe7b12cb69cd7ef920d4d90341b1433ba1d0278c7b65862\",\"e\":{\"event_id\":\"01a2242e-da20-7c59-910d-542652ce5365\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52238,\"t\":1795903380000,\"mono\":21013000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":0.6,\"idle_keys_s\":0.6,\"locked\":false}}}"
+            },
+            {
+              "seq": 52239,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"8abcc4867ba3064a2871ed1c45131d5f7d889e4c680427a6b41a1301971666dc\",\"e\":{\"event_id\":\"01a2242f-14b8-758f-b720-16e67c7fb13e\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52239,\"t\":1795903395000,\"mono\":21028000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":0.65,\"idle_keys_s\":0.65,\"locked\":false}}}"
+            },
+            {
+              "seq": 52240,
+              "rtype": 5,
+              "project_key": "p_0e6a8e0b849e",
+              "session_key": "s_f9d2c9433adf",
+              "body": "{\"n\":\"b83a5b1fbbca6c8b9a6bdd16f97035d7f7384daea6177b05cb7355b54dd813be\",\"e\":{\"event_id\":\"01a2242f-2840-7818-9cbe-04742f5e6ebd\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52240,\"t\":1795903400000,\"mono\":21033000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"hook\",\"via\":\"hook\",\"harness\":\"claude_code\",\"harness_version\":\"2.1.328\",\"session_key\":\"s_f9d2c9433adf\",\"project_key\":\"p_0e6a8e0b849e\",\"kind\":\"agent.tool\",\"data\":{\"tool_class\":\"edit\",\"files\":[\"f_66290f4a37b2\"],\"lines_added\":40,\"lines_removed\":12,\"visible_output_lines\":0,\"t_start\":1795903399600,\"t_end\":1795903400000}}}"
+            },
+            {
+              "seq": 52241,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"4dce7dd161e0b312e6eb09420d548f8d9a0bf02d5c8c22d979a038d5eccd9760\",\"e\":{\"event_id\":\"01a2242f-2840-76b6-955e-1e308880471b\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52241,\"t\":1795903400000,\"mono\":21033000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":0.45,\"idle_keys_s\":0.45,\"locked\":false}}}"
+            },
+            {
+              "seq": 52242,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"88ac17c982643415b69ab36ebd45ed1db89a6cf7ebc9415c61a639df3c323716\",\"e\":{\"event_id\":\"01a2242f-4f50-719d-a563-a156b7e7f7a2\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52242,\"t\":1795903410000,\"mono\":21043000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":0.05,\"idle_keys_s\":0.05,\"locked\":false}}}"
+            },
+            {
+              "seq": 52243,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"72a84ab49bb712b173596047923608ead7fc8acb482a727285827584d18e22e4\",\"e\":{\"event_id\":\"01a2242f-89e8-7870-b56f-f550f694db21\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52243,\"t\":1795903425000,\"mono\":21058000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":0.1,\"idle_keys_s\":0.1,\"locked\":false}}}"
+            },
+            {
+              "seq": 52244,
+              "rtype": 4,
+              "project_key": "p_0e6a8e0b849e",
+              "session_key": "s_f9d2c9433adf",
+              "body": "{\"n\":\"46c454e18c5c703b1be0d1ff78d007fc0ecceb157901f4303ad5fe579aca9d5e\",\"e\":{\"event_id\":\"01a2242f-a540-778b-bc97-c03c088e930a\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52244,\"t\":1795903432000,\"mono\":21065000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"log\",\"via\":\"log\",\"harness\":\"claude_code\",\"harness_version\":\"2.1.328\",\"session_key\":\"s_f9d2c9433adf\",\"project_key\":\"p_0e6a8e0b849e\",\"kind\":\"agent.output\",\"data\":{\"turn_key\":\"t_c66c1761dc96\",\"words\":35,\"code_lines\":0,\"is_final\":false,\"asks_question\":false,\"offers_options\":false}}}"
+            }
+          ]
+        },
+        {
+          "b": 17404,
+          "records": [
+            {
+              "seq": 52245,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"f0ffe355d57d1e9643538eaa072d7492ce2ff91c3f8f77224a6ecb6288077f8f\",\"e\":{\"event_id\":\"01a2242f-c480-75a0-a7bb-c34545526240\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52245,\"t\":1795903440000,\"mono\":21073000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":0.15,\"idle_keys_s\":0.15,\"locked\":false}}}"
+            },
+            {
+              "seq": 52246,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"6b7dbc6d9e96ec94011579da53a9b6298aa9079a1863d96376e84b24e52f2027\",\"e\":{\"event_id\":\"01a2242f-ff18-7d49-af25-e28088209f48\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52246,\"t\":1795903455000,\"mono\":21088000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":0.2,\"idle_keys_s\":0.2,\"locked\":false}}}"
+            },
+            {
+              "seq": 52247,
+              "rtype": 3,
+              "project_key": "p_a73dbaeaf36c",
+              "session_key": "s_429df3acb00a",
+              "body": "{\"n\":\"3b3f01d8d1cd8df2b3ea890507cee9b087e00e568941ba4239f72371fbfd1d5a\",\"e\":{\"event_id\":\"01a22430-39b0-7851-93e4-4d90ced1214e\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52247,\"t\":1795903470000,\"mono\":21103000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"hook\",\"via\":\"hook\",\"harness\":\"codex\",\"harness_version\":\"0.170.0\",\"session_key\":\"s_429df3acb00a\",\"project_key\":\"p_a73dbaeaf36c\",\"kind\":\"prompt.submit\",\"data\":{\"turn_key\":\"t_d83dc68309f4\",\"len_chars\":150,\"pasted_chars\":0,\"typed_len_est\":150,\"origin_declared\":\"none\",\"matches_pending_cron\":false,\"answers_question\":false,\"low_effort\":false}}}"
+            },
+            {
+              "seq": 52248,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"31e297b7f61a4cad679b64846730b5909b243ef054a82ff6d70c42dabd916771\",\"e\":{\"event_id\":\"01a22430-39b0-724a-b172-bdcaabfaf6bb\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52248,\"t\":1795903470000,\"mono\":21103000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":0.2,\"idle_keys_s\":0.2,\"locked\":false}}}"
+            }
+          ]
+        },
+        {
+          "b": 17405,
+          "records": [
+            {
+              "seq": 52249,
+              "rtype": 3,
+              "project_key": "p_a73dbaeaf36c",
+              "session_key": "s_429df3acb00a",
+              "body": "{\"n\":\"d14a73bc1886223f02f79641934d4fcdb75e4e69499fc14191c73ffad4d99209\",\"e\":{\"event_id\":\"01a22430-3f8c-71ac-a659-c98bef5753de\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52249,\"t\":1795903471500,\"mono\":21104500,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"log\",\"via\":\"log\",\"harness\":\"codex\",\"harness_version\":\"0.170.0\",\"session_key\":\"s_429df3acb00a\",\"project_key\":\"p_a73dbaeaf36c\",\"kind\":\"prompt.submit\",\"data\":{\"turn_key\":\"t_d83dc68309f4\",\"len_chars\":150,\"pasted_chars\":0,\"typed_len_est\":150,\"origin_declared\":\"none\",\"matches_pending_cron\":false,\"answers_question\":false,\"low_effort\":false}}}"
+            },
+            {
+              "seq": 52250,
+              "rtype": 4,
+              "project_key": "p_a73dbaeaf36c",
+              "session_key": "s_429df3acb00a",
+              "body": "{\"n\":\"c8ab257955f334c331ff3245d23eb49e7302f6af07fa6671b75e283237137203\",\"e\":{\"event_id\":\"01a22430-5508-735b-9b16-318a6d59f0e7\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52250,\"t\":1795903477000,\"mono\":21110000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"log\",\"via\":\"log\",\"harness\":\"codex\",\"harness_version\":\"0.170.0\",\"session_key\":\"s_429df3acb00a\",\"project_key\":\"p_a73dbaeaf36c\",\"kind\":\"agent.output\",\"data\":{\"turn_key\":\"t_d83dc68309f4\",\"words\":45,\"code_lines\":0,\"is_final\":false,\"asks_question\":false,\"offers_options\":false}}}"
+            },
+            {
+              "seq": 52251,
+              "rtype": 5,
+              "project_key": "p_0e6a8e0b849e",
+              "session_key": "s_f9d2c9433adf",
+              "body": "{\"n\":\"2ac005f229f6abbfafc26a35dd0d53aea87d2690c0c4ba5df3ee6546cda1cf61\",\"e\":{\"event_id\":\"01a22430-60c0-7980-94f8-38230f376f71\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52251,\"t\":1795903480000,\"mono\":21113000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"hook\",\"via\":\"hook\",\"harness\":\"claude_code\",\"harness_version\":\"2.1.328\",\"session_key\":\"s_f9d2c9433adf\",\"project_key\":\"p_0e6a8e0b849e\",\"kind\":\"agent.tool\",\"data\":{\"tool_class\":\"edit\",\"files\":[\"f_a2440e271e9b\"],\"lines_added\":36,\"lines_removed\":12,\"visible_output_lines\":0,\"t_start\":1795903479600,\"t_end\":1795903480000}}}"
+            },
+            {
+              "seq": 52252,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"4aad8110a7f41c2446f8cdea1e3b02d9bb6912cedbcede3722d6b9538f7a4351\",\"e\":{\"event_id\":\"01a22430-60c0-7b3a-a4e9-0803cd1f6c3c\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52252,\"t\":1795903480000,\"mono\":21113000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":1.1,\"idle_keys_s\":10.2,\"locked\":false}}}"
+            },
+            {
+              "seq": 52253,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"565289b793eb25e374e61c5b8c6d0e7c6e713c0c96d2c31f46f7ce444a27fdd6\",\"e\":{\"event_id\":\"01a22430-7448-7eab-990c-2d08f25ac587\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52253,\"t\":1795903485000,\"mono\":21118000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":6.1,\"idle_keys_s\":15.2,\"locked\":false}}}"
+            }
+          ]
+        },
+        {
+          "b": 17406,
+          "records": [
+            {
+              "seq": 52254,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"7b1ed67da4fbbce4c442b677d1928367dc1c62080cf7763d48581115b8467fa2\",\"e\":{\"event_id\":\"01a22430-aee0-7d3e-ac43-892476f05730\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52254,\"t\":1795903500000,\"mono\":21133000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":7.6,\"idle_keys_s\":30.2,\"locked\":false}}}"
+            },
+            {
+              "seq": 52255,
+              "rtype": 15,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"fadce7d1b586ae5b4e8cc91598faaa69d135efa4ab30eeb9dbdf1b428f1cfa48\",\"e\":{\"event_id\":\"01a22430-b00c-7d3d-a271-6b1cae17d613\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52255,\"t\":1795903500300,\"mono\":21133300,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.focus\",\"data\":{\"app_class\":\"editor\",\"focus_project\":\"p_418d8413d1cf\"}}}"
+            },
+            {
+              "seq": 52256,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"c08f3baa7ae759f67ed2876ab9a3a2987afafae725fc75a978b0de666c8cd8e6\",\"e\":{\"event_id\":\"01a22430-b00c-7aa0-a366-5b46b1b8635d\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52256,\"t\":1795903500300,\"mono\":21133300,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":0.1,\"idle_keys_s\":30.5,\"locked\":false}}}"
+            },
+            {
+              "seq": 52257,
+              "rtype": 5,
+              "project_key": "p_a73dbaeaf36c",
+              "session_key": "s_429df3acb00a",
+              "body": "{\"n\":\"916583303c1fe4e5bc225041891fda4bbe82f1e61709fbaa60631d13add7ee90\",\"e\":{\"event_id\":\"01a22430-ddc0-74ba-b363-7c04265d2f5d\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52257,\"t\":1795903512000,\"mono\":21145000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"hook\",\"via\":\"hook\",\"harness\":\"codex\",\"harness_version\":\"0.170.0\",\"session_key\":\"s_429df3acb00a\",\"project_key\":\"p_a73dbaeaf36c\",\"kind\":\"agent.tool\",\"data\":{\"tool_class\":\"edit\",\"files\":[\"f_ff147e7b6f65\"],\"lines_added\":14,\"lines_removed\":6,\"visible_output_lines\":0,\"t_start\":1795903511600,\"t_end\":1795903512000}}}"
+            },
+            {
+              "seq": 52258,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"5c9d700efa6bd8d2dbdcbd551323a39942994db0226d1752a540ae323ac9184c\",\"e\":{\"event_id\":\"01a22430-ddc0-774d-93fe-ebb174d32705\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52258,\"t\":1795903512000,\"mono\":21145000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":4.6,\"idle_keys_s\":42.2,\"locked\":false}}}"
+            },
+            {
+              "seq": 52259,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"c3da63af855deb97ea135d32fff31d4dec9981025b8be6c13732c7a653e8d761\",\"e\":{\"event_id\":\"01a22430-e978-7f7d-b0d1-bc9ee47b23ba\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52259,\"t\":1795903515000,\"mono\":21148000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":7.6,\"idle_keys_s\":45.2,\"locked\":false}}}"
+            },
+            {
+              "seq": 52260,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"3cc485c0ab3fb6a5cd0e83ef620ea9f1161c43245494b51ab273d55a6d5b7091\",\"e\":{\"event_id\":\"01a22431-2410-79d9-887e-376d463f5cbc\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52260,\"t\":1795903530000,\"mono\":21163000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":2.6,\"idle_keys_s\":60.2,\"locked\":false}}}"
+            },
+            {
+              "seq": 52261,
+              "rtype": 5,
+              "project_key": "p_0e6a8e0b849e",
+              "session_key": "s_f9d2c9433adf",
+              "body": "{\"n\":\"bd207b7188197548dd7fc9bc47a76b7c9cb567425495faa5ccb92806957d7305\",\"e\":{\"event_id\":\"01a22431-3798-7f58-b2db-6087d16ed77e\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52261,\"t\":1795903535000,\"mono\":21168000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"hook\",\"via\":\"hook\",\"harness\":\"claude_code\",\"harness_version\":\"2.1.328\",\"session_key\":\"s_f9d2c9433adf\",\"project_key\":\"p_0e6a8e0b849e\",\"kind\":\"agent.tool\",\"data\":{\"tool_class\":\"build\",\"lines_added\":0,\"lines_removed\":0,\"exit_code\":0,\"visible_output_lines\":4,\"t_start\":1795903514000,\"t_end\":1795903535000}}}"
+            },
+            {
+              "seq": 52262,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"1ff248f657010cd23ffa72f6d441d65d7be31b772a9e47929db1ba4382921265\",\"e\":{\"event_id\":\"01a22431-3798-7f99-a221-11129d1ac7df\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52262,\"t\":1795903535000,\"mono\":21168000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":7.6,\"idle_keys_s\":65.2,\"locked\":false}}}"
+            },
+            {
+              "seq": 52263,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"69864b2b4390ca0ab8dd741a29166464445e49bb70c27397d3eed5e5ad923fcc\",\"e\":{\"event_id\":\"01a22431-5ea8-75fe-8f1c-78c6b4daf038\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52263,\"t\":1795903545000,\"mono\":21178000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":7.6,\"idle_keys_s\":75.2,\"locked\":false}}}"
+            }
+          ]
+        },
+        {
+          "b": 17407,
+          "records": [
+            {
+              "seq": 52264,
+              "rtype": 11,
+              "project_key": "p_418d8413d1cf",
+              "session_key": "none",
+              "body": "{\"n\":\"6fe243c9b08a6e03ca55e7ce71f24dc23470ce32f0afa88cb31844fa7d9efb86\",\"e\":{\"event_id\":\"01a22431-9940-7913-9d6a-36cf6dc32a12\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52264,\"t\":1795903560000,\"mono\":21193000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"editor\",\"via\":\"editor\",\"harness\":\"none\",\"session_key\":\"none\",\"project_key\":\"p_418d8413d1cf\",\"kind\":\"editor.activity\",\"data\":{\"editor\":\"cursor\",\"act\":\"edit\",\"file_hash\":\"f_b1b55f0c5e92\",\"lines_changed\":4,\"edit_source\":\"human\"}}}"
+            },
+            {
+              "seq": 52265,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"4279dd8909acd04e22c7f9800a0219810b7d3295d5f5b5c6bf990689dbc34927\",\"e\":{\"event_id\":\"01a22431-9940-71b5-a1c6-6d510320b10f\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52265,\"t\":1795903560000,\"mono\":21193000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":0.1,\"idle_keys_s\":0.1,\"locked\":false}}}"
+            },
+            {
+              "seq": 52266,
+              "rtype": 5,
+              "project_key": "p_a73dbaeaf36c",
+              "session_key": "s_429df3acb00a",
+              "body": "{\"n\":\"5a0e792bf1ec2dce7ad231e969e83ba89fb8518554589ae3f7e9b3d41f1917e6\",\"e\":{\"event_id\":\"01a22431-9d28-743d-8bde-1465b74dc328\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52266,\"t\":1795903561000,\"mono\":21194000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"hook\",\"via\":\"hook\",\"harness\":\"codex\",\"harness_version\":\"0.170.0\",\"session_key\":\"s_429df3acb00a\",\"project_key\":\"p_a73dbaeaf36c\",\"kind\":\"agent.tool\",\"data\":{\"tool_class\":\"test\",\"lines_added\":0,\"lines_removed\":0,\"exit_code\":0,\"visible_output_lines\":4,\"t_start\":1795903546000,\"t_end\":1795903561000}}}"
+            },
+            {
+              "seq": 52267,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"2c25efa14652478b6ab472ace3a523751b59f96f39b76d19bbb2948a0ecd550b\",\"e\":{\"event_id\":\"01a22431-9d28-7b6d-be3d-3a5eb6754d02\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52267,\"t\":1795903561000,\"mono\":21194000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":0.4,\"idle_keys_s\":0.4,\"locked\":false}}}"
+            },
+            {
+              "seq": 52268,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"bee1a8a0e52c77c7dcf4718db7c848106f0f01dbc33d921f6ac067ea507db875\",\"e\":{\"event_id\":\"01a22431-d3d8-7951-90e1-308cdf1b78dc\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52268,\"t\":1795903575000,\"mono\":21208000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":0.4,\"idle_keys_s\":0.4,\"locked\":false}}}"
+            },
+            {
+              "seq": 52269,
+              "rtype": 5,
+              "project_key": "p_0e6a8e0b849e",
+              "session_key": "s_f9d2c9433adf",
+              "body": "{\"n\":\"a670769b35c9e5cbba21b9427e435dbd5e31265c9d43f35191cdaa1ea22c6c3c\",\"e\":{\"event_id\":\"01a22431-fae8-7946-b9f7-12f3bfa0519f\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52269,\"t\":1795903585000,\"mono\":21218000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"hook\",\"via\":\"hook\",\"harness\":\"claude_code\",\"harness_version\":\"2.1.328\",\"session_key\":\"s_f9d2c9433adf\",\"project_key\":\"p_0e6a8e0b849e\",\"kind\":\"agent.tool\",\"data\":{\"tool_class\":\"edit\",\"files\":[\"f_3c3a9d80ac21\"],\"lines_added\":55,\"lines_removed\":15,\"visible_output_lines\":0,\"t_start\":1795903584600,\"t_end\":1795903585000}}}"
+            },
+            {
+              "seq": 52270,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"176c7480b77a40cddf375e0aab841415f48843e4cc5b1fba1458143bd3b486c6\",\"e\":{\"event_id\":\"01a22431-fae8-7c4c-bcf0-0ab59c909756\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52270,\"t\":1795903585000,\"mono\":21218000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":0.6,\"idle_keys_s\":0.6,\"locked\":false}}}"
+            },
+            {
+              "seq": 52271,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"074c285680a8b0e49fd5d6f72ce13b4eddd4f398a76ec7f1fc81b42a99a1916d\",\"e\":{\"event_id\":\"01a22432-0e70-7196-b9d8-347a37cccda4\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52271,\"t\":1795903590000,\"mono\":21223000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":0.7,\"idle_keys_s\":0.7,\"locked\":false}}}"
+            },
+            {
+              "seq": 52272,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"2390b65e53f3dd8fa63b8ec5075b2640d11ecaa4082923879f60d93017fa69f1\",\"e\":{\"event_id\":\"01a22432-4908-78d2-93ec-11ea8778f047\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52272,\"t\":1795903605000,\"mono\":21238000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":0.3,\"idle_keys_s\":0.3,\"locked\":false}}}"
+            },
+            {
+              "seq": 52273,
+              "rtype": 4,
+              "project_key": "p_a73dbaeaf36c",
+              "session_key": "s_429df3acb00a",
+              "body": "{\"n\":\"89b68ee825f0bd0d87f1cca74f72f8d0542706c5725c7f89ca4cb2ac7088d6e1\",\"e\":{\"event_id\":\"01a22432-7bd0-725d-9269-476e658a387c\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52273,\"t\":1795903618000,\"mono\":21251000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"log\",\"via\":\"log\",\"harness\":\"codex\",\"harness_version\":\"0.170.0\",\"session_key\":\"s_429df3acb00a\",\"project_key\":\"p_a73dbaeaf36c\",\"kind\":\"agent.output\",\"data\":{\"turn_key\":\"t_d83dc68309f4\",\"words\":210,\"code_lines\":0,\"is_final\":true,\"asks_question\":false,\"offers_options\":false}}}"
+            }
+          ]
+        },
+        {
+          "b": 17408,
+          "records": [
+            {
+              "seq": 52274,
+              "rtype": 9,
+              "project_key": "p_a73dbaeaf36c",
+              "session_key": "s_429df3acb00a",
+              "body": "{\"n\":\"07e5972e3a008796a45e85dc09cf575af114e487d11461533d06d8a616131441\",\"e\":{\"event_id\":\"01a22432-83a0-722b-b651-2f78f4b18603\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52274,\"t\":1795903620000,\"mono\":21253000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"hook\",\"via\":\"hook\",\"harness\":\"codex\",\"harness_version\":\"0.170.0\",\"session_key\":\"s_429df3acb00a\",\"project_key\":\"p_a73dbaeaf36c\",\"kind\":\"agent.stop\",\"data\":{\"turn_key\":\"t_d83dc68309f4\",\"stop_reason\":\"end_turn\",\"stop_hook_active\":false}}}"
+            },
+            {
+              "seq": 52275,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"4ba7972f9406a8d591acde29aa969388ce5dfd1bbffc46b0381db2e5ef2f3243\",\"e\":{\"event_id\":\"01a22432-83a0-74fe-b716-d712dd4aeac3\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52275,\"t\":1795903620000,\"mono\":21253000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":0.6,\"idle_keys_s\":0.6,\"locked\":false}}}"
+            }
+          ]
+        },
+        {
+          "b": 17409,
+          "records": [
+            {
+              "seq": 52276,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"800d9f9b0bfd88d55b4d45cdc6477242de72cbdd58627c3f3193fa83b961ea78\",\"e\":{\"event_id\":\"01a22432-be38-7170-92f4-322ff5ed177b\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52276,\"t\":1795903635000,\"mono\":21268000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":0.2,\"idle_keys_s\":0.2,\"locked\":false}}}"
+            },
+            {
+              "seq": 52277,
+              "rtype": 4,
+              "project_key": "p_0e6a8e0b849e",
+              "session_key": "s_f9d2c9433adf",
+              "body": "{\"n\":\"7684cd39f8bafa19f17bae9239cfd4814d4d5a897af97a2f5efc38ca06f516d5\",\"e\":{\"event_id\":\"01a22432-c9f0-71b3-89f4-48a4b1edbcc7\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52277,\"t\":1795903638000,\"mono\":21271000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"log\",\"via\":\"log\",\"harness\":\"claude_code\",\"harness_version\":\"2.1.328\",\"session_key\":\"s_f9d2c9433adf\",\"project_key\":\"p_0e6a8e0b849e\",\"kind\":\"agent.output\",\"data\":{\"turn_key\":\"t_c66c1761dc96\",\"words\":40,\"code_lines\":0,\"is_final\":false,\"asks_question\":false,\"offers_options\":false}}}"
+            },
+            {
+              "seq": 52278,
+              "rtype": 11,
+              "project_key": "p_418d8413d1cf",
+              "session_key": "none",
+              "body": "{\"n\":\"385b796b1fb848f802cd3943471a2eb55dfef455b9ef8d598c4147e06202589b\",\"e\":{\"event_id\":\"01a22432-f8d0-7eec-a5da-9e3b91ad743e\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52278,\"t\":1795903650000,\"mono\":21283000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"editor\",\"via\":\"editor\",\"harness\":\"none\",\"session_key\":\"none\",\"project_key\":\"p_418d8413d1cf\",\"kind\":\"editor.activity\",\"data\":{\"editor\":\"cursor\",\"act\":\"save\",\"file_hash\":\"f_b1b55f0c5e92\",\"lines_changed\":9,\"edit_source\":\"human\"}}}"
+            },
+            {
+              "seq": 52279,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"41636f3275bb1ed976900acb369370d6c6fba04ffeb1b4a56b6ccd6f7623ca67\",\"e\":{\"event_id\":\"01a22432-f8d0-7697-9cb7-2be5d0401840\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52279,\"t\":1795903650000,\"mono\":21283000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":0.5,\"idle_keys_s\":0.5,\"locked\":false}}}"
+            },
+            {
+              "seq": 52280,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"b20ec5ca86cda2f0c84dd09de28a772fb64a0e4fe311a4c3cc448bb387887477\",\"e\":{\"event_id\":\"01a22433-3368-715b-a493-cd275bc78def\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52280,\"t\":1795903665000,\"mono\":21298000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":0.1,\"idle_keys_s\":0.1,\"locked\":false}}}"
+            },
+            {
+              "seq": 52281,
+              "rtype": 5,
+              "project_key": "p_0e6a8e0b849e",
+              "session_key": "s_f9d2c9433adf",
+              "body": "{\"n\":\"e993a78bd3b18408f2a63134fcc7636c621fa1857c69812e602dcba2eacaa948\",\"e\":{\"event_id\":\"01a22433-46f0-719b-830a-0aef47de0997\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52281,\"t\":1795903670000,\"mono\":21303000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"hook\",\"via\":\"hook\",\"harness\":\"claude_code\",\"harness_version\":\"2.1.328\",\"session_key\":\"s_f9d2c9433adf\",\"project_key\":\"p_0e6a8e0b849e\",\"kind\":\"agent.tool\",\"data\":{\"tool_class\":\"edit\",\"files\":[\"f_cf6eee88c47b\"],\"lines_added\":50,\"lines_removed\":16,\"visible_output_lines\":0,\"t_start\":1795903669600,\"t_end\":1795903670000}}}"
+            },
+            {
+              "seq": 52282,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"066608427a089434f0deb64498b82f9adf2a9711d16328ad3d6511b8268943f7\",\"e\":{\"event_id\":\"01a22433-46f0-7651-993f-c8d872c55564\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52282,\"t\":1795903670000,\"mono\":21303000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":0.2,\"idle_keys_s\":0.2,\"locked\":false}}}"
+            }
+          ]
+        },
+        {
+          "b": 17410,
+          "records": [
+            {
+              "seq": 52283,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"9dfdc529f403eb6c95984d438524ca3dc7cbc1f8392f6f51273187018b038a86\",\"e\":{\"event_id\":\"01a22433-6e00-78f3-8eb3-f620bc6c44f7\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52283,\"t\":1795903680000,\"mono\":21313000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":0.4,\"idle_keys_s\":0.4,\"locked\":false}}}"
+            },
+            {
+              "seq": 52284,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"d3676132ea717aff480726546a23732a958a8048d3609803261c136599fb7d46\",\"e\":{\"event_id\":\"01a22433-a898-7e0a-825b-f31fa0cfb720\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52284,\"t\":1795903695000,\"mono\":21328000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":0.7,\"idle_keys_s\":0.7,\"locked\":false}}}"
+            },
+            {
+              "seq": 52285,
+              "rtype": 5,
+              "project_key": "p_0e6a8e0b849e",
+              "session_key": "s_f9d2c9433adf",
+              "body": "{\"n\":\"024511b1c3ca7282fe64ef2ab1bf403edf55677c90cce732c39bcfdac82f3884\",\"e\":{\"event_id\":\"01a22433-e330-7e25-bc20-52b521011ed6\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52285,\"t\":1795903710000,\"mono\":21343000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"hook\",\"via\":\"hook\",\"harness\":\"claude_code\",\"harness_version\":\"2.1.328\",\"session_key\":\"s_f9d2c9433adf\",\"project_key\":\"p_0e6a8e0b849e\",\"kind\":\"agent.tool\",\"data\":{\"tool_class\":\"build\",\"lines_added\":0,\"lines_removed\":0,\"exit_code\":0,\"visible_output_lines\":4,\"t_start\":1795903690000,\"t_end\":1795903710000}}}"
+            },
+            {
+              "seq": 52286,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"b89e95ed5d31046a04ec918acc5e5ff0931ed0782a4d31d0e27437b74787c1e8\",\"e\":{\"event_id\":\"01a22433-e330-7051-9dd0-e7f58f115fe3\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52286,\"t\":1795903710000,\"mono\":21343000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":0.3,\"idle_keys_s\":0.3,\"locked\":false}}}"
+            },
+            {
+              "seq": 52287,
+              "rtype": 11,
+              "project_key": "p_418d8413d1cf",
+              "session_key": "none",
+              "body": "{\"n\":\"44e7babeb2523215d09d7bcefaad263e8f90696315042e41661a0e711eb8858f\",\"e\":{\"event_id\":\"01a22434-0a40-707c-9fc0-8aecaf33d264\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52287,\"t\":1795903720000,\"mono\":21353000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"editor\",\"via\":\"editor\",\"harness\":\"none\",\"session_key\":\"none\",\"project_key\":\"p_418d8413d1cf\",\"kind\":\"editor.activity\",\"data\":{\"editor\":\"cursor\",\"act\":\"save\",\"file_hash\":\"f_b1b55f0c5e92\",\"lines_changed\":6,\"edit_source\":\"human\"}}}"
+            },
+            {
+              "seq": 52288,
+              "rtype": 1,
+              "project_key": "p_418d8413d1cf",
+              "session_key": "s_e0f13884db57",
+              "body": "{\"n\":\"a95d3c031bb24c8bf3b352790d24b59292f2cc8111618b9cedd79f1c3d90f8ef\",\"e\":{\"event_id\":\"01a22434-101c-70d2-972c-1332e9ce0619\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52288,\"t\":1795903721500,\"mono\":21354500,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"hook\",\"via\":\"hook\",\"harness\":\"cursor\",\"harness_version\":\"2.1.50\",\"session_key\":\"s_e0f13884db57\",\"project_key\":\"p_418d8413d1cf\",\"kind\":\"session.start\",\"data\":{\"start_kind\":\"startup\",\"entrypoint\":\"ide\",\"parent_class\":\"ide\",\"has_tty\":false}}}"
+            },
+            {
+              "seq": 52289,
+              "rtype": 15,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"7422e17094e102f3814575bda1e0b6fe631901d7a3ed91e1e59aa1e959deb388\",\"e\":{\"event_id\":\"01a22434-101c-73e0-9d6c-838a77f173bb\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52289,\"t\":1795903721500,\"mono\":21354500,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.focus\",\"data\":{\"app_class\":\"editor\",\"hosted_sessions\":[\"s_e0f13884db57\"],\"focus_project\":\"p_418d8413d1cf\"}}}"
+            },
+            {
+              "seq": 52290,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"c1e643bd26186028bb1e922f1540aae576c28197cf74f58ddc3147993c24f472\",\"e\":{\"event_id\":\"01a22434-101c-7705-8187-3e461985a309\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52290,\"t\":1795903721500,\"mono\":21354500,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":0.5,\"idle_keys_s\":0.5,\"locked\":false}}}"
+            },
+            {
+              "seq": 52291,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"3383738eab490e9be14a63fc4d7038436d59f76b5eba47d36b57c9315421ab71\",\"e\":{\"event_id\":\"01a22434-1dc8-726e-bfc8-8e609ea98b01\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52291,\"t\":1795903725000,\"mono\":21358000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":0.2,\"idle_keys_s\":0.2,\"locked\":false}}}"
+            },
+            {
+              "seq": 52292,
+              "rtype": 4,
+              "project_key": "p_0e6a8e0b849e",
+              "session_key": "s_f9d2c9433adf",
+              "body": "{\"n\":\"ba8fc776fadb5fda1629f8f1d43b2dcde162f66349fb64488513f24c3cd59d16\",\"e\":{\"event_id\":\"01a22434-48c0-7ab4-8eb7-6fe8d6742394\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52292,\"t\":1795903736000,\"mono\":21369000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"log\",\"via\":\"log\",\"harness\":\"claude_code\",\"harness_version\":\"2.1.328\",\"session_key\":\"s_f9d2c9433adf\",\"project_key\":\"p_0e6a8e0b849e\",\"kind\":\"agent.output\",\"data\":{\"turn_key\":\"t_c66c1761dc96\",\"words\":210,\"code_lines\":0,\"is_final\":true,\"asks_question\":false,\"offers_options\":false}}}"
+            }
+          ]
+        },
+        {
+          "b": 17411,
+          "records": [
+            {
+              "seq": 52293,
+              "rtype": 9,
+              "project_key": "p_0e6a8e0b849e",
+              "session_key": "s_f9d2c9433adf",
+              "body": "{\"n\":\"23feb2a79e19a1fc70e505aaf1fe7bf60816db61dafbae9628142f6541ff7fd2\",\"e\":{\"event_id\":\"01a22434-5860-72cd-9610-57399c803ed6\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52293,\"t\":1795903740000,\"mono\":21373000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"hook\",\"via\":\"hook\",\"harness\":\"claude_code\",\"harness_version\":\"2.1.328\",\"session_key\":\"s_f9d2c9433adf\",\"project_key\":\"p_0e6a8e0b849e\",\"kind\":\"agent.stop\",\"data\":{\"turn_key\":\"t_c66c1761dc96\",\"stop_reason\":\"end_turn\",\"stop_hook_active\":false}}}"
+            },
+            {
+              "seq": 52294,
+              "rtype": 3,
+              "project_key": "p_418d8413d1cf",
+              "session_key": "s_e0f13884db57",
+              "body": "{\"n\":\"b626bd3b4477410cb3532d2f002e106a1819d4beffc096fc775f6ef245cc7e57\",\"e\":{\"event_id\":\"01a22434-5860-73e5-84f9-c2c882830ba5\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52294,\"t\":1795903740000,\"mono\":21373000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"hook\",\"via\":\"hook\",\"harness\":\"cursor\",\"harness_version\":\"2.1.50\",\"session_key\":\"s_e0f13884db57\",\"project_key\":\"p_418d8413d1cf\",\"kind\":\"prompt.submit\",\"data\":{\"turn_key\":\"t_1a04ac19492b\",\"len_chars\":50,\"pasted_chars\":0,\"typed_len_est\":50,\"origin_declared\":\"none\",\"matches_pending_cron\":false,\"answers_question\":false,\"low_effort\":false}}}"
+            },
+            {
+              "seq": 52295,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"d07dd45a3db0a10e4601604032c8abdb41cc42f1f509014685fb845d2dc2ec47\",\"e\":{\"event_id\":\"01a22434-5860-76dd-8be5-146accf895b8\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52295,\"t\":1795903740000,\"mono\":21373000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":0.2,\"idle_keys_s\":0.2,\"locked\":false}}}"
+            }
+          ]
+        },
+        {
+          "b": 17412,
+          "records": [
+            {
+              "seq": 52296,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"26a446966c1d6959a661c9d1e4b16b48bb80a3c5a4b80e0fb42f7f1ae2c61f3f\",\"e\":{\"event_id\":\"01a22434-92f8-7497-b946-6c94d0502c07\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52296,\"t\":1795903755000,\"mono\":21388000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":8.8,\"idle_keys_s\":15.2,\"locked\":false}}}"
+            },
+            {
+              "seq": 52297,
+              "rtype": 5,
+              "project_key": "p_418d8413d1cf",
+              "session_key": "s_e0f13884db57",
+              "body": "{\"n\":\"724eccfe8a0c9579f9afab2a37571339383966ce0b69c06680f8921c6e9be7cd\",\"e\":{\"event_id\":\"01a22434-cd90-7e58-a0f4-c6f1e9780428\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52297,\"t\":1795903770000,\"mono\":21403000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"hook\",\"via\":\"hook\",\"harness\":\"cursor\",\"harness_version\":\"2.1.50\",\"session_key\":\"s_e0f13884db57\",\"project_key\":\"p_418d8413d1cf\",\"kind\":\"agent.tool\",\"data\":{\"tool_class\":\"test\",\"lines_added\":0,\"lines_removed\":0,\"exit_code\":101,\"error_sig\":\"e_06ce0de5fb2c\",\"visible_output_lines\":4,\"t_start\":1795903744000,\"t_end\":1795903770000}}}"
+            },
+            {
+              "seq": 52298,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"b42531b97f36755daf4b4db5d331bd7dc20e2ee8e42466936cc66f1642887451\",\"e\":{\"event_id\":\"01a22434-cd90-7fb4-8961-2ae27ce0cae6\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52298,\"t\":1795903770000,\"mono\":21403000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":1.8,\"idle_keys_s\":30.2,\"locked\":false}}}"
+            },
+            {
+              "seq": 52299,
+              "rtype": 4,
+              "project_key": "p_418d8413d1cf",
+              "session_key": "s_e0f13884db57",
+              "body": "{\"n\":\"8c0406cc2ca3e6ac7fd80201f864b10da53a48430ca6a8cc8d3e4a74307d68c4\",\"e\":{\"event_id\":\"01a22434-e118-7133-9762-66bf0826657f\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52299,\"t\":1795903775000,\"mono\":21408000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"hook\",\"via\":\"hook\",\"harness\":\"cursor\",\"harness_version\":\"2.1.50\",\"session_key\":\"s_e0f13884db57\",\"project_key\":\"p_418d8413d1cf\",\"kind\":\"agent.output\",\"data\":{\"turn_key\":\"t_1a04ac19492b\",\"words\":40,\"code_lines\":0,\"is_final\":true,\"asks_question\":false,\"offers_options\":false}}}"
+            },
+            {
+              "seq": 52300,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"1838e340e1bfe2b5aadd77d68266dcdf5b21e97ef7ae8591b7a457fab1d998d8\",\"e\":{\"event_id\":\"01a22434-e118-7163-8b0b-9c5575abf5d1\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52300,\"t\":1795903775000,\"mono\":21408000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":6.8,\"idle_keys_s\":35.2,\"locked\":false}}}"
+            },
+            {
+              "seq": 52301,
+              "rtype": 9,
+              "project_key": "p_418d8413d1cf",
+              "session_key": "s_e0f13884db57",
+              "body": "{\"n\":\"4fadd40d438c3ff77e146ab53dac052e850cc0d7181065b7cb42ec7c3128fb54\",\"e\":{\"event_id\":\"01a22434-e500-73cc-bf54-db4148affd8f\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52301,\"t\":1795903776000,\"mono\":21409000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"hook\",\"via\":\"hook\",\"harness\":\"cursor\",\"harness_version\":\"2.1.50\",\"session_key\":\"s_e0f13884db57\",\"project_key\":\"p_418d8413d1cf\",\"kind\":\"agent.stop\",\"data\":{\"turn_key\":\"t_1a04ac19492b\",\"stop_reason\":\"end_turn\",\"stop_hook_active\":false}}}"
+            },
+            {
+              "seq": 52302,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"1f81624be8b9104310497dff8289cb51fd0a6655fec1df56708011242f548fe3\",\"e\":{\"event_id\":\"01a22434-e500-788f-ab13-fa3f8d1253e5\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52302,\"t\":1795903776000,\"mono\":21409000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":7.8,\"idle_keys_s\":36.2,\"locked\":false}}}"
+            }
+          ]
+        },
+        {
+          "b": 17413,
+          "records": [
+            {
+              "seq": 52303,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"6d2d8409bc222a42ba679c9dccaa17f3568480fa21c39ffa38de6b2f017a8c3c\",\"e\":{\"event_id\":\"01a22435-0828-7135-a0de-222acdbb1921\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52303,\"t\":1795903785000,\"mono\":21418000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":5.8,\"idle_keys_s\":45.2,\"locked\":false}}}"
+            }
+          ]
+        },
+        {
+          "b": 17414,
+          "records": [
+            {
+              "seq": 52304,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"79bd8ae72a8167d99c091cf7a27508e41a849a34eabb333772429c3c0747a5ce\",\"e\":{\"event_id\":\"01a22435-42c0-7b0a-b7f6-4d0e004e2eab\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52304,\"t\":1795903800000,\"mono\":21433000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":9.8,\"idle_keys_s\":60.2,\"locked\":false}}}"
+            },
+            {
+              "seq": 52305,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"220e4f4ee8ae7467adb31993100233aa66d0d5d28fc18672720f2c98f952ebb6\",\"e\":{\"event_id\":\"01a22435-7d58-78c7-95ef-5ec90ff78eaf\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52305,\"t\":1795903815000,\"mono\":21448000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":2.8,\"idle_keys_s\":75.2,\"locked\":false}}}"
+            },
+            {
+              "seq": 52306,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"6cc65cf359b18e7e814fa78acfae67daed6b7ec9abd2a5c8abc2b2faa328dc74\",\"e\":{\"event_id\":\"01a22435-b7f0-7502-8ab2-409676d8dc93\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52306,\"t\":1795903830000,\"mono\":21463000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":6.8,\"idle_keys_s\":90.2,\"locked\":false}}}"
+            },
+            {
+              "seq": 52307,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"611a343f6f4a954f3c239c7c7aa8f389fd2772809d95312a768bc487a213d679\",\"e\":{\"event_id\":\"01a22435-f288-7df2-b281-7996e3611357\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52307,\"t\":1795903845000,\"mono\":21478000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":10.8,\"idle_keys_s\":105.2,\"locked\":false}}}"
+            }
+          ]
+        },
+        {
+          "b": 17415,
+          "records": [
+            {
+              "seq": 52308,
+              "rtype": 11,
+              "project_key": "p_418d8413d1cf",
+              "session_key": "none",
+              "body": "{\"n\":\"0763946e78014d7cff4159abe258457dc5995c94cd3d52f1dbd022b9f970a61d\",\"e\":{\"event_id\":\"01a22436-2d20-7d8d-b05f-f97779eee828\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52308,\"t\":1795903860000,\"mono\":21493000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"editor\",\"via\":\"editor\",\"harness\":\"none\",\"session_key\":\"none\",\"project_key\":\"p_418d8413d1cf\",\"kind\":\"editor.activity\",\"data\":{\"editor\":\"cursor\",\"act\":\"edit\",\"file_hash\":\"f_b1b55f0c5e92\",\"lines_changed\":3,\"edit_source\":\"human\"}}}"
+            },
+            {
+              "seq": 52309,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"9a640584674a589c4601f37786f6674d87dca4450fa27c5a391b2896b58dad39\",\"e\":{\"event_id\":\"01a22436-2d20-73e0-bfc1-855829dd8d78\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52309,\"t\":1795903860000,\"mono\":21493000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":0.1,\"idle_keys_s\":0.1,\"locked\":false}}}"
+            },
+            {
+              "seq": 52310,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"0c9a106bcdc0c8bc562f5e58f86e12b0cb7697d60663a5f7e953249d9027d76b\",\"e\":{\"event_id\":\"01a22436-67b8-7de1-a228-03b32ff4b241\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52310,\"t\":1795903875000,\"mono\":21508000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":0.4,\"idle_keys_s\":0.4,\"locked\":false}}}"
+            },
+            {
+              "seq": 52311,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"07ff1000bf2d426b53f7f954eb7ace98348478157d33b8c14e3b5da3b25675b6\",\"e\":{\"event_id\":\"01a22436-a250-708f-adeb-2174d91f164d\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52311,\"t\":1795903890000,\"mono\":21523000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":0.7,\"idle_keys_s\":0.7,\"locked\":false}}}"
+            },
+            {
+              "seq": 52312,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"c3b9d26225ed7068b71bc7fe964cd5a4c368ee3284b96b583abb7f3434194343\",\"e\":{\"event_id\":\"01a22436-dce8-7ff9-ae37-0e2297a37dfd\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52312,\"t\":1795903905000,\"mono\":21538000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":0.3,\"idle_keys_s\":0.3,\"locked\":false}}}"
+            }
+          ]
+        },
+        {
+          "b": 17416,
+          "records": [
+            {
+              "seq": 52313,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"8550f9007a397b789211e9d54043a464dbf3c744588585b84fb5158f688cf5cf\",\"e\":{\"event_id\":\"01a22437-1780-7949-96b4-4d3a7529d01b\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52313,\"t\":1795903920000,\"mono\":21553000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":0.6,\"idle_keys_s\":0.6,\"locked\":false}}}"
+            },
+            {
+              "seq": 52314,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"bee26a32eaf49ff49c9fba07c954f6988bcf6ed3009529bf90b71dcf3206f7a2\",\"e\":{\"event_id\":\"01a22437-5218-7443-8c02-e96f59727234\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52314,\"t\":1795903935000,\"mono\":21568000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":0.2,\"idle_keys_s\":0.2,\"locked\":false}}}"
+            },
+            {
+              "seq": 52315,
+              "rtype": 11,
+              "project_key": "p_418d8413d1cf",
+              "session_key": "none",
+              "body": "{\"n\":\"b92e307bd3f7042023f97e3915a2cf7dc68343eeeeae19d8021def71b9ad9635\",\"e\":{\"event_id\":\"01a22437-8cb0-78cc-8db5-33b08baaf76f\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52315,\"t\":1795903950000,\"mono\":21583000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"editor\",\"via\":\"editor\",\"harness\":\"none\",\"session_key\":\"none\",\"project_key\":\"p_418d8413d1cf\",\"kind\":\"editor.activity\",\"data\":{\"editor\":\"cursor\",\"act\":\"save\",\"file_hash\":\"f_b1b55f0c5e92\",\"lines_changed\":7,\"edit_source\":\"human\"}}}"
+            },
+            {
+              "seq": 52316,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"b213378cadf65e54ad398280625132c005aee996ad5a02a7fc78b10a44f2a2ba\",\"e\":{\"event_id\":\"01a22437-8cb0-7ee4-bd14-d45005159a09\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52316,\"t\":1795903950000,\"mono\":21583000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":0.1,\"idle_keys_s\":0.1,\"locked\":false}}}"
+            },
+            {
+              "seq": 52317,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"b0adb08ad2dd18d50816036afafb0c9a681b78e6974921c16314a1801a5df0c9\",\"e\":{\"event_id\":\"01a22437-c748-751c-ab0e-caca2abc1324\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52317,\"t\":1795903965000,\"mono\":21598000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":4,\"idle_keys_s\":11.5,\"locked\":false}}}"
+            }
+          ]
+        },
+        {
+          "b": 17417,
+          "records": [
+            {
+              "seq": 52318,
+              "rtype": 3,
+              "project_key": "p_418d8413d1cf",
+              "session_key": "s_e0f13884db57",
+              "body": "{\"n\":\"6652eb64f40fc23908f6aa5dd77d411cf83fa811c994ea5691ab3116b16de811\",\"e\":{\"event_id\":\"01a22438-01e0-74c7-adc0-83b4ec8a064c\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52318,\"t\":1795903980000,\"mono\":21613000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"hook\",\"via\":\"hook\",\"harness\":\"cursor\",\"harness_version\":\"2.1.50\",\"session_key\":\"s_e0f13884db57\",\"project_key\":\"p_418d8413d1cf\",\"kind\":\"prompt.submit\",\"data\":{\"turn_key\":\"t_108c975d8196\",\"len_chars\":19,\"pasted_chars\":0,\"typed_len_est\":19,\"origin_declared\":\"none\",\"matches_pending_cron\":false,\"answers_question\":false,\"low_effort\":true}}}"
+            },
+            {
+              "seq": 52319,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"40da7c042a3c8e750e2f8003621fa794c80a1aef861c6ef22e5c433de4eb974f\",\"e\":{\"event_id\":\"01a22438-01e0-73da-910a-451b403cf34c\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52319,\"t\":1795903980000,\"mono\":21613000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":0.2,\"idle_keys_s\":0.2,\"locked\":false}}}"
+            }
+          ]
+        },
+        {
+          "b": 17418,
+          "records": [
+            {
+              "seq": 52320,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"16a74f4a12fbe20ac426daccfe9a1a73bb56de4b5a6ca5f4efb9fb983ad5a82f\",\"e\":{\"event_id\":\"01a22438-3c78-7365-86a4-9134a45236cb\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52320,\"t\":1795903995000,\"mono\":21628000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":9.4,\"idle_keys_s\":15.2,\"locked\":false}}}"
+            },
+            {
+              "seq": 52321,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"7bbf1cda6af540e2e41f1fdd3345db208fafbb8dae5e7e9694b969c389cfd1aa\",\"e\":{\"event_id\":\"01a22438-7710-7c28-b66f-a9fd68006cb1\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52321,\"t\":1795904010000,\"mono\":21643000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":2.4,\"idle_keys_s\":30.2,\"locked\":false}}}"
+            },
+            {
+              "seq": 52322,
+              "rtype": 5,
+              "project_key": "p_418d8413d1cf",
+              "session_key": "s_e0f13884db57",
+              "body": "{\"n\":\"790c7e0c32f45f8ad41a873dd30248984c278914a465bd27f4ba5d95030b18dc\",\"e\":{\"event_id\":\"01a22438-9e20-7c4a-8fbb-a442614d85c8\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52322,\"t\":1795904020000,\"mono\":21653000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"hook\",\"via\":\"hook\",\"harness\":\"cursor\",\"harness_version\":\"2.1.50\",\"session_key\":\"s_e0f13884db57\",\"project_key\":\"p_418d8413d1cf\",\"kind\":\"agent.tool\",\"data\":{\"tool_class\":\"test\",\"lines_added\":0,\"lines_removed\":0,\"exit_code\":0,\"visible_output_lines\":4,\"t_start\":1795903984000,\"t_end\":1795904020000}}}"
+            },
+            {
+              "seq": 52323,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"be2db40c2964d2fa128ad7897a73e8258bbefcadbaf0eece025610df3a6059e2\",\"e\":{\"event_id\":\"01a22438-9e20-7530-8ef6-8a82f602d3b5\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52323,\"t\":1795904020000,\"mono\":21653000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":1.4,\"idle_keys_s\":40.2,\"locked\":false}}}"
+            },
+            {
+              "seq": 52324,
+              "rtype": 4,
+              "project_key": "p_418d8413d1cf",
+              "session_key": "s_e0f13884db57",
+              "body": "{\"n\":\"a150e32c80240f0fee600a7cf5b55a1eb9120cfa43fd8fe4f48c1b01f20f4794\",\"e\":{\"event_id\":\"01a22438-a9d8-7e1b-a6a9-cf86f8c01beb\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52324,\"t\":1795904023000,\"mono\":21656000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"hook\",\"via\":\"hook\",\"harness\":\"cursor\",\"harness_version\":\"2.1.50\",\"session_key\":\"s_e0f13884db57\",\"project_key\":\"p_418d8413d1cf\",\"kind\":\"agent.output\",\"data\":{\"turn_key\":\"t_108c975d8196\",\"words\":12,\"code_lines\":0,\"is_final\":true,\"asks_question\":false,\"offers_options\":false}}}"
+            },
+            {
+              "seq": 52325,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"85b4eeccfb2366aa6e558c02917dcbc16c9d115ecb6b77af811f96ae78a3cf32\",\"e\":{\"event_id\":\"01a22438-a9d8-7526-b0a4-ae1c35c2b589\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52325,\"t\":1795904023000,\"mono\":21656000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":4.4,\"idle_keys_s\":43.2,\"locked\":false}}}"
+            },
+            {
+              "seq": 52326,
+              "rtype": 9,
+              "project_key": "p_418d8413d1cf",
+              "session_key": "s_e0f13884db57",
+              "body": "{\"n\":\"22712b7eb8475c33b6f37674353eca58d9be1c185af14afc8cf7222a3a1f60d3\",\"e\":{\"event_id\":\"01a22438-adc0-789d-8dcf-1b4e18b1a703\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52326,\"t\":1795904024000,\"mono\":21657000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"hook\",\"via\":\"hook\",\"harness\":\"cursor\",\"harness_version\":\"2.1.50\",\"session_key\":\"s_e0f13884db57\",\"project_key\":\"p_418d8413d1cf\",\"kind\":\"agent.stop\",\"data\":{\"turn_key\":\"t_108c975d8196\",\"stop_reason\":\"end_turn\",\"stop_hook_active\":false}}}"
+            },
+            {
+              "seq": 52327,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"ba0f07ba3f33a71be09944314de716328ea53d56eb1d38fa60cbbe9b94652b2d\",\"e\":{\"event_id\":\"01a22438-adc0-7bcc-8965-df750ae4d4f4\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52327,\"t\":1795904024000,\"mono\":21657000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":0,\"idle_keys_s\":0,\"locked\":false}}}"
+            }
+          ]
+        },
+        {
+          "b": 17419,
+          "records": [
+            {
+              "seq": 52328,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"090105aa079e0992858408d5dfab67b152d23fc9338ac94b1c3268c7e08613f8\",\"e\":{\"event_id\":\"01a22438-b1a8-7d21-84aa-1d2bfc75527b\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52328,\"t\":1795904025000,\"mono\":21658000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":0.3,\"idle_keys_s\":0.3,\"locked\":false}}}"
+            }
+          ]
+        },
+        {
+          "b": 17420,
+          "records": [
+            {
+              "seq": 52329,
+              "rtype": 13,
+              "project_key": "p_418d8413d1cf",
+              "session_key": "none",
+              "body": "{\"n\":\"fefd606b06f48ed09d16936e6e811e3dd491536ab27b7f738806706421f1936d\",\"e\":{\"event_id\":\"01a22438-ec40-705b-a01f-24ba5d787955\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52329,\"t\":1795904040000,\"mono\":21673000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"git\",\"via\":\"git\",\"harness\":\"none\",\"session_key\":\"none\",\"project_key\":\"p_418d8413d1cf\",\"kind\":\"git.change\",\"data\":{\"op\":\"commit\",\"sha\":\"b578278d53a73afd97d403fe61ab940c4cff4183\",\"parents\":[\"8b9a15f59e8e606804ee8185122274aef4582b73\"],\"files_changed\":1,\"insertions\":21,\"deletions\":8,\"actor\":\"human\"}}}"
+            },
+            {
+              "seq": 52330,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"19da1094edd15df87b532b95bd58770c9a330f2575ca9378518a932ce8328084\",\"e\":{\"event_id\":\"01a22438-ec40-7c44-891e-4c4e06f83eda\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52330,\"t\":1795904040000,\"mono\":21673000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":0.3,\"idle_keys_s\":1.4,\"locked\":false}}}"
+            },
+            {
+              "seq": 52331,
+              "rtype": 15,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"cfaca8040a5e3bd423592fc0c48a696e966c9bbc51af6b3ec5fb53321088defe\",\"e\":{\"event_id\":\"01a22438-edd0-7af4-bb68-f0896e83ab51\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52331,\"t\":1795904040400,\"mono\":21673400,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.focus\",\"data\":{\"app_class\":\"terminal\",\"hosted_sessions\":[\"s_f9d2c9433adf\"],\"focus_project\":\"p_0e6a8e0b849e\"}}}"
+            },
+            {
+              "seq": 52332,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"4ded16ff93a4eb0cc5014cc0a7d21957516cb42cdca78dfbe34a2207a051e6c5\",\"e\":{\"event_id\":\"01a22438-edd0-7783-8243-876c6d94070d\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52332,\"t\":1795904040400,\"mono\":21673400,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":0.1,\"idle_keys_s\":0.1,\"locked\":false}}}"
+            },
+            {
+              "seq": 52333,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"98b11ed0ff8155ca34f50998cbfce98560a2eb580e7d23d5fdf1d2d09a0928de\",\"e\":{\"event_id\":\"01a22439-26d8-7067-bb14-e7618c7b5b8e\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52333,\"t\":1795904055000,\"mono\":21688000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":8.2,\"idle_keys_s\":14.7,\"locked\":false}}}"
+            },
+            {
+              "seq": 52334,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"66bb5f56cca48159883085c2540bd85e747b14be3a56c3a5838939a000bd1fb6\",\"e\":{\"event_id\":\"01a22439-6170-75e6-918e-6405ceecc644\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52334,\"t\":1795904070000,\"mono\":21703000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":5.2,\"idle_keys_s\":29.7,\"locked\":false}}}"
+            },
+            {
+              "seq": 52335,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"ca86954bdd15bade3286b1bc2c66ab40be8c24643f8baef8667fb48deed6de3f\",\"e\":{\"event_id\":\"01a22439-9c08-757b-ae7f-f9c859f3cc29\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52335,\"t\":1795904085000,\"mono\":21718000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":2.2,\"idle_keys_s\":44.7,\"locked\":false}}}"
+            }
+          ]
+        },
+        {
+          "b": 17421,
+          "records": [
+            {
+              "seq": 52336,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"90deb3e965edbed12f6813058d45ee6778a356249bdc9897e7f4c39c07708ea1\",\"e\":{\"event_id\":\"01a22439-d6a0-77cf-999c-5520eefcc7dc\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52336,\"t\":1795904100000,\"mono\":21733000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":8.2,\"idle_keys_s\":59.7,\"locked\":false}}}"
+            },
+            {
+              "seq": 52337,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"5d40c9fb6e22e6a0eddf4415f31e03891af6137ca23106844682e07abacdf6d1\",\"e\":{\"event_id\":\"01a2243a-1138-75f3-8d86-4938a56c0043\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52337,\"t\":1795904115000,\"mono\":21748000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":5.2,\"idle_keys_s\":74.7,\"locked\":false}}}"
+            },
+            {
+              "seq": 52338,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"ffe66e511769361105420f0192565f58a7280675772350f7c8b3fe643b176050\",\"e\":{\"event_id\":\"01a2243a-4bd0-7c0b-a45c-d89020b88bd3\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52338,\"t\":1795904130000,\"mono\":21763000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":2.2,\"idle_keys_s\":89.7,\"locked\":false}}}"
+            },
+            {
+              "seq": 52339,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"31d4d491b8032a554d3dc317a94f78dcef23d5ca619143a67a0725e73a249315\",\"e\":{\"event_id\":\"01a2243a-8668-70b7-b520-bed6643b188d\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52339,\"t\":1795904145000,\"mono\":21778000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":8.2,\"idle_keys_s\":104.7,\"locked\":false}}}"
+            }
+          ]
+        },
+        {
+          "b": 17422,
+          "records": [
+            {
+              "seq": 52340,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"53a65a659ab1b2628e646a07ce8b3a9a30dcae26ce5b6611034fe43c724d0eb1\",\"e\":{\"event_id\":\"01a2243a-c100-71bb-8ff6-cd06ea3defea\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52340,\"t\":1795904160000,\"mono\":21793000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":5.2,\"idle_keys_s\":119.7,\"locked\":false}}}"
+            },
+            {
+              "seq": 52341,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"477e57a5079b159225f7a882ecf0661508947238d927cfef0079864a860002ba\",\"e\":{\"event_id\":\"01a2243a-fb98-7557-aa0e-21e5ae4a6aab\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52341,\"t\":1795904175000,\"mono\":21808000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":2.2,\"idle_keys_s\":134.7,\"locked\":false}}}"
+            },
+            {
+              "seq": 52342,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"c653a7b3a73736d74f2a2cbc13f1b05b896f7d233b504491cde0f3a60e9b9420\",\"e\":{\"event_id\":\"01a2243b-3630-7e78-9379-75e8b3110ab9\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52342,\"t\":1795904190000,\"mono\":21823000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":8.2,\"idle_keys_s\":149.7,\"locked\":false}}}"
+            },
+            {
+              "seq": 52343,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"eeb7b8816909c1a07468a417c974b910895bcdd5445a9c6d01619d049991069d\",\"e\":{\"event_id\":\"01a2243b-70c8-7157-86a4-0d8d1c9d2201\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52343,\"t\":1795904205000,\"mono\":21838000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":5.2,\"idle_keys_s\":164.7,\"locked\":false}}}"
+            }
+          ]
+        },
+        {
+          "b": 17423,
+          "records": [
+            {
+              "seq": 52344,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"662db024352c387b4f04d9c90805e238ab2397e01dac49e2e2ae4cc1c73f6293\",\"e\":{\"event_id\":\"01a2243b-ab60-76f8-bad7-f5e95dfcd330\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52344,\"t\":1795904220000,\"mono\":21853000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":2.2,\"idle_keys_s\":179.7,\"locked\":false}}}"
+            },
+            {
+              "seq": 52345,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"cd5258054c5b6311cd0bd490979c1b1cddf508ef93176f8664b27b8011f26c0f\",\"e\":{\"event_id\":\"01a2243b-e5f8-7d38-a585-6557fa46ce4d\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52345,\"t\":1795904235000,\"mono\":21868000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":8.2,\"idle_keys_s\":194.7,\"locked\":false}}}"
+            },
+            {
+              "seq": 52346,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"6454cfb6ef23b7f479ec33838cc347abfff809031acf160f80220290a57dbb58\",\"e\":{\"event_id\":\"01a2243c-2090-7fba-9627-33418747b734\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52346,\"t\":1795904250000,\"mono\":21883000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":5.2,\"idle_keys_s\":209.7,\"locked\":false}}}"
+            },
+            {
+              "seq": 52347,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"e9afdb78369ceb9cf26eefe72dc499359194da8ec49b9f73525c180101af3f85\",\"e\":{\"event_id\":\"01a2243c-5b28-7301-81d7-861481a40820\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52347,\"t\":1795904265000,\"mono\":21898000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":2.2,\"idle_keys_s\":224.7,\"locked\":false}}}"
+            }
+          ]
+        },
+        {
+          "b": 17424,
+          "records": [
+            {
+              "seq": 52348,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"a18d1eae06d469e32aefe103caa47d3e24f2369ceaba86e789ba897c91be5ba6\",\"e\":{\"event_id\":\"01a2243c-95c0-70e7-b462-d4577ee2de6b\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52348,\"t\":1795904280000,\"mono\":21913000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":8.2,\"idle_keys_s\":239.7,\"locked\":false}}}"
+            },
+            {
+              "seq": 52349,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"f3e94cadd2f85bcb5a75b18ce0f35f5cbb46a5826ddfe6522d841cfab3c86517\",\"e\":{\"event_id\":\"01a2243c-d058-7762-aacc-69c37b29dcb5\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52349,\"t\":1795904295000,\"mono\":21928000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":5.2,\"idle_keys_s\":254.7,\"locked\":false}}}"
+            },
+            {
+              "seq": 52350,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"ceafba02667ef5c321180d2ad030f03cd5456f749943149eb03c2b60af9ac504\",\"e\":{\"event_id\":\"01a2243d-0af0-7083-8983-5b857cd88600\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52350,\"t\":1795904310000,\"mono\":21943000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":2.2,\"idle_keys_s\":269.7,\"locked\":false}}}"
+            },
+            {
+              "seq": 52351,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"32cedd2c24c8c6a87e8c5405fb33ff327b163c75bcc2c141f302f5ba2e7b0b7f\",\"e\":{\"event_id\":\"01a2243d-4588-7fd6-bce8-c35ec058a51a\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52351,\"t\":1795904325000,\"mono\":21958000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":8.2,\"idle_keys_s\":284.7,\"locked\":false}}}"
+            }
+          ]
+        },
+        {
+          "b": 17425,
+          "records": [
+            {
+              "seq": 52352,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"3d3d25513073043ef5ea6e55f5fe57c597a3c34728c09f1a9f42df180c97f149\",\"e\":{\"event_id\":\"01a2243d-8020-7174-aa00-725b601eee00\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52352,\"t\":1795904340000,\"mono\":21973000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":5.2,\"idle_keys_s\":299.7,\"locked\":false}}}"
+            },
+            {
+              "seq": 52353,
+              "rtype": 11,
+              "project_key": "p_dedc43f1d319",
+              "session_key": "none",
+              "body": "{\"n\":\"0d01a65fdfb096cff0846b8b0977030bcfc834f79b745bbd0fb8a891b5570201\",\"e\":{\"event_id\":\"01a2243d-a730-7577-aec2-d6b9168a5ba8\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52353,\"t\":1795904350000,\"mono\":21983000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"editor\",\"via\":\"editor\",\"harness\":\"none\",\"session_key\":\"none\",\"project_key\":\"p_dedc43f1d319\",\"kind\":\"editor.activity\",\"data\":{\"editor\":\"vscode\",\"act\":\"edit\",\"file_hash\":\"f_be1f2e9b56be\",\"lines_changed\":3,\"edit_source\":\"human\"}}}"
+            },
+            {
+              "seq": 52354,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"e768b4ca3d31a723611c8942030f780342081e04413e15c93434e4f5a7eab0b9\",\"e\":{\"event_id\":\"01a2243d-bab8-78d1-bfc1-7a73e4a848f5\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52354,\"t\":1795904355000,\"mono\":21988000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":0.3,\"idle_keys_s\":0.3,\"locked\":false}}}"
+            },
+            {
+              "seq": 52355,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"db7200a8e4c9c4b87f3636e1e265077cd7eae4b9fa7529363ae6771cf6828610\",\"e\":{\"event_id\":\"01a2243d-f550-7ce8-9713-75a66ee5a2c2\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52355,\"t\":1795904370000,\"mono\":22003000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":0.35,\"idle_keys_s\":0.35,\"locked\":false}}}"
+            },
+            {
+              "seq": 52356,
+              "rtype": 11,
+              "project_key": "p_dedc43f1d319",
+              "session_key": "none",
+              "body": "{\"n\":\"57905d6bfb976e5b4641493f9167883cfdc340004b69557fd048b1cff3594640\",\"e\":{\"event_id\":\"01a2243e-08d8-767c-a8ae-7169f9107a69\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52356,\"t\":1795904375000,\"mono\":22008000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"editor\",\"via\":\"editor\",\"harness\":\"none\",\"session_key\":\"none\",\"project_key\":\"p_dedc43f1d319\",\"kind\":\"editor.activity\",\"data\":{\"editor\":\"vscode\",\"act\":\"edit\",\"file_hash\":\"f_be1f2e9b56be\",\"lines_changed\":3,\"edit_source\":\"human\"}}}"
+            },
+            {
+              "seq": 52357,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"00abe106de9062920fb595cbc249f8ad32bd13af00d9c611baeafda07c80dc6d\",\"e\":{\"event_id\":\"01a2243e-2fe8-7e5e-9bb7-0310dad80b57\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52357,\"t\":1795904385000,\"mono\":22018000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":0.4,\"idle_keys_s\":0.4,\"locked\":false}}}"
+            },
+            {
+              "seq": 52358,
+              "rtype": 11,
+              "project_key": "p_dedc43f1d319",
+              "session_key": "none",
+              "body": "{\"n\":\"1f01392705b685fa2d859cd73129508fca84e352e6d0a51e21cd8f201e01aace\",\"e\":{\"event_id\":\"01a2243e-56f8-75ee-8dd6-cf86a2bdf279\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52358,\"t\":1795904395000,\"mono\":22028000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"editor\",\"via\":\"editor\",\"harness\":\"none\",\"session_key\":\"none\",\"project_key\":\"p_dedc43f1d319\",\"kind\":\"editor.activity\",\"data\":{\"editor\":\"vscode\",\"act\":\"edit\",\"file_hash\":\"f_be1f2e9b56be\",\"lines_changed\":3,\"edit_source\":\"human\"}}}"
+            }
+          ]
+        },
+        {
+          "b": 17426,
+          "records": [
+            {
+              "seq": 52359,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"48bcf95174860ddf0a979f21201333f62685f42f7cc7e3804dba211d6194526e\",\"e\":{\"event_id\":\"01a2243e-6a80-7f11-bd9c-c9b2c76d078c\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52359,\"t\":1795904400000,\"mono\":22033000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":0.45,\"idle_keys_s\":0.45,\"locked\":false}}}"
+            },
+            {
+              "seq": 52360,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"4e54783202f269579875ccb8298827453afde3ffe798f234fa62d0b9366a5574\",\"e\":{\"event_id\":\"01a2243e-a518-759d-9ebe-ce2f132d5ab1\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52360,\"t\":1795904415000,\"mono\":22048000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":0.5,\"idle_keys_s\":0.5,\"locked\":false}}}"
+            },
+            {
+              "seq": 52361,
+              "rtype": 11,
+              "project_key": "p_dedc43f1d319",
+              "session_key": "none",
+              "body": "{\"n\":\"38e787af58520fecaf21f1607a29fbe2befc10bf9c8953cb5de3f256eed0ac82\",\"e\":{\"event_id\":\"01a2243e-b8a0-7eba-9fe1-12cfb0121d9c\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52361,\"t\":1795904420000,\"mono\":22053000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"editor\",\"via\":\"editor\",\"harness\":\"none\",\"session_key\":\"none\",\"project_key\":\"p_dedc43f1d319\",\"kind\":\"editor.activity\",\"data\":{\"editor\":\"vscode\",\"act\":\"edit\",\"file_hash\":\"f_be1f2e9b56be\",\"lines_changed\":3,\"edit_source\":\"human\"}}}"
+            },
+            {
+              "seq": 52362,
+              "rtype": 3,
+              "project_key": "p_0e6a8e0b849e",
+              "session_key": "s_f9d2c9433adf",
+              "body": "{\"n\":\"37a7a6179851789154eee849203f634055bf86f27253526e92f33a9e40f22e09\",\"e\":{\"event_id\":\"01a2243e-dfb0-7604-a56d-901472ec2fac\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52362,\"t\":1795904430000,\"mono\":22063000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"hook\",\"via\":\"hook\",\"harness\":\"claude_code\",\"harness_version\":\"2.1.328\",\"session_key\":\"s_f9d2c9433adf\",\"project_key\":\"p_0e6a8e0b849e\",\"kind\":\"prompt.submit\",\"data\":{\"turn_key\":\"t_95161e03c19a\",\"len_chars\":135,\"pasted_chars\":0,\"typed_len_est\":135,\"origin_declared\":\"none\",\"matches_pending_cron\":false,\"answers_question\":false,\"low_effort\":false}}}"
+            },
+            {
+              "seq": 52363,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"155b3329f48fa260610343fac0444102bfe373411417a16c1b4b6a2797e1bb8f\",\"e\":{\"event_id\":\"01a2243e-dfb0-77ae-873b-f04331272688\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52363,\"t\":1795904430000,\"mono\":22063000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":0.2,\"idle_keys_s\":0.2,\"locked\":false}}}"
+            }
+          ]
+        },
+        {
+          "b": 17427,
+          "records": [
+            {
+              "seq": 52364,
+              "rtype": 15,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"c6a865260dbc7d839e4d0c07d6ff42583da87b663c672087902949636632465a\",\"e\":{\"event_id\":\"01a2243e-e1a4-76b6-aee5-624db0f7c090\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52364,\"t\":1795904430500,\"mono\":22063500,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.focus\",\"data\":{\"app_class\":\"terminal\",\"hosted_sessions\":[\"s_429df3acb00a\"],\"focus_project\":\"p_a73dbaeaf36c\"}}}"
+            },
+            {
+              "seq": 52365,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"6ffe63e87e70aedf07034547236cd89ff87ae0a0f5de4f15f9c838d49c244e69\",\"e\":{\"event_id\":\"01a2243e-e1a4-72cc-b586-99cdf6bf7b06\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52365,\"t\":1795904430500,\"mono\":22063500,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":0.1,\"idle_keys_s\":0.1,\"locked\":false}}}"
+            },
+            {
+              "seq": 52366,
+              "rtype": 3,
+              "project_key": "p_0e6a8e0b849e",
+              "session_key": "s_f9d2c9433adf",
+              "body": "{\"n\":\"969c5943a4a4d1deb97c4f9a0d9cca2299b7ad8aaf796289a6f1d07b7614588e\",\"e\":{\"event_id\":\"01a2243e-e208-7451-83b2-bc3826a86171\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52366,\"t\":1795904430600,\"mono\":22063600,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"log\",\"via\":\"log\",\"harness\":\"claude_code\",\"harness_version\":\"2.1.328\",\"session_key\":\"s_f9d2c9433adf\",\"project_key\":\"p_0e6a8e0b849e\",\"kind\":\"prompt.submit\",\"data\":{\"turn_key\":\"t_95161e03c19a\",\"len_chars\":135,\"pasted_chars\":0,\"typed_len_est\":135,\"origin_declared\":\"none\",\"matches_pending_cron\":false,\"answers_question\":false,\"low_effort\":false}}}"
+            },
+            {
+              "seq": 52367,
+              "rtype": 4,
+              "project_key": "p_0e6a8e0b849e",
+              "session_key": "s_f9d2c9433adf",
+              "body": "{\"n\":\"81d6eebf6dcc6d907aee6553b5ff76d6678f987d870aca8a9934d04759e1ed42\",\"e\":{\"event_id\":\"01a2243e-f720-7dc5-94f1-3dd53ddfa1be\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52367,\"t\":1795904436000,\"mono\":22069000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"log\",\"via\":\"log\",\"harness\":\"claude_code\",\"harness_version\":\"2.1.328\",\"session_key\":\"s_f9d2c9433adf\",\"project_key\":\"p_0e6a8e0b849e\",\"kind\":\"agent.output\",\"data\":{\"turn_key\":\"t_95161e03c19a\",\"words\":90,\"code_lines\":0,\"is_final\":false,\"asks_question\":false,\"offers_options\":false}}}"
+            },
+            {
+              "seq": 52368,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"1c44f3f9a34c3dbbcb2a53cbe6ddcf8ea81b77d844229b623a77781823eab756\",\"e\":{\"event_id\":\"01a2243f-1a48-78e7-8620-53698c418ae0\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52368,\"t\":1795904445000,\"mono\":22078000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":7.9,\"idle_keys_s\":14.6,\"locked\":false}}}"
+            }
+          ]
+        },
+        {
+          "b": 17428,
+          "records": [
+            {
+              "seq": 52369,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"0937ae9fa5d3fccb64ffbc97148b0179ec1c1f7ac3fd70b927cabeb0e2198fe9\",\"e\":{\"event_id\":\"01a2243f-54e0-7209-b8ea-2394e689cd71\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52369,\"t\":1795904460000,\"mono\":22093000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":2.9,\"idle_keys_s\":29.6,\"locked\":false}}}"
+            },
+            {
+              "seq": 52370,
+              "rtype": 5,
+              "project_key": "p_0e6a8e0b849e",
+              "session_key": "s_f9d2c9433adf",
+              "body": "{\"n\":\"25e569a4b6b86e93e546219505cfa05a82373347bf9a567d8e28dca738c91bac\",\"e\":{\"event_id\":\"01a2243f-7bf0-7ae3-8a47-5e648a3f7cf7\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52370,\"t\":1795904470000,\"mono\":22103000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"hook\",\"via\":\"hook\",\"harness\":\"claude_code\",\"harness_version\":\"2.1.328\",\"session_key\":\"s_f9d2c9433adf\",\"project_key\":\"p_0e6a8e0b849e\",\"kind\":\"agent.tool\",\"data\":{\"tool_class\":\"edit\",\"files\":[\"f_a2440e271e9b\"],\"lines_added\":18,\"lines_removed\":6,\"visible_output_lines\":0,\"t_start\":1795904469600,\"t_end\":1795904470000}}}"
+            },
+            {
+              "seq": 52371,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"448129fab617ddd312892eff464c754accd6a86ed270fc8be64a10b340cb521e\",\"e\":{\"event_id\":\"01a2243f-7bf0-734f-be2a-0de5bb4a1423\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52371,\"t\":1795904470000,\"mono\":22103000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":2.9,\"idle_keys_s\":39.6,\"locked\":false}}}"
+            },
+            {
+              "seq": 52372,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"6d77cc679874e48b3813591d31330af9e86231307b48d530b0e4213856470b3f\",\"e\":{\"event_id\":\"01a2243f-8f78-7fc4-ab19-bf8a11a4d22f\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52372,\"t\":1795904475000,\"mono\":22108000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":7.9,\"idle_keys_s\":44.6,\"locked\":false}}}"
+            },
+            {
+              "seq": 52373,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"177162ffe168e94c1704798daa8fdbe8af5bde44fc04dc28fe59f3854d96fe50\",\"e\":{\"event_id\":\"01a2243f-ca10-7a75-8c25-5b8314f333df\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52373,\"t\":1795904490000,\"mono\":22123000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":2.9,\"idle_keys_s\":59.6,\"locked\":false}}}"
+            },
+            {
+              "seq": 52374,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"259fb28dc3c208406c2cdaa9e6969842cbe005b96125fa40e49e297036df47d8\",\"e\":{\"event_id\":\"01a22440-04a8-76c0-aaad-b156fe5990ee\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52374,\"t\":1795904505000,\"mono\":22138000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":7.9,\"idle_keys_s\":74.6,\"locked\":false}}}"
+            },
+            {
+              "seq": 52375,
+              "rtype": 5,
+              "project_key": "p_0e6a8e0b849e",
+              "session_key": "s_f9d2c9433adf",
+              "body": "{\"n\":\"eaa8c93d96ad8b1b269202d7faa93fa59f66a972ff6e8c284ba22dda60e5eb05\",\"e\":{\"event_id\":\"01a22440-2bb8-7a03-aa5d-b941f9926265\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52375,\"t\":1795904515000,\"mono\":22148000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"hook\",\"via\":\"hook\",\"harness\":\"claude_code\",\"harness_version\":\"2.1.328\",\"session_key\":\"s_f9d2c9433adf\",\"project_key\":\"p_0e6a8e0b849e\",\"kind\":\"agent.tool\",\"data\":{\"tool_class\":\"edit\",\"files\":[\"f_3c3a9d80ac21\"],\"lines_added\":12,\"lines_removed\":4,\"visible_output_lines\":0,\"t_start\":1795904514600,\"t_end\":1795904515000}}}"
+            },
+            {
+              "seq": 52376,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"c6f8799f01ba3e48b42d6c63c62bee31fb898ae1b138e324c4f7715c07cabd60\",\"e\":{\"event_id\":\"01a22440-2bb8-7656-8599-198a33b59063\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52376,\"t\":1795904515000,\"mono\":22148000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":7.9,\"idle_keys_s\":84.6,\"locked\":false}}}"
+            }
+          ]
+        },
+        {
+          "b": 17429,
+          "records": [
+            {
+              "seq": 52377,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"244e23ce739bcbde07ef9ff5d748c61feb5c7b8372d0af203285b9db1e10d166\",\"e\":{\"event_id\":\"01a22440-3f40-7dcf-b6f1-ff10f77493aa\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52377,\"t\":1795904520000,\"mono\":22153000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":2.9,\"idle_keys_s\":89.6,\"locked\":false}}}"
+            },
+            {
+              "seq": 52378,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"081b2c16203af611662ef250b77b268a48de93e2044f42fd1d5d7202798f92f0\",\"e\":{\"event_id\":\"01a22440-79d8-7f64-b6c3-95f3e698a3be\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52378,\"t\":1795904535000,\"mono\":22168000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":7.9,\"idle_keys_s\":104.6,\"locked\":false}}}"
+            },
+            {
+              "seq": 52379,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"c989b7a94ad41ad35604d406440cbb35d444a75fb2ab8f757bd5fa8a4e6fd7e6\",\"e\":{\"event_id\":\"01a22440-b470-7e1f-b55b-f14a9d318348\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52379,\"t\":1795904550000,\"mono\":22183000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":2.9,\"idle_keys_s\":119.6,\"locked\":false}}}"
+            },
+            {
+              "seq": 52380,
+              "rtype": 5,
+              "project_key": "p_0e6a8e0b849e",
+              "session_key": "s_f9d2c9433adf",
+              "body": "{\"n\":\"5fec18841c4966e82948e7bca25333d05a4ae2685f018038563f3c0e4a84a5fc\",\"e\":{\"event_id\":\"01a22440-db80-7fa9-ac66-0546fa2bc86f\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52380,\"t\":1795904560000,\"mono\":22193000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"hook\",\"via\":\"hook\",\"harness\":\"claude_code\",\"harness_version\":\"2.1.328\",\"session_key\":\"s_f9d2c9433adf\",\"project_key\":\"p_0e6a8e0b849e\",\"kind\":\"agent.tool\",\"data\":{\"tool_class\":\"build\",\"lines_added\":0,\"lines_removed\":0,\"exit_code\":0,\"visible_output_lines\":4,\"t_start\":1795904540000,\"t_end\":1795904560000}}}"
+            },
+            {
+              "seq": 52381,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"3a9102ead7c1169f6d548c231a32e2f93c490d61a4d911a113f122fb629e4c94\",\"e\":{\"event_id\":\"01a22440-db80-7621-9c67-504c4b9069dd\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52381,\"t\":1795904560000,\"mono\":22193000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":2.9,\"idle_keys_s\":129.6,\"locked\":false}}}"
+            },
+            {
+              "seq": 52382,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"eaaa5631fc8e7feae97b8f89cb729f2c6070a28891d7412b98744a9583c3e1d4\",\"e\":{\"event_id\":\"01a22440-ef08-7e96-abf2-9c760fb0a027\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52382,\"t\":1795904565000,\"mono\":22198000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":7.9,\"idle_keys_s\":134.6,\"locked\":false}}}"
+            },
+            {
+              "seq": 52383,
+              "rtype": 4,
+              "project_key": "p_0e6a8e0b849e",
+              "session_key": "s_f9d2c9433adf",
+              "body": "{\"n\":\"0889236015d7f96422b0e253b715a2b5d259855a4e44d9becf2118dcf6657555\",\"e\":{\"event_id\":\"01a22441-21d0-7eff-8da1-9a5872d7666b\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52383,\"t\":1795904578000,\"mono\":22211000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"log\",\"via\":\"log\",\"harness\":\"claude_code\",\"harness_version\":\"2.1.328\",\"session_key\":\"s_f9d2c9433adf\",\"project_key\":\"p_0e6a8e0b849e\",\"kind\":\"agent.output\",\"data\":{\"turn_key\":\"t_95161e03c19a\",\"words\":120,\"code_lines\":0,\"is_final\":true,\"asks_question\":false,\"offers_options\":false}}}"
+            }
+          ]
+        },
+        {
+          "b": 17430,
+          "records": [
+            {
+              "seq": 52384,
+              "rtype": 9,
+              "project_key": "p_0e6a8e0b849e",
+              "session_key": "s_f9d2c9433adf",
+              "body": "{\"n\":\"713c37a3434c4282dfd05a77d14c73d60892864785330448d381e8345599d3cb\",\"e\":{\"event_id\":\"01a22441-29a0-7f16-8e66-d98b95134fac\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52384,\"t\":1795904580000,\"mono\":22213000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"hook\",\"via\":\"hook\",\"harness\":\"claude_code\",\"harness_version\":\"2.1.328\",\"session_key\":\"s_f9d2c9433adf\",\"project_key\":\"p_0e6a8e0b849e\",\"kind\":\"agent.stop\",\"data\":{\"turn_key\":\"t_95161e03c19a\",\"stop_reason\":\"end_turn\",\"stop_hook_active\":false}}}"
+            },
+            {
+              "seq": 52385,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"810c63c86ac738f29c351eebc5529e37f74c5b2c7437798e41c7c388ab56baa8\",\"e\":{\"event_id\":\"01a22441-29a0-73f8-9d3f-831595609a43\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52385,\"t\":1795904580000,\"mono\":22213000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":2.9,\"idle_keys_s\":149.6,\"locked\":false}}}"
+            }
+          ]
+        },
+        {
+          "b": 17431,
+          "records": [
+            {
+              "seq": 52386,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"32a9f8ab980d85207244866cad33aaf158a5b4924dd53cd1c1401ccacb417d6b\",\"e\":{\"event_id\":\"01a22441-6438-71a3-b2db-fb65c1cd635e\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52386,\"t\":1795904595000,\"mono\":22228000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":7.9,\"idle_keys_s\":164.6,\"locked\":false}}}"
+            },
+            {
+              "seq": 52387,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"1a11dbed4adbd2d3f525e5b025930b9aac6007ce4514849a90b61ad7cc134f11\",\"e\":{\"event_id\":\"01a22441-9ed0-7cd2-98f0-da34ac39e30a\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52387,\"t\":1795904610000,\"mono\":22243000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":2.9,\"idle_keys_s\":179.6,\"locked\":false}}}"
+            },
+            {
+              "seq": 52388,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"785f78d2dc71676c927b938bc1b5b64d10699d53ff73e9bff22891d49fb69a5a\",\"e\":{\"event_id\":\"01a22441-d968-7c05-9479-d8a1d8a4bdb1\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52388,\"t\":1795904625000,\"mono\":22258000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":7.9,\"idle_keys_s\":194.6,\"locked\":false}}}"
+            }
+          ]
+        },
+        {
+          "b": 17432,
+          "records": [
+            {
+              "seq": 52389,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"f24d26f94aac4d7d5395f78b9adb29a8d6957f799300d91ef6b1a966c6f5d81c\",\"e\":{\"event_id\":\"01a22442-1400-7be2-8210-6490f5ae0e07\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52389,\"t\":1795904640000,\"mono\":22273000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":2.9,\"idle_keys_s\":209.6,\"locked\":false}}}"
+            },
+            {
+              "seq": 52390,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"071b503a7cbbfd5e8a7ef1c3c4104de742594fdbece01d25b481267ef2c61a04\",\"e\":{\"event_id\":\"01a22442-4e98-7af2-b8b1-cea5d9187f7a\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52390,\"t\":1795904655000,\"mono\":22288000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":0.2,\"idle_keys_s\":0.2,\"locked\":false}}}"
+            },
+            {
+              "seq": 52391,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"5b91347354b46e8fbba8a8cdebd6dae04d0c559dc23ef061c81e18a3db05da64\",\"e\":{\"event_id\":\"01a22442-8930-721d-a817-2bad3e658256\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52391,\"t\":1795904670000,\"mono\":22303000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":0.2,\"idle_keys_s\":0.2,\"locked\":false}}}"
+            },
+            {
+              "seq": 52392,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"9bfeaab7528197730991b760fabec61a584bb760ad4145099708155781cc7a10\",\"e\":{\"event_id\":\"01a22442-c3c8-78f5-9fb5-c92ca2c38719\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52392,\"t\":1795904685000,\"mono\":22318000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":0.2,\"idle_keys_s\":0.2,\"locked\":false}}}"
+            }
+          ]
+        },
+        {
+          "b": 17433,
+          "records": [
+            {
+              "seq": 52393,
+              "rtype": 3,
+              "project_key": "p_a73dbaeaf36c",
+              "session_key": "s_429df3acb00a",
+              "body": "{\"n\":\"3a7b99c5a79545b4b8a77f3264ab9d9a40d54836aca39d2ebe1f405081ee9873\",\"e\":{\"event_id\":\"01a22442-fe60-7f71-a0fc-6a7773fc39d1\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52393,\"t\":1795904700000,\"mono\":22333000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"hook\",\"via\":\"hook\",\"harness\":\"codex\",\"harness_version\":\"0.170.0\",\"session_key\":\"s_429df3acb00a\",\"project_key\":\"p_a73dbaeaf36c\",\"kind\":\"prompt.submit\",\"data\":{\"turn_key\":\"t_2161b4f78872\",\"len_chars\":90,\"pasted_chars\":0,\"typed_len_est\":90,\"origin_declared\":\"none\",\"matches_pending_cron\":false,\"answers_question\":false,\"low_effort\":false}}}"
+            },
+            {
+              "seq": 52394,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"ca566d9e4bda3e522c138709c359e4811386260470b89257285cd1f72c23e91f\",\"e\":{\"event_id\":\"01a22442-fe60-758d-bd21-0b5288a05608\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52394,\"t\":1795904700000,\"mono\":22333000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":0.2,\"idle_keys_s\":0.2,\"locked\":false}}}"
+            }
+          ]
+        },
+        {
+          "b": 17434,
+          "records": [
+            {
+              "seq": 52395,
+              "rtype": 15,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"5ee6be65e8ced640b564800169d4ac469de0bf495508820fd144ea1544877205\",\"e\":{\"event_id\":\"01a22443-0054-7d55-9a41-543076a73ff3\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52395,\"t\":1795904700500,\"mono\":22333500,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.focus\",\"data\":{\"app_class\":\"editor\",\"focus_project\":\"p_dedc43f1d319\"}}}"
+            },
+            {
+              "seq": 52396,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"4701810fa05fc4f6445b3121ba4fe34e41077b7a203b8aec9e42533bace53dfe\",\"e\":{\"event_id\":\"01a22443-0054-7229-a836-b0c26b4b9199\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52396,\"t\":1795904700500,\"mono\":22333500,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":0.1,\"idle_keys_s\":0.7,\"locked\":false}}}"
+            },
+            {
+              "seq": 52397,
+              "rtype": 11,
+              "project_key": "p_dedc43f1d319",
+              "session_key": "none",
+              "body": "{\"n\":\"d631f32c673ad4b700d1363e6712d717c59b8a428831edda7d6b58a049f43090\",\"e\":{\"event_id\":\"01a22443-0180-729f-bbe0-708668a8e77d\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52397,\"t\":1795904700800,\"mono\":22333800,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"editor\",\"via\":\"editor\",\"harness\":\"none\",\"session_key\":\"none\",\"project_key\":\"p_dedc43f1d319\",\"kind\":\"editor.activity\",\"data\":{\"editor\":\"vscode\",\"act\":\"edit\",\"file_hash\":\"f_be1f2e9b56be\",\"lines_changed\":2,\"edit_source\":\"human\"}}}"
+            },
+            {
+              "seq": 52398,
+              "rtype": 3,
+              "project_key": "p_a73dbaeaf36c",
+              "session_key": "s_429df3acb00a",
+              "body": "{\"n\":\"b6a97ddcedc01c5e527a5ba7ac724516a03142c3ef97f6f0e99703169d54e6a3\",\"e\":{\"event_id\":\"01a22443-01e4-765e-969b-e49ab9db9b72\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52398,\"t\":1795904700900,\"mono\":22333900,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"log\",\"via\":\"log\",\"harness\":\"codex\",\"harness_version\":\"0.170.0\",\"session_key\":\"s_429df3acb00a\",\"project_key\":\"p_a73dbaeaf36c\",\"kind\":\"prompt.submit\",\"data\":{\"turn_key\":\"t_2161b4f78872\",\"len_chars\":90,\"pasted_chars\":0,\"typed_len_est\":90,\"origin_declared\":\"none\",\"matches_pending_cron\":false,\"answers_question\":false,\"low_effort\":false}}}"
+            },
+            {
+              "seq": 52399,
+              "rtype": 4,
+              "project_key": "p_a73dbaeaf36c",
+              "session_key": "s_429df3acb00a",
+              "body": "{\"n\":\"0f671a757618762aaf4f96bbd1c98a7adeb7dd45a114e89909b18f1c831f5226\",\"e\":{\"event_id\":\"01a22443-1da0-71a2-a9fe-0ead80ea242c\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52399,\"t\":1795904708000,\"mono\":22341000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"log\",\"via\":\"log\",\"harness\":\"codex\",\"harness_version\":\"0.170.0\",\"session_key\":\"s_429df3acb00a\",\"project_key\":\"p_a73dbaeaf36c\",\"kind\":\"agent.output\",\"data\":{\"turn_key\":\"t_2161b4f78872\",\"words\":30,\"code_lines\":0,\"is_final\":false,\"asks_question\":false,\"offers_options\":false}}}"
+            },
+            {
+              "seq": 52400,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"7cabf028e9684d1f670189a7b74f1004bd2e05ebb34502073274c7bbea41f42e\",\"e\":{\"event_id\":\"01a22443-38f8-718e-b7c3-1f4e137269e6\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52400,\"t\":1795904715000,\"mono\":22348000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":0.7,\"idle_keys_s\":0.7,\"locked\":false}}}"
+            },
+            {
+              "seq": 52401,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"abf12ebbc02852dd3d25161114e2c52e786995e4ce490f162d46f7afd955cb14\",\"e\":{\"event_id\":\"01a22443-7390-7f92-8762-6930dd104839\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52401,\"t\":1795904730000,\"mono\":22363000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":0.5,\"idle_keys_s\":0.5,\"locked\":false}}}"
+            },
+            {
+              "seq": 52402,
+              "rtype": 5,
+              "project_key": "p_a73dbaeaf36c",
+              "session_key": "s_429df3acb00a",
+              "body": "{\"n\":\"7151027f165a7da537c7eb86fb22211eab22c608c1593773682e4e8001be03e0\",\"e\":{\"event_id\":\"01a22443-7778-7402-a170-aa0a6b606a14\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52402,\"t\":1795904731000,\"mono\":22364000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"hook\",\"via\":\"hook\",\"harness\":\"codex\",\"harness_version\":\"0.170.0\",\"session_key\":\"s_429df3acb00a\",\"project_key\":\"p_a73dbaeaf36c\",\"kind\":\"agent.tool\",\"data\":{\"tool_class\":\"edit\",\"files\":[\"f_9fa8df563385\"],\"lines_added\":7,\"lines_removed\":3,\"visible_output_lines\":0,\"t_start\":1795904730600,\"t_end\":1795904731000}}}"
+            },
+            {
+              "seq": 52403,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"7231c162a1d77215c758d1b85700bae25fcf6a280e8de51a3b272fa9cca617b8\",\"e\":{\"event_id\":\"01a22443-7778-72f7-865f-2fc91b813ffb\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52403,\"t\":1795904731000,\"mono\":22364000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":0.7,\"idle_keys_s\":0.7,\"locked\":false}}}"
+            },
+            {
+              "seq": 52404,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"0809fc831dfa5bfef09207e25f16bf8586b11d84606c71792287a95057fc1578\",\"e\":{\"event_id\":\"01a22443-ae28-7cc3-8f8e-89a2354d8dbe\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52404,\"t\":1795904745000,\"mono\":22378000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":0.3,\"idle_keys_s\":0.3,\"locked\":false}}}"
+            },
+            {
+              "seq": 52405,
+              "rtype": 4,
+              "project_key": "p_a73dbaeaf36c",
+              "session_key": "s_429df3acb00a",
+              "body": "{\"n\":\"6280cef1a6954f61c087ca30fdd783985b4dfa57d0d8c710eadb3440c5a6e836\",\"e\":{\"event_id\":\"01a22443-e0f0-7924-b826-3865b480ef75\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52405,\"t\":1795904758000,\"mono\":22391000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"log\",\"via\":\"log\",\"harness\":\"codex\",\"harness_version\":\"0.170.0\",\"session_key\":\"s_429df3acb00a\",\"project_key\":\"p_a73dbaeaf36c\",\"kind\":\"agent.output\",\"data\":{\"turn_key\":\"t_2161b4f78872\",\"words\":80,\"code_lines\":0,\"is_final\":true,\"asks_question\":false,\"offers_options\":false}}}"
+            }
+          ]
+        },
+        {
+          "b": 17435,
+          "records": [
+            {
+              "seq": 52406,
+              "rtype": 9,
+              "project_key": "p_a73dbaeaf36c",
+              "session_key": "s_429df3acb00a",
+              "body": "{\"n\":\"2ec8de76d022c2702d21ce8b6f083dd7d9d328dd4a34387f50dc8ba1dc6115d0\",\"e\":{\"event_id\":\"01a22443-e8c0-71b9-8f1f-08cd8068486b\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52406,\"t\":1795904760000,\"mono\":22393000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"hook\",\"via\":\"hook\",\"harness\":\"codex\",\"harness_version\":\"0.170.0\",\"session_key\":\"s_429df3acb00a\",\"project_key\":\"p_a73dbaeaf36c\",\"kind\":\"agent.stop\",\"data\":{\"turn_key\":\"t_2161b4f78872\",\"stop_reason\":\"end_turn\",\"stop_hook_active\":false}}}"
+            },
+            {
+              "seq": 52407,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"f6324645df813177d2c63852fbae1cf9a9c0ed1fc42ceffff3691cbb4d6986e1\",\"e\":{\"event_id\":\"01a22443-e8c0-7f5b-a076-a45357660c38\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52407,\"t\":1795904760000,\"mono\":22393000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":0.1,\"idle_keys_s\":0.1,\"locked\":false}}}"
+            }
+          ]
+        },
+        {
+          "b": 17436,
+          "records": [
+            {
+              "seq": 52408,
+              "rtype": 11,
+              "project_key": "p_dedc43f1d319",
+              "session_key": "none",
+              "body": "{\"n\":\"06064556a4fbe9e6accceaa385bee1ed7eb346e993e7f9b4522e878ef580d68d\",\"e\":{\"event_id\":\"01a22444-0fd0-7441-95a5-05fc439709fb\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52408,\"t\":1795904770000,\"mono\":22403000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"editor\",\"via\":\"editor\",\"harness\":\"none\",\"session_key\":\"none\",\"project_key\":\"p_dedc43f1d319\",\"kind\":\"editor.activity\",\"data\":{\"editor\":\"vscode\",\"act\":\"save\",\"file_hash\":\"f_be1f2e9b56be\",\"lines_changed\":3,\"edit_source\":\"human\"}}}"
+            },
+            {
+              "seq": 52409,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"fe2d42a3ff64dc911feecd8ecfefbb65975ee7af925906fcd03a1ea8a72afd4d\",\"e\":{\"event_id\":\"01a22444-2358-7246-87cd-573908cff6e7\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52409,\"t\":1795904775000,\"mono\":22408000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":0.7,\"idle_keys_s\":0.7,\"locked\":false}}}"
+            },
+            {
+              "seq": 52410,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"c57585cbfa26ec76c7612012ad729c221228994f50906673f51bce2ec906deb4\",\"e\":{\"event_id\":\"01a22444-5df0-7df3-92e8-4e551c5450d9\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52410,\"t\":1795904790000,\"mono\":22423000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":0.5,\"idle_keys_s\":0.5,\"locked\":false}}}"
+            },
+            {
+              "seq": 52411,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"a24972d9a998f901dc067a27e63ea3d2622fa930578e305a86f1d4b178e27bb1\",\"e\":{\"event_id\":\"01a22444-9888-75e6-b40a-db071df4b8ef\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52411,\"t\":1795904805000,\"mono\":22438000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":0.3,\"idle_keys_s\":0.3,\"locked\":false}}}"
+            }
+          ]
+        },
+        {
+          "b": 17437,
+          "records": [
+            {
+              "seq": 52412,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"ee600206286e6a156be62276df849dd32928aff19959d7b25e6f6ab28adef333\",\"e\":{\"event_id\":\"01a22444-d320-7f93-960a-6f801bb4f7ca\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52412,\"t\":1795904820000,\"mono\":22453000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":0.1,\"idle_keys_s\":0.1,\"locked\":false}}}"
+            },
+            {
+              "seq": 52413,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"669a87ef7e66be581c296ee54f703bba081cfbf6e57e2df1393ddb0f7f4c5435\",\"e\":{\"event_id\":\"01a22445-0db8-7c8d-a940-b83993b259a6\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52413,\"t\":1795904835000,\"mono\":22468000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":0.7,\"idle_keys_s\":0.7,\"locked\":false}}}"
+            },
+            {
+              "seq": 52414,
+              "rtype": 11,
+              "project_key": "p_dedc43f1d319",
+              "session_key": "none",
+              "body": "{\"n\":\"83cfa0423e4535b3b8776eb41ff22c8f42d62494f53629b7de283b2b2b58e109\",\"e\":{\"event_id\":\"01a22445-2140-7c1b-9fc5-87441b7c9c68\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52414,\"t\":1795904840000,\"mono\":22473000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"editor\",\"via\":\"editor\",\"harness\":\"none\",\"session_key\":\"none\",\"project_key\":\"p_dedc43f1d319\",\"kind\":\"editor.activity\",\"data\":{\"editor\":\"vscode\",\"act\":\"save\",\"file_hash\":\"f_be1f2e9b56be\",\"lines_changed\":3,\"edit_source\":\"human\"}}}"
+            },
+            {
+              "seq": 52415,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"d8f0f21eef532bf9c824f1e234a7355bea625c703f1bd9511ca342cf94593b54\",\"e\":{\"event_id\":\"01a22445-4850-7de4-b9f1-1aaf1d9c2585\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52415,\"t\":1795904850000,\"mono\":22483000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":0.5,\"idle_keys_s\":0.5,\"locked\":false}}}"
+            },
+            {
+              "seq": 52416,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"e77c2c1fd2c959b7f5af5669aa65217c82feba0d082034bb3d49a2097a282c8c\",\"e\":{\"event_id\":\"01a22445-82e8-7081-925c-ec9197354c9c\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52416,\"t\":1795904865000,\"mono\":22498000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":0.3,\"idle_keys_s\":0.3,\"locked\":false}}}"
+            }
+          ]
+        },
+        {
+          "b": 17438,
+          "records": [
+            {
+              "seq": 52417,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"a1665c2cbdebdd55afe135682b24e411f7243ad1400be2b95fc9e393322a7d00\",\"e\":{\"event_id\":\"01a22445-bd80-79b5-ae04-919254c06a08\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52417,\"t\":1795904880000,\"mono\":22513000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":0.1,\"idle_keys_s\":0.1,\"locked\":false}}}"
+            },
+            {
+              "seq": 52418,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"550b69e7e61526c52f55e79548adebcc6ee4b685af904e66d80e1674eafe937d\",\"e\":{\"event_id\":\"01a22445-f818-7305-92a3-3711a9f77d53\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52418,\"t\":1795904895000,\"mono\":22528000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":0.7,\"idle_keys_s\":0.7,\"locked\":false}}}"
+            },
+            {
+              "seq": 52419,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"3b2a86b4ac70375ff3166aed326aa9c48eeb400292b2927ad86ebb9ae7d3f0ac\",\"e\":{\"event_id\":\"01a22446-32b0-700f-8e2f-bf03f8275aad\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52419,\"t\":1795904910000,\"mono\":22543000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":0.5,\"idle_keys_s\":0.5,\"locked\":false}}}"
+            },
+            {
+              "seq": 52420,
+              "rtype": 11,
+              "project_key": "p_dedc43f1d319",
+              "session_key": "none",
+              "body": "{\"n\":\"f2576add9c5679c6298fc51a2fc9e7554899ed3275b77ee3765a0826577907bd\",\"e\":{\"event_id\":\"01a22446-4638-7cb0-a85b-cdb4f60c59a6\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52420,\"t\":1795904915000,\"mono\":22548000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"editor\",\"via\":\"editor\",\"harness\":\"none\",\"session_key\":\"none\",\"project_key\":\"p_dedc43f1d319\",\"kind\":\"editor.activity\",\"data\":{\"editor\":\"vscode\",\"act\":\"save\",\"file_hash\":\"f_be1f2e9b56be\",\"lines_changed\":3,\"edit_source\":\"human\"}}}"
+            },
+            {
+              "seq": 52421,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"0197c7381c6cb9d1d30737df5f2ee3c548fb75e808935cac1cac3c6f926e546c\",\"e\":{\"event_id\":\"01a22446-6d48-7eba-a238-03923d656f7a\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52421,\"t\":1795904925000,\"mono\":22558000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":0.3,\"idle_keys_s\":0.3,\"locked\":false}}}"
+            }
+          ]
+        },
+        {
+          "b": 17439,
+          "records": [
+            {
+              "seq": 52422,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"d287d8f0476bb90d9e5a21ed44e612d2939df3631f91f685d2eca7b3a4f8f9fb\",\"e\":{\"event_id\":\"01a22446-a7e0-7ee3-80da-8eaef9d631a5\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52422,\"t\":1795904940000,\"mono\":22573000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":0.1,\"idle_keys_s\":0.1,\"locked\":false}}}"
+            },
+            {
+              "seq": 52423,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"93d9156aecfc67213c8341d0686643dd62b1665ab25a8cfd6be08ccc1b1af47c\",\"e\":{\"event_id\":\"01a22446-e278-7d90-82af-c7488d4382da\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52423,\"t\":1795904955000,\"mono\":22588000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":0.7,\"idle_keys_s\":0.7,\"locked\":false}}}"
+            },
+            {
+              "seq": 52424,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"7fc5f257c096c055c2ff7f8acd0c38dbd0eb6244d3e0e4088dca779d3b9052e1\",\"e\":{\"event_id\":\"01a22447-1d10-7d11-ac3a-e6c7863dd39d\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52424,\"t\":1795904970000,\"mono\":22603000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":0.5,\"idle_keys_s\":0.5,\"locked\":false}}}"
+            },
+            {
+              "seq": 52425,
+              "rtype": 11,
+              "project_key": "p_dedc43f1d319",
+              "session_key": "none",
+              "body": "{\"n\":\"230c401d47bd974206e981b66809fd4533e5be13a5d7a12105321241bf1996a8\",\"e\":{\"event_id\":\"01a22447-57a8-7867-9414-17274c5eb373\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52425,\"t\":1795904985000,\"mono\":22618000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"editor\",\"via\":\"editor\",\"harness\":\"none\",\"session_key\":\"none\",\"project_key\":\"p_dedc43f1d319\",\"kind\":\"editor.activity\",\"data\":{\"editor\":\"vscode\",\"act\":\"save\",\"file_hash\":\"f_be1f2e9b56be\",\"lines_changed\":3,\"edit_source\":\"human\"}}}"
+            },
+            {
+              "seq": 52426,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"79031bcda975abc528cf15898d0c341bac5a37886cb48ce1df1522f3c33a78de\",\"e\":{\"event_id\":\"01a22447-57a8-7462-8daf-f2c584f09597\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52426,\"t\":1795904985000,\"mono\":22618000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":0.3,\"idle_keys_s\":0.3,\"locked\":false}}}"
+            }
+          ]
+        },
+        {
+          "b": 17440,
+          "records": [
+            {
+              "seq": 52427,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"0c00d97a2f6564c9a9075efa75f280bd2180d7640e1b2427e1ff99c3b35fa9db\",\"e\":{\"event_id\":\"01a22447-9240-7ed3-be16-99ae731ab390\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52427,\"t\":1795905000000,\"mono\":22633000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":0.1,\"idle_keys_s\":0.1,\"locked\":false}}}"
+            },
+            {
+              "seq": 52428,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"10bb3ee302230d7cc577788805d1ab63845538cdef3c83099d80e20617317806\",\"e\":{\"event_id\":\"01a22447-ccd8-70e2-9300-94ddd4592c3f\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52428,\"t\":1795905015000,\"mono\":22648000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":0.7,\"idle_keys_s\":0.7,\"locked\":false}}}"
+            },
+            {
+              "seq": 52429,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"0490dd0e399f2caeb752cec7508d670b9612d4d3c856b28d0e660b792605fb3f\",\"e\":{\"event_id\":\"01a22448-0770-777d-8ebf-f416369c060f\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52429,\"t\":1795905030000,\"mono\":22663000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":0.5,\"idle_keys_s\":0.5,\"locked\":false}}}"
+            },
+            {
+              "seq": 52430,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"f52b4fb61db964b8d13e824d5016f83b4650c190e56a34e9f45882fac6548ad6\",\"e\":{\"event_id\":\"01a22448-4208-75fb-a153-1eefe767773a\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52430,\"t\":1795905045000,\"mono\":22678000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":0.3,\"idle_keys_s\":0.3,\"locked\":false}}}"
+            },
+            {
+              "seq": 52431,
+              "rtype": 11,
+              "project_key": "p_dedc43f1d319",
+              "session_key": "none",
+              "body": "{\"n\":\"697f8418797625b9e4ba616d305d65fc45897f94d7ce521899c909d691929ede\",\"e\":{\"event_id\":\"01a22448-6918-7755-824a-c487911475f2\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52431,\"t\":1795905055000,\"mono\":22688000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"editor\",\"via\":\"editor\",\"harness\":\"none\",\"session_key\":\"none\",\"project_key\":\"p_dedc43f1d319\",\"kind\":\"editor.activity\",\"data\":{\"editor\":\"vscode\",\"act\":\"save\",\"file_hash\":\"f_be1f2e9b56be\",\"lines_changed\":3,\"edit_source\":\"human\"}}}"
+            }
+          ]
+        },
+        {
+          "b": 17441,
+          "records": [
+            {
+              "seq": 52432,
+              "rtype": 14,
+              "project_key": "",
+              "session_key": "none",
+              "body": "{\"n\":\"cd59acb16360b8683d3ad511861b4d9fe0b33e25a84ecbb738a636869ebf65ff\",\"e\":{\"event_id\":\"01a22448-7ca0-7022-8a8c-4b1c5d936abd\",\"device_id\":\"d_b3b8fb30978a\",\"seq\":52432,\"t\":1795905060000,\"mono\":22693000,\"boot_id\":\"b_4da85ab0ca5d\",\"source\":\"os\",\"via\":\"os\",\"harness\":\"none\",\"session_key\":\"none\",\"kind\":\"os.presence\",\"data\":{\"idle_any_s\":0.1,\"idle_keys_s\":0.1,\"locked\":false}}}"
+            }
+          ]
+        }
+      ],
+      "witnessed": [
+        {
+          "b": 17391,
+          "n": 5,
+          "prev": "05c983ae065cebea7787dcc283484b22e2bab50b90268c0aacb5e484c9c87b86",
+          "root": "d32853c02946dd557014429663ae3de2a0d5c0b32f0be1ed1041fdc4e823eda9",
+          "head": "d0e6facef0922b91c2116037c98177d09318fb7f7f2e0a765ba1f78f69aff2eb",
+          "received_at": 1795902900411
+        },
+        {
+          "b": 17392,
+          "n": 5,
+          "prev": "d0e6facef0922b91c2116037c98177d09318fb7f7f2e0a765ba1f78f69aff2eb",
+          "root": "d00e2516a99bd0a44d557169724ef9625a804a4ac79b21ecbe414da626e6d549",
+          "head": "95ab3825f5f86545ab42c598aefbde0f98204a56dfa029734279771f7ae515c2",
+          "received_at": 1795902940316
+        },
+        {
+          "b": 17393,
+          "n": 3,
+          "prev": "95ab3825f5f86545ab42c598aefbde0f98204a56dfa029734279771f7ae515c2",
+          "root": "2cd3de4cefed8a5f8bdd0d65d23b65f8f47162744781f560f75c2053f83edc74",
+          "head": "5091b007c4a9a405ba3853045df6ceceba190603dfe3a7b8f4ce948b5c81db98",
+          "received_at": 1795902960766
+        },
+        {
+          "b": 17394,
+          "n": 8,
+          "prev": "5091b007c4a9a405ba3853045df6ceceba190603dfe3a7b8f4ce948b5c81db98",
+          "root": "a60b62b626dee03d7dbbe3c9813dcf8b0b233d461aeecd0555b60ebefe9d465b",
+          "head": "6169e58450e9c6e483fe105b5ad96c18f100bd09133cce3b971486d47550dd96",
+          "received_at": 1795903020399
+        },
+        {
+          "b": 17395,
+          "n": 7,
+          "prev": "6169e58450e9c6e483fe105b5ad96c18f100bd09133cce3b971486d47550dd96",
+          "root": "26111f23fe2ff966c9312c56fed3ae27db1942e89e62d9b7ef3040c428a20e6e",
+          "head": "791bbe9ef38166661d47704cfc907d8f33fef1017db0ec282d3bfb76bea84678",
+          "received_at": 1795903081121
+        },
+        {
+          "b": 17396,
+          "n": 2,
+          "prev": "791bbe9ef38166661d47704cfc907d8f33fef1017db0ec282d3bfb76bea84678",
+          "root": "d821535baa56d23e7da922ca90da06ae28cdbde3852f3b7bb4f00fed3b1bbdd8",
+          "head": "3a5a80ac78467aefccb22f7e49b3186a5952e929b167ad55c88b5ef1711d3d11",
+          "received_at": 1795903081122
+        },
+        {
+          "b": 17397,
+          "n": 3,
+          "prev": "3a5a80ac78467aefccb22f7e49b3186a5952e929b167ad55c88b5ef1711d3d11",
+          "root": "542520ce7720dc22bc4c3e0d743da2c62da9b96c9e0fab2860b460af1d904ff1",
+          "head": "49149c8b4b50d6f56e148a1739c7114a3f68b6980218f4f0021adf86883c3c4f",
+          "received_at": 1795903140992
+        },
+        {
+          "b": 17398,
+          "n": 8,
+          "prev": "49149c8b4b50d6f56e148a1739c7114a3f68b6980218f4f0021adf86883c3c4f",
+          "root": "f28c21d89f19997f25b0a23b7d14b9e13c31e6288848c96412cc66f5e2f7926c",
+          "head": "b55bccc3a3a2a9e3dbca96d2c5ba294c6ee12377659ab5679f773fcd462434af",
+          "received_at": 1795903200397
+        },
+        {
+          "b": 17399,
+          "n": 4,
+          "prev": "b55bccc3a3a2a9e3dbca96d2c5ba294c6ee12377659ab5679f773fcd462434af",
+          "root": "7e49ee9ba363e340042d4203fd508ae1f4c645514df59fd514a14f5568139a0d",
+          "head": "938d94b8ebe38973244a3cce7ccf7440bab92ade8a93d6d17d1a46bb164b0209",
+          "received_at": 1795903261112
+        },
+        {
+          "b": 17400,
+          "n": 4,
+          "prev": "938d94b8ebe38973244a3cce7ccf7440bab92ade8a93d6d17d1a46bb164b0209",
+          "root": "5dd336b732f68eedd18ac7d4ec0d3adcd352b9b233d60badd5e9c8e57e835ea4",
+          "head": "510aca8afefe3c34c1e656333dde5ce9e06b72471b1fb34eea17e7890026e16e",
+          "received_at": 1795903290700
+        },
+        {
+          "b": 17401,
+          "n": 7,
+          "prev": "510aca8afefe3c34c1e656333dde5ce9e06b72471b1fb34eea17e7890026e16e",
+          "root": "399f2f54c2293d277799bad3e6e3b18c9a3cdd607f56c3a2adf41e6e21eb2e13",
+          "head": "fad3e65ca298456060a9f62485b2c5d2fb41218b6c236597950e56fdcdfbe82a",
+          "received_at": 1795903320311
+        },
+        {
+          "b": 17402,
+          "n": 8,
+          "prev": "fad3e65ca298456060a9f62485b2c5d2fb41218b6c236597950e56fdcdfbe82a",
+          "root": "eff0df7b59baf4d7358610826945d0574591541d1285f9c77d2e4fd9dd4449e6",
+          "head": "bf99351f1665c4c01dd34f02675d70c253109ea7bbb50ba3c7e3de33d20be57a",
+          "received_at": 1795903380702
+        },
+        {
+          "b": 17403,
+          "n": 7,
+          "prev": "bf99351f1665c4c01dd34f02675d70c253109ea7bbb50ba3c7e3de33d20be57a",
+          "root": "b4bc2ec89a7a2b6e65e164f2adab2ebada95b093d8b29fe0ef97fcc036eb484f",
+          "head": "018808d4d2b193fe2d63126d70791368ded6a8e61ad67cdfc1d6791e429463b0",
+          "received_at": 1795903440390
+        },
+        {
+          "b": 17404,
+          "n": 4,
+          "prev": "018808d4d2b193fe2d63126d70791368ded6a8e61ad67cdfc1d6791e429463b0",
+          "root": "74819c54962fa3e0a163a4f5368bc3c9733bde886838d5e181250daf4f15d20a",
+          "head": "ae19440c84288e7583b97ce8f965a0c125d868021685c8729b68977e1f167d60",
+          "received_at": 1795903470258
+        },
+        {
+          "b": 17405,
+          "n": 5,
+          "prev": "ae19440c84288e7583b97ce8f965a0c125d868021685c8729b68977e1f167d60",
+          "root": "796a93dbe4e0eed89ff8fe7439f107c2eec7987d9a42674a544c28dcd93b83b9",
+          "head": "724f7fcbe499d3c63507c90bb3e1f5e004098eec5d7b3b2eec558cd16c9776a7",
+          "received_at": 1795903501323
+        },
+        {
+          "b": 17406,
+          "n": 10,
+          "prev": "724f7fcbe499d3c63507c90bb3e1f5e004098eec5d7b3b2eec558cd16c9776a7",
+          "root": "dd6b4441269631e87a4ae16cf76656eddf21de71fc09f27f6d8cc8fe38457c69",
+          "head": "cf1552d5c336a7221c27b4a621c54787f112222848afc325b113364b7e87f0cf",
+          "received_at": 1795903560569
+        },
+        {
+          "b": 17407,
+          "n": 10,
+          "prev": "cf1552d5c336a7221c27b4a621c54787f112222848afc325b113364b7e87f0cf",
+          "root": "95937842ae855491568eba01ef7e9c8f2298e8516cf3fa7d3e90b0149d08c267",
+          "head": "8d891515d01ab002ce64e0808dcfbc85bab68faf17a2c58a5c16690e753c98d9",
+          "received_at": 1795903621409
+        },
+        {
+          "b": 17408,
+          "n": 2,
+          "prev": "8d891515d01ab002ce64e0808dcfbc85bab68faf17a2c58a5c16690e753c98d9",
+          "root": "9f03618d4994bb2f99c6ddc0a50348bc9c8e28a25c64498aa5ae48ff4cd11e29",
+          "head": "32a2ef2d97df63960b4bd6b4f5bcb30f7a52a5a9aacff00880e54af1e0e36ef9",
+          "received_at": 1795903621410
+        },
+        {
+          "b": 17409,
+          "n": 7,
+          "prev": "32a2ef2d97df63960b4bd6b4f5bcb30f7a52a5a9aacff00880e54af1e0e36ef9",
+          "root": "08c5a9dfe29bd99cdee185c43891906c072d0eb9b0a010c7a987dcc3e6838609",
+          "head": "87ed8d2ad3075cbd902c17413ab1d21235da4ee4a5a56fa092202d3d8d6e9211",
+          "received_at": 1795903681181
+        },
+        {
+          "b": 17410,
+          "n": 10,
+          "prev": "87ed8d2ad3075cbd902c17413ab1d21235da4ee4a5a56fa092202d3d8d6e9211",
+          "root": "eb3721d185bb7d500eb24df4bcc7fc9ac3743f25c66fb55e0bbe869bcd7a008e",
+          "head": "ebea668d39272eaccaedc11d3583e377df961aec27127da1bfb00ffde726d8b3",
+          "received_at": 1795903740701
+        },
+        {
+          "b": 17411,
+          "n": 3,
+          "prev": "ebea668d39272eaccaedc11d3583e377df961aec27127da1bfb00ffde726d8b3",
+          "root": "21bb5ff256cb2c62ed2a7247bebc410d02711c4e0525a455cd7a8c2c428aa35a",
+          "head": "1ddc59f2725728c6416e74427f008c98cc7cadb86b4e3d6958f8d5b16c027ee1",
+          "received_at": 1795903741101
+        },
+        {
+          "b": 17412,
+          "n": 7,
+          "prev": "1ddc59f2725728c6416e74427f008c98cc7cadb86b4e3d6958f8d5b16c027ee1",
+          "root": "7d510f9499fc1b8125fb8113e5fbdcee91e5d3d04034aad2e0f3d12fca739a76",
+          "head": "4e67b787a1eacd8d92ab2798e46a8ec62a051b2e902d999291621efdf9f83a15",
+          "received_at": 1795903777341
+        },
+        {
+          "b": 17413,
+          "n": 1,
+          "prev": "4e67b787a1eacd8d92ab2798e46a8ec62a051b2e902d999291621efdf9f83a15",
+          "root": "4fcb11e86a7fc6d3f6a62cc2a65d40131740f8a99d0cd50a9b8a3ab9371a9a0f",
+          "head": "766ac70404c54305422deeb6bb7765a7ae837e5d745ed4336ec93e0be466ebf2",
+          "received_at": 1795903801121
+        },
+        {
+          "b": 17414,
+          "n": 4,
+          "prev": "766ac70404c54305422deeb6bb7765a7ae837e5d745ed4336ec93e0be466ebf2",
+          "root": "4f57797d163bfd0cf2b4abde3f38d4152921cecf626ec9a5db5a13882de41db1",
+          "head": "448c7d2ffde8b5ca736fcb261750111c3e5e431032f43f1005478c59dd59568a",
+          "received_at": 1795903860803
+        },
+        {
+          "b": 17415,
+          "n": 5,
+          "prev": "448c7d2ffde8b5ca736fcb261750111c3e5e431032f43f1005478c59dd59568a",
+          "root": "0007b076ebd5705e39bb41f2f07fe80dc24d2cd1005a5b5431bd0f91434c70fe",
+          "head": "44dbeb37c440b60f312567ff2bceec8256660cad310f2513c9bc4d55c2c32df3",
+          "received_at": 1795903921064
+        },
+        {
+          "b": 17416,
+          "n": 5,
+          "prev": "44dbeb37c440b60f312567ff2bceec8256660cad310f2513c9bc4d55c2c32df3",
+          "root": "c30ae6fa925d20d3131a0ca8a0c86d6d1a19a6881db08aed710512d0894715d2",
+          "head": "3d34e910817aecda30d3f89377edf2ec8911bdb420142ac8f4f62ff861c4923d",
+          "received_at": 1795903980927
+        },
+        {
+          "b": 17417,
+          "n": 2,
+          "prev": "3d34e910817aecda30d3f89377edf2ec8911bdb420142ac8f4f62ff861c4923d",
+          "root": "195bd2d70b318481ef991cd6086cf99fdbf0527de38e07898a7ef197558359ba",
+          "head": "efc64767a8d4902d95c46e27690675c70378a7fa04802fda2e77a2aa051e5d16",
+          "received_at": 1795903980928
+        },
+        {
+          "b": 17418,
+          "n": 8,
+          "prev": "efc64767a8d4902d95c46e27690675c70378a7fa04802fda2e77a2aa051e5d16",
+          "root": "bc69557e642bc80f4250311734934cf72015569984f461aafc8e25c483735e32",
+          "head": "439b9bd85efcc27a3b9654bf1e2647577928055d9c9f9f85a16eb7d96d793506",
+          "received_at": 1795904024754
+        },
+        {
+          "b": 17419,
+          "n": 1,
+          "prev": "439b9bd85efcc27a3b9654bf1e2647577928055d9c9f9f85a16eb7d96d793506",
+          "root": "b176c0f5d0e3e4e1b36849bc4dcbf57c99f77d9c12b8724431a089084929fe90",
+          "head": "fbe43d13cf66a71f72fc9fc56aa31c30572818015660e1efc35a1eb8fe4bf2fb",
+          "received_at": 1795904040442
+        },
+        {
+          "b": 17420,
+          "n": 7,
+          "prev": "fbe43d13cf66a71f72fc9fc56aa31c30572818015660e1efc35a1eb8fe4bf2fb",
+          "root": "9d96e8e63a6b526af19a26dcce6d5fa89df1bd5c3fbc4900b9879c4beb948798",
+          "head": "b940d6f75446d649ad5a0ddd629c98bdc249c331e711ae5b3e4939d50ca8b83f",
+          "received_at": 1795904100806
+        },
+        {
+          "b": 17421,
+          "n": 4,
+          "prev": "b940d6f75446d649ad5a0ddd629c98bdc249c331e711ae5b3e4939d50ca8b83f",
+          "root": "2df06ffae017f429818ba8cbeb1fd47f498643e470b56a13b8ce4af67f511e4a",
+          "head": "24cdf4ce908707931bae578c8f3cb5c8a70f926c57c70c15dae732b8359a0c4e",
+          "received_at": 1795904161486
+        },
+        {
+          "b": 17422,
+          "n": 4,
+          "prev": "24cdf4ce908707931bae578c8f3cb5c8a70f926c57c70c15dae732b8359a0c4e",
+          "root": "33f80b5dbc3a88061a8c16e04d1efcc26f882a1ead4995325918f88c8a705003",
+          "head": "1eb339333afcbeb65fd3403587a4f16543e06960d1c654e4628f824e8f172b43",
+          "received_at": 1795904221078
+        },
+        {
+          "b": 17423,
+          "n": 4,
+          "prev": "1eb339333afcbeb65fd3403587a4f16543e06960d1c654e4628f824e8f172b43",
+          "root": "c05d7cc6ad7f72eae18c8d1b6887731c10dddca8e1a3b0f956019880c2f56f02",
+          "head": "05e37c87a62caeeb3ee15f62b9cbfadcbb32ae6ab6e173831b48bbcbc11135ac",
+          "received_at": 1795904281042
+        },
+        {
+          "b": 17424,
+          "n": 4,
+          "prev": "05e37c87a62caeeb3ee15f62b9cbfadcbb32ae6ab6e173831b48bbcbc11135ac",
+          "root": "e16e871cd0febb59a15d7004ff82d7f4e49d8bb3890e1955f59d4097a82a706d",
+          "head": "e46b90756c29c5f41ec7a15588f5868a38fe3a645c401ee618e4dcb29d2115a5",
+          "received_at": 1795904340733
+        },
+        {
+          "b": 17425,
+          "n": 7,
+          "prev": "e46b90756c29c5f41ec7a15588f5868a38fe3a645c401ee618e4dcb29d2115a5",
+          "root": "9436649464e04281311258c098f89f9b84fa1522c9d728bfe7781b9507734cf7",
+          "head": "8b63b25afbc140a473631c188a304f25827120db49345131a58a0d20279baaca",
+          "received_at": 1795904401451
+        },
+        {
+          "b": 17426,
+          "n": 5,
+          "prev": "8b63b25afbc140a473631c188a304f25827120db49345131a58a0d20279baaca",
+          "root": "15229694ed8354faf407a28121a9031343aa3275da1b7c16721e87300ba63346",
+          "head": "cb72a7b8adcac94aa57d52974f667d1bdd2e413ab1c744bbc0fc9b4096400c3f",
+          "received_at": 1795904431198
+        },
+        {
+          "b": 17427,
+          "n": 5,
+          "prev": "cb72a7b8adcac94aa57d52974f667d1bdd2e413ab1c744bbc0fc9b4096400c3f",
+          "root": "8df4af5280fb13abae07ba42433c92c9ce3ee3dc4df4f80d124866f8a1ca25b5",
+          "head": "0bb5efea3afe8533c0eedce25d4a40262f807550b213bf440175995e7123d83f",
+          "received_at": 1795904461186
+        },
+        {
+          "b": 17428,
+          "n": 8,
+          "prev": "0bb5efea3afe8533c0eedce25d4a40262f807550b213bf440175995e7123d83f",
+          "root": "0617128ff6b6d7297379ece9477e2e89dc1177a5163969f37ee533c20bd8e0d1",
+          "head": "8c03474a7f59c097ff9b6515c0b174ab9682e30d2724d0ab2de2b24bd3566125",
+          "received_at": 1795904521441
+        },
+        {
+          "b": 17429,
+          "n": 7,
+          "prev": "8c03474a7f59c097ff9b6515c0b174ab9682e30d2724d0ab2de2b24bd3566125",
+          "root": "c9da67c4c4e9e2d0cbd900dccecf4cc63e55e1bc83228eaf2c25a2015d90f809",
+          "head": "69b0042fcf36a28cd28fb4f3c55f404885dde2fdb482047d4e6a80c46f9f3949",
+          "received_at": 1795904581200
+        },
+        {
+          "b": 17430,
+          "n": 2,
+          "prev": "69b0042fcf36a28cd28fb4f3c55f404885dde2fdb482047d4e6a80c46f9f3949",
+          "root": "cbf2d386492e074a68caf6435a3299d68279264cf91b5222687e51e2a8847176",
+          "head": "0aa522eadbb08737cc88b0d3e71d556646e4f297236faa56d2cb6515825dd16c",
+          "received_at": 1795904581201
+        },
+        {
+          "b": 17431,
+          "n": 3,
+          "prev": "0aa522eadbb08737cc88b0d3e71d556646e4f297236faa56d2cb6515825dd16c",
+          "root": "409a02eacecbd51b144fd2cf8799a9926bf0e31851acdaa573132fa5bc99f945",
+          "head": "6bc890712e088c14407990e1bd6243eced4db1885792e15a54f159d59a2ce26c",
+          "received_at": 1795904640618
+        },
+        {
+          "b": 17432,
+          "n": 4,
+          "prev": "6bc890712e088c14407990e1bd6243eced4db1885792e15a54f159d59a2ce26c",
+          "root": "4b5ec20484740521d9b4c79787bd620e6bad7e42c6a887e152a38d32c4383324",
+          "head": "e7869b525d6efcc189ebaec8774de071c8e1dacd8437e403aa3a5ebf9ae81729",
+          "received_at": 1795904701493
+        },
+        {
+          "b": 17433,
+          "n": 2,
+          "prev": "e7869b525d6efcc189ebaec8774de071c8e1dacd8437e403aa3a5ebf9ae81729",
+          "root": "d881541f444d1078973600feeade911fc5e92a322ab15e8c33085a26a565434a",
+          "head": "f06c4453a5a40a5b4412734e88debe05facf8a96ab99dbdd4faf1bd612cf5901",
+          "received_at": 1795904701494
+        },
+        {
+          "b": 17434,
+          "n": 11,
+          "prev": "f06c4453a5a40a5b4412734e88debe05facf8a96ab99dbdd4faf1bd612cf5901",
+          "root": "45b27f4bd5921ddf5ada1cd37339361efe0762a07f6d5b9db6e50a120c850cfa",
+          "head": "56b633428ac8e380a6d6ef5333d8237fb861a4bcae36f99f9f036b0c1341af61",
+          "received_at": 1795904761116
+        },
+        {
+          "b": 17435,
+          "n": 2,
+          "prev": "56b633428ac8e380a6d6ef5333d8237fb861a4bcae36f99f9f036b0c1341af61",
+          "root": "6c7a25acb590ddb623f111fb47f36e6c5d0032534fa2905c3cb36c6f998c7a97",
+          "head": "be6845996e464b02facfe542a3ed8e1d4920934186ef8e65f4a4b8d40ce1e2cb",
+          "received_at": 1795904761485
+        },
+        {
+          "b": 17436,
+          "n": 4,
+          "prev": "be6845996e464b02facfe542a3ed8e1d4920934186ef8e65f4a4b8d40ce1e2cb",
+          "root": "92cdc36c5f01afefe984b639cd5fb24f64d0dbca6d1eb4adc1015db23bafc744",
+          "head": "3de9f42089d035dadf8a5ff2110f2ae1a1aa777dbd9c7df7bd8993db9cd59abb",
+          "received_at": 1795904821208
+        },
+        {
+          "b": 17437,
+          "n": 5,
+          "prev": "3de9f42089d035dadf8a5ff2110f2ae1a1aa777dbd9c7df7bd8993db9cd59abb",
+          "root": "e4745f8552442b1204512143f2b892f330d9a7cc52efdf719fa3c2e7fed87456",
+          "head": "96bc9c8f1ae4ab35594c3d748bb230610b4f85cc0b1b6130bb6fad3d8624a568",
+          "received_at": 1795904880900
+        },
+        {
+          "b": 17438,
+          "n": 5,
+          "prev": "96bc9c8f1ae4ab35594c3d748bb230610b4f85cc0b1b6130bb6fad3d8624a568",
+          "root": "84268df49397b6b61919ce2b4960e46469cd5cd080b42209c9abdc126d2c72a7",
+          "head": "061b9c993a68c62384bcd266286955f4dccd2dbd7af47b514df5e472a58812f6",
+          "received_at": 1795904940366
+        },
+        {
+          "b": 17439,
+          "n": 5,
+          "prev": "061b9c993a68c62384bcd266286955f4dccd2dbd7af47b514df5e472a58812f6",
+          "root": "42fc4e20d768c3efe68dbd2d964eda41b4a46f1afff846d24b6cd0e633948299",
+          "head": "f44cf422bd4a66a0206956991bdca1877cf862888f3497b22ebcb350f8485bd7",
+          "received_at": 1795905000426
+        },
+        {
+          "b": 17440,
+          "n": 5,
+          "prev": "f44cf422bd4a66a0206956991bdca1877cf862888f3497b22ebcb350f8485bd7",
+          "root": "cfe0eafc3e5c34bfb05763732844192966eb76170da2f0e0f0333abd473d1d06",
+          "head": "9d0c5e843ca643feef23cb0cdbed6164509c651ffe7d0196f6b5b4697a2a2971",
+          "received_at": 1795905060815
+        },
+        {
+          "b": 17441,
+          "n": 1,
+          "prev": "9d0c5e843ca643feef23cb0cdbed6164509c651ffe7d0196f6b5b4697a2a2971",
+          "root": "7aff245e03128500a5091f7386665ddc6cf3bac62010942b3f5a34e5376b6aa7",
+          "head": "edda5c33a6fc6591f0429a5b3babce950b8ebdf105c0bca157f81ba0ab29868f",
+          "received_at": 1795905120883
+        }
+      ]
+    }
+  ]
+}

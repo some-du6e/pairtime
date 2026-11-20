@@ -1,0 +1,196 @@
+{
+  "fixture": "6.5",
+  "field": "agent.tool hunks",
+  "status": "pkg/event has no field for edit hunks yet (issue #2). Once it has one, these move into the agent.tool events of events.jsonl and this file goes.",
+  "edits": [
+    {
+      "event_id": "01a21295-2918-7b20-a7c2-11d1960f8dc4",
+      "t": 1795608095000,
+      "local": "20:01:35",
+      "turn_key": "t_4a1edc4a6c03",
+      "hunks": [
+        {"file": "f_5b37b23829b6", "old_start": 10, "old_lines": 12, "new_start": 10, "new_lines": 12}
+      ]
+    },
+    {
+      "event_id": "01a21297-1160-76fd-a9fa-449e4f17adeb",
+      "t": 1795608220000,
+      "local": "20:03:40",
+      "turn_key": "t_2e748f8fb238",
+      "hunks": [
+        {"file": "f_5b37b23829b6", "old_start": 12, "old_lines": 8, "new_start": 12, "new_lines": 8}
+      ]
+    },
+    {
+      "event_id": "01a21298-e620-7827-9f7b-0a32d0792ca4",
+      "t": 1795608340000,
+      "local": "20:05:40",
+      "turn_key": "t_d92b34825bd3",
+      "hunks": [
+        {"file": "f_5b37b23829b6", "old_start": 12, "old_lines": 8, "new_start": 12, "new_lines": 8}
+      ]
+    },
+    {
+      "event_id": "01a2129a-bae0-75d5-9609-8ada924c0e5d",
+      "t": 1795608460000,
+      "local": "20:07:40",
+      "turn_key": "t_c982a2face13",
+      "hunks": [
+        {"file": "f_5b37b23829b6", "old_start": 12, "old_lines": 8, "new_start": 12, "new_lines": 8}
+      ]
+    },
+    {
+      "event_id": "01a2129c-8fa0-7e8d-bd1c-b60abc9cc8e3",
+      "t": 1795608580000,
+      "local": "20:09:40",
+      "turn_key": "t_ddcad73bce68",
+      "hunks": [
+        {"file": "f_5b37b23829b6", "old_start": 12, "old_lines": 8, "new_start": 12, "new_lines": 8}
+      ]
+    },
+    {
+      "event_id": "01a2129e-6460-7236-ad42-01fd3d88079e",
+      "t": 1795608700000,
+      "local": "20:11:40",
+      "turn_key": "t_058127dc2169",
+      "hunks": [
+        {"file": "f_5b37b23829b6", "old_start": 12, "old_lines": 8, "new_start": 12, "new_lines": 8}
+      ]
+    },
+    {
+      "event_id": "01a212a0-3920-74af-8cd7-113588f3610d",
+      "t": 1795608820000,
+      "local": "20:13:40",
+      "turn_key": "t_36fc14531023",
+      "hunks": [
+        {"file": "f_5b37b23829b6", "old_start": 12, "old_lines": 8, "new_start": 12, "new_lines": 8}
+      ]
+    },
+    {
+      "event_id": "01a212a2-0de0-747d-9e2d-0d958da634de",
+      "t": 1795608940000,
+      "local": "20:15:40",
+      "turn_key": "t_e4684582067a",
+      "hunks": [
+        {"file": "f_5b37b23829b6", "old_start": 12, "old_lines": 8, "new_start": 12, "new_lines": 8}
+      ]
+    },
+    {
+      "event_id": "01a212a3-e2a0-7516-9bb6-f7316b3d79b4",
+      "t": 1795609060000,
+      "local": "20:17:40",
+      "turn_key": "t_c6af816c2eb2",
+      "hunks": [
+        {"file": "f_5b37b23829b6", "old_start": 12, "old_lines": 8, "new_start": 12, "new_lines": 8}
+      ]
+    },
+    {
+      "event_id": "01a212a5-b760-7141-9ebb-354262bf45bf",
+      "t": 1795609180000,
+      "local": "20:19:40",
+      "turn_key": "t_f29baea24498",
+      "hunks": [
+        {"file": "f_5b37b23829b6", "old_start": 12, "old_lines": 8, "new_start": 12, "new_lines": 8}
+      ]
+    },
+    {
+      "event_id": "01a212a7-8c20-70d4-a5e9-7db943f78614",
+      "t": 1795609300000,
+      "local": "20:21:40",
+      "turn_key": "t_6ffee72257ff",
+      "hunks": [
+        {"file": "f_5b37b23829b6", "old_start": 12, "old_lines": 8, "new_start": 12, "new_lines": 8}
+      ]
+    },
+    {
+      "event_id": "01a212a9-60e0-7c95-bbed-3e38d02c2dc6",
+      "t": 1795609420000,
+      "local": "20:23:40",
+      "turn_key": "t_7d1dabe19639",
+      "hunks": [
+        {"file": "f_5b37b23829b6", "old_start": 12, "old_lines": 8, "new_start": 12, "new_lines": 8}
+      ]
+    },
+    {
+      "event_id": "01a212ab-35a0-7782-b111-c861902026ab",
+      "t": 1795609540000,
+      "local": "20:25:40",
+      "turn_key": "t_c540d93fb811",
+      "hunks": [
+        {"file": "f_5b37b23829b6", "old_start": 12, "old_lines": 8, "new_start": 12, "new_lines": 8}
+      ]
+    },
+    {
+      "event_id": "01a212ad-0a60-792b-b451-94e7f8a45d11",
+      "t": 1795609660000,
+      "local": "20:27:40",
+      "turn_key": "t_1dc6cfc972c1",
+      "hunks": [
+        {"file": "f_5b37b23829b6", "old_start": 12, "old_lines": 8, "new_start": 12, "new_lines": 8}
+      ]
+    },
+    {
+      "event_id": "01a212ae-df20-73f7-98e0-3f5766d3cf39",
+      "t": 1795609780000,
+      "local": "20:29:40",
+      "turn_key": "t_8742ed2402cc",
+      "hunks": [
+        {"file": "f_5b37b23829b6", "old_start": 12, "old_lines": 8, "new_start": 12, "new_lines": 8}
+      ]
+    },
+    {
+      "event_id": "01a212b0-b3e0-742a-a99a-effe51016b6c",
+      "t": 1795609900000,
+      "local": "20:31:40",
+      "turn_key": "t_6e94ea908b06",
+      "hunks": [
+        {"file": "f_5b37b23829b6", "old_start": 12, "old_lines": 8, "new_start": 12, "new_lines": 8}
+      ]
+    },
+    {
+      "event_id": "01a212b2-88a0-71d6-891a-d66e96c55ade",
+      "t": 1795610020000,
+      "local": "20:33:40",
+      "turn_key": "t_e6a0effb1ee4",
+      "hunks": [
+        {"file": "f_5b37b23829b6", "old_start": 12, "old_lines": 8, "new_start": 12, "new_lines": 8}
+      ]
+    },
+    {
+      "event_id": "01a212b4-5d60-74f8-9aef-14a0d0da7855",
+      "t": 1795610140000,
+      "local": "20:35:40",
+      "turn_key": "t_98ec05b65e1f",
+      "hunks": [
+        {"file": "f_5b37b23829b6", "old_start": 12, "old_lines": 8, "new_start": 12, "new_lines": 8}
+      ]
+    },
+    {
+      "event_id": "01a212b6-3220-736c-a2b8-ea2a8a6a362a",
+      "t": 1795610260000,
+      "local": "20:37:40",
+      "turn_key": "t_13b6a412fd8d",
+      "hunks": [
+        {"file": "f_5b37b23829b6", "old_start": 12, "old_lines": 8, "new_start": 12, "new_lines": 8}
+      ]
+    },
+    {
+      "event_id": "01a212bb-fe80-7a15-8030-3378d4a3acec",
+      "t": 1795610640000,
+      "local": "20:44:00",
+      "turn_key": "t_0e7ff4d531ca",
+      "hunks": [
+        {"file": "f_48f2b5289058", "old_start": 40, "old_lines": 0, "new_start": 41, "new_lines": 12}
+      ]
+    },
+    {
+      "event_id": "01a212c1-7cc0-768c-af94-00b009225394",
+      "t": 1795611000000,
+      "local": "20:50:00",
+      "turn_key": "t_61613602832a",
+      "hunks": [
+        {"file": "f_399295f8d577", "old_start": 22, "old_lines": 0, "new_start": 23, "new_lines": 18}
+      ]
+    }
+  ]
+}

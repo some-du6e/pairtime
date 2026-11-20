@@ -1,6 +1,6 @@
 {
   "source": "RFC 4231, section 4, test cases 1 to 7, HMAC-SHA-256 only, https://www.rfc-editor.org/rfc/rfc4231.txt",
-  "note": "Extracted from the RFC text by script. Hex throughout. Test case 5's output is truncated to 128 bits in the RFC, so compare only its first 16 bytes",
+  "note": "Extracted from the RFC text by script. Hex throughout. The RFC gives only the first 128 bits of test case 5's output, so that case alone has truncate_bytes, and the others give all 32 bytes",
   "cases": [
     {
       "name": "RFC 4231 4.2 (test case 1)",
@@ -30,7 +30,8 @@
       "name": "RFC 4231 4.6 (test case 5)",
       "key": "0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c",
       "data": "546573742057697468205472756e636174696f6e",
-      "hmac_sha256": "a3b6167473100ee06e0c796c2955552b"
+      "hmac_sha256": "a3b6167473100ee06e0c796c2955552b",
+      "truncate_bytes": 16
     },
     {
       "name": "RFC 4231 4.7 (test case 6)",
