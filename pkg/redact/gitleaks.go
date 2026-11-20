@@ -322,7 +322,11 @@ func shannonEntropy(data string) float64 {
 
 // gitleaksLine returns what gitleaks calls a finding's line
 // (detect/location.go): from the line break before start, which it
-// includes, to the line break after end.
+// includes, to the line break after end. On a last line with no break
+// after it, gitleaks starts the line at the start of the text, so a
+// line-target allowlist sees every line before it too; a prompt nearly
+// always ends that way. Here that line starts at the break before it, as
+// every other line does, which only narrows what an allowlist can hide.
 func gitleaksLine(raw string, start, end int) string {
 	var newlines []int
 	for i := 0; i < len(raw); i++ {
@@ -345,6 +349,7 @@ func gitleaksLine(raw string, start, end int) string {
 		prev = nl
 	}
 	if !set {
+		from = prev
 		i := 0
 		for end+i < len(raw) && raw[end+i] != '\n' && raw[end+i] != '\r' {
 			i++

@@ -216,6 +216,7 @@ func TestSecretsInProse(t *testing.T) {
 	anthropic := fakeKey("sk-ant-"+"api03-", "aB3_x9Kq-Z", 93, "AA")
 	ghp := fakeKey("gh"+"p_", "Zx81Qw4LmN", 36, "")
 	stripe := fakeKey("sk_"+"live_", "Qw81Zx4LmN", 24, "")
+	hexKey := "a1b2c3d4e5f6" + "0718293a4b5c6d7e8f90"
 	tests := []struct {
 		name string
 		text string
@@ -228,6 +229,8 @@ func TestSecretsInProse(t *testing.T) {
 		{"a key in bold", "**" + anthropic + "**", anthropic, "anthropic-api-key"},
 		{"a GitHub token mid-sentence", "the token " + ghp + " stopped working", ghp, "github-pat"},
 		{"a key in a JSON string with an escaped newline", `{"text": "key ` + stripe + `\nthanks"}`, stripe, "stripe-access-token"},
+		{"a key on a prompt's last line isn't hidden by an allowlisted line before it",
+			"RUN --mount=type=secret,id=npmrc npm ci\nENV API_TOKEN=" + hexKey, hexKey, "generic-api-key"},
 	}
 	r := mustNew(t, Known{})
 	for _, tt := range tests {
@@ -263,6 +266,8 @@ func TestSecretsInJSON(t *testing.T) {
 		{"a key that ends an embedded sentence before a line break", `{"text":"` + stripe + `.\nthanks"}`, stripe, "stripe-access-token"},
 		{"an allowlisted embedded line doesn't hide a key on the next one",
 			`{"content":"RUN --mount=type=secret,id=npmrc npm ci\nENV API_TOKEN=` + hexKey + `\n"}`, hexKey, "generic-api-key"},
+		{"an allowlisted embedded line doesn't hide a key on the last one",
+			`{"content":"RUN --mount=type=secret,id=npmrc npm ci\nENV API_TOKEN=` + hexKey + `"}`, hexKey, "generic-api-key"},
 	}
 	r := mustNew(t, Known{})
 	for _, tt := range tests {
@@ -341,7 +346,7 @@ func TestGitleaksLine(t *testing.T) {
 		{"one line is the whole text", "a=secret", 2, 8, "a=secret"},
 		{"a later line starts at the line break before it", "x\na=secret\ny", 4, 10, "\na=secret"},
 		{"the first line has no break before it", "a=secret\ny", 2, 8, "a=secret"},
-		{"the last line without a break runs to the end", "x\na=secret", 4, 10, "x\na=secret"},
+		{"the last line without a break starts at the break before it, like any other line", "x\na=secret", 4, 10, "\na=secret"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
