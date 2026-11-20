@@ -44,7 +44,7 @@ func consoleHelper(goos string, p platform.Proc) bool {
 	if goos != platform.Windows {
 		return false
 	}
-	switch strings.ToLower(p.Name) {
+	switch appName(p) {
 	case "conhost", "openconsole":
 		return true
 	}
