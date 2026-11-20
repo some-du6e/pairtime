@@ -445,8 +445,9 @@ func (p *OTelActiveTime) check(c *checker) {
 // CLITrack is cli.track: a coding agent ran `pairtime track`, following the
 // AGENTS.md entry (DESIGN 5.4). It is the model's own claim. It opens an
 // anchor only under DESIGN 5.4's four conditions, at level C unless
-// keyboard input in the host window corroborates it (DESIGN 6.2 D3), and it
-// never counts toward logged_s or ai_logged_s (D19). When the caller's
+// keyboard input in the host window in the 10 s before the call makes it
+// level A (DESIGN 5.4, 6.2 D3), and it never counts toward logged_s or
+// ai_logged_s (D19). When the caller's
 // process chain reaches a harness session, the agent fills harness and
 // session_key from it (DESIGN 4.1 E-8).
 type CLITrack struct {

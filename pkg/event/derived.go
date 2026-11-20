@@ -140,9 +140,9 @@ const (
 	// anchor that arrived via hook, log, shell, git or editor.
 	EvidenceB Evidence = "B"
 	// EvidenceC is everything else: backfilled and lookback minutes, track,
-	// plugin and bridge anchors without keyboard corroboration,
-	// editor_unverified anchors, and offline minutes beyond the cap or
-	// without the forge push.
+	// plugin and bridge anchors without keyboard input in the host window
+	// in the 10 s before them, editor_unverified anchors, and offline
+	// minutes beyond the cap or without the forge push.
 	EvidenceC Evidence = "C"
 )
 
@@ -179,6 +179,13 @@ var (
 	// carries to tier 1 (DESIGN 4.1 E-6).
 	slotLabels = enum[Label]{values: []Label{LabelViaTrack, LabelViaPlugin, LabelViaBridge}}
 )
+
+// corroboratingVias are the vias of the records in DESIGN 6.4's pairs for
+// the corroborated band: a hook and a transcript line (log), a hook and an
+// OTel event, and an editor heartbeat that passed the peer-process check
+// plus a commit (git). No shell, side-door or unverified editor record is
+// in any pair.
+var corroboratingVias = enum[Via]{values: []Via{ViaHook, ViaLog, ViaOTel, ViaEditor, ViaGit}}
 
 // sideDoorLabel returns the label an anchor that arrived via v carries, or
 // "" when v isn't a labeled side door. editor_unverified anchors are level
@@ -375,11 +382,21 @@ type Anchor struct {
 	// presence and keyboard evidence it sets the anchor's level (DESIGN
 	// 4.1 E-7, 6.4).
 	Via Via `json:"via"`
-	// Corroborated is set when a second record, written by a different
-	// code path, saw the same act: a hook and a transcript line, a hook and
-	// an OTel event, or an editor heartbeat that passed the peer-process
-	// check plus a commit whose diffstat covers the file. It is one of the
-	// conditions of DESIGN 6.4's corroborated band.
+	// Corroborated is the anchor's condition for DESIGN 6.4's corroborated
+	// band: a second record, written by a different code path, saw the
+	// same act. 6.4 names three pairs: a hook and a transcript line, a hook
+	// and an OTel event, and an editor heartbeat that passed the
+	// peer-process check plus a commit whose diffstat covers the file. So
+	// only an anchor that arrived via hook, log, otel, editor or git can be
+	// corroborated. The band has other conditions, and Corroborated never
+	// changes the anchor's level.
+	//
+	// DESIGN 5.2 and 6.2 D2 also say "corroborate" for a different rule,
+	// the one that sets a side-door anchor's level. Keyboard input in the
+	// host window in the 10 s before a track, plugin or bridge anchor makes
+	// its credit level A. A matching entry in the harness's own log makes
+	// the log record's anchor count instead, so the side-door record opens
+	// no anchor of its own. Corroborated doesn't record that rule.
 	Corroborated bool `json:"corroborated"`
 	// Labels ride along with the anchor's level and never change it
 	// (DESIGN 6.4). A track, plugin or bridge anchor always carries its
@@ -400,6 +417,9 @@ func (a Anchor) Validate() error {
 		c.addf("discounted_by", "must be a dark-flow discount, one of %q, got %q", darkFlowReasons.values, a.DiscountedBy)
 	}
 	checkEnum(c, "via", vias, a.Via)
+	if a.Corroborated && vias.has(a.Via) && !corroboratingVias.has(a.Via) {
+		c.addf("corroborated", "is true, but an anchor that arrived via %q can't be; DESIGN 6.4's record pairs have only %q records", a.Via, corroboratingVias.values)
+	}
 	checkLabels(c, "labels", anchorLabels, a.Labels)
 	want := sideDoorLabel(a.Via)
 	if want != "" && !slices.Contains(a.Labels, want) {

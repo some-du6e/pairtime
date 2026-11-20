@@ -208,16 +208,46 @@ func TestAnchorValidate(t *testing.T) {
 		{"an autopilot discount", func(a *Anchor) { a.DiscountedBy = ReasonAutopilot }, ""},
 		{"lead isn't negative", func(a *Anchor) { a.LeadS = -1 }, "lead_s:"},
 		{"an anchor says how its record arrived", func(a *Anchor) { a.Via = "" }, "via:"},
-		{"a track anchor carries via_track", func(a *Anchor) { a.Via, a.Labels = ViaTrack, nil }, `labels: missing "via_track"; a track anchor always carries it`},
+		{"a track anchor carries via_track", func(a *Anchor) {
+			a.Via, a.Labels, a.Corroborated = ViaTrack, nil, false
+		}, `labels: missing "via_track"; a track anchor always carries it`},
 		{"a keyboard-backed track anchor keeps via_track", func(a *Anchor) {
-			a.Via, a.Labels = ViaTrack, []Label{LabelViaTrack, LabelTypingModule}
+			a.Via, a.Labels, a.Corroborated = ViaTrack, []Label{LabelViaTrack, LabelTypingModule}, false
 		}, ""},
-		{"a plugin anchor carries via_plugin", func(a *Anchor) { a.Via, a.Labels = ViaPlugin, []Label{LabelVM} }, `labels: missing "via_plugin"`},
-		{"an unverified bridge anchor carries via_bridge", func(a *Anchor) { a.Via, a.Labels = ViaBridgeUnverified, []Label{LabelViaBridge} }, ""},
+		{"a plugin anchor carries via_plugin", func(a *Anchor) {
+			a.Via, a.Labels, a.Corroborated = ViaPlugin, []Label{LabelVM}, false
+		}, `labels: missing "via_plugin"`},
+		{"an unverified bridge anchor carries via_bridge", func(a *Anchor) {
+			a.Via, a.Labels, a.Corroborated = ViaBridgeUnverified, []Label{LabelViaBridge}, false
+		}, ""},
 		{"a side-door label needs its side door", func(a *Anchor) { a.Labels = []Label{LabelViaPlugin} }, `labels: has "via_plugin", but the anchor arrived via "hook"`},
 		{"an unverified editor anchor has no side-door label", func(a *Anchor) {
-			a.Via, a.Labels = ViaEditorUnverified, []Label{LabelViaBridge}
+			a.Via, a.Labels, a.Corroborated = ViaEditorUnverified, []Label{LabelViaBridge}, false
 		}, `labels: has "via_bridge", but the anchor arrived via "editor_unverified"`},
+		// DESIGN 6.4's corroborated band: two records from different code
+		// paths saw the act.
+		{"a transcript anchor corroborated by its hook", func(a *Anchor) { a.Via = ViaLog }, ""},
+		{"an OTel anchor corroborated by its hook", func(a *Anchor) { a.Via = ViaOTel }, ""},
+		{"an editor anchor corroborated by a commit", func(a *Anchor) { a.Kind, a.Via = AnchorTypedEdit, ViaEditor }, ""},
+		{"a commit corroborated by an editor heartbeat", func(a *Anchor) { a.Kind, a.Via = AnchorHumanCommit, ViaGit }, ""},
+		{"keyboard input doesn't make a track anchor corroborated", func(a *Anchor) {
+			a.Via, a.Labels = ViaTrack, []Label{LabelViaTrack, LabelTypingModule}
+		}, `corroborated: is true, but an anchor that arrived via "track" can't be`},
+		{"a plugin anchor can't be corroborated", func(a *Anchor) {
+			a.Via, a.Labels = ViaPlugin, []Label{LabelViaPlugin}
+		}, `corroborated: is true, but an anchor that arrived via "plugin" can't be`},
+		{"a bridge anchor can't be corroborated", func(a *Anchor) {
+			a.Via, a.Labels = ViaBridge, []Label{LabelViaBridge}
+		}, `corroborated: is true, but an anchor that arrived via "bridge" can't be`},
+		{"an unverified bridge anchor can't be corroborated", func(a *Anchor) {
+			a.Via, a.Labels = ViaBridgeUnverified, []Label{LabelViaBridge}
+		}, `corroborated: is true, but an anchor that arrived via "bridge_unverified" can't be`},
+		{"an unverified editor anchor can't be corroborated", func(a *Anchor) {
+			a.Kind, a.Via = AnchorTypedEdit, ViaEditorUnverified
+		}, `corroborated: is true, but an anchor that arrived via "editor_unverified" can't be`},
+		{"a typed command can't be corroborated", func(a *Anchor) {
+			a.Kind, a.Via = AnchorTypedCommand, ViaShell
+		}, `corroborated: is true, but an anchor that arrived via "shell" can't be`},
 		{"labels are listed once, in order", func(a *Anchor) { a.Labels = []Label{LabelVM, LabelTypingModule} }, "labels: must list each label once"},
 		{"editor_typing isn't a v1 label", func(a *Anchor) { a.Labels = []Label{"editor_typing"} }, `labels[0]: "editor_typing" is not one of`},
 	})

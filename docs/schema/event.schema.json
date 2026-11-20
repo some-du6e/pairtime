@@ -318,7 +318,7 @@
       }
     },
     "cli.track": {
-      "description": "A coding agent ran pairtime track, following the AGENTS.md entry. The model's own claim: it opens an anchor only under the four conditions of DESIGN 5.4, at level C unless keyboard input corroborates it, and never counts toward logged_s.",
+      "description": "A coding agent ran pairtime track, following the AGENTS.md entry. The model's own claim: it opens an anchor only under the four conditions of DESIGN 5.4, at level C unless keyboard input in the host window in the 10 s before the call makes it level A, and never counts toward logged_s.",
       "type": "object",
       "additionalProperties": false,
       "required": ["text_len", "log_match"],

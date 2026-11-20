@@ -42,7 +42,10 @@ var sources = enum[Source]{name: "source", values: []Source{
 // whatever a sender wrote, so a sender can't choose its own via. An
 // anchor's evidence level depends on it (DESIGN 6.4), and only records
 // with via hook, log, otel, editor or bridge count toward logged_s,
-// ai_logged_s and hackatime_logged_s (DESIGN 6.2 D19).
+// ai_logged_s and hackatime_logged_s (DESIGN 6.2 D19). A track, plugin or
+// bridge record whose entry a pairtime log reader also holds opens no
+// anchor of its own: the log record's anchor counts instead, and the
+// side-door record is a cross-check (DESIGN 5.2, 6.4).
 type Via string
 
 const (
@@ -72,23 +75,27 @@ const (
 	ViaEditorUnverified Via = "editor_unverified"
 	// ViaBridge is a record the WakaTime bridge made from a
 	// transcript-derived heartbeat that passed the peer-process check
-	// (DESIGN 5.7). Its anchors are level C unless keyboard input or the
-	// harness's own log corroborates them (DESIGN 5.2).
+	// (DESIGN 5.7). Its anchors are level C unless keyboard input in the
+	// host window in the 10 s before them makes them level A (DESIGN 5.2,
+	// 6.4).
 	ViaBridge Via = "bridge"
 	// ViaBridgeUnverified is a bridge record from a heartbeat that failed
-	// the peer-process check. It is level C like ViaBridge, and like
-	// ViaEditorUnverified it never counts toward logged_s. DESIGN 4.1
-	// E-2 has no value for it; docs/errata/2026-11-19-bridge-unverified.md
-	// records why it was added.
+	// the peer-process check. Like ViaBridge, its anchors are level C
+	// unless keyboard input in the host window in the 10 s before them
+	// makes them level A, and like ViaEditorUnverified it never counts
+	// toward logged_s. DESIGN 4.1 E-2 has no value for it;
+	// docs/errata/2026-11-19-bridge-unverified.md records why it was added.
 	ViaBridgeUnverified Via = "bridge_unverified"
 	// ViaTrack is `pairtime track`, called by an agent following the
-	// AGENTS.md entry (DESIGN 5.4). Like ViaBridge its anchors are level C
-	// unless corroborated, and it never counts toward logged_s.
+	// AGENTS.md entry (DESIGN 5.4). Like ViaBridge, its anchors are level C
+	// unless keyboard input in the host window in the 10 s before them
+	// makes them level A, and it never counts toward logged_s.
 	ViaTrack Via = "track"
 	// ViaPlugin is a plugin posting over HTTP or through the inbox, or
 	// `pairtime emit` and the generic hook mode from a process whose
-	// parent chain reaches no listed host (DESIGN 5.3). Like ViaBridge its
-	// anchors are level C unless corroborated, and it never counts toward
+	// parent chain reaches no listed host (DESIGN 5.3). Like ViaBridge, its
+	// anchors are level C unless keyboard input in the host window in the
+	// 10 s before them makes them level A, and it never counts toward
 	// logged_s.
 	ViaPlugin Via = "plugin"
 )
