@@ -140,9 +140,15 @@ type Scanner struct {
 	self string
 	boot string
 
-	mu       sync.Mutex
-	claimed  map[platform.ID]bool
+	mu sync.Mutex
+	// claimed holds the processes hooks claimed, each with the number of
+	// table reads that had begun when its claim came. A scan forgets the
+	// claim of a process its table lacks only if the claim came before
+	// its own read began: a process that starts while the table is read
+	// can be claimed by its first hook before the scan sees the table.
+	claimed  map[platform.ID]uint64
 	reported map[platform.ID]Session
+	reads    uint64 // table reads begun
 	lastKick time.Time
 	kick     *sched.Job
 }
@@ -184,7 +190,7 @@ func New(opts Options) *Scanner {
 		opts:     opts,
 		self:     cmp.Or(opts.Self, selfOS()),
 		boot:     cmp.Or(opts.Boot, bootOS()),
-		claimed:  make(map[platform.ID]bool),
+		claimed:  make(map[platform.ID]uint64),
 		reported: make(map[platform.ID]Session),
 	}
 	s.load()
@@ -203,11 +209,11 @@ func (s *Scanner) Claim(boot string, host platform.Proc) {
 	}
 	id := host.ID()
 	s.mu.Lock()
-	if s.claimed[id] {
+	if _, ok := s.claimed[id]; ok {
 		s.mu.Unlock()
 		return
 	}
-	s.claimed[id] = true
+	s.claimed[id] = s.reads
 	sess, wasReported := s.reported[id]
 	delete(s.reported, id)
 	s.putLocked()
@@ -225,6 +231,10 @@ func (s *Scanner) Claim(boot string, host platform.Proc) {
 // child is (platform.LauncherOf). Scan returns the sessions it reported,
 // and gives Options.Running the count of this user's harness processes.
 func (s *Scanner) Scan() ([]Session, error) {
+	s.mu.Lock()
+	s.reads++
+	read := s.reads
+	s.mu.Unlock()
 	procs, err := s.opts.Read()
 	if err != nil {
 		s.running(0)
@@ -270,7 +280,7 @@ func (s *Scanner) Scan() ([]Session, error) {
 			continue
 		}
 		mine++
-		if s.claimed[id] {
+		if _, ok := s.claimed[id]; ok {
 			continue
 		}
 		if _, done := s.reported[id]; done {
@@ -297,10 +307,10 @@ func (s *Scanner) Scan() ([]Session, error) {
 		found = append(found, sess)
 	}
 	// Forget processes that have exited, so the maps stay as small as the
-	// process table.
+	// process table, but keep a claim that came since this table was read.
 	changed := len(found) > 0
-	for id := range s.claimed {
-		if !live[id] {
+	for id, at := range s.claimed {
+		if !live[id] && at < read {
 			delete(s.claimed, id)
 			changed = true
 		}
@@ -350,7 +360,7 @@ func (s *Scanner) load() {
 		return
 	}
 	for _, id := range st.Claimed {
-		s.claimed[id] = true
+		s.claimed[id] = 0 // older than any read this scanner begins
 	}
 	for _, r := range st.Reported {
 		if r.Session.Key != "" {

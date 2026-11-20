@@ -361,6 +361,71 @@ func TestClaimDuringAScan(t *testing.T) {
 	})
 }
 
+// TestClaimWhileTheTableIsRead has hooks claim two processes while a scan
+// reads the table: a claude that has just started, which that table
+// doesn't have yet, and a process that never shows up.
+func TestClaimWhileTheTableIsRead(t *testing.T) {
+	late := platform.Proc{PID: 140, PPID: 100, Name: "claude", PGID: 140, TTY: platform.TTYAttached, Start: sec(1), Owner: me}
+	ghost := platform.Proc{PID: 150, PPID: 100, Name: "claude", PGID: 150, TTY: platform.TTYAttached, Start: sec(1), Owner: me}
+	f := &fake{procs: terminal()}
+	now := sec(0)
+	var got []Session
+	var s *Scanner
+	claims := []platform.Proc{late, ghost}
+	s = New(Options{
+		Read: func() ([]platform.Proc, error) {
+			procs, err := f.read()
+			for _, p := range claims {
+				s.Claim(boot, p)
+			}
+			claims = nil
+			return procs, err
+		},
+		OS:     platform.Linux,
+		Self:   me,
+		Boot:   boot,
+		Now:    func() time.Time { return now },
+		Report: func(sess Session) { got = append(got, sess) },
+	})
+	claimedPIDs := func() []int {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		var pids []int
+		for id := range s.claimed {
+			pids = append(pids, id.PID)
+		}
+		slices.Sort(pids)
+		return pids
+	}
+	steps := []struct {
+		name    string
+		change  func()
+		report  []int
+		claimed []int
+	}{
+		{"the scan whose table lacks the newly claimed processes keeps their claims", func() {}, []int{111, 121, 132}, []int{140, 150}},
+		{"once the table has the process, its claim keeps the scan from reporting it", func() {
+			now = sec(60)
+			f.procs = append(terminal(), late)
+		}, nil, []int{140}},
+	}
+	for _, st := range steps {
+		t.Run(st.name, func(t *testing.T) {
+			got = nil
+			st.change()
+			if _, err := s.Scan(); err != nil {
+				t.Fatal(err)
+			}
+			if !slices.Equal(pidsOf(got), st.report) {
+				t.Errorf("reported %v, want %v", pidsOf(got), st.report)
+			}
+			if c := claimedPIDs(); !slices.Equal(c, st.claimed) {
+				t.Errorf("claims kept for %v, want %v: a claim older than the scan's read goes once its process is gone", c, st.claimed)
+			}
+		})
+	}
+}
+
 // TestScanAcrossRestarts runs scanners one after another on one
 // state.json, as an agent restarted by its updater or by a hook would.
 func TestScanAcrossRestarts(t *testing.T) {
