@@ -22,8 +22,12 @@ func TestIdleMillis(t *testing.T) {
 		{"the difference is right across the tick's wrap to zero", 0x0000_1000, 0xFFFF_F000, 0x2000},
 		{"a last input ahead of the tick clamps to zero", 4_000, 4_500, 0},
 		{"a last input ahead of the tick across the wrap clamps to zero", 0xFFFF_FFF0, 0x0000_0010, 0},
+		{"a last input ahead of the tick by the whole bound clamps to zero", 10_000, 10_000 + maxLeadMillis, 0},
+		{"a last input further ahead than the bound reads as a long idle, not as input now", 10_000, 10_000 + maxLeadMillis + 1, 0xFFFF_FFFF - maxLeadMillis},
+		{"a last input stamped 24.8 days ahead reads as a long idle", 1_000, 1_000 + 0x7FFF_0000, 0x8001_0000},
 		{"24.8 days of idle still read as idle", 0x7FFF_FFFF, 0, 0x7FFF_FFFF},
-		{"idle past 24.8 days reads as a last input ahead of the tick", 0x8000_0000, 0, 0},
+		{"idle past 24.8 days still reads as idle", 0x8000_0000, 0, 0x8000_0000},
+		{"idle up to 49.7 days less the bound still reads as idle", 0xFFFF_FFFF - maxLeadMillis, 0, 0xFFFF_FFFF - maxLeadMillis},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

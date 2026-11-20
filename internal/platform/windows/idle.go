@@ -60,19 +60,26 @@ func IdleTime() (time.Duration, error) {
 	return time.Duration(idleMillis(uint32(tick), info.dwTime)) * time.Millisecond, nil
 }
 
+// maxLeadMillis is how far the last input's tick may run ahead of the
+// current tick and still read as input this instant. Honest leads come
+// from the raw input thread lagging the desktop's and are milliseconds
+// long. A lead within the bound can fake at most that much input, since
+// the tick catches up with it that fast.
+const maxLeadMillis = 5_000
+
 // idleMillis returns the milliseconds from the last input's tick to the
 // current tick. Both are GetTickCount values, which wrap to zero every
 // 49.7 days, so the difference is taken in 32-bit arithmetic and is right
 // across a wrap. Microsoft says the last input's tick "is not guaranteed
 // to be incremental": input that SendInput injects carries its own tick,
 // and the raw input thread can lag the desktop's, so it can be ahead of
-// the current tick. A difference that is negative as a signed 32-bit
-// value is that, and it clamps to zero (CP 3.3). The cost is that a real
-// idle time over 24.8 days reads as zero too.
+// the current tick. A lead of up to maxLeadMillis clamps to zero (CP 3.3).
+// Every other difference is idle time: a real one, which reads right up to
+// 49.7 days less that bound, or a tick SendInput stamped further ahead,
+// which reads as a long idle rather than as weeks of input this instant.
 func idleMillis(tick, lastInput uint32) uint32 {
-	d := tick - lastInput
-	if int32(d) < 0 {
+	if lead := lastInput - tick; lead <= maxLeadMillis {
 		return 0
 	}
-	return d
+	return tick - lastInput
 }
