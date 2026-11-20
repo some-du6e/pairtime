@@ -2,7 +2,10 @@
 
 package ingest
 
-import "net/http"
+import (
+	"net/http"
+	"time"
+)
 
 // The codes of a request refused as a whole, ingest-v1 2.6, each with its
 // status in refusals.
@@ -108,6 +111,10 @@ const (
 	MaxBuckets      = 2000
 	MaxCommits      = 500
 )
+
+// BodyTimeout is how long an upload's body has to arrive once its headers
+// passed, so a client can't hold a connection by sending it slowly.
+const BodyTimeout = 60 * time.Second
 
 // The clock rules: a request's time and a bucket's minute may be at most
 // MaxSkew from the server's clock, and a minute at most BucketHorizon old

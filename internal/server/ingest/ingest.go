@@ -224,6 +224,10 @@ func (s *Service) batches(w http.ResponseWriter, r *http.Request) {
 	}
 	var raw []byte
 	if ref == nil {
+		// pairtimed has no read timeout, because live streams stay open
+		// (WP-SV8), so the body gets one of its own. A recorder in tests
+		// can't take it, and doesn't need it.
+		_ = http.NewResponseController(w).SetReadDeadline(time.Now().Add(BodyTimeout))
 		raw, ref = readRaw(r)
 	}
 	if ref == nil {

@@ -208,7 +208,7 @@ The server checks a request in this order and answers the first failure with the
 9. `hex(SHA-256(raw body))` equals `X-Pairtime-Body-SHA256`: otherwise `body_hash_mismatch`.
 10. The signature verifies over `M` under the device's registered key: otherwise `signature_invalid`.
 11. The raw body is one gzip member with nothing after it, and inflates within 2.4's limit: otherwise `gzip_invalid` or `decompressed_too_large`.
-12. The inflated bytes are one JSON object in valid UTF-8 (`json_invalid`), with only 2.3's members in their types (`body_shape`), and within 2.4's counts (`too_many_batches`, `too_many_buckets`, `too_many_commits`).
+12. The inflated bytes are one JSON value in valid UTF-8 (`json_invalid`), an object with only 2.3's members in their types (`body_shape`), within 2.4's counts (`too_many_batches`, `too_many_buckets`, `too_many_commits`).
 13. In the writer's transaction: if the device's most recent processed request had this `Idempotency-Key`, the server answers with that request's response, byte for byte, and changes nothing, when the raw body's SHA-256 is the one it had; when it isn't, 422 `idempotency_key_reused`. Otherwise `X-Pairtime-Req` must be greater than the device's stored counter: otherwise 409 `counter_stale`.
 14. The items, in order: the batch roots in array order, then the buckets, then the commits, then the labels (2.7). The counter becomes `X-Pairtime-Req`, and the response is stored with the `Idempotency-Key` as the device's most recent.
 
@@ -242,14 +242,14 @@ A request refused as a whole gets one of these statuses and this body, where `de
 | 401 | `signature_invalid` | The signature doesn't verify under the device's registered key | Check the key against the registered one; never retry blindly |
 | 400 | `gzip_invalid` | Not one valid gzip member, or bytes after it | Fix the client |
 | 413 | `decompressed_too_large` | It inflates past 4,194,304 bytes | Split the upload |
-| 400 | `json_invalid` | Not one JSON object, or not valid UTF-8 | Fix the client |
-| 422 | `body_shape` | A top-level member that isn't in 2.3, or one of the wrong JSON type | Fix the client |
+| 400 | `json_invalid` | Not valid JSON, more than one JSON value, or not valid UTF-8 | Fix the client |
+| 422 | `body_shape` | Not an object, or a top-level member that isn't in 2.3 or is of the wrong JSON type | Fix the client |
 | 413 | `too_many_batches` | More than 2,000 batch roots | Split the upload |
 | 413 | `too_many_buckets` | More than 2,000 minute buckets | Split the upload |
 | 413 | `too_many_commits` | More than 500 commit records | Split the upload |
 | 422 | `idempotency_key_reused` | The key is the device's most recent request's, with another body | Use a new key for a new body |
 | 409 | `counter_stale` | `X-Pairtime-Req` is at or below the stored counter | Read `GET /api/v1/ingest/state`, continue above its `req`, and sign again |
-| 503 | `unavailable` | The database didn't take the write | Retry the same body and key after `Retry-After` |
+| 503 | `unavailable` | The device store or the database failed | Retry the same body and key after `Retry-After` |
 
 Other methods on the path get 405 from the router. A refused request stores nothing and moves no counter, so a retry after any refusal is checked from step 1 again.
 
@@ -305,7 +305,7 @@ A request that reached step 14 gets 200, even when every item was refused, with 
 - `received_at` is the transaction's time (2.7), and `req` the counter it stored.
 - `head` is the device's stored head after the request, `{"b", "H_b"}`, or `null` while it has none.
 - `batches`, `buckets` and `commits` are always present. Element `k` answers item `k` of the request's array of the same name, and an array the request didn't send is `[]`. `labels` is the labels' result, or `null` when the request sent none.
-- Each result has `status`, an HTTP status for that item alone (200 stored or already there, 409 refused because of what the server holds, 422 refused for what the item is), and `code` from 2.9. A shape code adds `field`, the item's first offending member as a JSON path in DESIGN 4.3's names, such as `slots[2].p`, `uncredited` or `parents[0]`; for `unknown_field` it is the path of the object that holds the member, `""` for the item itself, and never the member's own name. No result repeats a string the request sent.
+- Each result has `status`, an HTTP status for that item alone (200 stored or already there, 409 refused because of what the server holds, 422 refused for what the item is), and `code` from 2.9. A shape code or `bad_rule` adds `field`, the item's first offending member as a JSON path in DESIGN 4.3's names, such as `slots[2].p`, `uncredited` or `parents[0]`; for `unknown_field` it is the path of the object that holds the member, `""` for the item itself, and never the member's own name. No result repeats a string the request sent.
 - A batch result has `b` once `b` passed its form, and a `receipt` when its code is `accepted` or `duplicate`.
 
 A receipt is ledger-v1 7's, in JSON:
@@ -358,7 +358,7 @@ And by kind:
 | Labels | 200 | `accepted` | Stored as the device's labels |
 | Labels | 422 | `bad_rule` | A harness is named twice; `field` is `harnesses` |
 
-Every code is final for its item: resending the same item gets the same answer, or `duplicate`. Only 2.6's refusals of the whole request are worth a retry.
+Sending an item again that got 200 changes nothing: it comes back `duplicate` or `superseded`. An item refused with 422 is refused for what it is, and gets the same answer every time, apart from a `future_minute` once its minute has come. `batch_conflict` and `rev_conflict` keep the stored row, so sending the item again changes nothing. `chain_gap`, `before_chain` and `prev_mismatch` depend on the stored head: the client reads it and sends from there (section 5). Of whole requests, only 2.6's refusals that say so are worth a retry.
 
 ### 2.10 Retries and idempotency
 
