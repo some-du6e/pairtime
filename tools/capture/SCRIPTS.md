@@ -4,7 +4,7 @@ One script per harness. Each lists the exact actions that make the harness fire 
 
 Type or paste each prompt exactly as written. The scrub flags any prompt line that isn't in this file, because a fixture should hold no text of yours. If you type something private by mistake, stop and quit the harness, delete the whole `ROOT` folder, which holds what you typed in its runs, history and transcripts, and start over with a new `ROOT`.
 
-Step numbers are shared across harnesses: step 4 is always "a permission accepted", even where a harness skips step 3. Before each step, type its number and Enter into the sink's terminal, so `STEPS.txt` says which step every hook call belongs to.
+Step numbers are shared across harnesses: step 4 is always "a permission accepted", even where a harness skips a step before it. Every script has step 3, the pasted prompt, right before step 4, whose prompt refers back to it. Before each step, type its number and Enter into the sink's terminal, so `STEPS.txt` says which step every hook call belongs to.
 
 ## Before any capture
 
@@ -147,7 +147,7 @@ claude -p "Reply with the number of functions in wordcount.py and nothing else."
 
 ### The VS Code run
 
-Quit VS Code completely, including any window in the background. Run `prepare.py claude_code ROOT vscode`, restart the sink on `ROOT/runs/vscode`, set the variables it printed in a terminal, and start VS Code from that terminal with `code ROOT/projects/vscode`, so the extension inherits them and uses `ROOT/claude-home` too. Open the Claude Code panel and do steps 1, 2, 4, 7, 9, 10 and 16. Close the panel's session from its menu for step 16.
+Quit VS Code completely, including any window in the background. Run `prepare.py claude_code ROOT vscode`, restart the sink on `ROOT/runs/vscode`, set the variables it printed in a terminal, and start VS Code from that terminal with `code ROOT/projects/vscode`, so the extension inherits them and uses `ROOT/claude-home` too. Open the Claude Code panel and do steps 1, 2, 3, 4, 7, 9, 10 and 16. Close the panel's session from its menu for step 16.
 
 The Desktop app's Code tab doesn't read a terminal's variables, so it can't be pointed at `ROOT/claude-home` and would load your own instructions and plugins. Don't capture it with this kit: `collect.py` refuses any session whose transcript is outside `ROOT/claude-home`.
 
@@ -214,7 +214,7 @@ Setup: run `prepare.py cursor ROOT cursor`. Cursor can't be pointed at a setting
 
 Repeat the entry for `beforeSubmitPrompt`, `afterAgentResponse`, `afterFileEdit`, `afterTabFileEdit`, `stop` and `sessionEnd`. On Windows, Cursor runs hook commands through PowerShell: use `powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "KIT\dump-hook.ps1" "ROOT\runs\cursor" sessionStart`.
 
-Steps: open `ROOT/projects/cursor` in Cursor and start a new agent chat (step 1). Do steps 2, 4 (`afterFileEdit`), 7, 8 and 9 (stop the generation). For a Tab edit, open `wordcount.py`, type `def count_chars(` on a new line at the end and accept a Tab suggestion. Close the chat (step 16). Start a background agent if your plan has them; its hooks run on Cursor's machines, so record in the notes whether any local hook fired. Then in the `agent` CLI, in `ROOT/projects/cursor`: steps 1, 2 and 16, and step 18 as `agent -p "Reply with the number of functions in wordcount.py and nothing else."`.
+Steps: open `ROOT/projects/cursor` in Cursor and start a new agent chat (step 1). Do steps 2, 3, 4 (`afterFileEdit`), 7, 8 and 9 (stop the generation). For a Tab edit, open `wordcount.py`, type `def count_chars(` on a new line at the end and accept a Tab suggestion. Close the chat (step 16). Start a background agent if your plan has them; its hooks run on Cursor's machines, so record in the notes whether any local hook fired. Then in the `agent` CLI, in `ROOT/projects/cursor`: steps 1, 2 and 16, and step 18 as `agent -p "Reply with the number of functions in wordcount.py and nothing else."`.
 
 Collect without `--history`. Transcripts the hooks named are copied on their own; don't add `state.vscdb`.
 
@@ -240,7 +240,7 @@ Setup: run `prepare.py copilot ROOT copilot`. It makes `ROOT/copilot-home`, the 
 
 Repeat it for `userPromptSubmitted`, `preToolUse`, `postToolUse`, `permissionRequest`, `agentStop`, `subagentStart`, `subagentStop`, `notification`, `errorOccurred` and `sessionEnd`.
 
-Steps: start VS Code with a profile of its own, so your VS Code instructions, prompt files and MCP servers stay out: `code --profile pairtime-capture ROOT/projects/copilot`. Install GitHub Copilot Chat in that profile, sign in, and in agent mode do steps 1, 2, 4, 6, 7, 8, 9, 10 and 16. In the Copilot CLI, in the terminal where you set `COPILOT_HOME`, in `ROOT/projects/copilot`: start it as `copilot --no-custom-instructions` and sign in with `/login` if it asks, then steps 1, 2, 7 and 16; one autopilot run with `/autopilot` and the step 13 goal; step 18 as `copilot --no-custom-instructions -p "Reply with the number of functions in wordcount.py and nothing else."`.
+Steps: start VS Code with a profile of its own, so your VS Code instructions, prompt files and MCP servers stay out: `code --profile pairtime-capture ROOT/projects/copilot`. Install GitHub Copilot Chat in that profile, sign in, and in agent mode do steps 1, 2, 3, 4, 6, 7, 8, 9, 10 and 16. In the Copilot CLI, in the terminal where you set `COPILOT_HOME`, in `ROOT/projects/copilot`: start it as `copilot --no-custom-instructions` and sign in with `/login` if it asks, then steps 1, 2, 7 and 16; one autopilot run with `/autopilot` and the step 13 goal; step 18 as `copilot --no-custom-instructions -p "Reply with the number of functions in wordcount.py and nothing else."`.
 
 Collect: the CLI's `ROOT/copilot-home/session-state/<sessionId>/events.jsonl` for each `sessionId` in the hook payloads, and for VS Code the one `workspaceStorage/<hash>/chatSessions/` folder whose `workspace.json` names `ROOT/projects/copilot`, each with `--extra`.
 
@@ -268,7 +268,7 @@ Collect with `--extra` for `ROOT/gemini-home/.gemini/tmp/<hash>/logs.json`, the 
 
 Captured by WP-AD14. Devin Desktop and the Devin CLI read Claude-format hooks from the project's `.claude/` settings, so `prepare.py devin ROOT devin` is the whole setup. Devin can't be pointed at a settings folder of its own, so `prepare.py` refuses while your Devin config, rules, skills or MCP servers, or Claude-format hooks in your `~/.claude`, hold something, and prints the commands to move each aside.
 
-Steps: Devin Desktop with `ROOT/projects/devin` open, steps 1, 2, 4, 7 and 16. The Devin CLI in `ROOT/projects/devin`, steps 1, 2, 7 and 16.
+Steps: Devin Desktop with `ROOT/projects/devin` open, steps 1, 2, 3, 4, 6, 7, 8, 9 and 16. Then the Devin CLI, run as `devin` in `ROOT/projects/devin`: steps 1, 2, 7 and 16, then step 17 as `devin --continue` with the step 17 prompt, quitting it the same way, and step 18 as `devin -p "Reply with the number of functions in wordcount.py and nothing else."`. Print mode can't show the folder trust prompt, so it only runs once the interactive steps have trusted the folder.
 
 Collect with `--extra` for this session's files in `~/.local/share/devin/transcripts/`. The Windows path isn't known yet (HS 15); if you find it, put it in the provenance notes.
 
@@ -286,6 +286,6 @@ for e in TaskStart TaskResume TaskCancel TaskComplete UserPromptSubmit PreToolUs
 done
 ```
 
-Steps: open `ROOT/projects/cline` in VS Code and start a Cline task (`TaskStart`). Do steps 2, 4, 7 and 8, cancel the task (`TaskCancel`), resume it (`TaskResume`), and let one task finish (`TaskComplete`). On Windows, do the same steps with no hooks.
+Steps: open `ROOT/projects/cline` in VS Code and start a Cline task (`TaskStart`). Do steps 2, 3, 4, 7 and 8, cancel the task (`TaskCancel`), resume it (`TaskResume`), and let one task finish (`TaskComplete`). On Windows, do the same steps with no hooks.
 
 Collect with `--extra` for each captured task's folder, `<editor user dir>/globalStorage/saoudrizwan.claude-dev/tasks/<taskId>/` (the `taskId`s are in the hook payloads), and for the CLI `~/.cline/data/sessions/<id>.json`.

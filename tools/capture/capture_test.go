@@ -179,6 +179,53 @@ func TestLineEndings(t *testing.T) {
 	}
 }
 
+// TestScripts checks SCRIPTS.md's step lists. Step 4's prompt refers to the
+// spec pasted at step 3, and WP-AD0 wants a pasted prompt in every script.
+func TestScripts(t *testing.T) {
+	text := read(t, "SCRIPTS.md")
+	sections := map[string]string{}
+	for _, part := range regexp.MustCompile(`(?m)^## `).Split(text, -1)[1:] {
+		title, body, _ := strings.Cut(part, "\n")
+		sections[title] = body
+	}
+	lists := regexp.MustCompile(`\bsteps ((?:\d+(?: \([^)]*\))?(?:, |,? and )?)+)`)
+	numbers := func(list string) map[string]bool {
+		list = regexp.MustCompile(`\([^)]*\)`).ReplaceAllString(list, "")
+		got := map[string]bool{}
+		for _, n := range regexp.MustCompile(`\d+`).FindAllString(list, -1) {
+			got[n] = true
+		}
+		return got
+	}
+	t.Run("every step list with step 4 has step 3, whose paste step 4 refers to", func(t *testing.T) {
+		for _, m := range lists.FindAllStringSubmatch(text, -1) {
+			if got := numbers(m[1]); got["4"] && !got["3"] {
+				t.Errorf("%q has step 4 without step 3", m[0])
+			}
+		}
+	})
+	for _, h := range []string{"Claude Code", "Codex", "Cursor", "GitHub Copilot", "Gemini CLI", "Devin", "Cline"} {
+		t.Run("the "+h+" script has the pasted prompt", func(t *testing.T) {
+			body, ok := sections[h]
+			if !ok {
+				t.Fatalf("no %s section", h)
+			}
+			if h == "Claude Code" {
+				if !strings.Contains(body, "| 3 | Copy the three-line block below and paste it as one prompt") {
+					t.Fatal("the steps table has no step 3 paste")
+				}
+				return
+			}
+			for _, m := range lists.FindAllStringSubmatch(body, -1) {
+				if numbers(m[1])["3"] {
+					return
+				}
+			}
+			t.Fatalf("no step list in the %s section has step 3", h)
+		})
+	}
+}
+
 // dumper is one of the two hook dumpers, as the command line that runs it.
 type dumper struct {
 	name string
