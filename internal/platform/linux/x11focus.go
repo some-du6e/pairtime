@@ -54,18 +54,18 @@ type x11Focus struct {
 
 // newX11Focus takes over c, interns the atoms, starts listening for
 // property changes on the root window and checks for a window manager
-// that keeps _NET_ACTIVE_WINDOW. It closes c if it fails.
-func newX11Focus(c *xconn, hostname string, timeout time.Duration) (*x11Focus, error) {
+// that keeps _NET_ACTIVE_WINDOW, all by deadline. It closes c if it fails.
+func newX11Focus(c *xconn, hostname string, deadline time.Time) (*x11Focus, error) {
 	w := &x11Focus{c: c, hostname: hostname}
-	if err := w.setup(timeout); err != nil {
+	if err := w.setup(deadline); err != nil {
 		c.close()
 		return nil, err
 	}
 	return w, nil
 }
 
-func (w *x11Focus) setup(timeout time.Duration) error {
-	if err := w.c.conn.SetDeadline(time.Now().Add(timeout)); err != nil {
+func (w *x11Focus) setup(deadline time.Time) error {
+	if err := w.c.conn.SetDeadline(deadline); err != nil {
 		return err
 	}
 	w.c.onEvent = w.event

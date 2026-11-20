@@ -112,15 +112,17 @@ func (d xDisplay) socketPath() string {
 }
 
 // dialDisplay connects to the display's socket in the file system, then in
-// Linux's abstract namespace, where Xorg also listens. The file comes
-// first because sandboxes share the directory but not the abstract names.
-func dialDisplay(d xDisplay, timeout time.Duration) (net.Conn, error) {
+// Linux's abstract namespace, where Xorg also listens, both by deadline.
+// The file comes first because sandboxes share the directory but not the
+// abstract names.
+func dialDisplay(d xDisplay, deadline time.Time) (net.Conn, error) {
+	dialer := net.Dialer{Deadline: deadline}
 	path := d.socketPath()
-	conn, err := net.DialTimeout("unix", path, timeout)
+	conn, err := dialer.Dial("unix", path)
 	if err == nil {
 		return conn, nil
 	}
-	conn, err2 := net.DialTimeout("unix", "@"+path, timeout)
+	conn, err2 := dialer.Dial("unix", "@"+path)
 	if err2 == nil {
 		return conn, nil
 	}
@@ -160,15 +162,15 @@ func isProtoError(err error) bool {
 }
 
 // openX11 connects to the display, authenticates with the cookie from the
-// Xauthority file if there is one, and finds the root window. timeout
-// bounds the connect and, separately, the handshake.
-func openX11(d xDisplay, getenv func(string) string, hostname string, timeout time.Duration) (*xconn, error) {
-	conn, err := dialDisplay(d, timeout)
+// Xauthority file if there is one, and finds the root window, all by
+// deadline.
+func openX11(d xDisplay, getenv func(string) string, hostname string, deadline time.Time) (*xconn, error) {
+	conn, err := dialDisplay(d, deadline)
 	if err != nil {
 		return nil, err
 	}
 	cookie := readCookie(getenv, hostname, d.number)
-	c, err := setupX11(conn, d.screen, cookie, time.Now().Add(timeout))
+	c, err := setupX11(conn, d.screen, cookie, deadline)
 	if err != nil {
 		conn.Close()
 		return nil, err

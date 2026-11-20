@@ -19,21 +19,22 @@ var errNoScreenSaver = errors.New("the X server has no MIT-SCREEN-SAVER extensio
 // (XScreenSaverQueryInfo's request, CP 3.3). It keeps one connection open
 // between samples, and reconnects on the next sample after any failure.
 type x11Idle struct {
-	// open connects to the display; openX11 outside tests.
-	open func(timeout time.Duration) (*xconn, error)
+	// open connects to the display by deadline; openX11 outside tests.
+	open func(deadline time.Time) (*xconn, error)
 
 	mu    sync.Mutex
 	c     *xconn
 	major byte // MIT-SCREEN-SAVER's major opcode on c
 }
 
-// connect opens the connection and checks for the extension. s.mu is held.
-func (s *x11Idle) connect(timeout time.Duration) error {
-	c, err := s.open(timeout)
+// connect opens the connection and checks for the extension, all by
+// deadline. s.mu is held.
+func (s *x11Idle) connect(deadline time.Time) error {
+	c, err := s.open(deadline)
 	if err != nil {
 		return err
 	}
-	if err := c.conn.SetDeadline(time.Now().Add(timeout)); err != nil {
+	if err := c.conn.SetDeadline(deadline); err != nil {
 		c.close()
 		return err
 	}
@@ -53,18 +54,21 @@ func (s *x11Idle) connect(timeout time.Duration) error {
 }
 
 func (s *x11Idle) idle(ctx context.Context) (time.Duration, error) {
-	timeout, err := callTimeout(ctx)
+	// One deadline covers the whole sample: the dials, the connection
+	// setup and the extension check when it has to reconnect, and the
+	// query.
+	deadline, err := sampleDeadline(ctx, sampleTimeout)
 	if err != nil {
 		return 0, err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.c == nil {
-		if err := s.connect(timeout); err != nil {
+		if err := s.connect(deadline); err != nil {
 			return 0, err
 		}
 	}
-	ms, err := s.query(timeout)
+	ms, err := s.query(deadline)
 	if err != nil {
 		s.c.close()
 		s.c = nil
@@ -73,8 +77,8 @@ func (s *x11Idle) idle(ctx context.Context) (time.Duration, error) {
 	return time.Duration(ms) * time.Millisecond, nil
 }
 
-func (s *x11Idle) query(timeout time.Duration) (uint32, error) {
-	if err := s.c.conn.SetDeadline(time.Now().Add(timeout)); err != nil {
+func (s *x11Idle) query(deadline time.Time) (uint32, error) {
+	if err := s.c.conn.SetDeadline(deadline); err != nil {
 		return 0, err
 	}
 	return s.c.idleSince(s.major)
@@ -91,24 +95,23 @@ func (s *x11Idle) close() {
 	}
 }
 
-// sampleTimeout bounds one idle query. The display server or Mutter
-// answers in well under a millisecond; one that takes a second is hung,
-// and the sample is better missing than late.
+// sampleTimeout bounds one idle sample, reconnecting included. The display
+// server or Mutter answers in well under a millisecond; one that takes a
+// second is hung, and the sample is better missing than late.
 const sampleTimeout = time.Second
 
-// callTimeout is sampleTimeout, or less if ctx ends sooner.
-func callTimeout(ctx context.Context) (time.Duration, error) {
+// sampleDeadline is when a sample has to be done: limit from now, or ctx's
+// deadline if that is sooner.
+func sampleDeadline(ctx context.Context, limit time.Duration) (time.Time, error) {
 	if err := ctx.Err(); err != nil {
-		return 0, err
+		return time.Time{}, err
 	}
-	d := sampleTimeout
-	if deadline, ok := ctx.Deadline(); ok {
-		if left := time.Until(deadline); left < d {
-			d = left
-		}
+	deadline := time.Now().Add(limit)
+	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
+		deadline = d
 	}
-	if d <= 0 {
-		return 0, context.DeadlineExceeded
+	if time.Until(deadline) <= 0 {
+		return time.Time{}, context.DeadlineExceeded
 	}
-	return d, nil
+	return deadline, nil
 }

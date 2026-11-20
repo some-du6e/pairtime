@@ -126,7 +126,7 @@ func TestX11Idle(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newFakeX(t, fakeXConfig{roots: []uint32{0x100}, noSaver: !tc.saver, noise: tc.noise, seqStart: tc.seqStart})
-			src := &x11Idle{open: func(time.Duration) (*xconn, error) {
+			src := &x11Idle{open: func(time.Time) (*xconn, error) {
 				c, err := f.dial(0, nil)
 				if c != nil {
 					c.seq = tc.seqStart
@@ -163,7 +163,7 @@ func TestX11IdleReconnects(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newFakeX(t, fakeXConfig{roots: []uint32{0x100}})
 			dials := 0
-			src := &x11Idle{open: func(time.Duration) (*xconn, error) {
+			src := &x11Idle{open: func(time.Time) (*xconn, error) {
 				dials++
 				return f.dial(0, nil)
 			}}
@@ -188,6 +188,45 @@ func TestX11IdleReconnects(t *testing.T) {
 			}
 			if dials != wantDials {
 				t.Errorf("%d connections, want %d", dials, wantDials)
+			}
+		})
+	}
+}
+
+func TestX11IdleOneDeadline(t *testing.T) {
+	cases := []struct {
+		name  string
+		delay time.Duration // how long the server takes over each answer
+		ok    bool          // the sample succeeds
+	}{
+		// A sample that reconnects waits for four answers: the setup,
+		// QueryExtension, QueryVersion and QueryInfo. At 150 ms each, any
+		// one of them fits the 400 ms deadline, but not all four.
+		{"a reconnecting sample whose steps each fit the deadline but together don't fails at the deadline", 150 * time.Millisecond, false},
+		{"a reconnecting sample that fits the deadline gets the idle time", 0, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFakeX(t, fakeXConfig{roots: []uint32{0x100}, delay: tc.delay})
+			src := &x11Idle{open: func(deadline time.Time) (*xconn, error) { return f.dialBy(0, nil, deadline) }}
+			defer src.close()
+			f.setIdle(3000)
+			ctx, cancel := context.WithTimeout(context.Background(), 400*time.Millisecond)
+			defer cancel()
+			start := time.Now()
+			got, err := src.idle(ctx)
+			took := time.Since(start)
+			if tc.ok {
+				if err != nil || got != 3*time.Second {
+					t.Fatalf("sample %v, %v; want 3s", got, err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("the sample took %v and succeeded, past its 400 ms deadline", took)
+			}
+			if took > time.Second {
+				t.Errorf("the sample gave up after %v, want at its 400 ms deadline", took)
 			}
 		})
 	}
@@ -375,7 +414,7 @@ func TestX11Focus(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			w, err := newX11Focus(c, testHost, 5*time.Second)
+			w, err := newX11Focus(c, testHost, time.Now().Add(5*time.Second))
 			if err != nil {
 				t.Fatal(err)
 			}

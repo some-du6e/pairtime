@@ -118,7 +118,7 @@ func samePayload(a, b event.Payload) bool {
 // TestOpenWithoutSignals opens desktops that give nothing, which needs no
 // X server or bus, and checks that each signal is unknown with a reason.
 func TestOpenWithoutSignals(t *testing.T) {
-	noBus := func() (*dbus.Conn, error) { return nil, errors.New("no bus here") }
+	noBus := func(context.Context) (*dbus.Conn, error) { return nil, errors.New("no bus here") }
 	cases := []struct {
 		name        string
 		env         map[string]string
@@ -176,6 +176,62 @@ func TestOpenWithoutSignals(t *testing.T) {
 			}
 			if d.Focus() != nil || d.Power() != nil {
 				t.Errorf("channels %v and %v, want nil", d.Focus(), d.Power())
+			}
+		})
+	}
+}
+
+// TestSilentBuses gives Open and Idle buses that accept the connection and
+// never answer, as a wedged dbus-daemon does. Each has to give up.
+func TestSilentBuses(t *testing.T) {
+	noBus := func(context.Context) (*dbus.Conn, error) { return nil, errors.New("no bus here") }
+	cases := []struct {
+		name   string
+		env    map[string]string
+		silent string // the bus that never answers: "session", "system" or, for one idle sample, "mutter"
+		within time.Duration
+	}{
+		{"Open gives up on a session bus that never answers, and Wayland's idle time is unknown", map[string]string{"XDG_SESSION_TYPE": "wayland", "WAYLAND_DISPLAY": "wayland-0"}, "session", openTimeout + time.Second},
+		{"Open gives up on a system bus that never answers, and power and lock are unknown", map[string]string{"XDG_SESSION_TYPE": "tty"}, "system", openTimeout + time.Second},
+		{"an idle sample that has to reconnect to Mutter gives up within its second", nil, "mutter", sampleTimeout + time.Second},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			address := silentBus(t)
+			silent := func(ctx context.Context) (*dbus.Conn, error) { return connectBus(ctx, address) }
+			start := time.Now()
+			if tc.silent == "mutter" {
+				m := &mutterIdle{connect: silent}
+				defer m.close()
+				if _, err := m.idle(context.Background()); err == nil {
+					t.Fatal("a sample from a bus that never answered succeeded")
+				}
+				if took := time.Since(start); took > tc.within {
+					t.Errorf("the sample took %v, want under %v", took, tc.within)
+				}
+				return
+			}
+			cfg := Config{
+				Getenv:     func(k string) string { return tc.env[k] },
+				SessionBus: noBus,
+				SystemBus:  noBus,
+			}
+			if tc.silent == "session" {
+				cfg.SessionBus = silent
+			} else {
+				cfg.SystemBus = silent
+			}
+			d := Open(context.Background(), cfg)
+			defer d.Close()
+			if took := time.Since(start); took > tc.within {
+				t.Errorf("Open took %v, want under %v", took, tc.within)
+			}
+			s := d.Status()
+			if tc.silent == "session" && s.Idle.Known() {
+				t.Errorf("idle is %+v, want unknown", s.Idle)
+			}
+			if tc.silent == "system" && (s.Power.Known() || s.Lock.Known()) {
+				t.Errorf("power is %+v and lock %+v, want both unknown", s.Power, s.Lock)
 			}
 		})
 	}

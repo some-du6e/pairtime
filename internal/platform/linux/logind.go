@@ -63,8 +63,8 @@ type logind struct {
 // lock state and takes the first delay lock. It fails only when logind
 // can't be reached; without a session it still reports suspend and
 // resume, and lockErr says why lock state is unknown.
-func openLogind(conn *dbus.Conn, readyTimeout time.Duration, log *slog.Logger) (l *logind, lockErr error, err error) {
-	ctx, cancel := context.WithTimeout(context.Background(), callWait)
+func openLogind(ctx context.Context, conn *dbus.Conn, readyTimeout time.Duration, log *slog.Logger) (l *logind, lockErr error, err error) {
+	ctx, cancel := context.WithTimeout(ctx, callWait)
 	defer cancel()
 	l = &logind{conn: conn, log: log, sigs: make(chan *dbus.Signal, 16)}
 	if err := conn.BusObject().CallWithContext(ctx, busName+".GetNameOwner", 0, logindName).Store(&l.owner); err != nil {

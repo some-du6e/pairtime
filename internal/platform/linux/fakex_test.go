@@ -133,11 +133,16 @@ func (f *fakeX) close() {
 
 // dial connects a client and runs the connection setup for screen.
 func (f *fakeX) dial(screen int, cookie []byte) (*xconn, error) {
+	return f.dialBy(screen, cookie, time.Now().Add(5*time.Second))
+}
+
+// dialBy is dial with the setup done by deadline.
+func (f *fakeX) dialBy(screen int, cookie []byte, deadline time.Time) (*xconn, error) {
 	conn, err := net.Dial("unix", f.addr)
 	if err != nil {
 		return nil, err
 	}
-	c, err := setupX11(conn, screen, cookie, time.Now().Add(5*time.Second))
+	c, err := setupX11(conn, screen, cookie, deadline)
 	if err != nil {
 		conn.Close()
 		return nil, err

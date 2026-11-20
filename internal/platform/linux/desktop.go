@@ -27,12 +27,14 @@ var ErrLockUnknown = errors.New("this session's lock state is unknown")
 type Config struct {
 	// Getenv reads the session's environment. Nil means os.Getenv.
 	Getenv func(string) string
-	// SessionBus connects to the session bus, for Mutter. Nil means the
-	// bus the environment names, never one started for the purpose.
-	SessionBus func() (*dbus.Conn, error)
-	// SystemBus connects to the bus logind is on. Nil means the system
-	// bus. Tests point it at a private bus with a fake logind.
-	SystemBus func() (*dbus.Conn, error)
+	// SessionBus connects to the session bus, for Mutter, before ctx
+	// ends. Nil means the bus the environment names, never one started
+	// for the purpose.
+	SessionBus func(ctx context.Context) (*dbus.Conn, error)
+	// SystemBus connects to the bus logind is on, before ctx ends. Nil
+	// means the system bus. Tests point it at a private bus with a fake
+	// logind.
+	SystemBus func(ctx context.Context) (*dbus.Conn, error)
 	// Hostname is this machine's name, to tell local X clients from
 	// remote ones. Empty means os.Hostname.
 	Hostname string
@@ -161,7 +163,9 @@ type Desktop struct {
 	closeOnce sync.Once
 }
 
-// openTimeout bounds each connection Open makes.
+// openTimeout bounds each connection Open makes, from the dial to the
+// first answer, so that a bus or X server that accepts a connection and
+// then says nothing delays Open by seconds, not forever.
 const openTimeout = 2 * time.Second
 
 // Open finds the session's signals and starts watching focus and power.
@@ -179,17 +183,23 @@ func Open(ctx context.Context, cfg Config) *Desktop {
 	}
 	sessionBus := cfg.SessionBus
 	if sessionBus == nil {
-		sessionBus = func() (*dbus.Conn, error) {
+		sessionBus = func(ctx context.Context) (*dbus.Conn, error) {
 			address, err := sessionBusAddress(getenv)
 			if err != nil {
 				return nil, err
 			}
-			return connectBus(address)
+			return connectBus(ctx, address)
 		}
 	}
 	systemBus := cfg.SystemBus
 	if systemBus == nil {
-		systemBus = func() (*dbus.Conn, error) { return dbus.ConnectSystemBus() }
+		systemBus = func(ctx context.Context) (*dbus.Conn, error) {
+			address, err := systemBusAddress(getenv)
+			if err != nil {
+				return nil, err
+			}
+			return connectBus(ctx, address)
+		}
 	}
 	readyTimeout := cfg.ReadyTimeout
 	if readyTimeout == 0 {
@@ -218,11 +228,11 @@ func Open(ctx context.Context, cfg Config) *Desktop {
 			x11Status = unknownErr(dispErr)
 			break
 		}
-		src := &x11Idle{open: func(timeout time.Duration) (*xconn, error) {
-			return openX11(disp, getenv, hostname, timeout)
+		src := &x11Idle{open: func(deadline time.Time) (*xconn, error) {
+			return openX11(disp, getenv, hostname, deadline)
 		}}
 		src.mu.Lock()
-		err := src.connect(openTimeout)
+		err := src.connect(time.Now().Add(openTimeout))
 		src.mu.Unlock()
 		if err == nil {
 			d.idleSrc, x11Status = src, via(src.name())
@@ -243,9 +253,7 @@ func Open(ctx context.Context, cfg Config) *Desktop {
 		d.status.Idle = x11Status
 	} else {
 		src := &mutterIdle{connect: sessionBus}
-		probe, cancelProbe := context.WithTimeout(ctx, openTimeout)
-		_, err := src.idle(probe)
-		cancelProbe()
+		_, err := src.sample(ctx, openTimeout)
 		if err == nil {
 			d.idleSrc, d.status.Idle = src, via(src.name())
 		} else {
@@ -283,12 +291,13 @@ func (d *Desktop) startFocus(ctx context.Context, disp xDisplay, dispErr error, 
 		d.status.Focus = unknownErr(dispErr)
 		return
 	}
-	c, err := openX11(disp, getenv, hostname, openTimeout)
+	deadline := time.Now().Add(openTimeout)
+	c, err := openX11(disp, getenv, hostname, deadline)
 	if err != nil {
 		d.status.Focus = unknownErr(err)
 		return
 	}
-	w, err := newX11Focus(c, hostname, openTimeout)
+	w, err := newX11Focus(c, hostname, deadline)
 	if err != nil {
 		d.status.Focus = unknownErr(err)
 		return
@@ -316,14 +325,16 @@ func (d *Desktop) startFocus(ctx context.Context, disp xDisplay, dispErr error, 
 
 // startPower subscribes to logind. The focus goroutine may be running, so
 // it sets the status through setStatus.
-func (d *Desktop) startPower(ctx context.Context, systemBus func() (*dbus.Conn, error), readyTimeout time.Duration, log *slog.Logger) {
-	conn, err := systemBus()
+func (d *Desktop) startPower(ctx context.Context, systemBus func(context.Context) (*dbus.Conn, error), readyTimeout time.Duration, log *slog.Logger) {
+	connectCtx, cancel := context.WithTimeout(ctx, openTimeout)
+	conn, err := systemBus(connectCtx)
+	cancel()
 	if err != nil {
 		reason := unknown("no system bus, so no logind: suspends show only as gaps between samples")
 		d.setStatus(func(s *Status) { s.Power, s.Lock = reason, reason })
 		return
 	}
-	l, lockErr, err := openLogind(conn, readyTimeout, log)
+	l, lockErr, err := openLogind(ctx, conn, readyTimeout, log)
 	if err != nil {
 		conn.Close()
 		reason := unknown(err.Error() + ": suspends show only as gaps between samples")
@@ -367,9 +378,10 @@ func (d *Desktop) Status() Status {
 }
 
 // Idle reads the time since the last input, with one round trip to the
-// X server or Mutter that waits at most 1 s, or until ctx ends. It returns
-// ErrUnknown when the desktop gives no idle time; any other error is a
-// failed sample, and the next call tries again.
+// X server or Mutter. It gives up after 1 s, or at ctx's deadline if that
+// is sooner, reconnecting included, and a Mutter sample also stops when ctx
+// is canceled. It returns ErrUnknown when the desktop gives no idle time;
+// any other error is a failed sample, and the next call tries again.
 func (d *Desktop) Idle(ctx context.Context) (Idle, error) {
 	if d.idleSrc == nil {
 		return Idle{}, ErrUnknown

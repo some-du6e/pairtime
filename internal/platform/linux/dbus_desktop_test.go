@@ -32,7 +32,9 @@ func testBus(t *testing.T) *dbus.Conn {
 	if address == "" {
 		t.Fatal("DBUS_SESSION_BUS_ADDRESS is unset: run this under tools/ci/desktop_session.sh")
 	}
-	conn, err := connectBus(address)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	conn, err := connectBus(ctx, address)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,7 +86,7 @@ func TestDesktopMutterIdle(t *testing.T) {
 			}
 			d := Open(context.Background(), Config{
 				Getenv:    func(k string) string { return env[k] },
-				SystemBus: func() (*dbus.Conn, error) { return nil, errors.New("not in this test") },
+				SystemBus: func(context.Context) (*dbus.Conn, error) { return nil, errors.New("not in this test") },
 			})
 			defer d.Close()
 			s := d.Status()
@@ -229,8 +231,10 @@ func startFakeLogind(t *testing.T, locked, noSession bool) *fakeLogind {
 func openWithLogind(t *testing.T, readyTimeout time.Duration) *Desktop {
 	t.Helper()
 	d := Open(context.Background(), Config{
-		Getenv:       func(string) string { return "" },
-		SystemBus:    func() (*dbus.Conn, error) { return connectBus(os.Getenv("DBUS_SESSION_BUS_ADDRESS")) },
+		Getenv: func(string) string { return "" },
+		SystemBus: func(ctx context.Context) (*dbus.Conn, error) {
+			return connectBus(ctx, os.Getenv("DBUS_SESSION_BUS_ADDRESS"))
+		},
 		ReadyTimeout: readyTimeout,
 	})
 	t.Cleanup(func() { d.Close() })

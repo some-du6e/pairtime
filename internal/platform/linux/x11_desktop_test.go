@@ -33,7 +33,7 @@ func openX11Desktop(t *testing.T) *Desktop {
 		t.Fatal("DISPLAY is unset: run this under tools/ci/desktop_session.sh")
 	}
 	d := Open(context.Background(), Config{
-		SystemBus: func() (*dbus.Conn, error) { return nil, errors.New("not in this test") },
+		SystemBus: func(context.Context) (*dbus.Conn, error) { return nil, errors.New("not in this test") },
 	})
 	t.Cleanup(func() { d.Close() })
 	s := d.Status()
