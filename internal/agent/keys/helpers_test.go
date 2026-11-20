@@ -7,7 +7,6 @@ import (
 	"crypto/subtle"
 	"os"
 	"path/filepath"
-	"runtime"
 	"sync"
 	"testing"
 
@@ -156,19 +155,4 @@ func keyFiles(t *testing.T, dir string) []string {
 		t.Fatal(err)
 	}
 	return m
-}
-
-// wantOSKind is where a first run with this OS's stores should put K_dev
-// on its CI runner: DPAPI on windows-latest and the login Keychain on
-// macos-latest. On Linux it depends on whether there is a session bus with
-// a Secret Service, so "" lets either the Secret Service or the key file
-// pass; the desktop tests pin the Secret Service.
-func wantOSKind() Kind {
-	switch runtime.GOOS {
-	case "windows":
-		return KindDPAPI
-	case "darwin":
-		return KindKeychain
-	}
-	return ""
 }

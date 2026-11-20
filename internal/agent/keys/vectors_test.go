@@ -135,11 +135,12 @@ func TestVectorsThroughTheKeyFile(t *testing.T) {
 }
 
 // TestVectorsThroughThisOSStore uses DPAPI on Windows and the login
-// Keychain on macOS, in platform.yml. On Linux, ci.yml has no Secret
-// Service, so the keys go through the key file there;
-// keys_desktop_test.go runs the vectors through the Secret Service.
+// Keychain on macOS, in platform.yml, and on Linux the Secret Service that
+// fakesecret provides in the desktop build. In ci.yml's Linux job, with no
+// Secret Service, the keys go through the key file.
 func TestVectorsThroughThisOSStore(t *testing.T) {
+	want := osStoreForTest(t)
 	checkVectors(t, func(dir string) Options {
 		return Options{Dir: dir, Timeout: osTimeout}
-	}, wantOSKind())
+	}, want)
 }

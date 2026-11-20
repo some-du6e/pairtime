@@ -19,6 +19,14 @@ import (
 // tools/ci/desktop_session.sh, with fakesecret answering go-keyring's real
 // D-Bus calls: the Linux round trip through the Secret Service (WP-OS7).
 
+// osStoreForTest starts fakesecret for a test that uses this OS's stores,
+// so in the desktop build those tests go through the Secret Service, and
+// nothing on the private bus can start a real keyring. See osstore_test.go.
+func osStoreForTest(t *testing.T) Kind {
+	startFakeSecretService(t)
+	return KindSecretService
+}
+
 func startFakeSecretService(t *testing.T) *fakesecret.Service {
 	t.Helper()
 	fake, err := fakesecret.Start()
@@ -130,13 +138,4 @@ func TestSecretService(t *testing.T) {
 			tt.run(t, fake, opts)
 		})
 	}
-}
-
-// TestVectorsThroughTheSecretService puts each vector's K_dev through
-// go-keyring and the fake Secret Service (see vectors_test.go).
-func TestVectorsThroughTheSecretService(t *testing.T) {
-	startFakeSecretService(t)
-	checkVectors(t, func(dir string) Options {
-		return Options{Dir: dir, Timeout: osTimeout}
-	}, KindSecretService)
 }
