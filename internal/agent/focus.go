@@ -24,18 +24,24 @@ import (
 //     opened (keyFocus), and left out before; it never reaches the ledger
 //     body either way, because the writer builds that from
 //     Event.Shareable.
-//   - hosted_sessions come from the sessions the process scan found.
-//     docs/PLAN.md names who wires the rest: the hook path (WP-AG3) adds
-//     the harness processes its hooks claim, with their session keys and
-//     the projects focus_project needs, and calls Refresh when a session
-//     starts or ends.
+//   - hosted_sessions come from the sessions the process scan found
+//     (procs.Scanner.Sessions) and the processes the agent's own walk of a
+//     hook's socket or pipe connection found, each with the session_key its
+//     calls name (hookTies, WP-AG3). The chain a spooled hook call recorded
+//     never adds one (DESIGN 5.2). The hook sink has the component look
+//     again when it ties a process to a session, and when a session starts
+//     or ends.
+//   - focus_project comes from the project each hooked session works in
+//     (hookTies.projectOf), which the hook sink knows once the agent can
+//     turn a folder into a project key (hookSteps.project).
 //
 // src is the focus source: focus.ThisOS(), or a fake in tests. startLedger
 // and startPresence must have run.
 func (a *agent) newFocus(src focus.OS) {
 	a.focus = focus.New(focus.Options{
 		OS:        src,
-		Sessions:  func() map[platform.ID]string { return a.procs.Sessions() },
+		Sessions:  func() map[platform.ID]string { return a.hooked.merged(a.procs.Sessions()) },
+		ProjectOf: a.hooked.projectOf,
 		AppSecret: a.appSecret,
 		Live:      func() bool { return a.presence.Status().Live },
 		Presence:  a.presence.FocusAt,

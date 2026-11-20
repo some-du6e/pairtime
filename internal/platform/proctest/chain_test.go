@@ -388,6 +388,15 @@ func TestReadsThisProcess(t *testing.T) {
 			t.Errorf("Name = %q, want %q", me.Name, want)
 		}
 	})
+	t.Run("this process read alone has the ID the table gives it, so the agent can check a hook's own chain entry against its walk", func(t *testing.T) {
+		self, err := readSelf()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if self.PID != os.Getpid() || self.ID() != me.ID() || self.ID().Start == 0 || !strings.EqualFold(self.Name, me.Name) {
+			t.Errorf("read alone %+v, ID %+v; in the table %+v, ID %+v", self, self.ID(), me, me.ID())
+		}
+	})
 	t.Run("the start time is this run's", func(t *testing.T) {
 		if me.Start.IsZero() || time.Since(me.Start) > time.Hour || time.Until(me.Start) > 2*time.Second {
 			t.Errorf("Start = %s, now %s", me.Start, time.Now())
