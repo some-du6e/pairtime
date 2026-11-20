@@ -9,27 +9,25 @@
 #
 # Litestream fills ${NAME} from its environment, which compose sets from
 # config/secrets.env, so this file holds no value of one deployment and
-# comes from git with compose.yml. pairtimed's own copy of the endpoint and
-# the bucket is [object_storage] in pairtime.toml; `pairtimed init` writes
-# it from the same variables, and `pairtimed doctor` fails when the two
-# disagree.
+# comes from git with compose.yml. Each one is in double quotes, so a URL
+# with '&' or '?' in it, as an Uptime Kuma push URL has, stays one string.
+# pairtimed's own copy of the endpoint and the bucket is [object_storage]
+# in pairtime.toml; `pairtimed init` writes it from the same variables, and
+# `pairtimed doctor` fails when the two disagree.
 #
 # Litestream v0.5 has no encryption option, so the replica is only as
 # private as the bucket. The nightly snapshot pairtimed uploads to the
 # second bucket is encrypted with age to Karim's offline key (DESIGN 10.3).
 
-exec: pairtimed serve
+# -litestream-replica names the replica's path below, so /readyz can tell
+# how far the replica is behind the database (DESIGN 10.4).
+exec: pairtimed serve -litestream-replica litestream
 
-# Litestream's own dead man's switch: a ping every 5 minutes, sent only
-# while the database has synced within that time (DESIGN 10.4). Empty
-# turns it off, as in the restore drill.
-heartbeat-url: ${PAIRTIME_LITESTREAM_HEARTBEAT_URL}
+# Litestream's own dead man's switch: a GET of this push-monitor URL every
+# 5 minutes, sent only while the database has synced within that time
+# (DESIGN 10.4). Empty turns it off, as in the restore drill.
+heartbeat-url: "${PAIRTIME_LITESTREAM_HEARTBEAT_URL}"
 heartbeat-interval: 5m
-
-# Prometheus metrics, inside the container only: nothing publishes this
-# port. pairtimed's /readyz reads the replication counters from here
-# (internal/server/backup).
-addr: 127.0.0.1:9090
 
 # A full snapshot every 24 hours, kept 72 hours (DESIGN 10.3).
 snapshot:
@@ -42,15 +40,16 @@ dbs:
     restore-if-db-not-exists: true
     replica:
       type: s3
-      endpoint: ${PAIRTIME_S3_ENDPOINT}
-      region: ${PAIRTIME_S3_REGION}
-      bucket: ${PAIRTIME_S3_BUCKET}
+      endpoint: "${PAIRTIME_S3_ENDPOINT}"
+      region: "${PAIRTIME_S3_REGION}"
+      bucket: "${PAIRTIME_S3_BUCKET}"
+      # The same as -litestream-replica in exec above.
       path: litestream
       # pairtimed's client uses path-style URLs too, which R2, Hetzner
       # and MinIO all take.
       force-path-style: true
-      access-key-id: ${PAIRTIME_S3_ACCESS_KEY_ID}
-      secret-access-key: ${PAIRTIME_S3_SECRET_ACCESS_KEY}
+      access-key-id: "${PAIRTIME_S3_ACCESS_KEY_ID}"
+      secret-access-key: "${PAIRTIME_S3_SECRET_ACCESS_KEY}"
       # About 10 s of writes at risk, inside R2's free request tier
       # (DESIGN 10.3).
       sync-interval: 10s

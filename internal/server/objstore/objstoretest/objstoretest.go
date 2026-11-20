@@ -67,6 +67,8 @@ type Server struct {
 	faults   []fault
 	nextID   int
 	uploads  map[string]*upload
+	// matched holds FailMatching's faults.
+	matched []fault
 	// versioning holds what SetVersioning set, by bucket.
 	versioning map[string]string
 	// ignoreIfNoneMatch holds the buckets that WriteOnceIgnored set.
@@ -114,11 +116,13 @@ type Request struct {
 
 // fault is an answer forced on the next request: an S3 error, or, with
 // status 0, a connection closed without an answer. With after set, the
-// server carries the request out first.
+// server carries the request out first. With match set, it waits for the
+// first request match accepts instead.
 type fault struct {
 	status int
 	code   string
 	after  bool
+	match  func(*http.Request) bool
 }
 
 // New starts a server holding the named, empty buckets, and closes it when
@@ -171,6 +175,18 @@ func (s *Server) FailAfter(n, status int, code string) {
 	defer s.mu.Unlock()
 	for range n {
 		s.faults = append(s.faults, fault{status: status, code: code, after: true})
+	}
+}
+
+// FailMatching is Fail, or FailAfter when after is set, for the next n
+// requests that match accepts, wherever they come. It goes before the
+// faults of Fail and FailAfter, which wait for the requests it doesn't
+// match.
+func (s *Server) FailMatching(n int, match func(*http.Request) bool, status int, code string, after bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for range n {
+		s.matched = append(s.matched, fault{status: status, code: code, after: after, match: match})
 	}
 }
 
@@ -271,7 +287,11 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 	s.nextID++
 	id := "fake-" + strconv.Itoa(s.nextID)
 	var f *fault
-	if len(s.faults) > 0 {
+	if i := slices.IndexFunc(s.matched, func(f fault) bool { return f.match(r) }); i >= 0 {
+		m := s.matched[i]
+		f = &m
+		s.matched = slices.Delete(s.matched, i, i+1)
+	} else if len(s.faults) > 0 {
 		f = &s.faults[0]
 		s.faults = s.faults[1:]
 	}
