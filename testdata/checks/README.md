@@ -16,7 +16,7 @@ Each failing scenario fails one check. Every other check passes on the same data
 | CC4 commit clocks | `6.2-clean`, `6.3-clean` | `6.2-cc4-late`, `6.2-cc4-diffstat`, `6.3-cc4-pushed-earlier` | the `4.2-*` scenarios: no commit |
 | CC5 one attention stream | `4.2-clean`, `6.2-clean`, `6.3-clean` | `4.2-cc5-second-device` | `4.2-cc2-send-keys`: nothing credited |
 | CC6 live vs re-scored | every scenario but one | `6.3-cc6-moved-minute` | |
-| CC7 chain integrity | every scenario but one | `4.2-cc7-dropped-record` | |
+| CC7 chain integrity | every scenario but two | `4.2-cc7-dropped-record`, `4.2-cc7-dropped-batch` | |
 | CC8 content-derived inputs | `4.2-clean`, `4.2-cc8-removed-spans` | `4.2-cc8-false-sketch`, `4.2-cc8-made-up-key` | `4.2-cc2-send-keys`: nothing drawn |
 | CC9 session integrity | `4.2-clean`, `6.2-clean`, `6.3-clean` | `6.3-cc9-moved-turn`, `6.3-cc9-orphan-turn`, `4.2-cc9-parent-class` | |
 | CC10 editor vs focus | `6.2-clean`, `6.3-clean` | `6.3-cc10-injected-heartbeats` | the `4.2-*` scenarios: no editor |
@@ -33,6 +33,7 @@ Each failing scenario fails one check. Every other check passes on the same data
 | `4.2-cc2-send-keys` | 4.2-alternation | Claude Code runs in tmux and a script types all five prompts with `tmux send-keys`: no key press reaches the OS |
 | `4.2-cc5-second-device` | 4.2-alternation and [6.2](../timelines/6.2/) | A second device on the account runs 6.2's five minutes at the same time |
 | `4.2-cc7-dropped-record` | 4.2-alternation | The reveal leaves out one record of a witnessed batch |
+| `4.2-cc7-dropped-batch` | 4.2-alternation | The reveal leaves out the last batch of the re-score range, A3's stop and its sample |
 | `4.2-cc8-false-sketch` | 4.2-alternation | A3's committed sketch is another request's, so the re-roll rule misses it; the client reveals A3's true values |
 | `4.2-cc8-made-up-key` | 4.2-alternation | A3's sketch and values are under a key of the client's own; A1 shows the same shingles with other values |
 | `4.2-cc8-removed-spans` | 4.2-alternation | As the made-up key, with three words of A3 removed by hand so no shingle of A3 shows its text |
@@ -69,7 +70,7 @@ Each scenario's `expected.json` tells its story, lists its edits and notes what 
 - `devices` lists each device: its `os`, whether it has `input_keys`, the typing module and a VM label, and whether it `reveals`. In every scenario one device submits and reveals. The second device in `4.2-cc5-second-device` reveals nothing; the server has only its live buckets.
 - `submission` is the projects `P` and the window `W` (DESIGN 7.5). The checks look at records in `W`. Records before it set up state, as in a timeline fixture.
 - `live` says what the server received live. See [The live buckets](#the-live-buckets).
-- `checks` holds one result per check: `result` (`pass`, `fail` or `not_computable`), `counts`, `items` naming what failed or couldn't be computed, `reason` for a check that isn't computable, and `basis` where a result rests on reasoning instead of counts, as CC5 does where the scorer's output isn't in SM's rows.
+- `checks` holds one result per check: `result` (`pass`, `fail` or `not_computable`), `counts`, `items` naming what failed or couldn't be computed, `reason` for a check that isn't computable, and `basis` where a result rests on reasoning instead of counts: CC6 always, and CC5 where the scorer's output isn't in SM's rows.
 - `fails` lists the checks that fail. It has one entry or none.
 - `not_exercised` holds the checks a scenario has no inputs for, with the reason. Only CC8 is ever here: SM 6.2 and 6.3 don't quote enough prompt text to commit and reveal.
 - `known_limit`, `errata` and `notes`.
@@ -80,12 +81,13 @@ A count a scenario states is part of the oracle. A count it leaves out isn't ass
 
 The format of [../timelines/README.md](../timelines/README.md#eventsjsonl): `pkg/event`'s own encoding, one event per line, in arrival order. A scenario with two devices interleaves their events by `t`, and each device's `seq` is gapless on its own. Keys, devices and times are the base fixture's. Event ids are UUIDv7s with the event's time and bits from a hash of the base, the device and `seq`, so two scenarios with the same records write the same bytes. The prompt texts the scenarios use are in the base fixture's `prompts.json`.
 
-`events.jsonl` holds what each device recorded, and `ledger.json` what the client revealed. They hold the same records in every scenario but `4.2-cc7-dropped-record`.
+`events.jsonl` holds what each device recorded, and `ledger.json` what the client revealed. They hold the same records in every scenario but three: `4.2-cc7-dropped-record` and `4.2-cc7-dropped-batch` leave records out of the reveal, and the second device of `4.2-cc5-second-device` reveals nothing, so its records are in `events.jsonl` only.
 
 ### `ledger.json`
 
 `devices[]`, one per revealing device:
 
+- `rescore_range` is DESIGN 6.5's re-score range: `start` and `end` in Unix ms, from W's start minus 900 s, since no scenario has a checkpoint, to W's end plus `REVEAL_POST_S` = 900 s, and `first_b` and `last_b`, the first and last batch the server stored with records in it. DESIGN 7.5 step 3 has the client reveal every one of those. How the server finds them from its own rows is WP-SB4's; in every scenario here they are all of `witnessed[]`.
 - `batches[]` is the client's metadata reveal (DESIGN 7.5 step 3): each batch's `b` and its records, each with `seq`, `rtype` (ledger-v1.md 4.2), `project_key` (`""` for none, as in the ledger vectors), `session_key` and `body`, the stored body bytes as text. Every body is ASCII.
 - `witnessed[]` is what the server stored when each batch arrived (ledger-v1.md 6): `b`, `n`, `prev`, `root`, `head` and `received_at`.
 
@@ -111,15 +113,15 @@ CC5 and CC6 read the minute buckets the server received live, which a scenario d
 
 ## How each check is read
 
-`checks.py` computes every result here from the scenario's own files, and `gen.py` states every result by hand. The generator writes nothing unless the two agree. These are the rules it applies, with the readings the erratum lists.
+`checks.py` computes every result here from the scenario's own files, and `gen.py` states every result by hand. The generator writes nothing unless the two agree. CC5 and CC6 are the exception until `pkg/score` exists: they compare live buckets and a re-score that no code here computes, so `gen.py` states them, from its slot tables for CC5 and from the scenario's mutations for CC6, and each says what it rests on in `basis` where its counts don't. These are the rules the checks follow, with the readings the erratum lists.
 
 - **CC1.** For each session of `P` whose harness has a v1 log reader (DESIGN 5.1: Claude Code, Codex, Copilot, Gemini CLI, Devin and Cline, not Cursor), each hook `prompt.submit` in `W` needs a `via` `log` `prompt.submit` with the same session and `turn_key`, at most 5 s from it and with the same `len_chars`. The matched pairs keep their order, and every log entry has its hook record. A hook prompt of a session with no reader is counted as not computable.
 - **CC2.** The prompts of `P` in `W` that SM 2.2 rules 1 to 5 leave unlabeled, one per turn, the hook's record where there is one. Each needs input in the 10 s before submit, read from the sample taken at the hook (`idle_keys_s` where the machine has `input_keys`, else `idle_any_s`, at most 10 s), and focus at submit on a window whose `hosted_sessions` holds the session, or on the editor for an IDE session.
 - **CC3.** For each commit of `P` in `W`, the changed lines are its insertions plus deletions. The recorded lines are the lines added and removed by `agent.tool` edits and writes, plus `lines_changed` of every `editor.activity` except `edit_source` `agent`, in the commit's project since the commit before it there. A commit is flagged `unexplained_lines` when its unexplained lines, changed minus recorded, are more than half its lines and more than 200.
 - **CC4.** For each commit, `observed_at` < `server_first_seen_at` < `observed_at` + 15 minutes. On an App-installed repo, `push_time` ≥ `observed_at` − 60 s. The forge found the SHA with the record's files, insertions and deletions.
 - **CC5.** Every device's live buckets in `W`, in every project. A slot is credited twice when two devices, or two projects of one device, credit it. `merge_dropped_s` is what SM 3.4's merge drops, which is WP-SV7's job; CC5 changes no credit.
-- **CC6.** Each device's live buckets against its re-score, minute by minute and slot by slot. A minute that differs is held (DESIGN 6.2 D7).
-- **CC7.** For each device, batch numbers and `seq` rise by 1 with no gap. Each batch's revealed entries give the `n`, `R_b` and `H_b` the server stored, with `H_b` computed from the head the server stored before it, and each body agrees with its header (ledger-v1.md 4.5, 9). A batch that fails holds the minutes its revealed records fall in.
+- **CC6.** Each device's live buckets against its re-score, minute by minute and slot by slot, in the minutes of W that CC7 doesn't hold: a held minute's records didn't verify, so there is nothing to reproduce it from. A minute that differs is held (DESIGN 6.2 D7).
+- **CC7.** For each device, every batch the server stored between `rescore_range`'s `first_b` and `last_b` is revealed (`missing_batches`), and batch numbers and `seq` rise by 1 with no gap. Each revealed batch's entries give the `n`, `R_b` and `H_b` the server stored, with `H_b` computed from the head the server stored before it, and each body agrees with its header (ledger-v1.md 4.5, 9). A batch that is missing or fails holds every minute its records could fall in: from the minute of the last verified record before it to the minute of the first verified record after it, or of the batch's `received_at` when no verified record follows. Its own revealed records can't narrow that, because they are what failed to verify. `held_minutes` counts the held minutes in W, and each item gives the span as `between`.
 - **CC8.** For each drawn prompt (ledger-v1.md 10.8, in PR #12), the shingle reveal is well formed and its values give the body's `f.mh` (`bad_entry`, `sketch`). When nothing was removed, the shown shingles are exactly the text's and every value shows one. No shingle shows two values across the device's reveals. The class recomputed from the text by SM 2.2 is `f.pc`.
 - **CC9.** For each harness session of `P` with records in `W`, every record names one project. Every turn an `agent.output`, `agent.interrupt`, `agent.queue` or `agent.stop` names has a `prompt.submit` in the session, or ends with a stop hook's continuation. Every `session.start` of the session has one `parent_class`.
 - **CC10.** For each `editor.activity` of `P` in `W` of an anchor's kind (SM 2.3: an edit or save with `edit_source` `human`, `tab` or `unknown`, or a navigate, open, debug or task), the last `os.focus` at or before it is an editor whose `focus_project` is the record's project.

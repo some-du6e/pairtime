@@ -53,6 +53,9 @@ COMPOSE_CPS = Fraction(3, 2)
 SUBSTANTIVE_CHARS = 20
 # DESIGN 6.3: CHALLENGE_K = max(10, 10% of the pool), at most 30.
 CHALLENGE_K_MIN, CHALLENGE_K_MAX = 10, 30
+# DESIGN 6.5: re-scoring starts from a checkpoint at or before W's start
+# minus 900 s and runs to W's end plus REVEAL_POST_S = 900 s.
+RESCORE_PRE_MS, REVEAL_POST_MS = 900_000, 900_000
 
 # DESIGN 5.1's "Second record (lookback and CC1)" column: the harnesses
 # with a v1 log reader. Cursor's state.vscdb reader is v1.5, and the
@@ -358,15 +361,16 @@ def seals_at_once(e):
     return e["kind"] == "os.power" and e["data"]["op"] in ("lock", "suspend")
 
 
-def ledger(dev, b0, extras=None, hide=(), lag=None):
+def ledger(dev, b0, rng, extras=None, hide=(), omit=()):
     """Seals dev's events into batches and returns the reveal and the rows
     the server witnessed. Batches close at every UTC minute, and at once
     after a record seals_at_once names together with the records of the
     same millisecond, such as the presence sample the agent takes at a hook
     event or a suspend, so no batch spans a minute and a suspended laptop
-    uploads nothing. extras maps a seq to more body members (f, c). hide
-    lists seqs the client leaves out of its reveal: the server's rows still
-    cover them."""
+    uploads nothing. rng is the re-score range, (start, end) in Unix ms.
+    extras maps a seq to more body members (f, c). hide lists seqs the
+    client leaves out of its reveal, and omit the batches it leaves out
+    whole: the server's rows still cover them."""
     keys = device_keys(dev.id)
     extras = extras or {}
     batches, cur, at_once = [], [], None
@@ -392,7 +396,7 @@ def ledger(dev, b0, extras=None, hide=(), lag=None):
         entries = [entry(header(e), bd.encode()) for e, bd in zip(recs, bodies)]
         r = root([leaf(x) for x in entries])
         h = batch_head(prev, r, len(recs), b)
-        received = sealed + (lag(b, sealed) if lag else rand.between(250, 1500))
+        received = sealed + rand.between(250, 1500)
         # The server stores batch b only after b - 1 (ledger-v1.md 6), so
         # a batch sealed in the same millisecond as the one before it, with
         # a shorter upload, still arrives after it.
@@ -407,9 +411,23 @@ def ledger(dev, b0, extras=None, hide=(), lag=None):
                 continue
             records.append({"seq": e["seq"], "rtype": RTYPE[e["kind"]], "project_key": header_project(e),
                             "session_key": e["session_key"], "body": bd})
-        revealed.append({"b": b, "records": records})
+        if b not in omit:
+            revealed.append({"b": b, "records": records})
         prev = h
-    return {"device_id": dev.id, "batches": revealed, "witnessed": witnessed}
+    # DESIGN 7.5 step 3: the client reveals every batch overlapping the
+    # re-score range. The server knows the range's batches from its own
+    # rows; here they are the batches with a record in it.
+    inside = [b0 + i for i, (recs, _) in enumerate(batches) if any(rng[0] <= e["t"] < rng[1] for e in recs)]
+    check(inside, f"{dev.base}: a batch in the re-score range")
+    span = {"start": rng[0], "end": rng[1], "first_b": inside[0], "last_b": inside[-1]}
+    return {"device_id": dev.id, "rescore_range": span, "batches": revealed, "witnessed": witnessed}
+
+
+def rescore_range(sub):
+    """DESIGN 6.5's re-score range for a submission whose projects have no
+    checkpoint, as in every scenario here: from W's start minus 900 s to
+    W's end plus REVEAL_POST_S = 900 s."""
+    return sub["start"] - RESCORE_PRE_MS, sub["end"] + REVEAL_POST_MS
 
 
 def header_project(e):
@@ -773,31 +791,41 @@ def cc4(events, sub, commits):
     return outcome("fail" if bad else "pass", counts, items)
 
 
-def cc7(led):
-    """Chain integrity: the revealed records reproduce every n_b, R_b and
-    H_b the server stored, with no gap in b or seq, and every body agrees
-    with its header. A batch that fails holds the minutes of its records."""
-    counts = {"batches": 0, "records": 0, "batch_gaps": 0, "seq_gaps": 0, "count_mismatches": 0,
-              "root_mismatches": 0, "head_mismatches": 0, "body_mismatches": 0}
+def cc7(led, sub):
+    """Chain integrity: every batch the server stored for the re-score
+    range is revealed, its records reproduce the n_b, R_b and H_b it
+    stored, b and seq rise with no gap, and every body agrees with its
+    header. A batch that is missing or fails holds every minute its records
+    could fall in: from the minute of the last verified record before it to
+    the minute of the first verified record after it, or of the batch's
+    received_at when no verified record follows. Its own revealed records
+    can't narrow that, since they are what failed to verify. held_minutes
+    counts the minutes of W."""
+    counts = {"batches": 0, "records": 0, "missing_batches": 0, "batch_gaps": 0, "seq_gaps": 0,
+              "count_mismatches": 0, "root_mismatches": 0, "head_mismatches": 0, "body_mismatches": 0}
     items, held = [], set()
     for dev in led:
         rows = {w["b"]: w for w in dev["witnessed"]}
+        rng = dev["rescore_range"]
+        revealed = {bt["b"]: bt for bt in dev["batches"]}
+        faults = {}
         last_b, last_s = None, None
         for bt in dev["batches"]:
             counts["batches"] += 1
             b = bt["b"]
-            w = rows[b]
             bad = []
-            if last_b is not None and b != last_b + 1:
-                counts["batch_gaps"] += 1
-                bad.append("batch_gap")
+            # A gap in b is counted here and failed on the missing batch
+            # below, so the batch after it isn't held for it.
+            gap = last_b is not None and b != last_b + 1
+            counts["batch_gaps"] += gap
             last_b = b
             entries = []
-            for r in bt["records"]:
+            for i, r in enumerate(bt["records"]):
                 counts["records"] += 1
                 if last_s is not None and r["seq"] != last_s + 1:
                     counts["seq_gaps"] += 1
-                    bad.append(f"seq_gap_before_{r['seq']}")
+                    if i or not gap:
+                        bad.append(f"seq_gap_before_{r['seq']}")
                 last_s = r["seq"]
                 e = json.loads(r["body"])["e"]
                 kind_ok = e["kind"] == KINDS[r["rtype"] - 1] and e["seq"] == r["seq"]
@@ -808,24 +836,43 @@ def cc7(led):
                 hdr = (u64(r["seq"]) + bytes([r["rtype"]]) + project_digest(r["project_key"])
                        + session_digest(r["session_key"]))
                 entries.append(entry(hdr, r["body"].encode()))
-            r_b = root([leaf(x) for x in entries])
-            if len(entries) != w["n"]:
-                counts["count_mismatches"] += 1
-                bad.append("count")
-            if r_b.hex() != w["root"]:
-                counts["root_mismatches"] += 1
-                bad.append("root")
-            if batch_head(bytes.fromhex(w["prev"]), r_b, len(entries), b).hex() != w["head"]:
-                counts["head_mismatches"] += 1
-                bad.append("head")
+            w = rows.get(b)
+            if w is None:
+                bad.append("not_witnessed")
+            else:
+                r_b = root([leaf(x) for x in entries])
+                if len(entries) != w["n"]:
+                    counts["count_mismatches"] += 1
+                    bad.append("count")
+                if r_b.hex() != w["root"]:
+                    counts["root_mismatches"] += 1
+                    bad.append("root")
+                if batch_head(bytes.fromhex(w["prev"]), r_b, len(entries), b).hex() != w["head"]:
+                    counts["head_mismatches"] += 1
+                    bad.append("head")
             if bad:
-                minutes = sorted({minute_of(json.loads(r["body"])["e"]["t"]) for r in bt["records"]})
-                held.update(minutes)
-                items.append({"device_id": dev["device_id"], "b": b, "failed": bad,
-                              "held_minutes": [utc(m) for m in minutes]})
+                faults[b] = bad
+        for b in range(rng["first_b"], rng["last_b"] + 1):
+            if b in rows and b not in revealed:
+                counts["missing_batches"] += 1
+                faults[b] = ["missing_batch"]
+        verified = sorted(b for b in revealed if b not in faults)
+
+        def times(b):
+            return [json.loads(r["body"])["e"]["t"] for r in revealed[b]["records"]]
+
+        for b in sorted(faults):
+            before = [v for v in verified if v < b]
+            after = [v for v in verified if v > b]
+            t0 = max(times(before[-1])) if before else rng["start"]
+            t1 = min(times(after[0])) if after else rows[b]["received_at"] if b in rows else rng["end"]
+            minutes = [m for m in range(minute_of(t0), minute_of(t1) + 1, MINUTE_MS) if in_window(sub, m)]
+            held.update(minutes)
+            items.append({"device_id": dev["device_id"], "b": b, "failed": faults[b], "between": [utc(t0), utc(t1)],
+                          "held_minutes": [utc(m) for m in minutes]})
     counts["held_minutes"] = len(held)
-    if not counts["batches"]:
-        return outcome("not_computable", counts, reason="no batch revealed")
+    if not counts["batches"] and not counts["missing_batches"]:
+        return outcome("not_computable", counts, reason="no batch revealed or witnessed in the re-score range")
     return outcome("fail" if items else "pass", counts, items)
 
 

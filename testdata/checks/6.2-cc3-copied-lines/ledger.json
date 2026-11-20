@@ -3,6 +3,7 @@
   "devices": [
     {
       "device_id": "d_c0fe658255f8",
+      "rescore_range": {"start": 1795523100000, "end": 1795525200000, "first_b": 10469, "last_b": 10475},
       "batches": [
         {
           "b": 10469,

@@ -8,6 +8,7 @@ what.
     python3 -I testdata/checks/gen.py --out DIR
 """
 
+import json
 import os
 import sys
 
@@ -82,6 +83,7 @@ class Scenario:
         self.mutations = []
         self.extras = {}
         self.hide = ()
+        self.omit = ()
         self.b0 = {}
         self.classes = {}
         self.stated = {}
@@ -107,7 +109,7 @@ class Scenario:
     def build(self, out):
         check(len([d for d in self.devices if d[2]]) == 1, f"{self.name}: one device reveals")
         dev = [d for d, _, r in self.devices if r][0]
-        led = [ck.ledger(dev, dev.seq0 // 3, self.extras, self.hide)]
+        led = [ck.ledger(dev, dev.seq0 // 3, ck.rescore_range(self.sub), self.extras, self.hide, self.omit)]
         sub = self.sub
         computed = {
             "CC1": ck.cc1(dev.events, sub),
@@ -116,7 +118,7 @@ class Scenario:
             "CC4": ck.cc4(dev.events, sub, self.commits or []),
             "CC5": self.cc5(),
             "CC6": self.cc6(),
-            "CC7": ck.cc7(led),
+            "CC7": ck.cc7(led, sub),
             "CC8": ck.cc8(self.challenge, led) if self.challenge is not None else None,
             "CC9": ck.cc9(dev.events, sub),
             "CC10": ck.cc10(dev.events, sub),
@@ -209,13 +211,23 @@ class Scenario:
         return [d for d, _, _ in self.devices if d.id == device_id][0].keys
 
     def cc6(self):
-        """Live against re-score. The live buckets are each device's own
-        re-score with the mutations applied, so the minutes that differ are
-        the mutated ones, and they are held."""
+        """Live against re-score, stated, not recomputed: no pkg/score
+        exists yet. The live buckets are each device's own re-score with the
+        mutations applied, so the minutes that differ are the mutated ones,
+        and they are held. basis says what the result rests on."""
         counts = {"minutes_mismatched": len(self.mutations), "held_s": sum(m["held_s"] for m in self.mutations)}
         items = [{"minute": m["minute"], "held_s": m["held_s"]} for m in self.mutations]
-        return ck.outcome("fail" if self.mutations else "pass", counts, items)
+        out = ck.outcome("fail" if self.mutations else "pass", counts, items)
+        out["basis"] = self.cc6_basis or (CC6_MUTATED if self.mutations else CC6_SAME)
+        return out
 
+    cc6_basis = None
+
+
+CC6_SAME = ("Stated, not recomputed: the live buckets are pkg/score over this device's events.jsonl, which the "
+            "reveal holds in full, so the server's re-score is the same computation and every minute reproduces.")
+CC6_MUTATED = ("Stated, not recomputed: the live buckets are pkg/score over this device's events.jsonl, which the "
+               "reveal holds in full, with live.mutations applied, so the mutated minutes alone differ.")
 
 LEDGER_NOTE = ("devices[].batches is the client's metadata reveal: each batch's records with their header fields "
                "and stored body. devices[].witnessed is what the server stored when each batch arrived. The device "
@@ -468,14 +480,57 @@ def s_42_cc7(out):
     sc.slots = {dev.id: alt_slots()}
     sc.fails = ["CC7"]
     alt_clean_state(sc)
-    sc.state("CC7", "fail", seq_gaps=1, count_mismatches=1, root_mismatches=1, head_mismatches=1,
-             body_mismatches=0, held_minutes=1)
+    sc.state("CC7", "fail", missing_batches=0, seq_gaps=1, count_mismatches=1, root_mismatches=1,
+             head_mismatches=1, body_mismatches=0, held_minutes=2)
+    sc.cc6_basis = ("Stated, not recomputed: the server's re-score lacks the plan, which only fills A1's reading "
+                    "bucket, and that bucket is drained in 19:33, which CC7 holds. Nothing drains it past its 20 s "
+                    "base anyway, because B1's lead starts at 19:33:20, so every other minute reproduces.")
     sc.notes.append("The batch from 19:33:00.7 to 19:33:58 doesn't reproduce: one record short, so its root and "
                     "head differ from the server's, and seq skips. Every other batch reproduces against the "
-                    "server's stored prev. Minute 19:33 is held, 60 s.")
-    sc.notes.append("The plan only fills A1's bucket, and nothing drains A1's bucket past its 20 s base, because "
-                    "B1's lead starts at 19:33:20. So the re-score without it equals the live buckets and CC6 "
-                    "passes.")
+                    "server's stored prev. Its records are unverified, so CC7 holds every minute from the last "
+                    "verified record before it, A1's prompt at 19:33:00, to the first after it, A1's stop at "
+                    "19:34:00: 19:33 and 19:34, 120 s.")
+    sc.build(out)
+
+
+def s_42_cc7_batch(out):
+    sc = Scenario("4.2-cc7-dropped-batch", "A batch left out of the reveal",
+                  "The client's metadata reveal stops one batch short. It leaves out the last batch the server "
+                  "stored for the re-score range, which holds A3's stop at 19:46:00 and the presence sample taken "
+                  "with it. Every batch it reveals reproduces, and b and seq rise with no gap, so only the "
+                  "server's own rows show what is missing.",
+                  base=ALT, projects=[DASH], window=ALT_W)
+    dev = alt(sc)
+    dev.finish()
+    keys = alt_features(sc, dev)
+    whole = ck.ledger(dev, dev.seq0 // 3, ck.rescore_range(sc.sub), sc.extras)
+    last = whole["batches"][-1]
+    kinds = [json.loads(r["body"])["e"]["kind"] for r in last["records"]]
+    check(kinds == ["agent.stop", "os.presence"], f"the last batch is A3's stop and its sample, got {kinds}")
+    check(whole["rescore_range"]["last_b"] == last["b"], "the last batch is in the re-score range")
+    sc.omit = (last["b"],)
+    sc.edit(f"The reveal has no batch {last['b']}, the last one the server stored for the re-score range: A3's "
+            "agent.stop at 19:46:00 and its presence sample. events.jsonl keeps both, as the client recorded "
+            "them.")
+    sc.typing = alt_typing(dev)
+    alt_challenge(sc, dev, keys, (A1, B1, A2, B2))
+    sc.slots = {dev.id: alt_slots()}
+    sc.fails = ["CC7"]
+    alt_clean_state(sc)
+    sc.state("CC7", "fail", missing_batches=1, batch_gaps=0, seq_gaps=0, count_mismatches=0, root_mismatches=0,
+             head_mismatches=0, held_minutes=1)
+    sc.cc6_basis = ("Stated, not recomputed: the server's re-score lacks A3's stop and the 19:46:00 sample, which "
+                    "bear only on 19:45: the sample closes its last slot, and the stop ends a turn that 19:45 "
+                    "discounts as X.reroll. CC7 holds 19:45, and every other minute of W depends only on revealed "
+                    "records, so it reproduces.")
+    sc.notes.append("A reveal that drops batches at either end of the range shows no gap in b or seq and nothing "
+                    "that fails to reproduce. Only the server's rows for the re-score range, 19:16 to 20:01, show "
+                    "that a batch is missing (DESIGN 7.5 step 3).")
+    sc.notes.append("The missing batch's records lie between the last verified record, A3's answer at 19:45:58, "
+                    "and the time the server received the batch, 19:46:01, so CC7 holds 19:45 and 19:46. Only "
+                    "19:45 is in W, and it credits nothing: A3 is the third A.")
+    sc.notes.append("The other checks read records in W, and the missing batch has none: its two records are at "
+                    "19:46:00, where W ends.")
     sc.build(out)
 
 
@@ -598,7 +653,7 @@ def s62_commit(dev, led_received, *, seen=None, forge=None):
 def batch_received(sc, dev):
     """received_at of the batch holding an event, from the scenario's own
     ledger."""
-    led = ck.ledger(dev, dev.seq0 // 3, sc.extras, sc.hide)
+    led = ck.ledger(dev, dev.seq0 // 3, ck.rescore_range(sc.sub), sc.extras, sc.hide)
     at = {}
     for bt, w in zip(led["batches"], led["witnessed"]):
         for r in bt["records"]:
@@ -913,7 +968,7 @@ def s_63_cc9_orphan(out):
     sc.build(out)
 
 
-SCENARIOS = [s_42_clean, s_42_cc1, s_42_cc2, s_42_cc5, s_42_cc7, s_42_cc8_false, s_42_cc8_key, s_42_cc8_limit,
+SCENARIOS = [s_42_clean, s_42_cc1, s_42_cc2, s_42_cc5, s_42_cc7, s_42_cc7_batch, s_42_cc8_false, s_42_cc8_key, s_42_cc8_limit,
              s_42_cc9, s_42_cc11, s_62_clean, s_62_cc3, s_62_cc4_late, s_62_cc4_diffstat, s_63_clean, s_63_cc4_pushed,
              s_63_cc6, s_63_cc9, s_63_cc9_orphan, s_63_cc10]
 

@@ -52,27 +52,30 @@
     },
     "CC6": {
       "result": "pass",
-      "counts": {"minutes_mismatched": 0, "held_s": 0}
+      "counts": {"minutes_mismatched": 0, "held_s": 0},
+      "basis": "Stated, not recomputed: the server's re-score lacks the plan, which only fills A1's reading bucket, and that bucket is drained in 19:33, which CC7 holds. Nothing drains it past its 20 s base anyway, because B1's lead starts at 19:33:20, so every other minute reproduces."
     },
     "CC7": {
       "result": "fail",
       "counts": {
         "batches": 27,
         "records": 105,
+        "missing_batches": 0,
         "batch_gaps": 0,
         "seq_gaps": 1,
         "count_mismatches": 1,
         "root_mismatches": 1,
         "head_mismatches": 1,
         "body_mismatches": 0,
-        "held_minutes": 1
+        "held_minutes": 2
       },
       "items": [
         {
           "device_id": "d_61e266631200",
           "b": 3009,
           "failed": ["seq_gap_before_9034", "count", "root", "head"],
-          "held_minutes": ["2026-11-23T08:33:00Z"]
+          "between": ["2026-11-23T08:33:00Z", "2026-11-23T08:34:00Z"],
+          "held_minutes": ["2026-11-23T08:33:00Z", "2026-11-23T08:34:00Z"]
         }
       ]
     },
@@ -107,7 +110,6 @@
   "known_limit": null,
   "errata": ["2026-11-19-check-readings"],
   "notes": [
-    "The batch from 19:33:00.7 to 19:33:58 doesn't reproduce: one record short, so its root and head differ from the server's, and seq skips. Every other batch reproduces against the server's stored prev. Minute 19:33 is held, 60 s.",
-    "The plan only fills A1's bucket, and nothing drains A1's bucket past its 20 s base, because B1's lead starts at 19:33:20. So the re-score without it equals the live buckets and CC6 passes."
+    "The batch from 19:33:00.7 to 19:33:58 doesn't reproduce: one record short, so its root and head differ from the server's, and seq skips. Every other batch reproduces against the server's stored prev. Its records are unverified, so CC7 holds every minute from the last verified record before it, A1's prompt at 19:33:00, to the first after it, A1's stop at 19:34:00: 19:33 and 19:34, 120 s."
   ]
 }

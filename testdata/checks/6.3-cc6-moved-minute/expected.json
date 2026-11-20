@@ -88,13 +88,15 @@
       "counts": {"minutes_mismatched": 1, "held_s": 60},
       "items": [
         {"minute": "2026-11-28T22:18:00Z", "held_s": 60}
-      ]
+      ],
+      "basis": "Stated, not recomputed: the live buckets are pkg/score over this device's events.jsonl, which the reveal holds in full, with live.mutations applied, so the mutated minutes alone differ."
     },
     "CC7": {
       "result": "pass",
       "counts": {
         "batches": 51,
         "records": 255,
+        "missing_batches": 0,
         "batch_gaps": 0,
         "seq_gaps": 0,
         "count_mismatches": 0,

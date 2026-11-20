@@ -61,13 +61,15 @@
     },
     "CC6": {
       "result": "pass",
-      "counts": {"minutes_mismatched": 0, "held_s": 0}
+      "counts": {"minutes_mismatched": 0, "held_s": 0},
+      "basis": "Stated, not recomputed: the live buckets are pkg/score over this device's events.jsonl, which the reveal holds in full, so the server's re-score is the same computation and every minute reproduces."
     },
     "CC7": {
       "result": "pass",
       "counts": {
         "batches": 27,
         "records": 103,
+        "missing_batches": 0,
         "batch_gaps": 0,
         "seq_gaps": 0,
         "count_mismatches": 0,

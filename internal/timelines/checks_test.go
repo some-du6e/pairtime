@@ -93,13 +93,19 @@ type checkResult struct {
 	Basis string `json:"basis"`
 }
 
-// checkLedger is a scenario's ledger.json: per device, the batches the
-// client reveals and the rows the server stored.
+// checkLedger is a scenario's ledger.json: per device, the re-score range,
+// the batches the client reveals and the rows the server stored.
 type checkLedger struct {
 	Note    string `json:"note"`
 	Devices []struct {
-		DeviceID string `json:"device_id"`
-		Batches  []struct {
+		DeviceID     string `json:"device_id"`
+		RescoreRange struct {
+			Start  int64  `json:"start"`
+			End    int64  `json:"end"`
+			FirstB uint64 `json:"first_b"`
+			LastB  uint64 `json:"last_b"`
+		} `json:"rescore_range"`
+		Batches []struct {
 			B       uint64 `json:"b"`
 			Records []struct {
 				Seq        uint64 `json:"seq"`
@@ -381,16 +387,25 @@ func TestCheckScenarioResults(t *testing.T) {
 
 // TestCheckScenarioLedgers recomputes each revealed batch's root and head
 // over the records it reveals and the server's stored prev. A batch that
-// doesn't reproduce must be one CC7's expected items name, and every
+// doesn't reproduce, or that the server stored for the re-score range and
+// the reveal leaves out, must be one CC7's expected items name, and every
 // revealed body must hold the event as Shareable writes it.
 func TestCheckScenarioLedgers(t *testing.T) {
 	for _, s := range loadScenarios(t) {
-		t.Run(s.name+" the server stored each batch after the one before it, as ledger-v1.md 6 requires", func(t *testing.T) {
+		t.Run(s.name+" the witnessed rows chain and arrive in order, and the re-score range is DESIGN 6.5's", func(t *testing.T) {
 			var led checkLedger
 			if err := readJSON(filepath.Join(s.dir, "ledger.json"), &led); err != nil {
 				t.Fatal(err)
 			}
+			w := s.exp.Submission.Window
 			for _, dev := range led.Devices {
+				rng := dev.RescoreRange
+				if rng.Start != w.Start.UnixMilli()-900_000 || rng.End != w.End.UnixMilli()+900_000 {
+					t.Errorf("%s: re-score range %d to %d; DESIGN 6.5 with no checkpoint gives W's start - 900 s to its end + 900 s", dev.DeviceID, rng.Start, rng.End)
+				}
+				if n := len(dev.Witnessed); n == 0 || rng.FirstB != dev.Witnessed[0].B || rng.LastB != dev.Witnessed[n-1].B {
+					t.Errorf("%s: re-score range has batches %d to %d; in every scenario it covers every witnessed row", dev.DeviceID, rng.FirstB, rng.LastB)
+				}
 				for i := 1; i < len(dev.Witnessed); i++ {
 					a, b := dev.Witnessed[i-1], dev.Witnessed[i]
 					if b.B != a.B+1 || b.Prev != a.Head {
@@ -402,7 +417,7 @@ func TestCheckScenarioLedgers(t *testing.T) {
 				}
 			}
 		})
-		t.Run(s.name+" the revealed batches reproduce the witnessed ones, except where CC7 fails", func(t *testing.T) {
+		t.Run(s.name+" the reveal covers the re-score range and reproduces the witnessed batches, except where CC7 fails", func(t *testing.T) {
 			var led checkLedger
 			if err := readJSON(filepath.Join(s.dir, "ledger.json"), &led); err != nil {
 				t.Fatal(err)
@@ -428,6 +443,15 @@ func TestCheckScenarioLedgers(t *testing.T) {
 				rows := map[uint64]int{}
 				for i, w := range dev.Witnessed {
 					rows[w.B] = i
+				}
+				revealed := map[uint64]bool{}
+				for _, bt := range dev.Batches {
+					revealed[bt.B] = true
+				}
+				for _, w := range dev.Witnessed {
+					if w.B >= dev.RescoreRange.FirstB && w.B <= dev.RescoreRange.LastB && !revealed[w.B] {
+						got[w.B] = true
+					}
 				}
 				for _, bt := range dev.Batches {
 					i, ok := rows[bt.B]
