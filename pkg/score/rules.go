@@ -2,7 +2,11 @@
 
 package score
 
-import "github.com/some-du6e/pairtime/pkg/params"
+import (
+	"math"
+
+	"github.com/some-du6e/pairtime/pkg/params"
+)
 
 // rules holds the parameters the scorer reads, converted to milliseconds
 // where they are durations. Step reads them from the table once, so no rule
@@ -36,9 +40,20 @@ type rules struct {
 	cmdWatchMax int64
 	commitLead  int64
 
-	// SM 8.3, reading.
-	readWPM     int64
-	readHorizon int64
+	// SM 8.3, the reading bucket and lookups. The bucket counts in units
+	// of 1 / (READ_WPM * DIFF_LPM) of a second, in which every fill is a
+	// whole number: a word of prose is 60 * DIFF_LPM units and a line of
+	// code or diff 60 * READ_WPM (SM 2.4).
+	turnBase      int64 // ms
+	readWPM       int64
+	diffLPM       int64
+	toolLinesMax  int64 // lines
+	bucketMax     int64 // ms
+	bucketTTL     int64 // ms
+	readHorizon   int64
+	lookupBracket int64
+	lookupMax     int64
+	unitsPerS     int64
 
 	// DESIGN 6.3.
 	pendingWindow int64
@@ -51,12 +66,29 @@ type rules struct {
 	trackMinGap   int64
 	trackLogMatch int64
 	trackDedupe   int64
+	// composeNeedsKeys realizes the typing part of every lead only in
+	// slots with key presses, on every machine (DESIGN 6.3, 6.7).
+	composeNeedsKeys bool
 
+	// reach is the furthest back from its own t that a record may change
+	// what the scorer derived. It is the return rule's look-ahead, the
+	// longest of SM's: a silent run of up to RETURN_GAP_MAX_S whose deciding
+	// anchor comes up to READ_HORIZON_S after it (SM 2.1). A lead (at most
+	// THINK_LEAD_S + COMPOSE_MAX_S) and the reading horizon fit inside it.
+	// Where a record would reach further, its effect is cut at its t minus
+	// reach, in every Step alike: a typed command's lead and run, when its
+	// record comes at the end of a run longer than that; a permission's
+	// wait, when its record comes long after the answer; and a turn's run,
+	// across a longer silence of its agent's records (turnBuild.runUntil,
+	// docs/errata/2026-11-20-hooked-turn-runs.md).
+	reach int64
 	// settle is how long after a time the scorer may still change what it
 	// derived for that time: the pending window for late records (DESIGN
-	// 6.2 D1), plus the furthest any SC1 rule looks ahead, which is the
-	// return rule's: a silent run of up to RETURN_GAP_MAX_S whose deciding
-	// anchor may come READ_HORIZON_S after it (SM 2.1).
+	// 6.2 D1) plus reach. So whatever a record changes is still pending when
+	// the record arrives, up to PENDING_WINDOW_S late, and the Finals of a
+	// Step per minute are what one Step gives. A browser run's lookup waits
+	// for its end, which can be later still, and Step holds FinalBefore for
+	// it on its own (docs/errata/2026-11-20-lookup-lookahead.md).
 	settle int64
 }
 
@@ -88,8 +120,15 @@ func newRules(t *params.Table) rules {
 		cmdWatchMax: ms(params.CMD_WATCH_MAX_S),
 		commitLead:  ms(params.COMMIT_LEAD_S),
 
-		readWPM:     t.Int(params.READ_WPM),
-		readHorizon: ms(params.READ_HORIZON_S),
+		turnBase:      ms(params.R_TURN_BASE_S),
+		readWPM:       t.Int(params.READ_WPM),
+		diffLPM:       t.Int(params.DIFF_LPM),
+		toolLinesMax:  t.Int(params.TOOL_LINES_MAX),
+		bucketMax:     ms(params.BUCKET_MAX_S),
+		bucketTTL:     ms(params.BUCKET_TTL_S),
+		readHorizon:   ms(params.READ_HORIZON_S),
+		lookupBracket: ms(params.LOOKUP_BRACKET_S),
+		lookupMax:     ms(params.LOOKUP_MAX_S),
 
 		pendingWindow: ms(params.PENDING_WINDOW_S),
 		contextIdle:   ms(params.CONTEXT_IDLE_S),
@@ -98,22 +137,79 @@ func newRules(t *params.Table) rules {
 		trackMinGap:   ms(params.TRACK_MIN_GAP_S),
 		trackLogMatch: ms(params.TRACK_LOG_MATCH_S),
 		trackDedupe:   ms(params.TRACK_DEDUPE_S),
+
+		composeNeedsKeys: t.Bool(params.COMPOSE_NEEDS_KEYS),
 	}
-	r.settle = r.pendingWindow + r.returnGapMax + r.readHorizon
+	r.unitsPerS = r.readWPM * r.diffLPM
+	r.reach = r.returnGapMax + r.readHorizon
+	r.settle = r.pendingWindow + r.reach
 	return r
 }
 
+// countMax bounds every count the scorer reads from a record: words, lines
+// and characters. event.Validate only asks that a count not be negative, so
+// a valid record may carry any int, and a hostile one carries 2^62. At
+// countMax a count is far past every cap it meets (a turn's 600 s of
+// reading, a lead's 300 s of typing, a silent run's 600 s), so clamping
+// changes no result. It keeps every product the rules form, and every sum
+// of clamped counts, inside int64, and it fits an int on 32-bit targets.
+const countMax = math.MaxInt32
+
+// count returns a count from a record, clamped to [0, countMax]. Every
+// count the scorer reads goes through it before any arithmetic.
+func count(n int) int64 { return min(max(int64(n), 0), countMax) }
+
+// addCount returns the sum of two clamped counts, saturated at countMax.
+func addCount(a, b int64) int64 { return min(a+b, countMax) }
+
+// unitsMax bounds a sum of reading-bucket units, such as all the output of
+// one turn, so that converting it to milliseconds can't overflow.
+const unitsMax = math.MaxInt64 / 1000
+
+// addUnits returns the sum of two amounts of units in [0, unitsMax],
+// saturated at unitsMax.
+func addUnits(a, b int64) int64 { return min(a+b, unitsMax) }
+
+// units converts milliseconds to reading-bucket units.
+func (r rules) units(ms int64) int64 { return ms * r.unitsPerS / 1000 }
+
+// proseUnits is what words of prose fill: 60 * words / READ_WPM seconds.
+// words is a clamped count.
+func (r rules) proseUnits(words int64) int64 { return 60 * min(words, countMax) * r.diffLPM }
+
+// lineUnits is what lines of code, diff or tool output fill: 60 * lines /
+// DIFF_LPM seconds. lines is a clamped count, or the sum of two.
+func (r rules) lineUnits(lines int64) int64 { return 60 * min(lines, 2*countMax) * r.readWPM }
+
+// unitsMS converts reading-bucket units to milliseconds, rounded to the
+// nearest. u is at most unitsMax.
+func (r rules) unitsMS(u int64) int64 { return roundDiv(min(u, unitsMax)*1000, r.unitsPerS) }
+
 // roundDiv returns a / b rounded to the nearest integer, halves away from
-// zero, for b > 0. SM states its leads in whole seconds and rounds a
-// fractional typing time to the nearest one: 61 characters at 1.5 a second
-// are 40.67 s, which SM 6.4 counts as 41, and 35 characters are 23.33 s,
-// which SM 6.5 counts as 23 (docs/errata/2026-11-19-sm-6.4-prompt-lengths.md
-// asks Karim to confirm the rounding).
+// zero, for any a and any b > 0. SM states its leads in whole seconds and
+// rounds a fractional typing time to the nearest one: 61 characters at 1.5 a
+// second are 40.67 s, which SM 6.4 counts as 41, and 35 characters are
+// 23.33 s, which SM 6.5 counts as 23
+// (docs/errata/2026-11-19-sm-6.4-prompt-lengths.md asks Karim to confirm the
+// rounding).
+//
+// It works from Go's truncated quotient and remainder, so it negates
+// nothing it can't: |r| < b, and the quotient moves by one only when b > 1,
+// where it can't be math.MinInt64 or math.MaxInt64.
 func roundDiv(a, b int64) int64 {
-	if a < 0 {
-		return -roundDiv(-a, b)
+	q, r := a/b, a%b
+	if r < 0 {
+		r = -r
 	}
-	return (2*a + b) / (2 * b)
+	// r >= b - r is 2r >= b without the overflow.
+	if r != 0 && r >= b-r {
+		if a < 0 {
+			q--
+		} else {
+			q++
+		}
+	}
+	return q
 }
 
 // typingMS is the typing part of a lead for n typed characters (SM 2.3):
@@ -122,7 +218,7 @@ func (r rules) typingMS(n int64) int64 {
 	if n <= 0 {
 		return 0
 	}
-	ms := roundDiv(n*r.compose.Den(), r.compose.Num()) * 1000
+	ms := roundDiv(min(n, countMax)*r.compose.Den(), r.compose.Num()) * 1000
 	return min(ms, r.composeMax)
 }
 
@@ -132,5 +228,5 @@ func (r rules) readingMS(words int64) int64 {
 	if words <= 0 {
 		return 0
 	}
-	return roundDiv(60*words, r.readWPM) * 1000
+	return roundDiv(60*min(words, countMax), r.readWPM) * 1000
 }

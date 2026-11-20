@@ -146,7 +146,7 @@ func TestEventRecordBodies(t *testing.T) {
 			if r, _ := RTypeOf(kind); h.Seq() != ev.Seq || h.RType() != r || h.Project() != project || h.Session() != session {
 				t.Errorf("header %x isn't s %d, rtype 0x%02x and the event's digests", h, ev.Seq, uint8(r))
 			}
-			if err := CheckBody(rec.Header, rec.Body); err != nil {
+			if err := CheckBody(ev.DeviceID, rec.Header, rec.Body); err != nil {
 				t.Errorf("the body disagrees with its own header: %v", err)
 			}
 			if err := k.CheckNonce(ev.Seq, rec.Body); err != nil {
@@ -174,27 +174,27 @@ func TestOtherRecordBodies(t *testing.T) {
 		wantBody string
 	}{
 		{
-			"a checkpoint stores its state compacted, under the project's digest and no session",
+			"a checkpoint stores its project, minute and state compacted, under the project's digest and no session",
 			func() (Record, error) {
-				return CheckpointRecord(k, 3, "p_example", json.RawMessage("{ \"project_key\": \"p_example\",\n  \"buckets\": [1, 2] }"))
+				return CheckpointRecord(k, 3, "p_example", 1795089600000, json.RawMessage("{ \"buckets\": [1, 2],\n  \"since\": 0 }"))
 			},
-			`{"project_key":"p_example","buckets":[1,2]}`,
+			`{"project_key":"p_example","t":1795089600000,"state":{"buckets":[1,2],"since":0}}`,
 		},
 		{
-			"an upload-failure note stores the note, under no project and no session",
+			"an upload-failure note stores its time and reason, under no project and no session",
 			func() (Record, error) {
-				return UploadFailureRecord(k, 4, json.RawMessage(`{"reason":"tls"}`))
+				return UploadFailureRecord(k, 4, 1795089612345, "tls")
 			},
-			`{"reason":"tls"}`,
+			`{"t":1795089612345,"reason":"tls"}`,
 		},
 		{
 			"a record's text is escaped the way encoding/json escapes it",
 			func() (Record, error) {
-				return UploadFailureRecord(k, 5, json.RawMessage(`{"reason":"<&>"}`))
+				return CheckpointRecord(k, 5, "p_example", 1795089600000, json.RawMessage(`{"label":"<&>"}`))
 			},
 			// encoding/json writes <, & and > as six-character unicode
 			// escapes; x5c is the backslash that starts each one.
-			"{\"reason\":\"\x5cu003c\x5cu0026\x5cu003e\"}",
+			"{\"project_key\":\"p_example\",\"t\":1795089600000,\"state\":{\"label\":\"\x5cu003c\x5cu0026\x5cu003e\"}}",
 		},
 	}
 	for _, c := range cases {
@@ -217,7 +217,7 @@ func TestOtherRecordBodies(t *testing.T) {
 			if err := rec.Header.Check(); err != nil {
 				t.Error(err)
 			}
-			if err := CheckBody(rec.Header, rec.Body); err != nil {
+			if err := CheckBody("d_example", rec.Header, rec.Body); err != nil {
 				t.Error(err)
 			}
 		})
@@ -250,23 +250,31 @@ func TestWritersRefuse(t *testing.T) {
 		{"an event whose project_key is a path is refused", event1(event.KindAgentTool, func(e *event.Event) { e.ProjectKey = "src/main.go" })},
 		{"an event with no payload is refused", event1(event.KindAgentOutput, func(e *event.Event) { e.Data = nil })},
 		{"a checkpoint with no project is refused", func() error {
-			_, err := CheckpointRecord(k, 1, "", json.RawMessage(`{}`))
+			_, err := CheckpointRecord(k, 1, "", 1795089600000, json.RawMessage(`{}`))
 			return err
 		}},
 		{"a checkpoint whose state isn't JSON is refused", func() error {
-			_, err := CheckpointRecord(k, 1, "p_x", json.RawMessage(`{"a":`))
+			_, err := CheckpointRecord(k, 1, "p_x", 1795089600000, json.RawMessage(`{"a":`))
 			return err
 		}},
 		{"a checkpoint with a null state is refused", func() error {
-			_, err := CheckpointRecord(k, 1, "p_x", json.RawMessage(`null`))
+			_, err := CheckpointRecord(k, 1, "p_x", 1795089600000, json.RawMessage(`null`))
 			return err
 		}},
-		{"an upload-failure note with no note is refused", func() error {
-			_, err := UploadFailureRecord(k, 1, nil)
+		{"a checkpoint at a minute not divisible by 15 is refused (spec 4.7)", func() error {
+			_, err := CheckpointRecord(k, 1, "p_x", 1795089660000, json.RawMessage(`{}`))
 			return err
 		}},
-		{"a header of reserved rtype 0x13 is refused", func() error {
+		{"an upload-failure note with a reason DESIGN 3.6 doesn't list is refused", func() error {
+			_, err := UploadFailureRecord(k, 1, 1795089612345, "the wifi was down")
+			return err
+		}},
+		{"a header of rtype 0x13, kept for a kind added later, is refused", func() error {
 			_, err := NewHeader(1, 0x13, "", event.NoSession)
+			return err
+		}},
+		{"a header of rtype 0x42, which version 1 never assigns, is refused", func() error {
+			_, err := NewHeader(1, 0x42, "", event.NoSession)
 			return err
 		}},
 		{"a header of rtype 0x00 is refused", func() error {
@@ -314,6 +322,12 @@ func TestCheckBody(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	orig, err := ParseBody(rec.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// body returns rec's body with its event edited, keeping its f and c,
+	// so each case below breaks one rule only.
 	body := func(edit func(*event.Event)) []byte {
 		e := ev
 		payload := *ev.Data.(*event.PromptSubmit)
@@ -323,7 +337,7 @@ func TestCheckBody(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		out, err := Body{N: k.Nonce(7), E: raw}.Encode()
+		out, err := Body{N: k.Nonce(7), E: raw, F: orig.F, C: orig.C}.Encode()
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -340,6 +354,15 @@ func TestCheckBody(t *testing.T) {
 		return h
 	}
 	nonceHex := k.Nonce(7).String()
+	n := `{"n":"` + nonceHex + `"`
+	shareable, err := ev.Shareable().MarshalJSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := string(shareable)
+	f, c := string(orig.F), `{"n":`+fmt.Sprint(orig.C.N)+`,"r":"`+orig.C.R.String()+`"}`
+	checkpoint := header(7, RTypeCheckpoint, "p_x", event.NoSession)
+	note := header(7, RTypeUploadFailure, "", event.NoSession)
 	cases := []struct {
 		name   string
 		header Header
@@ -349,21 +372,39 @@ func TestCheckBody(t *testing.T) {
 		{"a body that holds its header's event agrees with it", rec.Header, rec.Body, nil},
 		{"a body whose event is another kind than its header's rtype disagrees", header(7, 0x04, "p_9f2c", "s_4be1f0"), rec.Body, ErrBodyHeader},
 		{"a body whose seq isn't its header's s disagrees", rec.Header, body(func(e *event.Event) { e.Seq = 8 }), ErrBodyHeader},
+		{"a body whose device_id isn't the chain's device disagrees (spec 4.5)", rec.Header, body(func(e *event.Event) { e.DeviceID = "d_other" }), ErrBodyHeader},
 		{"a body whose project_key doesn't have its header's project digest disagrees", rec.Header, body(func(e *event.Event) { e.ProjectKey = "p_other" }), ErrBodyHeader},
 		{"a body with no project_key under a header with a project disagrees", rec.Header, body(func(e *event.Event) { e.ProjectKey = "" }), ErrBodyHeader},
 		{"a body whose session_key doesn't have its header's session digest disagrees", rec.Header, body(func(e *event.Event) { e.SessionKey = "s_other" }), ErrBodyHeader},
-		{"a body whose record isn't an event, under an event rtype, disagrees", rec.Header, []byte(`{"n":"` + nonceHex + `","e":{"stand_in":"prompt.submit","seq":7}}`), ErrBodyHeader},
-		{"a body that doesn't start with the n member isn't a body", rec.Header, []byte(`{"e":{},"n":"` + nonceHex + `"}`), ErrBody},
-		{"a body with a member part 1 doesn't define isn't a body", rec.Header, []byte(`{"n":"` + nonceHex + `","e":{},"x":1}`), ErrBody},
+		{"a body whose record isn't an event, under an event rtype, disagrees", rec.Header, []byte(n + `,"e":{"stand_in":"prompt.submit","seq":7}}`), ErrBodyHeader},
+		{"a body that doesn't start with the n member isn't a body", rec.Header, []byte(`{"e":` + e + `,"n":"` + nonceHex + `"}`), ErrBody},
+		{"a body with a member part 1 doesn't define isn't a body", rec.Header, []byte(n + `,"e":` + e + `,"x":1}`), ErrBody},
 		{"a body with data after the object isn't a body", rec.Header, append(bytes.Clone(rec.Body), []byte(`{}`)...), ErrBody},
-		{"a body with a null record isn't a body", rec.Header, []byte(`{"n":"` + nonceHex + `","e":null}`), ErrBody},
+		{"a body with a null record isn't a body", rec.Header, []byte(n + `,"e":null}`), ErrBody},
 		{"a body whose nonce is uppercase hex isn't a body", rec.Header, []byte(`{"n":"` + strings.ToUpper(nonceHex) + `","e":{}}`), ErrBody},
-		{"a body under an rtype not in the table is reported as unknown", header(7, 0x13, "", event.NoSession), []byte(`{"n":"` + nonceHex + `","e":{}}`), ErrUnknownRType},
-		{"a checkpoint body only has to parse, until WP-SC5 says how a state names its project", header(7, RTypeCheckpoint, "p_x", event.NoSession), []byte(`{"n":"` + nonceHex + `","e":{"any":"state"}}`), nil},
+		{"a body whose nonce runs past 64 hex digits isn't a body", rec.Header, []byte(`{"n":"` + nonceHex + `0","e":{}}`), ErrBody},
+		{"a body with the event under E instead of e isn't a body; names match exactly", rec.Header, []byte(n + `,"E":` + e + `,"f":` + f + `,"c":` + c + `}`), ErrBody},
+		{"a body with e twice isn't a body, whichever one a reader keeps", rec.Header, []byte(n + `,"e":{},"e":` + e + `,"f":` + f + `,"c":` + c + `}`), ErrBody},
+		{"a body with c and C isn't a body", rec.Header, []byte(n + `,"e":` + e + `,"f":` + f + `,"c":` + c + `,"C":` + c + `}`), ErrBody},
+		{"a body whose event holds a member name with a capital isn't a body", rec.Header, []byte(n + `,"e":` + strings.Replace(e, `"seq"`, `"SEQ"`, 1) + `,"f":` + f + `,"c":` + c + `}`), ErrBody},
+		{"a body whose event repeats a member isn't a body", rec.Header, []byte(n + `,"e":` + strings.Replace(e, `"seq":7`, `"seq":7,"seq":8`, 1) + `,"f":` + f + `,"c":` + c + `}`), ErrBody},
+		{"a body with f after c isn't a body; the members come in the table's order", rec.Header, []byte(n + `,"e":` + e + `,"c":` + c + `,"f":` + f + `}`), ErrBody},
+		{"a body that isn't valid UTF-8 isn't a body", rec.Header, []byte(n + `,"e":` + strings.Replace(e, `"p_9f2c"`, "\"p_9f2c\xff\"", 1) + `,"f":` + f + `,"c":` + c + `}`), ErrBody},
+		{"a body under rtype 0x13, a kind added later, is reported as unknown", header(7, 0x13, "", event.NoSession), []byte(n + `,"e":{}}`), ErrUnknownRType},
+		{"a body under rtype 0x42, which version 1 never assigns, is a header error", header(7, 0x42, "", event.NoSession), []byte(n + `,"e":{}}`), ErrHeader},
+		{"a checkpoint body that names its header's project agrees (spec 4.7)", checkpoint, []byte(n + `,"e":{"project_key":"p_x","t":1795089600000,"state":{"any":"state"}}}`), nil},
+		{"a checkpoint body that names another project disagrees", checkpoint, []byte(n + `,"e":{"project_key":"p_y","t":1795089600000,"state":{}}}`), ErrBodyHeader},
+		{"a checkpoint body with only a state isn't a body", checkpoint, []byte(n + `,"e":{"any":"state"}}`), ErrBody},
+		{"a checkpoint body with a member besides project_key, t and state isn't a body", checkpoint, []byte(n + `,"e":{"project_key":"p_x","t":1795089600000,"state":{},"x":1}}`), ErrBody},
+		{"a checkpoint body whose members are out of order isn't a body", checkpoint, []byte(n + `,"e":{"t":1795089600000,"project_key":"p_x","state":{}}}`), ErrBody},
+		{"a checkpoint at a minute not divisible by 15 isn't a body", checkpoint, []byte(n + `,"e":{"project_key":"p_x","t":1795089660000,"state":{}}}`), ErrBody},
+		{"an upload-failure note with its time and a listed reason agrees", note, []byte(n + `,"e":{"t":1795089612345,"reason":"http_429"}}`), nil},
+		{"an upload-failure note with a reason DESIGN 3.6 doesn't list isn't a body", note, []byte(n + `,"e":{"t":1795089612345,"reason":"wifi"}}`), ErrBody},
+		{"an upload-failure note with free text besides its reason isn't a body", note, []byte(n + `,"e":{"t":1795089612345,"reason":"dns","detail":"x"}}`), ErrBody},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			err := CheckBody(c.header, c.body)
+			err := CheckBody(ev.DeviceID, c.header, c.body)
 			switch {
 			case c.want == nil && err != nil:
 				t.Errorf("CheckBody: %v", err)
@@ -376,7 +417,7 @@ func TestCheckBody(t *testing.T) {
 
 func TestCheckNonce(t *testing.T) {
 	k := testKeys(t)
-	rec, err := UploadFailureRecord(k, 9, json.RawMessage(`{"reason":"dns"}`))
+	rec, err := UploadFailureRecord(k, 9, testT, "dns")
 	if err != nil {
 		t.Fatal(err)
 	}

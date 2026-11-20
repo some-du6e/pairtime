@@ -300,7 +300,7 @@ func TestVerifyErrorTypes(t *testing.T) {
 		{
 			name: "a record rewritten after sealing, still well formed, is a root mismatch and nothing else",
 			mutate: func(m *smallChain) Chain {
-				rec, err := UploadFailureRecord(k, 5, []byte(`{"reason":"connect"}`))
+				rec, err := UploadFailureRecord(k, 5, testT, "connect")
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -315,7 +315,7 @@ func TestVerifyErrorTypes(t *testing.T) {
 		{
 			name: "an earlier batch rewritten and resealed is a head mismatch in the batch after it",
 			mutate: func(m *smallChain) Chain {
-				rec, err := CheckpointRecord(k, 3, "p_small", []byte(`{"project_key":"p_small","rewritten":true}`))
+				rec, err := CheckpointRecord(k, 3, "p_small", 1795089600000, []byte(`{"rewritten":true}`))
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -409,7 +409,7 @@ func TestVerifyErrorTypes(t *testing.T) {
 		{
 			name: "a body with another record's nonce is a record error wrapping ErrNonce",
 			mutate: func(m *smallChain) Chain {
-				rec, err := UploadFailureRecord(k, 99, []byte(`{"reason":"dns"}`))
+				rec, err := UploadFailureRecord(k, 99, testT, "dns")
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -432,7 +432,7 @@ func TestVerifyErrorTypes(t *testing.T) {
 			alone: true,
 		},
 		{
-			name: "a record of an rtype not in the table is reported as unknown, and its batch's root and head still verify",
+			name: "a record of rtype 0x13, a kind added later, is reported as unknown, and its batch's root and head still verify",
 			mutate: func(m *smallChain) Chain {
 				h := &m.records[1][0].Header
 				h[offRType] = 0x13
@@ -452,6 +452,32 @@ func TestVerifyErrorTypes(t *testing.T) {
 			},
 			want: func(err error) bool {
 				return wants(err, func(e *RecordError) bool { return e.B == 2 && errors.Is(e, ErrUnknownRType) })
+			},
+			alone: true,
+		},
+		{
+			name: "a record of rtype 0x42, which version 1 never assigns, is a header error, and its batch's root and head still verify",
+			mutate: func(m *smallChain) Chain {
+				h := &m.records[1][0].Header
+				h[offRType] = 0x42
+				row, err := sealUnchecked(m.rows[0].Head, 2, entriesOf(m.records[1]))
+				if err != nil {
+					t.Fatal(err)
+				}
+				m.rows[1] = row
+				row3, err := Seal(row.Head, 3, entriesOf(m.records[2]))
+				if err != nil {
+					t.Fatal(err)
+				}
+				m.rows[2] = row3
+				ch := m.chain()
+				ch.Batches[1].Bodies = nil
+				return ch
+			},
+			want: func(err error) bool {
+				return wants(err, func(e *RecordError) bool {
+					return e.B == 2 && errors.Is(e, ErrHeader) && !errors.Is(e, ErrUnknownRType)
+				})
 			},
 			alone: true,
 		},
@@ -492,7 +518,7 @@ func sealUnchecked(prev Hash, b uint64, entries []Entry) (BatchRow, error) {
 func TestSealRefuses(t *testing.T) {
 	k := testKeys(t)
 	rec := func(s uint64) Entry {
-		r, err := UploadFailureRecord(k, s, []byte(`{"reason":"dns"}`))
+		r, err := UploadFailureRecord(k, s, testT, "dns")
 		if err != nil {
 			t.Fatal(err)
 		}

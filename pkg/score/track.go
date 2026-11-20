@@ -68,11 +68,11 @@ func trackCmp(a, b TrackCall) int {
 //
 // From any other session the call is the fallback anchor, opened only
 // when the gate's four conditions hold. It is classed like a prompt from
-// its length and, on the device, its text, but has no origin: the four
-// conditions take the place of SM 2.2's origin rules, which are for
-// prompt.submit. Its typing part needs key presses, and it is level C with
-// via_track, or A with key presses in the host window in the KEYS_PRE_S
-// before it.
+// its length, but not its text, which is local (DESIGN 5.4 says "text
+// length and content"), and has no origin: the four conditions take the
+// place of SM 2.2's origin rules, which are for prompt.submit. Its typing
+// part needs key presses, and it is level C with via_track, or A with key
+// presses in the host window in the KEYS_PRE_S before it.
 func (d *deriver) trackCalls() {
 	lastAnchor := map[string]int64{}
 	for i, e := range d.recs {
@@ -117,9 +117,11 @@ func (d *deriver) trackGate(i int, e event.Event, p *event.CLITrack, s *session,
 	if len(failed) > 0 {
 		return TrackRejected, failed
 	}
-	typed := int64(p.TextLen)
+	// The label is local, so the server's exact re-score (DESIGN 6.5)
+	// never sees it: the call is classed by its length alone.
+	typed := count(p.TextLen)
 	class := event.ClassSubstantive
-	if typed < d.r.substantive || (p.Label != "" && LowEffort(p.Label)) {
+	if typed < d.r.substantive {
 		class = event.ClassLowEffort
 	}
 	think, typing := d.leadParts(class, e.Via, typed)
@@ -127,11 +129,11 @@ func (d *deriver) trackGate(i int, e event.Event, p *event.CLITrack, s *session,
 	if project == "" {
 		project = s.project
 	}
-	a := Anchor{ID: e.EventID, T: e.T, ProjectKey: project, SessionKey: s.key, PromptClass: class, LeadMS: think + typing, TypingMS: typing, TypingNeedsKeys: true, TrailFrom: e.T,
-		Via: e.Via}
+	a := Anchor{ID: e.EventID, T: e.T, ProjectKey: project, SessionKey: s.key, PromptClass: class,
+		LeadMS: think + typing, TypingMS: typing, TypingNeedsKeys: true, TrailFrom: e.T, Via: e.Via}
 	a.Kind, a.Reason = promptKind(class)
 	d.level(&a, e.T-d.r.keysPre, e.T, host)
-	if !d.add(a) {
+	if !d.add(a, e.T) {
 		return TrackRejected, nil
 	}
 	lastAnchor[s.key] = e.T

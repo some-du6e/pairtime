@@ -17,7 +17,6 @@ type focusRec struct {
 	class   event.AppClass
 	project string
 	hosted  []string
-	app     string // app_hash; local, so absent from shareable records
 }
 
 // noFocus is what holds the foreground before the first os.focus record.
@@ -31,9 +30,12 @@ func (f *focusRec) hosts(key string) bool {
 // sameWindow reports whether g is the same foreground window as f, so
 // that moving from f to g is no focus change. A new record for the same
 // window, which the agent writes when a harness session starts or ends
-// under it, isn't one.
+// under it, isn't one. It compares only what a ledger record shares, the
+// app class and the project: app_hash is local, so the server's exact
+// re-score (DESIGN 6.5) never sees it, and two apps of one class on one
+// project count as one window on both sides.
 func (f *focusRec) sameWindow(g *focusRec) bool {
-	return f.class == g.class && f.project == g.project && f.app == g.app
+	return f.class == g.class && f.project == g.project
 }
 
 // focusLine is the foreground over time, from os.focus records.
@@ -46,7 +48,7 @@ func buildFocus(recs []event.Event) *focusLine {
 	for i, e := range recs {
 		if d, ok := e.Data.(*event.OSFocus); ok {
 			fl.recs = append(fl.recs, &focusRec{pos: i, t: e.T, class: d.AppClass,
-				project: d.FocusProject, hosted: d.HostedSessions, app: d.AppHash})
+				project: d.FocusProject, hosted: d.HostedSessions})
 		}
 	}
 	return fl
@@ -86,24 +88,50 @@ func (fl *focusLine) changed(from, to int64) bool {
 	return false
 }
 
-// longest returns what held focus longest in [a, b), the earliest on a
-// tie (SM 2.5).
+// longest returns what held focus longest in [a, b) (SM 2.5): the window
+// whose pieces of focus in it add up to the most time, the one to have
+// focus first on a tie. A window's focus comes in pieces when another
+// window took it in between, or when the agent wrote it again because a
+// session started or ended under it. Of the winning window's pieces it
+// returns the longest, the earliest on a tie, whose hosted sessions are
+// the slot's.
 func (fl *focusLine) longest(a, b int64) *focusRec {
-	best, bestLen := fl.at(a), int64(-1)
-	cur, from := best, a
+	type window struct {
+		first, best *focusRec
+		total, most int64
+	}
+	var wins []*window
+	add := func(f *focusRec, n int64) {
+		for _, w := range wins {
+			if w.first.sameWindow(f) {
+				w.total += n
+				if n > w.most {
+					w.best, w.most = f, n
+				}
+				return
+			}
+		}
+		wins = append(wins, &window{first: f, best: f, total: n, most: n})
+	}
+	cur, from := fl.at(a), a
 	i := sort.Search(len(fl.recs), func(i int) bool { return fl.recs[i].t > a })
 	for {
 		to := b
 		if i < len(fl.recs) && fl.recs[i].t < b {
 			to = fl.recs[i].t
 		}
-		if n := to - from; n > bestLen {
-			best, bestLen = cur, n
-		}
+		add(cur, to-from)
 		if to == b {
-			return best
+			break
 		}
 		cur, from = fl.recs[i], to
 		i++
 	}
+	win := wins[0]
+	for _, w := range wins[1:] {
+		if w.total > win.total {
+			win = w
+		}
+	}
+	return win.best
 }

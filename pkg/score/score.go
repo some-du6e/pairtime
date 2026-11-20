@@ -37,9 +37,38 @@ type State struct {
 	recs []event.Event
 	// high is the largest t of any record, 0 before the first.
 	high int64
+	// own is the largest t of a record the agent stamps itself: an
+	// os.presence, os.focus or os.power, 0 before the first.
+	own int64
 	// done is the FinalBefore of the last Step: everything derived for a
 	// time before it has been emitted as final.
 	done int64
+}
+
+// ownRecord reports whether the agent stamps e's t itself, from the
+// device's clock (DESIGN 3.3), rather than taking it from a hook, a
+// transcript, a heartbeat or another program.
+func ownRecord(e event.Event) bool {
+	switch e.Data.(type) {
+	case *event.OSPresence, *event.OSFocus, *event.OSPower:
+		return true
+	}
+	return false
+}
+
+// now is the time the scorer takes as the present: the largest t of any
+// record, but no more than PENDING_WINDOW_S past the latest record the
+// agent stamps itself. Those arrive every 15 to 60 s while a project
+// context is live (DESIGN 3.3). A record dated further ahead, such as a
+// bridge prompt whose transcript timestamp is hours off, so stays pending
+// until the samples reach it, instead of making every real record after
+// it come too late to be output. With no record of the agent's own, now is
+// high.
+func (s State) now(r rules) int64 {
+	if s.own == 0 {
+		return s.high
+	}
+	return min(s.high, s.own+r.pendingWindow)
 }
 
 // NewState returns the state of a scorer that has seen no records and
@@ -82,10 +111,11 @@ type Output struct {
 }
 
 // Derived holds the records the scorer derives from events (SM 1.3), as
-// far as WP-SC1 builds them: presence slots, turns, anchors, the silent
-// runs the return rule credits, the fate of each `pairtime track` call,
-// and review flags. Each list is in time order, ties broken by ids, so
-// equal inputs give equal lists.
+// far as WP-SC1 and WP-SC2 build them: presence slots, turns, anchors, the
+// silent runs the return rule credits, the fate of each `pairtime track`
+// call, review flags, what each turn put in its reading bucket, and every
+// slot's credit. Each list is in time order, ties broken by ids, so equal
+// inputs give equal lists.
 type Derived struct {
 	Slots   []Slot      `json:"slots"`
 	Turns   []Turn      `json:"turns"`
@@ -93,14 +123,18 @@ type Derived struct {
 	Returns []Return    `json:"returns"`
 	Tracks  []TrackCall `json:"tracks"`
 	Flags   []Flag      `json:"flags"`
+	Fills   []Fill      `json:"fills"`
+	Credits []Credit    `json:"credits"`
 }
 
 // Step scores records on top of state s and returns the new state and what
 // it derived. Records may come in any order and may repeat: Step keeps
 // them in record order, by t, then seq, then event_id, and drops a record
 // whose event_id it already holds. It reads no clock and does no I/O;
-// "now" is the largest t it has seen. Every record must pass
-// event.Validate, as every record in the ledger does.
+// "now" is the largest t it has seen, but no more than PENDING_WINDOW_S
+// past the latest sample, focus or power record, which the agent stamps
+// itself. Every record must pass event.Validate, as every record in the
+// ledger does.
 //
 // A record whose t is before the state's FinalBefore still counts toward
 // what is pending, but what is final stays final.
@@ -108,18 +142,36 @@ func Step(s State, records []event.Event) (State, Output) {
 	if s.table == nil {
 		panic("score: Step on a State not made by NewState")
 	}
-	next := State{table: s.table, device: s.device, high: s.high, done: s.done}
+	next := State{table: s.table, device: s.device, high: s.high, own: s.own, done: s.done}
 	next.recs = merge(s.recs, records)
 	for _, e := range records {
 		if e.Data != nil {
 			next.high = max(next.high, e.T)
+			if ownRecord(e) {
+				next.own = max(next.own, e.T)
+			}
 		}
 	}
 	r := newRules(s.table)
-	all := derive(r, s.device, next.recs)
+	now := next.now(r)
+	all, lookups := derive(r, s.device, next.recs, now)
 	fb := s.done
 	if len(next.recs) > 0 {
-		fb = max(fb, floorSlot(next.high-r.settle))
+		to := floorSlot(now - r.settle)
+		// A browser run's credit waits for the slot after it: a lookup
+		// needs credit within LOOKUP_BRACKET_S on both sides (SM 2.5). So
+		// nothing from a run whose end bracket isn't final yet is final.
+		// derive lists only the runs with credit before them: once the run's
+		// start is final, so is the bracket before it, and a run with none
+		// there is no lookup whatever follows. SM 2.5 sets no bound on a
+		// run's length, so the hold has none either
+		// (docs/errata/2026-11-20-lookup-lookahead.md).
+		for _, sp := range lookups {
+			if sp.from < to && sp.to+r.lookupBracket > to {
+				to = min(to, sp.from)
+			}
+		}
+		fb = max(fb, to)
 	}
 	next.done = fb
 	out := Output{FinalBefore: fb}
@@ -186,10 +238,12 @@ const never = math.MaxInt64
 func (d Derived) split(from, to int64) (final, pending Derived) {
 	final.Slots, pending.Slots = splitBy(d.Slots, from, to, func(s Slot) int64 { return s.Start })
 	final.Turns, pending.Turns = splitBy(d.Turns, from, to, Turn.decided)
-	final.Anchors, pending.Anchors = splitBy(d.Anchors, from, to, func(a Anchor) int64 { return a.T })
+	final.Anchors, pending.Anchors = splitBy(d.Anchors, from, to, func(a Anchor) int64 { return a.decided })
 	final.Returns, pending.Returns = splitBy(d.Returns, from, to, func(r Return) int64 { return r.RunStart })
 	final.Tracks, pending.Tracks = splitBy(d.Tracks, from, to, func(c TrackCall) int64 { return c.T })
 	final.Flags, pending.Flags = splitBy(d.Flags, from, to, func(f Flag) int64 { return f.T })
+	final.Fills, pending.Fills = splitBy(d.Fills, from, to, func(f Fill) int64 { return f.decided })
+	final.Credits, pending.Credits = splitBy(d.Credits, from, to, func(c Credit) int64 { return c.Slot })
 	return final, pending
 }
 
@@ -216,10 +270,14 @@ func (d *Derived) Append(o Derived) {
 	d.Returns = append(d.Returns, o.Returns...)
 	d.Tracks = append(d.Tracks, o.Tracks...)
 	d.Flags = append(d.Flags, o.Flags...)
+	d.Fills = append(d.Fills, o.Fills...)
+	d.Credits = append(d.Credits, o.Credits...)
 	slices.SortStableFunc(d.Slots, func(a, b Slot) int { return cmp.Compare(a.Start, b.Start) })
 	slices.SortStableFunc(d.Turns, turnCmp)
 	slices.SortStableFunc(d.Anchors, anchorCmp)
 	slices.SortStableFunc(d.Returns, func(a, b Return) int { return cmp.Compare(a.RunStart, b.RunStart) })
 	slices.SortStableFunc(d.Tracks, trackCmp)
 	slices.SortStableFunc(d.Flags, flagCmp)
+	slices.SortStableFunc(d.Fills, fillCmp)
+	slices.SortStableFunc(d.Credits, func(a, b Credit) int { return cmp.Compare(a.Slot, b.Slot) })
 }

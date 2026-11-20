@@ -95,6 +95,11 @@ func TestTrackGate(t *testing.T) {
 		{name: "a short call is a go-ahead",
 			build: func(b *tl) []event.Event { return []event.Event{b.track(at(60), "s_t", 2, event.LogNoReader, "ok")} },
 			want:  []want{{outcome: TrackAnchor, level: event.EvidenceC, kind: event.AnchorGoAhead, lead: 20}}},
+		{name: "a call is classed by its length alone, since its label is local and a re-score never sees it (DESIGN 6.5)",
+			build: func(b *tl) []event.Event {
+				return []event.Event{b.track(at(60), "s_t", 30, event.LogNoReader, "keep going!!!!!!!!!!!!!!!!!!!!")}
+			},
+			want: []want{{outcome: TrackAnchor, level: event.EvidenceC, kind: event.AnchorSubstantivePrompt, lead: 140}}},
 		{name: "condition 1: a call from a session the window in focus doesn't host is rejected",
 			build: func(b *tl) []event.Event {
 				b.focus(at(30), event.AppBrowser, "")
