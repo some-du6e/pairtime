@@ -60,7 +60,7 @@ func Autostart(env Env) (Item, error) {
 		if err != nil {
 			return Item{}, err
 		}
-		e = ownedEdit{target: File(filepath.Join(configHome(env), "autostart", DesktopFile)), data: data, claim: isAgentDesktopEntry}
+		e = ownedEdit{target: File(filepath.Join(configHome(env), "autostart", DesktopFile)), data: data, claim: isAgentDesktopEntry, keep: keepOffSwitch}
 	default:
 		return Item{}, fmt.Errorf("pairtime can't start itself at login on %s", env.GOOS)
 	}
@@ -199,6 +199,9 @@ type ownedEdit struct {
 	// pairtime wrote: one that starts the agent of a binary called
 	// pairtime, at any path. nil claims only what this edit writes.
 	claim func(Content) bool
+	// keep, when set, returns data with what the teen set in cur, an entry
+	// pairtime wrote, carried over, such as autostart turned off.
+	keep func(cur, data []byte) []byte
 }
 
 func (e ownedEdit) Target() Target { return e.target }
@@ -219,6 +222,9 @@ func (e ownedEdit) Apply(cur Content) (Content, error) {
 	next := Content{Exists: true, Data: e.data, Type: e.typ}
 	if cur.Exists {
 		next.Mode = cur.Mode
+		if e.keep != nil && e.claim != nil && e.claim(cur) {
+			next.Data = e.keep(cur.Data, e.data)
+		}
 	}
 	return next, nil
 }
@@ -314,6 +320,44 @@ func isAgentDesktopEntry(c Content) bool {
 		}
 	}
 	return false
+}
+
+// keepOffSwitch returns entry, pairtime's desktop entry, with the lines
+// that turned cur, an entry some pairtime wrote, off. On Linux the off
+// switch lives in the entry itself: Hidden=true, which the Autostart
+// specification defines and XFCE and KDE write (CP 2.1), and
+// X-GNOME-Autostart-enabled=false, which GNOME and Cinnamon write, as
+// MATE writes X-MATE-Autostart-enabled=false. A reinstall that wrote
+// pairtime's entry without them would turn autostart back on.
+func keepOffSwitch(cur, entry []byte) []byte {
+	var off []string
+	group := ""
+	for _, line := range strings.Split(string(cur), "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "[") {
+			group = line
+			continue
+		}
+		key, value, ok := strings.Cut(line, "=")
+		if ok && group == "[Desktop Entry]" && isOffSwitch(strings.TrimSpace(key), strings.TrimSpace(value)) {
+			off = append(off, line)
+		}
+	}
+	if len(off) == 0 {
+		return entry
+	}
+	// pairtime's entry is one [Desktop Entry] group ending in a newline,
+	// so the lines join that group.
+	return append(append([]byte(nil), entry...), strings.Join(off, "\n")+"\n"...)
+}
+
+// isOffSwitch reports whether key=value, in a [Desktop Entry] group, turns
+// an autostart entry off.
+func isOffSwitch(key, value string) bool {
+	if key == "Hidden" {
+		return value == "true"
+	}
+	return strings.HasPrefix(key, "X-") && strings.HasSuffix(key, "-Autostart-enabled") && value == "false"
 }
 
 // execArgs splits an Exec value, as written in the file, into its program

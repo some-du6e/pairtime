@@ -291,3 +291,57 @@ func TestEnvCheck(t *testing.T) {
 		t.Error("Autostart planned an entry for an OS without one")
 	}
 }
+
+func TestReinstallKeepsLinuxAutostartOff(t *testing.T) {
+	tests := []struct {
+		name string
+		// before is what the autostart entry holds before the reinstall:
+		// testdata/autostart/<dir>/before.desktop, or, with off set, the
+		// entry pairtime installs turned off by that line.
+		dir, off string
+	}{
+		{name: "an earlier pairtime's entry that XFCE or KDE turned off with Hidden=true stays off", dir: "off-hidden"},
+		{name: "an earlier pairtime's entry that GNOME or Cinnamon turned off with X-GNOME-Autostart-enabled=false stays off", dir: "off-gnome"},
+		{name: "an entry the teen turned off after this install stays off, and the reinstall plans nothing", off: "Hidden=true"},
+		{name: "MATE's off switch stays too", off: "X-MATE-Autostart-enabled=false"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			env := testEnv(t, "linux", nil)
+			item, err := Autostart(env)
+			if err != nil {
+				t.Fatal(err)
+			}
+			path := item.Edits[0].Target().Path
+			in := newInstaller(t)
+			var before, want []byte
+			if tt.dir != "" {
+				before = autostartGolden(t, filepath.Join(tt.dir, "before.desktop"))
+				want = autostartGolden(t, filepath.Join(tt.dir, "after.desktop"))
+			} else {
+				install(t, in, item)
+				before = append(readOrNil(t, path), tt.off+"\n"...)
+				want = before
+			}
+			writeFile(t, path, before)
+
+			p := install(t, in, item)
+			if got := readOrNil(t, path); !bytes.Equal(got, want) {
+				t.Errorf("after the reinstall the entry holds\n%s\nwant\n%s", got, want)
+			}
+			if bytes.Equal(before, want) != p.Empty() {
+				t.Errorf("the reinstall plans changes: %v, want %v:\n%s", !p.Empty(), !bytes.Equal(before, want), p.Diff())
+			}
+			again, err := in.PlanInstall([]Item{item})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !again.Empty() {
+				t.Errorf("a second reinstall plans changes:\n%s", again.Diff())
+			}
+			again.Close()
+			uninstall(t, in)
+			checkGone(t, path, "pairtime's autostart entry")
+		})
+	}
+}
