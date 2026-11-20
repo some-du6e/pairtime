@@ -5,6 +5,7 @@ package install
 import (
 	"bytes"
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
@@ -60,11 +61,24 @@ func TestApplyRefusesAStalePlan(t *testing.T) {
 			}
 			tt.between(t, env, in, items)
 			settings := readOrNil(t, ClaudeSettings(env))
+			manifest := readOrNil(t, in.manifestPath())
 			if err := p.Apply(); !errors.Is(err, ErrStale) {
 				t.Fatalf("Apply = %v, want ErrStale", err)
 			}
 			if got := readOrNil(t, ClaudeSettings(env)); !bytes.Equal(got, settings) {
 				t.Errorf("Apply wrote settings.json:\n%s", got)
+			}
+			// The autostart entry is the plan's first change, so an Apply
+			// that checked and wrote one target at a time would have
+			// written it, with the backups and the manifest before it.
+			if _, err := os.Lstat(filepath.Join(env.Home, ".config", "autostart", DesktopFile)); !errors.Is(err, fs.ErrNotExist) {
+				t.Errorf("Apply wrote the autostart entry (%v)", err)
+			}
+			if _, err := os.Lstat(in.backupsDir()); !errors.Is(err, fs.ErrNotExist) {
+				t.Errorf("Apply wrote backups (%v)", err)
+			}
+			if got := readOrNil(t, in.manifestPath()); !bytes.Equal(got, manifest) {
+				t.Errorf("Apply wrote the manifest:\n%s", got)
 			}
 		})
 	}
