@@ -2,7 +2,7 @@
 
 Status: version 1, from WP-RL1 (docs/PLAN.md). `internal/release` implements it, `tools/release` writes the files, and `.github/workflows/release.yml` publishes them.
 
-Every pairtime release publishes one archive per platform, `checksums.txt` and `manifest.json`. Before the client installs or updates itself, it checks `manifest.json` against the release keys compiled into it (DESIGN 3.3 and 5.9, CP 4.6). This file specifies those files, the keys and the checks.
+Every pairtime release publishes one archive per platform, `checksums.txt`, `manifest.json` and the install scripts. Before pairtime is installed, the install script checks `manifest.json` against the release keys written into it (Install scripts), and before the client updates itself, it checks it against the release keys compiled into it (DESIGN 3.3, CP 4.6). This file specifies those files, the keys and the checks.
 
 ## Release files
 

@@ -40,8 +40,14 @@ b64() {
 #    pre-authentication encoding: "DSSEv1 <len> <type> <len> <payload>".
 manifest=$dist/manifest.json
 [ "$(jq -r .payloadType "$manifest")" = "$type" ] || fail "manifest.json's payloadType isn't $type"
-b64 "$(jq -r .payload "$manifest")" "$work/payload.json" || fail "manifest.json's payload isn't in canonical base64"
+# $(...) drops trailing newlines, which a JSON escape can put in the
+# string, so the text must be as long as jq says the string is.
+payload_b64=$(jq -r .payload "$manifest")
+[ "$(jq '.payload | length' "$manifest")" -eq "${#payload_b64}" ] || fail "manifest.json's payload isn't in canonical base64"
+b64 "$payload_b64" "$work/payload.json" || fail "manifest.json's payload isn't in canonical base64"
 # Every signature, whichever key made it, is 64 bytes in canonical base64.
+# Read untrimmed, one per line, a newline in one makes an extra line that
+# fails too.
 while IFS= read -r any; do
   if ! b64 "$any" "$work/any.sig" || [ "$(stat -c %s "$work/any.sig")" -ne 64 ]; then
     fail "a signature in manifest.json isn't 64 bytes in canonical base64"
@@ -122,5 +128,7 @@ while IFS=$'\t' read -r name sha; do
   echo "$sha  $dist/$name" | sha256sum --check --strict --quiet - || fail "$name doesn't have the SHA-256 manifest.json lists"
   scripts=$((scripts + 1))
 done < <(jq -r '(.install_scripts // {}) | to_entries[] | [.key, .value] | @tsv' "$work/payload.json")
+# A jq failure in the loop's input would leave it checking nothing.
+[ "$scripts" -eq "$(jq '(.install_scripts // {}) | length' "$work/payload.json")" ] || fail "checked $scripts of the install scripts manifest.json lists"
 
 echo "check.sh: manifest.json for $version is signed by key $keyid (checked with OpenSSL), and its $count archives match it and checksums.txt, and its $scripts install scripts match it"
