@@ -123,8 +123,10 @@ func spooled(t *testing.T, ep ipc.Endpoint) []inbox.Message {
 	return out
 }
 
-// checkMessage checks that m is the hook call made with stdin `{"session_id":"s1"}`.
-func checkMessage(t *testing.T, m inbox.Message, id string) {
+// checkMessage checks that m is the hook call made with stdin
+// `{"session_id":"s1"}`, with the hook's own chain when wantChain is set,
+// as it is for a spooled call.
+func checkMessage(t *testing.T, m inbox.Message, id string, wantChain bool) {
 	t.Helper()
 	if m.ID != id || m.Kind != Kind {
 		t.Errorf("message %s of kind %q, want %s of kind %q", m.ID, m.Kind, id, Kind)
@@ -132,8 +134,11 @@ func checkMessage(t *testing.T, m inbox.Message, id string) {
 	if !m.Sent.Equal(testStamp.Wall) || m.Mono != testStamp.Mono || m.BootID != testStamp.BootID {
 		t.Errorf("stamped %v, %d, %q, want the hook's own %v, %d, %q", m.Sent, m.Mono, m.BootID, testStamp.Wall, testStamp.Mono, testStamp.BootID)
 	}
-	if len(m.Chain) != len(testChain) || m.Chain[1].PID != 200 || m.Chain[1].Name != "claude" || !m.Chain[1].Start.Equal(testChain[1].Start) {
-		t.Errorf("the message's chain is %+v, want the hook's own", m.Chain)
+	switch {
+	case !wantChain && m.Chain != nil:
+		t.Errorf("the message carries the chain %+v, want none: the agent walks the chain of a call over the socket itself", m.Chain)
+	case wantChain && (len(m.Chain) != len(testChain) || m.Chain[1].PID != 200 || m.Chain[1].Name != "claude" || !m.Chain[1].Start.Equal(testChain[1].Start)):
+		t.Errorf("the spooled message's chain is %+v, want the hook's own", m.Chain)
 	}
 	b, err := DecodeBody(m)
 	if err != nil {
@@ -148,8 +153,11 @@ func TestSend(t *testing.T) {
 	call := func() Call {
 		return Call{Harness: "claude_code", Event: "UserPromptSubmit", Stdin: strings.NewReader(`{"session_id":"s1"}`)}
 	}
+	// reads counts the reads of the hook's own chain.
+	var reads int
 	opts := func(ep ipc.Endpoint) Options {
-		return Options{Endpoint: ep, Now: fixedStamp, Chain: func() ([]platform.Proc, error) { return testChain, nil }}
+		reads = 0
+		return Options{Endpoint: ep, Now: fixedStamp, Chain: func() ([]platform.Proc, error) { reads++; return testChain, nil }}
 	}
 	tests := []struct {
 		name string
@@ -166,11 +174,11 @@ func TestSend(t *testing.T) {
 				if len(got) != 1 {
 					t.Fatalf("the spool has %d messages, want 1", len(got))
 				}
-				checkMessage(t, got[0], res.ID)
+				checkMessage(t, got[0], res.ID, true)
 			},
 		},
 		{
-			name: "an agent that acks takes the call over the socket, and nothing is spooled",
+			name: "an agent that acks takes the call over the socket, with no chain of the hook's own, and nothing is spooled",
 			run: func(t *testing.T, ep ipc.Endpoint) {
 				s := &sink{}
 				serve(t, ep, s)
@@ -182,9 +190,12 @@ func TestSend(t *testing.T) {
 				if len(got) != 1 {
 					t.Fatalf("the agent has %d messages, want 1", len(got))
 				}
-				checkMessage(t, got[0].Message, res.ID)
+				checkMessage(t, got[0].Message, res.ID, false)
 				if n := len(spooled(t, ep)); n != 0 {
 					t.Errorf("the spool has %d messages, want none", n)
+				}
+				if reads != 0 {
+					t.Errorf("the hook read its own chain %d times, want none on the way to a running agent", reads)
 				}
 			},
 		},
@@ -204,7 +215,7 @@ func TestSend(t *testing.T) {
 				if len(got) != 1 {
 					t.Fatalf("the spool has %d messages, want 1", len(got))
 				}
-				checkMessage(t, got[0], res.ID)
+				checkMessage(t, got[0], res.ID, true)
 			},
 		},
 		{

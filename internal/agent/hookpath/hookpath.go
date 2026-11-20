@@ -6,11 +6,11 @@
 //
 // The sender's half is Send. It stamps the call with the wall clock, the
 // OS's monotonic clock and the boot id (Now) as the harness makes it, reads
-// the event the harness writes to stdin, up to MaxStdin, records the hook's
-// parent chain (ReadChain), and hands all of it to the agent as one
-// inbox.Message over the socket. When the agent hasn't acked it within
-// ipc.HookTimeout, Send appends it to the inbox's spool instead, and says
-// whether the caller should start the agent: it should when nothing
+// the event the harness writes to stdin, up to MaxStdin, and hands both to
+// the agent as one inbox.Message over the socket. When the agent hasn't
+// acked it within ipc.HookTimeout, Send records the hook's parent chain
+// (ReadChain) in the message, appends it to the inbox's spool instead, and
+// says whether the caller should start the agent: it should when nothing
 // answered at all. `pairtime track` and `pairtime emit` will take the same
 // path (WP-AD18, WP-AD19).
 //
@@ -74,9 +74,9 @@ const MaxStdin = 1 << 20
 // isn't JSON, or on a person who runs the command in a terminal.
 const StdinWait = time.Second
 
-// chainWait bounds how long Send waits for its own parent chain once stdin
-// is in. Reading the process table takes milliseconds; a call goes without
-// its chain rather than wait for a reader that is stuck.
+// chainWait bounds how long Send waits for its own parent chain before it
+// spools a call. Reading the process table takes about a millisecond; a
+// call goes without its chain rather than wait for a reader that is stuck.
 const chainWait = 50 * time.Millisecond
 
 // maxArg bounds each of the hook's arguments in the message, which come
@@ -177,29 +177,15 @@ type Result struct {
 }
 
 // Send hands the call c to the agent, or to the spool when the agent
-// doesn't take it in time. It returns within about StdinWait, the chain's
-// read, the ack's timeout and one file append, at their longest, and much
-// sooner when the harness closes stdin and the agent is up.
+// doesn't take it in time. It returns within about StdinWait, the ack's
+// timeout, chainWait and one file append, at their longest, and within a
+// few milliseconds when the harness closes stdin and the agent is up.
 func Send(c Call, opts Options) Result {
 	now := opts.Now
 	if now == nil {
 		now = Now
 	}
 	stamp := now() // first, as the harness calls the hook
-	readChain := opts.Chain
-	if readChain == nil {
-		readChain = func() ([]platform.Proc, error) { return ReadChain(os.Getpid()) }
-	}
-	// The process table is read while stdin comes in. On Windows that is
-	// one call into the kernel, and elsewhere a few files per process.
-	chainc := make(chan []platform.Proc, 1)
-	go func() {
-		chain, err := readChain()
-		if err != nil {
-			chain = nil
-		}
-		chainc <- chain
-	}()
 	wait := opts.StdinWait
 	if wait <= 0 {
 		wait = StdinWait
@@ -207,11 +193,6 @@ func Send(c Call, opts Options) Result {
 	data, whole, cut := readStdin(c.Stdin, MaxStdin, wait)
 
 	m := inbox.Message{ID: inbox.NewID(), Kind: Kind, Sent: stamp.Wall, Mono: stamp.Mono, BootID: stamp.BootID}
-	select {
-	case chain := <-chainc:
-		m.Chain = senderChain(chain)
-	case <-time.After(chainWait):
-	}
 	m.Body = body(c, data, whole, cut)
 	res := Result{ID: m.ID, Cut: cut}
 
@@ -232,6 +213,13 @@ func Send(c Call, opts Options) Result {
 	} else {
 		res.StartAgent = true
 	}
+	// Only a spooled call carries the hook's own parent chain. Over the
+	// socket the agent reads the chain itself from the connection and
+	// believes no other (Of); through the spool, the recorded chain is all
+	// that can name the harness, which is what telling apart the copies of
+	// one call needs (D-spool-via). So the process table is read only here,
+	// off the path that a running agent's calls take.
+	m.Chain = ownChain(opts.Chain)
 	if aerr := inbox.Append(opts.Endpoint.Inbox, m); aerr != nil {
 		res.Err = errors.Join(err, aerr)
 		return res
@@ -273,6 +261,28 @@ func clip(s string) string {
 		return s[:maxArg]
 	}
 	return s
+}
+
+// ownChain reads the hook's own parent chain with read, ReadChain when it is
+// nil, for a message, waiting at most chainWait for it.
+func ownChain(read func() ([]platform.Proc, error)) []inbox.Proc {
+	if read == nil {
+		read = func() ([]platform.Proc, error) { return ReadChain(os.Getpid()) }
+	}
+	chainc := make(chan []platform.Proc, 1)
+	go func() {
+		chain, err := read()
+		if err != nil {
+			chain = nil
+		}
+		chainc <- chain
+	}()
+	select {
+	case chain := <-chainc:
+		return senderChain(chain)
+	case <-time.After(chainWait):
+		return nil
+	}
 }
 
 // senderChain turns the hook's own parent chain into the message's, at
