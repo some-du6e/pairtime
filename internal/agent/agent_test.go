@@ -199,6 +199,8 @@ func TestRun(t *testing.T) {
 	}{
 		{name: "status with the token answers 200 and says local mode", method: "GET", path: "/v1/status", token: true, wantCode: 200, wantBody: `"mode":"local"`},
 		{name: "status without the token answers 401", method: "GET", path: "/v1/status", wantCode: 401},
+		{name: "today with the token answers 200 with today's projects", method: "GET", path: "/v1/today", token: true, wantCode: 200, wantBody: `"projects":[`},
+		{name: "today without the token answers 401", method: "GET", path: "/v1/today", wantCode: 401},
 		{name: "a foreign Host answers 403", method: "GET", path: "/v1/status", host: "attacker.example", token: true, wantCode: 403},
 		{name: "a foreign Origin answers 403", method: "GET", path: "/v1/status", origin: "https://attacker.example", token: true, wantCode: 403},
 		{name: "stop needs POST", method: "GET", path: "/v1/agent/stop", token: true, wantCode: 405},

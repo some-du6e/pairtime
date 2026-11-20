@@ -37,8 +37,8 @@ const dayMS = 24 * 60 * minuteMS
 // for concurrent use.
 //
 // A write is one append and no flush; Sync flushes. A crash can leave the
-// last line of a file torn, and the store cuts it off before it appends
-// again, so the file goes on holding only whole lines. The scorer loop
+// last line of a file torn, and the store cuts it off when it first reads
+// the file, so the file goes on holding only whole lines. The scorer loop
 // writes again whatever a crash cut, since it starts again from the last
 // batch it saved as done.
 type Buckets struct {
@@ -90,6 +90,13 @@ func (s *Buckets) day(day string) (*dayFile, error) {
 		return nil, err
 	default:
 		d.size = readLines(data, d.latest)
+		if d.size < int64(len(data)) {
+			// A torn last line. A file opened for appending can't be
+			// truncated on Windows, so this goes by name.
+			if err := os.Truncate(s.path(day), d.size); err != nil {
+				return nil, err
+			}
+		}
 	}
 	s.days[day] = d
 	return d, nil
@@ -176,8 +183,7 @@ func (s *Buckets) Put(b Bucket) (stored Bucket, wrote bool, err error) {
 func (s *Buckets) append(day string, d *dayFile, line []byte) error {
 	if d.f == nil {
 		name := s.path(day)
-		// Cut a torn line off first. A file opened for appending can't be
-		// truncated on Windows, so this goes by name.
+		// Cut off what a failed append left, as day does a torn line.
 		if fi, err := os.Stat(name); err == nil && fi.Size() > d.size {
 			if err := os.Truncate(name, d.size); err != nil {
 				return err
