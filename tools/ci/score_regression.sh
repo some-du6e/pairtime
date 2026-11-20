@@ -116,9 +116,17 @@ while IFS=$'\t' read -r status first second || [ -n "$status" ]; do
 	esac
 done
 
-# has_input says whether a timeline directory's inputs changed.
+# has_input says whether a timeline directory's inputs changed. It matches
+# whole lines of $inputs without a pipe, which pipefail could fail when grep
+# -q stops reading early.
 has_input() {
-	printf '%s' "$inputs" | grep -qxF -- "$1"
+	case "
+$inputs" in
+	*"
+$1
+"*) return 0 ;;
+	esac
+	return 1
 }
 
 # changed holds the goldens that count as a change of output, and oracle
