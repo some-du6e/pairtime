@@ -1479,7 +1479,7 @@ def get_choice(obj, key, path, choices):
 
 
 def check_lowercase(rep, obj, path):
-    fields(obj, path, ("unicode", "runs"), ("later_unicode", "later"))
+    fields(obj, path, ("unicode", "runs"), ("later_unicode", "later", "note"))
     if get_str(obj, "unicode", path) != LOWER_UNICODE:
         rep.fail(path + ".unicode", "is %s; f.v = 1 lowercases with Unicode %s" % (json.dumps(obj["unicode"]), LOWER_UNICODE))
     runs = []
@@ -1768,7 +1768,7 @@ def check_draw(rep, obj, path):
 
 
 def check_challenge_k(rep, obj, path):
-    fields(obj, path, ("pool", "k", "drawn"))
+    fields(obj, path, ("pool", "k", "drawn"), ("note",))
     pool = get_int(obj, "pool", path)
     rep.same(path + ".k", get_int(obj, "k", path), challenge_k(pool))
     rep.same(path + ".drawn", get_int(obj, "drawn", path), min(challenge_k(pool), pool))
@@ -3362,6 +3362,14 @@ def test_check_catches_content():
     for name, notes in picks.items():
         base[name] = [full[name][note_index(name, note)] for note in notes]
     expect(not check_document(json.loads(json.dumps(base))).errors, "the slice of the content vectors doesn't pass check")
+    # 11.3 lets every object of the part 2 sections carry a note.
+    noted = json.loads(json.dumps(base))
+    noted["lowercase"]["note"] = "a note"
+    noted["challenge_k"][0]["note"] = "a note"
+    try:
+        expect(not check_document(noted).errors, "a note on the lowercase table or a CHALLENGE_K size changes a value")
+    except FormatError as err:
+        raise SelftestError("check refuses a note that 11.3 allows: %s" % err)
 
     def at(section, i, *keys):
         def get(doc):
