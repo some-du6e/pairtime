@@ -245,7 +245,9 @@ M_b       = ascii("pairtime-receipt-v1") || u8(len(device_id)) || ascii(device_i
 receipt_b = Ed25519(server key, M_b)        64 bytes
 ```
 
-`device_id` is 1 to 128 bytes, so its length fits in the one byte before it, and every other field has a fixed width, so `M_b` splits back into its fields from the front. The client stores the receipt with the batch in `ledger/batches.seg` (DESIGN 3.5) and checks it against the server's published key (DESIGN 10.2) before relying on it. The receipt binds the server to `received_at`: the server can't later deny or re-date a head the device holds a receipt for, and the device can't claim the batch arrived earlier (DESIGN 3.6).
+`device_id` is 1 to 128 bytes, so its length fits in the one byte before it, and every other field has a fixed width, so `M_b` splits back into its fields from the front.
+
+The server returns `received_at` with each `receipt_b`, because the client can't rebuild `M_b`, or check the signature, without it. The client stores `received_at` next to the receipt with the batch in `ledger/batches.seg` (DESIGN 3.5, whose row names only the receipt), as `pkg/ledger`'s `Receipt` holds both, and checks the receipt under the server key that was valid at `received_at` (DESIGN 10.2) before relying on it. The receipt binds the server to `received_at`: the server can't later deny or re-date a head the device holds a receipt for, and the device can't claim the batch arrived earlier (DESIGN 3.6).
 
 ## 8. Day trees
 
@@ -882,3 +884,4 @@ The review of parts 1 and 2 (issue #19) decided these, before any device witness
 28. A checkpoint's `e` is `{"project_key", "t", "state"}` and an upload-failure note's `{"t", "reason"}`, so a verifier can check a checkpoint's project without parsing `score.ProjectState` (4.7).
 29. An `f` with a `v` below 1 or not an integer, a `null` member, or a member version 1 doesn't list under `v = 1` is malformed. A `v` above a reader's own is unknown, and a server refuses or holds such a record (10.7).
 30. The server refuses an empty batch, and once it holds a batch of a device it refuses that device's batch `b` unless it stored batch `b - 1` with head `prev`, DESIGN 3.10's chain link. Only a device's first upload may start after batch 1. An earlier draft refused only a `prev` that differed from a stored head, which let a device skip a batch (6, 9).
+31. The server returns `received_at` with each receipt, and the client stores it next to the receipt. DESIGN 3.5's `batches.seg` row and DESIGN 3.6 name only the receipt, which can't be checked without the time it signs (7).
