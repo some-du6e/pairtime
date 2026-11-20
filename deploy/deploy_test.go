@@ -3,6 +3,7 @@
 package deploy
 
 import (
+	"os"
 	"path"
 	"regexp"
 	"testing"
@@ -53,6 +54,11 @@ func TestBundleFilesAgree(t *testing.T) {
 			got: line(`^\s*env_file: (\./config/secrets\.env)\s*$`, ComposeYAML), want: "./config/secrets.env"},
 		{name: "compose gives cloudflared only tunnel.env",
 			got: line(`^\s*env_file: (\./config/tunnel\.env)\s*$`, ComposeYAML), want: "./config/tunnel.env"},
+		{name: "pairtimed writes the day roots where the witness sidecar reads them",
+			got:  line(`^\s*- \./witness-roots:(/\S+)\s*$`, ComposeYAML),
+			want: line(`^\s*- \./witness-roots:(/\S+):ro\s*$`, ComposeYAML)},
+		{name: "the witness sidecar runs the loop the bundle ships",
+			got: line(`^\s*entrypoint: \["/bin/sh", "([^"]+)"\]`, ComposeYAML), want: line(`^\s*- \./witness/push\.sh:([^:]+):ro\s*$`, ComposeYAML)},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -83,13 +89,38 @@ func TestImagesArePinned(t *testing.T) {
 			ok:    pinned.MatchString(image) || image == "ghcr.io/some-du6e/pairtimed:UNRELEASED",
 		})
 	}
-	if len(tests) != 2 {
-		t.Fatalf("compose.yml has %d images, want pairtimed and cloudflared", len(tests))
+	if len(tests) != 3 {
+		t.Fatalf("compose.yml has %d images, want pairtimed, cloudflared and witness", len(tests))
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			if !tt.ok {
 				t.Errorf("%s isn't pinned: an upgrade is a reviewed diff of tag and digest (DESIGN 10.4)", tt.image)
+			}
+		})
+	}
+}
+
+func TestWitnessFiles(t *testing.T) {
+	tests := []struct {
+		name string
+		path string
+		mode os.FileMode
+	}{
+		{name: "the sidecar's loop is in the bundle, executable", path: "witness/push.sh", mode: 0o100},
+		{name: "GitHub's host keys are in the bundle", path: "witness/known_hosts"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fi, err := os.Stat(tt.path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if fi.Mode().Perm()&tt.mode != tt.mode {
+				t.Errorf("%s has mode %v", tt.path, fi.Mode())
+			}
+			if !regexp.MustCompile(`(?m)^\s*- \./`+regexp.QuoteMeta(tt.path)+`:`).MatchString(ComposeYAML) {
+				t.Errorf("compose.yml doesn't mount %s", tt.path)
 			}
 		})
 	}

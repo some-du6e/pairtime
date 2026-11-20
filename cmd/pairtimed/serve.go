@@ -214,6 +214,9 @@ func serve(ctx context.Context, cfg *config.Config, logger *slog.Logger, e *env,
 			background.Go(func() { runSnapshots(bctx, job, logger, last, failed) })
 		}
 	}
+	if err := distinctPushURLs(cfg.Secrets.Get); err != nil {
+		return err
+	}
 	if raw := cfg.Secrets.Get(envHeartbeatURL); raw != "" {
 		if err := checkPushURL(envHeartbeatURL, raw); err != nil {
 			return err

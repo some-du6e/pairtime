@@ -3,6 +3,6 @@
 # (deploy/runbook.md).
 /data/
 /config/
-/witness/
+/witness-roots/
 # Values compose interpolates into compose.yml on this host, if any.
 /.env

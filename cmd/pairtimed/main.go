@@ -45,8 +45,8 @@ type env struct {
 	// listening is called once serve's listeners are up, with their
 	// addresses.
 	listening func(public, ops string)
-	// githubURL stands in for https://github.com in doctor's witness
-	// check.
+	// githubURL stands in for https://api.github.com in doctor's
+	// witness check.
 	githubURL string
 }
 

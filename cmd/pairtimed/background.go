@@ -26,12 +26,21 @@ func userAgent(product string) string {
 	return product + "/" + version.Get().Version + " (+https://github.com/some-du6e/pairtime)"
 }
 
-// envHeartbeatURL is pairtimed's push monitor (deploy/secrets.env.example).
-const envHeartbeatURL = "PAIRTIME_HEARTBEAT_URL"
+// The three push monitors, the dead man's switches of DESIGN 10.4
+// (deploy/secrets.env.example). Each is a URL that a GET marks up.
+const (
+	// envHeartbeatURL is pinged every heartbeatEvery while /readyz passes.
+	envHeartbeatURL = "PAIRTIME_HEARTBEAT_URL"
+	// envSnapshotHeartbeatURL is pinged after each snapshot is stored, so
+	// its monitor expects a ping a day, with 26 hours of grace.
+	envSnapshotHeartbeatURL = "PAIRTIME_SNAPSHOT_HEARTBEAT_URL"
+	// envLitestreamHeartbeatURL is Litestream's own, which litestream.yml
+	// reads; pairtimed reads it only in doctor.
+	envLitestreamHeartbeatURL = "PAIRTIME_LITESTREAM_HEARTBEAT_URL"
+)
 
-// envLitestreamHeartbeatURL is Litestream's push monitor, which
-// litestream.yml reads; pairtimed reads it only in doctor.
-const envLitestreamHeartbeatURL = "PAIRTIME_LITESTREAM_HEARTBEAT_URL"
+// pushMonitors are the three, for checks that they differ.
+var pushMonitors = []string{envHeartbeatURL, envSnapshotHeartbeatURL, envLitestreamHeartbeatURL}
 
 // heartbeatEvery is how often pairtimed pings its push monitor while
 // /readyz passes (DESIGN 10.4).
@@ -42,24 +51,37 @@ const pushTimeout = 10 * time.Second
 
 // checkPushURL checks a push monitor's URL: any http or https URL that a
 // GET marks up, such as a Healthchecks.io check URL or an Uptime Kuma push
-// URL. Plain http is only for a loopback host. Errors never quote the URL,
-// whose path is the monitor's secret.
+// URL. Plain http is fine: the pilot's monitors are Uptime Kuma on the
+// LAN, kept off Cloudflare so a Cloudflare outage can't raise a false
+// alert, and a ping carries no data. Errors never quote the URL, whose
+// path is the monitor's secret.
 func checkPushURL(name, raw string) error {
 	u, err := url.Parse(raw)
-	if err != nil || u.Host == "" || u.User != nil {
-		return fmt.Errorf("%s isn't a URL with a host and no user", name)
+	if err != nil || u.Host == "" || u.User != nil || u.Fragment != "" {
+		return fmt.Errorf("%s isn't a URL with a host, and no user or fragment", name)
 	}
-	switch u.Scheme {
-	case "https":
-		return nil
-	case "http":
-		if h := u.Hostname(); h == "localhost" || h == "127.0.0.1" || h == "::1" {
-			return nil
+	if u.Scheme != "https" && u.Scheme != "http" {
+		return fmt.Errorf("%s must be an http or https URL", name)
+	}
+	return nil
+}
+
+// distinctPushURLs fails when two of the push monitors that are set share
+// a URL: each part needs a monitor of its own, or one could hide another's
+// silence.
+func distinctPushURLs(get func(string) string) error {
+	seen := make(map[string]string)
+	for _, name := range pushMonitors {
+		raw := get(name)
+		if raw == "" {
+			continue
 		}
-		return fmt.Errorf("%s uses http; a push monitor's URL must be https", name)
-	default:
-		return fmt.Errorf("%s must be an https URL", name)
+		if other, dup := seen[raw]; dup {
+			return fmt.Errorf("%s and %s are the same URL; each needs a push monitor of its own", other, name)
+		}
+		seen[raw] = name
 	}
+	return nil
 }
 
 // pushClient sends push-monitor pings. It follows no redirect: a monitor
@@ -211,6 +233,9 @@ func runSnapshots(ctx context.Context, job *snapshotJob, logger *slog.Logger, la
 		default:
 			last.Set(time.Now().Unix())
 			logger.Info("took the nightly snapshot", "key", info.Key, "bytes", info.Size, "took", time.Since(start).Round(time.Second).String())
+			if err := job.notify(ctx); err != nil {
+				logger.Error("the snapshot's push monitor didn't take the ping", "err", err)
+			}
 		}
 		wait = nextSnapshot(time.Now()).Sub(time.Now())
 	}

@@ -1,9 +1,11 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
 # pairtime's server on one host (DESIGN 10.1): pairtimed and Litestream in
-# one container, and cloudflared, which carries https://<host> to it with no
-# open ports. deploy/runbook.md is the procedure: first deploy, upgrades,
-# rollback and the move to a VPS.
+# one container; cloudflared, which carries https://<host> to it with no
+# open ports; and the witness sidecar, which pushes the day roots pairtimed
+# writes to the public witness repository with a deploy key, since
+# pairtimed's image has no git or ssh. deploy/runbook.md is the procedure:
+# first deploy, upgrades, rollback and the move to a VPS.
 #
 # The host builds nothing. release.yml builds the pairtimed image from a v*
 # tag and pushes it to GHCR, and every image here is pinned by tag and
@@ -12,11 +14,17 @@
 #
 # Next to this file, and never in git (deploy/.gitignore):
 #
-#   data/     SQLite, its WAL, Litestream's state, /data/keys. Mode 0700 and
-#             owned by 65532, the image's user: pairtimed refuses a data
-#             directory that group or others can enter (runbook, step 3).
-#   config/   pairtime.toml from `pairtimed init`, tier2.toml, and
-#             secrets.env and tunnel.env, both mode 0600.
+#   data/           SQLite, its WAL, Litestream's state, /data/keys. Mode
+#                   0700 and owned by 65532, the image's user: pairtimed
+#                   refuses a data directory that group or others can enter.
+#   witness-roots/  The signed day roots pairtimed writes, for the sidecar
+#                   to push. Mode 0700 and owned by 65532 too.
+#   config/         pairtime.toml from `pairtimed init`, tier2.toml, and,
+#                   each mode 0600: secrets.env, tunnel.env and
+#                   witness_deploy_key.
+#
+# PAIRTIME_WITNESS_REPO, in .env next to this file, names another witness
+# repository than some-du6e/pairtime-witness.
 name: pairtime
 
 services:
@@ -37,10 +45,14 @@ services:
       - ./config:/etc/pairtime:ro
       # From git, next to this file, so it changes with the release.
       - ./litestream.yml:/etc/litestream.yml:ro
+      # Where pairtimed writes each day's signed witness root (WP-SV17).
+      - ./witness-roots:/witness
     # compose reads this file on the host and passes each line to the
     # container as an environment variable; pairtimed and litestream.yml
     # read their PAIRTIME_* variables from there.
     env_file: ./config/secrets.env
+    environment:
+      PAIRTIME_WITNESS_REPO: ${PAIRTIME_WITNESS_REPO:-some-du6e/pairtime-witness}
     healthcheck:
       # /readyz on the private ops port: the database takes writes, the
       # replica is current, both buckets answer (DESIGN 10.4). The image
@@ -74,3 +86,33 @@ services:
     read_only: true
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
+
+  witness:
+    # git and OpenSSH on Alpine. v2.54.0, 2026-11-08.
+    image: alpine/git:v2.54.0@sha256:6a1fdb962814ca11508ca8d1bab94375b5b7ac4e4a9a40981c29fc32c02f095d
+    restart: unless-stopped
+    # Every 5 minutes: fetch the witness repository, add the roots it lacks,
+    # push them with the deploy key (deploy/witness/push.sh).
+    entrypoint: ["/bin/sh", "/etc/witness/push.sh"]
+    environment:
+      PAIRTIME_WITNESS_REPO: ${PAIRTIME_WITNESS_REPO:-some-du6e/pairtime-witness}
+    volumes:
+      - ./witness-roots:/witness:ro
+      - ./witness/push.sh:/etc/witness/push.sh:ro
+      # GitHub's published host keys; ssh trusts no other.
+      - ./witness/known_hosts:/etc/witness/known_hosts:ro
+      # A deploy key with write access to the witness repository alone.
+      - ./config/witness_deploy_key:/run/witness/deploy_key:ro
+      # Its clone of the repository.
+      - witness-repo:/repo
+    read_only: true
+    tmpfs:
+      - /tmp
+    # It runs as root, which owns its clone, with one capability: reading
+    # the roots and the deploy key, which belong to other users.
+    cap_drop: [ALL]
+    cap_add: [DAC_READ_SEARCH]
+    security_opt: ["no-new-privileges:true"]
+
+volumes:
+  witness-repo:

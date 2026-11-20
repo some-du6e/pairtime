@@ -52,6 +52,8 @@ or KEY, as it is stored; Karim decrypts it offline:
 // snapshotJob is what a snapshot needs, from the configuration.
 type snapshotJob struct {
 	opts backup.SnapshotOptions
+	// heartbeat is the snapshot's push monitor, or "".
+	heartbeat string
 }
 
 // newSnapshotJob checks that cfg can take snapshots and says how.
@@ -70,16 +72,32 @@ func newSnapshotJob(cfg *config.Config, objs *buckets) (*snapshotJob, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", envAgeRecipient, err)
 	}
+	heartbeat := cfg.Secrets.Get(envSnapshotHeartbeatURL)
+	if heartbeat != "" {
+		if err := checkPushURL(envSnapshotHeartbeatURL, heartbeat); err != nil {
+			return nil, err
+		}
+	}
 	return &snapshotJob{opts: backup.SnapshotOptions{
 		DBPath:    cfg.Database.Path,
 		Dir:       backup.SnapshotDir(cfg.DataDir),
 		Recipient: r,
 		Snapshots: objstore.NewSnapshots(objs.snapshots),
-	}}, nil
+	}, heartbeat: heartbeat}, nil
 }
 
 func (j *snapshotJob) run(ctx context.Context) (objstore.ObjectInfo, error) {
 	return backup.Snapshot(ctx, j.opts)
+}
+
+// notify pings the snapshot's push monitor, after a snapshot was stored.
+func (j *snapshotJob) notify(ctx context.Context) error {
+	if j.heartbeat == "" {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, pushTimeout)
+	defer cancel()
+	return ping(ctx, pushClient(), j.heartbeat, userAgent("pairtimed"))
 }
 
 func runSnapshotTake(ctx context.Context, e *env, args []string) int {
@@ -109,6 +127,9 @@ func runSnapshotTake(ctx context.Context, e *env, args []string) int {
 		return fail(err)
 	}
 	fmt.Fprintf(e.stdout, "stored %s in %s: %d bytes\n", info.Key, objs.snapshots.Name(), info.Size)
+	if err := job.notify(ctx); err != nil {
+		return fail(fmt.Errorf("the snapshot is stored, but its push monitor didn't take the ping: %w", err))
+	}
 	return 0
 }
 

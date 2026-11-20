@@ -10,9 +10,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
@@ -32,11 +34,18 @@ func init() {
 	register(&command{name: "doctor", summary: doctorSummary, run: runDoctor})
 }
 
-// The witness repository's variables (deploy/secrets.env.example).
-const (
-	envWitnessRepo  = "PAIRTIME_WITNESS_REPO"
-	envWitnessToken = "PAIRTIME_WITNESS_TOKEN"
-)
+// envWitnessRepo names the public witness repository, as owner/name.
+// compose.yml sets it for pairtimed and for the witness sidecar, which
+// pushes with a deploy key; pairtimed holds no GitHub credential.
+const envWitnessRepo = "PAIRTIME_WITNESS_REPO"
+
+// witnessPushLag is how long a root pairtimed wrote may wait for the
+// witness sidecar, which pushes every 5 minutes, before doctor fails.
+const witnessPushLag = 15 * time.Minute
+
+// witnessKey is the sidecar's deploy key, as the config directory holds
+// it; only the sidecar mounts it, and pairtimed can't read it.
+const witnessKey = "witness_deploy_key"
 
 // snapshotMaxAge is the oldest the newest snapshot may be: a day and two
 // hours, so one missed night fails doctor.
@@ -70,15 +79,22 @@ type doctor struct {
 	agent          string
 	litestreamPath string
 	github         string
+	// witnessDir is where pairtimed writes the day roots the sidecar
+	// pushes.
+	witnessDir string
 	// readiness is /readyz's answer, or nil when serve didn't answer.
 	readiness *ops.Readiness
+	// snapshotFresh says the newest snapshot is under snapshotMaxAge.
+	snapshotFresh bool
 }
 
 func runDoctor(ctx context.Context, e *env, args []string) int {
 	fs := newFlagSet("doctor", doctorSummary, e)
 	load := configFlags(fs, e)
-	skipList := fs.String("skip", "", "checks to leave out, comma-separated, such as hca,witness")
+	skipList := fs.String("skip", "", "checks to leave out, comma-separated: a name, or its first or last part, such as hca,push,write_once")
+	onlyList := fs.String("only", "", "the checks to run, comma-separated in the same way, leaving out the rest")
 	litestreamConfig := fs.String("litestream-config", "/etc/litestream.yml", "the litestream.yml compose mounts, to compare with pairtime.toml")
+	witnessDir := fs.String("witness-dir", "/witness", "where pairtimed writes the day roots the witness sidecar pushes")
 	timeout := fs.Duration("timeout", 15*time.Second, "how long each check may take")
 	if code, done := parse(fs, args); done {
 		return code
@@ -89,16 +105,12 @@ func runDoctor(ctx context.Context, e *env, args []string) int {
 		fmt.Fprintln(e.stdout, "doctor: the configuration doesn't load, so nothing else was checked")
 		return 1
 	}
-	d := &doctor{e: e, cfg: cfg, client: doctorClient(), agent: userAgent("pairtimed-doctor"), litestreamPath: *litestreamConfig, github: "https://github.com"}
+	d := &doctor{e: e, cfg: cfg, client: doctorClient(), agent: userAgent("pairtimed-doctor"),
+		litestreamPath: *litestreamConfig, github: "https://api.github.com", witnessDir: *witnessDir}
 	if e.githubURL != "" {
 		d.github = e.githubURL
 	}
-	skipped := make(map[string]bool)
-	for _, s := range strings.Split(*skipList, ",") {
-		if s = strings.TrimSpace(s); s != "" {
-			skipped[s] = true
-		}
-	}
+	skipped, only := nameSet(*skipList), nameSet(*onlyList)
 
 	type check struct {
 		name string
@@ -133,6 +145,7 @@ func runDoctor(ctx context.Context, e *env, args []string) int {
 		check{"hca", d.checkHCA},
 		check{"witness", d.checkWitness},
 		check{"push.pairtimed", d.checkPushPairtimed},
+		check{"push.snapshot", d.checkPushSnapshot},
 		check{"push.litestream", d.checkPushLitestream},
 		check{"tunnel", d.checkTunnel},
 	)
@@ -140,9 +153,12 @@ func runDoctor(ctx context.Context, e *env, args []string) int {
 	var failed, skips, oks int
 	for _, c := range checks {
 		var r result
-		if skipped[c.name] || skipped[strings.SplitN(c.name, ".", 2)[0]] {
+		switch {
+		case matches(skipped, c.name):
 			r = skip("left out with -skip")
-		} else {
+		case len(only) > 0 && !matches(only, c.name):
+			r = skip("left out with -only")
+		default:
 			cctx, cancel := context.WithTimeout(ctx, *timeout)
 			r = c.run(cctx)
 			cancel()
@@ -162,6 +178,25 @@ func runDoctor(ctx context.Context, e *env, args []string) int {
 		return 1
 	}
 	return 0
+}
+
+// nameSet splits a comma-separated list of check names.
+func nameSet(list string) map[string]bool {
+	set := make(map[string]bool)
+	for _, s := range strings.Split(list, ",") {
+		if s = strings.TrimSpace(s); s != "" {
+			set[s] = true
+		}
+	}
+	return set
+}
+
+// matches reports whether set names the check: its whole name, or the
+// part before its first dot or after its last, so "push" names
+// push.pairtimed and "write_once" names every bucket's.
+func matches(set map[string]bool, name string) bool {
+	first, _, _ := strings.Cut(name, ".")
+	return set[name] || set[first] || set[name[strings.LastIndex(name, ".")+1:]]
 }
 
 // doctorClient is doctor's HTTP client. It follows no redirect: each URL
@@ -413,6 +448,7 @@ func (d *doctor) checkSnapshot(ctx context.Context) result {
 	if age > snapshotMaxAge {
 		return bad("the newest snapshot, %s, is %s old: the nightly job hasn't stored one since (look for \"nightly snapshot\" in docker compose logs pairtimed)", latest.Key, age.Round(time.Minute))
 	}
+	d.snapshotFresh = true
 	return ok("%s, %s old, %d bytes", latest.Key, age.Round(time.Minute), latest.Size)
 }
 
@@ -469,30 +505,100 @@ func (d *doctor) checkHCA(ctx context.Context) result {
 // witnessRepo matches owner/name.
 var witnessRepo = regexp.MustCompile(`^[A-Za-z0-9-]{1,39}/[A-Za-z0-9._-]{1,100}$`)
 
-// checkWitness asks GitHub what `git push --dry-run` asks first: whether
-// the token may push to the witness repository. The receive-pack
-// advertisement answers 200 only for a token with write access, and
-// changes nothing.
+// checkWitness checks that the witness sidecar publishes what pairtimed
+// writes: the deploy key is where compose mounts it from, and the newest
+// day root in the witness directory is older than the repository's latest
+// commit, which GitHub's public API reports without a credential.
 func (d *doctor) checkWitness(ctx context.Context) result {
-	repo, token := d.cfg.Secrets.Get(envWitnessRepo), d.cfg.Secrets.Get(envWitnessToken)
-	switch {
-	case repo == "" && token == "":
-		return skip("%s and %s aren't set yet; the daily witness roots go there (WP-SV17, DESIGN 10.5 item 6)", envWitnessRepo, envWitnessToken)
-	case !witnessRepo.MatchString(repo):
-		return bad("%s must be owner/name", envWitnessRepo)
-	case token == "":
-		return bad("%s is set, so set %s, a fine-grained token with contents write on it", envWitnessRepo, envWitnessToken)
+	repo := d.cfg.Secrets.Get(envWitnessRepo)
+	if repo == "" {
+		return skip("%s isn't set, so there is no witness repository; compose.yml sets it", envWitnessRepo)
 	}
-	u := d.github + "/" + repo + ".git/info/refs?service=git-receive-pack"
-	status, _, _, err := d.get(ctx, u, func(r *http.Request) { r.SetBasicAuth("x-access-token", token) })
+	if !witnessRepo.MatchString(repo) {
+		return bad("%s must be owner/name", envWitnessRepo)
+	}
+	var problems []string
+	keyPath := filepath.Join(filepath.Dir(d.cfg.Path), witnessKey)
+	if fi, err := os.Lstat(keyPath); err != nil {
+		problems = append(problems, fmt.Sprintf("there is no deploy key at config/%s, so the sidecar can't push (deploy/runbook.md, step 6)", witnessKey))
+	} else if fi.Mode().Perm()&0o077 != 0 {
+		problems = append(problems, fmt.Sprintf("config/%s has mode %04o; ssh refuses a key others can read: chmod 600 it", witnessKey, fi.Mode().Perm()))
+	}
+
+	newest, newestAt, err := newestFile(d.witnessDir)
+	if err != nil {
+		return bad("%v", err)
+	}
+	u := d.github + "/repos/" + repo + "/commits?per_page=1"
+	status, _, body, err := d.get(ctx, u, func(r *http.Request) { r.Header.Set("Accept", "application/vnd.github+json") })
+	var committed time.Time
 	switch {
 	case err != nil:
 		return bad("asking GitHub about %s: %v", repo, err)
-	case status == http.StatusOK:
-		return ok("%s takes pushes from the token (a dry run: nothing was pushed)", repo)
+	case status == http.StatusConflict:
+		// GitHub's answer for a repository with no commits.
+	case status == http.StatusNotFound:
+		return bad("GitHub has no public repository %s", repo)
+	case status != http.StatusOK:
+		return bad("GitHub answered %d for %s's commits; unauthenticated calls get 60 an hour", status, repo)
 	default:
-		return bad("GitHub answered %d for a push to %s: the repository is missing, or the token lacks contents write on it", status, repo)
+		var commits []struct {
+			SHA    string `json:"sha"`
+			Commit struct {
+				Committer struct {
+					Date time.Time `json:"date"`
+				} `json:"committer"`
+			} `json:"commit"`
+		}
+		if err := json.Unmarshal(body, &commits); err != nil || len(commits) == 0 {
+			return bad("GitHub's list of %s's commits doesn't read: %v", repo, err)
+		}
+		committed = commits[0].Commit.Committer.Date
 	}
+	latest := "no commits yet"
+	if !committed.IsZero() {
+		latest = "latest commit " + committed.UTC().Format(time.RFC3339)
+	}
+	switch {
+	case len(problems) > 0:
+		return bad("%s; %s has %s", strings.Join(problems, "; "), repo, latest)
+	case newest == "":
+		return skip("pairtimed writes no day roots to %s yet; WP-SV17's publisher does. The sidecar and the deploy key are in place, and %s has %s", d.witnessDir, repo, latest)
+	case !committed.Before(newestAt):
+		return ok("%s, the newest root, is older than %s's %s", newest, repo, latest)
+	case time.Since(newestAt) < witnessPushLag:
+		return ok("%s is %s old and the sidecar pushes every 5 minutes; %s has %s", newest, time.Since(newestAt).Round(time.Second), repo, latest)
+	default:
+		return bad("%s, written %s ago, isn't in %s, which has %s: the witness sidecar isn't pushing (docker compose logs witness)", newest, time.Since(newestAt).Round(time.Minute), repo, latest)
+	}
+}
+
+// newestFile returns the newest regular file under dir, by modification
+// time, and when it was modified; "" when there is none or dir is
+// missing.
+func newestFile(dir string) (string, time.Time, error) {
+	var name string
+	var at time.Time
+	err := filepath.WalkDir(dir, func(p string, e fs.DirEntry, err error) error {
+		if err != nil {
+			if errors.Is(err, fs.ErrNotExist) {
+				return nil
+			}
+			return err
+		}
+		if !e.Type().IsRegular() {
+			return nil
+		}
+		fi, err := e.Info()
+		if err != nil {
+			return err
+		}
+		if fi.ModTime().After(at) {
+			name, at = p, fi.ModTime()
+		}
+		return nil
+	})
+	return name, at, err
 }
 
 // checkPush pings a push monitor, but only when its owner would: a ping
@@ -506,12 +612,8 @@ func (d *doctor) checkPush(ctx context.Context, name, owner string, healthy bool
 	if err := checkPushURL(name, raw); err != nil {
 		return bad("%v", err)
 	}
-	other := envLitestreamHeartbeatURL
-	if name == envLitestreamHeartbeatURL {
-		other = envHeartbeatURL
-	}
-	if raw == d.cfg.Secrets.Get(other) {
-		return bad("%s and %s are the same URL; each needs a monitor of its own", name, other)
+	if err := distinctPushURLs(d.cfg.Secrets.Get); err != nil {
+		return bad("%v", err)
 	}
 	if !healthy {
 		return skip("%s, so doctor sends no ping, as %s wouldn't", why, owner)
@@ -525,6 +627,10 @@ func (d *doctor) checkPush(ctx context.Context, name, owner string, healthy bool
 func (d *doctor) checkPushPairtimed(ctx context.Context) result {
 	healthy := d.readiness != nil && d.readiness.Ready
 	return d.checkPush(ctx, envHeartbeatURL, "pairtimed", healthy, "/readyz didn't pass")
+}
+
+func (d *doctor) checkPushSnapshot(ctx context.Context) result {
+	return d.checkPush(ctx, envSnapshotHeartbeatURL, "the nightly snapshot", d.snapshotFresh, "the snapshot check didn't pass")
 }
 
 func (d *doctor) checkPushLitestream(ctx context.Context) result {
