@@ -9,7 +9,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ebitengine/purego"
 	"golang.org/x/sys/unix"
 
 	"github.com/some-du6e/pairtime/internal/platform"
@@ -28,19 +27,15 @@ const (
 )
 
 // pidPath is libproc's proc_pidpath, through purego since pairtime builds
-// without cgo (CP 7). It is nil when libSystem won't load, and then names
-// come from p_comm alone.
+// without cgo (CP 7), bound the first time a scan needs it. It is nil when
+// libSystem won't load, and then names come from p_comm alone.
 var pidPath = sync.OnceValue(func() func(pid int32, buf *byte, size uint32) int32 {
-	lib, err := purego.Dlopen("/usr/lib/libSystem.B.dylib", purego.RTLD_NOW|purego.RTLD_GLOBAL)
-	if err != nil {
-		return nil
-	}
-	sym, err := purego.Dlsym(lib, "proc_pidpath")
-	if err != nil {
-		return nil
-	}
 	var fn func(pid int32, buf *byte, size uint32) int32
-	purego.RegisterFunc(&fn, sym)
+	sys := dlopen(pathLibSystem)
+	sys.fn(&fn, "proc_pidpath")
+	if sys.err != nil {
+		return nil
+	}
 	return fn
 })
 
