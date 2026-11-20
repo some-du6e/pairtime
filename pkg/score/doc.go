@@ -136,9 +136,10 @@
 //     one, so no record reaches further back than the scorer's look-ahead.
 //     A continuation whose first record comes later than that after the
 //     previous stop starts at the record.
-//   - A queued message resets the bucket when the turn running at the
-//     enqueue stops working, since no record says when the agent picks the
-//     message up.
+//   - A queued message resets the bucket when the agent picks it up, which
+//     no record says, so at the session's first agent record after the
+//     enqueue, the next point an agent takes up queued input, or at the
+//     enqueue when none follows within RETURN_GAP_MAX_S + READ_HORIZON_S.
 //   - A lookup second needs presence, and a run of browser or chat-app
 //     slots ends at a hard break. Its brackets are credited seconds of the
 //     same project, other than lookups, ending at most LOOKUP_BRACKET_S

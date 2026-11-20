@@ -229,6 +229,27 @@ func TestCredit(t *testing.T) {
 			},
 		},
 		{
+			name: "SM 2.4: a queued message resets the bucket when the agent picks it up, so what the agent writes in answer is there to read",
+			build: func(b *tl) {
+				terminalSession(b)
+				b.mouse(every(at(1), at(896), 5000)...)
+				b.prompt(at(60), event.ViaHook, "s_1", "p_1", "t_1", 30)
+				// A message typed while the agent works, which it takes up
+				// at its next tool call, then edits and sums up.
+				b.harness(at(95), event.ViaHook, "s_1", "p_1", &event.AgentQueue{TurnKey: "t_q", LenChars: 40})
+				b.harness(at(100), event.ViaHook, "s_1", "p_1", &event.AgentTool{ToolClass: event.ToolBash, TStart: at(97),
+					TEnd: at(100), VisibleOutputLines: 2})
+				b.agentEdits(at(150), "s_1", 200)
+				b.agentSays(at(290), "s_1", "t_1", 300)
+				b.agentStops(at(300), "s_1", "t_1")
+				b.samples(at(0), at(900))
+			},
+			want: []secondsWant{
+				// The Q anchor at 95 s qualifies reading until 695 s.
+				{300, 690, map[event.Reason]int64{rREAD: 390}},
+			},
+		},
+		{
 			name: "SM 3.3 rule 4: of two sessions in the project, the bucket with the oldest entry drains first",
 			build: func(b *tl) {
 				b.focus(at(0), event.AppTerminal, "p_1", "s_1", "s_2")

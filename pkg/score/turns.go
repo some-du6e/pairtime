@@ -98,6 +98,9 @@ type session struct {
 	// the answer class (SM 2.2).
 	outputs []posRec[*event.AgentOutput]
 	stops   []posRec[*event.AgentStop]
+	// agent holds the indexes of its agent.output, agent.tool and agent.stop
+	// records, in record order.
+	agent []int
 	// lastStop is the latest agent.stop seen so far while turns are
 	// assembled, where the next continuation turn starts.
 	lastStop int64
@@ -133,6 +136,16 @@ func (s *session) askedBefore(pos int) bool {
 	}
 	j := sort.Search(len(s.stops), func(i int) bool { return s.stops[i].pos >= pos })
 	return j > 0 && s.stops[j-1].d.StopReason == event.StopQuestion
+}
+
+// agentAfter returns the index of the session's first agent record after
+// the record at pos, or -1.
+func (s *session) agentAfter(pos int) int {
+	i := sort.SearchInts(s.agent, pos+1)
+	if i == len(s.agent) {
+		return -1
+	}
+	return s.agent[i]
 }
 
 // ide reports whether the session runs in an IDE, so that focus on the
@@ -276,8 +289,12 @@ func (d *deriver) buildSessions() {
 			s.ends = append(s.ends, e.T)
 		case *event.AgentOutput:
 			s.outputs = append(s.outputs, posRec[*event.AgentOutput]{i, e.T, p})
+			s.agent = append(s.agent, i)
+		case *event.AgentTool:
+			s.agent = append(s.agent, i)
 		case *event.AgentStop:
 			s.stops = append(s.stops, posRec[*event.AgentStop]{i, e.T, p})
+			s.agent = append(s.agent, i)
 		}
 	}
 }

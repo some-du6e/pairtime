@@ -311,18 +311,17 @@ func (d *deriver) buildBuckets() {
 				FillMS: d.r.unitsMS(base), decided: a.T})
 		case a.Kind == event.AnchorQueuedMessage:
 			// A queued message resets the bucket when the agent picks it
-			// up. The records don't say when that is, so it is when the
-			// turn running at the enqueue stops working, or the enqueue
-			// itself if none was running.
-			t := a.T
-			if tb := s.runningAt(a.T); tb != nil && tb.turn.RunUntil > t {
-				t = tb.turn.RunUntil
-			}
-			// At a later time it comes after every record of that
-			// millisecond: output that arrived by then is older output.
+			// up (SM 2.4), and what the agent shows from then on answers
+			// it. The records don't say when that is, so it is the
+			// session's first agent record after the enqueue, the next
+			// point at which an agent takes up queued input, just before
+			// what that record shows. With none within rules.reach, which
+			// no record may change what was derived beyond, it is the
+			// enqueue itself.
 			pos, _ := d.recIndex(a.ID)
-			if t > a.T {
-				pos = int64(len(d.recs))
+			t := a.T
+			if next := s.agentAfter(int(pos)); next >= 0 && d.recs[next].T-a.T <= d.r.reach {
+				t, pos = d.recs[next].T, int64(next)
 			}
 			b := get(s)
 			b.ops = append(b.ops, bucketOp{t: t, pos: pos, reset: true, units: base})
