@@ -57,7 +57,7 @@
     "CC7": {
       "result": "fail",
       "counts": {
-        "batches": 28,
+        "batches": 27,
         "records": 105,
         "batch_gaps": 0,
         "seq_gaps": 1,

@@ -66,7 +66,7 @@
     "CC7": {
       "result": "pass",
       "counts": {
-        "batches": 28,
+        "batches": 27,
         "records": 106,
         "batch_gaps": 0,
         "seq_gaps": 0,

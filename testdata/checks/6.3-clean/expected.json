@@ -80,7 +80,7 @@
     "CC7": {
       "result": "pass",
       "counts": {
-        "batches": 52,
+        "batches": 51,
         "records": 255,
         "batch_gaps": 0,
         "seq_gaps": 0,

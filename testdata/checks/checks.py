@@ -360,26 +360,32 @@ def seals_at_once(e):
 
 def ledger(dev, b0, extras=None, hide=(), lag=None):
     """Seals dev's events into batches and returns the reveal and the rows
-    the server witnessed. Batches close at every UTC minute and at once
-    after a record seals_at_once names, so no batch spans a minute. extras
-    maps a seq to more body members (f, c). hide lists seqs the client
-    leaves out of its reveal: the server's rows still cover them."""
+    the server witnessed. Batches close at every UTC minute, and at once
+    after a record seals_at_once names together with the records of the
+    same millisecond, such as the presence sample the agent takes at a hook
+    event or a suspend, so no batch spans a minute and a suspended laptop
+    uploads nothing. extras maps a seq to more body members (f, c). hide
+    lists seqs the client leaves out of its reveal: the server's rows still
+    cover them."""
     keys = device_keys(dev.id)
     extras = extras or {}
-    batches, cur = [], []
+    batches, cur, at_once = [], [], None
     for e in dev.events:
+        if cur and at_once is not None and e["t"] != at_once:
+            batches.append((cur, at_once))
+            cur, at_once = [], None
         if cur and minute_of(e["t"]) != minute_of(cur[-1]["t"]):
             batches.append((cur, minute_of(cur[-1]["t"]) + MINUTE_MS))
             cur = []
         cur.append(e)
         if seals_at_once(e):
-            batches.append((cur, e["t"]))
-            cur = []
+            at_once = e["t"]
     if cur:
-        batches.append((cur, minute_of(cur[-1]["t"]) + MINUTE_MS))
+        batches.append((cur, at_once if at_once is not None else minute_of(cur[-1]["t"]) + MINUTE_MS))
     rand = tl.Rand(f"checks/{dev.base}/{dev.id}/upload")
     prev = sha256(f"stand-in head of batch {b0 - 1} of {dev.id}".encode())
     revealed, witnessed = [], []
+    last_received = None
     for i, (recs, sealed) in enumerate(batches):
         b = b0 + i
         bodies = [body(e, keys["k_leaf"], extras.get(e["seq"])) for e in recs]
@@ -387,6 +393,12 @@ def ledger(dev, b0, extras=None, hide=(), lag=None):
         r = root([leaf(x) for x in entries])
         h = batch_head(prev, r, len(recs), b)
         received = sealed + (lag(b, sealed) if lag else rand.between(250, 1500))
+        # The server stores batch b only after b - 1 (ledger-v1.md 6), so
+        # a batch sealed in the same millisecond as the one before it, with
+        # a shorter upload, still arrives after it.
+        if last_received is not None:
+            received = max(received, last_received + 1)
+        last_received = received
         witnessed.append({"b": b, "n": len(recs), "prev": prev.hex(), "root": r.hex(), "head": h.hex(),
                           "received_at": received})
         records = []

@@ -385,6 +385,23 @@ func TestCheckScenarioResults(t *testing.T) {
 // revealed body must hold the event as Shareable writes it.
 func TestCheckScenarioLedgers(t *testing.T) {
 	for _, s := range loadScenarios(t) {
+		t.Run(s.name+" the server stored each batch after the one before it, as ledger-v1.md 6 requires", func(t *testing.T) {
+			var led checkLedger
+			if err := readJSON(filepath.Join(s.dir, "ledger.json"), &led); err != nil {
+				t.Fatal(err)
+			}
+			for _, dev := range led.Devices {
+				for i := 1; i < len(dev.Witnessed); i++ {
+					a, b := dev.Witnessed[i-1], dev.Witnessed[i]
+					if b.B != a.B+1 || b.Prev != a.Head {
+						t.Errorf("%s: witnessed batch %d follows %d without linking to its head", dev.DeviceID, b.B, a.B)
+					}
+					if b.ReceivedAt <= a.ReceivedAt {
+						t.Errorf("%s: batch %d received at %d, not after batch %d at %d", dev.DeviceID, b.B, b.ReceivedAt, a.B, a.ReceivedAt)
+					}
+				}
+			}
+		})
 		t.Run(s.name+" the revealed batches reproduce the witnessed ones, except where CC7 fails", func(t *testing.T) {
 			var led checkLedger
 			if err := readJSON(filepath.Join(s.dir, "ledger.json"), &led); err != nil {
