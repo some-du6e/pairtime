@@ -133,8 +133,11 @@ func hasContext(text string, i int, words []string) bool {
 }
 
 // Credit cards: CreditCardRecognizer, "All Credit Cards (weak)", 0.3, then
-// a Luhn check that sets the score to 1 or drops the result.
-var cardRE = regexp.MustCompile(`^((4\d{3})|(5[0-5]\d{2})|(6\d{3})|(1\d{3})|(3\d{3}))[- ]?(\d{3,4})[- ]?(\d{3,4})[- ]?(\d{3,5})\b`)
+// a Luhn check that sets the score to 1 or drops the result. The first
+// group also takes 22 to 27, which Presidio's pattern leaves out:
+// Mastercard has issued 2221 to 2720 since 2017, and Mir uses 2200 to
+// 2204. Luhn still drops nine in ten other numbers that start that way.
+var cardRE = regexp.MustCompile(`^((4\d{3})|(5[0-5]\d{2})|(6\d{3})|(1\d{3})|(3\d{3})|(2[2-7]\d{2}))[- ]?(\d{3,4})[- ]?(\d{3,4})[- ]?(\d{3,5})\b`)
 
 func findCards(text string, emit func(int, int, Type)) {
 	finditer(text, cardRE, func(i int) bool {
@@ -444,7 +447,10 @@ const maxLocal = 256
 
 // findEmails gives the matches finditer would, but only tries the starts
 // that can reach an @: those in the run of local-part characters right
-// before it.
+// before it. The run stops at a backslash escape, and the start right after
+// one counts as a word edge, so in a raw capture "hi\nmaya@example.com"
+// gives maya@example.com, not nmaya@example.com, whose removal would leave
+// a broken \ escape behind.
 func findEmails(text string, emit func(int, int, Type)) {
 	for from := 0; from < len(text); {
 		k := strings.IndexByte(text[from:], '@')
@@ -453,7 +459,12 @@ func findEmails(text string, emit func(int, int, Type)) {
 		}
 		at := from + k
 		s := at
+		escaped := false
 		for s > from && at-s < maxLocal {
+			if escapedBefore(text, s) {
+				escaped = true
+				break
+			}
 			r, size := utf8.DecodeLastRuneInString(text[from:s])
 			if !isLocal(r) {
 				break
@@ -462,7 +473,7 @@ func findEmails(text string, emit func(int, int, Type)) {
 		}
 		next := at + 1
 		for i := s; i < at; {
-			if boundary(text, i) {
+			if boundary(text, i) || i == s && escaped {
 				if m := emailRE.FindStringIndex(text[i:]); m != nil {
 					start, end := i, i+m[1]
 					// The pattern's trailing \b.

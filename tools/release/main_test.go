@@ -67,7 +67,7 @@ func read(t *testing.T, p string) []byte {
 }
 
 // fixture is what release.yml's build job has before dist runs: a binary
-// per target, LICENSE and README.md.
+// and its notices per target, LICENSE and README.md.
 type fixture struct {
 	dir, bin, extra, out, payload, manifest, pub string
 }
@@ -87,6 +87,7 @@ func newFixture(t *testing.T) fixture {
 		goos, goarch, _ := strings.Cut(s, "/")
 		tg := target{goos, goarch}
 		write(t, filepath.Join(f.bin, goos+"_"+goarch, tg.exe()), "stand-in pairtime binary for "+s)
+		write(t, filepath.Join(f.bin, goos+"_"+goarch, noticesName), "stand-in notices for "+s+"\n")
 	}
 	license, readme := filepath.Join(dir, "LICENSE"), filepath.Join(dir, "README.md")
 	write(t, license, "GNU AFFERO GENERAL PUBLIC LICENSE (stand-in)\n")
@@ -240,7 +241,7 @@ func TestBuildWritesARelease(t *testing.T) {
 		}
 	})
 
-	t.Run("every archive holds the binary, LICENSE and README.md at its root with Unix modes and the commit time", func(t *testing.T) {
+	t.Run("every archive holds the binary, LICENSE, README.md and its own target's notices at its root with Unix modes and the commit time", func(t *testing.T) {
 		for _, a := range m.Artifacts {
 			tg := target{a.OS, a.Arch}
 			es := entries(t, filepath.Join(f.out, archiveName(testVersion, tg)))
@@ -248,6 +249,7 @@ func TestBuildWritesARelease(t *testing.T) {
 				{tg.exe(), 0o755, date, "stand-in pairtime binary for " + tg.String()},
 				{"LICENSE", 0o644, date, "GNU AFFERO GENERAL PUBLIC LICENSE (stand-in)\n"},
 				{"README.md", 0o644, date, "# pairtime\n"},
+				{noticesName, 0o644, date, "stand-in notices for " + tg.String() + "\n"},
 			}
 			if len(es) != len(want) {
 				t.Fatalf("%s: entries %+v", tg, es)
@@ -264,6 +266,36 @@ func TestBuildWritesARelease(t *testing.T) {
 		}
 	})
 
+	t.Run("a tar.gz holds no build time and no owner, so neither the clock nor the user changes its bytes", func(t *testing.T) {
+		for _, a := range m.Artifacts {
+			tg := target{a.OS, a.Arch}
+			if tg.goos == "windows" {
+				continue // a zip, whose entries carry only the commit time
+			}
+			name := archiveName(testVersion, tg)
+			gz, err := gzip.NewReader(bytes.NewReader(read(t, filepath.Join(f.out, name))))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if h := gz.Header; !h.ModTime.IsZero() || h.Name != "" || h.Comment != "" || h.Extra != nil {
+				t.Errorf("%s: gzip header has time %v, name %q, comment %q and extra %q; want none of them", name, h.ModTime, h.Name, h.Comment, h.Extra)
+			}
+			tr := tar.NewReader(gz)
+			for {
+				hdr, err := tr.Next()
+				if err == io.EOF {
+					break
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				if hdr.Uid != 0 || hdr.Gid != 0 || hdr.Uname != "" || hdr.Gname != "" {
+					t.Errorf("%s: %s is owned by %d:%d (%q:%q), want 0:0 with no names", name, hdr.Name, hdr.Uid, hdr.Gid, hdr.Uname, hdr.Gname)
+				}
+			}
+		}
+	})
+
 	t.Run("the payload in manifest.json is the one dist wrote", func(t *testing.T) {
 		var env struct{ Payload string }
 		if err := json.Unmarshal(read(t, f.manifest), &env); err != nil {
@@ -276,6 +308,10 @@ func TestBuildWritesARelease(t *testing.T) {
 	})
 }
 
+// TestDistIsReproducible runs dist twice in one process, moments apart, so
+// it can't see a header taken from the clock, which gzip keeps in whole
+// seconds, or from the user running it. TestBuildWritesARelease checks
+// those headers directly.
 func TestDistIsReproducible(t *testing.T) {
 	f := newFixture(t)
 	a, b := filepath.Join(f.dir, "a"), filepath.Join(f.dir, "b")
@@ -527,6 +563,7 @@ func TestKeygen(t *testing.T) {
 		{name: "a comment names the key id", ok: strings.Contains(text, "# Key "+secret.Public().ID()+", made ")},
 		{name: "stdout is the secret key and nothing else", ok: out == secret.Text()+"\n"},
 		{name: "stderr names the key id", ok: strings.Contains(errOut, secret.Public().ID())},
+		{name: "stderr says to store a first key as RELEASE_SIGNING_KEY", ok: strings.Contains(errOut, "Save it as the RELEASE_SIGNING_KEY secret of the release environment")},
 		{name: "stderr never shows the secret key", ok: !strings.Contains(errOut, strings.TrimPrefix(secret.Text(), "pairtime-release-ed25519-secret:"))},
 		{name: "the list never holds the secret key", ok: !strings.Contains(text, strings.TrimPrefix(secret.Text(), "pairtime-release-ed25519-secret:"))},
 	}
@@ -538,11 +575,30 @@ func TestKeygen(t *testing.T) {
 		})
 	}
 
-	t.Run("a second key is appended after the first", func(t *testing.T) {
-		mustCLI(t, "keygen", "-pub", list)
+	t.Run("a second key is appended and kept out of RELEASE_SIGNING_KEY until clients trust it", func(t *testing.T) {
+		code, out, errOut := cli(t, "keygen", "-pub", list)
+		if code != 0 {
+			t.Fatalf("exit %d: %s", code, errOut)
+		}
 		keys, err := release.ParsePublicKeys(string(read(t, list)))
-		if err != nil || len(keys) != 2 {
-			t.Fatalf("%d keys, err %v", len(keys), err)
+		next, nextErr := release.ParseSecretKey(out)
+		checks := []struct {
+			name string
+			ok   bool
+		}{
+			{name: "the list holds both keys", ok: err == nil && len(keys) == 2},
+			{name: "stdout is the new secret key", ok: nextErr == nil && next.Public().ID() != secret.Public().ID()},
+			{name: "stderr names the key already listed", ok: strings.Contains(errOut, "already listed "+secret.Public().ID())},
+			{name: "stderr says to leave RELEASE_SIGNING_KEY as it is", ok: strings.Contains(errOut, "Leave RELEASE_SIGNING_KEY as it is")},
+			{name: "stderr says the current key signs the release that adds this one", ok: strings.Contains(errOut, "must be signed with the current key")},
+			{name: "stderr doesn't say to store it as RELEASE_SIGNING_KEY now", ok: !strings.Contains(errOut, "Save it as")},
+		}
+		for _, c := range checks {
+			t.Run(c.name, func(t *testing.T) {
+				if !c.ok {
+					t.Errorf("failed; %d keys (err %v), stdout %q, stderr %q", len(keys), err, out, errOut)
+				}
+			})
 		}
 	})
 	t.Run("a missing key list is an error, not a new file", func(t *testing.T) {
@@ -642,6 +698,45 @@ func TestCheck(t *testing.T) {
 	}
 }
 
+func TestMinVersion(t *testing.T) {
+	tests := []struct {
+		name     string
+		content  string
+		wantCode int
+		want     string // all of stdout for exit 0, part of stderr otherwise
+	}{
+		{name: "comments and blank lines are skipped", content: "# a comment\n\nv0.3.0-alpha.1\n", want: "v0.3.0-alpha.1\n"},
+		{name: "spaces and a CR around the version are ignored", content: "  v1.2.3 \r\n", want: "v1.2.3\n"},
+		{name: "a file with no version fails", content: "# only a comment\n", wantCode: 1, want: "holds 0 versions"},
+		{name: "a file with two versions fails", content: "v0.1.0\nv0.2.0\n", wantCode: 1, want: "holds 2 versions"},
+		{name: "a comment after the version fails", content: "v0.3.0 # older clients must update\n", wantCode: 1, want: "line 1:"},
+		{name: "a version without v fails", content: "# min\n0.3.0\n", wantCode: 1, want: "line 2: version \"0.3.0\" doesn't start with v"},
+		{name: "build metadata fails", content: "v0.3.0+build.1\n", wantCode: 1, want: "build metadata"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := filepath.Join(t.TempDir(), "minimum-version.txt")
+			write(t, p, tt.content)
+			code, out, errOut := cli(t, "min-version", "-file", p)
+			if code != tt.wantCode {
+				t.Fatalf("exit %d, stdout %q, stderr %q; want exit %d", code, out, errOut, tt.wantCode)
+			}
+			if (code == 0 && out != tt.want) || (code != 0 && !strings.Contains(errOut, tt.want)) {
+				t.Fatalf("stdout %q, stderr %q; want %q", out, errOut, tt.want)
+			}
+		})
+	}
+
+	// release.yml reads the same file on every run, but only for PRs that
+	// touch the release code. This checks it on every PR.
+	t.Run("the checked-in minimum-version.txt holds one pairtime version", func(t *testing.T) {
+		out := mustCLI(t, "min-version", "-file", "minimum-version.txt")
+		if _, err := release.ParseVersion(strings.TrimSuffix(out, "\n")); err != nil {
+			t.Fatalf("printed %q: %v", out, err)
+		}
+	})
+}
+
 // with returns args with flag's value replaced, or the flag removed when
 // value is "<none>".
 func with(args []string, flag, value string) []string {
@@ -657,6 +752,15 @@ func with(args []string, flag, value string) []string {
 func TestDistRefuses(t *testing.T) {
 	f := newFixture(t)
 	exists := t.TempDir()
+	// Binaries with no notices beside them.
+	bare := t.TempDir()
+	for _, s := range strings.Fields(testTargets) {
+		goos, goarch, _ := strings.Cut(s, "/")
+		write(t, filepath.Join(bare, goos+"_"+goarch, target{goos, goarch}.exe()), "stand-in pairtime binary for "+s)
+	}
+	// An extra file with the notices' name.
+	clash := filepath.Join(t.TempDir(), noticesName)
+	write(t, clash, "not the notices\n")
 	tests := []struct {
 		name     string
 		flag     string
@@ -674,6 +778,8 @@ func TestDistRefuses(t *testing.T) {
 		{name: "a short commit", flag: "-commit", value: "68726d8", wantCode: 1, wantErr: "commit"},
 		{name: "a date with an offset", flag: "-date", value: "2026-11-19T11:49:00+01:00", wantCode: 1, wantErr: "date"},
 		{name: "an extra file that doesn't exist", flag: "-extra", value: filepath.Join(f.dir, "NOTICE"), wantCode: 1, wantErr: "NOTICE"},
+		{name: "a target without its notices", flag: "-bin", value: bare, wantCode: 1, wantErr: noticesName + ": no such file"},
+		{name: "two files with one name in an archive", flag: "-extra", value: f.extra + "," + clash, wantCode: 1, wantErr: "two files are named " + noticesName},
 		{name: "a required flag left out", flag: "-payload", value: "<none>", wantCode: 2, wantErr: "-payload is required"},
 	}
 	for _, tt := range tests {

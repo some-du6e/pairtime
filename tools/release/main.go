@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-// Command release turns built pairtime binaries into a release: one archive
-// per platform, checksums.txt, and manifest.json, the signed update
-// manifest. It also makes release keys and checks a finished release.
+// Command release turns built pairtime binaries into a release: each
+// binary's third-party notices, one archive per platform, checksums.txt,
+// and manifest.json, the signed update manifest. It also makes release
+// keys and checks a finished release.
 // .github/workflows/release.yml runs it, and docs/spec/update-manifest.md
 // specifies what it writes.
 //
@@ -10,7 +11,9 @@
 //
 //	release keygen [-pub internal/release/release-keys.txt]
 //	release keys
+//	release min-version [-file tools/release/minimum-version.txt]
 //	release check -version v [-min-version v]
+//	release notices -bin file -out file [-extra tools/release/extra-notices.txt]
 //	release dist -version v -commit hash -date time -min-version v -base-url url
 //	    -targets "os/arch ..." -bin dir -out dir -payload file [-extra files]
 //	release sign -payload file -out manifest.json (-key-env NAME | -throwaway) [-pub-out file]
@@ -47,7 +50,10 @@ Usage:
   release keygen [-pub file]   make a release key: append its public half to the
                                key list, print its secret half once
   release keys                 print the ids of the release keys compiled in
+  release min-version          print the one version minimum-version.txt holds
   release check -version v     check a release version (and -min-version)
+  release notices -bin file    write the third-party notices for one built
+                               binary
   release dist ...             write the archives, checksums.txt and the
                                manifest payload
   release sign ...             sign the payload into manifest.json
@@ -66,12 +72,14 @@ type usageError string
 func (e usageError) Error() string { return string(e) }
 
 var commands = map[string]func(args []string, stdout, stderr io.Writer) error{
-	"keygen": cmdKeygen,
-	"keys":   cmdKeys,
-	"check":  cmdCheck,
-	"dist":   cmdDist,
-	"sign":   cmdSign,
-	"verify": cmdVerify,
+	"keygen":      cmdKeygen,
+	"keys":        cmdKeys,
+	"min-version": cmdMinVersion,
+	"check":       cmdCheck,
+	"notices":     cmdNotices,
+	"dist":        cmdDist,
+	"sign":        cmdSign,
+	"verify":      cmdVerify,
 }
 
 // run executes one command line and returns the exit code: 0 on success,
@@ -145,7 +153,8 @@ func cmdKeygen(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("%w (run keygen from the repository root, or pass -pub)", err)
 	}
-	if _, err := release.ParsePublicKeys(string(old)); err != nil {
+	listed, err := release.ParsePublicKeys(string(old))
+	if err != nil {
 		return fmt.Errorf("%s: %w", *pubPath, err)
 	}
 	key, err := release.GenerateSecretKey(rand.Reader)
@@ -173,9 +182,26 @@ func cmdKeygen(args []string, stdout, stderr io.Writer) error {
 	if _, err := fmt.Fprintln(stdout, key.Text()); err != nil {
 		return fmt.Errorf("printing the secret key: %w; delete key %s from %s and run keygen again", err, pub.ID(), *pubPath)
 	}
-	fmt.Fprintf(stderr, "Added release public key %s to %s. Commit that file.\n"+
-		"The secret key went to standard output and is stored nowhere else: save it as the\n"+
-		"RELEASE_SIGNING_KEY secret and keep an offline copy (docs/spec/update-manifest.md).\n", pub.ID(), *pubPath)
+	if len(listed) == 0 {
+		fmt.Fprintf(stderr, "Added release public key %s to %s. Commit that file.\n"+
+			"The secret key went to standard output and is stored nowhere else.\n"+
+			"Save it as the RELEASE_SIGNING_KEY secret of the release environment, and keep an offline copy.\n"+
+			"See docs/spec/update-manifest.md, Making the key.\n", pub.ID(), *pubPath)
+		return nil
+	}
+	// A replacement. Installed clients trust only the keys already listed,
+	// so storing this key as RELEASE_SIGNING_KEY now would sign the next
+	// release with a key none of them trusts, and GitHub never shows the
+	// old secret again.
+	var ids []string
+	for _, k := range listed {
+		ids = append(ids, k.ID())
+	}
+	fmt.Fprintf(stderr, "Added release public key %s to %s, which already listed %s. Commit that file.\n"+
+		"The secret key went to standard output and is stored nowhere else. Keep it offline for now.\n"+
+		"Leave RELEASE_SIGNING_KEY as it is: installed clients trust only the keys already listed, so the release that adds this one must be signed with the current key.\n"+
+		"Move this key into RELEASE_SIGNING_KEY once clients run a build that trusts it.\n"+
+		"See docs/spec/update-manifest.md, Replacing a key.\n", pub.ID(), *pubPath, strings.Join(ids, ", "))
 	return nil
 }
 
@@ -192,6 +218,46 @@ func cmdKeys(args []string, stdout, stderr io.Writer) error {
 		fmt.Fprintln(stdout, k.ID())
 	}
 	return nil
+}
+
+func cmdMinVersion(args []string, stdout, stderr io.Writer) error {
+	flags := newFlags("min-version", stderr)
+	file := flags.String("file", "tools/release/minimum-version.txt", "the file holding the oldest client version a tagged release supports")
+	if err := parse(flags, args); err != nil {
+		return err
+	}
+	v, err := readMinVersion(*file)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintln(stdout, v)
+	return nil
+}
+
+// readMinVersion returns the version a minimum-version.txt holds. Blank
+// lines and lines starting with # are skipped, and exactly one other line
+// must be left, holding a pairtime version and nothing else.
+func readMinVersion(p string) (release.Version, error) {
+	data, err := os.ReadFile(p)
+	if err != nil {
+		return release.Version{}, err
+	}
+	var versions []release.Version
+	for i, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		v, err := release.ParseVersion(line)
+		if err != nil {
+			return release.Version{}, fmt.Errorf("%s line %d: %w", p, i+1, err)
+		}
+		versions = append(versions, v)
+	}
+	if len(versions) != 1 {
+		return release.Version{}, fmt.Errorf("%s holds %d versions; it must hold exactly one", p, len(versions))
+	}
+	return versions[0], nil
 }
 
 func cmdCheck(args []string, stdout, stderr io.Writer) error {
@@ -281,7 +347,7 @@ func cmdDist(args []string, stdout, stderr io.Writer) error {
 	minVersion := flags.String("min-version", "", "the oldest client version the release supports")
 	baseURL := flags.String("base-url", "", "the URL the archives are published under")
 	targetList := flags.String("targets", "", "the targets, space-separated os/arch pairs")
-	binDir := flags.String("bin", "", "the directory holding <os>_<arch>/pairtime[.exe] for each target")
+	binDir := flags.String("bin", "", "the directory holding <os>_<arch>/pairtime[.exe] and <os>_<arch>/"+noticesName+" for each target")
 	extra := flags.String("extra", "", "comma-separated files every archive carries beside the binary, such as LICENSE,README.md")
 	outDir := flags.String("out", "", "the directory to create for the archives and checksums.txt; it must not exist")
 	payloadPath := flags.String("payload", "", "the file to write the unsigned manifest payload to")
@@ -322,11 +388,21 @@ func cmdDist(args []string, stdout, stderr io.Writer) error {
 	}
 	sums := map[string]string{}
 	for _, t := range targets {
-		bin, err := os.ReadFile(filepath.Join(*binDir, t.goos+"_"+t.goarch, t.exe()))
+		dir := filepath.Join(*binDir, t.goos+"_"+t.goarch)
+		bin, err := os.ReadFile(filepath.Join(dir, t.exe()))
 		if err != nil {
 			return fmt.Errorf("%s: %w", t, err)
 		}
+		// Every archive carries its own binary's third-party notices.
+		third, err := os.ReadFile(filepath.Join(dir, noticesName))
+		if err != nil {
+			return fmt.Errorf("%s: %w (tools/release notices writes it)", t, err)
+		}
 		files := append([]archiveFile{{name: t.exe(), mode: 0o755, data: bin}}, extras...)
+		files = append(files, archiveFile{name: noticesName, mode: 0o644, data: third})
+		if err := uniqueNames(files); err != nil {
+			return fmt.Errorf("%s: %w", t, err)
+		}
 		var buf bytes.Buffer
 		if t.goos == "windows" {
 			err = writeZip(&buf, files, mtime)
@@ -367,6 +443,19 @@ type archiveFile struct {
 	name string
 	mode fs.FileMode
 	data []byte
+}
+
+// uniqueNames refuses two archive entries with one name, which an unpacker
+// would write one over the other.
+func uniqueNames(files []archiveFile) error {
+	seen := map[string]bool{}
+	for _, f := range files {
+		if seen[f.name] {
+			return fmt.Errorf("two files are named %s", f.name)
+		}
+		seen[f.name] = true
+	}
+	return nil
 }
 
 // writeTarGz writes a reproducible tar.gz: fixed order, owner 0, the
