@@ -7,11 +7,17 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"sync"
 )
 
 // semverRE is the regular expression semver.org's FAQ suggests for
-// SemVer 2.0.0, copied verbatim. It matches a version without the "v".
-var semverRE = regexp.MustCompile(`^(?P<major>0|[1-9]\d*)\.(?P<minor>0|[1-9]\d*)\.(?P<patch>0|[1-9]\d*)(?:-(?P<prerelease>(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\.(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\+(?P<buildmetadata>[0-9a-zA-Z-]+(?:\.[0-9a-zA-Z-]+)*))?$`)
+// SemVer 2.0.0, copied verbatim. It matches a version without the "v". It
+// compiles the first time a version is parsed, not as the package is
+// initialized: every pairtime process links this package, `pairtime hook`
+// among them, which starts on every harness hook (DESIGN 9.7's hook gate).
+var semverRE = sync.OnceValue(func() *regexp.Regexp {
+	return regexp.MustCompile(`^(?P<major>0|[1-9]\d*)\.(?P<minor>0|[1-9]\d*)\.(?P<patch>0|[1-9]\d*)(?:-(?P<prerelease>(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\.(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\+(?P<buildmetadata>[0-9a-zA-Z-]+(?:\.[0-9a-zA-Z-]+)*))?$`)
+})
 
 // Version is a pairtime release version: "v" and a SemVer 2.0.0 version
 // without build metadata, such as v0.1.0-alpha.1. Release tags, the
@@ -27,19 +33,20 @@ func ParseVersion(s string) (Version, error) {
 	if !ok {
 		return Version{}, fmt.Errorf("version %q doesn't start with v", s)
 	}
-	m := semverRE.FindStringSubmatch(rest)
+	re := semverRE()
+	m := re.FindStringSubmatch(rest)
 	if m == nil {
 		return Version{}, fmt.Errorf("version %q isn't v and a SemVer 2.0.0 version, like v0.1.0 or v0.1.0-alpha.1", s)
 	}
-	if m[semverRE.SubexpIndex("buildmetadata")] != "" {
+	if m[re.SubexpIndex("buildmetadata")] != "" {
 		return Version{}, fmt.Errorf("version %q has build metadata, which pairtime versions don't use", s)
 	}
 	v := Version{
-		major: m[semverRE.SubexpIndex("major")],
-		minor: m[semverRE.SubexpIndex("minor")],
-		patch: m[semverRE.SubexpIndex("patch")],
+		major: m[re.SubexpIndex("major")],
+		minor: m[re.SubexpIndex("minor")],
+		patch: m[re.SubexpIndex("patch")],
 	}
-	if pre := m[semverRE.SubexpIndex("prerelease")]; pre != "" {
+	if pre := m[re.SubexpIndex("prerelease")]; pre != "" {
 		v.pre = strings.Split(pre, ".")
 	}
 	return v, nil
