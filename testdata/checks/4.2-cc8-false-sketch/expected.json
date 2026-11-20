@@ -79,8 +79,9 @@
         "bad_entry": 0,
         "sketch_mismatch": 1,
         "shingle_mismatch": 0,
-        "shingle_conflicts": 0,
+        "length_mismatch": 0,
         "class_mismatch": 0,
+        "shingle_conflicts": 0,
         "hidden_shingles": 0
       },
       "items": [
@@ -110,6 +111,6 @@
   "errata": ["2026-11-19-check-readings"],
   "notes": [
     "The server re-scores from the bodies' f (DESIGN 6.2 D18), which say A3 isn't a re-roll, so the re-score credits A3 as the live buckets do and CC6 passes. Only CC8 sees the lie: the sketch from A3's revealed values is A1's, not the committed one (ledger-v1.md 10.8 `sketch`).",
-    "ledger-v1.md 10.8 in PR #12 (WP-LG3, not merged yet). Issue #15: CC8 is weaker than DESIGN 7.3 claims, and these cases follow the spec's stated limit"
+    "ledger-v1.md 10.8 (WP-LG3, #12). Issue #15: CC8 is weaker than DESIGN 7.3 claims, and these cases follow the spec's stated limit"
   ]
 }

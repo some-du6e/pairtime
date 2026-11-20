@@ -23,7 +23,7 @@ check = ck.check
 
 # Every scenario rests on at least one reading DESIGN 7.3 leaves open.
 READINGS = "2026-11-19-check-readings"
-CC8_SPEC = ("ledger-v1.md 10.8 in PR #12 (WP-LG3, not merged yet). Issue #15: CC8 is weaker than DESIGN 7.3 "
+CC8_SPEC = ("ledger-v1.md 10.8 (WP-LG3, #12). Issue #15: CC8 is weaker than DESIGN 7.3 "
             "claims, and these cases follow the spec's stated limit")
 
 # 4.2-alternation: Claude Code on macOS, one project, five prompts.
@@ -38,6 +38,10 @@ TEXTS = {A1: TEXT_A, B1: TEXT_B, A2: TEXT_A, B2: TEXT_B, A3: TEXT_A}
 # What a client that wants A3 credited commits instead of A3's sketch: an
 # unrelated request's, so A3 is no near-duplicate of A1 or A2.
 DECOY = "add a dark mode toggle to the settings page header"
+# 4.2-cc8-false-class's B2, a go-ahead on SM 2.2's list, and
+# 4.2-cc8-inflated-length's lengths for B2.
+GO_AHEAD = "looks good"
+INFLATED = 450
 # The made-up key of 4.2-cc8-made-up-key, the client's own, not K_feat.
 FAKE_KEY = ck.sha256(b"pairtime check fixtures: a made-up feature key")
 # Typing-module counts in each prompt's three typing slots (the 40 s before
@@ -124,6 +128,11 @@ class Scenario:
             "CC10": ck.cc10(dev.events, sub),
             "CC11": ck.cc11(dev.events, sub, dev.keys, self.typing, self.classes),
         }
+        if self.challenge is not None and self.challenge["drawn"]:
+            flipped = ck.cc8(dict(self.challenge, drawn=self.challenge["drawn"][::-1]), led)
+            check(flipped["counts"] == computed["CC8"]["counts"]
+                  and sorted(map(str, flipped.get("items", []))) == sorted(map(str, computed["CC8"].get("items", []))),
+                  f"{self.name}: CC8's result doesn't depend on the order of the reveals")
         results, not_exercised = {}, {}
         for cc in ck.CHECKS:
             want = self.stated.get(cc)
@@ -256,12 +265,13 @@ def alt(sc, *, transcripts=True, typing=True, features=True, skip_turns=()):
     return dev
 
 
-def alt_typing(dev, pasted=None):
+def alt_typing(dev, pasted=None, slots=None):
     """The typing module's per-slot key-down counts for ALT, matching the
-    slots the samples show key presses in."""
+    slots the samples show key presses in. slots maps a prompt's time to
+    its own typing slots, (offset, key-downs), in place of TYPING_SLOTS."""
     counts = {CLAUDE_TYPED[0]: CLAUDE_TYPED[1]}
     for t in (A1, B1, A2, B2, A3):
-        for off, n in TYPING_SLOTS:
+        for off, n in (slots or {}).get(t, TYPING_SLOTS):
             counts[t + off] = n
     if pasted is not None:
         for off, _ in TYPING_SLOTS:
@@ -281,13 +291,15 @@ TYPING_NOTE = ("A stand-in: pkg/event has no field for the typing module's per-1
                "have no key-down. keys counts every key-down, injected the ones the module saw injected.")
 
 
-def alt_features(sc, dev, *, a3=None):
+def alt_features(sc, dev, *, a3=None, texts=None):
     """Each prompt.submit's f and c in its ledger body (ledger-v1.md 10.7,
     10.2), under the device's K_feat and K_tok: the hook's record and the
     log reader's copy alike, each committing the prompt's text under its own
-    seq. a3 replaces the f of both of A3's records."""
+    seq. Every f has class substantive, which each base text is. a3
+    replaces the f of both of A3's records, and texts replaces a prompt's
+    text by its time."""
     keys = ck.device_keys(dev.id)
-    text_of = {h["data"]["turn_key"]: TEXTS[h["t"]] for h in dev.turn_prompts("hook")}
+    text_of = {h["data"]["turn_key"]: {**TEXTS, **(texts or {})}[h["t"]] for h in dev.turn_prompts("hook")}
     a3_turn = dev.one("prompt.submit", A3, via="hook")["data"]["turn_key"]
     for p in dev.find("prompt.submit"):
         turn = p["data"]["turn_key"]
@@ -299,18 +311,23 @@ def alt_features(sc, dev, *, a3=None):
     return keys
 
 
-def alt_challenge(sc, dev, keys, drawn, *, a3_key=None, a3_hidden=()):
+def alt_challenge(sc, dev, keys, drawn, *, a3_key=None, a3_hidden=(), a3_bare=False, texts=None):
     """The draw and the reveals: every pool item is drawn, because the
-    pool is under CHALLENGE_K = 10."""
+    pool is under CHALLENGE_K = 10. a3_bare leaves the text off every one
+    of A3's per-shingle values."""
     hooks = {h["t"]: h for h in dev.turn_prompts("hook")}
+    text_at = {**TEXTS, **(texts or {})}
     items = []
     for t in drawn:
         h = hooks[t]
-        com = ck.commitment(keys["k_tok"], h["seq"], TEXTS[t])
+        com = ck.commitment(keys["k_tok"], h["seq"], text_at[t])
         key = a3_key if t == A3 and a3_key is not None else keys["k_feat"]
         hidden = a3_hidden if t == A3 else ()
+        cc8 = ck.shingle_reveal(key, text_at[t], hidden)
+        if t == A3 and a3_bare:
+            cc8 = [{"v": x["v"]} for x in cc8]
         items.append({"seq": h["seq"], "turn_key": h["data"]["turn_key"],
-                      "text": ck.text_reveal(com, hidden), "cc8": ck.shingle_reveal(key, TEXTS[t], hidden)})
+                      "text": ck.text_reveal(com, hidden), "cc8": cc8})
     pool = [hooks[t]["seq"] for t in drawn]
     sc.challenge = {"device_id": dev.id, "pool": pool, "k": ck.CHALLENGE_K_MIN, "drawn": items,
                     "note": CHALLENGE_NOTE}
@@ -581,6 +598,109 @@ def s_42_cc8_key(out):
     sc.build(out)
 
 
+def s_42_cc8_bare(out):
+    sc = Scenario("4.2-cc8-hidden-shingles", "A made-up key with every shingle's text left off",
+                  "As 4.2-cc8-made-up-key, but the client leaves the text off every one of A3's per-shingle values "
+                  "and removes nothing from A3's text. No shingle of A3 can then be compared with A1's or A2's, "
+                  "and A3's sketch reproduces under the client's key. The reviewer still sees all of A3's text.",
+                  base=ALT, projects=[DASH], window=ALT_W)
+    dev = alt(sc)
+    dev.finish()
+    keys = alt_features(sc, dev, a3=ck.features(FAKE_KEY, TEXT_A, "substantive"))
+    sc.edit("A3's f is computed under a made-up key instead of K_feat. Its c is honest, and its content reveal "
+            "removes nothing.")
+    sc.edit("A3's shingle reveal gives each of its nine values under the made-up key, and none with its x.")
+    sc.typing = alt_typing(dev)
+    alt_challenge(sc, dev, keys, (A1, B1, A2, B2, A3), a3_key=FAKE_KEY, a3_bare=True)
+    sc.fails = ["CC8"]
+    alt_clean_state(sc, cc5=False)
+    sc.state("CC5", "pass", devices=1, slots_credited_twice=0)
+    sc.state("CC8", "fail", challenged=5, sketch_ok=5, shingle_mismatch=1, length_mismatch=0, class_mismatch=0,
+             shingle_conflicts=0, hidden_shingles=9)
+    sc.notes.append("Nothing was removed from A3, so every value must show its shingle, and the shown shingles must "
+                    "be exactly A3's (ledger-v1.md 10.8). A3's show none, so CC8 fails it (`shingles`). That rule "
+                    "is what keeps the cross-reveal rule working: without it, leaving x off is a cheaper way to "
+                    "hide a made-up key than removing words, as 4.2-cc8-removed-spans does, and it hides nothing "
+                    "from the reviewer.")
+    sc.notes.append(CC8_SPEC)
+    sc.build(out)
+
+
+def s_42_cc8_class(out):
+    sc = Scenario("4.2-cc8-false-class", "A go-ahead committed as a substantive prompt",
+                  "B2 was a go-ahead: she typed `looks good`. A modified client commits its class as substantive, "
+                  "which buys a 120 s think lead where a go-ahead gets 20 s with presence only (SM 2.3). Its "
+                  "sketch, template, lengths and commitment are honest. B2 is drawn, and the class recomputed from "
+                  "its revealed text is low_effort.",
+                  base=ALT, projects=[DASH], window=ALT_W)
+    dev = alt(sc)
+    b2 = dev.one("prompt.submit", B2, via="hook")["data"]["turn_key"]
+    for p in dev.find("prompt.submit", turn_key=b2):
+        p["data"].update(len_chars=len(GO_AHEAD), typed_len_est=len(GO_AHEAD))
+    gone = dev.drop_keys(B2 - 45_000, B2 - 15_001)
+    check(len(gone) == 2, "two of B2's three typing samples' key presses go; the last slot's stays")
+    sc.edit(f"B2's text is {GO_AHEAD!r}: its hook record and the transcript's copy have len_chars and "
+            f"typed_len_est {len(GO_AHEAD)}.")
+    sc.edit("She types it in the slot before B2: the key presses from 19:41:15 to 19:41:44 are gone, and the "
+            "typing module counts 11 key-downs, the ten characters and Enter, in the slot from 19:41:45.")
+    dev.finish()
+    texts = {B2: GO_AHEAD}
+    keys = alt_features(sc, dev, texts=texts)
+    sc.edit("B2's f holds the honest sketch and template of its text, and class substantive.")
+    sc.typing = alt_typing(dev, slots={B2: ((-15_000, len(GO_AHEAD) + 1),)})
+    alt_challenge(sc, dev, keys, (A1, B1, A2, B2), texts=texts)
+    sc.fails = ["CC8"]
+    alt_clean_state(sc, cc5=False)
+    sc.state("CC5", "pass", devices=1, slots_credited_twice=0)
+    sc.state("CC8", "fail", challenged=4, sketch_ok=4, shingle_mismatch=0, length_mismatch=0, class_mismatch=1,
+             shingle_conflicts=0)
+    sc.state("CC11", "pass", prompts=5, typed_chars=250, key_downs=275, too_few_keys=0)
+    sc.notes.append("`looks good` is on SM 2.2's go-ahead list, and no agent output before B2 asks a question, so "
+                    "its class is low_effort whatever its length. The server re-scores from the bodies' f (DESIGN "
+                    "6.2 D18), which say substantive, so the re-score credits B2's lead as the live buckets do and "
+                    "CC6 passes. Only CC8 sees the class.")
+    sc.notes.append("B2 is still human_typed (SM 2.2 rule 6): a key press in the 10 s before it, focus on the "
+                    "terminal, and 10 characters in one input slot. It isn't a re-roll of B1, and A3 is still the "
+                    "third A.")
+    sc.notes.append(CC8_SPEC)
+    sc.build(out)
+
+
+def s_42_cc8_length(out):
+    sc = Scenario("4.2-cc8-inflated-length", "A prompt whose lengths are inflated",
+                  "A modified client writes len_chars and typed_len_est 450 for B2, a 60-character prompt, on the "
+                  "hook's record and on the transcript's copy, so CC1 still matches them. B2 is substantive at "
+                  "either length, but the typing part of its lead grows from 40 s to the 300 s cap. B2 is drawn, "
+                  "and its revealed text has 60 characters. The Mac's typing module is off, so CC11 has no key "
+                  "counts to compare.",
+                  base=ALT, projects=[DASH], window=ALT_W)
+    dev = alt(sc, typing=False)
+    b2 = dev.one("prompt.submit", B2, via="hook")["data"]["turn_key"]
+    for p in dev.find("prompt.submit", turn_key=b2):
+        p["data"].update(len_chars=INFLATED, typed_len_est=INFLATED)
+    sc.edit(f"B2's hook record and the transcript's copy have len_chars and typed_len_est {INFLATED}.")
+    sc.edit("The typing module is off, so there is no typing.json.")
+    dev.finish()
+    keys = alt_features(sc, dev)
+    alt_challenge(sc, dev, keys, (A1, B1, A2, B2))
+    sc.fails = ["CC8"]
+    alt_clean_state(sc, cc5=False)
+    sc.state("CC5", "pass", devices=1, slots_credited_twice=0)
+    sc.state("CC8", "fail", challenged=4, sketch_ok=4, shingle_mismatch=0, length_mismatch=1, class_mismatch=0,
+             shingle_conflicts=0)
+    sc.state("CC11", "not_computable", prompts=0)
+    sc.notes.append("Nothing was removed from B2, so its body's len_chars must be its text's 60 characters "
+                    "(`lengths`). The class recomputed with the typed length bounded by the text's is substantive, "
+                    "B2's committed class, so only the length rule fails. Read from the body's own 450 instead, the "
+                    "class check can't see a length lie at all.")
+    sc.notes.append("B2 is still human_typed: in its 420 s lead the Mac saw key presses in nine slots, 135 s, and "
+                    "SM 2.2 rule 6 allows 15 characters a second over them. On a Mac the typing part is realized "
+                    "only in slots with key presses, so the lie gains little here; on a laptop without a key "
+                    "counter the whole 300 s needs presence alone (SM 2.3).")
+    sc.notes.append(CC8_SPEC)
+    sc.build(out)
+
+
 def s_42_cc8_limit(out):
     sc = Scenario("4.2-cc8-removed-spans", "A made-up key that CC8 can't catch",
                   "As 4.2-cc8-made-up-key, but the teen removes three words of A3 by hand in its content reveal, so "
@@ -594,7 +714,7 @@ def s_42_cc8_limit(out):
             "are removed as type teen, which hides all nine shingles' texts.")
     sc.typing = alt_typing(dev)
     alt_challenge(sc, dev, keys, (A1, B1, A2, B2, A3), a3_key=FAKE_KEY, a3_hidden=(2, 5, 8))
-    sc.known_limit = ("ledger-v1.md 10.8 (PR #12): a client that commits a sketch under a made-up key is caught only "
+    sc.known_limit = ("ledger-v1.md 10.8: a client that commits a sketch under a made-up key is caught only "
                       "when two revealed turns share a shingle and show different values, and a span removed by hand "
                       "over the shared words hides even that. Issue #15 asks Karim to accept, bind the key or drop "
                       "CC8's dark-flow role. DESIGN 7.3's 0.65 for a 10-turn draw doesn't hold here.")
@@ -1003,7 +1123,8 @@ def s_63_cc9_orphan(out):
     sc.build(out)
 
 
-SCENARIOS = [s_42_clean, s_42_cc1, s_42_cc2, s_42_cc5, s_42_cc7, s_42_cc7_batch, s_42_cc8_false, s_42_cc8_key, s_42_cc8_limit,
+SCENARIOS = [s_42_clean, s_42_cc1, s_42_cc2, s_42_cc5, s_42_cc7, s_42_cc7_batch, s_42_cc8_false, s_42_cc8_key, s_42_cc8_bare, s_42_cc8_class, s_42_cc8_length,
+             s_42_cc8_limit,
              s_42_cc9, s_42_cc11, s_62_clean, s_62_cc3, s_62_cc3_plugin, s_62_cc4_late, s_62_cc4_diffstat, s_63_clean, s_63_cc4_pushed,
              s_63_cc6, s_63_cc9, s_63_cc9_orphan, s_63_cc10]
 

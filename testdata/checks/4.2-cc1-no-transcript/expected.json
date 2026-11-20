@@ -87,8 +87,9 @@
         "bad_entry": 0,
         "sketch_mismatch": 0,
         "shingle_mismatch": 0,
-        "shingle_conflicts": 0,
+        "length_mismatch": 0,
         "class_mismatch": 0,
+        "shingle_conflicts": 0,
         "hidden_shingles": 0
       }
     },

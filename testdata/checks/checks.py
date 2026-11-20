@@ -441,7 +441,7 @@ def header_project(e):
     return e.get("project_key") or ""
 
 
-# Content: ledger-v1.md 10 (PR #12), for texts of plain lowercase words.
+# Content: ledger-v1.md 10, for texts of plain lowercase words.
 
 WHITESPACE = {chr(c) for c in [*range(0x09, 0x0E), 0x20, 0x85, 0xA0, 0x1680, *range(0x2000, 0x200B),
                                0x2028, 0x2029, 0x202F, 0x205F, 0x3000]}
@@ -888,14 +888,38 @@ def cc7(led, sub):
     return outcome("fail" if items else "pass", counts, items)
 
 
+def reveal_word_count(items):
+    """The number of words a text reveal covers, or None when it keeps no
+    token. Tokens alternate between whitespace and other code points
+    (10.2), so one kept token fixes the kind of every token, removed ones
+    included. For the plain lowercase words these fixtures commit, 10.4
+    leaves every word as it is, so this is the normalized word count that
+    picks the shingle kind (10.5)."""
+    kinds = []
+    for it in items:
+        if "salt" in it:
+            kinds.append(bytes.fromhex(it["token"]).decode()[0] not in WHITESPACE)
+        else:
+            kinds.extend([None] * it["count"])
+    anchor = next((i for i, k in enumerate(kinds) if k is not None), None)
+    if anchor is None:
+        return None
+    return sum(1 for i in range(len(kinds)) if kinds[anchor] == ((i - anchor) % 2 == 0))
+
+
 def cc8(challenge, led):
-    """Content-derived inputs (ledger-v1.md 10.8, PR #12): for each
-    challenged turn, the revealed values reproduce the committed sketch,
-    every shingle of the revealed text is shown when nothing was removed,
-    no shingle shows two values across the device's reveals, and the class
-    recomputed from the text is the committed one."""
+    """Content-derived inputs (ledger-v1.md 10.8): for each
+    challenged turn, the revealed values are well formed and reproduce the
+    committed sketch. When nothing was removed, the shown shingles are
+    exactly the revealed text's and every value shows one, the body's
+    len_chars is the text's length and its typed_len_est no more than that,
+    and the class recomputed from the text, with the typed length bounded
+    by the text's, is the committed one. Across the device's reveals, a
+    shingle that shows two values fails every reveal that shows one of
+    them, and shingle_conflicts counts such shingles, so the count doesn't
+    depend on the order of the reveals."""
     counts = {"challenged": 0, "sketch_ok": 0, "bad_entry": 0, "sketch_mismatch": 0, "shingle_mismatch": 0,
-              "shingle_conflicts": 0, "class_mismatch": 0, "hidden_shingles": 0}
+              "length_mismatch": 0, "class_mismatch": 0, "shingle_conflicts": 0, "hidden_shingles": 0}
     if challenge is None or not challenge["drawn"]:
         return outcome("not_computable", counts, reason="nothing drawn: no human prompt opened a credited anchor")
     bodies = {}
@@ -903,12 +927,12 @@ def cc8(challenge, led):
         for bt in dev["batches"]:
             for r in bt["records"]:
                 bodies[(dev["device_id"], r["seq"])] = json.loads(r["body"])
-    items, seen = [], {}
+    faults, shown_by = {}, {}
     for d in challenge["drawn"]:
         counts["challenged"] += 1
         bd = bodies[(challenge["device_id"], d["seq"])]
         f = bd["f"]
-        bad = []
+        bad = faults.setdefault(d["seq"], [])
         vs = [bytes.fromhex(x["v"]) for x in d["cc8"]]
         if any(len(v) != 32 for v in vs) or any(b <= a for a, b in zip(vs, vs[1:])):
             counts["bad_entry"] += 1
@@ -928,20 +952,39 @@ def cc8(challenge, led):
                 counts["shingle_mismatch"] += 1
                 bad.append("shingles")
             ev = bd["e"]["data"]
-            if prompt_class(text, ev["typed_len_est"], ev["answers_question"]) != f["pc"]:
+            if ev["len_chars"] != len(text) or ev["typed_len_est"] > ev["len_chars"]:
+                counts["length_mismatch"] += 1
+                bad.append("lengths")
+            typed = min(ev["typed_len_est"], len(text))
+            if prompt_class(text, typed, ev["answers_question"]) != f["pc"]:
                 counts["class_mismatch"] += 1
                 bad.append("class")
+        words = reveal_word_count(d["text"])
+        tag = 0x05 if words is not None and words >= 6 else 0x06
         for x in d["cc8"]:
-            if "x" not in x:
-                continue
-            other = seen.setdefault(x["x"], (x["v"], d["seq"]))
-            if other[0] != x["v"]:
-                counts["shingle_conflicts"] += 1
-                bad.append(f"conflict_with_{other[1]}")
+            if "x" in x:
+                shown_by.setdefault((tag, x["x"]), {}).setdefault(x["v"], set()).add(d["seq"])
+    conflicting = {k: by_value for k, by_value in shown_by.items() if len(by_value) > 1}
+    counts["shingle_conflicts"] = len(conflicting)
+    others = {}
+    for by_value in conflicting.values():
+        for v, seqs in by_value.items():
+            elsewhere = set().union(*(o for w, o in by_value.items() if w != v))
+            for seq in seqs:
+                others.setdefault(seq, set()).update(elsewhere)
+    items = []
+    for d in challenge["drawn"]:
+        bad = faults[d["seq"]]
+        if d["seq"] in others:
+            bad.append("conflict")
         if bad:
-            items.append({"seq": d["seq"], "turn_key": bd["e"]["data"]["turn_key"], "failed": sorted(set(bad))})
+            item = {"seq": d["seq"], "turn_key": bodies[(challenge["device_id"], d["seq"])]["e"]["data"]["turn_key"],
+                    "failed": sorted(set(bad))}
+            if d["seq"] in others:
+                item["conflicts_with"] = sorted(others[d["seq"]])
+            items.append(item)
     failed = (counts["bad_entry"] or counts["sketch_mismatch"] or counts["shingle_mismatch"]
-              or counts["shingle_conflicts"] or counts["class_mismatch"])
+              or counts["length_mismatch"] or counts["class_mismatch"] or counts["shingle_conflicts"])
     return outcome("fail" if failed else "pass", counts, items)
 
 

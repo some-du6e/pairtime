@@ -79,15 +79,29 @@
         "bad_entry": 0,
         "sketch_mismatch": 0,
         "shingle_mismatch": 0,
-        "shingle_conflicts": 9,
+        "length_mismatch": 0,
         "class_mismatch": 0,
+        "shingle_conflicts": 9,
         "hidden_shingles": 0
       },
       "items": [
         {
+          "seq": 9030,
+          "turn_key": "t_a3b5a765ea66",
+          "failed": ["conflict"],
+          "conflicts_with": [9106]
+        },
+        {
+          "seq": 9068,
+          "turn_key": "t_1db5ec5bbe29",
+          "failed": ["conflict"],
+          "conflicts_with": [9106]
+        },
+        {
           "seq": 9106,
           "turn_key": "t_9e975cfb61c8",
-          "failed": ["conflict_with_9030"]
+          "failed": ["conflict"],
+          "conflicts_with": [9030, 9068]
         }
       ]
     },
@@ -110,6 +124,6 @@
   "errata": ["2026-11-19-check-readings"],
   "notes": [
     "Each reveal verifies on its own (ledger-v1.md 10.8 `ok`). The failure is the cross-reveal rule: A3's nine shingles are A1's, shown with other values.",
-    "ledger-v1.md 10.8 in PR #12 (WP-LG3, not merged yet). Issue #15: CC8 is weaker than DESIGN 7.3 claims, and these cases follow the spec's stated limit"
+    "ledger-v1.md 10.8 (WP-LG3, #12). Issue #15: CC8 is weaker than DESIGN 7.3 claims, and these cases follow the spec's stated limit"
   ]
 }

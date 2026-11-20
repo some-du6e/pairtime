@@ -17,7 +17,7 @@ Each failing scenario fails one check. Every other check passes on the same data
 | CC5 one attention stream | `4.2-clean`, `6.2-clean`, `6.3-clean` | `4.2-cc5-second-device` | `4.2-cc2-send-keys`: nothing credited |
 | CC6 live vs re-scored | every scenario but one | `6.3-cc6-moved-minute` | |
 | CC7 chain integrity | every scenario but two | `4.2-cc7-dropped-record`, `4.2-cc7-dropped-batch` | |
-| CC8 content-derived inputs | `4.2-clean`, `4.2-cc8-removed-spans` | `4.2-cc8-false-sketch`, `4.2-cc8-made-up-key` | `4.2-cc2-send-keys`: nothing drawn |
+| CC8 content-derived inputs | `4.2-clean`, `4.2-cc8-removed-spans` | `4.2-cc8-false-sketch`, `4.2-cc8-made-up-key`, `4.2-cc8-hidden-shingles`, `4.2-cc8-false-class`, `4.2-cc8-inflated-length` | `4.2-cc2-send-keys`: nothing drawn |
 | CC9 session integrity | `4.2-clean`, `6.2-clean`, `6.3-clean` | `6.3-cc9-moved-turn`, `6.3-cc9-orphan-turn`, `4.2-cc9-parent-class` | |
 | CC10 editor vs focus | `6.2-clean`, `6.3-clean` | `6.3-cc10-injected-heartbeats` | the `4.2-*` scenarios: no editor |
 | CC11 typing, module on | `4.2-clean` | `4.2-cc11-pasted` | the `6.2-*` and `6.3-*` scenarios: module off; `4.2-cc2-send-keys`: no human prompt |
@@ -36,6 +36,9 @@ Each failing scenario fails one check. Every other check passes on the same data
 | `4.2-cc7-dropped-batch` | 4.2-alternation | The reveal leaves out the last batch of the re-score range, A3's stop and its sample |
 | `4.2-cc8-false-sketch` | 4.2-alternation | A3's committed sketch is another request's, so the re-roll rule misses it; the client reveals A3's true values |
 | `4.2-cc8-made-up-key` | 4.2-alternation | A3's sketch and values are under a key of the client's own; A1 shows the same shingles with other values |
+| `4.2-cc8-hidden-shingles` | 4.2-alternation | As the made-up key, with no `x` on any of A3's values and nothing removed |
+| `4.2-cc8-false-class` | 4.2-alternation | B2 is the go-ahead `looks good`, committed with class substantive |
+| `4.2-cc8-inflated-length` | 4.2-alternation | B2's `len_chars` and `typed_len_est` say 450 for its 60 characters; the typing module is off |
 | `4.2-cc8-removed-spans` | 4.2-alternation | As the made-up key, with three words of A3 removed by hand so no shingle of A3 shows its text |
 | `4.2-cc9-parent-class` | 4.2-alternation | A second session.start under the session's key names a multiplexer parent; the first named Terminal |
 | `4.2-cc11-pasted` | 4.2-alternation | B2 was pasted with Cmd-V and the paste wasn't marked: three key-downs for 60 typed characters |
@@ -62,7 +65,7 @@ Each scenario's `expected.json` tells its story, lists its edits and notes what 
 | `ledger.json` | The client's metadata reveal, and the rows the server stored for each batch | every scenario |
 | `commits.json` | What the server holds for each commit: its clocks and the forge's answer | the `6.2-*` and `6.3-*` scenarios |
 | `challenge.json` | The draw, and each drawn prompt's text reveal and shingle reveal | the `4.2-*` scenarios |
-| `typing.json` | The typing module's per-slot key-down counts | the `4.2-*` scenarios |
+| `typing.json` | The typing module's per-slot key-down counts | the `4.2-*` scenarios but `4.2-cc8-inflated-length`, whose Mac has the module off |
 
 ### `expected.json`
 
@@ -94,7 +97,7 @@ The format of [../timelines/README.md](../timelines/README.md#eventsjsonl): `pkg
 
 The batches cover every record in `events.jsonl`. The writer seals a batch at every UTC minute, and at once after a hook's `prompt.submit` or `agent.stop` and after a lock or suspend, together with the records of the same millisecond, such as the presence sample the agent takes then (DESIGN 3.3). So no batch spans a minute, and a suspend's batch holds its own sample, uploaded before the laptop sleeps. Each batch reached the server 0.25 to 1.5 s after it was sealed and never before the batch before it, because the server stores batch `b` only after `b - 1` (ledger-v1.md 6). So every record is witnessed, and `received_at` rises with `b`. Batch numbers start at the device's first `seq` divided by 3, an arbitrary choice, and the first batch's `prev` stands for the head the server stored before it: the SHA-256 of `stand-in head of batch <b - 1> of <device_id>`.
 
-Bodies follow ledger-v1.md 4.5: `{"n": nonce, "e": the event after Event.Shareable}`. In the `4.2-*` scenarios each `prompt.submit` body also carries `f` and `c`, its features and commitment (ledger-v1.md 10.7 and 10.2, in PR #12). Other bodies carry no `f`, as a writer from before features would write them. The device keys are test keys, published here and used nowhere else: `K_dev` is the SHA-256 of `pairtime check fixtures: K_dev of <device_id>`, and `K_leaf`, `K_tok` and `K_feat` come from it as ledger-v1.md 3 says. A check never needs them. Only the device can compute a nonce, and only the generator needs `K_feat`.
+Bodies follow ledger-v1.md 4.5: `{"n": nonce, "e": the event after Event.Shareable}`. In the `4.2-*` scenarios each `prompt.submit` body also carries `f` and `c`, its features and commitment (ledger-v1.md 10.7 and 10.2). Other bodies carry no `f`, as a writer from before features would write them. The device keys are test keys, published here and used nowhere else: `K_dev` is the SHA-256 of `pairtime check fixtures: K_dev of <device_id>`, and `K_leaf`, `K_tok` and `K_feat` come from it as ledger-v1.md 3 says. A check never needs them. Only the device can compute a nonce, and only the generator needs `K_feat`.
 
 ### `commits.json`
 
@@ -123,7 +126,7 @@ CC5 and CC6 read the minute buckets the server received live, which a scenario d
 - **CC5.** Every device's live buckets in `W`, in every project. A slot is credited twice when two devices, or two projects of one device, credit it. `merge_dropped_s` is what SM 3.4's merge drops, which is WP-SV7's job; CC5 changes no credit.
 - **CC6.** Each device's live buckets against its re-score, minute by minute and slot by slot, in the minutes of W that CC7 doesn't hold: a held minute's records didn't verify, so there is nothing to reproduce it from. A minute that differs is held (DESIGN 6.2 D7).
 - **CC7.** For each device, every batch the server stored between `rescore_range`'s `first_b` and `last_b` is revealed (`missing_batches`), and batch numbers and `seq` rise by 1 with no gap. Each revealed batch's entries give the `n`, `R_b` and `H_b` the server stored, with `H_b` computed from the head the server stored before it, and each body agrees with its header (ledger-v1.md 4.5, 9). A batch that is missing or fails holds every minute its records could fall in: from the minute of the last verified record before it to the minute of the first verified record after it, or of the batch's `received_at` when no verified record follows. Its own revealed records can't narrow that, because they are what failed to verify. `held_minutes` counts the held minutes in W, and each item gives the span as `between`.
-- **CC8.** For each drawn prompt (ledger-v1.md 10.8, in PR #12), the shingle reveal is well formed and its values give the body's `f.mh` (`bad_entry`, `sketch`). When nothing was removed, the shown shingles are exactly the text's and every value shows one. No shingle shows two values across the device's reveals. The class recomputed from the text by SM 2.2 is `f.pc`.
+- **CC8.** For each drawn prompt (ledger-v1.md 10.8), the shingle reveal is well formed and its values give the body's `f.mh` (`bad_entry`, `sketch`). When nothing was removed, the shown shingles are exactly the text's and every value shows one (`shingles`); the body's `len_chars` is the revealed text's length in code points and its `typed_len_est` is no more than that (`lengths`); and the class SM 2.2 gives the text, with the typed length bounded by the text's, is `f.pc` (`class`). Across the device's reveals, a shingle, a kind and a text, that shows two values fails every reveal showing one of them (`conflict`, with `conflicts_with` naming the reveals that show another value), and `shingle_conflicts` counts such shingles, so neither depends on the order of the reveals. The kind, word or character shingles, follows from the number of words the text reveal covers, removed ones included.
 - **CC9.** For each harness session of `P` with records in `W`, every record names one project. Every turn an `agent.output`, `agent.interrupt`, `agent.queue` or `agent.stop` names has a `prompt.submit` in the session, or ends with a stop hook's continuation. Every `session.start` of the session has one `parent_class`.
 - **CC10.** For each `editor.activity` of `P` in `W` of an anchor's kind (SM 2.3: an edit or save with `edit_source` `human`, `tab` or `unknown`, or a navigate, open, debug or task), the last `os.focus` at or before it is an editor whose `focus_project` is the record's project.
 - **CC11.** Only with the typing module on. For each human prompt with typed characters and a typing part in its lead (`substantive`, `error_paste` or `answer`), the key-downs in the slots its lead window overlaps, minus the injected ones, must be at least its `typed_len_est`, and none may be injected.

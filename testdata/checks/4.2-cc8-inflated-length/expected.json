@@ -1,0 +1,119 @@
+{
+  "scenario": "4.2-cc8-inflated-length",
+  "title": "A prompt whose lengths are inflated",
+  "story": "A modified client writes len_chars and typed_len_est 450 for B2, a 60-character prompt, on the hook's record and on the transcript's copy, so CC1 still matches them. B2 is substantive at either length, but the typing part of its lead grows from 40 s to the 300 s cap. B2 is drawn, and its revealed text has 60 characters. The Mac's typing module is off, so CC11 has no key counts to compare.",
+  "base": "4.2-alternation",
+  "edits": [
+    "The transcript's user entry for each prompt, read by the log reader 0.7 to 4.5 s after the hook (via log, same turn_key and lengths), as a real Claude Code client records it.",
+    "B2's hook record and the transcript's copy have len_chars and typed_len_est 450.",
+    "The typing module is off, so there is no typing.json."
+  ],
+  "devices": [
+    {
+      "device_id": "d_61e266631200",
+      "base": "4.2-alternation",
+      "os": "macos",
+      "input_keys": true,
+      "typing_module": false,
+      "vm": false,
+      "reveals": true
+    }
+  ],
+  "submission": {
+    "projects": ["p_b2738424d7c2"],
+    "window": {"start": "2026-11-23T08:31:00Z", "end": "2026-11-23T08:46:00Z"}
+  },
+  "live": {
+    "from": "rescore",
+    "mutations": []
+  },
+  "fails": ["CC8"],
+  "checks": {
+    "CC1": {
+      "result": "pass",
+      "counts": {"hook_prompts": 5, "log_entries": 5, "matched": 5, "hook_only": 0, "log_only": 0, "not_computable": 0}
+    },
+    "CC2": {
+      "result": "pass",
+      "counts": {"prompts": 5, "with_input_and_focus": 5, "no_input": 0, "no_focus": 0}
+    },
+    "CC3": {
+      "result": "not_computable",
+      "counts": {"commits": 0, "flagged": 0},
+      "reason": "no commit in the submission"
+    },
+    "CC4": {
+      "result": "not_computable",
+      "counts": {"commits": 0, "seen_out_of_order": 0, "pushed_before_observed": 0, "forge_mismatch": 0},
+      "reason": "no commit in the submission"
+    },
+    "CC5": {
+      "result": "pass",
+      "counts": {"devices": 1, "slots_credited_twice": 0},
+      "basis": "one device, whose scorer credits each slot to at most one project (SM 3.1)"
+    },
+    "CC6": {
+      "result": "pass",
+      "counts": {"minutes_mismatched": 0, "held_s": 0},
+      "basis": "Stated, not recomputed: the live buckets are pkg/score over this device's events.jsonl, which the reveal holds in full, so the server's re-score is the same computation and every minute reproduces."
+    },
+    "CC7": {
+      "result": "pass",
+      "counts": {
+        "batches": 27,
+        "records": 106,
+        "missing_batches": 0,
+        "batch_gaps": 0,
+        "seq_gaps": 0,
+        "count_mismatches": 0,
+        "root_mismatches": 0,
+        "head_mismatches": 0,
+        "body_mismatches": 0,
+        "held_minutes": 0
+      }
+    },
+    "CC8": {
+      "result": "fail",
+      "counts": {
+        "challenged": 4,
+        "sketch_ok": 4,
+        "bad_entry": 0,
+        "sketch_mismatch": 0,
+        "shingle_mismatch": 0,
+        "length_mismatch": 1,
+        "class_mismatch": 0,
+        "shingle_conflicts": 0,
+        "hidden_shingles": 0
+      },
+      "items": [
+        {
+          "seq": 9087,
+          "turn_key": "t_a433d069cb4d",
+          "failed": ["lengths"]
+        }
+      ]
+    },
+    "CC9": {
+      "result": "pass",
+      "counts": {"sessions": 1, "multi_project_sessions": 0, "orphan_turns": 0, "parent_class_changes": 0}
+    },
+    "CC10": {
+      "result": "not_computable",
+      "counts": {"editor_acts": 0, "with_focus": 0, "without_focus": 0},
+      "reason": "no editor act in the submission"
+    },
+    "CC11": {
+      "result": "not_computable",
+      "counts": {"prompts": 0, "typed_chars": 0, "key_downs": 0, "injected": 0, "too_few_keys": 0, "injected_prompts": 0},
+      "reason": "the typing module is off on this device"
+    }
+  },
+  "not_exercised": {},
+  "known_limit": null,
+  "errata": ["2026-11-19-check-readings"],
+  "notes": [
+    "Nothing was removed from B2, so its body's len_chars must be its text's 60 characters (`lengths`). The class recomputed with the typed length bounded by the text's is substantive, B2's committed class, so only the length rule fails. Read from the body's own 450 instead, the class check can't see a length lie at all.",
+    "B2 is still human_typed: in its 420 s lead the Mac saw key presses in nine slots, 135 s, and SM 2.2 rule 6 allows 15 characters a second over them. On a Mac the typing part is realized only in slots with key presses, so the lie gains little here; on a laptop without a key counter the whole 300 s needs presence alone (SM 2.3).",
+    "ledger-v1.md 10.8 (WP-LG3, #12). Issue #15: CC8 is weaker than DESIGN 7.3 claims, and these cases follow the spec's stated limit"
+  ]
+}
