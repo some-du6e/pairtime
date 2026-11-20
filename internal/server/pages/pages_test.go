@@ -290,6 +290,36 @@ func TestPrivacyNotice(t *testing.T) {
 			want: []string{"It also runs automated bot detection on requests to this server, and pairtime&#39;s pages block the script it adds to them for that."},
 		},
 		{
+			name: "the notice says Cloudflare asks browsers to report failed requests to it (#119)",
+			want: []string{"And it asks your browser to report requests to this server that fail, a browser feature called Network Error Logging"},
+		},
+		{
+			name:    "the notice names a monitoring service of the operator's choice, not one company, since a deployment may ping any push monitor (#119)",
+			want:    []string{"<strong>A monitoring service</strong> the operator chooses gets a ping every 5 minutes while this server works, and one after each nightly backup"},
+			notWant: []string{"Healthchecks"},
+		},
+		{
+			name: "while this server runs only its pages, the notice's first lines say sign-in, uploads, submissions, the evidence store and day roots don't run yet (#119)",
+			want: []string{"<strong>Not everything here runs yet.</strong> This server doesn&#39;t yet let anyone sign in, receive uploads from the pairtime program, take hours you submit to programs, keep an evidence store, or publish day roots."},
+		},
+		{
+			name:    "with sign-in set up, the notice no longer says nobody can sign in",
+			opts:    Options{Running: Running{SignIn: true}},
+			want:    []string{"This server doesn&#39;t yet receive uploads from the pairtime program, take hours you submit to programs, keep an evidence store, or publish day roots."},
+			notWant: []string{"let anyone sign in"},
+		},
+		{
+			name:    "with only day roots left to come, the notice names that one",
+			opts:    Options{Running: Running{SignIn: true, Uploads: true, Submissions: true}},
+			want:    []string{"This server doesn&#39;t yet publish day roots."},
+			notWant: []string{"evidence store,", "sign in,"},
+		},
+		{
+			name:    "once everything the notice describes runs, the line goes",
+			opts:    Options{Running: Running{SignIn: true, Uploads: true, Submissions: true, DayRoots: true}},
+			notWant: []string{"runs yet", "doesn&#39;t yet"},
+		},
+		{
 			name: "the notice says where data goes outside the UK and the EU (GDPR Art. 13(1)(f))",
 			want: []string{"So some of your data is handled outside the UK and the EU, in the United States and elsewhere."},
 		},

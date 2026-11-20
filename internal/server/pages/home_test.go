@@ -78,9 +78,9 @@ func TestHome(t *testing.T) {
 			},
 		},
 		{
-			name:    "while sign-ups are closed the page says it's an early pilot with testers by invitation, and makes accounts only for the people who run the server",
+			name:    "while sign-ups are closed the page says testers use pairtime without an account, since there is no invitation, and makes accounts only for the people who run the server (#119)",
 			signIn:  signInOn(""),
-			want:    []string{"<strong>Early pilot.</strong> Sign-ups are closed for now, and testers join by invitation. Until sign-ups open, this server makes accounts only for the people who run it.</p>"},
+			want:    []string{"<strong>Early pilot.</strong> Sign-ups are closed for now, and testers use pairtime on their own computers without an account. Until sign-ups open, this server makes accounts only for the people who run it.</p>"},
 			notWant: []string{"Sign-ups on this server are open"},
 		},
 		{
@@ -88,7 +88,7 @@ func TestHome(t *testing.T) {
 			opts:    Options{SignupsOpen: true},
 			signIn:  signInOn(""),
 			want:    []string{"<strong>Early pilot.</strong> Sign-ups on this server are open. Sign in with Hack Club to make your account.</p>"},
-			notWant: []string{"testers join by invitation", "makes accounts only for"},
+			notWant: []string{"testers use pairtime", "invitation", "makes accounts only for"},
 		},
 		{
 			name:    "with sign-in set up, a visitor who isn't signed in gets the Sign in with Hack Club button and no sign-out form",
@@ -99,7 +99,7 @@ func TestHome(t *testing.T) {
 		{
 			name:    "without sign-in set up, the page offers no sign-in and says it isn't set up",
 			signIn:  SignIn{},
-			want:    []string{"Sign-ups are closed for now, and testers join by invitation. Sign-in isn&#39;t set up on this server yet.</p>"},
+			want:    []string{"Sign-ups are closed for now, and testers use pairtime on their own computers without an account. Sign-in isn&#39;t set up on this server yet.</p>"},
 			notWant: []string{"Sign in with Hack Club", `class="account"`, "<form", "makes accounts only for"},
 		},
 		{

@@ -97,6 +97,11 @@ func serve(ctx context.Context, cfg *config.Config, logger *slog.Logger, e *env,
 		Version:        version.Get().Version,
 		Commit:         sourceCommit(version.Get()),
 		Retention:      policy,
+		// What the privacy notice describes that this server runs. Sign-in
+		// runs once hca.client_id is set (newSignIn); the work package that
+		// adds uploads (WP-SV4), submissions (WP-SB1) or day roots
+		// (WP-SV17) sets its own here.
+		Running: pages.Running{SignIn: cfg.HCA.ClientID != ""},
 	})
 	if err != nil {
 		return err
@@ -273,7 +278,7 @@ func serve(ctx context.Context, cfg *config.Config, logger *slog.Logger, e *env,
 	}
 	errLog := slog.NewLogLogger(logger.Handler(), slog.LevelWarn)
 	servers := []*http.Server{
-		newHTTPServer(withHSTS(cfg.BaseURL, public), errLog),
+		newHTTPServer(withHSTS(cfg.BaseURL, withDefaultHeaders(public)), errLog),
 		newHTTPServer(ops.Handler(reg, checks, ops.DefaultCheckTimeout), errLog),
 	}
 	listeners := []net.Listener{pubLn, opsLn}
@@ -350,6 +355,30 @@ func withHSTS(baseURL string, h http.Handler) http.Handler {
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Strict-Transport-Security", hstsValue)
+		h.ServeHTTP(w, r)
+	})
+}
+
+// defaultHeaders are what every response from the public listener says
+// unless its handler sets its own, as the pages do: nobody stores it, no
+// browser sniffs another type into it, it loads nothing and no page frames
+// it, and it sends no referrer. ServeMux's own 404 and 405 answers set
+// none, and Cloudflare kept a 404 for /favicon.ico for 4 hours when the
+// answer said nothing about caching (#119).
+var defaultHeaders = map[string]string{
+	"Cache-Control":           "no-store",
+	"X-Content-Type-Options":  "nosniff",
+	"Content-Security-Policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+	"Referrer-Policy":         "no-referrer",
+}
+
+// withDefaultHeaders sets defaultHeaders before h writes, so h replaces
+// any it sets itself.
+func withDefaultHeaders(h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		for k, v := range defaultHeaders {
+			w.Header().Set(k, v)
+		}
 		h.ServeHTTP(w, r)
 	})
 }

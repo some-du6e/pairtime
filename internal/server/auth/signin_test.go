@@ -691,6 +691,11 @@ func TestLogout(t *testing.T) {
 			if tt.wantCode == auth.CodeLogoutFailed && !strings.Contains(r.body, "This browser is signed out") {
 				t.Errorf("the page doesn't say this browser is signed out:\n%s", r.body)
 			}
+			// A failed sign-out is tried again from the home page, where the
+			// button is, so its page links there and not to sign-in (#119).
+			if tt.wantCode != "" && (strings.Contains(r.body, auth.LoginPath) || !strings.Contains(r.body, `<a href="/">`)) {
+				t.Errorf("the sign-out error page should link the home page and not sign-in:\n%s", r.body)
+			}
 			me, _ := h.me()
 			if out := me.status == http.StatusUnauthorized; out != tt.wantOut {
 				t.Errorf("signed out = %v, want %v", out, tt.wantOut)
@@ -1029,10 +1034,18 @@ func TestSignInOff(t *testing.T) {
 		path       string
 		wantStatus int
 		wantBody   string
+		notBody    string
+		// wantChallenge is the WWW-Authenticate header the answer must
+		// carry, "" for none.
+		wantChallenge string
 	}{
-		{name: "the login page says sign-in isn't set up", path: auth.LoginPath, wantStatus: http.StatusServiceUnavailable, wantBody: "<code>not_configured</code>"},
-		{name: "the callback says sign-in isn't set up", path: auth.CallbackPath + "?code=x&state=y", wantStatus: http.StatusServiceUnavailable, wantBody: "<code>not_configured</code>"},
-		{name: "nobody is signed in", path: auth.MePath, wantStatus: http.StatusUnauthorized, wantBody: `"error":"not_signed_in"`},
+		{name: "the login page says sign-in isn't set up, and offers no sign-in, which would only lead back to it",
+			path: auth.LoginPath, wantStatus: http.StatusServiceUnavailable, wantBody: `<code>not_configured</code></p>
+<p><a href="/">`, notBody: auth.LoginPath},
+		{name: "the callback says sign-in isn't set up, and offers no sign-in either",
+			path: auth.CallbackPath + "?code=x&state=y", wantStatus: http.StatusServiceUnavailable, wantBody: "<code>not_configured</code>", notBody: auth.LoginPath},
+		{name: "nobody is signed in, and the 401 says how a request authenticates (RFC 9110 15.5.2)",
+			path: auth.MePath, wantStatus: http.StatusUnauthorized, wantBody: `"error":"not_signed_in"`, wantChallenge: `Session realm="pairtime"`},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1044,6 +1057,12 @@ func TestSignInOff(t *testing.T) {
 			mux.ServeHTTP(rec, req)
 			if rec.Code != tt.wantStatus || !strings.Contains(rec.Body.String(), tt.wantBody) {
 				t.Errorf("%s = %d %q, want %d containing %q", tt.path, rec.Code, rec.Body.String(), tt.wantStatus, tt.wantBody)
+			}
+			if tt.notBody != "" && strings.Contains(rec.Body.String(), tt.notBody) {
+				t.Errorf("%s answered %q, which holds %q", tt.path, rec.Body.String(), tt.notBody)
+			}
+			if got := rec.Header().Get("WWW-Authenticate"); got != tt.wantChallenge {
+				t.Errorf("%s has WWW-Authenticate %q, want %q", tt.path, got, tt.wantChallenge)
 			}
 		})
 	}

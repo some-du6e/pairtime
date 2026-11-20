@@ -548,3 +548,67 @@ func TestServeHSTS(t *testing.T) {
 		})
 	}
 }
+
+// TestServeHeaders checks the headers a browser and Cloudflare read on
+// every kind of answer from the public listener: each says how to cache
+// it, the error answers of ServeMux and sign-in included, and none can be
+// sniffed into another type (#119).
+func TestServeHeaders(t *testing.T) {
+	configPath, _ := writeConfig(t)
+	public, private := startServe(t, configPath)
+	client := &http.Client{
+		Timeout:       10 * time.Second,
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}
+	nosniff := "nosniff"
+	tests := []struct {
+		name     string
+		method   string
+		url      string
+		wantCode int
+		want     map[string]string
+	}{
+		{name: "the public health check is never stored or sniffed", url: public + "/healthz", wantCode: 200,
+			want: map[string]string{"Cache-Control": "no-store", "X-Content-Type-Options": nosniff}},
+		{name: "a 404 for a path nothing serves, such as /favicon.ico, is never stored, so the edge can't keep it",
+			url: public + "/favicon.ico", wantCode: 404,
+			want: map[string]string{"Cache-Control": "no-store", "X-Content-Type-Options": nosniff, "Content-Security-Policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"}},
+		{name: "a 405 for a method a page doesn't take is never stored either", method: http.MethodPost, url: public + "/privacy", wantCode: 405,
+			want: map[string]string{"Cache-Control": "no-store", "X-Content-Type-Options": nosniff}},
+		{name: "the privacy notice keeps its own caching", url: public + "/privacy", wantCode: 200,
+			want: map[string]string{"Cache-Control": "no-cache", "X-Content-Type-Options": nosniff, "Referrer-Policy": "no-referrer"}},
+		{name: "the home page keeps its own referrer policy", url: public + "/", wantCode: 200,
+			want: map[string]string{"Cache-Control": "no-store", "X-Content-Type-Options": nosniff, "Referrer-Policy": "same-origin"}},
+		{name: "a 401 names how a request authenticates (RFC 9110 15.5.2)", url: public + "/api/v1/users/me", wantCode: 401,
+			want: map[string]string{"WWW-Authenticate": `Session realm="pairtime"`, "Cache-Control": "no-store", "X-Content-Type-Options": nosniff}},
+		{name: "sign-in's error page is never stored", url: public + "/auth/hca/login", wantCode: 503,
+			want: map[string]string{"Cache-Control": "no-store", "X-Content-Type-Options": nosniff}},
+		{name: "the ops listener's health check isn't sniffed either", url: private + "/healthz", wantCode: 200,
+			want: map[string]string{"X-Content-Type-Options": nosniff}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			method := tt.method
+			if method == "" {
+				method = http.MethodGet
+			}
+			req, err := http.NewRequest(method, tt.url, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			resp, err := client.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			resp.Body.Close()
+			if resp.StatusCode != tt.wantCode {
+				t.Errorf("%s %s = %d, want %d", method, tt.url, resp.StatusCode, tt.wantCode)
+			}
+			for k, v := range tt.want {
+				if got := resp.Header.Values(k); len(got) != 1 || got[0] != v {
+					t.Errorf("%s %s has %s %q, want %q", method, tt.url, k, got, v)
+				}
+			}
+		})
+	}
+}
