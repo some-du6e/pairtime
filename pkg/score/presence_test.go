@@ -131,6 +131,22 @@ func TestPresence(t *testing.T) {
 				{at: 780, present: event.PresentYes}},
 		},
 		{
+			// The sampler reads idle time on every slot boundary but records
+			// only the minute's reading and one that shows new input, here
+			// at 765 s (D-d14-cadence). pkg/score already reads that gap as
+			// slow cadence.
+			name: "after CONTEXT_IDLE_S without input, a sample 45 s after a minute sample that shows new input is no sleep, and the slot holding the input is yes (DESIGN 6.2 D14)",
+			build: func(b *tl) {
+				b.mouse(at(5), at(760))
+				b.samples(at(0), at(660))
+				for _, s := range []int64{720, 765, 780} {
+					b.sample(at(s))
+				}
+			},
+			want: []slotWant{{at: 720, present: event.PresentNo}, {at: 735, present: event.PresentNo},
+				{at: 750, present: event.PresentYes}},
+		},
+		{
 			name: "slots before the first sample are unknown",
 			build: func(b *tl) {
 				b.harness(at(0), event.ViaLog, "s_1", "p_1", &event.AgentOutput{TurnKey: "t_1", Words: 10})

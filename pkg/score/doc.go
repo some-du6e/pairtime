@@ -20,7 +20,10 @@
 //
 //   - slots: 15-second presence slots with input_any and input_keys
 //     rebuilt from idle samples, SM 2.1's present values and its hard
-//     breaks (lock, suspend, a gap between samples over SLEEP_GAP_S);
+//     breaks (lock, suspend, a gap between samples over SLEEP_GAP_S,
+//     except one of up to twice SLOW_SAMPLE_S after a sample showing
+//     CONTEXT_IDLE_S of idle, as DESIGN 6.2 D14 has it, which a turn's end
+//     only delays);
 //   - turns, with SM 2.2's origin rules 1 to 8 and prompt classes;
 //   - anchors, SM 2.3's human acts with their think and typing parts,
 //     trails, evidence levels and labels (DESIGN 6.4), including the side
@@ -82,16 +85,10 @@
 // Where SM and DESIGN leave a choice open, the scorer takes these, each
 // stated again where it is implemented:
 //
-//   - Leads are whole seconds: a typing time is rounded to the nearest
-//     second, as SM 6.4 (161 s) and 6.5 (143 s) round theirs.
 //   - A silent run's length is its slots' length, from the end of the last
 //     input slot to the start of the next, because samples show when the
 //     last input before a silence came but not when the first one after it
 //     did. A tail is timed from the last input, to the millisecond.
-//   - A gap between samples longer than SLEEP_GAP_S is a hard break, except
-//     one that follows CONTEXT_IDLE_S without input and lasts at most twice
-//     SLOW_SAMPLE_S: the agent samples once a minute then, which DESIGN 6.2
-//     D14 says changes no credit.
 //   - "Input in its slot" is any input, and "input_keys where available"
 //     means key presses where the OS reports them, exactly as each row of
 //     SM 2.3 says.
@@ -122,8 +119,6 @@
 //
 // WP-SC2 adds these:
 //
-//   - A second belongs to a window when the second's start does, so
-//     window edges are applied to whole seconds (SM 1.3).
 //   - Presence after a silence longer than PRESENCE_GAP_S starts at the
 //     second of the first input a sample taken inside the slot reports,
 //     and at the slot's start when only the sample at its end reports one,

@@ -59,7 +59,7 @@ type rules struct {
 	pendingWindow int64
 	contextIdle   int64
 	// slowGap is the longest gap between samples that isn't a hard break
-	// once sampling has slowed to one a minute (DESIGN 6.2 D14): twice
+	// once the agent records one sample a minute (DESIGN 6.2 D14): twice
 	// SLOW_SAMPLE_S, as SLEEP_GAP_S is twice SAMPLE_S.
 	slowGap       int64
 	trackInputPre int64
@@ -191,12 +191,12 @@ func (r rules) lineUnits(lines int64) int64 { return 60 * min(lines, 2*countMax)
 func (r rules) unitsMS(u int64) int64 { return roundDiv(min(u, unitsMax)*1000, r.unitsPerS) }
 
 // roundDiv returns a / b rounded to the nearest integer, halves away from
-// zero, for any a and any b > 0. SM states its leads in whole seconds and
-// rounds a fractional typing time to the nearest one: 61 characters at 1.5 a
-// second are 40.67 s, which SM 6.4 counts as 41, and 35 characters are
-// 23.33 s, which SM 6.5 counts as 23
-// (docs/errata/2026-11-19-sm-6.4-prompt-lengths.md asks Karim to confirm the
-// rounding).
+// zero, for any a and any b > 0. SM 1.3 rounds a lead's typing part and the
+// reading part of RETURN_CREDIT to the nearest second, halves up: 61
+// characters at 1.5 a second are 40.67 s, which is 41 (SM 6.4), and 35
+// characters are 23.33 s, which is 23 (SM 6.5)
+// (docs/errata/2026-11-19-sm-6.4-prompt-lengths.md, decided 2026-11-20 as
+// E-6.4-prompt-lengths).
 //
 // It works from Go's truncated quotient and remainder, so it negates
 // nothing it can't: |r| < b, and the quotient moves by one only when b > 1,
@@ -218,7 +218,8 @@ func roundDiv(a, b int64) int64 {
 }
 
 // typingMS is the typing part of a lead for n typed characters (SM 2.3):
-// n / COMPOSE_CPS, rounded to a whole second and capped at COMPOSE_MAX_S.
+// n / COMPOSE_CPS, rounded to the nearest second (SM 1.3) and capped at
+// COMPOSE_MAX_S.
 func (r rules) typingMS(n int64) int64 {
 	if n <= 0 {
 		return 0
@@ -227,8 +228,8 @@ func (r rules) typingMS(n int64) int64 {
 	return min(ms, r.composeMax)
 }
 
-// readingMS is how long prose takes to read at READ_WPM, rounded to a
-// whole second: the reading part of RETURN_CREDIT (SM 2.1).
+// readingMS is how long prose takes to read at READ_WPM, rounded to the
+// nearest second (SM 1.3): the reading part of RETURN_CREDIT (SM 2.1).
 func (r rules) readingMS(words int64) int64 {
 	if words <= 0 {
 		return 0

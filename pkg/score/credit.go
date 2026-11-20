@@ -94,8 +94,7 @@ const (
 )
 
 // window is one part of an anchor's windows, [from, to) on whole seconds:
-// a second belongs to a window when its start does (SM 1.3: window edges
-// are applied to the second).
+// a second belongs to a window when its start does (SM 1.3).
 type window struct {
 	from, to int64
 	anchor   int
