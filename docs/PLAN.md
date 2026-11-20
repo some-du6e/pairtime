@@ -827,9 +827,9 @@ Exit check: a test submission from the deployed instance round-trips into a sand
 
 ### WP-SB2. `pkg/seal` and the evidence key
 
-- Depends on: WP-SV17.
-- Touches: `pkg/seal/` (new), `internal/server/keys/`, `cmd/pairtimed/`.
-- Build: DESIGN 7.6: ECDH P-256 through `crypto/ecdh`, HKDF-SHA256 with `info = "pairtime/v1/seal" || submission_id || part`, AES-256-GCM; a sealed-blob format with key id, ephemeral public key, nonce and ciphertext; opening with the evidence key; re-sealing to a viewer's ephemeral key; the evidence public key in `/.well-known/pairtime-keys.json` with id and validity dates; `pairtimed keys rotate-evidence`, which re-seals stored blobs.
+- Depends on: WP-SV17, WP-SV15.
+- Touches: `pkg/seal/` (new), `internal/server/keys/`, `cmd/pairtimed/`, `internal/server/objstore/`.
+- Build: DESIGN 7.6: ECDH P-256 through `crypto/ecdh`, HKDF-SHA256 with `info = "pairtime/v1/seal" || submission_id || part`, AES-256-GCM; a sealed-blob format with key id, ephemeral public key, nonce and ciphertext; opening with the evidence key; re-sealing to a viewer's ephemeral key; the evidence public key in `/.well-known/pairtime-keys.json` with id and validity dates; `pairtimed keys rotate-evidence`, which re-seals stored blobs and deletes the ones sealed to the old key. On a bucket that keeps versions it deletes every version of each, because a plain DeleteObject leaves a noncurrent version behind (`docs/errata/2026-11-20-evidence-versioning.md`).
 - CI checks: Wycheproof's `ecdh_secp256r1` and `aes_gcm` vectors at a pinned commit; round trips; changed ciphertext or associated data fails to open; after rotation every stored blob opens with the new key.
 - Oracle: Wycheproof; RFC 5869. WP-SB7 adds a second, independent implementation (WebCrypto).
 
@@ -947,9 +947,9 @@ Exit check: a test submission from the deployed instance round-trips into a sand
 
 ### WP-RV5. Purge, exposure reports and revocation
 
-- Depends on: WP-RV2.
-- Touches: `internal/server/reveal/`, `web/src/server/review/`, `web/src/local/submit/`.
-- Build: DESIGN 7.11: the teen's "This revealed something it shouldn't have" button (`POST .../purge`) deletes the item from the evidence store at once, uncredits its minutes and gives the program a revision; the reviewer's "Report an exposure" (`POST .../exposure`) hides the item from every viewer at once and asks the teen to purge or keep it; revocation through the spot-check window emits `submission.revoked` (DESIGN 7.9).
+- Depends on: WP-RV2, WP-SV15.
+- Touches: `internal/server/reveal/`, `web/src/server/review/`, `web/src/local/submit/`, `internal/server/objstore/`.
+- Build: DESIGN 7.11: the teen's "This revealed something it shouldn't have" button (`POST .../purge`) deletes the item from the evidence store at once, uncredits its minutes and gives the program a revision; the reviewer's "Report an exposure" (`POST .../exposure`) hides the item from every viewer at once and asks the teen to purge or keep it; revocation through the spot-check window emits `submission.revoked` (DESIGN 7.9). On a bucket that keeps versions, the purge deletes every version of the blob (ListObjectVersions, then DeleteObject with each versionId), because a plain DeleteObject leaves a noncurrent version behind (`docs/errata/2026-11-20-evidence-versioning.md`).
 - CI checks: a purged item is gone from object storage and the database and its minutes are uncredited; an exposure report hides the item for every role at once; a revocation emits the event.
 - Oracle: DESIGN 7.11.
 

@@ -29,9 +29,16 @@ var ErrDigestMismatch = errors.New("objstore: the blob's SHA-256 doesn't match i
 // Evidence is the evidence store: sealed blobs, each written once under
 // the hex SHA-256 of its bytes (DESIGN 7.6, 10.1, 10.3). The blobs are
 // ciphertext, sealed by pkg/seal before they arrive, so the bucket holds
-// no content anyone can read without the evidence key. The bucket is
-// meant to have versioning on, so even a write that bypasses pairtimed
-// leaves the first version (DESIGN 10.3).
+// no content anyone can read without the evidence key.
+//
+// Write-once puts and Get's digest check are the only protections. R2,
+// the pilot's store, has no bucket versioning, so anyone with the
+// bucket's key can delete a blob or overwrite it with a plain PUT, and
+// no earlier version survives. Get then fails with ErrNotFound or
+// ErrDigestMismatch, but nothing can bring the blob back, since
+// Litestream and the nightly snapshot copy only the database. DESIGN
+// 10.3's evidence row asks for versioning anyway, and
+// docs/errata/2026-11-20-evidence-versioning.md puts that to Karim.
 type Evidence struct {
 	b *Bucket
 }
