@@ -4,7 +4,9 @@ package features
 
 import (
 	"regexp"
+	"slices"
 	"strings"
+	"unicode/utf8"
 )
 
 // The patterns of spec 10.4 step 2. Each is matched against a whole line,
@@ -127,7 +129,8 @@ func (n Normalized) Text() string { return strings.Join(n.Words, " ") }
 // Normalize applies spec 10.4 to text, a committed text (spec 10.1): it
 // splits the lines, removes pasted blocks and error text by line, takes
 // the words of the lines that stay, lowercases them with Unicode 15.0.0's
-// simple mapping, applies the substitutions within each word, and marks
+// simple mapping, applies the substitutions within each word, strips each
+// word to its bare form, dropping a word that is left empty, and marks
 // retry phrases. text should be valid UTF-8, as every committed text is.
 func Normalize(text string) Normalized {
 	lines := splitLines(text)
@@ -142,7 +145,9 @@ func Normalize(text string) Normalized {
 			continue
 		}
 		for _, w := range Words(line) {
-			words = append(words, substitute(strings.Map(Lower, w)))
+			if w = bare(substitute(strings.Map(Lower, w))); w != "" {
+				words = append(words, w)
+			}
 		}
 	}
 	return Normalized{RemovedLines: removed, Words: replaceRetries(words)}
@@ -318,33 +323,49 @@ func replaceRetries(words []string) []string {
 }
 
 // retryAt returns the number of words of the retry phrase that words
-// starts with, trying the longest phrases first, or 0 for none.
+// starts with, trying the longest phrases first, or 0 for none. The words
+// are bare already (spec 10.4 step 6), so they compare as they are.
 func retryAt(words []string) int {
 	for _, p := range retryPhrases {
-		if len(words) < len(p) {
-			continue
-		}
-		match := true
-		for j, pw := range p {
-			if bare(words[j]) != pw {
-				match = false
-				break
-			}
-		}
-		if match {
+		if len(words) >= len(p) && slices.Equal(words[:len(p)], p) {
 			return len(p)
 		}
 	}
 	return 0
 }
 
-// bare returns a word as retry phrases compare it: without its leading and
-// trailing punctuation, then without every ' and U+2019 left inside, so
-// doesn't, doesn’t and doesnt compare equal.
+// placeholders are the words step 5's substitutions write (spec 10.4).
+var placeholders = []string{"<url>", "<id>", "<path>", "<hex>", "<n>"}
+
+// bare returns a word's bare form (spec 10.4 step 6): without its leading
+// and trailing punctuation, though never a placeholder at either end, then
+// without every ' and U+2019 left inside, so doesn't, doesn’t and doesnt
+// are one word.
 func bare(w string) string {
-	w = strings.TrimFunc(w, isEdgePunct)
+	for w != "" {
+		r, size := utf8.DecodeRuneInString(w)
+		if !isEdgePunct(r) || startsWithAny(w, placeholders) {
+			break
+		}
+		w = w[size:]
+	}
+	for w != "" {
+		r, size := utf8.DecodeLastRuneInString(w)
+		if !isEdgePunct(r) || endsWithAny(w, placeholders) {
+			break
+		}
+		w = w[:len(w)-size]
+	}
 	w = strings.ReplaceAll(w, "'", "")
 	return strings.ReplaceAll(w, "\U00002019", "")
+}
+
+func startsWithAny(s string, prefixes []string) bool {
+	return slices.ContainsFunc(prefixes, func(p string) bool { return strings.HasPrefix(s, p) })
+}
+
+func endsWithAny(s string, suffixes []string) bool {
+	return slices.ContainsFunc(suffixes, func(p string) bool { return strings.HasSuffix(s, p) })
 }
 
 // isEdgePunct accepts the 32 printable ASCII characters that are neither
