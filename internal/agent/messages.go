@@ -38,7 +38,8 @@ func (a *agent) startIPC(opts Options) func() {
 	a.journal = j
 	// Hook calls go through the hook sink, whichever way they come.
 	sink := newHookSink(j, runtime.GOOS, a.hooked, a.hookSteps())
-	l := &ipcListener{a: a, sink: sink, opts: ipc.Options{ForcePipe: opts.ForcePipe, Log: a.log, Walk: a.walkPeer}}
+	// Questions from the CLI are answered by a.answer (dashboard.go).
+	l := &ipcListener{a: a, sink: sink, opts: ipc.Options{ForcePipe: opts.ForcePipe, Log: a.log, Walk: a.walkPeer, Answer: a.answer}}
 	l.listen()
 
 	// Drains run on a goroutine of their own, because a long spool takes a

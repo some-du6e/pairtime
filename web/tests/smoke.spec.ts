@@ -6,11 +6,16 @@
 // playwright.config.ts runs `pairtime agent` in a fresh data directory.
 // The spec in docs/api/local.openapi.yaml is held to the agent's real
 // answers here, since the UI's types come from it, and so is DESIGN 3.9's
-// sign-in: a one-time URL that sets a SameSite=Strict, HttpOnly cookie,
-// without which no API call works.
+// sign-in: a one-time URL that `pairtime dashboard` gets over the agent's
+// socket and opens from a file, and that sets a SameSite=Strict, HttpOnly
+// cookie, without which no API call works (D-dashboard-link).
 
-import { readFileSync } from 'node:fs';
-import { type APIRequestContext, type Browser, expect, test } from '@playwright/test';
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
+import { type Browser, expect, test } from '@playwright/test';
 import { parse } from 'yaml';
 import { agentToken, agentURL } from './support/env.ts';
 import { check, type Schema } from './support/schema.ts';
@@ -57,20 +62,33 @@ function bearer(): { Authorization: string } {
 	return { Authorization: `Bearer ${agentToken()}` };
 }
 
-/** A one-time sign-in URL, as `pairtime dashboard` asks for one. */
-async function signInURL(request: APIRequestContext): Promise<string> {
-	const res = await request.post(new URL('v1/dashboard/link', base).href, { headers: bearer() });
-	expect(res.status()).toBe(201);
-	const link: unknown = await res.json();
-	expect(check(link, { $ref: '#/components/schemas/DashboardLink' }, spec)).toEqual([]);
-	const url = (link as { url: string }).url;
+/**
+ * Runs `pairtime dashboard` with args against the agent under test, with
+ * env added to this process's, and returns what it printed.
+ */
+function dashboard(args: string[], env: Record<string, string> = {}): string {
+	const bin = process.env.PAIRTIME_BIN;
+	const home = process.env.PAIRTIME_E2E_HOME;
+	if (!bin || !home) {
+		throw new Error('PAIRTIME_BIN and PAIRTIME_E2E_HOME must be set; playwright.config.ts sets the second from the first');
+	}
+	return execFileSync(bin, ['dashboard', ...args], {
+		env: { ...process.env, PAIRTIME_HOME: home, ...env },
+		encoding: 'utf8',
+		timeout: 30_000,
+	});
+}
+
+/** A one-time sign-in URL, as `pairtime dashboard --no-open` gets it from the agent's socket. */
+function signInURL(): string {
+	const url = dashboard(['--no-open']).trim();
 	expect(url.startsWith(`${origin}/signin?code=`), url).toBe(true);
 	return url;
 }
 
-/** A new browser context signed in the way `pairtime dashboard` signs one in. */
-async function signedIn(browser: Browser, request: APIRequestContext) {
-	const url = await signInURL(request);
+/** A new browser context signed in with a link from `pairtime dashboard`. */
+async function signedIn(browser: Browser) {
+	const url = signInURL();
 	const context = await browser.newContext();
 	const page = await context.newPage();
 	await page.goto(url);
@@ -90,11 +108,7 @@ test('the agent serves the built dashboard, not the placeholder', async ({ page 
 	await expect(page.getByRole('heading', { level: 1 })).toHaveText('Your dashboard');
 });
 
-test('everything the page loads comes from the agent, with no errors, signed out and signed in', async ({
-	browser,
-	page,
-	request,
-}) => {
+test('everything the page loads comes from the agent, with no errors, signed out and signed in', async ({ browser, page }) => {
 	const elsewhere: string[] = [];
 	const errors: string[] = [];
 	const watch = (p: typeof page, signedOut: boolean) => {
@@ -115,7 +129,7 @@ test('everything the page loads comes from the agent, with no errors, signed out
 	await page.goto(base);
 	await expect(page.getByTestId('signed-out')).toBeVisible();
 
-	const { context, page: inside } = await signedIn(browser, request);
+	const { context, page: inside } = await signedIn(browser);
 	watch(inside, false);
 	for (const [name, heading] of [
 		['Today', 'Today'],
@@ -140,8 +154,8 @@ test('signed out, the page says to run `pairtime dashboard` and shows no data', 
 	await expect(page.getByTestId('agent-status')).toHaveCount(0);
 });
 
-test('a sign-in link opens the dashboard with a SameSite=Strict, HttpOnly session cookie', async ({ browser, request }) => {
-	const { context, page } = await signedIn(browser, request);
+test('a sign-in link opens the dashboard with a SameSite=Strict, HttpOnly session cookie', async ({ browser }) => {
+	const { context, page } = await signedIn(browser);
 	await expect(page.getByRole('heading', { level: 1 })).toHaveText('Today');
 	const session = (await context.cookies(base)).find((c) => c.name === 'pairtime_session');
 	expect(session?.httpOnly).toBe(true);
@@ -154,7 +168,7 @@ test('signed in, the page shows what GET /v1/status says', async ({ browser, req
 	const res = await request.get(new URL('v1/status', base).href, { headers: bearer() });
 	expect(res.status()).toBe(200);
 	const body = (await res.json()) as { version: { version: string }; started: string };
-	const { context, page } = await signedIn(browser, request);
+	const { context, page } = await signedIn(browser);
 	await page.getByRole('link', { name: 'Settings' }).click();
 	const status = page.getByTestId('agent-status');
 	await expect(page.getByTestId('mode')).toContainText('Local only: nothing leaves this computer');
@@ -168,14 +182,14 @@ test('signed in, the page shows what GET /v1/status says', async ({ browser, req
 	await context.close();
 });
 
-test('until WP-AG4 serves its stores, Today has nothing yet and says so', async ({ browser, request }) => {
-	const { context, page } = await signedIn(browser, request);
+test('a new agent has counted nothing yet, and Today says so', async ({ browser }) => {
+	const { context, page } = await signedIn(browser);
 	await expect(page.getByTestId('nothing-yet')).toBeVisible();
 	await context.close();
 });
 
-test('a sign-in link works once; a second browser lands on the expired card', async ({ browser, request }) => {
-	const url = await signInURL(request);
+test('a sign-in link works once; a second browser lands on the expired card', async ({ browser }) => {
+	const url = signInURL();
 	const first = await browser.newContext();
 	await (await first.newPage()).goto(url);
 	const second = await browser.newContext();
@@ -189,8 +203,8 @@ test('a sign-in link works once; a second browser lands on the expired card', as
 	await second.close();
 });
 
-test("the session cookie opens every secured GET in the spec from the dashboard's own page", async ({ browser, request }) => {
-	const { context, page } = await signedIn(browser, request);
+test("the session cookie opens every secured GET in the spec from the dashboard's own page", async ({ browser }) => {
+	const { context, page } = await signedIn(browser);
 	for (const [path] of gets()) {
 		const status = await page.evaluate(async (p) => (await fetch(p, { cache: 'no-store' })).status, filled(path));
 		expect(status, path).toBe(200);
@@ -198,10 +212,38 @@ test("the session cookie opens every secured GET in the spec from the dashboard'
 	await context.close();
 });
 
-test("a signed-in browser can't get a sign-in link of its own", async ({ browser, request }) => {
-	const { context, page } = await signedIn(browser, request);
-	const status = await page.evaluate(async () => (await fetch('/v1/dashboard/link', { method: 'POST' })).status);
-	expect(status).toBe(401);
+test("a signed-in browser can't get a sign-in link of its own, or stop the agent", async ({ browser }) => {
+	const { context, page } = await signedIn(browser);
+	const post = (path: string) => page.evaluate(async (p) => (await fetch(p, { method: 'POST' })).status, path);
+	// Links come from the agent's socket alone, and only the bearer token
+	// stops the agent.
+	expect(await post('/v1/dashboard/link')).toBe(404);
+	expect(await post('/v1/agent/stop')).toBe(401);
+	await context.close();
+});
+
+test('`pairtime dashboard` opens a page only you can read, whose path holds no code, and the page signs the browser in', async ({
+	browser,
+}) => {
+	test.skip(process.platform !== 'linux', 'the stand-in for xdg-open is a shell script');
+	// A stand-in for xdg-open that writes down what it was given. Other users
+	// of a Linux computer can read every process's command line in /proc.
+	const opener = mkdtempSync(join(tmpdir(), 'pairtime-opener-'));
+	const said = join(opener, 'argv');
+	writeFileSync(join(opener, 'xdg-open'), `#!/bin/sh\nprintf '%s\\n' "$@" > '${said}'\n`, { mode: 0o755 });
+	const out = dashboard([], { PATH: `${opener}:${process.env.PATH ?? ''}` });
+	expect(out).toContain('Opening your dashboard in your browser.');
+	const argv = readFileSync(said, 'utf8').trim().split('\n');
+	expect(argv).toHaveLength(1);
+	const opened = argv[0] ?? '';
+	expect(opened).not.toContain('code=');
+	expect(opened.startsWith(join(process.env.PAIRTIME_E2E_HOME ?? '?', 'signin-')), opened).toBe(true);
+	expect(statSync(opened).mode & 0o777).toBe(0o600);
+	const context = await browser.newContext();
+	const page = await context.newPage();
+	await page.goto(pathToFileURL(opened).href);
+	await expect(page).toHaveURL(base);
+	await expect(page.getByRole('heading', { level: 1 })).toHaveText('Today');
 	await context.close();
 });
 

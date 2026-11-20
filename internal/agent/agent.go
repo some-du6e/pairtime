@@ -100,8 +100,12 @@ type agent struct {
 	state   *state.Store
 	cfg     atomic.Pointer[config.Config]
 	port    int
-	procs   *procs.Scanner // the harness process scan (DESIGN 3.3)
-	journal *inbox.Journal // nil when it couldn't be opened
+	// linkPort is port while the HTTP server listens, and 0 before and
+	// after, for the sign-in links the socket hands out (dashboard.go),
+	// which can be asked for before the port is known.
+	linkPort atomic.Int32
+	procs    *procs.Scanner // the harness process scan (DESIGN 3.3)
+	journal  *inbox.Journal // nil when it couldn't be opened
 	// ipcSrv is the socket's or the pipe's server, nil while hooks can't
 	// reach the agent.
 	ipcSrv atomic.Pointer[ipc.Server]
@@ -257,7 +261,11 @@ func Run(ctx context.Context, opts Options) error {
 	}
 	served := make(chan error, 1)
 	go func() { served <- srv.Serve(ln) }()
+	// The listener is bound, so a browser sent to a link from now on waits
+	// in its queue until Serve takes it.
+	a.linkPort.Store(int32(a.port))
 	closers = append(closers, func() {
+		a.linkPort.Store(0)
 		sctx, cancel := context.WithTimeout(context.Background(), shutdownWait)
 		defer cancel()
 		if err := srv.Shutdown(sctx); err != nil {

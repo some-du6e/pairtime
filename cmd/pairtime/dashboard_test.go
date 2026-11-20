@@ -4,82 +4,87 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
-	"fmt"
-	"net"
-	"net/http"
-	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/some-du6e/pairtime/internal/agent/home"
+	"github.com/some-du6e/pairtime/internal/agent/ipc"
 	"github.com/some-du6e/pairtime/internal/agent/localhttp"
 )
 
-// fakeLinkAgent answers POST /v1/dashboard/link the way the agent does, with
-// the link a test picks, and only with the token.
-func fakeLinkAgent(t *testing.T, token string, reply func(port string) (int, string)) int {
-	t.Helper()
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost || r.URL.Path != "/v1/dashboard/link" {
-			http.NotFound(w, r)
-			return
+// linkAnswer answers ipc.AskDashboardLink with url, as the agent does, and
+// no other question.
+func linkAnswer(url string) func(string) (json.RawMessage, error) {
+	return func(q string) (json.RawMessage, error) {
+		if q != ipc.AskDashboardLink {
+			return nil, ipc.ErrUnknownQuestion
 		}
-		if r.Header.Get("Authorization") != "Bearer "+token {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return
-		}
-		_, port, _ := strings.Cut(r.Host, ":")
-		code, body := reply(port)
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(code)
-		fmt.Fprint(w, body)
-	}))
-	t.Cleanup(srv.Close)
-	return srv.Listener.Addr().(*net.TCPAddr).Port
+		return json.Marshal(ipc.DashboardLink{URL: url, ExpiresInS: 120})
+	}
 }
 
-func goodLink(port string) (int, string) {
-	return http.StatusCreated, `{"url":"http://127.0.0.1:` + port + `/signin?code=abc","expires_in_s":120}`
+// signInPages lists the sign-in pages in dir.
+func signInPages(t *testing.T, dir string) []string {
+	t.Helper()
+	got, err := filepath.Glob(filepath.Join(dir, signInPrefix+"*"+signInSuffix))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return got
 }
 
 func TestDashboard(t *testing.T) {
-	const token = "test-token"
+	code := localhttp.NewToken()
+	good := "http://127.0.0.1:7247/signin?code=" + code
 	type world struct {
-		dir     string
-		port    int // the fake agent's
+		h       fakeHome
 		opened  []string
 		started int
-	}
-	writePort := func(t *testing.T, w *world, pid int) {
-		t.Helper()
-		pf := localhttp.PortFile{Port: w.port, Token: token, PID: pid}
-		if err := localhttp.WritePortFile(home.Dirs{Data: w.dir}.PortFile(), pf); err != nil {
-			t.Fatal(err)
-		}
+		asked   func() []string // what the agent was asked, once one listens
 	}
 	tests := []struct {
 		name     string
 		args     []string
-		reply    func(port string) (int, string)
-		setup    func(t *testing.T, w *world)
+		setup    func(t *testing.T, w *world)       // starts the agent when one runs already
 		start    func(t *testing.T, w *world) error // nil: the agent can't be started
-		open     error                              // what opening the browser returns
+		open     error                              // what opening the page returns
+		ask      time.Duration                      // how long each question may take; 0 is 2 s
 		wantCode int
 		check    func(t *testing.T, w *world, stdout, stderr string)
 	}{
 		{
-			name:  "with the agent running it opens the agent's link and prints it to paste",
-			reply: goodLink,
-			setup: func(t *testing.T, w *world) { writePort(t, w, 4242) },
+			name:  "with the agent running it opens a page only you can read, which sends the browser to the agent's link",
+			setup: func(t *testing.T, w *world) { w.asked = w.h.agent(linkAnswer(good)) },
 			check: func(t *testing.T, w *world, stdout, stderr string) {
-				want := fmt.Sprintf("http://127.0.0.1:%d/signin?code=abc", w.port)
-				if len(w.opened) != 1 || w.opened[0] != want {
-					t.Errorf("opened %v, want %s", w.opened, want)
+				if len(w.opened) != 1 {
+					t.Fatalf("opened %v, want the sign-in page", w.opened)
 				}
-				if !strings.Contains(stdout, want) || !strings.Contains(stdout, "It works once, for the next 2 minutes") {
-					t.Errorf("stdout %q doesn't give the link and how long it works", stdout)
+				page := w.opened[0]
+				if filepath.Dir(page) != w.h.dir || !strings.HasPrefix(filepath.Base(page), signInPrefix) {
+					t.Errorf("opened %s, want a sign-in page in the data directory %s", page, w.h.dir)
+				}
+				b, err := os.ReadFile(page)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !strings.Contains(string(b), `content="0; url=`+good+`"`) || !strings.Contains(string(b), `href="`+good+`"`) {
+					t.Errorf("the page doesn't send the browser to %s:\n%s", good, b)
+				}
+				if runtime.GOOS != "windows" {
+					fi, err := os.Stat(page)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if fi.Mode().Perm() != 0o600 {
+						t.Errorf("the page's mode is %v, want 0600", fi.Mode().Perm())
+					}
 				}
 				if w.started != 0 {
 					t.Error("it started a second agent")
@@ -87,46 +92,73 @@ func TestDashboard(t *testing.T) {
 			},
 		},
 		{
-			name:  "--no-open prints the link alone and opens nothing",
+			name:  "the code is in the page, never in the path the browser is opened with",
+			setup: func(t *testing.T, w *world) { w.h.agent(linkAnswer(good)) },
+			check: func(t *testing.T, w *world, stdout, stderr string) {
+				if len(w.opened) != 1 || strings.Contains(w.opened[0], code) || strings.Contains(w.opened[0], "signin?") {
+					t.Errorf("opened %v, want a path with no code in it", w.opened)
+				}
+			},
+		},
+		{
+			name:  "it prints the link to paste, and how long it works",
+			setup: func(t *testing.T, w *world) { w.h.agent(linkAnswer(good)) },
+			check: func(t *testing.T, w *world, stdout, stderr string) {
+				if !strings.Contains(stdout, good) || !strings.Contains(stdout, "It works once, for the next 2 minutes") {
+					t.Errorf("stdout %q doesn't give the link and how long it works", stdout)
+				}
+			},
+		},
+		{
+			name:  "it asks the agent for the link over its socket, and nothing else",
+			setup: func(t *testing.T, w *world) { w.asked = w.h.agent(linkAnswer(good)) },
+			check: func(t *testing.T, w *world, stdout, stderr string) {
+				if got := w.asked(); len(got) != 1 || got[0] != ipc.AskDashboardLink {
+					t.Errorf("the agent was asked %q, want %q once", got, ipc.AskDashboardLink)
+				}
+			},
+		},
+		{
+			name:  "--no-open prints the link alone, and writes and opens nothing",
 			args:  []string{"--no-open"},
-			reply: goodLink,
-			setup: func(t *testing.T, w *world) { writePort(t, w, 4242) },
+			setup: func(t *testing.T, w *world) { w.h.agent(linkAnswer(good)) },
 			check: func(t *testing.T, w *world, stdout, stderr string) {
-				if want := fmt.Sprintf("http://127.0.0.1:%d/signin?code=abc\n", w.port); stdout != want || len(w.opened) != 0 {
-					t.Errorf("stdout %q, opened %v; want %q and nothing opened", stdout, w.opened, want)
+				if stdout != good+"\n" || len(w.opened) != 0 || len(signInPages(t, w.h.dir)) != 0 {
+					t.Errorf("stdout %q, opened %v, pages %v; want %q alone", stdout, w.opened, signInPages(t, w.h.dir), good)
 				}
 			},
 		},
 		{
-			name:  "with no port.json it starts the agent and opens the link once the agent answers",
-			reply: goodLink,
+			name: "with nothing on the socket it starts the agent as a hook does and opens the link once the agent answers",
 			start: func(t *testing.T, w *world) error {
-				writePort(t, w, 4242)
+				w.h.agent(linkAnswer(good))
 				return nil
 			},
 			check: func(t *testing.T, w *world, stdout, stderr string) {
 				if w.started != 1 || len(w.opened) != 1 {
-					t.Errorf("started %d agents and opened %v, want 1 and the link", w.started, w.opened)
+					t.Errorf("started %d agents and opened %v, want 1 and the page", w.started, w.opened)
 				}
 			},
 		},
 		{
-			name:  "a port.json from an agent that stopped cleanly means starting one",
-			reply: goodLink,
-			setup: func(t *testing.T, w *world) { writePort(t, w, 0) },
-			start: func(t *testing.T, w *world) error {
-				writePort(t, w, 4242)
-				return nil
+			name: "an agent that has no link yet, before its HTTP server listens, is asked again and no second one starts",
+			setup: func(t *testing.T, w *world) {
+				var n atomic.Int32
+				w.asked = w.h.agent(func(q string) (json.RawMessage, error) {
+					if n.Add(1) <= 3 {
+						return json.Marshal(ipc.DashboardLink{})
+					}
+					return linkAnswer(good)(q)
+				})
 			},
 			check: func(t *testing.T, w *world, stdout, stderr string) {
-				if w.started != 1 || len(w.opened) != 1 {
-					t.Errorf("started %d agents and opened %v, want 1 and the link", w.started, w.opened)
+				if w.started != 0 || len(w.opened) != 1 || len(w.asked()) != 4 {
+					t.Errorf("started %d, opened %v, asked %d times; want no start, the page, and 4 questions", w.started, w.opened, len(w.asked()))
 				}
 			},
 		},
 		{
 			name:     "when the agent can't be started it says so and exits 1",
-			reply:    goodLink,
 			start:    func(t *testing.T, w *world) error { return errors.New("no such file") },
 			wantCode: 1,
 			check: func(t *testing.T, w *world, stdout, stderr string) {
@@ -136,47 +168,71 @@ func TestDashboard(t *testing.T) {
 			},
 		},
 		{
-			name:     "when a started agent never answers it gives up after the wait and exits 1",
-			reply:    goodLink,
-			start:    func(t *testing.T, w *world) error { return nil },
+			name:     "run as root or with an elevated token it starts no agent and says why",
+			start:    func(t *testing.T, w *world) error { return errNotTheUsers },
 			wantCode: 1,
 			check: func(t *testing.T, w *world, stdout, stderr string) {
-				if !strings.Contains(stderr, "didn't start within") || len(w.opened) != 0 {
+				if !strings.Contains(stderr, "won't start it from here") || !strings.Contains(stderr, "as yourself") || len(w.opened) != 0 {
 					t.Errorf("stderr %q, opened %v", stderr, w.opened)
 				}
 			},
 		},
 		{
-			name: "a link that isn't the agent's own sign-in page on 127.0.0.1 is never opened",
-			reply: func(port string) (int, string) {
-				return http.StatusCreated, `{"url":"https://example.com/signin?code=abc","expires_in_s":120}`
-			},
-			setup:    func(t *testing.T, w *world) { writePort(t, w, 4242) },
+			name:     "when a started agent never answers it gives up after the wait and exits 1",
+			start:    func(t *testing.T, w *world) error { return nil },
 			wantCode: 1,
 			check: func(t *testing.T, w *world, stdout, stderr string) {
-				if len(w.opened) != 0 || !strings.Contains(stderr, "won't open it") {
-					t.Errorf("opened %v, stderr %q", w.opened, stderr)
+				if !strings.Contains(stderr, "didn't start within 1 second") || len(w.opened) != 0 {
+					t.Errorf("stderr %q, opened %v", stderr, w.opened)
 				}
 			},
 		},
 		{
-			name:     "an agent that refuses the token says what it answered and exits 1",
-			reply:    func(port string) (int, string) { return http.StatusUnauthorized, "unauthorized" },
-			setup:    func(t *testing.T, w *world) { writePort(t, w, 4242) },
+			name: "an agent that doesn't answer in time is reported as slow, and no second agent starts",
+			setup: func(t *testing.T, w *world) {
+				release := make(chan struct{})
+				w.h.agent(func(q string) (json.RawMessage, error) {
+					<-release
+					return linkAnswer(good)(q)
+				})
+				// Registered after the agent, so it runs before the
+				// agent's cleanup waits for its answer.
+				t.Cleanup(func() { close(release) })
+			},
+			ask:      200 * time.Millisecond,
 			wantCode: 1,
 			check: func(t *testing.T, w *world, stdout, stderr string) {
-				if !strings.Contains(stderr, "401") || w.started != 0 {
+				if !strings.Contains(stderr, "didn't answer in time") || w.started != 0 || len(w.opened) != 0 {
+					t.Errorf("stderr %q, started %d, opened %v", stderr, w.started, w.opened)
+				}
+			},
+		},
+		{
+			name:     "an agent that doesn't know the question is from an older pairtime, and no second agent starts",
+			setup:    func(t *testing.T, w *world) { w.h.agent(nil) },
+			wantCode: 1,
+			check: func(t *testing.T, w *world, stdout, stderr string) {
+				if !strings.Contains(stderr, "older pairtime") || w.started != 0 {
 					t.Errorf("stderr %q, started %d", stderr, w.started)
 				}
 			},
 		},
 		{
+			name:     "a link that isn't the agent's own sign-in page on 127.0.0.1 is never opened or written",
+			setup:    func(t *testing.T, w *world) { w.h.agent(linkAnswer("https://example.com/signin?code=" + code)) },
+			wantCode: 1,
+			check: func(t *testing.T, w *world, stdout, stderr string) {
+				if len(w.opened) != 0 || len(signInPages(t, w.h.dir)) != 0 || !strings.Contains(stderr, "won't open it") {
+					t.Errorf("opened %v, pages %v, stderr %q", w.opened, signInPages(t, w.h.dir), stderr)
+				}
+			},
+		},
+		{
 			name:  "when no browser opens it prints the link to paste and exits 0",
-			reply: goodLink,
-			setup: func(t *testing.T, w *world) { writePort(t, w, 4242) },
+			setup: func(t *testing.T, w *world) { w.h.agent(linkAnswer(good)) },
 			open:  errors.New("xdg-open: no method available"),
 			check: func(t *testing.T, w *world, stdout, stderr string) {
-				if !strings.Contains(stdout, "couldn't open a browser (xdg-open: no method available)") || !strings.Contains(stdout, "/signin?code=abc") {
+				if !strings.Contains(stdout, "couldn't open a browser (xdg-open: no method available)") || !strings.Contains(stdout, good) {
 					t.Errorf("stdout %q", stdout)
 				}
 			},
@@ -185,28 +241,32 @@ func TestDashboard(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			w := &world{dir: t.TempDir()}
-			if tt.reply != nil {
-				w.port = fakeLinkAgent(t, token, tt.reply)
-			}
+			w := &world{h: newHome(t)}
 			if tt.setup != nil {
 				tt.setup(t, w)
 			}
+			ask := tt.ask
+			if ask == 0 {
+				ask = 2 * time.Second
+			}
 			deps := dashboardDeps{
-				dirs: func() (home.Dirs, error) { return home.Dirs{Data: w.dir, Config: w.dir, Runtime: w.dir}, nil },
-				startAgent: func() error {
+				dirs: func() (home.Dirs, error) { return w.h.dirs(), nil },
+				startAgent: func(d home.Dirs) error {
 					w.started++
+					if d != w.h.dirs() {
+						t.Errorf("startAgent got %+v, want the dashboard's directories %+v", d, w.h.dirs())
+					}
 					if tt.start == nil {
 						return errors.New("this test starts no agent")
 					}
 					return tt.start(t, w)
 				},
-				openURL: func(u string) error {
-					w.opened = append(w.opened, u)
+				openFile: func(p string) error {
+					w.opened = append(w.opened, p)
 					return tt.open
 				},
-				wait:   time.Second,
-				client: &http.Client{Timeout: 2 * time.Second},
+				wait: time.Second,
+				ask:  ask,
 			}
 			var stdout, stderr bytes.Buffer
 			if code := dashboard(tt.args, &stdout, &stderr, deps); code != tt.wantCode {
@@ -215,6 +275,134 @@ func TestDashboard(t *testing.T) {
 			if tt.check != nil {
 				tt.check(t, w, stdout.String(), stderr.String())
 			}
+		})
+	}
+}
+
+func TestCheckLink(t *testing.T) {
+	code := localhttp.NewToken()
+	tests := []struct {
+		name string
+		url  string
+		ttl  int
+		ok   bool
+	}{
+		{name: "the agent's own sign-in link passes", url: "http://127.0.0.1:7247/signin?code=" + code, ttl: 120, ok: true},
+		{name: "https is refused", url: "https://127.0.0.1:7247/signin?code=" + code, ttl: 120},
+		{name: "another host is refused", url: "http://example.com:7247/signin?code=" + code, ttl: 120},
+		{name: "localhost is refused, since the agent links 127.0.0.1", url: "http://localhost:7247/signin?code=" + code, ttl: 120},
+		{name: "a link without a port is refused", url: "http://127.0.0.1/signin?code=" + code, ttl: 120},
+		{name: "a port with a leading zero is refused", url: "http://127.0.0.1:07247/signin?code=" + code, ttl: 120},
+		{name: "a port past 65535 is refused", url: "http://127.0.0.1:70000/signin?code=" + code, ttl: 120},
+		{name: "another path is refused", url: "http://127.0.0.1:7247/v1/status?code=" + code, ttl: 120},
+		{name: "a second parameter is refused", url: "http://127.0.0.1:7247/signin?code=" + code + "&next=https://example.com", ttl: 120},
+		{name: "a code that isn't a token is refused", url: "http://127.0.0.1:7247/signin?code=abc", ttl: 120},
+		{name: "markup in place of the code is refused", url: `http://127.0.0.1:7247/signin?code="><script>x</script>`, ttl: 120},
+		{name: "a fragment is refused", url: "http://127.0.0.1:7247/signin?code=" + code + "#x", ttl: 120},
+		{name: "a user name is refused", url: "http://x@127.0.0.1:7247/signin?code=" + code, ttl: 120},
+		{name: "a link with no time left is refused", url: "http://127.0.0.1:7247/signin?code=" + code, ttl: 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := checkLink(ipc.DashboardLink{URL: tt.url, ExpiresInS: tt.ttl})
+			if (err == nil) != tt.ok {
+				t.Errorf("checkLink(%q) = %v, want ok %v", tt.url, err, tt.ok)
+			}
+		})
+	}
+}
+
+func TestSignInPage(t *testing.T) {
+	link := ipc.DashboardLink{URL: "http://127.0.0.1:7247/signin?code=" + localhttp.NewToken(), ExpiresInS: 120}
+	now := time.Now()
+	tests := []struct {
+		name  string
+		check func(t *testing.T, dir string)
+	}{
+		{
+			name: "each run writes a page of its own, which sends the browser on and links to the same place",
+			check: func(t *testing.T, dir string) {
+				a, err := writeSignInPage(dir, link, now)
+				if err != nil {
+					t.Fatal(err)
+				}
+				b, err := writeSignInPage(dir, link, now)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if a == b {
+					t.Errorf("two runs wrote the same page %s", a)
+				}
+				page, err := os.ReadFile(a)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !strings.HasPrefix(string(page), "<!doctype html>") || strings.Count(string(page), link.URL) != 2 {
+					t.Errorf("the page doesn't refresh to and link the URL once each:\n%s", page)
+				}
+			},
+		},
+		{
+			name: "only you can read the page",
+			check: func(t *testing.T, dir string) {
+				if runtime.GOOS == "windows" {
+					t.Skip("on Windows the data directory's DACL, which files inherit, keeps others out")
+				}
+				p, err := writeSignInPage(dir, link, now)
+				if err != nil {
+					t.Fatal(err)
+				}
+				fi, err := os.Stat(p)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if fi.Mode().Perm() != 0o600 {
+					t.Errorf("mode %v, want 0600", fi.Mode().Perm())
+				}
+			},
+		},
+		{
+			name: "a run deletes the pages older than signInKeep and leaves newer pages and other files",
+			check: func(t *testing.T, dir string) {
+				write := func(name string, age time.Duration) string {
+					p := filepath.Join(dir, name)
+					if err := os.WriteFile(p, []byte("x"), 0o600); err != nil {
+						t.Fatal(err)
+					}
+					if err := os.Chtimes(p, now.Add(-age), now.Add(-age)); err != nil {
+						t.Fatal(err)
+					}
+					return p
+				}
+				old := write(signInPrefix+"0000000000000000"+signInSuffix, signInKeep+time.Minute)
+				recent := write(signInPrefix+"1111111111111111"+signInSuffix, time.Minute)
+				other := write("signin-notes.txt", time.Hour)
+				if _, err := writeSignInPage(dir, link, now); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := os.Stat(old); !errors.Is(err, os.ErrNotExist) {
+					t.Errorf("the old page is still there (%v)", err)
+				}
+				for _, p := range []string{recent, other} {
+					if _, err := os.Stat(p); err != nil {
+						t.Errorf("%s is gone: %v", p, err)
+					}
+				}
+			},
+		},
+		{
+			name: "a page that can't be written is an error, and leaves nothing behind",
+			check: func(t *testing.T, dir string) {
+				missing := filepath.Join(dir, "nowhere")
+				if _, err := writeSignInPage(missing, link, now); err == nil {
+					t.Error("writing into a directory that doesn't exist worked")
+				}
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tt.check(t, t.TempDir())
 		})
 	}
 }

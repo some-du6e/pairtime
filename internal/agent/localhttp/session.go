@@ -13,12 +13,13 @@ import (
 
 // The dashboard's sign-in (DESIGN 3.9). The dashboard runs in the teen's
 // own browser, which can't read port.json, so `pairtime dashboard` asks
-// the agent for a one-time code with the bearer token and opens
-// /signin?code=<code>, where the agent trades the code for a session
-// cookie. The cookie is SameSite=Strict, so no other site's page can send
-// it, and HttpOnly, so no script can read it. Sessions live in the agent's
-// memory only: a restart signs every browser out, and `pairtime dashboard`
-// signs one back in.
+// the agent for a one-time code over the per-user socket, which needs no
+// token, and opens /signin?code=<code> from a file only this user can
+// read, so the code is on no command line (D-dashboard-link). The agent
+// trades the code for a session cookie. The cookie is SameSite=Strict, so
+// no other site's page can send it, and HttpOnly, so no script can read
+// it. Sessions live in the agent's memory only: a restart signs every
+// browser out, and `pairtime dashboard` signs one back in.
 //
 // A browser sends a cookie for 127.0.0.1 to every port there, not only the
 // agent's, so a server on another port of this computer that the browser
