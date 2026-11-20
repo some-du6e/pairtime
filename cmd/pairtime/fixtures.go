@@ -256,12 +256,14 @@ func (s *scrubber) file(path, shown string) {
 	}
 	text := string(b)
 	// An address that can stay goes before the spans are merged, so a known
-	// value, a URL's password or a key inside it keeps a span of its own and
-	// is still replaced. Merged first, the address would be the longest span
-	// and take whatever it holds with it (D-email-redaction).
+	// value or a URL's password inside it keeps a span of its own and is
+	// still replaced. Merged first, the address would be the longest span
+	// and take whatever it holds with it (D-email-redaction). A key inside
+	// it has no span of its own yet, so insideKept looks for one.
 	var found []redact.Span
 	for _, sp := range append(s.r.Find(text), telemetryIDs(text)...) {
 		if sp.Type == redact.TypeEmail && publicAddress(text[sp.Start:sp.End]) {
+			found = append(found, s.insideKept(text, sp)...)
 			continue
 		}
 		found = append(found, sp)
@@ -503,6 +505,59 @@ func publicAddress(addr string) bool {
 		}
 	}
 	return false
+}
+
+// insideKept returns spans for what a kept address holds that Find can't
+// see where it stands: a key that is the address's local part, as in
+// https://sk_live_...@api.example.com, or the user of the URL whose host the
+// address is, as in https://sk_live_...:pw@api.example.com. Most of
+// gitleaks' rules end a key at a quote, whitespace, a semicolon or the end
+// of the text, never at an @ or a colon, so Find gives such a key no span,
+// and the address's span was the only one that covered it. Each part is
+// scanned again on its own, where the end of the text ends the key.
+func (s *scrubber) insideKept(text string, sp redact.Span) []redact.Span {
+	at := sp.Start + strings.LastIndexByte(text[sp.Start:sp.End], '@')
+	parts := [][2]int{{sp.Start, at}}
+	if start, end, ok := urlUser(text, at); ok {
+		parts = append(parts, [2]int{start, end})
+	}
+	var found []redact.Span
+	for _, p := range parts {
+		for _, in := range s.r.Find(text[p[0]:p[1]]) {
+			in.Start += p[0]
+			in.End += p[0]
+			found = append(found, in)
+		}
+	}
+	return found
+}
+
+// urlUser returns where the user is in the URL whose authority ends at the
+// @ at text[at]: app in postgres://app:pw@db.example.com, between the //
+// and the first colon. It reports false when no // starts the authority,
+// as is or JSON-escaped as \/\/, and when the authority has no colon or
+// starts with one, since then there is no user before the address.
+func urlUser(text string, at int) (start, end int, ok bool) {
+	start = at
+	for start > 0 && authorityByte(text[start-1]) {
+		start--
+	}
+	if !strings.HasSuffix(text[:start], "//") && !strings.HasSuffix(text[:start], `\/\/`) {
+		return 0, 0, false
+	}
+	colon := strings.IndexByte(text[start:at], ':')
+	if colon <= 0 {
+		return 0, 0, false
+	}
+	return start, start + colon, true
+}
+
+// authorityByte reports whether c can be part of a URL's user or password
+// as a capture writes it: anything but a control character, a space, a
+// slash, a backslash, a quote or an angle bracket, which end the URL or the
+// JSON string around it.
+func authorityByte(c byte) bool {
+	return c > ' ' && c != 0x7f && !strings.ContainsRune(`/\'"<>`, rune(c))
 }
 
 // kinds names the spans' types, with the gitleaks rule for a secret.

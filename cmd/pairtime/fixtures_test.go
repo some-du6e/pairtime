@@ -17,6 +17,7 @@ import (
 func TestFixturesScrub(t *testing.T) {
 	// Built at run time, so no file in the repo looks like a leaked key.
 	stripe := "sk_" + "live_" + strings.Repeat("Qw81Zx4LmN", 3)
+	anthropic := "sk-ant-" + "api03-" + strings.Repeat("aB3_x9Kq-Z", 10)[:93] + "AA"
 	maya := []string{"--account", "maya", "--home", "/home/maya"}
 	tests := []struct {
 		name      string
@@ -106,6 +107,51 @@ func TestFixturesScrub(t *testing.T) {
 				"removed 2 spans from 1 of 1 files",
 			},
 			notOut: []string{"rowanq", "Tr0ub4dor3x"},
+		},
+		{
+			// Most of gitleaks' rules end a key at a quote, a space, a
+			// semicolon or the end of the text, so in place these keys,
+			// followed by an @, match none of them, and the kept address
+			// was their only span. TestScrub in tools/capture checks that
+			// scrub.py replaces them too.
+			name: "a key that is a kept address's local part, as a URL's user, is still replaced",
+			files: map[string]string{
+				"keys.txt": "https://" + stripe + "@api.example.com/v1/charges\n" +
+					"https://" + anthropic + "@api.example.com/v1/messages\n",
+			},
+			wantCode: 0,
+			wantFiles: map[string]string{
+				"keys.txt": "https://REDACTED_STRIPE_ACCESS_TOKEN@api.example.com/v1/charges\n" +
+					"https://REDACTED_ANTHROPIC_API_KEY@api.example.com/v1/messages\n",
+			},
+			wantOut: []string{
+				"keys.txt:1:9: secret stripe-access-token, 38 bytes\n",
+				"keys.txt:2:9: secret anthropic-api-key, 108 bytes\n",
+				"removed 2 spans from 1 of 1 files",
+			},
+			notOut: []string{stripe, anthropic},
+		},
+		{
+			// The kept address is x-oauth-basic@api.example.com here, and
+			// the key, followed by a colon, is before it.
+			name: "a key that is the user of a URL before its password, at a kept address, is still replaced",
+			files: map[string]string{
+				"remote.txt": "https://" + stripe + ":x-oauth-basic@api.example.com/v1/charges\n" +
+					"https://" + anthropic + ":x-oauth-basic@api.example.com/v1/messages\n",
+			},
+			wantCode: 0,
+			wantFiles: map[string]string{
+				"remote.txt": "https://REDACTED_STRIPE_ACCESS_TOKEN:REDACTED_URL_PASSWORD@api.example.com/v1/charges\n" +
+					"https://REDACTED_ANTHROPIC_API_KEY:REDACTED_URL_PASSWORD@api.example.com/v1/messages\n",
+			},
+			wantOut: []string{
+				"remote.txt:1:9: secret stripe-access-token, 38 bytes\n",
+				"remote.txt:1:48: secret url-password, 13 bytes\n",
+				"remote.txt:2:9: secret anthropic-api-key, 108 bytes\n",
+				"remote.txt:2:118: secret url-password, 13 bytes\n",
+				"removed 4 spans from 1 of 1 files",
+			},
+			notOut: []string{stripe, anthropic, "oauth"},
 		},
 		{
 			name: "telemetry account and organization ids become README's id, or 0 for a number, and each is listed",

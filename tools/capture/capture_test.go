@@ -1565,6 +1565,31 @@ func TestScrub(t *testing.T) {
 				t.Fatalf("notes.txt = %q, want %q", got, "capture@ci.example.com\n")
 			}
 		}},
+		// The lines of two TestFixturesScrub cases in cmd/pairtime. scrub.py's
+		// key patterns need nothing after a key, so a key followed by an
+		// address's @ or a URL's colon is found in place, and both scrubs
+		// remove it and keep the address.
+		{"a key that is a kept address's local part, or the user of its URL, is still replaced", func(t *testing.T) {
+			// Built at run time, so no file in the repo looks like a leaked key.
+			stripe := "sk_" + "live_" + strings.Repeat("Qw81Zx4LmN", 3)
+			anthropic := "sk-ant-" + "api03-" + strings.Repeat("aB3_x9Kq-Z", 10)[:93] + "AA"
+			dir := t.TempDir()
+			write(t, filepath.Join(dir, "run", "keys.txt"), "https://"+stripe+"@api.example.com/v1/charges\n"+
+				"https://"+anthropic+"@api.example.com/v1/messages\n"+
+				"https://"+stripe+":x-oauth-basic@api.example.com/v1/charges\n"+
+				"https://"+anthropic+":x-oauth-basic@api.example.com/v1/messages\n")
+			r := run(t, ".", nil, quiet, python(t, "scrub.py", "--no-detect", filepath.Join(dir, "run"), filepath.Join(dir, "out"))...)
+			if r.code != 0 {
+				t.Fatalf("exit %d:\n%s%s", r.code, r.stdout, r.stderr)
+			}
+			want := "https://REDACTED_STRIPE_KEY@api.example.com/v1/charges\n" +
+				"https://REDACTED_ANTHROPIC_KEY@api.example.com/v1/messages\n" +
+				"https://REDACTED_STRIPE_KEY:REDACTED_URL_PASSWORD@api.example.com/v1/charges\n" +
+				"https://REDACTED_ANTHROPIC_KEY:REDACTED_URL_PASSWORD@api.example.com/v1/messages\n"
+			if got := read(t, filepath.Join(dir, "out", "keys.txt")); got != want {
+				t.Fatalf("keys.txt = %q, want %q", got, want)
+			}
+		}},
 		{"a known value inside a longer word is reported, fails the run, and nothing is written", func(t *testing.T) {
 			dir := t.TempDir()
 			write(t, filepath.Join(dir, "run", "notes.txt"), "rowanqsLaptop\n")
