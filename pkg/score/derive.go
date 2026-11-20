@@ -10,13 +10,18 @@ import (
 	"github.com/some-du6e/pairtime/pkg/event"
 )
 
-// deriver derives everything WP-SC1 builds from one sorted list of
-// records, in passes: focus and presence, sessions and turns, anchors,
-// `pairtime track` calls, then the return rule, which needs the anchors.
+// deriver derives everything from one sorted list of records, in passes:
+// focus and presence, sessions and turns, anchors, `pairtime track` calls,
+// the return rule, which needs the anchors, then the reading buckets and
+// the per-second credit, which need all of them.
 type deriver struct {
-	r        rules
-	dev      Device
-	recs     []event.Event
+	r    rules
+	dev  Device
+	recs []event.Event
+	// now is the present as Step takes it (State.now). Nothing is derived
+	// for a slot after it.
+	now      int64
+	byID     map[string]int
 	focus    *focusLine
 	pres     *presence
 	sessions map[string]*session
@@ -25,16 +30,27 @@ type deriver struct {
 	tracks   []TrackCall
 	flags    []Flag
 	returns  []Return
+	buckets  map[string]*bucket
+	fills    []Fill
+	credits  []Credit
+	// noInputLeads are the leads the no-input prompts would have had, had a
+	// person typed them (SM 2.2 rule 8, 5.2's X.no_input).
+	noInputLeads []projLead
+	// lookups are the browser and chat-app runs, whose credit waits for
+	// their end (Step).
+	lookups []span
 }
 
-// derive runs every pass over recs, which must be in record order.
-func derive(r rules, dev Device, recs []event.Event) Derived {
+// derive runs every pass over recs, which must be in record order, with now
+// as the present. Besides what it derives, it returns the spans of the
+// browser and chat-app runs.
+func derive(r rules, dev Device, recs []event.Event, now int64) (Derived, []span) {
 	if len(recs) == 0 {
-		return Derived{}
+		return Derived{}, nil
 	}
-	d := &deriver{r: r, dev: dev, recs: recs}
+	d := &deriver{r: r, dev: dev, recs: recs, now: now}
 	d.focus = buildFocus(recs)
-	d.pres = buildPresence(r, recs, recs[len(recs)-1].T, d.focus)
+	d.pres = buildPresence(r, recs, now, d.focus)
 	d.buildSessions()
 	d.buildTurns()
 	d.promptAnchors()
@@ -42,15 +58,24 @@ func derive(r rules, dev Device, recs []event.Event) Derived {
 	d.trackCalls()
 	slices.SortFunc(d.anchors, anchorCmp)
 	d.markReturns()
+	d.buildBuckets()
+	d.credit()
 
-	out := Derived{Slots: slices.Clone(d.pres.slots), Anchors: d.anchors, Returns: d.returns, Tracks: d.tracks}
+	out := Derived{Slots: slices.Clone(d.pres.slots), Anchors: d.anchors, Returns: d.returns, Tracks: d.tracks,
+		Credits: d.credits, Fills: d.fills}
 	for _, tb := range d.turns {
 		out.Turns = append(out.Turns, tb.turn)
 	}
 	slices.SortFunc(out.Tracks, trackCmp)
 	out.Flags = d.flags
 	slices.SortFunc(out.Flags, flagCmp)
-	return out
+	return out, d.lookups
+}
+
+// projLead is a lead's span in one project.
+type projLead struct {
+	proj string
+	span
 }
 
 // Flag is a review flag a record raised (SM 8.7, DESIGN 5.4). Flags change

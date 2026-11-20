@@ -3,6 +3,7 @@
 package score
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/some-du6e/pairtime/pkg/event"
@@ -159,6 +160,57 @@ func TestPresence(t *testing.T) {
 	}
 }
 
+func TestFocusLongest(t *testing.T) {
+	cases := []struct {
+		name   string
+		focus  func(b *tl)
+		class  event.AppClass
+		hosted []string
+	}{
+		{
+			name: "SM 2.5: a window whose focus another window splits still holds the slot longest in total: 5 + 4 s against 6 s",
+			focus: func(b *tl) {
+				b.focus(at(0), event.AppTerminal, "p_1", "s_1")
+				b.focus(at(5), event.AppBrowser, "")
+				b.focus(at(11), event.AppTerminal, "p_1", "s_1")
+			},
+			class: event.AppTerminal, hosted: []string{"s_1"},
+		},
+		{
+			name: "a window written again when a session starts under it is one window, and its longest piece gives the hosted sessions",
+			focus: func(b *tl) {
+				b.focus(at(0), event.AppBrowser, "")
+				b.focus(at(6), event.AppTerminal, "p_1")
+				b.focus(at(10), event.AppTerminal, "p_1", "s_1")
+			},
+			class: event.AppTerminal, hosted: []string{"s_1"},
+		},
+		{
+			name: "on a tie the window that had focus first holds the slot",
+			focus: func(b *tl) {
+				b.focus(at(0), event.AppEditor, "p_1")
+				b.focus(atMS(7_500), event.AppBrowser, "")
+			},
+			class: event.AppEditor,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			b := newTL(false)
+			c.focus(b)
+			b.mouse(at(1))
+			b.samples(at(0), at(30))
+			s, ok := slotAt(b.run(t, Device{}), at(0))
+			if !ok {
+				t.Fatal("no slot")
+			}
+			if s.FocusClass != c.class || !slices.Equal(s.Hosted, c.hosted) {
+				t.Errorf("focus %s hosting %q, want %s hosting %q", s.FocusClass, s.Hosted, c.class, c.hosted)
+			}
+		})
+	}
+}
+
 func TestInputKeys(t *testing.T) {
 	for _, c := range []struct {
 		name       string
@@ -202,6 +254,11 @@ func TestMsOf(t *testing.T) {
 		{"a large idle time keeps its tenths", 35248.6, 35_248_600},
 		{"sub-millisecond digits round to the nearest millisecond", 2.0006, 2001},
 		{"zero is zero", 0, 0},
+		{"an idle time too large for int64 milliseconds reads as idleMaxS, a long idle, not as input at the sample", 1e19, idleMaxS * 1000},
+		{"one that would overflow the conversion to milliseconds reads as idleMaxS too", 9.3e15, idleMaxS * 1000},
+		{"one just under idleMaxS keeps its value", 999_999_999_999, 999_999_999_999_000},
+		{"text strconv can't read back, from a value event.Validate would reject, reads as idleMaxS, never as input at the sample",
+			-1e19, idleMaxS * 1000},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			if got := msOf(c.in); got != c.want {
