@@ -2320,6 +2320,124 @@
       "f": {"v": 1}
     }
   ],
+  "diffs": [
+    {
+      "note": "three lines of context around three lines added after line 9",
+      "patch": {"old_start": 7, "old_lines": 6, "new_start": 7, "new_lines": 9, "lines": ["206c696e6520370a", "206c696e6520380a", "206c696e6520390a", "2b616464656420310a", "2b616464656420320a", "2b616464656420330a", "206c696e652031300a", "206c696e652031310a", "206c696e652031320a"]},
+      "hunks": [
+        {"old_start": 9, "old_lines": 0, "new_start": 10, "new_lines": 3}
+      ]
+    },
+    {
+      "note": "the next turn appends three more below them: no line overlaps once context is gone",
+      "patch": {"old_start": 10, "old_lines": 6, "new_start": 10, "new_lines": 9, "lines": ["20616464656420310a", "20616464656420320a", "20616464656420330a", "2b616464656420340a", "2b616464656420350a", "2b616464656420360a", "206c696e652031300a", "206c696e652031310a", "206c696e652031320a"]},
+      "hunks": [
+        {"old_start": 12, "old_lines": 0, "new_start": 13, "new_lines": 3}
+      ]
+    },
+    {
+      "note": "a run of removed and added lines is one hunk",
+      "patch": {"old_start": 17, "old_lines": 8, "new_start": 17, "new_lines": 7, "lines": ["206c696e652031370a", "206c696e652031380a", "206c696e652031390a", "2d6f6c642032300a", "2d6f6c642032310a", "2b6e65772032300a", "206c696e652032320a", "206c696e652032330a", "206c696e652032340a"]},
+      "hunks": [
+        {"old_start": 20, "old_lines": 2, "new_start": 20, "new_lines": 1}
+      ]
+    },
+    {
+      "note": "two runs in one patch hunk, split at the unchanged line between them",
+      "patch": {"old_start": 4, "old_lines": 7, "new_start": 4, "new_lines": 8, "lines": ["206c696e6520340a", "206c696e6520350a", "2d6c696e6520360a", "2b6c696e65207369780a", "206c696e6520370a", "2b696e7365727465640a", "206c696e6520380a", "206c696e6520390a", "206c696e652031300a"]},
+      "hunks": [
+        {"old_start": 6, "old_lines": 1, "new_start": 6, "new_lines": 1},
+        {"old_start": 7, "old_lines": 0, "new_start": 8, "new_lines": 1}
+      ]
+    },
+    {
+      "note": "a run that adds before it removes is still one hunk",
+      "patch": {"old_start": 1, "old_lines": 3, "new_start": 1, "new_lines": 3, "lines": ["20610a", "2b62320a", "2d620a", "20630a"]},
+      "hunks": [
+        {"old_start": 2, "old_lines": 1, "new_start": 2, "new_lines": 1}
+      ]
+    },
+    {
+      "note": "a new file",
+      "patch": {"old_start": 0, "old_lines": 0, "new_start": 1, "new_lines": 3, "lines": ["2b6f6e650a", "2b74776f0a", "2b74687265650a"]},
+      "hunks": [
+        {"old_start": 0, "old_lines": 0, "new_start": 1, "new_lines": 3}
+      ]
+    },
+    {
+      "note": "a deleted file",
+      "patch": {"old_start": 1, "old_lines": 2, "new_start": 0, "new_lines": 0, "lines": ["2d6f6e650a", "2d74776f0a"]},
+      "hunks": [
+        {"old_start": 1, "old_lines": 2, "new_start": 0, "new_lines": 0}
+      ]
+    },
+    {
+      "note": "a last line without its LF, and the marker line counts in neither file",
+      "patch": {"old_start": 8, "old_lines": 3, "new_start": 8, "new_lines": 3, "lines": ["2065696768740a", "206e696e650a", "2d74656e", "5c204e6f206e65776c696e6520617420656e64206f662066696c65", "2b74656e0a"]},
+      "hunks": [
+        {"old_start": 10, "old_lines": 1, "new_start": 10, "new_lines": 1}
+      ]
+    },
+    {
+      "note": "a patch whose lines don't add up to its header is malformed",
+      "patch": {"old_start": 1, "old_lines": 3, "new_start": 1, "new_lines": 3, "lines": ["20610a", "2d620a", "2b420a"]},
+      "malformed": true
+    },
+    {
+      "note": "a patch line with no marker is malformed",
+      "patch": {"old_start": 1, "old_lines": 1, "new_start": 1, "new_lines": 1, "lines": ["610a"]},
+      "malformed": true
+    },
+    {
+      "note": "an edit inside one line",
+      "before": "6c696e6520310a6c696e6520320a6c696e6520330a6c696e6520340a6c696e6520350a6c696e6520360a6c696e6520370a6c696e6520380a6c696e6520390a6c696e652031300a6c696e652031310a6c696e652031320a6c696e652031330a6c696e652031340a6c696e652031350a6c696e652031360a6c696e652031370a6c696e652031380a6c696e652031390a6c696e652032300a",
+      "after": "6c696e6520310a6c696e6520320a6c696e6520330a6c696e6520340a6c696e6520350a6c696e6520360a6c696e6520370a6c696e6520380a6c696e6520390a6c696e652031300a6c696e652031310a6c696e65207477656c76650a6c696e652031330a6c696e652031340a6c696e652031350a6c696e652031360a6c696e652031370a6c696e652031380a6c696e652031390a6c696e652032300a",
+      "hunks": [
+        {"old_start": 12, "old_lines": 1, "new_start": 12, "new_lines": 1}
+      ]
+    },
+    {
+      "note": "an edit that removes two lines and adds one",
+      "before": "6c696e6520310a6c696e6520320a6c696e6520330a6c696e6520340a6c696e6520350a6c696e6520360a6c696e6520370a6c696e6520380a6c696e6520390a6c696e652031300a6c696e652031310a6c696e652031320a6c696e652031330a6c696e652031340a6c696e652031350a6c696e652031360a6c696e652031370a6c696e652031380a6c696e652031390a6c696e652032300a",
+      "after": "6c696e6520310a6c696e6520320a6c696e6520330a6c696e6520340a6c696e6573203520616e6420360a6c696e6520370a6c696e6520380a6c696e6520390a6c696e652031300a6c696e652031310a6c696e652031320a6c696e652031330a6c696e652031340a6c696e652031350a6c696e652031360a6c696e652031370a6c696e652031380a6c696e652031390a6c696e652032300a",
+      "hunks": [
+        {"old_start": 5, "old_lines": 2, "new_start": 5, "new_lines": 1}
+      ]
+    },
+    {
+      "note": "an insertion between two equal lines starts after the shared leading lines",
+      "before": "610a620a",
+      "after": "610a620a620a",
+      "hunks": [
+        {"old_start": 2, "old_lines": 0, "new_start": 3, "new_lines": 1}
+      ]
+    },
+    {
+      "note": "an edit that adds the final LF changes the last line",
+      "before": "610a62",
+      "after": "610a620a",
+      "hunks": [
+        {"old_start": 2, "old_lines": 1, "new_start": 2, "new_lines": 1}
+      ]
+    },
+    {
+      "note": "CRLF lines compare by their bytes",
+      "before": "610d0a620d0a",
+      "after": "610d0a420d0a",
+      "hunks": [
+        {"old_start": 2, "old_lines": 1, "new_start": 2, "new_lines": 1}
+      ]
+    },
+    {"note": "an edit that changes nothing has no hunk", "before": "6c696e6520310a6c696e6520320a6c696e6520330a6c696e6520340a6c696e6520350a6c696e6520360a6c696e6520370a6c696e6520380a6c696e6520390a6c696e652031300a6c696e652031310a6c696e652031320a6c696e652031330a6c696e652031340a6c696e652031350a6c696e652031360a6c696e652031370a6c696e652031380a6c696e652031390a6c696e652032300a", "after": "6c696e6520310a6c696e6520320a6c696e6520330a6c696e6520340a6c696e6520350a6c696e6520360a6c696e6520370a6c696e6520380a6c696e6520390a6c696e652031300a6c696e652031310a6c696e652031320a6c696e652031330a6c696e652031340a6c696e652031350a6c696e652031360a6c696e652031370a6c696e652031380a6c696e652031390a6c696e652032300a", "hunks": []},
+    {
+      "note": "an edit of an empty file",
+      "before": "",
+      "after": "66697273740a",
+      "hunks": [
+        {"old_start": 0, "old_lines": 0, "new_start": 1, "new_lines": 1}
+      ]
+    }
+  ],
   "jaccard": [
     {"note": "identical after normalization", "a": "04158cb12e5d67f6069828f036898da516d52b2524e06697038ea0540af6186a0ca59840203152d810f267271fc8b4f5161eece40541275219ea56c1160a0b2414be734a1ed2d4e60b26321f0378f7af0aadf4950fd7620f032688c00701c655014d03454a4d87e4049600300d162ad72f9db83e5679c26f06c4b708011c55e701b7356924fd0728113e685018750a0b0ec2fc6b1df9ee9f1351730e00293bb21033980e15727c221a2c6b190c94220309de677616b493803b9e5edf1b06b06806f828520743632c13be0e371d1b3c4317c3bdbc56594cb0198d21200f19148916d9e37b0cbf07d10c9fe46600f8eb200c26e3b92affc9d711bd52410a616f6d", "b": "04158cb12e5d67f6069828f036898da516d52b2524e06697038ea0540af6186a0ca59840203152d810f267271fc8b4f5161eece40541275219ea56c1160a0b2414be734a1ed2d4e60b26321f0378f7af0aadf4950fd7620f032688c00701c655014d03454a4d87e4049600300d162ad72f9db83e5679c26f06c4b708011c55e701b7356924fd0728113e685018750a0b0ec2fc6b1df9ee9f1351730e00293bb21033980e15727c221a2c6b190c94220309de677616b493803b9e5edf1b06b06806f828520743632c13be0e371d1b3c4317c3bdbc56594cb0198d21200f19148916d9e37b0cbf07d10c9fe46600f8eb200c26e3b92affc9d711bd52410a616f6d", "matches": 64},
     {"note": "one word changed", "a": "04158cb12e5d67f6069828f036898da516d52b2524e06697038ea0540af6186a0ca59840203152d810f267271fc8b4f5161eece40541275219ea56c1160a0b2414be734a1ed2d4e60b26321f0378f7af0aadf4950fd7620f032688c00701c655014d03454a4d87e4049600300d162ad72f9db83e5679c26f06c4b708011c55e701b7356924fd0728113e685018750a0b0ec2fc6b1df9ee9f1351730e00293bb21033980e15727c221a2c6b190c94220309de677616b493803b9e5edf1b06b06806f828520743632c13be0e371d1b3c4317c3bdbc56594cb0198d21200f19148916d9e37b0cbf07d10c9fe46600f8eb200c26e3b92affc9d711bd52410a616f6d", "b": "04158cb13976f18c069828f036898da516d52b2524e06697038ea0540af6186a15a4adfa203152d810f267271fc8b4f5161eece40541275219ea56c1160a0b2414be734a1ed2d4e60b26321f0378f7af0aadf4950fd7620f032688c00701c655014d03453de343bc049600300d162ad72f9db83e067f1c9506c4b708011c55e701b7356924fd0728113e68501253ae740ec2fc6b1df9ee9f1351730e00293bb21033980e15727c221a2c6b19047bac1a09de677616b49380380471ae1b06b06806f828520743632c13be0e3707f7a26017c3bdbc3e992905198d21200f19148916d9e37b0cbf07d10c9fe46600f8eb200c26e3b934a82a3511bd52410a616f6d", "matches": 54},

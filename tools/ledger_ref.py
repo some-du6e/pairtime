@@ -944,6 +944,78 @@ def hunk(k_feat, path, old_start, old_lines, new_start, new_lines):
             "os": old_start, "ol": old_lines, "ns": new_start, "nl": new_lines}
 
 
+def file_lines(text):
+    """A file's lines: each piece up to and including an LF, and a last
+    piece without one when the text doesn't end with LF."""
+    out, start = [], 0
+    while start < len(text):
+        end = text.find("\n", start)
+        if end < 0:
+            out.append(text[start:])
+            break
+        out.append(text[start:end + 1])
+        start = end + 1
+    return out
+
+
+def hunk_from_texts(before, after):
+    """The zero-context hunk of one edit, from the file's text before and
+    after it: what is left once the longest shared leading run of lines,
+    then the longest shared trailing run, are dropped. None when no line
+    changed."""
+    a, b = file_lines(before), file_lines(after)
+    p = 0
+    while p < len(a) and p < len(b) and a[p] == b[p]:
+        p += 1
+    q = 0
+    while q < len(a) - p and q < len(b) - p and a[len(a) - 1 - q] == b[len(b) - 1 - q]:
+        q += 1
+    old_lines, new_lines = len(a) - p - q, len(b) - p - q
+    if not old_lines and not new_lines:
+        return None
+    return (p + 1 if old_lines else p, old_lines, p + 1 if new_lines else p, new_lines)
+
+
+def hunks_from_patch(old_start, old_lines, new_start, new_lines, lines):
+    """The zero-context hunks of one unified-diff hunk, from its header's
+    four numbers and its lines, each starting with ' ', '-', '+' or '\\'.
+    Each maximal run of '-' and '+' lines is one hunk."""
+    o = old_start if old_lines else old_start + 1
+    n = new_start if new_lines else new_start + 1
+    seen_old = seen_new = 0
+    out, run = [], None
+
+    def close():
+        ro, rn, removed, added = run
+        out.append((ro if removed else ro - 1, removed, rn if added else rn - 1, added))
+
+    for line in lines:
+        op = line[:1]
+        if op == "\\":
+            continue
+        if op not in (" ", "-", "+"):
+            raise LedgerError("a patch line starts with ' ', '-', '+' or '\\'")
+        if op == " ":
+            if run is not None:
+                close()
+                run = None
+            o, n, seen_old, seen_new = o + 1, n + 1, seen_old + 1, seen_new + 1
+            continue
+        if run is None:
+            run = [o, n, 0, 0]
+        if op == "-":
+            run[2] += 1
+            o, seen_old = o + 1, seen_old + 1
+        else:
+            run[3] += 1
+            n, seen_new = n + 1, seen_new + 1
+    if run is not None:
+        close()
+    if (seen_old, seen_new) != (old_lines, new_lines):
+        raise LedgerError("the patch hunk's lines don't add up to its header's counts")
+    return out
+
+
 # 10.7 The feature map f, version 1. Members in this order: v, mh, th, es,
 # pc, h, ch, each present only where 10.7 says.
 
@@ -1498,6 +1570,46 @@ def check_features(rep, obj, path):
     rep.same(path + ".f", obj["f"], want)
 
 
+HUNK_FIELDS = ("old_start", "old_lines", "new_start", "new_lines")
+
+
+def check_diff(rep, obj, path):
+    fields(obj, path, (), ("patch", "before", "after", "hunks", "malformed", "note"))
+    if ("hunks" in obj) == ("malformed" in obj):
+        raise FormatError("%s: a diff has hunks or malformed, not both" % path)
+    rep.count("diffs")
+    if "patch" in obj:
+        if "before" in obj or "after" in obj:
+            raise FormatError("%s: a diff is a patch or a before and after, not both" % path)
+        pp = path + ".patch"
+        patch = fields(obj["patch"], pp, HUNK_FIELDS + ("lines",))
+        lines = [get_hex_text({"line": x}, "line", "%s.lines[%d]" % (pp, i))[1]
+                 for i, x in enumerate(get_list(patch, "lines", pp))]
+        try:
+            want = hunks_from_patch(*[get_int(patch, k, pp, 0, (1 << 31) - 1) for k in HUNK_FIELDS], lines)
+        except LedgerError:
+            want = None
+    else:
+        fields(obj, path, ("before", "after"), ("hunks", "malformed", "note"))
+        h = hunk_from_texts(get_hex_text(obj, "before", path)[1], get_hex_text(obj, "after", path)[1])
+        want = [] if h is None else [h]
+    if "malformed" in obj:
+        if obj["malformed"] is not True:
+            raise FormatError("%s.malformed: want true" % path)
+        if want is not None:
+            rep.fail(path + ".malformed", "the reference reads the patch as %s" % show([list(h) for h in want]))
+        return
+    given = []
+    for i, h in enumerate(get_list(obj, "hunks", path)):
+        hp = "%s.hunks[%d]" % (path, i)
+        fields(h, hp, HUNK_FIELDS)
+        given.append(tuple(get_int(h, k, hp) for k in HUNK_FIELDS))
+    if want is None:
+        rep.fail(path + ".hunks", "the reference finds the patch malformed")
+    else:
+        rep.same(path + ".hunks", [list(h) for h in given], [list(h) for h in want])
+
+
 def get_sketch(obj, key, path):
     return sketch_from_bytes(get_hex(obj, key, path, 4 * MINHASH_SIZE))
 
@@ -1583,6 +1695,7 @@ CONTENT_SECTIONS = (
     ("reveals", check_reveal),
     ("normalizations", check_normalization),
     ("features", check_features),
+    ("diffs", check_diff),
     ("jaccard", check_jaccard),
     ("shingle_reveals", check_shingle_reveal),
     ("draws", check_draw),
@@ -1628,7 +1741,7 @@ def check_document(doc):
 
 def summary(counts):
     order = ("key sets", "digests", "chains", "batches", "records", "days", "day rows", "inclusion proofs",
-             "lowercase tables", "commitments", "reveals", "normalizations", "feature sets", "jaccard pairs",
+             "lowercase tables", "commitments", "reveals", "normalizations", "feature sets", "diffs", "jaccard pairs",
              "shingle reveals", "draws", "challenge sizes")
     return ", ".join("%d %s" % (counts[k], k) for k in order if k in counts)
 
@@ -2184,6 +2297,59 @@ def make_shingle_reveals(features):
     return out
 
 
+def context(first, last, text="line %d"):
+    return [" " + text % i + "\n" for i in range(first, last)]
+
+
+def patch_diff(note, old_start, old_lines, new_start, new_lines, lines):
+    out = {"note": note, "patch": {"old_start": old_start, "old_lines": old_lines, "new_start": new_start,
+                                   "new_lines": new_lines, "lines": [x.encode("utf-8").hex() for x in lines]}}
+    try:
+        out["hunks"] = [dict(zip(HUNK_FIELDS, h)) for h in hunks_from_patch(old_start, old_lines, new_start, new_lines, lines)]
+    except LedgerError:
+        out["malformed"] = True
+    return out
+
+
+def text_diff(note, before, after):
+    h = hunk_from_texts(before, after)
+    return {"note": note, "before": before.encode("utf-8").hex(), "after": after.encode("utf-8").hex(),
+            "hunks": [] if h is None else [dict(zip(HUNK_FIELDS, h))]}
+
+
+def make_diffs():
+    """Zero-context hunks from patches with context and from the text
+    before and after an edit (10.6)."""
+    file20 = "".join("line %d\n" % i for i in range(1, 21))
+    return [
+        patch_diff("three lines of context around three lines added after line 9", 7, 6, 7, 9,
+                   context(7, 10) + ["+added %d\n" % i for i in (1, 2, 3)] + context(10, 13)),
+        patch_diff("the next turn appends three more below them: no line overlaps once context is gone", 10, 6, 10, 9,
+                   [" added %d\n" % i for i in (1, 2, 3)] + ["+added %d\n" % i for i in (4, 5, 6)] + context(10, 13)),
+        patch_diff("a run of removed and added lines is one hunk", 17, 8, 17, 7,
+                   context(17, 20) + ["-old 20\n", "-old 21\n", "+new 20\n"] + context(22, 25)),
+        patch_diff("two runs in one patch hunk, split at the unchanged line between them", 4, 7, 4, 8,
+                   context(4, 6) + ["-line 6\n", "+line six\n"] + context(7, 8) + ["+inserted\n"] + context(8, 11)),
+        patch_diff("a run that adds before it removes is still one hunk", 1, 3, 1, 3,
+                   [" a\n", "+b2\n", "-b\n", " c\n"]),
+        patch_diff("a new file", 0, 0, 1, 3, ["+one\n", "+two\n", "+three\n"]),
+        patch_diff("a deleted file", 1, 2, 0, 0, ["-one\n", "-two\n"]),
+        patch_diff("a last line without its LF, and the marker line counts in neither file", 8, 3, 8, 3,
+                   [" eight\n", " nine\n", "-ten", "\\ No newline at end of file", "+ten\n"]),
+        patch_diff("a patch whose lines don't add up to its header is malformed", 1, 3, 1, 3,
+                   [" a\n", "-b\n", "+B\n"]),
+        patch_diff("a patch line with no marker is malformed", 1, 1, 1, 1, ["a\n"]),
+        text_diff("an edit inside one line", file20, file20.replace("line 12\n", "line twelve\n")),
+        text_diff("an edit that removes two lines and adds one", file20,
+                  file20.replace("line 5\nline 6\n", "lines 5 and 6\n")),
+        text_diff("an insertion between two equal lines starts after the shared leading lines", "a\nb\n", "a\nb\nb\n"),
+        text_diff("an edit that adds the final LF changes the last line", "a\nb", "a\nb\n"),
+        text_diff("CRLF lines compare by their bytes", "a\r\nb\r\n", "a\r\nB\r\n"),
+        text_diff("an edit that changes nothing has no hunk", file20, file20),
+        text_diff("an edit of an empty file", "", "first\n"),
+    ]
+
+
 def make_jaccard(features):
     by = {f["note"]: sketch_from_bytes(bytes.fromhex(f["f"]["mh"])) for f in features if "mh" in f["f"]}
     pairs = (
@@ -2275,6 +2441,7 @@ def make_content_vectors():
         "reveals": reveals,
         "normalizations": normalizations,
         "features": features,
+        "diffs": make_diffs(),
         "jaccard": make_jaccard(features),
         "shingle_reveals": make_shingle_reveals(features),
         "draws": draws,
@@ -2775,6 +2942,34 @@ def test_minhash_estimates():
     return "mean error %.3f, bias %+.3f over 100 pairs" % (total / 100, signed / 100)
 
 
+def test_hunk_properties():
+    """For random single edits of random files, the hunks of a patch with
+    three lines of context, as Claude Code writes it, are the one hunk the
+    text before and after gives, and the hunk counts changed lines only."""
+    s = Stream("selftest-hunks")
+    checked = 0
+    for _ in range(300):
+        before = ["line %d %s\n" % (i, s.take(2).hex()) for i in range(s.below(40))]
+        at = s.below(len(before) + 1)
+        removed = s.below(min(4, len(before) - at) + 1)
+        added = ["new %s\n" % s.take(3).hex() for _ in range(s.below(4))]
+        if not removed and not added:
+            continue
+        after = before[:at] + added + before[at + removed:]
+        lo, hi = max(0, at - 3), min(len(before), at + removed + 3)
+        lines = ([" " + x for x in before[lo:at]] + ["-" + x for x in before[at:at + removed]]
+                 + ["+" + x for x in added] + [" " + x for x in before[at + removed:hi]])
+        old_lines, new_lines = hi - lo, hi - lo - removed + len(added)
+        old_start = lo + 1 if old_lines else lo
+        new_start = lo + 1 if new_lines else lo
+        got = hunks_from_patch(old_start, old_lines, new_start, new_lines, lines)
+        want = hunk_from_texts("".join(before), "".join(after))
+        expect(got == [want], "a patch's hunks %s aren't the text's %s" % (got, want))
+        expect(want[1] == removed and want[3] == len(added), "the hunk %s counts lines that didn't change" % (want,))
+        checked += 1
+    return "%d random edits" % checked
+
+
 def test_draw_properties():
     """The draw takes the CHALLENGE_K smallest scores whatever the pool's
     order, and CHALLENGE_K steps at the rounding boundaries."""
@@ -2821,6 +3016,8 @@ def test_check_catches_content():
         "normalizations": ["the worked example of 10.10"],
         "features": ["the worked example of 10.10", "an edit across two files, with an insertion and a deletion",
                      "a command typed in a shell"],
+        "diffs": ["three lines of context around three lines added after line 9", "an edit inside one line",
+                  "a patch whose lines don't add up to its header is malformed"],
         "jaccard": ["one word changed"],
         "shingle_reveals": ["the worked example of 10.10: every shingle shown"],
         "draws": ["a pool of 12 on two devices"],
@@ -2880,6 +3077,9 @@ def test_check_catches_content():
         ("a hunk's path", setter(at("features", tool, "f", "h", 0), "p", flip)),
         ("a hunk's numbers", setter(at("features", tool, "f", "h", 0), "nl", lambda x: x + 1)),
         ("a command hash", setter(at("features", shell, "f"), "ch", flip)),
+        ("a hunk from a patch", setter(at("diffs", 0, "hunks", 0), "new_start", lambda x: x + 1)),
+        ("a hunk from the text before and after", setter(at("diffs", 1, "hunks", 0), "old_lines", lambda x: x + 1)),
+        ("a malformed patch read as well formed", lambda d: d["diffs"][2].pop("malformed") and d["diffs"][2].update(hunks=[])),
         ("a Jaccard count", setter(at("jaccard", 0), "matches", lambda x: x + 1)),
         ("a shingle reveal's verdict", setter(at("shingle_reveals", 0), "verdict", lambda _: "sketch")),
         ("a draw seed", setter(at("draws", 0), "seed", flip)),
@@ -2916,6 +3116,7 @@ SELFTESTS = (
     ("tokens and the 16 KiB cut", test_tokens),
     ("reveal properties", test_reveal_properties),
     ("MinHash estimates", test_minhash_estimates),
+    ("hunk properties", test_hunk_properties),
     ("draw properties", test_draw_properties),
     ("part 2 worked example", test_content_example),
     ("content vectors regenerate", test_content_vectors_regenerate),
