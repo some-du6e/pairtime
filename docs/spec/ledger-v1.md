@@ -261,7 +261,7 @@ The day number of a time `t` is `d = floor(t / 86,400,000)`, days since 1970-01-
 leaf = u8(len(device_id)) || ascii(device_id) || u64(b) || H_b || u64(received_at)
 ```
 
-The leaves are ordered by `received_at`, then by `device_id` compared byte by byte as unsigned bytes, a shorter id sorting before a longer one it begins, then by `b`. No case folding, locale or collation enters the comparison: `Zq` sorts before `aB`, `a-` before `aB` before `a_`, and `w` before `w_`, while `strings.ToLower` or a database's `en_US` collation would order them otherwise and publish a different `T_d` for good. That order has no ties, because the server stores each `(device_id, b)` once. Equal `received_at` values are common: a device that was offline flushes many batches in one request.
+The leaves are ordered by `received_at`, then by `device_id` compared as unsigned bytes, a shorter id sorting before a longer one it begins, then by `b`. No case folding, locale or collation enters the comparison: `Zq` sorts before `aB`, `a-` before `aB` before `a_`, and `w` before `w_`, while `strings.ToLower` or a database's `en_US` collation would order them otherwise and publish a different `T_d` for good. That order has no ties, because the server stores each `(device_id, b)` once. Equal `received_at` values are common: a device that was offline flushes many batches in one request.
 
 ```text
 T_d     = MTH(day d's leaves, in that order)      T_d = SHA-256 of no bytes for a day with no rows
