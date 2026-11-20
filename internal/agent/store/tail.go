@@ -49,15 +49,15 @@ type Revision struct {
 	Mark   Mark
 }
 
-// DayFile is one day's file in a bucket store, and its size.
-type DayFile struct {
+// BucketDay is one day's file in a bucket store, and its size.
+type BucketDay struct {
 	Day  string // YYYY-MM-DD, the UTC day of the minutes it holds
 	Size int64
 }
 
-// Days lists the day files in the bucket store in dir, oldest first, from
+// BucketDays lists the day files in the bucket store in dir, oldest first, from
 // one read of the directory. A store that doesn't exist yet has none.
-func Days(dir string) ([]DayFile, error) {
+func BucketDays(dir string) ([]BucketDay, error) {
 	entries, err := os.ReadDir(dir)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
@@ -65,7 +65,7 @@ func Days(dir string) ([]DayFile, error) {
 	if err != nil {
 		return nil, err
 	}
-	var days []DayFile
+	var days []BucketDay
 	for _, e := range entries {
 		day, ok := strings.CutSuffix(e.Name(), ".jsonl")
 		if !ok || !e.Type().IsRegular() {
@@ -81,13 +81,13 @@ func Days(dir string) ([]DayFile, error) {
 			}
 			return nil, err
 		}
-		days = append(days, DayFile{Day: day, Size: fi.Size()})
+		days = append(days, BucketDay{Day: day, Size: fi.Size()})
 	}
-	slices.SortFunc(days, func(a, b DayFile) int { return strings.Compare(a.Day, b.Day) })
+	slices.SortFunc(days, func(a, b BucketDay) int { return strings.Compare(a.Day, b.Day) })
 	return days, nil
 }
 
-// ReadDay calls fn with each revision line of day's file in the bucket
+// TailDay calls fn with each revision line of day's file in the bucket
 // store in dir after the Mark m, in the order they were written, until fn
 // returns false. A revision a later line of the file supersedes is passed
 // too, in its place: the caller keeps what it needs. Lines that don't hold
@@ -97,7 +97,7 @@ func Days(dir string) ([]DayFile, error) {
 // leaves it for a later read. When m isn't at the end of the line it names,
 // because the file was cut and written again since, it reads the day from
 // its first line and restart is true. A day without a file has no lines.
-func ReadDay(dir, day string, m Mark, fn func(Revision) bool) (restart bool, err error) {
+func TailDay(dir, day string, m Mark, fn func(Revision) bool) (restart bool, err error) {
 	f, err := os.Open(filepath.Join(dir, day+".jsonl"))
 	if errors.Is(err, os.ErrNotExist) {
 		return m.Off > 0, nil

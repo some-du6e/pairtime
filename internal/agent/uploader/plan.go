@@ -121,7 +121,7 @@ func rootsOf(in planInput, n int) []Root {
 // ever move past lines that went. A revision of another chain's device
 // isn't this device's to send: its line is passed over.
 func bucketsOf(in planInput, n int) ([]entry, map[string]bool, error) {
-	files, err := store.Days(in.bucketDir)
+	files, err := store.BucketDays(in.bucketDir)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -138,7 +138,7 @@ func bucketsOf(in planInput, n int) ([]entry, map[string]bool, error) {
 			continue // nothing new
 		}
 		took := 0
-		restart, err := store.ReadDay(in.bucketDir, f.Day, m, func(r store.Revision) bool {
+		restart, err := store.TailDay(in.bucketDir, f.Day, m, func(r store.Revision) bool {
 			b := r.Bucket
 			if b.Device != in.rows.device {
 				out = append(out, entry{day: f.Day, mark: r.Mark})
