@@ -53,7 +53,8 @@ def build(tabs):
     ITERM, CURSOR_APP, VSCODE = (tl.key("a", n) for n in ("6.3 iTerm2", "6.3 Cursor", "6.3 Code"))
     FA = [tl.key("f", f"6.3 portfolio file {i}") for i in range(1, 6)]
     FB = [tl.key("f", f"6.3 discord-bot file {i}") for i in range(1, 4)]
-    F_E_SRC, F_E_TEST = tl.key("f", "6.3 rusty-cli src/parse.rs"), tl.key("f", "6.3 rusty-cli tests/parse.rs")
+    # E's one file: src/parse.rs, its unit tests included.
+    F_E = tl.key("f", "6.3 rusty-cli src/parse.rs")
     F_D = tl.key("f", "6.3 plant-sensor sketch.ino")
     CMD_A_BUILD, CMD_B_TEST, CMD_E_TEST = (tl.key("c", n) for n in ("6.3 npm run build", "6.3 npm test", "6.3 cargo test"))
     ERR_E = tl.key("e", "6.3 cargo test failure")
@@ -221,9 +222,11 @@ def build(tabs):
 
     # 14:05 to 14:14, E in Cursor: hand edits (WakaTime heartbeats on his
     # first keystroke and on two saves), then two agent turns and a commit.
-    e_edits = [heartbeat("14:06:00.000", "cursor", "edit", F_E_SRC, 4, E),
-               heartbeat("14:07:30.000", "cursor", "save", F_E_SRC, 9, E),
-               heartbeat("14:08:40.000", "cursor", "save", F_E_SRC, 6, E)]
+    # The failing test is in the file he is editing, so no file switch
+    # sends a heartbeat of its own (README.md).
+    e_edits = [heartbeat("14:06:00.000", "cursor", "edit", F_E, 4, E),
+               heartbeat("14:07:30.000", "cursor", "save", F_E, 9, E),
+               heartbeat("14:08:40.000", "cursor", "save", F_E, 6, E)]
     session_start("14:08:41.500", CURSOR, "ide", "ide", False)
     focus("14:08:41.500", "editor", CURSOR_APP, [S_E], E)
     stop("14:09:00.000", CC, "A1")
@@ -231,15 +234,15 @@ def build(tabs):
     tool("14:09:30.000", CURSOR, "test", start_ms=26_000, cmd=CMD_E_TEST, exit_code=101, error=ERR_E, visible=4)
     output("14:09:35.000", CURSOR, "E1", 40, final=True, via="hook")
     stop("14:09:36.000", CURSOR, "E1")
-    e_edits += [heartbeat("14:11:00.000", "cursor", "edit", F_E_TEST, 3, E),
-                heartbeat("14:12:30.000", "cursor", "save", F_E_TEST, 7, E)]
+    e_edits += [heartbeat("14:11:00.000", "cursor", "edit", F_E, 3, E),
+                heartbeat("14:12:30.000", "cursor", "save", F_E, 7, E)]
     e2 = prompt("14:13:00.000", CURSOR, "E2", 19, low_effort=True)
     tool("14:13:40.000", CURSOR, "test", start_ms=36_000, cmd=CMD_E_TEST, exit_code=0, visible=4)
     output("14:13:43.000", CURSOR, "E2", 12, final=True, via="hook")
     stop("14:13:44.000", CURSOR, "E2")
     commit = fx.emit(at("14:14:00.000"), "git.change",
                      {"op": "commit", "sha": tl.git_sha("6.3 rusty-cli commit"),
-                      "parents": [tl.git_sha("6.3 rusty-cli parent")], "files_changed": 2, "insertions": 21,
+                      "parents": [tl.git_sha("6.3 rusty-cli parent")], "files_changed": 1, "insertions": 21,
                       "deletions": 8, "actor": "human"},
                      source="git", via="git", project=E)
     if tabs:
