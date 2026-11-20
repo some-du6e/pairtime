@@ -344,6 +344,84 @@ func TestOtherUser(t *testing.T) {
 				}
 			},
 		},
+		{
+			name: "a sender won't spool into an inbox that another uid owns",
+			run: func(t *testing.T) {
+				in := filepath.Join(shortDir(t), "inbox")
+				if err := os.Mkdir(in, 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Chown(in, nobody, nobody); err != nil {
+					t.Fatal(err)
+				}
+				// No agent listens, so Send falls back to the spool.
+				ep := ipc.Endpoint{Socket: filepath.Join(shortDir(t), ipc.SocketName), Inbox: in}
+				if via, err := ipc.Send(ep, inbox.New("test", nil), time.Second); err == nil {
+					t.Errorf("Send = %q, nil; want it to fail rather than spool into nobody's inbox", via)
+				}
+				entries, err := os.ReadDir(in)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(entries) != 0 {
+					t.Errorf("nobody's inbox has %d files now, want none", len(entries))
+				}
+			},
+		},
+		{
+			name: "a sender won't append to a spool file that another uid owns",
+			run: func(t *testing.T) {
+				in := filepath.Join(shortDir(t), "inbox")
+				if err := os.Mkdir(in, 0o700); err != nil {
+					t.Fatal(err)
+				}
+				spool := filepath.Join(in, inbox.SpoolName)
+				if err := os.WriteFile(spool, nil, 0o600); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Chown(spool, nobody, nobody); err != nil {
+					t.Fatal(err)
+				}
+				if err := inbox.Append(in, inbox.New("test", nil)); err == nil {
+					t.Error("Append wrote to nobody's spool file")
+				}
+				fi, err := os.Stat(spool)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if fi.Size() != 0 {
+					t.Errorf("nobody's spool file has %d bytes, want 0", fi.Size())
+				}
+			},
+		},
+		{
+			name: "a drain delivers nothing from a spool file that another uid wrote",
+			run: func(t *testing.T) {
+				in := filepath.Join(shortDir(t), "inbox")
+				if err := os.Mkdir(in, 0o700); err != nil {
+					t.Fatal(err)
+				}
+				b, err := inbox.New("test", nil).Encode()
+				if err != nil {
+					t.Fatal(err)
+				}
+				name := filepath.Join(in, "spool-00000000000000000001-0badc0de.drain")
+				if err := os.WriteFile(name, []byte("\n"+string(b)+"\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Chown(name, nobody, nobody); err != nil {
+					t.Fatal(err)
+				}
+				sink := &countSink{}
+				res, err := inbox.Drain(in, sink, time.Now)
+				if err == nil {
+					t.Error("Drain passed over nobody's file without a word")
+				}
+				if n := sink.count(); n != 0 || res.Delivered != 0 {
+					t.Errorf("Drain = %+v and the sink took %d messages, want none", res, n)
+				}
+			},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, tt.run)

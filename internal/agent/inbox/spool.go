@@ -49,6 +49,11 @@ var afterWrite func()
 // by this user only where the OS has file modes. Many processes may append
 // at once: the OS keeps each write whole and in one place.
 //
+// It writes only into a spool that this user alone can reach (privateDir,
+// privateFile), and fails rather than write anywhere else: anyone else who
+// could put a file in the spool's place could read what hooks send,
+// prompts included.
+//
 // Each record has a newline before it as well as after it. When a sender is
 // killed halfway through its write, the next record still starts on a line
 // of its own, and only the cut one is lost.
@@ -78,19 +83,25 @@ func Append(dir string, m Message) error {
 // such a message again; if the drain did see the first copy, the sink drops
 // the second.
 func appendOnce(dir, name string, rec []byte) (bool, error) {
-	f, err := openSpool(name)
+	err := privateDir(dir)
 	if errors.Is(err, fs.ErrNotExist) {
-		if err := os.MkdirAll(dir, 0o700); err != nil {
-			return false, err
+		if err = os.MkdirAll(dir, 0o700); err == nil {
+			err = privateDir(dir)
 		}
-		f, err = openSpool(name)
 	}
+	if err != nil {
+		return false, err
+	}
+	f, err := openSpool(name)
 	if err != nil {
 		return false, err
 	}
 	defer f.Close()
 	opened, err := f.Stat()
 	if err != nil {
+		return false, err
+	}
+	if err := privateFile(name, opened); err != nil {
 		return false, err
 	}
 	if opened.Size()+int64(len(rec)) > maxSpool {
@@ -105,7 +116,7 @@ func appendOnce(dir, name string, rec []byte) (bool, error) {
 	// Checked while the file is still open: on Windows a drain can't
 	// rename it until it is closed, so a rename after this point can't
 	// have moved the write.
-	now, err := os.Stat(name)
+	now, err := os.Lstat(name)
 	if errors.Is(err, fs.ErrNotExist) {
 		return false, nil
 	}
@@ -128,7 +139,7 @@ func openSpool(name string) (*os.File, error) {
 	var err error
 	for i := range openTries {
 		var f *os.File
-		if f, err = os.OpenFile(name, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o600); err == nil || !busy(err) {
+		if f, err = os.OpenFile(name, spoolFlags, 0o600); err == nil || !busy(err) {
 			return f, err
 		}
 		if i < openTries-1 {
@@ -176,6 +187,12 @@ const (
 // and the next Drain reads it again. A spool it couldn't take is not an
 // error but res.Busy, and waits for the next Drain.
 func Drain(dir string, sink Sink, now func() time.Time) (DrainResult, error) {
+	if err := privateDir(dir); err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return DrainResult{}, nil // nothing was ever spooled
+		}
+		return DrainResult{}, err
+	}
 	res := DrainResult{Busy: take(dir)}
 	names, err := taken(dir)
 	if err != nil {
@@ -242,13 +259,22 @@ func taken(dir string) ([]string, error) {
 	return names, nil
 }
 
-// drainFile delivers every message in the file name.
+// drainFile delivers every message in the file name, which must be this
+// user's alone: a file that someone else could write may hold messages
+// they made up.
 func drainFile(name string, sink Sink, now func() time.Time) (delivered, bad int, err error) {
-	f, err := os.Open(name)
+	f, err := os.OpenFile(name, readFlags, 0)
 	if err != nil {
 		return 0, 0, err
 	}
 	defer f.Close()
+	fi, err := f.Stat()
+	if err != nil {
+		return 0, 0, err
+	}
+	if err := privateFile(name, fi); err != nil {
+		return 0, 0, err
+	}
 	r := bufio.NewReaderSize(f, 64<<10)
 	for {
 		line, long, err := readLine(r, MaxMessage)
@@ -310,4 +336,20 @@ func readLine(r *bufio.Reader, limit int) (line []byte, long bool, err error) {
 func trimEOL(line []byte) []byte {
 	line = bytes.TrimSuffix(line, []byte{'\n'})
 	return bytes.TrimSuffix(line, []byte{'\r'})
+}
+
+// privacyError says why the inbox directory or a spool file isn't this
+// user's alone (privateDir, privateFile).
+type privacyError struct{ msg string }
+
+func (e *privacyError) Error() string { return e.msg }
+
+func notPrivate(format string, args ...any) error {
+	return &privacyError{msg: fmt.Sprintf("inbox: "+format, args...)}
+}
+
+// isNotPrivate reports whether err came from privateDir or privateFile.
+func isNotPrivate(err error) bool {
+	var pe *privacyError
+	return errors.As(err, &pe)
 }
