@@ -1192,7 +1192,7 @@ var planted = map[string]string{
 {"type":"assistant","message":{"content":[{"type":"tool_use","id":"` + plantedTool + `","input":{"command":"whoami"}}]}}
 {"toolUseResult":{"stdout":"rowanq\nrowanq@rowans-laptop:~$ git log\nAuthor: Rowan Quinn <rowan.quinn@westfield.edu>\nsk-ant-api03-AbCdEfGhIjKlMnOpQrStUvWxYz012345"},"uri":"file:///c%3A/Users/RowanQ/pairtime-capture/project"}
 {"nested":"{\"stdout\":\"C:\\\\Users\\\\RowanQ\\\\x\"}","school":"Westfield High"}
-{"keys":"ghp_AbCdEfGhIjKlMnOpQrStUvWxYz0123456789 AKIAABCDEFGHIJKLMNOP eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U","trailer":"Co-Authored-By: Claude <noreply@anthropic.com>"}
+{"keys":"ghp_AbCdEfGhIjKlMnOpQrStUvWxYz0123456789 AKIAABCDEFGHIJKLMNOP eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U","trailer":"Co-Authored-By: Claude <noreply@anthropic.com>\nCo-authored-by: aider (gpt-5) <aider@aider.chat>"}
 `,
 	// Account ids outside telemetry attributes: a Codex rollout's
 	// session_meta (HS 6.2) and the userId in a Cline hook payload (HS 9).
@@ -1278,7 +1278,7 @@ func TestScrub(t *testing.T) {
 			}
 		}},
 		{"ids that aren't secrets and public tool addresses are kept", func(t *testing.T) {
-			for _, want := range []string{plantedSession, plantedTool, "noreply@anthropic.com"} {
+			for _, want := range []string{plantedSession, plantedTool, "noreply@anthropic.com", "aider@aider.chat"} {
 				if !strings.Contains(all.String(), want) {
 					t.Errorf("%s was removed", want)
 				}
@@ -1323,6 +1323,19 @@ func TestScrub(t *testing.T) {
 			r := run(t, ".", nil, quiet, python(t, "scrub.py", append(append([]string{}, scrubArgs...), "--report", filepath.Join(work, "r2.txt"), outDir, again)...)...)
 			if r.code != 0 || !strings.Contains(r.stdout, "Nothing was replaced.") {
 				t.Fatalf("exit %d:\n%s", r.code, r.stdout)
+			}
+		}},
+		// README keeps any name under example.com, and the account inside
+		// one still goes, as in pairtime fixtures scrub (D-email-redaction).
+		{"an address under a domain reserved for examples is kept, and a known value inside it is still replaced", func(t *testing.T) {
+			dir := t.TempDir()
+			write(t, filepath.Join(dir, "run", "notes.txt"), "rowanq@ci.example.com\n")
+			r := run(t, ".", nil, quiet, python(t, "scrub.py", "--no-detect", "--user", "rowanq", filepath.Join(dir, "run"), filepath.Join(dir, "out"))...)
+			if r.code != 0 {
+				t.Fatalf("exit %d:\n%s%s", r.code, r.stdout, r.stderr)
+			}
+			if got := read(t, filepath.Join(dir, "out", "notes.txt")); got != "capture@ci.example.com\n" {
+				t.Fatalf("notes.txt = %q, want %q", got, "capture@ci.example.com\n")
 			}
 		}},
 		{"a known value inside a longer word is reported, fails the run, and nothing is written", func(t *testing.T) {

@@ -20,7 +20,9 @@ checks below find nothing left over:
     HOST\\name, Name <email>), so "type":"user" stays as it is; --common
     treats another value that way;
   - anything shaped like an API key, token, password or private key;
-  - email addresses, apart from a few public tool addresses;
+  - email addresses, apart from the tool and example addresses that
+    testdata/fixtures/README.md lists, though a known value inside one
+    still goes;
   - the account, user and organization ids harnesses put in telemetry, and
     any JSON member named like one, anywhere in a file: Codex's
     creator_user_id, Cline's userId, machine and installation ids.
@@ -72,10 +74,13 @@ EMAIL = "capture@example.invalid"
 OTHER = "REDACTED"
 ACCOUNT_ID = "00000000-0000-4000-8000-000000000000"
 
-# Public addresses that tools write into commits and remotes. Keeping them
-# keeps fixtures realistic; none of them names a person.
+# Public addresses that tools write into commits and remotes, and domains
+# reserved for examples, as testdata/fixtures/README.md lists them. Keeping
+# them keeps fixtures realistic; none of them names a person. Aider's
+# trailer address is one the git adapter reads (HS 13.3).
 KEEP_EMAILS = {
     "noreply@anthropic.com",
+    "aider@aider.chat",
     "noreply@github.com",
     "noreply@openai.com",
     "git@github.com",
@@ -422,10 +427,13 @@ def build_rules(known, common=()):
         r'"key"\s*:\s*"(?:' + attr + r')"\s*,\s*"value"\s*:\s*\{\s*"(?:stringValue|intValue)"\s*:\s*"?(?P<secret>[^"},]+)"?',
         ACCOUNT_ID, secret=True))
 
+    # A kept address is dropped here, before find_hits resolves overlaps, so
+    # a known value inside one, as in rowanq@example.com, is still replaced.
     def keep_email(text):
         t = text.lower()
         domain = t.rsplit("@", 1)[-1]
-        return t in KEEP_EMAILS or domain in KEEP_EMAIL_DOMAINS or domain.endswith(KEEP_EMAIL_TLDS)
+        return (t in KEEP_EMAILS or domain.endswith(KEEP_EMAIL_TLDS)
+                or any(domain == d or domain.endswith("." + d) for d in KEEP_EMAIL_DOMAINS))
 
     # A Users\NAME~N folder is a home folder's 8.3 short name, whoever's it
     # is, so it goes in every spelling, even from another machine.
