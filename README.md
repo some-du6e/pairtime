@@ -30,6 +30,7 @@ One Go module holds the client, the server and the code they share.
 | `internal/platform/windows` | Win32 calls without cgo: input idle time, suspend and lock notifications, which window is in front and its process, the process table, EcoQoS, and DPAPI, which keeps the device key. No keyboard listener of any kind |
 | `internal/platform/darwin`, `internal/platform/linux` | What macOS and Linux report about idle time, focus, sleep and screen lock, and the device keystore's half on each: the Keychain on macOS, the Secret Service on Linux |
 | `internal/platform/localtime` | The time zone the computer is set to now, for clock times such as quiet hours. Go reads it only once per process |
+| `internal/platform/clock` | A moment as an event records it: the wall clock, the OS's monotonic clock that keeps counting through sleep, and the id of the boot it counts from. The hook stamps each call with it, and the agent each message it takes in |
 | `internal/platform/proctest` | Tests of the three process-table readers against process chains the tests start themselves. No code outside its tests |
 | `internal/adapters/git` | The git adapter: which project a folder belongs to, and the commits, amends and rebases made there, read from `.git` (DESIGN 5.8) |
 | `internal/install` | What `pairtime install` writes outside pairtime's own directories, the harness hooks and the login item, merged beside what's there, and the uninstall that puts each file back byte for byte (DESIGN 5.9) |

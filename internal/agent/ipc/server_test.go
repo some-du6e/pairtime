@@ -19,6 +19,7 @@ import (
 	"github.com/some-du6e/pairtime/internal/agent/home"
 	"github.com/some-du6e/pairtime/internal/agent/inbox"
 	"github.com/some-du6e/pairtime/internal/platform"
+	"github.com/some-du6e/pairtime/internal/platform/clock"
 )
 
 // shortDir makes a directory whose path leaves room for a socket name.
@@ -360,7 +361,7 @@ func TestServer(t *testing.T) {
 					t.Fatalf("Send = %q, %v; want the inbox", via, err)
 				}
 				sink := &memSink{}
-				if _, err := inbox.Drain(ep.Inbox, sink, time.Now); err != nil {
+				if _, err := inbox.Drain(ep.Inbox, sink, clock.Now); err != nil {
 					t.Fatal(err)
 				}
 				if got := sink.deliveries(); len(got) != 1 || got[0].ID != m.ID {
@@ -437,7 +438,7 @@ func TestServer(t *testing.T) {
 				// Close returns once the handler is done, so the message is
 				// in the journal before the drain brings its copy.
 				srv.Close()
-				res, err := inbox.Drain(ep.Inbox, j, time.Now)
+				res, err := inbox.Drain(ep.Inbox, j, clock.Now)
 				if err != nil || res.Delivered != 1 {
 					t.Fatalf("Drain = %+v, %v; want the spooled copy delivered", res, err)
 				}
