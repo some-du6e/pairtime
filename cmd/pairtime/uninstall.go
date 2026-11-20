@@ -226,7 +226,11 @@ func runUninstall(args []string, stdout, stderr io.Writer) int {
 
 	// The device key, before any binary, so that pairtime is still there
 	// when the key can't go: a keychain that is locked, or a Secret Service
-	// that no session bus leads to, over SSH.
+	// that no session bus leads to, over SSH. The agent opens its keystore
+	// in the background, so it may have made the key since the screen.
+	if _, err := keys.Inspect(dirs.Data); err == nil {
+		hadKey = true
+	}
 	if err := keys.Destroy(keys.Options{Dir: dirs.Data, Stores: agentKeyStores}); err != nil {
 		if _, ierr := keys.Inspect(dirs.Data); !errors.Is(ierr, fs.ErrNotExist) {
 			release()
@@ -239,28 +243,25 @@ func runUninstall(args []string, stdout, stderr io.Writer) int {
 	}
 
 	// The binary this process runs from, which Windows deletes only once
-	// this process has exited (removeAfterExit). What is left of the data
-	// directory's folder for it then is no error.
-	var later []string
+	// this process has exited (removeAfterExit).
+	var later, paths []string
 	for _, b := range binaries {
 		if b.self && !canRemoveRunning {
 			later = append(later, b.path)
 		}
-	}
-	runningFrom := ""
-	if len(later) > 0 {
-		runningFrom = later[0]
+		paths = append(paths, b.path)
 	}
 
 	// The data: everything but what the teen keeps. A linked data directory
 	// loses what pairtime put where it points, and then the link, unless
-	// something is kept there.
+	// something is kept there. On Windows the binaries are in the data
+	// directory, and what is left of them goes with the binaries below.
 	for _, d := range data {
 		var keepHere []string
 		if samePath(d, dirs.Data) {
 			keepHere = keep
 		}
-		if err := clearData(d, keepHere, runningFrom); err != nil {
+		if err := clearData(d, keepHere, paths); err != nil {
 			release()
 			return fail(fmt.Errorf("deleting your pairtime data: %w; close any program that has one of pairtime's files open, then run pairtime uninstall again", err))
 		}
@@ -333,9 +334,11 @@ func runUninstall(args []string, stdout, stderr io.Writer) int {
 		}
 	}
 	kept := removeEmptyDirs(after)
+	stays := false // a binary that nothing will delete
 	if len(later) > 0 {
 		if err := removeAfterExit(later, realDirs(kept)); err != nil {
 			fmt.Fprintf(stdout, "Windows doesn't let anyone delete a program while it runs, so delete %s yourself once this has finished.\n", joinPaths(later))
+			stays = true
 		} else {
 			fmt.Fprintf(stdout, "pairtime deletes %s once this has finished, because Windows doesn't let anyone delete a program while it runs.\n", joinPaths(later))
 		}
@@ -353,7 +356,7 @@ func runUninstall(args []string, stdout, stderr io.Writer) int {
 	for _, problem := range problems {
 		fmt.Fprintf(stdout, "Left alone: %s\n", install.Printable(problem))
 	}
-	if len(problems) > 0 {
+	if len(problems) > 0 || stays {
 		return 1
 	}
 	fmt.Fprintln(stdout, "pairtime is uninstalled.")
@@ -406,10 +409,13 @@ func showUninstall(w io.Writer, p *install.Plan, binaries []binary, running bool
 }
 
 // askYes asks question until the answer is yes or no, and reports whether
-// it was yes. The end of input is no.
+// it was yes. The end of input is no, and so is any answer to a question
+// that couldn't be written, since the teen didn't see it.
 func askYes(answers *bufio.Scanner, w io.Writer, question string) bool {
 	for {
-		fmt.Fprint(w, question)
+		if _, err := fmt.Fprint(w, question); err != nil {
+			return false
+		}
 		if !answers.Scan() {
 			fmt.Fprintln(w)
 			return false
@@ -489,10 +495,11 @@ func isPairtimeEntry(name string) bool {
 // When dir is itself a link or a junction, as when the teen moved
 // pairtime's data to a bigger drive, it deletes only pairtime's entries
 // (pairtimeEntries) in the folder the link points to, which could hold
-// anything, and the link goes later. running is the binary this process
-// runs from on Windows, which goes once this process has exited: a folder
-// that holds nothing else afterwards isn't an error.
-func clearData(dir string, keep []string, running string) error {
+// anything, and the link goes later. binaries are pairtime's binaries, which
+// on Windows are in the data directory: one that can't be deleted yet, as
+// the one this process runs from can't, goes with the binaries later, so a
+// folder that holds nothing else afterwards isn't an error.
+func clearData(dir string, keep, binaries []string) error {
 	linked := linkedDir(dir)
 	entries, err := os.ReadDir(dir)
 	if errors.Is(err, fs.ErrNotExist) {
@@ -507,22 +514,22 @@ func clearData(dir string, keep []string, running string) error {
 		if slices.Contains(keep, name) || name == "agent.lock" || name == "install.lock" || (linked && !isPairtimeEntry(name)) {
 			continue
 		}
-		if err := removeTree(filepath.Join(dir, name), running); err != nil {
+		if err := removeTree(filepath.Join(dir, name), binaries); err != nil {
 			errs = append(errs, err)
 		}
 	}
 	return errors.Join(errs...)
 }
 
-// removeTree deletes path and what it holds, but for running, the binary
-// this process runs from, and the folders that hold it, which are no
-// error. Where a running program's file can't be deleted, on Windows, it
-// tries again for a few seconds, as removeBinary does: an agent that just
-// stopped, or a virus scanner, may keep a file in use a moment longer.
-func removeTree(path, running string) error {
+// removeTree deletes path and what it holds. What is left of binaries, and
+// the folders that hold them, is no error. Where a running program's file
+// can't be deleted, on Windows, it tries again for a few seconds, as
+// removeBinary does: an agent that just stopped, or a virus scanner, may
+// keep a file in use a moment longer.
+func removeTree(path string, binaries []string) error {
 	for i := 0; ; i++ {
 		err := os.RemoveAll(path)
-		if err == nil || onlyHolds(path, running) {
+		if err == nil || onlyHolds(path, binaries) {
 			return nil
 		}
 		if canRemoveRunning || i == 49 {
@@ -532,19 +539,19 @@ func removeTree(path, running string) error {
 	}
 }
 
-// onlyHolds reports whether all that is left at path is running, the
-// binary this process runs from, and the folders that hold it.
-func onlyHolds(path, running string) bool {
-	if running == "" {
+// onlyHolds reports whether all that is left at path is some of files and
+// the folders that hold them.
+func onlyHolds(path string, files []string) bool {
+	if len(files) == 0 {
 		return false
 	}
 	only := true
 	filepath.WalkDir(path, func(p string, d fs.DirEntry, err error) error {
 		switch {
 		case err != nil:
-		case samePath(p, running):
+		case slices.ContainsFunc(files, func(f string) bool { return samePath(p, f) }):
 			return nil
-		case d.IsDir() && within(running, p):
+		case d.IsDir() && slices.ContainsFunc(files, func(f string) bool { return within(f, p) }):
 			return nil
 		}
 		only = false

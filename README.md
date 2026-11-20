@@ -6,7 +6,7 @@ We're building it for Hack Club's AI time tracking bounty. [docs/BOUNTY.md](docs
 
 ## Status
 
-Research and design are in progress, and the code is a skeleton. Both binaries build for every target and answer `version` and `help`, `pairtime agent` runs the background agent's skeleton, `pairtimed serve` starts the server on SQLite, signs people in with Hack Club Auth and answers health checks, and `pkg/event` holds the event model, but nothing tracks time yet. `pairtime install` sets the client up without admin rights: it shows every change as a diff before it makes any, puts the binary at its per-user path, adds the login item, starts the agent and adds Claude Code's hooks once `pairtime hook` is in the binary. `pairtime uninstall` takes it all back out.
+Research and design are in progress, and the code is a skeleton. Both binaries build for every target and answer `version` and `help`, `pairtime agent` runs the background agent's skeleton, `pairtimed serve` starts the server on SQLite, signs people in with Hack Club Auth and answers health checks, and `pkg/event` holds the event model, but nothing tracks time yet. `pairtime install` sets the client up without admin rights: it shows every change as a diff before it makes any, puts the binary at its per-user path, adds the login item, starts the agent and adds Claude Code's hooks once `pairtime hook` passes a self-test. `pairtime uninstall` takes it all back out and deletes the device key with what pairtime recorded, keeping only the daily totals and recaps unless told to delete those too.
 
 ## Layout
 

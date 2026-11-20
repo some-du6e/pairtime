@@ -117,3 +117,23 @@ func TestBinaryPath(t *testing.T) {
 		})
 	}
 }
+
+func TestPrintable(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"a plain path stays as it is", "/home/teen/.claude", "/home/teen/.claude"},
+		{"a line break is written out, so the path stays on its line", "/home/teen/a\nb", "/home/teen/a<U+000A>b"},
+		{"a carriage return and a tab are written out too", "/home/teen/a\r\tb", "/home/teen/a<U+000D><U+0009>b"},
+		{"an escape character is written out as a diff writes it", "/home/teen/\x1b[2Jx", "/home/teen/<U+001B>[2Jx"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := Printable(tt.in); got != tt.want {
+				t.Errorf("Printable(%q) = %q, want %q", tt.in, got, tt.want)
+			}
+		})
+	}
+}

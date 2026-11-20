@@ -260,7 +260,7 @@ func TestClearData(t *testing.T) {
 					t.Skipf("making a link: %v", err)
 				}
 			}
-			if err := clearData(dir, tt.keep, ""); err != nil {
+			if err := clearData(dir, tt.keep, nil); err != nil {
 				t.Fatalf("clearData: %v", err)
 			}
 			if got := treeOf(t, folder); !slices.Equal(got, tt.want) {
@@ -291,20 +291,21 @@ func treeOf(t *testing.T, dir string) []string {
 }
 
 // TestOnlyHolds checks when uninstall on Windows may leave a folder of the
-// data directory in place: when all it holds is the binary that uninstall
-// runs from, which PowerShell deletes once uninstall has exited, and the
-// folders that hold it (#124).
+// data directory in place for now: when all it holds is pairtime's
+// binaries, such as the one uninstall runs from, which PowerShell deletes
+// once uninstall has exited, and the folders that hold them (#124).
 func TestOnlyHolds(t *testing.T) {
 	tests := []struct {
-		name    string
-		files   []string // in the folder, a name ending in / a folder
-		running string   // the running binary, in the folder; "" for none
-		want    bool
+		name     string
+		files    []string // in the folder, a name ending in / a folder
+		binaries []string // pairtime's binaries, in the folder
+		want     bool
 	}{
-		{"a folder holding only the running binary, in folders of its own, may stay", []string{"x/pairtime.exe"}, "x/pairtime.exe", true},
-		{"a folder holding another file beside the binary may not", []string{"pairtime.exe", "draft.txt"}, "pairtime.exe", false},
-		{"a folder holding another, empty folder beside the binary may not", []string{"pairtime.exe", "empty/"}, "pairtime.exe", false},
-		{"with no binary running from it, no folder that holds anything may stay", []string{"pairtime.exe"}, "", false},
+		{"a folder holding only the running binary, in folders of its own, may stay", []string{"x/pairtime.exe"}, []string{"x/pairtime.exe"}, true},
+		{"a folder holding two binaries, one moved aside by an install, may stay", []string{"pairtime.exe", "pairtime.old.exe"}, []string{"pairtime.exe", "pairtime.old.exe"}, true},
+		{"a folder holding another file beside the binary may not", []string{"pairtime.exe", "draft.txt"}, []string{"pairtime.exe"}, false},
+		{"a folder holding another, empty folder beside the binary may not", []string{"pairtime.exe", "empty/"}, []string{"pairtime.exe"}, false},
+		{"with no binaries, no folder that holds anything may stay", []string{"pairtime.exe"}, nil, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -324,11 +325,11 @@ func TestOnlyHolds(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			running := ""
-			if tt.running != "" {
-				running = filepath.Join(folder, filepath.FromSlash(tt.running))
+			var binaries []string
+			for _, b := range tt.binaries {
+				binaries = append(binaries, filepath.Join(folder, filepath.FromSlash(b)))
 			}
-			if got := onlyHolds(folder, running); got != tt.want {
+			if got := onlyHolds(folder, binaries); got != tt.want {
 				t.Errorf("onlyHolds = %v, want %v", got, tt.want)
 			}
 		})

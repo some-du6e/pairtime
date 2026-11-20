@@ -4,6 +4,8 @@ package consent
 
 import (
 	"encoding/base64"
+	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -197,22 +199,28 @@ func TestAsk(t *testing.T) {
 		want    bool
 		ticked  []string
 		says    string // what the output must hold, beside the screen
+		broken  bool   // writing the output fails
 	}{
-		{"y installs every ticked item", "y\n", true, []string{install.ItemAutostart, install.ItemClaudeCode}, ""},
-		{"a number unticks its item, and y installs the rest", "2\ny\n", true, []string{install.ItemAutostart}, "[ ] 2. Add pairtime's hooks to Claude Code"},
-		{"a number twice ticks the item again", "2\n2\nyes\n", true, []string{install.ItemAutostart, install.ItemClaudeCode}, ""},
-		{"unticking everything and saying y installs nothing", "1\n2\nY\n", true, nil, ""},
-		{"n changes nothing", "n\n", false, []string{install.ItemAutostart, install.ItemClaudeCode}, ""},
-		{"the end of input is no", "", false, []string{install.ItemAutostart, install.ItemClaudeCode}, ""},
-		{"an empty line asks again", "\n\ny\n", true, []string{install.ItemAutostart, install.ItemClaudeCode}, ""},
-		{"an answer that is neither asks again and says what to type", "sure\n3\ny\n", true, []string{install.ItemAutostart, install.ItemClaudeCode}, "Type y, n, or a number from 1 to 2."},
+		{"y installs every ticked item", "y\n", true, []string{install.ItemAutostart, install.ItemClaudeCode}, "", false},
+		{"a number unticks its item, and y installs the rest", "2\ny\n", true, []string{install.ItemAutostart}, "[ ] 2. Add pairtime's hooks to Claude Code", false},
+		{"a number twice ticks the item again", "2\n2\nyes\n", true, []string{install.ItemAutostart, install.ItemClaudeCode}, "", false},
+		{"unticking everything and saying y installs nothing", "1\n2\nY\n", true, nil, "", false},
+		{"n changes nothing", "n\n", false, []string{install.ItemAutostart, install.ItemClaudeCode}, "", false},
+		{"the end of input is no", "", false, []string{install.ItemAutostart, install.ItemClaudeCode}, "", false},
+		{"an empty line asks again", "\n\ny\n", true, []string{install.ItemAutostart, install.ItemClaudeCode}, "", false},
+		{"an answer that is neither asks again and says what to type", "sure\n3\ny\n", true, []string{install.ItemAutostart, install.ItemClaudeCode}, "Type y, n, or a number from 1 to 2.", false},
+		{"a y to a screen that couldn't be written is no", "y\n", false, []string{install.ItemAutostart, install.ItemClaudeCode}, "", true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			s := New(Input{GOOS: "linux", Binary: teenExe, Hook: HookTest{OK: true},
 				Diffs: map[string]string{install.ItemAutostart: "--- /dev/null\n+++ a\n", install.ItemClaudeCode: "--- b\n+++ b\n"}})
 			var out strings.Builder
-			got := s.Ask(strings.NewReader(tt.answers), &out)
+			var w io.Writer = &out
+			if tt.broken {
+				w = brokenWriter{}
+			}
+			got := s.Ask(strings.NewReader(tt.answers), w)
 			if got != tt.want || !slices.Equal(s.Ticked(), tt.ticked) {
 				t.Errorf("Ask = %v with %q ticked, want %v with %q; output:\n%s", got, s.Ticked(), tt.want, tt.ticked, out.String())
 			}
@@ -222,3 +230,9 @@ func TestAsk(t *testing.T) {
 		})
 	}
 }
+
+// brokenWriter is an output that can't be written, as a terminal that has
+// gone away.
+type brokenWriter struct{}
+
+func (brokenWriter) Write([]byte) (int, error) { return 0, errors.New("the terminal is gone") }

@@ -192,8 +192,9 @@ func millis(d time.Duration) string {
 	return strconv.FormatInt(d.Milliseconds(), 10) + " ms"
 }
 
-// Render writes the whole screen to w.
-func (s *Screen) Render(w io.Writer) {
+// Render writes the whole screen to w, and returns the error writing it
+// gave.
+func (s *Screen) Render(w io.Writer) error {
 	b := &strings.Builder{}
 	b.WriteString("pairtime install\n\n")
 	b.WriteString(wrap("This is everything pairtime install changes on this computer. Nothing changes until you say yes, and pairtime uninstall takes it all back out.", ""))
@@ -213,7 +214,8 @@ func (s *Screen) Render(w io.Writer) {
 		b.WriteString("\n")
 		b.WriteString(wrap("There is nothing else to change here: pairtime only goes in place and starts.", ""))
 	}
-	io.WriteString(w, b.String())
+	_, err := io.WriteString(w, b.String())
+	return err
 }
 
 func (s *Screen) renderHarnesses(b *strings.Builder) {
@@ -306,12 +308,18 @@ func (s *Screen) prompt() string {
 // Ask shows the screen on out and reads the teen's answers, one per line,
 // from in until they say yes or no. A number ticks or unticks its card and
 // shows the list again. It returns true for yes. The end of input, or a
-// line that can't be read, is no.
+// line that can't be read, is no, and so is a yes to a screen or a
+// question that couldn't be written: the teen can only agree to what they
+// saw.
 func (s *Screen) Ask(in io.Reader, out io.Writer) bool {
-	s.Render(out)
+	if s.Render(out) != nil {
+		return false
+	}
 	sc := bufio.NewScanner(in)
 	for {
-		fmt.Fprintf(out, "\n%s", s.prompt())
+		if _, err := fmt.Fprintf(out, "\n%s", s.prompt()); err != nil {
+			return false
+		}
 		if !sc.Scan() {
 			fmt.Fprintln(out)
 			return false
@@ -337,7 +345,9 @@ func (s *Screen) Ask(in io.Reader, out io.Writer) bool {
 		s.Cards[n-1].Ticked = !s.Cards[n-1].Ticked
 		fmt.Fprintln(out)
 		for i, c := range s.Cards {
-			fmt.Fprintf(out, "%s %d. %s\n", mark(c.Ticked), i+1, c.Title)
+			if _, err := fmt.Fprintf(out, "%s %d. %s\n", mark(c.Ticked), i+1, c.Title); err != nil {
+				return false
+			}
 		}
 	}
 }

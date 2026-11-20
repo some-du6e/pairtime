@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // BinaryPath returns the per-user path that `pairtime install` puts the
@@ -127,6 +128,13 @@ func lookPath(env Env, name string) string {
 }
 
 // Printable returns s with the characters a terminal acts on written out,
-// as Plan.Diff writes them, for a path or a name that install prints: a
-// folder name could otherwise move the cursor or clear the consent screen.
-func Printable(s string) string { return escapeControls(s) }
+// as Plan.Diff writes them, for a path or a name that install prints on a
+// line of its own: a folder name could otherwise move the cursor or clear
+// the consent screen. Unlike a diff, which keeps them, it writes out line
+// breaks and tabs too, so that a path in $CLAUDE_CONFIG_DIR with a newline
+// in it can't put part of itself on a line that looks like another.
+func Printable(s string) string { return escapeControls(lineBreaks.Replace(s)) }
+
+// lineBreaks writes out the characters escapeControls keeps, as it writes
+// the others.
+var lineBreaks = strings.NewReplacer("\t", "<U+0009>", "\n", "<U+000A>", "\r", "<U+000D>")
