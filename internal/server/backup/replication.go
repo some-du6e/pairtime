@@ -11,7 +11,9 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -25,6 +27,20 @@ const MaxLag = 60 * time.Second
 // ltxName is an LTX file's name, the first and last transaction ids it
 // holds as 16 hex digits each (Litestream v0.5, superfly/ltx).
 var ltxName = regexp.MustCompile(`^([0-9a-f]{16})-([0-9a-f]{16})\.ltx$`)
+
+// maxWaiting bounds the commits Replication remembers. It keeps one entry
+// for each second that saw commits, so this is about 17 minutes of a busy
+// database that Litestream stopped reading. Past it, later commits join the
+// newest entry, which can only make the lag Lag reports longer, never
+// shorter.
+const maxWaiting = 1024
+
+// waiting is the commits of one second, or of more once maxWaiting is
+// reached, that no local LTX file has followed yet: the first and the last
+// one's times, in Unix nanoseconds.
+type waiting struct {
+	first, last int64
+}
 
 // Replication measures how far Litestream's replica is behind the
 // database, from what Litestream v0.5 leaves on both sides. Litestream
@@ -55,35 +71,51 @@ type Replication struct {
 
 	// lastLag holds the last lag measured, in milliseconds, or -1.
 	lastLag atomic.Int64
-	// pending is when the oldest commit that no local LTX file has
-	// followed yet was made, in Unix milliseconds, or 0.
-	pending atomic.Int64
+	// mu guards pending, the commits that no local LTX file has followed
+	// yet, oldest first.
+	mu      sync.Mutex
+	pending []waiting
 }
 
 // Wrote records a commit made at t. serve calls it from the writer's
-// OnCommit for each transaction that changed rows. Lag then treats the
+// OnCommit for each transaction that changed rows (writer.Commit.Changed),
+// since only those write WAL for Litestream to read. Lag then treats the
 // commit as waiting until Litestream writes a local LTX file after it,
 // which tells a database Litestream stopped reading from one that hasn't
-// changed.
+// changed. Every commit counts until a file follows it, however many come
+// first; commits within a second of each other share an entry.
 func (r *Replication) Wrote(t time.Time) {
-	r.pending.CompareAndSwap(0, t.UnixMilli())
+	ns := t.UnixNano()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if n := len(r.pending); n > 0 {
+		w := &r.pending[n-1]
+		if ns-w.first < int64(time.Second) || n >= maxWaiting {
+			w.last = max(w.last, ns)
+			return
+		}
+	}
+	r.pending = append(r.pending, waiting{first: ns, last: ns})
 }
 
-// captureLag is how long the oldest commit Wrote recorded has waited for
-// a local LTX file to follow it, the newest of which Litestream wrote at
-// newest; 0 once one has.
+// captureLag forgets the commits a local LTX file has followed, the newest
+// of which Litestream wrote at newest, and returns how long the oldest
+// commit left has waited; 0 when none is left. A file follows an entry
+// only once it is newer than the entry's last commit.
 func (r *Replication) captureLag(newest, now time.Time) time.Duration {
-	p := r.pending.Load()
-	if p == 0 {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	followed := 0
+	if !newest.IsZero() {
+		for followed < len(r.pending) && r.pending[followed].last <= newest.UnixNano() {
+			followed++
+		}
+	}
+	r.pending = slices.Delete(r.pending, 0, followed)
+	if len(r.pending) == 0 {
 		return 0
 	}
-	since := time.UnixMilli(p)
-	if !newest.Before(since) {
-		// Litestream wrote a file after the commit, so it read it.
-		r.pending.CompareAndSwap(p, 0)
-		return 0
-	}
-	return max(now.Sub(since), 0)
+	return max(now.Sub(time.Unix(0, r.pending[0].first)), 0)
 }
 
 // NewReplication returns the measure of the replica at path in bucket of

@@ -137,7 +137,11 @@ func serve(ctx context.Context, cfg *config.Config, logger *slog.Logger, e *env,
 		series.ObserveCommit(c.Duration, c.Rows, c.Failed, c.Err)
 		if c.Err != nil {
 			logger.Error("writer transaction failed", "err", c.Err, "ops", c.Ops, "rows", c.Rows)
-		} else if r := repl.Load(); r != nil && c.Rows > c.Failed {
+		} else if r := repl.Load(); r != nil && c.Changed > 0 {
+			// Only a transaction that changed rows wrote WAL for
+			// Litestream to read; one that changed none, such as the
+			// hourly sweep of expired sessions finding none, would wait
+			// for an LTX file that never comes.
 			r.Wrote(c.Start.Add(c.Duration))
 		}
 	}})
