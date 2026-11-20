@@ -105,7 +105,8 @@ func TestParseRejects(t *testing.T) {
 		{name: "an extra closing bracket is an error", src: `[1]]`},
 		{name: "an unknown escape is an error", src: `"\x"`},
 		{name: "a hex escape with too few digits is an error", src: "\"\x5cu12\""},
-		{name: "a string that isn't UTF-8 is an error", src: "\"\xff\""},
+		// encoding/json doesn't check UTF-8 and decodes the byte as U+FFFD.
+		{name: "a string that isn't UTF-8 is an error", src: "\"\xff\"", jsonOK: true},
 		{name: "UTF-16 is refused, since edits write UTF-8", src: "\xff\xfe{\x00}\x00"},
 		{name: "nesting deeper than 512 is an error", src: strings.Repeat("[", 600) + strings.Repeat("]", 600), jsonOK: true},
 	}
