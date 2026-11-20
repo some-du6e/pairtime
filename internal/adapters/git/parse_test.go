@@ -32,10 +32,22 @@ func TestClassify(t *testing.T) {
 		{"a pick is a rebase step", "rebase (pick): Fix wall clipping", action{step: stepRebaseStep}},
 		{"a squash folds", "rebase (squash): # This is a combination of 2 commits.", action{step: stepRebaseStep, fold: true}},
 		{"a fixup folds", "rebase -i (fixup): Fix wall clipping", action{step: stepRebaseStep, fold: true}},
-		{"a pull --rebase pick is a rebase step", "pull --rebase (pick): x", action{step: stepRebaseStep}},
+		{"a pull --rebase pick is a rebase step", "pull --rebase (pick): x", action{step: stepRebaseStep, pull: true}},
 		{"a rebase's finish is its finish", "rebase (finish): returning to refs/heads/main", action{step: stepRebaseFinish}},
 		{"the apply backend's finish is a finish", "rebase finished: returning to refs/heads/main", action{step: stepRebaseFinish}},
-		{"a pull --rebase finish is a finish", "pull --rebase (finish): returning to refs/heads/main", action{step: stepRebaseFinish}},
+		{"a pull --rebase finish is a finish", "pull --rebase (finish): returning to refs/heads/main", action{step: stepRebaseFinish, pull: true}},
+		// git pull puts its own arguments where the command goes, so the
+		// word "rebase" can be missing from a pull's rebase, and present in
+		// a merge's options or branch names.
+		{"a plain pull's rebase under pull.rebase=true starts with a step and no word rebase", "pull (start): checkout 3f8b3efe2f0266c823fbd6cf0f4e2053294734db", action{step: stepRebaseStart, pull: true}},
+		{"a plain pull's rebase picks with no word rebase", "pull -q (pick): local", action{step: stepRebaseStep, pull: true}},
+		{"a plain pull's rebase finishes with no word rebase", "pull -q (finish): returning to refs/heads/main", action{step: stepRebaseFinish, pull: true}},
+		{"a pull -r with a remote and branch is still a rebase", "pull -q -r origin main (squash): # This is a combination of 2 commits.", action{step: stepRebaseStep, fold: true, pull: true}},
+		{"a pull --rebase that fast-forwards is a merge", "pull -q --rebase: Fast-forward", action{step: stepMerge}},
+		{"a pull --no-rebase that merges is a merge", "pull -q --no-rebase --no-edit: Merge made by the 'ort' strategy.", action{step: stepMerge}},
+		{"a merge of a branch named for a rebase is a merge", "merge fix-rebase-bug: Merge made by the 'ort' strategy.", action{step: stepMerge}},
+		{"a fast-forward to a branch named for a rebase is a merge", "merge rebase-cleanup: Fast-forward", action{step: stepMerge}},
+		{"the apply backend's start under a pull before git 2.26 is a start", "pull --rebase: checkout 26600cacc5ba5d3ed0c1cb2d154d46f444c03ea8", action{step: stepRebaseStart, pull: true}},
 		{"a rebase's abort is an abort", "rebase (abort): returning to refs/heads/main", action{step: stepRebaseAbort}},
 		{"a revert is a revert", `revert: Revert "x"`, action{step: stepRevert}},
 		{"a checkout is a checkout", "checkout: moving from main to side", action{step: stepCheckout}},
@@ -166,6 +178,24 @@ func TestPlan(t *testing.T) {
 			entries:  []entry{e('b', 'c', "rebase (start): checkout main"), e('c', 'd', "commit (amend): y"), e('d', 'e', "rebase (continue): z"), e('e', 'e', "rebase (finish): returning to refs/heads/main")},
 			wantOps:  []event.GitOp{event.GitRebase},
 			wantUsed: 4,
+		},
+		{
+			name:     "a pull's rebase from start to finish is one rebase, though no entry says rebase",
+			entries:  []entry{e('b', 'c', "pull (start): checkout cccc"), e('c', 'd', "pull (pick): x"), e('d', 'd', "pull (finish): returning to refs/heads/main")},
+			wantOps:  []event.GitOp{event.GitRebase},
+			wantUsed: 3,
+		},
+		{
+			name:     "the apply backend's pull --rebase before git 2.26 is one rebase, its steps under the pull's own name",
+			entries:  []entry{e('b', 'c', "pull --rebase: checkout cccc"), e('c', 'd', "pull --rebase: x"), e('d', 'e', "pull --rebase: y"), e('e', 'e', "rebase finished: returning to refs/heads/main")},
+			wantOps:  []event.GitOp{event.GitRebase},
+			wantUsed: 4,
+		},
+		{
+			name:     "a merge of a branch named for a rebase is a merge, not a stray rebase step",
+			entries:  []entry{e('a', 'b', "merge fix-rebase-bug: Merge made by the 'ort' strategy."), e('b', 'c', "pull -q --no-rebase: Merge made by the 'ort' strategy.")},
+			wantOps:  []event.GitOp{event.GitMerge, event.GitMerge},
+			wantUsed: 2,
 		},
 	}
 	for _, tc := range cases {

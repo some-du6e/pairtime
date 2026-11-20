@@ -262,6 +262,7 @@ type op struct {
 	// steps are a rebase's entries, from its start to its end.
 	steps   []entry
 	unknown bool // a message the adapter doesn't know: decided from the commit graph
+	pull    bool // a rebase git pull ran, which also brought the upstream's commits
 }
 
 // makes reports whether the operation creates commits.
@@ -288,7 +289,7 @@ func plan(entries []entry, inRebase bool) ([]op, int) {
 				return ops, i
 			}
 			if !aborted {
-				ops = append(ops, op{kind: event.GitRebase, first: e, last: entries[end], steps: entries[i : end+1]})
+				ops = append(ops, op{kind: event.GitRebase, first: e, last: entries[end], steps: entries[i : end+1], pull: a.pull})
 			}
 			i = end
 			continue
@@ -329,8 +330,17 @@ func plan(entries []entry, inRebase bool) ([]op, int) {
 // ends before the first entry that can't be part of it, or at the last.
 func rebaseEnd(entries []entry, start int) (end int, aborted, closed bool) {
 	end = start
+	cmd := command(entries[start].Msg)
 	for j := start + 1; j < len(entries); j++ {
-		switch classify(entries[j].Msg).step {
+		a := classify(entries[j].Msg)
+		if a.step == stepMerge && command(entries[j].Msg) == cmd {
+			// Before git 2.26 the apply backend wrote each step under the
+			// command's own name, which under a pull reads like a merge:
+			// "pull --rebase: <subject>". A merge can't run in the middle of
+			// a rebase, whose HEAD is detached.
+			a.step = stepRebaseStep
+		}
+		switch a.step {
 		case stepRebaseStep, stepCommit, stepAmend, stepReset:
 		case stepRebaseFinish:
 			return j, false, true
@@ -385,12 +395,20 @@ func (s *Scanner) build(ctx context.Context, ops []op, now time.Time) ([]Change,
 				if len(tip.Parents) >= 2 && tip.Parents[0] == o.first.Old {
 					made = []*meta{tip}
 				}
-				if arrived, err = s.arrivals(ctx, o.first.Old, tip, made != nil); err != nil {
+				if arrived, err = s.arrivals(ctx, o.first.Old, tip.SHA, made != nil); err != nil {
 					return nil, err
 				}
 			case event.GitRebase:
 				if made, rewrites, err = s.rebased(ctx, o); err != nil {
 					return nil, err
+				}
+				if o.pull {
+					// A pull's rebase starts at the upstream commit it
+					// fetched, so what that commit's history has and the old
+					// HEAD's doesn't came from the upstream.
+					if arrived, err = s.arrivals(ctx, o.first.Old, o.first.New, false); err != nil {
+						return nil, err
+					}
 				}
 			}
 		}
@@ -525,14 +543,14 @@ func (s *Scanner) record(m *meta, kind event.GitOp, origin Origin, reflogTime in
 }
 
 // arrivals returns the commits a pull or merge brought into HEAD's
-// history that this scanner hasn't recorded, newest maxArrived of them,
-// oldest first. madeTip says the tip is a merge commit made here, which
-// isn't an arrival.
-func (s *Scanner) arrivals(ctx context.Context, old string, tip *meta, madeTip bool) ([]*meta, error) {
-	if old == "" || zeroID(old) {
+// history, the ones reachable from tip and not from old, that this scanner
+// hasn't recorded: the newest maxArrived of them, oldest first. madeTip
+// says tip is a merge commit made here, which isn't an arrival.
+func (s *Scanner) arrivals(ctx context.Context, old, tip string, madeTip bool) ([]*meta, error) {
+	if old == "" || zeroID(old) || tip == "" || zeroID(tip) {
 		return nil, nil
 	}
-	out, err := s.git.Run(ctx, s.loc.Dir, "rev-list", "-n", strconv.Itoa(maxArrived+1), tip.SHA, "--not", old, "--")
+	out, err := s.git.Run(ctx, s.loc.Dir, "rev-list", "-n", strconv.Itoa(maxArrived+1), tip, "--not", old, "--")
 	if err != nil {
 		return nil, err
 	}
@@ -542,7 +560,7 @@ func (s *Scanner) arrivals(ctx context.Context, old string, tip *meta, madeTip b
 	}
 	var want []string
 	for _, id := range ids {
-		if (madeTip && id == tip.SHA) || slices.Contains(s.st.Recent, id) {
+		if (madeTip && id == tip) || slices.Contains(s.st.Recent, id) {
 			continue
 		}
 		want = append(want, id)
@@ -573,7 +591,7 @@ func (s *Scanner) decide(ctx context.Context, o op, tip *meta) (event.GitOp, []*
 	old := o.first.Old
 	if len(tip.Parents) > 0 && tip.Parents[0] == old && abs64(tip.CommitterTime-o.last.Time) <= 300 {
 		if len(tip.Parents) >= 2 {
-			arrived, err := s.arrivals(ctx, old, tip, true)
+			arrived, err := s.arrivals(ctx, old, tip.SHA, true)
 			return event.GitMerge, []*meta{tip}, arrived, err
 		}
 		return event.GitCommit, []*meta{tip}, nil, nil
@@ -581,7 +599,7 @@ func (s *Scanner) decide(ctx context.Context, o op, tip *meta) (event.GitOp, []*
 	if old != "" && !zeroID(old) {
 		_, err := s.git.Run(ctx, s.loc.Dir, "merge-base", "--is-ancestor", old, tip.SHA)
 		if err == nil {
-			arrived, err := s.arrivals(ctx, old, tip, false)
+			arrived, err := s.arrivals(ctx, old, tip.SHA, false)
 			return event.GitMerge, nil, arrived, err
 		}
 	}

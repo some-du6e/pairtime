@@ -387,6 +387,120 @@ func TestScanAgainstGit(t *testing.T) {
 			},
 		},
 		{
+			name: "a pull with pull.rebase=true over a local commit is a rebase that maps the local commit as git's post-rewrite list does, and records the pulled commit as made elsewhere",
+			run: func(t *testing.T, g *gitEnv) {
+				up := g.initRepo()
+				up.commit("one", map[string]string{"a.txt": "a\n"})
+				dir := filepath.Join(t.TempDir(), "clone")
+				g.git(filepath.Dir(dir), "clone", "-q", up.dir, dir)
+				clone := &testRepo{g: g, dir: dir}
+				clone.git("config", "pull.rebase", "true")
+				clone.recordRewrites()
+				local := clone.commit("local", map[string]string{"l.txt": lines("l", 2)})
+				pulled := up.commit("upstream", map[string]string{"u.txt": lines("u", 3)})
+				s := g.scanner(g.resolver(ProjectMap{}, Excludes{}), dir)
+				clone.git("pull", "-q")
+				c := one(t, mustScan(t, s))
+				if ev := gitChange(t, c); ev.Op != event.GitRebase || ev.SHA != clone.head() {
+					t.Fatalf("event %s %s, want a rebase to %s", ev.Op, ev.SHA, clone.head())
+				}
+				var here, elsewhere []string
+				for _, cm := range c.Commits {
+					checkAgainstGit(t, clone, cm)
+					if cm.Local.Origin == MadeHere {
+						here = append(here, cm.SHA)
+					} else {
+						elsewhere = append(elsewhere, cm.SHA)
+					}
+				}
+				if want := clone.revList("HEAD", pulled); !slices.Equal(here, want) || len(want) != 1 {
+					t.Errorf("made here %v, want the copy git made of the local commit: %v", here, want)
+				}
+				if !slices.Equal(elsewhere, []string{pulled}) {
+					t.Errorf("made elsewhere %v, want the pulled commit %s", elsewhere, pulled)
+				}
+				want := sortedRewrites(clone.readRewrites("rebase"))
+				if got := allRewrites(c.Commits); !slices.Equal(got, want) || len(want) != 1 || want[0].OldSHA != local {
+					t.Errorf("rewrites %v, git says %v", got, want)
+				}
+			},
+		},
+		{
+			name: "a git pull --rebase that fast-forwards is a merge that records the pulled commits as made elsewhere",
+			run: func(t *testing.T, g *gitEnv) {
+				up := g.initRepo()
+				up.commit("one", map[string]string{"a.txt": "a\n"})
+				dir := filepath.Join(t.TempDir(), "clone")
+				g.git(filepath.Dir(dir), "clone", "-q", up.dir, dir)
+				clone := &testRepo{g: g, dir: dir}
+				s := g.scanner(g.resolver(ProjectMap{}, Excludes{}), dir)
+				p1 := up.commit("two", map[string]string{"b.txt": lines("b", 2)})
+				p2 := up.commit("three", map[string]string{"c.txt": lines("c", 3)})
+				clone.git("pull", "-q", "--rebase")
+				if clone.head() != p2 {
+					t.Fatalf("HEAD %s, want the fast-forward to %s", clone.head(), p2)
+				}
+				c := one(t, mustScan(t, s))
+				if c.Op() != event.GitMerge || !slices.Equal(shas(c.Commits), []string{p1, p2}) {
+					t.Fatalf("got %s with records %v, want a merge recording %s and %s", c.Op(), shas(c.Commits), p1, p2)
+				}
+				for _, cm := range c.Commits {
+					checkAgainstGit(t, clone, cm)
+					if cm.Local.Origin != MadeElsewhere {
+						t.Errorf("%s: origin %s, want made elsewhere", cm.SHA[:7], cm.Local.Origin)
+					}
+				}
+			},
+		},
+		{
+			name: "a git pull --no-rebase that merges records the merge commit as made here and the pulled commit as made elsewhere",
+			run: func(t *testing.T, g *gitEnv) {
+				up := g.initRepo()
+				up.commit("one", map[string]string{"a.txt": "a\n"})
+				dir := filepath.Join(t.TempDir(), "clone")
+				g.git(filepath.Dir(dir), "clone", "-q", up.dir, dir)
+				clone := &testRepo{g: g, dir: dir}
+				clone.commit("local", map[string]string{"l.txt": lines("l", 2)})
+				s := g.scanner(g.resolver(ProjectMap{}, Excludes{}), dir)
+				pulled := up.commit("upstream", map[string]string{"u.txt": lines("u", 3)})
+				clone.git("pull", "-q", "--no-rebase", "--no-edit")
+				merge := clone.head()
+				c := one(t, mustScan(t, s))
+				if ev := gitChange(t, c); ev.Op != event.GitMerge || ev.SHA != merge {
+					t.Fatalf("event %s %s, want a merge to %s", ev.Op, ev.SHA, merge)
+				}
+				if got := shas(c.Commits); !slices.Equal(got, []string{merge, pulled}) {
+					t.Fatalf("records %v, want the merge commit %s and the pulled %s", got, merge, pulled)
+				}
+				for _, cm := range c.Commits {
+					checkAgainstGit(t, clone, cm)
+				}
+				if c.Commits[0].Local.Origin != MadeHere || len(c.Commits[0].Parents) != 2 || c.Commits[1].Local.Origin != MadeElsewhere {
+					t.Errorf("origins %s and %s, want a merge commit made here and a commit made elsewhere", c.Commits[0].Local.Origin, c.Commits[1].Local.Origin)
+				}
+			},
+		},
+		{
+			name: "a merge of a branch whose name says rebase is a merge, recorded like any other",
+			run: func(t *testing.T, g *gitEnv) {
+				r := g.initRepo()
+				r.commit("base", map[string]string{"base.txt": "base\n"})
+				s := g.scanner(g.resolver(ProjectMap{}, Excludes{}), r.dir)
+				r.git("checkout", "-q", "-b", "fix-rebase-bug")
+				r.commit("fix", map[string]string{"fix.txt": lines("f", 2)})
+				r.git("checkout", "-q", "main")
+				r.commit("m1", map[string]string{"m1.txt": lines("m", 3)})
+				mustScan(t, s)
+				r.git("merge", "-q", "--no-edit", "fix-rebase-bug")
+				merge := r.head()
+				c := one(t, mustScan(t, s))
+				if c.Op() != event.GitMerge || !slices.Equal(shas(c.Commits), []string{merge}) {
+					t.Fatalf("got %s with records %v, want a merge recording only the merge commit %s", c.Op(), shas(c.Commits), merge)
+				}
+				checkAgainstGit(t, r, c.Commits[0])
+			},
+		},
+		{
 			name: "a reset yields a reset event and no commit record",
 			run: func(t *testing.T, g *gitEnv) {
 				r := g.initRepo()

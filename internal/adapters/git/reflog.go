@@ -60,15 +60,22 @@ type action struct {
 	// fold is a squash or fixup step, which folds an original commit into
 	// the one before it.
 	fold bool
+	// pull is a rebase that git pull ran, with --rebase or pull.rebase,
+	// which also brings in the upstream's commits.
+	pull bool
 }
 
-// classify reads a reflog message. The part before ": " names the command
-// and, in parentheses, its step: "commit (amend)", "rebase (pick)", "pull
-// --rebase (finish)". GIT_REFLOG_ACTION lets a tool replace the command's
-// name, which is why a rebase is recognized by "rebase" anywhere in it.
-// What follows ": " is a subject or branch names and is never looked at.
+// classify reads a reflog message by its structure. The part before ": "
+// is the command, as GIT_REFLOG_ACTION has it, with a step in parentheses
+// at its end: "commit (amend)", "rebase -i (pick)". git pull sets
+// GIT_REFLOG_ACTION to its own arguments, so a rebase it runs writes
+// "pull -q -r origin main (start)", and a merge it runs "pull --no-rebase:
+// Merge made by ...". Arguments and branch names are therefore never read
+// for a word like "rebase": a rebase is a rebase command, or a pull with a
+// step; a merge or a pull without one is a merge. What follows ": " is a
+// subject or branch names, and only its leading "checkout " is looked at.
 func classify(msg string) action {
-	act, _, _ := strings.Cut(msg, ": ")
+	act, rest, _ := strings.Cut(msg, ": ")
 	act = strings.TrimSpace(act)
 	base, paren := act, ""
 	if i := strings.LastIndex(act, " ("); i >= 0 && strings.HasSuffix(act, ")") {
@@ -78,6 +85,7 @@ func classify(msg string) action {
 	if len(fields) == 0 {
 		return action{step: stepUnknown}
 	}
+	cmd := fields[0]
 	switch {
 	case base == "commit":
 		switch paren {
@@ -88,20 +96,25 @@ func classify(msg string) action {
 		default: // "", "initial", "cherry-pick"
 			return action{step: stepCommit}
 		}
-	case strings.Contains(base, "rebase"):
+	case cmd == "rebase", cmd == "pull" && (paren != "" || strings.HasPrefix(rest, "checkout ")):
+		// Before git 2.26 the apply backend wrote "rebase: checkout main",
+		// or "pull --rebase: checkout <commit>" under a pull, for its
+		// start, and "rebase finished: returning to ..." for its finish.
+		a := action{pull: cmd == "pull"}
 		switch {
-		case paren == "start", base == "rebase" && strings.HasPrefix(msg, "rebase: checkout "):
-			return action{step: stepRebaseStart}
+		case paren == "start", paren == "" && strings.HasPrefix(rest, "checkout "):
+			a.step = stepRebaseStart
 		case paren == "finish", strings.HasPrefix(base, "rebase finished"):
-			return action{step: stepRebaseFinish}
+			a.step = stepRebaseFinish
 		case paren == "abort":
-			return action{step: stepRebaseAbort}
+			a.step = stepRebaseAbort
 		case paren == "squash", paren == "fixup":
-			return action{step: stepRebaseStep, fold: true}
+			a.step, a.fold = stepRebaseStep, true
 		default:
-			return action{step: stepRebaseStep}
+			a.step = stepRebaseStep
 		}
-	case fields[0] == "merge", fields[0] == "pull":
+		return a
+	case cmd == "merge", cmd == "pull":
 		return action{step: stepMerge}
 	case base == "cherry-pick", base == "am":
 		return action{step: stepCommit}
@@ -115,6 +128,17 @@ func classify(msg string) action {
 		return action{step: stepNone}
 	}
 	return action{step: stepUnknown}
+}
+
+// command returns the command part of a reflog message, without its step:
+// "pull --rebase" for "pull --rebase (pick): x" and "pull --rebase: x".
+func command(msg string) string {
+	act, _, _ := strings.Cut(msg, ": ")
+	act = strings.TrimSpace(act)
+	if i := strings.LastIndex(act, " ("); i >= 0 && strings.HasSuffix(act, ")") {
+		act = act[:i]
+	}
+	return act
 }
 
 // reflogFormat prints, per entry, the commit HEAD moved to, the reflog
