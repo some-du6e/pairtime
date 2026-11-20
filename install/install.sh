@@ -17,21 +17,29 @@
 #      or takes over 60 seconds.
 #   4. Puts the binary at ~/.local/bin/pairtime.
 #   5. Runs `pairtime install`, which lists every change it would make and
-#      asks before making any.
+#      asks before making any. It names the folders this script made, so
+#      that `pairtime uninstall` takes those away too.
 #
-# It never uses sudo, and it sends nothing anywhere: its only requests are
-# the downloads. It needs curl, tar, bc and sha256sum or shasum, which
-# macOS and most Linux systems come with.
+# It runs as you and refuses to run as root, so it never uses sudo. It
+# sends nothing anywhere: its only requests are the downloads. It needs
+# curl, tar, bc and sha256sum or shasum, which macOS and most Linux systems
+# come with.
 #
-# Options go after `sh -s --` when the script comes through a pipe. Each
-# has an environment variable too:
+# Options go after `sh -s --` when the script comes through a pipe. The
+# first four have an environment variable too:
 #
 #   --version V          PAIRTIME_VERSION=V          install release V instead of this script's
 #   --base-url URL       PAIRTIME_BASE_URL=URL       download the release files from URL
 #   --release-keys FILE  PAIRTIME_RELEASE_KEYS=FILE  trust the public keys in FILE instead of pairtime's
-#   --allow-unsigned     PAIRTIME_ALLOW_UNSIGNED=1   install even if no trusted key signed the release
 #   --no-install         PAIRTIME_NO_INSTALL=1       stop after step 4
+#   --allow-unsigned                                 install an unsigned release; see below
 #   --yes                                            answer yes for `pairtime install`
+#
+# --allow-unsigned lets a script that trusts no release key install a
+# release that no key signed, checked only against its own manifest's
+# SHA-256s. Once the script trusts a key, pinned or given, a manifest that
+# no trusted key signed is always refused, with the option or without it.
+# It has no environment variable, so it lasts for one run.
 set -eu
 
 # tools/release scripts fills in these two lines when release.yml attaches
@@ -182,21 +190,45 @@ die() {
   exit 1
 }
 
+# shell_quote WORD prints WORD so that a shell reads it back as one word:
+# as it is when it holds nothing a shell treats specially, otherwise in
+# single quotes, each ' in it written as '\''. Commands this script prints
+# for you to run go through it.
+shell_quote() {
+  case $1 in
+    '' | *[!A-Za-z0-9_./:@%+,-]*) printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")" ;;
+    *) printf '%s' "$1" ;;
+  esac
+}
+
 # Cleanup, and a message for any failure die didn't explain. A failed
-# install also removes the folders it made, which are empty then.
+# install also removes the folders it made, which are empty then. Once the
+# binary is in place it stays, and so do they.
 work=''
 new=''
 made_bin=''
 made_local=''
+installed=''
 step='starting'
 on_exit() {
   status=$?
   if [ -n "$new" ] && [ -f "$new" ]; then rm -f "$new"; fi
   if [ -n "$work" ] && [ -d "$work" ]; then rm -rf "$work"; fi
-  if [ -n "$made_bin" ]; then rmdir "$HOME/.local/bin" 2> /dev/null || :; fi
-  if [ -n "$made_local" ]; then rmdir "$HOME/.local" 2> /dev/null || :; fi
+  if [ -z "$installed" ]; then
+    if [ -n "$made_bin" ]; then rmdir "$HOME/.local/bin" 2> /dev/null || :; fi
+    if [ -n "$made_local" ]; then rmdir "$HOME/.local" 2> /dev/null || :; fi
+  fi
   if [ "$status" != 0 ] && [ -z "$died" ]; then
-    printf 'install.sh: stopped by an unexpected error while %s (status %s). Nothing was installed.\n' "$step" "$status" >&2
+    case $status in
+      # Ctrl-C, a closed terminal or kill, by the INT, HUP and TERM traps.
+      129 | 130 | 143) why="stopped while $step" ;;
+      *) why="stopped by an unexpected error while $step (status $status)" ;;
+    esac
+    if [ -n "$installed" ]; then
+      printf 'install.sh: %s. pairtime %s is installed at %s. To finish setting it up, run: %s install\n' "$why" "$version" "$target" "$(shell_quote "$target")" >&2
+    else
+      printf 'install.sh: %s. Nothing was installed.\n' "$why" >&2
+    fi
   fi
 }
 
@@ -208,8 +240,8 @@ usage() {
   say "  --version V          install release V (PAIRTIME_VERSION)"
   say "  --base-url URL       download the release files from URL (PAIRTIME_BASE_URL)"
   say "  --release-keys FILE  trust the release public keys in FILE (PAIRTIME_RELEASE_KEYS)"
-  say "  --allow-unsigned     install even if no trusted key signed the release (PAIRTIME_ALLOW_UNSIGNED=1)"
   say "  --no-install         don't run \`pairtime install\` (PAIRTIME_NO_INSTALL=1)"
+  say "  --allow-unsigned     install a release that no key signed, if this script trusts no release key"
   say "  --yes                answer yes for \`pairtime install\`"
 }
 
@@ -218,12 +250,14 @@ size_of() {
   wc -c < "$1" | tr -d ' '
 }
 
-# sha256 FILE prints FILE's SHA-256 in lowercase hex.
+# sha256 FILE prints FILE's SHA-256 in lowercase hex. The file comes in on
+# standard input, so no name is printed beside the hash: for a name with a
+# backslash in it, sha256sum and shasum start the line with one.
 sha256() {
   if [ "$sha_tool" = coreutils ]; then
-    sha256sum "$1" | cut -d ' ' -f 1
+    sha256sum < "$1" | cut -d ' ' -f 1
   else
-    shasum -a 256 "$1" | cut -d ' ' -f 1
+    shasum -a 256 < "$1" | cut -d ' ' -f 1
   fi
 }
 
@@ -236,9 +270,17 @@ sha512() {
   fi
 }
 
-# b64decode TEXT FILE writes the bytes that TEXT, in base64, encodes.
+# b64decode TEXT FILE writes the bytes that TEXT encodes in padded
+# standard base64, and fails unless TEXT is exactly how base64 writes those
+# bytes, as internal/release requires (keys.go, decodeB64): GNU and BusyBox
+# base64, left to themselves, ignore the unused bits of the last character
+# and read QR== as QQ==. BusyBox's base64 takes only -d, and old macOS's
+# only --decode.
 b64decode() {
-  printf '%s' "$1" | base64 --decode > "$2" 2> /dev/null
+  {
+    printf '%s' "$1" | base64 --decode > "$2" 2> /dev/null ||
+      printf '%s' "$1" | base64 -d > "$2" 2> /dev/null
+  } && [ "$(base64 < "$2" | tr -d '\n')" = "$1" ]
 }
 
 # le_hex FILE prints FILE's bytes as one little-endian number in the
@@ -388,7 +430,8 @@ open_manifest() {
   [ "$(wc -l < "$manifest" | tr -d ' ')" = 1 ] || die "$bad"
   # The envelope is one line of JSON with nothing in it that needs
   # escaping, so splitting it at each quote gives every token. This prints
-  # the payload, then one "keyid sig" line per signature.
+  # the payload, then one "keyid:sig" line per signature; neither holds a
+  # colon, and either may be empty.
   awk -F '"' -v type="$payload_type" '
     NR > 1 { exit 1 }
     {
@@ -397,7 +440,7 @@ open_manifest() {
       print $4
       for (i = 12; i + 7 <= NF; i += 8) {
         if ($i != "keyid" || $(i + 1) != ":" || $(i + 2) ~ /[^0-9A-Za-z._-]/ || $(i + 3) != "," || $(i + 4) != "sig" || $(i + 5) != ":" || $(i + 6) !~ /^[A-Za-z0-9+\/]*=?=?$/) exit 1
-        print $(i + 2), $(i + 6)
+        print $(i + 2) ":" $(i + 6)
         if ($(i + 7) == "}]}") {
           if (i + 7 == NF) ok = 1
           break
@@ -409,6 +452,13 @@ open_manifest() {
   ' "$manifest" > "$work/envelope" || die "$bad"
   b64decode "$(sed -n 1p "$work/envelope")" "$work/payload.json" || die "$bad"
   sed -n '2,$p' "$work/envelope" > "$work/signatures"
+  # As in internal/release, every signature has to be 64 bytes in that
+  # base64, whichever key it names, or the file isn't in the form.
+  n=0
+  while IFS=: read -r keyid sig; do
+    n=$((n + 1))
+    if ! b64decode "$sig" "$work/sig.$n" || [ "$(size_of "$work/sig.$n")" != 64 ]; then die "$bad"; fi
+  done < "$work/signatures"
 
   # DSSE's pre-authentication encoding of the payload is what was signed.
   {
@@ -420,14 +470,15 @@ open_manifest() {
   # verifies under a trusted key is enough.
   signer=''
   signed_by=''
-  while read -r keyid sig; do
+  n=0
+  while IFS=: read -r keyid sig; do
+    n=$((n + 1))
     signed_by="$signed_by $keyid"
     case $keyid in
       '' | *[!0-9a-f]*) continue ;;
     esac
     if [ "${#keyid}" != 16 ] || [ ! -f "$work/keys/$keyid" ]; then continue; fi
-    b64decode "$sig" "$work/sig" || continue
-    if ed25519_verify "$work/keys/$keyid" "$work/signed" "$work/sig"; then
+    if ed25519_verify "$work/keys/$keyid" "$work/signed" "$work/sig.$n"; then
       signer=$keyid
       break
     fi
@@ -435,10 +486,15 @@ open_manifest() {
 
   if [ -n "$signer" ]; then
     say "manifest.json is signed by release key $signer."
-  elif [ "$allow_unsigned" = 1 ]; then
-    warn "no key this script trusts signed manifest.json (signed by:${signed_by:- nobody}; trusted:${key_ids:- none}). --allow-unsigned is set, so the install goes on, but only the manifest's SHA-256s check the download: nothing shows the files are pairtime's."
+  elif [ "$key_count" = 0 ] && [ "$allow_unsigned" = 1 ]; then
+    # Only a script that trusts no key gets here (D-allow-unsigned-scope).
+    warn "no key this script trusts signed manifest.json (signed by:${signed_by:- nobody}; this script trusts none). --allow-unsigned is set, so the install goes on, but only the manifest's SHA-256s check the download: nothing shows the files are pairtime's."
   else
-    die "manifest.json isn't signed by a key this script trusts (signed by:${signed_by:- nobody}; trusted:${key_ids:- none}), so nothing was installed."
+    refusal="manifest.json isn't signed by a key this script trusts (signed by:${signed_by:- nobody}; trusted:$key_ids), so nothing was installed."
+    if [ "$allow_unsigned" = 1 ]; then
+      refusal="$refusal --allow-unsigned doesn't change that: it applies only when this script trusts no release key."
+    fi
+    die "$refusal"
   fi
 }
 
@@ -490,7 +546,9 @@ main() {
   version=${PAIRTIME_VERSION:-$pinned_version}
   base_url=${PAIRTIME_BASE_URL:-}
   keys_file=${PAIRTIME_RELEASE_KEYS:-}
-  allow_unsigned=${PAIRTIME_ALLOW_UNSIGNED:-0}
+  # Only the option allows an unsigned install, never the environment, so
+  # it can't outlast the run it was given for (D-allow-unsigned-scope).
+  allow_unsigned=0
   no_install=${PAIRTIME_NO_INSTALL:-0}
   yes=0
   while [ "$#" -gt 0 ]; do
@@ -514,12 +572,16 @@ main() {
       *) die "unknown option $1; --help lists the options" ;;
     esac
   done
-  for flag in "$allow_unsigned" "$no_install"; do
-    case $flag in
-      0 | 1) ;;
-      *) die "set PAIRTIME_ALLOW_UNSIGNED and PAIRTIME_NO_INSTALL to 1, or leave them unset" ;;
-    esac
-  done
+  case $no_install in
+    0 | 1) ;;
+    *) die "set PAIRTIME_NO_INSTALL to 1, or leave it unset" ;;
+  esac
+
+  # pairtime is set up for the person running it, in their own home. Run
+  # as root, it would install for root, or under a sudo that keeps HOME it
+  # would leave root's files in yours, so it stops before downloading
+  # anything, as pairtime hook and pairtime install do.
+  [ "$(id -u)" != 0 ] || die "don't run install.sh as root or with sudo: pairtime installs into your own home folder, so run the command again from a normal terminal, without sudo."
 
   [ -n "$version" ] || die "this copy of install.sh doesn't name a release; pass --version, such as --version v0.1.0"
   check_version "$version" || die "$version isn't a pairtime version, such as v0.1.0 or v0.1.0-alpha.1"
@@ -608,16 +670,21 @@ main() {
   step="moving pairtime to $target"
   mv -f "$new" "$target" || die "couldn't move pairtime to $target"
   new=''
-  made_bin=''
-  made_local=''
+  installed=1
   say "Installed pairtime $version at $target."
 
   step='running pairtime install'
   if [ "$no_install" = 1 ]; then
-    say "To finish setting it up, run: $target install"
+    say "To finish setting it up, run: $(shell_quote "$target") install"
   elif "$target" help < /dev/null 2> /dev/null | grep -q '^  install '; then
     set -- install
-    if [ "$yes" = 1 ]; then set -- install --yes; fi
+    if [ "$yes" = 1 ]; then set -- "$@" --yes; fi
+    # pairtime install records the folders it makes, so that pairtime
+    # uninstall can take them away again. The ones this script made for
+    # the binary exist by the time it starts, so it's told which they are
+    # (pairtime install --made).
+    if [ -n "$made_local" ]; then set -- "$@" --made "$HOME/.local"; fi
+    if [ -n "$made_bin" ]; then set -- "$@" --made "$bin_dir"; fi
     say "Running pairtime install. It lists every change it would make and asks before making any."
     # The script itself came through standard input, so pairtime install
     # asks on the terminal instead.
@@ -629,7 +696,7 @@ main() {
     else
       "$target" "$@" < /dev/null || status=$?
     fi
-    [ "$status" = 0 ] || die "\`pairtime install\` stopped with status $status. pairtime is at $target; run \`$target install\` to try again."
+    [ "$status" = 0 ] || die "\`pairtime install\` stopped with status $status. pairtime is at $target; run \`$(shell_quote "$target") install\` to try again."
   else
     say "This build of pairtime has no install command yet, so setup stops here."
   fi
