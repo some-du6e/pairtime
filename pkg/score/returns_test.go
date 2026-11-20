@@ -28,6 +28,71 @@ func silence(app event.AppClass, resume int64, act func(b *tl)) *tl {
 	return b
 }
 
+// TestActsEndingASilence checks SM 2.3's presence tests in the slot whose
+// input ends a silence longer than PRESENCE_GAP_S, where a sample taken
+// later in the slot dates the input (presence.markStarts). The tests read
+// SM 2.1's presence for the slot, which has input, so an act early in it
+// still opens its anchor, and an interrupt that comes first still keeps
+// the return rule from crediting the silence.
+func TestActsEndingASilence(t *testing.T) {
+	// The person watches the agent after its answer at 102 s and touches
+	// nothing from 100 s until 330 s.
+	watch := func(b *tl) {
+		b.focus(at(0), event.AppTerminal, "p_1", "s_1")
+		b.start(at(0), "s_1", "p_1", event.EntrypointCLI, event.ParentTerminalApp, true)
+		b.mouse(every(at(1), at(96), 5000)...)
+		b.mouse(at(100))
+		b.prompt(at(30), event.ViaHook, "s_1", "p_1", "t_1", 30)
+		b.harness(at(102), event.ViaLog, "s_1", "p_1", &event.AgentOutput{TurnKey: "t_1", Words: 160})
+	}
+	cases := []struct {
+		name string
+		act  func(b *tl) event.Event
+		kind event.AnchorKind
+	}{
+		{
+			name: "an interrupt at 333 s, before the correction whose hook sample at 340 s dates the slot's input, is INT, and nothing is returned",
+			act: func(b *tl) event.Event {
+				e := b.harness(at(333), event.ViaLog, "s_1", "p_1", &event.AgentInterrupt{TurnKey: "t_1"})
+				b.press(atMS(339_500))
+				b.prompt(at(340), event.ViaHook, "s_1", "p_1", "t_2", 20)
+				b.sample(at(340))
+				return e
+			},
+			kind: event.AnchorInterrupt,
+		},
+		{
+			name: "a permission answered at 333 s, before the tool's hook sample at 338 s dates the slot's input, is PA",
+			act: func(b *tl) event.Event {
+				b.mouse(atMS(337_500))
+				e := b.harness(at(338), event.ViaHook, "s_1", "p_1", &event.AgentPermission{RequestedAt: at(320),
+					AnsweredAt: at(333), Decision: event.DecisionAccept, DecidedBy: event.DecidedByUser})
+				b.sample(at(338))
+				return e
+			},
+			kind: event.AnchorPermissionAnswer,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			b := newTL(false)
+			watch(b)
+			e := c.act(b)
+			b.samples(at(0), at(400))
+			d := b.run(t, Device{})
+			if a, ok := anchorByID(d, e.EventID); !ok || a.Kind != c.kind {
+				t.Errorf("anchor %+v (found %v), want %s", a, ok, c.kind)
+			}
+			if len(d.Returns) != 0 {
+				t.Errorf("returns %+v, want none", d.Returns)
+			}
+			if s, _ := slotAt(d, at(330)); s.PresentUntil == s.End() {
+				t.Errorf("slot at 330 s is %+v; the test needs its input dated by the sample inside it", s)
+			}
+		})
+	}
+}
+
 func TestReturnRule(t *testing.T) {
 	typedPrompt := func(resume int64) func(b *tl) {
 		return func(b *tl) { b.prompt(at(resume+19), event.ViaHook, "s_1", "p_1", "t_2", 30) }

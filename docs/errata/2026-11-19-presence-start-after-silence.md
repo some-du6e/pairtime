@@ -28,6 +28,8 @@ Only the third reproduces both fixtures. By slot, 6.1 credits 10,105 s instead o
 
 It takes the third rule. The regular sample at a slot's end stands for the whole slot, as SM 2.1 has it. A sample the agent takes inside the slot, at a hook, focus or power event (DESIGN 3.3), dates what it reports. So after a silence longer than `PRESENCE_GAP_S`, the silence runs into the slot that ends it, up to the second of the first input that an inside sample reports. If no inside sample reports one, the silence runs up to the last inside sample, which still shows none. With no inside sample at all, presence starts with the slot. A silence the return rule credits includes those seconds. `presence.markStarts` in `pkg/score/presence.go` is the code.
 
+The dated start is for crediting seconds. SM 2.3's evidence tests that read presence, a permission answer's at `answered_at` and an interrupt's in its slot, read SM 2.1's value for the slot, as the slot record does: a slot with input is present from its start. Otherwise an interrupt early in the slot that ends a silence, before the correction whose hook sample dates the input, would open no anchor, and the prompt after it would end the silence as a returned run, which SM 2.1 denies when the first act is an interrupt.
+
 The rule is generous where the samples are coarse and strict where they are fine. Someone who comes back late in a slot with no event sample in it gets the whole slot, up to 14 s more than the conservative choice. Someone whose return comes with a focus change or a hook gets credit from that second.
 
 ## For Karim

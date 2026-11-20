@@ -409,13 +409,19 @@ func (p *presence) slotAt(t int64) *Slot {
 	return nil
 }
 
-// presentAt returns the presence at time t: unknown outside the derived
-// slots.
-func (p *presence) presentAt(t int64) event.Presence {
-	if s := p.slotAt(t); s != nil {
-		return s.At(t)
+// presentFor reports whether the person was present at t for an act's
+// evidence test, such as a permission answer's or an interrupt's (SM 2.3).
+// SM 2.1 makes presence a value per slot, so a slot with input passes from
+// its start, as Slot.Event has it, even where markStarts dates the end of a
+// silence inside it: that dating is for crediting seconds, and the act
+// itself is the person's return. Elsewhere it is the presence at t, so a
+// tail still ends to the millisecond.
+func (p *presence) presentFor(t int64) bool {
+	s := p.slotAt(t)
+	if s == nil {
+		return false
 	}
-	return event.PresentUnknown
+	return s.Then == event.PresentYes || present(s.At(t))
 }
 
 // classifyRuns gives every silent slot its presence (SM 2.1): bridged for

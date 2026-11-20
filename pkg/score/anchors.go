@@ -271,7 +271,7 @@ func (d *deriver) harnessAnchor(best int, pos []int) {
 			d.flag(FlagPermissionTooFast, e)
 			return
 		}
-		if !present(d.pres.presentAt(p.AnsweredAt)) {
+		if !d.pres.presentFor(p.AnsweredAt) {
 			return
 		}
 		a.Kind, a.Reason = event.AnchorPermissionAnswer, event.ReasonPermission
@@ -279,7 +279,7 @@ func (d *deriver) harnessAnchor(best int, pos []int) {
 		a.LeadMS, a.TrailMS = min(wait, d.r.paMax), d.r.paTrail
 		from, to = slotWindow(p.AnsweredAt)
 	case *event.AgentInterrupt:
-		if !present(d.pres.presentAt(e.T)) {
+		if !d.pres.presentFor(e.T) {
 			return
 		}
 		a.Kind, a.Reason, a.TurnKey = event.AnchorInterrupt, event.ReasonInterrupt, p.TurnKey
