@@ -538,7 +538,7 @@ read_artifact() {
     [ "${#hash}" = 64 ] || die "manifest.json's SHA-256 for $os/$arch isn't 64 hex digits"
   done
   case $size in
-    '' | *[!0-9]*) die "manifest.json's size for $os/$arch isn't a number" ;;
+    '' | 0* | *[!0-9]*) die "manifest.json's size for $os/$arch isn't a number above 0" ;;
   esac
 }
 

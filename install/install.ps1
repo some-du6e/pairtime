@@ -20,9 +20,11 @@
 #      that 'pairtime uninstall' takes those away too.
 #
 # It needs no administrator rights, and it stops before downloading
-# anything when PowerShell runs as administrator. It sends nothing
-# anywhere: its only requests are the downloads. It runs in Windows
-# PowerShell 5.1, which Windows 10 and 11 come with, and in PowerShell 7.
+# anything when PowerShell was opened with "Run as administrator", the
+# elevated half of a split token. An administrator whose token isn't
+# split, as with UAC off, can still install. It sends nothing anywhere:
+# its only requests are the downloads. It runs in Windows PowerShell 5.1,
+# which Windows 10 and 11 come with, and in PowerShell 7.
 #
 # Options are environment variables, set before 'irm ... | iex', or
 # parameters when the script is saved and run as a file:
@@ -514,7 +516,7 @@ $installPairtime = {
       foreach ($hash in @($artifact.sha256, $artifact.binary_sha256)) {
         if ([string]$hash -cnotmatch '^[0-9a-f]{64}\z') { Fail "manifest.json's SHA-256 for windows/$arch isn't 64 lowercase hex digits" }
       }
-      if ([string]$artifact.size -cnotmatch '^[0-9]+\z') { Fail "manifest.json's size for windows/$arch isn't a number" }
+      if ([string]$artifact.size -cnotmatch '^[1-9][0-9]*\z') { Fail "manifest.json's size for windows/$arch isn't a number above 0" }
       $name = "pairtime_$($Version.Substring(1))_windows_$arch.zip"
       $url = [string]$artifact.url
       $urlName = $url.Substring($url.LastIndexOf('/') + 1)
