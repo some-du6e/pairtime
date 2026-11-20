@@ -4,6 +4,8 @@ package score
 
 import (
 	"fmt"
+	"reflect"
+	"slices"
 	"testing"
 
 	"github.com/some-du6e/pairtime/pkg/event"
@@ -208,6 +210,83 @@ func TestTrackClass(t *testing.T) {
 			}
 			if got := TrackClass(testTable(t), tr.Data.(*event.CLITrack)); got != a.PromptClass {
 				t.Errorf("TrackClass gives %q, and the scorer %q", got, a.PromptClass)
+			}
+		})
+	}
+}
+
+// TestQuestionsState checks that a Questions restored from another's State
+// classes the prompts after it as that one does, and that Restore refuses a
+// state no Questions could have.
+func TestQuestionsState(t *testing.T) {
+	rec := func(v event.Via, sess string, p event.Payload) event.Event {
+		return event.Event{Envelope: event.Envelope{Via: v, Harness: event.HarnessClaudeCode, SessionKey: sess}, Data: p}
+	}
+	asks := &event.AgentOutput{TurnKey: "t_1", AsksQuestion: true}
+	tells := &event.AgentOutput{TurnKey: "t_1"}
+	before := []event.Event{
+		rec(event.ViaPlugin, "s_plugin", asks),
+		rec(event.ViaLog, "s_log", asks),
+		rec(event.ViaPlugin, "s_mixed", asks),
+		rec(event.ViaHook, "s_mixed", &event.AgentStop{TurnKey: "t_1", StopReason: event.StopEndTurn}),
+	}
+	// After the restore: one more record each in two sessions, and
+	// enough new sessions to make both forget their oldest.
+	after := []event.Event{rec(event.ViaTrack, "s_mixed", &event.AgentStop{TurnKey: "t_1", StopReason: event.StopQuestion}),
+		rec(event.ViaLog, "s_log", tells)}
+	for i := range questionSessions - 2 {
+		after = append(after, rec(event.ViaLog, fmt.Sprintf("s_%d", i), asks))
+	}
+
+	var live, restored Questions
+	for _, r := range before {
+		live.Observe(r)
+	}
+	if err := restored.Restore(live.State()); err != nil {
+		t.Fatal(err)
+	}
+	t.Run("a restored Questions remembers what the one it came from does", func(t *testing.T) {
+		if !reflect.DeepEqual(restored.State(), live.State()) {
+			t.Errorf("restored %+v, from %+v", restored.State(), live.State())
+		}
+	})
+	for _, r := range after {
+		live.Observe(r)
+		restored.Observe(r)
+	}
+	t.Run("after the same records, both ask the same and forget the same sessions", func(t *testing.T) {
+		for _, s := range []string{"s_plugin", "s_log", "s_mixed", "s_0"} {
+			if live.Asked(s) != restored.Asked(s) {
+				t.Errorf("session %s: asked %v live and %v restored", s, live.Asked(s), restored.Asked(s))
+			}
+		}
+		if !reflect.DeepEqual(restored.State(), live.State()) {
+			t.Errorf("the restored state went another way than the live one")
+		}
+	})
+
+	good := live.State()
+	cases := []struct {
+		name string
+		edit func(st *QuestionsState)
+	}{
+		{"a session with no key is refused", func(st *QuestionsState) { st.Sessions[0].Key = "" }},
+		{"a session listed twice is refused", func(st *QuestionsState) { st.Sessions[1].Key = st.Sessions[0].Key }},
+		{"a session heard from after the clock is refused", func(st *QuestionsState) { st.Sessions[0].Seen = st.Clock + 1 }},
+		{"two sessions heard from at once are refused", func(st *QuestionsState) { st.Sessions[1].Seen = st.Sessions[0].Seen }},
+		{"more sessions than a Questions remembers are refused", func(st *QuestionsState) {
+			st.Clock++
+			st.Sessions = append(st.Sessions, AskedSession{Key: "s_extra", Seen: st.Clock})
+		}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			st := good
+			st.Sessions = slices.Clone(good.Sessions)
+			c.edit(&st)
+			var q Questions
+			if err := q.Restore(st); err == nil {
+				t.Error("Restore took it")
 			}
 		})
 	}

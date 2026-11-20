@@ -22,8 +22,9 @@ import (
 	"github.com/some-du6e/pairtime/pkg/ledger/features"
 )
 
-// TestNumbers checks decision E-sm-1.1-seq-gaps' numbering: one sequence
-// over every record the device writes, from 1, with no gap or repeat.
+// TestNumbers checks decision E-sm-1.1-seq-gaps' numbering (decided; spec
+// wording pending): one sequence over every record the device writes, from
+// 1, with no gap or repeat.
 func TestNumbers(t *testing.T) {
 	cases := []struct {
 		name  string
@@ -191,6 +192,67 @@ func TestContent(t *testing.T) {
 	}
 }
 
+// TestQuestionsAfterRestart checks that a restart changes no prompt's
+// f.pc: a prompt that answers a question asked before the agent restarted
+// is an answer however many batches came between, as it is in a writer that
+// never stopped (SM 2.2), and rows don't carry the questions the seal
+// frames keep.
+func TestQuestionsAfterRestart(t *testing.T) {
+	cases := []struct {
+		name    string
+		asks    bool // the session's last output asked a question
+		batches int  // batches sealed after it, before the restart
+		want    features.Class
+	}{
+		{"an answer to a question asked just before a restart is an answer", true, 0, features.Answer},
+		{"an answer to a question asked more than questionRows batches before a restart is an answer", true, questionRows + 5, features.Answer},
+		{"an answer to a question asked two seal frames of questions before a restart is an answer", true, 2*questionRows + 1, features.Answer},
+		{"a go-ahead after an output that asked nothing is low_effort after a restart too", false, questionRows + 5, features.LowEffort},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			dir := t.TempDir()
+			w := open(t, dir, newClock(testT))
+			if _, err := w.Write(harness(&event.AgentOutput{TurnKey: "t_0", Words: 7, IsFinal: true, AsksQuestion: c.asks},
+				[]byte("Which one, the modal or the drawer?"))); err != nil {
+				t.Fatal(err)
+			}
+			rng := rand.New(rand.NewPCG(29, 30))
+			for range c.batches {
+				if _, _, err := write(w, rng, "os.presence", testT); err != nil {
+					t.Fatal(err)
+				}
+				if _, _, err := w.Seal(); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := w.Close(); err != nil {
+				t.Fatal(err)
+			}
+			w = open(t, dir, newClock(testT))
+			s, err := w.Write(prompt("ok", 0))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := w.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if f, _ := featuresOf(t, records(verify(t, dir, keysOf(t, testKDev)))[s-1]); f.PC != c.want {
+				t.Errorf("f.pc is %q, want %q", f.PC, c.want)
+			}
+			bf, err := readBatchesFile(filepath.Join(dir, batchesName))
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, rp := range bf.rows {
+				if rp.Q != nil {
+					t.Fatalf("the row of batch %d carries the questions", rp.B)
+				}
+			}
+		})
+	}
+}
+
 // harness is a hook record of session s_1 in project p_web.
 func harness(p event.Payload, text []byte) Input {
 	rng := rand.New(rand.NewPCG(3, 4))
@@ -260,6 +322,43 @@ func TestRefusals(t *testing.T) {
 			}
 			if s, _, err := write(w, rng, "os.presence", testT); err != nil || s != 2 {
 				t.Errorf("the next record got s = %d and %v, want 2", s, err)
+			}
+		})
+	}
+}
+
+// TestFrameLimit checks that the writer refuses a record whose frame would
+// be more than a frame holds (maxPayload), which every reader takes for
+// damage: a refused record takes no number and changes nothing on disk.
+func TestFrameLimit(t *testing.T) {
+	dir := t.TempDir()
+	w := open(t, dir, newClock(testT))
+	rng := rand.New(rand.NewPCG(27, 28))
+	if _, _, err := write(w, rng, "os.presence", testT); err != nil {
+		t.Fatal(err)
+	}
+	seg := segPath(dir, "2026-11-19")
+	before := fileSize(t, seg)
+	huge := json.RawMessage(`{"blob":"` + strings.Repeat("a", maxPayload) + `"}`)
+	s, err := w.Checkpoint("p_web", uint64(testT)/ledger.CheckpointMS*ledger.CheckpointMS, huge)
+	after := fileSize(t, seg)
+	next, _, nextErr := write(w, rng, "os.presence", testT)
+	closeErr := w.Close()
+
+	cases := []struct {
+		name string
+		ok   bool
+	}{
+		{"a checkpoint whose frame would be more than a frame holds is refused", err != nil && s == 0},
+		{"the refused checkpoint leaves the segment as it was", after == before},
+		{"the next record takes the number the refused one would have", nextErr == nil && next == 2},
+		{"the ledger still reads back whole", closeErr == nil && len(records(verify(t, dir, keysOf(t, testKDev)))) == 2},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if !c.ok {
+				t.Errorf("no: Checkpoint gave s = %d and %v; the segment went from %d to %d bytes; the next record got s = %d and %v; Close %v",
+					s, err, before, after, next, nextErr, closeErr)
 			}
 		})
 	}
@@ -467,6 +566,98 @@ func TestReceipts(t *testing.T) {
 			t.Error(err)
 		}
 	})
+}
+
+// TestReceiptRegion checks that a receipt marks every frame of batches.seg
+// before it as flushed. A frame there that isn't whole is damage, which
+// Open refuses rather than cut the receipts after it; a torn frame after
+// the last receipt is still a crash's torn tail.
+func TestReceiptRegion(t *testing.T) {
+	seed := make([]byte, ed25519.SeedSize)
+	copy(seed, "pairtime ledger writer test server")
+	server := ed25519.NewKeyFromSeed(seed)
+	// build gives batches.seg the frames chain, row 1, row 2, receipt 1,
+	// receipt 2, row 3.
+	build := func(t *testing.T) (dir string, frames []frame) {
+		t.Helper()
+		dir = t.TempDir()
+		w := open(t, dir, newClock(testT))
+		rng := rand.New(rand.NewPCG(25, 26))
+		var rows []Batch
+		receipt := func(b Batch) {
+			rc, err := ledger.SignReceipt(server, w.DeviceID(), b.Row.B, b.Row.Head, uint64(testT)+250)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := w.StoreReceipt(b.Row.B, rc); err != nil {
+				t.Fatal(err)
+			}
+		}
+		for i := range 3 {
+			if i == 2 {
+				receipt(rows[0])
+				receipt(rows[1])
+			}
+			if _, _, err := write(w, rng, "os.presence", testT); err != nil {
+				t.Fatal(err)
+			}
+			b, _, err := w.Seal()
+			if err != nil {
+				t.Fatal(err)
+			}
+			rows = append(rows, b)
+		}
+		if err := w.Close(); err != nil {
+			t.Fatal(err)
+		}
+		frames = framesOf(t, filepath.Join(dir, batchesName))
+		if got := len(frames); got != 6 || frames[3].kind != kindReceipt || frames[5].kind != kindBatch {
+			t.Fatalf("batches.seg has %d frames, want the six this test builds", got)
+		}
+		return dir, frames
+	}
+	cases := []struct {
+		name string
+		edit func(t *testing.T, name string, frames []frame)
+		// want is Open's error, or nil when it recovers with both
+		// receipts.
+		want error
+	}{
+		{"a changed byte in a row before a receipt is damage, not a torn tail",
+			func(t *testing.T, name string, frames []frame) { flipByte(t, name, frames[1].off+frameHeadSize+1) }, ErrDamaged},
+		{"a changed byte in a receipt before another receipt is damage",
+			func(t *testing.T, name string, frames []frame) { flipByte(t, name, frames[3].off+frameHeadSize+1) }, ErrDamaged},
+		{"a torn row after the last receipt is cut off and rebuilt, and the receipts stay",
+			func(t *testing.T, name string, frames []frame) { truncate(t, name, frames[5].end-3) }, nil},
+		{"zeros after the last receipt are a torn tail too",
+			func(t *testing.T, name string, frames []frame) { appendBytes(t, name, make([]byte, 64)) }, nil},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			dir, frames := build(t)
+			c.edit(t, filepath.Join(dir, batchesName), frames)
+			w, err := openErr(dir, newClock(testT+60_000))
+			if err == nil {
+				err = w.Close()
+			}
+			if !errors.Is(err, c.want) {
+				t.Fatalf("Open: %v, want %v", err, c.want)
+			}
+			if c.want != nil {
+				return
+			}
+			got := verify(t, dir, keysOf(t, testKDev))
+			var with []uint64
+			for _, b := range got {
+				if b.Row.Receipt != nil {
+					with = append(with, b.Row.B)
+				}
+			}
+			if len(got) != 3 || !slices.Equal(with, []uint64{1, 2}) {
+				t.Errorf("after Open, %d batches, with receipts for %v; want 3, with receipts for batches 1 and 2", len(got), with)
+			}
+		})
+	}
 }
 
 // TestFiles checks the layout of the files: the chain frame, a record

@@ -105,9 +105,27 @@ func (a *appendFile) cut(size int64) error {
 		return err
 	}
 	a.size = size
+	return a.sync()
+}
+
+// sync flushes the file. The caller holds the lock its writes take, so
+// a.size is what the flush covers.
+func (a *appendFile) sync() error { return a.syncTo(a.size) }
+
+// syncTo flushes the file, which holds at least size bytes once the flush
+// is done: seal reads the size under the writer's lock and flushes without
+// it, while records go on being written.
+func (a *appendFile) syncTo(size int64) error {
+	if syncHook != nil {
+		syncHook(a.name, size)
+	}
 	return a.f.Sync()
 }
 
-func (a *appendFile) sync() error { return a.f.Sync() }
+// syncHook, when set, hears of each flush just before it is made: the file
+// and how much of it the flush covers. A power cut can't take away what a
+// flush covered, and TestCrashLoop uses it to cut no more than a power cut
+// can. It is nil outside tests.
+var syncHook func(name string, size int64)
 
 func (a *appendFile) close() error { return a.f.Close() }

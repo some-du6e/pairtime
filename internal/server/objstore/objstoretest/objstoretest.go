@@ -12,6 +12,10 @@
 // It answers path-style requests, /<bucket>/<key>, and virtual-hosted
 // ones whose host starts with "<bucket>.". Like S3, it keeps the
 // x-amz-meta-* headers a put carries and returns them on GET and HEAD.
+// It takes multipart uploads with R2's rules: every part but the last at
+// least MinPartSize and all of one size, and If-None-Match: * evaluated
+// when CompleteMultipartUpload would make the object. GetBucketVersioning
+// answers what SetVersioning set.
 package objstoretest
 
 import (
@@ -62,9 +66,41 @@ type Server struct {
 	requests []Request
 	faults   []fault
 	nextID   int
+	uploads  map[string]*upload
+	// matched holds FailMatching's faults.
+	matched []fault
+	// versioning holds what SetVersioning set, by bucket.
+	versioning map[string]string
+	// ignoreIfNoneMatch holds the buckets that WriteOnceIgnored set.
+	ignoreIfNoneMatch map[string]bool
 	// Now is the server's clock, for checking X-Amz-Date. It defaults to
 	// time.Now; set it before the first request.
 	Now func() time.Time
+	// MinPartSize is the smallest part but the last that a multipart
+	// upload may have: S3's and R2's 5 MiB unless a test lowers it. Set it
+	// before the first request.
+	MinPartSize int
+}
+
+// NotImplemented is the versioning state that makes GetBucketVersioning
+// answer 501 NotImplemented, as R2 does.
+const NotImplemented = "not implemented"
+
+// AccessDenied is the versioning state that makes GetBucketVersioning
+// answer 403 AccessDenied, as a store does to a key scoped to objects.
+const AccessDenied = "access denied"
+
+// CutBody, as the status of FailAfter or FailMatching with after set,
+// answers 200 and then closes the connection halfway through the body, as
+// when a store's answer is lost after its headers.
+const CutBody = -1
+
+// upload is a multipart upload in progress.
+type upload struct {
+	bucket, key string
+	contentType string
+	meta        http.Header
+	parts       map[int][]byte
 }
 
 type object struct {
@@ -89,11 +125,13 @@ type Request struct {
 
 // fault is an answer forced on the next request: an S3 error, or, with
 // status 0, a connection closed without an answer. With after set, the
-// server carries the request out first.
+// server carries the request out first. With match set, it waits for the
+// first request match accepts instead.
 type fault struct {
 	status int
 	code   string
 	after  bool
+	match  func(*http.Request) bool
 }
 
 // New starts a server holding the named, empty buckets, and closes it when
@@ -113,7 +151,10 @@ func NewTLS(t testing.TB, buckets ...string) *Server {
 }
 
 func start(t testing.TB, newServer func(http.Handler) *httptest.Server, buckets []string) *Server {
-	s := &Server{buckets: make(map[string]map[string]*object), Now: time.Now}
+	s := &Server{
+		buckets: make(map[string]map[string]*object), Now: time.Now, MinPartSize: 5 << 20,
+		uploads: make(map[string]*upload), versioning: make(map[string]string), ignoreIfNoneMatch: make(map[string]bool),
+	}
 	for _, b := range buckets {
 		s.buckets[b] = make(map[string]*object)
 	}
@@ -146,6 +187,18 @@ func (s *Server) FailAfter(n, status int, code string) {
 	}
 }
 
+// FailMatching is Fail, or FailAfter when after is set, for the next n
+// requests that match accepts, wherever they come. It goes before the
+// faults of Fail and FailAfter, which wait for the requests it doesn't
+// match.
+func (s *Server) FailMatching(n int, match func(*http.Request) bool, status int, code string, after bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for range n {
+		s.matched = append(s.matched, fault{status: status, code: code, after: after, match: match})
+	}
+}
+
 // Requests returns the requests received so far, oldest first.
 func (s *Server) Requests() []Request {
 	s.mu.Lock()
@@ -174,6 +227,36 @@ func (s *Server) SetObject(bucket, key string, data []byte) {
 		s.buckets[bucket] = make(map[string]*object)
 	}
 	s.store(bucket, key, data, "application/octet-stream", nil)
+}
+
+// SetVersioning sets what GetBucketVersioning answers for bucket: "" for
+// a bucket whose versioning was never turned on, "Enabled", "Suspended",
+// or NotImplemented. The server never keeps old versions either way.
+func (s *Server) SetVersioning(bucket, state string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.versioning[bucket] = state
+}
+
+// WriteOnceIgnored makes bucket ignore If-None-Match, as a store without
+// conditional writes would: a second write-once put replaces the object.
+func (s *Server) WriteOnceIgnored(bucket string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.ignoreIfNoneMatch[bucket] = true
+}
+
+// Uploads returns the keys of the multipart uploads that were started and
+// neither completed nor aborted, sorted.
+func (s *Server) Uploads() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var keys []string
+	for _, u := range s.uploads {
+		keys = append(keys, u.bucket+"/"+u.key)
+	}
+	slices.Sort(keys)
+	return keys
 }
 
 // Keys returns the keys in bucket, sorted.
@@ -213,7 +296,11 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 	s.nextID++
 	id := "fake-" + strconv.Itoa(s.nextID)
 	var f *fault
-	if len(s.faults) > 0 {
+	if i := slices.IndexFunc(s.matched, func(f fault) bool { return f.match(r) }); i >= 0 {
+		m := s.matched[i]
+		f = &m
+		s.matched = slices.Delete(s.matched, i, i+1)
+	} else if len(s.faults) > 0 {
 		f = &s.faults[0]
 		s.faults = s.faults[1:]
 	}
@@ -227,6 +314,13 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 		if f.status == 0 {
 			s.drop(w, r)
 			return
+		}
+		if f.status == CutBody {
+			s.record(r, http.StatusOK)
+			w.Header().Set("Content-Length", strconv.Itoa(len(a.body)+64))
+			w.WriteHeader(http.StatusOK)
+			w.Write(a.body[:len(a.body)/2])
+			panic(http.ErrAbortHandler)
 		}
 		msg := "injected by the test"
 		if f.after {
@@ -296,22 +390,23 @@ func (s *Server) handle(r *http.Request, id string) answer {
 	if !ok {
 		return s3error(http.StatusNotFound, "NoSuchBucket", "The specified bucket does not exist", id)
 	}
+	q := r.URL.Query()
 	if key == "" {
-		if r.Method == http.MethodGet && r.URL.Query().Get("list-type") == "2" {
-			return s.list(objects, bucket, r.URL.Query(), id)
+		if r.Method == http.MethodGet && q.Get("list-type") == "2" {
+			return s.list(objects, bucket, q, id)
 		}
-		return s3error(http.StatusNotImplemented, "NotImplemented", "the test server lists objects and nothing else on a bucket", id)
+		if r.Method == http.MethodGet && q.Has("versioning") {
+			return s.versioningAnswer(bucket, id)
+		}
+		return s3error(http.StatusNotImplemented, "NotImplemented", "the test server lists objects and answers GetBucketVersioning, and nothing else on a bucket", id)
+	}
+	if q.Has("uploads") || q.Has("uploadId") {
+		return s.multipart(r, objects, bucket, key, body, id)
 	}
 	switch r.Method {
 	case http.MethodPut:
-		switch m := r.Header.Get("If-None-Match"); m {
-		case "":
-		case "*":
-			if _, exists := objects[key]; exists {
-				return s3error(http.StatusPreconditionFailed, "PreconditionFailed", "At least one of the pre-conditions you specified did not hold", id)
-			}
-		default:
-			return s3error(http.StatusNotImplemented, "NotImplemented", "If-None-Match takes only *", id)
+		if a, refused := s.precondition(r, objects, bucket, key, id); refused {
+			return a
 		}
 		ctype := r.Header.Get("Content-Type")
 		if ctype == "" {
@@ -337,6 +432,136 @@ func (s *Server) handle(r *http.Request, id string) answer {
 	case http.MethodDelete:
 		delete(objects, key)
 		return answer{status: http.StatusNoContent}
+	}
+	return s3error(http.StatusMethodNotAllowed, "MethodNotAllowed", "The specified method is not allowed against this resource.", id)
+}
+
+// precondition checks a write's If-None-Match against key, and reports
+// the answer when the write may not go ahead. Call it with s.mu held.
+func (s *Server) precondition(r *http.Request, objects map[string]*object, bucket, key, id string) (answer, bool) {
+	switch m := r.Header.Get("If-None-Match"); m {
+	case "":
+	case "*":
+		if _, exists := objects[key]; exists && !s.ignoreIfNoneMatch[bucket] {
+			return s3error(http.StatusPreconditionFailed, "PreconditionFailed", "At least one of the pre-conditions you specified did not hold", id), true
+		}
+	default:
+		return s3error(http.StatusNotImplemented, "NotImplemented", "If-None-Match takes only *", id), true
+	}
+	return answer{}, false
+}
+
+// versioningAnswer answers GetBucketVersioning. Call it with s.mu held.
+func (s *Server) versioningAnswer(bucket, id string) answer {
+	state := s.versioning[bucket]
+	switch state {
+	case NotImplemented:
+		return s3error(http.StatusNotImplemented, "NotImplemented", "GetBucketVersioning not implemented", id)
+	case AccessDenied:
+		return s3error(http.StatusForbidden, "AccessDenied", "Access Denied", id)
+	}
+	var b bytes.Buffer
+	b.WriteString(xml.Header + `<VersioningConfiguration xmlns="http://s3.amazonaws.com/doc/2006-03-01/">`)
+	if state != "" {
+		b.WriteString("<Status>")
+		xml.EscapeText(&b, []byte(state))
+		b.WriteString("</Status>")
+	}
+	b.WriteString("</VersioningConfiguration>")
+	return answer{status: http.StatusOK, header: http.Header{"Content-Type": {"application/xml"}}, body: b.Bytes()}
+}
+
+// multipart answers CreateMultipartUpload, UploadPart,
+// CompleteMultipartUpload and AbortMultipartUpload. Call it with s.mu
+// held.
+func (s *Server) multipart(r *http.Request, objects map[string]*object, bucket, key string, body []byte, id string) answer {
+	q := r.URL.Query()
+	if r.Method == http.MethodPost && q.Has("uploads") {
+		s.nextID++
+		// A '+' and a '/', which the client must percent-encode in the
+		// query, as S3's upload ids can hold both.
+		uploadID := "up+load/" + strconv.Itoa(s.nextID) + "~x.y"
+		ctype := r.Header.Get("Content-Type")
+		if ctype == "" {
+			ctype = "binary/octet-stream"
+		}
+		s.uploads[uploadID] = &upload{bucket: bucket, key: key, contentType: ctype, meta: userMeta(r.Header), parts: make(map[int][]byte)}
+		var b bytes.Buffer
+		b.WriteString(xml.Header + `<InitiateMultipartUploadResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Bucket>`)
+		xml.EscapeText(&b, []byte(bucket))
+		b.WriteString("</Bucket><Key>")
+		xml.EscapeText(&b, []byte(key))
+		b.WriteString("</Key><UploadId>")
+		xml.EscapeText(&b, []byte(uploadID))
+		b.WriteString("</UploadId></InitiateMultipartUploadResult>")
+		return answer{status: http.StatusOK, header: http.Header{"Content-Type": {"application/xml"}}, body: b.Bytes()}
+	}
+	u, ok := s.uploads[q.Get("uploadId")]
+	if !ok || u.bucket != bucket || u.key != key {
+		return s3error(http.StatusNotFound, "NoSuchUpload", "The specified multipart upload does not exist.", id)
+	}
+	switch r.Method {
+	case http.MethodPut:
+		n, err := strconv.Atoi(q.Get("partNumber"))
+		if err != nil || n < 1 || n > 10000 {
+			return s3error(http.StatusBadRequest, "InvalidArgument", "Part number must be an integer between 1 and 10000, inclusive", id)
+		}
+		u.parts[n] = slices.Clone(body)
+		sum := md5.Sum(body)
+		return answer{status: http.StatusOK, header: http.Header{"Etag": {`"` + hex.EncodeToString(sum[:]) + `"`}}, body: []byte{}}
+	case http.MethodDelete:
+		delete(s.uploads, q.Get("uploadId"))
+		return answer{status: http.StatusNoContent}
+	case http.MethodPost:
+		var req struct {
+			Parts []struct {
+				PartNumber int    `xml:"PartNumber"`
+				ETag       string `xml:"ETag"`
+			} `xml:"Part"`
+		}
+		if err := xml.Unmarshal(body, &req); err != nil || len(req.Parts) == 0 {
+			return s3error(http.StatusBadRequest, "MalformedXML", "The XML you provided was not well-formed or did not validate against our published schema", id)
+		}
+		var data []byte
+		var sums []byte
+		size := -1
+		for i, p := range req.Parts {
+			part, ok := u.parts[p.PartNumber]
+			sum := md5.Sum(part)
+			if !ok || p.ETag != `"`+hex.EncodeToString(sum[:])+`"` {
+				return s3error(http.StatusBadRequest, "InvalidPart", "One or more of the specified parts could not be found.", id)
+			}
+			if i > 0 && p.PartNumber <= req.Parts[i-1].PartNumber {
+				return s3error(http.StatusBadRequest, "InvalidPartOrder", "The list of parts was not in ascending order.", id)
+			}
+			last := i == len(req.Parts)-1
+			if !last && len(part) < s.MinPartSize {
+				return s3error(http.StatusBadRequest, "EntityTooSmall", "Your proposed upload is smaller than the minimum allowed object size.", id)
+			}
+			if !last && size >= 0 && len(part) != size {
+				return s3error(http.StatusBadRequest, "InvalidPart", "All non-trailing parts must have the same length.", id)
+			}
+			size = len(part)
+			data = append(data, part...)
+			sums = append(sums, sum[:]...)
+		}
+		if a, refused := s.precondition(r, objects, bucket, key, id); refused {
+			// The upload stays open, as on S3: the client aborts it.
+			return a
+		}
+		o := s.store(bucket, key, data, u.contentType, u.meta)
+		all := md5.Sum(sums)
+		o.etag = `"` + hex.EncodeToString(all[:]) + "-" + strconv.Itoa(len(req.Parts)) + `"`
+		delete(s.uploads, q.Get("uploadId"))
+		var b bytes.Buffer
+		b.WriteString(xml.Header + `<CompleteMultipartUploadResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Bucket>`)
+		xml.EscapeText(&b, []byte(bucket))
+		b.WriteString("</Bucket><Key>")
+		xml.EscapeText(&b, []byte(key))
+		b.WriteString("</Key><ETag>")
+		xml.EscapeText(&b, []byte(o.etag))
+		b.WriteString("</ETag></CompleteMultipartUploadResult>")
+		return answer{status: http.StatusOK, header: http.Header{"Content-Type": {"application/xml"}}, body: b.Bytes()}
 	}
 	return s3error(http.StatusMethodNotAllowed, "MethodNotAllowed", "The specified method is not allowed against this resource.", id)
 }
