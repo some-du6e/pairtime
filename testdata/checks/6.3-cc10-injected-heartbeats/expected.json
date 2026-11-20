@@ -1,11 +1,11 @@
 {
   "scenario": "6.3-cc10-injected-heartbeats",
   "title": "Editor heartbeats while no editor of the project has focus",
-  "story": "A script posts four of D's VS Code heartbeats to the local WakaTime port between 14:15 and 14:19, while Sam reads A's answer in iTerm. macOS skips the peer-process check (DESIGN 5.7), so they arrive as via editor.",
+  "story": "A script posts four of D's VS Code heartbeats to the local WakaTime port between 14:19 and 14:20:30, while Sam types A's next prompt in iTerm. macOS skips the peer-process check (DESIGN 5.7), so they arrive as via editor.",
   "base": "6.3",
   "edits": [
     "The log readers' copies of A's and B's prompts: Claude Code's transcript and Codex's rollout file, 0.6 to 1.5 s after each hook. Cursor's E has no v1 log reader.",
-    "Four editor.activity edits for D at 14:15:10, 14:16:25, 14:17:40 and 14:18:55, while iTerm's window 1, hosting A, has focus."
+    "Four editor.activity edits for D at 14:19:10, 14:19:35, 14:19:55 and 14:20:20, each in a slot where Sam is typing, while iTerm's window 1, hosting A, has focus."
   ],
   "devices": [
     {
@@ -103,10 +103,34 @@
       "result": "fail",
       "counts": {"editor_acts": 14, "with_focus": 10, "without_focus": 4},
       "items": [
-        {"t": 1795904110000, "editor": "vscode", "project_key": "p_dedc43f1d319", "focus": "terminal"},
-        {"t": 1795904185000, "editor": "vscode", "project_key": "p_dedc43f1d319", "focus": "terminal"},
-        {"t": 1795904260000, "editor": "vscode", "project_key": "p_dedc43f1d319", "focus": "terminal"},
-        {"t": 1795904335000, "editor": "vscode", "project_key": "p_dedc43f1d319", "focus": "terminal"}
+        {
+          "t": 1795904350000,
+          "editor": "vscode",
+          "project_key": "p_dedc43f1d319",
+          "focus": "terminal",
+          "focus_project": "p_0e6a8e0b849e"
+        },
+        {
+          "t": 1795904375000,
+          "editor": "vscode",
+          "project_key": "p_dedc43f1d319",
+          "focus": "terminal",
+          "focus_project": "p_0e6a8e0b849e"
+        },
+        {
+          "t": 1795904395000,
+          "editor": "vscode",
+          "project_key": "p_dedc43f1d319",
+          "focus": "terminal",
+          "focus_project": "p_0e6a8e0b849e"
+        },
+        {
+          "t": 1795904420000,
+          "editor": "vscode",
+          "project_key": "p_dedc43f1d319",
+          "focus": "terminal",
+          "focus_project": "p_0e6a8e0b849e"
+        }
       ]
     },
     "CC11": {
@@ -119,6 +143,7 @@
   "known_limit": null,
   "errata": ["2026-11-19-check-readings"],
   "notes": [
+    "Each heartbeat has key input in its slot, so it passes every test SM 2.3 sets a typed edit but editor focus on its project. CC10 fails it whether it counts every editor act of an anchor's kind or only those that pass SM 2.3's other tests.",
     "The heartbeats open no anchor, since a typed edit needs editor focus on its project (SM 2.3), and iTerm's slots resolve through its hosted session (SM 3.2), so credit is 6.3's."
   ]
 }

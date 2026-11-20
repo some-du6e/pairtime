@@ -19,7 +19,7 @@ Each failing scenario fails one check. Every other check passes on the same data
 | CC7 chain integrity | every scenario but two | `4.2-cc7-dropped-record`, `4.2-cc7-dropped-batch` | |
 | CC8 content-derived inputs | `4.2-clean`, `4.2-cc8-removed-spans` | `4.2-cc8-false-sketch`, `4.2-cc8-made-up-key`, `4.2-cc8-hidden-shingles`, `4.2-cc8-false-class`, `4.2-cc8-inflated-length` | `4.2-cc2-send-keys`: nothing drawn |
 | CC9 session integrity | `4.2-clean`, `6.2-clean`, `6.3-clean` | `6.3-cc9-moved-turn`, `6.3-cc9-orphan-turn`, `4.2-cc9-parent-class` | |
-| CC10 editor vs focus | `6.2-clean`, `6.3-clean` | `6.3-cc10-injected-heartbeats` | the `4.2-*` scenarios: no editor |
+| CC10 editor vs focus | `6.2-clean`, `6.3-clean` | `6.3-cc10-injected-heartbeats`: no editor has focus; `6.3-cc10-wrong-project`: the focused editor is on another project | the `4.2-*` scenarios: no editor |
 | CC11 typing, module on | `4.2-clean` | `4.2-cc11-pasted` | the `6.2-*` and `6.3-*` scenarios: module off; `4.2-cc2-send-keys`: no human prompt |
 
 `4.2-cc8-removed-spans` passes every check although its client lied. It is the limit ledger-v1.md 10.8 states and [issue #15](https://github.com/some-du6e/pairtime/issues/15) asks Karim to decide on. Its `known_limit` says so.
@@ -52,7 +52,8 @@ Each failing scenario fails one check. Every other check passes on the same data
 | `6.3-cc6-moved-minute` | 6.3 | The live bucket of 14:18 credits B with A's minute |
 | `6.3-cc9-moved-turn` | 6.3 | A's second turn is labeled with project D |
 | `6.3-cc9-orphan-turn` | 6.3 | A's second turn's agent records move to a session made up for D, without its prompt |
-| `6.3-cc10-injected-heartbeats` | 6.3 | A script posts D's heartbeats while iTerm has focus |
+| `6.3-cc10-injected-heartbeats` | 6.3 | A script posts D's heartbeats while iTerm has focus and Sam types A's prompt |
+| `6.3-cc10-wrong-project` | 6.3 | A script posts D's heartbeats while Cursor, on E, has focus |
 
 Each scenario's `expected.json` tells its story, lists its edits and notes what its results rely on.
 

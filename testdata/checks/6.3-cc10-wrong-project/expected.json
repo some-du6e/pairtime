@@ -1,0 +1,143 @@
+{
+  "scenario": "6.3-cc10-wrong-project",
+  "title": "Editor heartbeats for one project while the editor shows another",
+  "story": "While Sam hand-edits E in Cursor, a script posts three of D's VS Code heartbeats to the local WakaTime port. An editor has focus, so they pass the app half of CC10, but the focused window is on E. SM 3.2 resolves an editor slot to the project of the most recent heartbeat, so they pull their slots, and the typed-edit leads in them, from E into D.",
+  "base": "6.3",
+  "edits": [
+    "The log readers' copies of A's and B's prompts: Claude Code's transcript and Codex's rollout file, 0.6 to 1.5 s after each hook. Cursor's E has no v1 log reader.",
+    "Three editor.activity edits for D at 14:06:40, 14:08:05 and 14:11:50, each in a slot where Sam is typing, while Cursor's window, whose focus record names E, has focus."
+  ],
+  "devices": [
+    {
+      "device_id": "d_b3b8fb30978a",
+      "base": "6.3",
+      "os": "macos",
+      "input_keys": true,
+      "typing_module": false,
+      "vm": false,
+      "reveals": true
+    }
+  ],
+  "submission": {
+    "projects": ["p_0e6a8e0b849e", "p_a73dbaeaf36c", "p_dedc43f1d319", "p_418d8413d1cf"],
+    "window": {"start": "2026-11-28T22:00:00Z", "end": "2026-11-28T22:30:00Z"}
+  },
+  "live": {
+    "from": "rescore",
+    "mutations": []
+  },
+  "fails": ["CC10"],
+  "checks": {
+    "CC1": {
+      "result": "pass",
+      "counts": {"hook_prompts": 6, "log_entries": 4, "matched": 4, "hook_only": 0, "log_only": 0, "not_computable": 2},
+      "items": [
+        {
+          "turn_key": "t_1a04ac19492b",
+          "t": 1795903740000,
+          "harness": "cursor",
+          "status": "not_computable",
+          "why": "no v1 log reader for this harness (DESIGN 5.1)"
+        },
+        {
+          "turn_key": "t_108c975d8196",
+          "t": 1795903980000,
+          "harness": "cursor",
+          "status": "not_computable",
+          "why": "no v1 log reader for this harness (DESIGN 5.1)"
+        }
+      ]
+    },
+    "CC2": {
+      "result": "pass",
+      "counts": {"prompts": 6, "with_input_and_focus": 6, "no_input": 0, "no_focus": 0}
+    },
+    "CC3": {
+      "result": "pass",
+      "counts": {"commits": 1, "flagged": 0},
+      "items": [
+        {
+          "sha": "b578278d53a73afd97d403fe61ab940c4cff4183",
+          "t": 1795904040000,
+          "changed_lines": 29,
+          "recorded_lines": 29,
+          "ignored_lines": 0,
+          "unexplained_lines": 0,
+          "flagged": false
+        }
+      ]
+    },
+    "CC4": {
+      "result": "pass",
+      "counts": {"commits": 1, "seen_out_of_order": 0, "pushed_before_observed": 0, "forge_mismatch": 0}
+    },
+    "CC5": {
+      "result": "pass",
+      "counts": {"devices": 1, "slots_credited_twice": 0},
+      "basis": "one device, whose scorer credits each slot to at most one project (SM 3.1)"
+    },
+    "CC6": {
+      "result": "pass",
+      "counts": {"minutes_mismatched": 0, "held_s": 0},
+      "basis": "Stated, not recomputed: the live buckets are pkg/score over this device's events.jsonl, which the reveal holds in full, so the server's re-score is the same computation and every minute reproduces."
+    },
+    "CC7": {
+      "result": "pass",
+      "counts": {
+        "batches": 51,
+        "records": 258,
+        "missing_batches": 0,
+        "batch_gaps": 0,
+        "seq_gaps": 0,
+        "count_mismatches": 0,
+        "root_mismatches": 0,
+        "head_mismatches": 0,
+        "body_mismatches": 0,
+        "held_minutes": 0
+      }
+    },
+    "CC9": {
+      "result": "pass",
+      "counts": {"sessions": 3, "multi_project_sessions": 0, "orphan_turns": 0, "parent_class_changes": 0}
+    },
+    "CC10": {
+      "result": "fail",
+      "counts": {"editor_acts": 13, "with_focus": 10, "without_focus": 3},
+      "items": [
+        {
+          "t": 1795903600000,
+          "editor": "vscode",
+          "project_key": "p_dedc43f1d319",
+          "focus": "editor",
+          "focus_project": "p_418d8413d1cf"
+        },
+        {
+          "t": 1795903685000,
+          "editor": "vscode",
+          "project_key": "p_dedc43f1d319",
+          "focus": "editor",
+          "focus_project": "p_418d8413d1cf"
+        },
+        {
+          "t": 1795903910000,
+          "editor": "vscode",
+          "project_key": "p_dedc43f1d319",
+          "focus": "editor",
+          "focus_project": "p_418d8413d1cf"
+        }
+      ]
+    },
+    "CC11": {
+      "result": "not_computable",
+      "counts": {"prompts": 0, "typed_chars": 0, "key_downs": 0, "injected": 0, "too_few_keys": 0, "injected_prompts": 0},
+      "reason": "the typing module is off on this device"
+    }
+  },
+  "not_exercised": {"CC8": "SM 6.3 quotes one prompt of seven, so the scenario commits and reveals no text"},
+  "known_limit": null,
+  "errata": ["2026-11-19-check-readings"],
+  "notes": [
+    "The focused window is an editor, so a check of the app class alone passes all three. Only the project comparison fails them: the focus record says E, the heartbeats say D.",
+    "The live buckets are the client's score of these records, and the re-score reads the same ones, so CC6 passes, and CC5 states no slot count because the scorer moves slots between projects here. D has no commit and E's commit counts only E's records, so CC3 is 6.3's."
+  ]
+}

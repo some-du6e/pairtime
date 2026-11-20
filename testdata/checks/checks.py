@@ -1057,7 +1057,8 @@ def cc10(events, sub):
         else:
             counts["without_focus"] += 1
             items.append({"t": e["t"], "editor": d["editor"], "project_key": e["project_key"],
-                          "focus": f["data"]["app_class"] if f else None})
+                          "focus": f["data"]["app_class"] if f else None,
+                          "focus_project": f["data"].get("focus_project") if f else None})
     if not counts["editor_acts"]:
         return outcome("not_computable", counts, reason="no editor act in the submission")
     return outcome("fail" if items else "pass", counts, items)

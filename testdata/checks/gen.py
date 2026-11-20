@@ -1019,26 +1019,64 @@ def s_63_cc9(out):
 
 def s_63_cc10(out):
     sc = Scenario("6.3-cc10-injected-heartbeats", "Editor heartbeats while no editor of the project has focus",
-                  "A script posts four of D's VS Code heartbeats to the local WakaTime port between 14:15 and "
-                  "14:19, while Sam reads A's answer in iTerm. macOS skips the peer-process check (DESIGN 5.7), so "
-                  "they arrive as via editor.",
+                  "A script posts four of D's VS Code heartbeats to the local WakaTime port between 14:19 and "
+                  "14:20:30, while Sam types A's next prompt in iTerm. macOS skips the peer-process check (DESIGN "
+                  "5.7), so they arrive as via editor.",
                   base=S63, projects=[A, B, D, E], window=W63)
     dev = s63(sc)
     proto = dev.find("editor.activity")[-1]
-    for t in (1795904110000, 1795904185000, 1795904260000, 1795904335000):
+    times = (1795904350000, 1795904375000, 1795904395000, 1795904420000)
+    for t in times:
+        check(dev.keys_in_slot(t - t % ck.SLOT_MS), f"Sam is typing in the slot of {t}")
         dev.insert(dev.like(proto, t, "editor.activity",
                             {"editor": "vscode", "act": "edit", "file_hash": proto["data"]["file_hash"],
                              "lines_changed": 3, "edit_source": "human"}))
-    sc.edit("Four editor.activity edits for D at 14:15:10, 14:16:25, 14:17:40 and 14:18:55, while iTerm's "
-            "window 1, hosting A, has focus.")
+    sc.edit("Four editor.activity edits for D at 14:19:10, 14:19:35, 14:19:55 and 14:20:20, each in a slot where "
+            "Sam is typing, while iTerm's window 1, hosting A, has focus.")
     dev.finish()
     sc.slots = {dev.id: s63_slots()}
     sc.commits = s63_commit(dev)
     sc.fails = ["CC10"]
     s63_state(sc)
     sc.state("CC10", "fail", editor_acts=14, with_focus=10, without_focus=4)
+    sc.notes.append("Each heartbeat has key input in its slot, so it passes every test SM 2.3 sets a typed edit "
+                    "but editor focus on its project. CC10 fails it whether it counts every editor act of an "
+                    "anchor's kind or only those that pass SM 2.3's other tests.")
     sc.notes.append("The heartbeats open no anchor, since a typed edit needs editor focus on its project (SM 2.3), "
                     "and iTerm's slots resolve through its hosted session (SM 3.2), so credit is 6.3's.")
+    sc.build(out)
+
+
+def s_63_cc10_project(out):
+    sc = Scenario("6.3-cc10-wrong-project", "Editor heartbeats for one project while the editor shows another",
+                  "While Sam hand-edits E in Cursor, a script posts three of D's VS Code heartbeats to the local "
+                  "WakaTime port. An editor has focus, so they pass the app half of CC10, but the focused window "
+                  "is on E. SM 3.2 resolves an editor slot to the project of the most recent heartbeat, so they "
+                  "pull their slots, and the typed-edit leads in them, from E into D.",
+                  base=S63, projects=[A, B, D, E], window=W63)
+    dev = s63(sc)
+    proto = dev.find("editor.activity")[-1]
+    times = (1795903600000, 1795903685000, 1795903910000)
+    for t in times:
+        check(dev.keys_in_slot(t - t % ck.SLOT_MS), f"Sam is typing in the slot of {t}")
+        f = ck.focus_at(dev.events, t)
+        check(f["data"]["app_class"] == "editor" and f["data"]["focus_project"] == E, "Cursor on E has focus")
+        dev.insert(dev.like(proto, t, "editor.activity",
+                            {"editor": "vscode", "act": "edit", "file_hash": proto["data"]["file_hash"],
+                             "lines_changed": 3, "edit_source": "human"}))
+    sc.edit("Three editor.activity edits for D at 14:06:40, 14:08:05 and 14:11:50, each in a slot where Sam is "
+            "typing, while Cursor's window, whose focus record names E, has focus.")
+    dev.finish()
+    sc.commits = s63_commit(dev)
+    sc.fails = ["CC10"]
+    s63_state(sc, cc5=False)
+    sc.state("CC5", "pass", devices=1, slots_credited_twice=0)
+    sc.state("CC10", "fail", editor_acts=13, with_focus=10, without_focus=3)
+    sc.notes.append("The focused window is an editor, so a check of the app class alone passes all three. Only "
+                    "the project comparison fails them: the focus record says E, the heartbeats say D.")
+    sc.notes.append("The live buckets are the client's score of these records, and the re-score reads the same "
+                    "ones, so CC6 passes, and CC5 states no slot count because the scorer moves slots between "
+                    "projects here. D has no commit and E's commit counts only E's records, so CC3 is 6.3's.")
     sc.build(out)
 
 
@@ -1126,7 +1164,7 @@ def s_63_cc9_orphan(out):
 SCENARIOS = [s_42_clean, s_42_cc1, s_42_cc2, s_42_cc5, s_42_cc7, s_42_cc7_batch, s_42_cc8_false, s_42_cc8_key, s_42_cc8_bare, s_42_cc8_class, s_42_cc8_length,
              s_42_cc8_limit,
              s_42_cc9, s_42_cc11, s_62_clean, s_62_cc3, s_62_cc3_plugin, s_62_cc4_late, s_62_cc4_diffstat, s_63_clean, s_63_cc4_pushed,
-             s_63_cc6, s_63_cc9, s_63_cc9_orphan, s_63_cc10]
+             s_63_cc6, s_63_cc9, s_63_cc9_orphan, s_63_cc10, s_63_cc10_project]
 
 
 def main():
