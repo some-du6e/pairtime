@@ -40,12 +40,13 @@ import (
 const Interval = 60 * time.Second
 
 // Grace is how long a harness process runs before a scan may report it.
-// A session that fires hooks claims its process with its first one,
-// Claude Code's SessionStart, as it starts; Grace leaves that hook time to
-// reach the agent, even through the inbox while the agent restarts. A
-// first hook that comes later, as when Claude Code's folder-trust dialog
-// stays open (DESIGN 5.1), still claims the process, and the session the
-// scan reported goes to Options.Withdraw.
+// A session that fires hooks claims its process with its first hook that
+// reaches the agent over the socket or the pipe, normally Claude Code's
+// SessionStart as it starts; Grace leaves that hook time to arrive. A hook
+// that only the spool delivered claims nothing (DESIGN 5.2). A first such
+// hook that comes later, as when the agent was restarting or Claude Code's
+// folder-trust dialog stays open (DESIGN 5.1), still claims the process,
+// and the session the scan reported goes to Options.Withdraw.
 const Grace = 10 * time.Second
 
 // KickDelay is how long after a focus change the scan runs, so a burst of
@@ -200,9 +201,10 @@ func New(opts Options) *Scanner {
 // Claim records that a hook arrived from inside the harness process host,
 // read on the boot boot (in Options.Boot's terms), so no scan reports the
 // process. The hook path claims the process that platform.HookHost finds
-// in the hook's parent chain. A claim from another boot, such as a hook
-// spooled before the machine restarted, is dropped. When a scan reported
-// the process already, Claim hands that session to Options.Withdraw.
+// in the parent chain the agent walked from a socket or pipe connection,
+// never in a chain a spooled message recorded (DESIGN 5.2). A claim from
+// another boot is dropped. When a scan reported the process already, Claim
+// hands that session to Options.Withdraw.
 func (s *Scanner) Claim(boot string, host platform.Proc) {
 	if boot != s.boot {
 		return
@@ -223,6 +225,11 @@ func (s *Scanner) Claim(boot string, host platform.Proc) {
 		s.opts.Withdraw(sess)
 	}
 }
+
+// ClaimLive is Claim for a process read on the boot the scanner runs on, as
+// the agent's own walk of a hook's connection reads it (DESIGN 3.4;
+// internal/agent/hookpath).
+func (s *Scanner) ClaimLive(host platform.Proc) { s.Claim(s.boot, host) }
 
 // Scan reads the process table once and reports every harness process of
 // this user (Options.Self) that started at least Grace ago, that no hook
@@ -360,6 +367,16 @@ func (s *Scanner) Sessions() map[platform.ID]string {
 		out[id] = sess.Key
 	}
 	return out
+}
+
+// Claimed reports whether a hook has claimed the process id, and no scan
+// has seen it gone since. The hook path forgets the sessions of processes
+// that aren't (internal/agent's hookTies).
+func (s *Scanner) Claimed(id platform.ID) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, ok := s.claimed[id]
+	return ok
 }
 
 func (s *Scanner) running(n int) {

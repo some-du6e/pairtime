@@ -32,3 +32,11 @@ require (
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.12.1 // indirect
 )
+
+// third_party/burntsushi-toml is BurntSushi/toml v1.6.0 with one patch: its
+// internal package reads the local time zone offset on first use instead of
+// at package initialization, which loaded time.Local before main in every
+// pairtime process, and on Windows could read every time zone in the
+// registry (docs/errata/2026-11-20-hook-p95-gate.md). Its PROVENANCE.md has
+// the upstream commit and the patch. Drop this once upstream releases the fix.
+replace github.com/BurntSushi/toml => ./third_party/burntsushi-toml

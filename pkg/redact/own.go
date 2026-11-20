@@ -2,10 +2,7 @@
 
 package redact
 
-import (
-	"regexp"
-	"strings"
-)
+import "strings"
 
 // ownRules are pairtime's own secret rules, for secrets beginners paste
 // that gitleaks v8.30.1 has no rule for. Each runs only on text that holds
@@ -13,7 +10,7 @@ import (
 // never names a gitleaks rule (TestOwnRuleIDs).
 var ownRules = []struct {
 	id, keyword string
-	re          *regexp.Regexp
+	re          *lazyRE
 }{
 	// The password of a URL such as postgres://app:PASSWORD@localhost:5432.
 	// gitleaks only finds one when a keyword such as "password" comes
@@ -21,11 +18,11 @@ var ownRules = []struct {
 	// or ends in a number. The user may be empty, as in redis://:pw@cache,
 	// and the password may hold an @: it runs to the last one before the
 	// host, so p@ss doesn't leave ss behind.
-	{"url-password", "://", regexp.MustCompile(`(?i)\b[a-z][a-z0-9+.-]*://[^\s/:@'"]*:([^\s/'"]+)@`)},
+	{"url-password", "://", lazy(`(?i)\b[a-z][a-z0-9+.-]*://[^\s/:@'"]*:([^\s/'"]+)@`)},
 	// The credential of an Authorization header, as written outside a curl
 	// command, where gitleaks' curl-auth-header doesn't look: in HTTP,
 	// "Authorization: Bearer ...", or in JSON, quoted around the colon.
-	{"authorization-header", "authorization", regexp.MustCompile(`(?i)\bauthorization[ \t]*["']?[ \t]*[:=][ \t]*["']?[ \t]*(?:basic|bearer|token)[ \t]+([\w.~+/=-]+)`)},
+	{"authorization-header", "authorization", lazy(`(?i)\bauthorization[ \t]*["']?[ \t]*[:=][ \t]*["']?[ \t]*(?:basic|bearer|token)[ \t]+([\w.~+/=-]+)`)},
 }
 
 // ownSecrets calls emit for every match of ownRules in text, whose lower
@@ -35,7 +32,7 @@ func ownSecrets(text, lower string, emit func(start, end int, rule string)) {
 		if !strings.Contains(lower, o.keyword) {
 			continue
 		}
-		for _, m := range o.re.FindAllStringSubmatchIndex(text, -1) {
+		for _, m := range o.re.get().FindAllStringSubmatchIndex(text, -1) {
 			if m[2] >= 0 && m[2] < m[3] {
 				emit(m[2], m[3], o.id)
 			}
@@ -44,9 +41,9 @@ func ownSecrets(text, lower string, emit func(start, end int, rule string)) {
 }
 
 var (
-	secretKind = regexp.MustCompile(`(?im)^[ \t]*kind:[ \t]*["']?secret["']?[ \t]*(?:#[^\n]*)?\r?$`)
-	dataKey    = regexp.MustCompile(`^[ \t]*(?:data|stringData):[ \t]*`)
-	entryKey   = regexp.MustCompile(`^(?:[\w.-]+|"[^"]*"|'[^']*')[ \t]*:[ \t]*`)
+	secretKind = lazy(`(?im)^[ \t]*kind:[ \t]*["']?secret["']?[ \t]*(?:#[^\n]*)?\r?$`)
+	dataKey    = lazy(`^[ \t]*(?:data|stringData):[ \t]*`)
+	entryKey   = lazy(`^(?:[\w.-]+|"[^"]*"|'[^']*')[ \t]*:[ \t]*`)
 )
 
 // kubernetesSecretValues calls emit, with gitleaks' kubernetes-secret-yaml
@@ -62,12 +59,12 @@ var (
 // not over a prose view, which blanks a colon before a space.
 func kubernetesSecretValues(text string, emit func(start, end int, rule string)) {
 	const rule = "kubernetes-secret-yaml"
-	if (!strings.Contains(text, "ecret") && !strings.Contains(text, "ECRET")) || !secretKind.MatchString(text) {
+	if (!strings.Contains(text, "ecret") && !strings.Contains(text, "ECRET")) || !secretKind.get().MatchString(text) {
 		return
 	}
 	// Each document runs from one --- line to the next.
 	for _, doc := range yamlDocuments(text) {
-		if !secretKind.MatchString(text[doc[0]:doc[1]]) {
+		if !secretKind.get().MatchString(text[doc[0]:doc[1]]) {
 			continue
 		}
 		block, entries := -1, -1 // indents of the open data key and of its entries
@@ -90,7 +87,7 @@ func kubernetesSecretValues(text string, emit func(start, end int, rule string))
 					entries = indent
 				}
 				value := 0 // where the value starts in content
-				if m := entryKey.FindStringIndex(content); m != nil && indent == entries {
+				if m := entryKey.get().FindStringIndex(content); m != nil && indent == entries {
 					value = m[1]
 				}
 				if value < len(content) {
@@ -98,7 +95,7 @@ func kubernetesSecretValues(text string, emit func(start, end int, rule string))
 				}
 			default:
 				block, entries = -1, -1
-				if m := dataKey.FindStringIndex(line); m != nil {
+				if m := dataKey.get().FindStringIndex(line); m != nil {
 					if rest := line[m[1]:]; rest != "" && !strings.HasPrefix(rest, "#") {
 						// A value on the key's own line, such as {a: b}.
 						emit(at+m[1], at+len(line), rule)

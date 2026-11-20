@@ -138,7 +138,7 @@ func TestPrivateSpool(t *testing.T) {
 					t.Fatal(err)
 				}
 				j := openJournal(t, journal)
-				if _, err := Drain(inbox, j, utcNow); err == nil {
+				if _, err := Drain(inbox, j, stampNow); err == nil {
 					t.Error("Drain read an inbox that others may write in")
 				}
 				if stored, _ := j.Stats(); stored != 0 {
@@ -157,7 +157,7 @@ func TestPrivateSpool(t *testing.T) {
 					t.Fatal(err)
 				}
 				j := openJournal(t, journal)
-				res, err := Drain(inbox, j, utcNow)
+				res, err := Drain(inbox, j, stampNow)
 				if err == nil {
 					t.Error("Drain passed over a file that others may write without a word")
 				}
