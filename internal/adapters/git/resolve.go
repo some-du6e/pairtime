@@ -108,6 +108,10 @@ type Resolver struct {
 	repos    map[string]*RepoProject
 	byRoot   map[string]string // root commit to project key
 	inflight map[string]*flight
+	// gen counts the times cached folders were forgotten, so an answer
+	// worked out across one, say a Rekey after a first commit, isn't put
+	// back into the cache.
+	gen uint64
 }
 
 type dirEntry struct {
@@ -123,6 +127,9 @@ type flight struct {
 	done chan struct{}
 	loc  Location
 	err  error
+	// gone says the first caller's context ended, so its error isn't the
+	// answer for a caller whose context is still live.
+	gone bool
 }
 
 // ProjectMap is the part of the resolver that state.json keeps (DESIGN
@@ -240,6 +247,7 @@ func (r *Resolver) Resolve(ctx context.Context, dir string) (Location, error) {
 
 	r.mu.Lock()
 	e, cached := r.dirs[key]
+	gen := r.gen
 	r.mu.Unlock()
 	if cached {
 		if now.Sub(e.checked) < r.recheck {
@@ -247,10 +255,13 @@ func (r *Resolver) Resolve(ctx context.Context, dir string) (Location, error) {
 		}
 		if r.stillValid(abs, e) {
 			r.mu.Lock()
-			e.checked = now
-			r.dirs[key] = e
-			r.mu.Unlock()
-			return cloneLoc(e.loc), e.err
+			if r.gen == gen {
+				e.checked = now
+				r.dirs[key] = e
+				r.mu.Unlock()
+				return cloneLoc(e.loc), e.err
+			}
+			r.mu.Unlock() // forgotten meanwhile: look again
 		}
 	}
 
@@ -272,7 +283,9 @@ func (r *Resolver) Resolve(ctx context.Context, dir string) (Location, error) {
 	if len(r.dirs) >= maxCachedDirs {
 		clear(r.dirs)
 	}
-	r.dirs[key] = entry
+	if r.gen == gen {
+		r.dirs[key] = entry
+	}
 	r.mu.Unlock()
 	return cloneLoc(loc), err
 }
@@ -282,6 +295,7 @@ func (r *Resolver) Resolve(ctx context.Context, dir string) (Location, error) {
 func (r *Resolver) Forget() {
 	r.mu.Lock()
 	clear(r.dirs)
+	r.gen++
 	r.mu.Unlock()
 }
 
@@ -295,6 +309,7 @@ func (r *Resolver) forgetRepo(commonDir string) {
 			delete(r.dirs, k)
 		}
 	}
+	r.gen++
 	r.mu.Unlock()
 }
 
@@ -303,10 +318,11 @@ func (r *Resolver) forgetRepo(commonDir string) {
 // directory is still the one that was resolved, and a folder without git
 // hasn't gained one.
 func (r *Resolver) stillValid(abs string, e dirEntry) bool {
+	ignored := r.ignored(abs) || r.ignored(canonicalDir(abs))
 	if errors.Is(e.err, ErrIgnored) {
-		return r.ignored(abs)
+		return ignored
 	}
-	if e.err != nil || r.ignored(abs) || r.ignoredLoc(e.loc) {
+	if e.err != nil || ignored || r.ignoredLoc(e.loc) {
 		return false
 	}
 	if e.loc.GitDir != "" {
@@ -314,9 +330,28 @@ func (r *Resolver) stillValid(abs string, e dirEntry) bool {
 			return false
 		}
 		fi, err := os.Stat(e.loc.GitDir)
-		return err == nil && (e.gitDir == nil || os.SameFile(fi, e.gitDir))
+		if err != nil || (e.gitDir != nil && !os.SameFile(fi, e.gitDir)) {
+			return false
+		}
+		// A repo made since between abs and the cached top level, as by
+		// `git init` in a subfolder of a repo, owns abs now.
+		if d := gitAbove(abs); d != "" && !e.loc.Bare && !sameFolder(d, e.loc.Dir) {
+			return false
+		}
+		return true
 	}
 	return gitAbove(abs) == ""
+}
+
+// sameFolder reports whether a and b name one folder, whatever symlinks,
+// junctions or short names either goes through.
+func sameFolder(a, b string) bool {
+	fa, err := os.Stat(a)
+	if err != nil {
+		return false
+	}
+	fb, err := os.Stat(b)
+	return err == nil && os.SameFile(fa, fb)
 }
 
 // gitAbove returns the folder at or above dir that has a .git entry, or "".
@@ -357,6 +392,9 @@ func (r *Resolver) resolveOnce(ctx context.Context, key, abs string) (Location, 
 		r.mu.Unlock()
 		select {
 		case <-f.done:
+			if f.gone && ctx.Err() == nil {
+				return r.resolveOnce(ctx, key, abs) // the first caller gave up, not git
+			}
 			return cloneLoc(f.loc), f.err
 		case <-ctx.Done():
 			return Location{}, ctx.Err()
@@ -367,6 +405,7 @@ func (r *Resolver) resolveOnce(ctx context.Context, key, abs string) (Location, 
 	r.mu.Unlock()
 
 	f.loc, f.err = r.resolve(ctx, abs)
+	f.gone = f.err != nil && ctx.Err() != nil
 	r.mu.Lock()
 	delete(r.inflight, key)
 	r.mu.Unlock()
@@ -375,7 +414,9 @@ func (r *Resolver) resolveOnce(ctx context.Context, key, abs string) (Location, 
 }
 
 func (r *Resolver) resolve(ctx context.Context, abs string) (Location, error) {
-	if r.ignored(abs) {
+	// The folder as given and as it really is: a link into an ignored
+	// part of a repo is as ignored as the part.
+	if r.ignored(abs) || r.ignored(canonicalDir(abs)) {
 		return Location{}, ErrIgnored
 	}
 	if fi, err := os.Stat(abs); err != nil {
@@ -411,7 +452,13 @@ func (r *Resolver) resolve(ctx context.Context, abs string) (Location, error) {
 	if r.ignoredLoc(loc) {
 		return Location{}, ErrIgnored
 	}
-	p, err := r.identify(ctx, abs, info, loc.Dir)
+	// A repo without usable roots is keyed by a folder, which has to be
+	// the same whichever worktree a resolver sees first: the main one's.
+	keyDir := loc.Dir
+	if loc.Linked {
+		keyDir = mainWorktree(info.commonDir)
+	}
+	p, err := r.identify(ctx, abs, info, keyDir)
 	if err != nil {
 		return Location{}, err
 	}

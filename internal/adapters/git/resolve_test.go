@@ -435,6 +435,81 @@ func TestResolve(t *testing.T) {
 			},
 		},
 		{
+			name: "a repo made in a subfolder of a resolved repo owns that subfolder from the next check",
+			run: func(t *testing.T, g *gitEnv) {
+				outer := g.initRepo()
+				outer.commit("outer", map[string]string{"tools/readme.txt": "tools\n"})
+				tools := filepath.Join(outer.dir, "tools")
+				res := g.resolver(ProjectMap{}, Excludes{})
+				before, err := res.Resolve(ctx, tools)
+				if err != nil {
+					t.Fatal(err)
+				}
+				inner := &testRepo{g: g, dir: tools}
+				inner.git("init", "-q")
+				inner.commit("inner", map[string]string{"tool.go": "package tool\n"})
+				want := rootsKey(testSecret, strings.Fields(inner.git("rev-list", "--max-parents=0", "HEAD")))
+				res.recheck = -1 // as if DefaultRecheck had passed
+				after, err := res.Resolve(ctx, tools)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if after.Project != want || after.Project == before.Project || !sameDir(t, after.Dir, tools) {
+					t.Errorf("tools resolves to %s at %s, want the new repo %s, not the outer %s", after.Project, after.Dir, want, before.Project)
+				}
+			},
+		},
+		{
+			name: "a link into an ignored part of a repo is ignored, though the repo's top level isn't",
+			run: func(t *testing.T, g *gitEnv) {
+				r := g.initRepo()
+				r.commit("one", map[string]string{"private/deep/a.txt": "a\n", "public/b.txt": "b\n"})
+				r.write(map[string]string{"private/" + IgnoreFile: ""})
+				// A junction can't stand in: Go's EvalSymlinks leaves it, so
+				// only git would see where it leads.
+				link := linkTo(t, filepath.Join(r.dir, "private", "deep"), false)
+				res := g.resolver(ProjectMap{}, Excludes{})
+				if _, err := res.Resolve(ctx, link); !errors.Is(err, ErrIgnored) {
+					t.Errorf("through the link: %v, want ErrIgnored", err)
+				}
+				if _, err := res.Resolve(ctx, filepath.Join(r.dir, "public")); err != nil {
+					t.Errorf("the public part: %v, want it resolved", err)
+				}
+			},
+		},
+		{
+			name: "a shallow clone's linked worktree and main worktree get one folder key, whichever a resolver sees first",
+			run: func(t *testing.T, g *gitEnv) {
+				up := g.initRepo()
+				up.commit("one", map[string]string{"a.txt": "a\n"})
+				up.commit("two", map[string]string{"a.txt": "b\n"})
+				dir := filepath.Join(t.TempDir(), "shallow")
+				g.git(filepath.Dir(dir), "clone", "-q", "--depth", "1", fileURL(up.dir), dir)
+				wt := filepath.Join(t.TempDir(), "wt")
+				g.git(dir, "worktree", "add", "-q", wt, "-b", "side")
+				var keys []string
+				for _, order := range [][]string{{dir, wt}, {wt, dir}} {
+					res := g.resolver(ProjectMap{}, Excludes{})
+					for _, d := range order {
+						loc, err := res.Resolve(ctx, d)
+						if err != nil {
+							t.Fatal(err)
+						}
+						if loc.Kind != KindShallow {
+							t.Fatalf("%s is %s, want shallow", d, loc.Kind)
+						}
+						keys = append(keys, loc.Project)
+					}
+				}
+				for _, k := range keys[1:] {
+					if k != keys[0] {
+						t.Errorf("keys %v, want one", keys)
+						break
+					}
+				}
+			},
+		},
+		{
 			name: "a folder inside a git directory resolves to its repo with no top level of its own",
 			run: func(t *testing.T, g *gitEnv) {
 				r := g.initRepo()
