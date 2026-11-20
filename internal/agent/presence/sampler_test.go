@@ -105,10 +105,11 @@ func TestSampler(t *testing.T) {
 		inputs       []time.Duration
 		keys         bool
 		failIdle     func(at time.Duration) error
-		noIdle       bool  // the OS has no idle source
-		locked       bool  // the session is locked at the start
-		lockErr      error // reading the lock state fails
-		lockWatchErr error // the lock watch fails to start
+		noIdle       bool           // the OS has no idle source
+		locked       bool           // the session is locked at the start
+		lockErr      error          // reading the lock state fails
+		lockWatchErr error          // the lock watch fails to start
+		before       []func(e *env) // calls made before Start
 		acts         []act
 		end          time.Duration
 		// want lists every record. When it is nil, wantSamples lists the
@@ -145,6 +146,13 @@ func TestSampler(t *testing.T) {
 				"45s presence idle=25",
 				"1m0s presence idle=40",
 			},
+		},
+		{
+			name:   "focus reported before Start makes a context, sampled once Start runs",
+			inputs: []time.Duration{-s(2)},
+			before: []func(e *env){focusOn(event.AppTerminal)},
+			end:    s(16),
+			want:   []string{"0s presence idle=2", "15s presence idle=17"},
 		},
 		{
 			name:   "a hook takes a sample at once, between the boundaries",
@@ -433,6 +441,9 @@ func TestSampler(t *testing.T) {
 						problems = append(problems, msg)
 					},
 				})
+				for _, do := range tt.before {
+					do(e)
+				}
 				e.s.Start()
 				for _, a := range tt.acts {
 					time.Sleep(time.Until(start.Add(a.at)))

@@ -142,7 +142,9 @@ func New(opts Options) *Sampler {
 
 // Start reads the session's lock state and starts the power watches. A
 // source that fails is reported through Options.Problem, and the sampler
-// carries on without it. With no idle source, Start does nothing.
+// carries on without it. With no idle source, Start does nothing. Focus,
+// Hook and HarnessProcesses may come before Start: the gate keeps what
+// they report, and sampling starts with Start.
 func (s *Sampler) Start() {
 	if s.opts.OS.Idle == nil {
 		return
@@ -165,6 +167,8 @@ func (s *Sampler) Start() {
 
 	s.watch("suspend", "suspend and resume go unrecorded", s.opts.OS.WatchSuspend)
 	s.watch("lock", "lock and unlock go unrecorded", s.opts.OS.WatchLock)
+	// A context that went live before Start gets its first sample now.
+	s.update(func(time.Time) {}, false)
 }
 
 // watch starts one power watch, or reports why it couldn't.
@@ -239,6 +243,7 @@ func (s *Sampler) HarnessProcesses(n int) {
 func (s *Sampler) Power(op event.PowerOp) {
 	s.mu.Lock()
 	if !s.started || s.stopped {
+		// Before Start, the lock state Start reads is the one that counts.
 		s.mu.Unlock()
 		return
 	}
@@ -286,12 +291,15 @@ func (s *Sampler) Status() Status {
 func (s *Sampler) update(change func(now time.Time), sampleNow bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if !s.started || s.stopped {
+	if s.stopped {
 		return
 	}
 	now := time.Now()
 	wasLive := s.every != 0
 	change(wall(now))
+	if !s.started {
+		return
+	}
 	if s.g.interval(wall(now)) != 0 && (sampleNow || !wasLive) {
 		s.sample(now, true)
 	}
