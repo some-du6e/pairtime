@@ -52,6 +52,7 @@ type statusReply struct {
 	// Wakeups counts the scheduler's timer firings since the start.
 	Wakeups  uint64            `json:"wakeups"`
 	Jobs     []jobReply        `json:"jobs"`
+	IPC      ipcReply          `json:"ipc"`
 	Problems map[string]string `json:"problems,omitempty"`
 }
 
@@ -75,6 +76,7 @@ func (a *agent) serveStatus(w http.ResponseWriter, r *http.Request) {
 		Port:     a.port,
 		Wakeups:  a.sched.Wakeups(),
 		Jobs:     jobs,
+		IPC:      a.ipcStatus(),
 		Problems: a.currentProblems(),
 	})
 }

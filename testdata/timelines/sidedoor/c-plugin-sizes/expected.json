@@ -1,0 +1,187 @@
+{
+  "fixture": "sidedoor/c-plugin-sizes",
+  "title": "A plugin reporting 50,000-word outputs, with a jiggler on Windows",
+  "sm": "docs/PLAN.md WP-FX4 (c); DESIGN 5.2, 5.3, 6.2 D2 and D19, 6.4",
+  "date": "2026-11-25",
+  "timezone": "America/Chicago",
+  "utc_offset": "-06:00",
+  "os": "windows",
+  "input_keys": false,
+  "evidence": "C",
+  "witness": "witnessed",
+  "device": "d_2fc4578e3d5c",
+  "projects": {"p_3f9b82e02f0c": "the project the plugin's session claims"},
+  "window": {"start": "2026-11-25T20:00:00Z", "end": "2026-11-25T20:12:00Z", "local": "14:00-14:12"},
+  "rows": [
+    {
+      "start": "2026-11-25T20:00:00Z",
+      "minutes": 1,
+      "local": "14:00",
+      "bucket": false,
+      "codes": ["X.no_anchor"]
+    },
+    {
+      "start": "2026-11-25T20:01:00Z",
+      "minutes": 1,
+      "local": "14:01",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_3f9b82e02f0c": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "note": "The first prompt's 220 s lead, from 14:01:00."
+    },
+    {
+      "start": "2026-11-25T20:02:00Z",
+      "minutes": 1,
+      "local": "14:02",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_3f9b82e02f0c": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "note": "The first prompt's 220 s lead, from 14:01:00."
+    },
+    {
+      "start": "2026-11-25T20:03:00Z",
+      "minutes": 1,
+      "local": "14:03",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_3f9b82e02f0c": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "note": "The first prompt's 220 s lead, from 14:01:00."
+    },
+    {
+      "start": "2026-11-25T20:04:00Z",
+      "minutes": 1,
+      "local": "14:04",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_3f9b82e02f0c": {"P": 40, "SUP": 20}
+      },
+      "uncredited": {},
+      "agent_running_s": 20,
+      "note": "The prompt at 14:04:40, then its turn's 20 s base while the claimed agent runs."
+    },
+    {
+      "start": "2026-11-25T20:05:00Z",
+      "minutes": 1,
+      "local": "14:05",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 0,
+      "credit": {},
+      "uncredited": {"X.no_anchor": 40, "X.agent_only": 20},
+      "agent_running_s": 20,
+      "note": "The bucket is empty at 14:05:00 and the 50,000 words at 14:05:20 add nothing to it."
+    },
+    {
+      "start": "2026-11-25T20:06:00Z",
+      "minutes": 1,
+      "local": "14:06",
+      "bucket": false,
+      "codes": ["X.no_anchor"]
+    },
+    {
+      "start": "2026-11-25T20:07:00Z",
+      "minutes": 1,
+      "local": "14:07",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_3f9b82e02f0c": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "note": "The second prompt's lead, from 14:07:00."
+    },
+    {
+      "start": "2026-11-25T20:08:00Z",
+      "minutes": 1,
+      "local": "14:08",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_3f9b82e02f0c": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "note": "The second prompt's lead, from 14:07:00."
+    },
+    {
+      "start": "2026-11-25T20:09:00Z",
+      "minutes": 1,
+      "local": "14:09",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_3f9b82e02f0c": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "note": "The second prompt's lead, from 14:07:00."
+    },
+    {
+      "start": "2026-11-25T20:10:00Z",
+      "minutes": 1,
+      "local": "14:10",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_3f9b82e02f0c": {"P": 40, "SUP": 20}
+      },
+      "uncredited": {},
+      "agent_running_s": 20
+    },
+    {
+      "start": "2026-11-25T20:11:00Z",
+      "minutes": 1,
+      "local": "14:11",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 0,
+      "credit": {},
+      "uncredited": {"X.no_anchor": 40, "X.agent_only": 20},
+      "agent_running_s": 20
+    }
+  ],
+  "totals": {
+    "credited_s": 480,
+    "credited_by_project": {"p_3f9b82e02f0c": 480},
+    "credited_by_reason": {"P": 440, "SUP": 40},
+    "uncredited": {"X.no_anchor": 80, "X.agent_only": 40},
+    "agent_running_s": 80,
+    "level_a_s": 0,
+    "level_b_s": 0,
+    "level_c_s": 480,
+    "via_track_s": 0,
+    "logged_s": 0,
+    "ai_logged_s": 0,
+    "level_c_cap_s": 0
+  },
+  "stated": ["level_a_s", "level_b_s", "logged_s", "ai_logged_s"],
+  "approx": {},
+  "errata": [],
+  "notes": [
+    "Every credited second rests on a plugin anchor: level C, labeled via_plugin.",
+    "Uncapped, each 50,000-word output would refill the bucket to its 600 s cap and turn the 100 s from 14:05:20 to 14:07:00, and the 40 s from 14:11:20 to 14:12:00, into READ. The side-door cap turns that into nothing.",
+    "logged_s and ai_logged_s are 0: every record but the OS ones arrived via plugin (D19)."
+  ]
+}
