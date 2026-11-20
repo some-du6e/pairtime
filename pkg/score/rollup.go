@@ -283,7 +283,9 @@ type DayProject struct {
 }
 
 // Days returns a day rollup for each local day with a derived slot, in
-// order. A minute belongs to the day its start falls in.
+// order. A minute belongs to the local date its start falls on, and a day
+// runs from the first instant of its date to the first instant of the next
+// (dayStart), so it can be 23 or 25 hours long.
 func (r Rollups) Days(d Derived) []Day {
 	loc := r.Location
 	if loc == nil {
@@ -294,33 +296,65 @@ func (r Rollups) Days(d Derived) []Day {
 	flagDay := r.Table.Int(params.DAY_FLAG_S) * 2
 	var out []Day
 	for i := 0; i < len(ms); {
-		local := time.UnixMilli(ms[i].Start).In(loc)
-		y, mo, dd := local.Date()
-		from := time.Date(y, mo, dd, 0, 0, 0, 0, loc)
-		to := from.AddDate(0, 0, 1)
-		j := i
-		for j < len(ms) && ms[j].Start < to.UnixMilli() {
+		y, mo, dd := time.UnixMilli(ms[i].Start).In(loc).Date()
+		// The day takes ms[i] and every minute after it on the same local
+		// date, so each pass moves on by at least one minute.
+		j := i + 1
+		for j < len(ms) && onDate(time.UnixMilli(ms[j].Start).In(loc), y, mo, dd) {
 			j++
 		}
 		day := ms[i:j]
 		i = j
+		date := time.Date(y, mo, dd, 0, 0, 0, 0, time.UTC)
+		ny, nmo, ndd := date.AddDate(0, 0, 1).Date()
+		from, to := dayStart(y, mo, dd, loc).UnixMilli(), dayStart(ny, nmo, ndd, loc).UnixMilli()
 		all := newTally()
 		for _, m := range day {
 			for _, s := range m.Slots {
 				all.addSlot(s, "", r.backfilled(m.Start))
 			}
 		}
-		all.addAnchors(d.Anchors, "", from.UnixMilli(), to.UnixMilli())
+		all.addAnchors(d.Anchors, "", from, to)
 		out = append(out, Day{
-			Rollup:     all.rollup(r.Table, event.LevelDay, "", from.UnixMilli(), to.UnixMilli()),
-			Date:       from.Format(time.DateOnly),
+			Rollup:     all.rollup(r.Table, event.LevelDay, "", from, to),
+			Date:       date.Format(time.DateOnly),
 			AgentOnlyS: float64(all.agentOnly),
-			Projects:   r.dayProjects(d, day, from.UnixMilli(), to.UnixMilli()),
+			Projects:   r.dayProjects(d, day, from, to),
 			BuildDay:   all.byLevel[event.EvidenceA]+all.byLevel[event.EvidenceB] >= buildDay,
 			ReviewFlag: all.halves > flagDay,
 		})
 	}
 	return out
+}
+
+// onDate reports whether t falls on the date y-mo-dd of its location.
+func onDate(t time.Time, y int, mo time.Month, dd int) bool {
+	ty, tmo, tdd := t.Date()
+	return ty == y && tmo == mo && tdd == dd
+}
+
+// dayStart returns the first instant of the local date y-mo-dd in loc.
+// time.Date alone can miss it where a clock change skips or repeats local
+// midnight. Where DST starts at midnight west of UTC, as in
+// America/Santiago, America/Havana and Atlantic/Azores, the date has no
+// 00:00, and time.Date gives 23:00 of the day before: the date starts where
+// that hour's zone ends. Where a clock change repeats midnight, time.Date
+// may give the second one, and the date starts at the first, in the zone
+// before the change.
+func dayStart(y int, mo time.Month, dd int, loc *time.Location) time.Time {
+	t := time.Date(y, mo, dd, 0, 0, 0, 0, loc)
+	if !onDate(t, y, mo, dd) {
+		if _, end := t.ZoneBounds(); !end.IsZero() {
+			t = end
+		}
+	}
+	if start, _ := t.ZoneBounds(); !start.IsZero() {
+		if before := start.Add(-time.Millisecond); onDate(before, y, mo, dd) {
+			_, offset := before.Zone()
+			t = time.Date(y, mo, dd, 0, 0, 0, 0, time.UTC).Add(-time.Duration(offset) * time.Second).In(loc)
+		}
+	}
+	return t
 }
 
 // dayProjects returns the sums of every project that has credit, agent

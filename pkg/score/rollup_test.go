@@ -8,6 +8,7 @@ import (
 	"slices"
 	"testing"
 	"time"
+	_ "time/tzdata"
 
 	"github.com/some-du6e/pairtime/pkg/event"
 )
@@ -118,6 +119,53 @@ func TestDays(t *testing.T) {
 		}
 		return d
 	}
+	// Zones where DST starts at local midnight west of UTC: the date that
+	// starts it has no 00:00, and time.Date gives 23:00 of the day before
+	// for it. time/tzdata keeps them loadable on any runner.
+	tz := func(name string) *time.Location {
+		loc, err := time.LoadLocation(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return loc
+	}
+	santiago, havana := tz("America/Santiago"), tz("America/Havana")
+	instant := func(s string) time.Time {
+		tm, err := time.Parse(time.RFC3339, s)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return tm
+	}
+	// minutesAt credits p_1 a full minute from each UTC minute start.
+	minutesAt := func(starts ...string) Derived {
+		var ms []int64
+		for _, s := range starts {
+			ms = append(ms, instant(s).UnixMilli())
+		}
+		return creditMinutes("p_1", ms...)
+	}
+	// daysAre checks each day's date, its span from start to end (UTC) and
+	// its credit.
+	type dayWant struct {
+		date, start, end string
+		credited         float64
+	}
+	daysAre := func(want ...dayWant) func([]Day) bool {
+		return func(days []Day) bool {
+			if len(days) != len(want) {
+				return false
+			}
+			for i, d := range days {
+				w := want[i]
+				if d.Date != w.date || d.Start.UTC().Format(time.RFC3339) != w.start || d.End.UTC().Format(time.RFC3339) != w.end ||
+					d.CreditedS != w.credited {
+					return false
+				}
+			}
+			return true
+		}
+	}
 	cases := []struct {
 		name    string
 		r       Rollups
@@ -166,6 +214,27 @@ func TestDays(t *testing.T) {
 				return p[0].ProjectKey == "p_1" && p[0].CreditedS == 60 && p[1].ProjectKey == "p_2" && p[1].CreditedS == 120 &&
 					reflect.DeepEqual(days[0].CreditedByProject, map[string]float64{"p_1": 60, "p_2": 120})
 			}, "p_1 60 s and p_2 120 s"},
+		// 23:30 -04 on 2026-09-05, an hour before DST skips 2026-09-06's
+		// midnight, then 01:00 -03 on 2026-09-06, the first minute after it.
+		{"America/Santiago: a minute at 23:30 on 2026-09-05, the hour time.Date gives for 2026-09-06's missing midnight, is on 2026-09-05, and 2026-09-06 starts at 01:00 -03",
+			Rollups{Table: tab, Location: santiago}, minutesAt("2026-09-06T03:30:00Z", "2026-09-06T04:00:00Z"),
+			daysAre(dayWant{"2026-09-05", "2026-09-05T04:00:00Z", "2026-09-06T04:00:00Z", 60},
+				dayWant{"2026-09-06", "2026-09-06T04:00:00Z", "2026-09-07T03:00:00Z", 60}),
+			"2026-09-05 until the change at 04:00Z and 2026-09-06 from it, 60 s each"},
+		// 23:30 -04 on 2027-09-04, then 01:00 -03 and 23:30 -03 on
+		// 2027-09-05, the first and last hours of a date with no 00:00.
+		{"America/Santiago: 2027-09-05, whose midnight DST skips, is labeled 2027-09-05 and keeps a minute in its last hour, 23:30 -03",
+			Rollups{Table: tab, Location: santiago}, minutesAt("2027-09-05T03:30:00Z", "2027-09-05T04:00:00Z", "2027-09-06T02:30:00Z"),
+			daysAre(dayWant{"2027-09-04", "2027-09-04T04:00:00Z", "2027-09-05T04:00:00Z", 60},
+				dayWant{"2027-09-05", "2027-09-05T04:00:00Z", "2027-09-06T03:00:00Z", 120}),
+			"2027-09-04 with 60 s, then 2027-09-05 from the change at 04:00Z to 03:00Z with 120 s"},
+		// 23:30 -05 on 2026-03-07, an hour before DST skips 2026-03-08's
+		// midnight, then 01:00 -04 on 2026-03-08.
+		{"America/Havana: a minute at 23:30 on 2026-03-07, the hour time.Date gives for 2026-03-08's missing midnight, is on 2026-03-07, and 2026-03-08 starts at 01:00 -04",
+			Rollups{Table: tab, Location: havana}, minutesAt("2026-03-08T04:30:00Z", "2026-03-08T05:00:00Z"),
+			daysAre(dayWant{"2026-03-07", "2026-03-07T05:00:00Z", "2026-03-08T05:00:00Z", 60},
+				dayWant{"2026-03-08", "2026-03-08T05:00:00Z", "2026-03-09T04:00:00Z", 60}),
+			"2026-03-07 until the change at 05:00Z and 2026-03-08 from it, 60 s each"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
