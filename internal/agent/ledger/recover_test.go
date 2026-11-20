@@ -9,6 +9,8 @@ import (
 	"math/rand/v2"
 	"os"
 	"path/filepath"
+	"slices"
+	"sync"
 	"testing"
 )
 
@@ -567,4 +569,70 @@ func TestChains(t *testing.T) {
 			t.Errorf("the chain's first record got s = %d and %v, want 1", s, err)
 		}
 	})
+}
+
+// flush is one flush syncHook heard of.
+type flush struct {
+	name string
+	size int64
+}
+
+// TestRestoredRowOrder checks that Open flushes a segment before it writes
+// the rows of batches whose seal frames it found there without one. A
+// crash between a seal frame and its flush leaves the frame in the page
+// cache only, and a row that reached the disk first would point past the
+// segment's end after a power cut, which every Open after refuses.
+func TestRestoredRowOrder(t *testing.T) {
+	lostRow := func(t *testing.T, c crashed) {
+		name := filepath.Join(c.dir, batchesName)
+		truncate(t, name, framesOf(t, name)[0].end)
+	}
+	cases := []struct {
+		name string
+		edit func(t *testing.T, c crashed)
+	}{
+		{"a lost row whose batch is the last thing in the segment goes to disk after its segment", func(t *testing.T, c crashed) {
+			lostRow(t, c)
+			truncate(t, c.seg, framesOf(t, c.seg)[5].end)
+		}},
+		{"a lost row with unsealed records after its batch goes to disk after its segment", lostRow},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := crash(t)
+			tc.edit(t, c)
+			end := framesOf(t, c.seg)[5].end // batch 1's seal frame
+			var mu sync.Mutex
+			var flushes []flush
+			syncHook = func(name string, size int64) {
+				mu.Lock()
+				flushes = append(flushes, flush{filepath.Base(name), size})
+				mu.Unlock()
+			}
+			defer func() { syncHook = nil }()
+			w := open(t, c.dir, newClock(testT+60_000))
+			mu.Lock()
+			got := slices.Clone(flushes)
+			mu.Unlock()
+			if err := w.Close(); err != nil {
+				t.Fatal(err)
+			}
+			covered, rowFlushed := false, false
+			for _, f := range got {
+				if f.name == batchesName {
+					rowFlushed = true
+					break
+				}
+				if f.name == filepath.Base(c.seg) && f.size >= end {
+					covered = true
+				}
+			}
+			if !rowFlushed || !covered {
+				t.Errorf("Open's flushes were %v; want the segment flushed past batch 1's end, %d bytes, before batches.seg", got, end)
+			}
+			if b := verify(t, c.dir, keysOf(t, testKDev)); b[0].Row.Head != c.batch1.Row.Head {
+				t.Errorf("batch 1 came back as %+v, want %+v", b[0].Row, c.batch1.Row)
+			}
+		})
+	}
 }

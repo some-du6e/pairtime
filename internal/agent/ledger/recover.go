@@ -236,6 +236,16 @@ func (w *Writer) recover() error {
 	if err != nil {
 		return err
 	}
+	if len(restored) > 0 {
+		// A crash between a seal frame and its flush leaves the frame, and
+		// the batch's records, in the page cache only. A row must never
+		// reach the disk before its batch, or a power cut would leave a
+		// row pointing past its segment's end, which every Open after
+		// refuses.
+		if err := w.syncSegments(restored[0].Start.Seg); err != nil {
+			return err
+		}
+	}
 	for _, rp := range restored {
 		if err := w.writeRow(rp); err != nil {
 			return err
@@ -243,6 +253,35 @@ func (w *Writer) recover() error {
 	}
 	if len(restored) > 0 {
 		return w.batches.sync()
+	}
+	return nil
+}
+
+// syncSegments flushes the segments of from's day and every later one, the
+// newest through w.seg.
+func (w *Writer) syncSegments(from string) error {
+	days, err := segments(w.dir)
+	if err != nil {
+		return err
+	}
+	for _, day := range days {
+		switch {
+		case day < from:
+		case w.seg != nil && day == w.segDay:
+			if err := w.seg.sync(); err != nil {
+				return err
+			}
+		default:
+			f, err := openAppend(segPath(w.dir, day), false)
+			if err != nil {
+				return err
+			}
+			err = f.sync()
+			f.close()
+			if err != nil {
+				return err
+			}
+		}
 	}
 	return nil
 }

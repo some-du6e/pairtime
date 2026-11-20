@@ -591,7 +591,7 @@ func (w *Writer) seal() (Batch, bool, error) {
 
 	// The one flush of the seal. Records written since the seal frame go
 	// to disk with it, which does no harm.
-	err = seg.sync()
+	err = seg.syncTo(end.Off)
 	closeAll(retired)
 	if err != nil {
 		w.fail(err)
