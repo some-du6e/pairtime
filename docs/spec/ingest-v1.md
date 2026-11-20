@@ -65,25 +65,25 @@ seed       = 7bf821b60e33d7e00abe88a5e7e8e31715789eacda1a3ac3eea47eca45c210c1
 public key = fadacf1c88bce8152ec27995a05aa8d9c53ac5678801cdd2e05b19060398a677
 ```
 
-The body is this JSON, gzipped by Python's `gzip.compress(json, compresslevel=9, mtime=0)` into 77 bytes. Any gzip writer is fine; the hash is over whatever bytes go on the wire.
+The body holds one batch root, a valid batch 1 with `n = 3`, `R_b` = 32 bytes of `0xaa`, `prev` = zero(32) and `H_b = SHA-256(0x03 || prev || R_b || u64(3) || u64(1))` (ledger-v1 6), gzipped by Python's `gzip.compress(json, compresslevel=9, mtime=0)` into 129 bytes. Any gzip writer is fine; the hash is over whatever bytes go on the wire.
 
 ```text
-json = {"batches":[{"b":1,"n":3,"R_b":"aaaa…aa","H_b":"bbbb…bb","prev":"0000…00"}]}    each hash 64 hex digits of one character
-raw  = 1f8b0800000000000203ab564a4a2c49ce482d56b28aae564a52b232d451ca53b232d6510a8a07f2941229044a3a4a1e608392280440830a8a52cb8026195008946a636b0146d4783bf7000000
-hex(SHA-256(raw)) = 7063dc748d40263297a5a5a94a71f311eb1aa8cff150fe1385e7d59c587d3593
+json = {"batches":[{"b":1,"n":3,"R_b":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","H_b":"709a14e467695dbaddf729b36d14c2629ba332116c1942c8a21a8e1d21309123","prev":"0000000000000000000000000000000000000000000000000000000000000000"}]}
+raw  = 1f8b0800000000000203a5cc310e02310c44d1bb4c9d22b683b3c909a86911424e1c448510209ad5de9d882becaf669ab7a2d9a7dfc71bf5bca2a152c00355024ed7f9603b43c0f10fe5588cd2489ab51cbc99fb2d7369a24ea9b3ce69224ca49d4ae2be18932d839c49622196093d5fe33ba5b8336c97ed07d5b9d682f7000000
+hex(SHA-256(raw)) = c8e78a7463f88a78d206683e69e3f847fe3d83715ad7ec2845e997167ddf4e15
 ```
 
 With `device_id = d_example`, `req = 42` and `time = 1795089660250` (2026-11-19T12:01:00.250Z), `M` is 110 bytes:
 
 ```text
-M   = pairtime-ingest-v1\nd_example\n42\n1795089660250\n7063dc748d40263297a5a5a94a71f311eb1aa8cff150fe1385e7d59c587d3593
-    = 7061697274696d652d696e676573742d76310a645f6578616d706c650a34320a313739353038393636303235300a37303633646337343864343032363332393761356135613934613731663331316562316161386366663135306665313338356537643539633538376433353933
-sig = 553baca27376e33b67f00a6425a8446c83a6af65beda2ae1b02368853c7bad9a1400515c2a7ab63e47cb9c8ee4318fde65393efaa5fb83b0162f307c22da480a
-X-Pairtime-Body-SHA256: 7063dc748d40263297a5a5a94a71f311eb1aa8cff150fe1385e7d59c587d3593
-X-Pairtime-Signature: ed25519=VTusonN24ztn8ApkJahEbIOmr2W+2irhsCNohTx7rZoUAFFcKnq2PkfLnI7kMY/eZTk++qX7g7AWLzB8ItpICg==
+M   = pairtime-ingest-v1\nd_example\n42\n1795089660250\nc8e78a7463f88a78d206683e69e3f847fe3d83715ad7ec2845e997167ddf4e15
+    = 7061697274696d652d696e676573742d76310a645f6578616d706c650a34320a313739353038393636303235300a63386537386137343633663838613738643230363638336536396533663834376665336438333731356164376563323834356539393731363764646634653135
+sig = 1ffce087cf6259d5b28584fd9bc097e4333fb8cdf9818cc7b060dddbd66f2362f508f8768f53c61ebe72e750e6a0fef48870b8cfef6def01f78a3640bcf35500
+X-Pairtime-Body-SHA256: c8e78a7463f88a78d206683e69e3f847fe3d83715ad7ec2845e997167ddf4e15
+X-Pairtime-Signature: ed25519=H/zgh89iWdWyhYT9m8CX5DM/uM35gYzHsGDd29ZvI2L1CPh2j1PGHr5y51DmoP70iHC4z+9t7wH3ijZAvPNVAA==
 ```
 
-`internal/server/ingest`'s tests check this example with `crypto/ed25519`.
+`internal/server/ingest`'s tests check this example with `crypto/ed25519`, and send it to a server whose clock reads that time, which accepts the batch.
 
 ### 2.3 The body
 

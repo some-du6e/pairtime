@@ -80,6 +80,10 @@
         "key": ["device_id"],
         "time_column": "removed_at_ms",
         "awaits": "WP-SV3"
+      }, {
+        "table": "device_labels",
+        "key": ["device_id"],
+        "time_column": "received_at_ms"
       }]
     },
     {
@@ -106,7 +110,6 @@
         "table": "minute_buckets",
         "key": ["device_id", "minute_ms"],
         "time_column": "minute_ms",
-        "awaits": "WP-SV7",
         "hold": {
           "table": "submission_minutes",
           "decided_column": "decided_at_ms",
@@ -130,7 +133,6 @@
         "table": "witness_rows",
         "key": ["device_id", "b"],
         "time_column": "received_at_ms",
-        "awaits": "WP-SV4",
         "hold": {
           "table": "submission_batches",
           "decided_column": "decided_at_ms",
@@ -142,13 +144,18 @@
         "time_column": "decided_at_ms",
         "period": "window",
         "awaits": "WP-SB4"
+      }, {
+        "table": "ingest_devices",
+        "key": ["device_id"],
+        "time_column": "updated_at_ms"
       }]
     },
     {
       "id": "server.commits",
       "where": "server",
       "data": "Commit records (commit IDs, times and line counts, with file paths only as keyed hashes), project fingerprints, and the pushes pairtime's GitHub App reports if you install it",
-      "kept": "While your account exists"
+      "kept": "While your account exists",
+      "tables": ["commit_records"]
     },
     {
       "id": "server.program_links",

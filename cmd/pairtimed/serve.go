@@ -247,6 +247,7 @@ func serve(ctx context.Context, cfg *config.Config, logger *slog.Logger, e *env,
 	public.HandleFunc("GET /healthz", ops.Healthz)
 	site.Register(public)
 	signIn.Register(public)
+	newIngest(cfg, db, w, logger).Register(public)
 	// The home page at /, where a sign-in without return_to lands.
 	site.RegisterHome(public, pages.SignIn{
 		Enabled:    signIn.Enabled(),
