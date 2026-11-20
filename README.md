@@ -18,6 +18,8 @@ One Go module holds the client, the server and the code they share.
 | `cmd/pairtimed` | The server: accounts, projects, rollups and the live dashboard, once they exist |
 | `pkg/event` | The event model from the [struggle-metric spec](docs/design/struggle-metric.md): the envelope, the 18 event kinds, the records the scorer derives from them, and validation for all of it |
 | `internal/agent` | The background agent: its data directories, the single-instance lock, `config.toml`, `state.json`, the scheduler every timer goes through, and the HTTP server on 127.0.0.1 |
+| `internal/agent/presence` | Presence and power: idle-time samples on each 15-second slot boundary and suspend, resume, lock and unlock, recorded only while a project context is live (DESIGN 3.3, D14) |
+| `internal/platform/windows` | Win32 calls without cgo: input idle time, suspend and lock notifications, EcoQoS. No keyboard listener of any kind |
 | `internal/webui` | The local dashboard's built files, embedded in the client. A placeholder stands in until the UI exists, so Go builds never need Node |
 | `internal/version` | Build info, set at link time |
 | `docs/schema/event.schema.json` | A JSON Schema for events, for adapters written in other languages. A test fails if it drifts from `pkg/event` |
