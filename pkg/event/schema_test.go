@@ -48,7 +48,7 @@ func schemaEnums() []enumInfo {
 		infoOf(parentClasses), infoOf(declaredOrigins), infoOf(toolClasses), infoOf(decisions),
 		infoOf(decidedBys), infoOf(stopReasons), infoOf(subagentPhases), infoOf(editorActs),
 		infoOf(editSources), infoOf(cmdClasses), infoOf(gitOps), infoOf(actors), infoOf(appClasses),
-		infoOf(powerOps), infoOf(activeTimeTypes), infoOf(logMatches),
+		infoOf(powerOps), infoOf(activeTimeTypes), infoOf(logMatches), infoOf(envHints),
 	}
 }
 
@@ -511,7 +511,6 @@ func TestSchemaBounds(t *testing.T) {
 		{"parents hold at most maxList ids", []string{"$defs", "git.change", "properties", "parents"}, "maxItems", float64(maxList)},
 		{"pending crons hold at most maxList entries", []string{"$defs", "agent.stop", "properties", "pending_crons"}, "maxItems", float64(maxList)},
 		{"a key has 1 to maxKeyLen characters", []string{"$defs", "key"}, "pattern", fmt.Sprintf("^[A-Za-z0-9_-]{1,%d}$", maxKeyLen)},
-		{"an env name has at most maxEnvNameLen characters", []string{"$defs", "env_name"}, "pattern", fmt.Sprintf("^[A-Za-z_][A-Za-z0-9_]{0,%d}$", maxEnvNameLen-1)},
 		{"times start at minUnixMS", []string{"$defs", "unix_ms"}, "minimum", float64(minUnixMS)},
 		{"times end before maxUnixMS", []string{"$defs", "unix_ms"}, "exclusiveMaximum", float64(maxUnixMS)},
 	}
@@ -617,6 +616,20 @@ func TestSchemaDriftIsCaught(t *testing.T) {
 			list := def["enum"].([]any)
 			def["enum"] = slices.DeleteFunc(slices.Clone(list), func(v any) bool { return v == "bridge_unverified" })
 		}, "$defs/via lists"},
+		{"an env hint only Go has", func(t *testing.T, root map[string]any) {
+			def := at(t, root, "$defs", "env_hint")
+			list := def["enum"].([]any)
+			def["enum"] = slices.DeleteFunc(slices.Clone(list), func(v any) bool { return v == "CLAUDE_CODE_CHILD_SESSION" })
+		}, "$defs/env_hint lists"},
+		{"a list of enums pointing at the wrong enum", func(t *testing.T, root map[string]any) {
+			at(t, root, "$defs", "cli.track", "properties", "env_hints", "items")["$ref"] = "#/$defs/harness"
+		}, `cli.track.env_hints: the Go type is enum "env_hint", but the schema refers to "harness"`},
+		{"a list of enums the schema calls a string", func(t *testing.T, root map[string]any) {
+			at(t, root, "$defs", "cli.track", "properties", "env_hints")["type"] = "string"
+		}, `cli.track.env_hints: the schema allows JSON types ["string"], but Go writes ["array"]`},
+		{"an omitempty list of enums the schema lets be null", func(t *testing.T, root map[string]any) {
+			at(t, root, "$defs", "cli.track", "properties", "env_hints")["type"] = []any{"array", "null"}
+		}, `cli.track.env_hints: the schema allows JSON types ["array" "null"], but Go writes ["array"]`},
 		{"a kind rule that drops the session check", func(t *testing.T, root map[string]any) {
 			props, _ := kindRuleAt(t, root, KindPromptSubmit)
 			delete(props, "session_key")

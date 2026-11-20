@@ -14,9 +14,6 @@ const (
 	// entry asks the agent for at most 400 characters of the user's
 	// message, with personal information removed (DESIGN 5.4).
 	MaxLabelLen = 400
-	// maxEnvNameLen caps an environment variable name in cli.track's
-	// env_hints.
-	maxEnvNameLen = 64
 )
 
 // SessionStart is session.start: a harness session started, resumed, was
@@ -463,10 +460,10 @@ type CLITrack struct {
 	// label it is shareable, so the length the anchor was classed by
 	// (DESIGN 5.4) survives Shareable.
 	TextLen int `json:"text_len"`
-	// EnvHints are the names, never the values, of harness environment
-	// variables set in the caller's environment, such as
-	// CLAUDE_CODE_SESSION_ID (DESIGN 4.1 E-8).
-	EnvHints []string `json:"env_hints,omitempty"`
+	// EnvHints are the harness variables set in the caller's environment,
+	// by name and never by value (DESIGN 4.1 E-8): each one of the closed
+	// list of EnvHint names, at most once.
+	EnvHints []EnvHint `json:"env_hints,omitempty"`
 	// LogMatch says whether a pairtime log reader holds the user entry the
 	// call copies (DESIGN 5.2, 5.4).
 	LogMatch LogMatch `json:"log_match"`
@@ -482,10 +479,10 @@ func (p *CLITrack) check(c *checker) {
 		c.addf("env_hints", "has %d entries, more than %d", len(p.EnvHints), maxList)
 	} else {
 		for i, name := range p.EnvHints {
-			// The message leaves out the value: it may hold what follows
-			// "=" in the caller's environment.
-			if !isEnvName(name) {
-				c.addf(fieldIndex("env_hints", i), "must be an environment variable's name, never its value: a letter or '_', then up to %d letters, digits or '_'", maxEnvNameLen-1)
+			// The message leaves out the entry: one that isn't a listed
+			// name may be a variable's value, such as a token.
+			if !envHints.has(name) {
+				c.addf(fieldIndex("env_hints", i), "must be one of the harness variable names %q, never a value", envHints.values)
 				break
 			}
 			if slices.Contains(p.EnvHints[:i], name) {

@@ -69,7 +69,6 @@
     "count": {"type": "integer", "minimum": 0},
     "seconds": {"type": "number", "minimum": 0},
     "text64": {"type": "string", "maxLength": 64, "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*$", "description": "One line of text: no control characters."},
-    "env_name": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,63}$", "description": "An environment variable's name, never its value."},
 
     "kind": {"enum": ["session.start", "session.end", "prompt.submit", "agent.output", "agent.tool", "agent.permission", "agent.interrupt", "agent.queue", "agent.stop", "agent.subagent", "editor.activity", "shell.command", "git.change", "os.presence", "os.focus", "os.power", "otel.active_time", "cli.track"]},
     "source": {"enum": ["hook", "log", "otel", "os", "editor", "shell", "git", "cli", "mcp"], "description": "What the record claims produced it. cli is the AGENTS.md fallback, pairtime track."},
@@ -93,6 +92,7 @@
     "power_op": {"enum": ["suspend", "resume", "lock", "unlock"]},
     "active_time_type": {"enum": ["user", "cli"]},
     "log_match": {"enum": ["matched", "unmatched", "no_reader"], "description": "matched: a log reader holds the user entry from the same session within TRACK_LOG_MATCH_S; unmatched: a reader covers the session but held no match when the call was recorded; no_reader: no reader covers the session."},
+    "env_hint": {"enum": ["CLAUDECODE", "CLAUDE_CODE_CHILD_SESSION", "CLAUDE_CODE_SESSION_ID"], "description": "The name of a harness environment variable that pairtime track looks for in its caller's environment. The list is closed, so a variable's value can't pass as a name."},
 
     "session.start": {
       "description": "A harness session started, resumed, was cleared, compacted or forked.",
@@ -325,7 +325,7 @@
       "properties": {
         "label": {"type": "string", "maxLength": 400, "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*$", "x-local": true, "description": "The text the model passed, on one line: the user's message with personal information removed. Prompt text, so it stays on the device."},
         "text_len": {"$ref": "#/$defs/count", "description": "The number of characters the model passed. Shareable, unlike the label."},
-        "env_hints": {"type": "array", "maxItems": 1024, "uniqueItems": true, "items": {"$ref": "#/$defs/env_name"}, "description": "Names, never values, of harness environment variables set in the caller's environment, such as CLAUDE_CODE_SESSION_ID."},
+        "env_hints": {"type": "array", "maxItems": 1024, "uniqueItems": true, "items": {"$ref": "#/$defs/env_hint"}, "description": "The harness variables in $defs/env_hint that are set in the caller's environment, by name and never by value."},
         "log_match": {"$ref": "#/$defs/log_match", "description": "Whether a pairtime log reader holds the user entry the call copies."}
       }
     }

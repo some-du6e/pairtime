@@ -109,7 +109,7 @@ func sample(t *testing.T, k Kind) Event {
 	case KindCLITrack:
 		env.Source, env.Via = SourceCLI, ViaTrack
 		p = &CLITrack{Label: "fix the login redirect loop", TextLen: 27,
-			EnvHints: []string{"CLAUDECODE", "CLAUDE_CODE_SESSION_ID"}, LogMatch: LogMatched}
+			EnvHints: []EnvHint{EnvClaudeCode, EnvClaudeCodeSessionID}, LogMatch: LogMatched}
 	default:
 		t.Fatalf("no sample for kind %q; add one", k)
 	}
@@ -273,11 +273,17 @@ func TestEventValidate(t *testing.T) {
 		{"unknown log match", KindCLITrack, func(e *Event) { e.Data.(*CLITrack).LogMatch = "maybe" }, "data.log_match:"},
 		{"track text length isn't negative", KindCLITrack, func(e *Event) { e.Data.(*CLITrack).TextLen = -1 }, "data.text_len: must not be negative"},
 		{"env hints are names, never values", KindCLITrack, func(e *Event) {
-			e.Data.(*CLITrack).EnvHints = []string{"CLAUDECODE", "CLAUDE_CODE_SESSION_ID=5f0c"}
-		}, "data.env_hints[1]: must be an environment variable's name"},
-		{"env hints don't start with a digit", KindCLITrack, func(e *Event) { e.Data.(*CLITrack).EnvHints = []string{"1PASSWORD"} }, "data.env_hints[0]:"},
+			e.Data.(*CLITrack).EnvHints = []EnvHint{EnvClaudeCode, "CLAUDE_CODE_SESSION_ID=5f0c"}
+		}, "data.env_hints[1]: must be one of the harness variable names"},
+		{"a value shaped like a name isn't an env hint", KindCLITrack, func(e *Event) {
+			e.Data.(*CLITrack).EnvHints = []EnvHint{"production"}
+		}, "data.env_hints[0]: must be one of the harness variable names"},
+		{"only harness variables are env hints", KindCLITrack, func(e *Event) { e.Data.(*CLITrack).EnvHints = []EnvHint{"PATH"} }, "data.env_hints[0]:"},
+		{"every listed harness variable is an env hint", KindCLITrack, func(e *Event) {
+			e.Data.(*CLITrack).EnvHints = []EnvHint{EnvClaudeCodeSessionID, EnvClaudeCodeChildSession, EnvClaudeCode}
+		}, ""},
 		{"env hints are listed once", KindCLITrack, func(e *Event) {
-			e.Data.(*CLITrack).EnvHints = []string{"CLAUDECODE", "CLAUDECODE"}
+			e.Data.(*CLITrack).EnvHints = []EnvHint{EnvClaudeCode, EnvClaudeCode}
 		}, "data.env_hints[1]: repeats an earlier name"},
 		{"a track call from no harness session", KindCLITrack, func(e *Event) {
 			e.Harness, e.SessionKey, e.Data.(*CLITrack).LogMatch = HarnessOther, NoSession, LogNoReader
@@ -314,6 +320,34 @@ func TestEventValidateReportsEveryError(t *testing.T) {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("Validate() = %q, want it to contain %q", err, want)
 		}
+	}
+}
+
+// TestEnvHintErrorsLeaveOutTheEntry checks that Validate doesn't echo a
+// rejected env hint: an entry that isn't a listed name may be a variable's
+// value, and errors end up in logs.
+func TestEnvHintErrorsLeaveOutTheEntry(t *testing.T) {
+	for _, tt := range []struct {
+		name  string
+		entry EnvHint
+	}{
+		{"a NAME=value pair isn't repeated", "CLAUDE_CODE_SESSION_ID=5f0c9a2e"},
+		{"a bare value isn't repeated", "x9TqLm2vR8pZ"},
+		{"a value with a space isn't repeated", "correct horse"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			e := sample(t, KindCLITrack)
+			e.Data.(*CLITrack).EnvHints = []EnvHint{tt.entry}
+			err := e.Validate()
+			switch {
+			case err == nil:
+				t.Fatalf("Validate() = nil, want an error for the env hint")
+			case !strings.Contains(err.Error(), "data.env_hints[0]:"):
+				t.Errorf("Validate() = %q, want an error for data.env_hints[0]", err)
+			case strings.Contains(err.Error(), string(tt.entry)):
+				t.Errorf("Validate() = %q, which repeats the rejected entry", err)
+			}
+		})
 	}
 }
 

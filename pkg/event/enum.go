@@ -425,3 +425,30 @@ const (
 var logMatches = enum[LogMatch]{name: "log_match", values: []LogMatch{
 	LogMatched, LogUnmatched, LogNoReader,
 }}
+
+// EnvHint is the name of a harness environment variable that `pairtime
+// track` looks for in its caller's environment (cli.track's env_hints,
+// DESIGN 4.1 E-8). The list is closed, so a variable's value can't pass as
+// a name: env_hints can only carry these names off the device. A
+// collector that looks for another variable adds its constant here and in
+// the schema, as with Harness.
+type EnvHint string
+
+const (
+	// EnvClaudeCode is CLAUDECODE. Claude Code sets it in the processes it
+	// spawns, but IDE extensions also set it in their integrated
+	// terminals, where a person types, so on its own it doesn't show that
+	// Claude Code made the call (HS 11.3, 12.1).
+	EnvClaudeCode EnvHint = "CLAUDECODE"
+	// EnvClaudeCodeChildSession is CLAUDE_CODE_CHILD_SESSION, which Claude
+	// Code sets in the processes its Bash, PowerShell and Monitor tools,
+	// hooks and status line spawn, but not in stdio MCP servers (HS 12.1).
+	EnvClaudeCodeChildSession EnvHint = "CLAUDE_CODE_CHILD_SESSION"
+	// EnvClaudeCodeSessionID is CLAUDE_CODE_SESSION_ID, which Claude Code
+	// sets in its tool, hook and stdio MCP subprocesses (HS 11.3).
+	EnvClaudeCodeSessionID EnvHint = "CLAUDE_CODE_SESSION_ID"
+)
+
+var envHints = enum[EnvHint]{name: "env_hint", values: []EnvHint{
+	EnvClaudeCode, EnvClaudeCodeChildSession, EnvClaudeCodeSessionID,
+}}
