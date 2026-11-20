@@ -1,0 +1,176 @@
+{
+  "reconstructed": true,
+  "base_url": "https://telescreen.hackclub.com",
+  "auth": {
+    "text": "Every call sends Authorization: Bearer <event API key>. A key belongs to exactly one Robert event, so no path names the event. Alchemize treats a key that doesn't start with ysws_ as missing, so event keys apparently carry that prefix. Calls with a body send Content-Type: application/json.",
+    "sources": [
+      {"repo": "hackclub/the-carnival", "file": "src/lib/telescreen/client.ts", "lines": "5, 58-73"},
+      {"repo": "hackclub/trmnt", "file": "src/src/lib/server/robert.ts", "lines": "20-26"},
+      {"repo": "hackclub/Alchemize", "file": "src/lib/server/telescreenClient.ts", "lines": "19-30, 61-79"},
+      {"repo": "hackclub/pixl", "file": "apps/internal-dashboard/lib/robert.ts", "lines": "166-174"}
+    ]
+  },
+  "errors": {
+    "text": "A failed call answers with a non-2xx status and a JSON body whose message field is a human-readable reason. The clients show message and fall back to the status code when it is missing.",
+    "sources": [
+      {"repo": "hackclub/the-carnival", "file": "src/lib/telescreen/client.ts", "lines": "79-89"},
+      {"repo": "hackclub/trmnt", "file": "src/src/lib/server/robert.ts", "lines": "27-30"},
+      {"repo": "hackclub/Alchemize", "file": "src/lib/server/telescreenClient.ts", "lines": "80-87"}
+    ]
+  },
+  "states": {
+    "values": ["awaiting_review", "awaiting_outcome", "rejected_fraud", "decided"],
+    "meaning": "A new project waits in awaiting_review for a fraud reviewer's 1 to 10 score. A score above 4 moves it to awaiting_outcome until the program records its own decision. A score of 4 or below moves it to rejected_fraud, which is final. A recorded outcome makes it decided.",
+    "sources": [
+      {"repo": "hackclub/pixl", "file": "apps/internal-dashboard/lib/robert.ts", "lines": "186-197"},
+      {"repo": "hackclub/trmnt", "file": "src/src/lib/server/robert.ts", "lines": "3-5, 10"},
+      {"repo": "hackclub/Alchemize", "file": "src/lib/server/telescreenClient.ts", "lines": "32-38"}
+    ]
+  },
+  "score_bands": [
+    {"min": 1, "max": 4, "band": "fraud", "meaning": "A final rejection. Carnival dismisses the project.", "sources": [{"repo": "hackclub/the-carnival", "file": "src/lib/telescreen/shared.ts", "lines": "5-9, 14-22"}]},
+    {"min": 5, "max": 7, "band": "doubtful", "meaning": "Usually a deduction. In Carnival the granting admin must acknowledge it, which is Carnival's own step.", "sources": [{"repo": "hackclub/the-carnival", "file": "src/lib/telescreen/shared.ts", "lines": "5-9, 14-22"}]},
+    {"min": 8, "max": 10, "band": "clean", "meaning": "Clean.", "sources": [{"repo": "hackclub/the-carnival", "file": "src/lib/telescreen/shared.ts", "lines": "5-9, 14-22"}]}
+  ],
+  "project": {
+    "description": "The project object GET /projects/:id returns and GET /projects lists.",
+    "fields": [
+      {"name": "id", "type": "string, a UUID", "required": true, "meaning": "Robert's id. Alchemize refuses to put anything but a UUID in a path.", "sources": [{"repo": "hackclub/Alchemize", "file": "src/lib/server/telescreenClient.ts", "lines": "56-57, 99-103"}]},
+      {"name": "externalId", "type": "string or null", "required": true, "meaning": "The program's own id, as sent on create."},
+      {"name": "state", "type": "string", "required": true, "meaning": "One of states.values."},
+      {"name": "trustScore", "type": "integer 1 to 10, or null", "required": true, "meaning": "The fraud reviewer's score, null until there is one."},
+      {"name": "review", "type": "object or null", "required": true, "meaning": "{trustScore, note, at}: the score, the reviewer's note or null, and when."},
+      {"name": "outcome", "type": "object or null", "required": true, "meaning": "{status, reason, at}: approved or rejected, the reason or null, and when. See disagreements for pixl's longer reading."},
+      {"name": "submittedAt", "type": "string or null", "required": false, "meaning": "When the project was sent.", "sources": [{"repo": "hackclub/Alchemize", "file": "src/lib/server/telescreenClient.ts", "lines": "47"}]},
+      {"name": "creditedSeconds", "type": "integer or null", "required": false, "meaning": "Robert's own credited time, worked out from the Hackatime project names it was sent. It is Robert's figure for fraud scoring, not the program's hours.", "sources": [{"repo": "hackclub/the-carnival", "file": "src/lib/telescreen/client.ts", "lines": "43"}, {"repo": "hackclub/Alchemize", "file": "src/lib/server/telescreenClient.ts", "lines": "48, 159-161"}]}
+    ],
+    "sources": [
+      {"repo": "hackclub/Alchemize", "file": "src/lib/server/telescreenClient.ts", "lines": "40-49"},
+      {"repo": "hackclub/the-carnival", "file": "src/lib/telescreen/client.ts", "lines": "39-47"}
+    ]
+  },
+  "endpoints": [
+    {
+      "id": "create_project",
+      "method": "POST",
+      "path": "/api/v1/ysws/projects",
+      "body": [
+        {"name": "name", "type": "string", "required": true, "meaning": "The project's name."},
+        {"name": "kind", "type": "\"hackatime\" or \"hardware\"", "required": true, "meaning": "hackatime projects carry hackatimeProjects. hardware projects carry journal instead.", "sources": [{"repo": "hackclub/pixl", "file": "apps/internal-dashboard/lib/robert.ts", "lines": "66-75, 92-128"}]},
+        {"name": "codeUrl", "type": "string", "required": true, "meaning": "The repository link."},
+        {"name": "demoUrl", "type": "string", "required": false, "meaning": "Left out by Alchemize and pixl when there is none. trmnt sends an empty string instead.", "sources": [{"repo": "hackclub/trmnt", "file": "src/src/lib/server/robert.ts", "lines": "51"}]},
+        {"name": "submitter", "type": "object", "required": true, "meaning": "{slackId, hackatimeId}. Each client sends the Slack id; hackatimeId is a number, sent when known.", "sources": [{"repo": "hackclub/trmnt", "file": "src/src/lib/server/robert.ts", "lines": "52-55"}, {"repo": "hackclub/Alchemize", "file": "src/lib/server/telescreenClient.ts", "lines": "180-183"}]},
+        {"name": "hackatimeProjects", "type": "string[]", "required": false, "meaning": "The Hackatime project names Robert credits time from. Robert caps the list at 50 distinct names. This is Robert's only time-bearing input.", "sources": [{"repo": "hackclub/Alchemize", "file": "src/lib/server/telescreenClient.ts", "lines": "156-161, 171-174"}]},
+        {"name": "journal", "type": "object[]", "required": false, "meaning": "For hardware: [{title, content, loggedAt, hours}], hours optional.", "sources": [{"repo": "hackclub/pixl", "file": "apps/internal-dashboard/lib/robert.ts", "lines": "73, 103-108"}]},
+        {"name": "externalId", "type": "string", "required": true, "meaning": "The program's id for this submission. Sending the same externalId again returns the same Robert project instead of a new one, so retries are safe. pixl puts the ship time in it so that each new ship gets its own record.", "sources": [{"repo": "hackclub/trmnt", "file": "src/src/lib/server/robert.ts", "lines": "34-37"}, {"repo": "hackclub/pixl", "file": "apps/internal-dashboard/lib/robert.ts", "lines": "29-38"}]}
+      ],
+      "returns": "{id, state, created}. created tells a new project from an earlier one returned for the same externalId.",
+      "notes": [
+        {"text": "Alchemize sends nothing about a person beyond the Slack id and the Hackatime id: never an email, name, address, birthdate or Unified ID.", "sources": [{"repo": "hackclub/Alchemize", "file": "src/lib/server/telescreenClient.ts", "lines": "159-161"}]}
+      ],
+      "sources": [
+        {"repo": "hackclub/Alchemize", "file": "src/lib/server/telescreenClient.ts", "lines": "105-116, 162-187"},
+        {"repo": "hackclub/the-carnival", "file": "src/lib/telescreen/client.ts", "lines": "49-56, 93-102"},
+        {"repo": "hackclub/trmnt", "file": "src/src/lib/server/robert.ts", "lines": "38-60"},
+        {"repo": "hackclub/pixl", "file": "apps/internal-dashboard/lib/robert.ts", "lines": "79-129, 155-184"}
+      ]
+    },
+    {
+      "id": "get_project",
+      "method": "GET",
+      "path": "/api/v1/ysws/projects/:id",
+      "body": [],
+      "returns": "The project object. See disagreements for the wrapper trmnt expects.",
+      "sources": [
+        {"repo": "hackclub/Alchemize", "file": "src/lib/server/telescreenClient.ts", "lines": "118-121"},
+        {"repo": "hackclub/the-carnival", "file": "src/lib/telescreen/client.ts", "lines": "104-111"},
+        {"repo": "hackclub/trmnt", "file": "src/src/lib/server/robert.ts", "lines": "62-72"}
+      ]
+    },
+    {
+      "id": "list_projects",
+      "method": "GET",
+      "path": "/api/v1/ysws/projects",
+      "query": [
+        {"name": "state", "type": "string", "required": true, "meaning": "One of states.values. Every client asks for one state at a time."},
+        {"name": "limit", "type": "integer", "required": false, "meaning": "Page size. Carnival and pixl ask for 100."},
+        {"name": "offset", "type": "integer", "required": false, "meaning": "Projects to skip."}
+      ],
+      "body": [],
+      "returns": "{total, projects}: the event's projects in that state, newest submission first, and how many there are in all.",
+      "notes": [
+        {"text": "pixl polls this list for awaiting_outcome, rejected_fraud and decided, because webhooks alone miss scores in the 5 to 10 range and carry no review note.", "sources": [{"repo": "hackclub/pixl", "file": "apps/internal-dashboard/lib/robert.ts", "lines": "186-216"}]}
+      ],
+      "sources": [
+        {"repo": "hackclub/the-carnival", "file": "src/lib/telescreen/client.ts", "lines": "113-126"},
+        {"repo": "hackclub/Alchemize", "file": "src/lib/server/telescreenClient.ts", "lines": "123-132"},
+        {"repo": "hackclub/pixl", "file": "apps/internal-dashboard/lib/robert.ts", "lines": "191-216"}
+      ]
+    },
+    {
+      "id": "record_outcome",
+      "method": "POST",
+      "path": "/api/v1/ysws/projects/:id/outcome",
+      "body": [
+        {"name": "status", "type": "\"approved\" or \"rejected\"", "required": true, "meaning": "The program's final decision."},
+        {"name": "reason", "type": "string", "required": false, "meaning": "Sent only when there is one."}
+      ],
+      "returns": "{id, state, outcome}",
+      "errors": [
+        {"text": "Allowed only while the project is awaiting_outcome. 409 once the outcome is final, most often because Robert already rejected it as fraud.", "sources": [{"repo": "hackclub/the-carnival", "file": "src/lib/telescreen/client.ts", "lines": "128"}, {"repo": "hackclub/pixl", "file": "apps/internal-dashboard/lib/robert.ts", "lines": "238-244"}]}
+      ],
+      "sources": [
+        {"repo": "hackclub/Alchemize", "file": "src/lib/server/telescreenClient.ts", "lines": "134-143"},
+        {"repo": "hackclub/the-carnival", "file": "src/lib/telescreen/client.ts", "lines": "128-140"},
+        {"repo": "hackclub/trmnt", "file": "src/src/lib/server/robert.ts", "lines": "74-81"},
+        {"repo": "hackclub/pixl", "file": "apps/internal-dashboard/lib/robert.ts", "lines": "221-251"}
+      ]
+    },
+    {
+      "id": "withdraw_project",
+      "method": "DELETE",
+      "path": "/api/v1/ysws/projects/:id",
+      "body": [
+        {"name": "signedOffBy", "type": "string", "required": true, "meaning": "Who on the program's side approved the withdrawal."}
+      ],
+      "returns": "{id, deleted}",
+      "errors": [
+        {"text": "409 once a fraud reviewer has scored the project.", "sources": [{"repo": "hackclub/Alchemize", "file": "src/lib/server/telescreenClient.ts", "lines": "145"}, {"repo": "hackclub/the-carnival", "file": "src/lib/telescreen/client.ts", "lines": "142"}, {"repo": "hackclub/trmnt", "file": "src/src/lib/server/robert.ts", "lines": "83"}]}
+      ],
+      "sources": [
+        {"repo": "hackclub/Alchemize", "file": "src/lib/server/telescreenClient.ts", "lines": "145-151"},
+        {"repo": "hackclub/the-carnival", "file": "src/lib/telescreen/client.ts", "lines": "142-148"},
+        {"repo": "hackclub/trmnt", "file": "src/src/lib/server/robert.ts", "lines": "83-86"}
+      ]
+    },
+    {
+      "id": "set_webhook_url",
+      "method": "PATCH",
+      "path": "/api/v1/ysws/event",
+      "body": [
+        {"name": "webhookUrl", "type": "string or null", "required": true, "meaning": "Where Robert should send the event's webhooks. null clears it."}
+      ],
+      "returns": "{webhookUrl, secret}: the secret webhook.json's signatures are keyed with.",
+      "sources": [
+        {"repo": "hackclub/Alchemize", "file": "src/lib/server/telescreenClient.ts", "lines": "153-154"}
+      ]
+    }
+  ],
+  "disagreements": [
+    {
+      "text": "trmnt reads GET /projects/:id as {project: {...}}, while Carnival and Alchemize read the project object at the top level. One of them is wrong, or Robert sends both. A compatible client should accept either.",
+      "sources": [
+        {"repo": "hackclub/trmnt", "file": "src/src/lib/server/robert.ts", "lines": "62-72"},
+        {"repo": "hackclub/the-carnival", "file": "src/lib/telescreen/client.ts", "lines": "104-111"},
+        {"repo": "hackclub/Alchemize", "file": "src/lib/server/telescreenClient.ts", "lines": "118-121"}
+      ]
+    },
+    {
+      "text": "pixl types a listed project's outcome as {status, reason, trustScore, reviewedAt, reviewerName}, while Carnival and Alchemize type it as {status, reason, at}. The webhook's outcome has trustScore and reviewedAt (webhook.json), so the list may carry the longer form.",
+      "sources": [
+        {"repo": "hackclub/pixl", "file": "apps/internal-dashboard/lib/robert.ts", "lines": "137-151"},
+        {"repo": "hackclub/Alchemize", "file": "src/lib/server/telescreenClient.ts", "lines": "40-49"}
+      ]
+    }
+  ]
+}

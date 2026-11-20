@@ -1,0 +1,113 @@
+{
+  "handbook": "YSWS Project Submission Guidelines",
+  "base_url": "https://hackclub.gitbook.io/ysws-project-submission-guidelines/BLBRN8LIfoCZhFV6oMNR/",
+  "short_url": "https://hack.club/ysws-rules",
+  "retrieved": "2026-11-19T20:41:54Z",
+  "pages": [
+    {"page": "override-hours-spent-justification.md", "last_updated": "March 2026", "sha256": "1bff585edde6ed27759b55ec500406c0a32cd8340c24d901afffe05b25c0017d"},
+    {"page": "override-hours-spent.md", "last_updated": "March 2026", "sha256": "27bb6306766e548cc6785b52c01c84ba9941d8b859dde2a5da3c99481bbda33e"},
+    {"page": "required-submission-fields.md", "last_updated": "March 2026", "sha256": "f53cfd4deb2f96b1648cee0aefd394660ced97e29d317612967742505b3283e1"},
+    {"page": "spot-checks.md", "last_updated": "March 2026", "sha256": "42142b09fc9064da16463b4b36a4d4d2d4006fe6de9ff36861d0bfa67ed097da"}
+  ],
+  "submission_fields": {
+    "page": "required-submission-fields.md",
+    "always": [
+      "Code URL", "Playable URL", "First Name", "Last Name", "Email", "Screenshot", "Description",
+      "Address (Line 1)", "Address (Line 2)", "City", "State / Province", "Country", "ZIP / Postal Code",
+      "Birthday", "Override Hours Spent", "Override Hours Spent Justification"
+    ],
+    "sometimes": [
+      {"name": "Optional - Override Duplicate Justification", "when": "The project's Code URL is already in the Unified Database for another project, as with team projects."},
+      {"name": "Optional - Override Age Justification", "when": "The submitter is over 18 at review, usually because they turned 19 between submitting and the review."}
+    ]
+  },
+  "justification": {
+    "page": "override-hours-spent-justification.md",
+    "unified_field": "Override Hours Spent Justification",
+    "template_field": "Optional - Override Hours Spent Justification",
+    "how_fields_combine": "A program that reviews in Airtable fills the separate justification fields below and leaves Optional - Override Hours Spent Justification empty, and an automation combines the fields into the Unified Database's Override Hours Spent Justification. A program with its own review flow may instead put one templated justification in Optional - Override Hours Spent Justification, which overrides the separate fields and must contain every element they would.",
+    "standard": "Someone who wasn't part of the review should be able to read the justification, follow its links and reach the same conclusion, so it has to carry specific, checkable links, numbers and observations.",
+    "audience": "Not shown to the submitter. It is an internal record for other reviewers and for audits, so it states evidence and conclusions and isn't addressed to the submitter.",
+    "fields": [
+      {
+        "name": "Hackatime Project Name(s) and Date Range(s)",
+        "include_when": "The program tracked hours with Hackatime.",
+        "written_by": "automated",
+        "content": "Which Hackatime projects were counted, and the days each was counted over. An update covers only the days since the previous one.",
+        "format": "Comma-separated entries of a project name, a space, and a M/D/YYYY-M/D/YYYY date range. Ari writes the dates in UTC (HC 3.6), and so does pairtime (DESIGN 9.3); the handbook doesn't say.",
+        "example": "hackatime-project 7/20/2026-7/22/2026, hackatime-project-2 7/21/2026-7/23/2026"
+      },
+      {
+        "name": "Submitter Hackatime ID",
+        "include_when": "The program tracked hours with Hackatime.",
+        "written_by": "automated",
+        "content": "The submitter's numeric Hackatime id."
+      },
+      {
+        "name": "Lapse Link(s)",
+        "include_when": "The program tracked hours with Lapse.",
+        "written_by": "automated",
+        "content": "Comma-separated links to the submission's timelapses. For each coding timelapse, a short note on how much of it was on task and what deflation followed."
+      },
+      {
+        "name": "Specific Technical Features",
+        "include_when": "Always, unless the program has an exception.",
+        "written_by": "human",
+        "content": "What the project does that accounts for its hours, as specifically as possible, not a list of languages."
+      },
+      {
+        "name": "Deflation Justification",
+        "include_when": "The reviewer deflated the tracked hours.",
+        "written_by": "human",
+        "content": "The number of hours deflated to, and why: the evidence doesn't support the claimed time, or the submitter's experience doesn't match the technical features."
+      },
+      {
+        "name": "Alternate Tracking Method",
+        "include_when": "The program tracked time with something other than Hackatime or Lapse, which includes tracking with something else next to them.",
+        "written_by": "either",
+        "content": "What method gave the hours and why the submitted hours, after any deflation, are accurate by that method. How the tracking works may be automated text. A method with some subjectivity, such as self-reporting, also needs a human-written reason the hours are reasonable."
+      },
+      {
+        "name": "Additional Justification",
+        "include_when": "The other fields don't fully justify the hours, the submission has suspicious traits, or there are more links to give, such as the project's page on the program's own review platform.",
+        "written_by": "either",
+        "content": "Anything else a spot-checker needs: extra review links, the submitter's experience and evidence for it, or why that experience fits the hours."
+      }
+    ]
+  },
+  "hours_rules": {
+    "page": "override-hours-spent.md",
+    "rules": [
+      {"id": "approved_hours", "rule": "Override Hours Spent is the number of hours approved for the project. It should reflect the submitter's genuine effort, and reviewers may deflate claimed hours that the evidence doesn't support."},
+      {"id": "updates", "rule": "An update submits only the hours tracked since the previous update, not the running total."},
+      {"id": "default_to_deflation", "rule": "When a reviewer doubts the claimed hours, they deflate them to what the evidence does support. Submitters get the benefit of the doubt on intent, never on the number."},
+      {"id": "outright_fraud", "rule": "A fraudulent submission, such as one with Hackatime heartbeats generated by a script, a copied project or a commit history made after the fact, isn't deflated to zero. It never enters the Unified Database."},
+      {"id": "ai_slop", "rule": "A project generated from a single prompt with no meaningful iteration, testing or refinement is rejected outright."},
+      {"id": "stricter_ai_only", "rule": "A program may set stricter AI rules than the handbook's, never looser ones."},
+      {
+        "id": "one_third",
+        "rule": "In a project tracked with Hackatime, time that WakaTime categorizes as ai coding must be deflated to at most a third of its original amount, unless there is significant evidence that more should be credited. Time in other categories isn't touched by this rule.",
+        "numbers": {
+          "ai_coding_factor": {"numerator": 1, "denominator": 3},
+          "handbook_example": {"coding_h": 4, "ai_coding_h": 3, "max_justifiable_h": 5}
+        }
+      },
+      {
+        "id": "art_and_assets",
+        "rule": "Time on art and assets that are part of the core project may count, up to 30% of the approved hours.",
+        "numbers": {"max_share_percent": 30}
+      }
+    ]
+  },
+  "spot_checks": {
+    "page": "spot-checks.md",
+    "verdicts": ["Accepted", "Needs Changes (fine issued)", "Rejected (fine issued)"],
+    "grounds": [
+      {"number": 2, "verdict": "Rejected", "ground": "The project is the result of fraud, Hackatime hour inflation included."},
+      {"number": 7, "verdict": "Needs Changes", "ground": "The project doesn't match the reviewer's justification, for example in hours, features or Hackatime projects."},
+      {"number": 14, "verdict": "Needs Changes", "ground": "The justification lacks required elements or doesn't justify the hours."},
+      {"number": 15, "verdict": "Needs Changes", "ground": "Required evidence can't be located from the information given."}
+    ],
+    "resubmit": "Needs Changes and Rejected projects are both removed from the Unified Database. A Needs Changes project goes back in when the program fixes it and presses Automation - Submit to Unified YSWS again in its Airtable. A Rejected project shouldn't be resubmitted without a spot-checker's permission."
+  }
+}

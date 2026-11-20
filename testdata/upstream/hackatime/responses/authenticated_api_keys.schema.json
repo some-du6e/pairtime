@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "GET /api/v1/authenticated/api_keys, 200",
+  "description": "ApiKeysController#index, api_keys_controller.rb lines 5-13: the user's first API key, created on the spot when the user has none. Hackatime's keys are the UUIDv4 strings wakatime-cli sends (HC 1.2), but the schema doesn't pin the format, because pairtime answers this call with a read-only ptr_ token instead (DESIGN 5.10).",
+  "type": "object",
+  "required": ["token"],
+  "properties": {
+    "token": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Stardance reads only this field (stardance hackatime_service.rb line 183) and then sends it as 'Authorization: Bearer <token>'."
+    }
+  }
+}

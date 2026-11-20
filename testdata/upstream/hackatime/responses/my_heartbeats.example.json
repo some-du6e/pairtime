@@ -1,0 +1,9 @@
+{
+  "start_time": "2026-11-03T18:00:00.000Z",
+  "end_time": "2026-11-03T19:00:00.000Z",
+  "total_seconds": 60,
+  "heartbeats": [
+    {"id": 90001, "user_id": 4821, "time": 1793728800.0, "entity": "lookout-session-example", "type": "file", "category": "coding", "project": "remind-bot", "editor": "Lookout", "language": "Lookout", "source_type": "direct_entry"},
+    {"id": 90002, "user_id": 4821, "time": 1793728860.0, "entity": "lookout-session-example", "type": "file", "category": "coding", "project": "remind-bot", "editor": "Lookout", "language": "Lookout", "source_type": "direct_entry"}
+  ]
+}

@@ -1,0 +1,111 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "GET /api/v1/users/:username/stats, 200 without total_seconds=true",
+  "description": "StatsController#user_stats (stats_controller.rb lines 32-113) returns WakatimeService#build_summary (wakatime_service.rb lines 72-110) as data, adds streak and sometimes unique_total_seconds, and appends the masked trust level. With total_seconds=true the body is stats_total_seconds.schema.json instead.",
+  "type": "object",
+  "required": ["data", "trust_factor"],
+  "properties": {
+    "data": {
+      "type": "object",
+      "required": [
+        "username", "user_id", "is_coding_activity_visible", "is_other_usage_visible", "status",
+        "start", "end", "range", "human_readable_range", "total_seconds", "daily_average",
+        "human_readable_total", "human_readable_daily_average", "streak"
+      ],
+      "properties": {
+        "username": {"type": "string", "description": "User#display_name (user.rb lines 400-408), which always returns a string."},
+        "user_id": {"type": "string", "pattern": "^[0-9]+$", "description": "The numeric user id, as a string."},
+        "is_coding_activity_visible": {"const": true},
+        "is_other_usage_visible": {"const": true},
+        "status": {"const": "ok"},
+        "start": {"$ref": "#/$defs/second_z"},
+        "end": {"$ref": "#/$defs/second_z"},
+        "range": {"const": "all_time"},
+        "human_readable_range": {"const": "All Time"},
+        "total_seconds": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "With test_param=true, Heartbeat.duration_seconds_boundary_aware over the filtered heartbeats in one global order, counting the gap from the last heartbeat before start (heartbeatable.rb lines 286-311). Otherwise plain duration_seconds over start <= time < end (lines 279-283)."
+        },
+        "daily_average": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "total_seconds divided by the whole days from start to end. Both divisions are integer divisions, and the value is 0 for a window under a day."
+        },
+        "human_readable_total": {"$ref": "#/$defs/detailed_text"},
+        "human_readable_daily_average": {"$ref": "#/$defs/detailed_text"},
+        "projects": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/chunk"},
+          "description": "Present when features includes projects. One entry per project name with heartbeats in start <= time < end, sorted by total_seconds descending and cut to limit when limit is non-zero. The seconds come from the grouped path, where LAG is partitioned by project (heartbeatable.rb lines 255-277), and that path never adds the boundary heartbeat. Entries can therefore add up to more than total_seconds (HC 1.4)."
+        },
+        "languages": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/language_chunk"},
+          "description": "Present when features includes languages, which is the default when features is absent."
+        },
+        "unique_total_seconds": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Present when features includes projects and filter_by_project is set. Coding-category heartbeats only, in one order, where a gap counts only when it is over 0 and at most 120 s (unique_heartbeat_seconds, stats_controller.rb lines 205-215)."
+        },
+        "streak": {"type": "integer", "minimum": 0, "description": "User#streak_days."}
+      }
+    },
+    "trust_factor": {"$ref": "#/$defs/public_trust_factor"}
+  },
+  "$defs": {
+    "second_z": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$",
+      "description": "Time.at(epoch).strftime('%Y-%m-%dT%H:%M:%SZ'). Time.at uses the server process's zone, so the Z holds only when that zone is UTC."
+    },
+    "detailed_text": {
+      "type": "string",
+      "pattern": "^$|^[0-9]+h( [0-9]+m)?( [0-9]+s)?$|^[0-9]+m( [0-9]+s)?$|^[0-9]+s$",
+      "description": "short_time_detailed (application_helper.rb lines 52-56). Zero parts are left out, so 0 is the empty string.",
+      "examples": ["3h 34m", "1m 14s", "5h 10m 10s", ""]
+    },
+    "simple_text": {
+      "type": "string",
+      "pattern": "^0m$|^[0-9]+h( [0-9]+m)?$|^[0-9]+m$",
+      "description": "short_time_simple (application_helper.rb lines 45-50): hours and minutes, never seconds, and 0m for under a minute.",
+      "examples": ["2h 30m", "1h", "0m"]
+    },
+    "digital": {
+      "type": "string",
+      "pattern": "^[0-9]{2,}:[0-9]{2}:[0-9]{2}$",
+      "description": "digital_time (application_helper.rb lines 40-43): zero-padded hours, minutes and seconds.",
+      "examples": ["02:30:00", "100:00:05"]
+    },
+    "chunk": {
+      "type": "object",
+      "description": "One entry from generate_summary_chunk (wakatime_service.rb lines 119-137).",
+      "required": ["name", "total_seconds", "text", "hours", "minutes", "percent", "digital"],
+      "properties": {
+        "name": {"type": "string", "description": "The project or language as stored, or 'Other' for a null or empty one. Stardance drops 'Other' and '<<LAST_PROJECT>>' (stardance app/models/user/hackatime_project.rb line 38)."},
+        "total_seconds": {"type": "integer", "minimum": 0},
+        "text": {"$ref": "#/$defs/simple_text"},
+        "hours": {"type": "integer", "minimum": 0, "description": "total_seconds / 3600, integer division."},
+        "minutes": {"type": "integer", "minimum": 0, "maximum": 59, "description": "(total_seconds % 3600) / 60, integer division."},
+        "percent": {"type": ["number", "null"], "description": "(100.0 * total_seconds / data.total_seconds).round(2). By our reading this is null when data.total_seconds is 0, since the quotient isn't finite and Rails encodes non-finite floats as null."},
+        "digital": {"$ref": "#/$defs/digital"}
+      }
+    },
+    "language_chunk": {
+      "allOf": [{"$ref": "#/$defs/chunk"}],
+      "required": ["color"],
+      "properties": {"color": {"type": ["string", "null"], "description": "LanguageUtils.color for the language."}}
+    },
+    "public_trust_factor": {
+      "type": "object",
+      "required": ["trust_level", "trust_value"],
+      "description": "@user.public_trust_level, which shows yellow as blue (user.rb lines 55-59), with its enum value.",
+      "oneOf": [
+        {"properties": {"trust_level": {"const": "blue"}, "trust_value": {"const": 0}}},
+        {"properties": {"trust_level": {"const": "red"}, "trust_value": {"const": 1}}},
+        {"properties": {"trust_level": {"const": "green"}, "trust_value": {"const": 2}}}
+      ]
+    }
+  }
+}

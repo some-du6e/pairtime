@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Hackatime JSON error",
+  "description": "The body of every JSON error the captured actions send: render_error and the helpers built on it (render_helpers.rb lines 9-29), and the inline errors in authenticated/application_controller.rb lines 20-26. Two refusals send no JSON and have no schema here: the admin API's token check answers 401 with Rails' plain-text 'HTTP Token: Access denied.', and Doorkeeper refuses a bad OAuth token itself.",
+  "type": "object",
+  "required": ["error"],
+  "properties": {
+    "error": {
+      "type": "string",
+      "minLength": 1,
+      "description": "A short message. The strings each action sends are listed in endpoints.json."
+    }
+  },
+  "examples": [
+    {"error": "User not found"},
+    {"error": "user has disabled public stats"},
+    {"error": "Unauthorized"},
+    {"error": "email not found"}
+  ]
+}

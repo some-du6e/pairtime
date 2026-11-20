@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "GET /api/v1/users/:username/heartbeats/spans, 200",
+  "description": "StatsController#user_spans (stats_controller.rb lines 115-126) returns Heartbeat.to_span (heartbeatable.rb lines 86-134) over every category, in one order across the selected projects, with the 120 s timeout. A span ends at a heartbeat whose next gap is over 120 s and gets min(gap, 120) added as its tail. The last span gets no tail. A span whose duration is 0, a lone heartbeat, is dropped.",
+  "type": "object",
+  "required": ["spans"],
+  "properties": {
+    "spans": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["start_time", "end_time", "duration"],
+        "properties": {
+          "start_time": {"type": "number", "description": "Epoch seconds of the span's first heartbeat."},
+          "end_time": {"type": "number", "description": "The last heartbeat's time plus the tail, in epoch seconds."},
+          "duration": {"type": "number", "minimum": 0, "description": "Always over 0. The span's last heartbeat minus its first, rounded to whole seconds, plus the tail, which isn't rounded. So it can have a fraction."}
+        }
+      }
+    }
+  }
+}

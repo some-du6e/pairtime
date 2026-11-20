@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "GET /api/v1/users/:username/trust_factor, 200",
+  "description": "StatsController#trust_factor, stats_controller.rb lines 128-138: the masked level (User.mask_trust_level shows yellow as blue, user.rb lines 55-57) and its enum value. pairtime always answers with the blue pair (DESIGN 5.10; JT must-fix 14).",
+  "type": "object",
+  "required": ["trust_level", "trust_value"],
+  "properties": {
+    "trust_level": {"enum": ["blue", "red", "green"]},
+    "trust_value": {"enum": [0, 1, 2]}
+  },
+  "oneOf": [
+    {"properties": {"trust_level": {"const": "blue"}, "trust_value": {"const": 0}}},
+    {"properties": {"trust_level": {"const": "red"}, "trust_value": {"const": 1}}},
+    {"properties": {"trust_level": {"const": "green"}, "trust_value": {"const": 2}}}
+  ],
+  "examples": [{"trust_level": "blue", "trust_value": 0}]
+}

@@ -1,0 +1,105 @@
+{
+  "functions": "durations.sql",
+  "derived": "Worked out by hand from excerpts/app/models/concerns/heartbeatable.rb and excerpts/lib/wakatime_service.rb. WP-PG0 did not run them; WP-PG11 runs every case through durations.sql on Postgres. A mismatch there means the SQL, these numbers or the Ruby reading is wrong, and the Ruby decides.",
+  "sets": [
+    {
+      "name": "two projects, a boundary heartbeat, an excluded category, a NULL category, a deleted row and another user's row",
+      "heartbeats": [
+        {"id": 1, "user_id": 1, "time": 900, "project": "a", "category": "coding", "deleted_at": null},
+        {"id": 2, "user_id": 1, "time": 950, "project": "b", "category": "coding", "deleted_at": null},
+        {"id": 3, "user_id": 1, "time": 1030, "project": "a", "category": "coding", "deleted_at": null},
+        {"id": 4, "user_id": 1, "time": 1060, "project": "b", "category": "coding", "deleted_at": null},
+        {"id": 5, "user_id": 1, "time": 1090, "project": "a", "category": "coding", "deleted_at": null},
+        {"id": 6, "user_id": 1, "time": 1120, "project": "b", "category": "coding", "deleted_at": null},
+        {"id": 7, "user_id": 1, "time": 1400, "project": "a", "category": "browsing", "deleted_at": null},
+        {"id": 8, "user_id": 1, "time": 1430, "project": "a", "category": "ai coding", "deleted_at": null},
+        {"id": 9, "user_id": 1, "time": 1460, "project": "a", "category": null, "deleted_at": null},
+        {"id": 10, "user_id": 1, "time": 2000, "project": "a", "category": "coding", "deleted_at": null},
+        {"id": 11, "user_id": 1, "time": 1200, "project": "a", "category": "coding", "deleted_at": "2026-11-01T00:00:00"},
+        {"id": 12, "user_id": 99, "time": 1110, "project": "a", "category": "coding", "deleted_at": null}
+      ],
+      "cases": [
+        {
+          "name": "test mode total: the gap from the boundary heartbeat counts, and long gaps are capped at 120 s",
+          "function": "hackatime_seconds_boundary_aware",
+          "args": {"user_id": 1, "projects": ["a", "b"], "start": 1000, "end": 2000, "excluded": ["browsing", "meeting", "communicating"]},
+          "expect": 410,
+          "why": "Ids 7 (browsing), 9 (no category), 11 (deleted) and 12 (another user) drop out. The boundary is id 2 at 950. Gaps ending in the window: 80, 30, 30, 30, then 310 and 570, each capped at 120."
+        },
+        {
+          "name": "no_ai_coding=true leaves the ai coding heartbeat out of the timeline",
+          "function": "hackatime_seconds_boundary_aware",
+          "args": {"user_id": 1, "projects": ["a", "b"], "start": 1000, "end": 2000, "excluded": ["browsing", "meeting", "communicating", "ai coding"]},
+          "expect": 290,
+          "why": "Without id 8 the gaps are 80, 30, 30, 30 and 880 capped at 120."
+        },
+        {
+          "name": "the boundary heartbeat is the last one of the filtered projects, not the last one overall",
+          "function": "hackatime_seconds_boundary_aware",
+          "args": {"user_id": 1, "projects": ["a"], "start": 1000, "end": 2000, "excluded": ["browsing", "meeting", "communicating"]},
+          "expect": 420,
+          "why": "Only project a: the boundary is id 1 at 900, then 130 capped at 120, 60, 340 capped at 120 and 570 capped at 120."
+        },
+        {
+          "name": "with no heartbeat before the window, the first one adds nothing",
+          "function": "hackatime_seconds_boundary_aware",
+          "args": {"user_id": 1, "projects": ["a", "b"], "start": 800, "end": 2000, "excluded": ["browsing", "meeting", "communicating"]},
+          "expect": 460,
+          "why": "No row before 800, so the window is 800 <= time <= 2000. Id 1 adds 0, then 50, 80, 30, 30, 30, 120 and 120."
+        },
+        {
+          "name": "the plain sum stops before the window's end and has no boundary heartbeat",
+          "function": "hackatime_seconds",
+          "args": {"user_id": 1, "projects": ["a", "b"], "start": 1000, "end": 2000, "excluded": ["browsing", "meeting", "communicating"]},
+          "expect": 210,
+          "why": "1000 <= time < 2000 keeps ids 3, 4, 5, 6 and 8. Id 10 at exactly 2000 is out. Id 3 adds 0, then 30, 30, 30 and 310 capped at 120."
+        },
+        {
+          "name": "with no exclusion list, browsing and NULL categories count",
+          "function": "hackatime_seconds",
+          "args": {"user_id": 1, "projects": ["a", "b"], "start": 1000, "end": 2000, "excluded": null},
+          "expect": 270,
+          "why": "Ids 3 to 9 without 10 or 11: 0, 30, 30, 30, 280 capped at 120, 30 and 30."
+        },
+        {
+          "name": "per-project gaps are taken inside each project, so the parts can exceed the whole",
+          "function": "hackatime_seconds_by_project",
+          "args": {"user_id": 1, "projects": ["a", "b"], "start": 1000, "end": 2000, "excluded": ["browsing", "meeting", "communicating"]},
+          "expect": {"a": 180, "b": 60},
+          "why": "a has 1030, 1090 and 1430, so 60 plus 340 capped at 120. b has 1060 and 1120, so 60. That is 240 against 210 for the same heartbeats in one order."
+        },
+        {
+          "name": "each gap goes to the category of the heartbeat that ends it",
+          "function": "hackatime_seconds_by_category",
+          "args": {"user_id": 1, "projects": ["a", "b"], "start": 1000, "end": 2000, "excluded": ["browsing", "meeting", "communicating"]},
+          "expect": {"coding": 90, "ai coding": 120},
+          "why": "In one order the three 30 s gaps end on coding heartbeats and the capped 310 s gap ends on id 8. 90 plus 120 is the plain sum, 210."
+        },
+        {
+          "name": "the category breakdown drops the NULL bucket",
+          "function": "hackatime_seconds_by_category",
+          "args": {"user_id": 1, "projects": ["a", "b"], "start": 1000, "end": 2000, "excluded": null},
+          "expect": {"coding": 90, "browsing": 120, "ai coding": 30},
+          "why": "The 280 s gap capped at 120 ends on id 7, browsing. Id 8 gets 30. Id 9's 30 s has no category and is dropped, so the buckets add up to 240, not the 270 of the plain sum."
+        }
+      ]
+    },
+    {
+      "name": "fractional timestamps",
+      "heartbeats": [
+        {"id": 21, "user_id": 2, "time": 1000.0, "project": "r", "category": "coding", "deleted_at": null},
+        {"id": 22, "user_id": 2, "time": 1000.8, "project": "r", "category": "coding", "deleted_at": null},
+        {"id": 23, "user_id": 2, "time": 1001.6, "project": "r", "category": "coding", "deleted_at": null}
+      ],
+      "cases": [
+        {
+          "name": "the integer cast rounds the sum instead of truncating it",
+          "function": "hackatime_seconds",
+          "args": {"user_id": 2, "projects": ["r"], "start": 1000, "end": 1002, "excluded": ["browsing", "meeting", "communicating"]},
+          "expect": 2,
+          "why": "Two gaps of 0.8 s make 1.6 s, and ::integer rounds that to 2. Truncating would give 1."
+        }
+      ]
+    }
+  ]
+}

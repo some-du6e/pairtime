@@ -1,0 +1,10 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "POST /api/admin/v1/user/get_user_by_email, 200",
+  "description": "UserUtilities#get_user_by_email, user_utilities.rb lines 32-37: the id of the user who owns the address. The errors are in endpoints.json.",
+  "type": "object",
+  "required": ["user_id"],
+  "properties": {
+    "user_id": {"type": "integer", "minimum": 1}
+  }
+}

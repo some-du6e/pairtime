@@ -1,0 +1,339 @@
+{
+  "reconstructed": true,
+  "scheme": {
+    "timestamp_header": "X-Robert-Timestamp",
+    "signature_header": "X-Robert-Signature",
+    "message": "<X-Robert-Timestamp>.<raw body>: the timestamp header's value, a period, and the request body exactly as it arrived, before any JSON parsing.",
+    "mac": "HMAC-SHA256",
+    "key": "The event's webhook secret as UTF-8 bytes. Robert issues it when the webhook URL is set (api.json, set_webhook_url), and pixl's comment says it starts with whsec_.",
+    "signature_format": "sha256= followed by the 64 lowercase hex digits of the MAC.",
+    "timestamp_format": "Unix time in whole seconds, as decimal digits.",
+    "tolerance_s": 300,
+    "receiver_rule": [
+      "Refuse when either header is missing. Carnival and Alchemize also refuse outright when the secret is empty.",
+      "Refuse unless X-Robert-Timestamp is one or more ASCII digits.",
+      "Refuse when the timestamp is more than 300 s from the receiver's clock, either way. The clock has fractions (Date.now() / 1000), so 300.5 s off is refused and exactly 300 s is accepted.",
+      "Compute sha256= and the hex MAC, and compare that with X-Robert-Signature byte for byte in constant time. A different length, uppercase hex or a missing prefix fails.",
+      "Parse the body only after it verifies."
+    ],
+    "sources": [
+      {
+        "repo": "hackclub/trmnt",
+        "file": "src/src/lib/server/robert.ts",
+        "lines": "88-116"
+      },
+      {
+        "repo": "hackclub/Alchemize",
+        "file": "src/lib/server/telescreenClient.ts",
+        "lines": "189-207"
+      },
+      {
+        "repo": "hackclub/the-carnival",
+        "file": "src/lib/telescreen/webhook-signature.ts",
+        "lines": "3-28"
+      },
+      {
+        "repo": "hackclub/pixl",
+        "file": "apps/internal-dashboard/app/api/robert/outcome/route.ts",
+        "lines": "9-23"
+      }
+    ]
+  },
+  "payloads": [
+    {
+      "event": "outcome.set",
+      "when": "A project reached its final outcome: a fraud reviewer scored it 4 or below, or the program's own outcome was recorded. A score from 5 to 10 sends nothing; the project just becomes awaiting_outcome.",
+      "fields": [
+        {
+          "name": "event",
+          "type": "string",
+          "meaning": "outcome.set"
+        },
+        {
+          "name": "deliveryId",
+          "type": "string, a UUID",
+          "meaning": "The same on every retry of one delivery."
+        },
+        {
+          "name": "eventId",
+          "type": "string",
+          "meaning": "The Robert event's slug. Alchemize acknowledges and ignores a delivery for another slug."
+        },
+        {
+          "name": "projectId",
+          "type": "string, a UUID",
+          "meaning": "Robert's project id."
+        },
+        {
+          "name": "outcome.status",
+          "type": "\"approved\" or \"rejected\"",
+          "meaning": "The final decision."
+        },
+        {
+          "name": "outcome.reason",
+          "type": "string or null",
+          "meaning": "For a fraud rejection, the fraud reviewer's note."
+        },
+        {
+          "name": "outcome.trustScore",
+          "type": "integer or null",
+          "meaning": "The fraud reviewer's 1 to 10 score."
+        },
+        {
+          "name": "outcome.reviewedAt",
+          "type": "string, ISO 8601",
+          "meaning": "When the outcome was decided."
+        }
+      ],
+      "sources": [
+        {
+          "repo": "hackclub/the-carnival",
+          "file": "src/app/api/webhooks/telescreen/route.ts",
+          "lines": "1-11, 21-31, 89-114"
+        },
+        {
+          "repo": "hackclub/pixl",
+          "file": "apps/internal-dashboard/app/api/robert/outcome/route.ts",
+          "lines": "25-34, 54-63, 88-93"
+        },
+        {
+          "repo": "hackclub/Alchemize",
+          "file": "src/routes/api/telescreen/webhook/+server.ts",
+          "lines": "45-61"
+        }
+      ]
+    },
+    {
+      "event": "ping",
+      "when": "A test delivery. The receivers acknowledge it and do nothing else.",
+      "fields": [
+        {
+          "name": "event",
+          "type": "string",
+          "meaning": "ping"
+        },
+        {
+          "name": "deliveryId",
+          "type": "string, a UUID",
+          "meaning": "As for outcome.set."
+        }
+      ],
+      "sources": [
+        {
+          "repo": "hackclub/pixl",
+          "file": "apps/internal-dashboard/app/api/robert/outcome/route.ts",
+          "lines": "70"
+        },
+        {
+          "repo": "hackclub/Alchemize",
+          "file": "src/routes/api/telescreen/webhook/+server.ts",
+          "lines": "45-49, 70-72"
+        }
+      ]
+    }
+  ],
+  "deliveries": [
+    {
+      "text": "Any 2xx answer acknowledges a delivery. Anything else makes Robert retry with the same deliveryId, 8 attempts over about 45 hours by Alchemize's comment, so receivers store the delivery ids they handled and acknowledge a repeat without acting on it again.",
+      "sources": [
+        {
+          "repo": "hackclub/Alchemize",
+          "file": "src/routes/api/telescreen/webhook/+server.ts",
+          "lines": "6-8, 58-65"
+        },
+        {
+          "repo": "hackclub/the-carnival",
+          "file": "src/app/api/webhooks/telescreen/route.ts",
+          "lines": "8-10, 60-65"
+        }
+      ]
+    },
+    {
+      "text": "Carnival reads the delivery id from an X-Robert-Delivery header when the body has none.",
+      "sources": [
+        {
+          "repo": "hackclub/the-carnival",
+          "file": "src/app/api/webhooks/telescreen/route.ts",
+          "lines": "54-58"
+        }
+      ]
+    },
+    {
+      "text": "The webhook for an outcome decided in Robert's own UI carries no review note, only outcome.reason, so pixl also polls list_projects.",
+      "sources": [
+        {
+          "repo": "hackclub/pixl",
+          "file": "apps/internal-dashboard/lib/robert.ts",
+          "lines": "194-196"
+        }
+      ]
+    }
+  ],
+  "signing_vectors": [
+    {
+      "name": "a ping delivery",
+      "secret": "pairtime-test-secret",
+      "timestamp": "1793728800",
+      "body": "{\"event\":\"ping\",\"deliveryId\":\"6f1d2a3b-4c5d-4e6f-8a9b-0c1d2e3f4a5b\",\"eventId\":\"pairtime-test\"}",
+      "signature": "sha256=25416ca11cb9b2a76ad93a55585a8b2b747e15379ef89104851ce440062e11cf"
+    },
+    {
+      "name": "an outcome.set delivery for a fraud rejection",
+      "secret": "pairtime-test-secret",
+      "timestamp": "1793729500",
+      "body": "{\"event\":\"outcome.set\",\"deliveryId\":\"0b5e8f8e-2d1c-4f7a-9e3b-6a2c1d0e9f87\",\"eventId\":\"pairtime-test\",\"projectId\":\"3c9a7e21-5b4d-4c1f-8e2a-7d6b5c4a3f21\",\"outcome\":{\"status\":\"rejected\",\"reason\":\"Scripted heartbeats\",\"trustScore\":3,\"reviewedAt\":\"2026-11-03T20:11:40.000Z\"}}",
+      "signature": "sha256=dc7968006acdfd014bc666ed07f2628890bbf2c7c9265a2154d1cbc99286f0a0"
+    },
+    {
+      "name": "a body with non-ASCII text is signed as its UTF-8 bytes",
+      "secret": "pairtime-test-secret",
+      "timestamp": "1793790000",
+      "body": "{\"event\":\"outcome.set\",\"deliveryId\":\"9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d\",\"eventId\":\"pairtime-test\",\"projectId\":\"3c9a7e21-5b4d-4c1f-8e2a-7d6b5c4a3f21\",\"outcome\":{\"status\":\"approved\",\"reason\":\"D\u00e9j\u00e0 vu \u2013 fine\",\"trustScore\":9,\"reviewedAt\":\"2026-11-04T09:00:00.000Z\"}}",
+      "signature": "sha256=57c4d05c916deb0c4dfc0bd0f5b4a5a34c8888612c5cbb0eef387b5334588c62"
+    },
+    {
+      "name": "an empty body still signs the timestamp and the period",
+      "secret": "pairtime-test-secret",
+      "timestamp": "1793728800",
+      "body": "",
+      "signature": "sha256=197cd4adf3e06a15f61a75b198b6b79f71d722f388a237f74f8033195d0469f9"
+    }
+  ],
+  "verify_cases": [
+    {
+      "name": "a correct signature with the receiver's clock on the timestamp is accepted",
+      "secret": "pairtime-test-secret",
+      "timestamp": "1793728800",
+      "signature": "sha256=25416ca11cb9b2a76ad93a55585a8b2b747e15379ef89104851ce440062e11cf",
+      "body": "{\"event\":\"ping\",\"deliveryId\":\"6f1d2a3b-4c5d-4e6f-8a9b-0c1d2e3f4a5b\",\"eventId\":\"pairtime-test\"}",
+      "now": 1793728800,
+      "expect": "accept"
+    },
+    {
+      "name": "exactly 300 s after the timestamp is still accepted",
+      "secret": "pairtime-test-secret",
+      "timestamp": "1793728800",
+      "signature": "sha256=25416ca11cb9b2a76ad93a55585a8b2b747e15379ef89104851ce440062e11cf",
+      "body": "{\"event\":\"ping\",\"deliveryId\":\"6f1d2a3b-4c5d-4e6f-8a9b-0c1d2e3f4a5b\",\"eventId\":\"pairtime-test\"}",
+      "now": 1793729100,
+      "expect": "accept"
+    },
+    {
+      "name": "301 s after the timestamp is refused",
+      "secret": "pairtime-test-secret",
+      "timestamp": "1793728800",
+      "signature": "sha256=25416ca11cb9b2a76ad93a55585a8b2b747e15379ef89104851ce440062e11cf",
+      "body": "{\"event\":\"ping\",\"deliveryId\":\"6f1d2a3b-4c5d-4e6f-8a9b-0c1d2e3f4a5b\",\"eventId\":\"pairtime-test\"}",
+      "now": 1793729101,
+      "expect": "reject"
+    },
+    {
+      "name": "300.5 s after is refused, because the clock has fractions",
+      "secret": "pairtime-test-secret",
+      "timestamp": "1793728800",
+      "signature": "sha256=25416ca11cb9b2a76ad93a55585a8b2b747e15379ef89104851ce440062e11cf",
+      "body": "{\"event\":\"ping\",\"deliveryId\":\"6f1d2a3b-4c5d-4e6f-8a9b-0c1d2e3f4a5b\",\"eventId\":\"pairtime-test\"}",
+      "now": 1793729100.5,
+      "expect": "reject"
+    },
+    {
+      "name": "300 s before the timestamp is accepted, since the window runs both ways",
+      "secret": "pairtime-test-secret",
+      "timestamp": "1793728800",
+      "signature": "sha256=25416ca11cb9b2a76ad93a55585a8b2b747e15379ef89104851ce440062e11cf",
+      "body": "{\"event\":\"ping\",\"deliveryId\":\"6f1d2a3b-4c5d-4e6f-8a9b-0c1d2e3f4a5b\",\"eventId\":\"pairtime-test\"}",
+      "now": 1793728500,
+      "expect": "accept"
+    },
+    {
+      "name": "301 s before the timestamp is refused",
+      "secret": "pairtime-test-secret",
+      "timestamp": "1793728800",
+      "signature": "sha256=25416ca11cb9b2a76ad93a55585a8b2b747e15379ef89104851ce440062e11cf",
+      "body": "{\"event\":\"ping\",\"deliveryId\":\"6f1d2a3b-4c5d-4e6f-8a9b-0c1d2e3f4a5b\",\"eventId\":\"pairtime-test\"}",
+      "now": 1793728499,
+      "expect": "reject"
+    },
+    {
+      "name": "an uppercase hex digest is refused, since the comparison is byte for byte",
+      "secret": "pairtime-test-secret",
+      "timestamp": "1793728800",
+      "signature": "sha256=25416CA11CB9B2A76AD93A55585A8B2B747E15379EF89104851CE440062E11CF",
+      "body": "{\"event\":\"ping\",\"deliveryId\":\"6f1d2a3b-4c5d-4e6f-8a9b-0c1d2e3f4a5b\",\"eventId\":\"pairtime-test\"}",
+      "now": 1793728800,
+      "expect": "reject"
+    },
+    {
+      "name": "a digest without the sha256= prefix is refused",
+      "secret": "pairtime-test-secret",
+      "timestamp": "1793728800",
+      "signature": "25416ca11cb9b2a76ad93a55585a8b2b747e15379ef89104851ce440062e11cf",
+      "body": "{\"event\":\"ping\",\"deliveryId\":\"6f1d2a3b-4c5d-4e6f-8a9b-0c1d2e3f4a5b\",\"eventId\":\"pairtime-test\"}",
+      "now": 1793728800,
+      "expect": "reject"
+    },
+    {
+      "name": "a correct MAC over a timestamp with a fraction is refused, because the timestamp must be digits",
+      "secret": "pairtime-test-secret",
+      "timestamp": "1793728800.0",
+      "signature": "sha256=357b33ecb6a84cccb2101d45295955d820cd8e93484eea8b33b9e64826884c86",
+      "body": "{\"event\":\"ping\",\"deliveryId\":\"6f1d2a3b-4c5d-4e6f-8a9b-0c1d2e3f4a5b\",\"eventId\":\"pairtime-test\"}",
+      "now": 1793728800,
+      "expect": "reject"
+    },
+    {
+      "name": "a correct MAC over a millisecond timestamp is refused, since it reads as a time far outside the window",
+      "secret": "pairtime-test-secret",
+      "timestamp": "1793728800000",
+      "signature": "sha256=ceefb0871398a9fed51f35a9ee1ee5086d0dc6fa2571de89cdf745859de7f5f7",
+      "body": "{\"event\":\"ping\",\"deliveryId\":\"6f1d2a3b-4c5d-4e6f-8a9b-0c1d2e3f4a5b\",\"eventId\":\"pairtime-test\"}",
+      "now": 1793728800,
+      "expect": "reject"
+    },
+    {
+      "name": "one byte added to the body after signing is refused",
+      "secret": "pairtime-test-secret",
+      "timestamp": "1793728800",
+      "signature": "sha256=25416ca11cb9b2a76ad93a55585a8b2b747e15379ef89104851ce440062e11cf",
+      "body": "{\"event\": \"ping\",\"deliveryId\":\"6f1d2a3b-4c5d-4e6f-8a9b-0c1d2e3f4a5b\",\"eventId\":\"pairtime-test\"}",
+      "now": 1793728800,
+      "expect": "reject"
+    },
+    {
+      "name": "the right signature checked with another secret is refused",
+      "secret": "pairtime-other-secret",
+      "timestamp": "1793728800",
+      "signature": "sha256=25416ca11cb9b2a76ad93a55585a8b2b747e15379ef89104851ce440062e11cf",
+      "body": "{\"event\":\"ping\",\"deliveryId\":\"6f1d2a3b-4c5d-4e6f-8a9b-0c1d2e3f4a5b\",\"eventId\":\"pairtime-test\"}",
+      "now": 1793728800,
+      "expect": "reject"
+    },
+    {
+      "name": "a missing signature header is refused",
+      "secret": "pairtime-test-secret",
+      "timestamp": "1793728800",
+      "signature": null,
+      "body": "{\"event\":\"ping\",\"deliveryId\":\"6f1d2a3b-4c5d-4e6f-8a9b-0c1d2e3f4a5b\",\"eventId\":\"pairtime-test\"}",
+      "now": 1793728800,
+      "expect": "reject"
+    },
+    {
+      "name": "a missing timestamp header is refused",
+      "secret": "pairtime-test-secret",
+      "timestamp": null,
+      "signature": "sha256=25416ca11cb9b2a76ad93a55585a8b2b747e15379ef89104851ce440062e11cf",
+      "body": "{\"event\":\"ping\",\"deliveryId\":\"6f1d2a3b-4c5d-4e6f-8a9b-0c1d2e3f4a5b\",\"eventId\":\"pairtime-test\"}",
+      "now": 1793728800,
+      "expect": "reject"
+    },
+    {
+      "name": "an empty secret never verifies, even against a MAC made with the empty key",
+      "secret": "",
+      "timestamp": "1793728800",
+      "signature": "sha256=cf6e51c2bc01247c810dc4067b1c05ec353e09095bc3d70fcd863c55a39f713e",
+      "body": "{\"event\":\"ping\",\"deliveryId\":\"6f1d2a3b-4c5d-4e6f-8a9b-0c1d2e3f4a5b\",\"eventId\":\"pairtime-test\"}",
+      "now": 1793728800,
+      "expect": "reject"
+    }
+  ]
+}
