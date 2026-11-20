@@ -855,7 +855,7 @@ DESIGN 3.6 and 7.4 give the fields of each value. These are the encodings and ru
 1. HKDF uses RFC 5869's default salt, 32 zero bytes, and `L = 32` (3).
 2. Every integer is `u64` big-endian: `s`, `n_b`, `b`, `received_at`, `count_d` and `d`. Times are Unix milliseconds (1).
 3. Batch numbers and sequence numbers start at 1, and `H_0 = zero(32)` (4.1, 6).
-4. One sequence numbers every record, checkpoints and upload-failure notes included, and an event's `seq` equals its record's `s` (4.1). PR1 documents `seq` as gapless among events, which stops being true once checkpoints exist. The comment on `Envelope.Seq` in `pkg/event` needs to change, in WP-LG2 or WP-EV1.
+4. One sequence numbers every record, checkpoints and upload-failure notes included, and an event's `seq` equals its record's `s` (4.1). PR1 documented `seq` as gapless among events, which stops being true once checkpoints exist. `pkg/event`'s comment on `Envelope.Seq` and the event schema now say so. SM 1.1 still calls `seq` gapless, and SM is an oracle, so `docs/errata/2026-11-20-sm-1.1-seq-gaps.md` takes its wording to Karim.
 5. The rtype table is fixed as listed, with `0x00` and every unlisted code reserved (4.2).
 6. A header for an `os.*` event always has the zero project, and checkpoints and upload-failure notes get the header fields in 4.3's table. `pkg/event` doesn't yet refuse a `project_key` on an `os.*` event, so until a `kindTable` rule does, the ledger writer must (4.3).
 7. The body's members, their order, and the nonce as hex (4.5).
