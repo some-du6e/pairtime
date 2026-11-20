@@ -157,7 +157,6 @@ func runInstall(args []string, stdout, stderr io.Writer) int {
 		Harnesses: harnesses,
 		Hook:      hook,
 		Diffs:     diffs,
-		Settings:  install.ClaudeSettings(env),
 	})
 	for _, id := range skip {
 		screen.Untick(id)
@@ -171,13 +170,20 @@ func runInstall(args []string, stdout, stderr io.Writer) int {
 	switch {
 	case *dryRun:
 		if !same {
-			fmt.Fprintf(stdout, "Binary files /dev/null and %s differ\n", install.Printable(env.Exe))
+			from := "/dev/null"
+			if _, err := os.Stat(env.Exe); err == nil {
+				from = install.Printable(env.Exe)
+			}
+			fmt.Fprintf(stdout, "Binary files %s and %s differ\n", from, install.Printable(env.Exe))
 		}
 		for _, id := range screen.Ticked() {
 			io.WriteString(stdout, diffs[id])
 		}
 		return 0
 	case *yes:
+		if claudeFound && !hook.OK {
+			fmt.Fprintf(stdout, "Claude Code's hooks stay out: %s.\n", hook.Why)
+		}
 	default:
 		if !screen.Ask(installStdin, stdout) {
 			fmt.Fprintln(stdout, "Nothing changed.")

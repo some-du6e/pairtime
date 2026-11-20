@@ -148,7 +148,7 @@ func placeBinary(src, dst string) (err error) {
 // Uninstall deletes the binary at pairtime's per-user path only then.
 func isPairtimeBinary(path string) bool {
 	bi, err := buildinfo.ReadFile(path)
-	return err == nil && bi.Main.Path == modulePath
+	return err == nil && (bi.Main.Path == modulePath || strings.HasPrefix(bi.Path, modulePath+"/"))
 }
 
 // setupRecord is install/setup.json in the data directory: what install

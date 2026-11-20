@@ -83,8 +83,6 @@ type Input struct {
 	// install.Plan.Diff prints them. An item missing from it isn't
 	// offered.
 	Diffs map[string]string
-	// Settings is the Claude Code settings file the hooks go in.
-	Settings string
 }
 
 // Screen is the consent screen.
