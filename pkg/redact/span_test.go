@@ -35,6 +35,13 @@ func TestMerge(t *testing.T) {
 		{"a secret that outgrows a known value keeps its rule",
 			[]Span{{Start: 0, End: 4, Type: TypeDeny}, {Start: 2, End: 30, Type: TypeSecret, Rule: "jwt"}},
 			[]Span{{Start: 0, End: 30, Type: TypeSecret, Rule: "jwt"}}},
+		{"a vendor's rule wins a tie with generic-api-key, in either order",
+			[]Span{{Start: 0, End: 9, Type: TypeSecret, Rule: "generic-api-key"}, {Start: 0, End: 9, Type: TypeSecret, Rule: "stripe-access-token"},
+				{Start: 20, End: 29, Type: TypeSecret, Rule: "stripe-access-token"}, {Start: 20, End: 29, Type: TypeSecret, Rule: "generic-api-key"}},
+			[]Span{{Start: 0, End: 9, Type: TypeSecret, Rule: "stripe-access-token"}, {Start: 20, End: 29, Type: TypeSecret, Rule: "stripe-access-token"}}},
+		{"a tie between two vendors' rules goes to the id that sorts first",
+			[]Span{{Start: 0, End: 9, Type: TypeSecret, Rule: "slack-bot-token"}, {Start: 0, End: 9, Type: TypeSecret, Rule: "aws-access-token"}},
+			[]Span{{Start: 0, End: 9, Type: TypeSecret, Rule: "aws-access-token"}}},
 		{"empty and inverted spans are dropped",
 			[]Span{{Start: 3, End: 3, Type: TypeHost}, {Start: 5, End: 4, Type: TypeHost}, {Start: -1, End: 2, Type: TypeHost}},
 			nil},
@@ -66,6 +73,38 @@ func TestRender(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := Render(tt.text, tt.spans); got != tt.want {
 				t.Errorf("Render = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestPreview checks that the preview shows what a reveal carries: whole
+// tokens, the five reveal types, and a code block's line count without its
+// language.
+func TestPreview(t *testing.T) {
+	code := "see:\n```go\nx\n```\nok"
+	tests := []struct {
+		name  string
+		text  string
+		spans []Span
+		want  string
+	}{
+		{"an email address takes its whole token and shows as pii", "write to email:teen@example.com, ok",
+			[]Span{{Start: 15, End: 31, Type: TypeEmail}}, "write to [PII] ok"},
+		{"every known value shows as known", "Maya Kowalski said hi",
+			[]Span{{Start: 0, End: 13, Type: TypeGitName}}, "[KNOWN] said hi"},
+		{"a secret shows as secret, without its rule", "key sk_test_x here",
+			[]Span{{Start: 4, End: 13, Type: TypeSecret, Rule: "stripe-access-token"}}, "key [SECRET] here"},
+		{"code shows its line count and never its language", code, CodeBlocks(code), "see:\n[CODE: 1 line]\nok"},
+		{"an empty code block shows no count", "```\n```", CodeBlocks("```\n```"), "[CODE]"},
+		{"a span the teen removed shows as teen", "my friend Sam", []Span{{Start: 10, End: 13, Type: TypeManual}}, "my friend [TEEN]"},
+		{"a secret inside a code block shows once, as the code", "```\nkey\n```",
+			[]Span{{Start: 0, End: 11, Type: TypeCode, Lines: 1}, {Start: 4, End: 7, Type: TypeSecret, Rule: "x"}}, "[CODE: 1 line]"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := Preview(tt.text, tt.spans); got != tt.want {
+				t.Errorf("Preview = %q, want %q", got, tt.want)
 			}
 		})
 	}
