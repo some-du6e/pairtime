@@ -312,7 +312,7 @@ func TestPrivacyNotice(t *testing.T) {
 			name:    "with only day roots left to come, the notice names that one",
 			opts:    Options{Running: Running{SignIn: true, Uploads: true, Submissions: true}},
 			want:    []string{"This server doesn&#39;t yet publish day roots."},
-			notWant: []string{"evidence store,", "sign in,"},
+			notWant: []string{"keep an evidence store", "let anyone sign in", "receive uploads from"},
 		},
 		{
 			name:    "once everything the notice describes runs, the line goes",
