@@ -47,12 +47,23 @@ import (
 	"unicode"
 
 	"github.com/some-du6e/pairtime/internal/agent/config"
+	"github.com/some-du6e/pairtime/pkg/params"
 )
 
-// Fresh is SESSION_GAP_S (SM 8), the gap that ends a work session: how long
-// after its session ended a note may still be shown, and the least time
-// between two notifications.
-const Fresh = 1200 * time.Second
+// Fresh returns SESSION_GAP_S (SM 8.6), the gap between credited minutes
+// that ends a work session, from the newest parameter table pairtime
+// embeds: how long after its session ended a note may still be shown, and
+// the least time between two notifications. SESSION_GAP_S is for display
+// only, so reading it needs no scoring version in force, and a new table
+// that changes it needs no change here.
+func Fresh() time.Duration {
+	return sessionGap()
+}
+
+var sessionGap = sync.OnceValue(func() time.Duration {
+	tables := params.Tables()
+	return time.Duration(tables[len(tables)-1].Int(params.SESSION_GAP_S)) * time.Second
+})
 
 // MaxText is the most characters of a note's Text a notification shows.
 const MaxText = 200
@@ -365,12 +376,12 @@ func (n *Notifier) gate(note Note, set config.Notifications, now time.Time) Outc
 		return TurnedOff
 	case set.Quiet.Contains(now):
 		return InQuietHours
-	case !note.Ended.IsZero() && now.Sub(note.Ended) > Fresh:
+	case !note.Ended.IsZero() && now.Sub(note.Ended) > Fresh():
 		return Stale
 	}
 	// A last notification in the future means the clock was set back; it
 	// stops nothing.
-	if since := now.Sub(n.lastShown); !n.lastShown.IsZero() && since >= 0 && since < Fresh {
+	if since := now.Sub(n.lastShown); !n.lastShown.IsZero() && since >= 0 && since < Fresh() {
 		return TooSoon
 	}
 	return Queued

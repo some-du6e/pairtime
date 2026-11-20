@@ -15,6 +15,7 @@ import (
 
 	"github.com/some-du6e/pairtime/internal/agent/config"
 	"github.com/some-du6e/pairtime/internal/agent/state"
+	"github.com/some-du6e/pairtime/pkg/params"
 )
 
 // The agent hands the notifier its state.json.
@@ -120,7 +121,8 @@ func mustQuiet(s string) config.QuietHours {
 
 // step is one thing that happens, at a clock time.
 type step struct {
-	at       string                // the clock time
+	at       string                // the clock time; "" means 20:00:00 plus after
+	after    time.Duration         // with no at, how long after 20:00:00
 	settings *config.Notifications // when set, the settings from now on
 	notify   string                // Notify about this session ("" with present: nothing)
 	ago      time.Duration         // how long before the clock time the session ended
@@ -166,7 +168,11 @@ func newRig(settings config.Notifications, errs []error, memory Memory) *rig {
 func (r *rig) run(t *testing.T, steps []step) {
 	t.Helper()
 	for i, s := range steps {
-		r.clock.Set(at(s.at))
+		when := at("20:00:00").Add(s.after)
+		if s.at != "" {
+			when = at(s.at)
+		}
+		r.clock.Set(when)
 		if s.settings != nil {
 			r.mu.Lock()
 			r.settings = *s.settings
@@ -177,7 +183,7 @@ func (r *rig) run(t *testing.T, steps []step) {
 		} else {
 			note := Note{Session: s.notify, Ended: r.clock.Now().Add(-s.ago), Text: s.text}
 			if got := r.n.Notify(note); got != s.want {
-				t.Errorf("step %d at %s: Notify(%q) = %v, want %v", i, s.at, s.notify, got, s.want)
+				t.Errorf("step %d at %s: Notify(%q) = %v, want %v", i, when.Format("15:04:05"), s.notify, got, s.want)
 			}
 		}
 		r.n.wg.Wait()
@@ -265,12 +271,12 @@ func TestNotifyRules(t *testing.T) {
 		},
 		{
 			name:        "a session that ended more than SESSION_GAP_S ago is stale",
-			steps:       []step{{at: "20:00:00", notify: "s1", ago: Fresh + time.Second, want: Stale}},
+			steps:       []step{{at: "20:00:00", notify: "s1", ago: Fresh() + time.Second, want: Stale}},
 			wantResults: []string{"s1: the session ended too long ago"},
 		},
 		{
 			name:         "a session that ended exactly SESSION_GAP_S ago is still shown",
-			steps:        []step{{at: "20:00:00", notify: "s1", ago: Fresh, want: Queued}},
+			steps:        []step{{at: "20:00:00", notify: "s1", ago: Fresh(), want: Queued}},
 			wantResults:  []string{"s1: shown"},
 			wantCalls:    1,
 			wantProblems: []string{""},
@@ -279,7 +285,7 @@ func TestNotifyRules(t *testing.T) {
 			name: "a note within SESSION_GAP_S of the last one shown is dropped",
 			steps: []step{
 				{at: "20:00:00", notify: "s1", want: Queued},
-				{at: "20:19:59", notify: "s2", want: TooSoon},
+				{after: Fresh() - time.Second, notify: "s2", want: TooSoon},
 			},
 			wantResults:  []string{"s1: shown", "s2: too soon after the last notification"},
 			wantCalls:    1,
@@ -289,7 +295,7 @@ func TestNotifyRules(t *testing.T) {
 			name: "a note SESSION_GAP_S after the last one shown is shown",
 			steps: []step{
 				{at: "20:00:00", notify: "s1", want: Queued},
-				{at: "20:20:00", notify: "s2", want: Queued},
+				{after: Fresh(), notify: "s2", want: Queued},
 			},
 			wantResults:  []string{"s1: shown", "s2: shown"},
 			wantCalls:    2,
@@ -311,7 +317,7 @@ func TestNotifyRules(t *testing.T) {
 			errs: []error{ErrAway},
 			steps: []step{
 				{at: "20:00:00", notify: "s1", want: Queued},
-				{at: "20:20:01", present: true},
+				{after: Fresh() + time.Second, present: true},
 			},
 			wantResults: []string{"s1: the session ended too long ago"},
 			wantCalls:   1,
@@ -600,6 +606,24 @@ func TestShownNotificationIsSavedForTheNextStart(t *testing.T) {
 			want := "s1: already decided for this session\ns2: shown"
 			if got := strings.Join(results, "\n"); got != want {
 				t.Errorf("results:\n%s\nwant:\n%s", got, want)
+			}
+		})
+	}
+}
+
+func TestFreshIsSessionGapFromTheNewestTable(t *testing.T) {
+	tables := params.Tables()
+	newest := tables[len(tables)-1]
+	tests := []struct {
+		name string
+		want time.Duration
+	}{
+		{name: "Fresh is the newest table's SESSION_GAP_S, in seconds", want: time.Duration(newest.Int(params.SESSION_GAP_S)) * time.Second},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := Fresh(); got != tt.want || got <= 0 {
+				t.Errorf("Fresh() = %v, want %v from table %s", got, tt.want, newest.Version())
 			}
 		})
 	}
