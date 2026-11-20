@@ -401,6 +401,35 @@ func TestNotifyRules(t *testing.T) {
 	}
 }
 
+// Quiet hours are clock times in the zone of the clock's times, which
+// localtime.Now reads afresh on each call. So a laptop that flew from Los
+// Angeles to Tokyo keeps quiet hours by Tokyo's clock.
+func TestQuietHoursFollowTheClocksZone(t *testing.T) {
+	instant := at("20:00:00") // 20:00 UTC
+	tests := []struct {
+		name string
+		zone *time.Location
+		want Outcome
+	}{
+		{name: "05:00 in Tokyo is inside quiet hours of 22:00-07:00", zone: time.FixedZone("JST", 9*3600), want: InQuietHours},
+		{name: "the same instant, 12:00 in Los Angeles, is outside them", zone: time.FixedZone("PST", -8*3600), want: Queued},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			n := New(Options{
+				Backend:  &fakeBackend{},
+				Settings: func() config.Notifications { return config.Notifications{Quiet: mustQuiet("22:00-07:00")} },
+				Now:      func() time.Time { return instant.In(tt.zone) },
+			})
+			defer n.Close()
+			if got := n.Notify(Note{Session: "s1", Ended: instant}); got != tt.want {
+				t.Errorf("Notify() at %s = %v, want %v", instant.In(tt.zone).Format("15:04 MST"), got, tt.want)
+			}
+			n.wg.Wait()
+		})
+	}
+}
+
 func TestEveryMessageHasTheFixedTitle(t *testing.T) {
 	tests := []struct {
 		name string

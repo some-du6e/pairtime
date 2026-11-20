@@ -51,6 +51,7 @@ import (
 	"unicode"
 
 	"github.com/some-du6e/pairtime/internal/agent/config"
+	"github.com/some-du6e/pairtime/internal/platform/localtime"
 	"github.com/some-du6e/pairtime/pkg/params"
 )
 
@@ -229,8 +230,11 @@ type Options struct {
 	// Memory keeps the last notification time and recent sessions across
 	// restarts. Nil keeps them for this process only.
 	Memory Memory
-	// Now is the clock. Nil means time.Now. Quiet hours read the clock time
-	// in the location of the times it returns.
+	// Now is the clock. Quiet hours read the clock time in the location of
+	// the times it returns. Nil means localtime.Now, which reads the
+	// computer's time zone afresh each time, so quiet hours follow a laptop
+	// that changed time zones while the agent ran. time.Now wouldn't: Go
+	// reads time.Local once per process.
 	Now func() time.Time
 	// Log gets one line per note, without its text. Nil discards it.
 	Log *slog.Logger
@@ -290,7 +294,7 @@ func New(opts Options) *Notifier {
 		n.settings = func() config.Notifications { return config.Notifications{} }
 	}
 	if n.now == nil {
-		n.now = time.Now
+		n.now = localtime.Now
 	}
 	if n.log == nil {
 		n.log = slog.New(slog.DiscardHandler)
