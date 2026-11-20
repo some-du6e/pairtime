@@ -5,6 +5,9 @@ package git
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -645,6 +648,35 @@ func TestScanAgainstGit(t *testing.T) {
 			},
 		},
 		{
+			name: "resolving and scanning a repo writes nothing in it: every file under .git stays as it was",
+			run: func(t *testing.T, g *gitEnv) {
+				r := g.initRepo()
+				r.commit("one", map[string]string{"a.txt": "a\n"})
+				r.git("checkout", "-q", "-b", "side")
+				r.commit("two", map[string]string{"b.txt": "b\n"})
+				r.git("checkout", "-q", "main")
+				r.git("merge", "-q", "--no-ff", "--no-edit", "side")
+				before := snapshot(t, filepath.Join(r.dir, ".git"))
+				res := g.resolver(ProjectMap{}, Excludes{})
+				loc, err := res.Resolve(ctx, r.dir)
+				if err != nil {
+					t.Fatal(err)
+				}
+				// A cursor set on an empty reflog makes the scan read every
+				// entry, with their commits, stats and notes.
+				s := NewScanner(g.runner(), loc, ScannerState{Cursor: Cursor{Set: true}}, func() time.Time { return testNow }, res.Rekey)
+				if changes := mustScan(t, s); len(changes) == 0 {
+					t.Fatal("the scan found nothing to read")
+				}
+				if after := snapshot(t, filepath.Join(r.dir, ".git")); !maps.Equal(before, after) {
+					t.Errorf("files under .git changed:\nbefore %v\nafter  %v", before, after)
+				}
+				if out, _ := g.gitErr(r.dir, nil, "config", "--get", "core.hooksPath"); strings.TrimSpace(out) != "" {
+					t.Errorf("core.hooksPath is %q, want it unset", out)
+				}
+			},
+		},
+		{
 			name: "a git.change event validates once the agent fills in the envelope",
 			run: func(t *testing.T, g *gitEnv) {
 				r := g.initRepo()
@@ -669,6 +701,28 @@ func TestScanAgainstGit(t *testing.T) {
 			tc.run(t, newGitEnv(t))
 		})
 	}
+}
+
+// snapshot lists every file under dir with its size, mode and
+// modification time.
+func snapshot(t *testing.T, dir string) map[string]string {
+	t.Helper()
+	files := make(map[string]string)
+	err := filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		fi, err := d.Info()
+		if err != nil {
+			return err
+		}
+		files[p] = fmt.Sprintf("%d %v %d", fi.Size(), fi.Mode(), fi.ModTime().UnixNano())
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return files
 }
 
 // TestCommitJSON pins the fields a commit record can upload to DESIGN
