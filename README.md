@@ -14,7 +14,7 @@ One Go module holds the client, the server and the code they share.
 
 | Path | What's in it |
 |---|---|
-| `cmd/pairtime` | The client. One binary will be the background agent, the hook receiver for AI harnesses and the CLI |
+| `cmd/pairtime` | The client. One binary will be the background agent, the hook receiver for AI harnesses and the CLI. `today`, `recap` and `statusline` print your time and your agent's from the running agent |
 | `cmd/pairtimed` | The server. `serve` checks SQLite, applies the migrations, signs people in with Hack Club Auth and serves until it's stopped, `migrate` applies them alone, and `healthcheck` asks a running server whether it's ready. `init`, `keys`, `snapshot` and `doctor` set up, back up and check a deployment. Projects, rollups and the live dashboard come later |
 | `deploy` | The deploy bundle: `compose.yml` with pairtimed under Litestream, cloudflared and the witness sidecar, `litestream.yml`, the `pairtime.toml` template, and [runbook.md](deploy/runbook.md), the procedure a deploy agent follows. `Dockerfile.pairtimed` at the top builds the image release.yml pushes |
 | `pkg/event` | The event model from the [struggle-metric spec](docs/design/struggle-metric.md): the envelope, the 18 event kinds, the records the scorer derives from them, and validation for all of it |
@@ -34,9 +34,11 @@ One Go module holds the client, the server and the code they share.
 | `internal/platform/proctest` | Tests of the three process-table readers against process chains the tests start themselves. No code outside its tests |
 | `internal/adapters/git` | The git adapter: which project a folder belongs to, and the commits, amends and rebases made there, read from `.git` (DESIGN 5.8) |
 | `internal/install` | What `pairtime install` writes outside pairtime's own directories, the harness hooks and the login item, merged beside what's there, and the uninstall that puts each file back byte for byte (DESIGN 5.9) |
+| `internal/coach/text` | The words pairtime shows a teen about their time, shared by the coach, the CLI and the dashboard: your time, each agent's time named after it, the rest said for what it was, and nothing that scolds (DESIGN 3.8) |
 | `internal/server` | The server's packages: `config` reads `pairtime.toml`, `store` opens the database (SQLite in WAL mode, or Postgres), `migrations` holds the schema, `writer` is the one goroutine every write goes through, `ops` serves the health and readiness endpoints, `accounts` keeps accounts and web sessions, `auth` signs people in with Hack Club Auth, `objstore` is the S3 client for evidence and snapshots, and `backup` holds the server's keys, their encrypted backup, the nightly snapshot and the replica's lag |
 | `internal/release` | The [update manifest](docs/spec/update-manifest.md), the signed list of release archives a client checks its downloads against, and the release keys built into the client |
 | `internal/timelines` | Loads `testdata/timelines`, the struggle-metric spec's worked examples written out as events. The scorer's tests compare their output with them |
+| `internal/jsonschema` | A JSON Schema validator for the keywords the schemas in `docs/schema` use, so tests can check JSON a command prints. The client doesn't link it |
 | `internal/webui` | The local dashboard's built files, embedded in the client. The repo carries a placeholder, so Go builds never need Node |
 | `web` | The web UI in Svelte 5 and TypeScript: the local dashboard the agent serves, the server UI, and the components they share. [web/README.md](web/README.md) says how it builds |
 | `docs/api` | OpenAPI specs of pairtime's HTTP APIs. The UI's TypeScript types are generated from them |
@@ -44,6 +46,7 @@ One Go module holds the client, the server and the code they share.
 | `tools/` | `ledger_ref.py`, a standard-library Python reference for `pkg/ledger`; `release`, which packages and signs releases; `capture`, the kit for capturing harness fixtures; and `ci`, the checks the workflows run |
 | `testdata/` | What the tests read: the timelines, ledger vectors, captures of upstream interfaces, the consistency checks' scenarios, harness fixtures, the redaction corpus, and the license check's seeded modules |
 | `docs/schema/event.schema.json` | A JSON Schema for events, for adapters written in other languages. A test fails if it drifts from `pkg/event` |
+| `docs/schema/cli-today.schema.json` | What `pairtime today --json` prints. A test fails if it drifts from the Go types |
 | `docs/` | Requirements, research, the design docs and the specs |
 
 ## Build from source
