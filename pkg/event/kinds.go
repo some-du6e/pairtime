@@ -14,9 +14,6 @@ const (
 	// entry asks the agent for at most 400 characters of the user's
 	// message, with personal information removed (DESIGN 5.4).
 	MaxLabelLen = 400
-	// maxEnvNameLen caps an environment variable name in cli.track's
-	// env_hints.
-	maxEnvNameLen = 64
 )
 
 // SessionStart is session.start: a harness session started, resumed, was
@@ -83,7 +80,8 @@ type PromptSubmit struct {
 	LowEffort          bool           `json:"low_effort"`
 	// SealedText is the prompt text, encrypted on the device before the
 	// event is written; base64 in JSON. Plain prompt text never goes in a
-	// prompt.submit event.
+	// prompt.submit event. The one event field that holds it is
+	// cli.track's label, which is local too.
 	SealedText []byte `json:"text,omitempty" pairtime:"local"`
 }
 
@@ -281,8 +279,10 @@ type EditorActivity struct {
 	// Editor names the editor as a key, such as "vscode" or "neovim".
 	Editor string    `json:"editor"`
 	Act    EditorAct `json:"act"`
-	// FileHash is the file's path as an opaque key keyed per device, in
-	// the same form as agent.tool's files (DESIGN 4.1 E-10, 5.7).
+	// FileHash is the file's path as an opaque key keyed per device: an
+	// HMAC under a device key, in the same form as agent.tool's files,
+	// never a plain hash a reader could recompute from a guessed path
+	// (DESIGN 4.1 E-10, 5.7).
 	FileHash     string     `json:"file_hash,omitempty"`
 	LinesChanged int        `json:"lines_changed"`
 	EditSource   EditSource `json:"edit_source"`
@@ -311,8 +311,9 @@ type ShellCommand struct {
 	// command ran.
 	TEnd        int64 `json:"t_end"`
 	Interactive bool  `json:"interactive"`
-	// ErrorSig is an opaque key in agent.tool's form: HMAC(K_feat,
-	// signature) truncated to 16 bytes (DESIGN 3.6, 4.1 E-10).
+	// ErrorSig is the signature of an error in the command's output, as an
+	// opaque key in agent.tool's form: HMAC(K_feat, signature) truncated to
+	// 16 bytes (DESIGN 3.6, 4.1 E-10).
 	ErrorSig string `json:"error_sig,omitempty"`
 }
 
@@ -444,8 +445,9 @@ func (p *OTelActiveTime) check(c *checker) {
 // CLITrack is cli.track: a coding agent ran `pairtime track`, following the
 // AGENTS.md entry (DESIGN 5.4). It is the model's own claim. It opens an
 // anchor only under DESIGN 5.4's four conditions, at level C unless
-// keyboard input in the host window corroborates it (DESIGN 6.2 D3), and it
-// never counts toward logged_s or ai_logged_s (D19). When the caller's
+// keyboard input in the host window in the 10 s before the call makes it
+// level A (DESIGN 5.4, 6.2 D3), and it never counts toward logged_s or
+// ai_logged_s (D19). When the caller's
 // process chain reaches a harness session, the agent fills harness and
 // session_key from it (DESIGN 4.1 E-8).
 type CLITrack struct {
@@ -459,10 +461,10 @@ type CLITrack struct {
 	// label it is shareable, so the length the anchor was classed by
 	// (DESIGN 5.4) survives Shareable.
 	TextLen int `json:"text_len"`
-	// EnvHints are the names, never the values, of harness environment
-	// variables set in the caller's environment, such as
-	// CLAUDE_CODE_SESSION_ID (DESIGN 4.1 E-8).
-	EnvHints []string `json:"env_hints,omitempty"`
+	// EnvHints are the harness variables set in the caller's environment,
+	// by name and never by value (DESIGN 4.1 E-8): each one of the closed
+	// list of EnvHint names, at most once.
+	EnvHints []EnvHint `json:"env_hints,omitempty"`
 	// LogMatch says whether a pairtime log reader holds the user entry the
 	// call copies (DESIGN 5.2, 5.4).
 	LogMatch LogMatch `json:"log_match"`
@@ -478,10 +480,10 @@ func (p *CLITrack) check(c *checker) {
 		c.addf("env_hints", "has %d entries, more than %d", len(p.EnvHints), maxList)
 	} else {
 		for i, name := range p.EnvHints {
-			// The message leaves out the value: it may hold what follows
-			// "=" in the caller's environment.
-			if !isEnvName(name) {
-				c.addf(fieldIndex("env_hints", i), "must be an environment variable's name, never its value: a letter or '_', then up to %d letters, digits or '_'", maxEnvNameLen-1)
+			// The message leaves out the entry: one that isn't a listed
+			// name may be a variable's value, such as a token.
+			if !envHints.has(name) {
+				c.addf(fieldIndex("env_hints", i), "must be one of the harness variable names %q, never a value", envHints.values)
 				break
 			}
 			if slices.Contains(p.EnvHints[:i], name) {

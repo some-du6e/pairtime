@@ -69,11 +69,10 @@
     "count": {"type": "integer", "minimum": 0},
     "seconds": {"type": "number", "minimum": 0},
     "text64": {"type": "string", "maxLength": 64, "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*$", "description": "One line of text: no control characters."},
-    "env_name": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,63}$", "description": "An environment variable's name, never its value."},
 
     "kind": {"enum": ["session.start", "session.end", "prompt.submit", "agent.output", "agent.tool", "agent.permission", "agent.interrupt", "agent.queue", "agent.stop", "agent.subagent", "editor.activity", "shell.command", "git.change", "os.presence", "os.focus", "os.power", "otel.active_time", "cli.track"]},
     "source": {"enum": ["hook", "log", "otel", "os", "editor", "shell", "git", "cli", "mcp"], "description": "What the record claims produced it. cli is the AGENTS.md fallback, pairtime track."},
-    "via": {"enum": ["hook", "log", "otel", "os", "git", "shell", "editor", "editor_unverified", "bridge", "bridge_unverified", "track", "plugin"], "description": "How the agent received the record: a harness hook, a log reader, the OTLP receiver, the OS and .git watchers, a shell integration, an editor heartbeat that passed or failed the peer-process check, a WakaTime bridge record from a heartbeat that passed or failed it, pairtime track, or a plugin. An anchor's evidence level depends on it, and only hook, log, otel, editor and bridge records count toward logged_s."},
+    "via": {"enum": ["hook", "log", "otel", "os", "git", "shell", "editor", "editor_unverified", "bridge", "bridge_unverified", "track", "plugin"], "description": "How the agent received the record: a harness hook, a log reader, the OTLP receiver, the OS and .git watchers, a shell integration, an editor heartbeat that passed or failed the peer-process check, a WakaTime bridge record from a heartbeat that passed or failed it, pairtime track, or a plugin. macOS skips the check, so for now its editor heartbeats are editor and its bridge records bridge_unverified (docs/errata/2026-11-19-bridge-unverified.md). An anchor's evidence level depends on it, and only hook, log, otel, editor and bridge records count toward logged_s."},
     "harness": {"enum": ["claude_code", "cursor", "copilot", "codex", "gemini", "devin", "cline", "opencode", "other", "none"], "description": "other is an agent pairtime has no value for yet; none marks OS and git events."},
     "start_kind": {"enum": ["startup", "resume", "clear", "compact", "fork"]},
     "entrypoint": {"enum": ["cli", "ide", "desktop", "sdk", "exec", "mcp", "cloud", "unknown"]},
@@ -93,6 +92,7 @@
     "power_op": {"enum": ["suspend", "resume", "lock", "unlock"]},
     "active_time_type": {"enum": ["user", "cli"]},
     "log_match": {"enum": ["matched", "unmatched", "no_reader"], "description": "matched: a log reader holds the user entry from the same session within TRACK_LOG_MATCH_S; unmatched: a reader covers the session but held no match when the call was recorded; no_reader: no reader covers the session."},
+    "env_hint": {"enum": ["CLAUDECODE", "CLAUDE_CODE_CHILD_SESSION", "CLAUDE_CODE_SESSION_ID"], "description": "The name of a harness environment variable that pairtime track looks for in its caller's environment. The list is closed, so a variable's value can't pass as a name."},
 
     "session.start": {
       "description": "A harness session started, resumed, was cleared, compacted or forked.",
@@ -134,7 +134,7 @@
         "matches_pending_cron": {"type": "boolean"},
         "answers_question": {"type": "boolean"},
         "low_effort": {"type": "boolean"},
-        "text": {"type": "string", "contentEncoding": "base64", "pattern": "^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$", "x-local": true, "description": "The prompt text, encrypted on the device; standard padded base64. Plain prompt text never goes in an event."}
+        "text": {"type": "string", "contentEncoding": "base64", "pattern": "^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$", "x-local": true, "description": "The prompt text, encrypted on the device; standard padded base64. Plain prompt text never goes in a prompt.submit event. The one event field that holds it is cli.track's label, which is local too."}
       }
     },
     "agent.output": {
@@ -158,12 +158,12 @@
       "required": ["tool_class", "lines_added", "lines_removed", "visible_output_lines", "t_start", "t_end"],
       "properties": {
         "tool_class": {"$ref": "#/$defs/tool_class"},
-        "files": {"$ref": "#/$defs/key_list", "description": "Per-device hashes of the paths the tool touched."},
+        "files": {"$ref": "#/$defs/key_list", "description": "The paths the tool touched, each as an opaque key keyed per device: an HMAC under a device key, never a plain hash a reader could recompute from a guessed path. editor.activity's file_hash takes the same form, so an agent's edit and a person's edit of one file compare equal."},
         "lines_added": {"$ref": "#/$defs/count"},
         "lines_removed": {"$ref": "#/$defs/count"},
         "cmd_hash": {"$ref": "#/$defs/key", "x-local": true, "description": "Hash of the normalized command, for tools that run one."},
         "exit_code": {"type": "integer", "description": "Absent for tools that don't run a process."},
-        "error_sig": {"$ref": "#/$defs/key"},
+        "error_sig": {"$ref": "#/$defs/key", "description": "The signature of an error in the tool's output, as an opaque key: HMAC(K_feat, signature) truncated to 16 bytes, so revealing it in tier 2 leaks nothing a guess can test."},
         "visible_output_lines": {"$ref": "#/$defs/count"},
         "t_start": {"$ref": "#/$defs/unix_ms"},
         "t_end": {"$ref": "#/$defs/unix_ms", "description": "Not before t_start."}
@@ -239,7 +239,7 @@
       "properties": {
         "editor": {"$ref": "#/$defs/key", "description": "The editor, such as vscode or neovim."},
         "act": {"$ref": "#/$defs/editor_act"},
-        "file_hash": {"$ref": "#/$defs/key", "description": "Per-device hash of the file's path."},
+        "file_hash": {"$ref": "#/$defs/key", "description": "The file's path as an opaque key keyed per device: an HMAC under a device key, in the same form as agent.tool's files, never a plain hash a reader could recompute from a guessed path."},
         "lines_changed": {"$ref": "#/$defs/count"},
         "edit_source": {"$ref": "#/$defs/edit_source"}
       }
@@ -256,7 +256,7 @@
         "t_start": {"$ref": "#/$defs/unix_ms"},
         "t_end": {"$ref": "#/$defs/unix_ms", "description": "Not before t_start; equal to it when the run's length is unknown."},
         "interactive": {"type": "boolean"},
-        "error_sig": {"$ref": "#/$defs/key"}
+        "error_sig": {"$ref": "#/$defs/key", "description": "The signature of an error in the command's output, as an opaque key in agent.tool's form: HMAC(K_feat, signature) truncated to 16 bytes."}
       }
     },
     "git.change": {
@@ -318,14 +318,14 @@
       }
     },
     "cli.track": {
-      "description": "A coding agent ran pairtime track, following the AGENTS.md entry. The model's own claim: it opens an anchor only under the four conditions of DESIGN 5.4, at level C unless keyboard input corroborates it, and never counts toward logged_s.",
+      "description": "A coding agent ran pairtime track, following the AGENTS.md entry. The model's own claim: it opens an anchor only under the four conditions of DESIGN 5.4, at level C unless keyboard input in the host window in the 10 s before the call makes it level A, and never counts toward logged_s.",
       "type": "object",
       "additionalProperties": false,
       "required": ["text_len", "log_match"],
       "properties": {
         "label": {"type": "string", "maxLength": 400, "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*$", "x-local": true, "description": "The text the model passed, on one line: the user's message with personal information removed. Prompt text, so it stays on the device."},
         "text_len": {"$ref": "#/$defs/count", "description": "The number of characters the model passed. Shareable, unlike the label."},
-        "env_hints": {"type": "array", "maxItems": 1024, "uniqueItems": true, "items": {"$ref": "#/$defs/env_name"}, "description": "Names, never values, of harness environment variables set in the caller's environment, such as CLAUDE_CODE_SESSION_ID."},
+        "env_hints": {"type": "array", "maxItems": 1024, "uniqueItems": true, "items": {"$ref": "#/$defs/env_hint"}, "description": "The harness variables in $defs/env_hint that are set in the caller's environment, by name and never by value."},
         "log_match": {"$ref": "#/$defs/log_match", "description": "Whether a pairtime log reader holds the user entry the call copies."}
       }
     }

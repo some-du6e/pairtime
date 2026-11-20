@@ -94,7 +94,9 @@ func validDayRollup() Rollup {
 // 4.8 h corroborated, 0.8 h witnessed, 0.2 h offline and 0.1 h backfilled;
 // it credited 4.6 h (62%) of the AI-assisted time; 71% of credited time
 // was level A. The level-C 0.1 h is the backfilled band, and here it is
-// all backfilled time.
+// all backfilled time. Its Deflation Justification excludes agent-only
+// runtime 2.1 h, re-roll loops 0.6 h and idle reading 0.5 h, which are
+// the 3.2 h between Hackatime's 9.1 h and pairtime's 5.9 h.
 func handbookTotals() SubmissionTotals {
 	const h = 3600
 	return SubmissionTotals{
@@ -102,7 +104,7 @@ func handbookTotals() SubmissionTotals {
 		WitnessedS: 20160, OfflineS: 720, BackfilledS: 360,
 		LevelAS: 15080, LevelBS: 5800, LevelCS: 360,
 		BandCorroboratedS: 17280, BandWitnessedS: 2880, BandOfflineS: 720, BandBackfilledS: 360,
-		AgentOnlyS: 2 * h, ExcludedLoopsS: 0.3 * h, IdleS: h,
+		AgentOnlyS: 2.1 * h, ExcludedLoopsS: 0.6 * h, IdleS: 0.5 * h,
 		AILoggedS: 7.4 * h, CodingLoggedS: 1.7 * h, HandbookS: 1.7*h + 7.4*h/3,
 		AICreditedS: 4.6 * h, HandCreditedS: 1.3 * h, AIRatio: ptr(4.6 / 7.4),
 	}
@@ -206,16 +208,47 @@ func TestAnchorValidate(t *testing.T) {
 		{"an autopilot discount", func(a *Anchor) { a.DiscountedBy = ReasonAutopilot }, ""},
 		{"lead isn't negative", func(a *Anchor) { a.LeadS = -1 }, "lead_s:"},
 		{"an anchor says how its record arrived", func(a *Anchor) { a.Via = "" }, "via:"},
-		{"a track anchor carries via_track", func(a *Anchor) { a.Via, a.Labels = ViaTrack, nil }, `labels: missing "via_track"; a track anchor always carries it`},
+		{"a track anchor carries via_track", func(a *Anchor) {
+			a.Via, a.Labels, a.Corroborated = ViaTrack, nil, false
+		}, `labels: missing "via_track"; a track anchor always carries it`},
 		{"a keyboard-backed track anchor keeps via_track", func(a *Anchor) {
-			a.Via, a.Labels = ViaTrack, []Label{LabelViaTrack, LabelTypingModule}
+			a.Via, a.Labels, a.Corroborated = ViaTrack, []Label{LabelViaTrack, LabelTypingModule}, false
 		}, ""},
-		{"a plugin anchor carries via_plugin", func(a *Anchor) { a.Via, a.Labels = ViaPlugin, []Label{LabelVM} }, `labels: missing "via_plugin"`},
-		{"an unverified bridge anchor carries via_bridge", func(a *Anchor) { a.Via, a.Labels = ViaBridgeUnverified, []Label{LabelViaBridge} }, ""},
+		{"a plugin anchor carries via_plugin", func(a *Anchor) {
+			a.Via, a.Labels, a.Corroborated = ViaPlugin, []Label{LabelVM}, false
+		}, `labels: missing "via_plugin"`},
+		{"an unverified bridge anchor carries via_bridge", func(a *Anchor) {
+			a.Via, a.Labels, a.Corroborated = ViaBridgeUnverified, []Label{LabelViaBridge}, false
+		}, ""},
 		{"a side-door label needs its side door", func(a *Anchor) { a.Labels = []Label{LabelViaPlugin} }, `labels: has "via_plugin", but the anchor arrived via "hook"`},
 		{"an unverified editor anchor has no side-door label", func(a *Anchor) {
-			a.Via, a.Labels = ViaEditorUnverified, []Label{LabelViaBridge}
+			a.Via, a.Labels, a.Corroborated = ViaEditorUnverified, []Label{LabelViaBridge}, false
 		}, `labels: has "via_bridge", but the anchor arrived via "editor_unverified"`},
+		// DESIGN 6.4's corroborated band: two records from different code
+		// paths saw the act.
+		{"a transcript anchor corroborated by its hook", func(a *Anchor) { a.Via = ViaLog }, ""},
+		{"an OTel anchor corroborated by its hook", func(a *Anchor) { a.Via = ViaOTel }, ""},
+		{"an editor anchor corroborated by a commit", func(a *Anchor) { a.Kind, a.Via = AnchorTypedEdit, ViaEditor }, ""},
+		{"a commit anchor isn't corroborated by the editor pair", func(a *Anchor) { a.Kind, a.Via = AnchorHumanCommit, ViaGit },
+			`corroborated: is true, but an anchor that arrived via "git" can't be`},
+		{"keyboard input doesn't make a track anchor corroborated", func(a *Anchor) {
+			a.Via, a.Labels = ViaTrack, []Label{LabelViaTrack, LabelTypingModule}
+		}, `corroborated: is true, but an anchor that arrived via "track" can't be`},
+		{"a plugin anchor can't be corroborated", func(a *Anchor) {
+			a.Via, a.Labels = ViaPlugin, []Label{LabelViaPlugin}
+		}, `corroborated: is true, but an anchor that arrived via "plugin" can't be`},
+		{"a bridge anchor can't be corroborated", func(a *Anchor) {
+			a.Via, a.Labels = ViaBridge, []Label{LabelViaBridge}
+		}, `corroborated: is true, but an anchor that arrived via "bridge" can't be`},
+		{"an unverified bridge anchor can't be corroborated", func(a *Anchor) {
+			a.Via, a.Labels = ViaBridgeUnverified, []Label{LabelViaBridge}
+		}, `corroborated: is true, but an anchor that arrived via "bridge_unverified" can't be`},
+		{"an unverified editor anchor can't be corroborated", func(a *Anchor) {
+			a.Kind, a.Via = AnchorTypedEdit, ViaEditorUnverified
+		}, `corroborated: is true, but an anchor that arrived via "editor_unverified" can't be`},
+		{"a typed command can't be corroborated", func(a *Anchor) {
+			a.Kind, a.Via = AnchorTypedCommand, ViaShell
+		}, `corroborated: is true, but an anchor that arrived via "shell" can't be`},
 		{"labels are listed once, in order", func(a *Anchor) { a.Labels = []Label{LabelVM, LabelTypingModule} }, "labels: must list each label once"},
 		{"editor_typing isn't a v1 label", func(a *Anchor) { a.Labels = []Label{"editor_typing"} }, `labels[0]: "editor_typing" is not one of`},
 	})
@@ -349,9 +382,10 @@ func objectKeys(t *testing.T, b []byte) []string {
 }
 
 // TestTier1Shape pins what a minute bucket uploads: the JSON keys of its
-// shareable form, and of each of its four slots, are DESIGN 4.3's tier-1
-// list, in order. A new field fails here until it is local, or Karim adds
-// it to DESIGN 4.3 (PLAN ground rule 10).
+// shareable form, and of each of its four slots, are Tier1BucketFields and
+// Tier1SlotFields, DESIGN 4.3's tier-1 list, in order. A new field fails
+// here until it is local, or Karim adds it to DESIGN 4.3 (PLAN ground rule
+// 10).
 func TestTier1Shape(t *testing.T) {
 	m := tier1Bucket()
 	for _, v := range append([]reflect.Value{reflect.ValueOf(m)}, sliceValues(m.Slots)...) {
@@ -374,16 +408,14 @@ func TestTier1Shape(t *testing.T) {
 	if err := json.Unmarshal(b, &wire); err != nil {
 		t.Fatal(err)
 	}
-	bucketKeys := []string{"v", "params", "minute", "device", "slots", "credited_s", "uncredited", "agent_running_s", "state", "witness", "rev"}
-	slotKeys := []string{"p", "cr", "why", "kind", "ev", "lbl"}
 	type keysCase struct {
 		name string
 		json []byte
 		want []string
 	}
-	tests := []keysCase{{"a shareable bucket has DESIGN 4.3's fields and no anchor ids", b, bucketKeys}}
+	tests := []keysCase{{"a shareable bucket has DESIGN 4.3's fields and no anchor ids", b, Tier1BucketFields()}}
 	for i, raw := range wire.Slots {
-		tests = append(tests, keysCase{fmt.Sprintf("slot %d has DESIGN 4.3's slot fields", i), raw, slotKeys})
+		tests = append(tests, keysCase{fmt.Sprintf("slot %d has DESIGN 4.3's slot fields", i), raw, Tier1SlotFields()})
 	}
 	if len(wire.Slots) != 4 {
 		t.Errorf("the shareable bucket has %d slots, DESIGN 4.3 says 4", len(wire.Slots))
@@ -392,6 +424,25 @@ func TestTier1Shape(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := objectKeys(t, tt.json); !slices.Equal(got, tt.want) {
 				t.Errorf("keys = %q, want %q\njson: %s", got, tt.want, tt.json)
+			}
+		})
+	}
+}
+
+func TestTier1FieldsCantBeChanged(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		fields func() []string
+	}{
+		{"changing a copy of the bucket fields leaves the list alone", Tier1BucketFields},
+		{"changing a copy of the slot fields leaves the list alone", Tier1SlotFields},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			want := slices.Clone(tt.fields())
+			got := tt.fields()
+			got[0] = "anchors"
+			if again := tt.fields(); !slices.Equal(again, want) {
+				t.Errorf("after changing a returned slice, the list is %q, want %q", again, want)
 			}
 		})
 	}
@@ -460,6 +511,18 @@ func TestRollupValidate(t *testing.T) {
 			*r = validSubmission()
 			r.ProjectKey, r.CreditedByProject = "", map[string]float64{"p_9f2c": 15000, "p_77aa": 6000}
 		}, "credited_by_project: sums to 21000"},
+		{"a keyed submission's breakdown may name its own project", func(r *Rollup) {
+			*r = validSubmission()
+			r.CreditedByProject = map[string]float64{"p_9f2c": 21240}
+		}, ""},
+		{"a keyed submission's breakdown names no other project", func(r *Rollup) {
+			*r = validSubmission()
+			r.CreditedByProject = map[string]float64{"p_77aa": 21240}
+		}, `credited_by_project: names project "p_77aa", but the submission covers only its project_key "p_9f2c"`},
+		{"a keyed submission doesn't share its credit with another project", func(r *Rollup) {
+			*r = validSubmission()
+			r.CreditedByProject = map[string]float64{"p_9f2c": 15000, "p_77aa": 6240}
+		}, `credited_by_project: names project "p_77aa"`},
 		{"a submission's project is a key", func(r *Rollup) { *r = validSubmission(); r.ProjectKey = "/home/teen/game" }, "project_key:"},
 		{"unknown level", func(r *Rollup) { r.Level = "week" }, "level:"},
 		{"a day spans projects", func(r *Rollup) { *r = validDayRollup(); r.ProjectKey = "p_9f2c" }, "project_key: a day rollup spans projects"},
@@ -520,10 +583,13 @@ func TestSubmissionTotalsValidate(t *testing.T) {
 		}, "ai_ratio: must be null"},
 		{"no negative totals", func(s *SubmissionTotals) { s.IdleS = -1 }, "idle_s:"},
 	})
-	// DESIGN 9.3's handbook text rounds these: "allows at most 4.2 h",
-	// "credited 5.9 h: 4.8 h corroborated, 0.8 h witnessed, 0.2 h offline,
-	// 0.1 h backfilled", "credited 4.6 h (62%)" and "71% of credited time had
-	// keyboard-level evidence (level A)".
+	// DESIGN 9.3's handbook text rounds these: "Hackatime logged 9.1 h, 7.4 h
+	// of it as AI coding", "allows at most 4.2 h", "credited 5.9 h: 4.8 h
+	// corroborated, 0.8 h witnessed, 0.2 h offline, 0.1 h backfilled",
+	// "credited 4.6 h (62%)" and "71% of credited time had keyboard-level
+	// evidence (level A)". Its Deflation Justification reads "deflated from
+	// Hackatime's 9.1 h to pairtime's 5.9 h: agent-only runtime 2.1 h,
+	// re-roll loops 0.6 h, idle reading 0.5 h excluded".
 	tot := handbookTotals()
 	hours := func(s float64) float64 { return math.Round(s/360) / 10 }
 	percent := func(part, whole float64) float64 { return math.Round(100 * part / whole) }
@@ -531,6 +597,8 @@ func TestSubmissionTotalsValidate(t *testing.T) {
 		name      string
 		got, want float64
 	}{
+		{"Hackatime logged 9.1 h", hours(tot.LoggedS), 9.1},
+		{"7.4 h of it AI coding", hours(tot.AILoggedS), 7.4},
 		{"the handbook allows 4.2 h", hours(tot.HandbookS), 4.2},
 		{"pairtime credited 5.9 h", hours(tot.CreditedS), 5.9},
 		{"4.8 h corroborated", hours(tot.BandCorroboratedS), 4.8},
@@ -540,6 +608,11 @@ func TestSubmissionTotalsValidate(t *testing.T) {
 		{"4.6 h of AI time credited", hours(tot.AICreditedS), 4.6},
 		{"62% of AI time credited", math.Round(*tot.AIRatio * 100), 62},
 		{"71% of credited time at level A", percent(tot.LevelAS, tot.CreditedS), 71},
+		{"agent-only runtime 2.1 h excluded", hours(tot.AgentOnlyS), 2.1},
+		{"re-roll loops 0.6 h excluded", hours(tot.ExcludedLoopsS), 0.6},
+		{"idle reading 0.5 h excluded", hours(tot.IdleS), 0.5},
+		{"deflated by 3.2 h from 9.1 h to 5.9 h", hours(tot.LoggedS - tot.CreditedS), 3.2},
+		{"the three exclusions are the whole 3.2 h", hours(tot.AgentOnlyS + tot.ExcludedLoopsS + tot.IdleS), 3.2},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			if tt.got != tt.want {

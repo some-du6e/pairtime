@@ -28,17 +28,17 @@ docs/design/struggle-metric.md (SM) is the source of truth for what pairtime cre
 
 ## Content stays on the device
 
-Raw prompt text, agent output, code, file paths, command lines and window titles stay on the device. Uploads carry numbers, reason codes, opaque keys and event ids (SM 1, SM 5.1).
+Raw prompt text, agent output, code, file paths, command lines and window titles stay on the device (SM 1). Tier-1 uploads carry numbers, reason codes and opaque keys, never event ids (DESIGN 4.3). Event ids leave the device only inside the ledger records a submission reveals (DESIGN 3.6).
 
 - Content and digests of content are *local*: prompt text and its sketches (MinHash, template hashes, error signatures in prompts), command-line hashes, app identity hashes and scheduled-prompt hashes. Tag them `pairtime:"local"` with `omitempty` in Go and `"x-local": true` in the schema. `Event.Shareable` clears local fields, so pass everything bound off the device through it. It only clears top-level payload fields, so tag the whole field when the private part is nested.
-- Identifiers of devices, sessions, turns, projects and files are opaque keys and may be shared. They must be keyed per device (an HMAC under a device secret, or a random id), never a plain hash a reader could recompute from a guess. They pass `isKey`, which rejects paths and email addresses.
+- Identifiers of devices, sessions, turns, projects and files are opaque keys and may be shared. They must be keyed per device (an HMAC under a device secret, or a random id), never a plain hash a reader could recompute from a guess. They pass `isKey`, which checks only their shape. It turns away a path or an email address but passes a bare name like `Makefile`, so the keying is what keeps them private.
 - `TestLocalFields` pins the local fields. Changing that list changes what pairtime may upload, so the PR description calls it out.
 
 ## Changing the event model
 
 pkg/event and docs/schema/event.schema.json describe the same events, written by hand on both sides, and pkg/event/schema_test.go fails when they drift. Change both in the same commit. To add an event kind:
 
-1. Add its `Kind` constant and payload type, and register it in `kindTable` with its rule (source, harness, session).
+1. Add its `Kind` constant and payload type, and register it in `kindTable` with its rule (source, via, harness, session).
 2. Add its `$defs` entry and its `allOf` rule to the schema.
 3. Give `sample()` in event_test.go an instance with every field set, and add a validation case for each rule the payload checks.
 

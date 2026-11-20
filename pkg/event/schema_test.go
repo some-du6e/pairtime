@@ -6,10 +6,11 @@ package event
 // drift apart. The schema is written by hand and the Go types are the
 // reference. checkSchema lists every disagreement it finds: a missing kind,
 // a property on one side only, a required list that doesn't match the
-// fields Go always writes, an enum value on one side only, a local field
-// marked on one side only, a kind rule that differs, or a $ref that doesn't
-// resolve. TestSchemaDriftIsCaught breaks the schema in each of those ways
-// and checks that checkSchema notices.
+// fields Go always writes, a JSON type or a null Go doesn't write, an enum
+// value on one side only, a local field marked on one side only, a kind
+// rule that differs, or a $ref that doesn't resolve.
+// TestSchemaDriftIsCaught breaks the schema in each of those ways and
+// checks that checkSchema notices.
 
 import (
 	"encoding/json"
@@ -47,7 +48,7 @@ func schemaEnums() []enumInfo {
 		infoOf(parentClasses), infoOf(declaredOrigins), infoOf(toolClasses), infoOf(decisions),
 		infoOf(decidedBys), infoOf(stopReasons), infoOf(subagentPhases), infoOf(editorActs),
 		infoOf(editSources), infoOf(cmdClasses), infoOf(gitOps), infoOf(actors), infoOf(appClasses),
-		infoOf(powerOps), infoOf(activeTimeTypes), infoOf(logMatches),
+		infoOf(powerOps), infoOf(activeTimeTypes), infoOf(logMatches), infoOf(envHints),
 	}
 }
 
@@ -109,17 +110,22 @@ type schemaCheck struct {
 }
 
 func checkSchema(root map[string]any) []string {
-	c := &schemaCheck{root: root, byType: map[reflect.Type]string{}}
-	for _, e := range schemaEnums() {
-		c.byType[e.typ] = e.name
-	}
-	c.defs = c.object(root["$defs"], "$defs")
+	c := newSchemaCheck(root)
 	c.envelope()
 	c.payloads()
 	c.enums()
 	c.kindRules()
 	c.refs("#", root)
 	return c.problems
+}
+
+func newSchemaCheck(root map[string]any) *schemaCheck {
+	c := &schemaCheck{root: root, byType: map[reflect.Type]string{}}
+	for _, e := range schemaEnums() {
+		c.byType[e.typ] = e.name
+	}
+	c.defs = c.object(root["$defs"], "$defs")
+	return c
 }
 
 func (c *schemaCheck) addf(format string, args ...any) {
@@ -210,7 +216,9 @@ func (c *schemaCheck) objectFields(where string, obj map[string]any, fields []fi
 			c.addf("%s.%s: the Go type is enum %q, but the schema refers to %q", where, f.name, want, got)
 		case !isEnum && c.isEnum(got):
 			c.addf("%s.%s: the schema refers to enum %q, but the Go type is %s", where, f.name, got, f.typ)
-		case !isEnum:
+		case !isEnum || list:
+			// A list of enums still states its own type, "array", and may
+			// be null like any other list.
 			c.jsonTypes(where+"."+f.name, prop, f)
 		}
 	}
@@ -282,16 +290,22 @@ func jsonType(t reflect.Type) string {
 }
 
 // jsonTypes compares the JSON types a property allows with the ones its Go
-// field writes: a pointer without omitempty may also be null, and a list's
-// items are compared too, unless they are enums.
+// field writes, null included. encoding/json writes null for a nil
+// pointer, slice or map, []byte included, when the field has no
+// omitempty, and leaves the field out when it has one. So the schema
+// allows null exactly for those fields without omitempty. A list's items
+// are compared too, unless they are enums.
 func (c *schemaCheck) jsonTypes(path string, prop map[string]any, f field) {
 	typ := f.typ
 	want := []string{}
-	if typ.Kind() == reflect.Pointer {
-		typ = typ.Elem()
+	switch typ.Kind() {
+	case reflect.Pointer, reflect.Slice, reflect.Map:
 		if !f.omitempty {
 			want = append(want, "null")
 		}
+	}
+	if typ.Kind() == reflect.Pointer {
+		typ = typ.Elem()
 	}
 	want = append(want, jsonType(typ))
 	slices.Sort(want)
@@ -497,7 +511,6 @@ func TestSchemaBounds(t *testing.T) {
 		{"parents hold at most maxList ids", []string{"$defs", "git.change", "properties", "parents"}, "maxItems", float64(maxList)},
 		{"pending crons hold at most maxList entries", []string{"$defs", "agent.stop", "properties", "pending_crons"}, "maxItems", float64(maxList)},
 		{"a key has 1 to maxKeyLen characters", []string{"$defs", "key"}, "pattern", fmt.Sprintf("^[A-Za-z0-9_-]{1,%d}$", maxKeyLen)},
-		{"an env name has at most maxEnvNameLen characters", []string{"$defs", "env_name"}, "pattern", fmt.Sprintf("^[A-Za-z_][A-Za-z0-9_]{0,%d}$", maxEnvNameLen-1)},
 		{"times start at minUnixMS", []string{"$defs", "unix_ms"}, "minimum", float64(minUnixMS)},
 		{"times end before maxUnixMS", []string{"$defs", "unix_ms"}, "exclusiveMaximum", float64(maxUnixMS)},
 	}
@@ -603,6 +616,20 @@ func TestSchemaDriftIsCaught(t *testing.T) {
 			list := def["enum"].([]any)
 			def["enum"] = slices.DeleteFunc(slices.Clone(list), func(v any) bool { return v == "bridge_unverified" })
 		}, "$defs/via lists"},
+		{"an env hint only Go has", func(t *testing.T, root map[string]any) {
+			def := at(t, root, "$defs", "env_hint")
+			list := def["enum"].([]any)
+			def["enum"] = slices.DeleteFunc(slices.Clone(list), func(v any) bool { return v == "CLAUDE_CODE_CHILD_SESSION" })
+		}, "$defs/env_hint lists"},
+		{"a list of enums pointing at the wrong enum", func(t *testing.T, root map[string]any) {
+			at(t, root, "$defs", "cli.track", "properties", "env_hints", "items")["$ref"] = "#/$defs/harness"
+		}, `cli.track.env_hints: the Go type is enum "env_hint", but the schema refers to "harness"`},
+		{"a list of enums the schema calls a string", func(t *testing.T, root map[string]any) {
+			at(t, root, "$defs", "cli.track", "properties", "env_hints")["type"] = "string"
+		}, `cli.track.env_hints: the schema allows JSON types ["string"], but Go writes ["array"]`},
+		{"an omitempty list of enums the schema lets be null", func(t *testing.T, root map[string]any) {
+			at(t, root, "$defs", "cli.track", "properties", "env_hints")["type"] = []any{"array", "null"}
+		}, `cli.track.env_hints: the schema allows JSON types ["array" "null"], but Go writes ["array"]`},
 		{"a kind rule that drops the session check", func(t *testing.T, root map[string]any) {
 			props, _ := kindRuleAt(t, root, KindPromptSubmit)
 			delete(props, "session_key")
@@ -646,6 +673,69 @@ func TestSchemaDriftIsCaught(t *testing.T) {
 				}
 			}
 			t.Errorf("checkSchema didn't report %q; it reported %q", tt.want, problems)
+		})
+	}
+}
+
+// TestNullDriftIsCaught checks jsonTypes's null rule on fields the event
+// types don't have yet. Every slice, map and []byte in them has omitempty,
+// so breaking the real schema can't show a missing null; each case
+// compares a one-field struct with a one-property object schema instead.
+func TestNullDriftIsCaught(t *testing.T) {
+	list := map[string]any{"type": "array", "items": map[string]any{"type": "string"}}
+	nullableList := map[string]any{"type": []any{"array", "null"}, "items": map[string]any{"type": "string"}}
+	tests := []struct {
+		name string
+		typ  reflect.Type // a struct with one JSON field
+		prop map[string]any
+		want string // a substring of one reported problem, or "" for none
+	}{
+		{"a nil slice without omitempty is written as null", reflect.TypeFor[struct {
+			Hunks []string `json:"hunks"`
+		}](), list, `probe.hunks: the schema allows JSON types ["array"], but Go writes ["array" "null"]`},
+		{"a slice without omitempty may be null", reflect.TypeFor[struct {
+			Hunks []string `json:"hunks"`
+		}](), nullableList, ""},
+		{"a slice with omitempty is left out, never null", reflect.TypeFor[struct {
+			Hunks []string `json:"hunks,omitempty"`
+		}](), nullableList, `probe.hunks: the schema allows JSON types ["array" "null"], but Go writes ["array"]`},
+		{"a nil list of enums without omitempty is written as null", reflect.TypeFor[struct {
+			Vias []Via `json:"vias"`
+		}](), map[string]any{"type": "array", "items": map[string]any{"$ref": "#/$defs/via"}}, `probe.vias: the schema allows JSON types ["array"], but Go writes ["array" "null"]`},
+		{"a nil map without omitempty is written as null", reflect.TypeFor[struct {
+			Counts map[string]int `json:"counts"`
+		}](), map[string]any{"type": "object"}, `probe.counts: the schema allows JSON types ["object"], but Go writes ["null" "object"]`},
+		{"a nil []byte without omitempty is written as null", reflect.TypeFor[struct {
+			Sealed []byte `json:"sealed"`
+		}](), map[string]any{"type": "string"}, `probe.sealed: the schema allows JSON types ["string"], but Go writes ["null" "string"]`},
+		{"a nil pointer without omitempty is written as null", reflect.TypeFor[struct {
+			Idle *float64 `json:"idle"`
+		}](), map[string]any{"type": "number"}, `probe.idle: the schema allows JSON types ["number"], but Go writes ["null" "number"]`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fields := jsonFields(tt.typ)
+			if len(fields) != 1 {
+				t.Fatalf("%s has %d JSON fields, want 1", tt.typ, len(fields))
+			}
+			required := []any{}
+			if !fields[0].omitempty {
+				required = append(required, fields[0].name)
+			}
+			obj := map[string]any{
+				"additionalProperties": false,
+				"required":             required,
+				"properties":           map[string]any{fields[0].name: tt.prop},
+			}
+			c := newSchemaCheck(loadSchema(t))
+			c.objectFields("probe", obj, fields)
+			reported := slices.ContainsFunc(c.problems, func(p string) bool { return strings.Contains(p, tt.want) })
+			switch {
+			case tt.want == "" && len(c.problems) > 0:
+				t.Errorf("objectFields reported %q, want nothing", c.problems)
+			case tt.want != "" && !reported:
+				t.Errorf("objectFields didn't report %q; it reported %q", tt.want, c.problems)
+			}
 		})
 	}
 }

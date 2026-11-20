@@ -140,9 +140,9 @@ const (
 	// anchor that arrived via hook, log, shell, git or editor.
 	EvidenceB Evidence = "B"
 	// EvidenceC is everything else: backfilled and lookback minutes, track,
-	// plugin and bridge anchors without keyboard corroboration,
-	// editor_unverified anchors, and offline minutes beyond the cap or
-	// without the forge push.
+	// plugin and bridge anchors without keyboard input in the host window
+	// in the 10 s before them, editor_unverified anchors, and offline
+	// minutes beyond the cap or without the forge push.
 	EvidenceC Evidence = "C"
 )
 
@@ -179,6 +179,17 @@ var (
 	// carries to tier 1 (DESIGN 4.1 E-6).
 	slotLabels = enum[Label]{values: []Label{LabelViaTrack, LabelViaPlugin, LabelViaBridge}}
 )
+
+// corroboratingVias are the vias an anchor can arrive by and still be
+// corroborated under DESIGN 6.4's pairs: a hook and a transcript line
+// (log), a hook and an OTel event, and an editor heartbeat that passed the
+// peer-process check plus a commit whose diffstat covers the file. In the
+// last pair the act both records saw is the edit, so the anchor is the
+// editor one; the commit is only the second record, and a commit anchor
+// (via git) is never corroborated by it. On macOS, where the check doesn't
+// run, `editor` doesn't mean it passed (docs/errata/2026-11-19-bridge-unverified.md).
+// No shell, git, side-door or unverified editor anchor is in any pair.
+var corroboratingVias = enum[Via]{values: []Via{ViaHook, ViaLog, ViaOTel, ViaEditor}}
 
 // sideDoorLabel returns the label an anchor that arrived via v carries, or
 // "" when v isn't a labeled side door. editor_unverified anchors are level
@@ -375,11 +386,22 @@ type Anchor struct {
 	// presence and keyboard evidence it sets the anchor's level (DESIGN
 	// 4.1 E-7, 6.4).
 	Via Via `json:"via"`
-	// Corroborated is set when a second record, written by a different
-	// code path, saw the same act: a hook and a transcript line, a hook and
-	// an OTel event, or an editor heartbeat that passed the peer-process
-	// check plus a commit whose diffstat covers the file. It is one of the
-	// conditions of DESIGN 6.4's corroborated band.
+	// Corroborated is the anchor's condition for DESIGN 6.4's corroborated
+	// band: a second record, written by a different code path, saw the
+	// same act. 6.4 names three pairs: a hook and a transcript line, a hook
+	// and an OTel event, and an editor heartbeat that passed the
+	// peer-process check plus a commit whose diffstat covers the file. So
+	// only an anchor that arrived via hook, log, otel or editor can be
+	// corroborated; in the editor pair the commit is the second record, not
+	// the anchor. The band has other conditions, and Corroborated never
+	// changes the anchor's level.
+	//
+	// DESIGN 5.2 and 6.2 D2 also say "corroborate" for a different rule,
+	// the one that sets a side-door anchor's level. Keyboard input in the
+	// host window in the 10 s before a track, plugin or bridge anchor makes
+	// its credit level A. A matching entry in the harness's own log makes
+	// the log record's anchor count instead, so the side-door record opens
+	// no anchor of its own. Corroborated doesn't record that rule.
 	Corroborated bool `json:"corroborated"`
 	// Labels ride along with the anchor's level and never change it
 	// (DESIGN 6.4). A track, plugin or bridge anchor always carries its
@@ -400,6 +422,9 @@ func (a Anchor) Validate() error {
 		c.addf("discounted_by", "must be a dark-flow discount, one of %q, got %q", darkFlowReasons.values, a.DiscountedBy)
 	}
 	checkEnum(c, "via", vias, a.Via)
+	if a.Corroborated && vias.has(a.Via) && !corroboratingVias.has(a.Via) {
+		c.addf("corroborated", "is true, but an anchor that arrived via %q can't be; DESIGN 6.4's record pairs have only %q records", a.Via, corroboratingVias.values)
+	}
 	checkLabels(c, "labels", anchorLabels, a.Labels)
 	want := sideDoorLabel(a.Via)
 	if want != "" && !slices.Contains(a.Labels, want) {
@@ -498,6 +523,23 @@ type MinuteBucket struct {
 func (m MinuteBucket) Shareable() MinuteBucket {
 	clearLocal(reflect.ValueOf(&m).Elem())
 	return m
+}
+
+// Tier1BucketFields returns the JSON keys a shareable MinuteBucket
+// writes, in order: DESIGN 4.3's tier-1 list for minute buckets.
+// TestTier1Shape fails when Shareable writes any other key, and the
+// server's ingest allowlist is checked against this list, so a new key
+// needs Karim to add it to DESIGN 4.3 first (PLAN ground rule 10). Each
+// call returns a new slice, so no caller can change the list.
+func Tier1BucketFields() []string {
+	return []string{"v", "params", "minute", "device", "slots", "credited_s", "uncredited", "agent_running_s", "state", "witness", "rev"}
+}
+
+// Tier1SlotFields returns the JSON keys each of a shareable bucket's four
+// slots writes, in order: DESIGN 4.3's slots[4]{p, cr, why, kind, ev,
+// lbl}. Like Tier1BucketFields, each call returns a new slice.
+func Tier1SlotFields() []string {
+	return []string{"p", "cr", "why", "kind", "ev", "lbl"}
 }
 
 // BucketSlot is one slot of a MinuteBucket, with the short field names of
@@ -605,7 +647,8 @@ type Rollup struct {
 	// CreditedByEvidence, when present, sums to CreditedS.
 	CreditedByEvidence map[Evidence]float64 `json:"credited_by_evidence,omitempty"`
 	// CreditedByProject is for the day and submission levels only. When
-	// present it sums to CreditedS.
+	// present it sums to CreditedS. A submission with a ProjectKey may
+	// name only that project in it.
 	CreditedByProject map[string]float64 `json:"credited_by_project,omitempty"`
 	AgentRunningS     float64            `json:"agent_running_s"`
 	AnchorCounts      map[AnchorKind]int `json:"anchor_counts,omitempty"`
@@ -626,8 +669,16 @@ func (r Rollup) Validate() error {
 		}
 	case LevelSubmission:
 		// A submission covers a set of projects (DESIGN 7.5): one key, or
-		// none when it covers several.
+		// none when it covers several. A keyed submission covers that one
+		// project, so its breakdown can't put credit anywhere else.
 		c.optKey("project_key", r.ProjectKey)
+		if isKey(r.ProjectKey) {
+			for _, k := range slices.Sorted(maps.Keys(r.CreditedByProject)) {
+				if k != r.ProjectKey {
+					c.addf("credited_by_project", "names project %q, but the submission covers only its project_key %q", k, r.ProjectKey)
+				}
+			}
+		}
 	default:
 		c.key("project_key", r.ProjectKey)
 	}
