@@ -7,7 +7,9 @@ import (
 	"context"
 	"crypto/sha256"
 	"errors"
+	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"slices"
@@ -643,6 +645,60 @@ func TestErrorsCarryNoSecrets(t *testing.T) {
 			}
 			if strings.Contains(err.Error(), tt.secret) {
 				t.Errorf("error %q contains %q", err, tt.secret)
+			}
+		})
+	}
+}
+
+// TestClientNeverPrintsSecrets formats a client every way a caller or a
+// log line might. sigv4's TestCredentialsNeverPrintSecrets covers bare
+// Credentials; this covers the Client that holds them, where fmt can't
+// call Credentials.String through the unexported signer field.
+func TestClientNeverPrintsSecrets(t *testing.T) {
+	creds := sigv4.Credentials{AccessKeyID: "AKIDPRINTCHECK", SecretAccessKey: "print-check-secret-value", SessionToken: "print-check-session-token"}
+	c, err := New(Config{Endpoint: "https://s3.example", Credentials: creds})
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := bucket(t, c, mainBucket)
+	logged := func(handler func(io.Writer) slog.Handler) string {
+		var buf bytes.Buffer
+		slog.New(handler(&buf)).Info("object storage", "client", c)
+		return buf.String()
+	}
+	const described = "objstore.Client{endpoint https://s3.example, region auto}"
+	outputs := []struct {
+		name, text string
+		// names is text the output must hold, to show String ran.
+		names string
+	}{
+		{name: "%v of a *Client prints no credential", text: fmt.Sprintf("%v", c), names: described},
+		{name: "%+v of a *Client prints no credential", text: fmt.Sprintf("%+v", c), names: described},
+		{name: "%#v of a *Client prints no credential", text: fmt.Sprintf("%#v", c), names: described},
+		{name: "%s of a *Client prints no credential", text: fmt.Sprintf("%s", c), names: described},
+		{name: "%+v of a Client value, which skips String, prints no credential", text: fmt.Sprintf("%+v", *c)},
+		{name: "%#v of a Client value, which skips GoString, prints no credential", text: fmt.Sprintf("%#v", *c)},
+		{name: "%+v of a *Bucket prints no credential", text: fmt.Sprintf("%+v", b)},
+		{name: "slog's text handler prints no credential", names: described,
+			text: logged(func(w io.Writer) slog.Handler { return slog.NewTextHandler(w, nil) })},
+		{name: "slog's JSON handler prints no credential", names: described,
+			text: logged(func(w io.Writer) slog.Handler { return slog.NewJSONHandler(w, nil) })},
+	}
+	secrets := []struct{ name, value string }{
+		{name: "access key id", value: creds.AccessKeyID},
+		{name: "secret access key", value: creds.SecretAccessKey},
+		{name: "session token", value: creds.SessionToken},
+	}
+	for _, o := range outputs {
+		t.Run(o.name, func(t *testing.T) {
+			// The messages say what leaked without printing it.
+			for _, s := range secrets {
+				if strings.Contains(o.text, s.value) {
+					t.Errorf("the output holds the %s", s.name)
+				}
+			}
+			if o.names != "" && !strings.Contains(o.text, o.names) {
+				t.Errorf("the output doesn't hold %q, so String didn't run", o.names)
 			}
 		})
 	}

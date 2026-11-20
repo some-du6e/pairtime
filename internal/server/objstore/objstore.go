@@ -31,6 +31,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"math/rand/v2"
 	"net"
 	"net/http"
@@ -103,13 +104,19 @@ type Config struct {
 }
 
 // Client makes S3 calls to one endpoint with one set of credentials.
+// Formatting a *Client prints its endpoint and region, never a
+// credential.
 type Client struct {
 	endpoint    *url.URL
 	virtualHost bool
-	signer      sigv4.Signer
-	http        *http.Client
-	now         func() time.Time
-	attempts    int
+	// signer holds the credentials. It is a pointer so that formatting a
+	// Client value, which skips String, prints an address here: fmt never
+	// calls Credentials.String through an unexported field, so a Signer
+	// value would print the secret.
+	signer   *sigv4.Signer
+	http     *http.Client
+	now      func() time.Time
+	attempts int
 	// sleep waits between attempts; tests replace it.
 	sleep func(context.Context, time.Duration) error
 }
@@ -147,13 +154,25 @@ func New(cfg Config) (*Client, error) {
 	return &Client{
 		endpoint:    u,
 		virtualHost: cfg.VirtualHost,
-		signer:      sigv4.Signer{Credentials: cfg.Credentials, Region: region, Service: "s3"},
+		signer:      &sigv4.Signer{Credentials: cfg.Credentials, Region: region, Service: "s3"},
 		http:        hc,
 		now:         now,
 		attempts:    attempts,
 		sleep:       sleepCtx,
 	}, nil
 }
+
+// String names the client's endpoint and region. It prints no credential,
+// not even the access key id.
+func (c *Client) String() string {
+	return "objstore.Client{endpoint " + c.endpoint.String() + ", region " + c.signer.Region + "}"
+}
+
+// GoString is String, for %#v.
+func (c *Client) GoString() string { return c.String() }
+
+// LogValue is String, for log/slog.
+func (c *Client) LogValue() slog.Value { return slog.StringValue(c.String()) }
 
 func defaultHTTPClient() *http.Client {
 	t := http.DefaultTransport.(*http.Transport).Clone()
