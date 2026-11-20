@@ -1,0 +1,659 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
+package retention
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"reflect"
+	"regexp"
+	"slices"
+	"strconv"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/some-du6e/pairtime/docs"
+	"github.com/some-du6e/pairtime/internal/server/migrations"
+	"github.com/some-du6e/pairtime/internal/server/store"
+	"github.com/some-du6e/pairtime/internal/server/store/storetest"
+	"github.com/some-du6e/pairtime/internal/server/writer"
+)
+
+const day = 24 * time.Hour
+
+// validDoc is a small schedule that loads. TestLoad's cases edit it.
+const validDoc = `{"about": "test", "version": 1, "source": "DESIGN 4.4",
+"spot_check_window": {"months": 12},
+"no_personal_data": ["schema_migrations"],
+"entries": [
+{"id": "server.ip_ja4", "where": "server", "data": "IPs", "kept": "{days}", "days": 30,
+ "job": {"table": "request_origins", "key": ["id"], "time_column": "seen_at_ms"}}
+]}`
+
+func TestLoad(t *testing.T) {
+	tests := []struct {
+		name     string
+		data     string // the schedule; "" means validDoc with old replaced by new
+		old, new string
+		wantErr  string // substring; "" means Load must succeed
+	}{
+		{name: "the embedded docs/retention.json loads", data: string(docs.RetentionJSON)},
+		{name: "a valid schedule loads"},
+		{name: "an unknown field is refused, so a misspelt key can't drop a rule", old: `"days": 30`, new: `"dayz": 30`, wantErr: `unknown field "dayz"`},
+		{name: "anything after the schedule is refused", data: validDoc + "{}", wantErr: "more after"},
+		{name: "another format version is refused", old: `"version": 1`, new: `"version": 2`, wantErr: "version is 2"},
+		{name: "a spot-check window under a month is refused", old: `"months": 12`, new: `"months": 0`, wantErr: "spot_check_window.months is 0"},
+		{name: "an unknown placeholder is refused", old: `"kept": "{days}"`, new: `"kept": "{days} or {hours}"`, wantErr: "kept has {hours}"},
+		{name: "days must appear in kept as {days}", old: `"kept": "{days}"`, new: `"kept": "a month"`, wantErr: "kept doesn't say {days}"},
+		{name: "{days} needs days", old: `"days": 30,`, new: ``, wantErr: "days isn't set"},
+		{name: "a job needs days", old: `"days": 30,`, new: ``, wantErr: "a job needs days"},
+		{name: "kept may not write a number of its own beside {days}", old: `"kept": "{days}"`, new: `"kept": "{days}, or 31 days"`, wantErr: "a number besides {days}"},
+		{name: "only server entries have jobs", old: `"id": "server.ip_ja4", "where": "server"`, new: `"id": "device.ip_ja4", "where": "device"`, wantErr: "only server entries have jobs"},
+		{name: "an unknown place is refused", old: `"where": "server"`, new: `"where": "cloud"`, wantErr: `where is "cloud"`},
+		{name: "an id must start with its place", old: `"id": "server.ip_ja4"`, new: `"id": "ip_ja4"`, wantErr: "id must be where.name"},
+		{name: "an id is used once", old: "\n]}", new: ",\n" + `{"id": "server.ip_ja4", "where": "server", "data": "x", "kept": "forever"}` + "\n]}", wantErr: "the id is used twice"},
+		{name: "a table belongs to one entry", old: `"no_personal_data": ["schema_migrations"]`, new: `"no_personal_data": ["request_origins"]`, wantErr: "table request_origins belongs to both"},
+		{name: "a column name can't carry SQL", old: `"time_column": "seen_at_ms"`, new: `"time_column": "seen_at_ms; DROP TABLE devices"`, wantErr: "isn't a lowercase SQL name"},
+		{name: "a key column is listed once", old: `"key": ["id"]`, new: `"key": ["id", "id"]`, wantErr: "job.key lists id twice"},
+		{name: "data can't be empty", old: `"data": "IPs"`, new: `"data": " "`, wantErr: "data is empty"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			data := tt.data
+			if data == "" {
+				data = validDoc
+				if tt.old != "" {
+					if !strings.Contains(data, tt.old) {
+						t.Fatalf("validDoc has no %q to replace", tt.old)
+					}
+					data = strings.Replace(data, tt.old, tt.new, 1)
+				}
+			}
+			_, err := Load([]byte(data))
+			switch {
+			case tt.wantErr == "" && err != nil:
+				t.Errorf("Load: %v", err)
+			case tt.wantErr != "" && err == nil:
+				t.Errorf("Load succeeded, want an error containing %q", tt.wantErr)
+			case tt.wantErr != "" && !strings.Contains(err.Error(), tt.wantErr):
+				t.Errorf("Load error = %q, want it to contain %q", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestKept(t *testing.T) {
+	tests := []struct {
+		name   string
+		window Window
+		entry  Entry
+		want   string
+	}{
+		{name: "{days} becomes the entry's days", window: Window{Months: 12}, entry: Entry{Kept: "{days}, then deleted", Days: 30}, want: "30 days, then deleted"},
+		{name: "one day is singular", window: Window{Months: 12}, entry: Entry{Kept: "{days}", Days: 1}, want: "1 day"},
+		{name: "{window} counts months after the decision", window: Window{Months: 12}, entry: Entry{Kept: "until ({window})"}, want: "until (12 months after the decision)"},
+		{name: "a provisional window says it is a default", window: Window{Months: 12, Provisional: "DESIGN 13.2"}, entry: Entry{Kept: "until ({window})"},
+			want: "until (12 months after the decision, a default until Hack Club sets the window)"},
+		{name: "one month is singular", window: Window{Months: 1}, entry: Entry{Kept: "{window}"}, want: "1 month after the decision"},
+		{name: "text without placeholders is unchanged", window: Window{Months: 12}, entry: Entry{Kept: "While your account exists"}, want: "While your account exists"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := &Policy{SpotCheckWindow: tt.window}
+			if got := p.Kept(tt.entry); got != tt.want {
+				t.Errorf("Kept = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+// designRows returns the rows of DESIGN 4.4's table, each split into its
+// cells: where, data and kept.
+func designRows(t *testing.T) [][]string {
+	t.Helper()
+	data, err := os.ReadFile("../../../docs/DESIGN.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, section, ok := strings.Cut(string(data), "\n### 4.4 Data inventory and retention\n")
+	if !ok {
+		t.Fatal("docs/DESIGN.md has no section 4.4")
+	}
+	section, _, _ = strings.Cut(section, "\n### ")
+	var rows [][]string
+	for _, line := range strings.Split(section, "\n") {
+		if strings.HasPrefix(line, "| ") {
+			rows = append(rows, strings.Split(strings.Trim(line, "| "), " | "))
+		}
+	}
+	return rows
+}
+
+// TestDesignPeriods checks every number in docs/retention.json against the
+// oracle, DESIGN 4.4's own text.
+func TestDesignPeriods(t *testing.T) {
+	p, err := Default()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows := designRows(t)
+	tests := []struct {
+		name  string
+		id    string // the entry in docs/retention.json
+		where string // DESIGN 4.4's first cell
+		data  string // the start of its second cell
+		re    string // captures the days in its third cell
+	}{
+		{name: "prompt text is kept 90 days on the device", id: "device.prompt_text", where: "Device", data: "Prompt text, final agent messages", re: `^(\d+) days, or until a submission covering them is decided, whichever is later`},
+		{name: "file paths and tool commands are kept 30 days on the device", id: "device.paths_commands", where: "Device", data: "File paths in the vault; tool commands", re: `^(\d+) days$`},
+		{name: "presence, focus, typing aggregates and sketches are kept 90 days on the device", id: "device.activity", where: "Device", data: "Presence and focus slots", re: `^(\d+) days$`},
+		{name: "ledger records are kept 180 days on the device, or longer for a submission", id: "device.ledger", where: "Device", data: "Ledger records and batch roots", re: `^(\d+) days, or longer while a submission using them is inside its spot-check window$`},
+		{name: "minute buckets are kept 180 days on the device", id: "device.buckets", where: "Device", data: "Minute buckets", re: `^(\d+) days; day rollups and coach records until the teen deletes them$`},
+		{name: "device rows are kept 90 days past the device's lifetime", id: "server.devices", where: "Server", data: "`device_id`, OS family", re: `^Device lifetime plus (\d+) days$`},
+		{name: "IP addresses and JA4 are kept 30 days, then deleted", id: "server.ip_ja4", where: "Server", data: "Uploading IP address and JA4", re: `^(\d+) days, then deleted, not truncated`},
+		{name: "per-minute buckets are kept 180 days, then daily totals", id: "server.minute_buckets", where: "Server", data: "Minute buckets", re: `^Per-minute detail for (\d+) days, the submission horizon, then daily totals per project`},
+		{name: "witness rows are kept 180 days unless a submission uses them", id: "server.witness", where: "Server", data: "Witness rows and batch roots", re: `^(\d+) days; rows a submission uses stay until its spot-check window closes$`},
+		{name: "backup segments older than 180 days are deleted", id: "server.backups", where: "Server", data: "Wrapped `K_dev` and encrypted backups", re: `; backup segments older than (\d+) days are deleted$`},
+	}
+	checked := make(map[string]bool)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			checked[tt.id] = true
+			e, ok := p.Find(tt.id)
+			if !ok {
+				t.Fatalf("docs/retention.json has no entry %s", tt.id)
+			}
+			var kept string
+			for _, r := range rows {
+				if len(r) == 3 && r[0] == tt.where && strings.HasPrefix(r[1], tt.data) {
+					kept = r[2]
+					break
+				}
+			}
+			if kept == "" {
+				t.Fatalf("DESIGN 4.4 has no row %q, %q...", tt.where, tt.data)
+			}
+			m := regexp.MustCompile(tt.re).FindStringSubmatch(kept)
+			if m == nil {
+				t.Fatalf("DESIGN 4.4's %q row says %q, which doesn't match %s", tt.data, kept, tt.re)
+			}
+			if want, _ := strconv.Atoi(m[1]); e.Days != want {
+				t.Errorf("%s has days %d; DESIGN 4.4 says %d (%q)", tt.id, e.Days, want, kept)
+			}
+		})
+	}
+	t.Run("every entry with days is checked against DESIGN 4.4", func(t *testing.T) {
+		for _, e := range p.Entries {
+			if e.Days > 0 && !checked[e.ID] {
+				t.Errorf("%s has days %d and no case in TestDesignPeriods", e.ID, e.Days)
+			}
+		}
+	})
+	t.Run("the spot-check window is DESIGN 4.4's default, marked provisional", func(t *testing.T) {
+		var kept string
+		for _, r := range rows {
+			if len(r) == 3 && r[0] == "Evidence store" {
+				kept = r[2]
+			}
+		}
+		m := regexp.MustCompile(`(\d+) months after the decision until HQ sets a window`).FindStringSubmatch(kept)
+		if m == nil {
+			t.Fatalf("DESIGN 4.4's evidence store row says %q", kept)
+		}
+		if want, _ := strconv.Atoi(m[1]); p.SpotCheckWindow.Months != want {
+			t.Errorf("spot_check_window.months = %d; DESIGN 4.4 says %d", p.SpotCheckWindow.Months, want)
+		}
+		if p.SpotCheckWindow.Provisional == "" {
+			t.Error("spot_check_window.provisional is empty, but HQ hasn't set the window (DESIGN 13.2 item 4)")
+		}
+	})
+}
+
+func TestJobs(t *testing.T) {
+	tests := []struct {
+		name     string
+		edit     func(p *Policy)
+		wantJobs []string // ids, and "+hold" when the job has its hold
+		wantOff  []string
+	}{
+		{
+			name:    "every job waits while its table doesn't exist",
+			edit:    func(*Policy) {},
+			wantOff: []string{"server.devices awaits WP-SV3", "server.ip_ja4 awaits WP-SV4", "server.minute_buckets awaits WP-SV7", "server.witness awaits WP-SV4"},
+		},
+		{
+			name: "a job whose table exists runs, without a hold whose table doesn't",
+			edit: func(p *Policy) {
+				for _, e := range p.Entries {
+					if e.Job != nil {
+						e.Job.Awaits = ""
+					}
+				}
+			},
+			wantJobs: []string{"server.devices", "server.ip_ja4", "server.minute_buckets", "server.witness"},
+			wantOff:  []string{"server.witness hold awaits WP-SB4"},
+		},
+		{
+			name: "a job runs with its hold once both tables exist",
+			edit: func(p *Policy) {
+				for _, e := range p.Entries {
+					if e.Job != nil {
+						e.Job.Awaits = ""
+						if e.Job.Hold != nil {
+							e.Job.Hold.Awaits = ""
+						}
+					}
+				}
+			},
+			wantJobs: []string{"server.devices", "server.ip_ja4", "server.minute_buckets", "server.witness+hold"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p, err := Default()
+			if err != nil {
+				t.Fatal(err)
+			}
+			tt.edit(p)
+			jobs, off := p.Jobs()
+			var got []string
+			for _, j := range jobs {
+				id := j.ID
+				if j.Hold != nil {
+					id += "+hold"
+				}
+				got = append(got, id)
+				e, _ := p.Find(j.ID)
+				if j.MaxAge != time.Duration(e.Days)*day {
+					t.Errorf("%s MaxAge = %v, want the entry's %d days", j.ID, j.MaxAge, e.Days)
+				}
+				if j.Hold != nil && j.Hold.WindowMonths != p.SpotCheckWindow.Months {
+					t.Errorf("%s hold window = %d months, want the schedule's %d", j.ID, j.Hold.WindowMonths, p.SpotCheckWindow.Months)
+				}
+			}
+			if !slices.Equal(got, tt.wantJobs) {
+				t.Errorf("jobs = %q, want %q", got, tt.wantJobs)
+			}
+			if !slices.Equal(off, tt.wantOff) {
+				t.Errorf("off = %q, want %q", off, tt.wantOff)
+			}
+		})
+	}
+}
+
+func TestDeleteSQL(t *testing.T) {
+	now := time.Date(2027, 7, 1, 12, 0, 0, 0, time.UTC)
+	tests := []struct {
+		name     string
+		job      Job
+		wantSQL  string
+		wantArgs []any
+	}{
+		{
+			name:     "a one-column key deletes by that column, in batches",
+			job:      Job{ID: "server.ip_ja4", Table: "request_origins", Key: []string{"id"}, TimeColumn: "seen_at_ms", MaxAge: 30 * day},
+			wantSQL:  "DELETE FROM request_origins WHERE id IN (SELECT t.id FROM request_origins t WHERE t.seen_at_ms <= $1 LIMIT $2)",
+			wantArgs: []any{now.Add(-30 * day).UnixMilli(), 500},
+		},
+		{
+			name: "a hold keeps the rows an open or recently decided submission uses",
+			job: Job{ID: "server.witness", Table: "witness_rows", Key: []string{"device_id", "b"}, TimeColumn: "received_at_ms", MaxAge: 180 * day,
+				Hold: &Hold{Table: "submission_batches", DecidedColumn: "decided_at_ms", WindowMonths: 12}},
+			wantSQL: "DELETE FROM witness_rows WHERE (device_id, b) IN (SELECT t.device_id, t.b FROM witness_rows t WHERE t.received_at_ms <= $1" +
+				" AND NOT EXISTS (SELECT 1 FROM submission_batches h WHERE h.device_id = t.device_id AND h.b = t.b" +
+				" AND (h.decided_at_ms IS NULL OR h.decided_at_ms > $3)) LIMIT $2)",
+			wantArgs: []any{now.Add(-180 * day).UnixMilli(), 500, now.AddDate(0, -12, 0).UnixMilli()},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotSQL, gotArgs := tt.job.deleteSQL(now, 500)
+			if gotSQL != tt.wantSQL {
+				t.Errorf("SQL =\n%s\nwant\n%s", gotSQL, tt.wantSQL)
+			}
+			if !reflect.DeepEqual(gotArgs, tt.wantArgs) {
+				t.Errorf("args = %v, want %v", gotArgs, tt.wantArgs)
+			}
+		})
+	}
+}
+
+// TestSweep runs the four server jobs under a fake clock against tables
+// shaped as their bindings say, on SQLite and, in postgres.yml, Postgres.
+// The ages are written from DESIGN 4.4 here rather than read from the
+// schedule, so with TestDesignPeriods it checks that the jobs delete
+// exactly DESIGN 4.4's rows.
+func TestSweep(t *testing.T) {
+	p, err := Default()
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2027, 7, 1, 12, 0, 0, 0, time.UTC)
+	monthsAgo := func(m int) time.Time { return now.AddDate(0, -m, 0) }
+	type hold struct {
+		open    bool      // the submission isn't decided
+		decided time.Time // when it was decided, unless open
+		other   bool      // the hold names a different row
+	}
+	cases := []struct {
+		name string
+		job  string
+		age  time.Duration // how long before now the row's time is
+		null bool          // the row's time is NULL
+		hold *hold
+		kept bool
+	}{
+		{name: "an IP seen 30 days ago is deleted", job: "server.ip_ja4", age: 30 * day},
+		{name: "an IP seen a millisecond less than 30 days ago stays", job: "server.ip_ja4", age: 30*day - time.Millisecond, kept: true},
+		{name: "an IP seen an hour ago stays", job: "server.ip_ja4", age: time.Hour, kept: true},
+		{name: "an IP seen a year ago is deleted", job: "server.ip_ja4", age: 365 * day},
+		{name: "a minute bucket 180 days old loses its per-minute row", job: "server.minute_buckets", age: 180 * day},
+		{name: "a minute bucket a minute younger than 180 days keeps its row", job: "server.minute_buckets", age: 180*day - time.Minute, kept: true},
+		{name: "a device removed 90 days ago is deleted", job: "server.devices", age: 90 * day},
+		{name: "a device removed 89 days ago stays", job: "server.devices", age: 89 * day, kept: true},
+		{name: "a device that was never removed stays", job: "server.devices", null: true, kept: true},
+		{name: "a witness row received 180 days ago is deleted", job: "server.witness", age: 180 * day},
+		{name: "a witness row received 179 days ago stays", job: "server.witness", age: 179 * day, kept: true},
+		{name: "an old witness row an open submission uses stays", job: "server.witness", age: 400 * day, hold: &hold{open: true}, kept: true},
+		{name: "an old witness row stays 11 months after its submission's decision", job: "server.witness", age: 400 * day, hold: &hold{decided: monthsAgo(11)}, kept: true},
+		{name: "an old witness row stays a minute before the spot-check window closes", job: "server.witness", age: 400 * day, hold: &hold{decided: monthsAgo(12).Add(time.Minute)}, kept: true},
+		{name: "an old witness row is deleted when the window closes, 12 months after the decision", job: "server.witness", age: 400 * day, hold: &hold{decided: monthsAgo(12)}},
+		{name: "a hold on a different batch keeps nothing", job: "server.witness", age: 400 * day, hold: &hold{open: true, other: true}},
+	}
+
+	jobs := p.AllJobs()
+	byID := make(map[string]Job)
+	for _, j := range jobs {
+		byID[j.ID] = j
+	}
+	wantDeleted := make(map[string]int64)
+	for _, c := range cases {
+		if _, ok := byID[c.job]; !ok {
+			t.Fatalf("%s: docs/retention.json has no job %s", c.name, c.job)
+		}
+		if !c.kept {
+			wantDeleted[c.job]++
+		}
+	}
+
+	for _, engine := range storetest.Engines() {
+		t.Run(string(engine), func(t *testing.T) {
+			ctx := context.Background()
+			db := storetest.Open(t, engine)
+			createTables(t, db, jobs)
+			for i, c := range cases {
+				j := byID[c.job]
+				var at any
+				if !c.null {
+					at = now.Add(-c.age).UnixMilli()
+				}
+				cols, vals := rowValues(j, i, at)
+				insert(t, db, j.Table, cols, vals)
+				if h := c.hold; h != nil {
+					hi := i
+					if h.other {
+						hi = 1000 + i
+					}
+					hcols, hvals := keyValues(j, hi, at)
+					var decided any
+					if !h.open {
+						decided = h.decided.UnixMilli()
+					}
+					insert(t, db, j.Hold.Table, append(hcols, j.Hold.DecidedColumn), append(hvals, decided))
+				}
+			}
+
+			w := writer.Start(db.Write, writer.Options{})
+			// A batch of 2 makes the jobs that delete two rows or more
+			// loop.
+			results := Sweep(ctx, w, jobs, now, 2)
+			again := Sweep(ctx, w, jobs, now, 2)
+			w.Close()
+
+			if len(results) != len(jobs) {
+				t.Fatalf("Sweep returned %d results for %d jobs", len(results), len(jobs))
+			}
+			for _, r := range results {
+				if r.Err != nil {
+					t.Errorf("%s: %v", r.ID, r.Err)
+				} else if r.Deleted != wantDeleted[r.ID] {
+					t.Errorf("%s deleted %d rows, want %d", r.ID, r.Deleted, wantDeleted[r.ID])
+				}
+			}
+			for _, r := range again {
+				if r.Err != nil || r.Deleted != 0 {
+					t.Errorf("a second sweep at the same time: %s deleted %d rows (error %v), want 0", r.ID, r.Deleted, r.Err)
+				}
+			}
+			for i, c := range cases {
+				t.Run(c.name, func(t *testing.T) {
+					j := byID[c.job]
+					var at any
+					if !c.null {
+						at = now.Add(-c.age).UnixMilli()
+					}
+					if got := exists(t, db, j, i, at); got != c.kept {
+						t.Errorf("row kept = %v, want %v", got, c.kept)
+					}
+				})
+			}
+		})
+	}
+}
+
+// createTables creates each job's table, and its hold table, with just the
+// columns the binding names. Key columns are TEXT unless a key column is
+// also the time column.
+func createTables(t *testing.T, db *store.DB, jobs []Job) {
+	t.Helper()
+	exec := func(q string) {
+		t.Helper()
+		if _, err := db.Write.ExecContext(context.Background(), q); err != nil {
+			t.Fatalf("%s: %v", q, err)
+		}
+	}
+	keyCols := func(j Job) []string {
+		var cols []string
+		for _, k := range j.Key {
+			typ := "TEXT"
+			if k == j.TimeColumn {
+				typ = "BIGINT"
+			}
+			cols = append(cols, k+" "+typ+" NOT NULL")
+		}
+		return cols
+	}
+	for _, j := range jobs {
+		cols := keyCols(j)
+		if !slices.Contains(j.Key, j.TimeColumn) {
+			cols = append(cols, j.TimeColumn+" BIGINT")
+		}
+		exec(fmt.Sprintf("CREATE TABLE %s (%s, PRIMARY KEY (%s))", j.Table, strings.Join(cols, ", "), strings.Join(j.Key, ", ")))
+		if h := j.Hold; h != nil {
+			exec(fmt.Sprintf("CREATE TABLE %s (%s, %s BIGINT)", h.Table, strings.Join(keyCols(j), ", "), h.DecidedColumn))
+		}
+	}
+}
+
+// keyValues returns the key columns of row i of j's table and their values.
+func keyValues(j Job, i int, at any) ([]string, []any) {
+	var cols []string
+	var vals []any
+	for _, k := range j.Key {
+		cols = append(cols, k)
+		if k == j.TimeColumn {
+			vals = append(vals, at)
+		} else {
+			vals = append(vals, fmt.Sprintf("%s-%d", k, i))
+		}
+	}
+	return cols, vals
+}
+
+// rowValues returns every column of row i of j's table and their values.
+func rowValues(j Job, i int, at any) ([]string, []any) {
+	cols, vals := keyValues(j, i, at)
+	if !slices.Contains(j.Key, j.TimeColumn) {
+		cols = append(cols, j.TimeColumn)
+		vals = append(vals, at)
+	}
+	return cols, vals
+}
+
+func insert(t *testing.T, db *store.DB, table string, cols []string, vals []any) {
+	t.Helper()
+	ph := make([]string, len(cols))
+	for i := range cols {
+		ph[i] = "$" + strconv.Itoa(i+1)
+	}
+	q := fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s)", table, strings.Join(cols, ", "), strings.Join(ph, ", "))
+	if _, err := db.Write.ExecContext(context.Background(), q, vals...); err != nil {
+		t.Fatalf("%s: %v", q, err)
+	}
+}
+
+// exists reports whether row i of j's table is still there.
+func exists(t *testing.T, db *store.DB, j Job, i int, at any) bool {
+	t.Helper()
+	cols, vals := keyValues(j, i, at)
+	conds := make([]string, len(cols))
+	for k, c := range cols {
+		conds[k] = c + " = $" + strconv.Itoa(k+1)
+	}
+	q := "SELECT count(*) FROM " + j.Table + " WHERE " + strings.Join(conds, " AND ")
+	var n int
+	if err := db.Read.QueryRowContext(context.Background(), q, vals...).Scan(&n); err != nil {
+		t.Fatalf("%s: %v", q, err)
+	}
+	return n > 0
+}
+
+// TestTables checks docs/retention.json against the tables pairtimed's
+// migrations create, so no table holds data without a published period.
+func TestTables(t *testing.T) {
+	p, err := Default()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	db := storetest.Open(t, store.SQLite)
+	ms, err := migrations.Embedded()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := migrations.Apply(ctx, db, ms, time.Now); err != nil {
+		t.Fatal(err)
+	}
+	columns := func(table string) []string {
+		rows, err := db.Read.QueryContext(ctx, `SELECT name FROM pragma_table_info($1)`, table)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer rows.Close()
+		var cols []string
+		for rows.Next() {
+			var c string
+			if err := rows.Scan(&c); err != nil {
+				t.Fatal(err)
+			}
+			cols = append(cols, c)
+		}
+		if err := rows.Err(); err != nil {
+			t.Fatal(err)
+		}
+		return cols
+	}
+	var tables []string
+	rows, err := db.Read.QueryContext(ctx, `SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for rows.Next() {
+		var n string
+		if err := rows.Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		tables = append(tables, n)
+	}
+	rows.Close()
+	if len(tables) == 0 {
+		t.Fatal("the migrations created no tables")
+	}
+
+	claimed := make(map[string]bool)
+	for _, n := range p.NoPersonalData {
+		claimed[n] = true
+	}
+	for _, e := range p.Entries {
+		for _, n := range e.Tables {
+			claimed[n] = true
+		}
+		if j := e.Job; j != nil {
+			claimed[j.Table] = true
+			if j.Hold != nil {
+				claimed[j.Hold.Table] = true
+			}
+		}
+	}
+
+	// bound checks one job or hold table: it exists with cols when on,
+	// and doesn't exist yet when it awaits its work package.
+	bound := func(t *testing.T, id, table, awaits string, cols []string) {
+		t.Helper()
+		have := columns(table)
+		switch {
+		case awaits != "" && len(have) > 0:
+			t.Errorf("%s: table %s exists now; remove its awaits %q in docs/retention.json, so its job runs", id, table, awaits)
+		case awaits == "" && len(have) == 0:
+			t.Errorf("%s: table %s doesn't exist; set awaits to the work package that creates it", id, table)
+		case awaits == "":
+			for _, c := range cols {
+				if !slices.Contains(have, c) {
+					t.Errorf("%s: table %s has no column %s", id, table, c)
+				}
+			}
+		}
+	}
+	tests := []struct {
+		name  string
+		check func(t *testing.T)
+	}{
+		{
+			name: "every table the migrations create is in docs/retention.json",
+			check: func(t *testing.T) {
+				for _, n := range tables {
+					if !claimed[n] {
+						t.Errorf("table %s isn't in docs/retention.json; add it to the entry for the data it holds, as its job or in its tables, or to no_personal_data", n)
+					}
+				}
+			},
+		},
+		{
+			name: "a job runs only on a table that exists, with the columns it names",
+			check: func(t *testing.T) {
+				for _, e := range p.Entries {
+					if j := e.Job; j != nil {
+						bound(t, e.ID, j.Table, j.Awaits, append(slices.Clone(j.Key), j.TimeColumn))
+					}
+				}
+			},
+		},
+		{
+			name: "a hold is used only once its table exists, with the columns it names",
+			check: func(t *testing.T) {
+				for _, e := range p.Entries {
+					if e.Job == nil || e.Job.Hold == nil {
+						continue
+					}
+					h := e.Job.Hold
+					bound(t, e.ID+" hold", h.Table, h.Awaits, append(slices.Clone(e.Job.Key), h.DecidedColumn))
+				}
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, tt.check)
+	}
+}
