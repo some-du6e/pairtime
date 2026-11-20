@@ -401,9 +401,9 @@ func TestLookbackAnchors(t *testing.T) {
 						t.Errorf("%s: class %q doesn't make a %s", where, a.PromptClass, a.Kind)
 					}
 					typing := math.Min(float64(p.TypedLenEst)/lookbackComposeCPS, lookbackComposeMaxS)
-					if a.LeadS < typing || a.LeadS >= typing+1 {
-						t.Errorf("%s: lead_s %v; SM 2.8 leaves only the typing time, %d / 1.5 = %v s, rounded up to a whole second",
-							where, a.LeadS, p.TypedLenEst, typing)
+					if want := math.Ceil(typing); a.LeadS != want {
+						t.Errorf("%s: lead_s %v; SM 2.8 leaves only the typing time, %d / 1.5 = %v s, rounded up to %v",
+							where, a.LeadS, p.TypedLenEst, typing, want)
 					}
 					if a.TrailS != 0 {
 						t.Errorf("%s: trail_s %v; a prompt has no trail (SM 2.3)", where, a.TrailS)

@@ -68,7 +68,7 @@ exp.row("23:39", credit={P: {"P": 50}}, uncredited=None, codes=["X.no_anchor"], 
         derived=DERIVED, erratum=ER,
         note="The /goal prompt at 23:40:00 has 75 typed characters by SM's count: typing time only, 75 / 1.5 = "
              "50 s, from 23:39:10. The quoted text has 73 (WP-FX1's prompt-lengths erratum), which would make it "
-             "48.67 s. The code of 23:39:00 to 23:39:10 is open.")
+             "48.67 s, rounded up to 49. The code of 23:39:00 to 23:39:10 is open.")
 exp.row("23:40", "+1 00:23", credit={}, uncredited={"X.agent_only": 43 * 60}, agent=43 * 60,
         sm="2.8; the events of 6.4's 23:40 to 23:43 rows and its 23:44 to 07:29 range", derived=DERIVED,
         note="T1, his /goal turn, runs to 00:23:20. Lookback credits no reading while the agent runs, so the "

@@ -52,7 +52,7 @@ The live fixture's reading needs presence. Its `SUP` from 23:40 to 23:43:40 happ
 
 ## Readings the rows rely on
 
-- **Prompt lengths.** The events carry SM's counts, 75 and 61, as the live fixture's do. The quoted texts have 73 and 60 characters (WP-FX1's prompt-lengths erratum). With those, 23:39 would credit 48.67 s and 07:36 would credit 40, and the night 88.67.
+- **Prompt lengths.** The events carry SM's counts, 75 and 61, as the live fixture's do. The quoted texts have 73 and 60 characters (WP-FX1's prompt-lengths erratum). With those, 23:39 would credit 73 / 1.5 = 48.67 s, rounded up to 49, and 07:36 would credit 40, so the night would credit 89.
 - **Rounding.** 61 / 1.5 is 40.67 s. The lead is rounded up to the whole second, as SM rounds the live lead, which the prompt-lengths erratum also asks Karim to confirm.
 - **Codes.** Seconds outside every window with no agent running have no SM 5.2 code in lookback (the lookback erratum's point 2). A stop-hook turn's uncredited seconds could be `X.automated` or `X.agent_only` (WP-FX1's 6.6 erratum, point 1). Those rows have `uncredited` null and list the candidate codes.
 
