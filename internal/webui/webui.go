@@ -14,7 +14,11 @@ import (
 	"io/fs"
 )
 
-//go:embed dist
+// The all: prefix keeps files whose names start with _ or ., which a bare
+// pattern drops. Vite and Rollup write such files, such as a shared
+// _commonjsHelpers chunk.
+//
+//go:embed all:dist
 var dist embed.FS
 
 // FS returns the built UI, with index.html at its root.
