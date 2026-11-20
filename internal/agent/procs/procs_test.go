@@ -15,6 +15,7 @@ import (
 	"github.com/some-du6e/pairtime/internal/agent/sched"
 	"github.com/some-du6e/pairtime/internal/platform"
 	"github.com/some-du6e/pairtime/pkg/event"
+	"github.com/some-du6e/pairtime/pkg/params"
 )
 
 var t0 = time.Date(2026, 11, 19, 22, 0, 0, 0, time.UTC)
@@ -198,6 +199,16 @@ func TestScanOverTime(t *testing.T) {
 		// The new 121 and 132 are left; 111 and the old 121 have exited.
 		if len(s.reported) != 2 || len(s.claimed) != 0 {
 			t.Errorf("remembers %d reported and %d claimed processes, want 2 and 0", len(s.reported), len(s.claimed))
+		}
+	})
+}
+
+func TestIntervalMatchesTheParameterTable(t *testing.T) {
+	tables := params.Tables()
+	newest := tables[len(tables)-1]
+	t.Run("Interval is PROC_SCAN_S of the newest table", func(t *testing.T) {
+		if want := time.Duration(newest.Int(params.PROC_SCAN_S)) * time.Second; Interval != want {
+			t.Errorf("Interval = %s, but table %s has PROC_SCAN_S = %s", Interval, newest.Version(), want)
 		}
 	})
 }

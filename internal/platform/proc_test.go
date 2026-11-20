@@ -81,13 +81,15 @@ func TestChain(t *testing.T) {
 }
 
 func TestChainIsCapped(t *testing.T) {
-	var procs []Proc
-	for pid := 1; pid <= 3*MaxChain; pid++ {
-		procs = append(procs, Proc{PID: pid, PPID: pid + 1})
-	}
-	if got := len(NewTable(Linux, procs).Chain(1)); got != MaxChain {
-		t.Errorf("a %d-deep chain came back %d long, want the cap %d", 3*MaxChain, got, MaxChain)
-	}
+	t.Run("a chain deeper than MaxChain stops at MaxChain", func(t *testing.T) {
+		var procs []Proc
+		for pid := 1; pid <= 3*MaxChain; pid++ {
+			procs = append(procs, Proc{PID: pid, PPID: pid + 1})
+		}
+		if got := len(NewTable(Linux, procs).Chain(1)); got != MaxChain {
+			t.Errorf("a %d-deep chain came back %d long, want the cap %d", 3*MaxChain, got, MaxChain)
+		}
+	})
 }
 
 func TestDescendants(t *testing.T) {

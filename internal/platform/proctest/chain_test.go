@@ -172,7 +172,35 @@ func readResult(t *testing.T, out string) result {
 	}
 	t.Logf("  => %s, entrypoint %s, has_tty %v, decided by #%d, script shell %v",
 		r.Lineage.ParentClass, r.Lineage.Entrypoint, r.Lineage.HasTTY, r.Lineage.By, r.Lineage.ScriptShell)
+	summarize(t, r)
 	return r
+}
+
+// summarize adds the chain to the job summary when the test runs in
+// GitHub Actions, so every CI run records the real chains each reader saw
+// on its OS. The chains hold only the runner's own test processes.
+func summarize(t *testing.T, r result) {
+	t.Helper()
+	path := os.Getenv("GITHUB_STEP_SUMMARY")
+	if path == "" {
+		return
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "\n#### %s, %s\n\n| # | pid | ppid | name | alias | pgid | tty |\n|---:|---:|---:|---|---|---:|---|\n", t.Name(), goos)
+	for i, p := range r.Chain {
+		fmt.Fprintf(&b, "| %d | %d | %d | %s | %s | %d | %s |\n", i, p.PID, p.PPID, p.Name, p.Alias, p.PGID, p.TTY)
+	}
+	fmt.Fprintf(&b, "\n%s, entrypoint %s, has_tty %v, decided by #%d, script shell %v\n",
+		r.Lineage.ParentClass, r.Lineage.Entrypoint, r.Lineage.HasTTY, r.Lineage.By, r.Lineage.ScriptShell)
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Logf("couldn't add to the job summary: %v", err)
+		return
+	}
+	defer f.Close()
+	if _, err := f.WriteString(b.String()); err != nil {
+		t.Logf("couldn't add to the job summary: %v", err)
+	}
 }
 
 // checkChain checks what every chain must show: the helper itself first,

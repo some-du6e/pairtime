@@ -29,6 +29,7 @@ import (
 )
 
 // Interval is PROC_SCAN_S, SM 8.4's interval of the harness process scan.
+// A test checks it against the newest table in pkg/params.
 const Interval = 60 * time.Second
 
 // Grace is how long a harness process runs before a scan may report it.
