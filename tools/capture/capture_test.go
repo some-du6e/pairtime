@@ -1439,6 +1439,50 @@ func TestPrepare(t *testing.T) {
 	}
 }
 
+// TestPrepareHarnesses checks what prepare.py sets up and prints for the
+// harnesses other than Claude Code.
+func TestPrepareHarnesses(t *testing.T) {
+	unixOnly(t)
+	need(t, "git")
+	cases := []struct {
+		harness, section string
+		// history is the history file collect.py gets, below ROOT, or "".
+		history string
+	}{
+		{"codex", "Codex", "codex-home/history.jsonl"},
+		{"cursor", "Cursor", ""},
+		{"copilot", "GitHub Copilot", ""},
+		{"gemini", "Gemini CLI", ""},
+		{"devin", "Devin", ""},
+		{"cline", "Cline", ""},
+	}
+	for _, c := range cases {
+		t.Run(c.harness+"'s commands name its own fixture folder, SCRIPTS.md section and history, never Claude Code's", func(t *testing.T) {
+			capture := filepath.Join(t.TempDir(), "capture")
+			env := []string{"HOME=" + t.TempDir(), "PATH=" + os.Getenv("PATH")}
+			r := run(t, ".", nil, env, python(t, "prepare.py", c.harness, capture, "run1")...)
+			if r.code != 0 {
+				t.Fatalf("exit %d:\n%s%s", r.code, r.stdout, r.stderr)
+			}
+			fixture := filepath.Join(filepath.Dir(filepath.Dir(kit(t, "."))), "testdata", "fixtures", c.harness) + string(os.PathSeparator)
+			for _, want := range []string{fixture, `Follow the "` + c.section + `" section`} {
+				if !strings.Contains(r.stdout, want) {
+					t.Errorf("no %q in:\n%s", want, r.stdout)
+				}
+			}
+			if strings.Contains(r.stdout, "claude_code") || strings.Contains(r.stdout, filepath.Join(".claude", "history.jsonl")) {
+				t.Errorf("Claude Code's fixture folder or history in:\n%s", r.stdout)
+			}
+			if c.history != "" && !strings.Contains(r.stdout, "--history "+filepath.Join(capture, filepath.FromSlash(c.history))) {
+				t.Errorf("no --history %s in:\n%s", c.history, r.stdout)
+			}
+			if c.history == "" && strings.Contains(r.stdout, "--history") {
+				t.Errorf("a --history for a harness with no history file:\n%s", r.stdout)
+			}
+		})
+	}
+}
+
 // captureFile is capture.json, as collect.py and the scrub read it.
 type captureFile struct {
 	Harness string            `json:"harness"`

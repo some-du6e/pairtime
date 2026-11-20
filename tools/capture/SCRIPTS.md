@@ -161,13 +161,13 @@ The Desktop app's Code tab doesn't read a terminal's variables, so it can't be p
    ```
 
    `prepare.py` printed this command with your paths, and each harness's section below says which history file it has. For harnesses whose hooks don't say where the log is, add `--extra PATH` for that one session's file. It shows the list and asks first. Never pass a whole store such as Cursor's `state.vscdb`: it holds all your chats. When the harness had a settings folder of its own, `collect.py` copies nothing from outside it, since a session file from anywhere else ran with your own settings; start over with a new `ROOT` if it says so.
-3. Scrub into the repo. Add `--also` for anything private the kit can't know: your real name, your school, another handle.
+3. Scrub into the repo, with the scrub command `prepare.py` printed: it has your run's paths and the fixture folder filled in. Add `--also` for anything private the kit can't know: your real name, your school, another handle. For the Claude Code CLI run it looks like this:
 
    ```sh
    python3 tools/capture/scrub.py ROOT/runs/cli testdata/fixtures/claude_code/<version>/<os>/cli --also "Your Name"
    ```
 
-   `<version>` is the number from `claude --version`, `<os>` is `windows`, `macos` or `linux`.
+   The fixture folder is `testdata/fixtures/<harness>/<version>/<os>/<run>`. `<harness>` is the name you gave `prepare.py` (`claude_code`, `codex`, `cursor`, `copilot`, `gemini`, `devin` or `cline`) and `<run>` the run's name. `<version>` is the version `prepare.py` found with the harness's `--version`. If it printed `<version>` instead, use the number the harness shows in its About box or, for an extension such as Cline, in VS Code's Extensions view. `<os>` is `windows`, `macos` or `linux`.
 4. Read the report it prints. Anything under STILL PRESENT is a known value inside a longer word. If the longer word is private too, such as `karimsLaptop`, add it with `--also`. If it's your account name or hostname inside an ordinary word or a harness field name, such as `will` in `willing` or `mark` in `markdown`, add `--common` with that name instead: it's then replaced only in paths and as `name@host`, never as a word on its own. The report lists the names it already treats that way, such as `User` and `admin`. Then delete the output folder and scrub again. Anything under FROM YOUR OWN INSTRUCTION FILES means the harness read your own instructions, so the run gets redone. Every prompt it lists as not from this file must be machine text (a loop run, a subagent's report) or the run gets redone.
 5. Read every file the scrub wrote, by eye. Look for names, paths, hostnames, anything from outside the scratch project, and prompts that aren't in this file.
 6. Copy `testdata/fixtures/PROVENANCE.template.md` to `testdata/fixtures/<harness>/<version>/<os>/PROVENANCE.md` and fill it in, with `synthetic: false`.
