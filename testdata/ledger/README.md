@@ -5,7 +5,7 @@ Test data for the ledger format in [docs/spec/ledger-v1.md](../../docs/spec/ledg
 | File | What it is | Where it comes from |
 |---|---|---|
 | `vectors.json` | Keys, digests, two device chains (54 batches, 1,529 records) and three day trees, in the format of spec section 11.3 | `python3 -I tools/ledger_ref.py vectors`, from fixed seeds |
-| `vectors-content.json` | Part 2: the Unicode 15.0.0 lowercase table, 22 content commitments, 55 reveals with their verdicts, 47 normalizations, 19 feature maps, Jaccard pairs, CC8 reveals and five draws | `python3 -I tools/ledger_ref.py vectors-content`, from fixed seeds |
+| `vectors-content.json` | Part 2: the Unicode 15.0.0 lowercase table, 22 content commitments, 55 reveals with their verdicts, 50 normalizations, 21 feature maps, Jaccard pairs, CC8 reveals and five draws | `python3 -I tools/ledger_ref.py vectors-content`, from fixed seeds |
 | `rfc5869.json` | HKDF-SHA256 test cases 1 to 3 | RFC 5869 appendix A, extracted from the RFC text by script |
 | `rfc4231.json` | HMAC-SHA256 test cases 1 to 7 | RFC 4231 section 4, extracted from the RFC text by script |
 | `ct/` | RFC 6962 and RFC 9162 Merkle roots, subtree hashes and 98 inclusion-proof checks | transparency-dev/merkle at one pinned commit, see [ct/README.md](ct/README.md) |

@@ -778,14 +778,16 @@ def substitute(word):
 RETRY_PHRASES = (("still", "not", "working"), ("try", "again"), ("fix", "it"), ("still", "broken"),
                  ("doesnt", "work"), ("again",), ("retry",))
 EDGE_PUNCT = frozenset("!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~\u2018\u2019\u201c\u201d")
+PLACEHOLDERS = ("<url>", "<id>", "<path>", "<hex>", "<n>")
 
 
 def bare(word):
-    """A word as retry phrases compare it: edge punctuation and apostrophes gone."""
+    """Step 6: the word without its edge punctuation, except a placeholder
+    of step 5 at either end, and without the apostrophes left inside."""
     i, j = 0, len(word)
-    while i < j and word[i] in EDGE_PUNCT:
+    while i < j and word[i] in EDGE_PUNCT and not word[i:j].startswith(PLACEHOLDERS):
         i += 1
-    while j > i and word[j - 1] in EDGE_PUNCT:
+    while j > i and word[j - 1] in EDGE_PUNCT and not word[i:j].endswith(PLACEHOLDERS):
         j -= 1
     return word[i:j].replace("'", "").replace("\u2019", "")
 
@@ -794,7 +796,7 @@ def replace_retries(words):
     out, i = [], 0
     while i < len(words):
         for phrase in RETRY_PHRASES:
-            if tuple(bare(w) for w in words[i:i + len(phrase)]) == phrase:
+            if tuple(words[i:i + len(phrase)]) == phrase:
                 out.append("<retry>")
                 i += len(phrase)
                 break
@@ -806,14 +808,16 @@ def replace_retries(words):
 
 def normalize(text):
     """10.4. Returns the removed line indices and the normalized words; the
-    normalized text is the words joined by single spaces."""
+    normalized text is the words joined by single spaces. Each word is
+    lowercased, substituted and stripped to its bare form, and a word left
+    empty goes."""
     lines = split_lines(text)
     removed = removed_lines(lines)
     gone = set(removed)
     words = []
     for i, line in enumerate(lines):
         if i not in gone:
-            words += [substitute(lowercase(w)) for w in words_of(line)]
+            words += [w for w in (bare(substitute(lowercase(x))) for x in words_of(line)) if w]
     return removed, replace_retries(words)
 
 
@@ -2064,6 +2068,10 @@ NORMALIZATION_TEXTS = (
     ("an error line with CRLF", "still broken\r\nModuleNotFoundError: No module named 'requests'\r\n"),
     ("prose that isn't an error", "the error is that terror and Errors happen, error: none"),
     ("five words, so character shingles", "make the button bigger please"),
+    ("SM 6.5's 20:02 prompt", "still overlapping on mobile. fix it"),
+    ("SM 6.5's 20:07 prompt, one text with 20:02's", "still overlapping on mobile, fix it!!"),
+    ("edge punctuation goes, a placeholder's stays, and a word of punctuation goes",
+     "(see \u201cmain.go:12\u201d) -- it's 42. \u2018quoted\u2019, e.g. [x], <tag> and !!"),
     ("six words, so word shingles", "make the button a bit bigger"),
     ("the worked example of 10.10", "still broken, see src/nav.js:12\r\nTypeError: x is undefined"),
 )
@@ -2118,6 +2126,8 @@ FEATURE_PROMPTS = (
                                                          "why is user_id missing after login?", "error_paste"),
     ("non-ASCII", "\u0415\u0449\u0451 \u0440\u0430\u0437 \u2014 \u043f\u043e\u0447\u0438\u043d\u0438 "
                   "\u043a\u043d\u043e\u043f\u043a\u0443 \U0001f64f", "substantive"),
+    ("SM 6.5's 20:02 prompt", "still overlapping on mobile. fix it", "substantive"),
+    ("SM 6.5's 20:07 prompt", "still overlapping on mobile, fix it!!", "substantive"),
 )
 
 
@@ -2179,6 +2189,8 @@ def make_jaccard(features):
     pairs = (
         ("identical after normalization", "a re-roll, first", "a re-roll, same words in other case"),
         ("one word changed", "a re-roll, first", "a re-roll, one word changed"),
+        ("SM 6.5's 20:02 and 20:07 prompts, one text after edge punctuation goes", "SM 6.5's 20:02 prompt",
+         "SM 6.5's 20:07 prompt"),
         ("unrelated prompts", "a re-roll, first", "unrelated"),
         ("two empty sets", "empty", "only pasted content"),
         ("an empty set and a prompt", "empty", "a go-ahead"),
