@@ -129,23 +129,15 @@ func serve(ctx context.Context, cfg *config.Config, logger *slog.Logger, e *env)
 	if len(off) > 0 {
 		logger.Info("retention jobs that wait for their tables", "off", off)
 	}
-	retentionDeleted := reg.Counter("pairtime_retention_deleted_rows_total", "Rows the retention jobs deleted (DESIGN 4.4).")
-	retentionErrors := reg.Counter("pairtime_retention_errors_total", "Retention job runs that failed.")
+	report := retentionReport(logger,
+		reg.Counter("pairtime_retention_deleted_rows_total", "Rows the retention jobs deleted (DESIGN 4.4)."),
+		reg.Counter("pairtime_retention_errors_total", "Retention job runs that failed."))
 	rctx, stopRetention := context.WithCancel(ctx)
 	retentionDone := make(chan struct{})
 	go func() {
 		defer close(retentionDone)
 		retention.Run(rctx, w, jobs, retentionEvery, time.Now, func(r retention.Result) {
-			switch {
-			case r.Err != nil:
-				if rctx.Err() == nil {
-					retentionErrors.Inc()
-					logger.Error("retention job failed", "job", r.ID, "err", r.Err)
-				}
-			case r.Deleted > 0:
-				retentionDeleted.Add(uint64(r.Deleted))
-				logger.Info("retention job deleted rows", "job", r.ID, "rows", r.Deleted)
-			}
+			report(r, rctx.Err() != nil)
 		})
 	}()
 	// Deferred after w.Close, so it runs first: the sweep stops before the
@@ -226,6 +218,27 @@ func serve(ctx context.Context, cfg *config.Config, logger *slog.Logger, e *env)
 		}
 	}
 	return serveErr
+}
+
+// retentionReport returns what serve does with each retention job's
+// result. It counts and logs the rows the job deleted, and counts and logs
+// a failure, unless the sweep failed only because it is being stopped. A
+// job that fails partway has still deleted the rows of every batch that
+// committed before the failure, so they count and appear in the log either
+// way.
+func retentionReport(logger *slog.Logger, deleted, failed *ops.Counter) func(r retention.Result, stopping bool) {
+	return func(r retention.Result, stopping bool) {
+		if r.Deleted > 0 {
+			deleted.Add(uint64(r.Deleted))
+		}
+		switch {
+		case r.Err != nil && !stopping:
+			failed.Inc()
+			logger.Error("retention job failed", "job", r.ID, "rows", r.Deleted, "err", r.Err)
+		case r.Deleted > 0:
+			logger.Info("retention job deleted rows", "job", r.ID, "rows", r.Deleted)
+		}
+	}
 }
 
 // newHTTPServer returns a server with timeouts for slow clients. There is

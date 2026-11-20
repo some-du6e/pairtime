@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"io/fs"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -17,6 +18,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/some-du6e/pairtime/internal/server/ops"
+	"github.com/some-du6e/pairtime/internal/server/retention"
 	"github.com/some-du6e/pairtime/internal/server/store"
 )
 
@@ -247,6 +250,80 @@ func TestDialAddr(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := dialAddr(tt.listen); got != tt.want {
 				t.Errorf("dialAddr(%q) = %q, want %q", tt.listen, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestRetentionReport(t *testing.T) {
+	timeout := errors.New("retention: server.ip_ja4/request_origins: writer: the batch timed out")
+	tests := []struct {
+		name        string
+		result      retention.Result
+		stopping    bool // the sweep is being stopped
+		wantDeleted uint64
+		wantFailed  uint64
+		wantLog     []string // substrings of the one log line; nil means no line
+	}{
+		{
+			name:        "a job's deleted rows are counted and logged",
+			result:      retention.Result{ID: "server.ip_ja4/request_origins", Deleted: 3},
+			wantDeleted: 3,
+			wantLog:     []string{"level=INFO", "job=server.ip_ja4/request_origins", "rows=3"},
+		},
+		{
+			name:   "a job that deleted nothing logs nothing",
+			result: retention.Result{ID: "server.ip_ja4/request_origins"},
+		},
+		{
+			name:        "rows deleted before a job failed are counted, and the failure's log says how many",
+			result:      retention.Result{ID: "server.ip_ja4/request_origins", Deleted: 1500, Err: timeout},
+			wantDeleted: 1500,
+			wantFailed:  1,
+			wantLog:     []string{"level=ERROR", "job=server.ip_ja4/request_origins", "rows=1500", "the batch timed out"},
+		},
+		{
+			name:       "a job that fails before deleting anything counts the failure",
+			result:     retention.Result{ID: "server.ip_ja4/request_origins", Err: timeout},
+			wantFailed: 1,
+			wantLog:    []string{"level=ERROR", "rows=0"},
+		},
+		{
+			name:        "stopping the sweep isn't a failure, but the rows it deleted first still count",
+			result:      retention.Result{ID: "server.ip_ja4/request_origins", Deleted: 500, Err: context.Canceled},
+			stopping:    true,
+			wantDeleted: 500,
+			wantLog:     []string{"level=INFO", "rows=500"},
+		},
+		{
+			name:     "stopping the sweep before it deleted anything logs nothing",
+			result:   retention.Result{ID: "server.ip_ja4/request_origins", Err: context.Canceled},
+			stopping: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var out strings.Builder
+			deleted, failed := new(ops.Counter), new(ops.Counter)
+			retentionReport(slog.New(slog.NewTextHandler(&out, nil)), deleted, failed)(tt.result, tt.stopping)
+			if got := deleted.Value(); got != tt.wantDeleted {
+				t.Errorf("deleted rows counted = %d, want %d", got, tt.wantDeleted)
+			}
+			if got := failed.Value(); got != tt.wantFailed {
+				t.Errorf("failures counted = %d, want %d", got, tt.wantFailed)
+			}
+			lines := strings.Split(strings.TrimSpace(out.String()), "\n")
+			switch {
+			case tt.wantLog == nil && out.Len() > 0:
+				t.Errorf("logged %q, want nothing", out.String())
+			case tt.wantLog != nil && len(lines) != 1:
+				t.Errorf("logged %q, want one line", out.String())
+			case tt.wantLog != nil:
+				for _, w := range tt.wantLog {
+					if !strings.Contains(lines[0], w) {
+						t.Errorf("logged %q, want it to contain %q", lines[0], w)
+					}
+				}
 			}
 		})
 	}
