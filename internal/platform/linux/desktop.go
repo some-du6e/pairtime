@@ -151,9 +151,10 @@ type Desktop struct {
 	mu     sync.Mutex
 	status Status
 
-	cancel  context.CancelFunc
-	wg      sync.WaitGroup
-	closers []func()
+	cancel    context.CancelFunc
+	wg        sync.WaitGroup
+	closers   []func()
+	closeOnce sync.Once
 }
 
 // openTimeout bounds each connection Open makes.
@@ -393,11 +394,14 @@ func (d *Desktop) Power() <-chan Power { return d.power }
 
 // Close stops watching, releases logind's delay lock and closes every
 // connection. The Focus and Power channels are closed once it returns.
+// Closing again does nothing.
 func (d *Desktop) Close() error {
-	d.cancel()
-	for _, c := range d.closers {
-		c()
-	}
-	d.wg.Wait()
+	d.closeOnce.Do(func() {
+		d.cancel()
+		for _, c := range d.closers {
+			c()
+		}
+		d.wg.Wait()
+	})
 	return nil
 }
