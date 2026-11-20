@@ -22,11 +22,16 @@ const SpoolName = "spool.jsonl"
 // takenSuffix ends the name of a spool file that a drain has taken.
 const takenSuffix = ".drain"
 
+// badSuffix ends the name of a spool file that a drain set aside: one that
+// drain after drain failed to read, or that isn't this user's alone.
+const badSuffix = ".bad"
+
 // MaxSpool is the size past which Append refuses to grow the spool, about
 // two days of heavy use with the agent down. Every sender that spools a
 // message also starts the agent (DESIGN 3.2), so the spool only fills when
-// the agent can't run at all, and then losing new messages beats filling
-// the disk.
+// the agent can't run at all, or can't store what it drains, and then
+// losing new messages beats filling the disk. Drain doesn't take the spool
+// while its sink fails, so taken files don't pile up past it.
 const MaxSpool = 256 << 20
 
 // ErrSpoolFull means the spool is over MaxSpool.
@@ -48,6 +53,11 @@ var afterWrite func()
 // written with one O_APPEND write. It creates dir when it has to, readable
 // by this user only where the OS has file modes. Many processes may append
 // at once: the OS keeps each write whole and in one place.
+//
+// It writes only into a spool that this user alone can reach (privateDir,
+// privateFile), and fails rather than write anywhere else: anyone else who
+// could put a file in the spool's place could read what hooks send,
+// prompts included.
 //
 // Each record has a newline before it as well as after it. When a sender is
 // killed halfway through its write, the next record still starts on a line
@@ -78,19 +88,25 @@ func Append(dir string, m Message) error {
 // such a message again; if the drain did see the first copy, the sink drops
 // the second.
 func appendOnce(dir, name string, rec []byte) (bool, error) {
-	f, err := openSpool(name)
+	err := privateDir(dir)
 	if errors.Is(err, fs.ErrNotExist) {
-		if err := os.MkdirAll(dir, 0o700); err != nil {
-			return false, err
+		if err = os.MkdirAll(dir, 0o700); err == nil {
+			err = privateDir(dir)
 		}
-		f, err = openSpool(name)
 	}
+	if err != nil {
+		return false, err
+	}
+	f, err := openSpool(name)
 	if err != nil {
 		return false, err
 	}
 	defer f.Close()
 	opened, err := f.Stat()
 	if err != nil {
+		return false, err
+	}
+	if err := privateFile(name, opened); err != nil {
 		return false, err
 	}
 	if opened.Size()+int64(len(rec)) > maxSpool {
@@ -105,7 +121,7 @@ func appendOnce(dir, name string, rec []byte) (bool, error) {
 	// Checked while the file is still open: on Windows a drain can't
 	// rename it until it is closed, so a rename after this point can't
 	// have moved the write.
-	now, err := os.Stat(name)
+	now, err := os.Lstat(name)
 	if errors.Is(err, fs.ErrNotExist) {
 		return false, nil
 	}
@@ -128,7 +144,7 @@ func openSpool(name string) (*os.File, error) {
 	var err error
 	for i := range openTries {
 		var f *os.File
-		if f, err = os.OpenFile(name, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o600); err == nil || !busy(err) {
+		if f, err = os.OpenFile(name, spoolFlags, 0o600); err == nil || !busy(err) {
 			return f, err
 		}
 		if i < openTries-1 {
@@ -148,6 +164,17 @@ type DrainResult struct {
 	// Bad is how many lines weren't a message the agent takes, such as a
 	// record cut short by a killed sender. They are skipped.
 	Bad int
+	// Rejected is how many messages the sink refused for good
+	// (ErrRejected). They are skipped too.
+	Rejected int
+	// Failed is how many spool files couldn't be read this time. Each is
+	// read again by the next drain, until maxFileFailures drains in a row
+	// have failed it and it is set aside.
+	Failed int
+	// SetAside is how many spool files were renamed to end in .bad,
+	// because drain after drain failed to read them or because they aren't
+	// this user's alone. Drain deletes them KeepDays later.
+	SetAside int
 	// Busy is why the spool couldn't be taken this time, as when senders
 	// on Windows kept it open throughout. Its messages wait for the next
 	// drain.
@@ -162,50 +189,238 @@ const (
 	renameWait  = 20 * time.Millisecond
 )
 
-// Drain hands every message waiting in dir, the inbox directory, to sink,
-// and deletes each spool file once all its messages are delivered. now
-// stamps each delivery.
-//
-// It first takes the spool by renaming it, so senders start a new one, and
-// then reads every taken file, oldest first. A file that an earlier Drain
-// took but didn't delete, because the agent was killed in between, is read
-// again from the start, and the sink drops the messages it already has
-// (DESIGN 3.5).
-//
-// When the sink fails, Drain stops and returns the error. The file stays,
-// and the next Drain reads it again. A spool it couldn't take is not an
-// error but res.Busy, and waits for the next Drain.
+// maxFileFailures is how many drains in a row may fail to read a spool
+// file before Drain sets it aside. What this is for, such as a disk error,
+// doesn't pass; what does pass, such as running out of file descriptors,
+// gets a few minutes to.
+const maxFileFailures = 3
+
+// A Drainer drains one inbox directory into one sink, again and again,
+// and remembers what earlier drains left of each taken file: where the
+// last one stopped reading it, and how many in a row failed to read it.
+// The agent keeps one for as long as it runs. A Drainer isn't safe for
+// concurrent use.
+type Drainer struct {
+	dir  string
+	sink Sink
+	now  func() time.Time
+	left map[string]*leftOver
+}
+
+// leftOver is what drains left of one taken file.
+type leftOver struct {
+	offset   int64 // where the next drain starts reading
+	failures int   // drains in a row that failed to read the file
+}
+
+// NewDrainer returns a Drainer that hands the messages waiting in dir, the
+// inbox directory, to sink. now stamps each delivery.
+func NewDrainer(dir string, sink Sink, now func() time.Time) *Drainer {
+	return &Drainer{dir: dir, sink: sink, now: now, left: make(map[string]*leftOver)}
+}
+
+// Drain drains dir into sink once, as a new Drainer's first Drain does.
 func Drain(dir string, sink Sink, now func() time.Time) (DrainResult, error) {
-	res := DrainResult{Busy: take(dir)}
-	names, err := taken(dir)
+	return NewDrainer(dir, sink, now).Drain()
+}
+
+// Drain hands every message waiting in the inbox to the sink, and deletes
+// each spool file once all its messages are in (DESIGN 3.5).
+//
+// It first reads the files that earlier drains took, oldest first, each
+// from where the last drain of it stopped. A file that a drain took but
+// didn't delete, because the agent was killed in between, is read again
+// from the start, and the sink drops the messages it has already. Then,
+// unless the sink failed, it takes the spool, by renaming it so that
+// senders start a new one, and reads that too. While the sink fails, the
+// spool stays where it is, so Append's MaxSpool still bounds what waits on
+// disk.
+//
+// A message the sink refuses for good (ErrRejected) is counted and
+// skipped. Any other sink error stops the drain: the file waits, and so
+// does everything after it, since the same sink would get it. A file that
+// can't be read is passed over, and the files after it are drained. It is
+// tried again by the next drain, and set aside once maxFileFailures drains
+// in a row have failed it, or at once when it isn't this user's alone
+// (privateFile).
+//
+// Drain returns what it did and every problem it met, joined. A spool it
+// couldn't take is not an error but res.Busy, and waits for the next
+// drain.
+func (d *Drainer) Drain() (DrainResult, error) {
+	var res DrainResult
+	if err := privateDir(d.dir); err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return res, nil // nothing was ever spooled
+		}
+		return res, err
+	}
+	names, err := d.taken()
 	if err != nil {
 		return res, err
 	}
-	for _, name := range names {
-		delivered, bad, err := drainFile(name, sink, now)
-		res.Delivered += delivered
-		res.Bad += bad
-		if err != nil {
-			return res, err
+	for name := range d.left {
+		if !slices.Contains(names, name) {
+			delete(d.left, name) // gone since the last drain
 		}
-		if err := retry(func() error { return os.Remove(name) }); err != nil && !errors.Is(err, fs.ErrNotExist) {
-			return res, err
-		}
-		res.Files++
 	}
-	return res, nil
+	var errs []error
+	for _, name := range names {
+		stop, err := d.drainFile(name, &res)
+		if err != nil {
+			errs = append(errs, err)
+		}
+		if stop {
+			return res, errors.Join(errs...)
+		}
+	}
+	name, err := take(d.dir)
+	switch {
+	case err != nil:
+		res.Busy = err
+	case name != "":
+		if _, err := d.drainFile(name, &res); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return res, errors.Join(errs...)
+}
+
+// drainFile drains the taken file name: it hands the sink its messages
+// from where the last drain of it stopped, and deletes it once they are
+// all in. stop says that the sink failed, and the drain must stop.
+func (d *Drainer) drainFile(name string, res *DrainResult) (stop bool, err error) {
+	left := d.left[name]
+	if left == nil {
+		left = &leftOver{}
+		d.left[name] = left
+	}
+	from := left.offset
+	sinkErr, err := d.deliver(name, left, res)
+	if sinkErr != nil {
+		return true, fmt.Errorf("inbox: the sink failed on a message in %s, which waits for the next drain: %w", filepath.Base(name), sinkErr)
+	}
+	switch {
+	case err == nil:
+		err = retry(func() error { return os.Remove(name) })
+		if err == nil || errors.Is(err, fs.ErrNotExist) {
+			delete(d.left, name)
+			res.Files++
+			return false, nil
+		}
+	case errors.Is(err, fs.ErrNotExist):
+		delete(d.left, name) // gone before it could be read
+		return false, nil
+	}
+	// The file is the trouble, not the sink.
+	res.Failed++
+	if left.offset > from {
+		left.failures = 0 // it got further than the last drain did
+	}
+	left.failures++
+	if left.failures < maxFileFailures && !isNotPrivate(err) {
+		return false, fmt.Errorf("inbox: reading %s, which waits for the next drain: %w", filepath.Base(name), err)
+	}
+	delete(d.left, name)
+	if serr := setAside(name, d.now()); serr != nil {
+		return false, fmt.Errorf("inbox: reading %s: %w; and setting it aside: %w", filepath.Base(name), err, serr)
+	}
+	res.SetAside++
+	return false, fmt.Errorf("inbox: set %s aside: %w", filepath.Base(name), err)
+}
+
+// deliver hands the sink the messages in the file name from left.offset
+// on, and moves left.offset past each line once it is done with it. The
+// sink stored the lines before it durably (Sink), so a drain after a
+// failure starts where this one stopped instead of reading the file from
+// the start again. It returns the sink's error or the file's.
+func (d *Drainer) deliver(name string, left *leftOver, res *DrainResult) (sinkErr, fileErr error) {
+	if fi, err := os.Lstat(name); err != nil {
+		return nil, err
+	} else if !fi.Mode().IsRegular() {
+		return nil, notPrivate("%s isn't a regular file", name)
+	}
+	f, err := os.OpenFile(name, readFlags, 0)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	fi, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if err := privateFile(name, fi); err != nil {
+		return nil, err
+	}
+	if _, err := f.Seek(left.offset, io.SeekStart); err != nil {
+		return nil, err
+	}
+	base := left.offset
+	cr := &countReader{r: f}
+	r := bufio.NewReaderSize(cr, 64<<10)
+	// pos is where in the file the next line starts.
+	pos := func() int64 { return base + cr.n - int64(r.Buffered()) }
+	for {
+		line, long, err := readLine(r, MaxMessage)
+		if errors.Is(err, io.EOF) {
+			left.offset = pos()
+			return nil, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		switch {
+		case long:
+			res.Bad++
+		case len(line) == 0:
+			// the blank line between two records
+		default:
+			m, err := Decode(line)
+			if err != nil {
+				res.Bad++
+				break
+			}
+			// The spool doesn't say who wrote the line or when, so there is
+			// no PeerPID, and Received is now (ViaInbox, Delivery).
+			if err := d.sink.Deliver(Delivery{Message: m, Via: ViaInbox, Received: d.now()}); err != nil {
+				if !errors.Is(err, ErrRejected) {
+					return err, nil
+				}
+				res.Rejected++
+				break
+			}
+			res.Delivered++
+		}
+		left.offset = pos()
+	}
+}
+
+// countReader counts the bytes read through it.
+type countReader struct {
+	r io.Reader
+	n int64
+}
+
+func (c *countReader) Read(p []byte) (int, error) {
+	n, err := c.r.Read(p)
+	c.n += int64(n)
+	return n, err
 }
 
 // take renames the spool to a name that sorts after every file taken
-// before, unless the clock went back.
-func take(dir string) error {
+// before, unless the clock went back, and returns that name, or "" when
+// nothing was spooled since the last drain.
+func take(dir string) (string, error) {
 	src := filepath.Join(dir, SpoolName)
 	dst := filepath.Join(dir, fmt.Sprintf("spool-%020d-%s%s", time.Now().UnixNano(), NewID()[:8], takenSuffix))
 	err := retry(func() error { return os.Rename(src, dst) })
 	if errors.Is(err, fs.ErrNotExist) {
-		return nil // nothing spooled since the last drain
+		return "", nil
 	}
-	return err
+	if err != nil {
+		return "", err
+	}
+	return dst, nil
 }
 
 // retry runs op until it succeeds, fails with ErrNotExist, or has failed
@@ -223,58 +438,44 @@ func retry(op func() error) error {
 	return err
 }
 
-// taken lists the taken spool files in dir, oldest first.
-func taken(dir string) ([]string, error) {
-	entries, err := os.ReadDir(dir)
-	if errors.Is(err, fs.ErrNotExist) {
-		return nil, nil
-	}
+// taken lists the spool files that drains took, oldest first, and deletes
+// the ones set aside more than KeepDays ago. A file set aside can hold
+// prompts, and the inbox is no place to keep them (DESIGN 3.5).
+func (d *Drainer) taken() ([]string, error) {
+	entries, err := os.ReadDir(d.dir)
 	if err != nil {
 		return nil, err
 	}
+	cutoff := d.now().Add(-KeepDays * 24 * time.Hour)
 	var names []string
 	for _, e := range entries {
-		if e.Type().IsRegular() && strings.HasPrefix(e.Name(), "spool-") && strings.HasSuffix(e.Name(), takenSuffix) {
-			names = append(names, filepath.Join(dir, e.Name()))
+		n := e.Name()
+		if !strings.HasPrefix(n, "spool-") {
+			continue
+		}
+		switch {
+		case strings.HasSuffix(n, takenSuffix):
+			names = append(names, filepath.Join(d.dir, n))
+		case strings.HasSuffix(n, badSuffix):
+			if fi, err := e.Info(); err == nil && fi.ModTime().Before(cutoff) {
+				os.Remove(filepath.Join(d.dir, n))
+			}
 		}
 	}
 	slices.Sort(names)
 	return names, nil
 }
 
-// drainFile delivers every message in the file name.
-func drainFile(name string, sink Sink, now func() time.Time) (delivered, bad int, err error) {
-	f, err := os.Open(name)
-	if err != nil {
-		return 0, 0, err
+// setAside renames the taken file name to end in .bad, so that drains
+// leave it alone, and dates it now, which starts the KeepDays after which
+// Drain deletes it.
+func setAside(name string, now time.Time) error {
+	bad := strings.TrimSuffix(name, takenSuffix) + badSuffix
+	if err := retry(func() error { return os.Rename(name, bad) }); err != nil {
+		return err
 	}
-	defer f.Close()
-	r := bufio.NewReaderSize(f, 64<<10)
-	for {
-		line, long, err := readLine(r, MaxMessage)
-		if errors.Is(err, io.EOF) {
-			return delivered, bad, nil
-		}
-		if err != nil {
-			return delivered, bad, err
-		}
-		if long {
-			bad++
-			continue
-		}
-		if len(line) == 0 {
-			continue // the blank line between two records
-		}
-		m, err := Decode(line)
-		if err != nil {
-			bad++
-			continue
-		}
-		if err := sink.Deliver(Delivery{Message: m, Via: ViaInbox, Received: now()}); err != nil {
-			return delivered, bad, err
-		}
-		delivered++
-	}
+	os.Chtimes(bad, now, now) // best effort: Drain then goes by its last write
+	return nil
 }
 
 // readLine returns the next line of r without its line ending. A line
@@ -310,4 +511,20 @@ func readLine(r *bufio.Reader, limit int) (line []byte, long bool, err error) {
 func trimEOL(line []byte) []byte {
 	line = bytes.TrimSuffix(line, []byte{'\n'})
 	return bytes.TrimSuffix(line, []byte{'\r'})
+}
+
+// privacyError says why the inbox directory or a spool file isn't this
+// user's alone (privateDir, privateFile).
+type privacyError struct{ msg string }
+
+func (e *privacyError) Error() string { return e.msg }
+
+func notPrivate(format string, args ...any) error {
+	return &privacyError{msg: fmt.Sprintf("inbox: "+format, args...)}
+}
+
+// isNotPrivate reports whether err came from privateDir or privateFile.
+func isNotPrivate(err error) bool {
+	var pe *privacyError
+	return errors.As(err, &pe)
 }

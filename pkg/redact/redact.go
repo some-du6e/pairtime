@@ -30,6 +30,13 @@ func New(k Known) (*Redactor, error) {
 // gets on a tie. The spans are sorted by start and can overlap; Merge
 // makes them disjoint. Find doesn't collapse code blocks, which is a
 // separate choice for agent messages (CodeBlocks).
+//
+// In text with backslash escapes, such as a raw JSON capture, gitleaks'
+// rules and the PII patterns also read its JSON view (jsonView), and a
+// known value may start right after an escape such as \n. So a key quoted
+// as \"...\", a name or a card number at the start of an embedded line,
+// and an email address after one are found. A span never ends halfway
+// through an escape, so removing it from JSON text leaves JSON.
 func (r *Redactor) Find(text string) []Span {
 	var spans []Span
 	for _, p := range r.known {
@@ -37,17 +44,27 @@ func (r *Redactor) Find(text string) []Span {
 			spans = append(spans, Span{Start: s, End: e, Type: p.t})
 		})
 	}
-	r.secrets(text, func(s, e int, id string) {
-		spans = append(spans, Span{Start: s, End: e, Type: TypeSecret, Rule: id})
-	})
-	findPII(text, func(s, e int, t Type) {
-		spans = append(spans, Span{Start: s, End: e, Type: t})
-	})
+	views := []string{text}
+	if view, ok := jsonView(text); ok {
+		views = append(views, view)
+	}
+	for _, v := range views {
+		r.secrets(v, func(s, e int, id string) {
+			spans = append(spans, Span{Start: s, End: e, Type: TypeSecret, Rule: id})
+		})
+	}
+	for _, v := range views {
+		findPII(v, func(s, e int, t Type) {
+			spans = append(spans, Span{Start: s, End: e, Type: t})
+		})
+	}
+	keepEscapesWhole(text, spans)
 	return sortSpans(spans)
 }
 
-// secrets runs every gitleaks rule over text, and again over its prose
-// view when that differs.
+// secrets runs every gitleaks rule, then pairtime's own (ownRules), over
+// text, and again over its prose view when that differs, and then takes
+// the values out of any Kubernetes Secret manifest in text.
 func (r *Redactor) secrets(text string, emit func(start, end int, rule string)) {
 	run := func(s string) {
 		lower := strings.ToLower(s)
@@ -58,9 +75,11 @@ func (r *Redactor) secrets(text string, emit func(start, end int, rule string)) 
 				}
 			})
 		}
+		ownSecrets(s, lower, emit)
 	}
 	run(text)
 	if view, ok := proseView(text); ok {
 		run(view)
 	}
+	kubernetesSecretValues(text, emit)
 }

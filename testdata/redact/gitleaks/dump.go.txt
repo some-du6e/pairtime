@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // This file isn't part of pairtime's build; the .txt suffix keeps the Go
 // toolchain away from it. extract.sh copies it into gitleaks' own
 // cmd/generate/config/utils package and calls pairtimeDump at the top of

@@ -7,20 +7,23 @@ What real AI harnesses send and write, captured on real machines. Each adapter i
 ```text
 testdata/fixtures/<harness>/<version>/<os>/
   PROVENANCE.md         who captured it, when, on what, and how it was scrubbed
-  <run>/                one run of the capture script, named after the surface: cli, vscode, desktop, ...
+  <run>/                one run of the capture script, named after the surface: cli, vscode, ...
+    capture.json        how prepare.py set the run up: the harness, the hook form, the settings folder
     hooks/NNNNNN/       one hook call, numbered in arrival order
       stdin             the bytes the harness wrote to the hook's stdin, unchanged
       argv              the hook's arguments, one per line, as the harness passed them
       env               the names of the environment variables the hook saw, one per line, sorted; never their values
       time              when the call arrived: unix_ns, utc and the clock used, one key=value per line
       cwd               the hook process's working directory
-      parents           the hook's parent processes, nearest first: pid and executable name, never command lines
+      parents           the hook's parent processes, nearest first: pid, controlling terminal (? or ?? when none) and executable name, never command lines
+      console           Windows only: attached or none, whether the hook had a console, which it shares with the harness that started it
       stderr            only when the dumper itself hit an error
     otlp/NNNNNN.json    one OTLP/HTTP JSON request body, as sent
     otlp/NNNNNN.meta    its arrival time, path, content type, encoding and header names
     transcripts/        the harness's own session files for the sessions the hooks saw, under home/ by their path
       INDEX.txt         each copied file with its source path, size and modification time
     STEPS.txt           which SCRIPTS.md step the person was on, with the time they started it
+    deny-once           Gemini CLI only: the decision tools/capture/deny-once.sh sent back at step 19, which turned that answer down once
 ```
 
 - `<harness>` is the id `pkg/event` uses: `claude_code`, `codex`, `cursor`, `copilot`, `gemini`, `devin`, `cline` or `opencode`.

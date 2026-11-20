@@ -18,8 +18,8 @@ func TestCodeBlockGoldens(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(inputs) != 14 {
-		t.Fatalf("found %d golden inputs, want 14", len(inputs))
+	if len(inputs) != 16 {
+		t.Fatalf("found %d golden inputs, want 16", len(inputs))
 	}
 	for _, in := range inputs {
 		name := strings.TrimSuffix(filepath.Base(in), ".md")
@@ -58,6 +58,19 @@ func TestCodeBlocks(t *testing.T) {
 			"```C++\nint x;\n```",
 			[]Span{{Start: 0, End: 17, Type: TypeCode, Lines: 1, Lang: "c++"}}},
 		{"no fences, no spans", "just text\n", nil},
+		{"a fence after a list marker starts the block at the fence",
+			"1. ```sh\n   npm i\n   ```\nok",
+			[]Span{{Start: 3, End: 24, Type: TypeCode, Lines: 1, Lang: "sh"}}},
+		{"a block in a quote closes at a quoted fence",
+			"> ```\n> x\n> ```\nok",
+			[]Span{{Start: 2, End: 15, Type: TypeCode, Lines: 1}}},
+		{"a list marker inside a quote counts too",
+			"> - ```js\n>   y\n> ```",
+			[]Span{{Start: 4, End: 21, Type: TypeCode, Lines: 1, Lang: "js"}}},
+		{"a quoted fence is content in a block outside a quote",
+			"```\n> ```\nx\n```",
+			[]Span{{Start: 0, End: 15, Type: TypeCode, Lines: 2}}},
+		{"a bullet needs a blank after it, so bold before backticks opens nothing", "**```** marks a fence", nil},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

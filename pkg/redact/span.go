@@ -121,8 +121,10 @@ func (s Span) Marker() string {
 // Merge turns spans that may overlap into the sorted, disjoint set a reveal
 // removes. Spans that overlap become one span covering all of them, which
 // takes the type, rule and code details of its longest member; a tie goes
-// to the type that comes first in pipeline order, then to the earlier span.
-// Spans that only touch stay apart. Empty and inverted spans are dropped.
+// to the type that comes first in pipeline order, then to the earlier span,
+// then to a vendor's own rule over generic-api-key, then to the rule whose
+// id sorts first. Spans that only touch stay apart. Empty and inverted
+// spans are dropped.
 func Merge(spans []Span) []Span {
 	in := make([]Span, 0, len(spans))
 	for _, s := range spans {
@@ -131,7 +133,8 @@ func Merge(spans []Span) []Span {
 		}
 	}
 	slices.SortFunc(in, func(a, b Span) int {
-		return cmp.Or(cmp.Compare(a.Start, b.Start), cmp.Compare(b.End, a.End), cmp.Compare(a.Type.rank(), b.Type.rank()))
+		return cmp.Or(cmp.Compare(a.Start, b.Start), cmp.Compare(b.End, a.End), cmp.Compare(a.Type.rank(), b.Type.rank()),
+			compareRules(a.Rule, b.Rule))
 	})
 	var out []Span
 	for i := 0; i < len(in); {
@@ -152,9 +155,10 @@ func Merge(spans []Span) []Span {
 }
 
 // Render returns text with the spans, merged, replaced by their markers.
-// It's for people reading a redaction, such as the teen's preview and
-// `pairtime fixtures scrub`; a reveal sends the spans themselves. Spans
-// that run past the end of text are cut at the end.
+// It's for diagnostics and tests, such as the paths `pairtime fixtures
+// scrub` lists. Its markers are finer than a reveal can carry, and its
+// spans aren't rounded to tokens, so it isn't what a reviewer sees:
+// that's Preview. Spans that run past the end of text are cut at the end.
 func Render(text string, spans []Span) string {
 	var b strings.Builder
 	at := 0
@@ -169,6 +173,40 @@ func Render(text string, spans []Span) string {
 	}
 	b.WriteString(text[at:])
 	return b.String()
+}
+
+// Preview returns text as a reviewer sees its reveal (DESIGN 7.5 step 6
+// and 7.7 item 5), which is what the teen must see before sending it: the
+// spans rounded out to whole tokens as Tokens does, each shown as the
+// coarse type a reveal carries, [KNOWN], [SECRET], [PII], [CODE] or
+// [TEEN], and a code block with its line count, [CODE: 3 lines], but never
+// its language, which a reveal doesn't send (docs/spec/ledger-v1.md 10.3).
+func Preview(text string, spans []Span) string {
+	var b strings.Builder
+	at := 0
+	for _, s := range Tokens(text, spans) {
+		b.WriteString(text[at:s.Start])
+		b.WriteString(s.revealMarker())
+		at = s.End
+	}
+	b.WriteString(text[at:])
+	return b.String()
+}
+
+// revealMarker is the marker Preview shows for s.
+func (s Span) revealMarker() string {
+	t := s.Type.Reveal()
+	if t == "" {
+		t = "removed"
+	}
+	m := "[" + strings.ToUpper(t)
+	if s.Type == TypeCode && s.Lines > 0 {
+		m += ": " + strconv.Itoa(s.Lines) + " line"
+		if s.Lines != 1 {
+			m += "s"
+		}
+	}
+	return m + "]"
 }
 
 // Tokens rounds each span out to the whole tokens it touches, which is
@@ -226,7 +264,25 @@ func tokenEnd(text string, e int) int {
 func sortSpans(spans []Span) []Span {
 	slices.SortFunc(spans, func(a, b Span) int {
 		return cmp.Or(cmp.Compare(a.Start, b.Start), cmp.Compare(b.End, a.End),
-			cmp.Compare(a.Type.rank(), b.Type.rank()), strings.Compare(a.Rule, b.Rule))
+			cmp.Compare(a.Type.rank(), b.Type.rank()), compareRules(a.Rule, b.Rule))
 	})
 	return slices.Compact(spans)
+}
+
+// genericRule is gitleaks' catch-all rule. It often finds the same secret
+// as a vendor's rule, which says more about which key to rotate.
+const genericRule = "generic-api-key"
+
+// compareRules orders the rules of two spans that tie on everything else:
+// any rule before genericRule, then by id. Merge keeps the first, so which
+// rule a merged span names doesn't depend on how the sort orders equals.
+func compareRules(a, b string) int {
+	ga, gb := 0, 0
+	if a == genericRule {
+		ga = 1
+	}
+	if b == genericRule {
+		gb = 1
+	}
+	return cmp.Or(cmp.Compare(ga, gb), strings.Compare(a, b))
 }

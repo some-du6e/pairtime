@@ -31,3 +31,7 @@ Read it with `gzip -dc corpus.jsonl.gz`. It's gzipped because thousands of plaus
 - `dropbox-long-lived-api-token` and `dropbox-short-lived-api-token`: gitleaks defines them without examples (`dropbox.go` returns them without calling `Validate`), so there's nothing to extract.
 - `pkcs12-file`: its examples are file names. It matches a path, not text, so `pkg/redact` doesn't load it.
 - False positives with a path (from `ValidateWithPaths`): gitleaks kept them because of the file they were in, and `pkg/redact` applies every rule to all text, so the test skips them.
+
+## License
+
+`corpus.jsonl.gz` is made from gitleaks' own rule sources and the examples its generator writes, so it's under gitleaks' MIT License, Copyright (c) 2019 Zachary Rice, in `LICENSE` here (the same file as `pkg/redact/rules/LICENSE`). `extract.sh` and `dump.go.txt` are pairtime's, under the AGPL-3.0-or-later like the rest of the repo.

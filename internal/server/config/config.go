@@ -40,7 +40,7 @@
 //	region          = "auto"            # R2's; AWS and Hetzner take the bucket's region
 //	bucket          = ""                # Litestream's replica and evidence/
 //	snapshot_bucket = ""                # nightly snapshots, 30-day lifecycle; never the same as bucket
-//	virtual_host    = false             # true: <bucket>.<endpoint host>/<key>; false: <endpoint>/<bucket>/<key>
+//	virtual_host    = false             # true: <bucket>.<endpoint host>/<key>, https and a host name only; false: <endpoint>/<bucket>/<key>
 //
 //	[[reviewers]]                       # one table per HCA sub
 //	sub   = "..."
@@ -386,6 +386,11 @@ func checkObjectStorage(o *ObjectStorage, secrets Secrets) []error {
 		errs = append(errs, fmt.Errorf("object_storage.endpoint: %v", err))
 	} else {
 		o.Endpoint = u.String()
+		if o.VirtualHost {
+			if err := objstore.CheckVirtualHost(u); err != nil {
+				errs = append(errs, fmt.Errorf("object_storage.virtual_host: %v", err))
+			}
+		}
 	}
 	if o.Region == "" {
 		o.Region = objstore.DefaultRegion

@@ -1,0 +1,16 @@
+# Third-party material that pairtime's own packages embed, or that their
+# code was ported from, and that isn't a Go module. `tools/release notices`
+# finds every module's license through the binary's build info, but nothing
+# there points at material like this, so it's listed here.
+#
+# One entry per line: the package's directory, the license or notice file,
+# and what the material is, as THIRD_PARTY_NOTICES.txt should name it. Both
+# paths are relative to the repository root and use slashes. A binary's
+# notices reproduce the file when the binary links that package. Every line
+# is checked on every run, binaries that don't link the package included, so
+# a path that stops existing fails the build instead of dropping a notice,
+# and so does a directory that holds no Go package, such as pkg/redact/rules
+# (docs/spec/update-manifest.md, THIRD_PARTY_NOTICES.txt).
+
+pkg/redact pkg/redact/rules/LICENSE gitleaks v8.30.1's default rules, embedded in pkg/redact
+pkg/redact testdata/redact/presidio/LICENSE Presidio's pattern recognizers (presidio-analyzer 2.2.366), ported to pkg/redact

@@ -15,10 +15,14 @@ import (
 // Fences follow CommonMark 0.31.2 section 4.5: a run of three or more
 // backticks or tildes opens a block, the info string after a backtick fence
 // can't contain a backtick, and the block ends at a line holding only a run
-// of the same character at least as long, or at the end of the text. Two
-// rules are looser than CommonMark, because agents put code in nested
-// lists: an opening fence may be indented by any amount, and a closing
-// fence by up to three columns more than its opening fence.
+// of the same character at least as long, or at the end of the text. A
+// fence may follow one block-quote marker and one list marker, as in
+// "1. ```sh" or "> ```", since CommonMark puts such a block inside the
+// list item or the quote; the closing fence of a block in a quote comes
+// after its own quote marker. Two rules are looser than CommonMark,
+// because agents put code in nested lists: an opening fence may be
+// indented by any amount, and a closing fence by up to three columns more
+// than its opening fence, counting the columns of any markers.
 //
 // A span runs from the first fence character to the end of the closing
 // fence. Lines counts the lines between the fences, as SM 1 counts
@@ -71,13 +75,14 @@ func CodeBlocks(text string) []Span {
 type fence struct {
 	char   byte   // '`' or '~'
 	n      int    // length of the run
-	indent int    // columns before the run
+	indent int    // columns before the run, markers included
 	col    int    // byte offset of the run in its line
 	lang   string // the info string's first word, if it's a plain language name
+	quoted bool   // whether a block-quote marker comes before the run
 }
 
 func openingFence(line string) (fence, bool) {
-	indent, col := leading(line)
+	indent, col, quoted := contentStart(line)
 	rest := line[col:]
 	if rest == "" || rest[0] != '`' && rest[0] != '~' {
 		return fence{}, false
@@ -90,11 +95,14 @@ func openingFence(line string) (fence, bool) {
 	if rest[0] == '`' && strings.Contains(info, "`") {
 		return fence{}, false
 	}
-	return fence{char: rest[0], n: n, indent: indent, col: col, lang: language(info)}, true
+	return fence{char: rest[0], n: n, indent: indent, col: col, lang: language(info), quoted: quoted}, true
 }
 
 func closes(line string, f *fence) bool {
-	indent, col := leading(line)
+	indent, col := blanks(line, 0, 0)
+	if f.quoted && col < len(line) && line[col] == '>' {
+		indent, col = blanks(line, col+1, indent+1)
+	}
 	if indent > f.indent+3 {
 		return false
 	}
@@ -103,9 +111,48 @@ func closes(line string, f *fence) bool {
 	return n >= f.n && strings.Trim(rest[n:], " \t") == ""
 }
 
-// leading measures a line's indentation in columns, with a tab moving to
-// the next multiple of four as in CommonMark, and in bytes.
-func leading(line string) (cols, n int) {
+// contentStart skips a line's indentation, then one block-quote marker and
+// one list marker if they're there, each with the blanks after it, and
+// returns the columns and the bytes it skipped and whether it skipped a
+// quote marker.
+func contentStart(line string) (cols, n int, quoted bool) {
+	cols, n = blanks(line, 0, 0)
+	if n < len(line) && line[n] == '>' {
+		quoted = true
+		cols, n = blanks(line, n+1, cols+1)
+	}
+	if m := listMarker(line[n:]); m > 0 {
+		cols, n = blanks(line, n+m, cols+m)
+	}
+	return cols, n, quoted
+}
+
+// listMarker returns the length of the list marker that starts s: a
+// bullet, -, * or +, or one to nine digits and a . or ). A marker needs a
+// space or a tab after it, so "**bold**" and "1.5" have none.
+func listMarker(s string) int {
+	m := 0
+	if s != "" && strings.IndexByte("-*+", s[0]) >= 0 {
+		m = 1
+	} else {
+		for m < len(s) && m < 9 && isDigit(s[m]) {
+			m++
+		}
+		if m == 0 || m == len(s) || s[m] != '.' && s[m] != ')' {
+			return 0
+		}
+		m++
+	}
+	if m < len(s) && (s[m] == ' ' || s[m] == '\t') {
+		return m
+	}
+	return 0
+}
+
+// blanks skips the spaces and tabs at line[n:], counting columns on from
+// cols, with a tab moving to the next multiple of four as in CommonMark,
+// and returns the column and the byte offset it stopped at.
+func blanks(line string, n, cols int) (int, int) {
 	for n < len(line) {
 		switch line[n] {
 		case ' ':

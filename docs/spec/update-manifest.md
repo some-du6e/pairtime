@@ -17,7 +17,7 @@ Every pairtime release publishes one archive per platform, `checksums.txt` and `
 
 ### Archives
 
-An archive holds three files at its root and no directories: the binary (`pairtime`, or `pairtime.exe` on Windows) with mode 0755, then `LICENSE` and `README.md` with mode 0644. Every file has the release commit's time. The tar.gz archives are USTAR with owner 0 and no gzip timestamp, and the zip archives record Unix modes. The same commit built with the same Go version gives the same bytes.
+An archive holds four files at its root and no directories: the binary (`pairtime`, or `pairtime.exe` on Windows) with mode 0755, then `LICENSE`, `README.md` and `THIRD_PARTY_NOTICES.txt` with mode 0644. Every file has the release commit's time. The tar.gz archives are USTAR with owner 0 and no gzip timestamp, and the zip archives record Unix modes. The same commit built with the same Go version gives the same bytes.
 
 The binary is built the way `ci.yml` builds it, with the tag as the version:
 
@@ -28,6 +28,21 @@ CGO_ENABLED=0 GOOS=<os> GOARCH=<arch> go build -trimpath -buildvcs=false \
     -X github.com/some-du6e/pairtime/internal/version.Date=<commit time>" \
   ./cmd/pairtime
 ```
+
+### THIRD_PARTY_NOTICES.txt
+
+Every binary statically links Go's runtime and standard library and some third-party modules, and their licenses (BSD-3-Clause, BSD-2-Clause, MIT, Apache-2.0) require a binary to come with their copyright notices and license terms. `tools/release notices` writes the file for one built binary, so each archive lists what its own target links. go-keyring's vendored `internal/shellescape`, for one, is linked only on macOS, so only the macOS archives carry its MIT license.
+
+- The modules come from the binary's build info, the list `go version -m` prints. `go list -deps` then finds the binary's packages, with the GOOS, GOARCH, cgo setting and tags the build info records, and the two have to name the same modules, or the command fails.
+- From each module it copies every license and notice file in a linked package's directory and in each directory above it, up to the module root: the directories `tools/ci/licensecheck` reads. A file counts when its name, ignoring case, is `LICENSE`, `LICENCE`, `COPYING`, `UNLICENSE`, `MIT-LICENSE`, `NOTICE` or `PATENTS`, alone or followed by `.`, `-` or `_` and more, as in `LICENSE-APACHE` or `NOTICE.txt`, unless it's a file the go command compiles, like lib/pq's `notice.go`. A module without a license file at its root fails.
+- Go's part is `LICENSE` and `PATENTS` from the `GOROOT` of the go command running the tool, which must be the Go version that built the binary.
+- `tools/release/extra-notices.txt` lists material that pairtime's own packages embed, or that their code was ported from, and that isn't a module, so no build info points at it. Each line names the package's directory, the license file and what the material is, both paths from the repository root. A binary's notices include the file when the binary links the package. Every line is checked on every run, so a renamed file fails instead of dropping a notice, and so does a directory that holds no Go file a build compiles, such as `pkg/redact/rules`, because no binary links it. The file lists gitleaks' rules, which `pkg/redact` embeds, and Presidio's recognizers, which it ports. gitleaks' line is:
+
+  ```text
+  pkg/redact pkg/redact/rules/LICENSE gitleaks v8.30.1's default rules, embedded in pkg/redact
+  ```
+
+The file opens with the binary's main package, platform and Go version and a list of what it contains, then copies each license and notice file word for word under a header naming its module and path. It names no directory on the build machine, so it's as reproducible as the archive. When `release.yml` ships the server (WP-OP1), `pairtimed` gets its own the same way; `ci.yml` already writes them for both binaries.
 
 ### checksums.txt
 
@@ -65,7 +80,7 @@ The envelope's payload is this JSON object, indented by two spaces, with a final
 | `version` | The release version: `v` and a SemVer 2.0.0 version without build metadata. It's the tag, and what `pairtime version` prints |
 | `commit` | The full git commit hash, 40 or 64 lowercase hex digits |
 | `date` | The commit time in RFC 3339, UTC, whole seconds |
-| `minimum_version` | The oldest client version the release still supports, at most `version`. A client older than this should update before it does anything else. Tags take it from `tools/release/minimum-version.txt` |
+| `minimum_version` | The oldest client version the release still supports, at most `version`. A client older than this should update before it does anything else. Tags take it from `tools/release/minimum-version.txt`, which holds exactly one version; `release.yml` and `tools/release`'s tests check it on every run. A prerelease sorts before its release, so to require 0.3.0 while its prereleases ship, the file says `v0.3.0-alpha.1` |
 | `artifacts` | One entry per platform, at least one, no platform twice |
 | `os`, `arch` | Go's `GOOS` and `GOARCH`: lowercase letters and digits. A client skips platforms it doesn't know |
 | `url` | Where the archive is published: absolute `https`, no credentials, ending in a file name. Plain `http` is allowed only for a loopback host, which test fixtures use |
@@ -119,34 +134,147 @@ A release key is an Ed25519 key pair, written as one line of text:
 
 | Kind | Form | Where it lives |
 |---|---|---|
-| Secret key | `pairtime-release-ed25519-secret:` and the 32-byte RFC 8032 private key in padded standard base64 | The `RELEASE_SIGNING_KEY` secret in the `release` environment, plus an offline copy. Never in the repository |
+| Secret key | `pairtime-release-ed25519-secret:` and the 32-byte RFC 8032 private key in padded standard base64 | The `RELEASE_SIGNING_KEY` secret of the `release` environment, plus an offline copy. Never in the repository, and never a repository secret |
 | Public key | `pairtime-release-ed25519-public:` and the 32-byte public key the same way | `internal/release/release-keys.txt`, one per line, compiled into the client with `go:embed` |
 
 The two prefixes differ, so a secret key pasted into the key list fails to parse instead of being committed. A key's id is the first 8 bytes of the SHA-256 of its 32 raw public-key bytes, in hex; the public key of RFC 8032's test 1 has the id `21fe31dfa154a261`. `pairtime version` prints the ids its build trusts, or `none`.
 
 ### Making the key
 
-Karim runs this once, from the repository root (PLAN WP-RL1):
+Karim does this once, before the first tag that should be signed (PLAN WP-RL1). These are repository settings, so they're his to run, not an agent's. Step 2 encrypts a backup to the offline `age` key pair (DESIGN 10.5, item 5), so that key pair has to exist first.
+
+1. Set up the `release` environment so that only `v*` tags can deploy to it, and only once Karim approves the run. Only a job that deploys to it can read its secrets.
+
+   ```sh
+   gh api -X PUT repos/some-du6e/pairtime/environments/release --input - <<EOF
+   {
+     "deployment_branch_policy": {"protected_branches": false, "custom_branch_policies": true},
+     "reviewers": [{"type": "User", "id": $(gh api users/some-du6e --jq .id)}]
+   }
+   EOF
+   gh api -X POST repos/some-du6e/pairtime/environments/release/deployment-branch-policies \
+     -f name='v*' -f type=tag
+   ```
+
+   Run both even if `release` already exists. The publish job names the environment, so a tag pushed before this step creates it, and GitHub creates it with no deployment policy and no reviewer, which lets a workflow run on any branch deploy to it and read its secrets. `PUT` sets the policy and the reviewer on an environment that exists; send both fields in any later `PUT` too. If the `POST` reports that the `v*` policy exists, the environment already has it. Then check what it admits and who approves:
+
+   ```sh
+   gh api repos/some-du6e/pairtime/environments/release/deployment-branch-policies \
+     --jq '.branch_policies[] | "\(.id) \(.type) \(.name)"'
+   gh api repos/some-du6e/pairtime/environments/release \
+     --jq '.protection_rules[] | select(.type == "required_reviewers") | .reviewers[].reviewer.login'
+   ```
+
+   The first should print one line, ending in `tag v*`. Delete the policy of any other line with `gh api -X DELETE repos/some-du6e/pairtime/environments/release/deployment-branch-policies/<id>`. The second should print `some-du6e`. Each publish job then waits on its run's page until Karim approves it. The approval is no guard against a tool that has Karim's credentials (What gets signed).
+
+2. Make the key from the repository root, with its secret half going to an offline copy and straight into the environment:
+
+   ```sh
+   go run ./tools/release keygen \
+     | tee >(age -r <your age recipient> -o "$HOME/release-signing-key.age") \
+     | gh secret set RELEASE_SIGNING_KEY --env release --repo some-du6e/pairtime
+   ```
+
+   `keygen` appends the public key to `release-keys.txt` and prints the secret key to standard output once. `tee` encrypts one copy to the offline `age` key DESIGN 10.2 uses for the server's keys, and `gh` stores the other. The copy goes to your home directory, outside the checkout: keygen runs from the repository root, and the next step commits from there, where one `git add -A` would put the encrypted key in the public history for good. `.gitignore` ignores `*.age` as a second guard. GitHub never shows a secret again, so the copy is the only way back, and if the key is lost no installed client can verify any update, including one that would trust a new key. Check that the copy decrypts: `age -d -i <your age identity> "$HOME/release-signing-key.age" | cut -c1-32` prints `pairtime-release-ed25519-secret:` and none of the key.
+
+   Store the key in the environment and nowhere else in GitHub. A repository or organization secret with the same name would reach every workflow run on every branch, so `release.yml` fails while one exists.
+
+3. Once that check prints the prefix, commit `release-keys.txt` in a PR. If it prints anything else, `git checkout internal/release/release-keys.txt` drops the new key, and step 2 can run again. The first tag after the PR merges is signed.
+
+### What gets signed
+
+The publish job signs a tag only if `main` contains the tagged commit. Before it reads the key, it runs `git merge-base --is-ancestor "$GITHUB_SHA" origin/main`, so a `v*` tag pushed by mistake on a PR branch or in an agent's worktree fails there. It catches mistakes, not someone who means to sign such a commit. A tag runs the `release.yml` of the commit it names, so the check runs only on commits whose `release.yml` still has it, and a tag on a commit whose copy leaves it out gets signed.
+
+What stops that is who can push a `v*` tag and approve the run. The environment's required reviewer is step 1 of Making the key, and two rulesets do the rest. They're repository settings, so Karim adds them:
+
+- `main` takes changes only through pull requests and can't be force-pushed or deleted, so "on `main`" means merged.
+- Only a repository admin, which on this personal repository means Karim, can create, move or delete a `v*` tag. Without this rule, anyone who can push a branch can push a tag.
 
 ```sh
-go run ./tools/release keygen | gh secret set RELEASE_SIGNING_KEY --env release --repo some-du6e/pairtime
+gh api -X POST repos/some-du6e/pairtime/rulesets --input - <<'EOF'
+{
+  "name": "main",
+  "target": "branch",
+  "enforcement": "active",
+  "conditions": {"ref_name": {"include": ["~DEFAULT_BRANCH"], "exclude": []}},
+  "rules": [
+    {"type": "deletion"},
+    {"type": "non_fast_forward"},
+    {"type": "pull_request", "parameters": {
+      "required_approving_review_count": 0,
+      "dismiss_stale_reviews_on_push": false,
+      "require_code_owner_review": false,
+      "require_last_push_approval": false,
+      "required_review_thread_resolution": false
+    }}
+  ]
+}
+EOF
+gh api -X POST repos/some-du6e/pairtime/rulesets --input - <<'EOF'
+{
+  "name": "release tags",
+  "target": "tag",
+  "enforcement": "active",
+  "conditions": {"ref_name": {"include": ["refs/tags/v*"], "exclude": []}},
+  "rules": [{"type": "creation"}, {"type": "update"}, {"type": "deletion"}],
+  "bypass_actors": [{"actor_id": 5, "actor_type": "RepositoryRole", "bypass_mode": "always"}]
+}
+EOF
+gh api repos/some-du6e/pairtime/rulesets --jq '.[] | "\(.id) \(.target) \(.name) \(.enforcement)"'
 ```
 
-`keygen` appends the public key to `release-keys.txt`, which then goes into a PR, and prints the secret key to standard output once. Keep an offline copy too, for example by putting `tee >(age -r <recipient> -o release-signing-key.age)` between the two commands, with the offline `age` key DESIGN 10.2 uses for the server's keys. GitHub never shows a secret again. If the key is lost, installed clients can't verify any update, including one that would trust a new key.
+The last command should list both rulesets as `active`. Actor 5 is the admin role. The `main` ruleset lets nobody bypass it, so Karim's own changes go through PRs too, and so do the orchestrator's direct docs commits (#22).
+
+None of this stops a tool that holds Karim's credentials, and the agents on his machines hold them today. They push as `some-du6e`, an admin, and the tag ruleset lets admins bypass it. Any token of his with the `repo` scope, like the one `gh` uses, can approve a pending deployment as him (`POST repos/some-du6e/pairtime/actions/runs/<run id>/pending_deployments`). So such a tool can push a `v*` tag on any commit, with a `release.yml` that skips the check, and approve its run.
+
+To shut that out, give the agents a GitHub account of their own and add it as a collaborator, which on a personal repository has write access and not admin:
+
+```sh
+gh api -X PUT repos/some-du6e/pairtime/collaborators/<the agents' account>
+```
+
+Once it accepts the invitation, sign the agents' `gh` and git credentials in as that account, and keep `some-du6e`'s tokens off the machines they run on, since an agent can use any token it can read. The tag ruleset then refuses their `v*` tags, and they can't approve the environment, because only Karim reviews it. They can still merge PRs, so a tag signs whatever `main` holds when Karim pushes it, and his approval is where he checks that.
 
 ### Replacing a key
 
-1. Make a new key with `keygen` and ship a release whose `release-keys.txt` lists both keys.
-2. Sign the following manifests with both. A client that trusts either key accepts them. `internal/release.Sign` takes several keys; `tools/release sign` takes one today and needs a second `-key-env` when this happens.
-3. Once clients have updated, remove the old key from the list and stop signing with it.
+An installed client trusts only the keys compiled into it, so the release that brings a new key has to be signed with the old one. Between rotations, `$HOME/release-signing-key.age` holds the key `RELEASE_SIGNING_KEY` holds. During one, `$HOME/release-signing-key-next.age` holds the key waiting to replace it.
 
-A leaked secret key can sign manifests that every client trusting it accepts, until those clients update to a build without it. Replace it at once.
+1. Make the new key with `keygen`, with its secret half going only to an offline copy, and check that the copy decrypts. `RELEASE_SIGNING_KEY` keeps the old key. `keygen` says so when the list already holds a key. `age -o` writes over an existing file without asking, and step 3 renames the file at the end of every rotation, so if `$HOME/release-signing-key-next.age` already exists, an earlier rotation never finished. Finish its step 3, or move the file aside, first.
+
+   ```sh
+   go run ./tools/release keygen | age -r <your age recipient> -o "$HOME/release-signing-key-next.age"
+   age -d -i <your age identity> "$HOME/release-signing-key-next.age" | cut -c1-32
+   ```
+
+   The second command must print `pairtime-release-ed25519-secret:` and none of the key. Commit `release-keys.txt`, which now lists both keys, in a PR only once it does, because GitHub holds no copy of this key and the backup is the only one. If it prints anything else, `git checkout internal/release/release-keys.txt` drops the new key, and the step can run again.
+2. Once that PR merges, tag a release. The old key signs it, so installed clients accept it, and its binaries trust both keys. Had the new key replaced `RELEASE_SIGNING_KEY` already, no installed client could verify this release or any after it, and GitHub would never show the old key again to undo that.
+3. Keep signing with the old key until clients run a build that trusts the new one. Raising `minimum-version.txt` to step 2's version in the last release the old key signs tells clients still older than that to update first. Then move the new key into the environment:
+
+   ```sh
+   age -d -i <your age identity> "$HOME/release-signing-key-next.age" \
+     | gh secret set RELEASE_SIGNING_KEY --env release --repo some-du6e/pairtime
+   ```
+
+   Once `gh` has stored it, rename the copies, so `release-signing-key.age` holds the key `RELEASE_SIGNING_KEY` holds again and the retired key sits under its id. Without this, the next rotation's step 1 would write over `release-signing-key-next.age`, the live key's only offline copy.
+
+   ```sh
+   mv "$HOME/release-signing-key.age" "$HOME/release-signing-key-<old key id>.age" &&
+     mv "$HOME/release-signing-key-next.age" "$HOME/release-signing-key.age"
+   ```
+
+   `<old key id>` is the id of the key that signed the latest release, which that release's notes name.
+
+   A client that never got a build with the new key can't verify a release from here on. Signing with both keys for a while would keep such clients updating: `internal/release.Sign` takes several keys, but `tools/release sign` takes one, so it would need a second `-key-env`, such as `RELEASE_SIGNING_KEY_NEXT`, first.
+4. Remove the old key from `release-keys.txt` in a PR.
+
+A leaked secret key can sign manifests that every client trusting it accepts, until those clients update to a build without it. Replace it at once, without waiting at step 3: the release after step 2's can already be signed with the new key and drop the leaked one from the list.
 
 ## Snapshots and unsigned releases
 
 - `workflow_dispatch`, and a PR that changes the release code, build a snapshot. Its version is `v0.0.0-snapshot.<run number>` and its `minimum_version` is the same. A throwaway key made in the job signs it and is never stored. The files stay as a workflow artifact for 7 days, with the throwaway public key as `snapshot-key.pub`. Their URLs name a release that doesn't exist.
 - A tag pushed while no release key exists, with nothing in `release-keys.txt` and no secret, still publishes. The throwaway key signs it, its notes start with "Unsigned", and no client trusts its manifest; check its downloads against `checksums.txt`.
 - Once `release-keys.txt` lists a key, a tag fails instead of publishing if the secret is missing or its key isn't in the list.
+- A tag on a commit that `main` doesn't contain fails before anything is signed or published, with a key or without one, if that commit's `release.yml` has the check (What gets signed).
 
 ## Where clients find it
 
@@ -155,5 +283,6 @@ Every release has `manifest.json` as an asset. The newest stable one is at `http
 ## How it's checked
 
 - `internal/release`'s tests run RFC 8032 section 7.1's five vectors through the key parser and signer, use DSSE's own example of the encoding, use semver.org's regular expression and its precedence examples, refuse a signed manifest with a byte changed at any offset, and check that a secret key never prints.
-- `tools/release`'s tests run dist, sign and verify in a temporary directory, rebuild to check the archives are reproducible, and check what verify refuses.
+- `tools/release`'s tests run dist, sign and verify in a temporary directory, rebuild to check the archives are reproducible, check that no tar.gz header holds a time or an owner, and check what verify refuses. They build the notices for a fake binary over a fake module cache, refuse one whose modules go list doesn't confirm, and check the checked-in `minimum-version.txt` and `extra-notices.txt`.
+- `ci.yml` writes the notices for all fourteen binaries it cross-compiles, `pairtimed` included, so a new module whose license can't be found fails in the PR that adds it.
 - `release.yml` checks every build twice: with `tools/release verify`, then with `tools/release/check.sh`, which uses only `sha256sum`, jq, tar, unzip and OpenSSL. On a tag it also checks that the shipped linux/amd64 binary names the signing key.

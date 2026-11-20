@@ -279,6 +279,28 @@ func TestLoad(t *testing.T) {
 			environ: s3Secrets,
 			wantErr: "user or password",
 		},
+		{
+			name:    "virtual-hosted URLs over http are refused, since <bucket>.localhost isn't a loopback host",
+			toml:    base + "[object_storage]\nendpoint = \"http://localhost:9000\"\nbucket = \"a-bucket\"\nsnapshot_bucket = \"b-bucket\"\nvirtual_host = true\n",
+			environ: s3Secrets,
+			wantErr: "object_storage.virtual_host",
+		},
+		{
+			name:    "virtual-hosted URLs on an IP address are refused",
+			toml:    base + "[object_storage]\nendpoint = \"https://192.0.2.10\"\nbucket = \"a-bucket\"\nsnapshot_bucket = \"b-bucket\"\nvirtual_host = true\n",
+			environ: s3Secrets,
+			wantErr: "not the IP address",
+		},
+		{
+			name:    "path-style URLs over http on loopback stay allowed, for MinIO in CI",
+			toml:    base + "[object_storage]\nendpoint = \"http://127.0.0.1:9000\"\nbucket = \"a-bucket\"\nsnapshot_bucket = \"b-bucket\"\n",
+			environ: s3Secrets,
+			check: func(t *testing.T, c *Config, _ string) {
+				if oc, on := c.ObjectStore(); !on || oc.Endpoint != "http://127.0.0.1:9000" || oc.VirtualHost {
+					t.Errorf("ObjectStore() endpoint %q, virtual host %v, on %v", oc.Endpoint, oc.VirtualHost, on)
+				}
+			},
+		},
 		{name: "object storage keys without an endpoint are refused", toml: base + "[object_storage]\nbucket = \"pairtime\"\n", wantErr: "object_storage.endpoint is empty"},
 		{name: "an unknown object_storage key is refused", toml: base + objectStorage + "buckets = \"x\"\n", environ: s3Secrets, wantErr: "unknown keys: object_storage.buckets"},
 	}
