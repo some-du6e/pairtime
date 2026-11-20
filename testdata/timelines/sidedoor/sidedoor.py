@@ -311,8 +311,9 @@ def check_inputs_off_boundaries(fx):
     is in the slot that starts there. The sample at 14:06:45 would report it
     as the last press, and a scorer that rebuilds slots from the samples
     would see no key in 14:06:30 to 14:06:45 even if there was one. The
-    sweep reads fx.inputs, which can't tell, so write() runs this for every
-    case, inputs before the fixture included."""
+    sweep reads fx.inputs, not the samples, so it can't catch this itself.
+    write() runs this check for every case, inputs before the fixture
+    included."""
     times = [t for t, _ in fx.inputs] + [t for t in (fx.last_input, fx.last_key) if t is not None]
     for t in times:
         tl.check(t % tl.SLOT_MS != 0, f"{fx.name}: input at {fx.hhmmss(t)} falls on a slot boundary")

@@ -103,7 +103,7 @@ exp = tl.Expected(fx, sm="docs/PLAN.md WP-FX4 (b); DESIGN 5.2, 5.4, 6.2 D2 and D
 exp.row("14:00", bucket=False, codes=["X.no_anchor"], note="As in (a): before any lead reaches back.")
 for m in ("14:01", "14:02", "14:03", "14:04", "14:05", "14:06"):
     # From the first call on, agent_running_s 0 rests on the erratum, as in (a).
-    after_first_call = m >= "14:04"
+    after_first_call = at(m) >= CALLS[0]
     exp.row(m, credit={P: {"P": 60}}, uncredited={}, agent=0, erratum=ERRATUM if after_first_call else None,
             note="Think parts from 14:01:00, and every typing part from 14:03:45 on, where every slot has "
                  "key presses." + (" No track turn runs, so agent_running_s is 0; read literally, the turn the "
