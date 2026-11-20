@@ -161,6 +161,11 @@ func Step(s State, records []event.Event) (State, Output) {
 		// A browser run's credit waits for the slot after it: a lookup
 		// needs credit within LOOKUP_BRACKET_S on both sides (SM 2.5). So
 		// nothing from a run whose end bracket isn't final yet is final.
+		// derive lists only the runs with credit before them: once the run's
+		// start is final, so is the bracket before it, and a run with none
+		// there is no lookup whatever follows. SM 2.5 sets no bound on a
+		// run's length, so the hold has none either
+		// (docs/errata/2026-11-19-return-rule-lookahead.md).
 		for _, sp := range lookups {
 			if sp.from < to && sp.to+r.lookupBracket > to {
 				to = min(to, sp.from)

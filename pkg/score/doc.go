@@ -70,9 +70,10 @@
 // arrives. Where an act's record comes later than that, as a long typed
 // command's does at its end, the windows the act would open before then
 // credit nothing, in every Step alike, and the anchor is final from its
-// record's time. A browser run's lookup credit waits for the run's end, so
-// nothing from the run on is final until its end bracket is. Until WP-SC5
-// adds checkpoints, a State holds every record it was given.
+// record's time. A browser run with credit just before it may be a lookup,
+// whose credit waits for the run's end, so nothing from such a run on is
+// final until its end bracket is. Until WP-SC5 adds checkpoints, a State
+// holds every record it was given.
 //
 // # Readings of the spec
 //

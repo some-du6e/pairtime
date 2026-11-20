@@ -181,8 +181,9 @@ type creditor struct {
 	buckets map[string][]*bucket
 	runs    map[string]*running
 	returns []returned
-	// lookups are the browser and chat-app runs, which Step holds
-	// FinalBefore back for until their end bracket is decided.
+	// lookups are the browser and chat-app runs with credit in the
+	// LOOKUP_BRACKET_S before them, the ones that can become lookups. Step
+	// holds FinalBefore back for them until their end bracket is decided.
 	lookups []span
 }
 
@@ -514,13 +515,18 @@ func (c *creditor) lookupRuns() {
 			j++
 		}
 		from, to := i*perSlot, j*perSlot // seconds [from, to)
-		c.lookups = append(c.lookups, span{c.at(from), c.at(to)})
 		i = j
 		// A credited second ending LOOKUP_BRACKET_S before the run starts
 		// still brackets it, as does one starting LOOKUP_BRACKET_S after it
 		// ends.
 		bracket := int(c.r.lookupBracket / 1000)
 		before := c.brackets(from-1-bracket, from, true)
+		if len(before) == 0 {
+			// Nothing before the run brackets it, so it is no lookup
+			// whatever comes after it, and Step needn't wait for its end.
+			continue
+		}
+		c.lookups = append(c.lookups, span{c.at(from), c.at(to)})
 		after := c.brackets(to, to+1+bracket, false)
 		var proj string
 		for _, p := range slices.Sorted(maps.Keys(before)) {

@@ -615,4 +615,23 @@ func TestLookupHoldsFinal(t *testing.T) {
 			t.Error("the Finals and the last Pending differ from one Step's output")
 		}
 	})
+	t.Run("a browser run with nothing credited in the LOOKUP_BRACKET_S before it is no lookup and holds nothing back", func(t *testing.T) {
+		b := newTL(false)
+		b.focus(at(0), event.AppEditor, "p_1")
+		b.mouse(every(at(1), at(5996), 5000)...)
+		b.focus(at(60), event.AppBrowser, "")
+		b.focus(at(3000), event.AppEditor, "p_1")
+		b.editor(at(3030), event.ViaEditor, "p_1", event.ActNavigate, event.EditSourceUnknown)
+		b.samples(at(0), at(6000))
+		recs := b.records()
+		cut := 0
+		for cut < len(recs) && recs[cut].T < at(2990) {
+			cut++
+		}
+		_, o := Step(NewState(testTable(t), Device{}), recs[:cut])
+		r := newRules(testTable(t))
+		if want := floorSlot(recs[cut-1].T - r.settle); o.FinalBefore != want {
+			t.Errorf("FinalBefore %d s, want %d s", (o.FinalBefore-base)/1000, (want-base)/1000)
+		}
+	})
 }
