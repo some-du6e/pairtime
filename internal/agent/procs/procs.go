@@ -6,7 +6,9 @@
 // reports each one as a session.start with its parent_class, entrypoint
 // and has_tty (SM 1.2, 2.2 rule 4). That is how `claude --bare`, `claude
 // -p` and `codex exec` runs that fire no hooks (HS 3.1, 3.5) still get
-// classified.
+// classified. Each scan also counts this user's harness processes, hooked
+// or not, for presence, which keeps a project context live while one runs
+// (DESIGN 3.3).
 //
 // The scan reads only what internal/platform's readers read: process ids,
 // parent ids, executable names, start times, owners, process groups and
