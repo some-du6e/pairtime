@@ -16,8 +16,9 @@
 //     Asking again about a session does nothing.
 //   - Nothing is shown while the teen has notifications off, or during their
 //     quiet hours (config.toml [notifications]; DESIGN 3.9; TE 11.1 risk 2).
-//   - Nothing is shown about a session that ended more than Fresh ago. By
-//     then the recap is old news, and it waits in the dashboard.
+//   - Nothing is shown about a session that was found to be over more
+//     than Fresh ago (Note.Ended). By then the recap is old news, and it
+//     waits in the dashboard.
 //   - Nothing is shown within Fresh of the last notification. A session
 //     ends SESSION_GAP_S after its last credited minute, or sooner at a lock
 //     or a suspend, and each project has its own sessions (SM 5.3). So
@@ -100,7 +101,15 @@ type Note struct {
 	// Session is the work session's opaque key (AGENTS.md). At most one
 	// notification is shown for each key.
 	Session string
-	// Ended is when the session ended. A note goes stale Fresh after it.
+	// Ended is the moment the session was found to be over: the time of
+	// the lock or suspend that ended it, or, for a session that ended in a
+	// gap, the end of its last credited minute plus SESSION_GAP_S, when
+	// the gap was complete (DESIGN 3.8; WP-CO1). It isn't SM 5.3's
+	// work-session end, the end of the last credited minute: that is
+	// SESSION_GAP_S earlier, so a note given it would be stale by the time
+	// anyone could know the session was over. A note goes stale Fresh after
+	// Ended. The scorer steps every 60 s (DESIGN 3.7), so the coach can call
+	// Notify about a minute after Ended, well inside that.
 	Ended time.Time
 	// Text is the body: a sentence or two from the coach, such as "52 min
 	// on remind-bot. You fixed the timezone bug yourself. See recap."
@@ -165,7 +174,7 @@ const (
 	// Repeated: this session already had its decision, or the note has no
 	// session.
 	Repeated
-	// Stale: the session ended more than Fresh ago.
+	// Stale: the session was found to be over more than Fresh ago.
 	Stale
 	// TooSoon: the last notification was less than Fresh ago.
 	TooSoon

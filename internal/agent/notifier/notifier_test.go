@@ -430,6 +430,46 @@ func TestQuietHoursFollowTheClocksZone(t *testing.T) {
 	}
 }
 
+// Note.Ended is the moment a session was found to be over. For a session
+// that ended in a gap, the coach (WP-CO1) knows it once SESSION_GAP_S has
+// passed since the end of the last credited minute, at the scorer's next
+// step, every 60 s (DESIGN 3.7).
+func TestGapEndedSession(t *testing.T) {
+	lastCredited := at("19:30:00") // the end of the session's last credited minute
+	foundOver := lastCredited.Add(Fresh())
+	scorerStep := time.Minute
+	tests := []struct {
+		name  string
+		ended time.Time
+		now   time.Time
+		want  Outcome
+	}{
+		{
+			name:  "a session found over SESSION_GAP_S after its last credited minute is shown at the scorer's next step",
+			ended: foundOver, now: foundOver.Add(scorerStep), want: Queued,
+		},
+		{
+			name:  "it is still shown when the coach reports it SESSION_GAP_S after it was found over",
+			ended: foundOver, now: foundOver.Add(Fresh()), want: Queued,
+		},
+		{
+			name:  "given SM 5.3's work-session end instead, the end of the last credited minute, the same note is already stale",
+			ended: lastCredited, now: foundOver.Add(scorerStep), want: Stale,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := newRig(config.Notifications{}, nil, nil)
+			defer r.n.Close()
+			r.clock.Set(tt.now)
+			if got := r.n.Notify(Note{Session: "s1", Ended: tt.ended}); got != tt.want {
+				t.Errorf("Notify() at %s for a session found over at %s = %v, want %v", tt.now.Format(time.TimeOnly), tt.ended.Format(time.TimeOnly), got, tt.want)
+			}
+			r.n.wg.Wait()
+		})
+	}
+}
+
 func TestEveryMessageHasTheFixedTitle(t *testing.T) {
 	tests := []struct {
 		name string
