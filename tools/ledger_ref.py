@@ -143,6 +143,10 @@ RTYPES = {
     0x41: "upload_failure",
 }
 EVENT_RTYPES = tuple(range(0x01, 0x13))
+# Codes reserved for event kinds added later. A verifier that meets one
+# reports its kind as unknown and still checks the batch; 0x00 and 0x42 to
+# 0xff fail.
+LATER_RTYPES = range(0x13, 0x40)
 OS_RTYPES = (0x0E, 0x0F, 0x10)
 CHECKPOINT = 0x40
 UPLOAD_FAILURE = 0x41
@@ -176,8 +180,8 @@ def header(seq, rtype, project_key, session_key):
     """hdr = u64(seq) || u8(rtype) || project (16) || session (8): 33 bytes."""
     if not 1 <= seq < 1 << 64:
         raise LedgerError("seq %d is out of range; sequence numbers start at 1" % seq)
-    if rtype not in RTYPES:
-        raise LedgerError("rtype 0x%02x isn't in the table" % rtype)
+    if rtype not in RTYPES and rtype not in LATER_RTYPES:
+        raise LedgerError("rtype 0x%02x is reserved; version 1 never assigns it" % rtype)
     if rtype in OS_RTYPES and project_key != "":
         raise LedgerError("%s records have no project" % RTYPES[rtype])
     if rtype == CHECKPOINT and (project_key == "" or session_key != NO_SESSION):
@@ -1378,6 +1382,8 @@ def check_chain(rep, chain, path, received):
                 rep.same(rp + ".entry", got_entry, entry(header(seq, rtype, project_key, session_key), body))
             except LedgerError as err:
                 rep.fail(rp, str(err))
+            if rtype in LATER_RTYPES:
+                rep.count("records of later kinds")
             rep.count("records")
         if not entries:
             rep.fail(bp + ".records", "a batch has at least one record")
@@ -1821,7 +1827,7 @@ def check_document(doc):
 
 
 def summary(counts):
-    order = ("key sets", "digests", "chains", "batches", "records", "days", "day rows", "inclusion proofs",
+    order = ("key sets", "digests", "chains", "batches", "records", "records of later kinds", "days", "day rows", "inclusion proofs",
              "lowercase tables", "commitments", "reveals", "normalizations", "feature sets", "diffs", "jaccard pairs",
              "shingle reveals", "draws", "challenge sizes")
     return ", ".join("%d %s" % (counts[k], k) for k in order if k in counts)
@@ -2863,7 +2869,8 @@ def test_check_catches():
         ("a nonce", setter(rec, "nonce", flip)),
         ("an entry", setter(rec, "entry", flip)),
         ("a seq", setter(lambda d: rec(d, 1, 0), "seq", lambda s: s + 1)),
-        ("a reserved rtype", setter(rec, "rtype", lambda _: 0x13)),
+        ("a reserved rtype", setter(rec, "rtype", lambda _: 0x42)),
+        ("rtype 0x00", setter(rec, "rtype", lambda _: 0x00)),
         ("an os.* record with a project", os_with_project),
         ("a root", setter(batch, "root", flip)),
         ("a head", setter(batch, "head", flip)),

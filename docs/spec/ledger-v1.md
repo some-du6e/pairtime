@@ -116,7 +116,7 @@ Checkpoints and upload-failure notes take numbers from the same sequence. So the
 | `0x41` | upload-failure note (DESIGN 3.6, 7.4) |
 | `0x42` to `0xff` | reserved |
 
-`0x01` to `0x12` are the 18 kinds in the order of PR1's `kindTable`, as DESIGN 3.6 says. That order was used once. From now on the table is fixed: a code never changes meaning, even if `kindTable` is reordered, and a kind added later takes the next free code from `0x13` up. A writer never emits a reserved code. Checking roots and heads never reads `rtype`, so a reader that meets a code it doesn't know reports the record as unknown and can still verify its batch.
+`0x01` to `0x12` are the 18 kinds in the order of PR1's `kindTable`, as DESIGN 3.6 says. That order was used once. From now on the table is fixed: a code never changes meaning, even if `kindTable` is reordered, and a kind added later takes the next free code from `0x13` up. A writer never emits a reserved code. A verifier fails a record whose code is `0x00` or from `0x42` to `0xff`, which version 1 never assigns. A code from `0x13` to `0x3f` that a verifier doesn't know belongs to an event kind added after the verifier was built: it reports the record's kind as unknown and leaves its body unchecked, and it still checks the record's place in its batch, because checking roots and heads never reads `rtype`. A server is never older than the clients that write to it, so for a server such a code is a fault, as an `f.v` newer than its own is (10.7), and it refuses or holds a reveal that shows one.
 
 ### 4.3 Header
 
@@ -288,7 +288,7 @@ A verifier that holds a run of a device's batches, with headers and body hashes 
 
 1. Batch numbers rise by 1 with no gap. A run that starts at `b = 1` has `prev = zero(32)`. A run that starts later links its first `prev` to the head the server stored for the batch before it. Only a run that starts at a device's first witnessed batch, where WP-SV4 started the chain after batch 1 (6), takes its first `prev` as given.
 2. Sequence numbers rise by 1 with no gap, within and across batches. Batch 1 starts at `s = 1`.
-3. Every header follows 4.3: its rtype is in the table, an `os.*` header has the zero project, and checkpoints and upload-failure notes have the fields their row in 4.3 gives them.
+3. Every header follows 4.3: its rtype isn't `0x00` or `0x42` to `0xff`, a code from `0x13` to `0x3f` that the verifier doesn't know is reported as an unknown kind (4.2), an `os.*` header has the zero project, and checkpoints and upload-failure notes have the fields their row in 4.3 gives them.
 4. Every entry is its header followed by the SHA-256 of the record's stored body, and every revealed body is valid JSON by 4.5's rule, agrees with its header, names the chain's device in an event's `device_id`, and has `f` and `c` exactly where 4.5, 4.7, 10.1 and 10.7 put them.
 5. `n_b` is the number of the batch's records, and `R_b` is the `MTH` of their entries.
 6. `H_b` follows from `H_(b-1)`, `R_b`, `n_b` and `b`.
@@ -664,7 +664,7 @@ python3 -I tools/ledger_ref.py vectors-content [--out PATH]
 python3 -I tools/ledger_ref.py check FILE
 ```
 
-`selftest` checks the RFC 5869, RFC 4231 and Certificate Transparency vectors, the rtype table against `pkg/event`'s `kindTable`, and the worked example in section 12 against this file. Then it checks that `vectors.json` is byte for byte what `vectors` writes, that it passes `check`, and that `check` catches each of 24 kinds of tampering with it. For part 2 it checks the whitespace set of 10.2 against Python's `str.isspace`, the lowercase table of 10.4 against Python's `unicodedata`, the tokenizer, the 16 KiB cut, reveals with random removals and every single-item change to them, the MinHash estimate's error and bias on random sets, hunks from patches with context against hunks from the text before and after, and the draw. Then it checks the worked example in 10.10 against this file, that `vectors-content.json` is byte for byte what `vectors-content` writes, that it passes `check`, and that `check` catches 35 kinds of change to it. `ci.yml` runs it on every PR.
+`selftest` checks the RFC 5869, RFC 4231 and Certificate Transparency vectors, the rtype table against `pkg/event`'s `kindTable`, and the worked example in section 12 against this file. Then it checks that `vectors.json` is byte for byte what `vectors` writes, that it passes `check`, and that `check` catches each of 25 kinds of tampering with it. For part 2 it checks the whitespace set of 10.2 against Python's `str.isspace`, the lowercase table of 10.4 against Python's `unicodedata`, the tokenizer, the 16 KiB cut, reveals with random removals and every single-item change to them, the MinHash estimate's error and bias on random sets, hunks from patches with context against hunks from the text before and after, and the draw. Then it checks the worked example in 10.10 against this file, that `vectors-content.json` is byte for byte what `vectors-content` writes, that it passes `check`, and that `check` catches 35 kinds of change to it. `ci.yml` runs it on every PR.
 
 `check FILE` recomputes every value in a file in the format of 11.3 and prints each mismatch with its JSON path. `pkg/ledger`'s tests write such files and run `check` on them (WP-LG2, WP-LG4).
 
@@ -703,6 +703,7 @@ Besides recomputing each value from the file's own inputs, `check` applies these
 - `received_at` and `receipt_msg` come together or not at all.
 - Each day after the first has the next day number and chains to the day before. The first day's `prev` is taken as given.
 - A batch whose `received_at` falls on a day the file lists appears in that day's rows with the same head and time, and no `(device_id, b)` appears twice.
+- A record of rtype `0x00` or `0x42` to `0xff` fails. One from `0x13` to `0x3f` is of a kind added after this reference, which `check` counts as such and doesn't fail (4.2).
 - A body that starts with `{"n":"` carries its own record's nonce there.
 - A commitment with `raw` is an agent message, and its `text` is the cut of `raw` (10.1). An agent message without `raw` is at most 16,384 bytes.
 - A features object's `f` equals, as JSON, the map 10.7 builds from its inputs.
@@ -892,3 +893,4 @@ The review of parts 1 and 2 (issue #19) decided these, before any device witness
 31. The server returns `received_at` with each receipt, and the client stores it next to the receipt. DESIGN 3.5's `batches.seg` row and DESIGN 3.6 name only the receipt, which can't be checked without the time it signs (7).
 32. One `K_dev` writes one chain, so no `s` repeats under it. An install restored with `pairtime restore` writes a new chain under a new `K_dev` and keeps the old key only to verify and open the old chain. DESIGN 7.11 unwraps the old key onto the new install, and a second chain from `s = 1` under it would repeat every nonce and token salt (3, 4.1).
 33. A day head is signed with the server key that was valid at the end of its day, whenever it is signed or published, so a verifier knows the key from `d` alone. Section 9 gave a receipt's key and not a day head's (8, 9).
+34. A verifier fails a record of rtype `0x00` or `0x42` to `0xff`. One from `0x13` to `0x3f` that it doesn't know is an event kind added later: it reports the kind as unknown, leaves the body unchecked and still verifies the batch, and a server, never older than its clients, refuses or holds it. 4.2 said such a batch still verifies, while section 9 required every rtype to be in the table (4.2, 9).
