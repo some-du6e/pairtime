@@ -19,6 +19,10 @@ type ChainInfo struct {
 	DeviceID string
 	// KeyID is the id of the device key that writes it.
 	KeyID string
+	// Created is when the chain began, at the writer's first start under
+	// the key. No record of a time before it was written live: those are
+	// lookback's, read from logs (DESIGN 6.2 D11).
+	Created time.Time
 }
 
 // ReadChain reads which chain the ledger in dir holds, from batches.seg.
@@ -27,7 +31,7 @@ func ReadChain(dir string) (ChainInfo, error) {
 	if err != nil {
 		return ChainInfo{}, err
 	}
-	return ChainInfo{DeviceID: bf.chain.DeviceID, KeyID: bf.chain.KeyID}, nil
+	return ChainInfo{DeviceID: bf.chain.DeviceID, KeyID: bf.chain.KeyID, Created: time.UnixMilli(bf.chain.Created)}, nil
 }
 
 // ReadBatches calls fn with each sealed batch of the ledger in dir whose

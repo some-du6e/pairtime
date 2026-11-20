@@ -38,7 +38,7 @@ func ReadRows(dir string, from uint64) (ChainInfo, []Row, error) {
 	if err != nil {
 		return ChainInfo{}, nil, err
 	}
-	info := ChainInfo{DeviceID: bf.chain.DeviceID, KeyID: bf.chain.KeyID}
+	info := ChainInfo{DeviceID: bf.chain.DeviceID, KeyID: bf.chain.KeyID, Created: time.UnixMilli(bf.chain.Created)}
 	from = max(from, 1)
 	if from > uint64(len(bf.rows)) {
 		return info, nil, nil

@@ -27,10 +27,12 @@ type rowTime struct {
 // every batch, and the rows of the batches from first on, whose roots may
 // still have to go. It isn't safe for concurrent use.
 type rowIndex struct {
-	device string    // the chain's device id
-	times  []rowTime // times[i] is batch i + 1
-	first  uint64    // queue[0]'s batch, when queue isn't empty
-	queue  []ledger.Row
+	device string // the chain's device id
+	// created is when the chain began, in Unix ms, 0 when unknown.
+	created int64
+	times   []rowTime // times[i] is batch i + 1
+	first   uint64    // queue[0]'s batch, when queue isn't empty
+	queue   []ledger.Row
 	// lastHead is the newest batch's H_b, the prev of the next one.
 	lastHead pkgledger.Hash
 }
@@ -42,7 +44,7 @@ func loadRows(dir string, keep uint64) (*rowIndex, error) {
 	if err != nil {
 		return nil, err
 	}
-	ix := &rowIndex{device: info.DeviceID}
+	ix := &rowIndex{device: info.DeviceID, created: info.Created.UnixMilli()}
 	for _, r := range rows {
 		if err := ix.add(r); err != nil {
 			return nil, err
@@ -148,15 +150,20 @@ func (ix *rowIndex) sealedAfter(t int64) (uint64, bool) {
 // after the minute's end; offline when it was late but B* was sealed
 // within lag of the end and the uploader's failure notes fall between the
 // seal and the receipt, so it waited for the server; and backfilled
-// otherwise, which takes in every minute of lookback (D11), since the
-// batches that hold it were sealed long after it, and every minute logged
-// in local-only mode, when the uploader tried nothing. A B* before the
-// server's chain starts is never received: backfilled. The reading waits
+// otherwise, which takes in every minute logged in local-only mode, when
+// the uploader tried nothing. A B* before the server's chain starts is
+// never received: backfilled. Lookback's minutes are backfilled whatever
+// their batch (D11; DESIGN 7.4): every minute that ended before the
+// device's chain began is one, since nothing recorded it live, and the
+// rest were sealed long after they happened. The reading waits
 // while no batch has been sealed after the minute, or B* has no receipt
 // yet, so it rests only on receipts and is the same whenever it is read:
 // `pairtime privacy show` gives the bytes the upload sends.
 func witnessOf(ix *rowIndex, minute, lag int64, chainStart uint64, offline []span) (event.Witness, bool) {
 	end := minute + 60_000
+	if ix.created > 0 && end <= ix.created {
+		return event.Backfilled, true
+	}
 	b, ok := ix.sealedAfter(end)
 	if !ok {
 		return "", false

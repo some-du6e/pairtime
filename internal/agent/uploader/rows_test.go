@@ -46,36 +46,44 @@ func TestWitness(t *testing.T) {
 		got        []float64 // minutes of day0, -1 for no receipt
 		chainStart uint64
 		offline    []span
+		created    int // the minute of day0 the chain began, 0 for unknown
 		minute     int
 		want       event.Witness
 		known      bool
 	}{
 		{"a minute whose next batch arrived within the lag is witnessed",
-			[]float64{1, 2}, []float64{1.1, 2.1}, 0, nil, 0, event.Witnessed, true},
+			[]float64{1, 2}, []float64{1.1, 2.1}, 0, nil, 0, 0, event.Witnessed, true},
 		{"the batch that counts is the first one sealed after the minute ends",
-			[]float64{0.5, 1, 30}, []float64{0.6, 40, 40}, 0, nil, 0, event.Backfilled, true},
+			[]float64{0.5, 1, 30}, []float64{0.6, 40, 40}, 0, nil, 0, 0, event.Backfilled, true},
 		{"a batch received just at the lag is still witnessed",
-			[]float64{1}, []float64{16}, 0, nil, 0, event.Witnessed, true},
+			[]float64{1}, []float64{16}, 0, nil, 0, 0, event.Witnessed, true},
 		{"a batch sealed on time, received late, with failure notes in between, is offline",
-			[]float64{1}, []float64{120}, 0, []span{{From: at(30), To: at(90)}}, 0, event.Offline, true},
+			[]float64{1}, []float64{120}, 0, []span{{From: at(30), To: at(90)}}, 0, 0, event.Offline, true},
 		{"a late batch with no failure notes is backfilled, as in local-only mode",
-			[]float64{1}, []float64{120}, 0, nil, 0, event.Backfilled, true},
+			[]float64{1}, []float64{120}, 0, nil, 0, 0, event.Backfilled, true},
 		{"failure notes outside the wait don't make it offline",
-			[]float64{1}, []float64{120}, 0, []span{{From: at(200), To: at(210)}}, 0, event.Backfilled, true},
+			[]float64{1}, []float64{120}, 0, []span{{From: at(200), To: at(210)}}, 0, 0, event.Backfilled, true},
 		{"a minute sealed long after it, as lookback is, is backfilled even with failure notes",
-			[]float64{600}, []float64{601}, 0, []span{{From: at(600), To: at(600)}}, 0, event.Backfilled, true},
+			[]float64{600}, []float64{601}, 0, []span{{From: at(600), To: at(600)}}, 0, 0, event.Backfilled, true},
 		{"a minute before the server's chain starts is backfilled",
-			[]float64{1, 2}, []float64{-1, 2.1}, 2, nil, 0, event.Backfilled, true},
+			[]float64{1, 2}, []float64{-1, 2.1}, 2, nil, 0, 0, event.Backfilled, true},
 		{"a minute no batch was sealed after waits",
-			[]float64{1}, []float64{1.1}, 0, nil, 5, "", false},
+			[]float64{1}, []float64{1.1}, 0, nil, 0, 5, "", false},
 		{"a minute whose batch has no receipt yet waits",
-			[]float64{1}, []float64{-1}, 0, nil, 0, "", false},
+			[]float64{1}, []float64{-1}, 0, nil, 0, 0, "", false},
 		{"a clock that went back between seals doesn't hide the batch after",
-			[]float64{10, 3, 20}, []float64{10.1, 10.2, 20.1}, 0, nil, 5, event.Witnessed, true},
+			[]float64{10, 3, 20}, []float64{10.1, 10.2, 20.1}, 0, nil, 0, 5, event.Witnessed, true},
+		{"a minute that ended before the chain began is lookback's, and backfilled however soon its batch arrived",
+			[]float64{6}, []float64{6.1}, 0, nil, 5, 3, event.Backfilled, true},
+		{"a minute that ended after the chain began reads by its batch",
+			[]float64{6}, []float64{6.1}, 0, nil, 5, 5, event.Witnessed, true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			ix := indexOf(t, tc.sealed, tc.got)
+			if tc.created > 0 {
+				ix.created = at(tc.created)
+			}
 			w, ok := witnessOf(ix, at(tc.minute), lag, tc.chainStart, tc.offline)
 			if w != tc.want || ok != tc.known {
 				t.Errorf("witnessOf = %q, %v; want %q, %v", w, ok, tc.want, tc.known)

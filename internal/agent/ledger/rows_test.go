@@ -50,6 +50,11 @@ func TestReadRows(t *testing.T) {
 				}
 			}
 		}},
+		{"the chain's info says when the chain began, at the writer's first start", 1, func(t *testing.T, info ChainInfo, _ []Row) {
+			if info.Created.UnixMilli() != testT {
+				t.Errorf("created %v", info.Created)
+			}
+		}},
 		{"each row's prev is the head before it, zero for batch 1", 1, func(t *testing.T, _ ChainInfo, rows []Row) {
 			if rows[0].Prev != (ledger.Hash{}) || rows[1].Prev != rows[0].Head || rows[2].Prev != rows[1].Head {
 				t.Error("the prevs don't chain")
