@@ -4,6 +4,7 @@ package ledger
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -654,6 +655,9 @@ func checkDrawVector(t *testing.T, dv drawVec) {
 	}
 	seed := DrawSeed(r, dv.Metadata)
 	sameBytes(t, "seed", seed[:], dv.Seed)
+	if s := DrawSeedFromDigest(r, sha256.Sum256(dv.Metadata)); s != seed {
+		t.Errorf("DrawSeedFromDigest gives %s from SHA-256(M), and DrawSeed %s from M", s, seed)
+	}
 	pool := make([]Turn, len(dv.Pool))
 	for j, p := range dv.Pool {
 		pool[j] = Turn{DeviceID: p.DeviceID, Seq: p.Seq}
