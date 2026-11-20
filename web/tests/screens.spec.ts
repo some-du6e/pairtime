@@ -15,7 +15,15 @@ const fakePages: { name: string; hash: string; wait: string; options?: FakeOptio
 	{ name: 'today', hash: '#/today', wait: 'today' },
 	{ name: 'today-focus-unknown', hash: '#/today', wait: 'focus-unknown', options: { focus: { known: false, gnome_extension: 'needs_login' } } },
 	{ name: 'today-calibrating', hash: '#/today', wait: 'calibrating', options: { shadow: true } },
+	// Wednesday and the last session don't come back from the agent.
+	{
+		name: 'today-unread',
+		hash: '#/today',
+		wait: 'unread-days',
+		options: { unavailable: (path) => path === '/v1/days/2026-11-18' || path === '/v1/sessions/last' },
+	},
 	{ name: 'projects', hash: '#/projects', wait: 'project' },
+	{ name: 'projects-calibrating', hash: '#/projects', wait: 'calibrating', options: { shadow: true } },
 	{ name: 'privacy', hash: '#/privacy', wait: 'kept' },
 	{ name: 'settings', hash: '#/settings', wait: 'agent-status' },
 ];

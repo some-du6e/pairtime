@@ -6,8 +6,9 @@
 // pages as a teen sees them: the chess clocks equal the agent's numbers in
 // the words `pairtime today` prints, pending minutes are drawn lighter,
 // level-C time is labeled, D-focus-unknown's sentence shows while focus is
-// unknown, calibration hides your time and keeps the agents', and the page
-// refreshes itself.
+// unknown, calibration hides your time and everything it could be worked
+// out from and keeps the agents', a day or session the agent can't read
+// is named, and the page refreshes itself.
 
 import { expect, type Page, test } from '@playwright/test';
 import { dashboardURL } from './support/env.ts';
@@ -20,8 +21,12 @@ const origin = new URL(dashboardURL).origin;
 // Session times are written in the browser's zone; these read them in UTC.
 test.use({ locale: 'en-US', timezoneId: 'UTC' });
 
+const focusClause = "This desktop doesn't tell pairtime which window is in front.";
 const focusSentence =
 	"This desktop doesn't tell pairtime which window is in front, so your time here counts only on your own dashboard, not on your profile, build days or most programs.";
+const levelC = 'this shows on your own dashboard, not on your profile, build days or most programs';
+const wednesdayUnread =
+	"pairtime couldn't read Wednesday, November 18 from its agent, so the times here leave that day out. It asks again in a minute.";
 
 /** The fill of each part of the first bar inside a test id, as RGB. */
 async function fills(page: Page, testid: string): Promise<Record<string, RGB>> {
@@ -66,13 +71,13 @@ test.describe('Today', () => {
 		await fakeAgent(page);
 		await page.goto(dashboardURL);
 		await expect(page.getByRole('heading', { level: 1 })).toHaveText('Today');
-		await expect(page.getByTestId('today-clock')).toHaveText('you 3h 27m · Claude 41m · Codex 22m · Copilot 18m · Cursor 12m');
+		await expect(page.getByTestId('today-clock')).toHaveText('you 3h 27m, 5m level C · Claude 41m · Codex 22m · Copilot 18m · Cursor 12m');
 		const clocks = page.getByTestId('clock');
 		await expect(clocks.locator('h3')).toHaveText(['portfolio', 'rusty-cli', 'homework-helper', 'discord-bot', 'plant-sensor']);
 		await expect(clocks.getByTestId('clock-line')).toHaveText([
 			'you 52m · Claude 41m',
 			'you 47m · Cursor 12m',
-			'you 41m · Copilot 18m',
+			'you 41m, 5m level C · Copilot 18m',
 			'you 38m · Codex 22m',
 			'you 29m',
 		]);
@@ -88,8 +93,8 @@ test.describe('Today', () => {
 		await expect(legend.locator('li')).toHaveText([
 			/94%\s*level A: pairtime saw your typing/,
 			/4%\s*level B: pairtime saw you at the computer, not your typing/,
-			/2%\s*level C: this counts only on your own dashboard/,
-			'5m of it is level C: it counts only on your own dashboard',
+			new RegExp(`2%\\s*level C: ${levelC}`),
+			'5m of it is level C: it shows on your own dashboard, not on your profile, build days or most programs',
 			'9m of it may still change',
 		]);
 	});
@@ -118,8 +123,14 @@ test.describe('Today', () => {
 		expect(new Set([A, B, C].map((c) => JSON.stringify(c))).size).toBe(3);
 	});
 
-	test("with /v1/status reporting focus unknown, Today shows D-focus-unknown's sentence", async ({ page }) => {
+	test("with /v1/status reporting focus unknown, Today says D-focus-unknown's first clause alone", async ({ page }) => {
 		await fakeAgent(page, { focus: { known: false } });
+		await page.goto(dashboardURL);
+		await expect(page.getByTestId('focus-unknown')).toHaveText(focusClause);
+	});
+
+	test('once the agent says such time is level C, the sentence says where it counts', async ({ page }) => {
+		await fakeAgent(page, { focus: { known: false, level_c: true } });
 		await page.goto(dashboardURL);
 		await expect(page.getByTestId('focus-unknown')).toHaveText(focusSentence);
 	});
@@ -128,7 +139,7 @@ test.describe('Today', () => {
 		await fakeAgent(page, { focus: { known: false, gnome_extension: 'needs_login' } });
 		await page.goto(dashboardURL);
 		await expect(page.getByTestId('focus-unknown').locator('p')).toHaveText([
-			focusSentence,
+			focusClause,
 			"Log out and back in once to turn on pairtime's GNOME extension.",
 		]);
 	});
@@ -156,23 +167,64 @@ test.describe('Today', () => {
 			'rusty-cli',
 			'plant-sensor',
 		]);
+		// The rest of the time keeps SM 4.2's loops alone, and today has none.
+		await expect(page.getByTestId('today').getByTestId('other')).toHaveCount(0);
+		await expect(page.getByTestId('today')).not.toContainText('Away');
 	});
 
-	test('the week lists only the days with time on them, and asks for each earlier day once', async ({ page }) => {
+	test('while calibrating, the last session is its project and day, with no start or end', async ({ page }) => {
+		await fakeAgent(page, { shadow: true });
+		await page.goto(dashboardURL);
+		const session = page.getByTestId('session');
+		await expect(session.locator('h2')).toHaveText('Your last session: rusty-cli');
+		await expect(session.getByTestId('session-span')).toHaveText('Friday, November 20');
+		await expect(session.getByTestId('session-clock')).toHaveText('you calibrating');
+		await expect(session).not.toContainText('14:05');
+		await expect(session).not.toContainText('14:14');
+	});
+
+	test('the week lists only the days with time on them, asks for each earlier day once, and for yesterday, with time on hold, each minute', async ({
+		page,
+	}) => {
 		await page.clock.install();
 		const fake = await fakeAgent(page);
 		await page.goto(dashboardURL);
 		const week = page.getByTestId('week');
 		await expect(week.getByTestId('week-day')).toHaveText(['Monday, November 16', 'Wednesday, November 18', 'Yesterday', 'Today']);
-		await expect(page.getByTestId('week-clock')).toHaveText('you 5h 37m · Claude 1h 21m · Copilot 33m · Codex 32m · Cursor 17m');
-		const asked = () => fake.requests.filter((u) => /^\/v1\/days\/2026-11-1[6-9]$/.test(u.pathname)).map((u) => u.pathname);
-		expect(asked().sort()).toEqual(['/v1/days/2026-11-16', '/v1/days/2026-11-17', '/v1/days/2026-11-18', '/v1/days/2026-11-19']);
-		// A minute later it asks for today again, and not for the earlier days.
-		const todays = () => fake.requests.filter((u) => u.pathname === '/v1/days/today').length;
-		const before = todays();
+		await expect(page.getByTestId('week-clock')).toHaveText('you 5h 37m, 10m level C · Claude 1h 21m · Copilot 33m · Codex 32m · Cursor 17m');
+		await expect(week.getByTestId('week-notes').locator('li')).toHaveText([
+			'10m of it is level C: it shows on your own dashboard, not on your profile, build days or most programs',
+			'9m of it may still change',
+		]);
+		const asked = (date: string) => fake.requests.filter((u) => u.pathname === `/v1/days/${date}`).length;
+		const earlier = ['2026-11-16', '2026-11-17', '2026-11-18'];
+		expect(earlier.map(asked)).toEqual([1, 1, 1]);
+		expect(asked('2026-11-19')).toBe(1);
+		// Each minute it asks for today and for yesterday, whose X.noprog
+		// minutes progress can still bring back (SM 4.3), and not for the
+		// days before. Two rounds, so the first round's asks have all come.
+		for (const round of [2, 3]) {
+			await page.clock.runFor(61_000);
+			await expect.poll(() => asked('2026-11-19')).toBe(round);
+		}
+		expect(earlier.map(asked)).toEqual([1, 1, 1]);
+	});
+
+	test("a day the agent can't read is named as left out of the week, and asked for again a minute later", async ({ page }) => {
+		await page.clock.install();
+		let broken = true;
+		const fake = await fakeAgent(page, { unavailable: (path) => broken && path === '/v1/days/2026-11-18' });
+		await page.goto(dashboardURL);
+		const week = page.getByTestId('week');
+		await expect(week.getByTestId('unread-days')).toHaveText(wednesdayUnread);
+		await expect(week.getByTestId('week-day')).toHaveText(['Monday, November 16', 'Yesterday', 'Today']);
+		await expect(page.getByTestId('week-clock')).toHaveText('you 4h 37m, 10m level C · Claude 1h 21m · Copilot 33m · Codex 22m · Cursor 12m');
+		broken = false;
 		await page.clock.runFor(61_000);
-		await expect.poll(todays).toBeGreaterThan(before);
-		expect(asked()).toHaveLength(4);
+		await expect(week.getByTestId('unread-days')).toHaveCount(0);
+		await expect(week.getByTestId('week-day')).toHaveText(['Monday, November 16', 'Wednesday, November 18', 'Yesterday', 'Today']);
+		await expect(page.getByTestId('week-clock')).toHaveText('you 5h 37m, 10m level C · Claude 1h 21m · Copilot 33m · Codex 32m · Cursor 17m');
+		expect(fake.requests.filter((u) => u.pathname === '/v1/days/2026-11-18')).toHaveLength(2);
 	});
 
 	test('the last session reads as `pairtime recap` heads it', async ({ page }) => {
@@ -181,6 +233,18 @@ test.describe('Today', () => {
 		const session = page.getByTestId('session');
 		await expect(session.locator('h2')).toHaveText('Your last session: rusty-cli');
 		await expect(page.getByTestId('session-span')).toHaveText('Friday, November 20, 14:05 to 14:14');
+		// Cursor's turns fell inside credited minutes, so it has no hand here.
+		await expect(session.getByTestId('session-clock')).toHaveText('you 9m');
+		await expect(session.getByTestId('agent')).toHaveCount(0);
+	});
+
+	test("a last session the agent can't read is a card that says so, and that pairtime asks again", async ({ page }) => {
+		await fakeAgent(page, { unavailable: (path) => path === '/v1/sessions/last' });
+		await page.goto(dashboardURL);
+		await expect(page.getByTestId('today-clock')).toBeVisible();
+		await expect(page.getByTestId('session').getByTestId('session-unread')).toHaveText(
+			"pairtime couldn't read your last session from its agent. It asks again in a minute.",
+		);
 	});
 
 	test('Today says what pairtime counts and why a minute counts at level A, B or C', async ({ page }) => {
@@ -191,7 +255,7 @@ test.describe('Today', () => {
 		await expect(how.locator('dt')).toHaveText([
 			'Level A: pairtime saw your typing',
 			'Level B: pairtime saw you at the computer, not your typing',
-			'Level C: this counts only on your own dashboard',
+			`Level C: ${levelC}`,
 		]);
 		await expect(how.getByTestId('pending-words')).toContainText('pairtime waits 15 minutes after each minute');
 	});
@@ -237,6 +301,38 @@ test.describe('Projects', () => {
 			/Watching Codex work\s*10m/,
 		]);
 		await expect(bot.getByTestId('other').locator('li')).toHaveText(['In other apps 6m', 'Re-rolling the same prompt 4m']);
+	});
+
+	test("X.noprog's minutes on hold are a row of their own, beside the minutes that can't come back", async ({ page }) => {
+		await fakeAgent(page);
+		await page.goto(`${dashboardURL}#/projects`);
+		const homework = page.getByTestId('project').filter({ has: page.getByRole('heading', { name: 'homework-helper' }) });
+		await expect(homework.getByTestId('clock-line')).toHaveText('you 51m, 10m level C · Copilot 33m');
+		await expect(homework.getByTestId('other').locator('li')).toHaveText([
+			'Here, between steps 3m',
+			'On hold: these come back when you fix it 1m 30s',
+			'Past two hours without progress, counted at half 1m',
+		]);
+	});
+
+	test("while calibrating, each project's rest of the time is SM 4.2's loops alone", async ({ page }) => {
+		await fakeAgent(page, { shadow: true });
+		await page.goto(`${dashboardURL}#/projects`);
+		const bot = page.getByTestId('project').filter({ has: page.getByRole('heading', { name: 'discord-bot' }) });
+		await expect(bot.getByTestId('clock-line')).toHaveText('you calibrating · Codex 32m');
+		await expect(bot.getByTestId('other').locator('li')).toHaveText(['Re-rolling the same prompt 4m']);
+		await expect(bot.getByTestId('kinds')).toHaveCount(0);
+		const homework = page.getByTestId('project').filter({ has: page.getByRole('heading', { name: 'homework-helper' }) });
+		await expect(homework.getByTestId('other')).toHaveCount(0);
+	});
+
+	test("a day the agent can't read is named under the span, and the totals leave it out", async ({ page }) => {
+		await fakeAgent(page, { unavailable: (path) => path === '/v1/days/2026-11-18' });
+		await page.goto(`${dashboardURL}#/projects`);
+		await expect(page.getByTestId('span')).toHaveText('From Monday, November 16 to Friday, November 20');
+		await expect(page.getByTestId('unread-days')).toHaveText(wednesdayUnread);
+		const bot = page.getByTestId('project').filter({ has: page.getByRole('heading', { name: 'discord-bot' }) });
+		await expect(bot.getByTestId('clock-line')).toHaveText('you 38m · Codex 22m');
 	});
 
 	test('the last 30 days asks the agent for each of the 30 days up to its own today', async ({ page }) => {
