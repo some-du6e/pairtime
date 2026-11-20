@@ -37,13 +37,24 @@ func TestStep(t *testing.T) {
 			t.Errorf("FinalBefore %d, want %d", o1.FinalBefore, want)
 		}
 	})
-	t.Run("an old record arriving late doesn't move FinalBefore back", func(t *testing.T) {
+	t.Run("a new record dated long before FinalBefore joins the state, but what is final stays final", func(t *testing.T) {
 		s2, o2 := Step(s1, f.Events[half:])
-		_, o3 := Step(s2, f.Events[:1])
+		// A sample the agent writes late, an hour into the fixture, with
+		// an event id no record has.
+		late := event.Event{Envelope: event.Envelope{EventID: "019a0000-0000-7000-8000-00000000ffff", DeviceID: "d_test",
+			BootID: "b_test", T: f.Events[0].T + 3_600_000, Source: event.SourceOS, Via: event.ViaOS,
+			Harness: event.HarnessNone, SessionKey: event.NoSession}, Data: &event.OSPresence{IdleAnyS: 0.5}}
+		if late.T >= o2.FinalBefore {
+			t.Fatalf("the late record at %d isn't before FinalBefore %d", late.T, o2.FinalBefore)
+		}
+		s3, o3 := Step(s2, []event.Event{late})
+		if s3.Len() != s2.Len()+1 {
+			t.Errorf("the state holds %d records, want %d", s3.Len(), s2.Len()+1)
+		}
 		if o3.FinalBefore != o2.FinalBefore {
 			t.Errorf("FinalBefore went from %d to %d", o2.FinalBefore, o3.FinalBefore)
 		}
-		if len(o3.Final.Anchors)+len(o3.Final.Slots)+len(o3.Final.Turns) != 0 {
+		if f := o3.Final; len(f.Slots)+len(f.Turns)+len(f.Anchors)+len(f.Returns)+len(f.Credits)+len(f.Fills) != 0 {
 			t.Error("a Step that made nothing new final emitted finals")
 		}
 	})
