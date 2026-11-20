@@ -9,8 +9,8 @@ This notice covers the pairtime server at {{.BaseURL}} and the pairtime program 
 
 ## The short version
 
-- Your prompts, your code, your file names and your window titles stay on your computer.
-- This server gets numbers: for every 15 seconds you work, how many were credited, to which project (as a key, not its name), what kind of work it was, and why the rest weren't.
+- Your prompts, your code, your file names and your window titles stay on your computer, unless you submit hours: then a few prompts, and the agent replies they answered, go to the program's reviewers.
+- This server gets your Hack Club identity and email address, the IP address each upload comes from, and numbers: for every 15 seconds you work, how many were credited, to which project (as a key, not its name), what kind of work it was, and why the rest weren't.
 - Nothing about you is public until you choose what to show.
 - Hours are checked for fraud only when you submit them to a program.
 - Every kind of data has a time limit, listed under [How long we keep things](#how-long-we-keep-things). Deleted data is gone from the server's backups too within {{days "server.db_snapshots"}}.

@@ -246,6 +246,13 @@ func TestPrivacyNotice(t *testing.T) {
 			notWant: []string{"or when you press them", "per-minute counts"},
 		},
 		{
+			name: "the short version names the exception for submissions and what identifies you (UK Children's Code Std 4)",
+			want: []string{
+				"stay on your computer, unless you submit hours: then a few prompts, and the agent replies they answered, go to the program&#39;s reviewers.",
+				"This server gets your Hack Club identity and email address, the IP address each upload comes from, and numbers",
+			},
+		},
+		{
 			name: "the IP period in the prose is the schedule's",
 			want: []string{"the server deletes them after 30 days."},
 		},
