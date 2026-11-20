@@ -55,7 +55,11 @@
 // From gitleaks: a rule limited to some file paths applies to all text,
 // since a prompt has no path and a pasted .tf file is still a secret; a
 // "gitleaks:allow" comment doesn't hide anything; nothing is base64- or
-// percent-decoded first; and the rules also run over a copy of the text
+// percent-decoded first; a match on a last line with no line break after
+// it gets only that line for a line-target allowlist, as on any other
+// line, where gitleaks gives it every line before it too, so an
+// allowlisted line such as RUN --mount=type=secret can't hide a key on the
+// last line of a prompt; and the rules also run over a copy of the text
 // with sentence punctuation after a token, and every character outside
 // ASCII, turned into spaces, because a token rule needs ASCII whitespace, a
 // quote or a semicolon after the secret, and a key ends a sentence with a
