@@ -296,8 +296,74 @@ func lyingMkdir(t *testing.T) string {
 	return "PATH=" + bin + string(os.PathListSeparator) + os.Getenv("PATH")
 }
 
+// harnessSentinel is an argument the fake harnesses in TestDumpers are
+// started with. The dumpers read a harness's arguments only to answer yes
+// or no, so it must never reach a run folder (E-procs-cmdlines).
+const harnessSentinel = "pairtime-sentinel-argument-6d1f"
+
+// shQuote quotes s for a POSIX shell.
+func shQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+// appclassHarnesses returns the executable names that
+// internal/platform/appclass.json gives harnesses, sorted. The nearest
+// parent with one of them is the harness a dumper's flags file describes.
+func appclassHarnesses(t *testing.T) []string {
+	t.Helper()
+	var table struct {
+		Entries []struct {
+			Names []string `json:"names"`
+			Role  string   `json:"role"`
+		} `json:"entries"`
+	}
+	if err := json.Unmarshal([]byte(read(t, filepath.Join("..", "..", "internal", "platform", "appclass.json"))), &table); err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, e := range table.Entries {
+		if e.Role == "harness" {
+			names = append(names, e.Names...)
+		}
+	}
+	sort.Strings(names)
+	return names
+}
+
+// harnessParent reports whether a parents line, "pid tty name", names one
+// of the harnesses in names, matched as the dumpers match it: in lower case
+// and without .exe.
+func harnessParent(names []string, line string) bool {
+	parts := strings.SplitN(line, " ", 3)
+	if len(parts) < 3 {
+		return false
+	}
+	name := strings.TrimSuffix(strings.ToLower(parts[2]), ".exe")
+	for _, n := range names {
+		if n == name {
+			return true
+		}
+	}
+	return false
+}
+
 func TestDumpers(t *testing.T) {
 	unixOnly(t)
+	t.Run("both dumpers look for the harness names internal/platform/appclass.json gives", func(t *testing.T) {
+		want := strings.Join(appclassHarnesses(t), " ")
+		sh := regexp.MustCompile(`(?m)^harnesses='([^']*)'$`).FindStringSubmatch(read(t, "dump-hook.sh"))
+		ps := regexp.MustCompile(`(?m)^\$harnesses = @\(([^)]*)\)$`).FindStringSubmatch(read(t, "dump-hook.ps1"))
+		if sh == nil || ps == nil {
+			t.Fatalf("a dumper has no list of harnesses: dump-hook.sh %t, dump-hook.ps1 %t", sh != nil, ps != nil)
+		}
+		for file, list := range map[string]string{"dump-hook.sh": sh[1], "dump-hook.ps1": strings.NewReplacer("'", " ", ",", " ").Replace(ps[1])} {
+			names := strings.Fields(list)
+			sort.Strings(names)
+			if got := strings.Join(names, " "); got != want {
+				t.Errorf("%s looks for %q, appclass.json names %q", file, got, want)
+			}
+		}
+	})
 	for _, d := range dumpers {
 		t.Run(d.name, func(t *testing.T) {
 			base := d.argv(t)
@@ -310,11 +376,141 @@ func TestDumpers(t *testing.T) {
 				return runDir, run(t, t.TempDir(), stdin, []string{secretName + "=" + secretValue}, argv...)
 			}
 			first := func(runDir string) string { return filepath.Join(runDir, "hooks", "000001") }
+			// underHarness runs one hook call as the child of a fake harness
+			// and returns the run directory. The fake is a link to sh with the
+			// harness's name, which is the name ps shows. It reads the
+			// dumper's command from stdin, so the arguments after its -s are
+			// the harness's own; the first can't start with a dash, or sh
+			// takes it for an option of its own.
+			underHarness := func(t *testing.T, name string, args ...string) string {
+				t.Helper()
+				dir := t.TempDir()
+				runDir := filepath.Join(dir, "run")
+				in := filepath.Join(dir, "payload")
+				write(t, in, string(payload))
+				exe := filepath.Join(dir, "bin", name)
+				if err := os.MkdirAll(filepath.Dir(exe), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(need(t, "sh"), exe); err != nil {
+					t.Fatal(err)
+				}
+				var script strings.Builder
+				for _, a := range append(append([]string{}, base...), runDir, "UserPromptSubmit") {
+					script.WriteString(shQuote(a) + " ")
+				}
+				script.WriteString("<" + shQuote(in) + "\nexit $?\n")
+				if r := run(t, dir, []byte(script.String()), nil, append([]string{exe, "-s"}, args...)...); r.code != 0 || r.stderr != "" {
+					t.Fatalf("the fake %s: exit %d, stderr %q", name, r.code, r.stderr)
+				}
+				if _, err := os.Stat(filepath.Join(first(runDir), "stderr")); err == nil {
+					t.Fatalf("the dumper hit an error: %s", read(t, filepath.Join(first(runDir), "stderr")))
+				}
+				return runDir
+			}
+			flags := func(t *testing.T, runDir string) string {
+				t.Helper()
+				return read(t, filepath.Join(first(runDir), "flags"))
+			}
 
 			cases := []struct {
 				name  string
 				check func(t *testing.T)
 			}{
+				{"flags names the harness the hook runs under and finds its print flag, stream-json and --bare", func(t *testing.T) {
+					runDir := underHarness(t, "claude", harnessSentinel, "-p", "--output-format", "stream-json", "--bare")
+					if got, want := flags(t, runDir), "name=claude\nprint=yes\nstream_json=yes\nbare=yes\n"; got != want {
+						t.Fatalf("flags = %q, want %q", got, want)
+					}
+				}},
+				{"--print, and stream-json joined to its flag by =, count too", func(t *testing.T) {
+					runDir := underHarness(t, "claude", harnessSentinel, "--print", "--input-format=stream-json")
+					if got, want := flags(t, runDir), "name=claude\nprint=yes\nstream_json=yes\nbare=no\n"; got != want {
+						t.Fatalf("flags = %q, want %q", got, want)
+					}
+				}},
+				{"flags says no for each flag the harness wasn't started with", func(t *testing.T) {
+					runDir := underHarness(t, "claude", harnessSentinel, "--output-format", "json", "--model", "sonnet")
+					if got, want := flags(t, runDir), "name=claude\nprint=no\nstream_json=no\nbare=no\n"; got != want {
+						t.Fatalf("flags = %q, want %q", got, want)
+					}
+				}},
+				// /proc keeps the arguments apart. On macOS, ps joins them
+				// with spaces, so there an argument holding " -p " counts.
+				{"an argument that only mentions a flag, or comes after --, isn't one", func(t *testing.T) {
+					runDir := underHarness(t, "claude", harnessSentinel+" says -p and --bare", "--", "-p", "--bare", "--output-format", "stream-json")
+					if got, want := flags(t, runDir), "name=claude\nprint=no\nstream_json=no\nbare=no\n"; got != want {
+						t.Fatalf("flags = %q, want %q", got, want)
+					}
+				}},
+				{"codex's exec subcommand is its print mode", func(t *testing.T) {
+					runDir := underHarness(t, "codex", "exec", harnessSentinel)
+					if got, want := flags(t, runDir), "name=codex\nprint=yes\nstream_json=no\nbare=no\n"; got != want {
+						t.Fatalf("flags = %q, want %q", got, want)
+					}
+				}},
+				{"no argument of the harness reaches the run folder", func(t *testing.T) {
+					runDir := underHarness(t, "claude", harnessSentinel, "-p", "--bare", "a prompt that ends in "+harnessSentinel)
+					files := tree(t, runDir)
+					if _, ok := files["hooks/000001/flags"]; !ok {
+						t.Fatalf("no flags file among %v", keys(files))
+					}
+					for path, text := range files {
+						if strings.Contains(text, harnessSentinel) {
+							t.Errorf("%s holds an argument of the harness: %q", path, text)
+						}
+					}
+				}},
+				{"flags is ? for each answer when no parent has a harness's name", func(t *testing.T) {
+					runDir, _ := call(t, payload)
+					names := appclassHarnesses(t)
+					for _, line := range strings.Split(strings.TrimSpace(read(t, filepath.Join(first(runDir), "parents"))), "\n") {
+						if harnessParent(names, line) {
+							t.Skipf("this test runs under a harness: %q", line)
+						}
+					}
+					if got, want := flags(t, runDir), "name=?\nprint=?\nstream_json=?\nbare=?\n"; got != want {
+						t.Fatalf("flags = %q, want %q", got, want)
+					}
+				}},
+				// A harness stops a hook that runs past its timeout. Every file
+				// but flags is written before stdin is read, so a hook stopped
+				// while it waits on stdin, or while flags reads a command line,
+				// keeps the rest.
+				{"a hook cut short while it reads stdin has written every file but flags", func(t *testing.T) {
+					runDir := filepath.Join(t.TempDir(), "run")
+					cmd := exec.Command(base[0], append(append([]string{}, base[1:]...), runDir, "Stop")...)
+					cmd.Dir = t.TempDir()
+					stdin, err := cmd.StdinPipe()
+					if err != nil {
+						t.Fatal(err)
+					}
+					defer stdin.Close()
+					if err := cmd.Start(); err != nil {
+						t.Fatal(err)
+					}
+					dir := first(runDir)
+					for start := time.Now(); ; time.Sleep(20 * time.Millisecond) {
+						if _, err := os.Stat(filepath.Join(dir, "stdin")); err == nil {
+							break
+						}
+						if time.Since(start) > 30*time.Second {
+							_ = cmd.Process.Kill()
+							_ = cmd.Wait()
+							t.Fatal("no stdin file after 30 s")
+						}
+					}
+					_ = cmd.Process.Kill()
+					_ = cmd.Wait()
+					for _, name := range []string{"time", "argv", "env", "cwd", "parents"} {
+						if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
+							t.Errorf("%s is missing: %v", name, err)
+						}
+					}
+					if _, err := os.Stat(filepath.Join(dir, "flags")); err == nil {
+						t.Error("flags was written before stdin was read")
+					}
+				}},
 				{"stdin is saved byte for byte", func(t *testing.T) {
 					runDir, _ := call(t, payload)
 					if got := read(t, filepath.Join(first(runDir), "stdin")); got != string(payload) {
@@ -509,6 +705,37 @@ func TestDumpers(t *testing.T) {
 			}
 			for _, c := range cases {
 				t.Run(c.name, c.check)
+			}
+		})
+	}
+}
+
+// TestSplitCommandLine runs dump-hook.ps1's Split-CommandLine in pwsh on
+// Linux. On Windows the flags file reads a harness's arguments through it
+// from Win32_Process.CommandLine, and ci.yml runs no Windows job.
+func TestSplitCommandLine(t *testing.T) {
+	unixOnly(t)
+	pwsh := need(t, "pwsh")
+	fn := regexp.MustCompile(`(?ms)^function Split-CommandLine\b.*?^}$`).FindString(read(t, "dump-hook.ps1"))
+	if fn == "" {
+		t.Fatal("dump-hook.ps1 has no Split-CommandLine")
+	}
+	cases := []struct {
+		name, line string
+		want       []string
+	}{
+		{"a quoted argument with spaces stays one argument", `"C:\Program Files\Claude\claude.exe" -p "fix the -p flag" --bare`,
+			[]string{`C:\Program Files\Claude\claude.exe`, "-p", "fix the -p flag", "--bare"}},
+		{"backslashes count only before a quote", `claude.exe C:\dir\ "a\"b" "c\\" d`, []string{"claude.exe", `C:\dir\`, `a"b`, `c\`, "d"}},
+		{"tabs and runs of spaces end an argument", "claude.exe\t-p   --output-format  stream-json ", []string{"claude.exe", "-p", "--output-format", "stream-json"}},
+		{"an empty quoted argument is kept", `claude.exe "" -p`, []string{"claude.exe", "", "-p"}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			script := fn + "\nforeach ($w in (Split-CommandLine $env:PAIRTIME_COMMAND_LINE)) { [Console]::Out.Write('[' + $w + ']') }\n"
+			r := run(t, ".", nil, []string{"PAIRTIME_COMMAND_LINE=" + c.line}, pwsh, "-NoProfile", "-NonInteractive", "-Command", script)
+			if want := "[" + strings.Join(c.want, "][") + "]"; r.code != 0 || r.stdout != want {
+				t.Fatalf("exit %d, arguments %s, want %s\n%s", r.code, r.stdout, want, r.stderr)
 			}
 		})
 	}

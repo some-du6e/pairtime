@@ -16,6 +16,12 @@
 #            (?? on macOS) when the process has none. Never command lines,
 #            which can hold prompts
 #   stdin    the bytes on stdin, unchanged
+#   flags    the harness the hook runs under, the nearest parent with a
+#            harness's executable name: name=claude, then print=,
+#            stream_json= and bare=, each yes or no, for a print flag (-p,
+#            --print, --prompt, codex exec), stream-json input or output,
+#            and --bare among its arguments, or ? where it can't tell. The
+#            arguments are read in memory and never written. Written last
 #   stderr   only if something in this script failed
 #
 # LABEL is the hook event the entry was registered for, such as
@@ -130,13 +136,111 @@ ps -A -o pid= -o ppid= -o tty= -o comm= 2>/dev/null | awk -v start="$PPID" '
 		}
 	}' >"$call/parents"
 
-# Last, because it can block until the harness closes the pipe. A terminal
-# on stdin means a person ran this by hand: write an empty file and go.
+# After the quick files, because it can block until the harness closes the
+# pipe. A terminal on stdin means a person ran this by hand: write an empty
+# file and go.
 if [ -t 0 ]; then
 	: >"$call/stdin"
 else
 	cat >"$call/stdin"
 fi
+
+# flags comes after everything else, so a hook the harness cuts short while
+# this reads a command line has written every other file (E-procs-cmdlines).
+# The harness is the nearest parent with one of the executable names that
+# internal/platform/appclass.json gives a harness. Its command line goes
+# through a pipe into awk, which keeps three answers and drops the rest:
+# no argument is ever written. The file is put together first and written
+# at once, so it is whole or missing.
+harnesses='claude codex cursor-agent copilot gemini devin opencode cline'
+found=$(awk -v harnesses="$harnesses" '
+	BEGIN {
+		n = split(harnesses, list, " ")
+		for (i = 1; i <= n; i++) {
+			known[list[i]] = 1
+		}
+	}
+	{
+		name = $0
+		sub(/^[^ ]+ [^ ]+ /, "", name)
+		key = tolower(name)
+		sub(/\.exe$/, "", key)
+		if (key in known) {
+			print $1 " " key " " name
+			exit
+		}
+	}' "$call/parents")
+if [ -n "$found" ]; then
+	# The pid, the name as appclass.json lists it, and the name as parents
+	# shows it, which is the one written.
+	pid=${found%% *}
+	rest=${found#* }
+	key=${rest%% *}
+	name=${rest#* }
+	# One argument per line. On Linux each NUL in /proc/PID/cmdline ends an
+	# argument, and a newline inside one becomes a carriage return, so each
+	# line is one whole argument. macOS has no /proc, and its ps joins the
+	# arguments with spaces, so there they are split at whitespace.
+	answers=$(
+		if [ -r "/proc/$pid/cmdline" ]; then
+			tr '\n\000' '\r\n' <"/proc/$pid/cmdline"
+		else
+			ps -o args= -p "$pid" | awk '{ for (i = 1; i <= NF; i++) print $i }'
+		fi | awk -v name="$key" '
+			BEGIN {
+				print_flag = "no"
+				stream = "no"
+				bare = "no"
+			}
+			NR == 1 {
+				next # the executable
+			}
+			$0 == "--" {
+				exit
+			}
+			{
+				# codex has no print flag; its exec subcommand, or e, is the
+				# first argument that is not an option.
+				if (name == "codex") {
+					if (!subcommand && substr($0, 1, 1) != "-") {
+						subcommand = 1
+						if ($0 == "exec" || $0 == "e") {
+							print_flag = "yes"
+						}
+					}
+				} else if ($0 == "-p" || $0 == "--print" || $0 == "--prompt" || substr($0, 1, 9) == "--prompt=") {
+					print_flag = "yes"
+				}
+				if ($0 == "--bare") {
+					bare = "yes"
+				}
+				if ($0 == "--input-format=stream-json" || $0 == "--output-format=stream-json") {
+					stream = "yes"
+				}
+				if ($0 == "stream-json" && (previous == "--input-format" || previous == "--output-format")) {
+					stream = "yes"
+				}
+				previous = $0
+			}
+			END {
+				if (NR == 0) {
+					# Nothing could be read: the process is gone or hidden.
+					print_flag = stream = bare = "?"
+				}
+				print "print=" print_flag
+				print "stream_json=" stream
+				print "bare=" bare
+			}'
+	)
+	flags="name=$name
+$answers"
+else
+	flags='name=?
+print=?
+stream_json=?
+bare=?'
+fi
+printf '%s\n' "$flags" >"$call/flags"
 
 if [ ! -s "$call/stderr" ]; then
 	rm -f "$call/stderr"

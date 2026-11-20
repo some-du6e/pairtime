@@ -6,7 +6,9 @@
 # It writes the same files in the same format: each call claims the next
 # number under RUN_DIR\hooks\ and writes time, argv, env (names only, never
 # values), cwd, parents (pid, terminal and executable name, never command
-# lines) and stdin (the bytes, unchanged), plus stderr if something here
+# lines), stdin (the bytes, unchanged) and, last, flags (the harness's
+# executable name and yes or no for a print flag, stream-json and --bare
+# among its arguments, never the arguments), plus stderr if something here
 # failed. On Windows it also writes console: attached or none.
 #
 # Register it as one command line, with the bare executable name first and
@@ -45,6 +47,106 @@ function Write-Problem([string]$what) {
     if ($null -ne $call) {
         [System.IO.File]::AppendAllText((Join-Path $call 'stderr'), "$what`n", $utf8)
     }
+}
+
+# The executable names internal/platform/appclass.json gives a harness. The
+# nearest parent with one of them is the harness flags describes.
+$harnesses = @('claude', 'codex', 'cursor-agent', 'copilot', 'gemini', 'devin', 'opencode', 'cline')
+
+# Split-CommandLine splits a Windows command line into its arguments the
+# way CommandLineToArgvW does: whitespace ends an argument outside double
+# quotes, and backslashes count only before a quote. So a quoted argument
+# that holds " -p " stays one argument and isn't taken for the flag.
+function Split-CommandLine([string]$text) {
+    $words = New-Object System.Collections.Generic.List[string]
+    $word = New-Object System.Text.StringBuilder
+    $inWord = $false
+    $quoted = $false
+    $slashes = 0
+    foreach ($c in $text.ToCharArray()) {
+        if ($c -eq [char]'\') {
+            $slashes++
+            $inWord = $true
+            continue
+        }
+        if ($c -eq [char]'"') {
+            # 2n backslashes before a quote are n backslashes, and the quote
+            # opens or closes; 2n+1 are n backslashes and a literal quote.
+            [void]$word.Append([char]'\', [int][Math]::Floor($slashes / 2))
+            if ($slashes % 2 -eq 1) {
+                [void]$word.Append($c)
+            } else {
+                $quoted = -not $quoted
+            }
+            $slashes = 0
+            $inWord = $true
+            continue
+        }
+        if ($slashes -gt 0) {
+            [void]$word.Append([char]'\', $slashes)
+            $slashes = 0
+        }
+        if (-not $quoted -and ($c -eq [char]' ' -or $c -eq [char]"`t")) {
+            if ($inWord) {
+                $words.Add($word.ToString())
+                [void]$word.Clear()
+                $inWord = $false
+            }
+            continue
+        }
+        [void]$word.Append($c)
+        $inWord = $true
+    }
+    if ($slashes -gt 0) {
+        [void]$word.Append([char]'\', $slashes)
+    }
+    if ($inWord) {
+        $words.Add($word.ToString())
+    }
+    return ,$words.ToArray()
+}
+
+# Get-Answers returns the print, stream_json and bare lines of flags for a
+# harness whose name, as appclass.json lists it, is $key, from its
+# arguments, the executable first. With none to read, each answer is ?.
+function Get-Answers([string]$key, [string[]]$words) {
+    if ($null -eq $words -or $words.Count -eq 0) {
+        return "print=?`nstream_json=?`nbare=?`n"
+    }
+    $print = 'no'
+    $stream = 'no'
+    $bare = 'no'
+    $subcommand = $false
+    $previous = ''
+    for ($i = 1; $i -lt $words.Count; $i++) {
+        $a = [string]$words[$i]
+        if ($a -ceq '--') {
+            break
+        }
+        if ($key -eq 'codex') {
+            # codex has no print flag; its exec subcommand, or e, is the
+            # first argument that isn't an option.
+            if (-not $subcommand -and -not $a.StartsWith('-', [StringComparison]::Ordinal)) {
+                $subcommand = $true
+                if ($a -ceq 'exec' -or $a -ceq 'e') {
+                    $print = 'yes'
+                }
+            }
+        } elseif ($a -ceq '-p' -or $a -ceq '--print' -or $a -ceq '--prompt' -or $a.StartsWith('--prompt=', [StringComparison]::Ordinal)) {
+            $print = 'yes'
+        }
+        if ($a -ceq '--bare') {
+            $bare = 'yes'
+        }
+        if ($a -ceq '--input-format=stream-json' -or $a -ceq '--output-format=stream-json') {
+            $stream = 'yes'
+        }
+        if ($a -ceq 'stream-json' -and ($previous -ceq '--input-format' -or $previous -ceq '--output-format')) {
+            $stream = 'yes'
+        }
+        $previous = $a
+    }
+    return "print=$print`nstream_json=$stream`nbare=$bare`n"
 }
 
 try {
@@ -127,8 +229,9 @@ try {
     $chain = New-Object System.Collections.Generic.List[string]
     $byId = @{}
     if ($onWindows) {
-        # One CIM query, then walk it. Name is the executable's file name;
-        # CommandLine is never read.
+        # One CIM query, then walk it. Name is the executable's file name.
+        # CommandLine isn't read here: flags, at the end, reads the
+        # harness's alone.
         foreach ($p in Get-CimInstance -ClassName Win32_Process -Property ProcessId, ParentProcessId, Name) {
             $byId[[int]$p.ProcessId] = @{ Parent = [int]$p.ParentProcessId; Tty = '?'; Name = [string]$p.Name }
         }
@@ -181,8 +284,8 @@ if ($onWindows) {
     }
 }
 
-# Last, because it can block until the harness closes the pipe. Raw bytes,
-# so the console code page can't change a character.
+# After the quick files, because it can block until the harness closes the
+# pipe. Raw bytes, so the console code page can't change a character.
 try {
     $stdinPath = Join-Path $call 'stdin'
     if ([Console]::IsInputRedirected) {
@@ -198,6 +301,67 @@ try {
     }
 } catch {
     Write-Problem "stdin: $($_.Exception.Message)"
+}
+
+# flags comes after everything else, so a hook the harness cuts short while
+# this reads a command line has written every other file (E-procs-cmdlines).
+# The harness is the nearest parent with a name in $harnesses. Its command
+# line is read into memory, from Win32_Process.CommandLine on Windows,
+# /proc/PID/cmdline on Linux and ps on macOS, and Get-Answers keeps three
+# answers from it: no argument is ever written. The file is put together
+# first and written at once, so it is whole or missing.
+try {
+    $flags = "name=?`nprint=?`nstream_json=?`nbare=?`n"
+    foreach ($entry in @($chain)) {
+        $parts = [string]$entry -split ' ', 3
+        if ($parts.Count -lt 3) {
+            continue
+        }
+        $key = $parts[2].ToLowerInvariant()
+        if ($key.EndsWith('.exe', [StringComparison]::Ordinal)) {
+            $key = $key.Substring(0, $key.Length - 4)
+        }
+        if ($harnesses -notcontains $key) {
+            continue
+        }
+        $hid = [int]$parts[0]
+        $words = $null
+        try {
+            if ($onWindows) {
+                $cmd = [string](Get-CimInstance -ClassName Win32_Process -Filter "ProcessId = $hid" -Property CommandLine).CommandLine
+                if ($cmd -ne '') {
+                    $words = Split-CommandLine $cmd
+                }
+            } elseif (Test-Path -LiteralPath "/proc/$hid/cmdline") {
+                # One argument per NUL. The file reports no length, so it is
+                # read to its end rather than by its size.
+                $buffer = New-Object System.IO.MemoryStream
+                $file = [System.IO.File]::OpenRead("/proc/$hid/cmdline")
+                try {
+                    $file.CopyTo($buffer)
+                } finally {
+                    $file.Dispose()
+                }
+                $text = $utf8.GetString($buffer.ToArray()).TrimEnd([char]0)
+                if ($text -ne '') {
+                    $words = $text.Split([char]0)
+                }
+            } else {
+                # macOS: ps joins the arguments with spaces.
+                $text = ([string](& ps -o args= -p $hid 2>$null)).Trim()
+                if ($text -ne '') {
+                    $words = $text -split '\s+'
+                }
+            }
+        } catch {
+            Write-Problem "flags: $($_.Exception.Message)"
+        }
+        $flags = "name=$($parts[2])`n" + (Get-Answers $key $words)
+        break
+    }
+    [System.IO.File]::WriteAllText((Join-Path $call 'flags'), $flags, $utf8)
+} catch {
+    Write-Problem "flags: $($_.Exception.Message)"
 }
 
 exit 0
