@@ -152,6 +152,33 @@ func TestOrigin(t *testing.T) {
 			},
 			// 40 / 1.5 = 26.67 s, rounded to 27.
 			origin: event.OriginHumanPasted, class: event.ClassSubstantive, kind: event.AnchorSubstantivePrompt, lead: 147},
+		{name: "rule 4: a plugin's session.start after a headless hook one doesn't decide a hooked session's origin (DESIGN 5.2)",
+			edit: func(b *tl, p *event.PromptSubmit) {
+				restart(event.EntrypointSDK, event.ParentScriptRuntime, true)(b, p)
+				b.harness(at(1), event.ViaPlugin, "s_1", "p_1", &event.SessionStart{StartKind: event.StartResume,
+					Entrypoint: event.EntrypointCLI, ParentClass: event.ParentTerminalApp, HasTTY: true})
+			},
+			origin: event.OriginHeadless},
+		{name: "rule 6: a plugin's session.start saying ide doesn't make the editor host a hooked terminal session",
+			edit: func(b *tl, p *event.PromptSubmit) {
+				b.harness(at(1), event.ViaPlugin, "s_1", "p_1", &event.SessionStart{StartKind: event.StartResume,
+					Entrypoint: event.EntrypointIDE, ParentClass: event.ParentIDE})
+				b.focus(at(40), event.AppEditor, "p_1")
+			},
+			origin: event.OriginNoInput},
+		{name: "class low_effort: a plugin's stop on a question doesn't make a hooked session's go-ahead an answer",
+			edit: func(b *tl, p *event.PromptSubmit) {
+				p.LenChars, p.TypedLenEst, p.LowEffort = 2, 2, true
+				b.harness(at(20), event.ViaPlugin, "s_1", "p_1", &event.AgentStop{TurnKey: "t_0", StopReason: event.StopQuestion})
+			},
+			origin: event.OriginHumanTyped, class: event.ClassLowEffort, kind: event.AnchorGoAhead, lead: 20},
+		{name: "class low_effort: a plugin's output asking a question doesn't make a hooked session's go-ahead an answer",
+			edit: func(b *tl, p *event.PromptSubmit) {
+				p.LenChars, p.TypedLenEst, p.LowEffort = 2, 2, true
+				b.harness(at(20), event.ViaPlugin, "s_1", "p_1", &event.AgentOutput{TurnKey: "t_0", Words: 30, IsFinal: true,
+					AsksQuestion: true})
+			},
+			origin: event.OriginHumanTyped, class: event.ClassLowEffort, kind: event.AnchorGoAhead, lead: 20},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

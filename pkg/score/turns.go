@@ -221,27 +221,49 @@ func harnessRecord(e event.Event) string {
 	return ""
 }
 
-// buildSessions collects what the records say about each session.
+// buildSessions collects what the records say about each session, in two
+// passes. The first finds the sessions a hook or log reader covers. In
+// those, the second leaves out what a side door says about the session,
+// which is a cross-check there (DESIGN 5.2): a side door's session.start
+// would decide SM 2.2 rules 4 and 5 and whether an IDE hosts the session,
+// and its outputs and stops whether the next prompt answers a question. A
+// side-door record can come before the first hook record, hence the first
+// pass. The session's harness and project come from its first record that
+// counts.
 func (d *deriver) buildSessions() {
 	d.sessions = map[string]*session{}
-	for i, e := range d.recs {
+	for _, e := range d.recs {
 		key := harnessRecord(e)
 		if key == "" {
 			continue
 		}
 		s := d.sessions[key]
 		if s == nil {
-			s = &session{key: key, harness: e.Harness}
+			s = &session{key: key}
 			d.sessions[key] = s
-		}
-		if s.project == "" {
-			s.project = e.ProjectKey
 		}
 		if nativeVia(e.Via) {
 			s.native = true
 		}
+	}
+	seen := map[*session]bool{}
+	for i, e := range d.recs {
+		key := harnessRecord(e)
+		if key == "" {
+			continue
+		}
+		s := d.sessions[key]
 		if e.Via == event.ViaBridge || e.Via == event.ViaBridgeUnverified {
 			s.bridged = true
+		}
+		if s.native && sideDoor(e.Via) {
+			continue
+		}
+		if !seen[s] {
+			seen[s], s.harness = true, e.Harness
+		}
+		if s.project == "" {
+			s.project = e.ProjectKey
 		}
 		switch p := e.Data.(type) {
 		case *event.SessionStart:
