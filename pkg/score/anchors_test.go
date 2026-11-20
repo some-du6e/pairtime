@@ -96,6 +96,55 @@ func TestSideDoorCrossChecks(t *testing.T) {
 	})
 }
 
+// TestPermissionReports checks that the reports of one permission answer
+// from two code paths are one act (SM 1.2, DESIGN 6.4).
+func TestPermissionReports(t *testing.T) {
+	type report struct {
+		via      event.Via
+		req, ans int64 // milliseconds after base
+	}
+	cases := []struct {
+		name         string
+		reports      []report
+		anchors      int
+		corroborated bool
+	}{
+		{"the hook's and Claude's OTel span's reports of one answer, a few milliseconds apart, are one PA anchor, corroborated",
+			[]report{{event.ViaHook, 43_120, 58_480}, {event.ViaOTel, 43_118, 58_476}}, 1, true},
+		{"two answers whose times differ by PA_MIN_LATENCY_MS are two acts",
+			[]report{{event.ViaHook, 43_000, 50_000}, {event.ViaHook, 43_300, 50_300}}, 2, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			b := newTL(false)
+			terminalSession(b)
+			b.press(atMS(55_500))
+			var first event.Event
+			for i, r := range c.reports {
+				e := b.harness(atMS(r.ans), r.via, "s_1", "p_1", &event.AgentPermission{RequestedAt: atMS(r.req),
+					AnsweredAt: atMS(r.ans), Decision: event.DecisionAccept, DecidedBy: event.DecidedByUser})
+				if i == 0 {
+					first = e
+				}
+			}
+			b.samples(at(0), at(90))
+			d := b.run(t, Device{})
+			var pas []Anchor
+			for _, a := range d.Anchors {
+				if a.Kind == event.AnchorPermissionAnswer {
+					pas = append(pas, a)
+				}
+			}
+			if len(pas) != c.anchors {
+				t.Fatalf("%d PA anchors %+v, want %d", len(pas), pas, c.anchors)
+			}
+			if c.corroborated && (pas[0].ID != first.EventID || !pas[0].Corroborated) {
+				t.Errorf("anchor %+v, want the hook's, corroborated", pas[0])
+			}
+		})
+	}
+}
+
 // actCase is one human act other than a prompt, at 58 s, with input at
 // 55.5 s unless input says otherwise.
 type actCase struct {

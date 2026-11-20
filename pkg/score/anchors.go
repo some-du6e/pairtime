@@ -197,6 +197,14 @@ func (d *deriver) eventAnchors() {
 	// its most trusted record, the first in record order on a tie.
 	groups := map[actKey][]int{}
 	var order []actKey
+	// perms holds each session's permission groups. The PermissionRequest
+	// hook stamps arrival times and Claude's tool.blocked_on_user span its
+	// own clock (SM 1.2), so two reports of one answer differ by a few
+	// milliseconds. Records whose request and answer times are both within
+	// PA_MIN_LATENCY_MS of a group's are that answer: two answers can't be
+	// that close, since a person takes at least that long over each (SM
+	// 2.3).
+	perms := map[string][]actKey{}
 	for i, e := range d.recs {
 		var k actKey
 		switch p := e.Data.(type) {
@@ -218,8 +226,19 @@ func (d *deriver) eventAnchors() {
 			// paths cover the session (DESIGN 5.7).
 			continue
 		}
+		if k.kind == event.KindAgentPermission {
+			for _, g := range perms[k.sess] {
+				if absDiff(g.from, k.from) < d.r.paMinLatencyMS && absDiff(g.to, k.to) < d.r.paMinLatencyMS {
+					k = g
+					break
+				}
+			}
+		}
 		if _, ok := groups[k]; !ok {
 			order = append(order, k)
+			if k.kind == event.KindAgentPermission {
+				perms[k.sess] = append(perms[k.sess], k)
+			}
 		}
 		groups[k] = append(groups[k], i)
 	}
@@ -233,6 +252,14 @@ func (d *deriver) eventAnchors() {
 		}
 		d.harnessAnchor(best, pos)
 	}
+}
+
+// absDiff returns |a - b|.
+func absDiff(a, b int64) int64 {
+	if a < b {
+		return b - a
+	}
+	return a - b
 }
 
 // harnessAnchor makes the anchor of a harness act, if it passes its
