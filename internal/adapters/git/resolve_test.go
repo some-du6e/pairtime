@@ -423,6 +423,15 @@ func TestResolve(t *testing.T) {
 				if got, err := res.Resolve(ctx, cloneB); err != nil || got.Project != lb.Project {
 					t.Errorf("a clone of B is in %s, %v; want B's %s", got.Project, err, lb.Project)
 				}
+				// After a restart, both A's entry and B's list B's root.
+				again := g.resolver(res.Map(), Excludes{})
+				for _, c := range []struct{ dir, want string }{{cloneA, la.Project}, {cloneB, lb.Project}} {
+					fresh := filepath.Join(t.TempDir(), "again")
+					g.git(filepath.Dir(fresh), "clone", "-q", c.dir, fresh)
+					if got, err := again.Resolve(ctx, fresh); err != nil || got.Project != c.want {
+						t.Errorf("after a restart a clone of %s is in %s, %v; want %s", c.dir, got.Project, err, c.want)
+					}
+				}
 			},
 		},
 		{

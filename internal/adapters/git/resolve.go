@@ -173,8 +173,21 @@ func NewResolver(opts ResolverOptions, m ProjectMap) (*Resolver, error) {
 		p.Roots = slices.Clone(p.Roots)
 		p.Aliases = slices.Clone(p.Aliases)
 		r.repos[foldPath(p.CommonDir)] = &p
-		for _, root := range p.Roots {
-			r.byRoot[root] = p.Key
+	}
+	// A root can be listed by several repos: a project that gained one,
+	// through a merge of another project's history, lists it beside the
+	// project it came from. Each root goes to the project its own roots
+	// key first, then to the first that lists it, in the map's order.
+	for _, owner := range []bool{true, false} {
+		for _, p := range m.Repos {
+			if len(p.Roots) == 0 || (rootsKey(r.secret, p.Roots) == p.Key) != owner {
+				continue
+			}
+			for _, root := range p.Roots {
+				if _, taken := r.byRoot[root]; !taken {
+					r.byRoot[root] = p.Key
+				}
+			}
 		}
 	}
 	return r, nil
