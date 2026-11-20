@@ -92,26 +92,42 @@ func (fl *focusLine) changed(from, to int64) bool {
 // whose pieces of focus in it add up to the most time, the one to have
 // focus first on a tie. A window's focus comes in pieces when another
 // window took it in between, or when the agent wrote it again because a
-// session started or ended under it. Of the winning window's pieces it
-// returns the longest, the earliest on a tie, whose hosted sessions are
-// the slot's.
+// session started or ended under it. Of the winning window's hosted sets
+// it takes the one whose pieces add up to the most time, again the first
+// on a tie (E-6.6-codes), and returns that set's first piece, whose hosted
+// sessions are the slot's. Focus before the first os.focus record, noFocus,
+// is a window of its own.
 func (fl *focusLine) longest(a, b int64) *focusRec {
+	type hostedSet struct {
+		first *focusRec
+		total int64
+	}
 	type window struct {
-		first, best *focusRec
-		total, most int64
+		first *focusRec
+		total int64
+		sets  []*hostedSet
 	}
 	var wins []*window
 	add := func(f *focusRec, n int64) {
-		for _, w := range wins {
-			if w.first.sameWindow(f) {
-				w.total += n
-				if n > w.most {
-					w.best, w.most = f, n
-				}
+		var w *window
+		for _, x := range wins {
+			if (x.first == noFocus) == (f == noFocus) && x.first.sameWindow(f) {
+				w = x
+				break
+			}
+		}
+		if w == nil {
+			w = &window{first: f}
+			wins = append(wins, w)
+		}
+		w.total += n
+		for _, hs := range w.sets {
+			if sameSet(hs.first.hosted, f.hosted) {
+				hs.total += n
 				return
 			}
 		}
-		wins = append(wins, &window{first: f, best: f, total: n, most: n})
+		w.sets = append(w.sets, &hostedSet{first: f, total: n})
 	}
 	cur, from := fl.at(a), a
 	i := sort.Search(len(fl.recs), func(i int) bool { return fl.recs[i].t > a })
@@ -133,5 +149,30 @@ func (fl *focusLine) longest(a, b int64) *focusRec {
 			win = w
 		}
 	}
-	return win.best
+	best := win.sets[0]
+	for _, hs := range win.sets[1:] {
+		if hs.total > best.total {
+			best = hs
+		}
+	}
+	return best.first
+}
+
+// sameSet reports whether two lists of session keys hold the same keys, in
+// whatever order.
+func sameSet(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for _, k := range a {
+		if !slices.Contains(b, k) {
+			return false
+		}
+	}
+	for _, k := range b {
+		if !slices.Contains(a, k) {
+			return false
+		}
+	}
+	return true
 }

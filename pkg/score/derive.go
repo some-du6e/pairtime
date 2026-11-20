@@ -33,9 +33,6 @@ type deriver struct {
 	buckets  map[string]*bucket
 	fills    []Fill
 	credits  []Credit
-	// noInputLeads are the leads the no-input prompts would have had, had a
-	// person typed them (SM 2.2 rule 8, 5.2's X.no_input).
-	noInputLeads []projLead
 	// lookups are the browser and chat-app runs, whose credit waits for
 	// their end (Step).
 	lookups []span
@@ -70,12 +67,6 @@ func derive(r rules, dev Device, recs []event.Event, now int64) (Derived, []span
 	out.Flags = d.flags
 	slices.SortFunc(out.Flags, flagCmp)
 	return out, d.lookups
-}
-
-// projLead is a lead's span in one project.
-type projLead struct {
-	proj string
-	span
 }
 
 // Flag is a review flag a record raised (SM 8.7, DESIGN 5.4). Flags change

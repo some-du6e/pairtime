@@ -357,7 +357,7 @@ func TestCredit(t *testing.T) {
 			want: []secondsWant{{450, 465, map[event.Reason]int64{rP: 10, rSUP: 5}}},
 		},
 		{
-			name: "SM 5.2: the seconds a no-input prompt's lead would have covered are X.no_input, and its run X.agent_only",
+			name: "SM 5.2: a no-input prompt opens no window, and while its turn runs alone the project's seconds are X.no_input",
 			build: func(b *tl) {
 				terminalSession(b)
 				// No input in the KEYS_PRE_S before the prompt at 60 s, as
@@ -369,8 +369,8 @@ func TestCredit(t *testing.T) {
 				b.samples(at(0), at(300))
 			},
 			want: []secondsWant{
-				{0, 60, map[event.Reason]int64{event.ReasonNoInput: 60}},
-				{60, 120, map[event.Reason]int64{xAgent: 60}},
+				{0, 60, map[event.Reason]int64{xNoAnch: 60}},
+				{60, 120, map[event.Reason]int64{event.ReasonNoInput: 60}},
 				{120, 135, map[event.Reason]int64{xNoAnch: 15}},
 			},
 		},
