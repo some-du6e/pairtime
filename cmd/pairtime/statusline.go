@@ -9,7 +9,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"slices"
 	"time"
 
 	"github.com/some-du6e/pairtime/internal/coach/text"
@@ -113,21 +112,15 @@ func runStatusline(args []string, stdout, stderr io.Writer) (code int) {
 
 // buildStatus sums the day's projects into the line's numbers.
 func buildStatus(r dayReply) statusJSON {
-	out := statusJSON{V: jsonVersion, Date: r.Date, Calibrating: r.Shadow, Agents: []agentJSON{}}
 	you := 0.0
 	byHarness := map[event.Harness]float64{}
 	for _, p := range r.Projects {
 		you += p.CreditedS
 		for h, s := range p.AgentOnlyByHarness {
-			if s > 0 {
-				byHarness[h] += s
-			}
+			byHarness[h] += s
 		}
 	}
-	for h, s := range byHarness {
-		out.Agents = append(out.Agents, agentJSON{Harness: h, Name: text.Agent(h), S: s})
-	}
-	slices.SortFunc(out.Agents, func(a, b agentJSON) int { return most(a.S, b.S, string(a.Harness), string(b.Harness)) })
+	out := statusJSON{V: jsonVersion, Date: r.Date, Calibrating: r.Shadow, Agents: agentList(byHarness)}
 	if !r.Shadow {
 		out.YouS = &you
 	}

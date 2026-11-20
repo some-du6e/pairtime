@@ -28,7 +28,8 @@ const jsonVersion = 1
 
 // viewTimeout bounds how long today and recap wait for the agent. A person
 // is waiting, but the agent answers from small files it already keeps.
-const viewTimeout = 3 * time.Second
+// Tests shorten it.
+var viewTimeout = 3 * time.Second
 
 // viewZone is the time zone the views give times of day in. Tests set it.
 var viewZone = func() *time.Location { return time.Local }
@@ -112,12 +113,7 @@ func buildProject(key, name string, t tally, calibrating bool) projectJSON {
 		}
 		p.You = you
 	}
-	for h, s := range t.AgentOnlyByHarness {
-		if s > 0 {
-			p.Agents = append(p.Agents, agentJSON{Harness: h, Name: text.Agent(h), S: s})
-		}
-	}
-	slices.SortFunc(p.Agents, func(a, b agentJSON) int { return most(a.S, b.S, string(a.Harness), string(b.Harness)) })
+	p.Agents = agentList(t.AgentOnlyByHarness)
 	for r, s := range t.Uncredited {
 		if s <= 0 || text.IsAgentTime(r) {
 			continue
@@ -131,6 +127,26 @@ func buildProject(key, name string, t tally, calibrating bool) projectJSON {
 	}
 	slices.SortFunc(p.Other, func(a, b otherJSON) int { return most(a.S, b.S, string(a.Reason), string(b.Reason)) })
 	return p
+}
+
+// agentList lists each agent's time on its own, the most first. Time the
+// agent files under no harness is your agent's.
+func agentList(byHarness map[event.Harness]float64) []agentJSON {
+	sum := map[event.Harness]float64{}
+	for h, s := range byHarness {
+		if s > 0 {
+			if h == event.HarnessNone || h == "" {
+				h = event.HarnessOther
+			}
+			sum[h] += s
+		}
+	}
+	out := make([]agentJSON, 0, len(sum))
+	for h, s := range sum {
+		out = append(out, agentJSON{Harness: h, Name: text.Agent(h), S: s})
+	}
+	slices.SortFunc(out, func(a, b agentJSON) int { return most(a.S, b.S, string(a.Harness), string(b.Harness)) })
+	return out
 }
 
 // most orders by seconds, the most first, then by code.

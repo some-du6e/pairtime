@@ -1,0 +1,91 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/some-du6e/pairtime/main/docs/schema/cli-today.schema.json",
+  "title": "pairtime today --json",
+  "description": "One local day's time for each project, as `pairtime today --json` prints it (docs/PLAN.md WP-CO0; DESIGN 3.8). The CLI reads it from the running agent's GET /v1/days/{date}. Seconds are credited seconds and may be halves. you is your time: the credited seconds (SM 5.1), absent from every project while display.shadow is on, when the day is calibrating (DESIGN 6.7). agents is each agent's time on its own: the seconds its turns ran that nothing credited (SM 5.3's agent_only_s). other is the rest of the uncredited time by reason (SM 5.2), without X.agent_only and X.automated, which are the agent's time (approach-teen.md D5). Each words field is the text internal/coach/text gives the code. cmd/pairtime's tests check `pairtime today --json` against this file.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["v", "date", "calibrating", "projects"],
+  "properties": {
+    "v": {"const": 1, "description": "The version of this format."},
+    "date": {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$", "description": "The local day, in the profile's time zone."},
+    "calibrating": {"type": "boolean", "description": "display.shadow: while true, no project has you."},
+    "projects": {
+      "type": "array",
+      "description": "Every project with time on the day: the most of your time first, then the most agent time, then by name. While calibrating, your time doesn't decide the order.",
+      "items": {"$ref": "#/$defs/project"}
+    }
+  },
+  "if": {"properties": {"calibrating": {"const": true}}},
+  "then": {"properties": {"projects": {"items": {"not": {"required": ["you"]}}}}},
+  "else": {"properties": {"projects": {"items": {"required": ["you"]}}}},
+  "$defs": {
+    "key": {"type": "string", "pattern": "^[A-Za-z0-9_-]{1,128}$", "description": "An opaque key, as in event.schema.json."},
+    "seconds": {"type": "number", "minimum": 0},
+    "words": {"type": "string", "minLength": 1},
+    "project": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["project", "name", "agents", "other"],
+      "properties": {
+        "project": {"$ref": "#/$defs/key"},
+        "name": {"type": "string", "description": "The project's display name from the local project map, or empty when the agent has none. It never leaves the device."},
+        "you": {"$ref": "#/$defs/you"},
+        "agents": {"type": "array", "items": {"$ref": "#/$defs/agent"}, "description": "The most first."},
+        "other": {"type": "array", "items": {"$ref": "#/$defs/other"}, "description": "The most first."}
+      }
+    },
+    "you": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["s", "pending_s", "kinds", "levels"],
+      "properties": {
+        "s": {"$ref": "#/$defs/seconds", "description": "Your time: the credited seconds."},
+        "pending_s": {"$ref": "#/$defs/seconds", "description": "The part of s in minutes still pending (DESIGN 3.7), which may change."},
+        "kinds": {"type": "array", "items": {"$ref": "#/$defs/kind"}, "description": "s by activity kind, the most first."},
+        "levels": {"type": "array", "items": {"$ref": "#/$defs/level"}, "description": "s by evidence level, in the order A, B, C. Level C counts only on the teen's own dashboard (DESIGN 6.2 D11)."}
+      }
+    },
+    "kind": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "words", "s"],
+      "properties": {
+        "kind": {"enum": ["prompting", "reading_output", "supervising", "reviewing", "testing", "debugging", "hand_edit", "lookup"], "description": "SM 5.1's activity kinds."},
+        "words": {"$ref": "#/$defs/words"},
+        "s": {"$ref": "#/$defs/seconds"}
+      }
+    },
+    "level": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["level", "words", "s", "share"],
+      "properties": {
+        "level": {"enum": ["A", "B", "C"], "description": "The evidence level (SM 5.1, DESIGN 6.4)."},
+        "words": {"$ref": "#/$defs/words"},
+        "s": {"$ref": "#/$defs/seconds"},
+        "share": {"type": "integer", "minimum": 0, "maximum": 100, "description": "The level's part of you.s in whole percent; a project's shares add up to 100."}
+      }
+    },
+    "agent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["harness", "name", "s"],
+      "properties": {
+        "harness": {"enum": ["claude_code", "cursor", "copilot", "codex", "gemini", "devin", "cline", "opencode", "other"]},
+        "name": {"$ref": "#/$defs/words", "description": "The agent's name, such as Claude."},
+        "s": {"$ref": "#/$defs/seconds", "description": "Its time on its own."}
+      }
+    },
+    "other": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reason", "words", "s"],
+      "properties": {
+        "reason": {"enum": ["X.absent", "X.other_focus", "X.ambiguous", "X.no_anchor", "X.no_input", "X.reroll", "X.rewrite_loop", "X.same_error", "X.autopilot", "X.noprog", "X.lookup_cap", "X.bucket_cap", "X.day_cap"], "description": "SM 5.2's uncredited reasons, in its order, without X.agent_only and X.automated."},
+        "words": {"$ref": "#/$defs/words"},
+        "s": {"$ref": "#/$defs/seconds"}
+      }
+    }
+  }
+}

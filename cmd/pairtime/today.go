@@ -121,7 +121,7 @@ func writeToday(w io.Writer, d todayJSON, today bool) {
 		if today {
 			fmt.Fprintln(w, text.Phrase(text.KeyNothingToday))
 		} else {
-			fmt.Fprintln(w, text.Phrase(text.KeyNothingOn, "date", dayTitle(d.Date)))
+			fmt.Fprintln(w, text.Phrase(text.KeyNothingOn))
 		}
 		return
 	}

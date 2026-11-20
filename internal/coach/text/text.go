@@ -123,7 +123,6 @@ var placeholders = map[Key][]string{
 	KeyAgent:        {"agent", "time"},
 	KeyLevelCNote:   {"time"},
 	KeyPendingNote:  {"time"},
-	KeyNothingOn:    {"date"},
 	KeySessionLast:  {"project"},
 	KeySessionOpen:  {"project"},
 	KeySessionSpan:  {"day", "start", "end"},

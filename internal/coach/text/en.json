@@ -53,7 +53,7 @@
     "level_c_note": "{time} of it is level C: it counts only on your own dashboard",
     "pending_note": "{time} of it may still change",
     "nothing_today": "Nothing tracked yet today.",
-    "nothing_on": "Nothing tracked on {date}.",
+    "nothing_on": "Nothing tracked this day.",
     "session_last": "Your last session: {project}",
     "session_open": "Your session so far: {project}",
     "session_span": "{day}, {start} to {end}",
