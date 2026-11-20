@@ -260,19 +260,20 @@ jobs:
         if: ${{ !cancelled() }}
         run: |
           # Every module pairtime's packages and tests import, for each of
-          # the seven targets above and for the desktop tests, must be MIT,
-          # BSD-2-Clause, BSD-3-Clause, Apache-2.0 or ISC (DESIGN 3.12).
-          # licensecheck exits 1 on a bad license.
+          # the seven targets above, for the desktop tests and for
+          # nightly.yml's -race run, must be MIT, BSD-2-Clause, BSD-3-Clause,
+          # Apache-2.0 or ISC (DESIGN 3.12). licensecheck exits 1 on a bad
+          # license.
           tool="$RUNNER_TEMP/licensecheck"
           go build -o "$tool" ./tools/ci/licensecheck
           "$tool"
 
           # The check must keep catching a GPL-3.0 module pulled in through a
-          # replace, whether a package imports it (bad) or only a desktop
-          # test does (desktop), and keep passing an MIT one
-          # (testdata/licensecheck).
+          # replace, whether a package imports it (bad), only a desktop test
+          # does (desktop) or only a race-tagged test does (race), and keep
+          # passing an MIT one (testdata/licensecheck).
           "$tool" -C testdata/licensecheck/good
-          for seeded in bad desktop; do
+          for seeded in bad desktop race; do
             set +e
             out=$("$tool" -C "testdata/licensecheck/$seeded" 2>&1)
             code=$?

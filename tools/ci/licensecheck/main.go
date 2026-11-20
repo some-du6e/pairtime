@@ -11,7 +11,10 @@
 // and so does a module swapped in with a replace directive. The linux
 // targets are listed a second time with -tags desktop, the way
 // platform.yml builds the *_desktop_test.go tests (AGENTS.md), so a module
-// only a desktop test imports counts too. For each package from another
+// only a desktop test imports counts too. linux/amd64 is listed a third
+// time with -race and CGO_ENABLED=1, the way nightly.yml builds its tests,
+// so a module imported only from a file under //go:build race or cgo
+// counts as well. For each package from another
 // module it reads the license files in the package's directory and every
 // directory above it up to the module root, and the module root must have
 // one. Every license file found must be one of the allowed licenses (see
@@ -130,14 +133,14 @@ func run(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintf(stderr, "licensecheck: target %q isn't GOOS/GOARCH\n", target)
 			return 2
 		}
-		for _, tags := range tagSets(goos) {
-			p, err := listPackages(*dir, goos, goarch, tags)
+		for _, v := range variants(goos, goarch) {
+			p, err := listPackages(*dir, goos, goarch, v)
 			if err != nil {
 				fmt.Fprintf(stderr, "licensecheck: %v\n", err)
 				return 2
 			}
 			pkgs = append(pkgs, p...)
-			builds = append(builds, build(goos, goarch, tags))
+			builds = append(builds, build(goos, goarch, v))
 		}
 	}
 	verdicts := check(pkgs)
@@ -160,43 +163,66 @@ func run(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
-// tagSets returns the build tags a target is listed with, "" being the
-// default build. platform.yml's Linux job runs the *_desktop_test.go tests
-// with -tags desktop, and those files are under //go:build linux && desktop
-// (AGENTS.md), so linux targets are listed both ways. Listing the default
-// build too keeps any file under //go:build !desktop in the check.
-func tagSets(goos string) []string {
-	if goos == "linux" {
-		return []string{"", "desktop"}
-	}
-	return []string{""}
+// variant is one way a target's packages are listed.
+type variant struct {
+	tags string // the -tags value; "" is the default build
+	race bool   // -race with CGO_ENABLED=1, which sets the race and cgo tags
 }
 
-// build names one listing in messages: linux/amd64, or
-// linux/amd64 -tags desktop.
-func build(goos, goarch, tags string) string {
-	if tags == "" {
-		return goos + "/" + goarch
+// variants returns the ways a target is listed. Every target is listed the
+// way it ships. platform.yml's Linux job runs the *_desktop_test.go tests with
+// -tags desktop, and those files are under //go:build linux && desktop
+// (AGENTS.md), so linux targets are listed with the tag too; listing the
+// default build as well keeps any file under //go:build !desktop in the
+// check. nightly.yml runs go test -race with CGO_ENABLED=1 on a linux/amd64
+// runner (AGENTS.md's one exception to the cgo rule), so linux/amd64 is
+// also listed that way.
+func variants(goos, goarch string) []variant {
+	vs := []variant{{}}
+	if goos == "linux" {
+		vs = append(vs, variant{tags: "desktop"})
+		if goarch == "amd64" {
+			vs = append(vs, variant{race: true})
+		}
 	}
-	return goos + "/" + goarch + " -tags " + tags
+	return vs
+}
+
+// build names one listing in messages: linux/amd64,
+// linux/amd64 -tags desktop or linux/amd64 -race.
+func build(goos, goarch string, v variant) string {
+	s := goos + "/" + goarch
+	if v.tags != "" {
+		s += " -tags " + v.tags
+	}
+	if v.race {
+		s += " -race"
+	}
+	return s
 }
 
 // listPackages lists every package the module in dir builds or tests with
-// for one target and set of build tags, with its module.
-func listPackages(dir, goos, goarch, tags string) ([]goPackage, error) {
+// for one target and variant, with its module.
+func listPackages(dir, goos, goarch string, v variant) ([]goPackage, error) {
 	args := []string{"list", "-deps", "-test", "-json=ImportPath,Dir,Standard,Module"}
-	if tags != "" {
-		args = append(args, "-tags="+tags)
+	if v.tags != "" {
+		args = append(args, "-tags="+v.tags)
+	}
+	cgo := "0"
+	if v.race {
+		// The race detector needs cgo everywhere but macOS.
+		args = append(args, "-race")
+		cgo = "1"
 	}
 	cmd := exec.Command("go", append(args, "./...")...)
 	cmd.Dir = dir
 	// GOWORK=off: a stray go.work must not change the module graph.
-	cmd.Env = append(os.Environ(), "GOOS="+goos, "GOARCH="+goarch, "CGO_ENABLED=0", "GOWORK=off")
+	cmd.Env = append(os.Environ(), "GOOS="+goos, "GOARCH="+goarch, "CGO_ENABLED="+cgo, "GOWORK=off")
 	var out, errOut bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = &errOut
 	if err := cmd.Run(); err != nil {
-		return nil, fmt.Errorf("go list for %s in %s: %v\n%s", build(goos, goarch, tags), dir, err, errOut.String())
+		return nil, fmt.Errorf("go list for %s in %s: %v\n%s", build(goos, goarch, v), dir, err, errOut.String())
 	}
 	var pkgs []goPackage
 	dec := json.NewDecoder(&out)
