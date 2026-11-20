@@ -88,11 +88,38 @@ jobs:
         if: ${{ !cancelled() }}
         run: python3 -I testdata/upstream/check.py
 
+      # pkg/redact embeds gitleaks' rules as JSON converted from the pinned
+      # upstream config in pkg/redact/rules. This fails when the JSON isn't
+      # exactly what the converter writes from that config.
+      - name: Redaction rules
+        run: python3 -I pkg/redact/rules/convert.py --check
+
       - name: go vet
         run: go vet ./...
 
       - name: go test
         run: go test ./...
+
+      - name: IPC against a second user, as root
+        if: ${{ !cancelled() }}
+        # The agent's socket must refuse another uid (docs/PLAN.md, WP-AG2).
+        # Acting as a second user takes root, so go test skips TestOtherUser,
+        # and this step runs it with sudo; it runs its second user as nobody.
+        run: |
+          go test -c -o "$RUNNER_TEMP/ipc.test" ./internal/agent/ipc
+          set +e
+          out=$(sudo "$RUNNER_TEMP/ipc.test" -test.run '^TestOtherUser$' -test.count=1 -test.v 2>&1)
+          code=$?
+          set -e
+          echo "$out"
+          if [ "$code" -ne 0 ]; then
+            exit "$code"
+          fi
+          # A skip would pass without checking anything.
+          if ! grep -q '^--- PASS: TestOtherUser ' <<<"$out"; then
+            echo "::error::TestOtherUser didn't run as root"
+            exit 1
+          fi
 
       - name: Cross-compile
         run: |
@@ -156,6 +183,55 @@ jobs:
 
       # The checks below run even when an earlier step failed, so one run
       # reports every problem.
+
+      - name: Platform packages for every target
+        # The cross-compile above builds only what cmd/pairtime imports, and
+        # platform code lands before the agent calls it. go vet type-checks a
+        # package and its tests for one GOOS/GOARCH, so this compiles
+        # internal/platform for all seven targets with CGO_ENABLED=0, such as
+        # internal/platform/darwin for darwin/amd64 and darwin/arm64 (WP-OS3).
+        # The Windows and macOS tests themselves run in platform.yml.
+        if: ${{ !cancelled() }}
+        run: |
+          for target in windows/amd64 windows/386 windows/arm64 darwin/amd64 darwin/arm64 linux/amd64 linux/arm64; do
+            echo "go vet ./internal/platform/... for $target"
+            GOOS=${target%/*} GOARCH=${target#*/} go vet ./internal/platform/...
+          done
+
+      - name: HCA sign-in against an independent OIDC server
+        if: ${{ !cancelled() }}
+        # WP-SV2's oracle: pairtimed's Hack Club Auth sign-in, end to end
+        # against navikt/mock-oauth2-server (MIT), an OIDC server nobody on
+        # this project wrote, pinned by digest. Its config gives each client
+        # id the claims one case of TestMockOAuth2Server needs. The test
+        # skips without PAIRTIME_TEST_OIDC_URL, so this step fails unless it
+        # ran and passed.
+        env:
+          PAIRTIME_TEST_OIDC_URL: http://localhost:8080
+          # 6.1.4, 2026-10-28.
+          IMAGE: ghcr.io/navikt/mock-oauth2-server:6.1.4@sha256:647dd8c78a54f0e6fcd58d79c884e612f8f998a0662276f3e1db22e464a50192
+        run: |
+          docker run -d --name oidc -p 8080:8080 \
+            -e JSON_CONFIG_PATH=/config/mock-oauth2-server.json \
+            -v "$PWD/internal/server/auth/testdata:/config:ro" \
+            "$IMAGE" >/dev/null
+          for _ in $(seq 1 60); do
+            if curl -fsS http://localhost:8080/isalive >/dev/null 2>&1; then break; fi
+            sleep 1
+          done
+          set +e
+          out=$(go test -count=1 -v -run '^TestMockOAuth2Server$' ./internal/server/auth 2>&1)
+          code=$?
+          set -e
+          grep -E -- '--- (PASS|FAIL|SKIP)' <<<"$out" || true
+          if [ "$code" -ne 0 ] || ! grep -q -- '--- PASS: TestMockOAuth2Server ' <<<"$out" || grep -q -- '--- SKIP' <<<"$out"; then
+            echo "$out"
+            echo "::group::mock-oauth2-server log"
+            docker logs oidc 2>&1 | tail -n 200
+            echo "::endgroup::"
+            echo "::error::TestMockOAuth2Server didn't run and pass against mock-oauth2-server"
+            exit 1
+          fi
 
       - name: Module licenses
         if: ${{ !cancelled() }}
