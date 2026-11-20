@@ -17,7 +17,8 @@ import (
 const minuteMS = 60_000
 
 // bucketMeta is what every bucket of one Step says about who scored it and
-// how.
+// how: v is the scoring version, pkg/score's VERSION, and params the hash
+// of the parameter table the Step ran with (SM 5.1, 7.6; DESIGN 4.3).
 type bucketMeta struct {
 	v, params, device string
 }

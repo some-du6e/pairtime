@@ -28,24 +28,37 @@ type Tally struct {
 	// change (DESIGN 3.7).
 	CreditedS float64 `json:"credited_s"`
 	PendingS  float64 `json:"pending_s"`
-	// CreditedByKind and CreditedByEvidence each split CreditedS, by
-	// activity kind (SM 5.1) and by evidence level (DESIGN 6.4). Only kinds
-	// and levels with credit are in them.
+	// CreditedByKind, CreditedByEvidence and CreditedByReason each split
+	// CreditedS: by activity kind (SM 5.1), by evidence level (DESIGN 6.4)
+	// and by SM 5.2's credit code, with its ~r and +restored suffixes
+	// kept, since SM 5.3 rolls credit up by reason at every level and a
+	// kind lumps reasons together (reviewing holds PA and INT, which SM 5.4
+	// counts as AI-assisted, with NAV and G). Only kinds, levels and codes
+	// with credit are in them.
 	CreditedByKind     map[event.Activity]float64 `json:"credited_by_kind"`
 	CreditedByEvidence map[event.Evidence]float64 `json:"credited_by_evidence"`
-	// AgentOnlyS is SM 5.3's agent_only_s: the seconds a turn in the
-	// project ran that the project wasn't credited, whatever their reason
-	// code. They aren't the X.agent_only seconds: in SM 6.4 all 23,180 of
-	// them are X.absent.
+	CreditedByReason   map[event.Reason]float64   `json:"credited_by_reason"`
+	// AgentOnlyS is SM 5.3's agent_only_s for the project: the seconds
+	// this project's agent turns ran that this project didn't credit,
+	// including seconds credited to another project (SM 6.3;
+	// testdata/timelines/6.3 agent_only_s.<project>). They aren't the
+	// X.agent_only seconds: in SM 6.4 all 23,180 of them are X.absent.
 	AgentOnlyS float64 `json:"agent_only_s"`
 	// AgentOnlyByHarness splits AgentOnlyS by the harness whose turn ran,
 	// and names every harness that had a session in the project in the
 	// span, with 0 for one that had no time on its own.
 	AgentOnlyByHarness map[event.Harness]float64 `json:"agent_only_by_harness"`
-	// Uncredited is the seconds looked at and not credited, by reason
-	// (SM 5.2): agent-only seconds under their own codes, and X.day_cap for
-	// credit past DAY_CAP_S.
+	// Uncredited is the seconds the project was looked at and not
+	// credited, by reason (SM 5.2), and X.day_cap for credit past
+	// DAY_CAP_S. Agent-only seconds that no project credited are in it
+	// under their own codes; those another project credited aren't
+	// (SM 6.3).
 	Uncredited map[event.Reason]float64 `json:"uncredited"`
+	// OnHoldS is the part of Uncredited's X.noprog in minutes still
+	// pending or provisional (SM 4.3, 5.1): half-weighted seconds that
+	// progress within PROGRESS_RESTORE_S can still bring back. Absent
+	// means 0.
+	OnHoldS float64 `json:"on_hold_s,omitempty"`
 }
 
 // DayProject is one project's part of a day.
@@ -63,7 +76,7 @@ type DayProject struct {
 type Day struct {
 	// Date is the day, YYYY-MM-DD, in the time zone Zone names: the
 	// device's own, since SM 5.3's day is the person's local day. Start
-	// and End are its bounds, in UTC.
+	// and End are its bounds, in UTC (DayBounds).
 	Date  string    `json:"date"`
 	Zone  string    `json:"zone"`
 	Start time.Time `json:"start"`
@@ -83,17 +96,58 @@ type Session struct {
 	Name    string    `json:"name"`
 	Start   time.Time `json:"start"`
 	End     time.Time `json:"end"`
+	// CreditUntil is the end of the last 15-second slot of its last
+	// credited minute in which anything was credited: when the credit
+	// stopped. A lock or suspend from then on ends the session (DESIGN
+	// 3.8), even inside that minute.
+	CreditUntil time.Time `json:"-"`
 	Tally
 }
 
-// DayBounds returns the start and end of the day date, YYYY-MM-DD, in loc.
-// A day is 23 or 25 hours long where the clocks change.
+// DateOf returns the local day, YYYY-MM-DD in loc, of the instant ms in
+// Unix milliseconds. A minute belongs to the day it starts in.
+func DateOf(ms int64, loc *time.Location) string {
+	return time.UnixMilli(ms).In(loc).Format(time.DateOnly)
+}
+
+// DayBounds returns the start and end of the local day date, YYYY-MM-DD,
+// in loc: the first instant whose date in loc is date, and the first whose
+// date is later. A day is 23 or 25 hours long where the clocks change, and
+// one whose midnight the clocks skip starts when they jump: in
+// America/Santiago 2027-09-05 starts at 01:00, and 2027-09-04 keeps its
+// last hour. A day the clocks skip altogether is empty.
 func DayBounds(date string, loc *time.Location) (start, end time.Time, err error) {
-	t, err := time.ParseInLocation(time.DateOnly, date, loc)
-	if err != nil || t.Format(time.DateOnly) != date {
+	d, err := time.Parse(time.DateOnly, date)
+	if err != nil || d.Format(time.DateOnly) != date || loc == nil {
 		return time.Time{}, time.Time{}, fmt.Errorf("store: %q isn't a date", date)
 	}
-	return t, t.AddDate(0, 0, 1), nil
+	return firstInstant(d, loc), firstInstant(d.AddDate(0, 0, 1), loc), nil
+}
+
+// firstInstant returns the first instant, to the second, whose date in loc
+// is day's or a later one, where day is a date at midnight UTC. No offset
+// from UTC reaches a day, so the instant is within two days of day; a date
+// in loc never comes before the date of an earlier instant, and clocks
+// change on whole seconds, so a binary search over those seconds finds it.
+func firstInstant(day time.Time, loc *time.Location) time.Time {
+	want := dateNumber(day)
+	// In loc the date at lo is before day's, and at hi day's or later.
+	lo, hi := day.Unix()-2*86400, day.Unix()+2*86400
+	for hi-lo > 1 {
+		mid := lo + (hi-lo)/2
+		if dateNumber(time.Unix(mid, 0).In(loc)) >= want {
+			hi = mid
+		} else {
+			lo = mid
+		}
+	}
+	return time.Unix(hi, 0).In(loc)
+}
+
+// dateNumber returns t's date as a number that orders dates: YYYYMMDD.
+func dateNumber(t time.Time) int {
+	y, m, d := t.Date()
+	return y*10000 + int(m)*100 + d
 }
 
 // tallySum is a Tally's running sums, in half-seconds and seconds.
@@ -101,14 +155,16 @@ type tallySum struct {
 	halves, pending int64
 	kind            map[event.Activity]int64
 	level           map[event.Evidence]int64
+	reason          map[event.Reason]int64
 	agentOnly       int64
 	harness         map[event.Harness]int64
 	uncredited      map[event.Reason]int64 // seconds
+	onHold          int64                  // seconds
 	capped          int64                  // half-seconds past the day cap
 }
 
 func newSum() *tallySum {
-	return &tallySum{kind: map[event.Activity]int64{}, level: map[event.Evidence]int64{},
+	return &tallySum{kind: map[event.Activity]int64{}, level: map[event.Evidence]int64{}, reason: map[event.Reason]int64{},
 		harness: map[event.Harness]int64{}, uncredited: map[event.Reason]int64{}}
 }
 
@@ -126,8 +182,10 @@ func (c *dayCap) take(h int64) int64 {
 	return fit
 }
 
-// add sums pm, a project's part of a minute, into s.
-func (s *tallySum) add(pm ProjectMinute, pending bool, c *dayCap) {
+// add sums pm, a project's part of a minute whose bucket is in state, into
+// s.
+func (s *tallySum) add(pm ProjectMinute, state event.BucketState, c *dayCap) {
+	pending := state == event.StatePending
 	for _, cr := range pm.Credited {
 		h := max(cr.Halves, 0)
 		kept := c.take(h)
@@ -141,6 +199,7 @@ func (s *tallySum) add(pm ProjectMinute, pending bool, c *dayCap) {
 		}
 		s.kind[cr.Why.Activity()] += kept
 		s.level[cr.Ev] += kept
+		s.reason[cr.Why] += kept
 	}
 	s.agentOnly += pm.AgentOnlyS
 	for h, n := range pm.Harnesses {
@@ -148,6 +207,9 @@ func (s *tallySum) add(pm ProjectMinute, pending bool, c *dayCap) {
 	}
 	for r, n := range pm.Uncredited {
 		s.uncredited[r] += n
+	}
+	if state == event.StatePending || state == event.StateProvisional {
+		s.onHold += max(pm.Uncredited[event.ReasonNoProgress], 0)
 	}
 }
 
@@ -158,8 +220,9 @@ func (s *tallySum) tally() Tally {
 	t := Tally{
 		CreditedS: halfSeconds(s.halves), PendingS: halfSeconds(s.pending),
 		CreditedByKind: map[event.Activity]float64{}, CreditedByEvidence: map[event.Evidence]float64{},
-		AgentOnlyS:         float64(s.agentOnly),
+		CreditedByReason: map[event.Reason]float64{}, AgentOnlyS: float64(s.agentOnly),
 		AgentOnlyByHarness: map[event.Harness]float64{}, Uncredited: map[event.Reason]float64{},
+		OnHoldS: float64(s.onHold),
 	}
 	for k, h := range s.kind {
 		if h > 0 {
@@ -169,6 +232,11 @@ func (s *tallySum) tally() Tally {
 	for l, h := range s.level {
 		if h > 0 {
 			t.CreditedByEvidence[l] = halfSeconds(h)
+		}
+	}
+	for r, h := range s.reason {
+		if h > 0 {
+			t.CreditedByReason[r] = halfSeconds(h)
 		}
 	}
 	for h, n := range s.harness {
@@ -185,7 +253,7 @@ func (s *tallySum) tally() Tally {
 
 // Rollup sums the buckets of the day date in loc into its rollup. buckets
 // are the latest revisions of the day's minutes, as Buckets.Range returns
-// them; any outside the day are left out. Once the day has dayCapS
+// them; any that start on another local day are left out (DateOf). Once the day has dayCapS
 // credited seconds, the credit of every later minute is X.day_cap instead
 // (SM 5.3), and within the minute that reaches the cap, projects take
 // their credit in key order. This is SM 5.3's day level as the device sees
@@ -199,14 +267,14 @@ func Rollup(date string, loc *time.Location, buckets []Bucket, dayCapS int64) (D
 	sums := map[string]*tallySum{}
 	c := &dayCap{max: 2 * max(dayCapS, 0)}
 	for _, b := range sorted(buckets) {
-		if b.At() < start.UnixMilli() || b.At() >= end.UnixMilli() {
+		if DateOf(b.At(), loc) != date {
 			continue
 		}
 		for _, key := range slices.Sorted(maps.Keys(b.Projects)) {
 			if sums[key] == nil {
 				sums[key] = newSum()
 			}
-			sums[key].add(b.Projects[key], b.State == event.StatePending, c)
+			sums[key].add(b.Projects[key], b.State, c)
 		}
 	}
 	for _, key := range slices.Sorted(maps.Keys(sums)) {
@@ -238,6 +306,17 @@ func creditedProject(b Bucket) string {
 	return best
 }
 
+// creditUntil returns the end of b's last slot in which anything was
+// credited, or the end of its minute when its slots say nothing.
+func creditUntil(b Bucket) int64 {
+	for i := len(b.Slots) - 1; i >= 0; i-- {
+		if b.Slots[i].Credited > 0 {
+			return b.At() + int64(i+1)*event.SlotMS
+		}
+	}
+	return b.At() + minuteMS
+}
+
 // credits reports whether b credits project key anything.
 func credits(b Bucket, key string) bool {
 	for _, c := range b.Projects[key].Credited {
@@ -259,9 +338,9 @@ const sessionLookback = 30 * dayMS
 // SESSION_GAP_S in milliseconds.
 func LastSession(s *Buckets, to, gapMS int64) (*Session, error) {
 	var (
-		project    string
-		start, end int64
-		in         []Bucket
+		project           string
+		start, end, until int64
+		in                []Bucket
 	)
 	err := s.Before(to, func(b Bucket) bool {
 		m := b.At()
@@ -272,7 +351,7 @@ func LastSession(s *Buckets, to, gapMS int64) (*Session, error) {
 			if project = creditedProject(b); project == "" {
 				return true
 			}
-			start, end = m, m+minuteMS
+			start, end, until = m, m+minuteMS, creditUntil(b)
 			in = append(in, b)
 			return true
 		}
@@ -291,10 +370,11 @@ func LastSession(s *Buckets, to, gapMS int64) (*Session, error) {
 	sum := newSum()
 	for _, b := range sorted(in) {
 		if pm, ok := b.Projects[project]; ok && b.At() >= start && b.At() < end {
-			sum.add(pm, b.State == event.StatePending, nil)
+			sum.add(pm, b.State, nil)
 		}
 	}
-	return &Session{Project: project, Start: time.UnixMilli(start).UTC(), End: time.UnixMilli(end).UTC(), Tally: sum.tally()}, nil
+	return &Session{Project: project, Start: time.UnixMilli(start).UTC(), End: time.UnixMilli(end).UTC(),
+		CreditUntil: time.UnixMilli(until).UTC(), Tally: sum.tally()}, nil
 }
 
 // DayFile returns the path of date's rollup in the days directory dir.

@@ -31,8 +31,11 @@ import (
 // slot names one project and one level even when its seconds went to two.
 // Day rollups and the local API sum Projects.
 type Bucket struct {
-	// V is the scoring version and Params the parameter table's hash
-	// (SM 7.6).
+	// V is the scoring version, pkg/score's VERSION, and Params the hash
+	// of the parameter table the scorer ran with (SM 5.1, 7.6). A refit
+	// adds a table and leaves the version, and a rule change bumps the
+	// version and may keep the table (DESIGN 6.6), so neither stands for
+	// the other.
 	V      string    `json:"v"`
 	Params string    `json:"params"`
 	Minute time.Time `json:"minute"`

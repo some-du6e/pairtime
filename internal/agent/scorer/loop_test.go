@@ -4,13 +4,17 @@ package scorer
 
 import (
 	"bytes"
+	"cmp"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"maps"
 	"os"
 	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -87,10 +91,19 @@ type rig struct {
 	dev   score.Device
 	keys  *pkgledger.Keys
 	clock atomic.Int64 // what the ledger writer's clock reads, Unix ms
-	// snapshot, when set, is called with state.json's bytes after the
-	// event at index snapAt is written.
+	// snapshot, when set, is called with state.json's bytes and the files
+	// in days/ after the event at index snapAt is written.
 	snapAt   int
-	snapshot func([]byte)
+	snapshot func(state []byte, days map[string][]byte)
+	// wrap, when set, wraps the bucket store every loop gets; setup, when
+	// set, gets every loop before it starts; and each, when set, is called
+	// after write writes the event at index i.
+	wrap  func(BucketStore) BucketStore
+	setup func(*Loop)
+	each  func(i int, l *Loop, w *ledger.Writer)
+
+	mu       sync.Mutex
+	problems []string // what the loops told doctor, in order
 }
 
 func newRig(t *testing.T, dev score.Device) *rig {
@@ -110,12 +123,64 @@ func (r *rig) open() (*Loop, *store.Buckets) {
 	if err != nil {
 		r.t.Fatal(err)
 	}
-	l, err := New(Options{Ledger: r.path("ledger"), Params: r.table, Device: r.dev, State: st, Buckets: bs,
-		Days: r.path("days"), Zone: func() *time.Location { return time.UTC }})
+	var b BucketStore = bs
+	if r.wrap != nil {
+		b = r.wrap(bs)
+	}
+	l, err := New(Options{Ledger: r.path("ledger"), Params: r.table, Device: r.dev, State: st, Buckets: b,
+		Days: r.path("days"), Zone: func() *time.Location { return time.UTC }, Problem: r.problem})
 	if err != nil {
 		r.t.Fatal(err)
 	}
+	if r.setup != nil {
+		r.setup(l)
+	}
 	return l, bs
+}
+
+func (r *rig) problem(msg string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.problems = append(r.problems, msg)
+}
+
+// lastProblem returns what the loops last told doctor, "" for nothing.
+func (r *rig) lastProblem() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if len(r.problems) == 0 {
+		return ""
+	}
+	return r.problems[len(r.problems)-1]
+}
+
+// place returns the last batch of the place state.json holds.
+func (r *rig) place() uint64 {
+	r.t.Helper()
+	data, err := os.ReadFile(r.path("state.json"))
+	if err != nil {
+		r.t.Fatal(err)
+	}
+	var keys map[string]json.RawMessage
+	if err := json.Unmarshal(data, &keys); err != nil {
+		r.t.Fatal(err)
+	}
+	var c cursor
+	if raw, ok := keys[StateKey]; ok {
+		if err := json.Unmarshal(raw, &c); err != nil {
+			r.t.Fatal(err)
+		}
+	}
+	return c.Batch
+}
+
+// settle seals what w holds and waits until l has scored it.
+func (r *rig) settle(l *Loop, w *ledger.Writer) {
+	r.t.Helper()
+	if _, _, err := w.Seal(); err != nil {
+		r.t.Fatal(err)
+	}
+	l.Flush()
 }
 
 // write writes evs to the rig's ledger through a ledger writer that hands
@@ -154,15 +219,15 @@ func (r *rig) write(evs []event.Event, note func(i int) bool) {
 			}
 		}
 		if i == r.snapAt && r.snapshot != nil {
-			if _, _, err := w.Seal(); err != nil {
-				r.t.Fatal(err)
-			}
-			l.Flush()
+			r.settle(l, w)
 			data, err := os.ReadFile(r.path("state.json"))
 			if err != nil {
 				r.t.Fatal(err)
 			}
-			r.snapshot(data)
+			r.snapshot(data, r.dirFiles("days"))
+		}
+		if r.each != nil {
+			r.each(i, l, w)
 		}
 	}
 	if err := w.Close(); err != nil {
@@ -211,17 +276,28 @@ func (r *rig) files() map[string][]byte {
 	r.t.Helper()
 	out := map[string][]byte{}
 	for _, sub := range []string{"buckets", "days"} {
-		entries, err := os.ReadDir(r.path(sub))
+		for name, data := range r.dirFiles(sub) {
+			out[sub+"/"+name] = data
+		}
+	}
+	return out
+}
+
+// dirFiles returns the bytes of every file in the rig's directory sub, by
+// name.
+func (r *rig) dirFiles(sub string) map[string][]byte {
+	r.t.Helper()
+	out := map[string][]byte{}
+	entries, err := os.ReadDir(r.path(sub))
+	if err != nil {
+		r.t.Fatal(err)
+	}
+	for _, e := range entries {
+		data, err := os.ReadFile(filepath.Join(r.path(sub), e.Name()))
 		if err != nil {
 			r.t.Fatal(err)
 		}
-		for _, e := range entries {
-			data, err := os.ReadFile(filepath.Join(r.path(sub), e.Name()))
-			if err != nil {
-				r.t.Fatal(err)
-			}
-			out[sub+"/"+e.Name()] = data
-		}
+		out[e.Name()] = data
 	}
 	return out
 }
@@ -269,7 +345,7 @@ func promptText(p *event.PromptSubmit) string {
 // gives it.
 func direct(table *params.Table, dev score.Device, device string, evs []event.Event) (map[int64]store.Bucket, int64) {
 	_, out := score.Step(score.NewState(table, dev), evs)
-	meta := bucketMeta{v: table.Version(), params: table.Hash(), device: device}
+	meta := bucketMeta{v: score.Version(), params: table.Hash(), device: device}
 	var all score.Derived
 	all.Append(out.Final)
 	all.Append(out.Pending)
@@ -448,17 +524,31 @@ func TestRebuild(t *testing.T) {
 	tests := []struct {
 		name string
 		// lose removes what a crash or the teen removed, given state.json
-		// as it was partway through the run.
-		lose func(r *rig, early []byte)
+		// and days/ as they were partway through the run.
+		lose func(r *rig, early []byte, earlyDays map[string][]byte)
 	}{
-		{"a restart with state.json in place scores nothing twice", func(*rig, []byte) {}},
-		{"deleting state.json rebuilds byte-identical buckets and rollups", func(r *rig, _ []byte) {
+		{"a restart with state.json in place scores nothing twice", func(*rig, []byte, map[string][]byte) {}},
+		{"deleting state.json rebuilds byte-identical buckets and rollups", func(r *rig, _ []byte, _ map[string][]byte) {
 			removeAll(r.t, r.path("state.json"))
 		}},
-		{"deleting state.json, buckets/ and days/ rebuilds byte-identical buckets and rollups", func(r *rig, _ []byte) {
+		{"deleting state.json, buckets/ and days/ rebuilds byte-identical buckets and rollups", func(r *rig, _ []byte, _ map[string][]byte) {
 			removeAll(r.t, r.path("state.json"), r.path("buckets"), r.path("days"))
 		}},
-		{"a crash that kept an early place in state.json and tore the last bucket line loses nothing and writes nothing twice", func(r *rig, early []byte) {
+		{"a crash between a Step's bucket appends and its save, which left state.json and days/ from the middle of the run, leaves no day behind its buckets", func(r *rig, early []byte, earlyDays map[string][]byte) {
+			if err := os.WriteFile(r.path("state.json"), early, 0o600); err != nil {
+				r.t.Fatal(err)
+			}
+			removeAll(r.t, r.path("days"))
+			if err := os.MkdirAll(r.path("days"), 0o700); err != nil {
+				r.t.Fatal(err)
+			}
+			for name, data := range earlyDays {
+				if err := os.WriteFile(filepath.Join(r.path("days"), name), data, 0o600); err != nil {
+					r.t.Fatal(err)
+				}
+			}
+		}},
+		{"a crash that kept an early place in state.json and tore the last bucket line loses nothing and writes nothing twice", func(r *rig, early []byte, _ map[string][]byte) {
 			if err := os.WriteFile(r.path("state.json"), early, 0o600); err != nil {
 				r.t.Fatal(err)
 			}
@@ -480,13 +570,14 @@ func TestRebuild(t *testing.T) {
 			t.Parallel()
 			r := newRig(t, fixtureDevice(f))
 			var early []byte
-			r.snapAt, r.snapshot = len(f.Events)/2, func(b []byte) { early = b }
+			var earlyDays map[string][]byte
+			r.snapAt, r.snapshot = len(f.Events)/2, func(b []byte, days map[string][]byte) { early, earlyDays = b, days }
 			r.write(f.Events, nil)
 			want := r.files()
 			if len(early) == 0 {
 				t.Fatal("no state.json from the middle of the run")
 			}
-			tt.lose(r, early)
+			tt.lose(r, early, earlyDays)
 			if st := r.rescore(); st.Stopped != "" {
 				t.Fatalf("the loop stopped: %s", st.Stopped)
 			}
@@ -564,6 +655,14 @@ func TestRevisions(t *testing.T) {
 			}
 			return ""
 		}},
+		{"every revision carries pkg/score's VERSION as v and the parameter table's hash as params", func(_ int64, bs []store.Bucket) string {
+			for _, b := range bs {
+				if b.V != score.Version() || b.Params != testTable().Hash() {
+					return "v " + b.V + ", params " + b.Params
+				}
+			}
+			return ""
+		}},
 		{"every revision says something the one before it didn't", func(_ int64, bs []store.Bucket) string {
 			for i := 1; i < len(bs); i++ {
 				a, b := bs[i-1], bs[i]
@@ -589,34 +688,166 @@ func TestRevisions(t *testing.T) {
 	}
 }
 
-func TestGapStopsTheLoop(t *testing.T) {
-	f := fixture(t, "6.2")
-	r := newRig(t, fixtureDevice(f))
-	r.write(f.Events, nil)
-	l, bs := r.open()
-	defer bs.Close()
-	l.Start()
-	l.Flush()
-	before := l.Status()
-	if before.Stopped != "" || before.Batch == 0 {
-		t.Fatalf("the loop stopped or scored nothing: %+v", before)
+// lastRow returns the row of the last batch the rig's ledger holds.
+func (r *rig) lastRow() pkgledger.BatchRow {
+	r.t.Helper()
+	var row pkgledger.BatchRow
+	if err := ledger.ReadBatches(r.path("ledger"), 1, func(b ledger.Batch) error {
+		row = b.Row
+		return nil
+	}); err != nil {
+		r.t.Fatal(err)
 	}
-	rec := func(s uint64) pkgledger.Record {
+	return row
+}
+
+// notes returns batch b of n upload-failure notes numbered from first,
+// which hold no event.
+func notes(t *testing.T, b, first, n uint64) ledger.Batch {
+	t.Helper()
+	out := ledger.Batch{Row: pkgledger.BatchRow{B: b, FirstSeq: first, N: n}}
+	for s := first; s < first+n; s++ {
 		h, err := pkgledger.NewHeader(s, pkgledger.RTypeUploadFailure, "", event.NoSession)
 		if err != nil {
 			t.Fatal(err)
 		}
-		return pkgledger.Record{Header: h}
+		out.Records = append(out.Records, pkgledger.Record{Header: h})
 	}
-	// Batch b+2, which the ledger's files don't hold, nor b+1.
-	next := before.Batch + 2
-	l.Sealed(ledger.Batch{Row: pkgledger.BatchRow{B: next, FirstSeq: 1000, N: 1}, Records: []pkgledger.Record{rec(1000)}})
-	l.Flush()
-	after := l.Status()
-	l.Close()
-	if !strings.Contains(after.Stopped, "aren't in the ledger") || after.Batch != before.Batch {
-		t.Errorf("after a batch past a hole the loop is %+v, want it stopped at batch %d over the hole", after, before.Batch)
+	return out
+}
+
+func TestGaps(t *testing.T) {
+	f := fixture(t, "6.2")
+	tests := []struct {
+		name string
+		// then are the batches the loop gets after 6.2's, whose last batch
+		// is b and last record s.
+		then func(t *testing.T, b, s uint64) []ledger.Batch
+		// at is the batch the loop must be at after them, counted from b,
+		// and failed how many batches must have failed.
+		at, failed uint64
+		// says is what doctor must hear, in part.
+		says func(b uint64) string
+	}{
+		{
+			name: "batches the ledger's files don't hold fail alone, and the batch after them counts from its own row",
+			then: func(t *testing.T, b, s uint64) []ledger.Batch {
+				return []ledger.Batch{notes(t, b+3, s+10, 2), notes(t, b+4, s+12, 1)}
+			},
+			at: 4, failed: 2,
+			says: func(b uint64) string { return fmt.Sprintf("batches %d to %d aren't in the ledger's files", b+1, b+2) },
+		},
+		{
+			name: "a batch whose first record skips numbers fails alone, and the next one counts",
+			then: func(t *testing.T, b, s uint64) []ledger.Batch {
+				return []ledger.Batch{notes(t, b+1, s+3, 1), notes(t, b+2, s+4, 2)}
+			},
+			at: 2, failed: 1, says: func(b uint64) string { return fmt.Sprintf("batch %d isn't scored", b+1) },
+		},
+		{
+			name: "a batch that repeats a record number fails alone, and the next one counts",
+			then: func(t *testing.T, b, s uint64) []ledger.Batch {
+				return []ledger.Batch{notes(t, b+1, s, 2), notes(t, b+2, s+2, 1)}
+			},
+			at: 2, failed: 1, says: func(b uint64) string { return fmt.Sprintf("batch %d isn't scored", b+1) },
+		},
+		{
+			name: "a batch holding fewer records than its row says fails alone, and the next one counts",
+			then: func(t *testing.T, b, s uint64) []ledger.Batch {
+				short := notes(t, b+1, s+1, 3)
+				short.Records = short.Records[:2]
+				return []ledger.Batch{short, notes(t, b+2, s+4, 1)}
+			},
+			at: 2, failed: 1, says: func(b uint64) string { return fmt.Sprintf("batch %d isn't scored", b+1) },
+		},
 	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := newRig(t, fixtureDevice(f))
+			r.write(f.Events, nil)
+			row := r.lastRow()
+			l, bs := r.open()
+			l.Start()
+			l.Flush()
+			if st := l.Status(); st.Stopped != "" || st.Batch != row.B {
+				t.Fatalf("before the gap the loop is %+v, want it at batch %d", st, row.B)
+			}
+			for _, b := range tt.then(t, row.B, row.FirstSeq+row.N-1) {
+				l.Sealed(b)
+			}
+			l.Flush()
+			after := l.Status()
+			l.Close()
+			if err := bs.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if after.Stopped != "" {
+				t.Fatalf("the loop stopped: %s", after.Stopped)
+			}
+			if after.Batch != row.B+tt.at || after.Failed != tt.failed {
+				t.Errorf("the loop is at batch %d with %d failed, want %d with %d", after.Batch, after.Failed, row.B+tt.at, tt.failed)
+			}
+			if p, says := r.lastProblem(), tt.says(row.B); !strings.Contains(p, says) {
+				t.Errorf("doctor hears %q, want it to say %q", p, says)
+			}
+			if got := r.place(); got != row.B+tt.at {
+				t.Errorf("state.json's place is batch %d, want %d", got, row.B+tt.at)
+			}
+		})
+	}
+}
+
+func TestNoPlaceStartsAtTheFirstBatchTheLedgerHolds(t *testing.T) {
+	// 6.4 runs across midnight UTC, so its ledger has two segments.
+	f := fixture(t, "6.4")
+	r := newRig(t, fixtureDevice(f))
+	r.write(f.Events, nil)
+	var segs []string
+	entries, err := os.ReadDir(r.path("ledger"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if day, ok := strings.CutSuffix(e.Name(), ".seg"); ok {
+			if _, err := time.Parse(time.DateOnly, day); err == nil {
+				segs = append(segs, e.Name())
+			}
+		}
+	}
+	slices.Sort(segs)
+	if len(segs) < 2 {
+		t.Fatalf("the ledger has segments %q, want two days of them", segs)
+	}
+	// Retention deletes the oldest segment, and state.json is lost.
+	removeAll(t, filepath.Join(r.path("ledger"), segs[0]), r.path("state.json"), r.path("buckets"), r.path("days"))
+	first, err := ledger.FirstHeld(r.path("ledger"), 1)
+	if err != nil || first <= 1 {
+		t.Fatalf("FirstHeld = %d, %v; want a batch after the first", first, err)
+	}
+	st := r.rescore()
+	if st.Stopped != "" || st.Failed != 0 {
+		t.Fatalf("the loop is %+v, want it scoring with nothing failed", st)
+	}
+	chain, err := ledger.ReadChain(r.path("ledger"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var evs []event.Event
+	if err := ledger.ReadBatches(r.path("ledger"), first, func(b ledger.Batch) error {
+		for _, rec := range b.Records {
+			if ev, ok, err := eventOf(rec, chain.DeviceID); err == nil && ok {
+				evs = append(evs, ev)
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Run("the buckets are those of one Step over the batches the ledger holds", func(t *testing.T) {
+		want, _ := direct(r.table, r.dev, chain.DeviceID, evs)
+		from, to := span(f.Events)
+		compare(t, r.stored(from, to), want)
+	})
 }
 
 func TestCheckBatch(t *testing.T) {
@@ -654,6 +885,280 @@ func TestCheckBatch(t *testing.T) {
 			err := checkBatch(tt.b(t), tt.lastB, tt.lastS)
 			if (err == nil) != tt.ok {
 				t.Errorf("checkBatch = %v, want ok %v", err, tt.ok)
+			}
+		})
+	}
+}
+
+// faulty is a bucket store whose writes, or whose flushes, fail while it
+// is told to.
+type faulty struct {
+	BucketStore
+	puts, flushes atomic.Bool
+}
+
+func (f *faulty) Put(b store.Bucket) (store.Bucket, bool, error) {
+	if f.puts.Load() {
+		return store.Bucket{}, false, errors.New("injected: no space left on device")
+	}
+	return f.BucketStore.Put(b)
+}
+
+func (f *faulty) Sync() error {
+	if f.flushes.Load() {
+		return errors.New("injected: input/output error")
+	}
+	return f.BucketStore.Sync()
+}
+
+// Forget flushes the days it drops, so it fails as Sync does.
+func (f *faulty) Forget(before int64) error {
+	if f.flushes.Load() {
+		return errors.New("injected: input/output error")
+	}
+	return f.BucketStore.Forget(before)
+}
+
+func TestWriteFailures(t *testing.T) {
+	f := fixture(t, "6.1")
+	clean := newRig(t, fixtureDevice(f))
+	clean.write(f.Events, nil)
+	from, to := span(f.Events)
+	want := map[int64]store.Bucket{}
+	for _, b := range clean.stored(from, to) {
+		want[b.At()] = b
+	}
+	wantDays := clean.dirFiles("days")
+	n := len(f.Events)
+	tests := []struct {
+		name string
+		// fail turns the failure on or off.
+		fail func(fs *faulty, days *atomic.Bool, on bool)
+		// held says the place in state.json must not move while it lasts.
+		held bool
+		// untilStop keeps the failure on until the loop stops, and has a
+		// new loop over the same files make it good.
+		untilStop bool
+	}{
+		{
+			name: "a bucket write that fails is written again at the next save, the place waits for it, and the problem lasts until then",
+			fail: func(fs *faulty, _ *atomic.Bool, on bool) { fs.puts.Store(on) },
+			held: true,
+		},
+		{
+			name: "a flush that fails is tried again at the next save, the place waits for it, and the problem lasts until then",
+			fail: func(fs *faulty, _ *atomic.Bool, on bool) { fs.flushes.Store(on) },
+			held: true,
+		},
+		{
+			name: "a day rollup that fails to write is written again at the next save, and the problem lasts until then",
+			fail: func(_ *faulty, days *atomic.Bool, on bool) { days.Store(on) },
+		},
+		{
+			name:      "a day rollup that fails to write until the agent stops is written when it starts again",
+			fail:      func(_ *faulty, days *atomic.Bool, on bool) { days.Store(on) },
+			untilStop: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			r := newRig(t, fixtureDevice(f))
+			fs := &faulty{}
+			var days atomic.Bool
+			r.wrap = func(b BucketStore) BucketStore {
+				fs.BucketStore = b
+				return fs
+			}
+			r.setup = func(l *Loop) {
+				l.writeDayFile = func(dir string, d store.Day) error {
+					if days.Load() {
+						return errors.New("injected: the rename outlasted its retries")
+					}
+					return store.WriteDay(dir, d)
+				}
+			}
+			on, off := n/3, 2*n/3
+			var placed uint64
+			r.each = func(i int, l *Loop, w *ledger.Writer) {
+				switch {
+				case i == on:
+					r.settle(l, w)
+					placed = r.place()
+					tt.fail(fs, &days, true)
+				case i == off && !tt.untilStop:
+					r.settle(l, w)
+					if r.lastProblem() == "" {
+						t.Error("doctor heard nothing while the writes failed")
+					}
+					if got := r.place(); tt.held && got != placed {
+						t.Errorf("the place moved from batch %d to %d while the writes failed", placed, got)
+					}
+					tt.fail(fs, &days, false)
+				}
+			}
+			r.write(f.Events, nil)
+			if tt.untilStop {
+				if r.lastProblem() == "" {
+					t.Error("doctor heard nothing while the writes failed")
+				}
+				tt.fail(fs, &days, false)
+				if st := r.rescore(); st.Stopped != "" {
+					t.Fatalf("the loop stopped: %s", st.Stopped)
+				}
+			} else if p := r.lastProblem(); p != "" {
+				t.Errorf("doctor still hears %q after the writes work again", p)
+			}
+			// The two runs' ledgers are two devices.
+			chain, err := ledger.ReadChain(r.path("ledger"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			mine := map[int64]store.Bucket{}
+			for m, b := range want {
+				b.Device = chain.DeviceID
+				mine[m] = b
+			}
+			compare(t, r.stored(from, to), mine)
+			got := r.dirFiles("days")
+			for _, name := range slices.Sorted(maps.Keys(wantDays)) {
+				if !bytes.Equal(got[name], wantDays[name]) {
+					t.Errorf("days/%s isn't what a run with no failure writes", name)
+				}
+			}
+		})
+	}
+}
+
+// hookTurn returns a Claude Code turn the harness's hooks alone report,
+// as WP-AD2 delivers one before WP-AD3 reads its transcript: 6.4's
+// session start a minute before at, its prompt at at, and a tool call at
+// at plus each of tools, in Unix ms, with no stop. Nobody is at the
+// computer, and the agent samples presence once a minute, as it does
+// after CONTEXT_IDLE_S without input (DESIGN 6.2 D14), so no sample gap is
+// a sleep. Without samples pkg/score derives only the BUCKET_TTL_S before
+// now, which no loop over the batches could match.
+func hookTurn(t *testing.T, at int64, tools []int64) []event.Event {
+	t.Helper()
+	var start, prompt, tool, sample *event.Event
+	evs := fixture(t, "6.4").Events
+	for i := range evs {
+		e := &evs[i]
+		switch e.Data.(type) {
+		case *event.SessionStart:
+			start = cmpOr(start, e)
+		case *event.PromptSubmit:
+			prompt = cmpOr(prompt, e)
+		case *event.AgentTool:
+			if e.Via == event.ViaHook {
+				tool = cmpOr(tool, e)
+			}
+		case *event.OSPresence:
+			sample = cmpOr(sample, e)
+		}
+	}
+	if start == nil || prompt == nil || tool == nil || sample == nil {
+		t.Fatal("6.4 has no session start, prompt, hooked tool call or presence sample")
+	}
+	n := 0
+	clone := func(tmpl *event.Event, ts int64) event.Event {
+		n++
+		e := *tmpl
+		e.EventID = fmt.Sprintf("01a1fb1e-5318-78a1-a781-%012x", n)
+		e.Mono += ts - e.T
+		e.T = ts
+		return e
+	}
+	out := []event.Event{clone(start, at-60_000), clone(prompt, at)}
+	for _, d := range tools {
+		e := clone(tool, at+d)
+		p := *tool.Data.(*event.AgentTool)
+		p.TStart, p.TEnd = e.T-800, e.T
+		e.Data = &p
+		out = append(out, e)
+	}
+	end := at + slices.Max(tools) + 60_000
+	for ts := at - 55_000; ts <= end; ts += 60_000 {
+		e := clone(sample, ts)
+		idle := float64(600 + (ts-at+55_000)/1000)
+		e.Data = &event.OSPresence{IdleAnyS: idle, IdleKeysS: &idle}
+		out = append(out, e)
+	}
+	slices.SortStableFunc(out, func(a, b event.Event) int { return cmp.Compare(a.T, b.T) })
+	return out
+}
+
+// cmpOr returns cur, or e when cur is nil.
+func cmpOr(cur, e *event.Event) *event.Event {
+	if cur != nil {
+		return cur
+	}
+	return e
+}
+
+func TestLongHookedTurns(t *testing.T) {
+	const minute = 60_000
+	every := func(from, to int64) []int64 {
+		var out []int64
+		for d := from; d <= to; d += 10 * minute {
+			out = append(out, d)
+		}
+		return out
+	}
+	tests := []struct {
+		name  string
+		tools []int64 // after the prompt, in ms
+	}{
+		{
+			name:  "a hooked turn quiet for 90 minutes after six hours of tool calls runs on through the window's start, as one Step over every record has it",
+			tools: append(every(10*minute, 360*minute), every(450*minute, 840*minute)...),
+		},
+		{
+			name:  "a hooked turn quiet for three hours ends two hours into the silence for good, as one Step over every record has it",
+			tools: append(every(10*minute, 120*minute), every(300*minute, 780*minute)...),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			at := fixture(t, "6.4").Events[0].T
+			evs := hookTurn(t, at, tt.tools)
+			r := newRig(t, score.Device{})
+			r.write(evs, nil)
+			chain, err := ledger.ReadChain(r.path("ledger"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			want, _ := direct(r.table, r.dev, chain.DeviceID, evs)
+			if len(want) == 0 {
+				t.Fatal("one Step over the turn gives no bucket")
+			}
+			from, to := span(evs)
+			compare(t, r.stored(from, to), want)
+		})
+	}
+}
+
+func TestHoldFor(t *testing.T) {
+	const h = 3600 * 1000
+	from := int64(30 * h)
+	turn := func(submit, runUntil int64) score.Turn { return score.Turn{TSubmit: submit, RunUntil: runUntil} }
+	tests := []struct {
+		name  string
+		turns []score.Turn
+		want  int64
+	}{
+		{"a turn that ran past the window's start holds it at the turn's submit", []score.Turn{turn(20*h, 31*h)}, 20 * h},
+		{"a turn whose run ended at or before the window's start holds nothing", []score.Turn{turn(20*h, 30*h)}, from},
+		{"a turn submitted inside the window holds nothing", []score.Turn{turn(30*h+1, 32*h)}, from},
+		{"a turn submitted more than holdMaxMS before the window's start holds nothing", []score.Turn{turn(from-holdMaxMS-1, 31*h)}, from},
+		{"a turn submitted holdMaxMS before the window's start still holds it", []score.Turn{turn(from-holdMaxMS, 31*h)}, from - holdMaxMS},
+		{"of two turns that ran past it, the earlier submit holds the window's start", []score.Turn{turn(25*h, 31*h), turn(22*h, 30*h+1)}, 22 * h},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := holdFor(tt.turns, from); got != tt.want {
+				t.Errorf("holdFor = %d, want %d", got, tt.want)
 			}
 		})
 	}

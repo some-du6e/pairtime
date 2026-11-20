@@ -131,9 +131,10 @@ paths:
         The most recent work session (SM 5.3: a run of one project's
         credited minutes, split where one ends more than `SESSION_GAP_S`,
         1,200 s, before the next starts), or the one still going, with the
-        same tally as a day. `pairtime recap` asks the agent for it over the
-        socket (WP-CO0), and the dashboard's Today page shows it. `session`
-        is null before the first. While `shadow` is true a session is its
+        same tally as a day. The agent gives the same JSON to the CLI's
+        `sessions/last` question over its socket, which `pairtime recap`
+        asks (WP-CO0), and the dashboard's Today page shows it. `session` is
+        null before the first. While `shadow` is true a session is its
         project and local date alone, with the tally Shadow allows. The
         answer is never cached.
       responses:
@@ -449,6 +450,8 @@ components:
           $ref: "#/components/schemas/ByKind"
         credited_by_evidence:
           $ref: "#/components/schemas/ByEvidence"
+        credited_by_reason:
+          $ref: "#/components/schemas/ByReason"
         agent_only_s:
           $ref: "#/components/schemas/AgentOnlyS"
         agent_only_by_harness:
@@ -469,7 +472,7 @@ components:
     WorkSession:
       type: [object, "null"]
       additionalProperties: false
-      required: [project, name, agent_only_s, agent_only_by_harness, uncredited]
+      required: [project, name, date, agent_only_s, agent_only_by_harness, uncredited]
       description: >
         A work session (SM 5.3) with the same tally as a project's day, or
         null before the first one. While `shadow` is true it has no `start`,
@@ -486,9 +489,11 @@ components:
           type: string
           format: date
           description: >
-            The local day the session started on, as YYYY-MM-DD: all a
-            session says of when it was while `shadow` is true. An agent
-            that leaves it out sends `start`, which views take the day from.
+            The local day the session started on, as YYYY-MM-DD, in the zone
+            the agent counts days in: the day its first credited minute
+            starts in. It is there whether or not `shadow` is true, and while
+            it is, it is all the session says of when it was.
+          examples: ["2026-11-24"]
         start:
           type: string
           format: date-time
@@ -501,9 +506,9 @@ components:
           type: boolean
           description: >
             True while the session goes on: SESSION_GAP_S hasn't passed
-            since `end`, and no lock or suspend came after it (DESIGN 3.8).
-            Absent while `shadow` is true, since it says whether the last
-            minute counted.
+            since `end`, and no lock or suspend came after its credit
+            stopped (DESIGN 3.8). Absent while `shadow` is true, since it
+            says whether the last minute counted.
         credited_s:
           $ref: "#/components/schemas/CreditedS"
         pending_s:
@@ -512,6 +517,8 @@ components:
           $ref: "#/components/schemas/ByKind"
         credited_by_evidence:
           $ref: "#/components/schemas/ByEvidence"
+        credited_by_reason:
+          $ref: "#/components/schemas/ByReason"
         agent_only_s:
           $ref: "#/components/schemas/AgentOnlyS"
         agent_only_by_harness:
@@ -527,13 +534,14 @@ components:
         it is true, every view shows your time as "calibrating", and the
         answer leaves out everything the hidden credited time could be
         worked out from (D-shadow-scope): the credited and pending seconds,
-        the credited-by-kind and by-evidence maps, `on_hold_s`, every
-        uncredited code but the agent's own (`X.agent_only`, `X.automated`)
-        and SM 4.2's loops (`X.reroll`, `X.rewrite_loop`, `X.same_error`,
-        `X.autopilot`), and a session's start and end. The agent's time
-        stays, and so do the loops with their seconds. A client reads a
-        number that is left out as 0 and a map as empty. The files in
-        `days/` and `buckets/` keep every number.
+        the credited-by-kind, by-evidence and by-reason maps, `on_hold_s`,
+        every uncredited code but SM 4.2's loops (`X.reroll`,
+        `X.rewrite_loop`, `X.same_error`, `X.autopilot`), `X.day_cap`
+        included, and a session's `start`, `end` and `open`. The agent's
+        time (`agent_only_s`, `agent_only_by_harness`) stays, and so do the
+        loops with their seconds. A client reads a number that is left out
+        as 0 and a map as empty. The files in `days/` and `buckets/` keep
+        every number.
     ProjectName:
       type: string
       description: >
@@ -620,6 +628,15 @@ components:
         C:
           type: number
           minimum: 0
+    ByReason:
+      type: object
+      description: >
+        `credited_s` by SM 5.2's credit code, with its `~r` and `+restored`
+        suffixes, such as `READ~r` (SM 5.3), only the codes with credit.
+        Absent while `shadow` is true.
+      additionalProperties:
+        type: number
+        minimum: 0
     AgentOnlyByHarness:
       type: object
       additionalProperties: false
@@ -667,8 +684,7 @@ components:
         (SM 6.3), so `agent_only_s` can be more than `X.agent_only` and
         `X.automated` together. Credit past the day's cap is under
         `X.day_cap`. A reason with no seconds may be left out. While
-        `shadow` is true only the agent's codes and SM 4.2's loops are in
-        it (Shadow).
+        `shadow` is true only SM 4.2's loops are in it (Shadow).
       properties:
         X.absent:
           type: number
