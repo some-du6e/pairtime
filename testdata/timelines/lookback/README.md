@@ -6,7 +6,7 @@ These fixtures are WP-FX5's oracle for WP-SC7, the scorer's lookback mode (docs/
 
 | Case | What it is | Credited | Live fixture | Errata |
 |---|---|---|---|---|
-| [`6.1-transcript-only`](6.1-transcript-only/) | SM 6.1's three hours of flow, from the transcript alone | 5,055 s | 10,095 s | lookback, points 1, 2 and 5 |
+| [`6.1-transcript-only`](6.1-transcript-only/) | SM 6.1's three hours of flow, from the transcript alone | 5,055 s | 10,095 s | lookback, points 2 and 5 |
 | [`6.4-transcript-only`](6.4-transcript-only/) | SM 6.4's overnight `/goal` run, from the transcript alone | 91 s | 810 s | lookback, point 2; WP-FX1's prompt lengths and 6.6 codes |
 | [`two-sessions`](two-sessions/) | Two sessions in two projects running in parallel | 885 s | none | lookback, points 3 and 5 |
 

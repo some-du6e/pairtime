@@ -116,8 +116,8 @@ for k in range(1, CYCLES + 1):
         if k == 6:
             n6 = ("The live fixture's drink, 15:06:40 to 15:12:40, leaves no record in a transcript, so this "
                   "cycle reads like the others.")
-        row(6, credit={P: {"READ": 30}}, uncredited={"X.agent_only": 30}, agent=30, erratum=ER, note=n6)
-        row(7, credit={P: {"READ": 60}}, uncredited={}, erratum=ER)
+        row(6, credit={P: {"READ": 30}}, uncredited={"X.agent_only": 30}, agent=30, note=n6)
+        row(7, credit={P: {"READ": 60}}, uncredited={})
         row(8, credit={P: {"READ": 30}}, uncredited=None, codes=["X.no_anchor"], erratum=ER,
             note="The 120 s of reading end at 14:08:30." if k == 1 else None)
         exp.row(fx.hhmm(C + 9 * 60_000), fx.hhmm(C + 12 * 60_000), bucket=False, sm="2.8; " + SEEN.format(
@@ -179,8 +179,7 @@ expected = exp.doc(
         "uncredited sums only the rows whose codes SM decides. agent_only_s is the agent's 2,250 s less the "
         "25 s of PA credited inside each turn: 1,875. The open codes are the erratum's point 2.",
         "Cycles 1 to 14 credit 120 s of reading each, 1,680 s in all, because each stop is followed by the "
-        "next prompt 570 s later. docs/PLAN.md says the twelve-minute cycles credit no reading; the erratum's "
-        "point 1 explains why SM 2.8 credits it.",
+        "next prompt 570 s later, inside SM 2.8's 600 s.",
         "The live fixture credits 10,095 s of the same afternoon. Lookback keeps 5,055: no think leads, no "
         "editor, browser or commit time, no reading while the agent runs, at most 120 s of reading a turn.",
         f"The agent events replay to ai_logged_s {ai_logged:g} under min(gap, 120 s) (SM 5.4), so DESIGN 6.2 "

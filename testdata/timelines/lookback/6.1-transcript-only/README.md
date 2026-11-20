@@ -9,7 +9,7 @@ Rowan's three hours of flow (SM 6.1) as pairtime would score them if he installe
 | Date and zone | Saturday 2026-11-21, Asia/Kolkata, UTC+05:30, as in 6.1 |
 | Evidence | Level C, witness `backfilled`, presence `unknown` in every slot |
 | Window | 14:00:00 to 17:00:00. The session starts at 13:58:05.5 and isn't checked |
-| Errata | [lookback](../../../../docs/errata/2026-11-19-sm-2.8-lookback.md): point 1 for the reading, 2 for the open codes and 5 for the permission trail. Point 4 covers the session's fields |
+| Errata | [lookback](../../../../docs/errata/2026-11-19-sm-2.8-lookback.md): point 2 for the open codes and 5 for the permission trail. Point 4 covers the session's fields |
 
 ## What the transcript holds
 
@@ -75,7 +75,7 @@ All 5,055 s are AI-assisted (`P`, `PA`, `READ`). There is no hand work, because 
 
 ## Readings the rows rely on
 
-- **Reading starts at the stop.** SM 2.8 credits reading "between a stop and a human prompt that follows within 600 s". Nothing else wants those seconds, so the bucket drains from the stop, one second per second, as SM 2.4 drains it, and the 120 s end at C+8:30. docs/PLAN.md says these cycles credit no reading, which SM's rule doesn't give for a 570 s gap. That is the erratum's point 1.
+- **Reading starts at the stop.** SM 2.8 credits reading "between a stop and a human prompt that follows within 600 s", and here the next prompt follows each stop 570 s later. Nothing else wants those seconds, so the bucket drains from the stop, one second per second, as SM 2.4 drains it, and the 120 s end at C+8:30.
 - **The permission's trail stays.** SM 2.8 changes the permission answer's lead, its wait, to at most 60 s, and says nothing about its 10 s trail, so the trail is SM 2.3's. Without the trail each cycle would credit 15 s of `PA`, not 25, and the afternoon 4,905 s. That is the erratum's point 5.
 - **Codes.** Seconds in an agent turn that nothing credits are `X.agent_only` (SM 5.2). Seconds outside every lookback window when no agent runs fit no code in SM 5.2, because `X.absent` and `X.no_anchor` both describe presence that lookback doesn't know. Rows with such seconds have `uncredited` null, list the erratum's proposal, `X.no_anchor`, in `codes`, and name the erratum. This is point 2.
 - **The envelope.** Each record keeps the live record's time, session, project, turn and payload, with `source` and `via` set to `log`. `seq` starts at 1, because lookback runs at the agent's first start. `mono` and `boot_id` are the live fixture's: a transcript has no monotonic reading, and no lookback rule reads one.
