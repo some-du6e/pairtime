@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/some-du6e/pairtime/internal/agent/ipc"
 	"github.com/some-du6e/pairtime/internal/agent/scorer"
 	"github.com/some-du6e/pairtime/internal/agent/store"
 	"github.com/some-du6e/pairtime/pkg/event"
@@ -85,7 +86,8 @@ type numbersReply struct {
 // tallyReply is a project's tally over a span, as the local API gives it
 // (store.Tally). While display.shadow is on it holds only what decision
 // D-shadow-scope lets every view show: the agent's time on its own and
-// SM 4.2's loops, X.reroll, X.rewrite_loop, X.same_error and X.autopilot.
+// SM 4.2's loops, X.reroll, X.rewrite_loop, X.same_error and X.autopilot
+// (event.Reason.DarkFlow).
 // Your time and its splits are left out, and so is every other uncredited
 // code, X.day_cap included. pkg/score gives every second it looks at either
 // credit or an uncredited code, so with the rest of the uncredited time the
@@ -102,7 +104,7 @@ type tallyReply struct {
 func tallyOf(t store.Tally, shadow bool) tallyReply {
 	r := tallyReply{AgentOnlyS: t.AgentOnlyS, AgentOnlyByHarness: orEmpty(t.AgentOnlyByHarness), Uncredited: map[event.Reason]float64{}}
 	for code, s := range t.Uncredited {
-		if !shadow || isLoop(code) {
+		if !shadow || code.DarkFlow() {
 			r.Uncredited[code] = s
 		}
 	}
@@ -112,17 +114,6 @@ func tallyOf(t store.Tally, shadow bool) tallyReply {
 			CreditedByReason: orEmpty(t.CreditedByReason), OnHoldS: t.OnHoldS}
 	}
 	return r
-}
-
-// isLoop reports whether r is one of SM 4.2's dark-flow discounts, the
-// loops: the only uncredited codes a reply keeps while display.shadow is
-// on (D-shadow-scope).
-func isLoop(r event.Reason) bool {
-	switch r {
-	case event.ReasonReroll, event.ReasonRewriteLoop, event.ReasonSameError, event.ReasonAutopilot:
-		return true
-	}
-	return false
 }
 
 // orEmpty returns m, or an empty map in place of a nil one, so a reply
@@ -251,23 +242,14 @@ func (a *agent) serveLastSession(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, reply)
 }
 
-// askLastSession is the question `pairtime recap` asks over the per-user
-// socket for the last work session (#107's ipc.AskLastSession).
-const askLastSession = "sessions/last"
-
-// errUnknownQuestion is a question the agent has no answer for.
-var errUnknownQuestion = errors.New("the agent doesn't answer that question")
-
-// answerQuestion answers a question the CLI asks over the per-user socket,
-// as #107's ipc.Options.Answer does: sessions/last gets the JSON that GET
-// /v1/sessions/last gives, display.shadow's rule included, so `pairtime
-// recap` and the dashboard show the same session. Once the socket takes
-// questions, startIPC sets it as ipc.Options.Answer, and it returns
-// ipc.ErrUnknownQuestion for any other question in place of
-// errUnknownQuestion.
+// answerQuestion is ipc.Options.Answer: it answers the questions the CLI
+// asks over the per-user socket. ipc.AskLastSession, which `pairtime recap`
+// asks, gets the JSON that GET /v1/sessions/last gives, display.shadow's
+// rule included, so recap and the dashboard show the same session. Any
+// other question is ipc.ErrUnknownQuestion.
 func (a *agent) answerQuestion(q string) (json.RawMessage, error) {
-	if q != askLastSession {
-		return nil, fmt.Errorf("%w: %q", errUnknownQuestion, q)
+	if q != ipc.AskLastSession {
+		return nil, fmt.Errorf("%w: %q", ipc.ErrUnknownQuestion, q)
 	}
 	reply, err := a.lastSession(time.Now())
 	if err != nil {
