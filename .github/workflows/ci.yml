@@ -94,6 +94,27 @@ jobs:
       - name: go test
         run: go test ./...
 
+      - name: IPC against a second user, as root
+        if: ${{ !cancelled() }}
+        # The agent's socket must refuse another uid (docs/PLAN.md, WP-AG2).
+        # Acting as a second user takes root, so go test skips TestOtherUser,
+        # and this step runs it with sudo; it runs its second user as nobody.
+        run: |
+          go test -c -o "$RUNNER_TEMP/ipc.test" ./internal/agent/ipc
+          set +e
+          out=$(sudo "$RUNNER_TEMP/ipc.test" -test.run '^TestOtherUser$' -test.count=1 -test.v 2>&1)
+          code=$?
+          set -e
+          echo "$out"
+          if [ "$code" -ne 0 ]; then
+            exit "$code"
+          fi
+          # A skip would pass without checking anything.
+          if ! grep -q '^--- PASS: TestOtherUser ' <<<"$out"; then
+            echo "::error::TestOtherUser didn't run as root"
+            exit 1
+          fi
+
       - name: Cross-compile
         run: |
           # Targets from docs/research/client-platform.md section 7. windows/386
