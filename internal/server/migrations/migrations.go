@@ -16,11 +16,14 @@
 // statements. A migration whose statements changed after it was applied
 // stops pairtimed at start. A migration the database has and this binary
 // doesn't, because a newer release applied it, is reported and left alone.
+// The tests pin every file's checksum, so CI fails an edit to a merged
+// migration before any server sees it: a fix goes in a new file.
 //
-// In a file, a statement ends with a semicolon at the end of a line, and
-// lines starting with "--" are comments. Statements follow the portable SQL
-// rules in package store; postgres.yml applies every migration to Postgres
-// 18 as well as SQLite.
+// In a file, a statement ends with a semicolon at the end of a line, and a
+// line starting with "--" is a comment. A comment after code on the same
+// line stays in its statement and counts toward the checksum. Statements
+// follow the portable SQL rules in package store; postgres.yml applies
+// every migration to Postgres 18 as well as SQLite.
 package migrations
 
 import (
@@ -50,8 +53,10 @@ type Migration struct {
 	ID string
 	// Statements are the SQL statements, without their semicolons.
 	Statements []string
-	// SHA256 is the hex SHA-256 of the statements. Comments and
-	// indentation don't count, so editing those is safe.
+	// SHA256 is the hex SHA-256 of the statements as Split returns them.
+	// Whole-line comments and indentation don't count, so editing those
+	// is safe. A comment after code on the same line is part of its
+	// statement, so it counts.
 	SHA256 string
 }
 
@@ -113,9 +118,10 @@ func Parse(fsys fs.FS) ([]Migration, error) {
 }
 
 // Split returns the statements of a migration file. A statement ends at a
-// line whose last character is a semicolon, and lines starting with "--"
-// are comments. Each statement comes back with its lines trimmed and
-// without the semicolon.
+// line whose last character is a semicolon. A line starting with "--" is a
+// comment, which Split drops; a "--" after code stays in the statement,
+// for the database to read as a comment. Each statement comes back with
+// its lines trimmed and without the semicolon.
 func Split(text string) ([]string, error) {
 	var stmts, cur []string
 	for _, line := range strings.Split(text, "\n") {

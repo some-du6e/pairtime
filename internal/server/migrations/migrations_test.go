@@ -145,20 +145,78 @@ func TestParse(t *testing.T) {
 			}
 		})
 	}
-	t.Run("comments and indentation don't change a checksum, statements do", func(t *testing.T) {
-		sum := func(text string) string {
-			ms, err := migrations.Parse(fstest.MapFS{"0001_a.sql": {Data: []byte(text)}})
-			if err != nil {
-				t.Fatal(err)
+}
+
+func TestChecksum(t *testing.T) {
+	sum := func(t *testing.T, text string) string {
+		t.Helper()
+		ms, err := migrations.Parse(fstest.MapFS{"0001_a.sql": {Data: []byte(text)}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return ms[0].SHA256
+	}
+	const base = "CREATE TABLE a (\n  id BIGINT\n);\n"
+	tests := []struct {
+		name     string
+		text     string
+		wantSame bool
+	}{
+		{name: "a whole-line comment doesn't change the checksum", text: "-- why a exists\nCREATE TABLE a (\n  -- the key\n  id BIGINT\n);\n", wantSame: true},
+		{name: "indentation doesn't change the checksum", text: "CREATE TABLE a (\n        id BIGINT\n);\n", wantSame: true},
+		{name: "a comment after code is part of its statement, so it changes the checksum", text: "CREATE TABLE a (\n  id BIGINT -- the key\n);\n"},
+		{name: "a changed column type changes the checksum", text: "CREATE TABLE a (\n  id TEXT\n);\n"},
+	}
+	want := sum(t, base)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if same := sum(t, tt.text) == want; same != tt.wantSame {
+				t.Errorf("checksum unchanged = %v, want %v, for:\n%s", same, tt.wantSame, tt.text)
 			}
-			return ms[0].SHA256
+		})
+	}
+}
+
+// pinned is the checksum of every embedded migration. A deployed database
+// records each migration's checksum when it applies it, and pairtimed stops
+// at start when a file no longer matches (ErrChanged), so a merged
+// migration is never edited: its fix goes in a new file. Applying
+// migrations to empty databases can't catch an edit, and this list does. A
+// new migration adds its line. A changed line is an edit to a migration
+// that servers may have applied, for a reviewer to refuse.
+var pinned = []struct{ id, sha256 string }{
+	{"0001_ops_probe", "03e43c38a5ae6670785d28dd6926750ec177a35eba1ec04a94537a7d07fd2738"},
+}
+
+func TestPinnedChecksums(t *testing.T) {
+	ms, err := migrations.Embedded()
+	if err != nil {
+		t.Fatal(err)
+	}
+	embedded := make(map[string]string, len(ms))
+	for _, m := range ms {
+		embedded[m.ID] = m.SHA256
+	}
+	for _, p := range pinned {
+		t.Run(p.id+" keeps the checksum servers recorded when they applied it", func(t *testing.T) {
+			got, ok := embedded[p.id]
+			if !ok {
+				t.Fatalf("%s is pinned but no longer embedded; servers that applied it would report it as a newer release's", p.id)
+			}
+			if got != p.sha256 {
+				t.Errorf("%s has checksum %s, but %s is pinned. Every server that applied it would stop at start: restore the file and put the change in a new migration", p.id, got, p.sha256)
+			}
+		})
+	}
+	t.Run("every embedded migration is pinned", func(t *testing.T) {
+		pins := make(map[string]bool, len(pinned))
+		for _, p := range pinned {
+			pins[p.id] = true
 		}
-		base := sum("CREATE TABLE a (\n  id BIGINT\n);\n")
-		if got := sum("-- why a exists\nCREATE TABLE a (\n        id BIGINT\n);\n"); got != base {
-			t.Error("a comment or indentation changed the checksum")
-		}
-		if got := sum("CREATE TABLE a (\n  id TEXT\n);\n"); got == base {
-			t.Error("a changed column type kept the checksum")
+		for _, m := range ms {
+			if !pins[m.ID] {
+				t.Errorf("%s isn't pinned: add {%q, %q} to pinned in migrations_test.go", m.ID, m.ID, m.SHA256)
+			}
 		}
 	})
 }
