@@ -3,5 +3,6 @@
 # (deploy/runbook.md).
 /data/
 /config/
-# Copies of pairtime.toml kept before upgrades.
-/pairtime.toml.*
+/witness/
+# Values compose interpolates into compose.yml on this host, if any.
+/.env
