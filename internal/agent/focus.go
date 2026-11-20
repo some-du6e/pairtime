@@ -32,8 +32,8 @@ import (
 //     again when it ties a process to a session, and when a session starts
 //     or ends.
 //   - focus_project comes from the project each hooked session works in
-//     (hookTies.projectOf), which the hook sink knows once the agent can
-//     turn a folder into a project key (hookSteps.project).
+//     (hookTies.projectOf), which the adapters set from the project the
+//     git adapter resolved the session's folder to (adapters.go, WP-AG7).
 //
 // src is the focus source: focus.ThisOS(), or a fake in tests. startLedger
 // and startPresence must have run.

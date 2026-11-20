@@ -95,3 +95,9 @@ func (d Dirs) Coach() string { return filepath.Join(d.Data, "coach") }
 
 // Inbox holds hook calls made while the agent was down, and plugin events.
 func (d Dirs) Inbox() string { return filepath.Join(d.Data, "inbox") }
+
+// Held holds the hook calls the agent took in before it could read them:
+// before its keystore and its ledger were open, its adapters have no keys
+// to key them with and no ledger to write them to (WP-AG7). Like the
+// inbox, it holds what the harness sent, prompts included.
+func (d Dirs) Held() string { return filepath.Join(d.Data, "held.jsonl") }

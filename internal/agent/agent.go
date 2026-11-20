@@ -41,6 +41,7 @@ import (
 	"github.com/some-du6e/pairtime/internal/agent/procs"
 	"github.com/some-du6e/pairtime/internal/agent/sched"
 	"github.com/some-du6e/pairtime/internal/agent/state"
+	"github.com/some-du6e/pairtime/internal/platform"
 	"github.com/some-du6e/pairtime/internal/version"
 )
 
@@ -76,6 +77,11 @@ type Options struct {
 	// that can pass, such as a locked keyring; 15 s otherwise. Tests set
 	// it so they needn't wait.
 	LedgerRetry time.Duration
+	// Walk, when set, replaces how the agent reads the parent chain of a
+	// hook connection's peer, which is hookpath.ReadChain otherwise
+	// (ipc.Options.Walk). Tests use it to hand captured calls in from
+	// under the processes the capture recorded.
+	Walk func(pid int) []platform.Proc
 }
 
 // linked keeps heavyModules' entry points reachable (see heavy_linux.go).
@@ -116,6 +122,12 @@ type agent struct {
 	// sessions, once keySessions has derived it from the device key.
 	hooked   *hookTies
 	kSession atomic.Pointer[[]byte]
+	// adapt runs the harness adapters and the git adapter, which turn the
+	// hook calls the journal stores, and the commits in the sessions'
+	// repos, into ledger records (adapters.go, git.go; WP-AG7).
+	// adaptersHost makes it on first use.
+	adapt     *adapterHost
+	adaptOnce sync.Once
 	// ledgerIn takes presence's and focus's records, and presence's
 	// seals, to the ledger writer once it opens (WP-LG5).
 	ledgerIn    *ledger.Presence
@@ -213,6 +225,7 @@ func Run(ctx context.Context, opts Options) error {
 	a.newFocus(focus.ThisOS())
 	closers = append(closers, a.startProcs())
 	closers = append(closers, a.startFocus())
+	closers = append(closers, a.startAdapters())
 	closers = append(closers, a.startIPC(opts))
 
 	ln, pf, err := a.listen(opts.Ports)

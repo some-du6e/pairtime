@@ -53,6 +53,7 @@ type statusReply struct {
 	Wakeups  uint64            `json:"wakeups"`
 	Jobs     []jobReply        `json:"jobs"`
 	IPC      ipcReply          `json:"ipc"`
+	Adapters adaptersReply     `json:"adapters"`
 	Problems map[string]string `json:"problems,omitempty"`
 }
 
@@ -77,6 +78,7 @@ func (a *agent) serveStatus(w http.ResponseWriter, r *http.Request) {
 		Wakeups:  a.sched.Wakeups(),
 		Jobs:     jobs,
 		IPC:      a.ipcStatus(),
+		Adapters: a.adaptersHost().status(),
 		Problems: a.currentProblems(),
 	})
 }
