@@ -129,6 +129,43 @@ func TestOpenSQLite(t *testing.T) {
 			},
 		},
 		{
+			name: "the write connection zeroes what it deletes (secure_delete)",
+			run: func(t *testing.T) {
+				if got := pragma(t, "secure_delete"); got != "1" {
+					t.Errorf("secure_delete = %s, want 1", got)
+				}
+			},
+		},
+		{
+			name: "a deleted row's bytes are gone from the database file",
+			run: func(t *testing.T) {
+				// The row reaches the file through a checkpoint before it is
+				// deleted, so only secure_delete can take its bytes out.
+				const marker = "pairtime-secure-delete-check-5c1e"
+				for _, q := range []string{
+					"CREATE TABLE secure_delete_check (v TEXT)",
+					"INSERT INTO secure_delete_check (v) VALUES ('" + marker + "')",
+					"PRAGMA wal_checkpoint(TRUNCATE)",
+					"DELETE FROM secure_delete_check",
+					"PRAGMA wal_checkpoint(TRUNCATE)",
+				} {
+					if _, err := db.Write.ExecContext(ctx, q); err != nil {
+						t.Fatalf("%s: %v", q, err)
+					}
+				}
+				path := sqlitePath(t, db)
+				for _, f := range []string{path, path + "-wal"} {
+					b, err := os.ReadFile(f)
+					if err != nil && !errors.Is(err, fs.ErrNotExist) {
+						t.Fatal(err)
+					}
+					if strings.Contains(string(b), marker) {
+						t.Errorf("%s still holds the deleted row's text", filepath.Base(f))
+					}
+				}
+			},
+		},
+		{
 			name: "foreign keys are enforced, as on Postgres",
 			run: func(t *testing.T) {
 				if got := pragma(t, "foreign_keys"); got != "1" {
