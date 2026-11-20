@@ -196,6 +196,11 @@ func TestNormalize(t *testing.T) {
 		{"try alone isn't a retry", "try harder", "try harder", []int{}},
 		{"lowercasing is the simple mapping: U+0130 is i, a final capital sigma is a small sigma, and sharp s stays", "\U00000130STANBUL \U000003a3\U00000391\U000003a3 Stra\U000000dfe", "istanbul \U000003c3\U000003b1\U000003c3 stra\U000000dfe", []int{}},
 		{"a fenced block goes with its fences", "look\n```js\nconst x = 1\n```\nwhy", "look why", []int{1, 2, 3}},
+		{"a Go panic goes with its goroutine block, each frame and the file line under it", "panic: runtime error: index out of range [5] with length 3\n\ngoroutine 1 [running]:\nmain.main()\n\t/x/main.go:8 +0x1d\nhow do I solve this", "how do i solve this", []int{0, 1, 2, 3, 4}},
+		{"after a panic, a blank line that no goroutine block follows stays", "panic: boom\n\nnot a goroutine\nstays", "not a goroutine stays", []int{0}},
+		{"rustc's column-0 gutter line goes with its error, and the indented ones too", "error[E0308]: mismatched types\n --> src/main.rs:2:18\n  |\n2 |     let x: i32 = \"a\";\n  |            ^^^ expected `i32`\nwhy", "why", []int{0, 1, 2, 3, 4}},
+		{"a gutter-like line after prose isn't error text", "see\n2 | x\nok", "see <n> x ok", []int{}},
+		{"a JVM exception goes with its frames and its cause", "Exception in thread \"main\" java.lang.IllegalStateException: boom\n\tat Main.main(Main.java:3)\nCaused by: java.lang.NumberFormatException: x\n\t... 1 more\nhelp", "help", []int{0, 1, 2, 3}},
 		{"a fence closes only with the same character, at least as long", "a\n~~~~\nb\n~~~\nc\n~~~~~\nd", "a d", []int{1, 2, 3, 4, 5}},
 		{"an unclosed fence runs to the end", "a\n```\nb\nc", "a", []int{1, 2, 3}},
 		{"a backtick fence whose line holds another backtick isn't a fence, and its backticks go as edge punctuation", "```js x = 1``` still here", "js x <n> still here", []int{}},
@@ -234,6 +239,8 @@ func TestErrorSignature(t *testing.T) {
 		{"a Rust error gives its signature", "error[E0308]: mismatched types", "error[E<n>]: mismatched types", true},
 		{"a compiler error's line and column become numbers", "main.c:3:5: error: 'x' undeclared", "main.c:<n>:<n>: error: 'x' undeclared", true},
 		{"a Go panic gives its signature", "panic: runtime error: index out of range [5] with length 3", "panic: runtime error: index out of range [<n>] with length <n>", true},
+		{"the JVM's thread prefix is part of the error line", "Exception in thread \"main\" java.lang.IllegalStateException: boom", "Exception in thread \"main\" java.lang.IllegalStateException: boom", true},
+		{"an uncaught promise rejection is an error line", "Uncaught (in promise) TypeError: Failed to fetch", "Uncaught (in promise) TypeError: Failed to fetch", true},
 		{"prose has no signature", "the error is that terror and Errors happen, error: none", "", false},
 	}
 	for _, c := range cases {

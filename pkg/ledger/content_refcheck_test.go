@@ -188,6 +188,11 @@ var (
 		"a.go:1:2: fatal error: x.h: no such file", "FAILED tests/test_api.py::test_login - AssertionError: 401 != 200",
 		"FAILED ", "--- FAIL: TestParse (0.00s)", "    parse_test.go:14: got 3, want 4",
 		"panic: runtime error: index out of range [5] with length 3", "panic: ", "goroutine 1 [running]:",
+		"goroutine 18 [chan receive]:", "main.main()", "\t/home/teen/x/main.go:8 +0x1d", "created by main.main in goroutine 1",
+		"[signal SIGSEGV: segmentation violation code=0x1 addr=0x0 pc=0x47e1b6]", "2 |     let x: i32 = \"a\";", "12 | }",
+		"  |            ^^^ expected `i32`", "Exception in thread \"main\" java.lang.IllegalStateException: boom",
+		"\tat Main.main(Main.java:3)", "Caused by: java.lang.NumberFormatException: x", "\t... 1 more",
+		"Uncaught (in promise) TypeError: Failed to fetch", "",
 		"\U00003000TypeError: x\U00003000", "\U000000a0FAILED x 0x7ffd",
 	}
 	lineBreaks = []string{"\n", "\n", "\r\n", "\r\n\r\n", "\n\n"}

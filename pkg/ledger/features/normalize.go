@@ -30,15 +30,45 @@ var (
 	// Python, JavaScript or Java, Rust's error[E0xxx], a compiler's
 	// file:line:col: error:, pytest's FAILED, go test's --- FAIL: and a Go
 	// panic.
-	errorLine = regexp.MustCompile(`^(?:` + strings.Join([]string{
-		`(?:Uncaught )?(?:[A-Za-z_$][A-Za-z0-9_$]*\.)*[A-Za-z0-9_$]*(?:Error|Exception)(?::.*)?`,
-		`error\[E[0-9]{4}\](?::.*)?`,
-		`[^ \t]+:[0-9]+:[0-9]+: (?:fatal )?error:.*`,
-		`FAILED .+`,
-		`--- FAIL: .+`,
-		`panic: .+`,
-	}, "|") + `)$`)
+	errorLine = regexp.MustCompile(`^(?:` + strings.Join(errorPatterns[:], "|") + `)$`)
+	// errorLines are E1 to E6 one by one, so the walk knows which matched.
+	errorLines = func() (out [len(errorPatterns)]*regexp.Regexp) {
+		for i, p := range errorPatterns {
+			out[i] = regexp.MustCompile(`^(?:` + p + `)$`)
+		}
+		return out
+	}()
+	// gutterLine is R, a compiler's gutter line with its line number at
+	// column 0, where rustc writes the widest number. It goes with an E2 or
+	// E3 line, whose other gutter lines are indented.
+	gutterLine = regexp.MustCompile(`^[0-9]+ +\|.*$`)
+	// goroutineLine is G, the first line of a goroutine's stack in a Go
+	// panic.
+	goroutineLine = regexp.MustCompile(`^goroutine [0-9]+ [^\[]*\[[^\]]*\]:$`)
 )
+
+// errorPatterns are E1 to E6 (spec 10.4). E1 takes the JVM's
+// Exception in thread "main" and Caused by:, and a browser's Uncaught and
+// Uncaught (in promise), before an exception line.
+var errorPatterns = [...]string{
+	`(?:Uncaught (?:\(in promise\) )?|Exception in thread "[^"]*" |Caused by: )?(?:[A-Za-z_$][A-Za-z0-9_$]*\.)*[A-Za-z0-9_$]*(?:Error|Exception)(?::.*)?`,
+	`error\[E[0-9]{4}\](?::.*)?`,
+	`[^ \t]+:[0-9]+:[0-9]+: (?:fatal )?error:.*`,
+	`FAILED .+`,
+	`--- FAIL: .+`,
+	`panic: .+`,
+}
+
+// errorKind returns which of E1 to E6, 1 to 6, the stripped line s matches
+// first, or 0 for none.
+func errorKind(s string) int {
+	for i, re := range errorLines {
+		if re.MatchString(s) {
+			return i + 1
+		}
+	}
+	return 0
+}
 
 const traceback = "Traceback (most recent call last):"
 
@@ -77,6 +107,38 @@ func indented(line string) bool {
 	return strings.HasPrefix(line, " ") || strings.HasPrefix(line, "\t")
 }
 
+// errorTextEnd returns the index of the first line after the error text
+// that starts at line i, a traceback's first line or a line that matches E
+// kind (spec 10.4 step 2; kind is 0 for a traceback). The text runs on
+// over every indented line; after E2 or E3 over every gutter line R too;
+// and after E6 over [signal lines and then each goroutine block: the blank
+// lines before it, its first line G, and every line that starts with a tab
+// or comes just before one that does.
+func errorTextEnd(lines []string, i, kind int) int {
+	i++
+	for i < len(lines) {
+		l := lines[i]
+		if !indented(l) && !((kind == 2 || kind == 3) && gutterLine.MatchString(l)) && !(kind == 6 && strings.HasPrefix(l, "[signal ")) {
+			break
+		}
+		i++
+	}
+	for kind == 6 {
+		j := i
+		for j < len(lines) && strip(lines[j]) == "" {
+			j++
+		}
+		if j == len(lines) || !goroutineLine.MatchString(strip(lines[j])) {
+			break
+		}
+		i = j + 1
+		for i < len(lines) && (strings.HasPrefix(lines[i], "\t") || i+1 < len(lines) && strings.HasPrefix(lines[i+1], "\t")) {
+			i++
+		}
+	}
+	return i
+}
+
 // removedLines returns the indices of the lines that spec 10.4 step 2
 // removes: fenced blocks, pasted blocks, tracebacks and error lines with
 // the indented lines after them. At each line the first rule that applies
@@ -99,10 +161,7 @@ func removedLines(lines []string) []int {
 			}
 			i = min(i+1, len(lines))
 		case s == traceback || isErrorLine(s):
-			i++
-			for i < len(lines) && indented(lines[i]) {
-				i++
-			}
+			i = errorTextEnd(lines, i, errorKind(s))
 		default:
 			i++
 			continue

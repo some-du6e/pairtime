@@ -250,7 +250,7 @@ func TestContentVectorsHaveWhatSpec11Lists(t *testing.T) {
 		{"the lowercase table lists 55 later mappings", len(f.Lowercase.Later), 55},
 		{"the vectors hold 22 commitments", len(f.Commitments), 22},
 		{"the vectors hold 58 reveals", len(f.Reveals), 58},
-		{"the vectors hold 50 normalizations", len(f.Normalizations), 50},
+		{"the vectors hold 54 normalizations", len(f.Normalizations), 54},
 		{"the vectors hold 21 feature maps", len(f.Features), 21},
 		{"the vectors hold 17 hunk derivations", len(f.Diffs), 17},
 		{"the vectors hold 6 Jaccard pairs", len(f.Jaccard), 6},
