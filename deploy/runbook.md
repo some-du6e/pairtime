@@ -50,7 +50,7 @@ Neither bucket may keep versions. R2 has no versioning, and `pairtimed doctor` f
 
 Ask for anything on this list you don't have before step 1 (DESIGN 10.5):
 
-1. The host: Linux, Docker with Compose v2, local disk (never NFS or SMB), outbound HTTPS, always on. DESIGN 10.5 asks for 40 GB, which is for R11 scale. The pilot runs in CT 118 with 20 GB on purpose: its database is small, and a snapshot needs free space about the database's size while it is taken. The bundle lives in `/srv/pairtime`, and every compose command runs from `/srv/pairtime/deploy`.
+1. The host: Linux, Docker with Compose v2, local disk (never NFS or SMB), outbound HTTPS, always on. DESIGN 10.5 asks for 40 GB, which is for R11 scale. The pilot runs in CT 118 with 20 GB on purpose: its database is small, and a snapshot needs free space about the database's size while it is taken. Grow the disk once the database passes a third of it: doctor's `disk` line warns from then on, and the nightly snapshot fails, so its monitor alerts, once the free space is under the database's size. The bundle lives in `/srv/pairtime`, and every compose command runs from `/srv/pairtime/deploy`.
 2. The tunnel's token.
 3. The Hack Club Auth app's client id and secret, with redirect URI `https://pairtime.karimeltaib.com/auth/hca/callback`. Without them the server runs, but nobody can sign in.
 4. The R2 endpoint, `https://<account id>.r2.cloudflarestorage.com`, and one access key with read and write on the two buckets and nothing else.
@@ -77,11 +77,11 @@ The `pairtimed` line must name a released tag and a digest. If it says `UNRELEAS
 ### 2. Make the directories
 
 ```sh
-sudo install -d -m 0700 -o 65532 -g 65532 data witness-roots
+sudo install -d -m 0700 -o 65532 -g 65532 data data/tmp witness-roots
 install -d -m 0755 config
 ```
 
-65532 is the image's user. pairtimed refuses a data directory that group or others can enter, because Litestream writes copies of the database there. Don't let compose create these directories on its own: it would make them root's, and pairtimed couldn't write to them.
+65532 is the image's user. pairtimed refuses a data directory that group or others can enter, because Litestream writes copies of the database there, and init refuses one it can't write. Don't let compose create these directories on its own: it would make them root's, and pairtimed couldn't write to them. `data/tmp` takes SQLite's temporary files, on the disk instead of the container's 256 MiB `/tmp`; pairtimed makes it if it is missing.
 
 ### 3. The secrets
 
@@ -145,7 +145,9 @@ docker compose run --rm -T pairtimed pairtimed init \
   -config-out - > config/pairtime.toml.new && mv config/pairtime.toml.new config/pairtime.toml
 ```
 
-Leave out `-hca-client-id` if there is none yet. init makes `server.ed25519`, `evidence.p256` and `pepper` in `data/keys`, each mode 0600, and prints each key's id and public key to the terminal. Copy those two lines into the deploy log, issue #103. It reads the buckets from the `PAIRTIME_S3_*` lines of step 3, which Litestream reads too, and it checks that the file loads before it writes anything. If it fails, it has written nothing, so remove `config/pairtime.toml.new`, fix what it names and run it again.
+Leave out `-hca-client-id` if there is none yet; with it, `PAIRTIME_HCA_CLIENT_SECRET` and `PAIRTIME_EMAIL_KEY` must be in `config/secrets.env` too, or init refuses, as pairtimed would. init makes `server.ed25519`, `evidence.p256` and `pepper` in `data/keys`, each mode 0600, and prints each key's id and public key to the terminal. Copy those two lines into the deploy log, issue #103. It reads the buckets from the `PAIRTIME_S3_*` lines of step 3, which Litestream reads too, refuses to run without them, and checks that the file loads before it writes anything. If it fails, it has written nothing, so remove `config/pairtime.toml.new`, fix what it names and run it again.
+
+On a host that was rebuilt or moved, or lost its disk, init refuses to make keys: `data/` holds a database, or `pairtime-data` already holds Litestream's replica, evidence or key backups, so a server ran here before, and its keys come from their backup ("Restoring the keys"). Once they are in `data/keys`, init keeps them and writes `pairtime.toml`. pairtimed itself refuses to serve a database written with other keys. Only to start over with new keys anyway, pass `-new-keys`.
 
 init never replaces a key. It refuses to write `pairtime.toml` when one is already in `config/`, since the new file would lose the operators of step 9 and every edit made since. To add something later, such as the HCA client id once Karim has it, edit the file by hand:
 
@@ -154,7 +156,7 @@ init never replaces a key. It refuses to write `pairtime.toml` when one is alrea
 client_id = "<client id>"
 ```
 
-then `docker compose up -d pairtimed`. Only to start the file over, run init with `-force`.
+then `docker compose restart pairtimed`, since `docker compose up -d` doesn't recreate the container when only a mounted file changed, and doctor reads the file, not what is running. Only to start the file over, run init with `-force`.
 
 ### 8. Back up the keys
 
@@ -165,7 +167,7 @@ docker compose run --rm -T pairtimed pairtimed keys backup -upload \
   > "pairtime-keys-$(date -u +%Y%m%dT%H%M%SZ).tar.age"
 ```
 
-The backup is a tar archive of the three keys and `PAIRTIME_EMAIL_KEY`, encrypted with age to Karim's public key and armored as text. `-upload` also stores it in `pairtime-data` under `backups/keys/`. Send the file to Karim too. Only his offline identity can read it, so any channel will do. Back up again whenever a key or `PAIRTIME_EMAIL_KEY` changes.
+The backup is a tar archive of the three keys and `PAIRTIME_EMAIL_KEY`, encrypted with age to Karim's public key and armored as text. `-upload` also stores it in `pairtime-data` under `backups/keys/`, with a name that gives the time and the ids of the keys and of the email key it holds, so doctor can tell whether the newest backup holds this server's keys; `pairtimed keys list` lists them. Send the file to Karim too. Only his offline identity can read it, so any channel will do. Back up again whenever a key or `PAIRTIME_EMAIL_KEY` changes: doctor's `keys_backup` line fails until you do, and also for a backup from before names said what they hold.
 
 ### 9. Operators, and what stays closed
 
@@ -175,7 +177,7 @@ Ask Karim for the HCA subs of the people who run this instance and put them in `
 operators = ["<hca sub>", "<hca sub>"]
 ```
 
-Operators can sign in while sign-ups are closed, to smoke-test the server. Alpha testers aren't operators: they stay in local-only mode until sign-ups open. Leave `signups_open = false`, `profile_default = "ask"` and `[controller]` as init wrote them. pairtimed refuses to start with `signups_open = true` until `[controller]` has a name and a contact. Karim alone decides when these change (DESIGN 8.3, 8.6).
+Then `docker compose restart pairtimed`. Operators can sign in while sign-ups are closed, to smoke-test the server. Alpha testers aren't operators: they stay in local-only mode until sign-ups open. Leave `signups_open = false`, `profile_default = "ask"` and `[controller]` as init wrote them. pairtimed refuses to start with `signups_open = true` until `[controller]` has a name and a contact. Karim alone decides when these change (DESIGN 8.3, 8.6).
 
 ### 10. Start
 
@@ -215,7 +217,7 @@ Every line should say `ok`, except these, which may say `skip`:
 - `witness`, until WP-SV17's publisher writes day roots to `witness-roots/`. Before then the sidecar runs and finds nothing to push.
 - `hca`, while there is no client id.
 
-doctor checks the configuration, the keys and their modes, the database and its migrations, that `litestream.yml` and `pairtime.toml` name the same database and bucket, `/readyz` with the replica's lag, that neither bucket keeps versions, the lifecycle rules of both (none that deletes in `pairtime-data`, and one in `pairtime-snapshots` that deletes snapshots within 30 days), that both refuse a second write-once put, the newest snapshot and key backup, HCA's discovery document, the witness repository through GitHub's public API, each push monitor, and `https://<host>/healthz` through the tunnel. It pings a monitor only when that monitor's owner would, and checks the HCA client id and secret with one client_credentials grant. A `warn` line means doctor couldn't tell, and doesn't fail the run. An R2 key scoped to the two buckets may get 403 for GetBucketVersioning and GetBucketLifecycleConfiguration. R2 has no versioning, and the lifecycle rules show in the dashboard under each bucket's settings, so check them there, note it in the deploy log, and leave the two checks out with `-skip versioning,lifecycle`. Paste the output into the deploy log, issue #103.
+doctor checks the configuration, the keys and their modes, the database and its migrations, the room the database has on its disk, that `litestream.yml` and `pairtime.toml` name the same database and bucket, `/readyz` with the replica's lag, that neither bucket keeps versions, the lifecycle rules of both (none that deletes in `pairtime-data`, and one in `pairtime-snapshots` that deletes snapshots within 30 days), that both refuse a second write-once put, that an upload of about 11 MiB in parts reaches the snapshot bucket whole, as a snapshot past 5 GiB would, the newest snapshot, that the newest key backup holds these keys, HCA's discovery document, the witness repository through GitHub's public API, each push monitor, and `https://<host>/healthz` through the tunnel. It pings a monitor only when that monitor's owner would, and checks the HCA client id and secret with one client_credentials grant. A `warn` line means doctor couldn't tell, and doesn't fail the run. An R2 key scoped to the two buckets may get 403 for GetBucketVersioning and GetBucketLifecycleConfiguration. R2 has no versioning, and the lifecycle rules show in the dashboard under each bucket's settings, so check them there, note it in the deploy log, and leave the two checks out with `-skip versioning,lifecycle`. Paste the output into the deploy log, issue #103.
 
 ### 13. From outside
 
@@ -291,12 +293,23 @@ age -d -i <identity file> pairtime-keys-<time>.tar.age | tar -x
 and sends you the `pairtime-keys/` directory over SSH. On the host:
 
 ```sh
-sudo install -d -m 0700 -o 65532 -g 65532 data/keys
+sudo install -d -m 0700 -o 65532 -g 65532 data data/keys
 sudo install -m 0600 -o 65532 -g 65532 pairtime-keys/server.ed25519 \
   pairtime-keys/evidence.p256 pairtime-keys/pepper data/keys/
 ```
 
-Put `pairtime-keys/PAIRTIME_EMAIL_KEY`'s one line back into `config/secrets.env` as `PAIRTIME_EMAIL_KEY=<value>`, then `shred -u` every file under `pairtime-keys/` and remove the directory, here and on Karim's side. `docker compose run --rm -T pairtimed pairtimed keys show` should print the same key ids as the deploy log, issue #103.
+`install -d` makes `data/` itself with the right owner and mode when the host has none yet; otherwise it would make it root's. Put `pairtime-keys/PAIRTIME_EMAIL_KEY`'s one line back into `config/secrets.env` as `PAIRTIME_EMAIL_KEY=<value>`, then `shred -u` every file under `pairtime-keys/` and remove the directory, here and on Karim's side. `docker compose run --rm -T pairtimed pairtimed keys show` should print the same key ids as the deploy log, issue #103, and `pairtimed keys list` the backups that hold them. With the keys back, step 7's init is safe: it keeps them, and writes `pairtime.toml` if `config/` has none.
+
+## Restoring from a disk backup
+
+A `data/` copied from a disk or VPS snapshot holds an old `pairtime.db`. Started as it is, Litestream would take that old database for the newest state and upload it over the replica. Before the first start, move the database aside and keep only the keys, so Litestream restores the replica instead:
+
+```sh
+sudo mkdir /srv/pairtime-old
+sudo sh -c 'mv data/pairtime.db data/pairtime.db-wal data/pairtime.db-shm data/.pairtime.db-litestream /srv/pairtime-old/ 2> /dev/null'
+sudo ls -la data   # keys/ and tmp/, nothing else
+docker compose up -d
+```
 
 ## Moving to a VPS
 
@@ -318,6 +331,10 @@ Before the native program pays out, the server moves to a Hetzner CCX13, or an A
 | pairtimed logs `group or others can enter` and exits | `sudo chown 65532:65532 data && sudo chmod 700 data`, then `docker compose up -d`. |
 | `config: ... unknown keys` | `pairtime.toml` has a key this release doesn't know. Fix the spelling, or after a rollback put the copy back ("Rolling back"). |
 | `signups_open is true, but controller.name and controller.contact aren't both set` | Sign-ups can't open before the controller is named. Set it back to `false` unless Karim has given the controller's name and contact. |
+| pairtimed exits with `the keys aren't the ones this database was written with` | `data/keys` holds other keys than the database was written with, as after an init on a rebuilt host. Put the server's keys back from their backup ("Restoring the keys"); never `-new-keys` for a database that holds accounts. |
+| init refuses with `a server ran here before` | This is a rebuilt or moved host. Restore the keys first ("Restoring the keys"), then run init again. |
+| doctor's `keys_backup` fails | The newest key backup is from before backups named their keys, or holds other keys or another email key than this server has. Back up again (step 8). |
+| doctor's `disk` warns, or the snapshot log says `no room for the snapshot's copy` | The database is past a third of the disk, or larger than its free space. Grow the disk (What Karim provides, item 1). |
 | `/readyz` fails on `replication` | Litestream isn't uploading. `docker compose logs pairtimed` shows its errors, usually a wrong key or endpoint in `config/secrets.env`. Doctor's `litestream.yml` line says whether Litestream and pairtimed name the same bucket. |
 | `/readyz` fails on `object_storage.*` | The bucket or its key is wrong. Its error names the S3 code, such as `NoSuchBucket` or `SignatureDoesNotMatch`. |
 | `config/witness_deploy_key` turned into a directory | compose started before the key existed. `sudo rmdir config/witness_deploy_key`, do step 5, then `docker compose up -d witness`. |

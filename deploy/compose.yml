@@ -52,12 +52,22 @@ services:
       - ./litestream.yml:/etc/litestream.yml:ro
       # Where pairtimed writes each day's signed witness root (WP-SV17).
       - ./witness-roots:/witness
+      # /tmp in memory, since the root filesystem is read-only, and bounded,
+      # so nothing written there can take the host's memory. SQLite's own
+      # temporary files, its sort spills and temporary indexes, go to
+      # /data/tmp on the disk instead (SQLITE_TMPDIR below; #133).
+      - type: tmpfs
+        target: /tmp
+        tmpfs:
+          size: 268435456
     # compose reads this file on the host and passes each line to the
     # container as an environment variable; pairtimed and litestream.yml
     # read their PAIRTIME_* variables from there.
     env_file: ./config/secrets.env
     environment:
       PAIRTIME_WITNESS_REPO: ${PAIRTIME_WITNESS_REPO:-some-du6e/pairtime-witness}
+      # pairtimed serve makes it, mode 0700, if the runbook's step 2 didn't.
+      SQLITE_TMPDIR: /data/tmp
     healthcheck:
       # /healthz on the private ops port: the process answers. Not /readyz,
       # whose database check commits a row each call and so makes
@@ -71,11 +81,10 @@ services:
       # A restore from the replica on a new host can take minutes.
       start_period: 10m
     # Time for pairtimed to finish its requests and for Litestream's last
-    # sync before Docker kills them.
+    # sync before Docker kills them. litestream.yml's shutdown-timeout, the
+    # time Litestream gives both, ends first.
     stop_grace_period: 90s
     read_only: true
-    tmpfs:
-      - /tmp
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
 

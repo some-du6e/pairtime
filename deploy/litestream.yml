@@ -38,6 +38,13 @@
 # how far the replica is behind the database (DESIGN 10.4).
 exec: pairtimed serve -litestream-replica litestream
 
+# How long Litestream gives pairtimed to exit once it is told to stop, and
+# itself to sync one last time, before it gives up: inside compose.yml's
+# stop_grace_period of 90 s, after which Docker kills both, and past
+# Litestream's own default of 30 s, which pairtimed's 20 s for requests in
+# flight left little of (#133).
+shutdown-timeout: 80s
+
 # Litestream's own dead man's switch: a GET of this push-monitor URL every
 # 5 minutes, sent only while the database has synced within that time
 # (DESIGN 10.4). Empty turns it off, as in the restore drill.

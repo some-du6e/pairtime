@@ -212,7 +212,7 @@ image() {
 }
 
 read_only() {
-	local v d copy agent missing=""
+	local v d copy agent help newkeys recorded newest only missing=""
 	for v in S3_ENDPOINT S3_BUCKET S3_SNAPSHOT_BUCKET S3_ACCESS_KEY_ID S3_SECRET_ACCESS_KEY; do
 		if [ -z "${!v:-}" ]; then
 			missing="$missing $v"
@@ -225,7 +225,7 @@ read_only() {
 	copy=$RUNNER_TEMP/read-only-copy
 	cp -r deploy "$d"
 	cd "$d"
-	sudo install -d -m 0700 -o 65532 -g 65532 data witness-roots
+	sudo install -d -m 0700 -o 65532 -g 65532 data data/tmp witness-roots
 	mkdir config
 	# Only the two env files are private: compose reads them on the host.
 	# pairtime.toml has to stay readable by 65532, the image's user.
@@ -243,10 +243,19 @@ read_only() {
 	)
 	printf 'services:\n  pairtimed:\n    image: pairtimed:drill\n    pull_policy: never\n    network_mode: host\n' > drill.yml
 	compose() { docker compose -f compose.yml -f drill.yml "$@"; }
+	# This host's keys are throwaway ones, on purpose: the real ones stay
+	# with the server. init refuses to make keys where the bucket shows a
+	# server ran before, unless -new-keys (#133); an image from before that
+	# has neither the check nor the flag.
+	help=$(compose run --rm -T pairtimed pairtimed init -h 2>&1 || true)
+	newkeys=()
+	if grep -q -- '-new-keys' <<< "$help"; then
+		newkeys=(-new-keys)
+	fi
 	# To a new name and then moved, as runbook step 7 does: a redirect
 	# straight to pairtime.toml would make an empty one before init runs,
 	# and init refuses to replace a pairtime.toml.
-	compose run --rm -T pairtimed pairtimed init -base-url http://localhost:8080 -config-out - > config/pairtime.toml.new
+	compose run --rm -T pairtimed pairtimed init -base-url http://localhost:8080 "${newkeys[@]}" -config-out - > config/pairtime.toml.new
 	chmod 0644 config/pairtime.toml.new
 	mv config/pairtime.toml.new config/pairtime.toml
 
@@ -259,6 +268,17 @@ read_only() {
 		fail "the restored database fails PRAGMA integrity_check"
 	fi
 	echo "The replica restores to a database that passes integrity_check."
+
+	# The server key the copy was written with, which its key backup has to
+	# hold (#133); a database from before pairtimed recorded it has none.
+	# The copy is served with this host's throwaway keys, so the record
+	# goes from it, or serve would refuse it as written with other keys.
+	recorded=
+	if [ -n "$(sudo sqlite3 data/pairtime.db "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'server_keys'")" ]; then
+		recorded=$(sudo sqlite3 data/pairtime.db 'SELECT server_key_id FROM server_keys WHERE id = 1')
+		sudo sqlite3 data/pairtime.db 'DELETE FROM server_keys'
+		sudo chown -R 65532:65532 data
+	fi
 
 	# pairtimed serve alone, without Litestream, so nothing writes to the
 	# buckets; with no age recipient it takes no snapshot.
@@ -273,11 +293,29 @@ read_only() {
 		fail "the restored copy's /healthz didn't answer ok"
 	fi
 	curl -fsS -A "$agent" -o /dev/null http://127.0.0.1:8080/privacy
-	# Reads only: the newest snapshot and key backup exist and are recent.
-	# -skip push, because "snapshot" in -only also names push.snapshot,
-	# which would fail on the monitor URL this host lacks, or ping the real
-	# monitor if it had one.
-	docker exec drill-serve pairtimed doctor -only snapshot,keys_backup,database,keys,config -skip push
+	# The newest key backup holds the server key the database was written
+	# with. doctor's own key backup check compares it with this host's
+	# keys, which are throwaway ones, so it is left out where the image
+	# can list the backups; an image from before keys list has the older
+	# check, which only asks that a backup exists.
+	if docker exec drill-serve pairtimed keys list > "$RUNNER_TEMP/key-backups.txt"; then
+		newest=$(tail -n 1 "$RUNNER_TEMP/key-backups.txt")
+		if [ -z "$newest" ]; then
+			fail "there is no key backup in the main bucket"
+		fi
+		if [ -n "$recorded" ] && [ "$(cut -f 3 <<< "$newest")" != "$recorded" ]; then
+			fail "the newest key backup, $(cut -f 1 <<< "$newest"), doesn't hold server key $recorded, which the database was written with: back the keys up again (deploy/runbook.md, step 8)"
+		fi
+		echo "The newest key backup, $(cut -f 1 <<< "$newest"), holds the server key the database was written with${recorded:+, $recorded}."
+		only=snapshot,database,keys,config
+	else
+		only=snapshot,keys_backup,database,keys,config
+	fi
+	# Reads only: the newest snapshot exists and is recent. -skip push,
+	# because "snapshot" in -only also names push.snapshot, which would
+	# fail on the monitor URL this host lacks, or ping the real monitor if
+	# it had one.
+	docker exec drill-serve pairtimed doctor -only "$only" -skip push
 	# Karim's key stays offline, so the snapshot is checked for age's
 	# header alone.
 	docker exec drill-serve pairtimed snapshot fetch -o /data/latest.db.age

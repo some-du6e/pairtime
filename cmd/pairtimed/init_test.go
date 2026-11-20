@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	"crypto/rand"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,15 +13,35 @@ import (
 
 	"github.com/some-du6e/pairtime/internal/server/backup"
 	"github.com/some-du6e/pairtime/internal/server/config"
+	"github.com/some-du6e/pairtime/internal/server/objstore/objstoretest"
 )
+
+// s3URL stands for the endpoint in s3Environ. TestInit puts each case's own
+// objstoretest server in its place, which init asks whether a server ran
+// on the bucket before.
+const s3URL = "http://127.0.0.1:1"
 
 // s3Environ is the bucket part of a filled-in secrets.env.
 var s3Environ = []string{
-	"PAIRTIME_S3_ENDPOINT=https://0123456789abcdef.r2.cloudflarestorage.com",
+	"PAIRTIME_S3_ENDPOINT=" + s3URL,
 	"PAIRTIME_S3_BUCKET=pairtime-data",
 	"PAIRTIME_S3_SNAPSHOT_BUCKET=pairtime-snapshots",
-	"PAIRTIME_S3_ACCESS_KEY_ID=AKIDPAIRTIMETEST",
-	"PAIRTIME_S3_SECRET_ACCESS_KEY=not-a-real-secret",
+	"PAIRTIME_S3_ACCESS_KEY_ID=" + objstoretest.AccessKeyID,
+	"PAIRTIME_S3_SECRET_ACCESS_KEY=" + objstoretest.SecretAccessKey,
+}
+
+// hcaEnviron is what -hca-client-id needs beside it.
+var hcaEnviron = []string{
+	"PAIRTIME_HCA_CLIENT_SECRET=hca-secret",
+	"PAIRTIME_EMAIL_KEY=" + strings.Repeat("ab", 32),
+}
+
+// notRoot skips a test that relies on file modes, which root ignores.
+func notRoot(t *testing.T) {
+	t.Helper()
+	if os.Geteuid() == 0 {
+		t.Skip("root writes where the mode says it may not")
+	}
 }
 
 // privateDir makes a directory with mode 0700, as the runbook makes data/.
@@ -41,8 +62,9 @@ func TestInit(t *testing.T) {
 		name    string
 		args    []string
 		environ []string
-		// setup prepares the data directory and the config path.
-		setup func(t *testing.T, data, out string)
+		// setup prepares the data directory, the config path and the
+		// bucket.
+		setup func(t *testing.T, data, out string, s3 *objstoretest.Server)
 		// stdout sends the file to standard output with -config-out -.
 		stdout   bool
 		wantCode int
@@ -72,7 +94,7 @@ func TestInit(t *testing.T) {
 			environ: s3Environ, wantKeys: true,
 			check: func(t *testing.T, cfg *config.Config, _ string) {
 				o := cfg.ObjectStorage
-				if o.Endpoint != "https://0123456789abcdef.r2.cloudflarestorage.com" || o.Region != "auto" || o.Bucket != "pairtime-data" || o.SnapshotBucket != "pairtime-snapshots" {
+				if !strings.HasPrefix(o.Endpoint, "http://127.0.0.1:") || o.Endpoint == s3URL || o.Region != "auto" || o.Bucket != "pairtime-data" || o.SnapshotBucket != "pairtime-snapshots" {
 					t.Errorf("object_storage = %+v", o)
 				}
 			}},
@@ -88,15 +110,26 @@ func TestInit(t *testing.T) {
 					t.Errorf("signups_open = true with an empty [controller] loaded: %v", err)
 				}
 			}},
-		{name: "without PAIRTIME_S3_ENDPOINT the file turns object storage off",
-			wantKeys: true,
+		{name: "without PAIRTIME_S3_ENDPOINT init refuses, since the bundle's Litestream would start serve on a pairtime.toml without buckets in a loop",
+			wantCode: 1, wantErr: "-no-object-storage"},
+		{name: "-no-object-storage writes a file with object storage off, which says how to turn it on",
+			args: []string{"-no-object-storage"}, wantKeys: true,
 			check: func(t *testing.T, cfg *config.Config, text string) {
-				if cfg.ObjectStorage.Enabled() || !strings.Contains(text, "PAIRTIME_S3_ENDPOINT wasn't set") {
+				if cfg.ObjectStorage.Enabled() || !strings.Contains(text, "ran with -no-object-storage") || !strings.Contains(text, "run init again with -force") {
 					t.Errorf("object_storage = %+v", cfg.ObjectStorage)
 				}
 			}},
+		{name: "-no-object-storage beside PAIRTIME_S3_ENDPOINT is refused",
+			args: []string{"-no-object-storage"}, environ: s3Environ,
+			wantCode: 1, wantErr: "leave one of them out"},
+		{name: "-hca-client-id without the client secret and the email key is refused, since serve wouldn't start",
+			args: []string{"-hca-client-id", "app-123"}, environ: s3Environ,
+			wantCode: 1, wantErr: "PAIRTIME_HCA_CLIENT_SECRET and PAIRTIME_EMAIL_KEY"},
+		{name: "-hca-client-id with an email key that isn't 32 bytes is refused",
+			args: []string{"-hca-client-id", "app-123"}, environ: append([]string{"PAIRTIME_HCA_CLIENT_SECRET=hca-secret", "PAIRTIME_EMAIL_KEY=short"}, s3Environ...),
+			wantCode: 1, wantErr: "PAIRTIME_EMAIL_KEY"},
 		{name: "-hca-client-id goes into [hca]",
-			args: []string{"-hca-client-id", "app-123"}, environ: s3Environ, wantKeys: true,
+			args: []string{"-hca-client-id", "app-123"}, environ: append(append([]string{}, hcaEnviron...), s3Environ...), wantKeys: true,
 			check: func(t *testing.T, cfg *config.Config, _ string) {
 				if cfg.HCA.ClientID != "app-123" {
 					t.Errorf("hca.client_id = %q", cfg.HCA.ClientID)
@@ -106,7 +139,7 @@ func TestInit(t *testing.T) {
 			environ: s3Environ, stdout: true, wantKeys: true},
 		{name: "an existing pairtime.toml is never replaced, and no key is made",
 			environ: s3Environ,
-			setup: func(t *testing.T, _, out string) {
+			setup: func(t *testing.T, _, out string, _ *objstoretest.Server) {
 				if err := os.WriteFile(out, []byte("base_url = \"https://kept.example.org\"\n"), 0o644); err != nil {
 					t.Fatal(err)
 				}
@@ -114,7 +147,7 @@ func TestInit(t *testing.T) {
 			wantCode: 1, wantErr: "doesn't replace a pairtime.toml unless -force"},
 		{name: "with -config-out -, a pairtime.toml where pairtimed reads it is never replaced, since the shell's redirect would wipe its operators",
 			environ: append([]string{"PAIRTIME_CONFIG=OUT"}, s3Environ...), stdout: true,
-			setup: func(t *testing.T, _, out string) {
+			setup: func(t *testing.T, _, out string, _ *objstoretest.Server) {
 				if err := os.WriteFile(out, []byte("base_url = \"https://kept.example.org\"\noperators = [\"op\"]\n"), 0o644); err != nil {
 					t.Fatal(err)
 				}
@@ -122,7 +155,7 @@ func TestInit(t *testing.T) {
 			wantCode: 1, wantErr: "unless -force"},
 		{name: "-force writes a new pairtime.toml over the old one, and keeps the keys",
 			args: []string{"-force"}, environ: s3Environ, wantKeys: true,
-			setup: func(t *testing.T, data, out string) {
+			setup: func(t *testing.T, data, out string, _ *objstoretest.Server) {
 				if _, err := backup.Generate(backup.KeysDir(data), rand.Reader); err != nil {
 					t.Fatal(err)
 				}
@@ -137,14 +170,72 @@ func TestInit(t *testing.T) {
 			}},
 		{name: "keys that are all there are kept, so init can run again after it failed to write the file",
 			environ: s3Environ, wantKeys: true,
-			setup: func(t *testing.T, data, _ string) {
+			setup: func(t *testing.T, data, _ string, _ *objstoretest.Server) {
 				if _, err := backup.Generate(backup.KeysDir(data), rand.Reader); err != nil {
 					t.Fatal(err)
 				}
 			}},
+		{name: "keys restored from their backup are kept on a host whose bucket holds the replica, so init runs after the restore",
+			environ: s3Environ, wantKeys: true,
+			setup: func(t *testing.T, data, _ string, s3 *objstoretest.Server) {
+				if _, err := backup.Generate(backup.KeysDir(data), rand.Reader); err != nil {
+					t.Fatal(err)
+				}
+				s3.SetObject("pairtime-data", "litestream/0000/0000000000000001-0000000000000001.ltx", []byte("ltx"))
+			}},
+		{name: "a database in the data directory and no keys is refused, since a server ran here and its keys come from their backup",
+			environ: s3Environ,
+			setup: func(t *testing.T, data, _ string, _ *objstoretest.Server) {
+				writeFile(t, filepath.Join(data, config.DefaultDatabaseFile), "", 0o600)
+			},
+			wantCode: 1, wantErr: "pass -new-keys"},
+		{name: "a bucket that holds Litestream's replica is refused without keys here, as on a rebuilt host",
+			environ: s3Environ,
+			setup: func(t *testing.T, _, _ string, s3 *objstoretest.Server) {
+				s3.SetObject("pairtime-data", "litestream/0000/0000000000000001-0000000000000001.ltx", []byte("ltx"))
+			},
+			wantCode: 1, wantErr: "pairtime-data holds litestream/0000/"},
+		{name: "a bucket that holds key backups is refused without keys here too",
+			environ: s3Environ,
+			setup: func(t *testing.T, _, _ string, s3 *objstoretest.Server) {
+				s3.SetObject("pairtime-data", backup.KeyBackupPrefix+"pairtime-keys-20261120T101500Z.tar.age", []byte("armored"))
+			},
+			wantCode: 1, wantErr: "Restoring the keys"},
+		{name: "-new-keys makes keys anyway, for a server that starts over",
+			args: []string{"-new-keys"}, environ: s3Environ, wantKeys: true,
+			setup: func(t *testing.T, _, _ string, s3 *objstoretest.Server) {
+				s3.SetObject("pairtime-data", "litestream/0000/0000000000000001-0000000000000001.ltx", []byte("ltx"))
+			}},
+		{name: "a bucket init can't ask is refused, since it can't tell whether a server ran there",
+			environ: s3Environ,
+			setup: func(t *testing.T, _, _ string, s3 *objstoretest.Server) {
+				s3.FailMatching(10, func(r *http.Request) bool { return r.URL.Query().Get("list-type") == "2" }, http.StatusForbidden, "AccessDenied", false)
+			},
+			wantCode: 1, wantErr: "can't tell whether pairtime-data holds another server's data"},
+		{name: "a data directory this user can't write is refused, naming the chown that fixes it",
+			environ: s3Environ,
+			setup: func(t *testing.T, data, _ string, _ *objstoretest.Server) {
+				notRoot(t)
+				if err := os.Chmod(data, 0o500); err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() { os.Chmod(data, 0o700) })
+			},
+			wantCode: 1, wantErr: "chown 65532:65532 data"},
+		{name: "a -config-out in a directory init can't write is refused before any key is made, naming -config-out -",
+			environ: s3Environ,
+			setup: func(t *testing.T, _, out string, _ *objstoretest.Server) {
+				notRoot(t)
+				dir := filepath.Dir(out)
+				if err := os.Chmod(dir, 0o555); err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() { os.Chmod(dir, 0o755) })
+			},
+			wantCode: 1, wantErr: "-config-out -"},
 		{name: "a partial set of keys is refused",
 			environ: s3Environ,
-			setup: func(t *testing.T, data, _ string) {
+			setup: func(t *testing.T, data, _ string, _ *objstoretest.Server) {
 				keys := backup.KeysDir(data)
 				if err := os.Mkdir(keys, 0o700); err != nil {
 					t.Fatal(err)
@@ -156,7 +247,7 @@ func TestInit(t *testing.T) {
 			wantCode: 1, wantErr: "holds only pepper"},
 		{name: "a data directory that group can enter is refused before anything is written",
 			environ: s3Environ,
-			setup: func(t *testing.T, data, _ string) {
+			setup: func(t *testing.T, data, _ string, _ *objstoretest.Server) {
 				if err := os.Chmod(data, 0o750); err != nil {
 					t.Fatal(err)
 				}
@@ -164,7 +255,7 @@ func TestInit(t *testing.T) {
 			wantCode: 1, wantErr: "chmod 700"},
 		{name: "a missing data directory is refused",
 			environ: s3Environ,
-			setup: func(t *testing.T, data, _ string) {
+			setup: func(t *testing.T, data, _ string, _ *objstoretest.Server) {
 				if err := os.Remove(data); err != nil {
 					t.Fatal(err)
 				}
@@ -187,8 +278,9 @@ func TestInit(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			data := privateDir(t)
 			out := filepath.Join(t.TempDir(), "pairtime.toml")
+			s3 := objstoretest.New(t, "pairtime-data", "pairtime-snapshots")
 			if tt.setup != nil {
-				tt.setup(t, data, out)
+				tt.setup(t, data, out, s3)
 			}
 			before, _ := os.ReadFile(out)
 			args := []string{"init", "-base-url", "https://pairtime.example.org", "-data-dir", data}
@@ -200,7 +292,7 @@ func TestInit(t *testing.T) {
 			args = append(args, tt.args...)
 			environ := make([]string, len(tt.environ))
 			for i, v := range tt.environ {
-				environ[i] = strings.Replace(v, "=OUT", "="+out, 1)
+				environ[i] = strings.NewReplacer("=OUT", "="+out, s3URL, s3.URL).Replace(v)
 			}
 			e, stdout, stderr := testEnv(environ...)
 			code := run(context.Background(), args, e)
@@ -244,7 +336,7 @@ func TestInit(t *testing.T) {
 			if pub := keys.Public(); !strings.Contains(notes, pub.ServerKeyID()) || !strings.Contains(notes, pub.EvidenceKeyID()) {
 				t.Errorf("the notes don't name the key ids %s and %s:\n%s", pub.ServerKeyID(), pub.EvidenceKeyID(), notes)
 			}
-			cfg, err := config.Load(out, "", tt.environ)
+			cfg, err := config.Load(out, "", environ)
 			if err != nil {
 				t.Fatalf("the written file doesn't load: %v\n%s", err, text)
 			}

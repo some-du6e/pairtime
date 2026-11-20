@@ -136,7 +136,7 @@ func runSnapshotTake(ctx context.Context, e *env, args []string) int {
 func runSnapshotFetch(ctx context.Context, e *env, args []string) int {
 	fs := newFlagSet("snapshot fetch", "Download the newest snapshot, still encrypted", e)
 	load := configFlags(fs, e)
-	out := fs.String("o", "", "the file to write, never over an existing one (required)")
+	out := fs.String("o", "", `the file to write, never over an existing one, or "-" for standard output (required)`)
 	key := fs.String("key", "", "the snapshot to download, instead of the newest")
 	if code, done := parse(fs, args); done {
 		return code
@@ -173,21 +173,34 @@ func runSnapshotFetch(ctx context.Context, e *env, args []string) int {
 		return fail(err)
 	}
 	defer body.Close()
-	f, err := os.OpenFile(*out, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
-	if err != nil {
-		return fail(err)
+	// "-" streams it to standard output, since in the read-only container
+	// /data is the only place a file could go (#133); the note then goes
+	// to standard error.
+	w, notes := io.Writer(e.stdout), e.stdout
+	var f *os.File
+	if *out == "-" {
+		notes = e.stderr
+	} else {
+		if f, err = os.OpenFile(*out, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600); err != nil {
+			return fail(err)
+		}
+		w = f
 	}
-	n, err := io.Copy(f, body)
-	if cerr := f.Close(); err == nil {
-		err = cerr
+	n, err := io.Copy(w, body)
+	if f != nil {
+		if cerr := f.Close(); err == nil {
+			err = cerr
+		}
 	}
 	if err == nil && info.Size >= 0 && n != info.Size {
 		err = fmt.Errorf("got %d of %d bytes", n, info.Size)
 	}
 	if err != nil {
-		os.Remove(*out)
+		if f != nil {
+			os.Remove(*out)
+		}
 		return fail(err)
 	}
-	fmt.Fprintf(e.stdout, "fetched %s, last modified %s: %d bytes\n", k, info.LastModified.UTC().Format("2006-01-02T15:04:05Z"), n)
+	fmt.Fprintf(notes, "fetched %s, last modified %s: %d bytes\n", k, info.LastModified.UTC().Format("2006-01-02T15:04:05Z"), n)
 	return 0
 }

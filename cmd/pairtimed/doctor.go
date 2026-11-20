@@ -3,6 +3,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -64,6 +65,16 @@ const (
 	statusFail = "FAIL"
 	statusSkip = "skip"
 )
+
+// multipartProbeSize is the multipart check's upload: two whole parts of
+// objstore.MinPartSize and a short last one, so the probe goes the way a
+// snapshot over objstore.MaxPutSize does, which R2 otherwise first sees at
+// an unattended 03:10 months after the deploy (#133).
+const multipartProbeSize = 2*objstore.MinPartSize + 1<<20
+
+// multipartTimeout is the multipart check's own deadline, since 11 MiB up
+// from a home connection can take longer than the other checks' 15 s.
+const multipartTimeout = 3 * time.Minute
 
 // writeGap is the wait between the write-once check's two puts to one key:
 // R2 takes one write a second to a key and answers a faster second with
@@ -130,19 +141,22 @@ func runDoctor(ctx context.Context, e *env, args []string) int {
 	type check struct {
 		name string
 		run  func(context.Context) result
+		// timeout, when longer than -timeout, is the check's own.
+		timeout time.Duration
 	}
 	checks := []check{
-		{"config", d.checkConfig},
-		{"data_dir", d.checkDataDir},
-		{"keys", d.checkKeys},
-		{"database", d.checkDatabase},
-		{"litestream.yml", d.checkLitestream},
-		{"readyz", d.checkReadyz},
+		{name: "config", run: d.checkConfig},
+		{name: "data_dir", run: d.checkDataDir},
+		{name: "keys", run: d.checkKeys},
+		{name: "database", run: d.checkDatabase},
+		{name: "disk", run: d.checkDisk},
+		{name: "litestream.yml", run: d.checkLitestream},
+		{name: "readyz", run: d.checkReadyz},
 	}
 	objs, oerr := openBuckets(cfg)
 	d.objs = objs
 	if oerr != nil || objs == nil {
-		checks = append(checks, check{"object_storage", func(context.Context) result {
+		checks = append(checks, check{name: "object_storage", run: func(context.Context) result {
 			if oerr != nil {
 				return bad("%v", oerr)
 			}
@@ -155,19 +169,22 @@ func runDoctor(ctx context.Context, e *env, args []string) int {
 		}{{objs.main, false}, {objs.snapshots, true}} {
 			b := bucket.b
 			checks = append(checks,
-				check{"bucket." + b.Name() + ".versioning", func(ctx context.Context) result { return d.checkVersioning(ctx, b) }},
-				check{"bucket." + b.Name() + ".lifecycle", func(ctx context.Context) result { return d.checkLifecycle(ctx, b, bucket.snapshots) }},
-				check{"bucket." + b.Name() + ".write_once", func(ctx context.Context) result { return d.checkWriteOnce(ctx, b) }})
+				check{name: "bucket." + b.Name() + ".versioning", run: func(ctx context.Context) result { return d.checkVersioning(ctx, b) }},
+				check{name: "bucket." + b.Name() + ".lifecycle", run: func(ctx context.Context) result { return d.checkLifecycle(ctx, b, bucket.snapshots) }},
+				check{name: "bucket." + b.Name() + ".write_once", run: func(ctx context.Context) result { return d.checkWriteOnce(ctx, b) }})
+			if bucket.snapshots {
+				checks = append(checks, check{name: "bucket." + b.Name() + ".multipart", run: func(ctx context.Context) result { return d.checkMultipart(ctx, b) }, timeout: multipartTimeout})
+			}
 		}
-		checks = append(checks, check{"snapshot", d.checkSnapshot}, check{"keys_backup", d.checkKeyBackup})
+		checks = append(checks, check{name: "snapshot", run: d.checkSnapshot}, check{name: "keys_backup", run: d.checkKeyBackup})
 	}
 	checks = append(checks,
-		check{"hca", d.checkHCA},
-		check{"witness", d.checkWitness},
-		check{"push.pairtimed", d.checkPushPairtimed},
-		check{"push.snapshot", d.checkPushSnapshot},
-		check{"push.litestream", d.checkPushLitestream},
-		check{"tunnel", d.checkTunnel},
+		check{name: "hca", run: d.checkHCA},
+		check{name: "witness", run: d.checkWitness},
+		check{name: "push.pairtimed", run: d.checkPushPairtimed},
+		check{name: "push.snapshot", run: d.checkPushSnapshot},
+		check{name: "push.litestream", run: d.checkPushLitestream},
+		check{name: "tunnel", run: d.checkTunnel},
 	)
 
 	var failed, skips, oks, warns int
@@ -179,7 +196,7 @@ func runDoctor(ctx context.Context, e *env, args []string) int {
 		case len(only) > 0 && !matches(only, c.name):
 			r = skip("left out with -only")
 		default:
-			cctx, cancel := context.WithTimeout(ctx, *timeout)
+			cctx, cancel := context.WithTimeout(ctx, max(*timeout, c.timeout))
 			r = c.run(cctx)
 			cancel()
 		}
@@ -581,20 +598,128 @@ func (d *doctor) checkSnapshot(ctx context.Context) result {
 	return ok("%s, %s old, %d bytes", latest.Key, age.Round(time.Minute), latest.Size)
 }
 
+// checkKeyBackup checks that the newest key backup holds the keys in
+// /data/keys and the PAIRTIME_EMAIL_KEY this server has, as its name says
+// (#133). A backup from before names said so is stale: doctor can't tell
+// what it holds.
 func (d *doctor) checkKeyBackup(ctx context.Context) result {
-	var newest objstore.ObjectInfo
+	var newest backup.KeyBackup
+	var newestKey string
 	for o, err := range d.objs.main.List(ctx, backup.KeyBackupPrefix) {
 		if err != nil {
 			return bad("%v", err)
 		}
-		if o.Key > newest.Key {
-			newest = o
+		b, err := backup.ParseKeyBackupName(strings.TrimPrefix(o.Key, backup.KeyBackupPrefix))
+		if err != nil {
+			continue
+		}
+		if newestKey == "" || b.Made.After(newest.Made) {
+			newest, newestKey = b, o.Key
 		}
 	}
-	if newest.Key == "" {
-		return bad("no key backup in %s/%s: run pairtimed keys backup -upload (deploy/runbook.md)", d.objs.main.Name(), backup.KeyBackupPrefix)
+	again := "back the keys up again with pairtimed keys backup -upload (deploy/runbook.md, step 8)"
+	if newestKey == "" {
+		return bad("no key backup in %s/%s: %s", d.objs.main.Name(), backup.KeyBackupPrefix, again)
 	}
-	return ok("%s", newest.Key)
+	if !newest.Named {
+		return bad("%s, the newest key backup, is stale: it was made before backups were named for the keys they hold, so doctor can't tell whether it holds these. %s", newestKey, again)
+	}
+	keys, err := backup.Load(backup.KeysDir(d.cfg.DataDir))
+	if err != nil {
+		return bad("can't read the keys to compare with %s: %v", newestKey, err)
+	}
+	pub := keys.Public()
+	var stale []string
+	if newest.ServerKeyID != pub.ServerKeyID() {
+		stale = append(stale, fmt.Sprintf("server key %s, not %s", newest.ServerKeyID, pub.ServerKeyID()))
+	}
+	if newest.EvidenceKeyID != pub.EvidenceKeyID() {
+		stale = append(stale, fmt.Sprintf("evidence key %s, not %s", newest.EvidenceKeyID, pub.EvidenceKeyID()))
+	}
+	switch email := backup.EmailKeyFingerprint(d.cfg.Secrets.Get(config.EmailKey)); {
+	case newest.EmailKey == email:
+	case newest.EmailKey == "none":
+		stale = append(stale, fmt.Sprintf("no email key, and %s is set", config.EmailKey))
+	case email == "none":
+		stale = append(stale, fmt.Sprintf("an email key, and %s isn't set", config.EmailKey))
+	default:
+		stale = append(stale, fmt.Sprintf("another %s", config.EmailKey))
+	}
+	if len(stale) > 0 {
+		return bad("%s, the newest key backup, holds %s: %s", newestKey, strings.Join(stale, "; "), again)
+	}
+	if newest.EmailKey == "none" {
+		return ok("%s holds these keys, and no email key, as none is set", newestKey)
+	}
+	return ok("%s holds these keys and the email key", newestKey)
+}
+
+// checkDisk warns when the disk that holds the database is running out of
+// room for it (#133). A snapshot's copy needs about the database's size,
+// and the runbook grows the disk once the database passes a third of it.
+func (d *doctor) checkDisk(context.Context) result {
+	if d.cfg.Database.Engine != config.EngineSQLite {
+		return skip("the database isn't SQLite, so it isn't on this disk")
+	}
+	size, err := backup.DatabaseSize(d.cfg.Database.Path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return skip("there is no database at %s yet", d.cfg.Database.Path)
+	}
+	if err != nil {
+		return bad("%v", err)
+	}
+	space := backup.DiskSpace
+	if d.e.diskSpace != nil {
+		space = d.e.diskSpace
+	}
+	free, total, known, err := space(d.cfg.DataDir)
+	switch {
+	case err != nil:
+		return bad("%v", err)
+	case !known:
+		return skip("doctor can't read free space on this system")
+	}
+	used := fmt.Sprintf("the database is %s, and %s of %s is free on the disk that holds %s", backup.Bytes(uint64(size)), backup.Bytes(free), backup.Bytes(total), d.cfg.DataDir)
+	switch {
+	case free < uint64(size)+backup.SnapshotMargin:
+		return warn("%s, too little for the next nightly snapshot's copy, which will fail: grow the disk (deploy/runbook.md, What Karim provides)", used)
+	case uint64(size)*3 > total:
+		return warn("%s: the database is past a third of the disk, so grow it before snapshots run out of room (deploy/runbook.md, What Karim provides)", used)
+	}
+	return ok("%s", used)
+}
+
+// checkMultipart uploads multipartProbeSize bytes to the snapshot bucket in
+// parts of objstore.MinPartSize, write-once, the way a snapshot past
+// objstore.MaxPutSize goes, reads its size back with HEAD, and deletes it
+// (#133).
+func (d *doctor) checkMultipart(ctx context.Context, b *objstore.Bucket) result {
+	var r [8]byte
+	rand.Read(r[:])
+	key := doctorProbePrefix + hex.EncodeToString(r[:]) + ".multipart"
+	_, err := b.PutStream(ctx, key, bytes.NewReader(make([]byte, multipartProbeSize)), objstore.StreamOptions{PartSize: objstore.MinPartSize, IfNoneMatch: true})
+	var info objstore.ObjectInfo
+	if err == nil {
+		info, err = b.Head(ctx, key)
+	}
+	// The probe goes whatever happened, on a clock of its own.
+	dctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
+	derr := b.Delete(dctx, key)
+	cancel()
+	var res result
+	switch {
+	case err != nil:
+		res = bad("a multipart upload of %s in parts of %s, as a snapshot over %s goes, failed: %v", backup.Bytes(multipartProbeSize), backup.Bytes(objstore.MinPartSize), backup.Bytes(objstore.MaxPutSize), err)
+	case info.Size != multipartProbeSize:
+		res = bad("a multipart upload of %d bytes reads back as %d", multipartProbeSize, info.Size)
+	default:
+		res = ok("a multipart upload of %s in parts of %s went up whole", backup.Bytes(multipartProbeSize), backup.Bytes(objstore.MinPartSize))
+	}
+	if derr != nil {
+		return bad("%s, and deleting the probe failed, so delete %s by hand: %v", res.detail, key, derr)
+	}
+	res.detail += ", and the probe is deleted"
+	return res
 }
 
 func (d *doctor) checkHCA(ctx context.Context) result {

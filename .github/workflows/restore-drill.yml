@@ -161,7 +161,7 @@ jobs:
           cp -r deploy "$d"
           cd "$d"
           echo "D=$d" >> "$GITHUB_ENV"
-          sudo install -d -m 0700 -o "$UID65532" -g "$UID65532" data witness-roots
+          sudo install -d -m 0700 -o "$UID65532" -g "$UID65532" data data/tmp witness-roots
           mkdir config
           # The drill's stand-in for Karim's offline age key.
           age-keygen -o "$RUNNER_TEMP/karim.key" 2> /dev/null

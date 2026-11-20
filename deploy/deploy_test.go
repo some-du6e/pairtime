@@ -4,11 +4,13 @@ package deploy
 
 import (
 	"cmp"
+	"errors"
 	"os"
 	"path"
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/some-du6e/pairtime/internal/server/config"
 )
@@ -85,6 +87,10 @@ func TestBundleFilesAgree(t *testing.T) {
 		{name: "pairtimed writes the day roots where the witness sidecar reads them",
 			got:  line(`^\s*- \./witness-roots:(/\S+)\s*$`, ComposeYAML),
 			want: line(`^\s*- \./witness-roots:(/\S+):ro\s*$`, ComposeYAML)},
+		{name: "SQLite's temporary files go to the data directory's disk, off the container's small /tmp",
+			got: line(`^\s*SQLITE_TMPDIR: (\S+)\s*$`, ComposeYAML), want: path.Join(config.DefaultDataDir, "tmp")},
+		{name: "the container's /tmp is a tmpfs of 256 MiB, so nothing written there takes the host's memory",
+			got: line(`(?s)- type: tmpfs\n\s+target: /tmp\n\s+tmpfs:\n\s+size: (\d+)\n`, ComposeYAML), want: "268435456"},
 		{name: "the witness sidecar runs the loop the bundle ships",
 			got: line(`^\s*entrypoint: \["/bin/sh", "([^"]+)"\]`, ComposeYAML), want: line(`^\s*- \./witness/push\.sh:([^:]+):ro\s*$`, ComposeYAML)},
 	}
@@ -92,6 +98,28 @@ func TestBundleFilesAgree(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if tt.got == "" || tt.got != tt.want {
 				t.Errorf("got %q, want %q", tt.got, tt.want)
+			}
+		})
+	}
+}
+
+func TestShutdownFitsTheGracePeriod(t *testing.T) {
+	grace, err1 := time.ParseDuration(line(`^\s*stop_grace_period: (\S+)\s*$`, ComposeYAML))
+	litestream, err2 := time.ParseDuration(line(`^shutdown-timeout: (\S+)\s*$`, LitestreamYAML))
+	if err := errors.Join(err1, err2); err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name string
+		ok   bool
+	}{
+		{name: "Litestream gives pairtimed and its last sync less time than Docker gives the container, so Docker never kills the sync", ok: litestream < grace},
+		{name: "Litestream's shutdown outlasts pairtimed's own 20 s for requests in flight, with time left to sync", ok: litestream >= 20*time.Second+30*time.Second},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if !tt.ok {
+				t.Errorf("litestream.yml's shutdown-timeout is %s and compose.yml's stop_grace_period %s", litestream, grace)
 			}
 		})
 	}

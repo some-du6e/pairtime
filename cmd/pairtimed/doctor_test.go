@@ -40,6 +40,10 @@ type deployed struct {
 	// has none.
 	commitAt time.Time
 	github   string
+	// keys are the keys in dataDir.
+	keys *backup.Keys
+	// diskSpace, when set, stands in for the data disk's free space.
+	diskSpace func(string) (free, total uint64, ok bool, err error)
 }
 
 func newDeployed(t *testing.T) *deployed {
@@ -54,7 +58,8 @@ func newDeployed(t *testing.T) *deployed {
 		tunnel:   func(w http.ResponseWriter) { w.Write([]byte("ok\n")) },
 		commitAt: time.Now().Add(-time.Minute),
 	}
-	if _, err := backup.Generate(backup.KeysDir(d.dataDir), rand.Reader); err != nil {
+	var err error
+	if d.keys, err = backup.Generate(backup.KeysDir(d.dataDir), rand.Reader); err != nil {
 		t.Fatal(err)
 	}
 	// The pilot's rules: R2's default one on the main bucket, which only
@@ -133,7 +138,7 @@ snapshot_bucket = "pairtime-snapshots"
 		"PAIRTIME_S3_REGION=auto",
 		"PAIRTIME_S3_BUCKET=pairtime-data",
 		"PAIRTIME_HCA_CLIENT_SECRET=hca-secret",
-		"PAIRTIME_EMAIL_KEY=" + strings.Repeat("ab", 32),
+		"PAIRTIME_EMAIL_KEY=" + doctorEmailKey,
 		"PAIRTIME_HEARTBEAT_URL=" + d.monitors.URL + "/pairtimed",
 		"PAIRTIME_SNAPSHOT_HEARTBEAT_URL=" + d.monitors.URL + "/snapshot",
 		"PAIRTIME_LITESTREAM_HEARTBEAT_URL=" + d.monitors.URL + "/litestream",
@@ -151,7 +156,7 @@ snapshot_bucket = "pairtime-snapshots"
 	if _, err := snaps.Put(context.Background(), time.Now(), bytes.NewReader([]byte("age-encryption.org/v1\n"))); err != nil {
 		t.Fatal(err)
 	}
-	d.s3.SetObject("pairtime-data", backup.KeyBackupPrefix+backup.KeyBackupName(time.Now()), []byte("armored"))
+	d.s3.SetObject("pairtime-data", backup.KeyBackupPrefix+backup.KeyBackupName(time.Now(), d.keys.Public(), doctorEmailKey), []byte("armored"))
 	root := filepath.Join(d.witness, "2026", "2026-11-19.json")
 	writeFile(t, root, "{}\n", 0o644)
 	old := time.Now().Add(-time.Hour)
@@ -159,6 +164,36 @@ snapshot_bucket = "pairtime-snapshots"
 		t.Fatal(err)
 	}
 	return d
+}
+
+// doctorEmailKey is the fake deploy's PAIRTIME_EMAIL_KEY.
+var doctorEmailKey = strings.Repeat("ab", 32)
+
+// setKeyBackups replaces the fake deploy's key backups with ones made at
+// each time ago of each named key set, and returns their names.
+func (d *deployed) setKeyBackups(t *testing.T, names ...string) {
+	t.Helper()
+	b := mustBucket(t, d.s3, "pairtime-data")
+	for _, k := range d.s3.Keys("pairtime-data") {
+		if strings.HasPrefix(k, backup.KeyBackupPrefix) {
+			if err := b.Delete(context.Background(), k); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	for _, n := range names {
+		d.s3.SetObject("pairtime-data", backup.KeyBackupPrefix+n, []byte("armored"))
+	}
+}
+
+// otherKeys are a key set other than the fake deploy's.
+func otherKeys(t *testing.T) backup.Public {
+	t.Helper()
+	keys, err := backup.Generate(filepath.Join(privateDir(t), "keys"), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return keys.Public()
 }
 
 // r2AbortRule is the lifecycle rule R2 gives every new bucket: it aborts
@@ -216,6 +251,7 @@ func (d *deployed) run(t *testing.T, extra ...string) (map[string][2]string, int
 	e, stdout, _ := testEnv(d.environ...)
 	e.githubURL = d.github
 	e.doctorWriteGap = time.Millisecond
+	e.diskSpace = d.diskSpace
 	args := append([]string{"doctor", "-config", d.config, "-witness-dir", d.witness,
 		"-litestream-config", filepath.Join(filepath.Dir(d.config), "litestream.yml"), "-timeout", "10s"}, extra...)
 	code := run(context.Background(), args, e)
@@ -399,6 +435,47 @@ func TestDoctor(t *testing.T) {
 				}
 			},
 			want: map[string][2]string{"witness": {statusOK, "2026-11-19.json, the newest root"}}},
+		{name: "a key backup from before backups named their keys is stale, so it fails, though the object reads",
+			setup: func(t *testing.T, d *deployed) {
+				d.setKeyBackups(t, "pairtime-keys-"+time.Now().UTC().Format("20060102T150405Z")+".tar.age")
+			},
+			want: map[string][2]string{"keys_backup": {statusFail, "is stale"}}, wantCode: 1},
+		{name: "a newest key backup of other keys fails, though an older one holds these",
+			setup: func(t *testing.T, d *deployed) {
+				d.setKeyBackups(t,
+					backup.KeyBackupName(time.Now().Add(-time.Hour), d.keys.Public(), doctorEmailKey),
+					backup.KeyBackupName(time.Now(), otherKeys(t), doctorEmailKey))
+			},
+			want: map[string][2]string{"keys_backup": {statusFail, "holds server key"}}, wantCode: 1},
+		{name: "a key backup without the email key fails while PAIRTIME_EMAIL_KEY is set",
+			setup: func(t *testing.T, d *deployed) {
+				d.setKeyBackups(t, backup.KeyBackupName(time.Now(), d.keys.Public(), ""))
+			},
+			want: map[string][2]string{"keys_backup": {statusFail, "no email key, and PAIRTIME_EMAIL_KEY is set"}}, wantCode: 1},
+		{name: "the newest key backup decides, so an older stale one beside a current one passes",
+			setup: func(t *testing.T, d *deployed) {
+				d.setKeyBackups(t, "pairtime-keys-20261101T000000Z.tar.age", backup.KeyBackupName(time.Now(), d.keys.Public(), doctorEmailKey))
+			},
+			want: map[string][2]string{"keys_backup": {statusOK, "holds these keys and the email key"}}},
+		{name: "no key backup at all fails",
+			setup: func(t *testing.T, d *deployed) { d.setKeyBackups(t) },
+			want:  map[string][2]string{"keys_backup": {statusFail, "no key backup"}}, wantCode: 1},
+		{name: "a snapshot bucket that refuses a multipart upload fails, since a snapshot past 5 GiB takes one",
+			setup: func(t *testing.T, d *deployed) {
+				d.s3.FailMatching(5, func(r *http.Request) bool { return r.Method == http.MethodPost && r.URL.Query().Has("uploads") }, http.StatusForbidden, "AccessDenied", false)
+			},
+			want: map[string][2]string{"bucket.pairtime-snapshots.multipart": {statusFail, "multipart upload"}}, wantCode: 1},
+		{name: "a disk with less room than the database is a warning, since the next snapshot won't fit",
+			setup: func(t *testing.T, d *deployed) {
+				d.diskSpace = func(string) (uint64, uint64, bool, error) { return 1 << 20, 20 << 30, true, nil }
+			},
+			want: map[string][2]string{"disk": {statusWarn, "too little for the next nightly snapshot"}}},
+		{name: "a database past a third of its disk is a warning to grow it",
+			setup: func(t *testing.T, d *deployed) {
+				// A disk of 1 KiB, a third of which any SQLite file passes.
+				d.diskSpace = func(string) (uint64, uint64, bool, error) { return 1 << 30, 1 << 10, true, nil }
+			},
+			want: map[string][2]string{"disk": {statusWarn, "past a third of the disk"}}},
 		{name: "a missing deploy key fails the witness check",
 			setup: func(t *testing.T, d *deployed) {
 				if err := os.Remove(filepath.Join(filepath.Dir(d.config), witnessKey)); err != nil {

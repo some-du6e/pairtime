@@ -93,6 +93,21 @@ func KeyID(pub []byte) string {
 // ServerKeyID is the server key's id.
 func (p Public) ServerKeyID() string { return KeyID(p.Server) }
 
+// Fingerprint names a secret without revealing it: the first 16 hex
+// digits of the SHA-256 of label, a zero byte and the secret. The label
+// keeps one secret's fingerprint from ever matching another's.
+func Fingerprint(label string, secret []byte) string {
+	h := sha256.New()
+	h.Write([]byte(label))
+	h.Write([]byte{0})
+	h.Write(secret)
+	return hex.EncodeToString(h.Sum(nil)[:8])
+}
+
+// PepperFingerprint names the pepper, which has no public half to name it
+// by, as the database's record of its keys does (#133).
+func (k *Keys) PepperFingerprint() string { return Fingerprint("pairtime pepper", k.Pepper) }
+
 // EvidenceKeyID is the evidence key's id.
 func (p Public) EvidenceKeyID() string { return KeyID(p.Evidence.Bytes()) }
 

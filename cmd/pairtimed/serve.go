@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -110,6 +111,14 @@ func serve(ctx context.Context, cfg *config.Config, logger *slog.Logger, e *env,
 		logger.Info("sign-ups are closed; only operators can create accounts", "operators", len(cfg.Operators))
 	}
 
+	// compose points SQLite's temporary files at the data disk, off the
+	// container's small /tmp (deploy/compose.yml); the directory is made
+	// here when it isn't there yet, or SQLite would fall back to /tmp.
+	if dir := e.getenv("SQLITE_TMPDIR"); dir != "" {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			logger.Warn("couldn't make SQLITE_TMPDIR, so SQLite's temporary files go to /tmp", "dir", dir, "err", err)
+		}
+	}
 	db, err := store.Open(ctx, storeOptions(cfg, e))
 	if err != nil {
 		return err
@@ -153,6 +162,11 @@ func serve(ctx context.Context, cfg *config.Config, logger *slog.Logger, e *env,
 	// Deferred after db.Close, so it runs first: queued writes commit
 	// before the database closes.
 	defer w.Close()
+
+	// The keys in data_dir must be the ones the database was written with.
+	if err := checkServerKeys(ctx, cfg.DataDir, db, w, logger); err != nil {
+		return err
+	}
 
 	// The retention jobs whose tables exist sweep through the writer, so
 	// their deletes queue with every other write (DESIGN 4.4).

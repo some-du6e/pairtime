@@ -15,10 +15,13 @@ import (
 	"runtime"
 	"strings"
 	"text/template"
+	"time"
 
 	"github.com/some-du6e/pairtime/deploy"
+	"github.com/some-du6e/pairtime/internal/server/accounts"
 	"github.com/some-du6e/pairtime/internal/server/backup"
 	"github.com/some-du6e/pairtime/internal/server/config"
+	"github.com/some-du6e/pairtime/internal/server/objstore"
 	"github.com/some-du6e/pairtime/internal/version"
 )
 
@@ -59,6 +62,8 @@ func runInit(ctx context.Context, e *env, args []string) int {
 	}
 	out := fs.String("config-out", defaultOut, `where to write pairtime.toml; "-" writes it to standard output, which compose's read-only config mount needs`)
 	force := fs.Bool("force", false, "write pairtime.toml even where one exists, losing operators and every edit made to it; the keys are never replaced")
+	newKeys := fs.Bool("new-keys", false, "make new keys even where the data directory or the main bucket shows that a server ran before, whose keys should come from their backup instead (deploy/runbook.md, Restoring the keys)")
+	noObjects := fs.Bool("no-object-storage", false, "write pairtime.toml with object storage off, for a server without buckets, which the deploy bundle can't run")
 	if code, done := parse(fs, args); done {
 		return code
 	}
@@ -68,6 +73,28 @@ func runInit(ctx context.Context, e *env, args []string) int {
 	}
 	if *baseURL == "" {
 		return fail("-base-url is required, such as -base-url https://pairtime.example.org")
+	}
+	// What serve would refuse at start, refused here before anything is
+	// written (#133).
+	switch endpoint := e.getenv(envS3Endpoint); {
+	case endpoint == "" && !*noObjects:
+		return fail("%s isn't set, so pairtime.toml would turn object storage off, and pairtimed serve, which the deploy bundle's Litestream starts with -litestream-replica, would refuse to start. Fill in the PAIRTIME_S3_* lines of config/secrets.env (deploy/runbook.md, step 3), or pass -no-object-storage for a server without buckets", envS3Endpoint)
+	case endpoint != "" && *noObjects:
+		return fail("-no-object-storage, and %s is set too: leave one of them out", envS3Endpoint)
+	}
+	if *clientID != "" {
+		var missing []string
+		for _, name := range []string{config.HCAClientSecret, config.EmailKey} {
+			if e.getenv(name) == "" {
+				missing = append(missing, name)
+			}
+		}
+		if len(missing) > 0 {
+			return fail("-hca-client-id is set, so pairtimed serve needs %s as well, or it won't start: add them to config/secrets.env (deploy/runbook.md, step 3)", strings.Join(missing, " and "))
+		}
+		if _, err := accounts.ParseEmailKey(e.getenv(config.EmailKey)); err != nil {
+			return fail("%s: %v", config.EmailKey, err)
+		}
 	}
 	// Notes go where the configuration doesn't.
 	notes := e.stdout
@@ -95,6 +122,13 @@ func runInit(ctx context.Context, e *env, args []string) int {
 			return fail("%v", err)
 		}
 	}
+	// The file has to be writable before any key is made: in compose's
+	// container, config/ is mounted read-only (#133).
+	if *out != "-" {
+		if err := probeWritable(filepath.Dir(*out)); err != nil {
+			return fail("can't write %s (%v). compose mounts config/ read-only, so in the container run init with -config-out - and redirect it to config/pairtime.toml.new, as deploy/runbook.md step 7 does", *out, err)
+		}
+	}
 
 	data := templateData{
 		Version:       version.Get().Version,
@@ -119,12 +153,27 @@ func runInit(ctx context.Context, e *env, args []string) int {
 	if err := litestreamQuotable(e.getenv); err != nil {
 		return fail("%v", err)
 	}
-	toml, err := renderConfig(data, e.environ)
+	toml, cfg, err := renderConfig(data, e.environ)
 	if err != nil {
 		return fail("%v", err)
 	}
 
 	keysDir := backup.KeysDir(dir)
+	if !*newKeys && !anyKey(keysDir) {
+		objs, err := openBuckets(cfg)
+		if err != nil {
+			return fail("%v", err)
+		}
+		lctx, cancel := context.WithTimeout(ctx, time.Minute)
+		why, err := usedBefore(lctx, dir, objs)
+		cancel()
+		if err != nil {
+			return fail("%v. Pass -new-keys only if this server is to start over with new keys", err)
+		}
+		if why != "" {
+			return fail("%s, so a server ran here before, and %s holds no keys. Restore that server's keys from their backup first (deploy/runbook.md, Restoring the keys), then run init again, which keeps them. New keys would break every receipt and every project's identity, and pairtimed serve refuses a database written with other keys. Only to start over with new keys anyway, pass -new-keys", why, keysDir)
+		}
+	}
 	keys, made, err := ensureKeys(keysDir)
 	if err != nil {
 		return fail("%v", err)
@@ -153,35 +202,86 @@ func runInit(ctx context.Context, e *env, args []string) int {
 }
 
 // renderConfig renders the template and checks that what it wrote loads,
-// with the secrets of environ, before anything is written.
-func renderConfig(data templateData, environ []string) ([]byte, error) {
+// with the secrets of environ, before anything is written. It returns the
+// file and the configuration it loads as.
+func renderConfig(data templateData, environ []string) ([]byte, *config.Config, error) {
 	t, err := template.New("pairtime.toml.tmpl").Option("missingkey=error").Funcs(template.FuncMap{"toml": tomlString}).Parse(deploy.ConfigTemplate)
 	if err != nil {
-		return nil, fmt.Errorf("the template: %w", err)
+		return nil, nil, fmt.Errorf("the template: %w", err)
 	}
 	var b bytes.Buffer
 	if err := t.Execute(&b, data); err != nil {
-		return nil, fmt.Errorf("the template: %w", err)
+		return nil, nil, fmt.Errorf("the template: %w", err)
 	}
 	if data.S3.Endpoint != "" && (data.S3.Bucket == "" || data.S3.SnapshotBucket == "") {
-		return nil, fmt.Errorf("%s is set, so set %s and %s too: one bucket for the replica and evidence, a second for snapshots (DESIGN 10.5 item 4)", envS3Endpoint, envS3Bucket, envS3SnapshotBucket)
+		return nil, nil, fmt.Errorf("%s is set, so set %s and %s too: one bucket for the replica and evidence, a second for snapshots (DESIGN 10.5 item 4)", envS3Endpoint, envS3Bucket, envS3SnapshotBucket)
 	}
 	tmp, err := os.CreateTemp("", "pairtime-init-*.toml")
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	defer os.Remove(tmp.Name())
 	if _, err := tmp.Write(b.Bytes()); err != nil {
 		tmp.Close()
-		return nil, err
+		return nil, nil, err
 	}
 	if err := tmp.Close(); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	if _, err := config.Load(tmp.Name(), "", environ); err != nil {
-		return nil, fmt.Errorf("the pairtime.toml init would write doesn't load, so it wrote nothing: %w", err)
+	cfg, err := config.Load(tmp.Name(), "", environ)
+	if err != nil {
+		return nil, nil, fmt.Errorf("the pairtime.toml init would write doesn't load, so it wrote nothing: %w", err)
 	}
-	return b.Bytes(), nil
+	return b.Bytes(), cfg, nil
+}
+
+// anyKey reports whether dir holds any of the key files.
+func anyKey(dir string) bool {
+	for _, name := range backup.KeyFiles {
+		if _, err := os.Lstat(filepath.Join(dir, name)); err == nil {
+			return true
+		}
+	}
+	return false
+}
+
+// usedBefore says what shows that a server ran on this data directory or
+// these buckets before, or "" when nothing does: a database in dataDir,
+// or Litestream's replica, evidence or key backups in the main bucket.
+// init makes keys only where none are, so on a host that was rebuilt or
+// moved, or lost its disk, it would otherwise make new ones for the old
+// database that Litestream then restores (#133).
+func usedBefore(ctx context.Context, dataDir string, objs *buckets) (string, error) {
+	db := filepath.Join(dataDir, config.DefaultDatabaseFile)
+	if _, err := os.Lstat(db); err == nil {
+		return db + " exists", nil
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return "", err
+	}
+	if objs == nil {
+		return "", nil
+	}
+	// litestream/ is the replica's path in deploy/litestream.yml.
+	for _, prefix := range []string{"litestream/", objstore.EvidencePrefix, backup.KeyBackupPrefix} {
+		for o, err := range objs.main.List(ctx, prefix) {
+			if err != nil {
+				return "", fmt.Errorf("can't tell whether %s holds another server's data: %w", objs.main.Name(), err)
+			}
+			return fmt.Sprintf("%s holds %s", objs.main.Name(), o.Key), nil
+		}
+	}
+	return "", nil
+}
+
+// probeWritable checks that this user can make a file in dir.
+func probeWritable(dir string) error {
+	f, err := os.CreateTemp(dir, ".pairtime-probe-*")
+	if err != nil {
+		return err
+	}
+	name := f.Name()
+	f.Close()
+	return os.Remove(name)
 }
 
 // ensureKeys loads the keys in dir when all of them are there, and makes
@@ -233,9 +333,10 @@ func writeConfigFile(path string, data []byte, replace bool) error {
 	return err
 }
 
-// checkDataDir refuses a data directory that is missing, or that group or
+// checkDataDir refuses a data directory that is missing, that group or
 // others can enter, as pairtimed serve would, since Litestream writes
-// copies of the database there (DESIGN 10.1).
+// copies of the database there (DESIGN 10.1), or that this user can't
+// write.
 func checkDataDir(dir string) error {
 	fi, err := os.Stat(dir)
 	if errors.Is(err, fs.ErrNotExist) {
@@ -249,6 +350,11 @@ func checkDataDir(dir string) error {
 	}
 	if runtime.GOOS != "windows" && fi.Mode().Perm()&0o077 != 0 {
 		return fmt.Errorf("the data directory %s has mode %04o, so group or others can enter it, and pairtimed serve would refuse it: chmod 700 %s (DESIGN 10.1)", dir, fi.Mode().Perm(), dir)
+	}
+	// One that root still owns passes the mode check, and then fails at
+	// the first key with a bare "permission denied" (#133).
+	if err := probeWritable(dir); err != nil {
+		return fmt.Errorf("can't write the data directory %s (%v). It must belong to the server's user, 65532 in the image: sudo chown 65532:65532 data (deploy/runbook.md, step 2)", dir, err)
 	}
 	return nil
 }
