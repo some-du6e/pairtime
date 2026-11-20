@@ -16,9 +16,9 @@ Each credited second gets one level (DESIGN 6.4):
 
 | Level | Means |
 |---|---|
-| A | Witnessed, meaning our server got it within 15 minutes, with OS input showing presence and the keyboard in use |
-| B | Witnessed, but the OS can't tell keys from other input. Most Windows minutes are B unless the teen opts in to typing evidence |
-| C | Lookback, late uploads beyond the offline cap, or side-door records with no keyboard evidence. Only with program opt-in, only inside commit intervals that reached the forge, and at most at the handbook's third |
+| A | Witnessed, meaning our server got it within 15 minutes, with OS input showing presence and the opt-in typing evidence showing the keyboard in use, with keys that other programs send left out |
+| B | Witnessed, without opt-in typing evidence: the OS shows input but can't tell keys from other input, or, on a Mac, can't tell a pressed key from one a program sends. Most Windows and Mac minutes are B unless the teen opts in to typing evidence |
+| C | Lookback, late uploads beyond the offline cap, or side-door records with no typing evidence. Only with program opt-in, only inside commit intervals that reached the forge, and at most at the handbook's third |
 
 Time sent late after failed uploads keeps its A or B level for up to 3 hours per submission, and only if a commit reached the forge within 24 hours of reconnecting (DESIGN 6.2 D6).
 
@@ -45,7 +45,7 @@ Fraud Squad can verify the signed bundle offline with `pairtime verify` (DESIGN 
 2. Two trackers, one number. Where both tracked a window, the program uses pairtime's figure with no second one-third cut. Do you agree?
 3. Significant evidence. Is level A "significant evidence proving that more time should be credited"? Is level B, given the bands, the must-view rows and the higher audit chance it brings? Is level C acceptable at the third?
 4. The spot-check window. How long after approval can a spot-check happen? We keep revealed evidence that long, and 12 months until you tell us (DESIGN 4.4).
-5. The native program. Would you run or observe its audits, and spot-check it more often than others? We're building the tracker, so our program should be the most audited one in the DB. The proposal is attached (DESIGN 7.10).
+5. The native program. Would you run or observe its audits, spot-check it more often than others, and, with its HQ sponsor, nominate or approve each of its outside reviewers, so nobody on our team picks one alone? We're building the tracker, so our program should be the most audited one in the DB. The proposal is attached (DESIGN 7.10).
 6. Loop rows. Loop time arrives as its own row at 0, and a reviewer may raise it to its captured seconds, never past them. Does that count as cut-only, the way Ari settles rows? (DESIGN 6.2 D12)
 7. Interviews with minors. Our default audit is 15 minutes in a Slack huddle with adult staff or a reviewer HQ has cleared. Nothing is recorded and the camera is never required. A parent may join, and the teen can choose an asynchronous audit instead. What do your safeguarding rules change? (DESIGN 7.9)
 

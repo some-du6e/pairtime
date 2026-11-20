@@ -84,7 +84,7 @@ The envelope's payload is this JSON object, indented by two spaces, with a final
 | `version` | The release version: `v` and a SemVer 2.0.0 version without build metadata. It's the tag, and what `pairtime version` prints |
 | `commit` | The full git commit hash, 40 or 64 lowercase hex digits |
 | `date` | The commit time in RFC 3339, UTC, whole seconds |
-| `minimum_version` | The oldest client version the release still supports, at most `version`. A client older than this should update before it does anything else. Tags take it from `tools/release/minimum-version.txt`, which holds exactly one version; `release.yml` and `tools/release`'s tests check it on every run. A prerelease sorts before its release, so to require 0.3.0 while its prereleases ship, the file says `v0.3.0-alpha.1` |
+| `minimum_version` | The oldest client version the release still supports, at most `version`. A client older than this should update before it does anything else. One whose update fails step 8 of Verifying keeps its own binary and keeps working, and `doctor` says it is below the minimum. Raising the minimum past the last release built with Go 1.26 ends macOS 12 support (DESIGN 3.12). Tags take it from `tools/release/minimum-version.txt`, which holds exactly one version; `release.yml` and `tools/release`'s tests check it on every run. A prerelease sorts before its release, so to require 0.3.0 while its prereleases ship, the file says `v0.3.0-alpha.1` |
 | `artifacts` | One entry per platform, at least one, no platform twice |
 | `os`, `arch` | Go's `GOOS` and `GOARCH`: lowercase letters and digits. A client skips platforms it doesn't know |
 | `url` | Where the archive is published: absolute `https`, no credentials, ending in a file name. Plain `http` is allowed only for a loopback host, which test fixtures use |
@@ -129,6 +129,7 @@ A client, or anything else that checks a manifest:
 5. Parses the payload it verified, not a second decoding of the envelope, and refuses it if a field breaks a rule above.
 6. Takes the entry for its own `os` and `arch`, downloads `url`, checks `size` and `sha256` before unpacking, and checks the binary against `binary_sha256` after.
 7. Never installs a version that isn't newer than its own.
+8. Before it replaces its own binary, runs the new one's `version` subcommand with a 60 s timeout, and keeps its own binary unless that exits 0. It records the failure for `doctor` and tries that version again at most once a week. So a build that can't run on the machine, such as a Go 1.27 build on macOS 12 (DESIGN 3.12), is never swapped in. The VS Code extension runs the same check before it puts its bundled binary in place of an installed one.
 
 `internal/release.Open` does steps 1 to 5. Step 7 means a replayed old manifest can't downgrade a client. Nothing here detects a frozen feed, where someone keeps serving an old manifest; a client on such a feed just stays on its version.
 
