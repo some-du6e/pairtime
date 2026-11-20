@@ -4,7 +4,7 @@ One script per harness. Each lists the exact actions that make the harness fire 
 
 Type or paste each prompt exactly as written. The scrub flags any prompt line that isn't in this file, because a fixture should hold no text of yours. If you type something private by mistake, stop and quit the harness, delete the whole `ROOT` folder, which holds what you typed in its runs, history and transcripts, and start over with a new `ROOT`.
 
-Step numbers are shared across harnesses: step 4 is always "a permission accepted", even where a harness skips a step before it. Every script has step 3, the pasted prompt, right before step 4, whose prompt refers back to it. Before each step, type its number and Enter into the sink's terminal, so `STEPS.txt` says which step every hook call belongs to.
+Step numbers are shared across harnesses: step 4 is always "a permission accepted", even where a harness skips a step before it. Every script has step 3, the pasted prompt, right before step 4, whose prompt refers back to it. Steps 19 to 21 came later than the rest, so their numbers are higher than the steps around them: do every step in the order its script lists it. Before each step, type its number and Enter into the sink's terminal, so `STEPS.txt` says which step every hook call belongs to.
 
 ## Before any capture
 
@@ -46,9 +46,11 @@ If no `hooks/` folder appears in `ROOT/runs/cli` after step 2 below, open `/hook
 | 8 | Type the step 8 prompt and accept the command. One test fails | `PostToolUse` (Bash) with the failure, `Stop` |
 | 9 | Type the step 9 prompt. As soon as Claude starts working, press Esc once | `UserPromptSubmit`, and no `Stop` |
 | 10 | Type the step 10 prompt and accept what it asks | `SubagentStart`, `SubagentStop`, `Stop`, a subagent transcript |
+| 20 | Type the step 20 prompt and accept the command. Claude starts a second Claude Code with its Bash tool | `PermissionRequest` and `PostToolUse` (Bash) for the command, `Stop`. From the nested run: `SessionStart`, `UserPromptSubmit`, `Stop` and `SessionEnd` with a `session_id` of their own, whose `parents` show claude under claude, and a transcript of its own |
 | 11 | After Claude answers, don't type anything for 75 seconds | `Notification` (idle prompt) |
 | 12 | Type the step 12 command, then wait about two and a half minutes without typing, so the loop fires twice. Then type the step 12 follow-up | `UserPromptSubmit` per loop run with no human mark, `Stop` with `session_crons` |
-| 13 | Type the step 13 command and let it run to the end, accepting edits and test runs | `Stop` with `stop_hook_active` on the continued turns |
+| 13 | Type the step 13 command. While it's still working, do step 21, then let it run to the end, accepting edits and test runs | `Stop` with `stop_hook_active` on the continued turns |
+| 21 | While step 13 is still working, type the step 21 prompt into Claude Code and press Enter. It waits in Claude Code's queue until Claude takes it up | A `queue-operation` entry with `operation` enqueue in the transcript, and later its dequeue (HS 3.2). Whether a `UserPromptSubmit` comes with it is one of the things this capture finds out |
 | 14 | Type `/clear` | `SessionEnd` (`reason` clear), `SessionStart` (`source` clear) |
 | 15 | Optional: turn the network off, type the step 15 prompt, wait for the error, turn the network on | `StopFailure` |
 | 16 | Type `/exit` | `SessionEnd` |
@@ -111,6 +113,12 @@ Step 10:
 Use a subagent to review wordcount.py, and report back in two sentences.
 ```
 
+Step 20, which Claude runs as a nested, headless Claude Code:
+
+```text
+Run this exact command with your Bash tool and tell me what it printed: claude -p "Say nested."
+```
+
 Step 12, then the follow-up once the loop has fired twice:
 
 ```text
@@ -125,6 +133,12 @@ Step 13:
 
 ```text
 /goal Make the failing test pass, then stop.
+```
+
+Step 21, typed while step 13 is still working:
+
+```text
+When you're done, say which test you fixed.
 ```
 
 Step 15:

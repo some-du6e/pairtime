@@ -205,6 +205,21 @@ func TestScripts(t *testing.T) {
 			}
 		}
 	})
+	// A nested claude -p is the only run whose parents show claude under
+	// claude, and a message typed while the agent works is the only source
+	// of agent.queue (SM 1.2; HS 3.2, 12.1).
+	claude := sections["Claude Code"]
+	for _, c := range []struct{ name, row, prompt string }{
+		{"the Claude Code script starts a nested session", "| 20 | Type the step 20 prompt", `claude -p "Say nested."`},
+		{"the Claude Code script queues a message while /goal works", "| 21 | While step 13 is still working",
+			"When you're done, say which test you fixed."},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			if !strings.Contains(claude, c.row) || !strings.Contains(claude, c.prompt+"\n```") {
+				t.Fatalf("no table row %q with its prompt %q", c.row, c.prompt)
+			}
+		})
+	}
 	for _, h := range []string{"Claude Code", "Codex", "Cursor", "GitHub Copilot", "Gemini CLI", "Devin", "Cline"} {
 		t.Run("the "+h+" script has the pasted prompt", func(t *testing.T) {
 			body, ok := sections[h]
