@@ -208,7 +208,7 @@ func normalizeName(name string) string {
 
 // ExeName turns the full path of a process's executable image into the
 // name the table is keyed by: the base name without ".exe", except for
-// three install layouts whose base name doesn't name the program.
+// these install layouts, whose base name doesn't name the program.
 //
 //   - Claude Code's native install runs from claude/versions/<version>
 //     through a claude symlink (CP 4.1), so on Linux and macOS the image's

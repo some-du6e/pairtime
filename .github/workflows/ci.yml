@@ -91,6 +91,16 @@ jobs:
       - name: go vet
         run: go vet ./...
 
+      - name: go vet for Windows and macOS
+        # The platform code and its tests for the other two OSes, type-checked
+        # on this runner, so a mistake in them shows up here before
+        # platform.yml spends a scarce Windows or macOS runner on it.
+        run: |
+          for goos in windows darwin; do
+            echo "GOOS=$goos"
+            GOOS=$goos go vet ./internal/platform/... ./internal/agent/procs/...
+          done
+
       - name: go test
         run: go test ./...
 
