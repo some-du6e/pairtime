@@ -119,20 +119,45 @@ A release key is an Ed25519 key pair, written as one line of text:
 
 | Kind | Form | Where it lives |
 |---|---|---|
-| Secret key | `pairtime-release-ed25519-secret:` and the 32-byte RFC 8032 private key in padded standard base64 | The `RELEASE_SIGNING_KEY` secret in the `release` environment, plus an offline copy. Never in the repository |
+| Secret key | `pairtime-release-ed25519-secret:` and the 32-byte RFC 8032 private key in padded standard base64 | The `RELEASE_SIGNING_KEY` secret of the `release` environment, plus an offline copy. Never in the repository, and never a repository secret |
 | Public key | `pairtime-release-ed25519-public:` and the 32-byte public key the same way | `internal/release/release-keys.txt`, one per line, compiled into the client with `go:embed` |
 
 The two prefixes differ, so a secret key pasted into the key list fails to parse instead of being committed. A key's id is the first 8 bytes of the SHA-256 of its 32 raw public-key bytes, in hex; the public key of RFC 8032's test 1 has the id `21fe31dfa154a261`. `pairtime version` prints the ids its build trusts, or `none`.
 
 ### Making the key
 
-Karim runs this once, from the repository root (PLAN WP-RL1):
+Karim does this once, before the first tag that should be signed (PLAN WP-RL1). These are repository settings, so they're his to run, not an agent's.
 
-```sh
-go run ./tools/release keygen | gh secret set RELEASE_SIGNING_KEY --env release --repo some-du6e/pairtime
-```
+1. Set up the `release` environment so that only `v*` tags can deploy to it. Only a job that deploys to it can read its secrets.
 
-`keygen` appends the public key to `release-keys.txt`, which then goes into a PR, and prints the secret key to standard output once. Keep an offline copy too, for example by putting `tee >(age -r <recipient> -o release-signing-key.age)` between the two commands, with the offline `age` key DESIGN 10.2 uses for the server's keys. GitHub never shows a secret again. If the key is lost, installed clients can't verify any update, including one that would trust a new key.
+   ```sh
+   gh api -X PUT repos/some-du6e/pairtime/environments/release \
+     -F 'deployment_branch_policy[protected_branches]=false' \
+     -F 'deployment_branch_policy[custom_branch_policies]=true'
+   gh api -X POST repos/some-du6e/pairtime/environments/release/deployment-branch-policies \
+     -f name='v*' -f type=tag
+   ```
+
+   Run both even if `release` already exists. The publish job names the environment, so a tag pushed before this step creates it, and GitHub creates it with no deployment policy, which lets a workflow run on any branch deploy to it and read its secrets. `PUT` adds the policy to an environment that exists. Then check what it admits:
+
+   ```sh
+   gh api repos/some-du6e/pairtime/environments/release/deployment-branch-policies \
+     --jq '.branch_policies[] | "\(.id) \(.type) \(.name)"'
+   ```
+
+   It should print one line, ending in `tag v*`. Delete the policy of any other line with `gh api -X DELETE repos/some-du6e/pairtime/environments/release/deployment-branch-policies/<id>`.
+
+2. Make the key from the repository root, with its secret half going straight into the environment:
+
+   ```sh
+   go run ./tools/release keygen | gh secret set RELEASE_SIGNING_KEY --env release --repo some-du6e/pairtime
+   ```
+
+   `keygen` appends the public key to `release-keys.txt` and prints the secret key to standard output once. Keep an offline copy too, for example by putting `tee >(age -r <recipient> -o release-signing-key.age)` between the two commands, with the offline `age` key DESIGN 10.2 uses for the server's keys. GitHub never shows a secret again. If the key is lost, installed clients can't verify any update, including one that would trust a new key.
+
+   Store the key in the environment and nowhere else in GitHub. A repository or organization secret with the same name would reach every workflow run on every branch, so `release.yml` fails while one exists.
+
+3. Commit `release-keys.txt` in a PR. The first tag after it merges is signed.
 
 ### Replacing a key
 

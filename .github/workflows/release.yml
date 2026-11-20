@@ -8,7 +8,8 @@
 #   prerelease part, such as v0.1.0-alpha.1, publishes a prerelease.
 # - workflow_dispatch, and a PR that changes the release code, build a
 #   snapshot signed with a throwaway key and keep it as a workflow
-#   artifact. They never publish and never read the secret.
+#   artifact. They never publish, and the release environment that holds
+#   the secret never admits them.
 #
 # The server image (WP-OP1), code signing (DESIGN 9.7 WP 4.10) and the VSIX
 # packages (WP 4.11) join this workflow later.
@@ -62,6 +63,19 @@ jobs:
           # No build cache: a release builds from source alone, so a
           # poisoned cache entry can't end up in it.
           cache: false
+
+      - name: The signing key isn't a repository secret
+        # This job deploys to no environment, so here the name can only
+        # find a repository or organization secret, which every workflow
+        # run on every branch can read. The key belongs to the release
+        # environment alone (docs/spec/update-manifest.md, Making the key).
+        env:
+          OUTSIDE_THE_ENVIRONMENT: ${{ secrets.RELEASE_SIGNING_KEY }}
+        run: |
+          if [ -n "$OUTSIDE_THE_ENVIRONMENT" ]; then
+            echo "::error::RELEASE_SIGNING_KEY is a repository or organization secret, which any workflow run on any branch can read. Delete it with gh secret delete RELEASE_SIGNING_KEY --repo some-du6e/pairtime, keep the key only in the release environment, and replace the key if a workflow run you don't trust could have read it (docs/spec/update-manifest.md)."
+            exit 1
+          fi
 
       - name: Version
         env:
@@ -225,8 +239,10 @@ jobs:
     if: github.event_name == 'push' && github.ref_type == 'tag'
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    # RELEASE_SIGNING_KEY belongs in this environment, whose deployment rule
-    # admits v* tags only, so no branch or PR run can read it.
+    # RELEASE_SIGNING_KEY lives only in this environment, whose deployment
+    # policy admits v* tags alone, so no branch or PR run can read it. The
+    # spec's Making the key sets that policy up; GitHub creates a missing
+    # environment without one.
     environment: release
     permissions:
       # To create the release and upload its files.
