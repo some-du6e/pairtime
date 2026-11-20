@@ -346,7 +346,9 @@ func TestLayoutDoesntChangeHash(t *testing.T) {
 }
 
 // TestMadeUpNamesPanic checks that reading a parameter no table declares,
-// or reading one as the wrong type, panics instead of returning zero.
+// reading one as the wrong type, or reading the zero value panics instead
+// of returning zero. Only this package can make the first two kinds of
+// name; other packages can only make the zero value.
 func TestMadeUpNamesPanic(t *testing.T) {
 	tab, err := ByVersion("0.1.0")
 	if err != nil {
@@ -356,10 +358,13 @@ func TestMadeUpNamesPanic(t *testing.T) {
 		name string
 		read func()
 	}{
-		{"Int of a name no table has panics", func() { tab.Int(IntParam("NOT_A_PARAM_S")) }},
-		{"Int of a rational parameter panics", func() { tab.Int(IntParam(COMPOSE_CPS)) }},
-		{"Rat of an integer parameter panics", func() { tab.Rat(RatParam(THINK_LEAD_S)) }},
-		{"Bool of an integer parameter panics", func() { tab.Bool(BoolParam(THINK_LEAD_S)) }},
+		{"Int of a name no table has panics", func() { tab.Int(IntParam{"NOT_A_PARAM_S"}) }},
+		{"Int of a rational parameter panics", func() { tab.Int(IntParam{COMPOSE_CPS.ratName}) }},
+		{"Rat of an integer parameter panics", func() { tab.Rat(RatParam{THINK_LEAD_S.intName}) }},
+		{"Bool of an integer parameter panics", func() { tab.Bool(BoolParam{THINK_LEAD_S.intName}) }},
+		{"Int of the zero IntParam panics", func() { tab.Int(IntParam{}) }},
+		{"Rat of the zero RatParam panics", func() { tab.Rat(RatParam{}) }},
+		{"Bool of the zero BoolParam panics", func() { tab.Bool(BoolParam{}) }},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

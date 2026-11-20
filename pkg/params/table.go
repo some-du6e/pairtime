@@ -95,20 +95,20 @@ func Parse(data []byte) (*Table, error) {
 	values := make(map[string]value, len(all))
 	if params != nil {
 		for _, p := range all {
-			raw, ok := params[p.name()]
+			raw, ok := params[p.String()]
 			if !ok {
-				add("params.%s: missing", p.name())
+				add("params.%s: missing", p.String())
 				continue
 			}
 			v, err := newValue(p.kind(), raw)
 			if err != nil {
-				add("params.%s: %v", p.name(), err)
+				add("params.%s: %v", p.String(), err)
 				continue
 			}
-			values[p.name()] = v
+			values[p.String()] = v
 		}
 		for _, k := range slices.Sorted(maps.Keys(params)) {
-			if !slices.ContainsFunc(all, func(p param) bool { return p.name() == k }) {
+			if !slices.ContainsFunc(all, func(p param) bool { return p.String() == k }) {
 				add("params.%s: not a parameter", k)
 			}
 		}
@@ -191,30 +191,32 @@ func (t *Table) Canonical() []byte { return slices.Clone(t.canonical) }
 func (t *Table) Names() []string { return slices.Sorted(maps.Keys(t.values)) }
 
 // Text returns a parameter's value as the table writes it, such as "120",
-// "1.5" or "false", and whether the table has the parameter.
+// "1.5" or "false", and whether the table has the parameter. Names and Text
+// are for code that shows a whole table. Rules read values with Int, Rat
+// and Bool, whose names the static check can see.
 func (t *Table) Text(name string) (string, bool) {
 	v, ok := t.values[name]
 	return v.text, ok
 }
 
 // Int returns an integer parameter. Every table has every IntParam this
-// package declares, so Int panics only for a name made up by the caller.
-// Each call is a map lookup; a rule that reads a parameter in a loop should
-// read it once outside.
-func (t *Table) Int(p IntParam) int64 { return t.lookup(string(p), kindInt).num.num }
+// package declares, and no other package can make one up, so Int panics
+// only for the zero IntParam, which names no parameter. Each call is a map
+// lookup; a rule that reads a parameter in a loop should read it once
+// outside.
+func (t *Table) Int(p IntParam) int64 { return t.lookup(p.intName, kindInt).num.num }
 
-// Rat returns a rational parameter. Like Int, it panics only for a name
-// made up by the caller.
-func (t *Table) Rat(p RatParam) Rat { return t.lookup(string(p), kindRat).num }
+// Rat returns a rational parameter. Like Int, it panics only for the zero
+// RatParam.
+func (t *Table) Rat(p RatParam) Rat { return t.lookup(p.ratName, kindRat).num }
 
-// Bool returns a flag. Like Int, it panics only for a name made up by the
-// caller.
-func (t *Table) Bool(p BoolParam) bool { return t.lookup(string(p), kindBool).flag }
+// Bool returns a flag. Like Int, it panics only for the zero BoolParam.
+func (t *Table) Bool(p BoolParam) bool { return t.lookup(p.flagName, kindBool).flag }
 
 func (t *Table) lookup(name string, k kind) value {
 	v, ok := t.values[name]
 	if !ok || v.kind != k {
-		panic(fmt.Sprintf("params: table %s has no %s parameter %s", t.version, k, name))
+		panic(fmt.Sprintf("params: table %s has no %s parameter %q", t.version, k, name))
 	}
 	return v
 }

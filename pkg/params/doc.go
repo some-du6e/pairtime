@@ -36,15 +36,23 @@
 //
 // # Reading parameters
 //
-// Each parameter is a constant named exactly as SM writes it, such as
+// Each parameter is a variable named exactly as SM writes it, such as
 // [THINK_LEAD_S], rather than in Go's usual MixedCaps, so that one search
 // finds the spec, the table and every rule that reads it. Its type says how
 // to read it: [Table.Int] for integers, [Table.Rat] for exact rationals and
 // [Table.Bool] for flags. No parameter is ever read as a float64, so
 // pkg/score can stay in integer arithmetic (DESIGN 3.7).
 //
-// A test in this package lists every params.NAME selector in pkg/score
-// with go/ast and fails if a table lacks one of the names (TE WP0.6).
+// The three types are opaque, so these variables are the only names other
+// packages have. A string doesn't convert to one, so tab.Int("THINK_LEAD_S")
+// doesn't compile, and a composite literal outside this package can only
+// make the zero value, which names no parameter and panics when read. The
+// parameters are variables only because a Go constant can't be a struct;
+// nothing assigns them.
+//
+// So every parameter pkg/score reads is a params.NAME selector there. A
+// test in this package lists those selectors with go/ast and fails if a
+// table lacks one of the names (TE WP0.6).
 //
 // # Names that differ from SM 8
 //
