@@ -299,6 +299,51 @@ func TestOtherUser(t *testing.T) {
 				}
 			},
 		},
+		{
+			name: "the agent won't follow a symbolic link that another uid put where its socket's directory goes",
+			run: func(t *testing.T) {
+				// The link's target is root's own, so a check made through
+				// the link would pass, and its chmod would land on the
+				// target.
+				dir := shortDir(t)
+				target := filepath.Join(dir, "target")
+				if err := os.Mkdir(target, 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Chmod(target, 0o755); err != nil {
+					t.Fatal(err)
+				}
+				link := filepath.Join(dir, "run")
+				if err := os.Symlink(target, link); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Lchown(link, nobody, nobody); err != nil {
+					t.Fatal(err)
+				}
+				ep, err := ipc.EndpointFor(home.Dirs{Data: dir, Config: dir, Runtime: link})
+				if err != nil {
+					t.Fatal(err)
+				}
+				srv, err := ipc.Listen(ep, ipc.Options{})
+				if err == nil {
+					srv.Close()
+					t.Fatal("Listen put its socket behind nobody's link")
+				}
+				if !strings.Contains(err.Error(), "symbolic link") {
+					t.Errorf("Listen = %v, want it to refuse the link", err)
+				}
+				fi, err := os.Stat(target)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if perm := fi.Mode().Perm(); perm != 0o755 {
+					t.Errorf("the link's target has mode %v now, want it left at 0755", perm)
+				}
+				if _, err := os.Lstat(filepath.Join(target, ipc.SocketName)); !os.IsNotExist(err) {
+					t.Errorf("a socket was made behind the link: %v", err)
+				}
+			},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, tt.run)
