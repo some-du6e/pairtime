@@ -26,6 +26,10 @@ const (
 	// helper and chain.sh.
 	envExe    = "PAIRTIME_PROCTEST_EXE"
 	envScript = "PAIRTIME_PROCTEST_SCRIPT"
+	// envRegroup, set to 1, makes the test binary move into a process group
+	// of its own and then exec itself as the helper, the way GNU timeout
+	// without --foreground runs a command (regroupSelf).
+	envRegroup = "PAIRTIME_PROCTEST_REGROUP"
 )
 
 // result is what a helper reports.
@@ -37,10 +41,26 @@ type result struct {
 }
 
 func TestMain(m *testing.M) {
+	if os.Getenv(envRegroup) != "" {
+		err := regroupSelf()
+		fmt.Fprintln(os.Stderr, "proctest regroup:", err)
+		os.Exit(1)
+	}
 	if out := os.Getenv(envOut); out != "" {
 		os.Exit(helper(out))
 	}
 	os.Exit(m.Run())
+}
+
+// withoutEnv returns env without the variable name.
+func withoutEnv(env []string, name string) []string {
+	out := make([]string, 0, len(env))
+	for _, kv := range env {
+		if !strings.HasPrefix(kv, name+"=") {
+			out = append(out, kv)
+		}
+	}
+	return out
 }
 
 // helper runs at the bottom of a chain a test started. It reads the

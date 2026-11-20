@@ -34,11 +34,26 @@ const osPID = 1
 
 func runsAsOS() bool { return os.Geteuid() == 0 }
 
-// regroup returns a script line that runs the helper the way GNU timeout
-// without --foreground runs a command: in a process group of its own.
+// regroup returns a script line that runs the helper through GNU timeout
+// without --foreground, which runs its command in a process group of its
+// own.
 var regroup = func(t *testing.T, _ *rig) string {
 	timeout := need(t, "timeout", func() (string, error) { return exec.LookPath("timeout") })
 	return `"` + timeout + `" 60 "$` + envExe + `"`
+}
+
+// regroupSelf moves this process into a process group of its own and
+// execs it again as the helper, as on macOS. Linux's test runs GNU
+// timeout itself, so this is only here for TestMain.
+func regroupSelf() error {
+	if err := syscall.Setpgid(0, 0); err != nil {
+		return err
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	return syscall.Exec(exe, []string{exe}, withoutEnv(os.Environ(), envRegroup))
 }
 
 var scriptCase = struct {

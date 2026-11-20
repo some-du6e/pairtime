@@ -4,6 +4,7 @@ package proctest
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -48,6 +49,9 @@ func runsAsOS() bool { return windows.SelfOwner() == platform.SessionOwner(0) }
 
 // regroup is nil: Windows has no process groups.
 var regroup func(t *testing.T, r *rig) string
+
+// regroupSelf fails: Windows has no process groups.
+func regroupSelf() error { return errors.New("windows has no process groups") }
 
 var scriptCase = struct {
 	name        string

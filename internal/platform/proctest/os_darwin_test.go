@@ -35,9 +35,22 @@ func runsAsOS() bool { return os.Geteuid() == 0 }
 
 // regroup returns a script line that runs the helper the way GNU timeout
 // without --foreground runs a command, in a process group of its own.
-// macOS has no timeout(1), so python's setpgid and exec do the same.
-var regroup = func(_ *testing.T, r *rig) string {
-	return `"` + r.python + `" -c 'import os, sys; os.setpgid(0, 0); os.execv(sys.argv[1], sys.argv[1:])' "$` + envExe + `"`
+// macOS has no timeout(1), so the test binary does the same itself.
+var regroup = func(*testing.T, *rig) string {
+	return envRegroup + `=1 "$` + envExe + `"`
+}
+
+// regroupSelf moves this process into a process group of its own and
+// execs it again as the helper. It returns only on failure.
+func regroupSelf() error {
+	if err := syscall.Setpgid(0, 0); err != nil {
+		return err
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	return syscall.Exec(exe, []string{exe}, withoutEnv(os.Environ(), envRegroup))
 }
 
 var scriptCase = struct {
