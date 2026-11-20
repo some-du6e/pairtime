@@ -191,6 +191,31 @@ func TestCheck(t *testing.T) {
 	}
 }
 
+func TestVariants(t *testing.T) {
+	tests := []struct {
+		name   string
+		goos   string
+		goarch string
+		want   []string
+	}{
+		{name: "linux/amd64 is listed as it ships, as platform.yml's desktop job builds it, and as nightly.yml's race run builds it", goos: "linux", goarch: "amd64", want: []string{"linux/amd64", "linux/amd64 -tags desktop", "linux/amd64 -race"}},
+		{name: "linux/arm64 is listed as it ships and with -tags desktop, since nightly.yml runs on amd64 alone", goos: "linux", goarch: "arm64", want: []string{"linux/arm64", "linux/arm64 -tags desktop"}},
+		{name: "windows is listed only as it ships, since desktop and race tests need linux", goos: "windows", goarch: "amd64", want: []string{"windows/amd64"}},
+		{name: "darwin is listed only as it ships, since desktop and race tests need linux", goos: "darwin", goarch: "arm64", want: []string{"darwin/arm64"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var got []string
+			for _, v := range variants(tt.goos, tt.goarch) {
+				got = append(got, build(tt.goos, tt.goarch, v))
+			}
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("variants(%q, %q) list %q, want %q", tt.goos, tt.goarch, got, tt.want)
+			}
+		})
+	}
+}
+
 func show(vs []verdict) string {
 	var b strings.Builder
 	for _, v := range vs {

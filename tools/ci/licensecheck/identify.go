@@ -30,7 +30,8 @@ var templateFS embed.FS
 
 // otherLicenses are phrases that name a license outside Allowed. A file has
 // to match a template as a whole, so extra clauses fail, but these phrases
-// are looked for anywhere in it.
+// are looked for anywhere in it, and so are their short names
+// (otherLicenseIDRE).
 var otherLicenses = []string{
 	"general public license", // GPL, LGPL and AGPL
 	"affero",
@@ -48,6 +49,17 @@ var otherLicenses = []string{
 	"noncommercial",
 	"good, not evil", // the JSON license
 }
+
+// otherLicenseIDRE finds the short names of the licenses otherLicenses
+// spells out, the way a note on a copyright line or a URL cites them:
+// GPLv2, LGPL-2.1, AGPL-3.0, MPL-2.0, EPL, EUPL, CDDL, SSPL, BUSL-1.1 or
+// BSL, ELv2 or Elastic-2.0, CC-BY-NC-4.0, CC0, and the path of
+// gnu.org/licenses/gpl-3.0.html. Each must stand as a whole word, with an
+// optional version after it, so a name that only starts with the same
+// letters (Gplot, Eplus, Elastic N.V.) passes. No allowed license's text
+// uses any of them. shortLicenseName runs it.
+var otherLicenseIDRE = regexp.MustCompile(`(?i)\b(?:(?:[al]?gpl|mpl|epl|eupl|cddl|sspl|busl|bsl|cc0|cc[-\s]?by)(?:-?v?\d+(?:\.\d+)*)?` +
+	`|elv2|elastic-v?\d+(?:\.\d+)*)\b`)
 
 // conditionRE finds an added condition ("Redistribution is prohibited
 // without written permission", "Commercial use is prohibited") in a
@@ -92,6 +104,14 @@ func mustLoadTemplates() []template {
 	return ts
 }
 
+// shortLicenseName returns the first short license name otherLicenseIDRE
+// finds in a license file's text, or "". It reads underscores as spaces
+// first: RE2's word boundary counts '_' as part of a word, so GPL_v2 or
+// COPYING_LGPL would hide the name.
+func shortLicenseName(text string) string {
+	return otherLicenseIDRE.FindString(strings.ReplaceAll(charFixer.Replace(text), "_", " "))
+}
+
 // identify names the allowed license a license file holds. When the file
 // holds none of them, id is empty and reason says why.
 func identify(text string) (id, reason string) {
@@ -101,6 +121,11 @@ func identify(text string) (id, reason string) {
 		if strings.Contains(lower, phrase) {
 			return "", fmt.Sprintf("it mentions %q, so it isn't only %s", phrase, orList(Allowed))
 		}
+	}
+	// Matched before normalize drops URLs, so a link to a license's text
+	// counts as a mention too.
+	if name := shortLicenseName(text); name != "" {
+		return "", fmt.Sprintf("it mentions %q, so it isn't only %s", name, orList(Allowed))
 	}
 	var ids []string
 	why := "its text isn't " + orList(Allowed)
@@ -171,10 +196,14 @@ func badHead(original string, re *regexp.Regexp, m []string) string {
 // line, after a title the template matched itself, and the line that holds
 // its end may go on into the license text; only the head's part of either
 // is kept. ok is false when the lines don't add up to the head.
+//
+// A line ends at any line break normalize turns into a space (lineBreakRE),
+// not only at \n, so a file with CR or U+2028 line breaks can't pass two
+// lines off as one.
 func headLines(original, head string) (lines []string, ok bool) {
 	head = strings.TrimSpace(head)
 	acc := ""
-	for _, line := range strings.Split(original, "\n") {
+	for _, line := range lineBreakRE.Split(original, -1) {
 		n := normalize(line)
 		if n == "" {
 			continue
@@ -282,10 +311,18 @@ func orList(ids []string) string {
 var (
 	// A bare URL, optionally in angle brackets. Copies differ in http and
 	// https, and some add the license's URL at the end, so URLs are dropped.
-	urlRE     = regexp.MustCompile(`<?https?://[^\s<>]*>?`)
+	// A URL ends at white space as spaceRE defines it, so it can't run on
+	// past a line break into the next line.
+	urlRE     = regexp.MustCompile(`<?https?://[^\s\v\x{85}\p{Z}<>]*>?`)
 	licenceRE = regexp.MustCompile(`(?i)licen[cs]e`)
-	spaceRE   = regexp.MustCompile(`[\s\p{Z}]+`)
-	charFixer = strings.NewReplacer(
+	// spaceRE is white space, all seven of Unicode's line breaks included:
+	// \n, \f and \r from \s, U+2028 and U+2029 from \p{Z}, and the vertical
+	// tab and NEL (U+0085), which neither covers.
+	spaceRE = regexp.MustCompile(`[\s\v\x{85}\p{Z}]+`)
+	// lineBreakRE is every line break spaceRE removes. CRLF splits twice,
+	// and headLines skips the empty line between.
+	lineBreakRE = regexp.MustCompile(`[\n\v\f\r\x{85}\x{2028}\x{2029}]`)
+	charFixer   = strings.NewReplacer(
 		"\ufeff", "",
 		"\u201c", "'", "\u201d", "'", "\u201e", "'", "\u201f", "'", "\u2033", "'",
 		"\u2018", "'", "\u2019", "'", "\u201a", "'", "\u201b", "'", "\u2032", "'",
