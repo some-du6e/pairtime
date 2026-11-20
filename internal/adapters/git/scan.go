@@ -156,11 +156,6 @@ func (s *Scanner) Scan(ctx context.Context) ([]Change, error) {
 	if last.Msg == "" { // made up from HEAD, for a repo without a reflog
 		s.st.Cursor = Cursor{HEAD: last.New, Set: true}
 	}
-	for _, c := range changes {
-		for _, cm := range c.Commits {
-			s.remember(cm.SHA)
-		}
-	}
 	return changes, err
 }
 
@@ -400,13 +395,17 @@ func (s *Scanner) build(ctx context.Context, ops []op, now time.Time) ([]Change,
 			}
 		}
 		c.Event = s.event(kind, tip, made, now)
+		// Each record is remembered at once, so a later merge in the same
+		// scan doesn't record it again as an arrival.
 		for _, m := range made {
 			c.Commits = append(c.Commits, s.record(m, kind, MadeHere, o.last.Time, rewritesTo(rewrites, m.SHA), now))
 			need = append(need, m)
+			s.remember(m.SHA)
 		}
 		for _, m := range arrived {
 			c.Commits = append(c.Commits, s.record(m, kind, MadeElsewhere, o.last.Time, nil, now))
 			need = append(need, m)
+			s.remember(m.SHA)
 		}
 		changes = append(changes, c)
 	}
