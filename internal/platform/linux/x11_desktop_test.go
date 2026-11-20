@@ -7,8 +7,9 @@ package linux
 // These tests run in platform.yml's Linux job, inside Xvfb with openbox
 // and a private session bus (tools/ci/desktop_session.sh). Their oracles
 // are the X server's own idle counter, moved by real XTEST input from
-// xdotool, and the window manager's active window, as xdotool and xprop,
-// two independent X clients, read it.
+// xdotool, the window manager's active window, as xdotool and xprop, two
+// independent X clients, read it, and the pid of each xterm the test
+// starts.
 
 import (
 	"context"
@@ -36,8 +37,8 @@ func openX11Desktop(t *testing.T) *Desktop {
 	})
 	t.Cleanup(func() { d.Close() })
 	s := d.Status()
-	if s.Session != SessionX11 || s.Idle.Via != screenSaverExtension || s.Focus.Via != "_NET_ACTIVE_WINDOW" {
-		t.Fatalf("status %+v, want X11 with MIT-SCREEN-SAVER idle time and _NET_ACTIVE_WINDOW focus", s)
+	if s.Session != SessionX11 || s.Idle.Via != screenSaverExtension || s.Focus.Via != focusViaXRes {
+		t.Fatalf("status %+v, want X11 with MIT-SCREEN-SAVER idle time, and focus from _NET_ACTIVE_WINDOW with X-Resource pids", s)
 	}
 	return d
 }
@@ -208,5 +209,35 @@ func TestDesktopX11FocusFollowsActiveWindow(t *testing.T) {
 			t.Errorf("an extra focus report: %+v", f)
 		}
 	case <-time.After(500 * time.Millisecond):
+	}
+}
+
+func TestDesktopX11FocusPIDFromServer(t *testing.T) {
+	cases := []struct {
+		name   string
+		netPID string // what the test sets the xterm's _NET_WM_PID to
+	}{
+		{"a window whose _NET_WM_PID names a sandbox's pid, as a Flatpak app's does, reports its process's pid on the host", "2"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cmd, win := startXterm(t, "PairtimeSandboxed")
+			runTool(t, "xprop", "-id", fmt.Sprint(win), "-f", "_NET_WM_PID", "32c", "-set", "_NET_WM_PID", tc.netPID)
+			if got := fmt.Sprint(xpropPID(t, win)); got != tc.netPID {
+				t.Fatalf("xprop reads _NET_WM_PID %s after setting it to %s", got, tc.netPID)
+			}
+			d := openX11Desktop(t)
+			focus := d.Focus()
+			runTool(t, "xdotool", "windowactivate", "--sync", fmt.Sprint(win))
+			f := nextFocus(t, focus)
+			for f.Window != win {
+				f = nextFocus(t, focus)
+			}
+			// The xterm's own pid is the oracle: the X server took it from
+			// the xterm's socket when it connected.
+			if f.PID != cmd.Process.Pid {
+				t.Errorf("pid %d, want the xterm's %d rather than its _NET_WM_PID %s", f.PID, cmd.Process.Pid, tc.netPID)
+			}
+		})
 	}
 }

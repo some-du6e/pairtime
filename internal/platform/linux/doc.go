@@ -13,8 +13,9 @@
 //	                 X11 session                 GNOME on Wayland           other Wayland, console
 //	idle time        MIT-SCREEN-SAVER            org.gnome.Mutter.          unknown (KDE and wlroots
 //	                 (Mutter as a fallback)      IdleMonitor                come with ext-idle-notify-v1)
-//	focus            _NET_ACTIVE_WINDOW and      unknown: no portable       unknown
-//	                 _NET_WM_PID                 signal (SM 3.2)
+//	focus            _NET_ACTIVE_WINDOW, with    unknown: no portable       unknown
+//	                 each window's process from  signal (SM 3.2)
+//	                 X-Resource
 //	suspend, resume  logind PrepareForSleep, with a delay lock, on every session type
 //	lock, unlock     logind's LockedHint on the session, on every session type
 //
@@ -29,12 +30,18 @@
 // error handlers exit the process when a window vanishes mid-query or the
 // display goes away, and libXss isn't installed everywhere. The protocol
 // subset is small: connection setup, InternAtom, GetProperty,
-// ChangeWindowAttributes, QueryExtension and the screen saver extension's
-// QueryVersion and QueryInfo.
+// ChangeWindowAttributes, QueryExtension, the screen saver extension's
+// QueryVersion and QueryInfo, and X-Resource's QueryVersion and
+// QueryClientIds.
 //
 // Nothing here reads input devices, records keys or reads window titles.
-// The only window properties read are _NET_ACTIVE_WINDOW on the root
-// window, and _NET_WM_PID and WM_CLIENT_MACHINE on the focused window.
+// The only window properties read are _NET_ACTIVE_WINDOW, _NET_SUPPORTED and
+// _NET_SUPPORTING_WM_CHECK on the root window; _NET_SUPPORTING_WM_CHECK on
+// the window that property names, which shows the window manager is alive;
+// and WM_CLIENT_MACHINE on the focused window, with its _NET_WM_PID only on
+// an X server without X-Resource 1.2. Otherwise the focused window's process
+// comes from X-Resource's QueryClientIds, the server's record of which
+// process opened the connection that created the window.
 //
 // Idle samples cost one round trip to the display server or Mutter, made
 // when the agent asks. Focus, power and lock changes arrive as X events and

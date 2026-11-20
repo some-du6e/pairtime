@@ -7,6 +7,7 @@ package linux
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"fmt"
 	"io"
 	"net"
 	"sync"
@@ -28,8 +29,11 @@ type fakeX struct {
 	atoms    map[string]uint32
 	props    map[fakePropKey]fakeProp
 	windows  map[uint32]bool
-	selected map[uint32]uint32 // event masks clients selected, by window
+	pids     map[uint32]uint32   // the pid the server took from the socket of each window's client
+	selected map[uint32]uint32   // event masks clients selected, by window
+	reads    map[fakePropKey]int // GetProperty requests, by window and property
 	conns    []net.Conn
+	accepted int // connections accepted
 	seq      map[net.Conn]uint16
 	gotName  string // the authorization a client sent
 	gotData  []byte
@@ -38,11 +42,13 @@ type fakeX struct {
 // fakeXConfig is how a fake X server behaves. It doesn't change once the
 // server is listening.
 type fakeXConfig struct {
-	roots    []uint32 // the root window of each screen
-	refuse   string   // when set, refuse the connection with this reason
-	noSaver  bool     // lack MIT-SCREEN-SAVER
-	seqStart uint16   // the sequence number before the first request
-	noise    bool     // send an event before every reply and error
+	roots    []uint32      // the root window of each screen
+	refuse   string        // when set, refuse the connection with this reason
+	noSaver  bool          // lack MIT-SCREEN-SAVER
+	xres     string        // X-Resource: "" for version 1.2, "1.1" for one without QueryClientIds, "none" for none
+	seqStart uint16        // the sequence number before the first request
+	noise    bool          // send an event before every reply and error
+	delay    time.Duration // wait this long before the setup reply and before each reply and error
 }
 
 type fakePropKey struct{ window, atom uint32 }
@@ -53,21 +59,55 @@ type fakeProp struct {
 	data   []byte
 }
 
-// fakeSaverOpcode is the major opcode the fake gives MIT-SCREEN-SAVER.
-const fakeSaverOpcode = 140
+// The major opcodes the fake gives its extensions.
+const (
+	fakeSaverOpcode = 140
+	fakeXResOpcode  = 141
+)
 
 // newFakeX starts a fake X server.
 func newFakeX(t *testing.T, cfg fakeXConfig) *fakeX {
 	t.Helper()
 	var b [8]byte
 	rand.Read(b[:])
+	f, err := startFakeX(cfg, "@pairtime-fakex-"+hex.EncodeToString(b[:]))
+	if err != nil {
+		t.Fatalf("listening for the fake X server: %v", err)
+	}
+	t.Cleanup(f.close)
+	return f
+}
+
+// newFakeDisplay starts a fake X server where Open looks for a display, the
+// abstract socket of a display numbered past any real one, and returns it
+// with the DISPLAY that names it.
+func newFakeDisplay(t *testing.T, cfg fakeXConfig) (*fakeX, string) {
+	t.Helper()
+	var err error
+	for range 5 {
+		var b [4]byte
+		rand.Read(b[:])
+		number := fmt.Sprint(100000 + le32(b[:])%900000)
+		var f *fakeX
+		if f, err = startFakeX(cfg, "@"+xDisplay{number: number}.socketPath()); err == nil {
+			t.Cleanup(f.close)
+			return f, ":" + number
+		}
+	}
+	t.Fatalf("listening for the fake X display: %v", err)
+	return nil, ""
+}
+
+func startFakeX(cfg fakeXConfig, addr string) (*fakeX, error) {
 	f := &fakeX{
 		fakeXConfig: cfg,
-		addr:        "@pairtime-fakex-" + hex.EncodeToString(b[:]),
+		addr:        addr,
 		atoms:       map[string]uint32{"ATOM": atomAtom, "CARDINAL": atomCardinal, "STRING": atomString, "WINDOW": atomWindow, "WM_CLIENT_MACHINE": atomWMClientMachine},
 		props:       map[fakePropKey]fakeProp{},
 		windows:     map[uint32]bool{},
+		pids:        map[uint32]uint32{},
 		selected:    map[uint32]uint32{},
+		reads:       map[fakePropKey]int{},
 		seq:         map[net.Conn]uint16{},
 	}
 	for _, r := range cfg.roots {
@@ -75,12 +115,11 @@ func newFakeX(t *testing.T, cfg fakeXConfig) *fakeX {
 	}
 	ln, err := net.Listen("unix", f.addr)
 	if err != nil {
-		t.Fatalf("listening for the fake X server: %v", err)
+		return nil, err
 	}
 	f.ln = ln
 	go f.accept()
-	t.Cleanup(f.close)
-	return f
+	return f, nil
 }
 
 func (f *fakeX) close() {
@@ -124,6 +163,7 @@ func (f *fakeX) accept() {
 		}
 		f.mu.Lock()
 		f.conns = append(f.conns, conn)
+		f.accepted++
 		f.mu.Unlock()
 		go f.serve(conn)
 	}
@@ -146,6 +186,7 @@ func (f *fakeX) serve(conn net.Conn) {
 	f.seq[conn] = f.seqStart
 	f.mu.Unlock()
 
+	time.Sleep(f.delay)
 	if f.refuse != "" {
 		reply := make([]byte, 8, 8+len(f.refuse)+pad4(len(f.refuse)))
 		reply[1] = byte(len(f.refuse))
@@ -222,8 +263,11 @@ func (f *fakeX) handle(conn net.Conn, req []byte) {
 	case opQueryExtension:
 		name := string(req[8:][:le16(req[4:])])
 		r := fakeReply(seq, 0)
-		if name == screenSaverExtension && !f.noSaver {
+		switch {
+		case name == screenSaverExtension && !f.noSaver:
 			r[8], r[9] = 1, fakeSaverOpcode
+		case name == xResExtension && f.xres != "none":
+			r[8], r[9] = 1, fakeXResOpcode
 		}
 		f.write(conn, r)
 	case fakeSaverOpcode:
@@ -241,6 +285,8 @@ func (f *fakeX) handle(conn net.Conn, req []byte) {
 			return
 		}
 		f.write(conn, r)
+	case fakeXResOpcode:
+		f.handleXRes(conn, seq, req)
 	case opInternAtom:
 		name := string(req[8:][:le16(req[4:])])
 		r := fakeReply(seq, 0)
@@ -262,6 +308,7 @@ func (f *fakeX) handle(conn net.Conn, req []byte) {
 	case opGetProperty:
 		window, atom, typ, words := le32(req[4:]), le32(req[8:]), le32(req[12:]), le32(req[20:])
 		f.mu.Lock()
+		f.reads[fakePropKey{window, atom}]++
 		exists := f.windows[window]
 		p, ok := f.props[fakePropKey{window, atom}]
 		f.mu.Unlock()
@@ -296,6 +343,54 @@ func (f *fakeX) handle(conn net.Conn, req []byte) {
 	}
 }
 
+// handleXRes answers X-Resource's QueryVersion and QueryClientIds, which
+// version 1.1 lacks. A spec names a client by any resource it created, here
+// always a window; the fake answers for windows it knows a pid for, and for
+// a window that is gone whose client's slot has a new owner.
+func (f *fakeX) handleXRes(conn net.Conn, seq uint16, req []byte) {
+	switch {
+	case req[1] == xResQueryVersion:
+		r := fakeReply(seq, 0)
+		put16(r[8:], 1)
+		put16(r[10:], 2)
+		if f.xres == "1.1" {
+			put16(r[10:], 1)
+		}
+		f.write(conn, r)
+	case req[1] == xResQueryClientIDs && f.xres != "1.1":
+		n := int(le32(req[4:]))
+		if len(req) != 8+8*n {
+			f.writeError(conn, seq, 16, req[0], uint16(req[1])) // BadLength
+			return
+		}
+		var ids []byte
+		count := 0
+		for i := range n {
+			spec := req[8+8*i:]
+			client, mask := le32(spec), le32(spec[4:])
+			f.mu.Lock()
+			pid, ok := f.pids[client]
+			f.mu.Unlock()
+			if !ok || mask&xResLocalClientPID == 0 {
+				continue
+			}
+			v := make([]byte, 16)
+			put32(v, client&^0x1fffff) // the client's resource base
+			put32(v[4:], xResLocalClientPID)
+			put32(v[8:], 4)
+			put32(v[12:], pid)
+			ids = append(ids, v...)
+			count++
+		}
+		r := fakeReply(seq, len(ids))
+		put32(r[8:], uint32(count))
+		copy(r[32:], ids)
+		f.write(conn, r)
+	default:
+		f.writeError(conn, seq, 1, req[0], uint16(req[1])) // BadRequest
+	}
+}
+
 // fakeReply is a reply header with extra bytes of data after its 32.
 func fakeReply(seq uint16, extra int) []byte {
 	r := make([]byte, 32+extra)
@@ -317,6 +412,7 @@ func (f *fakeX) writeError(conn net.Conn, seq uint16, code, major byte, minor ui
 // write sends a packet, after an unrelated event when noise is on, so the
 // client has to skip events to find its reply.
 func (f *fakeX) write(conn net.Conn, p []byte) {
+	time.Sleep(f.delay)
 	if f.noise {
 		mapping := make([]byte, 32)
 		mapping[0] = 34 // MappingNotify, which every client gets
@@ -355,6 +451,14 @@ func (f *fakeX) addWindow(window uint32) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.windows[window] = true
+}
+
+// setClientPID sets the pid the server took from the socket of the client
+// that created window, which X-Resource reports.
+func (f *fakeX) setClientPID(window, pid uint32) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.pids[window] = pid
 }
 
 // setProp sets a property of window. A nil data deletes it.
@@ -405,6 +509,34 @@ func (f *fakeX) selectedOn(window uint32) uint32 {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.selected[window]
+}
+
+// readsOf counts the GetProperty requests for window's property name.
+func (f *fakeX) readsOf(window uint32, name string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.reads[fakePropKey{window, f.atomLocked(name)}]
+}
+
+// readsOfAny counts the GetProperty requests for property name on any
+// window.
+func (f *fakeX) readsOfAny(name string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	atom, n := f.atomLocked(name), 0
+	for k, reads := range f.reads {
+		if k.atom == atom {
+			n += reads
+		}
+	}
+	return n
+}
+
+// connections counts the connections the server has accepted.
+func (f *fakeX) connections() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.accepted
 }
 
 func (f *fakeX) auth() (string, []byte) {

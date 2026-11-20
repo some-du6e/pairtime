@@ -293,13 +293,12 @@ func (d *Desktop) startFocus(ctx context.Context, disp xDisplay, dispErr error, 
 		d.status.Focus = unknownErr(err)
 		return
 	}
-	const name = "_NET_ACTIVE_WINDOW"
-	d.status.Focus = via(name)
+	d.status.Focus = via(w.via())
 	if !w.ewmh {
 		// Keep listening: a window manager that starts later sets the
 		// property, and the first change makes focus known.
 		d.status.Focus = unknown("the window manager doesn't keep _NET_ACTIVE_WINDOW")
-		w.onEWMH = func() { d.setStatus(func(s *Status) { s.Focus = via(name) }) }
+		w.onEWMH = func() { d.setStatus(func(s *Status) { s.Focus = via(w.via()) }) }
 	}
 	d.focus = make(chan Focus, 16)
 	d.closers = append(d.closers, w.close)

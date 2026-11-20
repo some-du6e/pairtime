@@ -16,10 +16,10 @@ import (
 )
 
 // The X11 protocol subset this package speaks. Numbers are from the X
-// Window System Protocol (X11R7.7) and the MIT-SCREEN-SAVER extension
-// (xcb-proto's screensaver.xml). Every request goes out in little-endian
-// byte order, which the connection setup asks for, so the server answers
-// in it too, whatever the host.
+// Window System Protocol (X11R7.7), the MIT-SCREEN-SAVER extension
+// (xcb-proto's screensaver.xml) and X-Resource (xcb-proto's res.xml). Every
+// request goes out in little-endian byte order, which the connection setup
+// asks for, so the server answers in it too, whatever the host.
 const (
 	xPacketError = 0
 	xPacketReply = 1
@@ -45,6 +45,11 @@ const (
 	screenSaverExtension = "MIT-SCREEN-SAVER"
 	ssQueryVersion       = 0
 	ssQueryInfo          = 1
+
+	xResExtension      = "X-Resource"
+	xResQueryVersion   = 0
+	xResQueryClientIDs = 4      // new in X-Resource 1.2
+	xResLocalClientPID = 1 << 1 // XRES_CLIENT_ID_PID_MASK
 )
 
 // maxReplyBytes bounds the extra bytes of one reply or event. pairtime's
@@ -436,6 +441,59 @@ func (c *xconn) idleSince(major byte) (uint32, error) {
 		return 0, err
 	}
 	return le32(p[16:]), nil
+}
+
+// xResHasClientIDs reports whether the X-Resource extension at major speaks
+// version 1.2 or later, the first with QueryClientIds.
+func (c *xconn) xResHasClientIDs(major byte) (bool, error) {
+	req := []byte{major, xResQueryVersion, 2, 0, 1, 2, 0, 0}
+	p, err := c.roundTrip(req)
+	if err != nil {
+		return false, err
+	}
+	v, minor := le16(p[8:]), le16(p[10:])
+	return v > 1 || (v == 1 && minor >= 2), nil
+}
+
+// clientPID asks the server, through X-Resource's QueryClientIds, for the
+// process of the client that created window. The server read that pid from
+// the client's socket (SO_PEERCRED) when it connected, so it is a pid in
+// the server's PID namespace, whatever namespace the client runs in. A
+// client that connected over TCP has none, and none is 0.
+func (c *xconn) clientPID(major byte, window uint32) (uint32, error) {
+	if window == 0 {
+		return 0, nil // a spec for client 0 would ask about every client
+	}
+	req := make([]byte, 16)
+	req[0] = major
+	req[1] = xResQueryClientIDs
+	put16(req[2:], 4)
+	put32(req[4:], 1) // one spec: the client owning window, and the pid mask
+	put32(req[8:], window)
+	put32(req[12:], xResLocalClientPID)
+	p, err := c.roundTrip(req)
+	if err != nil {
+		return 0, err
+	}
+	// After the 32-byte header come the values, each a spec (the client
+	// and the one mask bit it answers), a length in bytes and the value.
+	bad := errors.New("X server sent a malformed QueryClientIds reply")
+	off := 32
+	for range le32(p[8:]) {
+		if off+12 > len(p) {
+			return 0, bad
+		}
+		mask, size := le32(p[off+4:]), le32(p[off+8:])
+		off += 12
+		if size%4 != 0 || size > uint32(len(p)-off) {
+			return 0, bad
+		}
+		if mask == xResLocalClientPID && size == 4 {
+			return le32(p[off:]), nil
+		}
+		off += int(size)
+	}
+	return 0, nil
 }
 
 func pad4(n int) int { return (4 - n%4) % 4 }

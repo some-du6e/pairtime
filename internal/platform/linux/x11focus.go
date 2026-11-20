@@ -13,11 +13,19 @@ import (
 // maxPID is Linux's PID_MAX_LIMIT. A larger _NET_WM_PID is garbage.
 const maxPID = 1 << 22
 
+// Where focus comes from, as Status.Focus names it.
+const (
+	focusViaXRes = "_NET_ACTIVE_WINDOW, with each window's process from X-Resource"
+	focusViaPID  = "_NET_ACTIVE_WINDOW, with each window's process from its _NET_WM_PID, which is wrong for Flatpak apps: the X server lacks X-Resource 1.2"
+)
+
 // x11Focus follows the focused window through the window manager's
 // _NET_ACTIVE_WINDOW property on the root window (EWMH 1.5), which changes
 // with every focus change and announces itself with a PropertyNotify. The
-// focused window's process comes from its _NET_WM_PID. It owns its own X
-// connection, which sits in a blocked read between focus changes.
+// focused window's process comes from the X server through X-Resource, or
+// from the window's _NET_WM_PID on a server without X-Resource 1.2 (see
+// windowPID). It owns its own X connection, which sits in a blocked read
+// between focus changes.
 type x11Focus struct {
 	c        *xconn
 	hostname string
@@ -26,6 +34,10 @@ type x11Focus struct {
 	pid       uint32 // _NET_WM_PID
 	supported uint32 // _NET_SUPPORTED
 	wmCheck   uint32 // _NET_SUPPORTING_WM_CHECK
+
+	// xres is X-Resource's major opcode when the server speaks version
+	// 1.2, which says which process each client is, and 0 when it doesn't.
+	xres byte
 
 	// ewmh is set once the window manager is known to keep
 	// _NET_ACTIVE_WINDOW. Until then the root's property says nothing
@@ -72,6 +84,9 @@ func (w *x11Focus) setup(timeout time.Duration) error {
 		}
 		*a.atom = atom
 	}
+	if err := w.findXRes(); err != nil {
+		return err
+	}
 	// Select before the first read, so a change between the two isn't
 	// missed: it sets dirty, and run reads again.
 	if err := w.c.selectPropertyChanges(w.c.root); err != nil {
@@ -86,6 +101,34 @@ func (w *x11Focus) setup(timeout time.Duration) error {
 		w.ewmh, w.dirty = true, true
 	}
 	return w.c.conn.SetDeadline(time.Time{})
+}
+
+// findXRes looks for X-Resource 1.2. Xorg, Xvfb and XWayland have had it
+// since 2012; on a server without it, windowPID falls back to _NET_WM_PID.
+func (w *x11Focus) findXRes() error {
+	major, ok, err := w.c.queryExtension(xResExtension)
+	if err != nil || !ok {
+		return err
+	}
+	has, err := w.c.xResHasClientIDs(major)
+	if isProtoError(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if has {
+		w.xres = major
+	}
+	return nil
+}
+
+// via names where focus comes from, for Status.Focus.
+func (w *x11Focus) via() string {
+	if w.xres != 0 {
+		return focusViaXRes
+	}
+	return focusViaPID
 }
 
 // wmKeepsActiveWindow checks EWMH's two signs of a live window manager
@@ -177,17 +220,38 @@ func (w *x11Focus) read() (Focus, error) {
 	return f, err
 }
 
-// windowPID returns the focused window's _NET_WM_PID, or 0 when the window
-// doesn't say, is gone, or belongs to a client on another host: EWMH says a
-// pid only means something together with WM_CLIENT_MACHINE, and a client
-// forwarded over ssh -X or running in a container reports a pid from a
-// process table that isn't this one.
+// windowPID returns the process of the client that owns the focused
+// window, or 0 when it can't be known: the window is gone, its client runs
+// on another host, or the server knows no pid for it.
+//
+// The pid comes from the X server, through X-Resource. A window's own
+// _NET_WM_PID is whatever getpid() returned in its client, and Flatpak
+// starts every app in a PID namespace of its own while keeping the host's
+// name, so a Flatpak editor's window says it is pid 2 or so, which on the
+// host is kthreadd. The server took the pid from the client's socket, in
+// its own namespace; it has none for a client that connected over TCP, and
+// then the window has no pid. Only a server without X-Resource 1.2 leaves
+// _NET_WM_PID as the one source.
+//
+// Either way, WM_CLIENT_MACHINE has to name this host. A client forwarded by
+// ssh -X reaches the server through the local ssh process, whose pid is the
+// one X-Resource gives, and a remote client's _NET_WM_PID is from another
+// machine's process table (EWMH: a pid only means something together with
+// WM_CLIENT_MACHINE). Reading it after the pid also checks that the window
+// still exists, so a pid read for a window that has closed, whose client's
+// slot a new client may have taken, isn't reported.
 func (w *x11Focus) windowPID(win uint32) (int, error) {
-	pid, ok, err := w.c.getCardinal(win, w.pid, atomCardinal)
+	var pid uint32
+	var err error
+	if w.xres != 0 {
+		pid, err = w.c.clientPID(w.xres, win)
+	} else {
+		pid, _, err = w.c.getCardinal(win, w.pid, atomCardinal)
+	}
 	if isProtoError(err) {
 		return 0, nil
 	}
-	if err != nil || !ok || pid == 0 || pid > maxPID {
+	if err != nil || pid == 0 || pid > maxPID {
 		return 0, err
 	}
 	_, machine, err := w.c.getProperty(win, atomWMClientMachine, atomString, 64)
