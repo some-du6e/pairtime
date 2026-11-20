@@ -78,6 +78,38 @@ func TestRender(t *testing.T) {
 	}
 }
 
+// TestPreview checks that the preview shows what a reveal carries: whole
+// tokens, the five reveal types, and a code block's line count without its
+// language.
+func TestPreview(t *testing.T) {
+	code := "see:\n```go\nx\n```\nok"
+	tests := []struct {
+		name  string
+		text  string
+		spans []Span
+		want  string
+	}{
+		{"an email address takes its whole token and shows as pii", "write to email:teen@example.com, ok",
+			[]Span{{Start: 15, End: 31, Type: TypeEmail}}, "write to [PII] ok"},
+		{"every known value shows as known", "Maya Kowalski said hi",
+			[]Span{{Start: 0, End: 13, Type: TypeGitName}}, "[KNOWN] said hi"},
+		{"a secret shows as secret, without its rule", "key sk_test_x here",
+			[]Span{{Start: 4, End: 13, Type: TypeSecret, Rule: "stripe-access-token"}}, "key [SECRET] here"},
+		{"code shows its line count and never its language", code, CodeBlocks(code), "see:\n[CODE: 1 line]\nok"},
+		{"an empty code block shows no count", "```\n```", CodeBlocks("```\n```"), "[CODE]"},
+		{"a span the teen removed shows as teen", "my friend Sam", []Span{{Start: 10, End: 13, Type: TypeManual}}, "my friend [TEEN]"},
+		{"a secret inside a code block shows once, as the code", "```\nkey\n```",
+			[]Span{{Start: 0, End: 11, Type: TypeCode, Lines: 1}, {Start: 4, End: 7, Type: TypeSecret, Rule: "x"}}, "[CODE: 1 line]"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := Preview(tt.text, tt.spans); got != tt.want {
+				t.Errorf("Preview = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestMarker(t *testing.T) {
 	tests := []struct {
 		name string

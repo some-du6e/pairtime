@@ -155,9 +155,10 @@ func Merge(spans []Span) []Span {
 }
 
 // Render returns text with the spans, merged, replaced by their markers.
-// It's for people reading a redaction, such as the teen's preview and
-// `pairtime fixtures scrub`; a reveal sends the spans themselves. Spans
-// that run past the end of text are cut at the end.
+// It's for diagnostics and tests, such as the paths `pairtime fixtures
+// scrub` lists. Its markers are finer than a reveal can carry, and its
+// spans aren't rounded to tokens, so it isn't what a reviewer sees:
+// that's Preview. Spans that run past the end of text are cut at the end.
 func Render(text string, spans []Span) string {
 	var b strings.Builder
 	at := 0
@@ -172,6 +173,40 @@ func Render(text string, spans []Span) string {
 	}
 	b.WriteString(text[at:])
 	return b.String()
+}
+
+// Preview returns text as a reviewer sees its reveal (DESIGN 7.5 step 6
+// and 7.7 item 5), which is what the teen must see before sending it: the
+// spans rounded out to whole tokens as Tokens does, each shown as the
+// coarse type a reveal carries, [KNOWN], [SECRET], [PII], [CODE] or
+// [TEEN], and a code block with its line count, [CODE: 3 lines], but never
+// its language, which a reveal doesn't send (docs/spec/ledger-v1.md 10.3).
+func Preview(text string, spans []Span) string {
+	var b strings.Builder
+	at := 0
+	for _, s := range Tokens(text, spans) {
+		b.WriteString(text[at:s.Start])
+		b.WriteString(s.revealMarker())
+		at = s.End
+	}
+	b.WriteString(text[at:])
+	return b.String()
+}
+
+// revealMarker is the marker Preview shows for s.
+func (s Span) revealMarker() string {
+	t := s.Type.Reveal()
+	if t == "" {
+		t = "removed"
+	}
+	m := "[" + strings.ToUpper(t)
+	if s.Type == TypeCode && s.Lines > 0 {
+		m += ": " + strconv.Itoa(s.Lines) + " line"
+		if s.Lines != 1 {
+			m += "s"
+		}
+	}
+	return m + "]"
 }
 
 // Tokens rounds each span out to the whole tokens it touches, which is

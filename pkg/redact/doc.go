@@ -8,11 +8,13 @@
 // Redaction removes spans and never rewrites text. [Redactor.Find] returns
 // byte ranges of the original text, each with a [Type] marker, and leaves
 // the text alone, so a content commitment still proves every byte that is
-// kept (TP B6). [Merge] turns the spans into a disjoint set, and [Render]
-// draws them as markers for a person to read. For a ledger reveal, [Tokens]
-// rounds the spans out to the whole tokens a reveal can remove, and
-// [Type.Reveal] gives the coarse type the reveal shows: known, secret, pii,
-// code or teen (docs/spec/ledger-v1.md 10.2 and 10.3, WP-LG3).
+// kept (TP B6). [Merge] turns the spans into a disjoint set. For a ledger
+// reveal, [Tokens] rounds the spans out to the whole tokens a reveal can
+// remove, and [Type.Reveal] gives the coarse type the reveal shows: known,
+// secret, pii, code or teen (docs/spec/ledger-v1.md 10.2 and 10.3,
+// WP-LG3). [Preview] draws a text the way its reveal will look to the
+// reviewer, which is what the teen previews. [Render] draws the finer
+// markers, unrounded, for diagnostics and tests.
 //
 // # The pipeline
 //
