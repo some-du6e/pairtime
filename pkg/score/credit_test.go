@@ -1,0 +1,425 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
+package score
+
+import (
+	"bytes"
+	"testing"
+
+	"github.com/some-du6e/pairtime/pkg/event"
+)
+
+// The agent's records for these tests, all in project p_1: transcript text
+// (via log), a stop and an edit (via hook).
+
+func (b *tl) agentSays(t int64, sess, turn string, words int) {
+	b.harness(t, event.ViaLog, sess, "p_1", &event.AgentOutput{TurnKey: turn, Words: words})
+}
+
+func (b *tl) agentStops(t int64, sess, turn string) {
+	b.harness(t, event.ViaHook, sess, "p_1", &event.AgentStop{TurnKey: turn, StopReason: event.StopEndTurn})
+}
+
+func (b *tl) agentEdits(t int64, sess string, lines int) {
+	b.harness(t, event.ViaHook, sess, "p_1", &event.AgentTool{ToolClass: event.ToolEdit, LinesAdded: lines,
+		TStart: t - 500, TEnd: t})
+}
+
+// scheduled marks a prompt as a /loop iteration (SM 2.2 rule 1).
+func scheduled(e event.Event) { e.Data.(*event.PromptSubmit).OriginDeclared = event.DeclaredLoop }
+
+// sumIn sums the seconds of d's credit slots in [from, to), which are slot
+// boundaries: credited seconds by reason and uncredited ones by reason.
+func sumIn(d Derived, from, to int64) map[event.Reason]int64 {
+	out := map[event.Reason]int64{}
+	for _, c := range d.Credits {
+		if c.Slot < from || c.Slot >= to {
+			continue
+		}
+		for _, e := range c.Credited {
+			out[e.Reason] += e.Seconds
+		}
+		for r, n := range c.Uncredited {
+			out[r] += n
+		}
+	}
+	return out
+}
+
+func sameCounts(a, b map[event.Reason]int64) bool {
+	for k, v := range a {
+		if b[k] != v {
+			return false
+		}
+	}
+	for k, v := range b {
+		if a[k] != v {
+			return false
+		}
+	}
+	return true
+}
+
+// secondsWant is what a range of slots, in seconds after base, should hold.
+type secondsWant struct {
+	from, to int64
+	want     map[event.Reason]int64
+}
+
+const (
+	rP       = event.ReasonPrompt
+	rSUP     = event.ReasonSupervise
+	rREAD    = event.ReasonRead
+	rNAV     = event.ReasonNavigate
+	rPA      = event.ReasonPermission
+	rG       = event.ReasonCommit
+	rLOOKUP  = event.ReasonLookup
+	xAbsent  = event.ReasonAbsent
+	xNoAnch  = event.ReasonNoAnchor
+	xAgent   = event.ReasonAgentOnly
+	xAuto    = event.ReasonAutomated
+	xOther   = event.ReasonOtherFocus
+	xAmbig   = event.ReasonAmbiguous
+	xLookCap = event.ReasonLookupCap
+)
+
+func TestCredit(t *testing.T) {
+	typedPrompt := func(resume int64) func(b *tl) {
+		return func(b *tl) { b.prompt(at(resume+19), event.ViaHook, "s_1", "p_1", "t_2", 30) }
+	}
+	// lookup is SM 2.5's case: editor work, 240 s in the browser from 60 s,
+	// then editor work again. after adds the navigation at 330 s whose lead
+	// brackets the browser run; agent runs a scheduled turn during it.
+	lookup := func(after, agent bool) func(b *tl) {
+		return func(b *tl) {
+			b.focus(at(0), event.AppEditor, "p_1")
+			b.mouse(every(at(1), at(596), 5000)...)
+			b.editor(at(60), event.ViaEditor, "p_1", event.ActNavigate, event.EditSourceUnknown)
+			b.focus(at(60), event.AppBrowser, "")
+			b.focus(at(300), event.AppEditor, "p_1")
+			if after {
+				b.editor(at(330), event.ViaEditor, "p_1", event.ActNavigate, event.EditSourceUnknown)
+			}
+			if agent {
+				b.start(at(0), "s_1", "p_1", event.EntrypointCLI, event.ParentTerminalApp, true)
+				scheduled(b.prompt(at(100), event.ViaHook, "s_1", "p_1", "t_1", 30))
+				b.agentStops(at(150), "s_1", "t_1")
+			}
+			b.samples(at(0), at(600))
+		}
+	}
+	// back is SM 2.4's TTL case: a 300 s answer at 61 s, read for 30 s,
+	// and the person back at ret s with a prompt 200 s later, whose lead
+	// starts 60 s after ret.
+	back := func(ret int64) func(b *tl) {
+		return func(b *tl) {
+			terminalSession(b)
+			b.mouse(every(at(1), at(61), 5000)...)
+			b.prompt(at(60), event.ViaHook, "s_1", "p_1", "t_1", 30)
+			b.agentSays(at(61), "s_1", "t_1", 900)
+			b.agentStops(at(62), "s_1", "t_1")
+			b.mouse(every(at(ret+1), at(ret+196), 5000)...)
+			b.prompt(at(ret+200), event.ViaHook, "s_1", "p_1", "t_2", 30)
+			b.samples(at(0), at(ret+260))
+		}
+	}
+	cases := []struct {
+		name  string
+		keys  bool
+		build func(b *tl)
+		want  []secondsWant
+	}{
+		{
+			name: "SM 2.4: a prompt resets the bucket to R_TURN_BASE_S, output adds to it, and present seconds drain it as SUP while the agent runs and READ after",
+			build: func(b *tl) {
+				terminalSession(b)
+				b.mouse(every(at(1), at(296), 5000)...)
+				b.prompt(at(60), event.ViaHook, "s_1", "p_1", "t_1", 30)
+				b.agentSays(at(70), "s_1", "t_1", 45)
+				b.agentSays(at(90), "s_1", "t_1", 30)
+				b.agentStops(at(90), "s_1", "t_1")
+				b.samples(at(0), at(300))
+			},
+			want: []secondsWant{
+				{0, 60, map[event.Reason]int64{rP: 60}},
+				{60, 90, map[event.Reason]int64{rSUP: 30}},
+				{90, 105, map[event.Reason]int64{rREAD: 15}},
+				{105, 300, map[event.Reason]int64{xNoAnch: 195}},
+			},
+		},
+		{
+			name: "SM 2.4: a scheduled turn's output fills the bucket without resetting it, and its idle seconds are X.automated",
+			build: func(b *tl) {
+				terminalSession(b)
+				b.mouse(every(at(1), at(296), 5000)...)
+				b.prompt(at(60), event.ViaHook, "s_1", "p_1", "t_1", 30)
+				b.agentSays(at(65), "s_1", "t_1", 60)
+				b.agentStops(at(65), "s_1", "t_1")
+				scheduled(b.prompt(at(120), event.ViaHook, "s_1", "p_1", "t_2", 30))
+				b.agentSays(at(135), "s_1", "t_2", 30)
+				b.agentStops(at(150), "s_1", "t_2")
+				b.samples(at(0), at(300))
+			},
+			want: []secondsWant{
+				{60, 75, map[event.Reason]int64{rSUP: 5, rREAD: 10}},
+				{75, 90, map[event.Reason]int64{rREAD: 15}},
+				{90, 105, map[event.Reason]int64{rREAD: 10, xNoAnch: 5}},
+				{105, 120, map[event.Reason]int64{xNoAnch: 15}},
+				{120, 135, map[event.Reason]int64{xAuto: 15}},
+				{135, 150, map[event.Reason]int64{rSUP: 10, xAuto: 5}},
+				{150, 165, map[event.Reason]int64{xNoAnch: 15}},
+			},
+		},
+		{
+			name: "SM 2.4: output past BUCKET_MAX_S evicts the oldest entries, so 1,500 s of diff leaves 600 s to read",
+			build: func(b *tl) {
+				terminalSession(b)
+				b.mouse(every(at(1), at(1206), 5000)...)
+				b.prompt(at(60), event.ViaHook, "s_1", "p_1", "t_1", 30)
+				b.agentEdits(at(61), "s_1", 200)
+				b.agentStops(at(62), "s_1", "t_1")
+				b.git(at(1200), "p_1", event.ActorHuman)
+				b.samples(at(0), at(1260))
+			},
+			want: []secondsWant{
+				{60, 75, map[event.Reason]int64{rSUP: 2, rREAD: 13}},
+				{75, 660, map[event.Reason]int64{rREAD: 585}},
+				{660, 675, map[event.Reason]int64{rREAD: 1, xNoAnch: 14}},
+				{675, 1140, map[event.Reason]int64{xNoAnch: 465}},
+				{1140, 1200, map[event.Reason]int64{rG: 60}},
+			},
+		},
+		{
+			name:  "SM 2.4: output younger than BUCKET_TTL_S waits in the bucket for the person to come back",
+			build: back(6990),
+			want: []secondsWant{
+				{6990, 7050, map[event.Reason]int64{rREAD: 60}},
+				{7050, 7065, map[event.Reason]int64{rP: 15}},
+			},
+		},
+		{
+			name:  "SM 2.4: output older than BUCKET_TTL_S is dropped",
+			build: back(7290),
+			want: []secondsWant{
+				{7290, 7350, map[event.Reason]int64{xNoAnch: 60}},
+				{7350, 7365, map[event.Reason]int64{rP: 15}},
+			},
+		},
+		{
+			name: "SM 2.4: the bucket drains only within READ_HORIZON_S of a human act in the project",
+			build: func(b *tl) {
+				terminalSession(b)
+				b.mouse(every(at(1), at(796), 5000)...)
+				b.prompt(at(60), event.ViaHook, "s_1", "p_1", "t_1", 30)
+				b.agentSays(at(61), "s_1", "t_1", 900)
+				b.agentStops(at(62), "s_1", "t_1")
+				b.focus(at(75), event.AppOther, "")
+				b.focus(at(495), event.AppTerminal, "p_1", "s_1")
+				b.samples(at(0), at(810))
+			},
+			want: []secondsWant{
+				{60, 75, map[event.Reason]int64{rSUP: 2, rREAD: 13}},
+				{75, 495, map[event.Reason]int64{xOther: 420}},
+				{495, 660, map[event.Reason]int64{rREAD: 165}},
+				{660, 675, map[event.Reason]int64{rREAD: 1, xNoAnch: 14}},
+				{675, 795, map[event.Reason]int64{xNoAnch: 120}},
+			},
+		},
+		{
+			name: "SM 3.3 rule 4: of two sessions in the project, the bucket with the oldest entry drains first",
+			build: func(b *tl) {
+				b.focus(at(0), event.AppTerminal, "p_1", "s_1", "s_2")
+				b.start(at(0), "s_1", "p_1", event.EntrypointCLI, event.ParentTerminalApp, true)
+				b.start(at(0), "s_2", "p_1", event.EntrypointCLI, event.ParentTerminalApp, true)
+				b.mouse(every(at(1), at(296), 5000)...)
+				b.prompt(at(60), event.ViaHook, "s_1", "p_1", "t_1", 30)
+				b.focus(atMS(60_500), event.AppOther, "")
+				b.agentStops(at(61), "s_1", "t_1")
+				b.focus(at(90), event.AppTerminal, "p_1", "s_1", "s_2")
+				b.prompt(at(100), event.ViaHook, "s_2", "p_1", "t_2", 30)
+				b.agentStops(at(200), "s_2", "t_2")
+				b.samples(at(0), at(300))
+			},
+			want: []secondsWant{
+				{90, 105, map[event.Reason]int64{rP: 10, rREAD: 5}},
+				{105, 120, map[event.Reason]int64{rREAD: 15}},
+				{120, 135, map[event.Reason]int64{rSUP: 15}},
+				{135, 150, map[event.Reason]int64{rSUP: 5, xAgent: 10}},
+			},
+		},
+		{
+			name:  "SM 2.5: a browser run bracketed by credit in the project is LOOKUP up to LOOKUP_MAX_S, and X.lookup_cap after",
+			build: lookup(true, false),
+			want: []secondsWant{
+				{0, 60, map[event.Reason]int64{rNAV: 60}},
+				{60, 240, map[event.Reason]int64{rLOOKUP: 180}},
+				{240, 300, map[event.Reason]int64{xLookCap: 60}},
+				{300, 330, map[event.Reason]int64{rNAV: 30}},
+				{330, 600, map[event.Reason]int64{xNoAnch: 270}},
+			},
+		},
+		{
+			name:  "SM 2.5: a browser run with no credit after it is X.other_focus",
+			build: lookup(false, false),
+			want:  []secondsWant{{60, 300, map[event.Reason]int64{xOther: 240}}},
+		},
+		{
+			name:  "SM 2.5: a browser run while the project's agent runs is waiting, not a lookup",
+			build: lookup(true, true),
+			want:  []secondsWant{{60, 300, map[event.Reason]int64{xOther: 240}}},
+		},
+		{
+			name: "SM 3.3 rule 3: the lead of the next act beats the trail of an earlier one",
+			build: func(b *tl) {
+				terminalSession(b)
+				b.mouse(every(at(1), at(296), 5000)...)
+				b.harness(at(100), event.ViaHook, "s_1", "p_1", &event.AgentPermission{RequestedAt: at(90), AnsweredAt: at(100),
+					Decision: event.DecisionAccept, DecidedBy: event.DecidedByUser})
+				b.focus(at(120), event.AppEditor, "p_1")
+				b.editor(at(150), event.ViaEditor, "p_1", event.ActNavigate, event.EditSourceUnknown)
+				b.samples(at(0), at(300))
+			},
+			want: []secondsWant{
+				{0, 30, map[event.Reason]int64{xNoAnch: 30}},
+				{30, 90, map[event.Reason]int64{rNAV: 60}},
+				{90, 105, map[event.Reason]int64{rPA: 10, rNAV: 5}},
+				{105, 150, map[event.Reason]int64{rNAV: 45}},
+			},
+		},
+		{
+			name: "SM 2.7: where the OS reports key presses, a lead's typing part isn't realized in a slot without one",
+			keys: true,
+			build: func(b *tl) {
+				terminalSession(b)
+				b.mouse(every(at(1), at(44), 5000)...)
+				b.press(every(atMS(45_500), atMS(59_500), 1000)...)
+				b.prompt(at(60), event.ViaHook, "s_1", "p_1", "t_1", 45)
+				b.mouse(every(at(61), at(116), 5000)...)
+				b.samples(at(0), at(120))
+			},
+			want: []secondsWant{
+				{0, 30, map[event.Reason]int64{rP: 30}},
+				{30, 45, map[event.Reason]int64{xNoAnch: 15}},
+				{45, 60, map[event.Reason]int64{rP: 15}},
+			},
+		},
+		{
+			name:  "SM 2.1: a returned run credits the unread prose left in the bucket as READ~r and the prompt's think lead as P~r, and the rest is X.absent",
+			build: func(b *tl) { *b = *silence(event.AppTerminal, 451, typedPrompt(451)) },
+			want: []secondsWant{
+				{105, 450, map[event.Reason]int64{rREAD: 25, rREAD + event.ReturnedSuffix: 26, rP + event.ReturnedSuffix: 120,
+					xAbsent: 174}},
+			},
+		},
+		{
+			name: "SM 5.2: focus on a terminal that resolves to no project is X.ambiguous, on another app X.other_focus",
+			build: func(b *tl) {
+				b.focus(at(0), event.AppTerminal, "")
+				b.mouse(every(at(1), at(56), 5000)...)
+				b.focus(at(30), event.AppOther, "")
+				b.samples(at(0), at(60))
+			},
+			want: []secondsWant{
+				{0, 30, map[event.Reason]int64{xAmbig: 30}},
+				{30, 45, map[event.Reason]int64{xOther: 15}},
+			},
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			b := newTL(c.keys)
+			c.build(b)
+			d := b.run(t, Device{})
+			for _, w := range c.want {
+				if got := sumIn(d, at(w.from), at(w.to)); !sameCounts(got, w.want) {
+					t.Errorf("[%d s, %d s): %v, want %v", w.from, w.to, got, w.want)
+				}
+			}
+		})
+	}
+}
+
+// TestSideDoorFillCap checks DESIGN 5.2's cap on plugin output by itself:
+// it fills a turn up to R_TURN_BASE_S, base included, so a person's plugin
+// prompt gets its base and nothing more, while an automated plugin turn,
+// which has no base, gets up to R_TURN_BASE_S of its output.
+func TestSideDoorFillCap(t *testing.T) {
+	plugin := func(b *tl, sess string, tm int64, p event.Payload) event.Event {
+		return b.emit(tm, event.Envelope{Source: event.SourceHook, Via: event.ViaPlugin, Harness: event.HarnessOther,
+			SessionKey: sess, ProjectKey: "p_1"}, p)
+	}
+	for _, c := range []struct {
+		name      string
+		automated bool
+		fillMS    int64
+	}{
+		{"a person's plugin turn fills its 20 s base and nothing of its output", false, 20_000},
+		{"an automated plugin turn fills R_TURN_BASE_S of its output", true, 20_000},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			b := newTL(false)
+			b.focus(at(0), event.AppTerminal, "p_1", "s_9")
+			b.mouse(every(at(1), at(116), 5000)...)
+			e := plugin(b, "s_9", at(60), &event.PromptSubmit{TurnKey: "t_9", LenChars: 30, TypedLenEst: 30,
+				OriginDeclared: event.DeclaredNone})
+			if c.automated {
+				scheduled(e)
+			}
+			plugin(b, "s_9", at(70), &event.AgentOutput{TurnKey: "t_9", Words: 9000})
+			plugin(b, "s_9", at(70), &event.AgentStop{TurnKey: "t_9", StopReason: event.StopEndTurn})
+			b.samples(at(0), at(120))
+			d := b.run(t, Device{})
+			if len(d.Fills) != 1 {
+				t.Fatalf("fills %+v, want one", d.Fills)
+			}
+			f := d.Fills[0]
+			if f.FillMS != c.fillMS || f.OutputMS != 3_000_000 || f.Backed {
+				t.Errorf("fill %+v; want %d ms of 3,000,000 ms of output, not backed", f, c.fillMS)
+			}
+		})
+	}
+}
+
+// TestLookupHoldsFinal checks that a browser run's seconds stay pending
+// until its end bracket is final, since a lookup needs credit on both sides
+// (SM 2.5), and that stepping in two parts gives what one Step gives.
+func TestLookupHoldsFinal(t *testing.T) {
+	b := newTL(false)
+	b.focus(at(0), event.AppEditor, "p_1")
+	b.mouse(every(at(1), at(5996), 5000)...)
+	b.editor(at(60), event.ViaEditor, "p_1", event.ActNavigate, event.EditSourceUnknown)
+	b.focus(at(60), event.AppBrowser, "")
+	b.focus(at(3000), event.AppEditor, "p_1")
+	b.editor(at(3030), event.ViaEditor, "p_1", event.ActNavigate, event.EditSourceUnknown)
+	b.samples(at(0), at(6000))
+	recs := b.records()
+	cut := 0
+	for cut < len(recs) && recs[cut].T < at(2990) {
+		cut++
+	}
+	s1, o1 := Step(NewState(testTable(t), Device{}), recs[:cut])
+	t.Run("while the browser run goes on, nothing from its start on is final", func(t *testing.T) {
+		if o1.FinalBefore != at(60) {
+			t.Errorf("FinalBefore %d s, want 60 s", (o1.FinalBefore-base)/1000)
+		}
+	})
+	_, o2 := Step(s1, recs[cut:])
+	t.Run("once its end bracket is final, the run's lookup credit is too", func(t *testing.T) {
+		r := newRules(testTable(t))
+		if want := floorSlot(at(6000) - r.settle); o2.FinalBefore != want {
+			t.Errorf("FinalBefore %d s, want %d s", (o2.FinalBefore-base)/1000, (want-base)/1000)
+		}
+		if got := sumIn(o2.Final, at(60), at(240)); !sameCounts(got, map[event.Reason]int64{rLOOKUP: 180}) {
+			t.Errorf("the run's first 180 s are %v, want LOOKUP", got)
+		}
+	})
+	t.Run("two Steps give what one Step gives", func(t *testing.T) {
+		var all Derived
+		all.Append(o1.Final)
+		all.Append(o2.Final)
+		all.Append(o2.Pending)
+		if !bytes.Equal(marshal(t, all), marshal(t, scoreAll(t, Device{}, recs))) {
+			t.Error("the Finals and the last Pending differ from one Step's output")
+		}
+	})
+}

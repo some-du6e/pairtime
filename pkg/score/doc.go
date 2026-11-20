@@ -29,17 +29,45 @@
 //   - what became of each `pairtime track` call (DESIGN 5.4, 6.2 D3);
 //   - review flags.
 //
-// The reading bucket, focus attribution and per-second credit (WP-SC2),
-// one timeline across projects (WP-SC3), minute buckets (WP-SC4),
-// checkpoints (WP-SC5) and dark flow (WP-SC6) build on these.
+// # What WP-SC2 builds
+//
+// On top of those, Step applies SM 2.7's rule to every second and sums the
+// result into 15-second credit slots (Credit). For each second it takes:
+//
+//   - the anchor windows that cover it, realized where the person is
+//     present and the slot is focused on the anchor's project, with a
+//     lead's typing part only where key presses allow it (SM 2.3), and
+//     the lead of the next anchor at or after the second winning (SM 3.3
+//     rule 3);
+//   - else the session's reading bucket (SM 2.4): filled by what the agent
+//     showed, reset to R_TURN_BASE_S by each prompt a person sends, capped
+//     at BUCKET_MAX_S, emptied after BUCKET_TTL_S, drained oldest first and
+//     only within READ_HORIZON_S of a human act, as SUP while the agent
+//     runs and READ after; plugin and bridge output fills a turn only up to
+//     R_TURN_BASE_S when no hook or transcript record backs it (DESIGN
+//     5.2), and what each turn filled is in Fill;
+//   - else a bracketed browser or chat-app run (SM 2.5, LOOKUP);
+//   - the return rule's reading and think parts in returned slots (SM 2.1,
+//     with the ~r suffix);
+//   - and for a second nothing credits, one uncredited reason (SM 5.2).
+//
+// Each credited second takes the level of the anchor behind it (DESIGN
+// 6.4), and each slot counts its agent_running_s and agent-only seconds
+// (SM 2.6, 5.1). A slot's project is the one its focus resolves to; one
+// timeline across projects is WP-SC3's (SM 3), minute buckets WP-SC4's,
+// checkpoints WP-SC5's, and dark flow and the no-progress weight WP-SC6's,
+// so every second is at weight 1 for now.
 //
 // # Final and pending
 //
 // Records can arrive late, up to PENDING_WINDOW_S (DESIGN 6.2 D1), and some
 // rules look ahead: the return rule up to RETURN_GAP_MAX_S plus
-// READ_HORIZON_S. So what Step derives for a time stays pending until the
-// latest record is that much later, then becomes final and is output once.
-// Until WP-SC5 adds checkpoints, a State holds every record it was given.
+// READ_HORIZON_S, which covers a lead's reach and the reading horizon. So
+// what Step derives for a time stays pending until the latest record is
+// that much later, then becomes final and is output once. A browser run's
+// lookup credit waits for the run's end, so nothing from the run on is
+// final until its end bracket is. Until WP-SC5 adds checkpoints, a State
+// holds every record it was given.
 //
 // # Readings of the spec
 //
@@ -71,4 +99,34 @@
 //   - The editor in focus on a session's project hosts a session the
 //     WakaTime bridge reports, as it does an IDE session, since the bridge
 //     reads it from the editor's wakatime-cli (DESIGN 5.7).
+//
+// WP-SC2 adds these:
+//
+//   - A second belongs to a window when the second's start does, so
+//     window edges are applied to whole seconds (SM 1.3).
+//   - Presence after a silence longer than PRESENCE_GAP_S starts at the
+//     second of the first input a sample taken inside the slot reports,
+//     and at the slot's start when only the sample at its end reports one,
+//     which is what SM 6.1's drink and 6.4's 23:37 row need together
+//     (docs/errata/2026-11-19-presence-start-after-silence.md).
+//   - A second is credited from the bucket when the bucket holds anything,
+//     as SM 2.7's b > 0 says, and drains up to a second from it. A turn's
+//     base counts toward the R_TURN_BASE_S that side-door output may fill
+//     (testdata/timelines/sidedoor/README.md).
+//   - A turn with no agent.stop runs to its last agent record and no
+//     later than the session's next prompt; one with no agent record after
+//     its prompt doesn't run, as a track turn never does
+//     (docs/errata/2026-11-19-turns-without-a-stop.md).
+//   - A queued message resets the bucket when the turn running at the
+//     enqueue stops working, since no record says when the agent picks the
+//     message up.
+//   - A lookup second needs presence, and a run of browser or chat-app
+//     slots ends at a hard break. Its brackets are credited seconds of the
+//     same project, other than lookups, ending at most LOOKUP_BRACKET_S
+//     before the run or starting at most LOOKUP_BRACKET_S after it.
+//   - An uncredited second takes the first reason that applies in the order
+//     docs/errata/2026-11-19-sm-6.6-uncredited-codes.md proposes, with
+//     X.no_input for a running turn whose prompt came with no input and
+//     X.lookup_cap for a lookup's seconds past LOOKUP_MAX_S. Seconds before
+//     the presence sampler ran are X.absent until lookback (WP-SC7).
 package score
