@@ -3,6 +3,11 @@
 package score
 
 import (
+	"cmp"
+	"errors"
+	"fmt"
+	"slices"
+
 	"github.com/some-du6e/pairtime/pkg/event"
 	"github.com/some-du6e/pairtime/pkg/params"
 )
@@ -134,6 +139,67 @@ func (q *Questions) state(key string) *questionState {
 	}
 	s.seen = q.clock
 	return s
+}
+
+// QuestionsState is what a Questions remembers, so a writer that keeps
+// classing prompts across restarts can keep it too: State takes it, and a
+// Questions given it by Restore classes the prompts after it as the one it
+// came from would. The ledger writer keeps one in its seal frames.
+type QuestionsState struct {
+	// Clock counts the records the Questions heard a session from. It
+	// orders the sessions, and the one heard from least recently is the
+	// first forgotten.
+	Clock    uint64         `json:"clock"`
+	Sessions []AskedSession `json:"sessions,omitempty"`
+}
+
+// AskedSession is one session's part of a QuestionsState. The "all"
+// fields count every record of the session, the "kept" ones only those
+// that didn't come through a side door, and Native says a hook or a log
+// reader has reported the session.
+type AskedSession struct {
+	Key        string `json:"key"`
+	Native     bool   `json:"native,omitempty"`
+	OutputAll  bool   `json:"output_all,omitempty"`
+	StopAll    bool   `json:"stop_all,omitempty"`
+	OutputKept bool   `json:"output_kept,omitempty"`
+	StopKept   bool   `json:"stop_kept,omitempty"`
+	// Seen is Clock when the Questions last heard from the session.
+	Seen uint64 `json:"seen"`
+}
+
+// State returns what q remembers, its sessions in the order it last heard
+// from them.
+func (q *Questions) State() QuestionsState {
+	st := QuestionsState{Clock: q.clock}
+	for key, s := range q.sessions {
+		st.Sessions = append(st.Sessions, AskedSession{Key: key, Native: s.native, OutputAll: s.outputAll,
+			StopAll: s.stopAll, OutputKept: s.outputKept, StopKept: s.stopKept, Seen: s.seen})
+	}
+	slices.SortFunc(st.Sessions, func(a, b AskedSession) int { return cmp.Compare(a.Seen, b.Seen) })
+	return st
+}
+
+// Restore makes q remember st and nothing else. It refuses a state no
+// Questions could have: more than questionSessions sessions, a session with
+// no key or listed twice, or one heard from at no point of the clock, after
+// it, or at the same point as another.
+func (q *Questions) Restore(st QuestionsState) error {
+	if len(st.Sessions) > questionSessions {
+		return fmt.Errorf("score: a Questions remembers at most %d sessions", questionSessions)
+	}
+	sessions := make(map[string]*questionState, len(st.Sessions))
+	seen := make(map[uint64]bool, len(st.Sessions))
+	for _, a := range st.Sessions {
+		if a.Key == "" || sessions[a.Key] != nil || a.Seen == 0 || a.Seen > st.Clock || seen[a.Seen] {
+			return errors.New("score: a session in the state isn't one a Questions could remember")
+		}
+		seen[a.Seen] = true
+		sessions[a.Key] = &questionState{native: a.Native, outputAll: a.OutputAll, stopAll: a.StopAll,
+			outputKept: a.OutputKept, stopKept: a.StopKept, seen: a.Seen}
+	}
+	q.sessions, q.clock = sessions, st.Clock
+	return nil
 }
 
 func (q *Questions) forgetOldest() {

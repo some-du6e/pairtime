@@ -1,0 +1,101 @@
+{{- /* SPDX-License-Identifier: AGPL-3.0-or-later
+
+The template `pairtimed init` writes config/pairtime.toml from (DESIGN 10.2,
+10.5 step 2). It is a text/template: toml quotes a value as a TOML basic
+string. Every key here is one internal/server/config knows at config_version
+1, and TestInitTemplate checks that what it renders loads.
+*/ -}}
+# pairtime.toml for {{.BaseURL}}, written by pairtimed init {{.Version}}.
+#
+# DESIGN 10.2 says what each key is for, and internal/server/config lists
+# every key with its default. pairtimed refuses a key it doesn't know, unless
+# config_version says the file is for a newer release.
+#
+# Keep a copy of this file before each upgrade (deploy/runbook.md, Upgrades).
+# A rollback to the previous image starts on the newer release's file, except
+# when that release added a value to an existing key; then it needs the copy.
+
+# The release whose keys this file may use; `pairtimed version` prints it.
+# Raise it only when you start using a key that a newer release added.
+config_version = {{.ConfigVersion}}
+
+base_url = {{toml .BaseURL}}
+
+# Closed until the controller is named and the privacy notice is published
+# (DESIGN 8.6). pairtimed won't start with true while [controller] lacks a
+# name and a contact. Karim alone decides when this changes.
+signups_open = false
+
+# HCA subs (Hack Club Auth subject ids) of the people who run this instance,
+# who may sign in while sign-ups are closed to smoke-test it. Alpha testers
+# aren't operators: they stay in local-only mode until sign-ups open.
+operators = []
+
+# "ask" until the controller signs the assessment in DESIGN 8.3, then
+# "public". Karim alone decides when this changes.
+profile_default = "ask"
+
+# Empty: the scorer this release was built with (DESIGN 6.7).
+scoring_version = ""
+
+# The API, which cloudflared's tunnel reaches as http://pairtimed:8080.
+listen = ":8080"
+# /healthz, /readyz and /metrics, inside the container only. Never tunnel it.
+ops_listen = "127.0.0.1:9091"
+# The database, its WAL and keys/, from `pairtimed init`.
+data_dir = {{toml .DataDir}}
+
+[database]
+engine = "sqlite"
+# litestream.yml replicates this file; pairtimed doctor checks they match.
+path = {{toml .DatabasePath}}
+
+[controller]
+# Who is responsible for the data on this server, for the privacy notice
+# (DESIGN 8.6). Until name and contact are both set, /privacy says "not named
+# yet" and sign-ups can't open.
+name = ""
+# An email address or an https URL.
+contact = ""
+# Hack Club's Data Protection Officer, when Hack Club is the controller.
+dpo = ""
+
+[hca]
+# The Hack Club Auth app's client id. Its redirect URI is
+# {{.BaseURL}}/auth/hca/callback, and its secret is PAIRTIME_HCA_CLIENT_SECRET
+# in secrets.env. Empty: nobody can sign in.
+client_id = {{toml .HCAClientID}}
+
+[privacy_hub]
+# From HQ, once pairtime is registered with the privacy hub (DESIGN 8.9).
+aud = ""
+jwks_url = ""
+
+[sentinel]
+# Empty: the optional private sentinel is off (DESIGN 7.2).
+socket = ""
+
+[object_storage]
+{{- if .S3.Endpoint}}
+# The two buckets of DESIGN 10.5 item 4, as PAIRTIME_S3_* in secrets.env
+# said when this file was written. litestream.yml reads those variables
+# itself, and pairtimed doctor fails when they and this section disagree.
+# Neither bucket may keep versions (doctor checks).
+endpoint = {{toml .S3.Endpoint}}
+region = {{toml .S3.Region}}
+# Litestream's replica, under litestream/, and the evidence store, under
+# evidence/.
+bucket = {{toml .S3.Bucket}}
+# The nightly snapshots, with a 30-day lifecycle rule. Never the same bucket.
+snapshot_bucket = {{toml .S3.SnapshotBucket}}
+{{- else}}
+# Off: PAIRTIME_S3_ENDPOINT wasn't set when pairtimed init ran, so there is
+# no replica, evidence store or snapshot. A deployment needs both buckets
+# (DESIGN 10.5 item 4); set the PAIRTIME_S3_* variables and run init again.
+{{- end}}
+
+# The reviewer allowlist from HQ (DESIGN 10.2): one table per HCA sub.
+#
+# [[reviewers]]
+# sub = "..."
+# roles = ["qi"]

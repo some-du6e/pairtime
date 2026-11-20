@@ -1,0 +1,123 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# pairtime's server on one host (DESIGN 10.1): pairtimed and Litestream in
+# one container; cloudflared, which carries https://<host> to it with no
+# open ports; and the witness sidecar, which pushes the day roots pairtimed
+# writes to the public witness repository with a deploy key, since
+# pairtimed's image has no git or ssh. deploy/runbook.md is the procedure:
+# first deploy, upgrades, rollback and the move to a VPS.
+#
+# The host builds nothing. server-image.yml builds the pairtimed image from
+# each commit on main that changes the server and pushes it to GHCR as
+# sha-<commit>, and every image here is pinned by tag and digest, so an
+# upgrade is a reviewed diff to this file, whose restore drill has passed
+# (DESIGN 10.4).
+#
+# Next to this file, and never in git (deploy/.gitignore):
+#
+#   data/           SQLite, its WAL, Litestream's state, /data/keys. Mode
+#                   0700 and owned by 65532, the image's user: pairtimed
+#                   refuses a data directory that group or others can enter.
+#   witness-roots/  The signed day roots pairtimed writes, for the sidecar
+#                   to push. Mode 0700 and owned by 65532 too.
+#   config/         pairtime.toml from `pairtimed init`, tier2.toml, and,
+#                   each mode 0600: secrets.env, tunnel.env and
+#                   witness_deploy_key.
+#
+# PAIRTIME_WITNESS_REPO, in .env next to this file, names another witness
+# repository than some-du6e/pairtime-witness.
+name: pairtime
+
+services:
+  pairtimed:
+    # A server-image.yml push, by tag and digest (deploy/runbook.md, The
+    # image pin). Until the first push is pinned, this is a placeholder
+    # that can't be pulled.
+    image: ghcr.io/some-du6e/pairtimed:UNRELEASED
+    restart: unless-stopped
+    # Litestream restores /data/pairtime.db from the replica when the file
+    # is missing, then runs "pairtimed serve" as its subprocess and copies
+    # every change to the bucket (deploy/litestream.yml). When pairtimed
+    # exits, Litestream syncs once more and exits too.
+    command: ["litestream", "replicate", "-config", "/etc/litestream.yml"]
+    volumes:
+      # Local disk only, never NFS or SMB: SQLite's locks don't hold there.
+      - ./data:/data
+      - ./config:/etc/pairtime:ro
+      # From git, next to this file, so it changes with the release.
+      - ./litestream.yml:/etc/litestream.yml:ro
+      # Where pairtimed writes each day's signed witness root (WP-SV17).
+      - ./witness-roots:/witness
+    # compose reads this file on the host and passes each line to the
+    # container as an environment variable; pairtimed and litestream.yml
+    # read their PAIRTIME_* variables from there.
+    env_file: ./config/secrets.env
+    environment:
+      PAIRTIME_WITNESS_REPO: ${PAIRTIME_WITNESS_REPO:-some-du6e/pairtime-witness}
+    healthcheck:
+      # /healthz on the private ops port: the process answers. Not /readyz,
+      # whose database check commits a row each call and so makes
+      # Litestream upload; pairtimed's 5-minute heartbeat runs /readyz
+      # instead (DESIGN 10.4; litestream.yml, Cost). The image has no shell
+      # or curl.
+      test: ["CMD", "pairtimed", "healthcheck", "-live"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      # A restore from the replica on a new host can take minutes.
+      start_period: 10m
+    # Time for pairtimed to finish its requests and for Litestream's last
+    # sync before Docker kills them.
+    stop_grace_period: 90s
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+
+  cloudflared:
+    # 2026.10.7, 2026-10-30.
+    image: cloudflare/cloudflared:2026.10.7@sha256:4955524aeaa379e154023d5a027c250f7b35041a2e7e950cf13f144bc9b9c5ba
+    restart: unless-stopped
+    # A tunnel managed in the Cloudflare dashboard: its token comes from
+    # tunnel.env, and its one public hostname points at
+    # http://pairtimed:8080 (deploy/cloudflared/README.md).
+    command: ["tunnel", "--no-autoupdate", "run"]
+    env_file: ./config/tunnel.env
+    depends_on:
+      - pairtimed
+    # The image is distroless and runs as nonroot already. It keeps a
+    # writable root filesystem, since no CI job starts a real tunnel to
+    # show cloudflared runs without one.
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+
+  witness:
+    # git and OpenSSH on Alpine. v2.54.0, 2026-11-08.
+    image: alpine/git:v2.54.0@sha256:6a1fdb962814ca11508ca8d1bab94375b5b7ac4e4a9a40981c29fc32c02f095d
+    restart: unless-stopped
+    # Every 5 minutes: fetch the witness repository, add the roots it lacks,
+    # push them with the deploy key (deploy/witness/push.sh).
+    entrypoint: ["/bin/sh", "/etc/witness/push.sh"]
+    environment:
+      PAIRTIME_WITNESS_REPO: ${PAIRTIME_WITNESS_REPO:-some-du6e/pairtime-witness}
+    volumes:
+      - ./witness-roots:/witness:ro
+      - ./witness/push.sh:/etc/witness/push.sh:ro
+      # GitHub's published host keys; ssh trusts no other.
+      - ./witness/known_hosts:/etc/witness/known_hosts:ro
+      # A deploy key with write access to the witness repository alone.
+      - ./config/witness_deploy_key:/run/witness/deploy_key:ro
+      # Its clone of the repository.
+      - witness-repo:/repo
+    read_only: true
+    tmpfs:
+      - /tmp
+    # It runs as root, which owns its clone, with one capability: reading
+    # the roots and the deploy key, which belong to other users.
+    cap_drop: [ALL]
+    cap_add: [DAC_READ_SEARCH]
+    security_opt: ["no-new-privileges:true"]
+
+volumes:
+  witness-repo:
