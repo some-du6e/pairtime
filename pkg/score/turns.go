@@ -531,14 +531,16 @@ func (d *deriver) headless(st *event.SessionStart, s *session) bool {
 
 // hostedBy reports whether window f hosts session s (SM 2.2 rule 6): its
 // hosted_sessions hold the session, or it is the editor, in the session's
-// project, of a session that runs in an IDE. A session the bridge reports
-// runs in one: its records come from the editor's wakatime-cli (DESIGN
-// 5.7), and no hook says more about its process.
+// project, of a session that runs in an IDE. A session only the bridge
+// reports runs in one: its records come from the editor's wakatime-cli
+// (DESIGN 5.7), and no hook or log reader says more about its process.
+// Where one does, the bridge is a cross-check and its records say nothing
+// about where the session runs.
 func (d *deriver) hostedBy(f *focusRec, s *session, pos int) bool {
 	if f.hosts(s.key) {
 		return true
 	}
-	return (s.ide(pos) || s.bridged) && f.class == event.AppEditor && (f.project == "" || f.project == s.project)
+	return (s.ide(pos) || (s.bridged && !s.native)) && f.class == event.AppEditor && (f.project == "" || f.project == s.project)
 }
 
 // classify gives a person's prompt its class (SM 2.2). The prompt's text

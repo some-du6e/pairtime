@@ -166,6 +166,13 @@ func TestOrigin(t *testing.T) {
 				b.focus(at(40), event.AppEditor, "p_1")
 			},
 			origin: event.OriginNoInput},
+		{name: "rule 6: a bridge record in a hooked terminal session doesn't make the editor host it (DESIGN 5.7)",
+			edit: func(b *tl, p *event.PromptSubmit) {
+				b.harness(at(30), event.ViaBridge, "s_1", "p_1", &event.AgentTool{ToolClass: event.ToolEdit, LinesAdded: 3,
+					TStart: at(29), TEnd: at(30)})
+				b.focus(at(40), event.AppEditor, "p_1")
+			},
+			origin: event.OriginNoInput},
 		{name: "class low_effort: a plugin's stop on a question doesn't make a hooked session's go-ahead an answer",
 			edit: func(b *tl, p *event.PromptSubmit) {
 				p.LenChars, p.TypedLenEst, p.LowEffort = 2, 2, true
