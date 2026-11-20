@@ -456,3 +456,48 @@ func TestSideDoorFills(t *testing.T) {
 		}
 	}
 }
+
+// TestSixSixCodes checks SM 6.6's uncredited seconds as E-6.6-codes gives
+// them: SM 5.2's order, with SM 2.5's slot focus deciding whether a slot is
+// the project's or hosts no harness (SM 3.2). 6.6's expected.json lists
+// only the codes until the orchestrator's oracle PR writes these seconds
+// into it; TestFixtureMinutes checks them from then on, and this test can
+// go.
+func TestSixSixCodes(t *testing.T) {
+	f := fixture(t, "6.6")
+	got := byMinute(scoreAll(t, fixtureDevice(f), f.Events))
+	start := f.Expected.Window.Start.UnixMilli()
+	const (
+		noAnchor  = event.ReasonNoAnchor
+		automated = event.ReasonAutomated
+		ambiguous = event.ReasonAmbiguous
+	)
+	for _, c := range []struct {
+		name     string
+		from, to int64 // minutes after 22:00
+		want     map[event.Reason]float64
+	}{
+		{"22:00: the terminal hosts the session for 10 s of its first slot, so the slot is the project's", 0, 1,
+			map[event.Reason]float64{noAnchor: 5, automated: 55}},
+		{"22:01: the headless turn runs the whole minute", 1, 2, map[event.Reason]float64{automated: 60}},
+		{"22:02: the agent stops at 22:02:10 and from 22:02:15 the terminal hosts no harness", 2, 3,
+			map[event.Reason]float64{automated: 10, noAnchor: 5, ambiguous: 45}},
+		{"22:05: claude starts at 22:05:02", 5, 6, map[event.Reason]float64{noAnchor: 2, automated: 58}},
+		{"22:06 to 01:59: the same pattern in every minute with a bucket", 6, 240,
+			map[event.Reason]float64{ambiguous: 2550, noAnchor: 158, automated: 5392}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			sum := map[event.Reason]float64{}
+			for m := start + c.from*60_000; m < start+c.to*60_000; m += 60_000 {
+				if g := got[m]; g != nil && g.bucket() {
+					for r, n := range g.uncredited {
+						sum[r] += n
+					}
+				}
+			}
+			if !sameSeconds(sum, c.want) {
+				t.Errorf("uncredited %v, want %v (E-6.6-codes)", sum, c.want)
+			}
+		})
+	}
+}
