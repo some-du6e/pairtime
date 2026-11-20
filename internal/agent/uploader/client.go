@@ -83,13 +83,13 @@ func (u *Uploader) newRequest(method string, c Credentials, path string, body []
 func (u *Uploader) getState(ctx context.Context, c Credentials) (State, answer, error) {
 	req, err := u.newRequest(http.MethodGet, c, pathState, nil)
 	if err != nil {
-		return State{}, answer{}, err
+		return State{}, answer{}, fmt.Errorf("%w: %v", errLocal, err)
 	}
 	// The device signs it, as it signs an upload (ingest-v1 3).
 	t := u.clock.serverNow().UnixMilli()
 	sig, err := signState(c.Sign, c.DeviceID, t)
 	if err != nil {
-		return State{}, answer{}, err
+		return State{}, answer{}, fmt.Errorf("%w: %v", errLocal, err)
 	}
 	req.Header.Set("Authorization", "Bearer "+c.Token)
 	req.Header.Set("X-Pairtime-Device", c.DeviceID)

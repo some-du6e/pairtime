@@ -85,13 +85,19 @@ func Next(o PreviewOptions) (Preview, error) {
 	case st.Chain != rows.device:
 		st = saved{Chain: rows.device, Harnesses: st.Harnesses}
 	case st.Server != c.Server || st.Device != c.DeviceID:
-		if st.Server != "" {
-			rows.forgetReceipts() // they are the old server's
-		}
+		foreign := st.Server != ""
 		st = saved{Chain: rows.device, Harnesses: st.Harnesses}
+		if foreign {
+			rows.forgetReceipts() // they are the old server's
+			st.Foreign = rows.last()
+		}
 	}
+	st.prepare(rows)
 	if p, err := readOutbox(o.DataDir, st); err == nil && p != nil {
 		return previewOf(p.plan, true), nil
+	}
+	if st.From == 0 {
+		st.From = firstLinked(rows, c.LinkedAt)
 	}
 	rows.trim(max(st.Next, 1))
 	in := planInput{

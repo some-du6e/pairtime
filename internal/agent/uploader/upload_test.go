@@ -186,7 +186,7 @@ func TestUploadDay(t *testing.T) {
 		t.Fatal(err)
 	}
 	var signedIn atomic.Bool
-	creds := Credentials{Server: srv.URL, Token: testToken, DeviceID: device, Sign: KeySigner(devKey)}
+	creds := Credentials{Server: srv.URL, Token: testToken, DeviceID: device, Sign: KeySigner(devKey), LinkedAt: start}
 	u, err := New(Options{
 		Ledger: w, LedgerDir: dirs.Ledger(), BucketDir: dirs.Buckets(), DataDir: dirs.Data, State: st,
 		Login:  LoginFunc(func() (Credentials, bool) { return creds, signedIn.Load() }),
@@ -270,9 +270,9 @@ func TestUploadDay(t *testing.T) {
 			if labels != 1 {
 				t.Errorf("the labels went %d times", labels)
 			}
-			// The day was logged before the sign-in, so nothing tried to send
-			// it on time, and the failures of the catch-up after don't change
-			// that: every minute reads backfilled (DESIGN 4.2, 7.4).
+			// Nothing tried to send the day on time, and the failures of the
+			// catch-up after don't change that: every minute reads
+			// backfilled (DESIGN 7.4).
 			fake.mu.Lock()
 			witness := maps.Clone(fake.witness)
 			fake.mu.Unlock()

@@ -468,14 +468,14 @@ func (f *fakeIngest) bucket(raw json.RawMessage) map[string]any {
 		f.witness[mb.Witness]++
 		return map[string]any{"status": 200, "code": "accepted"}
 	case cur.Rev > mb.Rev:
-		return map[string]any{"status": 200, "code": "superseded"}
+		return map[string]any{"status": 200, "code": "superseded", "rev": cur.Rev}
 	}
 	a, _ := json.Marshal(cur)
 	b, _ := json.Marshal(mb)
 	if bytes.Equal(a, b) {
 		return map[string]any{"status": 200, "code": "duplicate"}
 	}
-	return map[string]any{"status": 409, "code": "rev_conflict"}
+	return map[string]any{"status": 409, "code": "rev_conflict", "rev": cur.Rev}
 }
 
 func (f *fakeIngest) label(raw json.RawMessage) map[string]any {

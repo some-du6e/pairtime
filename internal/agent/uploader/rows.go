@@ -247,6 +247,10 @@ func (r reading) of(ix *rowIndex, b uint64, due int64) (event.Witness, bool) {
 	}
 	got, ok := ix.receivedAt(b)
 	if !ok {
+		if r.fork > 0 {
+			// No root goes after a fork, so no receipt comes for it.
+			return event.Backfilled, true
+		}
 		return "", false
 	}
 	sealed := ix.times[b-1].sealed

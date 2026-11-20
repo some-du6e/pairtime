@@ -38,6 +38,9 @@ type plan struct {
 	labels string
 	// more is set when items wait behind the request's, past its limits.
 	more bool
+	// bumps are the rev bumps the request's buckets went out with, by
+	// minute.
+	bumps map[int64]uint32
 	// unread lists the days whose bucket files couldn't be read: their
 	// lines wait, and the rest go.
 	unread []string
@@ -148,7 +151,7 @@ func rootsOf(in planInput, n int) []Root {
 		return nil
 	}
 	var roots []Root
-	for _, r := range in.rows.rowsFrom(max(in.st.Next, 1), n) {
+	for _, r := range in.rows.rowsFrom(max(in.st.Next, in.st.From, 1), n) {
 		roots = append(roots, Root{B: r.B, N: r.N, Root: r.Root, Head: r.Head, Prev: r.Prev})
 	}
 	return roots
@@ -200,6 +203,13 @@ func bucketsOf(in planInput, n int) ([]entry, map[string]bool, []string, error) 
 				return true
 			}
 			ms := b.At()
+			if bs, ok := in.rows.sealedAfter(ms + 60_000); ok && bs < in.st.From {
+				// Its records were sealed in local-only mode: it never goes
+				// (ingest-v1 5.3).
+				out = append(out, entry{day: f.Day, mark: r.Mark})
+				took++
+				return true
+			}
 			if in.notAfter != 0 && ms > in.notAfter {
 				return false // it waits until the server's clock reaches it
 			}
@@ -220,6 +230,7 @@ func bucketsOf(in planInput, n int) ([]entry, map[string]bool, []string, error) 
 				delete(sent, ms)
 			}
 			mb := b.MinuteBucket(w).Shareable()
+			mb.Rev += in.st.Bump[ms]
 			out = append(out, entry{day: f.Day, mark: r.Mark, bucket: &mb, minute: ms, rev: rev, pending: pending})
 			took++
 			count++
@@ -289,6 +300,12 @@ func assemble(in planInput, roots []Root, entries []entry, days map[string]bool)
 			continue
 		}
 		p.body.Buckets = append(p.body.Buckets, *e.bucket)
+		if bump := in.st.Bump[e.minute]; bump > 0 {
+			if p.bumps == nil {
+				p.bumps = map[int64]uint32{}
+			}
+			p.bumps[e.minute] = bump
+		}
 		if e.pending {
 			p.sent[e.minute] = e.rev
 		} else {
@@ -317,6 +334,10 @@ func assemble(in planInput, roots []Root, entries []entry, days map[string]bool)
 	p.js, p.raw, p.hash = js, raw, bodyHash(raw)
 	return p, nil
 }
+
+// bump returns the rev bump the request's bucket of the minute starting at
+// ms went out with.
+func (p plan) bump(ms int64) uint32 { return p.bumps[ms] }
 
 // labelsHash returns the hex SHA-256 of the labels' JSON, which tells
 // whether they changed since the server last took them.

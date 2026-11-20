@@ -186,7 +186,7 @@ func TestResume(t *testing.T) {
 			if token == "" {
 				token = testToken
 			}
-			creds := Credentials{Server: srv.URL, Token: token, DeviceID: w.DeviceID(), Sign: KeySigner(devKey)}
+			creds := Credentials{Server: srv.URL, Token: token, DeviceID: w.DeviceID(), Sign: KeySigner(devKey), LinkedAt: rows[0].SealedAt.Add(-time.Minute)}
 			var (
 				pmu     sync.Mutex
 				problem string
@@ -323,7 +323,7 @@ func TestFastClock(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	creds := Credentials{Server: srv.URL, Token: testToken, DeviceID: w.DeviceID(), Sign: KeySigner(devKey)}
+	creds := Credentials{Server: srv.URL, Token: testToken, DeviceID: w.DeviceID(), Sign: KeySigner(devKey), LinkedAt: end.Add(-30 * time.Minute)}
 	u, err := New(Options{
 		Ledger: w, LedgerDir: dirs.Ledger(), BucketDir: dirs.Buckets(), DataDir: dirs.Data, State: st,
 		Login:  LoginFunc(func() (Credentials, bool) { return creds, true }),
@@ -418,7 +418,7 @@ func TestPreviewBuckets(t *testing.T) {
 	}
 	srv := httptest.NewServer(f)
 	t.Cleanup(srv.Close)
-	creds := Credentials{Server: srv.URL, Token: testToken, DeviceID: w.DeviceID(), Sign: KeySigner(devKey)}
+	creds := Credentials{Server: srv.URL, Token: testToken, DeviceID: w.DeviceID(), Sign: KeySigner(devKey), LinkedAt: start}
 	st, _, err := state.Open(dirs.StateFile())
 	if err != nil {
 		t.Fatal(err)
@@ -520,7 +520,7 @@ func TestKeyRotation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	creds := Credentials{Server: srv.URL, Token: testToken, DeviceID: w.DeviceID(), Sign: KeySigner(devKey)}
+	creds := Credentials{Server: srv.URL, Token: testToken, DeviceID: w.DeviceID(), Sign: KeySigner(devKey), LinkedAt: start}
 	var (
 		pmu     sync.Mutex
 		problem string
@@ -563,6 +563,13 @@ func TestKeyRotation(t *testing.T) {
 			}
 			return true
 		}},
+		{"they wait in state.json, unchecked, until their key checks them", func() bool {
+			var sv saved
+			if _, err := st.Get(StateKey, &sv); err != nil {
+				return false
+			}
+			return len(sv.Unchecked) == 3
+		}},
 		{"doctor hears that the receipts don't check out", func() bool {
 			pmu.Lock()
 			defer pmu.Unlock()
@@ -572,6 +579,179 @@ func TestKeyRotation(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			if !tc.ok() {
+				t.Error("no")
+			}
+		})
+	}
+}
+
+// rig is a signed-in uploader against a fake server, over a small chain
+// and a bucket store, for the tests that follow.
+type rig struct {
+	dirs  home.Dirs
+	w     *ledger.Writer
+	rows  []ledger.Row
+	start time.Time
+	f     *fakeIngest
+	st    *state.Store
+	creds Credentials
+	u     *Uploader
+}
+
+// newRig makes a chain of n batches a quarter hour apart from start, and
+// a bucket store holding the given minutes of start, credited 30 s each.
+func newRig(t *testing.T, n int, minutes []int, linkedAfter time.Duration) *rig {
+	t.Helper()
+	dir := t.TempDir()
+	r := &rig{dirs: home.Dirs{Data: dir, Config: dir, Runtime: dir}}
+	r.w, r.rows = smallChain(t, r.dirs, n)
+	r.start = r.rows[0].SealedAt.Add(-15 * time.Minute)
+	bs, err := store.OpenBuckets(r.dirs.Buckets())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range minutes {
+		if _, _, err := bs.Put(testBucket(newestTable(), r.w.DeviceID(), r.start.Add(time.Duration(m)*time.Minute), 30, event.StateFinal)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := bs.Close(); err != nil {
+		t.Fatal(err)
+	}
+	devKey := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{11}, 32))
+	r.f = newFakeIngest(r.w.DeviceID(), testToken, devKey.Public().(ed25519.PublicKey))
+	srv := httptest.NewServer(r.f)
+	t.Cleanup(srv.Close)
+	if r.st, _, err = state.Open(r.dirs.StateFile()); err != nil {
+		t.Fatal(err)
+	}
+	r.creds = Credentials{Server: srv.URL, Token: testToken, DeviceID: r.w.DeviceID(), Sign: KeySigner(devKey), LinkedAt: r.start.Add(linkedAfter)}
+	r.u, err = New(Options{
+		Ledger: r.w, LedgerDir: r.dirs.Ledger(), BucketDir: r.dirs.Buckets(), DataDir: r.dirs.Data, State: r.st,
+		Login:  LoginFunc(func() (Credentials, bool) { return r.creds, true }),
+		Params: newestTable(), Client: srv.Client(), Draw: func(int64) int64 { return 0 },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(r.u.Close)
+	return r
+}
+
+// run starts the uploader, waits until cond holds under the fake's lock,
+// and stops it.
+func (r *rig) run(t *testing.T, what string, cond func(f *fakeIngest) bool) {
+	t.Helper()
+	r.u.Start()
+	waitFor(t, what, func() bool {
+		r.f.mu.Lock()
+		defer r.f.mu.Unlock()
+		return cond(r.f)
+	})
+	for range 2 {
+		r.u.Wake()
+		time.Sleep(100 * time.Millisecond)
+	}
+	r.u.Close()
+}
+
+func TestLocalOnly(t *testing.T) {
+	// Six batches, the sign-in between the third and the fourth: batches 1
+	// to 3 and the minutes they hold were sealed in local-only mode.
+	minutes := make([]int, 90)
+	for i := range minutes {
+		minutes[i] = i
+	}
+	r := newRig(t, 6, minutes, 50*time.Minute)
+	r.run(t, "the batches after the sign-in", func(f *fakeIngest) bool { return f.head != nil && f.head.b == 6 && len(f.buckets) == 45 })
+	r.f.mu.Lock()
+	defer r.f.mu.Unlock()
+	tests := []struct {
+		name string
+		ok   bool
+	}{
+		{"the server's chain starts at the first batch sealed after the sign-in", r.f.start == 4},
+		{"no root of a batch sealed in local-only mode went", r.f.rows[1].b == 0 && r.f.rows[2].b == 0 && r.f.rows[3].b == 0},
+		{"no minute whose records local-only mode sealed went", func() bool {
+			for ms := range r.f.buckets {
+				if ms < r.start.Add(45*time.Minute).UnixMilli() {
+					return false
+				}
+			}
+			return true
+		}()},
+		{"every minute after the sign-in went", len(r.f.buckets) == 45},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if !tc.ok {
+				t.Error("no")
+			}
+		})
+	}
+}
+
+func TestRevBump(t *testing.T) {
+	r := newRig(t, 3, []int{0}, -time.Minute)
+	hold(t, r.f, r.rows, 1)
+	for _, row := range r.rows {
+		fr := r.f.rows[row.B]
+		sig, _ := hex.DecodeString(fr.sig)
+		rc := pkgledger.Receipt{ReceivedAt: fr.receivedAt}
+		copy(rc.Signature[:], sig)
+		if err := r.w.StoreReceipt(row.B, rc); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// The server holds rev 5 of the minute, from before the bucket store
+	// lost its lines and wrote the minute again as rev 0.
+	ms := r.start.UnixMilli()
+	old := testBucket(newestTable(), r.w.DeviceID(), r.start, 15, event.StateFinal).MinuteBucket(event.Backfilled).Shareable()
+	old.Rev = 5
+	r.f.buckets[ms] = old
+	r.run(t, "the minute above the server's rev", func(f *fakeIngest) bool { return f.buckets[ms].Rev > 5 })
+	r.f.mu.Lock()
+	defer r.f.mu.Unlock()
+	if got := r.f.buckets[ms]; got.Rev != 6 || got.CreditedS != 30 {
+		t.Errorf("the server holds rev %d with %v s, want rev 6 with the store's 30 s", got.Rev, got.CreditedS)
+	}
+}
+
+func TestRestoredLedger(t *testing.T) {
+	// The server holds batches 1 to 5, and the device's ledger, restored
+	// from an old backup, ends at batch 3 with no receipts.
+	r := newRig(t, 3, []int{0, 20, 40}, -time.Minute)
+	hold(t, r.f, r.rows, 1)
+	prev := r.rows[2].Head
+	for b := uint64(4); b <= 5; b++ {
+		var root, head pkgledger.Hash
+		root[0], head[0] = byte(b), byte(0x80|b)
+		row := fakeRow{b: b, n: 1, root: root.String(), head: head.String(), prev: prev.String(), receivedAt: 1, sig: "00", keyID: r.f.keyID}
+		r.f.rows[b] = row
+		r.f.head = &row
+		prev = head
+	}
+	r.run(t, "every minute", func(f *fakeIngest) bool { return len(f.buckets) == 3 })
+	r.f.mu.Lock()
+	defer r.f.mu.Unlock()
+	tests := []struct {
+		name string
+		ok   bool
+	}{
+		{"the fork is at the device's next batch, which the server already holds", r.u.Status().Fork == 4},
+		{"no root went after the fork", func() bool {
+			for _, b := range r.f.bodies {
+				if bytes.Contains(b, []byte(`"batches"`)) {
+					return false
+				}
+			}
+			return true
+		}()},
+		{"the minutes still went, backfilled", r.f.witness[event.Backfilled] == 3},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if !tc.ok {
 				t.Error("no")
 			}
 		})

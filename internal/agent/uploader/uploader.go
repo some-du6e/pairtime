@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -47,6 +48,16 @@ const SoonDelay = 5 * time.Second
 // start before it waits: under the 300 s after which the server refuses it
 // as future_minute (ingest-v1 2.7).
 const futureMargin = 240 * time.Second
+
+// errNotPairtimed is an answer without pairtimed's X-Pairtime-Time or its
+// JSON refusal, such as a proxy's or Cloudflare's block page, which counts
+// as a network error (ingest-v1 5.5).
+var errNotPairtimed = errors.New("uploader: the answer isn't pairtimed's")
+
+// errLocal is a request that couldn't be made on the device, as when the
+// device key won't sign: no upload-failure note, which says the server
+// was out of reach.
+var errLocal = errors.New("uploader: the request couldn't be made on this computer")
 
 // errBodyUnreadable is the server's body_unreadable, a body that broke
 // off on the way, which goes again as it is (ingest-v1 2.6).
@@ -87,6 +98,12 @@ type Credentials struct {
 	DeviceID string
 	// Sign signs with the device key the token registered.
 	Sign Signer
+	// LinkedAt is when `pairtime login` linked this computer, account.json's
+	// linked_at. Batches sealed before it were sealed in local-only mode:
+	// none of them goes, nor the buckets of their minutes (ingest-v1 5.3,
+	// 7.6; DESIGN 4.2). Zero when unknown, when only batches sealed after
+	// the uploader first sees the sign-in go.
+	LinkedAt time.Time
 }
 
 // Ledger is the ledger writer as the uploader uses it, *ledger.Writer.
@@ -344,7 +361,9 @@ func (u *Uploader) Sealed(b ledger.Batch) {
 		if u.seen == nil {
 			u.seen = map[event.Harness]string{}
 		}
-		u.seen[h] = v
+		if v != "" || u.seen[h] == "" {
+			u.seen[h] = v
+		}
 	}
 	u.mu.Unlock()
 	if soon {
@@ -505,10 +524,13 @@ func (u *Uploader) cycle() bool {
 		u.sealed, u.lost = nil, false
 		u.mu.Unlock()
 		u.loaded = false
+		// Nothing tries while signed out, so no outage span runs on.
+		u.backoff.ok()
 		u.setProblem("login", "")
 		return false
 	}
 	if c.Token == u.blocked {
+		u.backoff.ok()
 		return false
 	}
 	if err := u.load(c); err != nil {
@@ -597,8 +619,9 @@ func (u *Uploader) load(c Credentials) error {
 		st = saved{Chain: chain, Harnesses: st.Harnesses}
 	case st.Server != c.Server || st.Device != c.DeviceID:
 		// Another server or another sign-in holds none of this: it gets
-		// the chain from its start, and every bucket. The old server's
-		// outages say nothing about this one.
+		// the chain from the first batch sealed after the sign-in, and the
+		// buckets of its minutes. The old server's outages say nothing
+		// about this one.
 		st = saved{Chain: chain, Harnesses: st.Harnesses}
 	}
 	st.Server, st.Device = c.Server, c.DeviceID
@@ -607,17 +630,34 @@ func (u *Uploader) load(c Credentials) error {
 		return err
 	}
 	if foreign {
-		// batches.seg's receipts are the old server's.
+		// batches.seg's receipts are the old server's, until this one's come.
 		rows.forgetReceipts()
+		st.Foreign = rows.last()
 	}
+	st.prepare(rows)
 	if rows.device != chain {
 		return fmt.Errorf("the ledger's batches.seg is %s's chain, and the writer writes %s's", rows.device, chain)
+	}
+	if st.From == 0 {
+		st.From = firstLinked(rows, c.LinkedAt)
 	}
 	u.st, u.rows, u.loaded, u.synced = st, rows, true, false
 	u.lastReq = max(u.lastReq, st.Req)
 	u.pending = u.readOutbox()
 	u.setStatus(func(s *Status) { s.Next, s.Fork, s.Retrying = st.Next, st.Fork, u.pending != nil })
 	return nil
+}
+
+// firstLinked returns the first batch sealed after the sign-in at
+// linkedAt, or the next one to be sealed when linkedAt is unknown or
+// after every batch: the batches before it are local-only mode's.
+func firstLinked(rows *rowIndex, linkedAt time.Time) uint64 {
+	if !linkedAt.IsZero() {
+		if b, ok := rows.sealedAfter(linkedAt.UnixMilli()); ok {
+			return b
+		}
+	}
+	return rows.last() + 1
 }
 
 // takeSealed adds the batches Sealed took to the rows, and the harnesses
@@ -631,6 +671,7 @@ func (u *Uploader) takeSealed() {
 	u.mu.Unlock()
 	if lost {
 		if rows, err := loadRows(u.opts.LedgerDir, max(u.st.Next, 1)); err == nil {
+			u.st.prepare(rows)
 			u.rows = rows
 		}
 	}
@@ -647,6 +688,7 @@ func (u *Uploader) takeSealed() {
 			// A batch went missing between the writer and here: read the
 			// rows again.
 			if rows, err := loadRows(u.opts.LedgerDir, max(u.st.Next, 1)); err == nil {
+				u.st.prepare(rows)
 				u.rows = rows
 			}
 		}
@@ -758,9 +800,16 @@ func (u *Uploader) sync(c Credentials) bool {
 		// sign again with it.
 		st, a, err = u.getState(u.ctx, c)
 	}
+	if err == nil && a.status != http.StatusTooManyRequests && a.status < 500 && !fromPairtimed(a) {
+		err = errNotPairtimed
+	}
 	switch {
+	case errors.Is(err, errLocal):
+		u.setProblem("login", fmt.Sprintf("pairtime can't ask the server where this computer's uploads stand: %v", err))
+		u.notBefore = u.now().Add(Every)
+		return false
 	case err == nil && a.status == http.StatusOK:
-	case err != nil && a.status == http.StatusOK:
+	case err != nil && a.status == http.StatusOK && !errors.Is(err, errNotPairtimed):
 		// The server answered, with something that doesn't read.
 		u.setProblem("server", fmt.Sprintf("the server's state answer doesn't read: %v", err))
 		u.notBefore = u.now().Add(u.backoff.fail(0))
@@ -796,15 +845,26 @@ func (u *Uploader) sync(c Credentials) bool {
 		from := store.DayOf(cutoff)
 		maps.DeleteFunc(u.st.Marks, func(day string, _ store.Mark) bool { return day >= from })
 		u.st.Sent = nil
+		// A request waiting for its retry was built from the marks before
+		// the rewind, and its answer would put them back.
+		if u.pending != nil {
+			u.pending = nil
+			u.removeOutbox()
+		}
 		u.log.Warn("the server's chain is behind what it took, so the minutes after its head go again", "head", st.Head, "next", held, "from", from)
 	}
-	next := uint64(1)
+	// While the server holds no batch of the device, its chain starts at
+	// the first batch sealed after the sign-in (ingest-v1 5.3).
+	next := max(u.st.From, 1)
 	if st.Head != nil {
 		next = st.Head.B + 1
 		switch b := u.forkAt(st.Head); {
 		case b != 0:
-			u.st.Fork = b
-			u.setProblem("chain", forkProblem(b))
+			// The lower fork stays: no root goes after either.
+			if u.st.Fork == 0 || b < u.st.Fork {
+				u.st.Fork = b
+			}
+			u.setProblem("chain", forkProblem(u.st.Fork))
 		case u.st.Fork != 0 && u.st.Fork <= st.Head.B && u.rows.holdsRow(st.Head.B):
 			// The server's head is the device's own, past the batch the
 			// fork was at, and every head chains the batches before it:
@@ -828,9 +888,11 @@ func (u *Uploader) sync(c Credentials) bool {
 			u.setProblem("local", fmt.Sprintf("pairtime can't read its ledger's batches: %v", err))
 			return false
 		}
+		u.st.prepare(rows)
 		u.rows = rows
 	}
 	u.st.Next = next
+	u.recheck()
 	u.synced = true
 	u.save()
 	u.setStatus(func(s *Status) { s.Next = next })
@@ -843,12 +905,18 @@ func forkProblem(b uint64) string {
 }
 
 // forkAt returns the batch of the server's head when the device's own row
-// of that batch has another H_b: there the server's chain and the
-// device's part, and no root after it can link. It returns 0 when they
-// agree, or the device doesn't hold that batch.
+// of that batch has another H_b, and the device's next batch when it has
+// none that high: there the server's chain and the device's part, and no
+// root after it can link. It returns 0 when they agree.
 func (u *Uploader) forkAt(h *Head) uint64 {
-	if h.B == 0 || h.B > u.rows.last() {
+	if h.B == 0 {
 		return 0
+	}
+	if h.B > u.rows.last() {
+		// The server holds batches the device doesn't, as after a home
+		// folder restored from an old backup: the next one it seals takes
+		// a number the server already holds (ingest-v1 5.3).
+		return u.rows.last() + 1
 	}
 	row, ok := u.rows.row(h.B)
 	if !ok {
@@ -909,6 +977,9 @@ func (u *Uploader) send(c Credentials, p plan, key string) bool {
 		}
 		setHeaders(hr.Header, c, key, p.hash, sg, u.userAgent)
 		a, err := u.do(u.ctx, hr)
+		if err == nil && a.status != http.StatusTooManyRequests && a.status < 500 && !fromPairtimed(a) {
+			err = errNotPairtimed
+		}
 		if err != nil || a.status == http.StatusTooManyRequests || a.status >= 500 {
 			u.failed(c, err, a, &pendingReq{plan: p, key: key})
 			return false
@@ -1011,12 +1082,23 @@ func (u *Uploader) refused(c Credentials, p plan, a answer) {
 	u.log.Warn("the server refused an upload", "code", code, "detail", a.refusal.Detail)
 }
 
+// fromPairtimed reports whether an answer is pairtimed's: it carries the
+// server's time and, unless it is a 200, pairtimed's JSON refusal.
+func fromPairtimed(a answer) bool {
+	if _, ok := serverTime(a.header); !ok {
+		return false
+	}
+	return a.status == http.StatusOK || a.refusal.Error != ""
+}
+
 // refusedState handles a refused GET /api/v1/ingest/state, which takes
 // the token and the device id only.
 func (u *Uploader) refusedState(c Credentials, a answer) {
 	code := a.refusal.Error
 	switch code {
-	case refusalTokenMissing, refusalTokenInvalid, refusalRevoked, refusalMismatch:
+	case refusalTokenMissing, refusalTokenInvalid, refusalRevoked, refusalMismatch, refusalKeyMissing, refusalSignature:
+		// None of them passes with the same sign-in: signing in again binds
+		// a new token and device key (ingest-v1 2.6).
 		u.blocked = c.Token
 		u.setProblem("server", fmt.Sprintf("the server refused this computer's sign-in (%s), so pairtime uploads nothing until you run pairtime login again", code))
 	default:
@@ -1073,6 +1155,9 @@ func (u *Uploader) answered(c Credentials, p plan, a answer) bool {
 		}
 	}
 	u.st.Next = next
+	if u.st.Foreign > 0 && u.st.Next > u.st.Foreign {
+		u.st.Foreign = 0 // this server's receipts are in for every batch
+	}
 	if took {
 		more = true
 	}
@@ -1080,24 +1165,41 @@ func (u *Uploader) answered(c Credentials, p plan, a answer) bool {
 		u.setProblem("chain", forkProblem(u.st.Fork))
 	}
 	refused := map[string]int{}
-	marks, held := p.marks, false
+	marks := p.marks
+	heldDays := map[string]bool{}
+	// newest is the highest rev the request carried for each minute.
+	newest := map[int64]uint32{}
+	for _, b := range p.body.Buckets {
+		ms := b.Minute.UnixMilli()
+		newest[ms] = max(newest[ms], b.Rev)
+	}
 	for i, res := range resp.Buckets {
+		b := p.body.Buckets[i]
+		ms := b.Minute.UnixMilli()
 		switch res.Code {
-		case codeAccepted, codeDuplicate, codeSuperseded:
+		case codeAccepted, codeDuplicate:
+		case codeSuperseded, codeRevConflict:
+			// The server holds a revision of the minute above the newest one
+			// sent, or another bucket at its rev, as after the store lost its
+			// last lines: the minute's revs go up past the server's, and its
+			// day is read again (ingest-v1 5.5).
+			if res.Rev == nil || (res.Code == codeSuperseded && *res.Rev <= newest[ms]) {
+				break // a newer revision of ours, which the server already has
+			}
+			if u.st.Bump == nil {
+				u.st.Bump = map[int64]uint32{}
+			}
+			u.st.Bump[ms] = max(u.st.Bump[ms], *res.Rev+1-(b.Rev-p.bump(ms)))
+			heldDays[store.DayOf(ms)] = true
+			if res.Code == codeRevConflict {
+				refused[res.Code]++
+			}
 		case codeFutureMinute:
 			// The server's clock hasn't reached the minute yet, so it goes
 			// again later: its day keeps the mark it had (ingest-v1 2.9).
 			// The lines of the day that went are sent again with it, and
 			// come back duplicates.
-			if !held {
-				marks, held = maps.Clone(p.marks), true
-			}
-			day := store.DayOf(p.body.Buckets[i].Minute.UnixMilli())
-			if m, ok := u.st.Marks[day]; ok {
-				marks[day] = m
-			} else {
-				delete(marks, day)
-			}
+			heldDays[store.DayOf(ms)] = true
 			refused[res.Code]++
 		default:
 			refused[res.Code]++
@@ -1109,7 +1211,26 @@ func (u *Uploader) answered(c Credentials, p plan, a answer) bool {
 	} else {
 		u.setProblem("buckets", "")
 	}
-	u.st.Marks, u.st.Sent = marks, p.sent
+	sent := p.sent
+	if len(heldDays) > 0 {
+		// A held day's lines go again from its old mark, read against what
+		// was sent before them.
+		marks, sent = maps.Clone(p.marks), maps.Clone(p.sent)
+		for day := range heldDays {
+			if m, ok := u.st.Marks[day]; ok {
+				marks[day] = m
+			} else {
+				delete(marks, day)
+			}
+		}
+		maps.DeleteFunc(sent, func(ms int64, _ sentRev) bool { return heldDays[store.DayOf(ms)] })
+		for ms, v := range u.st.Sent {
+			if heldDays[store.DayOf(ms)] {
+				sent[ms] = v
+			}
+		}
+	}
+	u.st.Marks, u.st.Sent = marks, sent
 	if off, ok := u.clock.Offset(); ok {
 		u.st.Offset = off.Milliseconds()
 	}
@@ -1167,7 +1288,12 @@ func (u *Uploader) answered(c Credentials, p plan, a answer) bool {
 // batch's minutes until the agent stops, so they don't wait for a receipt
 // that can't come.
 func (u *Uploader) receipt(c Credentials, root Root, wr *WireReceipt, refetched *bool) {
-	if _, ok := u.rows.receivedAt(root.B); ok && !u.rows.unchecked(root.B) {
+	if got, ok := u.rows.receivedAt(root.B); ok && !u.rows.unchecked(root.B) {
+		if wr != nil && int64(wr.ReceivedAt) != got {
+			// A later receipt for the same batch: the server re-dated it. The
+			// first one stays (ingest-v1 5.4).
+			u.setProblem("receipts", fmt.Sprintf("the server re-dated batch %d, which it first took at %d and now says it took at %d; pairtime keeps the first receipt", root.B, got, wr.ReceivedAt))
+		}
 		return
 	}
 	r, err := checkReceipt(u.st.ServerKey, u.rows.device, root.B, root.Head, wr)
@@ -1181,6 +1307,16 @@ func (u *Uploader) receipt(c Credentials, root Root, wr *WireReceipt, refetched 
 	if err != nil {
 		if wr != nil {
 			u.rows.receivedUnchecked(root.B, int64(wr.ReceivedAt))
+			if errors.Is(err, errNoKey) {
+				// Kept, unchecked, until its key checks it.
+				if u.st.Unchecked == nil {
+					u.st.Unchecked = map[uint64]WireReceipt{}
+				}
+				u.st.Unchecked[root.B] = *wr
+				if len(u.st.Unchecked) > uncheckedMax {
+					delete(u.st.Unchecked, slices.Min(slices.Collect(maps.Keys(u.st.Unchecked))))
+				}
+			}
 		}
 		u.setProblem("receipts", fmt.Sprintf("the server's receipt for batch %d doesn't check out, so it isn't kept: %v", root.B, err))
 		u.log.Warn("a receipt doesn't check out", "batch", root.B, "err", err)
@@ -1191,7 +1327,31 @@ func (u *Uploader) receipt(c Credentials, root Root, wr *WireReceipt, refetched 
 		return
 	}
 	u.rows.received(root.B, int64(r.ReceivedAt))
+	delete(u.st.Unchecked, root.B)
 	u.setProblem("receipts", "")
+}
+
+// recheck checks the receipts kept unchecked under the state's server key,
+// and keeps in batches.seg the ones it checks (ingest-v1 5.4).
+func (u *Uploader) recheck() {
+	for b, wr := range u.st.Unchecked {
+		row, ok := u.rows.row(b)
+		if !ok {
+			_, rows, err := ledger.ReadRows(u.opts.LedgerDir, b)
+			if err != nil || len(rows) == 0 || rows[0].B != b {
+				continue
+			}
+			row = rows[0]
+		}
+		r, err := checkReceipt(u.st.ServerKey, u.rows.device, b, row.Head, &wr)
+		if err != nil {
+			continue
+		}
+		if err := u.opts.Ledger.StoreReceipt(b, r); err == nil {
+			u.rows.received(b, int64(r.ReceivedAt))
+			delete(u.st.Unchecked, b)
+		}
+	}
 }
 
 // keep makes p the request the next try sends, and writes its body to

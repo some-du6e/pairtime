@@ -82,6 +82,9 @@ type ItemResult struct {
 	Status int    `json:"status"`
 	Code   string `json:"code"`
 	Field  string `json:"field,omitempty"`
+	// Rev is the revision the server holds, which a bucket's superseded,
+	// rev_conflict and too_many_revisions name.
+	Rev *uint32 `json:"rev,omitempty"`
 	// B and Receipt are a batch root's: its number once it passed its
 	// form, and the receipt of an accepted or duplicate root.
 	B       uint64       `json:"b,omitempty"`
@@ -135,6 +138,7 @@ const (
 	codeChainGap      = "chain_gap"
 	codeBeforeChain   = "before_chain"
 	codeFutureMinute  = "future_minute"
+	codeRevConflict   = "rev_conflict"
 )
 
 // The request refusals the uploader acts on (ingest-v1 2.6).
@@ -150,6 +154,7 @@ const (
 	refusalMismatch     = "device_mismatch"
 	refusalKeyMissing   = "device_key_missing"
 	refusalKeyReused    = "idempotency_key_reused"
+	refusalSignature    = "signature_invalid"
 
 	refusalBodyUnreadable = "body_unreadable"
 	refusalBodyTooLarge   = "body_too_large"

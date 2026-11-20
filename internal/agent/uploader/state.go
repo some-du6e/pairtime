@@ -29,6 +29,9 @@ const counterBlock = 64
 // that were already labelled.
 const offlineSpans = 256
 
+// uncheckedMax bounds the receipts kept unchecked; past it the oldest go.
+const uncheckedMax = 4096
+
 // harnessesMax is how many harnesses the labels carry (ingest-v1 2.3.4).
 const harnessesMax = 16
 
@@ -52,6 +55,11 @@ type saved struct {
 	// Next is the batch whose root goes next, from 1. Rows before it hold
 	// receipts, or are before ChainStart.
 	Next uint64 `json:"next,omitempty"`
+	// From is the first batch sealed after the sign-in. The batches before
+	// it were sealed in local-only mode: none of them goes, nor the buckets
+	// of the minutes they hold (ingest-v1 5.3, 7.6). 0 until the first
+	// load with this sign-in sets it.
+	From uint64 `json:"from,omitempty"`
 	// ChainStart is the first batch of the device's witnessed chain on the
 	// server, 0 while the server holds none or it isn't known yet. Rows
 	// before it are never sent again: the server answers them
@@ -81,10 +89,25 @@ type saved struct {
 	// Sent maps each minute still pending on the server, by its start in
 	// Unix ms, to what its last revision's credit rests on (sentRev).
 	Sent map[int64]sentRev `json:"sent,omitempty"`
+	// Bump is what a minute's revs go up by on the way out, by its start in
+	// Unix ms, for a minute the server holds a higher or another revision
+	// of than the bucket store does, as after the store lost its last lines:
+	// a minute's rev only rises (ingest-v1 5.5).
+	Bump map[int64]uint32 `json:"bump,omitempty"`
 	// Offset is the server's clock less the device's, in ms, as the last
 	// answer measured: what X-Pairtime-Time is corrected by, and how far
 	// ahead of the server's clock a minute may be before it waits.
 	Offset int64 `json:"offset_ms,omitempty"`
+	// Foreign is the newest batch whose batches.seg receipt may be another
+	// server's, after a sign-in to this one: the receipts of the batches
+	// from Next to it are forgotten whenever the rows are read, until this
+	// server's own come in. 0 when there was no switch.
+	Foreign uint64 `json:"foreign,omitempty"`
+	// Unchecked are receipts the uploader couldn't check yet, because they
+	// name a server key it doesn't have, by batch. They read the batches'
+	// minutes, and go into batches.seg once their key checks them
+	// (ingest-v1 5.4).
+	Unchecked map[uint64]WireReceipt `json:"unchecked,omitempty"`
 	// ServerKey is the receipt key GET /api/v1/ingest/state gave.
 	ServerKey *ServerKey `json:"server_key,omitempty"`
 	// Outbox is the request a retry sends again, when one is waiting.
@@ -131,6 +154,8 @@ func (s saved) clone() saved {
 	s.Harnesses = maps.Clone(s.Harnesses)
 	s.Offline = slices.Clone(s.Offline)
 	s.Sent = maps.Clone(s.Sent)
+	s.Bump = maps.Clone(s.Bump)
+	s.Unchecked = maps.Clone(s.Unchecked)
 	if s.ServerKey != nil {
 		k := *s.ServerKey
 		s.ServerKey = &k
@@ -180,4 +205,19 @@ func waitedOut(spans []span, sealed, lag int64) bool {
 		}
 	}
 	return false
+}
+
+// prepare puts what st says of the device's receipts into rows: it forgets
+// the receipts that may be another server's (Foreign) and reads the
+// unchecked ones. The uploader and `pairtime privacy show` both call it
+// after reading the rows, so they read the same minutes.
+func (st saved) prepare(rows *rowIndex) {
+	if st.Foreign > 0 {
+		for b := max(st.Next, 1); b <= min(st.Foreign, rows.last()); b++ {
+			rows.times[b-1].received, rows.times[b-1].unchecked = 0, false
+		}
+	}
+	for b, wr := range st.Unchecked {
+		rows.receivedUnchecked(b, int64(wr.ReceivedAt))
+	}
 }
