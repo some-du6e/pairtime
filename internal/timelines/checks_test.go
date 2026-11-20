@@ -28,6 +28,10 @@ import (
 	"github.com/some-du6e/pairtime/pkg/event"
 )
 
+// logReaders are the harnesses with a v1 log reader, DESIGN 5.1's "Second
+// record (lookback and CC1)" column.
+var logReaders = []string{"claude_code", "codex", "copilot", "gemini", "devin", "cline"}
+
 // checkNames are DESIGN 7.3's checks, in order.
 var checkNames = []string{"CC1", "CC2", "CC3", "CC4", "CC5", "CC6", "CC7", "CC8", "CC9", "CC10", "CC11"}
 
@@ -213,8 +217,27 @@ func TestCheckScenariosCoverDesign(t *testing.T) {
 		})
 	}
 	t.Run("CC1 is not computable on a harness with no log reader", func(t *testing.T) {
-		if len(results["CC1"]["not_computable"]) == 0 {
-			t.Error("no scenario where CC1 is not computable")
+		found := false
+		for _, s := range scenarios {
+			r, ok := s.exp.Checks["CC1"]
+			if !ok || r.Result != "not_computable" || r.Counts["not_computable"] == 0 {
+				continue
+			}
+			for _, it := range r.Items {
+				var item struct {
+					Harness string `json:"harness"`
+					Status  string `json:"status"`
+				}
+				if err := json.Unmarshal(it, &item); err != nil {
+					t.Fatal(err)
+				}
+				if item.Status == "not_computable" && item.Harness != "" && !slices.Contains(logReaders, item.Harness) {
+					found = true
+				}
+			}
+		}
+		if !found {
+			t.Error("no scenario where CC1 isn't computable because a hook prompt's harness has no v1 log reader")
 		}
 	})
 	for _, s := range scenarios {

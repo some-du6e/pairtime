@@ -689,6 +689,8 @@ def cc1(events, sub):
         return outcome("fail", counts, items)
     if counts["matched"]:
         return outcome("pass", counts, items)
+    if not counts["hook_prompts"]:
+        return outcome("not_computable", counts, items, "no hook prompt in the submission")
     return outcome("not_computable", counts, items, "no session of the submission has a v1 log reader")
 
 
