@@ -626,11 +626,16 @@ expected = exp.doc(
     ],
 )
 
-# The acts SM names, in time order. Outside cycle 1, sm names the cycle-1
-# row the act copies.
+# Every anchor the events hold, in time order: the acts SM names and the
+# heartbeat before the window. Outside cycle 1, sm names the cycle-1 row
+# the act copies.
 anchors = []
 turns = []
 prompt_entries = []
+setup = fx.event_at("editor.activity", at("13:57:05"))
+anchors.append(tl.anchor(fx, setup, kind="editor_navigation", lead_s=120, trail_s=0, lead_from="params", level="A",
+                         sm="not in SM: VS Code's heartbeat before the window, which resolves its slots to cs2go "
+                            "from 14:00:00"))
 for k in range(1, CYCLES + 1):
     C = start(k)
 

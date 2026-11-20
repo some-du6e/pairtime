@@ -2,6 +2,19 @@
   "fixture": "6.1",
   "anchors": [
     {
+      "event_id": "01a1fd37-57a8-7b63-81b2-e4b3ed9f56b0",
+      "kind": "editor_navigation",
+      "t": 1795249625000,
+      "local": "13:57:05",
+      "project_key": "p_0eccb85aa257",
+      "lead_s": 120,
+      "trail_s": 0,
+      "lead_from": "params",
+      "via": "editor",
+      "level": "A",
+      "sm": "not in SM: VS Code's heartbeat before the window, which resolves its slots to cs2go from 14:00:00"
+    },
+    {
       "event_id": "01a1fd3a-7870-74a5-9748-a6348ef6002b",
       "kind": "editor_navigation",
       "t": 1795249830000,

@@ -7,7 +7,7 @@ Rowan, 17, on macOS, works on `cs2go` from 14:00 to 17:00 in fifteen 12-minute c
 | SM rows | 14:00 to 14:11, the list of variations, and the totals table |
 | Date and zone | Saturday 2026-11-21, Asia/Kolkata, UTC+05:30. 14:00 local is 08:30Z. 6.2 and 6.4 have whole-hour offsets, so this one takes a half hour |
 | OS and evidence | macOS. Every sample has `idle_keys_s` from the key-down idle time (SM 1.2), so every credited second is level A. Witnessed |
-| Window | 14:00:00 to 17:00:00. Records from 13:56:59 set up the session and the editor, and records to 17:00:45 hold the heartbeat whose lead credits the window's last 20 s. No row covers them. `anchors.json` lists SM's acts whose lead or trail reaches into the window, so it has the heartbeat at 17:00:30 and not the one at 13:57:05 |
+| Window | 14:00:00 to 17:00:00. Records from 13:56:59 set up the session and the editor, and records to 17:00:45 hold the heartbeat whose lead credits the window's last 20 s. No row covers them. `anchors.json` lists every anchor the events hold, so it has both heartbeats outside the window, at 13:57:05 and 17:00:30, and pkg/score checks that the scorer finds exactly these |
 | Project | `cs2go` |
 | Errata | [presence edges](../../../docs/errata/2026-11-19-sm-6.1-presence-edges.md) for the drink's rows, [same error](../../../docs/errata/2026-11-19-sm-6.1-same-error.md) for cycles 9 and 10, [Hackatime replay](../../../docs/errata/2026-11-19-sm-6.1-hackatime-replay.md) for the approximate totals, [permission answer](../../../docs/errata/2026-11-19-sm-6.1-permission-answer.md) for each cycle's fifth minute. The rows and totals are SM's |
 
