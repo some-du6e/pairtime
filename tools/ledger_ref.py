@@ -2812,14 +2812,66 @@ def test_rtypes():
     return "%d kinds" % len(table)
 
 
+def example_blocks():
+    """Section 12's code blocks, in order, as example()'s values render
+    them, so selftest can compare each block with the spec's text whole."""
+    v = dict(example())
+    h = lambda label: v[label].hex()
+
+    def spaced(data, *cuts):
+        """data's hex with a space at each of the byte offsets cuts."""
+        parts, last = [], 0
+        for c in cuts + (len(data),):
+            parts.append(data[last:c].hex())
+            last = c
+        return " ".join(parts)
+
+    blocks = ["".join("%-7s = %s\n" % (k, h(k)) for k in ("K_dev", "PRK", "K_leaf", "K_tok", "K_feat", "K_vault")),
+              'project = SHA-256(ascii("p_example"))[0:16] = %s\n' % h("project digest of p_example")
+              + 'session = SHA-256(ascii("s_example"))[0:8]  = %s\n' % h("session digest of s_example")]
+    for seq in (1, 2, 3):
+        hdr = v["header %d" % seq]
+        blocks.append("nonce     = %s\nbody      = %s\nbody hash = %s\nhdr       = %s\n          = %s\nentry     = %s\n" % (
+            h("nonce %d" % seq), v["body %d" % seq], h("body hash %d" % seq), spaced(hdr, 8, 9, 25), hdr.hex(),
+            h("entry %d" % seq)))
+    blocks.append("".join("L%d = LEAF(entry %d) = %s\n" % (i, i, h("leaf hash %d" % i)) for i in (1, 2, 3))
+                  + "NODE(L1, L2)       = %s\n" % h("node over leaves 1 and 2")
+                  + "R_1                = %s\n" % h("R_1")
+                  + "H_1 = SHA-256(0x03 || zero(32) || R_1 || u64(3) || u64(1))\n    = %s\n" % h("H_1"))
+    blocks.append("".join("%s\n" % h("path of record 2, element %d" % i) for i in (0, 1)))
+    m = v["receipt message"]
+    fields = ((m[:19], '"pairtime-receipt-v1"'), (m[19:20], 'len("d_example")'), (m[20:29], '"d_example"'),
+              (m[29:37], "b"), (m[37:69], "H_1"), (m[69:], "received_at"))
+    blocks.append("".join("%s%-38s    %s\n" % ("M_1 = " if i == 0 else "      ", f.hex(), note)
+                          for i, (f, note) in enumerate(fields)) + "    = %s\n" % m.hex())
+    leaf1, leaf2 = v["day leaf 1"], v["day leaf 2"]
+    blocks.append("leaf 1 = %s\n       = %s\nleaf 2 = %s\n" % (spaced(leaf1, 1, 8, 16, 48), leaf1.hex(), leaf2.hex())
+                  + "LEAF(leaf 1) = %s\nLEAF(leaf 2) = %s\n" % (h("day leaf hash 1"), h("day leaf hash 2"))
+                  + "T_d     = NODE(LEAF(leaf 1), LEAF(leaf 2))\n        = %s\n" % h("T_d")
+                  + "count_d = 2\n"
+                  + "G_d     = SHA-256(0x04 || zero(32) || T_d || u64(2) || u64(%d))\n        = %s\n" % (v["day"], h("G_d"))
+                  + "D_d     = %s\n        = %s\n" % (spaced(v["day message"], 15, 23), h("day message")))
+    return blocks
+
+
 def test_example():
+    """Section 12's code blocks are, in order and byte for byte, what
+    example() renders, so a swapped proof line or a typo in a spaced
+    breakdown fails; and every value example() computes appears in the
+    spec, which covers the ones the prose gives."""
     with open(repo_path("docs", "spec", "ledger-v1.md"), encoding="utf-8") as f:
         spec = f.read()
+    section = spec[spec.index("## 12. Worked example"):spec.index("## 13. ")]
+    shown = re.findall(r"```text\n(.*?)```", section, re.S)
+    want = example_blocks()
+    expect(len(shown) == len(want), "section 12 has %d code blocks, the example renders %d" % (len(shown), len(want)))
+    for i, (got, w) in enumerate(zip(shown, want)):
+        expect(got == w, "section 12's code block %d isn't what the example renders:\n%s\nwant:\n%s" % (i + 1, got, w))
     values = example()
     for label, v in values:
         text = v.hex() if isinstance(v, bytes) else str(v)
         expect(text in spec, "the spec doesn't show the example's %s, %s" % (label, text))
-    return "%d values" % len(values)
+    return "%d code blocks, %d values" % (len(want), len(values))
 
 
 def test_vectors_regenerate():
