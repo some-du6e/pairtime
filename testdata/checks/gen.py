@@ -832,9 +832,90 @@ def s_63_cc10(out):
     sc.build(out)
 
 
+def s_42_cc9(out):
+    sc = Scenario("4.2-cc9-parent-class", "A session whose parent class changes",
+                  "At 19:40:31 a script starts a second Claude Code process inside tmux, and the client files its "
+                  "SessionStart under the first session's key. The session began in Terminal, and now one of its "
+                  "session.start records names a multiplexer parent.",
+                  base=ALT, projects=[DASH], window=ALT_W)
+    dev = alt(sc)
+    st = dev.one("session.start")
+    t = 1795423231200  # 19:40:31.2, between two 15 s samples
+    dev.insert(dev.like(st, t, "session.start", dict(st["data"], start_kind="resume", parent_class="multiplexer")))
+    # The agent takes a presence sample at every hook event (DESIGN 3.3).
+    dev.insert(dev.like(dev.find("os.presence")[0], t, "os.presence",
+                        {"idle_any_s": 0, "idle_keys_s": 0, "locked": False}))
+    dev.presence_dirty = True
+    sc.edit("A session.start at 19:40:31.2 with the session's key, start_kind resume and parent_class multiplexer, "
+            "and the presence sample the agent takes at it.")
+    dev.finish()
+    keys = alt_features(sc, dev)
+    sc.typing = alt_typing(dev)
+    alt_challenge(sc, dev, keys, (A1, B1, A2, B2))
+    sc.fails = ["CC9"]
+    alt_clean_state(sc, cc5=False)
+    sc.state("CC5", "pass", devices=1, slots_credited_twice=0)
+    sc.state("CC9", "fail", sessions=1, multi_project_sessions=0, orphan_turns=0, parent_class_changes=1)
+    sc.notes.append("A multiplexer isn't one of SM 2.2 rule 4's headless parents, so every prompt keeps its origin "
+                    "and CC2 still counts all five.")
+    sc.build(out)
+
+
+def s_63_cc4_pushed(out):
+    sc = Scenario("6.3-cc4-pushed-earlier", "A commit GitHub had before the laptop saw it",
+                  "GitHub's push of E's commit is timestamped 14:09:00, five minutes before the laptop says it saw "
+                  "the commit, so the commit was made and pushed somewhere else first. The App's webhook came late, "
+                  "so pairtimed first heard of the commit from the laptop's record.",
+                  base=S63, projects=[A, B, D, E], window=W63)
+    dev = s63(sc)
+    dev.finish()
+    sc.slots = {dev.id: s63_slots()}
+    seen = batch_received(sc, dev)(dev.one("git.change"))
+    commits = s63_commit(dev)
+    commits[0].update({"server_first_seen_at": seen, "seen_via": "device"})
+    commits[0]["forge"].update({"push_time": 1795904040000 - 5 * 60_000, "found_at": seen + 2000})
+    sc.commits = commits
+    sc.edit("The forge's push_time for E's commit is 14:09:00. pairtimed first sees the commit in the laptop's "
+            "batch sealed at 14:15:00, and the App's webhook 2 s after that.")
+    sc.fails = ["CC4"]
+    s63_state(sc)
+    sc.state("CC4", "fail", commits=1, seen_out_of_order=0, pushed_before_observed=1, forge_mismatch=0)
+    sc.notes.append("observed_at is before server_first_seen_at, which is within 15 minutes of it, and the forge's "
+                    "diffstat matches. Only the push-time rule for App-installed repos fails.")
+    sc.build(out)
+
+
+def s_63_cc9_orphan(out):
+    sc = Scenario("6.3-cc9-orphan-turn", "An agent turn with no prompt in its session",
+                  "A modified client moves the agent's work on A's second turn, its outputs, tool calls and stop, "
+                  "into a session it makes up for project D, so the turn's reading would count toward D. The "
+                  "prompt stays in A's session, where the transcript has it.",
+                  base=S63, projects=[A, B, D, E], window=W63)
+    dev = s63(sc)
+    fake = tl.key("s", "6.3 a session the client made up for D")
+    moved = 0
+    for e in dev.events:
+        if e["session_key"] == "s_f9d2c9433adf" and e["t"] > 1795904431000:
+            e["session_key"] = fake
+            e["project_key"] = D
+            moved += 1
+    check(moved == 6, f"A's second turn has 6 agent records after its prompt, got {moved}")
+    sc.edit(f"The 6 agent records of A's second turn (two outputs, three tool calls and the stop) carry session "
+            f"{fake} and project D. Its prompt and the transcript's copy stay in A's session.")
+    dev.finish()
+    sc.commits = s63_commit(dev)
+    sc.fails = ["CC9"]
+    s63_state(sc, cc5=False)
+    sc.state("CC5", "pass", devices=1, slots_credited_twice=0)
+    sc.state("CC9", "fail", sessions=4, multi_project_sessions=0, orphan_turns=1, parent_class_changes=0)
+    sc.notes.append("Each session names one project, so only the turn rule fails: the made-up session's outputs "
+                    "and stop name a turn whose prompt is in another session.")
+    sc.build(out)
+
+
 SCENARIOS = [s_42_clean, s_42_cc1, s_42_cc2, s_42_cc5, s_42_cc7, s_42_cc8_false, s_42_cc8_key, s_42_cc8_limit,
-             s_42_cc11, s_62_clean, s_62_cc3, s_62_cc4_late, s_62_cc4_diffstat, s_63_clean, s_63_cc6, s_63_cc9,
-             s_63_cc10]
+             s_42_cc9, s_42_cc11, s_62_clean, s_62_cc3, s_62_cc4_late, s_62_cc4_diffstat, s_63_clean, s_63_cc4_pushed,
+             s_63_cc6, s_63_cc9, s_63_cc9_orphan, s_63_cc10]
 
 
 def main():

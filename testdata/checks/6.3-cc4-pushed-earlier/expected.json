@@ -1,0 +1,125 @@
+{
+  "scenario": "6.3-cc4-pushed-earlier",
+  "title": "A commit GitHub had before the laptop saw it",
+  "story": "GitHub's push of E's commit is timestamped 14:09:00, five minutes before the laptop says it saw the commit, so the commit was made and pushed somewhere else first. The App's webhook came late, so pairtimed first heard of the commit from the laptop's record.",
+  "base": "6.3",
+  "edits": [
+    "The log readers' copies of A's and B's prompts: Claude Code's transcript and Codex's rollout file, 0.6 to 1.5 s after each hook. Cursor's E has no v1 log reader.",
+    "The forge's push_time for E's commit is 14:09:00. pairtimed first sees the commit in the laptop's batch sealed at 14:15:00, and the App's webhook 2 s after that."
+  ],
+  "devices": [
+    {
+      "device_id": "d_b3b8fb30978a",
+      "base": "6.3",
+      "os": "macos",
+      "input_keys": true,
+      "typing_module": false,
+      "vm": false,
+      "reveals": true
+    }
+  ],
+  "submission": {
+    "projects": ["p_0e6a8e0b849e", "p_a73dbaeaf36c", "p_dedc43f1d319", "p_418d8413d1cf"],
+    "window": {"start": "2026-11-28T22:00:00Z", "end": "2026-11-28T22:30:00Z"}
+  },
+  "live": {
+    "from": "rescore",
+    "mutations": []
+  },
+  "fails": ["CC4"],
+  "checks": {
+    "CC1": {
+      "result": "pass",
+      "counts": {"hook_prompts": 6, "log_entries": 4, "matched": 4, "hook_only": 0, "log_only": 0, "not_computable": 2},
+      "items": [
+        {
+          "turn_key": "t_1a04ac19492b",
+          "t": 1795903740000,
+          "harness": "cursor",
+          "status": "not_computable",
+          "why": "no v1 log reader for this harness (DESIGN 5.1)"
+        },
+        {
+          "turn_key": "t_108c975d8196",
+          "t": 1795903980000,
+          "harness": "cursor",
+          "status": "not_computable",
+          "why": "no v1 log reader for this harness (DESIGN 5.1)"
+        }
+      ]
+    },
+    "CC2": {
+      "result": "pass",
+      "counts": {"prompts": 6, "with_input_and_focus": 6, "no_input": 0, "no_focus": 0}
+    },
+    "CC3": {
+      "result": "pass",
+      "counts": {"commits": 1, "flagged": 0},
+      "items": [
+        {
+          "sha": "b578278d53a73afd97d403fe61ab940c4cff4183",
+          "t": 1795904040000,
+          "changed_lines": 29,
+          "recorded_lines": 29,
+          "unexplained_lines": 0,
+          "flagged": false
+        }
+      ]
+    },
+    "CC4": {
+      "result": "fail",
+      "counts": {"commits": 1, "seen_out_of_order": 0, "pushed_before_observed": 1, "forge_mismatch": 0},
+      "items": [
+        {
+          "sha": "b578278d53a73afd97d403fe61ab940c4cff4183",
+          "observed_at": 1795904040000,
+          "server_first_seen_at": 1795904101486,
+          "seen_in_order": true,
+          "push_ok": false,
+          "forge_matches": true
+        }
+      ]
+    },
+    "CC5": {
+      "result": "pass",
+      "counts": {"devices": 1, "slots_credited_twice": 0, "slots_credited": 120, "merge_dropped_s": 0}
+    },
+    "CC6": {
+      "result": "pass",
+      "counts": {"minutes_mismatched": 0, "held_s": 0}
+    },
+    "CC7": {
+      "result": "pass",
+      "counts": {
+        "batches": 52,
+        "records": 255,
+        "batch_gaps": 0,
+        "seq_gaps": 0,
+        "count_mismatches": 0,
+        "root_mismatches": 0,
+        "head_mismatches": 0,
+        "body_mismatches": 0,
+        "held_minutes": 0
+      }
+    },
+    "CC9": {
+      "result": "pass",
+      "counts": {"sessions": 3, "multi_project_sessions": 0, "orphan_turns": 0, "parent_class_changes": 0}
+    },
+    "CC10": {
+      "result": "pass",
+      "counts": {"editor_acts": 10, "with_focus": 10, "without_focus": 0}
+    },
+    "CC11": {
+      "result": "not_computable",
+      "counts": {"prompts": 0, "typed_chars": 0, "key_downs": 0, "injected": 0, "too_few_keys": 0, "injected_prompts": 0},
+      "reason": "the typing module is off on this device"
+    }
+  },
+  "not_exercised": {"CC8": "SM 6.3 quotes one prompt of seven, so the scenario commits and reveals no text"},
+  "known_limit": null,
+  "errata": ["2026-11-19-check-readings"],
+  "notes": [
+    "observed_at is before server_first_seen_at, which is within 15 minutes of it, and the forge's diffstat matches. Only the push-time rule for App-installed repos fails."
+  ]
+}

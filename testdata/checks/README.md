@@ -13,12 +13,12 @@ Each failing scenario fails one check. Every other check passes on the same data
 | CC1 hook vs log | `4.2-clean`, the `6.3-*` scenarios | `4.2-cc1-no-transcript` | `6.2-clean`: Cursor has no v1 log reader |
 | CC2 prompt vs OS | `4.2-clean`, `6.2-clean`, `6.3-clean` | `4.2-cc2-send-keys` | |
 | CC3 edits vs git | `6.2-clean`, `6.3-clean` | `6.2-cc3-copied-lines` | the `4.2-*` scenarios: no commit |
-| CC4 commit clocks | `6.2-clean`, `6.3-clean` | `6.2-cc4-late`, `6.2-cc4-diffstat` | the `4.2-*` scenarios: no commit |
+| CC4 commit clocks | `6.2-clean`, `6.3-clean` | `6.2-cc4-late`, `6.2-cc4-diffstat`, `6.3-cc4-pushed-earlier` | the `4.2-*` scenarios: no commit |
 | CC5 one attention stream | `4.2-clean`, `6.2-clean`, `6.3-clean` | `4.2-cc5-second-device` | `4.2-cc2-send-keys`: nothing credited |
 | CC6 live vs re-scored | every scenario but one | `6.3-cc6-moved-minute` | |
 | CC7 chain integrity | every scenario but one | `4.2-cc7-dropped-record` | |
 | CC8 content-derived inputs | `4.2-clean`, `4.2-cc8-removed-spans` | `4.2-cc8-false-sketch`, `4.2-cc8-made-up-key` | `4.2-cc2-send-keys`: nothing drawn |
-| CC9 session integrity | `4.2-clean`, `6.2-clean`, `6.3-clean` | `6.3-cc9-moved-turn` | |
+| CC9 session integrity | `4.2-clean`, `6.2-clean`, `6.3-clean` | `6.3-cc9-moved-turn`, `6.3-cc9-orphan-turn`, `4.2-cc9-parent-class` | |
 | CC10 editor vs focus | `6.2-clean`, `6.3-clean` | `6.3-cc10-injected-heartbeats` | the `4.2-*` scenarios: no editor |
 | CC11 typing, module on | `4.2-clean` | `4.2-cc11-pasted` | the `6.2-*` and `6.3-*` scenarios: module off; `4.2-cc2-send-keys`: no human prompt |
 
@@ -36,14 +36,17 @@ Each failing scenario fails one check. Every other check passes on the same data
 | `4.2-cc8-false-sketch` | 4.2-alternation | A3's committed sketch is another request's, so the re-roll rule misses it; the client reveals A3's true values |
 | `4.2-cc8-made-up-key` | 4.2-alternation | A3's sketch and values are under a key of the client's own; A1 shows the same shingles with other values |
 | `4.2-cc8-removed-spans` | 4.2-alternation | As the made-up key, with three words of A3 removed by hand so no shingle of A3 shows its text |
+| `4.2-cc9-parent-class` | 4.2-alternation | A second session.start under the session's key names a multiplexer parent; the first named Terminal |
 | `4.2-cc11-pasted` | 4.2-alternation | B2 was pasted with Cmd-V and the paste wasn't marked: three key-downs for 60 typed characters |
 | `6.2-clean` | 6.2 | Nothing the checks object to: the base with its commit's server clocks and forge lookup |
 | `6.2-cc3-copied-lines` | 6.2 | The commit adds 299 lines copied in outside anything pairtime watches |
 | `6.2-cc4-late` | 6.2 | pairtimed first sees the commit 18 minutes after its `observed_at` |
 | `6.2-cc4-diffstat` | 6.2 | The forge's diffstat for the commit isn't the one the laptop reported |
 | `6.3-clean` | [6.3](../timelines/6.3/) | Nothing the checks object to: the base with the log readers' copies of A's and B's prompts and E's commit clocks |
+| `6.3-cc4-pushed-earlier` | 6.3 | GitHub's push of E's commit is five minutes older than the laptop's `observed_at` |
 | `6.3-cc6-moved-minute` | 6.3 | The live bucket of 14:18 credits B with A's minute |
 | `6.3-cc9-moved-turn` | 6.3 | A's second turn is labeled with project D |
+| `6.3-cc9-orphan-turn` | 6.3 | A's second turn's agent records move to a session made up for D, without its prompt |
 | `6.3-cc10-injected-heartbeats` | 6.3 | A script posts D's heartbeats while iTerm has focus |
 
 Each scenario's `expected.json` tells its story, lists its edits and notes what its results rely on.
