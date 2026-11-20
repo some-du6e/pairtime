@@ -163,6 +163,13 @@ MOVED_INSTRUCTIONS = (
 )
 # prepare.py's name for a file moved aside for a capture.
 ASIDE = ".pairtime-aside"
+
+# Where a history entry keeps the prompt besides prompt and display: Codex's
+# history.jsonl (text) and Gemini CLI's logs.json (message).
+HISTORY_PROMPT_KEYS = ("text", "message")
+# What Claude Code shows in a prompt in place of a paste or an image; the
+# pasted text itself is in the entry's pastedContents.
+PASTE_PLACEHOLDER = re.compile(r"\[(?:Pasted text #\d+(?: \+\d+ lines)?|Image #\d+|\.\.\.Truncated text #\d+ \+\d+ lines\.\.\.)\]")
 MAX_INSTRUCTION_BYTES = 1 << 20
 
 
@@ -549,9 +556,11 @@ def kit_text():
     return " ".join(" ".join(parts).split())
 
 
-def prompts_in(text):
-    """Prompt texts in a hook payload, history line or OTLP body."""
-    keys = ("prompt", "initialPrompt", "display")
+def prompts_in(text, extra=()):
+    """Prompt texts in a hook payload, history entry or OTLP body: the
+    prompt fields, the extra keys (a history file's text or message), and
+    each pasted block Claude Code keeps beside a history entry."""
+    keys = ("prompt", "initialPrompt", "display") + tuple(extra)
     found = []
     stack = json_docs(text)
     while stack:
@@ -560,6 +569,9 @@ def prompts_in(text):
             for k, x in v.items():
                 if k in keys and isinstance(x, str) and x.strip():
                     found.append(x)
+                elif k == "pastedContents" and isinstance(x, dict):
+                    found.extend(p["content"] for p in x.values()
+                                 if isinstance(p, dict) and isinstance(p.get("content"), str) and p["content"].strip())
                 else:
                     stack.append(x)
         elif isinstance(v, list):
@@ -689,9 +701,11 @@ def main(argv=None):
                 if line in hay:
                     borrowed.append("%s  holds line %d of %s: %r" % (new_rel.replace(os.sep, "/"), n, src, line[:80]))
 
-        if scripts is not None and (parts[0] == "hooks" or "history" in parts[-1]):
-            for p in prompts_in(clean):
-                lines = [ln for ln in p.splitlines() if ln.strip() and " ".join(ln.split()) not in scripts]
+        history = "history" in parts[-1] or parts[-1] == "logs.json"
+        if scripts is not None and (parts[0] == "hooks" or history):
+            for p in prompts_in(clean, HISTORY_PROMPT_KEYS if history else ()):
+                lines = [ln for ln in (PASTE_PLACEHOLDER.sub("", x) for x in p.splitlines())
+                         if ln.strip() and " ".join(ln.split()) not in scripts]
                 if lines:
                     unscripted.append("%s  %r" % (new_rel.replace(os.sep, "/"), lines[0][:120]))
 

@@ -2,7 +2,7 @@
 
 One script per harness. Each lists the exact actions that make the harness fire every event its pairtime adapter maps (DESIGN 5.1), so a capture is complete and two captures of the same version can be compared. Read [README.md](README.md) first; it says what the kit does and doesn't do on your machine.
 
-Type or paste each prompt exactly as written. The scrub flags any prompt line that isn't in this file, because a fixture should hold no text of yours. If you type something private by mistake, stop, delete that run's folder, and start the run again under a new name.
+Type or paste each prompt exactly as written. The scrub flags any prompt line that isn't in this file, because a fixture should hold no text of yours. If you type something private by mistake, stop and quit the harness, delete the whole `ROOT` folder, which holds what you typed in its runs, history and transcripts, and start over with a new `ROOT`.
 
 Step numbers are shared across harnesses: step 4 is always "a permission accepted", even where a harness skips step 3. Before each step, type its number and Enter into the sink's terminal, so `STEPS.txt` says which step every hook call belongs to.
 

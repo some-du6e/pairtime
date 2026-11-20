@@ -499,21 +499,44 @@ func TestCollect(t *testing.T) {
 	write(t, transcript, "{\"type\":\"user\",\"sessionId\":\"sess-1\"}\n")
 	write(t, filepath.Join(projects, "sess-1", "subagents", "agent-a.jsonl"), "{\"isSidechain\":true}\n")
 	write(t, filepath.Join(projects, "sess-2.jsonl"), "{\"type\":\"user\",\"sessionId\":\"sess-2\"}\n")
+	// The run's hook calls arrived over the last minute. History entries
+	// carry their own times: Claude Code's timestamp in ms, Codex's ts in
+	// seconds, Gemini CLI's an ISO 8601 string.
+	now := time.Now()
+	during, earlier := now.Add(-30*time.Second), now.Add(-time.Hour)
 	history := filepath.Join(home, ".claude", "history.jsonl")
-	captured := jsonText(t, map[string]any{"display": "a captured prompt", "project": project}) + "\n"
-	elsewhere := jsonText(t, map[string]any{"display": "a prompt from another project", "project": filepath.Join(home, "school")}) + "\n"
-	bySession := jsonText(t, map[string]any{"display": "a prompt by session id", "sessionId": "sess-1"}) + "\n"
-	write(t, history, captured+elsewhere+bySession)
+	entry := func(fields map[string]any) string { return jsonText(t, fields) + "\n" }
+	captured := entry(map[string]any{"display": "a captured prompt", "project": project, "timestamp": during.UnixMilli()})
+	elsewhere := entry(map[string]any{"display": "a prompt from another project", "project": filepath.Join(home, "school"),
+		"timestamp": during.UnixMilli()})
+	bySession := entry(map[string]any{"display": "a prompt by session id", "sessionId": "sess-1", "project": project,
+		"timestamp": during.UnixMilli()})
+	attempt := entry(map[string]any{"display": "an earlier attempt's private prompt", "project": project,
+		"timestamp": earlier.UnixMilli()})
+	otherSession := entry(map[string]any{"display": "another session's prompt in the same folder", "sessionId": "sess-9",
+		"project": project, "timestamp": during.UnixMilli()})
+	undated := entry(map[string]any{"display": "a prompt with no time", "project": project})
+	codex := entry(map[string]any{"session_id": "sess-1", "ts": during.Unix(), "text": "a Codex prompt"})
+	write(t, history, captured+elsewhere+bySession+attempt+otherSession+undated+codex)
+	logs := filepath.Join(home, ".claude", "logs.json")
+	write(t, logs, jsonText(t, []map[string]any{
+		{"sessionId": "sess-1", "type": "user", "message": "a Gemini prompt", "timestamp": during.UTC().Format(time.RFC3339Nano)},
+		{"sessionId": "sess-9", "type": "user", "message": "another session's Gemini prompt", "timestamp": during.UTC().Format(time.RFC3339)},
+	}))
 
 	runDir := filepath.Join(t.TempDir(), "run")
 	writeCapture(t, runDir, "claude_code", true, map[string]string{"CLAUDE_CONFIG_DIR": config})
+	for i, at := range []time.Time{now.Add(-time.Minute), now} {
+		write(t, filepath.Join(runDir, "hooks", "00000"+strconv.Itoa(i+1), "time"),
+			"unix_ns="+strconv.FormatInt(at.UnixNano(), 10)+"\nutc="+at.UTC().Format(time.RFC3339)+"\nclock=gnu-date\n")
+	}
 	write(t, filepath.Join(runDir, "hooks", "000001", "stdin"),
 		jsonText(t, map[string]any{"session_id": "sess-1", "transcript_path": transcript, "cwd": project}))
 	write(t, filepath.Join(runDir, "hooks", "000002", "stdin"),
 		jsonText(t, map[string]any{"session_id": "sess-1", "transcript_path": filepath.Join(projects, "gone.jsonl"), "cwd": project}))
 	write(t, filepath.Join(runDir, "hooks", "000003", "stdin"), "not json")
 
-	r := run(t, ".", nil, []string{"HOME=" + home}, python(t, "collect.py", runDir, "--history", history)...)
+	r := run(t, ".", nil, []string{"HOME=" + home}, python(t, "collect.py", runDir, "--history", history, "--history", logs)...)
 	if r.code != 0 {
 		t.Fatalf("collect.py exit %d:\n%s%s", r.code, r.stdout, r.stderr)
 	}
@@ -540,9 +563,20 @@ func TestCollect(t *testing.T) {
 				}
 			}
 		}},
-		{"history keeps only lines from the captured sessions and folders", func(t *testing.T) {
-			if h := got["home/.claude/history.jsonl"]; h != captured+bySession {
-				t.Fatalf("history = %q, want %q", h, captured+bySession)
+		{"history keeps a captured session's entries, and an undated one from its folder only while the run went", func(t *testing.T) {
+			// Left behind: another project's prompt, an earlier attempt's in the
+			// same folder, another session's, and one that can't be placed.
+			if h, want := got["home/.claude/history.jsonl"], captured+bySession+codex; h != want {
+				t.Fatalf("history = %q, want %q", h, want)
+			}
+		}},
+		{"a history file that is one JSON array is filtered entry by entry", func(t *testing.T) {
+			var entries []map[string]any
+			if err := json.Unmarshal([]byte(got["home/.claude/logs.json"]), &entries); err != nil {
+				t.Fatalf("logs.json = %q: %v", got["home/.claude/logs.json"], err)
+			}
+			if len(entries) != 1 || entries[0]["message"] != "a Gemini prompt" {
+				t.Fatalf("logs.json entries = %v, want only the captured session's", entries)
 			}
 		}},
 		{"INDEX.txt lists every copied file with its source", func(t *testing.T) {
@@ -901,6 +935,30 @@ func TestScrub(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("pasted blocks and a history file's prompt text are checked against SCRIPTS.md", func(t *testing.T) {
+		step3 := "Here is a spec. Say in one sentence whether it is clear, and don't write any code yet.\n" +
+			"count_lines(text) returns how many lines of text are not empty.\nA line holding only spaces counts as empty."
+		entry := func(fields map[string]any) string { return jsonText(t, fields) + "\n" }
+		dir := t.TempDir()
+		write(t, filepath.Join(dir, "run", "transcripts", "home", ".claude", "history.jsonl"),
+			entry(map[string]any{"display": "[Pasted text #1 +3 lines]", "pastedContents": map[string]any{
+				"1": map[string]any{"id": 1, "type": "text", "content": step3}}})+
+				entry(map[string]any{"display": "[Pasted text #1 +1 lines]", "pastedContents": map[string]any{
+					"1": map[string]any{"id": 1, "type": "text", "content": "my private notes"}}})+
+				entry(map[string]any{"session_id": "s", "ts": 1, "text": "my secret plan"}))
+		r := run(t, ".", nil, quiet, python(t, "scrub.py", "--no-detect", filepath.Join(dir, "run"), filepath.Join(dir, "out"))...)
+		for _, want := range []string{"my private notes", "my secret plan"} {
+			if !strings.Contains(r.stdout, want) {
+				t.Errorf("%q isn't flagged as unscripted:\n%s", want, r.stdout)
+			}
+		}
+		for _, scripted := range []string{"Here is a spec", "Pasted text"} {
+			if strings.Contains(r.stdout, scripted) {
+				t.Errorf("%q is flagged, but it's the script's own paste or Claude Code's placeholder:\n%s", scripted, r.stdout)
+			}
+		}
+	})
 
 	t.Run("a capture without a line of your instruction files passes", func(t *testing.T) {
 		own, dir := t.TempDir(), t.TempDir()
