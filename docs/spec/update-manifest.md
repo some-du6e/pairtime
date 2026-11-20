@@ -239,7 +239,7 @@ Once it accepts the invitation, sign the agents' `gh` and git credentials in as 
 
 An installed client trusts only the keys compiled into it, so the release that brings a new key has to be signed with the old one. Between rotations, `$HOME/release-signing-key.age` holds the key `RELEASE_SIGNING_KEY` holds. During one, `$HOME/release-signing-key-next.age` holds the key waiting to replace it.
 
-1. Make the new key with `keygen`, with its secret half going only to an offline copy, and check that the copy decrypts. `RELEASE_SIGNING_KEY` keeps the old key. `keygen` says so when the list already holds a key.
+1. Make the new key with `keygen`, with its secret half going only to an offline copy, and check that the copy decrypts. `RELEASE_SIGNING_KEY` keeps the old key. `keygen` says so when the list already holds a key. `age -o` writes over an existing file without asking, and step 3 renames the file at the end of every rotation, so if `$HOME/release-signing-key-next.age` already exists, an earlier rotation never finished. Finish its step 3, or move the file aside, first.
 
    ```sh
    go run ./tools/release keygen | age -r <your age recipient> -o "$HOME/release-signing-key-next.age"
@@ -247,8 +247,6 @@ An installed client trusts only the keys compiled into it, so the release that b
    ```
 
    The second command must print `pairtime-release-ed25519-secret:` and none of the key. Commit `release-keys.txt`, which now lists both keys, in a PR only once it does, because GitHub holds no copy of this key and the backup is the only one. If it prints anything else, `git checkout internal/release/release-keys.txt` drops the new key, and the step can run again.
-
-   `age -o` writes over an existing file without asking. Step 3 renames `release-signing-key-next.age` at the end of every rotation, so if the file exists before this step, an earlier rotation never finished. Finish that rotation's step 3, or move the file aside, first.
 2. Once that PR merges, tag a release. The old key signs it, so installed clients accept it, and its binaries trust both keys. Had the new key replaced `RELEASE_SIGNING_KEY` already, no installed client could verify this release or any after it, and GitHub would never show the old key again to undo that.
 3. Keep signing with the old key until clients run a build that trusts the new one. Raising `minimum-version.txt` to step 2's version in the last release the old key signs tells clients still older than that to update first. Then move the new key into the environment:
 
