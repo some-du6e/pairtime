@@ -22,7 +22,10 @@ func (a *agent) journalDir() string { return filepath.Join(a.dirs.Data, "receive
 // drains the inbox now and every minute after (WP-AG2). Problems go to the
 // status and don't stop the agent: a hook that can't reach the agent
 // spools its message, and the drain picks it up once the agent can store
-// it. It returns the step that stops all of it.
+// it. While the agent has no listener, because Listen failed or Serve gave
+// up, it tries to listen again at every drain, since a spooled hook call
+// loses its via = hook (D-spool-via). It returns the step that stops all
+// of it.
 func (a *agent) startIPC(opts Options) func() {
 	j, err := inbox.OpenJournal(a.journalDir(), time.Now())
 	if err != nil {
@@ -30,44 +33,30 @@ func (a *agent) startIPC(opts Options) func() {
 		return func() {}
 	}
 	a.journal = j
-
-	ep, err := ipc.EndpointFor(a.dirs)
-	if err == nil {
-		a.ipcSrv, err = ipc.Listen(ep, ipc.Options{ForcePipe: opts.ForcePipe, Log: a.log})
-	}
-	switch {
-	case err != nil:
-		a.ipcSrv = nil
-		a.setProblem("ipc", fmt.Sprintf("hooks spool their messages, because the agent can't listen for them: %v", err))
-	case a.ipcSrv.Fallback() != "":
-		a.setProblem("ipc", "the agent listens on the named pipe, because "+a.ipcSrv.Fallback())
-	}
-	served := make(chan struct{})
-	if srv := a.ipcSrv; srv != nil {
-		go func() {
-			defer close(served)
-			if err := srv.Serve(j); err != nil {
-				a.setProblem("ipc", fmt.Sprintf("hooks spool their messages, because the agent stopped taking them: %v", err))
-			}
-		}()
-	} else {
-		close(served)
-	}
+	// Hook calls go through the hook sink, whichever way they come.
+	sink := newHookSink(a, j)
+	l := &ipcListener{a: a, sink: sink, opts: ipc.Options{ForcePipe: opts.ForcePipe, Log: a.log, Walk: a.walkPeer}}
+	l.listen()
 
 	// Drains run on a goroutine of their own, because a long spool takes a
 	// while and scheduler jobs must return at once. That goroutine is the
-	// only one that uses the Drainer.
-	drainer := inbox.NewDrainer(a.dirs.Inbox(), j, func() time.Time { return time.Now().UTC() })
+	// only one that uses the Drainer, and the only one that listens again.
+	drainer := inbox.NewDrainer(a.dirs.Inbox(), sink, func() time.Time { return time.Now().UTC() })
 	kick := make(chan struct{}, 1)
 	stop := make(chan struct{})
 	drained := make(chan struct{})
 	go func() {
 		defer close(drained)
+		first := true // startIPC has just tried to listen
 		for {
 			select {
 			case <-stop:
 				return
 			case <-kick:
+				if !first {
+					l.ensure()
+				}
+				first = false
 				a.drain(drainer)
 			}
 		}
@@ -88,14 +77,70 @@ func (a *agent) startIPC(opts Options) func() {
 		job.Stop()
 		close(stop)
 		<-drained
-		if a.ipcSrv != nil {
-			a.ipcSrv.Close()
-		}
-		<-served
+		l.close()
 		if err := j.Close(); err != nil {
 			a.log.Warn("closing the journal", "err", err)
 		}
 	}
+}
+
+// ipcListener keeps the agent listening on its socket, or its pipe. Only
+// startIPC, the drain goroutine and the step that stops the agent use it,
+// one after another, so it needs no lock; the status reads a.ipcSrv.
+type ipcListener struct {
+	a      *agent
+	opts   ipc.Options
+	sink   inbox.Sink
+	srv    *ipc.Server   // the server that listens, or last did; nil if none
+	served chan struct{} // closed when srv's Serve has returned
+}
+
+// listen starts listening and serving, or records why it can't.
+func (l *ipcListener) listen() {
+	ep, err := ipc.EndpointFor(l.a.dirs)
+	var srv *ipc.Server
+	if err == nil {
+		srv, err = ipc.Listen(ep, l.opts)
+	}
+	if err != nil {
+		l.a.setProblem("ipc", fmt.Sprintf("hooks spool their messages, because the agent can't listen for them: %v", err))
+		return
+	}
+	if fb := srv.Fallback(); fb != "" {
+		l.a.setProblem("ipc", "the agent listens on the named pipe, because "+fb)
+	} else {
+		l.a.setProblem("ipc", "")
+	}
+	served := make(chan struct{})
+	go func() {
+		defer close(served)
+		if err := srv.Serve(l.sink); err != nil {
+			l.a.setProblem("ipc", fmt.Sprintf("hooks spool their messages, because the agent stopped taking them: %v", err))
+		}
+	}()
+	l.srv, l.served = srv, served
+	l.a.ipcSrv.Store(srv)
+}
+
+// ensure listens again when the agent doesn't: when the last try failed,
+// or when Serve has given up since, which leaves the server's Via empty.
+func (l *ipcListener) ensure() {
+	if l.srv != nil && l.srv.Via() != "" {
+		return
+	}
+	l.close()
+	l.listen()
+}
+
+// close stops the server, if there is one, and waits for its Serve.
+func (l *ipcListener) close() {
+	if l.srv == nil {
+		return
+	}
+	l.a.ipcSrv.Store(nil)
+	l.srv.Close()
+	<-l.served
+	l.srv, l.served = nil, nil
 }
 
 // drain moves what the inbox holds into the journal.
@@ -133,10 +178,10 @@ func (a *agent) ipcStatus() ipcReply {
 	if a.journal != nil {
 		r.Stored, r.Duplicates = a.journal.Stats()
 	}
-	if a.ipcSrv != nil {
+	if srv := a.ipcSrv.Load(); srv != nil {
 		// Via is "" once the server stopped listening, as it does when
 		// Serve gives up.
-		r.Via, r.Refused = a.ipcSrv.Via(), a.ipcSrv.Refused()
+		r.Via, r.Refused = srv.Via(), srv.Refused()
 	}
 	return r
 }

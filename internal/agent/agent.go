@@ -84,7 +84,9 @@ type agent struct {
 	port    int
 	procs   *procs.Scanner // the harness process scan (DESIGN 3.3)
 	journal *inbox.Journal // nil when it couldn't be opened
-	ipcSrv  *ipc.Server    // nil when hooks can't reach the agent
+	// ipcSrv is the socket's or the pipe's server, nil while hooks can't
+	// reach the agent.
+	ipcSrv atomic.Pointer[ipc.Server]
 	// notifier shows the coach's notification when a work session ends
 	// (WP-OS8). The coach calls its Notify, and its UserPresent on unlock
 	// and resume (WP-CO1).
