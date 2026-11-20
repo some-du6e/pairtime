@@ -104,7 +104,7 @@ A device that `pairtime login` links again (after `pairtime logout`, or after it
 | `{v, server, device_id, public_key, linked_at}` | `account.json` in the data directory, readable by the user only |
 | `mode = "online"` and `[server] url` | config.toml, the settings the teen can edit |
 
-An upload goes out only while config.toml's mode is `online` and the keystore holds a token, and only to the server `account.json` names: a token is never sent to a server it didn't come from, even when `[server] url` changes later. `pairtime logout` sends section 7's `DELETE`, then deletes the token, the key and `account.json` whatever the server answered, and sets the mode back to `local`. The ledger and everything else stay.
+An upload goes out only while config.toml's mode is `online` and the keystore holds a token, and only to the server `account.json` names: a token is never sent to a server it didn't come from, even when `[server] url` changes later. `pairtime logout` sends section 7's `DELETE`, then deletes `account.json`, the token and the key whatever the server answered, and sets the mode back to `local`. The ledger and everything else stay. When the keystore can't be opened, as with a locked keyring, logout still deletes `account.json` and sets the mode to `local`, so nothing uploads, and says the token stays in the keystore and the device on the server until it runs again.
 
 ## 9. On the server
 

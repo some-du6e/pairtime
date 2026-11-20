@@ -200,18 +200,21 @@ func runLogout(args []string, stdout, stderr io.Writer) int {
 			return 0
 		}
 	}
-	ks, err := keys.Open(keys.Options{Dir: dirs.Data, Stores: agentKeyStores})
-	if err != nil {
-		fmt.Fprintf(stderr, "pairtime logout: the device keystore can't be opened: %v\n", err)
-		return 1
-	}
 	ctx, stop := signal.NotifyContext(loginContext(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	r, err := account.Logout(ctx, loginOptions("", dirs, ks))
+	var secrets account.Secrets
+	ks, kerr := keys.Open(keys.Options{Dir: dirs.Data, Stores: agentKeyStores})
+	if kerr == nil {
+		secrets = ks
+	}
+	r, err := account.Logout(ctx, loginOptions("", dirs, secrets))
 	switch {
 	case errors.Is(err, account.ErrNotLinked):
 		fmt.Fprintln(stdout, "This computer isn't linked to a pairtime server.")
 		return 0
+	case errors.Is(err, account.ErrNoKeystore):
+		fmt.Fprintf(stderr, "pairtime logout: this computer stopped uploading and is back in local mode, but the device keystore can't be opened (%v), so its token is still in it and the server still lists it. Run pairtime logout again once the keystore opens, or remove the computer on the server's devices page.\n", kerr)
+		return 1
 	case err != nil:
 		fmt.Fprintf(stderr, "pairtime logout: %v\n", err)
 		return 1
@@ -226,13 +229,14 @@ func runLogout(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
-// loginOptions are the account options of login and logout.
-func loginOptions(server string, dirs home.Dirs, ks *keys.Keystore) account.Options {
+// loginOptions are the account options of login and logout. secrets is
+// nil when the keystore couldn't be opened.
+func loginOptions(server string, dirs home.Dirs, secrets account.Secrets) account.Options {
 	return account.Options{
 		Server:     server,
 		DataDir:    dirs.Data,
 		ConfigFile: dirs.ConfigFile(),
-		Secrets:    ks,
+		Secrets:    secrets,
 		HTTP:       &http.Client{Timeout: 30 * time.Second, Transport: loginTransport},
 		UserAgent:  "pairtime-cli/" + version.Get().Version,
 	}

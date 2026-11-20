@@ -168,13 +168,19 @@ func TestRequestCode(t *testing.T) {
 	}{
 		{name: "a code comes back", reply: reply{status: http.StatusOK, body: `{"device_code":"dc","user_code":"WDJB-MJHT","verification_uri":"https://pairtime.example.org/device","expires_in":900,"interval":5}`}},
 		{name: "temporarily_unavailable means the server isn't taking sign-ins", reply: reply{status: http.StatusServiceUnavailable, body: `{"error":"temporarily_unavailable"}`}, wantErr: ErrClosed},
+		{name: "a code with a terminal escape in it is refused, since the terminal shows it", reply: reply{status: http.StatusOK, body: `{"device_code":"dc","user_code":"WDJB-MJHT\u001b]0;pwned\u0007","verification_uri":"https://pairtime.example.org/device","expires_in":900,"interval":5}`}, wantErr: errShown},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			fake := &fakeServer{replies: map[string][]reply{"POST " + codePath: {tt.reply}}}
 			c := &Client{Server: testServer, HTTP: &http.Client{Transport: fake}, UserAgent: "pairtime-cli/test"}
 			_, err := c.RequestCode(context.Background(), Device{ID: "d_testdevice00000000000000a", OS: "linux", Build: "v0.1.0"})
-			if !errors.Is(err, tt.wantErr) {
+			switch {
+			case tt.wantErr == errShown:
+				if err == nil || !strings.Contains(err.Error(), "can't be shown") {
+					t.Fatalf("RequestCode = %v, want a refusal", err)
+				}
+			case !errors.Is(err, tt.wantErr):
 				t.Fatalf("RequestCode = %v, want %v", err, tt.wantErr)
 			}
 			body := fake.bodies[0]
@@ -386,6 +392,69 @@ func TestLogout(t *testing.T) {
 			}
 			if _, err := Logout(context.Background(), Options{DataDir: o.DataDir, ConfigFile: o.ConfigFile, Secrets: sec}); !errors.Is(err, ErrNotLinked) {
 				t.Errorf("a second Logout = %v, want ErrNotLinked", err)
+			}
+		})
+	}
+}
+
+// errShown stands for RequestCode's refusal of codes it can't show.
+var errShown = errors.New("can't be shown")
+
+func TestPrintable(t *testing.T) {
+	tests := []struct{ name, in, want string }{
+		{name: "plain text is kept", in: "Nobody has approved this code yet.", want: "Nobody has approved this code yet."},
+		{name: "an escape sequence loses its control bytes", in: "a\x1b[2Jb\x07c", want: "a[2Jbc"},
+		{name: "a newline is dropped", in: "a\nb", want: "ab"},
+		{name: "text past 300 bytes is cut", in: strings.Repeat("x", 400), want: strings.Repeat("x", 300)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := printable(tt.in); got != tt.want {
+				t.Errorf("printable(%q) = %q, want %q", tt.in, got, tt.want)
+			}
+		})
+	}
+	t.Run("a server's error description reaches the error printable", func(t *testing.T) {
+		fake := &fakeServer{replies: map[string][]reply{"POST " + tokenPath: {{status: http.StatusBadRequest, body: `{"error":"invalid_grant","error_description":"gone\u001b[31m"}`}}}}
+		c := &Client{Server: testServer, HTTP: &http.Client{Transport: fake}, Wait: func(context.Context, time.Duration) error { return nil }}
+		_, err := c.Poll(context.Background(), Code{Interval: 5, ExpiresIn: 900})
+		if err == nil || strings.ContainsRune(err.Error(), 0x1b) || !strings.Contains(err.Error(), "invalid_grant: gone[31m") {
+			t.Errorf("Poll = %q", err)
+		}
+	})
+}
+
+func TestLogoutWithoutKeystore(t *testing.T) {
+	fake := loginServer(http.StatusCreated)
+	sec := &memSecrets{}
+	o := testOptions(t, fake, sec)
+	if _, err := Login(context.Background(), o, testDevice, func(Code) {}); err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name string
+		ok   func() bool
+	}{
+		{name: "a logout whose keystore can't be opened says so", ok: func() bool {
+			_, err := Logout(context.Background(), Options{DataDir: o.DataDir, ConfigFile: o.ConfigFile})
+			return errors.Is(err, ErrNoKeystore)
+		}},
+		{name: "it still deletes account.json, so nothing uploads", ok: func() bool {
+			_, err := Load(o.DataDir)
+			return errors.Is(err, ErrNotLinked)
+		}},
+		{name: "it still switches config.toml to local", ok: func() bool {
+			cfg, _, _ := config.Load(o.ConfigFile)
+			return cfg.Mode == config.Local
+		}},
+		{name: "it sends nothing to the server without the token", ok: func() bool {
+			return fake.count("DELETE "+mePath) == 0
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if !tt.ok() {
+				t.Error("it didn't")
 			}
 		})
 	}

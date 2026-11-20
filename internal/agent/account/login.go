@@ -185,12 +185,19 @@ func undo(ctx context.Context, c *Client, o Options, token string) {
 	o.Secrets.ForgetAccount()
 }
 
+// ErrNoKeystore means logout couldn't open the keystore, so the token and
+// the key stay in it, and the server still lists the device. account.json
+// is gone, so nothing uploads.
+var ErrNoKeystore = errors.New("account: the keystore couldn't be opened, so the device token stays in it")
+
 // Logout unlinks this install: it asks the server to remove the device,
 // which stops its token at once, then forgets the token and the device
 // key, deletes account.json and switches config.toml back to mode
 // "local", whatever the server answered. The ledger and everything else
 // on the computer stay. account.json goes first, so uploads stop even when
-// the keystore can't be reached to forget the sign-in.
+// the keystore can't be reached to forget the sign-in. With o.Secrets nil,
+// for a keystore that couldn't be opened, it does only that, and returns
+// ErrNoKeystore.
 //
 // It returns ErrNotLinked, after cleaning up anything left of a sign-in,
 // when this install wasn't linked.
@@ -201,6 +208,15 @@ func Logout(ctx context.Context, o Options) (Result, error) {
 	}
 	var r Result
 	r.Linked = l
+	if o.Secrets == nil {
+		if err := remove(o.DataDir); err != nil {
+			return r, fmt.Errorf("account: deleting %s: %w", FileName, err)
+		}
+		if err := config.SetLocal(o.ConfigFile); err != nil {
+			r.ConfigErr = err
+		}
+		return r, ErrNoKeystore
+	}
 	if lerr == nil {
 		token, seed, err := o.Secrets.Account()
 		clear(seed)

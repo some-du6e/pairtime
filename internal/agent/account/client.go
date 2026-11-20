@@ -153,7 +153,7 @@ func (c *Client) send(req *http.Request, out any) (int, error) {
 			Description string `json:"error_description"`
 		}
 		if json.Unmarshal(body, &e) == nil {
-			se.Code, se.Description = e.Error, e.Description
+			se.Code, se.Description = printable(e.Error), printable(e.Description)
 		}
 		return resp.StatusCode, se
 	}
@@ -194,7 +194,29 @@ func (c *Client) RequestCode(ctx context.Context, d Device) (Code, error) {
 	if code.DeviceCode == "" || code.UserCode == "" || code.VerificationURI == "" {
 		return Code{}, errors.New("account: the server's code answer is missing its codes")
 	}
+	// The codes and the page are shown in the teen's terminal.
+	for _, s := range []string{code.UserCode, code.VerificationURI, code.VerificationURIComplete} {
+		if printable(s) != s {
+			return Code{}, errors.New("account: the server's code answer has characters that can't be shown")
+		}
+	}
 	return code, nil
+}
+
+// maxShown bounds text from a server that pairtime shows.
+const maxShown = 300
+
+// printable keeps the printable ASCII of s, at most maxShown bytes, so
+// text a server sends can't steer the terminal it is shown in. RFC 6749
+// 5.2 allows nothing else in an error_description anyway.
+func printable(s string) string {
+	b := make([]byte, 0, min(len(s), maxShown))
+	for i := 0; i < len(s) && len(b) < maxShown; i++ {
+		if c := s[i]; c >= 0x20 && c < 0x7f {
+			b = append(b, c)
+		}
+	}
+	return string(b)
 }
 
 // Token is what the device grant ends with.
