@@ -32,7 +32,7 @@ func ReadChain(dir string) (ChainInfo, error) {
 
 // ReadBatches calls fn with each sealed batch of the ledger in dir whose
 // number is from or more, in order, until fn returns an error, which it
-// returns. Each batch has its row, with the receipt when batches.seg holds
+// returns. A from of 0 reads from batch 1. Each batch has its row, with the receipt when batches.seg holds
 // one, when it was sealed, and its records as stored. Records no batch
 // holds yet are skipped.
 //
@@ -51,10 +51,11 @@ func ReadBatches(dir string, from uint64, fn func(Batch) error) error {
 	if err != nil {
 		return err
 	}
+	from = max(from, 1)
 	var start position
 	next, prev := uint64(1), ledger.Hash{}
 	switch n := uint64(len(bf.rows)); {
-	case from >= 1 && from <= n:
+	case from <= n:
 		rp := bf.rows[from-1]
 		start, next, prev = rp.Start, from, rp.Prev
 	case n > 0:

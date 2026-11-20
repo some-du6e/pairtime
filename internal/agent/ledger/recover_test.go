@@ -329,6 +329,7 @@ func TestReadBatchesFrom(t *testing.T) {
 		want []uint64
 	}{
 		{"from batch 1, every sealed batch, and no unsealed record", 1, []uint64{1, 2, 3, 4}},
+		{"from batch 0, which doesn't exist, every sealed batch too", 0, []uint64{1, 2, 3, 4}},
 		{"from batch 3, batches 3 and 4", 3, []uint64{3, 4}},
 		{"from a batch not sealed yet, none", 5, nil},
 	}
