@@ -37,6 +37,6 @@ DESIGN 5.3 opens an anchor for a plugin prompt "only under SM 2.2 rule 6". The j
 
 The outputs add nothing. DESIGN 5.2 lets plugin output fill a turn's bucket "only up to `R_TURN_BASE_S` = 20 s per turn" when no hook or transcript record backs it, and the base already reaches 20 s. From 14:05:00 to 14:05:20 the claimed agent is running with nothing to read (`X.agent_only`), and from 14:05:20 to 14:07:00 nothing covers the jiggler (`X.no_anchor`), and the same after turn 2.
 
-SM 4.2's autopilot test marks turn 1 unread: reading 50,000 words at a quarter of 238 wpm's time takes 3,151 s, and the next prompt comes 320 s after the stop. The discount starts only at the third low-effort prompt after an unread turn, and both prompts are substantive, so nothing is discounted.
+SM 4.2's autopilot test marks turn 1 unread. The next prompt comes 320 s after the stop, less than a quarter of the time 50,000 words take at 238 wpm, which is 3,151 s. The discount starts only at the third low-effort prompt after an unread turn, and both prompts are substantive, so nothing is discounted.
 
 Every record but the OS ones arrived via `plugin`, so none counts toward `logged_s` or `ai_logged_s` (D19). Both are 0.
