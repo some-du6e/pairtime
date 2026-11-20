@@ -1448,13 +1448,18 @@ func TestPrepareHarnesses(t *testing.T) {
 		harness, section string
 		// history is the history file collect.py gets, below ROOT, or "".
 		history string
+		// claudeHooks says whether the harness runs Claude Code-format hooks
+		// in real use, so the run's project gets them (HS 4.1, 8.1). Copilot
+		// reads a repo's .claude/ too (HS 5.1), but pairtime installs only
+		// Copilot's own hooks for it.
+		claudeHooks bool
 	}{
-		{"codex", "Codex", "codex-home/history.jsonl"},
-		{"cursor", "Cursor", ""},
-		{"copilot", "GitHub Copilot", ""},
-		{"gemini", "Gemini CLI", ""},
-		{"devin", "Devin", ""},
-		{"cline", "Cline", ""},
+		{"codex", "Codex", "codex-home/history.jsonl", false},
+		{"cursor", "Cursor", "", true},
+		{"copilot", "GitHub Copilot", "", false},
+		{"gemini", "Gemini CLI", "", false},
+		{"devin", "Devin", "", true},
+		{"cline", "Cline", "", false},
 	}
 	for _, c := range cases {
 		t.Run(c.harness+"'s commands name its own fixture folder, SCRIPTS.md section and history, never Claude Code's", func(t *testing.T) {
@@ -1478,6 +1483,23 @@ func TestPrepareHarnesses(t *testing.T) {
 			}
 			if c.history == "" && strings.Contains(r.stdout, "--history") {
 				t.Errorf("a --history for a harness with no history file:\n%s", r.stdout)
+			}
+		})
+		t.Run(c.harness+"'s project has Claude Code-format hooks only if it runs them in real use", func(t *testing.T) {
+			capture := filepath.Join(t.TempDir(), "capture")
+			env := []string{"HOME=" + t.TempDir(), "PATH=" + os.Getenv("PATH")}
+			if r := run(t, ".", nil, env, python(t, "prepare.py", c.harness, capture, "run1")...); r.code != 0 {
+				t.Fatalf("exit %d:\n%s%s", r.code, r.stdout, r.stderr)
+			}
+			settings := filepath.Join(capture, "projects", "run1", ".claude", "settings.local.json")
+			_, err := os.Stat(settings)
+			if has := err == nil; has != c.claudeHooks {
+				t.Fatalf("%s exists: %v, want %v", settings, has, c.claudeHooks)
+			}
+			if c.claudeHooks {
+				if h := readSettings(t, settings)["Stop"][0].Hooks[0]; h.Args[0] != filepath.Join(capture, "runs", "run1") {
+					t.Errorf("the Stop hook writes to %s", h.Args[0])
+				}
 			}
 		})
 	}

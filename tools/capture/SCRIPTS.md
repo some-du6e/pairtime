@@ -222,7 +222,7 @@ Collect without `--history`. Transcripts the hooks named are copied on their own
 
 Captured by WP-AD10. pairtime installs Copilot's hooks in `~/.copilot/hooks/`; the capture uses the repo-level folder Copilot also reads, so only the scratch project is captured. The camelCase event names are the ones whose payloads carry timestamps.
 
-Setup: run `prepare.py copilot ROOT copilot`. It makes `ROOT/copilot-home`, the Copilot CLI's settings folder for the capture, and prints the `COPILOT_HOME` line that points the CLI at it. VS Code reads your own `~/.copilot` all the same, so `prepare.py` refuses while its hooks or instructions hold something, and prints the commands to move them aside. Then write `ROOT/projects/copilot/.github/hooks/capture.json`:
+Setup: run `prepare.py copilot ROOT copilot`. It makes `ROOT/copilot-home`, the Copilot CLI's settings folder for the capture, and prints the `COPILOT_HOME` line that points the CLI at it. VS Code reads your own `~/.copilot` all the same, so `prepare.py` refuses while its hooks or instructions hold something, and prints the commands to move them aside. Copilot also runs Claude Code-format hooks from a repo's `.claude/settings.json` and `.claude/settings.local.json` (HS 5.1), but pairtime installs only Copilot's own hooks for it, so `prepare.py` writes none of those into this run's project. Then write `ROOT/projects/copilot/.github/hooks/capture.json`:
 
 ```json
 {
