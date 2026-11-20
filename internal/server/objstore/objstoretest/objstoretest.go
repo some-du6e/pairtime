@@ -15,7 +15,8 @@
 // It takes multipart uploads with R2's rules: every part but the last at
 // least MinPartSize and all of one size, and If-None-Match: * evaluated
 // when CompleteMultipartUpload would make the object. GetBucketVersioning
-// answers what SetVersioning set.
+// answers what SetVersioning set, and GetBucketLifecycleConfiguration what
+// SetLifecycle set.
 package objstoretest
 
 import (
@@ -71,6 +72,8 @@ type Server struct {
 	matched []fault
 	// versioning holds what SetVersioning set, by bucket.
 	versioning map[string]string
+	// lifecycle holds what SetLifecycle set, by bucket.
+	lifecycle map[string]string
 	// ignoreIfNoneMatch holds the buckets that WriteOnceIgnored set.
 	ignoreIfNoneMatch map[string]bool
 	// Now is the server's clock, for checking X-Amz-Date. It defaults to
@@ -89,6 +92,10 @@ const NotImplemented = "not implemented"
 // AccessDenied is the versioning state that makes GetBucketVersioning
 // answer 403 AccessDenied, as a store does to a key scoped to objects.
 const AccessDenied = "access denied"
+
+// InternalError is the versioning state that makes GetBucketVersioning
+// answer 500 InternalError every time, as a store does that is failing.
+const InternalError = "internal error"
 
 // CutBody, as the status of FailAfter or FailMatching with after set,
 // answers 200 and then closes the connection halfway through the body, as
@@ -153,7 +160,8 @@ func NewTLS(t testing.TB, buckets ...string) *Server {
 func start(t testing.TB, newServer func(http.Handler) *httptest.Server, buckets []string) *Server {
 	s := &Server{
 		buckets: make(map[string]map[string]*object), Now: time.Now, MinPartSize: 5 << 20,
-		uploads: make(map[string]*upload), versioning: make(map[string]string), ignoreIfNoneMatch: make(map[string]bool),
+		uploads: make(map[string]*upload), versioning: make(map[string]string), lifecycle: make(map[string]string),
+		ignoreIfNoneMatch: make(map[string]bool),
 	}
 	for _, b := range buckets {
 		s.buckets[b] = make(map[string]*object)
@@ -231,11 +239,24 @@ func (s *Server) SetObject(bucket, key string, data []byte) {
 
 // SetVersioning sets what GetBucketVersioning answers for bucket: "" for
 // a bucket whose versioning was never turned on, "Enabled", "Suspended",
-// or NotImplemented. The server never keeps old versions either way.
+// NotImplemented, AccessDenied or InternalError. The server never keeps
+// old versions either way.
 func (s *Server) SetVersioning(bucket, state string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.versioning[bucket] = state
+}
+
+// SetLifecycle sets what GetBucketLifecycleConfiguration answers for
+// bucket: rules, the XML of its Rule elements, which the answer wraps in a
+// LifecycleConfiguration element; "" for a bucket without a lifecycle
+// configuration, which answers 404 NoSuchLifecycleConfiguration as S3
+// does; or NotImplemented, AccessDenied or InternalError. The server never
+// applies the rules.
+func (s *Server) SetLifecycle(bucket, rules string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.lifecycle[bucket] = rules
 }
 
 // WriteOnceIgnored makes bucket ignore If-None-Match, as a store without
@@ -398,7 +419,10 @@ func (s *Server) handle(r *http.Request, id string) answer {
 		if r.Method == http.MethodGet && q.Has("versioning") {
 			return s.versioningAnswer(bucket, id)
 		}
-		return s3error(http.StatusNotImplemented, "NotImplemented", "the test server lists objects and answers GetBucketVersioning, and nothing else on a bucket", id)
+		if r.Method == http.MethodGet && q.Has("lifecycle") {
+			return s.lifecycleAnswer(bucket, id)
+		}
+		return s3error(http.StatusNotImplemented, "NotImplemented", "the test server lists objects and answers GetBucketVersioning and GetBucketLifecycleConfiguration, and nothing else on a bucket", id)
 	}
 	if q.Has("uploads") || q.Has("uploadId") {
 		return s.multipart(r, objects, bucket, key, body, id)
@@ -459,6 +483,8 @@ func (s *Server) versioningAnswer(bucket, id string) answer {
 		return s3error(http.StatusNotImplemented, "NotImplemented", "GetBucketVersioning not implemented", id)
 	case AccessDenied:
 		return s3error(http.StatusForbidden, "AccessDenied", "Access Denied", id)
+	case InternalError:
+		return s3error(http.StatusInternalServerError, "InternalError", "We encountered an internal error. Please try again.", id)
 	}
 	var b bytes.Buffer
 	b.WriteString(xml.Header + `<VersioningConfiguration xmlns="http://s3.amazonaws.com/doc/2006-03-01/">`)
@@ -469,6 +495,24 @@ func (s *Server) versioningAnswer(bucket, id string) answer {
 	}
 	b.WriteString("</VersioningConfiguration>")
 	return answer{status: http.StatusOK, header: http.Header{"Content-Type": {"application/xml"}}, body: b.Bytes()}
+}
+
+// lifecycleAnswer answers GetBucketLifecycleConfiguration. Call it with
+// s.mu held.
+func (s *Server) lifecycleAnswer(bucket, id string) answer {
+	switch rules := s.lifecycle[bucket]; rules {
+	case "":
+		return s3error(http.StatusNotFound, "NoSuchLifecycleConfiguration", "The lifecycle configuration does not exist", id)
+	case NotImplemented:
+		return s3error(http.StatusNotImplemented, "NotImplemented", "GetBucketLifecycleConfiguration not implemented", id)
+	case AccessDenied:
+		return s3error(http.StatusForbidden, "AccessDenied", "Access Denied", id)
+	case InternalError:
+		return s3error(http.StatusInternalServerError, "InternalError", "We encountered an internal error. Please try again.", id)
+	default:
+		body := xml.Header + `<LifecycleConfiguration xmlns="http://s3.amazonaws.com/doc/2006-03-01/">` + rules + `</LifecycleConfiguration>`
+		return answer{status: http.StatusOK, header: http.Header{"Content-Type": {"application/xml"}}, body: []byte(body)}
+	}
 }
 
 // multipart answers CreateMultipartUpload, UploadPart,

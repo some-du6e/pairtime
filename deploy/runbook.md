@@ -44,7 +44,7 @@ Images built from #123 on carry their own `litestream.yml` at `/etc/litestream.y
 | Push monitors | Three Uptime Kuma push monitors on the LAN, reached over plain http and kept off Cloudflare, so a Cloudflare outage can't raise a false alert |
 | Witness repository | `some-du6e/pairtime-witness`, public, with a write deploy key for this host |
 
-Neither bucket may keep versions. R2 has no versioning, and `pairtimed doctor` fails on a bucket that reports any.
+Neither bucket may keep versions. R2 has no versioning, and `pairtimed doctor` fails on a bucket that reports any. `pairtime-data` has no lifecycle rule that deletes objects, since it holds the replica, the evidence and the key backups; R2's default rule, which only aborts multipart uploads that never finished, can stay. `pairtime-snapshots` has one that deletes everything under `snapshots/` after 30 days, the period the privacy notice gives the backups. `pairtimed doctor` checks both.
 
 ## What Karim provides
 
@@ -215,7 +215,7 @@ Every line should say `ok`, except these, which may say `skip`:
 - `witness`, until WP-SV17's publisher writes day roots to `witness-roots/`. Before then the sidecar runs and finds nothing to push.
 - `hca`, while there is no client id.
 
-doctor checks the configuration, the keys and their modes, the database and its migrations, that `litestream.yml` and `pairtime.toml` name the same database and bucket, `/readyz` with the replica's lag, that neither bucket keeps versions and both refuse a second write-once put, the newest snapshot and key backup, HCA's discovery document, the witness repository through GitHub's public API, each push monitor, and `https://<host>/healthz` through the tunnel. It pings a monitor only when that monitor's owner would, and checks the HCA client id and secret with one client_credentials grant. A `warn` line means doctor couldn't tell, and doesn't fail the run: an R2 key scoped to the two buckets may get 403 for GetBucketVersioning, and R2 has no versioning, so `-skip versioning` leaves that check out. Paste the output into the deploy log, issue #103.
+doctor checks the configuration, the keys and their modes, the database and its migrations, that `litestream.yml` and `pairtime.toml` name the same database and bucket, `/readyz` with the replica's lag, that neither bucket keeps versions, the lifecycle rules of both (none that deletes in `pairtime-data`, and one in `pairtime-snapshots` that deletes snapshots within 30 days), that both refuse a second write-once put, the newest snapshot and key backup, HCA's discovery document, the witness repository through GitHub's public API, each push monitor, and `https://<host>/healthz` through the tunnel. It pings a monitor only when that monitor's owner would, and checks the HCA client id and secret with one client_credentials grant. A `warn` line means doctor couldn't tell, and doesn't fail the run. An R2 key scoped to the two buckets may get 403 for GetBucketVersioning and GetBucketLifecycleConfiguration. R2 has no versioning, and the lifecycle rules show in the dashboard under each bucket's settings, so check them there, note it in the deploy log, and leave the two checks out with `-skip versioning,lifecycle`. Paste the output into the deploy log, issue #103.
 
 ### 13. From outside
 
@@ -324,6 +324,8 @@ Before the native program pays out, the server moves to a Hetzner CCX13, or an A
 | doctor's `witness` fails with "isn't pushing" | `docker compose logs witness`. `Permission denied (publickey)` means the deploy key isn't on the repository or lacks write access. If port 22 is blocked, set `PAIRTIME_WITNESS_REMOTE=ssh://git@ssh.github.com:443/some-du6e/pairtime-witness.git` for the witness service. Its host keys are already in `witness/known_hosts`. |
 | A push monitor alerts | Its part stopped. Litestream: replication (above). pairtimed: `/readyz` (doctor says which check). Snapshot: `docker compose logs pairtimed`, look for `nightly snapshot`. |
 | doctor's `bucket.*.versioning` fails | That bucket has, or had, versioning. Use a bucket that never had it (docs/errata/2026-11-20-evidence-versioning.md). |
+| doctor's `bucket.pairtime-data.lifecycle` fails | A lifecycle rule deletes objects in the main bucket, which would delete the replica, evidence and key backups. Delete the rule it names, in the dashboard; one that only aborts unfinished uploads can stay. |
+| doctor's `bucket.pairtime-snapshots.lifecycle` fails | No enabled rule deletes the snapshots within 30 days, so they would outlive what the privacy notice promises. Add a rule for the prefix `snapshots/`, or the whole bucket, that deletes objects after 30 days, with no tag or size filter. |
 
 ## Reference
 

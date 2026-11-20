@@ -25,6 +25,7 @@ import (
 	"github.com/some-du6e/pairtime/internal/server/migrations"
 	"github.com/some-du6e/pairtime/internal/server/objstore"
 	"github.com/some-du6e/pairtime/internal/server/ops"
+	"github.com/some-du6e/pairtime/internal/server/retention"
 	"github.com/some-du6e/pairtime/internal/server/store"
 )
 
@@ -148,9 +149,14 @@ func runDoctor(ctx context.Context, e *env, args []string) int {
 			return bad("[object_storage] in %s is off; a deployment needs both buckets (DESIGN 10.5 item 4)", cfg.Path)
 		}})
 	} else {
-		for _, b := range []*objstore.Bucket{objs.main, objs.snapshots} {
+		for _, bucket := range []struct {
+			b         *objstore.Bucket
+			snapshots bool
+		}{{objs.main, false}, {objs.snapshots, true}} {
+			b := bucket.b
 			checks = append(checks,
 				check{"bucket." + b.Name() + ".versioning", func(ctx context.Context) result { return d.checkVersioning(ctx, b) }},
+				check{"bucket." + b.Name() + ".lifecycle", func(ctx context.Context) result { return d.checkLifecycle(ctx, b, bucket.snapshots) }},
 				check{"bucket." + b.Name() + ".write_once", func(ctx context.Context) result { return d.checkWriteOnce(ctx, b) }})
 		}
 		checks = append(checks, check{"snapshot", d.checkSnapshot}, check{"keys_backup", d.checkKeyBackup})
@@ -433,6 +439,11 @@ func (d *doctor) readyCheck(name string) bool {
 	return false
 }
 
+// checkVersioning reads GetBucketVersioning (D-evidence-versioning).
+// Enabled or Suspended fails, no status passes, and so does a store that
+// doesn't implement the call, as R2's S3 API page says it doesn't. Any
+// other answer is a warning, since doctor can't decide it and
+// Evidence.Delete (WP-SB2) fails on a bucket that keeps versions too.
 func (d *doctor) checkVersioning(ctx context.Context, b *objstore.Bucket) result {
 	state, err := b.Versioning(ctx)
 	var e *objstore.Error
@@ -444,12 +455,81 @@ func (d *doctor) checkVersioning(ctx context.Context, b *objstore.Bucket) result
 		// not ask.
 		return warn("can't tell: the key may not read the bucket's versioning state (%s). R2 has no versioning; elsewhere, check that it was never turned on, and then leave this out with -skip versioning", e.Code)
 	case err != nil:
-		return bad("%v", err)
+		return warn("can't tell whether the bucket keeps versions: %v. Check that versioning was never turned on, and then leave this out with -skip versioning", err)
 	case state == "":
 		return ok("versioning was never turned on")
 	default:
 		return bad("versioning is %s. Neither bucket may keep versions: a purged or expired blob would survive as an old version (docs/errata/2026-11-20-evidence-versioning.md). Use a bucket that never had versioning", state)
 	}
+}
+
+// checkLifecycle reads a bucket's lifecycle rules (DESIGN 10.5 item 4).
+// The main bucket holds Litestream's replica, the evidence and the key
+// backups, so no rule may delete objects in it; one that only aborts
+// unfinished uploads, which R2 gives every bucket, can stay. In the
+// snapshot bucket an enabled rule has to delete every snapshot within the
+// period the privacy notice gives the backups (docs/retention.json,
+// server.db_snapshots), since pairtimed deletes none itself. A key that
+// may not read the rules, or any other answer doctor can't decide, is a
+// warning, as for versioning.
+func (d *doctor) checkLifecycle(ctx context.Context, b *objstore.Bucket, snapshots bool) result {
+	days, err := snapshotDays()
+	if err != nil {
+		return bad("%v", err)
+	}
+	rules, err := b.Lifecycle(ctx)
+	var e *objstore.Error
+	switch {
+	case errors.Is(err, objstore.ErrNotImplemented) && snapshots:
+		return bad("the store doesn't implement lifecycle rules, so nothing deletes the snapshots under %s after %s, as the privacy notice says (DESIGN 10.5 item 4)", objstore.SnapshotPrefix, retention.Days(days))
+	case errors.Is(err, objstore.ErrNotImplemented):
+		return ok("the store doesn't implement lifecycle rules, so none deletes objects here")
+	case errors.As(err, &e) && e.Status == http.StatusForbidden:
+		return warn("can't tell: the key may not read the bucket's lifecycle rules (%s). Check them where the bucket was made (deploy/runbook.md, The pilot), and then leave this out with -skip lifecycle", e.Code)
+	case err != nil:
+		return warn("can't tell what the bucket's lifecycle rules are: %v. Check them where the bucket was made (deploy/runbook.md, The pilot), and then leave this out with -skip lifecycle", err)
+	}
+	name := func(r objstore.LifecycleRule) string {
+		if r.ID == "" {
+			return "a rule with no ID"
+		}
+		return fmt.Sprintf("rule %q", r.ID)
+	}
+	if !snapshots {
+		var deleting []string
+		for _, r := range rules {
+			if r.Expires() {
+				deleting = append(deleting, name(r))
+			}
+		}
+		if len(deleting) > 0 {
+			return bad("%s deletes objects, and this bucket holds Litestream's replica, the evidence and the key backups, so no lifecycle rule may delete in it; one that only aborts unfinished uploads can stay (DESIGN 10.5 item 4)", strings.Join(deleting, " and "))
+		}
+		if len(rules) == 0 {
+			return ok("no lifecycle rules")
+		}
+		return ok("none of its lifecycle rules deletes objects")
+	}
+	for _, r := range rules {
+		if r.Expires() && r.ExpireDays > 0 && r.ExpireDays <= days && r.Covers(objstore.SnapshotPrefix) {
+			return ok("%s deletes the snapshots under %s after %s", name(r), objstore.SnapshotPrefix, retention.Days(r.ExpireDays))
+		}
+	}
+	return bad("no enabled rule deletes every snapshot under %s within %s, so old snapshots, with whatever they hold of deleted accounts, outlive the %s the privacy notice gives them (docs/retention.json, server.db_snapshots; DESIGN 10.5 item 4)", objstore.SnapshotPrefix, retention.Days(days), retention.Days(days))
+}
+
+// snapshotDays is how long the retention schedule says the nightly
+// snapshots are kept, the period the snapshot bucket's rule must keep to.
+func snapshotDays() (int, error) {
+	p, err := retention.Default()
+	if err != nil {
+		return 0, err
+	}
+	e, found := p.Find("server.db_snapshots")
+	if !found || e.Days <= 0 {
+		return 0, errors.New("docs/retention.json gives server.db_snapshots no period in days")
+	}
+	return e.Days, nil
 }
 
 func (d *doctor) checkWriteOnce(ctx context.Context, b *objstore.Bucket) result {
@@ -700,7 +780,9 @@ func (d *doctor) checkWitness(ctx context.Context) result {
 
 // newestFile returns the newest regular file under dir, by modification
 // time, and when it was modified; "" when there is none or dir is
-// missing.
+// missing. Like the witness sidecar, it passes over a file whose name, or
+// a directory's on its path, starts with a dot, such as a root pairtimed
+// is still writing (deploy/witness/push.sh).
 func newestFile(dir string) (string, time.Time, error) {
 	var name string
 	var at time.Time
@@ -710,6 +792,12 @@ func newestFile(dir string) (string, time.Time, error) {
 				return nil
 			}
 			return err
+		}
+		if p != dir && strings.HasPrefix(e.Name(), ".") {
+			if e.IsDir() {
+				return fs.SkipDir
+			}
+			return nil
 		}
 		if !e.Type().IsRegular() {
 			return nil
