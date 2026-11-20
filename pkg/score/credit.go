@@ -180,7 +180,11 @@ type creditor struct {
 	// buckets holds, per project, its sessions' buckets in key order.
 	buckets map[string][]*bucket
 	runs    map[string]*running
-	returns []returned
+	// noInputLeads holds, per project, the seconds the leads of its
+	// no-input prompts would have covered had a person typed them, sorted
+	// and merged: where X.no_input goes.
+	noInputLeads map[string][]secSpan
+	returns      []returned
 	// lookups are the browser and chat-app runs with credit in the
 	// LOOKUP_BRACKET_S before them, the ones that can become lookups. Step
 	// holds FinalBefore back for them until their end bracket is decided.
@@ -285,6 +289,15 @@ func (c *creditor) index() {
 	}
 	for _, r := range c.runs {
 		r.human, r.auto, r.noInput, r.any = merged(r.human), merged(r.auto), merged(r.noInput), merged(r.any)
+	}
+	c.noInputLeads = map[string][]secSpan{}
+	for _, l := range d.noInputLeads {
+		if from, to := c.sec(ceilSecond(l.from)), c.sec(ceilSecond(l.to)); from < to {
+			c.noInputLeads[l.proj] = append(c.noInputLeads[l.proj], secSpan{from, to})
+		}
+	}
+	for p, spans := range c.noInputLeads {
+		c.noInputLeads[p] = merged(spans)
 	}
 	ids := map[string]int{}
 	for i, a := range d.anchors {
@@ -605,11 +618,14 @@ func lowerLevel(a, b event.Evidence) event.Evidence {
 // uncredited gives a second nothing credited its reason (SM 5.2), the
 // first that applies: X.absent without presence, X.lookup_cap past a
 // lookup's cap, X.other_focus with focus outside every project's windows,
-// X.ambiguous when the focus resolves to no single project, then, while a
-// turn of the focused project runs, X.agent_only if a person started it,
-// X.automated if automation did and X.no_input if its prompt came with no
-// input, and X.no_anchor otherwise. This is the order
-// docs/errata/2026-11-19-sm-6.6-uncredited-codes.md proposes.
+// X.ambiguous when the focus resolves to no single project, X.no_input on
+// a second the lead of a no-input prompt of the focused project would have
+// covered, then, while a turn of the focused project runs, X.automated if
+// automation started it and X.agent_only otherwise, and X.no_anchor last.
+// This is the order docs/errata/2026-11-19-sm-6.6-uncredited-codes.md
+// proposes, with X.no_input where it puts it. Its rule 4 names no code for
+// the run of a no-input turn, which gets SM 5.2's code for an agent turn
+// that ran with nothing credited, X.agent_only.
 func (c *creditor) uncredited(k int, s *Slot) event.Reason {
 	if s.Asleep || s.Locked || !present(s.At(c.at(k))) {
 		return event.ReasonAbsent
@@ -625,6 +641,9 @@ func (c *creditor) uncredited(k int, s *Slot) event.Reason {
 	if s.FocusProject == "" {
 		return event.ReasonAmbiguous
 	}
+	if covers(c.noInputLeads[s.FocusProject], k) {
+		return event.ReasonNoInput
+	}
 	if r := c.runs[s.FocusProject]; r != nil {
 		switch {
 		case covers(r.human, k):
@@ -632,7 +651,7 @@ func (c *creditor) uncredited(k int, s *Slot) event.Reason {
 		case covers(r.auto, k):
 			return event.ReasonAutomated
 		case covers(r.noInput, k):
-			return event.ReasonNoInput
+			return event.ReasonAgentOnly
 		}
 	}
 	return event.ReasonNoAnchor

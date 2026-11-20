@@ -351,6 +351,24 @@ func TestCredit(t *testing.T) {
 			want: []secondsWant{{450, 465, map[event.Reason]int64{rP: 10, rSUP: 5}}},
 		},
 		{
+			name: "SM 5.2: the seconds a no-input prompt's lead would have covered are X.no_input, and its run X.agent_only",
+			build: func(b *tl) {
+				terminalSession(b)
+				// No input in the KEYS_PRE_S before the prompt at 60 s, as
+				// when a script sends it into the terminal (SM 2.2 rule 8).
+				b.mouse(every(at(1), at(44), 5000)...)
+				b.mouse(every(at(61), at(296), 5000)...)
+				b.prompt(at(60), event.ViaHook, "s_1", "p_1", "t_1", 30)
+				b.agentStops(at(120), "s_1", "t_1")
+				b.samples(at(0), at(300))
+			},
+			want: []secondsWant{
+				{0, 60, map[event.Reason]int64{event.ReasonNoInput: 60}},
+				{60, 120, map[event.Reason]int64{xAgent: 60}},
+				{120, 135, map[event.Reason]int64{xNoAnch: 15}},
+			},
+		},
+		{
 			name: "SM 5.2: focus on a terminal that resolves to no project is X.ambiguous, on another app X.other_focus",
 			build: func(b *tl) {
 				b.focus(at(0), event.AppTerminal, "")

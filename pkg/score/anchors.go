@@ -116,6 +116,15 @@ func promptKind(c event.PromptClass) (event.AnchorKind, event.Reason) {
 func (d *deriver) promptAnchors() {
 	for _, tb := range d.turns {
 		t := tb.turn
+		if tb.primary >= 0 && t.Origin == event.OriginNoInput {
+			// Not an anchor (SM 2.2 rule 8). The seconds its lead would
+			// have covered are where X.no_input goes (SM 5.2).
+			e := d.recs[tb.primary]
+			p := e.Data.(*event.PromptSubmit)
+			think, typing := d.leadParts(d.classify(tb.sess, tb.primary, p), e.Via, count(p.TypedLenEst))
+			d.noInputLeads = append(d.noInputLeads, projLead{t.ProjectKey, span{e.T - think - typing, e.T}})
+			continue
+		}
 		if tb.primary < 0 || !t.Origin.Human() {
 			continue
 		}

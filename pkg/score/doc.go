@@ -151,7 +151,10 @@
 //     before the run or starting at most LOOKUP_BRACKET_S after it.
 //   - An uncredited second takes the first reason that applies in the order
 //     docs/errata/2026-11-19-sm-6.6-uncredited-codes.md proposes, with
-//     X.no_input for a running turn whose prompt came with no input and
-//     X.lookup_cap for a lookup's seconds past LOOKUP_MAX_S. Seconds before
-//     the presence sampler ran are X.absent until lookback (WP-SC7).
+//     X.no_input on the seconds a no-input prompt's lead would have
+//     covered, as it says, and X.lookup_cap for a lookup's seconds past
+//     LOOKUP_MAX_S. The erratum's rule 4 names no code for the run of a
+//     no-input turn, which is X.agent_only, SM 5.2's code for an agent turn
+//     that ran with nothing credited. Seconds before the presence sampler
+//     ran are X.absent until lookback (WP-SC7).
 package score
