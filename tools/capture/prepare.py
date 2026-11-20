@@ -111,7 +111,7 @@ CLAUDE_CODE_HOOKS = [
 HOOK_SCRIPTS = ("dump-hook", "allow-once")
 
 # Claude Code 2.1.327 starts every session in auto mode, where a classifier
-# answers most permission prompts, so the script's steps 4 to 8 and 22 would
+# answers most permission prompts, so the script's permission steps would
 # never ask anyone. The scratch project's settings start it in manual mode,
 # whose name in settings is "default", the mode those steps are written for.
 CLAUDE_CODE_PERMISSIONS = {"defaultMode": "default"}
