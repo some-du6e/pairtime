@@ -1,6 +1,6 @@
 # Erratum: `pairtime install` puts the binary in place after the yes
 
-Date 2026-11-20. Raised by the WP-IN2 review fix-up (#106, issue #124). Status: for the orchestrator's docs PR. `cmd/pairtime` already does what "What install does" says.
+Date 2026-11-20. Raised by the WP-IN2 review fix-up (#106, issue #124). Status: decided 2026-11-20 by the orchestrator for Karim: `pairtime install` puts the binary in place after the consent screen's yes, as `cmd/pairtime` already does, so nothing lands on the computer before the teen agrees. DESIGN 5.9 step 1 and PLAN's WP-RL2 take the wording below in the next docs PR.
 
 ## Input
 
