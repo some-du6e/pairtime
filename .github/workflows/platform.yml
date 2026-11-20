@@ -15,7 +15,9 @@ on:
       - internal/install/**
       - internal/agent/ipc/**
       # The agent's platform code: the lock, the data directories and
-      # private files (home), and the loopback server (localhttp).
+      # private files (home), the loopback server (localhttp), and the
+      # spool, which Windows file sharing makes OS-specific (inbox).
+      - internal/agent/inbox/**
       - internal/agent/home/**
       - internal/agent/localhttp/**
       - cmd/pairtime/**
@@ -36,7 +38,7 @@ permissions:
 env:
   # pairtime never uses cgo (AGENTS.md).
   CGO_ENABLED: "0"
-  PLATFORM_DIRS: internal/platform internal/install internal/agent/ipc internal/agent/home internal/agent/localhttp cmd/pairtime
+  PLATFORM_DIRS: internal/platform internal/install internal/agent/ipc internal/agent/inbox internal/agent/home internal/agent/localhttp cmd/pairtime
 
 jobs:
   windows:
