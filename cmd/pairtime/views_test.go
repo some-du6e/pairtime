@@ -900,10 +900,10 @@ func TestTodaySchemaMatchesGo(t *testing.T) {
 		def, prop string
 		want      []string
 	}{
-		{"kind", "kind", keys(c.Kinds)},
-		{"level", "level", keys(c.Levels)},
-		{"agent", "harness", keys(c.Agents)},
-		{"other", "reason", keys(c.Other)},
+		{"kind", "kind", codesOf(c.Kinds)},
+		{"level", "level", codesOf(c.Levels)},
+		{"agent", "harness", codesOf(c.Agents)},
+		{"other", "reason", codesOf(c.Other)},
 	}
 	for _, e := range enums {
 		t.Run("the schema's "+e.def+"."+e.prop+" values are the codes internal/coach/text describes", func(t *testing.T) {
@@ -927,7 +927,7 @@ func cmpName(def string) string {
 	return def
 }
 
-func keys[K ~string, V any](m map[K]V) []string {
+func codesOf[K ~string, V any](m map[K]V) []string {
 	out := make([]string, 0, len(m))
 	for k := range m {
 		out = append(out, string(k))
