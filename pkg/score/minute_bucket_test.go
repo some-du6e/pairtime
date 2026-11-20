@@ -7,6 +7,7 @@ import (
 	"maps"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -243,8 +244,9 @@ func TestMinuteBucket(t *testing.T) {
 	p.AnchorIDs = []string{idB, idA}
 	read := credOf("p_1", rREAD, event.EvidenceA, 10)
 	m := Minute{Start: base, Slots: []MinuteSlot{
-		{Credit: Credit{Slot: at(15), Credited: []Credited{p}, AgentS: 10}},
-		{Credit: Credit{Slot: at(45), Credited: []Credited{read}, Uncredited: map[event.Reason]int64{xNoAnch: 5}, AgentS: 15}},
+		{Credit: Credit{Slot: at(15), Credited: []Credited{p}, AgentS: 10, AgentOnly: map[string]int64{"p_2": 10, "p_3": 0}}},
+		{Credit: Credit{Slot: at(45), Credited: []Credited{read}, Uncredited: map[event.Reason]int64{xNoAnch: 5}, AgentS: 15,
+			AgentOnly: map[string]int64{"p_2": 5}}},
 	}}
 	b := m.Bucket(BucketInfo{Table: tab, Device: "d_test", State: event.StatePending, Witness: event.Witnessed, Rev: 3})
 	cases := []struct {
@@ -257,6 +259,8 @@ func TestMinuteBucket(t *testing.T) {
 		{"credited_s sums the slots", b.CreditedS == 25},
 		{"uncredited sums the slots by reason", reflect.DeepEqual(b.Uncredited, map[event.Reason]float64{xNoAnch: 5})},
 		{"agent_running_s sums the slots", b.AgentRunningS == 25},
+		{"agent_only sums the slots' agent-only time by project and leaves out a project with none (D-bucket-agent-only)",
+			reflect.DeepEqual(b.AgentOnly, map[string]float64{"p_2": 15})},
 		{"anchors lists each anchor behind the credit once, sorted", slices.Equal(b.Anchors, []string{idA, idB})},
 		{"v is pkg/score's VERSION and params the table's hash (SM 7.6)", b.V == Version() && b.Params == tab.Hash()},
 		{"minute is the minute's start in UTC", b.Minute.Equal(time.UnixMilli(base)) && b.Minute.Location() == time.UTC},
@@ -278,6 +282,60 @@ func TestMinuteBucket(t *testing.T) {
 			t.Errorf("version %q: %v", Version(), err)
 		}
 	})
+}
+
+// TestBucketAgentOnly checks each fixture's buckets' agent_only against the
+// per-project agent_only_s its expected.json states (D-bucket-agent-only,
+// SM 2.6's chess clock): summed over the window, each project's agent_only
+// in the last revision of each minute is the seconds a turn of it ran that
+// weren't credited to it. SM 6.3 states them for 14:00 to 14:30: 570 s for
+// p_0e6a8e0b849e, 180 s for p_a73dbaeaf36c and none for p_418d8413d1cf.
+func TestBucketAgentOnly(t *testing.T) {
+	sm63 := map[string]float64{"p_0e6a8e0b849e": 570, "p_a73dbaeaf36c": 180, "p_418d8413d1cf": 0}
+	checked := false
+	for _, f := range creditCases(t) {
+		want := map[string]float64{}
+		for k, v := range f.Expected.Totals.Other {
+			if p, ok := strings.CutPrefix(k, "agent_only_s."); ok {
+				want[p] = v
+			}
+		}
+		if len(want) == 0 {
+			continue
+		}
+		if f.Name == "6.3" {
+			checked = true
+			if !maps.Equal(want, sm63) {
+				t.Errorf("6.3's expected.json states agent_only_s %v, want SM 6.3's %v", want, sm63)
+			}
+		}
+		from, to := f.Expected.Window.Start.UnixMilli(), f.Expected.Window.End.UnixMilli()
+		got := map[string]float64{}
+		last := lastRevisions(stepRevisions(t, fixtureDevice(f), f.Expected.Device, f.Expected.Witness, arrivals(f.Events, nil)))
+		for _, m := range slices.Sorted(maps.Keys(last)) {
+			if m < from || m >= to {
+				continue
+			}
+			for p, n := range last[m].AgentOnly {
+				if n == 0 {
+					t.Errorf("%s: the bucket of %s lists %s with no agent-only time; agent_only leaves such a project out", f.Name,
+						minuteName(m), p)
+				}
+				got[p] += n
+			}
+		}
+		for _, p := range slices.Sorted(maps.Keys(want)) {
+			t.Run(fmt.Sprintf("%s: %s's agent_only sums to %v s over %s, as its expected.json says (D-bucket-agent-only)", f.Name, p,
+				want[p], f.Expected.Window.Local), func(t *testing.T) {
+				if got[p] != want[p] {
+					t.Errorf("%v s, want %v s", got[p], want[p])
+				}
+			})
+		}
+	}
+	if !checked {
+		t.Error("6.3 isn't among the credit fixtures, so SM 6.3's agent_only_s went unchecked")
+	}
 }
 
 func TestMinutes(t *testing.T) {

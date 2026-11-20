@@ -157,8 +157,12 @@ type BucketInfo struct {
 //     4.1 E-6).
 //
 // A slot nothing credited, or the scorer didn't derive, is empty. The
-// minute's uncredited seconds, agent_running_s and anchors sum its slots.
-// Anchors are local (DESIGN 6.2 D9): Shareable clears them.
+// minute's uncredited seconds, agent_running_s, agent_only and anchors sum
+// its slots. agent_only gives, for each project a turn of which ran in the
+// minute, the seconds it ran that weren't credited to that project, the
+// slots' Credit.AgentOnly summed (SM 2.6, D-bucket-agent-only); a project
+// with none is left out. Anchors are local (DESIGN 6.2 D9): Shareable
+// clears them.
 func (m Minute) Bucket(info BucketInfo) event.MinuteBucket {
 	b := event.MinuteBucket{
 		V:       Version(),
@@ -186,6 +190,15 @@ func (m Minute) Bucket(info BucketInfo) event.MinuteBucket {
 			b.Uncredited[r] += float64(n)
 		}
 		b.AgentRunningS += float64(s.AgentS)
+		for p, n := range s.AgentOnly {
+			if n <= 0 {
+				continue
+			}
+			if b.AgentOnly == nil {
+				b.AgentOnly = map[string]float64{}
+			}
+			b.AgentOnly[p] += float64(n)
+		}
 		for _, e := range s.Credited {
 			anchors = append(anchors, e.AnchorIDs...)
 		}
