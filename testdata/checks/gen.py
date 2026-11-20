@@ -11,6 +11,7 @@ what.
 import json
 import os
 import sys
+from datetime import datetime, timezone
 
 sys.dont_write_bytecode = True
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -32,9 +33,12 @@ DASH = "p_b2738424d7c2"
 ALT_SESSION = "s_45dccad56214"
 ALT_W = (1795422660000, 1795423560000)  # 19:31 to 19:46 at UTC+11, 2026-11-23
 A1, B1, A2, B2, A3 = 1795422780000, 1795422960000, 1795423140000, 1795423320000, 1795423500000
-TEXT_A = "make the sidebar collapse into an icon rail on small screens"
-TEXT_B = "keep the top bar pinned to the top of the page as you scroll"
-TEXTS = {A1: TEXT_A, B1: TEXT_B, A2: TEXT_A, B2: TEXT_B, A3: TEXT_A}
+# The prompt texts are the base's own (4.2-alternation/prompts.json): A1, A2
+# and A3 are one request, B1 and B2 another.
+TEXTS = {p["t"]: p["text"] for p in ck.read_json(os.path.join(ck.TIMELINES, ALT, "prompts.json"))["prompts"]}
+check(sorted(TEXTS) == [A1, B1, A2, B2, A3], "4.2-alternation's prompts.json has the five prompts")
+TEXT_A, TEXT_B = TEXTS[A1], TEXTS[B1]
+check(TEXTS[A2] == TEXTS[A3] == TEXT_A and TEXTS[B2] == TEXT_B and TEXT_A != TEXT_B, "A, B, A, B, A")
 # What a client that wants A3 credited commits instead of A3's sketch: an
 # unrelated request's, so A3 is no near-duplicate of A1 or A2.
 DECOY = "add a dark mode toggle to the settings page header"
@@ -358,10 +362,35 @@ def alt_clean_state(sc, *, cc1=None, cc5=True):
         sc.state("CC5", "pass", devices=1, slots_credited=56, slots_credited_twice=0)
 
 
-def alt_slots():
+def base_slots(dev, table):
+    """A slot table that the base's own rows agree with: each row's
+    credited_s is the sum of its slots, and no slot outside a row credits
+    anything. The tables follow the rows by hand, so this is what keeps
+    them in step when a base changes."""
+    rows = []
+    for r in dev.expected["rows"]:
+        start = round(datetime.strptime(r["start"], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc).timestamp()
+                      * 1000)
+        rows.append((start, start + r["minutes"] * ck.MINUTE_MS, r["credited_s"], r["local"]))
+    for start, end, credited, local in rows:
+        got = sum(cr for slot, cr in table.items() if start <= slot < end)
+        check(got == credited, f"{dev.base} {local}: the slot table credits {got} s, the base row {credited} s")
+    for slot, cr in table.items():
+        check(not cr or any(start <= slot < end for start, end, _, _ in rows), f"{dev.base}: slot {slot} has a row")
+    return table
+
+
+def alt_slots(dev):
     """ALT's credited slots: every slot of 19:31 to 19:44 credits 15 s, and
     19:45 is X.reroll."""
-    return {ALT_W[0] + i * ck.SLOT_MS: (15 if i < 56 else 0) for i in range(60)}
+    return base_slots(dev, {ALT_W[0] + i * ck.SLOT_MS: (15 if i < 56 else 0) for i in range(60)})
+
+
+def slots62(dev, at=W62[0]):
+    """6.2's credited slots, checked against its rows, then moved to start at
+    at."""
+    table = base_slots(dev, {W62[0] + i * ck.SLOT_MS: cr for i, cr in enumerate(SLOTS62)})
+    return {slot - W62[0] + at: cr for slot, cr in table.items()}
 
 
 # The scenarios.
@@ -377,7 +406,7 @@ def s_42_clean(out):
     keys = alt_features(sc, dev)
     sc.typing = alt_typing(dev)
     alt_challenge(sc, dev, keys, (A1, B1, A2, B2))
-    sc.slots = {dev.id: alt_slots()}
+    sc.slots = {dev.id: alt_slots(dev)}
     alt_clean_state(sc)
     sc.notes.append("A3 is attempt 3 of A, discounted as X.reroll, so it opened no credited anchor and isn't in "
                     "the pool. The other four are drawn.")
@@ -466,8 +495,7 @@ def s_42_cc5(out):
     sc.device(other, {"os": "windows", "input_keys": False, "typing_module": False, "vm": False}, reveals=False)
     sc.edit(f"A second device: 6.2's events, moved by {delta} ms so its 07:40:00 falls on 4.2's 19:36:00 "
             "(08:36:00Z). It submits nothing and reveals nothing; the server has its live buckets.")
-    sc.slots = {dev.id: alt_slots(),
-                other.id: {B1 + i * ck.SLOT_MS: cr for i, cr in enumerate(SLOTS62)}}
+    sc.slots = {dev.id: alt_slots(dev), other.id: slots62(other, at=B1)}
     sc.fails = ["CC5"]
     alt_clean_state(sc, cc5=False)
     sc.state("CC5", "fail", devices=2, slots_credited=75, slots_credited_twice=19, merge_dropped_s=265)
@@ -494,7 +522,7 @@ def s_42_cc7(out):
     keys = alt_features(sc, dev)
     sc.typing = alt_typing(dev)
     alt_challenge(sc, dev, keys, (A1, B1, A2, B2))
-    sc.slots = {dev.id: alt_slots()}
+    sc.slots = {dev.id: alt_slots(dev)}
     sc.fails = ["CC7"]
     alt_clean_state(sc)
     sc.state("CC7", "fail", missing_batches=0, seq_gaps=1, count_mismatches=1, root_mismatches=1,
@@ -531,7 +559,7 @@ def s_42_cc7_batch(out):
             "them.")
     sc.typing = alt_typing(dev)
     alt_challenge(sc, dev, keys, (A1, B1, A2, B2))
-    sc.slots = {dev.id: alt_slots()}
+    sc.slots = {dev.id: alt_slots(dev)}
     sc.fails = ["CC7"]
     alt_clean_state(sc)
     sc.state("CC7", "fail", missing_batches=1, batch_gaps=0, seq_gaps=0, count_mismatches=0, root_mismatches=0,
@@ -804,7 +832,7 @@ def s_62_clean(out):
                   base=S62, projects=[REMIND], window=W62)
     dev = s62(sc)
     dev.finish()
-    sc.slots = {dev.id: {W62[0] + i * ck.SLOT_MS: cr for i, cr in enumerate(SLOTS62)}}
+    sc.slots = {dev.id: slots62(dev)}
     sc.commits = s62_commit(dev, batch_received(sc, dev))
     s62_state(sc)
     sc.notes.append("CC3: the commit's 29 + 13 lines against 41 recorded in its interval, the agent's 28 + 12 and "
@@ -828,7 +856,7 @@ def s_62_cc3(out):
     sc.edit("The commit's --shortstat is 7 files, 328 insertions and 13 deletions: 299 copied lines on top of "
             "6.2's 29 + 13.")
     dev.finish()
-    sc.slots = {dev.id: {W62[0] + i * ck.SLOT_MS: cr for i, cr in enumerate(SLOTS62)}}
+    sc.slots = {dev.id: slots62(dev)}
     sc.commits = s62_commit(dev, batch_received(sc, dev))
     sc.fails = ["CC3"]
     s62_state(sc, cc3=False)
@@ -860,7 +888,7 @@ def s_62_cc3_plugin(out):
     sc.edit("An editor.activity at 07:44:10 via plugin: an edit of remind-bot with edit_source paste and "
             "lines_changed 300. It arrives over the inbox, so the agent takes no presence sample at it.")
     dev.finish()
-    sc.slots = {dev.id: {W62[0] + i * ck.SLOT_MS: cr for i, cr in enumerate(SLOTS62)}}
+    sc.slots = {dev.id: slots62(dev)}
     sc.commits = s62_commit(dev, batch_received(sc, dev))
     sc.fails = ["CC3"]
     s62_state(sc, cc3=False)
@@ -883,7 +911,7 @@ def s_62_cc4_late(out):
                   base=S62, projects=[REMIND], window=W62)
     dev = s62(sc)
     dev.finish()
-    sc.slots = {dev.id: {W62[0] + i * ck.SLOT_MS: cr for i, cr in enumerate(SLOTS62)}}
+    sc.slots = {dev.id: slots62(dev)}
     seen = 1795524270000 + 18 * 60_000 + 600
     sc.commits = s62_commit(dev, batch_received(sc, dev), seen=seen)
     sc.edit("server_first_seen_at is observed_at plus 18 minutes and 0.6 s.")
@@ -900,7 +928,7 @@ def s_62_cc4_diffstat(out):
                   base=S62, projects=[REMIND], window=W62)
     dev = s62(sc)
     dev.finish()
-    sc.slots = {dev.id: {W62[0] + i * ck.SLOT_MS: cr for i, cr in enumerate(SLOTS62)}}
+    sc.slots = {dev.id: slots62(dev)}
     sc.commits = s62_commit(dev, batch_received(sc, dev), forge={"files_changed": 7, "insertions": 328})
     sc.edit("The forge returns 7 files, 328 insertions and 13 deletions for the SHA.")
     sc.fails = ["CC4"]
@@ -934,8 +962,8 @@ def s63_commit(dev):
                        "deletions": d["deletions"]}}]
 
 
-def s63_slots():
-    return {W63[0] + i * ck.SLOT_MS: 15 for i in range(120)}
+def s63_slots(dev):
+    return base_slots(dev, {W63[0] + i * ck.SLOT_MS: 15 for i in range(120)})
 
 
 def s63_state(sc, *, cc5=True):
@@ -960,7 +988,7 @@ def s_63_clean(out):
                   base=S63, projects=[A, B, D, E], window=W63)
     dev = s63(sc)
     dev.finish()
-    sc.slots = {dev.id: s63_slots()}
+    sc.slots = {dev.id: s63_slots(dev)}
     sc.commits = s63_commit(dev)
     s63_state(sc)
     sc.notes.append("CC4: rusty-cli has the GitHub App, which saw the push at 14:14:02, 2 s after the laptop "
@@ -977,7 +1005,7 @@ def s_63_cc6(out):
                   base=S63, projects=[A, B, D, E], window=W63)
     dev = s63(sc)
     dev.finish()
-    sc.slots = {dev.id: s63_slots()}
+    sc.slots = {dev.id: s63_slots(dev)}
     sc.commits = s63_commit(dev)
     minute = W63[0] + 18 * ck.MINUTE_MS
     sc.mutations = [{"device_id": dev.id, "minute": iso(minute), "op": "move_project", "from": A, "to": B,
@@ -1034,7 +1062,7 @@ def s_63_cc10(out):
     sc.edit("Four editor.activity edits for D at 14:19:10, 14:19:35, 14:19:55 and 14:20:20, each in a slot where "
             "Sam is typing, while iTerm's window 1, hosting A, has focus.")
     dev.finish()
-    sc.slots = {dev.id: s63_slots()}
+    sc.slots = {dev.id: s63_slots(dev)}
     sc.commits = s63_commit(dev)
     sc.fails = ["CC10"]
     s63_state(sc)
@@ -1123,7 +1151,7 @@ def s_63_cc4_pushed(out):
                   base=S63, projects=[A, B, D, E], window=W63)
     dev = s63(sc)
     dev.finish()
-    sc.slots = {dev.id: s63_slots()}
+    sc.slots = {dev.id: s63_slots(dev)}
     seen = batch_received(sc, dev)(dev.one("git.change"))
     commits = s63_commit(dev)
     commits[0].update({"server_first_seen_at": seen, "seen_via": "device"})
