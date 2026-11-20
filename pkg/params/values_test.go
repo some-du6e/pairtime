@@ -123,12 +123,12 @@ func TestValues(t *testing.T) {
 	}
 	rows := make(map[string]int)
 	for _, c := range cases {
-		rows[c.p.name()]++
-		t.Run(fmt.Sprintf("%s is %s per %s", c.p.name(), c.want, c.src), func(t *testing.T) {
-			if got, ok := tab.Text(c.p.name()); !ok {
-				t.Fatalf("table 0.1.0 has no %s", c.p.name())
+		rows[c.p.String()]++
+		t.Run(fmt.Sprintf("%s is %s per %s", c.p.String(), c.want, c.src), func(t *testing.T) {
+			if got, ok := tab.Text(c.p.String()); !ok {
+				t.Fatalf("table 0.1.0 has no %s", c.p.String())
 			} else if got != c.want {
-				t.Errorf("%s = %s in the table, want %s (%s)", c.p.name(), got, c.want, c.src)
+				t.Errorf("%s = %s in the table, want %s (%s)", c.p.String(), got, c.want, c.src)
 			}
 			switch p := c.p.(type) {
 			case IntParam:

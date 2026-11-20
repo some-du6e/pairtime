@@ -43,6 +43,17 @@ sub = "ident!def456"
 roles = ["fraud_squad", "spot_checker", "admin"]
 `
 
+// objectStorage is an [object_storage] section with the keys a deployment
+// needs, and s3Secrets the secrets that go with it.
+const objectStorage = `
+[object_storage]
+endpoint = "https://acct.r2.cloudflarestorage.com/"
+bucket = "pairtime"
+snapshot_bucket = "pairtime-snapshots"
+`
+
+var s3Secrets = []string{"PAIRTIME_S3_ACCESS_KEY_ID=AKIDR2", "PAIRTIME_S3_SECRET_ACCESS_KEY=hunter2-r2"}
+
 func TestLoad(t *testing.T) {
 	const base = "base_url = \"https://pairtime.example.org\"\n"
 	tests := []struct {
@@ -172,6 +183,74 @@ func TestLoad(t *testing.T) {
 			environ: []string{"PAIRTIME_DATABASE_URL=mysql://pt:hunter2@db/pairtime"},
 			wantErr: "must be a URL of the form postgres://",
 		},
+		{
+			name: "object storage is off without an endpoint",
+			toml: base,
+			check: func(t *testing.T, c *Config, _ string) {
+				if _, on := c.ObjectStore(); on || c.ObjectStorage.Enabled() {
+					t.Error("object storage is on with no [object_storage] section")
+				}
+			},
+		},
+		{
+			name:    "object storage takes R2's region by default and the access key from the secrets",
+			toml:    base + objectStorage,
+			environ: s3Secrets,
+			check: func(t *testing.T, c *Config, _ string) {
+				want := ObjectStorage{Endpoint: "https://acct.r2.cloudflarestorage.com", Region: "auto", Bucket: "pairtime", SnapshotBucket: "pairtime-snapshots"}
+				if c.ObjectStorage != want {
+					t.Errorf("object_storage = %+v, want %+v", c.ObjectStorage, want)
+				}
+				oc, on := c.ObjectStore()
+				if !on || oc.Endpoint != want.Endpoint || oc.Region != "auto" || oc.Credentials.AccessKeyID != "AKIDR2" || oc.Credentials.SecretAccessKey != "hunter2-r2" {
+					t.Errorf("ObjectStore() = %v, %v", oc.Endpoint, on)
+				}
+			},
+		},
+		{
+			name:    "object storage takes a region and virtual-hosted URLs",
+			toml:    base + objectStorage + "region = \"eu-central-1\"\nvirtual_host = true\n",
+			environ: s3Secrets,
+			check: func(t *testing.T, c *Config, _ string) {
+				if oc, _ := c.ObjectStore(); oc.Region != "eu-central-1" || !oc.VirtualHost {
+					t.Errorf("ObjectStore() region %q, virtual host %v", oc.Region, oc.VirtualHost)
+				}
+			},
+		},
+		{name: "object storage needs its access key id", toml: base + objectStorage, environ: s3Secrets[1:], wantErr: "set the secret PAIRTIME_S3_ACCESS_KEY_ID"},
+		{name: "object storage needs its secret access key", toml: base + objectStorage, environ: s3Secrets[:1], wantErr: "set the secret PAIRTIME_S3_SECRET_ACCESS_KEY"},
+		{
+			name:    "object storage needs a snapshot bucket",
+			toml:    base + "[object_storage]\nendpoint = \"https://acct.r2.cloudflarestorage.com\"\nbucket = \"pairtime\"\n",
+			environ: s3Secrets,
+			wantErr: "object_storage.snapshot_bucket is required",
+		},
+		{
+			name:    "the snapshot bucket can't be the main one, whose evidence its lifecycle would delete",
+			toml:    base + "[object_storage]\nendpoint = \"https://acct.r2.cloudflarestorage.com\"\nbucket = \"pairtime\"\nsnapshot_bucket = \"pairtime\"\n",
+			environ: s3Secrets,
+			wantErr: "30-day lifecycle",
+		},
+		{
+			name:    "a bucket name outside R2's and S3's rules is refused",
+			toml:    base + "[object_storage]\nendpoint = \"https://acct.r2.cloudflarestorage.com\"\nbucket = \"Pairtime_Main\"\nsnapshot_bucket = \"pairtime-snapshots\"\n",
+			environ: s3Secrets,
+			wantErr: "object_storage.bucket",
+		},
+		{
+			name:    "an object storage endpoint over http is refused off loopback",
+			toml:    base + "[object_storage]\nendpoint = \"http://s3.example\"\nbucket = \"a-bucket\"\nsnapshot_bucket = \"b-bucket\"\n",
+			environ: s3Secrets,
+			wantErr: "only https",
+		},
+		{
+			name:    "an object storage endpoint with a key in it is refused without quoting it",
+			toml:    base + "[object_storage]\nendpoint = \"https://AKIDR2:hunter2@acct.r2.cloudflarestorage.com\"\nbucket = \"a-bucket\"\nsnapshot_bucket = \"b-bucket\"\n",
+			environ: s3Secrets,
+			wantErr: "user or password",
+		},
+		{name: "object storage keys without an endpoint are refused", toml: base + "[object_storage]\nbucket = \"pairtime\"\n", wantErr: "object_storage.endpoint is empty"},
+		{name: "an unknown object_storage key is refused", toml: base + objectStorage + "buckets = \"x\"\n", environ: s3Secrets, wantErr: "unknown keys: object_storage.buckets"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

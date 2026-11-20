@@ -2,9 +2,13 @@
 
 package params
 
-// TE WP0.6's static check: every parameter pkg/score reads is in the
-// public table. paramReads finds the reads with go/ast, without building
-// the package, and TestScoreReadsOnlyTableParams compares them with every
+// TE WP0.6's static check: every parameter pkg/score reads through Int,
+// Rat or Bool is in the public table. The parameter types are opaque
+// (names.go), so a params.NAME selector is the only way another package can
+// name a parameter to those three. Table.Text takes a string and isn't
+// checked; it's for code that shows a whole table.
+// paramReads finds those selectors with go/ast, without building the
+// package, and TestScoreReadsOnlyTableParams compares them with every
 // embedded table.
 
 import (
@@ -17,6 +21,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -195,23 +200,29 @@ func TestParamReads(t *testing.T) {
 	})
 }
 
-// constDecl is one parameter constant as the source declares it.
-type constDecl struct {
-	kind  kind
+// paramTypes maps the name of each parameter type to its kind.
+var paramTypes = map[string]kind{"IntParam": kindInt, "RatParam": kindRat, "BoolParam": kindBool}
+
+// paramDecl is one parameter variable as the source declares it.
+type paramDecl struct {
+	kind kind
+	// value is the name the variable's composite literal gives it, or ""
+	// when there is no literal of the form Type{"NAME"}.
 	value string
 	pos   token.Position
 }
 
-// declaredParams lists the constants of type IntParam, RatParam or
-// BoolParam in the non-test Go files of dir.
-func declaredParams(dir string) (map[string]constDecl, error) {
-	types := map[string]kind{"IntParam": kindInt, "RatParam": kindRat, "BoolParam": kindBool}
+// declaredParams lists the package-level variables of type IntParam,
+// RatParam or BoolParam in the non-test Go files of dir: each variable
+// declared with one of those types, given a composite literal of one, or
+// both.
+func declaredParams(dir string) (map[string]paramDecl, error) {
 	files, err := filepath.Glob(filepath.Join(dir, "*.go"))
 	if err != nil {
 		return nil, err
 	}
 	fset := token.NewFileSet()
-	out := make(map[string]constDecl)
+	out := make(map[string]paramDecl)
 	for _, file := range files {
 		if strings.HasSuffix(file, "_test.go") {
 			continue
@@ -222,27 +233,22 @@ func declaredParams(dir string) (map[string]constDecl, error) {
 		}
 		for _, decl := range f.Decls {
 			gd, ok := decl.(*ast.GenDecl)
-			if !ok || gd.Tok != token.CONST {
+			if !ok || gd.Tok != token.VAR {
 				continue
 			}
 			for _, spec := range gd.Specs {
 				vs := spec.(*ast.ValueSpec)
-				typ, ok := vs.Type.(*ast.Ident)
-				if !ok {
-					continue
-				}
-				k, ok := types[typ.Name]
-				if !ok {
-					continue
-				}
 				for i, id := range vs.Names {
-					d := constDecl{kind: k, pos: fset.Position(id.Pos())}
+					d := paramDecl{kind: paramKind(vs.Type), pos: fset.Position(id.Pos())}
 					if i < len(vs.Values) {
-						if lit, ok := vs.Values[i].(*ast.BasicLit); ok && lit.Kind == token.STRING {
-							d.value, _ = strconv.Unquote(lit.Value)
+						if lit, ok := vs.Values[i].(*ast.CompositeLit); ok && paramKind(lit.Type) != 0 {
+							d.kind = paramKind(lit.Type)
+							d.value = literalName(lit)
 						}
 					}
-					out[id.Name] = d
+					if d.kind != 0 {
+						out[id.Name] = d
+					}
 				}
 			}
 		}
@@ -250,9 +256,32 @@ func declaredParams(dir string) (map[string]constDecl, error) {
 	return out, nil
 }
 
-// TestDeclaredParams checks the constants against all, the list Parse
-// checks tables against. Each constant is spelled as its value, so a
-// selector's name is the table's name, and all holds each one once with
+// paramKind returns the kind of the parameter type typ names, or 0 when
+// typ, which may be nil, names none.
+func paramKind(typ ast.Expr) kind {
+	if id, ok := typ.(*ast.Ident); ok {
+		return paramTypes[id.Name]
+	}
+	return 0
+}
+
+// literalName returns NAME for a composite literal Type{"NAME"}, and "" for
+// any other literal.
+func literalName(lit *ast.CompositeLit) string {
+	if len(lit.Elts) != 1 {
+		return ""
+	}
+	s, ok := lit.Elts[0].(*ast.BasicLit)
+	if !ok || s.Kind != token.STRING {
+		return ""
+	}
+	name, _ := strconv.Unquote(s.Value)
+	return name
+}
+
+// TestDeclaredParams checks the parameter variables against all, the list
+// Parse checks tables against. Each is declared as NAME = Type{"NAME"}, so
+// a selector's name is the table's name, and all holds each one once with
 // its type, so no table can lack a parameter rule code can name.
 func TestDeclaredParams(t *testing.T) {
 	decls, err := declaredParams(".")
@@ -261,26 +290,94 @@ func TestDeclaredParams(t *testing.T) {
 	}
 	listed := make(map[string][]kind)
 	for _, p := range all {
-		listed[p.name()] = append(listed[p.name()], p.kind())
+		listed[p.String()] = append(listed[p.String()], p.kind())
 	}
 	for _, name := range slices.Sorted(maps.Keys(decls)) {
 		d := decls[name]
-		t.Run(name+" is spelled as its value and listed once in all with its type", func(t *testing.T) {
+		t.Run(name+" is declared with its own name and listed once in all with its type", func(t *testing.T) {
 			if d.value != name {
-				t.Errorf("%s: %s = %q; a parameter constant's value is its own name", d.pos, name, d.value)
+				t.Errorf("%s: %s names %q; declare a parameter as NAME = Type{\"NAME\"}", d.pos, name, d.value)
 			}
 			if got := listed[name]; len(got) != 1 || got[0] != d.kind {
 				t.Errorf("%s: all lists %s as %v, want it once as %s", d.pos, name, got, d.kind)
 			}
 		})
 	}
-	t.Run("all lists only declared constants", func(t *testing.T) {
+	t.Run("all lists only declared variables", func(t *testing.T) {
 		for name := range listed {
 			if _, ok := decls[name]; !ok {
-				t.Errorf("all lists %s, which no constant declares", name)
+				t.Errorf("all lists %s, which no variable declares", name)
 			}
 		}
 	})
+}
+
+// TestParamDecls runs declaredParams on testdata/decls, a package the go
+// command never builds, which declares parameters the right way and in
+// each wrong way TestDeclaredParams has to catch.
+func TestParamDecls(t *testing.T) {
+	decls, err := declaredParams(filepath.Join("testdata", "decls"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		name  string
+		param string
+		// kind is 0 for a variable that isn't listed.
+		kind  kind
+		value string
+	}{
+		{"an IntParam literal is listed with its name", "GOOD_S", kindInt, "GOOD_S"},
+		{"a RatParam literal is listed as a rational", "GOOD_RATIO", kindRat, "GOOD_RATIO"},
+		{"a BoolParam literal is listed as a flag", "GOOD_FLAG", kindBool, "GOOD_FLAG"},
+		{"a literal under a declared type is read the same way", "TYPED_S", kindInt, "TYPED_S"},
+		{"a literal that gives another name is listed with that name", "MISNAMED_S", kindInt, "OTHER_S"},
+		{"a keyed literal is listed with no name", "KEYED_S", kindInt, ""},
+		{"an empty literal is listed with no name", "EMPTY_S", kindInt, ""},
+		{"a variable with a type and no value is listed with no name", "BARE_S", kindInt, ""},
+		{"each variable of a list gets its own literal", "PAIR_B_S", kindInt, "WRONG_S"},
+		{"a slice of parameters isn't a parameter", "list", 0, ""},
+		{"a string isn't a parameter", "text", 0, ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			d, ok := decls[c.param]
+			if ok != (c.kind != 0) || d.kind != c.kind || d.value != c.value {
+				t.Errorf("declaredParams lists %s: %v, kind %v, name %q; want kind %v, name %q", c.param, ok, d.kind, d.value, c.kind, c.value)
+			}
+		})
+	}
+}
+
+// TestParamTypesAreOpaque checks what leaves other packages no names but
+// the variables in names.go: a string or number type would take any
+// constant, as in tab.Int("THINK_LEAD_S"); an exported field would let any
+// package write a literal with a name; and a conversion between two
+// parameter types would change a name's type.
+func TestParamTypesAreOpaque(t *testing.T) {
+	types := []reflect.Type{reflect.TypeFor[IntParam](), reflect.TypeFor[RatParam](), reflect.TypeFor[BoolParam]()}
+	for _, typ := range types {
+		t.Run(typ.Name()+" is a struct with no exported field", func(t *testing.T) {
+			if typ.Kind() != reflect.Struct {
+				t.Fatalf("%s is a %s, which takes a constant of its kind", typ, typ.Kind())
+			}
+			for i := range typ.NumField() {
+				if f := typ.Field(i); f.IsExported() {
+					t.Errorf("%s has exported field %s, which any package can set", typ, f.Name)
+				}
+			}
+		})
+		for _, other := range types {
+			if other == typ {
+				continue
+			}
+			t.Run(typ.Name()+" doesn't convert to "+other.Name(), func(t *testing.T) {
+				if typ.ConvertibleTo(other) {
+					t.Errorf("%s converts to %s", typ, other)
+				}
+			})
+		}
+	}
 }
 
 func TestIsParamName(t *testing.T) {

@@ -16,16 +16,35 @@ import (
 
 // The canonical form of a JSON document, whose SHA-256 is a table's hash
 // (SM 7.6): object keys sorted bytewise at every level, no whitespace, and
-// every number exactly as written. jq -cS writes the same bytes, plus a
-// final newline. decode refuses what would make the canonical form
-// ambiguous or what jq might write differently:
+// every number exactly as written. jq -cSj writes the same bytes; jq -cS
+// writes them with a final newline, which isn't part of the form. decode
+// refuses what would make the canonical form ambiguous or what jq might
+// write differently:
 //
 //   - a key that appears twice in one object;
 //   - a number that isn't a plain decimal: an exponent, a zero after the
 //     last nonzero digit of the fraction, or -0, so that a number's text
 //     follows from its value;
+//   - a number other than 0 between -0.000001 and 0.000001, which jq
+//     writes with an exponent, as 1E-7 for 0.0000001;
 //   - a string with a character outside printable ASCII, so that '"' and
 //     '\' are the only characters that need escaping.
+//
+// Every bundle carries the table it was scored with, and pairtime verify
+// parses it (DESIGN 6.6, 7.8), so decode also refuses what no table needs
+// and a hostile one could use to exhaust the stack or memory: nesting
+// deeper than maxDepth, and a number longer than maxNumberLen.
+
+const (
+	// maxDepth is the deepest nesting decode accepts. A table is two
+	// levels deep, its params inside it.
+	maxDepth = 32
+	// maxNumberLen is the most characters a number may have. No value a
+	// parameter can take comes close: an int64 has at most 20 characters
+	// with its sign, and a decimal whose numerator and denominator in
+	// lowest terms fit in int64s has at most 65.
+	maxNumberLen = 100
+)
 
 // decode parses one JSON document into maps (map[string]any), slices
 // ([]any), strings, json.Number values, bools and nil.
@@ -35,7 +54,7 @@ func decode(data []byte) (any, error) {
 	}
 	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.UseNumber()
-	v, err := decodeValue(dec)
+	v, err := decodeValue(dec, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -58,17 +77,25 @@ func nextToken(dec *json.Decoder) (json.Token, error) {
 	return t, err
 }
 
-func decodeValue(dec *json.Decoder) (any, error) {
+// decodeValue decodes the next value, which depth arrays and objects
+// enclose. It recurses once per level, so it refuses to open one past
+// maxDepth.
+func decodeValue(dec *json.Decoder, depth int) (any, error) {
 	tok, err := nextToken(dec)
 	if err != nil {
 		return nil, err
 	}
 	switch tok := tok.(type) {
 	case json.Delim:
+		// Token returns ] and } only where the loops below end a value,
+		// so tok is [ or {.
+		if depth == maxDepth {
+			return nil, fmt.Errorf("JSON nested more than %d levels deep", maxDepth)
+		}
 		if tok == '[' {
 			list := []any{}
 			for dec.More() {
-				v, err := decodeValue(dec)
+				v, err := decodeValue(dec, depth+1)
 				if err != nil {
 					return nil, err
 				}
@@ -93,7 +120,7 @@ func decodeValue(dec *json.Decoder) (any, error) {
 			if _, dup := obj[k]; dup {
 				return nil, fmt.Errorf("key %q appears twice in one object", k)
 			}
-			v, err := decodeValue(dec)
+			v, err := decodeValue(dec, depth+1)
 			if err != nil {
 				return nil, err
 			}
@@ -107,8 +134,11 @@ func decodeValue(dec *json.Decoder) (any, error) {
 		}
 		return tok, nil
 	case json.Number:
+		if len(tok) > maxNumberLen {
+			return nil, fmt.Errorf("number %s... is %d characters long; a number may have at most %d", tok[:20], len(tok), maxNumberLen)
+		}
 		if !plainDecimal(string(tok)) {
-			return nil, fmt.Errorf("number %s must be a plain decimal: no exponent, no trailing zeros after the point, no -0", tok)
+			return nil, fmt.Errorf("number %s must be a plain decimal as jq writes one: no exponent, no trailing zeros after the point, no -0, and nothing but 0 between -0.000001 and 0.000001", tok)
 		}
 		return tok, nil
 	default: // bool or nil
@@ -127,9 +157,13 @@ func checkString(s string) error {
 }
 
 // plainDecimal reports whether s, a valid JSON number, is written the one
-// way its value allows: an optional minus sign, an integer part without
-// leading zeros, and an optional fraction that doesn't end in 0. It rejects
-// exponents and -0.
+// way its value allows, which is also the way jq writes it: an optional
+// minus sign, an integer part without leading zeros, and an optional
+// fraction that doesn't end in 0. It rejects exponents and -0. It also
+// rejects a number other than 0 that is closer to 0 than 0.000001, whose
+// integer part is 0 and whose fraction starts with six zeros: jq's decimal
+// library writes a number with an exponent once its first nonzero digit is
+// more than six places after the point.
 func plainDecimal(s string) bool {
 	if rest, neg := strings.CutPrefix(s, "-"); neg {
 		if rest == "0" {
@@ -141,7 +175,13 @@ func plainDecimal(s string) bool {
 	if !isDigits(whole) || (len(whole) > 1 && whole[0] == '0') {
 		return false
 	}
-	return !dot || (isDigits(frac) && frac[len(frac)-1] != '0')
+	if !dot {
+		return true
+	}
+	if !isDigits(frac) || frac[len(frac)-1] == '0' {
+		return false
+	}
+	return whole != "0" || !strings.HasPrefix(frac, "000000")
 }
 
 // isDigits reports whether s is one or more ASCII digits.

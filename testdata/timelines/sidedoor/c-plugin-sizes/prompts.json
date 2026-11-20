@@ -1,0 +1,21 @@
+{
+  "fixture": "sidedoor/c-plugin-sizes",
+  "prompts": [
+    {
+      "turn_key": "t_17828ca8fe9a",
+      "t": 1795637080000,
+      "local": "14:04:40",
+      "text": "the scoreboard flickers when two players score in the same frame, can you batch the updates so it redraws once per tick and add a test that covers it.",
+      "len_chars": 150,
+      "source": "invented: the prompt the plugin forwards"
+    },
+    {
+      "turn_key": "t_823c721f67be",
+      "t": 1795637440000,
+      "local": "14:10:40",
+      "text": "add an options menu with a volume slider and a key rebinding screen, then save the settings to a json file next to the saves and load them at startup.",
+      "len_chars": 150,
+      "source": "invented: the prompt the plugin forwards"
+    }
+  ]
+}

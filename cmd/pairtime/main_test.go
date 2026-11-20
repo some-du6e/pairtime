@@ -24,7 +24,11 @@ func TestRun(t *testing.T) {
 		{name: "help", args: []string{"help"}, wantCode: 0, wantStdout: "Commands:"},
 		{name: "-h", args: []string{"-h"}, wantCode: 0, wantStdout: "Commands:"},
 		{name: "--help", args: []string{"--help"}, wantCode: 0, wantStdout: "Commands:"},
-		{name: "unknown command", args: []string{"agent"}, wantCode: 2, wantStderr: `unknown command "agent"`},
+		{name: "unknown command", args: []string{"frobnicate"}, wantCode: 2, wantStderr: `unknown command "frobnicate"`},
+		{name: "help lists the registered commands", args: []string{"help"}, wantCode: 0, wantStdout: "  agent  "},
+		{name: "agent -h documents the exit status", args: []string{"agent", "-h"}, wantCode: 0, wantStderr: "3  another agent is already running"},
+		{name: "agent with an unknown flag is a usage error", args: []string{"agent", "--frobnicate"}, wantCode: 2, wantStderr: "flag provided but not defined"},
+		{name: "agent with an argument is a usage error", args: []string{"agent", "now"}, wantCode: 2, wantStderr: "takes no arguments"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

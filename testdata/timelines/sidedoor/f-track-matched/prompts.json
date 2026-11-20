@@ -1,0 +1,13 @@
+{
+  "fixture": "sidedoor/f-track-matched",
+  "prompts": [
+    {
+      "turn_key": "t_ed0fb3ae34ca",
+      "t": 1795637080000,
+      "local": "14:04:40",
+      "text": "the pause menu ignores the escape key while a dialog is open, find out why and fix it so escape closes the dialog first and then opens the pause menu.",
+      "len_chars": 150,
+      "source": "invented"
+    }
+  ]
+}
