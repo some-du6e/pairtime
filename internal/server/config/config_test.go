@@ -76,7 +76,7 @@ func TestLoad(t *testing.T) {
 						{Sub: "ident!abc123", Roles: []string{"qi", "program_reviewer:stardance"}},
 						{Sub: "ident!def456", Roles: []string{"fraud_squad", "spot_checker", "admin"}},
 					},
-					HCA:        HCA{ClientID: "hca-client"},
+					HCA:        HCA{ClientID: "hca-client", Issuer: DefaultHCAIssuer},
 					PrivacyHub: PrivacyHub{Aud: "pairtime", JWKSURL: "https://privacy.example.org/.well-known/jwks.json"},
 					Sentinel:   Sentinel{Socket: "/run/pairtime/sentinel.sock"},
 					Listen:     ":8081",
@@ -107,6 +107,8 @@ func TestLoad(t *testing.T) {
 					{"database.path", c.Database.Path, "/data/pairtime.db"},
 					{"scoring_version", c.ScoringVersion, ""},
 					{"sentinel.socket", c.Sentinel.Socket, ""},
+					{"hca.client_id", c.HCA.ClientID, ""},
+					{"hca.issuer", c.HCA.Issuer, "https://auth.hackclub.com"},
 				} {
 					if f.got != f.want {
 						t.Errorf("%s = %q, want %q", f.key, f.got, f.want)
@@ -133,6 +135,12 @@ func TestLoad(t *testing.T) {
 				}
 			},
 		},
+		{name: "base_url's scheme and host are lowercased, as browsers send Origin", toml: "base_url = \"HTTPS://Pairtime.Example.ORG\"\n", check: wantBaseURL("https://pairtime.example.org")},
+		{name: "base_url drops https's default port", toml: "base_url = \"https://pairtime.example.org:443/\"\n", check: wantBaseURL("https://pairtime.example.org")},
+		{name: "base_url drops http's default port", toml: "base_url = \"http://localhost:80\"\n", check: wantBaseURL("http://localhost")},
+		{name: "base_url keeps a port that isn't the default", toml: "base_url = \"https://pairtime.example.org:8443\"\n", check: wantBaseURL("https://pairtime.example.org:8443")},
+		{name: "an IPv6 loopback base_url keeps its brackets", toml: "base_url = \"http://[::1]:80\"\n", check: wantBaseURL("http://[::1]")},
+		{name: "base_url's host must be ASCII, as browsers send it", toml: "base_url = \"https://pairtim\u00e9.example.org\"\n", wantErr: "isn't ASCII"},
 		{name: "profile_default is public or ask, never private", toml: base + "profile_default = \"private\"\n", wantErr: "profile_default"},
 		{name: "scoring_version must be X.Y.Z", toml: base + "scoring_version = \"0.x\"\n", wantErr: "scoring_version"},
 		{name: "scoring_version can't have a leading zero", toml: base + "scoring_version = \"01.0.0\"\n", wantErr: "scoring_version"},
@@ -142,6 +150,9 @@ func TestLoad(t *testing.T) {
 		{name: "a reviewer needs a sub", toml: base + "[[reviewers]]\nroles = [\"qi\"]\n", wantErr: "has no sub"},
 		{name: "a reviewer sub is listed once", toml: base + "[[reviewers]]\nsub = \"a\"\nroles = [\"qi\"]\n[[reviewers]]\nsub = \"a\"\nroles = [\"admin\"]\n", wantErr: "listed twice"},
 		{name: "a role is listed once per reviewer", toml: base + "[[reviewers]]\nsub = \"a\"\nroles = [\"qi\", \"qi\"]\n", wantErr: "twice"},
+		{name: "hca.issuer over plain http is refused", toml: base + "[hca]\nissuer = \"http://auth.example.org\"\n", wantErr: "hca.issuer"},
+		{name: "hca.issuer over http is allowed on localhost, for a fake HCA", toml: base + "[hca]\nissuer = \"http://localhost:8080/hca\"\n"},
+		{name: "hca.issuer can't carry a query", toml: base + "[hca]\nissuer = \"https://auth.example.org/?x=1\"\n", wantErr: "hca.issuer"},
 		{name: "privacy_hub.jwks_url must be https", toml: base + "[privacy_hub]\njwks_url = \"http://example.org/jwks.json\"\n", wantErr: "jwks_url"},
 		{name: "sentinel.socket must be absolute", toml: base + "[sentinel]\nsocket = \"sentinel.sock\"\n", wantErr: "sentinel.socket"},
 		{name: "listen must be host:port", toml: base + "listen = \"8080\"\n", wantErr: "listen is"},
@@ -272,6 +283,41 @@ func TestLoad(t *testing.T) {
 			}
 			if tt.check != nil {
 				tt.check(t, c, dir)
+			}
+		})
+	}
+}
+
+// wantBaseURL checks that Load left base_url as want.
+func wantBaseURL(want string) func(t *testing.T, c *Config, dir string) {
+	return func(t *testing.T, c *Config, _ string) {
+		if c.BaseURL != want {
+			t.Errorf("base_url = %q, want %q", c.BaseURL, want)
+		}
+	}
+}
+
+func TestCanonicalOrigin(t *testing.T) {
+	tests := []struct {
+		name, in, want string
+	}{
+		{name: "an origin browsers would send is kept", in: "https://pairtime.example.org", want: "https://pairtime.example.org"},
+		{name: "the host is lowercased", in: "https://Pairtime.Example.org", want: "https://pairtime.example.org"},
+		{name: "https's default port is dropped", in: "https://pairtime.example.org:443", want: "https://pairtime.example.org"},
+		{name: "http's default port is dropped", in: "http://127.0.0.1:80", want: "http://127.0.0.1"},
+		{name: "another port is kept", in: "https://pairtime.example.org:8443", want: "https://pairtime.example.org:8443"},
+		{name: "443 isn't http's default", in: "http://localhost:443", want: "http://localhost:443"},
+		{name: "an IPv6 host keeps its brackets", in: "https://[::1]:443", want: "https://[::1]"},
+		{name: "a trailing slash is dropped", in: "https://pairtime.example.org/", want: "https://pairtime.example.org"},
+		{name: "a path isn't an origin", in: "https://pairtime.example.org/x"},
+		{name: "a user isn't part of an origin", in: "https://me@pairtime.example.org"},
+		{name: "another scheme has no origin here", in: "ftp://pairtime.example.org"},
+		{name: "the opaque origin null isn't one", in: "null"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := CanonicalOrigin(tt.in); got != tt.want {
+				t.Errorf("CanonicalOrigin(%q) = %q, want %q", tt.in, got, tt.want)
 			}
 		})
 	}
