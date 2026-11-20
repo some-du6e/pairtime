@@ -21,7 +21,8 @@
 #            stream_json= and bare=, each yes or no, for a print flag (-p,
 #            --print, --prompt, codex exec), stream-json input or output,
 #            and --bare among its arguments, or ? where it can't tell. The
-#            arguments are read in memory and never written. Written last
+#            arguments are read in memory and never written. Written last,
+#            as flags.tmp renamed into place, so it is whole or missing
 #   stderr   only if something in this script failed
 #
 # LABEL is the hook event the entry was registered for, such as
@@ -150,9 +151,14 @@ fi
 # The harness is the nearest parent with one of the executable names that
 # internal/platform/appclass.json gives a harness. Its command line goes
 # through a pipe into awk, which keeps three answers and drops the rest:
-# no argument is ever written. The file is put together first and written
-# at once, so it is whole or missing.
+# no argument is ever written. The file is put together first, written as
+# flags.tmp and renamed into place, so flags is whole or missing.
 harnesses='claude codex cursor-agent copilot gemini devin opencode cline'
+# The options codex takes a value with before its subcommand, as in
+# codex -c key=value exec or codex -p work exec: the root options of
+# codex-rs/cli/src/main.rs and codex-rs/utils/cli/src at d64451b. A value
+# joined to its option with = needs no skipping.
+codex_values='-c --config --enable --disable --remote --remote-auth-token-env -a --ask-for-approval -i --image -m --model --local-provider -p --profile -s --sandbox -C --cd --add-dir'
 found=$(awk -v harnesses="$harnesses" '
 	BEGIN {
 		n = split(harnesses, list, " ")
@@ -186,11 +192,15 @@ if [ -n "$found" ]; then
 			tr '\n\000' '\r\n' <"/proc/$pid/cmdline"
 		else
 			ps -o args= -p "$pid" | awk '{ for (i = 1; i <= NF; i++) print $i }'
-		fi | awk -v name="$key" '
+		fi | awk -v name="$key" -v codex_values="$codex_values" '
 			BEGIN {
 				print_flag = "no"
 				stream = "no"
 				bare = "no"
+				n = split(codex_values, list, " ")
+				for (i = 1; i <= n; i++) {
+					takes_value[list[i]] = 1
+				}
 			}
 			NR == 1 {
 				next # the executable
@@ -200,13 +210,18 @@ if [ -n "$found" ]; then
 			}
 			{
 				# codex has no print flag; its exec subcommand, or e, is the
-				# first argument that is not an option.
+				# first argument that is neither an option nor the value of
+				# one.
 				if (name == "codex") {
-					if (!subcommand && substr($0, 1, 1) != "-") {
+					if (value) {
+						value = 0
+					} else if (!subcommand && substr($0, 1, 1) != "-") {
 						subcommand = 1
 						if ($0 == "exec" || $0 == "e") {
 							print_flag = "yes"
 						}
+					} else if (!subcommand && ($0 in takes_value)) {
+						value = 1
 					}
 				} else if ($0 == "-p" || $0 == "--print" || $0 == "--prompt" || substr($0, 1, 9) == "--prompt=") {
 					print_flag = "yes"
@@ -240,7 +255,7 @@ print=?
 stream_json=?
 bare=?'
 fi
-printf '%s\n' "$flags" >"$call/flags"
+printf '%s\n' "$flags" >"$call/flags.tmp" && mv -f "$call/flags.tmp" "$call/flags"
 
 if [ ! -s "$call/stderr" ]; then
 	rm -f "$call/stderr"

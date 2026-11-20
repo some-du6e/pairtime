@@ -364,6 +364,20 @@ func TestDumpers(t *testing.T) {
 			}
 		}
 	})
+	t.Run("both dumpers skip the values of the same codex options", func(t *testing.T) {
+		sh := regexp.MustCompile(`(?m)^codex_values='([^']*)'$`).FindStringSubmatch(read(t, "dump-hook.sh"))
+		ps := regexp.MustCompile(`(?m)^\$codexValues = @\(([^)]*)\)$`).FindStringSubmatch(read(t, "dump-hook.ps1"))
+		if sh == nil || ps == nil {
+			t.Fatalf("a dumper has no list of codex's options that take a value: dump-hook.sh %t, dump-hook.ps1 %t", sh != nil, ps != nil)
+		}
+		shOptions := strings.Fields(sh[1])
+		psOptions := strings.Fields(strings.NewReplacer("'", " ", ",", " ").Replace(ps[1]))
+		sort.Strings(shOptions)
+		sort.Strings(psOptions)
+		if strings.Join(shOptions, " ") != strings.Join(psOptions, " ") {
+			t.Errorf("dump-hook.sh skips the values of %q, dump-hook.ps1 those of %q", shOptions, psOptions)
+		}
+	})
 	for _, d := range dumpers {
 		t.Run(d.name, func(t *testing.T) {
 			base := d.argv(t)
@@ -376,13 +390,17 @@ func TestDumpers(t *testing.T) {
 				return runDir, run(t, t.TempDir(), stdin, []string{secretName + "=" + secretValue}, argv...)
 			}
 			first := func(runDir string) string { return filepath.Join(runDir, "hooks", "000001") }
-			// underHarness runs one hook call as the child of a fake harness
-			// and returns the run directory. The fake is a link to sh with the
-			// harness's name, which is the name ps shows. It reads the
-			// dumper's command from stdin, so the arguments after its -s are
-			// the harness's own; the first can't start with a dash, or sh
-			// takes it for an option of its own.
-			underHarness := func(t *testing.T, name string, args ...string) string {
+			// harnessCall runs one hook call under a fake harness and returns
+			// the run directory. The fake is a link to sh with the harness's
+			// name, which is the name ps shows. It reads the dumper's command
+			// from stdin, so the arguments after its -s are the harness's own;
+			// the first can't start with a dash, or sh takes it for an option
+			// of its own. codex reads that -s as its --sandbox, so a codex
+			// call's first argument is a sandbox mode. With through, the fake
+			// runs the dumper through a shell that stays between them, as a
+			// hook command's sh -c, allow-once.sh, and Git Bash or PowerShell
+			// on Windows do.
+			harnessCall := func(t *testing.T, through bool, name string, args ...string) string {
 				t.Helper()
 				dir := t.TempDir()
 				runDir := filepath.Join(dir, "run")
@@ -395,18 +413,29 @@ func TestDumpers(t *testing.T) {
 				if err := os.Symlink(need(t, "sh"), exe); err != nil {
 					t.Fatal(err)
 				}
-				var script strings.Builder
+				var cmd strings.Builder
 				for _, a := range append(append([]string{}, base...), runDir, "UserPromptSubmit") {
-					script.WriteString(shQuote(a) + " ")
+					cmd.WriteString(shQuote(a) + " ")
 				}
-				script.WriteString("<" + shQuote(in) + "\nexit $?\n")
-				if r := run(t, dir, []byte(script.String()), nil, append([]string{exe, "-s"}, args...)...); r.code != 0 || r.stderr != "" {
+				cmd.WriteString("<" + shQuote(in) + "\nexit $?\n")
+				script := cmd.String()
+				if through {
+					// The exit after the dumper keeps the shell from running
+					// the dumper in its own place, so it stays its parent.
+					script = shQuote(need(t, "sh")) + " -c " + shQuote(script) + "\nexit $?\n"
+				}
+				if r := run(t, dir, []byte(script), nil, append([]string{exe, "-s"}, args...)...); r.code != 0 || r.stderr != "" {
 					t.Fatalf("the fake %s: exit %d, stderr %q", name, r.code, r.stderr)
 				}
 				if _, err := os.Stat(filepath.Join(first(runDir), "stderr")); err == nil {
 					t.Fatalf("the dumper hit an error: %s", read(t, filepath.Join(first(runDir), "stderr")))
 				}
 				return runDir
+			}
+			// underHarness runs one hook call as the child of a fake harness.
+			underHarness := func(t *testing.T, name string, args ...string) string {
+				t.Helper()
+				return harnessCall(t, false, name, args...)
 			}
 			flags := func(t *testing.T, runDir string) string {
 				t.Helper()
@@ -435,18 +464,60 @@ func TestDumpers(t *testing.T) {
 						t.Fatalf("flags = %q, want %q", got, want)
 					}
 				}},
-				// /proc keeps the arguments apart. On macOS, ps joins them
-				// with spaces, so there an argument holding " -p " counts.
-				{"an argument that only mentions a flag, or comes after --, isn't one", func(t *testing.T) {
-					runDir := underHarness(t, "claude", harnessSentinel+" says -p and --bare", "--", "-p", "--bare", "--output-format", "stream-json")
+				// /proc keeps the arguments apart. macOS has no /proc, and its
+				// ps joins them with spaces, so there the dumpers split them at
+				// whitespace and an argument holding " -p " counts.
+				{"an argument that only mentions a flag isn't one", func(t *testing.T) {
+					if _, err := os.Stat("/proc/self/cmdline"); err != nil {
+						t.Skip("no /proc here: ps joins a harness's arguments with spaces, so a -p inside one counts")
+					}
+					runDir := underHarness(t, "claude", harnessSentinel+" says -p and --bare and --output-format stream-json")
 					if got, want := flags(t, runDir), "name=claude\nprint=no\nstream_json=no\nbare=no\n"; got != want {
 						t.Fatalf("flags = %q, want %q", got, want)
 					}
 				}},
+				{"an argument after -- isn't a flag", func(t *testing.T) {
+					runDir := underHarness(t, "claude", harnessSentinel, "--", "-p", "--bare", "--output-format", "stream-json")
+					if got, want := flags(t, runDir), "name=claude\nprint=no\nstream_json=no\nbare=no\n"; got != want {
+						t.Fatalf("flags = %q, want %q", got, want)
+					}
+				}},
+				// Each codex call starts with a sandbox mode, the value of the
+				// fake's -s.
 				{"codex's exec subcommand is its print mode", func(t *testing.T) {
-					runDir := underHarness(t, "codex", "exec", harnessSentinel)
+					runDir := underHarness(t, "codex", "workspace-write", "exec", harnessSentinel)
 					if got, want := flags(t, runDir), "name=codex\nprint=yes\nstream_json=no\nbare=no\n"; got != want {
 						t.Fatalf("flags = %q, want %q", got, want)
+					}
+				}},
+				{"codex's e, after options and the values they take, is its print mode", func(t *testing.T) {
+					runDir := underHarness(t, "codex", "workspace-write", "-c", "model_reasoning_effort=high", "--profile", "work", "--model=o3", "e", harnessSentinel)
+					if got, want := flags(t, runDir), "name=codex\nprint=yes\nstream_json=no\nbare=no\n"; got != want {
+						t.Fatalf("flags = %q, want %q", got, want)
+					}
+				}},
+				{"an option's value isn't codex's subcommand, even when it reads exec", func(t *testing.T) {
+					runDir := underHarness(t, "codex", "workspace-write", "-m", "exec", harnessSentinel)
+					if got, want := flags(t, runDir), "name=codex\nprint=no\nstream_json=no\nbare=no\n"; got != want {
+						t.Fatalf("flags = %q, want %q", got, want)
+					}
+				}},
+				{"flags names the nearest harness above a shell that runs the hook", func(t *testing.T) {
+					runDir := harnessCall(t, true, "claude", harnessSentinel, "-p")
+					names := appclassHarnesses(t)
+					parents := strings.Split(strings.TrimSpace(read(t, filepath.Join(first(runDir), "parents"))), "\n")
+					if len(parents) < 2 || harnessParent(names, parents[0]) || !harnessParent(names, parents[1]) {
+						t.Fatalf("parents = %q, want a shell and then the fake claude", parents)
+					}
+					if got, want := flags(t, runDir), "name=claude\nprint=yes\nstream_json=no\nbare=no\n"; got != want {
+						t.Fatalf("flags = %q, want %q", got, want)
+					}
+				}},
+				{"a call writes time, argv, env, cwd, parents, stdin and flags, and leaves no temporary file", func(t *testing.T) {
+					runDir, _ := call(t, payload)
+					got := keys(tree(t, first(runDir)))
+					if want := []string{"argv", "cwd", "env", "flags", "parents", "stdin", "time"}; strings.Join(got, " ") != strings.Join(want, " ") {
+						t.Fatalf("the call folder holds %q, want %q", got, want)
 					}
 				}},
 				{"no argument of the harness reaches the run folder", func(t *testing.T) {

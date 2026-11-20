@@ -53,6 +53,13 @@ function Write-Problem([string]$what) {
 # nearest parent with one of them is the harness flags describes.
 $harnesses = @('claude', 'codex', 'cursor-agent', 'copilot', 'gemini', 'devin', 'opencode', 'cline')
 
+# The options codex takes a value with before its subcommand, as in
+# codex -c key=value exec or codex -p work exec: the root options of
+# codex-rs/cli/src/main.rs and codex-rs/utils/cli/src at d64451b. A value
+# joined to its option with = needs no skipping. -c and -C differ, so they
+# are compared with case.
+$codexValues = @('-c', '--config', '--enable', '--disable', '--remote', '--remote-auth-token-env', '-a', '--ask-for-approval', '-i', '--image', '-m', '--model', '--local-provider', '-p', '--profile', '-s', '--sandbox', '-C', '--cd', '--add-dir')
+
 # Split-CommandLine splits a Windows command line into its arguments the
 # way CommandLineToArgvW does: whitespace ends an argument outside double
 # quotes, and backslashes count only before a quote. So a quoted argument
@@ -117,6 +124,7 @@ function Get-Answers([string]$key, [string[]]$words) {
     $stream = 'no'
     $bare = 'no'
     $subcommand = $false
+    $value = $false
     $previous = ''
     for ($i = 1; $i -lt $words.Count; $i++) {
         $a = [string]$words[$i]
@@ -125,12 +133,16 @@ function Get-Answers([string]$key, [string[]]$words) {
         }
         if ($key -eq 'codex') {
             # codex has no print flag; its exec subcommand, or e, is the
-            # first argument that isn't an option.
-            if (-not $subcommand -and -not $a.StartsWith('-', [StringComparison]::Ordinal)) {
+            # first argument that is neither an option nor the value of one.
+            if ($value) {
+                $value = $false
+            } elseif (-not $subcommand -and -not $a.StartsWith('-', [StringComparison]::Ordinal)) {
                 $subcommand = $true
                 if ($a -ceq 'exec' -or $a -ceq 'e') {
                     $print = 'yes'
                 }
+            } elseif (-not $subcommand -and $codexValues -ccontains $a) {
+                $value = $true
             }
         } elseif ($a -ceq '-p' -or $a -ceq '--print' -or $a -ceq '--prompt' -or $a.StartsWith('--prompt=', [StringComparison]::Ordinal)) {
             $print = 'yes'
@@ -309,7 +321,8 @@ try {
 # line is read into memory, from Win32_Process.CommandLine on Windows,
 # /proc/PID/cmdline on Linux and ps on macOS, and Get-Answers keeps three
 # answers from it: no argument is ever written. The file is put together
-# first and written at once, so it is whole or missing.
+# first, written as flags.tmp and moved into place, so flags is whole or
+# missing.
 try {
     $flags = "name=?`nprint=?`nstream_json=?`nbare=?`n"
     foreach ($entry in @($chain)) {
@@ -359,7 +372,11 @@ try {
         $flags = "name=$($parts[2])`n" + (Get-Answers $key $words)
         break
     }
-    [System.IO.File]::WriteAllText((Join-Path $call 'flags'), $flags, $utf8)
+    # WriteAllText creates the file before it writes, so it writes the
+    # temporary name. Move never overwrites, and flags isn't there yet.
+    $tmp = Join-Path $call 'flags.tmp'
+    [System.IO.File]::WriteAllText($tmp, $flags, $utf8)
+    [System.IO.File]::Move($tmp, (Join-Path $call 'flags'))
 } catch {
     Write-Problem "flags: $($_.Exception.Message)"
 }
