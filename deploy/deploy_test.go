@@ -119,7 +119,7 @@ func TestWitnessFiles(t *testing.T) {
 			if fi.Mode().Perm()&tt.mode != tt.mode {
 				t.Errorf("%s has mode %v", tt.path, fi.Mode())
 			}
-			if !regexp.MustCompile(`(?m)^\s*- \./`+regexp.QuoteMeta(tt.path)+`:`).MatchString(ComposeYAML) {
+			if !regexp.MustCompile(`(?m)^\s*- \./` + regexp.QuoteMeta(tt.path) + `:`).MatchString(ComposeYAML) {
 				t.Errorf("compose.yml doesn't mount %s", tt.path)
 			}
 		})
