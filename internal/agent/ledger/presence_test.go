@@ -3,6 +3,8 @@
 package ledger
 
 import (
+	"slices"
+	"sync"
 	"testing"
 	"time"
 
@@ -71,6 +73,29 @@ func TestPresence(t *testing.T) {
 		p.Seal(event.PowerLock)
 		if d := time.Since(start); d < sealWait/2 || d > sealWait+5*time.Second {
 			t.Errorf("Seal took %v, want about %v", d, sealWait)
+		}
+	})
+
+	t.Run("records dropped before the writer opens are reported as lost once it opens", func(t *testing.T) {
+		var mu sync.Mutex
+		var problems []string
+		p := NewPresence(func(msg string) {
+			mu.Lock()
+			problems = append(problems, msg)
+			mu.Unlock()
+		})
+		for range presenceQueue + 3 {
+			p.Record(sample)
+		}
+		w := open(t, t.TempDir(), newClock(testT))
+		p.Attach(w)
+		p.Close()
+		mu.Lock()
+		defer mu.Unlock()
+		want := []string{"the ledger isn't open, so presence records are being dropped",
+			"presence dropped 3 records while the ledger wasn't open"}
+		if !slices.Equal(problems, want) {
+			t.Errorf("problems %q, want %q", problems, want)
 		}
 	})
 
