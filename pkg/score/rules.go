@@ -59,7 +59,7 @@ type rules struct {
 	pendingWindow int64
 	contextIdle   int64
 	// slowGap is the longest gap between samples that isn't a hard break
-	// once the agent records one sample a minute (DESIGN 6.2 D14): twice
+	// once sampling has slowed to one a minute (DESIGN 6.2 D14): twice
 	// SLOW_SAMPLE_S, as SLEEP_GAP_S is twice SAMPLE_S.
 	slowGap       int64
 	trackInputPre int64
@@ -71,20 +71,22 @@ type rules struct {
 	composeNeedsKeys bool
 
 	// reach is the furthest back from its own t that a record may change
-	// what the scorer derived: READ_HORIZON_S, the bound DESIGN 3.7 and 6.2
-	// D1 set (docs/errata/2026-11-19-return-rule-lookahead.md, decided
-	// 2026-11-20 as E-return-lookahead). Reading needs a human act within it
-	// (SM 2.4), the return rule an act on record within it of the silence's
-	// start (SM 2.1), and a lead, at most THINK_LEAD_S + COMPOSE_MAX_S, fits
-	// inside it, as do TRACK_LOG_MATCH_S and TRACK_DEDUPE_S, the windows in
-	// which a hook or log record decides a side-door prompt or a track call
-	// (DESIGN 5.2, 5.4). Where a record would reach further, its effect is
-	// cut at its t minus reach, in every Step alike: a typed command's lead
-	// and run when its record comes at the end of a run longer than about
-	// nine minutes; a permission's wait when its record comes more than
-	// eight minutes after the answer; a turn's run across a longer silence
-	// of its agent's records outside hooked sessions (turnBuild.runUntil);
-	// and a queued message's reset when no agent record follows within it.
+	// what the scorer derived: READ_HORIZON_S, the bound E-return-lookahead
+	// sets for every rule (docs/errata/2026-11-19-return-rule-lookahead.md,
+	// decided 2026-11-20). Reading needs a human act within it (SM 2.4), the
+	// return rule an act on record within it of the silence's start
+	// (E-return-lookahead), and a lead, at most THINK_LEAD_S +
+	// COMPOSE_MAX_S, fits inside it, as do TRACK_LOG_MATCH_S, the window in
+	// which a log record decides a side-door prompt (DESIGN 5.2), and
+	// TRACK_DEDUPE_S, the one in which a hook or log record decides a track
+	// call (E-track-windows). Where a record would reach further, its
+	// effect is cut at its t minus reach, in every Step alike: a typed
+	// command's lead and run when its record comes at the end of a run
+	// longer than about nine minutes; a permission's wait when its record
+	// comes more than eight minutes after the answer; a turn's run across a
+	// longer silence of its agent's records outside hooked sessions
+	// (turnBuild.runUntil); and a queued message's reset when no agent
+	// record follows within it.
 	reach int64
 	// settle is how long after a time the scorer may still change what it
 	// derived for that time: PENDING_WINDOW_S, after which DESIGN 6.2 D1
@@ -146,6 +148,13 @@ func newRules(t *params.Table) rules {
 		composeNeedsKeys: t.Bool(params.COMPOSE_NEEDS_KEYS),
 	}
 	r.unitsPerS = r.readWPM * r.diffLPM
+	// The code half of E-return-lookahead, which lets its code land before
+	// its text: main's SM 2.1 still bounds the return rule by READ_HORIZON_S
+	// after the run's end, and DESIGN 3.7 and D1 don't yet say that every
+	// rule decides a second from what is on record within READ_HORIZON_S of
+	// it.
+	// TODO(P10): P10 lands that SM 2.1, DESIGN 3.7 and D1 text, and these
+	// comments then cite SM.
 	r.reach = r.readHorizon
 	r.settle = r.pendingWindow
 	return r
@@ -191,12 +200,13 @@ func (r rules) lineUnits(lines int64) int64 { return 60 * min(lines, 2*countMax)
 func (r rules) unitsMS(u int64) int64 { return roundDiv(min(u, unitsMax)*1000, r.unitsPerS) }
 
 // roundDiv returns a / b rounded to the nearest integer, halves away from
-// zero, for any a and any b > 0. SM 1.3 rounds a lead's typing part and the
-// reading part of RETURN_CREDIT to the nearest second, halves up: 61
-// characters at 1.5 a second are 40.67 s, which is 41 (SM 6.4), and 35
-// characters are 23.33 s, which is 23 (SM 6.5)
-// (docs/errata/2026-11-19-sm-6.4-prompt-lengths.md, decided 2026-11-20 as
-// E-6.4-prompt-lengths).
+// zero, for any a and any b > 0. A lead's typing part and the reading part
+// of RETURN_CREDIT are rounded to the nearest second, halves up, as SM's
+// worked examples round them: 61 characters at 1.5 a second are 40.67 s,
+// which SM 6.4 counts as 41, and 35 characters are 23.33 s, which SM 6.5
+// counts as 23. E-6.4-prompt-lengths decided that reading
+// (docs/errata/2026-11-19-sm-6.4-prompt-lengths.md, decided 2026-11-20),
+// and SM 1.3 gains it with P11.
 //
 // It works from Go's truncated quotient and remainder, so it negates
 // nothing it can't: |r| < b, and the quotient moves by one only when b > 1,
@@ -218,8 +228,8 @@ func roundDiv(a, b int64) int64 {
 }
 
 // typingMS is the typing part of a lead for n typed characters (SM 2.3):
-// n / COMPOSE_CPS, rounded to the nearest second (SM 1.3) and capped at
-// COMPOSE_MAX_S.
+// n / COMPOSE_CPS, rounded to the nearest second (E-6.4-prompt-lengths)
+// and capped at COMPOSE_MAX_S.
 func (r rules) typingMS(n int64) int64 {
 	if n <= 0 {
 		return 0
@@ -229,7 +239,8 @@ func (r rules) typingMS(n int64) int64 {
 }
 
 // readingMS is how long prose takes to read at READ_WPM, rounded to the
-// nearest second (SM 1.3): the reading part of RETURN_CREDIT (SM 2.1).
+// nearest second (E-6.4-prompt-lengths): the reading part of RETURN_CREDIT
+// (SM 2.1).
 func (r rules) readingMS(words int64) int64 {
 	if words <= 0 {
 		return 0

@@ -20,10 +20,7 @@
 //
 //   - slots: 15-second presence slots with input_any and input_keys
 //     rebuilt from idle samples, SM 2.1's present values and its hard
-//     breaks (lock, suspend, a gap between samples over SLEEP_GAP_S,
-//     except one of up to twice SLOW_SAMPLE_S after a sample showing
-//     CONTEXT_IDLE_S of idle, as DESIGN 6.2 D14 has it, which a turn's end
-//     only delays);
+//     breaks (lock, suspend, a gap between samples over SLEEP_GAP_S);
 //   - turns, with SM 2.2's origin rules 1 to 8 and prompt classes;
 //   - anchors, SM 2.3's human acts with their think and typing parts,
 //     trails, evidence levels and labels (DESIGN 6.4), including the side
@@ -76,18 +73,23 @@
 //
 // What Step derives for a time stays pending until now is PENDING_WINDOW_S
 // later, then becomes final and is output once (DESIGN 3.7, 6.2 D1). No
-// record changes what was derived for a time more than READ_HORIZON_S
-// before its own t: a lead reaches back at most THINK_LEAD_S +
-// COMPOSE_MAX_S, reading needs a human act within READ_HORIZON_S, and the
-// return rule an act on record within READ_HORIZON_S of the silence's start
-// (SM 2.1). So a record that arrives up to PENDING_WINDOW_S - READ_HORIZON_S
-// late changes only what is still pending. An anchor is decided at the
-// latest t of its records; where that is later than its windows allow, as
-// a long typed command's record is at its end, the windows it would open
-// before then credit nothing, in every Step alike. A browser run with credit
-// just before it may be a lookup, whose credit waits for the run's end, so
-// nothing from such a run on is final until its end bracket is. SM 2.5 sets
-// no bound on that (docs/errata/2026-11-19-return-rule-lookahead.md,
+// record changes what was derived for a time more than READ_HORIZON_S before
+// its own t: a lead reaches back at most THINK_LEAD_S + COMPOSE_MAX_S,
+// reading needs a human act within READ_HORIZON_S, and the return rule an
+// act on record within READ_HORIZON_S of the silence's start. So a record
+// that arrives up to PENDING_WINDOW_S - READ_HORIZON_S late changes only
+// what is still pending. That bound and the return rule's horizon are the
+// code half of E-return-lookahead
+// (docs/errata/2026-11-19-return-rule-lookahead.md, decided 2026-11-20),
+// which lets its code land before its text: SM 2.1, DESIGN 3.7 and D1 state
+// them once P10 lands, and main's SM 2.1 still counts the return rule's
+// horizon from the run's end. An anchor is decided at the latest t of its
+// records; where that is later than its windows allow, as a long typed
+// command's record is at its end, the windows it would open before then
+// credit nothing, in every Step alike. A browser run with credit just before
+// it may be a lookup, whose credit waits for the run's end, so nothing from
+// such a run on is final until its end bracket is. SM 2.5 sets no bound on
+// that (docs/errata/2026-11-19-return-rule-lookahead.md,
 // docs/errata/2026-11-20-lookup-lookahead.md). Until WP-SC5 adds
 // checkpoints, a State holds every record it was given.
 //
@@ -96,10 +98,19 @@
 // Where SM and DESIGN leave a choice open, the scorer takes these, each
 // stated again where it is implemented:
 //
+//   - Leads are whole seconds: a typing time is rounded to the nearest
+//     second, halves up, as SM 6.4 (161 s) and 6.5 (143 s) round theirs.
+//     E-6.4-prompt-lengths decided this reading, and SM 1.3 gains it with
+//     P11 (docs/errata/2026-11-19-sm-6.4-prompt-lengths.md).
 //   - A silent run's length is its slots' length, from the end of the last
 //     input slot to the start of the next, because samples show when the
 //     last input before a silence came but not when the first one after it
 //     did. A tail is timed from the last input, to the millisecond.
+//   - A gap between samples longer than SLEEP_GAP_S is a hard break, except
+//     one that follows CONTEXT_IDLE_S without input and lasts at most twice
+//     SLOW_SAMPLE_S: the agent samples once a minute then, which DESIGN 6.2
+//     D14 says changes no credit. D-d14-cadence decided that D14 states
+//     this rule, and P07 lands that text.
 //   - "Input in its slot" is any input, and "input_keys where available"
 //     means key presses where the OS reports them, exactly as each row of
 //     SM 2.3 says.
@@ -114,6 +125,17 @@
 //   - A message from another session (origin_declared cross_session) is
 //     origin subagent: SM 2.2 has no rule for it, and like a subagent's it
 //     is one agent prompting another (TP DI 26).
+//   - One window decides a `pairtime track` call from a session pairtime
+//     sees through hooks or a log reader: within TRACK_DEDUPE_S of one of
+//     the session's hook or log prompts, before or after, the call is
+//     track_matched, and with none it raises track_without_prompt, where
+//     DESIGN 5.4 still flags a call with no prompt within
+//     TRACK_LOG_MATCH_S. The session counts as seen only from the call's
+//     log_match or from a hook or log record dated at most TRACK_DEDUPE_S
+//     after the call, so no later record changes what the call did. This
+//     is the code half of E-track-windows
+//     (docs/errata/2026-11-19-track-match-windows.md, decided 2026-11-20),
+//     whose DESIGN 5.4 text lands with P10.
 //   - The editor in focus on a session's project hosts a session only the
 //     WakaTime bridge reports, as it does an IDE session, since the bridge
 //     reads it from the editor's wakatime-cli (DESIGN 5.7).
@@ -130,6 +152,10 @@
 //
 // WP-SC2 adds these:
 //
+//   - A second belongs to a window when the second's start does, so
+//     window edges are applied to whole seconds (SM 1.3). The same holds
+//     for a turn's run, a tail and the reading horizon, as
+//     E-6.4-prompt-lengths decided; SM 1.3 says so once P11 lands.
 //   - Presence after a silence longer than PRESENCE_GAP_S starts at the
 //     second of the first input a sample taken inside the slot reports,
 //     and at the slot's start when only the sample at its end reports one,

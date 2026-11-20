@@ -8,11 +8,13 @@ import (
 	"github.com/some-du6e/pairtime/pkg/event"
 )
 
-// TestSecondSpans pins SM 1.3's span rule at a mid-second edge: a second
-// belongs to a span the rules define, such as an anchor's window or a tail,
-// when the second's start is at or after the span's start and before its
-// end (docs/errata/2026-11-19-sm-6.4-prompt-lengths.md, decided 2026-11-20
-// as E-6.4-prompt-lengths).
+// TestSecondSpans pins the span rule at a mid-second edge: a second belongs
+// to a span the rules define, such as an anchor's window or a tail, when the
+// second's start is at or after the span's start and before its end. SM 1.3
+// applies window edges to the second, and E-6.4-prompt-lengths decided this
+// reading of it for every span
+// (docs/errata/2026-11-19-sm-6.4-prompt-lengths.md, decided 2026-11-20),
+// which SM 1.3 states once P11 lands.
 func TestSecondSpans(t *testing.T) {
 	cases := []struct {
 		name  string
@@ -25,7 +27,7 @@ func TestSecondSpans(t *testing.T) {
 		seconds int64
 	}{
 		{
-			name: "SM 1.3: a second belongs to a lead when its start does, so a go-ahead sent at 60.3 s credits GO in seconds 41 to 60 and not in second 40",
+			name: "a second belongs to a lead when its start does, so a go-ahead sent at 60.3 s credits GO in seconds 41 to 60 and not in second 40 (SM 1.3)",
 			build: func(b *tl) {
 				terminalSession(b)
 				b.press(every(at(1), at(60), 1000)...)
@@ -42,7 +44,7 @@ func TestSecondSpans(t *testing.T) {
 			at: 60, reason: event.ReasonGoAhead, seconds: 1,
 		},
 		{
-			name: "SM 1.3: a second belongs to a tail when its start does, so a tail ending at 130.3 s credits second 130 and leaves second 131 X.absent",
+			name: "a second belongs to a tail when its start does, so a tail ending at 130.3 s credits second 130 and leaves second 131 X.absent (E-6.4-prompt-lengths)",
 			build: func(b *tl) {
 				terminalSession(b)
 				b.press(every(atMS(30_500), atMS(59_500), 1000)...)

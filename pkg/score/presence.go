@@ -187,9 +187,9 @@ func buildPresence(r rules, recs []event.Event, now int64, fl *focusLine) *prese
 			if gap := e.T - lastSample; haveSample && gap > r.sleepGap && !(lastIdle >= r.contextIdle && gap <= r.slowGap) {
 				// SM 2.1: gaps come from wall-clock sample times. The open
 				// interval between the two samples is the gap. After
-				// CONTEXT_IDLE_S without input the agent records one sample
-				// a minute (DESIGN 6.2 D14, which a turn's end only delays),
-				// and a gap that cadence explains is no sleep.
+				// CONTEXT_IDLE_S without input the agent samples once a
+				// minute (DESIGN 6.2 D14), and a gap that slow sampling
+				// explains is no sleep.
 				gaps = append(gaps, span{lastSample + 1, e.T})
 			}
 			// A sample after a suspend shows the machine awake again, even

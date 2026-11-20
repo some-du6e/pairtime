@@ -211,8 +211,10 @@ func TestReturnRule(t *testing.T) {
 
 	// The return rule's horizon is READ_HORIZON_S from the run's start, and
 	// an act counts once it is on record (docs/errata/2026-11-19-return-rule-lookahead.md,
-	// decided 2026-11-20 as E-return-lookahead). silence's run starts at
-	// 105 s, so its horizon is 705 s.
+	// decided 2026-11-20 as E-return-lookahead). These cases pin the code
+	// half of that rule change; main's SM 2.1 still counts 600 s from the
+	// run's end, and P10 lands its new text. silence's run starts at 105 s,
+	// so its horizon is 705 s.
 	command := func(b *tl) event.Event {
 		return b.shell(at(762), "p_1", &event.ShellCommand{CmdClass: event.CmdRun, TStart: at(470), TEnd: at(760),
 			Interactive: true})

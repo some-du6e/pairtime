@@ -12,7 +12,8 @@ import (
 // Return is a silent run that SM 2.1's return rule credits: longer than
 // PRESENCE_GAP_S, at most RETURN_GAP_MAX_S, with input on both sides, and
 // ended by a substantive act in the project that held focus through it, on
-// record within READ_HORIZON_S of the run's start.
+// record within READ_HORIZON_S of the run's start (E-return-lookahead; see
+// markReturns).
 // Its slots past the tail are returned. Of the run, at most CreditMS
 // qualifies:
 //
@@ -72,13 +73,18 @@ func (d *deriver) markReturns() {
 			continue
 		}
 		// Of the anchors after the run, the first one on record within
-		// READ_HORIZON_S of the run's start decides (SM 2.1): it must be
-		// substantive, in the focused project, with no lock, sleep or focus
-		// change from the run's start to it. An anchor is on record when it
-		// is decided (Anchor.decided), so a typed command counts from its
-		// end; one decided later doesn't count for the run, in every Step
-		// alike (docs/errata/2026-11-19-return-rule-lookahead.md, decided
+		// READ_HORIZON_S of the run's start decides: it must be substantive,
+		// in the focused project, with no lock, sleep or focus change from
+		// the run's start to it. An anchor is on record when it is decided
+		// (Anchor.decided), so a typed command counts from its end; one
+		// decided later doesn't count for the run, in every Step alike
+		// (docs/errata/2026-11-19-return-rule-lookahead.md, decided
 		// 2026-11-20 as E-return-lookahead).
+		// This is the code half of E-return-lookahead, which lets its code
+		// land before its text: main's SM 2.1 still asks for the anchor
+		// within 600 s of the run's end.
+		// TODO(P10): P10 lands SM 2.1's new returned row and return-rule
+		// paragraph, and this comment then cites SM 2.1.
 		horizon := start + d.r.readHorizon
 		k := sort.Search(len(d.anchors), func(k int) bool { return d.anchors[k].T >= end })
 		for k < len(d.anchors) && d.anchors[k].T <= horizon && d.anchors[k].decided > horizon {

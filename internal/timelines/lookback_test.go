@@ -404,7 +404,7 @@ func TestLookbackAnchors(t *testing.T) {
 					// math.Round rounds halves away from zero, which is halves
 					// up for these times (E-6.4-prompt-lengths).
 					if want := math.Round(typing); a.LeadS != want {
-						t.Errorf("%s: lead_s %v; SM 2.8 leaves only the typing time, %d / 1.5 = %v s, rounded to the nearest second (SM 1.3), %v",
+						t.Errorf("%s: lead_s %v; SM 2.8 leaves only the typing time, %d / 1.5 = %v s, rounded to the nearest second (E-6.4-prompt-lengths), %v",
 							where, a.LeadS, p.TypedLenEst, typing, want)
 					}
 					if a.TrailS != 0 {

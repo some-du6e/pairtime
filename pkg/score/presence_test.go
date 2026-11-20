@@ -133,9 +133,9 @@ func TestPresence(t *testing.T) {
 		{
 			// The sampler reads idle time on every slot boundary but records
 			// only the minute's reading and one that shows new input, here
-			// at 765 s (D-d14-cadence). pkg/score already reads that gap as
-			// slow cadence.
-			name: "after CONTEXT_IDLE_S without input, a sample 45 s after a minute sample that shows new input is no sleep, and the slot holding the input is yes (DESIGN 6.2 D14)",
+			// at 765 s (D-d14-cadence, whose D14 text P07 lands). pkg/score
+			// already reads that gap as slow cadence, one of its readings.
+			name: "after CONTEXT_IDLE_S without input, a sample 45 s after a minute sample that shows new input is no sleep, and the slot holding the input is yes (D-d14-cadence)",
 			build: func(b *tl) {
 				b.mouse(at(5), at(760))
 				b.samples(at(0), at(660))

@@ -340,7 +340,7 @@ func TestLowEffort(t *testing.T) {
 		{"the word option alone is not a pick", "option", false},
 		{"a go-ahead inside a longer request is not low effort", "yes, but use a min-heap", false},
 		{"SM 2.2's short substantive example is not low effort", "use a min-heap for the queue", false},
-		{"SM 6.4's morning prompt is not low effort", "nice. explain what you changed in the service worker and why?", false},
+		{"SM 6.4's morning prompt is not low effort", "nice. explain what you changed in the service worker and why", false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
