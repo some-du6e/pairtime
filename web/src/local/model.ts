@@ -317,7 +317,7 @@ export function sessionHead(s: WorkSession, title: string, calibrating: boolean)
  * (D-shadow-scope): its date, or the day its start falls on here when an
  * agent leaves the date out, and "" when there is neither.
  */
-export function sessionWhen(s: WorkSession, calibrating: boolean): string {
+export function sessionWhen(s: Pick<WorkSession, 'start' | 'end' | 'open'> & { date?: string }, calibrating: boolean): string {
 	const start = instant(s.start);
 	const end = instant(s.end);
 	if (!calibrating && start && end) {

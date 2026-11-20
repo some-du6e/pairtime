@@ -186,19 +186,20 @@ const days: Record<string, Day> = {
 
 /**
  * The uncredited codes an answer keeps while display.shadow is on
- * (D-shadow-scope): the agent's own and SM 4.2's loops.
+ * (D-shadow-scope): SM 4.2's loops alone, as the agent's tallyOf keeps
+ * them (internal/agent/scorer.go).
  */
-export const shadowCodes: readonly (keyof Uncredited)[] = [
-	'X.agent_only',
-	'X.automated',
-	'X.reroll',
-	'X.rewrite_loop',
-	'X.same_error',
-	'X.autopilot',
-];
+export const shadowCodes: readonly (keyof Uncredited)[] = ['X.reroll', 'X.rewrite_loop', 'X.same_error', 'X.autopilot'];
 
 /** The fields a tally leaves out while display.shadow is on (D-shadow-scope). */
-export const shadowHides = ['credited_s', 'pending_s', 'credited_by_kind', 'credited_by_evidence', 'on_hold_s'] as const;
+export const shadowHides = [
+	'credited_s',
+	'pending_s',
+	'credited_by_kind',
+	'credited_by_evidence',
+	'credited_by_reason',
+	'on_hold_s',
+] as const;
 
 /** A session's fields that a shadow answer leaves out too (D-shadow-scope). */
 export const shadowHidesOfSession = ['start', 'end', 'open'] as const;
@@ -251,7 +252,7 @@ export function shadowSession(r: LastSession): LastSession {
 		session: {
 			project: s.project,
 			name: s.name,
-			...(s.date === undefined ? {} : { date: s.date }),
+			date: s.date,
 			agent_only_s: s.agent_only_s,
 			agent_only_by_harness: { ...s.agent_only_by_harness },
 			uncredited: shadowUncredited(s.uncredited),

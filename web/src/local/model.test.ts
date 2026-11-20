@@ -291,7 +291,8 @@ describe('a day the agent gave while display.shadow was on', () => {
 				expect([t.credited_s, t.pending_s, t.on_hold_s, t.agent_only_s]).toEqual([0, 0, 0, 5580]);
 				expect(t.credited_by_kind).toEqual({});
 				expect(t.credited_by_evidence).toEqual({});
-				expect(t.uncredited).toEqual({ 'X.agent_only': 240 });
+				// Friday has no loops, the only codes a shadow answer keeps.
+				expect(t.uncredited).toEqual({});
 			},
 		},
 		{
