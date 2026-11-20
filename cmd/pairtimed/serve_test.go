@@ -131,6 +131,11 @@ func TestServe(t *testing.T) {
 		{name: "the privacy notice marks the controller as not named yet", url: public + "/privacy", wantCode: 200, wantBody: `This notice isn&#39;t final\.`},
 		{name: "the public listener serves the evidence definition", url: public + "/docs/evidence", wantCode: 200, wantBody: `This server runs scoring 0\.1\.0\.`},
 		{name: "the ops listener doesn't serve the pages", url: private + "/privacy", wantCode: 404},
+		{name: "the public listener serves the home page at /, so a sign-in without return_to never ends on a 404", url: public + "/", wantCode: 200, wantBody: `<h1 id="pairtime-counts-the-time-you-spend-building-with-ai">`},
+		{name: "without hca.client_id the home page says sign-in isn't set up, and offers none", url: public + "/", wantCode: 200, wantBody: `(?s)<header>\n<a class="name" href="/">pairtime</a>\n</header>.*Sign-in isn&#39;t set up on this server yet\.`},
+		{name: "/ links to the privacy notice", url: public + "/", wantCode: 200, wantBody: `href="/privacy"`},
+		{name: "a path nothing serves is still a 404, not the home page", url: public + "/nothing-here", wantCode: 404},
+		{name: "the ops listener doesn't serve the home page", url: private + "/", wantCode: 404},
 	}
 	client := &http.Client{Timeout: 10 * time.Second}
 	for _, tt := range requests {
@@ -411,6 +416,134 @@ func TestSourceCommit(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := sourceCommit(tt.info); got != tt.want {
 				t.Errorf("sourceCommit(%+v) = %q, want %q", tt.info, got, tt.want)
+			}
+		})
+	}
+}
+
+// startServe runs pairtimed serve on the file at configPath with the
+// environment given, and returns the URLs of its public and ops listeners.
+// The server stops when the test ends, and must stop cleanly.
+func startServe(t *testing.T, configPath string, environ ...string) (public, private string) {
+	t.Helper()
+	e, _, stderr := testEnv(environ...)
+	type addrs struct{ public, ops string }
+	up := make(chan addrs, 1)
+	e.listening = func(public, ops string) { up <- addrs{public, ops} }
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	var code int
+	go func() {
+		code = run(ctx, []string{"serve", "-config", configPath}, e)
+		close(done)
+	}()
+	listening := false
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-done:
+			if listening && code != 0 {
+				t.Errorf("serve exit code after cancel = %d, want 0; stderr:\n%s", code, stderr.String())
+			}
+		case <-time.After(60 * time.Second):
+			t.Error("serve didn't stop within a minute of its context ending")
+		}
+	})
+	select {
+	case a := <-up:
+		listening = true
+		return "http://" + a.public, "http://" + a.ops
+	case <-done:
+		t.Fatalf("serve exited with %d before listening; stderr:\n%s", code, stderr.String())
+	case <-time.After(60 * time.Second):
+		t.Fatalf("serve didn't start within a minute; stderr:\n%s", stderr.String())
+	}
+	return "", ""
+}
+
+// setBaseURL changes the base_url of writeConfig's file at configPath.
+func setBaseURL(t *testing.T, configPath, baseURL string) {
+	t.Helper()
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const old = `base_url = "http://localhost:8080"`
+	if !strings.Contains(string(data), old) {
+		t.Fatalf("%s doesn't say %s", configPath, old)
+	}
+	text := strings.Replace(string(data), old, `base_url = "`+baseURL+`"`, 1)
+	if err := os.WriteFile(configPath, []byte(text), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestServeHSTS checks that with an https base_url every response from the
+// public listener carries Strict-Transport-Security, whichever handler
+// writes it, and that nothing from the ops listener does. With an http
+// base_url, which config allows only on localhost, no response carries it,
+// since the header must not be sent over plain http (RFC 6797 7.2).
+func TestServeHSTS(t *testing.T) {
+	bases := []struct {
+		name    string
+		baseURL string
+		want    string
+	}{
+		{name: "with an https base_url", baseURL: "https://pairtime.example.org", want: "max-age=31536000"},
+		{name: "with an http base_url on localhost", baseURL: "http://localhost:8080"},
+	}
+	client := &http.Client{
+		Timeout:       10 * time.Second,
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}
+	for _, base := range bases {
+		t.Run(base.name, func(t *testing.T) {
+			configPath, _ := writeConfig(t)
+			setBaseURL(t, configPath, base.baseURL)
+			public, private := startServe(t, configPath)
+			requests := []struct {
+				name     string
+				method   string
+				url      string
+				wantCode int
+				want     string
+			}{
+				{name: "the public health check", url: public + "/healthz", wantCode: 200, want: base.want},
+				{name: "the home page", url: public + "/", wantCode: 200, want: base.want},
+				{name: "the privacy notice", url: public + "/privacy", wantCode: 200, want: base.want},
+				{name: "a 404", url: public + "/nothing-here", wantCode: 404, want: base.want},
+				{name: "sign-in's error page", url: public + "/auth/hca/login", wantCode: 503, want: base.want},
+				{name: "sign-out's redirect", method: http.MethodPost, url: public + "/auth/logout", wantCode: 303, want: base.want},
+				{name: "a JSON answer", url: public + "/api/v1/users/me", wantCode: 401, want: base.want},
+				{name: "the ops listener's health check", url: private + "/healthz", wantCode: 200},
+				{name: "the ops listener's metrics", url: private + "/metrics", wantCode: 200},
+			}
+			for _, tt := range requests {
+				name := tt.name + " carries no Strict-Transport-Security"
+				if tt.want != "" {
+					name = tt.name + " carries Strict-Transport-Security: " + tt.want
+				}
+				t.Run(name, func(t *testing.T) {
+					method := tt.method
+					if method == "" {
+						method = http.MethodGet
+					}
+					req, err := http.NewRequest(method, tt.url, nil)
+					if err != nil {
+						t.Fatal(err)
+					}
+					resp, err := client.Do(req)
+					if err != nil {
+						t.Fatal(err)
+					}
+					resp.Body.Close()
+					if resp.StatusCode != tt.wantCode {
+						t.Errorf("%s %s = %d, want %d", method, tt.url, resp.StatusCode, tt.wantCode)
+					}
+					if got := resp.Header.Values("Strict-Transport-Security"); len(got) > 1 || resp.Header.Get("Strict-Transport-Security") != tt.want {
+						t.Errorf("%s %s has Strict-Transport-Security %q, want %q", method, tt.url, got, tt.want)
+					}
+				})
 			}
 		})
 	}

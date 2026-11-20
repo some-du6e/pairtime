@@ -16,7 +16,16 @@ import (
 
 	"github.com/some-du6e/pairtime/internal/agent"
 	"github.com/some-du6e/pairtime/internal/agent/home"
+	"github.com/some-du6e/pairtime/internal/agent/keys"
 )
+
+// agentKeyStores is the agent's agent.Options.KeyStores: nil in the real
+// binary, which keeps K_dev in the OS's secret store. The command's tests
+// set it to an empty list in TestMain, which runs in every process they
+// start, so the agents they run keep K_dev in a key file in their data
+// directory and leave nothing in the Keychain or the Secret Service of
+// the machine they run on.
+var agentKeyStores []keys.Store
 
 // exitAlreadyRunning is the exit status of `pairtime agent` when another
 // agent holds the data directory's lock. Whoever started the agent, such as
@@ -79,7 +88,7 @@ func runAgent(args []string, stdout, stderr io.Writer) int {
 	// agent the usual way.
 	context.AfterFunc(ctx, stop)
 
-	err = agent.Run(ctx, agent.Options{Dirs: dirs, Log: slog.New(slog.NewTextHandler(stderr, nil))})
+	err = agent.Run(ctx, agent.Options{Dirs: dirs, Log: slog.New(slog.NewTextHandler(stderr, nil)), KeyStores: agentKeyStores})
 	switch {
 	case errors.Is(err, agent.ErrAlreadyRunning):
 		fmt.Fprintf(stderr, "pairtime agent: already running for %s\n", dirs.Data)

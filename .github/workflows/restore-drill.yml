@@ -1,0 +1,476 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# The restore drill (DESIGN 10.3; docs/PLAN.md, WP-OP1): proof that the
+# backups restore, made in GitHub Actions instead of on the home server.
+#
+# The minio job runs on PRs that change the deploy bundle or the image,
+# weekly, and by hand. It builds the image, deploys it with
+# deploy/compose.yml against MinIO the way deploy/runbook.md does, writes
+# data, backs the keys up and takes a snapshot, then destroys the container
+# and its disk, restores the keys from their backup and the database from
+# Litestream's replica into a fresh container, and checks the result with
+# SQLite's own integrity_check, the sqlite3 tool and the server's pages. The
+# snapshot and the key backup are decrypted with the age tool and a test
+# identity, never with pairtime's code. The witness sidecar pushes a root to
+# a local bare repository.
+#
+# The production job runs by hand once WP-OP2 has deployed: it restores the
+# real replica with read-only keys, the restore-drill environment's secrets,
+# serves it in a throwaway container and checks that the newest snapshot
+# and key backup exist. It writes nothing to the buckets, and Karim's age key
+# stays offline, so the snapshot's age header is all it can check.
+#
+#   gh workflow run restore-drill.yml --ref <branch>
+#   gh workflow run restore-drill.yml --ref <branch> -f minio=source
+#   gh workflow run restore-drill.yml --ref main -f target=production
+name: restore-drill
+
+on:
+  pull_request:
+    paths:
+      - deploy/**
+      - Dockerfile.pairtimed
+      - internal/server/backup/**
+      - .github/workflows/restore-drill.yml
+  schedule:
+    # Mondays, after objstore.yml.
+    - cron: "30 4 * * 1"
+  workflow_dispatch:
+    inputs:
+      target:
+        description: "minio: the whole drill against MinIO; production: restore the real replica with read-only keys"
+        type: choice
+        options: [minio, production]
+        default: minio
+      minio:
+        description: "image: Bitnami's MinIO, pinned by digest; source: MinIO built from its source at the same release (as in objstore.yml)"
+        type: choice
+        options: [image, source]
+        default: image
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ inputs.target }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  # pairtime never uses cgo (AGENTS.md).
+  CGO_ENABLED: "0"
+  # The image's user (Dockerfile.pairtimed).
+  UID65532: "65532"
+
+jobs:
+  minio:
+    name: restore drill against MinIO
+    if: inputs.target != 'production'
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    services:
+      minio:
+        # The pin and the input of objstore.yml (D-minio-guard): Bitnami's
+        # last build of MinIO RELEASE.2025-07-23, or, with minio=source, no
+        # service and MinIO built from source in a step.
+        image: ${{ inputs.minio != 'source' && 'bitnamilegacy/minio:2025.7.23-debian-12-r5@sha256:6dabb4a2088c9a79908de3bc05f4586c23ad2182c8908e7e3acbf61c1467fb20' || '' }}
+        env:
+          MINIO_ROOT_USER: pairtime-ci
+          MINIO_ROOT_PASSWORD: pairtime-ci-not-a-secret
+          MINIO_SKIP_CLIENT: "yes"
+        ports:
+          - 9000:9000
+    defaults:
+      run:
+        shell: bash
+    steps:
+      # Actions are pinned to commit SHAs; tags can be moved. Dependabot bumps them.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: |
+            go.mod
+            go.sum
+
+      - name: The checking tools
+        # age and sqlite3 from Ubuntu: the decrypter and the database check
+        # that pairtime didn't write.
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends age sqlite3 > /dev/null
+          age --version
+          sqlite3 --version
+
+      - name: MinIO from source
+        if: inputs.minio == 'source'
+        env:
+          MINIO_MODULE: github.com/minio/minio@v0.0.0-20250723155402-7ced9663e6a7
+          MINIO_ROOT_USER: pairtime-ci
+          MINIO_ROOT_PASSWORD: pairtime-ci-not-a-secret
+        run: |
+          GOTOOLCHAIN=auto go install "$MINIO_MODULE"
+          minio="$(go env GOPATH)/bin/minio"
+          "$minio" --version
+          mkdir "$RUNNER_TEMP/minio-data"
+          nohup "$minio" server "$RUNNER_TEMP/minio-data" --address :9000 > "$RUNNER_TEMP/minio.log" 2>&1 &
+
+      - name: Wait for MinIO and make the two buckets
+        run: |
+          for _ in $(seq 90); do
+            if curl -fsS -o /dev/null http://127.0.0.1:9000/minio/health/ready; then break; fi
+            sleep 1
+          done
+          for b in pairtime-data pairtime-snapshots; do
+            curl -fsS -X PUT --aws-sigv4 "aws:amz:us-east-1:s3" --user pairtime-ci:pairtime-ci-not-a-secret \
+              -H "x-amz-content-sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855" \
+              "http://127.0.0.1:9000/$b"
+            echo "made bucket $b"
+          done
+
+      - name: Build pairtimed and the image
+        run: |
+          pkg=github.com/some-du6e/pairtime/internal/version
+          commit=$(git rev-parse HEAD)
+          date=$(TZ=UTC git log -1 --format=%cd --date=format-local:%Y-%m-%dT%H:%M:%SZ)
+          mkdir -p dist/linux_amd64
+          GOOS=linux GOARCH=amd64 go build -trimpath -buildvcs=false \
+            -ldflags="-s -w -X $pkg.Version=v0.0.0-drill -X $pkg.Commit=$commit -X $pkg.Date=$date" \
+            -o dist/linux_amd64/pairtimed ./cmd/pairtimed
+          go run ./tools/release notices -bin dist/linux_amd64/pairtimed -out dist/THIRD_PARTY_NOTICES.txt
+          docker buildx build -f Dockerfile.pairtimed --platform linux/amd64 --load -t pairtimed:drill .
+          docker run --rm pairtimed:drill pairtimed version
+          docker run --rm pairtimed:drill litestream version
+          if [ "$(docker image inspect pairtimed:drill --format '{{.Config.User}}')" != "65532:65532" ]; then
+            echo "::error::the image doesn't run as 65532"
+            exit 1
+          fi
+
+      - name: Lay out the host as the runbook does
+        run: |
+          d=$RUNNER_TEMP/pairtime
+          cp -r deploy "$d"
+          cd "$d"
+          echo "D=$d" >> "$GITHUB_ENV"
+          sudo install -d -m 0700 -o "$UID65532" -g "$UID65532" data witness-roots
+          mkdir config
+          # The drill's stand-in for Karim's offline age key.
+          age-keygen -o "$RUNNER_TEMP/karim.key" 2> /dev/null
+          recipient=$(age-keygen -y "$RUNNER_TEMP/karim.key")
+          email_key=$(openssl rand -hex 32)
+          echo "EMAIL_KEY=$email_key" >> "$GITHUB_ENV"
+          install -m 0600 secrets.env.example config/secrets.env
+          set_var() {
+            if ! grep -q "^$1=" config/secrets.env; then
+              echo "::error file=deploy/secrets.env.example::it has no $1= line for the runbook to fill"
+              exit 1
+            fi
+            sed -i "s|^$1=.*|$1=$2|" config/secrets.env
+          }
+          set_var PAIRTIME_S3_ENDPOINT http://127.0.0.1:9000
+          set_var PAIRTIME_S3_REGION us-east-1
+          set_var PAIRTIME_S3_BUCKET pairtime-data
+          set_var PAIRTIME_S3_SNAPSHOT_BUCKET pairtime-snapshots
+          set_var PAIRTIME_S3_ACCESS_KEY_ID pairtime-ci
+          set_var PAIRTIME_S3_SECRET_ACCESS_KEY pairtime-ci-not-a-secret
+          set_var PAIRTIME_EMAIL_KEY "$email_key"
+          set_var PAIRTIME_AGE_RECIPIENT "$recipient"
+          install -m 0600 cloudflared/tunnel.env.example config/tunnel.env
+          # A witness repository on this machine, through a deploy key of
+          # the drill's own, in place of GitHub's.
+          ssh-keygen -q -t ed25519 -N '' -C drill -f config/witness_deploy_key
+          git init -q --bare "$RUNNER_TEMP/witness.git"
+          # The sidecar is root with no capability to write what isn't
+          # root's.
+          sudo chown -R 0:0 "$RUNNER_TEMP/witness.git"
+          # The drill's override: the image just built, the host's network,
+          # where MinIO listens on 127.0.0.1, and a file:// witness remote.
+          cat > drill.yml <<EOF
+          services:
+            pairtimed:
+              image: pairtimed:drill
+              pull_policy: never
+              network_mode: host
+            witness:
+              environment:
+                PAIRTIME_WITNESS_REMOTE: /remote.git
+                PAIRTIME_WITNESS_EVERY: "5"
+                PAIRTIME_WITNESS_TRACE: "1"
+              volumes:
+                - $RUNNER_TEMP/witness.git:/remote.git
+          EOF
+          docker compose -f compose.yml -f drill.yml config --quiet
+
+      - name: pairtimed init writes the keys and pairtime.toml
+        run: |
+          cd "$D"
+          compose() { docker compose -f compose.yml -f drill.yml "$@"; }
+          compose run --rm -T pairtimed pairtimed init -base-url http://localhost:8080 -config-out - > config/pairtime.toml.new
+          mv config/pairtime.toml.new config/pairtime.toml
+          grep -qx 'signups_open = false' config/pairtime.toml
+          grep -qx 'profile_default = "ask"' config/pairtime.toml
+          # Each key mode 0600 and the image's user's (PLAN WP-OP1).
+          # The runner's shell can't list data/, so root expands the glob.
+          sudo sh -c 'stat -c "%a %u %n" data/keys data/keys/*'
+          bad=$(sudo find data/keys -type f \( ! -perm 0600 -o ! -uid "$UID65532" \) -print)
+          if [ -n "$bad" ] || [ "$(sudo stat -c %a data/keys)" != 700 ]; then
+            echo "::error::init's keys aren't mode 0600 in a mode 0700 directory: $bad"
+            exit 1
+          fi
+          compose run --rm -T pairtimed pairtimed keys show | tee "$RUNNER_TEMP/keys-before.txt"
+
+      - name: Start the server and wait until it's ready
+        run: |
+          cd "$D"
+          compose() { docker compose -f compose.yml -f drill.yml "$@"; }
+          compose up -d pairtimed
+          if ! timeout 180 bash -c 'until curl -fsS -o /dev/null http://127.0.0.1:9091/readyz; do sleep 2; done'; then
+            curl -sS http://127.0.0.1:9091/readyz || true
+            compose logs pairtimed
+            echo "::error::the server wasn't ready within 3 minutes"
+            exit 1
+          fi
+          curl -fsS http://127.0.0.1:9091/readyz | tee "$RUNNER_TEMP/readyz.json"
+          grep -q '"name":"replication","ok":true' "$RUNNER_TEMP/readyz.json"
+          # Docker's own health check, which runs pairtimed healthcheck in
+          # the distroless image.
+          if ! timeout 120 bash -c 'until [ "$(docker inspect --format "{{.State.Health.Status}}" pairtime-pairtimed-1)" = healthy ]; do sleep 3; done'; then
+            docker inspect --format '{{json .State.Health}}' pairtime-pairtimed-1
+            echo "::error::the container never turned healthy"
+            exit 1
+          fi
+
+      - name: Write data, back the keys up, take a snapshot
+        run: |
+          cd "$D"
+          compose() { docker compose -f compose.yml -f drill.yml "$@"; }
+          # A row the drill can find after the restore, written while the
+          # server is stopped, so nothing writes the database at once, and
+          # replicated when it starts again.
+          compose stop pairtimed
+          token=$(openssl rand -hex 16)
+          echo "TOKEN=$token" >> "$GITHUB_ENV"
+          sudo sqlite3 data/pairtime.db "CREATE TABLE drill_marker (token TEXT PRIMARY KEY); INSERT INTO drill_marker VALUES ('$token');"
+          # Whatever sqlite3 made as root goes back to the server's user.
+          sudo chown -R "$UID65532:$UID65532" data
+          compose start pairtimed
+          timeout 180 bash -c 'until curl -fsS -o /dev/null http://127.0.0.1:9091/readyz; do sleep 2; done'
+
+          # The key backup, decrypted with the age tool and compared with
+          # the files byte for byte.
+          compose exec -T pairtimed pairtimed keys backup -upload > "$RUNNER_TEMP/keys.tar.age"
+          head -n 1 "$RUNNER_TEMP/keys.tar.age" | grep -qx -- '-----BEGIN AGE ENCRYPTED FILE-----'
+          mkdir "$RUNNER_TEMP/keys"
+          age -d -i "$RUNNER_TEMP/karim.key" "$RUNNER_TEMP/keys.tar.age" | tar -x -C "$RUNNER_TEMP/keys"
+          for f in server.ed25519 evidence.p256 pepper; do
+            sudo cmp "data/keys/$f" "$RUNNER_TEMP/keys/pairtime-keys/$f"
+          done
+          grep -qx "$EMAIL_KEY" "$RUNNER_TEMP/keys/pairtime-keys/PAIRTIME_EMAIL_KEY"
+          echo "the key backup decrypts with age to the keys, byte for byte"
+
+          # The nightly snapshot, taken now, fetched as stored, decrypted
+          # with the age tool and checked with sqlite3.
+          compose exec -T pairtimed pairtimed snapshot take
+          compose exec -T pairtimed pairtimed snapshot fetch -o /data/drill-snapshot.db.age
+          sudo cat data/drill-snapshot.db.age | age -d -i "$RUNNER_TEMP/karim.key" > "$RUNNER_TEMP/snapshot.db"
+          test "$(sqlite3 "$RUNNER_TEMP/snapshot.db" 'PRAGMA integrity_check')" = ok
+          test "$(sqlite3 "$RUNNER_TEMP/snapshot.db" 'SELECT token FROM drill_marker')" = "$token"
+          echo "the snapshot decrypts with age to an intact database holding the marker"
+
+          # The witness sidecar pushes a root to the bare repository.
+          echo '{"drill":"'"$token"'"}' | sudo tee witness-roots/drill.json > /dev/null
+          compose up -d witness
+          export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=safe.directory GIT_CONFIG_VALUE_0='*'
+          if ! timeout 90 bash -c 'until git --git-dir="$RUNNER_TEMP/witness.git" cat-file -e main:drill.json 2> /dev/null; do sleep 2; done'; then
+            compose logs witness | tail -n 80
+            compose exec -T witness sh -c 'id; grep Cap /proc/self/status; ls -la /witness /repo' || true
+            echo "::error::the witness sidecar didn't push the root"
+            exit 1
+          fi
+          # A second round finds nothing new and pushes nothing.
+          before=$(git --git-dir="$RUNNER_TEMP/witness.git" rev-parse main)
+          sleep 12
+          test "$(git --git-dir="$RUNNER_TEMP/witness.git" rev-parse main)" = "$before"
+          git --git-dir="$RUNNER_TEMP/witness.git" log --format='%h %an %s' main
+          compose stop witness
+
+          # Nothing writes for 30 s, while Litestream reads the WAL (every
+          # 10 s) and uploads (every 10 s); then one /readyz, whose own probe
+          # row is the only change, finds the replica caught up.
+          sleep 30
+          curl -fsS http://127.0.0.1:9091/readyz | tee "$RUNNER_TEMP/readyz-synced.json"
+          grep -q '"name":"replication","ok":true' "$RUNNER_TEMP/readyz-synced.json"
+          lag=$(curl -fsS http://127.0.0.1:9091/metrics | awk '$1 == "pairtime_replication_lag_seconds" { print $2 }')
+          echo "replication lag: ${lag}s"
+          awk -v lag="$lag" 'BEGIN { exit !(lag != "" && lag >= 0 && lag < 5) }'
+
+      - name: Destroy the server and its disk
+        run: |
+          cd "$D"
+          compose() { docker compose -f compose.yml -f drill.yml "$@"; }
+          compose down
+          sudo rm -rf "$D/data"
+          sudo install -d -m 0700 -o "$UID65532" -g "$UID65532" data
+
+      - name: Restore into a fresh container, as the runbook does
+        run: |
+          cd "$D"
+          compose() { docker compose -f compose.yml -f drill.yml "$@"; }
+          # The keys from their backup (deploy/runbook.md, Restoring the keys).
+          sudo install -d -m 0700 -o "$UID65532" -g "$UID65532" data/keys
+          sudo install -m 0600 -o "$UID65532" -g "$UID65532" \
+            "$RUNNER_TEMP/keys/pairtime-keys/server.ed25519" "$RUNNER_TEMP/keys/pairtime-keys/evidence.p256" \
+            "$RUNNER_TEMP/keys/pairtime-keys/pepper" data/keys/
+          compose run --rm -T pairtimed pairtimed keys show > "$RUNNER_TEMP/keys-after.txt"
+          diff "$RUNNER_TEMP/keys-before.txt" "$RUNNER_TEMP/keys-after.txt"
+          # The database from the replica: Litestream restores it because the
+          # file is missing (restore-if-db-not-exists).
+          compose up -d pairtimed
+          if ! timeout 300 bash -c 'until curl -fsS -o /dev/null http://127.0.0.1:9091/readyz; do sleep 2; done'; then
+            curl -sS http://127.0.0.1:9091/readyz || true
+            compose logs pairtimed
+            echo "::error::the restored server wasn't ready within 5 minutes"
+            exit 1
+          fi
+          compose logs pairtimed 2>&1 | grep -i 'restor' | head -n 5 || true
+
+      - name: API smoke tests on the restored server
+        run: |
+          agent="pairtime-drill/${GITHUB_SHA::12} (+https://github.com/some-du6e/pairtime)"
+          get() { curl -fsS -A "$agent" "$@"; }
+          test "$(get http://127.0.0.1:8080/healthz)" = ok
+          get http://127.0.0.1:9091/readyz | tee "$RUNNER_TEMP/readyz-restored.json"
+          grep -q '"ready":true' "$RUNNER_TEMP/readyz-restored.json"
+          get http://127.0.0.1:8080/privacy | grep -q 'not named yet'
+          get -o /dev/null http://127.0.0.1:8080/docs/evidence
+          echo "healthz, readyz, /privacy and /docs/evidence answer from the restored database"
+
+      - name: The restored database is whole and holds the marker
+        run: |
+          cd "$D"
+          docker compose -f compose.yml -f drill.yml down
+          # pairtimed takes group and other access away from a restored file.
+          test "$(sudo stat -c %a "$D/data/pairtime.db")" = 600
+          # A copy with its WAL, which sqlite3 reads as SQLite would.
+          mkdir "$RUNNER_TEMP/final"
+          sudo sh -c "cp '$D'/data/pairtime.db* '$RUNNER_TEMP/final/'"
+          sudo chown -R "$(id -u):$(id -g)" "$RUNNER_TEMP/final"
+          db=$RUNNER_TEMP/final/pairtime.db
+          test "$(sqlite3 "$db" 'PRAGMA integrity_check')" = ok
+          test "$(sqlite3 "$db" 'SELECT token FROM drill_marker')" = "$TOKEN"
+          sqlite3 "$db" 'SELECT id FROM schema_migrations ORDER BY id'
+          echo "the restored database passes integrity_check, holds the marker and has mode 0600"
+
+      - name: The logs
+        if: failure()
+        run: |
+          cd "$D" 2> /dev/null && docker compose -f compose.yml -f drill.yml logs --no-color | tail -n 300 || true
+          tail -n 50 "$RUNNER_TEMP/minio.log" 2> /dev/null || true
+
+  production:
+    name: restore drill from the real replica, read-only
+    if: github.event_name == 'workflow_dispatch' && inputs.target == 'production'
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    # Read-only keys for the two real buckets, as the restore-drill
+    # environment's secrets (WP-OP2).
+    environment: restore-drill
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: |
+            go.mod
+            go.sum
+
+      - name: The checking tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends sqlite3 > /dev/null
+
+      - name: Build pairtimed and the image
+        run: |
+          pkg=github.com/some-du6e/pairtime/internal/version
+          mkdir -p dist/linux_amd64
+          GOOS=linux GOARCH=amd64 go build -trimpath -buildvcs=false \
+            -ldflags="-s -w -X $pkg.Version=v0.0.0-drill -X $pkg.Commit=$(git rev-parse HEAD)" \
+            -o dist/linux_amd64/pairtimed ./cmd/pairtimed
+          go run ./tools/release notices -bin dist/linux_amd64/pairtimed -out dist/THIRD_PARTY_NOTICES.txt
+          docker buildx build -f Dockerfile.pairtimed --platform linux/amd64 --load -t pairtimed:drill .
+
+      - name: A throwaway host with read-only keys
+        env:
+          S3_ENDPOINT: ${{ secrets.PAIRTIME_S3_ENDPOINT }}
+          S3_REGION: ${{ secrets.PAIRTIME_S3_REGION }}
+          S3_BUCKET: ${{ secrets.PAIRTIME_S3_BUCKET }}
+          S3_SNAPSHOT_BUCKET: ${{ secrets.PAIRTIME_S3_SNAPSHOT_BUCKET }}
+          S3_ACCESS_KEY_ID: ${{ secrets.PAIRTIME_S3_READONLY_ACCESS_KEY_ID }}
+          S3_SECRET_ACCESS_KEY: ${{ secrets.PAIRTIME_S3_READONLY_SECRET_ACCESS_KEY }}
+        run: |
+          for v in S3_ENDPOINT S3_BUCKET S3_SNAPSHOT_BUCKET S3_ACCESS_KEY_ID S3_SECRET_ACCESS_KEY; do
+            if [ -z "${!v}" ]; then
+              echo "::error::the restore-drill environment has no PAIRTIME_$v secret (deploy/runbook.md, step 14)"
+              exit 1
+            fi
+          done
+          d=$RUNNER_TEMP/pairtime
+          cp -r deploy "$d"
+          echo "D=$d" >> "$GITHUB_ENV"
+          cd "$d"
+          sudo install -d -m 0700 -o "$UID65532" -g "$UID65532" data witness-roots
+          mkdir config
+          umask 077
+          {
+            echo "PAIRTIME_S3_ENDPOINT=$S3_ENDPOINT"
+            echo "PAIRTIME_S3_REGION=${S3_REGION:-auto}"
+            echo "PAIRTIME_S3_BUCKET=$S3_BUCKET"
+            echo "PAIRTIME_S3_SNAPSHOT_BUCKET=$S3_SNAPSHOT_BUCKET"
+            echo "PAIRTIME_S3_ACCESS_KEY_ID='$S3_ACCESS_KEY_ID'"
+            echo "PAIRTIME_S3_SECRET_ACCESS_KEY='$S3_SECRET_ACCESS_KEY'"
+          } > config/secrets.env
+          : > config/tunnel.env
+          printf 'services:\n  pairtimed:\n    image: pairtimed:drill\n    pull_policy: never\n    network_mode: host\n' > drill.yml
+          docker compose -f compose.yml -f drill.yml run --rm -T pairtimed pairtimed init -base-url http://localhost:8080 -config-out - > config/pairtime.toml
+
+      - name: Restore the real replica, read-only
+        run: |
+          cd "$D"
+          compose() { docker compose -f compose.yml -f drill.yml "$@"; }
+          # litestream restore reads the replica and writes only here.
+          compose run --rm -T pairtimed litestream restore -config /etc/litestream.yml -o /data/pairtime.db /data/pairtime.db
+          mkdir "$RUNNER_TEMP/restored"
+          sudo sh -c "cp '$D'/data/pairtime.db* '$RUNNER_TEMP/restored/'"
+          sudo chown -R "$(id -u):$(id -g)" "$RUNNER_TEMP/restored"
+          test "$(sqlite3 "$RUNNER_TEMP/restored/pairtime.db" 'PRAGMA integrity_check')" = ok
+          echo "the replica restores to a database that passes integrity_check"
+
+      - name: Serve the copy and check the backups exist
+        run: |
+          cd "$D"
+          compose() { docker compose -f compose.yml -f drill.yml "$@"; }
+          # pairtimed serve alone, without Litestream, so nothing writes to
+          # the bucket; with no age recipient it takes no snapshot.
+          compose run -d --name drill-serve pairtimed pairtimed serve
+          if ! timeout 180 bash -c 'until curl -fsS -o /dev/null http://127.0.0.1:9091/readyz; do sleep 2; done'; then
+            docker logs drill-serve
+            exit 1
+          fi
+          agent="pairtime-drill/${GITHUB_SHA::12} (+https://github.com/some-du6e/pairtime)"
+          test "$(curl -fsS -A "$agent" http://127.0.0.1:8080/healthz)" = ok
+          curl -fsS -A "$agent" -o /dev/null http://127.0.0.1:8080/privacy
+          # Reads only: the newest snapshot and key backup exist and are
+          # recent. Karim's key stays offline, so the snapshot is checked
+          # for age's header alone.
+          docker exec drill-serve pairtimed doctor -only snapshot,keys_backup,database,keys,config
+          docker exec drill-serve pairtimed snapshot fetch -o /data/latest.db.age
+          sudo head -c 21 data/latest.db.age | grep -q 'age-encryption.org/v1'
+          docker rm -f drill-serve

@@ -1,0 +1,101 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Looks at a deployed server from GitHub's network, outside the host
+# (docs/PLAN.md, WP-OP1 and WP-OP2): TLS that verifies and isn't about to
+# expire, /healthz answering 200 ok, and /.well-known/pairtime-keys.json
+# parsing. By hand only:
+#
+#   gh workflow run probe.yml -f host=pairtime.karimeltaib.com
+#
+# Every request sends a descriptive User-Agent. Cloudflare's Bot Fight
+# Mode answers the default curl agent from a data-center address, which a
+# runner is, with a 403 challenge, and that is the edge refusing the probe,
+# not the server failing; the probe says which it was (deploy/runbook.md,
+# User-Agent).
+name: probe
+
+on:
+  workflow_dispatch:
+    inputs:
+      host:
+        description: "The server's host name, without https://, such as pairtime.example.org"
+        required: true
+        type: string
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ inputs.host }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    name: probe https://${{ inputs.host }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    defaults:
+      run:
+        shell: bash
+    env:
+      HOST: ${{ inputs.host }}
+      AGENT: pairtime-probe/${{ github.sha }} (+https://github.com/some-du6e/pairtime)
+    steps:
+      - name: The host name
+        run: |
+          if ! grep -qE '^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$' <<<"$HOST"; then
+            echo "::error::'$HOST' isn't a host name: give it without https:// or a path"
+            exit 1
+          fi
+
+      - name: TLS verifies, and the certificate has 14 days left
+        run: |
+          # The chain and the name, as a browser checks them, then the dates.
+          cert=$(openssl s_client -connect "$HOST:443" -servername "$HOST" -verify_hostname "$HOST" -verify_return_error < /dev/null 2> "$RUNNER_TEMP/tls.err") || {
+            cat "$RUNNER_TEMP/tls.err"
+            echo "::error::the TLS handshake with $HOST failed or its certificate doesn't verify"
+            exit 1
+          }
+          openssl x509 -noout -subject -issuer -enddate <<<"$cert"
+          if ! openssl x509 -noout -checkend $((14 * 86400)) <<<"$cert" > /dev/null; then
+            echo "::error::$HOST's certificate expires within 14 days"
+            exit 1
+          fi
+
+      - name: /healthz answers 200 ok
+        run: |
+          code=$(curl -sS -A "$AGENT" --max-time 20 -D "$RUNNER_TEMP/healthz.h" -o "$RUNNER_TEMP/healthz.b" -w '%{http_code}' "https://$HOST/healthz") || {
+            echo "::error::https://$HOST/healthz didn't answer"
+            exit 1
+          }
+          body=$(tr -d '\r\n' < "$RUNNER_TEMP/healthz.b")
+          if [ "$code" = 403 ] && grep -qi '^cf-mitigated: challenge' "$RUNNER_TEMP/healthz.h"; then
+            echo "::error::Cloudflare challenged the probe (403, cf-mitigated: challenge): the edge refused it, not pairtimed. Check the zone's bot settings for this User-Agent (deploy/runbook.md, User-Agent)"
+            exit 1
+          fi
+          if [ "$code" != 200 ] || [ "$body" != ok ]; then
+            echo "::error::https://$HOST/healthz answered $code '${body:0:200}', not 200 ok"
+            exit 1
+          fi
+          echo "https://$HOST/healthz answered 200 ok"
+
+      - name: /.well-known/pairtime-keys.json parses
+        run: |
+          code=$(curl -sS -A "$AGENT" --max-time 20 -D "$RUNNER_TEMP/keys.h" -o "$RUNNER_TEMP/keys.json" -w '%{http_code}' "https://$HOST/.well-known/pairtime-keys.json") || {
+            echo "::error::https://$HOST/.well-known/pairtime-keys.json didn't answer"
+            exit 1
+          }
+          if [ "$code" = 403 ] && grep -qi '^cf-mitigated: challenge' "$RUNNER_TEMP/keys.h"; then
+            echo "::error::Cloudflare challenged the probe (deploy/runbook.md, User-Agent)"
+            exit 1
+          fi
+          if [ "$code" = 404 ]; then
+            echo "::error::https://$HOST/.well-known/pairtime-keys.json is 404: the server keys' public document arrives with WP-SV17, which WP-OP2 waits for"
+            exit 1
+          fi
+          if [ "$code" != 200 ] || ! jq -e 'type == "object"' "$RUNNER_TEMP/keys.json" > /dev/null; then
+            echo "::error::https://$HOST/.well-known/pairtime-keys.json answered $code with something that isn't a JSON object"
+            head -c 300 "$RUNNER_TEMP/keys.json"
+            exit 1
+          fi
+          jq . "$RUNNER_TEMP/keys.json"
