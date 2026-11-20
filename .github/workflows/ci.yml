@@ -88,6 +88,12 @@ jobs:
         if: ${{ !cancelled() }}
         run: python3 -I testdata/upstream/check.py
 
+      # pkg/redact embeds gitleaks' rules as JSON converted from the pinned
+      # upstream config in pkg/redact/rules. This fails when the JSON isn't
+      # exactly what the converter writes from that config.
+      - name: Redaction rules
+        run: python3 -I pkg/redact/rules/convert.py --check
+
       - name: go vet
         run: go vet ./...
 
