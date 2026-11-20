@@ -322,9 +322,10 @@ func TestFindingRunLoop(t *testing.T) {
 		f.PostReachedObserver = eventually(2*time.Second, func() bool { return b.activations.Load() > before })
 	})
 	t.Run("a distributed notification to a Loop off the main thread", func(t *testing.T) {
-		l, _, rec := startMacLoop(t, false, func(b *macBackend) { b.lockNames = testLockNames() })
+		names := testLockNames("offmain")
+		l, _, rec := startMacLoop(t, false, func(b *macBackend) { b.lockNames = names })
 		l.seedLock(false)
-		postDistributed(testLockNames()[0])
+		postDistributed(names[0])
 		select {
 		case <-rec.power:
 			f.DistributedOffMain = true

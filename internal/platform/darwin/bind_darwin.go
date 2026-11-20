@@ -5,6 +5,7 @@ package darwin
 import (
 	"errors"
 	"fmt"
+	"runtime"
 	"sync"
 	"unsafe"
 
@@ -397,8 +398,11 @@ func bindObjC() error {
 
 // withPool runs f inside an autorelease pool, so the objects AppKit hands
 // back autoreleased are freed when f returns. Threads that don't run an
-// AppKit event loop have no pool of their own.
+// AppKit event loop have no pool of their own. A pool belongs to its
+// thread, so the goroutine stays on one thread from the push to the pop.
 func withPool(f func()) {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
 	pool := objc.poolPush()
 	defer objc.poolPop(pool)
 	f()

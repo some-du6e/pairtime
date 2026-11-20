@@ -307,10 +307,11 @@ func postDistributed(name string) {
 	cf.postNotification(cf.distributedCenter(), s, 0, 0, true)
 }
 
-// testLockNames are lock notification names private to this process, so
-// posting them locks nothing and no other process hears them.
-func testLockNames() [2]string {
-	p := fmt.Sprintf("dev.pairtime.test.%d.", os.Getpid())
+// testLockNames are lock notification names private to this process and
+// to one use, so posting them locks nothing, no other process hears them,
+// and one test's notification can't reach another test's Loop late.
+func testLockNames(use string) [2]string {
+	p := fmt.Sprintf("dev.pairtime.test.%d.%s.", os.Getpid(), use)
 	return [2]string{p + "screenIsLocked", p + "screenIsUnlocked"}
 }
 
@@ -364,7 +365,7 @@ func TestLoopOnMac(t *testing.T) {
 				// The runner's real lock state seeded the filter; start from
 				// unlocked so both posts are news.
 				l.seedLock(false)
-				names := testLockNames()
+				names := testLockNames("loop")
 				postDistributed(names[0])
 				rec.waitPower(t, event.PowerLock)
 				postDistributed(names[1])
@@ -388,7 +389,7 @@ func TestLoopOnMac(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			var rec *macRecorder
 			l, b, rec := startMacLoop(t, tt.mainThread, func(b *macBackend) {
-				b.lockNames = testLockNames()
+				b.lockNames = testLockNames("loop")
 				b.testAck = func(id uintptr) {
 					if testPowerIDs[id] {
 						rec.note(fmt.Sprintf("ack %d", id))
