@@ -8,9 +8,14 @@
 # values), cwd, parents (pid and executable name, never command lines) and
 # stdin (the bytes, unchanged), plus stderr if something here failed.
 #
-# Register it in exec form, so no shell sits in between:
+# Register it as one command line, with the bare executable name first and
+# the paths in double quotes, which Git Bash, PowerShell and cmd all run:
 #
-#   powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File <kit>\dump-hook.ps1 <run-dir> <label>
+#   powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "<kit>\dump-hook.ps1" "<run-dir>" <label>
+#
+# Never as exec form with powershell.exe as the command: a harness that
+# drops "args" would start a bare powershell.exe, which runs the hook's
+# payload on stdin as commands.
 #
 # It prints nothing and always exits 0: harnesses feed a hook's stdout to the
 # model on some events, and a non-zero exit can block a prompt or a tool call.

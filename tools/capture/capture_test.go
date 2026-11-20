@@ -179,6 +179,11 @@ const (
 // and no newline at the end.
 var payload = []byte("{\"session_id\":\"3f9c\",\"hook_event_name\":\"UserPromptSubmit\",\"prompt\":\"caf\u00e9 \u2603\"}\r\n{\"tail\":true}")
 
+// hostile is a hook payload whose strings hold command substitutions, as an
+// agent's reply quoting a command can. A shell that reads it as its script
+// runs both and creates the two files.
+var hostile = []byte("{\"session_id\":\"x\",\"last_assistant_message\":\"I ran \x60touch backtick-ran\x60 and $(touch dollar-ran)\"}")
+
 func TestDumpers(t *testing.T) {
 	unixOnly(t)
 	for _, d := range dumpers {
@@ -741,6 +746,33 @@ func readSettings(t *testing.T, path string) map[string][]hookEntry {
 	return s.Hooks
 }
 
+// copyKit copies the kit's scripts into repo/tools/capture, keeping their
+// modes, and returns that folder. prepare.py takes the folder two levels up
+// as the pairtime checkout.
+func copyKit(t *testing.T, repo string) string {
+	t.Helper()
+	dir := filepath.Join(repo, "tools", "capture")
+	entries, err := os.ReadDir(".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		ext := filepath.Ext(e.Name())
+		if e.IsDir() || (ext != ".py" && ext != ".sh" && ext != ".ps1" && ext != ".md") {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil {
+			t.Fatal(err)
+		}
+		write(t, filepath.Join(dir, e.Name()), read(t, e.Name()))
+		if err := os.Chmod(filepath.Join(dir, e.Name()), info.Mode().Perm()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return dir
+}
+
 func TestPrepare(t *testing.T) {
 	unixOnly(t)
 	need(t, "git")
@@ -760,7 +792,7 @@ func TestPrepare(t *testing.T) {
 		name  string
 		check func(t *testing.T)
 	}{
-		{"every DESIGN 5.1 hook runs the dumper in exec form with the run and its label", func(t *testing.T) {
+		{"every DESIGN 5.1 hook runs the dumper itself in exec form, with the run and its label as args", func(t *testing.T) {
 			if len(hooks) != len(claudeHooks) {
 				t.Errorf("%d events, want %d: %v", len(hooks), len(claudeHooks), hooks)
 			}
@@ -771,9 +803,9 @@ func TestPrepare(t *testing.T) {
 					continue
 				}
 				h := entries[0].Hooks[0]
-				want := []string{kit(t, "dump-hook.sh"), runDir, name}
-				if h.Type != "command" || h.Command != "/bin/sh" || strings.Join(h.Args, "\n") != strings.Join(want, "\n") {
-					t.Errorf("%s: %+v, want /bin/sh %q", name, h, want)
+				want := []string{runDir, name}
+				if h.Type != "command" || h.Command != kit(t, "dump-hook.sh") || strings.Join(h.Args, "\n") != strings.Join(want, "\n") {
+					t.Errorf("%s: %+v, want %s %q", name, h, kit(t, "dump-hook.sh"), want)
 				}
 				if entries[0].Matcher != matcher {
 					t.Errorf("%s matcher = %q, want %q", name, entries[0].Matcher, matcher)
@@ -788,6 +820,67 @@ func TestPrepare(t *testing.T) {
 			run(t, project, payload, nil, append([]string{h.Command}, h.Args...)...)
 			if got := read(t, filepath.Join(runDir, "hooks", "000001", "stdin")); got != string(payload) {
 				t.Fatalf("stdin = %q", got)
+			}
+		}},
+		{"a harness that drops args runs the dumper bare, which runs nothing from the payload", func(t *testing.T) {
+			// The payload really is hostile: the old form, a bare /bin/sh
+			// with the payload on stdin, runs the commands inside it.
+			old := t.TempDir()
+			run(t, old, hostile, nil, need(t, "sh"))
+			if len(tree(t, old)) == 0 {
+				t.Fatal("a bare sh ran nothing from the hostile payload, so this check would prove nothing")
+			}
+			h := hooks["Stop"][0].Hooks[0]
+			before := len(tree(t, runDir))
+			// Exec form without its args, and the command run through a shell.
+			for _, argv := range [][]string{{h.Command}, {need(t, "sh"), "-c", h.Command}} {
+				dir := t.TempDir()
+				r := run(t, dir, hostile, nil, argv...)
+				if r.code != 0 || r.stdout != "" || r.stderr != "" {
+					t.Errorf("%q: exit %d, stdout %q, stderr %q; want 0 and nothing", argv, r.code, r.stdout, r.stderr)
+				}
+				if files := tree(t, dir); len(files) != 0 {
+					t.Errorf("%q ran something from the payload: %v", argv, keys(files))
+				}
+			}
+			if after := len(tree(t, runDir)); after != before {
+				t.Errorf("a call without args wrote into the run: %d files, then %d", before, after)
+			}
+		}},
+		{"on Windows a hook is one powershell.exe command line with no args to drop, run the same by Git Bash and PowerShell", func(t *testing.T) {
+			// A stand-in for powershell.exe, which this Linux runner lacks.
+			pwsh := need(t, "pwsh")
+			bin := t.TempDir()
+			write(t, filepath.Join(bin, "powershell.exe"), "#!/bin/sh\nexec "+pwsh+" \"$@\"\n")
+			if err := os.Chmod(filepath.Join(bin, "powershell.exe"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			// A space in the run folder, as in C:\Users\Rowan Quinn.
+			winRun := filepath.Join(t.TempDir(), "rowan quinn", "run")
+			code := "import json, sys; sys.path.insert(0, sys.argv[1]); import prepare; " +
+				"print(json.dumps(prepare.hook_command(sys.argv[2], 'Stop', False, windows=True)))"
+			r := run(t, ".", nil, nil, need(t, "python3"), "-I", "-B", "-c", code, kit(t, "."), winRun)
+			var h map[string]any
+			if err := json.Unmarshal([]byte(r.stdout), &h); err != nil {
+				t.Fatalf("handler %q: %v (%s)", r.stdout, err, r.stderr)
+			}
+			cmd, _ := h["command"].(string)
+			if _, ok := h["args"]; ok || len(h) != 1 || !strings.HasPrefix(cmd, "powershell.exe -NoProfile ") {
+				t.Fatalf("handler %v, want only a command that starts with the bare powershell.exe", h)
+			}
+			env := []string{"PATH=" + bin + string(os.PathListSeparator) + os.Getenv("PATH")}
+			shells := [][]string{{need(t, "sh"), "-c", cmd}, {pwsh, "-NoProfile", "-NonInteractive", "-Command", cmd}}
+			for i, shell := range shells {
+				if r := run(t, project, payload, env, shell...); r.code != 0 {
+					t.Errorf("%s: exit %d: %s", shell[0], r.code, r.stderr)
+				}
+				call := filepath.Join(winRun, "hooks", "00000"+strconv.Itoa(i+1))
+				if got := read(t, filepath.Join(call, "argv")); got != winRun+"\nStop\n" {
+					t.Errorf("%s: argv = %q, want the run and Stop", shell[0], got)
+				}
+			}
+			if got := read(t, filepath.Join(winRun, "hooks", "000001", "stdin")); got != string(payload) {
+				t.Errorf("stdin through sh = %q", got)
 			}
 		}},
 		{"the scratch project is a git repo with a made-up author", func(t *testing.T) {
@@ -814,8 +907,8 @@ func TestPrepare(t *testing.T) {
 			if len(matches) != 1 {
 				t.Fatalf("backups: %v", matches)
 			}
-			if h := readSettings(t, settings)["Stop"][0].Hooks[0]; h.Args[1] != filepath.Join(root, "runs", "vscode") {
-				t.Fatalf("Stop hook writes to %s", h.Args[1])
+			if h := readSettings(t, settings)["Stop"][0].Hooks[0]; h.Args[0] != filepath.Join(root, "runs", "vscode") {
+				t.Fatalf("Stop hook writes to %s", h.Args[0])
 			}
 		}},
 		{"--shell-form writes one command string that works in a shell", func(t *testing.T) {
@@ -830,6 +923,43 @@ func TestPrepare(t *testing.T) {
 			run(t, project, []byte("{}"), nil, need(t, "sh"), "-c", h.Command)
 			if got := read(t, filepath.Join(root, "runs", "shell", "hooks", "000001", "argv")); !strings.HasSuffix(got, "\nStop\n") {
 				t.Fatalf("argv = %q", got)
+			}
+		}},
+		{"a kit path a shell would split is refused in exec form, and --shell-form quotes it", func(t *testing.T) {
+			copied := copyKit(t, filepath.Join(t.TempDir(), "my stuff", "pairtime"))
+			prep := []string{need(t, "python3"), "-I", "-B", filepath.Join(copied, "prepare.py"), "claude_code"}
+			r := run(t, ".", nil, env, append(prep, filepath.Join(t.TempDir(), "capture"), "cli")...)
+			if r.code != 2 || !strings.Contains(r.stderr, "--shell-form") {
+				t.Fatalf("exit %d, want 2 and a pointer to --shell-form: %s", r.code, r.stderr)
+			}
+			r = run(t, ".", nil, env, append(prep, filepath.Join(t.TempDir(), "capture"), "cli", "--shell-form")...)
+			if r.code != 0 {
+				t.Fatalf("--shell-form: exit %d: %s", r.code, r.stderr)
+			}
+		}},
+		{"a dumper that can't run as a command is refused", func(t *testing.T) {
+			for _, c := range []struct {
+				name, want string
+				spoil      func(path string) error
+			}{
+				{"no executable bit", "chmod +x", func(p string) error { return os.Chmod(p, 0o644) }},
+				{"Windows line endings", "line endings", func(p string) error {
+					b, err := os.ReadFile(p)
+					if err != nil {
+						return err
+					}
+					return os.WriteFile(p, bytes.ReplaceAll(b, []byte("\n"), []byte("\r\n")), 0o755)
+				}},
+			} {
+				copied := copyKit(t, filepath.Join(t.TempDir(), "pairtime"))
+				if err := c.spoil(filepath.Join(copied, "dump-hook.sh")); err != nil {
+					t.Fatal(err)
+				}
+				r := run(t, ".", nil, env, need(t, "python3"), "-I", "-B", filepath.Join(copied, "prepare.py"), "claude_code",
+					filepath.Join(t.TempDir(), "capture"), "cli")
+				if r.code != 2 || !strings.Contains(r.stderr, c.want) {
+					t.Errorf("%s: exit %d, want 2 and %q: %s", c.name, r.code, c.want, r.stderr)
+				}
 			}
 		}},
 		{"a capture folder inside the pairtime checkout is refused", func(t *testing.T) {

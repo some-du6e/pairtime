@@ -29,7 +29,7 @@ Captured by WP-AD1. Run it once in the CLI (run `cli`) and once in the VS Code e
 2. Terminal 1: start the sink, `python3 tools/capture/otlp_sink.py ROOT/runs/cli`.
 3. Terminal 2: set the telemetry variables `prepare.py` printed (OTLP over `http/json` to the sink, `OTEL_METRICS_INCLUDE_ENTRYPOINT=true`, prompt, response and tool logging off), then `cd ROOT/project`. Claude Code ignores telemetry variables set in project settings, so they have to come from this shell.
 
-If no `hooks/` folder appears in `ROOT/runs/cli` after step 2 below, open `/hooks` in Claude Code to see whether the hooks loaded. If your version doesn't accept `args` in a hook, run `prepare.py` again with `--shell-form` under a new run name.
+If no `hooks/` folder appears in `ROOT/runs/cli` after step 2 below, open `/hooks` in Claude Code to see whether the hooks loaded. On macOS and Linux each hook names the dumper itself as its command, with the run folder and the event as its `args`. A version that doesn't take `args` either rejects the hooks or runs the dumper without them, and without them it records nothing and reads nothing. Either way, run `prepare.py` again with `--shell-form` under a new run name. On Windows every hook is already one `powershell.exe` command line, so there is no `args` to drop.
 
 ### Steps
 
