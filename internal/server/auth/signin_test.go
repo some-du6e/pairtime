@@ -3,6 +3,7 @@
 package auth_test
 
 import (
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"net/http"
@@ -63,9 +64,12 @@ func testSignIn(t *testing.T, engine store.Engine) {
 		// sign up. Otherwise anyone may.
 		closed    bool
 		mayCreate func(sub string) bool
-		deny      bool
-		hook      func(*hcafake.Token) string
-		opts      signInOptions
+		// sessionStart, when set, starts the browser's HCA session this
+		// long before the sign-in.
+		sessionStart time.Duration
+		deny         bool
+		hook         func(*hcafake.Token) string
+		opts         signInOptions
 		// wantCode is the refusal's code; "" means the sign-in succeeds
 		// and lands on wantLocation, "/" when empty.
 		wantStatus   int
@@ -115,6 +119,36 @@ func testSignIn(t *testing.T, engine store.Engine) {
 				}
 				if n := hca.TokenCalls(); n != 1 {
 					t.Errorf("the code was redeemed %d times, want once", n)
+				}
+				if me.Session.FreshLoginAt != nil {
+					t.Error("an ordinary sign-in's session is marked as a fresh login")
+				}
+			},
+		},
+		{
+			name: "the nonce is the SHA-256 of a secret only the login cookie holds",
+			check: func(t *testing.T, _ *harness, _ *hcafake.Server, f *flow, _ auth.Me) {
+				secret := loginSecret(t, f.loginCookie)
+				sum := sha256.Sum256([]byte(secret))
+				nonce := f.authorize.Query().Get("nonce")
+				if nonce != base64.RawURLEncoding.EncodeToString(sum[:]) {
+					t.Error("the nonce sent to HCA isn't the base64url SHA-256 of the login cookie's secret")
+				}
+				if strings.Contains(f.authorize.String(), secret) {
+					t.Error("the authorization request carries the login cookie's secret")
+				}
+			},
+		},
+		{
+			name:         "an ordinary sign-in keeps an auth_time a day old and isn't a fresh login",
+			sessionStart: 24 * time.Hour,
+			check: func(t *testing.T, _ *harness, _ *hcafake.Server, _ *flow, me auth.Me) {
+				day := time.Now().Add(-24 * time.Hour)
+				if at := me.Session.AuthTime; at == nil || at.Sub(day) > time.Minute || at.Sub(day) < -time.Minute {
+					t.Errorf("session auth_time = %v, want about %v", at, day)
+				}
+				if me.Session.FreshLoginAt != nil {
+					t.Error("an ordinary sign-in's session is marked as a fresh login")
 				}
 			},
 		},
@@ -385,11 +419,29 @@ func testSignIn(t *testing.T, engine store.Engine) {
 				if q.Get("prompt") != "login" || q.Has("max_age") {
 					t.Errorf("authorize prompt = %q, max_age = %q; want prompt=login and no max_age", q.Get("prompt"), q.Get("max_age"))
 				}
-				at := me.Session.AuthTime
-				if at == nil || time.Since(*at) > time.Minute || time.Since(*at) < -time.Minute {
-					t.Errorf("session auth_time = %v, want about now", at)
+				for name, at := range map[string]*time.Time{"auth_time": me.Session.AuthTime, "fresh_login_at": me.Session.FreshLoginAt} {
+					if at == nil || time.Since(*at) > time.Minute || time.Since(*at) < -time.Minute {
+						t.Errorf("session %s = %v, want about now", name, at)
+					}
 				}
 			},
+		},
+		{
+			name:         "a fresh login after a day-old HCA session is fresh from the new login",
+			sessionStart: 24 * time.Hour,
+			opts:         signInOptions{query: "?fresh=1"},
+			check: func(t *testing.T, _ *harness, _ *hcafake.Server, _ *flow, me auth.Me) {
+				if at := me.Session.FreshLoginAt; at == nil || time.Since(*at) > time.Minute {
+					t.Errorf("session fresh_login_at = %v, want about now", at)
+				}
+			},
+		},
+		{
+			name:       "a fresh login HCA authenticated two minutes before it started is refused",
+			opts:       signInOptions{query: "?fresh=1"},
+			hook:       resign(func(c map[string]any) { c["auth_time"] = now() - 120 }),
+			wantStatus: http.StatusUnauthorized,
+			wantCode:   auth.CodeLoginNotFresh,
 		},
 		{
 			name:       "a fresh login HCA authenticated an hour ago is refused",
@@ -451,6 +503,9 @@ func testSignIn(t *testing.T, engine store.Engine) {
 			h, hca := withFake(t, engine, mayCreate)
 			if tt.identity != nil {
 				hca.SetIdentity(*tt.identity)
+			}
+			if tt.sessionStart != 0 {
+				hca.SetSessionStart(time.Now().Add(-tt.sessionStart))
 			}
 			hca.SetHook(tt.hook)
 			hca.SetDeny(tt.deny)
@@ -528,6 +583,63 @@ func TestIneligibleLater(t *testing.T) {
 						t.Errorf("callback %d %q; log:\n%s", f.resp.status, errorCode(f.resp), h.logs.String())
 					}
 				})
+			}
+		})
+	}
+}
+
+// TestCodeInjection replays the code from one browser's sign-in in another
+// browser, as someone who saw the first browser's authorization response
+// could. The nonce ties the code's ID token to the browser that started the
+// sign-in (OIDC Core 15.5.2), and the login cookie's HMAC keeps a browser
+// from writing its own cookie around another sign-in's nonce.
+func TestCodeInjection(t *testing.T) {
+	victim := hcafake.Verified()
+	attacker := hcafake.Identity{Sub: "ident!fakeAttacker1", VerificationStatus: "verified"}
+	tests := []struct {
+		name string
+		// forge writes the attacker's login cookie by hand from the
+		// victim's authorization request, instead of starting a sign-in.
+		forge      bool
+		wantStatus int
+		wantCode   string
+	}{
+		{name: "another browser's code fails the nonce check in the attacker's own sign-in", wantStatus: http.StatusUnauthorized, wantCode: auth.CodeWrongNonce},
+		{name: "a login cookie written by hand around another browser's state and nonce is refused", forge: true, wantStatus: http.StatusBadRequest, wantCode: auth.CodeStateMissing},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h, hca := withFake(t, storetest.Engines()[0], anyone)
+			hca.SetIdentity(victim)
+			v := h.startSignIn(signInOptions{})
+			// From here on the client is the attacker's browser.
+			h.client.Jar = newJar(t)
+			hca.SetIdentity(attacker)
+			callback := *v.callback
+			if tt.forge {
+				// What an unsigned cookie would have needed: the victim's
+				// state, and the nonce under both its old and new names.
+				q := v.authorize.Query()
+				st, err := json.Marshal(map[string]any{"s": q.Get("state"), "n": q.Get("nonce"), "v": q.Get("nonce"), "r": "/", "t": time.Now().Unix()})
+				if err != nil {
+					t.Fatal(err)
+				}
+				u, err := url.Parse(h.srv.URL)
+				if err != nil {
+					t.Fatal(err)
+				}
+				h.client.Jar.SetCookies(u, []*http.Cookie{{Name: loginCookieName, Value: base64.RawURLEncoding.EncodeToString(st), Path: "/", Secure: true, HttpOnly: true}})
+			} else {
+				own := h.startSignIn(signInOptions{})
+				callback = *own.callback
+				q := callback.Query()
+				q.Set("code", v.callback.Query().Get("code"))
+				callback.RawQuery = q.Encode()
+			}
+			f := &flow{authorize: v.authorize, callback: &callback, resp: h.get(callback.String())}
+			checkRefused(t, h, f, tt.wantStatus, tt.wantCode)
+			if n := h.count(`SELECT count(*) FROM sessions`); n != 0 {
+				t.Errorf("%d sessions after the replayed code, want none", n)
 			}
 		})
 	}
@@ -613,12 +725,14 @@ func TestNoSecretsInLogs(t *testing.T) {
 	bad := h.signIn(signInOptions{})
 	logs := h.logs.String()
 	secrets := map[string]string{
-		"the client secret":        hcafake.ClientSecret,
-		"the authorization code":   ok.callback.Query().Get("code"),
-		"a refused sign-in's code": bad.callback.Query().Get("code"),
-		"the state":                ok.authorize.Query().Get("state"),
-		"the nonce":                ok.authorize.Query().Get("nonce"),
-		"the session token":        cookie(ok.resp, auth.SessionCookie).Value,
+		"the client secret":         hcafake.ClientSecret,
+		"the authorization code":    ok.callback.Query().Get("code"),
+		"a refused sign-in's code":  bad.callback.Query().Get("code"),
+		"the state":                 ok.authorize.Query().Get("state"),
+		"the nonce":                 ok.authorize.Query().Get("nonce"),
+		"the login cookie":          ok.loginCookie,
+		"the login cookie's secret": loginSecret(t, ok.loginCookie),
+		"the session token":         cookie(ok.resp, auth.SessionCookie).Value,
 	}
 	for name, v := range secrets {
 		t.Run("the log never holds "+name, func(t *testing.T) {
@@ -626,7 +740,7 @@ func TestNoSecretsInLogs(t *testing.T) {
 				t.Fatal("the test lost the value")
 			}
 			if strings.Contains(logs, v) {
-				t.Errorf("the log holds %s:\n%s", name, logs)
+				t.Errorf("the log holds %s", name)
 			}
 		})
 	}

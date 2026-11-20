@@ -4,8 +4,10 @@ package auth
 
 import (
 	"context"
+	"crypto/hmac"
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
@@ -23,12 +25,16 @@ import (
 )
 
 // loginState is what the login cookie carries from the login page to the
-// callback. It holds no secret of the server's: the state and nonce are
-// fresh random values, and the cookie's __Host- prefix means only
-// pairtimed's own origin can set it.
+// callback. The cookie also carries an HMAC of it under the service's login
+// key (sealLogin), so a browser can't write a login state of its own: the
+// callback believes Fresh and Started, and the cookie's __Host- prefix
+// keeps other origins from setting it.
 type loginState struct {
-	State    string `json:"s"`
-	Nonce    string `json:"n"`
+	State string `json:"s"`
+	// Secret is a random value only this cookie holds. The nonce sent to
+	// HCA is its SHA-256 (nonceFor), so the authorization request never
+	// carries it (OIDC Core 15.5.2).
+	Secret   string `json:"v"`
 	ReturnTo string `json:"r"`
 	Fresh    bool   `json:"f,omitempty"`
 	Started  int64  `json:"t"`
@@ -45,7 +51,7 @@ func (s *Service) login(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	st := loginState{
 		State:    randomString(),
-		Nonce:    randomString(),
+		Secret:   randomString(),
 		ReturnTo: localPath(q.Get("return_to")),
 		Fresh:    q.Get("fresh") == "1",
 		Started:  s.now().Unix(),
@@ -60,14 +66,14 @@ func (s *Service) login(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, unreachable(err))
 		return
 	}
-	value, err := json.Marshal(st)
+	value, err := s.sealLogin(st)
 	if err != nil {
 		s.fail(w, r, internal(err))
 		return
 	}
 	http.SetCookie(w, &http.Cookie{
 		Name:     loginCookie,
-		Value:    base64.RawURLEncoding.EncodeToString(value),
+		Value:    value,
 		Path:     "/",
 		MaxAge:   int(loginTTL / time.Second),
 		Secure:   true,
@@ -91,14 +97,15 @@ func (s *Service) authorizeURL(p *provider, st loginState) (string, error) {
 	q.Set("redirect_uri", s.redirectURI)
 	q.Set("scope", strings.Join(Scopes, " "))
 	q.Set("state", st.State)
-	q.Set("nonce", st.Nonce)
+	q.Set("nonce", nonceFor(st.Secret))
 	if st.Fresh {
 		// prompt=login asks HCA to authenticate the person again before it
 		// answers (OIDC Core 3.1.2.1). It goes alone, as HCA's OIDC guide
 		// shows it (SP 3.1): the guide offers prompt=login and max_age as
 		// two separate ways to ask, so pairtime never adds max_age. The
 		// callback then needs the ID token's auth_time to show the person
-		// authenticated after this sign-in started.
+		// authenticated after this sign-in started, the time the signed
+		// login cookie holds.
 		q.Set("prompt", "login")
 	}
 	u.RawQuery = q.Encode()
@@ -178,12 +185,16 @@ func (s *Service) callback(w http.ResponseWriter, r *http.Request) {
 	keys := func(kid string) ([]*rsa.PublicKey, error) {
 		return s.oidc.signingKeys(ctx, p.JWKSURI, kid)
 	}
+	var freshSince time.Time
+	if st.Fresh {
+		freshSince = time.Unix(st.Started, 0)
+	}
 	c, verr := verifyIDToken(raw, keys, expectation{
-		issuer:   s.issuer,
-		clientID: s.clientID,
-		nonce:    st.Nonce,
-		now:      s.now(),
-		fresh:    st.Fresh,
+		issuer:     s.issuer,
+		clientID:   s.clientID,
+		nonce:      nonceFor(st.Secret),
+		now:        s.now(),
+		freshSince: freshSince,
 	})
 	if verr != nil {
 		s.fail(w, r, verr)
@@ -194,7 +205,9 @@ func (s *Service) callback(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, perr)
 		return
 	}
-	sess, created, err := s.accounts.SignIn(ctx, id, authTime)
+	// A fresh login's auth_time passed verifyIDToken's freshSince check,
+	// so HCA authenticated the person after this sign-in started.
+	sess, created, err := s.accounts.SignIn(ctx, id, accounts.Login{AuthTime: authTime, Fresh: st.Fresh})
 	switch {
 	case errors.Is(err, accounts.ErrIneligible):
 		s.fail(w, r, &Error{Status: http.StatusForbidden, Code: CodeIneligible,
@@ -221,24 +234,62 @@ func (s *Service) callback(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, st.ReturnTo, http.StatusSeeOther)
 }
 
-// readLoginState reads the login cookie, if it is there, well formed and
-// younger than loginTTL.
+// loginMACLabel starts the input of the login cookie's HMAC.
+const loginMACLabel = "pairtime hca login v1\x00"
+
+// sealLogin encodes st as the login cookie's value: its JSON in base64url,
+// a dot, and the base64url HMAC-SHA256 of that encoding under the login
+// key.
+func (s *Service) sealLogin(st loginState) (string, error) {
+	b, err := json.Marshal(st)
+	if err != nil {
+		return "", err
+	}
+	body := base64.RawURLEncoding.EncodeToString(b)
+	return body + "." + base64.RawURLEncoding.EncodeToString(s.loginMAC(body)), nil
+}
+
+// loginMAC is the HMAC of a login cookie's encoded state.
+func (s *Service) loginMAC(body string) []byte {
+	m := hmac.New(sha256.New, s.loginKey)
+	m.Write([]byte(loginMACLabel))
+	m.Write([]byte(body))
+	return m.Sum(nil)
+}
+
+// readLoginState reads the login cookie, if it is there, carries this
+// service's HMAC, is well formed and is younger than loginTTL.
 func (s *Service) readLoginState(r *http.Request) (loginState, bool) {
-	var st loginState
 	c, err := r.Cookie(loginCookie)
 	if err != nil || len(c.Value) > 2048 {
-		return st, false
+		return loginState{}, false
 	}
-	b, err := base64.RawURLEncoding.DecodeString(c.Value)
+	body, mac64, ok := strings.Cut(c.Value, ".")
+	if !ok {
+		return loginState{}, false
+	}
+	mac, err := base64.RawURLEncoding.DecodeString(mac64)
+	if err != nil || !hmac.Equal(mac, s.loginMAC(body)) {
+		return loginState{}, false
+	}
+	var st loginState
+	b, err := base64.RawURLEncoding.DecodeString(body)
 	if err != nil || json.Unmarshal(b, &st) != nil {
-		return st, false
+		return loginState{}, false
 	}
 	age := s.now().Sub(time.Unix(st.Started, 0))
-	if st.State == "" || st.Nonce == "" || age < -ClockSkew || age > loginTTL {
-		return st, false
+	if st.State == "" || st.Secret == "" || age < -ClockSkew || age > loginTTL {
+		return loginState{}, false
 	}
 	st.ReturnTo = localPath(st.ReturnTo)
 	return st, true
+}
+
+// nonceFor is the nonce of a sign-in whose login cookie holds secret: the
+// base64url SHA-256 of it (OIDC Core 15.5.2).
+func nonceFor(secret string) string {
+	sum := sha256.Sum256([]byte(secret))
+	return base64.RawURLEncoding.EncodeToString(sum[:])
 }
 
 // slackID is the shape of a Slack user id. HCA itself requires U and
@@ -362,6 +413,10 @@ func (s *Service) me(w http.ResponseWriter, r *http.Request) {
 		t := sess.AuthTime.UTC()
 		body.Session.AuthTime = &t
 	}
+	if !sess.FreshLoginAt.IsZero() {
+		t := sess.FreshLoginAt.UTC()
+		body.Session.FreshLoginAt = &t
+	}
 	writeJSON(w, http.StatusOK, body)
 }
 
@@ -388,6 +443,9 @@ type MeSession struct {
 	ExpiresAt time.Time `json:"expires_at"`
 	// AuthTime is when HCA last authenticated the person, if it said.
 	AuthTime *time.Time `json:"auth_time,omitempty"`
+	// FreshLoginAt is set only for a session from a fresh login
+	// (?fresh=1): when HCA authenticated the person again for it.
+	FreshLoginAt *time.Time `json:"fresh_login_at,omitempty"`
 }
 
 // localPath returns p when it is a path on this server, and "/" otherwise,
@@ -406,9 +464,14 @@ func localPath(p string) string {
 
 // randomString returns 32 random bytes as base64url.
 func randomString() string {
-	b := make([]byte, 32)
+	return base64.RawURLEncoding.EncodeToString(randomBytes(32))
+}
+
+// randomBytes returns n random bytes.
+func randomBytes(n int) []byte {
+	b := make([]byte, n)
 	rand.Read(b)
-	return base64.RawURLEncoding.EncodeToString(b)
+	return b
 }
 
 // expiredCookie deletes the cookie name.

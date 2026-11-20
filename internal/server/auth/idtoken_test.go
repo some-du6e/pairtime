@@ -57,11 +57,13 @@ func TestVerifyIDToken(t *testing.T) {
 		return tok.SignWith(right)
 	}
 	tests := []struct {
-		name     string
-		raw      string
-		keys     keyFinder // nil: keysFor(testKid, right)
-		fresh    bool
-		wantCode string // "" means the token passes
+		name string
+		raw  string
+		keys keyFinder // nil: keysFor(testKid, right)
+		// freshSince, when set, is the Unix time a login that asked for
+		// prompt=login started.
+		freshSince int64
+		wantCode   string // "" means the token passes
 	}{
 		{name: "a token HCA would issue passes", raw: sign(nil)},
 		{name: "aud may be an array holding only the client", raw: sign(func(t *hcafake.Token) { t.Claims["aud"] = []string{testClient} })},
@@ -106,9 +108,13 @@ func TestVerifyIDToken(t *testing.T) {
 				return []*rsa.PublicKey{&wrong.PublicKey, &right.PublicKey}, nil
 			},
 		},
-		{name: "a fresh login authenticated 30 s ago passes", raw: sign(nil), fresh: true},
-		{name: "a fresh login authenticated 10 minutes ago is refused", raw: sign(func(t *hcafake.Token) { t.Claims["auth_time"] = n - 600 }), fresh: true, wantCode: CodeLoginNotFresh},
-		{name: "a fresh login without auth_time is refused", raw: sign(func(t *hcafake.Token) { delete(t.Claims, "auth_time") }), fresh: true, wantCode: CodeNoAuthTime},
+		{name: "a fresh login authenticated after it started passes", raw: sign(nil), freshSince: n - 60},
+		{name: "a fresh login authenticated within the clock skew before it started passes", raw: sign(func(t *hcafake.Token) { t.Claims["auth_time"] = n - 120 }), freshSince: n - 60},
+		{name: "a fresh login authenticated past the clock skew before it started is refused", raw: sign(func(t *hcafake.Token) { t.Claims["auth_time"] = n - 121 }), freshSince: n - 60, wantCode: CodeLoginNotFresh},
+		{name: "a fresh login started 9 minutes ago passes with the auth_time of its own login", raw: sign(func(t *hcafake.Token) { t.Claims["auth_time"] = n - 500 }), freshSince: n - 540},
+		{name: "a fresh login without auth_time is refused", raw: sign(func(t *hcafake.Token) { delete(t.Claims, "auth_time") }), freshSince: n - 60, wantCode: CodeNoAuthTime},
+		{name: "an ordinary sign-in passes with an auth_time three days old", raw: sign(func(t *hcafake.Token) { t.Claims["auth_time"] = n - 3*24*3600 })},
+		{name: "an ordinary sign-in passes without auth_time", raw: sign(func(t *hcafake.Token) { delete(t.Claims, "auth_time") })},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -116,12 +122,16 @@ func TestVerifyIDToken(t *testing.T) {
 			if keys == nil {
 				keys = keysFor(testKid, right)
 			}
+			var freshSince time.Time
+			if tt.freshSince != 0 {
+				freshSince = time.Unix(tt.freshSince, 0)
+			}
 			c, err := verifyIDToken(tt.raw, keys, expectation{
-				issuer:   testIssuer,
-				clientID: testClient,
-				nonce:    testNonce,
-				now:      testNow,
-				fresh:    tt.fresh,
+				issuer:     testIssuer,
+				clientID:   testClient,
+				nonce:      testNonce,
+				now:        testNow,
+				freshSince: freshSince,
 			})
 			if tt.wantCode == "" {
 				if err != nil {

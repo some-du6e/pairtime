@@ -97,6 +97,7 @@ func TestSignIn(t *testing.T) {
 		mayCreate  func(sub string) bool
 		before     []Identity // sign-ins that happen first, each accepted
 		id         Identity
+		login      Login
 		wantErr    error // nil means the sign-in is accepted
 		wantErrAny bool  // any error, not one of the sentinels
 		check      func(t *testing.T, s *Store, db *store.DB, sess *Session, created bool)
@@ -220,6 +221,7 @@ func TestSignIn(t *testing.T) {
 			},
 		},
 		{name: "an unknown verification status is refused", id: Identity{Sub: "ident!abc123", Status: "verified_eventually"}, wantErrAny: true},
+		{name: "a fresh login without the time HCA authenticated the person is refused", id: verified(), login: Login{Fresh: true}, wantErrAny: true},
 		{name: "an empty subject is refused", id: Identity{Status: Verified}, wantErrAny: true},
 		{name: "a subject with a space is refused", id: Identity{Sub: "ident! abc", Status: Verified}, wantErrAny: true},
 	}
@@ -229,7 +231,7 @@ func TestSignIn(t *testing.T) {
 				t.Run(tt.name, func(t *testing.T) {
 					s, db := open(t, engine, Options{MayCreate: anyone})
 					for _, id := range tt.before {
-						if _, _, err := s.SignIn(ctx, id, time.Time{}); err != nil {
+						if _, _, err := s.SignIn(ctx, id, Login{}); err != nil {
 							t.Fatalf("an earlier sign-in: %v", err)
 						}
 					}
@@ -239,7 +241,7 @@ func TestSignIn(t *testing.T) {
 					case tt.mayCreate != nil:
 						s.mayCreate = tt.mayCreate
 					}
-					sess, created, err := s.SignIn(ctx, tt.id, time.Time{})
+					sess, created, err := s.SignIn(ctx, tt.id, tt.login)
 					switch {
 					case tt.wantErrAny:
 						if err == nil {
@@ -271,7 +273,7 @@ func TestEmailAtRest(t *testing.T) {
 			s, db := open(t, engine, Options{MayCreate: anyone})
 			id := verified()
 			id.Email = "Teen@Example.org"
-			sess, _, err := s.SignIn(ctx, id, time.Time{})
+			sess, _, err := s.SignIn(ctx, id, Login{})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -311,14 +313,18 @@ func TestSession(t *testing.T) {
 	reviewers := []config.Reviewer{{Sub: "ident!abc123", Roles: []string{"qi", "program_reviewer:stardance"}}}
 	tests := []struct {
 		name string
+		// fresh signs in with a fresh login; either way HCA's auth_time is
+		// a minute before the sign-in.
+		fresh bool
 		// act runs after the sign-in and returns the token to look up.
 		act     func(t *testing.T, s *Store, c *clock, token string) string
 		wantErr bool
 		check   func(t *testing.T, sess *Session, c *clock)
 	}{
 		{
-			name: "a live session is found with its account, its roles and HCA's auth_time",
-			act:  func(_ *testing.T, _ *Store, _ *clock, token string) string { return token },
+			name:  "a live session is found with its account, its roles, HCA's auth_time and its fresh login",
+			fresh: true,
+			act:   func(_ *testing.T, _ *Store, _ *clock, token string) string { return token },
 			check: func(t *testing.T, sess *Session, c *clock) {
 				if sess.User.HCASub != "ident!abc123" || !sess.User.CanSubmit() {
 					t.Errorf("user = %+v", sess.User)
@@ -326,11 +332,26 @@ func TestSession(t *testing.T) {
 				if !slices.Equal(sess.Roles, []string{"qi", "program_reviewer:stardance"}) || !sess.HasRole("qi") || sess.HasRole("admin") {
 					t.Errorf("roles = %v", sess.Roles)
 				}
-				if !sess.AuthTime.Equal(c.t.Add(-time.Minute)) || !sess.AuthenticatedWithin(2*time.Minute, c.t) {
-					t.Errorf("auth time = %v", sess.AuthTime)
+				if at := c.t.Add(-time.Minute); !sess.AuthTime.Equal(at) || !sess.FreshLoginAt.Equal(at) {
+					t.Errorf("auth time = %v, fresh login at %v; want both %v", sess.AuthTime, sess.FreshLoginAt, at)
+				}
+				if !sess.FreshLoginWithin(2*time.Minute, c.t) {
+					t.Error("a fresh login a minute old isn't one within 2 minutes")
 				}
 				if !sess.ExpiresAt.Equal(c.t.Add(DefaultSessionLifetime)) {
 					t.Errorf("expires at %v, want %v", sess.ExpiresAt, c.t.Add(DefaultSessionLifetime))
+				}
+			},
+		},
+		{
+			name: "an ordinary sign-in's session is no fresh login, however recent HCA's auth_time",
+			act:  func(_ *testing.T, _ *Store, _ *clock, token string) string { return token },
+			check: func(t *testing.T, sess *Session, c *clock) {
+				if !sess.AuthTime.Equal(c.t.Add(-time.Minute)) {
+					t.Errorf("auth time = %v, want %v", sess.AuthTime, c.t.Add(-time.Minute))
+				}
+				if !sess.FreshLoginAt.IsZero() || sess.FreshLoginWithin(time.Hour, c.t) {
+					t.Errorf("fresh login at %v, want none", sess.FreshLoginAt)
 				}
 			},
 		},
@@ -369,7 +390,7 @@ func TestSession(t *testing.T) {
 				t.Run(tt.name, func(t *testing.T) {
 					c := newClock()
 					s, _ := open(t, engine, Options{MayCreate: anyone, Reviewers: reviewers, Now: c.now})
-					signed, _, err := s.SignIn(ctx, verified(), c.t.Add(-time.Minute))
+					signed, _, err := s.SignIn(ctx, verified(), Login{AuthTime: c.t.Add(-time.Minute), Fresh: tt.fresh})
 					if err != nil {
 						t.Fatal(err)
 					}
@@ -403,7 +424,7 @@ func TestTokenAtRest(t *testing.T) {
 	for _, engine := range storetest.Engines() {
 		t.Run(string(engine), func(t *testing.T) {
 			s, db := open(t, engine, Options{MayCreate: anyone})
-			sess, _, err := s.SignIn(ctx, verified(), time.Time{})
+			sess, _, err := s.SignIn(ctx, verified(), Login{})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -434,11 +455,11 @@ func TestDeleteExpiredSessions(t *testing.T) {
 		t.Run(string(engine), func(t *testing.T) {
 			c := newClock()
 			s, db := open(t, engine, Options{MayCreate: anyone, Now: c.now, SessionLifetime: time.Hour})
-			expired, _, err := s.SignIn(ctx, verified(), time.Time{})
+			expired, _, err := s.SignIn(ctx, verified(), Login{})
 			if err != nil {
 				t.Fatal(err)
 			}
-			revoked, _, err := s.SignIn(ctx, verified(), time.Time{})
+			revoked, _, err := s.SignIn(ctx, verified(), Login{})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -446,7 +467,7 @@ func TestDeleteExpiredSessions(t *testing.T) {
 				t.Fatal(err)
 			}
 			c.t = c.t.Add(time.Hour + sessionGrace)
-			live, _, err := s.SignIn(ctx, verified(), time.Time{})
+			live, _, err := s.SignIn(ctx, verified(), Login{})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -613,6 +634,28 @@ func TestEligibility(t *testing.T) {
 			if u.CanSubmit() != tt.wantSubmit || u.EligibilityToConfirm() != tt.wantToConfirm {
 				t.Errorf("CanSubmit = %v, EligibilityToConfirm = %v; want %v, %v",
 					u.CanSubmit(), u.EligibilityToConfirm(), tt.wantSubmit, tt.wantToConfirm)
+			}
+		})
+	}
+}
+
+func TestFreshLoginWithin(t *testing.T) {
+	now := time.Date(2026, 11, 19, 12, 0, 0, 0, time.UTC)
+	tests := []struct {
+		name string
+		sess Session
+		d    time.Duration
+		want bool
+	}{
+		{name: "a fresh login a minute old is within 2 minutes", sess: Session{AuthTime: now.Add(-time.Minute), FreshLoginAt: now.Add(-time.Minute)}, d: 2 * time.Minute, want: true},
+		{name: "a fresh login exactly d old is within d", sess: Session{FreshLoginAt: now.Add(-2 * time.Minute)}, d: 2 * time.Minute, want: true},
+		{name: "a fresh login 3 minutes old isn't within 2 minutes", sess: Session{FreshLoginAt: now.Add(-3 * time.Minute)}, d: 2 * time.Minute},
+		{name: "an ordinary sign-in isn't a fresh login, even with a recent auth_time", sess: Session{AuthTime: now}, d: time.Hour},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.sess.FreshLoginWithin(tt.d, now); got != tt.want {
+				t.Errorf("FreshLoginWithin(%v) = %v, want %v", tt.d, got, tt.want)
 			}
 		})
 	}

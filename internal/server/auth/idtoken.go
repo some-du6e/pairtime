@@ -20,11 +20,6 @@ import (
 // token's times are checked. HCA's ID tokens live 120 s.
 const ClockSkew = 60 * time.Second
 
-// FreshLoginMaxAge is how long before the callback HCA may have
-// authenticated the person for a login that asked for prompt=login to
-// count as fresh.
-const FreshLoginMaxAge = 5 * time.Minute
-
 // maxIDTokenBytes bounds an ID token before it is parsed.
 const maxIDTokenBytes = 16 << 10
 
@@ -99,8 +94,11 @@ func (d *numericDate) UnmarshalJSON(b []byte) error {
 type expectation struct {
 	issuer, clientID, nonce string
 	now                     time.Time
-	// fresh is set when the login asked for prompt=login.
-	fresh bool
+	// freshSince is when a login that asked for prompt=login started, and
+	// zero for an ordinary sign-in. HCA re-authenticates the person after
+	// such a request (OIDC Core 3.1.2.1), so the token's auth_time must not
+	// be before freshSince, less the clock skew.
+	freshSince time.Time
 }
 
 // keyFinder returns the keys that may have signed a token naming kid.
@@ -221,12 +219,13 @@ func verifyIDToken(raw string, keys keyFinder, want expectation) (*claims, *Erro
 		// The nonce's value is never logged.
 		return refuse(CodeWrongNonce, "the ID token's nonce isn't the one this browser's sign-in sent")
 	}
-	if want.fresh {
+	if !want.freshSince.IsZero() {
 		if c.AuthTime == nil {
 			return refuse(CodeNoAuthTime, "the login asked for prompt=login, and the ID token has no auth_time to show it happened")
 		}
-		if c.AuthTime.t.Before(want.now.Add(-FreshLoginMaxAge - ClockSkew)) {
-			return refuse(CodeLoginNotFresh, "the login asked for prompt=login, and HCA last authenticated the person at %s", c.AuthTime.t.UTC().Format(time.RFC3339))
+		if c.AuthTime.t.Before(want.freshSince.Add(-ClockSkew)) {
+			return refuse(CodeLoginNotFresh, "the login asked for prompt=login at %s, and HCA last authenticated the person at %s",
+				want.freshSince.UTC().Format(time.RFC3339), c.AuthTime.t.UTC().Format(time.RFC3339))
 		}
 	}
 	return &c, nil

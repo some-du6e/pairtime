@@ -112,10 +112,15 @@ func TestMockOAuth2Server(t *testing.T) {
 				me.Email != "verified@example.org" || me.SlackID != "U0MOCKVERIFIED" {
 				t.Errorf("me = %+v", me)
 			}
-			if tt.opts.query == fresh {
-				at := me.Session.AuthTime
+			if tt.opts.query != fresh {
+				if me.Session.FreshLoginAt != nil {
+					t.Error("an ordinary sign-in's session is marked as a fresh login")
+				}
+				return
+			}
+			for name, at := range map[string]*time.Time{"auth_time": me.Session.AuthTime, "fresh_login_at": me.Session.FreshLoginAt} {
 				if at == nil || time.Since(*at) > time.Minute || time.Since(*at) < -time.Minute {
-					t.Errorf("session auth_time = %v, want about now", at)
+					t.Errorf("session %s = %v, want about now", name, at)
 				}
 			}
 		})

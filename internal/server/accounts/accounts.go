@@ -138,8 +138,14 @@ type Session struct {
 	// CreatedAt is the sign-in that opened the session.
 	CreatedAt, ExpiresAt time.Time
 	// AuthTime is when HCA last authenticated the person, from the ID
-	// token, or zero when HCA didn't say.
+	// token, or zero when HCA didn't say. For an ordinary sign-in it can
+	// be the start of an HCA session days old.
 	AuthTime time.Time
+	// FreshLoginAt is when HCA authenticated the person again for this
+	// sign-in, which asked for that (?fresh=1, prompt=login) and got an
+	// auth_time from after it started. It is zero for an ordinary sign-in,
+	// however recent its AuthTime.
+	FreshLoginAt time.Time
 }
 
 // HasRole reports whether the session's account holds role.
@@ -147,11 +153,22 @@ func (s *Session) HasRole(role string) bool {
 	return slices.Contains(s.Roles, role)
 }
 
-// AuthenticatedWithin reports whether HCA authenticated the person at most
-// d before now. A submission freeze asks this after a fresh login
-// (DESIGN 7.5 step 2).
-func (s *Session) AuthenticatedWithin(d time.Duration, now time.Time) bool {
-	return !s.AuthTime.IsZero() && !s.AuthTime.Before(now.Add(-d))
+// FreshLoginWithin reports whether the session comes from a fresh login
+// made at most d before now. A submission freeze sends the browser through
+// /auth/hca/login?fresh=1 and then asks this of the session it comes back
+// with (DESIGN 7.5 step 2). An ordinary sign-in never counts.
+func (s *Session) FreshLoginWithin(d time.Duration, now time.Time) bool {
+	return !s.FreshLoginAt.IsZero() && !s.FreshLoginAt.Before(now.Add(-d))
+}
+
+// Login is how HCA authenticated the person at one sign-in.
+type Login struct {
+	// AuthTime is the ID token's auth_time, or zero when HCA didn't say.
+	AuthTime time.Time
+	// Fresh is set when the sign-in asked HCA to authenticate the person
+	// again (prompt=login) and AuthTime is from after the sign-in started,
+	// which package auth checks.
+	Fresh bool
 }
 
 // DefaultSessionLifetime is how long a web session lasts. It doesn't slide:
@@ -234,21 +251,28 @@ func (s *Store) Roles(sub string) []string {
 	return slices.Clone(s.roles[sub])
 }
 
-// SignIn records a sign-in by id and opens a session for it. authTime is
-// when HCA authenticated the person, or zero when HCA didn't say. created
-// reports whether the sign-in created the account.
+// SignIn records a sign-in by id and opens a session for it, which records
+// how HCA authenticated the person. created reports whether the sign-in
+// created the account.
 //
 // SignIn returns ErrIneligible when HCA marks id ineligible, and
 // ErrSignupsClosed when id has no account and Options.MayCreate doesn't
-// admit it. Neither opens a session. An existing account that turns ineligible gets its new
-// status and loses its sessions; an identity without an account is never
-// written.
-func (s *Store) SignIn(ctx context.Context, id Identity, authTime time.Time) (sess *Session, created bool, err error) {
+// admit it. Neither opens a session. An existing account that turns
+// ineligible gets its new status and loses its sessions; an identity
+// without an account is never written.
+func (s *Store) SignIn(ctx context.Context, id Identity, login Login) (sess *Session, created bool, err error) {
 	if err := CheckSub(id.Sub); err != nil {
 		return nil, false, err
 	}
 	if _, err := ParseVerificationStatus(string(id.Status)); err != nil {
 		return nil, false, err
+	}
+	var freshAt time.Time
+	if login.Fresh {
+		if login.AuthTime.IsZero() {
+			return nil, false, errors.New("accounts: a fresh login needs the time HCA authenticated the person")
+		}
+		freshAt = login.AuthTime
 	}
 	now := s.now()
 	nowMs := now.UnixMilli()
@@ -317,9 +341,9 @@ WHERE id = $1`,
 			}
 		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO sessions
-(id_hash, user_id, created_at_ms, expires_at_ms, auth_time_ms, revoked_at_ms)
-VALUES ($1, $2, $3, $4, $5, NULL)`,
-			hash, userID, nowMs, expires.UnixMilli(), nullTime(authTime)); err != nil {
+(id_hash, user_id, created_at_ms, expires_at_ms, auth_time_ms, fresh_login_at_ms, revoked_at_ms)
+VALUES ($1, $2, $3, $4, $5, $6, NULL)`,
+			hash, userID, nowMs, expires.UnixMilli(), nullTime(login.AuthTime), nullTime(freshAt)); err != nil {
 			return fmt.Errorf("accounts: opening the session: %w", err)
 		}
 		return nil
@@ -350,8 +374,11 @@ VALUES ($1, $2, $3, $4, $5, NULL)`,
 	if b, ok := sealed.([]byte); ok {
 		sess.User.emailSealed = b
 	}
-	if !authTime.IsZero() {
-		sess.AuthTime = time.UnixMilli(authTime.UnixMilli())
+	if !login.AuthTime.IsZero() {
+		sess.AuthTime = time.UnixMilli(login.AuthTime.UnixMilli())
+	}
+	if !freshAt.IsZero() {
+		sess.FreshLoginAt = time.UnixMilli(freshAt.UnixMilli())
 	}
 	return sess, isNew, nil
 }
@@ -368,17 +395,17 @@ func (s *Store) Session(ctx context.Context, token string) (*Session, error) {
 		sess                          Session
 		createdMs, expiresMs          int64
 		uCreated, uUpdated, uSignedIn int64
-		authTime, eligible            sql.NullInt64
+		authTime, freshAt, eligible   sql.NullInt64
 		slack                         sql.NullString
 		sealed                        []byte
 		status                        string
 	)
-	err := s.db.Read.QueryRowContext(ctx, `SELECT s.created_at_ms, s.expires_at_ms, s.auth_time_ms,
+	err := s.db.Read.QueryRowContext(ctx, `SELECT s.created_at_ms, s.expires_at_ms, s.auth_time_ms, s.fresh_login_at_ms,
 u.id, u.hca_sub, u.slack_id, u.email_ct, u.verification_status, u.ysws_eligible,
 u.created_at_ms, u.updated_at_ms, u.signed_in_at_ms
 FROM sessions s JOIN users u ON u.id = s.user_id
 WHERE s.id_hash = $1 AND s.revoked_at_ms IS NULL AND s.expires_at_ms > $2`,
-		hash, s.now().UnixMilli()).Scan(&createdMs, &expiresMs, &authTime,
+		hash, s.now().UnixMilli()).Scan(&createdMs, &expiresMs, &authTime, &freshAt,
 		&sess.User.ID, &sess.User.HCASub, &slack, &sealed, &status, &eligible,
 		&uCreated, &uUpdated, &uSignedIn)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -406,6 +433,9 @@ WHERE s.id_hash = $1 AND s.revoked_at_ms IS NULL AND s.expires_at_ms > $2`,
 	sess.ExpiresAt = time.UnixMilli(expiresMs)
 	if authTime.Valid {
 		sess.AuthTime = time.UnixMilli(authTime.Int64)
+	}
+	if freshAt.Valid {
+		sess.FreshLoginAt = time.UnixMilli(freshAt.Int64)
 	}
 	return &sess, nil
 }

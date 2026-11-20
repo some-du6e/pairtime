@@ -7,19 +7,21 @@
 // and holds the secret; the desktop client never sees an HCA token (SP 3.5).
 // The flow is OIDC Core's authorization code flow:
 //
-//   - GET /auth/hca/login sets a short-lived cookie holding a random state
-//     and nonce, and redirects to HCA's authorization endpoint asking for
-//     the scopes "openid email slack_id verification_status". They are
-//     named explicitly, because HCA's discovery document lists only "openid
-//     profile phone birthdate" (SP 3.1). With fresh=1 it also sends
-//     prompt=login, and no max_age, for the fresh login a submission freeze
-//     asks for (DESIGN 7.5 step 2).
+//   - GET /auth/hca/login sets a short-lived login cookie holding a random
+//     state and a random secret, whose SHA-256 is the nonce, with an HMAC
+//     so no browser can write one of its own. It redirects to HCA's
+//     authorization endpoint asking for the scopes "openid email slack_id
+//     verification_status". They are named explicitly, because HCA's
+//     discovery document lists only "openid profile phone birthdate" (SP
+//     3.1). With fresh=1 it also sends prompt=login, and no max_age, for the
+//     fresh login a submission freeze asks for (DESIGN 7.5 step 2).
 //   - GET /auth/hca/callback checks the state against the cookie before it
 //     redeems the code, redeems it at the token endpoint with the client
 //     secret, and checks the ID token by OIDC Core 3.1.3.7: an RS256
 //     signature by a key from HCA's JWKS, the issuer, the audience, the
 //     expiry and issue times, and the nonce. A fresh login must also carry
-//     a recent auth_time. HCA's access and refresh tokens are dropped
+//     an auth_time from after the sign-in started, and only such a login
+//     marks its session fresh. HCA's access and refresh tokens are dropped
 //     unused, since everything pairtime needs is in the ID token.
 //   - The claims go to package accounts, which applies DESIGN 8.2: an
 //     ineligible identity is refused, and sign-ups may be closed (DESIGN
@@ -30,7 +32,8 @@
 //     the signed-in account.
 //
 // Errors are pages with a stable code, such as wrong_nonce, which is also
-// logged. Nothing logs a token, a code, a state, a nonce or a secret.
+// logged. Nothing logs a token, a code, a state, a nonce, a cookie or a
+// secret.
 package auth
 
 import (
@@ -63,8 +66,11 @@ var Scopes = []string{"openid", "email", "slack_id", "verification_status"}
 // browsers refuse it unless it is Secure, has Path=/ and no Domain.
 const SessionCookie = "__Host-pairtime_session"
 
-// loginCookie holds the state and nonce of a sign-in in progress.
+// loginCookie holds the state and nonce secret of a sign-in in progress.
 const loginCookie = "__Host-pairtime_hca_login"
+
+// loginKeySize is the size of the key that signs login cookies.
+const loginKeySize = 32
 
 // loginTTL is how long a sign-in may take between the login page and the
 // callback.
@@ -161,6 +167,9 @@ type Service struct {
 	log                  *slog.Logger
 	now                  func() time.Time
 	exchanges            chan struct{}
+	// loginKey signs login cookies. It is made at start and lives only in
+	// memory, so a sign-in in progress across a restart starts again.
+	loginKey []byte
 }
 
 // New returns a Service for c.
@@ -179,6 +188,7 @@ func New(c Config) (*Service, error) {
 		log:       c.Logger,
 		now:       c.Now,
 		exchanges: make(chan struct{}, maxConcurrentExchanges),
+		loginKey:  randomBytes(loginKeySize),
 	}
 	s.redirectURI = s.baseURL + CallbackPath
 	if c.ClientID == "" {

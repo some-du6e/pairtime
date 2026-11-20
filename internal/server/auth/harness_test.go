@@ -5,6 +5,7 @@ package auth_test
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -204,6 +205,8 @@ func (h *harness) location(r response) *url.URL {
 
 // flow is one sign-in as a browser saw it.
 type flow struct {
+	// loginCookie is the value of the login cookie the login page set.
+	loginCookie string
 	// authorize is where the login page sent the browser.
 	authorize *url.URL
 	// callback is where HCA sent it back.
@@ -233,15 +236,34 @@ type signInOptions struct {
 }
 
 // signIn runs a sign-in as a browser would: the login page, HCA's
-// authorization endpoint, and the callback. When the authorization
-// endpoint shows a login form, as mock-oauth2-server does for prompt=login,
-// it posts a username, and the loginClaims option, to it.
+// authorization endpoint, and the callback.
 func (h *harness) signIn(o signInOptions) *flow {
+	h.t.Helper()
+	f := h.startSignIn(o)
+	if o.edit != nil {
+		o.edit(f.callback)
+	}
+	if o.otherBrowser {
+		h.client.Jar = newJar(h.t)
+	}
+	f.resp = h.get(f.callback.String())
+	return f
+}
+
+// startSignIn runs a sign-in up to HCA's answer: the login page and HCA's
+// authorization endpoint, but not the callback HCA sends the browser to.
+// When the authorization endpoint shows a login form, as
+// mock-oauth2-server does for prompt=login, it posts a username, and the
+// loginClaims option, to it.
+func (h *harness) startSignIn(o signInOptions) *flow {
 	h.t.Helper()
 	f := &flow{}
 	r := h.get(h.srv.URL + auth.LoginPath + o.query)
 	if r.status != http.StatusFound {
 		h.t.Fatalf("the login page answered %d, want 302; body:\n%s", r.status, r.body)
+	}
+	if c := cookie(r, loginCookieName); c != nil {
+		f.loginCookie = c.Value
 	}
 	f.authorize = h.location(r)
 	if o.editAuthorize != nil {
@@ -260,14 +282,25 @@ func (h *harness) signIn(o signInOptions) *flow {
 		h.t.Fatalf("HCA's authorization endpoint answered %d, want 302; body:\n%s", r.status, r.body)
 	}
 	f.callback = h.location(r)
-	if o.edit != nil {
-		o.edit(f.callback)
-	}
-	if o.otherBrowser {
-		h.client.Jar = newJar(h.t)
-	}
-	f.resp = h.get(f.callback.String())
 	return f
+}
+
+// loginCookieName is the name of auth's login cookie.
+const loginCookieName = "__Host-pairtime_hca_login"
+
+// loginSecret is the secret a login cookie's value holds, read from its
+// JSON part.
+func loginSecret(t *testing.T, value string) string {
+	t.Helper()
+	body, _, _ := strings.Cut(value, ".")
+	b, err := base64.RawURLEncoding.DecodeString(body)
+	var st struct {
+		Secret string `json:"v"`
+	}
+	if err != nil || json.Unmarshal(b, &st) != nil || st.Secret == "" {
+		t.Fatal("the login cookie's value doesn't decode to a state with a secret")
+	}
+	return st.Secret
 }
 
 // me fetches GET /api/v1/users/me.
@@ -355,7 +388,7 @@ func checkSignedIn(t *testing.T, h *harness, f *flow, wantLocation string) auth.
 	case c.MaxAge <= 0:
 		t.Errorf("session cookie Max-Age = %d, want a lifetime", c.MaxAge)
 	}
-	if lc := cookie(f.resp, "__Host-pairtime_hca_login"); lc == nil || lc.MaxAge >= 0 {
+	if lc := cookie(f.resp, loginCookieName); lc == nil || lc.MaxAge >= 0 {
 		t.Error("the callback didn't delete the login cookie")
 	}
 	r, m := h.me()
