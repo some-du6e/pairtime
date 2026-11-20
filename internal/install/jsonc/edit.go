@@ -335,11 +335,11 @@ func endsInLineComment(src []byte, from, lb int) bool {
 	for i := from; i+1 < lb; {
 		switch {
 		case src[i] == '/' && src[i+1] == '/':
-			n := bytes.IndexByte(src[i:lb], '\n')
-			if n < 0 {
+			end := lineCommentEnd(src[:lb], i)
+			if end == lb {
 				return true
 			}
-			i += n + 1
+			i = end + 1
 		case src[i] == '/' && src[i+1] == '*':
 			n := bytes.Index(src[i+2:lb], []byte("*/"))
 			if n < 0 {
@@ -386,11 +386,7 @@ func skipBlank(src []byte, i int) int {
 			i++
 		case '/':
 			if i+1 < len(src) && src[i+1] == '/' {
-				n := bytes.IndexByte(src[i:], '\n')
-				if n < 0 {
-					return len(src)
-				}
-				i += n
+				i = lineCommentEnd(src, i)
 			} else if i+1 < len(src) && src[i+1] == '*' {
 				n := bytes.Index(src[i+2:], []byte("*/"))
 				if n < 0 {
@@ -425,15 +421,16 @@ func lineEnd(src []byte, i, limit int) int {
 			return i
 		case '/':
 			if j+1 < limit && src[j+1] == '/' {
-				n := bytes.IndexByte(src[j:], '\n')
-				if n < 0 {
+				switch e := lineCommentEnd(src, j); {
+				case e >= limit:
+					return i
+				case src[e] == '\n', e+1 < len(src) && src[e+1] == '\n':
+					return e // "\n" or "\r\n"
+				default:
+					// A carriage return alone ends the comment, but the edits
+					// lay lines out by "\n", so the line goes on.
 					return i
 				}
-				n += j
-				if src[n-1] == '\r' {
-					return n - 1
-				}
-				return n
 			}
 			if j+1 < limit && src[j+1] == '*' {
 				n := bytes.Index(src[j+2:], []byte("*/"))

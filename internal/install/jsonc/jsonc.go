@@ -126,13 +126,7 @@ func Comments(src []byte) [][2]int {
 			}
 			i++
 		case src[i] == '/' && i+1 < len(src) && src[i+1] == '/':
-			end := len(src)
-			if n := bytes.IndexByte(src[i:], '\n'); n >= 0 {
-				end = i + n
-				if src[end-1] == '\r' {
-					end--
-				}
-			}
+			end := lineCommentEnd(src, i)
 			spans = append(spans, [2]int{i, end})
 			i = end
 		case src[i] == '/' && i+1 < len(src) && src[i+1] == '*':
@@ -147,6 +141,18 @@ func Comments(src []byte) [][2]int {
 		}
 	}
 	return spans
+}
+
+// lineCommentEnd returns where the // comment that starts at i ends: at the
+// first line break after it, "\n" or a carriage return, or at the end of
+// src. A carriage return ends one on its own, as JavaScript and VS Code's
+// JSONC scanner read it, so a file saved with old Mac line endings parses
+// as other readers parse it; the "\r" of a CRLF ends it too.
+func lineCommentEnd(src []byte, i int) int {
+	if n := bytes.IndexAny(src[i:], "\r\n"); n >= 0 {
+		return i + n
+	}
+	return len(src)
 }
 
 // Get returns the value of v's last member named key, which is the one
@@ -233,12 +239,7 @@ func (p *parser) skip() error {
 			p.pos++
 		case '/':
 			if p.pos+1 < len(p.src) && p.src[p.pos+1] == '/' {
-				n := bytes.IndexByte(p.src[p.pos:], '\n')
-				if n < 0 {
-					p.pos = len(p.src)
-				} else {
-					p.pos += n
-				}
+				p.pos = lineCommentEnd(p.src, p.pos)
 				continue
 			}
 			if p.pos+1 < len(p.src) && p.src[p.pos+1] == '*' {

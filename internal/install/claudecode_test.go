@@ -560,6 +560,33 @@ func TestClaudeCodeLeavesFilesItCantMergeAlone(t *testing.T) {
 	}
 }
 
+func TestClaudeCodeReadsCommentsAsOtherReadersDo(t *testing.T) {
+	tests := []struct {
+		name string
+		src  string
+	}{
+		{"a line comment ended by a carriage return alone, as an old Mac editor saves it, doesn't hide the object after it", "// note\r{\"model\": \"x\"}"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			item, err := ClaudeCode(testEnv(t, "linux", nil))
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, err := item.Edits[0].Apply(Content{Exists: true, Data: []byte(tt.src), Mode: 0o644})
+			if err != nil {
+				t.Fatal(err)
+			}
+			// One object, the file's own, with the hooks merged in: a second
+			// object after it would make the file one no reader accepts.
+			root, err := jsonc.Parse(got.Data)
+			if err != nil || root.Kind != jsonc.Object || root.Get("model") == nil || root.Get("hooks").Find("Stop") < 0 {
+				t.Errorf("Apply gives\n%q\nwant the hooks merged into the object after the comment (%v)", got.Data, err)
+			}
+		})
+	}
+}
+
 func TestClaudeSettings(t *testing.T) {
 	home, moved := t.TempDir(), t.TempDir()
 	tests := []struct {
