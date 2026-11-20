@@ -12,6 +12,13 @@
 // build writes, so a built index.html committed by mistake fails TestFS in
 // ci.yml, which finds the files it loads missing.
 //
+// notices/ holds copies of the license and notice files of the npm packages
+// with code in the built dashboard, such as Svelte's, and
+// tools/release/extra-notices.txt lists them against this package, so every
+// release archive's THIRD_PARTY_NOTICES.txt carries them. web.yml and
+// release.yml hold the copies to each dashboard they build
+// (tools/ci/npm_notices.py). Nothing embeds them.
+//
 // The <meta name="pairtime-ui"> in index.html says which one is embedded:
 // "placeholder" or "local".
 package webui

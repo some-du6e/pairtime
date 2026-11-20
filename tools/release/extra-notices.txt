@@ -11,6 +11,15 @@
 # a path that stops existing fails the build instead of dropping a notice,
 # and so does a directory that holds no Go package, such as pkg/redact/rules
 # (docs/spec/update-manifest.md, THIRD_PARTY_NOTICES.txt).
+#
+# The internal/webui lines are the npm packages with code in the local
+# dashboard that internal/webui embeds: one line per license or notice file,
+# copied word for word from web/node_modules into
+# internal/webui/notices/<package>/. tools/ci/npm_notices.py, which web.yml
+# and release.yml run on the dashboard they build, fails unless these lines
+# name exactly the packages in that build, at the versions it bundles, and
+# the copies match node_modules byte for byte.
 
 pkg/redact pkg/redact/rules/LICENSE gitleaks v8.30.1's default rules, embedded in pkg/redact
 pkg/redact testdata/redact/presidio/LICENSE Presidio's pattern recognizers (presidio-analyzer 2.2.366), ported to pkg/redact
+internal/webui internal/webui/notices/svelte/LICENSE.md svelte 5.57.3 from npm, bundled into the local dashboard in internal/webui
