@@ -2,3 +2,11 @@
 # What `npm run build` in web/ writes next to the placeholder: only
 # internal/webui/dist/index.html is checked in (DESIGN 3.12).
 /internal/webui/dist/assets/
+
+# The capture kit's scrub report holds the original private values it
+# replaced (tools/capture/scrub.py). It never belongs in the repo.
+*-scrub-report.txt
+
+# Bytecode Python writes beside a script it imports, such as the kit's
+# scrub.py when a test or a person imports it.
+__pycache__/
