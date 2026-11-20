@@ -205,10 +205,13 @@ jobs:
                 $psi.RedirectStandardError = $true
                 $sw = [System.Diagnostics.Stopwatch]::StartNew()
                 $p = [System.Diagnostics.Process]::Start($psi)
+                # stderr is read while stdout is, or a child that fills the
+                # stderr pipe first, as inittrace does, would never exit.
+                $errRead = $p.StandardError.ReadToEndAsync()
                 $p.StandardInput.Write($stdin)
                 $p.StandardInput.Close()
                 $out = $p.StandardOutput.ReadToEnd()
-                $errText = $p.StandardError.ReadToEnd()
+                $errText = $errRead.GetAwaiter().GetResult()
                 $p.WaitForExit()
                 $sw.Stop()
                 if ($quiet -and ($p.ExitCode -ne 0 -or $out -ne '' -or $errText -ne '')) {
