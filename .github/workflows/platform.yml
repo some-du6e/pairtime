@@ -74,7 +74,9 @@ jobs:
       - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: go.mod
-          cache-dependency-path: go.mod
+          cache-dependency-path: |
+            go.mod
+            go.sum
 
       - name: go test (platform packages)
         # Hosted runners get injected fakes, never real focus switching
@@ -94,7 +96,9 @@ jobs:
       - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: go.mod
-          cache-dependency-path: go.mod
+          cache-dependency-path: |
+            go.mod
+            go.sum
 
       - name: go test (platform packages)
         env:
@@ -116,9 +120,9 @@ jobs:
           retention-days: 90
 
   linux-desktop:
-    # Only the Linux tests that need an X server or a session D-Bus: files
-    # named *_desktop_test.go, built with -tags desktop (AGENTS.md). Every
-    # other Linux test runs in ci.yml.
+    # Only the Linux tests that need an X server or a session D-Bus: the
+    # TestDesktop* tests in *_desktop_test.go files, built with -tags
+    # desktop (AGENTS.md). Every other Linux test runs in ci.yml.
     name: linux desktop (Xvfb, D-Bus)
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -127,17 +131,36 @@ jobs:
         shell: bash
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # A PR is checked out as its merge commit; depth 2 brings its
+          # first parent, the base, to see which files the PR changes.
+          fetch-depth: 2
 
       - name: Find desktop tests
         id: find
         run: |
-          dirs=$(git ls-files -- '*_desktop_test.go' | xargs -r -n 1 dirname | sort -u | tr '\n' ' ')
-          echo "dirs=$dirs" >> "$GITHUB_OUTPUT"
-          # A run by hand sets up the desktop even with no tests, to prove
-          # the runner image still has what the tests need.
-          if [ -n "$dirs" ] || [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
+          # testdata holds separate modules, such as licensecheck's seeded
+          # desktop test, which aren't pairtime's to run.
+          pkgs=$(git ls-files -- '*_desktop_test.go' ':(exclude)testdata/*' ':(exclude)*/testdata/*' | xargs -r -n 1 dirname | sort -u | sed 's|^|./|' | tr '\n' ' ')
+          echo "pkgs=$pkgs" >> "$GITHUB_OUTPUT"
+          why=""
+          if [ -n "$pkgs" ]; then
+            why="desktop test packages: $pkgs"
+          elif [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
+            # A run by hand sets up the desktop even with no tests, to prove
+            # the runner image still has what the tests need.
+            why="no desktop tests yet; a run by hand checks the desktop anyway"
+          elif [ "$GITHUB_EVENT_NAME" = pull_request ]; then
+            # So does a PR that changes how the desktop is set up, so the
+            # version that merges has run.
+            changed=$(git diff --name-only HEAD^1 HEAD)
+            if grep -qx -e tools/ci/desktop_session.sh -e .github/workflows/platform.yml <<<"$changed"; then
+              why="no desktop tests yet; this PR changes desktop_session.sh or platform.yml, so it checks the desktop"
+            fi
+          fi
+          if [ -n "$why" ]; then
             echo "run=true" >> "$GITHUB_OUTPUT"
-            echo "desktop test packages: ${dirs:-none yet}"
+            echo "$why"
           else
             echo "::notice::no *_desktop_test.go files yet, so there is nothing to run"
           fi
@@ -146,7 +169,9 @@ jobs:
         if: steps.find.outputs.run == 'true'
         with:
           go-version-file: go.mod
-          cache-dependency-path: go.mod
+          cache-dependency-path: |
+            go.mod
+            go.sum
 
       - name: Install Xvfb, openbox, xterm, xdotool and D-Bus
         if: steps.find.outputs.run == 'true'
@@ -155,17 +180,21 @@ jobs:
           sudo apt-get install -y -qq --no-install-recommends \
             xvfb openbox xterm xdotool x11-utils dbus dbus-bin
 
-      - name: go test -tags desktop, under Xvfb and a private D-Bus
+      - name: go test -tags desktop -run '^TestDesktop', under Xvfb and a private D-Bus
         if: steps.find.outputs.run == 'true'
         env:
-          DIRS: ${{ steps.find.outputs.dirs }}
+          PKGS: ${{ steps.find.outputs.pkgs }}
         run: |
-          if [ -z "$DIRS" ]; then
+          if [ -z "$PKGS" ]; then
             bash tools/ci/desktop_session.sh true
           else
-            # -p 1 runs the packages' test binaries one at a time. Tests in
-            # several of them start fakenotify or fakesecret, which own
-            # org.freedesktop.Notifications or org.freedesktop.secrets on the
-            # one private bus, or need nobody to own them.
-            bash tools/ci/desktop_session.sh bash tools/ci/test_existing.sh -p 1 -tags desktop -- $DIRS
+            # Only the TestDesktop* tests, and only in the packages with
+            # desktop test files, not their subpackages: ci.yml runs the
+            # rest. -count=1, because a cached pass says nothing about
+            # this runner's desktop. -p 1 runs the packages' test binaries
+            # one at a time. Tests in several of them start fakenotify or
+            # fakesecret, which own org.freedesktop.Notifications or
+            # org.freedesktop.secrets on the one private bus, or need nobody
+            # to own them.
+            bash tools/ci/desktop_session.sh go test -p 1 -tags desktop -run '^TestDesktop' -count=1 $PKGS
           fi

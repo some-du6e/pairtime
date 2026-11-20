@@ -19,7 +19,7 @@ import (
 // Desktop Notifications Specification's Notify signature, susssasa{sv}i,
 // read from the call's own message header.
 
-func TestNotifyAgainstAFakeServer(t *testing.T) {
+func TestDesktopNotifyAgainstAFakeServer(t *testing.T) {
 	tests := []struct {
 		name     string
 		caps     []string
@@ -108,7 +108,7 @@ func TestNotifyAgainstAFakeServer(t *testing.T) {
 	}
 }
 
-func TestNotifyWithNoServerOnTheBus(t *testing.T) {
+func TestDesktopNotifyWithNoServerOnTheBus(t *testing.T) {
 	tests := []struct {
 		name string
 		n    Notifications
