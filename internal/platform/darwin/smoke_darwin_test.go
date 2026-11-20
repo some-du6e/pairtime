@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -189,6 +190,8 @@ var testObjC struct {
 	clsNSDictionary, clsNSNotification   uintptr
 	selCurrentApp, selDictWithObjForKey  uintptr
 	selPostNotification, selNoteWithName uintptr
+	selRunningApps, selCount             uintptr
+	selObjectAtIndex                     uintptr
 }
 
 func loadTestObjC() error {
@@ -210,22 +213,55 @@ func loadTestObjC() error {
 		testObjC.selDictWithObjForKey = objc.registerName("dictionaryWithObject:forKey:")
 		testObjC.selPostNotification = objc.registerName("postNotificationName:object:userInfo:")
 		testObjC.selNoteWithName = objc.registerName("notificationWithName:object:userInfo:")
+		testObjC.selRunningApps = objc.registerName("runningApplications")
+		testObjC.selCount = objc.registerName("count")
+		testObjC.selObjectAtIndex = objc.registerName("objectAtIndex:")
 	})
 	return testObjC.err
 }
 
-// activationInfo returns the userInfo NSWorkspace would attach to an
-// activation of this process, autoreleased.
-func activationInfo() uintptr {
-	app := objc.send(objc.clsNSRunningApplication, testObjC.selCurrentApp)
-	return testObjC.send2(testObjC.clsNSDictionary, testObjC.selDictWithObjForKey, app, objc.applicationKey)
+// activationInfo returns the userInfo NSWorkspace attaches to an
+// activation of the NSRunningApplication ra, autoreleased.
+func activationInfo(ra uintptr) uintptr {
+	return testObjC.send2(testObjC.clsNSDictionary, testObjC.selDictWithObjForKey, ra, objc.applicationKey)
+}
+
+// activationTarget picks the app a synthetic activation names, inside a
+// pool: this process's NSRunningApplication, or else the first running app,
+// whose pid appFrom reads as valid and which isn't the app in front, since
+// the Loop has reported that one already and drops a repeat. It fails the
+// test, listing what it saw, when appFrom reads no app.
+func activationTarget(t *testing.T) (uintptr, App) {
+	t.Helper()
+	ws := objc.send(objc.clsNSWorkspace, objc.selSharedWorkspace)
+	front, _ := appFrom(objc.send(ws, objc.selFrontApp))
+	candidates := []uintptr{objc.send(objc.clsNSRunningApplication, testObjC.selCurrentApp)}
+	apps := objc.send(ws, testObjC.selRunningApps)
+	for i, n := uintptr(0), objc.send(apps, testObjC.selCount); i < n && i < 50; i++ {
+		candidates = append(candidates, objc.send1(apps, testObjC.selObjectAtIndex, i))
+	}
+	var seen []string
+	for _, ra := range candidates {
+		app, ok := appFrom(ra)
+		seen = append(seen, fmt.Sprintf("%#x (%s) kind of NSRunningApplication %v: %+v, %v",
+			ra, testObjC.className(ra), objc.sendBool1(ra, objc.selIsKindOfClass, objc.clsNSRunningApplication), app, ok))
+		if ok && app.PID > 0 && app.PID != front.PID {
+			if ra != candidates[0] {
+				t.Logf("this process's NSRunningApplication won't do (%s), so the activation names pid %d", seen[0], app.PID)
+			}
+			return ra, app
+		}
+	}
+	t.Fatalf("appFrom read no usable app; front is %+v; this process is pid %d; saw:\n%s", front, os.Getpid(), strings.Join(seen, "\n"))
+	return 0, App{}
 }
 
 // deliverActivation hands the observer's method the
 // NSWorkspaceDidActivateApplicationNotification NSWorkspace would send if
-// this process came to the front, the way NSWorkspace's notification center
-// calls it. No app's focus changes.
-func deliverActivation(t *testing.T, b *macBackend) {
+// the app activationTarget picks came to the front, the way NSWorkspace's
+// notification center calls it, and returns that app. No app's focus
+// changes.
+func deliverActivation(t *testing.T, b *macBackend) App {
 	t.Helper()
 	if err := loadTestObjC(); err != nil {
 		t.Fatal(err)
@@ -233,22 +269,19 @@ func deliverActivation(t *testing.T, b *macBackend) {
 	if b.observer == 0 {
 		t.Fatalf("the Loop has no NSWorkspace observer: %v", b.l.Status().Focus)
 	}
+	var want App
 	withPool(func() {
 		ws := objc.send(objc.clsNSWorkspace, objc.selSharedWorkspace)
-		info := activationInfo()
-		// What the observer's method will find, logged so a failure says
-		// which step broke.
-		ra := objc.send1(info, objc.selObjectForKey, objc.applicationKey)
-		app, ok := appFrom(ra)
-		t.Logf("pid %d; userInfo %#x (%s); key %#x; value %#x (%s), kind of %s: %v; appFrom = %+v, %v",
-			os.Getpid(), info, testObjC.className(info), objc.applicationKey, ra, testObjC.className(ra),
-			testObjC.className(objc.clsNSRunningApplication), objc.sendBool1(ra, objc.selIsKindOfClass, objc.clsNSRunningApplication), app, ok)
-		note := testObjC.send3(testObjC.clsNSNotification, testObjC.selNoteWithName, objc.didActivateName, ws, info)
+		ra, app := activationTarget(t)
+		want = app
+		note := testObjC.send3(testObjC.clsNSNotification, testObjC.selNoteWithName, objc.didActivateName, ws, activationInfo(ra))
 		before := b.activations.Load()
 		objc.send1(b.observer, objc.selActivated, note)
-		t.Logf("note %#x (%s); the observer's method ran %d time(s); current is this backend: %v",
-			note, testObjC.className(note), b.activations.Load()-before, current.Load() == b)
+		if ran := b.activations.Load() - before; ran != 1 {
+			t.Errorf("the observer's method ran %d times for one notification, want 1", ran)
+		}
 	})
+	return want
 }
 
 // postActivation posts that same notification to NSWorkspace's
@@ -261,7 +294,8 @@ func postActivation(t *testing.T) {
 	withPool(func() {
 		ws := objc.send(objc.clsNSWorkspace, objc.selSharedWorkspace)
 		nc := objc.send(ws, objc.selNotificationCenter)
-		testObjC.send3(nc, testObjC.selPostNotification, objc.didActivateName, ws, activationInfo())
+		ra, _ := activationTarget(t)
+		testObjC.send3(nc, testObjC.selPostNotification, objc.didActivateName, ws, activationInfo(ra))
 	})
 }
 
@@ -300,9 +334,10 @@ func TestLoopOnMac(t *testing.T) {
 			name:       "the observer's method turns a synthetic activation of this process into its App",
 			mainThread: true,
 			run: func(t *testing.T, l *Loop, b *macBackend, rec *macRecorder) {
-				deliverActivation(t, b)
-				app := rec.waitFocus(t, os.Getpid())
-				t.Logf("activation: pid %d, bundle id %q, executable %q", app.PID, app.BundleID, app.Executable)
+				want := deliverActivation(t, b)
+				if got := rec.waitFocus(t, want.PID); got != want {
+					t.Errorf("Focus(%+v), want Focus(%+v)", got, want)
+				}
 			},
 		},
 		{
@@ -344,8 +379,8 @@ func TestLoopOnMac(t *testing.T) {
 				if st.MainThread || st.Power != nil {
 					t.Errorf("Status() = %+v, want off the main thread with IOKit registered", st)
 				}
-				deliverActivation(t, b)
-				rec.waitFocus(t, os.Getpid())
+				want := deliverActivation(t, b)
+				rec.waitFocus(t, want.PID)
 			},
 		},
 	}
