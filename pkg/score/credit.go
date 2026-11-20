@@ -109,6 +109,9 @@ type second struct {
 	level  event.Evidence
 	anchor int32 // the anchor behind the credit
 	other  int32 // a lookup's second bracketing anchor, or -1
+	// label is the side-door label of what a drained second took from the
+	// bucket, or "" (DESIGN 6.4).
+	label event.Label
 	// capped marks a present second of a lookup run past LOOKUP_MAX_S.
 	capped bool
 }
@@ -402,7 +405,7 @@ func (c *creditor) anchorsAndBuckets() {
 		}
 		// SM 2.7 credits the second when the bucket holds anything and
 		// drains up to a second from it.
-		pick.drain(oneSecond, proseOnly)
+		src := pick.drain(oneSecond, proseOnly)
 		reason := event.ReasonRead
 		if pick.runningAt(t) {
 			reason = event.ReasonSupervise
@@ -410,8 +413,15 @@ func (c *creditor) anchorsAndBuckets() {
 		if proseOnly {
 			reason += event.ReturnedSuffix
 		}
+		// The second takes the level of the anchor that qualifies the drain
+		// (DESIGN 6.4), but no better than the evidence behind what it
+		// drained (docs/errata/2026-11-20-design-6.4-side-door-reading.md).
 		a := &c.d.anchors[near]
-		sec.reason, sec.proj, sec.level, sec.anchor = reason, proj, a.Level, int32(near)
+		level := a.Level
+		if src.level != "" {
+			level = lowerLevel(level, src.level)
+		}
+		sec.reason, sec.proj, sec.level, sec.anchor, sec.label = reason, proj, level, int32(near), src.label
 	}
 }
 
@@ -452,8 +462,15 @@ func (c *creditor) lookupRuns() {
 		if proj == "" {
 			continue
 		}
-		a1, a2 := before[proj], after[proj]
-		level := lowerLevel(c.d.anchors[a1].Level, c.d.anchors[a2].Level)
+		// The lookup takes the lower level of its brackets (DESIGN 6.4), as
+		// the brackets were credited, so a bracket drained from side-door
+		// output passes on its level C and its label.
+		b1, b2 := before[proj], after[proj]
+		level := lowerLevel(b1.level, b2.level)
+		label := b1.label
+		if label == "" {
+			label = b2.label
+		}
 		left := c.r.lookupMax / 1000
 		for k := from; k < to; k++ {
 			if !present(c.slots[k/per].At(c.at(k))) {
@@ -465,7 +482,8 @@ func (c *creditor) lookupRuns() {
 				continue
 			}
 			left--
-			sec.reason, sec.proj, sec.level, sec.anchor, sec.other = event.ReasonLookup, proj, level, int32(a1), int32(a2)
+			sec.reason, sec.proj, sec.level, sec.anchor, sec.other, sec.label = event.ReasonLookup, proj, level, b1.anchor,
+				b2.anchor, label
 		}
 	}
 }
@@ -476,19 +494,18 @@ func lookupSlot(s *Slot) bool {
 	return (s.FocusClass == event.AppBrowser || s.FocusClass == event.AppChatApp) && !s.Asleep && !s.Locked
 }
 
-// brackets returns, for each project credited in seconds [from, to), the
-// anchor behind its credited second nearest the run: the last one when
-// last is set, for the range before the run, else the first. Lookups don't
-// bracket lookups.
-func (c *creditor) brackets(from, to int, last bool) map[string]int {
-	out := map[string]int{}
+// brackets returns, for each project credited in seconds [from, to), its
+// credited second nearest the run: the last one when last is set, for the
+// range before the run, else the first. Lookups don't bracket lookups.
+func (c *creditor) brackets(from, to int, last bool) map[string]second {
+	out := map[string]second{}
 	for k := max(from, 0); k < min(to, c.n); k++ {
 		s := c.secs[k]
 		if s.reason == "" || s.reason == event.ReasonLookup {
 			continue
 		}
 		if _, ok := out[s.proj]; !ok || last {
-			out[s.proj] = int(s.anchor)
+			out[s.proj] = s
 		}
 	}
 	return out
@@ -622,6 +639,9 @@ func (c *creditor) slotCredits() []Credit {
 						e.Labels = append(e.Labels, l)
 					}
 				}
+			}
+			if sec.label != "" && !slices.Contains(e.Labels, sec.label) {
+				e.Labels = append(e.Labels, sec.label)
 			}
 		}
 		slices.SortFunc(keys, func(x, y creditKey) int {

@@ -58,6 +58,33 @@ type entry struct {
 	t     int64 // when it was filled
 	units int64
 	prose bool
+	src   source
+}
+
+// source is the evidence behind a bucket entry, when it came through a side
+// door (DESIGN 5.2): the best level a second drained from it can have, and
+// the label it carries. The zero source is the harness's own records, which
+// leave a drained second at the level of the anchor that qualifies it
+// (DESIGN 6.4). See docs/errata/2026-11-20-design-6.4-side-door-reading.md.
+type source struct {
+	level event.Evidence
+	label event.Label
+}
+
+// weaker returns the source a second drained from entries of both s and o
+// has: the lower level, and the first label.
+func (s source) weaker(o source) source {
+	switch {
+	case s.level == "":
+		return o
+	case o.level == "":
+		return s
+	}
+	out := source{level: lowerLevel(s.level, o.level), label: s.label}
+	if out.label == "" {
+		out.label = o.label
+	}
+	return out
 }
 
 // bucketOp is one change to a session's bucket, in record order: a reset
@@ -67,6 +94,7 @@ type bucketOp struct {
 	reset  bool
 	units  int64
 	prose  bool
+	src    source
 }
 
 // bucket is one session's reading bucket while the timeline is swept.
@@ -90,7 +118,7 @@ func (b *bucket) advance(r rules, t int64) {
 			b.entries = b.entries[:0]
 		}
 		if op.units > 0 {
-			b.entries = append(b.entries, entry{t: op.t, units: op.units, prose: op.prose})
+			b.entries = append(b.entries, entry{t: op.t, units: op.units, prose: op.prose, src: op.src})
 		}
 		// New output past BUCKET_MAX_S evicts the oldest entries, so the
 		// bucket holds the most recent output.
@@ -137,20 +165,24 @@ func (b *bucket) oldest(proseOnly bool) int64 {
 	return never
 }
 
-// drain takes up to u units, oldest first, or from the prose only.
-func (b *bucket) drain(u int64, proseOnly bool) {
+// drain takes up to u units, oldest first, or from the prose only, and
+// returns the source of what it took.
+func (b *bucket) drain(u int64, proseOnly bool) source {
+	var src source
 	kept := b.entries[:0]
 	for _, e := range b.entries {
 		if u > 0 && (!proseOnly || e.prose) {
 			take := min(u, e.units)
 			e.units -= take
 			u -= take
+			src = src.weaker(e.src)
 		}
 		if e.units > 0 {
 			kept = append(kept, e)
 		}
 	}
 	b.entries = kept
+	return src
 }
 
 // runningAt reports whether a turn of the session was running at t.
@@ -168,7 +200,10 @@ func (b *bucket) runningAt(t int64) bool {
 
 // turnFill is the fill of one turn while the buckets are built.
 type turnFill struct {
-	fill   Fill
+	fill Fill
+	// opened is set for a turn a prompt opened. Side-door output fills no
+	// other turn.
+	opened bool
 	base   int64 // units
 	output int64 // units, uncapped
 	filled int64 // units of output that went in
@@ -176,18 +211,24 @@ type turnFill struct {
 
 // add records output of u units for the turn and returns how much of it
 // goes in the bucket. Output a plugin or the bridge reports, sideDoor, goes
-// in only up to R_TURN_BASE_S for the turn, base included (DESIGN 5.2):
-// buildBuckets drops it wherever a hook or a transcript record covers the
-// session, so what reaches here has nothing behind it. An amount that
-// isn't positive adds nothing, so it can't lower what the turn has filled
-// and with it the side-door cap.
+// in only up to R_TURN_BASE_S for the turn, base included (DESIGN 5.2), and
+// only in a turn a prompt opened: a side door can claim as many turn keys as
+// it likes, and a turn per key would fill R_TURN_BASE_S each, up to
+// BUCKET_MAX_S. buildBuckets drops side-door output wherever a hook or a
+// transcript record covers the session, so what reaches here has nothing
+// behind it. An amount that isn't positive adds nothing, so it can't lower
+// what the turn has filled and with it the side-door cap.
 func (f *turnFill) add(r rules, u int64, sideDoor bool) int64 {
 	if u <= 0 {
 		return 0
 	}
 	f.output = addUnits(f.output, u)
 	if sideDoor {
-		u = min(u, max(0, r.units(r.turnBase)-f.base-f.filled))
+		room := int64(0)
+		if f.opened {
+			room = max(0, r.units(r.turnBase)-f.base-f.filled)
+		}
+		u = min(u, room)
 	}
 	f.filled = addUnits(f.filled, u)
 	return u
@@ -216,7 +257,7 @@ func (d *deriver) buildBuckets() {
 		f := fills[tb]
 		if f == nil {
 			f = &turnFill{fill: Fill{SessionKey: tb.sess.key, TurnKey: tb.key, T: tb.turn.TSubmit,
-				Backed: tb.sess.native, decided: tb.turn.decided()}}
+				Backed: tb.sess.native, decided: tb.turn.decided()}, opened: tb.primary >= 0}
 			if tb.primary >= 0 {
 				e := d.recs[tb.primary]
 				f.fill.OpenedBy, f.fill.Via = e.EventID, e.Via
@@ -224,6 +265,20 @@ func (d *deriver) buildBuckets() {
 			fills[tb] = f
 		}
 		return f
+	}
+	anchorOf := map[string]*Anchor{}
+	for i := range d.anchors {
+		anchorOf[d.anchors[i].ID] = &d.anchors[i]
+	}
+	// opener is the source of the base of a turn that the act behind anchor
+	// a opened: none for the harness's own records, and for a side door the
+	// level and label of a itself, so that its base drains no better than
+	// the act it watches (docs/errata/2026-11-20-design-6.4-side-door-reading.md).
+	opener := func(a *Anchor) source {
+		if a == nil || !sideDoor(a.Via) {
+			return source{}
+		}
+		return source{level: a.Level, label: sideDoorLabel(a.Via)}
 	}
 	for _, tb := range d.turns {
 		b := get(tb.sess)
@@ -237,7 +292,8 @@ func (d *deriver) buildBuckets() {
 		// starts: the person has moved on from older output.
 		f := fillOf(tb)
 		f.base = base
-		b.ops = append(b.ops, bucketOp{t: tb.turn.TSubmit, pos: int64(tb.primary), reset: true, units: base})
+		b.ops = append(b.ops, bucketOp{t: tb.turn.TSubmit, pos: int64(tb.primary), reset: true, units: base,
+			src: opener(anchorOf[tb.turn.Prompt])})
 	}
 	for _, a := range d.anchors {
 		s := d.sessions[a.SessionKey]
@@ -250,7 +306,7 @@ func (d *deriver) buildBuckets() {
 			// on, so its fill is the base (DESIGN 5.4).
 			pos, _ := d.recIndex(a.ID)
 			b := get(s)
-			b.ops = append(b.ops, bucketOp{t: a.T, pos: pos, reset: true, units: base})
+			b.ops = append(b.ops, bucketOp{t: a.T, pos: pos, reset: true, units: base, src: opener(&a)})
 			d.fills = append(d.fills, Fill{OpenedBy: a.ID, SessionKey: s.key, T: a.T, Via: a.Via,
 				FillMS: d.r.unitsMS(base), decided: a.T})
 		case a.Kind == event.AnchorQueuedMessage:
@@ -299,6 +355,7 @@ func (d *deriver) buildBuckets() {
 			continue
 		}
 		side := sideDoor(e.Via)
+		var src source
 		if tb != nil {
 			f := fillOf(tb)
 			prose = f.add(d.r, prose, side)
@@ -307,12 +364,18 @@ func (d *deriver) buildBuckets() {
 			// Side-door output outside any turn has no turn to fill.
 			continue
 		}
+		if side {
+			// Nothing but the side door's word backs what it reports, so a
+			// second drained from it is level C and carries its label, even
+			// when a hook anchor nearby qualifies the drain.
+			src = source{level: event.EvidenceC, label: sideDoorLabel(e.Via)}
+		}
 		b := get(s)
 		if prose > 0 {
-			b.ops = append(b.ops, bucketOp{t: e.T, pos: int64(i), units: prose, prose: true})
+			b.ops = append(b.ops, bucketOp{t: e.T, pos: int64(i), units: prose, prose: true, src: src})
 		}
 		if lines > 0 {
-			b.ops = append(b.ops, bucketOp{t: e.T, pos: int64(i), units: lines})
+			b.ops = append(b.ops, bucketOp{t: e.T, pos: int64(i), units: lines, src: src})
 		}
 	}
 	for _, b := range d.buckets {

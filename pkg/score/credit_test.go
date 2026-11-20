@@ -4,6 +4,9 @@ package score
 
 import (
 	"bytes"
+	"fmt"
+	"maps"
+	"slices"
 	"testing"
 
 	"github.com/some-du6e/pairtime/pkg/event"
@@ -378,6 +381,96 @@ func TestSideDoorFillCap(t *testing.T) {
 			f := d.Fills[0]
 			if f.FillMS != c.fillMS || f.OutputMS != 3_000_000 || f.Backed {
 				t.Errorf("fill %+v; want %d ms of 3,000,000 ms of output, not backed", f, c.fillMS)
+			}
+		})
+	}
+}
+
+// readingBy sums the SUP and READ seconds credited in [from, to) by level,
+// and how many of them carry label.
+func readingBy(d Derived, from, to int64, label event.Label) (map[event.Evidence]int64, int64) {
+	levels := map[event.Evidence]int64{}
+	var labeled int64
+	for _, c := range d.Credits {
+		if c.Slot < from || c.Slot >= to {
+			continue
+		}
+		for _, e := range c.Credited {
+			if b := e.Reason.Base(); b != rSUP && b != rREAD {
+				continue
+			}
+			levels[e.Level] += e.Seconds
+			if slices.Contains(e.Labels, label) {
+				labeled += e.Seconds
+			}
+		}
+	}
+	return levels, labeled
+}
+
+// TestSideDoorPump checks the two halves of DESIGN 5.2's cap that a side
+// door could get around by claiming many turns: output fills only a turn a
+// prompt opened, and what a side door put in a bucket drains at level C
+// with its label, whatever anchor qualifies the drain
+// (docs/errata/2026-11-20-design-6.4-side-door-reading.md).
+func TestSideDoorPump(t *testing.T) {
+	plugin := func(b *tl, tm int64, p event.Payload) event.Event {
+		return b.emit(tm, event.Envelope{Source: event.SourceHook, Via: event.ViaPlugin, Harness: event.HarnessOther,
+			SessionKey: "s_9", ProjectKey: "p_1"}, p)
+	}
+	// scene is a hook prompt in s_1 at 60 s, typed where the OS reports key
+	// presses, with a plugin's session s_9 of the same project hosted by the
+	// same terminal, and the person present until 300 s.
+	scene := func(b *tl) {
+		b.focus(at(0), event.AppTerminal, "p_1", "s_1", "s_9")
+		b.start(at(0), "s_1", "p_1", event.EntrypointCLI, event.ParentTerminalApp, true)
+		b.press(every(atMS(30_500), atMS(59_500), 1000)...)
+		b.mouse(every(at(61), at(296), 5000)...)
+		b.prompt(at(60), event.ViaHook, "s_1", "p_1", "t_1", 30)
+		b.agentStops(at(61), "s_1", "t_1")
+	}
+	cases := []struct {
+		name    string
+		build   func(b *tl)
+		levels  map[event.Evidence]int64
+		labeled int64
+	}{
+		{
+			name: "30 plugin outputs under 30 turn keys no prompt opened fill nothing, leaving only the hook prompt's base",
+			build: func(b *tl) {
+				for i := int64(0); i < 30; i++ {
+					plugin(b, at(62+i), &event.AgentOutput{TurnKey: fmt.Sprintf("t_c%02d", i), Words: 300})
+				}
+			},
+			levels: map[event.Evidence]int64{event.EvidenceA: 20},
+		},
+		{
+			name: "output a scheduled plugin turn fills drains at level C with via_plugin, after the hook prompt's base at level A",
+			build: func(b *tl) {
+				scheduled(plugin(b, at(62), &event.PromptSubmit{TurnKey: "t_9", LenChars: 30, TypedLenEst: 30,
+					OriginDeclared: event.DeclaredNone}))
+				plugin(b, at(63), &event.AgentOutput{TurnKey: "t_9", Words: 300})
+				plugin(b, at(64), &event.AgentStop{TurnKey: "t_9", StopReason: event.StopEndTurn})
+			},
+			levels:  map[event.Evidence]int64{event.EvidenceA: 20, event.EvidenceC: 20},
+			labeled: 20,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			b := newTL(true)
+			scene(b)
+			c.build(b)
+			b.samples(at(0), at(300))
+			d := b.run(t, Device{})
+			levels, labeled := readingBy(d, at(60), at(300), event.LabelViaPlugin)
+			if !maps.Equal(levels, c.levels) || labeled != c.labeled {
+				t.Errorf("reading by level %v, %d s labeled via_plugin; want %v and %d", levels, labeled, c.levels, c.labeled)
+			}
+			for _, f := range d.Fills {
+				if f.SessionKey == "s_9" && f.FillMS > 20_000 {
+					t.Errorf("the plugin's turn %s fills %d ms", f.TurnKey, f.FillMS)
+				}
 			}
 		})
 	}
