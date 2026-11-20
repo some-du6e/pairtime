@@ -1,0 +1,205 @@
+{
+  "about": "What pairtime knows about an executable, shared by the Windows, macOS and Linux code. app_class is the os.focus class of a window the executable owns (SM 1.2, 2.5, 3.2). role is its part in a parent chain, which decides a harness session's parent_class (SM 1.2, 2.2 rule 4). Names are lowercase executable base names without .exe; a trailing * matches any rest. appclass.go documents every field, and appclass_test.go checks every entry.",
+  "entries": [
+    {
+      "names": ["bash", "sh", "dash", "zsh", "ksh", "mksh", "ash", "fish", "tcsh", "csh"],
+      "app_class": "other",
+      "role": "shell",
+      "job_control": true,
+      "cite": "SM 2.2 rule 4 (shells in between are skipped); HS 13.2 (bash, zsh, fish); HS 3.1 (Git Bash runs Claude Code's shell-form hooks on Windows)"
+    },
+    {
+      "names": ["pwsh", "nu"],
+      "app_class": "other",
+      "role": "shell",
+      "cite": "SM 2.2 rule 4; HS 13.2 (PowerShell, the Windows default shell). Neither puts jobs in process groups of their own, so a script they run looks like typing"
+    },
+    {
+      "names": ["powershell", "cmd"],
+      "os": ["windows"],
+      "app_class": "other",
+      "role": "shell",
+      "cite": "SM 2.2 rule 4; HS 13.2 (PowerShell); HS 3.1 (PowerShell runs hooks when Git Bash is missing)"
+    },
+    {
+      "names": ["login", "sudo", "su", "doas", "env", "nohup", "nice", "time", "timeout", "stdbuf", "setsid", "caffeinate"],
+      "os": ["linux", "darwin"],
+      "app_class": "other",
+      "role": "wrapper",
+      "cite": "SM 1.2 (parent_class is the nearest ancestor that started the session; a program that only runs another, such as login under macOS Terminal, is passed over)"
+    },
+    {
+      "names": ["wezterm-gui", "alacritty", "kitty", "ghostty", "warp", "tabby", "hyper"],
+      "app_class": "terminal",
+      "role": "terminal",
+      "cite": "HS 13.2 (WezTerm, kitty, Warp); CP 3.3 (foreground app)"
+    },
+    {
+      "names": ["windowsterminal", "mintty", "conemu", "conemu64", "conemuc", "conemuc64", "conhost"],
+      "os": ["windows"],
+      "app_class": "terminal",
+      "role": "terminal",
+      "cite": "HS 13.2 (Windows Terminal); SM 6.6 (Git Bash in Windows Terminal); CP 3.3 (foreground app on Windows)"
+    },
+    {
+      "names": ["terminal", "iterm2", "itermserver*"],
+      "os": ["darwin"],
+      "app_class": "terminal",
+      "role": "terminal",
+      "cite": "HS 13.2 (iTerm2); HS 3.3 (terminal.type iTerm.app); SM 6.3 (two iTerm windows); CP 3.3 (foreground app on macOS)"
+    },
+    {
+      "names": ["gnome-terminal-server", "gnome-terminal", "kgx", "ptyxis", "ptyxis-agent", "konsole", "xterm", "uxterm", "xfce4-terminal", "mate-terminal", "lxterminal", "qterminal", "tilix", "terminator", "guake", "yakuake", "foot", "st", "urxvt", "rxvt", "sakura", "terminology", "warp-terminal"],
+      "os": ["linux"],
+      "app_class": "terminal",
+      "role": "terminal",
+      "cite": "CP 3.3 (foreground app on Linux, X11 _NET_ACTIVE_WINDOW); SM 6.4 (an X11 laptop)"
+    },
+    {
+      "names": ["code", "code - insiders", "code-insiders", "codium", "cursor", "windsurf", "zed", "zed-editor", "kiro", "trae", "antigravity", "sublime_text", "emacs", "gvim", "neovide", "nvim-qt"],
+      "app_class": "editor",
+      "role": "ide",
+      "cite": "HS 13.1 (editor activity); HS 4 (Cursor); HS 8 (Windsurf); HS 9 (Zed, Kiro, Trae, Antigravity)"
+    },
+    {
+      "names": ["idea", "idea64", "pycharm", "pycharm64", "webstorm", "webstorm64", "goland", "goland64", "clion", "clion64", "rider", "rider64", "phpstorm", "phpstorm64", "rubymine", "rubymine64", "studio", "studio64"],
+      "app_class": "editor",
+      "role": "ide",
+      "cite": "HS 9 (JetBrains IDEs, whose terminal and agent plugins run harnesses)"
+    },
+    {
+      "names": ["electron", "code helper*", "code - insiders helper*", "codium helper*", "cursor helper*", "windsurf helper*", "kiro helper*", "macvim"],
+      "os": ["darwin"],
+      "app_class": "editor",
+      "role": "ide",
+      "cite": "HS 13.1 (VS Code and its forks; on macOS the extension host and the terminal's pty host run as the app's Helper processes); HS 4 (Cursor)"
+    },
+    {
+      "names": ["claude-desktop", "codex-desktop"],
+      "app_class": "agent_app",
+      "role": "desktop",
+      "cite": "SM 3.2 (agent desktop app: Claude desktop's Code tab); HS 3.2 (desktop app transcripts); HS 6.5 (originator codex_desktop)"
+    },
+    {
+      "names": ["chatgpt"],
+      "app_class": "chat_app",
+      "role": "none",
+      "cite": "HS 10.1 (ChatGPT desktop has no plugin API); SM 2.5 (chat apps credit only as lookups)"
+    },
+    {
+      "names": ["chrome", "google chrome", "chromium", "chromium-browser", "firefox", "firefox-esr", "librewolf", "msedge", "microsoft edge", "safari", "brave", "brave browser", "opera", "vivaldi", "arc"],
+      "app_class": "browser",
+      "role": "none",
+      "cite": "HS 10.1 (browser chat); SM 2.5 (browsers credit only as lookups)"
+    },
+    {
+      "names": ["tmux", "screen", "zellij", "dtach", "abduco"],
+      "app_class": "other",
+      "role": "multiplexer",
+      "cite": "HS 3.3 (terminal.type tmux); HS 12.2 (tmux wrappers); SM 1.2 (multiplexer: tmux, screen)"
+    },
+    {
+      "names": ["sshd", "sshd-session", "dropbear", "mosh-server"],
+      "app_class": "other",
+      "role": "remote",
+      "cite": "SM 1.2 (remote: sshd)"
+    },
+    {
+      "names": ["node", "nodejs", "bun", "deno"],
+      "app_class": "other",
+      "role": "runtime",
+      "js_runtime": true,
+      "cite": "HS 12.2 (an agent spawned by a Node script); SM 1.2 (script_runtime: a non-IDE node)"
+    },
+    {
+      "names": ["python", "python3", "python3.*", "pythonw", "py", "pypy", "pypy3", "ruby", "perl", "php", "lua", "expect", "tclsh"],
+      "app_class": "other",
+      "role": "runtime",
+      "cite": "HS 12.2 (an agent spawned by a Python script; expect wrappers); SM 1.2 (script_runtime: python); SM 6.6 (python gen_prompt.py)"
+    },
+    {
+      "names": ["osascript"],
+      "os": ["darwin"],
+      "app_class": "other",
+      "role": "runtime",
+      "cite": "HS 12.2 (a script driving the agent); SM 1.2 (script_runtime)"
+    },
+    {
+      "names": ["wscript", "cscript", "autohotkey*"],
+      "os": ["windows"],
+      "app_class": "other",
+      "role": "runtime",
+      "cite": "HS 12.2 (a script driving the agent); SM 6.6 (AutoHotkey); SM 1.2 (script_runtime)"
+    },
+    {
+      "names": ["cron", "crond", "anacron", "atd", "fcron", "systemd", "init"],
+      "os": ["linux"],
+      "app_class": "other",
+      "role": "scheduler",
+      "cite": "SM 1.2 (scheduler: cron, systemd)"
+    },
+    {
+      "names": ["launchd", "cron", "atrun"],
+      "os": ["darwin"],
+      "app_class": "other",
+      "role": "scheduler",
+      "cite": "SM 1.2 (scheduler: launchd)"
+    },
+    {
+      "names": ["svchost", "taskeng"],
+      "os": ["windows"],
+      "app_class": "other",
+      "role": "scheduler",
+      "cite": "SM 1.2 (scheduler: Task Scheduler, which runs inside svchost on Windows 10 and taskeng before it)"
+    },
+    {
+      "names": ["claude"],
+      "app_class": "other",
+      "role": "harness",
+      "harness": "claude_code",
+      "cite": "HS 3.5 (claude -p and --bare runs); CP 4.1 (the native install)"
+    },
+    {
+      "names": ["codex"],
+      "app_class": "other",
+      "role": "harness",
+      "harness": "codex",
+      "cite": "HS 6.5 (codex exec)"
+    },
+    {
+      "names": ["agent", "cursor-agent"],
+      "app_class": "other",
+      "role": "harness",
+      "harness": "cursor",
+      "cite": "HS 4.1 (the Cursor CLI, binary agent, formerly cursor-agent); HS 4.5 (agent -p)"
+    },
+    {
+      "names": ["copilot"],
+      "app_class": "other",
+      "role": "harness",
+      "harness": "copilot",
+      "cite": "HS 5.5 (copilot -p)"
+    },
+    {
+      "names": ["gemini"],
+      "app_class": "other",
+      "role": "harness",
+      "harness": "gemini",
+      "cite": "HS 7.5 (gemini -p)"
+    },
+    {
+      "names": ["opencode"],
+      "app_class": "other",
+      "role": "harness",
+      "harness": "opencode",
+      "cite": "HS 9 (OpenCode)"
+    },
+    {
+      "names": ["cline"],
+      "app_class": "other",
+      "role": "harness",
+      "harness": "cline",
+      "cite": "HS 9 (the Cline CLI)"
+    }
+  ]
+}
