@@ -207,7 +207,7 @@ details td, details th { white-space: nowrap; }
 .lvc { background: var(--lv-c); color: var(--on-lv-c); }
 .levels { list-style: none; padding: 0; margin: 0; display: grid; gap: 0.55rem; }
 .levels li { margin: 0; display: grid; grid-template-columns: auto 1fr auto; gap: 0 0.25rem; align-items: baseline; }
-.levels .key { align-self: center; }
+.levels .key { align-self: start; margin-top: 0.45em; }
 .levels .lt { padding-left: 0.75rem; color: var(--muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
 .kinds { list-style: none; padding: 0; margin: 1rem 0 0; display: grid; gap: 0.6rem; }
 .kinds li { margin: 0; display: grid; grid-template-columns: minmax(10rem, 15rem) 1fr 4.75rem; align-items: center; gap: 0 0.75rem; font-size: 0.95rem; }
@@ -218,7 +218,10 @@ details td, details th { white-space: nowrap; }
 .kt { text-align: right; color: var(--muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
 @media (max-width: 34rem) {
   .chart { grid-template-columns: 2.6rem 1fr; }
-  .cap { font-size: 0.68rem; }
+  /* "1h 53m" breaks into two lines, so neighbors never touch. */
+  .cap { width: min-content; font-size: 0.7rem; line-height: 1.15; text-align: center; white-space: normal; }
+  .levels li { grid-template-columns: auto 1fr; }
+  .levels .lt { grid-column: 2; padding-left: 0; }
   .kinds li { grid-template-columns: 1fr auto; }
   .kinds .track { grid-column: 1 / -1; grid-row: 2; margin-top: 0.3rem; }
 }

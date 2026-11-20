@@ -118,12 +118,12 @@ func TestDemoPage(t *testing.T) {
 			want:    []string{`<li class="col"></li>`, `<li><span>Wed</span><span class="dom">18</span></li>`},
 		},
 		{
-			name:    "today's pending minutes sit lighter on top of their project's part, and the legend says what lighter means",
+			name:    "today's pending minutes sit faded on top of their project's part, and the legend says what faded means",
 			signIn:  signInOn(""),
 			section: "week",
 			want: []string{
 				`<span class="seg c1 f26" title="chip8-emulator, 1h 3m"></span><span class="seg c1 pend f4" title="chip8-emulator, 9m pending"></span><span class="seg c2 f17" title="robotics-scouting, 41m"></span><small class="cap">1h 53m</small>`,
-				`<li><span class="key c1 pend"></span>Lighter means pending</li>`,
+				`<li><span class="key c1 pend"></span>Faded means pending</li>`,
 				"Pending minutes are from the last 15 minutes.",
 			},
 		},

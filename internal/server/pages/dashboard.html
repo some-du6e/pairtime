@@ -57,12 +57,12 @@
 <li><span class="key {{.Color}}"></span>{{.Name}}</li>
 {{- end}}
 {{- if .Week.HasPending}}
-<li><span class="key c1 pend"></span>Lighter means pending</li>
+<li><span class="key c1 pend"></span>Faded means pending</li>
 {{- end}}
 </ul>
 {{- end}}
 {{- if .Week.HasPending}}
-<p class="note">Pending minutes are from the last 15 minutes. pairtime can still change them while late events arrive, so they stay lighter until they settle.</p>
+<p class="note">Pending minutes are from the last 15 minutes. pairtime can still change them while late events arrive, so they stay faded until they settle.</p>
 {{- end}}
 <details>
 <summary>The last 7 days as a table</summary>

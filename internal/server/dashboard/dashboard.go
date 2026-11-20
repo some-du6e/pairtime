@@ -10,7 +10,7 @@
 // as rolled up from minute buckets (SM 5.1, 5.3). Minutes still inside
 // their pending window are kept apart from final ones throughout, because
 // a late event can still change them (DESIGN 6.2 D1), and the page draws
-// them lighter.
+// them faded.
 package dashboard
 
 import (
