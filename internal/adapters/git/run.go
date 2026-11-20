@@ -82,6 +82,9 @@ var redirecting = map[string]bool{
 	"GIT_ALTERNATE_OBJECT_DIRECTORIES": true,
 	"GIT_NAMESPACE":                    true,
 	"GIT_PREFIX":                       true,
+	"GIT_SHALLOW_FILE":                 true, // would make a full clone read as shallow
+	"GIT_GRAFT_FILE":                   true, // would rewrite parents, roots included
+	"GIT_REPLACE_REF_BASE":             true,
 	"GIT_CONFIG":                       true,
 	"GIT_CONFIG_PARAMETERS":            true,
 	"GIT_CONFIG_COUNT":                 true,
@@ -102,8 +105,8 @@ var redirecting = map[string]bool{
 // writes the index, which would wake its own watch. GIT_NO_LAZY_FETCH=1
 // keeps git from fetching an object a partial clone lacks from its
 // promisor remote, which would reach the network and write a pack into
-// .git; the call fails instead (see HonorsNoLazyFetch for the versions that
-// obey it). LC_ALL=C keeps error messages in English, which ErrNotRepo is
+// .git; the call fails instead (HonorsNoLazyFetch says which versions obey
+// it). LC_ALL=C keeps error messages in English, which ErrNotRepo is
 // matched on. Replace refs are ignored so the root commits are the ones a
 // fresh clone has.
 var fixedEnv = []string{
@@ -124,18 +127,25 @@ var fixedEnv = []string{
 // the -c reaches that child through GIT_CONFIG_PARAMETERS.
 var fixedArgs = []string{"-c", "log.showSignature=false", "-c", "color.ui=never", "-c", "core.quotePath=false", "-c", "core.fsmonitor=false"}
 
-// HonorsNoLazyFetch reports whether git v obeys GIT_NO_LAZY_FETCH. Git
-// 2.44 added it, and the security releases of May 2024 made the lazy-fetch
-// path itself check it, back to 2.39.4, 2.40.2, 2.41.1, 2.42.2 and 2.43.4.
-// A distribution that backported the fix without the version bump counts
-// as not obeying it, which only costs stats in partial clones.
+// HonorsNoLazyFetch reports whether git v obeys GIT_NO_LAZY_FETCH on every
+// path that fetches a missing object. The security releases of May 2024
+// put the check into promisor_remote_get_direct, which every such path
+// goes through: 2.39.4, 2.40.2, 2.41.1, 2.42.2, 2.43.4, 2.44.1 and 2.45.1,
+// and every release from 2.46. 2.44.0 doesn't know the variable, and
+// 2.45.0 reads it but its diff machinery prefetches blobs for a diffstat
+// without asking. A distribution that backported the fix without the
+// version bump counts as not obeying it, which only costs stats in partial
+// clones.
 func HonorsNoLazyFetch(v Version) bool {
-	if !v.Less(Version{2, 44, 0}) {
+	if v.Major != 2 {
+		return v.Major > 2
+	}
+	if v.Minor >= 46 {
 		return true
 	}
-	fixedIn := map[int]int{39: 4, 40: 2, 41: 1, 42: 2, 43: 4}
+	fixedIn := map[int]int{39: 4, 40: 2, 41: 1, 42: 2, 43: 4, 44: 1, 45: 1}
 	p, ok := fixedIn[v.Minor]
-	return v.Major == 2 && ok && v.Patch >= p
+	return ok && v.Patch >= p
 }
 
 func (r *Runner) init() {

@@ -101,10 +101,26 @@ func (g *gitEnv) git(dir string, args ...string) string {
 	return out
 }
 
+// baseEnv is the test process's environment without the variables that
+// would point git at another repository than the folder's own, so a test
+// run from inside a git hook can't touch the outer repo.
+func baseEnv() []string {
+	var env []string
+	for _, kv := range os.Environ() {
+		name, _, _ := strings.Cut(kv, "=")
+		upper := strings.ToUpper(name)
+		if redirecting[upper] || strings.HasPrefix(upper, "GIT_CONFIG_KEY_") || strings.HasPrefix(upper, "GIT_CONFIG_VALUE_") {
+			continue
+		}
+		env = append(env, kv)
+	}
+	return env
+}
+
 func (g *gitEnv) gitErr(dir string, extra []string, args ...string) (string, error) {
 	cmd := exec.Command("git", args...)
 	cmd.Dir = dir
-	env := append(append([]string(nil), os.Environ()...), g.env...)
+	env := append(baseEnv(), g.env...)
 	if !g.realDates {
 		date := fmt.Sprintf("@%d +0000", g.clock)
 		env = append(env, "GIT_AUTHOR_DATE="+date, "GIT_COMMITTER_DATE="+date)
@@ -230,7 +246,7 @@ func (r *testRepo) oracle(sha string) oracleCommit {
 func (g *gitEnv) gitIn(dir, stdin string, args ...string) (string, error) {
 	cmd := exec.Command("git", args...)
 	cmd.Dir = dir
-	cmd.Env = append(append([]string(nil), os.Environ()...), g.env...)
+	cmd.Env = append(baseEnv(), g.env...)
 	cmd.Stdin = strings.NewReader(stdin)
 	out, err := cmd.Output()
 	return string(out), err

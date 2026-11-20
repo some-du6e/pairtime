@@ -559,9 +559,13 @@ func TestHonorsNoLazyFetch(t *testing.T) {
 		v    Version
 		want bool
 	}{
-		{"2.44.0 added GIT_NO_LAZY_FETCH", Version{2, 44, 0}, true},
+		{"2.44.0 doesn't know GIT_NO_LAZY_FETCH", Version{2, 44, 0}, false},
+		{"2.44.1 got the May 2024 security fix", Version{2, 44, 1}, true},
+		{"2.45.0 reads it but its diff prefetch fetches anyway", Version{2, 45, 0}, false},
+		{"2.45.1 checks it where every lazy fetch goes", Version{2, 45, 1}, true},
+		{"2.46.0 and later obey it", Version{2, 46, 0}, true},
 		{"a later release obeys it", Version{2, 51, 2}, true},
-		{"2.43.4 got the May 2024 security fix", Version{2, 43, 4}, true},
+		{"2.43.4 got the security fix", Version{2, 43, 4}, true},
 		{"2.43.3 came before the fix", Version{2, 43, 3}, false},
 		{"2.39.4, the oldest fixed line, got the fix", Version{2, 39, 4}, true},
 		{"2.41.0 came before the fix", Version{2, 41, 0}, false},
@@ -607,8 +611,8 @@ func TestEnviron(t *testing.T) {
 	}{
 		{
 			name:    "variables that point git at another repo are removed, and the adapter's own settings added",
-			base:    []string{"PATH=/bin", "GIT_DIR=/elsewhere/.git", "git_work_tree=/x", "GIT_CONFIG_KEY_0=core.hooksPath", "GIT_CONFIG_VALUE_0=/tmp", "GIT_INDEX_FILE=/i"},
-			gone:    []string{"GIT_DIR=/elsewhere/.git", "git_work_tree=/x", "GIT_CONFIG_KEY_0=core.hooksPath", "GIT_CONFIG_VALUE_0=/tmp", "GIT_INDEX_FILE=/i"},
+			base:    []string{"PATH=/bin", "GIT_DIR=/elsewhere/.git", "git_work_tree=/x", "GIT_CONFIG_KEY_0=core.hooksPath", "GIT_CONFIG_VALUE_0=/tmp", "GIT_INDEX_FILE=/i", "GIT_SHALLOW_FILE=/empty", "GIT_GRAFT_FILE=/grafts"},
+			gone:    []string{"GIT_DIR=/elsewhere/.git", "git_work_tree=/x", "GIT_CONFIG_KEY_0=core.hooksPath", "GIT_CONFIG_VALUE_0=/tmp", "GIT_INDEX_FILE=/i", "GIT_SHALLOW_FILE=/empty", "GIT_GRAFT_FILE=/grafts"},
 			present: []string{"PATH=/bin", "GIT_OPTIONAL_LOCKS=0", "GIT_NO_LAZY_FETCH=1", "GIT_TERMINAL_PROMPT=0", "LC_ALL=C"},
 		},
 	}
