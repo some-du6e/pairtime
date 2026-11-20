@@ -3,6 +3,7 @@
 package webui
 
 import (
+	"html"
 	"io/fs"
 	"net/url"
 	"regexp"
@@ -32,9 +33,10 @@ func TestFS(t *testing.T) {
 	if m := uiMeta.FindStringSubmatch(page); m != nil {
 		kind = m[1]
 	}
+	// Attribute values as the browser reads them: Vite writes ' as &#39;.
 	var loaded []string
 	for _, m := range loads.FindAllStringSubmatch(page, -1) {
-		loaded = append(loaded, m[1])
+		loaded = append(loaded, html.UnescapeString(m[1]))
 	}
 
 	tests := []struct {
@@ -93,8 +95,9 @@ func TestFS(t *testing.T) {
 				if m == nil {
 					t.Fatal("index.html has no Content-Security-Policy <meta>; vite.config.ts adds it to builds")
 				}
+				csp := html.UnescapeString(m[1])
 				policy := map[string]string{}
-				for _, d := range strings.Split(m[1], ";") {
+				for _, d := range strings.Split(csp, ";") {
 					name, sources, _ := strings.Cut(strings.TrimSpace(d), " ")
 					policy[name] = strings.TrimSpace(sources)
 				}
@@ -108,12 +111,12 @@ func TestFS(t *testing.T) {
 				}
 				for name, sources := range want {
 					if policy[name] != sources {
-						t.Errorf("CSP %s is %q, want %q (the policy: %s)", name, policy[name], sources, m[1])
+						t.Errorf("CSP %s is %q, want %q (the policy: %s)", name, policy[name], sources, csp)
 					}
 				}
 				for _, bad := range []string{"'unsafe-inline'", "'unsafe-eval'", "http:", "https:", "*", "data:"} {
-					if strings.Contains(m[1], bad) {
-						t.Errorf("the CSP allows %s: %s", bad, m[1])
+					if strings.Contains(csp, bad) {
+						t.Errorf("the CSP allows %s: %s", bad, csp)
 					}
 				}
 			},
