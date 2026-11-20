@@ -87,6 +87,16 @@ folder key = "d" || hex(HMAC-SHA256(K_project, ascii("pairtime/v1/project/folder
 
 `root_1` to `root_n` are the repo's root commit ids in lowercase hex, sorted and without repeats. `folder` is the folder's canonical path with forward slashes, lowercased on Windows and macOS. `internal/adapters/git/keys.go` has the code, and `TestProjectKeyVectors` pins a vector for each form.
 
+The harness adapters' id secret is `K_ids`, derived as above with the label `pairtime/v1/harness-ids` (`internal/adapters`, WP-AD2). It keys the ids a harness gives its sessions, turns and subagents, and the scheduled prompts a Claude Code `Stop` hook lists, so `session_key`, `turn_key`, `agent_key` and `pending_crons[].prefix_hash` hold keys no one without the device can recompute:
+
+```text
+key     = prefix || hex(HMAC-SHA256(K_ids, part(ascii("pairtime/v1/harness-ids/") || domain)
+                                   || part(harness) || part(id_1) || ... || part(id_n))[0:16])
+part(x) = u32be(len(x)) || x
+```
+
+`harness` is the `pkg/event` harness, such as `claude_code`. A session is prefix `s`, domain `session` and its id. A turn is `t`, `turn`, the session's id and the turn's. A subagent is `a`, `agent`, the session's id and the subagent's. A scheduled prompt is `c`, `cron`, the session's id and the prompt's first 1,000 characters. `TestKeys` in `internal/adapters` pins a vector for each, computed apart from the code.
+
 One `K_dev` writes one chain. The nonce (4.4) and the token salts (10.2) are keyed by `s` alone, so they stay unique only while no `s` repeats under one `K_dev`. A `K_dev` that `pairtime restore` unwraps onto a new install (DESIGN 7.11) only verifies and opens the old chain's records. The restored install writes its own chain, under its own `device_id` and a `K_dev` generated for it, from `s = 1`, and keeps the old key for reading. A second chain under the old key would repeat every nonce and salt: a body or a salt revealed from the old chain would let a reader confirm guesses of the new chain's hidden bodies, or of its removed tokens, at the same `s`.
 
 ## 4. Records
