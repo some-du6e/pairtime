@@ -84,6 +84,9 @@ func serve(t *testing.T, ep Endpoint, opts Options, before func(*Server)) (*Serv
 	if err != nil {
 		t.Fatalf("Listen: %v", err)
 	}
+	if srv.Fallback() != "" {
+		t.Logf("the server is on the pipe because %s", srv.Fallback())
+	}
 	if before != nil {
 		before(srv)
 	}
@@ -401,6 +404,12 @@ func TestListen(t *testing.T) {
 		{
 			name: "a socket directory owned by another user is refused",
 			run: func(t *testing.T, dir string) {
+				if runtime.GOOS == "windows" {
+					// The runner is an elevated administrator, so what it makes
+					// belongs to Administrators, an owner secureDir accepts
+					// for anyone.
+					t.Skip("an elevated test can't make a directory that another user owns")
+				}
 				if err := secureDir(dir, otherUser(t)); err == nil {
 					t.Error("secureDir took a directory that isn't the wanted user's")
 				}

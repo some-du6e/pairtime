@@ -119,12 +119,12 @@ func startAgent(t *testing.T, data string, pipe bool) *agentProc {
 	for {
 		p, err := tryStart(exe, data, pipe)
 		if err == nil {
-			via, serr := agentVia(data)
+			via, problems, serr := agentVia(data)
 			if serr == nil && via == want {
 				t.Cleanup(func() { p.kill() })
 				return p
 			}
-			err = fmt.Errorf("it takes messages by %q (%v), want %q", via, serr, want)
+			err = fmt.Errorf("it takes messages by %q, want %q (status: %v; problems: %v)", via, want, serr, problems)
 			p.stop()
 		}
 		if time.Now().After(deadline) {
@@ -203,31 +203,33 @@ func (p *agentProc) stop() error {
 	}
 }
 
-// agentVia asks a running agent how it takes messages.
-func agentVia(data string) (inbox.Via, error) {
+// agentVia asks a running agent how it takes messages, and what problems
+// it reports.
+func agentVia(data string) (inbox.Via, map[string]string, error) {
 	pf, err := localhttp.ReadPortFile(home.Dirs{Data: data}.PortFile())
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	req, err := http.NewRequest("GET", fmt.Sprintf("http://127.0.0.1:%d/v1/status", pf.Port), nil)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	req.Header.Set("Authorization", "Bearer "+pf.Token)
 	resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	defer resp.Body.Close()
 	var status struct {
 		IPC struct {
 			Via inbox.Via `json:"via"`
 		} `json:"ipc"`
+		Problems map[string]string `json:"problems"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&status); err != nil {
-		return "", err
+		return "", nil, err
 	}
-	return status.IPC.Via, nil
+	return status.IPC.Via, status.Problems, nil
 }
 
 // stored is one line of the agent's journal, read the way a test that

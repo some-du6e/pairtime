@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -189,6 +190,9 @@ func TestAppendDrain(t *testing.T) {
 		{
 			name: "a sender whose write lands after a drain took the spool writes the message again, into the new spool",
 			run: func(t *testing.T, inbox, journal string) {
+				if runtime.GOOS == "windows" {
+					t.Skip("on Windows a drain can't take the spool while a sender has it open, so the write can't land late")
+				}
 				took := false
 				afterWrite = func() {
 					if !took {
