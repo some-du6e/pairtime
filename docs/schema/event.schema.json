@@ -9,7 +9,7 @@
   "properties": {
     "event_id": {"$ref": "#/$defs/uuid_v7", "description": "Unique and time-ordered."},
     "device_id": {"$ref": "#/$defs/key", "description": "A random per-install id, never derived from hardware."},
-    "seq": {"type": "integer", "minimum": 1, "description": "Per-device sequence number, gapless from 1. The server uses it for exactly-once ingest. The agent assigns it when it writes the event and overwrites whatever a sender wrote."},
+    "seq": {"type": "integer", "minimum": 1, "description": "The s of the device's ledger record that holds the event (docs/spec/ledger-v1.md 4.1). Ledger records are numbered from 1 with no gaps, checkpoints and upload-failure notes included, so events' seq values skip the numbers those records hold. The server uses it for exactly-once ingest. The agent assigns it when it writes the event and overwrites whatever a sender wrote."},
     "t": {"$ref": "#/$defs/unix_ms", "description": "Client wall time when the adapter saw the event."},
     "mono": {"type": "integer", "minimum": 0, "description": "Monotonic clock reading in milliseconds at the same moment, so the server can re-anchor t within one boot."},
     "boot_id": {"$ref": "#/$defs/key", "description": "Linux's boot_id, or an id generated per boot elsewhere."},
