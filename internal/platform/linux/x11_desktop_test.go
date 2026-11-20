@@ -185,13 +185,14 @@ func TestDesktopX11FocusFollowsActiveWindow(t *testing.T) {
 			if got.Window != tc.win || active != fmt.Sprint(tc.win) {
 				t.Fatalf("reported window %d; xdotool activated %d and reads %s as active", got.Window, tc.win, active)
 			}
-			// xprop is the oracle for the pid; xterm's own pid backs it.
+			// xprop is the oracle for the pid, and xterm, which has set
+			// _NET_WM_PID since 2005, backs it with its own.
 			wantPID := xpropPID(t, tc.win)
+			if wantPID != tc.cmd.Process.Pid {
+				t.Fatalf("xprop reads _NET_WM_PID %d on the xterm, whose pid is %d", wantPID, tc.cmd.Process.Pid)
+			}
 			if got.PID != wantPID {
 				t.Errorf("pid %d, xprop says %d", got.PID, wantPID)
-			}
-			if wantPID != 0 && wantPID != tc.cmd.Process.Pid {
-				t.Errorf("xprop's _NET_WM_PID %d isn't the xterm's pid %d", wantPID, tc.cmd.Process.Pid)
 			}
 			t.Logf("window %d, pid %d (xterm %d)", got.Window, got.PID, tc.cmd.Process.Pid)
 			if err := got.Payload(nil).Validate(); err != nil {
