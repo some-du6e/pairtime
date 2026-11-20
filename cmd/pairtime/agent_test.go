@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/some-du6e/pairtime/internal/agent/home"
+	"github.com/some-du6e/pairtime/internal/agent/keys"
 )
 
 // runEnv, when set, makes the test binary run `pairtime` with these
@@ -35,6 +36,9 @@ const ownArgs = "@args"
 var helpers = map[string]func(value string) int{}
 
 func TestMain(m *testing.M) {
+	// Every agent a test starts, in this process or one it starts, keeps
+	// K_dev in a key file in its data directory, off the OS's store.
+	agentKeyStores = []keys.Store{}
 	for env, helper := range helpers {
 		if v := os.Getenv(env); v != "" {
 			os.Exit(helper(v))
@@ -196,6 +200,26 @@ func TestAgentProcess(t *testing.T) {
 					if _, err := os.Stat(filepath.Join(ptHome, f)); err != nil {
 						t.Errorf("%s isn't in PAIRTIME_HOME: %v", f, err)
 					}
+				}
+			},
+		},
+		{
+			name: "a test's agent keeps its device key in a key file in PAIRTIME_HOME, off the OS's secret store",
+			check: func(t *testing.T) {
+				// The agent opens its keystore after it is ready.
+				deadline := time.Now().Add(20 * time.Second)
+				for {
+					st, err := keys.Inspect(ptHome)
+					if err == nil {
+						if st.Store != keys.KindFile {
+							t.Errorf("the agent keeps its device key in %s", st.Store.Description())
+						}
+						return
+					}
+					if time.Now().After(deadline) {
+						t.Fatalf("the agent made no device key within 20 s: %v", err)
+					}
+					time.Sleep(50 * time.Millisecond)
 				}
 			},
 		},
