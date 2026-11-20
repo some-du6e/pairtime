@@ -266,7 +266,8 @@ func TestConfigVersion(t *testing.T) {
 		wantCode   int
 		wantStderr string // substring
 	}{
-		{name: "a rollback runs on a newer release's pairtime.toml, warning about the keys it ignores", extra: "config_version = 2\nfrom_a_newer_release = true\n", wantStderr: "ignores the keys it doesn't know: from_a_newer_release"},
+		{name: "a rollback runs on a newer release's pairtime.toml, warning about the keys it ignores", extra: "config_version = 2\nprofile_default = \"ask\"\nfrom_a_newer_release = true\n", wantStderr: "ignores the keys it doesn't know: from_a_newer_release"},
+		{name: "a newer release's pairtime.toml that leaves out profile_default is refused while keys are ignored, since one may be it misspelt", extra: "config_version = 2\nprofile_defualt = \"ask\"\n", wantCode: 1, wantStderr: "may be a misspelt or misplaced profile_default"},
 		{name: "a pairtime.toml for this release still refuses a misspelt key", extra: "signup_open = true\n", wantCode: 1, wantStderr: "unknown keys: signup_open"},
 	}
 	for _, tt := range tests {

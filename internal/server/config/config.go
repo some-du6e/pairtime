@@ -83,6 +83,14 @@ const DefaultPath = "/etc/pairtime/pairtime.toml"
 // raises ConfigVersion by one: the first PR after a release tag to add a
 // key does it, and later PRs before the next tag leave it. keyVersions
 // records the config_version each key arrived in.
+//
+// A release reading a file for a newer one ignores the keys it doesn't
+// know, so a release may add only keys whose absence is the safe setting,
+// and may never rename or move a key: the release before it would read
+// the file as if the key weren't there. profile_default predates this
+// rule, and its default publishes profiles, so Load refuses a file for a
+// newer release that has keys this release ignores and doesn't set
+// profile_default.
 const ConfigVersion = 1
 
 // keyVersions maps every key pairtime.toml can hold to the config_version
@@ -282,6 +290,10 @@ func Load(path, secretsFile string, environ []string) (*Config, error) {
 		if c.ConfigVersion <= ConfigVersion {
 			return nil, fmt.Errorf("config: %s: unknown keys: %s", path, strings.Join(unknown, ", "))
 		}
+		if !md.IsDefined("profile_default") {
+			return nil, fmt.Errorf("config: %s: profile_default isn't set, and the file has config_version %d, above this release's %d, so this release ignores the keys it doesn't know: %s. One of them may be a misspelt or misplaced profile_default, which would leave this release on %q; set profile_default to %q or %q (DESIGN 8.3)",
+				path, c.ConfigVersion, ConfigVersion, strings.Join(unknown, ", "), ProfilePublic, ProfileAsk, ProfilePublic)
+		}
 		c.Warnings = append(c.Warnings, fmt.Sprintf("%s has config_version %d, above this release's %d, so this release ignores the keys it doesn't know: %s",
 			path, c.ConfigVersion, ConfigVersion, strings.Join(unknown, ", ")))
 	}
@@ -298,6 +310,10 @@ func Load(path, secretsFile string, environ []string) (*Config, error) {
 		dir = abs
 	}
 	if err := c.finish(dir); err != nil {
+		if c.ConfigVersion > ConfigVersion {
+			return nil, fmt.Errorf("config: %s: %w\nThe file has config_version %d, above this release's %d: a newer release wrote it, and may have added a value this release doesn't know. For a rollback, restore the pairtime.toml this release ran with (DESIGN 10.5 step 6)",
+				path, err, c.ConfigVersion, ConfigVersion)
+		}
 		return nil, fmt.Errorf("config: %s: %w", path, err)
 	}
 	return &c, nil

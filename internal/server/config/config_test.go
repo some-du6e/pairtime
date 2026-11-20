@@ -143,10 +143,10 @@ func TestLoad(t *testing.T) {
 			// that table (DESIGN 8.6). A release that doesn't ignores it with
 			// the other keys it doesn't know.
 			name: "a file for a newer release loads, with its unknown keys as warnings, so a rollback starts on it",
-			toml: base + "config_version = 2\nsignups_open = true\nfrom_a_newer_release = true\n[controller]\nname = \"Hack Club\"\ncontact = \"privacy@example.org\"\n[hca]\nnewer_key = \"x\"\n",
+			toml: base + "config_version = 2\nprofile_default = \"ask\"\nsignups_open = true\nfrom_a_newer_release = true\n[controller]\nname = \"Hack Club\"\ncontact = \"privacy@example.org\"\n[hca]\nnewer_key = \"x\"\n",
 			check: func(t *testing.T, c *Config, _ string) {
-				if c.ConfigVersion != 2 || !c.SignupsOpen {
-					t.Errorf("config_version = %d, signups_open = %v; want 2 and true, read as usual", c.ConfigVersion, c.SignupsOpen)
+				if c.ConfigVersion != 2 || c.ProfileDefault != ProfileAsk || !c.SignupsOpen {
+					t.Errorf("config_version = %d, profile_default = %q, signups_open = %v; want 2, %q and true, read as usual", c.ConfigVersion, c.ProfileDefault, c.SignupsOpen, ProfileAsk)
 				}
 				var unknown []string
 				for _, k := range []string{"from_a_newer_release", "controller", "controller.name", "controller.contact", "hca.newer_key"} {
@@ -160,6 +160,30 @@ func TestLoad(t *testing.T) {
 			},
 		},
 		{name: "a file for a newer release still has its values checked", toml: base + "config_version = 2\nprofile_default = \"private\"\n", wantErr: "profile_default"},
+		{
+			name:    "a value refused in a file for a newer release says a rollback needs the pairtime.toml this release ran with",
+			toml:    base + "config_version = 2\nprofile_default = \"friends\"\n",
+			wantErr: "a newer release wrote it, and may have added a value this release doesn't know. For a rollback, restore the pairtime.toml this release ran with",
+		},
+		{
+			name:    "a file for a newer release that has keys this release ignores must set profile_default, since one may be profile_default misspelt",
+			toml:    base + "config_version = 2\nprofile_defualt = \"ask\"\n",
+			wantErr: "ignores the keys it doesn't know: profile_defualt. One of them may be a misspelt or misplaced profile_default",
+		},
+		{
+			name:    "a profile_default under a table counts as missing in a file for a newer release",
+			toml:    base + "config_version = 2\n[hca]\nprofile_default = \"ask\"\n",
+			wantErr: "may be a misspelt or misplaced profile_default",
+		},
+		{
+			name: "a file for a newer release that has no keys this release ignores may leave profile_default out",
+			toml: base + "config_version = 2\n",
+			check: func(t *testing.T, c *Config, _ string) {
+				if c.ProfileDefault != ProfilePublic || len(c.Warnings) != 0 {
+					t.Errorf("profile_default = %q, warnings %q; want %q and none", c.ProfileDefault, c.Warnings, ProfilePublic)
+				}
+			},
+		},
 		{name: "config_version starts at 1", toml: base + "config_version = 0\n", wantErr: "config_version is 0"},
 		{
 			name:        "a key from a later config_version than the file's is refused, with the config_version to set, so the release before that key can start on the file",
