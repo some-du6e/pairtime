@@ -34,7 +34,9 @@ P = tl.key("p", "sidedoor e project")
 # The agent extension's session, keyed from the heartbeat's ai_session.
 S = tl.key("s", "sidedoor e extension session")
 APP = tl.key("a", "sidedoor e Code.exe")
-F = tl.key("f", "sidedoor e src/app.tsx")
+# Each turn rewrites a different file, so SM 4.2's rewrite-loop rule has no
+# shared lines to count, whatever it makes of edits with no hunk ranges.
+FILES = [tl.key("f", f"sidedoor e src/{name}") for name in ("app.tsx", "store.ts", "api.ts")]
 BRIDGE = dict(source="editor", via="bridge", harness="other", session=S, project=P)
 TURNS = [at("14:03:03"), at("14:05:03"), at("14:07:03")]
 EDIT_AFTER = 3_000
@@ -50,7 +52,7 @@ fx.ticks("13:58:00", "14:09:00", tl.SLOT_MS)
 fx.emit(at("13:58:00"), "os.focus", {"app_class": "editor", "app_hash": APP, "focus_project": P},
         source="os", via="os", sample=True)
 turn_keys = [tl.key("t", f"sidedoor e turn {k}") for k in range(1, len(TURNS) + 1)]
-for t, k in zip(TURNS, turn_keys):
+for t, k, f in zip(TURNS, turn_keys, FILES):
     # The agent's write of 5,000 changed lines changes the open file, so the
     # WakaTime plugin sends a heartbeat and wakatime-cli runs. Its AI sync
     # goes first and sends the prompt and the edit from the transcript; the
@@ -66,13 +68,13 @@ for t, k in zip(TURNS, turn_keys):
             **BRIDGE)
     e = t + EDIT_AFTER
     fx.emit(e, "agent.tool",
-            {"tool_class": "edit", "files": [F], "lines_added": ADDED, "lines_removed": REMOVED,
+            {"tool_class": "edit", "files": [f], "lines_added": ADDED, "lines_removed": REMOVED,
              "visible_output_lines": 0, "t_start": e, "t_end": e},
             **BRIDGE)
     # The plugin's heartbeat for the same file, within 120 s of an agent edit
     # of it, so the bridge marks it the agent's (DESIGN 5.7).
     fx.emit(e, "editor.activity",
-            {"editor": "vscode", "act": "edit", "file_hash": F, "lines_changed": ADDED + REMOVED,
+            {"editor": "vscode", "act": "edit", "file_hash": f, "lines_changed": ADDED + REMOVED,
              "edit_source": "agent"},
             source="editor", via="editor", project=P)
 

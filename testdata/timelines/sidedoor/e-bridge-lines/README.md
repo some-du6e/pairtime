@@ -16,7 +16,7 @@ Unlike (a), (c) and (d), these records count toward `logged_s` and `ai_logged_s`
 
 - `os.focus` at 13:58:00: VS Code, `focus_project` the project. The agent runs inside VS Code, so SM 2.2 rule 6's focus test is the editor window's.
 - `os.presence` every 15 s. Bridge records arrive over HTTP and take no sample.
-- At 14:03:03, 14:05:03 and 14:07:03, a `prompt.submit` from the bridge with `len_chars` 90 and no text. At :06 in each of those minutes, an `agent.tool` edit from the bridge with 3,800 lines added and 1,200 removed, and the WakaTime plugin's own heartbeat for the same file, `via` `editor`, `edit_source` `agent`.
+- At 14:03:03, 14:05:03 and 14:07:03, a `prompt.submit` from the bridge with `len_chars` 90 and no text. At :06 in each of those minutes, an `agent.tool` edit from the bridge with 3,800 lines added and 1,200 removed, each turn in a different file, and the WakaTime plugin's own heartbeat for that file, `via` `editor`, `edit_source` `agent`.
 
 ## Timing choices
 
@@ -24,6 +24,7 @@ Unlike (a), (c) and (d), these records count toward `logged_s` and `ai_logged_s`
 - The plugin's heartbeat shares the edit's millisecond. Within 120 s of an agent edit of the same file, the bridge marks it the agent's (DESIGN 5.7), and an agent's edit opens no anchor.
 - The jiggler moves at 14:02:59, 14:04:59 and 14:06:59 among other times, and the samples at :00 show it: the input in the 10 s before each prompt.
 - 90 characters gives a 60 s typing lead. The edit 3 s after the prompt makes `ai_logged_s` 243 s, a multiple of 3.
+- Each turn edits a different file, so SM 4.2's rewrite-loop rule finds no line that two turns both changed, whatever it makes of bridge edits, which carry no hunk ranges. The re-roll and fix-it rules need text, which bridge prompts don't have (D4). No dark-flow rule applies.
 
 ## How the numbers follow
 
