@@ -398,9 +398,6 @@ type agentStatus struct {
 	} `json:"version"`
 }
 
-// errAgentDown means port.json names no running agent.
-var errAgentDown = errors.New("pairtime's agent isn't running")
-
 // agentHTTP talks to the agent on 127.0.0.1, never through a proxy.
 var agentHTTP = &http.Client{Timeout: 3 * time.Second, Transport: &http.Transport{Proxy: nil}}
 
