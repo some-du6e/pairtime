@@ -17,6 +17,7 @@ import (
 	"github.com/some-du6e/pairtime/internal/server/auth"
 	"github.com/some-du6e/pairtime/internal/server/backup"
 	"github.com/some-du6e/pairtime/internal/server/config"
+	"github.com/some-du6e/pairtime/internal/server/device"
 	"github.com/some-du6e/pairtime/internal/server/migrations"
 	"github.com/some-du6e/pairtime/internal/server/ops"
 	"github.com/some-du6e/pairtime/internal/server/pages"
@@ -242,11 +243,30 @@ func serve(ctx context.Context, cfg *config.Config, logger *slog.Logger, e *env,
 	if err != nil {
 		return err
 	}
+	// The device grant, /device, /account/devices and the device API
+	// (WP-SV3). With sign-in off, the grant refuses new codes and the
+	// pages say linking isn't open yet.
+	devices, err := device.New(device.Options{DB: db, Writer: w})
+	if err != nil {
+		return err
+	}
+	linking, err := device.NewService(device.Config{
+		Store:   devices,
+		BaseURL: cfg.BaseURL,
+		SignIn:  signIn,
+		Site:    site,
+		Handle:  handle,
+		Logger:  logger,
+	})
+	if err != nil {
+		return err
+	}
 
 	public := http.NewServeMux()
 	public.HandleFunc("GET /healthz", ops.Healthz)
 	site.Register(public)
 	signIn.Register(public)
+	linking.Register(public)
 	// The home page at /, where a sign-in without return_to lands.
 	site.RegisterHome(public, pages.SignIn{
 		Enabled:    signIn.Enabled(),
@@ -257,6 +277,7 @@ func serve(ctx context.Context, cfg *config.Config, logger *slog.Logger, e *env,
 	maintainCtx, stopMaintain := context.WithCancel(ctx)
 	defer stopMaintain()
 	go signIn.Maintain(maintainCtx)
+	go linking.Maintain(maintainCtx)
 
 	pubLn, err := net.Listen("tcp", cfg.Listen)
 	if err != nil {
