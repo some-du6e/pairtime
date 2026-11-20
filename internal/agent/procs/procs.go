@@ -91,6 +91,13 @@ type Options struct {
 	// hooks after all, so the hookless session.start Report gave for it
 	// should be withdrawn, or merged into the session its hooks name.
 	Withdraw func(Session)
+	// Running, when set, gets the number of this user's harness session
+	// processes after every scan, on the goroutine that ran it: hooked or
+	// not, younger than Grace or not, with launchers left out. The agent
+	// hands it to presence, where a running one keeps a project context
+	// live (DESIGN 3.3). A scan that fails gives 0, so a reader that stops
+	// working can't hold a context live, and the sampling with it, for good.
+	Running func(n int)
 	// Read reads the process table. Nil means this OS's reader.
 	Read func() ([]platform.Proc, error)
 	// OS is the GOOS whose names Read returns. Empty means runtime.GOOS.
@@ -209,13 +216,16 @@ func (s *Scanner) Claim(boot string, host platform.Proc) {
 // this user (Options.Self) that started at least Grace ago, that no hook
 // claimed and that no earlier scan reported. A harness's own launcher,
 // such as the node wrapper npm puts in front of codex, isn't reported; its
-// child is (platform.LauncherOf). Scan returns the sessions it reported.
+// child is (platform.LauncherOf). Scan returns the sessions it reported,
+// and gives Options.Running the count of this user's harness processes.
 func (s *Scanner) Scan() ([]Session, error) {
 	procs, err := s.opts.Read()
 	if err != nil {
+		s.running(0)
 		return nil, fmt.Errorf("reading the process table: %w", err)
 	}
 	if s.self == "" {
+		s.running(0)
 		return nil, errNoSelf
 	}
 	now := s.opts.Now()
@@ -242,6 +252,7 @@ func (s *Scanner) Scan() ([]Session, error) {
 	s.mu.Lock()
 	live := make(map[platform.ID]bool)
 	var found []Session
+	mine := 0 // this user's harness processes, launchers left out
 	for _, p := range all {
 		h, ok := harness[p.PID]
 		if !ok {
@@ -249,7 +260,11 @@ func (s *Scanner) Scan() ([]Session, error) {
 		}
 		id := p.ID()
 		live[id] = true
-		if launcher[p.PID] || p.Owner == "" || p.Owner != s.self || s.claimed[id] {
+		if launcher[p.PID] || p.Owner == "" || p.Owner != s.self {
+			continue
+		}
+		mine++
+		if s.claimed[id] {
 			continue
 		}
 		if _, done := s.reported[id]; done {
@@ -303,7 +318,14 @@ func (s *Scanner) Scan() ([]Session, error) {
 	if changed {
 		s.save()
 	}
+	s.running(mine)
 	return found, nil
+}
+
+func (s *Scanner) running(n int) {
+	if s.opts.Running != nil {
+		s.opts.Running(n)
+	}
 }
 
 // load takes what Store kept, if it is from this boot. A damaged entry is

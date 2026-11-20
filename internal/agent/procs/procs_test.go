@@ -135,6 +135,57 @@ func TestScan(t *testing.T) {
 	}
 }
 
+// TestScanCountsRunningHarnesses checks the count each scan gives
+// Options.Running, which keeps presence's project context live while a
+// harness session process runs (DESIGN 3.3).
+func TestScanCountsRunningHarnesses(t *testing.T) {
+	young := []platform.Proc{
+		{PID: 5, Name: "bash", Owner: me, Start: sec(-60)},
+		{PID: 6, PPID: 5, Name: "claude", Owner: me, Start: sec(-1)},
+	}
+	tests := []struct {
+		name   string
+		procs  []platform.Proc
+		err    error
+		noSelf bool
+		claims []int
+		want   int
+	}{
+		{"every harness process of this user counts, a launcher and its child once", terminal(), nil, false, nil, 3},
+		{"a harness a hook claimed counts too", terminal(), nil, false, []int{111, 132}, 3},
+		{"another user's harness doesn't count, nor one whose owner is unknown", familyPC(), nil, false, nil, 3},
+		{"a harness younger than the grace counts, though it isn't reported yet", young, nil, false, nil, 1},
+		{"with no harness the count is 0", []platform.Proc{{PID: 5, Name: "bash", Owner: me}}, nil, false, nil, 0},
+		{"a scan that can't read the table counts 0", terminal(), errors.New("no /proc"), false, nil, 0},
+		{"a scan that can't tell whose processes are whose counts 0", terminal(), nil, true, nil, 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var counts []int
+			s := New(Options{
+				Read:    (&fake{procs: tt.procs, err: tt.err}).read,
+				OS:      platform.Linux,
+				Self:    me,
+				Boot:    boot,
+				Now:     func() time.Time { return sec(0) },
+				Running: func(n int) { counts = append(counts, n) },
+			})
+			if tt.noSelf {
+				s.self = ""
+			}
+			tab := platform.NewTable(platform.Linux, tt.procs)
+			for _, pid := range tt.claims {
+				p, _ := tab.Get(pid)
+				s.Claim(boot, p)
+			}
+			s.Scan()
+			if !slices.Equal(counts, []int{tt.want}) {
+				t.Errorf("Running got %v, want [%d] once", counts, tt.want)
+			}
+		})
+	}
+}
+
 func TestScanSession(t *testing.T) {
 	f := &fake{procs: familyPC()}
 	now := sec(0)
