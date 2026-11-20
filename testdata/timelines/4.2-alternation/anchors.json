@@ -1,0 +1,137 @@
+{
+  "fixture": "4.2-alternation",
+  "anchors": [
+    {
+      "event_id": "01a20789-7a60-73c1-9f0e-0514cab85200",
+      "kind": "substantive_prompt",
+      "t": 1795422780000,
+      "local": "19:33:00",
+      "project_key": "p_b2738424d7c2",
+      "origin": "human_typed",
+      "prompt_class": "substantive",
+      "lead_s": 160,
+      "trail_s": 0,
+      "lead_from": "params",
+      "via": "hook",
+      "level": "A",
+      "sm": "A1: attempt 1; credited"
+    },
+    {
+      "event_id": "01a2078c-3980-7b71-8f9a-e6bc17f9b9b8",
+      "kind": "substantive_prompt",
+      "t": 1795422960000,
+      "local": "19:36:00",
+      "project_key": "p_b2738424d7c2",
+      "origin": "human_typed",
+      "prompt_class": "substantive",
+      "lead_s": 160,
+      "trail_s": 0,
+      "lead_from": "params",
+      "via": "hook",
+      "level": "A",
+      "sm": "B1: attempt 1; credited"
+    },
+    {
+      "event_id": "01a2078e-f8a0-7e3f-9ceb-c639990a7025",
+      "kind": "substantive_prompt",
+      "t": 1795423140000,
+      "local": "19:39:00",
+      "project_key": "p_b2738424d7c2",
+      "origin": "human_typed",
+      "prompt_class": "substantive",
+      "lead_s": 160,
+      "trail_s": 0,
+      "lead_from": "params",
+      "via": "hook",
+      "level": "A",
+      "sm": "A2: attempt 2; credited"
+    },
+    {
+      "event_id": "01a20791-b7c0-76ac-bdfe-44b94b679b36",
+      "kind": "substantive_prompt",
+      "t": 1795423320000,
+      "local": "19:42:00",
+      "project_key": "p_b2738424d7c2",
+      "origin": "human_typed",
+      "prompt_class": "substantive",
+      "lead_s": 160,
+      "trail_s": 0,
+      "lead_from": "params",
+      "via": "hook",
+      "level": "A",
+      "sm": "B2: attempt 2; credited"
+    },
+    {
+      "event_id": "01a20794-76e0-7fa8-ba57-d6e504dec333",
+      "kind": "substantive_prompt",
+      "t": 1795423500000,
+      "local": "19:45:00",
+      "project_key": "p_b2738424d7c2",
+      "origin": "human_typed",
+      "prompt_class": "substantive",
+      "lead_s": 160,
+      "trail_s": 0,
+      "lead_from": "params",
+      "via": "hook",
+      "level": "A",
+      "sm": "A3: attempt 3; discounted, X.reroll (SM 4.2): it opens no window"
+    }
+  ],
+  "turns": [
+    {
+      "session_key": "s_45dccad56214",
+      "turn_key": "t_a3b5a765ea66",
+      "t_submit": 1795422780000,
+      "local_submit": "19:33:00",
+      "t_stop": 1795422840000,
+      "local_stop": "19:34:00",
+      "origin": "human_typed",
+      "prompt_class": "substantive",
+      "sm": "A1, attempt 1"
+    },
+    {
+      "session_key": "s_45dccad56214",
+      "turn_key": "t_e96fa5b99b6d",
+      "t_submit": 1795422960000,
+      "local_submit": "19:36:00",
+      "t_stop": 1795423020000,
+      "local_stop": "19:37:00",
+      "origin": "human_typed",
+      "prompt_class": "substantive",
+      "sm": "B1, attempt 1"
+    },
+    {
+      "session_key": "s_45dccad56214",
+      "turn_key": "t_1db5ec5bbe29",
+      "t_submit": 1795423140000,
+      "local_submit": "19:39:00",
+      "t_stop": 1795423200000,
+      "local_stop": "19:40:00",
+      "origin": "human_typed",
+      "prompt_class": "substantive",
+      "sm": "A2, attempt 2"
+    },
+    {
+      "session_key": "s_45dccad56214",
+      "turn_key": "t_a433d069cb4d",
+      "t_submit": 1795423320000,
+      "local_submit": "19:42:00",
+      "t_stop": 1795423380000,
+      "local_stop": "19:43:00",
+      "origin": "human_typed",
+      "prompt_class": "substantive",
+      "sm": "B2, attempt 2"
+    },
+    {
+      "session_key": "s_45dccad56214",
+      "turn_key": "t_9e975cfb61c8",
+      "t_submit": 1795423500000,
+      "local_submit": "19:45:00",
+      "t_stop": 1795423560000,
+      "local_stop": "19:46:00",
+      "origin": "human_typed",
+      "prompt_class": "substantive",
+      "sm": "A3, attempt 3"
+    }
+  ]
+}

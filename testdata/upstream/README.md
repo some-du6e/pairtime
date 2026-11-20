@@ -35,7 +35,7 @@ source: https://github.com/hackclub/hackatime/tree/43bde10b02dbd2371fb4f802e724a
 
 - `method` is `copied` (some text is verbatim upstream text), `described` (all of it is ours) or `reconstructed` (ours, and inferred from callers because the source isn't public).
 - `source` repeats, one line per upstream. A GitHub source is a tree or blob URL at a full 40-character commit, then its SPDX license or `none`. A web page is its URL, its license or `none`, then `retrieved YYYY-MM-DD`.
-- `copied` requires a license on every source and the upstream's `LICENSE` file next to the note.
+- `copied` requires the upstream's `LICENSE` file next to the note, and every source under one of the licenses `check.py` lets a capture quote: MIT, BSD-2-Clause, BSD-3-Clause, Apache-2.0, ISC, 0BSD, CC0-1.0 or CC-BY-4.0, in any case, since SPDX ids match without it. A source under anything else, `none`, `NOASSERTION` and `UNLICENSED` included, is described in our own words.
 
 The prose below the front matter lists what was taken from where, by file, line range and git blob SHA, and what was left out.
 
@@ -43,7 +43,7 @@ The prose below the front matter lists what was taken from where, by file, line 
 
 A file named `foo.json` or `foo.<label>.json` validates against `foo.schema.json` in the same directory. Every schema has at least one file to validate, and every value in a schema's `examples` must validate as well.
 
-Schemas are JSON Schema 2020-12, limited to the keywords `check.py` implements: `type`, `enum`, `const`, `properties`, `required`, `additionalProperties`, `minProperties`, `maxProperties`, `items`, `minItems`, `maxItems`, `uniqueItems`, `minLength`, `maxLength`, `pattern`, `minimum`, `maximum`, `allOf`, `anyOf`, `oneOf`, `not`, local `$ref` into `$defs`, and the annotations `title`, `description`, `examples`, `default`, `deprecated`, `format`, `$comment`, `$id`. Any other keyword fails the check. That keeps a schema from relying on a rule nothing enforces. Keywords starting with `x-` are notes, except `x-file-ref: true`, which requires the string to name a file in the same directory or below it. Patterns run through Python's `re` in ASCII mode, so keep them to what Python and ECMA-262 agree on.
+Schemas are JSON Schema 2020-12, limited to the keywords `check.py` implements: `type`, `enum`, `const`, `properties`, `required`, `additionalProperties`, `minProperties`, `maxProperties`, `items`, `minItems`, `maxItems`, `uniqueItems`, `minLength`, `maxLength`, `pattern`, `minimum`, `maximum`, `allOf`, `anyOf`, `oneOf`, `not`, `$ref` to an entry of the file's own `$defs` (written `#/$defs/<name>`), and the annotations `title`, `description`, `examples`, `default`, `deprecated`, `format`, `$comment`, `$id`. Any other keyword fails the check. That keeps a schema from relying on a rule nothing enforces. Keywords starting with `x-` are notes, with two exceptions. `x-file-ref: true` requires the string to name a file in the same directory or below it. `x-invalid-examples` lists values that must fail the schema it sits in, the way every value in `examples` must pass, so a rule that refuses something is shown refusing it and can't loosen unnoticed. Other validators ignore both, as they do any unknown keyword. Patterns run through Python's `re` in ASCII mode, so keep them to what Python and ECMA-262 agree on.
 
 Downstream WPs can load the response and payload schemas in their own tests. A schema here lists what upstream always sends as `required` and leaves `additionalProperties` open, so pairtime may add fields, such as the `pairtime` object on stats, without failing them.
 
@@ -53,4 +53,4 @@ Downstream WPs can load the response and payload schemas in their own tests. A s
 python3 -I testdata/upstream/check.py
 ```
 
-CI runs it in `ci.yml` as the "Upstream captures" step. It needs nothing beyond the standard library. Besides provenance and schemas, it recomputes every Robert webhook signature in `robert/webhook.json` and runs each verification case through the scheme written there.
+CI runs it in `ci.yml` as the "Upstream captures" step. It needs nothing beyond the standard library. Besides provenance and schemas, it recomputes every Robert webhook signature in `robert/webhook.json`, runs each verification case through the scheme written there, and checks that each case's `mac_valid` says rightly whether its signature is the MAC of its inputs.

@@ -3,10 +3,24 @@
 // Package sched runs every timer in the agent, so the agent's own wakeups
 // are one number (DESIGN 9.7; CP 1.3). An idle agent should wake about ten
 // times a minute (CP 7), and most of those wakeups are periodic jobs: a
-// presence sample every 15 s, and a process scan, an inbox drain and an
-// upload check every 60 s (DESIGN 3.3). Periodic jobs run on one grid, so
-// jobs whose intervals divide each other share wakeups: a 15 s job and a
-// 60 s job together wake the agent four times a minute, not five.
+// presence sample every 15 s, and a process scan and an inbox drain every
+// 60 s (DESIGN 3.3). Periodic jobs run on one grid, so jobs whose
+// intervals divide each other share wakeups: a 15 s job and a 60 s job
+// together wake the agent four times a minute, not five.
+//
+// The grid is on SM 1.3's slot boundaries, :00, :15, :30 and :45 of every
+// minute of the wall clock. SM 2.1 sets each slot's input from idle time,
+// which reports only the latest input, so only a sample taken as a slot
+// ends tells for certain whether the slot had any. Each agent's grid is a
+// random whole number of slots from the Unix epoch, so its 60 s jobs run
+// on one of the four boundaries, and devices don't all run their daily
+// jobs at the same time of day.
+//
+// A job that calls the server, such as the upload check every 60 s, uses
+// EverySpread instead. Its grid has an offset that each agent draws to the
+// nanosecond, so devices spread their calls over the interval instead of
+// all making them on the same slot boundary. That costs the job a wakeup
+// of its own.
 //
 // One goroutine runs every job, one at a time, so a job must return
 // quickly. A job with slow work hands it to a goroutine of its own.
@@ -22,8 +36,13 @@ import (
 	"time"
 )
 
-// day is the range the grid's phase is drawn from. Intervals that divide
-// a day keep their alignment with each other whatever the phase is.
+// slot is SM 1.3's 15-second slot, which starts at :00, :15, :30 or :45
+// of a minute. The grid's phase is a whole number of slots.
+const slot = 15 * time.Second
+
+// day is the range the grid's phase and the spread offset are drawn from.
+// Intervals that divide a day keep their alignment with each other
+// whatever the phase is.
 const day = 24 * time.Hour
 
 // early is how far ahead of its due time a job may run. Timers count
@@ -33,12 +52,16 @@ const day = 24 * time.Hour
 const early = 50 * time.Millisecond
 
 // Scheduler runs jobs at their due times. Make one with New, add jobs with
-// Every and After, and call Run once.
+// Every, EverySpread and After, and call Run once.
 type Scheduler struct {
-	// phase is the grid's offset from the Unix epoch. Each agent draws its
-	// own, so devices don't all upload in the same second.
+	// phase is the grid's offset from the Unix epoch: a whole number of
+	// slots, which each agent draws.
 	phase time.Duration
-	kick  chan struct{} // wakes Run when a job is added or changed
+	// spread is the offset of EverySpread's grid, which each agent draws
+	// to the nanosecond, so devices don't all call the server in the same
+	// second.
+	spread time.Duration
+	kick   chan struct{} // wakes Run when a job is added or changed
 
 	wakeups atomic.Uint64
 
@@ -46,47 +69,67 @@ type Scheduler struct {
 	jobs map[*Job]struct{} // the scheduled jobs
 }
 
-// Job is one timer, from Every or After.
+// Job is one timer, from Every, EverySpread or After.
 type Job struct {
-	s    *Scheduler
-	name string
-	fn   func(now time.Time)
+	s     *Scheduler
+	name  string
+	fn    func(now time.Time)
+	phase time.Duration // the offset of a periodic job's grid: the scheduler's phase or its spread
 
 	// Guarded by s.mu.
-	every time.Duration // the period of an Every job; 0 for an After job
+	every time.Duration // the period of a periodic job; 0 for an After job
 	next  time.Time     // when the job is due; zero when it isn't scheduled
 	gen   uint64        // bumped by Stop and Reset, to cancel a run already picked
 	runs  uint64
 }
 
-// New returns a scheduler whose grid has a random phase.
+// New returns a scheduler whose grid is a random whole number of slots from
+// the Unix epoch, with a random offset for EverySpread.
 func New() *Scheduler {
-	return newScheduler(time.Duration(rand.Int64N(int64(day))))
+	return newScheduler(
+		time.Duration(rand.Int64N(int64(day/slot)))*slot,
+		time.Duration(rand.Int64N(int64(day))),
+	)
 }
 
-func newScheduler(phase time.Duration) *Scheduler {
+func newScheduler(phase, spread time.Duration) *Scheduler {
 	return &Scheduler{
-		phase: phase,
-		kick:  make(chan struct{}, 1),
-		jobs:  make(map[*Job]struct{}),
+		phase:  phase,
+		spread: spread,
+		kick:   make(chan struct{}, 1),
+		jobs:   make(map[*Job]struct{}),
 	}
 }
 
 // Every adds a job that runs fn every interval, at the scheduler's grid
 // times: the phase plus a whole number of intervals since the Unix epoch,
-// in wall-clock time. The first run is at the next grid time, so it can be
-// up to one interval away.
+// in wall-clock time. For an interval that is a whole number of slots,
+// such as 15 s or 60 s, those are slot boundaries. The first run is at the
+// next grid time, so it can be up to one interval away.
 //
 // fn gets the wall-clock time of the wakeup without a monotonic reading,
 // so the difference between two runs is a wall-clock gap, which counts the
 // time a laptop spent asleep on every OS (CP 2.2).
 func (s *Scheduler) Every(name string, interval time.Duration, fn func(now time.Time)) *Job {
+	return s.every(name, interval, s.phase, fn)
+}
+
+// EverySpread is Every for a job that calls the server, such as the upload
+// check (DESIGN 3.3). Its grid has an offset of its own, the scheduler's
+// spread, which each agent draws at random, so devices make their calls at
+// different moments of the interval instead of all on the same slot
+// boundary. It costs a wakeup that Every jobs don't share.
+func (s *Scheduler) EverySpread(name string, interval time.Duration, fn func(now time.Time)) *Job {
+	return s.every(name, interval, s.spread, fn)
+}
+
+func (s *Scheduler) every(name string, interval, phase time.Duration, fn func(now time.Time)) *Job {
 	if interval <= 0 {
 		panic("sched: Every needs a positive interval")
 	}
-	j := &Job{s: s, name: name, fn: fn, every: interval}
+	j := &Job{s: s, name: name, fn: fn, phase: phase, every: interval}
 	s.mu.Lock()
-	j.next = s.gridAfter(time.Now(), interval)
+	j.next = gridAfter(time.Now(), interval, phase)
 	s.jobs[j] = struct{}{}
 	s.mu.Unlock()
 	s.wake()
@@ -118,7 +161,8 @@ func (j *Job) Stop() {
 
 // Reset reschedules j. An After job runs once, d from now, whether or not
 // it has run already, so calling Reset on every event makes a debounce. An
-// Every job runs every d from now on, starting at the next grid time.
+// Every or EverySpread job runs every d from now on, starting at the next
+// time on its grid.
 func (j *Job) Reset(d time.Duration) {
 	s := j.s
 	now := time.Now()
@@ -130,7 +174,7 @@ func (j *Job) Reset(d time.Duration) {
 	j.gen++
 	if j.every > 0 {
 		j.every = d
-		j.next = s.gridAfter(now, d)
+		j.next = gridAfter(now, d, j.phase)
 	} else {
 		j.next = now.Add(d)
 	}
@@ -198,17 +242,20 @@ func (s *Scheduler) wake() {
 	}
 }
 
-// earliest returns the due time of the job due first. It also moves an
-// Every job that is due more than one interval from now, which happens
+// earliest returns the due time of the job due first. It also moves a
+// periodic job that is due more than one interval from now, which happens
 // only when the wall clock was set back, to the next grid time, so a clock
-// change can't stall it.
+// change can't stall it. A job that runDue ran up to early before its due
+// time is due up to early more than one interval later, so that much
+// counts as on time: moving that job back would run it twice for one grid
+// time.
 func (s *Scheduler) earliest(now time.Time) (time.Time, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var first time.Time
 	for j := range s.jobs {
-		if j.every > 0 && j.next.Sub(now) > j.every {
-			j.next = s.gridAfter(now, j.every)
+		if j.every > 0 && j.next.Sub(now) > j.every+early {
+			j.next = gridAfter(now, j.every, j.phase)
 		}
 		if first.IsZero() || j.next.Before(first) {
 			first = j.next
@@ -241,7 +288,7 @@ func (s *Scheduler) runDue(now time.Time) {
 			if j.next.After(from) {
 				from = j.next
 			}
-			j.next = s.gridAfter(from, j.every)
+			j.next = gridAfter(from, j.every, j.phase)
 		} else {
 			j.next = time.Time{}
 			delete(s.jobs, j)
@@ -268,13 +315,14 @@ func (s *Scheduler) runDue(now time.Time) {
 	}
 }
 
-// gridAfter returns the first grid time for interval every that is after t.
-func (s *Scheduler) gridAfter(t time.Time, every time.Duration) time.Time {
-	n := t.UnixNano() - int64(s.phase)
+// gridAfter returns the first time after t that is phase plus a whole
+// number of intervals every from the Unix epoch.
+func gridAfter(t time.Time, every, phase time.Duration) time.Time {
+	n := t.UnixNano() - int64(phase)
 	e := int64(every)
 	k := n / e
 	if n < 0 && n%e != 0 {
 		k-- // round down, for times before the grid's origin
 	}
-	return time.Unix(0, (k+1)*e+int64(s.phase))
+	return time.Unix(0, (k+1)*e+int64(phase))
 }

@@ -1,0 +1,135 @@
+{
+  "fixture": "sidedoor/f-track-matched",
+  "title": "A track call 4 s after the hook prompt it copies",
+  "sm": "docs/PLAN.md WP-FX4 (f); DESIGN 5.2, 5.4, 6.2 D3 and D19, 6.4",
+  "date": "2026-11-25",
+  "timezone": "America/Chicago",
+  "utc_offset": "-06:00",
+  "os": "windows",
+  "input_keys": false,
+  "evidence": "B",
+  "witness": "witnessed",
+  "device": "d_0b93192703a9",
+  "projects": {"p_fad80786b46c": "the project Claude Code runs in"},
+  "window": {"start": "2026-11-25T20:00:00Z", "end": "2026-11-25T20:08:00Z", "local": "14:00-14:08"},
+  "rows": [
+    {
+      "start": "2026-11-25T20:00:00Z",
+      "minutes": 1,
+      "local": "14:00",
+      "bucket": false,
+      "codes": ["X.no_anchor"]
+    },
+    {
+      "start": "2026-11-25T20:01:00Z",
+      "minutes": 1,
+      "local": "14:01",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_fad80786b46c": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "note": "The prompt's 220 s lead, from 14:01:00."
+    },
+    {
+      "start": "2026-11-25T20:02:00Z",
+      "minutes": 1,
+      "local": "14:02",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_fad80786b46c": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "note": "The prompt's 220 s lead, from 14:01:00."
+    },
+    {
+      "start": "2026-11-25T20:03:00Z",
+      "minutes": 1,
+      "local": "14:03",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_fad80786b46c": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "note": "The prompt's 220 s lead, from 14:01:00."
+    },
+    {
+      "start": "2026-11-25T20:04:00Z",
+      "minutes": 1,
+      "local": "14:04",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_fad80786b46c": {"P": 40, "SUP": 20}
+      },
+      "uncredited": {},
+      "agent_running_s": 20,
+      "note": "The prompt at 14:04:40, then its turn's 20 s base. The track call at 14:04:44 changes nothing."
+    },
+    {
+      "start": "2026-11-25T20:05:00Z",
+      "minutes": 1,
+      "local": "14:05",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 30,
+      "credit": {
+        "p_fad80786b46c": {"READ": 30}
+      },
+      "uncredited": {"X.agent_only": 30},
+      "agent_running_s": 30,
+      "note": "Nothing to read until the 120-word answer at 14:05:30 adds 40 s."
+    },
+    {
+      "start": "2026-11-25T20:06:00Z",
+      "minutes": 1,
+      "local": "14:06",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 10,
+      "credit": {
+        "p_fad80786b46c": {"READ": 10}
+      },
+      "uncredited": {"X.no_anchor": 50},
+      "agent_running_s": 0
+    },
+    {
+      "start": "2026-11-25T20:07:00Z",
+      "minutes": 1,
+      "local": "14:07",
+      "bucket": false,
+      "codes": ["X.no_anchor"]
+    }
+  ],
+  "totals": {
+    "credited_s": 280,
+    "credited_by_project": {"p_fad80786b46c": 280},
+    "credited_by_reason": {"P": 220, "SUP": 20, "READ": 40},
+    "uncredited": {"X.no_anchor": 50, "X.agent_only": 30},
+    "agent_running_s": 50,
+    "level_a_s": 0,
+    "level_b_s": 280,
+    "level_c_s": 0,
+    "via_track_s": 0,
+    "logged_s": 50,
+    "ai_logged_s": 50,
+    "level_c_cap_s": 0
+  },
+  "stated": ["level_c_s", "via_track_s"],
+  "approx": {},
+  "errata": [],
+  "notes": [
+    "Everything is what the same session would earn with no track call: 280 s at level B from the hook prompt, nothing at level C and nothing labeled via_track.",
+    "logged_s = ai_logged_s = 4.3 + 45.7 = 50 s: the prompt, the Bash call's PostToolUse and the stop. The cli.track record isn't in either series (D19)."
+  ]
+}

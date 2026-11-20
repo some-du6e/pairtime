@@ -1,4 +1,7 @@
 /bin/
+# What `npm run build` in web/ writes next to the placeholder: only
+# internal/webui/dist/index.html is checked in (DESIGN 3.12).
+/internal/webui/dist/assets/
 
 # The capture kit's scrub report holds the original private values it
 # replaced (tools/capture/scrub.py). It never belongs in the repo.
