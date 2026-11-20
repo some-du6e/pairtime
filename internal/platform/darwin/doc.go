@@ -46,13 +46,15 @@
 // macOS delivers distributed notifications on the main thread, and
 // NSWorkspace updates the frontmost app from the main run loop (Apple's
 // Notification Programming Topics; the NSWorkspace and NSRunningApplication
-// references). So the Loop has to run on the process's main thread to see
-// locks and app switches. The agent arranges that by calling
-// runtime.LockOSThread in an init function of its main package, which keeps
-// the main goroutine on the main thread, and by calling Loop.Run from the
-// main goroutine. IOKit's messages arrive on whatever thread runs the loop,
-// so off the main thread a Loop still reports sleep and wake, and its
-// Status says that locks and app switches may not arrive.
+// references). On macos-latest a distributed notification never reached a
+// Loop off the main thread (TestFindingRunLoop). So the Loop has to run on
+// the process's main thread to see locks and app switches. The agent has to
+// arrange that: runtime.LockOSThread in an init function of its main
+// package keeps the main goroutine on the main thread, and the main
+// goroutine then calls Loop.Run while the rest of the agent runs elsewhere.
+// IOKit's messages arrive on whatever thread runs the loop, so off the main
+// thread a Loop still reports sleep and wake, and its Status says that locks
+// and app switches may not arrive.
 //
 // # Focus granularity
 //

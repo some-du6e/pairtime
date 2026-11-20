@@ -3,10 +3,14 @@
 package darwin
 
 import (
+	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"os"
+	"path/filepath"
 	"runtime"
+	"sync"
 	"testing"
 	"time"
 
@@ -15,16 +19,23 @@ import (
 
 // TestFindingKeyDownIdle answers WP-OS3's open question: does
 // CGEventSourceSecondsSinceLastEventType with kCGEventKeyDown need the
-// Input Monitoring permission (SM 1.2, DESIGN 5.7)? It records what the
-// calls return on macos-latest and, to see whether key-down idle notices a
-// key at all, posts one key-down and key-up of F20, a key with no default
-// action, and reads again. It writes
-// macos-key-down-idle-input-monitoring-<granted|denied|unknown>.json to
-// $PAIRTIME_FINDINGS_DIR, which platform.yml uploads as an artifact, and
-// fails only when it can't write the file. It never asks for a permission.
+// Input Monitoring permission (SM 1.2, DESIGN 5.7)? Readings on an idle
+// runner can't tell, since nobody has pressed a key, so the test posts one
+// key-down and key-up of F20, a key with no default action, and reads
+// again. It does that twice:
 //
-// Posting events is a test-only tool here. The client never posts, taps or
-// listens to input events (DESIGN 7.2).
+//   - in this process, which macos-latest grants Input Monitoring through
+//     the runner's own processes, a grant no TCC database row holds and the
+//     job can't take back;
+//   - in a child that is its own responsible process, spawned with
+//     responsibility_spawnattrs_setdisclaim as Chromium starts its helpers,
+//     so TCC judges the child alone, as it will judge a pairtime agent that
+//     its LaunchAgent starts. This process posts the key for it.
+//
+// It writes macos-key-down-idle.json to $PAIRTIME_FINDINGS_DIR, which
+// platform.yml uploads as an artifact, and fails only when it can't write
+// the file. It never asks for a permission. Posting events is a test-only
+// tool: the client never posts, taps or listens to input (DESIGN 7.2).
 func TestFindingKeyDownIdle(t *testing.T) {
 	if os.Getenv(findingsEnv) == "" {
 		t.Skipf("%s isn't set; platform.yml sets it on macos-latest", findingsEnv)
@@ -65,16 +76,11 @@ func TestFindingKeyDownIdle(t *testing.T) {
 		f.Presence = &s
 	}
 
-	f.Before = p.read()
-	f.Probe = p.post()
+	f.Before = p.quiet()
+	f.Probe = p.post(f.Before)
+	f.OwnProcess = p.ownProcessRun(t)
 	f.Answer, f.Detail = f.conclude()
-	// platform.yml runs this twice, the second time after revoking Input
-	// Monitoring, so the file says which state it saw.
-	state := "unknown"
-	if f.InputMonitoring != nil {
-		state = map[bool]string{true: "granted", false: "denied"}[*f.InputMonitoring]
-	}
-	if !writeFinding(t, "macos-key-down-idle-input-monitoring-"+state+".json", f) {
+	if !writeFinding(t, "macos-key-down-idle.json", f) {
 		t.Fatalf("%s is set but nothing was written", findingsEnv)
 	}
 	t.Logf("%s: %s", f.Answer, f.Detail)
@@ -98,7 +104,7 @@ type keyFinding struct {
 	// InputMonitoring is CGPreflightListenEventAccess: whether this process
 	// has Input Monitoring. IOHIDListenAccess is IOHIDCheckAccess for
 	// kIOHIDRequestTypeListenEvent. PostEventAccess is
-	// CGPreflightPostEventAccess, which the probe's key event needs.
+	// CGPreflightPostEventAccess, which posting the key needs.
 	InputMonitoring   *bool  `json:"input_monitoring_granted"`
 	IOHIDListenAccess string `json:"iohid_listen_access"`
 	PostEventAccess   *bool  `json:"post_event_granted"`
@@ -107,8 +113,10 @@ type keyFinding struct {
 	Presence      any    `json:"presence_sample,omitempty"`
 	PresenceError string `json:"presence_error,omitempty"`
 
-	Before idleReading `json:"before"`
-	Probe  keyProbe    `json:"probe"`
+	// Before and Probe are this process's run, OwnProcess the child's.
+	Before     idleReading `json:"before"`
+	Probe      keyProbe    `json:"probe"`
+	OwnProcess *ownRun     `json:"own_process_run"`
 }
 
 // idleReading is every idle value the question touches, read at once.
@@ -125,43 +133,95 @@ type idleReading struct {
 	KeyDowns uint32 `json:"key_down_count_hid_state"`
 }
 
+// resets says which idle values a posted key moved, comparing a reading
+// from before it with one after. A value counts as moved when it was at
+// least quietS before and is under a second after, so input that came just
+// before the post can't pass for it.
+type resets struct {
+	AnyReset     bool `json:"any_input_idle_reset"`
+	KeysReset    bool `json:"key_down_idle_reset"`
+	CountRose    bool `json:"key_down_count_rose"`
+	HIDIdleReset bool `json:"hid_idle_time_reset"`
+}
+
+// quietS is how long input has to have been idle before a post.
+const quietS = 1.5
+
+func compare(before, after idleReading) resets {
+	moved := func(b, a *float64) bool { return b != nil && *b >= quietS && below(a, 1) }
+	return resets{
+		AnyReset:     moved(before.AnyHIDS, after.AnyHIDS),
+		KeysReset:    moved(before.KeysHIDS, after.KeysHIDS),
+		CountRose:    after.KeyDowns > before.KeyDowns,
+		HIDIdleReset: moved(before.HIDIdleS, after.HIDIdleS),
+	}
+}
+
 type keyProbe struct {
 	Key       string      `json:"key"`
 	Attempted bool        `json:"attempted"`
 	Error     string      `json:"error,omitempty"`
 	After     idleReading `json:"after"`
-	// AnyReset says the posted key reached the HID system state;
-	// KeysReset says key-down idle saw it too.
-	AnyReset  bool `json:"any_input_idle_reset"`
-	KeysReset bool `json:"key_down_idle_reset"`
-	CountRose bool `json:"key_down_count_rose"`
-	// HIDIdleReset says IOKit's HIDIdleTime, the fallback, saw it.
-	HIDIdleReset bool `json:"hid_idle_time_reset"`
+	resets
+}
+
+// ownRun is the run in a child that is its own responsible process.
+type ownRun struct {
+	How    string        `json:"how"`
+	Error  string        `json:"error,omitempty"`
+	Reader *readerResult `json:"reader,omitempty"`
+	resets
 }
 
 // conclude turns the readings into the one-line answer Karim reads first.
+// A process without Input Monitoring answers the question; one with it
+// can only say what the call does with the permission.
 func (f keyFinding) conclude() (answer, detail string) {
-	keys := "null"
-	if v := f.Probe.After.KeysHIDS; v != nil {
-		keys = fmt.Sprintf("%.3f s", *v)
+	if o := f.OwnProcess; o != nil && o.Reader != nil && isFalse(o.Reader.InputMonitoring) {
+		return verdict("A child that is its own responsible process, and so has no Input Monitoring,", o.resets, o.Reader.After.KeysHIDS)
 	}
-	switch {
-	case f.InputMonitoring != nil && *f.InputMonitoring:
-		saw := "didn't see it"
-		if f.Probe.KeysReset {
-			saw = "dropped to " + keys
+	if isFalse(f.InputMonitoring) && f.Probe.Attempted {
+		return verdict("The test process, which has no Input Monitoring,", f.Probe.resets, f.Probe.After.KeysHIDS)
+	}
+	child := "wasn't run"
+	if o := f.OwnProcess; o != nil {
+		switch {
+		case o.Error != "":
+			child = "failed: " + o.Error
+		case o.Reader == nil || o.Reader.InputMonitoring == nil:
+			child = "couldn't tell whether it had the permission"
+		default:
+			child = "had the permission as well"
 		}
-		return "inconclusive", "the test process has Input Monitoring here, so this run can't show what the call returns without it. With it, key-down idle " + saw +
-			" after a posted key-down. The run without the permission, if platform.yml could revoke it, is in the -denied file"
-	case !f.Probe.Attempted:
-		return "inconclusive", "no key event could be made, so there was no fresh key press to look for: " + f.Probe.Error
-	case !f.Probe.AnyReset:
-		return "inconclusive", "the posted key-down didn't reach the HID system state (any-input idle didn't drop), most likely because the runner refuses posted events without Accessibility"
-	case f.Probe.KeysReset:
-		return "no permission needed", "without Input Monitoring, key-down idle dropped to " + keys + " after a posted key-down, as any-input idle did"
 	}
-	return "permission needed, or posted keys don't count", "without Input Monitoring, any-input idle dropped after a posted key-down but key-down idle stayed at " + keys +
-		": the call needs the permission, or it counts only hardware keys. One hardware key press on a Mac without the permission tells the two apart"
+	with := "didn't move"
+	if f.Probe.KeysReset {
+		with = "dropped to " + secs(f.Probe.After.KeysHIDS)
+	}
+	return "inconclusive", "the test process has Input Monitoring on this runner, and the child meant to run without it " + child +
+		". With the permission, key-down idle " + with + " after a posted key-down"
+}
+
+// verdict answers the question from what a process without Input
+// Monitoring saw after a posted key.
+func verdict(who string, r resets, keysAfter *float64) (answer, detail string) {
+	switch {
+	case !r.AnyReset:
+		return "inconclusive", who + " didn't see the posted key-down at all: any-input idle didn't drop"
+	case r.KeysReset:
+		return "no permission needed", who + " saw key-down idle drop to " + secs(keysAfter) + " after a posted key-down, as any-input idle did"
+	}
+	return "permission needed, or posted keys don't count", who + " saw any-input idle drop after a posted key-down, but key-down idle stayed at " + secs(keysAfter) +
+		". The call needs the permission, or it counts only hardware keys; one hardware key press on a Mac without the permission tells the two apart"
+}
+
+func isFalse(b *bool) bool { return b != nil && !*b }
+
+func secs(v *float64) string {
+	if v == nil {
+		return "null"
+	}
+	return fmt.Sprintf("%.3f s", *v)
 }
 
 // probe holds the calls only this test makes.
@@ -230,42 +290,288 @@ func (p *probe) read() idleReading {
 	return r
 }
 
-// post sends one F20 key-down and key-up into the HID system state and
-// waits up to two seconds for any-input idle to notice.
-func (p *probe) post() keyProbe {
-	kp := keyProbe{Key: "F20 (kVK_F20, 0x5A), down then up, from a kCGEventSourceStateHIDSystemState source to kCGHIDEventTap"}
-	start := p.read()
+// quiet waits up to 10 s for any-input idle to reach quietS, so a post that
+// follows can be told from input before it, and returns the last reading.
+func (p *probe) quiet() idleReading {
+	var r idleReading
+	eventually(10*time.Second, func() bool {
+		r = p.read()
+		return r.AnyHIDS != nil && *r.AnyHIDS >= quietS
+	})
+	return r
+}
+
+// postKey posts one F20 key-down and key-up from a HID-state source to the
+// HID event tap.
+func (p *probe) postKey() error {
 	src := p.sourceCreate(cgStateHIDSystem)
 	if src == 0 {
-		kp.Error = "CGEventSourceCreate returned NULL"
-		kp.After = p.read()
-		return kp
+		return errors.New("CGEventSourceCreate returned NULL")
 	}
 	defer cf.release(src)
 	for _, down := range []bool{true, false} {
 		ev := p.keyboardEvent(src, kVKF20, down)
 		if ev == 0 {
-			kp.Error = "CGEventCreateKeyboardEvent returned NULL"
-			kp.After = p.read()
-			return kp
+			return errors.New("CGEventCreateKeyboardEvent returned NULL")
 		}
 		p.postEvent(cgHIDEventTap, ev)
 		cf.release(ev)
 	}
-	kp.Attempted = true
-	deadline := time.Now().Add(2 * time.Second)
-	for {
+	return nil
+}
+
+// settle reads until any-input idle is under a second, for up to 2 s.
+func (p *probe) settle() idleReading {
+	var r idleReading
+	eventually(2*time.Second, func() bool {
+		r = p.read()
+		return below(r.AnyHIDS, 1)
+	})
+	return r
+}
+
+// post posts the key in this process and reads what changed since before.
+func (p *probe) post(before idleReading) keyProbe {
+	kp := keyProbe{Key: "F20 (kVK_F20, 0x5A), down then up, from a kCGEventSourceStateHIDSystemState source to kCGHIDEventTap"}
+	if err := p.postKey(); err != nil {
+		kp.Error = err.Error()
 		kp.After = p.read()
-		if below(kp.After.AnyHIDS, 1) || time.Now().After(deadline) {
-			break
-		}
-		time.Sleep(50 * time.Millisecond)
+		return kp
 	}
-	kp.AnyReset = below(kp.After.AnyHIDS, 1)
-	kp.KeysReset = below(kp.After.KeysHIDS, 1)
-	kp.CountRose = kp.After.KeyDowns > start.KeyDowns
-	kp.HIDIdleReset = below(kp.After.HIDIdleS, 1)
+	kp.Attempted = true
+	kp.After = p.settle()
+	kp.resets = compare(before, kp.After)
 	return kp
+}
+
+// readerEnv, set to a directory, makes the test binary the child half of
+// the run without Input Monitoring: TestKeyIdleReader takes a reading,
+// waits for the parent to post the key, reads again, and leaves both in
+// the directory.
+const readerEnv = "PAIRTIME_KEY_READER_DIR"
+
+// readerResult is what the child leaves in result.json.
+type readerResult struct {
+	InputMonitoring   *bool       `json:"input_monitoring_granted"`
+	IOHIDListenAccess string      `json:"iohid_listen_access"`
+	Before            idleReading `json:"before"`
+	After             idleReading `json:"after"`
+	Error             string      `json:"error,omitempty"`
+}
+
+// TestKeyIdleReader is the child half. It exits from inside the test, with
+// status 3 and before the testing package prints PASS, because the parent
+// reads result.json rather than the child's output or status.
+func TestKeyIdleReader(t *testing.T) {
+	dir := os.Getenv(readerEnv)
+	if dir == "" {
+		t.Skipf("runs only as TestFindingKeyDownIdle's child, with %s set", readerEnv)
+	}
+	var r readerResult
+	defer func() {
+		if err := writeJSONFile(filepath.Join(dir, "result.json"), r); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+		}
+		os.Exit(3)
+	}()
+	if err := readKeyIdle(dir, &r); err != nil {
+		r.Error = err.Error()
+	}
+}
+
+func readKeyIdle(dir string, r *readerResult) error {
+	if err := loadCG(); err != nil {
+		return err
+	}
+	if err := loadIOKit(); err != nil {
+		return err
+	}
+	p, err := bindProbe()
+	if err != nil {
+		return err
+	}
+	if granted, known := listenAccess(); known {
+		r.InputMonitoring = &granted
+	}
+	r.IOHIDListenAccess = p.hidAccess()
+	r.Before = p.quiet()
+	if err := writeJSONFile(filepath.Join(dir, "ready.json"), r); err != nil {
+		return err
+	}
+	if !eventually(20*time.Second, exists(filepath.Join(dir, "posted"))) {
+		return errors.New("the parent never posted the key")
+	}
+	r.After = p.settle()
+	return nil
+}
+
+// ownProcessRun starts this test binary again as TestKeyIdleReader, as its
+// own responsible process, posts the key once the child has its first
+// reading, and returns what the child saw.
+func (p *probe) ownProcessRun(t *testing.T) *ownRun {
+	run := &ownRun{How: "this test binary started again as TestKeyIdleReader with responsibility_spawnattrs_setdisclaim, so TCC judges it as its own responsible process; the parent posted the key"}
+	dir := t.TempDir()
+	logName := filepath.Join(dir, "reader.log")
+	fail := func(msg string) *ownRun {
+		b, _ := os.ReadFile(logName)
+		if len(b) > 2000 {
+			b = b[len(b)-2000:]
+		}
+		run.Error = msg
+		if len(b) > 0 {
+			run.Error += "; the child printed: " + string(b)
+		}
+		return run
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		return fail(err.Error())
+	}
+	pid, err := spawnDisclaimed(exe, []string{exe, "-test.run=^TestKeyIdleReader$", "-test.count=1"}, append(os.Environ(), readerEnv+"="+dir), logName)
+	if err != nil {
+		return fail(err.Error())
+	}
+	exited := make(chan struct{})
+	go func() {
+		var ws unix.WaitStatus
+		unix.Wait4(int(pid), &ws, 0, nil)
+		close(exited)
+	}()
+	defer func() {
+		select {
+		case <-exited:
+		case <-time.After(5 * time.Second):
+			unix.Kill(int(pid), unix.SIGKILL)
+			<-exited
+		}
+	}()
+	if !eventually(30*time.Second, exists(filepath.Join(dir, "ready.json"))) {
+		return fail("the child never took its first reading")
+	}
+	if err := p.postKey(); err != nil {
+		return fail(err.Error())
+	}
+	if err := os.WriteFile(filepath.Join(dir, "posted"), nil, 0o600); err != nil {
+		return fail(err.Error())
+	}
+	result := filepath.Join(dir, "result.json")
+	if !eventually(30*time.Second, exists(result)) {
+		return fail("the child wrote no result")
+	}
+	b, err := os.ReadFile(result)
+	if err != nil {
+		return fail(err.Error())
+	}
+	var r readerResult
+	if err := json.Unmarshal(b, &r); err != nil {
+		return fail(err.Error())
+	}
+	run.Reader = &r
+	if r.Error != "" {
+		return fail(r.Error)
+	}
+	run.resets = compare(r.Before, r.After)
+	return run
+}
+
+func exists(name string) func() bool {
+	return func() bool {
+		_, err := os.Stat(name)
+		return err == nil
+	}
+}
+
+// writeJSONFile writes v to name by atomic rename, so a reader polling for
+// name never sees half of it.
+func writeJSONFile(name string, v any) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+	tmp := name + ".tmp"
+	if err := os.WriteFile(tmp, b, 0o600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, name)
+}
+
+// spawn binds posix_spawn and responsibility_spawnattrs_setdisclaim, the
+// libSystem call Chromium uses (base/process/launch_mac.cc) so that a child
+// answers to TCC for itself instead of for the process that started it.
+var spawn struct {
+	once sync.Once
+	err  error
+
+	attrInit       func(attr *uintptr) int32
+	attrDestroy    func(attr *uintptr) int32
+	setDisclaim    func(attr *uintptr, disclaim int32) int32
+	actionsInit    func(fa *uintptr) int32
+	actionsDestroy func(fa *uintptr) int32
+	addOpen        func(fa *uintptr, fd int32, path string, oflag int32, mode uint16) int32
+	addDup2        func(fa *uintptr, fd, newfd int32) int32
+	posixSpawn     func(pid *int32, path string, fa *uintptr, attr *uintptr, argv, envp **byte) int32
+}
+
+func loadSpawn() error {
+	spawn.once.Do(func() {
+		l := dlopen(pathLibSystem)
+		l.fn(&spawn.attrInit, "posix_spawnattr_init")
+		l.fn(&spawn.attrDestroy, "posix_spawnattr_destroy")
+		l.fn(&spawn.setDisclaim, "responsibility_spawnattrs_setdisclaim")
+		l.fn(&spawn.actionsInit, "posix_spawn_file_actions_init")
+		l.fn(&spawn.actionsDestroy, "posix_spawn_file_actions_destroy")
+		l.fn(&spawn.addOpen, "posix_spawn_file_actions_addopen")
+		l.fn(&spawn.addDup2, "posix_spawn_file_actions_adddup2")
+		l.fn(&spawn.posixSpawn, "posix_spawn")
+		spawn.err = l.err
+	})
+	return spawn.err
+}
+
+// spawnDisclaimed starts path with argv and env as its own responsible
+// process, with its stdout and stderr in logName.
+func spawnDisclaimed(path string, argv, env []string, logName string) (int32, error) {
+	if err := loadSpawn(); err != nil {
+		return 0, err
+	}
+	var attr, fa uintptr
+	if e := spawn.attrInit(&attr); e != 0 {
+		return 0, fmt.Errorf("posix_spawnattr_init: %w", unix.Errno(e))
+	}
+	defer spawn.attrDestroy(&attr)
+	if e := spawn.setDisclaim(&attr, 1); e != 0 {
+		return 0, fmt.Errorf("responsibility_spawnattrs_setdisclaim: %w", unix.Errno(e))
+	}
+	if e := spawn.actionsInit(&fa); e != 0 {
+		return 0, fmt.Errorf("posix_spawn_file_actions_init: %w", unix.Errno(e))
+	}
+	defer spawn.actionsDestroy(&fa)
+	if e := spawn.addOpen(&fa, 1, logName, int32(unix.O_WRONLY|unix.O_CREAT|unix.O_TRUNC), 0o600); e != 0 {
+		return 0, fmt.Errorf("posix_spawn_file_actions_addopen: %w", unix.Errno(e))
+	}
+	if e := spawn.addDup2(&fa, 1, 2); e != 0 {
+		return 0, fmt.Errorf("posix_spawn_file_actions_adddup2: %w", unix.Errno(e))
+	}
+	cargv, cenv := cStrings(argv), cStrings(env)
+	var pid int32
+	e := spawn.posixSpawn(&pid, path, &fa, &attr, &cargv[0], &cenv[0])
+	runtime.KeepAlive(cargv)
+	runtime.KeepAlive(cenv)
+	if e != 0 {
+		return 0, fmt.Errorf("posix_spawn: %w", unix.Errno(e))
+	}
+	return pid, nil
+}
+
+// cStrings returns NUL-terminated copies of ss as a NULL-terminated array
+// of pointers, the shape of argv and envp.
+func cStrings(ss []string) []*byte {
+	ptrs := make([]*byte, 0, len(ss)+1)
+	for _, s := range ss {
+		b := append([]byte(s), 0)
+		ptrs = append(ptrs, &b[0])
+	}
+	return append(ptrs, nil)
 }
 
 func finite(v float64) *float64 {
