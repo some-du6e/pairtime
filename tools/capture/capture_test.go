@@ -1073,6 +1073,52 @@ func TestScrub(t *testing.T) {
 		})
 	})
 
+	// Windows gives C:\Users\Karim Abdallah the short name KARIMA~1 too, and
+	// often sets %TEMP% with it. Any Users\NAME~N folder is a home folder,
+	// so it goes even when the scrub knows nothing about the machine.
+	t.Run("a Windows short home folder name is replaced in every spelling, from any machine", func(t *testing.T) {
+		shorts := []struct{ name, in, want string }{
+			{"JSON-escaped, in a temp path", `{"stdout":"C:\\Users\\KARIMA~1\\AppData\\Local\\Temp\\claude-x"}`,
+				`{"stdout":"C:\\Users\\capture\\AppData\\Local\\Temp\\claude-x"}`},
+			{"as is", `C:\Users\JOHNSM~2\x`, `C:\Users\capture\x`},
+			{"with forward slashes", `C:/Users/ROWANQ~1/x`, `C:/Users/capture/x`},
+			{"URL-encoded", `C%3A%5CUsers%5CROWANQ~1%5Cx`, `C%3A%5CUsers%5Ccapture%5Cx`},
+			{"escaped twice", `"C:\\\\Users\\\\KARIMA~1\\\\x"`, `"C:\\\\Users\\\\capture\\\\x"`},
+			{"a short name outside Users stays", `D:\Backup\README~1.TXT`, `D:\Backup\README~1.TXT`},
+		}
+		var lines []string
+		for _, c := range shorts {
+			lines = append(lines, c.in)
+		}
+		dir := t.TempDir()
+		write(t, filepath.Join(dir, "run", "notes.txt"), strings.Join(lines, "\n")+"\n")
+		r := run(t, ".", nil, quiet, python(t, "scrub.py", "--no-detect", filepath.Join(dir, "run"), filepath.Join(dir, "out"))...)
+		if r.code != 0 {
+			t.Fatalf("exit %d:\n%s%s", r.code, r.stdout, r.stderr)
+		}
+		got := read(t, filepath.Join(dir, "out", "notes.txt"))
+		for _, c := range shorts {
+			t.Run(c.name, func(t *testing.T) {
+				if !strings.Contains(got, c.want) {
+					t.Errorf("no %s in:\n%s", c.want, got)
+				}
+			})
+		}
+	})
+	t.Run("the short home folder in %TEMP% is found, and a long one gives none", func(t *testing.T) {
+		code := "import json, sys; sys.path.insert(0, sys.argv[1]); import scrub; " +
+			"print(json.dumps([scrub.short_homes([], {'TEMP': t}) for t in sys.argv[2:]]))"
+		r := run(t, ".", nil, nil, need(t, "python3"), "-I", "-B", "-c", code, kit(t, "."),
+			`C:\Users\KARIMA~1\AppData\Local\Temp`, `C:\Users\Karim Abdallah\AppData\Local\Temp`)
+		var got [][]string
+		if err := json.Unmarshal([]byte(r.stdout), &got); err != nil {
+			t.Fatalf("%q: %v (%s)", r.stdout, err, r.stderr)
+		}
+		if len(got) != 2 || len(got[0]) != 1 || got[0][0] != `C:\Users\KARIMA~1` || len(got[1]) != 0 {
+			t.Fatalf("short_homes = %q, want [[C:\\Users\\KARIMA~1] []]", got)
+		}
+	})
+
 	// The person's own instruction files: a line of one in the capture means
 	// the harness loaded it, whatever the isolation was meant to do. The
 	// quote in it is JSON-escaped in the transcript, and the scripted prompt

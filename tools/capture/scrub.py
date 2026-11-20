@@ -161,6 +161,15 @@ MOVED_INSTRUCTIONS = (
     ("COPILOT_HOME", ("copilot-instructions.md", "instructions")),
     ("GEMINI_CLI_HOME", (".gemini/GEMINI.md",)),
 )
+# Windows gives a home folder whose name has a space or is longer than eight
+# characters an 8.3 short name as well, C:\Users\KARIMA~1 for C:\Users\Karim
+# Abdallah, and often sets %TEMP% in that form, which Node's os.tmpdir() and
+# Python's tempfile hand on as is. SHORT_HOME is such a name, after any
+# spelling of Users and a separator.
+SHORT_HOME = r"[A-Za-z0-9_$&#@!'()^{}-]{1,7}~[0-9]{1,6}(?![A-Za-z0-9])"
+SHORT_HOME_AFTER = (r"(?<=Users\\)", r"(?<=Users\\\\)", r"(?<=Users\\\\\\\\)", r"(?<=Users/)", r"(?<=Users%5C)",
+                    r"(?<=Users%2F)")
+
 # prepare.py's name for a file moved aside for a capture.
 ASIDE = ".pairtime-aside"
 
@@ -244,11 +253,43 @@ def run_quiet(cmd):
     return out.stdout.decode("utf-8", "replace").strip()
 
 
+def windows_short_path(path):
+    """What GetShortPathNameW gives for path on Windows, or None."""
+    try:
+        import ctypes
+        buf = ctypes.create_unicode_buffer(32768)
+        n = ctypes.windll.kernel32.GetShortPathNameW(path, buf, len(buf))
+    except (AttributeError, ImportError, OSError, ValueError):
+        return None
+    return buf.value if 0 < n < len(buf) else None
+
+
+def short_homes(homes, environ=None, short_path=None):
+    """The 8.3 short forms of Windows home folders: what short_path gives
+    for each home, and the home part of %TEMP% and %TMP%, which Windows
+    often sets in short form."""
+    environ = os.environ if environ is None else environ
+    out = []
+    for h in homes:
+        s = short_path(h) if short_path else None
+        if s and s.rstrip("\\/").lower() != h.rstrip("\\/").lower() and s.rstrip("\\/") not in out:
+            out.append(s.rstrip("\\/"))
+    for var in ("TEMP", "TMP"):
+        m = re.match(r"^([A-Za-z]:\\Users\\[^\\]*~[0-9]+)(?:\\|$)", environ.get(var, ""), re.I)
+        if m and m.group(1) not in out:
+            out.append(m.group(1))
+    return out
+
+
 def detect():
     """(kind, value) for the private values this machine knows about."""
     found = []
     homes = [os.path.expanduser("~"), os.environ.get("HOME", ""), os.environ.get("USERPROFILE", "")]
     homes += [os.path.realpath(h) for h in homes if h]
+    if os.name == "nt":
+        shorts = short_homes([h for h in homes if h], short_path=windows_short_path)
+        homes += shorts
+        found += [("user", s.rstrip("\\").rsplit("\\", 1)[-1]) for s in shorts]
     for h in homes:
         h = h.rstrip("/\\")
         if h and h not in ("", "/") and len(h) > 3:
@@ -351,6 +392,9 @@ def build_rules(known, common=()):
         domain = t.rsplit("@", 1)[-1]
         return t in KEEP_EMAILS or domain in KEEP_EMAIL_DOMAINS or domain.endswith(KEEP_EMAIL_TLDS)
 
+    # A Users\NAME~N folder is a home folder's 8.3 short name, whoever's it
+    # is, so it goes in every spelling, even from another machine.
+    rules.append(Rule("home", "(?i)(?:" + "|".join(SHORT_HOME_AFTER) + ")" + SHORT_HOME, USER, priority=0))
     rules.append(Rule("email", EMAIL_PATTERN, EMAIL, keep=keep_email))
     for kind, pattern in SECRET_PATTERNS:
         rules.append(Rule(kind, pattern, "REDACTED_" + kind, secret=True))
