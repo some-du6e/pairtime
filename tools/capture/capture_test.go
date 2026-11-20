@@ -1046,12 +1046,28 @@ func TestScrub(t *testing.T) {
 				t.Fatalf("exit %d:\n%s", r.code, r.stdout)
 			}
 		}},
-		{"a known value inside a longer word is reported and fails the run", func(t *testing.T) {
+		{"a known value inside a longer word is reported, fails the run, and nothing is written", func(t *testing.T) {
 			dir := t.TempDir()
 			write(t, filepath.Join(dir, "run", "notes.txt"), "rowanqsLaptop\n")
+			write(t, filepath.Join(dir, "run", "clean.txt"), "nothing private\n")
 			r := run(t, ".", nil, quiet, python(t, "scrub.py", "--no-detect", "--user", "rowanq", filepath.Join(dir, "run"), filepath.Join(dir, "out"))...)
 			if r.code != 1 || !strings.Contains(r.stdout, "STILL PRESENT") || !strings.Contains(r.stdout, "notes.txt:1") {
 				t.Fatalf("exit %d:\n%s", r.code, r.stdout)
+			}
+			if _, err := os.Stat(filepath.Join(dir, "out")); err == nil {
+				t.Fatalf("the scrub wrote %v although it found a leftover", keys(tree(t, filepath.Join(dir, "out"))))
+			}
+		}},
+		{"--accept-leftovers writes the output once the person has checked them", func(t *testing.T) {
+			dir := t.TempDir()
+			write(t, filepath.Join(dir, "run", "notes.txt"), "rowanqsLaptop\n")
+			r := run(t, ".", nil, quiet, python(t, "scrub.py", "--no-detect", "--user", "rowanq", "--accept-leftovers",
+				filepath.Join(dir, "run"), filepath.Join(dir, "out"))...)
+			if r.code != 0 || !strings.Contains(r.stdout, "STILL PRESENT") {
+				t.Fatalf("exit %d, want 0 with the leftover still listed:\n%s", r.code, r.stdout)
+			}
+			if got := read(t, filepath.Join(dir, "out", "notes.txt")); got != "rowanqsLaptop\n" {
+				t.Fatalf("notes.txt = %q", got)
 			}
 		}},
 		{"an output folder inside the run is refused", func(t *testing.T) {
@@ -1203,6 +1219,9 @@ func TestScrub(t *testing.T) {
 			}
 			if strings.Contains(r.stdout, "line 4 of") {
 				t.Errorf("the scripted prompt was flagged as the person's own text:\n%s", r.stdout)
+			}
+			if _, err := os.Stat(filepath.Join(dir, "out")); err == nil {
+				t.Errorf("the scrub wrote its output although the capture holds the person's instructions")
 			}
 		})
 	}

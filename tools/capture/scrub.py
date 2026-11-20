@@ -5,7 +5,8 @@
     python3 scrub.py RUN_DIR OUT_DIR [--also VALUE]... [--dry-run]
 
 Copies every text file under RUN_DIR to OUT_DIR, replacing private values
-with the fixed placeholders in testdata/fixtures/README.md:
+with the fixed placeholders in testdata/fixtures/README.md, but only once the
+checks below find nothing left over:
 
   - known values, found on this machine or given with flags: the home folder,
     the account name, the hostname, git's user.name and user.email, and
@@ -34,7 +35,10 @@ from the script. So is every line of your own instruction files that the
 capture holds (CLAUDE.md, AGENTS.md, GEMINI.md, rules and the like, from your
 home folder and from the folders above the scratch project): prepare.py's
 settings folder keeps them out of the captured sessions, and a line found
-here means the harness loaded them anyway.
+here means the harness loaded them anyway. While the report lists a
+leftover of either kind, the scrub writes nothing to OUT_DIR and exits 1;
+--accept-leftovers writes it anyway, for someone who has checked every one
+and found none private.
 
 The report, which holds the original values, is printed and saved beside
 RUN_DIR as RUN_DIR-scrub-report.txt, never inside OUT_DIR: it must not be
@@ -675,6 +679,9 @@ def main(argv=None):
                          "name, such as will or mark: replaced only in paths and as name@host")
     ap.add_argument("--no-detect", action="store_true", help="use only the values given with flags")
     ap.add_argument("--dry-run", action="store_true", help="print the report without writing OUT_DIR")
+    ap.add_argument("--accept-leftovers", action="store_true",
+                    help="write OUT_DIR even though the report lists leftovers, once you've checked every one "
+                         "and none of them is private")
     ap.add_argument("--report", metavar="FILE", help="where to save the report (default: beside RUN_DIR)")
     args = ap.parse_args(argv)
 
@@ -713,7 +720,7 @@ def main(argv=None):
 
     rep = []
     totals = {}
-    renamed, skipped, leftovers, unscripted, borrowed = [], [], [], [], []
+    renamed, skipped, leftovers, unscripted, borrowed, pending = [], [], [], [], [], []
     scripts = scripted_lines()
     files = 0
     kit = kit_text()
@@ -781,13 +788,27 @@ def main(argv=None):
                 if lines:
                     unscripted.append("%s  %r" % (new_rel.replace(os.sep, "/"), lines[0][:120]))
 
-        if not args.dry_run:
-            dst = os.path.join(out_dir, new_rel)
+        # Held back until every file is checked: a leftover in any of them
+        # means nothing goes into the repo.
+        pending.append((os.path.join(out_dir, new_rel), clean.encode("utf-8")))
+
+    blocked = bool(leftovers or borrowed) and not args.accept_leftovers
+    if not args.dry_run and not blocked:
+        for dst, data in pending:
             os.makedirs(os.path.dirname(dst), exist_ok=True)
             with open(dst, "wb") as f:
-                f.write(clean.encode("utf-8"))
-
-    summary = ["Scrubbed %d files from %s%s." % (files, run_dir, "" if args.dry_run else " into " + out_dir), ""]
+                f.write(data)
+    if args.dry_run:
+        head = "Checked %d files from %s, a dry run, so nothing was written." % (files, run_dir)
+    elif blocked:
+        head = ("Checked %d files from %s and wrote NOTHING to %s, because the report lists values that are still "
+                "there (STILL PRESENT and FROM YOUR OWN INSTRUCTION FILES below). Fix them and scrub again, or, if "
+                "you've checked every one and none is private, scrub again with --accept-leftovers."
+                % (files, run_dir, out_dir))
+    else:
+        head = "Scrubbed %d files from %s into %s%s." % (
+            files, run_dir, out_dir, ", with the leftovers below accepted" if leftovers or borrowed else "")
+    summary = [head, ""]
     if totals:
         summary.append("Replaced (kind, original, placeholder, count):")
         for (kind, shown, placeholder), n in sorted(totals.items(), key=lambda kv: (-kv[1], kv[0])):
@@ -813,13 +834,16 @@ def main(argv=None):
     summary += ["", "Checked the capture against %d line%s of %d instruction file%s of yours." % (
         len(needles), "" if len(needles) == 1 else "s", len(sources), "" if len(sources) == 1 else "s")]
     summary += ["", "Every replacement, with file:line and context, is in " + report_path,
-                "That report holds the original values: keep it out of the repo, and delete it with the run when you're done.",
-                "Now read every file in %s yourself before committing it." % out_dir]
+                "That report holds the original values: keep it out of the repo, and delete it with the run when you're done."]
+    if not args.dry_run and not blocked:
+        summary.append("Now read every file in %s yourself before committing it." % out_dir)
+    if blocked and not args.dry_run:
+        summary += ["", head]
 
     with open(report_path, "w", encoding="utf-8", newline="\n") as f:
         f.write("\n".join(summary) + "\n\nEvery replacement:\n" + "\n".join("  " + r for r in rep) + "\n")
     print("\n".join(summary))
-    return 1 if leftovers or borrowed else 0
+    return 1 if blocked else 0
 
 
 if __name__ == "__main__":
