@@ -147,5 +147,9 @@ jobs:
           if [ -z "$DIRS" ]; then
             bash tools/ci/desktop_session.sh true
           else
-            bash tools/ci/desktop_session.sh bash tools/ci/test_existing.sh -tags desktop -- $DIRS
+            # -p 1 runs the packages' test binaries one at a time. Tests in
+            # several of them start fakenotify, which owns
+            # org.freedesktop.Notifications on the one private bus, or need
+            # nobody to own it.
+            bash tools/ci/desktop_session.sh bash tools/ci/test_existing.sh -p 1 -tags desktop -- $DIRS
           fi
