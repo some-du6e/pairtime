@@ -886,7 +886,12 @@ var planted = map[string]string{
 {"nested":"{\"stdout\":\"C:\\\\Users\\\\RowanQ\\\\x\"}","school":"Westfield High"}
 {"keys":"ghp_AbCdEfGhIjKlMnOpQrStUvWxYz0123456789 AKIAABCDEFGHIJKLMNOP eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U","trailer":"Co-Authored-By: Claude <noreply@anthropic.com>"}
 `,
-	"otlp/000001.json": `{"resourceLogs":[{"resource":{"attributes":[{"key":"user.account_uuid","value":{"stringValue":"9b1e7f9e-1111-4222-8333-444455556666"}},{"key":"organization.id","value":{"stringValue":"77aa88bb-1111-4222-8333-444455556666"}},{"key":"user.email","value":{"stringValue":"rowan.quinn@westfield.edu"}},{"key":"session.id","value":{"stringValue":"` + plantedSession + `"}}]}}]}`,
+	// Account ids outside telemetry attributes: a Codex rollout's
+	// session_meta (HS 6.2) and the userId in a Cline hook payload (HS 9).
+	"transcripts/home/.codex/sessions/2026/11/19/rollout-2026-11-19T20-00-00-" + plantedSession + ".jsonl": `{"timestamp":"2026-11-19T20:00:00Z","type":"session_meta","payload":{"id":"` + plantedSession + `","source":"cli","creator_user_id":"user-Q9x8w7V6u5T4","creator_account_id":"acct-5566778899aa"}}
+`,
+	"hooks/000003/stdin": `{"clineVersion":"3.40.0","hookName":"UserPromptSubmit","taskId":"1763582400000","userId":"usr_5f4e3d2c1b0a","prompt":"What does count_words do? Answer in one sentence."}`,
+	"otlp/000001.json":   `{"resourceLogs":[{"resource":{"attributes":[{"key":"user.account_uuid","value":{"stringValue":"9b1e7f9e-1111-4222-8333-444455556666"}},{"key":"organization.id","value":{"stringValue":"77aa88bb-1111-4222-8333-444455556666"}},{"key":"user.email","value":{"stringValue":"rowan.quinn@westfield.edu"}},{"key":"session.id","value":{"stringValue":"` + plantedSession + `"}}]}}]}`,
 }
 
 // scrubArgs are the values the planted capture's person would have: given
@@ -924,7 +929,8 @@ func TestScrub(t *testing.T) {
 		check func(t *testing.T)
 	}{
 		{"no planted value survives in any file or path, in any case", func(t *testing.T) {
-			for _, v := range []string{"rowan", "westfield", "sk-ant-api03", "ghp_", "akiaabcd", "eyjhbgci", "9b1e7f9e", "77aa88bb"} {
+			for _, v := range []string{"rowan", "westfield", "sk-ant-api03", "ghp_", "akiaabcd", "eyjhbgci", "9b1e7f9e", "77aa88bb",
+				"q9x8w7v6", "5566778899aa", "5f4e3d2c1b0a"} {
 				if strings.Contains(everything, v) {
 					t.Errorf("%q survived the scrub", v)
 				}
@@ -948,6 +954,19 @@ func TestScrub(t *testing.T) {
 			got := out["otlp/000001.json"]
 			if strings.Count(got, "00000000-0000-4000-8000-000000000000") != 2 || !strings.Contains(got, `"stringValue":"capture@example.invalid"`) {
 				t.Fatalf("otlp body: %s", got)
+			}
+		}},
+		{"account ids outside telemetry attributes become the fixed id", func(t *testing.T) {
+			for path, want := range map[string][]string{
+				"transcripts/home/.codex/sessions/2026/11/19/rollout-2026-11-19T20-00-00-" + plantedSession + ".jsonl": {
+					`"creator_user_id":"00000000-0000-4000-8000-000000000000"`, `"creator_account_id":"00000000-0000-4000-8000-000000000000"`},
+				"hooks/000003/stdin": {`"userId":"00000000-0000-4000-8000-000000000000"`, `"taskId":"1763582400000"`},
+			} {
+				for _, w := range want {
+					if !strings.Contains(out[path], w) {
+						t.Errorf("%s lacks %s:\n%s", path, w, out[path])
+					}
+				}
 			}
 		}},
 		{"ids that aren't secrets and public tool addresses are kept", func(t *testing.T) {

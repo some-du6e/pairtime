@@ -20,7 +20,9 @@ with the fixed placeholders in testdata/fixtures/README.md:
     treats another value that way;
   - anything shaped like an API key, token, password or private key;
   - email addresses, apart from a few public tool addresses;
-  - the account, user and organization ids harnesses put in telemetry.
+  - the account, user and organization ids harnesses put in telemetry, and
+    any JSON member named like one, anywhere in a file: Codex's
+    creator_user_id, Cline's userId, machine and installation ids.
 
 File and folder names get the same replacements. Files that aren't UTF-8
 text, such as protobuf telemetry, are left out, since they can't be scrubbed.
@@ -85,6 +87,19 @@ ACCOUNT_ATTRIBUTES = (
     "user.id",
     "organization.id",
     "enduser.id",
+    "installation.id",
+)
+
+# JSON members anywhere in a file whose value names an account, an
+# organization or a machine, so it links every fixture one person makes:
+# Codex's session_meta creator ids (HS 6.2), the userId in every Cline hook
+# payload (HS 9), Gemini's installation id (HS 7.3), and the like. Session
+# and turn ids are random per session, so they stay.
+ACCOUNT_KEYS = (
+    "creator_user_id", "creator_account_id", "userId", "userID", "user_id", "accountId", "account_id",
+    "accountUuid", "account_uuid", "organizationId", "organization_id", "organizationUuid", "organization_uuid",
+    "orgId", "org_id", "installationId", "installation_id", "machineId", "machine_id", "deviceId", "device_id",
+    "anonymousId", "anonymous_id",
 )
 
 # (kind, regex). Order matters only for ties: the first rule wins a span two
@@ -381,6 +396,19 @@ def build_rules(known, common=()):
         for v, p in spellings(value, placeholder_for(kind, value)):
             rules.append(Rule(kind, bounded(v), p, priority=0, original=value))
 
+    # A value of one of ACCOUNT_KEYS, also inside JSON that is itself a JSON
+    # string, where every quote has a backslash before it. A quoted one
+    # becomes the fixed id and a number 0, so the JSON stays valid; a null
+    # stays.
+    keys = "|".join(re.escape(k) for k in ACCOUNT_KEYS)
+    rules.append(Rule(
+        "ACCOUNT_ID",
+        r'(?P<q>\\{0,3})"(?:' + keys + r')(?P=q)"\s*:\s*(?P=q)"(?P<secret>[^"\\]{1,200})(?P=q)"',
+        ACCOUNT_ID, secret=True))
+    rules.append(Rule(
+        "ACCOUNT_ID",
+        r'(?P<q>\\{0,3})"(?:' + keys + r')(?P=q)"\s*:\s*(?P<secret>[0-9]{2,})(?![0-9.eE])',
+        "0", secret=True))
     attr = "|".join(re.escape(a) for a in ACCOUNT_ATTRIBUTES)
     rules.append(Rule(
         "ACCOUNT_ID",
