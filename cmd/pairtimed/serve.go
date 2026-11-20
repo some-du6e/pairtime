@@ -174,7 +174,7 @@ func serve(ctx context.Context, cfg *config.Config, logger *slog.Logger, e *env)
 		logger.Info("object storage", "endpoint", cfg.ObjectStorage.Endpoint, "bucket", objs.main.Name(), "snapshot_bucket", objs.snapshots.Name())
 	}
 
-	signIn, err := newSignIn(cfg, db, w, logger)
+	signIn, err := newSignIn(cfg, db, w, logger, site.Signups.MayCreate)
 	if err != nil {
 		return err
 	}

@@ -22,8 +22,9 @@
 // An identity without an account gets one only when Options.MayCreate
 // admits its HCA subject. Otherwise it is refused and nothing is written,
 // so the server holds no new person's data until the controller is named
-// (DESIGN 8.6). cmd/pairtimed admits everyone while signups_open is true;
-// WP-SV14's gate also admits the operators list while it is false.
+// (DESIGN 8.6). cmd/pairtimed passes WP-SV14's gate, pages.Signups.MayCreate,
+// which admits everyone while signups_open is true and only the operators
+// list while it is false.
 //
 // A session is a random token in the browser's cookie, and the database
 // keeps only its SHA-256. Every write goes through the writer goroutine;

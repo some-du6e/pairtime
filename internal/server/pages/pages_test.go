@@ -3,7 +3,6 @@
 package pages
 
 import (
-	"context"
 	"crypto/sha256"
 	"encoding/base64"
 	"fmt"
@@ -12,7 +11,6 @@ import (
 	"io/fs"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"os"
 	"path"
 	"reflect"
@@ -22,8 +20,6 @@ import (
 	"time"
 
 	"github.com/some-du6e/pairtime/internal/server/retention"
-	"github.com/some-du6e/pairtime/internal/server/store"
-	"github.com/some-du6e/pairtime/internal/server/store/storetest"
 )
 
 // newSite builds a Site from o, with the embedded retention schedule and a
@@ -325,7 +321,6 @@ func TestStyleHash(t *testing.T) {
 	}{
 		{name: "the privacy notice's style matches its CSP hash", page: s.privacy},
 		{name: "the evidence page's style matches its CSP hash", page: s.current},
-		{name: "the refusal page's style matches its CSP hash", page: s.Signups.refusal},
 	}
 	for _, p := range pages {
 		t.Run(p.name, func(t *testing.T) {
@@ -398,82 +393,26 @@ func TestEvidenceIsDesign64(t *testing.T) {
 	}
 }
 
-// callback stands in for WP-SV2's HCA callback once it has verified the ID
-// token for sub: it looks up the account, asks the gate, and creates the
-// account only when the gate admits sub.
-func callback(db *store.DB, gate *Signups) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ctx := r.Context()
-		sub := r.URL.Query().Get("sub")
-		var n int
-		if err := db.Read.QueryRowContext(ctx, `SELECT count(*) FROM accounts WHERE hca_sub = $1`, sub).Scan(&n); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		if !gate.Admit(w, sub, n > 0) {
-			return
-		}
-		if n == 0 {
-			if _, err := db.Write.ExecContext(ctx, `INSERT INTO accounts (hca_sub) VALUES ($1)`, sub); err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
-				return
-			}
-		}
-		fmt.Fprint(w, "signed in")
-	})
-}
-
-func TestSignups(t *testing.T) {
+// TestMayCreate checks the sign-up gate's rule. Whether pairtimed hands it
+// to the real HCA callback is TestServeSignups' job, in cmd/pairtimed.
+func TestMayCreate(t *testing.T) {
 	tests := []struct {
 		name      string
 		open      bool
 		operators []string
-		existing  []string // HCA subs that already have accounts
 		sub       string
-		wantCode  int
-		wantBody  string
-		wantRows  int // accounts for sub afterwards
+		want      bool
 	}{
-		{name: "while sign-ups are closed a new identity gets the refusal page and no row", sub: "ident!new", wantCode: 403, wantBody: "Sign-ups aren&#39;t open yet", wantRows: 0},
-		{name: "the refusal says nothing was kept", sub: "ident!new", wantCode: 403, wantBody: "No account was made for you, and nothing from your Hack Club sign-in was saved.", wantRows: 0},
-		{name: "while sign-ups are closed an operator signs in and gets an account", operators: []string{"ident!op"}, sub: "ident!op", wantCode: 200, wantBody: "signed in", wantRows: 1},
-		{name: "the operators list lets in only the subs on it", operators: []string{"ident!op"}, sub: "ident!other", wantCode: 403, wantRows: 0},
-		{name: "while sign-ups are closed an existing account still signs in", existing: []string{"ident!old"}, sub: "ident!old", wantCode: 200, wantBody: "signed in", wantRows: 1},
-		{name: "with sign-ups open a new identity gets an account", open: true, sub: "ident!new", wantCode: 200, wantBody: "signed in", wantRows: 1},
+		{name: "while sign-ups are closed a new identity may not get an account", sub: "ident!new"},
+		{name: "while sign-ups are closed an identity on the operators list may", operators: []string{"ident!op"}, sub: "ident!op", want: true},
+		{name: "the operators list admits only the subs on it", operators: []string{"ident!op"}, sub: "ident!other"},
+		{name: "with sign-ups open any new identity may", open: true, sub: "ident!new", want: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ctx := context.Background()
-			db := storetest.Open(t, store.SQLite)
-			if _, err := db.Write.ExecContext(ctx, `CREATE TABLE accounts (hca_sub TEXT PRIMARY KEY)`); err != nil {
-				t.Fatal(err)
-			}
-			for _, sub := range tt.existing {
-				if _, err := db.Write.ExecContext(ctx, `INSERT INTO accounts (hca_sub) VALUES ($1)`, sub); err != nil {
-					t.Fatal(err)
-				}
-			}
 			gate := newSite(t, Options{SignupsOpen: tt.open, Operators: tt.operators}).Signups
-			rec := httptest.NewRecorder()
-			callback(db, gate).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/auth/hca/callback?sub="+url.QueryEscape(tt.sub), nil))
-
-			if rec.Code != tt.wantCode {
-				t.Errorf("status = %d, want %d", rec.Code, tt.wantCode)
-			}
-			if !strings.Contains(rec.Body.String(), tt.wantBody) {
-				t.Errorf("body doesn't contain %q:\n%s", tt.wantBody, rec.Body.String())
-			}
-			if tt.wantCode == 403 {
-				if cc := rec.Header().Get("Cache-Control"); cc != "no-store" {
-					t.Errorf("Cache-Control = %q, want no-store", cc)
-				}
-			}
-			var n int
-			if err := db.Read.QueryRowContext(ctx, `SELECT count(*) FROM accounts WHERE hca_sub = $1`, tt.sub).Scan(&n); err != nil {
-				t.Fatal(err)
-			}
-			if n != tt.wantRows {
-				t.Errorf("accounts for %s = %d, want %d", tt.sub, n, tt.wantRows)
+			if got := gate.MayCreate(tt.sub); got != tt.want {
+				t.Errorf("MayCreate(%q) = %v, want %v", tt.sub, got, tt.want)
 			}
 		})
 	}

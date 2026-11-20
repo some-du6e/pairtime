@@ -216,7 +216,7 @@ func (s *Service) callback(w http.ResponseWriter, r *http.Request) {
 		return
 	case errors.Is(err, accounts.ErrSignupsClosed):
 		s.fail(w, r, &Error{Status: http.StatusForbidden, Code: CodeSignupsClosed,
-			Message: "This pairtime server isn't taking new accounts yet. Your time keeps being tracked on your own computer, and nothing is lost."})
+			Message: "This pairtime server isn't taking new accounts yet, so no account was made for you and nothing from your Hack Club sign-in was saved. Your time keeps being tracked on your own computer, and nothing is lost."})
 		return
 	case err != nil:
 		s.fail(w, r, internal(err))

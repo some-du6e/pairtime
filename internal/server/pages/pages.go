@@ -1,15 +1,16 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 // Package pages serves pairtimed's static pages (WP-SV14): the privacy
-// notice at /privacy (DESIGN 4.4, 8.6), the definition of evidence levels
-// and bands at /docs/evidence (DESIGN 6.4), and the page Hack Club Auth
-// sign-in shows while sign-ups are closed (DESIGN 8.6, 10.2).
+// notice at /privacy (DESIGN 4.4, 8.6) and the definition of evidence
+// levels and bands at /docs/evidence (DESIGN 6.4). It also holds the
+// sign-up gate that Hack Club Auth sign-in asks before it creates an
+// account (DESIGN 8.6, 10.2).
 //
-// Each page is a Markdown template in this directory: privacy.md,
-// evidence/<version>.md and signups-closed.md. New renders all of them
-// once, from the configuration and the retention schedule, so serving a
-// page only copies bytes, and a mistake in a template stops pairtimed at
-// start instead of reaching a reader.
+// Each page is a Markdown template in this directory: privacy.md and
+// evidence/<version>.md. New renders all of them once, from the
+// configuration and the retention schedule, so serving a page only copies
+// bytes, and a mistake in a template stops pairtimed at start instead of
+// reaching a reader.
 //
 // The privacy notice's retention tables come from the same
 // retention.Policy the retention jobs run. The controller's name and
@@ -45,7 +46,7 @@ import (
 	"github.com/some-du6e/pairtime/internal/server/retention"
 )
 
-//go:embed layout.html style.css privacy.md signups-closed.md evidence/*.md
+//go:embed layout.html style.css privacy.md evidence/*.md
 var files embed.FS
 
 // SourceURL is where the code this server runs is published, which AGPL-3.0
@@ -102,8 +103,8 @@ type Site struct {
 	current  []byte
 	evidence []evidencePage // oldest first
 	csp      string
-	// Signups is the sign-up gate. HCA sign-in (WP-SV2) calls its Admit
-	// before it creates an account.
+	// Signups is the sign-up gate. pairtimed passes its MayCreate to HCA
+	// sign-in (WP-SV2), which asks it before it creates an account.
 	Signups *Signups
 }
 
@@ -156,11 +157,7 @@ func New(o Options) (*Site, error) {
 	if s.current, ok = s.evidenceFor(rv); !ok {
 		return nil, fmt.Errorf("pages: no evidence definition covers scoring %s; add internal/server/pages/evidence/%s.md (DESIGN 6.4, 6.6)", rv, rv)
 	}
-	refusal, err := l.page("Sign-ups are closed", "signups-closed.md", data, nil)
-	if err != nil {
-		return nil, err
-	}
-	s.Signups = &Signups{open: o.SignupsOpen, operators: make(map[string]bool), refusal: refusal, csp: l.csp}
+	s.Signups = &Signups{open: o.SignupsOpen, operators: make(map[string]bool)}
 	for _, sub := range o.Operators {
 		s.Signups.operators[sub] = true
 	}
@@ -360,8 +357,8 @@ func (v version) String() string {
 	return fmt.Sprintf("%d.%d.%d", v[0], v[1], v[2])
 }
 
-// privacyData is what privacy.md and signups-closed.md read. Every string
-// is Markdown, with values from the configuration escaped.
+// privacyData is what privacy.md reads. Every string is Markdown, with
+// values from the configuration escaped.
 type privacyData struct {
 	// Named says whether the controller's name and contact are both set.
 	Named      bool

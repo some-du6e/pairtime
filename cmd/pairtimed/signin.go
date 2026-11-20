@@ -15,8 +15,11 @@ import (
 
 // newSignIn builds Hack Club Auth sign-in from cfg (WP-SV2). Without
 // hca.client_id, sign-in is off and its pages say so. With it, the client
-// secret and the email key must be set, or serve doesn't start.
-func newSignIn(cfg *config.Config, db *store.DB, w *writer.Writer, logger *slog.Logger) (*auth.Service, error) {
+// secret and the email key must be set, or serve doesn't start. mayCreate
+// is the sign-up gate, pages.Signups.MayCreate: everyone may create an
+// account while signups_open is true, and only the operators list while it
+// is false (DESIGN 8.6; WP-SV14).
+func newSignIn(cfg *config.Config, db *store.DB, w *writer.Writer, logger *slog.Logger, mayCreate func(sub string) bool) (*auth.Service, error) {
 	if cfg.HCA.ClientID == "" {
 		logger.Warn("hca.client_id isn't set, so nobody can sign in")
 		return auth.New(auth.Config{BaseURL: cfg.BaseURL, Logger: logger})
@@ -38,7 +41,7 @@ func newSignIn(cfg *config.Config, db *store.DB, w *writer.Writer, logger *slog.
 		Writer:    w,
 		Emails:    emails,
 		Reviewers: cfg.Reviewers,
-		MayCreate: signupGate(cfg),
+		MayCreate: mayCreate,
 	})
 	if err != nil {
 		return nil, err
@@ -56,12 +59,4 @@ func newSignIn(cfg *config.Config, db *store.DB, w *writer.Writer, logger *slog.
 	}
 	logger.Info("sign-in with Hack Club Auth is on", "issuer", cfg.HCA.Issuer, "redirect_uri", svc.RedirectURI(), "signups_open", cfg.SignupsOpen)
 	return svc, nil
-}
-
-// signupGate says which new identities may create an account: everyone
-// while signups_open is true, and no one while it is false (DESIGN 8.6).
-// WP-SV14 replaces it with a gate that also admits its operators list.
-func signupGate(cfg *config.Config) func(sub string) bool {
-	signupsOpen := cfg.SignupsOpen
-	return func(string) bool { return signupsOpen }
 }
