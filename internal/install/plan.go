@@ -3,6 +3,7 @@
 package install
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -395,7 +396,9 @@ func (in *Installer) planUndo(rec record) (Change, error) {
 			ch.Notes = append(ch.Notes, "This changed since pairtime wrote it, so only pairtime's own entries come out.")
 		}
 	}
-	return ch, checkUndo(ch)
+	// checkUndo may change ch, so it runs before ch is returned.
+	err = checkUndo(&ch, rec.Edits)
+	return ch, err
 }
 
 // planFound works out how uninstall takes pairtime's entries out of g's
@@ -434,16 +437,61 @@ func (in *Installer) planFound(g *group) (Change, error) {
 	if !ch.After.Same(cur) {
 		ch.Notes = append(ch.Notes, "pairtime has no record of installing this, so uninstall takes out what it recognizes as pairtime's.")
 	}
-	return ch, checkUndo(ch)
+	err = checkUndo(&ch, g.recs)
+	return ch, err
+}
+
+// emptyFiles are, for each kind of edit to a file whose format has one, the
+// file that holds nothing: what uninstall writes through a symbolic link
+// instead of deleting a file pairtime created.
+var emptyFiles = map[string]string{
+	kindClaudeHooks: "{}",
 }
 
 // checkUndo refuses an undo that would rewrite a file the teen made
-// read-only.
-func checkUndo(ch Change) error {
-	if !ch.After.Same(ch.Before) && ch.Before.Exists && ch.After.Exists && !ch.Target.isRegistry() && ch.Before.Mode&0o200 == 0 {
+// read-only, and keeps a symbolic link the teen made. Deleting a file
+// pairtime created would delete the link when settings.json was moved into
+// a dotfiles repository and linked back, and leave pairtime's entries in
+// the copy there, which the next checkout links back. So the file the link
+// points to gets the file that holds nothing instead, or, for a kind of
+// file without one, the target is a problem the teen sorts out.
+func checkUndo(ch *Change, recs []editRecord) error {
+	if ch.After.Same(ch.Before) || !ch.Before.Exists || ch.Target.isRegistry() {
+		return nil
+	}
+	if !ch.After.Exists {
+		if info, err := os.Lstat(ch.Target.Path); err != nil || info.Mode()&fs.ModeSymlink == 0 {
+			return nil
+		}
+		empty, ok := emptyFile(recs)
+		if !ok {
+			return fmt.Errorf("%s is a symbolic link, so pairtime leaves it alone; pairtime created the file it points to, which you can delete", ch.Target)
+		}
+		newline := "\n"
+		if bytes.Contains(ch.Before.Data, []byte("\r\n")) {
+			newline = "\r\n"
+		}
+		ch.After = Content{Exists: true, Data: []byte(empty + newline), Mode: ch.Before.Mode}
+		ch.Notes = append(ch.Notes, "This is a link, which stays, so the file it points to is left empty rather than deleted.")
+	}
+	if ch.Before.Mode&0o200 == 0 {
 		return fmt.Errorf("%s is read-only now, so pairtime leaves it alone; make it writable and run uninstall again", ch.Target)
 	}
 	return nil
+}
+
+// emptyFile returns the file that holds nothing for a target that recs
+// edited, when every one of them is of a kind that has one.
+func emptyFile(recs []editRecord) (string, bool) {
+	empty := ""
+	for _, r := range recs {
+		e, ok := emptyFiles[r.Kind]
+		if !ok || (empty != "" && e != empty) {
+			return "", false
+		}
+		empty = e
+	}
+	return empty, empty != ""
 }
 
 // undoAll undoes edits on cur, the last one first.
@@ -545,7 +593,14 @@ func (p *Plan) Apply() error {
 	}
 	if p.uninstall {
 		for _, d := range p.rmdirs {
-			os.Remove(d) // only an empty directory goes, which is the point
+			// Only an empty directory goes, which is the point, and only a
+			// real one: os.Remove would delete a symbolic link or a
+			// junction that the teen put where pairtime's folder was,
+			// whatever it points to, such as ~/.claude moved into a
+			// dotfiles repository.
+			if info, err := os.Lstat(d); err == nil && info.Mode().Type() == fs.ModeDir {
+				os.Remove(d)
+			}
 		}
 		if err := in.writeManifest(data, p.oldSum); err != nil {
 			return err

@@ -118,6 +118,13 @@ func missingDirs(path string) ([]string, error) {
 		if !errors.Is(err, fs.ErrNotExist) {
 			return nil, err
 		}
+		if _, lerr := os.Lstat(d); lerr == nil {
+			// A link to a folder that isn't there, such as ~/.claude
+			// pointing into a dotfiles checkout that's gone. Making the
+			// folder would go through the link, and uninstall would then
+			// take the teen's link for pairtime's folder.
+			return nil, fmt.Errorf("%s is a link to a folder that isn't there, so pairtime leaves it alone", d)
+		}
 		dirs = append(dirs, d)
 		if filepath.Dir(d) == d {
 			break
@@ -140,10 +147,18 @@ func addDirs(dirs, more []string) []string {
 	return dirs
 }
 
-// makeDirs makes dirs, outermost first. One that is already there is fine.
+// makeDirs makes dirs, outermost first. A real directory that is already
+// there is fine; anything else at its name is an error.
 func makeDirs(dirs []string) error {
 	for _, d := range dirs {
-		if err := os.Mkdir(d, newDirMode); err != nil && !errors.Is(err, fs.ErrExist) {
+		err := os.Mkdir(d, newDirMode)
+		if errors.Is(err, fs.ErrExist) {
+			if info, lerr := os.Lstat(d); lerr == nil && info.Mode().Type() == fs.ModeDir {
+				continue
+			}
+			return fmt.Errorf("%s was made since the plan, and isn't a folder", d)
+		}
+		if err != nil {
 			return err
 		}
 	}

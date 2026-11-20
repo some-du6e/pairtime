@@ -664,3 +664,131 @@ func TestClaudeCodeKeepsHooksThatShareALineWithAnOldOne(t *testing.T) {
 		})
 	}
 }
+
+// isLink reports whether path is a symbolic link.
+func isLink(t *testing.T, path string) bool {
+	t.Helper()
+	info, err := os.Lstat(path)
+	return err == nil && info.Mode()&fs.ModeSymlink != 0
+}
+
+// moveAndLink moves path into the dotfiles folder in env's home and puts
+// a symbolic link to it where it was, as GNU stow does, and returns where
+// it went.
+func moveAndLink(t *testing.T, env Env, path string) string {
+	t.Helper()
+	moved := filepath.Join(env.Home, "dotfiles", filepath.Base(path))
+	if err := os.MkdirAll(filepath.Dir(moved), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(path, moved); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(moved, path); err != nil {
+		t.Fatal(err)
+	}
+	return moved
+}
+
+func TestUninstallKeepsLinks(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symbolic links need a privilege or developer mode on Windows")
+	}
+	tests := []struct {
+		name string
+		run  func(t *testing.T, env Env, in *Installer)
+	}{
+		{
+			name: "a settings.json pairtime created that the teen linked into dotfiles stays a link, and the file it points to is left empty",
+			run: func(t *testing.T, env Env, in *Installer) {
+				path := ClaudeSettings(env)
+				if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				item, err := ClaudeCode(env)
+				if err != nil {
+					t.Fatal(err)
+				}
+				install(t, in, item)
+				moved := moveAndLink(t, env, path)
+				uninstall(t, in)
+				if !isLink(t, path) {
+					t.Errorf("uninstall deleted the link %s", path)
+				}
+				if got := readOrNil(t, moved); string(got) != "{}\n" {
+					t.Errorf("after uninstall the linked file holds\n%s\nwant {} and a newline", got)
+				}
+			},
+		},
+		{
+			name: "an autostart entry pairtime created that the teen linked into dotfiles is a problem, and stays",
+			run: func(t *testing.T, env Env, in *Installer) {
+				item, err := Autostart(env)
+				if err != nil {
+					t.Fatal(err)
+				}
+				install(t, in, item)
+				path := item.Edits[0].Target().Path
+				moved := moveAndLink(t, env, path)
+				p, err := in.PlanUninstall()
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(p.Problems) != 1 || !strings.Contains(p.Problems[0], "symbolic link") {
+					t.Errorf("uninstall problems are %q, want one about the link", p.Problems)
+				}
+				if err := p.Apply(); err != nil {
+					t.Fatal(err)
+				}
+				if !isLink(t, path) || readOrNil(t, moved) == nil {
+					t.Errorf("uninstall took away the link %s or the file it points to", path)
+				}
+			},
+		},
+		{
+			name: "a folder pairtime made that the teen turned into a link stays at uninstall, with what it points to",
+			run: func(t *testing.T, env Env, in *Installer) {
+				item, err := ClaudeCode(env)
+				if err != nil {
+					t.Fatal(err)
+				}
+				install(t, in, item) // makes ~/.claude
+				dir := filepath.Dir(ClaudeSettings(env))
+				writeFile(t, filepath.Join(dir, "history.jsonl"), []byte("{}\n"))
+				moved := moveAndLink(t, env, dir)
+				uninstall(t, in)
+				if !isLink(t, dir) {
+					t.Errorf("uninstall deleted the link %s", dir)
+				}
+				if readOrNil(t, filepath.Join(moved, "history.jsonl")) == nil {
+					t.Errorf("the teen's file in the linked folder is gone")
+				}
+			},
+		},
+		{
+			name: "a link to a folder that isn't there, where pairtime would make one, stops the plan",
+			run: func(t *testing.T, env Env, in *Installer) {
+				dir := filepath.Dir(ClaudeSettings(env))
+				if err := os.Symlink(filepath.Join(env.Home, "dotfiles", "gone"), dir); err != nil {
+					t.Fatal(err)
+				}
+				item, err := ClaudeCode(env)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := in.PlanInstall([]Item{item}); err == nil || !strings.Contains(err.Error(), "link to a folder that isn't there") {
+					t.Errorf("PlanInstall = %v, want an error about the link", err)
+				}
+				if !isLink(t, dir) {
+					t.Errorf("the link %s is gone", dir)
+				}
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			env := testEnv(t, "linux", nil)
+			tt.run(t, env, newInstaller(t))
+		})
+	}
+}
