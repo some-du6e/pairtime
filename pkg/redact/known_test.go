@@ -104,6 +104,10 @@ func TestKnownValues(t *testing.T) {
 			`C:\xmaya`, `C:\xmaya`},
 		{"an escaped name goes after an escaped line break", accented,
 			"{\"by\": \"x\x5cnJos\x5cu00e9 N\x5cu00fa\x5cu00f1ez\"}", `{"by": "x\n[GIT_NAME]"}`},
+		{"the git email goes after an escaped line break, and the escape stays", teen,
+			`"Author:\nmaya.k@example.com"`, `"Author:\n[GIT_EMAIL]"`},
+		{"the git email goes between unicode escapes, as Go writes a trailer's angle brackets", teen,
+			"Maya Kowalski \x5cu003cmaya.k@example.com\x5cu003e", "[GIT_NAME] \x5cu003c[GIT_EMAIL]\x5cu003e"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
