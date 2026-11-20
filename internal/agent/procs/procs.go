@@ -139,10 +139,9 @@ func (s *Scanner) Claim(pid int, start time.Time) {
 
 // Scan reads the process table once and reports every harness process
 // that started at least Grace ago, that no hook claimed and that no
-// earlier scan reported. A harness whose direct parent runs the same
-// harness is part of that process's session (a launcher, a relaunch, a
-// helper) and isn't reported on its own. Scan returns the sessions it
-// reported.
+// earlier scan reported. A harness process whose direct child runs the
+// same harness, such as the node wrapper npm puts in front of codex, isn't
+// reported; its child is. Scan returns the sessions it reported.
 func (s *Scanner) Scan() ([]Session, error) {
 	procs, err := s.opts.Read()
 	if err != nil {
@@ -152,26 +151,40 @@ func (s *Scanner) Scan() ([]Session, error) {
 	goos := s.opts.OS
 	t := platform.NewTable(goos, procs)
 
+	all := t.Procs()
+	harness := make(map[int]event.Harness)
+	for _, p := range all {
+		if h, ok := platform.HarnessOf(goos, p); ok {
+			harness[p.PID] = h
+		}
+	}
+	// A harness process whose direct child runs the same harness is that
+	// child's launcher or an earlier copy that relaunched itself. The
+	// child is the session, and the child is what a hook claims.
+	launcher := make(map[int]bool)
+	for _, p := range all {
+		if h, ok := harness[p.PID]; ok {
+			if parent, ok := t.Parent(p); ok && harness[parent.PID] == h {
+				launcher[parent.PID] = true
+			}
+		}
+	}
+
 	s.mu.Lock()
 	live := make(map[procID]bool)
 	var found []Session
-	for _, p := range t.Procs() {
-		h, ok := platform.HarnessOf(goos, p)
+	for _, p := range all {
+		h, ok := harness[p.PID]
 		if !ok {
 			continue
 		}
 		id := idOf(p.PID, p.Start)
 		live[id] = true
-		if s.claimed[id] || s.reported[id] != "" {
+		if launcher[p.PID] || s.claimed[id] || s.reported[id] != "" {
 			continue
 		}
 		if !p.Start.IsZero() && now.Sub(p.Start) < Grace {
 			continue
-		}
-		if parent, ok := t.Parent(p); ok {
-			if ph, ok := platform.HarnessOf(goos, parent); ok && ph == h {
-				continue
-			}
 		}
 		l := platform.Classify(goos, t.Chain(p.PID))
 		sess := Session{
