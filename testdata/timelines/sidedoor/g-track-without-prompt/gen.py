@@ -173,8 +173,9 @@ prompts = {
 }
 
 sidedoor = side.doc(errata=[], notes=[
-    "A wrong scorer that opened an anchor for the call would credit its think part, 14:03:50 to 14:05:50, "
-    "where it beats the bucket from 14:04:40, and a fresh 20 s base from 14:07:30, all at level C.",
+    "A wrong scorer that opened an anchor for the call would credit its think part, from about 14:04:47 to "
+    "14:06:47 since its 42.7 s typing part is never realized here, ahead of the bucket, and a fresh 20 s base "
+    "from 14:07:30, all at level C.",
 ])
 
 sd.write(fx, tl.out_dir(HERE), expected, anchors, prompts, sidedoor)
