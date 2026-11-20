@@ -123,10 +123,18 @@
 //     as SM 2.7's b > 0 says, and drains up to a second from it. A turn's
 //     base counts toward the R_TURN_BASE_S that side-door output may fill
 //     (testdata/timelines/sidedoor/README.md).
-//   - A turn with no agent.stop runs to its last agent record and no
-//     later than the session's next prompt; one with no agent record after
-//     its prompt doesn't run, as a track turn never does
-//     (docs/errata/2026-11-19-turns-without-a-stop.md).
+//   - A turn runs to its agent.stop, and no later than the session's next
+//     prompt or session.end. Before its stop comes, a turn that hooks or a
+//     log reader see runs up to now, since they will report the stop. Any
+//     other turn runs to its last agent record, and one with no agent
+//     record after its prompt doesn't run, as a track turn never does
+//     (docs/errata/2026-11-19-turns-without-a-stop.md). A silence of a
+//     turn's agent records longer than BUCKET_TTL_S ends a hooked turn's
+//     run BUCKET_TTL_S after the last one, and one longer than
+//     RETURN_GAP_MAX_S + READ_HORIZON_S ends any other turn's at the last
+//     one, so no record reaches further back than the scorer's look-ahead.
+//     A continuation whose first record comes later than that after the
+//     previous stop starts at the record.
 //   - A queued message resets the bucket when the turn running at the
 //     enqueue stops working, since no record says when the agent picks the
 //     message up.

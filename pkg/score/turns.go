@@ -23,12 +23,15 @@ type Turn struct {
 	TSubmit    int64         `json:"t_submit"`
 	// TStop is 0 while the turn is running.
 	TStop int64 `json:"t_stop,omitempty"`
-	// RunUntil is when the agent stopped working on the turn: at TStop, or
-	// for a turn with no agent.stop at its last agent record, and in either
-	// case no later than the session's next prompt. A turn with no agent
-	// record after its prompt never runs, and its RunUntil is TSubmit. This
-	// is the rule docs/errata/2026-11-19-turns-without-a-stop.md proposes;
-	// it decides SUP against READ (SM 2.4) and agent_running_s (SM 5.1).
+	// RunUntil is when the agent stopped working on the turn: at TStop, no
+	// later than the session's next prompt or session.end. Before its stop
+	// comes, a turn that hooks or a log reader see runs up to now, and any
+	// other turn to its last agent record, so a track turn, which has none,
+	// never runs (docs/errata/2026-11-19-turns-without-a-stop.md). A silence
+	// of the turn's agent records longer than BUCKET_TTL_S, or longer than
+	// RETURN_GAP_MAX_S + READ_HORIZON_S outside hooked sessions, ends it
+	// (turnBuild.runUntil). It decides SUP against READ (SM 2.4) and
+	// agent_running_s (SM 5.1).
 	RunUntil int64        `json:"run_until"`
 	Origin   event.Origin `json:"origin"`
 	// PromptClass is set for turns a person started.
@@ -98,7 +101,9 @@ type session struct {
 	// lastStop is the latest agent.stop seen so far while turns are
 	// assembled, where the next continuation turn starts.
 	lastStop int64
-	turns    []*turnBuild
+	// ends are the times of its session.end records, in order.
+	ends  []int64
+	turns []*turnBuild
 }
 
 // posRec is a record's payload with its index in the records and its time.
@@ -159,10 +164,10 @@ type turnBuild struct {
 	// words and diffLines are clamped counts, summed up to countMax.
 	words     int64
 	diffLines int64
-	// lastAgent is the time of the turn's last agent.output, agent.tool or
-	// agent.stop, or 0.
-	lastAgent int64
-	turn      Turn
+	// agentTs are the times of the turn's agent.output, agent.tool and
+	// agent.stop records, in order once buildTurns is done.
+	agentTs []int64
+	turn    Turn
 }
 
 // running reports whether the agent was working on the turn at t.
@@ -267,6 +272,8 @@ func (d *deriver) buildSessions() {
 		switch p := e.Data.(type) {
 		case *event.SessionStart:
 			s.starts = append(s.starts, posRec[*event.SessionStart]{i, e.T, p})
+		case *event.SessionEnd:
+			s.ends = append(s.ends, e.T)
 		case *event.AgentOutput:
 			s.outputs = append(s.outputs, posRec[*event.AgentOutput]{i, e.T, p})
 		case *event.AgentStop:
@@ -358,7 +365,10 @@ func (d *deriver) buildTurns() {
 		tb := byKey[[2]string{s.key, key}]
 		if tb == nil {
 			tb = &turnBuild{sess: s, key: key, primary: -1, tSubmit: e.T}
-			if s.lastStop > 0 && s.lastStop <= e.T {
+			// It starts at the previous stop only when its first record
+			// comes within reach of it: before that record nothing showed the
+			// turn, and a record changes nothing further back (rules.reach).
+			if s.lastStop > 0 && s.lastStop <= e.T && e.T-s.lastStop <= d.r.reach {
 				tb.tSubmit = s.lastStop
 			}
 			byKey[[2]string{s.key, key}] = tb
@@ -373,7 +383,7 @@ func (d *deriver) buildTurns() {
 			}
 			s.lastStop = max(s.lastStop, e.T)
 		}
-		tb.lastAgent = max(tb.lastAgent, e.T)
+		tb.agentTs = append(tb.agentTs, e.T)
 	}
 	for _, s := range d.sessions {
 		slices.SortStableFunc(s.turns, func(a, b *turnBuild) int { return cmp.Compare(a.tSubmit, b.tSubmit) })
@@ -393,13 +403,14 @@ func (d *deriver) buildTurns() {
 			if isEdit(p) {
 				tb.diffLines = addCount(tb.diffLines, addCount(count(p.LinesAdded), count(p.LinesRemoved)))
 			}
-			tb.lastAgent = max(tb.lastAgent, e.T)
+			tb.agentTs = append(tb.agentTs, e.T)
 		}
 	}
 	for _, s := range d.sessions {
 		for k, tb := range s.turns {
 			d.finishTurn(tb)
-			tb.turn.RunUntil = tb.runUntil(s.turns[k+1:])
+			slices.Sort(tb.agentTs)
+			tb.turn.RunUntil = tb.runUntil(d.r, s.turns[k+1:], d.now)
 			d.turns = append(d.turns, tb)
 		}
 	}
@@ -413,17 +424,61 @@ func isEdit(p *event.AgentTool) bool {
 }
 
 // runUntil is the end of the turn's run (Turn.RunUntil). later are the
-// session's turns after it, in submit order.
-func (tb *turnBuild) runUntil(later []*turnBuild) int64 {
-	end := tb.tStop
-	if end == 0 {
-		end = tb.lastAgent
+// session's turns after it, in submit order, and now is the present as Step
+// takes it.
+//
+// A turn runs from its submit to its stop, and no later than the session's
+// next prompt or its session.end. Until its stop comes, a turn in a session
+// the harness's own hooks or logs cover runs up to now: its hooks will say
+// when it stops, and a stop that came after its minutes were final would
+// otherwise change them. A turn in any other session runs to its latest
+// agent record, as docs/errata/2026-11-19-turns-without-a-stop.md proposes,
+// since a track call or a bridge prompt never gets a stop.
+//
+// No record changes what was derived further back than rules.reach, so a
+// run lasts only while its agent's records keep coming. In a covered
+// session a silence of its records longer than BUCKET_TTL_S ends the run
+// BUCKET_TTL_S after the last one; elsewhere a silence longer than reach
+// ends it at the last one. A later record of the turn doesn't start it
+// again.
+func (tb *turnBuild) runUntil(r rules, later []*turnBuild, now int64) int64 {
+	native := tb.sess.native
+	gap := r.reach
+	if native {
+		gap = r.bucketTTL
+	}
+	prev, cut := tb.tSubmit, false
+	for _, t := range tb.agentTs {
+		if tb.tStop > 0 && t > tb.tStop {
+			break
+		}
+		if t-prev > gap {
+			cut = true
+			break
+		}
+		prev = t
+	}
+	var end int64
+	switch {
+	case cut && native:
+		end = prev + gap
+	case cut:
+		end = prev
+	case tb.tStop > 0:
+		end = tb.tStop
+	case native:
+		end = min(now, prev+gap)
+	default:
+		end = prev
 	}
 	for _, n := range later {
 		if n.primary >= 0 && n.tSubmit > tb.tSubmit {
 			end = min(end, n.tSubmit)
 			break
 		}
+	}
+	if i, _ := slices.BinarySearch(tb.sess.ends, tb.tSubmit); i < len(tb.sess.ends) {
+		end = min(end, tb.sess.ends[i])
 	}
 	return max(end, tb.tSubmit)
 }

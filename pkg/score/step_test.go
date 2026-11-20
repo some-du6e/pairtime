@@ -75,11 +75,42 @@ func firstDiff(a, b []byte) string {
 // where a record is about a time long before it: whatever a record changes
 // was still pending when it came (rules.reach).
 func TestStepsAgree(t *testing.T) {
-	cases := []struct {
+	type stepCase struct {
 		name  string
 		build func(b *tl)
 		check func(t *testing.T, d Derived)
-	}{
+	}
+	// agentIn sums agent_running_s over the slots in [from, to).
+	agentIn := func(d Derived, from, to int64) int64 {
+		var n int64
+		for _, c := range d.Credits {
+			if c.Slot >= from && c.Slot < to {
+				n += c.AgentS
+			}
+		}
+		return n
+	}
+	// hooked is a typed prompt at 60 s in s_1, which hooks see, its first
+	// output at 70 s, and the person present until 2,900 s.
+	hooked := func(b *tl) {
+		terminalSession(b)
+		b.press(every(atMS(30_500), atMS(59_500), 1000)...)
+		b.mouse(every(at(61), at(2896), 5000)...)
+		b.prompt(at(60), event.ViaHook, "s_1", "p_1", "t_1", 30)
+		b.agentSays(at(70), "s_1", "t_1", 30)
+	}
+	running := func(want int64) func(t *testing.T, d Derived) {
+		return func(t *testing.T, d Derived) {
+			if got := agentIn(d, at(600), at(2400)); got != want {
+				t.Errorf("agent_running_s from 600 s to 2,400 s is %d, want %d", got, want)
+			}
+		}
+	}
+	plugin := func(b *tl, tm int64, p event.Payload) event.Event {
+		return b.emit(tm, event.Envelope{Source: event.SourceHook, Via: event.ViaPlugin, Harness: event.HarnessOther,
+			SessionKey: "s_1", ProjectKey: "p_1"}, p)
+	}
+	cases := []stepCase{
 		{
 			name: "a typed command that ran 40 minutes, recorded when it ended, credits only its trail and ends no returned run",
 			build: func(b *tl) {
@@ -128,6 +159,63 @@ func TestStepsAgree(t *testing.T) {
 				}
 				if got := sumIn(d, at(285), at(330))[event.ReasonPermission]; got != 0 {
 					t.Errorf("%d s of PA, which the record comes too late for", got)
+				}
+			},
+		},
+		{
+			name: "a hooked turn runs through a 40-minute tool call before its stop is recorded",
+			build: func(b *tl) {
+				hooked(b)
+				b.harness(at(2470), event.ViaHook, "s_1", "p_1", &event.AgentTool{ToolClass: event.ToolBash, TStart: at(80),
+					TEnd: at(2470), VisibleOutputLines: 2})
+				b.agentStops(at(2480), "s_1", "t_1")
+				b.samples(at(0), at(2900))
+			},
+			check: running(1800),
+		},
+		{
+			name: "a hooked turn runs while it waits 40 minutes on a permission prompt",
+			build: func(b *tl) {
+				hooked(b)
+				b.harness(at(2505), event.ViaHook, "s_1", "p_1", &event.AgentPermission{RequestedAt: at(100), AnsweredAt: at(2500),
+					Decision: event.DecisionAccept, DecidedBy: event.DecidedByUser})
+				b.agentStops(at(2520), "s_1", "t_1")
+				b.samples(at(0), at(2900))
+			},
+			check: running(1800),
+		},
+		{
+			name: "a continuation whose first record comes 40 minutes after the stop before it starts at that record",
+			build: func(b *tl) {
+				hooked(b)
+				b.agentStops(at(80), "s_1", "t_1")
+				b.agentSays(at(2470), "s_1", "t_2", 30)
+				b.harness(at(2480), event.ViaHook, "s_1", "p_1", &event.AgentStop{TurnKey: "t_2", StopReason: event.StopEndTurn,
+					StopHookActive: true})
+				b.samples(at(0), at(2900))
+			},
+			check: func(t *testing.T, d Derived) {
+				running(0)(t, d)
+				if tu, ok := turnByKey(d, "t_2"); !ok || tu.TSubmit != at(2470) {
+					t.Errorf("continuation %+v, want it submitted at its first record", tu)
+				}
+			},
+		},
+		{
+			name: "a turn no hook sees ends at its last agent record before a 40-minute silence of them",
+			build: func(b *tl) {
+				b.focus(at(0), event.AppTerminal, "p_1", "s_1")
+				b.mouse(every(at(1), at(2896), 5000)...)
+				plugin(b, at(60), &event.PromptSubmit{TurnKey: "t_1", LenChars: 30, TypedLenEst: 30, OriginDeclared: event.DeclaredNone})
+				plugin(b, at(70), &event.AgentOutput{TurnKey: "t_1", Words: 30})
+				plugin(b, at(2470), &event.AgentOutput{TurnKey: "t_1", Words: 30})
+				plugin(b, at(2480), &event.AgentStop{TurnKey: "t_1", StopReason: event.StopEndTurn})
+				b.samples(at(0), at(2900))
+			},
+			check: func(t *testing.T, d Derived) {
+				running(0)(t, d)
+				if tu, ok := turnByKey(d, "t_1"); !ok || tu.RunUntil != at(70) {
+					t.Errorf("turn %+v, want it to run until 70 s", tu)
 				}
 			},
 		},

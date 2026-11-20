@@ -77,8 +77,9 @@ type rules struct {
 	// THINK_LEAD_S + COMPOSE_MAX_S) and the reading horizon fit inside it.
 	// Where a record would reach further, its effect is cut at its t minus
 	// reach, in every Step alike: a typed command's lead and run, when its
-	// record comes at the end of a run longer than that, and a permission's
-	// wait, when its record comes long after the answer.
+	// record comes at the end of a run longer than that; a permission's
+	// wait, when its record comes long after the answer; and a turn's run,
+	// across a longer silence of its agent's records (turnBuild.runUntil).
 	reach int64
 	// settle is how long after a time the scorer may still change what it
 	// derived for that time: the pending window for late records (DESIGN
