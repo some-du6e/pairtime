@@ -109,7 +109,7 @@ type Options struct {
 	// OS is the GOOS whose names Read returns. Empty means runtime.GOOS.
 	OS string
 	// Self is the Proc.Owner whose harness processes the scan reports:
-	// this user on Linux and macOS, this logon session on Windows. Empty
+	// this user on Linux and macOS, this user's session on Windows. Empty
 	// means this process's own, as this OS's reader names it. Processes
 	// of other owners stay in the table, where parent chains pass through
 	// them, but are never reported: on a family PC they are someone else's

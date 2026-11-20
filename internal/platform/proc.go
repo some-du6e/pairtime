@@ -91,8 +91,9 @@ type Proc struct {
 	TPGID int `json:"tpgid,omitempty"`
 	// Owner is whose process it is, from UIDOwner or SessionOwner: on Linux
 	// and macOS the user it runs as (its effective uid), on Windows the
-	// logon session it runs in. It is empty when the reader couldn't tell,
-	// which on Windows includes a harness process the reader couldn't open.
+	// session it runs in, the Remote Desktop Services session that each
+	// signed-in user has. It is empty when the reader couldn't tell, which
+	// on Windows includes a harness process the reader couldn't open.
 	// Owners compare as plain strings, and never leave the device.
 	Owner string `json:"owner,omitempty"`
 }
@@ -100,8 +101,8 @@ type Proc struct {
 // UIDOwner is the Owner of a process that runs as uid, on Linux and macOS.
 func UIDOwner(uid uint32) string { return "uid:" + strconv.FormatUint(uint64(uid), 10) }
 
-// SessionOwner is the Owner of a process that runs in the Windows logon
-// session id.
+// SessionOwner is the Owner of a process that runs in the Windows session
+// id (ProcessIdToSessionId's session).
 func SessionOwner(id uint32) string { return "session:" + strconv.FormatUint(uint64(id), 10) }
 
 // ID names one process for as long as it runs: its PID, and its start in

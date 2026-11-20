@@ -1,6 +1,6 @@
 {
   "case": "SM 6.6, first variant: the same loop with claude --bare -p, so no hook fires and only the procs scan sees the session. --bare changes the command line, not the process tree, so the tables are sm66-loop.json's at 22:00:20, past the scan's grace.",
-  "source": "Written by hand from SM 6.6, not recorded on a machine; see sm66-loop.json. Owners are Casey's logon session 1 on Windows and uid 501 on the Mac, with System, launchd and login as the OS runs them.",
+  "source": "Written by hand from SM 6.6, not recorded on a machine; see sm66-loop.json. Owners are Casey's session 1 on Windows and uid 501 on the Mac, with System, launchd and login as the OS runs them.",
   "bare": true,
   "tables": [
     {

@@ -16,8 +16,8 @@ import (
 
 // Processes reads the process table with one
 // NtQuerySystemInformation(SystemProcessInformation) call. It gives every
-// process's ID, parent ID, image file name, creation time and logon
-// session without opening any process, so the processes of SYSTEM and of
+// process's ID, parent ID, image file name, creation time and session id
+// without opening any process, so the processes of SYSTEM and of
 // other users have a start time too, which Table.Parent needs to see that
 // a parent's PID was reused.
 //
@@ -32,7 +32,8 @@ import (
 // or the environment, which sit in the process's memory.
 //
 // Windows has no process groups and doesn't say whether a process has a
-// terminal, so PGID is 0 and TTY TTYUnknown. Owner is the logon session.
+// terminal, so PGID is 0 and TTY TTYUnknown. Owner is the session, the
+// Remote Desktop Services session that each signed-in user has.
 func Processes() ([]platform.Proc, error) {
 	buf, err := processInformation()
 	if err != nil {
@@ -131,8 +132,8 @@ func imagePath(h win.Handle) (string, bool) {
 	return win.UTF16ToString(buf[:n]), true
 }
 
-// SelfOwner is this process's Owner, its logon session, or "" if Windows
-// won't say.
+// SelfOwner is this process's Owner, its session, or "" if Windows won't
+// say.
 func SelfOwner() string {
 	var id uint32
 	if err := win.ProcessIdToSessionId(win.GetCurrentProcessId(), &id); err != nil {

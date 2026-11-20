@@ -633,8 +633,8 @@ func TestGoldenBare(t *testing.T) {
 	if !g.Bare || len(g.Tables) == 0 {
 		t.Fatal("sm66-bare.json isn't marked bare or has no tables")
 	}
-	// Casey's own owner in the tables: logon session 1 on the Windows
-	// laptop, uid 501 on the Mac.
+	// Casey's own owner in the tables: session 1 on the Windows laptop,
+	// uid 501 on the Mac.
 	casey := map[string]string{platform.Windows: "session:1", platform.Darwin: "uid:501"}
 	for _, tab := range g.Tables {
 		t.Run("the --bare loop on "+tab.OS+" is reported with its classification", func(t *testing.T) {
