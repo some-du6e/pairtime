@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "GET /api/v1/users/:username/heartbeats/spans, 200",
-  "description": "StatsController#user_spans (stats_controller.rb lines 115-126) returns Heartbeat.to_span (heartbeatable.rb lines 86-134) over every category, in one order across the selected projects, with the 120 s timeout. A span ends at a heartbeat whose next gap is over 120 s and gets min(gap, 120) added as its tail. The last span gets no tail. A span whose duration is 0, a lone heartbeat, is dropped.",
+  "description": "StatsController#user_spans (stats_controller.rb lines 115-126) returns Heartbeat.to_span (heartbeatable.rb lines 86-134) over every category, in one order across the selected projects, with the 120 s timeout. A span ends at a heartbeat whose next gap is over 120 s (line 109). Its tail is min(gap, 120) (line 113), and that gap is over 120, so every span but the last gets exactly 120 s added. The last span ends at the last heartbeat and gets no tail. Only a span whose duration is 0 is dropped (line 121), and only the last span can have that: a lone final heartbeat, or in theory a final span whose heartbeats lie less than half a second apart. A lone heartbeat followed by a gap over 120 s is kept as a span of 120 s.",
   "type": "object",
   "required": ["spans"],
   "properties": {
@@ -12,8 +12,8 @@
         "required": ["start_time", "end_time", "duration"],
         "properties": {
           "start_time": {"type": "number", "description": "Epoch seconds of the span's first heartbeat."},
-          "end_time": {"type": "number", "description": "The last heartbeat's time plus the tail, in epoch seconds."},
-          "duration": {"type": "number", "minimum": 0, "description": "Always over 0. The span's last heartbeat minus its first, rounded to whole seconds, plus the tail, which isn't rounded. So it can have a fraction."}
+          "end_time": {"type": "number", "description": "The span's last heartbeat's time plus its tail, in epoch seconds: 120 s later for every span but the last, which ends at its last heartbeat."},
+          "duration": {"type": "integer", "minimum": 1, "x-invalid-examples": [0, 120.5], "description": "The span's last heartbeat minus its first, rounded to whole seconds (line 110), plus the 120 s tail, which is the Integer timeout itself (lines 87 and 113), or with no tail for the last span. So it is always a whole number, at least 120 for every span but the last and at least 1 for the last."}
         }
       }
     }
