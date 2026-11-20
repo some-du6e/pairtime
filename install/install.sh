@@ -589,6 +589,11 @@ main() {
   base_url=${base_url%/}
   check_url "$base_url" || die "--base-url must be an https URL, without user names, queries or spaces"
   [ -n "${HOME:-}" ] || die "HOME isn't set, so there's no ~/.local/bin to install into"
+  # pairtime install takes only full paths for the folders this script made.
+  case $HOME in
+    /*) ;;
+    *) die "HOME is $HOME, which isn't a full path, so there's no ~/.local/bin to install into" ;;
+  esac
   agent="pairtime-install.sh/$version (+$repo)"
 
   step='finding this computer'

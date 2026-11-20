@@ -368,6 +368,11 @@ check "a base URL that isn't https or this computer is refused" fails 'must be a
   run sh "$stamped" --base-url http://example.com/pairtime --release-keys "$keys/real.pub"
 
 fresh
+check "a HOME that isn't a full path is refused, since pairtime install --made takes only full paths" \
+  fails "isn't a full path" '' \
+  env -i PATH="$PATH" HOME=relative/home TMPDIR="$tmp" sh "$stamped" --base-url "$server/real" --release-keys "$keys/real.pub"
+
+fresh
 check "an unknown option is refused" fails 'unknown option --frobnicate' '' \
   run sh "$stamped" --frobnicate
 
