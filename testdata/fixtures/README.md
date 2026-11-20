@@ -16,7 +16,7 @@ testdata/fixtures/<harness>/<version>/<os>/
       time              when the call arrived: unix_ns, utc and the clock used, one key=value per line
       cwd               the hook process's working directory
       parents           the hook's parent processes, nearest first: pid, controlling terminal (? or ?? when none) and executable name, never command lines
-      flags             the harness the hook runs under: its executable name, then yes or no for a print flag (-p, --print, --prompt, codex exec), stream-json input or output, and --bare among its arguments; never the arguments
+      flags             the harness the hook runs under: its executable name, then yes or no for a print flag (-p, --print, --prompt, codex exec), stream-json input or output, and --bare among its arguments, or ? where the dumper can't tell; never the arguments
       console           Windows only: attached or none, whether the hook had a console, which it shares with the harness that started it
       stderr            only when the dumper itself hit an error
     otlp/NNNNNN.json    one OTLP/HTTP JSON request body, as sent
