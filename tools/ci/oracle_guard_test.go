@@ -98,7 +98,7 @@ func TestOracleGuard(t *testing.T) {
 		{name: "a timeline's golden.jsonl is a regression guard, not an oracle, so it changes with the scorer",
 			diff: []string{"M\ttestdata/timelines/6.1/golden.jsonl", "M\ttestdata/timelines/sidedoor/a-track-jiggler/golden.jsonl", "M\tpkg/score/score.go"}},
 		{name: "beside a golden, the timeline's other files stay oracles",
-			diff: []string{"M\ttestdata/timelines/6.1/golden.jsonl", "M\ttestdata/timelines/6.1/expected.json", "M\tpkg/score/score.go"},
+			diff:     []string{"M\ttestdata/timelines/6.1/golden.jsonl", "M\ttestdata/timelines/6.1/expected.json", "M\tpkg/score/score.go"},
 			wantCode: 1, wantOut: "::error file=testdata/timelines/6.1/expected.json::oracle modified"},
 		{name: "a malformed line is bad input", diff: []string{"M"}, wantCode: 2},
 		{name: "an empty diff passes", diff: nil},
