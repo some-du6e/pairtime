@@ -24,6 +24,15 @@ THINK_LEAD_S, COMPOSE_CPS, EDIT_LEAD_S, LOW_LEAD_S, COMMIT_LEAD_S = 120, Fractio
 ATTRIB_STICKY_S, READ_HORIZON_S = 120, 600
 
 
+def typing_s(n):
+    """The typing part of a lead for n typed characters, n / COMPOSE_CPS
+    rounded to a whole second. SM states its leads in whole seconds and
+    rounds this part to the nearest one: 61 characters give 41 s in 6.4 and
+    35 give 23 s in 6.5 (SM 1.3 applies window edges to the second; the 6.4
+    prompt-lengths erratum asks which way they round)."""
+    return Fraction(int(Fraction(n) / COMPOSE_CPS + Fraction(1, 2)))
+
+
 def build(tabs):
     name = "6.3-tabs" if tabs else "6.3"
     fx = tl.Fixture(
@@ -293,7 +302,7 @@ def build(tabs):
         tl.check(slot_inputs(s), f"input in slot {fx.hhmmss(s)}, so every slot is present")
 
     def lead(ps):
-        typing = Fraction(ps["data"]["typed_len_est"]) / COMPOSE_CPS
+        typing = typing_s(ps["data"]["typed_len_est"])
         return THINK_LEAD_S + typing, typing
 
     prompts = {"A1": (a1, 240, "13:57:30"), "B1": (b1, 220, "14:00:50"), "A2": (a2, 210, "14:17:00"),
@@ -497,14 +506,19 @@ def build(tabs):
         return int(total) if total.denominator == 1 else float(total)
 
     sub = dict(origin="human_typed", cls="substantive")
+    b0 = fx.event_at("prompt.submit", at("13:55:40"))
     anchor_list = [
+        anc(b0, "substantive_prompt", p_lead(b0), "params",
+            "14:02: the prompt behind B's answer from 13:58, sent at 13:55:40 before the window (64 characters, "
+            "lead 120 + 64 / 1.5, rounded)", **sub),
         anc(a1, "substantive_prompt", 240, "sm", "14:01: sends at 14:01:30 (lead 240 s)", **sub),
         anc(b1, "substantive_prompt", 220, "sm", "14:04: sends at 14:04:30 (lead 220 s)", **sub),
         anc(e_edits[0], "typed_edit", EDIT_LEAD_S, "params", "14:05: heartbeat at 14:06:00"),
         anc(e_edits[1], "typed_edit", EDIT_LEAD_S, "params", "14:05: heartbeat at 14:07:30"),
         anc(e_edits[2], "typed_edit", EDIT_LEAD_S, "params", "14:08: last edit at 14:08:40"),
         anc(e1, "substantive_prompt", p_lead(e1), "params",
-            "14:08: asks Cursor's agent to run the tests (50 characters), sent 14:09:00; lead 120 + 50 / 1.5", **sub),
+            "14:08: asks Cursor's agent to run the tests (50 characters), sent 14:09:00; lead 120 + 50 / 1.5, "
+            "rounded", **sub),
         anc(e_edits[3], "typed_edit", EDIT_LEAD_S, "params", "14:11: edit at 14:11:00"),
         anc(e_edits[4], "typed_edit", EDIT_LEAD_S, "params", "14:11: edit at 14:12:30"),
         anc(e2, "go_ahead", LOW_LEAD_S, "sm", "14:12: \"run the tests again\" (a go-ahead, lead 20 s)",
@@ -538,7 +552,6 @@ def build(tabs):
         return {"turn_key": T[turn], "t": ps["t"], "local": fx.hhmmss(ps["t"]), "text": text,
                 "len_chars": ps["data"]["len_chars"], "source": source}
 
-    b0 = fx.event_at("prompt.submit", at("13:55:40"))
     prompts_doc = {"fixture": name, "prompts": [
         pr("B0", b0, None, "not in SM; the turn whose 13:58 answer he rereads at 14:02"),
         pr("A1", a1, None, "SM 6.3's 14:00 row gives the length, 180 characters, not the text"),
@@ -563,7 +576,7 @@ def attribute_tabs(fx, events, app, project_of):
     anchors = []
     for e in events:
         if e["kind"] == "prompt.submit" and e["session_key"] in project_of:
-            lead_ms = int((THINK_LEAD_S + Fraction(e["data"]["typed_len_est"]) / COMPOSE_CPS) * 1000)
+            lead_ms = int((THINK_LEAD_S + typing_s(e["data"]["typed_len_est"])) * 1000)
             anchors.append((e["t"], e["session_key"], lead_ms))
     focus = []
     for e in events:

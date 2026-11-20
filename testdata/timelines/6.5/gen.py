@@ -330,15 +330,22 @@ for s in ("20:02:45", "20:04:30", "20:38:30", "20:41:00", "20:41:45", "20:47:00"
 tl.check(at("20:02:15") not in browser_slots and at("20:02:45") not in browser_slots, "20:02's check is one slot")
 
 
+def typing_s(n):
+    """The typing part of a lead, n / COMPOSE_CPS rounded to a whole second.
+    SM states its leads in whole seconds and rounds this part to the
+    nearest one: 35 characters give 23 s in SM's 143 s for T2, and 61 give
+    41 s in 6.4 (SM 1.3 applies window edges to the second; the 6.4
+    prompt-lengths erratum asks which way they round)."""
+    return Fraction(int(Fraction(n) / COMPOSE_CPS + Fraction(1, 2)))
+
+
 def lead(k):
-    total = THINK_LEAD_S + Fraction(LEN[k]) / COMPOSE_CPS
     if len(TEXT[k]) < 20:
-        total = Fraction(LOW_LEAD_S)
-    return total
+        return Fraction(LOW_LEAD_S)
+    return THINK_LEAD_S + typing_s(LEN[k])
 
 
-tl.check(lead(2) == Fraction(430, 3) and SENT[2] - lead(2) * 1000 < at("20:01:00"),
-         "T2's lead, 143.33 s, has started by 20:01:00")
+tl.check(lead(2) == 143 and SENT[2] - lead(2) * 1000 < at("20:01:00"), "T2's lead, SM's 143 s, has started by 20:01:00")
 tl.check(SENT[20] - lead(20) * 1000 < at("20:41:00"), "T20's lead covers 20:41:00 to 20:43:00")
 tl.check(SENT[21] - lead(21) * 1000 < at("20:47:00"), "T21's lead covers 20:47:00 to 20:49:00")
 tl.check(SENT[22] - lead(22) * 1000 <= at("20:58:00"), "T22's lead covers 20:58:00 to 21:00:00")
@@ -732,8 +739,9 @@ for k in sorted(SENT):
     if low:
         anchor_list.append(anc(e, "go_ahead", LOW_LEAD_S, "params", note, origin="human_typed", cls="low_effort"))
     else:
-        anchor_list.append(anc(e, "substantive_prompt", seconds(lead(k)), "params", note, origin="human_typed",
-                               cls="substantive"))
+        # SM's 20:01 row states T2's lead, 143 s; the others follow from SM 2.3.
+        anchor_list.append(anc(e, "substantive_prompt", seconds(lead(k)), "sm" if k == 2 else "params", note,
+                               origin="human_typed", cls="substantive"))
 anchor_list += [
     anc(ev[("editor", "20:39:20.000")], "editor_navigation", EDIT_LEAD_S, "params",
         "20:38-20:39: opens Navbar.css (heartbeat at 20:39:20); its lead can't reach back past T19's stop"),
