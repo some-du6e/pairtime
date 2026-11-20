@@ -188,10 +188,14 @@ func badHead(original string, re *regexp.Regexp, m []string) string {
 // line, after a title the template matched itself, and the line that holds
 // its end may go on into the license text; only the head's part of either
 // is kept. ok is false when the lines don't add up to the head.
+//
+// A line ends at any line break normalize turns into a space (lineBreakRE),
+// not only at \n, so a file with CR or U+2028 line breaks can't pass two
+// lines off as one.
 func headLines(original, head string) (lines []string, ok bool) {
 	head = strings.TrimSpace(head)
 	acc := ""
-	for _, line := range strings.Split(original, "\n") {
+	for _, line := range lineBreakRE.Split(original, -1) {
 		n := normalize(line)
 		if n == "" {
 			continue
@@ -299,10 +303,18 @@ func orList(ids []string) string {
 var (
 	// A bare URL, optionally in angle brackets. Copies differ in http and
 	// https, and some add the license's URL at the end, so URLs are dropped.
-	urlRE     = regexp.MustCompile(`<?https?://[^\s<>]*>?`)
+	// A URL ends at white space as spaceRE defines it, so it can't run on
+	// past a line break into the next line.
+	urlRE     = regexp.MustCompile(`<?https?://[^\s\v\x{85}\p{Z}<>]*>?`)
 	licenceRE = regexp.MustCompile(`(?i)licen[cs]e`)
-	spaceRE   = regexp.MustCompile(`[\s\p{Z}]+`)
-	charFixer = strings.NewReplacer(
+	// spaceRE is white space, all seven of Unicode's line breaks included:
+	// \n, \f and \r from \s, U+2028 and U+2029 from \p{Z}, and the vertical
+	// tab and NEL (U+0085), which neither covers.
+	spaceRE = regexp.MustCompile(`[\s\v\x{85}\p{Z}]+`)
+	// lineBreakRE is every line break spaceRE removes. CRLF splits twice,
+	// and headLines skips the empty line between.
+	lineBreakRE = regexp.MustCompile(`[\n\v\f\r\x{85}\x{2028}\x{2029}]`)
+	charFixer   = strings.NewReplacer(
 		"\ufeff", "",
 		"\u201c", "'", "\u201d", "'", "\u201e", "'", "\u201f", "'", "\u2033", "'",
 		"\u2018", "'", "\u2019", "'", "\u201a", "'", "\u201b", "'", "\u2032", "'",

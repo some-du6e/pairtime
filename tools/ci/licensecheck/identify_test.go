@@ -100,6 +100,9 @@ func TestIdentifyVariants(t *testing.T) {
 		}
 		return s[:i] + strings.Join(strings.Fields(s[i:]), "\n")
 	}
+	// franceMIT is MIT with that sentence on a line of its own under the
+	// copyright line.
+	franceMIT := mustReplace(mit, "Copyright (c) <year> <copyright holders>", "Copyright (c) <year> <copyright holders>\n\n"+france)
 	tests := []struct {
 		name string
 		text string
@@ -127,7 +130,7 @@ func TestIdentifyVariants(t *testing.T) {
 		{name: "a restriction in the holder's name fails", text: mustReplace(mit, "EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS", "EVENT SHALL THE AUTHORS, WHO FORBID COMMERCIAL USE,")},
 		{name: "a restriction in place of a bullet fails", text: mustReplace(bsd2, "1. Redistributions of source", "No sale. Redistributions of source")},
 		{name: "a restriction in Apache-2.0's appendix fails", text: mustReplace(apache, "Copyright [yyyy] [name of copyright owner]", "Copyright 2024 Foo Inc. Not for commercial use.")},
-		{name: "a sentence on its own line under MIT's copyright fails", text: mustReplace(mit, "Copyright (c) <year> <copyright holders>", "Copyright (c) <year> <copyright holders>\n\n"+france)},
+		{name: "a sentence on its own line under MIT's copyright fails", text: franceMIT},
 		{name: "a sentence on its own line under ISC's copyright fails", text: mustReplace(isc, "Copyright <year> <owner>", "Copyright <year> <owner>\n"+france)},
 		{name: "a sentence on its own line under BSD-2-Clause's copyright fails", text: mustReplace(bsd2, "Copyright (c) <year> <owner>", "Copyright (c) <year> <owner>\n"+france)},
 		{name: "a sentence on its own line under BSD-3-Clause's copyright fails", text: mustReplace(bsd3, "Copyright (c) <year> <owner>.", "Copyright (c) <year> <owner>.\n"+france)},
@@ -147,6 +150,24 @@ func TestIdentifyVariants(t *testing.T) {
 		{name: "BSD-3-Clause without its third clause is BSD-2-Clause", text: bsd3[:strings.Index(bsd3, "3. Neither")] + bsd3[strings.Index(bsd3, "THIS SOFTWARE"):], want: "BSD-2-Clause"},
 		{name: "MIT and GPL texts in one file fail", text: mit + "\n" + string(gpl)},
 		{name: "an empty file fails", text: ""},
+		{name: "a URL that ends a line stops at the line break, even a vertical tab", text: mustReplace(mit, "Copyright (c) <year> <copyright holders>", "Copyright (c) 2020 Foo https://example.com/foo\vCopyright (c) 2021 Bar"), want: "MIT"},
+	}
+	// Every line break normalize turns into a space also ends a line for
+	// the head rule, so the license still matches whichever one a file
+	// uses, and a sentence under the copyright line still fails. The
+	// separators past \v are built from their code points.
+	for _, lb := range []struct{ name, sep string }{
+		{name: "CR-only", sep: "\r"},
+		{name: "form feed", sep: "\f"},
+		{name: "vertical tab", sep: "\v"},
+		{name: "NEL (U+0085)", sep: string(rune(0x85))},
+		{name: "U+2028 line separator", sep: string(rune(0x2028))},
+		{name: "U+2029 paragraph separator", sep: string(rune(0x2029))},
+	} {
+		tests = append(tests,
+			struct{ name, text, want string }{name: lb.name + " line breaks don't matter", text: strings.ReplaceAll(mit, "\n", lb.sep), want: "MIT"},
+			struct{ name, text, want string }{name: "a sentence on its own line under MIT's copyright fails with " + lb.name + " line breaks", text: strings.ReplaceAll(franceMIT, "\n", lb.sep)},
+		)
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -315,6 +336,7 @@ func TestHeadLineOK(t *testing.T) {
 }
 
 func TestHeadLines(t *testing.T) {
+	nel, ls, ps := string(rune(0x85)), string(rune(0x2028)), string(rune(0x2029))
 	tests := []struct {
 		name     string
 		original string
@@ -348,6 +370,13 @@ func TestHeadLines(t *testing.T) {
 			original: "Copyright (c) 2020 A Permission is hereby granted...",
 			head:     "Copyright (c) 2020 A",
 			want:     []string{"Copyright (c) 2020 A"},
+			wantOK:   true,
+		},
+		{
+			name:     "every line break normalize removes ends a line",
+			original: "Copyright (c) 2020 A\rCopyright (c) 2021 B\fCopyright (c) 2022 C\vCopyright (c) 2023 D" + nel + "Copyright (c) 2024 E" + ls + "Copyright (c) 2025 F" + ps + "\r\n\r\nPermission is hereby granted...",
+			head:     "Copyright (c) 2020 A Copyright (c) 2021 B Copyright (c) 2022 C Copyright (c) 2023 D Copyright (c) 2024 E Copyright (c) 2025 F",
+			want:     []string{"Copyright (c) 2020 A", "Copyright (c) 2021 B", "Copyright (c) 2022 C", "Copyright (c) 2023 D", "Copyright (c) 2024 E", "Copyright (c) 2025 F"},
 			wantOK:   true,
 		},
 		{
