@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/some-du6e/pairtime/internal/agent/home"
 	"github.com/some-du6e/pairtime/internal/agent/keys"
@@ -27,14 +28,16 @@ gets back what it held before, byte for byte, unless something else changed
 it since; then only pairtime's own entries come out. It works even when
 pairtime's record of what it installed is gone.
 
-Your pairtime data, the time you tracked and the key that seals it, stays
-unless you say it should go. uninstall asks; --delete-data and --keep-data
-answer for scripts.
+It deletes pairtime's device key too, and with it the ledger and the rest
+of what pairtime recorded, as pairtime's privacy notice says. Your daily
+totals and recaps can stay until you delete them: uninstall asks, and
+--delete-data and --keep-data answer for scripts.
 
-  --yes          go ahead without asking; the data stays unless --delete-data
-  --delete-data  delete your pairtime data too
-  --keep-data    keep your pairtime data
-  --dry-run      print what would come out, as diffs, and take out nothing
+  --yes          go ahead without asking; your daily totals and recaps
+                 stay unless --delete-data
+  --delete-data  delete your daily totals and recaps too
+  --keep-data    keep your daily totals and recaps
+  --dry-run      print what would come out, and take out nothing
 
 Exit status:
   0  uninstalled, or there was nothing to take out
@@ -54,8 +57,17 @@ func init() {
 // runUninstall is `pairtime uninstall` (docs/PLAN.md, WP-IN2), which
 // reverses every step of install. The hooks come out first, so no harness
 // starts the agent again once it has stopped, then the login item, then
-// the agent stops, and while uninstall holds the agent's lock, so that no
-// agent can start, the binary goes, and the data when the teen asks.
+// the agent stops. While uninstall holds the agent's lock, so that no
+// agent can start and make a new key, pairtime's device key goes, then
+// the data, then the binary.
+//
+// K_dev goes on every uninstall, as DESIGN 4.4 ("until uninstall or
+// rotation") and the privacy notice say, and so do the ledger, the minute
+// buckets, the vault and the rest of pairtime's data. Only the day rollups
+// and coach records can stay, which 4.4 keeps until the teen deletes them
+// (D-uninstall-key, issue #124). The key goes before anything else is
+// deleted, so that when it can't go, pairtime is still there to try again
+// with.
 //
 // It doesn't need install's records. The installer plans the undo of the
 // items install offers on this machine as well as of what its manifest
@@ -68,8 +80,8 @@ func runUninstall(args []string, stdout, stderr io.Writer) int {
 	flags.SetOutput(stderr)
 	flags.Usage = func() { fmt.Fprint(flags.Output(), uninstallUsage) }
 	yes := flags.Bool("yes", false, "go ahead without asking")
-	deleteData := flags.Bool("delete-data", false, "delete your pairtime data too")
-	keepData := flags.Bool("keep-data", false, "keep your pairtime data")
+	deleteData := flags.Bool("delete-data", false, "delete your daily totals and recaps too")
+	keepData := flags.Bool("keep-data", false, "keep your daily totals and recaps")
 	dryRun := flags.Bool("dry-run", false, "print what would come out")
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -117,6 +129,9 @@ func runUninstall(args []string, stdout, stderr io.Writer) int {
 	// uninstall made of it.
 	missing := notThere(env, dirs)
 	data := existing(dirs.Data, dirs.Config)
+	keepable := existing(dirs.Days(), dirs.Coach())
+	_, kerr := keys.Inspect(dirs.Data)
+	hadKey := kerr == nil
 	running := agentLocked(dirs)
 	defer tidy(in, dirs, missing)
 	p, err := in.PlanUninstall(items...)
@@ -124,12 +139,9 @@ func runUninstall(args []string, stdout, stderr io.Writer) int {
 		return fail(err)
 	}
 	defer p.Close()
-	var binaries []string
-	for _, b := range []string{env.Exe, rec.Binary} {
-		if b != "" && !slices.Contains(binaries, b) && isPairtimeBinary(b) {
-			binaries = append(binaries, b)
-		}
-	}
+	// Worked out before anything is deleted, since a file that is gone
+	// can't be compared any more.
+	binaries := pairtimeBinaries(src, slices.Concat([]string{env.Exe, rec.Binary}, oldBinaries(filepath.Dir(env.Exe))))
 	if p.Empty() && len(p.Problems) == 0 && len(binaries) == 0 && len(data) == 0 && !running {
 		fmt.Fprintln(stdout, "pairtime isn't installed here, so there is nothing to take out.")
 		return 0
@@ -138,7 +150,10 @@ func runUninstall(args []string, stdout, stderr io.Writer) int {
 	if *dryRun {
 		io.WriteString(stdout, p.Diff())
 		for _, b := range binaries {
-			fmt.Fprintf(stdout, "Binary files %s and /dev/null differ\n", install.Printable(b))
+			fmt.Fprintf(stdout, "Binary files %s and /dev/null differ\n", install.Printable(b.path))
+		}
+		if len(data) > 0 {
+			fmt.Fprintln(stdout, dataFate(hadKey, data, keepable, *deleteData, "would be deleted"))
 		}
 		return 0
 	}
@@ -146,20 +161,32 @@ func runUninstall(args []string, stdout, stderr io.Writer) int {
 	// The teen's say.
 	answers := bufio.NewScanner(installStdin)
 	if !*yes {
-		showUninstall(stdout, p, binaries, running)
+		fate := ""
+		if len(data) > 0 {
+			fate = dataFate(hadKey, data, keepable, *deleteData, "is deleted")
+		}
+		showUninstall(stdout, p, binaries, running, fate)
 		if !askYes(answers, stdout, "Type y to take it all out, or n to stop without changing anything: ") {
 			fmt.Fprintln(stdout, "Nothing changed.")
 			return exitDeclined
 		}
 	}
 	purge := *deleteData
-	if len(data) > 0 && !*deleteData && !*keepData && !*yes {
-		fmt.Fprintf(stdout, "\nYour pairtime data is in %s: the time you tracked, your recaps, and the key that seals what pairtime recorded. Once it's deleted, nobody can bring it back.\n", install.Printable(strings.Join(data, " and ")))
-		purge = askYes(answers, stdout, "Type y to delete it too, or n to keep it: ")
+	if len(keepable) > 0 && !*deleteData && !*keepData && !*yes {
+		fmt.Fprintf(stdout, "\nYour daily totals and recaps can stay, in %s, until you delete them. Once they're deleted, nobody can bring them back.\n", joinPaths(keepable))
+		purge = askYes(answers, stdout, "Type y to delete them too, or n to keep them: ")
+	}
+	// What stays in the data directory: the day rollups and coach records,
+	// unless they go too.
+	var keep []string
+	if !purge {
+		for _, k := range keepable {
+			keep = append(keep, filepath.Base(k))
+		}
 	}
 
 	// The hooks and the login item.
-	problems := p.Problems
+	problems := slices.Clone(p.Problems)
 	if err := p.Apply(); err != nil {
 		return fail(err)
 	}
@@ -167,9 +194,9 @@ func runUninstall(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stdout, "Took out pairtime's hooks and its login item.")
 	}
 
-	// The agent, then the binary and the data, with the agent's lock held
-	// so that a hook already on its way can't start an agent in between.
-	// One that started before the hooks came out is stopped too.
+	// The agent, then the key, the data and the binary, with the agent's
+	// lock held, so that a hook already on its way can't start an agent in
+	// between. One that started before the hooks came out is stopped too.
 	var lock *home.Lock
 	for try := 0; ; try++ {
 		if err := stopAgent(dirs); err != nil {
@@ -197,6 +224,97 @@ func runUninstall(args []string, stdout, stderr io.Writer) int {
 	}
 	defer release()
 
+	// The device key, before any binary, so that pairtime is still there
+	// when the key can't go: a keychain that is locked, or a Secret Service
+	// that no session bus leads to, over SSH.
+	if err := keys.Destroy(keys.Options{Dir: dirs.Data, Stores: agentKeyStores}); err != nil {
+		if _, ierr := keys.Inspect(dirs.Data); !errors.Is(ierr, fs.ErrNotExist) {
+			release()
+			return fail(fmt.Errorf("couldn't delete pairtime's device key (%v), so pairtime and its data stay where they are; unlock your keychain or keyring, then run pairtime uninstall again", err))
+		}
+		// keystore.json is gone, so trying again would find nothing: what
+		// is left is a key in a store this system doesn't have, such as a
+		// keyring of the OS the data directory came from, which err names.
+		problems = append(problems, err.Error())
+	}
+
+	// The binary this process runs from, which Windows deletes only once
+	// this process has exited (removeAfterExit). What is left of the data
+	// directory's folder for it then is no error.
+	var later []string
+	for _, b := range binaries {
+		if b.self && !canRemoveRunning {
+			later = append(later, b.path)
+		}
+	}
+	runningFrom := ""
+	if len(later) > 0 {
+		runningFrom = later[0]
+	}
+
+	// The data: everything but what the teen keeps. A linked data directory
+	// loses what pairtime put where it points, and then the link, unless
+	// something is kept there.
+	for _, d := range data {
+		var keepHere []string
+		if samePath(d, dirs.Data) {
+			keepHere = keep
+		}
+		if err := clearData(d, keepHere, runningFrom); err != nil {
+			release()
+			return fail(fmt.Errorf("deleting your pairtime data: %w; close any program that has one of pairtime's files open, then run pairtime uninstall again", err))
+		}
+	}
+	if len(data) > 0 {
+		key := ""
+		if hadKey {
+			key = "pairtime's device key and "
+		}
+		if len(keep) > 0 {
+			fmt.Fprintf(stdout, "Deleted %severything else pairtime kept in %s. Your daily totals and recaps stay in %s; delete them when you no longer want them.\n", key, joinPaths(data), joinPaths(keepable))
+		} else {
+			fmt.Fprintf(stdout, "Deleted %syour pairtime data from %s.\n", key, joinPaths(data))
+		}
+	}
+
+	// The binaries.
+	var deleted []string
+	for _, b := range binaries {
+		if b.self && !canRemoveRunning {
+			continue
+		}
+		if err := removeBinary(b.path); err != nil {
+			if !canRemoveRunning {
+				// Something still runs it, and it goes once that has ended.
+				later = append(later, b.path)
+				continue
+			}
+			release()
+			return fail(fmt.Errorf("deleting %s: %w; make sure you may change the folder it's in, then run pairtime uninstall again", install.Printable(b.path), err))
+		}
+		deleted = append(deleted, b.path)
+	}
+	if len(deleted) > 0 {
+		fmt.Fprintf(stdout, "Deleted pairtime from %s.\n", joinPaths(deleted))
+	}
+
+	// The lock files go last, while uninstall holds the agent's
+	// (removeAgentLock), and the install lock's only if no other install
+	// holds it (RemoveLockFile).
+	removeAgentLock(dirs.Data, lock)
+	lock = nil
+	in.RemoveLockFile()
+	for _, d := range data {
+		if linkedDir(d) && (len(keep) == 0 || !samePath(d, dirs.Data)) {
+			os.Remove(d) // the link, not the folder it points to
+		}
+	}
+	if dirs.Runtime != dirs.Data {
+		// The socket's folder holds nothing once the agent has stopped,
+		// but a socket a crashed agent left behind.
+		os.Remove(filepath.Join(dirs.Runtime, "agent.sock"))
+	}
+
 	// Folders install made, and pairtime's own, that go once they are
 	// empty, innermost last here: removeEmptyDirs takes the innermost
 	// first.
@@ -204,69 +322,32 @@ func runUninstall(args []string, stdout, stderr io.Writer) int {
 	if dirs.Runtime != dirs.Data {
 		after = addMade(after, []string{dirs.Runtime})
 	}
-	if purge {
-		after = addMade(after, data)
-	}
-	later := ""
+	after = addMade(after, data)
 	for _, b := range binaries {
-		if within(b, dirs.Data) {
+		if within(b.path, dirs.Data) {
 			// Windows keeps the binary in a folder of the data directory,
 			// which is pairtime's own. ~/.local/bin is the teen's, and goes
-			// only when setup.json says install made it.
-			after = addMade(after, []string{filepath.Dir(b)})
+			// only when setup.json says install, or the install script,
+			// made it.
+			after = addMade(after, []string{filepath.Dir(b.path)})
 		}
-		isSelf, err := sameBinaryFile(src, b)
-		if err != nil {
-			return fail(err)
-		}
-		if isSelf && !canRemoveRunning {
-			later = b
-			continue
-		}
-		if err := removeBinary(b); err != nil {
-			return fail(fmt.Errorf("deleting %s: %w", b, err))
-		}
-	}
-	if len(binaries) > 0 {
-		fmt.Fprintf(stdout, "Deleted pairtime from %s.\n", install.Printable(strings.Join(binaries, " and ")))
-	}
-
-	if purge {
-		if err := keys.Destroy(keys.Options{Dir: dirs.Data}); err != nil {
-			release()
-			return fail(fmt.Errorf("deleting pairtime's device key: %w; your data stays where it is, so a later uninstall can try again", err))
-		}
-		release()
-		for _, d := range data {
-			if err := os.RemoveAll(d); err != nil && !(later != "" && within(later, d)) {
-				return fail(fmt.Errorf("deleting %s: %w", d, err))
-			}
-		}
-		fmt.Fprintf(stdout, "Deleted your pairtime data from %s.\n", install.Printable(strings.Join(data, " and ")))
-	} else {
-		release()
-	}
-	if dirs.Runtime != dirs.Data {
-		// The socket's folder holds nothing once the agent has stopped,
-		// but a socket a crashed agent left behind.
-		os.Remove(filepath.Join(dirs.Runtime, "agent.sock"))
 	}
 	kept := removeEmptyDirs(after)
-	if later != "" {
-		if err := removeAfterExit(later, kept); err != nil {
-			fmt.Fprintf(stdout, "Windows doesn't let a program delete itself while it runs, so delete %s yourself once this has finished.\n", install.Printable(later))
+	if len(later) > 0 {
+		if err := removeAfterExit(later, realDirs(kept)); err != nil {
+			fmt.Fprintf(stdout, "Windows doesn't let anyone delete a program while it runs, so delete %s yourself once this has finished.\n", joinPaths(later))
 		} else {
-			fmt.Fprintf(stdout, "pairtime deletes %s once this has finished, because Windows doesn't let a program delete itself while it runs.\n", install.Printable(later))
+			fmt.Fprintf(stdout, "pairtime deletes %s once this has finished, because Windows doesn't let anyone delete a program while it runs.\n", joinPaths(later))
 		}
 	}
-	if !purge {
+	if len(keep) > 0 {
+		// The data directory stays, with what the teen keeps, and so does
+		// the record of the folders install made above it, for a later
+		// uninstall with --delete-data to take away too.
 		rec.Binary = ""
 		rec.Made = slices.DeleteFunc(rec.Made, func(d string) bool { return !slices.Contains(kept, d) })
-		if err := writeSetup(dirs, rec); err != nil && len(data) > 0 {
+		if err := writeSetup(dirs, rec); err != nil {
 			fmt.Fprintf(stderr, "pairtime uninstall: updating %s: %v\n", setupPath(dirs), err)
-		}
-		if len(data) > 0 {
-			fmt.Fprintf(stdout, "Your pairtime data stays in %s. Delete it when you no longer want it.\n", install.Printable(strings.Join(data, " and ")))
 		}
 	}
 	for _, problem := range problems {
@@ -279,8 +360,23 @@ func runUninstall(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
+// dataFate says in one sentence what uninstall does with pairtime's data
+// directories data, given that a device key is there (hadKey), keepable,
+// the day rollups and coach records that are there, and whether those go
+// too (purge). done is the verb, such as "is deleted".
+func dataFate(hadKey bool, data, keepable []string, purge bool, done string) string {
+	what := "Everything pairtime recorded in " + joinPaths(data)
+	if hadKey {
+		what = "pairtime's device key, and with it everything pairtime recorded in " + joinPaths(data) + ","
+	}
+	if len(keepable) == 0 || purge {
+		return what + " " + done + "."
+	}
+	return what + " " + done + ", but for your daily totals and recaps in " + joinPaths(keepable) + ", which can stay."
+}
+
 // showUninstall shows what uninstall takes out.
-func showUninstall(w io.Writer, p *install.Plan, binaries []string, running bool) {
+func showUninstall(w io.Writer, p *install.Plan, binaries []binary, running bool, fate string) {
 	fmt.Fprintln(w, "pairtime uninstall")
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "This takes out everything pairtime install put in.")
@@ -294,14 +390,17 @@ func showUninstall(w io.Writer, p *install.Plan, binaries []string, running bool
 	for _, problem := range p.Problems {
 		fmt.Fprintf(w, "\nThis has to stay: %s\n", install.Printable(problem))
 	}
-	if len(binaries) > 0 || running {
+	if len(binaries) > 0 || running || fate != "" {
 		fmt.Fprintln(w)
 	}
 	if running {
 		fmt.Fprintln(w, "pairtime's agent stops.")
 	}
 	for _, b := range binaries {
-		fmt.Fprintf(w, "The pairtime program in %s is deleted.\n", install.Printable(b))
+		fmt.Fprintf(w, "The pairtime program in %s is deleted.\n", install.Printable(b.path))
+	}
+	if fate != "" {
+		fmt.Fprintln(w, fate)
 	}
 	fmt.Fprintln(w)
 }
@@ -335,18 +434,138 @@ func existing(dirs ...string) []string {
 	return out
 }
 
-// sameBinaryFile reports whether a and b are the same file.
-func sameBinaryFile(a, b string) (bool, error) {
-	ai, err := os.Stat(a)
-	if err != nil {
-		return false, err
+// joinPaths writes paths for a sentence, with the characters a terminal
+// acts on written out.
+func joinPaths(paths []string) string { return install.Printable(strings.Join(paths, " and ")) }
+
+// binary is a pairtime binary uninstall deletes.
+type binary struct {
+	path string
+	info fs.FileInfo
+	// self says that this process runs from it.
+	self bool
+}
+
+// pairtimeBinaries returns those of paths that are pairtime binaries, each
+// file once, however its path is spelled: setup.json may name the binary
+// through another spelling of the home directory, such as /home/teen and
+// /var/home/teen on Fedora Atomic. It marks the one this process runs
+// from, src, which isn't one of them when it is gone.
+func pairtimeBinaries(src string, paths []string) []binary {
+	srcInfo, _ := os.Stat(src)
+	var out []binary
+	for _, p := range paths {
+		if p == "" || !isPairtimeBinary(p) {
+			continue
+		}
+		info, err := os.Stat(p)
+		if err != nil || slices.ContainsFunc(out, func(b binary) bool { return os.SameFile(b.info, info) }) {
+			continue
+		}
+		out = append(out, binary{path: p, info: info, self: srcInfo != nil && os.SameFile(srcInfo, info)})
 	}
-	bi, err := os.Stat(b)
+	return out
+}
+
+// pairtimeEntries are the names of what pairtime keeps in its data and
+// config directories (DESIGN 3.5; home.Dirs and the packages that write
+// there).
+var pairtimeEntries = []string{"agent.lock", "agent.sock", "bin", "buckets", "coach", "config.toml", "days", "inbox",
+	"install", "install.lock", "keys", "ledger", "pipe.json", "port.json", "received", "state.json", "vault"}
+
+// isPairtimeEntry reports whether name is one of pairtimeEntries, or the
+// temporary file of an atomic write of one of them (home.WriteFile).
+func isPairtimeEntry(name string) bool {
+	return slices.Contains(pairtimeEntries, name) || slices.ContainsFunc(pairtimeEntries, func(e string) bool {
+		return strings.HasPrefix(name, "."+e+".tmp-")
+	})
+}
+
+// clearData deletes what dir, one of pairtime's directories, holds, but the
+// entries named in keep and the two lock files, which go once uninstall is
+// done with them (removeAgentLock, install.Installer.RemoveLockFile). A
+// link in dir goes, not what it points to.
+//
+// When dir is itself a link or a junction, as when the teen moved
+// pairtime's data to a bigger drive, it deletes only pairtime's entries
+// (pairtimeEntries) in the folder the link points to, which could hold
+// anything, and the link goes later. running is the binary this process
+// runs from on Windows, which goes once this process has exited: a folder
+// that holds nothing else afterwards isn't an error.
+func clearData(dir string, keep []string, running string) error {
+	linked := linkedDir(dir)
+	entries, err := os.ReadDir(dir)
 	if errors.Is(err, fs.ErrNotExist) {
-		return false, nil
+		return nil
 	}
 	if err != nil {
-		return false, err
+		return err
 	}
-	return os.SameFile(ai, bi), nil
+	var errs []error
+	for _, e := range entries {
+		name := e.Name()
+		if slices.Contains(keep, name) || name == "agent.lock" || name == "install.lock" || (linked && !isPairtimeEntry(name)) {
+			continue
+		}
+		if err := removeTree(filepath.Join(dir, name), running); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// removeTree deletes path and what it holds, but for running, the binary
+// this process runs from, and the folders that hold it, which are no
+// error. Where a running program's file can't be deleted, on Windows, it
+// tries again for a few seconds, as removeBinary does: an agent that just
+// stopped, or a virus scanner, may keep a file in use a moment longer.
+func removeTree(path, running string) error {
+	for i := 0; ; i++ {
+		err := os.RemoveAll(path)
+		if err == nil || onlyHolds(path, running) {
+			return nil
+		}
+		if canRemoveRunning || i == 49 {
+			return err
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+}
+
+// onlyHolds reports whether all that is left at path is running, the
+// binary this process runs from, and the folders that hold it.
+func onlyHolds(path, running string) bool {
+	if running == "" {
+		return false
+	}
+	only := true
+	filepath.WalkDir(path, func(p string, d fs.DirEntry, err error) error {
+		switch {
+		case err != nil:
+		case samePath(p, running):
+			return nil
+		case d.IsDir() && within(running, p):
+			return nil
+		}
+		only = false
+		return filepath.SkipAll
+	})
+	return only
+}
+
+// linkedDir reports whether dir is a link or a junction to a folder, not a
+// folder itself.
+func linkedDir(dir string) bool {
+	info, err := os.Lstat(dir)
+	return err == nil && info.Mode().Type() != fs.ModeDir
+}
+
+// realDirs returns those of dirs that are folders, not links or junctions
+// standing in for one, which removeAfterExit's Directory.Delete would
+// delete whatever they point to.
+func realDirs(dirs []string) []string {
+	return slices.DeleteFunc(slices.Clone(dirs), func(d string) bool {
+		info, err := os.Lstat(d)
+		return err != nil || info.Mode().Type() != fs.ModeDir
+	})
 }

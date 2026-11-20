@@ -22,7 +22,10 @@ const teenExe = "/home/teen/.local/bin/pairtime"
 // folders found, the way runInstall does, and returns the screen and the
 // home directory. It plans for Linux on every OS, so the snapshots are the
 // same everywhere once the home directory's path is written as /home/teen.
-func screenFor(t *testing.T, found []string, hook HookTest) (*Screen, string) {
+// With readOnly, Claude Code's settings.json is there and read-only, so
+// its planner refuses it, and the item is left out with the planner's
+// reason, as runInstall leaves it.
+func screenFor(t *testing.T, found []string, hook HookTest, readOnly bool) (*Screen, string) {
 	t.Helper()
 	root := t.TempDir()
 	for _, f := range found {
@@ -30,10 +33,16 @@ func screenFor(t *testing.T, found []string, hook HookTest) (*Screen, string) {
 			t.Fatal(err)
 		}
 	}
+	if readOnly {
+		if err := os.WriteFile(filepath.Join(root, ".claude", "settings.json"), []byte("{}\n"), 0o400); err != nil {
+			t.Fatal(err)
+		}
+	}
 	env := install.Env{GOOS: "linux", Home: root, Getenv: func(string) string { return "" }, Exe: teenExe}
 	in := &install.Installer{Dir: filepath.Join(root, "data", "install")}
 	harnesses := install.Detect(env)
 	diffs := map[string]string{}
+	left := map[string]string{}
 	plan := func(it install.Item, err error) {
 		t.Helper()
 		if err != nil {
@@ -41,7 +50,8 @@ func screenFor(t *testing.T, found []string, hook HookTest) (*Screen, string) {
 		}
 		p, err := in.PlanInstall([]install.Item{it})
 		if err != nil {
-			t.Fatal(err)
+			left[it.ID] = err.Error()
+			return
 		}
 		defer p.Close()
 		diffs[it.ID] = p.Diff()
@@ -50,7 +60,7 @@ func screenFor(t *testing.T, found []string, hook HookTest) (*Screen, string) {
 	if harnesses[0].Found() && hook.OK {
 		plan(install.ClaudeCode(env))
 	}
-	return New(Input{GOOS: "linux", Binary: teenExe, Harnesses: harnesses, Hook: hook, Diffs: diffs}), root
+	return New(Input{GOOS: "linux", Binary: teenExe, Harnesses: harnesses, Hook: hook, Diffs: diffs, Left: left}), root
 }
 
 // teenPaths writes root, the test's home directory, as /home/teen, and
@@ -61,30 +71,34 @@ func teenPaths(s, root string) string {
 }
 
 // TestScreenSnapshots checks the whole consent screen for three sets of
-// detected harnesses, and for a hook command that fails its self-test,
-// against testdata/*.golden (docs/PLAN.md, WP-IN2). A screen that differs
-// is printed in base64, so a new snapshot can be read out of the CI log
-// byte for byte, looked over and committed.
+// detected harnesses, for a hook command that fails its self-test, and for
+// a settings file Claude Code's planner refuses, against testdata/*.golden
+// (docs/PLAN.md, WP-IN2). A screen that differs is printed in base64, so a
+// new snapshot can be read out of the CI log byte for byte, looked over
+// and committed.
 func TestScreenSnapshots(t *testing.T) {
 	passed := HookTest{OK: true, Took: 12 * time.Millisecond}
 	tests := []struct {
-		name   string
-		golden string
-		found  []string
-		hook   HookTest
+		name     string
+		golden   string
+		found    []string
+		hook     HookTest
+		readOnly bool
 	}{
 		{"with no AI tool found, only autostart is offered, and each tool says it wasn't found",
-			"none.golden", nil, HookTest{}},
+			"none.golden", nil, HookTest{}, false},
 		{"with Claude Code found, autostart and Claude Code's hooks are offered, each with its diff",
-			"claude.golden", []string{".claude"}, passed},
+			"claude.golden", []string{".claude"}, passed, false},
 		{"with Claude Code, Cursor and Codex found, the hooks card says Cursor runs them too, and Codex has no hooks yet",
-			"claude-cursor-codex.golden", []string{".claude", ".cursor", ".codex"}, passed},
+			"claude-cursor-codex.golden", []string{".claude", ".cursor", ".codex"}, passed, false},
 		{"with a hook command that fails its self-test, no hooks are offered and the screen says why",
-			"hook-failed.golden", []string{".claude"}, HookTest{Why: "pairtime hook failed its self-test (it exited with status 2), so pairtime leaves Claude Code's settings alone"}},
+			"hook-failed.golden", []string{".claude"}, HookTest{Why: "pairtime hook failed its self-test (it exited with status 2), so pairtime leaves Claude Code's settings alone"}, false},
+		{"with a Claude Code settings file its planner won't edit, the hooks are left out and Claude Code's line says why, and autostart is still offered",
+			"planner-refused.golden", []string{".claude"}, passed, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			s, root := screenFor(t, tt.found, tt.hook)
+			s, root := screenFor(t, tt.found, tt.hook, tt.readOnly)
 			var b strings.Builder
 			s.Render(&b)
 			got := teenPaths(b.String(), root)

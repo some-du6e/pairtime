@@ -20,8 +20,6 @@ import (
 	"time"
 
 	"github.com/some-du6e/pairtime/internal/agent/home"
-	"github.com/some-du6e/pairtime/internal/agent/inbox"
-	"github.com/some-du6e/pairtime/internal/agent/ipc"
 	"github.com/some-du6e/pairtime/internal/install"
 )
 
@@ -31,22 +29,28 @@ import (
 // hook self-test.
 const hookModeEnv = "PAIRTIME_TEST_HOOK"
 
-func init() { helpers[hookModeEnv] = runWithHookMode }
+// holdEnv, when set, makes the test binary wait until its stdin ends and
+// exit, as a stand-in for a hook Claude Code runs, which keeps the binary
+// in use meanwhile.
+const holdEnv = "PAIRTIME_TEST_HOLD"
+
+func init() {
+	helpers[hookModeEnv] = runWithHookMode
+	helpers[holdEnv] = func(string) int {
+		io.Copy(io.Discard, os.Stdin)
+		return 0
+	}
+}
 
 // runWithHookMode runs pairtime with its own arguments after changing its
 // hook command as mode says:
 //
-//   - real keeps the binary's own, or a stand-in that hands the event to
-//     the agent the way `pairtime hook` does (fakeHook) when the binary has
-//     none, until WP-AG3's lands;
+//   - real keeps the binary's own `pairtime hook` (WP-AG3);
 //   - none takes the hook command away;
 //   - broken makes it print an answer and exit 2, as a usage error would.
 func runWithHookMode(mode string) int {
 	switch mode {
 	case "real":
-		if _, ok := commands["hook"]; !ok {
-			commands["hook"] = command{name: "hook", summary: "test stand-in", run: fakeHook}
-		}
 	case "none":
 		delete(commands, "hook")
 	case "broken":
@@ -56,39 +60,6 @@ func runWithHookMode(mode string) int {
 		}}
 	}
 	return start(os.Args[1:], os.Stdin, os.Stdout, os.Stderr)
-}
-
-// fakeHook hands the event on stdin to the agent as a hook message, the
-// way `pairtime hook` does, and spools it when the agent doesn't take it.
-func fakeHook(args []string, _, _ io.Writer) int {
-	var harness, event string
-	for i := 0; i+1 < len(args); i++ {
-		switch args[i] {
-		case "--harness":
-			harness = args[i+1]
-		case "--event":
-			event = args[i+1]
-		}
-	}
-	stdin, _ := io.ReadAll(io.LimitReader(os.Stdin, 1<<20))
-	b := map[string]any{"harness": harness, "event": event, "bytes": len(stdin)}
-	if json.Valid(stdin) {
-		b["payload"] = json.RawMessage(stdin)
-	}
-	body, err := json.Marshal(b)
-	if err != nil {
-		return 0
-	}
-	dirs, err := home.Default()
-	if err != nil {
-		return 0
-	}
-	ep, err := ipc.EndpointFor(dirs)
-	if err != nil {
-		return 0
-	}
-	ipc.Send(ep, inbox.New("hook", body), ipc.HookTimeout)
-	return 0
 }
 
 // testHome is a home directory of its own, with the temporary and runtime
@@ -117,8 +88,8 @@ func newTestHome(t *testing.T, hookMode string) *testHome {
 			t.Fatal(err)
 		}
 	}
-	drop := []string{"HOME", "USERPROFILE", "LOCALAPPDATA", "APPDATA", "TMPDIR", "PATH", "XDG_DATA_HOME", "XDG_CONFIG_HOME",
-		"XDG_RUNTIME_DIR", "XDG_STATE_HOME", "XDG_CACHE_HOME", "CLAUDE_CONFIG_DIR", "CODEX_HOME", home.EnvHome, runEnv, hookModeEnv}
+	drop := []string{"HOME", "USERPROFILE", "LOCALAPPDATA", "APPDATA", "TMPDIR", "TEMP", "TMP", "PATH", "XDG_DATA_HOME", "XDG_CONFIG_HOME",
+		"XDG_RUNTIME_DIR", "XDG_STATE_HOME", "XDG_CACHE_HOME", "CLAUDE_CONFIG_DIR", "CODEX_HOME", home.EnvHome, runEnv, hookModeEnv, holdEnv}
 	for _, kv := range os.Environ() {
 		k, _, _ := strings.Cut(kv, "=")
 		if !slices.ContainsFunc(drop, func(d string) bool { return strings.EqualFold(d, k) }) {
@@ -138,7 +109,10 @@ func newTestHome(t *testing.T, hookMode string) *testHome {
 		}
 		sys := os.Getenv("SystemRoot")
 		path := strings.Join([]string{filepath.Join(sys, "System32"), sys, filepath.Join(sys, "System32", "WindowsPowerShell", "v1.0")}, ";")
-		h.env = append(h.env, "USERPROFILE="+h.home, "LOCALAPPDATA="+local, "APPDATA="+roaming, "PATH="+path)
+		// The temporary folder is the snapshot's too, so a folder the hook
+		// self-test leaves in it fails the test, as it would stay in a
+		// teen's profile, where %TEMP% is.
+		h.env = append(h.env, "USERPROFILE="+h.home, "LOCALAPPDATA="+local, "APPDATA="+roaming, "TEMP="+tmp, "TMP="+tmp, "PATH="+path)
 		data := filepath.Join(local, "pairtime")
 		h.dirs = home.Dirs{Data: data, Config: filepath.Join(roaming, "pairtime"), Runtime: data}
 		h.bin = filepath.Join(data, "bin", "pairtime.exe")
@@ -148,7 +122,7 @@ func newTestHome(t *testing.T, hookMode string) *testHome {
 		h.dirs = home.Dirs{Data: data, Config: data, Runtime: filepath.Join(tmp, "pairtime")}
 		h.bin = filepath.Join(h.home, ".local", "bin", "pairtime")
 	default:
-		h.env = append(h.env, "HOME="+h.home, "XDG_RUNTIME_DIR="+run, "PATH=/usr/bin:/bin:/usr/sbin:/sbin")
+		h.env = append(h.env, "HOME="+h.home, "TMPDIR="+tmp, "XDG_RUNTIME_DIR="+run, "PATH=/usr/bin:/bin:/usr/sbin:/sbin")
 		h.dirs = home.Dirs{Data: filepath.Join(h.home, ".local", "share", "pairtime"), Config: filepath.Join(h.home, ".config", "pairtime"), Runtime: filepath.Join(run, "pairtime")}
 		h.bin = filepath.Join(h.home, ".local", "bin", "pairtime")
 	}
@@ -246,6 +220,99 @@ func (h *testHome) mustRun(exe, stdin string, want int, args ...string) string {
 		h.t.Fatalf("pairtime %s exited with %d, want %d; it printed:\n%s", strings.Join(args, " "), code, want, out)
 	}
 	return out
+}
+
+// mode returns h with the processes it starts running pairtime with its
+// hook command as mode says (runWithHookMode).
+func (h *testHome) mode(mode string) *testHome {
+	c := *h
+	c.env = setEnv(slices.Clone(h.env), hookModeEnv, mode)
+	return &c
+}
+
+// copyBinary puts a copy of the test binary at path, with the bytes extra
+// added at its end, which leave it a pairtime binary that runs as the test
+// binary does: with extra it is another build of pairtime, as far as
+// install can tell. It renames the copy into place, trying again for a
+// while, since Windows may keep the file of a process that just ended in
+// use a moment longer.
+func (h *testHome) copyBinary(path, extra string) {
+	h.t.Helper()
+	exe, err := os.Executable()
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	data, err := os.ReadFile(exe)
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		h.t.Fatal(err)
+	}
+	tmp := path + ".copy"
+	if err := os.WriteFile(tmp, append(data, extra...), 0o755); err != nil {
+		h.t.Fatal(err)
+	}
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		err := os.Rename(tmp, path)
+		if err == nil {
+			return
+		}
+		if time.Now().After(deadline) {
+			h.t.Fatal(err)
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+}
+
+// sum returns the SHA-256 of the file at path, in hex.
+func (h *testHome) sum(path string) string {
+	h.t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	return fmt.Sprintf("%x", sha256.Sum256(data))
+}
+
+// waitFor waits up to 30 s for path to be there, as keys/keystore.json is
+// once the agent has opened its ledger, which it does in the background.
+func (h *testHome) waitFor(path string) {
+	h.t.Helper()
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		if _, err := os.Stat(path); err == nil {
+			return
+		}
+		if time.Now().After(deadline) {
+			h.t.Fatalf("%s isn't there 30 s after install", path)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
+// hold starts exe as a process that runs until the function hold returns
+// is called, as a hook Claude Code runs keeps the binary in use.
+func (h *testHome) hold(exe string) func() {
+	h.t.Helper()
+	cmd := exec.Command(exe)
+	cmd.Env = append(withoutEnv(h.env, hookModeEnv), holdEnv+"=1")
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	var out bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &out, &out
+	if err := cmd.Start(); err != nil {
+		h.t.Fatal(err)
+	}
+	return func() {
+		stdin.Close()
+		if err := waitWithin(h.t, cmd, time.Minute); err != nil {
+			h.t.Errorf("the process that held %s: %v\n%s", exe, err, out.String())
+		}
+	}
 }
 
 // snapshot returns everything in the test's folders, with what each path
@@ -483,6 +550,12 @@ const gitAISettings = "{\r\n" +
 // no agent running (docs/PLAN.md, WP-IN2). The agent each install starts
 // is a real one.
 func TestInstallCycle(t *testing.T) {
+	// The registry isn't in the test's home directory, and the test's
+	// install would take over a login item of the account's own pairtime
+	// and its uninstall delete it.
+	if v, ok := runValue(); ok {
+		t.Skipf(`this account has a pairtime login item, HKCU\%s\%s = %q, which the test would replace; it runs where there is none, as in CI`, install.RunKey, install.RunValue, v)
+	}
 	tests := []struct {
 		name     string
 		hookMode string
@@ -504,6 +577,11 @@ func TestInstallCycle(t *testing.T) {
 				}
 				if strings.Contains(out, "sk-ant-test-token") {
 					t.Errorf("install printed the token:\n%s", out)
+				}
+				// The test's PATH doesn't have the binary's folder, on
+				// Windows either.
+				if !strings.Contains(out, "isn't on your PATH") {
+					t.Errorf("install didn't say that %s isn't on the PATH:\n%s", filepath.Dir(h.bin), out)
 				}
 
 				out = h.mustRun("", "", 0, "install", "--yes")
@@ -547,17 +625,47 @@ func TestInstallCycle(t *testing.T) {
 			},
 		},
 		{
-			name:     "uninstall keeps the data unless asked, and a later uninstall deletes it",
+			name:     "uninstall deletes the device key and the records, keeps the daily totals and recaps when the teen says so, and a later uninstall deletes those",
 			hookMode: "real",
 			before:   func(h *testHome) { h.write(".claude/settings.json", gitAISettings) },
 			steps: func(t *testing.T, h *testHome, before map[string]string) {
 				h.mustRun("", "", 0, "install", "--yes")
 				pid := h.installed(true)
-				out := h.mustRun("", "", 0, "uninstall", "--yes")
-				if !strings.Contains(out, "data stays in") {
-					t.Errorf("uninstall didn't say where the data stays:\n%s", out)
+				h.waitFor(filepath.Join(h.dirs.Data, "keys", "keystore.json"))
+				// What the scorer and the coach will write (DESIGN 3.5),
+				// which DESIGN 4.4 keeps until the teen deletes it.
+				kept := map[string]string{"days/2026-11-20.json": `{"date":"2026-11-20"}` + "\n", "coach/recaps.jsonl": `{"recap":1}` + "\n"}
+				for rel, body := range kept {
+					p := filepath.Join(h.dirs.Data, filepath.FromSlash(rel))
+					if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
+						t.Fatal(err)
+					}
+					if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+						t.Fatal(err)
+					}
+				}
+				out := h.mustRun("", "y\nn\n", 0, "uninstall")
+				if !strings.Contains(out, "Your daily totals and recaps can stay") || !strings.Contains(out, "Your daily totals and recaps stay in") {
+					t.Errorf("uninstall didn't ask about the daily totals and recaps, or didn't say where they stay:\n%s", out)
 				}
 				h.waitGone(h.bin)
+				for rel, body := range kept {
+					if got, err := os.ReadFile(filepath.Join(h.dirs.Data, filepath.FromSlash(rel))); err != nil || string(got) != body {
+						t.Errorf("uninstall didn't keep %s as it was: %q, %v", rel, got, err)
+					}
+				}
+				// The device key, the ledger and the rest go (D-uninstall-key):
+				// only the daily totals, the recaps and the record of the
+				// folders install made stay.
+				entries, err := os.ReadDir(h.dirs.Data)
+				if err != nil {
+					t.Fatal(err)
+				}
+				for _, e := range entries {
+					if n := e.Name(); n != "days" && n != "coach" && n != "install" {
+						t.Errorf("uninstall left %s in the data directory, which is neither the daily totals nor the recaps", n)
+					}
+				}
 				for p := range h.snapshot() {
 					full := filepath.Join(h.root, p)
 					if _, ok := before[p]; !ok && !within(full, h.dirs.Data) && !within(full, h.dirs.Config) && !within(h.dirs.Data, full) && !within(h.dirs.Config, full) {
@@ -619,6 +727,151 @@ func TestInstallCycle(t *testing.T) {
 				}
 				pid := h.installed(false)
 				h.mustRun("", "y\nn\n", 0, "uninstall")
+				h.mustRun("", "", 0, "uninstall", "--yes", "--delete-data")
+				h.uninstalled(before, pid)
+			},
+		},
+		{
+			name:     "an install whose hook command fails its self-test leaves alone the pairtime that Claude Code's hooks run",
+			hookMode: "real",
+			before:   func(h *testHome) { h.write(".claude/settings.json", gitAISettings) },
+			steps: func(t *testing.T, h *testHome, before map[string]string) {
+				h.mustRun("", "", 0, "install", "--yes")
+				pid := h.installed(true)
+				// The installed copy becomes another build of pairtime, so
+				// an install from the test binary would replace it.
+				if err := stopAgent(h.dirs); err != nil {
+					t.Fatal(err)
+				}
+				h.copyBinary(h.bin, "\npairtime test: another build\n")
+				bin, settings := h.sum(h.bin), h.read(".claude/settings.json")
+				out := h.mode("broken").mustRun("", "", 1, "install", "--yes")
+				if !strings.Contains(out, "failed its self-test") || !strings.Contains(out, "block your prompts") {
+					t.Errorf("install didn't say why it left the installed pairtime alone:\n%s", out)
+				}
+				if h.sum(h.bin) != bin || h.read(".claude/settings.json") != settings {
+					t.Error("install replaced the pairtime that Claude Code's hooks run, or changed their settings")
+				}
+				out = h.mode("broken").mustRun("", "", 1, "install", "--yes", "--skip", "hooks/claude_code")
+				if !strings.Contains(out, "block your prompts") || h.sum(h.bin) != bin {
+					t.Errorf("leaving the hooks out let install replace the pairtime that the hooks already there run:\n%s", out)
+				}
+				h.mustRun("", "", 0, "uninstall", "--yes", "--delete-data")
+				h.uninstalled(before, pid)
+			},
+		},
+		{
+			name:     "a Claude Code settings file that pairtime can't edit keeps its hooks out and the rest is set up, and --skip doesn't read it",
+			hookMode: "real",
+			before: func(h *testHome) {
+				h.write(".claude/settings.json", gitAISettings)
+				if err := os.Chmod(h.path(".claude/settings.json"), 0o400); err != nil {
+					h.t.Fatal(err)
+				}
+			},
+			steps: func(t *testing.T, h *testHome, before map[string]string) {
+				out := h.mustRun("", "", 0, "install", "--yes")
+				if !strings.Contains(out, "is read-only") {
+					t.Errorf("install didn't say why Claude Code's hooks stay out:\n%s", out)
+				}
+				pid := h.installed(false)
+				if h.read(".claude/settings.json") != gitAISettings {
+					t.Error("install changed Claude Code's settings")
+				}
+				h.mustRun("", "", 0, "uninstall", "--yes", "--delete-data")
+				h.uninstalled(before, pid)
+
+				out = h.mustRun("", "", 0, "install", "--yes", "--skip", "hooks/claude_code")
+				if strings.Contains(out, "read-only") || strings.Contains(out, "stay out") {
+					t.Errorf("install planned the hooks it was told to leave out:\n%s", out)
+				}
+				pid = h.installed(false)
+				h.mustRun("", "", 0, "uninstall", "--yes", "--delete-data")
+				h.uninstalled(before, pid)
+			},
+		},
+		{
+			name:     "install leaves alone a file at the binary's path that isn't pairtime",
+			hookMode: "real",
+			before: func(h *testHome) {
+				h.write(".claude/settings.json", gitAISettings)
+				if err := os.MkdirAll(filepath.Dir(h.bin), 0o755); err != nil {
+					h.t.Fatal(err)
+				}
+				if err := os.WriteFile(h.bin, []byte("#!/bin/sh\necho the teen's own pairtime script\n"), 0o755); err != nil {
+					h.t.Fatal(err)
+				}
+			},
+			steps: func(t *testing.T, h *testHome, before map[string]string) {
+				out := h.mustRun("", "", 1, "install", "--yes")
+				if !strings.Contains(out, "isn't pairtime") || !strings.Contains(out, "move it somewhere else") {
+					t.Errorf("install didn't say what to do about the file in its way:\n%s", out)
+				}
+				if diff := changes(before, h.snapshot()); diff != "" {
+					t.Errorf("install changed files:\n%s", diff)
+				}
+				if runtime.GOOS == "windows" {
+					return // the binary's folder is in pairtime's data directory there, not one other tools share
+				}
+				if out := h.mustRun("", "", 0, "uninstall", "--yes"); !strings.Contains(out, "nothing to take out") {
+					t.Errorf("uninstall found something to take out:\n%s", out)
+				}
+				if diff := changes(before, h.snapshot()); diff != "" {
+					t.Errorf("uninstall changed files:\n%s", diff)
+				}
+			},
+		},
+		{
+			name:     "the folders an install script made for the binary, named with --made, go with uninstall",
+			hookMode: "real",
+			before:   func(h *testHome) { h.write(".claude/settings.json", gitAISettings) },
+			steps: func(t *testing.T, h *testHome, before map[string]string) {
+				// What install.sh and install.ps1 do before they run
+				// pairtime install: make the binary's folders and put the
+				// binary there.
+				made := missingDirs(filepath.Dir(h.bin))
+				h.copyBinary(h.bin, "")
+				h.mustRun(h.bin, "", 2, "install", "--yes", "--made", "relative")
+				h.mustRun(h.bin, "", 2, "install", "--yes", "--made", h.path("elsewhere"))
+				args := []string{"install", "--yes"}
+				for _, d := range made {
+					args = append(args, "--made", d)
+				}
+				h.mustRun(h.bin, "", 0, args...)
+				pid := h.installed(true)
+				if runtime.GOOS == "windows" {
+					// The script made pairtime's data directory there, which
+					// took its parent's DACL, and install gives it home's.
+					checkUserOnlyDir(t, h.dirs.Data)
+				}
+				h.mustRun("", "", 0, "uninstall", "--yes", "--delete-data")
+				h.uninstalled(before, pid)
+			},
+		},
+		{
+			name:     "on Windows, install moves aside a pairtime.exe that a process runs, and uninstall deletes both copies",
+			hookMode: "real",
+			before: func(h *testHome) {
+				h.write(".claude/settings.json", gitAISettings)
+				h.copyBinary(filepath.Join(h.root, "download", "pairtime.exe"), "\npairtime test: a newer build\n")
+			},
+			steps: func(t *testing.T, h *testHome, before map[string]string) {
+				if runtime.GOOS != "windows" {
+					t.Skip("elsewhere a rename replaces a program that runs")
+				}
+				h.mustRun("", "", 0, "install", "--yes")
+				h.installed(true)
+				done := h.hold(h.bin)
+				newer := filepath.Join(h.root, "download", "pairtime.exe")
+				h.mustRun(newer, "", 0, "install", "--yes")
+				if h.sum(h.bin) != h.sum(newer) {
+					t.Error("install didn't put the newer pairtime in place")
+				}
+				if old := oldBinaries(filepath.Dir(h.bin)); len(old) != 1 {
+					t.Errorf("beside the binary install left %q, want the one old copy that a process runs", old)
+				}
+				pid := h.installed(true)
+				done()
 				h.mustRun("", "", 0, "uninstall", "--yes", "--delete-data")
 				h.uninstalled(before, pid)
 			},

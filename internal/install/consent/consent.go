@@ -16,7 +16,9 @@
 // Unlike 8.4's cards, which ask for something beyond the service, these are
 // the service the teen ran install for, so every card starts ticked and the
 // teen unticks what they don't want (DESIGN 5.9). Nothing is written until
-// they type y, and n, or the end of input, changes nothing.
+// they type y, and n, or the end of input, changes nothing. An item install
+// can't offer, because the teen left it out with --skip or its planner
+// won't edit the file it changes, has no card, and the screen says why.
 package consent
 
 import (
@@ -83,6 +85,12 @@ type Input struct {
 	// install.Plan.Diff prints them. An item missing from it isn't
 	// offered.
 	Diffs map[string]string
+	// Left are items install doesn't offer, by item ID, each with why, in
+	// words that follow "found at <folder>; " on a harness's line: the
+	// teen left it out with --skip, or its planner won't edit the file,
+	// such as a settings file that isn't JSON. A harness's line says why
+	// its hooks stay out, and the screen says why autostart does.
+	Left map[string]string
 }
 
 // Screen is the consent screen.
@@ -193,6 +201,10 @@ func (s *Screen) Render(w io.Writer) {
 	fmt.Fprintf(b, "pairtime goes in %s.\n", install.Printable(s.in.Binary))
 	b.WriteString("It runs in local-only mode: what it records stays on this computer.\n\n")
 	s.renderHarnesses(b)
+	if why, ok := s.in.Left[install.ItemAutostart]; ok {
+		b.WriteString("\n")
+		b.WriteString(wrap("pairtime won't start when you log in: "+install.Printable(why)+".", ""))
+	}
 	for i, c := range s.Cards {
 		b.WriteString("\n")
 		renderCard(b, i+1, c)
@@ -217,8 +229,10 @@ func (s *Screen) renderHarnesses(b *strings.Builder) {
 			what = "not found"
 		case h.Item == "":
 			what = "found at " + install.Printable(h.Where) + "; pairtime can't add hooks to it yet"
+		case s.in.Left[h.Item] != "":
+			what = "found at " + install.Printable(h.Where) + "; " + install.Printable(s.in.Left[h.Item])
 		case h.Item == install.ItemClaudeCode && !s.in.Hook.OK:
-			what = "found at " + install.Printable(h.Where) + "; " + s.in.Hook.Why
+			what = "found at " + install.Printable(h.Where) + "; " + install.Printable(s.in.Hook.Why)
 		default:
 			what = "found at " + install.Printable(h.Where)
 		}

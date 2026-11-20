@@ -36,6 +36,10 @@ func TestDetect(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			h := t.TempDir()
+			// From the home directory, a relative PATH entry such as bin
+			// names the folder the case plants a program in, so a lookPath
+			// that followed relative entries would find it.
+			t.Chdir(h)
 			for _, m := range tt.make {
 				p := filepath.Join(h, filepath.FromSlash(m))
 				if m[len(m)-1] == '/' {

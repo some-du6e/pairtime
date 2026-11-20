@@ -19,6 +19,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"time"
@@ -36,13 +37,21 @@ const modulePath = "github.com/some-du6e/pairtime"
 // per-user path, which every hook and the login item run (CP 7), and
 // pairtime's directories. PAIRTIME_HOME is refused: the hooks and the login
 // item install writes can't carry it, so they would feed the agent of the
-// usual data directory, not the one it names.
+// usual data directory, not the one it names. So are root in someone
+// else's home directory and an elevated token on Windows (checkUser).
 func setupEnv() (install.Env, home.Dirs, error) {
 	if os.Getenv(home.EnvHome) != "" {
 		return install.Env{}, home.Dirs{}, fmt.Errorf("%s is set, and the hooks and login item that install writes can't carry it, so they would feed the pairtime of your usual folders; unset it and run this again", home.EnvHome)
 	}
 	env, err := install.DefaultEnv("")
 	if err != nil {
+		v := "HOME"
+		if runtime.GOOS == "windows" {
+			v = "USERPROFILE"
+		}
+		return install.Env{}, home.Dirs{}, fmt.Errorf("finding your home folder: %w; set %s to its full path, then run this again", err, v)
+	}
+	if err := checkUser(env.Home); err != nil {
 		return install.Env{}, home.Dirs{}, err
 	}
 	if env.Exe, err = install.BinaryPath(env); err != nil {
@@ -50,6 +59,12 @@ func setupEnv() (install.Env, home.Dirs, error) {
 	}
 	dirs, err := home.Default()
 	if err != nil {
+		if runtime.GOOS == "windows" {
+			// BinaryPath has checked LOCALAPPDATA, so it is APPDATA, and
+			// home's own message would point at PAIRTIME_HOME, which
+			// install refuses.
+			err = errors.New(`APPDATA isn't a full path, so pairtime has nowhere to keep its settings; set it to your AppData\Roaming folder, then run this again`)
+		}
 		return install.Env{}, home.Dirs{}, err
 	}
 	return env, dirs, nil
@@ -108,39 +123,63 @@ func fileSum(path string) ([]byte, error) {
 	return h.Sum(nil), nil
 }
 
-// placeBinary makes dst a copy of src. It writes a temporary file beside
-// dst and renames it into place, so a harness that runs a hook meanwhile
-// runs the old binary or the new one, never part of one.
-func placeBinary(src, dst string) (err error) {
+// stageBinary copies src to a new temporary file beside dst, which is
+// where the binary goes, and returns the copy's path. commitBinary renames
+// it into place, so that a harness that runs a hook meanwhile runs the old
+// binary or the new one, never part of one. In between, install runs the
+// hook self-test on the copy, since a copy that fails it must never land
+// where pairtime's hooks run it. The copy has dst's extension, .exe on
+// Windows, so that it runs there.
+func stageBinary(src, dst string) (string, error) {
 	in, err := os.Open(src)
 	if err != nil {
-		return err
+		return "", err
 	}
 	defer in.Close()
-	f, err := os.CreateTemp(filepath.Dir(dst), ".pairtime.tmp-")
+	f, err := os.CreateTemp(filepath.Dir(dst), ".pairtime.new-*"+filepath.Ext(dst))
 	if err != nil {
-		return err
+		return "", err
 	}
 	tmp := f.Name()
-	defer func() {
-		if err != nil {
-			f.Close()
-			os.Remove(tmp)
-		}
-	}()
-	if _, err = io.Copy(f, in); err != nil {
+	if err := writeBinary(f, in); err != nil {
+		f.Close()
+		os.Remove(tmp)
+		return "", err
+	}
+	return tmp, nil
+}
+
+// writeBinary copies in to f, makes f a program, flushes it to disk and
+// closes it.
+func writeBinary(f *os.File, in io.Reader) error {
+	if _, err := io.Copy(f, in); err != nil {
 		return err
 	}
-	if err = f.Chmod(0o755); err != nil {
+	if err := f.Chmod(0o755); err != nil {
 		return err
 	}
-	if err = f.Sync(); err != nil {
+	if err := f.Sync(); err != nil {
 		return err
 	}
-	if err = f.Close(); err != nil {
+	return f.Close()
+}
+
+// checkReplaceable refuses to put pairtime at path, its per-user path, when
+// something that isn't pairtime is there: the teen's own script, say, or
+// another tool's program of the same name, as pipx and uv put their tools
+// in ~/.local/bin too. install would replace it with no copy, and
+// uninstall would then delete what install put there, so the file would
+// be gone for good.
+func checkReplaceable(path string) error {
+	if _, err := os.Lstat(path); errors.Is(err, fs.ErrNotExist) {
+		return nil
+	} else if err != nil {
 		return err
 	}
-	return os.Rename(tmp, dst)
+	if isPairtimeBinary(path) {
+		return nil
+	}
+	return fmt.Errorf("%s is there already, and it isn't pairtime, so install leaves it alone; move it somewhere else, then run pairtime install again", install.Printable(path))
 }
 
 // isPairtimeBinary reports whether the file at path is a program built
@@ -226,7 +265,7 @@ func missingDirs(dir string) []string {
 // its binary, and the folders above them, that aren't there, outermost
 // first. install and uninstall take it before anything else, since even
 // planning makes the data directory, for the installer's lock file
-// (install.Installer.LockFile).
+// (install.Installer.RemoveLockFile).
 func notThere(env install.Env, dirs home.Dirs) []string {
 	var missing []string
 	for _, d := range []string{dirs.Data, dirs.Config, filepath.Dir(env.Exe)} {
@@ -239,14 +278,44 @@ func notThere(env install.Env, dirs home.Dirs) []string {
 // missing, what notThere said before it began: in a data directory that
 // wasn't there, the installer's lock file, which planning makes, and the
 // agent's, which looking for an agent makes, then each folder of missing
-// that is empty by then.
+// that is empty by then. A lock file goes only while tidy holds its lock,
+// so when another install, or an agent another install started, holds
+// one, the file stays, and with it the data directory.
 func tidy(in *install.Installer, dirs home.Dirs, missing []string) {
 	if slices.Contains(missing, dirs.Data) {
-		os.Remove(in.LockFile())
-		os.Remove(filepath.Join(dirs.Data, "agent.lock"))
+		in.RemoveLockFile()
+		removeAgentLock(dirs.Data, nil)
 		os.Remove(in.Dir)
 	}
 	removeEmptyDirs(missing)
+}
+
+// removeAgentLock deletes agent.lock in the data directory dir, and only
+// while it holds the lock. home's lock is on the file, so deleting the
+// file of a lock an agent holds would let a second agent lock a new file
+// beside it, and agentLocked, which stopAgent and uninstall rely on, would
+// no longer see the first. held is the lock when the caller holds it, and
+// removeAgentLock drops it; with nil it takes the lock itself, and leaves
+// the file when an agent holds it.
+func removeAgentLock(dir string, held *home.Lock) {
+	name := filepath.Join(dir, "agent.lock")
+	if held == nil {
+		if _, err := os.Lstat(name); err != nil {
+			return
+		}
+		l, err := home.Acquire(dir)
+		if err != nil {
+			return
+		}
+		held = l
+	}
+	if removesHeldFiles {
+		os.Remove(name)
+		held.Release()
+		return
+	}
+	held.Release()
+	os.Remove(name)
 }
 
 // addMade returns made with each of more it lacks, outermost first.
@@ -279,10 +348,18 @@ func removeEmptyDirs(dirs []string) []string {
 	return kept
 }
 
-// within reports whether path is dir or inside it.
+// within reports whether path is dir or inside it, comparing paths as the
+// OS does: in any case on Windows.
 func within(path, dir string) bool {
 	rel, err := filepath.Rel(dir, path)
 	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !filepath.IsAbs(rel)
+}
+
+// samePath reports whether a and b are the same path, as within compares
+// them.
+func samePath(a, b string) bool {
+	rel, err := filepath.Rel(a, b)
+	return err == nil && rel == "."
 }
 
 // agentStatus is the part of GET /v1/status that install reads.
@@ -300,7 +377,12 @@ var errAgentDown = errors.New("pairtime's agent isn't running")
 var agentHTTP = &http.Client{Timeout: 3 * time.Second, Transport: &http.Transport{Proxy: nil}}
 
 // agentCall sends one request to the API of the agent that uses dirs, with
-// the bearer token from port.json, and returns the answer's body.
+// the bearer token from port.json, and returns the answer's body. The
+// token goes out only while an agent holds the data directory's lock, the
+// test stopAgent makes first too: port.json outlives an agent that crashed
+// or was killed, and every later agent keeps its token (internal/agent,
+// listen), so whatever listens on a stale port since, such as another
+// account's program, would get a token that opens this teen's agent.
 func agentCall(dirs home.Dirs, method, path string, want int) ([]byte, error) {
 	pf, err := localhttp.ReadPortFile(dirs.PortFile())
 	if errors.Is(err, fs.ErrNotExist) {
@@ -309,7 +391,7 @@ func agentCall(dirs home.Dirs, method, path string, want int) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	if pf.PID == 0 || pf.Port <= 0 {
+	if pf.PID == 0 || pf.Port <= 0 || !agentLocked(dirs) {
 		return nil, errAgentDown
 	}
 	req, err := http.NewRequest(method, fmt.Sprintf("http://127.0.0.1:%d%s", pf.Port, path), nil)
@@ -393,26 +475,39 @@ const startWait = 30 * time.Second
 // it answers. It runs in the data directory, so it doesn't keep the folder
 // install ran in from being deleted. When another agent was already
 // running, that one's status is returned.
+//
+// It asks only an agent that port.json says started since: the one it
+// started, or, when that one found another agent holding the data
+// directory, one whose port.json was written since. An older port.json is
+// an agent's that has stopped, and its port may be anyone's by now. Until
+// port.json names its agent, it doesn't touch the lock either (agentCall),
+// since an agent that found the lock taken at that moment would exit.
 func startAgentFrom(exe string, dirs home.Dirs) (agentStatus, error) {
 	cmd := exec.Command(exe, "agent")
 	cmd.SysProcAttr = detachedAttr()
 	cmd.Dir = dirs.Data
+	// Some file systems keep a file's time in whole seconds, or two.
+	since := time.Now().Add(-2 * time.Second)
 	if err := cmd.Start(); err != nil {
 		return agentStatus{}, fmt.Errorf("starting pairtime's agent: %w", err)
 	}
+	pid := cmd.Process.Pid
 	exited := make(chan error, 1)
 	go func() { exited <- cmd.Wait() }()
+	other := false // the agent it started found another holding the data directory
 	deadline := time.Now().Add(startWait)
 	for {
-		if st, err := queryAgent(dirs); err == nil {
-			return st, nil
+		if startedSince(dirs, pid, other, since) {
+			if st, err := queryAgent(dirs); err == nil {
+				return st, nil
+			}
 		}
 		select {
 		case err := <-exited:
 			var ee *exec.ExitError
 			if errors.As(err, &ee) && ee.ExitCode() == exitAlreadyRunning {
 				// Another agent holds the lock, and may still be starting.
-				exited = nil
+				exited, other = nil, true
 				continue
 			}
 			if err == nil {
@@ -422,7 +517,27 @@ func startAgentFrom(exe string, dirs home.Dirs) (agentStatus, error) {
 		case <-time.After(100 * time.Millisecond):
 		}
 		if time.Now().After(deadline) {
+			if other {
+				return agentStatus{}, fmt.Errorf("another pairtime agent holds pairtime's folder but didn't answer within %v; stop it (it's the process called pairtime), then run pairtime install again", startWait)
+			}
 			return agentStatus{}, fmt.Errorf("pairtime's agent didn't answer within %v of starting; run pairtime agent to see why", startWait)
 		}
 	}
+}
+
+// startedSince reports whether port.json names pid, the agent that
+// startAgentFrom started, or, when other is set, was written at since or
+// later.
+func startedSince(dirs home.Dirs, pid int, other bool, since time.Time) bool {
+	pf, err := localhttp.ReadPortFile(dirs.PortFile())
+	switch {
+	case err != nil || pf.PID == 0:
+		return false
+	case pf.PID == pid:
+		return true
+	case !other:
+		return false
+	}
+	info, err := os.Stat(dirs.PortFile())
+	return err == nil && !info.ModTime().Before(since)
 }

@@ -65,6 +65,25 @@ func (s *skipFlag) Set(v string) error {
 	return nil
 }
 
+// madeFlag collects --made, which the install scripts pass (WP-RL2) and
+// the usage leaves out: each folder a script made for the binary before it
+// ran install, which is the binary's folder or a folder above it. install
+// records them in setup.json beside the folders it made itself, so that
+// uninstall takes them away once they are empty, and gives a data
+// directory among them the permissions home gives the ones it makes
+// (makeHome).
+type madeFlag []string
+
+func (m *madeFlag) String() string { return strings.Join(*m, ",") }
+
+func (m *madeFlag) Set(v string) error {
+	if !filepath.IsAbs(v) {
+		return fmt.Errorf("%q isn't a full path", v)
+	}
+	*m = append(*m, filepath.Clean(v))
+	return nil
+}
+
 // installStdin is where install and uninstall read the teen's answers.
 // Tests replace it.
 var installStdin io.Reader = os.Stdin
@@ -73,16 +92,32 @@ var installStdin io.Reader = os.Stdin
 // WP-IN2). In order:
 //
 //  1. It finds the harnesses (install.Detect) and tests the hook command
-//     the hooks would run (hookCheck), then plans each item it offers.
+//     the hooks would run (hookCheck), then plans each item it offers. An
+//     item the teen leaves out with --skip isn't planned, and one whose
+//     planner refuses its file, such as a settings.json that isn't JSON,
+//     is left out with the planner's reason, as the hooks are when the
+//     self-test fails.
 //  2. It shows the consent screen, with each change as a diff, and the
 //     teen unticks what they don't want (--yes for scripts).
 //  3. It puts the binary at its per-user path, with pairtime's own
-//     folders, and tests the hook command again there, since that copy is
-//     what the hooks run.
+//     folders. It copies the binary beside its place and tests the hook
+//     command of the copy, since that is what the hooks run, before the
+//     copy goes in place.
 //  4. It writes autostart and starts the agent, then merges the hooks, so
 //     the first hook call finds the agent up and goes over its socket: a
 //     call that finds it down is spooled, and a spooled call earns only a
 //     side door's credit (DESIGN 5.2).
+//
+// Nothing changes before the teen's yes, so the binary goes in place after
+// it, in step 3, not first as DESIGN 5.9 step 1 has it. An install script
+// that put the binary in place itself names the folders it made with
+// --made.
+//
+// When pairtime's hooks are in Claude Code's settings already, they run
+// the binary at the per-user path. A binary whose hook command fails the
+// self-test would then block every prompt once it went there, so install
+// refuses to replace the binary at all (hooksWouldBreak), whether or not
+// the teen leaves the hooks out.
 //
 // The agent runs in local-only mode, the only mode of this release, which
 // it writes into config.toml at its first start (internal/agent/config).
@@ -96,6 +131,8 @@ func runInstall(args []string, stdout, stderr io.Writer) int {
 	dryRun := flags.Bool("dry-run", false, "print the changes and make none")
 	var skip skipFlag
 	flags.Var(&skip, "skip", "leave one change out")
+	var made madeFlag
+	flags.Var(&made, "made", "a folder an install script made for the binary")
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return 0
@@ -115,9 +152,24 @@ func runInstall(args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		return fail(err)
 	}
+	for _, d := range made {
+		if !within(filepath.Dir(env.Exe), d) {
+			fmt.Fprintf(stderr, "pairtime install: --made %s isn't %s or a folder above it\n", install.Printable(d), install.Printable(filepath.Dir(env.Exe)))
+			return 2
+		}
+	}
 	src, err := self()
 	if err != nil {
 		return fail(err)
+	}
+	same, err := sameBinary(src, env.Exe)
+	if err != nil {
+		return fail(err)
+	}
+	if !same {
+		if err := checkReplaceable(env.Exe); err != nil {
+			return fail(err)
+		}
 	}
 	in := install.New(dirs)
 	// Planning makes the data directory, for the installer's lock, so what
@@ -130,35 +182,70 @@ func runInstall(args []string, stdout, stderr io.Writer) int {
 			tidy(in, dirs, missing)
 		}
 	}()
+	// Every plan takes the installer's lock and reads its manifest, so what
+	// goes wrong here, another install that runs or a damaged manifest,
+	// would go wrong for every item.
+	probe, err := in.PlanInstall(nil)
+	if err != nil {
+		return fail(err)
+	}
+	probe.Close()
 
 	// 1. What there is, and what install would change.
 	harnesses := install.Detect(env)
 	claudeFound := slices.ContainsFunc(harnesses, func(h install.Harness) bool { return h.Item == install.ItemClaudeCode && h.Found() })
+	skipped := func(id string) bool { return slices.Contains(skip, id) }
+	hooked := false
+	if claudeFound && !same {
+		if hooked, err = hasClaudeHooks(in, env); err != nil {
+			return fail(err)
+		}
+	}
 	var hook consent.HookTest
-	if claudeFound {
-		took, why := hookCheck(src)
-		hook = consent.HookTest{OK: why == "", Took: took, Why: why}
+	if claudeFound && (!skipped(install.ItemClaudeCode) || hooked) {
+		took, err := hookCheck(src)
+		switch {
+		case err == nil:
+			hook = consent.HookTest{OK: true, Took: took}
+		case hooked:
+			return fail(hooksWouldBreak(err, env.Exe))
+		default:
+			hook = consent.HookTest{Why: hookWhy(err)}
+		}
 	}
 	items := map[string]install.Item{}
 	diffs := map[string]string{}
-	offer := func(it install.Item, err error) error {
-		if err != nil {
+	left := map[string]string{} // the items install doesn't offer, with why
+	offer := func(id string, mk func(install.Env) (install.Item, error)) error {
+		it, err := mk(env)
+		if err == nil {
+			var p *install.Plan
+			if p, err = in.PlanInstall([]install.Item{it}); err == nil {
+				items[id], diffs[id] = it, p.Diff()
+				p.Close()
+				return nil
+			}
+		}
+		if errors.Is(err, install.ErrBusy) {
 			return err
 		}
-		p, err := in.PlanInstall([]install.Item{it})
-		if err != nil {
-			return err
-		}
-		defer p.Close()
-		items[it.ID], diffs[it.ID] = it, p.Diff()
+		// A file the planner won't edit keeps out only its own item, which
+		// the teen could have unticked anyway (DESIGN 5.9).
+		left[id] = err.Error()
 		return nil
 	}
-	if err := offer(install.Autostart(env)); err != nil {
+	if skipped(install.ItemAutostart) {
+		left[install.ItemAutostart] = "you left it out with --skip"
+	} else if err := offer(install.ItemAutostart, install.Autostart); err != nil {
 		return fail(err)
 	}
-	if claudeFound && hook.OK {
-		if err := offer(install.ClaudeCode(env)); err != nil {
-			return fail(err)
+	if claudeFound {
+		if skipped(install.ItemClaudeCode) {
+			left[install.ItemClaudeCode] = "you left its hooks out with --skip"
+		} else if hook.OK {
+			if err := offer(install.ItemClaudeCode, install.ClaudeCode); err != nil {
+				return fail(err)
+			}
 		}
 	}
 	screen := consent.New(consent.Input{
@@ -167,16 +254,10 @@ func runInstall(args []string, stdout, stderr io.Writer) int {
 		Harnesses: harnesses,
 		Hook:      hook,
 		Diffs:     diffs,
+		Left:      left,
 	})
-	for _, id := range skip {
-		screen.Untick(id)
-	}
 
 	// 2. The teen's say.
-	same, err := sameBinary(src, env.Exe)
-	if err != nil {
-		return fail(err)
-	}
 	switch {
 	case *dryRun:
 		if !same {
@@ -189,11 +270,10 @@ func runInstall(args []string, stdout, stderr io.Writer) int {
 		for _, id := range screen.Ticked() {
 			io.WriteString(stdout, diffs[id])
 		}
+		leftOut(stderr, "pairtime install: ", hook, left, skip)
 		return 0
 	case *yes:
-		if claudeFound && !hook.OK {
-			fmt.Fprintf(stdout, "Claude Code's hooks stay out: %s.\n", hook.Why)
-		}
+		leftOut(stdout, "", hook, left, skip)
 	default:
 		if !screen.Ask(installStdin, stdout) {
 			fmt.Fprintln(stdout, "Nothing changed.")
@@ -203,33 +283,45 @@ func runInstall(args []string, stdout, stderr io.Writer) int {
 	chosen := screen.Ticked()
 
 	// 3. The binary, at the path every hook and the login item run.
+	changed = true
+	if err := makeHome(env, dirs, missing, made); err != nil {
+		return fail(fmt.Errorf("making pairtime's folders: %w; check that you may write in your home folder, then run pairtime install again", err))
+	}
 	restart := false
 	if !same {
+		// A copy an earlier install moved aside on Windows, which something
+		// ran then (commitBinary).
+		removeOldBinaries(filepath.Dir(env.Exe))
+		staged, err := stageBinary(src, env.Exe)
+		if err != nil {
+			return fail(fmt.Errorf("copying pairtime to %s: %w; make sure the disk has room and you may write there, then run pairtime install again", install.Printable(filepath.Dir(env.Exe)), err))
+		}
+		defer os.Remove(staged) // still there only if it didn't go in place
+		// The copy is what the hooks will run, so it is tested before it
+		// goes where they run it: a folder whose programs can't run, or a
+		// copy a virus scanner holds back, fails here.
+		if hooked || slices.Contains(chosen, install.ItemClaudeCode) {
+			if _, err := hookCheck(staged); err != nil {
+				if hooked {
+					return fail(hooksWouldBreak(err, env.Exe))
+				}
+				chosen = slices.DeleteFunc(chosen, func(id string) bool { return id == install.ItemClaudeCode })
+				fmt.Fprintf(stdout, "Claude Code's hooks stay out: %s.\n", hookWhy(err))
+			}
+		}
 		if st, err := queryAgent(dirs); err == nil {
-			// The running agent may be this copy, which Windows won't let
-			// anyone replace, and is an older pairtime anyway.
+			// The running agent may be this copy, and is an older pairtime
+			// anyway.
 			fmt.Fprintf(stdout, "Stopping pairtime's agent (process %d) to update it.\n", st.PID)
 			if err := stopAgent(dirs); err != nil {
 				return fail(err)
 			}
 			restart = true
 		}
-	}
-	changed = true
-	if err := makeHome(env, dirs, missing); err != nil {
-		return fail(err)
-	}
-	if !same {
-		if err := placeBinary(src, env.Exe); err != nil {
-			return fail(fmt.Errorf("putting pairtime in %s: %w", env.Exe, err))
+		if err := commitBinary(staged, env.Exe); err != nil {
+			return fail(fmt.Errorf("putting pairtime in %s: %w; close what runs it, then run pairtime install again", install.Printable(env.Exe), err))
 		}
 		fmt.Fprintf(stdout, "Put pairtime in %s.\n", install.Printable(env.Exe))
-	}
-	if slices.Contains(chosen, install.ItemClaudeCode) {
-		if _, why := hookCheck(env.Exe); why != "" {
-			chosen = slices.DeleteFunc(chosen, func(id string) bool { return id == install.ItemClaudeCode })
-			fmt.Fprintf(stdout, "Claude Code's hooks stay out: %s.\n", why)
-		}
 	}
 
 	// 4. Autostart, the agent, then the hooks.
@@ -242,7 +334,12 @@ func runInstall(args []string, stdout, stderr io.Writer) int {
 			p.Close()
 			return fmt.Errorf("what %s changes isn't what the screen showed any more, so pairtime didn't change it; run pairtime install again to see the new changes", id)
 		}
-		return p.Apply()
+		if err := p.Apply(); errors.Is(err, install.ErrStale) {
+			return fmt.Errorf("something else changed what %s changes while install was making the change, so install stopped there; run pairtime install again to see the new changes", id)
+		} else if err != nil {
+			return err
+		}
+		return nil
 	}
 	if slices.Contains(chosen, install.ItemAutostart) {
 		if err := apply(install.ItemAutostart); err != nil {
@@ -279,23 +376,78 @@ func runInstall(args []string, stdout, stderr io.Writer) int {
 	}
 
 	fmt.Fprintln(stdout, "pairtime is set up. It runs in local-only mode, so what it records stays on this computer.")
-	if claudeFound && slices.Contains(chosen, install.ItemClaudeCode) {
-		fmt.Fprintln(stdout, "Claude Code runs the hooks in a folder once you trust that folder, and in sessions that start after now.")
+	if slices.Contains(chosen, install.ItemClaudeCode) {
+		// Claude Code's file watcher picks up a change to the hooks in its
+		// settings in sessions that are open, and a folder's trust dialog
+		// comes before any of its hooks run (code.claude.com/docs/en/hooks).
+		fmt.Fprintln(stdout, "Claude Code sessions that are open already start running the hooks once Claude Code notices the change, and a folder runs them only after you trust it.")
 	}
-	if env.GOOS != "windows" && !onPath(filepath.Dir(env.Exe)) {
+	if !onPath(filepath.Dir(env.Exe)) {
 		fmt.Fprintf(stdout, "%s isn't on your PATH, so type its full path, %s, or add the folder to your PATH.\n", install.Printable(filepath.Dir(env.Exe)), install.Printable(env.Exe))
 	}
 	return 0
 }
 
+// leftOut writes, for --yes and --dry-run, which show no consent screen,
+// each change that stays out for a reason the teen didn't give with --skip.
+func leftOut(w io.Writer, prefix string, hook consent.HookTest, left map[string]string, skip []string) {
+	if hook.Why != "" {
+		fmt.Fprintf(w, "%sClaude Code's hooks stay out: %s.\n", prefix, hook.Why)
+	}
+	for _, id := range []string{install.ItemAutostart, install.ItemClaudeCode} {
+		why, ok := left[id]
+		if !ok || slices.Contains(skip, id) {
+			continue
+		}
+		if id == install.ItemAutostart {
+			fmt.Fprintf(w, "%spairtime won't start when you log in: %s.\n", prefix, install.Printable(why))
+		} else {
+			fmt.Fprintf(w, "%sClaude Code's hooks stay out: %s.\n", prefix, install.Printable(why))
+		}
+	}
+}
+
+// hasClaudeHooks reports whether Claude Code's settings hold hooks of
+// pairtime's, as uninstall would find them: those install's manifest
+// records and any it recognizes as pairtime's. They run the binary at the
+// per-user path, or, from an older pairtime, one somewhere else. A
+// settings file uninstall couldn't take them out of counts as holding
+// them, since it may.
+func hasClaudeHooks(in *install.Installer, env install.Env) (bool, error) {
+	it, err := install.ClaudeCode(env)
+	if err != nil {
+		return false, err
+	}
+	p, err := in.PlanUninstall(it)
+	if err != nil {
+		return false, err
+	}
+	defer p.Close()
+	for _, c := range p.Changes {
+		if slices.Contains(c.Items, install.ItemClaudeCode) {
+			return true, nil
+		}
+	}
+	settings := install.ClaudeSettings(env)
+	return slices.ContainsFunc(p.Problems, func(problem string) bool { return strings.Contains(problem, settings) }), nil
+}
+
 // makeHome makes pairtime's directories and the folder of its binary, and
-// records in setup.json each folder of made, which weren't there when
-// install began (notThere), for uninstall to take away. The data and config directories are made by home first, so
-// they are this user's only (DESIGN 3.5), and on Windows the binary's
-// folder inside the data directory inherits that.
-func makeHome(env install.Env, dirs home.Dirs, made []string) error {
+// records in setup.json, for uninstall to take away, each folder of made,
+// which weren't there when install began (notThere), and of scriptMade,
+// which an install script made for the binary before it ran install
+// (--made). home makes the data and config directories, so they are this
+// user's only (DESIGN 3.5), and on Windows the binary's folder inside the
+// data directory inherits that. A data directory a script made took its
+// parent's permissions instead, and gets home's here (protectDir).
+func makeHome(env install.Env, dirs home.Dirs, made, scriptMade []string) error {
 	if err := dirs.Create(); err != nil {
 		return err
+	}
+	if slices.ContainsFunc(scriptMade, func(d string) bool { return samePath(d, dirs.Data) }) {
+		if err := protectDir(dirs.Data); err != nil {
+			return err
+		}
 	}
 	if err := os.MkdirAll(filepath.Dir(env.Exe), 0o755); err != nil {
 		return err
@@ -305,14 +457,15 @@ func makeHome(env install.Env, dirs home.Dirs, made []string) error {
 		return err
 	}
 	rec.Binary = env.Exe
-	rec.Made = addMade(rec.Made, made)
+	rec.Made = addMade(addMade(rec.Made, made), scriptMade)
 	return writeSetup(dirs, rec)
 }
 
-// onPath reports whether dir is on this process's PATH.
+// onPath reports whether dir is on this process's PATH, comparing paths as
+// the OS does: in any case on Windows.
 func onPath(dir string) bool {
 	for _, d := range filepath.SplitList(os.Getenv("PATH")) {
-		if d != "" && filepath.Clean(d) == filepath.Clean(dir) {
+		if d != "" && samePath(d, dir) {
 			return true
 		}
 	}

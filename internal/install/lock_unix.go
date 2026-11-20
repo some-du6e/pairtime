@@ -29,3 +29,12 @@ func lockFile(name string) (func() error, error) {
 	// so the garbage collector can't close it, and drop the lock, early.
 	return f.Close, nil
 }
+
+// removeLocked deletes name, the lock file whose lock unlock drops, while
+// the lock is still held, so that no other process holds it when it goes.
+// Unix deletes a file that is open, and a process that opens the name
+// afterwards makes a new one.
+func removeLocked(name string, unlock func() error) error {
+	err := os.Remove(name)
+	return errors.Join(err, unlock())
+}

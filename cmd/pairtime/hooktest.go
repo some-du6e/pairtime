@@ -10,20 +10,23 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/some-du6e/pairtime/internal/agent/home"
 	"github.com/some-du6e/pairtime/internal/agent/inbox"
 	"github.com/some-du6e/pairtime/internal/agent/ipc"
+	"github.com/some-du6e/pairtime/internal/install"
 )
 
 // The hooks install writes run `pairtime hook` (WP-AG3). A binary without
 // that command, or with one that fails, would answer each of Claude Code's
 // hooks with a usage error and exit status 2, which makes Claude Code block
 // the prompt or the tool call the hook fired for (CP 6.2). So install adds
-// hooks only after the command has passed checkHook, against the binary the
-// hooks will run.
+// hooks only after the command has passed hookCheck, against the binary the
+// hooks will run, and it never puts a binary that fails it where hooks
+// already in Claude Code's settings would run it (hooksWouldBreak).
 
 // hookTestPayload is the event the self-test hands `pairtime hook`, shaped
 // like Claude Code's SessionStart, with a session id no harness makes.
@@ -39,17 +42,38 @@ const hookTestWait = 10 * time.Second
 // that agent must find the lock taken and exit, so that it never runs.
 const hookGrace = 3 * time.Second
 
-// hookCheck says whether exe's hook command may go in a harness's
-// settings, and how long a call took when it may. It is "" when it may.
-func hookCheck(exe string) (time.Duration, string) {
+// errNoHook means the binary has no hook command at all.
+var errNoHook = errors.New("this pairtime has no hook command")
+
+// hookCheck tests the hook command of exe, which has the bytes of this
+// binary, and returns how long the test call took, or why hooks may not
+// run it.
+func hookCheck(exe string) (time.Duration, error) {
 	if _, ok := commands["hook"]; !ok {
-		return 0, "this pairtime has no hook command yet, and Claude Code would block your prompts on the error each hook gave, so pairtime leaves its settings alone"
+		return 0, errNoHook
 	}
 	took, err := hookTest(exe)
 	if err != nil {
-		return 0, fmt.Sprintf("pairtime hook failed its self-test (%v), so pairtime leaves Claude Code's settings alone", err)
+		return 0, fmt.Errorf("pairtime hook failed its self-test (%v)", err)
 	}
-	return took, ""
+	return took, nil
+}
+
+// hookWhy says why Claude Code's hooks stay out when hookCheck returned
+// err, in words that follow "found at <folder>; " on the consent screen.
+func hookWhy(err error) string {
+	if errors.Is(err, errNoHook) {
+		return "this pairtime has no hook command yet, and Claude Code would block your prompts on the error each hook gave, so pairtime leaves its settings alone"
+	}
+	return err.Error() + ", so pairtime leaves Claude Code's settings alone"
+}
+
+// hooksWouldBreak is install's refusal to put a binary whose hook command
+// failed the self-test, as err says, at exe, which the hooks pairtime put
+// in Claude Code's settings run: from then on Claude Code would block
+// every prompt.
+func hooksWouldBreak(err error, exe string) error {
+	return fmt.Errorf("%v, and the hooks in Claude Code's settings run the pairtime in %s, so putting this one there would block your prompts; install left that pairtime as it was, so keep using it, and report what the self-test said at https://github.com/some-du6e/pairtime/issues", err, install.Printable(filepath.Dir(exe)))
 }
 
 // hookTest runs exe's hook command as Claude Code runs its hooks, with

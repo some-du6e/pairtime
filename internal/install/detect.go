@@ -18,12 +18,12 @@ func BinaryPath(env Env) (string, error) {
 	case "windows":
 		local := env.getenv("LOCALAPPDATA")
 		if !isAbs("windows", local) {
-			return "", errors.New("LOCALAPPDATA isn't an absolute path, so pairtime has nowhere to put its binary")
+			return "", errors.New(`LOCALAPPDATA isn't a full path, so pairtime has nowhere to put its binary; set it to your AppData\Local folder, then run this again`)
 		}
 		return filepath.Join(local, "pairtime", "bin", "pairtime.exe"), nil
 	case "darwin", "linux":
 		if !filepath.IsAbs(env.Home) {
-			return "", fmt.Errorf("the home directory %q isn't an absolute path", env.Home)
+			return "", fmt.Errorf("the home directory %q isn't a full path; set HOME to your home folder's full path, then run this again", env.Home)
 		}
 		return filepath.Join(env.Home, ".local", "bin", "pairtime"), nil
 	}
