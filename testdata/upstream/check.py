@@ -12,8 +12,9 @@ Three checks, each explained in README.md next to this file:
    LICENSE and copies only from sources under a license in COPYABLE.
 2. Schemas. Every JSON file validates against the schema its name points
    to, in the same directory: foo.json and foo.<label>.json against
-   foo.schema.json. Every schema has at least one such file, and every
-   value in a schema's "examples" validates too. Schemas may use only the
+   foo.schema.json. Every schema has at least one such file, every value
+   in a schema's "examples" validates too, and every value in its
+   "x-invalid-examples" fails. Schemas may use only the
    JSON Schema 2020-12 keywords implemented here. Any other keyword is an
    error, so no schema can lean on a keyword that nothing checks.
 3. Robert's webhook vectors. Each signature in robert/webhook.json is
@@ -57,7 +58,8 @@ FORMATS = ("date", "date-time", "email", "uri", "uuid")
 # Keyword -> what its value must be. Annotations are listed too, so a typo
 # in one is caught. Keywords starting with "x-" are free-form annotations,
 # except x-file-ref, which asserts that a string names a file next to the
-# instance.
+# instance, and x-invalid-examples, values that must fail the schema they
+# sit in.
 KEYWORDS = {
     "$schema": "draft",
     "$id": "string",
@@ -92,6 +94,7 @@ KEYWORDS = {
     "oneOf": "schema_list",
     "not": "schema",
     "x-file-ref": "bool",
+    "x-invalid-examples": "array",
 }
 
 
@@ -237,6 +240,13 @@ def subschemas(node, at):
             yield sub, f"{at}/{key}/{i}"
 
 
+def walk(node, at):
+    """Every schema in a valid schema document, with its pointer."""
+    yield node, at
+    for sub, where in subschemas(node, at):
+        yield from walk(sub, where)
+
+
 def problems(inst, schema, at, root, base):
     """Why `inst` fails `schema`; empty when it validates.
 
@@ -312,6 +322,21 @@ def problems(inst, schema, at, root, base):
             out.append(f"{at}: matches {matched} branches of oneOf, want exactly 1")
     if "not" in schema and not problems(inst, schema["not"], at, root, base):
         out.append(f"{at}: matches a schema it must not")
+    return out
+
+
+def example_problems(doc, base):
+    """Every value in an examples list must pass the schema it sits in, and
+    every value in an x-invalid-examples list must fail it."""
+    out = []
+    for sub, at in walk(doc, "#"):
+        if not isinstance(sub, dict):
+            continue
+        for i, example in enumerate(sub.get("examples", [])):
+            out += problems(example, sub, f"{at}/examples/{i}", doc, base)
+        for i, example in enumerate(sub.get("x-invalid-examples", [])):
+            if not problems(example, sub, f"{at}/x-invalid-examples/{i}", doc, base):
+                out.append(f"{at}/x-invalid-examples/{i}: {short(example)} is valid here, but it is listed as invalid")
     return out
 
 
@@ -430,6 +455,16 @@ SCHEMA_SELFTEST = [
     ("a $ref to a missing entry is refused", {"$ref": "#/$defs/n"}, False),
     ("a keyword check.py doesn't implement is refused", {"contains": {}}, False),
     ("an x- keyword is a note", {"x-note": "anything"}, True),
+]
+
+# Examples: (name, schema, whether its examples sit on the right side).
+EXAMPLES_SELFTEST = [
+    ("an example has to pass its schema", {"type": "integer", "examples": ["x"]}, False),
+    ("an invalid example has to fail its schema", {"type": "integer", "x-invalid-examples": [1]}, False),
+    ("examples that pass and invalid examples that fail are right",
+     {"type": "integer", "examples": [1], "x-invalid-examples": ["x"]}, True),
+    ("an invalid example deep inside a schema is checked too",
+     {"properties": {"a": {"type": "integer", "x-invalid-examples": [1]}}}, False),
 ]
 
 
@@ -577,6 +612,10 @@ class Checker:
             got = not schema_problems(schema, schema, "#")
             if got != allowed:
                 self.fail(__file__, f"schema selftest {name!r}: got allowed={got}, want {allowed}")
+        for name, schema, right in EXAMPLES_SELFTEST:
+            got = not example_problems(schema, HERE)
+            if got != right:
+                self.fail(__file__, f"examples selftest {name!r}: got right={got}, want {right}")
         for name, method, licenses, has_license_file, allowed in PROVENANCE_SELFTEST:
             got = not provenance_problems(front_matter(method, licenses), has_license_file)
             if got != allowed:
@@ -611,9 +650,8 @@ class Checker:
                 found = schema_problems(doc, doc, "#")
                 if not isinstance(doc, dict) or doc.get("$schema") != DRAFT or "title" not in doc:
                     found.append(f"#: the root needs \"$schema\": {DRAFT!r} and a title")
-                for sub, at in self.walk(doc, "#") if not found else []:
-                    for i, example in enumerate(sub.get("examples", []) if isinstance(sub, dict) else []):
-                        found += problems(example, sub, f"{at}/examples/{i}", doc, dirpath)
+                if not found:
+                    found = example_problems(doc, dirpath)
                 for message in found:
                     self.fail(path, message)
                 if not found:
@@ -638,11 +676,6 @@ class Checker:
             for name in names:
                 if name.endswith(".schema.json") and name not in used:
                     self.fail(os.path.join(dirpath, name), "no JSON file next to it validates against it")
-
-    def walk(self, node, at):
-        yield node, at
-        for sub, where in subschemas(node, at):
-            yield from self.walk(sub, where)
 
     def robert(self):
         path = os.path.join(HERE, "robert", "webhook.json")
