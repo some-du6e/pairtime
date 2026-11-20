@@ -17,7 +17,8 @@
 //
 // Requests use path-style URLs, https://<endpoint>/<bucket>/<key>, unless
 // the configuration asks for virtual-hosted ones. A single put is capped
-// at 5 GiB, as S3 and R2 cap PutObject; there is no multipart upload yet.
+// at MaxPutSize, R2's cap, which is 5 MiB under S3's 5 GiB. There is no
+// multipart upload yet; PLAN WP-OP1 adds it for the nightly snapshots.
 //
 // The package never logs. Its errors name the call, the bucket, the key,
 // the HTTP status and the S3 error code, and never a credential, a
@@ -51,12 +52,16 @@ var (
 	// ErrExists: a write-once put found the key already there, and the
 	// store kept what it had.
 	ErrExists = errors.New("objstore: the key already exists")
-	// ErrTooLarge: the body is bigger than one PutObject may be.
+	// ErrTooLarge: the body is bigger than one PutObject may be. Put
+	// refuses a body over MaxPutSize before sending it, and a store's own
+	// EntityTooLarge answer wraps ErrTooLarge too.
 	ErrTooLarge = errors.New("objstore: too large for a single put")
 )
 
-// MaxPutSize is the largest body one PutObject takes on S3 and R2: 5 GiB.
-const MaxPutSize = 5 << 30
+// MaxPutSize is the largest body one PutObject takes on every store
+// pairtimed uses. R2 takes at most 5 MiB less than 5 GiB in one request
+// (R2's limits page, modified 2026-10-30), which is under S3's 5 GiB.
+const MaxPutSize = 5<<30 - 5<<20
 
 // DefaultRegion is R2's region, which it asks every client to sign with.
 const DefaultRegion = "auto"
@@ -290,7 +295,8 @@ type Error struct {
 	// RequestID is the store's id for the request, for its support.
 	RequestID string
 	// Err is what the error wraps: ErrNotFound, ErrNoSuchBucket,
-	// ErrExists, or the transport's error when no answer came.
+	// ErrExists, ErrTooLarge, or the transport's error when no answer
+	// came.
 	Err error
 }
 
@@ -459,6 +465,9 @@ func (c *Client) answerError(r request, resp *http.Response) *Error {
 		e.Err = ErrNotFound
 	case resp.StatusCode == http.StatusPreconditionFailed:
 		e.Err = ErrExists
+	case e.Code == "EntityTooLarge":
+		// A store whose cap is under MaxPutSize says so this way.
+		e.Err = ErrTooLarge
 	}
 	return e
 }

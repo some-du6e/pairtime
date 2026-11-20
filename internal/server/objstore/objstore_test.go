@@ -335,28 +335,35 @@ func (h *hugeBody) Seek(offset int64, whence int) (int64, error) {
 }
 
 func TestPutTooLarge(t *testing.T) {
-	srv := objstoretest.New(t, mainBucket)
-	b := bucket(t, newTestClient(t, srv), mainBucket)
 	tests := []struct {
 		name string
-		put  func() error
+		put  func(*objstoretest.Server, *Bucket) error
+		// wantRequests is how many requests reach the store.
+		wantRequests int
 	}{
-		{name: "a body over 5 GiB fails with ErrTooLarge before it is read", put: func() error {
+		{name: "a body over MaxPutSize, R2's cap for one put, fails with ErrTooLarge before it is read", put: func(_ *objstoretest.Server, b *Bucket) error {
 			_, err := b.Put(context.Background(), "big", &hugeBody{}, PutOptions{})
 			return err
 		}},
-		{name: "a sealed blob over MaxEvidenceSize fails with ErrTooLarge", put: func() error {
+		{name: "a sealed blob over MaxEvidenceSize fails with ErrTooLarge", put: func(_ *objstoretest.Server, b *Bucket) error {
 			_, err := NewEvidence(b).Put(context.Background(), make([]byte, MaxEvidenceSize+1))
+			return err
+		}},
+		{name: "a store's EntityTooLarge answer fails with ErrTooLarge and isn't retried", wantRequests: 1, put: func(srv *objstoretest.Server, b *Bucket) error {
+			srv.Fail(1, http.StatusBadRequest, "EntityTooLarge")
+			_, err := b.Put(context.Background(), "big", strings.NewReader("over a smaller store's cap"), PutOptions{})
 			return err
 		}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if err := tt.put(); !errors.Is(err, ErrTooLarge) {
+			srv := objstoretest.New(t, mainBucket)
+			b := bucket(t, newTestClient(t, srv), mainBucket)
+			if err := tt.put(srv, b); !errors.Is(err, ErrTooLarge) {
 				t.Errorf("error = %v, want ErrTooLarge", err)
 			}
-			if n := len(srv.Requests()); n != 0 {
-				t.Errorf("%d requests were sent", n)
+			if n := len(srv.Requests()); n != tt.wantRequests {
+				t.Errorf("%d requests were sent, want %d", n, tt.wantRequests)
 			}
 		})
 	}
