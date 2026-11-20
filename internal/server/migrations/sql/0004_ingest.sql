@@ -48,10 +48,10 @@ CREATE TABLE witness_rows (
 CREATE INDEX witness_rows_received_at_ms ON witness_rows (received_at_ms);
 
 -- minute_buckets is each device's current revision of each minute, as the
--- JSON of pkg/event's MinuteBucket.Shareable() that ingest parsed, under
--- the device owner's account. earlier is a JSON array of the revisions it
--- replaced, oldest first, each {"rev", "received_at_ms", "bucket"}, for the
--- bundle's buckets.json (E-check-readings).
+-- JSON of the bucket ingest parsed (pkg/event's MinuteBucket.Shareable()
+-- with agent_only, D-bucket-agent-only), under the device owner's account.
+-- revisions counts the revisions of the minute ingest stored, this one
+-- included, which ingest-v1 2.7 bounds.
 CREATE TABLE minute_buckets (
     device_id TEXT NOT NULL,
     minute_ms BIGINT NOT NULL,
@@ -60,13 +60,29 @@ CREATE TABLE minute_buckets (
     state TEXT NOT NULL,
     received_at_ms BIGINT NOT NULL,
     bucket TEXT NOT NULL,
-    earlier TEXT NOT NULL,
+    revisions BIGINT NOT NULL,
     PRIMARY KEY (device_id, minute_ms)
 );
 
 CREATE INDEX minute_buckets_minute_ms ON minute_buckets (minute_ms);
 
 CREATE INDEX minute_buckets_account_minute ON minute_buckets (account_id, minute_ms);
+
+-- minute_bucket_revisions keeps every revision ingest stored, the current
+-- one included, with its received_at, for the bundle's buckets.json (DESIGN
+-- 7.8 as the decision E-check-readings words it). Each revision is a row of
+-- its own, so storing one costs the same however many came before it.
+CREATE TABLE minute_bucket_revisions (
+    device_id TEXT NOT NULL,
+    minute_ms BIGINT NOT NULL,
+    rev BIGINT NOT NULL,
+    account_id TEXT NOT NULL,
+    received_at_ms BIGINT NOT NULL,
+    bucket TEXT NOT NULL,
+    PRIMARY KEY (device_id, minute_ms, rev)
+);
+
+CREATE INDEX minute_bucket_revisions_minute_ms ON minute_bucket_revisions (minute_ms);
 
 -- commit_records is each device's commit records (DESIGN 4.3, 5.8) as
 -- ingest parsed them, with when the server first had each one.
@@ -94,3 +110,20 @@ CREATE TABLE device_labels (
 );
 
 CREATE INDEX device_labels_received_at_ms ON device_labels (received_at_ms);
+
+-- request_origins is where each upload ingest processed came from: the IP
+-- Cloudflare saw (CF-Connecting-IP) and its JA4 TLS fingerprint (CF-JA4)
+-- when the plan sends one, for Fraud Squad's desk (DESIGN 3.10, 4.4; SP
+-- 8.7). The retention job deletes each row 30 days after seen_at_ms.
+CREATE TABLE request_origins (
+    id TEXT PRIMARY KEY,
+    device_id TEXT NOT NULL,
+    account_id TEXT NOT NULL,
+    ip TEXT NOT NULL,
+    ja4 TEXT,
+    seen_at_ms BIGINT NOT NULL
+);
+
+CREATE INDEX request_origins_seen_at_ms ON request_origins (seen_at_ms);
+
+CREATE INDEX request_origins_device_id ON request_origins (device_id);

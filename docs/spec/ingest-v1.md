@@ -6,7 +6,7 @@ This is how a pairtime client sends tier-1 data to `pairtimed`: `POST /api/v1/in
 
 ## 1. Conventions
 
-- Times are Unix milliseconds, UTC, written as decimal integers, the unit of `pkg/event`'s `t` (ledger-v1 1). Two exceptions keep the forms their sources use: a bucket's `minute` is an RFC 3339 string, as `encoding/json` writes `pkg/event`'s `time.Time`, and a commit's `author_time` and `committer_time` are Unix seconds, git's unit (`internal/adapters/git`).
+- Times are Unix milliseconds, UTC, written as decimal integers, the unit of `pkg/event`'s `t` (ledger-v1 1). The times in a body, a bucket's `minute` and a commit's `observed_at`, are on the device's own clock and never corrected. Only `X-Pairtime-Time` is corrected (2.1). Two exceptions keep the forms their sources use: a bucket's `minute` is an RFC 3339 string, as `encoding/json` writes `pkg/event`'s `time.Time`, and a commit's `author_time` and `committer_time` are Unix seconds, git's unit (`internal/adapters/git`).
 - Hex is lowercase. A hash is 64 hex digits, a signature 128.
 - A *key* is an opaque key: 1 to 128 ASCII characters, each one of `A-Z a-z 0-9 _ -` (ledger-v1 1, `pkg/event`'s `isKey`). `device_id` and project keys are keys.
 - JSON is RFC 8259, UTF-8. An integer member is a JSON number with no fraction or exponent.
@@ -38,7 +38,7 @@ User-Agent: pairtime-agent/<version>
 | `Idempotency-Key` | A UUIDv7 (RFC 9562 section 5.7) in lowercase canonical form, `xxxxxxxx-xxxx-7xxx-Nxxx-xxxxxxxxxxxx` with `N` one of `8 9 a b`, 36 characters. A new one for each new body; a retry of the same body keeps it (2.10). |
 | `Content-Type` | `application/json`, optionally with `; charset=utf-8`. |
 | `Content-Encoding` | `gzip`: the body is one gzip member (RFC 1952) holding the JSON of 2.3, with nothing after it. |
-| `X-Pairtime-Device` | The device's `device_id`, the key the token belongs to. |
+| `X-Pairtime-Device` | The device's `device_id`: the per-install id the client's ledger made at install and writes into every event, which `pairtime login` registers with the token (WP-SV3). Receipts sign it (2.8), and every bucket names it (2.3.2). |
 | `X-Pairtime-Req` | The request counter, a decimal integer from 1 to 9223372036854775807 with no sign and no leading zeros. Each request the server processes must carry a counter greater than every counter it processed for the device before (2.5 step 13). |
 | `X-Pairtime-Time` | The client's clock, corrected by the offset it learned from `X-Pairtime-Time` on earlier responses, as a decimal integer of Unix milliseconds with no sign and no leading zeros. |
 | `X-Pairtime-Body-SHA256` | The SHA-256 of the raw body as 64 lowercase hex digits: the same 64 characters that end `M`. |
@@ -65,7 +65,7 @@ seed       = 7bf821b60e33d7e00abe88a5e7e8e31715789eacda1a3ac3eea47eca45c210c1
 public key = fadacf1c88bce8152ec27995a05aa8d9c53ac5678801cdd2e05b19060398a677
 ```
 
-The body holds one batch root, a valid batch 1 with `n = 3`, `R_b` = 32 bytes of `0xaa`, `prev` = zero(32) and `H_b = SHA-256(0x03 || prev || R_b || u64(3) || u64(1))` (ledger-v1 6), gzipped by Python's `gzip.compress(json, compresslevel=9, mtime=0)` into 129 bytes. Any gzip writer is fine; the hash is over whatever bytes go on the wire.
+The body holds one batch root, a valid batch 1 with `n = 3`, `R_b` = 32 bytes of `0xaa`, `prev` = zero(32) and `H_b = SHA-256(0x03 || prev || R_b || u64(3) || u64(1))` (ledger-v1 6), gzipped into 129 bytes: the 10-byte header `1f8b 08 00 00000000 02 03` (no flags, mtime 0, XFL 2, OS 3), zlib's level-9 raw deflate of the JSON, then its CRC-32 and length. That is what Python 3.11 and 3.12's `gzip.compress(json, 9, mtime=0)` give on Linux; other writers give other bytes. Any of them is fine on the wire, because the hash is over whatever bytes go there, so a test of signing starts from `raw` as given.
 
 ```text
 json = {"batches":[{"b":1,"n":3,"R_b":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","H_b":"709a14e467695dbaddf729b36d14c2629ba332116c1942c8a21a8e1d21309123","prev":"0000000000000000000000000000000000000000000000000000000000000000"}]}
@@ -116,7 +116,7 @@ DESIGN 4.3's `{b, n, R_b, H_b, prev}`, exactly these five members:
 
 #### 2.3.2 Minute buckets
 
-A bucket is the JSON that `encoding/json` writes for `pkg/event`'s `MinuteBucket.Shareable()`: DESIGN 4.3's `{v, params, minute, device, slots[4]{p, cr, why, kind, ev, lbl}, credited_s, uncredited{code: s}, agent_running_s, state, witness, rev}`, which `event.Tier1BucketFields` and `event.Tier1SlotFields` pin. It never holds `anchors`, the event ids that stay on the device (DESIGN 4.1 E-5): a bucket with that member is refused as `unknown_field`.
+A bucket is the JSON that `encoding/json` writes for `pkg/event`'s `MinuteBucket.Shareable()`: DESIGN 4.3's `{v, params, minute, device, slots[4]{p, cr, why, kind, ev, lbl}, credited_s, uncredited{code: s}, agent_running_s, state, witness, rev}`, which `event.Tier1BucketFields` and `event.Tier1SlotFields` pin, and `agent_only{p: s}`, which the decision D-bucket-agent-only adds to tier 1 and WP-EV3 adds to `pkg/event`. It never holds `anchors`, the event ids that stay on the device (DESIGN 4.1 E-5): a bucket with that member is refused as `unknown_field`.
 
 | Member | Type | Form |
 |---|---|---|
@@ -128,6 +128,7 @@ A bucket is the JSON that `encoding/json` writes for `pkg/event`'s `MinuteBucket
 | `credited_s` | number | Seconds, 0 to 60 |
 | `uncredited` | object | Optional. Each member's name is an uncredited reason code of SM 5.2 (`pkg/event`'s `Reason.Uncredited`) and its value seconds, 0 to 60; at most 64 members |
 | `agent_running_s` | number | Seconds, 0 to 60 |
+| `agent_only` | object | Optional. For each project key, the seconds in the minute a turn of that project ran and weren't credited to that project: SM 2.6's agent-only seconds, which the chess clock shows (D-bucket-agent-only). Each member's name is a project key, as `slots[].p`, and its value seconds, 0 to 60 in steps of 0.5; at most 64 members. Absent and `{}` both mean none |
 | `state` | string | `pending`, `final`, `provisional` or `restored` |
 | `witness` | string | `witnessed`, `offline` or `backfilled`. It is the client's own reading, stored as sent; the server's witness label is WP-SV6's |
 | `rev` | integer | The revision, 0 to 4294967295 |
@@ -152,19 +153,21 @@ DESIGN 4.3's `{sha, parents, project, observed_at, author_time, committer_time, 
 | Member | Type | Form |
 |---|---|---|
 | `sha` | string | The commit id, 40 or 64 hex digits |
-| `parents` | array or `null` | Commit ids of the same form, at most 1,024; `null` or `[]` for a root commit |
+| `parents` | array or `null` | Distinct commit ids of the same form, at most 1,024; `null` or `[]` for a root commit |
 | `project` | string | A project key |
-| `observed_at` | integer | When the device first saw the commit, Unix ms from 2020 to 2099 |
-| `author_time` | integer | The commit's author date, Unix seconds, 0 to 4102444799 |
-| `committer_time` | integer | The commit's committer date, Unix seconds, 0 to 4102444799 |
-| `files_changed` | integer | 0 to 2147483647 |
-| `insertions` | integer | 0 to 2147483647 |
-| `deletions` | integer | 0 to 2147483647 |
-| `path_hmacs` | array | Optional. Keys of the changed paths in WP-AD2's keyed form, at most 1,024 |
-| `credited_seconds_since_parent` | number | Optional. Seconds, 0 to 1e9 |
-| `rewrites` | array | Optional. At most 1,024 objects `{"old_sha", "new_sha"}`, each a commit id |
+| `observed_at` | integer | When the device first saw the commit, Unix ms from 2020 to 2099, on the device's clock |
+| `author_time` | integer | The commit's author date in Unix seconds as git stores it, 0 to 9223372036854775807. The server only compares it with its own clocks |
+| `committer_time` | integer | The commit's committer date, in the same form |
+| `files_changed` | integer | Optional: absent when the client couldn't read the commit's shortstat. 0 to 2147483647 |
+| `insertions` | integer | Optional, as `files_changed`. 0 to 2147483647 |
+| `deletions` | integer | Optional, as `files_changed`. 0 to 2147483647 |
+| `path_hmacs` | array | Optional. Distinct keys of the changed paths in WP-AD2's keyed form, at most 1,024. A commit that changed more than 1,024 paths leaves the member out, and the record still goes up |
+| `credited_seconds_since_parent` | object | Optional. Split by activity kind (DESIGN 5.8; SM 5.3): each member's name is an activity kind of SM 5.1 and its value seconds, 0 to 1e9; at most 8 members |
+| `rewrites` | array | Optional. At most 2,000 distinct objects `{"old_sha", "new_sha"}`, each a commit id: the commits this one replaced through an amend, a rebase or a squash. 2,000 is the most a rebase maps (`internal/adapters/git`'s `maxRebase`) |
 | `actor` | string | `human`, `agent` or `unknown` |
-| `agent_trailer` | string | Optional. A key naming the agent a trailer credits, such as `claude`; never the trailer itself |
+| `agent_trailer` | string | Optional. One of `aider`, `claude`, `lovable` and `replit`: the agent a co-author trailer, Replit's trailer or a bot author credits, the values `internal/adapters/git` writes. Never the trailer itself, which can hold a person's name, so the list is closed and a new agent reaches the server first |
+
+A list with an entry twice is refused as `bad_rule`, with the list as `field`.
 
 #### 2.3.4 Labels
 
@@ -175,7 +178,7 @@ DESIGN 4.3's `{client_build, scoring_version, params, harnesses[{name, version}]
 | `client_build` | string | The client's version, such as `v0.1.0`: 1 to 64 characters of `A-Z a-z 0-9 . _ + -`, starting with a letter or digit |
 | `scoring_version` | string | `N.N.N`, as a bucket's `v` |
 | `params` | string | `sha256:` and 64 hex digits |
-| `harnesses` | array | At most 16 objects `{"name", "version"}`: `name` a harness of `pkg/event`'s `Harness` list other than `none`, `version` in `client_build`'s form; no name twice |
+| `harnesses` | array | At most 16 objects `{"name", "version"}`: `name` a harness of `pkg/event`'s `Harness` list other than `none`, at most once (`bad_rule` otherwise); `version` optional, in `client_build`'s form. The client sends each harness it saw once, `other` included, with the version it saw last when that is in `client_build`'s form, and with no version otherwise |
 | `typing_module` | boolean | Whether the opt-in typing module is on |
 | `vm` | boolean | Whether the device is labeled as a VM (DESIGN 6.2 D17) |
 
@@ -195,7 +198,7 @@ A client splits a larger upload across requests.
 
 ### 2.5 Checks, in order
 
-The server checks a request in this order and answers the first failure with the refusal of 2.6. Steps 1 to 12 read but write nothing; step 13 and after run as one transaction in the server's writer.
+The server checks a request in this order and answers the first failure with the refusal of 2.6. Steps 1 to 12 read but write nothing, and so do the item forms of 2.3 and `MinuteBucket.Validate`, which the server checks after step 12 and before the writer; step 13 and after run as one transaction in the server's writer.
 
 1. Ingest is set up on this server: a device store and the server's signing key. Otherwise 503 `ingest_off`.
 2. `Authorization` holds a `Bearer` token: otherwise `token_missing`. The token passes its CRC32 checksum before any lookup and names a device: otherwise `token_invalid`. The device isn't revoked: otherwise `device_revoked`.
@@ -206,10 +209,10 @@ The server checks a request in this order and answers the first failure with the
 7. `X-Pairtime-Time` is within 300,000 ms of the server's clock, either way: otherwise `clock_skew`. The response's `X-Pairtime-Time` is what the client corrects by.
 8. The raw body fits 2.4's limit: otherwise `body_too_large`, or `body_unreadable` when reading it fails.
 9. `hex(SHA-256(raw body))` equals `X-Pairtime-Body-SHA256`: otherwise `body_hash_mismatch`.
-10. The signature verifies over `M` under the device's registered key: otherwise `signature_invalid`.
+10. The signature verifies over `M` under the device's registered key: otherwise `signature_invalid`. Then the device is within its rate, a bucket of 30 requests that refills one every 10 s (SP 8.6), with no other request of its in flight: otherwise 429 `rate_limited`. Only a signed request counts against the rate, so nobody without the device's key can use it up.
 11. The raw body is one gzip member with nothing after it, and inflates within 2.4's limit: otherwise `gzip_invalid` or `decompressed_too_large`.
 12. The inflated bytes are one JSON value in valid UTF-8 (`json_invalid`), an object with only 2.3's members in their types (`body_shape`), within 2.4's counts (`too_many_batches`, `too_many_buckets`, `too_many_commits`).
-13. In the writer's transaction: if the device's most recent processed request had this `Idempotency-Key`, the server answers with that request's response, byte for byte, and changes nothing, when the raw body's SHA-256 is the one it had; when it isn't, 422 `idempotency_key_reused`. Otherwise `X-Pairtime-Req` must be greater than the device's stored counter: otherwise 409 `counter_stale`.
+13. In the writer's transaction: if the device's most recent processed request had this `Idempotency-Key`, the server answers with that request's response, byte for byte, and changes nothing, when the raw body's SHA-256 is the one it had; when it isn't, 422 `idempotency_key_reused`. Otherwise `X-Pairtime-Req` must be greater than the device's stored counter: otherwise 409 `counter_stale`. The server may give these answers from a read before the writer, and checks again inside it.
 14. The items, in order: the batch roots in array order, then the buckets, then the commits, then the labels (2.7). The counter becomes `X-Pairtime-Req`, and the response is stored with the `Idempotency-Key` as the device's most recent.
 
 ### 2.6 Request refusals
@@ -227,7 +230,7 @@ A request refused as a whole gets one of these statuses and this body, where `de
 | 401 | `token_invalid` | The token fails its checksum or names no device | Sign in again |
 | 403 | `device_revoked` | The device was revoked | Stop uploading; the device signs in again as a new device |
 | 403 | `device_mismatch` | `X-Pairtime-Device` is missing or isn't the token's device | Fix the client |
-| 403 | `device_key_missing` | The device hasn't registered its key | Register it (WP-SV3), then retry |
+| 403 | `device_key_missing` | The device has no registered key | Sign in again (`pairtime login`). WP-SV3 binds the key in the sign-in itself, and the token alone can't set or replace it |
 | 400 | `idempotency_key_malformed` | Missing, repeated, or not a lowercase UUIDv7 | Fix the client |
 | 400 | `counter_malformed` | Missing, repeated, or not 1 to 2^63 - 1 in the form of 2.1 | Fix the client |
 | 400 | `time_malformed` | Missing, repeated, or not a decimal integer in the form of 2.1 | Fix the client |
@@ -239,7 +242,7 @@ A request refused as a whole gets one of these statuses and this body, where `de
 | 413 | `body_too_large` | The raw body is over 262,144 bytes | Split the upload |
 | 400 | `body_unreadable` | The body couldn't be read, as when the connection broke off | Retry the same body and key |
 | 400 | `body_hash_mismatch` | The raw body's SHA-256 isn't `X-Pairtime-Body-SHA256` | Retry; the body changed on the way |
-| 401 | `signature_invalid` | The signature doesn't verify under the device's registered key | Check the key against the registered one; never retry blindly |
+| 401 | `signature_invalid` | The signature doesn't verify under the device's registered key. The body adds `device_key_id`, that key's id in `key_id`'s form (2.8), a number of the server's and nothing the request sent | Compare `device_key_id` with the id of the device's own key. On a mismatch, sign in again; on a match, stop and report it (`pairtime doctor`). Never retry blindly |
 | 400 | `gzip_invalid` | Not one valid gzip member, or bytes after it | Fix the client |
 | 413 | `decompressed_too_large` | It inflates past 4,194,304 bytes | Split the upload |
 | 400 | `json_invalid` | Not valid JSON, more than one JSON value, or not valid UTF-8 | Fix the client |
@@ -249,6 +252,7 @@ A request refused as a whole gets one of these statuses and this body, where `de
 | 413 | `too_many_commits` | More than 500 commit records | Split the upload |
 | 422 | `idempotency_key_reused` | The key is the device's most recent request's, with another body | Use a new key for a new body |
 | 409 | `counter_stale` | `X-Pairtime-Req` is at or below the stored counter | Read `GET /api/v1/ingest/state`, continue above its `req`, and sign again |
+| 429 | `rate_limited` | The device is past its rate, or another of its requests is in flight (step 10) | Retry the same body and key after `Retry-After` |
 | 503 | `unavailable` | The device store or the database failed | Retry the same body and key after `Retry-After` |
 
 Other methods on the path get 405 from the router. A refused request stores nothing and moves no counter, so a retry after any refusal is checked from step 1 again.
@@ -264,7 +268,7 @@ Steps 13 and 14 run in one transaction of the writer goroutine (DESIGN 3.10), wh
 1. passes 2.3.1's forms (codes of 2.9);
 2. has `n` at least 1 (`batch_empty`), and `H_b = SHA-256(0x03 || prev || R_b || u64(n) || u64(b))`, ledger-v1 6 (`head_mismatch`);
 3. if the server already stored batch `b` of this device: is `duplicate` when `n`, `R_b`, `H_b` and `prev` all equal the stored ones, and answers with the stored receipt; otherwise `batch_conflict`, and the stored row stays;
-4. if the server holds no batch of this device: starts the device's witnessed chain at `b`. Batch 1 must have `prev` = 64 zeros (`prev_mismatch`); a later `b` takes its `prev` as given, ledger-v1 6's one exception, for a device that left local-only mode with batches it never sent;
+4. if the device has no stored head, neither in its state nor, when its state is gone, in a witness row a submission still holds: starts the device's witnessed chain at `b`. Batch 1 must have `prev` = 64 zeros (`prev_mismatch`); a later `b` takes its `prev` as given, ledger-v1 6's one exception, for a device whose first witnessed batch isn't its first batch (7 item 6). When its state is gone, the head is the highest witness row the server still holds;
 5. otherwise, with the stored head at batch `h`: `b` above `h + 1` is `chain_gap`; `b` at or below `h` with no stored row, because it is before the chain's start or its row passed its retention period, is `before_chain`; `b = h + 1` needs `prev` equal to the stored `H_h` (`prev_mismatch`).
 
 An accepted batch root is stored as the witness row `(device_id, b, n_b, R_b, H_b, received_at)` with `prev` and its receipt, and becomes the device's head.
@@ -272,14 +276,14 @@ An accepted batch root is stored as the witness row `(device_id, b, n_b, R_b, H_
 **Minute buckets.** A bucket passes 2.3.2's forms and `MinuteBucket.Validate`, names this device (`wrong_device`), and has a `minute` that starts no more than 300 s after the server's clock (`future_minute`) and less than 180 days before it (`expired_minute`), the period DESIGN 4.4 keeps per-minute detail. Then, for the same device and minute:
 
 - with nothing stored, it is stored: `accepted`;
-- with a lower `rev` stored, it replaces it: `accepted`;
+- with a lower `rev` stored, it replaces it: `accepted`. A minute keeps at most 128 revisions: once it has 128, a higher `rev` is refused as 409 `too_many_revisions`, and the stored one stays. DESIGN 3.7's 900 s pending window, with an upload at most every 10 s, gives about 90;
 - with the same `rev` stored and the same bucket, nothing changes: `duplicate`;
 - with the same `rev` stored and a different bucket, the stored one stays: `rev_conflict`;
 - with a higher `rev` stored, nothing changes: `superseded`.
 
-The server keeps every revision it accepted with its `received_at`: the current one, and the ones it replaced beside it, for the bundle's `buckets.json` (E-check-readings). Each bucket is stored under the device owner's account, and the account's rollups move from the replaced revision to the new one in the same transaction (WP-SV7).
+The server keeps every revision it accepted, each as a row of its own with its `received_at`, for the bundle's `buckets.json`: DESIGN 7.8's row, as the decision E-check-readings words it, carries the buckets "with `received_at` and revisions". Each bucket is stored under the device owner's account, and the account's rollups move from the replaced revision to the new one in the same transaction (WP-SV7).
 
-**Commit records** pass 2.3.3's forms and are stored per device and `sha`: `accepted` the first time, `duplicate` when the stored record is the same, `updated` when it differs, and the new one replaces it.
+**Commit records** pass 2.3.3's forms and are stored per device and `sha` with `server_first_seen_at`, the `received_at` of the request that first stored the record (DESIGN 5.8): `accepted` the first time, `duplicate` when the stored record is the same, and `updated` when it differs, when the new record replaces the stored one and `server_first_seen_at` stays. The account's first sighting of a commit is the earliest across its devices.
 
 **Labels** pass 2.3.4's forms and replace the device's stored labels: `accepted`.
 
@@ -307,6 +311,7 @@ A request that reached step 14 gets 200, even when every item was refused, with 
 - `batches`, `buckets` and `commits` are always present. Element `k` answers item `k` of the request's array of the same name, and an array the request didn't send is `[]`. `labels` is the labels' result, or `null` when the request sent none.
 - Each result has `status`, an HTTP status for that item alone (200 stored or already there, 409 refused because of what the server holds, 422 refused for what the item is), and `code` from 2.9. A shape code or `bad_rule` adds `field`, the item's first offending member as a JSON path in DESIGN 4.3's names, such as `slots[2].p`, `uncredited` or `parents[0]`; for `unknown_field` it is the path of the object that holds the member, `""` for the item itself, and never the member's own name. No result repeats a string the request sent.
 - A batch result has `b` once `b` passed its form, and a `receipt` when its code is `accepted` or `duplicate`.
+- A bucket result adds `rev`, the revision the server holds, when its code is `superseded`, `rev_conflict` or `too_many_revisions`.
 
 A receipt is ledger-v1 7's, in JSON:
 
@@ -348,6 +353,7 @@ And by kind:
 | Bucket | 200 | `duplicate` | The same revision is already stored |
 | Bucket | 200 | `superseded` | A higher revision is stored; nothing changed |
 | Bucket | 409 | `rev_conflict` | The same `rev` is stored with a different bucket; the stored one stays |
+| Bucket | 409 | `too_many_revisions` | The minute has 128 revisions stored; the stored one stays |
 | Bucket | 422 | `bad_rule` | It breaks a rule of `event.MinuteBucket.Validate`; `field` names the member that rule names |
 | Bucket | 422 | `wrong_device` | `device` isn't `X-Pairtime-Device` |
 | Bucket | 422 | `future_minute` | `minute` starts more than 300 s after the server's clock |
@@ -355,10 +361,13 @@ And by kind:
 | Commit | 200 | `accepted` | Stored |
 | Commit | 200 | `duplicate` | The same record is already stored |
 | Commit | 200 | `updated` | It replaced a different record of the same commit from this device |
+| Commit | 422 | `bad_rule` | `parents`, `path_hmacs` or `rewrites` has an entry twice; `field` names the list |
 | Labels | 200 | `accepted` | Stored as the device's labels |
 | Labels | 422 | `bad_rule` | A harness is named twice; `field` is `harnesses` |
 
-Sending an item again that got 200 changes nothing: it comes back `duplicate` or `superseded`. An item refused with 422 is refused for what it is, and gets the same answer every time, apart from a `future_minute` once its minute has come. `batch_conflict` and `rev_conflict` keep the stored row, so sending the item again changes nothing. `chain_gap`, `before_chain` and `prev_mismatch` depend on the stored head: the client reads it and sends from there (section 5). Of whole requests, only 2.6's refusals that say so are worth a retry.
+Sending a batch root or a bucket revision again that got 200 changes nothing: it comes back `duplicate` or `superseded`. Commit records and labels are last-write-wins: a commit record comes back `duplicate` only when it equals the stored one, and labels always come back `accepted`.
+
+No resend changes a 422, apart from `future_minute` once the server's clock is within 300 s of the minute, and none changes `batch_conflict`, `before_chain`, `rev_conflict` or `too_many_revisions` (a newer bucket goes up with a higher `rev`). A `chain_gap` root goes through once the missing batches are stored, so the client sends from the stored head (5.3). `prev_mismatch` on batch 1, or on the batch after the stored head, means the device's chain and the server's have forked (5.3). Of whole requests, only 2.6's refusals that say so are worth a retry.
 
 ### 2.10 Retries and idempotency
 
@@ -366,7 +375,7 @@ A device sends one ingest request at a time and waits for its answer.
 
 A retry of the same body keeps its `Idempotency-Key` and body and is signed again with a new counter and a fresh time; re-sending the identical signed bytes also works while its `X-Pairtime-Time` is within 300 s. When the first attempt reached step 14, the retry gets that response back byte for byte, with `X-Pairtime-Replay: true` added, and nothing changes. When it didn't, the retry is processed as a new request.
 
-The server keeps the response of each device's most recent processed request only. A request with an older key is processed as a new one, and that is safe because every item is idempotent on its own: a batch root already stored is a `duplicate` with its first receipt, a bucket revision already stored is a `duplicate` or `superseded`, and a commit record already stored is a `duplicate`. So a client that lost receipts gets them back by sending the same batch roots again.
+The server keeps the response of each device's most recent processed request only. A request with an older key is processed as a new one. That is safe for batch roots and bucket revisions, which are idempotent on their own: a batch root already stored is a `duplicate` with its first receipt, and a bucket revision already stored is a `duplicate` or `superseded`. Commit records and labels are last-write-wins, so the client sends them only in their current form. A client that lost receipts gets them back by sending the same batch roots again, alone.
 
 ## 3. `GET /api/v1/ingest/state`
 
@@ -376,10 +385,14 @@ What a client needs to resume: the device's counter and the head of its chain.
 GET /api/v1/ingest/state
 Authorization: Bearer ptd_...
 X-Pairtime-Device: <device_id>
+X-Pairtime-Time: <unix ms>
+X-Pairtime-Signature: ed25519=<base64 Ed25519(device_key, M_state)>
 User-Agent: pairtime-agent/<version>
+
+M_state = "pairtime-ingest-state-v1\n" || device_id || "\n" || time
 ```
 
-No signature: the answer holds nothing the token's holder couldn't learn by uploading. Steps 1 to 3 of 2.5 apply, with the same refusals. The response is 200:
+The device signs the request, as it signs an upload, because the counter and the head's time change with every upload, and anyone holding a leaked token could otherwise read when the device's owner works (DESIGN 4.5: the device key stops a stolen bearer token). `M_state` has no counter and no body, so it still works after `counter_stale`, and its context string differs from `M`'s, so neither kind of signature passes for the other. Steps 1 to 4 of 2.5 apply, then the forms of `X-Pairtime-Time` and `X-Pairtime-Signature` (step 5), the clock (step 7) and the signature over `M_state` (step 10), with the same refusals. The response is 200:
 
 ```json
 {
@@ -395,7 +408,7 @@ No signature: the answer holds nothing the token's holder couldn't learn by uplo
 |---|---|
 | `device` | The device's `device_id` |
 | `req` | The highest counter the server processed for the device, 0 before its first request. The next request uses a higher one |
-| `head` | The stored head, `{"b", "H_b", "received_at"}`, or `null` before the first batch. The next batch root is `b + 1` with `prev = H_b` |
+| `head` | The stored head, `{"b", "H_b", "received_at"}`, or `null` before the first batch. The server takes batch `b + 1` next, and only with `prev` equal to this `H_b`; a device whose own head at `b` differs has forked (5.3) |
 | `chain_start` | The first batch of the device's witnessed chain, or `null` before the first batch (2.7 step 4) |
 | `server_key` | The key receipts are signed with now: its id and its 32-byte Ed25519 public key in hex. Until `/.well-known/pairtime-keys.json` (WP-SV17) publishes the keys with their validity dates, this is where a client gets the key to check receipts against |
 
@@ -411,11 +424,11 @@ No authentication. The response is 200 with `{"server_time": 1795089660250}`, th
 ## 5. What the uploader does
 
 1. Keep the counter on disk and write the next value before sending. At start, and after `counter_stale`, read `GET /api/v1/ingest/state` and continue above `max(local, req)`.
-2. Keep a clock offset from the `X-Pairtime-Time` of the latest response, and send the corrected time.
-3. Send batch roots in ascending `b`, from the stored head's `b + 1`. After `prev_mismatch`, `chain_gap` or `before_chain`, read the state and resend from its head. After `batch_conflict`, stop sending batch roots and report the fork: the device's ledger and the server's witness rows disagree, which is a bug or tampering.
-4. Check every receipt with `pkg/ledger.VerifyReceipt` under the server key and store it.
-5. Treat every item code as final, and resend nothing that got one. Retry a whole request only after a refusal in 2.6 that says to, after a 429 or a 5xx, or after a network error, keeping the key and body (2.10), with backoff and `Retry-After` (WP-AG5).
-6. Send labels in the first request after the agent starts, whenever they change, and at least once a day: the server deletes a device's labels 90 days after it last received them (DESIGN 4.4's device row).
+2. Keep a clock offset from the `X-Pairtime-Time` of the latest response, and send the corrected time in `X-Pairtime-Time`. Times in the body stay on the device's clock (section 1).
+3. Batch roots come from the device's own ledger, in ascending `b`, and `prev` is never taken from the state. Start from `head.b + 1`, or, while the state's head is `null`, from the first batch the device sealed after `pairtime login`: batches sealed in local-only mode are never sent, nor the buckets of their minutes, because DESIGN 4.2 says those hours can never be submitted. After reading the state, compare `head.H_b` with the device's own head at `head.b`. If they differ, or the device has no batch `head.b`, the chains have forked. After `chain_gap` or `before_chain`, read the state and send from its head. `batch_conflict`, `prev_mismatch` on batch 1 or on `head.b + 1`, and a 422 on the root at `head.b + 1` each end the chain, because no later root can link past them: stop sending batch roots and report the fork. Forks happen without tampering, as with a home folder restored from an old backup or a reverted VM snapshot. The uploader keeps sending buckets, commit records and labels, tells the teen (`pairtime doctor`), and with their go-ahead signs in again as a new device: a new token, device key and `device_id`, whose ledger starts a new chain under a new `K_dev`, keeping the old ledger and key read-only, as ledger-v1 3 does for `pairtime restore`. It runs the fork check at every start, so it finds a fork before sealing batches under numbers the server already holds.
+4. Verify each receipt under the key its `key_id` names: the state's `server_key` when the ids match, and otherwise the key with that id from `/.well-known/pairtime-keys.json` (WP-SV17). Keep a receipt whose key isn't available yet, unverified, and check it once it is. Keep the first valid receipt for each `b` and never replace it: a later receipt for the same `b` and `H_b` with a different `received_at` is a re-dating, which the uploader reports and doesn't store.
+5. Resend nothing that 2.9 says no resend changes. A minute's `rev` only rises: the uploader writes each minute's `rev` to disk before sending it, and after `rev_conflict` or `superseded` it sends its current bucket again with a `rev` above the result's `rev`. Hold a `future_minute` bucket, and send its latest revision once its minute is no more than 300 s ahead of the corrected clock. Retry a whole request only after a refusal in 2.6 that says to, a 429, a 5xx or a network error, keeping the key and body (2.10), with backoff and `Retry-After` (WP-AG5). Act on 2.6's error only in a response that carries `X-Pairtime-Time` and pairtimed's JSON body; any other answer, such as a Cloudflare block page, counts as a network error.
+6. Send labels in the first request after the agent starts, and whenever they change.
 
 ## 6. Storage
 
@@ -423,11 +436,13 @@ For reviewers and later work packages; the client never sees it. Migration `0004
 
 | Table | Key | What it holds | Retention (docs/retention.json) |
 |---|---|---|---|
-| `ingest_devices` | `device_id` | The account, the counter, the head, the chain start, and the most recent request's key, body hash and response | `server.witness`: 180 days after the device's last processed request |
+| `ingest_devices` | `device_id` | The account, the counter, the head, the chain start, and the most recent request's key, body hash and response | `server.witness`: 180 days after the device's last processed request. A device whose state is gone keeps its chain through the witness rows still held (2.7 step 4) |
 | `witness_rows` | `(device_id, b)` | `n`, `R_b`, `H_b`, `prev`, `received_at_ms`, the receipt and its key id, and the account | `server.witness`: 180 days after `received_at_ms`, held while a submission uses them (WP-SB4) |
-| `minute_buckets` | `(device_id, minute_ms)` | The current revision of each minute, under the device owner's account, with its `received_at_ms`, and in `earlier` the revisions it replaced, each with its own (E-check-readings) | `server.minute_buckets`: 180 days after `minute_ms`, held while a submission uses them (WP-SB4) |
-| `commit_records` | `(device_id, sha)` | The account, the project key and the record | `server.commits`: while the account exists |
-| `device_labels` | `device_id` | The account and the latest labels | `server.devices`: 90 days after they were last received |
+| `minute_buckets` | `(device_id, minute_ms)` | The current revision of each minute, with `agent_only`, under the device owner's account, with its `received_at_ms` and how many revisions the minute has | `server.minute_buckets`: 180 days after `minute_ms`, held while a submission uses them (WP-SB4) |
+| `minute_bucket_revisions` | `(device_id, minute_ms, rev)` | Every revision stored, the current one included, each with its `received_at_ms` | `server.minute_buckets`, as `minute_buckets`; the job deletes a minute's revisions together |
+| `commit_records` | `(device_id, sha)` | The account, the project key, the record, and `server_first_seen_at` as `first_seen_at_ms` | `server.commits`: while the account exists |
+| `device_labels` | `device_id` | The account and the latest labels | `server.devices`: 90 days after the server last received them, so never longer than DESIGN 4.4's device lifetime plus 90 days |
+| `request_origins` | `id` | For each processed upload, the device, the account, the IP from `CF-Connecting-IP` (the connection's address when the request didn't come through Cloudflare) and the `CF-JA4` fingerprint when the plan sends one, as an address and a JA4 value only, and `seen_at_ms` | `server.ip_ja4`: deleted 30 days after `seen_at_ms` (DESIGN 4.4) |
 
 ## 7. Decisions this spec makes
 
@@ -436,15 +451,20 @@ DESIGN 4.3 and 4.5 give the fields and the rules. These are what they leave open
 1. `X-Pairtime-Body-SHA256` carries the body's hash beside the signature. DESIGN 4.5 refuses "a body whose hash differs", and PLAN's WP-SV4 checks want that refusal and a signature by another key to get different codes. With the hash only inside `M`, a changed body and a wrong key fail the same way.
 2. The raw body that `M` and the hash cover is the gzip stream as sent, so a request is authenticated before the server inflates it.
 3. The signature is padded standard base64; the counter and the time are decimal ASCII with no sign or leading zeros, so each value has one spelling in `M`.
-4. The `Idempotency-Key` is a lowercase UUIDv7, and the server keeps the response of each device's most recent request only. Items are idempotent on their own (2.10), so an older key costs nothing, and the server doesn't hold a reply for every upload.
+4. The `Idempotency-Key` is a lowercase UUIDv7, and the server keeps the response of each device's most recent request only. Batch roots and bucket revisions are idempotent on their own (2.10), so an older key costs nothing for them, and the server doesn't hold a reply for every upload.
 5. Only a request the server processes moves the counter; a refusal or a replay doesn't. A replay is answered before the counter is checked, so re-sending identical bytes works.
-6. A device's first batch may be any `b`, and for `b > 1` its `prev` is taken as given; from then on every batch links to the one before it (ledger-v1 6 leaves this to WP-SV4). A device leaving local-only mode can send its old batch roots from batch 1, which then get late `received_at` values, or start its chain at its current batch.
+6. A device's first witnessed batch may be any `b`, and for `b > 1` its `prev` is taken as given; from then on every batch links to the one before it (ledger-v1 6 leaves this to WP-SV4). A device leaving local-only mode starts its witnessed chain at the first batch it seals after `pairtime login`. It never sends the roots of batches sealed in local-only mode, or the buckets of their minutes, because DESIGN 4.2 says those hours can never be submitted and nothing in a root says which mode sealed it. While a submission holds some of a device's witness rows, the highest of them is its head even after its state is gone, so the exception never applies to a device the server still holds batches of.
 7. 2,000 batch roots per request, beside DESIGN 4.5's limits. It bounds one writer transaction, and 256 KiB of compressed random hashes doesn't hold many more.
 8. One `received_at` per request, the writer transaction's time.
 9. Item results are arrays parallel to the request's, so a refused item is named by its place and the response never repeats a string from the request (DESIGN 4.5's "names the rejected item").
-10. A bucket's minute must start between 180 days before the server's clock and 300 s after it (SP 8.4's 5 minutes; DESIGN 4.4's 180 days).
+10. A bucket's minute must start between 180 days before the server's clock and 300 s after it (SP 8.4's 5 minutes; DESIGN 4.4's 180 days). Unlike SP 8.4's corrected times, the minute is on the device's clock, which the server can't correct, so a device whose clock runs ahead holds a bucket until its minute is within 300 s of the corrected clock (5.5).
 11. For one device and minute, a higher `rev` replaces a lower one, and the same `rev` with a different bucket keeps the first (`rev_conflict`).
-12. The server keeps every bucket revision it accepted, with its `received_at`, beside the current one, because E-check-readings has the bundle's `buckets.json` carry "the buckets as received live ... with `received_at` and revisions".
+12. The server keeps every bucket revision it accepted, each as a row with its `received_at`, because the decision E-check-readings has DESIGN 7.8's `buckets.json` carry "the buckets as received live ... with `received_at` and revisions". A minute keeps at most 128 revisions, so neither one request nor many can make its history grow without end.
 13. The bucket's `witness` is stored as the client sent it. The server's own label, from `received_at` (DESIGN 7.4), is WP-SV6's.
 14. `GET /api/v1/ingest/state` gives the server key until WP-SV17 publishes `/.well-known/pairtime-keys.json`, and each receipt names its key by id.
 15. `GET /api/v1/time` needs no authentication, and every response carries the server's time in `X-Pairtime-Time`.
+16. `GET /api/v1/ingest/state` is signed with the device key over `M_state`, whose context string differs from `M`'s.
+17. Each device's rate is SP 8.6's: a burst of 30 requests, refilled at 6 a minute, one in flight at a time. SP 8.6's separate backlog allowance isn't needed, because a request carries up to 2,000 batch roots and 2,000 buckets, so a week offline catches up within the burst. The rate counts only signed requests.
+18. Each processed upload stores its origin: the IP from `CF-Connecting-IP`, which Cloudflare sets and the tunnel-only origin can trust, and `CF-JA4` where the plan sends it, each kept only in its own form (SP 8.7; DESIGN 4.4's 30 days).
+19. `agent_trailer` is a closed list, because its value isn't keyed and a trailer can hold a person's name. `harnesses[].version` is optional, because hook payloads often carry none.
+20. A device's labels are deleted 90 days after the server last received them. The client sends them at start and on change, so a device in use keeps them, and none outlives DESIGN 4.4's device lifetime plus 90 days.

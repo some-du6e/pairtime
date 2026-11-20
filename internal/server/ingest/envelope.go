@@ -71,6 +71,10 @@ type envelope struct {
 type refusal struct {
 	code   string
 	detail string
+	// retryAfter, when set, is the Retry-After in seconds.
+	retryAfter int
+	// deviceKeyID names the device's registered key, on signature_invalid.
+	deviceKeyID string
 }
 
 func refuse(code, detail string) *refusal { return &refusal{code: code, detail: detail} }
@@ -99,23 +103,60 @@ func parseEnvelope(h http.Header) (envelope, *refusal) {
 	if !ok || e.req < 1 {
 		return e, refuse(CodeCounterMalformed, "X-Pairtime-Req must be one decimal integer from 1 to 9223372036854775807, without a sign or leading zeros.")
 	}
-	if e.timeText, ok = single(h, HeaderTime); ok {
-		e.time, ok = decimal(e.timeText)
-	}
-	if !ok {
-		return e, refuse(CodeTimeMalformed, "X-Pairtime-Time must be one decimal integer of Unix milliseconds, without a sign or leading zeros.")
+	var ref *refusal
+	if e.timeText, e.time, ref = parseTime(h); ref != nil {
+		return e, ref
 	}
 	if e.bodySHA, ok = single(h, HeaderBodySHA256); !ok || !isHex(e.bodySHA, 64) {
 		return e, refuse(CodeBodyHashMalformed, "X-Pairtime-Body-SHA256 must be 64 lowercase hex digits.")
 	}
-	sig, ok := single(h, HeaderSignature)
-	if ok {
-		e.signature, ok = parseSignature(sig)
-	}
-	if !ok {
-		return e, refuse(CodeSignatureMalformed, "X-Pairtime-Signature must be ed25519= and a 64-byte signature in padded base64.")
+	if e.signature, ref = parseSignatureHeader(h); ref != nil {
+		return e, ref
 	}
 	return e, nil
+}
+
+// parseTime reads X-Pairtime-Time, as text and as Unix ms.
+func parseTime(h http.Header) (string, int64, *refusal) {
+	text, ok := single(h, HeaderTime)
+	var t int64
+	if ok {
+		t, ok = decimal(text)
+	}
+	if !ok {
+		return "", 0, refuse(CodeTimeMalformed, "X-Pairtime-Time must be one decimal integer of Unix milliseconds, without a sign or leading zeros.")
+	}
+	return text, t, nil
+}
+
+// parseSignatureHeader reads X-Pairtime-Signature.
+func parseSignatureHeader(h http.Header) ([]byte, *refusal) {
+	v, ok := single(h, HeaderSignature)
+	var sig []byte
+	if ok {
+		sig, ok = parseSignature(v)
+	}
+	if !ok {
+		return nil, refuse(CodeSignatureMalformed, "X-Pairtime-Signature must be ed25519= and a 64-byte signature in padded base64.")
+	}
+	return sig, nil
+}
+
+// stateContext starts the message a GET /api/v1/ingest/state request
+// signs (ingest-v1 3). It differs from an upload's, so neither kind of
+// signature passes for the other.
+const stateContext = "pairtime-ingest-state-v1\n"
+
+// StateMessage returns M_state, the bytes a GET /api/v1/ingest/state
+// request's signature covers (ingest-v1 3):
+//
+//	"pairtime-ingest-state-v1\n" || device_id || "\n" || time
+func StateMessage(deviceID, time string) []byte {
+	m := make([]byte, 0, len(stateContext)+len(deviceID)+1+len(time))
+	m = append(m, stateContext...)
+	m = append(m, deviceID...)
+	m = append(m, '\n')
+	return append(m, time...)
 }
 
 // decimal parses a decimal integer with no sign and no leading zeros that
@@ -275,7 +316,12 @@ func parseBody(data []byte) (body, *refusal) {
 			switch jsonKind(raw) {
 			case 'n':
 			case '{':
-				b.labels = raw
+				// An empty object means no labels, as an absent member
+				// does (ingest-v1 2.3).
+				var m map[string]json.RawMessage
+				if err = json.Unmarshal(raw, &m); err == nil && len(m) > 0 {
+					b.labels = raw
+				}
 			default:
 				err = errShape
 			}

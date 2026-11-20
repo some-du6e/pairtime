@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -58,6 +59,7 @@ func (f fakeDevices) Authenticate(_ context.Context, token string) (Device, erro
 
 // rollupCall is one call of the Rollup hook.
 type rollupCall struct {
+	agentOnly string // next's agent_only, as JSON
 	account   string
 	prevRev   int64 // -1 for no prev
 	nextRev   int64
@@ -109,9 +111,13 @@ func newHarness(t *testing.T, engine store.Engine) *harness {
 			}
 			h.observed = append(h.observed, stored)
 		},
-		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
-		Rollup: func(ctx context.Context, tx writer.Tx, account string, prev *event.MinuteBucket, next event.MinuteBucket) error {
+		Logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
+		RateBurst: 1000,
+		Rollup: func(ctx context.Context, tx writer.Tx, account string, prev *Revision, next Revision) error {
 			c := rollupCall{account: account, prevRev: -1, nextRev: int64(next.Rev), minuteMS: next.Minute.UnixMilli()}
+			if next.AgentOnly != nil {
+				c.agentOnly = string(marshal(t, next.AgentOnly))
+			}
 			if prev != nil {
 				c.prevRev = int64(prev.Rev)
 			}
@@ -256,12 +262,21 @@ func refusalOf(t *testing.T, rec *httptest.ResponseRecorder) (int, string) {
 }
 
 // state reads GET /api/v1/ingest/state for d.
-func (h *harness) state(t testing.TB, d *testDevice) stateJSON {
-	t.Helper()
+// stateRequest is a GET /api/v1/ingest/state for d, signed with signer
+// at the server's clock.
+func (h *harness) stateRequest(d *testDevice, signer ed25519.PrivateKey) *http.Request {
 	r := httptest.NewRequest(http.MethodGet, StatePath, nil)
 	r.Header.Set("Authorization", "Bearer "+d.token)
 	r.Header.Set(HeaderDevice, d.ID)
-	rec := h.serve(t, r)
+	tm := strconv.FormatInt(h.clock.UnixMilli(), 10)
+	r.Header.Set(HeaderTime, tm)
+	r.Header.Set(HeaderSignature, signaturePrefix+base64.StdEncoding.EncodeToString(ed25519.Sign(signer, StateMessage(d.ID, tm))))
+	return r
+}
+
+func (h *harness) state(t testing.TB, d *testDevice) stateJSON {
+	t.Helper()
+	rec := h.serve(t, h.stateRequest(d, d.key))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("state: status %d: %s", rec.Code, rec.Body)
 	}
@@ -641,6 +656,14 @@ func TestChain(t *testing.T) {
 				want(t, resp.Batches[0], 409, CodeChainGap)
 				want(t, resp.Batches[1], 200, CodeAccepted)
 			}},
+			{"a batch root whose R_b fails its form still names its b", func(t *testing.T) {
+				m := roots[5].json()
+				m["b"], m["R_b"] = 9, "zz"
+				resp := h.ok(t, upload{dev: dev, body: map[string]any{"batches": []any{m}}})
+				if got := resp.Batches[0]; got.B != 9 || got.Code != CodeBadString || got.Field == nil || *got.Field != "R_b" {
+					t.Errorf("got %+v", got)
+				}
+			}},
 			{"a device's first batch may be any b, its prev taken as given", func(t *testing.T) {
 				want(t, one(t, late, lateRoots[0]), 200, CodeAccepted)
 				if st := h.state(t, late); st.ChainStart == nil || *st.ChainStart != 5 {
@@ -750,17 +773,39 @@ func TestBuckets(t *testing.T) {
 			}
 			return out
 		}
-		stored := func(t *testing.T) (rev int64, account string, earlier []earlierRevision) {
+		// stored returns the minute's current rev, its account, and every
+		// revision minute_bucket_revisions holds, as "rev@received_at".
+		stored := func(t *testing.T) (rev int64, account string, revisions []string) {
 			t.Helper()
-			var raw string
-			if err := h.db.Read.QueryRow(`SELECT rev, account_id, earlier FROM minute_buckets WHERE device_id = $1 AND minute_ms = $2`,
-				dev.ID, minute.UnixMilli()).Scan(&rev, &account, &raw); err != nil {
+			var count int64
+			if err := h.db.Read.QueryRow(`SELECT rev, account_id, revisions FROM minute_buckets WHERE device_id = $1 AND minute_ms = $2`,
+				dev.ID, minute.UnixMilli()).Scan(&rev, &account, &count); err != nil {
 				t.Fatal(err)
 			}
-			if err := json.Unmarshal([]byte(raw), &earlier); err != nil {
+			rows, err := h.db.Read.Query(`SELECT rev, received_at_ms FROM minute_bucket_revisions WHERE device_id = $1 AND minute_ms = $2 ORDER BY rev`,
+				dev.ID, minute.UnixMilli())
+			if err != nil {
 				t.Fatal(err)
 			}
-			return rev, account, earlier
+			defer rows.Close()
+			for rows.Next() {
+				var r, at int64
+				if err := rows.Scan(&r, &at); err != nil {
+					t.Fatal(err)
+				}
+				revisions = append(revisions, fmt.Sprintf("%d@%d", r, at))
+			}
+			if err := rows.Err(); err != nil {
+				t.Fatal(err)
+			}
+			if count != int64(len(revisions)) {
+				t.Errorf("minute_buckets counts %d revisions, and minute_bucket_revisions holds %d", count, len(revisions))
+			}
+			return rev, account, revisions
+		}
+		results := func(t *testing.T, mbs ...event.MinuteBucket) []itemResult {
+			t.Helper()
+			return h.ok(t, upload{dev: dev, body: bucketsBody(t, mbs...)}).Buckets
 		}
 		rev3 := sampleBucket(dev.ID, minute, 3)
 		other3 := sampleBucket(dev.ID, minute, 3)
@@ -774,8 +819,8 @@ func TestBuckets(t *testing.T) {
 				if got := code(t, sampleBucket(dev.ID, minute, 2)); got[0] != CodeAccepted {
 					t.Fatalf("got %q", got)
 				}
-				if rev, account, earlier := stored(t); rev != 2 || account != dev.Account || len(earlier) != 0 {
-					t.Errorf("stored rev %d for %s with %d earlier", rev, account, len(earlier))
+				if rev, account, revisions := stored(t); rev != 2 || account != dev.Account || len(revisions) != 1 {
+					t.Errorf("stored rev %d for %s with revisions %q", rev, account, revisions)
 				}
 			}},
 			{"the same revision again is a duplicate", func(t *testing.T) {
@@ -783,27 +828,30 @@ func TestBuckets(t *testing.T) {
 					t.Errorf("got %q", got)
 				}
 			}},
-			{"a higher revision replaces it, and the replaced one is kept in earlier", func(t *testing.T) {
+			{"a higher revision replaces it, and every revision is kept with its received_at", func(t *testing.T) {
 				h.clock = h.clock.Add(30 * time.Second)
 				if got := code(t, rev3); got[0] != CodeAccepted {
 					t.Fatalf("got %q", got)
 				}
-				rev, _, earlier := stored(t)
-				if rev != 3 || len(earlier) != 1 || earlier[0].Rev != 2 || earlier[0].ReceivedAtMS != exampleClock.UnixMilli() {
-					t.Errorf("stored rev %d with earlier %+v", rev, earlier)
+				rev, _, revisions := stored(t)
+				want := []string{fmt.Sprintf("2@%d", exampleClock.UnixMilli()), fmt.Sprintf("3@%d", h.clock.UnixMilli())}
+				if rev != 3 || !slices.Equal(revisions, want) {
+					t.Errorf("stored rev %d with revisions %q, want 3 and %q", rev, revisions, want)
 				}
 			}},
-			{"a lower revision is superseded and changes nothing", func(t *testing.T) {
-				if got := code(t, sampleBucket(dev.ID, minute, 1)); got[0] != CodeSuperseded {
-					t.Errorf("got %q", got)
+			{"a lower revision is superseded, changes nothing, and names the stored rev", func(t *testing.T) {
+				got := results(t, sampleBucket(dev.ID, minute, 1))
+				if got[0].Code != CodeSuperseded || got[0].Rev == nil || *got[0].Rev != 3 {
+					t.Errorf("got %+v", got[0])
 				}
 				if rev, _, _ := stored(t); rev != 3 {
 					t.Errorf("stored rev %d, want 3", rev)
 				}
 			}},
-			{"the same rev with another bucket is rev_conflict, and the first stays", func(t *testing.T) {
-				if got := code(t, other3); got[0] != CodeRevConflict {
-					t.Errorf("got %q", got)
+			{"the same rev with another bucket is rev_conflict, names the stored rev, and the first stays", func(t *testing.T) {
+				got := results(t, other3)
+				if got[0].Status != 409 || got[0].Code != CodeRevConflict || got[0].Rev == nil || *got[0].Rev != 3 {
+					t.Errorf("got %+v", got[0])
 				}
 			}},
 			{"the rollups moved with each stored revision, inside its transaction", func(t *testing.T) {
@@ -868,7 +916,7 @@ func TestCommitsAndLabels(t *testing.T) {
 		h := newHarness(t, engine)
 		dev := h.device("d_test", false)
 		changed := sampleCommit()
-		changed["credited_seconds_since_parent"] = 300
+		changed["credited_seconds_since_parent"] = map[string]any{"prompting": 300}
 		firstSeen := h.clock.UnixMilli()
 		commit := func(t *testing.T, c map[string]any) string {
 			t.Helper()
@@ -900,7 +948,7 @@ func TestCommitsAndLabels(t *testing.T) {
 					dev.ID, strings.Repeat("a", 40)).Scan(&first, &updated, &body); err != nil {
 					t.Fatal(err)
 				}
-				if first != firstSeen || updated != h.clock.UnixMilli() || !strings.Contains(body, `"credited_seconds_since_parent":300`) {
+				if first != firstSeen || updated != h.clock.UnixMilli() || !strings.Contains(body, `"credited_seconds_since_parent":{"prompting":300}`) {
 					t.Errorf("first %d, updated %d, body %s", first, updated, body)
 				}
 			}},
@@ -915,6 +963,11 @@ func TestCommitsAndLabels(t *testing.T) {
 				}
 				if !strings.Contains(labels, `"claude_code"`) {
 					t.Errorf("stored labels %s", labels)
+				}
+			}},
+			{"labels sent as {} mean none, and their result is null", func(t *testing.T) {
+				if resp := h.ok(t, upload{dev: dev, json: []byte(`{"labels":{}}`)}); resp.Labels != nil {
+					t.Errorf("labels result %+v, want null", *resp.Labels)
 				}
 			}},
 			{"a request without labels answers null for them, and [] for arrays it didn't send", func(t *testing.T) {
@@ -936,13 +989,20 @@ func TestState(t *testing.T) {
 		h := newHarness(t, engine)
 		dev := h.device("d_test", false)
 		roots := chain(rand.New(rand.NewPCG(8, 9)), ledger.Hash{}, 1, 2)
-		get := func(t *testing.T, token, device string) *httptest.ResponseRecorder {
-			r := httptest.NewRequest(http.MethodGet, StatePath, nil)
-			if token != "" {
-				r.Header.Set("Authorization", "Bearer "+token)
-			}
-			r.Header.Set(HeaderDevice, device)
+		// get sends dev's signed state request after edit.
+		get := func(t *testing.T, edit func(r *http.Request)) *httptest.ResponseRecorder {
+			r := h.stateRequest(dev, dev.key)
+			edit(r)
 			return h.serve(t, r)
+		}
+		header := func(name, v string) func(*http.Request) {
+			return func(r *http.Request) {
+				if v == "" {
+					r.Header.Del(name)
+				} else {
+					r.Header.Set(name, v)
+				}
+			}
 		}
 		tests := []struct {
 			name  string
@@ -970,12 +1030,50 @@ func TestState(t *testing.T) {
 				}
 			}},
 			{"no token is token_missing", func(t *testing.T) {
-				if s, c := refusalOf(t, get(t, "", dev.ID)); s != 401 || c != CodeTokenMissing {
+				if s, c := refusalOf(t, get(t, header("Authorization", ""))); s != 401 || c != CodeTokenMissing {
 					t.Errorf("got %d %s", s, c)
 				}
 			}},
 			{"another device's id is device_mismatch", func(t *testing.T) {
-				if s, c := refusalOf(t, get(t, dev.token, "d_other")); s != 403 || c != CodeDeviceMismatch {
+				if s, c := refusalOf(t, get(t, header(HeaderDevice, "d_other"))); s != 403 || c != CodeDeviceMismatch {
+					t.Errorf("got %d %s", s, c)
+				}
+			}},
+			{"a state request without its signature is signature_malformed, so a token alone reads nothing", func(t *testing.T) {
+				if s, c := refusalOf(t, get(t, header(HeaderSignature, ""))); s != 400 || c != CodeSignatureMalformed {
+					t.Errorf("got %d %s", s, c)
+				}
+			}},
+			{"a state request without its time is time_malformed", func(t *testing.T) {
+				if s, c := refusalOf(t, get(t, header(HeaderTime, ""))); s != 400 || c != CodeTimeMalformed {
+					t.Errorf("got %d %s", s, c)
+				}
+			}},
+			{"a state request signed 301 s ago is clock_skew", func(t *testing.T) {
+				tm := strconv.FormatInt(h.clock.UnixMilli()-301_000, 10)
+				rec := get(t, func(r *http.Request) {
+					r.Header.Set(HeaderTime, tm)
+					r.Header.Set(HeaderSignature, signaturePrefix+base64.StdEncoding.EncodeToString(ed25519.Sign(dev.key, StateMessage(dev.ID, tm))))
+				})
+				if s, c := refusalOf(t, rec); s != 401 || c != CodeClockSkew {
+					t.Errorf("got %d %s", s, c)
+				}
+			}},
+			{"a state request signed by another key is signature_invalid, naming the registered key", func(t *testing.T) {
+				rec := h.serve(t, h.stateRequest(dev, seedKey("another key")))
+				var e errorBody
+				if err := json.Unmarshal(rec.Body.Bytes(), &e); err != nil || rec.Code != 401 || e.Error != CodeSignatureInvalid || e.DeviceKeyID != backup.KeyID(dev.PublicKey) {
+					t.Errorf("got %d %s", rec.Code, rec.Body)
+				}
+			}},
+			{"an upload's signature doesn't pass for a state request", func(t *testing.T) {
+				tm := strconv.FormatInt(h.clock.UnixMilli(), 10)
+				m := Message(dev.ID, "1", tm, strings.Repeat("0", 64))
+				rec := get(t, func(r *http.Request) {
+					r.Header.Set(HeaderTime, tm)
+					r.Header.Set(HeaderSignature, signaturePrefix+base64.StdEncoding.EncodeToString(ed25519.Sign(dev.key, m)))
+				})
+				if s, c := refusalOf(t, rec); s != 401 || c != CodeSignatureInvalid {
 					t.Errorf("got %d %s", s, c)
 				}
 			}},
@@ -1061,6 +1159,253 @@ func TestObserve(t *testing.T) {
 					t.Errorf("observed %v, want %v", h.observed, tt.want)
 				}
 			})
+		}
+	})
+}
+
+// TestSignatureNamesTheKey checks that signature_invalid names the
+// device's registered key, so a client can tell a key the server lacks
+// from a fault (ingest-v1 2.6).
+func TestSignatureNamesTheKey(t *testing.T) {
+	h := newHarness(t, store.SQLite)
+	dev := h.device("d_test", false)
+	rec := h.send(t, upload{dev: dev, signer: seedKey("another key")})
+	var e errorBody
+	if err := json.Unmarshal(rec.Body.Bytes(), &e); err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name, got, want string
+	}{
+		{"the refusal is signature_invalid", e.Error, CodeSignatureInvalid},
+		{"device_key_id is the registered key's id", e.DeviceKeyID, backup.KeyID(dev.PublicKey)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.got != tt.want {
+				t.Errorf("got %q, want %q", tt.got, tt.want)
+			}
+		})
+	}
+}
+
+// TestAgentOnly checks D-bucket-agent-only's agent_only{p: s}: a bucket
+// carries it, the revision stores it, and the rollups get it.
+func TestAgentOnly(t *testing.T) {
+	engines(t, func(t *testing.T, engine store.Engine) {
+		h := newHarness(t, engine)
+		dev := h.device("d_test", false)
+		m := asMap(t, shareableJSON(t, sampleBucket(dev.ID, exampleClock.Truncate(time.Minute), 1)))
+		m["agent_only"] = map[string]any{"p_two": 7, "p_one": 12.5}
+		resp := h.ok(t, upload{dev: dev, body: map[string]any{"buckets": []any{m}}})
+		var stored string
+		if err := h.db.Read.QueryRow(`SELECT bucket FROM minute_buckets WHERE device_id = $1`, dev.ID).Scan(&stored); err != nil {
+			t.Fatal(err)
+		}
+		const want = `{"p_one":12.5,"p_two":7}`
+		tests := []struct {
+			name string
+			ok   bool
+		}{
+			{"a bucket with agent_only is accepted", len(resp.Buckets) == 1 && resp.Buckets[0].Code == CodeAccepted},
+			{"the stored revision keeps agent_only", strings.Contains(stored, `"agent_only":`+want)},
+			{"the rollups get agent_only with the revision", len(h.rollups) == 1 && h.rollups[0].agentOnly == want},
+		}
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				if !tt.ok {
+					t.Errorf("no: response %+v, stored %s, rollups %+v", resp.Buckets, stored, h.rollups)
+				}
+			})
+		}
+	})
+}
+
+// TestRevisionCap checks that one minute keeps at most MaxRevisions
+// revisions, so no client can make its history grow without end
+// (ingest-v1 2.7).
+func TestRevisionCap(t *testing.T) {
+	engines(t, func(t *testing.T, engine store.Engine) {
+		h := newHarness(t, engine)
+		dev := h.device("d_test", false)
+		minute := exampleClock.Truncate(time.Minute)
+		var mbs []event.MinuteBucket
+		for rev := uint32(1); rev <= MaxRevisions+1; rev++ {
+			mbs = append(mbs, sampleBucket(dev.ID, minute, rev))
+		}
+		resp := h.ok(t, upload{dev: dev, body: bucketsBody(t, mbs...)})
+		var rev, count int64
+		if err := h.db.Read.QueryRow(`SELECT rev, revisions FROM minute_buckets WHERE device_id = $1 AND minute_ms = $2`, dev.ID, minute.UnixMilli()).Scan(&rev, &count); err != nil {
+			t.Fatal(err)
+		}
+		last := resp.Buckets[len(resp.Buckets)-1]
+		tests := []struct {
+			name string
+			ok   bool
+		}{
+			{"the first 128 revisions are accepted", func() bool {
+				for _, r := range resp.Buckets[:MaxRevisions] {
+					if r.Code != CodeAccepted {
+						return false
+					}
+				}
+				return true
+			}()},
+			{"the 129th is too_many_revisions, naming the stored rev", last.Status == 409 && last.Code == CodeTooManyRevisions && last.Rev != nil && *last.Rev == MaxRevisions},
+			{"the minute keeps rev 128 and counts 128 revisions", rev == MaxRevisions && count == MaxRevisions},
+		}
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				if !tt.ok {
+					t.Errorf("no: last result %+v, stored rev %d of %d", last, rev, count)
+				}
+			})
+		}
+	})
+}
+
+// TestOrigins checks request_origins: where each processed upload came
+// from, as an address and a JA4 fingerprint and never as text a client
+// wrote (DESIGN 4.4; SP 8.7).
+func TestOrigins(t *testing.T) {
+	engines(t, func(t *testing.T, engine store.Engine) {
+		h := newHarness(t, engine)
+		dev := h.device("d_test", false)
+		count := func(t *testing.T) int {
+			var n int
+			if err := h.db.Read.QueryRow(`SELECT COUNT(*) FROM request_origins WHERE device_id = $1`, dev.ID).Scan(&n); err != nil {
+				t.Fatal(err)
+			}
+			return n
+		}
+		latest := func(t *testing.T, headers map[string]string) (string, string) {
+			t.Helper()
+			h.clock = h.clock.Add(time.Second)
+			h.ok(t, upload{dev: dev, edit: func(r *http.Request) {
+				for k, v := range headers {
+					r.Header.Set(k, v)
+				}
+			}})
+			var ip string
+			var ja4 sql.NullString
+			if err := h.db.Read.QueryRow(`SELECT ip, ja4 FROM request_origins WHERE device_id = $1 AND seen_at_ms = $2`, dev.ID, h.clock.UnixMilli()).Scan(&ip, &ja4); err != nil {
+				t.Fatal(err)
+			}
+			return ip, ja4.String
+		}
+		tests := []struct {
+			name            string
+			headers         map[string]string
+			wantIP, wantJA4 string
+		}{
+			{"without Cloudflare's headers, the connection's address is kept", nil, "192.0.2.1", ""},
+			{"CF-Connecting-IP is kept", map[string]string{"CF-Connecting-IP": "203.0.113.7"}, "203.0.113.7", ""},
+			{"an IPv6 address loses its zone, which could hold text", map[string]string{"CF-Connecting-IP": "fe80::1%fix-the-bug"}, "fe80::1", ""},
+			{"a CF-Connecting-IP that isn't an address falls back to the connection's", map[string]string{"CF-Connecting-IP": "my laptop"}, "192.0.2.1", ""},
+			{"a CF-JA4 in JA4's form is kept", map[string]string{"CF-JA4": "t13d1516h2_8daaf6152771_b186095e22b6"}, "192.0.2.1", "t13d1516h2_8daaf6152771_b186095e22b6"},
+			{"a CF-JA4 in any other form is dropped", map[string]string{"CF-JA4": "Mozilla/5.0 (teen's laptop)"}, "192.0.2.1", ""},
+		}
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				if ip, ja4 := latest(t, tt.headers); ip != tt.wantIP || ja4 != tt.wantJA4 {
+					t.Errorf("stored %q and %q, want %q and %q", ip, ja4, tt.wantIP, tt.wantJA4)
+				}
+			})
+		}
+		t.Run("a refused upload leaves no origin", func(t *testing.T) {
+			before := count(t)
+			h.send(t, upload{dev: dev, signer: seedKey("another key")})
+			if after := count(t); after != before {
+				t.Errorf("%d origins, then %d", before, after)
+			}
+		})
+	})
+}
+
+// TestRate checks each device's upload rate (SP 8.6; ingest-v1 2.5).
+func TestRate(t *testing.T) {
+	h := newHarness(t, store.SQLite)
+	h.svc.rate = newLimiter(3, 10*time.Second)
+	dev := h.device("d_test", false)
+	tests := []struct {
+		name  string
+		check func(t *testing.T)
+	}{
+		{"three uploads fit a burst of three", func(t *testing.T) {
+			for range 3 {
+				h.ok(t, upload{dev: dev})
+			}
+		}},
+		{"a fourth is rate_limited, with Retry-After of one refill", func(t *testing.T) {
+			rec := h.send(t, upload{dev: dev})
+			if s, c := refusalOf(t, rec); s != 429 || c != CodeRateLimited || rec.Header().Get("Retry-After") != "10" {
+				t.Errorf("got %d %s, Retry-After %q", s, c, rec.Header().Get("Retry-After"))
+			}
+		}},
+		{"an upload signed by another key is refused for its signature, before the rate", func(t *testing.T) {
+			if s, c := refusalOf(t, h.send(t, upload{dev: dev, signer: seedKey("another key")})); s != 401 || c != CodeSignatureInvalid {
+				t.Errorf("got %d %s", s, c)
+			}
+		}},
+		{"ten seconds later one more fits", func(t *testing.T) {
+			h.clock = h.clock.Add(10 * time.Second)
+			h.ok(t, upload{dev: dev})
+		}},
+		{"a second request while one is in flight is refused, and fits once the first ends", func(t *testing.T) {
+			l := newLimiter(5, time.Second)
+			done, r1 := l.take("d_x", exampleClock)
+			_, r2 := l.take("d_x", exampleClock)
+			if r1 != nil || r2 == nil || r2.code != CodeRateLimited || r2.retryAfter != 1 {
+				t.Fatalf("first %v, second %v", r1, r2)
+			}
+			done()
+			if _, r3 := l.take("d_x", exampleClock); r3 != nil {
+				t.Errorf("after the first ended: %v", r3)
+			}
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, tt.check)
+	}
+}
+
+// TestHeadFromWitnessRows checks a device whose ingest state is gone, as
+// retention removes it 180 days after its last upload, while its witness
+// rows stay, as a submission's hold keeps them: its chain goes on from the
+// stored rows (ingest-v1 2.7 step 4).
+func TestHeadFromWitnessRows(t *testing.T) {
+	engines(t, func(t *testing.T, engine store.Engine) {
+		h := newHarness(t, engine)
+		dev := h.device("d_test", false)
+		roots := chain(rand.New(rand.NewPCG(12, 13)), ledger.Hash{}, 1, 3)
+		h.ok(t, upload{dev: dev, body: batchesBody(roots[:2]...)})
+		if _, err := h.db.Write.Exec(`DELETE FROM ingest_devices WHERE device_id = $1`, dev.ID); err != nil {
+			t.Fatal(err)
+		}
+		tests := []struct {
+			name  string
+			check func(t *testing.T)
+		}{
+			{"the state gives the head and the chain's start from the witness rows", func(t *testing.T) {
+				st := h.state(t, dev)
+				if st.Head == nil || st.Head.B != 2 || st.Head.Head != roots[1].head || st.ChainStart == nil || *st.ChainStart != 1 {
+					t.Errorf("state %+v", st)
+				}
+			}},
+			{"a batch that doesn't link to that head is refused", func(t *testing.T) {
+				x := root{b: 3, n: 1, prev: ledger.Hash{5}}.relink()
+				if got := h.ok(t, upload{dev: dev, body: batchesBody(x)}).Batches[0]; got.Code != CodePrevMismatch {
+					t.Errorf("got %+v", got)
+				}
+			}},
+			{"the next batch links to that head", func(t *testing.T) {
+				if got := h.ok(t, upload{dev: dev, body: batchesBody(roots[2])}).Batches[0]; got.Code != CodeAccepted {
+					t.Errorf("got %+v", got)
+				}
+			}},
+		}
+		for _, tt := range tests {
+			t.Run(tt.name, tt.check)
 		}
 	})
 }

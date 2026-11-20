@@ -5,7 +5,6 @@ package ingest
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -135,27 +134,19 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
 	return nil
 }
 
-// storedBucket is a minute's current revision in minute_buckets.
+// storedBucket is a minute's current revision in minute_buckets, and how
+// many revisions of the minute ingest stored.
 type storedBucket struct {
 	rev        int64
 	receivedAt int64
 	bucket     string
-	earlier    string
-}
-
-// earlierRevision is one entry of minute_buckets.earlier: a revision a
-// later one replaced, kept for the bundle's buckets.json
-// (E-check-readings).
-type earlierRevision struct {
-	Rev          int64           `json:"rev"`
-	ReceivedAtMS int64           `json:"received_at_ms"`
-	Bucket       json.RawMessage `json:"bucket"`
+	revisions  int64
 }
 
 func loadBucket(ctx context.Context, q queryer, deviceID string, minuteMS int64) (storedBucket, bool, error) {
 	var s storedBucket
-	err := q.QueryRowContext(ctx, `SELECT rev, received_at_ms, bucket, earlier FROM minute_buckets WHERE device_id = $1 AND minute_ms = $2`,
-		deviceID, minuteMS).Scan(&s.rev, &s.receivedAt, &s.bucket, &s.earlier)
+	err := q.QueryRowContext(ctx, `SELECT rev, received_at_ms, bucket, revisions FROM minute_buckets WHERE device_id = $1 AND minute_ms = $2`,
+		deviceID, minuteMS).Scan(&s.rev, &s.receivedAt, &s.bucket, &s.revisions)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return s, false, nil
@@ -165,29 +156,22 @@ func loadBucket(ctx context.Context, q queryer, deviceID string, minuteMS int64)
 	return s, true, nil
 }
 
-// putBucket stores bucket as the minute's current revision. When cur holds
-// the revision it replaces, that one moves to the end of earlier.
-func putBucket(ctx context.Context, tx writer.Tx, deviceID, account string, minuteMS int64, rev int64, state string, bucket []byte, receivedAt int64, cur *storedBucket) error {
-	earlier := "[]"
-	if cur != nil {
-		var list []earlierRevision
-		if err := json.Unmarshal([]byte(cur.earlier), &list); err != nil {
-			return fmt.Errorf("ingest: a stored bucket's earlier revisions: %w", err)
-		}
-		list = append(list, earlierRevision{Rev: cur.rev, ReceivedAtMS: cur.receivedAt, Bucket: json.RawMessage(cur.bucket)})
-		b, err := json.Marshal(list)
-		if err != nil {
-			return fmt.Errorf("ingest: %w", err)
-		}
-		earlier = string(b)
-	}
-	_, err := tx.ExecContext(ctx, `INSERT INTO minute_buckets (device_id, minute_ms, account_id, rev, state, received_at_ms, bucket, earlier)
+// putBucket stores bucket as the minute's current revision, the
+// revisions-th, and adds it to minute_bucket_revisions, which keeps every
+// revision ingest stored.
+func putBucket(ctx context.Context, tx writer.Tx, deviceID, account string, minuteMS, rev int64, state string, bucket []byte, receivedAt, revisions int64) error {
+	_, err := tx.ExecContext(ctx, `INSERT INTO minute_buckets (device_id, minute_ms, account_id, rev, state, received_at_ms, bucket, revisions)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 ON CONFLICT (device_id, minute_ms) DO UPDATE SET account_id = excluded.account_id, rev = excluded.rev, state = excluded.state,
-received_at_ms = excluded.received_at_ms, bucket = excluded.bucket, earlier = excluded.earlier`,
-		deviceID, minuteMS, account, rev, state, receivedAt, string(bucket), earlier)
+received_at_ms = excluded.received_at_ms, bucket = excluded.bucket, revisions = excluded.revisions`,
+		deviceID, minuteMS, account, rev, state, receivedAt, string(bucket), revisions)
 	if err != nil {
 		return fmt.Errorf("ingest: storing a minute bucket: %w", err)
+	}
+	_, err = tx.ExecContext(ctx, `INSERT INTO minute_bucket_revisions (device_id, minute_ms, rev, account_id, received_at_ms, bucket)
+VALUES ($1, $2, $3, $4, $5, $6)`, deviceID, minuteMS, rev, account, receivedAt, string(bucket))
+	if err != nil {
+		return fmt.Errorf("ingest: storing a minute bucket's revision: %w", err)
 	}
 	return nil
 }
@@ -214,6 +198,41 @@ updated_at_ms = excluded.updated_at_ms`,
 		deviceID, c.SHA, account, c.Project, string(body), now, now)
 	if err != nil {
 		return fmt.Errorf("ingest: storing a commit record: %w", err)
+	}
+	return nil
+}
+
+// witnessHead fills st's head and chain start from the device's witness
+// rows, for a device whose ingest_devices row is gone while some of its
+// witness rows stay, as rows a submission holds do (ingest-v1 2.7 step 4).
+// It leaves st alone when the device has none.
+func witnessHead(ctx context.Context, q queryer, deviceID string, st *deviceState) error {
+	var first, last sql.NullInt64
+	if err := q.QueryRowContext(ctx, `SELECT MIN(b), MAX(b) FROM witness_rows WHERE device_id = $1`, deviceID).Scan(&first, &last); err != nil {
+		return fmt.Errorf("ingest: reading a device's witness rows: %w", err)
+	}
+	if !last.Valid {
+		return nil
+	}
+	w, found, err := loadWitness(ctx, q, deviceID, uint64(last.Int64))
+	if err != nil || !found {
+		return err
+	}
+	st.headB, st.headHash, st.headAt, st.chainStart = uint64(last.Int64), w.head, w.receivedAt, uint64(first.Int64)
+	return nil
+}
+
+// insertOrigin records where a processed upload came from (DESIGN 4.4's
+// uploading IP and JA4, kept 30 days).
+func insertOrigin(ctx context.Context, tx writer.Tx, id, deviceID, account, ip, ja4 string, now int64) error {
+	var j any
+	if ja4 != "" {
+		j = ja4
+	}
+	_, err := tx.ExecContext(ctx, `INSERT INTO request_origins (id, device_id, account_id, ip, ja4, seen_at_ms) VALUES ($1, $2, $3, $4, $5, $6)`,
+		id, deviceID, account, ip, j, now)
+	if err != nil {
+		return fmt.Errorf("ingest: storing an upload's origin: %w", err)
 	}
 	return nil
 }

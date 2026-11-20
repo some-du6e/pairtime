@@ -37,6 +37,7 @@ const (
 	CodeTooManyCommits          = "too_many_commits"
 	CodeIdempotencyKeyReused    = "idempotency_key_reused"
 	CodeCounterStale            = "counter_stale"
+	CodeRateLimited             = "rate_limited"
 	CodeUnavailable             = "unavailable"
 )
 
@@ -69,6 +70,7 @@ var refusals = map[string]int{
 	CodeTooManyCommits:          http.StatusRequestEntityTooLarge,
 	CodeIdempotencyKeyReused:    http.StatusUnprocessableEntity,
 	CodeCounterStale:            http.StatusConflict,
+	CodeRateLimited:             http.StatusTooManyRequests,
 	CodeUnavailable:             http.StatusServiceUnavailable,
 }
 
@@ -93,12 +95,13 @@ const (
 	CodeChainGap      = "chain_gap"
 	CodeBeforeChain   = "before_chain"
 
-	CodeSuperseded    = "superseded"
-	CodeRevConflict   = "rev_conflict"
-	CodeBadRule       = "bad_rule"
-	CodeWrongDevice   = "wrong_device"
-	CodeFutureMinute  = "future_minute"
-	CodeExpiredMinute = "expired_minute"
+	CodeSuperseded       = "superseded"
+	CodeRevConflict      = "rev_conflict"
+	CodeTooManyRevisions = "too_many_revisions"
+	CodeBadRule          = "bad_rule"
+	CodeWrongDevice      = "wrong_device"
+	CodeFutureMinute     = "future_minute"
+	CodeExpiredMinute    = "expired_minute"
 
 	CodeUpdated = "updated"
 )
@@ -110,6 +113,18 @@ const (
 	MaxBatches      = 2000
 	MaxBuckets      = 2000
 	MaxCommits      = 500
+)
+
+// MaxRevisions bounds the revisions ingest keeps of one minute of one
+// device. DESIGN 3.7's 900 s pending window, with an upload at most every
+// 10 s (DESIGN 4.3), gives about 90.
+const MaxRevisions = 128
+
+// Each device's upload rate (SP 8.6): a burst of DefaultRateBurst requests,
+// refilled one every DefaultRateEvery, 6 a minute.
+const (
+	DefaultRateBurst = 30
+	DefaultRateEvery = 10 * time.Second
 )
 
 // BodyTimeout is how long an upload's body has to arrive once its headers

@@ -34,18 +34,20 @@ func refused(status int, code string) *itemErr { return &itemErr{status: status,
 
 // The members each item may have, required and optional (ingest-v1 2.3).
 // TestAllowlist checks the bucket's and the slot's against
-// event.Tier1BucketFields and event.Tier1SlotFields.
+// event.Tier1BucketFields and event.Tier1SlotFields. agent_only is
+// D-bucket-agent-only's, which WP-EV3 adds to Tier1BucketFields.
 var (
 	batchRequired   = []string{"b", "n", "R_b", "H_b", "prev"}
 	bucketRequired  = []string{"v", "params", "minute", "device", "slots", "credited_s", "agent_running_s", "state", "witness", "rev"}
-	bucketOptional  = []string{"uncredited"}
+	bucketOptional  = []string{"uncredited", "agent_only"}
 	slotRequired    = []string{"cr"}
 	slotOptional    = []string{"p", "why", "kind", "ev", "lbl"}
-	commitRequired  = []string{"sha", "parents", "project", "observed_at", "author_time", "committer_time", "files_changed", "insertions", "deletions", "actor"}
-	commitOptional  = []string{"path_hmacs", "credited_seconds_since_parent", "rewrites", "agent_trailer"}
+	commitRequired  = []string{"sha", "parents", "project", "observed_at", "author_time", "committer_time", "actor"}
+	commitOptional  = []string{"files_changed", "insertions", "deletions", "path_hmacs", "credited_seconds_since_parent", "rewrites", "agent_trailer"}
 	rewriteRequired = []string{"old_sha", "new_sha"}
 	labelsRequired  = []string{"client_build", "scoring_version", "params", "harnesses", "typing_module", "vm"}
-	harnessRequired = []string{"name", "version"}
+	harnessRequired = []string{"name"}
+	harnessOptional = []string{"version"}
 )
 
 // The enum values each string may hold, from pkg/event (ingest-v1 2.3).
@@ -59,6 +61,12 @@ var (
 	bucketStates = []event.BucketState{event.StatePending, event.StateFinal, event.StateProvisional, event.StateRestored}
 	witnesses    = []event.Witness{event.Witnessed, event.Offline, event.Backfilled}
 	actors       = []event.Actor{event.ActorHuman, event.ActorAgent, event.ActorUnknown}
+	// agentTrailers are the agents a commit's trailer or bot author can
+	// credit, the values internal/adapters/git writes (its trailerAgents,
+	// Replit's trailer and botAuthors). The list is closed, because the
+	// value isn't keyed and a trailer can hold a person's name; a new
+	// agent reaches the server first.
+	agentTrailers = []string{"aider", "claude", "lovable", "replit"}
 	// labelHarnesses are the harnesses a device's labels may name: every
 	// one of pkg/event's but none, which marks events no harness made.
 	labelHarnesses = []event.Harness{
@@ -72,12 +80,14 @@ const (
 	maxKeyLen      = 128
 	maxList        = 1024
 	maxUncredited  = 64
+	maxAgentOnly   = 64
 	maxHarnesses   = 16
 	maxBuildLen    = 64
 	maxSeconds     = 60
 	maxSlotSeconds = 15
 	maxCount       = math.MaxInt32
-	maxCommitTime  = 4_102_444_799 // 2099-12-31T23:59:59Z, in seconds
+	maxRewrites    = 2000 // internal/adapters/git's maxRebase
+	maxKinds       = 8
 	minUnixMS      = 1_577_836_800_000
 	maxUnixMS      = 4_102_444_800_000
 	maxCredited    = 1e9
@@ -319,22 +329,29 @@ func hash(raw json.RawMessage, field string) (ledger.Hash, *itemErr) {
 	return h, nil
 }
 
-// parseBatchRoot checks a batch root's forms (ingest-v1 2.3.1).
+// parseBatchRoot checks a batch root's forms (ingest-v1 2.3.1). Once b
+// has passed its form, br.b holds it, even when another member fails.
 func parseBatchRoot(raw json.RawMessage) (batchRoot, *itemErr) {
 	var br batchRoot
 	m, e := object(raw, "", batchRequired, nil)
 	if e != nil {
+		if raw, ok := objectMember(raw, "b"); ok {
+			if b, e := integer(raw, "b", 1, math.MaxInt64); e == nil {
+				br.b = uint64(b)
+			}
+		}
 		return br, e
 	}
 	b, e := integer(m["b"], "b", 1, math.MaxInt64)
 	if e != nil {
 		return br, e
 	}
+	br.b = uint64(b)
 	n, e := integer(m["n"], "n", 0, math.MaxInt64)
 	if e != nil {
 		return br, e
 	}
-	br.b, br.n = uint64(b), uint64(n)
+	br.n = uint64(n)
 	if br.root, e = hash(m["R_b"], "R_b"); e != nil {
 		return br, e
 	}
@@ -347,65 +364,119 @@ func parseBatchRoot(raw json.RawMessage) (batchRoot, *itemErr) {
 	return br, nil
 }
 
+// Revision is a minute bucket as ingest stores and hands it to the
+// rollups: pkg/event's MinuteBucket, and agent_only{p: s}, which
+// D-bucket-agent-only adds to tier 1 before pkg/event has it. Its JSON is
+// the bucket's, with agent_only after the rest.
+//
+// TODO(WP-EV3): once MinuteBucket has AgentOnly, a Revision is a
+// MinuteBucket; parseBucket fills mb.AgentOnly, and Validate checks it.
+type Revision struct {
+	event.MinuteBucket
+	// AgentOnly is, for each project key, the seconds in the minute a turn
+	// of that project ran and weren't credited to that project: 0 to 60 in
+	// steps of 0.5 (SM 2.6's agent-only seconds; D-bucket-agent-only).
+	AgentOnly map[string]float64 `json:"agent_only,omitempty"`
+}
+
 // parseBucket checks a minute bucket's forms (ingest-v1 2.3.2) and returns
-// it as pkg/event's MinuteBucket. The caller runs Validate for the rules
-// across fields.
-func parseBucket(raw json.RawMessage) (event.MinuteBucket, *itemErr) {
-	var mb event.MinuteBucket
+// it as a Revision. The caller runs Validate for the rules across fields.
+func parseBucket(raw json.RawMessage) (Revision, *itemErr) {
+	var rv Revision
 	m, e := object(raw, "", bucketRequired, bucketOptional)
 	if e != nil {
-		return mb, e
+		return rv, e
 	}
+	if raw, ok := m["agent_only"]; ok {
+		if rv.AgentOnly, e = parseAgentOnly(raw); e != nil {
+			return rv, e
+		}
+	}
+	mb := &rv.MinuteBucket
 	if mb.V, e = pattern(m["v"], "v", isSemver); e != nil {
-		return mb, e
+		return rv, e
 	}
 	if mb.Params, e = pattern(m["params"], "params", isParams); e != nil {
-		return mb, e
+		return rv, e
 	}
 	s, e := str(m["minute"], "minute")
 	if e != nil {
-		return mb, e
+		return rv, e
 	}
 	var ok bool
 	if mb.Minute, ok = parseMinute(s); !ok {
-		return mb, shapeErr(CodeBadString, "minute")
+		return rv, shapeErr(CodeBadString, "minute")
 	}
 	if mb.Device, e = pattern(m["device"], "device", isKey); e != nil {
-		return mb, e
+		return rv, e
 	}
 	slots, e := array(m["slots"], "slots", 4)
 	if e != nil {
-		return mb, e
+		return rv, e
 	}
 	mb.Slots = make([]event.BucketSlot, len(slots))
 	for i, raw := range slots {
 		if mb.Slots[i], e = parseSlot(raw, index("slots", i)); e != nil {
-			return mb, e
+			return rv, e
 		}
 	}
 	if mb.CreditedS, e = number(m["credited_s"], "credited_s", 0, maxSeconds); e != nil {
-		return mb, e
+		return rv, e
 	}
 	if raw, ok := m["uncredited"]; ok {
 		if mb.Uncredited, e = parseUncredited(raw); e != nil {
-			return mb, e
+			return rv, e
 		}
 	}
 	if mb.AgentRunningS, e = number(m["agent_running_s"], "agent_running_s", 0, maxSeconds); e != nil {
-		return mb, e
+		return rv, e
 	}
 	if mb.State, e = enumOf(m["state"], "state", bucketStates); e != nil {
-		return mb, e
+		return rv, e
 	}
 	if mb.Witness, e = enumOf(m["witness"], "witness", witnesses); e != nil {
-		return mb, e
+		return rv, e
 	}
 	rev, e := integer(m["rev"], "rev", 0, math.MaxUint32)
 	if e != nil {
-		return mb, e
+		return rv, e
 	}
 	mb.Rev = uint32(rev)
-	return mb, nil
+	return rv, nil
+}
+
+// parseAgentOnly reads agent_only{p: s}: each member's name a project key,
+// as slots[].p, and its value seconds, 0 to 60 in steps of 0.5
+// (D-bucket-agent-only). Names are checked in sorted order, so the same
+// bucket always fails the same way.
+func parseAgentOnly(raw json.RawMessage) (map[string]float64, *itemErr) {
+	var m map[string]json.RawMessage
+	if jsonKind(raw) != '{' || json.Unmarshal(raw, &m) != nil {
+		return nil, shapeErr(CodeBadType, "agent_only")
+	}
+	if len(m) > maxAgentOnly {
+		return nil, shapeErr(CodeTooMany, "agent_only")
+	}
+	names := make([]string, 0, len(m))
+	for name := range m {
+		names = append(names, name)
+	}
+	slices.Sort(names)
+	out := make(map[string]float64, len(m))
+	for _, name := range names {
+		if !isKey(name) {
+			return nil, shapeErr(CodeBadString, "agent_only")
+		}
+		v, e := number(m[name], "agent_only", 0, maxSeconds)
+		if e != nil {
+			return nil, e
+		}
+		if v*2 != math.Trunc(v*2) {
+			return nil, shapeErr(CodeBadNumber, "agent_only")
+		}
+		out[name] = v
+	}
+	return out, nil
 }
 
 func parseSlot(raw json.RawMessage, path string) (event.BucketSlot, *itemErr) {
@@ -492,15 +563,15 @@ func parseUncredited(raw json.RawMessage) (map[event.Reason]float64, *itemErr) {
 // checkBucket checks a bucket's forms, then the rules across its fields
 // that event.MinuteBucket.Validate holds, which fail as bad_rule
 // (ingest-v1 2.3.2).
-func checkBucket(raw json.RawMessage) (event.MinuteBucket, *itemErr) {
-	mb, e := parseBucket(raw)
+func checkBucket(raw json.RawMessage) (Revision, *itemErr) {
+	rv, e := parseBucket(raw)
 	if e != nil {
-		return mb, e
+		return rv, e
 	}
-	if err := mb.Validate(); err != nil {
-		return mb, shapeErr(CodeBadRule, ruleField(err))
+	if err := rv.Validate(); err != nil {
+		return rv, shapeErr(CodeBadRule, ruleField(err))
 	}
-	return mb, nil
+	return rv, nil
 }
 
 // ruleField returns the field pkg/event's first error names, or "" when
@@ -531,22 +602,25 @@ func isPath(s string) bool {
 }
 
 // commitRecord is DESIGN 4.3's commit record as the server stores it, its
-// members in that list's order (ingest-v1 2.3.3).
+// members in that list's order (ingest-v1 2.3.3). The three counts are
+// absent when the client couldn't read the commit's shortstat.
 type commitRecord struct {
-	SHA                        string    `json:"sha"`
-	Parents                    []string  `json:"parents"`
-	Project                    string    `json:"project"`
-	ObservedAt                 int64     `json:"observed_at"`
-	AuthorTime                 int64     `json:"author_time"`
-	CommitterTime              int64     `json:"committer_time"`
-	FilesChanged               int64     `json:"files_changed"`
-	Insertions                 int64     `json:"insertions"`
-	Deletions                  int64     `json:"deletions"`
-	PathHMACs                  []string  `json:"path_hmacs,omitempty"`
-	CreditedSecondsSinceParent *float64  `json:"credited_seconds_since_parent,omitempty"`
-	Rewrites                   []rewrite `json:"rewrites,omitempty"`
-	Actor                      string    `json:"actor"`
-	AgentTrailer               string    `json:"agent_trailer,omitempty"`
+	SHA           string   `json:"sha"`
+	Parents       []string `json:"parents"`
+	Project       string   `json:"project"`
+	ObservedAt    int64    `json:"observed_at"`
+	AuthorTime    int64    `json:"author_time"`
+	CommitterTime int64    `json:"committer_time"`
+	FilesChanged  *int64   `json:"files_changed,omitempty"`
+	Insertions    *int64   `json:"insertions,omitempty"`
+	Deletions     *int64   `json:"deletions,omitempty"`
+	PathHMACs     []string `json:"path_hmacs,omitempty"`
+	// CreditedSecondsSinceParent is split by activity kind (DESIGN 5.8;
+	// SM 5.3).
+	CreditedSecondsSinceParent map[event.Activity]float64 `json:"credited_seconds_since_parent,omitempty"`
+	Rewrites                   []rewrite                  `json:"rewrites,omitempty"`
+	Actor                      string                     `json:"actor"`
+	AgentTrailer               string                     `json:"agent_trailer,omitempty"`
 }
 
 type rewrite struct {
@@ -554,7 +628,8 @@ type rewrite struct {
 	NewSHA string `json:"new_sha"`
 }
 
-// keys reads a list of at most maxList strings, each accepted by ok.
+// keys reads a list of at most maxList distinct strings, each accepted by
+// ok. A string that repeats is bad_rule, naming the list.
 func keys(raw json.RawMessage, field string, ok func(string) bool) ([]string, *itemErr) {
 	a, e := array(raw, field, maxList)
 	if e != nil {
@@ -567,6 +642,74 @@ func keys(raw json.RawMessage, field string, ok func(string) bool) ([]string, *i
 			return nil, e
 		}
 		out = append(out, s)
+	}
+	if hasRepeat(out) {
+		return nil, shapeErr(CodeBadRule, field)
+	}
+	return out, nil
+}
+
+// hasRepeat reports whether a value appears twice in vs.
+func hasRepeat[T comparable](vs []T) bool {
+	seen := make(map[T]bool, len(vs))
+	for _, v := range vs {
+		if seen[v] {
+			return true
+		}
+		seen[v] = true
+	}
+	return false
+}
+
+// objectMember returns member name of the object raw, when raw is an
+// object that has it.
+func objectMember(raw json.RawMessage, name string) (json.RawMessage, bool) {
+	var m map[string]json.RawMessage
+	if jsonKind(raw) != '{' || json.Unmarshal(raw, &m) != nil {
+		return nil, false
+	}
+	v, ok := m[name]
+	return v, ok
+}
+
+// optCount reads one of a commit's optional counts.
+func optCount(m map[string]json.RawMessage, field string) (*int64, *itemErr) {
+	raw, ok := m[field]
+	if !ok {
+		return nil, nil
+	}
+	v, e := integer(raw, field, 0, maxCount)
+	if e != nil {
+		return nil, e
+	}
+	return &v, nil
+}
+
+// parseKinds reads credited_seconds_since_parent{kind: s}: each member's
+// name an activity kind of SM 5.1, and its value seconds, 0 to 1e9.
+func parseKinds(raw json.RawMessage, field string) (map[event.Activity]float64, *itemErr) {
+	var m map[string]json.RawMessage
+	if jsonKind(raw) != '{' || json.Unmarshal(raw, &m) != nil {
+		return nil, shapeErr(CodeBadType, field)
+	}
+	if len(m) > maxKinds {
+		return nil, shapeErr(CodeTooMany, field)
+	}
+	names := make([]string, 0, len(m))
+	for name := range m {
+		names = append(names, name)
+	}
+	slices.Sort(names)
+	out := make(map[event.Activity]float64, len(m))
+	for _, name := range names {
+		if !slices.Contains(activities, event.Activity(name)) {
+			return nil, shapeErr(CodeBadString, field)
+		}
+		v, e := number(m[name], field, 0, maxCredited)
+		if e != nil {
+			return nil, e
+		}
+		out[event.Activity(name)] = v
 	}
 	return out, nil
 }
@@ -593,19 +736,19 @@ func parseCommit(raw json.RawMessage) (commitRecord, *itemErr) {
 	if c.ObservedAt, e = integer(m["observed_at"], "observed_at", minUnixMS, maxUnixMS-1); e != nil {
 		return c, e
 	}
-	if c.AuthorTime, e = integer(m["author_time"], "author_time", 0, maxCommitTime); e != nil {
+	if c.AuthorTime, e = integer(m["author_time"], "author_time", 0, math.MaxInt64); e != nil {
 		return c, e
 	}
-	if c.CommitterTime, e = integer(m["committer_time"], "committer_time", 0, maxCommitTime); e != nil {
+	if c.CommitterTime, e = integer(m["committer_time"], "committer_time", 0, math.MaxInt64); e != nil {
 		return c, e
 	}
-	if c.FilesChanged, e = integer(m["files_changed"], "files_changed", 0, maxCount); e != nil {
+	if c.FilesChanged, e = optCount(m, "files_changed"); e != nil {
 		return c, e
 	}
-	if c.Insertions, e = integer(m["insertions"], "insertions", 0, maxCount); e != nil {
+	if c.Insertions, e = optCount(m, "insertions"); e != nil {
 		return c, e
 	}
-	if c.Deletions, e = integer(m["deletions"], "deletions", 0, maxCount); e != nil {
+	if c.Deletions, e = optCount(m, "deletions"); e != nil {
 		return c, e
 	}
 	if raw, ok := m["path_hmacs"]; ok {
@@ -614,14 +757,12 @@ func parseCommit(raw json.RawMessage) (commitRecord, *itemErr) {
 		}
 	}
 	if raw, ok := m["credited_seconds_since_parent"]; ok {
-		v, e := number(raw, "credited_seconds_since_parent", 0, maxCredited)
-		if e != nil {
+		if c.CreditedSecondsSinceParent, e = parseKinds(raw, "credited_seconds_since_parent"); e != nil {
 			return c, e
 		}
-		c.CreditedSecondsSinceParent = &v
 	}
 	if raw, ok := m["rewrites"]; ok {
-		a, e := array(raw, "rewrites", maxList)
+		a, e := array(raw, "rewrites", maxRewrites)
 		if e != nil {
 			return c, e
 		}
@@ -640,6 +781,9 @@ func parseCommit(raw json.RawMessage) (commitRecord, *itemErr) {
 			}
 			c.Rewrites = append(c.Rewrites, r)
 		}
+		if hasRepeat(c.Rewrites) {
+			return c, shapeErr(CodeBadRule, "rewrites")
+		}
 	}
 	actor, e := enumOf(m["actor"], "actor", actors)
 	if e != nil {
@@ -647,7 +791,7 @@ func parseCommit(raw json.RawMessage) (commitRecord, *itemErr) {
 	}
 	c.Actor = string(actor)
 	if raw, ok := m["agent_trailer"]; ok {
-		if c.AgentTrailer, e = pattern(raw, "agent_trailer", isKey); e != nil {
+		if c.AgentTrailer, e = enumOf(raw, "agent_trailer", agentTrailers); e != nil {
 			return c, e
 		}
 	}
@@ -666,8 +810,10 @@ type labels struct {
 }
 
 type harnessLabel struct {
-	Name    string `json:"name"`
-	Version string `json:"version"`
+	Name string `json:"name"`
+	// Version is absent when the harness didn't say, or said it in a form
+	// the labels don't take.
+	Version string `json:"version,omitempty"`
 }
 
 // parseLabels checks labels' forms (ingest-v1 2.3.4).
@@ -693,7 +839,7 @@ func parseLabels(raw json.RawMessage) (labels, *itemErr) {
 	l.Harnesses = make([]harnessLabel, 0, len(hs))
 	for i, raw := range hs {
 		path := index("harnesses", i)
-		hm, e := object(raw, path, harnessRequired, nil)
+		hm, e := object(raw, path, harnessRequired, harnessOptional)
 		if e != nil {
 			return l, e
 		}
@@ -701,9 +847,11 @@ func parseLabels(raw json.RawMessage) (labels, *itemErr) {
 		if e != nil {
 			return l, e
 		}
-		version, e := pattern(hm["version"], join(path, "version"), isBuild)
-		if e != nil {
-			return l, e
+		var version string
+		if raw, ok := hm["version"]; ok {
+			if version, e = pattern(raw, join(path, "version"), isBuild); e != nil {
+				return l, e
+			}
 		}
 		if slices.ContainsFunc(l.Harnesses, func(h harnessLabel) bool { return h.Name == string(name) }) {
 			return l, &itemErr{status: 422, code: CodeBadRule, field: "harnesses", named: true}

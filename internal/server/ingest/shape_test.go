@@ -4,6 +4,7 @@ package ingest
 
 import (
 	"encoding/json"
+	"fmt"
 	"maps"
 	"regexp"
 	"slices"
@@ -134,7 +135,9 @@ func TestAllowlist(t *testing.T) {
 		name      string
 		got, want []string
 	}{
-		{"the bucket allowlist is DESIGN 4.3's bucket fields, Tier1BucketFields", set(bucketRequired, bucketOptional), set(event.Tier1BucketFields())},
+		// TODO(WP-EV3): drop the append once Tier1BucketFields lists
+		// D-bucket-agent-only's agent_only.
+		{"the bucket allowlist is DESIGN 4.3's bucket fields, Tier1BucketFields, with agent_only", set(bucketRequired, bucketOptional), set(withAgentOnly(event.Tier1BucketFields()))},
 		{"the slot allowlist is DESIGN 4.3's slot fields, Tier1SlotFields", set(slotRequired, slotOptional), set(event.Tier1SlotFields())},
 		{"the commit allowlist is DESIGN 4.3's commit fields", set(commitRequired, commitOptional), set([]string{
 			"sha", "parents", "project", "observed_at", "author_time", "committer_time", "files_changed", "insertions",
@@ -150,6 +153,14 @@ func TestAllowlist(t *testing.T) {
 			}
 		})
 	}
+}
+
+// withAgentOnly adds agent_only to fields unless they have it.
+func withAgentOnly(fields []string) []string {
+	if slices.Contains(fields, "agent_only") {
+		return fields
+	}
+	return append(fields, "agent_only")
 }
 
 // TestEnums checks the server's enum lists against pkg/event's, so a value
@@ -240,6 +251,33 @@ func TestBucketShape(t *testing.T) {
 		}, shapeResult{CodeBadString, "slots[0].lbl[0]"}},
 		{"a scoring version that isn't N.N.N is bad_string", func(m map[string]any) { m["v"] = "1.0" }, shapeResult{CodeBadString, "v"}},
 		{"params without sha256: is bad_string", func(m map[string]any) { m["params"] = strings.Repeat("ab", 32) }, shapeResult{CodeBadString, "params"}},
+		{"agent_only by project passes", func(m map[string]any) {
+			m["agent_only"] = map[string]any{"p_one": 12.5, "p_two": 0.5}
+		}, shapeResult{}},
+		{"an empty agent_only passes", func(m map[string]any) { m["agent_only"] = map[string]any{} }, shapeResult{}},
+		{"agent_only named by a path is bad_string", func(m map[string]any) {
+			m["agent_only"] = map[string]any{"/home/teen/game": 3}
+		}, shapeResult{CodeBadString, "agent_only"}},
+		{"agent_only off its half-second steps is bad_number", func(m map[string]any) {
+			m["agent_only"] = map[string]any{"p_one": 1.25}
+		}, shapeResult{CodeBadNumber, "agent_only"}},
+		{"agent_only over a minute is bad_number", func(m map[string]any) {
+			m["agent_only"] = map[string]any{"p_one": 60.5}
+		}, shapeResult{CodeBadNumber, "agent_only"}},
+		{"negative agent_only is bad_number", func(m map[string]any) {
+			m["agent_only"] = map[string]any{"p_one": -0.5}
+		}, shapeResult{CodeBadNumber, "agent_only"}},
+		{"agent_only seconds in a string are bad_type", func(m map[string]any) {
+			m["agent_only"] = map[string]any{"p_one": "3"}
+		}, shapeResult{CodeBadType, "agent_only"}},
+		{"a null agent_only is bad_type", func(m map[string]any) { m["agent_only"] = nil }, shapeResult{CodeBadType, "agent_only"}},
+		{"agent_only for 65 projects is too_many", func(m map[string]any) {
+			ao := map[string]any{}
+			for i := range maxAgentOnly + 1 {
+				ao["p_"+strconv.Itoa(i)] = 1
+			}
+			m["agent_only"] = ao
+		}, shapeResult{CodeTooMany, "agent_only"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -257,7 +295,7 @@ func TestBucketShape(t *testing.T) {
 		if e != nil {
 			t.Fatalf("refused: %+v", *e)
 		}
-		if want := mb.Shareable(); string(marshal(t, got)) != string(marshal(t, want)) {
+		if want := (Revision{MinuteBucket: mb.Shareable()}); string(marshal(t, got)) != string(marshal(t, want)) {
 			t.Errorf("got  %s\nwant %s", marshal(t, got), marshal(t, want))
 		}
 	})
@@ -269,7 +307,7 @@ func sampleCommit() map[string]any {
 		"sha": strings.Repeat("a", 40), "parents": []any{strings.Repeat("b", 40)}, "project": "p_one",
 		"observed_at": 1795089660250, "author_time": 1795089600, "committer_time": 1795089600,
 		"files_changed": 3, "insertions": 10, "deletions": 2, "path_hmacs": []any{"k_one"},
-		"credited_seconds_since_parent": 120.5,
+		"credited_seconds_since_parent": map[string]any{"prompting": 100, "testing": 20.5},
 		"rewrites":                      []any{map[string]any{"old_sha": strings.Repeat("c", 40), "new_sha": strings.Repeat("a", 40)}},
 		"actor":                         "human", "agent_trailer": "claude",
 	}
@@ -320,6 +358,52 @@ func TestCommitShape(t *testing.T) {
 			m["insertions"] = -1
 			return marshal(t, m)
 		}, shapeResult{CodeBadNumber, "insertions"}},
+		{"a commit dated after 2099 passes, since git takes any date", func(t *testing.T) []byte {
+			m := sampleCommit()
+			m["author_time"], m["committer_time"] = 5_000_000_000, 5_000_000_000
+			return marshal(t, m)
+		}, shapeResult{}},
+		{"a commit without its counts passes, as the client sends one whose shortstat it couldn't read", func(t *testing.T) []byte {
+			m := sampleCommit()
+			delete(m, "files_changed")
+			delete(m, "insertions")
+			delete(m, "deletions")
+			return marshal(t, m)
+		}, shapeResult{}},
+		{"credited seconds as one number, not split by kind, are bad_type", func(t *testing.T) []byte {
+			m := sampleCommit()
+			m["credited_seconds_since_parent"] = 120.5
+			return marshal(t, m)
+		}, shapeResult{CodeBadType, "credited_seconds_since_parent"}},
+		{"credited seconds under a name that isn't an activity kind are bad_string", func(t *testing.T) []byte {
+			m := sampleCommit()
+			m["credited_seconds_since_parent"] = map[string]any{"coding": 5}
+			return marshal(t, m)
+		}, shapeResult{CodeBadString, "credited_seconds_since_parent"}},
+		{"a parent listed twice breaks a rule", func(t *testing.T) []byte {
+			m := sampleCommit()
+			m["parents"] = []any{strings.Repeat("b", 40), strings.Repeat("b", 40)}
+			return marshal(t, m)
+		}, shapeResult{CodeBadRule, "parents"}},
+		{"a path key listed twice breaks a rule", func(t *testing.T) []byte {
+			m := sampleCommit()
+			m["path_hmacs"] = []any{"k_one", "k_one"}
+			return marshal(t, m)
+		}, shapeResult{CodeBadRule, "path_hmacs"}},
+		{"an agent trailer outside the adapter's list is bad_string, since a trailer can hold a name", func(t *testing.T) []byte {
+			m := sampleCommit()
+			m["agent_trailer"] = "Jane_Doe"
+			return marshal(t, m)
+		}, shapeResult{CodeBadString, "agent_trailer"}},
+		{"2,000 rewrites, a squash of as many commits as a rebase maps, pass", func(t *testing.T) []byte {
+			m := sampleCommit()
+			rw := make([]any, maxRewrites)
+			for i := range rw {
+				rw[i] = map[string]any{"old_sha": fmt.Sprintf("%040x", i+1), "new_sha": strings.Repeat("a", 40)}
+			}
+			m["rewrites"] = rw
+			return marshal(t, m)
+		}, shapeResult{}},
 		{"1,025 parents are too_many", func(t *testing.T) []byte {
 			m := sampleCommit()
 			ps := make([]any, maxList+1)
@@ -358,6 +442,9 @@ func TestLabelsShape(t *testing.T) {
 		{"labels with one harness pass", func(map[string]any) {}, shapeResult{}},
 		{"labels with no harness pass", func(m map[string]any) { m["harnesses"] = []any{} }, shapeResult{}},
 		{"a Go pseudo-version as the build passes", func(m map[string]any) { m["client_build"] = "v0.0.0-20261119104900-1a2b3c4d5e6f" }, shapeResult{}},
+		{"a harness without a version passes, as a hook that names none", func(m map[string]any) {
+			m["harnesses"] = []any{map[string]any{"name": "codex"}}
+		}, shapeResult{}},
 		{"a hostname is unknown_field", func(m map[string]any) { m["hostname"] = "teens-laptop" }, shapeResult{CodeUnknownField, ""}},
 		{"a missing vm flag is missing_field", func(m map[string]any) { delete(m, "vm") }, shapeResult{CodeMissingField, "vm"}},
 		{"a vm flag in a string is bad_type", func(m map[string]any) { m["vm"] = "true" }, shapeResult{CodeBadType, "vm"}},
@@ -499,6 +586,22 @@ func TestFreeTextRefused(t *testing.T) {
 		})
 	}
 	for i, text := range freeText {
+		t.Run("minute bucket: free text "+strconv.Itoa(i)+" as an agent_only project is refused as bad_string", func(t *testing.T) {
+			m := asMap(t, shareableJSON(t, sampleBucket("d_test", sampleMinute, 1)))
+			m["agent_only"] = map[string]any{text: 1}
+			_, e := checkBucket(marshal(t, m))
+			if got, want := outcomeOf(e), (shapeResult{CodeBadString, "agent_only"}); got != want {
+				t.Errorf("got %+v, want %+v", got, want)
+			}
+		})
+		t.Run("commit record: free text "+strconv.Itoa(i)+" as an activity kind is refused as bad_string", func(t *testing.T) {
+			m := sampleCommit()
+			m["credited_seconds_since_parent"] = map[string]any{text: 1}
+			_, e := parseCommit(marshal(t, m))
+			if got, want := outcomeOf(e), (shapeResult{CodeBadString, "credited_seconds_since_parent"}); got != want {
+				t.Errorf("got %+v, want %+v", got, want)
+			}
+		})
 		t.Run("minute bucket: free text "+strconv.Itoa(i)+" as an uncredited reason is refused as bad_string", func(t *testing.T) {
 			m := asMap(t, shareableJSON(t, sampleBucket("d_test", sampleMinute, 1)))
 			u := maps.Clone(m["uncredited"].(map[string]any))
@@ -614,6 +717,13 @@ func FuzzFreeText(f *testing.F) {
 			got := outcomeOf(check(t, mb.kind, m))
 			if want := (shapeResult{CodeBadString, mb.field}); got != want {
 				t.Errorf("%s with %q in %s: got %+v, want %+v", mb.kind, text, mb.field, got, want)
+			}
+		}
+		if !lenientForms["key"].MatchString(text) {
+			m := samples["bucket"](t)
+			m["agent_only"] = map[string]any{text: 1}
+			if got, want := outcomeOf(check(t, "bucket", m)), (shapeResult{CodeBadString, "agent_only"}); got != want {
+				t.Errorf("bucket with %q as an agent_only project: got %+v, want %+v", text, got, want)
 			}
 		}
 		if !uncreditedForm.MatchString(text) {
