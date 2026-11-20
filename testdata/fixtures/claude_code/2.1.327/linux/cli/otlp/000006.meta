@@ -1,0 +1,9 @@
+unix_ns=1795193324156849039
+utc=2026-11-20T16:48:44Z
+method=POST
+path=/v1/metrics
+content_type=application/json
+content_encoding=
+bytes_received=5295
+bytes_saved=5295
+header_names=connection,content-length,content-type,host,user-agent
