@@ -52,6 +52,11 @@ type Bucket struct {
 	// Rev numbers the minute's revisions from 0 (DESIGN 3.7, 6.2 D1).
 	// Buckets.Put sets it.
 	Rev uint32 `json:"rev"`
+	// Batch is the ledger batch whose Step wrote the revision. A scorer
+	// that scores batches again, after a restart or a lost state.json,
+	// skips a minute whose latest revision came from a later batch, so
+	// it writes no revision twice. It stays on the device.
+	Batch uint64 `json:"batch"`
 	// Projects splits the minute by project key. It stays on the device.
 	Projects map[string]ProjectMinute `json:"projects,omitempty"`
 }
@@ -120,11 +125,12 @@ func (b Bucket) MinuteBucket(w event.Witness) event.MinuteBucket {
 	return m
 }
 
-// sameContent reports whether a and b say the same, apart from their rev.
-// It compares their JSON, which writes maps in key order, so it is exact
-// and needs no list of fields.
+// sameContent reports whether a and b say the same, apart from their rev
+// and the batch that wrote them. It compares their JSON, which writes maps
+// in key order, so it is exact and needs no list of fields.
 func sameContent(a, b Bucket) bool {
 	a.Rev, b.Rev = 0, 0
+	a.Batch, b.Batch = 0, 0
 	ja, errA := json.Marshal(a)
 	jb, errB := json.Marshal(b)
 	return errA == nil && errB == nil && bytes.Equal(ja, jb)

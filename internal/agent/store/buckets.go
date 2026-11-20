@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -241,21 +242,44 @@ func (s *Buckets) Range(from, to int64) ([]Bucket, error) {
 	return out, nil
 }
 
-// Pending returns the minutes from from on, up to the end of the latest
-// day read, whose latest revision is pending, in minute order. It reads
-// every day from from's to today's.
-func (s *Buckets) Pending(from int64, now time.Time) ([]Bucket, error) {
-	to := now.UnixMilli() + dayMS
-	bs, err := s.Range(from, to)
+// Pending returns the latest revision of every minute from from on, in
+// Unix ms, that is still pending, in minute order. It reads every day file
+// in the directory from from's day on, without keeping the ones it hadn't
+// read, so a scan from far back costs no memory.
+func (s *Buckets) Pending(from int64) ([]Bucket, error) {
+	entries, err := os.ReadDir(s.dir)
 	if err != nil {
 		return nil, err
 	}
-	out := bs[:0]
-	for _, b := range bs {
-		if b.State == event.StatePending {
-			out = append(out, b)
+	first := DayOf(from)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []Bucket
+	for _, e := range entries {
+		day, ok := strings.CutSuffix(e.Name(), ".jsonl")
+		if !ok || e.IsDir() || day < first {
+			continue
+		}
+		if _, err := time.Parse(time.DateOnly, day); err != nil {
+			continue
+		}
+		latest := map[int64]Bucket{}
+		if d, ok := s.days[day]; ok {
+			latest = d.latest
+		} else {
+			data, err := os.ReadFile(s.path(day))
+			if err != nil {
+				return nil, err
+			}
+			readLines(data, latest)
+		}
+		for ms, b := range latest {
+			if ms >= from && b.State == event.StatePending {
+				out = append(out, b)
+			}
 		}
 	}
+	slices.SortFunc(out, func(a, b Bucket) int { return cmp.Compare(a.At(), b.At()) })
 	return out, nil
 }
 

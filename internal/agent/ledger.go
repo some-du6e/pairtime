@@ -23,7 +23,9 @@ const ledgerOpenWait = 5 * time.Second
 // (keyFocus), and until the writer is open, presence's and focus's
 // records wait in a.ledgerIn. Every seal goes through the scheduler's seal
 // every BATCH_S, presence's seals on lock and suspend, and the writer's
-// own on a prompt or a stop.
+// own on a prompt or a stop. Each sealed batch goes to the scorer loop,
+// which startLedger starts once the writer is open (WP-AG4), so the
+// scorer reads only sealed records (decision E-sm-1.1-seq-gaps).
 func (a *agent) startLedger() func() {
 	a.ledgerIn = ledger.NewPresence(func(msg string) { a.setProblem("ledger", msg) })
 	var (
@@ -48,6 +50,9 @@ func (a *agent) startLedger() func() {
 		}
 		w = lw
 		a.ledgerIn.Attach(lw)
+		if a.scorer != nil {
+			a.scorer.Start()
+		}
 	}()
 	return func() {
 		select {
@@ -82,11 +87,17 @@ func (a *agent) openLedger() (*ledger.Writer, error) {
 	// doctor and the dashboard repeat it (DESIGN 3.6; CP 5.2).
 	a.setProblem("keystore", st.Warning())
 	a.keyFocus(ks)
+	var sealed func(ledger.Batch)
+	if a.scorer != nil {
+		sealed = a.scorer.Sealed
+	}
 	return ledger.Open(ledger.Options{
 		Dir:     a.dirs.Ledger(),
 		Keys:    ks.Keys(),
 		KeyID:   st.KeyID,
+		Params:  a.table,
 		Sched:   a.sched,
+		Sealed:  sealed,
 		Problem: func(msg string) { a.setProblem("ledger", msg) },
 	})
 }

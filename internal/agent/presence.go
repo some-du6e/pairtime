@@ -13,13 +13,15 @@ import (
 // WP-OS6), and so does focus on a terminal, editor or agent app, which the
 // focus component reports through FocusAt (focus.go, WP-OS2). docs/PLAN.md
 // names who wires the rest: WP-AG3 reports every hook and track message
-// through Hook; WP-AG4 passes the parameter table it scores with as
-// Params, and until then the sampler reads the newest table. Its records
+// through Hook. It gets the parameter table the scorer runs with as
+// Params, so it slows down where the scorer expects it to (WP-AG4;
+// DESIGN 6.2 D14). Its records
 // go to the ledger, which seals a batch after every suspend and lock
 // (startLedger, WP-LG5), so startLedger must run first.
 func (a *agent) startPresence() func() {
 	a.presence = presence.New(presence.Options{
 		Sched:   a.sched,
+		Params:  a.table,
 		OS:      presence.ThisOS(),
 		Record:  a.ledgerIn.Record,
 		Seal:    a.ledgerIn.Seal,

@@ -20,6 +20,7 @@ import (
 func (a *agent) handler(token string) http.Handler {
 	api := http.NewServeMux()
 	api.HandleFunc("GET /v1/status", a.serveStatus)
+	api.HandleFunc("GET /v1/today", a.serveToday)
 	api.HandleFunc("POST /v1/agent/stop", a.serveStop)
 
 	mux := http.NewServeMux()

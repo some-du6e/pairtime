@@ -8,7 +8,8 @@
 // timer goes through, and the HTTP server on 127.0.0.1. WP-AG2 added the
 // socket that hooks hand their messages to and the inbox they spool to
 // when the agent is down (packages ipc and inbox), and WP-OS8 the notifier
-// that shows the coach's notification. The other components of
+// that shows the coach's notification, and WP-AG4 the scorer loop and the
+// stores it writes (packages scorer and store). The other components of
 // DESIGN 3.3 arrive in later work packages, each as a package under
 // internal/agent that Run starts.
 package agent
@@ -39,8 +40,11 @@ import (
 	"github.com/some-du6e/pairtime/internal/agent/presence"
 	"github.com/some-du6e/pairtime/internal/agent/procs"
 	"github.com/some-du6e/pairtime/internal/agent/sched"
+	"github.com/some-du6e/pairtime/internal/agent/scorer"
 	"github.com/some-du6e/pairtime/internal/agent/state"
+	"github.com/some-du6e/pairtime/internal/agent/store"
 	"github.com/some-du6e/pairtime/internal/version"
+	"github.com/some-du6e/pairtime/pkg/params"
 )
 
 // ErrAlreadyRunning means another agent holds the lock on the same data
@@ -107,6 +111,14 @@ type agent struct {
 	// seals, to the ledger writer once it opens (WP-LG5).
 	ledgerIn  *ledger.Presence
 	keyStores []keys.Store // Options.KeyStores
+	// table is the parameter table the agent scores with, which the
+	// ledger writer and presence get too.
+	table *params.Table
+	// scorer steps pkg/score over every sealed batch and writes buckets,
+	// which the local API reads (WP-AG4). Both are nil when the bucket
+	// store didn't open.
+	scorer  *scorer.Loop
+	buckets *store.Buckets
 
 	stop     chan struct{} // closed when a client asks the agent to stop
 	stopOnce sync.Once
@@ -143,6 +155,7 @@ func Run(ctx context.Context, opts Options) error {
 		stop:      make(chan struct{}),
 		problems:  make(map[string]string),
 		keyStores: opts.KeyStores,
+		table:     newestTable(),
 	}
 	linkOnce.Do(func() { linked = heavyModules() })
 	if err := optIntoEcoQoS(); err != nil {
@@ -152,7 +165,8 @@ func Run(ctx context.Context, opts Options) error {
 	// Each part that starts adds the step that stops it, and they stop in
 	// reverse order: the HTTP server, port.json, the socket and the inbox,
 	// focus, the process scan, the config watch, presence, the ledger, the
-	// scheduler, the notifier, state.json.
+	// scorer, which scores the ledger's last seal, the scheduler, the
+	// notifier, state.json.
 	var closers []func()
 	defer func() {
 		for i := len(closers) - 1; i >= 0; i-- {
@@ -187,6 +201,7 @@ func Run(ctx context.Context, opts Options) error {
 		stopSched()
 		<-schedDone
 	})
+	closers = append(closers, a.startScorer())
 	closers = append(closers, a.startLedger())
 	closers = append(closers, a.startPresence())
 
