@@ -1,0 +1,212 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
+package score
+
+import (
+	"testing"
+
+	"github.com/some-du6e/pairtime/pkg/event"
+)
+
+// slotWant is a slot's expected presence; until is seconds after base, 0
+// for the slot's end.
+type slotWant struct {
+	at      int64 // the slot's start, seconds after base
+	present event.Presence
+	until   int64
+	then    event.Presence
+	asleep  bool
+	locked  bool
+}
+
+func checkSlots(t *testing.T, got Derived, want []slotWant) {
+	t.Helper()
+	for _, w := range want {
+		s, ok := slotAt(got, at(w.at))
+		if !ok {
+			t.Errorf("no slot at %d s", w.at)
+			continue
+		}
+		until := s.End()
+		if w.until != 0 {
+			until = at(w.until)
+		}
+		then := w.then
+		if then == "" {
+			then = w.present
+		}
+		if s.Present != w.present || s.PresentUntil != until || s.Then != then || s.Asleep != w.asleep || s.Locked != w.locked {
+			t.Errorf("slot at %d s: %q until %d then %q, asleep %v, locked %v; want %q until %d then %q, asleep %v, locked %v",
+				w.at, s.Present, s.PresentUntil, s.Then, s.Asleep, s.Locked, w.present, until, then, w.asleep, w.locked)
+		}
+	}
+}
+
+func TestPresence(t *testing.T) {
+	cases := []struct {
+		name  string
+		build func(b *tl)
+		want  []slotWant
+	}{
+		{
+			name: "a silent run of PRESENCE_GAP_S with input on both sides is bridged",
+			build: func(b *tl) {
+				b.mouse(at(5), at(140))
+				b.samples(at(0), at(180))
+			},
+			want: []slotWant{{at: 0, present: event.PresentYes}, {at: 15, present: event.PresentBridged},
+				{at: 120, present: event.PresentBridged}, {at: 135, present: event.PresentYes}},
+		},
+		{
+			name: "a longer silent run keeps PRESENCE_TAIL_S after the last input, to the millisecond, and is no after it",
+			build: func(b *tl) {
+				b.mouse(at(5), at(155))
+				b.samples(at(0), at(180))
+			},
+			want: []slotWant{{at: 0, present: event.PresentYes}, {at: 15, present: event.PresentTail},
+				{at: 30, present: event.PresentTail, until: 35, then: event.PresentNo},
+				{at: 45, present: event.PresentNo}, {at: 135, present: event.PresentNo}, {at: 150, present: event.PresentYes}},
+		},
+		{
+			name: "a slot that overlaps a screen lock is no, input or not",
+			build: func(b *tl) {
+				b.mouse(every(at(1), at(179), 5000)...)
+				b.samples(at(0), at(60))
+				b.power(at(62), event.PowerLock)
+				b.samples(at(61), at(89))
+				b.power(at(90), event.PowerUnlock)
+				b.samples(at(90), at(180))
+			},
+			want: []slotWant{{at: 45, present: event.PresentYes}, {at: 60, present: event.PresentNo, locked: true},
+				{at: 75, present: event.PresentNo, locked: true}, {at: 90, present: event.PresentYes}},
+		},
+		{
+			name: "a suspend is a hard break from suspend to resume",
+			build: func(b *tl) {
+				b.mouse(every(at(1), at(59), 5000)...)
+				b.mouse(every(at(601), at(700), 5000)...)
+				b.samples(at(0), at(60))
+				b.power(at(60), event.PowerSuspend)
+				b.sample(at(60))
+				b.power(at(600), event.PowerResume)
+				b.samples(at(600), at(720))
+			},
+			want: []slotWant{{at: 45, present: event.PresentYes}, {at: 60, present: event.PresentNo, asleep: true},
+				{at: 585, present: event.PresentNo, asleep: true}, {at: 600, present: event.PresentYes}},
+		},
+		{
+			name: "a gap between samples longer than SLEEP_GAP_S is a hard break, and the silence around it isn't bridged",
+			build: func(b *tl) {
+				b.mouse(at(5), at(100))
+				for _, s := range []int64{0, 15, 30, 75, 90, 105, 120} {
+					b.sample(at(s))
+				}
+			},
+			want: []slotWant{{at: 15, present: event.PresentTail}, {at: 30, present: event.PresentNo, asleep: true},
+				{at: 45, present: event.PresentNo, asleep: true}, {at: 60, present: event.PresentNo, asleep: true},
+				{at: 75, present: event.PresentNo}, {at: 90, present: event.PresentYes}},
+		},
+		{
+			name: "a gap of exactly SLEEP_GAP_S is no break",
+			build: func(b *tl) {
+				b.mouse(at(5), at(50))
+				for _, s := range []int64{0, 15, 45, 60, 75} {
+					b.sample(at(s))
+				}
+			},
+			want: []slotWant{{at: 15, present: event.PresentBridged}, {at: 30, present: event.PresentBridged},
+				{at: 45, present: event.PresentYes}},
+		},
+		{
+			name: "after CONTEXT_IDLE_S without input, samples a minute apart are slow sampling, not sleep (DESIGN 6.2 D14)",
+			build: func(b *tl) {
+				b.mouse(at(5), at(785))
+				b.samples(at(0), at(660))
+				for _, s := range []int64{720, 780, 795, 810} {
+					b.sample(at(s))
+				}
+			},
+			want: []slotWant{{at: 660, present: event.PresentNo}, {at: 705, present: event.PresentNo},
+				{at: 780, present: event.PresentYes}},
+		},
+		{
+			name: "slots before the first sample are unknown",
+			build: func(b *tl) {
+				b.harness(at(0), event.ViaLog, "s_1", "p_1", &event.AgentOutput{TurnKey: "t_1", Words: 10})
+				b.mouse(at(61))
+				b.samples(at(60), at(90))
+			},
+			want: []slotWant{{at: 0, present: event.PresentUnknown}, {at: 45, present: event.PresentUnknown},
+				{at: 60, present: event.PresentYes}},
+		},
+		{
+			name: "a tail ends at a hard break",
+			build: func(b *tl) {
+				b.mouse(at(10))
+				b.samples(at(0), at(15))
+				b.power(at(20), event.PowerLock)
+				b.samples(at(20), at(60))
+			},
+			want: []slotWant{{at: 0, present: event.PresentYes}, {at: 15, present: event.PresentNo, locked: true}},
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			b := newTL(false)
+			c.build(b)
+			checkSlots(t, b.run(t, Device{}), c.want)
+		})
+	}
+}
+
+func TestInputKeys(t *testing.T) {
+	for _, c := range []struct {
+		name       string
+		keyCounter bool
+		press      bool
+		want       *bool
+	}{
+		{"without a key counter input_keys is null", false, true, nil},
+		{"with one, a key press sets input_keys", true, true, ptr(true)},
+		{"with one, pointer input alone leaves input_keys false", true, false, ptr(false)},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			b := newTL(c.keyCounter)
+			if c.press {
+				b.press(at(5))
+			} else {
+				b.mouse(at(5))
+			}
+			b.samples(at(0), at(30))
+			s, ok := slotAt(b.run(t, Device{}), at(0))
+			if !ok {
+				t.Fatal("no slot")
+			}
+			if (s.InputKeys == nil) != (c.want == nil) || (s.InputKeys != nil && *s.InputKeys != *c.want) {
+				t.Errorf("input_keys %v, want %v", s.InputKeys, c.want)
+			}
+			if !s.InputAny {
+				t.Error("input_any is false")
+			}
+		})
+	}
+}
+
+func TestMsOf(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		in   float64
+		want int64
+	}{
+		{"a tenth of a second is 100 ms", 0.1, 100},
+		{"a large idle time keeps its tenths", 35248.6, 35_248_600},
+		{"sub-millisecond digits round to the nearest millisecond", 2.0006, 2001},
+		{"zero is zero", 0, 0},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			if got := msOf(c.in); got != c.want {
+				t.Errorf("msOf(%v) = %d, want %d", c.in, got, c.want)
+			}
+		})
+	}
+}

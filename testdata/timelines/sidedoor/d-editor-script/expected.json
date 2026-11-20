@@ -1,0 +1,178 @@
+{
+  "fixture": "sidedoor/d-editor-script",
+  "title": "A script posting editor heartbeats, with a jiggler on Windows",
+  "sm": "docs/PLAN.md WP-FX4 (d); DESIGN 5.2, 5.7, 6.2 D2 and D19, 6.4",
+  "date": "2026-11-25",
+  "timezone": "America/Chicago",
+  "utc_offset": "-06:00",
+  "os": "windows",
+  "input_keys": false,
+  "evidence": "C",
+  "witness": "witnessed",
+  "device": "d_74637ac25495",
+  "projects": {"p_fa9d9f85d14b": "the project VS Code has open"},
+  "window": {"start": "2026-11-25T20:00:00Z", "end": "2026-11-25T20:11:00Z", "local": "14:00-14:11"},
+  "rows": [
+    {
+      "start": "2026-11-25T20:00:00Z",
+      "minutes": 1,
+      "local": "14:00",
+      "bucket": false,
+      "codes": ["X.no_anchor"]
+    },
+    {
+      "start": "2026-11-25T20:01:00Z",
+      "minutes": 1,
+      "local": "14:01",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_fa9d9f85d14b": {"E": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "note": "Heartbeats 100 s apart, each with a 120 s lead, cover every second from 14:01:00."
+    },
+    {
+      "start": "2026-11-25T20:02:00Z",
+      "minutes": 1,
+      "local": "14:02",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_fa9d9f85d14b": {"E": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "note": "Heartbeats 100 s apart, each with a 120 s lead, cover every second from 14:01:00."
+    },
+    {
+      "start": "2026-11-25T20:03:00Z",
+      "minutes": 1,
+      "local": "14:03",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_fa9d9f85d14b": {"E": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "note": "Heartbeats 100 s apart, each with a 120 s lead, cover every second from 14:01:00."
+    },
+    {
+      "start": "2026-11-25T20:04:00Z",
+      "minutes": 1,
+      "local": "14:04",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_fa9d9f85d14b": {"E": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "note": "Heartbeats 100 s apart, each with a 120 s lead, cover every second from 14:01:00."
+    },
+    {
+      "start": "2026-11-25T20:05:00Z",
+      "minutes": 1,
+      "local": "14:05",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_fa9d9f85d14b": {"E": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "note": "Heartbeats 100 s apart, each with a 120 s lead, cover every second from 14:01:00."
+    },
+    {
+      "start": "2026-11-25T20:06:00Z",
+      "minutes": 1,
+      "local": "14:06",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_fa9d9f85d14b": {"E": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "note": "Heartbeats 100 s apart, each with a 120 s lead, cover every second from 14:01:00."
+    },
+    {
+      "start": "2026-11-25T20:07:00Z",
+      "minutes": 1,
+      "local": "14:07",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_fa9d9f85d14b": {"E": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "note": "Heartbeats 100 s apart, each with a 120 s lead, cover every second from 14:01:00."
+    },
+    {
+      "start": "2026-11-25T20:08:00Z",
+      "minutes": 1,
+      "local": "14:08",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_fa9d9f85d14b": {"E": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "note": "Heartbeats 100 s apart, each with a 120 s lead, cover every second from 14:01:00."
+    },
+    {
+      "start": "2026-11-25T20:09:00Z",
+      "minutes": 1,
+      "local": "14:09",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 40,
+      "credit": {
+        "p_fa9d9f85d14b": {"E": 40}
+      },
+      "uncredited": {"X.no_anchor": 20},
+      "agent_running_s": 0,
+      "note": "The last heartbeat is at 14:09:40, and an edit has no trail."
+    },
+    {
+      "start": "2026-11-25T20:10:00Z",
+      "minutes": 1,
+      "local": "14:10",
+      "bucket": false,
+      "codes": ["X.no_anchor"]
+    }
+  ],
+  "totals": {
+    "credited_s": 520,
+    "credited_by_project": {"p_fa9d9f85d14b": 520},
+    "credited_by_reason": {"E": 520},
+    "uncredited": {"X.no_anchor": 20},
+    "agent_running_s": 0,
+    "level_a_s": 0,
+    "level_b_s": 0,
+    "level_c_s": 520,
+    "via_track_s": 0,
+    "logged_s": 0,
+    "ai_logged_s": 0,
+    "level_c_cap_s": 0
+  },
+  "stated": ["level_a_s", "level_b_s", "logged_s", "ai_logged_s"],
+  "approx": {},
+  "errata": [],
+  "notes": [
+    "Every credited second rests on an editor_unverified anchor: level C, and no side-door label, because DESIGN 6.4's labels are via_track, via_plugin and via_bridge.",
+    "logged_s and ai_logged_s are 0: editor_unverified heartbeats never count (D19), and there is nothing else."
+  ]
+}

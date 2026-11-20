@@ -1,0 +1,85 @@
+{
+  "fixture": "sidedoor/a-track-jiggler",
+  "prompts": [
+    {
+      "turn_key": "t_5a54173af969",
+      "t": 1795637040000,
+      "local": "14:04:00",
+      "text": "make the leaderboard command page results ten at a time and add next and previous buttons.",
+      "len_chars": 90,
+      "source": "invented: the loop's LLM line, which the agent keeps as the cli.track label; turn_key is this fixture's name for the track turn, as in sidedoor.json"
+    },
+    {
+      "turn_key": "t_25c38032f631",
+      "t": 1795637061000,
+      "local": "14:04:21",
+      "text": "the reminder job fires twice after a restart, store the last run time and skip duplicates.",
+      "len_chars": 90,
+      "source": "invented: the loop's LLM line, which the agent keeps as the cli.track label; turn_key is this fixture's name for the track turn, as in sidedoor.json"
+    },
+    {
+      "turn_key": "t_ea32e6bb5faa",
+      "t": 1795637082000,
+      "local": "14:04:42",
+      "text": "add a slash command that shows the five most recent reminders for whoever runs it, please.",
+      "len_chars": 90,
+      "source": "invented: the loop's LLM line, which the agent keeps as the cli.track label; turn_key is this fixture's name for the track turn, as in sidedoor.json"
+    },
+    {
+      "turn_key": "t_344669463870",
+      "t": 1795637103000,
+      "local": "14:05:03",
+      "text": "refactor the database helpers into one module and give every query a short docstring, too.",
+      "len_chars": 90,
+      "source": "invented: the loop's LLM line, which the agent keeps as the cli.track label; turn_key is this fixture's name for the track turn, as in sidedoor.json"
+    },
+    {
+      "turn_key": "t_669c09f98bf4",
+      "t": 1795637124000,
+      "local": "14:05:24",
+      "text": "write tests for the time parser that cover tomorrow, next friday and dates without a year.",
+      "len_chars": 90,
+      "source": "invented: the loop's LLM line, which the agent keeps as the cli.track label; turn_key is this fixture's name for the track turn, as in sidedoor.json"
+    },
+    {
+      "turn_key": "t_6ee6b7496f9c",
+      "t": 1795637145000,
+      "local": "14:05:45",
+      "text": "the bot crashes when a channel is deleted, so catch that and remove its saved settings too",
+      "len_chars": 90,
+      "source": "invented: the loop's LLM line, which the agent keeps as the cli.track label; turn_key is this fixture's name for the track turn, as in sidedoor.json"
+    },
+    {
+      "turn_key": "t_8e41725743a5",
+      "t": 1795637166000,
+      "local": "14:06:06",
+      "text": "add a config option for the default time zone and use it when a user has not set one, okay",
+      "len_chars": 90,
+      "source": "invented: the loop's LLM line, which the agent keeps as the cli.track label; turn_key is this fixture's name for the track turn, as in sidedoor.json"
+    },
+    {
+      "turn_key": "t_8633c94d57e4",
+      "t": 1795637187000,
+      "local": "14:06:27",
+      "text": "make the help command list commands by category and hide the admin ones from normal users.",
+      "len_chars": 90,
+      "source": "invented: the loop's LLM line, which the agent keeps as the cli.track label; turn_key is this fixture's name for the track turn, as in sidedoor.json"
+    },
+    {
+      "turn_key": "t_adeecf4bb50d",
+      "t": 1795637208000,
+      "local": "14:06:48",
+      "text": "cache the guild settings for a minute so we stop hitting the database on every new message",
+      "len_chars": 90,
+      "source": "invented: the loop's LLM line, which the agent keeps as the cli.track label; turn_key is this fixture's name for the track turn, as in sidedoor.json"
+    },
+    {
+      "turn_key": "t_8a6b18cf95f0",
+      "t": 1795637229000,
+      "local": "14:07:09",
+      "text": "add logging around the scheduler so we can see when each job starts, ends, and its runtime",
+      "len_chars": 90,
+      "source": "invented: the loop's LLM line, which the agent keeps as the cli.track label; turn_key is this fixture's name for the track turn, as in sidedoor.json"
+    }
+  ]
+}
