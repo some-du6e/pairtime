@@ -4,6 +4,7 @@ package main
 
 import (
 	"bytes"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -53,6 +54,7 @@ func file(s string) *fstest.MapFile { return &fstest.MapFile{Data: []byte(s)} }
 
 func TestCheckTree(t *testing.T) {
 	const dir = "claude_code/2.0.14/windows"
+	const stray = "not inside a <harness>/<version>/<os>/ fixture directory, so no PROVENANCE.md covers it"
 	tests := []struct {
 		name     string
 		files    fstest.MapFS
@@ -64,13 +66,68 @@ func TestCheckTree(t *testing.T) {
 			files: fstest.MapFS{},
 		},
 		{
-			name: "files above the os level need no provenance",
+			name: "README notes and the root's template above the os level pass",
 			files: fstest.MapFS{
-				"README.md":                file("how fixtures are laid out"),
-				"PROVENANCE.template.md":   file("---\nharness: <harness>\n---\n"),
-				"claude_code/README.md":    file("notes"),
+				"README.md":                    file("how fixtures are laid out"),
+				"PROVENANCE.template.md":       file("---\nharness: <harness>\n---\n"),
+				"claude_code/README.md":        file("notes"),
+				"claude_code/2.0.14/README.md": file("notes on this version"),
+			},
+		},
+		{
+			name: "a file above the os level fails",
+			files: fstest.MapFS{
 				"claude_code/2.0.14/x.txt": file("a stray file is not a fixture directory"),
 			},
+			want: []problem{{path: "claude_code/2.0.14/x.txt", msg: stray}},
+		},
+		{
+			name: "a capture saved without its os level fails, even beside a fixture directory",
+			files: fstest.MapFS{
+				dir + "/PROVENANCE.md":                file(good),
+				"claude_code/2.0.14/transcript.jsonl": file("{}"),
+			},
+			want:     []problem{{path: "claude_code/2.0.14/transcript.jsonl", msg: stray}},
+			wantDirs: 1,
+		},
+		{
+			name: "files directly under the root or a harness directory fail",
+			files: fstest.MapFS{
+				"notes.txt":             file("not a README"),
+				"codex/rollout-1.jsonl": file("{}"),
+			},
+			want: []problem{
+				{path: "codex/rollout-1.jsonl", msg: stray},
+				{path: "notes.txt", msg: stray},
+			},
+		},
+		{
+			name: "the provenance template is a note only at the root",
+			files: fstest.MapFS{
+				"claude_code/PROVENANCE.template.md": file("---\nharness: <harness>\n---\n"),
+			},
+			want: []problem{{path: "claude_code/PROVENANCE.template.md", msg: stray}},
+		},
+		{
+			name: "a PROVENANCE.md above the os level covers nothing",
+			files: fstest.MapFS{
+				"claude_code/2.0.14/PROVENANCE.md":  file(good),
+				"claude_code/2.0.14/hooks/001.json": file("{}"),
+			},
+			want: []problem{
+				{path: "claude_code/2.0.14/PROVENANCE.md", msg: stray},
+				{path: "claude_code/2.0.14/hooks", msg: "fixture directory has no PROVENANCE.md"},
+			},
+			wantDirs: 1,
+		},
+		{
+			name: "a symbolic link in place of an os directory fails",
+			files: fstest.MapFS{
+				"claude_code/2.0.13/windows/PROVENANCE.md": file(good),
+				dir: &fstest.MapFile{Mode: fs.ModeSymlink, Data: []byte("../2.0.13/windows")},
+			},
+			want:     []problem{{path: dir, msg: stray}},
+			wantDirs: 1,
 		},
 		{
 			name: "a fixture directory with complete provenance passes",

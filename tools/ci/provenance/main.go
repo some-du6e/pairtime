@@ -20,6 +20,12 @@
 // harness. captured_on is a date, YYYY-MM-DD. More fields may follow, and
 // any Markdown may follow the front matter.
 //
+// Every file in the tree must sit inside one of those directories, where
+// its PROVENANCE.md covers it. Only notes may sit above them: a README.md
+// at any level, and the root's PROVENANCE.template.md (WP-AD0). So a
+// capture saved without its <os> level is reported, and so is a symbolic
+// link where a directory should be.
+//
 // Usage:
 //
 //	go run ./tools/ci/provenance [PATH...]
@@ -50,6 +56,13 @@ const FileName = "PROVENANCE.md"
 // fixtureDepth is how far below the fixtures root a <harness>/<version>/<os>
 // directory sits.
 const fixtureDepth = 3
+
+// isNote reports whether a file above the fixture directories, at a
+// slash-separated path relative to the tree, is one of the notes allowed
+// there.
+func isNote(p string) bool {
+	return path.Base(p) == "README.md" || p == "PROVENANCE.template.md"
+}
 
 // required lists the front-matter fields every provenance file sets, in the
 // order docs/PLAN.md gives them.
@@ -117,7 +130,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stdout, "::error file=%s::%s\n", pr.path, pr.msg)
 	}
 	if len(problems) > 0 {
-		fmt.Fprintf(stdout, "%d provenance problems. Each testdata/fixtures/<harness>/<version>/<os>/ directory needs a %s whose front matter sets %s (see tools/ci/provenance).\n",
+		fmt.Fprintf(stdout, "%d provenance problems. Each testdata/fixtures/<harness>/<version>/<os>/ directory needs a %s whose front matter sets %s, and every fixture file goes in one of those directories (see tools/ci/provenance).\n",
 			len(problems), FileName, strings.Join(required, ", "))
 		return 1
 	}
@@ -134,7 +147,15 @@ func checkTree(fsys fs.FS) ([]problem, int, error) {
 		if err != nil {
 			return err
 		}
-		if !d.IsDir() || p == "." {
+		if p == "." {
+			return nil
+		}
+		if !d.IsDir() {
+			// The walk skips each fixture directory's contents once it's
+			// checked, so anything else reaching here sits above one.
+			if !isNote(p) {
+				problems = append(problems, problem{path: p, msg: "not inside a <harness>/<version>/<os>/ fixture directory, so no PROVENANCE.md covers it"})
+			}
 			return nil
 		}
 		depth := strings.Count(p, "/") + 1

@@ -35,7 +35,7 @@ An oracle decides whether code is right, so the code it checks never changes it:
 
 - New oracle files may arrive beside new code. An existing oracle changes in a PR of its own. ci.yml's oracle guard fails a PR that modifies, deletes or renames an oracle and also touches cmd/, internal/, pkg/, web/, extension/ or integrations/, unless Karim adds the `oracle-change` label. A scoring-rule change, SM and code together, is such a PR.
 - When an SM worked example, a design number or a captured fixture disagrees with what the spec says should happen, write docs/errata/<YYYY-MM-DD>-<topic>.md with the input, the expected value, the computed value and your reasoning, add the `erratum` label, and stop there. Karim decides what is wrong; until then the code, the spec and the fixture stay as they are (DESIGN 6.6).
-- Every testdata/fixtures/<harness>/<version>/<os>/ directory has a PROVENANCE.md, which ci.yml checks (tools/ci/provenance says what it holds).
+- Every testdata/fixtures/<harness>/<version>/<os>/ directory has a PROVENANCE.md, and every fixture file sits inside one of those directories; only README.md files and the root's PROVENANCE.template.md go above them. ci.yml checks both (tools/ci/provenance says what PROVENANCE.md holds).
 
 ## Go
 
