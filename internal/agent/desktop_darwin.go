@@ -16,21 +16,25 @@ import (
 // thread may call, and takes suspend, resume, lock and unlock from the
 // MacLoop in opts.Mac, which also gives focus each app activation. Without
 // a MacLoop presence still samples, but no power event or app switch
-// arrives, and GET /v1/status says so.
+// arrives, and GET /v1/status says so. Power and lock are named only while
+// the sampler watches them (watched).
 func (a *agent) openOS(opts Options) osSources {
 	m := opts.Mac
+	signals := func() signalsReply { return a.watched(m.signals()) }
 	if m == nil {
-		// TODO(D-focus-unknown): focus is unknown here; record an os.focus
-		// with app_class unknown once pkg/event has it (WP-EV2).
+		// TODO(WP-OS15): focus is unknown here, and nothing records that
+		// yet. WP-OS15 records an os.focus with app_class unknown when
+		// watching starts with no source, once WP-EV2 adds the value
+		// (D-focus-unknown).
 		return osSources{
 			presence: presence.MacOS(darwin.Presence, nil),
 			focus:    focus.OS{Unknown: noMacLoop, Read: darwin.Processes, GOOS: platform.Darwin},
-			signals:  m.signals,
+			signals:  signals,
 		}
 	}
 	return osSources{
 		presence: presence.MacOS(darwin.Presence, &m.power),
 		focus:    focus.MacOS(&m.focus, darwin.Processes),
-		signals:  m.signals,
+		signals:  signals,
 	}
 }

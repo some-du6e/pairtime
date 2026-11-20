@@ -30,14 +30,16 @@ type Desktop interface {
 //
 // Where d's Status says the desktop gives no idle time, as on KDE and
 // wlroots and with no graphical session, Idle is nil: presence is unknown
-// there (SM 2.1), so the sampler records nothing, and Status says why.
+// there (SM 2.1), so the sampler samples and records nothing, and Status
+// says why. Its power watches run all the same, so a suspend or a lock
+// still seals the open batch (DESIGN 3.3, 3.6).
 //
 // LinuxOS reads d's Power on a goroutine of its own until d is closed, so
 // every suspend lets logind's delay lock go whether or not a sampler
 // watches: each event goes to the watch that wants it, and a suspend's
 // Ready is called once that call has returned, after the sampler has
-// sealed the open batch (DESIGN 3.3). A sampler that isn't running, as on
-// a desktop with no idle time, holds no sleep up.
+// sealed the open batch (DESIGN 3.3). With no watch, as before the sampler
+// starts and after it stops, the event is dropped and holds no sleep up.
 func LinuxOS(d Desktop) OS {
 	var o OS
 	if d.Status().Idle.Known() {

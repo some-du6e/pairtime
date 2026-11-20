@@ -81,7 +81,8 @@ type Idle struct {
 // OS is what the sampler needs from the operating system.
 type OS struct {
 	// Idle reads the input idle time. Nil means this OS has no source yet,
-	// so the sampler records nothing and presence stays unknown (SM 2.1).
+	// so the sampler records nothing and presence stays unknown (SM 2.1);
+	// its power watches still run, so suspends and locks still seal.
 	Idle func() (Idle, error)
 	// Locked reports whether the session is locked. The sampler asks once,
 	// at Start, after the lock watch has started, and follows lock and
@@ -125,10 +126,11 @@ type Options struct {
 	// return quickly and must not call the Sampler. Nil drops records.
 	Record func(Record)
 	// Seal, when set, is called after every suspend and lock, whether or
-	// not a project context is live, so the ledger writer can seal a
-	// batch (DESIGN 3.3, 3.6). For a suspend it runs on the thread Windows
-	// delivers the event on, which gets about two seconds before the
-	// machine sleeps.
+	// not a project context is live and whether or not the OS gives idle
+	// time, so the ledger writer can seal a batch (DESIGN 3.3, 3.6). For a
+	// suspend it runs before the machine sleeps: on Windows on the thread
+	// the event comes on, which gets about two seconds, on macOS inside the
+	// Loop's Power call, and on Linux before logind's delay lock is let go.
 	Seal func(op event.PowerOp)
 	// Problem gets a description of what is wrong, for doctor and the
 	// status endpoint, each time it changes; "" means nothing is.
@@ -179,14 +181,15 @@ func New(opts Options) *Sampler {
 
 // Start starts the power watches, reads the session's lock state and
 // starts sampling. A source that fails is reported through
-// Options.Problem, and the sampler carries on without it. With no idle
-// source, Start does nothing. Focus, Hook and HarnessProcesses may come
-// before Start: the gate keeps what they report, and sampling starts with
-// Start.
+// Options.Problem, and the sampler carries on without it. Focus, Hook and
+// HarnessProcesses may come before Start: the gate keeps what they report,
+// and sampling starts with Start.
+//
+// With no idle source, presence is unknown (SM 2.1), so Start starts the
+// power watches and nothing else: nothing is sampled or recorded, but every
+// suspend and lock still calls Options.Seal, because DESIGN 3.3 and 3.6
+// seal the open batch on each one whether or not idle time is known.
 func (s *Sampler) Start() {
-	if s.opts.OS.Idle == nil {
-		return
-	}
 	s.mu.Lock()
 	if s.watching || s.stopped {
 		s.mu.Unlock()
@@ -197,6 +200,11 @@ func (s *Sampler) Start() {
 
 	s.watch("suspend", "suspend and resume go unrecorded", s.opts.OS.WatchSuspend)
 	s.watch("lock", "lock and unlock go unrecorded", s.opts.OS.WatchLock)
+	if s.opts.OS.Idle == nil {
+		// started stays false, so Power seals but records nothing, and no
+		// sample is ever taken.
+		return
+	}
 
 	// The lock state is read only now, because Windows tells a new
 	// registration nothing about the state it starts in: read before the

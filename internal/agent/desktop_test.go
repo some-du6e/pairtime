@@ -20,13 +20,10 @@ import (
 
 // TestMacLoopSignals checks what GET /v1/status says about a MacLoop that
 // can't report the Loop's own Status: one the agent runs without, one
-// that hasn't started, and one whose Run failed. The Loop's Status itself
-// comes from macOS, so the macOS job's TestDesktopAgentOnMac checks it.
+// that hasn't started, and, off macOS, one whose Run failed. The Loop's
+// Status itself comes from macOS, so cmd/pairtime's TestAgentOnMac
+// (platform.yml's macOS job) checks it.
 func TestMacLoopSignals(t *testing.T) {
-	failed := NewMacLoop()
-	if err := failed.Run(context.Background()); err == nil && !onMac() {
-		t.Fatal("MacLoop.Run worked off macOS")
-	}
 	tests := []struct {
 		name string
 		m    *MacLoop
@@ -36,6 +33,13 @@ func TestMacLoopSignals(t *testing.T) {
 		{name: "before the Loop has registered its sources they are unknown, as starting", m: NewMacLoop(), want: "the macOS notification loop hasn't started yet"},
 	}
 	if !onMac() {
+		// Only off macOS does Run fail at once. On a Mac it registers
+		// IOKit's power source, which works off the main thread too, and
+		// serves the run loop until its context is done.
+		failed := NewMacLoop()
+		if err := failed.Run(context.Background()); err == nil {
+			t.Fatal("MacLoop.Run worked off macOS")
+		}
 		tests = append(tests, struct {
 			name string
 			m    *MacLoop
@@ -101,6 +105,90 @@ func TestMacHandler(t *testing.T) {
 			}
 			if !slices.Equal(pids, tt.pids) {
 				t.Errorf("focus changes for processes %v, want %v", pids, tt.pids)
+			}
+		})
+	}
+}
+
+// TestWatchedSignals checks that GET /v1/status names where suspends and
+// locks come from only while the sampler watches them, on every OS: the
+// OS layer can know logind's or IOKit's source while the agent hears none
+// of its events.
+func TestWatchedSignals(t *testing.T) {
+	watch := func(func(event.PowerOp)) (func(), error) { return func() {}, nil }
+	idle := func() (presence.Idle, error) { return presence.Idle{}, nil }
+	named := signalsReply{Idle: via("idle source"), Focus: via("focus source"), Power: via("power source"), Lock: via("lock source")}
+	tests := []struct {
+		name string
+		// presence is the sampler's OS, nil for an agent with no sampler.
+		presence  *presence.OS
+		start     bool
+		in        signalsReply
+		wantPower signalReply
+		wantLock  signalReply
+	}{
+		{
+			name:      "a source the sampler watches stays named",
+			presence:  &presence.OS{Idle: idle, WatchSuspend: watch, WatchLock: watch},
+			start:     true,
+			in:        named,
+			wantPower: via("power source"),
+			wantLock:  via("lock source"),
+		},
+		{
+			name:      "on a desktop with no idle time power and lock stay named, since the sampler still watches them to seal each suspend and lock (DESIGN 3.3, 3.6)",
+			presence:  &presence.OS{WatchSuspend: watch, WatchLock: watch},
+			start:     true,
+			in:        named,
+			wantPower: via("power source"),
+			wantLock:  via("lock source"),
+		},
+		{
+			name:      "a source the sampler has no watch on is unknown, though the OS names it",
+			presence:  &presence.OS{Idle: idle},
+			start:     true,
+			in:        named,
+			wantPower: unknown(noSuspendWatch),
+			wantLock:  unknown(noLockWatch),
+		},
+		{
+			name:      "before the sampler starts nothing is watched, so power and lock are unknown",
+			presence:  &presence.OS{Idle: idle, WatchSuspend: watch, WatchLock: watch},
+			in:        named,
+			wantPower: unknown(noSuspendWatch),
+			wantLock:  unknown(noLockWatch),
+		},
+		{
+			name:      "an agent without a sampler hears no suspend or lock",
+			in:        named,
+			wantPower: unknown(noSuspendWatch),
+			wantLock:  unknown(noLockWatch),
+		},
+		{
+			name:      "a signal the OS already calls unknown keeps its own reason",
+			presence:  &presence.OS{Idle: idle},
+			start:     true,
+			in:        signalsReply{Idle: via("idle source"), Focus: via("focus source"), Power: unknown("no logind"), Lock: unknown("no session")},
+			wantPower: unknown("no logind"),
+			wantLock:  unknown("no session"),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			a := &agent{sched: sched.New()}
+			if tt.presence != nil {
+				a.presence = presence.New(presence.Options{Sched: a.sched, OS: *tt.presence})
+				if tt.start {
+					a.presence.Start()
+				}
+				defer a.presence.Stop()
+			}
+			got := a.watched(tt.in)
+			if got.Power != tt.wantPower || got.Lock != tt.wantLock {
+				t.Errorf("power %+v, lock %+v; want %+v, %+v", got.Power, got.Lock, tt.wantPower, tt.wantLock)
+			}
+			if got.Idle != tt.in.Idle || got.Focus != tt.in.Focus {
+				t.Errorf("idle %+v, focus %+v; want them as the OS gave them, %+v and %+v", got.Idle, got.Focus, tt.in.Idle, tt.in.Focus)
 			}
 		})
 	}

@@ -16,13 +16,14 @@ import (
 // both (WP-OS9): idle time from the X server or GNOME's Mutter, focus from
 // the window manager's _NET_ACTIVE_WINDOW, and suspend, resume, lock and
 // unlock from logind (internal/platform/linux). Open doesn't fail: a signal
-// the desktop doesn't give is unknown, and GET /v1/status says why.
+// the desktop doesn't give is unknown, and GET /v1/status says why. Power
+// and lock are named only while the sampler watches them (watched).
 func (a *agent) openOS(Options) osSources {
 	d := linux.Open(context.Background(), linux.Config{Log: a.log.With("component", "desktop")})
 	return osSources{
 		presence: presence.LinuxOS(d),
 		focus:    focus.LinuxOS(d),
-		signals:  func() signalsReply { return linuxSignals(d.Status()) },
+		signals:  func() signalsReply { return a.watched(linuxSignals(d.Status())) },
 		close:    func() { d.Close() },
 	}
 }
@@ -30,8 +31,10 @@ func (a *agent) openOS(Options) osSources {
 // linuxSignals is GET /v1/status's signals from the desktop's Status,
 // which names each signal's source or says why it is unknown.
 //
-// TODO(D-focus-unknown): while Focus is unknown nothing records that;
-// WP-EV2 and its follow-up record an os.focus with app_class unknown.
+// TODO(WP-OS15): while Focus is unknown nothing records that yet. WP-OS15
+// records an os.focus with app_class unknown there, and on each change
+// between known and unknown focus, once WP-EV2 adds the value
+// (D-focus-unknown).
 func linuxSignals(st linux.Status) signalsReply {
 	return signalsReply{
 		Idle:    signalOf(st.Idle),
