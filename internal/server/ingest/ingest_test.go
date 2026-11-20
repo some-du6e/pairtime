@@ -17,6 +17,7 @@ import (
 	"math/rand/v2"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -73,6 +74,8 @@ type harness struct {
 	devices fakeDevices
 	keys    int
 	rollups []rollupCall
+	// observed is what each Observe call reported as stored.
+	observed []int
 }
 
 func seedKey(name string) ed25519.PrivateKey {
@@ -99,7 +102,13 @@ func newHarness(t *testing.T, engine store.Engine) *harness {
 	h := &harness{db: db, clock: exampleClock, server: seedKey("server"), devices: fakeDevices{}}
 	h.svc = New(Options{
 		Devices: h.devices, Writer: w, Read: db.Read, Key: h.server,
-		Now:    func() time.Time { return h.clock },
+		Now: func() time.Time { return h.clock },
+		Observe: func(stored int, took time.Duration) {
+			if took < 0 {
+				t.Errorf("Observe got a latency of %v", took)
+			}
+			h.observed = append(h.observed, stored)
+		},
 		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 		Rollup: func(ctx context.Context, tx writer.Tx, account string, prev *event.MinuteBucket, next event.MinuteBucket) error {
 			c := rollupCall{account: account, prevRev: -1, nextRev: int64(next.Rev), minuteMS: next.Minute.UnixMilli()}
@@ -1025,4 +1034,33 @@ func TestTimeAndOff(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, tt.check)
 	}
+}
+
+// TestObserve checks what ingest reports for /metrics: the batch roots
+// each processed upload stored, and nothing for a replay or a refusal.
+func TestObserve(t *testing.T) {
+	engines(t, func(t *testing.T, engine store.Engine) {
+		h := newHarness(t, engine)
+		dev := h.device("d_test", false)
+		roots := chain(rand.New(rand.NewPCG(10, 11)), ledger.Hash{}, 1, 2)
+		first := upload{dev: dev, body: batchesBody(roots...), key: h.newKey()}
+		tests := []struct {
+			name string
+			send func(t *testing.T)
+			want []int
+		}{
+			{"an upload that stores two batch roots reports 2", func(t *testing.T) { h.ok(t, first) }, []int{2}},
+			{"a replay reports nothing", func(t *testing.T) { h.ok(t, upload{dev: dev, body: first.body, key: first.key}) }, []int{2}},
+			{"the same roots under a new key are duplicates, and report 0", func(t *testing.T) { h.ok(t, upload{dev: dev, body: first.body}) }, []int{2, 0}},
+			{"a refused request reports nothing", func(t *testing.T) { h.send(t, upload{dev: dev, signer: seedKey("another key")}) }, []int{2, 0}},
+		}
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				tt.send(t)
+				if !slices.Equal(h.observed, tt.want) {
+					t.Errorf("observed %v, want %v", h.observed, tt.want)
+				}
+			})
+		}
+	})
 }

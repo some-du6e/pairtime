@@ -88,6 +88,11 @@ type Options struct {
 	// TODO(WP-SV7): serve.go passes rollup.Apply through it, converting
 	// event.MinuteBucket to rollup.Bucket, once package rollup merges.
 	Rollup RollupFunc
+	// Observe, when set, hears of each upload the writer processed, not
+	// counting replays: how many batch roots it stored, and how long the
+	// request took from arrival to the response with their receipts
+	// (DESIGN 10.4's ingest rate and batch latency).
+	Observe func(stored int, took time.Duration)
 	// Now is the server's clock. Nil means time.Now.
 	Now func() time.Time
 	// Logger gets the errors behind a 503. Nil means slog.Default().
@@ -194,6 +199,7 @@ func (s *Service) authenticate(r *http.Request) (Device, *refusal) {
 
 // batches is POST /api/v1/ingest/batches.
 func (s *Service) batches(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
 	if !s.On() {
 		s.refuse(w, refusalOff)
 		return
@@ -263,6 +269,8 @@ func (s *Service) batches(w http.ResponseWriter, r *http.Request) {
 	default:
 		if out.replay {
 			w.Header().Set(HeaderReplay, "true")
+		} else if s.o.Observe != nil {
+			s.o.Observe(out.stored, time.Since(start))
 		}
 		s.writeJSON(w, http.StatusOK, out.response)
 	}
@@ -274,6 +282,8 @@ type outcome struct {
 	refusal  *refusal
 	response []byte
 	replay   bool
+	// stored counts the batch roots the request stored.
+	stored int
 }
 
 // The response's JSON (ingest-v1 2.8).
@@ -352,10 +362,14 @@ func (s *Service) process(ctx context.Context, tx writer.Tx, dev Device, env env
 		Buckets:    make([]itemResult, 0, len(b.buckets)),
 		Commits:    make([]itemResult, 0, len(b.commits)),
 	}
+	stored := 0
 	for _, raw := range b.batches {
 		r, err := s.batch(ctx, tx, dev, &st, raw, now)
 		if err != nil {
 			return outcome{}, err
+		}
+		if r.Code == CodeAccepted {
+			stored++
 		}
 		resp.Batches = append(resp.Batches, r)
 	}
@@ -391,7 +405,7 @@ func (s *Service) process(ctx context.Context, tx writer.Tx, dev Device, env env
 	if err := saveState(ctx, tx, dev.ID, dev.Account, st, now); err != nil {
 		return outcome{}, err
 	}
-	return outcome{response: data}, nil
+	return outcome{response: data, stored: stored}, nil
 }
 
 // receipt returns a stored row's receipt in JSON.

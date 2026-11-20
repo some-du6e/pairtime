@@ -87,7 +87,7 @@ X-Pairtime-Signature: ed25519=H/zgh89iWdWyhYT9m8CX5DM/uM35gYzHsGDd29ZvI2L1CPh2j1
 
 ### 2.3 The body
 
-The gzip member holds one JSON object with up to four members, each optional; an absent member and an empty one mean the same:
+The gzip member holds one JSON object with up to four members, each optional. An absent member, a `null` one and an empty one mean the same:
 
 ```json
 {
@@ -204,7 +204,7 @@ The server checks a request in this order and answers the first failure with the
 5. `Idempotency-Key`, `X-Pairtime-Req`, `X-Pairtime-Time`, `X-Pairtime-Body-SHA256` and `X-Pairtime-Signature` are each present once and in the form of 2.1: otherwise `idempotency_key_malformed`, `counter_malformed`, `time_malformed`, `body_hash_malformed` or `signature_malformed`, in that order.
 6. `Content-Type` is `application/json` and `Content-Encoding` is `gzip`: otherwise `content_type_unsupported` or `encoding_unsupported`.
 7. `X-Pairtime-Time` is within 300,000 ms of the server's clock, either way: otherwise `clock_skew`. The response's `X-Pairtime-Time` is what the client corrects by.
-8. The raw body fits 2.4's limit: otherwise `body_too_large`.
+8. The raw body fits 2.4's limit: otherwise `body_too_large`, or `body_unreadable` when reading it fails.
 9. `hex(SHA-256(raw body))` equals `X-Pairtime-Body-SHA256`: otherwise `body_hash_mismatch`.
 10. The signature verifies over `M` under the device's registered key: otherwise `signature_invalid`.
 11. The raw body is one gzip member with nothing after it, and inflates within 2.4's limit: otherwise `gzip_invalid` or `decompressed_too_large`.
@@ -237,6 +237,7 @@ A request refused as a whole gets one of these statuses and this body, where `de
 | 415 | `encoding_unsupported` | `Content-Encoding` isn't `gzip` | Fix the client |
 | 401 | `clock_skew` | `X-Pairtime-Time` is more than 300 s from the server's clock | Correct the offset from the response's `X-Pairtime-Time`, then sign again with a new counter |
 | 413 | `body_too_large` | The raw body is over 262,144 bytes | Split the upload |
+| 400 | `body_unreadable` | The body couldn't be read, as when the connection broke off | Retry the same body and key |
 | 400 | `body_hash_mismatch` | The raw body's SHA-256 isn't `X-Pairtime-Body-SHA256` | Retry; the body changed on the way |
 | 401 | `signature_invalid` | The signature doesn't verify under the device's registered key | Check the key against the registered one; never retry blindly |
 | 400 | `gzip_invalid` | Not one valid gzip member, or bytes after it | Fix the client |
@@ -276,7 +277,7 @@ An accepted batch root is stored as the witness row `(device_id, b, n_b, R_b, H_
 - with the same `rev` stored and a different bucket, the stored one stays: `rev_conflict`;
 - with a higher `rev` stored, nothing changes: `superseded`.
 
-The server keeps every revision it accepted with its `received_at`, beside the current one, for the bundle's `buckets.json` (E-check-readings). Each bucket is stored under the device owner's account, and the account's rollups move from the replaced revision to the new one in the same transaction (WP-SV7).
+The server keeps every revision it accepted with its `received_at`: the current one, and the ones it replaced beside it, for the bundle's `buckets.json` (E-check-readings). Each bucket is stored under the device owner's account, and the account's rollups move from the replaced revision to the new one in the same transaction (WP-SV7).
 
 **Commit records** pass 2.3.3's forms and are stored per device and `sha`: `accepted` the first time, `duplicate` when the stored record is the same, `updated` when it differs, and the new one replaces it.
 
@@ -355,6 +356,7 @@ And by kind:
 | Commit | 200 | `duplicate` | The same record is already stored |
 | Commit | 200 | `updated` | It replaced a different record of the same commit from this device |
 | Labels | 200 | `accepted` | Stored as the device's labels |
+| Labels | 422 | `bad_rule` | A harness is named twice; `field` is `harnesses` |
 
 Every code is final for its item: resending the same item gets the same answer, or `duplicate`. Only 2.6's refusals of the whole request are worth a retry.
 
@@ -423,8 +425,7 @@ For reviewers and later work packages; the client never sees it. Migration `0004
 |---|---|---|---|
 | `ingest_devices` | `device_id` | The account, the counter, the head, the chain start, and the most recent request's key, body hash and response | `server.witness`: 180 days after the device's last processed request |
 | `witness_rows` | `(device_id, b)` | `n`, `R_b`, `H_b`, `prev`, `received_at_ms`, the receipt and its key id, and the account | `server.witness`: 180 days after `received_at_ms`, held while a submission uses them (WP-SB4) |
-| `minute_buckets` | `(device_id, minute_ms)` | The current revision of each minute, under the device owner's account | `server.minute_buckets`: 180 days after `minute_ms`, held while a submission uses them (WP-SB4) |
-| `minute_bucket_revisions` | `(device_id, minute_ms, rev)` | Every accepted revision with its `received_at_ms` (E-check-readings) | `server.minute_buckets`, as `minute_buckets` |
+| `minute_buckets` | `(device_id, minute_ms)` | The current revision of each minute, under the device owner's account, with its `received_at_ms`, and in `earlier` the revisions it replaced, each with its own (E-check-readings) | `server.minute_buckets`: 180 days after `minute_ms`, held while a submission uses them (WP-SB4) |
 | `commit_records` | `(device_id, sha)` | The account, the project key and the record | `server.commits`: while the account exists |
 | `device_labels` | `device_id` | The account and the latest labels | `server.devices`: 90 days after they were last received |
 

@@ -122,7 +122,9 @@ func TestServe(t *testing.T) {
 		{name: "/readyz is ready once its probe row commits through the writer", url: private + "/readyz", wantCode: 200, wantBody: `"ready":true.*"name":"database","ok":true`},
 		{name: "/readyz refuses POST", method: http.MethodPost, url: private + "/readyz", wantCode: 405},
 		{name: "/metrics counts the probe's transaction", url: private + "/metrics", wantCode: 200, wantBody: `(?m)^pairtime_writer_commits_total [1-9]`},
-		{name: "/metrics has the writer queue depth", url: private + "/metrics", wantCode: 200, wantBody: `(?m)^pairtime_writer_queue_depth 0$`},
+		// The retention sweep at start runs its jobs through the writer, so
+		// the queue may still hold one of their deletes.
+		{name: "/metrics has the writer queue depth", url: private + "/metrics", wantCode: 200, wantBody: `(?m)^pairtime_writer_queue_depth [0-9]+$`},
 		{name: "/metrics has the ingest rate", url: private + "/metrics", wantCode: 200, wantBody: `(?m)^pairtime_ingest_batches_total 0$`},
 		{name: "/metrics has ingest batch latency", url: private + "/metrics", wantCode: 200, wantBody: `(?m)^pairtime_ingest_batch_duration_seconds_count 0$`},
 		{name: "/metrics has open streams", url: private + "/metrics", wantCode: 200, wantBody: `(?m)^pairtime_stream_open_streams 0$`},
@@ -135,6 +137,9 @@ func TestServe(t *testing.T) {
 		{name: "without hca.client_id the home page says sign-in isn't set up, and offers none", url: public + "/", wantCode: 200, wantBody: `(?s)<header>\n<a class="name" href="/">pairtime</a>\n</header>.*Sign-in isn&#39;t set up on this server yet\.`},
 		{name: "/ links to the privacy notice", url: public + "/", wantCode: 200, wantBody: `href="/privacy"`},
 		{name: "a path nothing serves is still a 404, not the home page", url: public + "/nothing-here", wantCode: 404},
+		{name: "the public listener answers GET /api/v1/time without a token", url: public + "/api/v1/time", wantCode: 200, wantBody: `^\{"server_time":[0-9]+\}$`},
+		{name: "uploads get ingest_off until devices can sign in and the server key is there", method: http.MethodPost, url: public + "/api/v1/ingest/batches", wantCode: 503, wantBody: `"error":"ingest_off"`},
+		{name: "the ops listener doesn't serve ingest", url: private + "/api/v1/time", wantCode: 404},
 		{name: "the ops listener doesn't serve the home page", url: private + "/", wantCode: 404},
 	}
 	client := &http.Client{Timeout: 10 * time.Second}
