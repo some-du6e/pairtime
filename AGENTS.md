@@ -19,6 +19,7 @@ A change is done when every workflow its PR started is green. A WP marked "Race:
 | platform.yml | `go test` of the platform packages on Windows and macOS, and the desktop tests on Linux | PRs touching its paths, release tags |
 | nightly.yml | `go test -race` over internal/agent and internal/server | daily, 03:00 UTC |
 | web.yml | npm ci, vitest, the UI build, Playwright on Chromium | PRs touching web/ or extension/, release tags |
+| objstore.yml | the object storage client against a MinIO service container | PRs touching internal/server/objstore/, weekly |
 | tidy.yml | `go mod tidy` and npm lockfiles, committed to the branch | by hand |
 | fixtures.yml | the fixture provenance check | by hand |
 
