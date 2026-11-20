@@ -12,6 +12,8 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+
+	"github.com/some-du6e/pairtime/pkg/ledger/features"
 )
 
 // KeySize is the size of K_dev and of each key derived from it.
@@ -102,6 +104,12 @@ func (k *Keys) TokenKey() [KeySize]byte { return k.token }
 // FeatKey returns K_feat, which keys scorer features and error signatures
 // (spec part 2; DESIGN 3.6).
 func (k *Keys) FeatKey() [KeySize]byte { return k.feat }
+
+// Features returns K_feat as a features.Key, which computes every keyed
+// feature value of spec 10.5 and 10.6: the sketches, the 16-byte values
+// and the edit hunks a body's f holds, and the error_sig values of
+// agent.tool and shell.command events.
+func (k *Keys) Features() *features.Key { return features.NewKey(k.feat) }
 
 // VaultKey returns K_vault, which encrypts the vault (DESIGN 3.5).
 func (k *Keys) VaultKey() [KeySize]byte { return k.vault }
