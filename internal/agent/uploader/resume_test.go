@@ -377,3 +377,105 @@ func TestFastClock(t *testing.T) {
 		}
 	}
 }
+
+// TestPreviewBuckets holds privacy show to a request that carries minutes:
+// from where an agent left off, with every batch root and receipt already
+// on both sides, what it prints is the body the uploader sends next, byte
+// for byte.
+func TestPreviewBuckets(t *testing.T) {
+	dir := t.TempDir()
+	dirs := home.Dirs{Data: dir, Config: dir, Runtime: dir}
+	table := newestTable()
+	w, rows := smallChain(t, dirs, 3)
+	start := rows[0].SealedAt.Add(-15 * time.Minute)
+	devKey := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{7}, 32))
+	f := newFakeIngest(w.DeviceID(), testToken, devKey.Public().(ed25519.PublicKey))
+	hold(t, f, rows, 1)
+	for _, r := range rows {
+		fr := f.rows[r.B]
+		sig, err := hex.DecodeString(fr.sig)
+		if err != nil {
+			t.Fatal(err)
+		}
+		rc := pkgledger.Receipt{ReceivedAt: fr.receivedAt}
+		copy(rc.Signature[:], sig)
+		if err := w.StoreReceipt(r.B, rc); err != nil {
+			t.Fatal(err)
+		}
+	}
+	bs, err := store.OpenBuckets(dirs.Buckets())
+	if err != nil {
+		t.Fatal(err)
+	}
+	const minutes = 40
+	for m := 0; m < minutes; m++ {
+		if _, _, err := bs.Put(testBucket(table, w.DeviceID(), start.Add(time.Duration(m)*time.Minute), 30, event.StateFinal)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := bs.Close(); err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(f)
+	t.Cleanup(srv.Close)
+	creds := Credentials{Server: srv.URL, Token: testToken, DeviceID: w.DeviceID(), Sign: KeySigner(devKey)}
+	st, _, err := state.Open(dirs.StateFile())
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := time.Now()
+	pub := f.key.Public().(ed25519.PublicKey)
+	for k, v := range map[string]any{
+		"agent": map[string]any{"version": "dev", "starts": 2, "started": started.UTC()},
+		StateKey: saved{Chain: w.DeviceID(), Server: srv.URL, Device: w.DeviceID(), Req: 64, Next: 4, ChainStart: 1,
+			ServerKey: &ServerKey{KeyID: f.keyID, PublicKey: hex.EncodeToString(pub)}},
+	} {
+		if err := st.Put(k, v); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := st.Save(); err != nil {
+		t.Fatal(err)
+	}
+	var shown Preview
+	tests := []struct {
+		name string
+		run  func(t *testing.T)
+	}{
+		{"privacy show's next upload carries the minutes and no root", func(t *testing.T) {
+			p, err := Next(PreviewOptions{
+				LedgerDir: dirs.Ledger(), BucketDir: dirs.Buckets(), DataDir: dirs.Data, StateFile: dirs.StateFile(),
+				Params: table, Credentials: creds,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if p.Batches != 0 || p.Buckets != minutes || !p.Labels {
+				t.Fatalf("the preview holds %d roots, %d buckets, labels %v", p.Batches, p.Buckets, p.Labels)
+			}
+			shown = p
+		}},
+		{"the request the uploader sends is privacy show's, byte for byte", func(t *testing.T) {
+			u, err := New(Options{
+				Ledger: w, LedgerDir: dirs.Ledger(), BucketDir: dirs.Buckets(), DataDir: dirs.Data, State: st,
+				Login:  LoginFunc(func() (Credentials, bool) { return creds, true }),
+				Params: table, Started: started, Client: srv.Client(), Draw: func(int64) int64 { return 0 },
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			u.Start()
+			t.Cleanup(u.Close)
+			waitFor(t, "the first POST", func() bool { _, bodies, _ := f.snapshot(); return len(bodies) > 0 })
+			_, bodies, _ := f.snapshot()
+			if !bytes.Equal(bodies[0], shown.JSON) {
+				t.Errorf("the request's body differs from privacy show's:\n%s\n%s", bodies[0], shown.JSON)
+			}
+		}},
+	}
+	for _, tc := range tests {
+		if !t.Run(tc.name, tc.run) {
+			break
+		}
+	}
+}
