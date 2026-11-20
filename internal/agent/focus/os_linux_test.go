@@ -62,7 +62,7 @@ func TestLinuxOS(t *testing.T) {
 		watcher    bool // the desktop runs an X11 focus watcher
 		noSessions bool // no harness runs anywhere
 		reports    []linux.Focus
-		want    []Record
+		want       []Record
 		// via, noSource and unknown are what Status should say after.
 		via, noSource, unknown string
 	}{
