@@ -40,13 +40,14 @@ One Go module holds the client, the server and the code they share.
 | `docs/api` | OpenAPI specs of pairtime's HTTP APIs. The UI's TypeScript types are generated from them |
 | `internal/version` | Build info, set at link time |
 | `tools/` | `ledger_ref.py`, a standard-library Python reference for `pkg/ledger`; `release`, which packages and signs releases; `capture`, the kit for capturing harness fixtures; and `ci`, the checks the workflows run |
+| `third_party/` | Patched copies of modules, built in place of the originals through `replace` lines in `go.mod`, each under its own license with a `PROVENANCE.md`: `burntsushi-toml`, the TOML parser, which reads the local time zone on first use rather than as every pairtime process starts |
 | `testdata/` | What the tests read: the timelines, ledger vectors, captures of upstream interfaces, the consistency checks' scenarios, harness fixtures, the redaction corpus, and the license check's seeded modules |
 | `docs/schema/event.schema.json` | A JSON Schema for events, for adapters written in other languages. A test fails if it drifts from `pkg/event` |
 | `docs/` | Requirements, research, the design docs and the specs |
 
 ## Build from source
 
-You need Go 1.26 or later and nothing else. pairtime never uses cgo, so there's no C compiler to install. Besides the standard library, it uses a few modules, all listed in `go.mod`. The client uses `golang.org/x/sys` for Windows and Unix system calls, `purego` on macOS, `godbus` on Linux, `go-keyring` on macOS and Linux (Keychain and Secret Service), `fsnotify` to watch files and `BurntSushi/toml` for its config file. The server uses `modernc.org/sqlite`, `lib/pq` for Postgres and the same TOML parser. Each of them, and each module they pull in, is pure Go and MIT, BSD-2-Clause, BSD-3-Clause, Apache-2.0 or ISC licensed (DESIGN 3.12). ci.yml checks those licenses on every PR.
+You need Go 1.26 or later and nothing else. pairtime never uses cgo, so there's no C compiler to install. Besides the standard library, it uses a few modules, all listed in `go.mod`. The client uses `golang.org/x/sys` for Windows and Unix system calls, `purego` on macOS, `godbus` on Linux, `go-keyring` on macOS and Linux (Keychain and Secret Service), `fsnotify` to watch files and `BurntSushi/toml`, in a patched copy (`third_party/`), for its config file. The server uses `modernc.org/sqlite`, `lib/pq` for Postgres and the same TOML parser. Each of them, and each module they pull in, is pure Go and MIT, BSD-2-Clause, BSD-3-Clause, Apache-2.0 or ISC licensed (DESIGN 3.12). ci.yml checks those licenses on every PR.
 
 ```sh
 CGO_ENABLED=0 go build -o bin/ ./cmd/...

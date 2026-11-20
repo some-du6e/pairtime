@@ -48,7 +48,7 @@ An oracle decides whether code is right, so the code it checks never changes it:
 - Standard library first. A third-party module has to be cgo-free and licensed MIT, BSD-2-Clause, BSD-3-Clause, Apache-2.0 or ISC, and so do the modules it pulls in; ci.yml's module license step checks all of them. Its PR says why the standard library falls short, and a module missing from DESIGN 3.12's list also needs a reason the list falls short.
 - The `go` directive stays at 1.26 until Go 1.26 leaves support in February 2027. Go 1.27 dropped macOS 12, where 2015-2016 Macs top out (client-platform.md 1.5), so write nothing that needs a newer Go.
 - gofmt every Go file.
-- The first line of every .go file is `// SPDX-License-Identifier: AGPL-3.0-or-later`.
+- The first line of every .go file is `// SPDX-License-Identifier: AGPL-3.0-or-later`, except under third_party/. That holds patched copies of modules, which go.mod's `replace` builds instead of the originals. Each keeps its own license file and headers, and has a PROVENANCE.md naming the upstream commit and the patch. ci.yml's license gate skips it.
 - Tests are table tests: a slice of named cases, each run with `t.Run`, each name stating the rule it checks.
 
 ## Web UI
