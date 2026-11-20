@@ -48,8 +48,15 @@ type Options struct {
 	// Engine is SQLite or Postgres. Empty means SQLite.
 	Engine Engine
 	// Path is the SQLite database file. A missing file is created with
-	// mode 0600, and a missing directory with mode 0700.
+	// mode 0600, and a missing directory with mode 0700, unless NoCreate
+	// is set.
 	Path string
+	// NoCreate makes Open fail with ErrNoDatabase, and create nothing,
+	// when the SQLite file is missing. Only serve creates the database:
+	// Litestream restores from the replica when the file is missing and
+	// only then starts serve, so a file another command created would
+	// stop the restore (DESIGN 10.1). Postgres ignores it.
+	NoCreate bool
 	// URL is the Postgres connection URL,
 	// postgres://user:password@host:port/database?sslmode=....
 	URL string

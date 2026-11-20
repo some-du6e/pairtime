@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"io/fs"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -75,6 +76,10 @@ func (v Version) String() string {
 // MinSQLite or one whose version it can't read.
 var ErrSQLiteTooOld = errors.New("SQLite is too old")
 
+// ErrNoDatabase is what Open returns, wrapped, when Options.NoCreate is
+// set and the SQLite file is missing.
+var ErrNoDatabase = errors.New("no database")
+
 // tooOldError explains a refused SQLite version.
 type tooOldError struct {
 	have   string
@@ -127,10 +132,20 @@ func openSQLite(ctx context.Context, o Options) (*DB, error) {
 
 	// Create the file before SQLite does: SQLite gives the -wal and -shm
 	// files the database file's mode, so this keeps all three at 0600.
-	if err := os.MkdirAll(filepath.Dir(o.Path), 0o700); err != nil {
-		return nil, fmt.Errorf("store: %w", err)
+	// With NoCreate, a missing file is an error and nothing is created.
+	var f *os.File
+	var err error
+	if o.NoCreate {
+		f, err = os.OpenFile(o.Path, os.O_RDWR, 0)
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil, fmt.Errorf("store: %w at %s", ErrNoDatabase, o.Path)
+		}
+	} else {
+		if err := os.MkdirAll(filepath.Dir(o.Path), 0o700); err != nil {
+			return nil, fmt.Errorf("store: %w", err)
+		}
+		f, err = os.OpenFile(o.Path, os.O_RDWR|os.O_CREATE, 0o600)
 	}
-	f, err := os.OpenFile(o.Path, os.O_RDWR|os.O_CREATE, 0o600)
 	if err != nil {
 		return nil, fmt.Errorf("store: %w", err)
 	}

@@ -88,6 +88,48 @@ func TestOpenRefusesOldSQLite(t *testing.T) {
 	}
 }
 
+func TestOpenNoCreate(t *testing.T) {
+	tests := []struct {
+		name    string
+		create  bool // create the database before opening it with NoCreate
+		wantErr error
+	}{
+		{name: "NoCreate refuses a missing database and creates neither it nor its directory", wantErr: store.ErrNoDatabase},
+		{name: "NoCreate opens a database that exists", create: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			path := filepath.Join(t.TempDir(), "sub", "pairtime.db")
+			if tt.create {
+				db, err := store.Open(ctx, store.Options{Engine: store.SQLite, Path: path})
+				if err != nil {
+					t.Fatal(err)
+				}
+				db.Close()
+			}
+			db, err := store.Open(ctx, store.Options{Engine: store.SQLite, Path: path, NoCreate: true})
+			if tt.wantErr == nil {
+				if err != nil {
+					t.Fatalf("Open: %v", err)
+				}
+				db.Close()
+				return
+			}
+			if err == nil {
+				db.Close()
+				t.Fatal("Open succeeded")
+			}
+			if !errors.Is(err, tt.wantErr) || !strings.Contains(err.Error(), path) {
+				t.Errorf("Open error = %v, want one wrapping %v that names %s", err, tt.wantErr, path)
+			}
+			if _, err := os.Stat(filepath.Dir(path)); !errors.Is(err, fs.ErrNotExist) {
+				t.Errorf("Open created %s (stat: %v)", filepath.Dir(path), err)
+			}
+		})
+	}
+}
+
 func TestOpenSQLite(t *testing.T) {
 	db := storetest.Open(t, store.SQLite)
 	ctx := context.Background()
