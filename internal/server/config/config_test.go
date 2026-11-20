@@ -19,6 +19,12 @@ scoring_version = "1.0.0"
 listen = ":8081"
 ops_listen = "127.0.0.1:9191"
 data_dir = "/srv/pairtime"
+operators = ["ident!op1"]
+
+[controller]
+name = "Hack Club"
+contact = "privacy@example.org"
+dpo = "https://forms.example.org/privacy"
 
 [hca]
 client_id = "hca-client"
@@ -65,6 +71,8 @@ func TestLoad(t *testing.T) {
 						{Sub: "ident!abc123", Roles: []string{"qi", "program_reviewer:stardance"}},
 						{Sub: "ident!def456", Roles: []string{"fraud_squad", "spot_checker", "admin"}},
 					},
+					Operators:  []string{"ident!op1"},
+					Controller: Controller{Name: "Hack Club", Contact: "privacy@example.org", DPO: "https://forms.example.org/privacy"},
 					HCA:        HCA{ClientID: "hca-client"},
 					PrivacyHub: PrivacyHub{Aud: "pairtime", JWKSURL: "https://privacy.example.org/.well-known/jwks.json"},
 					Sentinel:   Sentinel{Socket: "/run/pairtime/sentinel.sock"},
@@ -131,6 +139,22 @@ func TestLoad(t *testing.T) {
 		{name: "a reviewer needs a sub", toml: base + "[[reviewers]]\nroles = [\"qi\"]\n", wantErr: "has no sub"},
 		{name: "a reviewer sub is listed once", toml: base + "[[reviewers]]\nsub = \"a\"\nroles = [\"qi\"]\n[[reviewers]]\nsub = \"a\"\nroles = [\"admin\"]\n", wantErr: "listed twice"},
 		{name: "a role is listed once per reviewer", toml: base + "[[reviewers]]\nsub = \"a\"\nroles = [\"qi\", \"qi\"]\n", wantErr: "twice"},
+		{name: "signups_open needs a named controller, so sign-ups can't open before the privacy notice names one", toml: base + "signups_open = true\n", wantErr: "signups_open is true, but controller.name and controller.contact"},
+		{name: "signups_open needs the controller's contact too", toml: base + "signups_open = true\n[controller]\nname = \"Hack Club\"\n", wantErr: "signups_open is true, but controller.name and controller.contact"},
+		{
+			name: "signups_open opens once the controller is named",
+			toml: base + "signups_open = true\n[controller]\nname = \"Karim\"\ncontact = \"karim@example.org\"\n",
+			check: func(t *testing.T, c *Config, _ string) {
+				if !c.SignupsOpen || c.Controller != (Controller{Name: "Karim", Contact: "karim@example.org"}) {
+					t.Errorf("signups_open = %v, controller = %+v", c.SignupsOpen, c.Controller)
+				}
+			},
+		},
+		{name: "an operator is an HCA sub without spaces", toml: base + "operators = [\"ident! op\"]\n", wantErr: "operators:"},
+		{name: "an operator is listed once", toml: base + "operators = [\"a\", \"a\"]\n", wantErr: "listed twice"},
+		{name: "controller.contact is an email address or an https URL", toml: base + "[controller]\ncontact = \"call me\"\n", wantErr: "controller.contact"},
+		{name: "controller.dpo over plain http is refused", toml: base + "[controller]\ndpo = \"http://example.org\"\n", wantErr: "controller.dpo"},
+		{name: "controller.name stays on one line", toml: base + "[controller]\nname = \"a\\nb\"\n", wantErr: "controller.name"},
 		{name: "privacy_hub.jwks_url must be https", toml: base + "[privacy_hub]\njwks_url = \"http://example.org/jwks.json\"\n", wantErr: "jwks_url"},
 		{name: "sentinel.socket must be absolute", toml: base + "[sentinel]\nsocket = \"sentinel.sock\"\n", wantErr: "sentinel.socket"},
 		{name: "listen must be host:port", toml: base + "listen = \"8080\"\n", wantErr: "listen is"},

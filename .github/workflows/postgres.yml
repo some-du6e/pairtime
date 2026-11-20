@@ -4,7 +4,8 @@
 # 10.6; SP 7.4, 9.5). pairtimed runs on SQLite, and ci.yml tests that on
 # every PR. This workflow runs the same tests with a Postgres service as
 # well, so SQL that only SQLite accepts fails here. It runs nightly and on
-# PRs that touch the SQL: the store, the migrations and the writer.
+# PRs that touch the SQL: the store, the migrations, the writer and the
+# retention jobs.
 #
 #   gh workflow run postgres.yml --ref <branch>
 name: postgres
@@ -15,6 +16,7 @@ on:
       - internal/server/store/**
       - internal/server/migrations/**
       - internal/server/writer/**
+      - internal/server/retention/**
       - .github/workflows/postgres.yml
   schedule:
     # Half an hour after nightly.yml, so the two don't queue together.
@@ -90,4 +92,20 @@ jobs:
               echo "::error::$t didn't run and pass"
               exit 1
             fi
+          done
+
+      - name: The retention jobs ran on Postgres
+        # The fake-clock retention test deletes rows with the jobs' own SQL
+        # (WP-SV14). Its parent line passes only when every case did.
+        run: |
+          out=$(go test -count=1 -v -run '^TestSweep$' ./internal/server/retention) || {
+            echo "$out"
+            exit 1
+          }
+          for t in TestSweep/sqlite TestSweep/postgres; do
+            if ! grep -q -- "--- PASS: $t (" <<<"$out"; then
+              echo "::error::$t didn't run and pass"
+              exit 1
+            fi
+            grep -- "--- PASS: $t (" <<<"$out"
           done

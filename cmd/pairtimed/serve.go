@@ -14,6 +14,8 @@ import (
 	"github.com/some-du6e/pairtime/internal/server/config"
 	"github.com/some-du6e/pairtime/internal/server/migrations"
 	"github.com/some-du6e/pairtime/internal/server/ops"
+	"github.com/some-du6e/pairtime/internal/server/pages"
+	"github.com/some-du6e/pairtime/internal/server/retention"
 	"github.com/some-du6e/pairtime/internal/server/store"
 	"github.com/some-du6e/pairtime/internal/server/writer"
 	"github.com/some-du6e/pairtime/internal/version"
@@ -28,6 +30,10 @@ func init() {
 // shutdownTimeout bounds how long serve waits for requests in flight once
 // it is told to stop.
 const shutdownTimeout = 20 * time.Second
+
+// retentionEvery is how often the retention jobs sweep. Periods are whole
+// days, so data outlives its period by at most this much (DESIGN 4.4).
+const retentionEvery = time.Hour
 
 func runServe(ctx context.Context, e *env, args []string) int {
 	fs := newFlagSet("serve", serveSummary, e)
@@ -53,6 +59,35 @@ func runServe(ctx context.Context, e *env, args []string) int {
 // database file, and migrations finish before the first request.
 func serve(ctx context.Context, cfg *config.Config, logger *slog.Logger, e *env) error {
 	logger.Info("starting", "version", version.Get().String(), "config", cfg.Path, "engine", cfg.Database.Engine)
+
+	// The pages render before the database opens, so a bad template or
+	// controller contact stops the server at once.
+	policy, err := retention.Default()
+	if err != nil {
+		return err
+	}
+	site, err := pages.New(pages.Options{
+		BaseURL: cfg.BaseURL,
+		Controller: pages.Controller{
+			Name:    cfg.Controller.Name,
+			Contact: cfg.Controller.Contact,
+			DPO:     cfg.Controller.DPO,
+		},
+		ProfileDefault: cfg.ProfileDefault,
+		PrivacyHub:     cfg.PrivacyHub.Aud != "",
+		SignupsOpen:    cfg.SignupsOpen,
+		Operators:      cfg.Operators,
+		ScoringVersion: cfg.ScoringVersion,
+		Version:        version.Get().Version,
+		Retention:      policy,
+	})
+	if err != nil {
+		return err
+	}
+	if !cfg.SignupsOpen {
+		logger.Info("sign-ups are closed; only operators can create accounts", "operators", len(cfg.Operators))
+	}
+
 	db, err := store.Open(ctx, storeOptions(cfg, e))
 	if err != nil {
 		return err
@@ -88,6 +123,38 @@ func serve(ctx context.Context, cfg *config.Config, logger *slog.Logger, e *env)
 	// before the database closes.
 	defer w.Close()
 
+	// The retention jobs whose tables exist sweep through the writer, so
+	// their deletes queue with every other write (DESIGN 4.4).
+	jobs, off := policy.Jobs()
+	if len(off) > 0 {
+		logger.Info("retention jobs that wait for their tables", "off", off)
+	}
+	retentionDeleted := reg.Counter("pairtime_retention_deleted_rows_total", "Rows the retention jobs deleted (DESIGN 4.4).")
+	retentionErrors := reg.Counter("pairtime_retention_errors_total", "Retention job runs that failed.")
+	rctx, stopRetention := context.WithCancel(ctx)
+	retentionDone := make(chan struct{})
+	go func() {
+		defer close(retentionDone)
+		retention.Run(rctx, w, jobs, retentionEvery, time.Now, func(r retention.Result) {
+			switch {
+			case r.Err != nil:
+				if rctx.Err() == nil {
+					retentionErrors.Inc()
+					logger.Error("retention job failed", "job", r.ID, "err", r.Err)
+				}
+			case r.Deleted > 0:
+				retentionDeleted.Add(uint64(r.Deleted))
+				logger.Info("retention job deleted rows", "job", r.ID, "rows", r.Deleted)
+			}
+		})
+	}()
+	// Deferred after w.Close, so it runs first: the sweep stops before the
+	// writer does.
+	defer func() {
+		stopRetention()
+		<-retentionDone
+	}()
+
 	checks := []ops.Check{{
 		Name: "database",
 		Run: func(ctx context.Context) error {
@@ -99,6 +166,7 @@ func serve(ctx context.Context, cfg *config.Config, logger *slog.Logger, e *env)
 
 	public := http.NewServeMux()
 	public.HandleFunc("GET /healthz", ops.Healthz)
+	site.Register(public)
 
 	pubLn, err := net.Listen("tcp", cfg.Listen)
 	if err != nil {
