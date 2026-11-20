@@ -572,17 +572,19 @@ func TestWatcher(t *testing.T) {
 				res := g.resolver(ProjectMap{}, Excludes{})
 				sink := make(testSink, 16)
 				w := g.watcher(res, sink, WatcherOptions{NoNotify: true, Hold: time.Millisecond})
-				track(t, w, r.dir)
+				mainLoc := track(t, w, r.dir)
 				track(t, w, wt)
 				agent := &testRepo{g: g, dir: wt}
 				c1 := agent.commit("c1", map[string]string{"c1.txt": lines("c", 2)})
 				c2 := agent.commit("c2", map[string]string{"c2.txt": lines("c", 3)})
 				r.git("merge", "-q", "--no-ff", "--no-edit", "agent")
 				merge := r.head()
-				// One poll finds both; whichever worktree it scans first, the
-				// linked one's commits are recorded before the merge's
-				// arrivals are looked for.
-				w.Poll()
+				// Only the main worktree's scan is asked for, as when its
+				// notification comes first. Its merge still finds the linked
+				// worktree's commits recorded, as made there.
+				w.mu.Lock()
+				w.queueLocked(w.trees[foldPath(mainLoc.GitDir)])
+				w.mu.Unlock()
 				w.flush()
 				var got []Change
 				for len(got) < 3 {
@@ -607,6 +609,7 @@ func TestWatcher(t *testing.T) {
 				if merges != 1 {
 					t.Errorf("got %d merges, want 1", merges)
 				}
+				w.flush() // the worker is done with the delivery of the last one
 				st := w.State()
 				var recorded []string
 				for _, rs := range st.Repos {

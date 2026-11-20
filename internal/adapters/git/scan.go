@@ -147,6 +147,11 @@ type Scanner struct {
 	// obey GIT_NO_LAZY_FETCH, which would fetch a missing blob over the
 	// network: the scan then reads no notes and no stats.
 	lazy bool
+	// beforeArrivals, when set, runs once per scan before the first look
+	// for commits a merge or a pull brought. The Watcher scans the repo's
+	// other worktrees there, so commits they made are recorded first.
+	beforeArrivals func(context.Context)
+	arrivalsReady  bool
 }
 
 // NewScanner returns a scanner for the worktree at loc, resuming from st.
@@ -450,7 +455,7 @@ func rebaseEnd(entries []entry, start int) (end int, aborted, closed bool) {
 
 // build turns operations into changes, reading what they need from git.
 func (s *Scanner) build(ctx context.Context, ops []op, now time.Time) ([]Change, error) {
-	s.lazy = false
+	s.lazy, s.arrivalsReady = false, false
 	if v, err := s.git.Version(); err == nil && !HonorsNoLazyFetch(v) {
 		s.lazy = partialClone(ctx, s.git, s.loc.Dir)
 	}
@@ -699,6 +704,12 @@ func (s *Scanner) record(m *meta, kind event.GitOp, origin Origin, reflogTime in
 func (s *Scanner) arrivals(ctx context.Context, old, tip string, madeTip bool) ([]*meta, error) {
 	if old == "" || zeroID(old) || tip == "" || zeroID(tip) {
 		return nil, nil
+	}
+	if !s.arrivalsReady {
+		s.arrivalsReady = true
+		if s.beforeArrivals != nil {
+			s.beforeArrivals(ctx)
+		}
 	}
 	out, err := s.git.Run(ctx, s.loc.Dir, "rev-list", "-n", strconv.Itoa(maxArrived+1), tip, "--not", old, "--")
 	if err != nil {

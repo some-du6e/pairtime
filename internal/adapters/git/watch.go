@@ -198,6 +198,9 @@ type tree struct {
 	// dropped is set once the worktree is out of pairtime, so a scan of it
 	// that was already queued or running yields nothing.
 	dropped bool
+	// scanning is set while the worker scans the worktree, so a scan of a
+	// sibling it starts (see scanSiblings) doesn't start this one again.
+	scanning bool
 }
 
 type pendingState struct {
@@ -415,6 +418,8 @@ func (w *Watcher) Track(ctx context.Context, dir string) (Location, error) {
 		t = &tree{key: key, loc: loc, state: st}
 		t.scan = NewScanner(w.git, loc, st, w.now, w.res.Rekey)
 		t.scan.share(w.recentLocked(loc.CommonDir))
+		tt := t
+		t.scan.beforeArrivals = func(context.Context) { w.scanSiblings(tt) }
 	}
 	w.trees[key] = t
 	watched := w.requestWatchLocked(t)
@@ -781,32 +786,40 @@ func (w *Watcher) loop() {
 	}
 }
 
-// scan scans t, after any other worktree of its repo whose HEAD moved too:
-// a merge here of a branch committed there has to find that branch's
-// commits recorded, as made there, before it looks for arrivals.
-func (w *Watcher) scan(t *tree) {
+// scanSiblings scans the other worktrees of t's repo whose HEAD moved
+// since their last scan. t's scanner calls it, on the worker goroutine,
+// before it looks for the commits a merge or a pull brought: a merge here
+// of a branch committed in another worktree, an agent's say, has to find
+// that branch's commits recorded, as made there, whichever worktree's
+// notification came first.
+func (w *Watcher) scanSiblings(t *tree) {
 	w.mu.Lock()
-	var first []*tree
+	var due []*tree
 	ck := foldPath(t.loc.CommonDir)
 	now := w.now()
 	for _, o := range w.trees {
-		if o != t && foldPath(o.loc.CommonDir) == ck && signatureOf(o.loc) != o.sig && !now.Before(o.retryAt) {
-			first = append(first, o)
+		if o != t && !o.scanning && foldPath(o.loc.CommonDir) == ck && signatureOf(o.loc) != o.sig && !now.Before(o.retryAt) {
+			due = append(due, o)
 		}
 	}
 	w.mu.Unlock()
-	for _, o := range first {
-		w.scanOne(o)
+	for _, o := range due {
+		w.scan(o)
 	}
-	w.scanOne(t)
 }
 
-func (w *Watcher) scanOne(t *tree) {
+func (w *Watcher) scan(t *tree) {
 	w.mu.Lock()
-	if t.dropped || w.closed || w.trees[t.key] != t {
+	if t.dropped || w.closed || w.trees[t.key] != t || t.scanning {
 		w.mu.Unlock()
 		return
 	}
+	t.scanning = true
+	defer func() {
+		w.mu.Lock()
+		t.scanning = false
+		w.mu.Unlock()
+	}()
 	if w.res.ignoredLoc(t.loc) {
 		w.dropLocked(t.key, t)
 		w.mu.Unlock()
