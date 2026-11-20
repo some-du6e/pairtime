@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"math/rand/v2"
 	"os"
 	"os/exec"
@@ -39,11 +40,13 @@ func TestReferenceCheckContent(t *testing.T) {
 	}
 
 	// Small slices of the same file, each with one value changed, to show
-	// the check really reads every section this test writes.
+	// the check really reads every section this test writes: it must exit
+	// 1 and name the changed value's JSON path.
 	small := func() contentVectorsFile {
 		s := contentVectorsFile{Format: vectorsFormat,
 			Commitments: doc.Commitments[:5], Reveals: doc.Reveals[:5], Normalizations: doc.Normalizations[:5],
-			Features: doc.Features[:5], ShingleReveals: doc.ShingleReveals[:5], Draws: doc.Draws[:3]}
+			Features: doc.Features[:5], Jaccard: doc.Jaccard[:5], ShingleReveals: doc.ShingleReveals[:5],
+			Draws: doc.Draws[:3], ChallengeK: doc.ChallengeK[:5]}
 		return deepCopyContent(t, s)
 	}
 	rootChanged := small()
@@ -55,24 +58,42 @@ func TestReferenceCheckContent(t *testing.T) {
 	fChanged := small()
 	fChanged.Features[0].F = json.RawMessage(strings.Replace(string(fChanged.Features[0].F), `"pc":"`, `"pc":"x`, 1))
 	drawChanged := small()
+	drawn := -1
 	for i := range drawChanged.Draws {
 		if d := drawChanged.Draws[i].Drawn; len(d) >= 2 {
 			d[0], d[1] = d[1], d[0]
+			drawn = i
 			break
 		}
 	}
+	if drawn < 0 {
+		t.Fatal("none of the first three draws drew two turns")
+	}
+	jaccardChanged := small()
+	jaccardChanged.Jaccard[1].Matches = (jaccardChanged.Jaccard[1].Matches + 1) % (features.SketchSize + 1)
+	shingleChanged := small()
+	if shingleChanged.ShingleReveals[0].Verdict != features.ShingleOK {
+		t.Fatal("the first CC8 reveal written isn't ok")
+	}
+	shingleChanged.ShingleReveals[0].Verdict = features.ShingleSketch
+	kChanged := small()
+	kChanged.ChallengeK[3].K++
 
 	cases := []struct {
 		name string
 		doc  contentVectorsFile
 		want int
+		path string // the JSON path check must name, for a changed file
 	}{
-		{"1,000 random texts with random removals, and their features, CC8 reveals and draws, pass tools/ledger_ref.py check", doc, 0},
-		{"tools/ledger_ref.py check fails the same commitments with one root byte changed", rootChanged, 1},
-		{"tools/ledger_ref.py check fails an ok reveal written down as failing on its root", verdictChanged, 1},
-		{"tools/ledger_ref.py check fails a normalized text with a byte added", normalizedChanged, 1},
-		{"tools/ledger_ref.py check fails a feature map whose prompt class was changed", fChanged, 1},
-		{"tools/ledger_ref.py check fails a draw with two drawn turns swapped", drawChanged, 1},
+		{"1,000 random texts with random removals, and their features, CC8 reveals and draws, pass tools/ledger_ref.py check", doc, 0, ""},
+		{"tools/ledger_ref.py check fails the same commitments with one root byte changed", rootChanged, 1, "commitments[1].root"},
+		{"tools/ledger_ref.py check fails an ok reveal written down as failing on its root", verdictChanged, 1, "reveals[2].verdict"},
+		{"tools/ledger_ref.py check fails a normalized text with a byte added", normalizedChanged, 1, "normalizations[3].normalized"},
+		{"tools/ledger_ref.py check fails a feature map whose prompt class was changed", fChanged, 1, "features[0].f"},
+		{"tools/ledger_ref.py check fails a draw with two drawn turns swapped", drawChanged, 1, fmt.Sprintf("draws[%d].drawn", drawn)},
+		{"tools/ledger_ref.py check fails a Jaccard pair with its match count changed", jaccardChanged, 1, "jaccard[1].matches"},
+		{"tools/ledger_ref.py check fails an ok CC8 reveal written down as failing on its sketch", shingleChanged, 1, "shingle_reveals[0].verdict"},
+		{"tools/ledger_ref.py check fails a CHALLENGE_K size changed", kChanged, 1, "challenge_k[3].k"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -96,6 +117,9 @@ func TestReferenceCheckContent(t *testing.T) {
 			}
 			if code != c.want {
 				t.Fatalf("tools/ledger_ref.py check exited %d, want %d:\n%s", code, c.want, out)
+			}
+			if c.path != "" && !bytes.Contains(out, []byte(c.path+": ")) {
+				t.Fatalf("tools/ledger_ref.py check doesn't name %s:\n%s", c.path, out)
 			}
 			lines := bytes.Split(bytes.TrimSpace(out), []byte("\n"))
 			t.Logf("%d bytes checked: %s", len(data), lines[len(lines)-1])
