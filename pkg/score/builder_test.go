@@ -31,6 +31,8 @@ type tl struct {
 	// keyCounter says the OS reports key presses apart from other input,
 	// as macOS does and the typing module does elsewhere.
 	keyCounter bool
+	// locked is set between a lock and an unlock, so samples say so.
+	locked bool
 }
 
 func newTL(keyCounter bool) *tl { return &tl{keyCounter: keyCounter} }
@@ -101,7 +103,7 @@ func (b *tl) sample(t int64) {
 		}
 		return float64(t-last) / 1000
 	}
-	d := &event.OSPresence{IdleAnyS: idle(b.inputs)}
+	d := &event.OSPresence{IdleAnyS: idle(b.inputs), Locked: b.locked}
 	if b.keyCounter {
 		k := idle(b.keys)
 		d.IdleKeysS = &k
@@ -120,7 +122,15 @@ func (b *tl) focus(t int64, class event.AppClass, project string, hosted ...stri
 	b.os(t, &event.OSFocus{AppClass: class, AppHash: "a_" + string(class), FocusProject: project, HostedSessions: hosted})
 }
 
-func (b *tl) power(t int64, op event.PowerOp) { b.os(t, &event.OSPower{Op: op}) }
+func (b *tl) power(t int64, op event.PowerOp) {
+	switch op {
+	case event.PowerLock:
+		b.locked = true
+	case event.PowerUnlock:
+		b.locked = false
+	}
+	b.os(t, &event.OSPower{Op: op})
+}
 
 // harness adds a record of session sess that arrived via v.
 func (b *tl) harness(t int64, v event.Via, sess, project string, p event.Payload) event.Event {
