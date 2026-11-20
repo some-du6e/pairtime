@@ -9,7 +9,6 @@ import (
 	"errors"
 
 	"github.com/some-du6e/pairtime/internal/platform/linux"
-	"github.com/some-du6e/pairtime/pkg/event"
 )
 
 // Desktop is what presence reads of a Linux desktop: the agent's
@@ -68,11 +67,12 @@ func LinuxOS(d Desktop) OS {
 }
 
 // runPower passes each event on ch to f's watches, and lets a suspend go
-// ahead once the sampler has handled it, until ch closes.
+// ahead once the sampler has handled it, until ch closes. Ready does
+// nothing for the other ops.
 func runPower(f *feed, ch <-chan linux.Power) {
 	for p := range ch {
 		f.pass(p.Op)
-		if p.Op == event.PowerSuspend && p.Ready != nil {
+		if p.Ready != nil {
 			p.Ready()
 		}
 	}
