@@ -18,7 +18,7 @@ pairtime's web UI, in Svelte 5 and TypeScript, built by Vite (DESIGN 3.11, 3.12)
 These run in CI (`.github/workflows/web.yml`); a person with Node 22.12 or later can run them too.
 
 ```sh
-npm ci                # install exactly what package-lock.json says
+npm ci                # install exactly what package-lock.json says; .npmrc turns install scripts off
 npm run check         # generate the API types, then svelte-check
 npm run test:unit     # vitest
 npm run build         # all three builds

@@ -10,7 +10,8 @@
 // repository didn't write.
 //
 // It answers path-style requests, /<bucket>/<key>, and virtual-hosted
-// ones whose host starts with "<bucket>.".
+// ones whose host starts with "<bucket>.". Like S3, it keeps the
+// x-amz-meta-* headers a put carries and returns them on GET and HEAD.
 package objstoretest
 
 import (
@@ -71,6 +72,8 @@ type object struct {
 	etag        string
 	modified    time.Time
 	contentType string
+	// meta holds the x-amz-meta-* headers the object was put with.
+	meta http.Header
 }
 
 // Request is one request the server received.
@@ -85,21 +88,36 @@ type Request struct {
 }
 
 // fault is an answer forced on the next request: an S3 error, or, with
-// status 0, a connection closed without an answer.
+// status 0, a connection closed without an answer. With after set, the
+// server carries the request out first.
 type fault struct {
 	status int
 	code   string
+	after  bool
 }
 
 // New starts a server holding the named, empty buckets, and closes it when
 // the test ends.
 func New(t testing.TB, buckets ...string) *Server {
 	t.Helper()
+	return start(t, httptest.NewServer, buckets)
+}
+
+// NewTLS is New over https. The server presents httptest's certificate,
+// which covers example.com and *.example.com, so a client can check a
+// virtual-hosted name against it. Certificate returns it for a client's
+// RootCAs.
+func NewTLS(t testing.TB, buckets ...string) *Server {
+	t.Helper()
+	return start(t, httptest.NewTLSServer, buckets)
+}
+
+func start(t testing.TB, newServer func(http.Handler) *httptest.Server, buckets []string) *Server {
 	s := &Server{buckets: make(map[string]map[string]*object), Now: time.Now}
 	for _, b := range buckets {
 		s.buckets[b] = make(map[string]*object)
 	}
-	s.Server = httptest.NewServer(http.HandlerFunc(s.serve))
+	s.Server = newServer(http.HandlerFunc(s.serve))
 	t.Cleanup(s.Close)
 	return s
 }
@@ -111,7 +129,20 @@ func (s *Server) Fail(n, status int, code string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for range n {
-		s.faults = append(s.faults, fault{status, code})
+		s.faults = append(s.faults, fault{status: status, code: code})
+	}
+}
+
+// FailAfter makes the next n requests do what they ask, and then answer
+// with status and the S3 error code in place of their real answer. A
+// status of 0 closes the connection without an answer instead, as when a
+// store commits a put and the answer is lost on the way back. Faults from
+// Fail and FailAfter apply in the order they were set.
+func (s *Server) FailAfter(n, status int, code string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for range n {
+		s.faults = append(s.faults, fault{status: status, code: code, after: true})
 	}
 }
 
@@ -134,14 +165,15 @@ func (s *Server) Object(bucket, key string) ([]byte, bool) {
 }
 
 // SetObject stores data under key in bucket, behind the client's back, as
-// someone with the bucket's keys could.
+// someone with the bucket's keys could. The object has no x-amz-meta-*
+// headers.
 func (s *Server) SetObject(bucket, key string, data []byte) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.buckets[bucket] == nil {
 		s.buckets[bucket] = make(map[string]*object)
 	}
-	s.store(bucket, key, data, "application/octet-stream")
+	s.store(bucket, key, data, "application/octet-stream", nil)
 }
 
 // Keys returns the keys in bucket, sorted.
@@ -151,11 +183,22 @@ func (s *Server) Keys(bucket string) []string {
 	return slices.Sorted(maps.Keys(s.buckets[bucket]))
 }
 
-func (s *Server) store(bucket, key string, data []byte, contentType string) *object {
+func (s *Server) store(bucket, key string, data []byte, contentType string, meta http.Header) *object {
 	sum := md5.Sum(data)
-	o := &object{data: slices.Clone(data), etag: `"` + hex.EncodeToString(sum[:]) + `"`, modified: s.Now().UTC().Truncate(time.Second), contentType: contentType}
+	o := &object{data: slices.Clone(data), etag: `"` + hex.EncodeToString(sum[:]) + `"`, modified: s.Now().UTC().Truncate(time.Second), contentType: contentType, meta: meta}
 	s.buckets[bucket][key] = o
 	return o
+}
+
+// userMeta returns the x-amz-meta-* headers of h.
+func userMeta(h http.Header) http.Header {
+	meta := http.Header{}
+	for k, vs := range h {
+		if strings.HasPrefix(k, "X-Amz-Meta-") {
+			meta[k] = slices.Clone(vs)
+		}
+	}
+	return meta
 }
 
 // answer is what the handler writes.
@@ -177,20 +220,19 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 	s.mu.Unlock()
 
 	var a answer
-	switch {
-	case f != nil && f.status == 0:
-		s.record(r, 0)
-		if hj, ok := w.(http.Hijacker); ok {
-			if conn, _, err := hj.Hijack(); err == nil {
-				conn.Close()
-				return
-			}
-		}
-		panic(http.ErrAbortHandler)
-	case f != nil:
-		a = s3error(f.status, f.code, "injected by the test", id)
-	default:
+	if f == nil || f.after {
 		a = s.handle(r, id)
+	}
+	if f != nil {
+		if f.status == 0 {
+			s.drop(w, r)
+			return
+		}
+		msg := "injected by the test"
+		if f.after {
+			msg = "injected by the test after carrying out the request"
+		}
+		a = s3error(f.status, f.code, msg, id)
 	}
 	s.record(r, a.status)
 	for k, vs := range a.header {
@@ -204,6 +246,18 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodHead {
 		w.Write(a.body)
 	}
+}
+
+// drop records r and closes its connection without an answer.
+func (s *Server) drop(w http.ResponseWriter, r *http.Request) {
+	s.record(r, 0)
+	if hj, ok := w.(http.Hijacker); ok {
+		if conn, _, err := hj.Hijack(); err == nil {
+			conn.Close()
+			return
+		}
+	}
+	panic(http.ErrAbortHandler)
 }
 
 func (s *Server) record(r *http.Request, status int) {
@@ -263,19 +317,23 @@ func (s *Server) handle(r *http.Request, id string) answer {
 		if ctype == "" {
 			ctype = "binary/octet-stream"
 		}
-		o := s.store(bucket, key, body, ctype)
+		o := s.store(bucket, key, body, ctype, userMeta(r.Header))
 		return answer{status: http.StatusOK, header: http.Header{"Etag": {o.etag}}, body: []byte{}}
 	case http.MethodGet, http.MethodHead:
 		o, ok := objects[key]
 		if !ok {
 			return s3error(http.StatusNotFound, "NoSuchKey", "The specified key does not exist.", id)
 		}
-		return answer{status: http.StatusOK, body: o.data, header: http.Header{
+		h := http.Header{
 			"Etag":           {o.etag},
 			"Last-Modified":  {o.modified.Format(http.TimeFormat)},
 			"Content-Type":   {o.contentType},
 			"Content-Length": {strconv.Itoa(len(o.data))},
-		}}
+		}
+		for k, vs := range o.meta {
+			h[k] = slices.Clone(vs)
+		}
+		return answer{status: http.StatusOK, body: o.data, header: h}
 	case http.MethodDelete:
 		delete(objects, key)
 		return answer{status: http.StatusNoContent}

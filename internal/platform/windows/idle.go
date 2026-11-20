@@ -11,6 +11,10 @@
 // the agent's process (DESIGN 3.2, 3.3). There is no keyboard listener or
 // low-level hook of any kind: DESIGN keeps one out until the binaries are
 // signed (7.2 item 5; 11 risk 18).
+//
+// dpapi.go is the device keystore's half (internal/agent/keys; DESIGN 3.6;
+// CP 5.2): DPAPI, which encrypts a secret under the user's logon
+// credentials.
 package windows
 
 import (

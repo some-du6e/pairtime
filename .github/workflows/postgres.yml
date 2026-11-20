@@ -4,7 +4,8 @@
 # 10.6; SP 7.4, 9.5). pairtimed runs on SQLite, and ci.yml tests that on
 # every PR. This workflow runs the same tests with a Postgres service as
 # well, so SQL that only SQLite accepts fails here. It runs nightly and on
-# PRs that touch the SQL: the store, the migrations and the writer.
+# PRs that touch the SQL: the store, the migrations, the writer, and the
+# accounts and sign-in packages.
 #
 #   gh workflow run postgres.yml --ref <branch>
 name: postgres
@@ -15,6 +16,8 @@ on:
       - internal/server/store/**
       - internal/server/migrations/**
       - internal/server/writer/**
+      - internal/server/accounts/**
+      - internal/server/auth/**
       - .github/workflows/postgres.yml
   schedule:
     # Half an hour after nightly.yml, so the two don't queue together.

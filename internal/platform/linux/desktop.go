@@ -180,7 +180,7 @@ func Open(ctx context.Context, cfg Config) *Desktop {
 	sessionBus := cfg.SessionBus
 	if sessionBus == nil {
 		sessionBus = func() (*dbus.Conn, error) {
-			address, err := sessionBusAddress(getenv)
+			address, err := sessionBusAddress(getenv, currentUID, isSocket)
 			if err != nil {
 				return nil, err
 			}

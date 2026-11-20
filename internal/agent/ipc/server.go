@@ -10,6 +10,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"os"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
@@ -29,10 +30,14 @@ const (
 	replyTimeout = 10 * time.Second
 	// selfTestTimeout bounds the self-test at startup.
 	selfTestTimeout = 3 * time.Second
-	// maxAcceptFailures is how many accepts in a row may fail, about 15 s
+	// maxAcceptFailures is how many accepts in a row may fail, about 10 s
 	// of trying, before Serve gives up.
 	maxAcceptFailures = 20
 )
+
+// acceptRetry is how much longer Serve waits after each failed accept in a
+// row before it tries again, up to a second. Tests shorten it.
+var acceptRetry = 50 * time.Millisecond
 
 // errNoPipe means a named pipe was asked for off Windows.
 var errNoPipe = errors.New("ipc: there is no named pipe off Windows")
@@ -65,6 +70,12 @@ type Server struct {
 	sem      chan struct{}
 	refused  atomic.Uint64
 
+	// stopped is set once the listener is closed, by Close or by Serve
+	// giving up (stopListening).
+	stopped  atomic.Bool
+	stopOnce sync.Once
+	stopErr  error
+
 	mu     sync.Mutex
 	conns  map[net.Conn]struct{}
 	closed bool
@@ -76,8 +87,9 @@ type Server struct {
 // behind, listens, and runs a self-test: a message sent to itself through
 // the same checks that every sender and connection go through. On
 // Windows, when any of that fails, or opts.ForcePipe is set, it listens on
-// the named pipe instead (CP 6.3; DESIGN 3.3). Elsewhere the failure is the
-// error.
+// the named pipe instead (CP 6.3; DESIGN 3.3), and writes the note without
+// which senders don't try the pipe (Endpoint.PipeNote). Elsewhere the
+// failure is the error.
 func Listen(ep Endpoint, opts Options) (*Server, error) {
 	me, err := self()
 	if err != nil {
@@ -105,6 +117,10 @@ func Listen(ep Endpoint, opts Options) (*Server, error) {
 		removeStale(ep.Socket)
 	default:
 		if sockErr = s.listenSocket(); sockErr == nil {
+			// A note left by an agent that was on the pipe would send
+			// senders whose socket dial fails to a pipe that is gone, or
+			// that someone else has made since.
+			removePipeNote(ep)
 			return s, nil
 		}
 		// An agent that already answers on the socket gets every message
@@ -117,8 +133,20 @@ func Listen(ep Endpoint, opts Options) (*Server, error) {
 	if err != nil {
 		return nil, errors.Join(sockErr, err)
 	}
+	if err := writePipeNote(ep); err != nil {
+		ln.Close()
+		return nil, errors.Join(sockErr, fmt.Errorf("ipc: noting that the agent listens on the pipe: %w", err))
+	}
 	s.ln, s.via, s.fallback = ln, inbox.ViaPipe, sockErr.Error()
 	return s, nil
+}
+
+// removePipeNote deletes the note that says an agent listens on ep's pipe,
+// so senders stop trying the pipe.
+func removePipeNote(ep Endpoint) {
+	if ep.PipeNote != "" {
+		os.Remove(ep.PipeNote)
+	}
 }
 
 func (s *Server) listenSocket() error {
@@ -191,8 +219,15 @@ func (s *Server) probe(ctx context.Context, m inbox.Message) error {
 	return conn.Send(ctx, m)
 }
 
-// Via says whether the server is on the socket or on the pipe.
-func (s *Server) Via() inbox.Via { return s.via }
+// Via says whether the server is on the socket or on the pipe. It is ""
+// once the server has stopped listening, after Close or once Serve has
+// given up, because senders can't reach it then and spool instead.
+func (s *Server) Via() inbox.Via {
+	if s.stopped.Load() {
+		return ""
+	}
+	return s.via
+}
 
 // Fallback says why the server is on the pipe, or is "" when it isn't.
 func (s *Server) Fallback() string { return s.fallback }
@@ -202,8 +237,14 @@ func (s *Server) Fallback() string { return s.fallback }
 func (s *Server) Refused() uint64 { return s.refused.Load() }
 
 // Serve takes connections until Close, delivers every message they carry
-// to sink, and acks each one sink stored. It returns nil after Close, and
-// an error only when accepting keeps failing.
+// to sink, and acks each one sink stored. It returns nil after Close.
+//
+// When accepting fails maxAcceptFailures times in a row, Serve stops
+// listening and returns the error; the connections it took carry on. With
+// the socket file or the pipe's note gone, senders find no agent at once
+// and spool. A listener left open would have the OS queue their
+// connections for an Accept that never comes, and each sender would wait
+// out its timeout first.
 func (s *Server) Serve(sink inbox.Sink) error {
 	failures := 0
 	for {
@@ -214,12 +255,12 @@ func (s *Server) Serve(sink inbox.Sink) error {
 			}
 			failures++
 			if failures >= maxAcceptFailures {
-				return fmt.Errorf("ipc: accepting connections keeps failing: %w", err)
+				return errors.Join(fmt.Errorf("ipc: accepting connections keeps failing, so the agent stopped listening: %w", err), s.stopListening())
 			}
 			s.log.Warn("ipc: accepting a connection failed", "err", err)
 			// Out of file descriptors and the like: wait, as net/http
 			// does, and try again.
-			time.Sleep(min(time.Duration(failures)*50*time.Millisecond, time.Second))
+			time.Sleep(min(time.Duration(failures)*acceptRetry, time.Second))
 			continue
 		}
 		failures = 0
@@ -271,6 +312,7 @@ func (s *Server) isClosed() bool {
 // Close stops listening, drops open connections, and returns once every
 // handler has finished, so no Deliver runs after it. A message whose ack
 // it cuts off is spooled by its sender, and arrives through the drain.
+// On the pipe it deletes its note first, so senders stop trying the pipe.
 func (s *Server) Close() error {
 	s.mu.Lock()
 	if s.closed {
@@ -282,9 +324,23 @@ func (s *Server) Close() error {
 		c.Close()
 	}
 	s.mu.Unlock()
-	err := s.ln.Close()
+	err := s.stopListening()
 	s.wg.Wait()
 	return err
+}
+
+// stopListening closes the listener, once, which also deletes the socket
+// file. On the pipe it deletes the note first, so senders stop trying the
+// pipe.
+func (s *Server) stopListening() error {
+	s.stopOnce.Do(func() {
+		s.stopped.Store(true)
+		if s.via == inbox.ViaPipe {
+			removePipeNote(s.ep)
+		}
+		s.stopErr = s.ln.Close()
+	})
+	return s.stopErr
 }
 
 // handle serves one connection until the sender hangs up, sends a bad

@@ -6,8 +6,12 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
+	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"slices"
@@ -130,18 +134,42 @@ func TestCheckNames(t *testing.T) {
 	}
 }
 
-func TestNewRefusesMissingCredentials(t *testing.T) {
+func TestNew(t *testing.T) {
+	creds := sigv4.Credentials{AccessKeyID: "a", SecretAccessKey: "s"}
 	tests := []struct {
-		name  string
-		creds sigv4.Credentials
+		name string
+		cfg  Config
+		// wantErr is a substring of New's error; "" means New succeeds.
+		wantErr string
 	}{
-		{name: "no access key id is refused", creds: sigv4.Credentials{SecretAccessKey: "s"}},
-		{name: "no secret is refused", creds: sigv4.Credentials{AccessKeyID: "a"}},
+		{name: "no access key id is refused", wantErr: "both required",
+			cfg: Config{Endpoint: "https://s3.example", Credentials: sigv4.Credentials{SecretAccessKey: "s"}}},
+		{name: "no secret is refused", wantErr: "both required",
+			cfg: Config{Endpoint: "https://s3.example", Credentials: sigv4.Credentials{AccessKeyID: "a"}}},
+		{name: "path-style URLs over http on loopback are allowed, for MinIO in CI",
+			cfg: Config{Endpoint: "http://127.0.0.1:9000", Credentials: creds}},
+		{name: "virtual-hosted URLs over https on a host name are allowed",
+			cfg: Config{Endpoint: "https://fsn1.your-objectstorage.com", VirtualHost: true, Credentials: creds}},
+		{name: "virtual-hosted URLs over http are refused, since <bucket>.localhost isn't a loopback host", wantErr: "need an https endpoint",
+			cfg: Config{Endpoint: "http://localhost:9000", VirtualHost: true, Credentials: creds}},
+		{name: "virtual-hosted URLs over http are refused, since <bucket>.127.0.0.1 isn't a loopback host", wantErr: "need an https endpoint",
+			cfg: Config{Endpoint: "http://127.0.0.1:9000", VirtualHost: true, Credentials: creds}},
+		{name: "virtual-hosted URLs on an IPv4 address are refused", wantErr: "not the IP address",
+			cfg: Config{Endpoint: "https://192.0.2.10", VirtualHost: true, Credentials: creds}},
+		{name: "virtual-hosted URLs on an IPv6 address are refused", wantErr: "not the IP address",
+			cfg: Config{Endpoint: "https://[2001:db8::1]:8443", VirtualHost: true, Credentials: creds}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if _, err := New(Config{Endpoint: "https://s3.example", Credentials: tt.creds}); err == nil {
-				t.Error("New accepted incomplete credentials")
+			_, err := New(tt.cfg)
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Fatalf("New: %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Errorf("New error = %v, want one containing %q", err, tt.wantErr)
 			}
 		})
 	}
@@ -202,12 +230,12 @@ func TestCalls(t *testing.T) {
 				t.Errorf("got %q with %+v", got, info)
 			}
 		}},
-		{name: "head returns the size, ETag and time without the body", run: func(t *testing.T) {
+		{name: "head returns the size, ETag, time and the SHA-256 put stored, without the body", run: func(t *testing.T) {
 			info, err := b.Head(ctx, "notes/one")
 			if err != nil {
 				t.Fatal(err)
 			}
-			if info.Size != 5 || info.ETag == "" || info.LastModified.IsZero() {
+			if info.Size != 5 || info.ETag == "" || info.LastModified.IsZero() || info.SHA256 != sigv4.PayloadHash([]byte("hello")) {
 				t.Errorf("head = %+v", info)
 			}
 		}},
@@ -335,28 +363,35 @@ func (h *hugeBody) Seek(offset int64, whence int) (int64, error) {
 }
 
 func TestPutTooLarge(t *testing.T) {
-	srv := objstoretest.New(t, mainBucket)
-	b := bucket(t, newTestClient(t, srv), mainBucket)
 	tests := []struct {
 		name string
-		put  func() error
+		put  func(*objstoretest.Server, *Bucket) error
+		// wantRequests is how many requests reach the store.
+		wantRequests int
 	}{
-		{name: "a body over 5 GiB fails with ErrTooLarge before it is read", put: func() error {
+		{name: "a body over MaxPutSize, R2's cap for one put, fails with ErrTooLarge before it is read", put: func(_ *objstoretest.Server, b *Bucket) error {
 			_, err := b.Put(context.Background(), "big", &hugeBody{}, PutOptions{})
 			return err
 		}},
-		{name: "a sealed blob over MaxEvidenceSize fails with ErrTooLarge", put: func() error {
+		{name: "a sealed blob over MaxEvidenceSize fails with ErrTooLarge", put: func(_ *objstoretest.Server, b *Bucket) error {
 			_, err := NewEvidence(b).Put(context.Background(), make([]byte, MaxEvidenceSize+1))
+			return err
+		}},
+		{name: "a store's EntityTooLarge answer fails with ErrTooLarge and isn't retried", wantRequests: 1, put: func(srv *objstoretest.Server, b *Bucket) error {
+			srv.Fail(1, http.StatusBadRequest, "EntityTooLarge")
+			_, err := b.Put(context.Background(), "big", strings.NewReader("over a smaller store's cap"), PutOptions{})
 			return err
 		}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if err := tt.put(); !errors.Is(err, ErrTooLarge) {
+			srv := objstoretest.New(t, mainBucket)
+			b := bucket(t, newTestClient(t, srv), mainBucket)
+			if err := tt.put(srv, b); !errors.Is(err, ErrTooLarge) {
 				t.Errorf("error = %v, want ErrTooLarge", err)
 			}
-			if n := len(srv.Requests()); n != 0 {
-				t.Errorf("%d requests were sent", n)
+			if n := len(srv.Requests()); n != tt.wantRequests {
+				t.Errorf("%d requests were sent, want %d", n, tt.wantRequests)
 			}
 		})
 	}
@@ -518,33 +553,92 @@ func TestSnapshots(t *testing.T) {
 	}
 }
 
+// mustPut stores data under key with a plain put.
+func mustPut(t *testing.T, b *Bucket, key, data string) {
+	t.Helper()
+	if _, err := b.Put(context.Background(), key, strings.NewReader(data), PutOptions{}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestRetries(t *testing.T) {
+	const key = "retry/k"
+	writeOnce := PutOptions{IfNoneMatch: true}
 	tests := []struct {
 		name string
-		// status 0 drops the connection.
-		status, failures int
-		code             string
-		call             func(*Bucket) error
-		wantRequests     int
-		wantErr          bool
+		// setup prepares the fresh server before the faults; its requests
+		// aren't counted.
+		setup func(*testing.T, *objstoretest.Server, *Bucket)
+		// fail injects the faults.
+		fail func(*objstoretest.Server)
+		// opts are the options of the call, a put of "body" under key.
+		opts PutOptions
+		// call replaces the put.
+		call func(*Bucket) error
+		// wantMethods are the requests the call sends, in order.
+		wantMethods []string
+		wantErr     bool
+		// wantIs is a sentinel the error must wrap.
+		wantIs error
+		// wantStored is what the key holds after the call; "" skips the
+		// check.
+		wantStored string
 	}{
-		{name: "a 503 SlowDown is retried and the put then succeeds", status: 503, code: "SlowDown", failures: 1, wantRequests: 2},
-		{name: "a dropped connection is retried", status: 0, failures: 1, wantRequests: 2},
-		{name: "a 500 is retried up to three attempts, then fails", status: 500, code: "InternalError", failures: 3, wantRequests: 3, wantErr: true},
-		{name: "a 403 isn't retried", status: 403, code: "AccessDenied", failures: 1, wantRequests: 1, wantErr: true},
-		{name: "a 400 isn't retried", status: 400, code: "InvalidArgument", failures: 1, wantRequests: 1, wantErr: true},
-		{name: "the readiness check is tried once", status: 503, code: "SlowDown", failures: 1, wantRequests: 1, wantErr: true,
-			call: func(b *Bucket) error { return b.Check(context.Background()) }},
+		{name: "a 503 SlowDown is retried and the put then succeeds", fail: func(s *objstoretest.Server) { s.Fail(1, 503, "SlowDown") },
+			wantMethods: []string{"PUT", "PUT"}, wantStored: "body"},
+		{name: "a dropped connection is retried", fail: func(s *objstoretest.Server) { s.Fail(1, 0, "") },
+			wantMethods: []string{"PUT", "PUT"}, wantStored: "body"},
+		{name: "a 500 is retried up to three attempts, then fails", fail: func(s *objstoretest.Server) { s.Fail(3, 500, "InternalError") },
+			wantMethods: []string{"PUT", "PUT", "PUT"}, wantErr: true},
+		{name: "a 403 isn't retried", fail: func(s *objstoretest.Server) { s.Fail(1, 403, "AccessDenied") },
+			wantMethods: []string{"PUT"}, wantErr: true},
+		{name: "a 400 isn't retried", fail: func(s *objstoretest.Server) { s.Fail(1, 400, "InvalidArgument") },
+			wantMethods: []string{"PUT"}, wantErr: true},
+		{name: "the readiness check is tried once", fail: func(s *objstoretest.Server) { s.Fail(1, 503, "SlowDown") },
+			call:        func(b *Bucket) error { return b.Check(context.Background()) },
+			wantMethods: []string{"GET"}, wantErr: true},
+		{name: "a write-once put whose stored first attempt lost its answer succeeds once a HEAD finds its own body",
+			fail: func(s *objstoretest.Server) { s.FailAfter(1, 0, "") }, opts: writeOnce,
+			wantMethods: []string{"PUT", "PUT", "HEAD"}, wantStored: "body"},
+		{name: "a write-once put whose stored first attempt was answered with a 500 succeeds once a HEAD finds its own body",
+			fail: func(s *objstoretest.Server) { s.FailAfter(1, 500, "InternalError") }, opts: writeOnce,
+			wantMethods: []string{"PUT", "PUT", "HEAD"}, wantStored: "body"},
+		{name: "a retried write-once put that finds other bytes of the same size fails with ErrExists",
+			setup: func(t *testing.T, _ *objstoretest.Server, b *Bucket) { mustPut(t, b, key, "BODY") },
+			fail:  func(s *objstoretest.Server) { s.Fail(1, 503, "SlowDown") }, opts: writeOnce,
+			wantMethods: []string{"PUT", "PUT", "HEAD"}, wantErr: true, wantIs: ErrExists, wantStored: "BODY"},
+		{name: "a retried write-once put fails with ErrExists when the stored object has no SHA-256 to compare",
+			setup: func(_ *testing.T, s *objstoretest.Server, _ *Bucket) { s.SetObject(mainBucket, key, []byte("body")) },
+			fail:  func(s *objstoretest.Server) { s.Fail(1, 503, "SlowDown") }, opts: writeOnce,
+			wantMethods: []string{"PUT", "PUT", "HEAD"}, wantErr: true, wantIs: ErrExists, wantStored: "body"},
+		{name: "a write-once put refused on its first attempt fails with ErrExists and sends no HEAD",
+			setup: func(t *testing.T, _ *objstoretest.Server, b *Bucket) { mustPut(t, b, key, "body") }, opts: writeOnce,
+			wantMethods: []string{"PUT"}, wantErr: true, wantIs: ErrExists, wantStored: "body"},
+		{name: "a retried write-once put whose HEAD fails returns that error, not ErrExists",
+			fail: func(s *objstoretest.Server) {
+				// The first attempt is stored and its answer lost, the
+				// retry is refused, and the HEAD is denied.
+				s.FailAfter(1, 0, "")
+				s.Fail(1, 412, "PreconditionFailed")
+				s.Fail(1, 403, "AccessDenied")
+			},
+			opts: writeOnce, wantMethods: []string{"PUT", "PUT", "HEAD"}, wantErr: true, wantStored: "body"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			srv := objstoretest.New(t, mainBucket)
 			b := bucket(t, newTestClient(t, srv), mainBucket)
-			srv.Fail(tt.failures, tt.status, tt.code)
+			if tt.setup != nil {
+				tt.setup(t, srv, b)
+			}
+			before := len(srv.Requests())
+			if tt.fail != nil {
+				tt.fail(srv)
+			}
 			call := tt.call
 			if call == nil {
 				call = func(b *Bucket) error {
-					_, err := b.Put(context.Background(), "retry/k", strings.NewReader("body"), PutOptions{})
+					_, err := b.Put(context.Background(), key, strings.NewReader("body"), tt.opts)
 					return err
 				}
 			}
@@ -552,12 +646,27 @@ func TestRetries(t *testing.T) {
 			if (err != nil) != tt.wantErr {
 				t.Errorf("error = %v, want an error: %v", err, tt.wantErr)
 			}
-			if n := len(srv.Requests()); n != tt.wantRequests {
-				t.Errorf("%d requests, want %d", n, tt.wantRequests)
+			if tt.wantIs != nil && !errors.Is(err, tt.wantIs) {
+				t.Errorf("error = %v, want %v", err, tt.wantIs)
 			}
-			if !tt.wantErr {
-				if got, _ := srv.Object(mainBucket, "retry/k"); string(got) != "body" {
-					t.Errorf("stored %q after the retry, want the whole body", got)
+			if tt.wantIs == nil && errors.Is(err, ErrExists) {
+				// ErrExists says the key held something else, which none
+				// of these cases has shown.
+				t.Errorf("error = %v, which wraps ErrExists", err)
+			}
+			var methods []string
+			for _, r := range srv.Requests()[before:] {
+				methods = append(methods, r.Method)
+				if r.Method == http.MethodPut && tt.opts.IfNoneMatch && r.Header.Get("If-None-Match") != "*" {
+					t.Error("a write-once attempt went without If-None-Match: *")
+				}
+			}
+			if !slices.Equal(methods, tt.wantMethods) {
+				t.Errorf("requests %q, want %q", methods, tt.wantMethods)
+			}
+			if tt.wantStored != "" {
+				if got, _ := srv.Object(mainBucket, key); string(got) != tt.wantStored {
+					t.Errorf("the key holds %q, want %q", got, tt.wantStored)
 				}
 			}
 		})
@@ -641,18 +750,79 @@ func TestErrorsCarryNoSecrets(t *testing.T) {
 	}
 }
 
-// TestVirtualHost sends every call to <bucket>.localhost, which a dialer
-// routes to the test server, and checks the server saw the bucket in the
-// host and only the key in the path.
+// TestClientNeverPrintsSecrets formats a client every way a caller or a
+// log line might. sigv4's TestCredentialsNeverPrintSecrets covers bare
+// Credentials; this covers the Client that holds them, where fmt can't
+// call Credentials.String through the unexported signer field.
+func TestClientNeverPrintsSecrets(t *testing.T) {
+	creds := sigv4.Credentials{AccessKeyID: "AKIDPRINTCHECK", SecretAccessKey: "print-check-secret-value", SessionToken: "print-check-session-token"}
+	c, err := New(Config{Endpoint: "https://s3.example", Credentials: creds})
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := bucket(t, c, mainBucket)
+	logged := func(handler func(io.Writer) slog.Handler) string {
+		var buf bytes.Buffer
+		slog.New(handler(&buf)).Info("object storage", "client", c)
+		return buf.String()
+	}
+	const described = "objstore.Client{endpoint https://s3.example, region auto}"
+	outputs := []struct {
+		name, text string
+		// names is text the output must hold, to show String ran.
+		names string
+	}{
+		{name: "%v of a *Client prints no credential", text: fmt.Sprintf("%v", c), names: described},
+		{name: "%+v of a *Client prints no credential", text: fmt.Sprintf("%+v", c), names: described},
+		{name: "%#v of a *Client prints no credential", text: fmt.Sprintf("%#v", c), names: described},
+		{name: "%s of a *Client prints no credential", text: fmt.Sprintf("%s", c), names: described},
+		{name: "%+v of a Client value, which skips String, prints no credential", text: fmt.Sprintf("%+v", *c)},
+		{name: "%#v of a Client value, which skips GoString, prints no credential", text: fmt.Sprintf("%#v", *c)},
+		{name: "%+v of a *Bucket prints no credential", text: fmt.Sprintf("%+v", b)},
+		{name: "slog's text handler prints no credential", names: described,
+			text: logged(func(w io.Writer) slog.Handler { return slog.NewTextHandler(w, nil) })},
+		{name: "slog's JSON handler prints no credential", names: described,
+			text: logged(func(w io.Writer) slog.Handler { return slog.NewJSONHandler(w, nil) })},
+	}
+	secrets := []struct{ name, value string }{
+		{name: "access key id", value: creds.AccessKeyID},
+		{name: "secret access key", value: creds.SecretAccessKey},
+		{name: "session token", value: creds.SessionToken},
+	}
+	for _, o := range outputs {
+		t.Run(o.name, func(t *testing.T) {
+			// The messages say what leaked without printing it.
+			for _, s := range secrets {
+				if strings.Contains(o.text, s.value) {
+					t.Errorf("the output holds the %s", s.name)
+				}
+			}
+			if o.names != "" && !strings.Contains(o.text, o.names) {
+				t.Errorf("the output doesn't hold %q, so String didn't run", o.names)
+			}
+		})
+	}
+}
+
+// TestVirtualHost sends every call over https to <bucket>.example.com,
+// which a dialer routes to the test server, and checks the server saw the
+// bucket in the host and only the key in the path. The server's
+// certificate covers *.example.com and is the only root the client
+// trusts, so TLS checks the virtual-hosted name, as it would on R2.
 func TestVirtualHost(t *testing.T) {
-	srv := objstoretest.New(t, mainBucket)
+	srv := objstoretest.NewTLS(t, mainBucket)
 	addr := srv.Listener.Addr().String()
-	_, port, _ := net.SplitHostPort(addr)
-	transport := &http.Transport{DialContext: func(ctx context.Context, network, _ string) (net.Conn, error) {
-		return (&net.Dialer{}).DialContext(ctx, network, addr)
-	}}
+	roots := x509.NewCertPool()
+	roots.AddCert(srv.Certificate())
+	transport := &http.Transport{
+		TLSClientConfig: &tls.Config{RootCAs: roots},
+		DialContext: func(ctx context.Context, network, _ string) (net.Conn, error) {
+			return (&net.Dialer{}).DialContext(ctx, network, addr)
+		},
+	}
+	t.Cleanup(transport.CloseIdleConnections)
 	c := newTestClient(t, srv, func(c *Config) {
-		c.Endpoint = "http://localhost:" + port
+		c.Endpoint = "https://example.com"
 		c.VirtualHost = true
 		c.HTTPClient = &http.Client{Transport: transport}
 	})
@@ -673,7 +843,7 @@ func TestVirtualHost(t *testing.T) {
 		name      string
 		got, want string
 	}{
-		{name: "the put went to the bucket's host", got: reqs[0].Host, want: mainBucket + ".localhost:" + port},
+		{name: "the put went to the bucket's host", got: reqs[0].Host, want: mainBucket + ".example.com"},
 		{name: "the put's path is the key alone", got: reqs[0].Path, want: "/vh/key"},
 		{name: "the listing's path is the root", got: reqs[1].Path, want: "/"},
 		{name: "the listing found the key", got: strings.Join(listed, ","), want: "vh/key"},

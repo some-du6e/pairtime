@@ -14,10 +14,17 @@ on:
       - internal/platform/**
       - internal/install/**
       - internal/agent/ipc/**
+      # The agent's own files, startIPC in messages.go among them. ipc's
+      # TestAgentKilledMidStream runs a real agent.Run, and this is where it
+      # runs on Windows (socket and pipe) and macOS. It lives in
+      # internal/agent/ipc, so PLATFORM_DIRS needn't list these.
+      - internal/agent/*.go
       # The agent's platform code: the lock, the data directories and
       # private files (home), the loopback server (localhttp), the spool,
-      # which Windows file sharing makes OS-specific (inbox), and presence,
-      # whose smoke test runs on the real Windows sources.
+      # which Windows file sharing makes OS-specific (inbox), presence,
+      # whose smoke test runs on the real Windows sources, and the device
+      # keystore, which picks DPAPI, the Keychain or the Secret Service by
+      # OS (keys).
       - internal/agent/inbox/**
       - internal/agent/home/**
       - internal/agent/localhttp/**
@@ -25,6 +32,7 @@ on:
       # The notifier's per-OS backends (platform_*.go) and the rules they
       # share.
       - internal/agent/notifier/**
+      - internal/agent/keys/**
       - cmd/pairtime/**
       - .github/workflows/platform.yml
       - tools/ci/test_existing.sh
@@ -43,7 +51,7 @@ permissions:
 env:
   # pairtime never uses cgo (AGENTS.md).
   CGO_ENABLED: "0"
-  PLATFORM_DIRS: internal/platform internal/install internal/agent/ipc internal/agent/inbox internal/agent/home internal/agent/localhttp internal/agent/presence internal/agent/notifier cmd/pairtime
+  PLATFORM_DIRS: internal/platform internal/install internal/agent/ipc internal/agent/inbox internal/agent/home internal/agent/localhttp internal/agent/presence internal/agent/notifier internal/agent/keys cmd/pairtime
 
 jobs:
   windows:
@@ -150,8 +158,8 @@ jobs:
             bash tools/ci/desktop_session.sh true
           else
             # -p 1 runs the packages' test binaries one at a time. Tests in
-            # several of them start fakenotify, which owns
-            # org.freedesktop.Notifications on the one private bus, or need
-            # nobody to own it.
+            # several of them start fakenotify or fakesecret, which own
+            # org.freedesktop.Notifications or org.freedesktop.secrets on the
+            # one private bus, or need nobody to own them.
             bash tools/ci/desktop_session.sh bash tools/ci/test_existing.sh -p 1 -tags desktop -- $DIRS
           fi

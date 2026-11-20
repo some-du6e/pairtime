@@ -152,6 +152,27 @@ func frame(body []byte) []byte {
 	return []byte(buf.String())
 }
 
+// failingListener is a listener whose every Accept fails, as when the
+// process has run out of file descriptors. Close closes the listener it
+// wraps.
+type failingListener struct{ net.Listener }
+
+func (failingListener) Accept() (net.Conn, error) {
+	return nil, errors.New("accept: too many open files")
+}
+
+// giveUp makes srv's accepts fail from now on and serves until Serve gives
+// up, with short waits between tries. It wants Serve's error.
+func giveUp(t *testing.T, srv *Server) {
+	t.Helper()
+	defer func(d time.Duration) { acceptRetry = d }(acceptRetry)
+	acceptRetry = time.Millisecond
+	srv.ln = failingListener{srv.ln}
+	if err := srv.Serve(&memSink{}); err == nil {
+		t.Fatal("Serve = nil, want the error that made it give up")
+	}
+}
+
 func TestServer(t *testing.T) {
 	tests := []struct {
 		name string
@@ -302,6 +323,87 @@ func TestServer(t *testing.T) {
 				}
 				if _, err := os.Stat(filepath.Join(ep.Inbox, inbox.SpoolName)); !os.IsNotExist(err) {
 					t.Errorf("an acked message was spooled too: %v", err)
+				}
+			},
+		},
+		{
+			name: "a message stored after Send gave up on its ack is spooled too, and the journal drops the drained copy",
+			run: func(t *testing.T, ep Endpoint) {
+				j, err := inbox.OpenJournal(filepath.Join(shortDir(t), "received"), time.Now())
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() { j.Close() })
+				// late holds the message until the test lets it go, which
+				// it does once Send has given up waiting for the ack.
+				arrived, release := make(chan struct{}, 1), make(chan struct{})
+				let := sync.OnceFunc(func() { close(release) })
+				late := sinkFunc(func(d inbox.Delivery) error {
+					select {
+					case arrived <- struct{}{}:
+					default:
+					}
+					<-release
+					return j.Deliver(d)
+				})
+				srv, err := Listen(ep, Options{})
+				if err != nil {
+					t.Fatal(err)
+				}
+				served := make(chan error, 1)
+				go func() { served <- srv.Serve(late) }()
+				t.Cleanup(func() {
+					let() // a message still held would keep Close waiting
+					srv.Close()
+					<-served
+				})
+				m := message(1)
+				if via, err := Send(ep, m, time.Second); err != nil || via != inbox.ViaInbox {
+					t.Fatalf("Send = %q, %v; want the message spooled once no ack came in time", via, err)
+				}
+				select {
+				case <-arrived:
+				case <-time.After(10 * time.Second):
+					t.Fatal("the message never reached the agent")
+				}
+				let()
+				// Close returns once the handler is done, so the message is
+				// in the journal before the drain brings its copy.
+				srv.Close()
+				res, err := inbox.Drain(ep.Inbox, j, time.Now)
+				if err != nil || res.Delivered != 1 {
+					t.Fatalf("Drain = %+v, %v; want the spooled copy delivered", res, err)
+				}
+				if stored, dups := j.Stats(); stored != 1 || dups != 1 {
+					t.Errorf("the journal stored %d messages and dropped %d, want the message once and its copy dropped", stored, dups)
+				}
+			},
+		},
+		{
+			name: "when accepting keeps failing, Serve stops listening and deletes the socket, so senders fail at once and spool",
+			run: func(t *testing.T, ep Endpoint) {
+				srv, err := Listen(ep, Options{})
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer srv.Close()
+				giveUp(t, srv)
+				if via := srv.Via(); via != "" {
+					t.Errorf("Via() = %q after Serve gave up, want none", via)
+				}
+				if _, err := os.Lstat(ep.Socket); !os.IsNotExist(err) {
+					t.Errorf("the socket file outlived the listener: %v", err)
+				}
+				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cancel()
+				if c, err := Dial(ctx, ep); err == nil || errors.Is(err, context.DeadlineExceeded) {
+					if c != nil {
+						c.Close()
+					}
+					t.Errorf("Dial = %v, want it to fail without waiting", err)
+				}
+				if via, err := Send(ep, message(1), 10*time.Second); err != nil || via != inbox.ViaInbox {
+					t.Errorf("Send = %q, %v; want the message spooled", via, err)
 				}
 			},
 		},
