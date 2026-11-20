@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/some-du6e/pairtime/internal/agent/home"
+	"github.com/some-du6e/pairtime/internal/agent/keys"
 	"github.com/some-du6e/pairtime/internal/install"
 )
 
@@ -33,6 +34,49 @@ const hookModeEnv = "PAIRTIME_TEST_HOOK"
 // exit, as a stand-in for a hook Claude Code runs, which keeps the binary
 // in use meanwhile.
 const holdEnv = "PAIRTIME_TEST_HOLD"
+
+// keyringEnv names a folder in which the processes the cycle test starts
+// keep device keys, as the OS's secret store would (testKeyring). Unlike
+// the key file the other tests use, it is outside the data directory, so
+// only keys.Destroy deletes a key from it. keyringFailEnv makes its
+// deletes fail, as a locked keychain's do.
+const (
+	keyringEnv     = "PAIRTIME_TEST_KEYRING"
+	keyringFailEnv = "PAIRTIME_TEST_KEYRING_FAIL"
+)
+
+// testKeyring is a keys.Store that keeps each secret in a file of its own
+// in dir. It says it is the Secret Service, so keystore.json names a store
+// outside the data directory.
+type testKeyring struct {
+	dir  string
+	fail bool // Delete fails
+}
+
+func (k testKeyring) Kind() keys.Kind { return keys.KindSecretService }
+
+func (k testKeyring) Get(name string) ([]byte, error) {
+	b, err := os.ReadFile(filepath.Join(k.dir, name))
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, keys.ErrNotFound
+	}
+	return b, err
+}
+
+func (k testKeyring) Set(name string, secret []byte) error {
+	return os.WriteFile(filepath.Join(k.dir, name), secret, 0o600)
+}
+
+func (k testKeyring) Delete(name string) error {
+	if k.fail {
+		return errors.New("the test keyring is locked")
+	}
+	err := os.Remove(filepath.Join(k.dir, name))
+	if errors.Is(err, fs.ErrNotExist) {
+		return keys.ErrNotFound
+	}
+	return err
+}
 
 func init() {
 	helpers[hookModeEnv] = runWithHookMode
@@ -49,6 +93,9 @@ func init() {
 //   - none takes the hook command away;
 //   - broken makes it print an answer and exit 2, as a usage error would.
 func runWithHookMode(mode string) int {
+	if dir := os.Getenv(keyringEnv); dir != "" {
+		agentKeyStores = []keys.Store{testKeyring{dir: dir, fail: os.Getenv(keyringFailEnv) != ""}}
+	}
 	switch mode {
 	case "real":
 	case "none":
@@ -83,13 +130,14 @@ func newTestHome(t *testing.T, hookMode string) *testHome {
 	}
 	h := &testHome{t: t, root: root, home: filepath.Join(root, "home")}
 	tmp, run := filepath.Join(root, "tmp"), filepath.Join(root, "run")
-	for _, d := range []string{h.home, tmp, run} {
+	for _, d := range []string{h.home, tmp, run, h.keyring()} {
 		if err := os.Mkdir(d, 0o700); err != nil {
 			t.Fatal(err)
 		}
 	}
 	drop := []string{"HOME", "USERPROFILE", "LOCALAPPDATA", "APPDATA", "TMPDIR", "TEMP", "TMP", "PATH", "XDG_DATA_HOME", "XDG_CONFIG_HOME",
-		"XDG_RUNTIME_DIR", "XDG_STATE_HOME", "XDG_CACHE_HOME", "CLAUDE_CONFIG_DIR", "CODEX_HOME", home.EnvHome, runEnv, hookModeEnv, holdEnv}
+		"XDG_RUNTIME_DIR", "XDG_STATE_HOME", "XDG_CACHE_HOME", "CLAUDE_CONFIG_DIR", "CODEX_HOME", home.EnvHome, runEnv, hookModeEnv, holdEnv,
+		keyringEnv, keyringFailEnv}
 	for _, kv := range os.Environ() {
 		k, _, _ := strings.Cut(kv, "=")
 		if !slices.ContainsFunc(drop, func(d string) bool { return strings.EqualFold(d, k) }) {
@@ -126,9 +174,30 @@ func newTestHome(t *testing.T, hookMode string) *testHome {
 		h.dirs = home.Dirs{Data: filepath.Join(h.home, ".local", "share", "pairtime"), Config: filepath.Join(h.home, ".config", "pairtime"), Runtime: filepath.Join(run, "pairtime")}
 		h.bin = filepath.Join(h.home, ".local", "bin", "pairtime")
 	}
-	h.env = append(h.env, hookModeEnv+"="+hookMode)
+	h.env = append(h.env, hookModeEnv+"="+hookMode, keyringEnv+"="+h.keyring())
 	t.Cleanup(h.cleanup)
 	return h
+}
+
+// keyring is the folder the test's processes keep device keys in
+// (testKeyring), in the snapshot, so a key that uninstall leaves fails the
+// test.
+func (h *testHome) keyring() string { return filepath.Join(h.root, "keyring") }
+
+// waitForKey waits up to 30 s for the agent to have put a device key in
+// the test's keyring, which it does in the background once it has started.
+func (h *testHome) waitForKey() {
+	h.t.Helper()
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		if entries, err := os.ReadDir(h.keyring()); err == nil && len(entries) > 0 {
+			return
+		}
+		if time.Now().After(deadline) {
+			h.t.Fatal("the agent put no device key in the keyring within 30 s of install")
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
 }
 
 // cleanup stops an agent the test left running, takes away a Run value it
@@ -224,9 +293,13 @@ func (h *testHome) mustRun(exe, stdin string, want int, args ...string) string {
 
 // mode returns h with the processes it starts running pairtime with its
 // hook command as mode says (runWithHookMode).
-func (h *testHome) mode(mode string) *testHome {
+func (h *testHome) mode(mode string) *testHome { return h.withEnv(hookModeEnv, mode) }
+
+// withEnv returns h with key set to value in the environment of the
+// processes it starts.
+func (h *testHome) withEnv(key, value string) *testHome {
 	c := *h
-	c.env = setEnv(slices.Clone(h.env), hookModeEnv, mode)
+	c.env = setEnv(slices.Clone(h.env), key, value)
 	return &c
 }
 
@@ -631,7 +704,7 @@ func TestInstallCycle(t *testing.T) {
 			steps: func(t *testing.T, h *testHome, before map[string]string) {
 				h.mustRun("", "", 0, "install", "--yes")
 				pid := h.installed(true)
-				h.waitFor(filepath.Join(h.dirs.Data, "keys", "keystore.json"))
+				h.waitForKey()
 				// What the scorer and the coach will write (DESIGN 3.5),
 				// which DESIGN 4.4 keeps until the teen deletes it.
 				kept := map[string]string{"days/2026-11-20.json": `{"date":"2026-11-20"}` + "\n", "coach/recaps.jsonl": `{"recap":1}` + "\n"}
@@ -655,14 +728,16 @@ func TestInstallCycle(t *testing.T) {
 					}
 				}
 				// The device key, the ledger and the rest go (D-uninstall-key):
-				// only the daily totals, the recaps and the record of the
-				// folders install made stay.
+				// only the daily totals and the recaps stay.
+				if left, err := os.ReadDir(h.keyring()); err != nil || len(left) > 0 {
+					t.Errorf("uninstall left the device key in the keyring: %v, %v", left, err)
+				}
 				entries, err := os.ReadDir(h.dirs.Data)
 				if err != nil {
 					t.Fatal(err)
 				}
 				for _, e := range entries {
-					if n := e.Name(); n != "days" && n != "coach" && n != "install" {
+					if n := e.Name(); n != "days" && n != "coach" {
 						t.Errorf("uninstall left %s in the data directory, which is neither the daily totals nor the recaps", n)
 					}
 				}
@@ -674,6 +749,42 @@ func TestInstallCycle(t *testing.T) {
 				}
 				if h.hooked() != nil || h.autostart() != "" {
 					t.Errorf("uninstall left hooks %q or the login item %q", h.hooked(), h.autostart())
+				}
+				// Only the two folders stayed, without install's record of
+				// the folders it made, so a later uninstall leaves those
+				// above the data directory, empty.
+				h.mustRun("", "", 0, "uninstall", "--yes", "--delete-data")
+				h.waitGone(h.dirs.Data)
+				for _, line := range strings.Split(changes(before, h.snapshot()), "\n") {
+					p, what, _ := strings.Cut(strings.TrimPrefix(line, "added "), ": ")
+					if line != "" && !(strings.HasPrefix(line, "added ") && strings.HasPrefix(what, "folder") && within(h.dirs.Data, filepath.Join(h.root, p))) {
+						t.Errorf("after the later uninstall: %s", line)
+					}
+				}
+				if processAlive(pid) {
+					t.Errorf("the agent, process %d, is still running after uninstall", pid)
+				}
+			},
+		},
+		{
+			name:     "a device key uninstall can't delete leaves pairtime and its data in place, so a second uninstall can finish",
+			hookMode: "real",
+			before:   func(h *testHome) { h.write(".claude/settings.json", gitAISettings) },
+			steps: func(t *testing.T, h *testHome, before map[string]string) {
+				h.mustRun("", "", 0, "install", "--yes")
+				pid := h.installed(true)
+				h.waitForKey()
+				out := h.withEnv(keyringFailEnv, "1").mustRun("", "", 1, "uninstall", "--yes", "--delete-data")
+				if !strings.Contains(out, "couldn't delete pairtime's device key") || !strings.Contains(out, "run pairtime uninstall again") {
+					t.Errorf("uninstall didn't say what to do about the key it couldn't delete:\n%s", out)
+				}
+				for _, p := range []string{h.bin, filepath.Join(h.dirs.Data, "keys", "keystore.json")} {
+					if _, err := os.Stat(p); err != nil {
+						t.Errorf("uninstall deleted %s though the device key stayed: %v", p, err)
+					}
+				}
+				if left, err := os.ReadDir(h.keyring()); err != nil || len(left) == 0 {
+					t.Errorf("the device key isn't in the keyring any more: %v, %v", left, err)
 				}
 				h.mustRun("", "", 0, "uninstall", "--yes", "--delete-data")
 				h.uninstalled(before, pid)

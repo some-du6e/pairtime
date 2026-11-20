@@ -28,7 +28,7 @@ func removeBinary(path string) error {
 
 // removeAfterExit isn't needed off Windows, where removeBinary deletes a
 // running binary.
-func removeAfterExit([]string, []string) error {
+func removeAfterExit(_, _, _ []string) error {
 	return errors.New("only Windows keeps a program from deleting itself")
 }
 

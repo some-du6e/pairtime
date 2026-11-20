@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/some-du6e/pairtime/internal/agent/home"
 	"github.com/some-du6e/pairtime/internal/install"
@@ -71,7 +72,10 @@ func (s *skipFlag) Set(v string) error {
 // records them in setup.json beside the folders it made itself, so that
 // uninstall takes them away once they are empty, and gives a data
 // directory among them the permissions home gives the ones it makes
-// (makeHome).
+// (makeHome). Like everything install records, they count only in an
+// install that gets past the consent screen, so the install command a
+// script suggests running next, after a no (exit 3) or with --no-install,
+// carries the same flags.
 type madeFlag []string
 
 func (m *madeFlag) String() string { return strings.Join(*m, ",") }
@@ -289,9 +293,12 @@ func runInstall(args []string, stdout, stderr io.Writer) int {
 	}
 	restart := false
 	if !same {
-		// A copy an earlier install moved aside on Windows, which something
-		// ran then (commitBinary).
-		removeOldBinaries(filepath.Dir(env.Exe))
+		// Copies an earlier install left: one it moved aside on Windows,
+		// which something ran then (commitBinary), and one it staged and
+		// was stopped before it put in place.
+		for _, p := range strayBinaries(filepath.Dir(env.Exe), 10*time.Minute) {
+			os.Remove(p)
+		}
 		staged, err := stageBinary(src, env.Exe)
 		if err != nil {
 			return fail(fmt.Errorf("copying pairtime to %s: %w; make sure the disk has room and you may write there, then run pairtime install again", install.Printable(filepath.Dir(env.Exe)), err))

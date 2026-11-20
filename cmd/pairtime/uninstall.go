@@ -67,7 +67,9 @@ func init() {
 // and coach records can stay, which 4.4 keeps until the teen deletes them
 // (D-uninstall-key, issue #124). The key goes before anything else is
 // deleted, so that when it can't go, pairtime is still there to try again
-// with.
+// with. Nothing writes coach/ yet. When WP-CO does, a moment that quotes a
+// prompt, which DESIGN 3.5 keeps 30 days, has to be gone before coach/ is
+// kept, or kept in the vault under K_dev, since no agent is left to cut it.
 //
 // It doesn't need install's records. The installer plans the undo of the
 // items install offers on this machine as well as of what its manifest
@@ -141,7 +143,7 @@ func runUninstall(args []string, stdout, stderr io.Writer) int {
 	defer p.Close()
 	// Worked out before anything is deleted, since a file that is gone
 	// can't be compared any more.
-	binaries := pairtimeBinaries(src, slices.Concat([]string{env.Exe, rec.Binary}, oldBinaries(filepath.Dir(env.Exe))))
+	binaries := pairtimeBinaries(src, slices.Concat([]string{env.Exe, rec.Binary}, strayBinaries(filepath.Dir(env.Exe), 0)))
 	if p.Empty() && len(p.Problems) == 0 && len(binaries) == 0 && len(data) == 0 && !running {
 		fmt.Fprintln(stdout, "pairtime isn't installed here, so there is nothing to take out.")
 		return 0
@@ -231,7 +233,9 @@ func runUninstall(args []string, stdout, stderr io.Writer) int {
 	if _, err := keys.Inspect(dirs.Data); err == nil {
 		hadKey = true
 	}
+	keyDeleted := hadKey
 	if err := keys.Destroy(keys.Options{Dir: dirs.Data, Stores: agentKeyStores}); err != nil {
+		keyDeleted = false
 		if _, ierr := keys.Inspect(dirs.Data); !errors.Is(ierr, fs.ErrNotExist) {
 			release()
 			return fail(fmt.Errorf("couldn't delete pairtime's device key (%v), so pairtime and its data stay where they are; unlock your keychain or keyring, then run pairtime uninstall again", err))
@@ -272,11 +276,14 @@ func runUninstall(args []string, stdout, stderr io.Writer) int {
 	}
 	if len(data) > 0 {
 		key := ""
-		if hadKey {
+		if keyDeleted {
 			key = "pairtime's device key and "
 		}
 		if len(stayed) > 0 {
-			fmt.Fprintf(stdout, "Deleted %severything else pairtime kept in %s. Your daily totals and recaps stay in %s; delete them when you no longer want them.\n", key, joinPaths(data), joinPaths(stayed))
+			// Only they stay, so install's record of the folders it made
+			// goes too, and a folder it made above the data directory
+			// stays once that is deleted.
+			fmt.Fprintf(stdout, "Deleted %severything else pairtime kept in %s. Your daily totals and recaps stay in %s; delete %s when you no longer want them.\n", key, joinPaths(data), joinPaths(stayed), install.Printable(dirs.Data))
 		} else {
 			fmt.Fprintf(stdout, "Deleted %syour pairtime data from %s.\n", key, joinPaths(data))
 		}
@@ -309,11 +316,6 @@ func runUninstall(args []string, stdout, stderr io.Writer) int {
 	removeAgentLock(dirs.Data, lock)
 	lock = nil
 	in.RemoveLockFile()
-	for _, d := range data {
-		if linkedDir(d) && (len(stayed) == 0 || !samePath(d, dirs.Data)) {
-			os.Remove(d) // the link, not the folder it points to
-		}
-	}
 	if dirs.Runtime != dirs.Data {
 		// The socket's folder holds nothing once the agent has stopped,
 		// but a socket a crashed agent left behind.
@@ -322,7 +324,8 @@ func runUninstall(args []string, stdout, stderr io.Writer) int {
 
 	// Folders install made, and pairtime's own, that go once they are
 	// empty, innermost last here: removeEmptyDirs takes the innermost
-	// first.
+	// first. A linked data directory's link goes after them, so that its
+	// folders are found through it.
 	after := slices.Clone(rec.Made)
 	if dirs.Runtime != dirs.Data {
 		after = addMade(after, []string{dirs.Runtime})
@@ -338,23 +341,27 @@ func runUninstall(args []string, stdout, stderr io.Writer) int {
 		}
 	}
 	kept := removeEmptyDirs(after)
+	// A link that stood in for a data directory goes now, but not what it
+	// points to, unless something stays behind it. When the binary this
+	// process runs from is behind it, PowerShell deletes the link once it
+	// has deleted the binary and its folder through it.
+	var links []string
+	for _, d := range data {
+		switch {
+		case !linkedDir(d) || (len(stayed) > 0 && samePath(d, dirs.Data)):
+		case slices.ContainsFunc(later, func(f string) bool { return within(f, d) }):
+			links = append(links, d)
+		default:
+			os.Remove(d)
+		}
+	}
 	stays := false // a binary that nothing will delete
 	if len(later) > 0 {
-		if err := removeAfterExit(later, realDirs(kept)); err != nil {
+		if err := removeAfterExit(later, realDirs(kept), links); err != nil {
 			fmt.Fprintf(stdout, "Windows doesn't let anyone delete a program while it runs, so delete %s yourself once this has finished.\n", joinPaths(later))
 			stays = true
 		} else {
 			fmt.Fprintf(stdout, "pairtime deletes %s once this has finished, because Windows doesn't let anyone delete a program while it runs.\n", joinPaths(later))
-		}
-	}
-	if len(stayed) > 0 {
-		// The data directory stays, with what the teen keeps, and so does
-		// the record of the folders install made above it, for a later
-		// uninstall with --delete-data to take away too.
-		rec.Binary = ""
-		rec.Made = slices.DeleteFunc(rec.Made, func(d string) bool { return !slices.Contains(kept, d) })
-		if err := writeSetup(dirs, rec); err != nil {
-			fmt.Fprintf(stderr, "pairtime uninstall: updating %s: %v\n", setupPath(dirs), err)
 		}
 	}
 	for _, problem := range problems {
@@ -481,7 +488,7 @@ func pairtimeBinaries(src string, paths []string) []binary {
 // config directories (DESIGN 3.5; home.Dirs and the packages that write
 // there).
 var pairtimeEntries = []string{"agent.lock", "agent.sock", "bin", "buckets", "coach", "config.toml", "days", "inbox",
-	"install", "install.lock", "keys", "ledger", "pipe.json", "port.json", "received", "state.json", "vault"}
+	"install", "install.lock", "keys", "ledger", "pipe.json", "port.json", "received", "state.json", "state.json.bad", "vault"}
 
 // isPairtimeEntry reports whether name is one of pairtimeEntries, or the
 // temporary file of an atomic write of one of them (home.WriteFile).

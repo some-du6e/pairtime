@@ -64,9 +64,11 @@ func psQuote(s string) string {
 // runs from, and any copy that something else still ran. Then it deletes
 // each of dirs that is an empty folder by then, the innermost first, and
 // leaves any of them that is a link or a junction, which Directory.Delete
-// would delete whatever it points to. It starts PowerShell with no window
-// and doesn't wait for it.
-func removeAfterExit(files, dirs []string) error {
+// would delete whatever it points to. Last it deletes each of links that
+// is still a link or a junction, by itself: a data directory's, which
+// uninstall leaves until the files behind it have gone. It starts
+// PowerShell with no window and doesn't wait for it.
+func removeAfterExit(files, dirs, links []string) error {
 	root := os.Getenv("SystemRoot")
 	if !filepath.IsAbs(root) {
 		return fmt.Errorf("SystemRoot isn't an absolute path, so PowerShell can't be found")
@@ -81,6 +83,9 @@ func removeAfterExit(files, dirs []string) error {
 		// Directory.Delete without recursive deletes only an empty folder,
 		// but a reparse point, a link or a junction, whatever it holds.
 		fmt.Fprintf(&b, "try { if (-not ([IO.File]::GetAttributes(%[1]s) -band [IO.FileAttributes]::ReparsePoint)) { [IO.Directory]::Delete(%[1]s) } } catch {}; ", psQuote(dirs[i]))
+	}
+	for _, l := range links {
+		fmt.Fprintf(&b, "try { if ([IO.File]::GetAttributes(%[1]s) -band [IO.FileAttributes]::ReparsePoint) { [IO.Directory]::Delete(%[1]s) } } catch {}; ", psQuote(l))
 	}
 	cmd := exec.Command(ps, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", b.String())
 	cmd.SysProcAttr = detachedAttr()
