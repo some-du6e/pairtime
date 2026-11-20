@@ -131,11 +131,14 @@ func TestAttribution(t *testing.T) {
 	// midLead has s_1's prompt at 457 s, of 45 characters, so its lead
 	// starts at 307 s, inside the slot from 300 s. Nothing resolves that
 	// slot or the ones before it: s_1's bucket is empty, since no prompt
-	// filled it, and no hosted session has an anchor before them.
+	// filled it, and no hosted session has an anchor before them. The agent
+	// samples at the prompt's hook (DESIGN 3.3), which shows the input in
+	// the KEYS_PRE_S before it.
 	midLead := func(b *tl) {
 		sharedTerminal(b)
 		b.mouse(every(at(1), at(596), 5000)...)
 		b.prompt(at(457), event.ViaHook, "s_1", "p_1", "t_1", 45)
+		b.sample(at(457))
 		stops(b, at(467), "s_1", "p_1", "t_1")
 		b.samples(at(0), at(600))
 	}
