@@ -15,7 +15,9 @@ on:
       - internal/install/**
       - internal/agent/ipc/**
       # The agent's platform code: the lock, the data directories and
-      # private files (home), and the loopback server (localhttp).
+      # private files (home), the loopback server (localhttp), and the
+      # spool, which Windows file sharing makes OS-specific (inbox).
+      - internal/agent/inbox/**
       - internal/agent/home/**
       - internal/agent/localhttp/**
       - cmd/pairtime/**
@@ -36,7 +38,7 @@ permissions:
 env:
   # pairtime never uses cgo (AGENTS.md).
   CGO_ENABLED: "0"
-  PLATFORM_DIRS: internal/platform internal/install internal/agent/ipc internal/agent/home internal/agent/localhttp cmd/pairtime
+  PLATFORM_DIRS: internal/platform internal/install internal/agent/ipc internal/agent/inbox internal/agent/home internal/agent/localhttp cmd/pairtime
 
 jobs:
   windows:
@@ -76,7 +78,23 @@ jobs:
           cache-dependency-path: go.mod
 
       - name: go test (platform packages)
-        run: bash tools/ci/test_existing.sh -- $PLATFORM_DIRS
+        env:
+          # The macOS tests write what they find about the OS here, such as
+          # whether key-down idle needs Input Monitoring (WP-OS3).
+          PAIRTIME_FINDINGS_DIR: ${{ runner.temp }}/findings
+        # -count=1: these tests read the live OS and write the findings, so a
+        # pass cached by an earlier run, which setup-go restores, can't stand
+        # in for this one.
+        run: bash tools/ci/test_existing.sh -count=1 -- $PLATFORM_DIRS
+
+      - name: Upload the findings
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: macos-findings
+          path: ${{ runner.temp }}/findings/
+          if-no-files-found: error
+          retention-days: 90
 
   linux-desktop:
     # Only the Linux tests that need an X server or a session D-Bus: files

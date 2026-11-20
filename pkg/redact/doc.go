@@ -1,0 +1,64 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
+// Package redact finds the parts of a prompt or an agent message that must
+// not leave the device: the teen's known values, secrets, and personal data
+// that passes a checksum. It's the pipeline of DESIGN 7.5 step 6 and 8.7,
+// after docs/research/trust-and-privacy.md (TP) B4.
+//
+// Redaction removes spans and never rewrites text. [Redactor.Find] returns
+// byte ranges of the original text, each with a [Type] marker, and leaves
+// the text alone, so a content commitment still proves every byte that is
+// kept (TP B6). [Merge] turns the spans into a disjoint set, and [Render]
+// draws them as markers for a person to read. For a ledger reveal, [Tokens]
+// rounds the spans out to the whole tokens a reveal can remove, and
+// [Type.Reveal] gives the coarse type the reveal shows: known, secret, pii,
+// code or teen (docs/spec/ledger-v1.md 10.2 and 10.3, WP-LG3).
+//
+// # The pipeline
+//
+// [Redactor.Find] runs three steps over the original text, in this order:
+//
+//  1. Known values ([Known]): the OS account name, home directory,
+//     hostname, git name and email, GitHub and HCA usernames, private repo
+//     and folder names, and the teen's deny list. Matching ignores case,
+//     needs a word edge where the value starts or ends with a letter or
+//     digit, and also finds the spellings a raw capture file uses: JSON
+//     escapes, and for a Windows home its forward-slash, Git Bash, WSL and
+//     file URL forms. Short and generic names such as "user" or "app" are
+//     skipped unless the teen put them on the deny list.
+//  2. gitleaks' rules as data: rules/gitleaks.json.gz, converted from
+//     gitleaks' default config at a pinned tag by rules/convert.py. The
+//     engine follows gitleaks' detectRule: the keyword prefilter, the
+//     secret group, the entropy floor and every allowlist.
+//  3. Personal data with validation, ported from Presidio's pattern
+//     recognizers: payment cards with Luhn, IBANs with mod-97 and the
+//     country's format, US Social Security numbers with Presidio's
+//     invalidation rules, UK National Insurance numbers, Aadhaar numbers
+//     with Verhoeff, and email addresses.
+//
+// [CodeBlocks] is separate: an agent message's fenced code blocks collapse
+// to a marker with a line count by default, and the teen can add any back,
+// so its spans are kept apart from Find's.
+//
+// # Where it differs from upstream
+//
+// From gitleaks: a rule limited to some file paths applies to all text,
+// since a prompt has no path and a pasted .tf file is still a secret; a
+// "gitleaks:allow" comment doesn't hide anything; nothing is base64- or
+// percent-decoded first; and the rules also run over a copy of the text
+// with sentence punctuation after a token turned into spaces, because a
+// token rule needs whitespace, a quote or a semicolon after the secret and
+// a key at the end of a sentence is followed by a period.
+//
+// From Presidio: a result needs a score of 0.4, Presidio's floor for a
+// result with a context word, where Presidio keeps anything above zero; in
+// practice only the very weak SSN shapes need a context word. The context
+// window is the ten words before the match, standing in for five lemmas
+// without stop words. Digits are ASCII digits. Email validation checks the
+// top-level domain's shape instead of the public suffix list.
+//
+// TP B4 also lists phone numbers, IP and MAC addresses and dates of birth;
+// none of them is in DESIGN 8.7's list, and phone numbers need
+// libphonenumber, so they're left for later. GLiNER's name model is a v2
+// option (DESIGN 8.7).
+package redact

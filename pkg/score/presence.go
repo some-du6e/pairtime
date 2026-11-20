@@ -1,0 +1,486 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
+package score
+
+import (
+	"math"
+	"sort"
+	"strconv"
+	"strings"
+
+	"github.com/some-du6e/pairtime/pkg/event"
+)
+
+// Slot is one 15-second slot of the timeline (SM 1.3, 2.1, 2.5), with its
+// presence. Every slot from the one holding the first record on is
+// derived, up to the last one the samples decide.
+type Slot struct {
+	// Start is the slot's start in Unix milliseconds, on :00, :15, :30 or
+	// :45.
+	Start int64 `json:"start"`
+	// InputAny is set when an idle sample shows input during the slot.
+	InputAny bool `json:"input_any"`
+	// InputKeys is nil where the OS reports no keyboard-specific idle
+	// time, else whether a sample shows a key press during the slot.
+	InputKeys *bool `json:"input_keys"`
+	// Present holds from Start until PresentUntil, and Then from there to
+	// the slot's end. They differ only in the slot where a tail ends: SM
+	// 2.1's tail runs PRESENCE_TAIL_S from the last input, to the
+	// millisecond, so it can end inside a slot, and what follows in that
+	// slot is no or returned.
+	Present      event.Presence `json:"present"`
+	PresentUntil int64          `json:"present_until"`
+	Then         event.Presence `json:"then"`
+	// FocusClass, FocusProject and Hosted describe the window that held
+	// focus longest in the slot (SM 2.5, 3.2). Resolving a terminal that
+	// hosts several sessions to one of them is WP-SC3's.
+	FocusClass   event.AppClass `json:"focus_class"`
+	FocusProject string         `json:"focus_project,omitempty"`
+	Hosted       []string       `json:"hosted_sessions,omitempty"`
+	// Asleep is set when the slot overlaps a suspend or a gap between
+	// samples longer than SLEEP_GAP_S; Locked when it overlaps a screen
+	// lock. Either makes the slot a hard break.
+	Asleep bool `json:"asleep"`
+	Locked bool `json:"locked"`
+}
+
+// End returns the end of the slot.
+func (s Slot) End() int64 { return s.Start + event.SlotMS }
+
+// At returns the slot's presence at time t, which must be in the slot.
+func (s Slot) At(t int64) event.Presence {
+	if t < s.PresentUntil {
+		return s.Present
+	}
+	return s.Then
+}
+
+// Event returns the slot as pkg/event's derived record. Its single present
+// value is the one the slot starts with.
+func (s Slot) Event() event.Slot {
+	var keys *bool
+	if s.InputKeys != nil {
+		keys = ptr(*s.InputKeys)
+	}
+	return event.Slot{Start: s.Start, InputAny: s.InputAny, InputKeys: keys, Present: s.Present,
+		FocusClass: s.FocusClass, FocusProject: s.FocusProject, Asleep: s.Asleep, Locked: s.Locked}
+}
+
+func ptr[T any](v T) *T { return &v }
+
+// present reports whether presence value p lets an anchor's evidence test
+// pass: SM 2.1's yes, bridged and tail. A returned slot only qualifies
+// credit under the return rule.
+func present(p event.Presence) bool {
+	return p == event.PresentYes || p == event.PresentBridged || p == event.PresentTail
+}
+
+// sample is one os.presence record in milliseconds: when it was taken and
+// when the last input and the last key press before it came.
+type sample struct {
+	t       int64
+	lastAny int64
+	hasKeys bool
+	lastKey int64
+	locked  bool
+}
+
+// span is the half-open interval [from, to) in Unix milliseconds.
+type span struct{ from, to int64 }
+
+// msOf converts seconds, as PR1's float fields hold them, to whole
+// milliseconds, rounding to the nearest. It goes through the decimal text,
+// which strconv rounds exactly, so the result doesn't depend on float
+// arithmetic.
+func msOf(sec float64) int64 {
+	s := strconv.FormatFloat(sec, 'f', 3, 64)
+	neg := strings.HasPrefix(s, "-")
+	whole, frac, _ := strings.Cut(strings.TrimPrefix(s, "-"), ".")
+	w, err1 := strconv.ParseInt(whole, 10, 64)
+	f, err2 := strconv.ParseInt(frac, 10, 64)
+	if err1 != nil || err2 != nil {
+		return 0
+	}
+	if neg {
+		return -(w*1000 + f)
+	}
+	return w*1000 + f
+}
+
+// silentRun is a maximal run of slots with no input and no hard break
+// (SM 2.1's no-input run).
+type silentRun struct {
+	i, j int // the run is slots [i, j)
+	// left and right are set when the slot just before the run, and the
+	// one just after it, have input.
+	left, right bool
+	// lastInput is when the last input before the run came, if left.
+	lastInput int64
+	// tailEnd is lastInput + PRESENCE_TAIL_S, if left.
+	tailEnd int64
+}
+
+// presence is SM 2.1 over the records: the samples, the hard breaks and
+// the slots they decide.
+type presence struct {
+	r       rules
+	samples []sample
+	// first is the start of slots[0].
+	first int64
+	slots []Slot
+	// lastIn holds, for each slot, the latest input a sample shows in it.
+	lastIn []int64
+	runs   []silentRun
+}
+
+func buildPresence(r rules, recs []event.Event, high int64, fl *focusLine) *presence {
+	p := &presence{r: r}
+	if len(recs) == 0 {
+		return p
+	}
+	var (
+		locks, sleeps, gaps []span
+		locked, asleep      bool
+		lockFrom, sleepFrom int64
+		haveSample          bool
+		lastSample          int64
+		lastIdle            int64 // the idle time the last sample showed
+	)
+	for _, e := range recs {
+		switch d := e.Data.(type) {
+		case *event.OSPresence:
+			s := sample{t: e.T, lastAny: e.T - msOf(d.IdleAnyS), locked: d.Locked}
+			if d.IdleKeysS != nil {
+				s.hasKeys, s.lastKey = true, e.T-msOf(*d.IdleKeysS)
+			}
+			if gap := e.T - lastSample; haveSample && gap > r.sleepGap && !(lastIdle >= r.contextIdle && gap <= r.slowGap) {
+				// SM 2.1: gaps come from wall-clock sample times. The open
+				// interval between the two samples is the gap. After
+				// CONTEXT_IDLE_S without input the agent samples once a
+				// minute (DESIGN 6.2 D14), and a gap that slow sampling
+				// explains is no sleep.
+				gaps = append(gaps, span{lastSample + 1, e.T})
+			}
+			// A sample after a suspend shows the machine awake again, even
+			// if the resume never arrived. The one taken at the suspend
+			// itself has the same time and doesn't.
+			if asleep && e.T > sleepFrom {
+				sleeps, asleep = append(sleeps, span{sleepFrom, e.T}), false
+			}
+			switch {
+			case d.Locked && !locked:
+				locked, lockFrom = true, e.T
+			case !d.Locked && locked && e.T > lockFrom:
+				locks, locked = append(locks, span{lockFrom, e.T}), false
+			}
+			p.samples = append(p.samples, s)
+			haveSample, lastSample, lastIdle = true, e.T, e.T-s.lastAny
+		case *event.OSPower:
+			switch d.Op {
+			case event.PowerSuspend:
+				if !asleep {
+					asleep, sleepFrom = true, e.T
+				}
+			case event.PowerResume:
+				if asleep {
+					sleeps, asleep = append(sleeps, span{sleepFrom, e.T}), false
+				} else {
+					// A resume with no suspend before it: the machine slept
+					// since the last sample, or since before any record.
+					from := int64(math.MinInt64)
+					if haveSample {
+						from = lastSample + 1
+					}
+					sleeps = append(sleeps, span{from, e.T})
+				}
+			case event.PowerLock:
+				if !locked {
+					locked, lockFrom = true, e.T
+				}
+			case event.PowerUnlock:
+				if locked {
+					locks, locked = append(locks, span{lockFrom, e.T}), false
+				}
+			}
+		}
+	}
+	if asleep {
+		sleeps = append(sleeps, span{sleepFrom, math.MaxInt64})
+	}
+	if locked {
+		locks = append(locks, span{lockFrom, math.MaxInt64})
+	}
+
+	p.first = floorSlot(recs[0].T)
+	last := floorSlot(high)
+	n := int((last-p.first)/event.SlotMS) + 1
+	asleepAt := p.mark(n, sleeps, gaps)
+	lockedAt := p.mark(n, locks)
+
+	// A slot is decided once a sample at or after its end exists, since
+	// that sample's idle time covers the whole slot, or when it is a hard
+	// break. The first undecided slot ends the list.
+	firstSample, lastSampleT := int64(math.MaxInt64), int64(math.MinInt64)
+	if len(p.samples) > 0 {
+		firstSample, lastSampleT = p.samples[0].t, p.samples[len(p.samples)-1].t
+	}
+	for k := 0; k < n; k++ {
+		a := p.first + int64(k)*event.SlotMS
+		brk := asleepAt[k] || lockedAt[k]
+		if !brk && lastSampleT < a+event.SlotMS && a+event.SlotMS > firstSample {
+			n = k
+			break
+		}
+	}
+	p.slots = make([]Slot, n)
+	inputAt := make([]bool, n)
+	keyAt := make([]bool, n)
+	lastIn := make([]int64, n)
+	for _, s := range p.samples {
+		if k, ok := p.index(s.lastAny); ok {
+			inputAt[k] = true
+			lastIn[k] = max(lastIn[k], s.lastAny)
+		}
+		if s.hasKeys {
+			if k, ok := p.index(s.lastKey); ok {
+				keyAt[k] = true
+			}
+		}
+	}
+	si := 0 // the first sample at or after the current slot's end
+	for k := range p.slots {
+		a := p.first + int64(k)*event.SlotMS
+		b := a + event.SlotMS
+		for si < len(p.samples) && p.samples[si].t < b {
+			si++
+		}
+		s := &p.slots[k]
+		s.Start, s.PresentUntil = a, b
+		s.Asleep, s.Locked = asleepAt[k], lockedAt[k]
+		hasKeys := false
+		switch {
+		case si < len(p.samples):
+			hasKeys = p.samples[si].hasKeys
+		case len(p.samples) > 0:
+			hasKeys = p.samples[len(p.samples)-1].hasKeys
+		}
+		if hasKeys {
+			s.InputKeys = ptr(keyAt[k])
+		}
+		s.InputAny = inputAt[k]
+		f := fl.longest(a, b)
+		s.FocusClass, s.FocusProject, s.Hosted = f.class, f.project, f.hosted
+		switch {
+		case s.Asleep || s.Locked:
+			s.Present = event.PresentNo
+		case b <= firstSample:
+			// SM 2.1: the sampler wasn't running yet.
+			s.Present = event.PresentUnknown
+		case s.InputAny:
+			s.Present = event.PresentYes
+		default:
+			s.Present = "" // a silent slot, decided below
+		}
+		s.Then = s.Present
+	}
+	p.lastIn = lastIn
+	p.classifyRuns(lastIn)
+	return p
+}
+
+// unsampled reports whether t falls before the presence sampler ran: there
+// is no sample, or none until after the slot holding t ends. Such a slot is
+// SM 2.1's unknown.
+func (p *presence) unsampled(t int64) bool {
+	return len(p.samples) == 0 || floorSlot(t)+event.SlotMS <= p.samples[0].t
+}
+
+// mark returns, for each of the n slots, whether it overlaps any of the
+// spans.
+func (p *presence) mark(n int, lists ...[]span) []bool {
+	at := make([]bool, n)
+	end := p.first + int64(n)*event.SlotMS
+	for _, spans := range lists {
+		for _, sp := range spans {
+			from, to := max(sp.from, p.first), min(sp.to, end)
+			if from >= to {
+				continue
+			}
+			for k := (floorSlot(from) - p.first) / event.SlotMS; k < int64(n); k++ {
+				if p.first+k*event.SlotMS >= to {
+					break
+				}
+				at[k] = true
+			}
+		}
+	}
+	return at
+}
+
+// index returns the index of the slot holding t, if it is derived.
+func (p *presence) index(t int64) (int, bool) {
+	if t < p.first {
+		return 0, false
+	}
+	k := int((t - p.first) / event.SlotMS)
+	return k, k < len(p.slots)
+}
+
+// slotAt returns the slot holding t, or nil if it isn't derived.
+func (p *presence) slotAt(t int64) *Slot {
+	if k, ok := p.index(t); ok {
+		return &p.slots[k]
+	}
+	return nil
+}
+
+// presentAt returns the presence at time t: unknown outside the derived
+// slots.
+func (p *presence) presentAt(t int64) event.Presence {
+	if s := p.slotAt(t); s != nil {
+		return s.At(t)
+	}
+	return event.PresentUnknown
+}
+
+// classifyRuns gives every silent slot its presence (SM 2.1): bridged for
+// a short run with input on both sides; otherwise tail for the
+// PRESENCE_TAIL_S after the last input, and no for the rest. The return
+// rule, which needs anchors, later turns some of the no into returned.
+//
+// A run's length is its slots' length, from the end of the last input slot
+// to the start of the next: samples tell when the last input before a
+// silence came, but not when the first input after it did.
+func (p *presence) classifyRuns(lastIn []int64) {
+	isInput := func(k int) bool { return p.slots[k].Present == event.PresentYes }
+	for i := 0; i < len(p.slots); {
+		if p.slots[i].Present != "" {
+			i++
+			continue
+		}
+		j := i
+		for j < len(p.slots) && p.slots[j].Present == "" {
+			j++
+		}
+		run := silentRun{i: i, j: j, left: i > 0 && isInput(i-1), right: j < len(p.slots) && isInput(j)}
+		if run.left {
+			run.lastInput = lastIn[i-1]
+			run.tailEnd = run.lastInput + p.r.presenceTail
+		}
+		length := int64(j-i) * event.SlotMS
+		for k := i; k < j; k++ {
+			s := &p.slots[k]
+			switch {
+			case run.left && run.right && length <= p.r.presenceGap:
+				s.Present = event.PresentBridged
+			case run.left && s.Start < run.tailEnd:
+				s.Present = event.PresentTail
+				s.PresentUntil = min(s.End(), run.tailEnd)
+			default:
+				s.Present = event.PresentNo
+			}
+			s.Then = s.Present
+			if s.PresentUntil < s.End() {
+				s.Then = event.PresentNo
+			}
+		}
+		p.runs = append(p.runs, run)
+		i = j
+	}
+}
+
+// inputIn reports whether a sample shows input, or a key press if keys is
+// set, at a time in [from, to]. Each sample says when the last input before
+// it came, so only samples from from on can show one, and the first sample
+// at or after to is the last that can.
+func (p *presence) inputIn(from, to int64, keys bool) bool {
+	i := sort.Search(len(p.samples), func(i int) bool { return p.samples[i].t >= from })
+	for ; i < len(p.samples); i++ {
+		s := p.samples[i]
+		if !keys {
+			if s.lastAny >= from && s.lastAny <= to {
+				return true
+			}
+		} else if s.hasKeys && s.lastKey >= from && s.lastKey <= to {
+			return true
+		}
+		if s.t >= to {
+			break
+		}
+	}
+	return false
+}
+
+// inputWhere is inputIn with a condition on each input's time, such as
+// which window had focus then.
+func (p *presence) inputWhere(from, to int64, keys bool, ok func(t int64) bool) bool {
+	i := sort.Search(len(p.samples), func(i int) bool { return p.samples[i].t >= from })
+	for ; i < len(p.samples); i++ {
+		s := p.samples[i]
+		l, has := s.lastAny, true
+		if keys {
+			l, has = s.lastKey, s.hasKeys
+		}
+		if has && l >= from && l <= to && ok(l) {
+			return true
+		}
+		if s.t >= to {
+			break
+		}
+	}
+	return false
+}
+
+// keysAt reports whether the OS reports keyboard input apart from other
+// input around time t: whether the first sample at or after t, or else the
+// last one, has idle_keys_s.
+func (p *presence) keysAt(t int64) bool {
+	if len(p.samples) == 0 {
+		return false
+	}
+	i := sort.Search(len(p.samples), func(i int) bool { return p.samples[i].t >= t })
+	if i == len(p.samples) {
+		i--
+	}
+	return p.samples[i].hasKeys
+}
+
+// inputBefore reports whether input came in the window before t: key
+// presses where the OS reports them, else any input (SM 2.2 rule 6).
+func (p *presence) inputBefore(t, window int64) bool {
+	return p.inputIn(t-window, t, p.keysAt(t))
+}
+
+// inputSlots counts the slots overlapping [from, to) with input: key
+// presses where the OS reports them, else any input.
+func (p *presence) inputSlots(from, to int64) int64 {
+	keys := p.keysAt(to)
+	var n int64
+	for t := floorSlot(from); t < to; t += event.SlotMS {
+		s := p.slotAt(t)
+		if s == nil {
+			continue
+		}
+		if keys && s.InputKeys != nil {
+			if *s.InputKeys {
+				n++
+			}
+		} else if s.InputAny {
+			n++
+		}
+	}
+	return n
+}
+
+// slotInput reports whether the slot holding t had input, or a key press
+// where the OS reports them and keys is set.
+func (p *presence) slotInput(t int64, keys bool) bool {
+	s := p.slotAt(t)
+	if s == nil {
+		return false
+	}
+	if keys && s.InputKeys != nil {
+		return *s.InputKeys
+	}
+	return s.InputAny
+}

@@ -2,6 +2,21 @@
   "fixture": "6.3",
   "anchors": [
     {
+      "event_id": "01a22428-2360-7603-a656-3dad6bf43fe8",
+      "kind": "substantive_prompt",
+      "t": 1795902940000,
+      "local": "13:55:40",
+      "project_key": "p_a73dbaeaf36c",
+      "origin": "human_typed",
+      "prompt_class": "substantive",
+      "lead_s": 163,
+      "trail_s": 0,
+      "lead_from": "params",
+      "via": "hook",
+      "level": "A",
+      "sm": "14:02: the prompt behind B's answer from 13:58, sent at 13:55:40 before the window (64 characters, lead 120 + 64 / 1.5, rounded)"
+    },
+    {
       "event_id": "01a2242d-7a90-7eda-830d-80c2a0e6b420",
       "kind": "substantive_prompt",
       "t": 1795903290000,
@@ -78,12 +93,12 @@
       "project_key": "p_418d8413d1cf",
       "origin": "human_typed",
       "prompt_class": "substantive",
-      "lead_s": 153.33333333333334,
+      "lead_s": 153,
       "trail_s": 0,
       "lead_from": "params",
       "via": "hook",
       "level": "A",
-      "sm": "14:08: asks Cursor's agent to run the tests (50 characters), sent 14:09:00; lead 120 + 50 / 1.5"
+      "sm": "14:08: asks Cursor's agent to run the tests (50 characters), sent 14:09:00; lead 120 + 50 / 1.5, rounded"
     },
     {
       "event_id": "01a22436-2d20-71d9-afa8-ec87d1854b86",

@@ -88,11 +88,38 @@ jobs:
         if: ${{ !cancelled() }}
         run: python3 -I testdata/upstream/check.py
 
+      # pkg/redact embeds gitleaks' rules as JSON converted from the pinned
+      # upstream config in pkg/redact/rules. This fails when the JSON isn't
+      # exactly what the converter writes from that config.
+      - name: Redaction rules
+        run: python3 -I pkg/redact/rules/convert.py --check
+
       - name: go vet
         run: go vet ./...
 
       - name: go test
         run: go test ./...
+
+      - name: IPC against a second user, as root
+        if: ${{ !cancelled() }}
+        # The agent's socket must refuse another uid (docs/PLAN.md, WP-AG2).
+        # Acting as a second user takes root, so go test skips TestOtherUser,
+        # and this step runs it with sudo; it runs its second user as nobody.
+        run: |
+          go test -c -o "$RUNNER_TEMP/ipc.test" ./internal/agent/ipc
+          set +e
+          out=$(sudo "$RUNNER_TEMP/ipc.test" -test.run '^TestOtherUser$' -test.count=1 -test.v 2>&1)
+          code=$?
+          set -e
+          echo "$out"
+          if [ "$code" -ne 0 ]; then
+            exit "$code"
+          fi
+          # A skip would pass without checking anything.
+          if ! grep -q '^--- PASS: TestOtherUser ' <<<"$out"; then
+            echo "::error::TestOtherUser didn't run as root"
+            exit 1
+          fi
 
       - name: Cross-compile
         run: |
@@ -156,6 +183,20 @@ jobs:
 
       # The checks below run even when an earlier step failed, so one run
       # reports every problem.
+
+      - name: Platform packages for every target
+        # The cross-compile above builds only what cmd/pairtime imports, and
+        # platform code lands before the agent calls it. go vet type-checks a
+        # package and its tests for one GOOS/GOARCH, so this compiles
+        # internal/platform for all seven targets with CGO_ENABLED=0, such as
+        # internal/platform/darwin for darwin/amd64 and darwin/arm64 (WP-OS3).
+        # The Windows and macOS tests themselves run in platform.yml.
+        if: ${{ !cancelled() }}
+        run: |
+          for target in windows/amd64 windows/386 windows/arm64 darwin/amd64 darwin/arm64 linux/amd64 linux/arm64; do
+            echo "go vet ./internal/platform/... for $target"
+            GOOS=${target%/*} GOARCH=${target#*/} go vet ./internal/platform/...
+          done
 
       - name: Module licenses
         if: ${{ !cancelled() }}

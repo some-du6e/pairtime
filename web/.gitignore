@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+node_modules/
+# Builds: the server UI and the component gallery. The local dashboard
+# builds into ../internal/webui/dist, which the root .gitignore covers.
+dist/
+# Types generated from docs/api/*.openapi.yaml by `npm run gen`.
+src/gen/
+# Playwright's output.
+test-results/
+playwright-report/
+# The agent binary the README builds for the smoke test.
+/pairtime
+/pairtime.exe
+# Screenshots from tests/screens.spec.ts.
+screens/

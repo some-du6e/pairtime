@@ -95,7 +95,8 @@
       },
       "uncredited": {},
       "agent_running_s": 60,
-      "sm": "14:05"
+      "sm": "14:05",
+      "erratum": "2026-11-19-sm-6.1-permission-answer"
     },
     {
       "start": "2026-11-21T08:36:00Z",
@@ -270,7 +271,8 @@
       "uncredited": {},
       "agent_running_s": 60,
       "sm": "14:05; the other fourteen cycles are the same shape",
-      "derived": ["credited_s", "credit", "uncredited"]
+      "derived": ["credited_s", "credit", "uncredited"],
+      "erratum": "2026-11-19-sm-6.1-permission-answer"
     },
     {
       "start": "2026-11-21T08:48:00Z",
@@ -360,7 +362,7 @@
       "uncredited": {},
       "agent_running_s": 0,
       "sm": "minute 11 of the other cycles is a small hand edit in VS Code, which credits the same 60 s as E and NAV",
-      "note": "The hand edit's heartbeat is at :40, where cycle 1's commit is.",
+      "note": "The hand edit's heartbeats are at his first keystroke, 14:23:02, and at the save, 14:23:40, where cycle 1's commit is.",
       "derived": ["credited_s", "credit", "uncredited"]
     },
     {
@@ -451,7 +453,8 @@
       "uncredited": {},
       "agent_running_s": 60,
       "sm": "14:05; the other fourteen cycles are the same shape",
-      "derived": ["credited_s", "credit", "uncredited"]
+      "derived": ["credited_s", "credit", "uncredited"],
+      "erratum": "2026-11-19-sm-6.1-permission-answer"
     },
     {
       "start": "2026-11-21T09:00:00Z",
@@ -631,7 +634,8 @@
       "uncredited": {},
       "agent_running_s": 60,
       "sm": "14:05; the other fourteen cycles are the same shape",
-      "derived": ["credited_s", "credit", "uncredited"]
+      "derived": ["credited_s", "credit", "uncredited"],
+      "erratum": "2026-11-19-sm-6.1-permission-answer"
     },
     {
       "start": "2026-11-21T09:12:00Z",
@@ -811,7 +815,8 @@
       "uncredited": {},
       "agent_running_s": 60,
       "sm": "14:05; the other fourteen cycles are the same shape",
-      "derived": ["credited_s", "credit", "uncredited"]
+      "derived": ["credited_s", "credit", "uncredited"],
+      "erratum": "2026-11-19-sm-6.1-permission-answer"
     },
     {
       "start": "2026-11-21T09:24:00Z",
@@ -991,7 +996,8 @@
       "uncredited": {},
       "agent_running_s": 60,
       "sm": "14:05; the other fourteen cycles are the same shape",
-      "derived": ["credited_s", "credit", "uncredited"]
+      "derived": ["credited_s", "credit", "uncredited"],
+      "erratum": "2026-11-19-sm-6.1-permission-answer"
     },
     {
       "start": "2026-11-21T09:36:00Z",
@@ -1126,7 +1132,8 @@
       "uncredited": {},
       "agent_running_s": 60,
       "sm": "14:05; the other fourteen cycles are the same shape",
-      "derived": ["credited_s", "credit", "uncredited"]
+      "derived": ["credited_s", "credit", "uncredited"],
+      "erratum": "2026-11-19-sm-6.1-permission-answer"
     },
     {
       "start": "2026-11-21T09:48:00Z",
@@ -1306,7 +1313,8 @@
       "uncredited": {},
       "agent_running_s": 60,
       "sm": "14:05; the other fourteen cycles are the same shape",
-      "derived": ["credited_s", "credit", "uncredited"]
+      "derived": ["credited_s", "credit", "uncredited"],
+      "erratum": "2026-11-19-sm-6.1-permission-answer"
     },
     {
       "start": "2026-11-21T10:00:00Z",
@@ -1487,7 +1495,8 @@
       "agent_running_s": 60,
       "sm": "14:05; the other fourteen cycles are the same shape",
       "note": "The agent's test run fails at 15:41:50 with the AssertionError. Its 4 lines add 30 s to a bucket that never runs dry here, so the row keeps cycle 1's shape.",
-      "derived": ["credited_s", "credit", "uncredited"]
+      "derived": ["credited_s", "credit", "uncredited"],
+      "erratum": "2026-11-19-sm-6.1-permission-answer"
     },
     {
       "start": "2026-11-21T10:12:00Z",
@@ -1668,7 +1677,8 @@
       "uncredited": {},
       "agent_running_s": 60,
       "sm": "14:05; the other fourteen cycles are the same shape",
-      "derived": ["credited_s", "credit", "uncredited"]
+      "derived": ["credited_s", "credit", "uncredited"],
+      "erratum": "2026-11-19-sm-6.1-permission-answer"
     },
     {
       "start": "2026-11-21T10:24:00Z",
@@ -1850,7 +1860,8 @@
       "uncredited": {},
       "agent_running_s": 60,
       "sm": "14:05; the other fourteen cycles are the same shape",
-      "derived": ["credited_s", "credit", "uncredited"]
+      "derived": ["credited_s", "credit", "uncredited"],
+      "erratum": "2026-11-19-sm-6.1-permission-answer"
     },
     {
       "start": "2026-11-21T10:36:00Z",
@@ -1865,7 +1876,7 @@
       "uncredited": {},
       "agent_running_s": 30,
       "sm": "14:06; the other fourteen cycles are the same shape",
-      "note": "The test run at 16:06:20 passes: a run_green, after his own edit at 15:59:40.",
+      "note": "The test run at 16:06:20 passes: a run_green, after his own edit, saved at 15:59:40.",
       "derived": ["credited_s", "credit", "uncredited"]
     },
     {
@@ -2031,7 +2042,8 @@
       "uncredited": {},
       "agent_running_s": 60,
       "sm": "14:05; the other fourteen cycles are the same shape",
-      "derived": ["credited_s", "credit", "uncredited"]
+      "derived": ["credited_s", "credit", "uncredited"],
+      "erratum": "2026-11-19-sm-6.1-permission-answer"
     },
     {
       "start": "2026-11-21T10:48:00Z",
@@ -2211,7 +2223,8 @@
       "uncredited": {},
       "agent_running_s": 60,
       "sm": "14:05; the other fourteen cycles are the same shape",
-      "derived": ["credited_s", "credit", "uncredited"]
+      "derived": ["credited_s", "credit", "uncredited"],
+      "erratum": "2026-11-19-sm-6.1-permission-answer"
     },
     {
       "start": "2026-11-21T11:00:00Z",
@@ -2391,7 +2404,8 @@
       "uncredited": {},
       "agent_running_s": 60,
       "sm": "14:05; the other fourteen cycles are the same shape",
-      "derived": ["credited_s", "credit", "uncredited"]
+      "derived": ["credited_s", "credit", "uncredited"],
+      "erratum": "2026-11-19-sm-6.1-permission-answer"
     },
     {
       "start": "2026-11-21T11:12:00Z",
@@ -2571,7 +2585,8 @@
       "uncredited": {},
       "agent_running_s": 60,
       "sm": "14:05; the other fourteen cycles are the same shape",
-      "derived": ["credited_s", "credit", "uncredited"]
+      "derived": ["credited_s", "credit", "uncredited"],
+      "erratum": "2026-11-19-sm-6.1-permission-answer"
     },
     {
       "start": "2026-11-21T11:24:00Z",
@@ -2698,14 +2713,15 @@
   "errata": [
     "2026-11-19-sm-6.1-presence-edges",
     "2026-11-19-sm-6.1-same-error",
-    "2026-11-19-sm-6.1-hackatime-replay"
+    "2026-11-19-sm-6.1-hackatime-replay",
+    "2026-11-19-sm-6.1-permission-answer"
   ],
   "notes": [
     "ai_credited_s is P + PA + SUP + READ and hand_credited_s is NAV + E + G + LOOKUP, as SM's table splits them; no credited second inside an agent turn has a hand-work reason (SM 5.4).",
     "absent_s is SM's X.absent total, the drink's 330 s. The rows' X.absent sums to 90 (50 in 15:07, 40 in 15:12): the other 240 s fall in 15:08 to 15:11, which have no bucket. See the presence-edges erratum.",
     "agent_only_s is the 25 s a cycle that SM's 14:04 row calls X.agent_only. agent_running_s, 150 s a turn from submit to stop, follows from SM's times.",
     "Commits: cycle 1's at 14:11:40 and cycles 3, 9, 12 and 15's, five in all. Cycle 6's would be at 15:11:40, during the drink.",
-    "Cycles 9 and 10: the agent's test run fails at 15:41:50, 15:42:20 and 15:54:20 with one AssertionError signature, and passes at 16:06:20, after his hand edit at 15:59:40. Nothing is discounted. See the same-error erratum for why SM's reason doesn't apply.",
-    "This fixture's events replay to logged_s 7370, ai_logged_s 3930 and handbook_s 4750 under min(gap, 120 s) over the window; SM says about 8,300, 4,050 and 5,600. The first prompt has no agent event within 120 s before it in the window, which is the 120 s off SM's ai_logged_s, and VS Code sends only the heartbeats SM names. See the Hackatime-replay erratum."
+    "Cycles 9 and 10: the agent's test run fails at 15:41:50, 15:42:20 and 15:54:20 with one AssertionError signature, and passes at 16:06:20, after his hand edit, saved at 15:59:40. Nothing is discounted. See the same-error erratum for why SM's reason doesn't apply.",
+    "This fixture's events replay to logged_s 7712, ai_logged_s 3930 and handbook_s 5092 under min(gap, 120 s) over the window; SM says about 8,300, 4,050 and 5,600. The first prompt has no agent event within 120 s before it in the window, which is the 120 s off SM's ai_logged_s, and VS Code sends only the heartbeats SM names, plus one at the first keystroke of each hand edit. Hackatime's boundary-aware path would also count the 13:57:05 heartbeat before the window, for logged_s 7832. See the Hackatime-replay erratum."
   ]
 }

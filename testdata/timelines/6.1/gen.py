@@ -14,6 +14,7 @@ import timeline as tl  # noqa: E402
 EDGES = "2026-11-19-sm-6.1-presence-edges"
 SAME_ERROR = "2026-11-19-sm-6.1-same-error"
 REPLAY = "2026-11-19-sm-6.1-hackatime-replay"
+PERMISSION = "2026-11-19-sm-6.1-permission-answer"
 
 fx = tl.Fixture(
     "6.1",
@@ -112,15 +113,30 @@ def focus(t, app_class, app, project=None):
     return fx.emit(t, "os.focus", data, source="os", via="os", sample=True)
 
 
-def heartbeat(t, act, file, lines=0):
+heartbeats = []  # (t, file, save), for the check of WakaTime's rule below
+
+
+def heartbeat(t, act, file, lines=0, save=False):
     # WakaTime's VS Code plugin through the dual-send (DESIGN 5.6). The
-    # bridge maps a heartbeat with changed lines to an edit and any other to
-    # navigation, both with edit_source unknown (DESIGN 5.7). macOS skips the
-    # peer-process check, so these arrive via editor.
+    # bridge maps a heartbeat with changed lines or a save to an edit and
+    # any other to navigation, both with edit_source unknown (DESIGN 5.7).
+    # macOS skips the peer-process check, so these arrive via editor.
+    heartbeats.append((t, file, save))
     return fx.emit(t, "editor.activity",
                    {"editor": "vscode", "act": act, "file_hash": file, "lines_changed": lines,
                     "edit_source": "unknown"},
                    source="editor", via="editor", project=P)
+
+
+def open_file():
+    """The file VS Code has open: the last heartbeat's."""
+    return heartbeats[-1][1]
+
+
+def another_file():
+    """A file he opens, one of the eleven other than the one open."""
+    others = [f for f in FILES if f != open_file()]
+    return others[rand.below(len(others))]
 
 
 def prompt(t, turn):
@@ -229,7 +245,7 @@ def cycle(k):
         # Back from the drink: the first thing he does is click in VS Code.
         move(BACK)
         focus(BACK, "editor", CODE, P)
-        heartbeat(BACK, "navigate", FILES[rand.below(len(FILES))])
+        heartbeat(BACK, "navigate", another_file())
         presses(BACK + 1_300, c("1:46.0"), 2_500, 6_000)
     else:
         if k > 1 and (k - 1) in COMMIT_CYCLES:
@@ -237,12 +253,12 @@ def cycle(k):
             focus(C, "editor", CODE, P)
         presses(c("0:01.2"), c("0:28.0"), 1_800, 4_200)
         press(c("0:29.6"))
-        heartbeat(c("0:30"), "navigate", FILES[rand.below(len(FILES))])
+        heartbeat(c("0:30"), "navigate", another_file())
         presses(c("0:32.4"), c("1:46.0"), 2_500, 6_000)
     press(c("1:47.2"))
     presses(c("1:47.8"), c("1:49.3"), 400, 600)
     press(c("1:49.6"))
-    heartbeat(c("1:50"), "navigate", FILES[rand.below(len(FILES))])
+    heartbeat(c("1:50"), "navigate", another_file())
     press(c("1:53.1"))
     press(c("1:56.4"))
 
@@ -305,11 +321,21 @@ def cycle(k):
                len(edits_since_commit["files"]))
         edits_since_commit.update(ins=0, dels=0, files=set())
     else:
+        # The edit is in the file open since 1:50, so VS Code changes no file.
         focus(c("11:00"), "editor", CODE, P)
         presses(c("11:02.0"), c("11:39.2"), 500, 900)
+        # His first key opens a new line. It is an editor event 552 s after
+        # the 1:50 heartbeat, so WakaTime sends a heartbeat with that one
+        # changed line (HC 1.5) in the same millisecond, and the bridge makes
+        # it an edit (DESIGN 5.7). The save carries the other two.
+        heartbeat(c("11:02.0"), "edit", open_file(), lines=1)
         press(c("11:39.7"))  # Cmd-S
-        hand = FILES[rand.below(len(FILES))]
-        heartbeat(c("11:40"), "edit", hand, lines=2)
+        # A number drawn and dropped. Other fixtures copy this one's harness
+        # events by time and data, and the draws after this one set the
+        # agent's files and line counts, so they keep their place.
+        rand.below(len(FILES))
+        hand = open_file()
+        heartbeat(c("11:40"), "edit", hand, lines=2, save=True)
         edits_since_commit["ins"] += 2
         edits_since_commit["dels"] += 1
         edits_since_commit["files"].add(hand)
@@ -327,7 +353,7 @@ press(at("16:59:59.900"))
 focus(at("17:00:00.000"), "editor", CODE, P)
 presses(at("17:00:01.200"), at("17:00:28.000"), 1_800, 4_200)
 press(at("17:00:29.600"))
-heartbeat(at("17:00:30.000"), "navigate", FILES[rand.below(len(FILES))])
+heartbeat(at("17:00:30.000"), "navigate", another_file())
 press(at("17:00:33.100"))
 press(at("17:00:37.500"))
 press(at("17:00:42.200"))
@@ -359,7 +385,16 @@ for a, b in zip(times, times[1:]):
 tl.check(LEFT in times and BACK in times and not input_in(LEFT + 1, BACK), "the drink: 15:06:40 to 15:12:40")
 tl.check(BACK - LEFT == 360_000, "the silent run is 6 minutes long")
 
-prompts_at = [start(k) + off("4:00") for k in range(1, CYCLES + 1)]
+# WakaTime's VS Code plugin sends a heartbeat when the file changes, on a
+# save, or on an editor event more than 120 s after the last heartbeat
+# (HC 1.5), and only from the window in front (SM 3.2).
+for (a, fa, _), (b, fb, save) in zip(heartbeats, heartbeats[1:]):
+    tl.check(fb != fa or save or b - a > 120_000,
+             f"the heartbeat at {fx.hhmmss(b)} changes file, saves or comes over 120 s after {fx.hhmmss(a)}")
+for t, _, _ in heartbeats:
+    front = [e for e in events if e["kind"] == "os.focus" and e["t"] <= t][-1]
+    tl.check(front["data"]["app_hash"] == CODE, f"VS Code is in front at the heartbeat at {fx.hhmmss(t)}")
+
 for k in range(1, CYCLES + 1):
     C = start(k)
     sub = C + off("4:00")
@@ -375,6 +410,15 @@ for k in range(1, CYCLES + 1):
         tl.check([(e["t"] - C, e["data"]["app_class"]) for e in f]
                  == [(off("9:00"), "browser"), (off("11:00"), "terminal" if k in COMMIT_CYCLES else "editor")],
                  f"cycle {k}: the browser run is 9:00 to 11:00")
+    # Minute 11 of a hand-edit cycle is E 40 and NAV 20: from 11:00 the next
+    # anchor is one of the edit's two heartbeats until the save at 11:40,
+    # then the next cycle's first heartbeat, a navigation (SM 3.3 rule 3).
+    if k != DRINK and k not in COMMIT_CYCLES:
+        nxt = [(e["t"] - C, e["data"].get("act", e["kind"])) for e in events
+               if C + off("11:00") <= e["t"] <= C + off("12:30")
+               and e["kind"] in ("editor.activity", "prompt.submit", "agent.permission", "git.change")]
+        tl.check(nxt == [(off("11:02"), "edit"), (off("11:40"), "edit"), (off("12:30"), "navigate")],
+                 f"cycle {k}: the hand edit's heartbeats at 11:02 and 11:40, then a navigation at 12:30")
 
 # Level A: every editor, permission and commit anchor has key presses in
 # its slot. A prompt's evidence is the 10 s before it, checked above.
@@ -383,8 +427,10 @@ for e in anchor_events:
     s = e["t"] - e["t"] % tl.SLOT_MS
     tl.check(keys_in(s, s + tl.SLOT_MS), f"key presses in the slot of the {e['kind']} at {fx.hhmmss(e['t'])}")
 
-tl.check(len(prompts_at) == 15 and sum(e["kind"] == "agent.permission" for e in events) == 15,
-         "fifteen typed prompts and fifteen permission decisions")
+in_window = [e for e in events if T0 <= e["t"] < END]
+typed = [e for e in in_window if e["kind"] == "prompt.submit" and e["data"]["pasted_chars"] == 0]
+decided = [e for e in in_window if e["kind"] == "agent.permission" and e["data"]["decided_by"] == "user"]
+tl.check(len(typed) == 15 and len(decided) == 15, "fifteen typed prompts and fifteen permission decisions")
 tl.check([fx.hhmmss(t) for t in commits] == ["14:11:40", "14:35:40", "15:47:40", "16:23:40", "16:59:40"],
          "five commits")
 tl.check(len(failing) == 3 and len(green) == 1, "three failing test runs, then a green one")
@@ -396,6 +442,7 @@ tl.check(all(e[2]["session_key"] == S for e in failing + green), "the agent runs
 # from 4:20 to 4:30 and from 4:45 to 5:00 (X.agent_only), never empty while
 # SM credits SUP or READ.
 fills = [(e["t"], e["kind"], e["data"]) for e in events if e["kind"] in ("agent.output", "agent.tool")]
+empty_s = 0  # seconds the bucket had nothing to drain, all of them while the agent runs
 for k in range(1, CYCLES + 1):
     C = start(k)
     bucket = tl.Bucket()
@@ -410,18 +457,28 @@ for k in range(1, CYCLES + 1):
         idle = C + off("4:20") <= tau < C + off("4:30") or C + off("4:45") <= tau < C + off("5:00")
         got = bucket.drain(1)
         tl.check(got == (0 if idle else 1), f"cycle {k}: the bucket at {fx.hhmmss(tau)}")
+        empty_s += got == 0
     if k == 1:
         tl.check(int(bucket.total()) == 303, f"the bucket holds 303 s at 14:09:00, not {float(bucket.total())}")
 
 # Hackatime's replay of the window (SM 5.3, 5.4): every editor heartbeat and
 # agent event for logged_s, the agent events alone for ai_logged_s.
-in_window = [e for e in events if T0 <= e["t"] < END]
-ai_times = [e["t"] for e in in_window if e["kind"] in ("prompt.submit", "agent.tool", "agent.stop")]
+AI_KINDS = ("prompt.submit", "agent.tool", "agent.stop")
+ai_times = [e["t"] for e in in_window if e["kind"] in AI_KINDS]
 all_times = sorted(ai_times + [e["t"] for e in in_window if e["kind"] == "editor.activity"])
 ai_logged = tl.hackatime_replay(ai_times)
 logged = tl.hackatime_replay(all_times)
 handbook = logged - ai_logged + ai_logged / 3
 tl.check(ai_logged == 4050 - 120, f"ai_logged_s replays to {ai_logged}")
+tl.check(logged == 7712, f"logged_s replays to {logged}")
+# Hackatime's boundary-aware path, which Stardance reads and DESIGN D15
+# follows, also takes the last record before the window (HC 1.4): the
+# 13:57:05 heartbeat, 205 s before the 14:00:30 one. No agent event comes
+# before the window, so only logged_s would change.
+before = [e["t"] for e in events if e["t"] < T0 and (e["kind"] in AI_KINDS or e["kind"] == "editor.activity")]
+logged_boundary = tl.hackatime_replay(before[-1:] + all_times)
+tl.check(fx.hhmmss(before[-1]) == "13:57:05" and logged_boundary == logged + 120,
+         f"the boundary-aware logged_s is {logged_boundary}")
 
 # The rows: cycle 1 is SM's table; the other fourteen cycles have its shape
 # with SM's three variations.
@@ -483,8 +540,9 @@ for k in range(1, CYCLES + 1):
             if k == 10 and m == 6:
                 note = "A third failing run at 15:54:20, the same AssertionError, after the agent tried his hypothesis."
             if k == 11 and m == 6:
-                note = "The test run at 16:06:20 passes: a run_green, after his own edit at 15:59:40."
-            exp.row(hhmm, credit={P: credit}, uncredited=unc, agent=agent, sm=sm, derived=derived, note=note)
+                note = "The test run at 16:06:20 passes: a run_green, after his own edit, saved at 15:59:40."
+            exp.row(hhmm, credit={P: credit}, uncredited=unc, agent=agent, sm=sm, derived=derived, note=note,
+                    erratum=PERMISSION if m == 5 else None)
             continue
         if k in COMMIT_CYCLES:
             exp.row(hhmm, credit={P: {"G": 40, "NAV": 20}}, uncredited={},
@@ -494,27 +552,47 @@ for k in range(1, CYCLES + 1):
             exp.row(hhmm, credit={P: {"E": 40, "NAV": 20}}, uncredited={},
                     sm="minute 11 of the other cycles is a small hand edit in VS Code, which credits the same "
                        "60 s as E and NAV",
-                    derived=DERIVED, note="The hand edit's heartbeat is at :40, where cycle 1's commit is."
-                    if k == 2 else ("His own edit fixes the failing test." if k == 10 else None))
+                    derived=DERIVED,
+                    note="The hand edit's heartbeats are at his first keystroke, 14:23:02, and at the save, 14:23:40, "
+                         "where cycle 1's commit is." if k == 2 else
+                    ("His own edit fixes the failing test." if k == 10 else None))
 
-# Totals SM states, checked against the sums of the rows by Expected.doc.
-rows_by_reason = exp.totals()["credited_by_reason"]
-tl.check(sum(rows_by_reason.get(r, 0) for r in ("P", "PA", "SUP", "READ")) == 5965, "AI-assisted 5,965 s")
-tl.check(sum(rows_by_reason.get(r, 0) for r in ("NAV", "E", "G", "LOOKUP")) == 4130, "hand work 4,130 s")
-first = sum(sum(sum(v.values()) for v in r["credit"].values()) for r in exp.rows[:12])
-tl.check(first == 695, f"cycle 1 credits {first} s")
-tl.check(10095 + 375 + 330 == 10800, "credited, agent-only and absent seconds fill the wall time")
+# The totals SM states, each checked against what the rows give.
+SM_TOTALS = {
+    "wall_s": 10800,
+    "credited_s": 10095,
+    "ai_credited_s": 5965,
+    "hand_credited_s": 4130,
+    "agent_only_s": 375,
+    "absent_s": 330,
+    "first_cycle_credited_s": 695,
+}
+sums = exp.totals()
+by_reason, unc = sums["credited_by_reason"], sums["uncredited"]
+no_bucket = [r for r in exp.rows if not r["bucket"]]
+tl.check(all(r["codes"] == ["X.absent"] for r in no_bucket), "the minutes without a bucket are X.absent")
+rows_give = {
+    "wall_s": sum(60 * r["minutes"] for r in exp.rows),
+    "credited_s": sums["credited_s"],
+    "ai_credited_s": sum(by_reason.get(r, 0) for r in ("P", "PA", "SUP", "READ")),
+    "hand_credited_s": sum(by_reason.get(r, 0) for r in ("NAV", "E", "G", "LOOKUP")),
+    "agent_only_s": unc.get("X.agent_only", 0),
+    # The drink's X.absent: 90 s in the rows, and the minutes with no bucket.
+    "absent_s": unc.get("X.absent", 0) + sum(60 * r["minutes"] for r in no_bucket),
+    "first_cycle_credited_s": sum(r["credited_s"] for r in exp.rows[:12]),
+}
+for name, v in SM_TOTALS.items():
+    tl.check(rows_give[name] == v, f"{name}: the rows give {rows_give[name]}, SM says {v}")
+tl.check(rows_give["wall_s"] == (END - T0) // 1000, "the rows cover the window")
+tl.check(rows_give["ai_credited_s"] + rows_give["hand_credited_s"] == rows_give["credited_s"],
+         "every credited second is AI-assisted or hand work")
+tl.check(rows_give["credited_s"] + rows_give["agent_only_s"] + rows_give["absent_s"] == rows_give["wall_s"],
+         "credited, agent-only and absent seconds fill the wall time")
+tl.check(empty_s == rows_give["agent_only_s"],
+         f"the replayed bucket is empty for {empty_s} s while the agent runs, the rows' X.agent_only")
 
 expected = exp.doc(
-    extra_totals={
-        "wall_s": 10800,
-        "credited_s": 10095,
-        "ai_credited_s": 5965,
-        "hand_credited_s": 4130,
-        "agent_only_s": 375,
-        "absent_s": 330,
-        "first_cycle_credited_s": 695,
-    },
+    extra_totals=SM_TOTALS,
     stated=["wall_s", "credited_s", "ai_credited_s", "hand_credited_s", "agent_only_s", "absent_s",
             "first_cycle_credited_s"],
     approx={
@@ -525,7 +603,7 @@ expected = exp.doc(
         "handbook_s": {"about": 5600, "sm": "handbook_s: about 5,600, 1 h 33 min"},
         "ai_ratio": {"about": 1.47, "sm": "ai_ratio is 5,965 / 4,050 = 1.47"},
     },
-    errata=[EDGES, SAME_ERROR, REPLAY],
+    errata=[EDGES, SAME_ERROR, REPLAY, PERMISSION],
     notes=[
         "ai_credited_s is P + PA + SUP + READ and hand_credited_s is NAV + E + G + LOOKUP, as SM's table "
         "splits them; no credited second inside an agent turn has a hand-work reason (SM 5.4).",
@@ -537,20 +615,27 @@ expected = exp.doc(
         "Commits: cycle 1's at 14:11:40 and cycles 3, 9, 12 and 15's, five in all. Cycle 6's would be at "
         "15:11:40, during the drink.",
         "Cycles 9 and 10: the agent's test run fails at 15:41:50, 15:42:20 and 15:54:20 with one "
-        "AssertionError signature, and passes at 16:06:20, after his hand edit at 15:59:40. Nothing is "
+        "AssertionError signature, and passes at 16:06:20, after his hand edit, saved at 15:59:40. Nothing is "
         "discounted. See the same-error erratum for why SM's reason doesn't apply.",
         f"This fixture's events replay to logged_s {logged:g}, ai_logged_s {ai_logged:g} and handbook_s "
         f"{handbook:g} under min(gap, 120 s) over the window; SM says about 8,300, 4,050 and 5,600. The "
         "first prompt has no agent event within 120 s before it in the window, which is the 120 s off SM's "
-        "ai_logged_s, and VS Code sends only the heartbeats SM names. See the Hackatime-replay erratum.",
+        "ai_logged_s, and VS Code sends only the heartbeats SM names, plus one at the first keystroke of each "
+        "hand edit. Hackatime's boundary-aware path would also count the 13:57:05 heartbeat before the window, "
+        f"for logged_s {logged_boundary:g}. See the Hackatime-replay erratum.",
     ],
 )
 
-# The acts SM names, in time order. Outside cycle 1, sm names the cycle-1
-# row the act copies.
+# Every anchor the events hold, in time order: the acts SM names and the
+# heartbeat before the window. Outside cycle 1, sm names the cycle-1 row
+# the act copies.
 anchors = []
 turns = []
 prompt_entries = []
+setup = fx.event_at("editor.activity", at("13:57:05"))
+anchors.append(tl.anchor(fx, setup, kind="editor_navigation", lead_s=120, trail_s=0, lead_from="params", level="A",
+                         sm="not in SM: VS Code's heartbeat before the window, which resolves its slots to cs2go "
+                            "from 14:00:00"))
 for k in range(1, CYCLES + 1):
     C = start(k)
 
@@ -586,10 +671,11 @@ for k in range(1, CYCLES + 1):
                                  sm="14:11: commit at 14:11:40 (G, lead 60 s)" if k == 1 else
                                  "14:11; minute 11 is a commit in cycles 3, 6, 9, 12 and 15"))
     else:
-        e = fx.event_at("editor.activity", C + off("11:40"))
-        anchors.append(tl.anchor(fx, e, kind="typed_edit", lead_s=120, trail_s=0, lead_from="params", level="A",
-                                 sm="minute 11 of the other cycles is a small hand edit in VS Code, crediting "
-                                    "E and NAV"))
+        for mss, part in (("11:02", "his first keystroke"), ("11:40", "the save")):
+            e = fx.event_at("editor.activity", C + off(mss))
+            anchors.append(tl.anchor(fx, e, kind="typed_edit", lead_s=120, trail_s=0, lead_from="params", level="A",
+                                     sm="minute 11 of the other cycles is a small hand edit in VS Code, crediting "
+                                        f"E and NAV; the heartbeat at {part}"))
     turns.append(tl.turn(fx, C + off("4:00"), C + off("6:30"), session=S, turn_key=TURN[k], origin="human_typed",
                          prompt_class="substantive",
                          sm=shaped("14:04 to 14:06: the agent starts at 14:04:00 and stops at 14:06:30")))

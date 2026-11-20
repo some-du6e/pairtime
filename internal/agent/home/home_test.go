@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -161,21 +162,65 @@ func TestFiles(t *testing.T) {
 	}
 }
 
+// TestCreate checks that Create makes every directory it needs for this
+// user only, so a PAIRTIME_HOME at a drive root such as C:\pairtime
+// doesn't let other users read the agent's files (#46), and that it leaves
+// a directory that is already there alone.
 func TestCreate(t *testing.T) {
+	// Two names that, under t.TempDir, make a path longer than the 247
+	// characters CreateDirectory takes without the \\?\ prefix.
+	long1, long2 := strings.Repeat("d", 100), strings.Repeat("e", 100)
 	tests := []struct {
-		name string
-		dirs func(root string) Dirs
+		name   string
+		before []string // directories under root made before Create, with os.Mkdir
+		dirs   func(root string) Dirs
+		made   []string // the directories under root that Create makes, each for this user only
+		kept   []string // directories under root that were there, whose permissions Create keeps
 	}{
-		{name: "Create makes separate data and config directories", dirs: func(root string) Dirs {
-			return Dirs{Data: filepath.Join(root, "data", "pairtime"), Config: filepath.Join(root, "config", "pairtime")}
-		}},
-		{name: "Create accepts one directory for both", dirs: func(root string) Dirs {
-			return Dirs{Data: filepath.Join(root, "pt"), Config: filepath.Join(root, "pt")}
-		}},
+		{
+			name: "Create makes separate data and config directories, and their parents, for this user only",
+			dirs: func(root string) Dirs {
+				return Dirs{Data: filepath.Join(root, "data", "pairtime"), Config: filepath.Join(root, "config", "pairtime")}
+			},
+			made: []string{"data", filepath.Join("data", "pairtime"), "config", filepath.Join("config", "pairtime")},
+		},
+		{
+			name: "Create accepts one directory for both",
+			dirs: func(root string) Dirs {
+				return Dirs{Data: filepath.Join(root, "pt"), Config: filepath.Join(root, "pt")}
+			},
+			made: []string{"pt"},
+		},
+		{
+			name:   "Create leaves a directory that is there as it is and makes the rest for this user only",
+			before: []string{"pt"},
+			dirs: func(root string) Dirs {
+				return Dirs{Data: filepath.Join(root, "pt", "data"), Config: filepath.Join(root, "pt")}
+			},
+			made: []string{filepath.Join("pt", "data")},
+			kept: []string{"pt"},
+		},
+		{
+			name: "Create makes a directory whose path is too long for Windows' usual limit",
+			dirs: func(root string) Dirs {
+				return Dirs{Data: filepath.Join(root, long1, long2), Config: filepath.Join(root, long1, long2)}
+			},
+			made: []string{long1, filepath.Join(long1, long2)},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			d := tt.dirs(t.TempDir())
+			root := t.TempDir()
+			for _, dir := range tt.before {
+				if err := os.Mkdir(filepath.Join(root, dir), 0o755); err != nil {
+					t.Fatal(err)
+				}
+			}
+			kept := map[string]string{}
+			for _, dir := range tt.kept {
+				kept[dir] = permissions(t, filepath.Join(root, dir))
+			}
+			d := tt.dirs(root)
 			if err := d.Create(); err != nil {
 				t.Fatal(err)
 			}
@@ -184,6 +229,20 @@ func TestCreate(t *testing.T) {
 					t.Errorf("%s isn't a directory after Create: %v", dir, err)
 				}
 			}
+			for _, dir := range tt.made {
+				checkPrivateDir(t, filepath.Join(root, dir))
+			}
+			for dir, before := range kept {
+				if after := permissions(t, filepath.Join(root, dir)); after != before {
+					t.Errorf("Create changed the permissions of %s, which was there, from %s to %s", dir, before, after)
+				}
+			}
+			// WriteFile's files take the data directory's permissions, so
+			// they are for this user only as well.
+			if err := WriteFile(d.StateFile(), []byte("{}\n")); err != nil {
+				t.Fatal(err)
+			}
+			checkPrivateFile(t, d.StateFile())
 		})
 	}
 }
