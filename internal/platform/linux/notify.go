@@ -14,6 +14,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"syscall"
 
 	"github.com/godbus/dbus/v5"
 )
@@ -43,8 +44,8 @@ var (
 type Notifications struct {
 	// Address is the session bus. "" means this login's:
 	// $DBUS_SESSION_BUS_ADDRESS, else the socket $XDG_RUNTIME_DIR/bus, else
-	// /run/user/<uid>/bus. Notify never starts a bus: godbus's dbus-launch
-	// fallback isn't used.
+	// /run/user/<uid>/bus, each socket only if this user owns it. Notify
+	// never starts a bus: godbus's dbus-launch fallback isn't used.
 	Address string
 	// AppName is the app_name argument. "" means "pairtime".
 	AppName string
@@ -70,7 +71,7 @@ func (n Notifications) Notify(ctx context.Context, summary, body string) (uint32
 	addr := n.Address
 	if addr == "" {
 		var ok bool
-		if addr, ok = notifyBusAddress(os.Getenv, notifySocketExists, os.Getuid()); !ok {
+		if addr, ok = notifyBusAddress(os.Getenv, notifyBusSocket, os.Getuid()); !ok {
 			return 0, ErrNotifyNoBus
 		}
 	}
@@ -118,10 +119,16 @@ func (n Notifications) Notify(ctx context.Context, summary, body string) (uint32
 }
 
 // notifyBusAddress finds the session bus the way the reference D-Bus
-// library does, minus autolaunch: $DBUS_SESSION_BUS_ADDRESS, or the socket
-// that systemd's user session puts in the runtime directory. "autolaunch:"
-// counts as no address.
-func notifyBusAddress(getenv func(string) string, isSocket func(string) bool, uid int) (string, bool) {
+// library, libdbus, does, minus autolaunch: $DBUS_SESSION_BUS_ADDRESS, or
+// the socket bus that systemd's user session puts in $XDG_RUNTIME_DIR,
+// which counts only when isBus says it is a socket that uid owns, as
+// libdbus's _dbus_lookup_user_bus checks. "autolaunch:" counts as no
+// address.
+//
+// Then, with the same check, comes /run/user/<uid>/bus, for an agent that
+// a hook started from a shell without XDG_RUNTIME_DIR. That fallback is
+// pairtime's own: libdbus has none.
+func notifyBusAddress(getenv func(string) string, isBus func(name string, uid int) bool, uid int) (string, bool) {
 	if a := getenv("DBUS_SESSION_BUS_ADDRESS"); a != "" && a != "autolaunch:" {
 		return a, true
 	}
@@ -130,17 +137,24 @@ func notifyBusAddress(getenv func(string) string, isSocket func(string) bool, ui
 		dirs = append([]string{d}, dirs...)
 	}
 	for _, d := range dirs {
-		if p := filepath.Join(d, "bus"); isSocket(p) {
+		if p := filepath.Join(d, "bus"); isBus(p, uid) {
 			return "unix:path=" + dbus.EscapeBusAddressValue(p), true
 		}
 	}
 	return "", false
 }
 
-// notifySocketExists reports whether name is a Unix socket.
-func notifySocketExists(name string) bool {
-	fi, err := os.Stat(name)
-	return err == nil && fi.Mode().Type() == fs.ModeSocket
+// notifyBusSocket reports whether name is a Unix socket that uid owns. It
+// checks as libdbus does: with lstat, so a symlink doesn't count whatever
+// it points to, and with the socket's owner, so a socket another user
+// left in a runtime directory pairtime was pointed at doesn't either.
+func notifyBusSocket(name string, uid int) bool {
+	fi, err := os.Lstat(name)
+	if err != nil || fi.Mode().Type() != fs.ModeSocket {
+		return false
+	}
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	return ok && uint64(st.Uid) == uint64(uid)
 }
 
 // escapeNotifyMarkup escapes the characters that would start markup in a

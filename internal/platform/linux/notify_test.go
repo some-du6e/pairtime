@@ -7,7 +7,10 @@ package linux
 import (
 	"context"
 	"errors"
+	"net"
+	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -68,17 +71,56 @@ func TestNotifyBusAddress(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			getenv := func(k string) string { return tt.env[k] }
-			isSocket := func(p string) bool {
-				for _, s := range tt.sockets {
-					if p == s {
-						return true
-					}
+			isBus := func(p string, uid int) bool {
+				if uid != 1000 {
+					t.Errorf("isBus(%q, %d), want the uid notifyBusAddress was given, 1000", p, uid)
 				}
-				return false
+				return slices.Contains(tt.sockets, p)
 			}
-			got, ok := notifyBusAddress(getenv, isSocket, 1000)
+			got, ok := notifyBusAddress(getenv, isBus, 1000)
 			if ok != tt.wantOK || got != tt.want {
 				t.Errorf("notifyBusAddress() = %q, %v, want %q, %v", got, ok, tt.want, tt.wantOK)
+			}
+		})
+	}
+}
+
+// libdbus's _dbus_lookup_user_bus takes $XDG_RUNTIME_DIR/bus only when
+// lstat says it is a socket and its owner is the caller's uid.
+func TestNotifyBusSocket(t *testing.T) {
+	// A short directory: a socket's path must fit in 108 bytes.
+	dir := t.TempDir()
+	sock := filepath.Join(dir, "bus")
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	link := filepath.Join(dir, "link")
+	if err := os.Symlink(sock, link); err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(dir, "file")
+	if err := os.WriteFile(file, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	me := os.Getuid()
+	tests := []struct {
+		name string
+		path string
+		uid  int
+		want bool
+	}{
+		{name: "a socket this user owns is the bus", path: sock, uid: me, want: true},
+		{name: "a socket another user owns isn't", path: sock, uid: me + 1, want: false},
+		{name: "a symlink to this user's socket isn't, since lstat doesn't follow it", path: link, uid: me, want: false},
+		{name: "a file that isn't a socket isn't", path: file, uid: me, want: false},
+		{name: "a path with nothing there isn't", path: filepath.Join(dir, "missing"), uid: me, want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := notifyBusSocket(tt.path, tt.uid); got != tt.want {
+				t.Errorf("notifyBusSocket(%q, %d) = %v, want %v", tt.path, tt.uid, got, tt.want)
 			}
 		})
 	}
