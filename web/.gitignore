@@ -11,3 +11,5 @@ playwright-report/
 # The agent binary the README builds for the smoke test.
 /pairtime
 /pairtime.exe
+# Screenshots from tests/screens.spec.ts.
+screens/
