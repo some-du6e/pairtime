@@ -42,4 +42,4 @@ That is 78 s of `READ`, and 309 + 78 = 387 s. No record counts toward `logged_s`
 
 ## Errata
 
-[Turns without a stop](../../../../docs/errata/2026-11-19-turns-without-a-stop.md). A track turn has no agent record, so nothing says whether it is running. The fixture takes the proposed rule: it isn't. That makes the 78 s `READ` rather than `SUP`, the idle seconds after 14:06:09 `X.no_anchor` rather than `X.agent_only`, and leaves 14:08 without a bucket. Rows 14:06 to 14:08 name it. The 387 s and their level don't depend on it.
+[Turns without a stop](../../../../docs/errata/2026-11-19-turns-without-a-stop.md). A track turn has no agent record, so nothing says whether it is running. The fixture takes the proposed rule: it isn't. That makes the 78 s `READ` rather than `SUP`, the idle seconds after 14:06:09 `X.no_anchor` rather than `X.agent_only`, and `agent_running_s` 0, and it leaves 14:08 without a bucket. Read literally, the turn the 14:04:00 call opens would run from then on, with 60 s of `agent_running_s` in every minute to the end of the window. So rows 14:04 to 14:08 name it, and the `agent_running_s` total depends on it too. The 387 s and their level don't.

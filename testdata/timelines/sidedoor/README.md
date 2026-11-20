@@ -59,7 +59,7 @@ Where the side-door files differ from the SM ones:
 
 ## Errata
 
-- [Turns without a stop](../../../docs/errata/2026-11-19-turns-without-a-stop.md): nothing says whether a track or bridge turn is running, which decides `SUP` against `READ`, `X.agent_only` against `X.no_anchor`, and `agent_running_s`. Cases (a), (b) and (e) use the proposed rule and name the erratum on the rows that depend on it. Their credited seconds, levels, fills and `logged_s` don't depend on it.
+- [Turns without a stop](../../../docs/errata/2026-11-19-turns-without-a-stop.md): nothing says whether a track or bridge turn is running, which decides `SUP` against `READ`, `X.agent_only` against `X.no_anchor`, and `agent_running_s`. Cases (a), (b) and (e) use the proposed rule and name the erratum on the rows that depend on it. Their `agent_running_s` totals depend on it too; their credited seconds, levels, fills and `logged_s` don't.
 - [Track match windows](../../../docs/errata/2026-11-19-track-match-windows.md): a track call 10 to 30 s from a hook prompt is both `track_matched` and `track_without_prompt`. No case sits in that gap; WP-SC1 needs the answer.
 
 ## Generating

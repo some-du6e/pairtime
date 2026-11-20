@@ -102,9 +102,12 @@ exp = tl.Expected(fx, sm="docs/PLAN.md WP-FX4 (b); DESIGN 5.2, 5.4, 6.2 D2 and D
                   start="14:00:00", end="14:09:00")
 exp.row("14:00", bucket=False, codes=["X.no_anchor"], note="As in (a): before any lead reaches back.")
 for m in ("14:01", "14:02", "14:03", "14:04", "14:05", "14:06"):
-    exp.row(m, credit={P: {"P": 60}}, uncredited={}, agent=0,
+    # From the first call on, agent_running_s 0 rests on the erratum, as in (a).
+    after_first_call = m >= "14:04"
+    exp.row(m, credit={P: {"P": 60}}, uncredited={}, agent=0, erratum=ERRATUM if after_first_call else None,
             note="Think parts from 14:01:00, and every typing part from 14:03:45 on, where every slot has "
-                 "key presses.")
+                 "key presses." + (" No track turn runs, so agent_running_s is 0; read literally, the turn the "
+                                   "14:04:00 call opens would run all minute." if after_first_call else ""))
 exp.row("14:07", credit={P: {"P": 9, "READ": 20}}, uncredited={"X.no_anchor": 31}, agent=0, erratum=ERRATUM,
         note="The last lead ends at the 14:07:09 call; its 20 s base drains until 14:07:29.")
 exp.row("14:08", bucket=False, codes=["X.no_anchor"], erratum=ERRATUM)
@@ -146,7 +149,9 @@ expected = exp.doc(
         "Every credited second rests on a keyboard-backed track anchor: level A, labeled via_track. A level-A "
         "minute is recommended as credited (SM 5.4), so these are submittable; the keyboard is the evidence.",
         "logged_s and ai_logged_s are still 0: D19 drops cli.track records whatever their level.",
-        "The 20 s READ in 14:07 and its X.no_anchor seconds depend on the erratum, as in (a).",
+        "The 20 s READ in 14:07, its X.no_anchor seconds and agent_running_s from 14:04 on, its total included, "
+        "depend on the erratum, as in (a): read literally, the turn the 14:04:00 call opens would run to the end "
+        "of the window, 300 s.",
     ],
 )
 

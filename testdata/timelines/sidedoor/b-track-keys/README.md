@@ -31,4 +31,4 @@ The typing part of a track lead is realized only in slots with key input. From 1
 
 ## Errata
 
-[Turns without a stop](../../../../docs/errata/2026-11-19-turns-without-a-stop.md), as in (a). The 20 s after the last call are `READ`, the rest of 14:07 is `X.no_anchor`, and 14:08 has no bucket, under the proposed rule. Rows 14:07 and 14:08 name it.
+[Turns without a stop](../../../../docs/errata/2026-11-19-turns-without-a-stop.md), as in (a). Under the proposed rule the 20 s after the last call are `READ`, the rest of 14:07 is `X.no_anchor`, `agent_running_s` is 0, and 14:08 has no bucket. Read literally, the turn the 14:04:00 call opens would run from then on, so rows 14:04 to 14:08 name it, and the `agent_running_s` total depends on it too. The 389 s and their level don't.

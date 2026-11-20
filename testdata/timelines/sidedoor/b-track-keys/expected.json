@@ -75,7 +75,8 @@
       },
       "uncredited": {},
       "agent_running_s": 0,
-      "note": "Think parts from 14:01:00, and every typing part from 14:03:45 on, where every slot has key presses."
+      "note": "Think parts from 14:01:00, and every typing part from 14:03:45 on, where every slot has key presses. No track turn runs, so agent_running_s is 0; read literally, the turn the 14:04:00 call opens would run all minute.",
+      "erratum": "2026-11-19-turns-without-a-stop"
     },
     {
       "start": "2026-11-25T20:05:00Z",
@@ -89,7 +90,8 @@
       },
       "uncredited": {},
       "agent_running_s": 0,
-      "note": "Think parts from 14:01:00, and every typing part from 14:03:45 on, where every slot has key presses."
+      "note": "Think parts from 14:01:00, and every typing part from 14:03:45 on, where every slot has key presses. No track turn runs, so agent_running_s is 0; read literally, the turn the 14:04:00 call opens would run all minute.",
+      "erratum": "2026-11-19-turns-without-a-stop"
     },
     {
       "start": "2026-11-25T20:06:00Z",
@@ -103,7 +105,8 @@
       },
       "uncredited": {},
       "agent_running_s": 0,
-      "note": "Think parts from 14:01:00, and every typing part from 14:03:45 on, where every slot has key presses."
+      "note": "Think parts from 14:01:00, and every typing part from 14:03:45 on, where every slot has key presses. No track turn runs, so agent_running_s is 0; read literally, the turn the 14:04:00 call opens would run all minute.",
+      "erratum": "2026-11-19-turns-without-a-stop"
     },
     {
       "start": "2026-11-25T20:07:00Z",
@@ -149,6 +152,6 @@
   "notes": [
     "Every credited second rests on a keyboard-backed track anchor: level A, labeled via_track. A level-A minute is recommended as credited (SM 5.4), so these are submittable; the keyboard is the evidence.",
     "logged_s and ai_logged_s are still 0: D19 drops cli.track records whatever their level.",
-    "The 20 s READ in 14:07 and its X.no_anchor seconds depend on the erratum, as in (a)."
+    "The 20 s READ in 14:07, its X.no_anchor seconds and agent_running_s from 14:04 on, its total included, depend on the erratum, as in (a): read literally, the turn the 14:04:00 call opens would run to the end of the window, 300 s."
   ]
 }

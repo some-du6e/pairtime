@@ -1,6 +1,6 @@
 # Erratum: whether a turn with no `agent.stop` is running
 
-Date 2026-11-19. Raised by WP-FX4. Status: waiting for Karim. Until Karim decides, the side-door cases (a), (b) and (e) in `testdata/timelines/sidedoor` use the rule proposed below, and every row that depends on it names this erratum. Their credited seconds, levels, reading fills and `logged_s` don't depend on it.
+Date 2026-11-19. Raised by WP-FX4. Status: waiting for Karim. Until Karim decides, the side-door cases (a), (b) and (e) in `testdata/timelines/sidedoor` use the rule proposed below, and every row that depends on it names this erratum. Their `agent_running_s` totals depend on it too, as does the split of credit between `SUP` and `READ` and of uncredited seconds between `X.agent_only` and `X.no_anchor`. Their credited seconds, levels, reading fills and `logged_s` don't.
 
 ## Input
 
@@ -23,13 +23,13 @@ Each second of these turns gets one reason code, and each minute one `agent_runn
 
 SM 1.3 builds a turn from `prompt.submit` and `agent.*` events, with `t_submit` and `t_stop`, and `pkg/event`'s `Turn` says "TStop is 0 while the turn is still running." A turn that never records a stop would run for ever: every later drain `SUP`, every idle second `X.agent_only`, and `agent_running_s` growing all night after one `pairtime track` call. Nothing in SM or DESIGN says when such a turn stops.
 
-Case (a) shows what that costs. Ten track calls come from a loop with no agent behind them. Turns that ran for ever would put agent time on every minute after 14:04, and the chess clock would show agent work that never happened.
+Case (a) shows what that costs. Ten track calls come from a loop with no agent behind them. Turns that ran for ever would put agent time on every minute from 14:04 on, and the chess clock would show agent work that never happened.
 
 ## What the fixtures do
 
 They use the rule below. In (a) and (b) the track turns never run. Their drains are `READ`, the idle seconds after them are `X.no_anchor`, `agent_running_s` is 0, and 14:08 has no bucket. In (e) each bridge turn runs from its prompt at :03 to its edit at :06, so its 20 s base drains as 3 s of `SUP` and 17 s of `READ`, `agent_running_s` is 3 in each turn's minute, and the idle seconds after it are `X.no_anchor`.
 
-The rows that depend on it: (a) 14:06 to 14:08, (b) 14:07 and 14:08, (e) 14:03 to 14:08. Credited seconds don't move, because `SUP` and `READ` both credit, at the same level.
+The rows that depend on it: (a) 14:04 to 14:08, (b) 14:04 to 14:08, (e) 14:03 to 14:08. In (a) and (b) the first track turn starts at 14:04:00, so read literally, or under alternative 2 below, the track turns would cover every second from then to the end of the window: 60 s of `agent_running_s` in each of those minutes, 300 s in each case's total, and a bucket for 14:08. The `agent_running_s` totals of all three cases depend on it. Credited seconds don't move, because `SUP` and `READ` both credit, at the same level.
 
 ## A rule to decide it
 

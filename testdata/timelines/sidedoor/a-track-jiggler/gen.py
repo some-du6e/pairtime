@@ -100,9 +100,15 @@ exp = tl.Expected(fx, sm="docs/PLAN.md WP-FX4 (a); DESIGN 5.2, 5.4, 6.2 D2, D3 a
                   start="14:00:00", end="14:09:00")
 exp.row("14:00", bucket=False, codes=["X.no_anchor"],
         note="The jiggler on a focused terminal, before any lead reaches back this far.")
-for m in ("14:01", "14:02", "14:03", "14:04", "14:05"):
+for m in ("14:01", "14:02", "14:03"):
     exp.row(m, credit={P: {"P": 60}}, uncredited={}, agent=0,
             note="Inside the think parts of the track anchors, which need presence only.")
+# From the first call on, agent_running_s 0 rests on the erratum too: read
+# literally, the turn the 14:04:00 call opens would run from then on.
+for m in ("14:04", "14:05"):
+    exp.row(m, credit={P: {"P": 60}}, uncredited={}, agent=0, erratum=ERRATUM,
+            note="Inside the think parts of the track anchors, which need presence only. No track turn runs, so "
+                 "agent_running_s is 0; read literally, the turn the 14:04:00 call opens would run all minute.")
 exp.row("14:06", credit={P: {"P": 9, "READ": 50}}, uncredited={"X.no_anchor": 1}, agent=0, erratum=ERRATUM,
         note="The last think part ends at 14:06:09, 60 s before the last call. Then each call's 20 s base "
              "drains: 18 s left of the 14:06:06 call's, 20 s of the 14:06:27 call's, and 12 s of the 14:06:48 "
@@ -155,8 +161,10 @@ expected = exp.doc(
         "level_c_cap_s is min(level_c_s, ai_logged_s / 3), the most a program that opts in to level C could "
         "take inside forge-verified commit intervals (DESIGN 5.2, 6.2 D5; SM 5.4). It is 0, so the loop earns "
         "0 submittable seconds whatever the program's policy, as DESIGN 5.2 requires.",
-        "The READ seconds and the X.no_anchor seconds after 14:06:09 depend on the erratum: a track turn has no "
-        "agent record, so the rules don't say whether it is running, which would make them SUP and X.agent_only.",
+        "The READ seconds, the X.no_anchor seconds after 14:06:09 and agent_running_s from 14:04 on, its total "
+        "included, depend on the erratum: a track turn has no agent record, so the rules don't say whether it is "
+        "running. Read literally, the turn the 14:04:00 call opens would run to the end of the window, making "
+        "them SUP, X.agent_only and 300 s, and 14:08 would get a bucket.",
     ],
 )
 

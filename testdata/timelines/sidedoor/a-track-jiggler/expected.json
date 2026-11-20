@@ -75,7 +75,8 @@
       },
       "uncredited": {},
       "agent_running_s": 0,
-      "note": "Inside the think parts of the track anchors, which need presence only."
+      "note": "Inside the think parts of the track anchors, which need presence only. No track turn runs, so agent_running_s is 0; read literally, the turn the 14:04:00 call opens would run all minute.",
+      "erratum": "2026-11-19-turns-without-a-stop"
     },
     {
       "start": "2026-11-25T20:05:00Z",
@@ -89,7 +90,8 @@
       },
       "uncredited": {},
       "agent_running_s": 0,
-      "note": "Inside the think parts of the track anchors, which need presence only."
+      "note": "Inside the think parts of the track anchors, which need presence only. No track turn runs, so agent_running_s is 0; read literally, the turn the 14:04:00 call opens would run all minute.",
+      "erratum": "2026-11-19-turns-without-a-stop"
     },
     {
       "start": "2026-11-25T20:06:00Z",
@@ -152,6 +154,6 @@
     "Every credited second rests on a track anchor, so all 387 s are level C and labeled via_track.",
     "logged_s and ai_logged_s are 0: cli.track records never count (DESIGN 6.2 D19), and nothing else of the session reaches pairtime.",
     "level_c_cap_s is min(level_c_s, ai_logged_s / 3), the most a program that opts in to level C could take inside forge-verified commit intervals (DESIGN 5.2, 6.2 D5; SM 5.4). It is 0, so the loop earns 0 submittable seconds whatever the program's policy, as DESIGN 5.2 requires.",
-    "The READ seconds and the X.no_anchor seconds after 14:06:09 depend on the erratum: a track turn has no agent record, so the rules don't say whether it is running, which would make them SUP and X.agent_only."
+    "The READ seconds, the X.no_anchor seconds after 14:06:09 and agent_running_s from 14:04 on, its total included, depend on the erratum: a track turn has no agent record, so the rules don't say whether it is running. Read literally, the turn the 14:04:00 call opens would run to the end of the window, making them SUP, X.agent_only and 300 s, and 14:08 would get a bucket."
   ]
 }
