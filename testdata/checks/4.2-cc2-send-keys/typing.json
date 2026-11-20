@@ -1,0 +1,9 @@
+{
+  "device_id": "d_61e266631200",
+  "module": "on",
+  "vm": false,
+  "note": "A stand-in: pkg/event has no field for the typing module's per-15-second key-down counts and injected share yet (DESIGN 7.2 rank 5, M5). Each slot is {start, keys, injected}; slots not listed have no key-down. keys counts every key-down, injected the ones the module saw injected.",
+  "slots": [
+    {"start": 1795422570000, "keys": 7, "injected": 0}
+  ]
+}
