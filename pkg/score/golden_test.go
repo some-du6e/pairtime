@@ -25,13 +25,15 @@ import (
 // compact JSON object a line, local fields included. The goldens are
 // regression guards, not oracles: they hold what this code outputs, so any
 // change to that output fails TestGolden until the PR rewrites them, and
-// ci.yml's score-regression step fails a PR that rewrites them without a
-// change to pkg/score/VERSION. To rewrite them:
+// ci.yml's score-regression guard fails a PR that rewrites them without a
+// higher pkg/score/VERSION, unless a golden's own timeline inputs change in
+// the same PR (tools/ci/score_regression.sh). To rewrite them:
 //
 //	go test ./pkg/score -run '^TestGolden$' -update
 //
 // which ci.yml's score-regression step also does when they differ, for the
-// run's score-goldens artifact.
+// run's score-goldens artifact. gh run download never overwrites a file, so
+// delete the old goldens before downloading it (AGENTS.md).
 
 // goldenFile is the name of a timeline's golden.
 const goldenFile = "golden.jsonl"
@@ -116,7 +118,7 @@ func TestGolden(t *testing.T) {
 				t.Fatal(err)
 			}
 			if !bytes.Equal(got, want) {
-				t.Errorf("the output differs from %s, which is a regression guard: if the change is intended, rewrite the goldens with -update and bump pkg/score/VERSION in the same PR (DESIGN 6.6). First difference, %s",
+				t.Errorf("the output differs from %s, which is a regression guard: if the change is intended, rewrite the goldens with -update and raise pkg/score/VERSION in the same PR (DESIGN 6.6). First difference, %s",
 					path, lineDiff(got, want))
 			}
 		})

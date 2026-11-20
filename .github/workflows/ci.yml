@@ -384,7 +384,7 @@ jobs:
         # TestGolden, which go test above runs too, fails when the output
         # differs from them. Then this step writes the output into the
         # goldens for the score-goldens artifact below. A PR that means to
-        # change the output commits them with a new pkg/score/VERSION.
+        # change the output commits them with a higher pkg/score/VERSION.
         id: goldens
         if: ${{ !cancelled() }}
         run: |
@@ -393,7 +393,7 @@ jobs:
           fi
           go test -count=1 -run '^TestGolden$' ./pkg/score -update >/dev/null || true
           git status --short -- testdata/timelines
-          echo "::error::pkg/score's bucket output differs from testdata/timelines/*/golden.jsonl. This run's score-goldens artifact holds the new goldens: gh run download $GITHUB_RUN_ID -n score-goldens -D testdata/timelines. Commit them with a new pkg/score/VERSION if the change is meant (DESIGN 6.6)."
+          echo "::error::pkg/score's bucket output differs from testdata/timelines/*/golden.jsonl. This run's score-goldens artifact holds every timeline's new golden. gh run download never overwrites a file, so delete the old ones first: find testdata/timelines -name golden.jsonl -delete && gh run download $GITHUB_RUN_ID -n score-goldens -D testdata/timelines. Commit them with a higher pkg/score/VERSION if the change is meant (DESIGN 6.6)."
           exit 1
 
       - name: Upload the rewritten goldens
@@ -406,8 +406,14 @@ jobs:
 
       - name: Score regression guard
         # A PR that rewrites a golden changes the scorer's output, so it
-        # changes pkg/score/VERSION too (DESIGN 6.6, EV WP1.7). The guard
-        # reads the same diff as the oracle guard.
+        # needs a higher pkg/score/VERSION (DESIGN 6.6, EV WP1.7), unless
+        # the golden's own timeline inputs change with it, which makes the
+        # PR an oracle change. The guard reads the same diff as the oracle
+        # guard, the version at the base and at the merge commit, and, for
+        # a PATCH-only bump, both commits' goldens.
         if: ${{ !cancelled() && github.event_name == 'pull_request' }}
         run: |
+          OLD_VERSION=$(git show HEAD^1:pkg/score/VERSION 2>/dev/null || true)
+          NEW_VERSION=$(git show HEAD:pkg/score/VERSION 2>/dev/null || true)
+          export OLD_VERSION NEW_VERSION SCORE_BASE=HEAD^1 SCORE_HEAD=HEAD
           git -c core.quotePath=false diff --name-status -M HEAD^1 HEAD | bash tools/ci/score_regression.sh
