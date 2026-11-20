@@ -157,6 +157,28 @@ func TestShellcheck(t *testing.T) {
 	}
 }
 
+// A CRLF checkout of a shell script makes sh fail on the carriage returns,
+// and Git for Windows checks text out with CRLF by default.
+func TestLineEndings(t *testing.T) {
+	unixOnly(t)
+	git := need(t, "git")
+	if r := run(t, ".", nil, nil, git, "rev-parse", "--is-inside-work-tree"); r.code != 0 {
+		t.Skip("not a git checkout")
+	}
+	scripts, err := filepath.Glob("*.sh")
+	if err != nil || len(scripts) == 0 {
+		t.Fatalf("no shell scripts in the kit: %v", err)
+	}
+	for _, f := range scripts {
+		t.Run(f+" is checked out with LF endings whatever core.autocrlf says", func(t *testing.T) {
+			r := run(t, ".", nil, nil, git, "check-attr", "eol", "--", f)
+			if got := strings.TrimSpace(r.stdout); got != f+": eol: lf" {
+				t.Fatalf("git check-attr eol = %q, want %q", got, f+": eol: lf")
+			}
+		})
+	}
+}
+
 // dumper is one of the two hook dumpers, as the command line that runs it.
 type dumper struct {
 	name string
