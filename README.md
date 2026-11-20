@@ -18,6 +18,7 @@ One Go module holds the client, the server and the code they share.
 | `cmd/pairtimed` | The server: accounts, projects, rollups and the live dashboard, once they exist |
 | `pkg/event` | The event model from the [struggle-metric spec](docs/design/struggle-metric.md): the envelope, the 18 event kinds, the records the scorer derives from them, and validation for all of it |
 | `internal/agent` | The background agent: its data directories, the single-instance lock, `config.toml`, `state.json`, the scheduler every timer goes through, and the HTTP server on 127.0.0.1 |
+| `internal/platform` | Code for one OS each, in `windows`, `darwin` and `linux`. So far it's the OS half of the device keystore in `internal/agent/keys`: DPAPI on Windows, the Keychain on macOS and the Secret Service on Linux |
 | `internal/webui` | The local dashboard's built files, embedded in the client. A placeholder stands in until the UI exists, so Go builds never need Node |
 | `internal/version` | Build info, set at link time |
 | `docs/schema/event.schema.json` | A JSON Schema for events, for adapters written in other languages. A test fails if it drifts from `pkg/event` |

@@ -88,6 +88,10 @@ var (
 // answer, so it gives a person time to type it.
 const DefaultTimeout = time.Minute
 
+// quickTimeout bounds Destroy's calls to stores that keystore.json doesn't
+// name.
+const quickTimeout = 5 * time.Second
+
 // Options say where a keystore is and which stores it may use.
 type Options struct {
 	// Dir is the installation's data directory (home.Dirs.Data), an
@@ -524,11 +528,21 @@ func Destroy(opts Options) error {
 	for _, a := range m.Archived {
 		keys = append(keys, key{m.archivedItem(a.ID), a.Store})
 	}
+	// A store keystore.json doesn't name for a key can hold it only if a
+	// first run's call there timed out and finished late. It gets a short
+	// deadline, so a locked keyring can't hold up "delete everything".
+	quick := *o
+	quick.timeout = min(o.timeout, quickTimeout)
 	var errs []error
 	for _, s := range o.stores {
 		for _, kk := range keys {
-			err := o.del(s, kk.item)
-			if err == nil || errors.Is(err, ErrNotFound) || s.Kind() != kk.store {
+			holds := s.Kind() == kk.store
+			call := o
+			if !holds {
+				call = &quick
+			}
+			err := call.del(s, kk.item)
+			if err == nil || errors.Is(err, ErrNotFound) || !holds {
 				continue
 			}
 			errs = append(errs, fmt.Errorf("keys: deleting a device key from %s: %w", s.Kind().Description(), err))
