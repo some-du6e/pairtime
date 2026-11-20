@@ -178,15 +178,17 @@ def build(tabs):
     output("13:57:59.600", CODEX, "B0", 160, final=True)
     stop("13:58:00.000", CODEX, "B0")
 
-    # 13:59, window 1: he starts Claude Code for A and types its prompt.
+    # 13:59, window 1: he starts Claude Code for A and types its prompt. In
+    # auto mode, as in 6.4: A's agent edits and builds while he is in other
+    # windows, and SM's rows have no permission answer (README.md).
     if tabs:
         # Tab 1 of the same window: the OS sees nothing until the new
         # session changes what the window hosts.
-        session_start("13:59:05.000", CC, "cli", "terminal_app", True, "default")
+        session_start("13:59:05.000", CC, "cli", "terminal_app", True, "auto")
         term("13:59:05.000", S_A, S_B)
     else:
         term("13:59:00.000")
-        session_start("13:59:05.000", CC, "cli", "terminal_app", True, "default")
+        session_start("13:59:05.000", CC, "cli", "terminal_app", True, "auto")
         term("13:59:05.000", S_A)
 
     # 14:01:30, A's prompt. Its agent works until 14:09:00: 300 changed
@@ -263,12 +265,12 @@ def build(tabs):
     tool("14:25:31.000", CODEX, "edit", start_ms=400, files=[FB[2]], added=7, removed=3)
     output("14:25:58.000", CODEX, "B2", 80, final=True)
     stop("14:26:00.000", CODEX, "B2")
-    # WakaTime's 2-minute rule for one file, sooner on a save: every 60 to
-    # 80 s while he codes, the last after the window so its lead covers
-    # 14:29.
-    for t, act in (("14:26:10.000", "save"), ("14:27:20.000", "edit"), ("14:28:35.000", "save"),
-                   ("14:29:45.000", "edit"), ("14:30:55.000", "save")):
-        d_edits.append(heartbeat(t, "vscode", act, F_D, 3, D))
+    # He saves every 70 to 75 s while he codes. In one file WakaTime sends a
+    # heartbeat on a save and otherwise none until two minutes after the
+    # last (HC 1.5), so each of these is a save. The last comes after the
+    # window, so its lead covers 14:29.
+    for t in ("14:26:10.000", "14:27:20.000", "14:28:35.000", "14:29:45.000", "14:30:55.000"):
+        d_edits.append(heartbeat(t, "vscode", "save", F_D, 3, D))
 
     events = fx.build()
     # emit returns the raw row; build keeps its data dict, so that finds the
