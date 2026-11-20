@@ -128,6 +128,27 @@ func TestReturnRule(t *testing.T) {
 			{at: 450, present: event.PresentYes},
 		})
 	})
+	t.Run("prose a plugin claims during the silence isn't unread prose, however many words it claims (DESIGN 5.2)", func(t *testing.T) {
+		// VS Code on p_1 hosts no session, so every session of p_1 counts:
+		// s_1, which hooks and a log reader see, and s_9, a plugin's.
+		b := newTL(false)
+		b.focus(at(0), event.AppEditor, "p_1")
+		b.start(at(0), "s_1", "p_1", event.EntrypointCLI, event.ParentTerminalApp, true)
+		b.mouse(every(at(1), at(96), 5000)...)
+		b.mouse(at(100))
+		b.prompt(at(30), event.ViaHook, "s_1", "p_1", "t_1", 30)
+		b.harness(at(102), event.ViaLog, "s_1", "p_1", &event.AgentOutput{TurnKey: "t_1", Words: 160, IsFinal: true})
+		b.harness(at(102), event.ViaHook, "s_1", "p_1", &event.AgentStop{TurnKey: "t_1", StopReason: event.StopEndTurn})
+		b.emit(at(200), event.Envelope{Source: event.SourceHook, Via: event.ViaPlugin, Harness: event.HarnessOther,
+			SessionKey: "s_9", ProjectKey: "p_1"}, &event.AgentOutput{TurnKey: "t_9", Words: 50_000})
+		b.press(every(atMS(451_500), atMS(456_500), 1000)...)
+		b.editor(at(457), event.ViaEditor, "p_1", event.ActEdit, event.EditSourceHuman)
+		b.samples(at(0), at(511))
+		got := b.run(t, Device{})
+		if len(got.Returns) != 1 || got.Returns[0].UnreadWords != 160 || got.Returns[0].ReadUntil != at(130+53) {
+			t.Errorf("returned runs %+v, want one with the 160 hooked words read until 183 s", got.Returns)
+		}
+	})
 	t.Run("SM 2.1: the same silence followed by editor navigation earns only the tail", func(t *testing.T) {
 		got := silence(event.AppEditor, 451, func(b *tl) {
 			b.editor(at(455), event.ViaEditor, "p_1", event.ActNavigate, event.EditSourceUnknown)

@@ -122,7 +122,10 @@ func (d *deriver) breakIn(from, to int64) bool {
 // unreadWords counts the prose the agent showed, up to the run's end, in
 // the sessions the focused window hosts, or in the focused project's
 // sessions if it hosts none, since the person last had each in focus with
-// input (SM 2.1's unread_prose_words).
+// input (SM 2.1's unread_prose_words). Only output that the harness's own
+// hooks or logs report counts: a plugin or the bridge can claim any word
+// count, and as many turns as it likes, so a cap per turn wouldn't bound it
+// (DESIGN 5.2).
 func (d *deriver) unreadWords(f *focusRec, run silentRun, end int64) int64 {
 	var keys []string
 	if len(f.hosted) > 0 {
@@ -143,7 +146,7 @@ func (d *deriver) unreadWords(f *focusRec, run silentRun, end int64) int64 {
 		}
 		seen := d.lastSeen(s, run.i)
 		for _, o := range s.outputs {
-			if o.t > seen && o.t <= end && !(s.native && sideDoor(d.recs[o.pos].Via)) {
+			if o.t > seen && o.t <= end && !sideDoor(d.recs[o.pos].Via) {
 				words = addCount(words, count(o.d.Words))
 			}
 		}
