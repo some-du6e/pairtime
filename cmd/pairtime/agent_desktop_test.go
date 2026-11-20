@@ -5,6 +5,8 @@
 package main
 
 import (
+	"fmt"
+	"os"
 	"os/exec"
 	"slices"
 	"strings"
@@ -14,15 +16,17 @@ import (
 	"github.com/some-du6e/pairtime/pkg/event"
 )
 
-// startWindow starts an X client in the test's display and returns its
-// window, which xdotool search finds by the match it is given, such as
-// "--class" and the class the client was started with.
-func startWindow(t *testing.T, match []string, args ...string) string {
+// startWindow starts an X client in the test's display, with env added to
+// its environment, and returns its window, which xdotool search finds by
+// the match it is given, such as "--class" and the class the client was
+// started with.
+func startWindow(t *testing.T, match, env []string, args ...string) string {
 	t.Helper()
 	if _, err := exec.LookPath(args[0]); err != nil {
-		t.Fatalf("%s isn't installed: platform.yml installs it with x11-utils or xterm", args[0])
+		t.Fatalf("%s isn't installed: platform.yml installs it with xterm", args[0])
 	}
 	cmd := exec.Command(args[0], args[1:]...)
+	cmd.Env = append(os.Environ(), env...)
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -49,17 +53,18 @@ func xdotool(t *testing.T, args ...string) {
 // TestDesktopAgentOnX11 runs the real `pairtime agent` under Xvfb and
 // openbox (tools/ci/desktop_session.sh) and checks WP-OS9's Linux wiring
 // from the ledger it writes: the X server's idle counter and the window
-// manager's _NET_ACTIVE_WINDOW reach os.presence and os.focus. Focus on an
-// xterm is what makes the project context live (DESIGN 3.3).
+// manager's _NET_ACTIVE_WINDOW reach os.presence and os.focus, and the
+// window's process, read from the X server and joined to /proc, hosts the
+// harness session running in it (SM 3.2). Focus on an xterm, and the fake
+// claude, make the project context live (DESIGN 3.3).
 //
-// Two xterms would make one record, not two: both are the same app hosting
-// no session, so the second record would say what the first did, and the
-// focus component writes it only when it says something new (WP-OS2). So
-// the switch goes between an xterm and xmessage, which the app-class table
-// doesn't know, and back.
+// One xterm runs the fake claude as its program, as a person runs claude
+// in a terminal; the other runs nothing pairtime knows. Two xterms that
+// both hosted nothing would make one record, not two, since the focus
+// component writes a record only when it says something new (WP-OS2).
 func TestDesktopAgentOnX11(t *testing.T) {
-	term := startWindow(t, []string{"--class", "PairtimeTerm"}, "xterm", "-class", "PairtimeTerm", "-e", "sleep", "600")
-	note := startWindow(t, []string{"--classname", "PairtimeNote"}, "xmessage", "-name", "PairtimeNote", "pairtime")
+	claude := startWindow(t, []string{"--class", "PairtimeClaude"}, []string{sleepEnv + "=10m"}, "xterm", "-class", "PairtimeClaude", "-e", fakeHarness(t))
+	plain := startWindow(t, []string{"--class", "PairtimePlain"}, nil, "xterm", "-class", "PairtimePlain", "-e", "sleep", "600")
 	ptHome := t.TempDir()
 	var out syncBuffer
 	cmd := startPairtime(t, ptHome, "agent", &out)
@@ -74,6 +79,9 @@ func TestDesktopAgentOnX11(t *testing.T) {
 	st := waitStatus(t, ptHome, 30*time.Second, "found its X11 sources", func(s agentStatus) bool {
 		return s.Signals.Idle.Via != "" && s.Signals.Focus.Via != ""
 	})
+	// The process scan runs on the minute. After its first run the agent
+	// knows the fake claude's session, so the xterm it runs in hosts it.
+	waitStatus(t, ptHome, 90*time.Second, "run its process scan", func(s agentStatus) bool { return s.runs("procs.scan") > 0 })
 
 	// Each switch waits for the window manager, and then a moment for
 	// the agent, which reads _NET_ACTIVE_WINDOW 50 ms after it changes.
@@ -81,15 +89,14 @@ func TestDesktopAgentOnX11(t *testing.T) {
 		xdotool(t, "windowactivate", "--sync", w)
 		time.Sleep(500 * time.Millisecond)
 	}
-	activate(term)
+	activate(claude)
 	// Two seconds without input, then a key, then focus moves at once:
 	// the sample presence takes for the switch is the first after the
 	// key, so it has to show the key.
 	time.Sleep(2 * time.Second)
 	xdotool(t, "key", "shift")
 	keyAt := time.Now()
-	activate(note)
-	activate(term)
+	activate(plain)
 	time.Sleep(time.Second)
 	stopAgent(t, ptHome, cmd)
 	focus := recorded(t, ptHome, event.KindOSFocus)
@@ -108,15 +115,16 @@ func TestDesktopAgentOnX11(t *testing.T) {
 			},
 		},
 		{
-			name: "xdotool windowactivate from the xterm to xmessage and back gives an os.focus record for each, a terminal, other and a terminal",
+			name: "xdotool windowactivate between two xterms gives two os.focus records, the first hosting the fake claude's session and the second none",
 			check: func(t *testing.T) {
-				var classes []event.AppClass
+				var got []string
 				for _, ev := range focus {
-					classes = append(classes, ev.Data.(*event.OSFocus).AppClass)
+					f := ev.Data.(*event.OSFocus)
+					got = append(got, fmt.Sprintf("%s hosting %d", f.AppClass, len(f.HostedSessions)))
 				}
-				want := []event.AppClass{event.AppTerminal, event.AppOther, event.AppTerminal}
-				if len(classes) < len(want) || !slices.Equal(classes[len(classes)-len(want):], want) {
-					t.Errorf("os.focus classes %v, want them to end with %v", classes, want)
+				want := []string{"terminal hosting 1", "terminal hosting 0"}
+				if len(got) < len(want) || !slices.Equal(got[len(got)-len(want):], want) {
+					t.Errorf("os.focus records %q, want them to end with %q", got, want)
 				}
 			},
 		},

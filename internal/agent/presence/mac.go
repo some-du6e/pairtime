@@ -40,9 +40,12 @@ func (p *MacPower) Power(at time.Time, op event.PowerOp) {
 // The key-down idle time goes in idle_keys_s as macOS gives it. It counts
 // key-downs that any process allowed to post events sends to the HID
 // system state, as well as the person's (internal/platform/darwin, WP-OS3's
-// finding), so it can withhold credit but never earns level A on its own.
-// The scorer applies that rule; presence only records the value
-// (D-macos-hid-posted).
+// finding). D-macos-hid-posted decides that such a value may only withhold
+// credit and never makes an anchor level A, but that isn't in force yet:
+// SM 5.1, DESIGN 6.4 and pkg/score's level() still make an anchor with key
+// presses in its window level A, whatever the OS. Their change has to land
+// before the scorer loop (WP-AG4) scores a Mac's minutes. Presence only
+// records the value.
 func MacOS(read func() (event.OSPresence, error), power *MacPower) OS {
 	o := OS{
 		Idle: func() (Idle, error) {

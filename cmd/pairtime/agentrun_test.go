@@ -43,9 +43,9 @@ func init() {
 	}
 }
 
-// startFakeHarness starts a copy of the test binary named claude, which
-// sleeps until the test ends.
-func startFakeHarness(t *testing.T) {
+// fakeHarness writes a copy of the test binary named claude and returns its
+// path. Started with sleepEnv set, it is a harness session process.
+func fakeHarness(t *testing.T) string {
 	t.Helper()
 	exe, err := os.Executable()
 	if err != nil {
@@ -59,7 +59,14 @@ func startFakeHarness(t *testing.T) {
 	if err := os.WriteFile(fake, b, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	cmd := exec.Command(fake)
+	return fake
+}
+
+// startFakeHarness starts a copy of the test binary named claude, which
+// sleeps until the test ends.
+func startFakeHarness(t *testing.T) {
+	t.Helper()
+	cmd := exec.Command(fakeHarness(t))
 	cmd.Env = append(os.Environ(), sleepEnv+"=10m")
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)

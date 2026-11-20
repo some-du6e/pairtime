@@ -89,6 +89,17 @@ func loop(op event.PowerOp) func(r *macRig) {
 	}
 }
 
+// early calls the MacPower as the Loop would before the sampler watches,
+// and checks that the call leaves no trace.
+func early(op event.PowerOp) func(r *macRig) {
+	return func(r *macRig) {
+		r.power.Power(time.Now().Round(0), op)
+		if got := r.lines(); len(got) != 0 {
+			r.t.Errorf("Power(%s) before Start gave %q", op, got)
+		}
+	}
+}
+
 func TestMacOS(t *testing.T) {
 	keys := 7.25
 	tests := []struct {
@@ -151,10 +162,14 @@ func TestMacOS(t *testing.T) {
 			watching: []string{"suspend", "lock"},
 		},
 		{
+			// A lock and a suspend, because a replayed lock would seal and
+			// make the first sample read locked, and a replayed suspend
+			// would seal too. They go to the MacPower directly: loop expects
+			// a seal after each.
 			name:     "power events that come before the sampler watches are dropped, and seal nothing",
 			withLoop: true,
 			sample:   event.OSPresence{IdleAnyS: 2.5},
-			before:   []func(*macRig){loop(event.PowerUnlock), loop(event.PowerResume)},
+			before:   []func(*macRig){early(event.PowerLock), early(event.PowerSuspend)},
 			steps:    []func(*macRig){live},
 			want:     []string{"presence idle=2.5"},
 			watching: []string{"suspend", "lock"},
