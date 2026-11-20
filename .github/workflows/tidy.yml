@@ -12,11 +12,11 @@
 name: tidy
 
 on:
+  # Dispatch only. A pull_request trigger would run this job, which holds a
+  # contents: write token, on PRs nobody has reviewed yet, including
+  # Dependabot's action bumps, which edit this file. Try a changed tidy.yml
+  # by dispatching it on its own branch: gh workflow run tidy.yml --ref <branch>
   workflow_dispatch:
-  pull_request:
-    # A PR that edits this workflow gets a dry run, which pushes nothing.
-    paths:
-      - .github/workflows/tidy.yml
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
