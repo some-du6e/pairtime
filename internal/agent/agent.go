@@ -7,8 +7,9 @@
 // config directories, config.toml, state.json, the scheduler that every
 // timer goes through, and the HTTP server on 127.0.0.1. WP-AG2 added the
 // socket that hooks hand their messages to and the inbox they spool to
-// when the agent is down (packages ipc and inbox), and WP-OS8 the notifier
-// that shows the coach's notification. The other components of
+// when the agent is down (packages ipc and inbox), WP-AG3 what the agent
+// makes of each hook call (hooks.go, package hookpath), and WP-OS8 the
+// notifier that shows the coach's notification. The other components of
 // DESIGN 3.3 arrive in later work packages, each as a package under
 // internal/agent that Run starts.
 package agent

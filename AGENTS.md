@@ -17,7 +17,7 @@ A change is done when every workflow its PR started is green. A WP marked "Race:
 |---|---|---|
 | ci.yml | the one Linux job: lint, `go test ./...`, the seven-target cross-compile with the 15 MB client budget, and the license, oracle and provenance guards | every PR, pushes to main |
 | platform.yml | `go test` of the platform packages on Windows and macOS, and the desktop tests on Linux | PRs touching its paths, release tags |
-| footprint.yml | the release-built agent idle on Windows: working set under 25 MB, CPU time under 0.1% of wall time | PRs touching internal/agent, internal/platform/windows, cmd/pairtime, go.mod or go.sum (3 minutes idle); daily, 03:30 UTC, and release tags (10 minutes) |
+| footprint.yml | the release-built agent idle on Windows: working set under 25 MB, CPU time under 0.1% of wall time; then 200 warm `pairtime hook` calls, timed around each process, with p95 under 25 ms | PRs touching internal/agent, internal/platform/windows, cmd/pairtime, go.mod or go.sum (3 minutes idle); daily, 03:30 UTC, and release tags (10 minutes) |
 | nightly.yml | `go test -race` over internal/agent and internal/server | daily, 03:00 UTC |
 | postgres.yml | the server tests on Postgres 18 as well as SQLite | PRs touching its paths, the packages that hold SQL; daily, 03:30 UTC |
 | web.yml | npm licenses, svelte-check, vitest, the UI build, Playwright on Chromium against a `pairtime agent` built with that UI embedded, and SPDX headers | PRs touching web/, extension/, internal/webui/, docs/api/, or the agent code the smoke test runs (internal/agent/, internal/version/, cmd/pairtime/); release tags |
