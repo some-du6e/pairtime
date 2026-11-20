@@ -1,23 +1,12 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
-# Every PR's build and tests. One Linux job on purpose: the account's Actions
-# capacity is shared with another busy project, so new Linux checks join this
-# job as steps (DESIGN 3.13). The other workflows are path-filtered or manual;
-# AGENTS.md lists them.
+# Throwaway probe for PR #37 (WP-OS7): one Linux job that vets the keystore
+# for linux, windows and darwin, tests it with and without -race, and runs
+# the desktop tests under a private D-Bus. Lives only on wp-os7-probe.
 name: ci
 
 on:
-  pull_request:
-    # labeled and unlabeled rerun the job when Karim adds or removes the
-    # oracle-change label, which the oracle guard reads.
-    types: [opened, synchronize, reopened, labeled, unlabeled]
-  push:
-    branches: [main]
   workflow_dispatch:
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -28,181 +17,59 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
-      # pairtime never uses cgo (AGENTS.md). Vet, test and build all run
-      # without it, the same way the shipped binaries are built.
       CGO_ENABLED: "0"
+      PKGS: ./internal/agent/keys/... ./internal/platform/...
     defaults:
       run:
         shell: bash
     steps:
-      # Actions are pinned to commit SHAs; tags can be moved. Dependabot bumps them.
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
-        with:
-          # A PR is checked out as its merge commit; depth 2 brings its first
-          # parent, the base, for the oracle guard's diff.
-          fetch-depth: 2
 
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
           go-version-file: go.mod
-          # There is no go.sum (stdlib only), so key the build cache on go.mod.
           cache-dependency-path: go.mod
 
-      - name: License gate
+      - name: gofmt and license headers
         run: |
-          fail=0
-          if ! head -n 2 LICENSE | grep -q "GNU AFFERO GENERAL PUBLIC LICENSE"; then
-            echo "::error file=LICENSE::LICENSE is not the GNU AGPL text"
-            fail=1
-          fi
+          test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
           header="// SPDX-License-Identifier: AGPL-3.0-or-later"
+          fail=0
           while IFS= read -r f; do
-            if [ "$(head -n 1 "$f")" != "$header" ]; then
-              echo "::error file=$f,line=1::first line must be: $header"
-              fail=1
-            fi
+            [ "$(head -n 1 "$f")" = "$header" ] || { echo "::error file=$f::bad header"; fail=1; }
           done < <(git ls-files '*.go')
           exit "$fail"
 
-      - name: gofmt
-        run: |
-          unformatted=$(gofmt -l .)
-          if [ -n "$unformatted" ]; then
-            while IFS= read -r f; do
-              echo "::error file=$f::not gofmt-formatted; run gofmt -w $f"
-            done <<< "$unformatted"
-            exit 1
-          fi
-
-      # The ledger's byte format is docs/spec/ledger-v1.md. This checks the
-      # stdlib-only Python reference against the RFC 5869, RFC 4231 and pinned
-      # Certificate Transparency vectors, and checks that
-      # testdata/ledger/vectors.json regenerates byte for byte.
-      - name: Ledger reference selftest
-        run: python3 -I tools/ledger_ref.py selftest
-
-      - name: Upstream captures
-        # testdata/upstream: each capture's PROVENANCE.md, every JSON file
-        # against the schema next to it, and Robert's webhook vectors
-        # (testdata/upstream/README.md). Standard library only.
+      - name: go vet, linux
         if: ${{ !cancelled() }}
-        run: python3 -I testdata/upstream/check.py
+        run: go vet ./... && go vet -tags desktop $PKGS
 
-      - name: go vet
-        run: go vet ./...
+      - name: go vet, windows
+        if: ${{ !cancelled() }}
+        run: GOOS=windows go vet $PKGS
+
+      - name: go vet, darwin
+        if: ${{ !cancelled() }}
+        run: GOOS=darwin go vet $PKGS
 
       - name: go test
-        run: go test ./...
+        if: ${{ !cancelled() }}
+        run: go test -count=1 $PKGS
 
-      - name: Cross-compile
-        run: |
-          # Targets from docs/research/client-platform.md section 7. windows/386
-          # stays in while its open question 2 (do 32-bit machines exist?) is open.
-          targets="windows/amd64 windows/386 windows/arm64 darwin/amd64 darwin/arm64 linux/amd64 linux/arm64"
-          # Client binary budget: under 15 MB, client-platform.md sections 7 and 9.
-          budget=15000000
+      - name: go test -race
+        if: ${{ !cancelled() }}
+        env:
+          CGO_ENABLED: "1"
+        run: go test -race -count=1 ./internal/agent/keys/...
 
-          pkg=github.com/some-du6e/pairtime/internal/version
-          commit=$(git rev-parse HEAD)
-          date=$(TZ=UTC git log -1 --format=%cd --date=format-local:%Y-%m-%dT%H:%M:%SZ)
-          ldflags="-s -w -X $pkg.Version=v0.0.0-ci -X $pkg.Commit=$commit -X $pkg.Date=$date"
-          # Outside the checkout, so the build's VCS stamp doesn't see the
-          # binaries as uncommitted changes.
-          dist="$RUNNER_TEMP/dist"
-
-          {
-            echo "### Binary sizes (stripped, CGO_ENABLED=0)"
-            echo
-            echo "| target | binary | bytes |"
-            echo "|---|---|---:|"
-          } >> "$GITHUB_STEP_SUMMARY"
-
-          fail=0
-          for target in $targets; do
-            goos=${target%/*}
-            goarch=${target#*/}
-            ext=""
-            if [ "$goos" = windows ]; then ext=".exe"; fi
-            for cmd in pairtime pairtimed; do
-              out="$dist/${goos}_${goarch}/$cmd$ext"
-              # -buildvcs=false: the -X values must supply commit and date,
-              # so a flag that stops applying shows up as an empty field.
-              GOOS=$goos GOARCH=$goarch go build -trimpath -buildvcs=false -ldflags="$ldflags" -o "$out" "./cmd/$cmd"
-              size=$(stat -c %s "$out")
-              printf '%-14s %-10s %10d bytes\n' "$target" "$cmd" "$size"
-              echo "| $target | $cmd | $size |" >> "$GITHUB_STEP_SUMMARY"
-              if [ "$cmd" = pairtime ] && [ "$size" -gt "$budget" ]; then
-                echo "::error::$target $cmd is $size bytes, over the $budget-byte client budget"
-                fail=1
-              fi
-            done
-          done
-
-          # The runner is linux/amd64, so those binaries can run here. This
-          # catches a -X path that no longer matches the version package,
-          # which the linker would otherwise ignore without a word.
-          for cmd in pairtime pairtimed; do
-            got=$("$dist/linux_amd64/$cmd" version)
-            echo "$got"
-            case "$got" in
-              "$cmd v0.0.0-ci (commit ${commit:0:12}, $date, "*) ;;
-              *)
-                echo "::error::$cmd version didn't report the -ldflags values"
-                fail=1
-                ;;
-            esac
-          done
-          exit "$fail"
-
-      # The checks below run even when an earlier step failed, so one run
-      # reports every problem.
-
-      - name: Module licenses
+      - name: go test -tags desktop under a private D-Bus
         if: ${{ !cancelled() }}
         run: |
-          # Every module pairtime's packages and tests import, for each of
-          # the seven targets above, must be MIT, BSD-2-Clause, BSD-3-Clause,
-          # Apache-2.0 or ISC (DESIGN 3.12). licensecheck exits 1 on a bad
-          # license.
-          tool="$RUNNER_TEMP/licensecheck"
-          go build -o "$tool" ./tools/ci/licensecheck
-          "$tool"
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends dbus dbus-bin
+          dbus-run-session -- go test -count=1 -p 1 -tags desktop -v -run 'TestSecretService|TestThisOSStore|TestVectorsThroughThisOSStore' ./internal/agent/keys/... ./internal/platform/linux/... 2>&1 | tail -80
+          exit "${PIPESTATUS[0]}"
 
-          # The check must keep catching a GPL-3.0 module pulled in through a
-          # replace, and keep passing an MIT one (testdata/licensecheck).
-          "$tool" -C testdata/licensecheck/good
-          set +e
-          out=$("$tool" -C testdata/licensecheck/bad 2>&1)
-          code=$?
-          set -e
-          # Rewritten, so the expected errors don't become PR annotations: the
-          # runner reads ::error:: even after leading spaces.
-          sed 's/^::error::/expected error: /' <<<"$out"
-          if [ "$code" -ne 1 ] || ! grep -q '^::error::example.com/licensecheck/gpl@v0.0.0 => ../gpl: LICENSE:' <<<"$out"; then
-            echo "::error::licensecheck no longer rejects the GPL-3.0 module seeded in testdata/licensecheck/bad (exit $code)"
-            exit 1
-          fi
-          echo "the seeded GPL-3.0 module was rejected, as it should be"
-
-      - name: Fixture provenance
+      - name: go test -tags desktop, two packages side by side (fakesecret waits for the name)
         if: ${{ !cancelled() }}
-        # Every testdata/fixtures/<harness>/<version>/<os>/ directory has a
-        # PROVENANCE.md (DESIGN 5.1). fixtures.yml runs the same check by hand.
-        run: go run ./tools/ci/provenance testdata/fixtures
-
-      - name: Shell scripts
-        if: ${{ !cancelled() }}
-        run: |
-          # shellcheck comes with the runner image.
-          scripts=$(git ls-files -- '*.sh')
-          if [ -n "$scripts" ]; then
-            shellcheck $scripts
-          fi
-
-      - name: Oracle guard
-        # A PR may not change an existing oracle together with the code it
-        # checks, unless Karim adds the oracle-change label (docs/PLAN.md,
-        # ground rule 5). The labels come from the event payload.
-        if: ${{ !cancelled() && github.event_name == 'pull_request' }}
-        run: |
-          git -c core.quotePath=false diff --name-status -M HEAD^1 HEAD | bash tools/ci/oracle_guard.sh
+        run: dbus-run-session -- go test -count=1 -tags desktop ./internal/agent/keys/... ./internal/platform/linux/...
