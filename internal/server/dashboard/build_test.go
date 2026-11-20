@@ -3,6 +3,7 @@
 package dashboard
 
 import (
+	"encoding/json"
 	"math"
 	"reflect"
 	"strings"
@@ -197,6 +198,18 @@ func TestBuild(t *testing.T) {
 				}
 				if levels != 120 || kinds != 120 || v.Week.You.Total() != 120 || v.Week.Agent.Total() != 3000 {
 					t.Errorf("levels %v, kinds %v, you %v, agent %v; want 120, 120, 120 and 3000", levels, kinds, v.Week.You.Total(), v.Week.Agent.Total())
+				}
+			},
+		},
+		{
+			name: "an empty view's lists are empty, not null, in its JSON",
+			check: func(t *testing.T, v View) {
+				b, err := json.Marshal(v)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if strings.Contains(string(b), "null") {
+					t.Errorf("the JSON has a null: %s", b)
 				}
 			},
 		},

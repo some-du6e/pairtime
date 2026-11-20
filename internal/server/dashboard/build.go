@@ -93,6 +93,8 @@ func Build(m Meta, rows []Row) (View, error) {
 
 	// Projects are ordered by the owner's time over the month, then the
 	// agent's, then key, so the order never depends on the rows' order.
+	// Every list is empty rather than nil, so the JSON has [] and no null.
+	v.Projects = make([]Project, 0, len(month.projects))
 	for key := range month.projects {
 		name, ok := m.Names[key]
 		switch {
@@ -170,7 +172,7 @@ func (s *sums) add(r Row) {
 
 // projectList returns the projects with time, in order.
 func (s *sums) projectList(order []string) []ProjectTime {
-	var out []ProjectTime
+	out := []ProjectTime{}
 	for _, key := range order {
 		if p := s.projects[key]; p != nil {
 			out = append(out, *p)
@@ -180,7 +182,7 @@ func (s *sums) projectList(order []string) []ProjectTime {
 }
 
 func (s *sums) totals(order []string) Totals {
-	t := Totals{From: s.from, To: s.to, You: s.you, Agent: s.agent, Projects: s.projectList(order)}
+	t := Totals{From: s.from, To: s.to, You: s.you, Agent: s.agent, Projects: s.projectList(order), Kinds: []KindTime{}}
 	for _, l := range Levels {
 		t.Levels = append(t.Levels, LevelTime{Level: l, Time: s.levels[l]})
 	}

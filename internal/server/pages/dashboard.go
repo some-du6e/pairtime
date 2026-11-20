@@ -99,6 +99,9 @@ type dashPage struct {
 	// starts.
 	SignIn, SignupsOpen bool
 	Login               string
+	// SignedIn says the visitor is signed in, so the sample's banner links
+	// their own dashboard instead of offering sign-in.
+	SignedIn bool
 	// Owner is set on a signed-in account's own dashboard, and Empty when
 	// it has no time in the last 30 days yet, which shows how to link the
 	// app instead of empty charts.
@@ -214,6 +217,11 @@ type kindRow struct {
 
 // newDashPage lays v out for the page.
 func newDashPage(v dashboard.View, in SignIn, signupsOpen bool) (dashPage, error) {
+	return newDashPageFor(v, in, signupsOpen, false)
+}
+
+// newDashPageFor lays v out for a visitor who is signed in or not.
+func newDashPageFor(v dashboard.View, in SignIn, signupsOpen, signedIn bool) (dashPage, error) {
 	if len(v.Days) < dashboard.WeekDays {
 		return dashPage{}, fmt.Errorf("pages: the view has %d days, fewer than a week", len(v.Days))
 	}
@@ -222,7 +230,7 @@ func newDashPage(v dashboard.View, in SignIn, signupsOpen bool) (dashPage, error
 		agent = dashboard.AgentName
 	}
 	p := dashPage{
-		Sample: v.Sample, SignIn: in.Enabled, SignupsOpen: signupsOpen, Agent: agent, AgentStart: capitalize(agent),
+		Sample: v.Sample, SignIn: in.Enabled, SignupsOpen: signupsOpen, SignedIn: signedIn, Agent: agent, AgentStart: capitalize(agent),
 		Owner: !v.Sample, Empty: !v.Sample && v.Month.You.Total() == 0 && v.Month.Agent.Total() == 0,
 		Zone: v.TZ, ZonePath: ZonePath,
 	}
@@ -230,13 +238,31 @@ func newDashPage(v dashboard.View, in SignIn, signupsOpen bool) (dashPage, error
 		// Sign-in brings the visitor to their own dashboard.
 		p.Login = in.LoginPath + "?return_to=" + DashboardPath
 	}
+	// Colors go to the projects with time this week first, in the view's
+	// order, then to the rest, so the week chart never folds one of the
+	// week's projects into Other while a quieter one keeps a color. Each
+	// project keeps its color across the page.
+	inWeek := make(map[string]bool, len(v.Week.Projects))
+	for _, pt := range v.Week.Projects {
+		inWeek[pt.Project] = true
+	}
+	var order []string
+	for _, week := range []bool{true, false} {
+		for _, pr := range v.Projects {
+			if inWeek[pr.Key] == week {
+				order = append(order, pr.Key)
+			}
+		}
+	}
 	color := make(map[string]string, len(v.Projects))
 	names := make(map[string]string, len(v.Projects))
-	for i, pr := range v.Projects {
-		color[pr.Key] = "c" + strconv.Itoa(i+1)
+	for i, key := range order {
+		color[key] = "c" + strconv.Itoa(i+1)
 		if i >= colorSlots {
-			color[pr.Key] = "co"
+			color[key] = "co"
 		}
+	}
+	for _, pr := range v.Projects {
 		names[pr.Key] = pr.Name
 	}
 
@@ -554,9 +580,9 @@ func percents(values []float64) []int {
 }
 
 // dashboardPage renders v as the dashboard page, with what a visitor does
-// to get a dashboard of their own from in.
-func (s *Site) dashboardPage(v dashboard.View, in SignIn) ([]byte, error) {
-	d, err := newDashPage(v, in, s.signupsOpen)
+// to get a dashboard of their own from in and whether they are signed in.
+func (s *Site) dashboardPage(v dashboard.View, in SignIn, signedIn bool) ([]byte, error) {
+	d, err := newDashPageFor(v, in, s.signupsOpen, signedIn)
 	if err != nil {
 		return nil, err
 	}
@@ -584,33 +610,42 @@ func (s *Site) checkDashboard() error {
 		return err
 	}
 	for _, in := range []SignIn{{}, {Enabled: true, LoginPath: "/sign-in"}} {
-		page, err := s.dashboardPage(v, in)
-		if err != nil {
-			return err
-		}
-		if len(page) == 0 {
-			return errors.New("pages: the dashboard page rendered empty")
+		for _, signedIn := range []bool{false, in.Enabled} {
+			page, err := s.dashboardPage(v, in, signedIn)
+			if err != nil {
+				return err
+			}
+			if len(page) == 0 {
+				return errors.New("pages: the dashboard page rendered empty")
+			}
 		}
 	}
-	return nil
+	var off bytes.Buffer
+	return s.dash.ExecuteTemplate(&off, "off", nil)
 }
 
 // RegisterDemo adds GET /demo, the dashboard page drawn from the fixed
 // sample as of now(). Its banner says the data is made up, and what a
-// visitor does to get a dashboard of their own, which depends on in.
+// visitor does to get a dashboard of their own, which depends on in: a
+// signed-in visitor gets a link to theirs. So the page differs by session,
+// and by day, and nothing may store it.
 func (s *Site) RegisterDemo(mux *http.ServeMux, in SignIn, now func() time.Time) {
 	mux.HandleFunc("GET /demo", func(w http.ResponseWriter, r *http.Request) {
+		signedIn := false
+		if in.Enabled && in.Visitor != nil {
+			_, signedIn = in.Visitor(r)
+		}
 		v, err := dashboard.Demo{}.View(r.Context(), "", now())
 		var page []byte
 		if err == nil {
-			page, err = s.dashboardPage(v, in)
+			page, err = s.dashboardPage(v, in, signedIn)
 		}
 		if err != nil {
 			// New rendered the sample already, so this doesn't happen.
 			http.Error(w, "This page didn't render.", http.StatusInternalServerError)
 			return
 		}
-		writePage(w, http.StatusOK, page, s.csp, "no-cache", "no-referrer")
+		writePage(w, http.StatusOK, page, s.csp, "no-store", "no-referrer")
 	})
 }
 

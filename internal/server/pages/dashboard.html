@@ -3,7 +3,9 @@
 {{- if .Sample}}
 <div class="sample" role="note">
 <p><strong class="tag">Sample data</strong> These are thirty made-up days of a teen building three projects with {{.Agent}}. No real person&#39;s time is on this page. The project names are made up too, and your own dashboard shows each project by a short code instead, since your project names stay on your computer.</p>
-{{- if and .SignIn .SignupsOpen}}
+{{- if .SignedIn}}
+<p><a class="button" href="/dashboard">See your own dashboard</a></p>
+{{- else if and .SignIn .SignupsOpen}}
 <p><a class="button" href="{{.Login}}">Sign in with Hack Club</a> and run <code>pairtime login</code> on your computer, and your own dashboard shows your time the way this one does.</p>
 {{- else if .SignupsOpen}}
 <p>Sign-ups on this server are open, but sign-in isn&#39;t set up on it yet.</p>

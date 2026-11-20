@@ -210,6 +210,19 @@ func TestDemoPage(t *testing.T) {
 			notWant: []string{"Sign-ups are closed", "isn&#39;t set up"},
 		},
 		{
+			name:    "a signed-in visitor gets a link to their own dashboard instead of a sign-in button",
+			opts:    Options{SignupsOpen: true},
+			signIn:  signInOn("U0FAKEVERIFIED"),
+			want:    []string{`<a class="button" href="/dashboard">See your own dashboard</a>`},
+			notWant: []string{"Sign in with Hack Club</a>", "Sign-ups are closed"},
+		},
+		{
+			name:    "the agent's time is said to go to the project you were working in, which is all a bucket can tell (docs/errata/2026-11-20-server-chess-clock.md)",
+			signIn:  signInOn(""),
+			section: "today",
+			want:    []string{"Claude Code&#39;s time goes to the project you were working in at the time."},
+		},
+		{
 			name:    "the page has no script, no form, no style attribute and no SVG",
 			signIn:  signInOn(""),
 			notWant: []string{"<script", "<form", " style=", "<svg"},
@@ -248,7 +261,7 @@ func TestDemoHeaders(t *testing.T) {
 	}{
 		{name: "the page is HTML", header: "Content-Type", want: "text/html; charset=utf-8"},
 		{name: "browsers may not read it as another type", header: "X-Content-Type-Options", want: "nosniff"},
-		{name: "the page changes every day, so a cache must ask again", header: "Cache-Control", want: "no-cache"},
+		{name: "the page differs by session and changes every day, so nothing may store it", header: "Cache-Control", want: "no-store"},
 		{name: "links from the page carry no referrer", header: "Referrer-Policy", want: "no-referrer"},
 		{name: "the CSP is the one the privacy notice and evidence page send, allowing no form, even for a signed-in visitor", header: "Content-Security-Policy", want: s.csp},
 	}
@@ -794,6 +807,86 @@ func TestCapitalize(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := capitalize(tt.in); got != tt.want {
 				t.Errorf("capitalize(%q) = %q, want %q", tt.in, got, tt.want)
+			}
+		})
+	}
+}
+
+// manyView is an owner's view of seven projects, p1 the busiest over the
+// month and p7 the quietest, with today's time in the projects week names.
+func manyView(t *testing.T, week ...string) dashboard.View {
+	t.Helper()
+	var rows []dashboard.Row
+	for i := 1; i <= 7; i++ {
+		key := "p" + strconv.Itoa(i)
+		// Earlier in the month, more for the lower numbers.
+		rows = append(rows, dashboard.Row{Day: "2026-11-01", Project: key, Kind: "prompting", Level: "A", Seconds: float64((8 - i) * 3600)})
+	}
+	for _, key := range week {
+		rows = append(rows, dashboard.Row{Day: "2026-11-20", Project: key, Kind: "prompting", Level: "A", Seconds: 1800})
+	}
+	v, err := dashboard.Build(dashboard.Meta{Today: "2026-11-20", TZ: "UTC", Agent: dashboard.AgentName}, rows)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return v
+}
+
+func TestManyProjects(t *testing.T) {
+	tests := []struct {
+		name    string
+		week    []string
+		section string
+		want    []string
+		notWant []string
+	}{
+		{
+			name:    "past five projects in a week, the chart draws the rest together as Other, in its own gray",
+			week:    []string{"p1", "p2", "p3", "p4", "p5", "p6", "p7"},
+			section: "week",
+			want: []string{
+				`<li><span class="key c5"></span>p5</li>`,
+				`<li><span class="key co"></span>Other</li>`,
+				`title="Other, 1h"`,
+			},
+			notWant: []string{`<li><span class="key co"></span>p6</li>`, `<span class="key c6">`},
+		},
+		{
+			name:    "the table still lists each project past the fifth by name",
+			week:    []string{"p1", "p2", "p3", "p4", "p5", "p6", "p7"},
+			section: "week",
+			want:    []string{"<th>p6</th><th>p7</th><th>Total</th>"},
+		},
+		{
+			name:    "a project that is the week's only one gets a color of its own, though the month ranks it sixth",
+			week:    []string{"p6"},
+			section: "week",
+			want:    []string{`<li><span class="key c1"></span>p6</li>`, `title="p6, 30m"`},
+			notWant: []string{"Other"},
+		},
+		{
+			name:    "a project keeps its color in every section: the week's only project is c1 in the projects table too",
+			week:    []string{"p6"},
+			section: "projects",
+			want:    []string{`<tr><td><span class="key c1"></span>p6</td>`, `<tr><td><span class="key c2"></span>p1</td>`},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mux, _ := ownerSite(t, signInOn("U0FAKEVERIFIED"), "u1", fakeSource{v: manyView(t, tt.week...)}, true, nil)
+			_, page := serve(mux, httptest.NewRequest(http.MethodGet, "/dashboard", nil))
+			if page = sectionOf(page, tt.section); page == "" {
+				t.Fatalf("the page has no section %q", tt.section)
+			}
+			for _, w := range tt.want {
+				if !strings.Contains(page, w) {
+					t.Errorf("the section doesn't contain %q", w)
+				}
+			}
+			for _, w := range tt.notWant {
+				if strings.Contains(page, w) {
+					t.Errorf("the section contains %q", w)
+				}
 			}
 		})
 	}
