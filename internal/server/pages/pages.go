@@ -21,7 +21,8 @@
 // 6.6). Each file is named for the first scoring version it applies to,
 // and applies until the next file of the same MAJOR. A scoring version that
 // changes a rule or a value the definition states adds a file, and a new
-// MAJOR needs a file of its own before a server can run it.
+// MAJOR needs a file of its own before a server can run it. For values,
+// TestEvidenceValues checks this against every table in pkg/params.
 // /docs/evidence shows the definition for the scoring version this server
 // runs, and /docs/evidence/<version> the one for any other version.
 package pages

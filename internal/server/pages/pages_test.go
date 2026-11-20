@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/some-du6e/pairtime/internal/server/retention"
+	"github.com/some-du6e/pairtime/pkg/params"
 )
 
 // newSite builds a Site from o, with the embedded retention schedule and a
@@ -431,6 +432,33 @@ func TestEvidenceIsDesign64(t *testing.T) {
 		t.Run(fmt.Sprintf("DESIGN 6.4 line %d appears word for word", i+2), func(t *testing.T) {
 			if !strings.Contains(string(src), l) {
 				t.Errorf("%s lacks DESIGN 6.4's line\n%s", file, l)
+			}
+		})
+	}
+}
+
+// TestEvidenceValues checks every value an evidence definition states, as
+// `NAME` = N s, against the parameter table of each scoring version it
+// covers. A MINOR version is new parameter values only (DESIGN 6.6), so
+// one that changes a stated value must add a definition file of its own.
+func TestEvidenceValues(t *testing.T) {
+	stated := regexp.MustCompile(`<code>([A-Z][A-Z0-9_]*)</code> = ([0-9][0-9,]*) s\b`)
+	for _, table := range params.Tables() {
+		t.Run("the definition in force at scoring "+table.Version()+" states that table's values", func(t *testing.T) {
+			page := string(newSite(t, Options{ScoringVersion: table.Version()}).current)
+			matches := stated.FindAllStringSubmatch(page, -1)
+			if len(matches) == 0 {
+				t.Fatal("the definition states no value as `NAME` = N s, so there is nothing to check; has the page's markup changed?")
+			}
+			for _, m := range matches {
+				name, value := m[1], strings.ReplaceAll(m[2], ",", "")
+				want, ok := table.Text(name)
+				switch {
+				case !ok:
+					t.Errorf("the definition states %s = %s s, which table %s doesn't have", name, m[2], table.Version())
+				case value != want:
+					t.Errorf("the definition states %s = %s s, but table %s has %s; add internal/server/pages/evidence/%s.md", name, m[2], table.Version(), want, table.Version())
+				}
 			}
 		})
 	}
