@@ -310,39 +310,42 @@ func (n *Notifier) Notify(note Note) Outcome {
 	note.Ended = note.Ended.Round(0)
 	var reports []report
 	n.mu.Lock()
-	o := n.decide(note, set, now, &reports)
+	o, launch := n.decide(note, set, now, &reports)
 	n.mu.Unlock()
 	if o != Queued && o != Waiting {
 		reports = append(reports, report{note, o})
 	}
 	n.finish(reports)
+	if launch != nil {
+		launch()
+	}
 	return o
 }
 
-// decide applies the rules to a new note, and starts or parks it. n.mu is
-// held.
-func (n *Notifier) decide(note Note, set config.Notifications, now time.Time, reports *[]report) Outcome {
+// decide applies the rules to a new note, and parks it or reserves a Show
+// for it, which launch starts. n.mu is held.
+func (n *Notifier) decide(note Note, set config.Notifications, now time.Time, reports *[]report) (o Outcome, launch func()) {
 	if n.closed {
-		return Stopped
+		return Stopped, nil
 	}
 	if note.Session == "" {
-		return Repeated
+		return Repeated, nil
 	}
 	for _, s := range n.sessions {
 		if s == note.Session {
-			return Repeated
+			return Repeated, nil
 		}
 	}
 	n.sessions = append(n.sessions, note.Session)
 	if len(n.sessions) > sessionsKept {
 		n.sessions = n.sessions[len(n.sessions)-sessionsKept:]
 	}
-	if o := n.gate(note, set, now); o != Queued {
-		return o
+	if g := n.gate(note, set, now); g != Queued {
+		return g, nil
 	}
 	if n.showing {
 		n.park(note, reports)
-		return Waiting
+		return Waiting, nil
 	}
 	// A note waiting for the screen gives way to this newer one, which
 	// asks the OS afresh. So a lock that nobody reported the end of holds
@@ -351,8 +354,7 @@ func (n *Notifier) decide(note Note, set config.Notifications, now time.Time, re
 		*reports = append(*reports, report{*n.waiting, Replaced})
 		n.waiting = nil
 	}
-	n.start(note)
-	return Queued
+	return Queued, n.start(note)
 }
 
 // gate applies the rules that don't depend on the OS, and returns Queued
@@ -382,13 +384,16 @@ func (n *Notifier) park(note Note, reports *[]report) {
 	n.waiting = &note
 }
 
-// start runs Show for note on a new goroutine. n.mu is held.
-func (n *Notifier) start(note Note) {
+// start reserves the notifier for note's Show and returns the step that
+// starts it on a new goroutine. The caller runs that step after it has let
+// go of n.mu and reported the outcomes it collected, so Options.Result
+// hears outcomes in the order they happened. n.mu is held.
+func (n *Notifier) start(note Note) (launch func()) {
 	ctx, cancel := context.WithTimeout(context.Background(), showTimeout)
 	n.showing = true
 	n.cancel = cancel
 	n.wg.Add(1)
-	go n.run(ctx, cancel, note)
+	return func() { go n.run(ctx, cancel, note) }
 }
 
 // run shows note, then any note that came while it did, one at a time.
@@ -462,6 +467,7 @@ func (n *Notifier) UserPresent() {
 	set := n.settings()
 	now := n.clock()
 	var reports []report
+	var launch func()
 	n.mu.Lock()
 	n.away = false
 	if !n.closed && !n.showing && n.waiting != nil {
@@ -470,11 +476,14 @@ func (n *Notifier) UserPresent() {
 		if o := n.gate(note, set, now); o != Queued {
 			reports = append(reports, report{note, o})
 		} else {
-			n.start(note)
+			launch = n.start(note)
 		}
 	}
 	n.mu.Unlock()
 	n.finish(reports)
+	if launch != nil {
+		launch()
+	}
 }
 
 // Close stops a Show in progress, which takes down whatever it put on
@@ -496,7 +505,6 @@ func (n *Notifier) Close() {
 		reports = append(reports, report{*n.waiting, Stopped})
 		n.waiting = nil
 	}
-	mem := n.snapshot()
 	n.mu.Unlock()
 	n.finish(reports)
 
@@ -511,6 +519,10 @@ func (n *Notifier) Close() {
 		n.log.Warn("a notification was still on its way when the agent stopped")
 	}
 	if n.memory != nil {
+		// After the wait, so a Show that ended meanwhile is counted.
+		n.mu.Lock()
+		mem := n.snapshot()
+		n.mu.Unlock()
 		if err := n.memory.Put(memoryKey, mem); err != nil {
 			n.log.Warn("couldn't keep the notifier's state", "err", err)
 		}
