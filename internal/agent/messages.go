@@ -134,6 +134,8 @@ func (a *agent) ipcStatus() ipcReply {
 		r.Stored, r.Duplicates = a.journal.Stats()
 	}
 	if a.ipcSrv != nil {
+		// Via is "" once the server stopped listening, as it does when
+		// Serve gives up.
 		r.Via, r.Refused = a.ipcSrv.Via(), a.ipcSrv.Refused()
 	}
 	return r

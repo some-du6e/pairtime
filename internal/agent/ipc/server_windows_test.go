@@ -236,6 +236,26 @@ func TestPipe(t *testing.T) {
 			},
 		},
 		{
+			name: "when accepting keeps failing, the agent on the pipe stops listening and deletes its note",
+			run: func(t *testing.T, ep Endpoint) {
+				srv, err := Listen(ep, Options{ForcePipe: true})
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer srv.Close()
+				giveUp(t, srv)
+				if via := srv.Via(); via != "" {
+					t.Errorf("Via() = %q after Serve gave up, want none", via)
+				}
+				if _, err := os.Stat(ep.PipeNote); !os.IsNotExist(err) {
+					t.Errorf("the note outlived the listener: %v", err)
+				}
+				if via, err := Send(ep, message(1), 10*time.Second); err != nil || via != inbox.ViaInbox {
+					t.Errorf("Send = %q, %v; want the message spooled", via, err)
+				}
+			},
+		},
+		{
 			name: "an agent on the socket deletes the note that an agent on the pipe left",
 			run: func(t *testing.T, ep Endpoint) {
 				if err := os.WriteFile(ep.PipeNote, []byte(`{"pipe":"x","pid":4,"started":1}`), 0o600); err != nil {

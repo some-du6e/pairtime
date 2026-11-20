@@ -152,6 +152,27 @@ func frame(body []byte) []byte {
 	return []byte(buf.String())
 }
 
+// failingListener is a listener whose every Accept fails, as when the
+// process has run out of file descriptors. Close closes the listener it
+// wraps.
+type failingListener struct{ net.Listener }
+
+func (failingListener) Accept() (net.Conn, error) {
+	return nil, errors.New("accept: too many open files")
+}
+
+// giveUp makes srv's accepts fail from now on and serves until Serve gives
+// up, with short waits between tries. It wants Serve's error.
+func giveUp(t *testing.T, srv *Server) {
+	t.Helper()
+	defer func(d time.Duration) { acceptRetry = d }(acceptRetry)
+	acceptRetry = time.Millisecond
+	srv.ln = failingListener{srv.ln}
+	if err := srv.Serve(&memSink{}); err == nil {
+		t.Fatal("Serve = nil, want the error that made it give up")
+	}
+}
+
 func TestServer(t *testing.T) {
 	tests := []struct {
 		name string
@@ -355,6 +376,34 @@ func TestServer(t *testing.T) {
 				}
 				if stored, dups := j.Stats(); stored != 1 || dups != 1 {
 					t.Errorf("the journal stored %d messages and dropped %d, want the message once and its copy dropped", stored, dups)
+				}
+			},
+		},
+		{
+			name: "when accepting keeps failing, Serve stops listening and deletes the socket, so senders fail at once and spool",
+			run: func(t *testing.T, ep Endpoint) {
+				srv, err := Listen(ep, Options{})
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer srv.Close()
+				giveUp(t, srv)
+				if via := srv.Via(); via != "" {
+					t.Errorf("Via() = %q after Serve gave up, want none", via)
+				}
+				if _, err := os.Lstat(ep.Socket); !os.IsNotExist(err) {
+					t.Errorf("the socket file outlived the listener: %v", err)
+				}
+				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cancel()
+				if c, err := Dial(ctx, ep); err == nil || errors.Is(err, context.DeadlineExceeded) {
+					if c != nil {
+						c.Close()
+					}
+					t.Errorf("Dial = %v, want it to fail without waiting", err)
+				}
+				if via, err := Send(ep, message(1), 10*time.Second); err != nil || via != inbox.ViaInbox {
+					t.Errorf("Send = %q, %v; want the message spooled", via, err)
 				}
 			},
 		},
