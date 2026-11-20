@@ -278,6 +278,8 @@ D_d         = ascii("pairtime-day-v1") || u64(d) || G_d
 signature_d = Ed25519(server key, D_d)
 ```
 
+The server key that signs `D_d` is the one valid at the last millisecond of day `d`, `(d + 1) × 86,400,000 − 1`, by DESIGN 10.2's validity dates, even when the head is signed or published later. WP-SV17 signs a day at 00:10 UTC the next day and publishes a missed day on a later run, so the key valid at signing time could be a newer one. Fixing the key by `d` lets a verifier find it from the day alone, as step 7 of section 9 finds a receipt's from `received_at`. After a rotation, the server keeps the old key until it has signed every day that ended before the rotation.
+
 It commits `d`, `G_(d-1)`, `T_d`, `count_d`, `G_d` and `signature_d` to the public `pairtime-witness` repository. WP-SV17 specifies that file. Each bundle carries the index of each batch's leaf in its day tree and the leaf's inclusion proof (DESIGN 7.8), checked against `T_d` with `count_d` leaves.
 
 ## 9. Verification
@@ -292,7 +294,7 @@ A verifier that holds a run of a device's batches, with headers and body hashes 
 6. `H_b` follows from `H_(b-1)`, `R_b`, `n_b` and `b`.
 7. Each receipt verifies over `M_b` under the server key that was valid at `received_at` (DESIGN 10.2).
 8. Each inclusion proof verifies (5.2), with `n` taken from a verified head.
-9. Each day tree has its rows in order and on its own day, its `count_d`, `T_d` and `G_d` follow from them, its signature verifies over `D_d`, and the day chain has no gaps.
+9. Each day tree has its rows in order and on its own day, its `count_d`, `T_d` and `G_d` follow from them, its signature verifies over `D_d` under the server key that was valid at the end of day `d` (8), and the day chain has no gaps.
 10. Each revealed text verifies `ok` against its record's `c` (10.3).
 11. Each CC8 reveal verifies `ok` against its record's `f.mh`, given whether the text's reveal removed a span (10.8), and the draw follows from `r`, `SHA-256(M)` and the pool (10.9).
 
@@ -888,3 +890,4 @@ The review of parts 1 and 2 (issue #19) decided these, before any device witness
 30. The server refuses an empty batch, and once it holds a batch of a device it refuses that device's batch `b` unless it stored batch `b - 1` with head `prev`, DESIGN 3.10's chain link. Only a device's first upload may start after batch 1. An earlier draft refused only a `prev` that differed from a stored head, which let a device skip a batch (6, 9).
 31. The server returns `received_at` with each receipt, and the client stores it next to the receipt. DESIGN 3.5's `batches.seg` row and DESIGN 3.6 name only the receipt, which can't be checked without the time it signs (7).
 32. One `K_dev` writes one chain, so no `s` repeats under it. An install restored with `pairtime restore` writes a new chain under a new `K_dev` and keeps the old key only to verify and open the old chain. DESIGN 7.11 unwraps the old key onto the new install, and a second chain from `s = 1` under it would repeat every nonce and token salt (3, 4.1).
+33. A day head is signed with the server key that was valid at the end of its day, whenever it is signed or published, so a verifier knows the key from `d` alone. Section 9 gave a receipt's key and not a day head's (8, 9).
