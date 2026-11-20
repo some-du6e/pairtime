@@ -179,7 +179,7 @@ Karim does this once, before the first tag that should be signed (PLAN WP-RL1). 
 
    Store the key in the environment and nowhere else in GitHub. A repository or organization secret with the same name would reach every workflow run on every branch, so `release.yml` fails while one exists.
 
-3. Commit `release-keys.txt` in a PR. The first tag after it merges is signed.
+3. Once that check prints the prefix, commit `release-keys.txt` in a PR. If it prints anything else, `git checkout internal/release/release-keys.txt` drops the new key, and step 2 can run again. The first tag after the PR merges is signed.
 
 ### What gets signed
 
@@ -237,15 +237,18 @@ Once it accepts the invitation, sign the agents' `gh` and git credentials in as 
 
 ### Replacing a key
 
-An installed client trusts only the keys compiled into it, so the release that brings a new key has to be signed with the old one.
+An installed client trusts only the keys compiled into it, so the release that brings a new key has to be signed with the old one. Between rotations, `$HOME/release-signing-key.age` holds the key `RELEASE_SIGNING_KEY` holds. During one, `$HOME/release-signing-key-next.age` holds the key waiting to replace it.
 
-1. Make the new key with `keygen`, with its secret half going only to an offline copy. `RELEASE_SIGNING_KEY` keeps the old key. `keygen` says so when the list already holds a key.
+1. Make the new key with `keygen`, with its secret half going only to an offline copy, and check that the copy decrypts. `RELEASE_SIGNING_KEY` keeps the old key. `keygen` says so when the list already holds a key.
 
    ```sh
    go run ./tools/release keygen | age -r <your age recipient> -o "$HOME/release-signing-key-next.age"
+   age -d -i <your age identity> "$HOME/release-signing-key-next.age" | cut -c1-32
    ```
 
-   Commit `release-keys.txt`, which now lists both keys, in a PR.
+   The second command must print `pairtime-release-ed25519-secret:` and none of the key. Commit `release-keys.txt`, which now lists both keys, in a PR only once it does, because GitHub holds no copy of this key and the backup is the only one. If it prints anything else, `git checkout internal/release/release-keys.txt` drops the new key, and the step can run again.
+
+   `age -o` writes over an existing file without asking. Step 3 renames `release-signing-key-next.age` at the end of every rotation, so if the file exists before this step, an earlier rotation never finished. Finish that rotation's step 3, or move the file aside, first.
 2. Once that PR merges, tag a release. The old key signs it, so installed clients accept it, and its binaries trust both keys. Had the new key replaced `RELEASE_SIGNING_KEY` already, no installed client could verify this release or any after it, and GitHub would never show the old key again to undo that.
 3. Keep signing with the old key until clients run a build that trusts the new one. Raising `minimum-version.txt` to step 2's version in the last release the old key signs tells clients still older than that to update first. Then move the new key into the environment:
 
@@ -253,6 +256,15 @@ An installed client trusts only the keys compiled into it, so the release that b
    age -d -i <your age identity> "$HOME/release-signing-key-next.age" \
      | gh secret set RELEASE_SIGNING_KEY --env release --repo some-du6e/pairtime
    ```
+
+   Once `gh` has stored it, rename the copies, so `release-signing-key.age` holds the key `RELEASE_SIGNING_KEY` holds again and the retired key sits under its id. Without this, the next rotation's step 1 would write over `release-signing-key-next.age`, the live key's only offline copy.
+
+   ```sh
+   mv "$HOME/release-signing-key.age" "$HOME/release-signing-key-<old key id>.age" &&
+     mv "$HOME/release-signing-key-next.age" "$HOME/release-signing-key.age"
+   ```
+
+   `<old key id>` is the id of the key that signed the latest release, which that release's notes name.
 
    A client that never got a build with the new key can't verify a release from here on. Signing with both keys for a while would keep such clients updating: `internal/release.Sign` takes several keys, but `tools/release sign` takes one, so it would need a second `-key-env`, such as `RELEASE_SIGNING_KEY_NEXT`, first.
 4. Remove the old key from `release-keys.txt` in a PR.
