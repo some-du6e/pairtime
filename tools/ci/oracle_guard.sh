@@ -13,10 +13,11 @@
 # in GitHub's documented payload). Without a payload there are no labels.
 #
 # A PR fails when it modifies, deletes, renames or retypes an oracle path and
-# also touches cmd/, internal/, pkg/, web/, extension/ or integrations/,
-# unless it carries the oracle-change label. Only Karim or the orchestrator
-# adds it, to apply a decision made outside the PR (AGENTS.md). Adding a new
-# oracle file next to new code passes.
+# also touches cmd/, internal/, pkg/, web/, extension/, integrations/,
+# tools/capture/ or tools/loadtest/, unless it carries the oracle-change
+# label. Only Karim or the orchestrator adds it, to apply a decision made
+# outside the PR (AGENTS.md). Adding a new oracle file next to new code
+# passes.
 #
 # Exit status: 0 pass, 1 blocked, 2 bad input or a missing tool.
 set -euo pipefail
@@ -37,10 +38,15 @@ is_oracle() {
 }
 
 # integrations/ holds the program kit, which testdata/upstream's captures
-# check (docs/PLAN.md, WP-PG0, WP-PG2, WP-PG8, WP-PG10).
+# check (docs/PLAN.md, WP-PG0, WP-PG2, WP-PG8, WP-PG10). Two directories of
+# tools/ are graded by oracles too: the capture kit by the hook contracts in
+# docs/research (WP-AD0) and the load test by DESIGN 10.6 (WP-OP3). The rest
+# of tools/ isn't code here, because tools/ledger_ref.py is an oracle itself
+# and a PR that changes only it (WP-LG3) must pass.
 is_code() {
 	case "$1" in
 	cmd/* | internal/* | pkg/* | web/* | extension/* | integrations/*) return 0 ;;
+	tools/capture/* | tools/loadtest/*) return 0 ;;
 	esac
 	return 1
 }

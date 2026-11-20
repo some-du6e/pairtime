@@ -38,13 +38,15 @@ var oraclePaths = []string{
 }
 
 // codePaths has one path under each code directory the guard watches.
-var codePaths = []string{
-	"cmd/pairtime/main.go",
-	"internal/agent/agent.go",
-	"pkg/score/score.go",
-	"web/src/app.ts",
-	"extension/vscode/package.json",
-	"integrations/airtable-automation.js",
+var codePaths = []struct{ dir, path string }{
+	{"cmd/", "cmd/pairtime/main.go"},
+	{"internal/", "internal/agent/agent.go"},
+	{"pkg/", "pkg/score/score.go"},
+	{"web/", "web/src/app.ts"},
+	{"extension/", "extension/vscode/package.json"},
+	{"integrations/", "integrations/airtable-automation.js"},
+	{"tools/capture/", "tools/capture/scrub.py"},
+	{"tools/loadtest/", "tools/loadtest/main.go"},
 }
 
 type guardCase struct {
@@ -79,6 +81,7 @@ func TestOracleGuard(t *testing.T) {
 		{name: "code without an oracle change passes", diff: []string{"M\tpkg/event/event.go", "A\tpkg/event/new_test.go"}},
 		{name: "docs/PLAN.md is not an oracle", diff: []string{"M\tdocs/PLAN.md", "M\tpkg/score/score.go"}},
 		{name: "workflows and CI tools are not code", diff: []string{"M\tdocs/research/client-platform.md", "M\t.github/workflows/ci.yml", "M\ttools/ci/oracle_guard.sh"}},
+		{name: "tools/ outside capture/ and loadtest/ is not code, so ledger_ref.py can change beside the release tool", diff: []string{"M\ttools/ledger_ref.py", "M\ttools/release/main.go"}},
 		{name: "a look-alike path is not an oracle", diff: []string{"M\tdocs/designs/notes.md", "M\ttestdata/fixtures-old/x.json", "M\tpkg/score/score.go"}},
 		{name: "a label with a similar name doesn't count", diff: []string{"M\tdocs/BOUNTY.md", "M\tcmd/pairtime/main.go"}, labels: []string{"oracle-changes", "Oracle-Change"}, wantCode: 1},
 		{
@@ -102,10 +105,10 @@ func TestOracleGuard(t *testing.T) {
 			wantCode: 1,
 		})
 	}
-	for _, p := range codePaths {
+	for _, c := range codePaths {
 		tests = append(tests, guardCase{
-			name:     "an oracle modified with a change under " + strings.SplitN(p, "/", 2)[0] + "/ fails",
-			diff:     []string{"M\tdocs/design/struggle-metric.md", "M\t" + p},
+			name:     "an oracle modified with a change under " + c.dir + " fails",
+			diff:     []string{"M\tdocs/design/struggle-metric.md", "M\t" + c.path},
 			wantCode: 1,
 		})
 	}
