@@ -531,7 +531,11 @@ type extraNotice struct {
 
 // readExtraNotices reads a list of extra notices whose paths are relative
 // to root. It checks every line, including those for packages no binary
-// links, so a typo fails at once instead of quietly dropping a notice.
+// links, so a typo fails at once instead of quietly dropping a notice. A
+// package directory must hold a Go file that a build compiles: binaries
+// link packages, so a notice keyed by any other directory, such as
+// pkg/redact/rules, which holds the rules pkg/redact embeds, would never
+// ship.
 func readExtraNotices(listPath, root string) ([]extraNotice, error) {
 	data, err := os.ReadFile(listPath)
 	if err != nil {
@@ -558,8 +562,16 @@ func readExtraNotices(listPath, root string) ([]extraNotice, error) {
 			return nil, fmt.Errorf("%s line %d: %s for %s is listed twice", listPath, i+1, e.file, e.pkg)
 		}
 		seen[e.pkg+" "+e.file] = true
-		if st, err := os.Stat(filepath.Join(root, filepath.FromSlash(e.pkg))); err != nil || !st.IsDir() {
+		dir := filepath.Join(root, filepath.FromSlash(e.pkg))
+		if st, err := os.Stat(dir); err != nil || !st.IsDir() {
 			return nil, fmt.Errorf("%s line %d: the package directory %s doesn't exist", listPath, i+1, e.pkg)
+		}
+		ok, err := holdsPackage(dir)
+		if err != nil {
+			return nil, fmt.Errorf("%s line %d: %w", listPath, i+1, err)
+		}
+		if !ok {
+			return nil, fmt.Errorf("%s line %d: %s holds no Go file that a build compiles, so no binary links it and its notice would never ship; name the directory of the package that embeds the material", listPath, i+1, e.pkg)
 		}
 		if e.data, err = os.ReadFile(filepath.Join(root, filepath.FromSlash(e.file))); err != nil {
 			return nil, fmt.Errorf("%s line %d: %w", listPath, i+1, err)
@@ -567,4 +579,22 @@ func readExtraNotices(listPath, root string) ([]extraNotice, error) {
 		extras = append(extras, e)
 	}
 	return extras, nil
+}
+
+// holdsPackage reports whether dir holds a .go file that a build compiles:
+// one that isn't a test, and whose name doesn't start with "_" or ".",
+// which the go command ignores. Build constraints aren't read.
+func holdsPackage(dir string) (bool, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return false, err
+	}
+	for _, e := range entries {
+		name := e.Name()
+		if !e.IsDir() && strings.HasSuffix(name, ".go") && !strings.HasSuffix(name, "_test.go") &&
+			!strings.HasPrefix(name, "_") && !strings.HasPrefix(name, ".") {
+			return true, nil
+		}
+	}
+	return false, nil
 }

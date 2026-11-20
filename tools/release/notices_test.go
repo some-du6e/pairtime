@@ -41,6 +41,7 @@ func newNoticeWorld(t *testing.T) *noticeWorld {
 	write(t, filepath.Join(b, "NOTICE"), "b's Apache NOTICE\n")
 
 	repo := filepath.Join(dir, "repo")
+	write(t, filepath.Join(repo, "pkg", "embeds", "embeds.go"), "package embeds\n")
 	write(t, filepath.Join(repo, "pkg", "embeds", "rules", "LICENSE"), "the embedded rules' license\n")
 	write(t, filepath.Join(repo, "pkg", "other", "other.go"), "package other\n")
 	write(t, filepath.Join(repo, "third_party", "LICENSE"), "material only an unlinked package embeds\n")
@@ -356,7 +357,12 @@ func TestBuildEnv(t *testing.T) {
 
 func TestReadExtraNotices(t *testing.T) {
 	root := t.TempDir()
+	write(t, filepath.Join(root, "root.go"), "package root\n")
+	write(t, filepath.Join(root, "pkg", "embeds", "embeds.go"), "package embeds\n")
 	write(t, filepath.Join(root, "pkg", "embeds", "LICENSE"), "MIT\n")
+	write(t, filepath.Join(root, "pkg", "embeds", "rules", "rules.json"), "{}\n")
+	write(t, filepath.Join(root, "pkg", "tested", "tested_test.go"), "package tested\n")
+	write(t, filepath.Join(root, "pkg", "ignored", "_ignored.go"), "package ignored\n")
 	tests := []struct {
 		name    string
 		list    string
@@ -372,6 +378,9 @@ func TestReadExtraNotices(t *testing.T) {
 		{name: "a path that isn't clean is refused", list: "./pkg/embeds pkg/embeds/LICENSE Rules\n", wantErr: `"./pkg/embeds" isn't a clean path`},
 		{name: "a backslash is refused", list: `pkg\embeds pkg/embeds/LICENSE Rules` + "\n", wantErr: "isn't a clean path"},
 		{name: "a package directory that doesn't exist is refused", list: "pkg/gone pkg/embeds/LICENSE Rules\n", wantErr: "the package directory pkg/gone doesn't exist"},
+		{name: "a directory with no Go file, which no binary can link, is refused", list: "pkg/embeds/rules pkg/embeds/LICENSE Rules\n", wantErr: "line 1: pkg/embeds/rules holds no Go file that a build compiles"},
+		{name: "a directory with only tests is refused", list: "pkg/tested pkg/embeds/LICENSE Rules\n", wantErr: "pkg/tested holds no Go file that a build compiles"},
+		{name: "a directory whose only Go file the go command ignores is refused", list: "pkg/ignored pkg/embeds/LICENSE Rules\n", wantErr: "pkg/ignored holds no Go file that a build compiles"},
 		{name: "a notice file that doesn't exist is refused", list: "# x\npkg/embeds pkg/embeds/NOTICE Rules\n", wantErr: "line 2:"},
 		{name: "a line listed twice is refused", list: "pkg/embeds pkg/embeds/LICENSE A\npkg/embeds pkg/embeds/LICENSE B\n", wantErr: "line 2: pkg/embeds/LICENSE for pkg/embeds is listed twice"},
 	}
