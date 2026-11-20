@@ -176,18 +176,18 @@ func runUninstall(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stdout, "\nYour daily totals and recaps can stay, in %s, until you delete them. Once they're deleted, nobody can bring them back.\n", joinPaths(keepable))
 		purge = askYes(answers, stdout, "Type y to delete them too, or n to keep them: ")
 	}
-	// What stays in the data directory: the day rollups and coach records,
-	// unless they go too.
+	// What stays in the data directory unless it goes too: the day rollups
+	// and coach records, also when the agent made them after the question.
 	var keep []string
 	if !purge {
-		for _, k := range keepable {
-			keep = append(keep, filepath.Base(k))
-		}
+		keep = []string{filepath.Base(dirs.Days()), filepath.Base(dirs.Coach())}
 	}
 
 	// The hooks and the login item.
 	problems := slices.Clone(p.Problems)
-	if err := p.Apply(); err != nil {
+	if err := p.Apply(); errors.Is(err, install.ErrStale) {
+		return fail(errors.New("something else changed a file while uninstall was putting it back, so uninstall stopped there; run pairtime uninstall again"))
+	} else if err != nil {
 		return fail(err)
 	}
 	if !p.Empty() {
@@ -266,13 +266,17 @@ func runUninstall(args []string, stdout, stderr io.Writer) int {
 			return fail(fmt.Errorf("deleting your pairtime data: %w; close any program that has one of pairtime's files open, then run pairtime uninstall again", err))
 		}
 	}
+	var stayed []string // the day rollups and coach records that stay
+	if !purge {
+		stayed = existing(dirs.Days(), dirs.Coach())
+	}
 	if len(data) > 0 {
 		key := ""
 		if hadKey {
 			key = "pairtime's device key and "
 		}
-		if len(keep) > 0 {
-			fmt.Fprintf(stdout, "Deleted %severything else pairtime kept in %s. Your daily totals and recaps stay in %s; delete them when you no longer want them.\n", key, joinPaths(data), joinPaths(keepable))
+		if len(stayed) > 0 {
+			fmt.Fprintf(stdout, "Deleted %severything else pairtime kept in %s. Your daily totals and recaps stay in %s; delete them when you no longer want them.\n", key, joinPaths(data), joinPaths(stayed))
 		} else {
 			fmt.Fprintf(stdout, "Deleted %syour pairtime data from %s.\n", key, joinPaths(data))
 		}
@@ -306,7 +310,7 @@ func runUninstall(args []string, stdout, stderr io.Writer) int {
 	lock = nil
 	in.RemoveLockFile()
 	for _, d := range data {
-		if linkedDir(d) && (len(keep) == 0 || !samePath(d, dirs.Data)) {
+		if linkedDir(d) && (len(stayed) == 0 || !samePath(d, dirs.Data)) {
 			os.Remove(d) // the link, not the folder it points to
 		}
 	}
@@ -343,7 +347,7 @@ func runUninstall(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintf(stdout, "pairtime deletes %s once this has finished, because Windows doesn't let anyone delete a program while it runs.\n", joinPaths(later))
 		}
 	}
-	if len(keep) > 0 {
+	if len(stayed) > 0 {
 		// The data directory stays, with what the teen keeps, and so does
 		// the record of the folders install made above it, for a later
 		// uninstall with --delete-data to take away too.
