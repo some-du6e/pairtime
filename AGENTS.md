@@ -17,8 +17,11 @@ A change is done when every workflow its PR started is green. A WP marked "Race:
 |---|---|---|
 | ci.yml | the one Linux job: lint, `go test ./...`, the seven-target cross-compile with the 15 MB client budget, and the license, oracle and provenance guards | every PR, pushes to main |
 | platform.yml | `go test` of the platform packages on Windows and macOS, and the desktop tests on Linux | PRs touching its paths, release tags |
+| footprint.yml | the release-built agent idle on Windows: working set under 25 MB, CPU time under 0.1% of wall time | PRs touching internal/agent, internal/platform/windows, cmd/pairtime, go.mod or go.sum (3 minutes idle); daily, 03:30 UTC, and release tags (10 minutes) |
 | nightly.yml | `go test -race` over internal/agent and internal/server | daily, 03:00 UTC |
+| postgres.yml | the server tests on Postgres 18 as well as SQLite | PRs touching internal/server/store, internal/server/migrations or internal/server/writer; daily, 03:30 UTC |
 | web.yml | npm ci, vitest, the UI build, Playwright on Chromium | PRs touching web/ or extension/, release tags |
+| release.yml | the seven targets' archives, checksums.txt and the signed manifest.json | release tags, signed with the release key and published; PRs touching internal/release or tools/release, as a snapshot signed with a throwaway key and never published |
 | tidy.yml | `go mod tidy` and npm lockfiles, committed to the branch | by hand |
 | fixtures.yml | the fixture provenance check | by hand |
 
