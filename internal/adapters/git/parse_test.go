@@ -517,6 +517,51 @@ func TestParseVersion(t *testing.T) {
 	}
 }
 
+func TestHonorsNoLazyFetch(t *testing.T) {
+	cases := []struct {
+		name string
+		v    Version
+		want bool
+	}{
+		{"2.44.0 added GIT_NO_LAZY_FETCH", Version{2, 44, 0}, true},
+		{"a later release obeys it", Version{2, 51, 2}, true},
+		{"2.43.4 got the May 2024 security fix", Version{2, 43, 4}, true},
+		{"2.43.3 came before the fix", Version{2, 43, 3}, false},
+		{"2.39.4, the oldest fixed line, got the fix", Version{2, 39, 4}, true},
+		{"2.41.0 came before the fix", Version{2, 41, 0}, false},
+		{"2.38 never got it", Version{2, 38, 9}, false},
+		{"2.15, the oldest supported, doesn't obey it", MinVersion, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := HonorsNoLazyFetch(tc.v); got != tc.want {
+				t.Errorf("HonorsNoLazyFetch(%v) = %v, want %v", tc.v, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestFixedArgs(t *testing.T) {
+	cases := []struct {
+		name string
+		key  string
+		want string
+	}{
+		{"no repo's fsmonitor hook runs when git reads an index", "core.fsmonitor", "false"},
+		{"no GPG output comes before formatted log lines", "log.showSignature", "false"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			for i := 0; i+1 < len(fixedArgs); i += 2 {
+				if fixedArgs[i] == "-c" && fixedArgs[i+1] == tc.key+"="+tc.want {
+					return
+				}
+			}
+			t.Errorf("fixedArgs %q don't set %s=%s", fixedArgs, tc.key, tc.want)
+		})
+	}
+}
+
 func TestEnviron(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -528,7 +573,7 @@ func TestEnviron(t *testing.T) {
 			name:    "variables that point git at another repo are removed, and the adapter's own settings added",
 			base:    []string{"PATH=/bin", "GIT_DIR=/elsewhere/.git", "git_work_tree=/x", "GIT_CONFIG_KEY_0=core.hooksPath", "GIT_CONFIG_VALUE_0=/tmp", "GIT_INDEX_FILE=/i"},
 			gone:    []string{"GIT_DIR=/elsewhere/.git", "git_work_tree=/x", "GIT_CONFIG_KEY_0=core.hooksPath", "GIT_CONFIG_VALUE_0=/tmp", "GIT_INDEX_FILE=/i"},
-			present: []string{"PATH=/bin", "GIT_OPTIONAL_LOCKS=0", "GIT_TERMINAL_PROMPT=0", "LC_ALL=C"},
+			present: []string{"PATH=/bin", "GIT_OPTIONAL_LOCKS=0", "GIT_NO_LAZY_FETCH=1", "GIT_TERMINAL_PROMPT=0", "LC_ALL=C"},
 		},
 	}
 	for _, tc := range cases {

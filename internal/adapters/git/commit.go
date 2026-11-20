@@ -122,16 +122,21 @@ type meta struct {
 // (run.go), so nothing comes before the fields.
 const metaFormat = "%H%x00%P%x00%ad%x00%cd%x00%an%x00%ae%x00%s%x00%(trailers:only,unfold)%x00%N%x1e"
 
-// readMeta reads the commits in shas, in one git call. Missing commits
-// are left out of the result.
-func readMeta(ctx context.Context, g *Runner, dir string, shas []string) (map[string]*meta, error) {
+// readMeta reads the commits in shas, in one git call per 500, with their
+// git-ai notes when notes is set. Missing commits are left out of the
+// result.
+func readMeta(ctx context.Context, g *Runner, dir string, shas []string, notes bool) (map[string]*meta, error) {
 	out := make(map[string]*meta, len(shas))
 	if len(shas) == 0 {
 		return out, nil
 	}
+	notesArg := "--notes=refs/notes/ai"
+	if !notes {
+		notesArg = "--no-notes" // %N then prints nothing
+	}
 	for start := 0; start < len(shas); start += 500 {
 		batch := shas[start:min(start+500, len(shas))]
-		args := append([]string{"log", "--no-walk=unsorted", "--date=raw", "--notes=refs/notes/ai", "--format=" + metaFormat}, batch...)
+		args := append([]string{"log", "--no-walk=unsorted", "--date=raw", notesArg, "--format=" + metaFormat}, batch...)
 		args = append(args, "--")
 		text, err := g.Run(ctx, dir, args...)
 		if err != nil {

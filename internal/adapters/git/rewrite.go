@@ -33,7 +33,7 @@ func (s *Scanner) rebased(ctx context.Context, o op) ([]*meta, []Rewrite, error)
 	if err != nil {
 		return nil, nil, err
 	}
-	metas, err := readMeta(ctx, s.git, s.loc.Dir, append(append([]string(nil), originals...), made...))
+	metas, err := s.readMeta(ctx, append(append([]string(nil), originals...), made...))
 	if err != nil {
 		return nil, nil, err
 	}

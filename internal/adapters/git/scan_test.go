@@ -763,10 +763,46 @@ func TestScanAgainstGit(t *testing.T) {
 					t.Fatal("the scan found nothing to read")
 				}
 				if after := snapshot(t, filepath.Join(r.dir, ".git")); !maps.Equal(before, after) {
-					t.Errorf("files under .git changed:\nbefore %v\nafter  %v", before, after)
+					t.Errorf("files under .git changed:\n%s", snapshotDiff(before, after))
 				}
 				if out, _ := g.gitErr(r.dir, nil, "config", "--get", "core.hooksPath"); strings.TrimSpace(out) != "" {
 					t.Errorf("core.hooksPath is %q, want it unset", out)
+				}
+			},
+		},
+		{
+			name: "in a partial clone a scan after a pull fetches nothing and writes nothing under .git, and records the commits whose blobs are missing with NoStat",
+			run: func(t *testing.T, g *gitEnv) {
+				up := g.initRepo()
+				up.git("config", "uploadpack.allowFilter", "true")
+				up.commit("one", map[string]string{"a.txt": lines("a", 30)})
+				dir := filepath.Join(t.TempDir(), "partial")
+				g.git(filepath.Dir(dir), "clone", "-q", "--filter=blob:none", fileURL(up.dir), dir)
+				clone := &testRepo{g: g, dir: dir}
+				if out, _ := g.gitErr(dir, nil, "config", "--get", "remote.origin.promisor"); strings.TrimSpace(out) != "true" {
+					t.Skipf("git made no partial clone: remote.origin.promisor is %q", out)
+				}
+				s := g.scanner(g.resolver(ProjectMap{}, Excludes{}), dir)
+				var pulled []string
+				for i := 2; i <= 4; i++ {
+					pulled = append(pulled, up.commit(fmt.Sprint("c", i), map[string]string{"a.txt": lines("a", 30+i)}))
+				}
+				clone.git("pull", "-q", "--ff-only")
+				// The pull checked out the last commit, so git fetched its
+				// blobs; the two before it have none here, and counting
+				// their lines would fetch them from the upstream.
+				before := snapshot(t, filepath.Join(dir, ".git"))
+				c := one(t, mustScan(t, s))
+				if after := snapshot(t, filepath.Join(dir, ".git")); !maps.Equal(before, after) {
+					t.Errorf("the scan changed files under .git, as a lazy fetch does:\n%s", snapshotDiff(before, after))
+				}
+				if c.Op() != event.GitMerge || !slices.Equal(shas(c.Commits), pulled) {
+					t.Fatalf("got %s with records %v, want a merge recording %v", c.Op(), shas(c.Commits), pulled)
+				}
+				for _, cm := range c.Commits[:2] {
+					if cm.Local.Origin != MadeElsewhere || !cm.Local.NoStat || cm.FilesChanged != 0 {
+						t.Errorf("%s: origin %s, no stat %v, %d files; want a commit made elsewhere whose stats couldn't be read", cm.SHA[:7], cm.Local.Origin, cm.Local.NoStat, cm.FilesChanged)
+					}
 				}
 			},
 		},
@@ -878,6 +914,24 @@ func snapshot(t *testing.T, dir string) map[string]string {
 		t.Fatal(err)
 	}
 	return files
+}
+
+// snapshotDiff lists the entries two snapshots disagree on.
+func snapshotDiff(before, after map[string]string) string {
+	var b strings.Builder
+	for _, p := range slices.Sorted(maps.Keys(before)) {
+		if a, ok := after[p]; !ok {
+			fmt.Fprintf(&b, "gone:    %s (%s)\n", p, before[p])
+		} else if a != before[p] {
+			fmt.Fprintf(&b, "changed: %s (%s, now %s)\n", p, before[p], a)
+		}
+	}
+	for _, p := range slices.Sorted(maps.Keys(after)) {
+		if _, ok := before[p]; !ok {
+			fmt.Fprintf(&b, "new:     %s (%s)\n", p, after[p])
+		}
+	}
+	return b.String()
 }
 
 // TestCommitJSON pins the fields a commit record can upload to DESIGN

@@ -240,6 +240,42 @@ func TestResolve(t *testing.T) {
 			},
 		},
 		{
+			name: "resolving a repo nested in another's worktree runs none of the outer repo's hooks, though the superproject lookup reads the outer index",
+			run: func(t *testing.T, g *gitEnv) {
+				outer := g.initRepo()
+				outer.commit("one", map[string]string{"a.txt": "a\n"})
+				nested := filepath.Join(outer.dir, "nested")
+				if err := os.Mkdir(nested, 0o755); err != nil {
+					t.Fatal(err)
+				}
+				g.git(nested, "init", "-q")
+				(&testRepo{g: g, dir: nested}).commit("n", map[string]string{"n.txt": "n\n"})
+				marker := filepath.Join(t.TempDir(), "fsmonitor-ran")
+				hook := filepath.Join(t.TempDir(), "fsmonitor.sh")
+				script := "#!/bin/sh\necho ran >> '" + filepath.ToSlash(marker) + "'\nexit 1\n"
+				if err := os.WriteFile(hook, []byte(script), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				outer.git("config", "core.fsmonitor", filepath.ToSlash(hook))
+				// The oracle: git on its own runs the hook for the lookup.
+				if _, err := g.gitErr(nested, nil, "rev-parse", "--show-superproject-working-tree"); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := os.Stat(marker); err != nil {
+					t.Skipf("this git ran no fsmonitor hook for the superproject lookup, so there is nothing to check: %v", err)
+				}
+				if err := os.Remove(marker); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := g.resolver(ProjectMap{}, Excludes{}).Resolve(ctx, nested); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := os.Stat(marker); err == nil {
+					t.Error("resolving the nested repo ran the outer repo's fsmonitor hook")
+				}
+			},
+		},
+		{
 			name: "a folder inside a git directory resolves to its repo with no top level of its own",
 			run: func(t *testing.T, g *gitEnv) {
 				r := g.initRepo()

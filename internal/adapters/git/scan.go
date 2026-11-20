@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/some-du6e/pairtime/pkg/event"
@@ -84,6 +85,10 @@ type Scanner struct {
 	now    func() time.Time
 	rekey  func(context.Context, Location) (Location, error)
 	failed int // consecutive scans that couldn't read commits
+	// lazy is set for a scan in a partial clone with a git that doesn't
+	// obey GIT_NO_LAZY_FETCH, which would fetch a missing blob over the
+	// network: the scan then reads no notes and no stats.
+	lazy bool
 }
 
 // NewScanner returns a scanner for the worktree at loc, resuming from st.
@@ -356,18 +361,23 @@ func rebaseEnd(entries []entry, start int) (end int, aborted, closed bool) {
 
 // build turns operations into changes, reading what they need from git.
 func (s *Scanner) build(ctx context.Context, ops []op, now time.Time) ([]Change, error) {
+	s.lazy = false
+	if v, err := s.git.Version(); err == nil && !HonorsNoLazyFetch(v) {
+		s.lazy = s.partialClone(ctx)
+	}
 	// The commit each operation moved HEAD to, in one read.
 	var tips []string
 	for _, o := range ops {
 		tips = appendNew(tips, o.last.New)
 	}
-	metas, err := readMeta(ctx, s.git, s.loc.Dir, tips)
+	metas, err := s.readMeta(ctx, tips)
 	if err != nil {
 		return nil, err
 	}
 
 	var changes []Change
-	var need []*meta // commits whose stats to read
+	var need []*meta            // commits whose stats to read
+	var here, elsewhere []*meta // the same, by origin
 	for _, o := range ops {
 		tip := metas[o.last.New]
 		if tip == nil {
@@ -418,19 +428,33 @@ func (s *Scanner) build(ctx context.Context, ops []op, now time.Time) ([]Change,
 		for _, m := range made {
 			c.Commits = append(c.Commits, s.record(m, kind, MadeHere, o.last.Time, rewritesTo(rewrites, m.SHA), now))
 			need = append(need, m)
+			here = append(here, m)
 			s.remember(m.SHA)
 		}
 		for _, m := range arrived {
 			c.Commits = append(c.Commits, s.record(m, kind, MadeElsewhere, o.last.Time, nil, now))
 			need = append(need, m)
+			elsewhere = append(elsewhere, m)
 			s.remember(m.SHA)
 		}
 		changes = append(changes, c)
 	}
 
 	// When the stats can't be read, the counts stay 0 and NoStat says so;
-	// the commits are still recorded.
-	_ = readStats(ctx, s.git, s.loc.Dir, uniqueMetas(need))
+	// the commits are still recorded. Commits made elsewhere are counted in
+	// a call of their own: in a partial clone their blobs are often
+	// missing, and GIT_NO_LAZY_FETCH makes one missing blob fail the whole
+	// call. A git that would fetch the blob instead reads no contents at
+	// all in a partial clone.
+	for _, ms := range [][]*meta{uniqueMetas(here), uniqueMetas(elsewhere)} {
+		if s.lazy {
+			for _, m := range ms {
+				m.noStat = true
+			}
+			continue
+		}
+		_ = readStats(ctx, s.git, s.loc.Dir, ms)
+	}
 	for i := range changes {
 		for j := range changes[i].Commits {
 			cm := &changes[i].Commits[j]
@@ -453,6 +477,42 @@ func (s *Scanner) build(ctx context.Context, ops []op, now time.Time) ([]Change,
 		}
 	}
 	return changes, nil
+}
+
+// readMeta reads commits, with their git-ai notes unless reading a note's
+// blob could fetch it from the network.
+func (s *Scanner) readMeta(ctx context.Context, shas []string) (map[string]*meta, error) {
+	return readMeta(ctx, s.git, s.loc.Dir, shas, !s.lazy)
+}
+
+// partialClone reports whether the repo is a partial clone, which lacks
+// objects its promisor remote has: extensions.partialClone names that
+// remote, or a remote has promisor set, which is what git clone --filter
+// writes since git 2.2x. When git can't say, the repo counts as one.
+func (s *Scanner) partialClone(ctx context.Context) bool {
+	out, err := s.git.Run(ctx, s.loc.Dir, "config", "--get-regexp", `^(extensions\.partialclone|remote\..*\.promisor)$`)
+	if exitCode(err) == 1 {
+		return false // neither key is set
+	}
+	if err != nil {
+		return true
+	}
+	for _, line := range strings.Split(string(out), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		_, value, ok := strings.Cut(line, " ")
+		if !ok {
+			return true // a boolean with no value is true
+		}
+		switch strings.ToLower(strings.TrimSpace(value)) {
+		case "false", "no", "off", "0":
+		default:
+			return true
+		}
+	}
+	return false
 }
 
 func uniqueMetas(ms []*meta) []*meta {
@@ -569,7 +629,7 @@ func (s *Scanner) arrivals(ctx context.Context, old, tip string, madeTip bool) (
 		want = want[:maxArrived]
 	}
 	slices.Reverse(want)
-	metas, err := readMeta(ctx, s.git, s.loc.Dir, want)
+	metas, err := s.readMeta(ctx, want)
 	if err != nil {
 		return nil, err
 	}

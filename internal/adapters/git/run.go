@@ -99,12 +99,17 @@ var redirecting = map[string]bool{
 // fixedEnv is what every call runs with. GIT_OPTIONAL_LOCKS=0 keeps git
 // from taking the index lock to refresh stat data, so the adapter never
 // makes a person's own git command fail with "index.lock exists", and never
-// writes the index, which would wake its own watch. LC_ALL=C keeps error
-// messages in English, which ErrNotRepo is matched on. Replace refs are
-// ignored so the root commits are the ones a fresh clone has.
+// writes the index, which would wake its own watch. GIT_NO_LAZY_FETCH=1
+// keeps git from fetching an object a partial clone lacks from its
+// promisor remote, which would reach the network and write a pack into
+// .git; the call fails instead (see HonorsNoLazyFetch for the versions that
+// obey it). LC_ALL=C keeps error messages in English, which ErrNotRepo is
+// matched on. Replace refs are ignored so the root commits are the ones a
+// fresh clone has.
 var fixedEnv = []string{
 	"GIT_TERMINAL_PROMPT=0",
 	"GIT_OPTIONAL_LOCKS=0",
+	"GIT_NO_LAZY_FETCH=1",
 	"GIT_NO_REPLACE_OBJECTS=1",
 	"GIT_PAGER=cat",
 	"LC_ALL=C",
@@ -112,8 +117,26 @@ var fixedEnv = []string{
 }
 
 // fixedArgs come before every subcommand. log.showSignature would put GPG
-// output in front of formatted log lines.
-var fixedArgs = []string{"-c", "log.showSignature=false", "-c", "color.ui=never", "-c", "core.quotePath=false"}
+// output in front of formatted log lines. core.fsmonitor=false keeps git
+// from running a repo's fsmonitor hook when it reads an index: rev-parse
+// --show-superproject-working-tree runs ls-files in the folder above the
+// top level, which reads the index of whatever repo holds that folder, and
+// the -c reaches that child through GIT_CONFIG_PARAMETERS.
+var fixedArgs = []string{"-c", "log.showSignature=false", "-c", "color.ui=never", "-c", "core.quotePath=false", "-c", "core.fsmonitor=false"}
+
+// HonorsNoLazyFetch reports whether git v obeys GIT_NO_LAZY_FETCH. Git
+// 2.44 added it, and the security releases of May 2024 made the lazy-fetch
+// path itself check it, back to 2.39.4, 2.40.2, 2.41.1, 2.42.2 and 2.43.4.
+// A distribution that backported the fix without the version bump counts
+// as not obeying it, which only costs stats in partial clones.
+func HonorsNoLazyFetch(v Version) bool {
+	if !v.Less(Version{2, 44, 0}) {
+		return true
+	}
+	fixedIn := map[int]int{39: 4, 40: 2, 41: 1, 42: 2, 43: 4}
+	p, ok := fixedIn[v.Minor]
+	return v.Major == 2 && ok && v.Patch >= p
+}
 
 func (r *Runner) init() {
 	r.once.Do(func() {
