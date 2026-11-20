@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"time"
 
 	"github.com/some-du6e/pairtime/internal/agent/home"
@@ -65,7 +66,15 @@ type marker struct {
 	Created time.Time `json:"created,omitzero"`
 	// Reason says why the OS store wasn't used, when Store is KindFile.
 	Reason string `json:"fallback_reason,omitempty"`
+	// Unconfirmed lists the stores a first run gave K_dev to and then
+	// didn't use, without being sure they don't have it: the save didn't
+	// answer in time and may yet finish, or a store that saved it
+	// couldn't be made to delete it again. Each is written here before the
+	// first run tries the next store, and Destroy deletes K_dev from them
+	// as from Store.
+	Unconfirmed []Kind `json:"unconfirmed,omitempty"`
 	// Archived lists the device keys restored from other installations.
+	// Archive lists each one here before it puts the key in a store.
 	Archived []archivedKey `json:"archived,omitempty"`
 }
 
@@ -104,6 +113,11 @@ func (m marker) validate() error {
 		return fmt.Errorf("%w: keystore.json names %s", ErrDamaged, m.Store.Description())
 	case m.KeyID != "" && !isHexID(m.KeyID):
 		return fmt.Errorf("%w: keystore.json has no valid key id", ErrDamaged)
+	}
+	for i, k := range m.Unconfirmed {
+		if !k.known() || slices.Contains(m.Unconfirmed[:i], k) {
+			return fmt.Errorf("%w: keystore.json lists a store that may hold the device key that isn't valid", ErrDamaged)
+		}
 	}
 	seen := make(map[string]bool, len(m.Archived))
 	for _, a := range m.Archived {

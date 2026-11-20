@@ -83,15 +83,25 @@ func (k Kind) known() bool {
 	return false
 }
 
+// inDir reports whether the store keeps its items as files in the
+// keystore's directory, so deleting the directory deletes them, even on a
+// system that doesn't have the store.
+func (k Kind) inDir() bool { return k == KindDPAPI || k == KindFile }
+
 // keyringService is the service go-keyring files the keystore's items
 // under, in the Keychain and the Secret Service. Each item's account is its
 // name, which starts with the installation's id.
 const keyringService = "pairtime"
 
-// notFound turns a platform store's not-found error into ErrNotFound.
-func notFound(err, platformNotFound error) error {
-	if errors.Is(err, platformNotFound) {
+// platformErr turns a keyring store's errors into the keystore's: its
+// not-found error into ErrNotFound, and its error for an item that isn't in
+// the form it writes, such as one that isn't hex, into ErrDamaged.
+func platformErr(err, notFound, badItem error) error {
+	switch {
+	case errors.Is(err, notFound):
 		return fmt.Errorf("%w: %v", ErrNotFound, err)
+	case errors.Is(err, badItem):
+		return fmt.Errorf("%w: %v", ErrDamaged, err)
 	}
 	return err
 }
@@ -238,26 +248,66 @@ func (o *options) await(s Store, call func() error) error {
 }
 
 func (o *options) late(s Store) error {
-	return fmt.Errorf("%w: %s didn't answer within %v", ErrUnavailable, s.Kind().Description(), o.timeout)
+	return &lateError{kind: s.Kind(), timeout: o.timeout}
 }
+
+// lateError is a call to a store that didn't answer within the deadline.
+// The call is still running and may yet do what it was asked. It is
+// ErrUnavailable.
+type lateError struct {
+	kind    Kind
+	timeout time.Duration
+}
+
+func (e *lateError) Error() string {
+	return fmt.Sprintf("%v: %s didn't answer within %v", ErrUnavailable, e.kind.Description(), e.timeout)
+}
+
+func (e *lateError) Unwrap() error { return ErrUnavailable }
 
 // put saves secret in s and reads it back, so a store that takes a secret
 // and loses or changes it is caught before anything depends on the secret.
-func (o *options) put(s Store, name string, secret []byte) error {
+// When put fails, mayHold says whether s may still have the secret: the
+// save didn't answer in time and may yet finish, or put saved the secret
+// and couldn't make sure it was deleted again.
+func (o *options) put(s Store, name string, secret []byte) (mayHold bool, err error) {
 	if err := o.set(s, name, secret); err != nil {
-		return err
+		var late *lateError
+		return errors.As(err, &late), err
 	}
 	got, err := o.get(s, name)
 	if err != nil {
-		return fmt.Errorf("reading it back: %w", err)
+		return o.erase(s, name) != nil, fmt.Errorf("reading it back: %w", err)
 	}
 	same := subtle.ConstantTimeCompare(got, secret) == 1
 	clear(got)
 	if !same {
-		o.del(s, name)
-		return errors.New("it gave back other bytes than it was given")
+		return o.erase(s, name) != nil, errors.New("it gave back other bytes than it was given")
 	}
-	return nil
+	return false, nil
+}
+
+// erase deletes the secret saved under name in s, and when the delete
+// returns nil, reads the name back and wants ErrNotFound. A nil delete
+// isn't proof: go-keyring returns nil for a Secret Service delete whose
+// prompt the user dismissed, and the item stays.
+func (o *options) erase(s Store, name string) error {
+	err := o.del(s, name)
+	if errors.Is(err, ErrNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	b, err := o.get(s, name)
+	clear(b)
+	switch {
+	case errors.Is(err, ErrNotFound):
+		return nil
+	case err != nil:
+		return fmt.Errorf("the delete returned, but checking that the key is gone failed: %w", err)
+	}
+	return errors.New("the key is still there after the delete returned, as when a keyring's prompt to allow it is dismissed")
 }
 
 // fetch reads the device key saved under name in s, and checks that it is
@@ -274,6 +324,8 @@ func (o *options) fetch(s Store, name, wantID string) ([]byte, error) {
 		return nil, fmt.Errorf("%w: %s has the device key, but this account can't decrypt it (%v)", ErrKeyLost, where, err)
 	case errors.Is(err, ErrUnavailable):
 		return nil, err
+	case errors.Is(err, ErrDamaged):
+		return nil, fmt.Errorf("%w: %s has an item for the device key that isn't in the form pairtime writes", ErrDamaged, where)
 	case err != nil:
 		return nil, fmt.Errorf("%w: %s: %v", ErrUnavailable, where, err)
 	}

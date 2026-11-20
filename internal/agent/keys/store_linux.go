@@ -19,7 +19,7 @@ func (secretServiceStore) Kind() Kind { return KindSecretService }
 
 func (s secretServiceStore) Get(name string) ([]byte, error) {
 	b, err := s.ss.Get(name)
-	return b, notFound(err, linux.ErrNotFound)
+	return b, platformErr(err, linux.ErrNotFound, linux.ErrBadItem)
 }
 
 func (s secretServiceStore) Set(name string, secret []byte) error {
@@ -27,5 +27,5 @@ func (s secretServiceStore) Set(name string, secret []byte) error {
 }
 
 func (s secretServiceStore) Delete(name string) error {
-	return notFound(s.ss.Delete(name), linux.ErrNotFound)
+	return platformErr(s.ss.Delete(name), linux.ErrNotFound, linux.ErrBadItem)
 }

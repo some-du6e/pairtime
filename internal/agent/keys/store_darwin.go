@@ -17,7 +17,7 @@ func (keychainStore) Kind() Kind { return KindKeychain }
 
 func (s keychainStore) Get(name string) ([]byte, error) {
 	b, err := s.k.Get(name)
-	return b, notFound(err, darwin.ErrNotFound)
+	return b, platformErr(err, darwin.ErrNotFound, darwin.ErrBadItem)
 }
 
 func (s keychainStore) Set(name string, secret []byte) error {
@@ -25,5 +25,5 @@ func (s keychainStore) Set(name string, secret []byte) error {
 }
 
 func (s keychainStore) Delete(name string) error {
-	return notFound(s.k.Delete(name), darwin.ErrNotFound)
+	return platformErr(s.k.Delete(name), darwin.ErrNotFound, darwin.ErrBadItem)
 }
