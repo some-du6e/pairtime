@@ -14,35 +14,40 @@ SIM_JACCARD = 0.8
 REROLL_WINDOW_MS = 1_800_000
 # SM 4.2's retry-type go-aheads, which all become the token <retry>.
 RETRY = ["still not working", "still broken", "doesn't work", "try again", "fix it", "retry", "again"]
+# One pass, longest phrase first, so a <retry> already written isn't
+# matched again.
+RETRY_RE = re.compile(r"(?<![\w'<])(?:" + "|".join(re.escape(p) for p in sorted(RETRY, key=len, reverse=True))
+                      + r")(?![\w'>])")
 
 
-def normalize(text):
+def normalize(text, keep_punctuation=False):
     """SM 4.2's normalization: lowercase, numbers to <n>, retry phrases to
     <retry>, whitespace collapsed. SM's list doesn't mention punctuation,
     but its 20:07 row needs "fix it!!" and "fix it" to normalize the same,
     so punctuation goes too, as in SM 2.2's prompt-class rule (erratum
-    2026-11-19-sm-6.5-loop-codes). Pasted blocks, paths, URLs, hex and
-    backticked identifiers would be replaced as well; no fixture prompt has
-    any."""
+    2026-11-19-sm-6.5-loop-codes). keep_punctuation gives SM's list as
+    written. Pasted blocks, paths, URLs, hex and backticked identifiers
+    would be replaced as well; no fixture prompt has any."""
     s = text.lower()
     s = re.sub(r"\d+(?:\.\d+)?", "<n>", s)
-    for phrase in sorted(RETRY, key=len, reverse=True):
-        s = re.sub(r"(?<![\w'])" + re.escape(phrase) + r"(?![\w'])", "<retry>", s)
+    s = RETRY_RE.sub("<retry>", s)
+    if keep_punctuation:
+        return " ".join(s.split())
     s = re.sub(r"[^\w\s<>]", " ", s)
     return " ".join(s.split())
 
 
-def shingles(text):
+def shingles(text, keep_punctuation=False):
     """Word 3-shingles, or character 5-shingles under 6 words (SM 8.5)."""
-    norm = normalize(text)
+    norm = normalize(text, keep_punctuation)
     words = norm.split()
     if len(words) >= 6:
         return {tuple(words[i:i + 3]) for i in range(len(words) - 2)}
     return {norm[i:i + 5] for i in range(max(1, len(norm) - 4))}
 
 
-def jaccard(a, b):
-    x, y = shingles(a), shingles(b)
+def jaccard(a, b, keep_punctuation=False):
+    x, y = shingles(a, keep_punctuation), shingles(b, keep_punctuation)
     return len(x & y) / len(x | y)
 
 

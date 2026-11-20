@@ -387,6 +387,11 @@ attempt = dict(zip(order, neardup.attempts([(SENT[k], TEXT[k]) for k in order], 
 tl.check([attempt[k] for k in order] == [1, 1, 2, 3, 1, 1, 4, 1, 1, 1, 1, 5, 1, 1, 1, 6, 1, 1, 1, 1, 1, 1],
          f"re-roll attempts {attempt}")
 tl.check(not neardup.far_apart(list(dict.fromkeys(TEXT.values()))), f"close pairs {neardup.far_apart(list(TEXT.values()))}")
+# With punctuation kept, as SM 4.2's list reads, T4 isn't a near-duplicate
+# of T2 and SM's 20:07 row fails (erratum).
+kept = neardup.jaccard(TEXT[2], TEXT[4], keep_punctuation=True)
+tl.check(neardup.normalize(TEXT[2]) == neardup.normalize(TEXT[4]) and round(kept, 2) == 0.69,
+         f"T2 and T4 normalize the same only without punctuation: {kept}")
 
 
 def changed_lines(k):
