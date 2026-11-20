@@ -118,6 +118,9 @@ func (l *logind) watchSession(ctx context.Context) error {
 	l.session = session
 	locked, err := l.readLockedHint(ctx)
 	if err != nil {
+		// Without a first reading, a later change can't be told from
+		// the state before it: leave lock unknown throughout.
+		l.session = ""
 		return err
 	}
 	// The first reading only sets the state; run reports it as a lock if
