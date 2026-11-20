@@ -124,27 +124,37 @@ upload before it goes.
 func describeUpload(p uploader.Preview, server string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "This is the next upload from this computer to %s/api/v1/ingest/batches.\n", strings.TrimSuffix(server, "/"))
-	b.WriteString("The JSON on standard output is all of it. pairtime compresses it with gzip and\n")
-	b.WriteString("signs it with this computer's device key, and the request adds only its\n")
-	b.WriteString("headers: your device token, this computer's device id, a request number, the\n")
-	b.WriteString("time and the signature.\n\nIt holds:\n")
+	b.WriteString("The JSON on standard output is all of its body. pairtime compresses it with\n")
+	b.WriteString("gzip and signs it with this computer's device key. The request's headers carry\n")
+	b.WriteString("your device token, this computer's device id, a request number, the time, a\n")
+	b.WriteString("request id that starts with this computer's clock, the hash and signature of\n")
+	b.WriteString("the compressed body, its content type and encoding, and pairtime-agent and its\n")
+	b.WriteString("version as the User-Agent. The server sees this computer's IP address, as\n")
+	b.WriteString("every website does. When the agent starts, it also asks the server where this\n")
+	b.WriteString("computer's uploads stand, with the same token, device id and User-Agent.\n\nIt holds:\n")
 	if p.Batches > 0 {
 		fmt.Fprintf(&b, "  - %s: hashes of your ledger's records, which prove when they\n", countOf(p.Batches, "batch root", "batch roots"))
 		b.WriteString("    existed without saying what they are;\n")
 	}
 	if p.Buckets > 0 {
-		fmt.Fprintf(&b, "  - %s: for each minute, the seconds credited to you and why, as\n", countOf(p.Buckets, "minute", "minutes"))
-		b.WriteString("    reason codes, the seconds left out and why, how long your AI agent ran,\n")
-		b.WriteString("    and which project, as a key only this computer can match to a folder;\n")
+		fmt.Fprintf(&b, "  - %s: for each minute, its time, the seconds credited to you with the\n", countOf(p.Buckets, "minute", "minutes"))
+		b.WriteString("    reason, the kind of work and how strong the evidence is, the seconds left\n")
+		b.WriteString("    out and why, how long your AI agent ran, which project, as a key only this\n")
+		b.WriteString("    computer can match to a folder, whether the minute can still change, and\n")
+		b.WriteString("    whether its records reached the server on time;\n")
 	}
 	if p.Labels {
 		b.WriteString("  - the labels: the versions of pairtime, of its scoring rules and of the AI\n")
-		b.WriteString("    tools you use;\n")
+		b.WriteString("    tools you use, and whether the typing module is on and this computer is\n")
+		b.WriteString("    a virtual machine;\n")
 	}
 	b.WriteString("and no prompt, answer, code, file name or path, window title, command line\n")
 	b.WriteString("or keystroke.\n")
 	if p.Retry {
 		b.WriteString("\nAn earlier try to send it failed, and pairtime sends it again exactly like this.\n")
+	}
+	if p.More {
+		b.WriteString("\nMore uploads like it wait behind this one, and go right after it.\n")
 	}
 	b.WriteString("\n")
 	return b.String()

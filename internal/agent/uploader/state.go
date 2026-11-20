@@ -5,6 +5,7 @@ package uploader
 import (
 	"maps"
 	"slices"
+	"time"
 
 	"github.com/some-du6e/pairtime/internal/agent/store"
 	"github.com/some-du6e/pairtime/pkg/event"
@@ -126,11 +127,17 @@ func (s saved) clone() saved {
 	return s
 }
 
+// spanGap is the longest wait between two failures of one outage: the
+// longest Retry-After the uploader keeps, and a wake. A longer gap, as
+// while the machine slept or the agent was stopped, ends the span: the
+// uploader wasn't trying then.
+const spanGap = int64((retryAfterMax + Every) / time.Millisecond)
+
 // noteFailure adds a failure at t, in Unix ms, to the offline spans: it
 // stretches the last span when the failure follows it with no success in
-// between (open), and starts a new one otherwise.
+// between (open) and within spanGap, and starts a new one otherwise.
 func (s *saved) noteFailure(t int64, open bool) {
-	if n := len(s.Offline); open && n > 0 && t >= s.Offline[n-1].To {
+	if n := len(s.Offline); open && n > 0 && t >= s.Offline[n-1].To && t-s.Offline[n-1].To <= spanGap {
 		s.Offline[n-1].To = t
 		return
 	}
@@ -140,11 +147,15 @@ func (s *saved) noteFailure(t int64, open bool) {
 	}
 }
 
-// offlineDuring reports whether a failure note falls in [from, to], in
-// Unix ms.
-func offlineDuring(spans []span, from, to int64) bool {
+// waitedOut reports whether a batch sealed at sealed, on the device's
+// clock in Unix ms, was held back by an outage that its receipt, at got
+// on the same clock, ended: a span of failures began by the end of the
+// batch's witness window, lag after its seal, went on past the seal, and
+// the receipt came within spanGap of its last failure, in the catch-up
+// after it (DESIGN 7.4).
+func waitedOut(spans []span, sealed, lag, got int64) bool {
 	for _, s := range spans {
-		if s.From <= to && s.To >= from {
+		if s.From <= sealed+lag && s.To >= sealed && got <= s.To+spanGap {
 			return true
 		}
 	}

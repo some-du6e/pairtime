@@ -107,6 +107,10 @@ func (ix *rowIndex) rowsFrom(from uint64, n int) []ledger.Row {
 	return rows[:min(n, len(rows))]
 }
 
+// holdsRow reports whether the device has a batch b, whether or not the
+// index still holds its row.
+func (ix *rowIndex) holdsRow(b uint64) bool { return b >= 1 && b <= ix.last() }
+
 // row returns batch b's row while the index holds it.
 func (ix *rowIndex) row(b uint64) (ledger.Row, bool) {
 	if len(ix.queue) == 0 || b < ix.first || b > ix.last() {
@@ -197,7 +201,13 @@ type reading struct {
 // the minute, or B* has no receipt yet, so it rests on what the device
 // keeps and is the same whenever it is read: `pairtime privacy show`
 // gives the bytes the upload sends.
-func witnessOf(ix *rowIndex, minute int64, r reading) (event.Witness, bool) {
+//
+// A revision written after B*, by a later batch's records, can rest on
+// those records too: a prompt whose batch waited out an outage credits
+// the minutes its lead reaches back into. So a revision also reads its own
+// batch, the one whose scoring wrote it, by when the server received that
+// batch after it was sealed, and takes the worse of the two readings.
+func witnessOf(ix *rowIndex, minute int64, batch uint64, r reading) (event.Witness, bool) {
 	end := minute + 60_000
 	if ix.created > 0 && end <= ix.created {
 		return event.Backfilled, true
@@ -206,6 +216,23 @@ func witnessOf(ix *rowIndex, minute int64, r reading) (event.Witness, bool) {
 	if !ok {
 		return "", false
 	}
+	w, ok := r.of(ix, b, end)
+	if !ok || batch <= b || batch > ix.last() {
+		return w, ok
+	}
+	wb, ok := r.of(ix, batch, ix.times[batch-1].sealed)
+	if !ok {
+		return "", false
+	}
+	return worse(w, wb), true
+}
+
+// of reads batch b's witness label for records of the time due, on the
+// device's clock: witnessed when the server received it within lag after
+// due, offline when it was sealed within lag of due and waited out an
+// outage, backfilled otherwise, and backfilled for a batch the server can
+// never receive. It waits while b has no receipt.
+func (r reading) of(ix *rowIndex, b uint64, due int64) (event.Witness, bool) {
 	if (r.chainStart > 0 && b < r.chainStart) || (r.fork > 0 && b >= r.fork) {
 		return event.Backfilled, true
 	}
@@ -215,10 +242,28 @@ func witnessOf(ix *rowIndex, minute int64, r reading) (event.Witness, bool) {
 	}
 	sealed := ix.times[b-1].sealed
 	switch {
-	case got-(end+r.offset) <= r.lag:
+	case got-(due+r.offset) <= r.lag:
 		return event.Witnessed, true
-	case sealed-end <= r.lag && offlineDuring(r.offline, sealed, sealed+r.lag):
+	case sealed-due <= r.lag && waitedOut(r.offline, sealed, r.lag, got-r.offset):
 		return event.Offline, true
 	}
 	return event.Backfilled, true
+}
+
+// worse returns the weaker of two witness labels: backfilled, then
+// offline, then witnessed.
+func worse(a, b event.Witness) event.Witness {
+	rank := func(w event.Witness) int {
+		switch w {
+		case event.Witnessed:
+			return 0
+		case event.Offline:
+			return 1
+		}
+		return 2
+	}
+	if rank(b) > rank(a) {
+		return b
+	}
+	return a
 }

@@ -26,6 +26,8 @@ type Preview struct {
 	// carries, and Labels says whether it carries the labels.
 	Batches, Buckets int
 	Labels           bool
+	// More is set when more requests wait behind this one.
+	More bool
 }
 
 // PreviewOptions say where an installation keeps its files, and what the
@@ -83,7 +85,7 @@ func Next(o PreviewOptions) (Preview, error) {
 	case st.Chain != rows.device:
 		st = saved{Chain: rows.device, Harnesses: st.Harnesses}
 	case st.Server != c.Server || st.Device != c.DeviceID:
-		st = saved{Chain: rows.device, Harnesses: st.Harnesses, Offline: st.Offline}
+		st = saved{Chain: rows.device, Harnesses: st.Harnesses}
 	}
 	if p, err := readOutbox(o.DataDir, st); err == nil && p != nil {
 		return previewOf(p.plan, true), nil
@@ -120,7 +122,7 @@ func previewOf(p plan, retry bool) Preview {
 	}
 	return Preview{
 		JSON: p.js, Retry: retry,
-		Batches: len(p.body.Batches), Buckets: len(p.body.Buckets), Labels: p.body.Labels != nil,
+		Batches: len(p.body.Batches), Buckets: len(p.body.Buckets), Labels: p.body.Labels != nil, More: p.more,
 	}
 }
 

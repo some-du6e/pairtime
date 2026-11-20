@@ -35,6 +35,11 @@ type plan struct {
 	// labels is the hash of the labels the request carries, "" when it
 	// carries none.
 	labels string
+	// more is set when items wait behind the request's, past its limits.
+	more bool
+	// unread lists the days whose bucket files couldn't be read: their
+	// lines wait, and the rest go.
+	unread []string
 }
 
 // planInput is everything a plan is made from. The agent's uploader and
@@ -81,18 +86,22 @@ func makePlan(in planInput) (plan, error) {
 		nBuckets = maxBuckets
 	}
 	roots := rootsOf(in, nRoots)
-	entries, days, err := bucketsOf(in, nBuckets)
+	entries, days, unread, err := bucketsOf(in, nBuckets)
 	if err != nil {
 		return plan{}, err
 	}
+	more := len(roots) == nRoots || bucketsIn(entries) == nBuckets
 	for {
 		p, err := assemble(in, roots, entries, days)
 		if err != nil {
 			return plan{}, err
 		}
+		p.unread = unread
 		if len(p.raw) <= maxRaw && len(p.js) <= maxJSON {
+			p.more = more
 			return p, nil
 		}
+		more = true
 		// Too big: send half of the longer list now, the rest next.
 		nb := bucketsIn(entries)
 		switch {
@@ -125,11 +134,12 @@ func rootsOf(in planInput, n int) []Root {
 // isn't known yet, which waits with every line after it, so marks only
 // ever move past lines that went. A revision of another chain's device
 // isn't this device's to send: its line is passed over.
-func bucketsOf(in planInput, n int) ([]entry, map[string]bool, error) {
+func bucketsOf(in planInput, n int) ([]entry, map[string]bool, []string, error) {
 	files, err := store.BucketDays(in.bucketDir)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
+	var unread []string
 	days := make(map[string]bool, len(files))
 	// Batches before the start never get a receipt: the server's chain
 	// starts after them, or it no longer holds them.
@@ -159,7 +169,7 @@ func bucketsOf(in planInput, n int) ([]entry, map[string]bool, error) {
 			if in.notAfter != 0 && b.At() > in.notAfter {
 				return false // it waits until the server's clock reaches it
 			}
-			w, ok := witnessOf(in.rows, b.At(), rd)
+			w, ok := witnessOf(in.rows, b.At(), b.Batch, rd)
 			if !ok {
 				return false
 			}
@@ -170,7 +180,9 @@ func bucketsOf(in planInput, n int) ([]entry, map[string]bool, error) {
 			return count < n
 		})
 		if err != nil {
-			return nil, nil, err
+			// The day waits with its mark, and the others go.
+			unread = append(unread, f.Day)
+			continue
 		}
 		if restart && took == 0 {
 			// The day was cut since its mark: read it from its start next
@@ -178,7 +190,7 @@ func bucketsOf(in planInput, n int) ([]entry, map[string]bool, error) {
 			out = append(out, entry{day: f.Day})
 		}
 	}
-	return out, days, nil
+	return out, days, unread, nil
 }
 
 // bucketsIn counts the entries that send a bucket.

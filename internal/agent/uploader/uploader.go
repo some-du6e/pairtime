@@ -526,6 +526,11 @@ func (u *Uploader) cycle() bool {
 		u.setProblem("local", fmt.Sprintf("pairtime can't build its next upload: %v", err))
 		return false
 	}
+	if len(p.unread) > 0 {
+		u.setProblem("local", fmt.Sprintf("pairtime can't read its minutes of %s, so they wait while the rest go", strings.Join(p.unread, ", ")))
+	} else {
+		u.setProblem("local", "")
+	}
 	if p.body.Empty() {
 		if !sameMarks(p.marks, u.st.Marks) {
 			u.st.Marks = p.marks
@@ -582,8 +587,9 @@ func (u *Uploader) load(c Credentials) error {
 		st = saved{Chain: chain, Harnesses: st.Harnesses}
 	case st.Server != c.Server || st.Device != c.DeviceID:
 		// Another server or another sign-in holds none of this: it gets
-		// the chain from its start, and every bucket.
-		st = saved{Chain: chain, Harnesses: st.Harnesses, Offline: st.Offline}
+		// the chain from its start, and every bucket. The old server's
+		// outages say nothing about this one.
+		st = saved{Chain: chain, Harnesses: st.Harnesses}
 	}
 	st.Server, st.Device = c.Server, c.DeviceID
 	rows, err := loadRows(u.opts.LedgerDir, max(st.Next, 1))
@@ -765,9 +771,16 @@ func (u *Uploader) sync(c Credentials) bool {
 	next := uint64(1)
 	if st.Head != nil {
 		next = st.Head.B + 1
-		if b := u.forkAt(st.Head); b != 0 {
+		switch b := u.forkAt(st.Head); {
+		case b != 0:
 			u.st.Fork = b
 			u.setProblem("chain", forkProblem(b))
+		case u.st.Fork != 0 && u.st.Fork <= st.Head.B && u.rows.holdsRow(st.Head.B):
+			// The server's head is the device's own, past the batch the
+			// fork was at, and every head chains the batches before it:
+			// there was no fork there after all.
+			u.st.Fork = 0
+			u.setProblem("chain", "")
 		}
 		// A batch the server holds that the device has no receipt for
 		// goes again, and its duplicate brings the receipt back. Batches
@@ -841,6 +854,11 @@ func (u *Uploader) reserve() (uint64, error) {
 // more to send at once.
 func (u *Uploader) send(c Credentials, p plan, key string) bool {
 	for try := 0; try < 3; try++ {
+		// The sign-in may have gone while the upload waited for the scorer,
+		// or between tries: nothing goes then (device-auth-v1 8).
+		if now, ok := u.opts.Login.Credentials(); !ok || now.Token != c.Token || now.Server != c.Server || now.DeviceID != c.DeviceID {
+			return false
+		}
 		req, err := u.reserve()
 		if err != nil {
 			u.setProblem("local", fmt.Sprintf("pairtime can't keep its request counter in state.json: %v", err))
