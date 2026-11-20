@@ -59,7 +59,8 @@ type Runner struct {
 	// settings. Tests use it to point HOME and git's global config at a
 	// temporary directory.
 	Env []string
-	// Timeout caps one call. Zero means DefaultTimeout.
+	// Timeout caps one call whose context has no deadline. Zero means
+	// DefaultTimeout.
 	Timeout time.Duration
 
 	once    sync.Once
@@ -167,12 +168,17 @@ func (r *Runner) RunInput(ctx context.Context, dir string, stdin []byte, args ..
 }
 
 func (r *Runner) run(ctx context.Context, dir string, stdin []byte, limit int, args ...string) ([]byte, error) {
-	timeout := r.Timeout
-	if timeout <= 0 {
-		timeout = DefaultTimeout
+	// A caller's own deadline wins, so a call known to be slow, like the
+	// root-commit walk, can have longer.
+	if _, ok := ctx.Deadline(); !ok {
+		timeout := r.Timeout
+		if timeout <= 0 {
+			timeout = DefaultTimeout
+		}
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
 	}
-	ctx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
 
 	cmd := exec.CommandContext(ctx, r.exe, append(append([]string(nil), fixedArgs...), args...)...)
 	cmd.Dir = dir
