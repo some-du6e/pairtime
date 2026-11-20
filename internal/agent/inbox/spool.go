@@ -78,13 +78,12 @@ func Append(dir string, m Message) error {
 // such a message again; if the drain did see the first copy, the sink drops
 // the second.
 func appendOnce(dir, name string, rec []byte) (bool, error) {
-	const flags = os.O_WRONLY | os.O_APPEND | os.O_CREATE
-	f, err := os.OpenFile(name, flags, 0o600)
+	f, err := openSpool(name)
 	if errors.Is(err, fs.ErrNotExist) {
 		if err := os.MkdirAll(dir, 0o700); err != nil {
 			return false, err
 		}
-		f, err = os.OpenFile(name, flags, 0o600)
+		f, err = openSpool(name)
 	}
 	if err != nil {
 		return false, err
@@ -114,6 +113,29 @@ func appendOnce(dir, name string, rec []byte) (bool, error) {
 		return false, err
 	}
 	return os.SameFile(opened, now), nil
+}
+
+// openTries and openWait bound how long a sender waits to open the spool
+// while a drain renames it, which on Windows shuts opens out for a moment.
+const (
+	openTries = 50
+	openWait  = time.Millisecond
+)
+
+// openSpool opens the spool for appending, and creates it when it is
+// missing but its directory isn't.
+func openSpool(name string) (*os.File, error) {
+	var err error
+	for i := range openTries {
+		var f *os.File
+		if f, err = os.OpenFile(name, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o600); err == nil || !busy(err) {
+			return f, err
+		}
+		if i < openTries-1 {
+			time.Sleep(openWait)
+		}
+	}
+	return nil, err
 }
 
 // DrainResult counts what one Drain did.
