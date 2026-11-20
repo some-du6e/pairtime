@@ -433,6 +433,7 @@ func TestClaudeCodeLeavesFilesItCantMergeAlone(t *testing.T) {
 		want    string // in the error
 	}{
 		{"a file bigger than 4 MiB is left alone", `{"x": "` + strings.Repeat("a", 4<<20) + `"}`, 0o644, "bigger than the 4 MiB"},
+		{"a file under 4 MiB that pairtime's hooks would push past it is left alone", `{"x": "` + strings.Repeat("a", 4<<20-100) + `"}`, 0o644, "grow past the 4 MiB"},
 		{"a file with more pairtime hooks than pairtime ever writes is left alone", oldHooks(maxRemovals + 1), 0o644, "more pairtime hooks than pairtime ever writes"},
 		{"a file that isn't JSON is left alone", `{"model": }`, 0o644, "isn't valid JSON"},
 		{"a top level that isn't an object is left alone", `["model"]`, 0o644, "doesn't hold a JSON object"},

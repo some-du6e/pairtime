@@ -170,6 +170,11 @@ func (in *Installer) planInstall(groups []*group) (*Plan, error) {
 		if cur.Exists && !g.target.isRegistry() && cur.Mode&0o200 == 0 {
 			return nil, fmt.Errorf("%s is read-only, so pairtime leaves it alone; make it writable and run install again", g.target)
 		}
+		if !g.target.isRegistry() && len(next.Data) > maxFileSize {
+			// Uninstall would refuse to read the file it has to take
+			// pairtime's entries out of.
+			return nil, fmt.Errorf("%s would grow past the %d MiB pairtime reads back, so uninstall couldn't take pairtime's entries out of it; pairtime leaves it alone", g.target, maxFileSize>>20)
+		}
 		ch := Change{Target: g.target, Items: itemIDs(g.recs), Before: cur, After: next, kinds: kindsOf(g.recs)}
 		if !g.target.isRegistry() && !cur.Exists {
 			// A file that isn't there may be missing its folders too: on a
