@@ -16,9 +16,10 @@
 //   - a readiness check for /readyz (Bucket.Check; DESIGN 10.4).
 //
 // Requests use path-style URLs, https://<endpoint>/<bucket>/<key>, unless
-// the configuration asks for virtual-hosted ones. A single put is capped
-// at MaxPutSize, R2's cap, which is 5 MiB under S3's 5 GiB. There is no
-// multipart upload yet; PLAN WP-OP1 adds it for the nightly snapshots.
+// the configuration asks for virtual-hosted ones, which need https and a
+// host name. A single put is capped at MaxPutSize, R2's cap, which is
+// 5 MiB under S3's 5 GiB. There is no multipart upload yet; PLAN WP-OP1
+// adds it for the nightly snapshots.
 //
 // The package never logs. Its errors name the call, the bucket, the key,
 // the HTTP status and the S3 error code, and never a credential, a
@@ -85,7 +86,8 @@ type Config struct {
 	// DefaultRegion.
 	Region string
 	// VirtualHost puts the bucket in the host name,
-	// https://<bucket>.<endpoint host>/<key>, instead of the path.
+	// https://<bucket>.<endpoint host>/<key>, instead of the path. It
+	// needs an https endpoint with a host name (CheckVirtualHost).
 	VirtualHost bool
 	// Credentials sign the requests.
 	Credentials sigv4.Credentials
@@ -126,6 +128,11 @@ func New(cfg Config) (*Client, error) {
 	u, err := ParseEndpoint(cfg.Endpoint)
 	if err != nil {
 		return nil, err
+	}
+	if cfg.VirtualHost {
+		if err := CheckVirtualHost(u); err != nil {
+			return nil, err
+		}
 	}
 	region := cfg.Region
 	if region == "" {
@@ -184,7 +191,7 @@ func defaultHTTPClient() *http.Client {
 // ParseEndpoint checks an endpoint and returns it as a URL: https, or http
 // on a loopback host such as MinIO in CI; a host; no user, path, query or
 // fragment. A default port is dropped, so the signed host is the one Go
-// sends.
+// sends. CheckVirtualHost says what virtual-hosted URLs need on top.
 func ParseEndpoint(raw string) (*url.URL, error) {
 	if raw == "" {
 		return nil, errors.New("objstore: the endpoint is required, such as https://<account id>.r2.cloudflarestorage.com")
@@ -231,6 +238,25 @@ func isLoopback(host string) bool {
 	}
 	ip := net.ParseIP(host)
 	return ip != nil && ip.IsLoopback()
+}
+
+// CheckVirtualHost checks that an endpoint from ParseEndpoint can take
+// virtual-hosted URLs, which put the bucket in front of its host. That
+// needs https and a host name. Over http the requests would go to
+// <bucket>.localhost or <bucket>.127.0.0.1, which aren't the loopback
+// host that ParseEndpoint allows http on. pairtimed builds without cgo,
+// and Go's own resolver looks such a name up in DNS like any other, while
+// a proxy set in HTTP_PROXY gets every request for it. Either way the
+// signed requests and their bodies could leave the machine in plaintext.
+// An IP address can't take a bucket in front of it at all.
+func CheckVirtualHost(endpoint *url.URL) error {
+	if endpoint.Scheme != "https" {
+		return errors.New("objstore: virtual-hosted URLs need an https endpoint; over http they would go to <bucket>.<host>, which isn't a loopback host, so requests could leave the machine in plaintext")
+	}
+	if host := endpoint.Hostname(); net.ParseIP(host) != nil {
+		return fmt.Errorf("objstore: virtual-hosted URLs need a host name to put the bucket in front of, not the IP address %s", host)
+	}
+	return nil
 }
 
 // CheckRegion checks a region name: lowercase letters, digits and '-'.

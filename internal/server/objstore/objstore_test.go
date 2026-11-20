@@ -6,6 +6,8 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"io"
@@ -132,18 +134,42 @@ func TestCheckNames(t *testing.T) {
 	}
 }
 
-func TestNewRefusesMissingCredentials(t *testing.T) {
+func TestNew(t *testing.T) {
+	creds := sigv4.Credentials{AccessKeyID: "a", SecretAccessKey: "s"}
 	tests := []struct {
-		name  string
-		creds sigv4.Credentials
+		name string
+		cfg  Config
+		// wantErr is a substring of New's error; "" means New succeeds.
+		wantErr string
 	}{
-		{name: "no access key id is refused", creds: sigv4.Credentials{SecretAccessKey: "s"}},
-		{name: "no secret is refused", creds: sigv4.Credentials{AccessKeyID: "a"}},
+		{name: "no access key id is refused", wantErr: "both required",
+			cfg: Config{Endpoint: "https://s3.example", Credentials: sigv4.Credentials{SecretAccessKey: "s"}}},
+		{name: "no secret is refused", wantErr: "both required",
+			cfg: Config{Endpoint: "https://s3.example", Credentials: sigv4.Credentials{AccessKeyID: "a"}}},
+		{name: "path-style URLs over http on loopback are allowed, for MinIO in CI",
+			cfg: Config{Endpoint: "http://127.0.0.1:9000", Credentials: creds}},
+		{name: "virtual-hosted URLs over https on a host name are allowed",
+			cfg: Config{Endpoint: "https://fsn1.your-objectstorage.com", VirtualHost: true, Credentials: creds}},
+		{name: "virtual-hosted URLs over http are refused, since <bucket>.localhost isn't a loopback host", wantErr: "need an https endpoint",
+			cfg: Config{Endpoint: "http://localhost:9000", VirtualHost: true, Credentials: creds}},
+		{name: "virtual-hosted URLs over http are refused, since <bucket>.127.0.0.1 isn't a loopback host", wantErr: "need an https endpoint",
+			cfg: Config{Endpoint: "http://127.0.0.1:9000", VirtualHost: true, Credentials: creds}},
+		{name: "virtual-hosted URLs on an IPv4 address are refused", wantErr: "not the IP address",
+			cfg: Config{Endpoint: "https://192.0.2.10", VirtualHost: true, Credentials: creds}},
+		{name: "virtual-hosted URLs on an IPv6 address are refused", wantErr: "not the IP address",
+			cfg: Config{Endpoint: "https://[2001:db8::1]:8443", VirtualHost: true, Credentials: creds}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if _, err := New(Config{Endpoint: "https://s3.example", Credentials: tt.creds}); err == nil {
-				t.Error("New accepted incomplete credentials")
+			_, err := New(tt.cfg)
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Fatalf("New: %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Errorf("New error = %v, want one containing %q", err, tt.wantErr)
 			}
 		})
 	}
@@ -704,18 +730,25 @@ func TestClientNeverPrintsSecrets(t *testing.T) {
 	}
 }
 
-// TestVirtualHost sends every call to <bucket>.localhost, which a dialer
-// routes to the test server, and checks the server saw the bucket in the
-// host and only the key in the path.
+// TestVirtualHost sends every call over https to <bucket>.example.com,
+// which a dialer routes to the test server, and checks the server saw the
+// bucket in the host and only the key in the path. The server's
+// certificate covers *.example.com and is the only root the client
+// trusts, so TLS checks the virtual-hosted name, as it would on R2.
 func TestVirtualHost(t *testing.T) {
-	srv := objstoretest.New(t, mainBucket)
+	srv := objstoretest.NewTLS(t, mainBucket)
 	addr := srv.Listener.Addr().String()
-	_, port, _ := net.SplitHostPort(addr)
-	transport := &http.Transport{DialContext: func(ctx context.Context, network, _ string) (net.Conn, error) {
-		return (&net.Dialer{}).DialContext(ctx, network, addr)
-	}}
+	roots := x509.NewCertPool()
+	roots.AddCert(srv.Certificate())
+	transport := &http.Transport{
+		TLSClientConfig: &tls.Config{RootCAs: roots},
+		DialContext: func(ctx context.Context, network, _ string) (net.Conn, error) {
+			return (&net.Dialer{}).DialContext(ctx, network, addr)
+		},
+	}
+	t.Cleanup(transport.CloseIdleConnections)
 	c := newTestClient(t, srv, func(c *Config) {
-		c.Endpoint = "http://localhost:" + port
+		c.Endpoint = "https://example.com"
 		c.VirtualHost = true
 		c.HTTPClient = &http.Client{Transport: transport}
 	})
@@ -736,7 +769,7 @@ func TestVirtualHost(t *testing.T) {
 		name      string
 		got, want string
 	}{
-		{name: "the put went to the bucket's host", got: reqs[0].Host, want: mainBucket + ".localhost:" + port},
+		{name: "the put went to the bucket's host", got: reqs[0].Host, want: mainBucket + ".example.com"},
 		{name: "the put's path is the key alone", got: reqs[0].Path, want: "/vh/key"},
 		{name: "the listing's path is the root", got: reqs[1].Path, want: "/"},
 		{name: "the listing found the key", got: strings.Join(listed, ","), want: "vh/key"},

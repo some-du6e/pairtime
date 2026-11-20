@@ -95,11 +95,24 @@ type fault struct {
 // the test ends.
 func New(t testing.TB, buckets ...string) *Server {
 	t.Helper()
+	return start(t, httptest.NewServer, buckets)
+}
+
+// NewTLS is New over https. The server presents httptest's certificate,
+// which covers example.com and *.example.com, so a client can check a
+// virtual-hosted name against it. Certificate returns it for a client's
+// RootCAs.
+func NewTLS(t testing.TB, buckets ...string) *Server {
+	t.Helper()
+	return start(t, httptest.NewTLSServer, buckets)
+}
+
+func start(t testing.TB, newServer func(http.Handler) *httptest.Server, buckets []string) *Server {
 	s := &Server{buckets: make(map[string]map[string]*object), Now: time.Now}
 	for _, b := range buckets {
 		s.buckets[b] = make(map[string]*object)
 	}
-	s.Server = httptest.NewServer(http.HandlerFunc(s.serve))
+	s.Server = newServer(http.HandlerFunc(s.serve))
 	t.Cleanup(s.Close)
 	return s
 }
