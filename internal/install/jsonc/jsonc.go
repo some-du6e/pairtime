@@ -9,8 +9,8 @@
 //
 // Parse accepts JSON (RFC 8259) plus // and /* */ comments and a comma
 // after the last member or element, which is what VS Code-style settings
-// files allow. Edits keep a strict JSON file strict: they add no comment and
-// no trailing comma.
+// files allow. Edits keep a strict JSON file strict: they add no comment,
+// and a trailing comma only where the container already ends with one.
 package jsonc
 
 import (

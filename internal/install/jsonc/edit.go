@@ -195,7 +195,8 @@ func AppendElement(src []byte, arr *Value, val any, st Style) []byte {
 // written over several lines gets the item on a line of its own, indented
 // like the item before it; one written on one line gets it on that line.
 // The comma that separates it goes right after the item before, so a
-// comment at the end of that line stays at the end of that line.
+// comment at the end of that line stays at the end of that line. When the
+// item before has a trailing comma, the new one gets one too.
 func insertLast(src []byte, c *Value, item func(indent string, st Style) string, st Style) []byte {
 	closeAt := c.End - 1
 	if len(c.Items) == 0 {
@@ -226,7 +227,7 @@ func insertLast(src []byte, c *Value, item func(indent string, st Style) string,
 		one := st
 		one.Compact = true
 		if comma >= 0 {
-			return splice(src, comma+1, comma+1, " "+item("", one))
+			return splice(src, comma+1, comma+1, " "+item("", one)+",")
 		}
 		return splice(src, end, end, ", "+item("", one))
 	}
@@ -239,7 +240,7 @@ func insertLast(src []byte, c *Value, item func(indent string, st Style) string,
 	text := st.Newline + indent + item(indent, multi)
 	if comma >= 0 {
 		at := lineEnd(src, comma+1, closeAt)
-		return splice(src, at, at, text)
+		return splice(src, at, at, text+",")
 	}
 	at := lineEnd(src, end, closeAt)
 	if at == end {
@@ -280,21 +281,19 @@ func Remove(src []byte, c *Value, i int) []byte {
 	case i == len(c.Items)-1:
 		prev := c.Items[i-1]
 		sep := skipBlank(src, prev.Value.End) // the comma between prev and the item
-		if own && sep < lb {
-			cut := end
-			if trailing >= 0 {
-				// The item had a trailing comma, so the one after prev
-				// stays and becomes the trailing comma.
+		if trailing >= 0 {
+			// The file writes trailing commas: the one after prev stays,
+			// and is prev's trailing comma again.
+			if own && sep < lb {
 				return splice(src, lb, trailing+1, "")
 			}
-			out := splice(src, lb, cut, "")
+			return splice(src, sep+1, trailing+1, "")
+		}
+		if own && sep < lb {
+			out := splice(src, lb, end, "")
 			return splice(out, sep, sep+1, "")
 		}
-		cut := end
-		if trailing >= 0 {
-			cut = trailing + 1
-		}
-		return splice(src, prev.Value.End, cut, "")
+		return splice(src, prev.Value.End, end, "")
 	default:
 		next := c.Items[i+1]
 		if own && trailing >= 0 {

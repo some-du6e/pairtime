@@ -129,16 +129,22 @@ func (in *Installer) PlanInstall(items []Item) (*Plan, error) {
 		rec := p.manifest.find(g.target)
 		switch {
 		case rec == nil:
-			// pairtime hasn't touched the target before: what it holds
-			// now is what uninstall puts back.
+			// The manifest doesn't know the target: what it holds now is
+			// what uninstall puts back, without any pairtime hooks an
+			// earlier install left there, which would run a binary that
+			// uninstall deletes.
 			if !g.target.isRegistry() {
 				if ch.mkdirs, err = missingDirs(g.target.Path); err != nil {
 					return nil, err
 				}
 			}
+			base, err := undoAll(cur, cur, g.recs)
+			if err != nil {
+				return nil, fmt.Errorf("%s %w", g.target, err)
+			}
 			p.manifest.Targets = append(p.manifest.Targets, record{Target: g.target, Dirs: ch.mkdirs})
 			rec = &p.manifest.Targets[len(p.manifest.Targets)-1]
-			p.rebase(rec, cur)
+			p.rebase(rec, base)
 		case rec.Written != cur.digest():
 			// Something else changed the target since pairtime wrote it,
 			// such as git-ai rewriting its hooks. From now on uninstall puts
