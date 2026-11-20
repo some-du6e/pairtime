@@ -22,8 +22,18 @@ type Turn struct {
 	ProjectKey string        `json:"project_key,omitempty"`
 	TSubmit    int64         `json:"t_submit"`
 	// TStop is 0 while the turn is running.
-	TStop  int64        `json:"t_stop,omitempty"`
-	Origin event.Origin `json:"origin"`
+	TStop int64 `json:"t_stop,omitempty"`
+	// RunUntil is when the agent stopped working on the turn: at TStop, no
+	// later than the session's next prompt or session.end. Before its stop
+	// comes, a turn that hooks or a log reader see runs up to now, and any
+	// other turn to its last agent record, so a track turn, which has none,
+	// never runs (docs/errata/2026-11-19-turns-without-a-stop.md). A silence
+	// of the turn's agent records longer than BUCKET_TTL_S, or longer than
+	// RETURN_GAP_MAX_S + READ_HORIZON_S outside hooked sessions, ends it
+	// (turnBuild.runUntil, docs/errata/2026-11-20-hooked-turn-runs.md). It
+	// decides SUP against READ (SM 2.4) and agent_running_s (SM 5.1).
+	RunUntil int64        `json:"run_until"`
+	Origin   event.Origin `json:"origin"`
 	// PromptClass is set for turns a person started.
 	PromptClass event.PromptClass `json:"prompt_class,omitempty"`
 	// Prompt is the event_id of the prompt.submit that started the turn,
@@ -88,10 +98,17 @@ type session struct {
 	// the answer class (SM 2.2).
 	outputs []posRec[*event.AgentOutput]
 	stops   []posRec[*event.AgentStop]
+	// agent holds the indexes of its agent.output, agent.tool and agent.stop
+	// records, in record order.
+	agent []int
 	// lastStop is the latest agent.stop seen so far while turns are
 	// assembled, where the next continuation turn starts.
 	lastStop int64
-	turns    []*turnBuild
+	// ends are the times of its session.end records, in order.
+	ends  []int64
+	turns []*turnBuild
+	// byKey indexes turns by turn key once they are all built.
+	byKey map[string]*turnBuild
 }
 
 // posRec is a record's payload with its index in the records and its time.
@@ -123,6 +140,16 @@ func (s *session) askedBefore(pos int) bool {
 	return j > 0 && s.stops[j-1].d.StopReason == event.StopQuestion
 }
 
+// agentAfter returns the index of the session's first agent record after
+// the record at pos, or -1.
+func (s *session) agentAfter(pos int) int {
+	i := sort.SearchInts(s.agent, pos+1)
+	if i == len(s.agent) {
+		return -1
+	}
+	return s.agent[i]
+}
+
 // ide reports whether the session runs in an IDE, so that focus on the
 // editor window counts as focus on it (SM 2.2 rule 6).
 func (s *session) ide(pos int) bool {
@@ -146,14 +173,20 @@ type turnBuild struct {
 	prompts []int
 	// primary is the index of the prompt.submit the turn goes by, or -1
 	// for a continuation.
-	primary   int
-	tSubmit   int64
-	tStop     int64
-	stopHook  bool
-	words     int
-	diffLines int
-	turn      Turn
+	primary int
+	tSubmit int64
+	tStop   int64
+	// words and diffLines are clamped counts, summed up to countMax.
+	words     int64
+	diffLines int64
+	// agentTs are the times of the turn's agent.output, agent.tool and
+	// agent.stop records, in order once buildTurns is done.
+	agentTs []int64
+	turn    Turn
 }
+
+// running reports whether the agent was working on the turn at t.
+func (tb *turnBuild) running(t int64) bool { return tb.turn.TSubmit <= t && t < tb.turn.RunUntil }
 
 // viaRank orders the ways a record can arrive, most trusted first. When
 // several records saw the same act, the first in this order is the one the
@@ -207,35 +240,63 @@ func harnessRecord(e event.Event) string {
 	return ""
 }
 
-// buildSessions collects what the records say about each session.
+// buildSessions collects what the records say about each session, in two
+// passes. The first finds the sessions a hook or log reader covers. In
+// those, the second leaves out what a side door says about the session,
+// which is a cross-check there (DESIGN 5.2): a side door's session.start
+// would decide SM 2.2 rules 4 and 5 and whether an IDE hosts the session,
+// and its outputs and stops whether the next prompt answers a question. A
+// side-door record can come before the first hook record, hence the first
+// pass. The session's harness and project come from its first record that
+// counts.
 func (d *deriver) buildSessions() {
 	d.sessions = map[string]*session{}
-	for i, e := range d.recs {
+	for _, e := range d.recs {
 		key := harnessRecord(e)
 		if key == "" {
 			continue
 		}
 		s := d.sessions[key]
 		if s == nil {
-			s = &session{key: key, harness: e.Harness}
+			s = &session{key: key}
 			d.sessions[key] = s
-		}
-		if s.project == "" {
-			s.project = e.ProjectKey
 		}
 		if nativeVia(e.Via) {
 			s.native = true
 		}
+	}
+	seen := map[*session]bool{}
+	for i, e := range d.recs {
+		key := harnessRecord(e)
+		if key == "" {
+			continue
+		}
+		s := d.sessions[key]
 		if e.Via == event.ViaBridge || e.Via == event.ViaBridgeUnverified {
 			s.bridged = true
+		}
+		if s.native && sideDoor(e.Via) {
+			continue
+		}
+		if !seen[s] {
+			seen[s], s.harness = true, e.Harness
+		}
+		if s.project == "" {
+			s.project = e.ProjectKey
 		}
 		switch p := e.Data.(type) {
 		case *event.SessionStart:
 			s.starts = append(s.starts, posRec[*event.SessionStart]{i, e.T, p})
+		case *event.SessionEnd:
+			s.ends = append(s.ends, e.T)
 		case *event.AgentOutput:
 			s.outputs = append(s.outputs, posRec[*event.AgentOutput]{i, e.T, p})
+			s.agent = append(s.agent, i)
+		case *event.AgentTool:
+			s.agent = append(s.agent, i)
 		case *event.AgentStop:
 			s.stops = append(s.stops, posRec[*event.AgentStop]{i, e.T, p})
+			s.agent = append(s.agent, i)
 		}
 	}
 }
@@ -323,7 +384,10 @@ func (d *deriver) buildTurns() {
 		tb := byKey[[2]string{s.key, key}]
 		if tb == nil {
 			tb = &turnBuild{sess: s, key: key, primary: -1, tSubmit: e.T}
-			if s.lastStop > 0 && s.lastStop <= e.T {
+			// It starts at the previous stop only when its first record
+			// comes within reach of it: before that record nothing showed the
+			// turn, and a record changes nothing further back (rules.reach).
+			if s.lastStop > 0 && s.lastStop <= e.T && e.T-s.lastStop <= d.r.reach {
 				tb.tSubmit = s.lastStop
 			}
 			byKey[[2]string{s.key, key}] = tb
@@ -331,22 +395,23 @@ func (d *deriver) buildTurns() {
 		}
 		switch p := e.Data.(type) {
 		case *event.AgentOutput:
-			tb.words += p.Words
+			tb.words = addCount(tb.words, count(p.Words))
 		case *event.AgentStop:
 			if tb.tStop == 0 {
-				tb.tStop, tb.stopHook = e.T, p.StopHookActive
+				tb.tStop = e.T
 			}
 			s.lastStop = max(s.lastStop, e.T)
 		}
+		tb.agentTs = append(tb.agentTs, e.T)
 	}
 	for _, s := range d.sessions {
 		slices.SortStableFunc(s.turns, func(a, b *turnBuild) int { return cmp.Compare(a.tSubmit, b.tSubmit) })
 	}
-	// Edit tools carry no turn key; their lines go to the turn running in
-	// their session at the time.
+	// Tools carry no turn key; they go to the turn running in their session
+	// at the time, and an edit tool's lines with them.
 	for _, e := range d.recs {
 		p, ok := e.Data.(*event.AgentTool)
-		if !ok || (p.ToolClass != event.ToolEdit && p.ToolClass != event.ToolWrite) {
+		if !ok {
 			continue
 		}
 		s := d.sessions[e.SessionKey]
@@ -354,36 +419,107 @@ func (d *deriver) buildTurns() {
 			continue
 		}
 		if tb := s.runningAt(e.T); tb != nil {
-			tb.diffLines += p.LinesAdded + p.LinesRemoved
+			if isEdit(p) {
+				tb.diffLines = addCount(tb.diffLines, addCount(count(p.LinesAdded), count(p.LinesRemoved)))
+			}
+			tb.agentTs = append(tb.agentTs, e.T)
 		}
 	}
 	for _, s := range d.sessions {
-		for _, tb := range s.turns {
+		for k, tb := range s.turns {
 			d.finishTurn(tb)
+			slices.Sort(tb.agentTs)
+			tb.turn.RunUntil = tb.runUntil(d.r, s.turns[k+1:], d.now)
 			d.turns = append(d.turns, tb)
 		}
 	}
 	slices.SortFunc(d.turns, func(a, b *turnBuild) int { return turnCmp(a.turn, b.turn) })
 }
 
-// runningAt returns the turn of s that was running at t, or nil.
-func (s *session) runningAt(t int64) *turnBuild {
-	var found *turnBuild
-	for _, tb := range s.turns {
-		if tb.tSubmit > t {
+// isEdit reports whether a tool call changed files, so that its lines are
+// the turn's diff (SM 2.4).
+func isEdit(p *event.AgentTool) bool {
+	return p.ToolClass == event.ToolEdit || p.ToolClass == event.ToolWrite
+}
+
+// runUntil is the end of the turn's run (Turn.RunUntil). later are the
+// session's turns after it, in submit order, and now is the present as Step
+// takes it.
+//
+// A turn runs from its submit to its stop, and no later than the session's
+// next prompt or its session.end. Until its stop comes, a turn in a session
+// the harness's own hooks or logs cover runs up to now: its hooks will say
+// when it stops, and a stop that came after its minutes were final would
+// otherwise change them. A turn in any other session runs to its latest
+// agent record, as docs/errata/2026-11-19-turns-without-a-stop.md proposes,
+// since a track call or a bridge prompt never gets a stop.
+//
+// No record changes what was derived further back than rules.reach, so a
+// run lasts only while its agent's records keep coming. In a covered
+// session a silence of its records longer than BUCKET_TTL_S ends the run
+// BUCKET_TTL_S after the last one; elsewhere a silence longer than reach
+// ends it at the last one. A later record of the turn doesn't start it
+// again. docs/errata/2026-11-20-hooked-turn-runs.md asks about both
+// additions to the turns-without-a-stop rule.
+func (tb *turnBuild) runUntil(r rules, later []*turnBuild, now int64) int64 {
+	native := tb.sess.native
+	gap := r.reach
+	if native {
+		gap = r.bucketTTL
+	}
+	prev, cut := tb.tSubmit, false
+	for _, t := range tb.agentTs {
+		if tb.tStop > 0 && t > tb.tStop {
 			break
 		}
-		if tb.tStop == 0 || t < tb.tStop {
-			found = tb
+		if t-prev > gap {
+			cut = true
+			break
+		}
+		prev = t
+	}
+	var end int64
+	switch {
+	case cut && native:
+		end = prev + gap
+	case cut:
+		end = prev
+	case tb.tStop > 0:
+		end = tb.tStop
+	case native:
+		end = min(now, prev+gap)
+	default:
+		end = prev
+	}
+	for _, n := range later {
+		if n.primary >= 0 && n.tSubmit > tb.tSubmit {
+			end = min(end, n.tSubmit)
+			break
 		}
 	}
-	return found
+	if i, _ := slices.BinarySearch(tb.sess.ends, tb.tSubmit); i < len(tb.sess.ends) {
+		end = min(end, tb.sess.ends[i])
+	}
+	return max(end, tb.tSubmit)
+}
+
+// runningAt returns the turn of s that was running at t, or nil: the latest
+// submitted at or before t that hadn't stopped by t. s.turns must be in
+// submit order.
+func (s *session) runningAt(t int64) *turnBuild {
+	i := sort.Search(len(s.turns), func(i int) bool { return s.turns[i].tSubmit > t })
+	for i--; i >= 0; i-- {
+		if tb := s.turns[i]; tb.tStop == 0 || t < tb.tStop {
+			return tb
+		}
+	}
+	return nil
 }
 
 // finishTurn gives a turn its origin, class and typed length.
 func (d *deriver) finishTurn(tb *turnBuild) {
 	tb.turn = Turn{SessionKey: tb.sess.key, TurnKey: tb.key, Harness: tb.sess.harness, ProjectKey: tb.sess.project,
-		TSubmit: tb.tSubmit, TStop: tb.tStop, WordsOut: tb.words, DiffLines: tb.diffLines}
+		TSubmit: tb.tSubmit, TStop: tb.tStop, WordsOut: int(tb.words), DiffLines: int(tb.diffLines)}
 	if tb.primary < 0 {
 		// SM 2.2 rule 2: the turn went on without a new prompt.
 		tb.turn.Origin = event.OriginSelfContinue
@@ -407,7 +543,12 @@ func (d *deriver) origin(tb *turnBuild, e event.Event) (event.Origin, event.Prom
 	switch {
 	case p.MatchesPendingCron || p.OriginDeclared == event.DeclaredCron || p.OriginDeclared == event.DeclaredLoop:
 		return event.OriginScheduled, "", 0
-	case p.OriginDeclared == event.DeclaredGoal || p.OriginDeclared == event.DeclaredFollowup || tb.stopHook:
+	case p.OriginDeclared == event.DeclaredGoal || p.OriginDeclared == event.DeclaredFollowup:
+		// SM 2.2 rule 2 for a prompt. A turn a stop hook continued has no
+		// prompt.submit (testdata/timelines/README.md, Turns), so it is
+		// self_continue as a continuation. A stop with stop_hook_active
+		// later in a prompted turn doesn't change the prompt's origin: it
+		// can come long after the anchor is final.
 		return event.OriginSelfContinue, "", 0
 	case p.OriginDeclared == event.DeclaredSubagent || p.OriginDeclared == event.DeclaredCrossSession:
 		// SM 2.2 names no rule for a message another session sent; like a
@@ -425,7 +566,7 @@ func (d *deriver) origin(tb *turnBuild, e event.Event) (event.Origin, event.Prom
 		return event.OriginNoInput, "", 0
 	}
 	class := d.classify(tb.sess, tb.primary, p)
-	typed := int64(p.TypedLenEst)
+	typed := count(p.TypedLenEst)
 	think, typing := d.leadParts(class, e.Via, typed)
 	active := d.pres.inputSlots(e.T-think-typing, e.T) * event.SlotMS / 1000
 	most := d.r.typingMaxCPS * active
@@ -468,21 +609,23 @@ func (d *deriver) headless(st *event.SessionStart, s *session) bool {
 
 // hostedBy reports whether window f hosts session s (SM 2.2 rule 6): its
 // hosted_sessions hold the session, or it is the editor, in the session's
-// project, of a session that runs in an IDE. A session the bridge reports
-// runs in one: its records come from the editor's wakatime-cli (DESIGN
-// 5.7), and no hook says more about its process.
+// project, of a session that runs in an IDE. A session only the bridge
+// reports runs in one: its records come from the editor's wakatime-cli
+// (DESIGN 5.7), and no hook or log reader says more about its process.
+// Where one does, the bridge is a cross-check and its records say nothing
+// about where the session runs.
 func (d *deriver) hostedBy(f *focusRec, s *session, pos int) bool {
 	if f.hosts(s.key) {
 		return true
 	}
-	return (s.ide(pos) || s.bridged) && f.class == event.AppEditor && (f.project == "" || f.project == s.project)
+	return (s.ide(pos) || (s.bridged && !s.native)) && f.class == event.AppEditor && (f.project == "" || f.project == s.project)
 }
 
 // classify gives a person's prompt its class (SM 2.2). The prompt's text
 // is local, so the class reads what the agent derived from it when it
 // recorded the prompt: low_effort, from LowEffort below, and error_sig.
 func (d *deriver) classify(s *session, pos int, p *event.PromptSubmit) event.PromptClass {
-	typed := int64(p.TypedLenEst)
+	typed := count(p.TypedLenEst)
 	switch {
 	case p.AnswersQuestion || s.askedBefore(pos):
 		return event.ClassAnswer

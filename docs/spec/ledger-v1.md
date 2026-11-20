@@ -74,7 +74,18 @@ K_x = HMAC-SHA256(PRK, ascii(label) || 0x01)
 
 HMAC pads a key shorter than SHA-256's 64-byte block with zeros, so an empty salt and `zero(32)` give the same `PRK`. RFC 5869's test case 3 runs through that path.
 
-Other parts of pairtime derive keys under the same `pairtime/v1/` prefix: `backup` and `recovery` in DESIGN 7.11, and `seal` in DESIGN 7.6. Their own specs define them. A new ledger key takes a new label, and no label is ever used for two keys. `K_dev` and the keys derived from it never leave the device unencrypted (DESIGN 4.3, 7.11).
+Other parts of pairtime derive keys under the same `pairtime/v1/` prefix: `backup` and `recovery` in DESIGN 7.11, `seal` in DESIGN 7.6, and `project` in the git adapter (WP-AD5). Their own specs define them, and the git adapter's is below. A new ledger key takes a new label, and no label is ever used for two keys. `K_dev` and the keys derived from it never leave the device unencrypted (DESIGN 4.3, 7.11).
+
+The git adapter's project secret is `K_project`, derived as above with the label `pairtime/v1/project`. Project keys are HMACs under it, each over a domain string of its own, so a root commit and a folder can never give the same key:
+
+```text
+repo key   = "g" || hex(HMAC-SHA256(K_project, ascii("pairtime/v1/project/roots") || 0x00
+                                   || root_1 || 0x0a || ... || root_n || 0x0a)[0:16])
+folder key = "d" || hex(HMAC-SHA256(K_project, ascii("pairtime/v1/project/folder") || 0x00
+                                   || utf8(folder))[0:16])
+```
+
+`root_1` to `root_n` are the repo's root commit ids in lowercase hex, sorted and without repeats. `folder` is the folder's canonical path with forward slashes, lowercased on Windows and macOS. `internal/adapters/git/keys.go` has the code, and `TestProjectKeyVectors` pins a vector for each form.
 
 One `K_dev` writes one chain. The nonce (4.4) and the token salts (10.2) are keyed by `s` alone, so they stay unique only while no `s` repeats under one `K_dev`. A `K_dev` that `pairtime restore` unwraps onto a new install (DESIGN 7.11) only verifies and opens the old chain's records. The restored install writes its own chain, under its own `device_id` and a `K_dev` generated for it, from `s = 1`, and keeps the old key for reading. A second chain under the old key would repeat every nonce and salt: a body or a salt revealed from the old chain would let a reader confirm guesses of the new chain's hidden bodies, or of its removed tokens, at the same `s`.
 

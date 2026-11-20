@@ -8,19 +8,22 @@
 // their tables as new files. Migrations are additive in v1, so the previous
 // release still runs on a database the next one migrated, and a rollback is
 // the previous image tag: a migration may create tables and indexes, add
-// columns that are nullable or have a default, and insert rows, and nothing
-// else. Parse refuses any other statement, so a test over the embedded files
-// catches it in CI.
+// columns that are nullable or have a default, and insert rows, with ON
+// CONFLICT DO NOTHING but never DO UPDATE, and nothing else. Parse refuses
+// any other statement, so a test over the embedded files catches it in CI.
 //
 // The database records each applied migration with the SHA-256 of its
 // statements. A migration whose statements changed after it was applied
 // stops pairtimed at start. A migration the database has and this binary
 // doesn't, because a newer release applied it, is reported and left alone.
+// The tests pin every file's checksum, so CI fails an edit to a merged
+// migration before any server sees it: a fix goes in a new file.
 //
-// In a file, a statement ends with a semicolon at the end of a line, and
-// lines starting with "--" are comments. Statements follow the portable SQL
-// rules in package store; postgres.yml applies every migration to Postgres
-// 18 as well as SQLite.
+// In a file, a statement ends with a semicolon at the end of a line, and a
+// line starting with "--" is a comment. A comment after code on the same
+// line stays in its statement and counts toward the checksum. Statements
+// follow the portable SQL rules in package store; postgres.yml applies
+// every migration to Postgres 18 as well as SQLite.
 package migrations
 
 import (
@@ -50,8 +53,10 @@ type Migration struct {
 	ID string
 	// Statements are the SQL statements, without their semicolons.
 	Statements []string
-	// SHA256 is the hex SHA-256 of the statements. Comments and
-	// indentation don't count, so editing those is safe.
+	// SHA256 is the hex SHA-256 of the statements as Split returns them.
+	// Whole-line comments and indentation don't count, so editing those
+	// is safe. A comment after code on the same line is part of its
+	// statement, so it counts.
 	SHA256 string
 }
 
@@ -113,9 +118,10 @@ func Parse(fsys fs.FS) ([]Migration, error) {
 }
 
 // Split returns the statements of a migration file. A statement ends at a
-// line whose last character is a semicolon, and lines starting with "--"
-// are comments. Each statement comes back with its lines trimmed and
-// without the semicolon.
+// line whose last character is a semicolon. A line starting with "--" is a
+// comment, which Split drops; a "--" after code stays in the statement,
+// for the database to read as a comment. Each statement comes back with
+// its lines trimmed and without the semicolon.
 func Split(text string) ([]string, error) {
 	var stmts, cur []string
 	for _, line := range strings.Split(text, "\n") {
@@ -144,7 +150,9 @@ func Split(text string) ([]string, error) {
 
 // CheckAdditive refuses a statement that could remove, rename or rewrite
 // anything. It must create a table or an index, add a column that is
-// nullable or has a default, or insert rows (DESIGN 10.5 step 6).
+// nullable or has a default, or insert rows without touching the ones
+// already there (DESIGN 10.5 step 6). It reads words, not SQL, so it
+// catches mistakes and not a statement written to slip past it.
 func CheckAdditive(stmt string) error {
 	if strings.Contains(stmt, ";") {
 		return errors.New("it holds a ';', so it may be two statements; end each statement with a semicolon at the end of a line")
@@ -154,7 +162,15 @@ func CheckAdditive(stmt string) error {
 		return len(words) >= len(prefix) && slices.Equal(words[:len(prefix)], prefix)
 	}
 	switch {
-	case starts("CREATE", "TABLE"), starts("CREATE", "INDEX"), starts("CREATE", "UNIQUE", "INDEX"), starts("INSERT", "INTO"):
+	case starts("CREATE", "TABLE"), starts("CREATE", "INDEX"), starts("CREATE", "UNIQUE", "INDEX"):
+		return nil
+	case starts("INSERT", "INTO"):
+		// The upsert package store recommends for pairtimed's own writes
+		// rewrites a row that is already there. ON CONFLICT DO NOTHING
+		// leaves it alone, so that form stays additive.
+		if hasPair(words, "DO", "UPDATE") {
+			return errors.New("INSERT ... ON CONFLICT DO UPDATE rewrites rows that are already there, so the previous release can find its rows changed; use ON CONFLICT DO NOTHING (DESIGN 10.5)")
+		}
 		return nil
 	case starts("ALTER", "TABLE"):
 		// ALTER TABLE name ADD COLUMN column type ...

@@ -210,15 +210,16 @@ jobs:
         # package and its tests for one GOOS/GOARCH, so this compiles
         # internal/platform for all seven targets with CGO_ENABLED=0, such as
         # internal/platform/darwin for darwin/amd64 and darwin/arm64 (WP-OS3),
-        # and the device keystore, which picks its store by OS (WP-OS7). The
-        # desktop tests, which build with -tags desktop on Linux alone, are
-        # vetted in the Desktop test files step. The Windows and macOS tests
-        # themselves run in platform.yml.
+        # the procs scan's per-OS readers (WP-OS6), and the device keystore,
+        # which picks its store by OS (WP-OS7). The desktop tests, which build
+        # with -tags desktop on Linux alone, are vetted in the Desktop test
+        # files step. The Windows and macOS tests themselves run in
+        # platform.yml.
         if: ${{ !cancelled() }}
         run: |
           for target in windows/amd64 windows/386 windows/arm64 darwin/amd64 darwin/arm64 linux/amd64 linux/arm64; do
-            echo "go vet ./internal/platform/... ./internal/agent/keys/... for $target"
-            GOOS=${target%/*} GOARCH=${target#*/} go vet ./internal/platform/... ./internal/agent/keys/...
+            echo "go vet ./internal/platform/... ./internal/agent/procs/... ./internal/agent/keys/... for $target"
+            GOOS=${target%/*} GOARCH=${target#*/} go vet ./internal/platform/... ./internal/agent/procs/... ./internal/agent/keys/...
           done
 
       - name: HCA sign-in against an independent OIDC server

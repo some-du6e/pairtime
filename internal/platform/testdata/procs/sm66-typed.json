@@ -1,0 +1,35 @@
+{
+  "case": "SM 6.6, second variant: the loop typed straight into the interactive shell, so no script file is in the tree. SM: the nearest non-shell ancestor is now the terminal, and only claude's -p, which hooks and OTel report, makes the session headless.",
+  "source": "Written by hand from SM 6.6, not recorded on a machine. The interactive shell runs each claude -p of the loop as a job, so on macOS claude leads a process group of its own.",
+  "tables": [
+    {
+      "os": "windows",
+      "harness_pid": 6488,
+      "want": {"harness": "claude_code", "parent_class": "terminal_app", "entrypoint": "unknown", "has_tty": true, "decided_by": "WindowsTerminal", "script_shell": false},
+      "sm_parent_class": "terminal_app",
+      "procs": [
+        {"pid": 4, "ppid": 0, "name": "System", "start": "2026-11-19T17:58:00Z"},
+        {"pid": 4520, "ppid": 4480, "name": "explorer", "start": "2026-11-19T18:00:10Z"},
+        {"pid": 6100, "ppid": 4520, "name": "WindowsTerminal", "start": "2026-11-19T21:58:02Z"},
+        {"pid": 6144, "ppid": 6100, "name": "OpenConsole", "start": "2026-11-19T21:58:03Z"},
+        {"pid": 6200, "ppid": 6100, "name": "bash", "start": "2026-11-19T21:58:03Z"},
+        {"pid": 6232, "ppid": 6200, "name": "bash", "start": "2026-11-19T21:58:03Z"},
+        {"pid": 6460, "ppid": 6232, "name": "bash", "start": "2026-11-19T22:00:05Z"},
+        {"pid": 6488, "ppid": 6460, "name": "claude", "start": "2026-11-19T22:00:05Z"}
+      ]
+    },
+    {
+      "os": "darwin",
+      "harness_pid": 730,
+      "want": {"harness": "claude_code", "parent_class": "terminal_app", "entrypoint": "unknown", "has_tty": true, "decided_by": "Terminal", "script_shell": false},
+      "sm_parent_class": "terminal_app",
+      "procs": [
+        {"pid": 1, "ppid": 0, "name": "launchd", "pgid": 1, "tty": "none", "start": "2026-11-19T17:58:00Z"},
+        {"pid": 612, "ppid": 1, "name": "Terminal", "pgid": 612, "tty": "none", "start": "2026-11-19T21:58:00Z"},
+        {"pid": 640, "ppid": 612, "name": "login", "pgid": 640, "tty": "attached", "start": "2026-11-19T21:58:01Z"},
+        {"pid": 641, "ppid": 640, "name": "zsh", "pgid": 641, "tty": "attached", "start": "2026-11-19T21:58:01Z"},
+        {"pid": 730, "ppid": 641, "name": "claude", "pgid": 730, "tty": "attached", "start": "2026-11-19T22:00:05Z"}
+      ]
+    }
+  ]
+}

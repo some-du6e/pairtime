@@ -1,0 +1,35 @@
+{
+  "case": "SM 2.2 rule 4's own example: python farm.py spawning bash spawning claude is still script_runtime, the shell in between skipped. On Windows the script is started from PowerShell in Windows Terminal; on Linux from bash in GNOME Terminal, with python in a job of its own and bash and claude in python's group.",
+  "source": "Written by hand from SM 2.2 rule 4, not recorded on a machine.",
+  "tables": [
+    {
+      "os": "windows",
+      "harness_pid": 8120,
+      "want": {"harness": "claude_code", "parent_class": "script_runtime", "entrypoint": "unknown", "has_tty": true, "decided_by": "python", "script_shell": false},
+      "sm_parent_class": "script_runtime",
+      "procs": [
+        {"pid": 4520, "ppid": 4480, "name": "explorer", "start": "2026-11-19T18:00:10Z"},
+        {"pid": 6100, "ppid": 4520, "name": "WindowsTerminal", "start": "2026-11-19T21:58:02Z"},
+        {"pid": 6300, "ppid": 6100, "name": "pwsh", "start": "2026-11-19T21:58:03Z"},
+        {"pid": 8000, "ppid": 6300, "name": "python", "start": "2026-11-19T21:59:50Z"},
+        {"pid": 8100, "ppid": 8000, "name": "bash", "start": "2026-11-19T22:00:04Z"},
+        {"pid": 8120, "ppid": 8100, "name": "claude", "start": "2026-11-19T22:00:05Z"}
+      ]
+    },
+    {
+      "os": "linux",
+      "harness_pid": 4120,
+      "want": {"harness": "claude_code", "parent_class": "script_runtime", "entrypoint": "unknown", "has_tty": true, "decided_by": "python3.12", "script_shell": true},
+      "sm_parent_class": "script_runtime",
+      "procs": [
+        {"pid": 1, "ppid": 0, "name": "systemd", "pgid": 1, "tty": "none", "start": "2026-11-19T17:58:00Z"},
+        {"pid": 1900, "ppid": 1, "name": "systemd", "pgid": 1900, "tty": "none", "start": "2026-11-19T18:00:00Z"},
+        {"pid": 3000, "ppid": 1900, "name": "gnome-terminal-server", "pgid": 3000, "tty": "none", "start": "2026-11-19T21:58:00Z"},
+        {"pid": 3010, "ppid": 3000, "name": "bash", "pgid": 3010, "tty": "attached", "start": "2026-11-19T21:58:01Z"},
+        {"pid": 4000, "ppid": 3010, "name": "python3.12", "pgid": 4000, "tty": "attached", "start": "2026-11-19T21:59:50Z"},
+        {"pid": 4100, "ppid": 4000, "name": "bash", "pgid": 4000, "tty": "attached", "start": "2026-11-19T22:00:04Z"},
+        {"pid": 4120, "ppid": 4100, "name": "claude", "pgid": 4000, "tty": "attached", "start": "2026-11-19T22:00:05Z"}
+      ]
+    }
+  ]
+}

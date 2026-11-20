@@ -73,7 +73,12 @@ func (d *deriver) markReturns() {
 		// The first anchor after the run must be substantive, in the
 		// focused project, and within READ_HORIZON_S of the run's end,
 		// with no lock, sleep or focus change from the run's start to it.
+		// An anchor decided too late to reach the run's start (Anchor.from)
+		// doesn't count for it.
 		k := sort.Search(len(d.anchors), func(k int) bool { return d.anchors[k].T >= end })
+		for k < len(d.anchors) && d.anchors[k].T <= end+d.r.readHorizon && d.anchors[k].from(d.r) > start {
+			k++
+		}
 		if k == len(d.anchors) {
 			continue
 		}
@@ -96,6 +101,11 @@ func (d *deriver) markReturns() {
 				s.Then = event.PresentReturned
 			}
 		}
+		// The silence runs into the slot after it until the input a sample
+		// there dates (presence.markStarts).
+		if s := &p.slots[run.j]; s.Present == event.PresentNo && s.Then == event.PresentYes {
+			s.Present = event.PresentReturned
+		}
 	}
 }
 
@@ -112,7 +122,10 @@ func (d *deriver) breakIn(from, to int64) bool {
 // unreadWords counts the prose the agent showed, up to the run's end, in
 // the sessions the focused window hosts, or in the focused project's
 // sessions if it hosts none, since the person last had each in focus with
-// input (SM 2.1's unread_prose_words).
+// input (SM 2.1's unread_prose_words). Only output that the harness's own
+// hooks or logs report counts: a plugin or the bridge can claim any word
+// count, and as many turns as it likes, so a cap per turn wouldn't bound it
+// (DESIGN 5.2).
 func (d *deriver) unreadWords(f *focusRec, run silentRun, end int64) int64 {
 	var keys []string
 	if len(f.hosted) > 0 {
@@ -133,8 +146,8 @@ func (d *deriver) unreadWords(f *focusRec, run silentRun, end int64) int64 {
 		}
 		seen := d.lastSeen(s, run.i)
 		for _, o := range s.outputs {
-			if o.t > seen && o.t <= end && !(s.native && sideDoor(d.recs[o.pos].Via)) {
-				words += int64(o.d.Words)
+			if o.t > seen && o.t <= end && !sideDoor(d.recs[o.pos].Via) {
+				words = addCount(words, count(o.d.Words))
 			}
 		}
 	}
