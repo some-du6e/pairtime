@@ -72,3 +72,53 @@ func TestOwnRuleIDs(t *testing.T) {
 		})
 	}
 }
+
+// TestKubernetesSecretValues covers pasted Secret manifests: every value of
+// their data and stringData blocks goes, and nothing outside them does.
+func TestKubernetesSecretValues(t *testing.T) {
+	b1 := "UyFCXCpk" + "JHpEc2I9"
+	b2 := "cG9zdGdyZXM6Ly9hZG1p" + "bjpodW50ZXIyQGRiLmV4YW1wbGUuY29tOjU0MzIvYXBw"
+	pw := "hunter2" + "hunter2"
+	tests := []struct {
+		name string
+		text string
+		gone []string
+		kept []string
+	}{
+		{"every data value goes, not just the first, whatever its key",
+			"apiVersion: v1\nkind: Secret\nmetadata:\n  name: db\ntype: Opaque\ndata:\n  password: " + b1 + "\n  DATABASE_URL: " + b2 + "\n",
+			[]string{b1, b2}, []string{"DATABASE_URL:", "name: db", "type: Opaque"}},
+		{"stringData values go, and every line of a multi-line value",
+			"kind: Secret\nstringData:\n  api-key: " + pw + "\n  config.yaml: |\n    db:\n      url: x\n  after: y\n",
+			[]string{pw, "db:", "url: x", ": y"}, []string{"api-key:", "config.yaml:", "after:"}},
+		{"a manifest in a raw JSON string goes too",
+			`{"content":"apiVersion: v1\nkind: Secret\ndata:\n  password: ` + b1 + `\n  DATABASE_URL: ` + b2 + `\n"}`,
+			[]string{b1, b2}, []string{"DATABASE_URL:"}},
+		{"a manifest as kubectl prints it, with kind after data, goes too",
+			"apiVersion: v1\ndata:\n  password: " + b1 + "\nkind: Secret\nmetadata:\n  name: x\n",
+			[]string{b1}, []string{"name: x"}},
+		{"a ConfigMap keeps its data", "kind: ConfigMap\ndata:\n  LOG_LEVEL: debug\n", nil, []string{"LOG_LEVEL: debug"}},
+		{"the next document isn't the Secret's",
+			"kind: Secret\ndata:\n  a: " + b1 + "\n---\nkind: ConfigMap\ndata:\n  b: plainvalue\n",
+			[]string{b1}, []string{"b: plainvalue"}},
+		// gitleaks' own span takes the first entry's key with its value.
+		{"CRLF lines and a quoted kind still make a Secret", "kind: \"Secret\"\r\ndata:\r\n  a: " + b1 + "\r\n  b: " + b2 + "\r\n",
+			[]string{b1, b2}, []string{"  b: [SECRET]\r\n"}},
+	}
+	r := mustNew(t, Known{})
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			out := Render(tt.text, r.Find(tt.text))
+			for _, g := range tt.gone {
+				if strings.Contains(out, g) {
+					t.Errorf("Render = %q, still holds %q", out, g)
+				}
+			}
+			for _, k := range tt.kept {
+				if !strings.Contains(out, k) {
+					t.Errorf("Render = %q, lost %q", out, k)
+				}
+			}
+		})
+	}
+}

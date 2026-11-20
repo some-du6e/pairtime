@@ -74,7 +74,11 @@
 // credential out of an Authorization header with the Basic, Bearer or
 // token scheme. gitleaks v8.30.1 finds a URL's password only after a
 // keyword such as "password", and a header's credential only in a curl
-// command, so a pasted DATABASE_URL or HTTP request kept both.
+// command, so a pasted DATABASE_URL or HTTP request kept both. And in a
+// YAML document with kind: Secret, the value of every entry under data:
+// and stringData: goes, under gitleaks' rule id kubernetes-secret-yaml:
+// gitleaks' rule of that name matches one entry, so it took only the
+// first value out of a pasted manifest, and it can't see stringData.
 //
 // From Presidio: a result needs a score of 0.4, Presidio's floor for a
 // result with a context word, where Presidio keeps anything above zero; in
