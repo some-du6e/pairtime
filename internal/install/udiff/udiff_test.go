@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -71,6 +72,96 @@ func TestUnified(t *testing.T) {
 	}
 }
 
+func TestUnifiedPastTheTraceBudget(t *testing.T) {
+	side := func(prefix string, n int) string {
+		var b strings.Builder
+		for i := range n {
+			fmt.Fprintf(&b, "%s%d\n", prefix, i)
+		}
+		return b.String()
+	}
+	tests := []struct {
+		name string
+		n    int // lines on each side, none of them shared
+	}{
+		{"a change of more steps than the trace keeps is one deletion of every line and one insertion", 2000},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			a, b := side("a", tt.n), side("b", tt.n)
+			if 2*tt.n <= maxD {
+				t.Fatalf("%d changes don't take middle past maxD, %d", 2*tt.n, maxD)
+			}
+			want := fmt.Sprintf("--- a\n+++ b\n@@ -1,%d +1,%d @@\n", tt.n, tt.n) +
+				strings.ReplaceAll("\n"+a, "\na", "\n-a")[1:] + strings.ReplaceAll("\n"+b, "\nb", "\n+b")[1:]
+			if got := Unified("a", "b", []byte(a), []byte(b)); got != want {
+				t.Errorf("Unified gives\n%.300q...\nwant\n%.300q...", got, want)
+			}
+		})
+	}
+}
+
+func TestMaxD(t *testing.T) {
+	tests := []struct {
+		name string
+		ok   bool
+	}{
+		{"the trace up to maxD-1 fits maxTrace", maxD*maxD <= maxTrace},
+		{"the trace up to maxD passes maxTrace, so middle never looks past maxD", (maxD+1)*(maxD+1) > maxTrace},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if !tt.ok {
+				t.Errorf("maxD = %d doesn't fit maxTrace = %d", maxD, maxTrace)
+			}
+		})
+	}
+}
+
+// TestUnifiedMemory checks that what Unified allocates goes with the lines
+// from the first change to the last, not with the size of the files: a
+// settings file can be up to 4 MiB, and almost all of it blank lines.
+func TestUnifiedMemory(t *testing.T) {
+	blank := func(n int) string { return strings.Repeat("\n", n) }
+	const many = 4<<20 - 16
+	const apart = 1 << 20
+	tests := []struct {
+		name string
+		a, b string
+		want string
+		most uint64 // bytes Unified may allocate
+	}{
+		{
+			name: "a short change after 4 MiB of blank lines costs the change, not the lines before it",
+			a:    blank(many) + "end\n", b: blank(many) + "END\n",
+			want: fmt.Sprintf("--- a\n+++ b\n@@ -%d,4 +%d,4 @@\n \n \n \n-end\n+END\n", many-2, many-2),
+			most: 1 << 20,
+		},
+		{
+			name: "two changes a million blank lines apart cost an offset a line between them, not a step a line",
+			a:    "a\n" + blank(apart) + "b\n", b: "A\n" + blank(apart) + "B\n",
+			want: fmt.Sprintf("--- a\n+++ b\n@@ -1,4 +1,4 @@\n-a\n+A\n \n \n \n@@ -%d,4 +%d,4 @@\n \n \n \n-b\n+B\n", apart-1, apart-1),
+			// Eight bytes a line on each side, and room for the rest.
+			most: 2*8*(apart+3) + 1<<20,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			a, b := []byte(tt.a), []byte(tt.b)
+			var before, after runtime.MemStats
+			runtime.ReadMemStats(&before)
+			got := Unified("a", "b", a, b)
+			runtime.ReadMemStats(&after)
+			if got != tt.want {
+				t.Errorf("Unified gives\n%q\nwant\n%q", got, tt.want)
+			}
+			if n := after.TotalAlloc - before.TotalAlloc; n > tt.most {
+				t.Errorf("Unified allocated %d bytes, want at most %d", n, tt.most)
+			}
+		})
+	}
+}
+
 // TestGitAppliesTheDiff checks every diff against git, a diff reader this
 // package didn't write: `git apply` must turn a into exactly b. The pairs
 // are the cases above, random edits, and the installer's golden
@@ -82,7 +173,10 @@ func TestGitAppliesTheDiff(t *testing.T) {
 	}
 	git, err := exec.LookPath("git")
 	if err != nil {
-		t.Fatalf("git isn't installed, so the diffs can't be checked: %v", err)
+		// README.md asks for Go and nothing else, so a go test run without
+		// git skips the check, as internal/adapters/git's tests do. CI's
+		// Linux runner has git.
+		t.Skipf("git isn't installed, so the diffs can't be checked: %v", err)
 	}
 	type pair struct {
 		name string
@@ -100,6 +194,14 @@ func TestGitAppliesTheDiff(t *testing.T) {
 	for i := range 40 {
 		a := randomLines(rng, 1+rng.IntN(60))
 		pairs = append(pairs, pair{fmt.Sprintf("random edit %d", i), a, mutate(rng, a)})
+	}
+	// Edits inside long runs of shared lines, which Unified leaves out but
+	// for the context, so the hunks have to count the lines before them.
+	outer := []byte(numbered(50))
+	for i := range 10 {
+		a := randomLines(rng, 1+rng.IntN(30))
+		wrap := func(mid []byte) []byte { return slices.Concat(outer, mid, outer) }
+		pairs = append(pairs, pair{fmt.Sprintf("random edit %d between 50 shared lines on each side", i), wrap(a), wrap(mutate(rng, a))})
 	}
 	goldens, err := filepath.Glob(filepath.Join("..", "testdata", "claudecode", "*", "after.json"))
 	if err != nil || len(goldens) == 0 {
@@ -178,9 +280,23 @@ func randomLines(rng *rand.Rand, n int) []byte {
 	return b.Bytes()
 }
 
+// splitLines splits s after each "\n".
+func splitLines(s []byte) []string {
+	var out []string
+	for len(s) > 0 {
+		n := bytes.IndexByte(s, '\n') + 1
+		if n == 0 {
+			n = len(s)
+		}
+		out = append(out, string(s[:n]))
+		s = s[n:]
+	}
+	return out
+}
+
 // mutate deletes, inserts and replaces a few random lines of a.
 func mutate(rng *rand.Rand, a []byte) []byte {
-	lines := Lines(a)
+	lines := splitLines(a)
 	for range 1 + rng.IntN(6) {
 		i := rng.IntN(len(lines) + 1)
 		switch rng.IntN(3) {
