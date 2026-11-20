@@ -15,7 +15,7 @@ A change is done when every workflow its PR started is green. A WP marked "Race:
 
 | Workflow | What it runs | When |
 |---|---|---|
-| ci.yml | the one Linux job: lint, `go test ./...`, the seven-target cross-compile with the 15 MB client budget, and the license, oracle and provenance guards | every PR, pushes to main |
+| ci.yml | the one Linux job: lint, `go test ./...`, the seven-target cross-compile with the 15 MB client budget, and the license, oracle, provenance and score-regression guards | every PR, pushes to main |
 | platform.yml | `go test` of the platform packages on Windows and macOS, and the desktop tests on Linux | PRs touching its paths, release tags |
 | footprint.yml | the release-built agent idle on Windows: working set under 25 MB, CPU time under 0.1% of wall time | PRs touching internal/agent, internal/platform/windows, cmd/pairtime, go.mod or go.sum (3 minutes idle); daily, 03:30 UTC, and release tags (10 minutes) |
 | nightly.yml | `go test -race` over internal/agent and internal/server | daily, 03:00 UTC |
@@ -36,7 +36,7 @@ Any workflow also runs by hand: `gh workflow run <file> --ref <branch>`.
 
 ## Oracles and errata
 
-An oracle decides whether code is right, so the code it checks never changes it: docs/DESIGN.md, docs/BOUNTY.md, docs/design/** (SM included), docs/research/**, docs/errata/**, tools/ledger_ref.py, and testdata/ under timelines, ledger, fixtures, upstream, checks and redteam.
+An oracle decides whether code is right, so the code it checks never changes it: docs/DESIGN.md, docs/BOUNTY.md, docs/design/** (SM included), docs/research/**, docs/errata/**, tools/ledger_ref.py, and testdata/ under timelines, ledger, fixtures, upstream, checks and redteam. A timeline's golden.jsonl is the exception: it is a regression guard, not an oracle (The struggle-metric spec decides scoring).
 
 - New oracle files may arrive beside new code. An existing oracle changes in a PR of its own. ci.yml's oracle guard fails a PR that modifies, deletes or renames an oracle and also touches cmd/, internal/, pkg/, web/, extension/, integrations/, tools/capture/ or tools/loadtest/, unless it has the `oracle-change` label. Only Karim or the orchestrator, the session that hands out and merges WPs, adds that label, and only to apply a decision made outside the PR: a decided erratum, or a scoring-rule change one of them decided. The PR description links that decision, and the PR's oracle edits stay within what it decided.
 - When an SM worked example, a design number or a captured fixture disagrees with what the spec says should happen, write docs/errata/<YYYY-MM-DD>-<topic>.md with the input, the expected value, the computed value and your reasoning, add the `erratum` label, and stop there. The orchestrator decides errata for Karim, outside the PR that raised them, and writes each decision into the erratum's Status line. Karim can overrule it. When only someone outside the project can answer, such as Hack Club HQ or Quality and Integrity, the orchestrator sets an interim answer and the question goes to Karim. Until a decision lands, the code, the spec and the fixture stay as they are (DESIGN 6.6). A new finding about a merged erratum goes in a new erratum file that links it.
@@ -64,6 +64,8 @@ web/ is Svelte 5 and TypeScript built by Vite: the local dashboard (src/local, b
 ## The struggle-metric spec decides scoring
 
 docs/design/struggle-metric.md (SM) is the source of truth for what pairtime credits and why. pkg/event follows SM sections 1 and 5 field for field, and the scorer will follow sections 2 to 5 and the parameter table in section 8. Change a scoring rule in SM and in code in the same PR, which needs the `oracle-change` label. Where code disagrees with SM, fix the code; where SM looks wrong, file an erratum (Oracles and errata).
+
+Each timeline under testdata/timelines has a golden.jsonl with the minute buckets pkg/score writes for it, and TestGolden fails when the output differs (DESIGN 6.6). A PR that changes the output rewrites the goldens, with `go test ./pkg/score -run '^TestGolden$' -update` in CI or from the score-goldens artifact a failed ci.yml run uploads (`gh run download <run-id> -n score-goldens -D testdata/timelines`), and changes pkg/score/VERSION in the same PR (SM 7.6). ci.yml's score-regression guard fails a PR that rewrites a golden without the version change.
 
 ## Content stays on the device
 

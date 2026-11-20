@@ -4,7 +4,6 @@ package score
 
 import (
 	"cmp"
-	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -230,7 +229,7 @@ func (s MinuteSlot) bucketSlot(backfilled bool) event.BucketSlot {
 	if backfilled {
 		level = event.EvidenceC
 	}
-	why := mostCredit(byReason, func(a, b event.Reason) bool { return reasonLess(a, b) })
+	why := mostCredit(byReason, reasonLess)
 	out := event.BucketSlot{
 		Project:  mostCredit(byProject, func(a, b string) bool { return a < b }),
 		Credited: float64(halves) / 2,
@@ -285,15 +284,4 @@ func (m Minute) creditedHalves() map[string]int64 {
 		}
 	}
 	return out
-}
-
-// Projects returns the projects with credit in the minute, sorted.
-func (m Minute) Projects() []string {
-	by := m.creditedHalves()
-	for p, n := range by {
-		if n == 0 {
-			delete(by, p)
-		}
-	}
-	return slices.Sorted(maps.Keys(by))
 }

@@ -184,6 +184,14 @@ func (s Submission) Totals(d Derived, records []event.Event) event.SubmissionTot
 	return out
 }
 
+// LevelCCap is SM 5.4's ceiling for a submission's level-C seconds:
+// min(level_c_s, ai_logged_s / 3), so lookback and side-door credit never
+// beat the handbook's third. DESIGN 6.2 D5 lets a program take them only if
+// it opts in to level C, and only inside commit intervals whose closing
+// commit is forge-verified, so the cap bounds what any program could
+// approve.
+func LevelCCap(t event.SubmissionTotals) float64 { return min(t.LevelCS, t.AILoggedS/3) }
+
 // aiCreditReasons are SM 5.4's AI-assisted credit reasons. Any other credited
 // second counts as AI-assisted too when a turn of its project was running.
 var aiCreditReasons = []event.Reason{event.ReasonPrompt, event.ReasonAnswer, event.ReasonGoAhead, event.ReasonQueued,

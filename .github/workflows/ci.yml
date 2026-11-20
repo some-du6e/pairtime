@@ -377,3 +377,37 @@ jobs:
         if: ${{ !cancelled() && github.event_name == 'pull_request' }}
         run: |
           git -c core.quotePath=false diff --name-status -M HEAD^1 HEAD | bash tools/ci/oracle_guard.sh
+
+      - name: Score regression
+        # Each timeline under testdata/timelines has a golden.jsonl with the
+        # minute buckets pkg/score writes for it (DESIGN 6.6, SM 7.6).
+        # TestGolden, which go test above runs too, fails when the output
+        # differs from them. Then this step writes the output into the
+        # goldens for the score-goldens artifact below. A PR that means to
+        # change the output commits them with a new pkg/score/VERSION.
+        id: goldens
+        if: ${{ !cancelled() }}
+        run: |
+          if go test -count=1 -run '^TestGolden$' ./pkg/score; then
+            exit 0
+          fi
+          go test -count=1 -run '^TestGolden$' ./pkg/score -update >/dev/null || true
+          git status --short -- testdata/timelines
+          echo "::error::pkg/score's bucket output differs from testdata/timelines/*/golden.jsonl. This run's score-goldens artifact holds the new goldens: gh run download $GITHUB_RUN_ID -n score-goldens -D testdata/timelines. Commit them with a new pkg/score/VERSION if the change is meant (DESIGN 6.6)."
+          exit 1
+
+      - name: Upload the rewritten goldens
+        if: ${{ !cancelled() && steps.goldens.outcome == 'failure' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: score-goldens
+          path: testdata/timelines/**/golden.jsonl
+          if-no-files-found: ignore
+
+      - name: Score regression guard
+        # A PR that rewrites a golden changes the scorer's output, so it
+        # changes pkg/score/VERSION too (DESIGN 6.6, EV WP1.7). The guard
+        # reads the same diff as the oracle guard.
+        if: ${{ !cancelled() && github.event_name == 'pull_request' }}
+        run: |
+          git -c core.quotePath=false diff --name-status -M HEAD^1 HEAD | bash tools/ci/score_regression.sh
