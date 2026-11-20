@@ -85,7 +85,9 @@
 // practice only the very weak SSN shapes need a context word. The context
 // window is the ten words before the match, standing in for five lemmas
 // without stop words. Digits are ASCII digits. Email validation checks the
-// top-level domain's shape instead of the public suffix list.
+// top-level domain's shape instead of the public suffix list. A card
+// number may also start with 22 to 27, Mastercard's 2-series and Mir,
+// which Presidio's card pattern leaves out.
 //
 // TP B4 also lists phone numbers, IP and MAC addresses and dates of birth;
 // none of them is in DESIGN 8.7's list, and phone numbers need

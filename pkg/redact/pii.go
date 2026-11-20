@@ -133,8 +133,11 @@ func hasContext(text string, i int, words []string) bool {
 }
 
 // Credit cards: CreditCardRecognizer, "All Credit Cards (weak)", 0.3, then
-// a Luhn check that sets the score to 1 or drops the result.
-var cardRE = regexp.MustCompile(`^((4\d{3})|(5[0-5]\d{2})|(6\d{3})|(1\d{3})|(3\d{3}))[- ]?(\d{3,4})[- ]?(\d{3,4})[- ]?(\d{3,5})\b`)
+// a Luhn check that sets the score to 1 or drops the result. The first
+// group also takes 22 to 27, which Presidio's pattern leaves out:
+// Mastercard has issued 2221 to 2720 since 2017, and Mir uses 2200 to
+// 2204. Luhn still drops nine in ten other numbers that start that way.
+var cardRE = regexp.MustCompile(`^((4\d{3})|(5[0-5]\d{2})|(6\d{3})|(1\d{3})|(3\d{3})|(2[2-7]\d{2}))[- ]?(\d{3,4})[- ]?(\d{3,4})[- ]?(\d{3,5})\b`)
 
 func findCards(text string, emit func(int, int, Type)) {
 	finditer(text, cardRE, func(i int) bool {
