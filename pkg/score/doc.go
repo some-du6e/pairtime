@@ -53,10 +53,79 @@
 //
 // Each credited second takes the level of the anchor behind it (DESIGN
 // 6.4), and each slot counts its agent_running_s and agent-only seconds
-// (SM 2.6, 5.1). A slot's project is the one its focus resolves to; one
-// timeline across projects is WP-SC3's (SM 3), minute buckets WP-SC4's,
-// checkpoints WP-SC5's, and dark flow and the no-progress weight WP-SC6's,
-// so every second is at weight 1 for now.
+// (SM 2.6, 5.1). Minute buckets are WP-SC4's, checkpoints WP-SC5's, and dark
+// flow and the no-progress weight WP-SC6's, so every second is at weight 1
+// for now.
+//
+// # What WP-SC3 builds
+//
+// One timeline across projects (SM 3): every second goes to one project at
+// most, so per-project credit adds up to the device's (SM 3.1). Each slot
+// resolves to the project its seconds may go to (attrib.go, SM 3.2), only
+// that project's windows and buckets credit them (SM 3.3 rule 1), and the
+// slot's Credit says which project in ProjectKey. A terminal or an agent
+// app goes by the project its focus record names, else by its hosted
+// sessions. An editor goes by the latest editor heartbeat with input in the
+// same or previous slot, and by the record only when there is none, since
+// the client names an editor's project from the sessions it hosts and all
+// of an editor's windows are one process on Windows and one app on macOS
+// (D-editor-heartbeat-first). A browser, a chat app or any other app
+// resolves to none, and only a lookup credits it (SM 2.5).
+//
+// For a window hosting sessions of several projects, SM 3.2 rule 1 is as
+// E-6.3-two-tabs decides it. The slot goes to the session of the first
+// anchor in the window strictly after the slot begins, if the slot starts
+// inside that anchor's lead or the anchor comes within READ_HORIZON_S while
+// its session's bucket isn't empty; else to the session with the most
+// recent anchor less than ATTRIB_STICKY_S before the slot; else it is
+// ambiguous. A second so resolved takes no better level than the resolving
+// anchor and carries its side-door label (DESIGN 6.4); the anchor is among
+// its AnchorIDs and in the slot's ResolvedBy. In an ambiguous slot the
+// bucket doesn't drain, but anchors still count (D-ambiguous-anchors):
+// every anchor window that covers a present second competes, whatever its
+// project and whether or not its act has a session, in SM 3.3's order. The
+// window that credits the slot's first credited second gives the slot its
+// project, only that project's windows credit the rest of it, and what they
+// don't credit is X.ambiguous.
+//
+// Rule 2 prefers verified heartbeats (D-rule2-sidedoor). A side-door one,
+// from a plugin, the bridge or a heartbeat that failed the peer-process
+// check, decides an editor slot only when no verified one is in the same or
+// previous slot, and then every second credited in the slot is level C and
+// carries the side door's label, so a script posting heartbeats can't
+// steer reading at level A or B into its project.
+//
+// Readings of SM 3.2:
+//
+//   - "Inside that anchor's lead" means the slot starts inside it, as the
+//     6.3-tabs fixture's gen.py has it. A slot that starts before the lead
+//     goes by the bucket or ATTRIB_STICKY_S.
+//   - An anchor is in the window when its session is one the window hosts.
+//     An act outside a harness session, such as a commit, resolves no slot
+//     of such a window, though its windows compete in the window's
+//     ambiguous slots.
+//   - A window whose focus record names no project but whose hosted
+//     sessions all have one is that project's, as one hosted session's is.
+//   - Ties go to the earlier anchor for the look-ahead and to the later one
+//     for ATTRIB_STICKY_S, then to the lower project key (SM 3.3 rule 6),
+//     session key and event id. Two windows of an ambiguous slot tied
+//     under SM 3.3 rule 3 go to the lower project key too.
+//   - An agent's edit says nothing about which editor window is in front,
+//     so rule 2's heartbeats are the others.
+//   - A heartbeat is verified when it came by a path DESIGN 6.4 lets reach
+//     level A or B: `editor`, a heartbeat that passed the peer-process
+//     check, or `hook`, from Cursor's hooks. D-rule2-sidedoor names
+//     `editor` verified and plugins, the bridge and `editor_unverified`
+//     side doors, and no other path.
+//   - SC1's typed-edit focus test takes the editor's project the same way,
+//     at the edit: the latest heartbeat with input in the same or previous
+//     slot, up to the edit itself, a verified one first, then the record.
+//   - The return rule (SM 2.1) still needs a window that names one
+//     project, so a long silence in a window hosting several ends with its
+//     tail. Its think part credits a slot only when the slot resolves to
+//     the run's project or to none, so that a slot keeps one project (SM
+//     5.1) when a heartbeat after the input that ends the run gives an
+//     editor slot to another one.
 //
 // # Final and pending
 //
@@ -156,16 +225,17 @@
 //     slots ends at a hard break. Its brackets are credited seconds of the
 //     same project, other than lookups, ending at most LOOKUP_BRACKET_S
 //     before the run or starting at most LOOKUP_BRACKET_S after it.
-//   - An uncredited second takes the first reason that applies in the order
-//     docs/errata/2026-11-19-sm-6.6-uncredited-codes.md proposes, with
-//     X.no_input on the seconds a no-input prompt's lead would have
-//     covered, as it says, X.lookup_cap for a lookup's seconds past
+//   - An uncredited second takes the first code of SM 5.2's order as
+//     E-6.6-codes decides it, which WP-SC3 applies. Codes for credit a rule
+//     withheld come first: X.lookup_cap for a lookup's present seconds past
 //     LOOKUP_MAX_S, and X.bucket_cap for a present, focused second within
 //     READ_HORIZON_S of an act whose bucket is empty only because
-//     BUCKET_MAX_S evicted output that hasn't expired. The erratum's rule 4
-//     names no code for the run of a no-input turn, which is X.agent_only,
-//     SM 5.2's code for an agent turn that ran with nothing credited.
-//     docs/errata/2026-11-20-uncredited-code-placement.md asks about these
-//     placements. Seconds before the presence sampler ran are X.absent
-//     until lookback (WP-SC7).
+//     BUCKET_MAX_S evicted output that hasn't expired. Then X.absent,
+//     X.other_focus, and X.ambiguous, which includes a slot before the
+//     client's first os.focus record. Then, while a turn of the slot's
+//     project runs, X.agent_only if a person started one of the running
+//     turns, else X.automated, else X.no_input. X.no_anchor comes last.
+//     That settles docs/errata/2026-11-20-uncredited-code-placement.md.
+//     Seconds before the presence sampler ran are X.absent until lookback
+//     (WP-SC7).
 package score
