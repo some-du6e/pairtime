@@ -14,6 +14,11 @@ on:
       - internal/platform/**
       - internal/install/**
       - internal/agent/ipc/**
+      # The agent's own files, startIPC in messages.go among them. ipc's
+      # TestAgentKilledMidStream runs a real agent.Run, and this is where it
+      # runs on Windows (socket and pipe) and macOS. It lives in
+      # internal/agent/ipc, so PLATFORM_DIRS needn't list these.
+      - internal/agent/*.go
       # The agent's platform code: the lock, the data directories and
       # private files (home), the loopback server (localhttp), and the
       # spool, which Windows file sharing makes OS-specific (inbox).
