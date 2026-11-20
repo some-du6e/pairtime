@@ -348,7 +348,8 @@ func removeOneHook(src []byte, hooks *jsonc.Value, match func(event string, grou
 // undoClaudeHooks takes every pairtime hook out of the settings cur holds,
 // then the lists and the "hooks" object that pairtime's hooks left empty
 // and that base, the file before pairtime, didn't have. A file left with
-// only an empty object, where base had no value, becomes base again.
+// only an empty object, where base had no value, becomes base again when
+// nothing outside the object changed since pairtime added it.
 func undoClaudeHooks(cur, base Content, _ json.RawMessage) (Content, error) {
 	if !cur.Exists {
 		return cur, nil

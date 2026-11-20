@@ -26,7 +26,8 @@ const (
 // maxFileSize bounds a file target pairtime reads: 4 MiB, far more than
 // any real settings file or login item holds. A bigger one is refused
 // before it is parsed, since its parse tree would take many times its size
-// in memory.
+// in memory, and install refuses an edit that would make a file bigger,
+// since uninstall couldn't read it back.
 const maxFileSize = 4 << 20
 
 // read returns what t holds.

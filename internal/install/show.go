@@ -34,9 +34,10 @@ func (ch Change) shown(c Content) []byte {
 // an env block, as the setup guides of third-party providers have it, or a
 // webhook URL in another tool's hook, in any form, so the mask takes every
 // value rather than what looks like a secret. Member names, numbers, true,
-// false and null stay, and so do pairtime's own hook handlers, so the diff
-// shows the file's shape and what pairtime adds or takes out. Every line
-// stays a line, so the diff of two masked files lines up as the files do.
+// false and null stay, and so do the strings pairtime writes in its own
+// hook handlers (keepPairtime), so the diff shows the file's shape and what
+// pairtime adds or takes out. Every line stays a line, so the diff of two
+// masked files lines up as the files do.
 func maskSettings(src []byte) []byte {
 	root, err := jsonc.Parse(src)
 	if err != nil && !errors.Is(err, jsonc.ErrEmpty) {

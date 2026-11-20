@@ -190,7 +190,7 @@ type Content struct {
 }
 
 // Same reports whether c and d hold the same thing. A file's mode doesn't
-// count.
+// count, and nor does whether its path is a link (unchanged).
 func (c Content) Same(d Content) bool {
 	if c.Exists != d.Exists {
 		return false
