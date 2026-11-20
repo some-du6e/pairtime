@@ -1,0 +1,362 @@
+{
+  "fixture": "lookback/two-sessions",
+  "title": "Two Claude Code sessions in parallel, from their transcripts alone",
+  "sm": "docs/design/struggle-metric.md 2.8",
+  "date": "2026-11-22",
+  "timezone": "America/Chicago",
+  "utc_offset": "-06:00",
+  "os": "windows",
+  "input_keys": false,
+  "evidence": "C",
+  "witness": "backfilled",
+  "device": "d_49ed78c7439b",
+  "projects": {"p_339d54a04dbb": "trivia-bot", "p_0e6a8e0b849e": "portfolio"},
+  "window": {"start": "2026-11-22T22:00:00Z", "end": "2026-11-22T22:20:00Z", "local": "16:00-16:20"},
+  "rows": [
+    {
+      "start": "2026-11-22T22:00:00Z",
+      "minutes": 1,
+      "local": "16:00",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0e6a8e0b849e": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "2.8: leads are typing time only",
+      "note": "B1's 90 typed characters: 90 / 1.5 = 60 s, from 16:00:00.",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-22T22:01:00Z",
+      "minutes": 1,
+      "local": "16:01",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 40,
+      "credit": {
+        "p_339d54a04dbb": {"P": 40}
+      },
+      "uncredited": {"X.agent_only": 20},
+      "agent_running_s": 60,
+      "sm": "2.8: leads are typing time only",
+      "note": "B1 runs from 16:01:00. A1's 60 characters: 40 s, from 16:01:20.",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-22T22:02:00Z",
+      "minutes": 1,
+      "local": "16:02",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 0,
+      "credit": {},
+      "uncredited": {"X.agent_only": 60},
+      "agent_running_s": 60,
+      "sm": "2.8: neither session reads while its agent runs",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-22T22:03:00Z",
+      "minutes": 1,
+      "local": "16:03",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 30,
+      "credit": {
+        "p_339d54a04dbb": {"PA": 20},
+        "p_0e6a8e0b849e": {"READ": 10}
+      },
+      "uncredited": {"X.agent_only": 30},
+      "agent_running_s": 60,
+      "sm": "2.8: a second two sessions want goes to the one with the most recent human prompt",
+      "note": "B1 stops at 16:03:30 and B2 follows 430 s later, so B reads from the stop. A1's permission, asked at 16:03:00 and answered at 16:04:40, keeps 60 s of its 100 s wait, from 16:03:40. A's last prompt, 16:02:00, is later than B's, 16:01:00, so A's PA wins the seconds both want.",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-22T22:04:00Z",
+      "minutes": 1,
+      "local": "16:04",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_339d54a04dbb": {"PA": 50},
+        "p_0e6a8e0b849e": {"READ": 10}
+      },
+      "uncredited": {},
+      "agent_running_s": 60,
+      "sm": "2.8: a second two sessions want goes to the one with the most recent human prompt",
+      "note": "A's PA runs to 16:04:50 with its 10 s trail; B reads again until A1 stops at 16:05:00.",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"],
+      "erratum": "2026-11-19-sm-2.8-lookback"
+    },
+    {
+      "start": "2026-11-22T22:05:00Z",
+      "minutes": 1,
+      "local": "16:05",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_339d54a04dbb": {"READ": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "2.8: a second two sessions want goes to the one with the most recent human prompt",
+      "note": "From A1's stop at 16:05:00 both sessions have output to read. A's last prompt is the more recent, so A reads first: 120 s, to 16:07:00. B still has 100 s.",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-22T22:06:00Z",
+      "minutes": 1,
+      "local": "16:06",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_339d54a04dbb": {"READ": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "2.8: a second two sessions want goes to the one with the most recent human prompt",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-22T22:07:00Z",
+      "minutes": 1,
+      "local": "16:07",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0e6a8e0b849e": {"READ": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "2.8: reading between a stop and a human prompt that follows within 600 s, at most 120 s a turn",
+      "note": "A's 120 s are read, so B reads its last 100 s, to 16:08:40.",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-22T22:08:00Z",
+      "minutes": 1,
+      "local": "16:08",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_339d54a04dbb": {"P": 20},
+        "p_0e6a8e0b849e": {"READ": 40}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "2.8: reading between a stop and a human prompt that follows within 600 s, at most 120 s a turn",
+      "note": "A2 has 390 characters, 300 of them pasted. Its lead is typing time only, 90 / 1.5 = 60 s, from 16:08:40.",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"],
+      "erratum": "2026-11-19-sm-2.8-lookback"
+    },
+    {
+      "start": "2026-11-22T22:09:00Z",
+      "minutes": 1,
+      "local": "16:09",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 40,
+      "credit": {
+        "p_339d54a04dbb": {"P": 40}
+      },
+      "uncredited": {"X.agent_only": 20},
+      "agent_running_s": 20,
+      "sm": "2.8: leads are typing time only",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-22T22:10:00Z",
+      "minutes": 1,
+      "local": "16:10",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 40,
+      "credit": {
+        "p_0e6a8e0b849e": {"P": 40}
+      },
+      "uncredited": {"X.agent_only": 20},
+      "agent_running_s": 60,
+      "sm": "2.8: leads are typing time only",
+      "note": "B2's 60 characters: 40 s, from 16:10:00, while A2 runs.",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-22T22:11:00Z",
+      "minutes": 1,
+      "local": "16:11",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 25,
+      "credit": {
+        "p_0e6a8e0b849e": {"PA": 25}
+      },
+      "uncredited": {"X.agent_only": 35},
+      "agent_running_s": 60,
+      "sm": "2.8: permission answers keep their wait",
+      "note": "B2's build asks at 16:11:20 and is answered at 16:11:35: its 15 s wait and 10 s trail.",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"],
+      "erratum": "2026-11-19-sm-2.8-lookback"
+    },
+    {
+      "start": "2026-11-22T22:12:00Z",
+      "minutes": 1,
+      "local": "16:12",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 30,
+      "credit": {
+        "p_339d54a04dbb": {"PA": 30}
+      },
+      "uncredited": {"X.agent_only": 30},
+      "agent_running_s": 60,
+      "sm": "2.8: permission answers keep their wait",
+      "note": "A2's test run asks at 16:12:00 and is answered at 16:12:20: its 20 s wait and 10 s trail. The answer is A's latest human act, later than B's at 16:11:35.",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"],
+      "erratum": "2026-11-19-sm-2.8-lookback"
+    },
+    {
+      "start": "2026-11-22T22:13:00Z",
+      "minutes": 1,
+      "local": "16:13",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0e6a8e0b849e": {"READ": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 30,
+      "sm": "2.8: a second two sessions want goes to the one with the most recent human prompt",
+      "note": "B2 stops at 16:13:00 and B3 follows 360 s later, so B reads from its stop while A2 runs. A2 stops at 16:13:30 and A3 follows 290 s later, so from then both sessions have output to read. A has the later stop and the later human act, but B's last prompt, 16:10:40, is later than A's, 16:09:40, so B reads on, to 16:15:00. A rule by the latest stop or the latest human act would give A 16:13:30 to 16:15:30.",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-22T22:14:00Z",
+      "minutes": 1,
+      "local": "16:14",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0e6a8e0b849e": {"READ": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "2.8: a second two sessions want goes to the one with the most recent human prompt",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-22T22:15:00Z",
+      "minutes": 1,
+      "local": "16:15",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_339d54a04dbb": {"READ": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "2.8: reading between a stop and a human prompt that follows within 600 s, at most 120 s a turn",
+      "note": "B's 120 s are read, so A reads its 120 s, to 16:17:00.",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-22T22:16:00Z",
+      "minutes": 1,
+      "local": "16:16",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_339d54a04dbb": {"READ": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "2.8: reading between a stop and a human prompt that follows within 600 s, at most 120 s a turn",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-22T22:17:00Z",
+      "minutes": 1,
+      "local": "16:17",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_339d54a04dbb": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "2.8: leads are typing time only",
+      "note": "A3's 120 characters: 80 s, from 16:17:00, where A's reading ends.",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-22T22:18:00Z",
+      "minutes": 1,
+      "local": "16:18",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 50,
+      "credit": {
+        "p_339d54a04dbb": {"P": 20},
+        "p_0e6a8e0b849e": {"P": 30}
+      },
+      "uncredited": {"X.agent_only": 10},
+      "agent_running_s": 40,
+      "sm": "2.8: leads are typing time only",
+      "note": "A3 is sent at 16:18:20 and runs. B3's 45 characters: 30 s, from 16:18:30, while A3 runs.",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-22T22:19:00Z",
+      "minutes": 1,
+      "local": "16:19",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 0,
+      "credit": {},
+      "uncredited": {"X.agent_only": 60},
+      "agent_running_s": 60,
+      "sm": "2.8: neither session reads while its agent runs",
+      "note": "A3 and B3 run past the window and stop at 16:21:40 and 16:22:00. No prompt follows either, so their output is never read as far as the rules can tell.",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    }
+  ],
+  "totals": {
+    "credited_s": 915,
+    "credited_by_project": {"p_0e6a8e0b849e": 395, "p_339d54a04dbb": 520},
+    "credited_by_reason": {"P": 310, "PA": 125, "READ": 480},
+    "uncredited": {"X.agent_only": 285},
+    "agent_running_s": 570,
+    "ai_credited_s": 915,
+    "hand_credited_s": 0,
+    "agent_only_s": 285,
+    "trivia_bot_p_s": 180,
+    "trivia_bot_pa_s": 100,
+    "trivia_bot_read_s": 240,
+    "portfolio_p_s": 130,
+    "portfolio_pa_s": 25,
+    "portfolio_read_s": 240,
+    "contested_s": 280
+  },
+  "stated": [],
+  "approx": {},
+  "errata": ["2026-11-19-sm-2.8-lookback"],
+  "notes": [
+    "Every row is computed from SM 2.8; no SM section describes this case. Every credited second is level C and backfilled.",
+    "The six turns are in two Claude Code sessions in two projects, three in each, so a second both sessions want is wanted by two projects, and SM 3.3's FIFO rule for buckets of one project never applies.",
+    "contested_s counts the seconds both sessions wanted: 70 of A's PA against B's reading, and 210 of reading against reading. The session with the most recent human prompt takes each (SM 2.8). In the last 90, from 16:13:30, A has the later stop and the later human act, so only the prompt rule gives them to B.",
+    "Every uncredited second here is X.agent_only: an agent turn ran and nothing credited it. Every turn a prompt follows within 600 s fills its bucket past the 120 s cap and reads exactly 120 s."
+  ]
+}

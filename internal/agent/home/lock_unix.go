@@ -12,11 +12,6 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// lockFile is the file in the data directory whose flock is the lock. It
-// stays on disk after Release: deleting a lock file races with the next
-// process that opens it.
-const lockFile = "agent.lock"
-
 func acquire(dir string) (func() error, error) {
 	name := filepath.Join(dir, lockFile)
 	f, err := os.OpenFile(name, os.O_RDWR|os.O_CREATE, 0o600)

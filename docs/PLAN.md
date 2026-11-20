@@ -97,14 +97,14 @@ Milestones overlap: the server lane starts M3 work while M1 is still finishing. 
 
 | Milestone | What it delivers | Target | WPs | Exit check |
 |---|---|---|---|---|
-| M1, alpha 0 | A local-only tracker testers can install with one command: Claude Code hooks and transcripts, git, OS presence and focus on all three OSes, the SM scorer without dark flow, `today`, `recap`, `statusline`, `doctor`. No uploads, `~/.wakatime.cfg` untouched | 2026-12-01 | 35, 1 [human] | `e2e-install.yml` green; SM 6.1 to 6.4 and 6.6 reproduce; footprint green; `v0.1.0-alpha.1` clean on two of Karim's machines |
+| M1, alpha 0 | A local-only tracker testers can install with one command: Claude Code hooks and transcripts, git, OS presence and focus on all three OSes, the SM scorer without dark flow, `today`, `recap`, `statusline`, `doctor`. No uploads, `~/.wakatime.cfg` untouched | 2026-12-01 | 36, 1 [human] | `e2e-install.yml` green; SM 6.1 to 6.4 and 6.6 reproduce; footprint green; `v0.1.0-alpha.1` clean on two of Karim's machines |
 | M2, alpha 1 | Dark flow, the local dashboard, session recaps and moments, the welcome recap, Codex and Cursor, OTLP, the vault, redaction, and the WakaTime dual-send behind its e2e gate | 12-08 | 22, 2 [human] | `e2e-wakatime.yml` green on three runners; SM 6.5 reproduces; `v0.2.0-alpha.1` |
 | M3, server | HCA and device sign-in, signed ingest with receipts, the firewall, witness labels, rollups, the live dashboard, profiles, commits and forges, build days, the privacy hub, daily roots, the deploy | 12-11 | 19, 1 [human] | probe and restore drill green on `https://<host>`; witnessed minutes from Karim's device |
 | M4, program path | Submissions, reveal, sealing, exact re-scoring, CC1 to CC11, risk and audit, the review desk, the handbook text, Hackatime-compatible reads, the Airtable script, the program kit, bundles and `verify`, labeling mode | 12-18 | 30, 1 [human] | the sandbox Airtable round trip; `verify` offline; the Ruby client |
 | M5, breadth and hardening | Copilot, Gemini, Devin, Cline, `track` and Karim's AGENTS.md entry, plugins, red-team goldens, the age signal, signing, the VS Code extension, channels, self-update, the load test | 12-14 to 12-31 | 21, 7 need a person or an account | load test green; red-team step; age signal merged by 12-31 |
 | M6, calibration and 1.0 | Scoring 1.0.0 and the R2 report, the typing module in signed builds, the VM rule, recovery and backups, the rest of the coach, seeded cases, the VPS move, the 1.0 gate | 12-21 to 2027-01-17 | 13, 3 [human] | 1.0.0 deployed and decisions open on 01-04; `v1.0.0` released |
 
-That is 140 WPs. 11 of them are done by a person or by the deploy agent (the captures, the two deploys, the sandbox round trip, labeling and the laptop reports), so 129 are coding-agent sessions. The targets assume the three slots together land about four WPs a day and Karim merges within half a day; at six a day there are several days of slack before 12-18. When the program path is at risk, the cut-first WPs move out of v1 in DESIGN 9.7's order and M4 doesn't move (DESIGN 9.7; JB, The race with grit).
+That is 141 WPs. 11 of them are done by a person or by the deploy agent (the captures, the two deploys, the sandbox round trip, labeling and the laptop reports), so 130 are coding-agent sessions. The targets assume the three slots together land about four WPs a day and Karim merges within half a day; at six a day there are several days of slack before 12-18. When the program path is at risk, the cut-first WPs move out of v1 in DESIGN 9.7's order and M4 doesn't move (DESIGN 9.7; JB, The race with grit).
 
 ## Dependency graph and parallel lanes
 
@@ -151,8 +151,9 @@ A suggested schedule for M1, if each slot lands one WP per half day:
 | 10 | WP-AG4 | WP-AD3 | WP-AD5 |
 | 11 | WP-CO0 | WP-OS3 | WP-IN2 |
 | 12 (11-25) | WP-AG6 | WP-OS4 | WP-RL2 |
+| 13 | WP-LG3 | WP-OS9 | WP-SV1 |
 
-That leaves about five days of slack before 12-01. Slot C moves to WP-SV1 as soon as WP-RL2 is in review, because the server chain is the longest chain that doesn't touch M1. Slot A moves to WP-LG3, WP-FX5 and WP-FX6 after WP-AG6.
+That leaves about four and a half days of slack before 12-01. Slot C moves to WP-SV1 as soon as WP-RL2 is in review, because the server chain is the longest chain that doesn't touch M1. Slot A moves to WP-LG3, WP-FX5 and WP-FX6 after WP-AG6.
 
 ## Suggested order for the first ten
 
@@ -302,15 +303,15 @@ Exit check: `e2e-install.yml` green on three runners; SM 6.1, 6.2, 6.3, 6.4 and 
 
 - Depends on: WP-AG1.
 - Touches: `internal/platform/{windows,darwin,linux}/`, `internal/agent/procs/`, `internal/platform/appclass.json`.
-- Build: a process-table reader per OS (Toolhelp32 and `QueryFullProcessImageNameW`; `sysctl` and `libproc` through purego; `/proc`); the parent chain of a pid with executable names and start times; SM 2.2 rule 4's `parent_class` classifier, which skips shells; the app-class table as data shared by all three OSes (terminal, editor, agent_app, browser, chat_app, other), each entry citing HS or CP; and the `procs` scanner (`PROC_SCAN_S`), which emits `session.start` for harness processes that fire no hooks (`claude --bare`, `claude -p`, `codex exec`) with `entrypoint` and `has_tty` (DESIGN 3.3).
+- Build: a process-table reader per OS (Toolhelp32 and `QueryFullProcessImageNameW`; `sysctl` and `libproc` through purego; `/proc`); the parent chain of a pid with executable names and start times; SM 2.2 rule 4's `parent_class` classifier, which skips shells; the app-class table as data shared by all three OSes (terminal, editor, agent_app, browser, chat_app, other), each entry citing HS or CP; and the `procs` scanner (`PROC_SCAN_S`), which emits `session.start` for harness processes that fire no hooks (`claude --bare`, `claude -p`, `codex exec`) with `entrypoint` and `has_tty` (DESIGN 3.3). The scanner also gives `presence.Sampler.HarnessProcesses` (WP-OS1) its count of harness session processes after each scan, which keeps a project context live while one runs (DESIGN 3.3); whichever of this WP and WP-OS1 merges second does that wiring.
 - CI checks: real child chains spawned by the test (`python3` to `bash` to a stub classifies `script_runtime`; a shell alone does not) on Linux in `ci.yml` and on Windows and macOS in `platform.yml`; a golden classifier test over recorded process tables for SM 6.6 and its three variants.
 - Oracle: real processes; SM 2.2 rule 4 and SM 6.6.
 
 ### WP-AG3. `pairtime hook`, the fast path
 
-- Depends on: WP-AG2, WP-OS6.
+- Depends on: WP-AG2, WP-OS6, WP-OS1.
 - Touches: `cmd/pairtime/`, `internal/agent/hookpath/`, `.github/workflows/footprint.yml`.
-- Build: `pairtime hook --harness <h> --event <e>` as CP 6.2 and DESIGN 3.2 describe: read stdin up to 1 MiB, stamp wall time, monotonic time and boot id, capture the raw parent chain (WP-OS6), send one frame with a 100 ms timeout, otherwise append one inbox line and start the agent detached (`DETACHED_PROCESS` on Windows, `setsid` elsewhere), always exit 0 and print nothing. `track` and `emit` reuse this path later (WP-AD18, WP-AD19).
+- Build: `pairtime hook --harness <h> --event <e>` as CP 6.2 and DESIGN 3.2 describe: read stdin up to 1 MiB, stamp wall time, monotonic time and boot id, capture the raw parent chain (WP-OS6), send one frame with a 100 ms timeout, otherwise append one inbox line and start the agent detached (`DETACHED_PROCESS` on Windows, `setsid` elsewhere), always exit 0 and print nothing. `track` and `emit` reuse this path later (WP-AD18, WP-AD19). In the agent, each hook and track message also goes to `presence.Sampler.Hook` (WP-OS1) with its session key and kind, so a prompt gets the sample SM 2.2 rule 6 reads and turns set D14's cadence.
 - CI checks: `footprint.yml` adds hook p95 under 25 ms over 200 warm calls on `windows-latest`, which DESIGN 9.7 sets at half the R8 claim (the 50 ms claim on a 2016 laptop is a 1.0 gate, WP-RL9); with the agent stopped, one call appends one line and exits 0; 2 MiB of stdin is cut at 1 MiB and still exits 0; malformed stdin exits 0 with empty stdout and stderr.
 - Oracle: timing measured by the workflow around the process; Claude Code's hook contract (exit code 2 blocks, stdout is parsed as JSON; CP 6.2).
 
@@ -326,7 +327,7 @@ Exit check: `e2e-install.yml` green on three runners; SM 6.1, 6.2, 6.3, 6.4 and 
 
 - Depends on: WP-OS1, WP-OS6.
 - Touches: `internal/platform/windows/`, `internal/agent/focus/`.
-- Build: `SetWinEventHook(EVENT_SYSTEM_FOREGROUND)` on a locked OS thread with its own message loop; `app_class` from the shared table; `hosted_sessions` from the focused window's process tree (WP-OS6); `os.focus` events. Window titles are never read (DESIGN 3.3).
+- Build: `SetWinEventHook(EVENT_SYSTEM_FOREGROUND)` on a locked OS thread with its own message loop; `app_class` from the shared table; `hosted_sessions` from the focused window's process tree (WP-OS6); `os.focus` events. Window titles are never read (DESIGN 3.3). Each focus change also goes to `presence.Sampler.Focus` with its `app_class`, which is what makes a focused terminal, editor or agent app a project context (DESIGN 3.3).
 - CI checks: injected-fake tests on `windows-latest` turning a sequence of foreground changes into the expected `os.focus` events; no test moves real focus (JE must-fix 11).
 - Oracle: SM 3.2's hosting rule; the shared app-class table.
 
@@ -346,6 +347,14 @@ Exit check: `e2e-install.yml` green on three runners; SM 6.1, 6.2, 6.3, 6.4 and 
 - CI checks: in `platform.yml`'s Linux job, under Xvfb with `openbox` and two `xterm`s: `xdotool` key input resets idle, and `xdotool windowactivate` between the two windows yields two `os.focus` events; a private `dbus-daemon` with fake `IdleMonitor` and logind services exercises the D-Bus paths.
 - Oracle: the X server's own idle counter and the window manager's active-window property.
 
+### WP-OS9. OS presence, focus and power on macOS and Linux in the agent
+
+- Depends on: WP-OS1, WP-OS2, WP-OS3, WP-OS4, WP-AG6.
+- Touches: `internal/agent/presence/`, `internal/agent/focus/`, `cmd/pairtime/`, `internal/agent/` (the status reply), `internal/agent/doctor/`, `docs/api/local.openapi.yaml`, `.github/workflows/platform.yml`.
+- Build: the macOS and Linux sources behind WP-OS1's sampler and WP-OS2's focus component. WP-OS1's `presence/os_other.go` gives every OS but Windows an empty `OS`, so until this WP the agent records no presence, focus or power there, and every slot is `unknown` (SM 2.1). On macOS, `presence/os_darwin.go` reads idle time, key-down idle time and the lock state from `darwin.Presence()`, and suspend, resume, lock and unlock from a `darwin.Loop` whose `Handler` feeds `WatchSuspend` and `WatchLock`. The batch is sealed inside `Power(suspend)`, because the Loop holds the sleep until that call returns or `darwin.SuspendWait` passes (DESIGN 3.3). The focus component's darwin source turns the Loop's `Focus` calls into `os.focus` per app, since macOS reports no switch between two windows of one app (the darwin package doc). On Linux both sources read `internal/platform/linux`'s `Desktop` (`Idle`, `Locked`, `Focus`, `Power`), and presence is `unknown` where its `Status` says the desktop gives no idle time. The Loop gets lock and app-switch notifications only on the process's main thread (the darwin package doc; `TestFindingRunLoop`), so `cmd/pairtime` gains a darwin-only `init` that calls `runtime.LockOSThread()`, and on macOS `pairtime agent` runs `agent.Run` on another goroutine and `Loop.Run` on the main goroutine until the agent stops. `GET /v1/status` and `doctor` report where each signal comes from. On macOS that is the Loop's `Status`: `MainThread`, the error of each source that didn't register, and `Dropped`, and when `MainThread` is false `doctor` warns that locks and app switches may not arrive. On Linux it is the `Desktop`'s `Status`, which names each signal's source or says why it is unknown. Add `internal/agent/focus/**` to `platform.yml`'s paths if WP-OS2 didn't.
+- CI checks: fake-OS table tests in `ci.yml` for both sources (a suspend is sealed before `Power(suspend)` returns; a lock and an unlock become `os.power`; an activation becomes one `os.focus`; a Linux desktop with no idle source gives `unknown`); the seven-target cross-compile stays under 15 MB; on `macos-latest`, `pairtime agent` with a temporary data directory reports `MainThread: true` and no source errors on `/v1/status`, records `os.presence` with a non-null `idle_keys_s` once a fake project context goes live (as WP-OS1's smoke does), and turns an activation posted to NSWorkspace's notification center into one `os.focus`; in `platform.yml`'s Linux desktop job, the running agent's first `os.presence` after `xdotool` key input has `idle_any_s` under 1 s, and `xdotool windowactivate` between two `xterm`s gives two `os.focus` records.
+- Oracle: the OS's own values and notifications, read by the running agent: `pthread_main_np` on the Loop's thread, NSWorkspace's notification center, the X server's idle counter and the window manager's `_NET_ACTIVE_WINDOW`.
+
 ### WP-OS7. Device keystore
 
 - Depends on: WP-AG1, WP-LG2.
@@ -356,9 +365,9 @@ Exit check: `e2e-install.yml` green on three runners; SM 6.1, 6.2, 6.3, 6.4 and 
 
 ### WP-LG5. Ledger writer
 
-- Depends on: WP-LG2, WP-AG1, WP-OS7.
+- Depends on: WP-LG2, WP-LG4, WP-AG1, WP-OS7, WP-OS1, and a scorer WP that exports SM 2.2's prompt class as a function the writer can call at write time for a prompt of any origin. `pkg/score` (WP-SC1) exports only `LowEffort` today, and its classifier needs scorer state.
 - Touches: `internal/agent/ledger/`.
-- Build: `ledger/YYYY-MM-DD.seg` with length-prefixed `{hdr, body}` records and `ledger/batches.seg` (DESIGN 3.5, 3.6); bodies from `Event.Shareable()`; sealing every `BATCH_S` while there are new records and at once on lock, suspend, prompt and stop; a gapless per-device `seq`; recovery of a torn tail at start; one fsync per seal, which suits a spinning disk; APIs for upload-failure notes (rtype 0x41, used by WP-AG5) and scorer checkpoints (rtype 0x40, used by WP-SC5). Race: yes.
+- Build: `ledger/YYYY-MM-DD.seg` with length-prefixed `{hdr, body}` records and `ledger/batches.seg` (DESIGN 3.5, 3.6); each event's record from `pkg/ledger`'s `EventRecord(k, ev, Content)`, which writes the body from `Event.Shareable()` and adds `f` and `c` (ledger-v1 4.5, 10). The writer passes each event's `Content`: the prompt, final agent message or `track` label text that the vault keeps, the edit hunks and command line of `agent.tool`, the command line of `shell.command`, and the prompt class from that scorer function, and it marks bridge prompts and plugin events that came without their text `NoText` (ledger-v1 10.1). Sealing every `BATCH_S` while there are new records and at once on lock, suspend, prompt and stop; a gapless per-device `seq`; recovery of a torn tail at start; one fsync per seal, which suits a spinning disk; APIs for upload-failure notes (rtype 0x41, used by WP-AG5) and scorer checkpoints (rtype 0x40, used by WP-SC5); and presence's wiring (WP-OS1): the writer takes its `os.presence` and `os.power` records through `presence.Options.Record` and seals at once on `presence.Options.Seal`. Race: yes.
 - CI checks: a crash loop kills the writer at random points 200 times on Linux (`ci.yml`) and Windows (`platform.yml`); after every restart `pkg/ledger` verifies the chain, `seq` has no gap apart from a truncated tail, no sealed batch changed, and `tools/ledger_ref.py check` agrees.
 - Oracle: `pkg/ledger` verification and the Python reference.
 
@@ -366,7 +375,7 @@ Exit check: `e2e-install.yml` green on three runners; SM 6.1, 6.2, 6.3, 6.4 and 
 
 - Depends on: WP-SC4, WP-LG5, WP-AG2.
 - Touches: `internal/agent/scorer/`, `internal/agent/store/`.
-- Build: step `pkg/score` every 60 s and after each prompt or stop hook over new ledger records; write `buckets/YYYY-MM-DD.jsonl` with revisions and `days/YYYY-MM-DD.json` rollups (DESIGN 3.5); keep scorer state and the project map in `state.json` and rebuild both from the ledger when it is missing. Add `display.shadow` (DESIGN 6.7 step 2): when on, every view shows credited totals as "calibrating" and keeps moments, loops and the agent's time. Calibration volunteers get it on from 12-01 until the scoring freeze, through `pairtime install --calibration-volunteer`; other alpha testers get it off.
+- Build: step `pkg/score` every 60 s and after each prompt or stop hook over new ledger records; write `buckets/YYYY-MM-DD.jsonl` with revisions and `days/YYYY-MM-DD.json` rollups (DESIGN 3.5); keep scorer state and the project map in `state.json` and rebuild both from the ledger when it is missing. Add `display.shadow` (DESIGN 6.7 step 2): when on, every view shows credited totals as "calibrating" and keeps moments, loops and the agent's time. Calibration volunteers get it on from 12-01 until the scoring freeze, through `pairtime install --calibration-volunteer`; other alpha testers get it off. Give presence (WP-OS1) the parameter table the scorer runs with, as `presence.Options.Params`, so the sampler slows down where the scorer expects it to (D14).
 - CI checks: the 6.2 fixture's events sent through the socket produce the same buckets as calling `pkg/score` directly; deleting `state.json` and restarting rebuilds identical buckets; `kill -9` mid-run loses nothing.
 - Open (#69): the git adapter's project map (`Resolver.Map`: each repo's key, kind, roots and aliases) has no ledger record, so it can't be rebuilt from the ledger as Build asks. Either this WP adds a local project-binding record, written whenever the map changes, or DESIGN 3.5 says the map lives only in `state.json` and decides how a session that crosses its repo's first commit keeps one project. DESIGN is an oracle, so Karim decides.
 - Oracle: `pkg/score` output on the SM fixtures, which is itself checked against SM.
@@ -559,8 +568,8 @@ Exit check: `e2e-wakatime.yml` green on three runners; SM 6.5 reproduces; `web.y
 ### WP-CO1. Session recaps and moments
 
 - Depends on: WP-SC6, WP-OS8, WP-UI1, WP-AD5.
-- Touches: `internal/coach/`, `web/src/local/`, `cmd/pairtime/`.
-- Build: work-session detection (no credited minute for `SESSION_GAP_S`, or a lock or suspend); the recap of DESIGN 3.8 (your time by kind, the agent's time named after the agent, moments, loops caught with what ended each, evidence-level shares, a "Was this right?" control stored locally); the moments `first_commit`, `first_green_test`, `first_test_written`, `rejected_agent_edit`, `interrupt`, `fixed_by_hand`, `long_fight`, `loop_caught`, `comeback`, `new_language` and `new_tool`; one notification per session. Copy follows DESIGN 3.8's last two paragraphs and PA 4.4: uncredited time named for what it was, never as the teen's failure.
+- Touches: `internal/coach/`, `web/src/local/`, `cmd/pairtime/`, `internal/agent/presence/` (the unlock and resume hook).
+- Build: work-session detection (no credited minute for `SESSION_GAP_S`, or a lock or suspend); the recap of DESIGN 3.8 (your time by kind, the agent's time named after the agent, moments, loops caught with what ended each, evidence-level shares, a "Was this right?" control stored locally); the moments `first_commit`, `first_green_test`, `first_test_written`, `rejected_agent_edit`, `interrupt`, `fixed_by_hand`, `long_fight`, `loop_caught`, `comeback`, `new_language` and `new_tool`; one notification per session through `notifier.Notify`, with `Note.Ended` the moment the session was found to be over. It calls `notifier.UserPresent` on unlock and resume, so a note that met a locked screen goes out when the teen is back: `presence.Sampler.Power` hears every lock, unlock, suspend and resume, in or out of a project context, and a hook beside `presence.Options.Seal` passes unlock and resume on (WP-OS8). A screen saver that doesn't lock the session sends neither, so a note that met one waits for the next unlock or resume, or for a newer note. Copy follows DESIGN 3.8's last two paragraphs and PA 4.4: uncredited time named for what it was, never as the teen's failure.
 - CI checks: golden recaps for the six SM fixtures; the 6.5 recap names the loop from 20:05 to 20:38, the 17 repeats, the same 8 lines and the 20:41 hand edit that ended it, as SM 6.5's last paragraph does; each moment kind has a fixture that triggers it and a near miss that doesn't.
 - Oracle: SM 6.5's recap sentence and DESIGN 1.2's examples, over the SM fixtures.
 
@@ -791,9 +800,9 @@ Exit check: `restore-drill.yml` green; `probe.yml` green against `https://<host>
 ### WP-OP1. Deploy bundle, server image and restore drill
 
 - Depends on: WP-SV1, WP-SV15.
-- Touches: `deploy/` (`compose.yml`, `litestream.yml`, `cloudflared/`, `pairtime.toml.tmpl`, `runbook.md`, `renovate.json`), `Dockerfile.pairtimed`, `.github/workflows/{release,restore-drill,probe}.yml`, `cmd/pairtimed/`, `internal/server/backup/`.
-- Build: DESIGN 10.1 to 10.5. A distroless static image holding `pairtimed` and a pinned Litestream v0.5 binary checked against its checksum, built and pushed to `ghcr.io/some-du6e/pairtimed` by `release.yml`, so the host never builds. `compose.yml` as DESIGN 10.1 shows, with pinned tags. `litestream.yml` with `exec: pairtimed serve`, `restore-if-db-not-exists`, a 10 s sync interval, 24 h snapshots, 72 h retention and the Healthchecks heartbeat. `pairtimed init --base-url` (creates `server.ed25519`, `evidence.p256` and `pepper` in `/data/keys` with mode 0600, writes `pairtime.toml`, prints the public keys). `pairtimed keys backup --age <recipient>`, plus the nightly `VACUUM INTO` snapshot encrypted with age and uploaded to the second bucket (DESIGN 10.3); both need `filippo.io/age` (BSD-3-Clause) in `pairtimed` only, and the PR says why. `pairtimed doctor` (HCA discovery, both buckets, replication lag, a dry-run push to `pairtime-witness`, both Healthchecks URLs, `/healthz` through the tunnel). A ping every 5 minutes while `/readyz` passes (DESIGN 10.4). `pairtimed` serves `install.sh` and `install.ps1` for the current release at `https://<host>/`. `runbook.md`, written for the deploy agent: first deploy, upgrades through Renovate PRs, rollback to the previous tag, moving to a VPS.
-- CI checks: `probe.yml` takes a `host` input and fails unless `/healthz` returns 200, `/.well-known/pairtime-keys.json` parses and TLS is valid. `restore-drill.yml` builds the image, runs it against a MinIO service container, writes data, destroys the container, restores into a fresh one from the replica, and passes `PRAGMA integrity_check` and API smoke tests; the nightly snapshot decrypts with the `age` command-line tool and a test identity and restores; files from `pairtimed init` have mode 0600.
+- Touches: `deploy/` (`compose.yml`, `litestream.yml`, `cloudflared/`, `pairtime.toml.tmpl`, `runbook.md`, `renovate.json`), `Dockerfile.pairtimed`, `.github/workflows/{release,restore-drill,probe}.yml`, `cmd/pairtimed/`, `internal/server/backup/`, `internal/server/objstore/`.
+- Build: DESIGN 10.1 to 10.5, and 10.6 for the database's size. A distroless static image holding `pairtimed` and a pinned Litestream v0.5 binary checked against its checksum, built and pushed to `ghcr.io/some-du6e/pairtimed` by `release.yml`, so the host never builds. `compose.yml` as DESIGN 10.1 shows, with pinned tags. `litestream.yml` with `exec: pairtimed serve`, `restore-if-db-not-exists`, a 10 s sync interval, 24 h snapshots, 72 h retention and the Healthchecks heartbeat. `pairtimed init --base-url` (creates `server.ed25519`, `evidence.p256` and `pepper` in `/data/keys` with mode 0600, writes `pairtime.toml`, prints the public keys). `pairtimed keys backup --age <recipient>`, plus the nightly `VACUUM INTO` snapshot encrypted with age and uploaded to the second bucket (DESIGN 10.3); both need `filippo.io/age` (BSD-3-Clause) in `pairtimed` only, and the PR says why. A snapshot is about the database's size, which DESIGN 10.6 puts near 9 to 10 GB at R11 scale, and one PutObject takes at most `objstore.MaxPutSize` (5 GiB less 5 MiB, R2's cap), so `internal/server/objstore/` gets a multipart upload for snapshots past it: CreateMultipartUpload, UploadPart, CompleteMultipartUpload with `If-None-Match: *` to stay write-once (R2 evaluates it atomically there), and AbortMultipartUpload on any failure so no parts are left behind. `pairtimed doctor` (HCA discovery, both buckets, replication lag, a dry-run push to `pairtime-witness`, both Healthchecks URLs, `/healthz` through the tunnel). A ping every 5 minutes while `/readyz` passes (DESIGN 10.4). `pairtimed` serves `install.sh` and `install.ps1` for the current release at `https://<host>/`. `runbook.md`, written for the deploy agent: first deploy, upgrades through Renovate PRs, rollback to the previous tag, moving to a VPS.
+- CI checks: `probe.yml` takes a `host` input and fails unless `/healthz` returns 200, `/.well-known/pairtime-keys.json` parses and TLS is valid. `restore-drill.yml` builds the image, runs it against a MinIO service container, writes data, destroys the container, restores into a fresh one from the replica, and passes `PRAGMA integrity_check` and API smoke tests; the nightly snapshot decrypts with the `age` command-line tool and a test identity and restores; against MinIO, with the multipart threshold lowered for the test, a snapshot of several parts reads back byte for byte and a failed part aborts the upload; files from `pairtimed init` have mode 0600.
 - Oracle: SQLite's integrity check after a real restore; the `age` CLI as an independent decrypter.
 
 ### WP-OP2. Deploy on Karim's domain [human]
@@ -829,9 +838,9 @@ Exit check: a test submission from the deployed instance round-trips into a sand
 
 ### WP-SB2. `pkg/seal` and the evidence key
 
-- Depends on: WP-SV17.
-- Touches: `pkg/seal/` (new), `internal/server/keys/`, `cmd/pairtimed/`.
-- Build: DESIGN 7.6: ECDH P-256 through `crypto/ecdh`, HKDF-SHA256 with `info = "pairtime/v1/seal" || submission_id || part`, AES-256-GCM; a sealed-blob format with key id, ephemeral public key, nonce and ciphertext; opening with the evidence key; re-sealing to a viewer's ephemeral key; the evidence public key in `/.well-known/pairtime-keys.json` with id and validity dates; `pairtimed keys rotate-evidence`, which re-seals stored blobs.
+- Depends on: WP-SV17, WP-SV15.
+- Touches: `pkg/seal/` (new), `internal/server/keys/`, `cmd/pairtimed/`, `internal/server/objstore/`.
+- Build: DESIGN 7.6: ECDH P-256 through `crypto/ecdh`, HKDF-SHA256 with `info = "pairtime/v1/seal" || submission_id || part`, AES-256-GCM; a sealed-blob format with key id, ephemeral public key, nonce and ciphertext; opening with the evidence key; re-sealing to a viewer's ephemeral key; the evidence public key in `/.well-known/pairtime-keys.json` with id and validity dates; `pairtimed keys rotate-evidence`, which re-seals stored blobs and deletes the ones sealed to the old key. On a bucket that keeps versions it deletes every version of each, because a plain DeleteObject leaves a noncurrent version behind (`docs/errata/2026-11-20-evidence-versioning.md`).
 - CI checks: Wycheproof's `ecdh_secp256r1` and `aes_gcm` vectors at a pinned commit; round trips; changed ciphertext or associated data fails to open; after rotation every stored blob opens with the new key.
 - Oracle: Wycheproof; RFC 5869. WP-SB7 adds a second, independent implementation (WebCrypto).
 
@@ -949,9 +958,9 @@ Exit check: a test submission from the deployed instance round-trips into a sand
 
 ### WP-RV5. Purge, exposure reports and revocation
 
-- Depends on: WP-RV2.
-- Touches: `internal/server/reveal/`, `web/src/server/review/`, `web/src/local/submit/`.
-- Build: DESIGN 7.11: the teen's "This revealed something it shouldn't have" button (`POST .../purge`) deletes the item from the evidence store at once, uncredits its minutes and gives the program a revision; the reviewer's "Report an exposure" (`POST .../exposure`) hides the item from every viewer at once and asks the teen to purge or keep it; revocation through the spot-check window emits `submission.revoked` (DESIGN 7.9).
+- Depends on: WP-RV2, WP-SV15.
+- Touches: `internal/server/reveal/`, `web/src/server/review/`, `web/src/local/submit/`, `internal/server/objstore/`.
+- Build: DESIGN 7.11: the teen's "This revealed something it shouldn't have" button (`POST .../purge`) deletes the item from the evidence store at once, uncredits its minutes and gives the program a revision; the reviewer's "Report an exposure" (`POST .../exposure`) hides the item from every viewer at once and asks the teen to purge or keep it; revocation through the spot-check window emits `submission.revoked` (DESIGN 7.9). On a bucket that keeps versions, the purge deletes every version of the blob (ListObjectVersions, then DeleteObject with each versionId), because a plain DeleteObject leaves a noncurrent version behind (`docs/errata/2026-11-20-evidence-versioning.md`).
 - CI checks: a purged item is gone from object storage and the database and its minutes are uncredited; an exposure report hides the item for every role at once; a revocation emits the event.
 - Oracle: DESIGN 7.11.
 
@@ -1180,7 +1189,7 @@ Exit check: `loadtest.yml` green; the red-team step green or every remaining cas
 - CI checks: on all three `platform.yml` jobs against a local manifest server: a good update swaps and restarts; a bad signature is refused; a hook call during the swap still lands, directly or through the inbox.
 - Oracle: the manifest signature; real file operations on each OS.
 
-### WP-OS9. Tray on Windows and Linux (cut-first)
+### WP-OS10. Tray on Windows and Linux (cut-first)
 
 - Depends on: WP-AG4.
 - Touches: `internal/platform/{windows,linux}/`, `internal/agent/tray/`.
@@ -1349,7 +1358,7 @@ The deploy is three WPs, and only the first is code. Nothing builds on Karim's h
 
 | WP | Who runs it | When | What it leaves behind |
 |---|---|---|---|
-| WP-OP1 | a coding agent | M3, as soon as WP-SV1 and WP-SV15 merge | the image on GHCR, `deploy/compose.yml`, `litestream.yml`, the cloudflared config, `pairtimed init`, `keys backup`, `doctor`, `runbook.md`, `restore-drill.yml` |
+| WP-OP1 | a coding agent | M3, as soon as WP-SV1 and WP-SV15 merge | the image on GHCR, `deploy/compose.yml`, `litestream.yml`, the cloudflared config, `pairtimed init`, `keys backup`, `doctor`, `runbook.md`, `restore-drill.yml`, multipart snapshot uploads |
 | WP-OP2 | the deploy agent on Karim's host, following `deploy/runbook.md` | M3, target 2026-12-09, once Karim has supplied DESIGN 10.5's list | `https://<host>` serving the release, keys backed up to the offline age key, `probe.yml` and the restore drill green, Healthchecks pinging |
 | WP-OP4 | the deploy agent | January, before the native program's first payout | the same compose file on a Hetzner CCX13 or AX42, restored from the replica, tunnel moved |
 

@@ -1,0 +1,145 @@
+{
+  "fixture": "sidedoor/e-bridge-lines",
+  "title": "Bridge records of 5,000-line agent edits, with a jiggler on Windows",
+  "sm": "docs/PLAN.md WP-FX4 (e); DESIGN 5.2, 5.7, 6.2 D2, D4 and D19, 6.4",
+  "date": "2026-11-25",
+  "timezone": "America/Chicago",
+  "utc_offset": "-06:00",
+  "os": "windows",
+  "input_keys": false,
+  "evidence": "C",
+  "witness": "witnessed",
+  "device": "d_9489b555722b",
+  "projects": {"p_544dbca0f073": "the project VS Code has open"},
+  "window": {"start": "2026-11-25T20:01:00Z", "end": "2026-11-25T20:09:00Z", "local": "14:01-14:09"},
+  "rows": [
+    {
+      "start": "2026-11-25T20:01:00Z",
+      "minutes": 1,
+      "local": "14:01",
+      "bucket": false,
+      "codes": ["X.no_anchor"]
+    },
+    {
+      "start": "2026-11-25T20:02:00Z",
+      "minutes": 1,
+      "local": "14:02",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 57,
+      "credit": {
+        "p_544dbca0f073": {"P": 57}
+      },
+      "uncredited": {"X.no_anchor": 3},
+      "agent_running_s": 0,
+      "note": "The first prompt's 60 s typing lead starts at 14:02:03."
+    },
+    {
+      "start": "2026-11-25T20:03:00Z",
+      "minutes": 1,
+      "local": "14:03",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 23,
+      "credit": {
+        "p_544dbca0f073": {"P": 3, "SUP": 3, "READ": 17}
+      },
+      "uncredited": {"X.no_anchor": 37},
+      "agent_running_s": 3,
+      "note": "The prompt at :03, then the turn's 20 s base until :23: SUP until the edit at :06, READ after. The 5,000 lines add nothing to the bucket.",
+      "erratum": "2026-11-19-turns-without-a-stop"
+    },
+    {
+      "start": "2026-11-25T20:04:00Z",
+      "minutes": 1,
+      "local": "14:04",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 57,
+      "credit": {
+        "p_544dbca0f073": {"P": 57}
+      },
+      "uncredited": {"X.no_anchor": 3},
+      "agent_running_s": 0,
+      "note": "The next prompt's lead starts at :03.",
+      "erratum": "2026-11-19-turns-without-a-stop"
+    },
+    {
+      "start": "2026-11-25T20:05:00Z",
+      "minutes": 1,
+      "local": "14:05",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 23,
+      "credit": {
+        "p_544dbca0f073": {"P": 3, "SUP": 3, "READ": 17}
+      },
+      "uncredited": {"X.no_anchor": 37},
+      "agent_running_s": 3,
+      "note": "The prompt at :03, then the turn's 20 s base until :23: SUP until the edit at :06, READ after. The 5,000 lines add nothing to the bucket.",
+      "erratum": "2026-11-19-turns-without-a-stop"
+    },
+    {
+      "start": "2026-11-25T20:06:00Z",
+      "minutes": 1,
+      "local": "14:06",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 57,
+      "credit": {
+        "p_544dbca0f073": {"P": 57}
+      },
+      "uncredited": {"X.no_anchor": 3},
+      "agent_running_s": 0,
+      "note": "The next prompt's lead starts at :03.",
+      "erratum": "2026-11-19-turns-without-a-stop"
+    },
+    {
+      "start": "2026-11-25T20:07:00Z",
+      "minutes": 1,
+      "local": "14:07",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 23,
+      "credit": {
+        "p_544dbca0f073": {"P": 3, "SUP": 3, "READ": 17}
+      },
+      "uncredited": {"X.no_anchor": 37},
+      "agent_running_s": 3,
+      "note": "The prompt at :03, then the turn's 20 s base until :23: SUP until the edit at :06, READ after. The 5,000 lines add nothing to the bucket.",
+      "erratum": "2026-11-19-turns-without-a-stop"
+    },
+    {
+      "start": "2026-11-25T20:08:00Z",
+      "minutes": 1,
+      "local": "14:08",
+      "bucket": false,
+      "codes": ["X.no_anchor"],
+      "erratum": "2026-11-19-turns-without-a-stop"
+    }
+  ],
+  "totals": {
+    "credited_s": 240,
+    "credited_by_project": {"p_544dbca0f073": 240},
+    "credited_by_reason": {"P": 180, "SUP": 9, "READ": 51},
+    "uncredited": {"X.no_anchor": 120},
+    "agent_running_s": 9,
+    "level_a_s": 0,
+    "level_b_s": 0,
+    "level_c_s": 240,
+    "via_track_s": 0,
+    "logged_s": 243,
+    "ai_logged_s": 243,
+    "level_c_cap_s": 81
+  },
+  "stated": ["level_a_s", "level_b_s"],
+  "approx": {},
+  "errata": ["2026-11-19-turns-without-a-stop"],
+  "notes": [
+    "Every credited second rests on a bridge anchor: level C, labeled via_bridge.",
+    "Unlike (a), (c) and (d), these records count toward logged_s and ai_logged_s: they come from heartbeats that passed the peer-process check (D19). logged_s = ai_logged_s = 3 + 117 + 3 + 117 + 3 = 243 s, because the editor heartbeats share their edits' millisecond.",
+    "level_c_cap_s = min(240, 243 / 3) = 81 s: the most a program that opts in to level C could take, and only inside a commit interval whose closing commit is forge-verified (DESIGN 5.2, D5). This case has no commit, so it is 0 submittable as recorded.",
+    "Uncapped, each 5,000-line edit would refill the bucket to its 600 s cap and turn the 40 s from :23 to the next lead, and everything after 14:07:23, into READ.",
+    "The SUP and READ split, agent_running_s and the X.no_anchor seconds after each edit depend on the erratum: no agent.stop says when a bridge turn ends."
+  ]
+}

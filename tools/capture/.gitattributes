@@ -1,0 +1,4 @@
+# dump-hook.sh runs under sh, which reads a carriage return as part of a
+# command, so a CRLF checkout (core.autocrlf, the Git for Windows default)
+# would make it fail. Shell scripts are checked out with LF everywhere.
+*.sh text eol=lf

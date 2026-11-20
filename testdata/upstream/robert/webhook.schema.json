@@ -78,7 +78,7 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["name", "secret", "timestamp", "signature", "body", "now", "expect"],
+        "required": ["name", "secret", "timestamp", "signature", "body", "now", "mac_valid", "expect"],
         "properties": {
           "name": {"type": "string"},
           "secret": {"type": "string"},
@@ -86,8 +86,22 @@
           "signature": {"type": ["string", "null"], "description": "The X-Robert-Signature header, or null when it is missing."},
           "body": {"type": "string"},
           "now": {"type": "number", "description": "The receiver's clock, in Unix seconds with fractions."},
+          "mac_valid": {
+            "type": ["boolean", "null"],
+            "description": "Whether signature is the right sha256= MAC of secret, timestamp and body, or null when a header is missing and there is no MAC to compare. check.py recomputes it, so a case meant to be refused for its clock, its timestamp's form or its empty secret still carries a correct MAC and can't pass by failing on the MAC instead."
+          },
           "expect": {"enum": ["accept", "reject"]}
-        }
+        },
+        "allOf": [
+          {
+            "description": "mac_valid is null exactly when a header is missing.",
+            "anyOf": [
+              {"properties": {"timestamp": {"type": "string"}, "signature": {"type": "string"}, "mac_valid": {"type": "boolean"}}},
+              {"properties": {"timestamp": {"type": "null"}, "mac_valid": {"type": "null"}}},
+              {"properties": {"signature": {"type": "null"}, "mac_valid": {"type": "null"}}}
+            ]
+          }
+        ]
       }
     }
   },

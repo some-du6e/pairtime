@@ -43,6 +43,17 @@ sub = "ident!def456"
 roles = ["fraud_squad", "spot_checker", "admin"]
 `
 
+// objectStorage is an [object_storage] section with the keys a deployment
+// needs, and s3Secrets the secrets that go with it.
+const objectStorage = `
+[object_storage]
+endpoint = "https://acct.r2.cloudflarestorage.com/"
+bucket = "pairtime"
+snapshot_bucket = "pairtime-snapshots"
+`
+
+var s3Secrets = []string{"PAIRTIME_S3_ACCESS_KEY_ID=AKIDR2", "PAIRTIME_S3_SECRET_ACCESS_KEY=hunter2-r2"}
+
 func TestLoad(t *testing.T) {
 	const base = "base_url = \"https://pairtime.example.org\"\n"
 	tests := []struct {
@@ -65,7 +76,7 @@ func TestLoad(t *testing.T) {
 						{Sub: "ident!abc123", Roles: []string{"qi", "program_reviewer:stardance"}},
 						{Sub: "ident!def456", Roles: []string{"fraud_squad", "spot_checker", "admin"}},
 					},
-					HCA:        HCA{ClientID: "hca-client"},
+					HCA:        HCA{ClientID: "hca-client", Issuer: DefaultHCAIssuer},
 					PrivacyHub: PrivacyHub{Aud: "pairtime", JWKSURL: "https://privacy.example.org/.well-known/jwks.json"},
 					Sentinel:   Sentinel{Socket: "/run/pairtime/sentinel.sock"},
 					Listen:     ":8081",
@@ -96,6 +107,8 @@ func TestLoad(t *testing.T) {
 					{"database.path", c.Database.Path, "/data/pairtime.db"},
 					{"scoring_version", c.ScoringVersion, ""},
 					{"sentinel.socket", c.Sentinel.Socket, ""},
+					{"hca.client_id", c.HCA.ClientID, ""},
+					{"hca.issuer", c.HCA.Issuer, "https://auth.hackclub.com"},
 				} {
 					if f.got != f.want {
 						t.Errorf("%s = %q, want %q", f.key, f.got, f.want)
@@ -122,6 +135,12 @@ func TestLoad(t *testing.T) {
 				}
 			},
 		},
+		{name: "base_url's scheme and host are lowercased, as browsers send Origin", toml: "base_url = \"HTTPS://Pairtime.Example.ORG\"\n", check: wantBaseURL("https://pairtime.example.org")},
+		{name: "base_url drops https's default port", toml: "base_url = \"https://pairtime.example.org:443/\"\n", check: wantBaseURL("https://pairtime.example.org")},
+		{name: "base_url drops http's default port", toml: "base_url = \"http://localhost:80\"\n", check: wantBaseURL("http://localhost")},
+		{name: "base_url keeps a port that isn't the default", toml: "base_url = \"https://pairtime.example.org:8443\"\n", check: wantBaseURL("https://pairtime.example.org:8443")},
+		{name: "an IPv6 loopback base_url keeps its brackets", toml: "base_url = \"http://[::1]:80\"\n", check: wantBaseURL("http://[::1]")},
+		{name: "base_url's host must be ASCII, as browsers send it", toml: "base_url = \"https://pairtim\u00e9.example.org\"\n", wantErr: "isn't ASCII"},
 		{name: "profile_default is public or ask, never private", toml: base + "profile_default = \"private\"\n", wantErr: "profile_default"},
 		{name: "scoring_version must be X.Y.Z", toml: base + "scoring_version = \"0.x\"\n", wantErr: "scoring_version"},
 		{name: "scoring_version can't have a leading zero", toml: base + "scoring_version = \"01.0.0\"\n", wantErr: "scoring_version"},
@@ -131,6 +150,9 @@ func TestLoad(t *testing.T) {
 		{name: "a reviewer needs a sub", toml: base + "[[reviewers]]\nroles = [\"qi\"]\n", wantErr: "has no sub"},
 		{name: "a reviewer sub is listed once", toml: base + "[[reviewers]]\nsub = \"a\"\nroles = [\"qi\"]\n[[reviewers]]\nsub = \"a\"\nroles = [\"admin\"]\n", wantErr: "listed twice"},
 		{name: "a role is listed once per reviewer", toml: base + "[[reviewers]]\nsub = \"a\"\nroles = [\"qi\", \"qi\"]\n", wantErr: "twice"},
+		{name: "hca.issuer over plain http is refused", toml: base + "[hca]\nissuer = \"http://auth.example.org\"\n", wantErr: "hca.issuer"},
+		{name: "hca.issuer over http is allowed on localhost, for a fake HCA", toml: base + "[hca]\nissuer = \"http://localhost:8080/hca\"\n"},
+		{name: "hca.issuer can't carry a query", toml: base + "[hca]\nissuer = \"https://auth.example.org/?x=1\"\n", wantErr: "hca.issuer"},
 		{name: "privacy_hub.jwks_url must be https", toml: base + "[privacy_hub]\njwks_url = \"http://example.org/jwks.json\"\n", wantErr: "jwks_url"},
 		{name: "sentinel.socket must be absolute", toml: base + "[sentinel]\nsocket = \"sentinel.sock\"\n", wantErr: "sentinel.socket"},
 		{name: "listen must be host:port", toml: base + "listen = \"8080\"\n", wantErr: "listen is"},
@@ -167,6 +189,96 @@ func TestLoad(t *testing.T) {
 			environ: []string{"PAIRTIME_DATABASE_URL=mysql://pt:hunter2@db/pairtime"},
 			wantErr: "must be a URL of the form postgres://",
 		},
+		{
+			name: "object storage is off without an endpoint",
+			toml: base,
+			check: func(t *testing.T, c *Config, _ string) {
+				if _, on := c.ObjectStore(); on || c.ObjectStorage.Enabled() {
+					t.Error("object storage is on with no [object_storage] section")
+				}
+			},
+		},
+		{
+			name:    "object storage takes R2's region by default and the access key from the secrets",
+			toml:    base + objectStorage,
+			environ: s3Secrets,
+			check: func(t *testing.T, c *Config, _ string) {
+				want := ObjectStorage{Endpoint: "https://acct.r2.cloudflarestorage.com", Region: "auto", Bucket: "pairtime", SnapshotBucket: "pairtime-snapshots"}
+				if c.ObjectStorage != want {
+					t.Errorf("object_storage = %+v, want %+v", c.ObjectStorage, want)
+				}
+				oc, on := c.ObjectStore()
+				if !on || oc.Endpoint != want.Endpoint || oc.Region != "auto" || oc.Credentials.AccessKeyID != "AKIDR2" || oc.Credentials.SecretAccessKey != "hunter2-r2" {
+					t.Errorf("ObjectStore() = %v, %v", oc.Endpoint, on)
+				}
+			},
+		},
+		{
+			name:    "object storage takes a region and virtual-hosted URLs",
+			toml:    base + objectStorage + "region = \"eu-central-1\"\nvirtual_host = true\n",
+			environ: s3Secrets,
+			check: func(t *testing.T, c *Config, _ string) {
+				if oc, _ := c.ObjectStore(); oc.Region != "eu-central-1" || !oc.VirtualHost {
+					t.Errorf("ObjectStore() region %q, virtual host %v", oc.Region, oc.VirtualHost)
+				}
+			},
+		},
+		{name: "object storage needs its access key id", toml: base + objectStorage, environ: s3Secrets[1:], wantErr: "set the secret PAIRTIME_S3_ACCESS_KEY_ID"},
+		{name: "object storage needs its secret access key", toml: base + objectStorage, environ: s3Secrets[:1], wantErr: "set the secret PAIRTIME_S3_SECRET_ACCESS_KEY"},
+		{
+			name:    "object storage needs a snapshot bucket",
+			toml:    base + "[object_storage]\nendpoint = \"https://acct.r2.cloudflarestorage.com\"\nbucket = \"pairtime\"\n",
+			environ: s3Secrets,
+			wantErr: "object_storage.snapshot_bucket is required",
+		},
+		{
+			name:    "the snapshot bucket can't be the main one, whose evidence its lifecycle would delete",
+			toml:    base + "[object_storage]\nendpoint = \"https://acct.r2.cloudflarestorage.com\"\nbucket = \"pairtime\"\nsnapshot_bucket = \"pairtime\"\n",
+			environ: s3Secrets,
+			wantErr: "30-day lifecycle",
+		},
+		{
+			name:    "a bucket name outside R2's and S3's rules is refused",
+			toml:    base + "[object_storage]\nendpoint = \"https://acct.r2.cloudflarestorage.com\"\nbucket = \"Pairtime_Main\"\nsnapshot_bucket = \"pairtime-snapshots\"\n",
+			environ: s3Secrets,
+			wantErr: "object_storage.bucket",
+		},
+		{
+			name:    "an object storage endpoint over http is refused off loopback",
+			toml:    base + "[object_storage]\nendpoint = \"http://s3.example\"\nbucket = \"a-bucket\"\nsnapshot_bucket = \"b-bucket\"\n",
+			environ: s3Secrets,
+			wantErr: "only https",
+		},
+		{
+			name:    "an object storage endpoint with a key in it is refused without quoting it",
+			toml:    base + "[object_storage]\nendpoint = \"https://AKIDR2:hunter2@acct.r2.cloudflarestorage.com\"\nbucket = \"a-bucket\"\nsnapshot_bucket = \"b-bucket\"\n",
+			environ: s3Secrets,
+			wantErr: "user or password",
+		},
+		{
+			name:    "virtual-hosted URLs over http are refused, since <bucket>.localhost isn't a loopback host",
+			toml:    base + "[object_storage]\nendpoint = \"http://localhost:9000\"\nbucket = \"a-bucket\"\nsnapshot_bucket = \"b-bucket\"\nvirtual_host = true\n",
+			environ: s3Secrets,
+			wantErr: "object_storage.virtual_host",
+		},
+		{
+			name:    "virtual-hosted URLs on an IP address are refused",
+			toml:    base + "[object_storage]\nendpoint = \"https://192.0.2.10\"\nbucket = \"a-bucket\"\nsnapshot_bucket = \"b-bucket\"\nvirtual_host = true\n",
+			environ: s3Secrets,
+			wantErr: "not the IP address",
+		},
+		{
+			name:    "path-style URLs over http on loopback stay allowed, for MinIO in CI",
+			toml:    base + "[object_storage]\nendpoint = \"http://127.0.0.1:9000\"\nbucket = \"a-bucket\"\nsnapshot_bucket = \"b-bucket\"\n",
+			environ: s3Secrets,
+			check: func(t *testing.T, c *Config, _ string) {
+				if oc, on := c.ObjectStore(); !on || oc.Endpoint != "http://127.0.0.1:9000" || oc.VirtualHost {
+					t.Errorf("ObjectStore() endpoint %q, virtual host %v, on %v", oc.Endpoint, oc.VirtualHost, on)
+				}
+			},
+		},
+		{name: "object storage keys without an endpoint are refused", toml: base + "[object_storage]\nbucket = \"pairtime\"\n", wantErr: "object_storage.endpoint is empty"},
+		{name: "an unknown object_storage key is refused", toml: base + objectStorage + "buckets = \"x\"\n", environ: s3Secrets, wantErr: "unknown keys: object_storage.buckets"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -193,6 +305,41 @@ func TestLoad(t *testing.T) {
 			}
 			if tt.check != nil {
 				tt.check(t, c, dir)
+			}
+		})
+	}
+}
+
+// wantBaseURL checks that Load left base_url as want.
+func wantBaseURL(want string) func(t *testing.T, c *Config, dir string) {
+	return func(t *testing.T, c *Config, _ string) {
+		if c.BaseURL != want {
+			t.Errorf("base_url = %q, want %q", c.BaseURL, want)
+		}
+	}
+}
+
+func TestCanonicalOrigin(t *testing.T) {
+	tests := []struct {
+		name, in, want string
+	}{
+		{name: "an origin browsers would send is kept", in: "https://pairtime.example.org", want: "https://pairtime.example.org"},
+		{name: "the host is lowercased", in: "https://Pairtime.Example.org", want: "https://pairtime.example.org"},
+		{name: "https's default port is dropped", in: "https://pairtime.example.org:443", want: "https://pairtime.example.org"},
+		{name: "http's default port is dropped", in: "http://127.0.0.1:80", want: "http://127.0.0.1"},
+		{name: "another port is kept", in: "https://pairtime.example.org:8443", want: "https://pairtime.example.org:8443"},
+		{name: "443 isn't http's default", in: "http://localhost:443", want: "http://localhost:443"},
+		{name: "an IPv6 host keeps its brackets", in: "https://[::1]:443", want: "https://[::1]"},
+		{name: "a trailing slash is dropped", in: "https://pairtime.example.org/", want: "https://pairtime.example.org"},
+		{name: "a path isn't an origin", in: "https://pairtime.example.org/x"},
+		{name: "a user isn't part of an origin", in: "https://me@pairtime.example.org"},
+		{name: "another scheme has no origin here", in: "ftp://pairtime.example.org"},
+		{name: "the opaque origin null isn't one", in: "null"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := CanonicalOrigin(tt.in); got != tt.want {
+				t.Errorf("CanonicalOrigin(%q) = %q, want %q", tt.in, got, tt.want)
 			}
 		})
 	}

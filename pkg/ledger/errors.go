@@ -10,10 +10,14 @@ import (
 // The errors that the typed errors below wrap, and that the functions
 // checking one value return. Test for them with errors.Is.
 var (
-	// ErrUnknownRType is a record type that isn't in spec 4.2's table.
+	// ErrUnknownRType is a record type from 0x13 to 0x3f that this package
+	// doesn't know: an event kind added after it was built (spec 4.2).
 	// Roots and heads never read rtype, so the rest of the record's batch
-	// can still be checked.
-	ErrUnknownRType = errors.New("ledger: rtype isn't in the table")
+	// can still be checked, and an auditor reports the record's kind as
+	// unknown. A server is never older than the clients writing to it, so
+	// for a server it is a fault, and it refuses or holds the record. A
+	// code version 1 never assigns, 0x00 or 0x42 to 0xff, is ErrHeader.
+	ErrUnknownRType = errors.New("ledger: rtype is a kind added after this reader")
 	// ErrHeader is a header that breaks a rule of spec 4.3.
 	ErrHeader = errors.New("ledger: header breaks spec 4.3")
 	// ErrBody is a body that isn't a record body (spec 4.5).

@@ -1,0 +1,113 @@
+{
+  "scenario": "6.2-cc3-plugin-claim",
+  "title": "Copied lines claimed by a plugin-posted heartbeat",
+  "story": "As 6.2-cc3-copied-lines, and before committing she runs a script that drops one line into pairtime's plugin inbox: an editor heartbeat for remind-bot claiming the copied files as a 300-line paste. Any process on the machine can do that (DESIGN 5.2), so the claim explains none of the commit's lines.",
+  "base": "6.2",
+  "edits": [
+    "The commit's --shortstat is 7 files, 328 insertions and 13 deletions, as in 6.2-cc3-copied-lines.",
+    "An editor.activity at 07:44:10 via plugin: an edit of remind-bot with edit_source paste and lines_changed 300. It arrives over the inbox, so the agent takes no presence sample at it."
+  ],
+  "devices": [
+    {
+      "device_id": "d_c0fe658255f8",
+      "base": "6.2",
+      "os": "windows",
+      "input_keys": false,
+      "typing_module": false,
+      "vm": false,
+      "reveals": true
+    }
+  ],
+  "submission": {
+    "projects": ["p_be4901c04a84"],
+    "window": {"start": "2026-11-24T12:40:00Z", "end": "2026-11-24T12:45:00Z"}
+  },
+  "live": {
+    "from": "rescore",
+    "mutations": []
+  },
+  "fails": ["CC3"],
+  "checks": {
+    "CC1": {
+      "result": "not_computable",
+      "counts": {"hook_prompts": 1, "log_entries": 0, "matched": 0, "hook_only": 0, "log_only": 0, "not_computable": 1},
+      "items": [
+        {
+          "turn_key": "t_9bdf9be6133e",
+          "t": 1795524060000,
+          "harness": "cursor",
+          "status": "not_computable",
+          "why": "no v1 log reader for this harness (DESIGN 5.1)"
+        }
+      ],
+      "reason": "no session of the submission has a v1 log reader"
+    },
+    "CC2": {
+      "result": "pass",
+      "counts": {"prompts": 1, "with_input_and_focus": 1, "no_input": 0, "no_focus": 0}
+    },
+    "CC3": {
+      "result": "fail",
+      "counts": {"commits": 1, "flagged": 1},
+      "items": [
+        {
+          "sha": "99d45dfe857548da524bb234c7ce7c29f267c9df",
+          "t": 1795524270000,
+          "changed_lines": 341,
+          "recorded_lines": 41,
+          "ignored_lines": 300,
+          "unexplained_lines": 300,
+          "flagged": true
+        }
+      ]
+    },
+    "CC4": {
+      "result": "pass",
+      "counts": {"commits": 1, "seen_out_of_order": 0, "pushed_before_observed": 0, "forge_mismatch": 0}
+    },
+    "CC5": {
+      "result": "pass",
+      "counts": {"devices": 1, "slots_credited_twice": 0, "slots_credited": 19, "merge_dropped_s": 0}
+    },
+    "CC6": {
+      "result": "pass",
+      "counts": {"minutes_mismatched": 0, "held_s": 0},
+      "basis": "Stated, not recomputed: the live buckets are pkg/score over this device's events.jsonl, which the reveal holds in full, so the server's re-score is the same computation and every minute reproduces."
+    },
+    "CC7": {
+      "result": "pass",
+      "counts": {
+        "batches": 7,
+        "records": 35,
+        "missing_batches": 0,
+        "batch_gaps": 0,
+        "seq_gaps": 0,
+        "count_mismatches": 0,
+        "root_mismatches": 0,
+        "head_mismatches": 0,
+        "body_mismatches": 0,
+        "held_minutes": 0
+      }
+    },
+    "CC9": {
+      "result": "pass",
+      "counts": {"sessions": 1, "multi_project_sessions": 0, "orphan_turns": 0, "parent_class_changes": 0}
+    },
+    "CC10": {
+      "result": "pass",
+      "counts": {"editor_acts": 1, "with_focus": 1, "without_focus": 0}
+    },
+    "CC11": {
+      "result": "not_computable",
+      "counts": {"prompts": 0, "typed_chars": 0, "key_downs": 0, "injected": 0, "too_few_keys": 0, "injected_prompts": 0},
+      "reason": "the typing module is off on this device"
+    }
+  },
+  "not_exercised": {"CC8": "SM 6.2 doesn't quote the prompt, so there is no text to commit or reveal"},
+  "known_limit": null,
+  "errata": ["2026-11-19-check-readings"],
+  "notes": [
+    "CC3 counts the lines of records from the vias D19 trusts, hook, log, otel, editor and verified bridge records. The plugin's 300 lines are listed as ignored_lines, so 300 of the commit's 341 lines stay unexplained and CC3 raises unexplained_lines. Counted, the claim would explain all of them.",
+    "A paste isn't an anchor's kind of edit (SM 2.3), so CC10 doesn't count the record, and it credits nothing: it opens no window, the slot it falls in already resolves to remind-bot, and plugin records never count toward logged_s (D19). The credited slots are 6.2's."
+  ]
+}

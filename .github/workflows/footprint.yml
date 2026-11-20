@@ -53,9 +53,9 @@ jobs:
         shell: pwsh
     steps:
       # Actions are pinned to commit SHAs; tags can be moved. Dependabot bumps them.
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: go.mod
           cache-dependency-path: go.mod
@@ -132,8 +132,29 @@ jobs:
             # talks to the agent during it.
             Start-Sleep -Seconds 15
             $before = Get-Sample $agent.Id
-            Start-Sleep -Seconds ([int]$env:IDLE_MINUTES * 60)
+
+            # The RSS budget holds over the whole span (DESIGN 9.7), and Go
+            # hands freed memory back to Windows, so a rise in the middle
+            # can be gone by the end. So the working set is read every 2 s,
+            # which reads the OS's counters and wakes nothing in the agent.
+            $end = $before.Time.AddMinutes([int]$env:IDLE_MINUTES)
+            $highest = $before.WorkingSet
+            $readings = 1
+            while ($true) {
+              $left = ($end - [DateTime]::UtcNow).TotalMilliseconds
+              if ($left -le 0) { break }
+              Start-Sleep -Milliseconds ([math]::Min(2000, [math]::Ceiling($left)))
+              $ws = (Get-Process -Id $agent.Id).WorkingSet64
+              $readings++
+              if ($ws -gt $highest) { $highest = $ws }
+            }
             $after = Get-Sample $agent.Id
+            $readings++
+            if ($after.WorkingSet -gt $highest) { $highest = $after.WorkingSet }
+            # The peak counter only rises. If it rose during the span, the
+            # working set reached the new peak then, so that is the span's
+            # highest, even if it came and went between two readings.
+            if ($after.Peak -gt $before.Peak -and $after.Peak -gt $highest) { $highest = $after.Peak }
             $status = Invoke-RestMethod -Uri "$base/v1/status" -Headers $headers
 
             $wall = ($after.Time - $before.Time).TotalSeconds
@@ -159,7 +180,7 @@ jobs:
 
             $budgetRss = 25000000
             $budgetCpu = 0.001
-            $rssOk = $after.WorkingSet -lt $budgetRss
+            $rssOk = $highest -lt $budgetRss
             $cpuOk = $cpuShare -lt $budgetCpu
             $secondOk = $secondStatus -eq 3
             $stopOk = ($stopStatus -eq 0) -and ($pidAfter -eq 0)
@@ -168,9 +189,10 @@ jobs:
               '',
               '| measure | value | gate |',
               '|---|---:|---|',
-              "| working set at the end | $($after.WorkingSet) bytes | under $budgetRss bytes: $(Verdict $rssOk) |",
+              "| highest working set over the span ($readings readings and the peak counter) | $highest bytes | under $budgetRss bytes: $(Verdict $rssOk) |",
               "| CPU time over wall time | $([math]::Round($cpuShare, 6)) | under ${budgetCpu}: $(Verdict $cpuOk) |",
-              "| peak working set | $($after.Peak) bytes | none |",
+              "| working set at the start and end of the span | $($before.WorkingSet), $($after.WorkingSet) bytes | none |",
+              "| peak working set since start-up | $($after.Peak) bytes | none |",
               "| private bytes | $($after.Private) bytes | none |",
               "| threads, handles | $($after.Threads), $($after.Handles) | none |",
               "| thread context switches per minute | $switchesPerMinute | none |",
