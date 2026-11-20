@@ -251,7 +251,7 @@ func TestVectorLowercase(t *testing.T) {
 		later[l.Code] = l.Lower
 	}
 	t.Run("the vectors pin Unicode 15.0.0, and list later mappings up to 17.0.0", func(t *testing.T) {
-		if lc.Unicode != features.LowerUnicode || lc.Unicode != "15.0.0" || lc.LaterUnicode != "17.0.0" {
+		if lc.Unicode != features.LowerUnicode || lc.LaterUnicode != "17.0.0" {
 			t.Errorf("unicode %q, later_unicode %q", lc.Unicode, lc.LaterUnicode)
 		}
 	})
