@@ -261,13 +261,17 @@ func (s *Store) SignIn(ctx context.Context, id Identity, authTime time.Time) (se
 	slack := nullString(id.SlackID)
 	eligible := nullBool(id.YSWSEligible)
 
+	// The op writes only these locals. When ctx ends while the op runs, Do
+	// returns early and the op may still be writing them, so they are read
+	// only after a nil error.
 	var (
 		userID    string
 		createdMs int64
+		isNew     bool
 		refused   error
 	)
 	err = s.w.Do(ctx, 3, func(ctx context.Context, tx writer.Tx) error {
-		userID, createdMs, created, refused = "", 0, false, nil
+		userID, createdMs, isNew, refused = "", 0, false, nil
 		err := tx.QueryRowContext(ctx, `SELECT id, created_at_ms FROM users WHERE hca_sub = $1`, id.Sub).Scan(&userID, &createdMs)
 		switch {
 		case errors.Is(err, sql.ErrNoRows):
@@ -279,7 +283,7 @@ func (s *Store) SignIn(ctx context.Context, id Identity, authTime time.Time) (se
 				refused = ErrSignupsClosed
 				return nil
 			}
-			userID, createdMs, created = newID(now), nowMs, true
+			userID, createdMs, isNew = newID(now), nowMs, true
 			if _, err := tx.ExecContext(ctx, `INSERT INTO users
 (id, hca_sub, slack_id, email_ct, email_index, verification_status, ysws_eligible, created_at_ms, updated_at_ms, signed_in_at_ms)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8, $8)`,
@@ -346,7 +350,7 @@ VALUES ($1, $2, $3, $4, $5, NULL)`,
 	if !authTime.IsZero() {
 		sess.AuthTime = time.UnixMilli(authTime.UnixMilli())
 	}
-	return sess, created, nil
+	return sess, isNew, nil
 }
 
 // Session returns the live session whose cookie value is token, with its
