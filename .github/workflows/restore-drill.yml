@@ -197,6 +197,7 @@ jobs:
               environment:
                 PAIRTIME_WITNESS_REMOTE: /remote.git
                 PAIRTIME_WITNESS_EVERY: "5"
+                PAIRTIME_WITNESS_TRACE: "1"
               volumes:
                 - $RUNNER_TEMP/witness.git:/remote.git
           EOF
@@ -283,10 +284,15 @@ jobs:
           compose up -d witness
           export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=safe.directory GIT_CONFIG_VALUE_0='*'
           if ! timeout 90 bash -c 'until git --git-dir="$RUNNER_TEMP/witness.git" cat-file -e main:drill.json 2> /dev/null; do sleep 2; done'; then
-            compose logs witness
+            compose logs witness | tail -n 80
+            compose exec -T witness sh -c 'id; grep Cap /proc/self/status; ls -la /witness /repo' || true
             echo "::error::the witness sidecar didn't push the root"
             exit 1
           fi
+          # A second round finds nothing new and pushes nothing.
+          before=$(git --git-dir="$RUNNER_TEMP/witness.git" rev-parse main)
+          sleep 12
+          test "$(git --git-dir="$RUNNER_TEMP/witness.git" rev-parse main)" = "$before"
           git --git-dir="$RUNNER_TEMP/witness.git" log --format='%h %an %s' main
           compose stop witness
 

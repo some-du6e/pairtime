@@ -19,14 +19,19 @@
 #   PAIRTIME_WITNESS_BRANCH  main unless set
 #   PAIRTIME_WITNESS_EVERY   seconds between rounds, 300 unless set
 #   PAIRTIME_WITNESS_ONCE    1 runs one round and exits with its status
+#   PAIRTIME_WITNESS_TRACE   1 traces every command, for the restore drill
 set -eu
+if [ "${PAIRTIME_WITNESS_TRACE:-}" = 1 ]; then
+	set -x
+fi
 
 repo=${PAIRTIME_WITNESS_REPO:?set PAIRTIME_WITNESS_REPO to owner/name}
 remote=${PAIRTIME_WITNESS_REMOTE:-git@github.com:$repo.git}
 branch=${PAIRTIME_WITNESS_BRANCH:-main}
 every=${PAIRTIME_WITNESS_EVERY:-300}
-src=/witness
-work=/repo
+# Where the roots are and where the clone goes; tests move them.
+src=${PAIRTIME_WITNESS_SRC:-/witness}
+work=${PAIRTIME_WITNESS_WORK:-/repo}
 
 # ssh with the deploy key alone, and GitHub's published host keys alone
 # (deploy/witness/known_hosts, from api.github.com/meta), never asking.
@@ -57,8 +62,15 @@ publish() {
 	if [ -z "$(find "$src" -mindepth 1 -print | head -n 1)" ]; then
 		return 0
 	fi
-	# What the repository lacks, never over what it holds.
-	cp -R -n "$src/." "$work/" || return 1
+	# What the repository lacks, file by file, never over what it holds.
+	# Not cp -R -n: BusyBox's skips a directory that exists, such as the
+	# clone itself, where GNU's goes into it.
+	(cd "$src" && find . -type f -print) | while IFS= read -r f; do
+		if [ ! -e "$work/$f" ]; then
+			mkdir -p "$work/${f%/*}" || exit 1
+			cp "$src/$f" "$work/$f" || exit 1
+		fi
+	done || return 1
 	if [ -z "$(git -C "$work" status --porcelain)" ]; then
 		return 0
 	fi

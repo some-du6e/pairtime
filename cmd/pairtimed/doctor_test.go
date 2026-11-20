@@ -111,7 +111,7 @@ bucket = "pairtime-data"
 snapshot_bucket = "pairtime-snapshots"
 `, tunnel.URL, strings.TrimPrefix(readyz.URL, "http://"), d.dataDir, hca.URL, d.s3.URL), 0o644)
 	writeFile(t, filepath.Join(dir, witnessKey), "a deploy key\n", 0o600)
-	writeFile(t, filepath.Join(dir, "litestream.yml"), strings.Replace(deploy.LitestreamYAML, "/data/pairtime.db", dbPath, 1), 0o644)
+	writeFile(t, filepath.Join(dir, "litestream.yml"), strings.Replace(deploy.LitestreamYAML, "path: /data/pairtime.db", "path: "+dbPath, 1), 0o644)
 	d.environ = []string{
 		"PAIRTIME_S3_ACCESS_KEY_ID=" + objstoretest.AccessKeyID,
 		"PAIRTIME_S3_SECRET_ACCESS_KEY=" + objstoretest.SecretAccessKey,
