@@ -61,9 +61,12 @@ func newMacRig(t *testing.T) *macRig {
 }
 
 // activate is the Loop telling its handler that the app with pid became
-// frontmost at the second s after t0.
+// frontmost at the second s after t0. Once the Watcher runs, it waits for
+// the Watcher to handle the change: changes that come faster than that
+// are coalesced, and only the last is recorded (the package doc).
 func (r *macRig) activate(s, pid int) {
 	r.loop.Focus(t0.Add(time.Duration(s)*time.Second), darwin.App{PID: pid, BundleID: "com.example.app", Executable: "/Applications/Example.app/Contents/MacOS/Example"})
+	r.w.sync()
 }
 
 func (r *macRig) records() []Record {
@@ -120,6 +123,7 @@ func TestMacFocus(t *testing.T) {
 				tt.before(r)
 			}
 			r.w.Start()
+			r.w.sync()
 			if tt.after != nil {
 				tt.after(r)
 			}
