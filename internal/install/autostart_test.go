@@ -146,6 +146,7 @@ func TestAutostartInstallAndUninstall(t *testing.T) {
 			if !again.Empty() {
 				t.Errorf("a second install plans changes:\n%s", again.Diff())
 			}
+			again.Close()
 
 			uninstall(t, in)
 			want := was

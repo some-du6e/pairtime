@@ -204,6 +204,7 @@ func TestClaudeCodeGoldens(t *testing.T) {
 			if !again.Empty() {
 				t.Errorf("a second install plans changes:\n%s", again.Diff())
 			}
+			again.Close()
 
 			// Taking pairtime's hooks out of after.json, without the backup,
 			// gives what uninstall puts back, byte for byte.

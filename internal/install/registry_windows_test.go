@@ -58,6 +58,7 @@ func TestRunValueOnThisAccount(t *testing.T) {
 			if !again.Empty() {
 				t.Errorf("a second install plans changes:\n%s", again.Diff())
 			}
+			again.Close()
 
 			uninstall(t, in)
 			v, typ, ok, err = reg.Get(RunKey, name)

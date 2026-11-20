@@ -42,14 +42,10 @@ func TestApplyRefusesAStalePlan(t *testing.T) {
 		},
 		{
 			name: "a manifest that changed after planning stops Apply before it writes anything",
-			between: func(t *testing.T, _ Env, in *Installer, items []Item) {
-				other, err := in.PlanInstall(items[:1])
-				if err != nil {
-					t.Fatal(err)
-				}
-				if err := other.Apply(); err != nil {
-					t.Fatal(err)
-				}
+			between: func(t *testing.T, _ Env, in *Installer, _ []Item) {
+				// Another writer, such as an older pairtime that takes no
+				// install lock.
+				writeFile(t, in.manifestPath(), []byte("{\"v\": 1, \"targets\": []}\n"))
 			},
 		},
 	}
@@ -232,6 +228,7 @@ func TestPlanDiff(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			defer u.Close()
 			d = u.Diff()
 			for _, w := range tt.wantUninstall {
 				if w = names.Replace(w); !strings.Contains(d, w) {
@@ -294,6 +291,7 @@ func TestUninstallWorksAroundATargetItCantUndo(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			defer again.Close()
 			if len(again.Problems) != 1 {
 				t.Errorf("the manifest no longer records the settings file: problems %q", again.Problems)
 			}
@@ -498,6 +496,7 @@ func TestUninstallWithoutTheManifest(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			defer again.Close()
 			if !again.Empty() || len(again.Problems) > 0 {
 				t.Errorf("a second uninstall plans changes or has problems %q:\n%s", again.Problems, again.Diff())
 			}
@@ -614,6 +613,105 @@ func TestExecArgsUndoesExecArg(t *testing.T) {
 			}
 			if got := execArgs(arg + " agent"); !slices.Equal(got, []string{tt.exe, "agent"}) {
 				t.Errorf("execArgs(%q) = %q, want [%q agent]", arg+" agent", got, tt.exe)
+			}
+		})
+	}
+}
+
+func TestApplyStopsAtATargetThatChangesWhileItRuns(t *testing.T) {
+	tests := []struct {
+		name string
+		// rewrite is what another program writes to settings.json while
+		// Apply writes the autostart entry, the plan's first change.
+		rewrite []byte
+	}{
+		{"a settings file rewritten while Apply runs is left as rewritten, and a rerun merges into the rewrite", []byte("{\n  \"model\": \"haiku\"\n}\n")},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			env := testEnv(t, "linux", nil)
+			items := linuxItems(t, env, []byte("{}\n"))
+			settings := ClaudeSettings(env)
+			in := newInstaller(t)
+			p, err := in.PlanInstall(items)
+			if err != nil {
+				t.Fatal(err)
+			}
+			p.stop = func(target Target) error {
+				if target.Path == settings {
+					writeFile(t, settings, tt.rewrite)
+				}
+				return nil
+			}
+			if err := p.Apply(); !errors.Is(err, ErrStale) {
+				t.Fatalf("Apply = %v, want ErrStale", err)
+			}
+			if got := readOrNil(t, settings); !bytes.Equal(got, tt.rewrite) {
+				t.Fatalf("Apply wrote over the other program's change:\n%s", got)
+			}
+
+			install(t, in, items...)
+			if got := readOrNil(t, settings); !bytes.Contains(got, []byte("haiku")) || !bytes.Contains(got, []byte("--harness")) {
+				t.Errorf("after the rerun settings.json holds\n%s\nwant the rewrite with pairtime's hooks", got)
+			}
+			uninstall(t, in)
+			if got := readOrNil(t, settings); !bytes.Equal(got, tt.rewrite) {
+				t.Errorf("after uninstall settings.json holds\n%s\nwant the rewrite\n%s", got, tt.rewrite)
+			}
+			checkGone(t, filepath.Join(env.Home, ".config"), "the folder install made for the autostart entry")
+			checkGone(t, in.Dir, "pairtime's install directory")
+		})
+	}
+}
+
+func TestOnePlanAtATime(t *testing.T) {
+	tests := []struct {
+		name string
+		// finish does what the caller does with the first plan, if anything.
+		finish func(t *testing.T, p *Plan)
+		// free is whether another plan can start after finish.
+		free bool
+	}{
+		{"while a plan is open, no other install or uninstall can start", func(*testing.T, *Plan) {}, false},
+		{"a closed plan lets the next one start, and can't be applied", func(t *testing.T, p *Plan) {
+			p.Close()
+			if err := p.Apply(); err == nil {
+				t.Error("a closed plan was applied")
+			}
+		}, true},
+		{"an applied plan lets the next one start", func(t *testing.T, p *Plan) {
+			if err := p.Apply(); err != nil {
+				t.Fatal(err)
+			}
+		}, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			env := testEnv(t, "linux", nil)
+			items := linuxItems(t, env, []byte("{}\n"))
+			in := newInstaller(t)
+			first, err := in.PlanInstall(items)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { first.Close() })
+			tt.finish(t, first)
+			// Another process's installer, on the same directory.
+			other := &Installer{Dir: in.Dir, Registry: in.Registry}
+			for _, plan := range []func() (*Plan, error){
+				func() (*Plan, error) { return other.PlanInstall(items) },
+				func() (*Plan, error) { return other.PlanUninstall(items...) },
+			} {
+				p, err := plan()
+				if p != nil {
+					p.Close()
+				}
+				if tt.free && err != nil {
+					t.Errorf("planning after the first plan finished: %v", err)
+				}
+				if !tt.free && !errors.Is(err, ErrBusy) {
+					t.Errorf("planning while the first plan is open = %v, want ErrBusy", err)
+				}
 			}
 		})
 	}

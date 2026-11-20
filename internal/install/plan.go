@@ -33,10 +33,43 @@ type Plan struct {
 	drops     []string // backup files Apply deletes once it is done
 	rmdirs    []string // directories uninstall removes if empty, innermost first
 
+	// unlock drops the install lock the plan holds until Apply or Close;
+	// nil once dropped.
+	unlock func() error
+
 	// stop, when a test sets it, runs before Apply writes each target, and
 	// an error from it stops Apply there, as a crash or a failed write
 	// would.
 	stop func(Target) error
+}
+
+// Close drops the install lock, which a plan holds from planning on, so
+// that no other install or uninstall can start in between (ErrBusy). Apply
+// closes the plan itself. Close a plan that won't be applied, such as a dry
+// run's or one the teen declined. Closing a plan again does nothing.
+func (p *Plan) Close() error {
+	if p.unlock == nil {
+		return nil
+	}
+	err := p.unlock()
+	p.unlock = nil
+	return err
+}
+
+// locked runs plan under the install lock, which the plan it returns keeps
+// until Apply or Close.
+func (in *Installer) locked(plan func() (*Plan, error)) (*Plan, error) {
+	unlock, err := in.lock()
+	if err != nil {
+		return nil, err
+	}
+	p, err := plan()
+	if err != nil {
+		unlock()
+		return nil, err
+	}
+	p.unlock = unlock
+	return p, nil
 }
 
 // Change is one target's planned change.
@@ -79,11 +112,18 @@ func (p *Plan) Diff() string {
 // already holds what the items want isn't in the plan: planning again
 // right after Apply gives an empty plan. If the manifest doesn't know such
 // a target, Apply still records it (see adopt).
+//
+// The plan holds the install lock until Apply or Close, and planning
+// returns ErrBusy while another plan holds it.
 func (in *Installer) PlanInstall(items []Item) (*Plan, error) {
 	groups, err := groupEdits(items)
 	if err != nil {
 		return nil, err
 	}
+	return in.locked(func() (*Plan, error) { return in.planInstall(groups) })
+}
+
+func (in *Installer) planInstall(groups []*group) (*Plan, error) {
 	m, oldSum, err := in.loadManifest()
 	if err != nil {
 		return nil, err
@@ -279,11 +319,18 @@ func (p *Plan) rebase(rec *record, base Content) {
 // That covers a manifest that is gone with pairtime's data directory, after
 // "Delete everything" (DESIGN 8.8) or by hand, which would otherwise leave
 // hooks and a login item that keep starting pairtime.
+//
+// The plan holds the install lock until Apply or Close, as PlanInstall's
+// does.
 func (in *Installer) PlanUninstall(items ...Item) (*Plan, error) {
 	groups, err := groupEdits(items)
 	if err != nil {
 		return nil, err
 	}
+	return in.locked(func() (*Plan, error) { return in.planUninstall(groups) })
+}
+
+func (in *Installer) planUninstall(groups []*group) (*Plan, error) {
 	m, oldSum, err := in.loadManifest()
 	if err != nil {
 		return nil, err
@@ -425,8 +472,8 @@ func itemIDs(recs []editRecord) []string {
 }
 
 // ErrStale means a target or the manifest changed between planning and
-// Apply. Nothing was written; plan again to see what changed.
-var ErrStale = errors.New("changed since the plan was made; nothing was written, so plan again")
+// Apply, so Apply didn't write it. Plan again to see what changed.
+var ErrStale = errors.New("changed since the plan was made, so pairtime didn't write it; plan again")
 
 // Apply makes p's changes. It first checks that every target still holds
 // what the plan read, and writes nothing if one doesn't (ErrStale).
@@ -436,7 +483,21 @@ var ErrStale = errors.New("changed since the plan was made; nothing was written,
 // covers everything pairtime may have written. Uninstall writes the
 // targets first and the manifest last, so that a crash leaves the targets
 // not yet undone in the manifest. Running either again finishes the job.
+//
+// A target can still change while Apply runs, as when git-ai rewrites
+// settings.json during the copies' and the manifest's flushes to disk. So
+// Apply reads each target again just before it writes it, and stops with
+// ErrStale, writing nothing more, if it changed. The manifest already
+// covers what Apply wrote and the target it stopped at, so planning and
+// applying again finishes the job and keeps the other program's change.
+//
+// Apply drops the plan's install lock when it returns, and a plan that was
+// applied or closed can't be applied.
 func (p *Plan) Apply() error {
+	if p.unlock == nil {
+		return errors.New("the install plan was applied or closed already; plan again")
+	}
+	defer p.Close()
 	in := p.in
 	if _, oldSum, err := in.loadManifest(); err != nil {
 		return err
@@ -469,6 +530,11 @@ func (p *Plan) Apply() error {
 			if err := p.stop(c.Target); err != nil {
 				return err
 			}
+		}
+		if cur, err := in.read(c.Target); err != nil {
+			return err
+		} else if !cur.Same(c.Before) {
+			return fmt.Errorf("%s %w", c.Target, ErrStale)
 		}
 		if err := makeDirs(c.mkdirs); err != nil {
 			return err
