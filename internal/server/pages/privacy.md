@@ -118,7 +118,7 @@ Apart from these, this server sends your data nowhere.
 
 ## How long we keep things
 
-Every kind of data has a time limit. These tables come from the same file this server's cleanup jobs read, [docs/retention.json](https://github.com/some-du6e/pairtime/blob/main/docs/retention.json). A spot-check window is the time after a decision during which Hack Club can check a submission again. {{if .WindowProvisional}}Until Hack Club sets its length, pairtime keeps it open for {{.WindowMonths}} months after the decision.{{else}}It stays open for {{.WindowMonths}} months after the decision.{{end}}
+Every kind of data has a time limit. These tables come from the same file this server's cleanup jobs read, {{.RetentionFile}}, as it was when this server was built. A spot-check window is the time after a decision during which Hack Club can check a submission again. {{if .WindowProvisional}}Until Hack Club sets its length, pairtime keeps it open for {{.WindowMonths}} months after the decision.{{else}}It stays open for {{.WindowMonths}} months after the decision.{{end}}
 {{range .Sections}}
 ### {{.Title}}
 

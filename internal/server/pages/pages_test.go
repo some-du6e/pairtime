@@ -302,6 +302,8 @@ func TestNewRefuses(t *testing.T) {
 		{name: "an http contact", opts: Options{Controller: Controller{Name: "X", Contact: "http://example.org"}}, wantErr: "must be an email address or an https URL"},
 		{name: "a scoring MAJOR without its own evidence definition", opts: Options{ScoringVersion: "1.0.0"}, wantErr: "no evidence definition covers scoring 1.0.0"},
 		{name: "a scoring version that isn't X.Y.Z", opts: Options{ScoringVersion: "1.0"}, wantErr: "isn't of the form X.Y.Z"},
+		{name: "a commit that is a short hash, which a link can't be pinned to", opts: Options{Commit: "1a2b3c4"}, wantErr: "isn't a full git commit hash"},
+		{name: "a commit carrying Markdown", opts: Options{Commit: strings.Repeat("a", 39) + ")"}, wantErr: "isn't a full git commit hash"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -400,6 +402,71 @@ func TestStyleHash(t *testing.T) {
 			want := "style-src 'sha256-" + base64.StdEncoding.EncodeToString(sum[:]) + "'"
 			if !strings.Contains(s.csp, want) {
 				t.Errorf("CSP %q doesn't allow the page's style; want %s", s.csp, want)
+			}
+		})
+	}
+}
+
+// TestSourceLinks checks that a page that says it is the same file this
+// server reads, or a section of the design word for word, links that file
+// at the commit this server was built from, and links no file at all when
+// the commit isn't known, since the file's latest version may differ.
+func TestSourceLinks(t *testing.T) {
+	commit := "1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b"
+	blob := "https://github.com/some-du6e/pairtime/blob/" + commit + "/"
+	tree := "https://github.com/some-du6e/pairtime/tree/" + commit
+	privacy := func(s *Site) []byte { return s.privacy }
+	evidence := func(s *Site) []byte { return s.current }
+	tests := []struct {
+		name    string
+		commit  string
+		page    func(*Site) []byte
+		want    []string
+		notWant []string
+	}{
+		{
+			name:   "the notice links docs/retention.json at the commit this server was built from",
+			commit: commit,
+			page:   privacy,
+			want:   []string{`read, <a href="` + blob + `docs/retention.json"><code>docs/retention.json</code></a>, as it was when this server was built.`},
+		},
+		{
+			name:   "the notice and the footer link the code at that commit",
+			commit: commit,
+			page:   privacy,
+			want:   []string{`<a href="` + tree + `">the code this server runs</a>`, `<a href="` + tree + `">Read the code this server runs</a>`},
+		},
+		{
+			name:   "the evidence page links the design it copies word for word at that commit",
+			commit: commit,
+			page:   evidence,
+			want:   []string{`section 6.4 of <a href="` + blob + `docs/DESIGN.md">pairtime&#39;s design</a>, word for word.`},
+		},
+		{
+			name:    "without a commit the notice names docs/retention.json and links no version of it",
+			page:    privacy,
+			want:    []string{"read, <code>docs/retention.json</code>, as it was when this server was built."},
+			notWant: []string{"/blob/", "/tree/"},
+		},
+		{
+			name:    "without a commit the evidence page links no version of the design",
+			page:    evidence,
+			want:    []string{"section 6.4 of pairtime&#39;s design, word for word."},
+			notWant: []string{"/blob/", "/tree/"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			page := string(tt.page(newSite(t, Options{Commit: tt.commit})))
+			for _, w := range tt.want {
+				if !strings.Contains(page, w) {
+					t.Errorf("the page doesn't contain %q", w)
+				}
+			}
+			for _, w := range tt.notWant {
+				if strings.Contains(page, w) {
+					t.Errorf("the page contains %q", w)
+				}
 			}
 		})
 	}

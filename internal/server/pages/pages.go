@@ -25,6 +25,12 @@
 // TestEvidenceValues checks this against every table in pkg/params.
 // /docs/evidence shows the definition for the scoring version this server
 // runs, and /docs/evidence/<version> the one for any other version.
+//
+// The pages link the code this server runs, and the docs/ files they
+// quote, at the commit it was built from (Options.Commit), because a page
+// that says it is the same file or word for word must link the version it
+// matches, not one that has moved on since. When the commit isn't known
+// they link no such file.
 package pages
 
 import (
@@ -39,6 +45,7 @@ import (
 	"io/fs"
 	"net/http"
 	"path"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -92,8 +99,37 @@ type Options struct {
 	ScoringVersion string
 	// Version is pairtimed's version, for the footer.
 	Version string
+	// Commit is the full hash of the git commit this server was built
+	// from, or "" when that isn't known or the build had local changes.
+	Commit string
 	// Retention is the retention schedule the notice publishes.
 	Retention *retention.Policy
+}
+
+// commitHash is a full git commit hash, SHA-1 or SHA-256.
+var commitHash = regexp.MustCompile(`^([0-9a-f]{40}|[0-9a-f]{64})$`)
+
+// sources links the code this server runs, and the docs/ files the pages
+// quote, at the commit it was built from.
+type sources struct{ commit string }
+
+// code is where to read the code this server runs: its commit's tree, or
+// the repository when the commit isn't known.
+func (s sources) code() string {
+	if s.commit == "" {
+		return SourceURL
+	}
+	return SourceURL + "/tree/" + s.commit
+}
+
+// file returns text, which is Markdown, as a link to path at the commit.
+// When the commit isn't known it returns text alone, since the file's
+// latest version may say something this server's copy doesn't.
+func (s sources) file(text, path string) string {
+	if s.commit == "" {
+		return text
+	}
+	return "[" + text + "](" + SourceURL + "/blob/" + s.commit + "/" + path + ")"
 }
 
 // Site holds the rendered pages.
@@ -115,12 +151,17 @@ type evidencePage struct {
 }
 
 // New renders every page. It fails on a mistake in a template or in its
-// Markdown, on a controller contact that can't be a link, and on a scoring
-// version that no evidence definition covers.
+// Markdown, on a controller contact that can't be a link, on a commit that
+// isn't a full hash, and on a scoring version that no evidence definition
+// covers.
 func New(o Options) (*Site, error) {
 	if o.Retention == nil {
 		return nil, errors.New("pages: no retention schedule")
 	}
+	if o.Commit != "" && !commitHash.MatchString(o.Commit) {
+		return nil, fmt.Errorf("pages: commit %q isn't a full git commit hash", o.Commit)
+	}
+	src := sources{commit: o.Commit}
 	running := o.ScoringVersion
 	if running == "" {
 		running = BuiltinScoringVersion
@@ -129,11 +170,11 @@ func New(o Options) (*Site, error) {
 	if !ok {
 		return nil, fmt.Errorf("pages: scoring version %q isn't of the form X.Y.Z", running)
 	}
-	l, err := newLayout(o.Version)
+	l, err := newLayout(o.Version, src.code())
 	if err != nil {
 		return nil, err
 	}
-	data, err := newPrivacyData(o)
+	data, err := newPrivacyData(o, src)
 	if err != nil {
 		return nil, err
 	}
@@ -152,7 +193,7 @@ func New(o Options) (*Site, error) {
 	if s.privacy, err = l.page("Privacy notice", "privacy.md", data, funcs); err != nil {
 		return nil, err
 	}
-	if s.evidence, err = l.evidencePages(rv); err != nil {
+	if s.evidence, err = l.evidencePages(rv, src); err != nil {
 		return nil, err
 	}
 	if s.current, ok = s.evidenceFor(rv); !ok {
@@ -215,6 +256,8 @@ type layout struct {
 	css     string
 	csp     string
 	version string
+	// code is where the footer links the code this server runs.
+	code string
 }
 
 type layoutData struct {
@@ -225,7 +268,7 @@ type layoutData struct {
 	Source  string
 }
 
-func newLayout(version string) (*layout, error) {
+func newLayout(version, code string) (*layout, error) {
 	t, err := template.ParseFS(files, "layout.html")
 	if err != nil {
 		return nil, fmt.Errorf("pages: %w", err)
@@ -238,7 +281,7 @@ func newLayout(version string) (*layout, error) {
 	sum := sha256.Sum256(css)
 	csp := "default-src 'none'; style-src 'sha256-" + base64.StdEncoding.EncodeToString(sum[:]) +
 		"'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
-	return &layout{tmpl: t, css: string(css), csp: csp, version: version}, nil
+	return &layout{tmpl: t, css: string(css), csp: csp, version: version, code: code}, nil
 }
 
 // page executes the Markdown template name with data, renders it and wraps
@@ -266,7 +309,7 @@ func (l *layout) page(title, name string, data any, funcs texttemplate.FuncMap) 
 		CSS:     template.CSS(l.css),
 		Body:    template.HTML(body),
 		Version: l.version,
-		Source:  SourceURL,
+		Source:  l.code,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("pages: %w", err)
@@ -282,10 +325,20 @@ type evidenceData struct {
 	Running string
 	// Others links every definition, when there is more than one.
 	Others string
+	// From is the first scoring version the definition applies to.
+	From string
+	// Builtin says whether this is the definition in force at
+	// BuiltinScoringVersion, the one TestEvidenceIsDesign64 checks against
+	// DESIGN 6.4 at the commit this server was built from. Only that one
+	// can say it is the design's 6.4 word for word and link the design.
+	Builtin bool
+	// Design is "pairtime's design" in Markdown, linked to DESIGN.md at
+	// the commit this server was built from when that is known.
+	Design string
 }
 
 // evidencePages renders every evidence definition, oldest first.
-func (l *layout) evidencePages(running version) ([]evidencePage, error) {
+func (l *layout) evidencePages(running version, src sources) ([]evidencePage, error) {
 	names, err := fs.Glob(files, "evidence/*.md")
 	if err != nil {
 		return nil, fmt.Errorf("pages: %w", err)
@@ -306,11 +359,24 @@ func (l *layout) evidencePages(running version) ([]evidencePage, error) {
 	for i, v := range froms {
 		links[i] = "[" + v.String() + "](/docs/evidence/" + v.String() + ")"
 	}
+	// The definition in force at the built-in version is the newest one of
+	// its MAJOR that starts at or before it.
+	builtin, _ := parseVersion(BuiltinScoringVersion)
+	var builtinFrom version
+	hasBuiltin := false
+	for _, v := range froms {
+		if v[0] == builtin[0] && v.compare(builtin) <= 0 {
+			builtinFrom, hasBuiltin = v, true
+		}
+	}
 	pages := make([]evidencePage, 0, len(froms))
 	for i, v := range froms {
 		d := evidenceData{
 			Covers:  fmt.Sprintf("scoring %s and the later %d.x versions", v, v[0]),
 			Running: running.String(),
+			From:    v.String(),
+			Builtin: hasBuiltin && v == builtinFrom,
+			Design:  src.file("pairtime's design", "docs/DESIGN.md"),
 		}
 		if i+1 < len(froms) && froms[i+1][0] == v[0] {
 			d.Covers = fmt.Sprintf("scoring %s and the later versions before %s", v, froms[i+1])
@@ -367,8 +433,12 @@ type privacyData struct {
 	Contact    string
 	DPO        string
 	BaseURL    string
-	SourceURL  string
-	Version    string
+	// SourceURL is where to read the code this server runs.
+	SourceURL string
+	// RetentionFile names docs/retention.json, linked at the commit this
+	// server was built from when that is known.
+	RetentionFile string
+	Version       string
 	// PublicDefault is profile_default = "public".
 	PublicDefault bool
 	PrivacyHub    bool
@@ -401,14 +471,15 @@ var placeTitles = map[string]string{
 // pairtime.toml sets them (DESIGN 8.6).
 const notNamed = `**\[not named yet\]**`
 
-func newPrivacyData(o Options) (*privacyData, error) {
+func newPrivacyData(o Options, src sources) (*privacyData, error) {
 	c := o.Controller
 	d := &privacyData{
 		Named:             c.Name != "" && c.Contact != "",
 		Controller:        notNamed,
 		Contact:           notNamed,
 		BaseURL:           escape(o.BaseURL),
-		SourceURL:         SourceURL,
+		SourceURL:         src.code(),
+		RetentionFile:     src.file("`docs/retention.json`", "docs/retention.json"),
 		Version:           escape(o.Version),
 		PublicDefault:     o.ProfileDefault != "ask",
 		PrivacyHub:        o.PrivacyHub,

@@ -21,6 +21,7 @@ import (
 	"github.com/some-du6e/pairtime/internal/server/ops"
 	"github.com/some-du6e/pairtime/internal/server/retention"
 	"github.com/some-du6e/pairtime/internal/server/store"
+	"github.com/some-du6e/pairtime/internal/version"
 )
 
 // writeConfig writes a pairtime.toml for a test server that listens on
@@ -324,6 +325,26 @@ func TestRetentionReport(t *testing.T) {
 						t.Errorf("logged %q, want it to contain %q", lines[0], w)
 					}
 				}
+			}
+		})
+	}
+}
+
+func TestSourceCommit(t *testing.T) {
+	commit := "1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b"
+	tests := []struct {
+		name string
+		info version.Info
+		want string
+	}{
+		{name: "a clean build's pages link its commit", info: version.Info{Commit: commit}, want: commit},
+		{name: "a build with local changes links no commit, since none holds what it runs", info: version.Info{Commit: commit, Modified: true}},
+		{name: "a build that doesn't know its commit links none", info: version.Info{}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := sourceCommit(tt.info); got != tt.want {
+				t.Errorf("sourceCommit(%+v) = %q, want %q", tt.info, got, tt.want)
 			}
 		})
 	}

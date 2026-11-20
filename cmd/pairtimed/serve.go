@@ -79,6 +79,7 @@ func serve(ctx context.Context, cfg *config.Config, logger *slog.Logger, e *env)
 		Operators:      cfg.Operators,
 		ScoringVersion: cfg.ScoringVersion,
 		Version:        version.Get().Version,
+		Commit:         sourceCommit(version.Get()),
 		Retention:      policy,
 	})
 	if err != nil {
@@ -218,6 +219,16 @@ func serve(ctx context.Context, cfg *config.Config, logger *slog.Logger, e *env)
 		}
 	}
 	return serveErr
+}
+
+// sourceCommit is the commit the pages link the code and docs/ files at:
+// the one this build came from, unless the build had local changes, which
+// no link could show.
+func sourceCommit(v version.Info) string {
+	if v.Modified {
+		return ""
+	}
+	return v.Commit
 }
 
 // retentionReport returns what serve does with each retention job's
