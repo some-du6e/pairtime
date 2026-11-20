@@ -48,7 +48,7 @@ for _ in $(seq 100); do
 done
 
 sha256() {
-  if command -v sha256sum > /dev/null; then sha256sum "$1"; else shasum -a 256 "$1"; fi | cut -d ' ' -f 1
+  if command -v sha256sum > /dev/null; then sha256sum < "$1"; else shasum -a 256 < "$1"; fi | cut -d ' ' -f 1
 }
 
 # key_id FILE prints the id of the last public key in FILE: the first 8
@@ -92,8 +92,12 @@ installed='./.local ./.local/bin ./.local/bin/pairtime'
 one_liner='curl -fsSL "$0/real/install.sh" | PAIRTIME_BASE_URL="$0/$2" PAIRTIME_RELEASE_KEYS="$1" PAIRTIME_NO_INSTALL="$3" sh'
 
 # The real binary's cases stop before pairtime install with --no-install,
-# so they don't change when it gains that command (WP-IN2). One case below
-# checks what happens without it.
+# so they don't change when it gains that command (WP-IN2). The cases just
+# below run it, for real once it has the command.
+#
+# The cases that need a script trusting no release key run the repository's
+# copy, which pins none: the stamped copies pin whatever release-keys.txt
+# holds, which stops being nothing once Karim commits the release key.
 
 # check NAME WANT PATTERN FILES COMMAND... runs COMMAND and checks that it
 # exits 0 (WANT ok) or doesn't (WANT fails), that its output matches the
@@ -116,6 +120,11 @@ check() {
     fail "$name: ${problems[*]}"
     sed 's/^/     | /' "$scratch/output"
   fi
+}
+
+# not_in_output TEXT fails the case if the last check's output holds TEXT.
+not_in_output() {
+  if grep -qF -- "$1" "$scratch/output"; then fail "the output says \"$1\""; fi
 }
 
 # check_binary RELEASE checks that HOME's pairtime is RELEASE's binary for
@@ -143,6 +152,29 @@ check_record() {
   fi
 }
 
+# install_then_uninstall runs the stamped script with --yes, which hands
+# over to the real pairtime install, then the pairtime it put in place with
+# uninstall --yes --delete-data, both in the case's home.
+install_then_uninstall() {
+  run sh "$stamped" --base-url "$server/real" --release-keys "$keys/real.pub" --yes || return
+  run "$home/.local/bin/pairtime" uninstall --yes --delete-data
+}
+
+# check_no_agent fails if a process still runs from the case's home, as an
+# agent that pairtime uninstall didn't stop would, and then stops it.
+check_no_agent() {
+  local real left=''
+  real=$(cd "$home" && pwd -P)
+  for _ in $(seq 50); do
+    ps -A -o pid= -o command= > "$scratch/ps"
+    left=$(grep -F -e "$home/" -e "$real/" "$scratch/ps" || :)
+    if [ -z "$left" ]; then return 0; fi
+    sleep 0.2
+  done
+  fail "a process from the case's home still runs after pairtime uninstall: $left"
+  awk '{ print $1 }' <<< "$left" | xargs kill 2> /dev/null || :
+}
+
 echo "== install.sh, against the fixture for $version, on $os/$arch"
 
 fresh
@@ -154,7 +186,15 @@ check_binary real
 mkdir "$scratch/real-binary"
 tar -xzf "$fixture/real/pairtime_${version#v}_${os}_${arch}.tar.gz" -C "$scratch/real-binary" pairtime
 if "$scratch/real-binary/pairtime" help | grep -q '^  install '; then
-  echo "::notice::the real pairtime has an install command now (WP-IN2), so install/e2e should run it, then pairtime uninstall, in a temporary home and check that nothing is left (docs/PLAN.md, WP-RL2)"
+  # The real pairtime install and uninstall, through the script
+  # (docs/PLAN.md, WP-RL2): set up with --yes in an empty home, then taken
+  # out with --delete-data, they must leave the home as empty as they found
+  # it, the folders the script made included, and no agent running.
+  fresh
+  check "with --yes in an empty home, the script and pairtime install set pairtime up, and pairtime uninstall --yes --delete-data leaves the home empty again" \
+    ok 'Running pairtime install' '' \
+    install_then_uninstall
+  check_no_agent
 else
   fresh
   check "without --no-install, setup stops before pairtime install while the binary has none" \
@@ -175,20 +215,25 @@ check "bash runs it too" ok 'Installed pairtime' "$installed" \
   run bash "$stamped" --base-url="$server/real" --release-keys="$keys/real.pub" --no-install
 
 fresh
-check "by default an unsigned release is refused, before anything is downloaded" \
+check "by default a script that trusts no key refuses the release, before anything is downloaded" \
   fails 'trusts no release key' '' \
-  run sh "$stamped" --base-url "$server/real"
+  run sh "$repo_script" --version "$version" --base-url "$server/real"
 
 fresh
-check "--allow-unsigned installs an unsigned release, with a warning" \
+check "--allow-unsigned has a script that trusts no key install an unsigned release, with a warning" \
   ok 'warning: no key this script trusts signed manifest.json' "$installed" \
-  run sh "$stamped" --base-url "$server/real" --allow-unsigned --no-install
+  run sh "$repo_script" --version "$version" --base-url "$server/real" --allow-unsigned --no-install
 check_binary real
 
 fresh
-check "PAIRTIME_ALLOW_UNSIGNED=1 installs a release no trusted key signed, with a warning" \
-  ok 'warning: no key this script trusts signed manifest.json' "$installed" \
-  run PAIRTIME_ALLOW_UNSIGNED=1 PAIRTIME_NO_INSTALL=1 sh "$stamped" --base-url "$server/real" --release-keys "$keys/other.pub"
+check "PAIRTIME_ALLOW_UNSIGNED does nothing: a script that trusts no key still refuses the release" \
+  fails 'pass --allow-unsigned' '' \
+  run PAIRTIME_ALLOW_UNSIGNED=1 sh "$repo_script" --version "$version" --base-url "$server/real"
+
+fresh
+check "--allow-unsigned doesn't apply once the script trusts a key: a release no trusted key signed is refused" \
+  fails "isn't signed by a key this script trusts.*--allow-unsigned doesn't change that" '' \
+  run sh "$stamped" --base-url "$server/real" --release-keys "$keys/other.pub" --allow-unsigned
 
 for refused in \
   "other.pub real a release signed by a key it doesn't trust" \
@@ -201,6 +246,11 @@ for refused in \
     fails "isn't signed by a key this script trusts" '' \
     run sh "$stamped" --base-url "$server/$dir" --release-keys "$keys/$key"
 done
+
+fresh
+check "a signature whose base64 isn't canonical is refused, as internal/release refuses it, and nothing is installed" \
+  fails "manifest.json isn't a pairtime update manifest in the form tools/release writes" '' \
+  run sh "$stamped" --base-url "$server/noncanonical-signature" --release-keys "$keys/real.pub"
 
 fresh
 check "one good signature is enough, after one that fails under a trusted key's id" \
@@ -236,22 +286,31 @@ check "a signed manifest for another release is refused" \
   run sh "$stamped" --version v0.0.0-snapshot.999999999 --base-url "$server/real" --release-keys "$keys/real.pub"
 
 fresh
-check "a build with an install command gets handed over to, with stdin from /dev/null when there's no terminal" \
+check "a build with an install command gets handed over to, told which folders the script made, with stdin from /dev/null when there's no terminal" \
+  ok 'Running pairtime install' "$installed" \
+  run sh "$stamped" --base-url "$server/fake" --release-keys "$keys/fake.pub"
+check_record "install --made $home/.local --made $home/.local/bin"$'\nstdin: null'
+
+fresh
+mkdir "$home/.local"
+check "--yes is passed on to pairtime install, and a ~/.local that was there isn't named as made" \
+  ok 'Running pairtime install' "$installed" \
+  run sh "$stamped" --base-url "$server/fake" --release-keys "$keys/fake.pub" --yes
+check_record "install --yes --made $home/.local/bin"$'\nstdin: null'
+
+fresh
+mkdir -p "$home/.local/bin"
+check "when ~/.local/bin was there, pairtime install hears of no folder the script made" \
   ok 'Running pairtime install' "$installed" \
   run sh "$stamped" --base-url "$server/fake" --release-keys "$keys/fake.pub"
 check_record $'install\nstdin: null'
-
-fresh
-check "--yes is passed on to pairtime install" ok 'Running pairtime install' "$installed" \
-  run sh "$stamped" --base-url "$server/fake" --release-keys "$keys/fake.pub" --yes
-check_record $'install --yes\nstdin: null'
 
 fresh
 check "under curl | sh in a terminal, pairtime install reads the terminal, not the pipe" \
   ok 'Running pairtime install' "$installed" \
   run python3 -I -c 'import pty, sys; sys.exit(pty.spawn(sys.argv[1:]) >> 8)' \
   bash -c "$one_liner" "$server" "$keys/fake.pub" fake ''
-check_record $'install\nstdin: terminal'
+check_record "install --made $home/.local --made $home/.local/bin"$'\nstdin: terminal'
 
 fresh
 check "--no-install stops once the binary is in place" ok 'To finish setting it up, run' "$installed" \
@@ -262,6 +321,35 @@ fresh
 check "a failing pairtime install fails the script, and the binary stays" \
   fails 'pairtime install. stopped with status 4' "$installed" \
   run PAIRTIME_FAKE_INSTALL_EXIT=4 sh "$stamped" --base-url "$server/fake" --release-keys "$keys/fake.pub"
+
+fresh
+check "Ctrl-C during pairtime install says where pairtime is, not that nothing was installed" \
+  fails "stopped while running pairtime install. pairtime $version is installed at $home/.local/bin/pairtime" "$installed" \
+  run PAIRTIME_FAKE_INSTALL_INTERRUPT=1 sh "$stamped" --base-url "$server/fake" --release-keys "$keys/fake.pub"
+not_in_output 'Nothing was installed'
+
+fresh
+home="$home/it's a home"
+mkdir "$home"
+check "the command it prints is quoted for a home with an apostrophe and a space in it" \
+  ok 'To finish setting it up, run' "$installed" \
+  run sh "$stamped" --base-url "$server/real" --release-keys "$keys/real.pub" --no-install
+printed=$(sed -n 's/^To finish setting it up, run: //p' "$scratch/output")
+# shlex reads the line as sh would, without running anything.
+words=$(python3 -I -c 'import shlex, sys; print("\n".join(shlex.split(sys.argv[1])))' "$printed" 2>&1 || :)
+if [ "$words" != "$home/.local/bin/pairtime"$'\ninstall' ]; then
+  fail "the printed command [$printed] reads as [${words//$'\n'/, }], not $home/.local/bin/pairtime and install"
+fi
+
+if sudo -n true 2> /dev/null; then
+  fresh
+  check "as root, under sudo, it stops before downloading anything" \
+    fails "don't run install.sh as root or with sudo" '' \
+    sudo -n env -i PATH="$PATH" HOME="$home" TMPDIR="$tmp" sh "$stamped" --base-url "$server/real" --release-keys "$keys/real.pub"
+  not_in_output 'Installing pairtime'
+else
+  echo "::notice::no passwordless sudo here, so install.sh's refusal to run as root goes untested"
+fi
 
 fresh
 printf '%s' "$(cat "$keys/real.pub")" > "$scratch/no-newline.pub"
@@ -296,7 +384,7 @@ echo "== install.sh's functions"
 # unit NAME runs standard input with install.sh's functions loaded, under
 # set -eu, in sh. It must exit 0.
 unit() {
-  if { printf '. "%s"\n' "$repo_script" && cat; } | env -i PATH="$PATH" PAIRTIME_INSTALL_SH_TEST=functions VECTORS="$scratch/vectors" sh -s > "$scratch/unit" 2>&1; then
+  if { printf '. "%s"\n' "$repo_script" && cat; } | env -i PATH="$PATH" PAIRTIME_INSTALL_SH_TEST=functions VECTORS="$scratch/vectors" SCRATCH="$scratch" sh -s > "$scratch/unit" 2>&1; then
     echo "ok   $1"
   else
     fail "$1"
@@ -339,6 +427,22 @@ with open(os.path.join(out, 'names'), 'w') as f:
     f.write(' '.join(names) + '\n')
 EOF
 
+# A base64 like BusyBox's, which takes -d but not --decode, and BusyBox's
+# own where this computer has it.
+mkdir "$scratch/busybox-like"
+cat > "$scratch/busybox-like/base64" << EOF
+#!/bin/sh
+for a in "\$@"; do
+  if [ "\$a" = --decode ]; then echo "base64: unrecognized option '--decode'" >&2; exit 1; fi
+done
+exec $(command -v base64) "\$@"
+EOF
+chmod +x "$scratch/busybox-like/base64"
+if command -v busybox > /dev/null; then
+  mkdir "$scratch/busybox"
+  ln -s "$(command -v busybox)" "$scratch/busybox/base64"
+fi
+
 unit "RFC 8032's five vectors verify, and each fails with a bit of R or S, the message or the key changed" << 'EOF'
 if command -v sha512sum > /dev/null 2>&1; then sha_tool=coreutils; else sha_tool=shasum; fi
 work=$(mktemp -d)
@@ -360,6 +464,53 @@ head -c 31 "$VECTORS/v0.good.key" > "$work/short.key"
 head -c 63 "$VECTORS/v0.good.sig" > "$work/short.sig"
 if ed25519_verify "$work/short.key" "$VECTORS/v0.good.msg" "$VECTORS/v0.good.sig"; then exit 1; fi
 if ed25519_verify "$VECTORS/v0.good.key" "$VECTORS/v0.good.msg" "$work/short.sig"; then exit 1; fi
+EOF
+
+unit "base64 decodes with GNU's, macOS's and BusyBox's tool, and only canonical base64 is accepted, as internal/release accepts it" << 'EOF'
+out=$(mktemp)
+for dir in '' "$SCRATCH/busybox-like" "$SCRATCH/busybox"; do
+  if [ -n "$dir" ] && [ ! -d "$dir" ]; then continue; fi
+  (
+    if [ -n "$dir" ]; then PATH=$dir:$PATH; fi
+    for good in aGk=:hi QQ==:A Zm9v:foo; do
+      if ! b64decode "${good%%:*}" "$out" || [ "$(cat "$out")" != "${good#*:}" ]; then
+        echo "${dir:-this base64}: ${good%%:*} didn't decode to ${good#*:}"
+        exit 1
+      fi
+    done
+    for bad in QR== QQ QQ=== aGk=aGk= 'aG k=' 'aGk=
+'; do
+      if b64decode "$bad" "$out"; then echo "${dir:-this base64}: accepted [$bad]"; exit 1; fi
+    done
+  ) || exit 1
+done
+EOF
+
+unit "a SHA-256 is right for a path with a backslash in it, from sha256sum and from shasum" << 'EOF'
+dir=$(mktemp -d)
+printf x > "$dir/a\\b"
+want=2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881
+tried=0
+for tool in coreutils shasum; do
+  case $tool in
+    coreutils) command -v sha256sum > /dev/null 2>&1 || continue ;;
+    shasum) command -v shasum > /dev/null 2>&1 || continue ;;
+  esac
+  sha_tool=$tool
+  got=$(sha256 "$dir/a\\b")
+  [ "$got" = "$want" ] || { echo "$tool: $got"; exit 1; }
+  tried=$((tried + 1))
+done
+[ "$tried" -gt 0 ]
+EOF
+
+unit "a path in a printed command reads back as one word, and a plain one isn't quoted" << 'EOF'
+for w in /home/teen/.local/bin/pairtime "/Users/it's me/.local/bin/pairtime" 'a b' '$HOME' 'x"y' 'back\slash' "two''quotes" ''; do
+  quoted=$(shell_quote "$w")
+  eval "set -- $quoted"
+  if [ "$#" != 1 ] || [ "$1" != "$w" ]; then echo "[$w] came back as $# words, [$*], from $quoted"; exit 1; fi
+done
+[ "$(shell_quote /home/teen/.local/bin/pairtime)" = /home/teen/.local/bin/pairtime ]
 EOF
 
 unit "uname's names map to Go's, and other platforms have no build" << 'EOF'

@@ -14,7 +14,10 @@
 //	help      a command list that includes install
 //	install   writes its arguments and what its standard input is to the
 //	          file $PAIRTIME_FAKE_RECORD names, then exits with
-//	          $PAIRTIME_FAKE_INSTALL_EXIT, or 0
+//	          $PAIRTIME_FAKE_INSTALL_EXIT, or 0. With
+//	          PAIRTIME_FAKE_INSTALL_INTERRUPT=1 it first sends its parent,
+//	          the script, an interrupt and then exits with status 130, as
+//	          Ctrl-C at the consent screen does to both (not on Windows)
 //	wait      sleeps two minutes, standing in for a running agent
 package main
 
@@ -59,6 +62,17 @@ func run(args []string, stdin *os.File, stdout, stderr io.Writer) int {
 				fmt.Fprintln(stderr, "fakepairtime:", err)
 				return 1
 			}
+		}
+		if os.Getenv("PAIRTIME_FAKE_INSTALL_INTERRUPT") == "1" {
+			parent, err := os.FindProcess(os.Getppid())
+			if err == nil {
+				err = parent.Signal(os.Interrupt)
+			}
+			if err != nil {
+				fmt.Fprintln(stderr, "fakepairtime: interrupting the script:", err)
+				return 1
+			}
+			return 130
 		}
 		code, err := strconv.Atoi(os.Getenv("PAIRTIME_FAKE_INSTALL_EXIT"))
 		if err != nil {

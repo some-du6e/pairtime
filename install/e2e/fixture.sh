@@ -3,10 +3,11 @@
 #
 # Builds the releases that install/e2e/test.sh and test.ps1 install
 # (docs/PLAN.md, WP-RL2) the way release.yml's build job builds a snapshot:
-# its -ldflags, tools/release notices and dist, a throwaway key from
-# tools/release sign, and the scripts tools/release scripts writes. It
-# builds only the three platforms the e2e jobs run on. Beside that release
-# it makes the broken copies the scripts must refuse.
+# its -ldflags, tools/release notices and dist, the scripts tools/release
+# scripts writes, with their SHA-256s in the payload, and a throwaway key
+# from tools/release sign. It builds only the three platforms the e2e jobs
+# run on. Beside that release it makes the broken copies the scripts must
+# refuse.
 #
 #   bash install/e2e/fixture.sh <out dir> <version>
 #
@@ -15,6 +16,9 @@
 # public key:
 #
 #   real/            the release, with install.sh and install.ps1
+#   repo/            the repository's install.sh and install.ps1, which
+#                    pin no version and no key, whatever release-keys.txt
+#                    holds
 #   fake/            install/e2e/fakepairtime, which has an install command
 #   broken/          fakepairtime built so that its version fails
 #   bad-archive/     real/ with one byte of each archive changed
@@ -27,6 +31,10 @@
 #   two-signatures/  real/ with a manifest that keys/two.pub's first key
 #                    didn't sign under its own id, then a good signature by
 #                    the second
+#   noncanonical-signature/
+#                    real/ with one of the unused bits of its signature's
+#                    last base64 character set, which decodes to the same
+#                    64 bytes everywhere but internal/release
 set -euo pipefail
 
 if [ "$#" -ne 2 ]; then
@@ -67,13 +75,18 @@ build() {
   done
 }
 
-# release NAME: the archives, checksums.txt and a manifest signed with a new
-# throwaway key in $out/NAME, and the key in $out/keys/NAME.pub.
+# release NAME [scripts]: the archives, checksums.txt and a manifest signed
+# with a new throwaway key in $out/NAME, and the key in $out/keys/NAME.pub.
+# With scripts, also the install scripts, whose SHA-256s go into the
+# payload before it's signed, as in release.yml.
 release() {
   local name=$1
   "$tool" dist -version "$version" -commit "$commit" -date "$date" -min-version "$version" \
     -base-url "$base" -targets "$targets" -bin "$scratch/$name/bin" -extra LICENSE,README.md \
     -out "$out/$name" -payload "$scratch/$name.payload.json"
+  if [ "${2:-}" = scripts ]; then
+    "$tool" scripts -version "$version" -out "$out/$name" -payload "$scratch/$name.payload.json"
+  fi
   "$tool" sign -throwaway -payload "$scratch/$name.payload.json" \
     -out "$out/$name/manifest.json" -pub-out "$out/keys/$name.pub"
   "$tool" verify -dir "$out/$name" -pub "$out/keys/$name.pub" -targets "$targets"
@@ -81,9 +94,10 @@ release() {
 
 pkg=github.com/some-du6e/pairtime/internal/version
 build real ./cmd/pairtime "-s -w -X $pkg.Version=$version -X $pkg.Commit=$commit -X $pkg.Date=$date"
-release real
+release real scripts
 bash tools/release/check.sh "$out/real" "$out/keys/real.pub"
-"$tool" scripts -version "$version" -out "$out/real"
+mkdir "$out/repo"
+cp install/install.sh install/install.ps1 "$out/repo/"
 
 build fake ./install/e2e/fakepairtime "-s -w -X main.version=$version"
 release fake
@@ -131,6 +145,21 @@ envelope['signatures'][0]['sig'] = base64.b64encode(sig[:32] + s.to_bytes(32, 'l
 sys.stdout.write(json.dumps(envelope, separators=(',', ':')) + '\n')
 EOF
 
+copy noncanonical-signature
+python3 -I - "$out/real/manifest.json" > "$out/noncanonical-signature/manifest.json" << 'EOF'
+import json, sys
+alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
+with open(sys.argv[1]) as f:
+    envelope = json.load(f)
+sig = envelope['signatures'][0]['sig']
+# 64 bytes are 86 characters and ==; the last of the 86 carries 2 bits of
+# the signature and 4 that base64 leaves 0.
+assert len(sig) == 88 and sig.endswith('=='), sig
+last = alphabet[alphabet.index(sig[85]) ^ 1]
+envelope['signatures'][0]['sig'] = sig[:85] + last + '=='
+sys.stdout.write(json.dumps(envelope, separators=(',', ':')) + '\n')
+EOF
+
 copy two-signatures
 "$tool" sign -throwaway -payload "$scratch/real.payload.json" -out "$scratch/first.json" -pub-out "$scratch/first.pub"
 "$tool" sign -throwaway -payload "$scratch/real.payload.json" -out "$scratch/second.json" -pub-out "$scratch/second.pub"
@@ -147,12 +176,16 @@ jq -c --slurpfile second "$scratch/second.json" \
 
 # The broken copies must break what they say: only the archives and
 # bad-binary still pass check.sh's signature check under their own keys.
-for name in bad-payload bad-signature big-s; do
+for name in bad-payload bad-signature big-s noncanonical-signature; do
   if bash tools/release/check.sh "$out/$name" "$out/keys/real.pub" > /dev/null 2>&1; then
     echo "::error::check.sh accepted $name, which should fail its signature check"
     exit 1
   fi
 done
+if "$tool" verify -dir "$out/noncanonical-signature" -pub "$out/keys/real.pub" > /dev/null 2>&1; then
+  echo "::error::tools/release verify accepted noncanonical-signature"
+  exit 1
+fi
 if bash tools/release/check.sh "$out/bad-archive" "$out/keys/real.pub" > /dev/null 2>&1; then
   echo "::error::check.sh accepted bad-archive"
   exit 1
