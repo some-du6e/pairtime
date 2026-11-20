@@ -15,7 +15,7 @@ import (
 // slotCredit is a credit slot at t: seconds credited to project p under P
 // at level l, and the rest of the slot X.no_anchor.
 func slotCredit(t int64, p string, l event.Evidence, seconds int64) Credit {
-	c := Credit{Slot: t, Credited: []Credited{entry(p, rP, l, seconds)}}
+	c := Credit{Slot: t, Credited: []Credited{credOf(p, rP, l, seconds)}}
 	if seconds < 15 {
 		c.Uncredited = map[event.Reason]int64{xNoAnch: 15 - seconds}
 	}
@@ -81,7 +81,7 @@ func TestWorkSessions(t *testing.T) {
 		})
 	}
 	t.Run("a session sums its project's agent time, agent-only time, the uncredited seconds of slots focused on it, and its anchors", func(t *testing.T) {
-		in := entry("p_1", rP, event.EvidenceA, 15)
+		in := credOf("p_1", rP, event.EvidenceA, 15)
 		in.InTurn = true
 		d := Derived{
 			Slots: []Slot{{Start: at(0), FocusProject: "p_1"}, {Start: at(15), FocusProject: "p_1"}, {Start: at(30)}},
@@ -197,12 +197,12 @@ func TestProjectCommits(t *testing.T) {
 	commit(at(200), "p_2", event.GitCommit, sha('4'))
 	commit(at(280), "p_1", event.GitRebase, sha('5'))
 	d := Derived{Credits: []Credit{
-		{Slot: at(0), Credited: []Credited{entry("p_1", rP, event.EvidenceA, 15)}},
-		{Slot: at(90), Credited: []Credited{entry("p_1", event.ReasonEdit, event.EvidenceA, 15)}},
-		{Slot: at(105), Credited: []Credited{entry("p_1", rREAD, event.EvidenceA, 15)}},
-		{Slot: at(240), Credited: []Credited{entry("p_1", rG, event.EvidenceA, 15)}},
-		{Slot: at(255), Credited: []Credited{entry("p_1", rP, event.EvidenceA, 15)}},
-		{Slot: at(300), Credited: []Credited{entry("p_1", rP, event.EvidenceA, 15)}},
+		{Slot: at(0), Credited: []Credited{credOf("p_1", rP, event.EvidenceA, 15)}},
+		{Slot: at(90), Credited: []Credited{credOf("p_1", event.ReasonEdit, event.EvidenceA, 15)}},
+		{Slot: at(105), Credited: []Credited{credOf("p_1", rREAD, event.EvidenceA, 15)}},
+		{Slot: at(240), Credited: []Credited{credOf("p_1", rG, event.EvidenceA, 15)}},
+		{Slot: at(255), Credited: []Credited{credOf("p_1", rP, event.EvidenceA, 15)}},
+		{Slot: at(300), Credited: []Credited{credOf("p_1", rP, event.EvidenceA, 15)}},
 	}}
 	got := Rollups{Table: testTable(t)}.Projects(d, b.records())
 	if len(got) != 1 {

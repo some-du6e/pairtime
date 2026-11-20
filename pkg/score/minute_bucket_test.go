@@ -145,9 +145,9 @@ const (
 	idB = "019a0000-0000-7000-8000-0000000000b2"
 )
 
-// entry is seconds credited at weight 1 to project p under reason r at
+// credOf is seconds credited at weight 1 to project p under reason r at
 // level l, behind anchor idA.
-func entry(p string, r event.Reason, l event.Evidence, seconds int64, labels ...event.Label) Credited {
+func credOf(p string, r event.Reason, l event.Evidence, seconds int64, labels ...event.Label) Credited {
 	return Credited{ProjectKey: p, Reason: r, Level: l, Seconds: seconds, Halves: 2 * seconds, AnchorIDs: []string{idA},
 		Labels: labels}
 }
@@ -157,7 +157,7 @@ func slotOf(es ...Credited) MinuteSlot { return MinuteSlot{Credit: Credit{Slot: 
 
 func TestBucketSlot(t *testing.T) {
 	const lA, lB, lC = event.EvidenceA, event.EvidenceB, event.EvidenceC
-	half := entry("p_1", rP, lA, 15)
+	half := credOf("p_1", rP, lA, 15)
 	half.Halves = 15
 	nothing := MinuteSlot{Credit: Credit{Slot: base, Uncredited: map[event.Reason]int64{xAbsent: 15}}}
 	cases := []struct {
@@ -167,35 +167,35 @@ func TestBucketSlot(t *testing.T) {
 		want       event.BucketSlot
 	}{
 		{"a slot credited under two reasons names the one with more credit, and counts all of it",
-			slotOf(entry("p_1", rP, lA, 9), entry("p_1", rSUP, lA, 6)), false,
+			slotOf(credOf("p_1", rP, lA, 9), credOf("p_1", rSUP, lA, 6)), false,
 			event.BucketSlot{Project: "p_1", Credited: 15, Why: rP, Kind: event.ActivityPrompting, Ev: lA}},
 		{"on a tie the reason earlier in SM 5.2's table names the slot",
-			slotOf(entry("p_1", rREAD, lA, 7), entry("p_1", rP, lA, 7)), false,
+			slotOf(credOf("p_1", rREAD, lA, 7), credOf("p_1", rP, lA, 7)), false,
 			event.BucketSlot{Project: "p_1", Credited: 14, Why: rP, Kind: event.ActivityPrompting, Ev: lA}},
 		{"ev is the weakest level among the slot's credited seconds",
-			slotOf(entry("p_1", rP, lA, 10), entry("p_1", rREAD, lC, 5)), false,
+			slotOf(credOf("p_1", rP, lA, 10), credOf("p_1", rREAD, lC, 5)), false,
 			event.BucketSlot{Project: "p_1", Credited: 15, Why: rP, Kind: event.ActivityPrompting, Ev: lC}},
 		{"a level-B second makes a slot of level-A seconds level B",
-			slotOf(entry("p_1", rP, lA, 14), entry("p_1", rP, lB, 1)), false,
+			slotOf(credOf("p_1", rP, lA, 14), credOf("p_1", rP, lB, 1)), false,
 			event.BucketSlot{Project: "p_1", Credited: 15, Why: rP, Kind: event.ActivityPrompting, Ev: lB}},
 		{"in a backfilled minute every credited slot is level C (DESIGN 6.4)",
-			slotOf(entry("p_1", rP, lA, 15)), true,
+			slotOf(credOf("p_1", rP, lA, 15)), true,
 			event.BucketSlot{Project: "p_1", Credited: 15, Why: rP, Kind: event.ActivityPrompting, Ev: lC}},
 		{"lbl lists the side-door labels in E-6's order and leaves out the others",
-			slotOf(entry("p_1", rP, lC, 15, event.LabelTypingModule, event.LabelViaBridge, event.LabelViaTrack)), false,
+			slotOf(credOf("p_1", rP, lC, 15, event.LabelTypingModule, event.LabelViaBridge, event.LabelViaTrack)), false,
 			event.BucketSlot{Project: "p_1", Credited: 15, Why: rP, Kind: event.ActivityPrompting, Ev: lC,
 				Lbl: []event.Label{event.LabelViaTrack, event.LabelViaBridge}}},
 		{"a slot nothing credited is empty, whatever its uncredited seconds say", nothing, false, event.BucketSlot{}},
 		{"a half-weighted second credits half a second (SM 4.3)", slotOf(half), false,
 			event.BucketSlot{Project: "p_1", Credited: 7.5, Why: rP, Kind: event.ActivityPrompting, Ev: lA}},
 		{"a returned second keeps its ~r reason, with the activity of its base",
-			slotOf(entry("p_1", rREAD+event.ReturnedSuffix, lB, 15)), false,
+			slotOf(credOf("p_1", rREAD+event.ReturnedSuffix, lB, 15)), false,
 			event.BucketSlot{Project: "p_1", Credited: 15, Why: rREAD + event.ReturnedSuffix, Kind: event.ActivityReadingOutput, Ev: lB}},
 		{"the project with the most credit names the slot",
-			slotOf(entry("p_b", rP, lA, 8), entry("p_a", rP, lA, 7)), false,
+			slotOf(credOf("p_b", rP, lA, 8), credOf("p_a", rP, lA, 7)), false,
 			event.BucketSlot{Project: "p_b", Credited: 15, Why: rP, Kind: event.ActivityPrompting, Ev: lA}},
 		{"on a tie the lower project key names the slot (SM 3.3 rule 6)",
-			slotOf(entry("p_b", rP, lA, 7), entry("p_a", rP, lA, 7)), false,
+			slotOf(credOf("p_b", rP, lA, 7), credOf("p_a", rP, lA, 7)), false,
 			event.BucketSlot{Project: "p_a", Credited: 14, Why: rP, Kind: event.ActivityPrompting, Ev: lA}},
 	}
 	for _, c := range cases {
@@ -208,9 +208,9 @@ func TestBucketSlot(t *testing.T) {
 }
 
 func TestMinuteState(t *testing.T) {
-	half := entry("p_1", rP, event.EvidenceA, 15)
+	half := credOf("p_1", rP, event.EvidenceA, 15)
 	half.Halves = 15
-	restored := entry("p_1", rP+event.RestoredSuffix, event.EvidenceA, 15)
+	restored := credOf("p_1", rP+event.RestoredSuffix, event.EvidenceA, 15)
 	minute := func(es ...Credited) Minute { return Minute{Start: base, Slots: []MinuteSlot{slotOf(es...)}} }
 	cases := []struct {
 		name  string
@@ -218,8 +218,8 @@ func TestMinuteState(t *testing.T) {
 		final bool
 		want  event.BucketState
 	}{
-		{"a minute inside the pending window is pending (DESIGN 6.2 D1)", minute(entry("p_1", rP, event.EvidenceA, 15)), false, event.StatePending},
-		{"a minute past the pending window is final", minute(entry("p_1", rP, event.EvidenceA, 15)), true, event.StateFinal},
+		{"a minute inside the pending window is pending (DESIGN 6.2 D1)", minute(credOf("p_1", rP, event.EvidenceA, 15)), false, event.StatePending},
+		{"a minute past the pending window is final", minute(credOf("p_1", rP, event.EvidenceA, 15)), true, event.StateFinal},
 		{"a final minute holding half-weighted seconds is provisional (SM 4.3)", minute(half), true, event.StateProvisional},
 		{"a final minute whose half-weighted seconds a progress event restored is restored", minute(restored), true, event.StateRestored},
 		{"a minute still holding half-weighted seconds is provisional though others were restored", minute(restored, half), true, event.StateProvisional},
@@ -239,9 +239,9 @@ func TestMinuteState(t *testing.T) {
 // whose first and third slots the scorer didn't derive.
 func TestMinuteBucket(t *testing.T) {
 	tab := testTable(t)
-	p := entry("p_1", rP, event.EvidenceA, 15)
+	p := credOf("p_1", rP, event.EvidenceA, 15)
 	p.AnchorIDs = []string{idB, idA}
-	read := entry("p_1", rREAD, event.EvidenceA, 10)
+	read := credOf("p_1", rREAD, event.EvidenceA, 10)
 	m := Minute{Start: base, Slots: []MinuteSlot{
 		{Credit: Credit{Slot: at(15), Credited: []Credited{p}, AgentS: 10}},
 		{Credit: Credit{Slot: at(45), Credited: []Credited{read}, Uncredited: map[event.Reason]int64{xNoAnch: 5}, AgentS: 15}},
