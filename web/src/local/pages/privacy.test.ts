@@ -135,10 +135,12 @@ describe('Privacy', () => {
 			},
 		},
 		{
-			name: 'Who can read it says the inbox is the one place this version keeps prompt text, and that a program running as you can read it',
+			name: 'Who can read it says the inbox and the hook calls the agent holds are the two places this version keeps prompt text, and that a program running as you can read them',
 			check: (html) => {
 				const t = text(html);
-				expect(t).toContain('This version of pairtime keeps the text of your prompts, and what your AI tool sent with them, in one place only: the inbox');
+				expect(t).toContain(
+					'This version of pairtime keeps the text of your prompts, and what your AI tool sent with them, in two places only: the inbox, until the agent reads it, and the hook calls it holds, until it has read them',
+				);
 				expect(t).toContain('so can any program running as you');
 				expect(t).toContain('but not from a program running as you');
 			},

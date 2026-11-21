@@ -12,6 +12,8 @@ on:
     paths:
       - internal/server/pages/**
       - internal/server/dashboard/**
+      - docs/retention.json
+      - internal/server/retention/**
       - tools/pagespreview/**
       - .github/workflows/pages-preview.yml
   workflow_dispatch:
