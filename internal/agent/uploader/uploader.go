@@ -1153,21 +1153,19 @@ func (u *Uploader) sync(c Credentials) bool {
 	return true
 }
 
-// newDeviceProblem is what doctor hears once this computer can't upload
-// under its device ID any more, for the reason why: after a fork, or the
-// server's device_mismatch. Going on as a new device, with a new device ID,
-// K_dev and chain, is WP-AG8's (#150 R5).
-func newDeviceProblem(why string) string {
-	return why + "; this version of pairtime can't go on uploading under this computer's ID yet, so it uploads nothing more, and what it records stays on this computer"
-}
+// newDevice ends what doctor hears once this computer can't upload under
+// its device ID any more: after a fork, or the server's device_mismatch.
+// Going on as a new device, with a new device ID, K_dev and chain, is
+// WP-AG8's (#150 R5).
+const newDevice = "; this version of pairtime can't go on uploading under this computer's ID yet, so it uploads nothing more, and what it records stays on this computer"
 
 // forkProblem is what doctor hears about a fork at batch b.
 func forkProblem(b uint64) string {
-	return newDeviceProblem(fmt.Sprintf("the server's record of this computer's ledger differs from it at batch %d, as after a home folder restored from an old backup, or a bug", b))
+	return fmt.Sprintf("the server's record of this computer's ledger differs from it at batch %d, as after a home folder restored from an old backup, or a bug", b) + newDevice
 }
 
 // mismatchProblem is what doctor hears after the server's device_mismatch.
-var mismatchProblem = newDeviceProblem("the server says this computer's device ID belongs to another account")
+const mismatchProblem = "the server says this computer's device ID belongs to another account" + newDevice
 
 // forkAt returns the batch of the server's head when the device's own row
 // of that batch has another H_b, and the device's next batch when it has

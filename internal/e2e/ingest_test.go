@@ -57,7 +57,7 @@ func newestTable() *params.Table {
 // bucket is a minute bucket of the scorer's store: credited seconds in
 // slots of up to 15, 10 seconds left out, 20 of agent time that p_test
 // wasn't credited, and an anchor, which stays on the device.
-func bucket(table *params.Table, device string, minute time.Time, credited float64, st event.BucketState) store.Bucket {
+func bucket(table *params.Table, deviceID string, minute time.Time, credited float64, st event.BucketState) store.Bucket {
 	slots := make([]event.BucketSlot, 4)
 	left := credited
 	for i := range slots {
@@ -67,7 +67,7 @@ func bucket(table *params.Table, device string, minute time.Time, credited float
 			slots[i] = event.BucketSlot{Project: "p_test", Credited: cr, Why: event.ReasonPrompt, Kind: event.ReasonPrompt.Activity(), Ev: event.EvidenceA}
 		}
 	}
-	return store.Bucket{V: table.Version(), Params: table.Hash(), Minute: minute.UTC(), Device: device, Slots: slots,
+	return store.Bucket{V: table.Version(), Params: table.Hash(), Minute: minute.UTC(), Device: deviceID, Slots: slots,
 		CreditedS: credited, Uncredited: map[event.Reason]float64{event.ReasonNoAnchor: 10}, AgentRunningS: 20, State: st,
 		Anchors: []string{event.NewEventID(minute)}, Projects: map[string]store.ProjectMinute{"p_test": {AgentS: 20, AgentOnlyS: 20}}}
 }
@@ -251,7 +251,7 @@ func TestUploadToIngest(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	device := w.DeviceID()
+	deviceID := w.DeviceID()
 
 	// The scorer's store: every minute of the day, and every tenth minute
 	// pending first and final after, so it has two revisions.
@@ -264,12 +264,12 @@ func TestUploadToIngest(t *testing.T) {
 	for m := 0; m < 24*60; m++ {
 		minute := start.Add(time.Duration(m) * time.Minute)
 		if m%10 == 0 {
-			if _, _, err := bs.Put(bucket(table, device, minute, 15, event.StatePending)); err != nil {
+			if _, _, err := bs.Put(bucket(table, deviceID, minute, 15, event.StatePending)); err != nil {
 				t.Fatal(err)
 			}
 			lines++
 		}
-		if _, _, err := bs.Put(bucket(table, device, minute, 30, event.StateFinal)); err != nil {
+		if _, _, err := bs.Put(bucket(table, deviceID, minute, 30, event.StateFinal)); err != nil {
 			t.Fatal(err)
 		}
 		lines++
@@ -312,7 +312,7 @@ func TestUploadToIngest(t *testing.T) {
 	tokenHash := sha256.Sum256([]byte(token))
 	exec(`INSERT INTO devices (device_id, user_id, token_hash, public_key, os_family, client_build, linked_at_ms, last_seen_at_ms, link_generation)
 VALUES ($1, $2, $3, $4, 'linux', 'v0.0.0-dev', $5, $5, 1)`,
-		device, account, hex.EncodeToString(tokenHash[:]), []byte(devKey.Public().(ed25519.PublicKey)), linked)
+		deviceID, account, hex.EncodeToString(tokenHash[:]), []byte(devKey.Public().(ed25519.PublicKey)), linked)
 	sv := &server{db: db, w: wr, devices: ds, key: ed25519.NewKeyFromSeed(seed("e2e server key"))}
 	sv.restart()
 	ft := &faults{srv: sv, by: map[int]string{1: "503", 2: "restart", 4: "429", 5: "lost"}}
@@ -336,7 +336,7 @@ VALUES ($1, $2, $3, $4, 'linux', 'v0.0.0-dev', $5, $5, 1)`,
 		signedIn atomic.Bool
 		sent     atomic.Int64
 	)
-	creds := uploader.Credentials{Server: srv.URL, Token: token, DeviceID: device, Sign: uploader.KeySigner(devKey), LinkedAt: start}
+	creds := uploader.Credentials{Server: srv.URL, Token: token, DeviceID: deviceID, Sign: uploader.KeySigner(devKey), LinkedAt: start}
 	client := &http.Client{Transport: roundTripper(func(r *http.Request) (*http.Response, error) {
 		sent.Add(1)
 		return srv.Client().Transport.RoundTrip(r)
@@ -355,7 +355,7 @@ VALUES ($1, $2, $3, $4, 'linux', 'v0.0.0-dev', $5, $5, 1)`,
 
 	count := func(query string) int64 {
 		var n int64
-		if err := db.Read.QueryRowContext(ctx, query, device).Scan(&n); err != nil {
+		if err := db.Read.QueryRowContext(ctx, query, deviceID).Scan(&n); err != nil {
 			t.Fatal(err)
 		}
 		return n
@@ -404,7 +404,7 @@ VALUES ($1, $2, $3, $4, 'linux', 'v0.0.0-dev', $5, $5, 1)`,
 				want += b.CreditedS
 			}
 			readings := map[event.Witness]int{}
-			rows, err := db.Read.QueryContext(ctx, `SELECT bucket FROM minute_buckets WHERE device_id = $1`, device)
+			rows, err := db.Read.QueryContext(ctx, `SELECT bucket FROM minute_buckets WHERE device_id = $1`, deviceID)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -459,7 +459,7 @@ VALUES ($1, $2, $3, $4, 'linux', 'v0.0.0-dev', $5, $5, 1)`,
 			for _, r := range rows {
 				if r.Receipt == nil {
 					t.Errorf("batch %d has no receipt", r.B)
-				} else if err := pkgledger.VerifyReceipt(pub, device, r.B, r.Head, *r.Receipt); err != nil {
+				} else if err := pkgledger.VerifyReceipt(pub, deviceID, r.B, r.Head, *r.Receipt); err != nil {
 					t.Errorf("batch %d: %v", r.B, err)
 				}
 			}
