@@ -54,23 +54,30 @@ func copyDir(t *testing.T, dir string) string {
 	return dst
 }
 
-// TestKillKeepsModes is a kill -9 of the agent right after it sealed a
-// batch in local-only mode, at each point before the uploader could save
-// the batch's mode in state.json: while a request is in flight, which
-// keeps the loop from taking the batch for up to a minute; after the seal
-// frame's flush, before the batch's row is in batches.seg; and after the
-// row, before the uploader hears of the batch. The next start, with
-// config.toml online again and no new sign-in, sends neither the batch's
-// root nor its minutes, and no root after it, and doctor hears why: the
-// seal frame holds the batch's mode, on disk with the seal (DESIGN 4.2).
+// TestKillKeepsModes is a kill -9 of the agent around a batch sealed in
+// local-only mode, at each point before the uploader could save the
+// batch's mode in state.json: while a request is in flight, which keeps the
+// loop from taking the batch for up to a minute; after the seal frame's
+// flush, before the batch's row is in batches.seg; after the row, before
+// the uploader hears of the batch; and inside a local-only stretch the
+// config watch noted, whose first record sealed at once, with a record
+// after it that no seal took. The next start, with config.toml online
+// again and no new sign-in, seals an online batch, and sends neither the
+// local-only batch's root nor its minutes, nor those of the online batch
+// that closes its run, and doctor hears why: the seal frame holds the
+// batch's mode, on disk with the seal (DESIGN 4.2).
 func TestKillKeepsModes(t *testing.T) {
 	cases := []struct {
 		name string
+		// after is the batch k the next start seals online, after what the
+		// kill left: 5, or 6 when the next Open seals what the kill left as
+		// batch 5.
+		after int
 		// kill seals batch 4 in local-only mode, once batches 1 and 2 went,
 		// and returns the data directory as a kill -9 then leaves it.
 		kill func(t *testing.T, r *liveRig) string
 	}{
-		{"a kill while batch 3's request is in flight", func(t *testing.T, r *liveRig) string {
+		{"a kill while batch 3's request is in flight", 5, func(t *testing.T, r *liveRig) string {
 			g := r.hold(t)
 			r.seal(t, 3)
 			r.u.Wake()
@@ -83,7 +90,7 @@ func TestKillKeepsModes(t *testing.T) {
 			r.seal(t, 4)
 			return copyDir(t, r.dirs.Data)
 		}},
-		{"a kill after the seal frame's flush, before the row is in batches.seg", func(t *testing.T, r *liveRig) string {
+		{"a kill after the seal frame's flush, before the row is in batches.seg", 5, func(t *testing.T, r *liveRig) string {
 			r.seal(t, 3)
 			r.wait(t, "batch 3 and its minutes", func(f *fakeIngest) bool { return f.head.b == 3 && len(f.buckets) == 45 })
 			r.drain()
@@ -110,7 +117,7 @@ func TestKillKeepsModes(t *testing.T) {
 			}
 			return killed
 		}},
-		{"a kill after the row is in batches.seg, before the uploader heard of the batch", func(t *testing.T, r *liveRig) string {
+		{"a kill after the row is in batches.seg, before the uploader heard of the batch", 5, func(t *testing.T, r *liveRig) string {
 			r.seal(t, 3)
 			r.wait(t, "batch 3 and its minutes", func(f *fakeIngest) bool { return f.head.b == 3 && len(f.buckets) == 45 })
 			r.drain()
@@ -123,6 +130,18 @@ func TestKillKeepsModes(t *testing.T) {
 			r.local.Store(true)
 			r.seal(t, 4)
 			return killed
+		}},
+		{"a kill inside a local-only stretch, after its first record sealed at once and before the next seal", 6, func(t *testing.T, r *liveRig) string {
+			r.seal(t, 3)
+			r.wait(t, "batch 3 and its minutes", func(f *fakeIngest) bool { return f.head.b == 3 && len(f.buckets) == 45 })
+			r.drain()
+			// config.toml says local, and the config watch notes it.
+			r.local.Store(true)
+			r.w.NoteMode(false)
+			r.record(t, 4)
+			waitFor(t, "the stretch's first record to seal at once", func() bool { return r.w.Status().Batches == 4 })
+			r.record(t, 5) // no seal takes it before the kill
+			return copyDir(t, r.dirs.Data)
 		}},
 	}
 	for _, c := range cases {
@@ -139,6 +158,7 @@ func TestKillKeepsModes(t *testing.T) {
 			r.restart(t, killed)
 			r.u.Start()
 			r.wait(t, "batch 3 and its minutes", func(f *fakeIngest) bool { return f.head.b == 3 && r.minutesIn(f, 30, 44) == 15 })
+			r.seal(t, c.after)
 			waitFor(t, "doctor to hear that uploads stopped", func() bool {
 				r.u.Wake()
 				return strings.Contains(r.doctor(), "stopped uploading")
@@ -150,9 +170,9 @@ func TestKillKeepsModes(t *testing.T) {
 				name string
 				ok   bool
 			}{
-				{"no root of the batch sealed in local-only mode went, nor any after it", r.f.head.b == 3 && r.f.rows[4].b == 0},
-				{"no minute of that batch went", r.minutesIn(r.f, 45, 59) == 0},
-				{"the uploader says the roots stop at it", r.u.Status().Stopped == 4},
+				{"no root of the batch sealed in local-only mode went, nor of a batch after it", r.f.head.b == 3 && r.f.rows[4].b == 0 && r.f.rows[5].b == 0},
+				{"no minute of that batch went, nor of the online batch that closed its run", r.minutesIn(r.f, 45, 74) == 0},
+				{"the uploader says the roots stop at the batch, with the online batch after it in its run", r.u.Status().Stopped == 4},
 			}
 			for _, ch := range checks {
 				t.Run(ch.name, func(t *testing.T) {

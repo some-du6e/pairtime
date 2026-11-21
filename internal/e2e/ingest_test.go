@@ -377,21 +377,28 @@ func TestUploadToIngest(t *testing.T) {
 	if err := st.Save(); err != nil {
 		t.Fatal(err)
 	}
+	// post is a POST the uploader sent, a retry of its own included, and
+	// whether it got no answer. net/http's own resends happen inside one.
+	type post struct {
+		key    string
+		failed bool
+	}
 	var (
 		signedIn atomic.Bool
 		sent     atomic.Int64
 		postsMu  sync.Mutex
-		posted   []string // the Idempotency-Key of each POST the uploader sent, a retry of its own included
+		posted   []post
 	)
 	creds := uploader.Credentials{Server: srv.URL, Token: token, DeviceID: deviceID, Sign: uploader.KeySigner(devKey), LinkedAt: start}
 	client := &http.Client{Transport: roundTripper(func(r *http.Request) (*http.Response, error) {
 		sent.Add(1)
+		resp, err := transport.RoundTrip(r)
 		if r.Method == http.MethodPost {
 			postsMu.Lock()
-			posted = append(posted, r.Header.Get("Idempotency-Key"))
+			posted = append(posted, post{key: r.Header.Get("Idempotency-Key"), failed: err != nil})
 			postsMu.Unlock()
 		}
-		return transport.RoundTrip(r)
+		return resp, err
 	})}
 	u, err := uploader.New(uploader.Options{
 		Ledger: w, LedgerDir: dirs.Ledger(), BucketDir: dirs.Buckets(), DataDir: dirs.Data, State: st,
@@ -496,18 +503,15 @@ func TestUploadToIngest(t *testing.T) {
 				t.Errorf("the server's own limiter refused %d requests as rate_limited", rateLimited)
 			}
 			postsMu.Lock()
-			resent := 0
-			for _, k := range posted {
-				if k == lost {
-					resent++
-				}
-			}
+			posts := slices.Clone(posted)
 			postsMu.Unlock()
-			// The client counts a POST once however often net/http sends it
-			// again by itself, so a second POST with the key is the
-			// uploader's own retry.
-			if lost == "" || resent < 2 || !slices.Contains(replayed, lost) {
-				t.Errorf("the answer the server lost, to %q, wasn't fetched again by the uploader's own retry: it sent the key %d times, and the server replayed %q", lost, resent, replayed)
+			// The lost answer reached the uploader as a failure, and a POST
+			// of its own after it sent the key again. Had net/http fetched
+			// the answer again by itself, the POST would have its answer.
+			i := slices.IndexFunc(posts, func(p post) bool { return p.key == lost && p.failed })
+			retried := i >= 0 && slices.ContainsFunc(posts[i+1:], func(p post) bool { return p.key == lost })
+			if lost == "" || !retried || !slices.Contains(replayed, lost) {
+				t.Errorf("the answer the server lost, to %q, wasn't fetched again by the uploader's own retry: its POSTs %+v, and the server replayed %q", lost, posts, replayed)
 			}
 		}},
 		{"every receipt in batches.seg checks out under the server key", func(t *testing.T) {

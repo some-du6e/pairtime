@@ -74,6 +74,23 @@ func (a *agent) online() bool {
 	return string(cfg.Mode) == modeOnline
 }
 
+// noteMode tells the ledger writer, once it is open, config.toml's mode as
+// uploads obey it (ledger.Writer.NoteMode): a record written while it is
+// local-only makes its batch local-only, even if no seal reads the file
+// before the teen switches back online.
+func (a *agent) noteMode() {
+	if w := a.writer.Load(); w != nil {
+		w.NoteMode(a.online())
+	}
+}
+
+// reloadConfig is the config watch's reload: config.toml as the agent's
+// settings, and its mode for the ledger writer.
+func (a *agent) reloadConfig() {
+	a.loadConfig(false)
+	a.noteMode()
+}
+
 // uploadMode is config.toml's mode as uploads obey it, for GET /v1/status.
 func (a *agent) uploadMode() config.Mode {
 	cfg, _ := UploadConfig(a.dirs)
@@ -232,13 +249,17 @@ func (a *agent) startUploader(w *ledger.Writer) func() {
 // writer seals only what a crash left before it, and maybe one more.
 const earlyMax = 64
 
+// handSealed is how the agent hands a sealed batch to its uploader. Tests
+// replace it.
+var handSealed = (*uploader.Uploader).Sealed
+
 // handEarly hands u the batches sealed before it existed, and makes u the
 // one sealed hands the rest to.
 func (a *agent) handEarly(u *uploader.Uploader) {
 	a.earlyMu.Lock()
 	defer a.earlyMu.Unlock()
 	for _, b := range a.early {
-		u.Sealed(b)
+		handSealed(u, b)
 	}
 	a.early = nil
 	a.upload.Store(u)
@@ -260,7 +281,7 @@ func (a *agent) sealed(b ledger.Batch) {
 	}
 	a.earlyMu.Unlock()
 	if u != nil {
-		u.Sealed(b)
+		handSealed(u, b)
 	}
 	if a.scorer != nil {
 		a.scorer.Sealed(b)

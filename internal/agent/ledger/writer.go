@@ -103,11 +103,13 @@ type Options struct {
 	// computer upload right now (DESIGN 4.2). Each seal asks it as it
 	// begins, before it takes the lock records take, so a slow read holds
 	// up no record, and it must never call the Writer. The seal frame
-	// records the answer: a batch's mode is on disk with the seal, in the
-	// same flush, before Sealed hears of it, and no crash can lose it. A
-	// batch whose seal frame doesn't say it was sealed online, as one an
-	// older writer sealed, counts as sealed in local-only mode
-	// (Batch.Online). Nil means every batch is sealed online.
+	// records the batch's mode: online only when Online says so and no
+	// record in the batch came while the mode NoteMode last noted was
+	// local-only. So a batch's mode is on disk with the seal, in the same
+	// flush, before Sealed hears of it, and no crash can lose it. A batch
+	// whose seal frame doesn't say it was sealed online, as one an older
+	// writer sealed, counts as sealed in local-only mode (Batch.Online).
+	// Nil means every batch is sealed online, but for NoteMode.
 	Online func() bool
 	// Problem gets a description of what went wrong when a seal that no
 	// caller waits for fails, and "" when one succeeds after that.
@@ -199,6 +201,10 @@ type Writer struct {
 	snap    position // where the newest seal frame that holds q starts
 	failed  error
 	closed  bool
+	// local is set while the mode NoteMode last noted is local-only, and
+	// taint once a record in pending came then. stretchSealed is set once
+	// a batch holding a record of the current local-only stretch is sealed.
+	local, taint, stretchSealed bool
 
 	kick     chan struct{}
 	stop     chan struct{}
@@ -461,10 +467,40 @@ func (w *Writer) append(rec ledger.Record) error {
 	}
 	w.pending = append(w.pending, pending{rec: rec, pos: pos})
 	w.next++
+	if w.local {
+		// The stretch's first record seals at once, so its batch is on disk
+		// as local-only before a crash can cut the records after it.
+		if !w.taint && !w.stretchSealed {
+			w.RequestSeal()
+		}
+		w.taint = true
+	}
 	if len(w.pending) >= pendingMax {
 		w.RequestSeal()
 	}
 	return nil
+}
+
+// NoteMode takes config.toml's mode as the agent's config watch reads it
+// each time the file changes, online or local-only (Options.Online). A
+// record written while the mode noted last is local-only makes its batch
+// local-only, whatever Online says at the seal, as when the teen switches
+// back online before the next seal. The stretch's first record seals at
+// once, so its batch reaches the disk before a crash can cut the records
+// after it, and the batch sealed online after it counts as local-only too
+// (the uploader's saved.mode). The switch back online seals the stretch's
+// last records, so the records after it go in a batch of their own.
+func (w *Writer) NoteMode(online bool) {
+	w.mu.Lock()
+	back := w.local && online
+	if !online && !w.local {
+		w.stretchSealed = false // a stretch begins
+	}
+	w.local = !online
+	w.mu.Unlock()
+	if back {
+		w.RequestSeal()
+	}
 }
 
 // writeFailed passes on a failed write. A write that couldn't be undone
@@ -613,7 +649,7 @@ func (w *Writer) seal() (Batch, bool, error) {
 	}
 	at := w.now()
 	sp := sealPayload{B: row.B, FirstSeq: row.FirstSeq, N: row.N, Prev: w.head, Root: row.Root, Head: row.Head,
-		SealedAt: at.UnixMilli(), Online: online}
+		SealedAt: at.UnixMilli(), Online: online && !w.taint}
 	snap := w.snap
 	if row.B%questionRows == 0 {
 		// w.q has taken every record the batch holds and none after.
@@ -640,6 +676,8 @@ func (w *Writer) seal() (Batch, bool, error) {
 	seg := w.seg
 	retired := w.takeRetired()
 	w.pending = nil
+	w.stretchSealed = w.stretchSealed || w.taint
+	w.taint = false
 	w.b, w.head, w.snap = row.B, row.Head, snap
 	w.mu.Unlock()
 

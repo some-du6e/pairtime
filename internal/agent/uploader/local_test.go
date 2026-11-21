@@ -471,14 +471,20 @@ func (r *liveRig) sealedAt(k int) time.Time { return r.start.Add(time.Duration(k
 // seal seals batch k, with one checkpoint in it.
 func (r *liveRig) seal(t *testing.T, k int) {
 	t.Helper()
+	r.record(t, k)
+	if _, _, err := r.w.Seal(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// record writes batch k's checkpoint at sealedAt(k), and seals nothing.
+func (r *liveRig) record(t *testing.T, k int) {
+	t.Helper()
 	q := r.sealedAt(k)
 	r.clockMu.Lock()
 	r.now = q
 	r.clockMu.Unlock()
 	if _, err := r.w.Checkpoint("p_test", uint64(q.UnixMilli()), json.RawMessage(`{}`)); err != nil {
-		t.Fatal(err)
-	}
-	if _, _, err := r.w.Seal(); err != nil {
 		t.Fatal(err)
 	}
 }

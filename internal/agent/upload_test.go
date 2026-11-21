@@ -6,12 +6,14 @@ import (
 	"bytes"
 	"crypto/ed25519"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -240,17 +242,24 @@ func (earlyLedger) UploadFailure(uint64, string) (uint64, error) { return 0, nil
 // TestEarlyBatches is the batches the ledger writer seals before the
 // uploader exists, as ledger.Open seals what a crash left: up to earlyMax
 // of them wait for it, for the harnesses their records name, and it takes
-// every batch sealed after it. Their modes are in their seal frames, and
-// so in the rows the uploader reads when it first uploads
-// (uploader.TestKillKeepsModes).
+// them, in order, and then every batch sealed after it. Their modes are in
+// their seal frames, and so in the rows the uploader reads when it first
+// uploads (TestLedgerMode, uploader.TestKillKeepsModes).
 func TestEarlyBatches(t *testing.T) {
 	dir := t.TempDir()
 	dirs := home.Dirs{Data: dir, Config: dir, Runtime: dir}
+	var handed []uint64
+	saved := handSealed
+	t.Cleanup(func() { handSealed = saved })
+	handSealed = func(_ *uploader.Uploader, b ledger.Batch) { handed = append(handed, b.Row.B) }
 	a := &agent{dirs: dirs, log: slog.New(slog.DiscardHandler), problems: map[string]string{}}
-	for b := uint64(1); b <= earlyMax+1; b++ {
-		a.sealed(ledger.Batch{Row: pkgledger.BatchRow{B: b, FirstSeq: b, N: 1}, SealedAt: time.Now()})
+	batch := func(b uint64) ledger.Batch {
+		return ledger.Batch{Row: pkgledger.BatchRow{B: b, FirstSeq: b, N: 1}, SealedAt: time.Now()}
 	}
-	kept := len(a.early)
+	for b := uint64(1); b <= earlyMax+1; b++ {
+		a.sealed(batch(b))
+	}
+	kept, before := len(a.early), len(handed)
 	st, _, err := state.Open(dirs.StateFile())
 	if err != nil {
 		t.Fatal(err)
@@ -264,18 +273,111 @@ func TestEarlyBatches(t *testing.T) {
 	}
 	t.Cleanup(u.Close)
 	a.handEarly(u)
+	early := slices.Clone(handed)
+	a.sealed(batch(earlyMax + 2))
+	want := make([]uint64, 0, earlyMax)
+	for b := uint64(1); b <= earlyMax; b++ {
+		want = append(want, b)
+	}
 	tests := []struct {
 		name string
 		ok   bool
 	}{
-		{"the batches sealed before the uploader existed wait for it, up to earlyMax", kept == earlyMax},
-		{"the uploader takes them, and the batches sealed after it from then on", a.upload.Load() == u && len(a.early) == 0},
+		{"the batches sealed before the uploader existed wait for it, up to earlyMax", kept == earlyMax && before == 0},
+		{"the uploader takes them, in order", slices.Equal(early, want)},
+		{"the uploader takes the batches sealed after it from then on", a.upload.Load() == u && len(a.early) == 0 && slices.Equal(handed[len(early):], []uint64{earlyMax + 2})},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			if !tc.ok {
-				t.Errorf("no: %d kept, %d left", kept, len(a.early))
+				t.Errorf("no: %d kept, %d handed before, then %v", kept, before, handed)
 			}
 		})
 	}
+}
+
+// TestLedgerMode is config.toml's mode as the agent's ledger writer
+// records it: openLedger gives the writer the mode uploads obey, which each
+// seal frame keeps, and the config watch's reload (reloadConfig) tells the
+// writer of a switch to local-only mode, after which the next record seals
+// at once in a local-only batch.
+func TestLedgerMode(t *testing.T) {
+	str := func(s string) *string { return &s }
+	// open opens the agent's ledger in a new data directory with
+	// config.toml as text says, nil for none.
+	open := func(t *testing.T, text *string) (*agent, *ledger.Writer, home.Dirs) {
+		t.Helper()
+		dir := t.TempDir()
+		dirs := home.Dirs{Data: dir, Config: dir, Runtime: dir}
+		if text != nil {
+			if err := os.WriteFile(dirs.ConfigFile(), []byte(*text), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		a := &agent{dirs: dirs, log: slog.New(slog.DiscardHandler), problems: map[string]string{}, table: newestTable(), keyStores: []keys.Store{}}
+		w, err := a.openLedger()
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { w.Close() })
+		return a, w, dirs
+	}
+	record := func(t *testing.T, w *ledger.Writer) {
+		t.Helper()
+		if _, err := w.Checkpoint("p_test", uint64(time.Now().UnixMilli()), json.RawMessage(`{}`)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rows := func(t *testing.T, dirs home.Dirs) []ledger.Row {
+		t.Helper()
+		_, rows, err := ledger.ReadRows(dirs.Ledger(), 1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return rows
+	}
+	seals := []struct {
+		name   string
+		text   *string
+		online bool
+	}{
+		{"a batch sealed while config.toml says online is sealed online", str("mode = \"online\"\n"), true},
+		{"a batch sealed while it says local is local-only", str("mode = \"local\"\n"), false},
+		{"a batch sealed with no config.toml is local-only, as its default is", nil, false},
+		{"a batch sealed while config.toml has an error is local-only", str("mode = \"onl"), false},
+	}
+	for _, tc := range seals {
+		t.Run(tc.name, func(t *testing.T) {
+			_, w, dirs := open(t, tc.text)
+			record(t, w)
+			if _, _, err := w.Seal(); err != nil {
+				t.Fatal(err)
+			}
+			if got := rows(t, dirs); len(got) != 1 || got[0].Online != tc.online {
+				t.Errorf("rows %+v, want one sealed online: %v", got, tc.online)
+			}
+		})
+	}
+	t.Run("after the config watch's reload of a switch to local-only mode, the next record seals at once, local-only", func(t *testing.T) {
+		a, w, dirs := open(t, str("mode = \"online\"\n"))
+		a.writer.Store(w)
+		a.noteMode() // as the ledger's start does
+		record(t, w)
+		time.Sleep(200 * time.Millisecond)
+		if got := rows(t, dirs); len(got) != 0 {
+			t.Fatalf("a record written online sealed at once: %+v", got)
+		}
+		if err := os.WriteFile(dirs.ConfigFile(), []byte("mode = \"local\"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		a.reloadConfig()
+		record(t, w)
+		deadline := time.Now().Add(10 * time.Second)
+		for len(rows(t, dirs)) == 0 && time.Now().Before(deadline) {
+			time.Sleep(25 * time.Millisecond)
+		}
+		if got := rows(t, dirs); len(got) != 1 || got[0].Online || got[0].N != 2 {
+			t.Errorf("rows %+v, want one local-only batch of both records", got)
+		}
+	})
 }

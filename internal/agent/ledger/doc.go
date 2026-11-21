@@ -16,7 +16,8 @@
 //     body as stored, and after each batch's last record a seal frame
 //     with the batch's b, first_seq, n, prev, R_b, H_b and sealed_at, and
 //     online when it was sealed while config.toml let the computer upload
-//     (Options.Online).
+//     and none of its records came while the agent's config watch said
+//     local-only (Options.Online, Writer.NoteMode).
 //   - batches.seg: a chain frame naming the device id and the device
 //     key's id, then a row per batch, {b, first_seq, last_seq, n, prev,
 //     R_b, H_b, sealed_at, online} and where its frames are, and the
