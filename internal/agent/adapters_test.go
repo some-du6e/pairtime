@@ -1035,6 +1035,29 @@ func TestCommitsInAHookedSession(t *testing.T) {
 	g1, e1 := change(0)
 	g2, e2 := change(1)
 	want := projectKeyOf(t, r.dirs, []keys.Store{}, repo)
+	// The commit records the agent kept for the uploader, from every day's
+	// file of commits/ (D-commit-records-local).
+	var kept []map[string]any
+	var raw []byte
+	entries, err := os.ReadDir(r.dirs.Commits())
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if day, ok := strings.CutSuffix(e.Name(), ".jsonl"); ok {
+			kept = append(kept, readCommitLines(t, r.dirs.Commits(), day)...)
+			b, err := os.ReadFile(filepath.Join(r.dirs.Commits(), e.Name()))
+			if err != nil {
+				t.Fatal(err)
+			}
+			raw = append(raw, b...)
+		}
+	}
+	keptAs := func(sha string, actor event.Actor) bool {
+		return slices.ContainsFunc(kept, func(m map[string]any) bool {
+			return m["sha"] == sha && m["actor"] == string(actor) && m["project"] == project
+		})
+	}
 	checks := []struct {
 		name string
 		ok   bool
@@ -1049,6 +1072,18 @@ func TestCommitsInAHookedSession(t *testing.T) {
 			g2.Op == event.GitCommit && g2.SHA == agentSHA && g2.Actor == event.ActorAgent && e2.ProjectKey == project},
 		{"git.change records come via git and belong to no session",
 			e1.Via == event.ViaGit && e2.Via == event.ViaGit && e1.SessionKey == event.NoSession && e2.SessionKey == event.NoSession},
+		{"commits/ keeps a commit record for each, the person's and the agent's, in the session's project",
+			len(kept) == 2 && keptAs(human, event.ActorHuman) && keptAs(agentSHA, event.ActorAgent)},
+		{"the commit records hold tier-1 fields only: no message, no file name, no folder",
+			!slices.ContainsFunc(kept, func(m map[string]any) bool {
+				for k := range m {
+					if !slices.Contains(tierOneCommit, k) {
+						return true
+					}
+				}
+				return false
+			}) && !slices.ContainsFunc([]string{"by hand", "by the agent", "a.txt", "b.txt", repo, filepath.Base(repo)},
+				func(text string) bool { return bytes.Contains(raw, []byte(text)) })},
 	}
 	for _, c := range checks {
 		t.Run(c.name, func(t *testing.T) {

@@ -96,6 +96,12 @@ func (d Dirs) Coach() string { return filepath.Join(d.Data, "coach") }
 // Inbox holds hook calls made while the agent was down, and plugin events.
 func (d Dirs) Inbox() string { return filepath.Join(d.Data, "inbox") }
 
+// Commits holds the commit records of DESIGN 4.3 that the git adapter made,
+// a file per UTC day, until the uploader sends them (WP-AG7,
+// D-commit-records-local). They hold tier-1 fields only: no commit message
+// and no path.
+func (d Dirs) Commits() string { return filepath.Join(d.Data, "commits") }
+
 // Held holds the hook calls the agent took in before it could read them:
 // before its keystore and its ledger were open, its adapters have no keys
 // to key them with and no ledger to write them to (WP-AG7). Like the

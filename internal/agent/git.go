@@ -69,13 +69,15 @@ const (
 // heartbeats arrive (WP-AD16).
 //
 // The commit records of DESIGN 4.3 that each change also carries
-// (git.Change.Commits) wait for the uploader (WP-AG5), which decides where
-// they are kept until they go; the ledger keeps the git.change.
+// (git.Change.Commits) go to commits/, where they wait for the uploader
+// (commitStore; D-commit-records-local), and the ledger keeps the
+// git.change.
 type gitHost struct {
-	a   *agent
-	res *git.Resolver
-	w   *git.Watcher
-	job *sched.Job
+	a       *agent
+	res     *git.Resolver
+	w       *git.Watcher
+	job     *sched.Job
+	commits *commitStore
 
 	// mu orders a change's record, and the seal that puts it on disk,
 	// before the watcher state that says it went (put): the cursor never
@@ -134,8 +136,9 @@ func newGitHost(a *agent, secret []byte, w *ledger.Writer) (*gitHost, error) {
 	if err != nil {
 		return nil, err
 	}
-	g := &gitHost{a: a, res: res, writer: w, tracked: make(map[string]bool), slow: make(map[string]bool),
-		rest: make(map[string]time.Time)}
+	g := &gitHost{a: a, res: res, writer: w, commits: &commitStore{dir: a.dirs.Commits()},
+		tracked: make(map[string]bool), slow: make(map[string]bool), rest: make(map[string]time.Time)}
+	g.commits.prune(time.Now())
 	g.w, err = git.NewWatcher(git.WatcherOptions{
 		Resolver: res,
 		Sink:     g.sink,
@@ -147,9 +150,10 @@ func newGitHost(a *agent, secret []byte, w *ledger.Writer) (*gitHost, error) {
 	}
 	g.saved, _ = json.Marshal(gitState{Projects: m, Watch: ws})
 	g.problems()
-	g.job = a.sched.Every("git.poll", gitPollEvery, func(time.Time) {
+	g.job = a.sched.Every("git.poll", gitPollEvery, func(now time.Time) {
 		g.w.Poll()
 		g.problems()
+		g.commits.prune(now)
 	})
 	return g, nil
 }
@@ -250,20 +254,31 @@ func (g *gitHost) noteCommand(r adapters.Record, t *event.AgentTool) {
 	g.w.NoteAgentCommand(c)
 }
 
-// sink writes a change's git.change record (git.WatcherOptions.Sink). The
-// watcher gives it the envelope's t, source, harness, session and
-// project; the agent adds the rest: the id, via git, and the run's mono
-// and boot_id, as its other own events have them (ledger.RunClock). The
-// mono is read now, from the clock presence's records are read from, less
-// how long ago t was by the wall clock: a few seconds of hold, which no
-// sleep or clock step falls in. The writer adds the device and the
-// sequence number. The record is sealed at once, so a cursor saved after
-// it never runs ahead of the ledger.
+// sink keeps a change's commit records in commits/ and writes its
+// git.change record (git.WatcherOptions.Sink), both before it returns,
+// which is when the watcher moves the cursor past the change. The watcher
+// gives it the envelope's t, source, harness, session and project; the
+// agent adds the rest: the id, via git, and the run's mono and boot_id, as
+// its other own events have them (ledger.RunClock). The mono is read now,
+// from the clock presence's records are read from, less how long ago t was
+// by the wall clock: a few seconds of hold, which no sleep or clock step
+// falls in. The writer adds the device and the sequence number. The record
+// is sealed at once, so a cursor saved after it never runs ahead of the
+// ledger. The commit records go first, so a ledger that refuses the
+// git.change still leaves them for the uploader.
 func (g *gitHost) sink(c git.Change) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	ev := c.Event
 	now := time.Now()
+	if err := g.commits.add(c.Commits, now); err != nil {
+		g.a.log.Warn("couldn't keep a change's commit records", "op", c.Op(), "commits", len(c.Commits), "err", err)
+		// In words of the agent's own, as the git adapter's other problems:
+		// the error names the data directory's folder.
+		g.a.setProblem("git.commits", "a change's commit records couldn't be kept in commits/ for the uploader; the agent's log says why")
+	} else if len(c.Commits) > 0 {
+		g.a.setProblem("git.commits", "")
+	}
+	ev := c.Event
 	ev.EventID = event.NewEventID(time.UnixMilli(ev.T))
 	ev.Via = event.ViaGit
 	ev.Mono, ev.BootID = ledger.RunClock(now)

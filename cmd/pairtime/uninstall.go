@@ -487,7 +487,7 @@ func pairtimeBinaries(src string, paths []string) []binary {
 // pairtimeEntries are the names of what pairtime keeps in its data and
 // config directories (DESIGN 3.5; home.Dirs and the packages that write
 // there).
-var pairtimeEntries = []string{"agent.lock", "agent.sock", "bin", "buckets", "coach", "config.toml", "days", "inbox",
+var pairtimeEntries = []string{"agent.lock", "agent.sock", "bin", "buckets", "coach", "commits", "config.toml", "days", "inbox",
 	"install", "install.lock", "keys", "ledger", "pipe.json", "port.json", "received", "state.json", "state.json.bad", "vault"}
 
 // isPairtimeEntry reports whether name is one of pairtimeEntries, or the
