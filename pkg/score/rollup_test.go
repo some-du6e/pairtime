@@ -363,6 +363,29 @@ func TestCommitParents(t *testing.T) {
 			want:  []gitWant{{main0, 15}, {after, 15}}, uncommitted: 15,
 		},
 		{
+			name: "a fast-forward merge makes no commit, so its record, which names the tip again, adds none",
+			commits: func(commit func(int64, event.GitOp, string, ...string)) {
+				commit(100, event.GitCommit, main0)
+				commit(200, event.GitCommit, f1, main0)
+				// git merge topic on main, which fast-forwards to f1.
+				commit(300, event.GitMerge, f1, main0)
+			},
+			slots:       []int64{0, 150, 250, 350},
+			want:        []gitWant{{main0, 15}, {f1, 15}},
+			uncommitted: 30,
+		},
+		{
+			name: "a commit whose first parent's record comes no earlier than its own, after the clock stepped back, takes no credit, so each slot goes to one commit",
+			commits: func(commit func(int64, event.GitOp, string, ...string)) {
+				commit(100, event.GitCommit, main0)
+				// f2's parent is f1, whose record comes later.
+				commit(400, event.GitCommit, f2, f1)
+				commit(500, event.GitCommit, f1, main0)
+			},
+			slots: []int64{0, 200, 450},
+			want:  []gitWant{{main0, 15}, {f2, 0}, {f1, 30}},
+		},
+		{
 			name: "a commit or amend record given twice counts once, as Step counts a record",
 			commits: func(commit func(int64, event.GitOp, string, ...string)) {
 				commit(100, event.GitCommit, main0)

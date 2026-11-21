@@ -21,11 +21,15 @@
 # A golden that is modified, retyped or renamed with changes is a change of
 # output. A new golden isn't, since its timeline had no output before, and
 # neither is a deleted one, which goes with its timeline, or a renamed one
-# that keeps every byte. Nor is a golden whose own timeline's inputs change
-# in the same diff (any other .json or .jsonl file in its directory, such as
-# events.jsonl or expected.json): that PR changes an oracle, which the oracle
+# that keeps every byte. Nor is a golden whose own timeline's existing
+# inputs change in the same diff (any other .json or .jsonl file in its
+# directory, such as events.jsonl or expected.json, modified, retyped,
+# deleted or renamed away): that PR changes an oracle, which the oracle
 # guard rules on, so it needs no new version (decided 2026-11-20 by the
-# orchestrator for Karim, issue #132).
+# orchestrator for Karim, issue #132). Only those count, the base-side
+# paths oracle_guard.sh checks. An added file, a copy or a rename's
+# destination is a new oracle file, which the oracle guard passes beside
+# code, so it excuses no golden.
 #
 # Any other change of output needs a version higher than the base's as
 # MAJOR.MINOR.PATCH. A higher MAJOR or MINOR covers it. A PATCH-only bump
@@ -94,16 +98,17 @@ while IFS=$'\t' read -r status first second || [ -n "$status" ]; do
 		echo "::error::score_regression.sh: malformed name-status line: $status" >&2
 		exit 2
 	fi
-	# A copy leaves its source as it was, so only its destination is a
-	# changed input. Every other status changes each path it names.
-	paths=("$first" "$second")
+	# An input changes when the base's copy does: modified, retyped,
+	# deleted or renamed away, the base-side path oracle_guard.sh checks.
+	# An added file, a copy and a rename's destination are new oracle
+	# files, which the oracle guard passes beside code.
 	case "$status" in
-	C*) paths=("$second") ;;
-	esac
-	for p in "${paths[@]}"; do
-		if [ -n "$p" ] && is_input "$p"; then inputs="$inputs${p%/*}
+	A | C*) ;;
+	*)
+		if is_input "$first"; then inputs="$inputs${first%/*}
 "; fi
-	done
+		;;
+	esac
 	case "$status" in
 	A | D | R100 | C*) ;;
 	M | T)

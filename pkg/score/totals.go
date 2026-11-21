@@ -55,8 +55,10 @@ const echoMS = 5_000
 
 // Totals returns the submission's totals, SM 5.3's and SM 5.4's, from what
 // the scorer derived over the window, d, and the records it derived them
-// from, which give logged_s. Records before the window count only to open
-// logged_s's series.
+// from, which give logged_s. Records before the window count toward no
+// total under main's SM 5.3 (E-6.1-hackatime would let the last one open
+// logged_s's series, see hackatimeDecided), but they open the harness
+// sessions whose spans idle_s reads.
 //
 //   - credited_s is the submitted projects' credit in the window. The
 //     uncommitted cap is WP-SC6's, so it isn't applied yet. It splits by
@@ -70,8 +72,8 @@ const echoMS = 5_000
 //     CC9, CC10).
 //   - logged_s is Hackatime's min(gap, 120 s) between each two consecutive
 //     records of one series: the submitted projects' editor heartbeats and
-//     agent events (prompt submits, tool calls and stops) in the window,
-//     ordered by t, then seq, then event_id (SM 5.3). Only records via
+//     agent events (prompt submits, tool calls and stops) in the window, in
+//     t order (SM 5.3), ties by seq, then event_id. Only records via
 //     hook, log, otel, editor or bridge count; track, plugin,
 //     editor_unverified and bridge_unverified records never do (DESIGN 6.2
 //     D19). ai_logged_s is the same rule over the agent events alone (SM

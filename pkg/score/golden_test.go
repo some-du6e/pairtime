@@ -118,7 +118,7 @@ func TestGolden(t *testing.T) {
 				t.Fatal(err)
 			}
 			if !bytes.Equal(got, want) {
-				t.Errorf("the output differs from %s, which is a regression guard: if the change is intended, rewrite the goldens with -update and raise pkg/score/VERSION in the same PR (DESIGN 6.6). First difference, %s",
+				t.Errorf("the output differs from %s, which is a regression guard: if the change is intended, rewrite the goldens with -update, and raise pkg/score/VERSION in the same PR unless it changes this timeline's own inputs (DESIGN 6.6). First difference, %s",
 					path, lineDiff(got, want))
 			}
 		})

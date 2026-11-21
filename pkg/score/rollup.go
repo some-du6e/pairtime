@@ -184,8 +184,8 @@ type WorkSession struct {
 // time between the end of the first and the start of the second is at
 // most SESSION_GAP_S. A session spans its first credited minute to the end
 // of its last, and sums every minute in that span for its project:
-// credit, uncredited seconds of slots focused on it, agent time and
-// anchors.
+// credit, the uncredited seconds of slots whose seconds go to it
+// (Credit.ProjectKey), agent time and anchors.
 func (r Rollups) WorkSessions(d Derived) []WorkSession {
 	ms := Minutes(d)
 	gap := r.Table.Int(params.SESSION_GAP_S) * 1000
@@ -427,8 +427,10 @@ type CommitTime struct {
 // any that include the projects' git.change records.
 //
 // A project's commits are its git.change records of op commit, merge or
-// revert. An amend replaces the commit before it, so the amended commit
-// takes that commit's place and parent. A commit's
+// revert, each SHA once: a fast-forward merge makes no commit, and its
+// record names the tip, which has its own record, so it adds none, nor
+// does a commit sighted again. An amend replaces the commit before it, so
+// the amended commit takes that commit's place and parent. A commit's
 // credited_seconds_since_parent is the project's credit in the slots that
 // start at or after its parent's record and before its own: SM 3.5's
 // credit "between a commit's parent and the commit". The parent is the
@@ -439,10 +441,13 @@ type CommitTime struct {
 // timeline, since commits only label seconds it credited once (SM 3.5, SP
 // 4.4). A commit whose first parent has no record here, such as the first
 // commit after pairtime started, takes the credit since the commit record
-// before it, or all the credit before it when there is none. So in linear
-// history each credited slot before the last commit goes to exactly one
-// commit. Credit from the last commit on is uncommitted. Moving time across
-// a rebase is the server's (SP 4.4): here a rebase moves nothing.
+// before it, or all the credit before it when there is none. One whose
+// first parent's record is no earlier than its own, as when the clock
+// stepped back between two scans, takes none: the parent's interval holds
+// those slots. So in linear history each credited slot before the last
+// commit goes to exactly one commit. Credit from the last commit on is
+// uncommitted. Moving time across a rebase is the server's (SP 4.4): here
+// a rebase moves nothing.
 func (r Rollups) Projects(d Derived, records []event.Event) []ProjectRollup {
 	ms := Minutes(d)
 	commits := projectCommits(records)
@@ -555,42 +560,60 @@ func projectCommits(records []event.Event) map[string][]commitRecord {
 	slices.SortStableFunc(recs, recordCmp)
 	recs = slices.CompactFunc(recs, func(a, b event.Event) bool { return a.EventID == b.EventID })
 	out := map[string][]commitRecord{}
+	// seen holds each project's SHAs on record, so a fast-forward merge or
+	// a commit sighted again adds no commit.
+	seen := map[string]map[string]bool{}
 	for _, e := range recs {
 		g, ok := e.Data.(*event.GitChange)
 		if !ok || e.ProjectKey == "" {
 			continue
 		}
+		switch g.Op {
+		case event.GitCommit, event.GitMerge, event.GitRevert, event.GitAmend:
+		default:
+			continue
+		}
+		if seen[e.ProjectKey] == nil {
+			seen[e.ProjectKey] = map[string]bool{}
+		}
+		if seen[e.ProjectKey][g.SHA] {
+			continue
+		}
+		seen[e.ProjectKey][g.SHA] = true
 		c := commitRecord{CommitTime: CommitTime{SHA: g.SHA, T: e.T}}
 		if len(g.Parents) > 0 {
 			c.parent = g.Parents[0]
 		}
 		cs := out[e.ProjectKey]
-		switch g.Op {
-		case event.GitCommit, event.GitMerge, event.GitRevert:
-			out[e.ProjectKey] = append(cs, c)
-		case event.GitAmend:
-			if n := len(cs); n > 0 {
-				if c.parent == "" {
-					c.parent = cs[n-1].parent
-				}
-				cs[n-1] = c
-			} else {
-				out[e.ProjectKey] = append(cs, c)
+		if n := len(cs); g.Op == event.GitAmend && n > 0 {
+			if c.parent == "" {
+				c.parent = cs[n-1].parent
 			}
+			cs[n-1] = c
+			continue
 		}
+		out[e.ProjectKey] = append(cs, c)
 	}
 	for p, cs := range out {
 		slices.SortStableFunc(cs, func(a, b commitRecord) int { return cmp.Compare(a.T, b.T) })
-		recorded := map[string]int64{}
+		recorded := make(map[string]int64, len(cs))
+		for _, c := range cs {
+			recorded[c.SHA] = c.T
+		}
 		for k := range cs {
-			cs[k].since = math.MinInt64
-			if k > 0 {
-				cs[k].since = cs[k-1].T
-			}
-			if t, ok := recorded[cs[k].parent]; ok && cs[k].parent != "" && t < cs[k].T {
+			t, ok := recorded[cs[k].parent]
+			switch {
+			case cs[k].parent != "" && ok && t < cs[k].T:
 				cs[k].since = t
+			case cs[k].parent != "" && ok:
+				// The parent's record is no earlier than this one, so the
+				// parent's interval holds these slots.
+				cs[k].since = cs[k].T
+			case k > 0:
+				cs[k].since = cs[k-1].T
+			default:
+				cs[k].since = math.MinInt64
 			}
-			recorded[cs[k].SHA] = cs[k].T
 		}
 		out[p] = cs
 	}

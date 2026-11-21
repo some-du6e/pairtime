@@ -174,10 +174,12 @@
 // Where SM and DESIGN leave a choice open, the scorer takes these, each
 // stated again where it is implemented:
 //
-//   - Leads are whole seconds: a typing time is rounded to the nearest
-//     second, halves up, as SM 6.4 (161 s) and 6.5 (143 s) round theirs.
-//     E-6.4-prompt-lengths decided this reading, and SM 1.3 gains it with
-//     P11 (docs/errata/2026-11-19-sm-6.4-prompt-lengths.md).
+//   - A lead's typing part, and the reading part of RETURN_CREDIT, are
+//     rounded to the nearest second, halves up, as SM 6.4 (161 s) and 6.5
+//     (143 s) round theirs. Other lengths, such as a permission wait or a
+//     command's run, keep their milliseconds. E-6.4-prompt-lengths decided
+//     this reading, and SM 1.3 gains it with P11
+//     (docs/errata/2026-11-19-sm-6.4-prompt-lengths.md).
 //   - A silent run's length is its slots' length, from the end of the last
 //     input slot to the start of the next, because samples show when the
 //     last input before a silence came but not when the first one after it
@@ -253,7 +255,9 @@
 //     reaches further back than the scorer's look-ahead.
 //     A continuation whose first record comes later than that after the
 //     previous stop starts at the record. The rules for hooked turns and
-//     for silences are docs/errata/2026-11-20-hooked-turn-runs.md.
+//     for silences are docs/errata/2026-11-20-hooked-turn-runs.md, which
+//     gives the silence as 1,200 s: RETURN_GAP_MAX_S + READ_HORIZON_S, the
+//     reach before E-return-lookahead, whose P10 updates it.
 //   - A queued message resets the bucket when the agent picks it up, which
 //     no record says, so at the session's first agent record after the
 //     enqueue, the next point an agent takes up queued input, or at the

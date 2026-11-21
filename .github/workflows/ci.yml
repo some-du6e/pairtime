@@ -386,7 +386,8 @@ jobs:
         # TestGolden, which go test above runs too, fails when the output
         # differs from them. Then this step writes the output into the
         # goldens for the score-goldens artifact below. A PR that means to
-        # change the output commits them with a higher pkg/score/VERSION.
+        # change the output commits them, with a higher pkg/score/VERSION
+        # unless it changes the timelines' own inputs.
         id: goldens
         if: ${{ !cancelled() }}
         run: |
@@ -395,7 +396,7 @@ jobs:
           fi
           go test -count=1 -run '^TestGolden$' ./pkg/score -update >/dev/null || true
           git status --short -- testdata/timelines
-          echo "::error::pkg/score's bucket output differs from testdata/timelines/*/golden.jsonl. This run's score-goldens artifact holds every timeline's new golden. gh run download never overwrites a file, so delete the old ones first: find testdata/timelines -name golden.jsonl -delete && gh run download $GITHUB_RUN_ID -n score-goldens -D testdata/timelines. Commit them with a higher pkg/score/VERSION if the change is meant (DESIGN 6.6)."
+          echo "::error::pkg/score's bucket output differs from testdata/timelines/*/golden.jsonl. This run's score-goldens artifact holds every timeline's new golden. gh run download never overwrites a file, so delete the old ones first: find testdata/timelines -name golden.jsonl -delete && gh run download $GITHUB_RUN_ID -n score-goldens -D testdata/timelines. If the change is meant, commit them. A PR that changes these timelines' own inputs, or adds them, needs no version change; any other needs a higher pkg/score/VERSION in the same PR (DESIGN 6.6): MAJOR for a rule, MINOR for a parameter value, PATCH only if the goldens differ in v alone."
           exit 1
 
       - name: Upload the rewritten goldens
