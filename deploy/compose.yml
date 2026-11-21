@@ -31,8 +31,9 @@ name: pairtime
 services:
   pairtimed:
     # A server-image.yml push, by tag and digest (deploy/runbook.md, The
-    # image pin). This one is main at 5a94c40 (#125, the sample dashboard at /demo).
-    image: ghcr.io/some-du6e/pairtimed:sha-5a94c40e0d1d@sha256:7a9e1c3a120e0c51cfff17ef3b9a130af433ddafa68453873d968a4162b747fb
+    # image pin). This one is main at 1356bb3: device sign-in (#126, with
+    # #149's fixes), signed uploads (#127) and your own dashboard (#137).
+    image: ghcr.io/some-du6e/pairtimed:sha-1356bb3619b6@sha256:d36e88ce20335abe8e674dd197b7008647e26107f2174a3fc6b17c16fd61ce5e
     restart: unless-stopped
     # Litestream restores /data/pairtime.db from the replica when the file
     # is missing, then runs "pairtimed serve" as its subprocess and copies
