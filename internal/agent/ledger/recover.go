@@ -469,6 +469,7 @@ func (w *Writer) scan(rows []rowPayload) ([]rowPayload, error) {
 		last := rows[n-1]
 		start, next, b, head, snap = last.End, last.LastSeq+1, last.B, last.Head, last.Snap
 		lastLocal = !last.online()
+		w.until.wall = max(w.until.wall, last.LocalUntil)
 		if !slices.Contains(days, start.Seg) {
 			return nil, damaged("batch %d ends in the segment of %s, which isn't there", last.B, start.Seg)
 		}
@@ -585,6 +586,7 @@ func (w *Writer) scan(rows []rowPayload) ([]rowPayload, error) {
 				rp.Snap = snap
 				restored = append(restored, rp)
 				b, head, lastLocal = rp.B, rp.Head, !rp.online()
+				w.until.wall = max(w.until.wall, rp.LocalUntil)
 				w.pending = nil
 			default:
 				f.close()
@@ -678,6 +680,38 @@ func (w *Writer) observe(rec ledger.Record) {
 		return
 	}
 	w.q.Observe(body.E)
+}
+
+// madeBefore reports whether a record in recs is an event made before
+// w.until by its own time (moment.before), as Write would have found it.
+// w.mu is held.
+func (w *Writer) madeBefore(recs []pending) bool {
+	for _, p := range recs {
+		if e, ok := envelopeOf(p.rec); ok && w.until.before(e) {
+			return true
+		}
+	}
+	return false
+}
+
+// envelopeOf returns the times of an event record's event, which are all
+// a moment holds it to, or false for a record that holds no event, as a
+// checkpoint or an upload-failure note doesn't.
+func envelopeOf(rec ledger.Record) (event.Envelope, bool) {
+	if _, ok := rec.Header.RType().EventKind(); !ok {
+		return event.Envelope{}, false
+	}
+	var body struct {
+		E struct {
+			T      int64  `json:"t"`
+			Mono   int64  `json:"mono"`
+			BootID string `json:"boot_id"`
+		} `json:"e"`
+	}
+	if json.Unmarshal(rec.Body, &body) != nil {
+		return event.Envelope{}, false
+	}
+	return event.Envelope{T: body.E.T, Mono: body.E.Mono, BootID: body.E.BootID}, true
 }
 
 // harnessKind reports whether events of kind k can belong to a harness
