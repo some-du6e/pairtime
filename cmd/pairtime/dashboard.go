@@ -34,8 +34,8 @@ the pairtime agent on 127.0.0.1, and it starts the agent first if it isn't
 running. The agent gives it a sign-in link over its socket, which only you
 can reach, and it hands the link to your browser in a file that only you
 can read, never on a command line. The link works once, for two minutes.
-The browser stays signed in until the agent stops, or until it goes 8
-hours without opening the dashboard.
+The browser stays signed in until you quit it or the agent stops, or until
+it goes 8 hours without opening the dashboard.
 
   --no-open  Print the link instead of opening a browser.
 
@@ -62,11 +62,15 @@ type dashboardDeps struct {
 	// and never as root or with an elevated token, for which it returns
 	// errNotTheUsers.
 	startAgent func(home.Dirs) error
-	// openFile asks the OS to open a local file in the default browser.
+	// openFile asks the OS to open a local file in the default browser,
+	// and pageDir names the folder the sign-in page goes in for it
+	// (signInDir).
 	openFile func(string) error
-	// wait is how long to wait for an agent that has just started, and
-	// ask how long each question to the agent may take.
-	wait, ask time.Duration
+	pageDir  func(home.Dirs) string
+	// wait is how long to wait for an agent that has just started, ask how
+	// long each question to the agent may take, and restart how long an
+	// agent this command started has to answer before it starts one again.
+	wait, ask, restart time.Duration
 }
 
 func runDashboard(args []string, stdout, stderr io.Writer) int {
@@ -74,8 +78,10 @@ func runDashboard(args []string, stdout, stderr io.Writer) int {
 		dirs:       home.Default,
 		startAgent: startHookAgent,
 		openFile:   openBrowser,
+		pageDir:    signInDir,
 		wait:       15 * time.Second,
 		ask:        5 * time.Second,
+		restart:    2 * time.Second,
 	})
 }
 
@@ -104,17 +110,23 @@ func dashboard(args []string, stdout, stderr io.Writer, deps dashboardDeps) int 
 		return 1
 	}
 	link, err := askLink(dirs, deps.ask)
-	switch {
-	case errors.Is(err, errAgentDown):
+	var started time.Time
+	if errors.Is(err, errAgentDown) {
 		if err := deps.startAgent(dirs); err != nil {
 			sayNotStarted(stderr, err)
 			return 1
 		}
-		link, err = waitForLink(dirs, deps)
-	case errors.Is(err, errAgentStarting):
-		// An agent a hook or the login item has just started gives a link
-		// once its HTTP server listens, a moment later.
-		link, err = waitForLink(dirs, deps)
+		started = time.Now()
+	}
+	if errors.Is(err, errAgentDown) || errors.Is(err, errAgentStarting) {
+		// An agent that has just started, by this command, a hook or the
+		// login item, gives a link once its HTTP server listens.
+		link, err = waitForLink(dirs, deps, started)
+	}
+	var notStarted startError
+	if errors.As(err, &notStarted) {
+		sayNotStarted(stderr, notStarted.err)
+		return 1
 	}
 	if err != nil {
 		sayNoLink(stderr, err)
@@ -125,7 +137,12 @@ func dashboard(args []string, stdout, stderr io.Writer, deps dashboardDeps) int 
 		return 0
 	}
 	ttl := words(time.Duration(link.ExpiresInS) * time.Second)
-	page, err := writeSignInPage(dirs.Data, link, time.Now())
+	dir := deps.pageDir(dirs)
+	if dir != dirs.Data {
+		// A page an earlier run left in the data directory goes too.
+		sweepSignInPages(dirs.Data, time.Now())
+	}
+	page, err := writeSignInPage(dir, link, time.Now())
 	if err == nil {
 		err = deps.openFile(page)
 	}
@@ -195,10 +212,22 @@ func validPort(s string) bool {
 	return err == nil && n >= 1 && n <= 65535 && strconv.Itoa(n) == s
 }
 
+// startError is an agent that this command couldn't start, which
+// sayNotStarted words.
+type startError struct{ err error }
+
+func (e startError) Error() string { return e.err.Error() }
+func (e startError) Unwrap() error { return e.err }
+
 // waitForLink asks for a link until the agent gives one, for up to
 // deps.wait: an agent that has just started listens on its socket first,
-// and on its HTTP port a moment later.
-func waitForLink(dirs home.Dirs, deps dashboardDeps) (ipc.DashboardLink, error) {
+// and on its HTTP port a moment later. started is when this command last
+// started an agent, the zero time for never. While nothing listens on the
+// socket for deps.restart after that, it starts one again: the agent that
+// was starting may have been stopping instead, and one this command
+// started exits at once while a stopping agent still holds the data
+// directory's lock. A second agent exits by itself while one runs.
+func waitForLink(dirs home.Dirs, deps dashboardDeps, started time.Time) (ipc.DashboardLink, error) {
 	deadline := time.Now().Add(deps.wait)
 	for {
 		link, err := askLink(dirs, deps.ask)
@@ -209,6 +238,11 @@ func waitForLink(dirs home.Dirs, deps dashboardDeps) (ipc.DashboardLink, error) 
 			return ipc.DashboardLink{}, err
 		case time.Now().After(deadline):
 			return ipc.DashboardLink{}, fmt.Errorf("the pairtime agent didn't start within %s: %v. Run `pairtime agent` to see why", words(deps.wait), err)
+		case errors.Is(err, errAgentDown) && time.Since(started) >= deps.restart:
+			if err := deps.startAgent(dirs); err != nil {
+				return ipc.DashboardLink{}, startError{err}
+			}
+			started = time.Now()
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
@@ -272,6 +306,71 @@ const signInHTML = `<!doctype html>
 <p>Opening your pairtime dashboard. If it doesn't open, <a href="%[1]s">open it here</a>.</p>
 </html>
 `
+
+// snapDesktopDir is where snapd installs the desktop files of snaps. Tests
+// set it.
+var snapDesktopDir = "/var/lib/snapd/desktop/applications"
+
+// signInDir is the folder the sign-in page goes in: the data directory, or
+// on Linux, where the default HTML handler is a snap, the snap's own
+// folder for files (snapPageDir).
+func signInDir(d home.Dirs) string {
+	if runtime.GOOS != "linux" {
+		return d.Data
+	}
+	userHome, err := os.UserHomeDir()
+	if err != nil {
+		return d.Data
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if dir := snapPageDir(ctx, userHome); dir != "" {
+		return dir
+	}
+	return d.Data
+}
+
+// snapPageDir returns the folder that a browser from a snap, which
+// Ubuntu's Firefox and Chromium are, can read the sign-in page in, when
+// the default HTML handler is one, or "" when it isn't or there is no such
+// folder yet. A snap can't read the home folder's hidden folders, which
+// the data directory, ~/.local/share/pairtime, is in, but it can read its
+// own ~/snap/<name>/common (SNAP_USER_COMMON). The page is as safe there:
+// the file is 0600 and its path holds no secret (D-dashboard-link).
+func snapPageDir(ctx context.Context, userHome string) string {
+	out, err := exec.CommandContext(ctx, "xdg-mime", "query", "default", "text/html").Output()
+	if err != nil {
+		return ""
+	}
+	desktop := strings.TrimSpace(string(out))
+	name, _, found := strings.Cut(desktop, "_")
+	if !found || !strings.HasSuffix(desktop, ".desktop") || !snapName(name) || strings.ContainsAny(desktop, `/\`) {
+		return ""
+	}
+	if fi, err := os.Stat(filepath.Join(snapDesktopDir, desktop)); err != nil || !fi.Mode().IsRegular() {
+		return ""
+	}
+	dir := filepath.Join(userHome, "snap", name, "common")
+	if fi, err := os.Stat(dir); err != nil || !fi.IsDir() {
+		return ""
+	}
+	return dir
+}
+
+// snapName reports whether s has the form of a snap's name: lowercase
+// letters, digits and hyphens.
+func snapName(s string) bool {
+	if s == "" || len(s) > 40 {
+		return false
+	}
+	for i := range len(s) {
+		c := s[i]
+		if (c < 'a' || c > 'z') && (c < '0' || c > '9') && c != '-' {
+			return false
+		}
+	}
+	return true
+}
 
 // writeSignInPage writes the page that opens link, which checkLink has
 // accepted, to a new file in dir with mode 0600, and returns its path. It

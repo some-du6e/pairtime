@@ -61,6 +61,20 @@ function sums(at: string, t: Tally): string[] {
 }
 
 /**
+ * Every project of a day whose agent time doesn't fit. A project's
+ * agent_only_s are seconds its turns ran that another project credited or
+ * nothing credited (SM 6.3), so they are at most the other projects' credit
+ * and the day's uncredited seconds together.
+ */
+function agentTimeFits(d: Day): string[] {
+	const uncredited = d.projects.reduce((a, p) => a + total(p.uncredited), 0);
+	const credited = d.projects.reduce((a, p) => a + (p.credited_s ?? 0), 0);
+	return d.projects
+		.filter((p) => p.agent_only_s > credited - (p.credited_s ?? 0) + uncredited)
+		.map((p) => `${d.date} ${p.project}: agent_only_s ${p.agent_only_s} is more than the other projects' credit and the day's uncredited seconds`);
+}
+
+/**
  * Every way a day breaks SM 6.3's afternoon: 207 minutes credited, 93 of
  * the projects' agent time, and 33 uncredited, 4 of them X.agent_only, in
  * the 240 minutes from 13:00 to 17:00. The agents ran while Sam's credited
@@ -108,7 +122,7 @@ function hidden(at: string, value: Record<string, unknown>, fields: readonly str
 }
 
 describe("the fake agent's answers keep to the spec", () => {
-	const cases: { name: string; value: () => unknown; schema: string; tallies?: () => [string, Tally][] }[] = [
+	const cases: { name: string; value: () => unknown; schema: string; tallies?: () => [string, Tally][]; fits?: () => string[] }[] = [
 		{ name: 'GET /v1/status is a Status', value: status, schema: 'Status' },
 		{
 			name: 'GET /v1/status with focus unknown on GNOME is a Status',
@@ -125,6 +139,12 @@ describe("the fake agent's answers keep to the spec", () => {
 			value: () => dayReply(date),
 			schema: 'Day',
 			tallies: () => dayReply(date).projects.map((p): [string, Tally] => [`${date} ${p.project}`, p]),
+		})),
+		...fixtureDates.map((date) => ({
+			name: `GET /v1/days/${date}: each project's agent time fits in another project's credit and the day's uncredited time`,
+			value: () => dayReply(date),
+			schema: 'Day',
+			fits: () => agentTimeFits(dayReply(date)),
 		})),
 		...fixtureDates.map((date) => ({
 			name: `GET /v1/days/${date} with display.shadow on is a Day whose sums hold`,
@@ -166,6 +186,7 @@ describe("the fake agent's answers keep to the spec", () => {
 			for (const [at, t] of c.tallies?.() ?? []) {
 				expect(sums(at, t)).toEqual([]);
 			}
+			expect(c.fits?.() ?? []).toEqual([]);
 		});
 	}
 });
@@ -293,6 +314,18 @@ describe('the checks can fail', () => {
 				return p ? hidden('portfolio', { ...p, uncredited: { ...p.uncredited, 'X.absent': 900 } }, shadowHides) : [];
 			},
 			want: 'has the uncredited code X.absent',
+		},
+		{
+			name: "a day with one project whose agent time nothing holds is caught, as nothing else credited it",
+			problems: () => {
+				const d = dayReply('2026-11-10');
+				const p = d.projects[0];
+				if (p) {
+					p.uncredited = { 'X.same_error': 120 };
+				}
+				return agentTimeFits(d);
+			},
+			want: 'p_portfolio: agent_only_s 3000 is more than',
 		},
 		{
 			name: "a shadow day that keeps X.agent_only is caught, since with agent_only_s it says how much another project credited",

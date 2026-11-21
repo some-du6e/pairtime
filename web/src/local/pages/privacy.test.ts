@@ -12,6 +12,7 @@ import { describe, expect, test } from 'vitest';
 import type { Mode } from '../api.ts';
 import { inboxKeepDays, keptText } from '../retention.ts';
 import Privacy from './Privacy.svelte';
+import { rules } from '../../../tests/support/copy-rules.ts';
 
 /** The text a page shows, without tags, comments or entities. */
 function text(html: string): string {
@@ -69,16 +70,6 @@ function keepDays(): number {
 	return found[0] ?? 0;
 }
 
-// internal/coach/text's scolding words (text_test.go): words that would
-// make a view nag, shame or set a target, matched as whole words in any
-// case, with a word right after a slash taken as a command's name.
-const scolding =
-	/(?:^|[^\w\/])(streaks?|don't break|keep it up|los(?:e|es|ing|t)|miss(?:ed|es|ing)?|behind|lazy|wast(?:e|ed|es|ing)|only counted|should|must|have to|need to|fail(?:ed|s|ing)?|goals?|targets?|ratios?|uncredited|not counted|doesn't count)\b/gi;
-
-// "%" and "!" turn time into a ratio or a cheer; the rest are the en dash,
-// the em dash and the curly quotes, which pairtime's copy doesn't use.
-const marks = ['%', '!', ...[0x2013, 0x2014, 0x2018, 0x2019, 0x201c, 0x201d].map((c) => String.fromCharCode(c))];
-
 describe('Privacy', () => {
 	const page = (mode: Mode = 'local') => render(Privacy, { props: { mode } }).body;
 	const cases: { name: string; check: (html: string) => void }[] = [
@@ -108,6 +99,10 @@ describe('Privacy', () => {
 			},
 		},
 		{
+			name: "the table says deleting each kind on time comes with a later version too, since this one has no retention sweep yet (WP-LG6)",
+			check: (html) => expect(text(html)).toContain('Some of these, and deleting each on time, come with a later version of pairtime.'),
+		},
+		{
 			name: "the prompt similarity sketches (MinHash) are on the list, as in DESIGN 4.4's 90-day row",
 			check: (html) => expect(rows(html).filter((r) => r.data.includes('MinHash'))).toHaveLength(1),
 		},
@@ -116,7 +111,7 @@ describe('Privacy', () => {
 			check: (html) => {
 				const inbox = rows(html).at(-1);
 				expect(inbox?.id).toBe('device.inbox');
-				expect(inbox?.data).toContain('your prompts included');
+				expect(inbox?.data).toContain('your prompts, its replies, the commands it ran with their output, and the files it edited');
 				expect(inbox?.data).toContain('plain text, not encrypted');
 				expect(inbox?.kept).toContain('Until the agent has read it');
 			},
@@ -143,7 +138,7 @@ describe('Privacy', () => {
 			name: 'Who can read it says the inbox is the one place this version keeps prompt text, and that a program running as you can read it',
 			check: (html) => {
 				const t = text(html);
-				expect(t).toContain('This version of pairtime keeps the text of your prompts in one place only: the inbox');
+				expect(t).toContain('This version of pairtime keeps the text of your prompts, and what your AI tool sent with them, in one place only: the inbox');
 				expect(t).toContain('so can any program running as you');
 				expect(t).toContain('but not from a program running as you');
 			},
@@ -157,11 +152,9 @@ describe('Privacy', () => {
 			name: "its words keep the CLI's rules: nothing scolds, sets a target or counts a streak, and no dash or curly quote",
 			check: (html) => {
 				for (const s of sentences(html)) {
-					expect(s.match(scolding) ?? [], s).toEqual([]);
-					expect(
-						marks.filter((c) => s.includes(c)),
-						s,
-					).toEqual([]);
+					for (const r of rules) {
+						expect(r.breaks(s), `${r.name}: ${s}`).toEqual([]);
+					}
 				}
 			},
 		},

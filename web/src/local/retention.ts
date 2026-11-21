@@ -16,9 +16,11 @@
 // everyone, and the inbox's period comes from the agent's code rather
 // than from that table: a hook call made while the agent wasn't running,
 // or one it didn't take within ipc.HookTimeout, waits in inbox/ as plain
-// text, prompt included, until a drain has read it, and a file of them
-// that drains can't read is set aside and deleted inbox.KeepDays later
-// (internal/agent/hookpath, internal/agent/inbox).
+// text until a drain has read it, and a file of them that drains can't
+// read is set aside and deleted inbox.KeepDays later
+// (internal/agent/hookpath, internal/agent/inbox). A spooled call is the
+// hook's whole input: a prompt, the agent's last reply in its Stop, and in
+// a tool's call the command with its output, or the file it edited.
 
 import retention from '../../../docs/retention.json';
 
@@ -91,7 +93,7 @@ export const keptOnDevice: readonly KeptRow[] = [
 		.map((e) => ({ id: e.id, data: e.data, kept: keptText(e, retention.spot_check_window) })),
 	{
 		id: 'device.inbox',
-		data: "The inbox: what your AI tool sent pairtime while the agent wasn't running or didn't answer in time, your prompts included. It's plain text, not encrypted",
+		data: "The inbox: what your AI tool sent pairtime while the agent wasn't running or didn't answer in time. That can be your prompts, its replies, the commands it ran with their output, and the files it edited. It's plain text, not encrypted",
 		kept: `Until the agent has read it. If the agent can't read a file there, it sets the file aside and deletes it ${days(inboxKeepDays)} later`,
 	},
 ];

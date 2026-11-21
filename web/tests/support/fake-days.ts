@@ -7,8 +7,9 @@
 // project's agent time (93 minutes) and the 33 uncredited minutes, a
 // little more for the last 30 days, and a last work session. A project's
 // agent time is SM 5.3's agent_only_s, the seconds its turns ran that it
-// didn't credit; most of it another project credited (SM 6.3), and only
-// the small part nothing credited is X.agent_only. Thursday has a Claude
+// didn't credit. On SM 6.3's afternoon most of it another project credited,
+// and only the small part nothing credited is X.agent_only; on a day with
+// one project nothing else credited it, so all of it is uncredited. Thursday has a Claude
 // session with no time of its own, which agent_only_by_harness lists at
 // 0, so its reading still says Claude's name, and minutes past two hours
 // without progress, some still on hold. While display.shadow is on the
@@ -91,7 +92,9 @@ const days: Record<string, Day> = {
 			byEvidence: { A: 1500 },
 			byKind: { hand_edit: 900, testing: 600 },
 			agents: { cursor: 600 },
-			agentOnly: 60,
+			// The day's only project, so nothing else credited Cursor's
+			// seconds: all 600 are uncredited.
+			agentOnly: 600,
 		},
 	]),
 	'2026-11-10': day('2026-11-10', [
@@ -100,7 +103,9 @@ const days: Record<string, Day> = {
 			byEvidence: { A: 2400 },
 			byKind: { prompting: 1500, reading_output: 900 },
 			agents: { claude_code: 3000 },
-			agentOnly: 120,
+			// The day's only project: Claude's 3,000 s are all uncredited,
+			// 120 of them while the same error came back.
+			agentOnly: 2880,
 			other: { 'X.same_error': 120 },
 		},
 	]),
@@ -110,7 +115,9 @@ const days: Record<string, Day> = {
 			byEvidence: { A: 1800 },
 			byKind: { prompting: 1200, reading_output: 600 },
 			agents: { claude_code: 2400 },
-			agentOnly: 60,
+			// The day's only project: Claude's 2,400 s are all uncredited,
+			// 600 of them while you were away.
+			agentOnly: 1800,
 			other: { 'X.absent': 600 },
 		},
 	]),
@@ -135,7 +142,10 @@ const days: Record<string, Day> = {
 			agentOnly: 60,
 			// Past two hours without progress: 150 s the half rate didn't
 			// credit, 90 of them in minutes still provisional, which progress
-			// within PROGRESS_RESTORE_S can still bring back (SM 4.3).
+			// within PROGRESS_RESTORE_S can still bring back (SM 4.3). This
+			// bends SM 4.3, so that a page shows the split: Friday credits
+			// homework-helper at full weight, which takes progress, and an
+			// agent that applies the rule would have restored these by then.
 			other: { 'X.noprog': 150 },
 			onHold: 90,
 		},

@@ -48,6 +48,7 @@ func TestDashboard(t *testing.T) {
 		opened  []string
 		started int
 		asked   func() []string // what the agent was asked, once one listens
+		pages   string          // where pageDir puts the page; "" is the data directory
 	}
 	tests := []struct {
 		name     string
@@ -56,6 +57,7 @@ func TestDashboard(t *testing.T) {
 		start    func(t *testing.T, w *world) error // nil: the agent can't be started
 		open     error                              // what opening the page returns
 		ask      time.Duration                      // how long each question may take; 0 is 2 s
+		restart  time.Duration                      // how long before a start is tried again; 0 is never
 		wantCode int
 		check    func(t *testing.T, w *world, stdout, stderr string)
 	}{
@@ -237,6 +239,49 @@ func TestDashboard(t *testing.T) {
 				}
 			},
 		},
+		{
+			name: "a started agent that exits at once, as one does while a stopping agent holds the lock, is started again",
+			start: func(t *testing.T, w *world) error {
+				if w.started == 2 {
+					w.h.agent(linkAnswer(good))
+				}
+				return nil
+			},
+			restart: 200 * time.Millisecond,
+			check: func(t *testing.T, w *world, stdout, stderr string) {
+				if w.started != 2 || len(w.opened) != 1 {
+					t.Errorf("started %d agents and opened %v, want 2 and the page", w.started, w.opened)
+				}
+			},
+		},
+		{
+			name: "a second start that is refused says why and exits 1",
+			start: func(t *testing.T, w *world) error {
+				if w.started == 2 {
+					return errNotTheUsers
+				}
+				return nil
+			},
+			restart:  200 * time.Millisecond,
+			wantCode: 1,
+			check: func(t *testing.T, w *world, stdout, stderr string) {
+				if !strings.Contains(stderr, "won't start it from here") || len(w.opened) != 0 {
+					t.Errorf("stderr %q, opened %v", stderr, w.opened)
+				}
+			},
+		},
+		{
+			name: "the page goes in the folder pageDir names, and the data directory keeps none",
+			setup: func(t *testing.T, w *world) {
+				w.h.agent(linkAnswer(good))
+				w.pages = t.TempDir()
+			},
+			check: func(t *testing.T, w *world, stdout, stderr string) {
+				if len(w.opened) != 1 || filepath.Dir(w.opened[0]) != w.pages || len(signInPages(t, w.h.dir)) != 0 {
+					t.Errorf("opened %v, want a page in %s and none in %s", w.opened, w.pages, w.h.dir)
+				}
+			},
+		},
 		{name: "an argument is a usage error", args: []string{"today"}, wantCode: 2},
 	}
 	for _, tt := range tests {
@@ -248,6 +293,10 @@ func TestDashboard(t *testing.T) {
 			ask := tt.ask
 			if ask == 0 {
 				ask = 2 * time.Second
+			}
+			restart := tt.restart
+			if restart == 0 {
+				restart = time.Hour
 			}
 			deps := dashboardDeps{
 				dirs: func() (home.Dirs, error) { return w.h.dirs(), nil },
@@ -265,8 +314,15 @@ func TestDashboard(t *testing.T) {
 					w.opened = append(w.opened, p)
 					return tt.open
 				},
-				wait: time.Second,
-				ask:  ask,
+				pageDir: func(d home.Dirs) string {
+					if w.pages != "" {
+						return w.pages
+					}
+					return d.Data
+				},
+				wait:    time.Second,
+				ask:     ask,
+				restart: restart,
 			}
 			var stdout, stderr bytes.Buffer
 			if code := dashboard(tt.args, &stdout, &stderr, deps); code != tt.wantCode {

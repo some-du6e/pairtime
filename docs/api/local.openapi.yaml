@@ -186,6 +186,7 @@ paths:
                 `pairtime_session=<id>; Path=/; HttpOnly; SameSite=Strict`,
                 only for a good code. The session lasts until the agent
                 stops, or until 8 hours pass with no request that uses it.
+                The cookie has no expiry, so a browser that quits drops it.
               schema:
                 type: string
         "403":

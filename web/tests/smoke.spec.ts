@@ -231,6 +231,9 @@ test('`pairtime dashboard` opens a page only you can read, whose path holds no c
 	const opener = mkdtempSync(join(tmpdir(), 'pairtime-opener-'));
 	const said = join(opener, 'argv');
 	writeFileSync(join(opener, 'xdg-open'), `#!/bin/sh\nprintf '%s\\n' "$@" > '${said}'\n`, { mode: 0o755 });
+	// And an xdg-mime that knows no HTML handler, so the page goes in the
+	// data directory whatever browser the runner has (signInDir).
+	writeFileSync(join(opener, 'xdg-mime'), '#!/bin/sh\nexit 1\n', { mode: 0o755 });
 	const out = dashboard([], { PATH: `${opener}:${process.env.PATH ?? ''}` });
 	expect(out).toContain('Opening your dashboard in your browser.');
 	const argv = readFileSync(said, 'utf8').trim().split('\n');

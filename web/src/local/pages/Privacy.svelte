@@ -35,8 +35,8 @@
 <section class="pt-card wide" aria-labelledby="kept-title" data-testid="kept">
 	<h2 id="kept-title">What pairtime keeps on this computer</h2>
 	<p>
-		Some of these come with a later version of pairtime. Who can read it, below, says what this one keeps of your
-		prompts.
+		Some of these, and deleting each on time, come with a later version of pairtime. Who can read it, below, says what
+		this one keeps of your prompts.
 	</p>
 	<table>
 		<thead>
@@ -69,8 +69,8 @@
 <section class="pt-card" aria-labelledby="who-title" data-testid="who">
 	<h2 id="who-title">Who can read it</h2>
 	<p>
-		This version of pairtime keeps the text of your prompts in one place only: the inbox, until the agent reads it, as
-		the table above says. The inbox is plain text, not encrypted. It's in a folder that other people's accounts on this
+		This version of pairtime keeps the text of your prompts, and what your AI tool sent with them, in one place only:
+		the inbox, until the agent reads it, as the table above says. The inbox is plain text, not encrypted. It's in a folder that other people's accounts on this
 		computer can't open, but an administrator can, and so can any program running as you. A backup of your home folder
 		can copy it as it is.
 	</p>
