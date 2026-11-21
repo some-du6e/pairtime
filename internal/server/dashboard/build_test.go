@@ -103,7 +103,7 @@ func TestBuild(t *testing.T) {
 			},
 		},
 		{
-			name: "projects go by the owner's time over the month, then the agent's, then their keys",
+			name: "projects go by the owner's time over the month, then the agent's, then their ids",
 			rows: []Row{
 				you("2026-11-01", "p-small", "prompting", "A", 60),
 				you("2026-11-20", "p-big", "prompting", "A", 600),
