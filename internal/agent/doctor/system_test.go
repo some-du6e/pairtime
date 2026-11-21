@@ -32,13 +32,13 @@ func TestSystem(t *testing.T) {
 				t.Errorf("OSBuild() = %q names the computer, %q", b, host)
 			}
 		}},
-		{"the disk of a temporary folder spins, doesn't, or the OS doesn't say", func(t *testing.T) {
+		{"the disk of a temporary folder spins, doesn't, or the OS doesn't say, and on macOS pairtime doesn't ask", func(t *testing.T) {
 			got := DiskKind(t.TempDir())
-			if !slices.Contains([]string{"ssd", "hdd", "unknown"}, got) {
-				t.Errorf("DiskKind = %q", got)
+			if !slices.Contains([]string{"ssd", "hdd", "unknown"}, got) && !(runtime.GOOS == "darwin" && got == "unread") {
+				t.Errorf("DiskKind = %q on %s", got, runtime.GOOS)
 			}
-			if runtime.GOOS == "darwin" && got != "unknown" {
-				t.Errorf("DiskKind = %q on macOS, which pairtime can't ask yet", got)
+			if runtime.GOOS == "darwin" && got != "unread" {
+				t.Errorf("DiskKind = %q on macOS, which pairtime doesn't ask yet", got)
 			}
 		}},
 		{"a test binary has the signature its linker gives it: none on Windows and Intel Macs, ad hoc on Apple silicon", func(t *testing.T) {

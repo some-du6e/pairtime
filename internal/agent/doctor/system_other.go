@@ -9,5 +9,5 @@ import "runtime"
 // OSBuild names the OS alone, on the OSes pairtime doesn't ship for.
 func OSBuild() string { return runtime.GOOS }
 
-// DiskKind is "unknown" on the OSes pairtime doesn't ship for.
-func DiskKind(string) string { return "unknown" }
+// DiskKind is "unread" on the OSes pairtime doesn't ship for.
+func DiskKind(string) string { return "unread" }

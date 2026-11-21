@@ -27,8 +27,9 @@ type Hooks struct {
 	// ReadError says why the settings couldn't be read.
 	ReadError string
 	// Events are the events whose hooks run pairtime, Missing the ones
-	// pairtime installs that are gone, and Exes the binaries they run.
-	Events, Missing, Exes []string
+	// pairtime installs that are gone, Stale the ones whose hook runs with
+	// other arguments than install writes, and Exes the binaries they run.
+	Events, Missing, Stale, Exes []string
 	// Disabled is set when the settings turn every hook off.
 	Disabled bool
 	// Trips are the times of warm test calls of the hook Exes[0] runs, from
@@ -94,6 +95,11 @@ func hookChecks(h Hooks) []Check {
 		}
 		c.Text += fmt.Sprintf("; %d of pairtime's hooks %s missing from %s (%s), so pairtime misses those events. Run pairtime install to put them back",
 			len(h.Missing), are, settings, strings.Join(h.Missing, ", "))
+	}
+	if len(h.Stale) > 0 && c.Result != Fail {
+		c.Result = Warn
+		c.Text += fmt.Sprintf("; the hooks for %s don't run with the arguments install writes, so each of their calls counts as a parse failure. Run pairtime install to write them again",
+			strings.Join(h.Stale, ", "))
 	}
 	if len(h.Exes) > 1 {
 		if c.Result == OK {

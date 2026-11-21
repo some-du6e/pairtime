@@ -55,6 +55,7 @@ func TestReadClaudeHooks(t *testing.T) {
 		write        func(t *testing.T, env Env)
 		wantEvents   []string
 		wantMissing  []string
+		wantStale    []string
 		wantExes     []string
 		wantDisabled bool
 		wantErr      string
@@ -111,14 +112,15 @@ func TestReadClaudeHooks(t *testing.T) {
 			wantExes:    []string{exe, "/opt/pairtime"},
 		},
 		{
-			name: "a pairtime hook that lost its --event records nothing, so its event is missing though its binary is named",
+			name: "a pairtime hook that lost its --event still runs, so its event isn't missing, but it is stale",
 			write: func(t *testing.T, env Env) {
 				b := []byte(`{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"` + exe + `","args":["hook","--harness","claude_code","--event","SessionStart"]}]}],` +
 					`"UserPromptSubmit":[{"hooks":[{"type":"command","command":"` + exe + `","args":["hook","--harness","claude_code"]}]}]}}`)
 				writeSettings(t, env, b)
 			},
-			wantEvents:  []string{"SessionStart"},
-			wantMissing: all[1:],
+			wantEvents:  all[:2],
+			wantMissing: all[2:],
+			wantStale:   []string{"UserPromptSubmit"},
 			wantExes:    []string{exe},
 		},
 		{
@@ -142,8 +144,8 @@ func TestReadClaudeHooks(t *testing.T) {
 				t.Fatal(err)
 			}
 			if got.Path != ClaudeSettings(env) || !slices.Equal(got.Events, tt.wantEvents) || !slices.Equal(got.Missing, tt.wantMissing) ||
-				!slices.Equal(got.Exes, tt.wantExes) || got.Disabled != tt.wantDisabled {
-				t.Errorf("ReadClaudeHooks = %+v, want events %q, missing %q, binaries %q, disabled %v", got, tt.wantEvents, tt.wantMissing, tt.wantExes, tt.wantDisabled)
+				!slices.Equal(got.Stale, tt.wantStale) || !slices.Equal(got.Exes, tt.wantExes) || got.Disabled != tt.wantDisabled {
+				t.Errorf("ReadClaudeHooks = %+v, want events %q, missing %q, stale %q, binaries %q, disabled %v", got, tt.wantEvents, tt.wantMissing, tt.wantStale, tt.wantExes, tt.wantDisabled)
 			}
 		})
 	}

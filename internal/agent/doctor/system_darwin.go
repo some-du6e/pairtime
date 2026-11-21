@@ -16,6 +16,6 @@ func OSBuild() string {
 	return "macOS " + ver
 }
 
-// DiskKind is "unknown" on macOS: whether a disk spins is in IOKit's
+// DiskKind is "unread" on macOS: whether a disk spins is in IOKit's
 // registry, which pairtime doesn't read yet.
-func DiskKind(string) string { return "unknown" }
+func DiskKind(string) string { return "unread" }

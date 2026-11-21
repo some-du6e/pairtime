@@ -499,6 +499,12 @@ type ClaudeHooks struct {
 	// both in the order pairtime installs them. Missing is nil when the
 	// file holds no pairtime hook at all.
 	Events, Missing []string
+	// Stale are the events whose pairtime hook runs with other arguments
+	// than install writes for it, such as one that lost its --event, in
+	// the order of Events. Claude Code still runs it, and the adapter goes
+	// by the payload's own event name, but each call counts as a parse
+	// failure.
+	Stale []string
 	// Exes are the binaries the pairtime hooks run, sorted: one, the
 	// per-user path, when install wrote them.
 	Exes []string
@@ -530,7 +536,7 @@ func ReadClaudeHooks(env Env) (ClaudeHooks, error) {
 	if hooks == nil || hooks.Kind != jsonc.Object {
 		return h, nil
 	}
-	held := map[string]bool{}
+	held, stale := map[string]bool{}, map[string]bool{}
 	for _, ev := range hooks.Items {
 		if ev.Value.Kind != jsonc.Array {
 			continue
@@ -544,11 +550,9 @@ func ReadClaudeHooks(env Env) (ClaudeHooks, error) {
 				if !isPairtimeHook(it.Value) {
 					continue
 				}
-				// A pairtime hook counts for its event only with the
-				// arguments install writes for it: one that lost its
-				// --event, or names another, records nothing there.
-				if slices.Equal(strs(it.Value.Get("args")), hookArgs(ev.Key)) {
-					held[ev.Key] = true
+				held[ev.Key] = true
+				if !slices.Equal(strs(it.Value.Get("args")), hookArgs(ev.Key)) {
+					stale[ev.Key] = true
 				}
 				if exe := it.Value.Get("command").Text; !slices.Contains(h.Exes, exe) {
 					h.Exes = append(h.Exes, exe)
@@ -574,5 +578,10 @@ func ReadClaudeHooks(env Env) (ClaudeHooks, error) {
 	}
 	slices.Sort(other)
 	h.Events = append(h.Events, other...)
+	for _, ev := range h.Events {
+		if stale[ev] {
+			h.Stale = append(h.Stale, ev)
+		}
+	}
 	return h, nil
 }

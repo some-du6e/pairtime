@@ -86,6 +86,11 @@ func TestReportText(t *testing.T) {
 			want: []string{"hook round trip: no harness has pairtime's hooks, so none was timed\n"},
 		},
 		{
+			name: "a disk on an OS pairtime doesn't ask, as macOS, is unknown, and the line says pairtime doesn't ask",
+			edit: func(r *Report) { r.Disk = "unread" },
+			want: []string{"disk:            unknown: pairtime doesn't read whether disks spin on this OS yet\n"},
+		},
+		{
 			name: "a disk whose kind the OS doesn't say is unknown",
 			edit: func(r *Report) { r.Disk = "unknown" },
 			want: []string{"disk:            unknown: the OS doesn't say for the disk pairtime's data is on\n"},

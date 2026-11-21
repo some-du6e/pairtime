@@ -173,7 +173,9 @@ func gatherFacts(dirs home.Dirs) doctor.Facts {
 		start = time.Now()
 		st, err = askStatus(dirs)
 		f.AskTook = time.Since(start)
-		if errors.Is(err, errAgentDown) {
+		// An agent that is stopping has closed its socket and still holds
+		// the lock for a moment; one that holds it after the wait is deaf.
+		if errors.Is(err, errAgentDown) && agentLocked(dirs) {
 			f.Reach = doctor.Deaf
 			return f
 		}
@@ -234,7 +236,7 @@ func readDoctorHooks() []doctor.Hooks {
 		if err != nil {
 			d.ReadError = err.Error()
 		}
-		d.Events, d.Missing, d.Exes, d.Disabled = ch.Events, ch.Missing, ch.Exes, ch.Disabled
+		d.Events, d.Missing, d.Stale, d.Exes, d.Disabled = ch.Events, ch.Missing, ch.Stale, ch.Exes, ch.Disabled
 		out = append(out, d)
 	}
 	return out

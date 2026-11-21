@@ -20,7 +20,9 @@ type Report struct {
 	// Version, Platform and GoVersion are this pairtime's.
 	Version, Platform, GoVersion string
 	// OS is the OS build (OSBuild), CPUs how many logical CPUs there are,
-	// and Disk whether the disk with pairtime's data spins (DiskKind).
+	// and Disk whether the disk with pairtime's data spins (DiskKind):
+	// ssd, hdd, unknown when the OS didn't say, or unread where pairtime
+	// doesn't ask.
 	OS   string
 	CPUs int
 	Disk string
@@ -161,6 +163,8 @@ func diskWords(kind string) string {
 		return "hdd, a disk that spins"
 	case "ssd":
 		return "ssd"
+	case "unread":
+		return "unknown: pairtime doesn't read whether disks spin on this OS yet"
 	}
 	return "unknown: the OS doesn't say for the disk pairtime's data is on"
 }
