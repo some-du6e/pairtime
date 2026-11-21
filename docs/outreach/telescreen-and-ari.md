@@ -49,7 +49,7 @@ Hi [TODO: name],
 
 I lead pairtime, an AGPL-3.0 AI time tracker we're building. So far it's a design and a code skeleton, and no program uses it yet. Ari settles hours row by row and only lets a reviewer cut, which is the shape pairtime's rows are designed for.
 
-With no change to Ari, a program could send pairtime time as one `journals[]` entry per devlog window (DESIGN 5.10):
+With no change to Ari, a program could send pairtime time as one `journals[]` entry per work session (DESIGN 5.10):
 
 ```json
 {
@@ -57,7 +57,8 @@ With no change to Ari, a program could send pairtime time as one `journals[]` en
     {
       "at": "2026-12-20T18:00:00Z",
       "seconds": 21240,
-      "markdown": "Tracked by pairtime. Evidence: https://[TODO: host]/review/submissions/sub_01HZX3K9"
+      "text": "Tracked by pairtime: 21,240 credited seconds in a work session from 2026-12-20T11:30:00Z to 2026-12-20T18:00:00Z.",
+      "markdown": "Tracked by pairtime: **5 h 54 m** credited in this work session. Evidence: https://[TODO: host]/review/submissions/sub_01HZX3K9/rows/r_1"
     }
   ]
 }
