@@ -89,6 +89,30 @@ func TestDeviceAPI(t *testing.T) {
 						t.Errorf("the page after Remove:\n%s", r.body)
 					}
 				}},
+				{name: "a second Remove of a device that never uploaded, as from a double click, gets the same redirect", run: func(t *testing.T, h *harness, b *browser, _ tokenReply, _ ed25519.PrivateKey) {
+					form := url.Values{"csrf": {b.csrf(device.DevicesPath)}, "device_id": {testDeviceID}}
+					for i := range 2 {
+						if r := b.post(device.RemovePath, form); r.status != http.StatusSeeOther || r.header.Get("Location") != device.DevicesPath {
+							t.Errorf("Remove %d answered %d, Location %q; want a 303 to %s", i+1, r.status, r.header.Get("Location"), device.DevicesPath)
+						}
+					}
+					if n := h.count(`SELECT count(*) FROM devices`); n != 0 {
+						t.Errorf("Remove left %d device rows of a device that never uploaded", n)
+					}
+				}},
+				{name: "a Remove from a page shown before the freed device id was linked to another account leaves that account's device alone", run: func(t *testing.T, h *harness, b *browser, _ tokenReply, _ ed25519.PrivateKey) {
+					form := url.Values{"csrf": {b.csrf(device.DevicesPath)}, "device_id": {testDeviceID}}
+					if r := b.post(device.RemovePath, form); r.status != http.StatusSeeOther {
+						t.Fatalf("Remove answered %d", r.status)
+					}
+					other := h.link(h.signIn(verified("ident!teen2", "U0TEEN2")), testDeviceID)
+					if r := b.post(device.RemovePath, form); r.status != http.StatusNotFound {
+						t.Errorf("removing the device again once another account linked it answered %d, want 404", r.status)
+					}
+					if r := h.call(http.MethodGet, device.MePath, other.AccessToken, nil); r.status != http.StatusOK {
+						t.Errorf("the other account's token answered %d after the first account's Remove", r.status)
+					}
+				}},
 				{name: "Remove keeps a device that uploaded as a tombstone, which the page lists as removed", run: func(t *testing.T, h *harness, b *browser, linked tokenReply, _ ed25519.PrivateKey) {
 					h.ingest(linked.AccessToken)
 					if r := b.post(device.RemovePath, url.Values{"csrf": {b.csrf(device.DevicesPath)}, "device_id": {testDeviceID}}); r.status != http.StatusSeeOther {
