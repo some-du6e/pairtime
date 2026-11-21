@@ -78,7 +78,9 @@ func TestChecks(t *testing.T) {
 			edit: func(f *Facts) { f.Agent.Signals.Idle = Signal{Unknown: "no session bus"} }, check: "idle", want: Warn,
 			wantHas: []string{"presence unknown on this desktop: no session bus"}},
 		{name: "no focus source is focus unknown on this desktop, without the level-C clause WP-SC8 adds",
-			edit: func(f *Facts) { f.Agent.Signals.Focus = Signal{Unknown: "Wayland gives other programs no focus signal"} }, check: "focus", want: Warn,
+			edit: func(f *Facts) {
+				f.Agent.Signals.Focus = Signal{Unknown: "Wayland gives other programs no focus signal"}
+			}, check: "focus", want: Warn,
 			wantHas: []string{"focus unknown on this desktop: Wayland gives other programs no focus signal"}},
 		{name: "the macOS loop off the main thread warns that locks and app switches may not arrive",
 			edit: func(f *Facts) { f.Agent.Signals.Loop = &Loop{} }, check: "macos-loop", want: Warn,
@@ -129,15 +131,23 @@ func TestChecks(t *testing.T) {
 			edit: func(*Facts) {}, check: "signing", want: OK,
 			wantHas: []string{"release v0.1.0 from commit 0123456789ab, not code-signed", "aren't code-signed yet"}},
 		{name: "a development build says so",
-			edit: func(f *Facts) { f.Signing = Signing{Verdict: NoSigning, State: "not code-signed, as Linux programs aren't"} }, check: "signing", want: OK,
+			edit: func(f *Facts) {
+				f.Signing = Signing{Verdict: NoSigning, State: "not code-signed, as Linux programs aren't"}
+			}, check: "signing", want: OK,
 			wantHas: []string{"a development build, not a release, not code-signed, as Linux programs aren't"}},
 		{name: "a binary that doesn't match its signature fails and says to download it again",
-			edit: func(f *Facts) { f.Signing.Verdict, f.Signing.State = Broken, "signed, but it doesn't match its signature" }, check: "signing", want: Fail,
+			edit: func(f *Facts) {
+				f.Signing.Verdict, f.Signing.State = Broken, "signed, but it doesn't match its signature"
+			}, check: "signing", want: Fail,
 			wantHas: []string{"changed after it was signed", "Download pairtime again"}},
 		{name: "a signature Windows doesn't trust warns",
-			edit: func(f *Facts) { f.Signing.Verdict, f.Signing.State = Untrusted, "signed, but Windows doesn't trust the signature" }, check: "signing", want: Warn},
+			edit: func(f *Facts) {
+				f.Signing.Verdict, f.Signing.State = Untrusted, "signed, but Windows doesn't trust the signature"
+			}, check: "signing", want: Warn},
 		{name: "a trusted signature is ok",
-			edit: func(f *Facts) { f.Signing.Verdict, f.Signing.State = Trusted, "signed, and Windows trusts the signature" }, check: "signing", want: OK,
+			edit: func(f *Facts) {
+				f.Signing.Verdict, f.Signing.State = Trusted, "signed, and Windows trusts the signature"
+			}, check: "signing", want: OK,
 			wantHas: []string{"Windows trusts the signature"}},
 		{name: "the device key in the OS's store is ok, naming the store",
 			edit: func(*Facts) {}, check: "keystore", want: OK, wantHas: []string{"the device key is in Windows DPAPI"}},
