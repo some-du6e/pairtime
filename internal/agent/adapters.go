@@ -166,6 +166,7 @@ type adapterHost struct {
 	// The rest belong to the worker goroutine, and to close once the
 	// worker is gone.
 	ready    bool // the adapters and the git host are made
+	down     bool // the ledger writer stopped after a failure (writerDown)
 	replayed bool // held.jsonl was read, and nothing has been held since
 	// The .replay file's calls: replayAt is how far into it they are read,
 	// replayRead says they are read to its end, replayTaken counts them,
@@ -558,7 +559,7 @@ func (h *adapterHost) finish() {
 	if g := h.git.Load(); g != nil {
 		g.close()
 	}
-	if h.ready {
+	if h.ready && !h.down {
 		h.save(true)
 	}
 }
@@ -586,6 +587,15 @@ func (h *adapterHost) step(last bool) {
 		h.donePending(false)
 		return
 	}
+	if h.writerDown() {
+		// Nothing goes to the ledger until the next start's Open recovers
+		// it: the calls that wait for their folders, then these, wait for
+		// that start in held.jsonl, in the order they came.
+		h.release(true)
+		h.keep(h.hold(batch))
+		h.donePending(false)
+		return
+	}
 	h.release(last)
 	if !h.replayed || held > 0 || h.replayRead {
 		if h.replayed = h.replayHeld(last); !h.replayed {
@@ -604,7 +614,7 @@ func (h *adapterHost) step(last bool) {
 	saveDue = saveDue || h.saveDue
 	h.saveDue = false
 	h.mu.Unlock()
-	if saveDue && !last {
+	if saveDue && !last && !h.down {
 		h.save(false)
 	}
 }
@@ -803,6 +813,7 @@ func (h *adapterHost) project(dir string) (adapters.Project, bool) {
 // hostCall is a stored hook call on its way to its adapter, as read made
 // it ready for Parse.
 type hostCall struct {
+	d   inbox.Delivery // the call as stored, which holdBack holds again
 	st  *harnessStats
 	ad  adapters.Adapter
 	raw adapters.RawRecord
@@ -827,7 +838,7 @@ func (h *adapterHost) read(d inbox.Delivery) (hostCall, bool) {
 	if err == nil {
 		ad = h.adapter(name)
 	}
-	c := hostCall{st: h.statsOf(name, ad != nil), ad: ad}
+	c := hostCall{d: d, st: h.statsOf(name, ad != nil), ad: ad}
 	switch {
 	case err != nil:
 		h.fail(c.st, "the call's body isn't a hook call's")
@@ -948,11 +959,19 @@ func (h *adapterHost) release(last bool) {
 	}
 }
 
-// parse has c's adapter parse it, and writes its records.
+// parse has c's adapter parse it, and writes its records. Once the ledger
+// writer has stopped after a failure, it holds c for the next start
+// instead, before Parse, so the adapter's memory doesn't move on past a
+// call whose records the ledger never took (writerDown). A call during
+// which the writer stopped is held too, so the records of it that went
+// before the stop come out twice, rather than the rest never. A call is
+// counted once it is done with, so a status that counts it finds its
+// records in the ledger writer.
 func (h *adapterHost) parse(c hostCall) {
-	// Counted once the call is done with, so a status that counts it finds
-	// its records in the ledger writer.
-	defer h.count(func() { c.st.Calls++ })
+	if h.writerDown() {
+		h.holdBack(c)
+		return
+	}
 	h.ignored = false
 	recs, err := c.ad.Parse(c.raw)
 	if err != nil && !errors.Is(err, adapters.ErrOtherHarness) {
@@ -960,7 +979,7 @@ func (h *adapterHost) parse(c hostCall) {
 	}
 	session := hookpath.SessionKey(h.a.sessionSecret(), c.session)
 	if h.ignored {
-		h.count(func() { c.st.Ignored++ })
+		h.count(func() { c.st.Calls++; c.st.Ignored++ })
 		// Its session is out of focus from now on: no window hosts it or
 		// shows its project, and presence hears none of its calls, so no
 		// os.focus record names it (hookTies.ignore).
@@ -972,27 +991,79 @@ func (h *adapterHost) parse(c hostCall) {
 	// A call that does count lets its session back in, as when it moved to
 	// a folder that isn't out of pairtime.
 	h.a.hooked.unignore(session)
-	due := false
+	due, refused := false, false
 	for _, r := range recs {
-		h.write(c.st, r)
+		if !h.write(c.st, r) {
+			refused = true
+		}
 		switch r.Event.Kind() {
 		case event.KindSessionStart, event.KindPromptSubmit, event.KindAgentStop:
 			due = true
 		}
 	}
-	if due {
-		// The memory these records go with, a session's start from the
-		// walk, a turn's id or a stop's scheduled prompts, goes to
-		// state.json with them (adaptersSaveEvery).
-		h.mu.Lock()
-		h.saveDue = true
-		h.mu.Unlock()
+	if refused && h.writerDown() {
+		h.holdBack(c)
+		return
 	}
+	h.mu.Lock()
+	c.st.Calls++
+	// The memory these records go with, a session's start from the walk,
+	// a turn's id or a stop's scheduled prompts, goes to state.json with
+	// them (adaptersSaveEvery).
+	h.saveDue = h.saveDue || due
+	h.mu.Unlock()
+}
+
+// writerFailedForTest, when set, makes writerDown take the ledger writer
+// for one that stopped after a failure, which outside tests only an I/O
+// error such as a failed flush does.
+var writerFailedForTest atomic.Bool
+
+// writerDown reports whether the ledger writer has stopped after a
+// failure: it refuses every record from then on, and only the next
+// start's Open recovers it (ledger.Writer.Status). Doctor hears once. The
+// adapters then hold every call for that start, and save nothing more to
+// state.json, so the next start goes on from the memory, cursors and
+// project map that match what the ledger has.
+func (h *adapterHost) writerDown() bool {
+	if h.down {
+		return true
+	}
+	h.mu.Lock()
+	w := h.writer
+	h.mu.Unlock()
+	if w == nil {
+		return false
+	}
+	failed := w.Status().Failed
+	if failed == "" && writerFailedForTest.Load() {
+		failed = "a test stopped it"
+	}
+	if failed == "" {
+		return false
+	}
+	h.down = true
+	h.a.log.Warn("hook calls wait for the next start, because the ledger writer stopped after a failure", "failed", failed)
+	h.a.setProblem("adapters.ledger", "hook calls wait in held.jsonl for the agent's next start, because the ledger writer stopped after a failure; the agent's log says why")
+	return true
+}
+
+// holdBack keeps c for the next start, once the writer is down: a call
+// held.jsonl.pending keeps goes to held.jsonl, behind the calls held
+// before it, and one read from the .replay file stays there, which this run
+// no longer deletes.
+func (h *adapterHost) holdBack(c hostCall) {
+	if c.replay {
+		h.replayStuck = true
+		return
+	}
+	h.keep(h.hold([]inbox.Delivery{c.d}))
 }
 
 // write writes one record to the ledger, with its content beside the
-// event, and tells focus and the git watcher what it says.
-func (h *adapterHost) write(st *harnessStats, r adapters.Record) {
+// event, tells focus and the git watcher what it says, and reports whether
+// the ledger took it.
+func (h *adapterHost) write(st *harnessStats, r adapters.Record) bool {
 	h.mu.Lock()
 	w := h.writer
 	h.mu.Unlock()
@@ -1006,7 +1077,7 @@ func (h *adapterHost) write(st *harnessStats, r adapters.Record) {
 			st.LastFailure = clip(fmt.Sprintf("the ledger refused a %s record: %v", ev.Kind(), err))
 		})
 		h.a.setProblem("adapters.ledger", fmt.Sprintf("the ledger refused a %s record of a hook call: %v", ev.Kind(), err))
-		return
+		return false
 	}
 	h.count(func() {
 		st.Records++
@@ -1023,6 +1094,7 @@ func (h *adapterHost) write(st *harnessStats, r adapters.Record) {
 			g.noteCommand(r, t)
 		}
 	}
+	return true
 }
 
 // statsOf returns the counts of harness name, or the ones of calls no
