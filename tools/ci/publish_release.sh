@@ -27,6 +27,11 @@
 #    it, it checks that refs/tags/VERSION on origin still names GITHUB_SHA,
 #    so a tag moved after checkout, or while the files upload, can't carry
 #    this build.
+# 4. A draft stays editable by anyone who can write to the repository, so
+#    before it publishes, it lists the draft's assets and refuses unless
+#    they are exactly the files, each at its SHA-256. It checks the
+#    publish answer the same way, with its tag, so a file swapped in the
+#    last moment, which immutable releases then keep, fails the job.
 #
 # If it stops after making the draft, the draft stays unpublished, and the
 # next run's step 1 deletes it.
@@ -55,6 +60,28 @@ prerelease=false
 case "$version" in
 *-*) prerelease=true ;;
 esac
+
+for file in "$@"; do
+	if [ ! -f "$file" ]; then
+		echo "::error::$file isn't a file to publish"
+		exit 2
+	fi
+done
+# want_assets is what the release must hold: each file's name and its
+# SHA-256 as GitHub gives an asset's digest, a line each, sorted.
+want_assets=$(for file in "$@"; do printf '%s\tsha256:%s\n' "$(basename "$file")" "$(sha256sum "$file" | cut -d ' ' -f 1)"; done | sort)
+
+# check_assets stops the script with the message WHAT unless GOT, a
+# release's assets listed as want_assets lists them, is exactly
+# want_assets. A null digest, which the API allows, matches no file.
+check_assets() {
+	local what=$1 got=$2
+	if [ "$got" != "$want_assets" ]; then
+		echo "::error::$what"
+		{ diff <(printf '%s\n' "$want_assets") <(printf '%s\n' "$got") || true; } | sed -n 's/^< /  uploaded: /p; s/^> /  found:    /p'
+		exit 1
+	fi
+}
 
 # check_tag stops the script unless refs/tags/VERSION on origin names
 # GITHUB_SHA. An annotated tag's own line names the tag object, and its ^{}
@@ -137,12 +164,23 @@ for file in "$@"; do
 	upload "$file"
 done
 
+# 4. The draft's assets, every one of them, against the files.
+got=$(gh api --paginate "$api/releases/$id/assets" | jq -r '.[] | "\(.name)\t\(.digest)"' | sort)
+check_assets "draft release $id doesn't hold exactly the files this run uploaded, each at its SHA-256, so it won't be published:" "$got"
+
 check_tag
 publish=(-F draft=false)
 if [ "$prerelease" = false ]; then
 	publish+=(-f make_latest=true)
 fi
-url=$(gh api --method PATCH "$api/releases/$id" "${publish[@]}" | jq -r 'if .draft == false then .html_url else error("release \(.id) is still a draft") end')
+published=$(gh api --method PATCH "$api/releases/$id" "${publish[@]}")
+if ! jq -e --arg v "$version" '.draft == false and .tag_name == $v' <<<"$published" >/dev/null; then
+	echo "::error::publishing draft release $id answered $(jq -c '{id, draft, tag_name}' <<<"$published"), not the published release of $version"
+	exit 1
+fi
+got=$(jq -r '.assets[] | "\(.name)\t\(.digest)"' <<<"$published" | sort)
+check_assets "release $id of $version is published, but its files aren't exactly the ones this run uploaded, and immutable releases keep them as they are. Check the release now:" "$got"
+url=$(jq -r .html_url <<<"$published")
 echo "Published $version: $url"
 if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
 	echo "Published $version: $url" >>"$GITHUB_STEP_SUMMARY"

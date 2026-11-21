@@ -4,6 +4,9 @@ package ci
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -23,12 +26,19 @@ import (
 //
 //   - releases.json holds the release list, a page a line. Without
 //     --paginate only the first page comes back.
-//   - assets.json is the draft's asset list.
+//   - assets/ID.json are the draft's assets, one object each. An upload
+//     adds one, with its file's SHA-256 as its digest, and a delete
+//     removes one. An upload of a name the draft holds fails with a 422.
+//     digest-swaps.json maps asset names to the digest the asset list
+//     gives them instead, as when a file is swapped after its upload.
 //   - upload-fails/NAME holds how many more uploads of NAME fail with a
 //     502, and upload-state and upload-size, if there, what an upload
 //     answers instead of uploaded at the file's size.
+//   - The publish answer is release 900 with the draft's assets and the
+//     version's tag, or patch-assets.json and patch-tag if there.
 const fakeGH = `#!/usr/bin/env bash
 set -euo pipefail
+shopt -s nullglob
 if [ "${1:-}" != api ]; then
 	echo "fake gh: only gh api is expected, not: gh $*" >&2
 	exit 64
@@ -49,6 +59,15 @@ while [ $# -gt 0 ]; do
 done
 echo "$method $path${logged[*]+ ${logged[*]}}" >>"$FAKE_DIR/calls"
 repo=repos/$GH_REPO
+assets() {
+	local files=("$FAKE_DIR"/assets/*.json) swaps='{}'
+	if [ -e "$FAKE_DIR/digest-swaps.json" ]; then swaps=$(cat "$FAKE_DIR/digest-swaps.json"); fi
+	if [ ${#files[@]} -eq 0 ]; then
+		echo '[]'
+	else
+		jq -s -c --argjson swaps "$swaps" 'map(. as $a | if $swaps | has($a.name) then .digest = $swaps[$a.name] else . end)' "${files[@]}"
+	fi
+}
 case "$method $path" in
 "GET $repo/releases")
 	if [ -e "$FAKE_DIR/list-fails" ]; then
@@ -61,11 +80,12 @@ case "$method $path" in
 		head -n 1 "$FAKE_DIR/releases.json"
 	fi
 	;;
+"DELETE $repo/releases/assets/"*) rm "$FAKE_DIR/assets/${path##*/}.json" ;;
 "DELETE $repo/releases/"*) ;;
 "POST $repo/releases")
 	echo "{\"id\": 900, \"draft\": true, \"upload_url\": \"https://uploads.github.com/$repo/releases/900/assets{?name,label}\"}"
 	;;
-"GET $repo/releases/900/assets") cat "$FAKE_DIR/assets.json" ;;
+"GET $repo/releases/900/assets") assets ;;
 "POST https://uploads.github.com/$repo/releases/900/assets")
 	name=$(basename "$input")
 	fails="$FAKE_DIR/upload-fails/$name"
@@ -74,13 +94,25 @@ case "$method $path" in
 		echo "gh: Bad Gateway (HTTP 502)" >&2
 		exit 1
 	fi
+	if [ "$(assets | jq --arg n "$name" 'any(.[]; .name == $n)')" = true ]; then
+		echo "gh: Validation Failed (HTTP 422)" >&2
+		exit 1
+	fi
+	id=$(cat "$FAKE_DIR/next-asset" 2>/dev/null || echo 101)
+	echo $((id + 1)) >"$FAKE_DIR/next-asset"
 	state=uploaded size=$(wc -c <"$input")
 	if [ -e "$FAKE_DIR/upload-state" ]; then state=$(cat "$FAKE_DIR/upload-state"); fi
 	if [ -e "$FAKE_DIR/upload-size" ]; then size=$(cat "$FAKE_DIR/upload-size"); fi
-	echo "{\"name\": \"$name\", \"state\": \"$state\", \"size\": $size}"
+	digest=sha256:$(sha256sum "$input" | cut -d ' ' -f 1)
+	jq -n -c --argjson id "$id" --arg name "$name" --arg state "$state" --argjson size "$size" --arg digest "$digest" \
+		'{id: $id, name: $name, state: $state, size: $size, digest: $digest}' | tee "$FAKE_DIR/assets/$id.json"
 	;;
 "PATCH $repo/releases/900")
-	echo "{\"id\": 900, \"draft\": false, \"html_url\": \"https://github.com/$GH_REPO/releases/tag/$(cat "$FAKE_DIR/version")\"}"
+	tag=$(cat "$FAKE_DIR/version")
+	if [ -e "$FAKE_DIR/patch-tag" ]; then tag=$(cat "$FAKE_DIR/patch-tag"); fi
+	if [ -e "$FAKE_DIR/patch-assets.json" ]; then list=$(cat "$FAKE_DIR/patch-assets.json"); else list=$(assets); fi
+	jq -n -c --arg tag "$tag" --argjson assets "$list" --arg url "https://github.com/$GH_REPO/releases/tag/$tag" \
+		'{id: 900, draft: false, tag_name: $tag, html_url: $url, assets: $assets}'
 	;;
 *)
 	echo "fake gh: no answer for $method $path" >&2
@@ -117,6 +149,8 @@ const (
 	otherSHA = "2222222222222222222222222222222222222222"
 	// tagObject is an annotated tag's own object id.
 	tagObject = "3333333333333333333333333333333333333333"
+	// otherDigest is the digest of a file the run didn't upload.
+	otherDigest = "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
 )
 
 // releaseFiles are the files each case publishes, in dist/, in the order
@@ -124,23 +158,43 @@ const (
 var releaseFiles = []struct{ name, body string }{
 	{"pairtime_1.2.0_linux_amd64.tar.gz", "an archive\n"},
 	{"checksums.txt", "sums\n"},
+	{"install.sh", "#!/bin/sh\necho installing\n"},
+}
+
+// releaseAsset is an asset as the REST API gives it. A nil digest is the
+// API's null.
+type releaseAsset struct {
+	ID     int     `json:"id"`
+	Name   string  `json:"name"`
+	State  string  `json:"state"`
+	Digest *string `json:"digest"`
+}
+
+// digestOf is body's SHA-256 as GitHub gives an asset's digest.
+func digestOf(body string) *string {
+	sum := sha256.Sum256([]byte(body))
+	d := "sha256:" + hex.EncodeToString(sum[:])
+	return &d
 }
 
 type publishCase struct {
 	name     string
 	version  string // v1.2.0 if empty
 	releases string // the release list's answer, a page a line
-	assets   string // the draft's asset list; [] if empty
 	// lsRemote is what git ls-remote prints; empty means the version's tag
 	// at builtSHA, unless noTag is set. lsRemote2 replaces it for the
 	// second call.
 	lsRemote, lsRemote2 string
 	noTag               bool
-	listFails           bool   // the release list answers HTTP 502
-	uploadFails         int    // how many uploads of the first file fail
-	uploadState         string // what an upload answers as its state
-	uploadSize          string // what an upload answers as its size
-	noFiles             bool   // the script gets only VERSION and NOTES
+	listFails           bool           // the release list answers HTTP 502
+	preset              []releaseAsset // assets the draft holds before any upload
+	digestSwaps         string         // digest-swaps.json, if set
+	uploadFails         int            // how many uploads of the first file fail
+	uploadState         string         // what an upload answers as its state
+	uploadSize          string         // what an upload answers as its size
+	patchAssets         []releaseAsset // the publish answer's assets, if set
+	patchTag            string         // the publish answer's tag, if set
+	noFiles             bool           // the script gets only VERSION and NOTES
 	wantCode            int
 	wantCalls           []string // FAKE_DIR is TMP in them
 	wantOut             string   // a substring of the script's output
@@ -152,9 +206,10 @@ type publishCase struct {
 // there is checked: a leftover draft, however many, is deleted and never
 // published; a published release stops it; a failed lookup never reads as
 // no release; the release it publishes is the draft it made, by id; and
-// it publishes only whole uploads of a tag that still names the commit.
+// it publishes only whole uploads, exactly the files and each at its
+// SHA-256, of a tag that still names the commit.
 func TestPublishRelease(t *testing.T) {
-	for _, tool := range []string{"bash", "jq", "awk", "stat"} {
+	for _, tool := range []string{"bash", "jq", "awk", "stat", "sha256sum", "diff"} {
 		if _, err := exec.LookPath(tool); err != nil {
 			t.Skipf("publish_release.sh needs %s: %v", tool, err)
 		}
@@ -187,6 +242,10 @@ func TestPublishRelease(t *testing.T) {
 	upload := func(name string) string {
 		return fmt.Sprintf("POST https://uploads.github.com/repos/%s/releases/900/assets -H Content-Type: application/octet-stream -f name=%s --input TMP/dist/%s", publishRepo, name, name)
 	}
+	var uploads []string
+	for _, f := range releaseFiles {
+		uploads = append(uploads, upload(f.name))
+	}
 	// made is the calls from the first tag check on, for a run that
 	// publishes.
 	made := func(v string, prerelease bool) []string {
@@ -194,7 +253,16 @@ func TestPublishRelease(t *testing.T) {
 		if prerelease {
 			last = publish
 		}
-		return []string{lsRemote(v), create(v, prerelease), upload(releaseFiles[0].name), upload(releaseFiles[1].name), lsRemote(v), last}
+		return slices.Concat([]string{lsRemote(v), create(v, prerelease)}, uploads, []string{assets, lsRemote(v), last})
+	}
+	// checked is the calls of a run that stops at the check of the draft's
+	// assets, and published those of one that gets to publish.
+	checked := slices.Concat([]string{list, lsRemote("v1.2.0"), create("v1.2.0", false)}, uploads, []string{assets})
+	published := slices.Concat(checked, []string{lsRemote("v1.2.0"), latest})
+	// asUploaded is each file's asset as the draft holds it once uploaded.
+	var asUploaded []releaseAsset
+	for i, f := range releaseFiles {
+		asUploaded = append(asUploaded, releaseAsset{ID: 101 + i, Name: f.name, State: "uploaded", Digest: digestOf(f.body)})
 	}
 	tests := []publishCase{
 		{
@@ -280,7 +348,7 @@ func TestPublishRelease(t *testing.T) {
 			releases:  `[]`,
 			lsRemote2: otherSHA + "\trefs/tags/v1.2.0\n",
 			wantCode:  1,
-			wantCalls: []string{list, lsRemote("v1.2.0"), create("v1.2.0", false), upload(releaseFiles[0].name), upload(releaseFiles[1].name), lsRemote("v1.2.0")},
+			wantCalls: slices.Concat(checked, []string{lsRemote("v1.2.0")}),
 			wantOut:   "names " + otherSHA,
 		},
 		{
@@ -294,7 +362,7 @@ func TestPublishRelease(t *testing.T) {
 			releases:    `[]`,
 			uploadState: "starter",
 			wantCode:    1,
-			wantCalls:   []string{list, lsRemote("v1.2.0"), create("v1.2.0", false), upload(releaseFiles[0].name)},
+			wantCalls:   []string{list, lsRemote("v1.2.0"), create("v1.2.0", false), upload(firstFile)},
 			wantOut:     `answered "starter 11", not "uploaded 11", so the draft stays unpublished`,
 		},
 		{
@@ -302,16 +370,16 @@ func TestPublishRelease(t *testing.T) {
 			releases:   `[]`,
 			uploadSize: "3",
 			wantCode:   1,
-			wantCalls:  []string{list, lsRemote("v1.2.0"), create("v1.2.0", false), upload(releaseFiles[0].name)},
+			wantCalls:  []string{list, lsRemote("v1.2.0"), create("v1.2.0", false), upload(firstFile)},
 			wantOut:    `answered "uploaded 3", not "uploaded 11"`,
 		},
 		{
 			name:        "a failed upload goes again, after the asset the failed try left under that name is deleted",
 			releases:    `[]`,
-			assets:      `[{"id": 30, "name": "checksums.txt.old", "state": "uploaded"}, {"id": 31, "name": "` + firstFile + `", "state": "starter"}]`,
+			preset:      []releaseAsset{{ID: 31, Name: firstFile, State: "starter"}},
 			uploadFails: 1,
 			wantCalls: slices.Concat([]string{list, lsRemote("v1.2.0"), create("v1.2.0", false), upload(firstFile), assets, delAsset(31)},
-				[]string{upload(firstFile), upload(releaseFiles[1].name), lsRemote("v1.2.0"), latest}),
+				uploads, []string{assets, lsRemote("v1.2.0"), latest}),
 			wantOut: "Uploading " + firstFile + " failed, so it goes again",
 		},
 		{
@@ -321,6 +389,49 @@ func TestPublishRelease(t *testing.T) {
 			wantCode:    1,
 			wantCalls:   []string{list, lsRemote("v1.2.0"), create("v1.2.0", false), upload(firstFile), assets, upload(firstFile), assets, upload(firstFile)},
 			wantOut:     "failed three times, so the draft stays unpublished",
+		},
+		{
+			name:        "a file swapped in the draft after its upload, whose asset's digest isn't the local file's SHA-256, is refused before the draft is published",
+			releases:    `[]`,
+			digestSwaps: `{"install.sh": "` + otherDigest + `"}`,
+			wantCode:    1,
+			wantCalls:   checked,
+			wantOut:     "  found:    install.sh\t" + otherDigest,
+		},
+		{
+			name:      "an asset in the draft that this run didn't upload is refused before the draft is published",
+			releases:  `[]`,
+			preset:    []releaseAsset{{ID: 50, Name: "pairtime_1.2.0_windows_amd64.zip", State: "uploaded", Digest: digestOf("not built here\n")}},
+			wantCode:  1,
+			wantCalls: checked,
+			wantOut:   "  found:    pairtime_1.2.0_windows_amd64.zip\t",
+		},
+		{
+			name:        "an asset the API gives a null digest is refused before the draft is published",
+			releases:    `[]`,
+			digestSwaps: `{"checksums.txt": null}`,
+			wantCode:    1,
+			wantCalls:   checked,
+			wantOut:     "  found:    checksums.txt\tnull",
+		},
+		{
+			name:     "a publish answer whose assets aren't exactly the uploaded files fails the job, though the release is out",
+			releases: `[]`,
+			patchAssets: []releaseAsset{
+				asUploaded[0], asUploaded[1],
+				{ID: asUploaded[2].ID, Name: asUploaded[2].Name, State: "uploaded", Digest: func() *string { d := otherDigest; return &d }()},
+			},
+			wantCode:  1,
+			wantCalls: published,
+			wantOut:   "release 900 of v1.2.0 is published, but its files aren't exactly the ones this run uploaded",
+		},
+		{
+			name:      "a publish answer for another tag fails the job",
+			releases:  `[]`,
+			patchTag:  "v1.2.1",
+			wantCode:  1,
+			wantCalls: published,
+			wantOut:   "not the published release of v1.2.0",
 		},
 		{
 			name:     "without a file to publish it is a usage error, and it calls nothing",
@@ -339,12 +450,8 @@ func TestPublishRelease(t *testing.T) {
 			if lsRemoteOut == "" && !tt.noTag {
 				lsRemoteOut = builtSHA + "\trefs/tags/" + version + "\n"
 			}
-			assetList := tt.assets
-			if assetList == "" {
-				assetList = "[]"
-			}
 			dir := t.TempDir()
-			for _, d := range []string{"bin", "dist", "upload-fails"} {
+			for _, d := range []string{"bin", "dist", "assets", "upload-fails"} {
 				if err := os.Mkdir(filepath.Join(dir, d), 0o755); err != nil {
 					t.Fatal(err)
 				}
@@ -353,25 +460,41 @@ func TestPublishRelease(t *testing.T) {
 				"bin/gh":        fakeGH,
 				"bin/git":       fakeGit,
 				"releases.json": tt.releases + "\n",
-				"assets.json":   assetList + "\n",
 				"ls-remote":     lsRemoteOut,
 				"version":       version,
 				"notes.md":      "manifest.json is signed with release key `0123456789abcdef`.\n",
 			}
-			if tt.lsRemote2 != "" {
-				files["ls-remote.2"] = tt.lsRemote2
+			for _, a := range tt.preset {
+				b, err := json.Marshal(a)
+				if err != nil {
+					t.Fatal(err)
+				}
+				files[fmt.Sprintf("assets/%d.json", a.ID)] = string(b) + "\n"
+			}
+			if tt.patchAssets != nil {
+				b, err := json.Marshal(tt.patchAssets)
+				if err != nil {
+					t.Fatal(err)
+				}
+				files["patch-assets.json"] = string(b)
+			}
+			optional := map[string]string{
+				"ls-remote.2":       tt.lsRemote2,
+				"digest-swaps.json": tt.digestSwaps,
+				"upload-state":      tt.uploadState,
+				"upload-size":       tt.uploadSize,
+				"patch-tag":         tt.patchTag,
+			}
+			for name, body := range optional {
+				if body != "" {
+					files[name] = body
+				}
 			}
 			if tt.listFails {
 				files["list-fails"] = ""
 			}
 			if tt.uploadFails > 0 {
 				files["upload-fails/"+firstFile] = fmt.Sprintf("%d\n", tt.uploadFails)
-			}
-			if tt.uploadState != "" {
-				files["upload-state"] = tt.uploadState
-			}
-			if tt.uploadSize != "" {
-				files["upload-size"] = tt.uploadSize
 			}
 			for _, f := range releaseFiles {
 				files["dist/"+f.name] = f.body
@@ -431,15 +554,16 @@ func TestPublishRelease(t *testing.T) {
 			if !slices.Equal(calls, tt.wantCalls) {
 				t.Errorf("calls:\n  %s\nwant:\n  %s\noutput:\n%s", strings.Join(calls, "\n  "), strings.Join(tt.wantCalls, "\n  "), out.String())
 			}
+			got, err := os.ReadFile(summary)
+			if err != nil && !errors.Is(err, fs.ErrNotExist) {
+				t.Fatal(err)
+			}
+			want := ""
 			if tt.wantCode == 0 {
-				got, err := os.ReadFile(summary)
-				if err != nil {
-					t.Fatal(err)
-				}
-				want := fmt.Sprintf("Published %s: https://github.com/%s/releases/tag/%s\n", version, publishRepo, version)
-				if string(got) != want {
-					t.Errorf("GITHUB_STEP_SUMMARY = %q, want %q", got, want)
-				}
+				want = fmt.Sprintf("Published %s: https://github.com/%s/releases/tag/%s\n", version, publishRepo, version)
+			}
+			if string(got) != want {
+				t.Errorf("GITHUB_STEP_SUMMARY = %q, want %q", got, want)
 			}
 		})
 	}
