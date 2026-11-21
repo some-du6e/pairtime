@@ -308,17 +308,6 @@ func TestDesignPeriods(t *testing.T) {
 	})
 }
 
-// devicesKeptByOff is what Jobs reports off while ingest's tables, which
-// keep removed devices' rows, don't exist yet.
-var devicesKeptByOff = []string{
-	"server.devices/devices kept_by witness_rows awaits WP-SV4",
-	"server.devices/devices kept_by minute_buckets awaits WP-SV4",
-	"server.devices/devices kept_by minute_bucket_revisions awaits WP-SV4",
-	"server.devices/devices kept_by commit_records awaits WP-SV4",
-	"server.devices/devices kept_by device_labels awaits WP-SV4",
-	"server.devices/devices kept_by ingest_replies awaits WP-SV4",
-}
-
 func TestJobs(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -327,14 +316,18 @@ func TestJobs(t *testing.T) {
 		wantOff  []string
 	}{
 		{
-			name:     "a job whose table exists runs, and every other job and guard waits for its table",
-			edit:     func(*Policy) {},
-			wantJobs: []string{"server.devices/devices"},
-			wantOff: append(slices.Clone(devicesKeptByOff),
-				"server.ip_ja4/request_origins awaits WP-SV4",
-				"server.minute_buckets/minute_buckets awaits WP-SV7", "server.minute_buckets/submission_minutes awaits WP-SB4",
-				"server.witness/witness_rows awaits WP-SV4", "server.witness/submission_batches awaits WP-SB4",
-			),
+			name: "a job runs once its table exists, and ingest's tables run without the holds WP-SB4 creates",
+			edit: func(*Policy) {},
+			wantJobs: []string{
+				"server.devices/devices+kept", "server.devices/device_labels", "server.ip_ja4/request_origins",
+				"server.minute_buckets/minute_buckets", "server.minute_buckets/minute_bucket_revisions",
+				"server.witness/witness_rows", "server.witness/ingest_replies",
+			},
+			wantOff: []string{
+				"server.minute_buckets/minute_buckets hold awaits WP-SB4", "server.minute_buckets/minute_bucket_revisions hold awaits WP-SB4",
+				"server.minute_buckets/submission_minutes awaits WP-SB4",
+				"server.witness/witness_rows hold awaits WP-SB4", "server.witness/submission_batches awaits WP-SB4",
+			},
 		},
 		{
 			name: "a job whose table exists runs, without a hold whose table doesn't",
@@ -346,11 +339,14 @@ func TestJobs(t *testing.T) {
 				}
 			},
 			wantJobs: []string{
-				"server.devices/devices", "server.ip_ja4/request_origins",
-				"server.minute_buckets/minute_buckets", "server.minute_buckets/submission_minutes",
-				"server.witness/witness_rows", "server.witness/submission_batches",
+				"server.devices/devices+kept", "server.devices/device_labels", "server.ip_ja4/request_origins",
+				"server.minute_buckets/minute_buckets", "server.minute_buckets/minute_bucket_revisions", "server.minute_buckets/submission_minutes",
+				"server.witness/witness_rows", "server.witness/submission_batches", "server.witness/ingest_replies",
 			},
-			wantOff: append(slices.Clone(devicesKeptByOff), "server.minute_buckets/minute_buckets hold awaits WP-SB4", "server.witness/witness_rows hold awaits WP-SB4"),
+			wantOff: []string{
+				"server.minute_buckets/minute_buckets hold awaits WP-SB4", "server.minute_buckets/minute_bucket_revisions hold awaits WP-SB4",
+				"server.witness/witness_rows hold awaits WP-SB4",
+			},
 		},
 		{
 			name: "a job runs with its hold and its kept_by guards once their tables exist",
@@ -368,9 +364,9 @@ func TestJobs(t *testing.T) {
 				}
 			},
 			wantJobs: []string{
-				"server.devices/devices+kept", "server.ip_ja4/request_origins",
-				"server.minute_buckets/minute_buckets+hold", "server.minute_buckets/submission_minutes",
-				"server.witness/witness_rows+hold", "server.witness/submission_batches",
+				"server.devices/devices+kept", "server.devices/device_labels", "server.ip_ja4/request_origins",
+				"server.minute_buckets/minute_buckets+hold", "server.minute_buckets/minute_bucket_revisions+hold", "server.minute_buckets/submission_minutes",
+				"server.witness/witness_rows+hold", "server.witness/submission_batches", "server.witness/ingest_replies",
 			},
 		},
 	}
@@ -584,7 +580,7 @@ func TestSweep(t *testing.T) {
 				{name: "a device removed 89 days ago stays", job: "server.devices/devices", age: 89 * day, kept: true},
 				{name: "a device that was never removed stays", job: "server.devices/devices", null: true, kept: true},
 				{name: "a device removed 90 days ago stays while ingest holds anything from it", job: "server.devices/devices", age: 90 * day, keptBy: "commit_records", kept: true},
-				{name: "a device removed a year ago stays while ingest holds its labels", job: "server.devices/devices", age: 365 * day, keptBy: "device_labels", kept: true},
+				{name: "a device removed a year ago stays while ingest holds its commit records", job: "server.devices/devices", age: 365 * day, keptBy: "commit_records", kept: true},
 				{name: "a witness row received 180 days ago is deleted", job: "server.witness/witness_rows", age: 180 * day},
 				{name: "a witness row received 179 days ago stays", job: "server.witness/witness_rows", age: 179 * day, kept: true},
 				{name: "an old witness row an open submission uses stays, and so does its hold", job: "server.witness/witness_rows", age: 400 * day, hold: &hold{open: true}, kept: true},
@@ -592,6 +588,13 @@ func TestSweep(t *testing.T) {
 				{name: "an old witness row and its hold stay a minute before the spot-check window closes", job: "server.witness/witness_rows", age: 400 * day, hold: &hold{decided: utc(2026, 7, 1, 12, 1)}, kept: true},
 				{name: "an old witness row is deleted when the window closes, 12 months after the decision, and its hold goes too", job: "server.witness/witness_rows", age: 400 * day, hold: &hold{decided: utc(2026, 7, 1, 12, 0), gone: true}},
 				{name: "a hold on a different batch keeps nothing, and stays while its submission is open", job: "server.witness/witness_rows", age: 400 * day, hold: &hold{open: true, other: true}},
+				{name: "a minute's stored revisions go 180 days after the minute", job: "server.minute_buckets/minute_bucket_revisions", age: 180 * day},
+				{name: "a minute's stored revisions stay a minute short of 180 days", job: "server.minute_buckets/minute_bucket_revisions", age: 180*day - time.Minute, kept: true},
+				{name: "an old minute's revisions stay while an open submission holds the minute", job: "server.minute_buckets/minute_bucket_revisions", age: 400 * day, hold: &hold{open: true}, kept: true},
+				{name: "a device's last upload reply goes 180 days after that upload", job: "server.witness/ingest_replies", age: 180 * day},
+				{name: "a device's last upload reply stays 179 days after that upload", job: "server.witness/ingest_replies", age: 179 * day, kept: true},
+				{name: "a device's labels go 90 days after the server last received them", job: "server.devices/device_labels", age: 90 * day},
+				{name: "a device's labels stay 89 days after the server last received them", job: "server.devices/device_labels", age: 89 * day, kept: true},
 			},
 		},
 		{
