@@ -540,26 +540,10 @@ jobs:
             echo "Built from $GITHUB_SHA by $RUN_URL. docs/spec/update-manifest.md describes the files."
           } > "$notes"
 
-          # A release that's already out is never changed. A draft left by
-          # a failed run is replaced.
-          if draft=$(gh release view "$VERSION" --json isDraft --jq .isDraft 2>/dev/null); then
-            if [ "$draft" != true ]; then
-              echo "::error::release $VERSION is already published, and this run won't replace its files"
-              exit 1
-            fi
-            gh release delete "$VERSION" --yes
-          fi
-
-          create=(--draft --verify-tag --title "$VERSION" --notes-file "$notes")
-          publish=(--draft=false)
-          # tools/release check refused build metadata, so a hyphen means a
-          # prerelease part.
-          case "$VERSION" in
-            *-*) create+=(--prerelease) ;;
-            *) publish+=(--latest) ;;
-          esac
-          # Upload into a draft and publish once every file is there, so
-          # nobody sees a release with files missing.
-          gh release create "$VERSION" "${create[@]}" "$stage"/dist/*
-          gh release edit "$VERSION" "${publish[@]}"
-          echo "Published $VERSION: $(gh release view "$VERSION" --json url --jq .url)" >> "$GITHUB_STEP_SUMMARY"
+          # By release id, never by tag name, since GitHub's lookup by tag
+          # sees no drafts and gh's sees one at most: a release that's
+          # already out is never changed, every draft a failed run left is
+          # deleted, and the draft this run uploads into is the one it
+          # publishes, once every file is there, so nobody sees a release
+          # with files missing (tools/ci/publish_release.sh).
+          bash tools/ci/publish_release.sh "$VERSION" "$notes" "$stage"/dist/*
