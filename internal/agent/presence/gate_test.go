@@ -28,6 +28,12 @@ func hook(session string, k event.Kind) func(*gate, time.Time) {
 	return func(g *gate, now time.Time) { g.hook(now, session, k) }
 }
 
+// forgot is the agent forgetting session, as it does for one whose calls
+// ran in a folder out of pairtime (Sampler.Forget).
+func forgot(session string) func(*gate, time.Time) {
+	return func(g *gate, now time.Time) { g.forget(now, session) }
+}
+
 func procs(n int) func(*gate, time.Time) {
 	return func(g *gate, _ time.Time) { g.setProcs(n) }
 }
@@ -143,6 +149,19 @@ func TestGate(t *testing.T) {
 				want(s(1200), fast),
 				want(s(1799), fast),
 				want(s(1800), 0),
+			},
+		},
+		{
+			name: "a forgotten session's running turn ends with no context left live, where its stop would keep the context 600 s",
+			steps: []step{
+				{at: 0, do: hook("s_a", event.KindAgentTool)},
+				want(s(1), fast),
+				{at: s(2), do: forgot("s_a")},
+				want(s(2), 0),
+				{at: s(3), do: hook("s_b", event.KindAgentTool)},
+				{at: s(4), do: hook("s_b", event.KindAgentStop)},
+				want(s(603), fast),
+				want(s(604), 0),
 			},
 		},
 		{

@@ -41,6 +41,7 @@ type recorder struct {
 	mu        sync.Mutex
 	secret    []byte // K_session; nil while it isn't known
 	presence  []presenceCall
+	forgets   []string // the presence keys presence was told to forget
 	claims    []int
 	refreshes int
 	stored    []inbox.Delivery
@@ -69,6 +70,11 @@ func (r *recorder) steps() hookSteps {
 			r.mu.Lock()
 			defer r.mu.Unlock()
 			r.presence = append(r.presence, presenceCall{key, k})
+		},
+		forget: func(key string) {
+			r.mu.Lock()
+			defer r.mu.Unlock()
+			r.forgets = append(r.forgets, key)
 		},
 		secret: func() []byte { return r.secret },
 		refresh: func() {
@@ -278,6 +284,21 @@ func TestHookSink(t *testing.T) {
 				}
 				if len(r.presence) != 1 || r.presence[0].kind != event.KindSessionStart {
 					t.Errorf("presence heard %+v, want only s2's start", r.presence)
+				}
+				if len(r.forgets) != 1 || !strings.HasPrefix(r.forgets[0], "s_") || r.forgets[0] == r.presence[0].key {
+					t.Errorf("presence was told to forget %q, want s1's key once", r.forgets)
+				}
+			},
+		},
+		{
+			name:    "the stop of a session kept out has presence forget the session's turn, and takes no sample of it",
+			ignored: []string{"s1"},
+			calls: func() []inbox.Delivery {
+				return []inbox.Delivery{socket("UserPromptSubmit", s1), socket("Stop", `{"session_id":"s1","hook_event_name":"Stop"}`)}
+			},
+			check: func(t *testing.T, r *recorder, _ *hookTies) {
+				if len(r.presence) != 0 || len(r.forgets) != 2 || r.forgets[0] != r.forgets[1] {
+					t.Errorf("presence heard %+v and was told to forget %q; want nothing heard and s1 forgotten at each call", r.presence, r.forgets)
 				}
 			},
 		},

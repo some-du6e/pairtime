@@ -1719,3 +1719,196 @@ func TestIgnoreCountsAtOnce(t *testing.T) {
 		})
 	}
 }
+
+// copyData copies the regular files under dir to a new folder, short enough
+// for the socket's name, as a kill -9 of the agent leaves them: the kill
+// takes the socket, the lock and the port with the process.
+func copyData(t *testing.T, dir string) string {
+	t.Helper()
+	dst, err := os.MkdirTemp("", "pk")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dst) })
+	if dst, err = filepath.EvalSymlinks(dst); err != nil {
+		t.Fatal(err)
+	}
+	err = filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(dir, p)
+		if err != nil {
+			return err
+		}
+		to := filepath.Join(dst, rel)
+		switch {
+		case d.IsDir():
+			return os.MkdirAll(to, 0o700)
+		case !d.Type().IsRegular(), rel == "agent.lock", rel == "port.json":
+			return nil
+		}
+		b, err := os.ReadFile(p)
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(to, b, 0o600)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return dst
+}
+
+// TestKillDuringSlowResolve checks DESIGN 9.7's "kill -9: no loss, no
+// duplicate" while a folder's first resolve runs, which can take minutes
+// in a big repo. The file the waiting calls came through then holds them
+// alone, the pending log for calls taken in over the socket and the
+// .replay file for calls an earlier run held, so a start from what a kill
+// left makes their records once, and none of the calls the ledger already
+// has again.
+func TestKillDuringSlowResolve(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git isn't installed")
+	}
+	const waiting = "bbbbbbbb-1111-4222-8333-444444444444" // the session in the slow folder
+	cases := []struct {
+		name string
+		held bool   // an earlier run held the calls, rather than the socket taking them in
+		file string // the file the waiting calls are left in, beside held.jsonl
+	}{
+		{"calls the socket took in wait in the pending log alone", false, pendingSuffix},
+		{"calls an earlier run held wait in the replay file alone", true, ".replay"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			capture := readCapture(t)
+			r := newHookReplay(t)
+			slow, quick := filepath.Join(r.home, "slow"), r.folder()
+			for _, dir := range []string{slow, quick} {
+				if err := os.MkdirAll(dir, 0o700); err != nil {
+					t.Fatal(err)
+				}
+				runGit(t, dir, "init", "-q")
+				// Each its own first commit, so the two repos' projects differ.
+				if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte(filepath.Base(dir)+"\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				runGit(t, dir, "add", "README.md")
+				runGit(t, dir, "commit", "-q", "-m", "first in "+filepath.Base(dir))
+			}
+			hold := holdGit(t, slow)
+			calls := []adapters.Call{
+				moved(t, capture[0], "f00031", quick, captureSession, nil),
+				moved(t, capture[0], "f00032", slow, waiting, nil),
+				moved(t, capture[1], "f00033", slow, waiting, nil),
+				moved(t, capture[1], "f00034", quick, captureSession, nil),
+			}
+			base := time.Now().UTC()
+			if c.held {
+				// As an earlier run left them in held.jsonl, stamped as they came.
+				if err := os.MkdirAll(r.dirs.Data, 0o700); err != nil {
+					t.Fatal(err)
+				}
+				earlier := newAdapterHost(&agent{dirs: r.dirs, log: slog.New(slog.DiscardHandler), problems: make(map[string]string)})
+				var held []byte
+				for _, call := range calls {
+					call.Arrived = time.Now().UTC()
+					d := adapters.DeliveryOf(event.HarnessClaudeCode, call, adapters.Walked, base)
+					d.Received.Wall = call.Arrived
+					line, err := earlier.heldLine(d)
+					if err != nil {
+						t.Fatal(err)
+					}
+					held = append(held, line...)
+				}
+				if err := os.WriteFile(r.dirs.Held(), held, 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			a := startAgent(t, r.options([]keys.Store{}))
+			if !c.held {
+				send := func(call adapters.Call) {
+					call.Arrived = time.Now().UTC()
+					r.send(t, event.HarnessClaudeCode, call, base)
+				}
+				// The first, once parsed, says the agent has its keys and its
+				// ledger, so the rest go through the pending log.
+				send(calls[0])
+				waitParsed(t, a, 1)
+				for _, call := range calls[1:] {
+					send(call)
+				}
+			}
+			waitStatus(t, a, func(s statusReply) bool {
+				return s.Adapters.Harnesses[event.HarnessClaudeCode].Calls == 2 && s.Adapters.Waiting == 2
+			})
+			// The calls' message ids, as DeliveryOf makes them.
+			id := func(dir string) []byte { return []byte(`"id":"` + strings.Repeat("0", 26) + dir + `"`) }
+			name := r.dirs.Held() + c.file
+			var left []byte
+			deadline := time.Now().Add(5 * time.Second)
+			for {
+				left, _ = os.ReadFile(name)
+				if bytes.Contains(left, id("f00032")) && bytes.Contains(left, id("f00033")) &&
+					!bytes.Contains(left, id("f00031")) && !bytes.Contains(left, id("f00034")) {
+					break
+				}
+				if time.Now().After(deadline) {
+					t.Fatalf("%s never held the waiting calls alone: %q", filepath.Base(name), left)
+				}
+				time.Sleep(50 * time.Millisecond)
+			}
+			// The kill: what the data directory holds now, before anything more.
+			killed := copyData(t, r.dirs.Data)
+			a.cancel()
+			if err := a.waitExit(t); err != nil {
+				t.Fatal(err)
+			}
+			os.Remove(hold)
+
+			// The next start, from what the kill left.
+			dirs := home.Dirs{Data: killed, Config: killed, Runtime: killed}
+			b := startAgent(t, Options{Dirs: dirs, Ports: []int{0}, KeyStores: []keys.Store{}, Log: slog.New(slog.NewTextHandler(r.logs, nil))})
+			waitParsed(t, b, 2)
+			b.cancel()
+			if err := b.waitExit(t); err != nil {
+				t.Fatal(err)
+			}
+			_, secret := deviceKeys(t, dirs, []keys.Store{})
+			k := adapters.NewKeys(secret)
+			var mine, other []event.Event // the waiting session's records, and the other's
+			for _, rec := range readLedger(t, dirs, event.SourceHook) {
+				switch rec.ev.SessionKey {
+				case k.Session(waiting):
+					mine = append(mine, rec.ev)
+				case k.Session(captureSession):
+					other = append(other, rec.ev)
+				}
+			}
+			kinds := func(evs []event.Event) []event.Kind {
+				var out []event.Kind
+				for _, e := range evs {
+					out = append(out, e.Kind())
+				}
+				return out
+			}
+			both := []event.Kind{event.KindSessionStart, event.KindPromptSubmit}
+			checks := []struct {
+				name string
+				ok   bool
+			}{
+				{"the calls parsed before the kill are in the ledger once, and not parsed again", slices.Equal(kinds(other), both)},
+				{"the calls that waited for the slow folder are parsed once by the next start, via plugin as a killed run's calls",
+					slices.Equal(kinds(mine), both) && !slices.ContainsFunc(mine, func(e event.Event) bool { return e.Via != event.ViaPlugin })},
+			}
+			for _, ch := range checks {
+				t.Run(ch.name, func(t *testing.T) {
+					if !ch.ok {
+						t.Errorf("no: waiting session %v, other %v; %s at the kill %q", kinds(mine), kinds(other), filepath.Base(name), left)
+					}
+				})
+			}
+		})
+	}
+}

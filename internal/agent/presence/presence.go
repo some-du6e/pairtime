@@ -336,6 +336,16 @@ func (s *Sampler) Hook(session string, k event.Kind) {
 	s.update(func(now time.Time) { s.g.hook(now, session, k) }, true)
 }
 
+// Forget drops the harness session with key session from what decides the
+// cadence, its running turn included, as if it had never been heard from:
+// it takes no sample and makes no context live. The agent calls it for each
+// call of a session that turned out to run in a folder out of pairtime
+// (DESIGN 8.8), whose turn would otherwise keep the fast cadence until it
+// went stale.
+func (s *Sampler) Forget(session string) {
+	s.update(func(now time.Time) { s.g.forget(now, session) }, false)
+}
+
 // HarnessProcesses reports how many harness session processes are
 // running, as the process scanner counted them. Any makes a project
 // context live.

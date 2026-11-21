@@ -151,6 +151,10 @@ func TestPrivacyNotice(t *testing.T) {
 			want: []string{"This notice isn&#39;t final.", "takes no sign-ups except test accounts for the people who run it", "The controller here is <strong>[not named yet]</strong>.", "contact <strong>[not named yet]</strong>."},
 		},
 		{
+			name: "the notice says a hook call can wait unencrypted until the agent takes it in, as the held calls do (D-held-calls-inbox-class)",
+			want: []string{"The exception is a hook call that arrives while pairtime&#39;s agent isn&#39;t running or hasn&#39;t opened its keys yet. It waits unencrypted in pairtime&#39;s folder, which only you can read, until the agent takes it in."},
+		},
+		{
 			name:    "a named controller and contact replace their placeholders and the warning",
 			opts:    Options{Controller: Controller{Name: "Hack Club", Contact: "privacy@example.org"}},
 			want:    []string{"The controller here is Hack Club.", `contact <a href="mailto:privacy@example.org">privacy@example.org</a>.`},

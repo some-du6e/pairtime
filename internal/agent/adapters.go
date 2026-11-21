@@ -159,7 +159,8 @@ type adapterHost struct {
 	// opened it: what an earlier run left that this run couldn't move to
 	// held.jsonl (recoverPending). The file is emptied only back to it, and
 	// kept for the next start.
-	pendingBase int64
+	pendingBase   int64
+	pendingOpened bool // this run has opened held.jsonl.pending, and taken pendingBase
 	// unsettled counts the calls pend wrote down that the hook sink hasn't
 	// settled yet: the file isn't emptied under them.
 	unsettled int
@@ -190,10 +191,13 @@ type adapterHost struct {
 	replayAt                int64
 	replayRead, replayStuck bool
 	replayTaken, replayOut  int
-	built                   map[event.Harness]adapters.Adapter
-	ignored                 bool // the call being parsed ran in a folder out of pairtime
-	memory                  adaptersState
-	lastSave                []byte // the adapters' memory as last saved
+	// replayKept is replayOut as it was when trimReplay last left the
+	// .replay file holding the parked calls alone.
+	replayKept int
+	built      map[event.Harness]adapters.Adapter
+	ignored    bool // the call being parsed ran in a folder out of pairtime
+	memory     adaptersState
+	lastSave   []byte // the adapters' memory as last saved
 	// parked are the calls that wait for their folder's project, in the
 	// order they came, and parkedBy counts them by session, whose later
 	// calls wait behind them (park).
@@ -430,8 +434,12 @@ func (h *adapterHost) writePendingLocked(line []byte) error {
 		// What the file holds before this run's first write, an earlier
 		// run left. recoverPending moved it and emptied the file, or it
 		// couldn't move it, or even look at it, and then it stays for the
-		// next start.
-		h.pending, h.pendingSize, h.pendingBase = f, end, max(h.pendingBase, end)
+		// next start. A later open, after keepParkedLocked, finds this
+		// run's lines there too, which aren't the earlier run's.
+		if !h.pendingOpened {
+			h.pendingBase, h.pendingOpened = max(h.pendingBase, end), true
+		}
+		h.pending, h.pendingSize = f, end
 	}
 	if h.pendingSize+int64(len(line)) > inbox.MaxSpool {
 		return errors.New("held.jsonl.pending is full")
@@ -443,17 +451,25 @@ func (h *adapterHost) writePendingLocked(line []byte) error {
 
 // donePending empties held.jsonl.pending once every call pend wrote to it
 // is parsed or held, which an empty queue, no call left to settle and none
-// waiting for its folder's project say under the lock pend writes with:
-// back to what an earlier run left in it,
-// pendingBase, which is zero but for a recovery that failed. At the last
-// step it closes the file, and deletes it when nothing is left in it.
+// waiting for its folder's project say under the lock pend writes with. It
+// empties it back to what an earlier run left in it, pendingBase, which is
+// zero but for a recovery that failed. While calls wait for their folder's
+// project and nothing else is outstanding, it keeps theirs alone
+// (keepParkedLocked). At the last step it closes the file, and deletes it
+// when nothing is left in it.
 func (h *adapterHost) donePending(last bool) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if h.pending == nil {
 		return
 	}
-	idle := len(h.queue) == 0 && h.unsettled == 0 && h.parkedLive == 0
+	settled := len(h.queue) == 0 && h.unsettled == 0
+	idle := settled && h.parkedLive == 0
+	if settled && h.parkedLive > 0 {
+		if h.keepParkedLocked(); h.pending == nil {
+			return // it couldn't open the file again; the next pend does
+		}
+	}
 	if idle && h.pendingSize > h.pendingBase {
 		if err := h.pending.Truncate(h.pendingBase); err != nil {
 			h.a.log.Warn("couldn't empty held.jsonl.pending", "err", err)
@@ -472,6 +488,78 @@ func (h *adapterHost) donePending(last bool) {
 			os.Remove(h.a.dirs.Held() + pendingSuffix)
 		}
 	}
+}
+
+// keepParkedLocked leaves held.jsonl.pending holding what an earlier run
+// left, up to pendingBase, and the lines of the calls that wait for their
+// folder's project (parked) and nothing else, once every other call in it
+// is parsed or held. A big repo's first walk can take minutes, and a kill
+// meanwhile then has the next start parse those calls alone, none that the
+// ledger has already (DESIGN 9.7: kill -9 loses nothing and duplicates
+// nothing). It rewrites the file only when it holds more than that, and
+// through inbox.Rewrite, so a kill at any moment leaves one whole file or
+// the other; the file is closed for the rename and opened again after it.
+// h.mu is held, so pend waits meanwhile, and only the worker calls it, which
+// owns parked.
+func (h *adapterHost) keepParkedLocked() {
+	want := h.pendingBase
+	ids := make(map[string]bool)
+	for _, c := range h.parked {
+		if !c.live {
+			continue
+		}
+		line, err := h.heldLine(c.d)
+		if err != nil {
+			return // can't happen: pend wrote the same line
+		}
+		want += int64(len(line))
+		ids[c.d.ID] = true
+	}
+	if h.pendingSize <= want {
+		return // nothing in it but what has to stay
+	}
+	name := h.a.dirs.Held() + pendingSuffix
+	h.pending.Close() // Windows renames nothing over an open file
+	h.pending = nil
+	base := h.pendingBase
+	if _, err := inbox.Rewrite(name, heldTmp, func(line []byte, at int64) bool {
+		if at < base {
+			return true
+		}
+		id, ok := heldID(line)
+		return ok && ids[id]
+	}); err != nil {
+		h.a.log.Warn("couldn't drop the parsed calls from held.jsonl.pending", "err", err)
+	}
+	f, err := inbox.OpenPrivate(name, os.O_WRONLY|os.O_CREATE, 0o600)
+	if err != nil {
+		// The next pend opens it again (writePendingLocked).
+		h.a.log.Warn("couldn't open held.jsonl.pending again", "err", err)
+		return
+	}
+	end, err := f.Seek(0, io.SeekEnd)
+	if err != nil {
+		f.Close()
+		h.a.log.Warn("couldn't open held.jsonl.pending again", "err", err)
+		return
+	}
+	h.pending, h.pendingSize = f, end
+}
+
+// heldID is the id of the message on a line of held.jsonl or its pending
+// log, which pend and the journal both key the call by.
+func heldID(line []byte) (string, bool) {
+	var e struct {
+		Call struct {
+			Message struct {
+				ID string `json:"id"`
+			} `json:"message"`
+		} `json:"call"`
+	}
+	if err := json.Unmarshal(line, &e); err != nil || e.Call.Message.ID == "" {
+		return "", false
+	}
+	return e.Call.Message.ID, true
 }
 
 // recoverPending moves what held.jsonl.pending holds, calls a run that was
@@ -652,11 +740,13 @@ func (h *adapterHost) step(last bool) {
 	if saveDue && !last && !h.down {
 		h.save(false)
 	}
-	// Only once the memory they made is saved does held.jsonl.pending let
-	// go of the calls, so a kill in between parses them again rather than
-	// leave the ledger ahead of state.json (adaptersSaveEvery). The last
-	// step leaves it to finish, after its own save.
+	// Only once the memory they made is saved do held.jsonl.pending and the
+	// .replay file let go of the calls, so a kill in between parses them
+	// again rather than leave the ledger ahead of state.json
+	// (adaptersSaveEvery). The last step leaves it to finish, after its
+	// own save, and parses every call that waits.
 	if !last {
+		h.trimReplay()
 		h.donePending(false)
 	}
 }
@@ -1507,7 +1597,7 @@ func (h *adapterHost) endReplay(name string) {
 			h.a.log.Warn("couldn't seal the held hook calls' records", "err", err)
 		}
 	}
-	h.replayRead, h.replayTaken = false, 0
+	h.replayRead, h.replayTaken, h.replayKept = false, 0, 0
 	if err := os.Remove(name); err != nil {
 		h.a.log.Warn("couldn't delete the held hook calls once replayed", "err", err)
 		h.a.setProblem("adapters.held", fmt.Sprintf("the hook calls held while the ledger wasn't open were parsed, but couldn't be deleted, so the next start parses them again: %v", err))
@@ -1515,6 +1605,32 @@ func (h *adapterHost) endReplay(name string) {
 		return
 	}
 	h.replayAt = 0
+}
+
+// trimReplay leaves the .replay file holding the calls read from it that
+// still wait for their folder's project, and no other, as keepParkedLocked
+// does for the pending log: the rest are parsed, and a kill now would have
+// the next start parse them a second time (DESIGN 9.7). Once read to its
+// end the file is closed, so it can be rewritten. It rewrites it only when
+// calls of it were parsed since it last looked.
+func (h *adapterHost) trimReplay() {
+	if !h.replayRead || h.replayStuck || h.replayOut == 0 || h.replayOut == h.replayKept {
+		return
+	}
+	ids := make(map[string]bool, h.replayOut)
+	for _, c := range h.parked {
+		if c.replay {
+			ids[c.d.ID] = true
+		}
+	}
+	if _, err := inbox.Rewrite(h.a.dirs.Held()+".replay", heldTmp, func(line []byte, _ int64) bool {
+		id, ok := heldID(line)
+		return ok && ids[id]
+	}); err != nil {
+		h.a.log.Warn("couldn't drop the parsed calls from the held calls' replay", "err", err)
+		return
+	}
+	h.replayKept = h.replayOut
 }
 
 // heldTmp is the prefix of the temporary file expireFile rewrites a held
@@ -1543,104 +1659,24 @@ func (h *adapterHost) expireHeld(now time.Time) {
 	}
 }
 
-// expireFile drops from name the calls taken in before cutoff, by writing
-// the rest to a new file that then takes its name, or by deleting it when
-// none is left, and returns how many it dropped. A file it can't rewrite
-// stays as it is, for the next start to try again.
+// expireFile drops from name the calls taken in before cutoff, and lines
+// that hold no call or no stamp, by rewriting it with the rest, or by
+// deleting it when none is left, and returns how many it dropped. A file it
+// can't rewrite stays as it is, for the next start to try again. The rewrite
+// closes the file before it renames the new one over it, as Windows needs
+// (inbox.Rewrite).
 func (h *adapterHost) expireFile(name string, cutoff time.Time) int {
-	f, err := inbox.OpenPrivate(name, os.O_RDONLY, 0)
+	n, err := inbox.Rewrite(name, heldTmp, func(line []byte, _ int64) bool {
+		at, ok := heldAt(line)
+		return ok && !at.Before(cutoff)
+	})
 	if err != nil {
 		if !errors.Is(err, fs.ErrNotExist) {
-			h.a.log.Warn("the held hook calls can't be read to drop the old ones", "err", err)
-		}
-		return 0
-	}
-	defer f.Close()
-	// keep reads each line of f in turn, and reports whether it is a call
-	// to keep; blank lines are neither kept nor counted.
-	var line []byte
-	keep := func(r *bufio.Reader) (blank, kept bool, err error) {
-		line, err = r.ReadBytes('\n')
-		if len(bytes.TrimSpace(line)) == 0 {
-			return true, false, err
-		}
-		at, ok := heldAt(line)
-		return false, ok && !at.Before(cutoff), err
-	}
-	old, left := 0, 0
-	for r := bufio.NewReader(f); ; {
-		blank, kept, err := keep(r)
-		switch {
-		case blank:
-		case kept:
-			left++
-		default:
-			old++
-		}
-		if err != nil {
-			if !errors.Is(err, io.EOF) {
-				h.a.log.Warn("the held hook calls can't be read to drop the old ones", "err", err)
-				return 0
-			}
-			break
-		}
-	}
-	if old == 0 {
-		return 0
-	}
-	if left == 0 {
-		f.Close()
-		if err := os.Remove(name); err != nil {
 			h.a.log.Warn("couldn't drop the old held hook calls", "err", err)
-			return 0
 		}
-		return old
-	}
-	if _, err := f.Seek(0, io.SeekStart); err != nil {
-		h.a.log.Warn("couldn't drop the old held hook calls", "err", err)
 		return 0
 	}
-	tmp, err := os.CreateTemp(filepath.Dir(name), heldTmp)
-	if err != nil {
-		h.a.log.Warn("couldn't drop the old held hook calls", "err", err)
-		return 0
-	}
-	w := bufio.NewWriter(tmp)
-	for r := bufio.NewReader(f); ; {
-		blank, kept, err := keep(r)
-		if !blank && kept {
-			// A newline before each line as well as after, as heldLine
-			// writes them.
-			w.WriteByte('\n')
-			w.Write(bytes.TrimSpace(line))
-			w.WriteByte('\n')
-		}
-		if err != nil {
-			if !errors.Is(err, io.EOF) {
-				tmp.Close()
-				os.Remove(tmp.Name())
-				h.a.log.Warn("couldn't drop the old held hook calls", "err", err)
-				return 0
-			}
-			break
-		}
-	}
-	err = w.Flush()
-	if err == nil {
-		err = tmp.Sync()
-	}
-	if cerr := tmp.Close(); err == nil {
-		err = cerr
-	}
-	if err == nil {
-		err = os.Rename(tmp.Name(), name)
-	}
-	if err != nil {
-		os.Remove(tmp.Name())
-		h.a.log.Warn("couldn't drop the old held hook calls", "err", err)
-		return 0
-	}
-	return old
+	return n
 }
 
 // heldAt is when the agent took the call on a line of held.jsonl in, by
