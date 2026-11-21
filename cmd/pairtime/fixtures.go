@@ -543,12 +543,13 @@ func (s *scrubber) localPart(text string, sp redact.Span) []redact.Span {
 // in text that has them, whatever its host: USER and PASSWORD in
 // https://USER:PASSWORD@host. A URL here is two or more slashes, among
 // backslashes when the URL sits in JSON as \/\/ or \\/\\/, then an
-// authority holding an @. The password runs to the last @, as in
-// pkg/redact's url-password rule. The user is scanned on its own, since no
-// span covers a key followed by the colon, or by the @ of a host that
-// isn't an address. The password gets url-password's span, which the rule
-// gives it only after scheme://, so a URL written in JSON or without its
-// scheme would keep it at a kept address.
+// authority holding an @. The user runs to the first colon and the
+// password from there to the last @, as in pkg/redact's url-password rule.
+// The user is scanned on its own, since no span covers a key followed by
+// the colon, or by the @ of a host that isn't an address. The password gets
+// url-password's span, which the rule gives it only after scheme://, so a
+// URL written in JSON or without its scheme would keep it at a kept
+// address.
 func (s *scrubber) urlCredentials(text string) []redact.Span {
 	var found []redact.Span
 	for i := 0; i < len(text); {
@@ -579,20 +580,34 @@ func (s *scrubber) urlCredentials(text string) []redact.Span {
 			continue
 		}
 		at += j
-		// RFC 3986 keeps [ and ] out of a user and a password. Two slashes
-		// with no scheme before them are often something else, such as the
-		// namespaced XPath //xs:element[@name].
-		if !afterScheme(text, slash) && strings.ContainsAny(text[j:at], "[]") {
-			continue
-		}
 		userEnd := at
 		if colon := strings.IndexByte(text[j:at], ':'); colon >= 0 {
 			userEnd = j + colon
-			if userEnd+1 < at {
-				found = append(found, redact.Span{Start: userEnd + 1, End: at, Type: redact.TypeSecret, Rule: "url-password"})
-			}
 		}
 		found = append(found, s.findIn(text, j, userEnd)...)
+		// A run that goes on into a query or a fragment, as in
+		// http://KEY@localhost?next=a@b, holds the host's @, or a ? or #,
+		// in the user, and no rule ends a key at those. So the part before
+		// the first of them is scanned on its own as well.
+		if k := strings.IndexAny(text[j:userEnd], "@?#"); k >= 0 {
+			found = append(found, s.findIn(text, j, j+k)...)
+		}
+		// RFC 3986 keeps [ and ] out of a user and a password, and two
+		// slashes with no scheme before them are often something else, such
+		// as the namespaced XPath //xs:element[@name]. So there a user
+		// holding one has no password, and a password ends at the last @
+		// before one, as in scrub.py.
+		pwStart, pwEnd := userEnd+1, at
+		if pwStart < pwEnd && !afterScheme(text, slash) {
+			if strings.ContainsAny(text[j:userEnd], "[]") {
+				pwEnd = pwStart
+			} else if b := strings.IndexAny(text[pwStart:pwEnd], "[]"); b >= 0 {
+				pwEnd = pwStart + max(strings.LastIndexByte(text[pwStart:pwStart+b], '@'), 0)
+			}
+		}
+		if pwStart < pwEnd {
+			found = append(found, redact.Span{Start: pwStart, End: pwEnd, Type: redact.TypeSecret, Rule: "url-password"})
+		}
 	}
 	return found
 }

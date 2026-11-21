@@ -308,6 +308,62 @@ func TestFixturesScrub(t *testing.T) {
 			wantOut:  []string{"removed 0 spans from 0 of 1 files"},
 		},
 		{
+			// The scan runs on past the host into the query or fragment,
+			// so the last @ there ends the user, and the key in it is
+			// followed by the host's @, a ? or a #. The second line's port
+			// colon starts a password, as it does in pkg/redact's rule.
+			name: "a key as a URL's user is still found when the URL runs on into a query or fragment holding an @",
+			files: map[string]string{
+				"query.txt": "http://" + stripe + "@localhost?next=a@b\n" +
+					"http://" + stripe + "@localhost:3000?email=test@example.com\n" +
+					"http://" + anthropic + "@localhost?next=a@b\n" +
+					"https://" + stripe + "#frag@x\n" +
+					"https://" + stripe + "?x=1@y\n",
+			},
+			wantCode: 0,
+			wantFiles: map[string]string{
+				"query.txt": "http://REDACTED_STRIPE_ACCESS_TOKEN@localhost?next=a@b\n" +
+					"http://REDACTED_STRIPE_ACCESS_TOKEN@localhost:REDACTED_URL_PASSWORD@example.com\n" +
+					"http://REDACTED_ANTHROPIC_API_KEY@localhost?next=a@b\n" +
+					"https://REDACTED_STRIPE_ACCESS_TOKEN#frag@x\n" +
+					"https://REDACTED_STRIPE_ACCESS_TOKEN?x=1@y\n",
+			},
+			wantOut: []string{
+				"query.txt:1:8: secret stripe-access-token, 38 bytes\n",
+				"query.txt:2:8: secret stripe-access-token, 38 bytes\n",
+				"query.txt:2:57: secret url-password, 15 bytes\n",
+				"query.txt:3:8: secret anthropic-api-key, 108 bytes\n",
+				"query.txt:4:9: secret stripe-access-token, 38 bytes\n",
+				"query.txt:5:9: secret stripe-access-token, 38 bytes\n",
+				"removed 6 spans from 1 of 1 files",
+			},
+			notOut: []string{stripe, anthropic},
+		},
+		{
+			// The bracket rule for a URL with no scheme takes only the
+			// password: its user is still scanned. An IPv6 host's brackets
+			// come after the @, so they don't count.
+			name: "a URL with no scheme has its user scanned, and its password ends at the last @ before a bracket",
+			files: map[string]string{
+				"bare.txt": "//" + stripe + ":pa[ss]@db:5432/app\n" +
+					"//app:hunter2pw@localhost?ids[]=1@x\n" +
+					"//user:pw@[::1]:8080/x\n",
+			},
+			wantCode: 0,
+			wantFiles: map[string]string{
+				"bare.txt": "//REDACTED_STRIPE_ACCESS_TOKEN:pa[ss]@db:5432/app\n" +
+					"//app:REDACTED_URL_PASSWORD@localhost?ids[]=1@x\n" +
+					"//user:REDACTED_URL_PASSWORD@[::1]:8080/x\n",
+			},
+			wantOut: []string{
+				"bare.txt:1:3: secret stripe-access-token, 38 bytes\n",
+				"bare.txt:2:7: secret url-password, 9 bytes\n",
+				"bare.txt:3:8: secret url-password, 2 bytes\n",
+				"removed 3 spans from 1 of 1 files",
+			},
+			notOut: []string{stripe, "hunter2pw"},
+		},
+		{
 			// A sandbox anonymizer disables a real address by appending a
 			// reserved label, and it still names someone
 			// (D-email-redaction-tld).

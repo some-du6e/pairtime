@@ -1854,6 +1854,24 @@ func TestScrub(t *testing.T) {
 		{"two slashes with no scheme before them aren't a URL when a bracket follows, as in namespaced XPath",
 			"tree.xpath('//xs:element[@name]', namespaces=ns)\npom.findall(\".//pom:dependency[@scope]\")\n",
 			"tree.xpath('//xs:element[@name]', namespaces=ns)\npom.findall(\".//pom:dependency[@scope]\")\n"},
+		{"a key as a URL's user is still found when the URL runs on into a query or fragment holding an @",
+			"http://" + stripe + "@localhost?next=a@b\n" +
+				"http://" + stripe + "@localhost:3000?email=test@example.com\n" +
+				"http://" + anthropic + "@localhost?next=a@b\n" +
+				"https://" + stripe + "#frag@x\n" +
+				"https://" + stripe + "?x=1@y\n",
+			"http://REDACTED_STRIPE_KEY@localhost?next=a@b\n" +
+				"http://REDACTED_STRIPE_KEY@localhost:REDACTED_URL_PASSWORD@example.com\n" +
+				"http://REDACTED_ANTHROPIC_KEY@localhost?next=a@b\n" +
+				"https://REDACTED_STRIPE_KEY#frag@x\n" +
+				"https://REDACTED_STRIPE_KEY?x=1@y\n"},
+		{"a URL with no scheme has its user scanned, and its password ends at the last @ before a bracket",
+			"//" + stripe + ":pa[ss]@db:5432/app\n" +
+				"//app:hunter2pw@localhost?ids[]=1@x\n" +
+				"//user:pw@[::1]:8080/x\n",
+			"//REDACTED_STRIPE_KEY:pa[ss]@db:5432/app\n" +
+				"//app:REDACTED_URL_PASSWORD@localhost?ids[]=1@x\n" +
+				"//user:REDACTED_URL_PASSWORD@[::1]:8080/x\n"},
 		// D-email-redaction-tld.
 		{"under a reserved top-level domain only a one-label name is kept, so a real address with .invalid appended is replaced",
 			"Owner: jane.doe@westfield.edu.invalid\nci@runner.ci.test ci@build.example.invalid\n" +
