@@ -506,6 +506,17 @@ type MinuteBucket struct {
 	// AgentRunningS is the seconds an agent turn was running, in any
 	// project.
 	AgentRunningS float64 `json:"agent_running_s"`
+	// AgentOnly holds, by project key, the seconds in the minute that a
+	// turn of the project ran and that weren't credited to the project:
+	// SM 2.6's agent-only time, which SM 6.3 reports per project and
+	// DESIGN 3.8's chess clock shows beside the owner's credited time. It
+	// is pkg/score's Credit.AgentOnly summed over the minute's slots
+	// (D-bucket-agent-only). Keys are keyed project keys, as in slots[].p.
+	// Each value is 0 to 60 seconds in steps of 0.5, and none is more than
+	// AgentRunningS, which counts the seconds a turn ran in any project.
+	// Turns of several projects can run in the same seconds, so the values
+	// can add up to more than a minute.
+	AgentOnly map[string]float64 `json:"agent_only,omitempty"`
 	// Anchors are the event ids whose windows covered credited seconds.
 	// They stay on the device (DESIGN 4.1 E-5, 6.2 D9): an event id is a
 	// UUIDv7, so it would give away the millisecond of every act, and
@@ -535,7 +546,7 @@ func (m MinuteBucket) Shareable() MinuteBucket {
 // needs Karim to add it to DESIGN 4.3 first (PLAN ground rule 10). Each
 // call returns a new slice, so no caller can change the list.
 func Tier1BucketFields() []string {
-	return []string{"v", "params", "minute", "device", "slots", "credited_s", "uncredited", "agent_running_s", "state", "witness", "rev"}
+	return []string{"v", "params", "minute", "device", "slots", "credited_s", "uncredited", "agent_running_s", "agent_only", "state", "witness", "rev"}
 }
 
 // Tier1SlotFields returns the JSON keys each of a shareable bucket's four
@@ -597,12 +608,30 @@ func (m MinuteBucket) Validate() error {
 	if m.AgentRunningS > 60 {
 		c.addf("agent_running_s", "is %v, more than a minute", m.AgentRunningS)
 	}
+	checkAgentOnly(c, m.AgentOnly, m.AgentRunningS)
 	// Anchors may be absent even with credit: Shareable clears them. Each
 	// credited CreditSlot still names its anchors on the device.
 	c.eventIDs("anchors", m.Anchors)
 	checkEnum(c, "state", bucketStates, m.State)
 	checkEnum(c, "witness", witnesses, m.Witness)
 	return c.err()
+}
+
+// checkAgentOnly checks a bucket's agent_only (D-bucket-agent-only): each
+// key is a project key, as slots[].p is, and each value is 0 to 60 seconds
+// in steps of 0.5. An agent-only second is a second a turn ran, so no
+// value is more than the bucket's agent_running_s. Keys are visited in
+// sorted order so errors come out the same way every time.
+func checkAgentOnly(c *checker, agentOnly map[string]float64, running float64) {
+	for _, p := range slices.Sorted(maps.Keys(agentOnly)) {
+		if !isKey(p) {
+			c.addf("agent_only", "has an invalid key %q; it must be a project key of 1-%d letters, digits, '_' or '-'", p, maxKeyLen)
+		}
+		field, v := "agent_only["+p+"]", agentOnly[p]
+		if c.halfSeconds(field, v, 60) && v > running+sumTolerance {
+			c.addf(field, "is %v, more than agent_running_s (%v); every agent-only second is a second a turn ran", v, running)
+		}
+	}
 }
 
 func (s BucketSlot) check(c *checker) {
