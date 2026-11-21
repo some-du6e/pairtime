@@ -315,8 +315,10 @@ components:
       type: string
       description: >
         Whether anything leaves the device (DESIGN 4.2). `local` uploads
-        nothing, and it is the only mode until signing in exists (WP-SV3).
-      enum: [local]
+        nothing. `online` uploads the tier-1 numbers of DESIGN 4.3 to the
+        server `pairtime login` linked, and `pairtime logout` goes back to
+        `local` (WP-SV3).
+      enum: [local, online]
     Job:
       type: object
       additionalProperties: false

@@ -2,8 +2,9 @@
 
 // Package redact finds the parts of a prompt or an agent message that must
 // not leave the device: the teen's known values, secrets, and personal data
-// that passes a checksum. It's the pipeline of DESIGN 7.5 step 6 and 8.7,
-// after docs/research/trust-and-privacy.md (TP) B4.
+// that passes Presidio's checks, email addresses included. It's the
+// pipeline of DESIGN 7.5 step 6 and 8.7, after
+// docs/research/trust-and-privacy.md (TP) B4.
 //
 // Redaction removes spans and never rewrites text. [Redactor.Find] returns
 // byte ranges of the original text, each with a [Type] marker, and leaves

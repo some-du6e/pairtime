@@ -56,8 +56,10 @@
 // BUCKET_TTL_S (2 h), and the window and the carry stand for the rules
 // that aren't bounded. What it misses is a browser run longer than
 // Lookback, whose lookup credit (SM 2.5) rests on a bracket before the
-// run, and a turn that runs longer than holdMaxMS and whose origin rests
-// on input it carries no record of.
+// run; a prompted turn that runs longer than holdMaxMS and whose origin
+// rests on input it carries no record of; and a turn a stop hook continued
+// without a prompt that runs longer than holdMaxMS, which the carry keeps
+// by its latest output and stop alone.
 //
 // # Its place
 //
@@ -252,7 +254,10 @@ type Loop struct {
 	lastBreak int64
 	// damage is why the last batch the ledger's files couldn't give
 	// didn't read, which apply names when it passes over that batch.
-	damage error
+	// failedTo is the last batch counted as failed while the loop had no
+	// place, so a read again doesn't count it twice.
+	damage   error
+	failedTo uint64
 	// batching is set while the loop scores the batches it found in the
 	// ledger at start. It saves its place and writes rollups once at the
 	// end, rather than at every Step.
@@ -580,14 +585,15 @@ func (l *Loop) readLedger(upTo uint64) error {
 		}
 		l.log.Warn("a ledger batch doesn't read, and the scorer goes on after it", "batch", first, "err", err)
 		l.damage = err
-		if l.cur.Batch == 0 {
+		if l.cur.Batch == 0 && first > l.failedTo {
 			// With no place, apply counts no batch before the first it
 			// takes, so the batches passed over are counted here.
-			n := uint64(1)
+			to := first
 			if resume > first {
-				n = resume - first
+				to = resume - 1
 			}
-			l.failed += n
+			l.failed += to - first + 1
+			l.failedTo = to
 		}
 		l.gapMsg = fmt.Sprintf("ledger batch %d doesn't read, so the time in it isn't counted: %v", first, err)
 		l.publish()

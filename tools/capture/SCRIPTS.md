@@ -181,7 +181,7 @@ claude -p "Reply with the number of functions in wordcount.py and nothing else."
 
 ### The VS Code run
 
-Quit VS Code completely, including any window in the background. Run `prepare.py claude_code ROOT vscode`, restart the sink on `ROOT/runs/vscode`, set the variables it printed in a terminal, and start VS Code from that terminal with `code ROOT/projects/vscode`, so the extension inherits them and uses `ROOT/claude-home` too. Open the Claude Code panel and do steps 1, 2, 3, 4, 22, 23, 7, 9, 10 and 16, with step 23 writing to `ROOT/runs/vscode/connections`. Close the panel's session from its menu for step 16.
+Quit VS Code completely, including any window in the background. Run `prepare.py claude_code ROOT vscode`, restart the sink on `ROOT/runs/vscode`, set the variables it printed in a terminal, and start VS Code from that terminal with `code ROOT/projects/vscode`, so the extension inherits them and uses `ROOT/claude-home` too. Open the Claude Code panel and do steps 1, 2, 3, 4, 22, 23, 7, 9, 10 and 16, with step 23 writing to `ROOT/runs/vscode/connections`. Close the panel's session from its menu for step 16. Then run `prepare.py claude_code ROOT desktop`, open `ROOT/projects/desktop` once in the Desktop app's Code tab, send the step 2 prompt, and write in your pull request what `ROOT/runs/desktop/hooks/*/flags` and `entrypoint` say. Don't collect or scrub that run.
 
 The Desktop app's Code tab doesn't read a terminal's variables, so it can't be pointed at `ROOT/claude-home` and would load your own instructions and plugins. Don't capture it with this kit: `collect.py` refuses any session whose transcript is outside `ROOT/claude-home`.
 
@@ -206,7 +206,7 @@ The Desktop app's Code tab doesn't read a terminal's variables, so it can't be p
 5. Read every file the scrub wrote, by eye. Look for names, paths, hostnames, anything from outside the scratch project, and prompts that aren't in this file.
 6. Copy `testdata/fixtures/PROVENANCE.template.md` to `testdata/fixtures/<harness>/<version>/<os>/PROVENANCE.md` and fill it in, with `synthetic: false`.
 7. Check it: `go run ./tools/ci/provenance testdata/fixtures`, or, without Go, push your branch and run `gh workflow run fixtures.yml --ref <branch>`.
-8. Commit only `testdata/fixtures/<harness>/**` and open a pull request. Its description names the steps you skipped.
+8. Commit only `testdata/fixtures/<harness>/**` and open a pull request. Its description names the steps you skipped and what the flags and `entrypoint` files show for each IDE or desktop run.
 9. Delete `ROOT`: the scratch project, the raw runs, the scrub reports, which hold the original values, and the harness's settings folder with the sign-in you made there. On macOS, Claude Code also keeps that sign-in in your login keychain, where Keychain Access can delete it. Move back everything `prepare.py` had you move aside: each time it runs, it prints the commands for whatever is still aside. Remove any hook entry you added outside `ROOT` (the sections below say where).
 
 ## Codex

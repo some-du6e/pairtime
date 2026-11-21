@@ -118,14 +118,24 @@ func (b Bucket) Empty() bool { return b.CreditedS == 0 && b.AgentRunningS == 0 }
 
 // MinuteBucket returns the bucket as SM 5.1's record with the witness
 // label w, the form the uploader passes through Shareable (DESIGN 4.3).
-// Backfilled credit is level C whatever the scorer computed (DESIGN 6.4,
-// 7.4), so in a backfilled minute every credited slot says C.
+// Its agent_only holds each project's agent-only seconds (decision
+// D-bucket-agent-only), which Projects keeps. Backfilled credit is level C
+// whatever the scorer computed (DESIGN 6.4, 7.4), so in a backfilled
+// minute every credited slot says C.
 func (b Bucket) MinuteBucket(w event.Witness) event.MinuteBucket {
 	m := event.MinuteBucket{
 		V: b.V, Params: b.Params, Minute: b.Minute, Device: b.Device,
 		Slots: slices.Clone(b.Slots), CreditedS: b.CreditedS, Uncredited: maps.Clone(b.Uncredited),
 		AgentRunningS: b.AgentRunningS, Anchors: slices.Clone(b.Anchors),
 		State: b.State, Witness: w, Rev: b.Rev,
+	}
+	for key, pm := range b.Projects {
+		if pm.AgentOnlyS > 0 {
+			if m.AgentOnly == nil {
+				m.AgentOnly = map[string]float64{}
+			}
+			m.AgentOnly[key] = float64(pm.AgentOnlyS)
+		}
 	}
 	if w == event.Backfilled {
 		for i := range m.Slots {

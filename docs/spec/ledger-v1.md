@@ -95,6 +95,17 @@ session key = "s" || hex(HMAC-SHA256(K_session, ascii("pairtime/v1/session/id") 
 
 `id` is the harness's own session id, as its hook payload names it (`session_id`, `sessionId` or Cursor's `conversation_id`). The key depends on the id alone, so the copies of one session's calls that two harnesses make have one key. The events of the session carry it, and `os.focus` lists it in `hosted_sessions`. `internal/agent/hookpath` has the code, and `TestSessionKey` pins a vector.
 
+The harness adapters key a session's turns, subagents and scheduled prompts under `K_session` too, each over a domain string of its own (`internal/adapters`, WP-AD2):
+
+```text
+turn key  = "t" || hex(HMAC-SHA256(K_session, ascii("pairtime/v1/session/turn")  || 0x00 || part(session) || part(id))[0:16])
+agent key = "a" || hex(HMAC-SHA256(K_session, ascii("pairtime/v1/session/agent") || 0x00 || part(session) || part(id))[0:16])
+cron key  = "c" || hex(HMAC-SHA256(K_session, ascii("pairtime/v1/session/cron")  || 0x00 || part(session) || part(prefix))[0:16])
+part(x)   = u32be(len(utf8(x))) || utf8(x)
+```
+
+`session` is the harness's own session id, `id` a turn's id (Claude Code's `prompt_id`, which its transcripts and OTel share) or a subagent's (`agent_id`), and `prefix` a scheduled prompt as a `Stop` hook lists it in `session_crons`, without the `… [+N chars]` marker Claude Code puts after a prompt it cut and, in a cut prompt, without any U+FFFD left at the end, which is what a cut through a UTF-16 surrogate pair leaves, and at most its first 1,000 code points. Claude Code cuts at 1,000 UTF-16 units, so a cut prompt with characters outside the Basic Multilingual Plane keeps fewer code points. The keys go in `turn_key`, `agent_key` and `pending_crons[].prefix_hash`. None depends on the harness, so, as with the session key, the copies of one turn that two harnesses make have one key. `TestKeys` in `internal/adapters` pins a vector for each, and `TestPendingCrons` in `internal/adapters/claudecode` pins `prefix` for cut prompts, all computed apart from the code.
+
 One `K_dev` writes one chain. The nonce (4.4) and the token salts (10.2) are keyed by `s` alone, so they stay unique only while no `s` repeats under one `K_dev`. A `K_dev` that `pairtime restore` unwraps onto a new install (DESIGN 7.11) only verifies and opens the old chain's records. The restored install writes its own chain, under its own `device_id` and a `K_dev` generated for it, from `s = 1`, and keeps the old key for reading. A second chain under the old key would repeat every nonce and salt: a body or a salt revealed from the old chain would let a reader confirm guesses of the new chain's hidden bodies, or of its removed tokens, at the same `s`.
 
 ## 4. Records
