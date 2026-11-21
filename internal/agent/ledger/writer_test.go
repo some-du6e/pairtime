@@ -592,6 +592,8 @@ func TestNoteMode(t *testing.T) {
 			[]string{"file-local", "local", "write", "sealed", "write", "file-online", "seal", "write", "seal"}, []bool{false, false, true}, []int{1, 1, 1}},
 		{"a switch with no record written in it leaves the next batch online",
 			[]string{"local", "online", "write", "seal"}, []bool{true}, []int{1}},
+		{"a switch to local-only and straight back still seals what was pending as local-only",
+			[]string{"write", "file-local", "local", "file-online", "online", "sealed"}, []bool{false}, []int{1}},
 		{"a second stretch's first record seals at once too",
 			[]string{"file-local", "local", "write", "sealed", "file-online", "online", "write", "seal", "file-local", "local", "write", "sealed"}, []bool{false, true, false}, []int{1, 1, 1}},
 	}

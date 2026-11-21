@@ -72,8 +72,12 @@ func (a *agent) startLedger() func() {
 		// the writer (adapters.go).
 		a.adaptersHost().attach(lw)
 		w = lw
-		// Before the records that waited for the writer go in, so those
-		// written in local-only mode make their batch local-only.
+		// config.toml's mode goes to the writer from here on
+		// (ledger.Writer.NoteMode). The records that waited for it,
+		// presence's queue and the hook calls the adapters held, attach on
+		// goroutines of their own and take the mode of their seal: those
+		// made in a local-only stretch while the ledger was shut can be
+		// sealed online, a gap #131 had too.
 		a.writer.Store(lw)
 		a.noteMode()
 		a.ledgerIn.Attach(lw)
