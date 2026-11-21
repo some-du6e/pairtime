@@ -9,6 +9,7 @@ import (
 	"errors"
 	"io/fs"
 	"log/slog"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -652,6 +653,20 @@ func TestPendingLog(t *testing.T) {
 		h.queue = nil
 		h.mu.Unlock()
 	}
+	// park has d wait for its folder's project, as admit does a call taken
+	// in over the socket.
+	park := func(h *adapterHost, d inbox.Delivery) {
+		h.parked = append(h.parked, hostCall{d: d, live: true})
+		h.count(func() { h.parkedN++; h.parkedLive++ })
+	}
+	// lose has h without the file open, as after a rewrite that couldn't
+	// open it again.
+	lose := func(h *adapterHost) {
+		h.mu.Lock()
+		h.pending.Close()
+		h.pending = nil
+		h.mu.Unlock()
+	}
 	cases := []struct {
 		name string
 		run  func(t *testing.T, dirs home.Dirs, pending string)
@@ -716,6 +731,102 @@ func TestPendingLog(t *testing.T) {
 			h.donePending(false)
 			if got := read(t, pending); len(got) != 0 {
 				t.Errorf("the file holds %q", got)
+			}
+		}},
+		{"a call that waits for its folder keeps the first line pend wrote of it, and its second copy's line goes with the calls that are done", func(t *testing.T, dirs home.Dirs, pending string) {
+			h := newHost(dirs)
+			waiting, done := call(t, "waiting"), call(t, "done")
+			h.pend(waiting)(true)
+			takeQueue(h)
+			park(h, waiting)
+			h.pend(waiting)(false) // a copy, as the spool's of a call the socket acked too late
+			h.pend(done)(true)
+			takeQueue(h)
+			h.donePending(false)
+			if got := read(t, pending); !bytes.Equal(got, lineOf(t, h, waiting)) {
+				t.Errorf("the file holds %q, want the waiting call's line, once", got)
+			}
+		}},
+		{"a call done before one that waits goes by a rewrite, during whose copy a call is taken in at once, and the lines then lie where pendingAt says", func(t *testing.T, dirs home.Dirs, pending string) {
+			h := newHost(dirs)
+			done, waiting, late := call(t, "done"), call(t, "waiting"), call(t, "late")
+			h.pend(done)(true)
+			h.pend(waiting)(true)
+			takeQueue(h)
+			park(h, waiting)
+			h.pend(waiting)(false) // a copy
+			h.copiedForTest = func() {
+				// A hook call that comes while the rewrite copies: its ack
+				// mustn't wait for the copy, nor for the disk to flush it.
+				acked := make(chan struct{})
+				go func() {
+					h.pend(late)(true)
+					close(acked)
+				}()
+				select {
+				case <-acked:
+				case <-time.After(10 * time.Second):
+					t.Error("a call taken in during the rewrite's copy waited for it")
+				}
+			}
+			h.donePending(false)
+			wl, ll := lineOf(t, h, waiting), lineOf(t, h, late)
+			if got := read(t, pending); !bytes.Equal(got, slices.Concat(wl, ll)) {
+				t.Errorf("the file holds %q, want the waiting call's line, once, and then the one taken in during the rewrite", got)
+			}
+			want := map[string]inbox.Span{waiting.ID: {Off: 0, Len: int64(len(wl))}, late.ID: {Off: int64(len(wl)), Len: int64(len(ll))}}
+			if !maps.Equal(h.pendingAt, want) {
+				t.Errorf("pendingAt is %v, want %v", h.pendingAt, want)
+			}
+			takeQueue(h)
+			h.donePending(false)
+			if got := read(t, pending); !bytes.Equal(got, wl) {
+				t.Errorf("once the late call is parsed too, the file holds %q, want the waiting call's line alone", got)
+			}
+		}},
+		{"the step after a rewrite that couldn't open the file again opens it, and empties it", func(t *testing.T, dirs home.Dirs, pending string) {
+			h := newHost(dirs)
+			h.pend(call(t, "one"))(true)
+			takeQueue(h)
+			lose(h)
+			h.donePending(false)
+			if got := read(t, pending); len(got) != 0 {
+				t.Errorf("the file holds %q", got)
+			}
+			if h.pending == nil {
+				t.Error("the file isn't open for pend")
+			}
+		}},
+		{"the last step after a rewrite that couldn't open the file again deletes it by name, once nothing in it is left to keep", func(t *testing.T, dirs home.Dirs, pending string) {
+			h := newHost(dirs)
+			h.pend(call(t, "one"))(true)
+			takeQueue(h)
+			lose(h)
+			h.donePending(true)
+			if _, err := os.Stat(pending); !errors.Is(err, fs.ErrNotExist) {
+				t.Errorf("the file is still there (%v)", err)
+			}
+		}},
+		{"a waiting call whose line pend couldn't write holds nothing back, and the lines of the calls that are done still go", func(t *testing.T, dirs home.Dirs, pending string) {
+			if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+				t.Skip("needs a file this user can't open, which Windows' modes and root don't give")
+			}
+			h := newHost(dirs)
+			done, waiting := call(t, "done"), call(t, "waiting")
+			h.pend(done)(true)
+			lose(h)
+			if err := os.Chmod(pending, 0); err != nil {
+				t.Fatal(err)
+			}
+			h.pend(waiting)(true) // its line isn't written
+			if err := os.Chmod(pending, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			takeQueue(h)
+			park(h, waiting)
+			h.donePending(false)
+			if got := read(t, pending); len(got) != 0 {
+				t.Errorf("the file holds %q, want nothing: the done call is parsed, and the waiting one has no line there", got)
 			}
 		}},
 		{"a start moves the calls a killed run left pending to the end of held.jsonl", func(t *testing.T, dirs home.Dirs, pending string) {
@@ -1763,10 +1874,10 @@ func copyData(t *testing.T, dir string) string {
 // TestKillDuringSlowResolve checks DESIGN 9.7's "kill -9: no loss, no
 // duplicate" while a folder's first resolve runs, which can take minutes
 // in a big repo. The file the waiting calls came through then holds them
-// alone, the pending log for calls taken in over the socket and the
-// .replay file for calls an earlier run held, so a start from what a kill
-// left makes their records once, and none of the calls the ledger already
-// has again.
+// alone, one line each, the pending log for calls taken in over the socket
+// and the .replay file for calls an earlier run held, so a start from what
+// a kill left makes their records once, and none of the calls the ledger
+// already has again.
 func TestKillDuringSlowResolve(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git isn't installed")
@@ -1777,7 +1888,7 @@ func TestKillDuringSlowResolve(t *testing.T) {
 		held bool   // an earlier run held the calls, rather than the socket taking them in
 		file string // the file the waiting calls are left in, beside held.jsonl
 	}{
-		{"calls the socket took in wait in the pending log alone", false, pendingSuffix},
+		{"calls the socket took in wait in the pending log alone, once each though one came twice", false, pendingSuffix},
 		{"calls an earlier run held wait in the replay file alone", true, ".replay"},
 	}
 	for _, c := range cases {
@@ -1839,6 +1950,10 @@ func TestKillDuringSlowResolve(t *testing.T) {
 				for _, call := range calls[1:] {
 					send(call)
 				}
+				// A second copy of a waiting call, as the spool's of one the
+				// socket acked too late: the journal has it, and pend writes
+				// its line all the same.
+				send(calls[1])
 			}
 			waitStatus(t, a, func(s statusReply) bool {
 				return s.Adapters.Harnesses[event.HarnessClaudeCode].Calls == 2 && s.Adapters.Waiting == 2
@@ -1850,12 +1965,12 @@ func TestKillDuringSlowResolve(t *testing.T) {
 			deadline := time.Now().Add(5 * time.Second)
 			for {
 				left, _ = os.ReadFile(name)
-				if bytes.Contains(left, id("f00032")) && bytes.Contains(left, id("f00033")) &&
+				if bytes.Count(left, id("f00032")) == 1 && bytes.Count(left, id("f00033")) == 1 &&
 					!bytes.Contains(left, id("f00031")) && !bytes.Contains(left, id("f00034")) {
 					break
 				}
 				if time.Now().After(deadline) {
-					t.Fatalf("%s never held the waiting calls alone: %q", filepath.Base(name), left)
+					t.Fatalf("%s never held the waiting calls alone, once each: %q", filepath.Base(name), left)
 				}
 				time.Sleep(50 * time.Millisecond)
 			}
