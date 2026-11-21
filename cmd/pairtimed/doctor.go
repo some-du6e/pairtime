@@ -68,8 +68,9 @@ const (
 
 // multipartProbeSize is the multipart check's upload: two whole parts of
 // objstore.MinPartSize and a short last one, so the probe goes the way a
-// snapshot over objstore.MaxPutSize does, which R2 otherwise first sees at
-// an unattended 03:10 months after the deploy (#133).
+// nightly snapshot past objstore.DefaultPartSize, 64 MiB, does, which R2
+// otherwise first sees at an unattended 03:10 once the database grows
+// past that (#133).
 const multipartProbeSize = 2*objstore.MinPartSize + 1<<20
 
 // multipartTimeout is the multipart check's own deadline, since 11 MiB up
@@ -691,8 +692,8 @@ func (d *doctor) checkDisk(context.Context) result {
 
 // checkMultipart uploads multipartProbeSize bytes to the snapshot bucket in
 // parts of objstore.MinPartSize, write-once, the way a snapshot past
-// objstore.MaxPutSize goes, reads its size back with HEAD, and deletes it
-// (#133).
+// objstore.DefaultPartSize goes, reads its size back with HEAD, and deletes
+// it (#133).
 func (d *doctor) checkMultipart(ctx context.Context, b *objstore.Bucket) result {
 	var r [8]byte
 	rand.Read(r[:])
@@ -709,7 +710,7 @@ func (d *doctor) checkMultipart(ctx context.Context, b *objstore.Bucket) result 
 	var res result
 	switch {
 	case err != nil:
-		res = bad("a multipart upload of %s in parts of %s, as a snapshot over %s goes, failed: %v", backup.Bytes(multipartProbeSize), backup.Bytes(objstore.MinPartSize), backup.Bytes(objstore.MaxPutSize), err)
+		res = bad("a multipart upload of %s in parts of %s, as a snapshot over %s goes, failed: %v", backup.Bytes(multipartProbeSize), backup.Bytes(objstore.MinPartSize), backup.Bytes(objstore.DefaultPartSize), err)
 	case info.Size != multipartProbeSize:
 		res = bad("a multipart upload of %d bytes reads back as %d", multipartProbeSize, info.Size)
 	default:
@@ -799,6 +800,12 @@ func (d *doctor) checkHCA(ctx context.Context) result {
 	case answer.Error == "unauthorized_client":
 		// Authenticated, and not allowed this grant: the secret is right.
 		return ok("%s; the token endpoint took the client id and secret, and this client may not use client_credentials, which sign-in doesn't need", found)
+	case answer.Error == "invalid_scope":
+		// HCA's answer to the right client id and secret: Doorkeeper checks
+		// the client before the grant's scope, and a grant that names none
+		// gets 400 invalid_scope, where a wrong secret gets 401
+		// invalid_client (the pilot's deploy, 2026-11-21).
+		return ok("%s; the token endpoint took the client id and secret, and refused the grant's scope (invalid_scope), as HCA does for a grant that names none, which sign-in doesn't need", found)
 	case answer.Error == "invalid_client":
 		return bad("%s; HCA refused the client id or secret (invalid_client): check hca.client_id and %s", found, config.HCAClientSecret)
 	default:

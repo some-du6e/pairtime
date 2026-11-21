@@ -44,6 +44,9 @@ type deployed struct {
 	keys *backup.Keys
 	// diskSpace, when set, stands in for the data disk's free space.
 	diskSpace func(string) (free, total uint64, ok bool, err error)
+	// hcaToken, when set, is HCA's token endpoint's answer to the right
+	// client id and secret; unset, it gives a token.
+	hcaToken func(w http.ResponseWriter)
 }
 
 func newDeployed(t *testing.T) *deployed {
@@ -90,6 +93,10 @@ func newDeployed(t *testing.T) *deployed {
 			if r.FormValue("grant_type") != "client_credentials" || r.FormValue("client_id") != "app-123" || r.FormValue("client_secret") != "hca-secret" || !strings.HasPrefix(r.UserAgent(), "pairtimed-doctor/") {
 				w.WriteHeader(http.StatusUnauthorized)
 				fmt.Fprint(w, `{"error":"invalid_client"}`)
+				return
+			}
+			if d.hcaToken != nil {
+				d.hcaToken(w)
 				return
 			}
 			fmt.Fprint(w, `{"access_token":"never-shown","token_type":"Bearer","expires_in":3600}`)
@@ -343,6 +350,30 @@ func TestDoctor(t *testing.T) {
 		{name: "a client secret HCA refuses fails the hca check, and the token never shows",
 			setup: func(_ *testing.T, d *deployed) { d.environ = append(d.environ, "PAIRTIME_HCA_CLIENT_SECRET=wrong") },
 			want:  map[string][2]string{"hca": {statusFail, "refused the client id or secret"}}, wantCode: 1},
+		{name: "HCA's 400 invalid_scope to a grant that names no scope passes the hca check, since HCA checks the client id and secret first",
+			setup: func(_ *testing.T, d *deployed) {
+				d.hcaToken = func(w http.ResponseWriter) {
+					w.WriteHeader(http.StatusBadRequest)
+					fmt.Fprint(w, `{"error":"invalid_scope","error_description":"The requested scope is invalid, unknown, or malformed."}`)
+				}
+			},
+			want: map[string][2]string{"hca": {statusOK, "took the client id and secret, and refused the grant's scope (invalid_scope)"}}},
+		{name: "a 400 unauthorized_client passes the hca check too, since the client authenticated before the grant was refused",
+			setup: func(_ *testing.T, d *deployed) {
+				d.hcaToken = func(w http.ResponseWriter) {
+					w.WriteHeader(http.StatusBadRequest)
+					fmt.Fprint(w, `{"error":"unauthorized_client"}`)
+				}
+			},
+			want: map[string][2]string{"hca": {statusOK, "may not use client_credentials"}}},
+		{name: "any other answer from the token endpoint fails the hca check, naming it",
+			setup: func(_ *testing.T, d *deployed) {
+				d.hcaToken = func(w http.ResponseWriter) {
+					w.WriteHeader(http.StatusBadRequest)
+					fmt.Fprint(w, `{"error":"invalid_request"}`)
+				}
+			},
+			want: map[string][2]string{"hca": {statusFail, "answered 400 invalid_request"}}, wantCode: 1},
 		{name: "a store that takes a second write-once put fails",
 			setup: func(_ *testing.T, d *deployed) { d.s3.WriteOnceIgnored("pairtime-snapshots") },
 			want:  map[string][2]string{"bucket.pairtime-snapshots.write_once": {statusFail, "took a second If-None-Match"}}, wantCode: 1},
@@ -460,7 +491,7 @@ func TestDoctor(t *testing.T) {
 		{name: "no key backup at all fails",
 			setup: func(t *testing.T, d *deployed) { d.setKeyBackups(t) },
 			want:  map[string][2]string{"keys_backup": {statusFail, "no key backup"}}, wantCode: 1},
-		{name: "a snapshot bucket that refuses a multipart upload fails, since a snapshot past 5 GiB takes one",
+		{name: "a snapshot bucket that refuses a multipart upload fails, since a nightly snapshot past 64 MiB takes one",
 			setup: func(t *testing.T, d *deployed) {
 				d.s3.FailMatching(5, func(r *http.Request) bool { return r.Method == http.MethodPost && r.URL.Query().Has("uploads") }, http.StatusForbidden, "AccessDenied", false)
 			},
