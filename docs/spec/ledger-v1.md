@@ -95,6 +95,17 @@ session key = "s" || hex(HMAC-SHA256(K_session, ascii("pairtime/v1/session/id") 
 
 `id` is the harness's own session id, as its hook payload names it (`session_id`, `sessionId` or Cursor's `conversation_id`). The key depends on the id alone, so the copies of one session's calls that two harnesses make have one key. The events of the session carry it, and `os.focus` lists it in `hosted_sessions`. `internal/agent/hookpath` has the code, and `TestSessionKey` pins a vector.
 
+The harness adapters key a session's turns, subagents and scheduled prompts under `K_session` too, each over a domain string of its own (`internal/adapters`, WP-AD2):
+
+```text
+turn key  = "t" || hex(HMAC-SHA256(K_session, ascii("pairtime/v1/session/turn")  || 0x00 || part(session) || part(id))[0:16])
+agent key = "a" || hex(HMAC-SHA256(K_session, ascii("pairtime/v1/session/agent") || 0x00 || part(session) || part(id))[0:16])
+cron key  = "c" || hex(HMAC-SHA256(K_session, ascii("pairtime/v1/session/cron")  || 0x00 || part(session) || part(prefix))[0:16])
+part(x)   = u32be(len(utf8(x))) || utf8(x)
+```
+
+`session` is the harness's own session id, `id` a turn's id (Claude Code's `prompt_id`, which its transcripts and OTel share) or a subagent's (`agent_id`), and `prefix` a scheduled prompt as a `Stop` hook lists it in `session_crons`, without the `… [+N chars]` marker Claude Code puts after a prompt it cut and, in a cut prompt, without any U+FFFD left at the end, which is what a cut through a UTF-16 surrogate pair leaves, and at most its first 1,000 code points. Claude Code cuts at 1,000 UTF-16 units, so a cut prompt with characters outside the Basic Multilingual Plane keeps fewer code points. The keys go in `turn_key`, `agent_key` and `pending_crons[].prefix_hash`. None depends on the harness, so, as with the session key, the copies of one turn that two harnesses make have one key. `TestKeys` in `internal/adapters` pins a vector for each, and `TestPendingCrons` in `internal/adapters/claudecode` pins `prefix` for cut prompts, all computed apart from the code.
+
 One `K_dev` writes one chain. The nonce (4.4) and the token salts (10.2) are keyed by `s` alone, so they stay unique only while no `s` repeats under one `K_dev`. A `K_dev` that `pairtime restore` unwraps onto a new install (DESIGN 7.11) only verifies and opens the old chain's records. The restored install writes its own chain, under its own `device_id` and a `K_dev` generated for it, from `s = 1`, and keeps the old key for reading. A second chain under the old key would repeat every nonce and salt: a body or a salt revealed from the old chain would let a reader confirm guesses of the new chain's hidden bodies, or of its removed tokens, at the same `s`.
 
 ## 4. Records
@@ -252,9 +263,9 @@ H_0 = zero(32)
 
 Each head depends on every batch before it, so no record can be added, dropped, reordered or changed after its batch is uploaded without changing every later head (DESIGN 3.6, CC7 in DESIGN 7.3).
 
-The client uploads `{b, n, R_b, H_b, prev}` with `prev = H_(b-1)` (DESIGN 4.3); the upload's JSON is WP-SV4's. The server refuses a batch with `n = 0`, which no writer seals, and a batch whose `H_b` isn't `SHA-256(0x03 || prev || R_b || u64(n) || u64(b))` for the values it received. It also checks DESIGN 3.10's chain link, `prev` equals the stored head: it refuses a batch 1 whose `prev` isn't `zero(32)`, and once it has stored any batch of a device, it refuses that device's batch `b` unless it stored batch `b - 1` with head `prev`. So a device that has stored batches 1 to 3 can't upload batch 5 until batch 4 is in, and batch 4 gets a `received_at`, a receipt and a day leaf like any other. The server then stores `(device_id, b, n_b, R_b, H_b, received_at)`, where `received_at` is the server's clock, in Unix milliseconds, when it stored the row.
+The client uploads `{b, n, R_b, H_b, prev}` with `prev = H_(b-1)` (DESIGN 4.3); the upload's JSON is WP-SV4's. The server refuses a batch with `n = 0`, which no writer seals, and a batch whose `H_b` isn't `SHA-256(0x03 || prev || R_b || u64(n) || u64(b))` for the values it received. It also checks DESIGN 3.10's chain link, `prev` equals the stored head: it refuses a batch 1 whose `prev` isn't `zero(32)`, and once it has stored any batch of a device, it refuses that device's batch `b` unless it stored batch `b - 1` with head `prev`, but for the second exception below. So a device that has stored batches 1 to 3 can't upload batch 5 until batch 4 is in, and batch 4 gets a `received_at`, a receipt and a day leaf like any other. The server then stores `(device_id, b, n_b, R_b, H_b, received_at)`, where `received_at` is the server's clock, in Unix milliseconds, when it stored the row.
 
-The one exception is a device's first upload, which can start after batch 1, for example when the device leaves local-only mode with batches it never sent (DESIGN 4.2). Whether the server then asks for the earlier batches or starts the device's witnessed chain at that batch is WP-SV4's decision, and from then on every batch links to the one before it. This spec only fixes the bytes either way.
+Two exceptions let a device skip batches it sealed in local-only mode, which it never sends (DESIGN 4.2). A device's first upload can start after batch 1, and the server starts the device's witnessed chain at that batch (ingest-v1 2.7 step 4). And after the device signs in again, the first batch the server stores under the new sign-in may skip ahead of the stored head: the server records the batches it skipped as a local-only gap and never takes their roots (ingest-v1 2.7 step 5; D-local-gap). From either one, every batch links to the one before it. This spec fixes the bytes; ingest-v1 fixes when the server takes them.
 
 ## 7. Receipts
 
@@ -305,8 +316,8 @@ It commits `d`, `G_(d-1)`, `T_d`, `count_d`, `G_d` and `signature_d` to the publ
 
 A verifier that holds a run of a device's batches, with headers and body hashes for every record in them, checks:
 
-1. Batch numbers rise by 1 with no gap. A run that starts at `b = 1` has `prev = zero(32)`. A run that starts later links its first `prev` to the head the server stored for the batch before it. Only a run that starts at a device's first witnessed batch, where WP-SV4 started the chain after batch 1 (6), takes its first `prev` as given.
-2. Sequence numbers rise by 1 with no gap, within and across batches. Batch 1 starts at `s = 1`.
+1. Batch numbers rise by 1 with no gap, but across a local-only gap the server recorded (6), after which a run of its own starts. A run that starts at `b = 1` has `prev = zero(32)`. A run that starts later links its first `prev` to the head the server stored for the batch before it. Only a run that starts at a device's first witnessed batch, where WP-SV4 started the chain after batch 1, or at the batch after a local-only gap (6), takes its first `prev` as given.
+2. Sequence numbers rise by 1 with no gap, within and across batches, but across a local-only gap. Batch 1 starts at `s = 1`.
 3. Every header follows 4.3: its rtype isn't `0x00` or `0x42` to `0xff`, a code from `0x13` to `0x3f` that the verifier doesn't know is reported as an unknown kind (4.2), an `os.*` header has the zero project, and checkpoints and upload-failure notes have the fields their row in 4.3 gives them.
 4. Every entry is its header followed by the SHA-256 of the record's stored body, and every revealed body is valid JSON by 4.5's rule, agrees with its header, names the chain's device in an event's `device_id`, and has `f` and `c` exactly where 4.5, 4.7, 10.1 and 10.7 put them.
 5. `n_b` is the number of the batch's records, and `R_b` is the `MTH` of their entries.

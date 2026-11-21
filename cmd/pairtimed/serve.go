@@ -18,6 +18,7 @@ import (
 	"github.com/some-du6e/pairtime/internal/server/backup"
 	"github.com/some-du6e/pairtime/internal/server/config"
 	"github.com/some-du6e/pairtime/internal/server/dashboard"
+	"github.com/some-du6e/pairtime/internal/server/device"
 	"github.com/some-du6e/pairtime/internal/server/migrations"
 	"github.com/some-du6e/pairtime/internal/server/ops"
 	"github.com/some-du6e/pairtime/internal/server/pages"
@@ -261,7 +262,28 @@ func serve(ctx context.Context, cfg *config.Config, logger *slog.Logger, e *env,
 		logger.Warn(envHeartbeatURL + " isn't set, so no push monitor hears from pairtimed (DESIGN 10.4)")
 	}
 
-	signIn, err := newSignIn(cfg, db, w, logger, site.Signups.MayCreate)
+	// The device grant, /device, /account/devices and the device API
+	// (WP-SV3). With sign-in off, the grant refuses new codes and the
+	// pages say linking isn't open yet. Sign-in removes the devices of an
+	// account Hack Club Auth turns ineligible, in the transaction that
+	// revokes its sessions (D-device-account-binding).
+	devices, err := device.New(device.Options{DB: db, Writer: w})
+	if err != nil {
+		return err
+	}
+	signIn, err := newSignIn(cfg, db, w, logger, site.Signups.MayCreate, devices.RemoveAccount)
+	if err != nil {
+		return err
+	}
+	linking, err := device.NewService(device.Config{
+		Store:       devices,
+		BaseURL:     cfg.BaseURL,
+		SignIn:      signIn,
+		Site:        site,
+		Handle:      handle,
+		SignupsOpen: site.Signups.Open,
+		Logger:      logger,
+	})
 	if err != nil {
 		return err
 	}
@@ -270,6 +292,8 @@ func serve(ctx context.Context, cfg *config.Config, logger *slog.Logger, e *env,
 	public.HandleFunc("GET /healthz", ops.Healthz)
 	site.Register(public)
 	signIn.Register(public)
+	linking.Register(public)
+	newIngest(cfg, db, w, devices, series, logger).Register(public)
 	visit := pages.SignIn{
 		Enabled:    signIn.Enabled(),
 		LoginPath:  auth.LoginPath,
@@ -302,6 +326,7 @@ func serve(ctx context.Context, cfg *config.Config, logger *slog.Logger, e *env,
 	maintainCtx, stopMaintain := context.WithCancel(ctx)
 	defer stopMaintain()
 	go signIn.Maintain(maintainCtx)
+	go linking.Maintain(maintainCtx)
 
 	pubLn, err := net.Listen("tcp", cfg.Listen)
 	if err != nil {

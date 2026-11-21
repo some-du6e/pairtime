@@ -37,8 +37,9 @@ var viewZone = func() *time.Location { return time.Local }
 // viewNow is the views' clock. Tests set it.
 var viewNow = time.Now
 
-// localToday is today's date in viewZone, as the agent names its day
-// rollups.
+// localToday is today's date in viewZone. The agent names its day rollups
+// by the zone it read when it started, so today and statusline ask the
+// rollups which day it is (dayStore.today) and fall back to this.
 func localToday() string { return viewNow().In(viewZone()).Format(time.DateOnly) }
 
 // projectJSON is one project's time over a span.

@@ -511,6 +511,8 @@ func TestSchemaBounds(t *testing.T) {
 		{"parents hold at most maxList ids", []string{"$defs", "git.change", "properties", "parents"}, "maxItems", float64(maxList)},
 		{"pending crons hold at most maxList entries", []string{"$defs", "agent.stop", "properties", "pending_crons"}, "maxItems", float64(maxList)},
 		{"a key has 1 to maxKeyLen characters", []string{"$defs", "key"}, "pattern", fmt.Sprintf("^[A-Za-z0-9_-]{1,%d}$", maxKeyLen)},
+		{"a version has IsVersion's form", []string{"$defs", "version"}, "pattern", VersionPattern},
+		{"a version has at most MaxVersionLen characters", []string{"$defs", "version"}, "maxLength", float64(MaxVersionLen)},
 		{"times start at minUnixMS", []string{"$defs", "unix_ms"}, "minimum", float64(minUnixMS)},
 		{"times end before maxUnixMS", []string{"$defs", "unix_ms"}, "exclusiveMaximum", float64(maxUnixMS)},
 	}
