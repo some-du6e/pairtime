@@ -131,22 +131,23 @@ func lock(dataDir string) (func(), error) {
 	return func() { l.Release() }, nil
 }
 
-// keyTries is how many times Login sends the key before it gives up.
-const keyTries = 4
-
 // Login links this install to o.Server as device d (RFC 8628;
-// docs/spec/device-auth-v1.md). show gets the code as soon as the server
-// gives one, to tell the teen where to type it; then Login polls until the
-// teen answers. With the token it makes the device key, keeps both in the
-// keystore, registers the key, writes account.json and switches
-// config.toml to mode "online". A key the server won't take undoes the
-// login: the keystore forgets the sign-in, and the server is asked to
-// remove the device, so a second try starts clean. Login holds the lock
-// it shares with Logout throughout.
+// docs/spec/device-auth-v1.md). It makes the device key first and keeps
+// it in the keystore, then asks for a code that names the key, since the
+// token the code yields works only with that key (D-key-at-grant). show
+// gets the code as soon as the server gives one, to tell the teen where to
+// type it; then Login polls until the teen answers. With the token, which
+// must name this device and key, it keeps the token beside the key, writes
+// account.json and switches config.toml to mode "online". A login that
+// fails leaves no sign-in behind: the keystore forgets the key, and once
+// the server has handed out a token, the server is asked to remove the
+// device too. Login holds the lock it shares with Logout throughout.
 //
 // It returns ErrAlreadyLinked when account.json exists, ErrBusy when
 // another login or logout runs, ErrClosed when the server isn't taking
-// sign-ins, and ErrDenied or ErrExpired when the code went unapproved.
+// sign-ins, ErrDenied or ErrExpired when the code went unapproved, and
+// ErrTaken when an account other than the one the device id belongs to
+// approved it.
 func Login(ctx context.Context, o Options, d Device, show func(Code)) (Result, error) {
 	unlock, err := lock(o.DataDir)
 	if err != nil {
@@ -158,37 +159,43 @@ func Login(ctx context.Context, o Options, d Device, show func(Code)) (Result, e
 	} else if !errors.Is(err, ErrNotLinked) {
 		return Result{}, fmt.Errorf("%w; pairtime logout clears it", err)
 	}
-	c := o.client()
-	code, err := c.RequestCode(ctx, d)
-	if err != nil {
-		return Result{}, err
-	}
-	show(code)
-	tok, err := c.Poll(ctx, code)
-	if err != nil {
-		return Result{}, err
-	}
-	if tok.DeviceID != "" && tok.DeviceID != d.ID {
-		undo(ctx, c, o, tok.AccessToken)
-		return Result{}, fmt.Errorf("account: the server linked device %q, not this computer's %s", tok.DeviceID, d.ID)
-	}
 
 	seed := make([]byte, ed25519.SeedSize)
 	defer clear(seed)
 	rand.Read(seed)
 	key := ed25519.NewKeyFromSeed(seed)
+	pub := encodeKey(key.Public().(ed25519.PublicKey))
+	if err := o.Secrets.SetSignKey(seed); err != nil {
+		return Result{}, fmt.Errorf("account: keeping the device key in the keystore: %w", err)
+	}
+	c := o.client()
+	code, err := c.RequestCode(ctx, d, key)
+	if err != nil {
+		o.Secrets.ForgetAccount()
+		return Result{}, err
+	}
+	show(code)
+	tok, err := c.Poll(ctx, code)
+	if err != nil {
+		o.Secrets.ForgetAccount()
+		return Result{}, err
+	}
+	switch {
+	case tok.DeviceID != "" && tok.DeviceID != d.ID:
+		undo(ctx, c, o, tok.AccessToken)
+		return Result{}, fmt.Errorf("account: the server linked device %q, not this computer's %s", tok.DeviceID, d.ID)
+	case tok.PublicKey != "" && tok.PublicKey != pub:
+		undo(ctx, c, o, tok.AccessToken)
+		return Result{}, errors.New("account: the server's token is for another device key than the one this computer sent")
+	}
 	if err := o.Secrets.SetAccount([]byte(tok.AccessToken), seed); err != nil {
 		undo(ctx, c, o, tok.AccessToken)
 		return Result{}, fmt.Errorf("account: keeping the sign-in in the keystore: %w", err)
 	}
-	if err := registerKey(ctx, c, tok.AccessToken, d.ID, key); err != nil {
-		undo(ctx, c, o, tok.AccessToken)
-		return Result{}, fmt.Errorf("account: registering the device key: %w", err)
-	}
 	l := Linked{
 		Server:    o.Server,
 		DeviceID:  d.ID,
-		PublicKey: encodeKey(key.Public().(ed25519.PublicKey)),
+		PublicKey: pub,
 		LinkedAt:  o.now().UTC().Truncate(time.Second),
 	}
 	if err := save(o.DataDir, l); err != nil {
@@ -201,29 +208,6 @@ func Login(ctx context.Context, o Options, d Device, show func(Code)) (Result, e
 		r.ConfigErr = err
 	}
 	return r, nil
-}
-
-// registerKey sends the key, trying again after a network error, a 5xx
-// or a 429, since registering the same key twice is fine. Any other
-// refusal from the server is final.
-func registerKey(ctx context.Context, c *Client, token, deviceID string, key ed25519.PrivateKey) error {
-	var err error
-	for i := range keyTries {
-		if i > 0 {
-			if werr := c.wait(ctx, time.Duration(1<<i)*time.Second); werr != nil {
-				return werr
-			}
-		}
-		err = c.RegisterKey(ctx, token, deviceID, key)
-		var se *ServerError
-		switch {
-		case err == nil, ctx.Err() != nil:
-			return err
-		case errors.As(err, &se) && se.Status != http.StatusTooManyRequests && se.Status < 500:
-			return err
-		}
-	}
-	return err
 }
 
 // undo takes back a login that failed after the server handed out its

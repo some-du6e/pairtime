@@ -55,8 +55,46 @@ func TestAccount(t *testing.T) {
 				t.Errorf("the agent's keystore reads %q, %v", got, err)
 			}
 		}},
-		{"SetAccount refuses a seed that isn't 32 bytes and a token that is empty", func(t *testing.T, dir string) {
+		{"a key kept before its token is in the store, but the keystore has no sign-in until the token comes", func(t *testing.T, dir string) {
+			osStore := newFake(KindKeychain)
+			ks := mustOpen(t, Options{Dir: dir, Stores: []Store{osStore}})
+			if err := ks.SetSignKey(seed); err != nil {
+				t.Fatal(err)
+			}
+			m := markerIn(t, dir)
+			if m.Account != KindKeychain || !osStore.has(m.accountItems()[1]) || osStore.has(m.accountItems()[0]) {
+				t.Errorf("after SetSignKey keystore.json names %q, the seed is there %v, a token is there %v", m.Account, osStore.has(m.accountItems()[1]), osStore.has(m.accountItems()[0]))
+			}
+			if _, _, err := ks.Account(); !errors.Is(err, ErrNotFound) {
+				t.Errorf("Account before the token = %v, want ErrNotFound", err)
+			}
+			if err := ks.SetAccount(token, seed); err != nil {
+				t.Fatal(err)
+			}
+			if gotToken, gotSeed, err := ks.Account(); err != nil || !bytes.Equal(gotToken, token) || !bytes.Equal(gotSeed, seed) {
+				t.Errorf("Account = %q, %x, %v", gotToken, gotSeed, err)
+			}
+		}},
+		{"a new key forgets the earlier sign-in's token, so no old token is paired with it", func(t *testing.T, dir string) {
 			ks := mustOpen(t, Options{Dir: dir, Stores: []Store{newFake(KindKeychain)}})
+			if err := ks.SetAccount(token, seed); err != nil {
+				t.Fatal(err)
+			}
+			if err := ks.SetSignKey(bytes.Repeat([]byte{0x6b}, 32)); err != nil {
+				t.Fatal(err)
+			}
+			if _, _, err := ks.Account(); !errors.Is(err, ErrNotFound) {
+				t.Errorf("Account after a new key = %v, want ErrNotFound", err)
+			}
+			if err := ks.ForgetAccount(); err != nil {
+				t.Errorf("ForgetAccount after a new key = %v", err)
+			}
+		}},
+		{"SetAccount refuses a seed that isn't 32 bytes and a token that is empty, and SetSignKey a short seed", func(t *testing.T, dir string) {
+			ks := mustOpen(t, Options{Dir: dir, Stores: []Store{newFake(KindKeychain)}})
+			if err := ks.SetSignKey(seed[:31]); err == nil {
+				t.Error("SetSignKey kept a 31-byte seed")
+			}
 			if err := ks.SetAccount(token, seed[:31]); err == nil {
 				t.Error("a 31-byte seed was kept")
 			}

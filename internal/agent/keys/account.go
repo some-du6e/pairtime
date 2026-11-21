@@ -12,6 +12,8 @@ import (
 // The account secrets `pairtime login` keeps (WP-SV3;
 // docs/spec/device-auth-v1.md section 8): the ptd_ device token the server
 // handed out, and the 32-byte seed of the Ed25519 key that signs uploads.
+// The seed comes first, since login sends the key's public half with its
+// code request and the token works only with that key (D-key-at-grant).
 // They go in the store that holds K_dev, under the installation's id like
 // every item, and keystore.json lists them before the store gets them, so
 // Destroy deletes them with everything else.
@@ -29,6 +31,20 @@ func (m marker) accountItems() [2]string {
 // maxTokenSize bounds a device token. Real ones are 42 bytes.
 const maxTokenSize = 256
 
+// SetSignKey keeps the seed of the device's Ed25519 key for a pairtime
+// login that has no token yet, so the keystore holds the key before the
+// server learns its public half. Any sign-in kept before goes, its token
+// included, so Account never pairs an old token with the new key. The seed
+// is read back from the store before SetSignKey returns, and SetAccount
+// adds the token once the server hands it out. It copies the seed and
+// changes nothing it is given.
+func (k *Keystore) SetSignKey(seed []byte) error {
+	if len(seed) != ed25519.SeedSize {
+		return fmt.Errorf("keys: a device key's seed is %d bytes, not %d", ed25519.SeedSize, len(seed))
+	}
+	return k.setAccount(nil, seed)
+}
+
 // SetAccount keeps the device token and the seed of the device's Ed25519
 // key, replacing any it kept before. Each is read back from the store
 // before SetAccount returns, as K_dev is. It copies neither and changes
@@ -40,6 +56,12 @@ func (k *Keystore) SetAccount(token, seed []byte) error {
 	if len(seed) != ed25519.SeedSize {
 		return fmt.Errorf("keys: a device key's seed is %d bytes, not %d", ed25519.SeedSize, len(seed))
 	}
+	return k.setAccount(token, seed)
+}
+
+// setAccount keeps seed and token, or with a nil token, the seed alone
+// and no token.
+func (k *Keystore) setAccount(token, seed []byte) error {
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	unlock, err := k.o.lock()
@@ -62,18 +84,24 @@ func (k *Keystore) SetAccount(token, seed []byte) error {
 		k.m = m
 	}
 	items := m.accountItems()
-	for i, secret := range [][]byte{token, seed} {
-		if _, err := k.o.put(k.store, items[i], secret); err != nil {
-			return fmt.Errorf("keys: keeping the device's sign-in in %s: %w", k.store.Kind().Description(), err)
+	if token == nil {
+		if err := k.o.erase(k.store, items[0]); err != nil {
+			return fmt.Errorf("keys: forgetting the device's earlier sign-in in %s: %w", k.store.Kind().Description(), err)
 		}
+	} else if _, err := k.o.put(k.store, items[0], token); err != nil {
+		return fmt.Errorf("keys: keeping the device's sign-in in %s: %w", k.store.Kind().Description(), err)
+	}
+	if _, err := k.o.put(k.store, items[1], seed); err != nil {
+		return fmt.Errorf("keys: keeping the device's sign-in in %s: %w", k.store.Kind().Description(), err)
 	}
 	return nil
 }
 
 // Account returns the device token and key seed SetAccount kept. Its error
-// wraps ErrNotFound when there are none: the installation isn't linked, or
-// pairtime logout forgot them. It reads keystore.json again, since
-// `pairtime login` runs in another process than the agent that asks.
+// wraps ErrNotFound when there are none: the installation isn't linked,
+// pairtime logout forgot them, or a login kept its key with SetSignKey and
+// hasn't got its token yet. It reads keystore.json again, since `pairtime
+// login` runs in another process than the agent that asks.
 func (k *Keystore) Account() (token, seed []byte, err error) {
 	k.mu.Lock()
 	m, err := k.reread()

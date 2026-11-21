@@ -153,6 +153,9 @@ func runLogin(args []string, stdout, stderr io.Writer) int {
 	context.AfterFunc(ctx, stop)
 	dev := account.Device{ID: id, OS: account.OSFamily(), Build: account.Build(version.Get().Version)}
 	r, err := account.Login(ctx, loginOptions(srv, dirs, ks), dev, func(c account.Code) {
+		if c.SignupsOpen != nil && !*c.SignupsOpen {
+			fmt.Fprintf(stdout, "%s isn't taking new accounts yet, so only an account that exists there already can approve this code.\n\n", srv)
+		}
 		fmt.Fprintf(stdout, "To link this computer to your pairtime account, open\n\n    %s\n\nand enter the code\n\n    %s\n\n", c.VerificationURI, c.UserCode)
 		if u, ok := account.BrowserURL(c, srv); ok && !*noBrowser {
 			if account.OpenBrowser(u) == nil {
@@ -169,7 +172,12 @@ func runLogin(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stdout, "The code was turned down, so this computer isn't linked.")
 		return 1
 	case errors.Is(err, account.ErrExpired):
-		fmt.Fprintln(stdout, "The code expired before anyone approved it. Run pairtime login again for a new one. If the page said this computer is linked to another account, sign in there as that account.")
+		fmt.Fprintln(stdout, "The code expired before anyone approved it. Run pairtime login again for a new one.")
+		return 1
+	case errors.Is(err, account.ErrTaken):
+		fmt.Fprintf(stdout, "The account that approved the code isn't the one this computer's device ID belongs to on %s, which keeps the ID with that account while it holds what this computer uploaded. So this computer isn't linked.\n"+
+			"If you approved it from another account, run pairtime login again and approve as the account this computer was linked to. Linking it to a different account takes a new device ID and key, which this version of pairtime can't make yet.\n"+
+			"If you didn't approve it, someone else typed your code: run pairtime login again.\n", srv)
 		return 1
 	case errors.Is(err, account.ErrBusy):
 		fmt.Fprintln(stderr, "pairtime login: another pairtime login or logout is running on this computer; let it finish first.")
@@ -183,7 +191,8 @@ func runLogin(args []string, stdout, stderr io.Writer) int {
 	}
 	fmt.Fprintf(stdout, "\nLinked. This computer is device %s on %s.\n", r.Linked.DeviceID, srv)
 	if r.Account != "" {
-		fmt.Fprintf(stdout, "It's linked to the account %s. If that isn't yours, run pairtime logout now.\n", r.Account)
+		fmt.Fprintf(stdout, "It's linked to the account %s, the name the top of %s's pages shows while that account is signed in.\n"+
+			"If that isn't your account, run pairtime logout right away: until this computer's first upload, logging out leaves nothing on the server, and the next pairtime login can link it to yours.\n", r.Account, srv)
 	}
 	fmt.Fprintf(stdout, "pairtime uploads the minutes it counts here to that server, as numbers. What you type stays on this computer.\nSee your linked computers at %s/account/devices, and unlink this one with pairtime logout.\n", srv)
 	if r.ConfigErr != nil {
@@ -230,6 +239,11 @@ func runLogout(args []string, stdout, stderr io.Writer) int {
 		why := err
 		if kerr != nil {
 			why = kerr
+		}
+		if r.ConfigErr != nil {
+			// Switching config.toml to local was all that stopped uploads.
+			fmt.Fprintf(stderr, "pairtime logout: the device keystore couldn't be read (%v), so this computer couldn't tell the server or forget its token, and config.toml couldn't be switched to local mode either (%v). The mode is still online, so uploads start again once the keystore opens: do what that says, then run pairtime logout again once the keystore opens.\n", why, r.ConfigErr)
+			return 1
 		}
 		fmt.Fprintf(stderr, "pairtime logout: pairtime is back in local mode, so nothing uploads, but the device keystore couldn't be read (%v), so this computer couldn't tell the server or forget its token. Run pairtime logout again once the keystore opens.\n", why)
 		return 1

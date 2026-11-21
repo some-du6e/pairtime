@@ -127,7 +127,7 @@ func Parse(data []byte) (cfg Config, problems []string) {
 		if u, err := CheckServerURL(file.Server.URL); err == nil {
 			cfg.Server.URL = u
 		} else {
-			problems = append(problems, fmt.Sprintf("config.toml: server.url %q %v, so pairtime login uses %s", file.Server.URL, err, DefaultServer))
+			problems = append(problems, fmt.Sprintf("config.toml: server.url %q %v, so pairtime login won't run until it's fixed or --server names a server", file.Server.URL, err))
 		}
 	}
 	if md.IsDefined("http", "port") {
