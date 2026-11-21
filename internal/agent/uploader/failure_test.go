@@ -159,3 +159,54 @@ func TestClock(t *testing.T) {
 		t.Errorf("serverTime = %d, %v", ms, ok)
 	}
 }
+
+func TestPace(t *testing.T) {
+	t0 := time.Date(2026, 11, 21, 12, 0, 0, 0, time.UTC)
+	spent := func(n int, at time.Time) *pacer {
+		p := newPacer(paceBurst, paceEvery)
+		for range n {
+			p.take(at)
+		}
+		return p
+	}
+	drained := newPacer(paceBurst, paceEvery)
+	drained.drain(t0)
+	tests := []struct {
+		name      string
+		got, want time.Duration
+	}{
+		{"a burst goes at once", spent(paceBurst-1, t0).wait(t0), 0},
+		{"past the burst, the next request waits a pace", spent(paceBurst, t0).wait(t0), paceEvery},
+		{"each pace earns one request back", spent(paceBurst, t0).wait(t0.Add(paceEvery)), 0},
+		{"a request past the pace, as on lock and suspend, makes the next one wait the longer", spent(paceBurst+1, t0).wait(t0), 2 * paceEvery},
+		{"after a 429 the requests left are spent", drained.wait(t0), paceEvery},
+		{"a clock that went back earns nothing", spent(paceBurst, t0).wait(t0.Add(-time.Hour)), paceEvery},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.got != tc.want {
+				t.Errorf("wait %v, want %v", tc.got, tc.want)
+			}
+		})
+	}
+	t.Run("an upload asked for every second for an hour never runs ingest's bucket dry", func(t *testing.T) {
+		p := newPacer(paceBurst, paceEvery)
+		server := newPacer(30, 10*time.Second) // ingest-v1 7 item 17
+		sent := 0
+		for s := range 3600 {
+			now := t0.Add(time.Duration(s) * time.Second)
+			if p.wait(now) > 0 {
+				continue
+			}
+			if server.wait(now) > 0 {
+				t.Fatalf("the server would refuse request %d, at %v", sent+1, now.Sub(t0))
+			}
+			p.take(now)
+			server.take(now)
+			sent++
+		}
+		if limit := paceBurst + 3600/int(paceEvery/time.Second); sent > limit {
+			t.Errorf("%d requests in an hour, over %d", sent, limit)
+		}
+	})
+}

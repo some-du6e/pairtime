@@ -342,6 +342,7 @@ func TestFastClock(t *testing.T) {
 	}{
 		{"the minutes the server's clock has reached go up", func(t *testing.T) {
 			waitFor(t, "the oldest minute", func() bool {
+				u.Wake() // as the ticker would
 				f.mu.Lock()
 				defer f.mu.Unlock()
 				_, ok := f.buckets[oldest]
@@ -538,6 +539,7 @@ func TestKeyRotation(t *testing.T) {
 	u.Start()
 	t.Cleanup(u.Close)
 	waitFor(t, "every minute", func() bool {
+		u.Wake() // as the ticker would
 		f.mu.Lock()
 		defer f.mu.Unlock()
 		return len(f.buckets) == minutes
@@ -640,11 +642,12 @@ func newRig(t *testing.T, n int, minutes []int, linkedAfter time.Duration) *rig 
 }
 
 // run starts the uploader, waits until cond holds under the fake's lock,
-// and stops it.
+// waking it meanwhile as its ticker would, and stops it.
 func (r *rig) run(t *testing.T, what string, cond func(f *fakeIngest) bool) {
 	t.Helper()
 	r.u.Start()
 	waitFor(t, what, func() bool {
+		r.u.Wake()
 		r.f.mu.Lock()
 		defer r.f.mu.Unlock()
 		return cond(r.f)
@@ -807,6 +810,44 @@ func TestRelink(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := tc.st.localOnly(tc.b); got != tc.want {
 				t.Errorf("localOnly(%d) = %v", tc.b, got)
+			}
+		})
+	}
+}
+
+// TestOneRequestAWake is a steady session under ingest's rate (#150 R3):
+// a wake sends what can go, and the buckets that wait for the receipts its
+// request brings go with the next wake, not in a second request straight
+// after it.
+func TestOneRequestAWake(t *testing.T) {
+	minutes := make([]int, 45)
+	for i := range minutes {
+		minutes[i] = i
+	}
+	r := newRig(t, 3, minutes, -time.Minute)
+	seen := func() (posts, buckets int) {
+		r.f.mu.Lock()
+		defer r.f.mu.Unlock()
+		return r.f.posts, len(r.f.buckets)
+	}
+	r.u.Start()
+	waitFor(t, "the first wake's requests", func() bool { posts, _ := seen(); return posts >= 2 })
+	time.Sleep(300 * time.Millisecond) // a request straight after would have gone by now
+	firstPosts, firstBuckets := seen()
+	r.u.Wake()
+	waitFor(t, "the next wake's request", func() bool { _, buckets := seen(); return buckets == len(minutes) })
+	lastPosts, _ := seen()
+	tests := []struct {
+		name string
+		ok   bool
+	}{
+		{"the first wake sent the link's first root alone, then the other roots with the minutes its receipt let go", firstPosts == 2 && firstBuckets == 15},
+		{"the minutes that waited for the second request's receipts went with the next wake, in one request", lastPosts == 3},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if !tc.ok {
+				t.Errorf("no: %d requests and %d minutes after the first wake, %d requests after the next", firstPosts, firstBuckets, lastPosts)
 			}
 		})
 	}

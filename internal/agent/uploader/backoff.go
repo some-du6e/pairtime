@@ -3,6 +3,7 @@
 package uploader
 
 import (
+	"math"
 	"math/rand/v2"
 	"net/http"
 	"strconv"
@@ -65,6 +66,69 @@ func (b *backoff) failing() int {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.failures
+}
+
+// The uploader's own pace, under ingest's rate of a burst of 30 requests
+// and one more every 10 s for each device (ingest-v1 7 item 17), with room
+// to spare: a burst of paceBurst, then one request every paceEvery, five a
+// minute. However busy a session, whose prompts and stops each bring an
+// upload forward, the server's bucket never runs dry from this device's
+// own requests, so none is refused as rate_limited and no 429 of its own
+// making becomes an upload-failure note. State reads count, as they do on
+// the server.
+const (
+	paceBurst = 12
+	paceEvery = 12 * time.Second
+)
+
+// pacer is a bucket of requests that refills one every every, up to
+// burst, on the wall clock the server's limiter counts by. Only the
+// uploader's loop uses it.
+type pacer struct {
+	burst  float64
+	every  time.Duration
+	tokens float64
+	at     time.Time
+}
+
+func newPacer(burst int, every time.Duration) *pacer {
+	return &pacer{burst: float64(burst), every: every, tokens: float64(burst)}
+}
+
+// refill adds the requests earned since it last ran. A clock that went
+// back adds none.
+func (p *pacer) refill(now time.Time) {
+	if !p.at.IsZero() && now.After(p.at) {
+		p.tokens = min(p.burst, p.tokens+float64(now.Sub(p.at))/float64(p.every))
+	}
+	if p.at.IsZero() || now.After(p.at) {
+		p.at = now
+	}
+}
+
+// wait returns how long after now the next request may go.
+func (p *pacer) wait(now time.Time) time.Duration {
+	p.refill(now)
+	if p.tokens >= 1 {
+		return 0
+	}
+	return time.Duration(math.Ceil((1 - p.tokens) * float64(p.every)))
+}
+
+// take spends a request at now. A request that goes whatever the pace, as
+// on lock and suspend, or the second of a cycle, can take it below one, and
+// the requests after it wait the longer.
+func (p *pacer) take(now time.Time) {
+	p.refill(now)
+	p.tokens--
+}
+
+// drain spends every request left, after the server refused one as too
+// fast: the requests after it go at the pace alone, which the server's
+// bucket refills faster than.
+func (p *pacer) drain(now time.Time) {
+	p.refill(now)
+	p.tokens = min(p.tokens, 0)
 }
 
 // retryAfter reads a response's Retry-After (RFC 9110 10.2.3): a number of

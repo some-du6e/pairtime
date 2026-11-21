@@ -207,6 +207,7 @@ type Uploader struct {
 	client    *http.Client
 	clock     *clock
 	backoff   *backoff
+	pace      *pacer
 	userAgent string
 	build     string
 	lag       int64 // WITNESS_LAG_S in ms
@@ -347,6 +348,7 @@ func New(opts Options) (*Uploader, error) {
 		client:    client,
 		clock:     &clock{now: now},
 		backoff:   newBackoff(opts.Draw),
+		pace:      newPacer(paceBurst, paceEvery),
 		userAgent: "pairtime-agent/" + clientBuild(build),
 		build:     build,
 		lag:       opts.Params.Int(params.WITNESS_LAG_S) * 1000,
@@ -525,10 +527,10 @@ func (u *Uploader) Soon() {
 	})
 }
 
-// Urgent makes the uploader send at once without waiting for the scorer,
-// as on lock and suspend, when the machine may sleep within seconds: the
-// batch roots go first, and buckets the scorer hasn't written yet follow
-// on the next wake (DESIGN 3.3).
+// Urgent makes the uploader send at once without waiting for the scorer
+// or its pace, as on lock and suspend, when the machine may sleep within
+// seconds: the batch roots go first, and buckets the scorer hasn't written
+// yet follow on the next wake (DESIGN 3.3).
 func (u *Uploader) Urgent() {
 	u.urgent.Store(true)
 	u.Wake()
@@ -612,11 +614,16 @@ func (u *Uploader) run() {
 		case <-timer.C:
 		}
 		u.applyModes()
-		if wait := u.notBefore.Sub(u.now()); wait > 0 {
-			timer.Reset(wait)
-			continue
-		}
-		for u.cycle() {
+		for {
+			if wait := u.holdOff(); wait > 0 {
+				// The cycle runs once the wait ends, with no other wake
+				// needed.
+				timer.Reset(wait)
+				break
+			}
+			if !u.cycle() {
+				break
+			}
 			select {
 			case <-u.stop:
 				return
@@ -632,10 +639,23 @@ func (u *Uploader) run() {
 	}
 }
 
+// holdOff returns how long the next cycle waits: the backoff after a
+// failure, and the pace that keeps the requests under ingest's rate, which
+// the upload lock and suspend ask for at once doesn't wait for.
+func (u *Uploader) holdOff() time.Duration {
+	wait := u.notBefore.Sub(u.now())
+	if !u.urgent.Load() {
+		wait = max(wait, u.pace.wait(time.Now()))
+	}
+	return wait
+}
+
 // cycle makes at most one request: the waiting retry, or the next plan
 // when there is anything new. It returns true when there is more to send
-// at once: a long upload goes request after request, and buckets that
-// waited for the receipts a request brought go right after it.
+// at once, as when an upload is larger than one request holds, which then
+// goes request after request at the pacer's pace. Buckets that waited for
+// the receipts a request brought go with the next wake's roots, so a
+// steady session sends one request a wake.
 func (u *Uploader) cycle() bool {
 	u.applyModes()
 	var c Credentials
@@ -1238,6 +1258,12 @@ func (u *Uploader) failed(c Credentials, err error, a answer, retry *pendingReq)
 	if _, nerr := u.opts.Ledger.UploadFailure(uint64(t), string(reason)); nerr != nil {
 		u.log.Warn("the ledger didn't take an upload-failure note", "err", nerr)
 	}
+	if a.status == http.StatusTooManyRequests {
+		// The server's bucket ran dry, as after a burst the pace didn't
+		// see, such as a restart's: the requests after this go at the pace
+		// alone, so no stream of 429s and notes follows.
+		u.pace.drain(time.Now())
+	}
 	open := u.backoff.failing() > 0
 	wait := u.backoff.fail(retryAfter(a.header, u.now()))
 	u.st.noteFailure(t, t+wait.Milliseconds(), open)
@@ -1379,9 +1405,6 @@ func (u *Uploader) answered(c Credentials, p plan, a answer) bool {
 	if u.st.Foreign > 0 && u.st.Next > u.st.Foreign {
 		u.st.Foreign = 0 // this server's receipts are in for every batch
 	}
-	if took {
-		more = true
-	}
 	if u.st.Fork != 0 {
 		u.setProblem("chain", forkProblem(u.st.Fork))
 	}
@@ -1461,10 +1484,12 @@ func (u *Uploader) answered(c Credentials, p plan, a answer) bool {
 			u.log.Warn("the server refused the labels", "code", resp.Labels.Code, "field", resp.Labels.Field)
 		}
 	}
-	if len(p.body.Buckets) > 0 && refused[codeFutureMinute] == 0 {
-		// More revisions may wait behind the ones that went. After a
-		// future_minute they wait for the next wake instead, by when the
-		// clock's offset holds them back.
+	if p.more && refused[codeFutureMinute] == 0 {
+		// The request held as much as one does, and more waits behind it,
+		// which goes at once, at the pacer's pace. What waited for the
+		// receipts this answer brought goes with the next wake's roots
+		// instead. After a future_minute the rest waits for the next wake
+		// too, by when the clock's offset holds it back.
 		more = true
 	}
 	if u.splitRoots > 0 || u.splitBuckets > 0 {

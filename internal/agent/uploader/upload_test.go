@@ -197,6 +197,7 @@ func TestUploadDay(t *testing.T) {
 		t.Fatal(err)
 	}
 	u.maxRoots, u.maxBuckets = 30, 200
+	u.pace = newPacer(1000, time.Millisecond) // the day goes in far more requests than one pace allows at once
 	up.Store(u)
 	u.Start()
 	t.Cleanup(u.Close)
@@ -243,6 +244,7 @@ func TestUploadDay(t *testing.T) {
 		}},
 		{"a day of buckets reaches the server with the store's totals, through a 503, a 429, a lost answer and a restart", func(t *testing.T) {
 			waitFor(t, "every root and every minute", func() bool {
+				u.Wake() // as the ticker would
 				minutes, _, _ := fake.totals()
 				_, _, head := fake.snapshot()
 				return minutes == 24*60 && head == batches

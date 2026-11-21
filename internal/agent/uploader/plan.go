@@ -117,12 +117,12 @@ func makePlan(in planInput) (plan, error) {
 	if nBuckets <= 0 {
 		nBuckets = maxBuckets
 	}
-	roots := rootsOf(in, nRoots)
+	roots, moreRoots := rootsOf(in, nRoots)
 	entries, days, unread, err := bucketsOf(in, nBuckets)
 	if err != nil {
 		return plan{}, err
 	}
-	more := len(roots) == nRoots || bucketsIn(entries) == nBuckets
+	more := moreRoots || bucketsIn(entries) == nBuckets
 	for {
 		p, err := assemble(in, roots, entries, days)
 		if err != nil {
@@ -154,22 +154,25 @@ func makePlan(in planInput) (plan, error) {
 // that one root alone, and the rest go once it is: in one request, a fork
 // refused at the batch after the server's head, followed by a higher root,
 // would be taken as a skip, and the fork stored as a local-only gap
-// (ingest-v1 5.3).
-func rootsOf(in planInput, n int) []Root {
+// (ingest-v1 5.3). more says whether a root that could go waits behind
+// them.
+func rootsOf(in planInput, n int) (roots []Root, more bool) {
 	if in.st.Fork != 0 {
-		return nil
+		return nil, false
 	}
 	if in.st.Linking {
 		n = 1
 	}
-	var roots []Root
-	for _, r := range in.rows.rowsFrom(max(in.st.Next, in.st.From, 1), n) {
+	for _, r := range in.rows.rowsFrom(max(in.st.Next, in.st.From, 1), n+1) {
 		if in.st.localOnly(r.B) {
 			break
 		}
+		if len(roots) == n {
+			return roots, true
+		}
 		roots = append(roots, Root{B: r.B, N: r.N, Root: r.Root, Head: r.Head, Prev: r.Prev})
 	}
-	return roots
+	return roots, false
 }
 
 // bucketsOf reads the bucket store's revisions after the marks, day by

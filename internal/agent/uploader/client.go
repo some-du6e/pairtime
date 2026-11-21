@@ -42,6 +42,7 @@ type answer struct {
 func (u *Uploader) do(ctx context.Context, req *http.Request) (answer, error) {
 	ctx, cancel := context.WithTimeout(ctx, requestTimeout)
 	defer cancel()
+	u.pace.take(time.Now())
 	sent := u.now()
 	resp, err := u.client.Do(req.WithContext(ctx))
 	if err != nil {

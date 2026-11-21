@@ -185,7 +185,7 @@ func TestLocalCredit(t *testing.T) {
 			return slices.Equal(all, []sentBucket{{at(0), 15}, {at(1), 15}}) && in.st.Sent[at(0)].B == 3
 		}()},
 		{"the batch roots stop before batch 3", func() bool {
-			roots := rootsOf(planInput{rows: ix, st: saved{Next: 2, Gaps: st.Gaps}}, 10)
+			roots, _ := rootsOf(planInput{rows: ix, st: saved{Next: 2, Gaps: st.Gaps}}, 10)
 			return len(roots) == 1 && roots[0].B == 2
 		}()},
 	}
@@ -326,9 +326,10 @@ func (r *liveRig) link(at time.Time) {
 }
 
 // served returns a condition on the fake server, which it checks under
-// the server's lock.
+// the server's lock after waking the uploader, as its ticker would.
 func (r *liveRig) served(cond func(f *fakeIngest) bool) func() bool {
 	return func() bool {
+		r.u.Wake()
 		r.f.mu.Lock()
 		defer r.f.mu.Unlock()
 		return cond(r.f)
