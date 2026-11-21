@@ -260,6 +260,8 @@ type Uploader struct {
 	// splitRoots and splitBuckets lower them after the server found a
 	// request too large, until splitOK requests in a row have gone.
 	splitRoots, splitBuckets, splitOK int
+	// pruned is when uploads.jsonl last let go of its old entries.
+	pruned time.Time
 }
 
 // sealedRow is what the uploader takes of a sealed batch: its row, when it
@@ -1292,6 +1294,11 @@ func (u *Uploader) refused(c Credentials, p plan, a answer) {
 	if code == "" {
 		code = fmt.Sprintf("status %d", a.status)
 	}
+	if a.status != 0 {
+		e := pastUpload(u.now(), c.Server, p, a)
+		e.Refused = code
+		u.recordUpload(e)
+	}
 	switch code {
 	case refusalMismatch:
 		// The device id belongs to another account: this computer signs in
@@ -1363,16 +1370,20 @@ func (u *Uploader) refusedState(c Credentials, a answer) {
 // uploader's place. It returns true when there is more to send at once.
 func (u *Uploader) answered(c Credentials, p plan, a answer) bool {
 	var resp Response
+	e := pastUpload(u.now(), c.Server, p, a)
 	if err := json.Unmarshal(a.body, &resp); err != nil || len(resp.Batches) != len(p.body.Batches) ||
 		len(resp.Buckets) != len(p.body.Buckets) || (p.body.Labels != nil) != (resp.Labels != nil) {
 		// The server took it, but its answer doesn't fit what was sent:
 		// read the state again before going on.
+		u.recordUpload(e)
 		u.drop()
 		u.synced = false
 		u.setProblem("server", "the server's answer to an upload didn't match what was sent")
 		u.notBefore = u.now().Add(Every)
 		return false
 	}
+	e.Results = resultsOf(resp)
+	u.recordUpload(e)
 	u.backoff.ok()
 	more := false
 	resync, took, refetched := false, false, false
