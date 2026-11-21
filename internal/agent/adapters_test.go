@@ -1421,3 +1421,51 @@ func TestHookCallsAfterTheWriterStopped(t *testing.T) {
 		})
 	}
 }
+
+// TestReplayProblems checks that what doctor hears of held calls stays
+// until it is no longer so: a later replay clears only its own problem,
+// adapters.replay, never an undeletable file's or a count of lost calls.
+func TestReplayProblems(t *testing.T) {
+	newHost := func(t *testing.T) *adapterHost {
+		dir := t.TempDir()
+		return newAdapterHost(&agent{dirs: home.Dirs{Data: dir, Config: dir, Runtime: dir},
+			log: slog.New(slog.DiscardHandler), problems: make(map[string]string)})
+	}
+	cases := []struct {
+		name string
+		run  func(t *testing.T, h *adapterHost)
+	}{
+		{"a .replay file that couldn't be deleted keeps adapters.held through the next replay, which stops for the run", func(t *testing.T, h *adapterHost) {
+			if os.Geteuid() == 0 || runtime.GOOS == "windows" {
+				t.Skip("needs a folder this user can't delete in, which root and Windows' modes don't give")
+			}
+			replay := h.a.dirs.Held() + ".replay"
+			if err := os.WriteFile(replay, nil, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Chmod(h.a.dirs.Data, 0o500); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { os.Chmod(h.a.dirs.Data, 0o700) })
+			h.endReplay(replay)
+			if !h.replayHeld(false) {
+				t.Error("the replay after it isn't done for the run")
+			}
+			if h.a.currentProblems()["adapters.held"] == "" {
+				t.Error("adapters.held is gone")
+			}
+		}},
+		{"lost calls keep adapters.dropped through a replay that finds nothing held", func(t *testing.T, h *adapterHost) {
+			h.dropHeld(2, errors.New("held.jsonl is full"))
+			if !h.replayHeld(false) {
+				t.Error("a replay with nothing held isn't done")
+			}
+			if !strings.Contains(h.a.currentProblems()["adapters.dropped"], "2 hook calls") {
+				t.Errorf("adapters.dropped is %q", h.a.currentProblems()["adapters.dropped"])
+			}
+		}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) { c.run(t, newHost(t)) })
+	}
+}
