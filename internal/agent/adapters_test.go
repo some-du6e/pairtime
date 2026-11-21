@@ -595,6 +595,27 @@ func TestHookCallsAKilledAgentAcked(t *testing.T) {
 	}
 }
 
+// pendingJournal is a journal that keeps, at each Store, what the file name
+// held then, and stores every call.
+type pendingJournal struct {
+	name string
+	saw  [][]byte
+}
+
+func (j *pendingJournal) Deliver(d inbox.Delivery) error {
+	_, err := j.Store(d)
+	return err
+}
+
+func (j *pendingJournal) Store(inbox.Delivery) (bool, error) {
+	b, err := os.ReadFile(j.name)
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return false, err
+	}
+	j.saw = append(j.saw, b)
+	return true, nil
+}
+
 // TestPendingLog checks held.jsonl.pending on a host with no worker: a
 // call the socket acks is written down before the journal stores it, and
 // the file is emptied only once every call in it is parsed or held.
@@ -645,6 +666,21 @@ func TestPendingLog(t *testing.T) {
 			h.donePending(false)
 			if got := read(t, pending); !bytes.Equal(got, lineOf(t, h, d)) {
 				t.Errorf("while the call waits in the queue, the file holds %q", got)
+			}
+		}},
+		{"the hook sink writes a call down before the journal stores it, so it is on disk before the socket acks it", func(t *testing.T, dirs home.Dirs, pending string) {
+			h := newHost(dirs)
+			j := &pendingJournal{name: pending}
+			sink := newHookSink(j, runtime.GOOS, newHookTies(), hookSteps{pend: h.pend})
+			d := call(t, "one")
+			if err := sink.Deliver(d); err != nil {
+				t.Fatal(err)
+			}
+			if len(j.saw) != 1 || !bytes.Contains(j.saw[0], []byte(d.ID)) {
+				t.Errorf("when the journal stored the call, the pending file held %q", j.saw)
+			}
+			if len(h.queue) != 1 {
+				t.Errorf("%d calls went to the worker, want the one the journal stored", len(h.queue))
 			}
 		}},
 		{"nothing is emptied under a call written down and not yet settled", func(t *testing.T, dirs home.Dirs, pending string) {
@@ -1621,3 +1657,4 @@ func TestHeldRetention(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) { c.run(t, newHost(t)) })
 	}
 }
+
