@@ -10,6 +10,13 @@ import { join } from 'node:path';
 export const galleryPort = 4173;
 export const galleryURL = `http://127.0.0.1:${galleryPort}/`;
 
+/**
+ * `vite preview --mode agent` serves the built dashboard here, for specs
+ * that answer its API with a fake agent (support/fake-agent.ts).
+ */
+export const dashboardPort = 4174;
+export const dashboardURL = `http://127.0.0.1:${dashboardPort}/`;
+
 /** The agent under test listens here; config.toml in its home says so. */
 export const agentPort = Number(process.env.PAIRTIME_E2E_PORT ?? '17247');
 
