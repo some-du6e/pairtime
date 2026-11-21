@@ -36,11 +36,14 @@ type attribution struct {
 	// label, if it has one (D-rule2-sidedoor).
 	sideDoor event.Via
 	// ambiguous is set for a slot of a window hosting sessions of several
-	// projects that neither the look-ahead nor ATTRIB_STICKY_S resolves (SM
-	// 3.2 rule 1). proj is "" and the bucket doesn't drain, but anchors
-	// still count: every anchor window covering a present second competes,
-	// whatever its project and whether or not its act has a session, until
-	// one credits a second (D-ambiguous-anchors).
+	// projects that neither the look-ahead nor ATTRIB_STICKY_S resolves, and
+	// for a terminal that resolves to no project at all, as one hosting no
+	// harness does: SM 3.2 rule 1 calls both ambiguous. proj is "" and the
+	// bucket doesn't drain, but anchors still count: every anchor window
+	// covering a present second competes, whatever its project and whether
+	// or not its act has a session, until one credits a second
+	// (D-ambiguous-anchors, which the orchestrator extended to the plain
+	// terminal on 2026-11-20).
 	ambiguous bool
 	// won is the project of the first second the credit pass credits in a
 	// slot that resolves to no project, or "". For an ambiguous slot it is
@@ -68,16 +71,13 @@ func (at *attribution) admits(p string) bool {
 	return false
 }
 
-// holds reports whether a second of the slot can be credited to project p
-// and the slot still hold one project (SM 5.1): the slot resolves to p or
-// to none, and nothing in it has been credited to another project yet.
-func (at *attribution) holds(p string) bool {
-	q := at.proj
-	if q == "" {
-		q = at.won
-	}
-	return q == "" || q == p
-}
+// holds reports whether a returned run's think part can credit a second of
+// the slot to project p and the slot still hold one project (SM 5.1): the
+// slot resolves to p. A run is returned only in a window SM 3.2 resolves
+// to its project (markReturns), so a slot of it that resolves to none, or
+// to another project by a later heartbeat, takes no returned second, and
+// no lookup shares a returned slot with another project.
+func (at *attribution) holds(p string) bool { return at.proj != "" && at.proj == p }
 
 // beat is an editor heartbeat with input in its slot, which SM 3.2 rule 2
 // resolves an editor slot with.
@@ -199,6 +199,13 @@ func (c *creditor) attribute(s *Slot) attribution {
 			var r int
 			at.proj, r, at.ambiguous = c.hostedProject(s)
 			at.resolver = int32(r)
+		}
+		// SM 3.2 rule 1: a terminal hosting no harness resolves through
+		// the shell hook's cwd once v1.5 has one, and until then is
+		// ambiguous, as one hosting several projects is, so anchors count
+		// in it. An agent app keeps rule 3: its session's project or none.
+		if at.proj == "" && s.FocusClass == event.AppTerminal {
+			at.ambiguous = true
 		}
 	case event.AppEditor:
 		// D-editor-heartbeat-first: the client names an editor's project
