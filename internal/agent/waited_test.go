@@ -18,6 +18,9 @@ import (
 	"github.com/some-du6e/pairtime/internal/agent/inbox"
 	"github.com/some-du6e/pairtime/internal/agent/keys"
 	"github.com/some-du6e/pairtime/internal/agent/ledger"
+	"github.com/some-du6e/pairtime/internal/agent/presence"
+	"github.com/some-du6e/pairtime/internal/agent/sched"
+	"github.com/some-du6e/pairtime/internal/agent/state"
 	"github.com/some-du6e/pairtime/internal/platform/clock"
 	"github.com/some-du6e/pairtime/pkg/event"
 	pkgledger "github.com/some-du6e/pairtime/pkg/ledger"
@@ -236,4 +239,196 @@ func TestAdaptersWaiting(t *testing.T) {
 				during, h.waiting(before), w.Status().Next-1)
 		}
 	})
+}
+
+// TestModesSeen checks what the agent sees of config.toml's mode for the
+// ledger writer (modes): the config watch's first look at a change notes a
+// switch back online at once, and only that; a stretch the agent saw end
+// while a locked keyring kept the ledger shut, or that ended before a
+// pairtime login the agent didn't see, or that the last run saw going on,
+// makes the records made before its end that reach the writer local-only,
+// and the first batch after them is marked as the first after the switch
+// back (ledger.Batch.Back).
+func TestModesSeen(t *testing.T) {
+	newAgent := func(t *testing.T, mode string) (*agent, home.Dirs) {
+		t.Helper()
+		dir := t.TempDir()
+		dirs := home.Dirs{Data: dir, Config: dir, Runtime: dir}
+		setMode(t, dirs, mode)
+		return &agent{dirs: dirs, log: slog.New(slog.DiscardHandler), problems: map[string]string{}, table: newestTable(),
+			keyStores: []keys.Store{}, sched: sched.New()}, dirs
+	}
+	// opened waits for the agent's ledger to open, as on a goroutine of its
+	// own.
+	opened := func(t *testing.T, a *agent) *ledger.Writer {
+		t.Helper()
+		for deadline := time.Now().Add(20 * time.Second); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
+			if w := a.writer.Load(); w != nil {
+				return w
+			}
+		}
+		t.Fatal("the ledger didn't open")
+		return nil
+	}
+	// sealOne writes an os.presence event made at at to the agent's
+	// writer, and seals it.
+	sealOne := func(t *testing.T, a *agent, w *ledger.Writer, at time.Time) ledger.Row {
+		t.Helper()
+		if _, err := w.Write(presenceAt(at)); err != nil {
+			t.Fatal(err)
+		}
+		return sealNow(t, w, a.dirs.Ledger())
+	}
+	seenLocal := func(a *agent) (bool, time.Time) {
+		a.modes.mu.Lock()
+		defer a.modes.mu.Unlock()
+		return a.modes.local, a.modes.ended
+	}
+
+	t.Run("a switch back online the config watch hears of is noted at its first look, before the reload", func(t *testing.T) {
+		a, dirs := newAgent(t, "local")
+		t.Cleanup(a.startLedger())
+		w := opened(t, a)
+		// The scheduler doesn't run, so the watch's reload never comes.
+		t.Cleanup(a.watchConfig())
+		if err := home.WriteFile(dirs.ConfigFile(), []byte("mode = \"online\"\n")); err != nil {
+			t.Fatal(err)
+		}
+		for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(10 * time.Millisecond) {
+			if local, _ := seenLocal(a); !local {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatal("the config watch's first look didn't note the switch back online")
+			}
+		}
+		if b := sealOne(t, a, w, time.Now()); !b.Online || !b.Back {
+			t.Errorf("the batch after the switch back was sealed online %v, marked %v; want both", b.Online, b.Back)
+		}
+	})
+	t.Run("a first look at config.toml that still says local-only notes nothing", func(t *testing.T) {
+		a, dirs := newAgent(t, "local")
+		a.startModes()
+		t.Cleanup(a.watchConfig())
+		if err := home.WriteFile(dirs.ConfigFile(), []byte("mode = \"local\"\n# an edit of another line\n")); err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(500 * time.Millisecond)
+		if local, ended := seenLocal(a); !local || !ended.IsZero() {
+			t.Errorf("after the look, local-only %v, a stretch ended %v; want still local-only, and none ended", local, ended)
+		}
+	})
+	t.Run("presence's records queued while a locked keyring kept the ledger shut through a switch back online are sealed local-only, and the batch after them is marked", func(t *testing.T) {
+		a, dirs := newAgent(t, "local")
+		store := &lockedStore{items: map[string][]byte{}}
+		a.keyStores = []keys.Store{store}
+		// One run unlocked first, so keystore.json names the store and the
+		// next run's keystore stays shut while it is locked.
+		first, err := a.openLedger()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := first.Close(); err != nil {
+			t.Fatal(err)
+		}
+		store.setLocked(true)
+		a.ledgerRetry = 20 * time.Millisecond
+		t.Cleanup(a.startLedger())
+		for deadline := time.Now().Add(10 * time.Second); store.refusals() == 0; time.Sleep(10 * time.Millisecond) {
+			if time.Now().After(deadline) {
+				t.Fatal("the agent never asked the locked keyring")
+			}
+		}
+		made := time.Now()
+		a.ledgerIn.Record(presence.Record{At: made, Data: &event.OSPresence{IdleAnyS: 1}})
+		// pairtime login switches config.toml online, and the watch notes it.
+		setMode(t, dirs, "online")
+		a.noteMode()
+		store.setLocked(false)
+		w := opened(t, a)
+		for deadline := time.Now().Add(10 * time.Second); w.Status().Next < 2; time.Sleep(10 * time.Millisecond) {
+			if time.Now().After(deadline) {
+				t.Fatal("presence's queued record never reached the writer")
+			}
+		}
+		waited := sealNow(t, w, dirs.Ledger())
+		after := sealOne(t, a, w, time.Now())
+		if waited.Online || waited.Back || !after.Online || !after.Back {
+			t.Errorf("the queued record's batch sealed online %v, marked %v, and the next online %v, marked %v; want local-only, then online and marked",
+				waited.Online, waited.Back, after.Online, after.Back)
+		}
+	})
+	t.Run("an event made in the second a pairtime login the agent didn't see linked the computer is sealed local-only, and the batch after it is marked", func(t *testing.T) {
+		a, dirs := newAgent(t, "online")
+		linked := time.Now().Add(-time.Minute).UTC().Truncate(time.Second)
+		if err := os.WriteFile(filepath.Join(dirs.Data, "account.json"), []byte(`{"v":1,"server":"https://pairtime.example","device_id":"d_testdevice00000000000000a","linked_at":"`+linked.Format(time.RFC3339)+`"}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(a.startLedger())
+		w := opened(t, a)
+		before := sealOne(t, a, w, linked.Add(500*time.Millisecond))
+		after := sealOne(t, a, w, linked.Add(1500*time.Millisecond))
+		if before.Online || !after.Online || !after.Back {
+			t.Errorf("the event in the link's second sealed online %v, and the next online %v, marked %v; want local-only, then online and marked",
+				before.Online, after.Online, after.Back)
+		}
+	})
+	t.Run("a stretch the last run saw going on, which state.json kept, lasts until the next start, so an event made before it is sealed local-only", func(t *testing.T) {
+		a, dirs := newAgent(t, "local")
+		st, _, err := state.Open(dirs.StateFile())
+		if err != nil {
+			t.Fatal(err)
+		}
+		a.state = st
+		a.startModes() // and the run ends before its ledger opens
+		setMode(t, dirs, "online")
+		next, _ := newAgent(t, "online")
+		next.dirs = dirs
+		if next.state, _, err = state.Open(dirs.StateFile()); err != nil {
+			t.Fatal(err)
+		}
+		made := time.Now()
+		t.Cleanup(next.startLedger())
+		w := opened(t, next)
+		before := sealOne(t, next, w, made.Add(-time.Second))
+		after := sealOne(t, next, w, time.Now().Add(time.Second))
+		if before.Online || !after.Online || !after.Back {
+			t.Errorf("the event made before the start sealed online %v, and the next online %v, marked %v; want local-only, then online and marked",
+				before.Online, after.Online, after.Back)
+		}
+	})
+}
+
+// setMode writes config.toml with mode = mode, as pairtime login and
+// logout do, by a rename.
+func setMode(t *testing.T, dirs home.Dirs, mode string) {
+	t.Helper()
+	if err := home.WriteFile(dirs.ConfigFile(), []byte("mode = \""+mode+"\"\n")); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// presenceAt is an os.presence event made at at, of another run's clock,
+// so the writer holds it to the moment by its t.
+func presenceAt(at time.Time) ledger.Input {
+	return ledger.Input{Event: event.Event{
+		Envelope: event.Envelope{EventID: event.NewEventID(at), T: at.UnixMilli(), Mono: 1000, BootID: "b_test",
+			Source: event.SourceOS, Via: event.ViaOS, Harness: event.HarnessNone, SessionKey: event.NoSession},
+		Data: &event.OSPresence{IdleAnyS: 1},
+	}}
+}
+
+// sealNow seals what w, the writer of the ledger in dir, has pending, and
+// returns the newest batch's row, which a seal the writer still owed may
+// have sealed first.
+func sealNow(t *testing.T, w *ledger.Writer, dir string) ledger.Row {
+	t.Helper()
+	if _, _, err := w.Seal(); err != nil {
+		t.Fatal(err)
+	}
+	_, rows, err := ledger.ReadRows(dir, w.Status().Batches)
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("the newest row doesn't read (%v): %+v", err, rows)
+	}
+	return rows[0]
 }

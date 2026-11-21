@@ -1070,10 +1070,10 @@ func TestNoteSeen(t *testing.T) {
 	}
 }
 
-// TestSealReadsModeAgain checks a note that comes while a seal reads
-// config.toml (Options.Online), which it does without the Writer's lock:
-// the seal reads the file again, so a record written after a switch back
-// online isn't sealed in the mode the file had before it. The test's
+// TestSealReadsModeAgain checks a note, or a record, that comes while a
+// seal reads config.toml (Options.Online), which it does without the
+// Writer's lock: the seal reads the file again, so a record written after
+// a switch isn't sealed in the mode the file had before it. The test's
 // Online notes the mode and writes the record itself, which a real one
 // never does, to land them in that moment.
 func TestSealReadsModeAgain(t *testing.T) {
@@ -1081,11 +1081,13 @@ func TestSealReadsModeAgain(t *testing.T) {
 		name string
 		// noted is the mode noted before the seal, note the one noted while
 		// it reads, and before and after what the file says at its first
-		// read and at the next.
-		noted, note, before, after, want bool
+		// read and at the next. unnoted has the record come mid-read with no
+		// note, as before the watch notes a switch.
+		noted, note, before, after, want, unnoted bool
 	}{
-		{"a switch back online noted mid-read, with a record after it, seals the batch online", false, true, false, true, true},
-		{"a switch to local-only noted mid-read, with a record after it, seals the batch local-only", true, false, true, false, false},
+		{"a switch back online noted mid-read, with a record after it, seals the batch online", false, true, false, true, true, false},
+		{"a switch to local-only noted mid-read, with a record after it, seals the batch local-only", true, false, true, false, false, false},
+		{"a record written mid-read, after config.toml went local-only, which the watch hasn't noted yet, seals the batch local-only", true, true, true, false, false, true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -1105,7 +1107,9 @@ func TestSealReadsModeAgain(t *testing.T) {
 					if reads.Add(1) > 1 {
 						return c.after
 					}
-					w.NoteMode(c.note)
+					if !c.unnoted {
+						w.NoteMode(c.note)
+					}
 					if _, _, err := write(w, rng, "os.presence", testT); err != nil {
 						t.Error(err)
 					}

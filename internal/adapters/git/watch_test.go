@@ -748,6 +748,93 @@ func TestWatcher(t *testing.T) {
 	}
 }
 
+// TestWatcherWaiting checks Waiting, which the agent's ledger writer asks
+// while the first batch after a switch back online is due its mark
+// (ledger.Options.Waiting): a change made before the moment asked about
+// counts while the watcher holds it, while it is being given to the sink,
+// and while a scan that began before the moment runs, and once the sink
+// has it, not at all.
+func TestWatcherWaiting(t *testing.T) {
+	const before = int64(1_795_100_000_000)
+	changeAt := func(ms int64) *heldChange {
+		return &heldChange{c: Change{Event: event.Event{Envelope: event.Envelope{T: ms}}}}
+	}
+	states := []struct {
+		name string
+		w    *Watcher
+		want bool
+	}{
+		{"a held change made before the moment counts", &Watcher{held: []*heldChange{changeAt(before + 5), changeAt(before - 1)}}, true},
+		{"a held change made at the moment or after it doesn't", &Watcher{held: []*heldChange{changeAt(before)}}, false},
+		{"a change being given to the sink, made before the moment, counts", &Watcher{delivering: before - 1}, true},
+		{"a change being given to the sink, made after it, doesn't", &Watcher{delivering: before + 1}, false},
+		{"a scan that began before the moment counts, since its changes are timed from its start",
+			&Watcher{trees: map[string]*tree{"r": {scanning: true, scanFrom: time.UnixMilli(before - 1)}}}, true},
+		{"a scan that began at the moment or after it doesn't",
+			&Watcher{trees: map[string]*tree{"r": {scanning: true, scanFrom: time.UnixMilli(before)}}}, false},
+		{"a worktree not being scanned doesn't", &Watcher{trees: map[string]*tree{"r": {scanFrom: time.UnixMilli(before - 1)}}}, false},
+		{"nothing on its way counts for nothing", &Watcher{}, false},
+	}
+	for _, c := range states {
+		t.Run(c.name, func(t *testing.T) {
+			if got := c.w.Waiting(before); got != c.want {
+				t.Errorf("Waiting = %v, want %v", got, c.want)
+			}
+		})
+	}
+
+	t.Run("a change held for its actor counts until the sink has it, and while the sink takes it, and carries when its scan began", func(t *testing.T) {
+		g := newGitEnv(t)
+		g.realDates = true
+		r := g.initRepo()
+		r.commit("one", map[string]string{"a.txt": "a\n"})
+		var (
+			w      *Watcher
+			moment atomic.Int64
+			during atomic.Bool
+		)
+		sink := make(testSink, 4)
+		w, err := NewWatcher(WatcherOptions{Resolver: g.resolver(ProjectMap{}, Excludes{}), NoNotify: true, Hold: time.Minute,
+			Sink: func(c Change) {
+				during.Store(w.Waiting(moment.Load()))
+				sink <- c
+			}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { w.Close() })
+		track(t, w, r.dir)
+		scanned := time.Now()
+		r.commit("by the agent", map[string]string{"a.txt": "b\n"})
+		w.Poll()
+		w.flush()
+		sink.none(t)
+		moment.Store(time.Now().Add(time.Second).UnixMilli())
+		held, early := w.Waiting(moment.Load()), w.Waiting(scanned.UnixMilli()-1)
+		w.NoteAgentCommand(AgentCommand{End: time.Now(), Dir: r.dir, Line: `git commit -am "by the agent"`})
+		w.flush()
+		c := sink.next(t, time.Second)
+		after := w.Waiting(moment.Load())
+		checks := []struct {
+			name string
+			ok   bool
+		}{
+			{"while the watcher held the change, it counted", held},
+			{"it didn't count as made before its scan began", !early},
+			{"while the sink took it, it counted", during.Load()},
+			{"once the sink had it, it didn't", !after},
+			{"the change carries when its scan began, its event's t", !c.Found.IsZero() && c.Found.UnixMilli() == c.Event.T && !c.Found.Before(scanned)},
+		}
+		for _, ch := range checks {
+			t.Run(ch.name, func(t *testing.T) {
+				if !ch.ok {
+					t.Errorf("no: held %v, before its scan %v, in the sink %v, after %v; found %v, t %d", held, early, during.Load(), after, c.Found, c.Event.T)
+				}
+			})
+		}
+	})
+}
+
 func TestRelevant(t *testing.T) {
 	cases := []struct {
 		name string
