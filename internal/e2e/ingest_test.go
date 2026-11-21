@@ -17,6 +17,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -94,6 +95,51 @@ func (s *server) restart() {
 	mux := http.NewServeMux()
 	svc.Register(mux)
 	s.mux.Store(mux)
+}
+
+// linkedServer is pairtimed's ingest over a new database, as cmd/pairtimed
+// wires it, with the rows WP-SV3's device grant writes for a linked device:
+// its account, and the device deviceID at link generation 1 with its
+// token's hash and its key, and no ingest state yet. It returns the
+// device's token and key.
+func linkedServer(t *testing.T, deviceID string) (*server, string, ed25519.PrivateKey) {
+	t.Helper()
+	ctx := context.Background()
+	db := storetest.Open(t, serverstore.SQLite)
+	ms, err := migrations.Embedded()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := migrations.Apply(ctx, db, ms, time.Now); err != nil {
+		t.Fatal(err)
+	}
+	wr := writer.Start(db.Write, writer.Options{Window: time.Millisecond})
+	t.Cleanup(wr.Close)
+	ds, err := device.New(device.Options{DB: db, Writer: wr})
+	if err != nil {
+		t.Fatal(err)
+	}
+	devKey := ed25519.NewKeyFromSeed(seed("e2e device key"))
+	token := devtoken.New()
+	exec := func(query string, args ...any) {
+		t.Helper()
+		if err := wr.Do(ctx, 1, func(ctx context.Context, tx writer.Tx) error {
+			_, err := tx.ExecContext(ctx, query, args...)
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	linked := time.Now().UnixMilli()
+	exec(`INSERT INTO users (id, hca_sub, verification_status, created_at_ms, updated_at_ms, signed_in_at_ms) VALUES ($1, $2, 'verified', $3, $3, $3)`,
+		account, "hca-e2e", linked)
+	tokenHash := sha256.Sum256([]byte(token))
+	exec(`INSERT INTO devices (device_id, user_id, token_hash, public_key, os_family, client_build, linked_at_ms, last_seen_at_ms, link_generation)
+VALUES ($1, $2, $3, $4, 'linux', 'v0.0.0-dev', $5, $5, 1)`,
+		deviceID, account, hex.EncodeToString(tokenHash[:]), []byte(devKey.Public().(ed25519.PublicKey)), linked)
+	sv := &server{db: db, w: wr, devices: ds, key: ed25519.NewKeyFromSeed(seed("e2e server key"))}
+	sv.restart()
+	return sv, token, devKey
 }
 
 // faults is the way to the server, with what a network and a restart do
@@ -236,8 +282,7 @@ func stop(at time.Time, mono int64) ledger.Input {
 // the uploader to pairtimed's ingest handler through a 503, a server
 // restart, a 429 and a lost answer, which the uploader's own retry fetches
 // again, under the server's own rate limiter, and both sides end with the
-// same totals and DESIGN 7.4's readings; a busy session after it, with no
-// restart, stays under that limiter; privacy show prints the first
+// same totals and DESIGN 7.4's readings; privacy show prints the first
 // request's body byte for byte; nothing goes out before the sign-in.
 func TestUploadToIngest(t *testing.T) {
 	ctx := context.Background()
@@ -310,43 +355,8 @@ func TestUploadToIngest(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// The server, and the rows WP-SV3's device grant writes for a linked
-	// device: its account, and the device at link generation 1 with its
-	// token's hash and its key, and no ingest state yet.
-	db := storetest.Open(t, serverstore.SQLite)
-	ms, err := migrations.Embedded()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := migrations.Apply(ctx, db, ms, time.Now); err != nil {
-		t.Fatal(err)
-	}
-	wr := writer.Start(db.Write, writer.Options{Window: time.Millisecond})
-	t.Cleanup(wr.Close)
-	ds, err := device.New(device.Options{DB: db, Writer: wr})
-	if err != nil {
-		t.Fatal(err)
-	}
-	devKey := ed25519.NewKeyFromSeed(seed("e2e device key"))
-	token := devtoken.New()
-	exec := func(query string, args ...any) {
-		t.Helper()
-		if err := wr.Do(ctx, 1, func(ctx context.Context, tx writer.Tx) error {
-			_, err := tx.ExecContext(ctx, query, args...)
-			return err
-		}); err != nil {
-			t.Fatal(err)
-		}
-	}
-	linked := time.Now().UnixMilli()
-	exec(`INSERT INTO users (id, hca_sub, verification_status, created_at_ms, updated_at_ms, signed_in_at_ms) VALUES ($1, $2, 'verified', $3, $3, $3)`,
-		account, "hca-e2e", linked)
-	tokenHash := sha256.Sum256([]byte(token))
-	exec(`INSERT INTO devices (device_id, user_id, token_hash, public_key, os_family, client_build, linked_at_ms, last_seen_at_ms, link_generation)
-VALUES ($1, $2, $3, $4, 'linux', 'v0.0.0-dev', $5, $5, 1)`,
-		deviceID, account, hex.EncodeToString(tokenHash[:]), []byte(devKey.Public().(ed25519.PublicKey)), linked)
-	sv := &server{db: db, w: wr, devices: ds, key: ed25519.NewKeyFromSeed(seed("e2e server key"))}
-	sv.restart()
+	sv, token, devKey := linkedServer(t, deviceID)
+	db := sv.db
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	t.Cleanup(transport.CloseIdleConnections)
 	ft := &faults{srv: sv, closeIdle: transport.CloseIdleConnections,
@@ -548,49 +558,111 @@ VALUES ($1, $2, $3, $4, 'linux', 'v0.0.0-dev', $5, $5, 1)`,
 				}
 			}
 		}},
-		{"a busy session after it, a stop every second for 45 s with no restart, gets no rate_limited from the server's own limiter", func(t *testing.T) {
-			// The limiter has counted every request since the restart the
-			// faults injected. The test wakes the uploader at each stop,
-			// more often than SoonDelay's coalescing does, so a pace that
-			// let the requests through, as paceBurst = 1000 does, would
-			// empty ingest's bucket of 30, refilled one every 10 s, within
-			// the session (#150 R3).
-			const busy = 45
-			clockMu.Lock()
-			at := now
-			clockMu.Unlock()
-			for i := range busy {
-				at = at.Add(time.Second)
-				clockMu.Lock()
-				now = at
-				clockMu.Unlock()
-				if _, err := w.Write(stop(at, int64(i+1)*1000)); err != nil {
-					t.Fatal(err)
-				}
-				// The stop seals at once on the writer's goroutine, and Seal
-				// waits for that seal.
-				if _, _, err := w.Seal(); err != nil {
-					t.Fatal(err)
-				}
-				u.Wake()
-				time.Sleep(time.Second)
-			}
-			last := w.Status().Batches
-			waitFor(t, "every root of the session", func() bool {
-				u.Wake()
-				return count(`SELECT COUNT(*) FROM witness_rows WHERE device_id = $1`) == int64(last)
-			})
-			ft.mu.Lock()
-			rateLimited := ft.rateLimited
-			ft.mu.Unlock()
-			if rateLimited != 0 {
-				t.Errorf("the server's own limiter refused %d requests as rate_limited", rateLimited)
-			}
-		}},
 	}
 	for _, s := range steps {
 		if !t.Run(s.name, s.run) {
 			break
 		}
+	}
+}
+
+// TestBusySession is a session busy with stops, one a second for 45 s,
+// against pairtimed's ingest with no restart and no fault (#150 R3): the
+// server's own limiter, a burst of 30 refilled one every 10 s, refuses none
+// of the uploader's requests, and every root gets there. The test wakes
+// the uploader at each stop, more often than SoonDelay's coalescing does,
+// so an uploader that let its requests through, as one with paceBurst =
+// 1000, would empty the server's bucket within the session. It is a test
+// of its own because the catch-up in TestUploadToIngest answers a 429,
+// which drains the uploader's pace, and after that the burst makes no
+// difference for minutes.
+func TestBusySession(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	dirs := home.Dirs{Data: dir, Config: dir, Runtime: dir}
+	table := newestTable()
+	keys, err := pkgledger.DeriveKeys(seed("e2e busy session K_dev"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var up atomic.Pointer[uploader.Uploader]
+	w, err := ledger.Open(ledger.Options{
+		Dir: dirs.Ledger(), Keys: keys, KeyID: "0123456789abcdef", Params: table,
+		Sealed: func(b ledger.Batch) {
+			if u := up.Load(); u != nil {
+				u.Sealed(b)
+			}
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { w.Close() })
+	if err := os.MkdirAll(dirs.Buckets(), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	sv, token, devKey := linkedServer(t, w.DeviceID())
+	ft := &faults{srv: sv, closeIdle: func() {}, by: map[int]string{}}
+	srv := httptest.NewServer(ft)
+	t.Cleanup(srv.Close)
+	st, _, err := state.Open(dirs.StateFile())
+	if err != nil {
+		t.Fatal(err)
+	}
+	creds := uploader.Credentials{Server: srv.URL, Token: token, DeviceID: w.DeviceID(), Sign: uploader.KeySigner(devKey), LinkedAt: time.Now().Add(-time.Minute)}
+	u, err := uploader.New(uploader.Options{
+		Ledger: w, LedgerDir: dirs.Ledger(), BucketDir: dirs.Buckets(), DataDir: dirs.Data, State: st,
+		Login:  uploader.LoginFunc(func() (uploader.Credentials, bool) { return creds, true }),
+		Params: table, Started: time.Now(), Client: srv.Client(), Draw: func(int64) int64 { return 0 },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	up.Store(u)
+	u.Start()
+	t.Cleanup(u.Close)
+
+	const busy = 45
+	for i := range busy {
+		if _, err := w.Write(stop(time.Now(), int64(i+1)*1000)); err != nil {
+			t.Fatal(err)
+		}
+		// The stop seals at once on the writer's goroutine, and Seal waits
+		// for that seal.
+		if _, _, err := w.Seal(); err != nil {
+			t.Fatal(err)
+		}
+		u.Wake()
+		time.Sleep(time.Second)
+	}
+	last := int64(w.Status().Batches)
+	roots := func() int64 {
+		var n int64
+		if err := sv.db.Read.QueryRowContext(ctx, `SELECT COUNT(*) FROM witness_rows WHERE device_id = $1`, w.DeviceID()).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	deadline := time.Now().Add(time.Minute)
+	for roots() != last && time.Now().Before(deadline) {
+		u.Wake()
+		time.Sleep(25 * time.Millisecond)
+	}
+	ft.mu.Lock()
+	rateLimited := ft.rateLimited
+	ft.mu.Unlock()
+	checks := []struct {
+		name string
+		ok   bool
+	}{
+		{"every root of the session reaches the server", roots() == last && last >= busy},
+		{"the server's own limiter refuses none of the uploader's requests", rateLimited == 0},
+	}
+	for _, c := range checks {
+		t.Run(c.name, func(t *testing.T) {
+			if !c.ok {
+				t.Errorf("no: the server holds %d of %d roots, and refused %d requests as rate_limited", roots(), last, rateLimited)
+			}
+		})
 	}
 }
