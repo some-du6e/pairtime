@@ -1416,6 +1416,61 @@ func TestStatuslineRules(t *testing.T) {
 	}
 }
 
+func TestTodayIsTheDayTheAgentWrites(t *testing.T) {
+	la, err := time.LoadLocation("America/Los_Angeles")
+	if err != nil {
+		t.Skip("no time zone data:", err)
+	}
+	ny, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		t.Skip("no time zone data:", err)
+	}
+	// The agent started in Los Angeles, and counts its days there: its
+	// 2026-11-24 runs from 08:00Z to 08:00Z the next day.
+	start := time.Date(2026, 11, 24, 0, 0, 0, 0, la)
+	written := dayFile{Date: "2026-11-24", Zone: "Local", Start: start.UTC(), End: start.AddDate(0, 0, 1).UTC(), Projects: mixedDay.Projects}
+	cases := []struct {
+		name string
+		now  time.Time
+		date string // the day today --json shows
+		line string // what statusline prints
+	}{
+		{
+			name: "after the computer's zone moves to New York, today and statusline read the day the agent goes on writing, whose bounds hold now",
+			now:  time.Date(2026, 11, 25, 1, 30, 0, 0, ny), // 22:30 on the 24th in Los Angeles
+			date: "2026-11-24", line: "you 1h 20m, 20m level C · Codex 30m · Claude 10m\n",
+		},
+		{
+			name: "once the agent's day has ended, today and statusline take the day by the computer's zone until the agent writes the next",
+			now:  time.Date(2026, 11, 25, 3, 30, 0, 0, ny), // 00:30 on the 25th in Los Angeles
+			date: "2026-11-25", line: "you 0m\n",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			setZone(t, ny)
+			old := viewNow
+			viewNow = func() time.Time { return tc.now }
+			t.Cleanup(func() { viewNow = old })
+			newHome(t).running().writeDays(written)
+			code, out, errOut := runCmd("today", "--json")
+			var got struct {
+				Date string `json:"date"`
+			}
+			if err := json.Unmarshal([]byte(out), &got); code != 0 || errOut != "" || err != nil {
+				t.Fatalf("today --json: exit %d, stderr %q, %v", code, errOut, err)
+			}
+			if got.Date != tc.date {
+				t.Errorf("today shows %s, want %s", got.Date, tc.date)
+			}
+			code, out, errOut = runCmd("statusline", "--timeout", "5s")
+			if code != 0 || errOut != "" || out != tc.line {
+				t.Errorf("statusline: exit %d, stderr %q, got %q, want %q", code, errOut, out, tc.line)
+			}
+		})
+	}
+}
+
 func TestTodayAndStatuslineWhenNothingCanBeShown(t *testing.T) {
 	agentDown := text.Phrase(text.KeyAgentDown)
 	storeFailed := text.Phrase(text.KeyStoreError, "error", "")

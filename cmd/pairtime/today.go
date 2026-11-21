@@ -67,16 +67,19 @@ func runToday(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	day := *date
-	if day == "" {
-		day = localToday()
-	} else if t, err := time.Parse(time.DateOnly, day); err != nil || t.Format(time.DateOnly) != day {
-		fmt.Fprintf(stderr, "pairtime today: --date wants a day such as 2026-11-24, got %q\n", day)
-		return 2
+	if day != "" {
+		if t, err := time.Parse(time.DateOnly, day); err != nil || t.Format(time.DateOnly) != day {
+			fmt.Fprintf(stderr, "pairtime today: --date wants a day such as 2026-11-24, got %q\n", day)
+			return 2
+		}
 	}
 	dirs, err := home.Default()
 	if err != nil {
 		sayStoreFailure(stderr, err)
 		return 1
+	}
+	if day == "" {
+		day = dayStore{dirs.Days()}.today()
 	}
 	shadow, err := readShadow(dirs)
 	if err != nil {

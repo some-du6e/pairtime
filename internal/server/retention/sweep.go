@@ -30,6 +30,8 @@ type Job struct {
 	WindowMonths int
 	// Hold, when set, keeps the rows a submission uses.
 	Hold *Hold
+	// KeptBy lists the tables whose rows keep the rows they name by Key.
+	KeptBy []string
 }
 
 // Hold is the hold table a job consults.
@@ -41,8 +43,9 @@ type Hold struct {
 }
 
 // Jobs returns the jobs whose tables exist: those without awaits, each
-// with its hold unless the hold awaits its table. off lists the rest, as
-// "server.devices/devices awaits WP-SV3", for the log.
+// with its hold and its kept_by tables, less the ones that await their
+// tables. off lists what is left out, as "server.devices/devices awaits
+// WP-SV3", for the log.
 func (p *Policy) Jobs() (jobs []Job, off []string) {
 	for _, e := range p.Entries {
 		for _, spec := range e.Jobs {
@@ -55,14 +58,22 @@ func (p *Policy) Jobs() (jobs []Job, off []string) {
 				off = append(off, job.ID+" hold awaits "+h.Awaits)
 				job.Hold = nil
 			}
+			job.KeptBy = nil
+			for _, k := range spec.KeptBy {
+				if k.Awaits != "" {
+					off = append(off, job.ID+" kept_by "+k.Table+" awaits "+k.Awaits)
+					continue
+				}
+				job.KeptBy = append(job.KeptBy, k.Table)
+			}
 			jobs = append(jobs, job)
 		}
 	}
 	return jobs, off
 }
 
-// AllJobs returns every job with its hold, whether or not its tables exist
-// yet. Tests run them against tables they create.
+// AllJobs returns every job with its hold and kept_by tables, whether or
+// not its tables exist yet. Tests run them against tables they create.
 func (p *Policy) AllJobs() []Job {
 	var jobs []Job
 	for _, e := range p.Entries {
@@ -88,6 +99,9 @@ func (p *Policy) job(e Entry, spec JobSpec) Job {
 	}
 	if h := spec.Hold; h != nil {
 		j.Hold = &Hold{Table: h.Table, DecidedColumn: h.DecidedColumn, WindowMonths: p.SpotCheckWindow.Months}
+	}
+	for _, k := range spec.KeptBy {
+		j.KeptBy = append(j.KeptBy, k.Table)
 	}
 	return j
 }
@@ -154,7 +168,8 @@ func Sweep(ctx context.Context, d Doer, jobs []Job, now time.Time, batch int) []
 // a job by the window at or before lastClosed, is past its period. A hold
 // keeps its row while the hold's decision time is NULL, because the
 // submission is open, or later than lastClosed, because the decision's
-// spot-check window is still open (Window.Closes).
+// spot-check window is still open (Window.Closes). A kept_by table keeps
+// every row one of its rows names.
 func (j Job) deleteSQL(now time.Time, batch int) (string, []any) {
 	col := func(alias string, cols []string) []string {
 		out := make([]string, len(cols))
@@ -185,6 +200,14 @@ func (j Job) deleteSQL(now time.Time, batch int) (string, []any) {
 		b.WriteString(" AND NOT EXISTS (SELECT 1 FROM " + h.Table + " h WHERE " + strings.Join(match, " AND ") +
 			" AND (" + decided + " IS NULL OR " + decided + " > $3))")
 		args = append(args, lastClosed(now, h.WindowMonths).UnixMilli())
+	}
+	for n, table := range j.KeptBy {
+		alias := fmt.Sprintf("k%d", n)
+		match := make([]string, len(j.Key))
+		for i, k := range j.Key {
+			match[i] = alias + "." + k + " = t." + k
+		}
+		b.WriteString(" AND NOT EXISTS (SELECT 1 FROM " + table + " " + alias + " WHERE " + strings.Join(match, " AND ") + ")")
 	}
 	b.WriteString(" LIMIT $2)")
 	return b.String(), args

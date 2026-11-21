@@ -17,12 +17,13 @@ const (
 	// anchor (DESIGN 6.2 D3).
 	TrackAnchor TrackOutcome = "anchor"
 	// TrackMatched is a call from a session pairtime sees through hooks or a
-	// log reader, near one of that session's prompts. The prompt is the
-	// anchor; the call opens nothing and counts toward the harness's
-	// compliance with the AGENTS.md entry.
+	// log reader, within TRACK_DEDUPE_S of one of that session's prompts.
+	// The prompt is the anchor; the call opens nothing and counts toward the
+	// harness's compliance with the AGENTS.md entry.
 	TrackMatched TrackOutcome = "track_matched"
-	// TrackWithoutPrompt is a call from such a session with no prompt near
-	// it. It opens nothing and raises FlagTrackWithoutPrompt.
+	// TrackWithoutPrompt is a call from such a session with no prompt of the
+	// session within TRACK_DEDUPE_S of it. It opens nothing and raises
+	// FlagTrackWithoutPrompt.
 	TrackWithoutPrompt TrackOutcome = "track_without_prompt"
 	// TrackRejected is a call from a session pairtime can't see otherwise
 	// that failed the gate. Failed says which conditions.
@@ -56,15 +57,21 @@ func trackCmp(a, b TrackCall) int {
 // trackCalls decides every `pairtime track` call (DESIGN 5.4, 6.2 D3).
 //
 // From a session pairtime sees through hooks or a log reader, the
-// session's own prompt is the anchor. A call within TRACK_DEDUPE_S of one
-// of its hook or log prompts is track_matched, and one with no such prompt
-// within TRACK_DEDUPE_S raises track_without_prompt. DESIGN 5.4 gives the
-// flag TRACK_LOG_MATCH_S, so a call 10 to 30 s from a prompt would be both
-// matched and flagged; this follows the single window that
-// docs/errata/2026-11-19-track-match-windows.md proposes to Karim, since an
-// agent following the entry calls track alongside its first tool call,
-// which can come that late. TRACK_LOG_MATCH_S keeps its job in DESIGN 5.2,
-// where a log record takes over from a side-door prompt.
+// session's own prompt is the anchor (DESIGN 5.4). One window decides the
+// call: within TRACK_DEDUPE_S of one of its hook or log prompts, before or
+// after it, the call is track_matched, and with no such prompt within
+// TRACK_DEDUPE_S it raises track_without_prompt. The session counts as seen
+// when the call's log_match names a reader, or when a hook or log record of
+// the session is dated at most TRACK_DEDUPE_S after the call, so no later
+// record changes what the call did. TRACK_LOG_MATCH_S keeps its job in
+// DESIGN 5.2, where a log record takes over from a side-door prompt
+// (docs/errata/2026-11-19-track-match-windows.md, decided 2026-11-20 as
+// E-track-windows).
+//
+// This is the code half of E-track-windows, which lets its scorer edits land
+// before its text: main's DESIGN 5.4 still flags a call with no prompt
+// within TRACK_LOG_MATCH_S and sets no date bound on seeing a session.
+// TODO(P10): P10 lands DESIGN 5.4's text, and this comment then cites it.
 //
 // From any other session the call is the fallback anchor, opened only
 // when the gate's four conditions hold. It is classed like a prompt from
@@ -82,7 +89,7 @@ func (d *deriver) trackCalls() {
 		}
 		c := TrackCall{ID: e.EventID, T: e.T, SessionKey: e.SessionKey, Harness: e.Harness}
 		s := d.sessions[e.SessionKey]
-		seen := s != nil && (s.native || p.LogMatch != event.LogNoReader)
+		seen := s != nil && (p.LogMatch != event.LogNoReader || s.native && s.firstNative <= e.T+d.r.trackDedupe)
 		switch {
 		case seen && s.nativePromptNear(e.T, d.r.trackDedupe):
 			c.Outcome = TrackMatched

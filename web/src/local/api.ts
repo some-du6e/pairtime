@@ -17,6 +17,8 @@ export function describeMode(mode: Mode): string {
 	switch (mode) {
 		case 'local':
 			return 'Local only: nothing leaves this computer';
+		case 'online':
+			return 'Online: the minutes pairtime counts go to your pairtime server, as numbers';
 		default:
 			// The UI ships inside the agent, so this is a mode added in Go
 			// without words here yet.

@@ -32,6 +32,9 @@ func TestTrackBesideHooks(t *testing.T) {
 	}{
 		{"a call 4 s after the session's hook prompt is track_matched and opens nothing", 4, TrackMatched},
 		{"a call 20 s after it is still track_matched, within TRACK_DEDUPE_S, and isn't flagged", 20, TrackMatched},
+		{"a call TRACK_DEDUPE_S after the session's hook prompt is still track_matched, since the window includes its edge", 30, TrackMatched},
+		{"a call 31 s after the session's hook prompt, past TRACK_DEDUPE_S, opens nothing and raises track_without_prompt", 31, TrackWithoutPrompt},
+		{"a call 20 s before the session's hook prompt is track_matched, since TRACK_DEDUPE_S counts both ways", -20, TrackMatched},
 		{"a call with no prompt of its session nearby opens nothing and raises track_without_prompt", 120, TrackWithoutPrompt},
 	}
 	for _, c := range cases {
@@ -133,6 +136,20 @@ func TestTrackGate(t *testing.T) {
 		{name: "condition 4: a call from a session a log reader covers goes by the log, and with no prompt there is flagged",
 			build: func(b *tl) []event.Event { return []event.Event{b.track(at(60), "s_t", 30, event.LogUnmatched, "")} },
 			want:  []want{{outcome: TrackWithoutPrompt}}},
+		{name: "condition 4 reads only records dated by TRACK_DEDUPE_S after the call, so a session whose first hook record comes 40 s later goes through the gate",
+			build: func(b *tl) []event.Event {
+				c := b.track(at(60), "s_t", 30, event.LogNoReader, "")
+				b.start(at(100), "s_t", "p_1", event.EntrypointCLI, event.ParentTerminalApp, true)
+				return []event.Event{c}
+			},
+			want: []want{{outcome: TrackAnchor, level: event.EvidenceC, kind: event.AnchorSubstantivePrompt, lead: 140}}},
+		{name: "condition 4 counts a hook prompt 20 s after the call, so the session is seen and the call is track_matched",
+			build: func(b *tl) []event.Event {
+				c := b.track(at(60), "s_t", 30, event.LogNoReader, "")
+				b.prompt(at(80), event.ViaHook, "s_t", "p_1", "t_1", 30)
+				return []event.Event{c}
+			},
+			want: []want{{outcome: TrackMatched}}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

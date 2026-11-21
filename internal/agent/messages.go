@@ -38,7 +38,11 @@ func (a *agent) startIPC(opts Options) func() {
 	a.journal = j
 	// Hook calls go through the hook sink, whichever way they come.
 	sink := newHookSink(j, runtime.GOOS, a.hooked, a.hookSteps())
-	l := &ipcListener{a: a, sink: sink, opts: ipc.Options{ForcePipe: opts.ForcePipe, Log: a.log, Walk: a.walkPeer}}
+	// The CLI's questions, such as the last work session `pairtime recap`
+	// asks for, are answered from the bucket store, which startScorer
+	// opened before this.
+	l := &ipcListener{a: a, sink: sink, opts: ipc.Options{ForcePipe: opts.ForcePipe, Log: a.log, Walk: a.walkPeer,
+		Answer: a.answerQuestion}}
 	l.listen()
 
 	// Drains run on a goroutine of their own, because a long spool takes a

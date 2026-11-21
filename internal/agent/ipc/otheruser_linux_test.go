@@ -232,7 +232,7 @@ func TestOtherUser(t *testing.T) {
 			},
 		},
 		{
-			name: "a sender writes nothing to a socket another uid listens on, and spools the message instead",
+			name: "a sender or a question writes nothing to a socket another uid listens on, and the message is spooled instead",
 			run: func(t *testing.T) {
 				ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 				defer cancel()
@@ -284,6 +284,10 @@ func TestOtherUser(t *testing.T) {
 					t.Errorf("Send = %q, %v; want the message spooled instead", via, err)
 				}
 				readNothing("Send")
+				if ans, err := ipc.Ask(dctx, ep, ipc.AskLastSession); !errors.Is(err, ipc.ErrNotAgent) {
+					t.Errorf("Ask = %s, %v; want ErrNotAgent", ans, err)
+				}
+				readNothing("Ask")
 			},
 		},
 		{
