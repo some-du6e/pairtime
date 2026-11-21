@@ -101,18 +101,26 @@ func (s *server) restart() {
 // down before it read the request and came back; down, a connection
 // dropped as pairtimed starts; a 429; and an answer lost after the server
 // stored the request. net/http sends a POST with an Idempotency-Key again
-// once by itself when a reused connection drops, so a restart is followed
-// by down for the uploader to see the failure. It keeps the inflated body
-// of every POST that reaches it, and counts the server's own 429s and its
-// replays.
+// once by itself when a reused connection drops, so a restart and a lost
+// answer are each followed by down, and a lost answer also closes the
+// client's idle connections, so the transport's own resend dials afresh
+// and isn't sent again: the uploader sees the failure, and its own retry
+// is what resends the request (go-idempotency-key-retry). It keeps the
+// inflated body of every POST that reaches it, and counts the server's own
+// 429s and its replays, with the Idempotency-Keys of the lost answer and
+// of the replays.
 type faults struct {
-	srv         *server
+	srv *server
+	// closeIdle closes the idle connections of the uploader's client.
+	closeIdle   func()
 	mu          sync.Mutex
 	by          map[int]string
 	n           int
 	js          [][]byte
 	rateLimited int
 	replays     int
+	lost        string   // the Idempotency-Key of the request whose answer was lost
+	replayed    []string // the Idempotency-Keys the server answered as replays
 }
 
 func (f *faults) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -145,6 +153,10 @@ func (f *faults) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		drop(w)
 	case "lost":
 		next.ServeHTTP(httptest.NewRecorder(), r)
+		f.mu.Lock()
+		f.lost = r.Header.Get("Idempotency-Key")
+		f.mu.Unlock()
+		f.closeIdle()
 		drop(w)
 	default:
 		f.serve(next, w, r)
@@ -162,6 +174,7 @@ func (f *faults) serve(next http.Handler, w http.ResponseWriter, r *http.Request
 	}
 	if w.Header().Get(ingest.HeaderReplay) == "true" {
 		f.replays++
+		f.replayed = append(f.replayed, r.Header.Get("Idempotency-Key"))
 	}
 }
 
@@ -207,13 +220,25 @@ type roundTripper func(*http.Request) (*http.Response, error)
 
 func (f roundTripper) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
+// stop is the agent.stop hook record of a turn at at, which the ledger
+// writer seals at once, as it does each prompt's and stop's.
+func stop(at time.Time, mono int64) ledger.Input {
+	return ledger.Input{Event: event.Event{
+		Envelope: event.Envelope{EventID: event.NewEventID(at), T: at.UnixMilli(), Mono: mono, BootID: "b_e2e",
+			Source: event.SourceHook, Via: event.ViaHook, Harness: event.HarnessClaudeCode, HarnessVersion: "2.1.327",
+			SessionKey: "s_busy", ProjectKey: "p_test"},
+		Data: &event.AgentStop{TurnKey: "t_1", StopReason: event.StopEndTurn},
+	}}
+}
+
 // TestUploadToIngest is WP-AG5's client and server in one Linux test
 // (#150 R4): a day of minute buckets and the batches beside them go from
 // the uploader to pairtimed's ingest handler through a 503, a server
-// restart, a 429 and a lost answer, under the server's own rate limiter,
-// and both sides end with the same totals and DESIGN 7.4's readings;
-// privacy show prints the first request's body byte for byte; nothing
-// goes out before the sign-in.
+// restart, a 429 and a lost answer, which the uploader's own retry fetches
+// again, under the server's own rate limiter, and both sides end with the
+// same totals and DESIGN 7.4's readings; a busy session after it, with no
+// restart, stays under that limiter; privacy show prints the first
+// request's body byte for byte; nothing goes out before the sign-in.
 func TestUploadToIngest(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
@@ -322,7 +347,10 @@ VALUES ($1, $2, $3, $4, 'linux', 'v0.0.0-dev', $5, $5, 1)`,
 		deviceID, account, hex.EncodeToString(tokenHash[:]), []byte(devKey.Public().(ed25519.PublicKey)), linked)
 	sv := &server{db: db, w: wr, devices: ds, key: ed25519.NewKeyFromSeed(seed("e2e server key"))}
 	sv.restart()
-	ft := &faults{srv: sv, by: map[int]string{1: "503", 2: "restart", 3: "down", 5: "429", 6: "lost"}}
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	t.Cleanup(transport.CloseIdleConnections)
+	ft := &faults{srv: sv, closeIdle: transport.CloseIdleConnections,
+		by: map[int]string{1: "503", 2: "restart", 3: "down", 5: "429", 6: "lost", 7: "down"}}
 	srv := httptest.NewServer(ft)
 	t.Cleanup(srv.Close)
 
@@ -342,11 +370,18 @@ VALUES ($1, $2, $3, $4, 'linux', 'v0.0.0-dev', $5, $5, 1)`,
 	var (
 		signedIn atomic.Bool
 		sent     atomic.Int64
+		keysMu   sync.Mutex
+		keys     []string // the Idempotency-Key of each POST the uploader sent, a retry of its own included
 	)
 	creds := uploader.Credentials{Server: srv.URL, Token: token, DeviceID: deviceID, Sign: uploader.KeySigner(devKey), LinkedAt: start}
 	client := &http.Client{Transport: roundTripper(func(r *http.Request) (*http.Response, error) {
 		sent.Add(1)
-		return srv.Client().Transport.RoundTrip(r)
+		if r.Method == http.MethodPost {
+			keysMu.Lock()
+			keys = append(keys, r.Header.Get("Idempotency-Key"))
+			keysMu.Unlock()
+		}
+		return transport.RoundTrip(r)
 	})}
 	u, err := uploader.New(uploader.Options{
 		Ledger: w, LedgerDir: dirs.Ledger(), BucketDir: dirs.Buckets(), DataDir: dirs.Data, State: st,
@@ -445,13 +480,24 @@ VALUES ($1, $2, $3, $4, 'linux', 'v0.0.0-dev', $5, $5, 1)`,
 				t.Errorf("the server holds the readings %v, not %d backfilled", readings, 24*60)
 			}
 			ft.mu.Lock()
-			rateLimited, replays := ft.rateLimited, ft.replays
+			rateLimited, lost, replayed := ft.rateLimited, ft.lost, slices.Clone(ft.replayed)
 			ft.mu.Unlock()
 			if rateLimited != 0 {
 				t.Errorf("the server's own limiter refused %d requests as rate_limited", rateLimited)
 			}
-			if replays == 0 {
-				t.Error("the answer the server lost wasn't fetched again with the same Idempotency-Key")
+			keysMu.Lock()
+			resent := 0
+			for _, k := range keys {
+				if k == lost {
+					resent++
+				}
+			}
+			keysMu.Unlock()
+			// The client counts a POST once however often net/http sends it
+			// again by itself, so a second POST with the key is the
+			// uploader's own retry.
+			if lost == "" || resent < 2 || !slices.Contains(replayed, lost) {
+				t.Errorf("the answer the server lost, to %q, wasn't fetched again by the uploader's own retry: it sent the key %d times, and the server replayed %q", lost, resent, replayed)
 			}
 		}},
 		{"every receipt in batches.seg checks out under the server key", func(t *testing.T) {
@@ -500,6 +546,45 @@ VALUES ($1, $2, $3, $4, 'linux', 'v0.0.0-dev', $5, $5, 1)`,
 				if !slices.Contains(reasons, want) {
 					t.Errorf("no %s note among %q", want, reasons)
 				}
+			}
+		}},
+		{"a busy session after it, a stop every second for 45 s with no restart, gets no rate_limited from the server's own limiter", func(t *testing.T) {
+			// The limiter has counted every request since the restart the
+			// faults injected. The test wakes the uploader at each stop,
+			// more often than SoonDelay's coalescing does, so a pace that
+			// let the requests through, as paceBurst = 1000 does, would
+			// empty ingest's bucket of 30, refilled one every 10 s, within
+			// the session (#150 R3).
+			const busy = 45
+			clockMu.Lock()
+			at := now
+			clockMu.Unlock()
+			for i := range busy {
+				at = at.Add(time.Second)
+				clockMu.Lock()
+				now = at
+				clockMu.Unlock()
+				if _, err := w.Write(stop(at, int64(i+1)*1000)); err != nil {
+					t.Fatal(err)
+				}
+				// The stop seals at once on the writer's goroutine, and Seal
+				// waits for that seal.
+				if _, _, err := w.Seal(); err != nil {
+					t.Fatal(err)
+				}
+				u.Wake()
+				time.Sleep(time.Second)
+			}
+			last := w.Status().Batches
+			waitFor(t, "every root of the session", func() bool {
+				u.Wake()
+				return count(`SELECT COUNT(*) FROM witness_rows WHERE device_id = $1`) == int64(last)
+			})
+			ft.mu.Lock()
+			rateLimited := ft.rateLimited
+			ft.mu.Unlock()
+			if rateLimited != 0 {
+				t.Errorf("the server's own limiter refused %d requests as rate_limited", rateLimited)
 			}
 		}},
 	}
