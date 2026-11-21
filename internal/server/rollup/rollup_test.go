@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -890,6 +891,18 @@ func TestProjects(t *testing.T) {
 		for id, keys := range got {
 			if len(keys) == 1 && !uuidv7.MatchString(id) {
 				t.Errorf("project %s of %v isn't a UUIDv7", id, keys)
+			}
+		}
+	})
+	t.Run("a project id gives away no more than the UTC day its key was first named on", func(t *testing.T) {
+		day := time.Unix(base, 0).UTC().Truncate(24 * time.Hour).UnixMilli()
+		for id, keys := range got {
+			if len(keys) != 1 {
+				continue
+			}
+			ms, err := strconv.ParseInt(strings.ReplaceAll(id[:13], "-", ""), 16, 64)
+			if err != nil || ms != day {
+				t.Errorf("project %s of %v has time %d (%v), want %d, its day's start", id, keys, ms, err, day)
 			}
 		}
 	})

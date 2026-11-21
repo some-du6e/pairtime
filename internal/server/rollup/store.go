@@ -146,9 +146,9 @@ agent_only_pending_ms = rollups_daily.agent_only_pending_ms + excluded.agent_onl
 // toProjects turns the device's project keys in d, its slots' and its
 // agent_only's, into the account-level project ids rollup_projects gives
 // them (D-account-project-id). A key the device hasn't named before gets
-// a new id, stamped with minuteMS. Two keys of the device that project
-// registration (WP-SV10) has linked to one id may both name agent time;
-// the larger counts, as it does across devices (merge).
+// a new id, stamped with minuteMS's UTC day. Two keys of the device that
+// project registration (WP-SV10) has linked to one id may both name agent
+// time; the larger counts, as it does across devices (merge).
 func toProjects(ctx context.Context, tx writer.Tx, account string, minuteMS int64, d *device) error {
 	ids := make(map[string]string)
 	idOf := func(key string) (string, error) {
@@ -188,7 +188,8 @@ func toProjects(ctx context.Context, tx writer.Tx, account string, minuteMS int6
 }
 
 // projectID returns the project id of the device's project key. A key
-// the device hasn't named before gets a new id, stamped with minuteMS.
+// the device hasn't named before gets a new id, stamped with minuteMS's
+// UTC day.
 func projectID(ctx context.Context, tx writer.Tx, account, device, key string, minuteMS int64) (string, error) {
 	var id string
 	err := tx.QueryRowContext(ctx, `SELECT project_id FROM rollup_projects
@@ -205,13 +206,18 @@ VALUES ($1, $2, $3, $4)`, account, device, key, id)
 }
 
 // newProjectID returns a new project id: a UUIDv7 (RFC 9562 section 5.7),
-// the id form of package store's rules, stamped with the minute the key
-// was first named in.
+// the id form of package store's rules. Its time field is the start of the
+// UTC day of minuteMS, the minute the key was first named in, and no finer:
+// the id lasts as long as the account, and past 180 days the rollups keep
+// days, not minutes. RFC 9562 section 6.1 lets a UUIDv7 carry a coarser
+// time.
 func newProjectID(minuteMS int64) string {
+	const dayMS = 24 * 60 * 60 * 1000
+	day := uint64(minuteMS - minuteMS%dayMS)
 	var b [16]byte
 	rand.Read(b[:])
 	for i := range 6 {
-		b[i] = byte(uint64(minuteMS) >> (40 - 8*i))
+		b[i] = byte(day >> (40 - 8*i))
 	}
 	b[6] = b[6]&0x0f | 0x70
 	b[8] = b[8]&0x3f | 0x80
