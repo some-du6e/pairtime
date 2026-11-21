@@ -23,6 +23,28 @@ import (
 	"github.com/some-du6e/pairtime/internal/version"
 )
 
+// swap sets *p to v for the rest of the test.
+func swap[T any](t *testing.T, p *T, v T) {
+	t.Helper()
+	old := *p
+	*p = v
+	t.Cleanup(func() { *p = old })
+}
+
+// newDoctorHome is newHome on a computer where doctor finds no harness, so
+// the tests of the agent's lines never read the settings or run the hooks
+// of the machine they run on.
+func newDoctorHome(t *testing.T) fakeHome {
+	t.Helper()
+	swap(t, &doctorHooks, func() []doctor.Hooks { return nil })
+	swap(t, &doctorRoundTrips, func(string, string, int) ([]time.Duration, error) {
+		t.Error("doctor timed a hook with none installed")
+		return nil, errors.New("no hook")
+	})
+	swap(t, &doctorStartup, func(string, int) ([]time.Duration, error) { return []time.Duration{2 * time.Millisecond}, nil })
+	return newHome(t)
+}
+
 // agentStatus is a running agent's status for the tests to change.
 func agentStatus() doctor.Status {
 	return doctor.Status{
@@ -124,7 +146,7 @@ func TestDoctorSignals(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			h := newHome(t)
+			h := newDoctorHome(t)
 			st := agentStatus()
 			st.Signals.Idle, st.Signals.Focus = tt.idle, tt.focus
 			h.statusAgent(st)
@@ -163,7 +185,7 @@ func TestDoctorReadsTheAgentNotTheTerminal(t *testing.T) {
 			for k, v := range tt.env {
 				t.Setenv(k, v)
 			}
-			h := newHome(t)
+			h := newDoctorHome(t)
 			st := agentStatus()
 			st.Signals.Idle = doctor.Signal{Via: "org.gnome.Mutter.IdleMonitor"}
 			st.Signals.Focus = doctor.Signal{Unknown: "Wayland gives other programs no focus signal"}
@@ -195,14 +217,14 @@ func TestDoctorAgentLine(t *testing.T) {
 			wantText: "running pairtime " + version.Get().Version + " for 3h 12m, in local mode, which uploads nothing",
 		},
 		{
-			name: "an agent of another version is a warning that says it moves to this one when it restarts",
+			name: "an agent of another version is a warning that says how to move it to this one",
 			agent: func(h fakeHome) {
 				st := agentStatus()
 				st.Version.Version = "v0.0.9"
 				h.statusAgent(st)
 			},
 			want:     doctor.Warn,
-			wantText: "the agent moves to when it restarts",
+			wantText: "run pairtime install with this one to move the agent to it",
 		},
 		{
 			name:      "no agent fails, says how to start one, and skips the lines only the agent can answer",
@@ -232,7 +254,7 @@ func TestDoctorAgentLine(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			h := newHome(t)
+			h := newDoctorHome(t)
 			tt.agent(h)
 			checks, code := doctorChecks(t)
 			c := checks["agent"]
@@ -252,7 +274,7 @@ func TestDoctorSlowAgent(t *testing.T) {
 	old := doctorWait
 	doctorWait = 200 * time.Millisecond
 	t.Cleanup(func() { doctorWait = old })
-	h := newHome(t)
+	h := newDoctorHome(t)
 	release := make(chan struct{})
 	h.agent(func(string) (json.RawMessage, error) {
 		<-release
@@ -326,7 +348,7 @@ func TestDoctorAdaptersAndProblems(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			h := newHome(t)
+			h := newDoctorHome(t)
 			st := agentStatus()
 			tt.edit(&st)
 			h.statusAgent(st)
@@ -386,7 +408,7 @@ func TestDoctorJSONFitsItsSchema(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run("doctor --json fits cli-doctor.schema.json "+tt.name, func(t *testing.T) {
-			h := newHome(t)
+			h := newDoctorHome(t)
 			tt.agent(h)
 			_, stdout, _ := runCmd("doctor", "--json")
 			errs, err := schema.ValidateJSON([]byte(stdout))

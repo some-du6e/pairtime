@@ -279,9 +279,32 @@ func problemChecks(f Facts) []Check {
 	keys = slices.DeleteFunc(keys, func(k string) bool { return k == "keystore" })
 	out := make([]Check, 0, len(keys))
 	for _, k := range keys {
-		out = append(out, Check{Name: "problem." + text.Printable(k), Result: Warn, Text: text.Printable(f.Agent.Problems[k])})
+		out = append(out, Check{Name: "problem." + checkName(k), Result: Warn, Text: text.Printable(f.Agent.Problems[k])})
 	}
 	return out
+}
+
+// checkName makes s, a problem's source, the last part of a check's name,
+// in the characters the agent's sources use: lowercase letters, digits,
+// '_' and '-', with '.' between parts (docs/schema/cli-doctor.schema.json).
+func checkName(s string) string {
+	var b strings.Builder
+	for _, r := range strings.ToLower(s) {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '_', r == '-', r == '.':
+			b.WriteRune(r)
+		default:
+			b.WriteByte('-')
+		}
+	}
+	n := b.String()
+	for strings.Contains(n, "..") {
+		n = strings.ReplaceAll(n, "..", ".")
+	}
+	if n = strings.Trim(n, "."); n == "" {
+		return "other"
+	}
+	return n
 }
 
 // issues is where doctor asks for reports.

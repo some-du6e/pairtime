@@ -11,6 +11,9 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"os/exec"
+	"runtime"
+	"slices"
 	"strings"
 	"time"
 
@@ -20,9 +23,11 @@ import (
 	"github.com/some-du6e/pairtime/internal/agent/hookpath"
 	"github.com/some-du6e/pairtime/internal/agent/ipc"
 	"github.com/some-du6e/pairtime/internal/agent/keys"
+	"github.com/some-du6e/pairtime/internal/coach/text"
 	"github.com/some-du6e/pairtime/internal/install"
 	"github.com/some-du6e/pairtime/internal/platform"
 	"github.com/some-du6e/pairtime/internal/version"
+	"github.com/some-du6e/pairtime/pkg/redact"
 )
 
 const doctorUsage = `Usage: pairtime doctor [--json | --report]
@@ -73,12 +78,20 @@ const doctorHookCalls = 3
 
 // What doctor reads of the computer, which tests replace: the hooks a
 // harness's settings hold, the round trips of test calls of the hook a
-// harness runs, and the signature of this binary.
+// harness runs, pairtime's start alone, and the signature of this binary.
 var (
 	doctorHooks      = readDoctorHooks
 	doctorRoundTrips = hookRoundTrips
+	doctorStartup    = startupTrips
 	doctorSignature  = doctor.OSSignature
 )
+
+// doctorReportSpan is how long --report watches the agent at rest, as
+// footprint.yml watches an idle agent, and doctorReportCalls how many warm
+// calls it times. Tests shorten the span.
+var doctorReportSpan = time.Minute
+
+const doctorReportCalls = 20
 
 func runDoctor(args []string, stdout, stderr io.Writer) int {
 	flags := flag.NewFlagSet("doctor", flag.ContinueOnError)
@@ -104,6 +117,9 @@ func runDoctor(args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		fmt.Fprintf(stderr, "pairtime doctor: can't find pairtime's folders: %v\n", err)
 		return 1
+	}
+	if *report {
+		return runReport(dirs, stdout, stderr)
 	}
 	facts := gatherFacts(dirs)
 	checks := doctor.Checks(facts)
@@ -266,4 +282,157 @@ func binarySigning() doctor.Signing {
 // count.
 func releaseBuild() bool {
 	return strings.HasPrefix(version.Version, "v") && version.Version != "v0.0.0-ci" && version.Commit != ""
+}
+
+// runReport prints the footprint report (DESIGN 5.9; TE WP7.9): it watches
+// the agent for doctorReportSpan between two status questions, times warm
+// test calls of each harness's hook and of pairtime's start alone, and
+// prints what it found, checked against every name and path that could
+// identify the teen or this computer.
+func runReport(dirs home.Dirs, stdout, stderr io.Writer) int {
+	v := version.Get()
+	r := doctor.Report{Version: v.Version, Platform: v.Platform, GoVersion: v.GoVersion,
+		OS: doctor.OSBuild(), CPUs: runtime.NumCPU(), Disk: doctor.DiskKind(dirs.Data)}
+	first, err := askStatus(dirs)
+	if err != nil {
+		r.NoAgent = noAgentWords(err)
+	} else {
+		fmt.Fprintf(stderr, "Watching pairtime's agent at rest for %s, then timing its hook. Leave this computer be until it's done.\n", text.Duration(doctorReportSpan.Seconds()))
+		start := time.Now()
+		time.Sleep(doctorReportSpan)
+		second, err := askStatus(dirs)
+		span := time.Since(start)
+		if err != nil {
+			second, span = first, 0
+		}
+		r.Agent = agentFootprint(first, second, span)
+	}
+	exe := ""
+	for _, h := range doctorHooks() {
+		if len(h.Events) == 0 || h.Disabled || h.ReadError != "" {
+			continue
+		}
+		trips, err := doctorRoundTrips(h.Exes[0], h.Harness, doctorReportCalls)
+		r.Hooks = append(r.Hooks, doctor.HookTimes{Harness: h.Harness, Times: doctor.TimesOf(trips), Failed: err != nil})
+		if exe == "" {
+			exe = h.Exes[0]
+		}
+	}
+	if exe == "" {
+		exe, _ = os.Executable()
+	}
+	if exe != "" {
+		if trips, err := doctorStartup(exe, doctorReportCalls); err == nil {
+			r.Startup = doctor.TimesOf(trips)
+		}
+	}
+	out, err := scrubReport(r.Text(), dirs)
+	if err != nil {
+		fmt.Fprintf(stderr, "pairtime doctor: couldn't check the report for names and paths, so it isn't printed: %v\n", err)
+		return 1
+	}
+	fmt.Fprint(stdout, out)
+	return 0
+}
+
+// agentFootprint is the agent's numbers from its status before and after
+// span. Over the span they count only when both answers came from the
+// same run of the agent.
+func agentFootprint(first, second doctor.Status, span time.Duration) *doctor.AgentFootprint {
+	a := &doctor.AgentFootprint{Version: second.Version.Version, UptimeS: second.UptimeS,
+		RSSBytes: second.Footprint.RSSBytes, PeakRSSBytes: second.Footprint.PeakRSSBytes,
+		CPUS: second.Footprint.CPUS, Wakeups: second.Wakeups}
+	if span <= 0 || first.PID != second.PID || !first.Started.Equal(second.Started) {
+		return a
+	}
+	a.SpanS = span.Seconds()
+	a.SpanCPUS = max(second.Footprint.CPUS-first.Footprint.CPUS, 0)
+	if second.Wakeups >= first.Wakeups {
+		a.SpanWakeups = second.Wakeups - first.Wakeups
+	}
+	a.Busy = second.IPC.Stored != first.IPC.Stored || hookCalls(second) != hookCalls(first)
+	return a
+}
+
+// hookCalls counts the hook calls the agent's adapters took.
+func hookCalls(s doctor.Status) uint64 {
+	n := s.Adapters.Other.Calls
+	for _, h := range s.Adapters.Harnesses {
+		n += h.Calls
+	}
+	return n
+}
+
+// noAgentWords says why the agent's numbers aren't in the report, without
+// an error's text, which can name a path.
+func noAgentWords(err error) string {
+	switch {
+	case errors.Is(err, errAgentDown):
+		return "not running"
+	case errors.Is(err, errAgentOld):
+		return "an older pairtime that can't say"
+	case errors.Is(err, errAgentSlow):
+		return "didn't answer in time"
+	}
+	return "couldn't be asked"
+}
+
+// startupTrips times n warm runs of `exe hook -h`, after one that warms the
+// OS's caches: what starting pairtime costs before the hook does anything,
+// as footprint.yml times it.
+func startupTrips(exe string, n int) ([]time.Duration, error) {
+	var trips []time.Duration
+	for i := 0; i <= n; i++ {
+		ctx, cancel := context.WithTimeout(context.Background(), hookTestWait)
+		cmd := exec.CommandContext(ctx, exe, "hook", "-h")
+		cmd.Stdout, cmd.Stderr = io.Discard, io.Discard
+		start := time.Now()
+		err := cmd.Run()
+		took := time.Since(start)
+		cancel()
+		if err != nil {
+			return nil, err
+		}
+		if i > 0 {
+			trips = append(trips, took)
+		}
+	}
+	return trips, nil
+}
+
+// scrubReport replaces in report everything pkg/redact finds that could
+// name the teen or this computer: what the OS says of the user and the
+// host, git's name and email, the environment's names and paths, and
+// pairtime's own folders. The report holds none of them by construction;
+// this is the check that it stays so.
+func scrubReport(report string, dirs home.Dirs) (string, error) {
+	k := machineKnown()
+	for _, name := range []string{"USER", "USERNAME", "LOGNAME"} {
+		k.Accounts = appendSet(k.Accounts, os.Getenv(name))
+	}
+	for _, name := range []string{"HOSTNAME", "COMPUTERNAME"} {
+		k.Hosts = appendSet(k.Hosts, os.Getenv(name))
+	}
+	for _, name := range []string{"HOME", "USERPROFILE"} {
+		k.Homes = appendSet(k.Homes, os.Getenv(name))
+	}
+	for _, name := range []string{"LOCALAPPDATA", "APPDATA", "TMPDIR", "TEMP", "TMP", "XDG_DATA_HOME", "XDG_CONFIG_HOME", "XDG_RUNTIME_DIR"} {
+		k.Private = appendSet(k.Private, os.Getenv(name))
+	}
+	for _, dir := range []string{dirs.Data, dirs.Config, dirs.Runtime} {
+		k.Private = appendSet(k.Private, dir)
+	}
+	rd, err := redact.New(k)
+	if err != nil {
+		return "", err
+	}
+	return redact.Render(report, rd.Find(report)), nil
+}
+
+// appendSet appends v to list unless it is empty or there already.
+func appendSet(list []string, v string) []string {
+	if v == "" || slices.Contains(list, v) {
+		return list
+	}
+	return append(list, v)
 }

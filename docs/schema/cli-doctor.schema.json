@@ -1,0 +1,93 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/some-du6e/pairtime/main/docs/schema/cli-doctor.schema.json",
+  "title": "pairtime doctor --json",
+  "description": "The checks `pairtime doctor` prints, one per line of its text, as `pairtime doctor --json` prints them (docs/PLAN.md WP-AG6; DESIGN 5.9). Each check has a name, a result and the text its line shows: what doctor found and, when something is wrong, the one thing to do about it. The idle, focus, adapter and spool checks read the running agent's status (GET /v1/status, which doctor asks over the agent's socket), never the terminal doctor runs in; with no agent to ask they are skipped. The other checks read this computer: each installed harness's hooks and a test call of them, the keystore, the binary's signature. Then comes one check for each problem the agent reports, in its words. doctor exits 1 when a check failed. cmd/pairtime's tests check `pairtime doctor --json` against this file.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "v",
+    "checks",
+    "summary"
+  ],
+  "properties": {
+    "v": {
+      "const": 1,
+      "description": "The version of this JSON."
+    },
+    "checks": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/check"
+      }
+    },
+    "summary": {
+      "$ref": "#/$defs/summary"
+    }
+  },
+  "$defs": {
+    "check": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "result",
+        "text"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]*(\\.[a-z0-9_-]+)*$",
+          "description": "What was checked: agent, idle, focus, macos-loop, hook.<harness>, trust.<harness>, adapter.<harness>, adapter.other, signing, keystore, spool, or problem.<source> for a problem the agent reports, such as problem.uploader.",
+          "examples": [
+            "agent",
+            "hook.claude_code",
+            "problem.adapters.held"
+          ]
+        },
+        "result": {
+          "enum": [
+            "ok",
+            "warn",
+            "fail",
+            "skip"
+          ],
+          "description": "ok: it works. warn: it works, with something to know, or that costs some of your time until it's fixed. fail: it doesn't work, and pairtime misses time until it does. skip: doctor couldn't check it, and text says why."
+        },
+        "text": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "ok",
+        "warn",
+        "fail",
+        "skip"
+      ],
+      "description": "How many checks had each result.",
+      "properties": {
+        "ok": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "warn": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "fail": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "skip": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    }
+  }
+}
