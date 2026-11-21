@@ -168,8 +168,10 @@ type agent struct {
 	// the device is signed in (WP-AG5). It is nil before the ledger opens.
 	upload atomic.Pointer[uploader.Uploader]
 	// writer is the ledger writer once it is open, which noteMode tells
-	// config.toml's mode.
-	writer atomic.Pointer[ledger.Writer]
+	// config.toml's mode, and localSeen is set once noteMode found it
+	// local-only.
+	writer    atomic.Pointer[ledger.Writer]
+	localSeen atomic.Bool
 	// early are the batches the ledger writer sealed before upload was
 	// set, for handEarly; earlyMu orders them with it.
 	earlyMu sync.Mutex

@@ -61,8 +61,9 @@ func copyDir(t *testing.T, dir string) string {
 // loop from taking the batch for up to a minute; after the seal frame's
 // flush, before the batch's row is in batches.seg; after the row, before
 // the uploader hears of the batch; and inside a local-only stretch the
-// config watch noted, whose first record sealed at once, with a record
-// after it that no seal took. The next start, with config.toml online
+// config watch noted, whose first record sealed at once, or whose switch
+// sealed the record it found pending, with a record after it that no seal
+// took. The next start, with config.toml online
 // again and no new sign-in, seals an online batch, and sends neither the
 // local-only batch's root nor its minutes, nor those of the online batch
 // that closes its run, and doctor hears why: the seal frame holds the
@@ -141,6 +142,17 @@ func TestKillKeepsModes(t *testing.T) {
 			r.w.NoteMode(false)
 			r.record(t, 4)
 			waitFor(t, "the stretch's first record to seal at once", func() bool { return r.w.Status().Batches == 4 })
+			r.record(t, 5) // no seal takes it before the kill
+			return copyDir(t, r.dirs.Data)
+		}},
+		{"a kill inside a local-only stretch whose switch found a record pending, which it sealed at once", 6, func(t *testing.T, r *liveRig) string {
+			r.seal(t, 3)
+			r.wait(t, "batch 3 and its minutes", func(f *fakeIngest) bool { return f.head.b == 3 && len(f.buckets) == 45 })
+			r.drain()
+			r.record(t, 4) // pending as config.toml goes local, noted a moment later
+			r.local.Store(true)
+			r.w.NoteMode(false)
+			waitFor(t, "the switch to seal what it found pending", func() bool { return r.w.Status().Batches == 4 })
 			r.record(t, 5) // no seal takes it before the kill
 			return copyDir(t, r.dirs.Data)
 		}},

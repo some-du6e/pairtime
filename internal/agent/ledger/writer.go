@@ -202,11 +202,13 @@ type Writer struct {
 	failed  error
 	closed  bool
 	// local is set while the mode NoteMode last noted is local-only, and
-	// taint once a record in pending came then. stretchSealed is set once
-	// a batch holding a record of the current local-only stretch is sealed.
+	// taint once a record in pending came then, or is dated before
+	// localBefore (NoteLocalBefore), in Unix ms. stretchSealed is set once a
+	// batch holding a record of the current local-only stretch is sealed.
 	// notes counts NoteMode's calls.
 	local, taint, stretchSealed bool
 	notes                       uint64
+	localBefore                 int64
 
 	kick     chan struct{}
 	stop     chan struct{}
@@ -349,6 +351,9 @@ func (w *Writer) Write(in Input) (uint64, error) {
 	if err := w.append(rec); err != nil {
 		return 0, err
 	}
+	if ev.T < w.localBefore {
+		w.markLocal()
+	}
 	w.q.Observe(ev)
 	if k := ev.Kind(); k == event.KindPromptSubmit || k == event.KindAgentStop {
 		w.RequestSeal()
@@ -470,17 +475,34 @@ func (w *Writer) append(rec ledger.Record) error {
 	w.pending = append(w.pending, pending{rec: rec, pos: pos})
 	w.next++
 	if w.local {
-		// The stretch's first record seals at once, so its batch is on disk
-		// as local-only before a crash can cut the records after it.
-		if !w.taint && !w.stretchSealed {
-			w.RequestSeal()
-		}
-		w.taint = true
+		w.markLocal()
 	}
 	if len(w.pending) >= pendingMax {
 		w.RequestSeal()
 	}
 	return nil
+}
+
+// markLocal makes the batch pending local-only. The stretch's first such
+// batch seals at once, so it is on disk as local-only before a crash can
+// cut the records after it. w.mu is held.
+func (w *Writer) markLocal() {
+	if !w.taint && !w.stretchSealed {
+		w.RequestSeal()
+	}
+	w.taint = true
+}
+
+// NoteLocalBefore makes each event record dated before t make its batch
+// local-only, as the agent asks for the records that waited for the
+// writer to open, presence's queue and the hook calls it held, when
+// config.toml said local-only at some time since it started: a record is
+// in the mode config.toml had when it was made, which a writer opened
+// later can't tell (DESIGN 4.2).
+func (w *Writer) NoteLocalBefore(t time.Time) {
+	w.mu.Lock()
+	w.localBefore = max(w.localBefore, t.UnixMilli())
+	w.mu.Unlock()
 }
 
 // NoteMode takes config.toml's mode as the agent's config watch reads it

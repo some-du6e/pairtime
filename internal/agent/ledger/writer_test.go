@@ -592,6 +592,8 @@ func TestNoteMode(t *testing.T) {
 			[]string{"file-local", "local", "write", "sealed", "write", "file-online", "seal", "write", "seal"}, []bool{false, false, true}, []int{1, 1, 1}},
 		{"a switch with no record written in it leaves the next batch online",
 			[]string{"local", "online", "write", "seal"}, []bool{true}, []int{1}},
+		{"a switch to local-only and straight back still seals what was pending as local-only",
+			[]string{"write", "file-local", "local", "file-online", "online", "sealed"}, []bool{false}, []int{1}},
 		{"a second stretch's first record seals at once too",
 			[]string{"file-local", "local", "write", "sealed", "file-online", "online", "write", "seal", "file-local", "local", "write", "sealed"}, []bool{false, true, false}, []int{1, 1, 1}},
 	}
@@ -655,6 +657,72 @@ func TestNoteMode(t *testing.T) {
 			}
 			if !slices.Equal(online, c.online) || !slices.Equal(records, c.records) {
 				t.Errorf("batches sealed online %v holding %v records, want %v holding %v", online, records, c.online, c.records)
+			}
+		})
+	}
+}
+
+// TestNoteLocalBefore checks the records that waited for the writer to open
+// (Writer.NoteLocalBefore): a record dated before the time noted makes its
+// batch local-only though config.toml says online at the seal, the first
+// such batch seals at once, and a record dated after it leaves its batch
+// online.
+func TestNoteLocalBefore(t *testing.T) {
+	sealed := make(chan Batch, 8)
+	w := open(t, t.TempDir(), newClock(testT), func(o *Options) {
+		o.Online = func() bool { return true } // config.toml reads online at every seal
+		o.Sealed = func(b Batch) { sealed <- b }
+	})
+	w.NoteLocalBefore(time.UnixMilli(testT))
+	rng := rand.New(rand.NewPCG(11, 12))
+	take := func() Batch {
+		t.Helper()
+		select {
+		case b := <-sealed:
+			return b
+		case <-time.After(10 * time.Second):
+			t.Fatal("no batch was sealed")
+			return Batch{}
+		}
+	}
+	seal := func() Batch {
+		t.Helper()
+		// A seal the writer still owed may take the records first.
+		if _, _, err := w.Seal(); err != nil {
+			t.Fatal(err)
+		}
+		return take()
+	}
+	writeAt := func(ms int64) {
+		t.Helper()
+		if _, _, err := write(w, rng, "os.presence", ms); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeAt(testT - 2000)
+	first := take() // sealed at once
+	writeAt(testT - 1000)
+	time.Sleep(200 * time.Millisecond)
+	select {
+	case b := <-sealed:
+		t.Fatalf("batch %d, holding a later record dated before the time noted, was sealed at once too", b.Row.B)
+	default:
+	}
+	second := seal()
+	writeAt(testT + 1000)
+	third := seal()
+	tests := []struct {
+		name string
+		ok   bool
+	}{
+		{"a record dated before the time noted seals at once, local-only", !first.Online && len(first.Records) == 1},
+		{"a later one dated before it waits for the next seal, local-only", !second.Online && len(second.Records) == 1},
+		{"a record dated after it leaves its batch online", third.Online && len(third.Records) == 1},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if !tc.ok {
+				t.Errorf("no: batches online %v, %v, %v", first.Online, second.Online, third.Online)
 			}
 		})
 	}

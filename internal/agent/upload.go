@@ -79,8 +79,13 @@ func (a *agent) online() bool {
 // local-only makes its batch local-only, even if no seal reads the file
 // before the teen switches back online.
 func (a *agent) noteMode() {
+	online := a.online()
+	if !online {
+		// Before the writer is loaded, so the ledger's start sees it.
+		a.localSeen.Store(true)
+	}
 	if w := a.writer.Load(); w != nil {
-		w.NoteMode(a.online())
+		w.NoteMode(online)
 	}
 }
 

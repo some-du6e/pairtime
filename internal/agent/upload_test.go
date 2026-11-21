@@ -27,6 +27,7 @@ import (
 	"github.com/some-du6e/pairtime/internal/agent/state"
 	"github.com/some-du6e/pairtime/internal/agent/uploader"
 	"github.com/some-du6e/pairtime/internal/devtoken"
+	"github.com/some-du6e/pairtime/pkg/event"
 	pkgledger "github.com/some-du6e/pairtime/pkg/ledger"
 )
 
@@ -407,6 +408,53 @@ func TestLedgerMode(t *testing.T) {
 		}
 		if got := sealsAtOnce(t, func() *ledger.Writer { return w }, dirs); len(got) != 1 || got[0].Online {
 			t.Errorf("rows %+v, want one local-only batch sealed at once", got)
+		}
+	})
+	t.Run("records dated before the ledger opened, after config.toml said local-only since the start, make their batch local-only, and later ones go online", func(t *testing.T) {
+		dir := t.TempDir()
+		dirs := home.Dirs{Data: dir, Config: dir, Runtime: dir}
+		setConfig := func(text string) {
+			t.Helper()
+			if err := os.WriteFile(dirs.ConfigFile(), []byte(text), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		// Local at the start, as every install begins, and online by the
+		// time the ledger opens, as after pairtime login while a locked
+		// keyring kept it shut.
+		a := &agent{dirs: dirs, log: slog.New(slog.DiscardHandler), problems: map[string]string{}, table: newestTable(), keyStores: []keys.Store{}}
+		setConfig("mode = \"local\"\n")
+		a.noteMode()
+		setConfig("mode = \"online\"\n")
+		a.reloadConfig()
+		waited := time.Now().Add(-time.Minute)
+		t.Cleanup(a.startLedger())
+		var w *ledger.Writer
+		for deadline := time.Now().Add(10 * time.Second); w == nil && time.Now().Before(deadline); time.Sleep(25 * time.Millisecond) {
+			w = a.writer.Load()
+		}
+		if w == nil {
+			t.Fatal("the ledger didn't open")
+		}
+		presence := func(at time.Time) ledger.Input {
+			return ledger.Input{Event: event.Event{
+				Envelope: event.Envelope{EventID: event.NewEventID(at), T: at.UnixMilli(), Mono: 1000, BootID: "b_test",
+					Source: event.SourceOS, Via: event.ViaOS, Harness: event.HarnessNone, SessionKey: event.NoSession},
+				Data: &event.OSPresence{IdleAnyS: 1},
+			}}
+		}
+		if _, err := w.Write(presence(waited)); err != nil {
+			t.Fatal(err)
+		}
+		first := sealsAtOnce(t, func() *ledger.Writer { return nil }, dirs)
+		if _, err := w.Write(presence(time.Now())); err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := w.Seal(); err != nil {
+			t.Fatal(err)
+		}
+		if got := rows(t, dirs); len(first) != 1 || first[0].Online || len(got) != 2 || !got[1].Online {
+			t.Errorf("rows %+v, then %+v; want the record that waited local-only, sealed at once, and the next online", first, got)
 		}
 	})
 }

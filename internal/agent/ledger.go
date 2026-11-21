@@ -48,6 +48,9 @@ const (
 // to drop; "keystore" where the device key is kept.
 func (a *agent) startLedger() func() {
 	a.ledgerIn = ledger.NewPresence(func(msg string) { a.setProblem("ledger.presence", msg) })
+	// The mode at the start counts for the records that wait for the
+	// writer.
+	a.noteMode()
 	var (
 		mu         sync.Mutex
 		w          *ledger.Writer
@@ -68,14 +71,19 @@ func (a *agent) startLedger() func() {
 			lw.Close()
 			return
 		}
+		w = lw
+		// A record is in the mode config.toml had when it was made. The
+		// ones that waited for the writer, dated before it opened, count as
+		// local-only if config.toml said local-only at some time since the
+		// start, and the mode now goes for the rest (ledger.Writer.NoteMode).
+		a.writer.Store(lw)
+		if a.localSeen.Load() {
+			lw.NoteLocalBefore(time.Now())
+		}
+		a.noteMode()
 		// The adapters parse the hook calls that waited for the keys and
 		// the writer (adapters.go).
 		a.adaptersHost().attach(lw)
-		w = lw
-		// Before the records that waited for the writer go in, so those
-		// written in local-only mode make their batch local-only.
-		a.writer.Store(lw)
-		a.noteMode()
 		a.ledgerIn.Attach(lw)
 		if a.scorer != nil {
 			a.scorer.Start()
