@@ -72,6 +72,10 @@ type hookSteps struct {
 	// presence hears a call with its session's key and kind
 	// (presence.Sampler.Hook).
 	presence func(session string, k event.Kind)
+	// forget has presence drop a session whose calls ran in a folder out
+	// of pairtime, its running turn included, without a sample
+	// (presence.Sampler.Forget).
+	forget func(session string)
 	// secret returns K_session, which the session keys that focus lists are
 	// keyed with, or nil while it isn't known (keySessions).
 	secret func() []byte
@@ -101,7 +105,7 @@ func (a *agent) hookSteps() hookSteps {
 		st.claim = a.procs.ClaimLive
 	}
 	if a.presence != nil {
-		st.presence = a.presence.Hook
+		st.presence, st.forget = a.presence.Hook, a.presence.Forget
 	}
 	return st
 }
@@ -142,8 +146,15 @@ func (s *hookSink) Deliver(d inbox.Delivery) error {
 				s.tie(*p.Host, session, kind)
 			}
 		}
-		if berr == nil && s.steps.presence != nil && !out {
+		switch {
+		case berr != nil:
+		case !out && s.steps.presence != nil:
 			s.steps.presence(s.presenceKey(b), kind)
+		case out && s.steps.forget != nil:
+			// A turn presence heard start before the folder turned out of
+			// pairtime would keep the fast cadence until it went stale: its
+			// next call, its stop say, drops it, with no sample.
+			s.steps.forget(s.presenceKey(b))
 		}
 	}
 	return s.store(d)

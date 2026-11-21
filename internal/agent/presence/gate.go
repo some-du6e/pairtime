@@ -131,6 +131,14 @@ func (g *gate) hook(now time.Time, key string, k event.Kind) {
 	}
 }
 
+// forget drops session as if it had never been heard from: unlike its end,
+// a turn it was running leaves no turnEnd behind, which would keep the fast
+// cadence for a while after it.
+func (g *gate) forget(now time.Time, key string) {
+	g.settle(now)
+	delete(g.sessions, key)
+}
+
 // setProcs records the process scanner's count of harness session
 // processes.
 func (g *gate) setProcs(n int) {
