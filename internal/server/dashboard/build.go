@@ -26,7 +26,8 @@ const DateLayout = "2006-01-02"
 // evidence level, or the agent's time on its own, which has neither.
 type Row struct {
 	// Day is the local date, YYYY-MM-DD.
-	Day     string
+	Day string
+	// Project is the project's id.
 	Project string
 	// Agent marks the agent's time on its own. Kind and Level are then "".
 	Agent bool
@@ -45,9 +46,14 @@ type Meta struct {
 	// Today is the local date, YYYY-MM-DD.
 	Today string
 	Agent string
-	// Names are the projects' display names, by key. A project without
-	// one is called by its key.
+	// Names are the projects' display names, by id. A project without
+	// one is called by its id.
 	Names map[string]string
+	// Keys are the device project keys of each project, by id
+	// (Project.Keys).
+	Keys map[string][]string
+	// SplitByDevice is View.SplitByDevice.
+	SplitByDevice bool
 }
 
 // noProject names the agent's time that no project claims.
@@ -62,7 +68,7 @@ func Build(m Meta, rows []Row) (View, error) {
 	if err != nil {
 		return View{}, fmt.Errorf("dashboard: today %q isn't a date: %w", m.Today, err)
 	}
-	v := View{Sample: m.Sample, AsOf: m.AsOf, TZ: m.TZ, Today: m.Today, Agent: m.Agent}
+	v := View{Sample: m.Sample, AsOf: m.AsOf, TZ: m.TZ, Today: m.Today, Agent: m.Agent, SplitByDevice: m.SplitByDevice}
 	index := make(map[string]int, MonthDays)
 	days := make([]*sums, MonthDays)
 	for i := range days {
@@ -92,31 +98,37 @@ func Build(m Meta, rows []Row) (View, error) {
 	}
 
 	// Projects are ordered by the owner's time over the month, then the
-	// agent's, then key, so the order never depends on the rows' order.
-	for key := range month.projects {
-		name, ok := m.Names[key]
+	// agent's, then id, so the order never depends on the rows' order.
+	// Every list is empty rather than nil, so the JSON has [] and no null.
+	v.Projects = make([]Project, 0, len(month.projects))
+	for id := range month.projects {
+		name, ok := m.Names[id]
 		switch {
 		case ok && name != "":
-		case key == "":
+		case id == "":
 			name = noProject
 		default:
-			name = key
+			name = id
 		}
-		v.Projects = append(v.Projects, Project{Key: key, Name: name})
+		keys := slices.Clone(m.Keys[id])
+		if keys == nil {
+			keys = []string{}
+		}
+		v.Projects = append(v.Projects, Project{ID: id, Keys: keys, Name: name})
 	}
 	slices.SortFunc(v.Projects, func(a, b Project) int {
-		pa, pb := month.projects[a.Key], month.projects[b.Key]
+		pa, pb := month.projects[a.ID], month.projects[b.ID]
 		if c := cmp.Compare(pb.You.Total(), pa.You.Total()); c != 0 {
 			return c
 		}
 		if c := cmp.Compare(pb.Agent.Total(), pa.Agent.Total()); c != 0 {
 			return c
 		}
-		return cmp.Compare(a.Key, b.Key)
+		return cmp.Compare(a.ID, b.ID)
 	})
 	order := make([]string, len(v.Projects))
 	for i, p := range v.Projects {
-		order[i] = p.Key
+		order[i] = p.ID
 	}
 
 	v.Days = make([]Day, MonthDays)
@@ -170,7 +182,7 @@ func (s *sums) add(r Row) {
 
 // projectList returns the projects with time, in order.
 func (s *sums) projectList(order []string) []ProjectTime {
-	var out []ProjectTime
+	out := []ProjectTime{}
 	for _, key := range order {
 		if p := s.projects[key]; p != nil {
 			out = append(out, *p)
@@ -180,7 +192,7 @@ func (s *sums) projectList(order []string) []ProjectTime {
 }
 
 func (s *sums) totals(order []string) Totals {
-	t := Totals{From: s.from, To: s.to, You: s.you, Agent: s.agent, Projects: s.projectList(order)}
+	t := Totals{From: s.from, To: s.to, You: s.you, Agent: s.agent, Projects: s.projectList(order), Kinds: []KindTime{}}
 	for _, l := range Levels {
 		t.Levels = append(t.Levels, LevelTime{Level: l, Time: s.levels[l]})
 	}

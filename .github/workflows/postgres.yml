@@ -5,8 +5,9 @@
 # every PR. This workflow runs the same tests with a Postgres service as
 # well, so SQL that only SQLite accepts fails here. It runs nightly and on
 # PRs that touch the SQL: the store, the migrations, the writer, the
-# accounts, sign-in and device packages, and the retention jobs, including
-# docs/retention.json, whose bindings the jobs build their DELETEs from.
+# accounts, sign-in, device and ingest packages, the rollups, and the
+# retention jobs, including docs/retention.json, whose bindings the jobs
+# build their DELETEs from.
 #
 #   gh workflow run postgres.yml --ref <branch>
 name: postgres
@@ -21,6 +22,8 @@ on:
       - internal/server/auth/**
       - internal/server/device/**
       - internal/server/retention/**
+      - internal/server/ingest/**
+      - internal/server/rollup/**
       - docs/retention.json
       - docs/embed.go
       - .github/workflows/postgres.yml

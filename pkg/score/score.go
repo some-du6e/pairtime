@@ -205,8 +205,8 @@ func merge(old, add []event.Event) []event.Event {
 	return out
 }
 
-// recordCmp orders records by t, then seq, then event_id. seq is gapless
-// per device and assigned as the agent writes, so events of the same
+// recordCmp orders records by t, then seq, then event_id. seq rises with
+// every record the agent writes (ledger-v1 4.1), so events of the same
 // millisecond keep the order the agent wrote them in.
 func recordCmp(a, b event.Event) int {
 	if c := cmp.Compare(a.T, b.T); c != 0 {

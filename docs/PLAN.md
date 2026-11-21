@@ -573,9 +573,10 @@ Exit check: `e2e-wakatime.yml` green on three runners; SM 6.5 reproduces; `web.y
 ### WP-UI1. Local dashboard v0
 
 - Depends on: WP-UI0, WP-AG4.
-- Touches: `web/src/local/`, `internal/agent/api/`, `docs/api/local.openapi.yaml`.
+- Touches: `web/src/local/`, `internal/agent/localhttp/`, `cmd/pairtime/dashboard.go`, `docs/api/local.openapi.yaml`.
 - Build: `pairtime dashboard` opens a one-time URL that sets a `SameSite=Strict`, `HttpOnly` cookie (DESIGN 3.9). Pages: Today (the chess clock per project and day, DESIGN 3.8 copy, pending minutes drawn lighter), Projects (credited time by kind, uncredited time by reason in plain words), Privacy (what is stored locally, retention periods, "delete everything"), Settings (adapters with last event time and parse-failure count, mode, exclusions, "pause for 1 hour", `display.shadow`). Nothing with a webview stays resident (CP 5.3).
 - CI checks: Playwright against an agent loaded with the 6.3 fixture's store: displayed totals equal `pkg/score`'s; no page and no API call works without the cookie; pause stops new records for an hour under a fake clock.
+- Open (#108): #108 builds the pages, the sign-in and the CI checks against a fake agent and the real one, and leaves these for the orchestrator to give to the WP that unblocks each. The Playwright check against an agent loaded with the 6.3 fixture's store needs a way to load a fixture's events into the agent's scorer, which WP-AG4's stores make possible. "Pause for 1 hour" and its fake-clock check need the agent to stop recording for an hour, which no WP builds: WP-OS10, which is cut first, only has it as a tray menu item. "Delete everything" on Privacy needs WP-LG6's wipe of the data directory and `K_dev`. Settings' exclusions, and its list of adapters with their last event times and parse-failure counts, need the agent to report them.
 - Oracle: SM 6.3's totals through the scorer; DESIGN 3.9's access rules.
 
 ### WP-OS8. Notifications

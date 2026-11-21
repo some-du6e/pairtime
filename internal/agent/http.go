@@ -16,16 +16,25 @@ import (
 
 // handler is the agent's HTTP server: the UI at /, which needs no token
 // because it is the same static files for everyone, and the API under
-// /v1/, which does. Guard checks the Host and Origin of both (CP 6.3).
+// /v1/. The routes the dashboard reads take the bearer token from
+// port.json or the dashboard's session cookie, and POST /v1/agent/stop
+// takes the token alone, so the cookie can't stop the agent. `pairtime
+// dashboard` gets a one-time sign-in link over the socket (dashboard.go),
+// and GET /signin trades it for the cookie (DESIGN 3.9). Guard checks the
+// Host and Origin of everything (CP 6.3).
 func (a *agent) handler(token string) http.Handler {
-	api := http.NewServeMux()
-	api.HandleFunc("GET /v1/status", a.serveStatus)
-	api.HandleFunc("GET /v1/days/{date}", a.serveDay)
-	api.HandleFunc("GET /v1/sessions/last", a.serveLastSession)
-	api.HandleFunc("POST /v1/agent/stop", a.serveStop)
+	reads := http.NewServeMux()
+	reads.HandleFunc("GET /v1/status", a.serveStatus)
+	reads.HandleFunc("GET /v1/days/{date}", a.serveDay)
+	reads.HandleFunc("GET /v1/sessions/last", a.serveLastSession)
+
+	stop := http.NewServeMux()
+	stop.HandleFunc("POST /v1/agent/stop", a.serveStop)
 
 	mux := http.NewServeMux()
-	mux.Handle("/v1/", localhttp.RequireToken(token, api))
+	mux.Handle("/v1/agent/stop", localhttp.RequireToken(token, stop))
+	mux.Handle("/v1/", localhttp.RequireAuth(token, a.sessions, reads))
+	mux.Handle("GET /signin", localhttp.SignIn(a.sessions))
 	mux.Handle("/", readOnly(http.FileServerFS(webui.FS())))
 	return localhttp.Guard(a.port, mux)
 }

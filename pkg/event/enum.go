@@ -376,6 +376,9 @@ var actors = enum[Actor]{name: "actor", values: []Actor{
 	ActorHuman, ActorAgent, ActorUnknown,
 }}
 
+// Actors returns every actor, in the schema's order.
+func Actors() []Actor { return slices.Clone(actors.values) }
+
 // AppClass sorts the app that has focus (os.focus, and a slot's
 // focus_class).
 type AppClass string

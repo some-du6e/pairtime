@@ -19,6 +19,10 @@ interface TestPaths {
 		get?: never;
 		post: { responses: { 202: { content: { 'application/json': { status: 'stopping' } } } } };
 	};
+	'/v1/days/{date}': {
+		get: { responses: { 200: { content: { 'application/json': { date: string } } } } };
+		post?: never;
+	};
 }
 
 function json(status: number, body: string): Response {
@@ -92,6 +96,26 @@ describe('requests', () => {
 			},
 		},
 		{
+			name: "a GET's query goes into the URL, leaving out parameters without a value",
+			send: (api) => api.get('/v1/thing', { query: { from: '2026-10-22', to: '2026-11-20', skip: undefined } }),
+			want: { url: '/v1/thing?from=2026-10-22&to=2026-11-20', method: 'GET' },
+		},
+		{
+			name: 'a GET with only empty parameters has no query at all',
+			send: (api) => api.get('/v1/thing', { query: { skip: undefined } }),
+			want: { url: '/v1/thing' },
+		},
+		{
+			name: "a path's {name} segment takes its value, URL-encoded",
+			send: (api) => api.get('/v1/days/{date}', { params: { date: '2026-11-20' } }),
+			want: { url: '/v1/days/2026-11-20', method: 'GET' },
+		},
+		{
+			name: 'a value with a slash stays inside its segment',
+			send: (api) => api.get('/v1/days/{date}', { params: { date: '../status' } }),
+			want: { url: '/v1/days/..%2Fstatus' },
+		},
+		{
 			name: 'a POST sends its body as JSON',
 			send: (api) => api.post('/v1/do', { body: { why: 'test' } }),
 			want: { url: '/v1/do', method: 'POST', body: '{"why":"test"}', contentType: 'application/json' },
@@ -119,6 +143,20 @@ describe('requests', () => {
 			expect(seen).toMatchObject(c.want);
 		});
 	}
+});
+
+describe('path parameters', () => {
+	test('a path whose {name} has no value sends nothing and says which', async () => {
+		let sent = false;
+		const api = createClient<TestPaths>({
+			fetch: async () => {
+				sent = true;
+				return json(200, '{}');
+			},
+		});
+		expect(await api.get('/v1/days/{date}')).toMatchObject({ ok: false, problem: 'unexpected', detail: '/v1/days/{date} needs a value for {date}' });
+		expect(sent).toBe(false);
+	});
 });
 
 describe('aborts', () => {

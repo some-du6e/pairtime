@@ -21,6 +21,11 @@ func TestLists(t *testing.T) {
 		{"CreditReasons lists SM 5.2's credit reasons in order", names(CreditReasons()), []string{
 			"P", "ANS", "GO", "Q", "PA", "INT", "E", "NAV", "CMD", "TEST", "G", "SUP", "READ", "LOOKUP"}},
 		{"UncreditedReasons lists SM 5.2's uncredited reasons in order", names(UncreditedReasons()), names(uncreditedReasons.values)},
+		{"Evidences lists the levels A, B and C", names(Evidences()), []string{"A", "B", "C"}},
+		{"SlotLabels lists the side-door labels in a slot's order", names(SlotLabels()), []string{"via_track", "via_plugin", "via_bridge"}},
+		{"BucketStates lists every bucket state", names(BucketStates()), names(bucketStates.values)},
+		{"Witnesses lists every witness label", names(Witnesses()), names(witnesses.values)},
+		{"Actors lists every actor in the schema's order", names(Actors()), names(actors.values)},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -31,8 +36,11 @@ func TestLists(t *testing.T) {
 	}
 	t.Run("a caller that changes a list changes nothing here", func(t *testing.T) {
 		h, a, c, u := Harnesses(), Activities(), CreditReasons(), UncreditedReasons()
+		e, l, s, w, ac := Evidences(), SlotLabels(), BucketStates(), Witnesses(), Actors()
 		h[0], a[0], c[0], u[0] = "x", "x", "x", "x"
-		if Harnesses()[0] == "x" || Activities()[0] == "x" || CreditReasons()[0] == "x" || UncreditedReasons()[0] == "x" {
+		e[0], l[0], s[0], w[0], ac[0] = "x", "x", "x", "x", "x"
+		if Harnesses()[0] == "x" || Activities()[0] == "x" || CreditReasons()[0] == "x" || UncreditedReasons()[0] == "x" ||
+			Evidences()[0] == "x" || SlotLabels()[0] == "x" || BucketStates()[0] == "x" || Witnesses()[0] == "x" || Actors()[0] == "x" {
 			t.Error("a list shares its backing array with the package")
 		}
 	})

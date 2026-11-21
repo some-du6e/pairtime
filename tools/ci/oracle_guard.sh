@@ -29,6 +29,10 @@ label=oracle-change
 # pattern * also matches /.
 is_oracle() {
 	case "$1" in
+	# Each timeline's golden.jsonl is a regression guard, not an oracle: it
+	# holds what pkg/score outputs, so it changes with the scorer, and
+	# score_regression.sh asks for a new scoring version instead (DESIGN 6.6).
+	testdata/timelines/*/golden.jsonl) return 1 ;;
 	docs/DESIGN.md | docs/BOUNTY.md | tools/ledger_ref.py) return 0 ;;
 	docs/design/* | docs/research/* | docs/errata/*) return 0 ;;
 	testdata/timelines/* | testdata/ledger/* | testdata/fixtures/*) return 0 ;;
