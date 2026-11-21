@@ -28,7 +28,7 @@ Commands:
 `
 
 const usageTail = `
-This build is a skeleton and doesn't track anything yet.
+Start with pairtime install. To see your hours online too, run pairtime login.
 Source and status: https://github.com/some-du6e/pairtime
 `
 
