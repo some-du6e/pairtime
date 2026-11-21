@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/some-du6e/pairtime/internal/platform/clock"
+	osclock "github.com/some-du6e/pairtime/internal/platform/clock"
 	"github.com/some-du6e/pairtime/pkg/event"
 )
 
@@ -86,17 +86,17 @@ func TestMoment(t *testing.T) {
 	reads := []struct {
 		name string
 		at   time.Time
-		s    clock.Stamp
+		s    osclock.Stamp
 		want moment
 	}{
 		{"a moment takes the OS's reading with its boot",
-			wallOnly, clock.Stamp{Mono: 42, BootID: boot}, moment{wall: testT, os: 42, boot: boot}},
+			wallOnly, osclock.Stamp{Mono: 42, BootID: boot}, moment{wall: testT, os: 42, boot: boot}},
 		{"a moment takes no reading of the OS's clock when the OS gave none",
-			wallOnly, clock.Stamp{}, moment{wall: testT}},
+			wallOnly, osclock.Stamp{}, moment{wall: testT}},
 		{"a moment takes this run's clock from a time with Go's monotonic reading",
-			now, clock.Stamp{}, moment{wall: now.UnixMilli(), run: runMono(now)}},
+			now, osclock.Stamp{}, moment{wall: now.UnixMilli(), run: runMono(now)}},
 		{"a moment takes none of this run's clock from a time with no monotonic reading, as one read back from disk",
-			now.Round(0), clock.Stamp{}, moment{wall: now.UnixMilli()}},
+			now.Round(0), osclock.Stamp{}, moment{wall: now.UnixMilli()}},
 	}
 	for _, c := range reads {
 		t.Run(c.name, func(t *testing.T) {

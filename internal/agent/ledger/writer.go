@@ -15,7 +15,7 @@ import (
 	"time"
 
 	"github.com/some-du6e/pairtime/internal/agent/sched"
-	"github.com/some-du6e/pairtime/internal/platform/clock"
+	osclock "github.com/some-du6e/pairtime/internal/platform/clock"
 	"github.com/some-du6e/pairtime/pkg/event"
 	"github.com/some-du6e/pairtime/pkg/ledger"
 	"github.com/some-du6e/pairtime/pkg/ledger/features"
@@ -138,8 +138,8 @@ type Options struct {
 	// next sign-in (ingest-v1 5.3). Nil means nothing waits.
 	Waiting func(before func(event.Envelope) bool) bool
 	// Clock reads the OS's monotonic clock, which hook calls carry, at the
-	// moments config.toml is seen local-only (moment): clock.Now when nil.
-	Clock func() clock.Stamp
+	// moments config.toml is seen local-only (moment): osclock.Now when nil.
+	Clock func() osclock.Stamp
 	// Seen, when set, gives what the agent saw of config.toml's mode before
 	// the writer opened. Open takes it as NoteSeen does, before it seals
 	// what a crash left, so the records the ledger kept through a stretch
@@ -234,7 +234,7 @@ type Writer struct {
 	sealedFn func(Batch)
 	online   func() bool
 	waiting  func(func(event.Envelope) bool) bool
-	osNow    func() clock.Stamp
+	osNow    func() osclock.Stamp
 	problem  func(string)
 	device   string
 
@@ -323,7 +323,7 @@ func Open(opts Options) (*Writer, error) {
 	}
 	osNow := opts.Clock
 	if osNow == nil {
-		osNow = clock.Now
+		osNow = osclock.Now
 	}
 	w := &Writer{
 		dir:      filepath.Clean(opts.Dir),
@@ -654,7 +654,7 @@ func (w *Writer) noteLocked(online bool, at moment) bool {
 type Seen struct {
 	Local bool
 	Ended time.Time
-	OS    clock.Stamp
+	OS    osclock.Stamp
 }
 
 // NoteSeen takes what the agent saw of config.toml's mode before it

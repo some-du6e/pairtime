@@ -5,7 +5,7 @@ package ledger
 import (
 	"time"
 
-	"github.com/some-du6e/pairtime/internal/platform/clock"
+	osclock "github.com/some-du6e/pairtime/internal/platform/clock"
 	"github.com/some-du6e/pairtime/pkg/event"
 )
 
@@ -39,7 +39,7 @@ type moment struct {
 // back from disk doesn't, and s, the OS's reading taken with it. A time
 // with no monotonic reading gives none of this run's clock, since one made
 // from the wall clock would move with its steps.
-func momentAt(at time.Time, s clock.Stamp) moment {
+func momentAt(at time.Time, s osclock.Stamp) moment {
 	m := moment{wall: at.UnixMilli()}
 	if at != at.Round(0) { // Round(0) strips the monotonic reading
 		m.run = runMono(at)

@@ -19,7 +19,7 @@ import (
 	"time"
 
 	"github.com/some-du6e/pairtime/internal/agent/sched"
-	"github.com/some-du6e/pairtime/internal/platform/clock"
+	osclock "github.com/some-du6e/pairtime/internal/platform/clock"
 	"github.com/some-du6e/pairtime/pkg/event"
 	"github.com/some-du6e/pairtime/pkg/ledger"
 	"github.com/some-du6e/pairtime/pkg/ledger/features"
@@ -803,7 +803,7 @@ func TestNoteMode(t *testing.T) {
 						asked.Store(before(event.Envelope{T: testT - 1}) && !before(event.Envelope{T: testT}))
 						return waits.Load()
 					}
-					o.Clock = func() clock.Stamp { return clock.Stamp{Wall: clk.now(), Mono: osMono, BootID: osBoot} }
+					o.Clock = func() osclock.Stamp { return osclock.Stamp{Wall: clk.now(), Mono: osMono, BootID: osBoot} }
 				})
 			}
 			w := openWriter(file.Load)
