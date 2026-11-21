@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/some-du6e/pairtime/internal/server/backup"
+	"github.com/some-du6e/pairtime/internal/server/device"
 	"github.com/some-du6e/pairtime/internal/server/writer"
 	"github.com/some-du6e/pairtime/pkg/event"
 	"github.com/some-du6e/pairtime/pkg/ledger"
@@ -33,38 +34,19 @@ const (
 	TimePath    = "/api/v1/time"
 )
 
-// Device is a linked device, as the device store (WP-SV3) finds it by its
-// token.
-type Device struct {
-	// ID is the opaque device_id, the per-install id the client's ledger
-	// made.
-	ID string
-	// Account is the users row of the device's owner.
-	Account string
-	// PublicKey is the device's registered Ed25519 key, nil until it
-	// registers one.
-	PublicKey ed25519.PublicKey
-	Revoked   bool
-}
-
-// ErrUnknownToken is what an Authenticator returns, wrapped, for a token
-// that fails its checksum or names no device. Any other error is the store
-// failing, and the request gets 503.
-var ErrUnknownToken = errors.New("ingest: the token fails its checksum or names no device")
-
-// Authenticator finds the device a "ptd_" token belongs to, checking the
-// token's checksum before any lookup (the dashboard wave's meeting point
-// 1). *device.Store meets it through AuthenticatorFunc.
-type Authenticator interface {
-	Authenticate(ctx context.Context, token string) (Device, error)
-}
-
-// AuthenticatorFunc is a function that is an Authenticator.
-type AuthenticatorFunc func(ctx context.Context, token string) (Device, error)
-
-// Authenticate calls f.
-func (f AuthenticatorFunc) Authenticate(ctx context.Context, token string) (Device, error) {
-	return f(ctx, token)
+// Devices is WP-SV3's device store, which *device.Store is. Authenticate
+// finds the device a "ptd_" token belongs to, checking the token's
+// checksum before any lookup (the dashboard wave's meeting point 1), and
+// returns device.ErrBadToken, device.ErrUnknownToken or device.ErrRevoked
+// for a token it refuses; any other error is the store failing, and the
+// request gets 503. The device's counter and chain head live on its row,
+// which ingest reads with LoadState and writes with SaveState inside its
+// own writer transaction, and never with SQL of its own
+// (D-device-row-chain-state).
+type Devices interface {
+	Authenticate(ctx context.Context, token string) (device.Device, error)
+	LoadState(ctx context.Context, tx writer.Tx, d device.Device) (device.State, error)
+	SaveState(ctx context.Context, tx writer.Tx, d device.Device, st device.State) error
 }
 
 // RollupFunc moves an account's rollups from prev, the revision a bucket
@@ -80,12 +62,14 @@ type Doer interface {
 
 // Options configure a Service.
 type Options struct {
-	// Devices finds the device behind a token. Without it, ingest is off.
-	Devices Authenticator
+	// Devices finds the device behind a token and keeps ingest's state on
+	// its row. Without it, ingest is off.
+	Devices Devices
 	// Writer is the writer goroutine every write goes through.
 	Writer Doer
-	// Read is the read pool, for GET /api/v1/ingest/state and the reads
-	// that spare the writer a replay.
+	// Read is the read pool, for the read that spares the writer a
+	// replay. Everything else, GET /api/v1/ingest/state included, reads in
+	// the writer's transaction, where the device's row is read.
 	Read *sql.DB
 	// Key is the server key that signs receipts. Without it, ingest is
 	// off.
@@ -119,8 +103,8 @@ type Service struct {
 	rate  *limiter
 }
 
-// New returns the ingest API. Ingest answers ingest_off until both
-// Devices and Key are set; GET /api/v1/time always answers.
+// New returns the ingest API. Ingest answers ingest_off until Devices,
+// Writer, Read and Key are all set; GET /api/v1/time always answers.
 func New(o Options) *Service {
 	if o.Now == nil {
 		o.Now = time.Now
@@ -195,37 +179,47 @@ func (s *Service) refuse(w http.ResponseWriter, r *refusal) {
 
 var refusalOff = refuse(CodeIngestOff, "Ingest isn't set up on this server yet.")
 
+func revoked() *refusal {
+	return refuse(CodeDeviceRevoked, "The device was removed, or its account can no longer sign in; pairtime login links it again.")
+}
+
+// anotherAccount refuses a device_id whose stored rows belong to an account
+// other than the token's (D-device-account-binding).
+func anotherAccount() *refusal {
+	return refuse(CodeDeviceMismatch, "This server holds uploads from this device_id under another account; sign in again as a new device.")
+}
+
 func unavailable() *refusal {
 	return refuse(CodeUnavailable, "The server couldn't store the upload; send it again later.")
 }
 
 // badSignature refuses a signature that doesn't verify under dev's key, and
 // names that key by its id.
-func badSignature(dev Device) *refusal {
+func badSignature(dev device.Device) *refusal {
 	r := refuse(CodeSignatureInvalid, "The signature doesn't verify under the device's registered key; device_key_id names that key.")
 	r.deviceKeyID = backup.KeyID(dev.PublicKey)
 	return r
 }
 
 // authenticate runs ingest-v1 2.5 steps 2 and 3.
-func (s *Service) authenticate(r *http.Request) (Device, *refusal) {
+func (s *Service) authenticate(r *http.Request) (device.Device, *refusal) {
 	auth, ok := single(r.Header, "Authorization")
 	scheme, token, found := strings.Cut(auth, " ")
 	if !ok || !found || !strings.EqualFold(scheme, "Bearer") || strings.TrimSpace(token) == "" {
-		return Device{}, refuse(CodeTokenMissing, "Send the device token as Authorization: Bearer ptd_...")
+		return device.Device{}, refuse(CodeTokenMissing, "Send the device token as Authorization: Bearer ptd_...")
 	}
 	dev, err := s.o.Devices.Authenticate(r.Context(), strings.TrimSpace(token))
 	switch {
-	case errors.Is(err, ErrUnknownToken):
-		return Device{}, refuse(CodeTokenInvalid, "The device token fails its checksum or names no device; sign in again.")
+	case errors.Is(err, device.ErrBadToken), errors.Is(err, device.ErrUnknownToken):
+		return device.Device{}, refuse(CodeTokenInvalid, "The device token fails its checksum or names no device; sign in again.")
+	case errors.Is(err, device.ErrRevoked), err == nil && dev.Revoked:
+		return device.Device{}, revoked()
 	case err != nil:
 		s.o.Logger.Error("ingest: the device store failed", "err", err)
-		return Device{}, unavailable()
-	case dev.Revoked:
-		return Device{}, refuse(CodeDeviceRevoked, "This device was revoked.")
+		return device.Device{}, unavailable()
 	}
 	if id, ok := single(r.Header, HeaderDevice); !ok || id != dev.ID {
-		return Device{}, refuse(CodeDeviceMismatch, "X-Pairtime-Device must be the device the token belongs to.")
+		return device.Device{}, refuse(CodeDeviceMismatch, "X-Pairtime-Device must be the device the token belongs to.")
 	}
 	return dev, nil
 }
@@ -354,31 +348,38 @@ type outcome struct {
 	stored int
 }
 
-// checkReplay is ingest-v1 2.5 step 13 against the device's stored state.
-// It reports whether it decided the request.
-func checkReplay(st deviceState, env envelope) (outcome, bool) {
-	if st.found && st.lastKey == env.key {
-		if st.lastSHA != env.bodySHA {
-			return outcome{refusal: refuse(CodeIdempotencyKeyReused, "This Idempotency-Key was used with another body; a new body takes a new key.")}, true
-		}
-		return outcome{response: st.lastResp, replay: true}, true
+// checkReplay is ingest-v1 2.5 step 13's Idempotency-Key check against the
+// device's last reply. It reports whether it decided the request.
+func checkReplay(rp reply, env envelope) (outcome, bool) {
+	if !rp.found || rp.key != env.key {
+		return outcome{}, false
 	}
-	if env.req <= st.req {
+	if rp.bodySHA != env.bodySHA {
+		return outcome{refusal: refuse(CodeIdempotencyKeyReused, "This Idempotency-Key was used with another body; a new body takes a new key.")}, true
+	}
+	return outcome{response: rp.response, replay: true}, true
+}
+
+// checkCounter is step 13's counter check against the device's stored
+// counter.
+func checkCounter(st device.State, env envelope) (outcome, bool) {
+	if env.req <= st.Req {
 		return outcome{refusal: refuse(CodeCounterStale, "X-Pairtime-Req is at or below the stored counter; read "+StatePath+" and continue above its req.")}, true
 	}
 	return outcome{}, false
 }
 
-// precheck runs step 13 on the read pool, so a replay or a stale counter
-// never waits for the writer. The writer's op runs it again on the rows it
-// holds; this read only spares it the work. A read that fails decides
-// nothing.
-func (s *Service) precheck(ctx context.Context, dev Device, env envelope) (outcome, bool) {
-	st, err := loadState(ctx, s.o.Read, dev.ID)
+// precheck runs step 13's replay check on the read pool, so a replay never
+// waits for the writer. The writer's op runs all of step 13 again on the
+// rows it holds; this read only spares it the work. A read that fails
+// decides nothing. The counter is on the device's row, which ingest reads
+// only inside its writer transaction (D-device-row-chain-state).
+func (s *Service) precheck(ctx context.Context, dev device.Device, env envelope) (outcome, bool) {
+	rp, err := loadReply(ctx, s.o.Read, dev.ID, dev.Account)
 	if err != nil {
 		return outcome{}, false
 	}
-	return checkReplay(st, env)
+	return checkReplay(rp, env)
 }
 
 // parsed is a request's items after the checks that read no stored state:
@@ -456,10 +457,10 @@ func parseItems(b body) (parsed, error) {
 }
 
 // rows is how many rows the request's op may write, for the writer's
-// MaxRows: the device's state and the request's origin, then each item, a
-// bucket counting twice for its revision row.
+// MaxRows: the device's row, its reply and the request's origin, then
+// each item, a bucket counting twice for its revision row.
 func (p parsed) rows() int {
-	n := 2 + len(p.batches) + 2*len(p.buckets) + len(p.commits)
+	n := 3 + len(p.batches) + 2*len(p.buckets) + len(p.commits)
 	if p.labels != nil {
 		n++
 	}
@@ -519,21 +520,77 @@ func storedRev(status int, code string, rev int64) itemResult {
 	return itemResult{Status: status, Code: code, Rev: &rev}
 }
 
+// chainState is a device's chain state while ingest works on it: the state on
+// its row, and, when the row has no head, the head of its witness rows,
+// which saving drops again unless a batch moved it (witnessHead).
+type chainState struct {
+	device.State
+	fromWitness bool
+	moved       bool
+}
+
+// loadChain reads dev's chain state inside tx. It refuses the request when
+// rows the server holds for the device belong to another account
+// (D-device-account-binding), or when the device's row no longer holds the
+// token the request came with.
+func (s *Service) loadChain(ctx context.Context, tx writer.Tx, dev device.Device) (chainState, *refusal, error) {
+	foreign, err := foreignRows(ctx, tx, dev.ID, dev.Account)
+	switch {
+	case err != nil:
+		return chainState{}, nil, err
+	case foreign:
+		return chainState{}, anotherAccount(), nil
+	}
+	st, err := s.o.Devices.LoadState(ctx, tx, dev)
+	switch {
+	case errors.Is(err, device.ErrRevoked):
+		return chainState{}, revoked(), nil
+	case err != nil:
+		return chainState{}, nil, err
+	}
+	c := chainState{State: st}
+	if st.HeadB == 0 {
+		if c.fromWitness, err = witnessHead(ctx, tx, dev.ID, &c.State); err != nil {
+			return chainState{}, nil, err
+		}
+	}
+	return c, nil, nil
+}
+
+// relinked reports whether the device signed in again since its head was
+// stored, so its next batch may skip ahead (D-local-gap).
+func (c chainState) relinked() bool { return c.HeadB != 0 && c.HeadGeneration < c.Generation }
+
+// saved is the state to store on the device's row: c's, without a head
+// from the witness rows that no batch moved.
+func (c chainState) saved() device.State {
+	st := c.State
+	if c.fromWitness && !c.moved {
+		st.HeadB, st.HeadHash, st.HeadGeneration, st.HeadReceivedAt, st.ChainStart, st.Gaps = 0, ledger.Hash{}, 0, time.Time{}, 0, nil
+	}
+	return st
+}
+
 // process runs ingest-v1 2.5 steps 13 and 14 in the writer's transaction.
 // It returns an error only when the database fails, which rolls back
 // everything it wrote.
-func (s *Service) process(ctx context.Context, tx writer.Tx, dev Device, env envelope, p parsed, ip, ja4 string) (outcome, error) {
-	st, err := loadState(ctx, tx, dev.ID)
+func (s *Service) process(ctx context.Context, tx writer.Tx, dev device.Device, env envelope, p parsed, ip, ja4 string) (outcome, error) {
+	c, ref, err := s.loadChain(ctx, tx, dev)
+	switch {
+	case err != nil:
+		return outcome{}, err
+	case ref != nil:
+		return outcome{refusal: ref}, nil
+	}
+	rp, err := loadReply(ctx, tx, dev.ID, dev.Account)
 	if err != nil {
 		return outcome{}, err
 	}
-	if out, done := checkReplay(st, env); done {
+	if out, done := checkReplay(rp, env); done {
 		return out, nil
 	}
-	if !st.found {
-		if err := witnessHead(ctx, tx, dev.ID, &st); err != nil {
-			return outcome{}, err
-		}
+	if out, done := checkCounter(c.State, env); done {
+		return out, nil
 	}
 
 	now := s.nowMS()
@@ -546,7 +603,7 @@ func (s *Service) process(ctx context.Context, tx writer.Tx, dev Device, env env
 	}
 	stored := 0
 	for _, pb := range p.batches {
-		r, err := s.batch(ctx, tx, dev, &st, pb, now)
+		r, err := s.batch(ctx, tx, dev, &c, pb, now)
 		if err != nil {
 			return outcome{}, err
 		}
@@ -578,16 +635,19 @@ func (s *Service) process(ctx context.Context, tx writer.Tx, dev Device, env env
 		}
 		resp.Labels = &r
 	}
-	if st.headB != 0 {
-		resp.Head = &headJSON{B: st.headB, Head: st.headHash}
+	if c.HeadB != 0 {
+		resp.Head = &headJSON{B: c.HeadB, Head: c.HeadHash}
 	}
 	data, err := json.Marshal(resp)
 	if err != nil {
 		return outcome{}, err
 	}
-	st.found = true
-	st.req, st.lastKey, st.lastSHA, st.lastResp = env.req, env.key, env.bodySHA, data
-	if err := saveState(ctx, tx, dev.ID, dev.Account, st, now); err != nil {
+	st := c.saved()
+	st.Req = env.req
+	if err := s.o.Devices.SaveState(ctx, tx, dev, st); err != nil {
+		return outcome{}, err
+	}
+	if err := putReply(ctx, tx, dev.ID, dev.Account, reply{key: env.key, bodySHA: env.bodySHA, response: data}, now); err != nil {
 		return outcome{}, err
 	}
 	if err := insertOrigin(ctx, tx, newID(time.UnixMilli(now)), dev.ID, dev.Account, ip, ja4, now); err != nil {
@@ -602,8 +662,8 @@ func receipt(w witnessRow) *receiptJSON {
 }
 
 // batch checks one batch root against the chain and stores it, moving
-// st's head (ingest-v1 2.7).
-func (s *Service) batch(ctx context.Context, tx writer.Tx, dev Device, st *deviceState, pb parsedBatch, now int64) (batchResult, error) {
+// c's head (ingest-v1 2.7).
+func (s *Service) batch(ctx context.Context, tx writer.Tx, dev device.Device, c *chainState, pb parsedBatch, now int64) (batchResult, error) {
 	br := pb.br
 	if e := pb.err; e != nil {
 		r := resultOf(e)
@@ -632,19 +692,28 @@ func (s *Service) batch(ctx context.Context, tx writer.Tx, dev Device, st *devic
 		return res, nil
 	}
 	var zero ledger.Hash
+	var gap *device.Gap
 	switch {
-	case st.headB == 0 && br.b == 1 && br.prev != zero:
+	case c.HeadB == 0 && br.b == 1 && br.prev != zero:
 		return fail(http.StatusConflict, CodePrevMismatch)
-	case st.headB == 0:
+	case c.HeadB == 0:
 		// A device with no stored head starts its witnessed chain at any b
 		// (ingest-v1 7 item 6; ledger-v1 6).
-		st.chainStart = br.b
-	case br.b > st.headB+1:
+	case br.b == c.HeadB+1:
+		if br.prev != c.HeadHash {
+			return fail(http.StatusConflict, CodePrevMismatch)
+		}
+	case br.b > c.HeadB+1 && c.relinked():
+		// The first batch under a new sign-in skips the batches the device
+		// sealed in local-only mode, whose roots it never sends; they stay
+		// a gap the server never takes (D-local-gap; ingest-v1 2.7 step 5).
+		gap = &device.Gap{First: c.HeadB + 1, Last: br.b - 1}
+	case br.b > c.HeadB+1:
 		return fail(http.StatusConflict, CodeChainGap)
-	case br.b <= st.headB:
+	default:
+		// At or below the head with no stored row: before the chain's
+		// start, in a local-only gap, or past its retention period.
 		return fail(http.StatusConflict, CodeBeforeChain)
-	case br.prev != st.headHash:
-		return fail(http.StatusConflict, CodePrevMismatch)
 	}
 	rc, err := ledger.SignReceipt(s.o.Key, dev.ID, br.b, br.head, uint64(now))
 	if err != nil {
@@ -654,13 +723,19 @@ func (s *Service) batch(ctx context.Context, tx writer.Tx, dev Device, st *devic
 	if err := insertWitness(ctx, tx, dev.ID, dev.Account, br.b, row); err != nil {
 		return res, err
 	}
-	st.headB, st.headHash, st.headAt = br.b, br.head, now
+	if c.HeadB == 0 {
+		c.ChainStart = br.b
+	}
+	if gap != nil {
+		c.Gaps = append(c.Gaps, *gap)
+	}
+	c.HeadB, c.HeadHash, c.HeadReceivedAt, c.HeadGeneration, c.moved = br.b, br.head, time.UnixMilli(now), c.Generation, true
 	res.Status, res.Code, res.Receipt = http.StatusOK, CodeAccepted, receipt(row)
 	return res, nil
 }
 
 // bucket stores one minute bucket as a revision (ingest-v1 2.7).
-func (s *Service) bucket(ctx context.Context, tx writer.Tx, dev Device, pb parsedBucket, now int64) (itemResult, error) {
+func (s *Service) bucket(ctx context.Context, tx writer.Tx, dev device.Device, pb parsedBucket, now int64) (itemResult, error) {
 	if pb.err != nil {
 		return resultOf(pb.err), nil
 	}
@@ -737,7 +812,7 @@ func sameBucket(stored string, data []byte) (bool, error) {
 }
 
 // commit stores one commit record (ingest-v1 2.7).
-func (s *Service) commit(ctx context.Context, tx writer.Tx, dev Device, pc parsedCommit, now int64) (itemResult, error) {
+func (s *Service) commit(ctx context.Context, tx writer.Tx, dev device.Device, pc parsedCommit, now int64) (itemResult, error) {
 	if pc.err != nil {
 		return resultOf(pc.err), nil
 	}
@@ -811,7 +886,12 @@ type stateJSON struct {
 	Req        int64          `json:"req"`
 	Head       *stateHeadJSON `json:"head"`
 	ChainStart *uint64        `json:"chain_start"`
-	ServerKey  serverKeyJSON  `json:"server_key"`
+	// Relinked is set while the device's next batch may skip ahead, since
+	// it signed in again after the head was stored (D-local-gap).
+	Relinked bool `json:"relinked"`
+	// Gaps are the local-only gaps the server recorded, oldest first.
+	Gaps      []device.Gap  `json:"gaps"`
+	ServerKey serverKeyJSON `json:"server_key"`
 }
 
 type stateHeadJSON struct {
@@ -857,19 +937,33 @@ func (s *Service) state(w http.ResponseWriter, r *http.Request) {
 		s.refuse(w, ref)
 		return
 	}
-	st, err := loadState(r.Context(), s.o.Read, dev.ID)
-	if err == nil && !st.found {
-		err = witnessHead(r.Context(), s.o.Read, dev.ID, &st)
-	}
-	if err != nil {
-		s.o.Logger.Error("ingest: reading a device's state failed", "err", err)
+	// The state is on the device's row, which ingest reads only inside its
+	// writer transaction (D-device-row-chain-state).
+	var c chainState
+	err := s.o.Writer.Do(r.Context(), 1, func(ctx context.Context, tx writer.Tx) error {
+		var err error
+		c, ref, err = s.loadChain(ctx, tx, dev)
+		return err
+	})
+	switch {
+	case err != nil:
+		if r.Context().Err() == nil {
+			s.o.Logger.Error("ingest: reading a device's state failed", "err", err)
+		}
 		s.refuse(w, unavailable())
 		return
+	case ref != nil:
+		s.refuse(w, ref)
+		return
 	}
-	out := stateJSON{Device: dev.ID, Req: st.req, ServerKey: serverKeyJSON{KeyID: s.keyID, PublicKey: hex.EncodeToString(s.pub)}}
-	if st.headB != 0 {
-		start := st.chainStart
-		out.Head = &stateHeadJSON{B: st.headB, Head: st.headHash, ReceivedAt: st.headAt}
+	out := stateJSON{Device: dev.ID, Req: c.Req, Relinked: c.relinked(), Gaps: c.Gaps,
+		ServerKey: serverKeyJSON{KeyID: s.keyID, PublicKey: hex.EncodeToString(s.pub)}}
+	if out.Gaps == nil {
+		out.Gaps = []device.Gap{}
+	}
+	if c.HeadB != 0 {
+		start := c.ChainStart
+		out.Head = &stateHeadJSON{B: c.HeadB, Head: c.HeadHash, ReceivedAt: c.HeadReceivedAt.UnixMilli()}
 		out.ChainStart = &start
 	}
 	data, err := json.Marshal(out)

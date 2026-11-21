@@ -315,7 +315,7 @@ func TestJobs(t *testing.T) {
 			wantJobs: []string{
 				"server.devices/devices", "server.devices/device_labels", "server.ip_ja4/request_origins",
 				"server.minute_buckets/minute_buckets", "server.minute_buckets/minute_bucket_revisions",
-				"server.witness/witness_rows", "server.witness/ingest_devices",
+				"server.witness/witness_rows", "server.witness/ingest_replies",
 			},
 			wantOff: []string{
 				"server.minute_buckets/minute_buckets hold awaits WP-SB4", "server.minute_buckets/minute_bucket_revisions hold awaits WP-SB4",
@@ -335,7 +335,7 @@ func TestJobs(t *testing.T) {
 			wantJobs: []string{
 				"server.devices/devices", "server.devices/device_labels", "server.ip_ja4/request_origins",
 				"server.minute_buckets/minute_buckets", "server.minute_buckets/minute_bucket_revisions", "server.minute_buckets/submission_minutes",
-				"server.witness/witness_rows", "server.witness/submission_batches", "server.witness/ingest_devices",
+				"server.witness/witness_rows", "server.witness/submission_batches", "server.witness/ingest_replies",
 			},
 			wantOff: []string{
 				"server.minute_buckets/minute_buckets hold awaits WP-SB4", "server.minute_buckets/minute_bucket_revisions hold awaits WP-SB4",
@@ -357,7 +357,7 @@ func TestJobs(t *testing.T) {
 			wantJobs: []string{
 				"server.devices/devices", "server.devices/device_labels", "server.ip_ja4/request_origins",
 				"server.minute_buckets/minute_buckets+hold", "server.minute_buckets/minute_bucket_revisions+hold", "server.minute_buckets/submission_minutes",
-				"server.witness/witness_rows+hold", "server.witness/submission_batches", "server.witness/ingest_devices",
+				"server.witness/witness_rows+hold", "server.witness/submission_batches", "server.witness/ingest_replies",
 			},
 		},
 	}
@@ -565,8 +565,8 @@ func TestSweep(t *testing.T) {
 				{name: "a minute's stored revisions go 180 days after the minute", job: "server.minute_buckets/minute_bucket_revisions", age: 180 * day},
 				{name: "a minute's stored revisions stay a minute short of 180 days", job: "server.minute_buckets/minute_bucket_revisions", age: 180*day - time.Minute, kept: true},
 				{name: "an old minute's revisions stay while an open submission holds the minute", job: "server.minute_buckets/minute_bucket_revisions", age: 400 * day, hold: &hold{open: true}, kept: true},
-				{name: "a device's ingest state goes 180 days after its last upload", job: "server.witness/ingest_devices", age: 180 * day},
-				{name: "a device's ingest state stays 179 days after its last upload", job: "server.witness/ingest_devices", age: 179 * day, kept: true},
+				{name: "a device's last upload reply goes 180 days after that upload", job: "server.witness/ingest_replies", age: 180 * day},
+				{name: "a device's last upload reply stays 179 days after that upload", job: "server.witness/ingest_replies", age: 179 * day, kept: true},
 				{name: "a device's labels go 90 days after the server last received them", job: "server.devices/device_labels", age: 90 * day},
 				{name: "a device's labels stay 89 days after the server last received them", job: "server.devices/device_labels", age: 89 * day, kept: true},
 			},

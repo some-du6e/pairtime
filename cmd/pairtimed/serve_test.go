@@ -142,7 +142,7 @@ func TestServe(t *testing.T) {
 		{name: "the ops listener doesn't serve the sample dashboard", url: private + "/demo", wantCode: 404},
 		{name: "a path nothing serves is still a 404, not the home page", url: public + "/nothing-here", wantCode: 404},
 		{name: "the public listener answers GET /api/v1/time without a token", url: public + "/api/v1/time", wantCode: 200, wantBody: `^\{"server_time":[0-9]+\}$`},
-		{name: "uploads get ingest_off until devices can sign in and the server key is there", method: http.MethodPost, url: public + "/api/v1/ingest/batches", wantCode: 503, wantBody: `"error":"ingest_off"`},
+		{name: "uploads get ingest_off while the server key isn't there", method: http.MethodPost, url: public + "/api/v1/ingest/batches", wantCode: 503, wantBody: `"error":"ingest_off"`},
 		{name: "the ops listener doesn't serve ingest", url: private + "/api/v1/time", wantCode: 404},
 		{name: "the ops listener doesn't serve the home page", url: private + "/", wantCode: 404},
 	}

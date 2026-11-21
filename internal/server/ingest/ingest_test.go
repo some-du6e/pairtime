@@ -24,7 +24,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/some-du6e/pairtime/internal/devtoken"
 	"github.com/some-du6e/pairtime/internal/server/backup"
+	"github.com/some-du6e/pairtime/internal/server/device"
 	"github.com/some-du6e/pairtime/internal/server/migrations"
 	"github.com/some-du6e/pairtime/internal/server/store"
 	"github.com/some-du6e/pairtime/internal/server/store/storetest"
@@ -36,25 +38,29 @@ import (
 // testDevice is a linked device and what its client keeps: its token, its
 // key and its counter.
 type testDevice struct {
-	Device
-	token string
-	key   ed25519.PrivateKey
-	req   int64
+	ID        string
+	Account   string
+	PublicKey ed25519.PublicKey
+	token     string
+	key       ed25519.PrivateKey
+	req       int64
 }
 
-// fakeDevices is the device store: tokens to devices. ptd_broken stands for
-// the store failing.
-type fakeDevices map[string]Device
+// testDevices is WP-SV3's device store, the one pairtimed runs, with
+// ptd_broken standing for the store failing.
+type testDevices struct{ *device.Store }
 
-func (f fakeDevices) Authenticate(_ context.Context, token string) (Device, error) {
+func (d testDevices) Authenticate(ctx context.Context, token string) (device.Device, error) {
 	if token == "ptd_broken" {
-		return Device{}, errors.New("the database is down")
+		return device.Device{}, errors.New("the database is down")
 	}
-	d, ok := f[token]
-	if !ok {
-		return Device{}, fmt.Errorf("no such token: %w", ErrUnknownToken)
-	}
-	return d, nil
+	return d.Store.Authenticate(ctx, token)
+}
+
+// hashOf is a token as the devices row stores it, its SHA-256 in hex.
+func hashOf(token string) string {
+	sum := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(sum[:])
 }
 
 // rollupCall is one call of the Rollup hook.
@@ -68,15 +74,17 @@ type rollupCall struct {
 }
 
 type harness struct {
-	db      *store.DB
-	writer  *writer.Writer
-	svc     *Service
-	mux     *http.ServeMux
-	clock   time.Time
-	server  ed25519.PrivateKey
-	devices fakeDevices
-	keys    int
-	rollups []rollupCall
+	t        testing.TB
+	db       *store.DB
+	writer   *writer.Writer
+	svc      *Service
+	mux      *http.ServeMux
+	clock    time.Time
+	server   ed25519.PrivateKey
+	devices  testDevices
+	accounts int
+	keys     int
+	rollups  []rollupCall
 	// observed is what each Observe call reported as stored.
 	observed []int
 }
@@ -102,7 +110,12 @@ func newHarness(t *testing.T, engine store.Engine) *harness {
 	}
 	w := writer.Start(db.Write, writer.Options{Window: time.Millisecond})
 	t.Cleanup(w.Close)
-	h := &harness{db: db, writer: w, clock: exampleClock, server: seedKey("server"), devices: fakeDevices{}}
+	h := &harness{t: t, db: db, writer: w, clock: exampleClock, server: seedKey("server")}
+	ds, err := device.New(device.Options{DB: db, Writer: w, Now: func() time.Time { return h.clock }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.devices = testDevices{ds}
 	h.svc = New(Options{
 		Devices: h.devices, Writer: w, Read: db.Read, Key: h.server,
 		Now: func() time.Time { return h.clock },
@@ -135,15 +148,56 @@ func newHarness(t *testing.T, engine store.Engine) *harness {
 	return h
 }
 
+// exec runs a statement through the writer, for a test to set up or
+// change rows that only other packages write in pairtimed.
+func (h *harness) exec(t testing.TB, query string, args ...any) {
+	t.Helper()
+	if err := h.writer.Do(context.Background(), 1, func(ctx context.Context, tx writer.Tx) error {
+		_, err := tx.ExecContext(ctx, query, args...)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // device links a device with a key; keyless leaves it without one.
 func (h *harness) device(id string, keyless bool) *testDevice {
-	d := &testDevice{Device: Device{ID: id, Account: "0190f4b2-0000-7000-8000-" + fmt.Sprintf("%012x", len(h.devices)+1)}, token: "ptd_" + id}
+	h.t.Helper()
+	var key ed25519.PrivateKey
 	if !keyless {
-		d.key = seedKey("device " + id)
-		d.PublicKey = d.key.Public().(ed25519.PublicKey)
+		key = seedKey("device " + id)
 	}
-	h.devices[d.token] = d.Device
+	return h.link(h.t, id, key)
+}
+
+// link makes a new account and links device id to it with key, writing
+// the rows WP-SV3's device grant writes: a users row and a devices row at
+// link generation 1 with no ingest state. A nil key stores an empty one,
+// which device.Store reads as none.
+func (h *harness) link(t testing.TB, id string, key ed25519.PrivateKey) *testDevice {
+	t.Helper()
+	h.accounts++
+	d := &testDevice{ID: id, Account: fmt.Sprintf("0190f4b2-0000-7000-8000-%012x", h.accounts), token: devtoken.New(), key: key}
+	pub := []byte{}
+	if key != nil {
+		d.PublicKey = key.Public().(ed25519.PublicKey)
+		pub = d.PublicKey
+	}
+	now := h.clock.UnixMilli()
+	h.exec(t, `INSERT INTO users (id, hca_sub, verification_status, created_at_ms, updated_at_ms, signed_in_at_ms) VALUES ($1, $2, 'verified', $3, $3, $3)`,
+		d.Account, "hca-"+d.Account, now)
+	h.exec(t, `INSERT INTO devices (device_id, user_id, token_hash, public_key, os_family, client_build, linked_at_ms, last_seen_at_ms, link_generation)
+VALUES ($1, $2, $3, $4, 'linux', 'v0.0.0-dev', $5, $5, 1)`, id, d.Account, hashOf(d.token), pub, now)
 	return d
+}
+
+// relink links d again with a new token, as WP-SV3's grant does after
+// pairtime logout and pairtime login: the same device_id and its ingest
+// state, one link generation more (D-local-gap).
+func (h *harness) relink(t testing.TB, d *testDevice) {
+	t.Helper()
+	d.token = devtoken.New()
+	h.exec(t, `UPDATE devices SET token_hash = $2, link_generation = link_generation + 1 WHERE device_id = $1`, d.ID, hashOf(d.token))
 }
 
 func (h *harness) newKey() string {
@@ -339,11 +393,11 @@ func engines(t *testing.T, test func(t *testing.T, engine store.Engine)) {
 func TestWorkedExampleAccepted(t *testing.T) {
 	engines(t, func(t *testing.T, engine store.Engine) {
 		h := newHarness(t, engine)
-		key := exampleKey()
-		h.devices["ptd_example"] = Device{ID: exampleDevice, Account: "0190f4b2-0000-7000-8000-00000000000a", PublicKey: key.Public().(ed25519.PublicKey)}
+		// The token isn't in M, so any token of the example's device does.
+		ex := h.link(t, exampleDevice, exampleKey())
 		r := httptest.NewRequest(http.MethodPost, BatchesPath, bytes.NewReader(mustHex(t, exampleRaw)))
 		for name, v := range map[string]string{
-			"Authorization": "Bearer ptd_example", HeaderIdempotencyKey: "0190f4b2-5a1c-7d3e-8f00-123456789abc",
+			"Authorization": "Bearer " + ex.token, HeaderIdempotencyKey: "0190f4b2-5a1c-7d3e-8f00-123456789abc",
 			"Content-Type": "application/json", "Content-Encoding": "gzip", HeaderDevice: exampleDevice,
 			HeaderReq: exampleReq, HeaderTime: exampleTime, HeaderBodySHA256: exampleBodySHA, HeaderSignature: exampleHeader,
 		} {
@@ -400,7 +454,9 @@ func TestRefusals(t *testing.T) {
 		h := newHarness(t, engine)
 		dev := h.device("d_test", false)
 		revoked := h.device("d_revoked", false)
-		h.devices[revoked.token] = Device{ID: revoked.ID, Account: revoked.Account, PublicKey: revoked.PublicKey, Revoked: true}
+		h.exec(t, `UPDATE users SET verification_status = 'ineligible' WHERE id = $1`, revoked.Account)
+		removed := h.device("d_removed", false)
+		h.exec(t, `UPDATE devices SET removed_at_ms = $2, token_hash = NULL WHERE device_id = $1`, removed.ID, h.clock.UnixMilli())
 		keyless := h.device("d_keyless", true)
 		other := seedKey("another key")
 		header := func(name, v string) func(*http.Request) {
@@ -424,9 +480,11 @@ func TestRefusals(t *testing.T) {
 		}{
 			{"no Authorization header is token_missing", upload{dev: dev, edit: header("Authorization", "")}, 401, CodeTokenMissing},
 			{"a Basic credential is token_missing", upload{dev: dev, edit: header("Authorization", "Basic ZGV2OnB3")}, 401, CodeTokenMissing},
-			{"a token no device has is token_invalid", upload{dev: dev, edit: header("Authorization", "Bearer ptd_nobody")}, 401, CodeTokenInvalid},
+			{"a token that fails its checksum is token_invalid", upload{dev: dev, edit: header("Authorization", "Bearer ptd_nobody")}, 401, CodeTokenInvalid},
+			{"a well-formed token no device has is token_invalid", upload{dev: dev, edit: header("Authorization", "Bearer "+devtoken.New())}, 401, CodeTokenInvalid},
+			{"a removed device's token names no device, so it is token_invalid", upload{dev: removed}, 401, CodeTokenInvalid},
 			{"the device store failing is unavailable", upload{dev: dev, edit: header("Authorization", "Bearer ptd_broken")}, 503, CodeUnavailable},
-			{"a revoked device is device_revoked", upload{dev: revoked}, 403, CodeDeviceRevoked},
+			{"a device whose account can no longer sign in is device_revoked", upload{dev: revoked}, 403, CodeDeviceRevoked},
 			{"another device's id in X-Pairtime-Device is device_mismatch", upload{dev: dev, edit: header(HeaderDevice, "d_revoked")}, 403, CodeDeviceMismatch},
 			{"a missing X-Pairtime-Device is device_mismatch", upload{dev: dev, edit: header(HeaderDevice, "")}, 403, CodeDeviceMismatch},
 			{"a device that registered no key is device_key_missing", upload{dev: keyless}, 403, CodeDeviceKeyMissing},
@@ -1058,7 +1116,7 @@ func TestState(t *testing.T) {
 		}{
 			{"before any upload the counter is 0 and there is no head", func(t *testing.T) {
 				st := h.state(t, dev)
-				if st.Device != dev.ID || st.Req != 0 || st.Head != nil || st.ChainStart != nil {
+				if st.Device != dev.ID || st.Req != 0 || st.Head != nil || st.ChainStart != nil || st.Relinked || st.Gaps == nil || len(st.Gaps) != 0 {
 					t.Errorf("state %+v", st)
 				}
 			}},
@@ -1439,16 +1497,23 @@ func TestHeadFromWitnessRows(t *testing.T) {
 		dev := h.device("d_test", false)
 		roots := chain(rand.New(rand.NewPCG(12, 13)), ledger.Hash{}, 1, 3)
 		h.ok(t, upload{dev: dev, body: batchesBody(roots[:2]...)})
-		if _, err := h.db.Write.Exec(`DELETE FROM ingest_devices WHERE device_id = $1`, dev.ID); err != nil {
-			t.Fatal(err)
-		}
+		// The device's row loses its ingest state, as a row linked afresh
+		// after its tombstone expired has none, while its witness rows stay.
+		h.exec(t, `UPDATE devices SET ingest_req = NULL, ingest_head_b = NULL, ingest_head_hash = NULL, ingest_head_generation = NULL,
+ingest_head_received_at_ms = NULL, ingest_chain_start = NULL, ingest_gaps = NULL WHERE device_id = $1`, dev.ID)
 		tests := []struct {
 			name  string
 			check func(t *testing.T)
 		}{
-			{"the state gives the head and the chain's start from the witness rows", func(t *testing.T) {
+			{"the state gives the head and the chain's start from the witness rows, as of a device signed in again", func(t *testing.T) {
 				st := h.state(t, dev)
-				if st.Head == nil || st.Head.B != 2 || st.Head.Head != roots[1].head || st.ChainStart == nil || *st.ChainStart != 1 {
+				if st.Head == nil || st.Head.B != 2 || st.Head.Head != roots[1].head || st.ChainStart == nil || *st.ChainStart != 1 || !st.Relinked {
+					t.Errorf("state %+v", st)
+				}
+			}},
+			{"a request that stores no batch leaves the row without a head, and the witness rows still give it", func(t *testing.T) {
+				h.ok(t, upload{dev: dev})
+				if st := h.state(t, dev); st.Req != dev.req || st.Head == nil || st.Head.B != 2 || !st.Relinked {
 					t.Errorf("state %+v", st)
 				}
 			}},
@@ -1461,6 +1526,11 @@ func TestHeadFromWitnessRows(t *testing.T) {
 			{"the next batch links to that head", func(t *testing.T) {
 				if got := h.ok(t, upload{dev: dev, body: batchesBody(roots[2])}).Batches[0]; got.Code != CodeAccepted {
 					t.Errorf("got %+v", got)
+				}
+			}},
+			{"then the row holds the head again, with the chain's first start", func(t *testing.T) {
+				if st := h.state(t, dev); st.Head == nil || st.Head.B != 3 || st.ChainStart == nil || *st.ChainStart != 1 || st.Relinked {
+					t.Errorf("state %+v", st)
 				}
 			}},
 		}

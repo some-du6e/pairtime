@@ -140,7 +140,7 @@
     {
       "id": "server.witness",
       "where": "server",
-      "data": "Witness rows and batch roots: the hash of each upload batch, and when the server received it",
+      "data": "Witness rows and batch roots: the hash of each upload batch, and when the server received it, and for each computer the server's answer to its latest upload, which a retry of that upload gets again",
       "kept": "{days}. Rows that a submission uses stay until its spot-check window closes ({window})",
       "days": 180,
       "jobs": [{
@@ -159,9 +159,9 @@
         "period": "window",
         "awaits": "WP-SB4"
       }, {
-        "table": "ingest_devices",
+        "table": "ingest_replies",
         "key": ["device_id"],
-        "time_column": "updated_at_ms"
+        "time_column": "received_at_ms"
       }]
     },
     {

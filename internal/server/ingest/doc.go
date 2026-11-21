@@ -26,6 +26,12 @@
 // (DESIGN 4.3's "never in it" column; SP 8.2). The server stores what it
 // parsed, encoded again, and never the bytes a client sent.
 //
-// Ingest keeps its own state per device in ingest_devices and never writes
-// the devices table of WP-SV3 (the dashboard wave's meeting point 1).
+// A device's counter and chain head live on WP-SV3's devices row, which
+// ingest reads and writes only through device.Store inside its own writer
+// transaction (D-device-row-chain-state), so they last exactly as long as
+// the device does. Only a sign-in resets what the chain expects next: the
+// first batch under a new one may skip the batches sealed in local-only
+// mode, which become a gap the server never takes (D-local-gap). Every row
+// ingest keeps names the device's account, and a request whose device_id
+// has rows under another account is refused (D-device-account-binding).
 package ingest

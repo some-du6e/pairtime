@@ -270,7 +270,7 @@ func serve(ctx context.Context, cfg *config.Config, logger *slog.Logger, e *env,
 	site.Register(public)
 	signIn.Register(public)
 	linking.Register(public)
-	newIngest(cfg, db, w, series, logger).Register(public)
+	newIngest(cfg, db, w, devices, series, logger).Register(public)
 	visit := pages.SignIn{
 		Enabled:    signIn.Enabled(),
 		LoginPath:  auth.LoginPath,

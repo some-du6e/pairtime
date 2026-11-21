@@ -4,28 +4,31 @@
 -- section 6), written by package ingest through the writer. No table here
 -- has a foreign key: retention jobs delete from most of them, and the
 -- tables they would point at can lose their rows first (docs/retention.json).
--- account_id is a users id; device_id is the device's opaque key.
+-- account_id is a users id; device_id is the device's opaque key. Every
+-- row of a device names the account it was uploaded under, which no write
+-- here changes, and ingest refuses a request whose device_id has rows
+-- under another account (D-device-account-binding).
 --
--- ingest_devices is ingest's own state per device: the request counter,
--- the head of the witnessed chain and the batch it started at, and the most
--- recent processed request's Idempotency-Key, body hash and response, which
--- a retry of that request gets back byte for byte (ingest-v1 2.10). WP-SV3's
--- devices table is never written here.
-CREATE TABLE ingest_devices (
+-- A device's request counter, chain head, chain start and local-only gaps
+-- are on WP-SV3's devices row (0003), which ingest reads and writes only
+-- through package device, so they go with the device
+-- (D-device-row-chain-state).
+--
+-- ingest_replies is each device's most recent processed request: its
+-- Idempotency-Key, the raw body's SHA-256 and the response, which a retry
+-- of that request gets back byte for byte (ingest-v1 2.10). Without it a
+-- retry is processed as a new request, which batch roots and bucket
+-- revisions are idempotent for, so its rows may go on their own.
+CREATE TABLE ingest_replies (
     device_id TEXT PRIMARY KEY,
     account_id TEXT NOT NULL,
-    req BIGINT NOT NULL,
-    head_b BIGINT,
-    head_hash TEXT,
-    head_received_at_ms BIGINT,
-    chain_start BIGINT,
-    last_key TEXT,
-    last_body_sha256 TEXT,
-    last_response TEXT,
-    updated_at_ms BIGINT NOT NULL
+    idempotency_key TEXT NOT NULL,
+    body_sha256 TEXT NOT NULL,
+    response TEXT NOT NULL,
+    received_at_ms BIGINT NOT NULL
 );
 
-CREATE INDEX ingest_devices_updated_at_ms ON ingest_devices (updated_at_ms);
+CREATE INDEX ingest_replies_received_at_ms ON ingest_replies (received_at_ms);
 
 -- witness_rows is DESIGN 3.6's (device_id, b, n_b, R_b, H_b, received_at)
 -- for each batch root ingest stored, with its prev and the receipt it
@@ -48,8 +51,9 @@ CREATE TABLE witness_rows (
 CREATE INDEX witness_rows_received_at_ms ON witness_rows (received_at_ms);
 
 -- minute_buckets is each device's current revision of each minute, as the
--- JSON of the bucket ingest parsed (pkg/event's MinuteBucket.Shareable()
--- with agent_only, D-bucket-agent-only), under the device owner's account.
+-- JSON of the bucket ingest parsed (pkg/event's MinuteBucket.Shareable(),
+-- agent_only included, D-bucket-agent-only), under the device owner's
+-- account.
 -- revisions counts the revisions of the minute ingest stored, this one
 -- included, which ingest-v1 2.7 bounds.
 CREATE TABLE minute_buckets (

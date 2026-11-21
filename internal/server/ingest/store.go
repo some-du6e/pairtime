@@ -7,88 +7,93 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"time"
 
+	"github.com/some-du6e/pairtime/internal/server/device"
 	"github.com/some-du6e/pairtime/internal/server/writer"
 	"github.com/some-du6e/pairtime/pkg/ledger"
 )
 
 // The SQL follows package store's portable rules, and runs inside the
-// writer's transaction except for GET /api/v1/ingest/state, which reads
-// through the read pool. Every write checks first and then inserts or
-// updates, because the writer runs one op at a time: an op never needs a
-// constraint error to find a row, and Postgres would abort the whole
-// transaction on one.
+// writer's transaction but for the replay check before it, which reads
+// ingest_replies through the read pool. A device's counter and chain head
+// are on its devices row, which ingest reads and writes only through
+// device.Store (D-device-row-chain-state); no SQL here names devices.
+// Every write checks first and then inserts or updates, because the
+// writer runs one op at a time: an op never needs a constraint error to
+// find a row, and Postgres would abort the whole transaction on one. No
+// upsert changes a row's account_id (D-device-account-binding).
 
 // queryer is the read half of writer.Tx, which *sql.DB has too.
 type queryer interface {
 	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
 }
 
-// deviceState is a device's row in ingest_devices: its counter, the head
-// of its witnessed chain and where the chain started, and its most recent
-// processed request (ingest-v1 2.10).
-type deviceState struct {
-	found      bool
-	req        int64
-	headB      uint64 // 0 while there is no head
-	headHash   ledger.Hash
-	headAt     int64
-	chainStart uint64
-	lastKey    string
-	lastSHA    string
-	lastResp   []byte
+// reply is a device's most recent processed request, which a retry of it
+// gets back byte for byte (ingest-v1 2.10): its Idempotency-Key, the raw
+// body's SHA-256 and the response. The device's counter and chain head are
+// on its devices row (D-device-row-chain-state), never here; a reply that
+// is gone only makes a retry a new request, which batch roots and bucket
+// revisions are idempotent for.
+type reply struct {
+	found    bool
+	key      string
+	bodySHA  string
+	response []byte
 }
 
-func loadState(ctx context.Context, q queryer, deviceID string) (deviceState, error) {
-	var st deviceState
-	var headB, headAt, chainStart sql.NullInt64
-	var headHash, lastKey, lastSHA, lastResp sql.NullString
-	err := q.QueryRowContext(ctx, `SELECT req, head_b, head_hash, head_received_at_ms, chain_start, last_key, last_body_sha256, last_response
-FROM ingest_devices WHERE device_id = $1`, deviceID).Scan(&st.req, &headB, &headHash, &headAt, &chainStart, &lastKey, &lastSHA, &lastResp)
+// loadReply reads deviceID's reply, if it is account's.
+func loadReply(ctx context.Context, q queryer, deviceID, account string) (reply, error) {
+	var rp reply
+	var resp string
+	err := q.QueryRowContext(ctx, `SELECT idempotency_key, body_sha256, response FROM ingest_replies WHERE device_id = $1 AND account_id = $2`,
+		deviceID, account).Scan(&rp.key, &rp.bodySHA, &resp)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
-		return st, nil
+		return rp, nil
 	case err != nil:
-		return st, fmt.Errorf("ingest: reading the device's state: %w", err)
+		return rp, fmt.Errorf("ingest: reading the device's last reply: %w", err)
 	}
-	st.found = true
-	if headB.Valid {
-		st.headB, st.headAt, st.chainStart = uint64(headB.Int64), headAt.Int64, uint64(chainStart.Int64)
-		if err := st.headHash.UnmarshalText([]byte(headHash.String)); err != nil {
-			return st, fmt.Errorf("ingest: the device's stored head: %w", err)
-		}
-	}
-	st.lastKey, st.lastSHA, st.lastResp = lastKey.String, lastSHA.String, []byte(lastResp.String)
-	return st, nil
+	rp.found, rp.response = true, []byte(resp)
+	return rp, nil
 }
 
-// nullable turns a zero into SQL NULL.
-func nullable[T comparable](v T) any {
-	var zero T
-	if v == zero {
-		return nil
-	}
-	return v
-}
-
-func saveState(ctx context.Context, tx writer.Tx, deviceID, account string, st deviceState, now int64) error {
-	var headHash any
-	if st.headB != 0 {
-		headHash = st.headHash.String()
-	}
-	_, err := tx.ExecContext(ctx, `INSERT INTO ingest_devices
-(device_id, account_id, req, head_b, head_hash, head_received_at_ms, chain_start, last_key, last_body_sha256, last_response, updated_at_ms)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-ON CONFLICT (device_id) DO UPDATE SET account_id = excluded.account_id, req = excluded.req, head_b = excluded.head_b,
-head_hash = excluded.head_hash, head_received_at_ms = excluded.head_received_at_ms, chain_start = excluded.chain_start,
-last_key = excluded.last_key, last_body_sha256 = excluded.last_body_sha256, last_response = excluded.last_response,
-updated_at_ms = excluded.updated_at_ms`,
-		deviceID, account, st.req, nullable(int64(st.headB)), headHash, nullable(st.headAt), nullable(int64(st.chainStart)),
-		st.lastKey, st.lastSHA, string(st.lastResp), now)
+// putReply stores rp as deviceID's most recent processed request.
+func putReply(ctx context.Context, tx writer.Tx, deviceID, account string, rp reply, now int64) error {
+	_, err := tx.ExecContext(ctx, `INSERT INTO ingest_replies (device_id, account_id, idempotency_key, body_sha256, response, received_at_ms)
+VALUES ($1, $2, $3, $4, $5, $6)
+ON CONFLICT (device_id) DO UPDATE SET idempotency_key = excluded.idempotency_key, body_sha256 = excluded.body_sha256,
+response = excluded.response, received_at_ms = excluded.received_at_ms`,
+		deviceID, account, rp.key, rp.bodySHA, string(rp.response), now)
 	if err != nil {
-		return fmt.Errorf("ingest: storing the device's state: %w", err)
+		return fmt.Errorf("ingest: storing the device's last reply: %w", err)
 	}
 	return nil
+}
+
+// deviceTables are the tables whose rows ingest reads back for a device,
+// each with its rows' account.
+var deviceTables = []string{"witness_rows", "minute_buckets", "minute_bucket_revisions", "commit_records", "device_labels", "ingest_replies"}
+
+// foreignRows reports whether the server holds a row of deviceID under an
+// account other than account (D-device-account-binding). A device's rows
+// all share one account: ingest refuses a request that finds otherwise
+// before it writes anything, and no upsert here changes account_id. So
+// one row of each table settles it, through the index every table has on
+// device_id.
+func foreignRows(ctx context.Context, q queryer, deviceID, account string) (bool, error) {
+	for _, table := range deviceTables {
+		var owner string
+		err := q.QueryRowContext(ctx, `SELECT account_id FROM `+table+` WHERE device_id = $1 LIMIT 1`, deviceID).Scan(&owner)
+		switch {
+		case errors.Is(err, sql.ErrNoRows):
+		case err != nil:
+			return false, fmt.Errorf("ingest: reading %s: %w", table, err)
+		case owner != account:
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // witnessRow is a stored batch root with its receipt (DESIGN 3.6).
@@ -162,7 +167,7 @@ func loadBucket(ctx context.Context, q queryer, deviceID string, minuteMS int64)
 func putBucket(ctx context.Context, tx writer.Tx, deviceID, account string, minuteMS, rev int64, state string, bucket []byte, receivedAt, revisions int64) error {
 	_, err := tx.ExecContext(ctx, `INSERT INTO minute_buckets (device_id, minute_ms, account_id, rev, state, received_at_ms, bucket, revisions)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-ON CONFLICT (device_id, minute_ms) DO UPDATE SET account_id = excluded.account_id, rev = excluded.rev, state = excluded.state,
+ON CONFLICT (device_id, minute_ms) DO UPDATE SET rev = excluded.rev, state = excluded.state,
 received_at_ms = excluded.received_at_ms, bucket = excluded.bucket, revisions = excluded.revisions`,
 		deviceID, minuteMS, account, rev, state, receivedAt, string(bucket), revisions)
 	if err != nil {
@@ -193,7 +198,7 @@ func loadCommit(ctx context.Context, q queryer, deviceID, sha string) (string, b
 func putCommit(ctx context.Context, tx writer.Tx, deviceID, account string, c commitRecord, body []byte, now int64) error {
 	_, err := tx.ExecContext(ctx, `INSERT INTO commit_records (device_id, sha, account_id, project, body, first_seen_at_ms, updated_at_ms)
 VALUES ($1, $2, $3, $4, $5, $6, $7)
-ON CONFLICT (device_id, sha) DO UPDATE SET account_id = excluded.account_id, project = excluded.project, body = excluded.body,
+ON CONFLICT (device_id, sha) DO UPDATE SET project = excluded.project, body = excluded.body,
 updated_at_ms = excluded.updated_at_ms`,
 		deviceID, c.SHA, account, c.Project, string(body), now, now)
 	if err != nil {
@@ -203,23 +208,26 @@ updated_at_ms = excluded.updated_at_ms`,
 }
 
 // witnessHead fills st's head and chain start from the device's witness
-// rows, for a device whose ingest_devices row is gone while some of its
-// witness rows stay, as rows a submission holds do (ingest-v1 2.7 step 4).
-// It leaves st alone when the device has none.
-func witnessHead(ctx context.Context, q queryer, deviceID string, st *deviceState) error {
+// rows, for a device whose row holds no head while some of its witness
+// rows stay, as when the row expired and the device was linked again
+// (ingest-v1 2.7 step 4). The head it gives was stored under no link the
+// row knows, generation 0, so the device counts as signed in again since
+// (D-local-gap). It reports whether it found one.
+func witnessHead(ctx context.Context, q queryer, deviceID string, st *device.State) (bool, error) {
 	var first, last sql.NullInt64
 	if err := q.QueryRowContext(ctx, `SELECT MIN(b), MAX(b) FROM witness_rows WHERE device_id = $1`, deviceID).Scan(&first, &last); err != nil {
-		return fmt.Errorf("ingest: reading a device's witness rows: %w", err)
+		return false, fmt.Errorf("ingest: reading a device's witness rows: %w", err)
 	}
 	if !last.Valid {
-		return nil
+		return false, nil
 	}
 	w, found, err := loadWitness(ctx, q, deviceID, uint64(last.Int64))
 	if err != nil || !found {
-		return err
+		return false, err
 	}
-	st.headB, st.headHash, st.headAt, st.chainStart = uint64(last.Int64), w.head, w.receivedAt, uint64(first.Int64)
-	return nil
+	st.HeadB, st.HeadHash, st.HeadReceivedAt = uint64(last.Int64), w.head, time.UnixMilli(w.receivedAt)
+	st.HeadGeneration, st.ChainStart, st.Gaps = 0, uint64(first.Int64), nil
+	return true, nil
 }
 
 // insertOrigin records where a processed upload came from (DESIGN 4.4's
@@ -240,7 +248,7 @@ func insertOrigin(ctx context.Context, tx writer.Tx, id, deviceID, account, ip, 
 func putLabels(ctx context.Context, tx writer.Tx, deviceID, account string, body []byte, now int64) error {
 	_, err := tx.ExecContext(ctx, `INSERT INTO device_labels (device_id, account_id, labels, received_at_ms)
 VALUES ($1, $2, $3, $4)
-ON CONFLICT (device_id) DO UPDATE SET account_id = excluded.account_id, labels = excluded.labels, received_at_ms = excluded.received_at_ms`,
+ON CONFLICT (device_id) DO UPDATE SET labels = excluded.labels, received_at_ms = excluded.received_at_ms`,
 		deviceID, account, string(body), now)
 	if err != nil {
 		return fmt.Errorf("ingest: storing labels: %w", err)

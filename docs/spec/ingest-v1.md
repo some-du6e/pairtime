@@ -227,8 +227,8 @@ A request refused as a whole gets one of these statuses and this body, where `de
 |---|---|---|---|
 | 503 | `ingest_off` | Ingest isn't set up on this server (step 1) | Retry later, after `Retry-After` when present |
 | 401 | `token_missing` | No `Bearer` token | Sign in again (`pairtime login`) |
-| 401 | `token_invalid` | The token fails its checksum or names no device | Sign in again |
-| 403 | `device_revoked` | The device was removed, on the web or by `pairtime logout`, or its account can no longer sign in | Stop uploading. `pairtime login` links the same install again to the account it was linked to, with the same `device_id`, which keeps its chain (5.3). Once the server holds uploads from that `device_id`, another account can link the install only as a new device, with a new `device_id` and `K_dev` (D-device-account-binding; device-auth-v1) |
+| 401 | `token_invalid` | The token fails its checksum or names no device, as a removed device's token, or one from before the device signed in again, no longer does | Sign in again (`pairtime login`), which links the same install with the same `device_id` (see `device_revoked`) |
+| 403 | `device_revoked` | The token's device is marked removed, or its account can no longer sign in. WP-SV3 drops a removed device's token at once, so its next request mostly gets `token_invalid` instead | Stop uploading. `pairtime login` links the same install again to the account it was linked to, with the same `device_id`, which keeps its chain (5.3). Once the server holds uploads from that `device_id`, another account can link the install only as a new device, with a new `device_id` and `K_dev` (D-device-account-binding; device-auth-v1) |
 | 403 | `device_mismatch` | `X-Pairtime-Device` is missing or isn't the token's device; or rows the server holds for this `device_id` belong to another account than the token's (step 13; D-device-account-binding) | Fix the client. A client that sent its own `device_id` hit the second case, and, with the teen's go-ahead, signs in again as a new device, as after a fork (5.3) |
 | 403 | `device_key_missing` | The device has no key on record | Sign in again (`pairtime login`). WP-SV3 binds the key in the device grant (D-key-at-grant): `pairtime login` sends its public key with the code request, and the code, the approval and the token all name it. No token can add or swap a key, so a device linked that way always has one, and this answer means a fault |
 | 400 | `idempotency_key_malformed` | Missing, repeated, or not a lowercase UUIDv7 | Fix the client |
@@ -281,7 +281,7 @@ An accepted batch root is stored as the witness row `(device_id, b, n_b, R_b, H_
 - with the same `rev` stored and a different bucket, the stored one stays: `rev_conflict`;
 - with a higher `rev` stored, nothing changes: `superseded`.
 
-The server keeps every revision it accepted, each as a row of its own with its `received_at`, for the bundle's `buckets.json`: DESIGN 7.8's row, as the decision E-check-readings words it, carries the buckets "with `received_at` and revisions". Each bucket is stored under the device owner's account, and the account's rollups move from the replaced revision to the new one in the same transaction (WP-SV7).
+The server keeps every revision it accepted, each as a row of its own with its `received_at`, for the bundle's `buckets.json`: DESIGN 7.8's row, as the decision E-check-readings words it, carries the buckets "with `received_at` and revisions". Each bucket is stored under the device owner's account, and the account's rollups move from the replaced revision to the new one in the same transaction (WP-SV7). Every row ingest stores names the account it was uploaded under, and none is ever moved to another account (D-device-account-binding; 2.5 step 13).
 
 **Commit records** pass 2.3.3's forms and are stored per device and `sha` with `server_first_seen_at`, the `received_at` of the request that first stored the record (DESIGN 5.8): `accepted` the first time, `duplicate` when the stored record is the same, and `updated` when it differs, when the new record replaces the stored one and `server_first_seen_at` stays. The account's first sighting of a commit is the earliest across its devices.
 
@@ -376,7 +376,7 @@ A device sends one ingest request at a time and waits for its answer.
 
 A retry of the same body keeps its `Idempotency-Key` and body and is signed again with a new counter and a fresh time; re-sending the identical signed bytes also works while its `X-Pairtime-Time` is within 300 s. When the first attempt reached step 14, the retry gets that response back byte for byte, with `X-Pairtime-Replay: true` added, and nothing changes. When it didn't, the retry is processed as a new request.
 
-The server keeps the response of each device's most recent processed request only. A request with an older key is processed as a new one. That is safe for batch roots and bucket revisions, which are idempotent on their own: a batch root already stored is a `duplicate` with its first receipt, and a bucket revision already stored is a `duplicate` or `superseded`. Commit records and labels are last-write-wins, so the client sends them only in their current form. A client that lost receipts gets them back by sending the same batch roots again, alone.
+The server keeps the response of each device's most recent processed request only, for 180 days (6). A request with an older key, or one whose response is gone, is processed as a new one. That is safe for batch roots and bucket revisions, which are idempotent on their own: a batch root already stored is a `duplicate` with its first receipt, and a bucket revision already stored is a `duplicate` or `superseded`. Commit records and labels are last-write-wins, so the client sends them only in their current form. A client that lost receipts gets them back by sending the same batch roots again, alone.
 
 ## 3. `GET /api/v1/ingest/state`
 
@@ -442,11 +442,12 @@ No authentication. The response is 200 with `{"server_time": 1795089660250}`, th
 
 ## 6. Storage
 
-For reviewers and later work packages; the client never sees it. Migration `0004_ingest.sql` creates:
+For reviewers and later work packages; the client never sees it. A device's counter and chain state are on WP-SV3's `devices` row (migration `0003_devices.sql`), and migration `0004_ingest.sql` creates the rest:
 
 | Table | Key | What it holds | Retention (docs/retention.json) |
 |---|---|---|---|
-| `ingest_devices` | `device_id` | The account, the counter, the head, the chain start, and the most recent request's key, body hash and response | `server.witness`: 180 days after the device's last processed request. A device whose state is gone keeps its chain through the witness rows still held (2.7 step 4) |
+| `devices` (WP-SV3's) | `device_id` | In its `ingest_` columns: the counter, the head's `b`, `H_b` and `received_at`, the link generation the head was stored under, the chain start and the local-only gaps. Ingest reads and writes them only through `device.Store`'s `LoadState` and `SaveState`, inside its writer transaction (D-device-row-chain-state) | `server.devices`: with the device's row, so until 90 days after it is removed; a device removed before ingest took anything from it goes at once. Should its state ever be gone while witness rows stay, the highest of them is its head (2.7 step 4) |
+| `ingest_replies` | `device_id` | The account, and the most recent processed request's `Idempotency-Key`, body hash and response, with its `received_at_ms` (2.10). The one per-device row of ingest's own, because a retry without it is only processed as a new request | `server.witness`: 180 days after `received_at_ms` |
 | `witness_rows` | `(device_id, b)` | `n`, `R_b`, `H_b`, `prev`, `received_at_ms`, the receipt and its key id, and the account | `server.witness`: 180 days after `received_at_ms`, held while a submission uses them (WP-SB4) |
 | `minute_buckets` | `(device_id, minute_ms)` | The current revision of each minute, with `agent_only`, under the device owner's account, with its `received_at_ms` and how many revisions the minute has | `server.minute_buckets`: 180 days after `minute_ms`, held while a submission uses them (WP-SB4) |
 | `minute_bucket_revisions` | `(device_id, minute_ms, rev)` | Every revision stored, the current one included, each with its `received_at_ms` | `server.minute_buckets`, as `minute_buckets`; the job deletes a minute's revisions together |
