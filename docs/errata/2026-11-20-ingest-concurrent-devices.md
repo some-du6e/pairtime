@@ -1,6 +1,6 @@
 # Erratum: DESIGN 3.10 raises `concurrent_devices` inside ingest, for hours that DESIGN 4.2 and 8.5 and the privacy notice say are never checked for fraud
 
-Date 2026-11-20. Raised by the privacy review of #137 (WP-SV7) in issue #142. Status: decided 2026-11-20 by the orchestrator for Karim (D-no-ingest-flags). Ingest and the rollups never store a fraud flag for hours nobody submitted. The cross-device merge stays at ingest. `concurrent_devices`, like every tier-2 flag of SM 4.5 and 8.7, is computed only when a submission is frozen, over the submitted window, from the per-device minutes the rollups keep for 180 days. #137 does this. A later docs PR changes DESIGN 3.10's wording.
+Date 2026-11-20. Raised by the privacy review of #137 (WP-SV7) in issue #142. Status: decided 2026-11-20 by the orchestrator for Karim (D-no-ingest-flags). Applied to DESIGN 3.10 and PLAN's WP-SV7 on 2026-11-21 by #NNN. Ingest and the rollups never store a fraud flag for hours nobody submitted. The cross-device merge stays at ingest. `concurrent_devices`, like every tier-2 flag of SM 4.5 and 8.7, is computed only when a submission is frozen, over the submitted window, from the per-device minutes the rollups keep for 180 days. #137 does this. A later docs PR changes DESIGN 3.10's wording.
 
 ## Input
 
