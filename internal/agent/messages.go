@@ -42,7 +42,11 @@ func (a *agent) startIPC(opts Options) func() {
 	if opts.Walk != nil {
 		walk = opts.Walk
 	}
-	l := &ipcListener{a: a, sink: sink, opts: ipc.Options{ForcePipe: opts.ForcePipe, Log: a.log, Walk: walk}}
+	// The CLI's questions, such as the last work session `pairtime recap`
+	// asks for, are answered from the bucket store, which startScorer
+	// opened before this.
+	l := &ipcListener{a: a, sink: sink, opts: ipc.Options{ForcePipe: opts.ForcePipe, Log: a.log, Walk: walk,
+		Answer: a.answerQuestion}}
 	l.listen()
 
 	// Drains run on a goroutine of their own, because a long spool takes a

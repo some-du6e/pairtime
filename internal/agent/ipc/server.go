@@ -77,10 +77,12 @@ type Options struct {
 	// isn't called when the OS gives no pid, nor for the self-test.
 	Walk func(pid int) []platform.Proc
 	// Answer, when set, answers the questions the CLI asks (Ask), such as
-	// AskLastSession, with one JSON value of at most about 1 MiB. It
-	// returns ErrUnknownQuestion for a question it has no answer for. It
-	// runs on the connection's goroutine, so it should answer from what the
-	// agent already holds. Without it the agent answers no question.
+	// AskLastSession, with one JSON value of at most about 1 MiB once
+	// encoded. It returns ErrUnknownQuestion for a question it has no
+	// answer for. It runs on the connection's goroutine, so it should
+	// answer from what the agent already holds, and never before Listen
+	// returns: a question that comes during the socket's self-test is
+	// turned away. Without it the agent answers no question.
 	Answer func(question string) (json.RawMessage, error)
 }
 
@@ -200,7 +202,8 @@ func (s *Server) listenSocket() error {
 // of who connected, the framing and the ack. Windows 10 builds differ in
 // how much of AF_UNIX works, SIO_AF_UNIX_GETPEERPID in particular (CP
 // 6.3), and this is where a build that falls short shows. A sender that
-// connects during the test is turned away, and spools its message.
+// connects during the test is turned away, and spools its message, and so
+// is a question: Options.Answer doesn't run until Listen has returned.
 func (s *Server) selfTest(ln *net.UnixListener) error {
 	probe := inbox.New("ipc.selftest", nil)
 	deadline := time.Now().Add(selfTestTimeout)
@@ -232,7 +235,7 @@ func (s *Server) selfTest(ln *net.UnixListener) error {
 			return errors.Join(err, <-sent)
 		}
 		// handle runs on this goroutine, so got needs no lock.
-		s.handle(c, sink, deadline, nil)
+		s.handle(c, sink, deadline, nil, false)
 	}
 	return <-sent
 }
@@ -309,7 +312,7 @@ func (s *Server) Serve(sink inbox.Sink) error {
 			defer s.wg.Done()
 			defer func() { <-s.sem }()
 			defer s.untrack(c)
-			s.handle(c, sink, time.Time{}, s.walk)
+			s.handle(c, sink, time.Time{}, s.walk, true)
 		}()
 	}
 }
@@ -375,8 +378,9 @@ func (s *Server) stopListening() error {
 // handle serves one connection until the sender hangs up, sends a bad
 // frame or goes quiet for idleTimeout. until, when not zero, is a deadline
 // for all of it. walk, when set, reads the peer's parent chain first
-// (Options.Walk).
-func (s *Server) handle(c net.Conn, sink inbox.Sink, until time.Time, walk func(int) []platform.Proc) {
+// (Options.Walk). asks says whether a question gets its answer, which it
+// doesn't during the self-test.
+func (s *Server) handle(c net.Conn, sink inbox.Sink, until time.Time, walk func(int) []platform.Proc, asks bool) {
 	defer c.Close()
 	id, pid, err := peerOf(c)
 	if err == nil && id != s.want {
@@ -402,7 +406,7 @@ func (s *Server) handle(c net.Conn, sink inbox.Sink, until time.Time, walk func(
 			}
 			return
 		}
-		rep, keep := s.take(body, sink, pid, chain)
+		rep, keep := s.take(body, sink, pid, chain, asks)
 		b, err := json.Marshal(rep)
 		if err != nil {
 			return
@@ -419,8 +423,13 @@ func (s *Server) handle(c net.Conn, sink inbox.Sink, until time.Time, walk func(
 // take answers the question in one frame (ask.go), or delivers the message
 // in it, and returns the reply and whether the connection may carry on.
 // One that sent something other than a question or a message may not.
-func (s *Server) take(body []byte, sink inbox.Sink, pid int, chain []platform.Proc) (reply, bool) {
+// With asks false a question is turned away, unanswered, and the
+// connection ends.
+func (s *Server) take(body []byte, sink inbox.Sink, pid int, chain []platform.Proc, asks bool) (reply, bool) {
 	if q, ok := asQuestion(body); ok {
+		if !asks {
+			return reply{ID: q.ID, Error: "the agent is still starting"}, false
+		}
 		return s.answer(q)
 	}
 	m, err := inbox.Decode(body)

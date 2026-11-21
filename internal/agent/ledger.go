@@ -36,7 +36,10 @@ const (
 // records wait in a.ledgerIn. When they don't open for a reason that can
 // pass, the goroutine tries again until they do or the agent stops. Every
 // seal goes through the scheduler's seal every BATCH_S, presence's seals
-// on lock and suspend, and the writer's own on a prompt or a stop.
+// on lock and suspend, and the writer's own on a prompt or a stop. Each
+// sealed batch goes to the scorer loop, which startLedger starts once the
+// writer is open (WP-AG4), so the scorer reads only sealed records
+// (decision E-sm-1.1-seq-gaps).
 //
 // The ledger's problems go under three sources, so none overwrites
 // another: "ledger" says why it isn't open, and later why a seal failed;
@@ -68,6 +71,9 @@ func (a *agent) startLedger() func() {
 		a.adaptersHost().attach(lw)
 		w = lw
 		a.ledgerIn.Attach(lw)
+		if a.scorer != nil {
+			a.scorer.Start()
+		}
 	}()
 	return func() {
 		close(quit)
@@ -150,6 +156,10 @@ func (a *agent) openLedger() (*ledger.Writer, error) {
 	a.keyAdapters(ks)
 	a.keyFocus(ks)
 	a.keySessions(ks)
+	var sealed func(ledger.Batch)
+	if a.scorer != nil {
+		sealed = a.scorer.Sealed
+	}
 	return ledger.Open(ledger.Options{
 		Dir:   a.dirs.Ledger(),
 		Keys:  ks.Keys(),
@@ -157,7 +167,9 @@ func (a *agent) openLedger() (*ledger.Writer, error) {
 		// keystore.json keeps the key's chain, so a ledger directory that
 		// is deleted can't make the key start another (ledger-v1 3).
 		Chains:  ks,
+		Params:  a.table,
 		Sched:   a.sched,
+		Sealed:  sealed,
 		Problem: func(msg string) { a.setProblem("ledger", msg) },
 	})
 }

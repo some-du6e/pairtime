@@ -21,6 +21,21 @@ const spec = parse(readFileSync(new URL('../../docs/api/local.openapi.yaml', imp
 
 type Operation = { responses?: Record<string, { content?: Record<string, { schema?: Schema }> }> };
 
+// A value for each of the spec's path parameters, so the tests below can
+// ask every GET.
+const pathValues: Record<string, string> = { date: 'today' };
+
+/** path with each {name} in it replaced by its value from pathValues. */
+function fill(path: string): string {
+	return path.replace(/\{([^}]+)\}/g, (_match: string, name: string) => {
+		const value = pathValues[name];
+		if (value === undefined) {
+			throw new Error(`${path} takes {${name}}; give this test a value for it in pathValues`);
+		}
+		return encodeURIComponent(value);
+	});
+}
+
 /** Every GET operation in the spec, with its path. */
 function gets(): [string, Operation][] {
 	const paths = (spec.paths ?? {}) as Record<string, { get?: Operation }>;
@@ -96,10 +111,7 @@ test('every GET in the spec answers 200 in the shape the spec gives', async ({ r
 	const ops = gets();
 	expect(ops.length).toBeGreaterThan(0);
 	for (const [path, op] of ops) {
-		if (path.includes('{')) {
-			throw new Error(`${path} takes parameters; give this test values for them`);
-		}
-		const res = await request.get(new URL(path.slice(1), base).href, {
+		const res = await request.get(new URL(fill(path).slice(1), base).href, {
 			headers: { Authorization: `Bearer ${agentToken()}` },
 		});
 		expect(res.status(), path).toBe(200);
@@ -113,7 +125,7 @@ test('every GET in the spec answers 200 in the shape the spec gives', async ({ r
 
 test('without the token every GET in the spec answers 401, as the spec says', async ({ request }) => {
 	for (const [path] of gets()) {
-		const res = await request.get(new URL(path.slice(1), base).href);
+		const res = await request.get(new URL(fill(path).slice(1), base).href);
 		expect(res.status(), path).toBe(401);
 		expect(res.headers()['www-authenticate'], path).toBe('Bearer realm="pairtime"');
 	}

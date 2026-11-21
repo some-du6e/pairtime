@@ -22,3 +22,11 @@ type Signups struct {
 func (s *Signups) MayCreate(sub string) bool {
 	return s.open || s.operators[sub]
 }
+
+// Open reports whether sign-ups are open to everyone. While they aren't,
+// the device grant's code response says so, since only an account that
+// exists already, or an operator's, can approve a code
+// (D-device-row-chain-state).
+func (s *Signups) Open() bool {
+	return s.open
+}
