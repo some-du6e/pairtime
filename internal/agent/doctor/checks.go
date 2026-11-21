@@ -18,9 +18,12 @@ type Reach int
 const (
 	// Reached is an agent that answered.
 	Reached Reach = iota
-	// Down is no agent: nothing listens on its socket, or port.json says it
-	// stopped.
+	// Down is no agent: nothing answers on its socket, and nothing holds
+	// the data folder's lock.
 	Down
+	// Deaf is an agent that holds the data folder's lock but answers
+	// nothing on its socket, so every hook call goes to the spool.
+	Deaf
 	// Old is an agent from before doctor, which doesn't answer the status
 	// question.
 	Old
@@ -95,6 +98,8 @@ func agentCheck(f Facts) Check {
 	switch f.Reach {
 	case Down:
 		c.Result, c.Text = Fail, "isn't running, so pairtime tracks nothing. Logging in starts it, or run: pairtime agent --detach"
+	case Deaf:
+		c.Result, c.Text = Fail, "runs, but nothing answers on its socket, so every hook call goes to the spool and counts for less. Log out and back in to restart it"
 	case Old:
 		c.Result, c.Text = Warn, "runs an older pairtime that can't answer doctor, so the lines that need it are skipped. Run pairtime install with this one to move the agent to it"
 	case Slow:

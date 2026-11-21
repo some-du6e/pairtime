@@ -92,12 +92,14 @@ func (a *agent) status() statusReply {
 		jobs = append(jobs, jobReply{Name: j.Name, EveryS: j.Every.Seconds(), Runs: j.Runs})
 	}
 	return statusReply{
-		Version:   version.Get(),
-		PID:       os.Getpid(),
-		Started:   a.started.UTC(),
-		UptimeS:   int64(time.Since(a.started) / time.Second),
-		Mode:      a.uploadMode(),
-		Port:      a.port,
+		Version: version.Get(),
+		PID:     os.Getpid(),
+		Started: a.started.UTC(),
+		UptimeS: int64(time.Since(a.started) / time.Second),
+		Mode:    a.uploadMode(),
+		// The socket answers the status question before Run has the port,
+		// so it reads the one the HTTP server published (agent.linkPort).
+		Port:      int(a.linkPort.Load()),
 		Wakeups:   a.sched.Wakeups(),
 		Jobs:      jobs,
 		IPC:       a.ipcStatus(),

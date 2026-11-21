@@ -204,8 +204,8 @@ func TestFootprint(t *testing.T) {
 		name  string
 		check func(t *testing.T, f footprintReply)
 	}{
-		{"the agent has used some CPU time, and never a negative amount", func(t *testing.T, f footprintReply) {
-			if f.CPUS < 0 {
+		{"the CPU time this process has used is more than none", func(t *testing.T, f footprintReply) {
+			if f.CPUS <= 0 {
 				t.Errorf("cpu_s = %v", f.CPUS)
 			}
 		}},

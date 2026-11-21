@@ -87,6 +87,11 @@ var (
 	doctorSignature  = doctor.OSSignature
 )
 
+// doctorSettle is how long doctor waits to ask again when nothing answers
+// on the agent's socket but an agent holds the data folder: one that has
+// just started listens a moment later. Tests shorten it.
+var doctorSettle = time.Second
+
 // doctorReportSpan is how long --report watches the agent at rest, as
 // footprint.yml watches an idle agent, and doctorReportCalls how many warm
 // calls it times. Tests shorten the span.
@@ -161,6 +166,17 @@ func gatherFacts(dirs home.Dirs) doctor.Facts {
 	start := time.Now()
 	st, err := askStatus(dirs)
 	f.AskTook = time.Since(start)
+	if errors.Is(err, errAgentDown) && agentLocked(dirs) {
+		// An agent holds the data folder: it may have just started.
+		time.Sleep(doctorSettle)
+		start = time.Now()
+		st, err = askStatus(dirs)
+		f.AskTook = time.Since(start)
+		if errors.Is(err, errAgentDown) {
+			f.Reach = doctor.Deaf
+			return f
+		}
+	}
 	switch {
 	case err == nil:
 		f.Reach, f.Agent = doctor.Reached, &st
@@ -297,6 +313,9 @@ func runReport(dirs home.Dirs, stdout, stderr io.Writer) int {
 	first, err := askStatus(dirs)
 	if err != nil {
 		r.NoAgent = noAgentWords(err)
+		if errors.Is(err, errAgentDown) && agentLocked(dirs) {
+			r.NoAgent = "running, but answering nothing on its socket"
+		}
 	} else {
 		fmt.Fprintf(stderr, "Watching pairtime's agent at rest for %s, then timing its hook. Leave this computer be until it's done.\n", text.Duration(doctorReportSpan.Seconds()))
 		start := time.Now()

@@ -242,6 +242,21 @@ func TestDoctorAgentLine(t *testing.T) {
 			wantSkips: []string{"idle", "focus"},
 		},
 		{
+			name: "an agent that holds the data folder but answers nothing on its socket fails, and says how to restart it",
+			agent: func(h fakeHome) {
+				swap(h.t, &doctorSettle, 10*time.Millisecond)
+				l, err := home.Acquire(h.dir)
+				if err != nil {
+					h.t.Fatal(err)
+				}
+				h.t.Cleanup(func() { l.Release() })
+			},
+			wantCode:  1,
+			want:      doctor.Fail,
+			wantText:  "runs, but nothing answers on its socket",
+			wantSkips: []string{"idle", "focus", "spool"},
+		},
+		{
 			name:      "an agent from before doctor is a warning, and the lines it can't answer are skipped",
 			agent:     func(h fakeHome) { h.agent(nil) },
 			want:      doctor.Warn,
