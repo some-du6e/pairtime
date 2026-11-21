@@ -9,15 +9,18 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"maps"
 	"os"
 	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/some-du6e/pairtime/internal/agent/doctor"
+	"github.com/some-du6e/pairtime/internal/agent/home"
 	"github.com/some-du6e/pairtime/internal/agent/ipc"
 	"github.com/some-du6e/pairtime/internal/jsonschema"
 	"github.com/some-du6e/pairtime/internal/version"
@@ -529,6 +532,183 @@ func TestDoctorUsage(t *testing.T) {
 			code, _, stderr := runCmd(tt.args...)
 			if code != tt.wantCode || !strings.Contains(stderr, tt.wantStderr) {
 				t.Errorf("%q = %d, stderr %q; want %d with %q", tt.args, code, stderr, tt.wantCode, tt.wantStderr)
+			}
+		})
+	}
+}
+
+// statusSequence starts a fake agent that answers the n-th status question
+// with sts[n], and the last of them after that.
+func (h fakeHome) statusSequence(sts ...doctor.Status) func() []string {
+	h.t.Helper()
+	var mu sync.Mutex
+	n := 0
+	return h.agent(func(q string) (json.RawMessage, error) {
+		if q != ipc.AskStatus {
+			return nil, ipc.ErrUnknownQuestion
+		}
+		mu.Lock()
+		st := sts[min(n, len(sts)-1)]
+		n++
+		mu.Unlock()
+		return json.Marshal(st)
+	})
+}
+
+// reportMachine is a computer with Claude Code's hooks, which run exe,
+// whose warm round trips take 10 ms and more and whose start alone takes
+// 5 ms and more, and a span at rest of 20 ms.
+func reportMachine(t *testing.T, exe string) {
+	t.Helper()
+	swap(t, &doctorReportSpan, 20*time.Millisecond)
+	swap(t, &doctorHooks, func() []doctor.Hooks {
+		return []doctor.Hooks{{Harness: "claude_code", Title: "Claude Code", Found: true, Settings: filepath.Join(filepath.Dir(exe), "settings.json"),
+			Events: []string{"SessionStart"}, Exes: []string{exe}}}
+	})
+	times := func(from int) func(string, int) ([]time.Duration, error) {
+		return func(_ string, n int) ([]time.Duration, error) {
+			ds := make([]time.Duration, n)
+			for i := range ds {
+				ds[i] = time.Duration(from+i) * time.Millisecond
+			}
+			return ds, nil
+		}
+	}
+	swap(t, &doctorRoundTrips, func(exe, _ string, n int) ([]time.Duration, error) { return times(10)(exe, n) })
+	swap(t, &doctorStartup, times(5))
+}
+
+// TestDoctorReportNamesNothing plants a username, a hostname and a home
+// path in the environment, in the data directory, in the agent's status
+// and in the hook's path, and finds none of them in the report (DESIGN
+// 5.9; TE WP7.9).
+func TestDoctorReportNamesNothing(t *testing.T) {
+	const user, host = "plantedteen", "plantedbox"
+	data := filepath.Join(shortHome(t), user)
+	if err := os.MkdirAll(data, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	homeDir := filepath.Join(t.TempDir(), "home-"+user)
+	for k, v := range map[string]string{"USER": user, "USERNAME": user, "LOGNAME": user, "HOSTNAME": host, "COMPUTERNAME": host,
+		"HOME": homeDir, "USERPROFILE": homeDir, home.EnvHome: data} {
+		t.Setenv(k, v)
+	}
+	h := fakeHome{t: t, dir: data}
+	h.writeFile("config.toml", []byte("# "+homeDir+" on "+host+"\n"))
+	h.writeFile("state.json", []byte(`{"home":"`+filepath.ToSlash(homeDir)+`","host":"`+host+`"}`))
+	st := agentStatus()
+	// Even a version that names the teen, which a build from a checkout
+	// can have, doesn't reach the report.
+	st.Version.Version = "v0.1.0-" + user
+	st.Signals.Focus = doctor.Signal{Unknown: "no X display on " + host}
+	st.Problems = map[string]string{"config": "couldn't read " + filepath.Join(homeDir, ".config") + ": permission denied", "uploader": host + " " + user}
+	st.Footprint = doctor.Footprint{RSSBytes: 18_200_000, PeakRSSBytes: 21_400_000, CPUS: 3.2}
+	h.statusAgent(st)
+	reportMachine(t, filepath.Join(homeDir, ".local", "bin", "pairtime"))
+
+	code, out, errOut := runCmd("doctor", "--report")
+	if code != 0 {
+		t.Fatalf("doctor --report = %d, stderr %q", code, errOut)
+	}
+	// The 20 round trips take 10 to 29 ms and the starts 5 to 24 ms, so
+	// their medians are 19.5 and 14.5 ms, which round up.
+	for _, want := range []string{"pairtime footprint report", "agent memory:    18.2 MB now, 21.4 MB at most", "hook round trip: claude_code: 20 ms median",
+		"start-up alone:  15 ms median"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("the report doesn't have %q:\n%s", want, out)
+		}
+	}
+	planted := []string{user, host, homeDir, filepath.ToSlash(homeDir), strings.ReplaceAll(homeDir, "/", `\`), data, filepath.ToSlash(data)}
+	if real, err := os.Hostname(); err == nil && len(real) >= 6 {
+		planted = append(planted, real)
+	}
+	for _, p := range planted {
+		if strings.Contains(strings.ToLower(out), strings.ToLower(p)) {
+			t.Errorf("the report has %q:\n%s", p, out)
+		}
+	}
+}
+
+func TestDoctorReportSpan(t *testing.T) {
+	first := agentStatus()
+	first.UptimeS, first.Wakeups, first.IPC.Stored = 3600, 120, 5
+	first.Footprint = doctor.Footprint{RSSBytes: 18_000_000, PeakRSSBytes: 20_000_000, CPUS: 1.8}
+	then := func(edit func(*doctor.Status)) doctor.Status {
+		st := first
+		st.Adapters.Harnesses = maps.Clone(first.Adapters.Harnesses)
+		st.Wakeups += 2
+		st.Footprint.CPUS += 0.000001
+		edit(&st)
+		return st
+	}
+	tests := []struct {
+		name  string
+		agent func(h fakeHome)
+		want  []string
+		not   []string
+	}{
+		{
+			name:  "a quiet span gives the agent's CPU and wakeups over it, at rest",
+			agent: func(h fakeHome) { h.statusSequence(first, then(func(*doctor.Status) {})) },
+			want:  []string{"agent:           " + version.Get().Version + ", running for 1h 0m", "0.050% since it started;", " at rest (pairtime aims", "over the same span"},
+			not:   []string{"not at rest"},
+		},
+		{
+			name: "a span in which the agent stored a hook call says it wasn't at rest",
+			agent: func(h fakeHome) {
+				h.statusSequence(first, then(func(s *doctor.Status) { s.IPC.Stored++ }))
+			},
+			want: []string{"while it took hook calls, so not at rest"},
+		},
+		{
+			name: "a span in which an adapter took a call says it wasn't at rest",
+			agent: func(h fakeHome) {
+				h.statusSequence(first, then(func(s *doctor.Status) {
+					c := s.Adapters.Harnesses["claude_code"]
+					c.Calls++
+					s.Adapters.Harnesses["claude_code"] = c
+				}))
+			},
+			want: []string{"so not at rest"},
+		},
+		{
+			name: "an agent that restarted during the span gives only its numbers since its start",
+			agent: func(h fakeHome) {
+				h.statusSequence(first, then(func(s *doctor.Status) { s.PID++; s.Started = s.Started.Add(time.Hour) }))
+			},
+			want: []string{"since it started (pairtime aims"},
+			not:  []string{"over the same span"},
+		},
+		{
+			name:  "with no agent, the report says it isn't running and still has the computer and the hook",
+			agent: func(fakeHome) {},
+			want:  []string{"agent:           not running, so its memory, CPU and wakeups aren't here", "os:", "hook round trip: claude_code:"},
+			not:   []string{"agent memory"},
+		},
+		{
+			name:  "an agent from before doctor is one that can't say",
+			agent: func(h fakeHome) { h.agent(nil) },
+			want:  []string{"agent:           an older pairtime that can't say"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := newDoctorHome(t)
+			reportMachine(t, filepath.Join(h.dir, "bin", "pairtime"))
+			tt.agent(h)
+			code, out, errOut := runCmd("doctor", "--report")
+			if code != 0 {
+				t.Fatalf("doctor --report = %d, stderr %q", code, errOut)
+			}
+			for _, w := range tt.want {
+				if !strings.Contains(out, w) {
+					t.Errorf("the report doesn't have %q:\n%s", w, out)
+				}
+			}
+			for _, w := range tt.not {
+				if strings.Contains(out, w) {
+					t.Errorf("the report has %q:\n%s", w, out)
+				}
 			}
 		})
 	}
