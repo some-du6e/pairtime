@@ -635,10 +635,11 @@ func (w *Writer) seal() (Batch, bool, error) {
 	// batch local-only, whenever its records came.
 	online := w.online == nil || w.online()
 	w.mu.Lock()
-	if online && w.notes == notes {
+	if w.online != nil && online && w.notes == notes {
 		// config.toml says online, and no note came since it was read: a
 		// stretch the noted mode still says is local-only ended unnoted.
-		// The batch's own records keep their taint.
+		// The batch's own records keep their taint. Without Online, only
+		// NoteMode ends a stretch.
 		w.local = false
 	}
 	if err := w.usable(); err != nil {

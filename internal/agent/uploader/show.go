@@ -117,7 +117,9 @@ func Next(o PreviewOptions) (Preview, error) {
 	fresh := relinked(st, c)
 	relink(&st, rows, c)
 	stop := st.localStop(rows.last())
-	if p, err := readOutbox(o.DataDir, st); err == nil && p != nil && !fresh {
+	// As the agent's load does, the request waiting for its retry goes as
+	// it is only while the place lets every item of it go (allows).
+	if p, err := readOutbox(o.DataDir, st); err == nil && p != nil && !fresh && st.allows(rows, p.plan) {
 		pv := previewOf(p.plan, true)
 		pv.Stopped = stop
 		return pv, nil

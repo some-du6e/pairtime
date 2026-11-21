@@ -571,7 +571,8 @@ func TestNoteMode(t *testing.T) {
 	// mode as the config watch does ("local", "online"), writes a record
 	// ("write"), seals ("seal"), waits for the batch a seal of the writer's
 	// own sealed ("sealed"), or gives one that shouldn't come time to
-	// ("pause").
+	// ("pause"). A first step "no-online" opens the writer without
+	// Options.Online.
 	cases := []struct {
 		name  string
 		steps []string
@@ -594,6 +595,8 @@ func TestNoteMode(t *testing.T) {
 			[]string{"local", "online", "write", "seal"}, []bool{true}, []int{1}},
 		{"a switch to local-only and straight back still seals what was pending as local-only",
 			[]string{"write", "file-local", "local", "file-online", "online", "sealed"}, []bool{false}, []int{1}},
+		{"without Online, only the switch back ends a stretch, since no seal reads config.toml",
+			[]string{"no-online", "local", "write", "sealed", "write", "seal"}, []bool{false, false}, []int{1, 1}},
 		{"a second stretch's first record seals at once too",
 			[]string{"file-local", "local", "write", "sealed", "file-online", "online", "write", "seal", "file-local", "local", "write", "sealed"}, []bool{false, true, false}, []int{1, 1, 1}},
 	}
@@ -603,7 +606,9 @@ func TestNoteMode(t *testing.T) {
 			file.Store(true)
 			sealed := make(chan Batch, 8)
 			w := open(t, t.TempDir(), newClock(testT), func(o *Options) {
-				o.Online = file.Load
+				if len(c.steps) == 0 || c.steps[0] != "no-online" {
+					o.Online = file.Load
+				}
 				o.Sealed = func(b Batch) { sealed <- b }
 			})
 			rng := rand.New(rand.NewPCG(9, 10))

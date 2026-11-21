@@ -225,6 +225,30 @@ func (s *saved) foldModes(rows *rowIndex) bool {
 	return changed
 }
 
+// allows reports whether every item of p may go by st's runs: none of its
+// roots is of a batch sealed in local-only mode, nor the batch a bucket's
+// minute was sealed in, nor the one a pending minute's credit rests on. A
+// request waiting for its retry from before the place took the modes from
+// the rows, as an older version's after an upgrade, can hold items whose
+// batches now count as local-only (foldModes).
+func (st saved) allows(rows *rowIndex, p plan) bool {
+	for _, r := range p.body.Batches {
+		if st.localOnly(r.B) {
+			return false
+		}
+	}
+	for _, b := range p.body.Buckets {
+		ms := b.Minute.UnixMilli()
+		if bs, ok := rows.sealedAfter(ms + 60_000); ok && st.localOnly(bs) {
+			return false
+		}
+		if rev, ok := p.sent[ms]; ok && st.localOnly(rev.B) {
+			return false
+		}
+	}
+	return true
+}
+
 // localOnly reports whether batch b was sealed in local-only mode: in a
 // recorded gap, at or after LocalFrom while the mode is local, or between
 // the server's head and From, where the state read that records the gap
@@ -251,17 +275,19 @@ func (s saved) localOnly(b uint64) bool {
 // (local) or online. The first batch sealed in local mode opens a run at
 // LocalFrom, and the first one sealed online after it closes the run into
 // Gaps, itself included: its records began while the mode was still
-// local, as the first one's began before it was. It reports whether
-// anything changed.
+// local, as the first one's began before it was. A batch sealed in local
+// mode before the open run, as an older writer's row below a run an older
+// place recorded, takes the run down to it, and one sealed online before
+// it leaves the run as it is. It reports whether anything changed.
 func (s *saved) mode(b uint64, local bool) bool {
 	switch {
 	case b == 0:
 		return false
-	case local && s.LocalFrom == 0:
+	case local && (s.LocalFrom == 0 || b < s.LocalFrom):
 		s.LocalFrom = b
 		return true
-	case !local && s.LocalFrom > 0:
-		s.addGap(s.LocalFrom, max(b, s.LocalFrom))
+	case !local && s.LocalFrom > 0 && b >= s.LocalFrom:
+		s.addGap(s.LocalFrom, b)
 		s.LocalFrom = 0
 		return true
 	}

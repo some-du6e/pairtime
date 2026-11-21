@@ -769,10 +769,12 @@ func (u *Uploader) load(c Credentials) error {
 	u.st, u.rows, u.loaded, u.synced = st, rows, true, false
 	u.lastReq = max(u.lastReq, st.Req)
 	u.pending = u.readOutbox()
-	if fresh && u.pending != nil {
+	if u.pending != nil && (fresh || !u.st.allows(u.rows, u.pending.plan)) {
 		// A request from before the link may carry roots the gap now
-		// holds, which the server never takes: its items are planned
-		// again from where they stood.
+		// holds, which the server never takes, and one from before an
+		// upgrade items of batches that now count as local-only, which
+		// may never go: its items are planned again from where they
+		// stood.
 		u.pending = nil
 		u.removeOutbox()
 		u.save()

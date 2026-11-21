@@ -283,30 +283,39 @@ func TestLabelsDue(t *testing.T) {
 			}
 		})
 	}
-	t.Run("the labels name the scorer's version, which every bucket's v is, not the table's, and the table's hash", func(t *testing.T) {
-		// The newest table under a version that isn't the scorer's, as a
-		// parameter change makes it before a scorer takes it in.
-		var doc map[string]json.RawMessage
-		if err := json.Unmarshal(newestTable().Canonical(), &doc); err != nil {
-			t.Fatal(err)
-		}
-		doc["version"] = json.RawMessage(`"9.9.9"`)
-		js, err := json.Marshal(doc)
-		if err != nil {
-			t.Fatal(err)
-		}
-		table, err := params.Parse(js)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if table.Version() == score.Version() {
-			t.Fatalf("the table's version is the scorer's, %s", score.Version())
-		}
-		got := currentLabels("v0.1.0", table, score.Device{}, nil)
-		if got.ScoringVersion != score.Version() || got.Params != table.Hash() {
-			t.Errorf("scoring_version %q and params %q; want %q, not the table's %q, and %q", got.ScoringVersion, got.Params, score.Version(), table.Version(), table.Hash())
-		}
-	})
+	// The newest table under a version that isn't the scorer's, as a
+	// parameter change makes it before a scorer takes it in.
+	var doc map[string]json.RawMessage
+	if err := json.Unmarshal(newestTable().Canonical(), &doc); err != nil {
+		t.Fatal(err)
+	}
+	doc["version"] = json.RawMessage(`"9.9.9"`)
+	js, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	table, err := params.Parse(js)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if table.Version() == score.Version() {
+		t.Fatalf("the table's version is the scorer's, %s", score.Version())
+	}
+	got := currentLabels("v0.1.0", table, score.Device{}, nil)
+	names := []struct {
+		name string
+		ok   bool
+	}{
+		{"the labels name the scorer's version, which every bucket's v is, not the table's", got.ScoringVersion == score.Version()},
+		{"the labels name the table's hash", got.Params == table.Hash()},
+	}
+	for _, c := range names {
+		t.Run(c.name, func(t *testing.T) {
+			if !c.ok {
+				t.Errorf("scoring_version %q and params %q; want %q, not the table's %q, and %q", got.ScoringVersion, got.Params, score.Version(), table.Version(), table.Hash())
+			}
+		})
+	}
 }
 
 // TestCreditBatch checks what a revision's reading rests on: a revision
