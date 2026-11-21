@@ -14,17 +14,47 @@ import (
 // agent restart) and a sample slowed to one a minute (D14).
 const lateMarginMS = 300_000
 
-// TestLookAheads checks, for every parameter table pkg/params embeds, that
-// no rule looks further ahead than READ_HORIZON_S and that PENDING_WINDOW_S
-// keeps every look-ahead at least lateMarginMS inside it, so a record up to
-// that late changes only what is still pending and the Finals of a Step per
-// minute are what one Step gives (DESIGN 6.2 D1;
+// scorerTables returns the embedded parameter tables the scorer can score
+// with: those that hold every parameter it reads, as NewState requires.
+// Table 0.1.0 predates INPUT_RELEASE_GRACE_MS, so it isn't one.
+func scorerTables(t *testing.T) []*params.Table {
+	t.Helper()
+	var out []*params.Table
+	for _, tab := range params.Tables() {
+		if holdsRules(tab) {
+			out = append(out, tab)
+		}
+	}
+	if len(out) == 0 {
+		t.Fatal("the scorer can score with none of the embedded tables")
+	}
+	return out
+}
+
+// holdsRules reports whether newRules can read every parameter it needs
+// from tab. Table.Int and the others panic on a parameter tab lacks.
+func holdsRules(tab *params.Table) (ok bool) {
+	defer func() {
+		if recover() != nil {
+			ok = false
+		}
+	}()
+	newRules(tab)
+	return true
+}
+
+// TestLookAheads checks, for every parameter table pkg/params embeds that
+// the scorer can score with, that no rule looks further ahead than
+// READ_HORIZON_S and that PENDING_WINDOW_S keeps every look-ahead at least
+// lateMarginMS inside it, so a record up to that late changes only what is
+// still pending and the Finals of a Step per minute are what one Step
+// gives (DESIGN 6.2 D1;
 // docs/errata/2026-11-19-return-rule-lookahead.md, decided 2026-11-20 as
 // E-return-lookahead). It pins the code half of that rule change, whose
 // DESIGN 3.7 and D1 text lands with P10. A MINOR table that broke one of
 // these would change minutes the agent has already called final.
 func TestLookAheads(t *testing.T) {
-	for _, tab := range params.Tables() {
+	for _, tab := range scorerTables(t) {
 		r := newRules(tab)
 		ms := func(p params.IntParam) int64 { return tab.Int(p) * 1000 }
 		cases := []struct {
@@ -45,6 +75,7 @@ func TestLookAheads(t *testing.T) {
 			{"a typed edit's or navigation's lead, EDIT_LEAD_S, is within READ_HORIZON_S", r.editLead, r.reach, false},
 			{"a typed command's lead and watched run, CMD_LEAD_S + CMD_WATCH_MAX_S, is within READ_HORIZON_S", r.cmdLead + r.cmdWatchMax, r.reach, false},
 			{"a human commit's lead, COMMIT_LEAD_S, is within READ_HORIZON_S", r.commitLead, r.reach, false},
+			{"INPUT_RELEASE_GRACE_MS, how far past a prompt's submit SM 2.2 rules 6 and 7 read input, is within READ_HORIZON_S", r.releaseGrace, r.reach, false},
 			{"the presence bridge, PRESENCE_GAP_S, which waits for the input after a silence, is within READ_HORIZON_S", r.presenceGap, r.reach, false},
 			{"TRACK_DEDUPE_S, how far after a track call a hook or log record still decides it, is within READ_HORIZON_S (E-track-windows)", r.trackDedupe, r.reach, false},
 			{"TRACK_LOG_MATCH_S, how far after a side-door prompt a hook or log prompt still makes it a cross-check, is within READ_HORIZON_S (DESIGN 5.2)", r.trackLogMatch, r.reach, false},
