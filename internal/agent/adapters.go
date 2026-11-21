@@ -5,6 +5,10 @@ package agent
 import (
 	"bufio"
 	"bytes"
+	"crypto/hmac"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -79,14 +83,29 @@ const maxQueued = 4096
 // id, pend appends the call to held.jsonl.pending with one write and no
 // flush, as the journal writes its line: a call the socket acks survives
 // the agent being killed before the worker parses or holds it, and one cut
-// off before its id is recorded comes again through the spool (inbox.Sink). The worker empties the file
-// once every call in it is parsed or held, and the next start parses what a
-// killed run left there. A call whose records were written in the moment
-// before a kill, ahead of the emptying, is parsed again: twice rather than
-// never.
+// off before its id is recorded comes again through the spool (inbox.Sink).
+// The worker empties the file once every call in it is parsed or held, and
+// the next start parses what a killed run left there. A call whose records
+// were written in the moment before a kill, ahead of the emptying, is
+// parsed again: twice rather than never.
+//
+// A held call keeps how it came, its via, the agent's walk of its sender
+// and the agent's stamp, only in the run that wrote it down. Any process
+// of this user can write to the data directory, so every line carries an
+// HMAC under a key the run makes at random and keeps in memory alone
+// (heldLine), and a line without a valid one, which is every line an
+// earlier run wrote, is read as the spool's lines are (D-spool-via; DESIGN
+// 5.2): its events are via plugin, it has no walk, and the replay that
+// reads it stamps it (readHeld). So a killed agent's acked calls, and calls
+// held through a stop, come out as plugin calls.
 type adapterHost struct {
 	a    *agent
 	goos string
+	// lineKey keys the HMAC on each line this run writes to held.jsonl and
+	// its pending log (heldLine). It is random, made with the host, and
+	// never leaves memory, so no other run and no other process can make a
+	// line that verifies.
+	lineKey []byte
 
 	mu      sync.Mutex
 	queue   []inbox.Delivery // calls stored and not yet taken, oldest first
@@ -195,14 +214,17 @@ func memoryKey(kSession []byte) string {
 }
 
 func newAdapterHost(a *agent) *adapterHost {
+	key := make([]byte, 32)
+	rand.Read(key) // never fails: crypto/rand panics instead
 	return &adapterHost{
-		a:     a,
-		goos:  runtime.GOOS,
-		stats: make(map[event.Harness]*harnessStats),
-		built: make(map[event.Harness]adapters.Adapter),
-		kick:  make(chan struct{}, 1),
-		stop:  make(chan struct{}),
-		done:  make(chan struct{}),
+		a:       a,
+		goos:    runtime.GOOS,
+		lineKey: key,
+		stats:   make(map[event.Harness]*harnessStats),
+		built:   make(map[event.Harness]adapters.Adapter),
+		kick:    make(chan struct{}, 1),
+		stop:    make(chan struct{}),
+		done:    make(chan struct{}),
 	}
 }
 
@@ -289,7 +311,7 @@ func (h *adapterHost) attach(w *ledger.Writer) {
 // stopped, which the agent's stop order rules out, is held for the next
 // run.
 func (h *adapterHost) pend(d inbox.Delivery) func(stored bool) {
-	line, err := heldLine(d)
+	line, err := h.heldLine(d)
 	h.mu.Lock()
 	closed := h.closed
 	if !closed {
@@ -919,7 +941,8 @@ func (h *adapterHost) save(force bool) {
 
 // heldCall is a stored hook call as held.jsonl keeps it until the
 // adapters can read it: the delivery whole, with the agent's own walk and
-// stamp, so it parses as it would have when it came.
+// stamp, so that in the run that wrote it, it parses as it would have when
+// it came. readHeld trusts those only on a line whose MAC verifies.
 type heldCall struct {
 	Message  json.RawMessage `json:"message"`
 	Via      inbox.Via       `json:"via"`
@@ -952,7 +975,7 @@ func (h *adapterHost) hold(calls []inbox.Delivery) []inbox.Delivery {
 		size = fi.Size()
 	}
 	for i, d := range calls {
-		line, err := heldLine(d)
+		line, err := h.heldLine(d)
 		if err != nil {
 			h.dropHeld(1, err) // can't happen: a message the agent took in encodes
 			continue
@@ -971,8 +994,18 @@ func (h *adapterHost) hold(calls []inbox.Delivery) []inbox.Delivery {
 	return nil
 }
 
-// heldLine is d as a line of held.jsonl, with a newline on each side.
-func heldLine(d inbox.Delivery) ([]byte, error) {
+// heldEntry is a line of held.jsonl or its pending log: the call, as the
+// JSON of a heldCall, and the HMAC of exactly those bytes under the run's
+// lineKey, in hex.
+type heldEntry struct {
+	Call json.RawMessage `json:"call"`
+	MAC  string          `json:"mac"`
+}
+
+// heldLine is d as a line of held.jsonl, with a newline on each side. The
+// line is written out by hand, so its call's bytes are exactly the ones
+// its MAC covers.
+func (h *adapterHost) heldLine(d inbox.Delivery) ([]byte, error) {
 	m, err := d.Message.Encode()
 	if err != nil {
 		return nil, err
@@ -982,13 +1015,25 @@ func heldLine(d inbox.Delivery) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	mac := hex.EncodeToString(h.lineMAC(b))
 	// A newline before it as well as after, as the inbox's spool has: a
 	// line a full disk or a power cut left short then can't take the next
 	// call with it.
-	line := make([]byte, 0, len(b)+2)
-	line = append(line, '\n')
+	line := make([]byte, 0, len(b)+len(mac)+20)
+	line = append(line, "\n{\"call\":"...)
 	line = append(line, b...)
-	return append(line, '\n'), nil
+	line = append(line, ",\"mac\":\""...)
+	line = append(line, mac...)
+	return append(line, "\"}\n"...), nil
+}
+
+// lineMAC is the HMAC of a held call's JSON under the run's lineKey.
+func (h *adapterHost) lineMAC(call []byte) []byte {
+	m := hmac.New(sha256.New, h.lineKey)
+	m.Write([]byte("pairtime held call v1"))
+	m.Write([]byte{0})
+	m.Write(call)
+	return m.Sum(nil)
 }
 
 func (h *adapterHost) dropHeld(n int, err error) {
@@ -1059,7 +1104,7 @@ func (h *adapterHost) replayFile(name string) (read, gone bool) {
 			return false, false
 		}
 		if len(bytes.TrimSpace(line)) > 0 {
-			if d, ok := readHeld(line); ok {
+			if d, ok := h.readHeld(line); ok {
 				h.handle(d)
 				n++
 			} else {
@@ -1121,16 +1166,31 @@ func (h *adapterHost) countHeld() {
 	h.count(func() { h.held += n })
 }
 
-// readHeld reads a line of held.jsonl.
-func readHeld(line []byte) (inbox.Delivery, bool) {
+// readHeld reads a line of held.jsonl. Only a line this run wrote, whose
+// MAC verifies under lineKey, keeps its via, the agent's walk of its
+// sender, the sender's pid and the agent's stamp (D-spool-via). Every other
+// one is read as a drain reads the spool's lines (inbox.Drainer): via the
+// inbox, with no walk or pid, so its events are via plugin and carry no
+// lineage, and stamped now, by the replay, so no event of it is timed
+// after that (hookpath.Times). That is every line of an earlier run's
+// held.jsonl or .replay, and every call a start moved there from a killed
+// run's pending log.
+func (h *adapterHost) readHeld(line []byte) (inbox.Delivery, bool) {
+	var e heldEntry
+	if err := json.Unmarshal(line, &e); err != nil || len(e.Call) == 0 {
+		return inbox.Delivery{}, false
+	}
 	var c heldCall
-	if err := json.Unmarshal(line, &c); err != nil {
+	if err := json.Unmarshal(e.Call, &c); err != nil {
 		return inbox.Delivery{}, false
 	}
 	m, err := inbox.Decode(c.Message)
 	if err != nil {
 		return inbox.Delivery{}, false
 	}
-	return inbox.Delivery{Message: m, Via: c.Via, PeerPID: c.PeerPID, Walk: c.Walk,
-		EventVia: c.EventVia, Harness: c.Harness, Received: c.Received}, true
+	if mac, err := hex.DecodeString(e.MAC); err == nil && hmac.Equal(mac, h.lineMAC(e.Call)) {
+		return inbox.Delivery{Message: m, Via: c.Via, PeerPID: c.PeerPID, Walk: c.Walk,
+			EventVia: c.EventVia, Harness: c.Harness, Received: c.Received}, true
+	}
+	return inbox.Delivery{Message: m, Via: inbox.ViaInbox, Received: clock.Now()}, true
 }

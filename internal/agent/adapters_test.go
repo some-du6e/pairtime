@@ -28,6 +28,7 @@ import (
 	"github.com/some-du6e/pairtime/internal/agent/keys"
 	"github.com/some-du6e/pairtime/internal/agent/ledger"
 	"github.com/some-du6e/pairtime/internal/platform"
+	"github.com/some-du6e/pairtime/internal/platform/clock"
 	"github.com/some-du6e/pairtime/pkg/event"
 	pkgledger "github.com/some-du6e/pairtime/pkg/ledger"
 	"github.com/some-du6e/pairtime/pkg/ledger/features"
@@ -423,14 +424,17 @@ func TestHookCallsReachTheLedger(t *testing.T) {
 // TestHookCallsBeforeTheKeystore checks that a hook call taken in before
 // the keystore opens waits, in this run or through a stop, and is parsed
 // once it opens, with every key made under this installation's K_session:
-// never under FixtureKeys' public secret, nor under an empty one.
+// never under FixtureKeys' public secret, nor under an empty one. A call
+// keeps its via hook through held.jsonl only in the run that held it
+// (D-spool-via).
 func TestHookCallsBeforeTheKeystore(t *testing.T) {
 	cases := []struct {
 		name string
-		stop bool // the agent stops while the keyring is still locked
+		stop bool      // the agent stops while the keyring is still locked
+		via  event.Via // the via of the calls' records
 	}{
-		{"calls taken in while the keyring is locked are parsed once it answers", false},
-		{"calls held when the agent stops with the keyring locked are parsed by the next run", true},
+		{"calls taken in while the keyring is locked are parsed once it answers, via hook", false, event.ViaHook},
+		{"calls held when the agent stops with the keyring locked are parsed by the next run, via plugin", true, event.ViaPlugin},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -507,6 +511,8 @@ func TestHookCallsBeforeTheKeystore(t *testing.T) {
 					p.TurnKey == mine.Turn(captureSession, prompt) && p.TurnKey != public.Turn(captureSession, prompt)},
 				{"no held call is left on disk, in held.jsonl or the file its replay renames it to",
 					errors.Is(heldErr, fs.ErrNotExist) && errors.Is(replayErr, fs.ErrNotExist)},
+				{"the records' via is hook in the run that held the calls, and plugin in a later one",
+					len(recs) == 2 && !slices.ContainsFunc(recs, func(r ledgerRecord) bool { return r.ev.Via != c.via })},
 			}
 			for _, ch := range checks {
 				t.Run(ch.name, func(t *testing.T) {
@@ -521,19 +527,24 @@ func TestHookCallsBeforeTheKeystore(t *testing.T) {
 
 // TestHookCallsAKilledAgentAcked checks that calls an agent acked and
 // hadn't parsed when it was killed, which it wrote to held.jsonl.pending
-// before each ack, are parsed by the next start, as they would have been.
+// before each ack, are parsed by the next start. They come out as plugin
+// calls (D-spool-via): the next run can't tell the killed run's lines from
+// ones any process of the user wrote, so the via, walk and stamp they name
+// count for nothing.
 func TestHookCallsAKilledAgentAcked(t *testing.T) {
 	calls := readCapture(t)[:2] // the session's start, and its first prompt
 	r := newHookReplay(t)
 	if err := os.MkdirAll(r.dirs.Data, 0o700); err != nil {
 		t.Fatal(err)
 	}
+	// The killed run's host, with its own key for the lines it wrote.
+	killed := newAdapterHost(&agent{dirs: r.dirs, log: slog.New(slog.DiscardHandler), problems: make(map[string]string)})
 	var pending []byte
 	for _, c := range calls {
 		c.Stdin = bytes.ReplaceAll(c.Stdin, []byte(captureHome), []byte(r.home))
 		// As the killed run took them in: over the socket, from under the
 		// captured parents (adapters.DeliveryOf).
-		line, err := heldLine(adapters.DeliveryOf(event.HarnessClaudeCode, c, adapters.Walked, calls[0].Arrived))
+		line, err := killed.heldLine(adapters.DeliveryOf(event.HarnessClaudeCode, c, adapters.Walked, calls[0].Arrived))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -551,13 +562,21 @@ func TestHookCallsAKilledAgentAcked(t *testing.T) {
 	_, secret := deviceKeys(t, r.dirs, []keys.Store{})
 	recs := readLedger(t, r.dirs, event.SourceHook)
 	_, pendingErr := os.Stat(r.dirs.Held() + pendingSuffix)
+	var start event.SessionStart
+	if len(recs) > 0 {
+		if s, ok := recs[0].ev.Data.(*event.SessionStart); ok {
+			start = *s
+		}
+	}
 	checks := []struct {
 		name string
 		ok   bool
 	}{
-		{"the next start makes the calls' records: the session's start from the walk, then its prompt",
+		{"the next start makes the calls' records, the session's start then its prompt, both via plugin",
 			len(recs) == 2 && recs[0].ev.Kind() == event.KindSessionStart && recs[1].ev.Kind() == event.KindPromptSubmit &&
-				recs[0].ev.Via == event.ViaHook && recs[1].ev.Via == event.ViaHook},
+				recs[0].ev.Via == event.ViaPlugin && recs[1].ev.Via == event.ViaPlugin},
+		{"the walk the killed run's lines name reaches no record: the session's start has no parent class, entrypoint or terminal",
+			len(recs) == 2 && start.ParentClass == event.ParentUnknown && start.Entrypoint == event.EntrypointUnknown && !start.HasTTY},
 		{"they are keyed under this installation's K_session",
 			len(recs) == 2 && recs[1].ev.SessionKey == adapters.NewKeys(secret).Session(captureSession)},
 		{"the pending log is gone once they are parsed", errors.Is(pendingErr, fs.ErrNotExist)},
@@ -584,9 +603,10 @@ func TestPendingLog(t *testing.T) {
 	newHost := func(dirs home.Dirs) *adapterHost {
 		return newAdapterHost(&agent{dirs: dirs, log: slog.New(slog.DiscardHandler), problems: make(map[string]string)})
 	}
-	lineOf := func(t *testing.T, d inbox.Delivery) []byte {
+	// lineOf is d's line as h writes it, under h's own key.
+	lineOf := func(t *testing.T, h *adapterHost, d inbox.Delivery) []byte {
 		t.Helper()
-		b, err := heldLine(d)
+		b, err := h.heldLine(d)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -613,12 +633,12 @@ func TestPendingLog(t *testing.T) {
 			h := newHost(dirs)
 			d := call(t, "one")
 			settle := h.pend(d)
-			if got := read(t, pending); !bytes.Equal(got, lineOf(t, d)) {
+			if got := read(t, pending); !bytes.Equal(got, lineOf(t, h, d)) {
 				t.Errorf("before the journal stored it, the file holds %q", got)
 			}
 			settle(true)
 			h.donePending(false)
-			if got := read(t, pending); !bytes.Equal(got, lineOf(t, d)) {
+			if got := read(t, pending); !bytes.Equal(got, lineOf(t, h, d)) {
 				t.Errorf("while the call waits in the queue, the file holds %q", got)
 			}
 		}},
@@ -627,7 +647,7 @@ func TestPendingLog(t *testing.T) {
 			d := call(t, "one")
 			settle := h.pend(d)
 			h.donePending(false)
-			if got := read(t, pending); !bytes.Equal(got, lineOf(t, d)) {
+			if got := read(t, pending); !bytes.Equal(got, lineOf(t, h, d)) {
 				t.Errorf("the file holds %q", got)
 			}
 			settle(true)
@@ -657,7 +677,8 @@ func TestPendingLog(t *testing.T) {
 			}
 		}},
 		{"a start moves the calls a killed run left pending to the end of held.jsonl", func(t *testing.T, dirs home.Dirs, pending string) {
-			held, left := lineOf(t, call(t, "held")), lineOf(t, call(t, "left"))
+			earlier := newHost(dirs)
+			held, left := lineOf(t, earlier, call(t, "held")), lineOf(t, earlier, call(t, "left"))
 			if err := os.WriteFile(dirs.Held(), held, 0o600); err != nil {
 				t.Fatal(err)
 			}
@@ -673,7 +694,7 @@ func TestPendingLog(t *testing.T) {
 			}
 		}},
 		{"when the move fails, this run empties the file only back to what the killed run left, and keeps it", func(t *testing.T, dirs home.Dirs, pending string) {
-			left := lineOf(t, call(t, "left"))
+			left := lineOf(t, newHost(dirs), call(t, "left"))
 			if err := os.WriteFile(pending, left, 0o600); err != nil {
 				t.Fatal(err)
 			}
@@ -700,6 +721,134 @@ func TestPendingLog(t *testing.T) {
 			dirs := home.Dirs{Data: dir, Config: dir, Runtime: dir}
 			c.run(t, dirs, dirs.Held()+pendingSuffix)
 		})
+	}
+}
+
+// TestHeldLines checks what a line of held.jsonl reads back as: the call
+// whole with how it came on a line this run wrote, and the call alone, as
+// a spooled one reads, on any other (D-spool-via).
+func TestHeldLines(t *testing.T) {
+	at := time.Date(2026, 11, 20, 9, 0, 0, 0, time.UTC)
+	self := inbox.Proc{PID: 4242, Name: "pairtime", Start: at}
+	newHost := func() *adapterHost {
+		return newAdapterHost(&agent{log: slog.New(slog.DiscardHandler), problems: make(map[string]string)})
+	}
+	call := func(t *testing.T, prompt string) inbox.Delivery {
+		return inbox.Delivery{
+			Message: hookMessage(t, "UserPromptSubmit", `{"session_id":"s1","prompt":"`+prompt+`"}`, self, at),
+			Via:     inbox.ViaSocket, PeerPID: 4242,
+			Walk: []platform.Proc{{PID: 4242, PPID: 300, Name: "pairtime", Start: at},
+				{PID: 300, PPID: 200, Name: "claude", Start: at.Add(-time.Minute)}},
+			EventVia: event.ViaHook, Harness: event.HarnessClaudeCode,
+			Received: clock.Stamp{Wall: at.Add(time.Second), Mono: 5_000, BootID: "boot-1"},
+		}
+	}
+	lineOf := func(t *testing.T, h *adapterHost, d inbox.Delivery) []byte {
+		t.Helper()
+		b, err := h.heldLine(d)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return b
+	}
+	entryOf := func(t *testing.T, line []byte) heldEntry {
+		t.Helper()
+		var e heldEntry
+		if err := json.Unmarshal(line, &e); err != nil {
+			t.Fatal(err)
+		}
+		return e
+	}
+	// asSpooled checks that got is d's call read as the spool's lines are:
+	// via the inbox, with no walk, pid or verdict, and stamped by the read,
+	// between from and to.
+	asSpooled := func(t *testing.T, got, d inbox.Delivery, from, to time.Time) {
+		t.Helper()
+		if got.ID != d.ID || !bytes.Equal(got.Body, d.Body) {
+			t.Error("the call itself didn't come back whole")
+		}
+		if got.Via != inbox.ViaInbox || got.Walk != nil || got.PeerPID != 0 || got.EventVia != "" || got.Harness != "" {
+			t.Errorf("via %q, walk %v, peer pid %d, event via %q, harness %q: want the inbox's, and none of the rest",
+				got.Via, got.Walk, got.PeerPID, got.EventVia, got.Harness)
+		}
+		if w := got.Received.Wall; w.Before(from) || w.After(to) {
+			t.Errorf("stamped %v, want the read's own time, between %v and %v", w, from, to)
+		}
+	}
+	cases := []struct {
+		name string
+		run  func(t *testing.T, h *adapterHost)
+	}{
+		{"a line this run wrote keeps its via, the agent's walk, the sender's pid and the agent's stamp", func(t *testing.T, h *adapterHost) {
+			d := call(t, "one")
+			got, ok := h.readHeld(lineOf(t, h, d))
+			if !ok {
+				t.Fatal("the line didn't read")
+			}
+			if got.ID != d.ID || got.Via != d.Via || got.PeerPID != d.PeerPID || got.EventVia != d.EventVia || got.Harness != d.Harness {
+				t.Errorf("got %+v, want %+v", got, d)
+			}
+			if !slices.EqualFunc(got.Walk, d.Walk, func(a, b platform.Proc) bool { return a.ID() == b.ID() && a.Name == b.Name }) {
+				t.Errorf("walk %v, want %v", got.Walk, d.Walk)
+			}
+			if !got.Received.Wall.Equal(d.Received.Wall) || got.Received.Mono != d.Received.Mono || got.Received.BootID != d.Received.BootID {
+				t.Errorf("stamp %+v, want %+v", got.Received, d.Received)
+			}
+		}},
+		{"a line an earlier run wrote, under its own key, reads as a spooled call", func(t *testing.T, h *adapterHost) {
+			d := call(t, "one")
+			line := lineOf(t, newHost(), d)
+			from := time.Now()
+			got, ok := h.readHeld(line)
+			if !ok {
+				t.Fatal("the line didn't read")
+			}
+			asSpooled(t, got, d, from, time.Now())
+		}},
+		{"a line whose call was changed after it was written reads as a spooled call", func(t *testing.T, h *adapterHost) {
+			d := call(t, "one")
+			d.Via = inbox.ViaPipe
+			line := bytes.Replace(lineOf(t, h, d), []byte(`"via":"pipe"`), []byte(`"via":"socket"`), 1)
+			from := time.Now()
+			got, ok := h.readHeld(line)
+			if !ok {
+				t.Fatal("the line didn't read")
+			}
+			asSpooled(t, got, d, from, time.Now())
+		}},
+		{"a MAC moved onto another call reads as a spooled call", func(t *testing.T, h *adapterHost) {
+			one, two := call(t, "one"), call(t, "two")
+			line, err := json.Marshal(heldEntry{Call: entryOf(t, lineOf(t, h, two)).Call, MAC: entryOf(t, lineOf(t, h, one)).MAC})
+			if err != nil {
+				t.Fatal(err)
+			}
+			from := time.Now()
+			got, ok := h.readHeld(line)
+			if !ok {
+				t.Fatal("the line didn't read")
+			}
+			asSpooled(t, got, two, from, time.Now())
+		}},
+		{"a line written by hand, with no MAC, reads as a spooled call", func(t *testing.T, h *adapterHost) {
+			d := call(t, "one")
+			line := []byte(`{"call":` + string(entryOf(t, lineOf(t, h, d)).Call) + `}`)
+			from := time.Now()
+			got, ok := h.readHeld(line)
+			if !ok {
+				t.Fatal("the line didn't read")
+			}
+			asSpooled(t, got, d, from, time.Now())
+		}},
+		{"a line that holds no call is no call", func(t *testing.T, h *adapterHost) {
+			for _, line := range []string{`not json`, `{"mac":"00"}`, `{"call":{"message":"x"},"mac":"00"}`, `{"call":null}`} {
+				if _, ok := h.readHeld([]byte(line)); ok {
+					t.Errorf("%s read as a call", line)
+				}
+			}
+		}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) { c.run(t, newHost()) })
 	}
 }
 
