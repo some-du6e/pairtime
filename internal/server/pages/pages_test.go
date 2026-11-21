@@ -151,12 +151,8 @@ func TestPrivacyNotice(t *testing.T) {
 			want: []string{"This notice isn&#39;t final.", "takes no sign-ups except test accounts for the people who run it", "The controller here is <strong>[not named yet]</strong>.", "contact <strong>[not named yet]</strong>."},
 		},
 		{
-			name: "the notice says what encryption keeps the prompts from, and then that hook calls wait unencrypted, where apps running as you can read them, until they are read into the ledger (D-held-calls-inbox-class)",
-			want: []string{
-				"your file paths. That keeps them from other people who use this computer under their own account",
-				"It doesn&#39;t protect them from malware running as you. pairtime doesn&#39;t encrypt the hook calls your AI tool sends it until it has read them into its ledger. They wait in pairtime&#39;s folder, where other accounts on this computer can&#39;t open them but any app running as you can, a sync app included.",
-			},
-			notWant: []string{"until the agent takes it in"},
+			name: "the notice says a hook call can wait unencrypted until the agent takes it in, as the held calls do (D-held-calls-inbox-class)",
+			want: []string{"The exception is a hook call that arrives while pairtime&#39;s agent isn&#39;t running or hasn&#39;t opened its keys yet. It waits unencrypted in pairtime&#39;s folder, which only you can read, until the agent takes it in."},
 		},
 		{
 			name:    "a named controller and contact replace their placeholders and the warning",
