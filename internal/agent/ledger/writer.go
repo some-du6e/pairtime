@@ -851,7 +851,6 @@ func (w *Writer) seal() (Batch, bool, error) {
 		// again, so the batch isn't sealed in the mode from before the note.
 	}
 	if w.online != nil {
-		seen := w.momentNow()
 		switch {
 		case online && (w.local || w.seen):
 			// config.toml says online, and no note came since it was read: a
@@ -859,12 +858,11 @@ func (w *Writer) seal() (Batch, bool, error) {
 			// ended unnoted, by now, so an event made before now may have
 			// come in it. The batch's own records keep their taint. Without
 			// Online, only NoteMode ends a stretch.
-			w.until.raise(seen)
+			w.until.raise(w.momentNow())
 			w.local, w.seen = false, false
 		case !online:
-			// config.toml said local-only just now: an event made by now,
-			// which reaches the writer later, came while it did.
-			w.until.raise(seen.next())
+			// config.toml says local-only, as the watch may not have noted:
+			// the stretch ends at the next note or read that says online.
 			w.seen = true
 		}
 	}

@@ -43,20 +43,6 @@ func momentAt(at time.Time, s clock.Stamp) moment {
 	return m
 }
 
-// next is the moment just after m, by each clock it has: a bound that also
-// holds an event made at m.
-func (m moment) next() moment {
-	n := m
-	n.wall++
-	if n.run > 0 {
-		n.run++
-	}
-	if n.os > 0 {
-		n.os++
-	}
-	return n
-}
-
 // raise moves m on to n by each clock where n is later. An OS reading of
 // another boot than m's replaces m's, since only one boot runs at a time
 // and n's is the newer.
