@@ -16,7 +16,7 @@ A change is done when every workflow its PR started is green. A WP marked "Race:
 | Workflow | What it runs | When |
 |---|---|---|
 | ci.yml | the one Linux job: lint, `go test ./...`, the seven-target cross-compile with the 15 MB client budget, and the license, oracle, provenance and score-regression guards | every PR, pushes to main |
-| platform.yml | `go test` of the platform packages on Windows and macOS, and the desktop tests on Linux | PRs touching its paths, release tags |
+| platform.yml | `go test` of the platform packages on Windows and macOS, and the desktop tests on Linux, among them the end-to-end rehearsal (internal/rehearsal) against navikt/mock-oauth2-server | PRs touching its paths, release tags |
 | footprint.yml | the release-built agent idle on Windows: working set under 25 MB, CPU time under 0.1% of wall time; then 200 warm `pairtime hook` calls and 200 of an empty Go program, timed around each process, with the hook's p95 at most 10 ms over the empty program's and at most 50 ms | PRs touching internal/agent, internal/platform/windows, cmd/pairtime, go.mod or go.sum (3 minutes idle); daily, 03:30 UTC, and release tags (10 minutes) |
 | nightly.yml | `go test -race` over internal/agent and internal/server, and 60 s of fuzzing on ingest's free-text firewall | daily, 03:00 UTC |
 | postgres.yml | the server tests on Postgres 18 as well as SQLite | PRs touching its paths, the packages that hold SQL; daily, 03:30 UTC |
