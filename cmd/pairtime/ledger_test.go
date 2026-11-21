@@ -118,20 +118,28 @@ func (r *ledgerRig) seal(t *testing.T) {
 	}
 }
 
-// sealed returns every sealed record of the ledger, by seq, through the
-// writer's own reader, which knows nothing of ledger show.
-func (r *ledgerRig) sealed(t *testing.T) map[uint64]ledger.Record {
+// held is every segment file of the ledger, end to end, and the device
+// id of its chain: what each printed record is checked against.
+func (r *ledgerRig) held(t *testing.T) ([]byte, string) {
 	t.Helper()
-	out := map[uint64]ledger.Record{}
-	if err := agentledger.ReadBatches(r.h.dirs().Ledger(), 1, func(b agentledger.Batch) error {
-		for _, rec := range b.Records {
-			out[rec.Header.Seq()] = rec
-		}
-		return nil
-	}); err != nil {
+	dir := r.h.dirs().Ledger()
+	chain, err := agentledger.ReadChain(dir)
+	if err != nil {
 		t.Fatal(err)
 	}
-	return out
+	names, err := filepath.Glob(filepath.Join(dir, "*.seg"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var all []byte
+	for _, n := range names {
+		b, err := os.ReadFile(n)
+		if err != nil {
+			t.Fatal(err)
+		}
+		all = append(all, b...)
+	}
+	return all, chain.DeviceID
 }
 
 // parseShown reads ledger show's output back into records, with each
@@ -190,44 +198,49 @@ func TestLedgerShow(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(r.h.dirs().Ledger(), "2026-11-25.seg")); err != nil {
 		t.Fatalf("the test's records don't span two UTC segments: %v", err)
 	}
+	files, device := r.held(t)
 
 	tests := []struct {
 		name        string
-		args        []string
+		day         string
 		wantSeqs    []uint64
 		wantBatches []uint64
 		wantStderr  string
+		wantHas     []string
+		wantNot     []string
 	}{
 		{
-			name:        "a day's records are those whose time is on the local day, from both UTC segments it spans, sealed or not",
-			args:        []string{"ledger", "show", "--day", "2026-11-24"},
+			name:        "a day's records are those whose time is on the local day, from both UTC segments it spans, sealed or not, and the agent's answer shows as its numbers and commitment, never its text",
+			day:         "2026-11-24",
 			wantSeqs:    []uint64{morning, answer, late, unsealed},
 			wantBatches: []uint64{1, 1, 1, 0},
 			wantStderr:  "4 records on Tuesday, November 24.\n",
+			wantHas:     []string{`"type":"agent.output"`, `"c":{`, `"type":"os.presence"`},
+			wantNot:     []string{"nav", "footer"},
 		},
 		{
 			name:        "the day before holds only its own record, though it was written in the next day's UTC segment",
-			args:        []string{"ledger", "show", "--day", "2026-11-23"},
+			day:         "2026-11-23",
 			wantSeqs:    []uint64{before},
 			wantBatches: []uint64{1},
 			wantStderr:  "1 record on Monday, November 23.\n",
 		},
 		{
 			name:        "the next day starts at its local midnight",
-			args:        []string{"ledger", "show", "--day", "2026-11-25"},
+			day:         "2026-11-25",
 			wantSeqs:    []uint64{after},
 			wantBatches: []uint64{1},
 			wantStderr:  "1 record on Wednesday, November 25.\n",
 		},
 		{
 			name:       "a day with no records prints nothing and says so",
-			args:       []string{"ledger", "show", "--day", "2026-11-20"},
+			day:        "2026-11-20",
 			wantStderr: "No records on Friday, November 20.\n",
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			code, stdout, stderr := runCmd(tt.args...)
+			code, stdout, stderr := runCmd("ledger", "show", "--day", tt.day)
 			if code != 0 || stderr != tt.wantStderr {
 				t.Fatalf("ledger show = %d, stderr %q; want 0 and %q", code, stderr, tt.wantStderr)
 			}
@@ -235,45 +248,31 @@ func TestLedgerShow(t *testing.T) {
 			var seqs []uint64
 			for _, rec := range recs {
 				seqs = append(seqs, rec.Header.Seq())
+				// Each line parses back into a record the ledger holds,
+				// header and body byte for byte, that checks out against
+				// its chain's device id.
+				if !bytes.Contains(files, append(rec.Header[:], rec.Body...)) {
+					t.Errorf("record %d printed as %x %s, which no segment holds", rec.Header.Seq(), rec.Header[:], rec.Body)
+				}
+				if err := ledger.CheckBody(device, rec.Header, rec.Body); err != nil {
+					t.Errorf("record %d's printed header and body don't check out: %v", rec.Header.Seq(), err)
+				}
 			}
 			if !slices.Equal(seqs, tt.wantSeqs) || !slices.Equal(batches, tt.wantBatches) {
 				t.Errorf("ledger show printed records %v in batches %v, want %v in %v", seqs, batches, tt.wantSeqs, tt.wantBatches)
 			}
+			for _, w := range tt.wantHas {
+				if !strings.Contains(stdout, w) {
+					t.Errorf("ledger show doesn't print %s:\n%s", w, stdout)
+				}
+			}
+			for _, w := range tt.wantNot {
+				if strings.Contains(stdout, w) {
+					t.Errorf("ledger show prints %q:\n%s", w, stdout)
+				}
+			}
 		})
 	}
-
-	t.Run("each line parses back into the record the ledger holds, header and body byte for byte", func(t *testing.T) {
-		_, stdout, _ := runCmd("ledger", "show", "--day", "2026-11-24")
-		shown, _ := parseShown(t, stdout)
-		r.seal(t) // so the writer's own reader has the unsealed record too
-		held := r.sealed(t)
-		if len(shown) == 0 {
-			t.Fatal("ledger show printed nothing")
-		}
-		for _, rec := range shown {
-			want, ok := held[rec.Header.Seq()]
-			if !ok {
-				t.Errorf("ledger show printed record %d, which the ledger doesn't hold", rec.Header.Seq())
-				continue
-			}
-			if rec.Header != want.Header || !bytes.Equal(rec.Body, want.Body) {
-				t.Errorf("record %d printed as\n%x %s\nbut the ledger holds\n%x %s", rec.Header.Seq(), rec.Header[:], rec.Body, want.Header[:], want.Body)
-			}
-			if _, err := ledger.ParseBody(rec.Body); err != nil {
-				t.Errorf("record %d's printed body doesn't parse as a body: %v", rec.Header.Seq(), err)
-			}
-		}
-	})
-
-	t.Run("the agent's answer shows as its numbers and its commitment, never its text", func(t *testing.T) {
-		_, stdout, _ := runCmd("ledger", "show", "--day", "2026-11-24")
-		if strings.Contains(stdout, "nav") || strings.Contains(stdout, "footer") {
-			t.Errorf("ledger show printed the answer's text:\n%s", stdout)
-		}
-		if !strings.Contains(stdout, `"type":"agent.output"`) || !strings.Contains(stdout, `"c":{`) {
-			t.Errorf("ledger show didn't print the answer's record with its commitment:\n%s", stdout)
-		}
-	})
 }
 
 func TestLedgerShowUsage(t *testing.T) {

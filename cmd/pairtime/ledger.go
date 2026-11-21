@@ -23,21 +23,24 @@ const ledgerUsage = `Usage: pairtime ledger show [--day YYYY-MM-DD]
 Prints every record pairtime's ledger holds for one day, today unless
 --day names another, one record per line in plain JSON (DESIGN 8.8). A
 day is this computer's own, from midnight to midnight, and a record is
-on it when the time it describes is. Records hold what pairtime saw,
-never what you typed or what the agent wrote: those stay in their own
-store on this computer.
+on it when the time it describes is, though it may have been written
+later. Records hold numbers and keys, never what you typed or what the
+agent wrote, which pairtime doesn't put in its ledger.
 
-Each line has the record's number (seq), what it holds (type), the keys
-of its project and session, the batch that seals it (0 while none does
-yet), and its body exactly as the ledger stores it, so
+Each line has the record's number (seq), what it holds (type), the
+digests of its project's and session's keys, the batch that seals it,
+and its body exactly as the ledger stores it, so
 
   pairtime ledger show --day 2026-11-24 > records.jsonl
 
-keeps them. Standard error says how many there were.
+keeps them. Batch 0 is a record no batch seals yet, which a crash can
+still take back. Records written under an earlier device key, as before
+a restore, aren't shown. Standard error says how many there were.
 
 Exit status:
-  0  the records were printed, if the day had any
-  1  pairtime couldn't read its ledger
+  0  the day's records were printed, if it had any
+  1  pairtime couldn't read its ledger, or some of it is damaged; the
+     records it could read are printed
   2  usage error
 `
 
@@ -105,13 +108,9 @@ func runLedger(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	out := bufio.NewWriter(stdout)
-	n, err := showRecords(out, dirs.Ledger(), start.UnixMilli(), end.UnixMilli())
+	n, err := showRecords(out, dirs.Ledger(), start, end)
 	if ferr := out.Flush(); err == nil {
 		err = ferr
-	}
-	if err != nil {
-		fmt.Fprintf(stderr, "pairtime ledger show: can't read the ledger: %v\n", err)
-		return 1
 	}
 	switch n {
 	case 0:
@@ -121,14 +120,23 @@ func runLedger(args []string, stdout, stderr io.Writer) int {
 	default:
 		fmt.Fprintf(stderr, "%d records on %s.\n", n, dayTitle(day))
 	}
+	if err != nil {
+		sayStoreFailure(stderr, err)
+		return 1
+	}
 	return 0
 }
 
 // showRecords writes each record of the ledger in dir whose time is in
-// [from, to), Unix ms, one per line, and returns how many it wrote.
-func showRecords(w io.Writer, dir string, from, to int64) (int, error) {
+// [start, end), one per line, and returns how many it wrote. A record is
+// written at its time or later, by a clock that may be off from the one
+// that gave its time by less than a day, so the segments of UTC days more
+// than a day before start's can't hold one and aren't read.
+func showRecords(w io.Writer, dir string, start, end time.Time) (int, error) {
+	from, to := start.UnixMilli(), end.UnixMilli()
+	first := start.Add(-24 * time.Hour).UTC().Format(time.DateOnly)
 	n := 0
-	err := agentledger.ReadRecords(dir, func(s agentledger.Stored) error {
+	err := agentledger.ReadRecords(dir, first, func(s agentledger.Stored) error {
 		t, err := recordTime(s.Record)
 		if err != nil {
 			return fmt.Errorf("record %d: %w", s.Record.Header.Seq(), err)
