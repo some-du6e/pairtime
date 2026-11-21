@@ -122,6 +122,34 @@ func ReadBatches(dir string, from uint64, fn func(Batch) error) error {
 	return nil
 }
 
+// FirstHeld returns the number of the first sealed batch from from on whose
+// records the ledger in dir still holds, by whether the segment its first
+// record is in is there, or 0 when there is none. Retention deletes whole
+// segments, the oldest first (DESIGN 4.4), and damage can take one out, so
+// a reader that starts with no place, or meets a batch that doesn't read,
+// goes on from here (decision E-sm-1.1-seq-gaps). A from of 0 counts from
+// batch 1.
+func FirstHeld(dir string, from uint64) (uint64, error) {
+	bf, err := readBatchesFile(filepath.Join(dir, batchesName))
+	if err != nil {
+		return 0, err
+	}
+	days, err := segments(dir)
+	if err != nil {
+		return 0, err
+	}
+	held := make(map[string]bool, len(days))
+	for _, d := range days {
+		held[d] = true
+	}
+	for b := max(from, 1); b <= uint64(len(bf.rows)); b++ {
+		if held[bf.rows[b-1].Start.Seg] {
+			return b, nil
+		}
+	}
+	return 0, nil
+}
+
 // readSegment calls fn with each frame of the segment name from offset off
 // on. more is false when it met a frame that isn't whole, after which
 // nothing in the ledger is.

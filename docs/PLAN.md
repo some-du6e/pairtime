@@ -434,10 +434,11 @@ Exit check: `e2e-install.yml` green on three runners; SM 6.1, 6.2, 6.3, 6.4 and 
 ### WP-IN2. `pairtime install` and `uninstall`
 
 - Depends on: WP-IN1, WP-AD2.
-- Touches: `cmd/pairtime/`, `internal/install/consent/`.
+- Touches: `cmd/pairtime/`, `internal/install/consent/`, `internal/agent/config/`.
 - Build: DESIGN 5.9 steps 1 to 4 and 9 for the alpha: place the binary at the per-user path (CP 7), detect harnesses through each adapter's `Detect`, show one consent screen in the terminal with every planned change as a diff and its cost line where DESIGN gives one, let the teen untick any item (`--yes` for scripts), write autostart, start the agent, merge hooks, set local-only mode, and run lookback if WP-AD3 is present. `uninstall` reverses every step. The WakaTime line, the AGENTS.md entry, sign-in, the age signal and the consent cards come later (WP-IN3, WP-AD18, WP-SV3, WP-PV3, WP-UI3).
 - CI checks: snapshot tests of the consent screen for three sets of detected harnesses; on all three runners in `platform.yml`, in a temporary `HOME` or `USERPROFILE`, install then uninstall leaves the file tree identical to the snapshot taken before, and no agent process remains.
 - Oracle: a file-system diff against the pre-install snapshot.
+- Left by WP-AG4: `pairtime install --calibration-volunteer`, which WP-AG4's Build asks for, writes `display.shadow = true` into config.toml's `[display]`, so from 2026-12-01 a volunteer's views hide their time as decision D-shadow-scope says; other alpha testers get it off. This WP also ends it at the scoring freeze without a hand edit: `internal/agent/config`'s `Parse` reads `display.shadow` as off once `pkg/score/VERSION` is 1.0.0 or later, which the freeze ships (WP-CA3; DESIGN 6.7 step 4). The agent and the terminal views (`pairtime today`, `recap` and `statusline`) both read config.toml through it (`config.Load`), so they end shadow together. WP-AG4 added the setting and what it hides, and left the flag because `pairtime install` didn't exist yet.
 
 ### WP-RL1. Release pipeline
 

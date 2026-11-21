@@ -181,7 +181,7 @@ func TestCarry(t *testing.T) {
 				if s == nil || s.Start.T != 100 || s.Prompt.T != 400 || s.Output.T != 600 || s.Stop.T != 500 || s.Last != 600 {
 					t.Errorf("session carry %+v", s)
 				}
-				if got := len(c.records(nil)); got != 4 {
+				if got := len(c.records(nil, 0, testGaps)); got != 4 {
 					t.Errorf("the carry gives %d records, want 4", got)
 				}
 			},
@@ -248,10 +248,190 @@ func TestCarry(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			var c carry
 			for _, e := range tt.fold {
-				c.fold(e)
+				c.fold(e, testGaps)
 			}
 			c.prune(tt.from)
 			tt.check(t, c)
+		})
+	}
+}
+
+// testGaps are the runs' gaps of the newest parameter table: BUCKET_TTL_S
+// in a hooked session, 2 h, and the scorer's reach elsewhere, 20 min.
+var testGaps = gapsOf(testTable())
+
+func TestCarryRuns(t *testing.T) {
+	const h, m = 3600 * 1000, 60 * 1000
+	via := func(v event.Via, e event.Event) event.Event {
+		e.Via = v
+		return e
+	}
+	prompt := func(at int64, seq uint64, key string) event.Event {
+		return via(event.ViaHook, ev(at, seq, "s_1", &event.PromptSubmit{TurnKey: key}))
+	}
+	tool := func(at int64, seq uint64) event.Event {
+		return via(event.ViaHook, ev(at, seq, "s_1", &event.AgentTool{}))
+	}
+	// dated returns the time records gives each of the session's records,
+	// by seq.
+	dated := func(c *carry, from int64) map[uint64]int64 {
+		out := map[uint64]int64{}
+		for _, e := range c.records(nil, from, testGaps) {
+			if e.SessionKey == "s_1" {
+				out[e.Seq] = e.T
+			}
+		}
+		return out
+	}
+	tests := []struct {
+		name  string
+		fold  []event.Event
+		from  int64
+		check func(t *testing.T, c *carry, s *sessionCarry)
+	}{
+		{
+			name: "a hooked turn's run keeps its latest tool call, at its own time, and its prompt goes no later than that",
+			fold: []event.Event{prompt(0, 1, "t_1"), tool(90*m, 2), tool(3*h, 3), tool(270*m, 4)},
+			from: 5 * h,
+			check: func(t *testing.T, c *carry, s *sessionCarry) {
+				if s.Agent == nil || s.Agent.T != 270*m || s.Cut || s.Stopped {
+					t.Fatalf("session carry %+v, want the 4:30 tool call as the run's latest", s)
+				}
+				if got := dated(c, 5*h); got[4] != 270*m || got[1] != 4*h {
+					t.Errorf("dated %v, want the tool call at 4:30 and the prompt an hour before the window", got)
+				}
+			},
+		},
+		{
+			name: "a hooked turn's run whose last record is more than an hour before the window has its prompt dated with that record",
+			fold: []event.Event{prompt(0, 1, "t_1"), tool(90*m, 2), tool(3*h, 3)},
+			from: 4*h + 30*m,
+			check: func(t *testing.T, c *carry, s *sessionCarry) {
+				if got := dated(c, 4*h+30*m); got[3] != 3*h || got[1] != 3*h {
+					t.Errorf("dated %v, want the prompt and the tool call both at 3:00", got)
+				}
+			},
+		},
+		{
+			name: "a silence longer than BUCKET_TTL_S ends a hooked turn's run for good, and its records go further back than any gap",
+			fold: []event.Event{prompt(0, 1, "t_1"), tool(h, 2), tool(3*h+1, 3), tool(3*h+10*m, 4)},
+			from: 4 * h,
+			check: func(t *testing.T, c *carry, s *sessionCarry) {
+				if !s.Cut || s.Agent == nil || s.Agent.T != h {
+					t.Fatalf("session carry %+v, want the run cut after the 1:00 tool call", s)
+				}
+				for seq, at := range dated(c, 4*h) {
+					if at != 2*h-1 {
+						t.Errorf("record %d is dated %d, want %d, longer than BUCKET_TTL_S before the window", seq, at, 2*h-1)
+					}
+				}
+			},
+		},
+		{
+			name: "a hooked turn with no record for BUCKET_TTL_S before the window is over",
+			fold: []event.Event{prompt(0, 1, "t_1"), tool(h, 2)},
+			from: 3*h + 1,
+			check: func(t *testing.T, c *carry, s *sessionCarry) {
+				for seq, at := range dated(c, 3*h+1) {
+					if at != h {
+						t.Errorf("record %d is dated %d, want %d", seq, at, h)
+					}
+				}
+			},
+		},
+		{
+			name: "a side-door turn's records go within the scorer's reach of its latest, since a longer silence ends its run",
+			fold: []event.Event{
+				via(event.ViaPlugin, ev(0, 1, "s_1", &event.PromptSubmit{TurnKey: "t_1"})),
+				via(event.ViaPlugin, ev(10*m, 2, "s_1", &event.AgentOutput{TurnKey: "t_1"})),
+				via(event.ViaPlugin, ev(25*m, 3, "s_1", &event.AgentOutput{TurnKey: "t_1"})),
+			},
+			from: 40 * m,
+			check: func(t *testing.T, c *carry, s *sessionCarry) {
+				if s.Native || s.Cut || s.Agent == nil || s.Agent.T != 25*m {
+					t.Fatalf("session carry %+v, want a side-door run going on from its 0:25 output", s)
+				}
+				if got := dated(c, 40*m); got[3] != 25*m || got[1] != 5*m {
+					t.Errorf("dated %v, want the prompt at 0:05 and the last output at 0:25", got)
+				}
+			},
+		},
+		{
+			name: "a stop ends the run, and the session's records go back to the usual dating",
+			fold: []event.Event{prompt(0, 1, "t_1"), tool(h, 2), via(event.ViaHook, ev(2*h, 3, "s_1", &event.AgentStop{TurnKey: "t_1"}))},
+			from: 10 * h,
+			check: func(t *testing.T, c *carry, s *sessionCarry) {
+				if !s.Stopped || s.running() {
+					t.Fatalf("session carry %+v, want the turn stopped", s)
+				}
+				for seq, at := range dated(c, 10*h) {
+					if at != 9*h {
+						t.Errorf("record %d is dated %d, want carryGraceMS before the window", seq, at)
+					}
+				}
+			},
+		},
+		{
+			name: "the turn's stop ends it after a silence cut its run, so the session's records, a continuation's among them, go back to the usual dating",
+			fold: []event.Event{
+				prompt(0, 1, "t_1"), tool(h, 2), tool(3*h+10*m, 3),
+				via(event.ViaHook, ev(4*h, 4, "s_1", &event.AgentStop{TurnKey: "t_1"})),
+				via(event.ViaHook, ev(5*h, 5, "s_1", &event.AgentOutput{TurnKey: "t_1b"})),
+			},
+			from: 10 * h,
+			check: func(t *testing.T, c *carry, s *sessionCarry) {
+				if !s.Cut || !s.Stopped || s.running() {
+					t.Fatalf("session carry %+v, want the cut turn stopped", s)
+				}
+				for seq, at := range dated(c, 10*h) {
+					if at != 9*h {
+						t.Errorf("record %d is dated %d, want carryGraceMS before the window", seq, at)
+					}
+				}
+			},
+		},
+		{
+			name: "a later prompt of another turn starts a run of its own",
+			fold: []event.Event{prompt(0, 1, "t_1"), tool(h, 2), tool(4*h, 3), prompt(5*h, 4, "t_2")},
+			from: 5*h + 30*m,
+			check: func(t *testing.T, c *carry, s *sessionCarry) {
+				if s.Cut || s.Agent != nil || turnKey(s.Prompt) != "t_2" {
+					t.Errorf("session carry %+v, want t_2's run from its prompt", s)
+				}
+			},
+		},
+		{
+			name: "a record folded out of turn changes nothing",
+			fold: []event.Event{prompt(0, 1, "t_1"), tool(h, 2), tool(2*h, 3), tool(30*m, 4)},
+			from: 3 * h,
+			check: func(t *testing.T, c *carry, s *sessionCarry) {
+				if s.Agent == nil || s.Agent.T != 2*h || s.Cut {
+					t.Errorf("session carry %+v, want the 2:00 tool call as the run's latest", s)
+				}
+			},
+		},
+		{
+			name: "an output of another turn doesn't carry this turn's run on",
+			fold: []event.Event{prompt(0, 1, "t_1"), via(event.ViaHook, ev(h, 2, "s_1", &event.AgentOutput{TurnKey: "t_0"}))},
+			from: 2 * h,
+			check: func(t *testing.T, c *carry, s *sessionCarry) {
+				if s.Agent != nil {
+					t.Errorf("the run's latest is %+v, want none", s.Agent)
+				}
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var c carry
+			for _, e := range tt.fold {
+				c.fold(e, testGaps)
+			}
+			s := c.Sessions["s_1"]
+			if s == nil {
+				t.Fatal("the session isn't carried")
+			}
+			tt.check(t, &c, s)
 		})
 	}
 }

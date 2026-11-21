@@ -138,6 +138,9 @@ var harnesses = enum[Harness]{name: "harness", values: []Harness{
 	HarnessDevin, HarnessCline, HarnessOpenCode, HarnessOther, HarnessNone,
 }}
 
+// Harnesses returns every harness, HarnessNone last, in the schema's order.
+func Harnesses() []Harness { return slices.Clone(harnesses.values) }
+
 // StartKind says how a harness session began (session.start).
 type StartKind string
 
