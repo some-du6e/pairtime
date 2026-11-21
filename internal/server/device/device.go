@@ -286,28 +286,30 @@ ORDER BY CASE WHEN d.removed_at_ms IS NULL THEN 0 ELSE 1 END, COALESCE(d.linked_
 // the first removal left a tombstone or deleted the row, so a second
 // Remove, as from a double click, gets the first one's answer. That makes
 // an id no account has a no-op too. An id that belongs to another account
-// gets ErrNoDevice.
-func (s *Store) Remove(ctx context.Context, account, id string) error {
+// gets ErrNoDevice. It reports whether the id was account's device, removed
+// now or before, so a caller logs a removal only when there was one.
+func (s *Store) Remove(ctx context.Context, account, id string) (bool, error) {
 	nowMs := s.now().UnixMilli()
-	var other bool
+	var other, mine bool
 	err := s.w.Do(ctx, 1, func(ctx context.Context, tx writer.Tx) error {
 		owner, err := ownerOf(ctx, tx, id)
 		if err != nil {
 			return err
 		}
 		other = owner != "" && owner != account
-		if owner != account {
+		mine = owner == account
+		if !mine {
 			return nil
 		}
 		return unlink(ctx, tx, nowMs, `device_id = $1 AND user_id = $2`, id, account)
 	})
 	if err != nil {
-		return err
+		return false, err
 	}
 	if other {
-		return ErrNoDevice
+		return false, ErrNoDevice
 	}
-	return nil
+	return mine, nil
 }
 
 // RemoveSelf removes the device d, which Authenticate found, for the app

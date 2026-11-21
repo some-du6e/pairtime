@@ -47,7 +47,7 @@ const (
 	statusApproved = "approved"
 	statusDenied   = "denied"
 	// statusTaken is a code that an account other than the one its device
-	// id belongs to tried to approve.
+	// id belongs to approved or stopped.
 	statusTaken    = "taken"
 	statusRedeemed = "redeemed"
 )
@@ -60,7 +60,7 @@ var (
 	ErrDenied   = errors.New("device: access_denied")
 	ErrExpired  = errors.New("device: expired_token")
 	// ErrTaken means an account other than the one the code's device id
-	// belongs to tried to approve the code. The id stays with its account,
+	// belongs to approved or stopped the code. The id stays with its account,
 	// so the app has to sign in as a new device, with a new device id and
 	// key (D-device-account-binding).
 	ErrTaken = errors.New("device: device_taken")

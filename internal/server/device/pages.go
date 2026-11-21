@@ -395,7 +395,7 @@ func (s *Service) remove(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := f.Get("device_id")
-	err := s.store.Remove(r.Context(), sess.User.ID, id)
+	removed, err := s.store.Remove(r.Context(), sess.User.ID, id)
 	switch {
 	case errors.Is(err, ErrNoDevice):
 		http.Error(w, "Your account has no such device.", http.StatusNotFound)
@@ -405,7 +405,9 @@ func (s *Service) remove(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Something went wrong on this pairtime server, and nothing was removed. Try again in a minute.", http.StatusInternalServerError)
 		return
 	}
-	s.log.Info("removed a device", "user", sess.User.ID, "device", id)
+	if removed {
+		s.log.Info("removed a device", "user", sess.User.ID, "device", id)
+	}
 	http.Redirect(w, r, DevicesPath, http.StatusSeeOther)
 }
 
