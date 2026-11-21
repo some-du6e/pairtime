@@ -1005,7 +1005,10 @@ func (h *adapterHost) dropHeld(n int, err error) {
 // renames the file first, so calls held meanwhile go to a new one, and a
 // .replay file a crash left goes before it. A crash during a replay
 // replays the file again at the next start, so its records that were
-// sealed by then come out twice, never none.
+// sealed by then come out twice, never none. A .replay file that is parsed
+// but can't be deleted stops the replay for the run: the calls held behind
+// it wait for the next start, and calls taken in meanwhile are parsed
+// before them.
 func (h *adapterHost) replayHeld() bool {
 	name := h.a.dirs.Held()
 	replay := name + ".replay"
