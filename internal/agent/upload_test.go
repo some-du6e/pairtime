@@ -324,7 +324,8 @@ func TestLedgerMode(t *testing.T) {
 	}
 	record := func(t *testing.T, w *ledger.Writer) {
 		t.Helper()
-		if _, err := w.Checkpoint("p_test", uint64(time.Now().UnixMilli()), json.RawMessage(`{}`)); err != nil {
+		at := uint64(time.Now().UnixMilli()) / pkgledger.CheckpointMS * pkgledger.CheckpointMS
+		if _, err := w.Checkpoint("p_test", at, json.RawMessage(`{}`)); err != nil {
 			t.Fatal(err)
 		}
 	}
