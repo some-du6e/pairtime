@@ -9,10 +9,12 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"io/fs"
 	"maps"
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -22,6 +24,7 @@ import (
 	"github.com/some-du6e/pairtime/internal/agent/doctor"
 	"github.com/some-du6e/pairtime/internal/agent/home"
 	"github.com/some-du6e/pairtime/internal/agent/ipc"
+	"github.com/some-du6e/pairtime/internal/agent/keys"
 	"github.com/some-du6e/pairtime/internal/jsonschema"
 	"github.com/some-du6e/pairtime/internal/version"
 )
@@ -709,6 +712,127 @@ func TestDoctorReportSpan(t *testing.T) {
 				if strings.Contains(out, w) {
 					t.Errorf("the report has %q:\n%s", w, out)
 				}
+			}
+		})
+	}
+}
+
+// copyAsPairtime copies the test binary to pairtime, or pairtime.exe, in a
+// folder of its own: what install's hooks run, by name, so that
+// install.ReadClaudeHooks takes them for pairtime's.
+func copyAsPairtime(t *testing.T) string {
+	t.Helper()
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(exe)
+	if err != nil {
+		t.Fatal(err)
+	}
+	name := "pairtime"
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
+	dst := filepath.Join(t.TempDir(), name)
+	if err := os.WriteFile(dst, b, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return dst
+}
+
+// TestDoctorHookRoundTrip has doctor time real test calls of the hook that
+// Claude Code's settings run, a copy of this binary, which runs `pairtime
+// hook` (runEnv), and finds the calls went to doctor's own listener: none
+// reached the agent, and none was spooled for it.
+func TestDoctorHookRoundTrip(t *testing.T) {
+	h := newHome(t)
+	homeDir := t.TempDir()
+	t.Setenv("HOME", homeDir)
+	t.Setenv("USERPROFILE", homeDir)
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	exe := copyAsPairtime(t)
+	hooks := map[string]any{}
+	for _, ev := range []string{"SessionStart", "UserPromptSubmit", "Stop", "StopFailure", "Notification", "PermissionRequest",
+		"PostToolUse", "SubagentStart", "SubagentStop", "SessionEnd"} {
+		group := map[string]any{"hooks": []any{map[string]any{"type": "command", "command": exe,
+			"args": []string{"hook", "--harness", "claude_code", "--event", ev}}}}
+		if ev == "PostToolUse" {
+			group["matcher"] = "Edit|Write|Bash"
+		}
+		hooks[ev] = []any{group}
+	}
+	b, err := json.Marshal(map[string]any{"hooks": hooks})
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings := filepath.Join(homeDir, ".claude", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(settings), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(settings, b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// The hook processes run pairtime from the test binary.
+	t.Setenv(runEnv, ownArgs)
+	h.statusAgent(agentStatus())
+
+	checks, _ := doctorChecks(t)
+	tests := []struct {
+		name  string
+		check func(t *testing.T)
+	}{
+		{"the hook line is ok, with the time of the test calls", func(t *testing.T) {
+			if c := checks["hook.claude_code"]; c.Result != doctor.OK || !strings.Contains(c.Text, "a test call took") || !strings.Contains(c.Text, "the median of 3") {
+				t.Errorf("hook.claude_code is %+v", c)
+			}
+		}},
+		{"Claude Code's hooks bring the folder-trust hint", func(t *testing.T) {
+			if c := checks["trust.claude_code"]; c.Result != doctor.OK || !strings.Contains(c.Text, "trust dialog") {
+				t.Errorf("trust.claude_code is %+v", c)
+			}
+		}},
+		{"no test call was spooled for the agent, so none can reach its ledger", func(t *testing.T) {
+			if _, err := os.Stat(filepath.Join(h.dir, "inbox")); !errors.Is(err, fs.ErrNotExist) {
+				t.Errorf("the agent's inbox is there (%v): a test call was spooled for it", err)
+			}
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, tt.check)
+	}
+}
+
+func TestDoctorKeystoreLine(t *testing.T) {
+	tests := []struct {
+		name     string
+		setup    func(t *testing.T, dir string)
+		want     doctor.Result
+		wantText string
+	}{
+		{"with no device key yet the line warns that nothing is recorded", func(*testing.T, string) {}, doctor.Warn, "no device key yet"},
+		{"a device key in the key file warns with the keystore's own fallback warning", func(t *testing.T, dir string) {
+			if _, err := keys.Open(keys.Options{Dir: dir, Stores: []keys.Store{}}); err != nil {
+				t.Fatal(err)
+			}
+		}, doctor.Warn, "pairtime keeps its device key in a file that only your account has permission to read"},
+		{"a keystore.json that doesn't read fails", func(t *testing.T, dir string) {
+			if err := os.MkdirAll(filepath.Join(dir, "keys"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(dir, "keys", "keystore.json"), []byte("{"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}, doctor.Fail, "keystore.json, which says where the device key is, doesn't read"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := newDoctorHome(t)
+			tt.setup(t, h.dir)
+			h.statusAgent(agentStatus())
+			checks, _ := doctorChecks(t)
+			if c := checks["keystore"]; c.Result != tt.want || !strings.Contains(c.Text, tt.wantText) {
+				t.Errorf("keystore is %+v, want %s with %q", c, tt.want, tt.wantText)
 			}
 		})
 	}
