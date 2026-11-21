@@ -8,6 +8,7 @@ import (
 	"runtime"
 	"time"
 
+	"github.com/some-du6e/pairtime/internal/agent/hookpath"
 	"github.com/some-du6e/pairtime/internal/agent/inbox"
 	"github.com/some-du6e/pairtime/internal/agent/ipc"
 	"github.com/some-du6e/pairtime/internal/platform/clock"
@@ -74,6 +75,7 @@ func (a *agent) startIPC(opts Options) func() {
 		}
 	}()
 	kick <- struct{}{}
+	a.spoolKick.Store(&kick)
 	every := opts.DrainEvery
 	if every <= 0 {
 		every = drainEvery
@@ -86,6 +88,7 @@ func (a *agent) startIPC(opts Options) func() {
 	})
 
 	return func() {
+		a.spoolKick.Store(nil)
 		job.Stop()
 		close(stop)
 		<-drained
@@ -153,6 +156,35 @@ func (l *ipcListener) close() {
 	l.srv.Close()
 	<-l.served
 	l.srv, l.served = nil, nil
+}
+
+// spoolSlack is how long after its own stamp a hook call can still reach
+// the inbox's spool: pairtime hook reads stdin for up to StdinWait, and
+// spools the call when the agent's ack doesn't come within HookTimeout,
+// and a second covers the spool's write.
+const spoolSlack = hookpath.StdinWait + ipc.HookTimeout + time.Second
+
+// drainSoon has the inbox drained once spoolSlack has passed, rather than
+// at the next minute's drain, as the switch back online after a local-only
+// stretch asks (modes): a hook call made just before the switch that went
+// to the spool, its ack late, reaches the ledger writer within seconds of
+// it, before the server can take a batch sealed after the switch, so its
+// batch, sealed local-only by the call's own time, lands in the stretch's
+// run rather than stop the batch roots (ledger.Options.Waiting). Without a
+// drain running, as before startIPC, it does nothing: the first drain
+// comes as startIPC starts.
+func (a *agent) drainSoon() {
+	k := a.spoolKick.Load()
+	if k == nil || a.sched == nil {
+		return
+	}
+	kick := *k
+	a.sched.After("inbox.drain.soon", spoolSlack, func(time.Time) {
+		select {
+		case kick <- struct{}{}:
+		default: // a drain is already due
+		}
+	})
 }
 
 // drain moves what the inbox holds into the journal.

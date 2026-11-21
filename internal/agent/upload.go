@@ -119,6 +119,9 @@ func (a *agent) seeLocked(online bool) {
 	}
 	if online {
 		m.ended, m.os = time.Now(), clock.Now()
+		// A hook call made just before, that went to the spool, comes
+		// within seconds.
+		a.drainSoon()
 	}
 	m.local = !online
 	if a.state == nil {

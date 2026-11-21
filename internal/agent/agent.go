@@ -127,6 +127,9 @@ type agent struct {
 	// ipcSrv is the socket's or the pipe's server, nil while hooks can't
 	// reach the agent.
 	ipcSrv atomic.Pointer[ipc.Server]
+	// spoolKick asks the drain goroutine for a drain of the inbox while it
+	// runs (startIPC, drainSoon), and is nil otherwise.
+	spoolKick atomic.Pointer[chan struct{}]
 	// notifier shows the coach's notification when a work session ends
 	// (WP-OS8). The coach calls its Notify, and its UserPresent on unlock
 	// and resume (WP-CO1).

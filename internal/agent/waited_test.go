@@ -4,6 +4,7 @@ package agent
 
 import (
 	"bytes"
+	"context"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -371,6 +372,35 @@ func TestModesSeen(t *testing.T) {
 		if before.Online || !after.Online || !after.Back {
 			t.Errorf("the event in the link's second sealed online %v, and the next online %v, marked %v; want local-only, then online and marked",
 				before.Online, after.Online, after.Back)
+		}
+	})
+	t.Run("the end of a stretch asks for a drain of the inbox's spool within seconds, and a note that repeats online doesn't", func(t *testing.T) {
+		a, _ := newAgent(t, "online")
+		ctx, cancel := context.WithCancel(context.Background())
+		t.Cleanup(cancel)
+		go a.sched.Run(ctx)
+		kick := make(chan struct{}, 1)
+		a.spoolKick.Store(&kick)
+		see := func(online bool) {
+			a.modes.mu.Lock()
+			a.seeLocked(online)
+			a.modes.mu.Unlock()
+		}
+		kicked := func() bool {
+			select {
+			case <-kick:
+				return true
+			case <-time.After(spoolSlack + 2*time.Second):
+				return false
+			}
+		}
+		see(false)
+		see(true)
+		ended := kicked()
+		see(true)
+		repeated := kicked()
+		if !ended || repeated {
+			t.Errorf("a drain asked for at the stretch's end: %v, at a note that repeats online: %v; want true, false", ended, repeated)
 		}
 	})
 	t.Run("a stretch the last run saw going on, which state.json kept, lasts until the next start, so an event made before it is sealed local-only", func(t *testing.T) {
