@@ -42,6 +42,26 @@ type claims struct {
 	SlackID            *string `json:"slack_id"`
 	VerificationStatus *string `json:"verification_status"`
 	YSWSEligible       *bool   `json:"ysws_eligible"`
+
+	// GivenName and Nickname come with the profile scope. HCA sends its
+	// first name as both, beside name and family_name, which pairtimed
+	// doesn't read.
+	GivenName profileName `json:"given_name"`
+	Nickname  profileName `json:"nickname"`
+}
+
+// profileName is a name claim. A sign-in does without one, so a value that
+// isn't a JSON string counts as no name, where a malformed claim pairtimed
+// needs fails the token.
+type profileName string
+
+func (n *profileName) UnmarshalJSON(b []byte) error {
+	var s string
+	if json.Unmarshal(b, &s) != nil {
+		s = ""
+	}
+	*n = profileName(s)
+	return nil
 }
 
 // audience is the aud claim, which is a string or an array of strings

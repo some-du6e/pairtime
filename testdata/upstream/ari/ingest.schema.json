@@ -129,6 +129,13 @@
       "allOf": [
         {"anyOf": [{"required": ["at"]}, {"required": ["date"]}]},
         {"anyOf": [{"required": ["seconds"]}, {"required": ["minutes"]}, {"required": ["hours"]}], "description": "No length at all gives 422 journals.minutes."}
+      ],
+      "examples": [
+        {"at": "2026-11-04T00:00:00Z", "seconds": 86400, "text": "Tracked by pairtime: 86,400 credited seconds."}
+      ],
+      "x-invalid-examples": [
+        {"at": "2026-11-18T21:40:00Z", "seconds": 108000, "text": "Tracked by pairtime: 108,000 credited seconds."},
+        {"at": "2026-11-03T20:11:00Z", "seconds": 6840.5, "text": "Tracked by pairtime: 6,840.5 credited seconds."}
       ]
     }
   }

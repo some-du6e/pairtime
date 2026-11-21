@@ -12,7 +12,8 @@
 //
 //   - ineligible: sign-in is refused. An identity without an account gets
 //     no row. An account that turns ineligible keeps its row with the new
-//     status, loses its email and Slack id, and loses every session it had.
+//     status, loses its email and Slack id, and loses every session it had,
+//     with the display names they kept.
 //   - verified: the person may submit hours. When HCA's ysws_eligible isn't
 //     true, the case HCA's own API reports as verified_but_over_18, the
 //     account carries the "eligibility to confirm" note for programs,
@@ -27,8 +28,10 @@
 // signups_open is true and only the operators list while it is false.
 //
 // A session is a random token in the browser's cookie, and the database
-// keeps only its SHA-256. Every write goes through the writer goroutine;
-// lookups use the read pool.
+// keeps only its SHA-256. The display name HCA sent at the sign-in, if any,
+// is kept with the session and never with the account, so it goes when the
+// session's row does (D-display-name; DESIGN 4.4). Every write goes through
+// the writer goroutine; lookups use the read pool.
 package accounts
 
 import (
@@ -43,6 +46,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/some-du6e/pairtime/internal/server/config"
 	"github.com/some-du6e/pairtime/internal/server/store"
@@ -147,6 +151,9 @@ type Session struct {
 	// auth_time from after it started. It is zero for an ordinary sign-in,
 	// however recent its AuthTime.
 	FreshLoginAt time.Time
+	// DisplayName is the Login.DisplayName of the sign-in that opened the
+	// session, or "". The pages show it as who is signed in.
+	DisplayName string
 }
 
 // HasRole reports whether the session's account holds role.
@@ -170,7 +177,14 @@ type Login struct {
 	// again (prompt=login) and AuthTime is from after the sign-in started,
 	// which package auth checks.
 	Fresh bool
+	// DisplayName is the name HCA sent with the sign-in, which package auth
+	// picks and cleans: given_name, or else nickname, at most
+	// MaxDisplayName characters. "" means none. Only the session keeps it.
+	DisplayName string
 }
+
+// MaxDisplayName is the most characters a display name may have.
+const MaxDisplayName = 64
 
 // DefaultSessionLifetime is how long a web session lasts. It doesn't slide:
 // after it ends, signing in again is one click while the HCA session lives.
@@ -269,15 +283,18 @@ func (s *Store) Roles(sub string) []string {
 // SignIn returns ErrIneligible when HCA marks id ineligible, and
 // ErrSignupsClosed when id has no account and Options.MayCreate doesn't
 // admit it. Neither opens a session. An existing account that turns
-// ineligible gets its new status, loses its email, its Slack id and its
-// sessions, and keeps nothing HCA sent this time; an identity without an
-// account is never written.
+// ineligible gets its new status, loses its email, its Slack id, its
+// sessions and their display names, and keeps nothing HCA sent this time;
+// an identity without an account is never written.
 func (s *Store) SignIn(ctx context.Context, id Identity, login Login) (sess *Session, created bool, err error) {
 	if err := CheckSub(id.Sub); err != nil {
 		return nil, false, err
 	}
 	if _, err := ParseVerificationStatus(string(id.Status)); err != nil {
 		return nil, false, err
+	}
+	if utf8.RuneCountInString(login.DisplayName) > MaxDisplayName {
+		return nil, false, fmt.Errorf("accounts: a display name has at most %d characters", MaxDisplayName)
 	}
 	var freshAt time.Time
 	if login.Fresh {
@@ -346,6 +363,12 @@ WHERE id = $1`,
 				userID, nowMs); err != nil {
 				return fmt.Errorf("accounts: revoking the account's sessions: %w", err)
 			}
+			// The names the sessions kept go now as well, with the contact
+			// details, and not with the rows a day later.
+			if _, err := tx.ExecContext(ctx, `UPDATE sessions SET display_name = NULL WHERE user_id = $1 AND display_name IS NOT NULL`,
+				userID); err != nil {
+				return fmt.Errorf("accounts: dropping the display names of the account's sessions: %w", err)
+			}
 			if s.ineligible != nil {
 				if err := s.ineligible(ctx, tx, userID, now); err != nil {
 					return fmt.Errorf("accounts: closing what the account kept: %w", err)
@@ -362,9 +385,9 @@ WHERE id = $1`,
 			}
 		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO sessions
-(id_hash, user_id, created_at_ms, expires_at_ms, auth_time_ms, fresh_login_at_ms, revoked_at_ms)
-VALUES ($1, $2, $3, $4, $5, $6, NULL)`,
-			hash, userID, nowMs, expires.UnixMilli(), nullTime(login.AuthTime), nullTime(freshAt)); err != nil {
+(id_hash, user_id, created_at_ms, expires_at_ms, auth_time_ms, fresh_login_at_ms, display_name, revoked_at_ms)
+VALUES ($1, $2, $3, $4, $5, $6, $7, NULL)`,
+			hash, userID, nowMs, expires.UnixMilli(), nullTime(login.AuthTime), nullTime(freshAt), nullString(login.DisplayName)); err != nil {
 			return fmt.Errorf("accounts: opening the session: %w", err)
 		}
 		return nil
@@ -388,9 +411,10 @@ VALUES ($1, $2, $3, $4, $5, $6, NULL)`,
 			UpdatedAt:    time.UnixMilli(nowMs),
 			SignedInAt:   time.UnixMilli(nowMs),
 		},
-		Roles:     s.Roles(id.Sub),
-		CreatedAt: time.UnixMilli(nowMs),
-		ExpiresAt: time.UnixMilli(expires.UnixMilli()),
+		Roles:       s.Roles(id.Sub),
+		CreatedAt:   time.UnixMilli(nowMs),
+		ExpiresAt:   time.UnixMilli(expires.UnixMilli()),
+		DisplayName: login.DisplayName,
 	}
 	if b, ok := sealed.([]byte); ok {
 		sess.User.emailSealed = b
@@ -417,16 +441,16 @@ func (s *Store) Session(ctx context.Context, token string) (*Session, error) {
 		createdMs, expiresMs          int64
 		uCreated, uUpdated, uSignedIn int64
 		authTime, freshAt, eligible   sql.NullInt64
-		slack                         sql.NullString
+		slack, name                   sql.NullString
 		sealed                        []byte
 		status                        string
 	)
-	err := s.db.Read.QueryRowContext(ctx, `SELECT s.created_at_ms, s.expires_at_ms, s.auth_time_ms, s.fresh_login_at_ms,
+	err := s.db.Read.QueryRowContext(ctx, `SELECT s.created_at_ms, s.expires_at_ms, s.auth_time_ms, s.fresh_login_at_ms, s.display_name,
 u.id, u.hca_sub, u.slack_id, u.email_ct, u.verification_status, u.ysws_eligible,
 u.created_at_ms, u.updated_at_ms, u.signed_in_at_ms
 FROM sessions s JOIN users u ON u.id = s.user_id
 WHERE s.id_hash = $1 AND s.revoked_at_ms IS NULL AND s.expires_at_ms > $2`,
-		hash, s.now().UnixMilli()).Scan(&createdMs, &expiresMs, &authTime, &freshAt,
+		hash, s.now().UnixMilli()).Scan(&createdMs, &expiresMs, &authTime, &freshAt, &name,
 		&sess.User.ID, &sess.User.HCASub, &slack, &sealed, &status, &eligible,
 		&uCreated, &uUpdated, &uSignedIn)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -458,6 +482,7 @@ WHERE s.id_hash = $1 AND s.revoked_at_ms IS NULL AND s.expires_at_ms > $2`,
 	if freshAt.Valid {
 		sess.FreshLoginAt = time.UnixMilli(freshAt.Int64)
 	}
+	sess.DisplayName = name.String
 	return &sess, nil
 }
 
@@ -478,7 +503,7 @@ func (s *Store) Revoke(ctx context.Context, token string) error {
 	}
 	nowMs := s.now().UnixMilli()
 	return s.w.Do(ctx, 1, func(ctx context.Context, tx writer.Tx) error {
-		if _, err := tx.ExecContext(ctx, `UPDATE sessions SET revoked_at_ms = $2 WHERE id_hash = $1 AND revoked_at_ms IS NULL`,
+		if _, err := tx.ExecContext(ctx, `UPDATE sessions SET revoked_at_ms = $2, display_name = NULL WHERE id_hash = $1 AND revoked_at_ms IS NULL`,
 			hash, nowMs); err != nil {
 			return fmt.Errorf("accounts: revoking the session: %w", err)
 		}

@@ -185,8 +185,7 @@ func designRows(t *testing.T, heading string) [][]string {
 // the oracle, DESIGN 4.4's own text, or for the server's database backups,
 // which 4.4 doesn't list, DESIGN 10.3's: each entry's days, and each number
 // that an entry without days writes in its kept text, such as the access
-// log's 2 years. The sessions entry's numbers are package accounts'
-// constants, which TestSessionRetention there checks.
+// log's 2 years.
 func TestDesignPeriods(t *testing.T) {
 	p, err := Default()
 	if err != nil {
@@ -216,6 +215,8 @@ func TestDesignPeriods(t *testing.T) {
 		{name: "deleted rows stay in the nightly snapshots for their 30-day lifecycle", id: "server.db_snapshots", section: design103, where: "Nightly", data: "`VACUUM INTO` a snapshot", re: `uploaded to a second bucket with a (\d+)-day lifecycle\.`},
 		{name: "the evidence access log is kept 2 years", id: "server.access_log", where: "Server", data: "Evidence access log", re: `^(\d+) years, visible to the teen$`, kept: `^(\d+) years$`},
 		{name: "Claude Code keeps its transcripts 30 days by default", id: "device.transcripts", where: "Device", data: "Transcripts and agent output", re: `\(Claude Code: (\d+) days by default; TP B8\)`, kept: `\(Claude Code keeps them for (\d+) days unless you change it\)$`},
+		{name: "a web sign-in session ends 30 days after sign-in at the latest", id: "server.sessions", where: "Server", data: "Web sign-in sessions", re: `or (\d+) days after sign-in at the latest`, kept: `or (\d+) days after you sign in at the latest`},
+		{name: "a web sign-in session's row is deleted 1 day after the session ends", id: "server.sessions", where: "Server", data: "Web sign-in sessions", re: `deleted (\d+) days? after the session ends$`, kept: `deleted (\d+) days? after the session ends$`},
 	}
 	checked := make(map[string]bool)
 	for _, tt := range tests {
@@ -277,11 +278,10 @@ func TestDesignPeriods(t *testing.T) {
 	})
 	t.Run("every number written in a kept text is checked", func(t *testing.T) {
 		// Load refuses a number beside {days}, so these are entries
-		// without days.
-		elsewhere := map[string]bool{
-			"server.sessions":     true, // accounts' TestSessionRetention
-			"server.device_codes": true, // device's TestCodeRetention
-		}
+		// without days. DESIGN 4.4 has no row for device codes, so their
+		// numbers are package device's constants, which its
+		// TestCodeRetention checks against the kept text.
+		elsewhere := map[string]bool{"server.device_codes": true}
 		for _, e := range p.Entries {
 			if strings.ContainsAny(e.Kept, "0123456789") && !checked[e.ID] && !elsewhere[e.ID] {
 				t.Errorf("%s's kept says %q, and no case in TestDesignPeriods checks its number", e.ID, e.Kept)
@@ -372,6 +372,55 @@ func TestJobs(t *testing.T) {
 				"server.witness/witness_rows+hold", "server.witness/submission_batches", "server.witness/ingest_replies",
 			},
 		},
+		{
+			name: "a job of an evidence entry stays off until WP-SV18, even once its table exists",
+			edit: func(p *Policy) {
+				for i := range p.Entries {
+					e := &p.Entries[i]
+					for k := range e.Jobs {
+						e.Jobs[k].Awaits = ""
+						if h := e.Jobs[k].Hold; h != nil {
+							h.Awaits = ""
+						}
+						for n := range e.Jobs[k].KeptBy {
+							e.Jobs[k].KeptBy[n].Awaits = ""
+						}
+					}
+					if e.ID == "evidence.revealed" {
+						e.Jobs = append(e.Jobs, evidenceIndexJob(""))
+					}
+				}
+			},
+			wantJobs: []string{
+				"server.devices/devices+kept", "server.devices/device_labels", "server.ip_ja4/request_origins",
+				"server.minute_buckets/minute_buckets+hold", "server.minute_buckets/minute_bucket_revisions+hold", "server.minute_buckets/submission_minutes",
+				"server.minute_buckets/rollup_minutes",
+				"server.witness/witness_rows+hold", "server.witness/submission_batches", "server.witness/ingest_replies",
+			},
+			wantOff: []string{"evidence.revealed/evidence_index awaits WP-SV18"},
+		},
+		{
+			name: "a job of an evidence entry whose table doesn't exist yet waits for the package that creates it",
+			edit: func(p *Policy) {
+				for i := range p.Entries {
+					if e := &p.Entries[i]; e.ID == "evidence.revealed" {
+						e.Jobs = append(e.Jobs, evidenceIndexJob("WP-SB4"))
+					}
+				}
+			},
+			wantJobs: []string{
+				"server.devices/devices+kept", "server.devices/device_labels", "server.ip_ja4/request_origins",
+				"server.minute_buckets/minute_buckets", "server.minute_buckets/minute_bucket_revisions",
+				"server.minute_buckets/rollup_minutes",
+				"server.witness/witness_rows", "server.witness/ingest_replies",
+			},
+			wantOff: []string{
+				"server.minute_buckets/minute_buckets hold awaits WP-SB4", "server.minute_buckets/minute_bucket_revisions hold awaits WP-SB4",
+				"server.minute_buckets/submission_minutes awaits WP-SB4",
+				"server.witness/witness_rows hold awaits WP-SB4", "server.witness/submission_batches awaits WP-SB4",
+				"evidence.revealed/evidence_index awaits WP-SB4",
+			},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -412,6 +461,12 @@ func TestJobs(t *testing.T) {
 			}
 		})
 	}
+}
+
+// evidenceIndexJob is a job by the window on an evidence index table, the
+// shape WP-SB4 gives evidence.revealed, with awaits set as given.
+func evidenceIndexJob(awaits string) JobSpec {
+	return JobSpec{Table: "evidence_index", Key: []string{"blob"}, TimeColumn: "decided_at_ms", Period: PeriodWindow, Awaits: awaits}
 }
 
 func TestDeleteSQL(t *testing.T) {
@@ -959,7 +1014,7 @@ func TestTables(t *testing.T) {
 		have := columns(table)
 		switch {
 		case awaits != "" && len(have) > 0:
-			t.Errorf("%s: table %s exists now; remove its awaits %q in docs/retention.json, so its job runs", id, table, awaits)
+			t.Errorf("%s: table %s exists now; remove its awaits %q in docs/retention.json, so its job runs (an evidence entry's once WP-SV18 lands)", id, table, awaits)
 		case awaits == "" && len(have) == 0:
 			t.Errorf("%s: table %s doesn't exist; set awaits to the work package that creates it", id, table)
 		case awaits == "":

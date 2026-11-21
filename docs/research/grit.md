@@ -212,7 +212,7 @@ The risk on pairtime's side is its own size. A plan of 140 work packages has to 
 
 ## 5. Options for Karim
 
-This section lays out the choices and what each costs. It doesn't pick one; DESIGN 13.1 item 7 leaves that to Karim.
+This section lays out the choices and what each costs. DESIGN 13.1 item 7 records the choice, made on 2026-11-20: compete (5.2).
 
 ### 5.1 Facts every option has to live with
 

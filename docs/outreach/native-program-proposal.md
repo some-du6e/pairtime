@@ -2,7 +2,7 @@
 
 Status: draft for Karim, not sent
 
-To: [TODO: HQ sponsor's name], copying Quality and Integrity. Hard Mode is a working name (DESIGN 13.1 item 6).
+To: [TODO: HQ sponsor's name], copying Quality and Integrity.
 
 ## The ask
 
@@ -49,7 +49,7 @@ It's also the first place pairtime's numbers meet real reviewers. We'll publish 
 
 We're building the tracker and we'd run the program, which is a conflict of interest by definition. A tool trying to win a bounty should be the most audited thing in the DB. So these are launch conditions, not extras (DESIGN 7.10):
 
-- Reviewers come from outside the build team. [TODO: who recruits them, and how many]
+- Reviewers come from outside the build team, and Quality and Integrity or the program's HQ sponsor nominates or approves each one, so nobody on our team picks a reviewer alone. We expect about seven, at about five hours each, to cover the 35 hours of review in the budget.
 - Quality and Integrity runs or observes the audits, and spot-checks this program at a higher rate than others. [TODO: the rate Q&I picks]
 - Reviewers are assigned at random from a pool. Nobody reviews someone from their own club or someone who shares a GitHub repository or organization with them.
 - About 2% of the queue is seeded known-answer submissions, so each reviewer's accuracy is measured.
@@ -71,7 +71,7 @@ None of this is built yet beyond a code skeleton. The plan has a local alpha out
 ## What we need from HQ
 
 - A sponsor, the grant amount, and a yes or no by 2026-12-07.
-- Quality and Integrity's agreement to observe audits and to the higher spot-check rate.
+- Quality and Integrity's agreement to observe audits and to the higher spot-check rate, and Quality and Integrity or the sponsor to nominate or approve each outside reviewer.
 - The privacy controller for the server named by about 2026-12-08, because sign-ups stay closed until then (DESIGN 8.6, 9.7).
 - A Robert event key for Hard Mode from the Telescreen team.
 - [TODO: how a new YSWS gets added to the Unified DB's program list and wired to its submission automation].

@@ -14,14 +14,14 @@
     {
       "at": "2026-11-03T20:11:00Z",
       "seconds": 6840,
-      "text": "Tracked by pairtime: 6,840 credited seconds in the devlog window ending 2026-11-03T20:11:00Z.",
-      "markdown": "Tracked by pairtime: **1 h 54 m** credited in this devlog window. Evidence: https://pairtime.example.org/review/submissions/sub_01JDEXAMPLE/rows/r_1"
+      "text": "Tracked by pairtime: 6,840 credited seconds in a work session from 2026-11-03T18:05:00Z to 2026-11-03T20:11:00Z.",
+      "markdown": "Tracked by pairtime: **1 h 54 m** credited in this work session. Evidence: https://pairtime.example.org/review/submissions/sub_01JDEXAMPLE/rows/r_1"
     },
     {
       "at": "2026-11-05T19:40:00Z",
       "seconds": 4380,
-      "text": "Tracked by pairtime: 4,380 credited seconds in the devlog window ending 2026-11-05T19:40:00Z.",
-      "markdown": "Tracked by pairtime: **1 h 13 m** credited in this devlog window. Evidence: https://pairtime.example.org/review/submissions/sub_01JDEXAMPLE/rows/r_2"
+      "text": "Tracked by pairtime: 4,380 credited seconds in a work session from 2026-11-05T18:15:00Z to 2026-11-05T19:40:00Z.",
+      "markdown": "Tracked by pairtime: **1 h 13 m** credited in this work session. Evidence: https://pairtime.example.org/review/submissions/sub_01JDEXAMPLE/rows/r_2"
     }
   ]
 }

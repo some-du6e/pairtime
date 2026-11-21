@@ -1,6 +1,6 @@
 # Erratum: DESIGN 10.3 has evidence rely on bucket versioning, which R2 doesn't have
 
-Date 2026-11-20. Raised by the review of #33 (WP-SV15, issue #62). Status: waiting for Karim. Until Karim decides, pairtimed protects evidence with write-once puts and `Evidence.Get`'s digest check alone. Nothing in pairtimed sets, reads or relies on versioning, and DESIGN stays as it is.
+Date 2026-11-20. Raised by the review of #33 (WP-SV15, issue #62). Status: decided 2026-11-20 by the orchestrator for Karim: option 1, with an eraser whose dry run deletes no blob, `unavailable` for a blob the store can't return, and `pairtimed doctor` failing on a bucket that keeps versions or ignores `If-None-Match: *`. For item 2, a new WP-SV18 (M5) owns the evidence store's retention delete on WP-SV14's window jobs, and WP-SB4 adds the evidence store to the eraser. A submission's window opens at its latest decision, at a withdrawal before any decision, or at its freeze when neither comes (DESIGN 4.4). Amended the same day by D-rotation-pending-copy and D-purge-record-first after #117's privacy review. Index rows are `pending`, `stored` or `deleting`, every delete marks its rows durably before any blob goes, and WP-SB4's delete pass deletes the blobs, as the amendment below says. The Decision section below says what changed.
 
 ## Input
 
@@ -39,7 +39,39 @@ The row promises that no evidence blob is lost, so its RPO is "n/a", and that th
 
 ## For Karim
 
-1. Pick an option for DESIGN 10.3's evidence row, or another fix. Options 2 and 3 also change 10.5 item 4's list, and option 2 needs the Hetzner limit checked.
-2. The evidence store's retention delete in 4.4 has no WP. Whoever builds it needs the same answer.
+Answered on 2026-11-20 by the decision below.
+
+1. Pick an option for DESIGN 10.3's evidence row, or another fix. Options 2 and 3 also change 10.5 item 4's list, and option 2 needs the Hetzner limit checked. **Option 1.**
+2. The evidence store's retention delete in 4.4 has no WP. Whoever builds it needs the same answer. **Answered by D-evidence-retention-wp: WP-SV18 builds it.**
 
 The PR that adds this erratum changes no DESIGN text. In PLAN.md it adds to WP-RV5 and WP-SB2 that their deletes must remove every version of a blob on a bucket that keeps versions, which holds under every option above.
+
+## Decision
+
+Option 1. Evidence keeps one copy, in buckets that never keep versions, and every delete is one plain DeleteObject.
+
+Versioning would protect nothing here. The purge, retention, key rotation and the eraser (DESIGN 8.9, a fourth delete the list above missed) would each have to remove every version, so a bug in one of them would remove every version too, and whoever holds `secrets.env` can delete versions as well. Versioning is also bucket-wide, and this bucket holds Litestream's replica, so it would keep every LTX file Litestream prunes, and the rows 4.4 deletes with them, past the 72 hours DESIGN 10.3 gives the replica. And R2 has no versioning to turn on.
+
+A lost blob costs a spot-check that can't be answered, and it earns nothing. The teen can delete evidence only by purging, which uncredits, or by erasing the account, and a changed blob fails its SHA-256, AES-GCM and `C_i`. Option 3 doubles every write and delete for the same narrow gain, and option 4 blocks the purge.
+
+Changes to DESIGN:
+
+- 10.3. The evidence row says blobs are written once under their SHA-256, with keys scoped to the two buckets and no versions, and that they aren't backed up, so a blob deleted or overwritten with the bucket's key is lost.
+- 10.5. Item 4 asks for no versioning on either bucket and no lifecycle rule that deletes objects in the first. Step 4's doctor checks both, and checks that the first bucket refuses a second write-once put.
+- 10.2. Key rotation deletes the blobs sealed to the old key, after `pairtimed` has switched to the new key.
+- 7.5 step 8, 7.7 and 7.8. An item whose blob the store can't return or open is `unavailable`. It isn't called lost, because 7.5 step 8 already has "witnessed, evidence lost". Before the decision the server asks the client to reveal the item again, since the device keeps prompt text until then (4.4). After the decision it changes no credit. `challenge.json` keeps the status recorded at the time, because the bundle's SHA-256 in the justification text has to keep matching, and `pairtime verify --fetch-reveals` lists an unavailable item without changing its exit code.
+- 8.9. The eraser deletes the account's blobs in the evidence store and any backup segments in object storage. The privacy hub sends a dry run first, and the dry run lists the blobs and backup segments it would delete without deleting any, because a blob delete can't be rolled back.
+
+Changes to PLAN: WP-SB2 gets `Evidence.List` and an `Evidence.Delete` that fails on `x-amz-delete-marker: true`, and a new WP-SB9 a key rotation that finishes when run again after a crash. WP-SB5 to WP-SB8 and WP-RV2 handle `unavailable`. WP-SV13's dry run deletes nothing outside the database. WP-RV5 takes a purge that removes every copy of an item and uncredits each submission that revealed it. WP-SV18 takes evidence retention, and WP-SB4 the eraser's evidence step, which answers item 2 above. WP-OP1's doctor checks versioning, tested against MinIO, and runs the write-once probe. These replace the "every version" text #81 added to WP-RV5 and WP-SB2.
+
+Item 2, decided as D-evidence-retention-wp. A new WP-SV18 in PLAN's M5 owns the evidence store's retention delete, on the window jobs WP-SV14 gives `evidence.revealed`, and WP-SB4 adds the evidence store to the eraser. A submission's window opens at its latest decision, at a withdrawal that came before any decision, or at its freeze when neither comes (DESIGN 4.4). Five things delete evidence blobs: the purge, retention, key rotation, calibration's 30-day delete and the eraser. Each marks the index rows it deletes `deleting`, durably and in the transaction that records why. WP-SB4's delete pass then calls `objstore.Evidence.Delete` and deletes each row after its blob. Nothing deletes a blob that no row names.
+
+Hetzner's page lists conditional writes as unsupported only on versioned buckets and says nothing about unversioned ones. Doctor's write-once probe checks whatever store the buckets use, so WP-OP4's doctor run settles it before any move.
+
+Amended the same day as D-rotation-pending-copy and D-purge-record-first, after the reviews of #117 and #111. Key rotation wrote its re-sealed copy before any index row named it, and a re-seal gives new bytes every time, so a crash between the copy's PUT and the re-point, or a purge, erasure or retention delete in that window, left a copy of a revealed item that nothing would find or delete. Its rerun also deleted every blob sealed to the old key that no row named, which on an empty or wrong database is every blob. The purge deleted the blob before it recorded anything, so a writer failure between the two left an item that looked `unavailable`. The server asked the teen to reveal the purged item again and kept crediting its minutes. Now an index row is `pending`, `stored` or `deleting`. A re-sealed copy is written as `pending` and takes the old row's place in one transaction only while that row is still `stored`, and the old row stays, `deleting`, until its blob is gone. Every delete, the purge and the eraser included, marks the `stored` rows it deletes `deleting` in the transaction that records why. Every transaction that writes an index row commits with `synchronous=FULL`, because DESIGN 10.1's NORMAL can roll back the last transactions after a power cut, and that can't undo a blob delete. Only then does WP-SB4's delete pass, which runs after each mark, at start and every hour, delete each blob and then its row. It also finishes `pending` rows a day old, which WP-SV18 no longer does. A purged item shows as purged from that commit. The submissions it was purged from never ask for it again or take a new reveal of it, and any other submission whose pool holds it still asks for it (DESIGN 7.5 step 5). If pairtimed can't reach the store, the purge still succeeds and the eraser still answers, listing the blobs not yet deleted as retained. Nothing deletes a blob that no row names, and key rotation's pass moves to a new WP-SB9, because WP-SB2 comes before WP-SB4 creates the index. DESIGN 7.5 step 8, 7.11, 8.9, 10.1 and 10.2 and the privacy notice say so.
+
+Left as they are:
+
+- Erasing an account inside an approved submission's spot-check window deletes that submission's evidence and uncredits nothing, so a spot-check of it can't be answered. That holds under every option, and the eraser stays as 8.9 has it.
+- When a withdrawn or never-decided submission's window starts is its own question, in `docs/errata/2026-11-20-withdrawn-window.md`, because it governs WP-SV14's holds as much as evidence.
+- SP 9.2's evidence row stays as SP proposed it. DESIGN 10.3 overrides it.

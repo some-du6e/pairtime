@@ -40,7 +40,7 @@ testdata/fixtures/<harness>/<version>/<os>/
 - Fixtures come from the capture kit in [tools/capture](../../tools/capture/README.md), following [SCRIPTS.md](../../tools/capture/SCRIPTS.md), so every prompt in them is text the script supplied.
 - Everything is scrubbed before it's committed: the home path, account name, hostname, git name and email, other names the person lists, email addresses other than the few listed under Placeholders, and anything shaped like a key or token become fixed placeholders. The scrub report, which lists the originals, stays on the capturing machine. Then a person reads every file. The repo is public, so nothing private may remain.
 - A fixture written from documentation rather than captured says `synthetic: true`. An adapter can't ship with synthetic fixtures alone (DESIGN 5.1).
-- Fixtures aren't edited after they're merged. A new harness version gets a new `<version>` directory. A capture that turns out wrong is replaced in a PR of its own with the `oracle-change` label, never in the PR that changes the adapter it tests.
+- Fixtures aren't edited after they're merged. A new harness version gets a new `<version>` directory. A capture that turns out wrong is replaced in a PR of its own, never in the PR that changes the adapter it tests.
 
 ## Placeholders
 

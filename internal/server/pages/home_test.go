@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"regexp"
 	"strings"
 	"testing"
@@ -323,6 +324,38 @@ func TestHeader(t *testing.T) {
 			if want := `<header>
 <a class="name" href="/">pairtime</a>`; !strings.Contains(tt.page, want) {
 				t.Errorf("the page doesn't contain %q", want)
+			}
+		})
+	}
+}
+
+// TestLoginURL checks the one helper behind every sign-in link that comes
+// back: /dashboard's here, and /device's and /account/devices' in package
+// device. It encodes return_to, so the login handler's query reads back
+// exactly the path it was given, whatever the path's own query holds.
+func TestLoginURL(t *testing.T) {
+	tests := []struct {
+		name, returnTo, want string
+	}{
+		{name: "a path's slashes are encoded", returnTo: "/dashboard", want: "/auth/hca/login?return_to=%2Fdashboard"},
+		{name: "a path with a query of its own comes back whole, as one parameter", returnTo: "/device?user_code=WDJB-MJHT", want: "/auth/hca/login?return_to=%2Fdevice%3Fuser_code%3DWDJB-MJHT"},
+		{name: "an & in the path's query doesn't start a parameter of the login's", returnTo: "/projects/demo?tab=time&day=today"},
+		{name: "a # in the path stays in return_to instead of ending the login URL", returnTo: "/docs/evidence#levels"},
+		{name: "a space and a plus come back as they were", returnTo: "/a b+c"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := LoginURL("/auth/hca/login", tt.returnTo)
+			if tt.want != "" && got != tt.want {
+				t.Errorf("LoginURL = %q, want %q", got, tt.want)
+			}
+			u, err := url.Parse(got)
+			if err != nil {
+				t.Fatalf("LoginURL = %q, which doesn't parse: %v", got, err)
+			}
+			q := u.Query()
+			if u.Path != "/auth/hca/login" || u.Fragment != "" || len(q) != 1 || q.Get("return_to") != tt.returnTo {
+				t.Errorf("LoginURL = %q reads back as path %q, fragment %q, query %v; want return_to %q alone", got, u.Path, u.Fragment, q, tt.returnTo)
 			}
 		})
 	}
