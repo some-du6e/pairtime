@@ -9,3 +9,7 @@
 # once. The spec's steps pipe it into an encrypted backup and check that
 # the backup decrypts, where a bare run leaves it in your terminal with no
 # copy. Never put a secret key in this file.
+
+# Key ed63470787489798, made 2026-11-21 with openssl genpkey, following
+# docs/spec/update-manifest.md, Making the key.
+pairtime-release-ed25519-public:mP7O9NMJlzm7lu65zP4lHq10l/t0XcASchf+mZSRBbE=
