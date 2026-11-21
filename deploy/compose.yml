@@ -44,16 +44,36 @@ services:
       # Local disk only, never NFS or SMB: SQLite's locks don't hold there.
       - ./data:/data
       - ./config:/etc/pairtime:ro
-      # From git, next to this file, so it changes with the release.
-      - ./litestream.yml:/etc/litestream.yml:ro
+      # Images built from #123 on carry litestream.yml at this path, so each
+      # runs the copy it was built and drilled with. The older image pinned
+      # above has none, so it gets litestream.frozen.yml, a copy that changes
+      # only with that image: a change to litestream.yml reaches hosts with
+      # the next image it is drilled in, never this one. The PR that first
+      # pins a newer image deletes these lines and that file. Its restore
+      # drill fails while the mount is there, and TestFrozenLitestream while
+      # the file is (deploy/runbook.md, The image pin).
+      - ./litestream.frozen.yml:/etc/litestream.yml:ro
       # Where pairtimed writes each day's signed witness root (WP-SV17).
       - ./witness-roots:/witness
+      # /tmp in memory, since the root filesystem is read-only, and bounded,
+      # so nothing written there can take the host's memory. SQLite's own
+      # temporary files, its sort spills and temporary indexes, go to
+      # /data/tmp on the disk instead (SQLITE_TMPDIR below; #133).
+      - type: tmpfs
+        target: /tmp
+        tmpfs:
+          size: 268435456
     # compose reads this file on the host and passes each line to the
     # container as an environment variable; pairtimed and litestream.yml
     # read their PAIRTIME_* variables from there.
     env_file: ./config/secrets.env
     environment:
       PAIRTIME_WITNESS_REPO: ${PAIRTIME_WITNESS_REPO:-some-du6e/pairtime-witness}
+      # Runbook step 2 makes it, and so does pairtimed serve, mode 0700, in
+      # the images built from #123 on. An older image doesn't, and SQLite
+      # then uses /tmp, so a host set up before #123 makes it as the
+      # runbook's Upgrades say.
+      SQLITE_TMPDIR: /data/tmp
     healthcheck:
       # /healthz on the private ops port: the process answers. Not /readyz,
       # whose database check commits a row each call and so makes
@@ -67,11 +87,10 @@ services:
       # A restore from the replica on a new host can take minutes.
       start_period: 10m
     # Time for pairtimed to finish its requests and for Litestream's last
-    # sync before Docker kills them.
+    # sync before Docker kills them. litestream.yml's shutdown-timeout, the
+    # time Litestream gives both, ends first.
     stop_grace_period: 90s
     read_only: true
-    tmpfs:
-      - /tmp
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
 

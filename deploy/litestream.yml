@@ -8,12 +8,12 @@
 # Litestream syncs once more and exits with it.
 #
 # Litestream fills ${NAME} from its environment, which compose sets from
-# config/secrets.env, so this file holds no value of one deployment and
-# comes from git with compose.yml. Each one is in single quotes, where YAML
-# keeps a value as written, so a URL with '&' or '?' in it, as an Uptime
-# Kuma push URL has, stays one string and a backslash in a key stays a
-# backslash. Only a ' would end one early: pairtimed init and doctor
-# refuse a value that holds one.
+# config/secrets.env, so this file holds no value of one deployment, and
+# each server image carries it (Dockerfile.pairtimed). Each one is in
+# single quotes, where YAML keeps a value as written, so a URL with '&' or
+# '?' in it, as an Uptime Kuma push URL has, stays one string and a
+# backslash in a key stays a backslash. Only a ' would end one early:
+# pairtimed init and doctor refuse a value that holds one.
 # pairtimed's own copy of the endpoint and the bucket is [object_storage]
 # in pairtime.toml; `pairtimed init` writes it from the same variables, and
 # `pairtimed doctor` fails when the two disagree.
@@ -37,6 +37,13 @@
 # -litestream-replica names the replica's path below, so /readyz can tell
 # how far the replica is behind the database (DESIGN 10.4).
 exec: pairtimed serve -litestream-replica litestream
+
+# How long Litestream gives pairtimed to exit once it is told to stop, and
+# itself to sync one last time, before it gives up: inside compose.yml's
+# stop_grace_period of 90 s, after which Docker kills both, and past
+# Litestream's own default of 30 s, which pairtimed's 20 s for requests in
+# flight left little of (#133).
+shutdown-timeout: 80s
 
 # Litestream's own dead man's switch: a GET of this push-monitor URL every
 # 5 minutes, sent only while the database has synced within that time

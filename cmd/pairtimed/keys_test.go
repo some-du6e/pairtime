@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"filippo.io/age"
 	"filippo.io/age/armor"
@@ -101,7 +102,8 @@ func TestKeysBackupCommand(t *testing.T) {
 	}
 	tests := []struct {
 		name string
-		// args go after "keys backup"; "OUT" becomes a fresh file path.
+		// args go after "keys backup"; "OUT" becomes a fresh file path, and
+		// "BADOUT" one in a directory that doesn't exist.
 		args     []string
 		environ  []string
 		setup    func(t *testing.T, out string)
@@ -126,6 +128,13 @@ func TestKeysBackupCommand(t *testing.T) {
 			args:     []string{"-o", "OUT"},
 			setup:    func(t *testing.T, out string) { writeFile(t, out, "an older backup\n", 0o600) },
 			wantCode: 1, wantErr: "exists"},
+		{name: "a -o that can't be made fails before -upload stores anything, so a second try stores no second backup",
+			args:     []string{"-upload", "-o", "BADOUT"},
+			wantCode: 1, wantErr: "no such file"},
+		{name: "-o over a file also stores nothing with -upload",
+			args:     []string{"-upload", "-o", "OUT"},
+			setup:    func(t *testing.T, out string) { writeFile(t, out, "an older backup\n", 0o600) },
+			wantCode: 1, wantErr: "exists"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -141,6 +150,8 @@ func TestKeysBackupCommand(t *testing.T) {
 				switch a {
 				case "OUT":
 					a = out
+				case "BADOUT":
+					a = filepath.Join(t.TempDir(), "missing", "pairtime-keys.tar.age")
 				case "KARIM":
 					a = h.karim.Recipient().String()
 				}
@@ -203,6 +214,87 @@ func TestKeysBackupCommand(t *testing.T) {
 	}
 }
 
+// TestKeyBackupNames checks that an uploaded key backup's name says which
+// keys and which email key it holds, which doctor and keys list read
+// (#133).
+func TestKeyBackupNames(t *testing.T) {
+	tests := []struct {
+		name      string
+		environ   []string
+		wantEmail func() string
+	}{
+		{name: "the name gives the server and evidence key ids and the email key's fingerprint",
+			wantEmail: func() string { return backup.EmailKeyFingerprint(strings.Repeat("cd", 32)) }},
+		{name: "without PAIRTIME_EMAIL_KEY the name says none",
+			environ: []string{"PAIRTIME_EMAIL_KEY="}, wantEmail: func() string { return "none" }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := newBackupHost(t)
+			h.environ = append(h.environ, tt.environ...)
+			if _, stderr, code := h.run(t, "keys", "backup", "-upload", "-o", filepath.Join(t.TempDir(), "k.tar.age")); code != 0 {
+				t.Fatalf("keys backup: %s", stderr)
+			}
+			keys, err := backup.Load(backup.KeysDir(h.dataDir))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var names []backup.KeyBackup
+			for _, k := range h.s3.Keys("pairtime-data") {
+				if n, ok := strings.CutPrefix(k, backup.KeyBackupPrefix); ok {
+					b, err := backup.ParseKeyBackupName(n)
+					if err != nil {
+						t.Fatal(err)
+					}
+					names = append(names, b)
+				}
+			}
+			pub := keys.Public()
+			if len(names) != 1 || !names[0].Named || names[0].ServerKeyID != pub.ServerKeyID() || names[0].EvidenceKeyID != pub.EvidenceKeyID() || names[0].EmailKey != tt.wantEmail() {
+				t.Errorf("the backups are named %+v; want one naming %s, %s and %s", names, pub.ServerKeyID(), pub.EvidenceKeyID(), tt.wantEmail())
+			}
+		})
+	}
+}
+
+// TestKeysList checks that keys list prints the bucket's key backups
+// oldest first, with what each name says it holds and "-" for a name from
+// before names said (#133).
+func TestKeysList(t *testing.T) {
+	h := newBackupHost(t)
+	keys, err := backup.Load(backup.KeysDir(h.dataDir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	pub := keys.Public()
+	made := time.Date(2026, 11, 20, 10, 15, 0, 0, time.UTC)
+	named := backup.KeyBackupName(made, pub, "")
+	h.s3.SetObject("pairtime-data", backup.KeyBackupPrefix+named, []byte("armored"))
+	h.s3.SetObject("pairtime-data", backup.KeyBackupPrefix+"pairtime-keys-20261101T000000Z.tar.age", []byte("armored"))
+	h.s3.SetObject("pairtime-data", backup.KeyBackupPrefix+"notes.txt", []byte("not a backup"))
+	stdout, stderr, code := h.run(t, "keys", "list")
+	if code != 0 {
+		t.Fatalf("keys list: %s", stderr)
+	}
+	lines := strings.Split(strings.TrimSpace(stdout), "\n")
+	tests := []struct {
+		name, got, want string
+	}{
+		{name: "two backups are listed, and an object that isn't one is left out", got: fmt.Sprint(len(lines)), want: "2"},
+		{name: "a backup from before names said what it holds comes first, older, with - for each key",
+			got: lines[0], want: backup.KeyBackupPrefix + "pairtime-keys-20261101T000000Z.tar.age\t2026-11-01T00:00:00Z\t-\t-\t-"},
+		{name: "a named backup gives its keys and says none for no email key",
+			got: lines[len(lines)-1], want: backup.KeyBackupPrefix + named + "\t2026-11-20T10:15:00Z\t" + pub.ServerKeyID() + "\t" + pub.EvidenceKeyID() + "\tnone"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.got != tt.want {
+				t.Errorf("got %q, want %q", tt.got, tt.want)
+			}
+		})
+	}
+}
+
 func TestSnapshotCommands(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -254,6 +346,12 @@ func TestSnapshotCommands(t *testing.T) {
 			sealed, err := os.ReadFile(out)
 			if err != nil {
 				t.Fatal(err)
+			}
+			// -o - streams the same bytes to standard output, with the
+			// note on standard error (#133).
+			streamed, notes, code := h.run(t, "snapshot", "fetch", "-o", "-")
+			if code != 0 || streamed != string(sealed) || !strings.Contains(notes, "fetched "+objstore.SnapshotPrefix) {
+				t.Errorf("fetch -o - exited %d with %d bytes, not the file's %d; stderr %q", code, len(streamed), len(sealed), notes)
 			}
 			plain, err := age.Decrypt(bytes.NewReader(sealed), h.karim)
 			if err != nil {

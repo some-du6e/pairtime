@@ -55,9 +55,10 @@ type Doer interface {
 // returns how many of the accounts' minutes it settled.
 //
 // Settle counts the due minutes on q, the read pool, before each op, and
-// runs none when nothing is due. So an idle server makes no transaction
-// for it: serve counts every transaction that declares rows as a write
-// Litestream has to copy (backup.Replication.Wrote).
+// runs none when nothing is due, so an idle server makes no transaction
+// for it. serve waits for Litestream to copy only the transactions that
+// changed rows (writer.Commit.Changed, backup.Replication.Wrote), so one
+// that settled nothing wouldn't hold /readyz back either.
 func Settle(ctx context.Context, d Doer, q Querier, now time.Time) (int, error) {
 	// A minute ends 60 s after it starts.
 	cutoffMS := now.Add(-PendingWindow() - time.Minute).UnixMilli()

@@ -18,10 +18,10 @@ var ConfigTemplate string
 // replicates the database pairtime.toml.tmpl names, to the replica path
 // serve's -litestream-replica measures.
 //
+// compose.yml is embedded in a test file, compose_test.go, because only
+// this package's tests read it: pairtimed imports this package, so a file
+// embedded here is one the server image is built from, and a pin in
+// compose.yml would then build an image (server-image.yml's paths).
+//
 //go:embed litestream.yml
 var LitestreamYAML string
-
-// ComposeYAML is compose.yml, which tests read for the same reason.
-//
-//go:embed compose.yml
-var ComposeYAML string

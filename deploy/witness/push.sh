@@ -11,8 +11,15 @@
 #
 # It never changes or deletes a file the repository already holds: a
 # published root stays as it was published, so a later, different copy of
-# one is left out. Each round starts from the remote branch, so a failed
-# push is retried whole on the next round.
+# one is left out. Each round starts from the remote branch, or from nothing
+# while the repository is empty, so a failed push is retried whole on the
+# next round.
+#
+# A file is left out while its name, or the name of a directory on its
+# path, starts with a dot. pairtimed writes each root under such a name in
+# its final directory and renames it once it is whole, since a rename into
+# /witness from another mount can't be atomic (WP-SV17), so a round never
+# publishes half a root, or a temp file, for good.
 #
 #   PAIRTIME_WITNESS_REPO    owner/name, such as some-du6e/pairtime-witness
 #   PAIRTIME_WITNESS_REMOTE  the remote to push to; git@github.com:<repo>.git
@@ -55,8 +62,12 @@ publish() {
 		git -C "$work" checkout --quiet -B "$branch" "refs/remotes/origin/$branch" || return 1
 		git -C "$work" reset --quiet --hard "refs/remotes/origin/$branch" || return 1
 	else
-		# An empty repository: the first push makes the branch.
-		git -C "$work" checkout --quiet --orphan "$branch" 2> /dev/null || true
+		# An empty repository: the first push makes the branch. A branch
+		# left by a round whose push failed goes, with its index, so this
+		# round starts from nothing and commits every root again.
+		git -C "$work" symbolic-ref HEAD "refs/heads/$branch" || return 1
+		git -C "$work" update-ref -d "refs/heads/$branch" 2> /dev/null || true
+		git -C "$work" read-tree --empty || return 1
 	fi
 	git -C "$work" clean --quiet -f -d -x || return 1
 	if [ -z "$(find "$src" -mindepth 1 -print | head -n 1)" ]; then
@@ -65,7 +76,7 @@ publish() {
 	# What the repository lacks, file by file, never over what it holds.
 	# Not cp -R -n: BusyBox's skips a directory that exists, such as the
 	# clone itself, where GNU's goes into it.
-	(cd "$src" && find . -type f -print) | while IFS= read -r f; do
+	(cd "$src" && find . -type f ! -path '*/.*' -print) | while IFS= read -r f; do
 		if [ ! -e "$work/$f" ]; then
 			mkdir -p "$work/${f%/*}" || exit 1
 			cp "$src/$f" "$work/$f" || exit 1

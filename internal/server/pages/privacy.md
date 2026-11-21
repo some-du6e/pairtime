@@ -5,6 +5,10 @@
 > **This notice isn't final.** It doesn't name a controller yet, the person or organization responsible for your data on this server. Until it does, this server takes no sign-ups except test accounts for the people who run it, and the parts marked "not named yet" stay empty.
 
 {{end -}}
+{{with .NotRunning -}}
+> **Not everything here runs yet.** This server doesn't yet {{.}}. This notice describes each as it will work once it runs, and until then nothing reaches the server through it.
+
+{{end -}}
 This notice covers the pairtime server at {{.BaseURL}} and the pairtime program on your computer. It's written for Hack Clubbers aged 13 to 18 and their parents. If anything in it is unclear, ask the controller.
 
 ## The short version
@@ -113,11 +117,11 @@ Submitting hours to a program is always your choice. This is what happens when y
 ## Who else is involved
 
 - **Hack Club Auth** signs you in.
-- **Cloudflare** sits in front of this server and handles its encrypted connections, so it sees everything that passes between your computer or browser and this server, such as the numbers your computer uploads and the pages you open. It also runs automated bot detection on requests to this server, and pairtime's pages block the script it adds to them for that. What you reveal when you submit hours passes through it encrypted, with the limit [When you submit hours](#when-you-submit-hours) describes.
+- **Cloudflare** sits in front of this server and handles its encrypted connections, so it sees everything that passes between your computer or browser and this server, such as the numbers your computer uploads and the pages you open. It also runs automated bot detection on requests to this server, and pairtime's pages block the script it adds to them for that. And it asks your browser to report requests to this server that fail, a browser feature called Network Error Logging, so a browser that can't load a page here may send Cloudflare that page's address and the kind of error. What you reveal when you submit hours passes through it encrypted, with the limit [When you submit hours](#when-you-submit-hours) describes.
 - **GitHub, GitLab and Forgejo.** The server looks up commits of your public repositories there to check them. Once a day it also publishes a day root to a public GitHub repository. A day root is one hash over that day's uploads, with a count and nothing about you. If you install pairtime's GitHub App, GitHub also sends this server your pushes to the repositories you picked, as [What this server receives](#what-this-server-receives) says.
 - **A storage provider** keeps this server's backups, and the evidence you reveal when you submit hours. The evidence and the nightly backups are encrypted before they reach it. The continuous backup isn't encrypted with a key of the operator's own, so the storage provider could read it.
 - **Programs** you connect a project to can read your time and details for the linked projects, as [What this server receives](#what-this-server-receives) lists, until you unlink them. They also get your submissions to them and their outcomes.
-- **Healthchecks.io** gets a ping every 5 minutes, so the operator knows the server is up. The pings carry nothing about you.
+- **A monitoring service** the operator chooses gets a ping every 5 minutes while this server works, and one after each nightly backup, so the operator hears when something stops. The pings carry nothing about you.
 
 Apart from these, this server sends your data nowhere.
 

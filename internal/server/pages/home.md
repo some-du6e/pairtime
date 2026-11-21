@@ -10,7 +10,7 @@ Thinking, writing prompts, reading what the agent did, testing and fixing all co
 {{if .SignupsOpen -}}
 > **Early pilot.** Sign-ups on this server are open.{{if .SignIn}} Sign in with Hack Club to make your account.{{else}} Sign-in isn't set up on this server yet, though.{{end}}
 {{- else -}}
-> **Early pilot.** Sign-ups are closed for now, and testers join by invitation.{{if .SignIn}} Until sign-ups open, this server makes accounts only for the people who run it.{{else}} Sign-in isn't set up on this server yet.{{end}}
+> **Early pilot.** Sign-ups are closed for now, and testers use pairtime on their own computers without an account.{{if .SignIn}} Until sign-ups open, this server makes accounts only for the people who run it.{{else}} Sign-in isn't set up on this server yet.{{end}}
 {{- end}}
 
 ## How it counts

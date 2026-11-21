@@ -38,12 +38,15 @@ func TestAPI(t *testing.T) {
 		wantCode   int
 		wantBody   string
 		wantAsked  string
+		// wantChallenge is the WWW-Authenticate header the answer must
+		// carry, "" for none.
+		wantChallenge string
 	}{
 		{name: "a signed-in owner gets their own view as JSON", account: "u1", wantCode: 200, wantBody: `"today":"2026-11-20"`, wantAsked: "u1"},
 		{name: "the JSON keeps pending apart from final", account: "u1", wantCode: 200, wantBody: `"you":{"final_s":6240,"pending_s":540}`, wantAsked: "u1"},
 		{name: "each project has its account-level id, its devices' keys and its name", account: "u1", wantCode: 200, wantBody: `{"id":"p_sample_chip8","keys":["p_sample_chip8"],"name":"chip8-emulator"}`, wantAsked: "u1"},
 		{name: "the JSON says whether a repo on two computers shows as two projects", account: "u1", wantCode: 200, wantBody: `"projects_split_by_device":false`, wantAsked: "u1"},
-		{name: "a request that isn't signed in gets 401 not_signed_in, as GET /api/v1/users/me answers", wantCode: 401, wantBody: `{"error":"not_signed_in"}`},
+		{name: "a request that isn't signed in gets 401 not_signed_in, with the session challenge, as GET /api/v1/users/me answers", wantCode: 401, wantBody: `{"error":"not_signed_in"}`, wantChallenge: `Session realm="pairtime"`},
 		{name: "a session that can't be read is a 500, not a sign-in, and no view is read", sessionErr: errors.New("database is locked"), wantCode: 500, wantBody: `{"error":"dashboard_unavailable"}`},
 		{name: "a view that doesn't load is a 500, never a view with wrong numbers", account: "u1", err: errors.New("disk on fire"), wantCode: 500, wantBody: `{"error":"dashboard_unavailable"}`, wantAsked: "u1"},
 	}
@@ -71,6 +74,9 @@ func TestAPI(t *testing.T) {
 			}
 			if asked != tt.wantAsked {
 				t.Errorf("the source was asked about %q, want %q", asked, tt.wantAsked)
+			}
+			if got := rec.Header().Get("WWW-Authenticate"); got != tt.wantChallenge {
+				t.Errorf("WWW-Authenticate = %q, want %q", got, tt.wantChallenge)
 			}
 			for h, want := range map[string]string{"Cache-Control": "no-store", "Content-Type": "application/json; charset=utf-8", "X-Content-Type-Options": "nosniff"} {
 				if got := rec.Header().Get(h); got != want {

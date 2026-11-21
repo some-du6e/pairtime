@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -85,6 +86,9 @@ func serve(ctx context.Context, cfg *config.Config, logger *slog.Logger, e *env,
 	if err != nil {
 		return err
 	}
+	// Ingest takes uploads once the server key loads (newIngest), and the
+	// privacy notice says whether it does.
+	_, keyErr := backup.Load(backup.KeysDir(cfg.DataDir))
 	site, err := pages.New(pages.Options{
 		BaseURL: cfg.BaseURL,
 		Controller: pages.Controller{
@@ -100,6 +104,11 @@ func serve(ctx context.Context, cfg *config.Config, logger *slog.Logger, e *env,
 		Version:        version.Get().Version,
 		Commit:         sourceCommit(version.Get()),
 		Retention:      policy,
+		// What the privacy notice describes that this server runs. Sign-in
+		// runs once hca.client_id is set (newSignIn), and uploads (WP-SV4)
+		// once the server key loads. The work package that adds
+		// submissions (WP-SB1) or day roots (WP-SV17) sets its own here.
+		Running: pages.Running{SignIn: cfg.HCA.ClientID != "", Uploads: keyErr == nil},
 	})
 	if err != nil {
 		return err
@@ -108,6 +117,14 @@ func serve(ctx context.Context, cfg *config.Config, logger *slog.Logger, e *env,
 		logger.Info("sign-ups are closed; only operators can create accounts", "operators", len(cfg.Operators))
 	}
 
+	// compose points SQLite's temporary files at the data disk, off the
+	// container's small /tmp (deploy/compose.yml); the directory is made
+	// here when it isn't there yet, or SQLite would fall back to /tmp.
+	if dir := e.getenv("SQLITE_TMPDIR"); dir != "" {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			logger.Warn("couldn't make SQLITE_TMPDIR, so SQLite's temporary files go to /tmp", "dir", dir, "err", err)
+		}
+	}
 	db, err := store.Open(ctx, storeOptions(cfg, e))
 	if err != nil {
 		return err
@@ -140,13 +157,22 @@ func serve(ctx context.Context, cfg *config.Config, logger *slog.Logger, e *env,
 		series.ObserveCommit(c.Duration, c.Rows, c.Failed, c.Err)
 		if c.Err != nil {
 			logger.Error("writer transaction failed", "err", c.Err, "ops", c.Ops, "rows", c.Rows)
-		} else if r := repl.Load(); r != nil && c.Rows > c.Failed {
+		} else if r := repl.Load(); r != nil && c.Changed > 0 {
+			// Only a transaction that changed rows wrote WAL for
+			// Litestream to read; one that changed none, such as the
+			// hourly sweep of expired sessions finding none, would wait
+			// for an LTX file that never comes.
 			r.Wrote(c.Start.Add(c.Duration))
 		}
 	}})
 	// Deferred after db.Close, so it runs first: queued writes commit
 	// before the database closes.
 	defer w.Close()
+
+	// The keys in data_dir must be the ones the database was written with.
+	if err := checkServerKeys(ctx, cfg.DataDir, db, w, logger); err != nil {
+		return err
+	}
 
 	// The retention jobs that are on sweep through the writer, so their
 	// deletes queue with every other write (DESIGN 4.4). A job, hold or
@@ -340,7 +366,7 @@ func serve(ctx context.Context, cfg *config.Config, logger *slog.Logger, e *env,
 	}
 	errLog := slog.NewLogLogger(logger.Handler(), slog.LevelWarn)
 	servers := []*http.Server{
-		newHTTPServer(withHSTS(cfg.BaseURL, public), errLog),
+		newHTTPServer(withHSTS(cfg.BaseURL, withDefaultHeaders(public)), errLog),
 		newHTTPServer(ops.Handler(reg, checks, ops.DefaultCheckTimeout), errLog),
 	}
 	listeners := []net.Listener{pubLn, opsLn}
@@ -417,6 +443,30 @@ func withHSTS(baseURL string, h http.Handler) http.Handler {
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Strict-Transport-Security", hstsValue)
+		h.ServeHTTP(w, r)
+	})
+}
+
+// defaultHeaders are what every response from the public listener says
+// unless its handler sets its own, as the pages do: nobody stores it, no
+// browser sniffs another type into it, it loads nothing and no page frames
+// it, and it sends no referrer. ServeMux's own 404 and 405 answers set
+// none, and Cloudflare kept a 404 for /favicon.ico for 4 hours when the
+// answer said nothing about caching (#119).
+var defaultHeaders = map[string]string{
+	"Cache-Control":           "no-store",
+	"X-Content-Type-Options":  "nosniff",
+	"Content-Security-Policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+	"Referrer-Policy":         "no-referrer",
+}
+
+// withDefaultHeaders sets defaultHeaders before h writes, so h replaces
+// any it sets itself.
+func withDefaultHeaders(h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		for k, v := range defaultHeaders {
+			w.Header().Set(k, v)
+		}
 		h.ServeHTTP(w, r)
 	})
 }

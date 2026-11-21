@@ -52,6 +52,8 @@ type env struct {
 	// doctorWriteGap, when positive, replaces doctor's wait between its
 	// two write-once puts.
 	doctorWriteGap time.Duration
+	// diskSpace stands in for backup.DiskSpace in doctor's disk check.
+	diskSpace func(path string) (free, total uint64, ok bool, err error)
 }
 
 // getenv looks name up in e.environ.
