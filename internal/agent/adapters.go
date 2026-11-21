@@ -16,6 +16,7 @@ import (
 	"io"
 	"io/fs"
 	"maps"
+	"math"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -195,13 +196,14 @@ type adapterHost struct {
 	// (parked), and parkedLive those of them that came through
 	// held.jsonl.pending, which keeps their lines meanwhile.
 	parkedN, parkedLive int
-	// For waiting: stepFrom is the earliest event time, in Unix ms, of the
-	// calls the worker's step took from queue, until it is done with them;
-	// parkedAt counts the parked calls by theirs, until each is parsed; and
-	// heldFrom is the earliest of the calls held counts that the agent
-	// could read. 0 or empty for none.
-	stepFrom, heldFrom int64
-	parkedAt           map[int64]int
+	// For waiting: stepping are the times of the calls the worker's step
+	// took from queue, until it is done with them; parkedAt counts the
+	// parked calls by theirs, until each is parsed; and heldFrom is the
+	// earliest of the calls held counts that the agent could read, by the
+	// wall clock and by each boot's monotonic clock. Empty for none.
+	stepping []callStamp
+	parkedAt map[callStamp]int
+	heldFrom earliestStamp
 	// expireDue says the minute job has run since the worker last looked
 	// for held calls to drop (expireRun). heldDue is when the oldest call in
 	// held.jsonl or an unread .replay file will have waited heldKeep, zero
@@ -344,7 +346,7 @@ func newAdapterHost(a *agent) *adapterHost {
 		stats:     make(map[event.Harness]*harnessStats),
 		built:     make(map[event.Harness]adapters.Adapter),
 		parkedBy:  make(map[string]int),
-		parkedAt:  make(map[int64]int),
+		parkedAt:  make(map[callStamp]int),
 		pendingAt: make(map[string][]inbox.Span),
 		kick:      make(chan struct{}, 1),
 		stop:      make(chan struct{}),
@@ -991,7 +993,7 @@ func (h *adapterHost) step(last bool) {
 	h.mu.Lock()
 	batch := h.queue
 	h.queue = nil
-	h.stepFrom = earliest(batch)
+	h.stepping = stampsOf(batch)
 	saveDue := h.saveDue
 	h.saveDue = false
 	expireDue := h.expireDue
@@ -1000,7 +1002,7 @@ func (h *adapterHost) step(last bool) {
 	h.mu.Unlock()
 	// The batch's calls are parsed, parked or held by the step's end, and
 	// waiting finds those last two where they went.
-	defer h.count(func() { h.stepFrom = 0 })
+	defer h.count(func() { h.stepping = nil })
 	if expireDue && !last {
 		// In every state, since calls are held longest while the agent has
 		// no keys or its writer is down.
@@ -1369,7 +1371,7 @@ func (h *adapterHost) park(c hostCall) {
 		if c.live {
 			h.parkedLive++
 		}
-		h.parkedAt[callTime(c.d)]++
+		h.parkedAt[stampOf(c.d)]++
 	})
 }
 
@@ -1406,10 +1408,10 @@ func (h *adapterHost) unparked(c hostCall) {
 		if c.live {
 			h.parkedLive--
 		}
-		if t := callTime(c.d); h.parkedAt[t] <= 1 {
-			delete(h.parkedAt, t)
+		if s := stampOf(c.d); h.parkedAt[s] <= 1 {
+			delete(h.parkedAt, s)
 		} else {
-			h.parkedAt[t]--
+			h.parkedAt[s]--
 		}
 	})
 }
@@ -1783,7 +1785,7 @@ func (h *adapterHost) hold(calls []inbox.Delivery) []inbox.Delivery {
 		h.count(func() {
 			h.held++
 			h.dueByLocked(d.Received.Wall.Add(heldKeep))
-			h.heldFrom = earlier(h.heldFrom, callTime(d))
+			h.heldFrom.add(stampOf(d))
 		})
 	}
 	return nil
@@ -2201,7 +2203,7 @@ func heldAt(line []byte) (time.Time, bool) {
 
 // countHeld counts the calls an earlier run left held, for the status.
 func (h *adapterHost) countHeld() {
-	n, from := 0, int64(0)
+	n, from := 0, earliestStamp{}
 	for _, name := range []string{h.a.dirs.Held() + ".replay", h.a.dirs.Held()} {
 		f, err := inbox.OpenPrivate(name, os.O_RDONLY, 0)
 		if err != nil {
@@ -2213,7 +2215,7 @@ func (h *adapterHost) countHeld() {
 			if len(bytes.TrimSpace(line)) > 0 {
 				n++
 				if d, ok := h.readHeld(line); ok {
-					from = earlier(from, callTime(d))
+					from.add(stampOf(d))
 				}
 			}
 			if err != nil {
@@ -2224,7 +2226,7 @@ func (h *adapterHost) countHeld() {
 	}
 	h.count(func() {
 		h.held += n
-		h.heldFrom = earlier(h.heldFrom, from)
+		h.heldFrom.merge(from)
 	})
 }
 
@@ -2233,60 +2235,126 @@ func (h *adapterHost) countHeld() {
 func (h *adapterHost) lessHeldLocked(n int) {
 	h.held = max(h.held-n, 0)
 	if h.held == 0 {
-		h.heldFrom = 0
+		h.heldFrom = earliestStamp{}
 	}
 }
 
-// waiting reports whether a hook call made before before, in Unix ms, is
-// still to be parsed, and its records to reach the ledger writer: taken in
-// and waiting for the worker, in the step the worker is on, parked behind
-// its folder's first Track, or held in held.jsonl or a .replay file while
-// the keys or the writer weren't there. It is the adapters' part of the
-// writer's Waiting (agent.waiting), which a seal asks while the first
-// batch after a switch back online is due its mark, so it takes only mu.
-// A call counts by the time its records carry (hookpath.Times), and stays
-// counted until its records are written, so no seal falls between the two.
-func (h *adapterHost) waiting(before int64) bool {
+// waiting reports whether a hook call that before says may have been made
+// before config.toml was last seen local-only is still to be parsed, and
+// its records to reach the ledger writer: taken in and waiting for the
+// worker, in the step the worker is on, parked behind its folder's first
+// Track, or held in held.jsonl or a .replay file while the keys or the
+// writer weren't there. It is the adapters' part of the writer's Waiting
+// (agent.waiting), which a seal asks while the first batch after a switch
+// back online is due its mark, so it takes only mu. A call counts by the
+// times its records carry (hookpath.Times), and stays counted until its
+// records are written, so no seal falls between the two.
+func (h *adapterHost) waiting(before func(event.Envelope) bool) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if h.stepFrom != 0 && h.stepFrom < before || h.held > 0 && h.heldFrom != 0 && h.heldFrom < before {
+	if h.held > 0 && h.heldFrom.waits(before) {
 		return true
 	}
-	for _, d := range h.queue {
-		if callTime(d) < before {
+	for _, s := range h.stepping {
+		if before(s.envelope()) {
 			return true
 		}
 	}
-	for t := range h.parkedAt {
-		if t < before {
+	for _, d := range h.queue {
+		if before(stampOf(d).envelope()) {
+			return true
+		}
+	}
+	for s := range h.parkedAt {
+		if before(s.envelope()) {
 			return true
 		}
 	}
 	return false
 }
 
-// callTime is the time of the records hook call d gives, in Unix ms
-// (adapters.HookRecord).
-func callTime(d inbox.Delivery) int64 { return hookpath.Times(d).Wall.UnixMilli() }
-
-// earliest is the earliest callTime of calls, 0 for none.
-func earliest(calls []inbox.Delivery) int64 {
-	from := int64(0)
-	for _, d := range calls {
-		from = earlier(from, callTime(d))
-	}
-	return from
+// callStamp is the times of a hook call's records (adapters.HookRecord):
+// its t by the wall clock, in Unix ms, and its mono in boot.
+type callStamp struct {
+	t, mono int64
+	boot    string
 }
 
-// earlier is the earlier of the times a and b, where 0 is none.
-func earlier(a, b int64) int64 {
-	switch {
-	case a == 0:
-		return b
-	case b == 0:
-		return a
+// stampOf is the times hook call d's records carry (hookpath.Times).
+func stampOf(d inbox.Delivery) callStamp {
+	at := hookpath.Times(d)
+	return callStamp{t: at.Wall.UnixMilli(), mono: at.Mono, boot: at.BootID}
+}
+
+// stampsOf is each call's times.
+func stampsOf(calls []inbox.Delivery) []callStamp {
+	if len(calls) == 0 {
+		return nil
 	}
-	return min(a, b)
+	out := make([]callStamp, len(calls))
+	for i, d := range calls {
+		out[i] = stampOf(d)
+	}
+	return out
+}
+
+// envelope is s as the envelope of the call's records.
+func (s callStamp) envelope() event.Envelope {
+	return event.Envelope{T: s.t, Mono: s.mono, BootID: s.boot}
+}
+
+// earliestStamp is the earliest of some calls' times by each clock: by the
+// wall clock, and by the monotonic clock of each boot they were made in.
+// The zero value holds none.
+type earliestStamp struct {
+	wall int64
+	set  bool
+	mono map[string]int64
+}
+
+// add takes in s.
+func (e *earliestStamp) add(s callStamp) {
+	if !e.set || s.t < e.wall {
+		e.wall, e.set = s.t, true
+	}
+	if s.mono > 0 && s.boot != "" {
+		if e.mono == nil {
+			e.mono = make(map[string]int64)
+		}
+		if cur, ok := e.mono[s.boot]; !ok || s.mono < cur {
+			e.mono[s.boot] = s.mono
+		}
+	}
+}
+
+// merge takes in what o holds.
+func (e *earliestStamp) merge(o earliestStamp) {
+	if o.set {
+		e.add(callStamp{t: o.wall})
+	}
+	for boot, mono := range o.mono {
+		if e.mono == nil {
+			e.mono = make(map[string]int64)
+		}
+		if cur, ok := e.mono[boot]; !ok || mono < cur {
+			e.mono[boot] = mono
+		}
+	}
+}
+
+// waits reports whether before says some call e holds may have been made
+// before the moment: the earliest by the wall clock, or the earliest of a
+// boot by its monotonic clock, each asked alone.
+func (e earliestStamp) waits(before func(event.Envelope) bool) bool {
+	if e.set && before(event.Envelope{T: e.wall}) {
+		return true
+	}
+	for boot, mono := range e.mono {
+		if before(event.Envelope{T: math.MaxInt64, Mono: mono, BootID: boot}) {
+			return true
+		}
+	}
+	return false
 }
 
 // readHeld reads a line of held.jsonl. Only a line this run wrote, whose

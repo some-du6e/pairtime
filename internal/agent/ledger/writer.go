@@ -120,20 +120,23 @@ type Options struct {
 	// sealed online, but for NoteMode and the events made before a
 	// local-only stretch it noted ended.
 	Online func() bool
-	// Waiting, when set, reports whether an event made before before, in
-	// Unix ms, may still be on its way to the writer: a hook call parked
-	// behind its folder's first Track, or held while the adapters' keys or
-	// the writer weren't there, or a git change the watcher holds. While
-	// the first batch after a switch back online is due its mark
-	// (Batch.Back), each seal asks it as it begins, with the moment
-	// config.toml was last seen local-only, outside the lock records take,
-	// and it must never call the Writer. While it says yes, the batch is
-	// sealed local-only and the mark waits for the next one: so an event
-	// made in local-only mode that reaches the writer late is sealed in the
-	// run of local-only batches before the first batch the server can
-	// take, and not after it, where its batch would stop the batch roots
-	// until the next sign-in (ingest-v1 5.3). Nil means nothing waits.
-	Waiting func(before int64) bool
+	// Waiting, when set, reports whether an event that before says may
+	// have been made before config.toml was last seen local-only is still
+	// on its way to the writer: a hook call parked behind its folder's
+	// first Track, or held while the adapters' keys or the writer weren't
+	// there, a git change the watcher holds, or a record presence queued.
+	// before takes the event's times, its t and its mono in its boot, and
+	// says yes for one made before the moment by any of them (moment), so
+	// whatever Write would seal local-only counts. While the first batch
+	// after a switch back online is due its mark (Batch.Back), each seal
+	// asks it as it begins, outside the lock records take, and it must
+	// never call the Writer. While it says yes, the batch is sealed
+	// local-only and the mark waits for the next one: so an event made in
+	// local-only mode that reaches the writer late is sealed in the run of
+	// local-only batches before the first batch the server can take, and
+	// not after it, where its batch would stop the batch roots until the
+	// next sign-in (ingest-v1 5.3). Nil means nothing waits.
+	Waiting func(before func(event.Envelope) bool) bool
 	// Clock reads the OS's monotonic clock, which hook calls carry, at the
 	// moments config.toml is seen local-only (moment): clock.Now when nil.
 	Clock func() clock.Stamp
@@ -230,7 +233,7 @@ type Writer struct {
 	now      func() time.Time
 	sealedFn func(Batch)
 	online   func() bool
-	waiting  func(int64) bool
+	waiting  func(func(event.Envelope) bool) bool
 	osNow    func() clock.Stamp
 	problem  func(string)
 	device   string
@@ -842,7 +845,7 @@ func (w *Writer) seal() (Batch, bool, error) {
 		notes, next := w.notes, w.next
 		// The first batch after a switch back online is due its mark.
 		due := w.waiting != nil && w.back > 0 && len(w.pending) > 0
-		before := w.until.wall
+		until := w.until
 		w.mu.Unlock()
 		// A switch to local-only mode that came before the seal makes the
 		// batch local-only, whenever its records came.
@@ -850,7 +853,7 @@ func (w *Writer) seal() (Batch, bool, error) {
 		// An event made in the stretch that is still on its way would
 		// reach the writer after the mark, so the batch is local-only and
 		// the mark waits (Options.Waiting).
-		waiting = due && online && w.waiting(before)
+		waiting = due && online && w.waiting(until.madeBefore)
 		w.mu.Lock()
 		if w.notes == notes && (w.next == next || reads >= sealReads) {
 			break

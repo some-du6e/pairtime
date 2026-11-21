@@ -82,21 +82,46 @@ func TestMoment(t *testing.T) {
 		})
 	}
 
-	at := time.UnixMilli(testT)
+	wallOnly, now := time.UnixMilli(testT), time.Now()
 	reads := []struct {
 		name string
+		at   time.Time
 		s    clock.Stamp
 		want moment
 	}{
 		{"a moment takes the OS's reading with its boot",
-			clock.Stamp{Mono: 42, BootID: boot}, moment{wall: testT, run: runMono(at), os: 42, boot: boot}},
+			wallOnly, clock.Stamp{Mono: 42, BootID: boot}, moment{wall: testT, os: 42, boot: boot}},
 		{"a moment takes no reading of the OS's clock when the OS gave none",
-			clock.Stamp{}, moment{wall: testT, run: runMono(at)}},
+			wallOnly, clock.Stamp{}, moment{wall: testT}},
+		{"a moment takes this run's clock from a time with Go's monotonic reading",
+			now, clock.Stamp{}, moment{wall: now.UnixMilli(), run: runMono(now)}},
+		{"a moment takes none of this run's clock from a time with no monotonic reading, as one read back from disk",
+			now.Round(0), clock.Stamp{}, moment{wall: now.UnixMilli()}},
 	}
 	for _, c := range reads {
 		t.Run(c.name, func(t *testing.T) {
-			if got := momentAt(at, c.s); got != c.want {
-				t.Errorf("momentAt(%v, %+v) = %+v, want %+v", at, c.s, got, c.want)
+			if got := momentAt(c.at, c.s); got != c.want {
+				t.Errorf("momentAt(%v, %+v) = %+v, want %+v", c.at, c.s, got, c.want)
+			}
+		})
+	}
+
+	wider := []struct {
+		name string
+		e    event.Envelope
+		want bool
+	}{
+		{"an event before the moment by its t may have been made before it, though its mono is after",
+			event.Envelope{T: 9_999, BootID: runBoot, Mono: 5_000}, true},
+		{"so may one before it by its mono, though its t is after",
+			event.Envelope{T: 20_000, BootID: boot, Mono: 6_999}, true},
+		{"one after it by every clock it carries wasn't",
+			event.Envelope{T: 10_000, BootID: runBoot, Mono: 5_000}, false},
+	}
+	for _, c := range wider {
+		t.Run(c.name, func(t *testing.T) {
+			if got := m.madeBefore(c.e); got != c.want {
+				t.Errorf("madeBefore(%+v) = %v, want %v", c.e, got, c.want)
 			}
 		})
 	}

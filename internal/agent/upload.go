@@ -110,12 +110,13 @@ type modesState struct {
 	Ended time.Time `json:"ended,omitzero"`
 }
 
-// seeLocked takes config.toml's mode, seen now, and keeps a change of what
-// modes saw in state.json. a.modes.mu is held.
-func (a *agent) seeLocked(online bool) {
+// seeLocked takes config.toml's mode, seen now, and reports whether what
+// modes saw changed, which the caller keeps in state.json once the writer
+// has the note (keepLocked). a.modes.mu is held.
+func (a *agent) seeLocked(online bool) bool {
 	m := &a.modes
 	if online == !m.local {
-		return
+		return false
 	}
 	if online {
 		m.ended, m.os = time.Now(), clock.Now()
@@ -124,10 +125,17 @@ func (a *agent) seeLocked(online bool) {
 		a.drainSoon()
 	}
 	m.local = !online
+	return true
+}
+
+// keepLocked keeps what modes saw in state.json, with its flush, after the
+// writer has the note, so the flush holds up no record. a.modes.mu is
+// held.
+func (a *agent) keepLocked() {
 	if a.state == nil {
 		return
 	}
-	err := a.state.Put(modesKey, modesState{Local: m.local, Ended: m.ended})
+	err := a.state.Put(modesKey, modesState{Local: a.modes.local, Ended: a.modes.ended})
 	if err == nil {
 		err = a.state.Save()
 	}
@@ -154,19 +162,26 @@ func (a *agent) startModes() {
 		}
 	}
 	a.modes.local, a.modes.ended = last.Local, last.Ended
-	a.seeLocked(a.online())
+	if a.seeLocked(a.online()) {
+		a.keepLocked()
+	}
 }
 
 // noteMode is the config watch's note of config.toml's mode, at its reload
 // after the editors' steps: it tells the ledger writer, once published
-// (ledger.Writer.NoteMode), and modes keeps it until then.
+// (ledger.Writer.NoteMode), and modes keeps it until then. It reads the
+// file under modes' lock, so a reload's read can't land after a later
+// look's (noteBack).
 func (a *agent) noteMode() {
-	online := a.online()
 	a.modes.mu.Lock()
 	defer a.modes.mu.Unlock()
-	a.seeLocked(online)
+	online := a.online()
+	changed := a.seeLocked(online)
 	if w := a.modes.w; w != nil {
 		w.NoteMode(online)
+	}
+	if changed {
+		a.keepLocked()
 	}
 }
 
@@ -180,18 +195,16 @@ func (a *agent) noteMode() {
 // online when the saved file won't say so. A switch to local-only waits
 // for the reload, and the seals read the file meanwhile.
 func (a *agent) noteBack() {
-	if !a.online() {
-		return
-	}
 	a.modes.mu.Lock()
 	defer a.modes.mu.Unlock()
-	if !a.modes.local {
+	if !a.modes.local || !a.online() {
 		return
 	}
 	a.seeLocked(true)
 	if w := a.modes.w; w != nil {
 		w.NoteMode(true)
 	}
+	a.keepLocked()
 }
 
 // seen is the ledger writer's Seen: what modes saw of config.toml's mode

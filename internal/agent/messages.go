@@ -167,12 +167,11 @@ const spoolSlack = hookpath.StdinWait + ipc.HookTimeout + time.Second
 // drainSoon has the inbox drained once spoolSlack has passed, rather than
 // at the next minute's drain, as the switch back online after a local-only
 // stretch asks (modes): a hook call made just before the switch that went
-// to the spool, its ack late, reaches the ledger writer within seconds of
-// it, before the server can take a batch sealed after the switch, so its
-// batch, sealed local-only by the call's own time, lands in the stretch's
-// run rather than stop the batch roots (ledger.Options.Waiting). Without a
-// drain running, as before startIPC, it does nothing: the first drain
-// comes as startIPC starts.
+// to the spool, its ack late, holds the mark of the first batch after the
+// switch while it waits there (spoolHolds), and this has it reach the
+// ledger writer within seconds, its batch sealed local-only by the call's
+// own time in the stretch's run. Without a drain running, as before
+// startIPC, it does nothing: the first drain comes as startIPC starts.
 func (a *agent) drainSoon() {
 	k := a.spoolKick.Load()
 	if k == nil || a.sched == nil {
@@ -185,6 +184,18 @@ func (a *agent) drainSoon() {
 		default: // a drain is already due
 		}
 	})
+}
+
+// spoolHolds reports whether the inbox's spool holds hook calls no drain
+// has handed to the adapters yet (inbox.Pending), for the ledger writer's
+// Waiting (agent.waiting). Their times aren't read, so any of them holds
+// the mark of the first batch after a switch back online until a drain,
+// which drainSoon brings within seconds of the switch. The spool is used
+// only while hooks can't reach the socket, so it is empty almost always.
+// With no drain running in this run, as when the journal couldn't open,
+// its calls wait for the next start, and hold nothing.
+func (a *agent) spoolHolds() bool {
+	return a.spoolKick.Load() != nil && inbox.Pending(a.dirs.Inbox())
 }
 
 // drain moves what the inbox holds into the journal.

@@ -152,8 +152,12 @@ func TestCallParkedAcrossLogin(t *testing.T) {
 // counts while it is still to be parsed, wherever it waits, and stops
 // counting once its records are written.
 func TestAdaptersWaiting(t *testing.T) {
-	const before = int64(1_795_100_000_000)
+	const moment, boot = int64(1_795_100_000_000), "b_os"
+	// before is the writer's test of an event against the moment: by its
+	// t, or by its mono in boot, where the moment is mono 50,000.
+	before := func(e event.Envelope) bool { return e.T < moment || e.BootID == boot && e.Mono > 0 && e.Mono < 50_000 }
 	call := func(ms int64) inbox.Delivery { return inbox.Delivery{Received: clock.Stamp{Wall: time.UnixMilli(ms)}} }
+	at := func(ms int64) callStamp { return callStamp{t: ms} }
 	newHost := func() *adapterHost {
 		dir := t.TempDir()
 		return newAdapterHost(&agent{dirs: home.Dirs{Data: dir, Config: dir, Runtime: dir}, log: slog.New(slog.DiscardHandler),
@@ -164,13 +168,17 @@ func TestAdaptersWaiting(t *testing.T) {
 		set  func(h *adapterHost)
 		want bool
 	}{
-		{"a call made before the moment counts while it waits for the worker", func(h *adapterHost) { h.queue = []inbox.Delivery{call(before - 1)} }, true},
-		{"a call made at the moment or after it doesn't count", func(h *adapterHost) { h.queue = []inbox.Delivery{call(before)} }, false},
-		{"a call made before the moment counts while the step that took it works", func(h *adapterHost) { h.stepFrom = before - 1 }, true},
-		{"a parked call made before the moment counts", func(h *adapterHost) { h.parkedAt[before-1] = 1 }, true},
-		{"a parked call made after it doesn't", func(h *adapterHost) { h.parkedAt[before+1] = 2 }, false},
-		{"a held call made before the moment counts while calls are held", func(h *adapterHost) { h.held, h.heldFrom = 1, before-1 }, true},
-		{"held calls that were all made after it don't count", func(h *adapterHost) { h.held, h.heldFrom = 3, before+1 }, false},
+		{"a call made before the moment counts while it waits for the worker", func(h *adapterHost) { h.queue = []inbox.Delivery{call(moment - 1)} }, true},
+		{"a call made at the moment or after it doesn't count", func(h *adapterHost) { h.queue = []inbox.Delivery{call(moment)} }, false},
+		{"a call made before the moment counts while the step that took it works", func(h *adapterHost) { h.stepping = []callStamp{at(moment + 1), at(moment - 1)} }, true},
+		{"a parked call made before the moment counts", func(h *adapterHost) { h.parkedAt[at(moment-1)] = 1 }, true},
+		{"a parked call made after it doesn't", func(h *adapterHost) { h.parkedAt[at(moment+1)] = 2 }, false},
+		{"a parked call made before the moment by its boot's monotonic clock counts, though its t is after",
+			func(h *adapterHost) { h.parkedAt[callStamp{t: moment + 1, mono: 49_000, boot: boot}] = 1 }, true},
+		{"a held call made before the moment counts while calls are held", func(h *adapterHost) { h.held = 1; h.heldFrom.add(at(moment - 1)) }, true},
+		{"a held call made before the moment by its boot's monotonic clock counts, though its t is after",
+			func(h *adapterHost) { h.held = 1; h.heldFrom.add(callStamp{t: moment + 1, mono: 49_000, boot: boot}) }, true},
+		{"held calls that were all made after it don't count", func(h *adapterHost) { h.held = 3; h.heldFrom.add(at(moment + 1)) }, false},
 		{"held calls none of which the agent could read don't count", func(h *adapterHost) { h.held = 2 }, false},
 		{"nothing to parse counts for nothing", func(*adapterHost) {}, false},
 	}
@@ -186,7 +194,7 @@ func TestAdaptersWaiting(t *testing.T) {
 
 	t.Run("a parked call counts until it is parsed, by the time its records carry", func(t *testing.T) {
 		h := newHost()
-		c := hostCall{d: call(before - 1)}
+		c := hostCall{d: call(moment - 1)}
 		h.park(c)
 		parked := h.waiting(before)
 		h.unparked(c)
@@ -198,7 +206,7 @@ func TestAdaptersWaiting(t *testing.T) {
 		capture := readCapture(t)
 		h := newHost()
 		c := capture[0]
-		c.Arrived = time.UnixMilli(before - 1)
+		c.Arrived = time.UnixMilli(moment - 1)
 		if left := h.hold([]inbox.Delivery{adapters.DeliveryOf(event.HarnessClaudeCode, c, adapters.Walked, c.Arrived)}); len(left) != 0 {
 			t.Fatalf("%d calls couldn't be held", len(left))
 		}
@@ -229,7 +237,7 @@ func TestAdaptersWaiting(t *testing.T) {
 		h.keys = &adapterKeys{feat: lk.Features(), project: bytes.Repeat([]byte{8}, 32)}
 		h.writer, h.ready = w, true
 		c := capture[0]
-		c.Arrived = time.UnixMilli(before - 1)
+		c.Arrived = time.UnixMilli(moment - 1)
 		h.queue = []inbox.Delivery{adapters.DeliveryOf(event.HarnessClaudeCode, c, adapters.Walked, c.Arrived)}
 		// The step asks about the call's folder before it parses the call.
 		var during bool
@@ -401,6 +409,34 @@ func TestModesSeen(t *testing.T) {
 		repeated := kicked()
 		if !ended || repeated {
 			t.Errorf("a drain asked for at the stretch's end: %v, at a note that repeats online: %v; want true, false", ended, repeated)
+		}
+	})
+	t.Run("a hook call in the inbox's spool holds the first batch after a switch back until a drain hands it on, whatever its time", func(t *testing.T) {
+		a, dirs := newAgent(t, "online")
+		never := func(event.Envelope) bool { return false }
+		if err := os.MkdirAll(dirs.Inbox(), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		spool := filepath.Join(dirs.Inbox(), inbox.SpoolName)
+		taken := filepath.Join(dirs.Inbox(), "spool-1.drain")
+		write := func(name, text string) {
+			t.Helper()
+			if err := os.WriteFile(name, []byte(text), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		write(spool, "{}\n")
+		noDrain := a.waiting(never)
+		kick := make(chan struct{}, 1)
+		a.spoolKick.Store(&kick)
+		spooled := a.waiting(never)
+		write(spool, "")
+		empty := a.waiting(never)
+		write(taken, "{}\n")
+		draining := a.waiting(never)
+		if noDrain || !spooled || empty || !draining {
+			t.Errorf("with no drain running: %v; a call in the spool: %v; an empty spool: %v; a file a drain took: %v; want false, true, false, true",
+				noDrain, spooled, empty, draining)
 		}
 	})
 	t.Run("a stretch the last run saw going on, which state.json kept, lasts until the next start, so an event made before it is sealed local-only", func(t *testing.T) {

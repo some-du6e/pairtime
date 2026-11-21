@@ -10,6 +10,7 @@ import (
 
 	"github.com/some-du6e/pairtime/internal/agent/keys"
 	"github.com/some-du6e/pairtime/internal/agent/ledger"
+	"github.com/some-du6e/pairtime/pkg/event"
 )
 
 // ledgerOpenWait bounds how long a stop waits for the ledger to finish
@@ -86,10 +87,10 @@ func (a *agent) startLedger() func() {
 		// and the first batch after them that holds none takes the mark
 		// (Batch.Back), once none is still on its way (a.waiting).
 		a.publishWriter(lw)
+		a.ledgerIn.Attach(lw)
 		// The adapters parse the hook calls that waited for the keys and
 		// the writer (adapters.go).
 		a.adaptersHost().attach(lw)
-		a.ledgerIn.Attach(lw)
 		if a.scorer != nil {
 			a.scorer.Start()
 		}
@@ -199,17 +200,26 @@ func (a *agent) openLedger() (*ledger.Writer, error) {
 	})
 }
 
-// waiting is the ledger writer's Waiting: whether a hook call or a git
-// change made before before, in Unix ms, may still be on its way to it,
-// parked behind its folder's first Track, held while the adapters' keys or
-// the writer weren't there, or held by the git watcher for its actor. It
-// takes the adapter host's and the git watcher's locks, which neither holds
-// while it calls the writer.
-func (a *agent) waiting(before int64) bool {
+// waiting is the ledger writer's Waiting: whether a record that before
+// says may have been made before config.toml was last seen local-only is
+// still on its way to it: one of presence's still queued, a hook call in
+// the inbox's spool, parked behind its folder's first Track or held while
+// the adapters' keys or the writer weren't there, or a git change the
+// watcher holds for its actor. A git change carries this run's clock from
+// when its scan began (gitHost.sink), and is asked about by it. It takes
+// presence's, the adapter host's and the git watcher's locks, none of
+// which is held while the writer is called.
+func (a *agent) waiting(before func(event.Envelope) bool) bool {
+	if a.ledgerIn != nil && a.ledgerIn.Waiting(before) || a.spoolHolds() {
+		return true
+	}
 	h := a.adaptersHost()
 	if h.waiting(before) {
 		return true
 	}
 	g := h.git.Load()
-	return g != nil && g.w.Waiting(before)
+	return g != nil && g.w.Waiting(func(t int64, found time.Time) bool {
+		mono, boot := ledger.RunClock(found)
+		return before(event.Envelope{T: t, Mono: mono, BootID: boot})
+	})
 }

@@ -34,15 +34,38 @@ type moment struct {
 	boot string
 }
 
-// momentAt is at by each clock: the wall clock's at, this run's mono at at,
-// which Go's monotonic reading in at gives when it has one, and s, the OS's
-// reading taken with it.
+// momentAt is at by each clock: the wall clock's at, this run's mono at at
+// when at has Go's monotonic reading, as time.Now gives it and a time read
+// back from disk doesn't, and s, the OS's reading taken with it. A time
+// with no monotonic reading gives none of this run's clock, since one made
+// from the wall clock would move with its steps.
 func momentAt(at time.Time, s clock.Stamp) moment {
-	m := moment{wall: at.UnixMilli(), run: runMono(at)}
+	m := moment{wall: at.UnixMilli()}
+	if at != at.Round(0) { // Round(0) strips the monotonic reading
+		m.run = runMono(at)
+	}
 	if s.HasMono() {
 		m.os, m.boot = s.Mono, s.BootID
 	}
 	return m
+}
+
+// madeBefore reports whether the event e may have been made before m by
+// any clock it carries that m holds: by its t, or by its mono. It is wider
+// than before, for what may still be on its way to the writer
+// (Options.Waiting): every event before counts as made before m counts
+// here too, so each holds the mark until it comes, whichever way a step of
+// the wall clock went.
+func (m moment) madeBefore(e event.Envelope) bool {
+	switch {
+	case e.T < m.wall:
+		return true
+	case m.run > 0 && e.BootID == runBoot:
+		return e.Mono < m.run
+	case m.os > 0 && e.Mono > 0 && e.BootID == m.boot:
+		return e.Mono < m.os
+	}
+	return false
 }
 
 // raise moves m on to n by each clock where n is later. An OS reading of

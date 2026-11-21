@@ -786,11 +786,11 @@ func TestNoteMode(t *testing.T) {
 			withOnline := len(c.steps) == 0 || c.steps[0] != "no-online"
 			clk := newClock(testT)
 			// waits is whether an event made before the moment Waiting is
-			// asked about is on its way, and asked the moment it was last
-			// asked about.
+			// asked about is on its way, and asked whether the moment it was
+			// last asked about held an event made a moment before the switch
+			// back's note, and not one made at it.
 			var (
-				waits atomic.Bool
-				asked atomic.Int64
+				waits, asked atomic.Bool
 			)
 			const osBoot, osMono = "b_os", 50_000
 			openWriter := func(online func() bool) *Writer {
@@ -799,8 +799,8 @@ func TestNoteMode(t *testing.T) {
 						o.Online = online
 					}
 					o.Sealed = func(b Batch) { sealed <- b }
-					o.Waiting = func(before int64) bool {
-						asked.Store(before)
+					o.Waiting = func(before func(event.Envelope) bool) bool {
+						asked.Store(before(event.Envelope{T: testT - 1}) && !before(event.Envelope{T: testT}))
 						return waits.Load()
 					}
 					o.Clock = func() clock.Stamp { return clock.Stamp{Wall: clk.now(), Mono: osMono, BootID: osBoot} }
@@ -908,8 +908,8 @@ func TestNoteMode(t *testing.T) {
 			if !slices.Equal(online, c.online) || !slices.Equal(back, c.back) || !slices.Equal(records, c.records) {
 				t.Errorf("batches sealed online %v, marked %v, holding %v records; want %v, %v and %v", online, back, records, c.online, c.back, c.records)
 			}
-			if slices.Contains(c.steps, "waiting") && asked.Load() != testT {
-				t.Errorf("Waiting was last asked about %d, want the switch back's note at %d", asked.Load(), testT)
+			if slices.Contains(c.steps, "waiting") && !asked.Load() {
+				t.Error("Waiting was last asked about another moment than the switch back's note")
 			}
 			_, rows, err := ReadRows(dir, 1)
 			if err != nil {

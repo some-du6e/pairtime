@@ -20,6 +20,27 @@ func TestPresence(t *testing.T) {
 	sample := presence.Record{At: at, Data: &event.OSPresence{IdleAnyS: 2.5}}
 	suspend := presence.Record{At: at.Add(time.Second), Data: &event.OSPower{Op: event.PowerSuspend}}
 
+	t.Run("a record queued and not yet written counts for the writer's Waiting, by its event's times, until it is written", func(t *testing.T) {
+		p := NewPresence(nil)
+		p.Record(sample)
+		// The writer's test of a record against a moment just after it.
+		before := func(e event.Envelope) bool { return e.T < testT+1 && e.BootID == runBoot }
+		after := func(e event.Envelope) bool { return e.T < testT }
+		queued, notBefore := p.Waiting(before), p.Waiting(after)
+		w := open(t, t.TempDir(), newClock(testT))
+		p.Attach(w)
+		for deadline := time.Now().Add(10 * time.Second); w.Status().Next < 2; time.Sleep(10 * time.Millisecond) {
+			if time.Now().After(deadline) {
+				t.Fatal("the queued record never reached the writer")
+			}
+		}
+		written := p.Waiting(before)
+		p.Close()
+		if !queued || notBefore || written {
+			t.Errorf("queued: %v, against a moment before it: %v, once written: %v; want true, false, false", queued, notBefore, written)
+		}
+	})
+
 	t.Run("records taken before the writer opens are written once it does, as OS events with no project or session", func(t *testing.T) {
 		dir := t.TempDir()
 		p := NewPresence(nil)
