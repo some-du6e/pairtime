@@ -25,11 +25,12 @@ func New(k Known) (*Redactor, error) {
 
 // Find returns the spans of text to remove, in pipeline order (DESIGN 7.5
 // step 6 and 8.7): the teen's known values, then whatever one of gitleaks'
-// rules finds, then personal data that passes its checksum. Each step looks
-// at the original text, so the order only decides which type a merged span
-// gets on a tie. The spans are sorted by start and can overlap; Merge
-// makes them disjoint. Find doesn't collapse code blocks, which is a
-// separate choice for agent messages (CodeBlocks).
+// rules finds, then personal data that passes Presidio's checks, email
+// addresses included. Each step looks at the original text, so the order
+// only decides which type a merged span gets on a tie. The spans are sorted
+// by start and can overlap; Merge makes them disjoint. Find doesn't
+// collapse code blocks, which is a separate choice for agent messages
+// (CodeBlocks).
 //
 // In text with backslash escapes, such as a raw JSON capture, gitleaks'
 // rules and the PII patterns also read its JSON view (jsonView), and a

@@ -261,6 +261,35 @@ jobs:
             exit 1
           fi
 
+      - name: Device sign-in against the same OIDC server
+        if: ${{ !cancelled() }}
+        # WP-SV3's oracle: the real pairtime login links an install to a
+        # real pairtimed whose sign-in goes through mock-oauth2-server,
+        # which the step above started, while a browser approves on
+        # /device; then pairtime logout unlinks it. TestLoginEndToEnd
+        # skips that case without PAIRTIME_TEST_OIDC_URL, so this step
+        # fails unless it ran and passed.
+        env:
+          PAIRTIME_TEST_OIDC_URL: http://localhost:8080
+        run: |
+          if ! curl -fsS http://localhost:8080/isalive >/dev/null 2>&1; then
+            echo "::error::mock-oauth2-server isn't running; the step above starts it"
+            exit 1
+          fi
+          set +e
+          out=$(go test -count=1 -v -run '^TestLoginEndToEnd$' ./cmd/pairtime 2>&1)
+          code=$?
+          set -e
+          grep -E -- '--- (PASS|FAIL|SKIP)' <<<"$out" || true
+          if [ "$code" -ne 0 ] || ! grep -q -- '--- PASS: TestLoginEndToEnd/mock-oauth2-server ' <<<"$out"; then
+            echo "$out"
+            echo "::group::mock-oauth2-server log"
+            docker logs oidc 2>&1 | tail -n 200
+            echo "::endgroup::"
+            echo "::error::TestLoginEndToEnd didn't run and pass against mock-oauth2-server"
+            exit 1
+          fi
+
       - name: Module licenses
         if: ${{ !cancelled() }}
         run: |

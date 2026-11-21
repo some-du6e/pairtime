@@ -676,6 +676,11 @@ func Destroy(opts Options) error {
 	for _, a := range m.Archived {
 		named = append(named, key{m.archivedItem(a.ID), a.Store})
 	}
+	if m.Account != "" {
+		for _, item := range m.accountItems() {
+			named = append(named, key{item, m.Account})
+		}
+	}
 	var retry, stays []error
 	for _, k := range named {
 		s := o.storeOf(k.store)
@@ -698,6 +703,13 @@ func Destroy(opts Options) error {
 	for _, s := range o.stores {
 		if !slices.Contains(named, key{m.deviceItem(), s.Kind()}) {
 			quick.del(s, m.deviceItem())
+		}
+		// The device's sign-in too: a save that timed out may have
+		// landed after ForgetAccount stopped listing it.
+		for _, item := range m.accountItems() {
+			if !slices.Contains(named, key{item, s.Kind()}) {
+				quick.del(s, item)
+			}
 		}
 	}
 	if len(retry) > 0 {

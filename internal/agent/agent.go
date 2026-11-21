@@ -85,7 +85,6 @@ type Options struct {
 	// Zone, when set, replaces time.Local as the time zone the agent
 	// counts days in. Tests set it.
 	Zone *time.Location
-
 	// Mac is the macOS notification loop, which cmd/pairtime runs on the
 	// main thread while Run runs on another goroutine. It gives presence
 	// its suspends, resumes, locks and unlocks, and focus its app

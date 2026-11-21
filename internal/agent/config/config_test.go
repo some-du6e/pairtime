@@ -27,9 +27,34 @@ func TestParse(t *testing.T) {
 		{name: "display.shadow is off by default", file: "[display]\n", want: Default()},
 		{
 			name:        "a mode this release lacks falls back to local and is reported",
-			file:        `mode = "online"`,
+			file:        `mode = "cloud"`,
 			want:        Default(),
-			wantProblem: `no mode "online"`,
+			wantProblem: `no mode "cloud"`,
+		},
+		{name: "mode online is kept", file: `mode = "online"`, want: Config{Mode: Online}},
+		{
+			name: "a server url is kept in lower case without its trailing slash",
+			file: "[server]\nurl = \"https://Pairtime.Example.org/\"\n",
+			want: Config{Mode: Local, Server: Server{URL: "https://pairtime.example.org"}},
+		},
+		{name: "an empty server url means the default server", file: "[server]\nurl = \"\"\n", want: Default()},
+		{
+			name:        "a server url over plain http to another computer is reported and ignored",
+			file:        "[server]\nurl = \"http://pairtime.example.org\"\n",
+			want:        Default(),
+			wantProblem: `server.url "http://pairtime.example.org" uses http`,
+		},
+		{
+			name:        "a server url with a path is reported and ignored",
+			file:        "[server]\nurl = \"https://example.org/pairtime\"\n",
+			want:        Default(),
+			wantProblem: `server.url "https://example.org/pairtime" isn't the address of a server`,
+		},
+		{
+			name:        "an unknown setting in [server] is reported",
+			file:        "[server]\ntoken = \"ptd_x\"\n",
+			want:        Default(),
+			wantProblem: `unknown setting "server.token"`,
 		},
 		{
 			name:        "a file that doesn't parse is ignored as a whole, with notifications off",
