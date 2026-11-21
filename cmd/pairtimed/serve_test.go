@@ -130,6 +130,7 @@ func TestServe(t *testing.T) {
 		{name: "/metrics has ingest batch latency", url: private + "/metrics", wantCode: 200, wantBody: `(?m)^pairtime_ingest_batch_duration_seconds_count 0$`},
 		{name: "/metrics has open streams", url: private + "/metrics", wantCode: 200, wantBody: `(?m)^pairtime_stream_open_streams 0$`},
 		{name: "/metrics counts rows the retention jobs deleted", url: private + "/metrics", wantCode: 200, wantBody: `(?m)^pairtime_retention_deleted_rows_total 0$`},
+		{name: "/metrics counts the pending minutes the settle job settled, none on a new database", url: private + "/metrics", wantCode: 200, wantBody: `(?m)^pairtime_rollup_settled_minutes_total 0$`},
 		{name: "the public listener serves the privacy notice", url: public + "/privacy", wantCode: 200, wantBody: `<h1 id="pairtime-privacy-notice">`},
 		{name: "the privacy notice marks the controller as not named yet", url: public + "/privacy", wantCode: 200, wantBody: `This notice isn&#39;t final\.`},
 		{name: "the public listener serves the evidence definition for the built-in scoring version", url: public + "/docs/evidence", wantCode: 200, wantBody: `This server runs scoring ` + regexp.QuoteMeta(pages.BuiltinScoringVersion) + `\.`},

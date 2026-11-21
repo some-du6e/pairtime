@@ -364,6 +364,11 @@ func (s *Service) logout(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
 
+// SameOrigin reports whether a state-changing request comes from
+// pairtimed's own pages, by the rule sign-out uses: other pages' forms,
+// such as the dashboard's time zone, check it too.
+func (s *Service) SameOrigin(r *http.Request) bool { return s.sameOrigin(r) }
+
 // sameOrigin reports whether a state-changing request comes from
 // pairtimed's own pages. Browsers send Origin with every POST, and
 // Sec-Fetch-Site too; a request with neither isn't from a browser, so it

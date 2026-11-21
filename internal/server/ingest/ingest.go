@@ -75,9 +75,7 @@ type Options struct {
 	// off.
 	Key ed25519.PrivateKey
 	// Rollup, when set, is called for every bucket revision stored.
-	// TODO(WP-SV7): serve.go passes rollup.Apply through it, converting
-	// each bucket with rollup.FromEvent(account, b, b.AgentOnly), once
-	// package rollup merges.
+	// pairtimed passes rollup.ApplyEvent (WP-SV7).
 	Rollup RollupFunc
 	// Observe, when set, hears of each upload the writer processed, not
 	// counting replays: how many batch roots it stored, and how long the

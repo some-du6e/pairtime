@@ -2,7 +2,7 @@
 
 The struggle-metric spec's worked examples (docs/design/struggle-metric.md section 6, SM 6 below) as the events a real client would record, with the minute rows, totals, anchors and prompt texts SM states for them. They are the scorer's oracle: `pkg/score`'s tests load a fixture, feed its events to the scorer in order and compare what comes out with the rows. They were written before the scorer, from SM alone.
 
-These files are oracle paths (docs/PLAN.md, ground rule 5). A PR that changes a fixture together with code under `cmd/`, `internal/`, `pkg/`, `web/` or `extension/` needs Karim's `oracle-change` label. When a worked example doesn't reproduce under SM's own rules, the fix is an erratum in `docs/errata/` for Karim, never a quiet change to a number (ground rule 6).
+These files are oracle paths (docs/PLAN.md, ground rule 5). A PR that changes a fixture together with code needs the `oracle-change` label, which only Karim or the orchestrator adds, to apply a decision made outside the PR. When a worked example doesn't reproduce under SM's own rules, the fix is an erratum in `docs/errata/`, which the orchestrator decides for Karim, never a quiet change to a number (ground rule 6).
 
 | Fixture | SM | What it is | Credited | Errata |
 |---|---|---|---|---|

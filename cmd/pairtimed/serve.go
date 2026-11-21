@@ -17,11 +17,13 @@ import (
 	"github.com/some-du6e/pairtime/internal/server/auth"
 	"github.com/some-du6e/pairtime/internal/server/backup"
 	"github.com/some-du6e/pairtime/internal/server/config"
+	"github.com/some-du6e/pairtime/internal/server/dashboard"
 	"github.com/some-du6e/pairtime/internal/server/device"
 	"github.com/some-du6e/pairtime/internal/server/migrations"
 	"github.com/some-du6e/pairtime/internal/server/ops"
 	"github.com/some-du6e/pairtime/internal/server/pages"
 	"github.com/some-du6e/pairtime/internal/server/retention"
+	"github.com/some-du6e/pairtime/internal/server/rollup"
 	"github.com/some-du6e/pairtime/internal/server/store"
 	"github.com/some-du6e/pairtime/internal/server/writer"
 	"github.com/some-du6e/pairtime/internal/version"
@@ -146,11 +148,13 @@ func serve(ctx context.Context, cfg *config.Config, logger *slog.Logger, e *env,
 	// before the database closes.
 	defer w.Close()
 
-	// The retention jobs whose tables exist sweep through the writer, so
-	// their deletes queue with every other write (DESIGN 4.4).
+	// The retention jobs that are on sweep through the writer, so their
+	// deletes queue with every other write (DESIGN 4.4). A job, hold or
+	// kept_by guard is off while its table doesn't exist yet, and an
+	// evidence entry's job stays off until WP-SV18.
 	jobs, off := policy.Jobs()
 	if len(off) > 0 {
-		logger.Info("retention jobs that wait for their tables", "off", off)
+		logger.Info("retention jobs, holds and kept_by guards that are off", "off", off)
 	}
 	report := retentionReport(logger,
 		reg.Counter("pairtime_retention_deleted_rows_total", "Rows the retention jobs deleted (DESIGN 4.4)."),
@@ -168,6 +172,27 @@ func serve(ctx context.Context, cfg *config.Config, logger *slog.Logger, e *env,
 	defer func() {
 		stopRetention()
 		<-retentionDone
+	}()
+
+	// The settle job runs beside the sweep, through the writer: a minute
+	// its device left pending counts as final by the server's clock once
+	// PENDING_WINDOW_S has passed since it ended (D-server-settles-pending).
+	// It too stops before the writer does.
+	settled := reg.Counter("pairtime_rollup_settled_minutes_total", "Minutes their devices left pending that the server settled as final (D-server-settles-pending).")
+	settleCtx, stopSettle := context.WithCancel(ctx)
+	settleDone := make(chan struct{})
+	go func() {
+		defer close(settleDone)
+		rollup.RunSettle(settleCtx, w, db.Read, rollup.SettleEvery, time.Now, func(n int, err error) {
+			settled.Add(uint64(n))
+			if err != nil && settleCtx.Err() == nil {
+				logger.Error("settling pending minutes failed", "settled", n, "err", err)
+			}
+		})
+	}()
+	defer func() {
+		stopSettle()
+		<-settleDone
 	}()
 
 	checks := []ops.Check{{
@@ -281,6 +306,24 @@ func serve(ctx context.Context, cfg *config.Config, logger *slog.Logger, e *env,
 	site.RegisterHome(public, visit)
 	// /demo, the dashboard page drawn from a fixed, labelled sample.
 	site.RegisterDemo(public, visit, time.Now)
+	// The signed-in owner's dashboard, as a page and as JSON, from the
+	// rollups (WP-SV7). Ingest's bucket revisions reach them through
+	// rollup.ApplyEvent, which newIngest sets as ingest's Rollup.
+	rollups := dashboard.Rollups{DB: db.Read}
+	owner := accountOf(signIn)
+	site.RegisterDashboard(public, visit, pages.Dashboard{
+		Source:  rollups,
+		Account: owner,
+		SetZone: func(ctx context.Context, account, zone string) error {
+			return w.Do(ctx, 1, func(ctx context.Context, tx writer.Tx) error {
+				return rollup.SetZone(ctx, tx, account, zone)
+			})
+		},
+		SameOrigin: signIn.SameOrigin,
+		Now:        time.Now,
+		Logger:     logger,
+	})
+	public.HandleFunc("GET "+dashboard.APIPath, dashboard.API(rollups, owner, time.Now, logger))
 	maintainCtx, stopMaintain := context.WithCancel(ctx)
 	defer stopMaintain()
 	go signIn.Maintain(maintainCtx)

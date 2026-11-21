@@ -46,6 +46,12 @@ func (Demo) View(_ context.Context, _ string, now time.Time) (View, error) {
 			demoRobotics:  "robotics-scouting",
 			demoPortfolio: "portfolio-site",
 		},
+		// Each sample project's made-up key is its id too.
+		Keys: map[string][]string{
+			demoChip8:     {demoChip8},
+			demoRobotics:  {demoRobotics},
+			demoPortfolio: {demoPortfolio},
+		},
 	}, demoRows(now.UTC()))
 }
 

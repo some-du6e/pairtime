@@ -30,6 +30,7 @@
   --grid: #ececef;
   --axis: #c3c3c9;
   --on-note: #1c1c1e;
+  --error: #c62828;
 }
 @media (prefers-color-scheme: dark) {
   :root {
@@ -58,6 +59,7 @@
     --grid: #26262c;
     --axis: #45454d;
     --on-note: #141417;
+    --error: #ef6b6b;
   }
 }
 * { box-sizing: border-box; }
@@ -216,6 +218,11 @@ details td, details th { white-space: nowrap; }
 .bar { height: 0.75rem; width: var(--f); min-width: 0; background: var(--bar); }
 .bar:last-child { border-radius: 0 4px 4px 0; }
 .kt { text-align: right; color: var(--muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.zone { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 0.75rem; margin: 1rem 0 0; }
+.zone label { font-weight: 600; }
+.zone input { font: inherit; font-size: 0.95rem; padding: 0.45rem 0.65rem; min-width: 0; width: 16rem; max-width: 100%; color: var(--fg); background: var(--bg); border: 1px solid var(--line); border-radius: 8px; }
+.zone input:focus-visible { outline: 3px solid var(--link); outline-offset: 2px; }
+.error { margin: 0.75rem 0 0; padding: 0.5rem 0.9rem; background: var(--note-bg); border-left: 4px solid var(--error); border-radius: 0 8px 8px 0; }
 @media (max-width: 34rem) {
   .chart { grid-template-columns: 2.6rem 1fr; }
   /* "1h 53m" breaks into two lines, so neighbors never touch. */

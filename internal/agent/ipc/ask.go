@@ -22,6 +22,21 @@ import (
 // so one function can serve both.
 const AskLastSession = "sessions/last"
 
+// AskDashboardLink asks for a one-time URL that signs a browser in to the
+// dashboard (DESIGN 3.9), which `pairtime dashboard` opens. The answer is
+// a DashboardLink. Asked here, the link needs no bearer token, so the CLI
+// sends the token nowhere (D-dashboard-link).
+const AskDashboardLink = "dashboard/link"
+
+// DashboardLink is the agent's answer to AskDashboardLink.
+type DashboardLink struct {
+	// URL is http://127.0.0.1:<port>/signin?code=<code>, and the code works
+	// once, for ExpiresInS seconds. URL is "" while the agent's HTTP server
+	// doesn't listen yet, just after the agent started: ask again then.
+	URL        string `json:"url"`
+	ExpiresInS int    `json:"expires_in_s"`
+}
+
 // ErrUnknownQuestion means the agent doesn't answer the question: it has
 // no answer for it, or it predates questions and refused the frame.
 var ErrUnknownQuestion = errors.New("ipc: the agent doesn't answer that question")

@@ -1,5 +1,5 @@
 {
-  "about": "How long pairtime keeps each kind of data, from DESIGN 4.4. This file is the one copy the code reads. The privacy notice at /privacy renders its retention table from it, and pairtimed's retention jobs take their periods, tables and columns from it. In kept, {days} stands for the entry's days and {window} for the spot-check window, so a number is never written twice. Every table pairtimed's migrations create belongs to an entry or is listed in no_personal_data. An entry with a period (days or {window}) puts each of its tables under one of its jobs, which deletes its rows on time, or in lifetime_tables when its rows stay while the account exists; only an entry without a period lists plain tables. A hold's table is also the table of one of its entry's jobs by the window, which deletes the hold rows once their spot-check window has closed. A job or hold with awaits set is off until the work package named there creates its table, and that package removes awaits.",
+  "about": "How long pairtime keeps each kind of data, from DESIGN 4.4. This file is the one copy the code reads. The privacy notice at /privacy renders its retention table from it, and pairtimed's retention jobs take their periods, tables and columns from it. In kept, {days} stands for the entry's days and {window} for the spot-check window, so a number is never written twice. Every table pairtimed's migrations create belongs to an entry or is listed in no_personal_data. An entry with a period (days or {window}) puts each of its tables under one of its jobs, which deletes its rows on time, or in lifetime_tables when its rows stay while the account exists; only an entry without a period lists plain tables. A hold's table is also the table of one of its entry's jobs by the window, which deletes the hold rows once their spot-check window has closed. An evidence entry's jobs stay off until WP-SV18, which deletes the blob each row names before the row. A job or hold with awaits set is off until the work package named there creates its table, and that package removes awaits.",
   "version": 1,
   "source": "DESIGN 4.4",
   "spot_check_window": {
@@ -19,7 +19,7 @@
       "id": "device.transcripts",
       "where": "device",
       "data": "Your AI tool's transcripts and output",
-      "kept": "Not copied. pairtime reads them where your AI tool keeps them, so the tool's own setting applies (Claude Code keeps them for 30 days unless you change it)"
+      "kept": "Not copied: pairtime reads them where your AI tool keeps them. What the tool hands pairtime while the agent isn't running waits in pairtime's inbox on this computer until the agent reads it. Everything else follows the tool's own setting (Claude Code keeps them for 30 days unless you change it)"
     },
     {
       "id": "device.paths_commands",
@@ -58,7 +58,7 @@
     {
       "id": "server.account",
       "where": "server",
-      "data": "Your account: your Hack Club Auth ID, Slack ID and handle, your email address (stored encrypted, with a keyed hash so a deletion request can find it), whether Hack Club Auth has verified you and says you're eligible for its programs, when you signed up and last signed in, and your GitHub user ID if you link GitHub",
+      "data": "Your account: your Hack Club Auth ID, Slack ID and handle, your email address (stored encrypted, with a keyed hash so a deletion request can find it), whether Hack Club Auth has verified you and says you're eligible for its programs, when you signed up and last signed in, the time zone your dashboard counts your days in, and your GitHub user ID if you link GitHub",
       "kept": "While your account exists",
       "tables": ["users"]
     },
@@ -73,7 +73,7 @@
       "id": "server.devices",
       "where": "server",
       "data": "Your devices: for each computer you link with pairtime login, a random device ID, a hash of its sign-in token (never the token itself), the public key that signs its uploads, the OS family, the pairtime build, when you linked it, when it last connected and when you removed it, how many times it has been linked, how far its uploads have got (the number of its last upload, the number, hash and arrival time of the last batch root it sent, the batch its record starts at, and the numbers of the batches it kept to itself in local-only mode between two sign-ins), and the labels its uploads carry: the names and versions of your AI tools, the scoring version and parameter hash, whether the typing module is on, and whether pairtime thinks it runs in a virtual machine",
-      "kept": "Until you remove the device. Then its device ID, removal time and upload progress stay {days} more, or as long as this server keeps anything the device uploaded, if that's longer, and the rest goes at once. A device removed before it uploaded anything is deleted at once",
+      "kept": "Until you remove the device. Then its device ID, when you removed it, how many times it has been linked and how far its uploads have got stay {days} more, or as long as this server keeps anything the device uploaded, if that's longer. Everything else about the device goes at once, except its pairtime build and the other labels its uploads carry, which stay until {days} after the device last sent them. A device removed before it uploaded anything is deleted at once",
       "days": 90,
       "jobs": [{
         "table": "devices",
@@ -115,10 +115,10 @@
     {
       "id": "server.minute_buckets",
       "where": "server",
-      "data": "Minute buckets: for each 15 seconds, the credited seconds by project key, why they were credited and what kind of work they counted as, with the reasons for seconds that weren't credited, how long an AI agent was running, and for each project key how long an AI agent ran there without you getting credit there",
-      "kept": "Per-minute detail for {days}, the furthest back a submission can reach. Minutes a submission uses stay until its spot-check window closes ({window}). After that only daily totals per project and kind of work stay, for as long as your account exists",
+      "data": "Minute buckets: for each 15 seconds, the credited seconds by project key, why they were credited and what kind of work they counted as, with the reasons for seconds that weren't credited, how long an AI agent was running, for each project key how long an AI agent ran there without you getting credit there, and the project each of your devices' project keys counts toward",
+      "kept": "Per-minute detail for {days}, the furthest back a submission can reach. Minutes a submission uses stay until its spot-check window closes ({window}). After that only daily totals per project and kind of work, split by evidence level, the time your agent worked on its own in each project, and the project each of your devices' project keys counts toward, stay for as long as your account exists",
       "days": 180,
-      "lifetime_tables": ["rollups_daily"],
+      "lifetime_tables": ["rollups_daily", "rollup_projects"],
       "jobs": [{
         "table": "minute_buckets",
         "key": ["device_id", "minute_ms"],
@@ -143,6 +143,10 @@
         "time_column": "decided_at_ms",
         "period": "window",
         "awaits": "WP-SB4"
+      }, {
+        "table": "rollup_minutes",
+        "key": ["user_id", "minute_ms", "device_id"],
+        "time_column": "minute_ms"
       }]
     },
     {

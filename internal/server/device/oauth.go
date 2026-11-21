@@ -215,7 +215,7 @@ func (s *Service) token(w http.ResponseWriter, r *http.Request) {
 		writeOAuthError(w, http.StatusBadRequest, "access_denied", "The code was turned down, so this app isn't linked.")
 	case errors.Is(err, ErrTaken):
 		writeOAuthError(w, http.StatusBadRequest, "device_taken",
-			"The account that approved this code isn't the one this device ID belongs to on this server, so it wasn't linked. To link it to that account, sign in as a new device.")
+			"The account that answered this code isn't the one this device ID belongs to on this server, so it wasn't linked. To link it to that account, sign in as a new device.")
 	case errors.Is(err, ErrExpired):
 		writeOAuthError(w, http.StatusBadRequest, "expired_token", "The code expired before anyone approved it. Start again.")
 	case errors.Is(err, ErrInvalidGrant):

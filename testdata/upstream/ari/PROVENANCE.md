@@ -22,11 +22,11 @@ WP-PG8 validates its bridge's output against `ingest.schema.json`. WP-PG10 maps 
 
 ## What a pairtime bridge has to send
 
-DESIGN 5.10 describes the bridge's entries as `at`, `seconds` and `markdown`. Ari also requires `text` on every entry and answers 422 `journals.text` when it is blank, and `markdown` only falls back to `text`. So each entry needs `text` too, which the pairtime example has. Two more limits shape the bridge: an entry holds at most 86,400 seconds, and a ship at most 200 entries. Under D13 a teen with no devlogs has a single window, which can hold more than a day of credit, so one entry per window can break the first limit. `docs/errata/2026-11-20-ari-journal-entries.md` asks Karim how the bridge should meet all three.
+DESIGN 5.10's bridge sends one entry per row of a checked submission, with `at`, `seconds`, `text` and `markdown`, and Ari's rules shape it. `text` is required, and Ari answers 422 `journals.text` when it is blank; `markdown` only falls back to `text`. `seconds` must be a whole number, so the bridge rounds pairtime's half-second credit down. An entry holds at most 86,400 seconds, so a longer row is cut at each UTC midnight. A ship holds at most 200 entries, so past that the bridge sends one entry per person per UTC day. Ari adds up every entry, so the bridge's entries are the only ones that carry seconds. `#/$defs/journal_entry`'s `x-invalid-examples` pin the 86,400-second cap and the whole seconds. Ari takes a ship under the same `external_id` again only once the open one is decided or withdrawn, and answers 409 `already_queued` until then. `docs/errata/2026-11-20-ari-journal-entries.md` has the reasoning.
 
 ## Files read
 
-Fetched with `gh api -H "Accept: application/vnd.github.raw" "repos/hackclub/<repo>/contents/<path>?ref=<commit>"` on 2026-11-19. Blob ids are `git hash-object` of what came back.
+Fetched with `gh api -H "Accept: application/vnd.github.raw" "repos/hackclub/<repo>/contents/<path>?ref=<commit>"` on 2026-11-19; `process.go` and `store.go` the same way on 2026-11-20, at the same commit. Blob ids are `git hash-object` of what came back.
 
 | Repo | File | Git blob | Used for |
 |---|---|---|---|
@@ -34,9 +34,11 @@ Fetched with `gh api -H "Accept: application/vnd.github.raw" "repos/hackclub/<re
 | hackclub/ari | `src/routes/docs/webhooks/sections/SendingSections.svelte` | `936a971cfda7` | context for the ingest endpoint |
 | hackclub/ari | `src/routes/docs/webhooks/sections/FieldsSections.svelte` | `5debc57537e4` | context |
 | hackclub/ari | `src/routes/docs/webhooks/examples.ts`, `rows.ts` | `338ae3344f38`, `a3701bd25d81` | context; nothing taken |
-| hackclub/ari | `src/lib/review/settlement.ts` | `c2c22dc40a7d` | the four time sources and one cuttable row per journal entry (lines 3-4, 135-153, 170) |
+| hackclub/ari | `src/lib/review/settlement.ts` | `c2c22dc40a7d` | the four time sources, and one cuttable row per journal entry, all summed into the journals total (lines 3-4, 135-153, 170) |
 | hackclub/ari-webhooks | `internal/ingest/validate.go` | `e2b45a55b9f5` | requirements, limits and 422 field names (lines 18-357) |
 | hackclub/ari-webhooks | `internal/ingest/payload.go` | `2f73aa644708` | URL and date parsing, program time precedence (lines 54-143) |
+| hackclub/ari-webhooks | `internal/ingest/process.go` | `e199ab5b085a` | 409 `already_queued` for a ship sent under the `external_id` of an open one (lines 103-105) |
+| hackclub/ari-webhooks | `internal/ingest/store.go` | `61f755805ab4` | which ships count as open (`findOpenShip`, lines 90-102) |
 | hackclub/ari-webhooks | `README.md` | `bb6dec6e4589` | context |
 
 ## Where the schema is stricter than Ari

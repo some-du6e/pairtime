@@ -21,6 +21,18 @@
 	--pt-accent-text: #ffffff;
 	--pt-focus: #b3471d;
 
+	/* The dashboard's bars (web/src/local): your time by evidence level,
+	   pending minutes drawn lighter, and the agent's time. Each solid fill
+	   has at least 3:1 against --pt-bg and --pt-surface in both schemes;
+	   pending stays lighter on purpose and carries an outline and a text
+	   figure beside it. */
+	--pt-level-a: #1d5bb8;
+	--pt-level-b: #127a6a;
+	--pt-level-c: #8f6400;
+	--pt-pending: #9fb3cf;
+	--pt-agent: #7d4a99;
+	--pt-track: #dfe3ea;
+
 	--pt-radius: 0.5rem;
 	--pt-gap: 1rem;
 	--pt-measure: 40rem;
@@ -36,6 +48,12 @@
 		--pt-accent: #8cb8ff;
 		--pt-accent-text: #0a1a33;
 		--pt-focus: #ffb27a;
+		--pt-level-a: #8cb8ff;
+		--pt-level-b: #5cc9b0;
+		--pt-level-c: #e2b84f;
+		--pt-pending: #4b5d7a;
+		--pt-agent: #cf9be6;
+		--pt-track: #2c3038;
 	}
 }
 
@@ -125,4 +143,38 @@ code {
 	flex-wrap: wrap;
 	gap: 0.75rem;
 	margin: 1rem 0;
+}
+
+/* A legend's color key: the swatch beside a figure names the part of a bar
+   it stands for. The figure beside it says the same in words. */
+.pt-swatch {
+	display: inline-block;
+	width: 0.75rem;
+	height: 0.75rem;
+	margin-right: 0.375rem;
+	vertical-align: -0.05em;
+	border-radius: 2px;
+	background: var(--pt-track);
+}
+
+.pt-swatch-A {
+	background: var(--pt-level-a);
+}
+
+.pt-swatch-B {
+	background: var(--pt-level-b);
+}
+
+.pt-swatch-C {
+	background: var(--pt-level-c);
+}
+
+.pt-swatch-pending {
+	background: var(--pt-pending);
+	outline: 1px dashed var(--pt-level-a);
+	outline-offset: -1px;
+}
+
+.pt-swatch-agent {
+	background: var(--pt-agent);
 }
