@@ -206,8 +206,10 @@ type adapterHost struct {
 	heldDue, baseDue, expireBase time.Time
 	// copiedForTest, when set, runs once a rewrite of held.jsonl.pending has
 	// copied what it keeps, before it flushes the copy to disk and takes mu
-	// to finish (inbox.StartSplice).
+	// to finish (inbox.StartSplice). askedForTest, when set, runs each time
+	// waits has asked the git host about a folder.
 	copiedForTest func()
+	askedForTest  func(dir string)
 
 	kick chan struct{}
 	stop chan struct{}
@@ -244,6 +246,13 @@ type adapterHost struct {
 	// calls wait behind them (park).
 	parked   []hostCall
 	parkedBy map[string]int
+	// releasedAt is the git host's count of Tracks that made a folder known
+	// (tracksEnded) when release last looked at the parked calls, and freed
+	// says park has since parsed one to make room in a way that can let a
+	// call go (frees). Until one of them changes, no parked call can go
+	// that couldn't then (admit).
+	releasedAt uint64
+	freed      bool
 	// holding are the calls holdBack keeps for the next start, which the
 	// step holds together (holdBackNow).
 	holding []inbox.Delivery
@@ -1284,7 +1293,10 @@ func (h *adapterHost) read(d inbox.Delivery) (hostCall, bool) {
 // because a resolve was slow. A call that goes at once lets go first of the
 // calls parked before it that can go now: a Track can end in the middle of
 // a step, after its release, and a later call in that folder, of another
-// session, would then come before them in the ledger. On the last step
+// session, would then come before them in the ledger. It looks only when a
+// Track has made a folder known, or park has made room in a way that can
+// let a call go, since release last looked (releasedAt, freed), so a long
+// replay doesn't walk the parked calls for every call. On the last step
 // nothing waits. replay says the call came from the .replay file.
 func (h *adapterHost) admit(d inbox.Delivery, replay, last bool) {
 	c, ok := h.read(d)
@@ -1296,15 +1308,30 @@ func (h *adapterHost) admit(d inbox.Delivery, replay, last bool) {
 		h.park(c)
 		return
 	}
-	h.release(last)
+	if len(h.parked) > 0 && (h.freed || h.tracksEnded() != h.releasedAt) {
+		h.release(last)
+	}
 	h.parse(c)
+}
+
+// tracksEnded is the git host's count of Tracks that made a folder known
+// (gitHost.tracksEnded), zero with no git host.
+func (h *adapterHost) tracksEnded() uint64 {
+	if g := h.git.Load(); g != nil {
+		return g.tracksEnded()
+	}
+	return 0
 }
 
 // waits reports whether the calls of folder dir wait for its project:
 // never for no folder, or with no git adapter, which resolves none.
 func (h *adapterHost) waits(dir string) bool {
 	g := h.git.Load()
-	return dir != "" && g != nil && !g.known(dir)
+	w := dir != "" && g != nil && !g.known(dir)
+	if h.askedForTest != nil {
+		h.askedForTest(dir)
+	}
+	return w
 }
 
 // park puts c behind the calls that wait already. Past maxParked, the
@@ -1316,6 +1343,7 @@ func (h *adapterHost) park(c hostCall) {
 		h.parked = h.parked[1:]
 		h.parse(first)
 		h.unparked(first)
+		h.freed = h.freed || h.frees(first.session, c)
 	}
 	h.parked = append(h.parked, c)
 	if c.session != "" {
@@ -1330,6 +1358,24 @@ func (h *adapterHost) park(c hostCall) {
 			h.parkedLive++
 		}
 	})
+}
+
+// frees reports whether parsing a parked call of session, as park does to
+// make room, can let a call go that couldn't before. That is the session's
+// next call, the first of it still parked or else c, the call being parked,
+// and only once that call's folder is known. A call of no session holds
+// none back.
+func (h *adapterHost) frees(session string, c hostCall) bool {
+	if session == "" {
+		return false
+	}
+	next := c
+	if h.parkedBy[session] > 0 {
+		if i := slices.IndexFunc(h.parked, func(p hostCall) bool { return p.session == session }); i >= 0 {
+			next = h.parked[i]
+		}
+	}
+	return next.session == session && !h.waits(next.dir)
 }
 
 // unparked counts c, which waited, as gone from the calls that wait.
@@ -1356,14 +1402,31 @@ func (h *adapterHost) unparked(c hostCall) {
 // folder still resolving then gives its calls no project, as one whose
 // resolve timed out does.
 func (h *adapterHost) release(last bool) {
+	// Taken first, so a Track that ends while it looks counts as news.
+	h.releasedAt, h.freed = h.tracksEnded(), false
 	if len(h.parked) == 0 {
 		return
 	}
 	held := make(map[string]bool)
+	// A folder that waits once in a walk waits for the rest of it, so a
+	// Track that ends while it walks can't let a later call of the folder go
+	// while an earlier one stays: they go together at the next look, which
+	// the count's move brings (admit). A folder that answered known is asked
+	// again, since known can forget it (maxFolders), and its later calls
+	// then wait for the new Track rather than go with no project; an earlier
+	// call going first is no reorder.
+	waiting := make(map[string]bool)
+	folderWaits := func(dir string) bool {
+		if waiting[dir] {
+			return true
+		}
+		waiting[dir] = h.waits(dir)
+		return waiting[dir]
+	}
 	var ready []hostCall
 	kept := h.parked[:0]
 	for _, c := range h.parked {
-		if !last && (c.session != "" && held[c.session] || h.waits(c.dir)) {
+		if !last && (c.session != "" && held[c.session] || folderWaits(c.dir)) {
 			if c.session != "" {
 				held[c.session] = true
 			}
