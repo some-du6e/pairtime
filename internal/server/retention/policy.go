@@ -37,7 +37,8 @@
 // exists, its job or hold names that package in awaits and doesn't run.
 // TestTables fails when a table the migrations create has no entry, when a
 // job's table lacks the columns its entry names, and when an awaited table
-// appears, so the package that creates a table also turns its job on.
+// appears, so the package that creates a table also turns its job on,
+// unless the job is an evidence entry's, which stays off until WP-SV18.
 //
 // An entry with a period, days or the spot-check window, can't simply list
 // a table: each of its tables is a job's, so something deletes its rows,
@@ -179,7 +180,8 @@ type JobSpec struct {
 type HoldSpec struct {
 	// Table is the hold table.
 	Table string `json:"table"`
-	// DecidedColumn is the hold table's decision time.
+	// DecidedColumn is the hold table's column for when its submission's
+	// spot-check window opened (DESIGN 4.4), as above.
 	DecidedColumn string `json:"decided_column"`
 	// Awaits names the work package that creates Table. The job runs
 	// without the hold while it is set, which is right only while no
@@ -421,18 +423,19 @@ func (w Window) Closes(decided time.Time) time.Time {
 	return c
 }
 
-// lastClosed returns the latest decision time, to the millisecond, whose
-// window of months has closed by now, as Window.Closes counts it. A hold
-// keeps its row while its decision is later. Subtracting months from now
-// isn't the inverse of Closes, because AddDate rolls an impossible date
-// into the next month: 29 February 2028 less 12 months is 1 March 2027,
-// which would release decisions of 1 March 2027 a day early.
+// lastClosed returns the latest time, to the millisecond, at which a
+// window of months that opened then has closed by now, as Window.Closes
+// counts it. A hold keeps its row while its time is later, or NULL.
+// Subtracting months from now isn't the inverse of Closes, because AddDate
+// rolls an impossible date into the next month: 29 February 2028 less 12
+// months is 1 March 2027, which would release windows that opened on
+// 1 March 2027 a day early.
 func lastClosed(now time.Time, months int) time.Time {
 	n := now.UTC()
 	c := n.AddDate(0, -months, 0)
 	if c.Day() != n.Day() {
-		// No date months back has n's day, so every decision of the
-		// shorter month has closed, and none of the next.
+		// No date months back has n's day, so every window that opened in
+		// the shorter month has closed, and none of the next.
 		c = time.Date(c.Year(), c.Month(), 1, 0, 0, 0, 0, time.UTC).Add(-time.Millisecond)
 	}
 	return c

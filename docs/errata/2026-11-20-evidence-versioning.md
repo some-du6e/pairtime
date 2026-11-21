@@ -58,7 +58,7 @@ Changes to DESIGN:
 
 - 10.3. The evidence row says blobs are written once under their SHA-256, with keys scoped to the two buckets and no versions, and that they aren't backed up, so a blob deleted or overwritten with the bucket's key is lost.
 - 10.5. Item 4 asks for no versioning on either bucket and no lifecycle rule that deletes objects in the first. Step 4's doctor checks both, and checks that the first bucket refuses a second write-once put.
-- 10.2. `rotate-evidence` deletes the blobs sealed to the old key.
+- 10.2. Key rotation deletes the blobs sealed to the old key, after `pairtimed` has switched to the new key.
 - 7.5 step 8, 7.7 and 7.8. An item whose blob the store can't return or open is `unavailable`. It isn't called lost, because 7.5 step 8 already has "witnessed, evidence lost". Before the decision the server asks the client to reveal the item again, since the device keeps prompt text until then (4.4). After the decision it changes no credit. `challenge.json` keeps the status recorded at the time, because the bundle's SHA-256 in the justification text has to keep matching, and `pairtime verify --fetch-reveals` lists an unavailable item without changing its exit code.
 - 8.9. The eraser deletes the account's blobs in the evidence store and any backup segments in object storage. The privacy hub sends a dry run first, and the dry run lists the blobs and backup segments it would delete without deleting any, because a blob delete can't be rolled back.
 

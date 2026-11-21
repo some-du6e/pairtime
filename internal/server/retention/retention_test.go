@@ -946,7 +946,7 @@ func TestTables(t *testing.T) {
 		have := columns(table)
 		switch {
 		case awaits != "" && len(have) > 0:
-			t.Errorf("%s: table %s exists now; remove its awaits %q in docs/retention.json, so its job runs", id, table, awaits)
+			t.Errorf("%s: table %s exists now; remove its awaits %q in docs/retention.json, so its job runs (an evidence entry's once WP-SV18 lands)", id, table, awaits)
 		case awaits == "" && len(have) == 0:
 			t.Errorf("%s: table %s doesn't exist; set awaits to the work package that creates it", id, table)
 		case awaits == "":
