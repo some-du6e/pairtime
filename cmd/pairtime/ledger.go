@@ -98,12 +98,12 @@ func runLedger(args []string, stdout, stderr io.Writer) int {
 	}
 	// The date is checked on its own: in a zone whose clocks jump over
 	// midnight, as Chile's do, the day's midnight doesn't exist.
-	date, err := time.Parse(time.DateOnly, day)
-	if err != nil || date.Format(time.DateOnly) != day {
+	asked, err := time.Parse(time.DateOnly, day)
+	if err != nil || asked.Format(time.DateOnly) != day {
 		fmt.Fprintf(stderr, "pairtime ledger show: --day wants a day such as 2026-11-24, got %q\n", day)
 		return 2
 	}
-	start, end := dayStart(date, 0, viewZone()), dayStart(date, 1, viewZone())
+	start, end := dayStart(asked, 0, viewZone()), dayStart(asked, 1, viewZone())
 	dirs, err := home.Default()
 	if err != nil {
 		fmt.Fprintf(stderr, "pairtime ledger show: can't find pairtime's folders: %v\n", err)
