@@ -109,7 +109,8 @@ var (
 	// LoadState and SaveState, it means the device was removed or linked
 	// again with a new token since Authenticate found it.
 	ErrRevoked = errors.New("device: the device was removed")
-	// ErrNoDevice means the account has no such device.
+	// ErrNoDevice means the device id belongs to another account, so the
+	// account has no such device to remove.
 	ErrNoDevice = errors.New("device: no such device")
 )
 
@@ -281,27 +282,29 @@ ORDER BY CASE WHEN d.removed_at_ms IS NULL THEN 0 ELSE 1 END, COALESCE(d.linked_
 }
 
 // Remove removes account's device id, which stops its token at once;
-// unlink says what stays of it. Removing a device that was already removed
-// does nothing; one the account doesn't have gets ErrNoDevice.
+// unlink says what stays of it. Removing it again does nothing, whether
+// the first removal left a tombstone or deleted the row, so a second
+// Remove, as from a double click, gets the first one's answer. That makes
+// an id no account has a no-op too. An id that belongs to another account
+// gets ErrNoDevice.
 func (s *Store) Remove(ctx context.Context, account, id string) error {
 	nowMs := s.now().UnixMilli()
-	var found bool
+	var other bool
 	err := s.w.Do(ctx, 1, func(ctx context.Context, tx writer.Tx) error {
-		found = false
-		var n int
-		if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM devices WHERE device_id = $1 AND user_id = $2`, id, account).Scan(&n); err != nil {
-			return fmt.Errorf("device: finding the device: %w", err)
+		owner, err := ownerOf(ctx, tx, id)
+		if err != nil {
+			return err
 		}
-		if n == 0 {
+		other = owner != "" && owner != account
+		if owner != account {
 			return nil
 		}
-		found = true
 		return unlink(ctx, tx, nowMs, `device_id = $1 AND user_id = $2`, id, account)
 	})
 	if err != nil {
 		return err
 	}
-	if !found {
+	if other {
 		return ErrNoDevice
 	}
 	return nil
