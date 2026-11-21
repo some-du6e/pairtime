@@ -5,8 +5,12 @@ package ingest
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"io"
+	"log/slog"
 	"math/rand/v2"
 	"net/http"
+	"net/http/httptest"
 	"slices"
 	"strconv"
 	"strings"
@@ -256,6 +260,74 @@ func TestUpsertsKeepTheAccount(t *testing.T) {
 				}
 				if !slices.Equal(accounts, []string{first}) {
 					t.Errorf("%s rows name %q, want only the first account", tt.table, accounts)
+				}
+			})
+		}
+	})
+}
+
+// revokingDevices is the device store with LoadState or SaveState answering
+// ErrRevoked, as they do for a device removed or linked again between
+// Authenticate and ingest's writer transaction.
+type revokingDevices struct {
+	testDevices
+	onLoad, onSave bool
+}
+
+func (d revokingDevices) LoadState(ctx context.Context, tx writer.Tx, dev device.Device) (device.State, error) {
+	if d.onLoad {
+		return device.State{}, device.ErrRevoked
+	}
+	return d.testDevices.LoadState(ctx, tx, dev)
+}
+
+func (d revokingDevices) SaveState(ctx context.Context, tx writer.Tx, dev device.Device, st device.State) error {
+	if d.onSave {
+		return device.ErrRevoked
+	}
+	return d.testDevices.SaveState(ctx, tx, dev, st)
+}
+
+// TestRevokedInFlight checks that a device removed or linked again while
+// its request waits for the writer gets 403 device_revoked, and that
+// nothing the request wrote stays (ingest-v1 2.5 step 13).
+func TestRevokedInFlight(t *testing.T) {
+	engines(t, func(t *testing.T, engine store.Engine) {
+		h := newHarness(t, engine)
+		root := chain(rand.New(rand.NewPCG(41, 42)), ledger.Hash{}, 1, 1)[0]
+		tests := []struct {
+			name           string
+			onLoad, onSave bool
+		}{
+			{"a device gone by the time ingest reads its state is device_revoked, its state request too", true, false},
+			{"a device gone by the time ingest stores its state is device_revoked, and its batch root doesn't stay", false, true},
+		}
+		for i, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				dev := h.link(t, fmt.Sprintf("d_gone%d", i), seedKey(fmt.Sprintf("gone %d", i)))
+				svc := New(Options{Devices: revokingDevices{h.devices, tt.onLoad, tt.onSave}, Writer: h.writer, Read: h.db.Read, Key: h.server,
+					Now: func() time.Time { return h.clock }, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), RateBurst: 1000})
+				mux := http.NewServeMux()
+				svc.Register(mux)
+				reqs := []*http.Request{h.request(t, upload{dev: dev, body: batchesBody(root)})}
+				if tt.onLoad {
+					reqs = append(reqs, h.stateRequest(dev, dev.key))
+				}
+				for _, r := range reqs {
+					rec := httptest.NewRecorder()
+					mux.ServeHTTP(rec, r)
+					if s, c := refusalOf(t, rec); s != 403 || c != CodeDeviceRevoked {
+						t.Errorf("%s %s: got %d %s, want 403 %s", r.Method, r.URL.Path, s, c, CodeDeviceRevoked)
+					}
+				}
+				for _, table := range deviceTables {
+					var n int
+					if err := h.db.Read.QueryRow(`SELECT COUNT(*) FROM `+table+` WHERE device_id = $1`, dev.ID).Scan(&n); err != nil {
+						t.Fatal(err)
+					}
+					if n != 0 {
+						t.Errorf("%s holds %d rows of the refused request", table, n)
+					}
 				}
 			})
 		}

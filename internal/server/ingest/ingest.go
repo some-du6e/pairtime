@@ -179,9 +179,20 @@ func (s *Service) refuse(w http.ResponseWriter, r *refusal) {
 
 var refusalOff = refuse(CodeIngestOff, "Ingest isn't set up on this server yet.")
 
+// revoked refuses a device whose account can no longer sign in, or one
+// removed or linked again between the token check and the writer's
+// transaction. A device removed before the request arrived keeps no
+// token, so its token is token_invalid instead.
 func revoked() *refusal {
-	return refuse(CodeDeviceRevoked, "The device was removed, or its account can no longer sign in; pairtime login links it again.")
+	return refuse(CodeDeviceRevoked, "The device was removed or linked again, or its account can no longer sign in; pairtime login links it again.")
 }
+
+// refusedError is an op's refusal that must also undo what the op wrote:
+// the writer rolls the op back for its error, and the request gets the
+// refusal rather than a 503.
+type refusedError struct{ r *refusal }
+
+func (e refusedError) Error() string { return "ingest: the request was refused: " + e.r.code }
 
 // anotherAccount refuses a device_id whose stored rows belong to an account
 // other than the token's (D-device-account-binding).
@@ -312,7 +323,12 @@ func (s *Service) batches(w http.ResponseWriter, r *http.Request) {
 		out, err = s.process(ctx, tx, dev, env, p, ip, ja4)
 		return err
 	})
-	if err != nil {
+	var refused refusedError
+	switch {
+	case errors.As(err, &refused):
+		s.refuse(w, refused.r)
+		return
+	case err != nil:
 		if r.Context().Err() == nil {
 			s.o.Logger.Error("ingest: storing an upload failed", "err", err)
 		}
@@ -644,7 +660,12 @@ func (s *Service) process(ctx context.Context, tx writer.Tx, dev device.Device, 
 	}
 	st := c.saved()
 	st.Req = env.req
-	if err := s.o.Devices.SaveState(ctx, tx, dev, st); err != nil {
+	switch err := s.o.Devices.SaveState(ctx, tx, dev, st); {
+	case errors.Is(err, device.ErrRevoked):
+		// Removed or linked again since Authenticate: refused as a revoked
+		// device, and nothing this request wrote stays.
+		return outcome{}, refusedError{revoked()}
+	case err != nil:
 		return outcome{}, err
 	}
 	if err := putReply(ctx, tx, dev.ID, dev.Account, reply{key: env.key, bodySHA: env.bodySHA, response: data}, now); err != nil {
