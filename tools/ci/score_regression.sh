@@ -32,11 +32,13 @@
 # code, so it excuses no golden.
 #
 # Any other change of output needs a version higher than the base's as
-# MAJOR.MINOR.PATCH. A higher MAJOR or MINOR covers it. A PATCH-only bump
-# covers it only when each such golden differs from the base's in v alone,
-# since PATCH is a fix that changes no output (SM 7.6, DESIGN 6.6), and every
-# bucket carries v. An edit that leaves the trimmed version as it was, or
-# lowers it, is no bump.
+# MAJOR.MINOR.PATCH. A higher MAJOR or MINOR covers it. While the version is
+# 0.x, before the 1.0.0 freeze, such a change raises MINOR, a rule's included;
+# from 1.0.0 on, MAJOR is for a rule and MINOR for a parameter value
+# (D-score-version-0x, DESIGN 6.6). A PATCH-only bump covers it only when
+# each such golden differs from the base's in v alone, since PATCH is a fix
+# that changes no output (SM 7.6, DESIGN 6.6), and every bucket carries v. An
+# edit that leaves the trimmed version as it was, or lowers it, is no bump.
 #
 # Exit status: 0 pass, 1 blocked, 2 bad input.
 set -euo pipefail
@@ -170,10 +172,12 @@ fail() {
 	cat <<EOF
 This PR changes what pkg/score outputs for a timeline, since it rewrites
 its golden.jsonl, but $why. A change of output needs a higher scoring
-version in the same PR (SM 7.6): MAJOR for a rule, MINOR for a parameter
-value. PATCH is only for a fix that changes no output, so with a PATCH-only
-bump the goldens may differ in v alone. Bump $version, or, if the output
-shouldn't change, fix the code and restore the goldens.
+version in the same PR (SM 7.6). While $version is 0.x, before the 1.0.0
+freeze, any change of output raises MINOR, a rule's included
+(D-score-version-0x); from 1.0.0 on, MAJOR is for a rule and MINOR for a
+parameter value. PATCH is only for a fix that changes no output, so with a
+PATCH-only bump the goldens may differ in v alone. Bump $version, or, if
+the output shouldn't change, fix the code and restore the goldens.
 EOF
 	exit 1
 }

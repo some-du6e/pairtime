@@ -405,7 +405,10 @@ func (r *rehearsal) stepServer(t *testing.T) {
 // startServer makes pairtimed's keys and config with pairtimed init, then
 // points sign-in at the mock, names the controller the privacy notice
 // needs before sign-ups open (DESIGN 8.6), opens them, and starts
-// pairtimed serve on SQLite.
+// pairtimed serve on SQLite. The rehearsal's server has no buckets, so
+// init gets -no-object-storage: without PAIRTIME_S3_ENDPOINT it refuses
+// to write a pairtime.toml the deploy bundle's Litestream couldn't run
+// (#123).
 func (r *rehearsal) startServer(t *testing.T) {
 	port, opsPort := freePort(t), freePort(t)
 	r.server = fmt.Sprintf("http://127.0.0.1:%d", port)
@@ -417,7 +420,7 @@ func (r *rehearsal) startServer(t *testing.T) {
 	env := append(os.Environ(),
 		"PAIRTIME_HCA_CLIENT_SECRET=mock-oauth2-server-takes-any-secret",
 		"PAIRTIME_EMAIL_KEY="+strings.Repeat("5a", 32))
-	initCmd := exec.Command(r.pairtimed, "init", "-base-url", r.server, "-hca-client-id", clientID, "-data-dir", data, "-config-out", cfg)
+	initCmd := exec.Command(r.pairtimed, "init", "-base-url", r.server, "-hca-client-id", clientID, "-data-dir", data, "-config-out", cfg, "-no-object-storage")
 	initCmd.Env = env
 	if out, err := initCmd.CombinedOutput(); err != nil {
 		t.Fatalf("pairtimed init: %v\n%s", err, out)

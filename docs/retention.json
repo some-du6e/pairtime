@@ -19,7 +19,7 @@
       "id": "device.transcripts",
       "where": "device",
       "data": "Your AI tool's transcripts and output",
-      "kept": "Not copied: pairtime reads them where your AI tool keeps them. What the tool hands pairtime while the agent isn't running waits in pairtime's inbox on this computer until the agent reads it. Everything else follows the tool's own setting (Claude Code keeps them for 30 days unless you change it)"
+      "kept": "Not copied: pairtime reads them where your AI tool keeps them. What the tool hands pairtime itself, through its hooks, waits on this computer until the agent has read it: in pairtime's inbox while the agent isn't running or doesn't answer in time, and as the hook calls listed below. Everything else follows the tool's own setting (Claude Code keeps them for 30 days unless you change it)"
     },
     {
       "id": "device.paths_commands",
@@ -48,6 +48,27 @@
       "data": "Minute buckets",
       "kept": "{days}. Daily totals and coach records stay until you delete them",
       "days": 180
+    },
+    {
+      "id": "device.held_calls",
+      "where": "device",
+      "data": "Hook calls the agent hasn't read yet: what your AI tool sent pairtime as you worked, which can be your prompts, its replies, the commands it ran with their output, and the files it edited. They're plain text, not encrypted, in a folder other people's accounts on this computer can't open, though an administrator can",
+      "kept": "Until the agent has read them. One still waiting {days} after it came is deleted the next time the agent starts, since that's when pairtime checks. Once the ledger can't open until you run pairtime restore, no new call is kept",
+      "days": 7
+    },
+    {
+      "id": "device.commits",
+      "where": "device",
+      "data": "Commit records: for each commit pairtime sees in your projects, its ID and its parents, its times, how many files and lines changed, which commits it replaced if you rebased or amended, and whether an AI agent made it, with no commit message and no file name",
+      "kept": "{days}",
+      "days": 180
+    },
+    {
+      "id": "device.uploads",
+      "where": "device",
+      "data": "A record of each upload the server answered: when, to which server, how many batch roots, minute buckets and commit records it carried and whether it carried the labels, the codes in the server's answer, and a hash of what was sent, never what was sent itself",
+      "kept": "{days}",
+      "days": 90
     },
     {
       "id": "device.key",

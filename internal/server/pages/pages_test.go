@@ -151,8 +151,13 @@ func TestPrivacyNotice(t *testing.T) {
 			want: []string{"This notice isn&#39;t final.", "takes no sign-ups except test accounts for the people who run it", "The controller here is <strong>[not named yet]</strong>.", "contact <strong>[not named yet]</strong>."},
 		},
 		{
-			name: "the notice says a hook call can wait unencrypted until the agent takes it in, as the held calls do (D-held-calls-inbox-class)",
-			want: []string{"The exception is a hook call that arrives while pairtime&#39;s agent isn&#39;t running or hasn&#39;t opened its keys yet. It waits unencrypted in pairtime&#39;s folder, which only you can read, until the agent takes it in."},
+			name:    "the notice says a hook call waits unencrypted until the agent has read it, where an administrator or any program running as you can read it, and that a held call the agent hasn't read in the entry's days goes at its next start (D-held-calls-inbox-class)",
+			want:    []string{"The exception is a hook call, what your AI tool sends pairtime as you work: your prompts, the agent&#39;s replies, the commands it ran with their output, and the files it edited. It waits unencrypted in pairtime&#39;s folder, where other people&#39;s accounts on this computer can&#39;t read it, though an administrator can, and so can any program running as you, until the agent has read it.", "One the agent has held for 7 days without reading it is deleted at the agent&#39;s next start."},
+			notWant: []string{"until the agent takes it in"},
+		},
+		{
+			name: "the notice's sentence on what encryption keeps out comes before the hook-call exception, so it doesn't read as covering the calls that wait unencrypted",
+			want: []string{"from casual reading. It doesn&#39;t protect them from malware running as you.</p>"},
 		},
 		{
 			name:    "a named controller and contact replace their placeholders and the warning",
