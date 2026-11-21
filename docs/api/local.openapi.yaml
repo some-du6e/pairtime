@@ -98,7 +98,7 @@ components:
     Status:
       type: object
       additionalProperties: false
-      required: [version, pid, started, uptime_s, mode, port, wakeups, jobs, ipc]
+      required: [version, pid, started, uptime_s, mode, port, wakeups, jobs, ipc, signals]
       properties:
         version:
           $ref: "#/components/schemas/Version"
@@ -130,12 +130,14 @@ components:
             $ref: "#/components/schemas/Job"
         ipc:
           $ref: "#/components/schemas/IPC"
+        signals:
+          $ref: "#/components/schemas/Signals"
         problems:
           type: object
           description: >
             What isn't working, keyed by where it comes from (`config`,
-            `config-watch`, `state`, `port`, `ipc`), in words for the teen.
-            Absent when nothing is wrong.
+            `config-watch`, `state`, `port`, `ipc`, `presence`, `focus`), in
+            words for the teen. Absent when nothing is wrong.
           additionalProperties:
             type: string
     Version:
@@ -212,6 +214,69 @@ components:
           type: integer
           minimum: 0
           description: Connections turned away because they didn't come from this user.
+    Signals:
+      type: object
+      additionalProperties: false
+      required: [idle, focus, power, lock]
+      description: >
+        Where the running agent reads idle time, focus, suspend and resume,
+        and the lock state, or why each is unknown (DESIGN 3.3). `pairtime
+        doctor` prints its idle and focus lines from this, so they say what
+        the agent reads, not what the terminal doctor runs in can reach
+        (DESIGN 5.9). Each is its source on Windows (WP-OS1, WP-OS2), the
+        macOS notification loop's on macOS, and the desktop's on Linux
+        (WP-OS9).
+      properties:
+        idle:
+          $ref: "#/components/schemas/Signal"
+        focus:
+          $ref: "#/components/schemas/Signal"
+        power:
+          $ref: "#/components/schemas/Signal"
+        lock:
+          $ref: "#/components/schemas/Signal"
+        session:
+          type: string
+          enum: [x11, wayland, none]
+          description: The kind of desktop session, on Linux only.
+        loop:
+          $ref: "#/components/schemas/Loop"
+    Signal:
+      type: object
+      additionalProperties: false
+      description: >
+        Exactly one of `via` and `unknown` is set. A signal with a source
+        can still fail now and then; `problems` says when it does.
+      properties:
+        via:
+          type: string
+          description: >
+            The source, such as `GetLastInputInfo`, `MIT-SCREEN-SAVER` or
+            `logind PrepareForSleep`, in words for doctor.
+        unknown:
+          type: string
+          description: >
+            Why the agent has no source, such as a Wayland desktop that tells
+            other programs nothing about focus, in words for doctor.
+    Loop:
+      type: object
+      additionalProperties: false
+      required: [main_thread, dropped]
+      description: >
+        The macOS notification loop, which gives the agent sleep, wake,
+        screen lock and app activation notifications, on macOS only and once
+        it runs.
+      properties:
+        main_thread:
+          type: boolean
+          description: >
+            The loop runs on the process's main thread, where macOS delivers
+            screen lock and app switch notifications. When it doesn't,
+            locks and app switches may not arrive.
+        dropped:
+          type: integer
+          minimum: 0
+          description: Events lost because the agent fell behind.
     Stopping:
       type: object
       additionalProperties: false

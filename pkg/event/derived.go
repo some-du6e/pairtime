@@ -123,6 +123,9 @@ var activities = enum[Activity]{values: []Activity{
 	ActivityTesting, ActivityDebugging, ActivityHandEdit, ActivityLookup,
 }}
 
+// Activities returns every activity kind, in SM 5.1 order.
+func Activities() []Activity { return slices.Clone(activities.values) }
+
 // Evidence is how strong the evidence behind credited seconds is: SM 5.1's
 // levels with DESIGN 6.4's provenance rule, which also looks at the
 // anchor's via.
