@@ -98,9 +98,13 @@ func (s *server) restart() {
 
 // faults is the way to the server, with what a network and a restart do
 // to some POSTs, by attempt from 1: a 503; a restart, when pairtimed went
-// down before it read the request and came back; a 429; and an answer lost
-// after the server stored the request. It keeps the inflated body of every
-// POST that reaches it, and counts the server's own 429s and its replays.
+// down before it read the request and came back; down, a connection
+// dropped as pairtimed starts; a 429; and an answer lost after the server
+// stored the request. net/http sends a POST with an Idempotency-Key again
+// once by itself when a reused connection drops, so a restart is followed
+// by down for the uploader to see the failure. It keeps the inflated body
+// of every POST that reaches it, and counts the server's own 429s and its
+// replays.
 type faults struct {
 	srv         *server
 	mu          sync.Mutex
@@ -136,6 +140,8 @@ func (f *faults) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"rate_limited","detail":"injected"}`, http.StatusTooManyRequests)
 	case "restart":
 		f.srv.restart()
+		drop(w)
+	case "down":
 		drop(w)
 	case "lost":
 		next.ServeHTTP(httptest.NewRecorder(), r)
@@ -316,7 +322,7 @@ VALUES ($1, $2, $3, $4, 'linux', 'v0.0.0-dev', $5, $5, 1)`,
 		deviceID, account, hex.EncodeToString(tokenHash[:]), []byte(devKey.Public().(ed25519.PublicKey)), linked)
 	sv := &server{db: db, w: wr, devices: ds, key: ed25519.NewKeyFromSeed(seed("e2e server key"))}
 	sv.restart()
-	ft := &faults{srv: sv, by: map[int]string{1: "503", 2: "restart", 4: "429", 5: "lost"}}
+	ft := &faults{srv: sv, by: map[int]string{1: "503", 2: "restart", 3: "down", 5: "429", 6: "lost"}}
 	srv := httptest.NewServer(ft)
 	t.Cleanup(srv.Close)
 

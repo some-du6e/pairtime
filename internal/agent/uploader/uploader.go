@@ -1173,7 +1173,8 @@ func (u *Uploader) sync(c Credentials) bool {
 	u.recheck()
 	u.synced = true
 	u.save()
-	u.setStatus(func(s *Status) { s.Next = next })
+	// The fork too: after one, no request follows whose answer would say it.
+	u.setStatus(func(s *Status) { s.Next, s.Fork = next, u.st.Fork })
 	return true
 }
 
