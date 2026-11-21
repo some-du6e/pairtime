@@ -157,7 +157,7 @@ func (s *Service) writeJSON(w http.ResponseWriter, status int, body []byte) {
 type errorBody struct {
 	Error  string `json:"error"`
 	Detail string `json:"detail"`
-	// DeviceKeyID names the device's registered key on signature_invalid,
+	// DeviceKeyID names the device's key on signature_invalid,
 	// so a client can tell a key the server doesn't have from a fault.
 	DeviceKeyID string `json:"device_key_id,omitempty"`
 }
@@ -196,7 +196,7 @@ func unavailable() *refusal {
 // badSignature refuses a signature that doesn't verify under dev's key, and
 // names that key by its id.
 func badSignature(dev device.Device) *refusal {
-	r := refuse(CodeSignatureInvalid, "The signature doesn't verify under the device's registered key; device_key_id names that key.")
+	r := refuse(CodeSignatureInvalid, "The signature doesn't verify under the device's key; device_key_id names that key.")
 	r.deviceKeyID = backup.KeyID(dev.PublicKey)
 	return r
 }
@@ -225,7 +225,7 @@ func (s *Service) authenticate(r *http.Request) (device.Device, *refusal) {
 }
 
 func keyMissing() *refusal {
-	return refuse(CodeDeviceKeyMissing, "The device has no registered key; sign in again with pairtime login.")
+	return refuse(CodeDeviceKeyMissing, "The device has no key on record; sign in again with pairtime login.")
 }
 
 // checkClock refuses a time more than MaxSkewMS from the server's clock

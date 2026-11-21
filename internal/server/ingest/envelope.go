@@ -73,7 +73,7 @@ type refusal struct {
 	detail string
 	// retryAfter, when set, is the Retry-After in seconds.
 	retryAfter int
-	// deviceKeyID names the device's registered key, on signature_invalid.
+	// deviceKeyID names the device's key, on signature_invalid.
 	deviceKeyID string
 }
 

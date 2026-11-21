@@ -1165,7 +1165,7 @@ func TestState(t *testing.T) {
 					t.Errorf("got %d %s", s, c)
 				}
 			}},
-			{"a state request signed by another key is signature_invalid, naming the registered key", func(t *testing.T) {
+			{"a state request signed by another key is signature_invalid, naming the device's key", func(t *testing.T) {
 				rec := h.serve(t, h.stateRequest(dev, seedKey("another key")))
 				var e errorBody
 				if err := json.Unmarshal(rec.Body.Bytes(), &e); err != nil || rec.Code != 401 || e.Error != CodeSignatureInvalid || e.DeviceKeyID != backup.KeyID(dev.PublicKey) {
@@ -1282,7 +1282,7 @@ func TestObserve(t *testing.T) {
 }
 
 // TestSignatureNamesTheKey checks that signature_invalid names the
-// device's registered key, so a client can tell a key the server lacks
+// device's key, so a client can tell a key the server lacks
 // from a fault (ingest-v1 2.6).
 func TestSignatureNamesTheKey(t *testing.T) {
 	h := newHarness(t, store.SQLite)
@@ -1296,7 +1296,7 @@ func TestSignatureNamesTheKey(t *testing.T) {
 		name, got, want string
 	}{
 		{"the refusal is signature_invalid", e.Error, CodeSignatureInvalid},
-		{"device_key_id is the registered key's id", e.DeviceKeyID, backup.KeyID(dev.PublicKey)},
+		{"device_key_id is the device key's id", e.DeviceKeyID, backup.KeyID(dev.PublicKey)},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
