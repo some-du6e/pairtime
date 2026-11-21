@@ -245,7 +245,7 @@ components:
     Status:
       type: object
       additionalProperties: false
-      required: [version, pid, started, uptime_s, mode, port, wakeups, jobs, ipc, signals, adapters]
+      required: [version, pid, started, uptime_s, mode, port, wakeups, jobs, ipc, signals, adapters, footprint]
       properties:
         version:
           $ref: "#/components/schemas/Version"
@@ -281,6 +281,8 @@ components:
           $ref: "#/components/schemas/Signals"
         adapters:
           $ref: "#/components/schemas/Adapters"
+        footprint:
+          $ref: "#/components/schemas/Footprint"
         problems:
           type: object
           description: >
@@ -297,6 +299,30 @@ components:
             Absent when nothing is wrong.
           additionalProperties:
             type: string
+    Footprint:
+      type: object
+      additionalProperties: false
+      required: [cpu_s]
+      description: >
+        What the agent costs the computer since it started, as the OS reports
+        it for the agent's own process: the R8 numbers `pairtime doctor
+        --report` shares (DESIGN 5.9, 9.7). footprint.yml measures the same
+        working set from outside the process, on Windows.
+      properties:
+        rss_bytes:
+          type: integer
+          minimum: 0
+          description: >
+            The resident set now, the working set on Windows. Absent where the
+            OS doesn't say, as on macOS.
+        peak_rss_bytes:
+          type: integer
+          minimum: 0
+          description: The most the resident set has been. Absent where the OS doesn't say.
+        cpu_s:
+          type: number
+          minimum: 0
+          description: The CPU time the agent has used, user and system, in seconds.
     Version:
       type: object
       additionalProperties: false

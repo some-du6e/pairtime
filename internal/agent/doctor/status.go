@@ -16,13 +16,24 @@ type Status struct {
 	// Mode is local or online (DESIGN 4.2).
 	Mode string `json:"mode"`
 	// Wakeups counts the scheduler's timer firings since the start.
-	Wakeups  uint64   `json:"wakeups"`
-	IPC      IPC      `json:"ipc"`
-	Signals  Signals  `json:"signals"`
-	Adapters Adapters `json:"adapters"`
+	Wakeups   uint64    `json:"wakeups"`
+	IPC       IPC       `json:"ipc"`
+	Signals   Signals   `json:"signals"`
+	Adapters  Adapters  `json:"adapters"`
+	Footprint Footprint `json:"footprint"`
 	// Problems is what isn't working, by where it comes from, in words for
 	// the teen.
 	Problems map[string]string `json:"problems,omitempty"`
+}
+
+// Footprint is what the agent costs the computer since it started, as the
+// OS reports it for the agent's process.
+type Footprint struct {
+	// RSSBytes and PeakRSSBytes are the resident set now and at most, 0
+	// where the OS doesn't say.
+	RSSBytes     uint64  `json:"rss_bytes,omitempty"`
+	PeakRSSBytes uint64  `json:"peak_rss_bytes,omitempty"`
+	CPUS         float64 `json:"cpu_s"`
 }
 
 // Version is the agent binary's version.Info.
