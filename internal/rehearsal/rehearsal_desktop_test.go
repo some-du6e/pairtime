@@ -80,9 +80,6 @@ const (
 	// prompt, in milliseconds: about 11 characters a second, under SM
 	// 2.2's TYPING_MAX_CPS of 15.
 	typingDelay = "90"
-	// returnHold is how long the person holds Return: a typist's key
-	// stays down for about 100 ms.
-	returnHold = 120 * time.Millisecond
 )
 
 // The test binary is also the stand-in claude, started under the name
@@ -142,7 +139,7 @@ func TestDesktopRehearsal(t *testing.T) {
 			run:   r.stepSession,
 		},
 		{
-			name:  "the scorer credits the person's time, and pairtime today and the agent's API agree on it",
+			name:  "the scorer credits the person's time, each typed prompt counting as typed, and pairtime today and the agent's API agree on it",
 			needs: []string{"session"},
 			run:   r.stepCredit,
 		},
@@ -816,19 +813,18 @@ func (p *person) leave() {
 }
 
 // typePrompt types text into the Claude Code window, Return after each
-// line, through XTEST as a keyboard would. Return is held down for
-// returnHold, as a person's finger holds it: the hook fires on the key
-// press, and the presence sample the hook takes must find that press, not
-// a release that came before it (SM 2.2 rule 6 looks for input before
-// the submit). xdotool's own key releases at once.
+// line, through XTEST as a keyboard would. xdotool releases Return a few
+// milliseconds after the press, so the presence sample the hook takes
+// often finds only that release, dated after the prompt. SM 2.2 rule 6
+// counts input up to INPUT_RELEASE_GRACE_MS after the submit (#151), so
+// the quick tap still shows the typing; stepCredit checks that every
+// prompt counted as typed.
 func (r *rehearsal) typePrompt(t *testing.T, text string) {
 	t.Helper()
 	r.activate(t, r.claudeWin)
 	for _, line := range strings.Split(text, "\n") {
 		r.xdotool(t, "type", "--delay", typingDelay, "--", line)
-		r.xdotool(t, "keydown", "Return")
-		time.Sleep(returnHold)
-		r.xdotool(t, "keyup", "Return")
+		r.xdotool(t, "key", "Return")
 	}
 }
 
@@ -959,6 +955,7 @@ func (r *rehearsal) stepCredit(t *testing.T) {
 		time.Sleep(10 * time.Second)
 	}
 	r.ok["credited"] = true
+	r.checkPromptsTyped(t)
 	// The CLI reads the agent's day rollups, and the local API serves
 	// them; both must say the same (WP-AG4).
 	var last string
@@ -973,6 +970,54 @@ func (r *rehearsal) stepCredit(t *testing.T) {
 		time.Sleep(3 * time.Second)
 	}
 	t.Errorf("pairtime today and the agent's GET /v1/days disagree:\n%s", last)
+}
+
+// checkPromptsTyped checks that each of the three prompts the person
+// typed counted as typed: SM 2.2 rule 6 made it the human act whose
+// window credits the seconds before it (SM 2.3), so its event is an
+// anchor of a credited minute. A prompt the scorer took for one that
+// arrived without typing (X.no_input) anchors nothing. The scorer can
+// settle the last prompt's minutes a batch or two later, so this waits.
+func (r *rehearsal) checkPromptsTyped(t *testing.T) {
+	t.Helper()
+	evs, err := r.ledgerEvents()
+	if err != nil {
+		t.Errorf("reading the ledger back: %v", err)
+		return
+	}
+	var prompts []string
+	for _, ev := range evs {
+		if ev.Kind() == event.KindPromptSubmit {
+			prompts = append(prompts, ev.EventID)
+		}
+	}
+	deadline := time.Now().Add(3 * time.Minute)
+	for {
+		anchors := map[string]bool{}
+		for _, date := range r.dates() {
+			latest, _ := r.latestBuckets(date)
+			for _, bk := range latest {
+				for _, a := range bk.Anchors {
+					anchors[a] = true
+				}
+			}
+		}
+		var untyped []int
+		for i, id := range prompts {
+			if !anchors[id] {
+				untyped = append(untyped, i+1)
+			}
+		}
+		if len(prompts) == 3 && len(untyped) == 0 {
+			return
+		}
+		if time.Now().After(deadline) {
+			_, raw, _ := r.agentGet("/v1/days/" + time.Now().UTC().Format(time.DateOnly))
+			t.Errorf("of the %d prompts the person typed, prompts %v anchor no credited minute, so they counted as arriving without typing (SM 2.2 rule 6); the day:\n%s", len(prompts), untyped, raw)
+			return
+		}
+		time.Sleep(10 * time.Second)
+	}
 }
 
 // Step 7: the server's numbers.
@@ -1064,29 +1109,9 @@ func (r *rehearsal) stepUpload(t *testing.T) {
 // by kind of work, slot by slot, from the latest revision of each minute:
 // what the uploader sends (SM 5.1).
 func (r *rehearsal) slotSplits(date string) (levels, kinds map[string]float64, err error) {
-	b, err := os.ReadFile(filepath.Join(r.dataDir(), "buckets", date+".jsonl"))
+	latest, err := r.latestBuckets(date)
 	if err != nil {
 		return nil, nil, err
-	}
-	type slot struct {
-		CR   float64 `json:"cr"`
-		Kind string  `json:"kind"`
-		EV   string  `json:"ev"`
-	}
-	type bucket struct {
-		Minute string `json:"minute"`
-		Rev    int    `json:"rev"`
-		Slots  []slot `json:"slots"`
-	}
-	latest := map[string]bucket{}
-	for _, line := range strings.Split(string(b), "\n") {
-		var bk bucket
-		if json.Unmarshal([]byte(line), &bk) != nil || bk.Minute == "" {
-			continue // a blank line, or a torn last one the agent is still writing
-		}
-		if prev, ok := latest[bk.Minute]; !ok || bk.Rev >= prev.Rev {
-			latest[bk.Minute] = bk
-		}
 	}
 	levels, kinds = map[string]float64{}, map[string]float64{}
 	for _, bk := range latest {
@@ -1098,6 +1123,40 @@ func (r *rehearsal) slotSplits(date string) (levels, kinds map[string]float64, e
 		}
 	}
 	return levels, kinds, nil
+}
+
+// bucketRev is a line of the agent's minute buckets, the parts read here.
+type bucketRev struct {
+	Minute string `json:"minute"`
+	Rev    int    `json:"rev"`
+	Slots  []struct {
+		CR   float64 `json:"cr"`
+		Kind string  `json:"kind"`
+		EV   string  `json:"ev"`
+	} `json:"slots"`
+	// Anchors are the human acts whose windows the minute's credit came
+	// from, by event id: local, never uploaded (DESIGN 4.3).
+	Anchors []string `json:"anchors"`
+}
+
+// latestBuckets is the latest revision of each minute in the agent's
+// buckets/<date>.jsonl, by minute.
+func (r *rehearsal) latestBuckets(date string) (map[string]bucketRev, error) {
+	b, err := os.ReadFile(filepath.Join(r.dataDir(), "buckets", date+".jsonl"))
+	if err != nil {
+		return nil, err
+	}
+	latest := map[string]bucketRev{}
+	for _, line := range strings.Split(string(b), "\n") {
+		var bk bucketRev
+		if json.Unmarshal([]byte(line), &bk) != nil || bk.Minute == "" {
+			continue // a blank line, or a torn last one the agent is still writing
+		}
+		if prev, ok := latest[bk.Minute]; !ok || bk.Rev >= prev.Rev {
+			latest[bk.Minute] = bk
+		}
+	}
+	return latest, nil
 }
 
 // serverSplits is the server's week by evidence level and by kind of
