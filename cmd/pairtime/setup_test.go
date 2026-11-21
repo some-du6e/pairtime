@@ -228,8 +228,14 @@ func TestClearData(t *testing.T) {
 			want:  []string{"agent.lock"},
 		},
 		{
+			name:  "through a link, the hook calls held for the agent's adapters go too, in held.jsonl, its pending log and its replay",
+			files: []string{"held.jsonl", "held.jsonl.pending", "held.jsonl.replay", "commits/2026-11-21.jsonl", "notes.txt"},
+			link:  true,
+			want:  []string{"notes.txt"},
+		},
+		{
 			name:  "through a link, only what pairtime puts in its directories goes, and what else the folder holds stays",
-			files: []string{"ledger/2026-11-20.seg", "state.json", "state.json.bad", ".state.json.tmp-123", "keys/keystore.json", "account.json", "account/agent.lock", "outbox.json", "uploads.jsonl", "notes.txt", "photos/cat.jpg"},
+			files: []string{"ledger/2026-11-20.seg", "state.json", "state.json.bad", ".state.json.tmp-123", "keys/keystore.json", "commits/2026-11-21.jsonl", "account.json", "account/agent.lock", "outbox.json", "uploads.jsonl", "notes.txt", "photos/cat.jpg"},
 			link:  true,
 			want:  []string{"notes.txt", "photos", "photos/cat.jpg"},
 		},

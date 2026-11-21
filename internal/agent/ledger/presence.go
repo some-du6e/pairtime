@@ -228,3 +228,9 @@ var (
 
 // runMono is at's reading of this run's monotonic clock, in ms.
 func runMono(at time.Time) int64 { return max(at.Sub(runStart).Milliseconds(), 0) }
+
+// RunClock returns the mono and boot_id of an event the agent makes itself
+// at at, such as the git watcher's git.change: this run's, as presence's
+// records carry them, so all of the agent's own events re-anchor together
+// (SM 1.1).
+func RunClock(at time.Time) (mono int64, bootID string) { return runMono(at), runBoot }

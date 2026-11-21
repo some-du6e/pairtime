@@ -26,6 +26,18 @@ const assertions = new Set([
 ]);
 
 const rfc3339 = /^\d{4}-\d{2}-\d{2}[Tt]\d{2}:\d{2}:\d{2}(\.\d+)?([Zz]|[+-]\d{2}:\d{2})$/;
+// RFC 3339's full-date, which OpenAPI's "date" format is.
+const fullDate = /^(\d{4})-(\d{2})-(\d{2})$/;
+
+/** Whether s is a calendar date written YYYY-MM-DD: 2026-02-30 isn't one. */
+function isFullDate(s: string): boolean {
+	const m = fullDate.exec(s);
+	if (!m) {
+		return false;
+	}
+	const d = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])));
+	return d.toISOString().slice(0, 10) === s;
+}
 
 /** Returns every way value fails schema; [] means it conforms. */
 export function check(value: unknown, schema: Schema, root: Schema = schema, at = '$'): string[] {
@@ -60,11 +72,16 @@ export function check(value: unknown, schema: Schema, root: Schema = schema, at 
 		}
 	}
 	if (schema.format !== undefined) {
-		if (schema.format !== 'date-time') {
+		if (schema.format === 'date-time') {
+			if (typeof value === 'string' && !(rfc3339.test(value) && !Number.isNaN(Date.parse(value)))) {
+				errors.push(`${at}: ${JSON.stringify(value)} isn't an RFC 3339 date-time`);
+			}
+		} else if (schema.format === 'date') {
+			if (typeof value === 'string' && !isFullDate(value)) {
+				errors.push(`${at}: ${JSON.stringify(value)} isn't a date written YYYY-MM-DD`);
+			}
+		} else {
 			throw new Error(`${at}: tests/support/schema.ts doesn't check format "${String(schema.format)}"`);
-		}
-		if (typeof value === 'string' && !(rfc3339.test(value) && !Number.isNaN(Date.parse(value)))) {
-			errors.push(`${at}: ${JSON.stringify(value)} isn't an RFC 3339 date-time`);
 		}
 	}
 	if (Array.isArray(value) && schema.items !== undefined) {

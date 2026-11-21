@@ -10,12 +10,12 @@
 // localhost:<port>, which defeats DNS rebinding, and an Origin, if it has
 // one, must be the dashboard's own, which defeats cross-site requests. API
 // routes also need the bearer token from port.json, which only this user
-// can read.
+// can read, or the session cookie `pairtime dashboard` signs the teen's
+// browser in with (session.go).
 package localhttp
 
 import (
 	"crypto/rand"
-	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -134,15 +134,16 @@ func fromLoopback(remoteAddr string) bool {
 }
 
 // RequireToken refuses, with 401, a request without the header
-// "Authorization: Bearer <token>".
+// "Authorization: Bearer <token>". Routes the dashboard calls take its
+// session cookie too, through RequireAuth; a route behind RequireToken
+// alone is for local tools.
 func RequireToken(token string, next http.Handler) http.Handler {
 	if token == "" {
 		panic("localhttp: RequireToken needs a token")
 	}
 	want := []byte(token)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		scheme, got, _ := strings.Cut(r.Header.Get("Authorization"), " ")
-		if !strings.EqualFold(scheme, "Bearer") || subtle.ConstantTimeCompare([]byte(got), want) != 1 {
+		if !hasBearer(r, want) {
 			w.Header().Set("WWW-Authenticate", `Bearer realm="pairtime"`)
 			http.Error(w, "unauthorized: send the bearer token from port.json", http.StatusUnauthorized)
 			return

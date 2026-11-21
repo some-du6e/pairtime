@@ -11,9 +11,10 @@
 // client_secret_post; no PKCE; RS256 ID tokens that live 120 s and carry
 // iss, sub ("ident!..."), aud (the client id), exp, iat, nonce, auth_time
 // and, by scope, email and email_verified, slack_id, verification_status
-// and ysws_eligible, leaving out claims without a value; prompt=login, after
-// which auth_time is when the person authenticated again; and "idntk."
-// access tokens.
+// and ysws_eligible, and for profile name, given_name, family_name and
+// nickname, which HCA fills from the identity's first and last names,
+// leaving out claims without a value; prompt=login, after which auth_time
+// is when the person authenticated again; and "idntk." access tokens.
 //
 // Where pairtimed must not lean on something, the fake refuses it. It reads
 // a Basic header's client id and secret without the form-decoding RFC 6749
@@ -69,6 +70,10 @@ type Identity struct {
 	VerificationStatus string
 	// YSWSEligible is left out of the token when nil.
 	YSWSEligible *bool
+	// FirstName and LastName become the profile scope's claims as HCA
+	// writes them: given_name and nickname are the first name, family_name
+	// the last, and name both.
+	FirstName, LastName string
 }
 
 // Verified is an identity HCA verified as eligible for YSWS programs.
@@ -531,6 +536,19 @@ func (s *Server) claims(g *grant, now time.Time) map[string]any {
 	}
 	if slices.Contains(g.scopes, "slack_id") && g.identity.SlackID != "" {
 		c["slack_id"] = g.identity.SlackID
+	}
+	if slices.Contains(g.scopes, "profile") {
+		first, last := g.identity.FirstName, g.identity.LastName
+		if first != "" {
+			c["given_name"] = first
+			c["nickname"] = first
+		}
+		if last != "" {
+			c["family_name"] = last
+		}
+		if full := strings.TrimSpace(first + " " + last); full != "" {
+			c["name"] = full
+		}
 	}
 	if slices.Contains(g.scopes, "verification_status") {
 		if g.identity.VerificationStatus != "" {

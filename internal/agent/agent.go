@@ -46,6 +46,7 @@ import (
 	"github.com/some-du6e/pairtime/internal/agent/state"
 	"github.com/some-du6e/pairtime/internal/agent/store"
 	"github.com/some-du6e/pairtime/internal/agent/uploader"
+	"github.com/some-du6e/pairtime/internal/platform"
 	"github.com/some-du6e/pairtime/internal/version"
 	"github.com/some-du6e/pairtime/pkg/params"
 )
@@ -92,6 +93,11 @@ type Options struct {
 	// idle time, and GET /v1/status says that power, locks and focus go
 	// unseen. Other OSes ignore it.
 	Mac *MacLoop
+	// Walk, when set, replaces how the agent reads the parent chain of a
+	// hook connection's peer, which is hookpath.ReadChain otherwise
+	// (ipc.Options.Walk). Tests use it to hand captured calls in from
+	// under the processes the capture recorded.
+	Walk func(pid int) []platform.Proc
 }
 
 // linked keeps heavyModules' entry points reachable (see heavy_linux.go).
@@ -112,8 +118,12 @@ type agent struct {
 	state   *state.Store
 	cfg     atomic.Pointer[config.Config]
 	port    int
-	procs   *procs.Scanner // the harness process scan (DESIGN 3.3)
-	journal *inbox.Journal // nil when it couldn't be opened
+	// linkPort is port while the HTTP server listens, and 0 before and
+	// after, for the sign-in links the socket hands out (dashboard.go),
+	// which can be asked for before the port is known.
+	linkPort atomic.Int32
+	procs    *procs.Scanner // the harness process scan (DESIGN 3.3)
+	journal  *inbox.Journal // nil when it couldn't be opened
 	// ipcSrv is the socket's or the pipe's server, nil while hooks can't
 	// reach the agent.
 	ipcSrv atomic.Pointer[ipc.Server]
@@ -132,6 +142,12 @@ type agent struct {
 	// sessions, once keySessions has derived it from the device key.
 	hooked   *hookTies
 	kSession atomic.Pointer[[]byte]
+	// adapt runs the harness adapters and the git adapter, which turn the
+	// hook calls the journal stores, and the commits in the sessions'
+	// repos, into ledger records (adapters.go, git.go; WP-AG7).
+	// adaptersHost makes it on first use.
+	adapt     *adapterHost
+	adaptOnce sync.Once
 	// ledgerIn takes presence's and focus's records, and presence's
 	// seals, to the ledger writer once it opens (WP-LG5).
 	ledgerIn *ledger.Presence
@@ -159,6 +175,11 @@ type agent struct {
 	signIn signInCache
 	// loc is Options.Zone (zone).
 	loc *time.Location
+
+	// sessions are the dashboard's sign-ins (DESIGN 3.9). The dashboard
+	// reads the same day and session routes as the CLI views, which
+	// scorer.go serves from the scorer's stores (WP-AG4; D-shadow-shape).
+	sessions *localhttp.Sessions
 
 	stop     chan struct{} // closed when a client asks the agent to stop
 	stopOnce sync.Once
@@ -198,6 +219,7 @@ func Run(ctx context.Context, opts Options) error {
 		ledgerRetry: defaultLedgerRetry,
 		table:       newestTable(),
 		loc:         opts.Zone,
+		sessions:    localhttp.NewSessions(nil),
 		hooked:      newHookTies(),
 	}
 	if opts.LedgerRetry > 0 {
@@ -260,6 +282,7 @@ func Run(ctx context.Context, opts Options) error {
 	a.newFocus(src.focus)
 	closers = append(closers, a.startProcs())
 	closers = append(closers, a.startFocus())
+	closers = append(closers, a.startAdapters())
 	closers = append(closers, a.startIPC(opts))
 
 	ln, pf, err := a.listen(opts.Ports)
@@ -283,7 +306,11 @@ func Run(ctx context.Context, opts Options) error {
 	}
 	served := make(chan error, 1)
 	go func() { served <- srv.Serve(ln) }()
+	// The listener is bound, so a browser sent to a link from now on waits
+	// in its queue until Serve takes it.
+	a.linkPort.Store(int32(a.port))
 	closers = append(closers, func() {
+		a.linkPort.Store(0)
 		sctx, cancel := context.WithTimeout(context.Background(), shutdownWait)
 		defer cancel()
 		if err := srv.Shutdown(sctx); err != nil {

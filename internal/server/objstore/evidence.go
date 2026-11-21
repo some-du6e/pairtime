@@ -31,17 +31,12 @@ var ErrDigestMismatch = errors.New("objstore: the blob's SHA-256 doesn't match i
 // ciphertext, sealed by pkg/seal before they arrive, so the bucket holds
 // no content anyone can read without the evidence key.
 //
-// Write-once puts and Get's digest check are the only protections. R2,
-// the pilot's store, has no bucket versioning, so anyone with the
-// bucket's key can delete a blob or overwrite it with a plain PUT, and
-// no earlier version survives. Get then fails with ErrNotFound or
-// ErrDigestMismatch, but nothing can bring the blob back, since
-// Litestream and the nightly snapshot copy only the database. Neither
-// bucket may keep versions either (D-evidence-versioning, on
-// docs/errata/2026-11-20-evidence-versioning.md): a purge must remove the
-// blob, so pairtimed doctor fails on a bucket that reports versioning,
-// and every evidence delete commits its database change before it
-// deletes the blob.
+// Write-once puts and Get's digest check are the only protections.
+// Neither bucket keeps versions (DESIGN 10.3), so the bucket holds the
+// only copy. Anyone with its key can delete a blob or overwrite it with a
+// plain PUT, after which Get fails with ErrNotFound, ErrDigestMismatch or
+// ErrTooLarge and nothing brings the blob back, since Litestream and the
+// nightly snapshot copy only the database.
 type Evidence struct {
 	b *Bucket
 }

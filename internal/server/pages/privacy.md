@@ -10,7 +10,7 @@ This notice covers the pairtime server at {{.BaseURL}} and the pairtime program 
 ## The short version
 
 - Your prompts, your code, your file names and your window titles stay on your computer, unless you submit hours: then a few prompts, and the agent replies they answered, go to the program's reviewers.
-- This server gets your Hack Club identity and email address, the IP address each upload comes from, and numbers: for every 15 seconds you work, how many were credited, to which project (as a key, not its name), what kind of work it was, and why the rest weren't.
+- This server gets your Hack Club identity, first name and email address, the IP address each upload comes from, and numbers: for every 15 seconds you work, how many were credited, to which project (as a key, not its name), what kind of work it was, and why the rest weren't.
 - Nothing about you is public until you choose what to show.
 - Hours are checked for fraud only when you submit them to a program.
 - Every kind of data has a time limit, listed under [How long we keep things](#how-long-we-keep-things). Deleted data is gone from the server's backups too within {{days "server.db_snapshots"}}.
@@ -56,7 +56,7 @@ Each upload also shows this server the IP address it came from. Cloudflare, whic
 
 Some things reach the server only at particular moments:
 
-- **Sign-in.** When you sign in with Hack Club Auth, the server gets your Hack Club Auth ID, your Slack ID, your email address, and whether Hack Club has verified you. It stores your email encrypted.
+- **Sign-in.** When you sign in with Hack Club Auth, the server gets your Hack Club Auth ID, your Slack ID, your email address, your name, and whether Hack Club has verified you. It stores your email encrypted. Of your name it keeps only your first name, and only with that sign-in, so its pages can show who you're signed in as. It never stores your full name or your last name, and your first name goes when that sign-in's record does, as [How long we keep things](#how-long-we-keep-things) says.
 - **A new computer.** When you link a computer with `pairtime login`, it sends this server the random device ID pairtime made for it when it was installed, its OS family and pairtime version, and the public half of the key that signs its uploads. The server keeps them with a hash of the computer's sign-in token, when you linked it, when it last connected and how many times it has been linked, and how far its uploads have got: the number of its last upload, the number, hash and arrival time of the last batch root it sent, the batch its record starts at, and the numbers of any batches it kept to itself in local-only mode between two sign-ins. Those batches themselves never reach the server.
 - **A new project.** When pairtime first sees a git repository, it sends the ID of the repository's first commit. The server turns that into a keyed hash and throws the ID away. It gets the repository's address only if the repository is public, you publish the project, or you install pairtime's GitHub App on it.
 - **Programs.** When you connect a project to a program, the server stores keyed hashes of the Hackatime project names you choose to link. From then until you unlink the program, it can read, for the projects you linked: your credited time, with the start and end time of each stretch, which includes the time of day your public profile never shows; your totals and how much of them is at each evidence level, for any dates; your username and IDs; and your email address, if you allow it.
@@ -106,7 +106,8 @@ Submitting hours to a program is always your choice. This is what happens when y
 - This server holds the key that opens it. It decrypts each item in memory to check it, and again each time a reviewer opens it, when it encrypts the item once more for that reviewer's browser alone. So whoever runs this server could read what you reveal. The operator also keeps an encrypted copy of the key offline.
 - The encryption doesn't protect against someone at Cloudflare who actively replaces the keys, because the key your computer encrypts to, and the review page reviewers open it with, both come through Cloudflare.
 - The people who may open what you reveal are the reviewers assigned to your submission, Hack Club's Fraud Squad, its Quality and Integrity team and HQ spot-checkers. Every view is logged, and you can read the log.
-- If a revealed item shows something it shouldn't, the "This revealed something it shouldn't have" button deletes it from the evidence store at once, every stored version of it included. The minutes it supported stop counting.
+- If a revealed item shows something it shouldn't, the "This revealed something it shouldn't have" button deletes it from the evidence store at once. If the server can't reach the evidence store just then, reviewers can't open the item any more, and the server deletes it as soon as it can. The minutes it supported stop counting.
+- Withdrawing a submission doesn't delete what you revealed. It stays for the spot-check window, counted from when you withdraw, so a withdrawal can't cut short a check that's under way. The button above deletes an item at once.
 - A person may audit your submission in a 15-minute walk-through on a Slack huddle. It's never recorded, your camera is never needed, and you can bring a parent or club leader, or choose a written audit instead. Hack Club's safeguarding rules come first where they differ.
 
 ## Who else is involved
@@ -124,7 +125,7 @@ Hack Club Auth, Cloudflare and GitHub are based in the United States, and Cloudf
 
 ## How long we keep things
 
-Every kind of data has a time limit. These tables come from the same file this server's cleanup jobs read, {{.RetentionFile}}, as it was when this server was built. A spot-check window is the time after a decision during which Hack Club can check a submission again. {{if .WindowProvisional}}Until Hack Club sets its length, pairtime keeps it open for {{.WindowMonths}} months after the decision.{{else}}It stays open for {{.WindowMonths}} months after the decision.{{end}}
+Every kind of data has a time limit. These tables come from the same file this server's cleanup jobs read, {{.RetentionFile}}, as it was when this server was built. A spot-check window is the time after a decision during which Hack Club can check a submission again. {{if .WindowProvisional}}Until Hack Club sets its length, pairtime keeps it open for {{.WindowMonths}} months after the decision.{{else}}It stays open for {{.WindowMonths}} months after the decision.{{end}} If you withdraw a submission before it's decided, its window starts when you withdraw it, and if it's never decided or withdrawn, when you submitted it.
 {{range .Sections}}
 ### {{.Title}}
 
@@ -151,7 +152,7 @@ Through the controller, you can:
 - object to its use for fraud protection, as [Your right to object](#your-right-to-object) explains
 - withdraw any consent you gave, which stops that use from then on
 
-Deleting your account deletes everything this server holds about you, except the minimal fraud record in the table above, which the deletion report lists as kept. Copies in the server's backups go as the backups expire, within {{days "server.db_snapshots"}}. Copies that programs already received, such as the outcome of a submission, are held by those programs, not by this server.{{if .PrivacyHub}} Hack Club's privacy team can also export or delete your pairtime data for you, through the same privacy hub it uses for Hackatime.{{end}}
+Deleting your account deletes everything this server holds about you, except the minimal fraud record in the table above, which the deletion report lists as kept. If the server can't reach the evidence store just then, the report also lists what you revealed as not deleted yet, and the server deletes it as soon as it can. Copies in the server's backups go as the backups expire, within {{days "server.db_snapshots"}}. Copies that programs already received, such as the outcome of a submission, are held by those programs, not by this server.{{if .PrivacyHub}} Hack Club's privacy team can also export or delete your pairtime data for you, through the same privacy hub it uses for Hackatime.{{end}}
 
 Parents and guardians can contact the controller with questions or requests too.
 

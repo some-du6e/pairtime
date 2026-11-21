@@ -63,8 +63,10 @@ type Config struct {
 	SignIn  SignIn
 	// Site renders the pages through the server's layout.
 	Site *pages.Site
-	// Handle is the name the pages show for an account. Nil shows the
-	// Slack ID, or the HCA subject without one.
+	// Handle is an account's handle, the name that stays the same: what
+	// the pages call an account whose sign-in brought no display name,
+	// and what the token response names the account by. Nil is the Slack
+	// ID, or the HCA subject without one.
 	Handle func(*accounts.User) string
 	// SignupsOpen reports whether sign-ups are open to everyone, so that
 	// the code response can say when only an account that exists already

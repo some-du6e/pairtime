@@ -38,7 +38,7 @@ func TestGrant(t *testing.T) {
 						c.ExpiresIn != 900 || c.Interval != 5 || len(c.UserCode) != 9 || c.UserCode[4] != '-' || c.SignupsOpen == nil || !*c.SignupsOpen {
 						t.Errorf("code reply = %+v", c)
 					}
-					if r := b.decide(c.UserCode, true); !strings.Contains(r.body, "<h1>Linked</h1>") {
+					if r := b.decide(c.UserCode, "approve"); !strings.Contains(r.body, "<h1>Linked</h1>") {
 						t.Fatalf("approving answered %d:\n%s", r.status, r.body)
 					}
 					status, tr := h.poll(c.DeviceCode)
@@ -96,14 +96,14 @@ func TestGrant(t *testing.T) {
 					if status, tr := h.poll(c.DeviceCode); status != http.StatusBadRequest || tr.Error != "expired_token" {
 						t.Errorf("poll after 15 minutes: %d %q, want expired_token", status, tr.Error)
 					}
-					if r := b.decide(c.UserCode, true); !strings.Contains(r.body, "or it has expired") {
+					if r := b.decide(c.UserCode, "approve"); !strings.Contains(r.body, "or it has expired") {
 						t.Errorf("typing an expired code answered %d:\n%s", r.status, r.body)
 					}
 				}},
 				{name: "an approved code the app doesn't redeem within a minute of its expiry gets expired_token", run: func(t *testing.T, h *harness) {
 					b := h.signIn(verified("ident!teen1", "U0TEEN1"))
 					c := h.requestCode(testDeviceID)
-					b.decide(c.UserCode, true)
+					b.decide(c.UserCode, "approve")
 					h.clock.Advance(device.CodeLifetime + device.RedeemGrace)
 					if _, tr := h.poll(c.DeviceCode); tr.Error != "expired_token" {
 						t.Errorf("poll = %q, want expired_token", tr.Error)
@@ -116,7 +116,7 @@ func TestGrant(t *testing.T) {
 					b := h.signIn(verified("ident!teen1", "U0TEEN1"))
 					c := h.requestCode(testDeviceID)
 					h.clock.Advance(device.CodeLifetime - 2*time.Second)
-					if r := b.decide(c.UserCode, true); !strings.Contains(r.body, "<h1>Linked</h1>") {
+					if r := b.decide(c.UserCode, "approve"); !strings.Contains(r.body, "<h1>Linked</h1>") {
 						t.Fatalf("approving 2 s before the code expires answered %d:\n%s", r.status, r.body)
 					}
 					h.clock.Advance(device.Interval)
@@ -131,10 +131,46 @@ func TestGrant(t *testing.T) {
 						t.Errorf("poll = %q, want expired_token", tr.Error)
 					}
 				}},
+				{name: "a code turned down in its last seconds still gets access_denied at the app's next poll after it expires", run: func(t *testing.T, h *harness) {
+					b := h.signIn(verified("ident!teen1", "U0TEEN1"))
+					c := h.requestCode(testDeviceID)
+					h.clock.Advance(device.CodeLifetime - 2*time.Second)
+					if r := b.decide(c.UserCode, "deny"); !strings.Contains(r.body, "<h1>Not linked</h1>") {
+						t.Fatalf("denying 2 s before the code expires answered %d:\n%s", r.status, r.body)
+					}
+					h.clock.Advance(device.Interval)
+					if status, tr := h.poll(c.DeviceCode); status != http.StatusBadRequest || tr.Error != "access_denied" {
+						t.Errorf("the poll 3 s after the code expired answered %d %q, want access_denied", status, tr.Error)
+					}
+				}},
+				{name: "a Stop in the code's last seconds still reaches the app as device_taken at its next poll after the code expires", run: func(t *testing.T, h *harness) {
+					h.link(h.signIn(verified("ident!teen1", "U0TEEN1")), testDeviceID)
+					b := h.signIn(verified("ident!teen2", "U0TEEN2"))
+					c := h.requestCode(testDeviceID)
+					h.clock.Advance(device.CodeLifetime - 2*time.Second)
+					if r := b.decide(c.UserCode, "stop"); !strings.Contains(r.body, "linked to another account") {
+						t.Fatalf("Stop 2 s before the code expires answered %d:\n%s", r.status, r.body)
+					}
+					h.clock.Advance(device.Interval)
+					if status, tr := h.poll(c.DeviceCode); status != http.StatusBadRequest || tr.Error != "device_taken" {
+						t.Errorf("the poll 3 s after the code expired answered %d %q, want device_taken", status, tr.Error)
+					}
+				}},
+				{name: "a code turned down in time gets expired_token once a minute has passed since it expired", run: func(t *testing.T, h *harness) {
+					b := h.signIn(verified("ident!teen1", "U0TEEN1"))
+					c := h.requestCode(testDeviceID)
+					if r := b.decide(c.UserCode, "deny"); !strings.Contains(r.body, "<h1>Not linked</h1>") {
+						t.Fatalf("denying answered %d:\n%s", r.status, r.body)
+					}
+					h.clock.Advance(device.CodeLifetime + device.RedeemGrace)
+					if _, tr := h.poll(c.DeviceCode); tr.Error != "expired_token" {
+						t.Errorf("poll = %q, want expired_token", tr.Error)
+					}
+				}},
 				{name: "an account Hack Club Auth turns ineligible between approving and the app's poll gets no device", run: func(t *testing.T, h *harness) {
 					b := h.signIn(verified("ident!teen1", "U0TEEN1"))
 					c := h.requestCode(testDeviceID)
-					if r := b.decide(c.UserCode, true); !strings.Contains(r.body, "<h1>Linked</h1>") {
+					if r := b.decide(c.UserCode, "approve"); !strings.Contains(r.body, "<h1>Linked</h1>") {
 						t.Fatalf("approving answered %d:\n%s", r.status, r.body)
 					}
 					gone := verified("ident!teen1", "U0TEEN1")
@@ -152,7 +188,7 @@ func TestGrant(t *testing.T) {
 				{name: "a denied code gets access_denied, and links nothing", run: func(t *testing.T, h *harness) {
 					b := h.signIn(verified("ident!teen1", "U0TEEN1"))
 					c := h.requestCode(testDeviceID)
-					if r := b.decide(c.UserCode, false); !strings.Contains(r.body, "<h1>Not linked</h1>") {
+					if r := b.decide(c.UserCode, "deny"); !strings.Contains(r.body, "<h1>Not linked</h1>") {
 						t.Fatalf("denying answered %d:\n%s", r.status, r.body)
 					}
 					if status, tr := h.poll(c.DeviceCode); status != http.StatusBadRequest || tr.Error != "access_denied" {
@@ -235,22 +271,26 @@ func TestGrant(t *testing.T) {
 						t.Errorf("poll = %q, want authorization_pending", tr.Error)
 					}
 				}},
-				{name: "a device another account linked stays with it: the page says so, Stop ends the code, and the app gets device_taken", run: func(t *testing.T, h *harness) {
+				{name: "a device another account linked stays with it: the page offers only Stop, Stop ends the code, and the app gets device_taken", run: func(t *testing.T, h *harness) {
 					a := h.signIn(verified("ident!teen1", "U0TEEN1"))
 					owned := h.link(a, testDeviceID)
 					b := h.signIn(verified("ident!teen2", "U0TEEN2"))
 					c := h.requestCode(testDeviceID)
 					tok := b.csrf(device.PagePath)
 					r := b.post(device.PagePath, url.Values{"csrf": {tok}, "user_code": {c.UserCode}})
-					if !strings.Contains(r.body, "linked to another account") || strings.Contains(r.body, ">Link it</button>") || !strings.Contains(r.body, ">Stop pairtime login</button>") {
+					if !strings.Contains(r.body, "linked to another account") || strings.Contains(r.body, `value="approve"`) || strings.Contains(r.body, `value="deny"`) ||
+						!strings.Contains(r.body, `name="decision" value="stop">Stop pairtime login</button>`) {
 						t.Errorf("typing the code of another account's device answered %d:\n%s", r.status, r.body)
 					}
 					if _, tr := h.poll(c.DeviceCode); tr.Error != "authorization_pending" {
 						t.Errorf("poll after the page = %q; want authorization_pending, since only Stop ends the code", tr.Error)
 					}
 					h.clock.Advance(device.Interval)
-					if r := b.post(device.DecisionPath, url.Values{"csrf": {tok}, "user_code": {c.UserCode}, "decision": {"approve"}}); !strings.Contains(r.body, "linked to another account") || strings.Contains(r.body, "<h1>Linked</h1>") {
-						t.Errorf("Stop answered %d:\n%s", r.status, r.body)
+					stop := url.Values{"csrf": {tok}, "user_code": {c.UserCode}, "decision": {"stop"}}
+					for i := range 2 {
+						if r := b.post(device.DecisionPath, stop); !strings.Contains(r.body, "<h1>Not linked</h1>") || !strings.Contains(r.body, "linked to another account") {
+							t.Errorf("Stop %d answered %d:\n%s", i+1, r.status, r.body)
+						}
 					}
 					if status, tr := h.poll(c.DeviceCode); status != http.StatusBadRequest || tr.Error != "device_taken" {
 						t.Errorf("poll after Stop = %d %q, want device_taken", status, tr.Error)
@@ -259,7 +299,100 @@ func TestGrant(t *testing.T) {
 						t.Errorf("the owner's token answered %d after another account tried its device", r.status)
 					}
 				}},
-				{name: "a removed device that uploaded stays with its account as a tombstone, and another account gets device_taken", run: func(t *testing.T, h *harness) {
+				{name: "Stop after the other account freed the device id links nothing: the code ends as denied, a second click gets the same page, and the app gets access_denied", run: func(t *testing.T, h *harness) {
+					a := h.signIn(verified("ident!teen1", "U0TEEN1"))
+					owned := h.link(a, testDeviceID)
+					b := h.signIn(verified("ident!teen2", "U0TEEN2"))
+					c := h.requestCode(testDeviceID)
+					tok := b.csrf(device.PagePath)
+					if r := b.post(device.PagePath, url.Values{"csrf": {tok}, "user_code": {c.UserCode}}); !strings.Contains(r.body, `value="stop"`) {
+						t.Fatalf("typing the code of another account's device answered %d:\n%s", r.status, r.body)
+					}
+					// Between the page and the click, the owner removes the
+					// device, which never uploaded, so its id is free.
+					if r := h.call(http.MethodDelete, device.MePath, owned.AccessToken, nil); r.status != http.StatusNoContent {
+						t.Fatalf("DELETE %s answered %d", device.MePath, r.status)
+					}
+					stop := url.Values{"csrf": {tok}, "user_code": {c.UserCode}, "decision": {"stop"}}
+					for i := range 2 {
+						if r := b.post(device.DecisionPath, stop); !strings.Contains(r.body, "<h1>Not linked</h1>") || strings.Contains(r.body, "linked to another account") {
+							t.Errorf("Stop %d after the id was freed answered %d:\n%s", i+1, r.status, r.body)
+						}
+					}
+					if status, tr := h.poll(c.DeviceCode); status != http.StatusBadRequest || tr.Error != "access_denied" || tr.AccessToken != "" {
+						t.Errorf("poll after Stop = %d %+v, want access_denied", status, tr)
+					}
+					if n := h.count(`SELECT count(*) FROM devices`); n != 0 {
+						t.Errorf("Stop linked %d devices", n)
+					}
+				}},
+				{name: "a second Stop after the other account freed the device id gets the first Stop's page, and links nothing", run: func(t *testing.T, h *harness) {
+					a := h.signIn(verified("ident!teen1", "U0TEEN1"))
+					owned := h.link(a, testDeviceID)
+					b := h.signIn(verified("ident!teen2", "U0TEEN2"))
+					c := h.requestCode(testDeviceID)
+					if r := b.decide(c.UserCode, "stop"); !strings.Contains(r.body, "<h1>Not linked</h1>") || !strings.Contains(r.body, "linked to another account") {
+						t.Fatalf("Stop answered %d:\n%s", r.status, r.body)
+					}
+					if r := h.call(http.MethodDelete, device.MePath, owned.AccessToken, nil); r.status != http.StatusNoContent {
+						t.Fatalf("DELETE %s answered %d", device.MePath, r.status)
+					}
+					if r := b.post(device.DecisionPath, url.Values{"csrf": {b.csrf(device.PagePath)}, "user_code": {c.UserCode}, "decision": {"stop"}}); !strings.Contains(r.body, "<h1>Not linked</h1>") ||
+						!strings.Contains(r.body, "linked to another account") {
+						t.Errorf("the second Stop answered %d:\n%s", r.status, r.body)
+					}
+					if status, tr := h.poll(c.DeviceCode); status != http.StatusBadRequest || tr.Error != "device_taken" {
+						t.Errorf("poll = %d %+v, want device_taken", status, tr)
+					}
+					if n := h.count(`SELECT count(*) FROM devices`); n != 0 {
+						t.Errorf("the second Stop linked %d devices", n)
+					}
+				}},
+				{name: "Stop from the account the device id belongs to links nothing either", run: func(t *testing.T, h *harness) {
+					a := h.signIn(verified("ident!teen1", "U0TEEN1"))
+					owned := h.link(a, testDeviceID)
+					c := h.requestCode(testDeviceID)
+					if r := a.post(device.DecisionPath, url.Values{"csrf": {a.csrf(device.PagePath)}, "user_code": {c.UserCode}, "decision": {"stop"}}); !strings.Contains(r.body, "<h1>Not linked</h1>") {
+						t.Errorf("Stop answered %d:\n%s", r.status, r.body)
+					}
+					if status, tr := h.poll(c.DeviceCode); status != http.StatusBadRequest || tr.Error != "access_denied" {
+						t.Errorf("poll = %d %+v, want access_denied", status, tr)
+					}
+					if r := h.call(http.MethodGet, device.MePath, owned.AccessToken, nil); r.status != http.StatusOK || !strings.Contains(r.body, `"public_key":"`+owned.PublicKey+`"`) {
+						t.Errorf("the device's own token answered %d: %s; want the device as it was, still linked with its key", r.status, r.body)
+					}
+				}},
+				{name: "an approval from a page shown before another account linked the device links nothing, and the app gets device_taken", run: func(t *testing.T, h *harness) {
+					b := h.signIn(verified("ident!teen2", "U0TEEN2"))
+					c := h.requestCode(testDeviceID)
+					tok := b.csrf(device.PagePath)
+					if r := b.post(device.PagePath, url.Values{"csrf": {tok}, "user_code": {c.UserCode}}); !strings.Contains(r.body, `value="approve"`) {
+						t.Fatalf("typing the code of a new device answered %d:\n%s", r.status, r.body)
+					}
+					owned := h.link(h.signIn(verified("ident!teen1", "U0TEEN1")), testDeviceID)
+					if r := b.post(device.DecisionPath, url.Values{"csrf": {tok}, "user_code": {c.UserCode}, "decision": {"approve"}}); !strings.Contains(r.body, "linked to another account") || strings.Contains(r.body, "<h1>Linked</h1>") {
+						t.Errorf("Link it answered %d:\n%s", r.status, r.body)
+					}
+					if status, tr := h.poll(c.DeviceCode); status != http.StatusBadRequest || tr.Error != "device_taken" {
+						t.Errorf("poll = %d %+v, want device_taken", status, tr)
+					}
+					if r := h.call(http.MethodGet, device.MePath, owned.AccessToken, nil); r.status != http.StatusOK {
+						t.Errorf("the owner's token answered %d after another account approved its device", r.status)
+					}
+				}},
+				{name: "a decision the pages don't offer is refused, and the code stays pending", run: func(t *testing.T, h *harness) {
+					b := h.signIn(verified("ident!teen1", "U0TEEN1"))
+					c := h.requestCode(testDeviceID)
+					for _, decision := range []string{"link", "Approve", "stopped"} {
+						if r := b.post(device.DecisionPath, url.Values{"csrf": {b.csrf(device.PagePath)}, "user_code": {c.UserCode}, "decision": {decision}}); r.status != http.StatusBadRequest {
+							t.Errorf("decision %q answered %d, want 400", decision, r.status)
+						}
+					}
+					if _, tr := h.poll(c.DeviceCode); tr.Error != "authorization_pending" {
+						t.Errorf("poll = %q, want authorization_pending", tr.Error)
+					}
+				}},
+				{name: "a removed device that uploaded stays with its account as a tombstone, and another account's Stop gets device_taken", run: func(t *testing.T, h *harness) {
 					a := h.signIn(verified("ident!teen1", "U0TEEN1"))
 					tok := h.link(a, testDeviceID).AccessToken
 					h.ingest(tok)
@@ -271,11 +404,9 @@ func TestGrant(t *testing.T) {
 					}
 					b := h.signIn(verified("ident!teen2", "U0TEEN2"))
 					c := h.requestCode(testDeviceID)
-					if r := b.decide(c.UserCode, true); !strings.Contains(r.body, "linked to another account") {
-						t.Errorf("another account's try answered %d:\n%s", r.status, r.body)
+					if r := b.decide(c.UserCode, "stop"); !strings.Contains(r.body, "<h1>Not linked</h1>") || !strings.Contains(r.body, "linked to another account") {
+						t.Errorf("another account's Stop answered %d:\n%s", r.status, r.body)
 					}
-					tokB := b.csrf(device.PagePath)
-					b.post(device.DecisionPath, url.Values{"csrf": {tokB}, "user_code": {c.UserCode}, "decision": {"approve"}})
 					if _, tr := h.poll(c.DeviceCode); tr.Error != "device_taken" {
 						t.Errorf("poll = %q, want device_taken", tr.Error)
 					}
@@ -472,7 +603,7 @@ func TestGrant(t *testing.T) {
 						t.Errorf("poll = %q, want authorization_pending", tr.Error)
 					}
 					other := h.signIn(verified("ident!teen2", "U0TEEN2"))
-					if r := other.decide(c.UserCode, false); !strings.Contains(r.body, "<h1>Not linked</h1>") {
+					if r := other.decide(c.UserCode, "deny"); !strings.Contains(r.body, "<h1>Not linked</h1>") {
 						t.Errorf("another account's try answered %d:\n%s", r.status, r.body)
 					}
 				}},
@@ -527,7 +658,11 @@ func TestCodeRequest(t *testing.T) {
 			f.Set("public_key", short)
 			f.Set("key_signature", signed(testDeviceID, key, short))
 		}), wantStatus: http.StatusBadRequest, wantError: "invalid_request"},
-		{name: "a public_key in unpadded base64 is invalid_request", h: h, form: with(func(f url.Values) { f.Set("public_key", strings.TrimRight(publicKey(key), "=")) }), wantStatus: http.StatusBadRequest, wantError: "invalid_request"},
+		{name: "a public_key in unpadded base64 is invalid_request, though its signature covers the string as sent", h: h, form: with(func(f url.Values) {
+			unpadded := strings.TrimRight(publicKey(key), "=")
+			f.Set("public_key", unpadded)
+			f.Set("key_signature", signed(testDeviceID, key, unpadded))
+		}), wantStatus: http.StatusBadRequest, wantError: "invalid_request", wantBody: "public_key must be"},
 		{name: "a key_signature by another key is invalid_request, since the app must hold the key it names", h: h, form: with(func(f url.Values) { f.Set("key_signature", signed(testDeviceID, other, publicKey(key))) }), wantStatus: http.StatusBadRequest, wantError: "invalid_request"},
 		{name: "a key_signature for another device id is invalid_request", h: h, form: with(func(f url.Values) { f.Set("key_signature", signed("d_someotherdevice00000000aa", key, publicKey(key))) }), wantStatus: http.StatusBadRequest, wantError: "invalid_request"},
 		{name: "a parameter given twice is invalid_request", h: h, raw: codeForm(testDeviceID, key).Encode() + "&device_id=" + testDeviceID, wantStatus: http.StatusBadRequest, wantError: "invalid_request"},

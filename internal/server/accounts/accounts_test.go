@@ -5,6 +5,7 @@ package accounts
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"errors"
 	"regexp"
 	"slices"
@@ -74,6 +75,40 @@ func count(t *testing.T, db *store.DB, query string, args ...any) int {
 }
 
 func boolPtr(b bool) *bool { return &b }
+
+// columnHolding returns the name of a column of a row of table whose value
+// contains s, or "" when none does.
+func columnHolding(t *testing.T, db *store.DB, table, s string) string {
+	t.Helper()
+	rows, err := db.Read.Query(`SELECT * FROM ` + table)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	cols, err := rows.Columns()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for rows.Next() {
+		vals := make([]sql.NullString, len(cols))
+		ptrs := make([]any, len(cols))
+		for i := range vals {
+			ptrs[i] = &vals[i]
+		}
+		if err := rows.Scan(ptrs...); err != nil {
+			t.Fatal(err)
+		}
+		for i, v := range vals {
+			if strings.Contains(v.String, s) {
+				return cols[i]
+			}
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	return ""
+}
 
 // anyone is MayCreate with sign-ups open to every identity.
 func anyone(string) bool { return true }
@@ -160,7 +195,7 @@ func TestSignIn(t *testing.T) {
 			},
 		},
 		{
-			name:    "an account that turns ineligible keeps its row with the new status and loses its sessions",
+			name:    "an account that turns ineligible keeps its row with the new status and loses its sessions, with their display names at once",
 			before:  []Identity{verified(), verified()},
 			id:      Identity{Sub: "ident!abc123", Status: Ineligible},
 			wantErr: ErrIneligible,
@@ -170,6 +205,9 @@ func TestSignIn(t *testing.T) {
 				}
 				if n := count(t, db, `SELECT count(*) FROM sessions WHERE revoked_at_ms IS NULL`); n != 0 {
 					t.Errorf("%d sessions still live, want 0", n)
+				}
+				if n := count(t, db, `SELECT count(*) FROM sessions WHERE display_name IS NOT NULL`); n != 0 {
+					t.Errorf("%d revoked sessions still hold a display name, want 0", n)
 				}
 			},
 		},
@@ -233,6 +271,43 @@ func TestSignIn(t *testing.T) {
 				}
 			},
 		},
+		{
+			name:  "a display name goes with the session and never with the account (D-display-name)",
+			id:    verified(),
+			login: Login{DisplayName: "Robin"},
+			check: func(t *testing.T, _ *Store, db *store.DB, sess *Session, _ bool) {
+				if sess.DisplayName != "Robin" {
+					t.Errorf("the session's display name = %q, want Robin", sess.DisplayName)
+				}
+				if n := count(t, db, `SELECT count(*) FROM sessions WHERE user_id = $1 AND display_name = 'Robin'`, sess.User.ID); n != 1 {
+					t.Errorf("%d session rows hold the display name, want 1", n)
+				}
+				if col := columnHolding(t, db, "users", "Robin"); col != "" {
+					t.Errorf("the account row holds the display name in %s", col)
+				}
+			},
+		},
+		{
+			name:  "a display name of 64 characters is kept, counted in characters rather than bytes",
+			id:    verified(),
+			login: Login{DisplayName: strings.Repeat(string(rune(0xe9)), MaxDisplayName)},
+			check: func(t *testing.T, _ *Store, _ *store.DB, sess *Session, _ bool) {
+				if want := strings.Repeat(string(rune(0xe9)), MaxDisplayName); sess.DisplayName != want {
+					t.Errorf("the session's display name = %q, want %q", sess.DisplayName, want)
+				}
+			},
+		},
+		{
+			name:       "a display name over 64 characters is refused, and nothing is written",
+			id:         verified(),
+			login:      Login{DisplayName: strings.Repeat("a", MaxDisplayName+1)},
+			wantErrAny: true,
+			check: func(t *testing.T, _ *Store, db *store.DB, _ *Session, _ bool) {
+				if n := count(t, db, `SELECT count(*) FROM users`) + count(t, db, `SELECT count(*) FROM sessions`); n != 0 {
+					t.Errorf("%d rows written, want none", n)
+				}
+			},
+		},
 		{name: "an unknown verification status is refused", id: Identity{Sub: "ident!abc123", Status: "verified_eventually"}, wantErrAny: true},
 		{name: "a fresh login without the time HCA authenticated the person is refused", id: verified(), login: Login{Fresh: true}, wantErrAny: true},
 		{name: "an empty subject is refused", id: Identity{Status: Verified}, wantErrAny: true},
@@ -243,10 +318,14 @@ func TestSignIn(t *testing.T) {
 			for _, tt := range tests {
 				t.Run(tt.name, func(t *testing.T) {
 					s, db := open(t, engine, Options{MayCreate: anyone})
+					// Earlier sign-ins bring a display name, as HCA's do.
 					for _, id := range tt.before {
-						if _, _, err := s.SignIn(ctx, id, Login{}); err != nil {
+						if _, _, err := s.SignIn(ctx, id, Login{DisplayName: "Robin"}); err != nil {
 							t.Fatalf("an earlier sign-in: %v", err)
 						}
+					}
+					if n := count(t, db, `SELECT count(*) FROM sessions WHERE display_name = 'Robin'`); n != len(tt.before) {
+						t.Fatalf("%d of %d earlier sessions hold their display name", n, len(tt.before))
 					}
 					switch {
 					case tt.closed:
@@ -329,6 +408,8 @@ func TestSession(t *testing.T) {
 		// fresh signs in with a fresh login; either way HCA's auth_time is
 		// a minute before the sign-in.
 		fresh bool
+		// shown is the sign-in's display name.
+		shown string
 		// act runs after the sign-in and returns the token to look up.
 		act     func(t *testing.T, s *Store, c *clock, token string) string
 		wantErr bool
@@ -369,6 +450,25 @@ func TestSession(t *testing.T) {
 			},
 		},
 		{
+			name:  "a session comes back with the display name of the sign-in that opened it",
+			shown: "Robin",
+			act:   func(_ *testing.T, _ *Store, _ *clock, token string) string { return token },
+			check: func(t *testing.T, sess *Session, _ *clock) {
+				if sess.DisplayName != "Robin" {
+					t.Errorf("display name = %q, want Robin", sess.DisplayName)
+				}
+			},
+		},
+		{
+			name: "a session whose sign-in brought no display name has none",
+			act:  func(_ *testing.T, _ *Store, _ *clock, token string) string { return token },
+			check: func(t *testing.T, sess *Session, _ *clock) {
+				if sess.DisplayName != "" {
+					t.Errorf("display name = %q, want none", sess.DisplayName)
+				}
+			},
+		},
+		{
 			name: "a session isn't found once it expires",
 			act: func(_ *testing.T, _ *Store, c *clock, token string) string {
 				c.t = c.t.Add(DefaultSessionLifetime)
@@ -403,7 +503,7 @@ func TestSession(t *testing.T) {
 				t.Run(tt.name, func(t *testing.T) {
 					c := newClock()
 					s, _ := open(t, engine, Options{MayCreate: anyone, Reviewers: reviewers, Now: c.now})
-					signed, _, err := s.SignIn(ctx, verified(), Login{AuthTime: c.t.Add(-time.Minute), Fresh: tt.fresh})
+					signed, _, err := s.SignIn(ctx, verified(), Login{AuthTime: c.t.Add(-time.Minute), Fresh: tt.fresh, DisplayName: tt.shown})
 					if err != nil {
 						t.Fatal(err)
 					}
@@ -468,9 +568,11 @@ func TestDeleteExpiredSessions(t *testing.T) {
 		t.Run(string(engine), func(t *testing.T) {
 			c := newClock()
 			s, db := open(t, engine, Options{MayCreate: anyone, Now: c.now, SessionLifetime: time.Hour})
-			signIn := func() string {
+			// Each session's sign-in brings a display name of its own, which
+			// lives and goes with the session's row (D-display-name).
+			signIn := func(name string) string {
 				t.Helper()
-				sess, _, err := s.SignIn(ctx, verified(), Login{})
+				sess, _, err := s.SignIn(ctx, verified(), Login{DisplayName: name})
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -483,18 +585,18 @@ func TestDeleteExpiredSessions(t *testing.T) {
 				}
 			}
 			// At T0 a session opens, and it expires at T0+1h.
-			expired := signIn()
+			expired := signIn("Expired")
 			// At T1 = T0+1h two more open, both expiring at T1+1h, and one
 			// of them is revoked at once.
 			c.t = c.t.Add(time.Hour)
-			revoked, twin := signIn(), signIn()
+			revoked, twin := signIn("Revoked"), signIn("Twin")
 			revoke(revoked)
 			// A day and a millisecond later the cutoff is T1 plus 1 ms: the
 			// first session expired before it, and the revoked one was
 			// revoked before it but expires after it, so only its
 			// revocation can delete it.
 			c.t = c.t.Add(sessionGrace + time.Millisecond)
-			revokedNow, live := signIn(), signIn()
+			revokedNow, live := signIn("RevokedNow"), signIn("Live")
 			revoke(revokedNow)
 			n, err := s.DeleteExpiredSessions(ctx)
 			if err != nil {
@@ -503,19 +605,26 @@ func TestDeleteExpiredSessions(t *testing.T) {
 			tests := []struct {
 				name  string
 				token string
+				// shown is the display name the session signed in with,
+				// and names how many rows still hold it.
+				shown string
 				want  int
+				names int
 			}{
-				{name: "a session that expired more than a day ago is deleted", token: expired, want: 0},
-				{name: "a session revoked more than a day ago is deleted, though it expires later", token: revoked, want: 0},
-				{name: "a session that expired less than a day ago is kept", token: twin, want: 1},
-				{name: "a session revoked less than a day ago is kept", token: revokedNow, want: 1},
-				{name: "a live session is kept", token: live, want: 1},
+				{name: "a session that expired more than a day ago is deleted, with its display name", token: expired, shown: "Expired", want: 0, names: 0},
+				{name: "a session revoked more than a day ago is deleted with its display name, though it expires later", token: revoked, shown: "Revoked", want: 0, names: 0},
+				{name: "a session that expired less than a day ago is kept, with its display name", token: twin, shown: "Twin", want: 1, names: 1},
+				{name: "a session revoked less than a day ago is kept, but sign-out dropped its display name", token: revokedNow, shown: "RevokedNow", want: 1, names: 0},
+				{name: "a live session is kept, with its display name", token: live, shown: "Live", want: 1, names: 1},
 			}
 			for _, tt := range tests {
 				t.Run(tt.name, func(t *testing.T) {
 					hash, _ := hashToken(tt.token)
 					if got := count(t, db, `SELECT count(*) FROM sessions WHERE id_hash = $1`, hash); got != tt.want {
 						t.Errorf("%d rows, want %d", got, tt.want)
+					}
+					if got := count(t, db, `SELECT count(*) FROM sessions WHERE display_name = $1`, tt.shown); got != tt.names {
+						t.Errorf("%d rows hold the display name %q, want %d", got, tt.shown, tt.names)
 					}
 				})
 			}

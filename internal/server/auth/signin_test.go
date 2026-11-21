@@ -58,6 +58,9 @@ func TestSignIn(t *testing.T) {
 
 func testSignIn(t *testing.T, engine store.Engine) {
 	now := func() int64 { return time.Now().Unix() }
+	// named is an identity HCA has a first and a last name for.
+	named := hcafake.Verified()
+	named.FirstName, named.LastName = "Robin", "Fakename"
 	tests := []struct {
 		name     string
 		identity *hcafake.Identity // nil: hcafake.Verified()
@@ -79,14 +82,14 @@ func testSignIn(t *testing.T, engine store.Engine) {
 		check        func(t *testing.T, h *harness, hca *hcafake.Server, f *flow, me auth.Me)
 	}{
 		{
-			name: "a verified identity signs in with exactly the four scopes, a state and a nonce",
+			name: "a verified identity signs in with exactly the five scopes, a state and a nonce",
 			check: func(t *testing.T, h *harness, hca *hcafake.Server, f *flow, me auth.Me) {
 				q := f.authorize.Query()
 				for k, want := range map[string]string{
 					"response_type": "code",
 					"client_id":     hcafake.ClientID,
 					"redirect_uri":  h.srv.URL + auth.CallbackPath,
-					"scope":         "openid email slack_id verification_status",
+					"scope":         "openid email profile slack_id verification_status",
 				} {
 					if got := q.Get(k); got != want {
 						t.Errorf("authorize %s = %q, want %q", k, got, want)
@@ -123,6 +126,47 @@ func testSignIn(t *testing.T, engine store.Engine) {
 				}
 				if me.Session.FreshLoginAt != nil {
 					t.Error("an ordinary sign-in's session is marked as a fresh login")
+				}
+				if me.Session.DisplayName != "" {
+					t.Errorf("an identity HCA has no names for got the display name %q", me.Session.DisplayName)
+				}
+			},
+		},
+		{
+			name:     "the session keeps HCA's given_name as its display name, and nothing keeps the last or full name (D-display-name)",
+			identity: &named,
+			check: func(t *testing.T, h *harness, _ *hcafake.Server, _ *flow, me auth.Me) {
+				if me.Session.DisplayName != "Robin" {
+					t.Errorf("session display_name = %q, want Robin", me.Session.DisplayName)
+				}
+				if n := h.count(`SELECT count(*) FROM sessions WHERE display_name = 'Robin'`); n != 1 {
+					t.Errorf("%d session rows hold the given name, want 1", n)
+				}
+				if n := h.count(`SELECT count(*) FROM sessions WHERE display_name LIKE '%Fakename%'`); n != 0 {
+					t.Errorf("%d session rows hold the last name", n)
+				}
+			},
+		},
+		{
+			name:     "without a given_name the nickname is the display name",
+			identity: &named,
+			hook: resign(func(c map[string]any) {
+				delete(c, "given_name")
+				c["nickname"] = "Robbie"
+			}),
+			check: func(t *testing.T, _ *harness, _ *hcafake.Server, _ *flow, me auth.Me) {
+				if me.Session.DisplayName != "Robbie" {
+					t.Errorf("session display_name = %q, want Robbie", me.Session.DisplayName)
+				}
+			},
+		},
+		{
+			name:     "a given_name that isn't a string doesn't stop the sign-in, and the nickname stands in",
+			identity: &named,
+			hook:     resign(func(c map[string]any) { c["given_name"] = 42 }),
+			check: func(t *testing.T, _ *harness, _ *hcafake.Server, _ *flow, me auth.Me) {
+				if me.Session.DisplayName != "Robin" {
+					t.Errorf("session display_name = %q, want the nickname, Robin", me.Session.DisplayName)
 				}
 			},
 		},
@@ -532,6 +576,7 @@ func TestSignInAgain(t *testing.T) {
 			id.SlackID = "U0NEWSLACK"
 			id.Email = "new@example.org"
 			id.YSWSEligible = boolPtr(false)
+			id.FirstName = "Robin"
 			hca.SetIdentity(id)
 			second := checkSignedIn(t, h, h.signIn(signInOptions{}), "/")
 			tests := []struct {
@@ -543,6 +588,8 @@ func TestSignInAgain(t *testing.T) {
 				{name: "the email is refreshed", ok: second.Email == "new@example.org"},
 				{name: "ysws_eligible is refreshed", ok: second.EligibilityToConfirm},
 				{name: "there is still one account row", ok: h.count(`SELECT count(*) FROM users`) == 1},
+				{name: "the new session has the name HCA sent this time, and the first session still has none",
+					ok: second.Session.DisplayName == "Robin" && h.count(`SELECT count(*) FROM sessions WHERE display_name IS NULL`) == 1},
 			}
 			for _, tt := range tests {
 				t.Run(tt.name, func(t *testing.T) {
@@ -559,7 +606,13 @@ func TestIneligibleLater(t *testing.T) {
 	for _, engine := range storetest.Engines() {
 		t.Run(string(engine), func(t *testing.T) {
 			h, hca := withFake(t, engine, anyone)
+			named := hcafake.Verified()
+			named.FirstName = "Robin"
+			hca.SetIdentity(named)
 			checkSignedIn(t, h, h.signIn(signInOptions{}), "/")
+			if n := h.count(`SELECT count(*) FROM sessions WHERE display_name = 'Robin'`); n != 1 {
+				t.Fatalf("%d sessions hold the first sign-in's display name, want 1", n)
+			}
 			id := hcafake.Verified()
 			id.VerificationStatus = "ineligible"
 			hca.SetIdentity(id)
@@ -573,6 +626,7 @@ func TestIneligibleLater(t *testing.T) {
 				{name: "the account keeps its row, marked ineligible", ok: h.count(`SELECT count(*) FROM users WHERE verification_status = 'ineligible'`) == 1},
 				{name: "the row keeps no email or Slack id, though HCA sent both", ok: h.count(`SELECT count(*) FROM users WHERE slack_id IS NULL AND email_ct IS NULL AND email_index IS NULL`) == 1},
 				{name: "no session of the account is live", ok: h.count(`SELECT count(*) FROM sessions WHERE revoked_at_ms IS NULL`) == 0},
+				{name: "no session of the account keeps a display name, though the rows stay a day", ok: h.count(`SELECT count(*) FROM sessions WHERE display_name IS NOT NULL`) == 0},
 			}
 			for _, tt := range tests {
 				t.Run(tt.name, func(t *testing.T) {

@@ -368,6 +368,26 @@ func gitAbove(dir string) string {
 	}
 }
 
+// Ignored reports whether dir is out of pairtime by what a few stats
+// show: a .pairtime-ignore in it or a folder above it, or an exclude
+// pattern, for the folder as given and as it really is. It runs no git, so
+// a caller that can't wait for Resolve, such as one whose first resolve of
+// a big repo goes on, still keeps an ignored folder out (DESIGN 8.8).
+func (r *Resolver) Ignored(dir string) bool {
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return false
+	}
+	return r.ignored(abs) || r.ignored(canonicalDir(abs))
+}
+
+// IgnoredLoc reports whether loc, a Location Resolve or Track gave, is out
+// of pairtime now: its folder is, or, for a linked worktree, its repo's
+// main worktree is (ignoredLoc). It runs no git, so a caller that keeps an
+// answer, as the agent keeps a session folder's, still keeps the folder out
+// from the moment a .pairtime-ignore appears, as Track does.
+func (r *Resolver) IgnoredLoc(loc Location) bool { return r.ignoredLoc(loc) }
+
 // ignored reports whether dir is out of pairtime.
 func (r *Resolver) ignored(dir string) bool {
 	return r.ex.Match(dir) || ignoreFileAbove(dir) != ""

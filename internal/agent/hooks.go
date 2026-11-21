@@ -39,6 +39,14 @@ import (
 // ties a process (hookpath.Of), and a walk that doesn't count is dropped
 // from the delivery, so the journal records none.
 //
+// Every call the journal stores, whichever way it came, then goes to the
+// adapters (hookSteps.pend, adapters.go), which parse it on a goroutine of
+// their own and write its records to the ledger. Before the journal
+// records its id, the adapters write the call down, so it outlives an agent
+// killed before they parse it. Nothing else of theirs runs on the ack's
+// path, and a call the journal had already, the second copy of one that
+// came over the socket and through the spool, goes to them once.
+//
 // A spooled call does none of it. Its line proves nothing about which
 // process wrote it, so it claims and ties nothing (DESIGN 5.2), and the
 // drain that reads it can come long after the call, when a sample says
@@ -67,14 +75,16 @@ type hookSteps struct {
 	// secret returns K_session, which the session keys that focus lists are
 	// keyed with, or nil while it isn't known (keySessions).
 	secret func() []byte
-	// project returns the project key of the folder the call b ran in, or
-	// "" when it isn't known, for focus_project (focus.Options.ProjectOf).
-	// The agent leaves it nil: it doesn't host the git adapter's Resolver
-	// yet, which turns a folder into a project key (internal/adapters/git).
-	project func(b hookpath.Body) string
 	// refresh has the focus component look again at the window in front
 	// (focus.Watcher.Refresh).
 	refresh func()
+	// pend writes a call down for the adapters before the journal stores it,
+	// and returns the step that settles it once the journal has answered:
+	// stored, the call goes to the adapters, which parse it later, off the
+	// ack's path (adapterHost.pend). Neither may block. The adapters also
+	// set each session's project for focus_project (hookTies.setProject),
+	// once the git adapter has resolved its folder.
+	pend func(d inbox.Delivery) func(stored bool)
 }
 
 func newHookSink(next inbox.Sink, goos string, ties *hookTies, steps hookSteps) *hookSink {
@@ -86,7 +96,7 @@ func newHookSink(next inbox.Sink, goos string, ties *hookTies, steps hookSteps) 
 // hookSteps wires the hook sink to the agent's components: the process
 // scan, presence and focus, which startIPC's callers start first.
 func (a *agent) hookSteps() hookSteps {
-	st := hookSteps{secret: a.sessionSecret, refresh: a.refreshFocus}
+	st := hookSteps{secret: a.sessionSecret, refresh: a.refreshFocus, pend: a.adaptersHost().pend}
 	if a.procs != nil {
 		st.claim = a.procs.ClaimLive
 	}
@@ -115,34 +125,66 @@ func (s *hookSink) Deliver(d inbox.Delivery) error {
 		if berr == nil {
 			kind = hookpath.PresenceKind(b)
 		}
+		session := s.sessionKey(b)
+		// A session whose calls ran in a folder out of pairtime is tied to
+		// no window and sampled by no presence (DESIGN 8.8; hookTies.ignore).
+		// Its end lets the marker go: a session that comes back is looked at
+		// afresh by its next call.
+		out := s.ties.ignoring(session)
+		if out && kind == event.KindSessionEnd {
+			s.ties.unignore(session)
+		}
 		if p.Host != nil {
 			if s.steps.claim != nil {
 				s.steps.claim(*p.Host)
 			}
-			s.tie(*p.Host, b, kind)
+			if !out {
+				s.tie(*p.Host, session, kind)
+			}
 		}
-		if berr == nil && s.steps.presence != nil {
+		if berr == nil && s.steps.presence != nil && !out {
 			s.steps.presence(s.presenceKey(b), kind)
 		}
 	}
-	return s.next.Deliver(d)
+	return s.store(d)
 }
 
-// tie records that host runs the session the call b names, a call of kind
-// k, and has focus look again when that is news: a session the process
-// hadn't run before, one that starts, or one that ends.
-func (s *hookSink) tie(host platform.Proc, b hookpath.Body, k event.Kind) {
+// journalStore is the part of the journal that says whether it stored a
+// call or had it already (inbox.Journal.Store).
+type journalStore interface {
+	Store(d inbox.Delivery) (bool, error)
+}
+
+// store stores the hook call d through the next sink, and hands it to the
+// adapters when the next sink stored it, and hadn't before. The adapters
+// write it down first: a kill after the journal recorded the id would
+// otherwise lose a call whose spooled copy the journal then drops.
+func (s *hookSink) store(d inbox.Delivery) error {
+	if s.steps.pend == nil {
+		return s.next.Deliver(d)
+	}
+	settle := s.steps.pend(d)
+	isNew := true
+	var err error
+	if j, ok := s.next.(journalStore); ok {
+		isNew, err = j.Store(d)
+	} else {
+		err = s.next.Deliver(d)
+	}
+	settle(err == nil && isNew)
+	return err
+}
+
+// tie records that host runs session, the key of the session a call of
+// kind k names, and has focus look again when that is news: a session the
+// process hadn't run before, one that starts, or one that ends.
+func (s *hookSink) tie(host platform.Proc, session string, k event.Kind) {
 	news := k == event.KindSessionStart || k == event.KindSessionEnd
-	if session := s.sessionKey(b); session != "" {
+	if session != "" {
 		if k == event.KindSessionEnd {
 			s.ties.end(host.ID(), session)
 		} else if s.ties.tie(host.ID(), session) {
 			news = true
-		}
-		if s.steps.project != nil {
-			if project := s.steps.project(b); project != "" {
-				s.ties.setProject(session, project)
-			}
 		}
 	}
 	if news && s.steps.refresh != nil {
@@ -193,21 +235,83 @@ type hookTies struct {
 	mu       sync.Mutex
 	sessions map[platform.ID]string // session key, by process
 	projects map[string]string      // project key, by session key
+	// ignored are the sessions a call of which ran in a folder out of
+	// pairtime (DESIGN 8.8), which the hook sink neither ties nor hands to
+	// presence, so no os.focus record names them (ignore).
+	ignored map[string]bool
 }
 
+// maxIgnored bounds the sessions hookTies keeps out (ignore).
+const maxIgnored = 256
+
 func newHookTies() *hookTies {
-	return &hookTies{sessions: make(map[platform.ID]string), projects: make(map[string]string)}
+	return &hookTies{sessions: make(map[platform.ID]string), projects: make(map[string]string),
+		ignored: make(map[string]bool)}
+}
+
+// ignore keeps session out of focus and presence from now on, because a
+// call of it ran in a folder out of pairtime (DESIGN 8.8): it unties the
+// session from every process, forgets its project, and has the hook sink
+// skip its later calls (ignoring). It reports whether a tie or a project
+// went, which focus needs to hear.
+func (t *hookTies) ignore(session string) bool {
+	if t == nil || session == "" {
+		return false
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if !t.ignored[session] && len(t.ignored) >= maxIgnored {
+		// Room for one: whichever marker goes, its session is looked at
+		// afresh by its next call.
+		for k := range t.ignored {
+			delete(t.ignored, k)
+			break
+		}
+	}
+	t.ignored[session] = true
+	_, news := t.projects[session]
+	delete(t.projects, session)
+	for id, s := range t.sessions {
+		if s == session {
+			delete(t.sessions, id)
+			news = true
+		}
+	}
+	return news
+}
+
+// unignore lets session's calls be tied and sampled again, as once one of
+// them runs in a folder that isn't out of pairtime.
+func (t *hookTies) unignore(session string) {
+	if t == nil {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	delete(t.ignored, session)
+}
+
+// ignoring reports whether session's calls are kept out of focus and
+// presence (ignore).
+func (t *hookTies) ignoring(session string) bool {
+	if t == nil || session == "" {
+		return false
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.ignored[session]
 }
 
 // tie records that the process id runs session, and reports whether that
-// is new.
+// is new. A session ignore keeps out isn't tied, even when the hook sink
+// looked before ignore ran.
 func (t *hookTies) tie(id platform.ID, session string) bool {
 	if t == nil {
 		return false
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if t.sessions[id] == session {
+	if t.sessions[id] == session || t.ignored[session] {
 		return false
 	}
 	t.sessions[id] = session
@@ -227,14 +331,32 @@ func (t *hookTies) end(id platform.ID, session string) {
 	}
 }
 
-// setProject records the project session works in.
-func (t *hookTies) setProject(session, project string) {
+// setProject records the project session works in, and reports whether
+// that is news. A session no process runs is left alone: its project would
+// stay forever, since only a tie's end or prune forgets one, and focus
+// hosts tied sessions only. The adapters call it for every record with a
+// project, after the hook sink tied the call's process.
+func (t *hookTies) setProject(session, project string) bool {
 	if t == nil {
-		return
+		return false
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	if t.projects[session] == project || !t.runsLocked(session) {
+		return false
+	}
 	t.projects[session] = project
+	return true
+}
+
+// runsLocked reports whether a process runs session. t.mu must be held.
+func (t *hookTies) runsLocked(session string) bool {
+	for _, s := range t.sessions {
+		if s == session {
+			return true
+		}
+	}
+	return false
 }
 
 // projectOf returns the project key of session, or "" when it isn't known
@@ -288,12 +410,9 @@ func (t *hookTies) prune(claimed func(platform.ID) bool) {
 // forgetLocked drops session's project once no process runs the session.
 // t.mu must be held.
 func (t *hookTies) forgetLocked(session string) {
-	for _, s := range t.sessions {
-		if s == session {
-			return
-		}
+	if !t.runsLocked(session) {
+		delete(t.projects, session)
 	}
-	delete(t.projects, session)
 }
 
 // keySessions derives K_session from the device key and keeps it for the
