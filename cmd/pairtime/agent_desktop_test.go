@@ -79,7 +79,7 @@ func TestDesktopAgentOnX11(t *testing.T) {
 		}
 	})
 	waitForAgent(t, ptHome)
-	st := waitStatus(t, ptHome, 30*time.Second, "found its X11 sources", func(s agentStatus) bool {
+	st := waitStatus(t, ptHome, 30*time.Second, "found its X11 sources", func(s runStatus) bool {
 		return s.Signals.Idle.Via != "" && s.Signals.Focus.Via != ""
 	})
 
@@ -97,9 +97,9 @@ func TestDesktopAgentOnX11(t *testing.T) {
 	// status reply counts only the minute scan, procs.scan, so the test
 	// waits for the next of those, at most procs.Interval away.
 	time.Sleep(time.Until(claudeAt.Add(procs.Grace + 2*time.Second)))
-	scans := readStatus(t, ptHome).runs("procs.scan")
+	scans := readRunStatus(t, ptHome).runs("procs.scan")
 	activate(claude)
-	waitStatus(t, ptHome, 90*time.Second, "scanned the processes again", func(s agentStatus) bool { return s.runs("procs.scan") > scans })
+	waitStatus(t, ptHome, 90*time.Second, "scanned the processes again", func(s runStatus) bool { return s.runs("procs.scan") > scans })
 	// Two seconds without input, then a key, then focus moves at once:
 	// the sample presence takes for the switch is the first after the
 	// key, so it has to show the key.
@@ -108,7 +108,7 @@ func TestDesktopAgentOnX11(t *testing.T) {
 	keyAt := time.Now()
 	activate(plain)
 	time.Sleep(time.Second)
-	stopAgent(t, ptHome, cmd)
+	stopRunAgent(t, ptHome, cmd)
 	focus := recorded(t, ptHome, event.KindOSFocus)
 	samples := recorded(t, ptHome, event.KindOSPresence)
 
