@@ -60,15 +60,21 @@ type presenceItem struct {
 // had to drop and writes that failed. Its messages are about presence's
 // queue only, so the agent files them apart from why the ledger isn't open.
 func NewPresence(problem func(msg string)) *Presence {
-	p := &Presence{
+	p := newPresence(problem)
+	go p.run()
+	return p
+}
+
+// newPresence is NewPresence without the goroutine, so a test can start
+// run as late as a busy machine might.
+func newPresence(problem func(msg string)) *Presence {
+	return &Presence{
 		items:   make(chan presenceItem, presenceQueue),
 		attach:  make(chan *Writer, 1),
 		stop:    make(chan struct{}),
 		done:    make(chan struct{}),
 		problem: problem,
 	}
-	go p.run()
-	return p
 }
 
 // Attach gives p the writer to write to, once it is open. Only the first

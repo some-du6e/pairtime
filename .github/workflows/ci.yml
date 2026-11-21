@@ -51,6 +51,28 @@ jobs:
             go.mod
             go.sum
 
+      # TEMPORARY, for the TestPresence flake; removed before the PR opens.
+      # Runs TestPresence 50 times under the race detector, then 50 more on
+      # one CPU, where presence's goroutine can't start on another CPU
+      # while the test goes on, and counts the failures by subtest.
+      - name: TestPresence stress (temporary)
+        env:
+          CGO_ENABLED: "1"
+        run: |
+          fail=0
+          for flags in "-race -count=50" "-race -count=50 -cpu 1"; do
+            out="$RUNNER_TEMP/presence.txt"
+            echo "::group::go test $flags -run TestPresence ./internal/agent/ledger/"
+            code=0
+            go test $flags -run TestPresence ./internal/agent/ledger/ > "$out" 2>&1 || code=$?
+            cat "$out"
+            echo "::endgroup::"
+            echo "go test $flags -run TestPresence: exit $code. Failures by subtest, out of 50:"
+            grep -o -- '--- FAIL: TestPresence/[^ ]*' "$out" | sort | uniq -c || true
+            if [ "$code" -ne 0 ]; then fail=1; fi
+          done
+          exit "$fail"
+
       - name: License gate
         run: |
           fail=0
