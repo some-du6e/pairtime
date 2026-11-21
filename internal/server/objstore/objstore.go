@@ -41,6 +41,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/some-du6e/pairtime/internal/server/objstore/sigv4"
@@ -386,7 +387,8 @@ type request struct {
 	rawQuery string
 	header   http.Header
 	// body is read from its offset start for size bytes on each attempt;
-	// nil for no body.
+	// nil for no body. The attempts read it one at a time, each through
+	// its own attemptBody, and nothing reads it once do returns.
 	body        io.ReadSeeker
 	start, size int64
 	payloadHash string
@@ -456,10 +458,14 @@ func (c *Client) once(ctx context.Context, r request) (*http.Response, error) {
 	}
 	var body io.Reader
 	if r.body != nil {
+		// The last attempt's body was stopped when it ended, so nothing
+		// else reads r.body now.
 		if _, err := r.body.Seek(r.start, io.SeekStart); err != nil {
 			return nil, fail(0, fmt.Errorf("rewinding the body: %w", err))
 		}
-		body = io.LimitReader(r.body, r.size)
+		b := &attemptBody{r: io.LimitReader(r.body, r.size)}
+		defer b.stop()
+		body = b
 	}
 	u := c.url(r.bucket, r.key, r.rawQuery)
 	req, err := http.NewRequestWithContext(ctx, r.method, u.String(), body)
@@ -491,6 +497,46 @@ func (c *Client) once(ctx context.Context, r request) (*http.Response, error) {
 		return resp, nil
 	}
 	return nil, c.answerError(r, resp)
+}
+
+// attemptBody is what one attempt sends of a request's body. The
+// transport can go on reading a body after Do returns: when the store
+// answers before it has the whole body, as a store that fails a request
+// at once does, net/http keeps sending the rest from the connection's own
+// goroutine, and HTTP/2 closes the body from yet another one. So once
+// calls stop when the attempt ends. stop waits out a Read in progress and
+// makes every later Read end the body. After that the next attempt may
+// rewind the shared body, and the caller may reuse its bytes, as
+// uploadParts reuses its part buffer.
+type attemptBody struct {
+	mu      sync.Mutex
+	r       io.Reader
+	stopped bool
+}
+
+// Read reads the attempt's bytes, and after stop reports the end of the
+// body. A transport still sending a stopped attempt then finds it shorter
+// than its Content-Length and fails it, though once has already taken
+// that attempt's answer.
+func (b *attemptBody) Read(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.stopped {
+		return 0, io.EOF
+	}
+	return b.r.Read(p)
+}
+
+// Close is how the transport says it is done with the body.
+func (b *attemptBody) Close() error {
+	b.stop()
+	return nil
+}
+
+func (b *attemptBody) stop() {
+	b.mu.Lock()
+	b.stopped = true
+	b.mu.Unlock()
 }
 
 // answerError turns a non-2xx answer into an *Error, reading at most

@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -117,10 +118,16 @@ type result struct {
 
 func run(t *testing.T, dir string, stdin []byte, env []string, argv ...string) result {
 	t.Helper()
+	return runEnv(t, dir, stdin, append(os.Environ(), env...), argv...)
+}
+
+// runEnv is run with environ as the script's whole environment.
+func runEnv(t *testing.T, dir string, stdin []byte, environ []string, argv ...string) result {
+	t.Helper()
 	cmd := exec.Command(argv[0], argv[1:]...)
 	cmd.Dir = dir
 	cmd.Stdin = bytes.NewReader(stdin)
-	cmd.Env = append(os.Environ(), env...)
+	cmd.Env = environ
 	var out, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errb
 	err := cmd.Run()
@@ -133,6 +140,18 @@ func run(t *testing.T, dir string, stdin []byte, env []string, argv ...string) r
 		t.Fatalf("%v: %v", argv, err)
 	}
 	return r
+}
+
+// without returns environ without the variables named.
+func without(environ []string, names ...string) []string {
+	var out []string
+	for _, kv := range environ {
+		name, _, _ := strings.Cut(kv, "=")
+		if !slices.Contains(names, name) {
+			out = append(out, kv)
+		}
+	}
+	return out
 }
 
 func python(t *testing.T, script string, args ...string) []string {
@@ -268,6 +287,11 @@ var dumpers = []dumper{
 const (
 	secretName  = "PAIRTIME_CAPTURE_TEST_SECRET"
 	secretValue = "value-that-must-never-be-written-7f3a"
+
+	// entrypointVar is the variable whose value the dumpers keep, and
+	// entrypointSentinel a value of it one character too long to keep.
+	entrypointVar      = "CLAUDE_CODE_ENTRYPOINT"
+	entrypointSentinel = "pairtime-sentinel-entrypoint-6d1f"
 )
 
 // A payload with the shapes that break naive copies: non-ASCII text, CRLF,
@@ -296,25 +320,310 @@ func lyingMkdir(t *testing.T) string {
 	return "PATH=" + bin + string(os.PathListSeparator) + os.Getenv("PATH")
 }
 
+// harnessSentinel is an argument the fake harnesses in TestDumpers are
+// started with. The dumpers read a harness's arguments only to answer yes
+// or no, so it must never reach a run folder (E-procs-cmdlines).
+const harnessSentinel = "pairtime-sentinel-argument-6d1f"
+
+// shQuote quotes s for a POSIX shell.
+func shQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+// appclassHarnesses returns the executable names that
+// internal/platform/appclass.json gives harnesses, sorted. The nearest
+// parent with one of them is the harness a dumper's flags file describes.
+func appclassHarnesses(t *testing.T) []string {
+	t.Helper()
+	var table struct {
+		Entries []struct {
+			Names []string `json:"names"`
+			Role  string   `json:"role"`
+		} `json:"entries"`
+	}
+	if err := json.Unmarshal([]byte(read(t, filepath.Join("..", "..", "internal", "platform", "appclass.json"))), &table); err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, e := range table.Entries {
+		if e.Role == "harness" {
+			names = append(names, e.Names...)
+		}
+	}
+	sort.Strings(names)
+	return names
+}
+
+// harnessParent reports whether a parents line, "pid tty name", names one
+// of the harnesses in names, matched as the dumpers match it: in lower case
+// and without .exe.
+func harnessParent(names []string, line string) bool {
+	parts := strings.SplitN(line, " ", 3)
+	if len(parts) < 3 {
+		return false
+	}
+	name := strings.TrimSuffix(strings.ToLower(parts[2]), ".exe")
+	for _, n := range names {
+		if n == name {
+			return true
+		}
+	}
+	return false
+}
+
 func TestDumpers(t *testing.T) {
 	unixOnly(t)
+	t.Run("both dumpers look for the harness names internal/platform/appclass.json gives", func(t *testing.T) {
+		want := strings.Join(appclassHarnesses(t), " ")
+		sh := regexp.MustCompile(`(?m)^harnesses='([^']*)'$`).FindStringSubmatch(read(t, "dump-hook.sh"))
+		ps := regexp.MustCompile(`(?m)^\$harnesses = @\(([^)]*)\)$`).FindStringSubmatch(read(t, "dump-hook.ps1"))
+		if sh == nil || ps == nil {
+			t.Fatalf("a dumper has no list of harnesses: dump-hook.sh %t, dump-hook.ps1 %t", sh != nil, ps != nil)
+		}
+		for file, list := range map[string]string{"dump-hook.sh": sh[1], "dump-hook.ps1": strings.NewReplacer("'", " ", ",", " ").Replace(ps[1])} {
+			names := strings.Fields(list)
+			sort.Strings(names)
+			if got := strings.Join(names, " "); got != want {
+				t.Errorf("%s looks for %q, appclass.json names %q", file, got, want)
+			}
+		}
+	})
+	t.Run("both dumpers skip the values of the same codex options", func(t *testing.T) {
+		sh := regexp.MustCompile(`(?m)^codex_values='([^']*)'$`).FindStringSubmatch(read(t, "dump-hook.sh"))
+		ps := regexp.MustCompile(`(?m)^\$codexValues = @\(([^)]*)\)$`).FindStringSubmatch(read(t, "dump-hook.ps1"))
+		if sh == nil || ps == nil {
+			t.Fatalf("a dumper has no list of codex's options that take a value: dump-hook.sh %t, dump-hook.ps1 %t", sh != nil, ps != nil)
+		}
+		shOptions := strings.Fields(sh[1])
+		psOptions := strings.Fields(strings.NewReplacer("'", " ", ",", " ").Replace(ps[1]))
+		sort.Strings(shOptions)
+		sort.Strings(psOptions)
+		if strings.Join(shOptions, " ") != strings.Join(psOptions, " ") {
+			t.Errorf("dump-hook.sh skips the values of %q, dump-hook.ps1 those of %q", shOptions, psOptions)
+		}
+	})
 	for _, d := range dumpers {
 		t.Run(d.name, func(t *testing.T) {
 			base := d.argv(t)
-			// call runs one hook call in a fresh run directory and returns the
-			// run directory and what the dumper printed.
-			call := func(t *testing.T, stdin []byte, args ...string) (string, result) {
+			// callEnv runs one hook call in a fresh run directory, with env
+			// set on top of this process's environment, and returns the run
+			// directory and what the dumper printed. CLAUDE_CODE_ENTRYPOINT is
+			// set only when env sets it, so a test run from a Claude Code
+			// session sees what CI sees.
+			callEnv := func(t *testing.T, env []string, stdin []byte, args ...string) (string, result) {
 				t.Helper()
 				runDir := filepath.Join(t.TempDir(), "run")
 				argv := append(append([]string{}, base...), append([]string{runDir, "UserPromptSubmit"}, args...)...)
-				return runDir, run(t, t.TempDir(), stdin, []string{secretName + "=" + secretValue}, argv...)
+				return runDir, runEnv(t, t.TempDir(), stdin, append(without(os.Environ(), entrypointVar), env...), argv...)
+			}
+			// call is callEnv with a secret in a variable of its own.
+			call := func(t *testing.T, stdin []byte, args ...string) (string, result) {
+				t.Helper()
+				return callEnv(t, []string{secretName + "=" + secretValue}, stdin, args...)
 			}
 			first := func(runDir string) string { return filepath.Join(runDir, "hooks", "000001") }
+			// harnessCall runs one hook call under a fake harness and returns
+			// the run directory. The fake is a link to sh with the harness's
+			// name, which is the name ps shows. It reads the dumper's command
+			// from stdin, so the arguments after its -s are the harness's own;
+			// the first can't start with a dash, or sh takes it for an option
+			// of its own. codex reads that -s as its --sandbox, so a codex
+			// call's first argument is a sandbox mode. With through, the fake
+			// runs the dumper through a shell that stays between them, as
+			// allow-once.sh does, and Git Bash or PowerShell on Windows. A
+			// hook command run with sh -c doesn't stay when it's one command:
+			// the shell runs the dumper in its own place.
+			harnessCall := func(t *testing.T, through bool, name string, args ...string) string {
+				t.Helper()
+				dir := t.TempDir()
+				runDir := filepath.Join(dir, "run")
+				in := filepath.Join(dir, "payload")
+				write(t, in, string(payload))
+				exe := filepath.Join(dir, "bin", name)
+				if err := os.MkdirAll(filepath.Dir(exe), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(need(t, "sh"), exe); err != nil {
+					t.Fatal(err)
+				}
+				var cmd strings.Builder
+				for _, a := range append(append([]string{}, base...), runDir, "UserPromptSubmit") {
+					cmd.WriteString(shQuote(a) + " ")
+				}
+				cmd.WriteString("<" + shQuote(in) + "\nexit $?\n")
+				script := cmd.String()
+				if through {
+					// The exit after the dumper keeps the shell from running
+					// the dumper in its own place, so it stays its parent.
+					script = shQuote(need(t, "sh")) + " -c " + shQuote(script) + "\nexit $?\n"
+				}
+				if r := run(t, dir, []byte(script), nil, append([]string{exe, "-s"}, args...)...); r.code != 0 || r.stderr != "" {
+					t.Fatalf("the fake %s: exit %d, stderr %q", name, r.code, r.stderr)
+				}
+				if _, err := os.Stat(filepath.Join(first(runDir), "stderr")); err == nil {
+					t.Fatalf("the dumper hit an error: %s", read(t, filepath.Join(first(runDir), "stderr")))
+				}
+				return runDir
+			}
+			// underHarness runs one hook call as the child of a fake harness.
+			underHarness := func(t *testing.T, name string, args ...string) string {
+				t.Helper()
+				return harnessCall(t, false, name, args...)
+			}
+			flags := func(t *testing.T, runDir string) string {
+				t.Helper()
+				return read(t, filepath.Join(first(runDir), "flags"))
+			}
 
 			cases := []struct {
 				name  string
 				check func(t *testing.T)
 			}{
+				{"flags names the harness the hook runs under and finds its print flag, stream-json and --bare", func(t *testing.T) {
+					runDir := underHarness(t, "claude", harnessSentinel, "-p", "--output-format", "stream-json", "--bare")
+					if got, want := flags(t, runDir), "name=claude\nprint=yes\nstream_json=yes\nbare=yes\n"; got != want {
+						t.Fatalf("flags = %q, want %q", got, want)
+					}
+				}},
+				{"--print, and stream-json joined to its flag by =, count too", func(t *testing.T) {
+					runDir := underHarness(t, "claude", harnessSentinel, "--print", "--input-format=stream-json")
+					if got, want := flags(t, runDir), "name=claude\nprint=yes\nstream_json=yes\nbare=no\n"; got != want {
+						t.Fatalf("flags = %q, want %q", got, want)
+					}
+				}},
+				{"flags says no for each flag the harness wasn't started with", func(t *testing.T) {
+					runDir := underHarness(t, "claude", harnessSentinel, "--output-format", "json", "--model", "sonnet")
+					if got, want := flags(t, runDir), "name=claude\nprint=no\nstream_json=no\nbare=no\n"; got != want {
+						t.Fatalf("flags = %q, want %q", got, want)
+					}
+				}},
+				// /proc keeps the arguments apart. macOS has no /proc, and its
+				// ps joins them with spaces, so there the dumpers split them at
+				// whitespace and an argument holding " -p " counts.
+				{"an argument that only mentions a flag isn't one", func(t *testing.T) {
+					if _, err := os.Stat("/proc/self/cmdline"); err != nil {
+						t.Skip("no /proc here: ps joins a harness's arguments with spaces, so a -p inside one counts")
+					}
+					runDir := underHarness(t, "claude", harnessSentinel+" says -p and --bare and --output-format stream-json")
+					if got, want := flags(t, runDir), "name=claude\nprint=no\nstream_json=no\nbare=no\n"; got != want {
+						t.Fatalf("flags = %q, want %q", got, want)
+					}
+				}},
+				{"an argument after -- isn't a flag", func(t *testing.T) {
+					runDir := underHarness(t, "claude", harnessSentinel, "--", "-p", "--bare", "--output-format", "stream-json")
+					if got, want := flags(t, runDir), "name=claude\nprint=no\nstream_json=no\nbare=no\n"; got != want {
+						t.Fatalf("flags = %q, want %q", got, want)
+					}
+				}},
+				// Each codex call starts with a sandbox mode, the value of the
+				// fake's -s.
+				{"codex's exec subcommand is its print mode", func(t *testing.T) {
+					runDir := underHarness(t, "codex", "workspace-write", "exec", harnessSentinel)
+					if got, want := flags(t, runDir), "name=codex\nprint=yes\nstream_json=no\nbare=no\n"; got != want {
+						t.Fatalf("flags = %q, want %q", got, want)
+					}
+				}},
+				{"codex's e, after options and the values they take, is its print mode", func(t *testing.T) {
+					runDir := underHarness(t, "codex", "workspace-write", "-c", "model_reasoning_effort=high", "--profile", "work", "-i", "shot.png", "--model=o3", "e", harnessSentinel)
+					if got, want := flags(t, runDir), "name=codex\nprint=yes\nstream_json=no\nbare=no\n"; got != want {
+						t.Fatalf("flags = %q, want %q", got, want)
+					}
+				}},
+				{"an option's value isn't codex's subcommand, even when it reads exec", func(t *testing.T) {
+					runDir := underHarness(t, "codex", "workspace-write", "-m", "exec", harnessSentinel)
+					if got, want := flags(t, runDir), "name=codex\nprint=no\nstream_json=no\nbare=no\n"; got != want {
+						t.Fatalf("flags = %q, want %q", got, want)
+					}
+				}},
+				// clap gives -i every argument up to the next option, so this
+				// codex starts interactive with three images.
+				{"every argument after codex's -i, up to the next option, is an image, even exec", func(t *testing.T) {
+					runDir := underHarness(t, "codex", "workspace-write", "-i", "shot.png", "exec", harnessSentinel)
+					if got, want := flags(t, runDir), "name=codex\nprint=no\nstream_json=no\nbare=no\n"; got != want {
+						t.Fatalf("flags = %q, want %q", got, want)
+					}
+				}},
+				{"flags names the nearest harness above a shell that runs the hook", func(t *testing.T) {
+					runDir := harnessCall(t, true, "claude", harnessSentinel, "-p")
+					names := appclassHarnesses(t)
+					parents := strings.Split(strings.TrimSpace(read(t, filepath.Join(first(runDir), "parents"))), "\n")
+					if len(parents) < 2 || harnessParent(names, parents[0]) || !harnessParent(names, parents[1]) {
+						t.Fatalf("parents = %q, want a shell and then the fake claude", parents)
+					}
+					if got, want := flags(t, runDir), "name=claude\nprint=yes\nstream_json=no\nbare=no\n"; got != want {
+						t.Fatalf("flags = %q, want %q", got, want)
+					}
+				}},
+				{"a call writes time, argv, env, cwd, parents, stdin and flags, and leaves no temporary file", func(t *testing.T) {
+					runDir, _ := call(t, payload)
+					got := keys(tree(t, first(runDir)))
+					if want := []string{"argv", "cwd", "env", "flags", "parents", "stdin", "time"}; strings.Join(got, " ") != strings.Join(want, " ") {
+						t.Fatalf("the call folder holds %q, want %q", got, want)
+					}
+				}},
+				{"no argument of the harness reaches the run folder", func(t *testing.T) {
+					runDir := underHarness(t, "claude", harnessSentinel, "-p", "--bare", "a prompt that ends in "+harnessSentinel)
+					files := tree(t, runDir)
+					if _, ok := files["hooks/000001/flags"]; !ok {
+						t.Fatalf("no flags file among %v", keys(files))
+					}
+					for path, text := range files {
+						if strings.Contains(text, harnessSentinel) {
+							t.Errorf("%s holds an argument of the harness: %q", path, text)
+						}
+					}
+				}},
+				{"flags is ? for each answer when no parent has a harness's name", func(t *testing.T) {
+					runDir, _ := call(t, payload)
+					names := appclassHarnesses(t)
+					for _, line := range strings.Split(strings.TrimSpace(read(t, filepath.Join(first(runDir), "parents"))), "\n") {
+						if harnessParent(names, line) {
+							t.Skipf("this test runs under a harness: %q", line)
+						}
+					}
+					if got, want := flags(t, runDir), "name=?\nprint=?\nstream_json=?\nbare=?\n"; got != want {
+						t.Fatalf("flags = %q, want %q", got, want)
+					}
+				}},
+				// A harness stops a hook that runs past its timeout. Every file
+				// but flags is written before stdin is read, so a hook stopped
+				// while it waits on stdin, or while flags reads a command line,
+				// keeps the rest.
+				{"a hook cut short while it reads stdin has written every file but flags", func(t *testing.T) {
+					runDir := filepath.Join(t.TempDir(), "run")
+					cmd := exec.Command(base[0], append(append([]string{}, base[1:]...), runDir, "Stop")...)
+					cmd.Dir = t.TempDir()
+					cmd.Env = append(without(os.Environ(), entrypointVar), entrypointVar+"=cli")
+					stdin, err := cmd.StdinPipe()
+					if err != nil {
+						t.Fatal(err)
+					}
+					defer stdin.Close()
+					if err := cmd.Start(); err != nil {
+						t.Fatal(err)
+					}
+					dir := first(runDir)
+					for start := time.Now(); ; time.Sleep(20 * time.Millisecond) {
+						if _, err := os.Stat(filepath.Join(dir, "stdin")); err == nil {
+							break
+						}
+						if time.Since(start) > 30*time.Second {
+							_ = cmd.Process.Kill()
+							_ = cmd.Wait()
+							t.Fatal("no stdin file after 30 s")
+						}
+					}
+					_ = cmd.Process.Kill()
+					_ = cmd.Wait()
+					for _, name := range []string{"time", "argv", "env", "entrypoint", "cwd", "parents"} {
+						if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
+							t.Errorf("%s is missing: %v", name, err)
+						}
+					}
+					if _, err := os.Stat(filepath.Join(dir, "flags")); err == nil {
+						t.Error("flags was written before stdin was read")
+					}
+				}},
 				{"stdin is saved byte for byte", func(t *testing.T) {
 					runDir, _ := call(t, payload)
 					if got := read(t, filepath.Join(first(runDir), "stdin")); got != string(payload) {
@@ -348,6 +657,48 @@ func TestDumpers(t *testing.T) {
 						if strings.Contains(text, secretValue) {
 							t.Errorf("%s holds the value of %s", path, secretName)
 						}
+					}
+				}},
+				// CLAUDE_CODE_ENTRYPOINT is the one variable whose value a
+				// dumper writes (E-cc-transcript-labels).
+				{"entrypoint holds CLAUDE_CODE_ENTRYPOINT's value, and no other variable's value reaches the run folder", func(t *testing.T) {
+					runDir, _ := callEnv(t, []string{entrypointVar + "=sdk-cli", secretName + "=" + secretValue}, payload)
+					if got := read(t, filepath.Join(first(runDir), "entrypoint")); got != "sdk-cli\n" {
+						t.Fatalf("entrypoint = %q, want %q", got, "sdk-cli\n")
+					}
+					for path, text := range tree(t, runDir) {
+						if strings.Contains(text, secretValue) {
+							t.Errorf("%s holds the value of %s", path, secretName)
+						}
+					}
+				}},
+				{"a CLAUDE_CODE_ENTRYPOINT of 32 characters is kept, and one of 33 becomes other and reaches no file", func(t *testing.T) {
+					runDir, _ := callEnv(t, []string{entrypointVar + "=" + entrypointSentinel[:32]}, payload)
+					if got, want := read(t, filepath.Join(first(runDir), "entrypoint")), entrypointSentinel[:32]+"\n"; got != want {
+						t.Errorf("32 characters: entrypoint = %q, want %q", got, want)
+					}
+					runDir, _ = callEnv(t, []string{entrypointVar + "=" + entrypointSentinel}, payload)
+					if got := read(t, filepath.Join(first(runDir), "entrypoint")); got != "other\n" {
+						t.Errorf("33 characters: entrypoint = %q, want %q", got, "other\n")
+					}
+					for path, text := range tree(t, runDir) {
+						if strings.Contains(text, entrypointSentinel[:20]) {
+							t.Errorf("%s holds the over-long %s: %q", path, entrypointVar, text)
+						}
+					}
+				}},
+				{"a CLAUDE_CODE_ENTRYPOINT with a capital, a space, another character or nothing in it becomes other", func(t *testing.T) {
+					for _, value := range []string{"SDK-CLI", "sdk cli", "sdk.cli", ""} {
+						runDir, _ := callEnv(t, []string{entrypointVar + "=" + value}, payload)
+						if got := read(t, filepath.Join(first(runDir), "entrypoint")); got != "other\n" {
+							t.Errorf("%s=%q: entrypoint = %q, want %q", entrypointVar, value, got, "other\n")
+						}
+					}
+				}},
+				{"no entrypoint file is written when CLAUDE_CODE_ENTRYPOINT is unset", func(t *testing.T) {
+					runDir, _ := call(t, payload)
+					if _, err := os.Stat(filepath.Join(first(runDir), "entrypoint")); err == nil {
+						t.Fatalf("entrypoint = %q, want no file", read(t, filepath.Join(first(runDir), "entrypoint")))
 					}
 				}},
 				{"time holds unix_ns, utc and clock, taken during the call", func(t *testing.T) {
@@ -509,6 +860,37 @@ func TestDumpers(t *testing.T) {
 			}
 			for _, c := range cases {
 				t.Run(c.name, c.check)
+			}
+		})
+	}
+}
+
+// TestSplitCommandLine runs dump-hook.ps1's Split-CommandLine in pwsh on
+// Linux. On Windows the flags file reads a harness's arguments through it
+// from Win32_Process.CommandLine, and ci.yml runs no Windows job.
+func TestSplitCommandLine(t *testing.T) {
+	unixOnly(t)
+	pwsh := need(t, "pwsh")
+	fn := regexp.MustCompile(`(?ms)^function Split-CommandLine\b.*?^}$`).FindString(read(t, "dump-hook.ps1"))
+	if fn == "" {
+		t.Fatal("dump-hook.ps1 has no Split-CommandLine")
+	}
+	cases := []struct {
+		name, line string
+		want       []string
+	}{
+		{"a quoted argument with spaces stays one argument", `"C:\Program Files\Claude\claude.exe" -p "fix the -p flag" --bare`,
+			[]string{`C:\Program Files\Claude\claude.exe`, "-p", "fix the -p flag", "--bare"}},
+		{"backslashes count only before a quote", `claude.exe C:\dir\ "a\"b" "c\\" d`, []string{"claude.exe", `C:\dir\`, `a"b`, `c\`, "d"}},
+		{"tabs and runs of spaces end an argument", "claude.exe\t-p   --output-format  stream-json ", []string{"claude.exe", "-p", "--output-format", "stream-json"}},
+		{"an empty quoted argument is kept", `claude.exe "" -p`, []string{"claude.exe", "", "-p"}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			script := fn + "\nforeach ($w in (Split-CommandLine $env:PAIRTIME_COMMAND_LINE)) { [Console]::Out.Write('[' + $w + ']') }\n"
+			r := run(t, ".", nil, []string{"PAIRTIME_COMMAND_LINE=" + c.line}, pwsh, "-NoProfile", "-NonInteractive", "-Command", script)
+			if want := "[" + strings.Join(c.want, "][") + "]"; r.code != 0 || r.stdout != want {
+				t.Fatalf("exit %d, arguments %s, want %s\n%s", r.code, r.stdout, want, r.stderr)
 			}
 		})
 	}
@@ -1192,7 +1574,7 @@ var planted = map[string]string{
 {"type":"assistant","message":{"content":[{"type":"tool_use","id":"` + plantedTool + `","input":{"command":"whoami"}}]}}
 {"toolUseResult":{"stdout":"rowanq\nrowanq@rowans-laptop:~$ git log\nAuthor: Rowan Quinn <rowan.quinn@westfield.edu>\nsk-ant-api03-AbCdEfGhIjKlMnOpQrStUvWxYz012345"},"uri":"file:///c%3A/Users/RowanQ/pairtime-capture/project"}
 {"nested":"{\"stdout\":\"C:\\\\Users\\\\RowanQ\\\\x\"}","school":"Westfield High"}
-{"keys":"ghp_AbCdEfGhIjKlMnOpQrStUvWxYz0123456789 AKIAABCDEFGHIJKLMNOP eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U","trailer":"Co-Authored-By: Claude <noreply@anthropic.com>"}
+{"keys":"ghp_AbCdEfGhIjKlMnOpQrStUvWxYz0123456789 AKIAABCDEFGHIJKLMNOP eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U","trailer":"Co-Authored-By: Claude <noreply@anthropic.com>\nCo-authored-by: aider (gpt-5) <aider@aider.chat>"}
 `,
 	// Account ids outside telemetry attributes: a Codex rollout's
 	// session_meta (HS 6.2) and the userId in a Cline hook payload (HS 9).
@@ -1278,7 +1660,7 @@ func TestScrub(t *testing.T) {
 			}
 		}},
 		{"ids that aren't secrets and public tool addresses are kept", func(t *testing.T) {
-			for _, want := range []string{plantedSession, plantedTool, "noreply@anthropic.com"} {
+			for _, want := range []string{plantedSession, plantedTool, "noreply@anthropic.com", "aider@aider.chat"} {
 				if !strings.Contains(all.String(), want) {
 					t.Errorf("%s was removed", want)
 				}
@@ -1323,6 +1705,19 @@ func TestScrub(t *testing.T) {
 			r := run(t, ".", nil, quiet, python(t, "scrub.py", append(append([]string{}, scrubArgs...), "--report", filepath.Join(work, "r2.txt"), outDir, again)...)...)
 			if r.code != 0 || !strings.Contains(r.stdout, "Nothing was replaced.") {
 				t.Fatalf("exit %d:\n%s", r.code, r.stdout)
+			}
+		}},
+		// README keeps any name under example.com, and the account inside
+		// one still goes, as in pairtime fixtures scrub (D-email-redaction).
+		{"an address under a domain reserved for examples is kept, and a known value inside it is still replaced", func(t *testing.T) {
+			dir := t.TempDir()
+			write(t, filepath.Join(dir, "run", "notes.txt"), "rowanq@ci.example.com\n")
+			r := run(t, ".", nil, quiet, python(t, "scrub.py", "--no-detect", "--user", "rowanq", filepath.Join(dir, "run"), filepath.Join(dir, "out"))...)
+			if r.code != 0 {
+				t.Fatalf("exit %d:\n%s%s", r.code, r.stdout, r.stderr)
+			}
+			if got := read(t, filepath.Join(dir, "out", "notes.txt")); got != "capture@ci.example.com\n" {
+				t.Fatalf("notes.txt = %q, want %q", got, "capture@ci.example.com\n")
 			}
 		}},
 		{"a known value inside a longer word is reported, fails the run, and nothing is written", func(t *testing.T) {
@@ -1400,6 +1795,102 @@ func TestScrub(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, c.check)
+	}
+
+	// The lines of TestFixturesScrub's cases of the same names, in
+	// cmd/pairtime, so both scrubs keep the same addresses and remove the same
+	// keys and passwords. scrub.py's key patterns need nothing after a key, so
+	// it finds one followed by an @ or a colon where it stands. Its
+	// placeholders name its own patterns.
+	stripe := "sk_" + "live_" + strings.Repeat("Qw81Zx4LmN", 3) // built at run time, so no file in the repo looks like a leaked key
+	anthropic := "sk-ant-" + "api03-" + strings.Repeat("aB3_x9Kq-Z", 10)[:93] + "AA"
+	agree := []struct{ name, in, want string }{
+		{"a key that is a kept address's local part, as a URL's user, is still replaced",
+			"https://" + stripe + "@api.example.com/v1/charges\n" +
+				"https://" + anthropic + "@api.example.com/v1/messages\n",
+			"https://REDACTED_STRIPE_KEY@api.example.com/v1/charges\n" +
+				"https://REDACTED_ANTHROPIC_KEY@api.example.com/v1/messages\n"},
+		{"a key that is the user of a URL before its password, at a kept address, is still replaced",
+			"https://" + stripe + ":x-oauth-basic@api.example.com/v1/charges\n" +
+				"https://" + anthropic + ":x-oauth-basic@api.example.com/v1/messages\n",
+			"https://REDACTED_STRIPE_KEY:REDACTED_URL_PASSWORD@api.example.com/v1/charges\n" +
+				"https://REDACTED_ANTHROPIC_KEY:REDACTED_URL_PASSWORD@api.example.com/v1/messages\n"},
+		{"a key that is a URL's user is replaced whatever the host",
+			"https://" + stripe + ":x-oauth-basic@api.stripe.com/v1/charges\n" +
+				"https://" + anthropic + ":@api.anthropic.com/v1/messages\n" +
+				"postgres://" + stripe + ":pw@db:5432/app\n",
+			"https://REDACTED_STRIPE_KEY:capture@example.invalid/v1/charges\n" +
+				"https://REDACTED_ANTHROPIC_KEY:@api.anthropic.com/v1/messages\n" +
+				"postgres://REDACTED_STRIPE_KEY:REDACTED_URL_PASSWORD@db:5432/app\n"},
+		{"a URL's user and password at a kept address are replaced however the URL is written",
+			`{"url":"postgres:\/\/app:Tr0ub4dor3x@db.example.com\/app"}` + "\n" +
+				"//app:Tr0ub4dor3x@db.example.com/app\n" +
+				"redis://:hunter2hunter2@cache.example.com:6379\n" +
+				`{"stdout":"{\"url\":\"https:\\/\\/` + stripe + `:x@api.example.com\"}"}` + "\n",
+			`{"url":"postgres:\/\/app:REDACTED_URL_PASSWORD@db.example.com\/app"}` + "\n" +
+				"//app:REDACTED_URL_PASSWORD@db.example.com/app\n" +
+				"redis://:REDACTED_URL_PASSWORD@cache.example.com:6379\n" +
+				`{"stdout":"{\"url\":\"https:\\/\\/REDACTED_STRIPE_KEY:REDACTED_URL_PASSWORD@api.example.com\"}"}` + "\n"},
+		{"a placeholder an earlier run wrote is left alone, even where another rule finds it",
+			"postgres://app:REDACTED_STRIPE_KEY@db.example.com/app\npostgres://app:capture@example.invalid/app\n" +
+				"https://REDACTED_STRIPE_KEY:capture@example.invalid/v1/charges\n",
+			"postgres://app:REDACTED_STRIPE_KEY@db.example.com/app\npostgres://app:capture@example.invalid/app\n" +
+				"https://REDACTED_STRIPE_KEY:capture@example.invalid/v1/charges\n"},
+		{"a span that runs on past a placeholder isn't one, so all of it is replaced",
+			"postgres://app:REDACTED_URL_PASSWORD@ssw0rd@db.example.com/app\n",
+			"postgres://app:REDACTED_URL_PASSWORD@db.example.com/app\n"},
+		{"a URL's password with ?, # or @ in it runs to its last @, and the user before it is still scanned",
+			"https://" + stripe + ":pa?ss1@api.example.com/v1/charges\n" +
+				`{"url":"postgres:\/\/app:Tr0ub#4dor@db.example.com\/app"}` + "\n" +
+				"//app:Tr0ub?4dor@db:5432/app\n" +
+				"postgres://app:p@ssw0rd@db.example.com/app\n",
+			"https://REDACTED_STRIPE_KEY:REDACTED_URL_PASSWORD@api.example.com/v1/charges\n" +
+				`{"url":"postgres:\/\/app:REDACTED_URL_PASSWORD@db.example.com\/app"}` + "\n" +
+				"//app:REDACTED_URL_PASSWORD@db:5432/app\n" +
+				"postgres://app:REDACTED_URL_PASSWORD@db.example.com/app\n"},
+		{"an address that is a URL's user is replaced or kept like any other address",
+			"ftp://jane@westfield.edu:s3cretpw@ftp.example.com/\nftp://noreply@anthropic.com:s3cretpw@ftp.example.com/\n",
+			"ftp://capture@example.invalid:REDACTED_URL_PASSWORD@ftp.example.com/\nftp://noreply@anthropic.com:REDACTED_URL_PASSWORD@ftp.example.com/\n"},
+		{"two slashes with no scheme before them aren't a URL when a bracket follows, as in namespaced XPath",
+			"tree.xpath('//xs:element[@name]', namespaces=ns)\npom.findall(\".//pom:dependency[@scope]\")\n",
+			"tree.xpath('//xs:element[@name]', namespaces=ns)\npom.findall(\".//pom:dependency[@scope]\")\n"},
+		{"a key as a URL's user is still found when the URL runs on into a query or fragment holding an @",
+			"http://" + stripe + "@localhost?next=a@b\n" +
+				"http://" + stripe + "@localhost:3000?email=test@example.com\n" +
+				"http://" + anthropic + "@localhost?next=a@b\n" +
+				"https://" + stripe + "#frag@x\n" +
+				"https://" + stripe + "?x=1@y\n",
+			"http://REDACTED_STRIPE_KEY@localhost?next=a@b\n" +
+				"http://REDACTED_STRIPE_KEY@localhost:REDACTED_URL_PASSWORD@example.com\n" +
+				"http://REDACTED_ANTHROPIC_KEY@localhost?next=a@b\n" +
+				"https://REDACTED_STRIPE_KEY#frag@x\n" +
+				"https://REDACTED_STRIPE_KEY?x=1@y\n"},
+		{"a URL with no scheme has its user scanned, and its password ends at the last @ before a bracket",
+			"//" + stripe + ":pa[ss]@db:5432/app\n" +
+				"//app:hunter2pw@localhost?ids[]=1@x\n" +
+				"//user:pw@[::1]:8080/x\n",
+			"//REDACTED_STRIPE_KEY:pa[ss]@db:5432/app\n" +
+				"//app:REDACTED_URL_PASSWORD@localhost?ids[]=1@x\n" +
+				"//user:REDACTED_URL_PASSWORD@[::1]:8080/x\n"},
+		// D-email-redaction-tld.
+		{"under a reserved top-level domain only a one-label name is kept, so a real address with .invalid appended is replaced",
+			"Owner: jane.doe@westfield.edu.invalid\nci@runner.ci.test ci@build.example.invalid\n" +
+				"user@myapp.test dev@build.localhost a@b.example capture@example.invalid\n",
+			"Owner: capture@example.invalid\ncapture@example.invalid capture@example.invalid\n" +
+				"user@myapp.test dev@build.localhost a@b.example capture@example.invalid\n"},
+	}
+	for _, c := range agree {
+		t.Run(c.name, func(t *testing.T) {
+			dir := t.TempDir()
+			write(t, filepath.Join(dir, "run", "notes.txt"), c.in)
+			r := run(t, ".", nil, quiet, python(t, "scrub.py", "--no-detect", filepath.Join(dir, "run"), filepath.Join(dir, "out"))...)
+			if r.code != 0 {
+				t.Fatalf("exit %d:\n%s%s", r.code, r.stdout, r.stderr)
+			}
+			if got := read(t, filepath.Join(dir, "out", "notes.txt")); got != c.want {
+				t.Fatalf("notes.txt = %q, want %q", got, c.want)
+			}
+		})
 	}
 
 	// Every spelling of a home folder, from a scrub that knows only the home
