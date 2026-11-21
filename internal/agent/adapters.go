@@ -191,10 +191,13 @@ type adapterHost struct {
 	replayAt                int64
 	replayRead, replayStuck bool
 	replayTaken, replayOut  int
-	built                   map[event.Harness]adapters.Adapter
-	ignored                 bool // the call being parsed ran in a folder out of pairtime
-	memory                  adaptersState
-	lastSave                []byte // the adapters' memory as last saved
+	// replayKept is replayOut as it was when trimReplay last left the
+	// .replay file holding the parked calls alone.
+	replayKept int
+	built      map[event.Harness]adapters.Adapter
+	ignored    bool // the call being parsed ran in a folder out of pairtime
+	memory     adaptersState
+	lastSave   []byte // the adapters' memory as last saved
 	// parked are the calls that wait for their folder's project, in the
 	// order they came, and parkedBy counts them by session, whose later
 	// calls wait behind them (park).
@@ -737,11 +740,13 @@ func (h *adapterHost) step(last bool) {
 	if saveDue && !last && !h.down {
 		h.save(false)
 	}
-	// Only once the memory they made is saved does held.jsonl.pending let
-	// go of the calls, so a kill in between parses them again rather than
-	// leave the ledger ahead of state.json (adaptersSaveEvery). The last
-	// step leaves it to finish, after its own save.
+	// Only once the memory they made is saved do held.jsonl.pending and the
+	// .replay file let go of the calls, so a kill in between parses them
+	// again rather than leave the ledger ahead of state.json
+	// (adaptersSaveEvery). The last step leaves it to finish, after its
+	// own save, and parses every call that waits.
 	if !last {
+		h.trimReplay()
 		h.donePending(false)
 	}
 }
@@ -1592,7 +1597,7 @@ func (h *adapterHost) endReplay(name string) {
 			h.a.log.Warn("couldn't seal the held hook calls' records", "err", err)
 		}
 	}
-	h.replayRead, h.replayTaken = false, 0
+	h.replayRead, h.replayTaken, h.replayKept = false, 0, 0
 	if err := os.Remove(name); err != nil {
 		h.a.log.Warn("couldn't delete the held hook calls once replayed", "err", err)
 		h.a.setProblem("adapters.held", fmt.Sprintf("the hook calls held while the ledger wasn't open were parsed, but couldn't be deleted, so the next start parses them again: %v", err))
@@ -1600,6 +1605,32 @@ func (h *adapterHost) endReplay(name string) {
 		return
 	}
 	h.replayAt = 0
+}
+
+// trimReplay leaves the .replay file holding the calls read from it that
+// still wait for their folder's project, and no other, as keepParkedLocked
+// does for the pending log: the rest are parsed, and a kill now would have
+// the next start parse them a second time (DESIGN 9.7). Once read to its
+// end the file is closed, so it can be rewritten. It rewrites it only when
+// calls of it were parsed since it last looked.
+func (h *adapterHost) trimReplay() {
+	if !h.replayRead || h.replayStuck || h.replayOut == 0 || h.replayOut == h.replayKept {
+		return
+	}
+	ids := make(map[string]bool, h.replayOut)
+	for _, c := range h.parked {
+		if c.replay {
+			ids[c.d.ID] = true
+		}
+	}
+	if _, err := inbox.Rewrite(h.a.dirs.Held()+".replay", heldTmp, func(line []byte, _ int64) bool {
+		id, ok := heldID(line)
+		return ok && ids[id]
+	}); err != nil {
+		h.a.log.Warn("couldn't drop the parsed calls from the held calls' replay", "err", err)
+		return
+	}
+	h.replayKept = h.replayOut
 }
 
 // heldTmp is the prefix of the temporary file expireFile rewrites a held
