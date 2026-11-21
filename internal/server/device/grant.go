@@ -29,10 +29,11 @@ const (
 	// PollSlack is how much earlier than its interval a poll may come
 	// without a slow_down, for network jitter between two requests.
 	PollSlack = 500 * time.Millisecond
-	// RedeemGrace is how long after it expires a code approved in time
-	// can still be redeemed, so an approval in the code's last seconds
-	// isn't lost to the wait before the app's next poll, which a network
-	// error can stretch to a minute.
+	// RedeemGrace is how long after it expires a code answered in time
+	// still gets its answer: an approved code can still be redeemed, and a
+	// denied or stopped one still gets ErrDenied or ErrTaken. So an answer
+	// in the code's last seconds isn't lost to the wait before the app's
+	// next poll, which a network error can stretch to a minute.
 	RedeemGrace = time.Minute
 	// CodeGrace is how long a code's row stays after the code expires,
 	// before DeleteExpiredCodes deletes it (docs/retention.json
@@ -46,7 +47,7 @@ const (
 	statusApproved = "approved"
 	statusDenied   = "denied"
 	// statusTaken is a code that an account other than the one its device
-	// id belongs to tried to approve.
+	// id belongs to approved or stopped.
 	statusTaken    = "taken"
 	statusRedeemed = "redeemed"
 )
@@ -59,7 +60,7 @@ var (
 	ErrDenied   = errors.New("device: access_denied")
 	ErrExpired  = errors.New("device: expired_token")
 	// ErrTaken means an account other than the one the code's device id
-	// belongs to tried to approve the code. The id stays with its account,
+	// belongs to approved or stopped the code. The id stays with its account,
 	// so the app has to sign in as a new device, with a new device id and
 	// key (D-device-account-binding).
 	ErrTaken = errors.New("device: device_taken")
@@ -75,8 +76,23 @@ var (
 	ErrNoCode = errors.New("device: no code is waiting under that user code")
 	// ErrOtherAccount means the code's device id belongs to another
 	// account, which keeps it (docs/spec/device-auth-v1.md section 1). An
-	// approval then ends the code, and the app gets ErrTaken.
+	// approval or a Stop then ends the code, and the app gets ErrTaken.
 	ErrOtherAccount = errors.New("device: the device is linked to another account")
+)
+
+// A Decision is an answer to a code on the /device page.
+type Decision int
+
+// The answers the /device page offers.
+const (
+	// Approve links the code's device to the account that answers,
+	// unless its device id belongs to another account.
+	Approve Decision = iota + 1
+	// Deny ends the code, and the app gets ErrDenied.
+	Deny
+	// Stop is the one answer the page offers for a code whose device id
+	// belongs to another account. It never links anything.
+	Stop
 )
 
 // Request is what an app sends with its device authorization request.
@@ -226,20 +242,29 @@ func (s *Store) live(run string, expiresMs int64) bool {
 	return run == s.run && s.now().UnixMilli() < expiresMs
 }
 
-// Decide records account's answer to the code the teen typed: approve or
-// deny. It returns ErrNoCode when no code is waiting under it any more.
-// An approval of a code whose device id belongs to another account links
-// nothing: it ends the code, so the app hears at once that it has to sign
-// in as a new device, and returns ErrOtherAccount. The same answer again
-// from the same account, as from a double click, gets the first one's
-// outcome.
-func (s *Store) Decide(ctx context.Context, userCode, account string, approve bool) error {
+// Decide records account's answer d to the code the teen typed. It
+// returns ErrNoCode when no code is waiting under it any more.
+//
+// Decide checks again whether the code's device id belongs to another
+// account, since that can change after the page was shown. If it does, an
+// approval links nothing: like a Stop, it ends the code as taken, so the
+// app hears at once that it has to sign in as a new device, and Decide
+// returns ErrOtherAccount. A Stop never links anything. For an id no other
+// account has any more, as when that account removed the device after the
+// page was shown, it ends the code as denied, and the app gets ErrDenied.
+//
+// The same answer again from the same account, as from a double click,
+// gets the first one's outcome.
+func (s *Store) Decide(ctx context.Context, userCode, account string, d Decision) error {
+	if d != Approve && d != Deny && d != Stop {
+		return fmt.Errorf("device: %d isn't a decision", d)
+	}
 	nowMs := s.now().UnixMilli()
 	var outcome error
 	err := s.w.Do(ctx, 1, func(ctx context.Context, tx writer.Tx) error {
 		outcome = nil
 		status := statusDenied
-		if approve {
+		if d == Approve {
 			status = statusApproved
 		}
 		var (
@@ -256,13 +281,13 @@ FROM device_codes WHERE user_code_hash = $1`, s.userCodeHash(userCode)).Scan(&co
 		case err != nil:
 			return fmt.Errorf("device: looking up a code: %w", err)
 		case run == s.run && current != statusPending && decidedBy.Valid && decidedBy.String == account:
-			outcome = repeated(current, approve)
+			outcome = repeated(current, d)
 			return nil
 		case current != statusPending || !s.live(run, expiresMs):
 			outcome = ErrNoCode
 			return nil
 		}
-		if approve {
+		if d != Deny {
 			owner, err := ownerOf(ctx, tx, deviceID)
 			if err != nil {
 				return err
@@ -283,17 +308,19 @@ WHERE device_code_hash = $1 AND status = $5`, codeHash, status, account, nowMs, 
 	return outcome
 }
 
-// repeated is Decide's outcome when an account answers a code it answered
-// already, which is now in the state current: the first answer's outcome
-// when approve is the same answer, and ErrNoCode when the account changed
-// its mind, since a code takes one answer.
-func repeated(current string, approve bool) error {
+// repeated is Decide's outcome when an account answers d to a code it
+// answered already, which is now in the state current: the first answer's
+// outcome when d is the same answer, and ErrNoCode when the account changed
+// its mind, since a code takes one answer. A Stop ends a code as taken or
+// as denied, so a second Stop gets whichever the first one did, and never
+// an approval.
+func repeated(current string, d Decision) error {
 	switch {
-	case approve && (current == statusApproved || current == statusRedeemed):
+	case d == Approve && (current == statusApproved || current == statusRedeemed):
 		return nil
-	case approve && current == statusTaken:
+	case (d == Approve || d == Stop) && current == statusTaken:
 		return ErrOtherAccount
-	case !approve && current == statusDenied:
+	case (d == Deny || d == Stop) && current == statusDenied:
 		return nil
 	}
 	return ErrNoCode
@@ -319,8 +346,10 @@ func ownerOf(ctx context.Context, tx writer.Tx, deviceID string) (string, error)
 // ErrDenied, ErrTaken, ErrExpired or ErrInvalidGrant. A poll sooner than
 // the code's interval after the last one, less PollSlack, gets ErrSlowDown
 // and raises the code's interval by SlowDownStep for every poll after it;
-// interval returns the interval in force after this poll. A code approved
-// in time can be redeemed for RedeemGrace after it expires.
+// interval returns the interval in force after this poll. A code answered
+// in time keeps its answer for RedeemGrace after it expires: an approved
+// one can still be redeemed, and a denied or stopped one still gets
+// ErrDenied or ErrTaken rather than ErrExpired.
 //
 // Redeeming an approved code links its device with the key the code named.
 // A new device id gets a row at link generation 1. A device its account
@@ -360,6 +389,12 @@ FROM device_codes WHERE device_code_hash = $1`, codeHash).Scan(&deviceID, &osFam
 			return fmt.Errorf("device: looking up a device code: %w", err)
 		}
 		interval = time.Duration(intervalS) * time.Second
+		// A code that was answered keeps its answer for RedeemGrace past
+		// its expiry; a pending one ends on time.
+		endsMs := expiresMs
+		if status != statusPending {
+			endsMs += RedeemGrace.Milliseconds()
+		}
 		switch {
 		case status == statusRedeemed:
 			outcome = ErrInvalidGrant
@@ -368,11 +403,11 @@ FROM device_codes WHERE device_code_hash = $1`, codeHash).Scan(&deviceID, &osFam
 			// Made before a restart, whose user-code key is gone.
 			outcome = ErrExpired
 			return nil
-		case status == statusApproved && nowMs < expiresMs+RedeemGrace.Milliseconds():
-			// Redeemed below.
-		case nowMs >= expiresMs:
+		case nowMs >= endsMs:
 			outcome = ErrExpired
 			return nil
+		case status == statusApproved:
+			// Redeemed below.
 		case status == statusDenied:
 			outcome = ErrDenied
 			return nil

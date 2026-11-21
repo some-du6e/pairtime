@@ -340,6 +340,14 @@ func TestPrivacyNotice(t *testing.T) {
 			want: []string{"If the server can&#39;t reach the evidence store just then, the report also lists what you revealed as not deleted yet, and the server deletes it as soon as it can."},
 		},
 		{
+			name: "a removed device keeps its link count with its ID and upload progress, and its build and the other labels its uploads carry go 90 days after it last sent them (D-device-account-binding)",
+			want: []string{
+				"Then its device ID, when you removed it, how many times it has been linked and how far its uploads have got stay 90 days more",
+				"Everything else about the device goes at once, except its pairtime build and the other labels its uploads carry, which stay until 90 days after the device last sent them.",
+			},
+			notWant: []string{"removal time and upload progress stay", "and the rest goes at once"},
+		},
+		{
 			name: "the notice names this server and its version",
 			opts: Options{BaseURL: "https://pairtime.example.net", Version: "v1.2.3"},
 			want: []string{"the pairtime server at https://pairtime.example.net", "built by pairtime v1.2.3", "pairtime v1.2.3 is free software"},
