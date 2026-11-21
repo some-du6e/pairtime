@@ -634,8 +634,19 @@ read:
 	}
 	r.ok["linked"] = true
 
-	if _, err := os.Stat(filepath.Join(r.dataDir(), "account.json")); err != nil {
-		t.Errorf("no account.json after pairtime login: %v", err)
+	var linked struct {
+		DeviceID string `json:"device_id"`
+		Server   string `json:"server"`
+	}
+	if b, err := os.ReadFile(filepath.Join(r.dataDir(), "account.json")); err != nil || json.Unmarshal(b, &linked) != nil || linked.DeviceID == "" || linked.Server != r.server {
+		t.Errorf("account.json after pairtime login (%v) doesn't name this server and a device:\n%s", err, b)
+	}
+	// The server's devices page lists the computer, with the build it
+	// runs (WP-SV3).
+	devices := r.get(t, r.server+"/account/devices")
+	r.save("account-devices.html", devices.body)
+	if devices.status != http.StatusOK || linked.DeviceID == "" || !strings.Contains(devices.body, "<code>"+linked.DeviceID+"</code>") || !strings.Contains(devices.body, "pairtime "+buildVersion) {
+		t.Errorf("/account/devices answered %d without device %s running pairtime %s:\n%s", devices.status, linked.DeviceID, buildVersion, clip(devices.body))
 	}
 	cfg, err := os.ReadFile(filepath.Join(r.home, ".config", "pairtime", "config.toml"))
 	r.save("config.toml", string(cfg))
@@ -1015,6 +1026,63 @@ func (r *rehearsal) stepUpload(t *testing.T) {
 			}
 		}
 	}
+	// The rollups split the time as the client does: by evidence level
+	// (DESIGN 6.4), by kind of work (SM 5.1), and the agent's time on its
+	// own beside the person's (D-bucket-agent-only). The account is new,
+	// so its week is this one day.
+	if len(dates) != 1 || err != nil {
+		t.Logf("not comparing the splits: the session spans %v (%v)", dates, err)
+		return
+	}
+	levels, kinds, agent := today.splits()
+	srvLevels, srvKinds, srvAgent := serverSplits(view, str(view, "today"))
+	if !sameSplit(levels, srvLevels) {
+		t.Errorf("by evidence level the client has %v and the server's week %v", levels, srvLevels)
+	}
+	if !sameSplit(kinds, srvKinds) {
+		t.Errorf("by kind of work the client has %v and the server's week %v", kinds, srvKinds)
+	}
+	if math.Abs(agent-srvAgent) > 0.01 {
+		t.Errorf("the agent's time on its own is %.1f s on the client and %.1f s on the server", agent, srvAgent)
+	}
+}
+
+// serverSplits is the server's week by evidence level and by kind of
+// work, and the day's agent time on its own, pending minutes included.
+func serverSplits(view map[string]any, date string) (levels, kinds map[string]float64, agent float64) {
+	levels, kinds = map[string]float64{}, map[string]float64{}
+	sum := func(into map[string]float64, list any, name string) {
+		items, _ := list.([]any)
+		for _, it := range items {
+			m, _ := it.(map[string]any)
+			if s := num(m, "final_s") + num(m, "pending_s"); s > 0 {
+				into[str(m, name)] += s
+			}
+		}
+	}
+	sum(levels, at(view, "week", "levels"), "level")
+	sum(kinds, at(view, "week", "kinds"), "kind")
+	days, _ := view["days"].([]any)
+	for _, d := range days {
+		if dm, _ := d.(map[string]any); str(dm, "date") == date {
+			agent = num(dm, "agent", "final_s") + num(dm, "agent", "pending_s")
+		}
+	}
+	return levels, kinds, agent
+}
+
+// sameSplit reports whether two splits give the same seconds to the same
+// names.
+func sameSplit(a, b map[string]float64) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for k, s := range a {
+		if math.Abs(s-b[k]) > 0.01 {
+			return false
+		}
+	}
+	return true
 }
 
 // Step 8: pairtime uninstall.
@@ -1470,8 +1538,45 @@ type todayJSON struct {
 		You     *struct {
 			S        float64 `json:"s"`
 			PendingS float64 `json:"pending_s"`
+			Kinds    []struct {
+				Kind string  `json:"kind"`
+				S    float64 `json:"s"`
+			} `json:"kinds"`
+			Levels []struct {
+				Level string  `json:"level"`
+				S     float64 `json:"s"`
+			} `json:"levels"`
 		} `json:"you"`
+		Agents []struct {
+			Harness string  `json:"harness"`
+			S       float64 `json:"s"`
+		} `json:"agents"`
 	} `json:"projects"`
+}
+
+// splits is the day's credit by evidence level and by kind of work, and
+// the agents' time on their own, over every project.
+func (d todayJSON) splits() (levels, kinds map[string]float64, agent float64) {
+	levels, kinds = map[string]float64{}, map[string]float64{}
+	for _, p := range d.Projects {
+		for _, a := range p.Agents {
+			agent += a.S
+		}
+		if p.You == nil {
+			continue
+		}
+		for _, l := range p.You.Levels {
+			if l.S > 0 {
+				levels[l.Level] += l.S
+			}
+		}
+		for _, k := range p.You.Kinds {
+			if k.S > 0 {
+				kinds[k.Kind] += k.S
+			}
+		}
+	}
+	return levels, kinds, agent
 }
 
 func (d todayJSON) credit() map[string]credit {
