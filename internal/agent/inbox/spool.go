@@ -443,21 +443,71 @@ func retry(op func() error) error {
 	return err
 }
 
-// Pending reports whether the inbox in dir holds messages no drain has
-// finished with: the spool, written to, or a file a drain took and hasn't
-// deleted yet. A drain hands every message of a file to its sink before it
-// deletes the file, so once Pending says no, every message spooled before
-// it asked is in the sink's hands. Files set aside (.bad) are no drain's.
-func Pending(dir string) bool {
-	if fi, err := os.Stat(filepath.Join(dir, SpoolName)); err == nil && fi.Size() > 0 {
+// Scan hands the messages the inbox in dir holds, which no drain has
+// finished with, to each, and reports whether each returned true for one:
+// the spool's first, then those of the files drains took, oldest first,
+// each file's in the order its senders appended them, up to the first
+// limit messages of a file. It reads a message a drain has handed to its
+// sink already again, since a drain keeps how far it got to itself. It
+// reads the spool before it lists the taken files, so a message the spool
+// held as Scan began is read even when a drain takes the spool meanwhile,
+// and a file that is gone by the time Scan opens it was deleted by a drain
+// that had handed all of it over. Lines that aren't a message are passed
+// over, and so are files no drain reads: one set aside (.bad), one that
+// isn't this user's alone (privateFile), or one that can't be read, which
+// a drain sets aside in time. Scan writes nothing, so a drain can run
+// meanwhile.
+func Scan(dir string, limit int, each func(Message) bool) bool {
+	if scanFile(filepath.Join(dir, SpoolName), limit, each) {
 		return true
 	}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return false
 	}
+	var names []string
 	for _, e := range entries {
 		if n := e.Name(); strings.HasPrefix(n, "spool-") && strings.HasSuffix(n, takenSuffix) {
+			names = append(names, n)
+		}
+	}
+	slices.Sort(names)
+	for _, n := range names {
+		if scanFile(filepath.Join(dir, n), limit, each) {
+			return true
+		}
+	}
+	return false
+}
+
+// scanFile is Scan of the one file name.
+func scanFile(name string, limit int, each func(Message) bool) bool {
+	if fi, err := os.Lstat(name); err != nil || !fi.Mode().IsRegular() {
+		return false
+	}
+	f, err := os.OpenFile(name, readFlags, 0)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	if fi, err := f.Stat(); err != nil || privateFile(name, fi) != nil {
+		return false
+	}
+	r := bufio.NewReaderSize(f, 64<<10)
+	for n := 0; n < limit; {
+		line, long, err := readLine(r, MaxMessage)
+		if err != nil {
+			return false
+		}
+		if long || len(line) == 0 {
+			continue
+		}
+		m, err := Decode(line)
+		if err != nil {
+			continue
+		}
+		n++
+		if each(m) {
 			return true
 		}
 	}

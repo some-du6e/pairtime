@@ -13,33 +13,53 @@ import (
 	"github.com/some-du6e/pairtime/pkg/event"
 )
 
+// TestPresenceWaiting checks presence's part of the writer's Waiting: a
+// record queued and not yet written counts, by its event's times, until it
+// is written, and one the full queue dropped never does.
+func TestPresenceWaiting(t *testing.T) {
+	// before is the writer's test of an event against a moment at testT,
+	// by its t, of this run's clock.
+	before := func(e event.Envelope) bool { return e.BootID == runBoot && e.T < testT }
+	cases := []struct {
+		name string
+		// times are when the records queued were made, in Unix ms, and
+		// written has a writer take them all before Waiting is asked.
+		times   []int64
+		written bool
+		want    bool
+	}{
+		{"a record made before the moment counts while it is queued", []int64{testT + 5, testT - 1}, false, true},
+		{"a record made at the moment doesn't count", []int64{testT}, false, false},
+		{"a record counts no more once it is written", []int64{testT - 1}, true, false},
+		{"a record the full queue dropped doesn't count", append(slices.Repeat([]int64{testT + 1}, presenceQueue), testT-1), false, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			p := NewPresence(nil)
+			for _, ms := range c.times {
+				p.Record(presence.Record{At: time.UnixMilli(ms), Data: &event.OSPresence{IdleAnyS: 1}})
+			}
+			if c.written {
+				p.Attach(open(t, t.TempDir(), newClock(testT)))
+				// Close waits for the goroutine, which writes what was queued
+				// first.
+				p.Close()
+			}
+			got := p.Waiting(before)
+			p.Close()
+			if got != c.want {
+				t.Errorf("Waiting = %v, want %v", got, c.want)
+			}
+		})
+	}
+}
+
 // TestPresence checks how presence's records and seals reach the writer
 // (WP-OS1's presence.Options.Record and Seal).
 func TestPresence(t *testing.T) {
 	at := time.UnixMilli(testT)
 	sample := presence.Record{At: at, Data: &event.OSPresence{IdleAnyS: 2.5}}
 	suspend := presence.Record{At: at.Add(time.Second), Data: &event.OSPower{Op: event.PowerSuspend}}
-
-	t.Run("a record queued and not yet written counts for the writer's Waiting, by its event's times, until it is written", func(t *testing.T) {
-		p := NewPresence(nil)
-		p.Record(sample)
-		// The writer's test of a record against a moment just after it.
-		before := func(e event.Envelope) bool { return e.T < testT+1 && e.BootID == runBoot }
-		after := func(e event.Envelope) bool { return e.T < testT }
-		queued, notBefore := p.Waiting(before), p.Waiting(after)
-		w := open(t, t.TempDir(), newClock(testT))
-		p.Attach(w)
-		for deadline := time.Now().Add(10 * time.Second); w.Status().Next < 2; time.Sleep(10 * time.Millisecond) {
-			if time.Now().After(deadline) {
-				t.Fatal("the queued record never reached the writer")
-			}
-		}
-		written := p.Waiting(before)
-		p.Close()
-		if !queued || notBefore || written {
-			t.Errorf("queued: %v, against a moment before it: %v, once written: %v; want true, false, false", queued, notBefore, written)
-		}
-	})
 
 	t.Run("records taken before the writer opens are written once it does, as OS events with no project or session", func(t *testing.T) {
 		dir := t.TempDir()

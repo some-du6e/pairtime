@@ -54,8 +54,10 @@ type ChainRecord interface {
 	RecordChain(deviceID string) error
 }
 
-// sealReads bounds how often a seal reads config.toml for the records
-// written while it read it (Writer.seal). Notes always make it read again.
+// sealReads bounds how often a seal reads config.toml without the record
+// lock for the records written while it read it (Writer.seal). Notes
+// always make it read again. After that many, it reads the file once more
+// under the lock.
 const sealReads = 3
 
 // pendingMax is how many records the writer holds unsealed before it seals
@@ -356,6 +358,12 @@ func Open(opts Options) (*Writer, error) {
 		seen = opts.Seen()
 	}
 	w.mu.Lock()
+	if now := w.now().UnixMilli(); w.until.wall > now {
+		// Ahead of the clock, as after a step back of the wall clock while
+		// the agent was stopped: every record of this run would count as made
+		// before it, so it is the clock's time instead.
+		w.until.wall = now
+	}
 	w.seenLocked(seen, w.momentNow())
 	// An event a crash left without a batch that was made before
 	// config.toml was last known to say local-only, as the newest seal
@@ -677,17 +685,27 @@ func (w *Writer) NoteSeen(s Seen) {
 }
 
 // seenLocked is NoteSeen's change of state, now at at, and reports
-// whether it asks for a seal. w.mu is held.
+// whether it asks for a seal. A stretch end the writer has already, as
+// the newest seal frame recorded it, arms no mark: the agent sees the same
+// end at every start, and a mark due then would hold the first batch for
+// what is still on its way after any restart. w.mu is held.
 func (w *Writer) seenLocked(s Seen, at moment) bool {
+	// A seal reading config.toml meanwhile reads it again, as after a note.
+	w.notes++
 	seal := false
 	if !s.Ended.IsZero() {
 		ended := momentAt(s.Ended, s.OS)
+		// A stretch can't have ended after now. A time ahead of the clock,
+		// as one state.json or account.json kept from before a step back of
+		// the wall clock, is now instead.
+		ended.wall = min(ended.wall, at.wall)
+		newer := ended.wall > w.until.wall
 		if w.local {
 			// A stretch the writer took as going on, which the agent saw end.
 			seal = w.noteLocked(true, ended)
 		}
 		w.until.raise(ended)
-		if w.back == 0 {
+		if newer && w.back == 0 {
 			w.back = w.next
 		}
 	}
@@ -762,8 +780,12 @@ type sealPayload struct {
 	// local-only as the batch was sealed, in Unix ms (Writer.until): Open
 	// takes it back from the newest batch, so an event made before it that
 	// reaches the writer after a restart, as a hook call held.jsonl kept,
-	// is still sealed local-only. 0 before any.
-	LocalUntil int64 `json:"local_until,omitempty"`
+	// is still sealed local-only. 0 before any. LocalUntilOS is the same
+	// moment by the OS's monotonic clock, when the writer read that clock
+	// then, so a hook call of that boot is held to it by its mono after a
+	// restart too, as the running writer did.
+	LocalUntil   int64    `json:"local_until,omitempty"`
+	LocalUntilOS *untilOS `json:"local_until_os,omitempty"`
 	// Q is what the prompt classes' questions remember after the batch's
 	// last record (score.Questions), in the seal frame of every
 	// questionRows-th batch, so Open can restore them exactly rather than
@@ -774,6 +796,23 @@ type sealPayload struct {
 // online reports whether the batch was sealed online, as its seal frame
 // records: one that records no mode counts as sealed in local-only mode.
 func (sp sealPayload) online() bool { return sp.Online != nil && *sp.Online }
+
+// untilOS is a moment by the OS's monotonic clock: its reading in ms, and
+// the boot it counts (sealPayload.LocalUntilOS).
+type untilOS struct {
+	Mono int64  `json:"mono"`
+	Boot string `json:"boot"`
+}
+
+// until is the moment the seal frame recorded (LocalUntil, LocalUntilOS),
+// with no reading of this run's clock, which a restart starts again.
+func (sp sealPayload) until() moment {
+	m := moment{wall: sp.LocalUntil}
+	if o := sp.LocalUntilOS; o != nil && o.Mono > 0 && o.Boot != "" {
+		m.os, m.boot = o.Mono, o.Boot
+	}
+	return m
+}
 
 // msTime is the time of ms, in Unix ms, and the zero time for 0.
 func msTime(ms int64) time.Time {
@@ -840,7 +879,9 @@ func (w *Writer) RequestSeal() {
 // seal is Seal. w.sealMu is held.
 func (w *Writer) seal() (Batch, bool, error) {
 	w.mu.Lock()
-	var online, waiting bool
+	// asked is whether Waiting was asked about the batch as it was due its
+	// mark, with config.toml online.
+	var online, waiting, asked bool
 	for reads := 1; ; reads++ {
 		notes, next := w.notes, w.next
 		// The first batch after a switch back online is due its mark.
@@ -853,9 +894,10 @@ func (w *Writer) seal() (Batch, bool, error) {
 		// An event made in the stretch that is still on its way would
 		// reach the writer after the mark, so the batch is local-only and
 		// the mark waits (Options.Waiting).
-		waiting = due && online && w.waiting(until.madeBefore)
+		asked = due && online
+		waiting = asked && w.waiting(until.madeBefore)
 		w.mu.Lock()
-		if w.notes == notes && (w.next == next || reads >= sealReads) {
+		if w.notes == notes && w.next == next {
 			break
 		}
 		// A note came while config.toml was read, as the config watch's of
@@ -864,6 +906,17 @@ func (w *Writer) seal() (Batch, bool, error) {
 		// So are records, which may have come once the file changed, as to
 		// local-only, while the read still saw it as it was: a read after
 		// them seals them in the mode they came in.
+		if w.notes == notes && reads >= sealReads {
+			// Records came through every read, as in a drain: the last
+			// read is made under the record lock, so none can come during
+			// it, and Write waits for one read of a small file. Waiting
+			// takes other locks, so it can't be asked under this one: a
+			// batch these records made due its mark is sealed as while one
+			// of the stretch is on its way, and the mark waits for the next.
+			online = w.online == nil || w.online()
+			waiting = waiting || online && !asked && w.waiting != nil && w.back > 0
+			break
+		}
 	}
 	if w.online != nil {
 		switch {
@@ -934,6 +987,9 @@ func (w *Writer) seal() (Batch, bool, error) {
 	sp := sealPayload{B: row.B, FirstSeq: row.FirstSeq, N: row.N, Prev: w.head, Root: row.Root, Head: row.Head,
 		SealedAt: at.UnixMilli(), Online: &on, Back: on && w.back > 0 && row.FirstSeq >= w.back,
 		LocalUntil: w.until.wall}
+	if w.until.os > 0 {
+		sp.LocalUntilOS = &untilOS{Mono: w.until.os, Boot: w.until.boot}
+	}
 	snap := w.snap
 	if row.B%questionRows == 0 {
 		// w.q has taken every record the batch holds and none after.

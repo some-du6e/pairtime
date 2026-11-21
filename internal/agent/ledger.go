@@ -210,7 +210,7 @@ func (a *agent) openLedger() (*ledger.Writer, error) {
 // presence's, the adapter host's and the git watcher's locks, none of
 // which is held while the writer is called.
 func (a *agent) waiting(before func(event.Envelope) bool) bool {
-	if a.ledgerIn != nil && a.ledgerIn.Waiting(before) || a.spoolHolds() {
+	if a.ledgerIn != nil && a.ledgerIn.Waiting(before) || a.spoolHolds(before) {
 		return true
 	}
 	h := a.adaptersHost()

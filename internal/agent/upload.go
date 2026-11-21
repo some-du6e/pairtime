@@ -104,10 +104,13 @@ const modesKey = "modes"
 
 // modesState is what state.json keeps of modes: whether config.toml said
 // local-only when the agent last looked, and when the newest stretch it
-// saw ended, by the wall clock.
+// saw ended, by the wall clock and by the OS's monotonic clock in its boot,
+// so a hook call of that boot is held to it by its mono after a restart.
 type modesState struct {
-	Local bool      `json:"local,omitempty"`
-	Ended time.Time `json:"ended,omitzero"`
+	Local  bool      `json:"local,omitempty"`
+	Ended  time.Time `json:"ended,omitzero"`
+	OSMono int64     `json:"os_mono,omitempty"`
+	OSBoot string    `json:"os_boot,omitempty"`
 }
 
 // seeLocked takes config.toml's mode, seen now, and reports whether what
@@ -135,7 +138,8 @@ func (a *agent) keepLocked() {
 	if a.state == nil {
 		return
 	}
-	err := a.state.Put(modesKey, modesState{Local: a.modes.local, Ended: a.modes.ended})
+	err := a.state.Put(modesKey, modesState{Local: a.modes.local, Ended: a.modes.ended,
+		OSMono: a.modes.os.Mono, OSBoot: a.modes.os.BootID})
 	if err == nil {
 		err = a.state.Save()
 	}
@@ -162,6 +166,7 @@ func (a *agent) startModes() {
 		}
 	}
 	a.modes.local, a.modes.ended = last.Local, last.Ended
+	a.modes.os = clock.Stamp{Mono: last.OSMono, BootID: last.OSBoot}
 	if a.seeLocked(a.online()) {
 		a.keepLocked()
 	}

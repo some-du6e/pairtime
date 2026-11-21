@@ -469,7 +469,7 @@ func (w *Writer) scan(rows []rowPayload) ([]rowPayload, error) {
 		last := rows[n-1]
 		start, next, b, head, snap = last.End, last.LastSeq+1, last.B, last.Head, last.Snap
 		lastLocal = !last.online()
-		w.until.wall = max(w.until.wall, last.LocalUntil)
+		w.until = last.until()
 		if !slices.Contains(days, start.Seg) {
 			return nil, damaged("batch %d ends in the segment of %s, which isn't there", last.B, start.Seg)
 		}
@@ -586,7 +586,7 @@ func (w *Writer) scan(rows []rowPayload) ([]rowPayload, error) {
 				rp.Snap = snap
 				restored = append(restored, rp)
 				b, head, lastLocal = rp.B, rp.Head, !rp.online()
-				w.until.wall = max(w.until.wall, rp.LocalUntil)
+				w.until = rp.until()
 				w.pending = nil
 			default:
 				f.close()

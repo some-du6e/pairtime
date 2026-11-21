@@ -598,6 +598,85 @@ func TestDrainer(t *testing.T) {
 	}
 }
 
+// TestScan checks what Scan hands its func: the spool's messages first,
+// then those of the files drains took, oldest first, each file's in the
+// order they were written and up to the limit, until the func takes one,
+// passing over lines that aren't a message and files no drain reads.
+func TestScan(t *testing.T) {
+	cases := []struct {
+		name string
+		// files are the inbox's files by name, each a list of lines: n for
+		// the message newMessage(n) makes, and -1 for a line that isn't a
+		// message.
+		files map[string][]int
+		// perm is the files' mode, 0o600 when zero.
+		perm os.FileMode
+		// limit is Scan's, and stop the message the func takes, 0 for none.
+		limit, stop int
+		// read are the messages the func is handed, in order, and want
+		// what Scan reports.
+		read []int
+		want bool
+	}{
+		{"the spool is read first, then the taken files, oldest first, each in order",
+			map[string][]int{SpoolName: {1, 2}, "spool-2.drain": {5}, "spool-1.drain": {3, 4}}, 0, 10, 0, []int{1, 2, 3, 4, 5}, false},
+		{"the read ends at the first message the func takes, which Scan reports",
+			map[string][]int{SpoolName: {1, 2}, "spool-1.drain": {3, 4}}, 0, 10, 3, []int{1, 2, 3}, true},
+		{"a file's messages past the limit aren't read, and the next file's are",
+			map[string][]int{SpoolName: {1, 2, 3}, "spool-1.drain": {4}}, 0, 2, 0, []int{1, 2, 4}, false},
+		{"a line that isn't a message is passed over, and counts for nothing toward the limit",
+			map[string][]int{SpoolName: {-1, 1, 2}}, 0, 2, 0, []int{1, 2}, false},
+		{"a file set aside is no drain's, and isn't read",
+			map[string][]int{"spool-1.bad": {1}, "spool-2.drain": {2}}, 0, 10, 0, []int{2}, false},
+		{"a spool others may open is no drain's, and isn't read",
+			map[string][]int{SpoolName: {1}}, 0o644, 10, 0, nil, false},
+		{"an inbox with nothing in it hands over nothing", map[string][]int{}, 0, 10, 0, nil, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if c.perm != 0 && runtime.GOOS == "windows" {
+				t.Skip("on Windows the data directory's DACL, not a file's mode, says who may open it")
+			}
+			dir := t.TempDir()
+			perm := c.perm
+			if perm == 0 {
+				perm = 0o600
+			}
+			for name, lines := range c.files {
+				var b []byte
+				for _, n := range lines {
+					line := []byte("{not a message")
+					if n >= 0 {
+						var err error
+						if line, err = newMessage(t, n).Encode(); err != nil {
+							t.Fatal(err)
+						}
+					}
+					b = append(append(b, line...), '\n')
+				}
+				if err := os.WriteFile(filepath.Join(dir, name), b, perm); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Chmod(filepath.Join(dir, name), perm); err != nil { // past the umask
+					t.Fatal(err)
+				}
+			}
+			var read []int
+			got := Scan(dir, c.limit, func(m Message) bool {
+				var body struct{ N int }
+				if err := json.Unmarshal(m.Body, &body); err != nil {
+					t.Fatal(err)
+				}
+				read = append(read, body.N)
+				return body.N == c.stop
+			})
+			if got != c.want || !slices.Equal(read, c.read) {
+				t.Errorf("Scan handed over %v and reported %v; want %v and %v", read, got, c.read, c.want)
+			}
+		})
+	}
+}
+
 func TestReadLine(t *testing.T) {
 	tests := []struct {
 		name      string

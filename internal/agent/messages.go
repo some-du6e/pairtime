@@ -12,6 +12,7 @@ import (
 	"github.com/some-du6e/pairtime/internal/agent/inbox"
 	"github.com/some-du6e/pairtime/internal/agent/ipc"
 	"github.com/some-du6e/pairtime/internal/platform/clock"
+	"github.com/some-du6e/pairtime/pkg/event"
 )
 
 // drainEvery is how often the agent drains the inbox (DESIGN 3.5).
@@ -161,8 +162,19 @@ func (l *ipcListener) close() {
 // spoolSlack is how long after its own stamp a hook call can still reach
 // the inbox's spool: pairtime hook reads stdin for up to StdinWait, and
 // spools the call when the agent's ack doesn't come within HookTimeout,
-// and a second covers the spool's write.
-const spoolSlack = hookpath.StdinWait + ipc.HookTimeout + time.Second
+// and a second covers the spool's write. drainSoon drains a little later
+// than that after a switch back, for the scheduler's lag.
+const (
+	spoolSlack     = hookpath.StdinWait + ipc.HookTimeout + time.Second
+	drainSoonAfter = spoolSlack + 250*time.Millisecond
+)
+
+// spoolScanned bounds how many of a spool file's calls spoolHolds reads.
+// Senders append calls in the order they make them, each within
+// spoolSlack of its stamp, so one made before a moment comes after one
+// made after it only in the seconds around it, and the calls after those
+// in a file were all made later.
+const spoolScanned = 1024
 
 // drainSoon has the inbox drained once spoolSlack has passed, rather than
 // at the next minute's drain, as the switch back online after a local-only
@@ -178,7 +190,7 @@ func (a *agent) drainSoon() {
 		return
 	}
 	kick := *k
-	a.sched.After("inbox.drain.soon", spoolSlack, func(time.Time) {
+	a.sched.After("inbox.drain.soon", drainSoonAfter, func(time.Time) {
 		select {
 		case kick <- struct{}{}:
 		default: // a drain is already due
@@ -186,16 +198,27 @@ func (a *agent) drainSoon() {
 	})
 }
 
-// spoolHolds reports whether the inbox's spool holds hook calls no drain
-// has handed to the adapters yet (inbox.Pending), for the ledger writer's
-// Waiting (agent.waiting). Their times aren't read, so any of them holds
-// the mark of the first batch after a switch back online until a drain,
-// which drainSoon brings within seconds of the switch. The spool is used
-// only while hooks can't reach the socket, so it is empty almost always.
-// With no drain running in this run, as when the journal couldn't open,
-// its calls wait for the next start, and hold nothing.
-func (a *agent) spoolHolds() bool {
-	return a.spoolKick.Load() != nil && inbox.Pending(a.dirs.Inbox())
+// spoolHolds reports whether the inbox's spool holds a hook call, which no
+// drain has handed to the adapters yet, that before says may have been
+// made before config.toml was last seen local-only, for the ledger
+// writer's Waiting (agent.waiting). It reads each call's times as its
+// records will carry them once a drain hands it over (hookpath.Times), so
+// a call made after the switch, as one spooled while the agent restarted,
+// holds nothing, and one without the hook's monotonic reading, which is
+// timed by its drain, holds nothing either. drainSoon has a call made
+// before the switch handed over within seconds. The spool is used only
+// while hooks can't reach the socket, so it is empty almost always. With
+// no drain running in this run, as when the journal couldn't open, its
+// calls wait for the next start, and hold nothing.
+func (a *agent) spoolHolds(before func(event.Envelope) bool) bool {
+	if a.spoolKick.Load() == nil {
+		return false
+	}
+	now := clock.Now()
+	return inbox.Scan(a.dirs.Inbox(), spoolScanned, func(m inbox.Message) bool {
+		at := hookpath.Times(inbox.Delivery{Message: m, Via: inbox.ViaInbox, Received: now})
+		return before(event.Envelope{T: at.Wall.UnixMilli(), Mono: at.Mono, BootID: at.BootID})
+	})
 }
 
 // drain moves what the inbox holds into the journal.

@@ -386,8 +386,12 @@ func TestLedgerMode(t *testing.T) {
 		}
 		a := &agent{dirs: dirs, log: slog.New(slog.DiscardHandler), problems: map[string]string{}, table: newestTable(), keyStores: []keys.Store{}}
 		t.Cleanup(a.startLedger())
-		if got := sealsAtOnce(t, a.writer.Load, dirs); len(got) != 1 || got[0].Online {
-			t.Errorf("rows %+v, want one local-only batch sealed at once", got)
+		// The start's own read, before the ledger opens on its goroutine.
+		a.modes.mu.Lock()
+		seen := a.modes.local
+		a.modes.mu.Unlock()
+		if got := sealsAtOnce(t, a.writer.Load, dirs); !seen || len(got) != 1 || got[0].Online {
+			t.Errorf("the start saw local-only %v, and rows %+v; want local-only, and one local-only batch sealed at once", seen, got)
 		}
 	})
 	t.Run("a switch to local-only the config watch notes while the ledger waits to open is noted as the writer is published", func(t *testing.T) {
