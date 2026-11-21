@@ -304,7 +304,7 @@ func New(opts Options) (*Uploader, error) {
 		client:    client,
 		clock:     &clock{now: now},
 		backoff:   newBackoff(opts.Draw),
-		userAgent: "pairtime-agent/" + build,
+		userAgent: "pairtime-agent/" + clientBuild(build),
 		build:     build,
 		lag:       opts.Params.Int(params.WITNESS_LAG_S) * 1000,
 		started:   started,
@@ -315,9 +315,7 @@ func New(opts Options) (*Uploader, error) {
 		done:      make(chan struct{}),
 		problems:  map[string]string{},
 	}
-	if !buildForm(build) {
-		u.build = "unknown"
-	}
+	u.build = clientBuild(build)
 	return u, nil
 }
 
@@ -372,7 +370,7 @@ func (u *Uploader) Sealed(b ledger.Batch) {
 }
 
 // harnessOf reads the harness and its version from a record's body, with
-// "" for a version not in client_build's form, and false when the body
+// "" for a version that isn't one (versionForm), and false when the body
 // names no harness the labels can carry.
 func harnessOf(body []byte) (event.Harness, string, bool) {
 	var b struct {
@@ -385,7 +383,7 @@ func harnessOf(body []byte) (event.Harness, string, bool) {
 		return "", "", false
 	}
 	v := b.E.HarnessVersion
-	if !buildForm(v) {
+	if !versionForm(v) {
 		v = ""
 	}
 	return b.E.Harness, v, true
@@ -638,14 +636,29 @@ func (u *Uploader) load(c Credentials) error {
 	if rows.device != chain {
 		return fmt.Errorf("the ledger's batches.seg is %s's chain, and the writer writes %s's", rows.device, chain)
 	}
-	if st.From == 0 {
-		st.From = firstLinked(rows, c.LinkedAt)
-	}
+	relink(&st, rows, c)
 	u.st, u.rows, u.loaded, u.synced = st, rows, true, false
 	u.lastReq = max(u.lastReq, st.Req)
 	u.pending = u.readOutbox()
 	u.setStatus(func(s *Status) { s.Next, s.Fork, s.Retrying = st.Next, st.Fork, u.pending != nil })
 	return nil
+}
+
+// relink sets where the device's chain goes on from for the sign-in c: the
+// first batch sealed after it, for a new sign-in or a re-link, a new token
+// after pairtime logout, which account.json's new linked_at shows. The
+// batches sealed before it, in local-only mode, never go, nor their
+// minutes, and the server takes the gap after a re-link (D-local-gap).
+// The same sign-in keeps its place: a batch skipped without a re-link is
+// still chain_gap, so nothing is skipped then.
+func relink(st *saved, rows *rowIndex, c Credentials) {
+	if la := c.LinkedAt.UnixMilli(); !c.LinkedAt.IsZero() && la != st.LinkedAt {
+		st.From, st.LinkedAt = firstLinked(rows, c.LinkedAt), la
+		return
+	}
+	if st.From == 0 {
+		st.From = firstLinked(rows, c.LinkedAt)
+	}
 }
 
 // firstLinked returns the first batch sealed after the sign-in at
@@ -854,10 +867,19 @@ func (u *Uploader) sync(c Credentials) bool {
 		u.log.Warn("the server's chain is behind what it took, so the minutes after its head go again", "head", st.Head, "next", held, "from", from)
 	}
 	// While the server holds no batch of the device, its chain starts at
-	// the first batch sealed after the sign-in (ingest-v1 5.3).
+	// the first batch sealed after the sign-in (ingest-v1 5.3), and after a
+	// re-link it goes on from there (D-local-gap): the batches between are
+	// local-only mode's.
+	base := uint64(1)
+	if st.Head != nil {
+		base = st.Head.B + 1
+	}
+	if u.st.From > base {
+		u.st.addGap(base, u.st.From-1)
+	}
 	next := max(u.st.From, 1)
 	if st.Head != nil {
-		next = st.Head.B + 1
+		next = max(st.Head.B+1, u.st.From)
 		switch b := u.forkAt(st.Head); {
 		case b != 0:
 			// The lower fork stays: no root goes after either.
@@ -875,7 +897,7 @@ func (u *Uploader) sync(c Credentials) bool {
 		// A batch the server holds that the device has no receipt for
 		// goes again, and its duplicate brings the receipt back. Batches
 		// the server said it no longer holds (Gone) are skipped.
-		for b := max(u.st.ChainStart, u.st.Gone+1, 1); b <= st.Head.B && b <= u.rows.last(); b++ {
+		for b := max(u.st.ChainStart, u.st.Gone+1, u.st.From, 1); b <= st.Head.B && b <= u.rows.last(); b++ {
 			if _, ok := u.rows.receivedAt(b); !ok {
 				next = b
 				break
@@ -1051,9 +1073,15 @@ func (u *Uploader) refused(c Credentials, p plan, a answer) {
 		code = fmt.Sprintf("status %d", a.status)
 	}
 	switch code {
-	case refusalTokenMissing, refusalTokenInvalid, refusalRevoked, refusalMismatch, refusalKeyMissing:
+	case refusalMismatch:
+		// The device id belongs to another account: this computer signs in
+		// again as a new device, with a new device id and K_dev
+		// (D-device-account-binding).
+		u.blocked = c.Token
+		u.setProblem("server", "the server says this computer's device id belongs to another account, so pairtime uploads nothing until it signs in again as a new device")
+	case refusalTokenMissing, refusalTokenInvalid, refusalRevoked, refusalKeyMissing:
 		// Not this token again: signing in again gives a new one, and binds
-		// the device key with it (ingest-v1 2.6).
+		// the device key with it (ingest-v1 2.6; D-key-at-grant).
 		u.blocked = c.Token
 		u.setProblem("server", fmt.Sprintf("the server refused this computer's sign-in (%s), so pairtime uploads nothing until you run pairtime login again", code))
 	case refusalKeyReused:

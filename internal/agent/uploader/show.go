@@ -69,9 +69,7 @@ func Next(o PreviewOptions) (Preview, error) {
 	if build == "" {
 		build = defaultBuild()
 	}
-	if !buildForm(build) {
-		build = "unknown"
-	}
+	build = clientBuild(build)
 	st, started, err := readState(o.StateFile, now)
 	if err != nil {
 		return Preview{}, err
@@ -96,9 +94,7 @@ func Next(o PreviewOptions) (Preview, error) {
 	if p, err := readOutbox(o.DataDir, st); err == nil && p != nil {
 		return previewOf(p.plan, true), nil
 	}
-	if st.From == 0 {
-		st.From = firstLinked(rows, c.LinkedAt)
-	}
+	relink(&st, rows, c)
 	rows.trim(max(st.Next, 1))
 	in := planInput{
 		rows:       rows,

@@ -60,6 +60,16 @@ type saved struct {
 	// of the minutes they hold (ingest-v1 5.3, 7.6). 0 until the first
 	// load with this sign-in sets it.
 	From uint64 `json:"from,omitempty"`
+	// LinkedAt is the sign-in's linked_at From was set for, in Unix ms: a
+	// newer one is a re-link, after which From moves to the first batch
+	// sealed after it (D-local-gap).
+	LinkedAt int64 `json:"linked_at,omitempty"`
+	// Gaps are the runs of batches sealed in local-only mode: before the
+	// first sign-in, and between a logout and a re-link, from the server's
+	// head then to the first batch after the re-link. Neither their roots
+	// nor their minutes ever go, and the server never asks for them
+	// (D-local-gap; DESIGN 4.2).
+	Gaps []gap `json:"gaps,omitempty"`
 	// ChainStart is the first batch of the device's witnessed chain on the
 	// server, 0 while the server holds none or it isn't known yet. Rows
 	// before it are never sent again: the server answers them
@@ -124,6 +134,39 @@ type sentRev struct {
 	B uint64 `json:"b"`
 }
 
+// gap is a run of batches, From to To, sealed in local-only mode.
+type gap struct {
+	From uint64 `json:"from"`
+	To   uint64 `json:"to"`
+}
+
+// addGap records the batches from a to b as local-only.
+func (s *saved) addGap(a, b uint64) {
+	if a == 0 || b < a {
+		return
+	}
+	for _, g := range s.Gaps {
+		if g.From <= a && b <= g.To {
+			return
+		}
+	}
+	s.Gaps = append(s.Gaps, gap{From: a, To: b})
+}
+
+// localOnly reports whether batch b was sealed in local-only mode: in a
+// recorded gap, or before From where the state read that records the gap
+// hasn't run yet, as for `pairtime privacy show` before an agent's first
+// upload.
+func (s saved) localOnly(b uint64) bool {
+	for _, g := range s.Gaps {
+		if g.From <= b && b <= g.To {
+			return true
+		}
+	}
+	base := max(s.Next, 1)
+	return s.From > base && b >= base && b < s.From
+}
+
 // span is a stretch of failed uploads: the first and the last failure's
 // upload-failure note, in Unix ms.
 type span struct {
@@ -153,6 +196,7 @@ func (s saved) clone() saved {
 	s.Marks = maps.Clone(s.Marks)
 	s.Harnesses = maps.Clone(s.Harnesses)
 	s.Offline = slices.Clone(s.Offline)
+	s.Gaps = slices.Clone(s.Gaps)
 	s.Sent = maps.Clone(s.Sent)
 	s.Bump = maps.Clone(s.Bump)
 	s.Unchecked = maps.Clone(s.Unchecked)

@@ -191,7 +191,7 @@ func TestHarnesses(t *testing.T) {
 		{"none is an empty list", nil, []Harness{}},
 		{"harnesses go by name", map[event.Harness]string{event.HarnessCodex: "0.9.1", event.HarnessClaudeCode: "2.1.327"},
 			[]Harness{{event.HarnessClaudeCode, "2.1.327"}, {event.HarnessCodex, "0.9.1"}}},
-		{"a harness whose version isn't in client_build's form goes without it", map[event.Harness]string{event.HarnessCursor: "1.2 (beta)"},
+		{"a harness whose version isn't a version goes without it", map[event.Harness]string{event.HarnessCursor: "1.2 (beta)"},
 			[]Harness{{Name: event.HarnessCursor}}},
 		{"a harness that named no version goes without one", map[event.Harness]string{event.HarnessOther: ""}, []Harness{{Name: event.HarnessOther}}},
 		{"none, the OS's harness, stays out", map[event.Harness]string{event.HarnessNone: "1"}, []Harness{}},
@@ -214,17 +214,24 @@ func TestHarnesses(t *testing.T) {
 		s    string
 		ok   bool
 	}{
-		{"a release version is a build", "v0.1.0", true},
-		{"dev is a build", "dev", true},
-		{"a build can't start with a dot", ".1", false},
-		{"a build has no spaces", "1.0 beta", false},
-		{"a build has at most 64 characters", string(bytes.Repeat([]byte("a"), 65)), false},
-		{"an empty build isn't one", "", false},
+		{"a release version is a version", "v0.1.0", true},
+		{"a harness's dotted version is a version", "2.1.327", true},
+		{"a pre-release suffix is allowed", "v0.1.0-alpha.1", true},
+		{"a build suffix is allowed", "0.1.0+3dbf6d4", true},
+		{"four numeric parts are allowed", "1.2.3.4", true},
+		{"a fifth numeric part isn't", "1.2.3.4.5", false},
+		{"dev is a word, not a version", "dev", false},
+		{"a file name is not a version", "notes.txt", false},
+		{"a version has no spaces", "1.0 beta", false},
+		{"a suffix starts with a letter or digit", "1.0-.x", false},
+		{"a dot ends no part", "1.", false},
+		{"a version has at most 64 characters", "1.0+" + string(bytes.Repeat([]byte("a"), 61)), false},
+		{"an empty version isn't one", "", false},
 	}
 	for _, tc := range builds {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := buildForm(tc.s); got != tc.ok {
-				t.Errorf("buildForm(%q) = %v", tc.s, got)
+			if got := versionForm(tc.s); got != tc.ok {
+				t.Errorf("versionForm(%q) = %v", tc.s, got)
 			}
 		})
 	}

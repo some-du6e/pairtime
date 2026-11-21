@@ -757,3 +757,111 @@ func TestRestoredLedger(t *testing.T) {
 		})
 	}
 }
+
+func TestRelink(t *testing.T) {
+	ix := indexOf(t, []float64{1, 2, 3, 4}, []float64{-1, -1, -1, -1})
+	la := func(m float64) time.Time { return day0.Add(time.Duration(m * float64(time.Minute))) }
+	tests := []struct {
+		name     string
+		st       saved
+		linkedAt time.Time
+		from     uint64
+	}{
+		{"a first sign-in starts at the first batch sealed after it", saved{}, la(2.5), 3},
+		{"the same sign-in keeps its place", saved{From: 3, LinkedAt: la(2.5).UnixMilli()}, la(2.5), 3},
+		{"a re-link moves to the first batch sealed after it", saved{From: 1, LinkedAt: la(0).UnixMilli()}, la(3.5), 4},
+		{"a re-link after the last batch starts at the next one", saved{From: 1, LinkedAt: la(0).UnixMilli()}, la(9), 5},
+		{"a sign-in with no linked_at keeps the place it has", saved{From: 2}, time.Time{}, 2},
+		{"a first sign-in with no linked_at starts at the next batch", saved{}, time.Time{}, 5},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			st := tc.st
+			relink(&st, ix, Credentials{LinkedAt: tc.linkedAt})
+			if st.From != tc.from {
+				t.Errorf("From = %d, want %d", st.From, tc.from)
+			}
+		})
+	}
+	gaps := []struct {
+		name string
+		st   saved
+		b    uint64
+		want bool
+	}{
+		{"a batch in a recorded gap is local-only", saved{Gaps: []gap{{4, 5}}, Next: 7, From: 6}, 5, true},
+		{"a batch after the gap isn't", saved{Gaps: []gap{{4, 5}}, Next: 7, From: 6}, 6, false},
+		{"a batch before the gap, of the link before it, isn't", saved{Gaps: []gap{{4, 5}}, Next: 7, From: 6}, 3, false},
+		{"before the first state read, the batches before From are", saved{From: 4}, 2, true},
+	}
+	for _, tc := range gaps {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.st.localOnly(tc.b); got != tc.want {
+				t.Errorf("localOnly(%d) = %v", tc.b, got)
+			}
+		})
+	}
+}
+
+// TestRelinkGap is a device that went local-only after batch 3 and
+// re-linked before batch 6: batches 4 and 5 were sealed in local-only
+// mode. Only batch 6's root goes, and every minute goes but theirs.
+func TestRelinkGap(t *testing.T) {
+	minutes := make([]int, 90)
+	for i := range minutes {
+		minutes[i] = i
+	}
+	r := newRig(t, 6, minutes, 80*time.Minute) // the re-link, between batches 5 and 6
+	hold(t, r.f, r.rows[:3], 1)
+	for _, row := range r.rows[:3] {
+		fr := r.f.rows[row.B]
+		sig, _ := hex.DecodeString(fr.sig)
+		rc := pkgledger.Receipt{ReceivedAt: fr.receivedAt}
+		copy(rc.Signature[:], sig)
+		if err := r.w.StoreReceipt(row.B, rc); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r.f.relinked = true
+	pub := r.f.key.Public().(ed25519.PublicKey)
+	if err := r.st.Put(StateKey, saved{
+		Chain: r.w.DeviceID(), Server: r.creds.Server, Device: r.w.DeviceID(), Req: 64, Next: 4, From: 1, ChainStart: 1,
+		LinkedAt:  r.start.Add(-time.Minute).UnixMilli(), // the first link, before batch 1
+		ServerKey: &ServerKey{KeyID: r.f.keyID, PublicKey: hex.EncodeToString(pub)},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.st.Save(); err != nil {
+		t.Fatal(err)
+	}
+	r.run(t, "batch 6 and its minutes", func(f *fakeIngest) bool { return f.head != nil && f.head.b == 6 && len(f.buckets) == 60 })
+	r.f.mu.Lock()
+	defer r.f.mu.Unlock()
+	gapFrom, gapTo := r.start.Add(45*time.Minute).UnixMilli(), r.start.Add(75*time.Minute).UnixMilli()
+	tests := []struct {
+		name string
+		ok   bool
+	}{
+		{"no root of a batch sealed in local-only mode went", r.f.rows[4].b == 0 && r.f.rows[5].b == 0},
+		{"the first root after the re-link is the first batch sealed after it", r.f.rows[6].b == 6},
+		{"no minute of the local-only gap went", func() bool {
+			for ms := range r.f.buckets {
+				if ms >= gapFrom && ms < gapTo {
+					return false
+				}
+			}
+			return true
+		}()},
+		{"the minutes of the link before the gap still went", func() bool {
+			_, ok := r.f.buckets[r.start.UnixMilli()]
+			return ok
+		}()},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if !tc.ok {
+				t.Error("no")
+			}
+		})
+	}
+}

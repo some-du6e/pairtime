@@ -51,6 +51,7 @@ type fakeIngest struct {
 	revs              int                          // revisions accepted
 	labels            int                          // labels accepted
 	futures           int                          // buckets answered future_minute
+	relinked          bool                         // the device re-linked, so its next batch may skip a gap
 	witness           map[event.Witness]int        // the readings of the revisions accepted
 	lastKey, lastHash string
 	lastResp          []byte
@@ -81,8 +82,10 @@ var (
 	uuid7Form   = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
 	decimalForm = regexp.MustCompile(`^[1-9][0-9]{0,18}$`)
 	hashForm    = regexp.MustCompile(`^[0-9a-f]{64}$`)
-	versionForm = regexp.MustCompile(`^[0-9]{1,9}\.[0-9]{1,9}\.[0-9]{1,9}$`)
-	buildForm2  = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$`)
+	scoringForm = regexp.MustCompile(`^[0-9]{1,9}\.[0-9]{1,9}\.[0-9]{1,9}$`)
+	// releaseForm is D-version-grammar's version, for client_build and
+	// harness versions.
+	releaseForm = regexp.MustCompile(`^v?[0-9]+(\.[0-9]+){0,3}([-+][0-9A-Za-z][0-9A-Za-z.-]{0,40})?$`)
 	paramsForm  = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 )
 
@@ -385,6 +388,10 @@ func (f *fakeIngest) root(raw json.RawMessage, receivedAt uint64) map[string]any
 		return map[string]any{"status": 409, "code": "prev_mismatch", "b": b}
 	case f.head == nil:
 		f.start = b
+	case b > f.head.b+1 && f.relinked:
+		// After a re-link the first batch may skip a local-only gap, with its
+		// prev taken as given (D-local-gap).
+		f.relinked = false
 	case b > f.head.b+1:
 		return map[string]any{"status": 409, "code": "chain_gap", "b": b}
 	case b <= f.head.b:
@@ -436,7 +443,7 @@ func (f *fakeIngest) bucket(raw json.RawMessage) map[string]any {
 	if err := dec.Decode(&mb); err != nil {
 		return map[string]any{"status": 422, "code": "unknown_field", "field": ""}
 	}
-	if !versionForm.MatchString(mb.V) || !paramsForm.MatchString(mb.Params) {
+	if !scoringForm.MatchString(mb.V) || !paramsForm.MatchString(mb.Params) {
 		return map[string]any{"status": 422, "code": "bad_string"}
 	}
 	var probe struct {
@@ -495,9 +502,14 @@ func (f *fakeIngest) label(raw json.RawMessage) map[string]any {
 	if err := dec.Decode(&l); err != nil {
 		return map[string]any{"status": 422, "code": "unknown_field", "field": ""}
 	}
-	if !buildForm2.MatchString(l.ClientBuild) || !versionForm.MatchString(l.ScoringVersion) || !paramsForm.MatchString(l.Params) ||
+	if !releaseForm.MatchString(l.ClientBuild) || len(l.ClientBuild) > 64 || !scoringForm.MatchString(l.ScoringVersion) || !paramsForm.MatchString(l.Params) ||
 		l.Harnesses == nil || len(*l.Harnesses) > 16 || l.TypingModule == nil || l.VM == nil {
 		return map[string]any{"status": 422, "code": "bad_string"}
+	}
+	for _, h := range *l.Harnesses {
+		if h.Version != "" && (!releaseForm.MatchString(h.Version) || len(h.Version) > 64) {
+			return map[string]any{"status": 422, "code": "bad_string", "field": "harnesses"}
+		}
 	}
 	f.labels++
 	return map[string]any{"status": 200, "code": "accepted"}
