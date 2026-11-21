@@ -335,6 +335,9 @@ func TestCommitParents(t *testing.T) {
 		slots       []int64
 		want        []gitWant
 		uncommitted float64
+		// twice gives Projects every git.change record twice, as a view
+		// that holds a batch twice would.
+		twice bool
 	}{
 		{
 			name: "a merge takes the credit since its first parent, the branch it was made on, so it shows the feature branch's work as well as its 30 s",
@@ -359,6 +362,17 @@ func TestCommitParents(t *testing.T) {
 			slots: []int64{0, 300, 600},
 			want:  []gitWant{{main0, 15}, {after, 15}}, uncommitted: 15,
 		},
+		{
+			name: "a commit or amend record given twice counts once, as Step counts a record",
+			commits: func(commit func(int64, event.GitOp, string, ...string)) {
+				commit(100, event.GitCommit, main0)
+				commit(200, event.GitCommit, f1, main0)
+				commit(300, event.GitAmend, f2, main0)
+			},
+			slots: []int64{0, 150, 250, 400},
+			want:  []gitWant{{main0, 15}, {f2, 30}}, uncommitted: 15,
+			twice: true,
+		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -371,7 +385,15 @@ func TestCommitParents(t *testing.T) {
 			for _, s := range c.slots {
 				d.Credits = append(d.Credits, Credit{Slot: at(s), Credited: []Credited{credOf("p_1", rP, event.EvidenceA, 15)}})
 			}
-			got := Rollups{Table: testTable(t)}.Projects(d, b.records())
+			recs := b.records()
+			if c.twice {
+				for _, e := range b.records() {
+					if _, ok := e.Data.(*event.GitChange); ok {
+						recs = append(recs, e)
+					}
+				}
+			}
+			got := Rollups{Table: testTable(t)}.Projects(d, recs)
 			if len(got) != 1 {
 				t.Fatalf("project rollups %+v, want p_1's", got)
 			}

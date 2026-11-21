@@ -549,10 +549,11 @@ type commitRecord struct {
 
 // projectCommits returns each project's commits from its git.change
 // records, in order of their records, with the interval each one's credit
-// comes from.
+// comes from. A record given twice counts once, as in Step.
 func projectCommits(records []event.Event) map[string][]commitRecord {
 	recs := slices.Clone(records)
 	slices.SortStableFunc(recs, recordCmp)
+	recs = slices.CompactFunc(recs, func(a, b event.Event) bool { return a.EventID == b.EventID })
 	out := map[string][]commitRecord{}
 	for _, e := range recs {
 		g, ok := e.Data.(*event.GitChange)

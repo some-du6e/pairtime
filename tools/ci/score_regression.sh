@@ -94,7 +94,13 @@ while IFS=$'\t' read -r status first second || [ -n "$status" ]; do
 		echo "::error::score_regression.sh: malformed name-status line: $status" >&2
 		exit 2
 	fi
-	for p in "$first" "$second"; do
+	# A copy leaves its source as it was, so only its destination is a
+	# changed input. Every other status changes each path it names.
+	paths=("$first" "$second")
+	case "$status" in
+	C*) paths=("$second") ;;
+	esac
+	for p in "${paths[@]}"; do
 		if [ -n "$p" ] && is_input "$p"; then inputs="$inputs${p%/*}
 "; fi
 	done
