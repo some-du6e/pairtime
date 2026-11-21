@@ -3,6 +3,7 @@
 package uploader
 
 import (
+	"cmp"
 	"maps"
 	"slices"
 	"time"
@@ -35,6 +36,11 @@ const uncheckedMax = 4096
 // harnessesMax is how many harnesses the labels carry (ingest-v1 2.3.4).
 const harnessesMax = 16
 
+// gapsMax bounds the runs of local-only batches the uploader remembers;
+// past it the two oldest become one, which counts the batches between them
+// as local-only too, so nothing that was local-only goes.
+const gapsMax = 1024
+
 // saved is what the uploader keeps in state.json under StateKey.
 // Everything in it can be rebuilt: from GET /api/v1/ingest/state, which
 // gives the counter and the server's head, and from the ledger and the
@@ -64,12 +70,19 @@ type saved struct {
 	// newer one is a re-link, after which From moves to the first batch
 	// sealed after it (D-local-gap).
 	LinkedAt int64 `json:"linked_at,omitempty"`
-	// Gaps are the runs of batches sealed in local-only mode: before the
-	// first sign-in, and between a logout and a re-link, from the server's
-	// head then to the first batch after the re-link. Neither their roots
-	// nor their minutes ever go, and the server never asks for them
-	// (D-local-gap; DESIGN 4.2).
+	// Gaps are the runs of batches sealed in local-only mode, merged
+	// where they touch: before the first sign-in, between a logout and a
+	// re-link (from the server's head then to the first batch after the
+	// re-link), and while config.toml's mode was local (mode). Neither
+	// their roots nor their minutes ever go (D-local-gap; DESIGN 4.2). The
+	// server takes a gap only at a re-link, so the roots stop before a run
+	// sealed after the chain's last link until the next one (localStop).
 	Gaps []gap `json:"gaps,omitempty"`
+	// LocalFrom is the first batch sealed while config.toml's mode was
+	// local, while it still is: it and every batch after it count as
+	// sealed in local-only mode, until a batch is sealed online again and
+	// the run moves into Gaps (mode). 0 while the mode isn't local.
+	LocalFrom uint64 `json:"local_from,omitempty"`
 	// ChainStart is the first batch of the device's witnessed chain on the
 	// server, 0 while the server holds none or it isn't known yet. Rows
 	// before it are never sent again: the server answers them
@@ -140,24 +153,37 @@ type gap struct {
 	To   uint64 `json:"to"`
 }
 
-// addGap records the batches from a to b as local-only.
+// addGap records the batches from a to b as local-only, as one run with
+// every run it overlaps or touches.
 func (s *saved) addGap(a, b uint64) {
 	if a == 0 || b < a {
 		return
 	}
+	out := make([]gap, 0, len(s.Gaps)+1)
 	for _, g := range s.Gaps {
-		if g.From <= a && b <= g.To {
-			return
+		if g.To+1 < a || b+1 < g.From {
+			out = append(out, g)
+			continue
 		}
+		a, b = min(a, g.From), max(b, g.To)
 	}
-	s.Gaps = append(s.Gaps, gap{From: a, To: b})
+	out = append(out, gap{From: a, To: b})
+	slices.SortFunc(out, func(x, y gap) int { return cmp.Compare(x.From, y.From) })
+	for len(out) > gapsMax {
+		out[1].From = out[0].From
+		out = out[1:]
+	}
+	s.Gaps = out
 }
 
 // localOnly reports whether batch b was sealed in local-only mode: in a
-// recorded gap, or before From where the state read that records the gap
-// hasn't run yet, as for `pairtime privacy show` before an agent's first
-// upload.
+// recorded gap, at or after LocalFrom while the mode is local, or before
+// From where the state read that records the gap hasn't run yet, as for
+// `pairtime privacy show` before an agent's first upload.
 func (s saved) localOnly(b uint64) bool {
+	if s.LocalFrom > 0 && b >= s.LocalFrom {
+		return true
+	}
 	for _, g := range s.Gaps {
 		if g.From <= b && b <= g.To {
 			return true
@@ -165,6 +191,73 @@ func (s saved) localOnly(b uint64) bool {
 	}
 	base := max(s.Next, 1)
 	return s.From > base && b >= base && b < s.From
+}
+
+// mode records that batch b was sealed while config.toml's mode was local
+// (local) or online. The first batch sealed in local mode opens a run at
+// LocalFrom, and the first one sealed online after it closes the run into
+// Gaps, itself included: its records began while the mode was still
+// local, as the first one's began before it was. It reports whether
+// anything changed.
+func (s *saved) mode(b uint64, local bool) bool {
+	switch {
+	case b == 0:
+		return false
+	case local && s.LocalFrom == 0:
+		s.LocalFrom = b
+		return true
+	case !local && s.LocalFrom > 0:
+		s.addGap(s.LocalFrom, max(b, s.LocalFrom))
+		s.LocalFrom = 0
+		return true
+	}
+	return false
+}
+
+// cutLocal ends every run of local-only batches that started before from,
+// the first batch sealed after a re-link, at the batch before it: a re-link
+// sets the mode online (`pairtime login`), and the batches sealed after it
+// went online again even when config.toml's change reached the agent a
+// moment later (D-local-gap). A run that started at or after from is the
+// mode set to local again after the re-link, and stays.
+func (s *saved) cutLocal(from uint64) {
+	if from == 0 {
+		return
+	}
+	if s.LocalFrom > 0 && s.LocalFrom < from {
+		s.addGap(s.LocalFrom, from-1)
+		s.LocalFrom = 0
+	}
+	for i, g := range s.Gaps {
+		if g.From < from && g.To >= from {
+			s.Gaps[i].To = from - 1
+		}
+	}
+}
+
+// localStop returns the first batch, up to last, that the next batch roots
+// can't pass: the first one sealed in local-only mode at or after where
+// they go on from. The server takes no gap without a re-link, and none of
+// those batches may go, so nothing after it goes until `pairtime logout`
+// and `pairtime login` link the device again (D-local-gap). 0 when there
+// is none.
+func (s saved) localStop(last uint64) uint64 {
+	start := max(s.Next, s.From, 1)
+	stop := uint64(0)
+	consider := func(b uint64) {
+		if b <= last && (stop == 0 || b < stop) {
+			stop = b
+		}
+	}
+	if s.LocalFrom > 0 {
+		consider(max(s.LocalFrom, start))
+	}
+	for _, g := range s.Gaps {
+		if g.To >= start {
+			consider(max(g.From, start))
+		}
+	}
+	return stop
 }
 
 // span is a stretch of failed uploads: the first and the last failure's

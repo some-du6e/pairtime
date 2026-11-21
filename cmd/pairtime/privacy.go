@@ -101,8 +101,13 @@ func showUpload(stdout, stderr io.Writer, dirs home.Dirs, creds uploader.Credent
 		fmt.Fprintf(stderr, "pairtime privacy show: can't work out the next upload: %v\n", err)
 		return 1
 	}
+	if p.Stopped > 0 {
+		fmt.Fprint(stderr, uploadsStopped)
+	}
 	if p.JSON == nil {
-		fmt.Fprintf(stderr, "Nothing is waiting to go to %s: it has every batch root and minute this computer has recorded.\n", creds.Server)
+		if p.Stopped == 0 {
+			fmt.Fprintf(stderr, "Nothing is waiting to go to %s: it has every batch root and minute this computer has recorded.\n", creds.Server)
+		}
 		return 0
 	}
 	fmt.Fprint(stderr, describeUpload(p, creds.Server))
@@ -118,6 +123,16 @@ const notSignedIn = `Nothing: this computer uploads nothing. It isn't signed in 
 server, or config.toml says mode = "local", so everything pairtime records
 stays here. pairtime login signs it in, and then this command shows each
 upload before it goes.
+`
+
+// uploadsStopped is what privacy show says while the batch roots stop at a
+// batch sealed in local-only mode (uploader.Preview.Stopped).
+const uploadsStopped = `Uploads are stopped. config.toml said mode = "local" for a while after this
+computer was linked, and nothing pairtime records in local-only mode leaves
+this computer, so nothing it recorded from then on goes. To upload again,
+run pairtime logout, then pairtime login; what it records after that goes
+as usual.
+
 `
 
 // describeUpload says in plain words what upload p holds and where it goes.

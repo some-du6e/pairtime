@@ -28,6 +28,10 @@ type Preview struct {
 	Labels           bool
 	// More is set when more requests wait behind this one.
 	More bool
+	// Stopped is the first batch sealed in local-only mode after the
+	// chain's last link: no batch root from it on goes until the next link,
+	// nor the minutes it holds. 0 for none.
+	Stopped uint64
 }
 
 // PreviewOptions say where an installation keeps its files, and what the
@@ -91,10 +95,19 @@ func Next(o PreviewOptions) (Preview, error) {
 		}
 	}
 	st.prepare(rows)
-	if p, err := readOutbox(o.DataDir, st); err == nil && p != nil {
-		return previewOf(p.plan, true), nil
-	}
+	// As the agent's load does: the link first, then the request waiting
+	// for its retry, which a new link drops.
+	fresh := relinked(st, c)
 	relink(&st, rows, c)
+	stop := st.localStop(rows.last())
+	if p, err := readOutbox(o.DataDir, st); err == nil && p != nil && !fresh {
+		pv := previewOf(p.plan, true)
+		pv.Stopped = stop
+		return pv, nil
+	}
+	if fresh {
+		st.Outbox = nil
+	}
 	rows.trim(max(st.Next, 1))
 	in := planInput{
 		rows:       rows,
@@ -117,7 +130,9 @@ func Next(o PreviewOptions) (Preview, error) {
 	if err != nil {
 		return Preview{}, err
 	}
-	return previewOf(p, false), nil
+	pv := previewOf(p, false)
+	pv.Stopped = stop
+	return pv, nil
 }
 
 // previewOf describes plan p.

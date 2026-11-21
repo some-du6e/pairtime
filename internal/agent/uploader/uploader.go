@@ -132,6 +132,12 @@ type Options struct {
 	State *state.Store
 	// Login gives the sign-in. Nil means the device is never signed in.
 	Login Login
+	// LocalOnly reports whether config.toml's mode is local-only right
+	// now (DESIGN 4.2), with known false while the agent doesn't know, as
+	// before config.toml has read cleanly. Sealed asks it of every batch:
+	// none sealed in local-only mode goes, neither its root nor its
+	// minutes (D-local-gap). Nil means the mode is never local-only.
+	LocalOnly func() (local, known bool)
 	// Params is the table the scorer runs with: its version and hash go
 	// in the labels, and WITNESS_LAG_S reads the witness labels.
 	Params *params.Table
@@ -179,6 +185,10 @@ type Status struct {
 	Fork uint64 `json:"fork,omitempty"`
 	// Retrying is set while a request waits for its retry.
 	Retrying bool `json:"retrying,omitempty"`
+	// Stopped is the first batch sealed in local-only mode after the
+	// chain's last link, which no batch root passes until the next one, 0
+	// for none (saved.localStop).
+	Stopped uint64 `json:"stopped,omitempty"`
 }
 
 // Uploader sends the device's tier-1 data to pairtimed: the batch roots of
@@ -219,6 +229,16 @@ type Uploader struct {
 	seen    map[event.Harness]string
 	running bool
 	status  Status
+	// modeSeen is the mode Sealed last saw, and modes the changes it saw
+	// that applyModes hasn't recorded yet. closed is set once Close has
+	// stopped the loop, after which Sealed records them itself.
+	modeSeen int8
+	modes    []modeChange
+	closed   bool
+
+	// keepMu keeps applyModes to one caller at a time once the loop has
+	// stopped.
+	keepMu sync.Mutex
 
 	// The rest belongs to the loop's goroutine.
 	st        saved
@@ -252,6 +272,28 @@ type sealedRow struct {
 // device isn't signed in. Past it the loop reads the rows from
 // batches.seg instead.
 const sealedQueueMax = 1024
+
+// The modes Sealed sees: modeUnknown before it has seen one, or after the
+// uploader's place changed under it, so that the next batch records its
+// mode again.
+const (
+	modeUnknown int8 = iota
+	modeOnline
+	modeLocal
+)
+
+// modeChange is a batch whose mode differs from the batch's before it.
+type modeChange struct {
+	b     uint64
+	local bool
+}
+
+// modeQueueMax bounds the mode changes waiting for the loop.
+const modeQueueMax = 64
+
+// localOnlyProblem is what doctor hears while the batch roots stop at a
+// batch sealed in local-only mode (saved.localStop).
+const localOnlyProblem = `pairtime has stopped uploading, because config.toml's mode was "local" for a while after this computer was linked, and nothing it records in local-only mode may leave it; to upload again, run pairtime logout, then pairtime login`
 
 // pendingReq is a request waiting for its retry: the same body goes again
 // with the same Idempotency-Key (ingest-v1 2.10).
@@ -349,6 +391,10 @@ func (u *Uploader) Sealed(b ledger.Batch) {
 			}
 		}
 	}
+	local, known := false, false
+	if u.opts.LocalOnly != nil {
+		local, known = u.opts.LocalOnly()
+	}
 	u.mu.Lock()
 	if len(u.sealed) < sealedQueueMax {
 		u.sealed = append(u.sealed, sealedRow{row: b.Row, sealedAt: b.SealedAt})
@@ -363,9 +409,85 @@ func (u *Uploader) Sealed(b ledger.Batch) {
 			u.seen[h] = v
 		}
 	}
+	changed := false
+	if m := modeOf(local); known && m != u.modeSeen {
+		u.modeSeen, changed = m, true
+		u.modes = append(u.modes, modeChange{b: b.Row.B, local: local})
+		if len(u.modes) > modeQueueMax {
+			// The loop hasn't taken them for a long while. Every batch
+			// from the first change on counts as local-only, so none that
+			// was goes, and the next batch records its mode again.
+			u.modes = []modeChange{{b: u.modes[0].b, local: true}}
+			u.modeSeen = modeUnknown
+		}
+	}
+	closed := u.closed
 	u.mu.Unlock()
+	if changed {
+		if closed {
+			u.applyModes()
+		} else {
+			u.Wake()
+		}
+	}
 	if soon {
 		u.Soon()
+	}
+}
+
+// modeOf is the mode Sealed records for a batch sealed in local-only
+// mode (local) or not.
+func modeOf(local bool) int8 {
+	if local {
+		return modeLocal
+	}
+	return modeOnline
+}
+
+// applyModes records the mode changes Sealed saw in the uploader's place
+// (saved.mode): in u.st while it is loaded, and else in state.json, where
+// the next sign-in reads them. The loop calls it before anything else
+// after a wake, so a batch's mode is recorded before its root can be
+// planned, and Close and Sealed call it once the loop has stopped.
+func (u *Uploader) applyModes() {
+	u.keepMu.Lock()
+	defer u.keepMu.Unlock()
+	u.mu.Lock()
+	changes := u.modes
+	u.modes = nil
+	u.mu.Unlock()
+	if len(changes) == 0 {
+		return
+	}
+	record := func(st *saved) bool {
+		changed := false
+		for _, c := range changes {
+			changed = st.mode(c.b, c.local) || changed
+		}
+		return changed
+	}
+	if u.loaded {
+		if record(&u.st) {
+			u.save()
+		}
+		return
+	}
+	var st saved
+	if _, err := u.opts.State.Get(StateKey, &st); err != nil {
+		st = saved{}
+	}
+	if chain := u.opts.Ledger.DeviceID(); st.Chain != chain {
+		st = saved{Chain: chain, Harnesses: st.Harnesses}
+	}
+	if !record(&st) {
+		return
+	}
+	if err := u.opts.State.Put(StateKey, st); err != nil {
+		u.log.Warn("couldn't keep which batches were sealed in local-only mode", "err", err)
+		return
+	}
+	if err := u.opts.State.Save(); err != nil {
+		u.log.Warn("couldn't save which batches were sealed in local-only mode", "err", err)
 	}
 }
 
@@ -456,6 +578,10 @@ func (u *Uploader) Close() {
 		if started {
 			<-u.done
 		}
+		u.mu.Lock()
+		u.closed = true
+		u.mu.Unlock()
+		u.applyModes()
 	})
 }
 
@@ -484,6 +610,7 @@ func (u *Uploader) run() {
 		case <-tick:
 		case <-timer.C:
 		}
+		u.applyModes()
 		if wait := u.notBefore.Sub(u.now()); wait > 0 {
 			timer.Reset(wait)
 			continue
@@ -509,6 +636,7 @@ func (u *Uploader) run() {
 // at once: a long upload goes request after request, and buckets that
 // waited for the receipts a request brought go right after it.
 func (u *Uploader) cycle() bool {
+	u.applyModes()
 	var c Credentials
 	ok := false
 	if u.opts.Login != nil {
@@ -525,6 +653,7 @@ func (u *Uploader) cycle() bool {
 		// Nothing tries while signed out, so no outage span runs on.
 		u.backoff.ok()
 		u.setProblem("login", "")
+		u.setProblem("local-only", "")
 		return false
 	}
 	if c.Token == u.blocked {
@@ -548,6 +677,13 @@ func (u *Uploader) cycle() bool {
 		return false // stopping
 	}
 	u.takeSealed()
+	stop := u.st.localStop(u.rows.last())
+	if stop > 0 {
+		u.setProblem("local-only", localOnlyProblem)
+	} else {
+		u.setProblem("local-only", "")
+	}
+	u.setStatus(func(s *Status) { s.Stopped = stop })
 	p, key, err := u.next()
 	if err != nil {
 		u.setProblem("local", fmt.Sprintf("pairtime can't build its next upload: %v", err))
@@ -559,8 +695,10 @@ func (u *Uploader) cycle() bool {
 		u.setProblem("local", "")
 	}
 	if p.body.Empty() {
-		if !sameMarks(p.marks, u.st.Marks) {
-			u.st.Marks = p.marks
+		// Lines that only passed over, and revisions withheld, move the
+		// marks and what the minutes' credit rests on all the same.
+		if !sameMarks(p.marks, u.st.Marks) || !maps.Equal(p.sent, u.st.Sent) {
+			u.st.Marks, u.st.Sent = p.marks, p.sent
 			u.save()
 		}
 		return false
@@ -598,10 +736,12 @@ func (u *Uploader) flush() bool {
 
 // load reads the uploader's place from state.json and the chain's rows
 // from the ledger, the first time, and when the sign-in or the chain
-// changed. Batches Sealed took meanwhile are added after.
+// changed, a re-link included: `pairtime logout` and `pairtime login`
+// within one wake leave no signed-out wake between them, and only the new
+// linked_at shows it. Batches Sealed took meanwhile are added after.
 func (u *Uploader) load(c Credentials) error {
 	chain := u.opts.Ledger.DeviceID()
-	if u.loaded && u.st.Chain == chain && u.st.Server == c.Server && u.st.Device == c.DeviceID {
+	if u.loaded && u.st.Chain == chain && u.st.Server == c.Server && u.st.Device == c.DeviceID && !relinked(u.st, c) {
 		return nil
 	}
 	var st saved
@@ -636,28 +776,51 @@ func (u *Uploader) load(c Credentials) error {
 	if rows.device != chain {
 		return fmt.Errorf("the ledger's batches.seg is %s's chain, and the writer writes %s's", rows.device, chain)
 	}
+	fresh := relinked(st, c)
 	relink(&st, rows, c)
 	u.st, u.rows, u.loaded, u.synced = st, rows, true, false
+	// The place may have changed under what Sealed last saw, as when a
+	// re-link ended a local-only run: the next batch records its mode again.
+	u.mu.Lock()
+	u.modeSeen = modeUnknown
+	u.mu.Unlock()
 	u.lastReq = max(u.lastReq, st.Req)
 	u.pending = u.readOutbox()
-	u.setStatus(func(s *Status) { s.Next, s.Fork, s.Retrying = st.Next, st.Fork, u.pending != nil })
+	if fresh && u.pending != nil {
+		// A request from before the link may carry roots the gap now
+		// holds, which the server never takes: its items are planned
+		// again from where they stood.
+		u.pending = nil
+		u.removeOutbox()
+		u.save()
+	}
+	u.setStatus(func(s *Status) { s.Next, s.Fork, s.Retrying = u.st.Next, u.st.Fork, u.pending != nil })
 	return nil
+}
+
+// relinked reports whether c is a link st hasn't seen: a first sign-in, or
+// a re-link with a new linked_at (relink).
+func relinked(st saved, c Credentials) bool {
+	return !c.LinkedAt.IsZero() && c.LinkedAt.UnixMilli() != st.LinkedAt
 }
 
 // relink sets where the device's chain goes on from for the sign-in c: the
 // first batch sealed after it, for a new sign-in or a re-link, a new token
 // after pairtime logout, which account.json's new linked_at shows. The
 // batches sealed before it, in local-only mode, never go, nor their
-// minutes, and the server takes the gap after a re-link (D-local-gap).
-// The same sign-in keeps its place: a batch skipped without a re-link is
-// still chain_gap, so nothing is skipped then.
+// minutes, and the server takes the gap after a re-link (D-local-gap). A
+// run of batches sealed in local-only mode that started before it ends
+// there (cutLocal). The same sign-in keeps its place: a batch skipped
+// without a re-link is still chain_gap, so nothing is skipped then.
 func relink(st *saved, rows *rowIndex, c Credentials) {
 	if la := c.LinkedAt.UnixMilli(); !c.LinkedAt.IsZero() && la != st.LinkedAt {
 		st.From, st.LinkedAt = firstLinked(rows, c.LinkedAt), la
+		st.cutLocal(st.From)
 		return
 	}
 	if st.From == 0 {
 		st.From = firstLinked(rows, c.LinkedAt)
+		st.cutLocal(st.From)
 	}
 }
 
@@ -1482,7 +1645,7 @@ func (u *Uploader) setProblem(source, msg string) {
 		return
 	}
 	var all []string
-	for _, s := range []string{"login", "server", "chain", "receipts", "buckets", "local"} {
+	for _, s := range []string{"login", "local-only", "server", "chain", "receipts", "buckets", "local"} {
 		if m := u.problems[s]; m != "" {
 			all = append(all, m)
 		}

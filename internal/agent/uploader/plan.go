@@ -70,14 +70,17 @@ type planInput struct {
 // entry is one revision line a plan read from the bucket store: its day,
 // the mark just past it, and the bucket it sends, nil for a line it only
 // passes over, with its minute, what its credit rests on, and whether the
-// minute is still pending.
+// minute is still pending. A withheld line sends nothing and keeps what
+// its credit rests on, a batch sealed in local-only mode, so the minute's
+// later revisions are withheld too.
 type entry struct {
-	day     string
-	mark    store.Mark
-	bucket  *event.MinuteBucket
-	minute  int64
-	rev     sentRev
-	pending bool
+	day      string
+	mark     store.Mark
+	bucket   *event.MinuteBucket
+	minute   int64
+	rev      sentRev
+	pending  bool
+	withheld bool
 }
 
 // sentKeep is how long before the newest pending minute an entry of
@@ -145,13 +148,17 @@ func makePlan(in planInput) (plan, error) {
 }
 
 // rootsOf returns the batch roots that go next: up to n from st.Next on,
-// and none after a fork.
+// none after a fork, and none from the first batch sealed in local-only
+// mode since the chain's last link on, until the next link (localStop).
 func rootsOf(in planInput, n int) []Root {
 	if in.st.Fork != 0 {
 		return nil
 	}
 	var roots []Root
 	for _, r := range in.rows.rowsFrom(max(in.st.Next, in.st.From, 1), n) {
+		if in.st.localOnly(r.B) {
+			break
+		}
 		roots = append(roots, Root{B: r.B, N: r.N, Root: r.Root, Head: r.Head, Prev: r.Prev})
 	}
 	return roots
@@ -216,8 +223,20 @@ func bucketsOf(in planInput, n int) ([]entry, map[string]bool, []string, error) 
 			// The credit rests on the batch that last changed it: a
 			// revision that only changes the minute's state keeps it.
 			rev := sentRev{H: creditHash(b), B: b.Batch}
-			if prev, ok := sent[ms]; ok && prev.H == rev.H {
+			prev, had := sent[ms]
+			if had && (prev.H == rev.H || in.st.localOnly(prev.B)) {
 				rev.B = prev.B
+			}
+			if in.st.localOnly(rev.B) {
+				// Its credit rests on records sealed in local-only mode, as a
+				// prompt after pairtime logout credits the minutes before it.
+				// It never goes, nor does any later revision of its minute:
+				// the server keeps the last one it took, and settles it
+				// (D-local-gap; D-server-settles-pending).
+				sent[ms] = rev
+				out = append(out, entry{day: f.Day, mark: r.Mark, minute: ms, rev: rev, withheld: true})
+				took++
+				return true
 			}
 			w, ok := witnessOf(in.rows, ms, rev.B, rd)
 			if !ok {
@@ -295,6 +314,10 @@ func assemble(in planInput, roots []Root, entries []entry, days map[string]bool)
 			delete(p.marks, e.day)
 		} else {
 			p.marks[e.day] = e.mark
+		}
+		if e.withheld {
+			p.sent[e.minute] = e.rev
+			continue
 		}
 		if e.bucket == nil {
 			continue

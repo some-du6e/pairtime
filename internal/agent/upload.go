@@ -18,6 +18,34 @@ import (
 // config; until then config.toml can only say "local".
 const modeOnline = "online"
 
+// What agent.mode holds: config.toml's mode as it last read cleanly.
+const (
+	modeUnread     int32 = iota // it hasn't read cleanly since the start
+	modeReadOnline              // mode = "online"
+	modeReadLocal               // any other mode: local-only (DESIGN 4.2)
+)
+
+// modeRead is the agent.mode of a config.toml that read as cfg.
+func modeRead(cfg config.Config) int32 {
+	if string(cfg.Mode) == modeOnline {
+		return modeReadOnline
+	}
+	return modeReadLocal
+}
+
+// localOnly is the uploader's LocalOnly: whether config.toml keeps the
+// device local-only, as it last read cleanly, and not known before it
+// has. Batches sealed then never go, nor their minutes (D-local-gap).
+func (a *agent) localOnly() (local, known bool) {
+	switch a.mode.Load() {
+	case modeReadLocal:
+		return true, true
+	case modeReadOnline:
+		return false, true
+	}
+	return false, false
+}
+
 // SignedIn returns the sign-in that uploads go with, and false while there
 // is none, by docs/spec/device-auth-v1.md 8's rule: an upload goes out
 // only while config.toml's mode is "online" and the device keystore holds
@@ -59,13 +87,14 @@ func (a *agent) startUploader(w *ledger.Writer) func() {
 		Login: uploader.LoginFunc(func() (uploader.Credentials, bool) {
 			return SignedIn(a.dirs, a.config())
 		}),
-		Params:  a.table,
-		Device:  score.Device{},
-		Started: a.started,
-		Sched:   a.sched,
-		Flush:   flush,
-		Problem: func(msg string) { a.setProblem("uploader", msg) },
-		Log:     a.log.With("component", "uploader"),
+		LocalOnly: a.localOnly,
+		Params:    a.table,
+		Device:    score.Device{},
+		Started:   a.started,
+		Sched:     a.sched,
+		Flush:     flush,
+		Problem:   func(msg string) { a.setProblem("uploader", msg) },
+		Log:       a.log.With("component", "uploader"),
 	})
 	if err != nil {
 		a.setProblem("uploader", fmt.Sprintf("the agent uploads nothing, because its uploader can't start: %v", err))
