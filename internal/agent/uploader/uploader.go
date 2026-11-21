@@ -977,11 +977,14 @@ func (u *Uploader) labels() Labels {
 	return currentLabels(u.build, u.opts.Params, u.opts.Device, u.st.Harnesses)
 }
 
-// currentLabels builds DESIGN 4.3's labels.
+// currentLabels builds DESIGN 4.3's labels. The scoring version is the
+// scorer's, the v of every bucket it writes (ingest-v1 2.3.4), which moves
+// apart from the parameter table's on a PATCH or a MAJOR rule change with
+// no new parameter.
 func currentLabels(build string, table *params.Table, dev score.Device, harnesses map[event.Harness]string) Labels {
 	return Labels{
 		ClientBuild:    build,
-		ScoringVersion: table.Version(),
+		ScoringVersion: score.Version(),
 		Params:         table.Hash(),
 		Harnesses:      sortedHarnesses(harnesses),
 		TypingModule:   dev.TypingModule,

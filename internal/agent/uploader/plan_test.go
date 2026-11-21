@@ -282,6 +282,11 @@ func TestLabelsDue(t *testing.T) {
 			}
 		})
 	}
+	t.Run("the labels name the scorer's version, every bucket's v, and the table's hash", func(t *testing.T) {
+		if l.ScoringVersion != score.Version() || l.Params != newestTable().Hash() {
+			t.Errorf("scoring_version %q and params %q; want %q and %q", l.ScoringVersion, l.Params, score.Version(), newestTable().Hash())
+		}
+	})
 }
 
 // TestCreditBatch checks what a revision's reading rests on: a revision

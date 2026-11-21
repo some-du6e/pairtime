@@ -39,6 +39,7 @@ import (
 	"github.com/some-du6e/pairtime/pkg/event"
 	pkgledger "github.com/some-du6e/pairtime/pkg/ledger"
 	"github.com/some-du6e/pairtime/pkg/params"
+	"github.com/some-du6e/pairtime/pkg/score"
 )
 
 // account is the device owner's account id.
@@ -67,7 +68,7 @@ func bucket(table *params.Table, deviceID string, minute time.Time, credited flo
 			slots[i] = event.BucketSlot{Project: "p_test", Credited: cr, Why: event.ReasonPrompt, Kind: event.ReasonPrompt.Activity(), Ev: event.EvidenceA}
 		}
 	}
-	return store.Bucket{V: table.Version(), Params: table.Hash(), Minute: minute.UTC(), Device: deviceID, Slots: slots,
+	return store.Bucket{V: score.Version(), Params: table.Hash(), Minute: minute.UTC(), Device: deviceID, Slots: slots,
 		CreditedS: credited, Uncredited: map[event.Reason]float64{event.ReasonNoAnchor: 10}, AgentRunningS: 20, State: st,
 		Anchors: []string{event.NewEventID(minute)}, Projects: map[string]store.ProjectMinute{"p_test": {AgentS: 20, AgentOnlyS: 20}}}
 }

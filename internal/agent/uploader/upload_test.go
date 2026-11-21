@@ -23,6 +23,7 @@ import (
 	"github.com/some-du6e/pairtime/pkg/event"
 	pkgledger "github.com/some-du6e/pairtime/pkg/ledger"
 	"github.com/some-du6e/pairtime/pkg/params"
+	"github.com/some-du6e/pairtime/pkg/score"
 )
 
 const testToken = "ptd_0123456789abcdefghijABCDEFGHIJxyzw01ab"
@@ -47,7 +48,7 @@ func testBucket(table *params.Table, device string, minute time.Time, credited f
 		}
 	}
 	return store.Bucket{
-		V: table.Version(), Params: table.Hash(), Minute: minute.UTC(), Device: device, Slots: slots,
+		V: score.Version(), Params: table.Hash(), Minute: minute.UTC(), Device: device, Slots: slots,
 		CreditedS: credited, Uncredited: map[event.Reason]float64{event.ReasonNoAnchor: 10},
 		AgentRunningS: 20, State: st,
 		// Anchors stay on the device, and agent_only goes (D-bucket-agent-only).
