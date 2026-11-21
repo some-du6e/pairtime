@@ -54,8 +54,6 @@ type Facts struct {
 	Keystore Keystore
 	// Signing is what this binary is and how it is signed.
 	Signing Signing
-	// Now is when doctor ran.
-	Now time.Time
 }
 
 // Checks works out doctor's lines from f, in the order DESIGN 5.9 lists

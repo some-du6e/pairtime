@@ -40,10 +40,11 @@ terminal can reach. doctor sends nothing anywhere.
 
   --json    Print the checks as JSON, as described in
             docs/schema/cli-doctor.schema.json.
-  --report  Print the footprint report instead: how much memory, CPU and
-            disk time pairtime takes on this computer, with nothing in it
-            that names you or this computer, so you can choose to share
-            it.
+  --report  Print the footprint report instead: the memory and CPU
+            pairtime's agent takes, how fast its hook answers, and what
+            this computer is, with nothing in it that names you or the
+            computer, so you can choose to share it. It watches the agent
+            at rest for a minute first.
 
 Exit status:
   0  no check failed
@@ -141,13 +142,13 @@ func runDoctor(args []string, stdout, stderr io.Writer) int {
 // gatherFacts finds out what doctor's checks need: the running agent's
 // status, over its socket, and what this computer holds.
 func gatherFacts(dirs home.Dirs) doctor.Facts {
-	f := doctor.Facts{Version: version.Get().Version, AskWait: doctorWait, Now: viewNow()}
+	f := doctor.Facts{Version: version.Get().Version, AskWait: doctorWait}
 	for _, h := range adapters.Default.Harnesses() {
 		f.Adapters = append(f.Adapters, string(h))
 	}
 	f.Hooks = doctorHooks()
 	for i, h := range f.Hooks {
-		if len(h.Events) > 0 && !h.Disabled && h.ReadError == "" {
+		if len(h.Events) > 0 && len(h.Exes) > 0 && !h.Disabled && h.ReadError == "" {
 			trips, err := doctorRoundTrips(h.Exes[0], h.Harness, doctorHookCalls)
 			if err != nil {
 				f.Hooks[i].TripError = err.Error()
@@ -309,7 +310,7 @@ func runReport(dirs home.Dirs, stdout, stderr io.Writer) int {
 	}
 	exe := ""
 	for _, h := range doctorHooks() {
-		if len(h.Events) == 0 || h.Disabled || h.ReadError != "" {
+		if len(h.Events) == 0 || len(h.Exes) == 0 || h.Disabled || h.ReadError != "" {
 			continue
 		}
 		trips, err := doctorRoundTrips(h.Exes[0], h.Harness, doctorReportCalls)
