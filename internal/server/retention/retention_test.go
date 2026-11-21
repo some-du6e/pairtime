@@ -206,7 +206,7 @@ func TestDesignPeriods(t *testing.T) {
 		{name: "presence, focus, typing aggregates and sketches are kept 90 days on the device", id: "device.activity", where: "Device", data: "Presence and focus slots", re: `^(\d+) days$`},
 		{name: "ledger records are kept 180 days on the device, or longer for a submission", id: "device.ledger", where: "Device", data: "Ledger records and batch roots", re: `^(\d+) days, or longer while a submission using them is inside its spot-check window$`},
 		{name: "minute buckets are kept 180 days on the device", id: "device.buckets", where: "Device", data: "Minute buckets", re: `^(\d+) days; day rollups and coach records until the teen deletes them$`},
-		{name: "hook calls the agent holds are dropped at the first start after 7 days on the device", id: "device.held_calls", where: "Device", data: "Hook calls the agent hasn't parsed yet", re: `^Until parsed; dropped at the first start after (\d+) days, since expiry runs only at a start`},
+		{name: "hook calls the agent holds are kept 7 days at most on the device", id: "device.held_calls", where: "Device", data: "Hook calls the agent hasn't parsed yet", re: `^Until parsed; kept (\d+) days at most`},
 		{name: "commit records wait for the uploader 180 days on the device", id: "device.commits", where: "Device", data: "Commit records waiting for the uploader", re: `^(\d+) days$`},
 		{name: "records of past uploads are kept 90 days on the device", id: "device.uploads", where: "Device", data: "Records of past uploads", re: `^(\d+) days$`},
 		{name: "device rows are kept 90 days past the device's lifetime", id: "server.devices", where: "Server", data: "`device_id`, OS family", re: `^Device lifetime plus (\d+) days$`},
