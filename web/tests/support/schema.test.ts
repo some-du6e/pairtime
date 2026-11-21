@@ -13,6 +13,7 @@ const root: Schema = {
 				properties: {
 					n: { type: 'integer', minimum: 0, maximum: 10 },
 					at: { type: 'string', format: 'date-time' },
+					day: { type: 'string', format: 'date' },
 					mode: { type: 'string', enum: ['local'] },
 					status: { type: 'string', const: 'stopping' },
 					list: { type: 'array', items: { type: 'number' } },
@@ -42,6 +43,10 @@ describe('check', () => {
 		{ name: 'const refuses any other value', value: { n: 1, at: '2026-11-19T10:49:00Z', status: 'stopped' }, errors: 1 },
 		{ name: 'date-time takes RFC 3339 with an offset and fractions', value: { n: 1, at: '2026-11-19T10:49:00.123+01:00' }, errors: 0 },
 		{ name: 'date-time refuses a date without a time', value: { n: 1, at: '2026-11-19' }, errors: 1 },
+		{ name: 'date takes YYYY-MM-DD', value: { n: 1, at: '2026-11-19T10:49:00Z', day: '2026-11-19' }, errors: 0 },
+		{ name: 'date refuses a date-time', value: { n: 1, at: '2026-11-19T10:49:00Z', day: '2026-11-19T10:49:00Z' }, errors: 1 },
+		{ name: 'date refuses a day the month lacks', value: { n: 1, at: '2026-11-19T10:49:00Z', day: '2026-02-30' }, errors: 1 },
+		{ name: 'date refuses one-digit months and days', value: { n: 1, at: '2026-11-19T10:49:00Z', day: '2026-1-9' }, errors: 1 },
 		{ name: 'a wrong type at the top fails once', value: [], errors: 1 },
 	];
 	for (const c of cases) {

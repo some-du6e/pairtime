@@ -3,10 +3,14 @@
 package text
 
 import (
+	"bytes"
+	_ "embed"
+	"encoding/json"
 	"maps"
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -30,6 +34,116 @@ var (
 		KeyLevelsHead, KeyLevelLine, KeyAgentDown, KeyAgentOld, KeyAgentSlow, KeyAgentError, KeyStoreError,
 	}
 )
+
+// casesJSON holds the test cases this package shares with its TypeScript
+// port, web/src/local/text.ts. text.test.ts and copy.test.ts read the same
+// file, so a case changed here fails there too until the port follows.
+// Cases JSON can't hold, such as bytes that aren't UTF-8, stay in this file.
+//
+//go:embed testdata/cases.json
+var casesJSON []byte
+
+// caseFile is testdata/cases.json.
+type caseFile struct {
+	Comment  string `json:"$comment"`
+	Duration []struct {
+		Name string  `json:"name"`
+		S    float64 `json:"s"`
+		Want string  `json:"want"`
+	} `json:"duration"`
+	Clock []struct {
+		Name        string  `json:"name"`
+		You         float64 `json:"you"`
+		LevelC      float64 `json:"level_c"`
+		Calibrating bool    `json:"calibrating"`
+		Agents      []struct {
+			Name string  `json:"name"`
+			S    float64 `json:"s"`
+		} `json:"agents"`
+		Want string `json:"want"`
+	} `json:"clock"`
+	Percentages []struct {
+		Name  string    `json:"name"`
+		Parts []float64 `json:"parts"`
+		Want  []int     `json:"want"`
+	} `json:"percentages"`
+	// Each words case calls Func, a function of this package, with Args
+	// (wordFuncs).
+	Words []struct {
+		Name string   `json:"name"`
+		Func string   `json:"func"`
+		Args []string `json:"args"`
+		Want string   `json:"want"`
+	} `json:"words"`
+	Scolding struct {
+		Alternatives []string `json:"alternatives"`
+		Marks        []string `json:"marks"`
+		Cases        []struct {
+			Name string   `json:"name"`
+			S    string   `json:"s"`
+			Want []string `json:"want"`
+		} `json:"cases"`
+	} `json:"scolding"`
+
+	// scolding matches words that would make a view nag, shame or set a
+	// target (DESIGN 3.8; PA 4.3, 4.4): streak pressure, judgment, goals and
+	// ratios between you and the agent, which Scolding.Alternatives lists.
+	// It matches whole words in any case, so "permission" doesn't trip
+	// "miss" nor "close" "lose", and a word right after a slash is a
+	// command's name, such as Claude Code's /goal (SM 6.4). copy.test.ts
+	// builds the dashboard's matcher from the same list the same way.
+	scolding *regexp.Regexp
+}
+
+// loadCases decodes testdata/cases.json once. It refuses a field it doesn't
+// know, so a misspelled one can't leave a case's value at zero.
+var loadCases = sync.OnceValues(func() (*caseFile, error) {
+	dec := json.NewDecoder(bytes.NewReader(casesJSON))
+	dec.DisallowUnknownFields()
+	var c caseFile
+	if err := dec.Decode(&c); err != nil {
+		return nil, err
+	}
+	re, err := regexp.Compile(`(?i)(?:^|[^\w/])(` + strings.Join(c.Scolding.Alternatives, "|") + `)\b`)
+	if err != nil {
+		return nil, err
+	}
+	c.scolding = re
+	return &c, nil
+})
+
+// shared returns testdata/cases.json, or stops t.
+func shared(t *testing.T) *caseFile {
+	t.Helper()
+	c, err := loadCases()
+	if err != nil {
+		t.Fatalf("testdata/cases.json: %v", err)
+	}
+	return c
+}
+
+func TestSharedCases(t *testing.T) {
+	c := shared(t)
+	cases := []struct {
+		name string
+		n    int
+	}{
+		{"the duration table isn't empty", len(c.Duration)},
+		{"the clock table isn't empty", len(c.Clock)},
+		{"the percentages table isn't empty", len(c.Percentages)},
+		{"the words table isn't empty", len(c.Words)},
+		{"the scolding list has words", len(c.Scolding.Alternatives)},
+		{"the scolding list has marks", len(c.Scolding.Marks)},
+		{"the scolding table isn't empty", len(c.Scolding.Cases)},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.n == 0 {
+				t.Error("testdata/cases.json has none, so the tests that read it would pass with nothing checked")
+			}
+		})
+	}
+}
 
 // entry is one string of the catalog, with the placeholders it may use.
 type entry struct {
@@ -128,32 +242,26 @@ func TestPlaceholders(t *testing.T) {
 	}
 }
 
-// scolding matches words that would make a view nag, shame or set a target
-// (DESIGN 3.8; PA 4.3, 4.4): streak pressure, judgment, goals and ratios
-// between you and the agent. It matches whole words in any case, so
-// "permission" doesn't trip "miss" nor "close" "lose", and a word right
-// after a slash is a command's name, such as Claude Code's /goal (SM 6.4).
-var scolding = regexp.MustCompile(`(?i)(?:^|[^\w/])(streaks?|don't break|keep it up|los(?:e|es|ing|t)|miss(?:ed|es|ing)?|behind|lazy|wast(?:e|ed|es|ing)|only counted|should|must|have to|need to|fail(?:ed|s|ing)?|goals?|targets?|ratios?|uncredited|not counted|doesn't count)\b`)
-
-// scolds returns what in s scolds: a scolding word, or "%" or "!", which
-// turn time into a ratio or a cheer.
-func scolds(s string) []string {
+// scolds returns what in s scolds: a scolding word, or a mark, "%" or "!",
+// which turn time into a ratio or a cheer.
+func (c *caseFile) scolds(s string) []string {
 	var out []string
-	for _, m := range scolding.FindAllStringSubmatch(s, -1) {
+	for _, m := range c.scolding.FindAllStringSubmatch(s, -1) {
 		out = append(out, m[1])
 	}
-	for _, c := range []string{"%", "!"} {
-		if strings.Contains(s, c) {
-			out = append(out, c)
+	for _, mark := range c.Scolding.Marks {
+		if strings.Contains(s, mark) {
+			out = append(out, mark)
 		}
 	}
 	return out
 }
 
 func TestNothingScolds(t *testing.T) {
+	c := shared(t)
 	for _, e := range entries(English()) {
 		t.Run(e.where+" doesn't scold, set a target or count a streak", func(t *testing.T) {
-			if got := scolds(e.s); len(got) > 0 {
+			if got := c.scolds(e.s); len(got) > 0 {
 				t.Errorf("%q has %q", e.s, got)
 			}
 		})
@@ -161,28 +269,11 @@ func TestNothingScolds(t *testing.T) {
 }
 
 func TestScolds(t *testing.T) {
-	cases := []struct {
-		name string
-		s    string
-		want []string
-	}{
-		{"a streak scolds", "Keep your streak", []string{"streak"}},
-		{"a word in capitals scolds as well", "You MISSED a day", []string{"MISSED"}},
-		{"a target and a ratio scold", "your target ratio", []string{"target", "ratio"}},
-		{"a percent sign scolds", "40% of it", []string{"%"}},
-		{"an exclamation mark scolds", "Well done!", []string{"!"}},
-		{"permission doesn't trip miss", "you said no to a permission Claude asked for", nil},
-		{"submission doesn't trip miss", "your submission", nil},
-		{"close doesn't trip lose", "close the editor", nil},
-		{"duration and calibration don't trip ratio", "the duration while calibration runs", nil},
-		{"a slash command named goal is its name, not a goal", "the /goal prompt", nil},
-		{"goal as a word scolds", "your goal for today", []string{"goal"}},
-		{"wasted scolds as waste does", "wasted time", []string{"wasted"}},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := scolds(tc.s); !slices.Equal(got, tc.want) {
-				t.Errorf("scolds(%q) = %q, want %q", tc.s, got, tc.want)
+	c := shared(t)
+	for _, tc := range c.Scolding.Cases {
+		t.Run(tc.Name, func(t *testing.T) {
+			if got := c.scolds(tc.S); !slices.Equal(got, tc.Want) {
+				t.Errorf("scolds(%q) = %q, want %q", tc.S, got, tc.Want)
 			}
 		})
 	}
@@ -209,58 +300,25 @@ func TestEnglishParses(t *testing.T) {
 }
 
 func TestDuration(t *testing.T) {
-	cases := []struct {
-		name string
-		s    float64
-		want string
-	}{
-		{"nothing is 0m", 0, "0m"},
-		{"less than a second is 0m", 0.5, "0m"},
-		{"a negative number is 0m", -30, "0m"},
-		{"seconds alone below a minute", 45, "45s"},
-		{"a half second rounds down", 45.5, "45s"},
-		{"minutes and seconds below an hour", 265, "4m 25s"},
-		{"whole minutes drop the seconds", 720, "12m"},
-		{"hours and minutes from an hour up, seconds dropped", 4339, "1h 12m"},
-		{"whole hours drop the minutes", 7200, "2h"},
-		{"an hour and a few seconds is the hour", 3605, "1h"},
-		{"59 minutes 59 seconds stays below the hour", 3599, "59m 59s"},
-		{"SM 6.4's agent-only night", 23180, "6h 26m"},
-		{"a huge number doesn't overflow", 1e300, "277777777h 46m"},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := Duration(tc.s); got != tc.want {
-				t.Errorf("Duration(%v) = %q, want %q", tc.s, got, tc.want)
+	for _, tc := range shared(t).Duration {
+		t.Run(tc.Name, func(t *testing.T) {
+			if got := Duration(tc.S); got != tc.Want {
+				t.Errorf("Duration(%v) = %q, want %q", tc.S, got, tc.Want)
 			}
 		})
 	}
 }
 
 func TestClock(t *testing.T) {
-	claude := AgentClock{Name: "Claude", S: 9600}
-	cases := []struct {
-		name        string
-		you, levelC float64
-		calibrating bool
-		agents      []AgentClock
-		want        string
-	}{
-		{"your time then the agent's, as DESIGN 3.8 writes it", 4320, 0, false, []AgentClock{claude}, "you 1h 12m · Claude 2h 40m"},
-		{"no agent time shows your time alone", 265, 0, false, nil, "you 4m 25s"},
-		{"an agent with no time is left out", 265, 0, false, []AgentClock{{Name: "Cursor", S: 0.5}}, "you 4m 25s"},
-		{"two agents keep their order", 60, 0, false, []AgentClock{claude, {Name: "Codex", S: 300}}, "you 1m · Claude 2h 40m · Codex 5m"},
-		{"level-C time is labeled on the clock (D11)", 4320, 1200, false, []AgentClock{claude}, "you 1h 12m, 20m level C · Claude 2h 40m"},
-		{"under a second of level C isn't labeled", 4320, 0.5, false, []AgentClock{claude}, "you 1h 12m · Claude 2h 40m"},
-		{"calibrating hides your time and keeps the agent's", 4320, 0, true, []AgentClock{claude}, "you calibrating · Claude 2h 40m"},
-		{"calibrating hides your level-C time too", 4320, 1200, true, []AgentClock{claude}, "you calibrating · Claude 2h 40m"},
-		{"nothing yet is 0m", 0, 0, false, nil, "you 0m"},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			got := Clock(tc.you, tc.levelC, tc.calibrating, tc.agents)
-			if got != tc.want {
-				t.Errorf("Clock = %q, want %q", got, tc.want)
+	for _, tc := range shared(t).Clock {
+		t.Run(tc.Name, func(t *testing.T) {
+			agents := make([]AgentClock, len(tc.Agents))
+			for i, a := range tc.Agents {
+				agents[i] = AgentClock{Name: a.Name, S: a.S}
+			}
+			got := Clock(tc.You, tc.LevelC, tc.Calibrating, agents)
+			if got != tc.Want {
+				t.Errorf("Clock = %q, want %q", got, tc.Want)
 			}
 			if strings.ContainsAny(got, "%/") {
 				t.Errorf("Clock = %q shows a ratio", got)
@@ -269,37 +327,70 @@ func TestClock(t *testing.T) {
 	}
 }
 
+// oneThenPairs is wordFuncs' argument count for a function that takes one
+// argument and then pairs of name and value, as Phrase and Fill do.
+const oneThenPairs = -1
+
+// wordFuncs calls the function a words case in testdata/cases.json names,
+// with the case's arguments, which are strings there: Day takes a
+// YYYY-MM-DD date and Clocktime an RFC 3339 time. text.test.ts calls
+// text.ts's port of each the same way.
+var wordFuncs = map[string]struct {
+	args int
+	call func(a []string) (string, error)
+}{
+	"Agent":     {1, func(a []string) (string, error) { return Agent(event.Harness(a[0])), nil }},
+	"Kind":      {2, func(a []string) (string, error) { return Kind(event.Activity(a[0]), a[1]), nil }},
+	"AgentTime": {1, func(a []string) (string, error) { return AgentTime(a[0]), nil }},
+	"Other":     {2, func(a []string) (string, error) { return Other(event.Reason(a[0]), a[1]), nil }},
+	"OnHold":    {0, func([]string) (string, error) { return OnHold(), nil }},
+	"Level":     {1, func(a []string) (string, error) { return Level(event.Evidence(a[0])), nil }},
+	"Printable": {1, func(a []string) (string, error) { return Printable(a[0]), nil }},
+	"Phrase":    {oneThenPairs, func(a []string) (string, error) { return Phrase(Key(a[0]), a[1:]...), nil }},
+	"Fill":      {oneThenPairs, func(a []string) (string, error) { return Fill(a[0], a[1:]...), nil }},
+	"Sentence":  {1, func(a []string) (string, error) { return Sentence(a[0]), nil }},
+	"Day": {1, func(a []string) (string, error) {
+		d, err := time.Parse(time.DateOnly, a[0])
+		return Day(d), err
+	}},
+	"Clocktime": {1, func(a []string) (string, error) {
+		at, err := time.Parse(time.RFC3339, a[0])
+		return Clocktime(at), err
+	}},
+}
+
 func TestWords(t *testing.T) {
-	cases := []struct {
+	for _, tc := range shared(t).Words {
+		t.Run(tc.Name, func(t *testing.T) {
+			f, ok := wordFuncs[tc.Func]
+			if !ok {
+				t.Fatalf("this package has no function %s for the case", tc.Func)
+			}
+			fits := len(tc.Args) == f.args
+			if f.args == oneThenPairs {
+				fits = len(tc.Args)%2 == 1
+			}
+			if !fits {
+				t.Fatalf("%s doesn't take the arguments %q", tc.Func, tc.Args)
+			}
+			got, err := f.call(tc.Args)
+			if err != nil {
+				t.Fatalf("%s(%q): %v", tc.Func, tc.Args, err)
+			}
+			if got != tc.Want {
+				t.Errorf("%s(%q) = %q, want %q", tc.Func, tc.Args, got, tc.Want)
+			}
+		})
+	}
+	// What JSON can't hold, so text.test.ts can't run it.
+	goOnly := []struct {
 		name string
 		got  string
 		want string
 	}{
-		{"claude_code's agent is Claude", Agent(event.HarnessClaudeCode), "Claude"},
-		{"a harness en.json doesn't know is your agent", Agent(event.Harness("zed")), "your agent"},
-		{"reading names the agent", Kind(event.ActivityReadingOutput, "Claude"), "reading Claude's answers"},
-		{"an unknown kind shows its code", Kind(event.Activity("juggling"), "Claude"), "juggling"},
-		{"an unknown kind's code can't reach the terminal raw", Kind(event.Activity("jug\x1b]52;c;x\x07"), "Claude"), "jug\uFFFD]52;c;x\uFFFD"},
-		{"agent-only time names the agent", AgentTime("Cursor"), "Cursor, working on its own"},
-		{"X.absent is away (D5)", Other(event.ReasonAbsent, "Claude"), "away"},
-		{"X.noprog that can no longer come back says what it was", Other(event.ReasonNoProgress, "Claude"), "past two hours without progress, counted at half"},
-		{"X.noprog that progress can still bring back is on hold (D5)", OnHold(), "on hold: these come back when you fix it"},
-		{"the rewrite loop names the agent", Other(event.ReasonRewriteLoop, "Codex"), "Codex rewriting the same lines"},
-		{"X.agent_only isn't other time", Other(event.ReasonAgentOnly, "Claude"), ""},
-		{"level C says where it shows, as D-focus-unknown words it (D5, D11)", Level(event.EvidenceC), "this shows on your own dashboard, not on your profile, build days or most programs"},
-		{"Printable keeps plain text", Printable("remind-bot {x} café"), "remind-bot {x} café"},
-		{"Printable replaces control characters", Printable("a\x1b[2Jb\x07c\nd\te"), "a\uFFFD[2Jb\uFFFDc\uFFFDd\uFFFDe"},
-		{"Printable replaces bidirectional formatting", Printable("abc\u202Edcba\u2066x"), "abc\uFFFDdcba\uFFFDx"},
 		{"Printable replaces bytes that aren't UTF-8", Printable("a\xffb"), "a\uFFFDb"},
-		{"a phrase fills its placeholders", Phrase(KeySessionSpan, "day", "Tuesday, November 24", "start", "07:40", "end", "07:45"), "Tuesday, November 24, 07:40 to 07:45"},
-		{"a value with braces isn't filled again", Phrase(KeySessionLast, "project", "{time}"), "Your last session: {time}"},
-		{"a placeholder with no value stays", Fill("you {time}"), "you {time}"},
-		{"Sentence capitalizes the first letter", Sentence("your agent, working on its own"), "Your agent, working on its own"},
-		{"Sentence leaves an empty string", Sentence(""), ""},
-		{"Day heads a day", Day(time.Date(2026, 11, 24, 7, 40, 0, 0, time.UTC)), "Tuesday, November 24"},
-		{"Clocktime is 24-hour with a leading zero", Clocktime(time.Date(2026, 11, 24, 7, 4, 0, 0, time.UTC)), "07:04"},
 	}
-	for _, tc := range cases {
+	for _, tc := range goOnly {
 		t.Run(tc.name, func(t *testing.T) {
 			if tc.got != tc.want {
 				t.Errorf("got %q, want %q", tc.got, tc.want)
@@ -309,31 +400,18 @@ func TestWords(t *testing.T) {
 }
 
 func TestPercentages(t *testing.T) {
-	cases := []struct {
-		name  string
-		parts []float64
-		want  []int
-	}{
-		{"one part is 100", []float64{265}, []int{100}},
-		{"thirds give the extra point to the first", []float64{1, 1, 1}, []int{34, 33, 33}},
-		{"the largest remainder gets the extra point", []float64{1, 2, 3.5}, []int{15, 31, 54}},
-		{"a zero part stays 0 and the rest add up to 100", []float64{0, 3, 1}, []int{0, 75, 25}},
-		{"a tiny part can round to 0", []float64{1, 999}, []int{0, 100}},
-		{"nothing positive is all zeros", []float64{0, -1}, []int{0, 0}},
-		{"no parts is no percentages", nil, []int{}},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			got := Percentages(tc.parts)
-			if !slices.Equal(got, tc.want) {
-				t.Errorf("Percentages(%v) = %v, want %v", tc.parts, got, tc.want)
+	for _, tc := range shared(t).Percentages {
+		t.Run(tc.Name, func(t *testing.T) {
+			got := Percentages(tc.Parts)
+			if !slices.Equal(got, tc.Want) {
+				t.Errorf("Percentages(%v) = %v, want %v", tc.Parts, got, tc.Want)
 			}
 			sum := 0
 			for _, p := range got {
 				sum += p
 			}
 			if sum != 100 && sum != 0 {
-				t.Errorf("Percentages(%v) adds up to %d", tc.parts, sum)
+				t.Errorf("Percentages(%v) adds up to %d", tc.Parts, sum)
 			}
 		})
 	}
