@@ -327,14 +327,30 @@ func (r *liveRig) link(at time.Time) {
 	r.linked.Store(true)
 }
 
-// served returns a condition on the fake server, which it checks under
-// the server's lock after waking the uploader, as its ticker would.
-func (r *liveRig) served(cond func(f *fakeIngest) bool) func() bool {
-	return func() bool {
+// wait waits until cond holds of the fake server, under its lock, waking
+// the uploader meanwhile as its ticker would, and says what the server and
+// the uploader hold if it gives up.
+func (r *liveRig) wait(t *testing.T, what string, cond func(f *fakeIngest) bool) {
+	t.Helper()
+	deadline := time.Now().Add(time.Minute)
+	for {
 		r.u.Wake()
 		r.f.mu.Lock()
-		defer r.f.mu.Unlock()
-		return cond(r.f)
+		ok := cond(r.f)
+		head := uint64(0)
+		if r.f.head != nil {
+			head = r.f.head.b
+		}
+		held := fmt.Sprintf("the server holds head %d from %d, gaps %v and %d minutes, after %d POSTs and %d state reads",
+			head, r.f.start, r.f.gaps, len(r.f.buckets), r.f.posts, r.f.gets)
+		r.f.mu.Unlock()
+		if ok {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("gave up waiting for %s: %s; the uploader says %+v, and doctor hears %q", what, held, r.u.Status(), r.doctor())
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 }
 
@@ -378,7 +394,7 @@ func TestLocalMode(t *testing.T) {
 	r.u.Start()
 	r.seal(t, 1)
 	r.seal(t, 2)
-	waitFor(t, "batches 1 and 2 and their minutes", r.served(func(f *fakeIngest) bool { return f.head != nil && f.head.b == 2 && len(f.buckets) == 30 }))
+	r.wait(t, "batches 1 and 2 and their minutes", func(f *fakeIngest) bool { return f.head != nil && f.head.b == 2 && len(f.buckets) == 30 })
 	r.local.Store(true)
 	r.seal(t, 3)
 	r.seal(t, 4)
@@ -410,7 +426,7 @@ func TestLocalMode(t *testing.T) {
 	r.link(r.start.Add(80 * time.Minute))
 	r.seal(t, 6)
 	r.u.Wake()
-	waitFor(t, "batch 6 and its minutes", r.served(func(f *fakeIngest) bool { return f.head.b == 6 && r.minutesIn(f, 75, 89) == 15 }))
+	r.wait(t, "batch 6 and its minutes", func(f *fakeIngest) bool { return f.head.b == 6 && r.minutesIn(f, 75, 89) == 15 })
 	r.drain()
 	r.f.mu.Lock()
 	defer r.f.mu.Unlock()
@@ -455,7 +471,7 @@ func TestRelinkLocal(t *testing.T) {
 		r.u.Start()
 		r.seal(t, 1)
 		r.seal(t, 2)
-		waitFor(t, "batches 1 and 2 and their minutes", r.served(func(f *fakeIngest) bool { return f.head != nil && f.head.b == 2 && len(f.buckets) == 30 }))
+		r.wait(t, "batches 1 and 2 and their minutes", func(f *fakeIngest) bool { return f.head != nil && f.head.b == 2 && len(f.buckets) == 30 })
 		// pairtime logout sets mode = "local", and pairtime login couldn't
 		// set it online again, so config.toml says local after the link.
 		r.local.Store(true)
@@ -468,7 +484,7 @@ func TestRelinkLocal(t *testing.T) {
 		r.seal(t, 6)
 		r.seal(t, 7)
 		r.u.Wake()
-		waitFor(t, "batch 7 and its minutes", r.served(func(f *fakeIngest) bool { return f.head.b == 7 && r.minutesIn(f, 90, 104) == 15 }))
+		r.wait(t, "batch 7 and its minutes", func(f *fakeIngest) bool { return f.head.b == 7 && r.minutesIn(f, 90, 104) == 15 })
 		r.drain()
 		r.f.mu.Lock()
 		defer r.f.mu.Unlock()
@@ -484,7 +500,7 @@ func TestRelinkLocal(t *testing.T) {
 		r.u.Start()
 		r.seal(t, 1)
 		r.seal(t, 2)
-		waitFor(t, "batches 1 and 2 and their minutes", r.served(func(f *fakeIngest) bool { return f.head != nil && f.head.b == 2 && len(f.buckets) == 30 }))
+		r.wait(t, "batches 1 and 2 and their minutes", func(f *fakeIngest) bool { return f.head != nil && f.head.b == 2 && len(f.buckets) == 30 })
 		// pairtime logout and pairtime login within one wake, with no batch
 		// sealed between them, and batch 3 sealed before config.toml's
 		// change to online reached the agent.
@@ -495,7 +511,7 @@ func TestRelinkLocal(t *testing.T) {
 		r.seal(t, 4)
 		r.seal(t, 5)
 		r.u.Wake()
-		waitFor(t, "batch 5 and its minutes", r.served(func(f *fakeIngest) bool { return f.head.b == 5 && r.minutesIn(f, 60, 74) == 15 }))
+		r.wait(t, "batch 5 and its minutes", func(f *fakeIngest) bool { return f.head.b == 5 && r.minutesIn(f, 60, 74) == 15 })
 		r.drain()
 		r.f.mu.Lock()
 		defer r.f.mu.Unlock()
@@ -521,7 +537,7 @@ func TestRelinkLocal(t *testing.T) {
 		r.seal(t, 4)
 		r.seal(t, 5)
 		r.u.Wake()
-		waitFor(t, "batch 5 and its minutes", r.served(func(f *fakeIngest) bool { return f.head != nil && f.head.b == 5 && r.minutesIn(f, 60, 74) == 15 }))
+		r.wait(t, "batch 5 and its minutes", func(f *fakeIngest) bool { return f.head != nil && f.head.b == 5 && r.minutesIn(f, 60, 74) == 15 })
 		r.drain()
 		r.f.mu.Lock()
 		defer r.f.mu.Unlock()
