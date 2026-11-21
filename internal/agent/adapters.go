@@ -244,10 +244,11 @@ type adapterHost struct {
 	// calls wait behind them (park).
 	parked   []hostCall
 	parkedBy map[string]int
-	// releasedAt is the git host's count of ended Tracks when release last
-	// looked at the parked calls, and freed says park has since parsed one
-	// to make room, which can let its session's later calls go: until one
-	// of them changes, no parked call can go that couldn't then (admit).
+	// releasedAt is the git host's count of Tracks that made a folder known
+	// (tracksEnded) when release last looked at the parked calls, and freed
+	// says park has since parsed one to make room in a way that can let a
+	// call go (frees). Until one of them changes, no parked call can go
+	// that couldn't then (admit).
 	releasedAt uint64
 	freed      bool
 	// holding are the calls holdBack keeps for the next start, which the
@@ -1291,10 +1292,10 @@ func (h *adapterHost) read(d inbox.Delivery) (hostCall, bool) {
 // calls parked before it that can go now: a Track can end in the middle of
 // a step, after its release, and a later call in that folder, of another
 // session, would then come before them in the ledger. It looks only when a
-// Track has ended or park has made room since release last looked
-// (releasedAt, freed), so a long replay doesn't walk the parked calls for
-// every call. On the last step nothing waits. replay says the call came
-// from the .replay file.
+// Track has made a folder known, or park has made room in a way that can
+// let a call go, since release last looked (releasedAt, freed), so a long
+// replay doesn't walk the parked calls for every call. On the last step
+// nothing waits. replay says the call came from the .replay file.
 func (h *adapterHost) admit(d inbox.Delivery, replay, last bool) {
 	c, ok := h.read(d)
 	if !ok {
@@ -1336,7 +1337,7 @@ func (h *adapterHost) park(c hostCall) {
 		h.parked = h.parked[1:]
 		h.parse(first)
 		h.unparked(first)
-		h.freed = true
+		h.freed = h.freed || h.frees(first.session, c)
 	}
 	h.parked = append(h.parked, c)
 	if c.session != "" {
@@ -1351,6 +1352,24 @@ func (h *adapterHost) park(c hostCall) {
 			h.parkedLive++
 		}
 	})
+}
+
+// frees reports whether parsing a parked call of session, as park does to
+// make room, can let a call go that couldn't before. That is the session's
+// next call, the first of it still parked or else c, the call being parked,
+// and only once that call's folder is known. A call of no session holds
+// none back.
+func (h *adapterHost) frees(session string, c hostCall) bool {
+	if session == "" {
+		return false
+	}
+	next := c
+	if h.parkedBy[session] > 0 {
+		if i := slices.IndexFunc(h.parked, func(p hostCall) bool { return p.session == session }); i >= 0 {
+			next = h.parked[i]
+		}
+	}
+	return next.session == session && !h.waits(next.dir)
 }
 
 // unparked counts c, which waited, as gone from the calls that wait.
@@ -1383,10 +1402,23 @@ func (h *adapterHost) release(last bool) {
 		return
 	}
 	held := make(map[string]bool)
+	// Each folder is asked once a walk, so its calls all go or all wait: a
+	// Track that ends while it walks lets the folder's calls go together at
+	// the next look, which the count's move brings (admit), rather than a
+	// later call now and an earlier one then.
+	asked := make(map[string]bool)
+	folderWaits := func(dir string) bool {
+		w, ok := asked[dir]
+		if !ok {
+			w = h.waits(dir)
+			asked[dir] = w
+		}
+		return w
+	}
 	var ready []hostCall
 	kept := h.parked[:0]
 	for _, c := range h.parked {
-		if !last && (c.session != "" && held[c.session] || h.waits(c.dir)) {
+		if !last && (c.session != "" && held[c.session] || folderWaits(c.dir)) {
 			if c.session != "" {
 				held[c.session] = true
 			}

@@ -2214,3 +2214,199 @@ func TestKillDuringSlowResolve(t *testing.T) {
 		})
 	}
 }
+
+// TestParkedCallsKeepTheirOrder checks the gate on admit's release (#159,
+// #164). A call that doesn't wait lets the parked calls that can go now go
+// first, in the order they came. It walks them only once a Track has made a
+// folder known, or park has made room in a way that can let a call go. The
+// host has no ledger: its writer counts as stopped, so parse holds each call
+// back in the order it reaches it (holdBack), and h.holding gives that
+// order. The git host is built by hand. A folder marked inflight starts no
+// Track, and the cases make it known the way track does, under fmu.
+func TestParkedCallsKeepTheirOrder(t *testing.T) {
+	at := time.Date(2026, 11, 21, 9, 0, 0, 0, time.UTC)
+	self := inbox.Proc{PID: 4242, Name: "pairtime", Start: at}
+	type env struct {
+		h      *adapterHost
+		g      *gitHost
+		x, y   string            // two session folders
+		labels map[string]string // each call's label, by its message id
+	}
+	newEnv := func(t *testing.T) *env {
+		dir := t.TempDir()
+		a := &agent{dirs: home.Dirs{Data: dir, Config: dir, Runtime: dir}, log: slog.New(slog.DiscardHandler), problems: make(map[string]string)}
+		secret := make([]byte, hookpath.SessionSecretLen)
+		a.kSession.Store(&secret)
+		h := newAdapterHost(a)
+		a.adaptOnce.Do(func() { a.adapt = h }) // so track's poke reaches h
+		h.keys = &adapterKeys{feat: features.NewKey([features.KeySize]byte{})}
+		h.down = true
+		g := &gitHost{a: a, tracked: make(map[string]bool), folders: make(map[string]*folder)}
+		h.git.Store(g)
+		return &env{h: h, g: g, x: filepath.Join(dir, "x"), y: filepath.Join(dir, "y"), labels: make(map[string]string)}
+	}
+	// call is a prompt of session in folder dir, labelled.
+	call := func(t *testing.T, e *env, label, session, dir string) inbox.Delivery {
+		t.Helper()
+		payload, err := json.Marshal(map[string]string{"session_id": session, "cwd": dir, "hook_event_name": "UserPromptSubmit", "prompt": label})
+		if err != nil {
+			t.Fatal(err)
+		}
+		d := inbox.Delivery{Message: hookMessage(t, "UserPromptSubmit", string(payload), self, at),
+			Via: inbox.ViaSocket, Received: clock.Stamp{Wall: time.Now().UTC()}}
+		e.labels[d.ID] = label
+		return d
+	}
+	admit := func(e *env, ds ...inbox.Delivery) {
+		for _, d := range ds {
+			e.h.admit(d, false, false)
+		}
+	}
+	// resolving has dir's first Track running, so known starts no other,
+	// and resolved has dir known just now, with no Track to start.
+	resolving := func(e *env, dir string) { e.g.folders[dir] = &folder{inflight: true} }
+	resolved := func(e *env, dir string) { e.g.folders[dir] = &folder{known: true, at: time.Now()} }
+	// end has dir's Track end as track does; counted says it moves the
+	// count, as only track does.
+	end := func(e *env, dir string, counted bool) {
+		e.g.fmu.Lock()
+		f := e.g.folders[dir]
+		f.known, f.inflight, f.at = true, false, time.Now()
+		if counted {
+			e.g.ended++
+		}
+		e.g.fmu.Unlock()
+	}
+	// more parks a call of session C in dir, built by hand, and fill parks
+	// them until maxParked calls wait, so the next more makes room.
+	more := func(e *env, dir string) {
+		e.h.park(hostCall{d: inbox.Delivery{Message: inbox.Message{ID: inbox.NewID()}}, session: "C", dir: dir, live: true})
+	}
+	fill := func(e *env, dir string) {
+		for len(e.h.parked) < maxParked {
+			more(e, dir)
+		}
+	}
+	// order is the labels of the labelled calls parse reached, in order.
+	order := func(e *env) []string {
+		var out []string
+		for _, d := range e.h.holding {
+			if l, ok := e.labels[d.ID]; ok {
+				out = append(out, l)
+			}
+		}
+		return out
+	}
+	want := func(t *testing.T, e *env, labels ...string) {
+		t.Helper()
+		if got := order(e); !slices.Equal(got, labels) {
+			t.Errorf("parse reached %q, want %q", got, labels)
+		}
+	}
+	cases := []struct {
+		name string
+		run  func(t *testing.T, e *env)
+	}{
+		{"a Track that ends between two calls has the next call in its folder let the folder's parked calls go first", func(t *testing.T, e *env) {
+			resolving(e, e.x)
+			admit(e, call(t, e, "a1", "A", e.x), call(t, e, "a2", "A", e.x))
+			end(e, e.x, true)
+			admit(e, call(t, e, "b1", "B", e.x))
+			want(t, e, "a1", "a2", "b1")
+			if len(e.h.parked) != 0 {
+				t.Errorf("%d calls still wait", len(e.h.parked))
+			}
+		}},
+		{"a folder that turns known without a counted Track lets the next call go alone, with no walk of the parked calls", func(t *testing.T, e *env) {
+			resolving(e, e.x)
+			admit(e, call(t, e, "a1", "A", e.x), call(t, e, "a2", "A", e.x))
+			end(e, e.x, false)
+			admit(e, call(t, e, "b1", "B", e.x))
+			want(t, e, "b1")
+			if len(e.h.parked) != 2 {
+				t.Errorf("%d calls still wait, want a1 and a2", len(e.h.parked))
+			}
+		}},
+		{"at maxParked, making room by parsing the oldest call lets its session's next call go before a later call of another session in that call's folder", func(t *testing.T, e *env) {
+			resolving(e, e.y)
+			resolved(e, e.x)
+			admit(e, call(t, e, "a1", "A", e.y), call(t, e, "a2", "A", e.x))
+			fill(e, e.y)
+			more(e, e.y)
+			if !e.h.freed {
+				t.Error("making room for a call that can go set no freed")
+			}
+			admit(e, call(t, e, "b1", "B", e.x))
+			want(t, e, "a1", "a2", "b1")
+		}},
+		{"at maxParked, making room lets the call being parked go first when it is the session's next, before a later call of another session in its folder", func(t *testing.T, e *env) {
+			resolving(e, e.y)
+			resolved(e, e.x)
+			admit(e, call(t, e, "a1", "A", e.y))
+			fill(e, e.y)
+			admit(e, call(t, e, "a2", "A", e.x))
+			if !e.h.freed {
+				t.Error("making room for the call being parked, which can go, set no freed")
+			}
+			admit(e, call(t, e, "b1", "B", e.x))
+			want(t, e, "a1", "a2", "b1")
+		}},
+		{"at maxParked, making room frees nothing when the session's next call still waits for its folder", func(t *testing.T, e *env) {
+			resolving(e, e.y)
+			resolved(e, e.x)
+			admit(e, call(t, e, "a1", "A", e.y), call(t, e, "a2", "A", e.y))
+			fill(e, e.y)
+			more(e, e.y)
+			if e.h.freed {
+				t.Error("making room set freed, though a2 still waits for its folder")
+			}
+			admit(e, call(t, e, "b1", "B", e.x))
+			want(t, e, "a1", "b1")
+		}},
+		{"at maxParked, making room by parsing a call of no session frees nothing", func(t *testing.T, e *env) {
+			resolving(e, e.y)
+			e.h.park(hostCall{d: inbox.Delivery{Message: inbox.Message{ID: inbox.NewID()}}, dir: e.y, live: true})
+			fill(e, e.y)
+			more(e, e.y)
+			if e.h.freed {
+				t.Error("making room by parsing a call of no session set freed")
+			}
+		}},
+		{"a Track that makes its folder known moves the count, and a later Track of the known folder doesn't", func(t *testing.T, e *env) {
+			res, err := git.NewResolver(git.ResolverOptions{Secret: make([]byte, 32)}, git.ProjectMap{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			w, err := git.NewWatcher(git.WatcherOptions{Resolver: res, Sink: func(git.Change) {}, NoNotify: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { w.Close() })
+			e.g.res, e.g.w = res, w
+			e.g.ctx, e.g.cancel = context.WithCancel(context.Background())
+			t.Cleanup(e.g.cancel)
+			// Never made, so each Track fails at its os.Stat, before any git
+			// runs, and the folder is known with an error, which due Tracks
+			// again at the next call.
+			gone := filepath.Join(t.TempDir(), "gone")
+			f := &folder{}
+			e.g.folders[gone] = f
+			for i := range 2 {
+				e.g.fmu.Lock()
+				f.inflight = true // as startLocked does
+				e.g.running++
+				e.g.fmu.Unlock()
+				e.g.track(gone, f)
+				if got := e.g.tracksEnded(); got != 1 {
+					t.Errorf("after Track %d of the folder the count is %d, want 1", i+1, got)
+				}
+			}
+			if !f.known || f.err == nil {
+				t.Errorf("the folder is known: %v, with error %v; want known, with the Stat's error", f.known, f.err)
+			}
+		}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) { c.run(t, newEnv(t)) })
+	}
+}
