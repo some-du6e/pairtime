@@ -244,6 +244,12 @@ type adapterHost struct {
 	// calls wait behind them (park).
 	parked   []hostCall
 	parkedBy map[string]int
+	// releasedAt is the git host's count of ended Tracks when release last
+	// looked at the parked calls, and freed says park has since parsed one
+	// to make room, which can let its session's later calls go: until one
+	// of them changes, no parked call can go that couldn't then (admit).
+	releasedAt uint64
+	freed      bool
 	// holding are the calls holdBack keeps for the next start, which the
 	// step holds together (holdBackNow).
 	holding []inbox.Delivery
@@ -1284,8 +1290,11 @@ func (h *adapterHost) read(d inbox.Delivery) (hostCall, bool) {
 // because a resolve was slow. A call that goes at once lets go first of the
 // calls parked before it that can go now: a Track can end in the middle of
 // a step, after its release, and a later call in that folder, of another
-// session, would then come before them in the ledger. On the last step
-// nothing waits. replay says the call came from the .replay file.
+// session, would then come before them in the ledger. It looks only when a
+// Track has ended or park has made room since release last looked
+// (releasedAt, freed), so a long replay doesn't walk the parked calls for
+// every call. On the last step nothing waits. replay says the call came
+// from the .replay file.
 func (h *adapterHost) admit(d inbox.Delivery, replay, last bool) {
 	c, ok := h.read(d)
 	if !ok {
@@ -1296,8 +1305,19 @@ func (h *adapterHost) admit(d inbox.Delivery, replay, last bool) {
 		h.park(c)
 		return
 	}
-	h.release(last)
+	if len(h.parked) > 0 && (h.freed || h.tracksEnded() != h.releasedAt) {
+		h.release(last)
+	}
 	h.parse(c)
+}
+
+// tracksEnded is the git host's count of ended Tracks, zero with no git
+// host.
+func (h *adapterHost) tracksEnded() uint64 {
+	if g := h.git.Load(); g != nil {
+		return g.tracksEnded()
+	}
+	return 0
 }
 
 // waits reports whether the calls of folder dir wait for its project:
@@ -1316,6 +1336,7 @@ func (h *adapterHost) park(c hostCall) {
 		h.parked = h.parked[1:]
 		h.parse(first)
 		h.unparked(first)
+		h.freed = true
 	}
 	h.parked = append(h.parked, c)
 	if c.session != "" {
@@ -1356,6 +1377,8 @@ func (h *adapterHost) unparked(c hostCall) {
 // folder still resolving then gives its calls no project, as one whose
 // resolve timed out does.
 func (h *adapterHost) release(last bool) {
+	// Taken first, so a Track that ends while it looks counts as news.
+	h.releasedAt, h.freed = h.tracksEnded(), false
 	if len(h.parked) == 0 {
 		return
 	}

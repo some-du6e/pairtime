@@ -103,12 +103,14 @@ type gitHost struct {
 	// sessions worked in this run, which the watcher reads; folders are the
 	// session folders of this run, by path; waiting are the folders whose
 	// Track waits for a slot, oldest first; running counts the Tracks going
-	// on.
+	// on, and ended those that have ended, which tells the adapter host when
+	// a call that waits for its folder may go (adapterHost.admit).
 	fmu     sync.Mutex
 	tracked map[string]bool
 	folders map[string]*folder
 	waiting []string
 	running int
+	ended   uint64
 }
 
 // folder is what the git host knows of one session folder in this run.
@@ -259,6 +261,7 @@ func (g *gitHost) track(dir string, f *folder) {
 	now := time.Now()
 	g.fmu.Lock()
 	f.known, f.loc, f.err, f.at, f.inflight = true, loc, err, now, false
+	g.ended++
 	if err == nil && loc.GitDir != "" && !loc.Bare {
 		g.tracked[loc.GitDir] = true
 	}
@@ -272,6 +275,13 @@ func (g *gitHost) track(dir string, f *folder) {
 	}
 	g.fmu.Unlock()
 	g.a.adaptersHost().poke()
+}
+
+// tracksEnded counts the Tracks that have ended in this run.
+func (g *gitHost) tracksEnded() uint64 {
+	g.fmu.Lock()
+	defer g.fmu.Unlock()
+	return g.ended
 }
 
 // project returns dir's project as the last Track of it found (known), and
