@@ -1053,7 +1053,8 @@ func (r *rehearsal) stepUpload(t *testing.T) {
 	}
 	// The client's own views split each second exactly, so a slot whose
 	// seconds had two reasons or two levels reads differently there than
-	// on the server's dashboard. Same total, other split.
+	// on the server's dashboard, which counts its split per slot
+	// (D-kind-split-by-slot). Same total, other split.
 	if !sameSplit(levels, srvLevels) || !sameSplit(kinds, srvKinds) {
 		t.Logf("pairtime today splits the same time %v by level and %v by kind; pairtimed's dashboard, from one reason and one level a slot, %v and %v", levels, kinds, srvLevels, srvKinds)
 	}
