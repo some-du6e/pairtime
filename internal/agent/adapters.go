@@ -16,6 +16,7 @@ import (
 	"io/fs"
 	"maps"
 	"os"
+	"path/filepath"
 	"runtime"
 	"slices"
 	"strings"
@@ -61,6 +62,11 @@ const keyRetry = time.Minute
 // it are counted as lost.
 const maxQueued = 4096
 
+// heldKeep is how long a held hook call is kept: a start drops the ones
+// taken in longer ago than this, unparsed (expireHeld; DESIGN 4.4, which
+// gives every field a finite retention; D-held-calls-inbox-class).
+const heldKeep = 7 * 24 * time.Hour
+
 // maxParked bounds the calls that wait for their folder's project (park).
 // Past it the oldest goes on without waiting more, and so without the
 // project if its folder still has none.
@@ -97,7 +103,11 @@ const maxParked = 4096
 // the data directory (home.Dirs.Held), and none is dropped while what is
 // held stays under inbox.MaxSpool. The calls are parsed in the order the
 // agent took them in once the keys and the writer are there, in this run
-// or, after a stop, in the next.
+// or, after a stop, in the next. The held files have inbox/'s protections
+// and a bound, since they hold whole payloads in plaintext: a call held
+// longer than heldKeep goes at the next start, and none is held once the
+// ledger can't open until a person runs pairtime restore
+// (D-held-calls-inbox-class; hold, expireHeld).
 //
 // The journal keeps no bodies, so before the journal even records a call's
 // id, pend appends the call to held.jsonl.pending with one write and no
@@ -154,6 +164,9 @@ type adapterHost struct {
 	// settled yet: the file isn't emptied under them.
 	unsettled int
 	retrying  bool // a goroutine derives the keys again (retryKeysLocked)
+	// gaveUp says the ledger can't open until a person runs pairtime
+	// restore (ledgerGivesUp), so hold keeps no more calls (giveUp).
+	gaveUp bool
 	// parkedN counts the calls that wait for their folder's project
 	// (parked), and parkedLive those of them held.jsonl.pending keeps: the
 	// file isn't emptied under them either.
@@ -397,7 +410,7 @@ const pendingSuffix = ".pending"
 // writes, so writes land at the end anyway. h.mu is held.
 func (h *adapterHost) writePendingLocked(line []byte) error {
 	if h.pending == nil {
-		f, err := os.OpenFile(h.a.dirs.Held()+pendingSuffix, os.O_WRONLY|os.O_CREATE, 0o600)
+		f, err := inbox.OpenPrivate(h.a.dirs.Held()+pendingSuffix, os.O_WRONLY|os.O_CREATE, 0o600)
 		if err != nil {
 			return err
 		}
@@ -472,9 +485,9 @@ func (h *adapterHost) recoverPending() {
 	var copied bool
 	if err == nil {
 		var src *os.File
-		if src, err = os.Open(name); err == nil {
+		if src, err = inbox.OpenPrivate(name, os.O_RDONLY, 0); err == nil {
 			var dst *os.File
-			if dst, err = os.OpenFile(h.a.dirs.Held(), os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o600); err == nil {
+			if dst, err = inbox.OpenPrivate(h.a.dirs.Held(), os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o600); err == nil {
 				// Each line starts with a newline (heldLine), so the calls
 				// stay whole whatever held.jsonl ends with.
 				_, err = io.Copy(dst, src)
@@ -537,6 +550,7 @@ func (h *adapterHost) close() {
 
 func (h *adapterHost) run() {
 	defer close(h.done)
+	h.expireHeld(time.Now())
 	h.countHeld()
 	for {
 		select {
@@ -1221,18 +1235,30 @@ type heldCall struct {
 	Received clock.Stamp     `json:"received"`
 }
 
-// hold appends calls to held.jsonl, which only this user can read (the
-// data directory is theirs alone, home.Dirs.Create), with one write per
-// call, and returns the ones it couldn't write, which the caller keeps
-// (keep). A call that would take the file past inbox.MaxSpool is dropped,
-// counted and reported instead: the ledger has then been shut for days, and
-// filling the disk helps nobody.
+// hold appends calls to held.jsonl, with one write per call, and returns
+// the ones it couldn't write, which the caller keeps (keep). The file has
+// inbox/'s protections, as its pending log and its .replay do: a folder
+// and a file that only this user can reach, opened with O_NOFOLLOW where
+// the spool is (inbox.OpenPrivate; D-held-calls-inbox-class). A call that
+// would take the file past inbox.MaxSpool is dropped, counted and
+// reported instead: the ledger has then been shut for days, and filling the
+// disk helps nobody. So is every call once the ledger can't open without
+// a person's restore (giveUp): held calls would only pile up, prompts and
+// all, with no end in sight. What is held is kept heldKeep at most
+// (expireHeld).
 func (h *adapterHost) hold(calls []inbox.Delivery) []inbox.Delivery {
 	if len(calls) == 0 {
 		return nil
 	}
+	h.mu.Lock()
+	gaveUp := h.gaveUp
+	h.mu.Unlock()
+	if gaveUp {
+		h.dropGivenUp(len(calls))
+		return nil
+	}
 	name := h.a.dirs.Held()
-	f, err := os.OpenFile(name, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o600)
+	f, err := inbox.OpenPrivate(name, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o600)
 	if err != nil {
 		h.a.log.Warn("hook calls that wait for the ledger couldn't be held, and wait in memory", "calls", len(calls), "err", err)
 		return calls
@@ -1304,6 +1330,27 @@ func (h *adapterHost) lineMAC(call []byte) []byte {
 	return m.Sum(nil)
 }
 
+// giveUp tells the host that the ledger can't open until a person runs
+// pairtime restore (ledgerGivesUp): from now on it keeps no call for later,
+// and drops each instead (hold).
+func (h *adapterHost) giveUp() {
+	h.mu.Lock()
+	h.gaveUp = true
+	h.mu.Unlock()
+	h.poke()
+}
+
+// dropGivenUp drops n calls that hold would have kept, once the ledger has
+// given up, and says how to get it back, under adapters.held.
+func (h *adapterHost) dropGivenUp(n int) {
+	h.mu.Lock()
+	h.dropped += uint64(n)
+	dropped := h.dropped
+	h.mu.Unlock()
+	h.a.log.Warn("hook calls are dropped, because the ledger can't open until pairtime restore runs", "calls", n)
+	h.a.setProblem("adapters.held", fmt.Sprintf("hook calls are no longer kept for the ledger, which can't open until you run pairtime restore; %d were dropped", dropped))
+}
+
 func (h *adapterHost) dropHeld(n int, err error) {
 	h.mu.Lock()
 	h.dropped += uint64(n)
@@ -1369,7 +1416,7 @@ func (h *adapterHost) replayHeld(last bool) bool {
 // fails partway resumes after the last call it took, so none is taken
 // twice in a run.
 func (h *adapterHost) readReplay(name string, last bool) bool {
-	f, err := os.Open(name)
+	f, err := inbox.OpenPrivate(name, os.O_RDONLY, 0)
 	if err != nil {
 		h.a.log.Warn("the held hook calls can't be read", "err", err)
 		return false
@@ -1435,11 +1482,154 @@ func (h *adapterHost) endReplay(name string) {
 	h.replayAt = 0
 }
 
+// heldTmp is the prefix of the temporary file expireFile rewrites a held
+// file through, beside it, as home.WriteFile names its own, so a link's
+// clearData at uninstall takes one a crash left (pairtimeEntries).
+const heldTmp = ".held.jsonl.tmp-"
+
+// expireHeld drops, at a start, the held calls the agent took in longer
+// than heldKeep before now, unparsed: from held.jsonl, which holds the
+// calls a killed run left pending too by then (recoverPending), and from a
+// .replay file a crash left. A line that holds no call, or no time to go
+// by, goes as well. It deletes what a rewrite cut short left, first. It runs
+// on the worker before its first step, when nothing else writes them.
+func (h *adapterHost) expireHeld(now time.Time) {
+	if old, err := filepath.Glob(filepath.Join(h.a.dirs.Data, heldTmp+"*")); err == nil {
+		for _, name := range old {
+			os.Remove(name)
+		}
+	}
+	n := 0
+	for _, name := range []string{h.a.dirs.Held() + ".replay", h.a.dirs.Held()} {
+		n += h.expireFile(name, now.Add(-heldKeep))
+	}
+	if n > 0 {
+		h.dropHeld(n, fmt.Errorf("they were held longer than %v, which is as long as hook calls are kept", heldKeep))
+	}
+}
+
+// expireFile drops from name the calls taken in before cutoff, by writing
+// the rest to a new file that then takes its name, or by deleting it when
+// none is left, and returns how many it dropped. A file it can't rewrite
+// stays as it is, for the next start to try again.
+func (h *adapterHost) expireFile(name string, cutoff time.Time) int {
+	f, err := inbox.OpenPrivate(name, os.O_RDONLY, 0)
+	if err != nil {
+		if !errors.Is(err, fs.ErrNotExist) {
+			h.a.log.Warn("the held hook calls can't be read to drop the old ones", "err", err)
+		}
+		return 0
+	}
+	defer f.Close()
+	// keep reads each line of f in turn, and reports whether it is a call
+	// to keep; blank lines are neither kept nor counted.
+	var line []byte
+	keep := func(r *bufio.Reader) (blank, kept bool, err error) {
+		line, err = r.ReadBytes('\n')
+		if len(bytes.TrimSpace(line)) == 0 {
+			return true, false, err
+		}
+		at, ok := heldAt(line)
+		return false, ok && !at.Before(cutoff), err
+	}
+	old, left := 0, 0
+	for r := bufio.NewReader(f); ; {
+		blank, kept, err := keep(r)
+		switch {
+		case blank:
+		case kept:
+			left++
+		default:
+			old++
+		}
+		if err != nil {
+			if !errors.Is(err, io.EOF) {
+				h.a.log.Warn("the held hook calls can't be read to drop the old ones", "err", err)
+				return 0
+			}
+			break
+		}
+	}
+	if old == 0 {
+		return 0
+	}
+	if left == 0 {
+		f.Close()
+		if err := os.Remove(name); err != nil {
+			h.a.log.Warn("couldn't drop the old held hook calls", "err", err)
+			return 0
+		}
+		return old
+	}
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		h.a.log.Warn("couldn't drop the old held hook calls", "err", err)
+		return 0
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(name), heldTmp)
+	if err != nil {
+		h.a.log.Warn("couldn't drop the old held hook calls", "err", err)
+		return 0
+	}
+	w := bufio.NewWriter(tmp)
+	for r := bufio.NewReader(f); ; {
+		blank, kept, err := keep(r)
+		if !blank && kept {
+			// A newline before each line as well as after, as heldLine
+			// writes them.
+			w.WriteByte('\n')
+			w.Write(bytes.TrimSpace(line))
+			w.WriteByte('\n')
+		}
+		if err != nil {
+			if !errors.Is(err, io.EOF) {
+				tmp.Close()
+				os.Remove(tmp.Name())
+				h.a.log.Warn("couldn't drop the old held hook calls", "err", err)
+				return 0
+			}
+			break
+		}
+	}
+	err = w.Flush()
+	if err == nil {
+		err = tmp.Sync()
+	}
+	if cerr := tmp.Close(); err == nil {
+		err = cerr
+	}
+	if err == nil {
+		err = os.Rename(tmp.Name(), name)
+	}
+	if err != nil {
+		os.Remove(tmp.Name())
+		h.a.log.Warn("couldn't drop the old held hook calls", "err", err)
+		return 0
+	}
+	return old
+}
+
+// heldAt is when the agent took the call on a line of held.jsonl in, by
+// the stamp the line gives, which heldKeep counts from: the agent's own,
+// or, for a line any process could have written, whatever it says, which
+// can keep nothing but that line longer. It reports false for a line that
+// holds no call, or no stamp.
+func heldAt(line []byte) (time.Time, bool) {
+	var e heldEntry
+	if err := json.Unmarshal(line, &e); err != nil || len(e.Call) == 0 {
+		return time.Time{}, false
+	}
+	var c heldCall
+	if err := json.Unmarshal(e.Call, &c); err != nil || c.Received.Wall.IsZero() {
+		return time.Time{}, false
+	}
+	return c.Received.Wall, true
+}
+
 // countHeld counts the calls an earlier run left held, for the status.
 func (h *adapterHost) countHeld() {
 	n := 0
 	for _, name := range []string{h.a.dirs.Held() + ".replay", h.a.dirs.Held()} {
-		f, err := os.Open(name)
+		f, err := inbox.OpenPrivate(name, os.O_RDONLY, 0)
 		if err != nil {
 			continue
 		}

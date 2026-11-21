@@ -544,8 +544,12 @@ func TestHookCallsAKilledAgentAcked(t *testing.T) {
 	for _, c := range calls {
 		c.Stdin = bytes.ReplaceAll(c.Stdin, []byte(captureHome), []byte(r.home))
 		// As the killed run took them in: over the socket, from under the
-		// captured parents (adapters.DeliveryOf).
-		line, err := killed.heldLine(adapters.DeliveryOf(event.HarnessClaudeCode, c, adapters.Walked, calls[0].Arrived))
+		// captured parents (adapters.DeliveryOf), and stamped as they came,
+		// which was just now, so a start doesn't drop them as held too long
+		// (heldKeep), whenever the capture was made.
+		d := adapters.DeliveryOf(event.HarnessClaudeCode, c, adapters.Walked, calls[0].Arrived)
+		d.Received.Wall = time.Now().UTC()
+		line, err := killed.heldLine(d)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1462,6 +1466,154 @@ func TestReplayProblems(t *testing.T) {
 			}
 			if !strings.Contains(h.a.currentProblems()["adapters.dropped"], "2 hook calls") {
 				t.Errorf("adapters.dropped is %q", h.a.currentProblems()["adapters.dropped"])
+			}
+		}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) { c.run(t, newHost(t)) })
+	}
+}
+
+// TestHeldRetention checks D-held-calls-inbox-class's limits on the hook
+// calls held.jsonl and its .replay keep in plaintext: a start drops the
+// ones held longer than heldKeep, a ledger that can't open without a
+// restore holds no more, and the file takes no call where others could
+// read it.
+func TestHeldRetention(t *testing.T) {
+	now := time.Now().UTC()
+	self := inbox.Proc{PID: 4242, Name: "pairtime", Start: now}
+	newHost := func(t *testing.T) *adapterHost {
+		dir := t.TempDir()
+		return newAdapterHost(&agent{dirs: home.Dirs{Data: dir, Config: dir, Runtime: dir},
+			log: slog.New(slog.DiscardHandler), problems: make(map[string]string)})
+	}
+	// call is a prompt the agent took in ago before now, with no stamp of
+	// its own when unstamped.
+	call := func(t *testing.T, prompt string, ago time.Duration, unstamped bool) inbox.Delivery {
+		d := inbox.Delivery{Message: hookMessage(t, "UserPromptSubmit", `{"session_id":"s1","prompt":"`+prompt+`"}`, self, now.Add(-ago)),
+			Via: inbox.ViaSocket, Received: clock.Stamp{Wall: now.Add(-ago)}}
+		if unstamped {
+			d.Received = clock.Stamp{}
+		}
+		return d
+	}
+	line := func(t *testing.T, h *adapterHost, d inbox.Delivery) []byte {
+		t.Helper()
+		b, err := h.heldLine(d)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return b
+	}
+	write := func(t *testing.T, name string, lines ...[]byte) {
+		t.Helper()
+		if err := os.WriteFile(name, slices.Concat(lines...), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// prompts lists the prompts of the calls in name, in order, of the ones
+	// the cases use.
+	prompts := func(t *testing.T, name string) []string {
+		t.Helper()
+		b, err := os.ReadFile(name)
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out []string
+		for _, l := range bytes.Split(b, []byte("\n")) {
+			for _, p := range []string{"old-1", "old-2", "new-1", "new-2", "unstamped"} {
+				if bytes.Contains(l, []byte(`"prompt":"`+p+`"`)) {
+					out = append(out, p)
+				}
+			}
+		}
+		return out
+	}
+	const week = 7 * 24 * time.Hour
+	cases := []struct {
+		name string
+		run  func(t *testing.T, h *adapterHost)
+	}{
+		{"a start drops the calls held longer than seven days, keeps the rest in order, and doctor hears how many", func(t *testing.T, h *adapterHost) {
+			write(t, h.a.dirs.Held(), line(t, h, call(t, "old-1", week+time.Hour, false)), line(t, h, call(t, "new-1", time.Hour, false)),
+				line(t, h, call(t, "old-2", week+time.Minute, false)), line(t, h, call(t, "new-2", week-time.Hour, false)))
+			h.expireHeld(now)
+			if got := prompts(t, h.a.dirs.Held()); !slices.Equal(got, []string{"new-1", "new-2"}) {
+				t.Errorf("held.jsonl holds %q, want new-1 and new-2", got)
+			}
+			if p := h.a.currentProblems()["adapters.dropped"]; !strings.Contains(p, "2 hook calls") {
+				t.Errorf("adapters.dropped is %q", p)
+			}
+		}},
+		{"a held file whose calls are all that old goes", func(t *testing.T, h *adapterHost) {
+			write(t, h.a.dirs.Held(), line(t, h, call(t, "old-1", 30*24*time.Hour, false)))
+			h.expireHeld(now)
+			if _, err := os.Stat(h.a.dirs.Held()); !errors.Is(err, fs.ErrNotExist) {
+				t.Errorf("held.jsonl is still there (%v)", err)
+			}
+		}},
+		{"a .replay file a crash left is cut the same way", func(t *testing.T, h *adapterHost) {
+			replay := h.a.dirs.Held() + ".replay"
+			write(t, replay, line(t, h, call(t, "old-1", week+time.Hour, false)), line(t, h, call(t, "new-1", time.Hour, false)))
+			h.expireHeld(now)
+			if got := prompts(t, replay); !slices.Equal(got, []string{"new-1"}) {
+				t.Errorf(".replay holds %q, want new-1", got)
+			}
+		}},
+		{"a line that holds no call, or no stamp to go by, goes as well", func(t *testing.T, h *adapterHost) {
+			write(t, h.a.dirs.Held(), []byte("\nnot a call\n"), line(t, h, call(t, "unstamped", time.Hour, true)), line(t, h, call(t, "new-1", time.Hour, false)))
+			h.expireHeld(now)
+			if got := prompts(t, h.a.dirs.Held()); !slices.Equal(got, []string{"new-1"}) {
+				t.Errorf("held.jsonl holds %q, want new-1", got)
+			}
+		}},
+		{"a start with nothing that old leaves held.jsonl as it is", func(t *testing.T, h *adapterHost) {
+			want := line(t, h, call(t, "new-1", time.Hour, false))
+			write(t, h.a.dirs.Held(), want)
+			h.expireHeld(now)
+			if got, err := os.ReadFile(h.a.dirs.Held()); err != nil || !bytes.Equal(got, want) {
+				t.Errorf("held.jsonl holds %q (%v), want it untouched", got, err)
+			}
+			if p := h.a.currentProblems()["adapters.dropped"]; p != "" {
+				t.Errorf("adapters.dropped is %q", p)
+			}
+		}},
+		{"a start deletes what a rewrite cut short left", func(t *testing.T, h *adapterHost) {
+			left := filepath.Join(h.a.dirs.Data, heldTmp+"123")
+			write(t, left, line(t, h, call(t, "new-1", time.Hour, false)))
+			h.expireHeld(now)
+			if _, err := os.Stat(left); !errors.Is(err, fs.ErrNotExist) {
+				t.Errorf("%s is still there (%v)", filepath.Base(left), err)
+			}
+		}},
+		{"once the ledger can't open without a restore, a call is dropped rather than held, and doctor says how to get it back", func(t *testing.T, h *adapterHost) {
+			h.giveUp()
+			if rest := h.hold([]inbox.Delivery{call(t, "new-1", 0, false)}); len(rest) != 0 {
+				t.Errorf("hold kept %d calls back", len(rest))
+			}
+			if _, err := os.Stat(h.a.dirs.Held()); !errors.Is(err, fs.ErrNotExist) {
+				t.Errorf("held.jsonl is there (%v)", err)
+			}
+			if p := h.a.currentProblems()["adapters.held"]; !strings.Contains(p, "pairtime restore") || h.status().Dropped != 1 {
+				t.Errorf("adapters.held is %q, dropped %d", p, h.status().Dropped)
+			}
+		}},
+		{"a held.jsonl others could read takes no call", func(t *testing.T, h *adapterHost) {
+			if runtime.GOOS == "windows" {
+				t.Skip("the data directory's DACL decides on Windows")
+			}
+			write(t, h.a.dirs.Held())
+			if err := os.Chmod(h.a.dirs.Held(), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if rest := h.hold([]inbox.Delivery{call(t, "new-1", 0, false)}); len(rest) != 1 {
+				t.Errorf("hold wrote the call, keeping back %d", len(rest))
+			}
+			if got := prompts(t, h.a.dirs.Held()); len(got) != 0 {
+				t.Errorf("held.jsonl holds %q", got)
 			}
 		}},
 	}

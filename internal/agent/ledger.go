@@ -112,6 +112,8 @@ func (a *agent) openLedgerRetrying(quit <-chan struct{}) *ledger.Writer {
 		if ledgerGivesUp(err) {
 			a.setProblem("ledger", fmt.Sprintf("the agent records nothing in the ledger: %v", err))
 			a.log.Warn("the ledger can't open", "err", err)
+			// Its hook calls would wait for it forever (adapters.go).
+			a.adaptersHost().giveUp()
 			return nil
 		}
 		a.setProblem("ledger", fmt.Sprintf("the agent records nothing in the ledger until it opens, and tries again in %v: %v", wait, err))
