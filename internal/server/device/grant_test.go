@@ -662,7 +662,7 @@ func TestCodeRequest(t *testing.T) {
 			unpadded := strings.TrimRight(publicKey(key), "=")
 			f.Set("public_key", unpadded)
 			f.Set("key_signature", signed(testDeviceID, key, unpadded))
-		}), wantStatus: http.StatusBadRequest, wantError: "invalid_request"},
+		}), wantStatus: http.StatusBadRequest, wantError: "invalid_request", wantBody: "public_key must be"},
 		{name: "a key_signature by another key is invalid_request, since the app must hold the key it names", h: h, form: with(func(f url.Values) { f.Set("key_signature", signed(testDeviceID, other, publicKey(key))) }), wantStatus: http.StatusBadRequest, wantError: "invalid_request"},
 		{name: "a key_signature for another device id is invalid_request", h: h, form: with(func(f url.Values) { f.Set("key_signature", signed("d_someotherdevice00000000aa", key, publicKey(key))) }), wantStatus: http.StatusBadRequest, wantError: "invalid_request"},
 		{name: "a parameter given twice is invalid_request", h: h, raw: codeForm(testDeviceID, key).Encode() + "&device_id=" + testDeviceID, wantStatus: http.StatusBadRequest, wantError: "invalid_request"},
