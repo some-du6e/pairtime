@@ -70,7 +70,7 @@
 	<h2 id="who-title">Who can read it</h2>
 	<p>
 		This version of pairtime keeps the text of your prompts, and what your AI tool sent with them, in two places only:
-		the inbox, until the agent reads it, and the hook calls it holds, until it has recorded them, as the table above says.
+		the inbox, until the agent reads it, and the hook calls it holds, until it has read them, as the table above says.
 		Both are plain text, not encrypted. They're in a folder that other people's accounts on this computer can't open, but
 		an administrator can, and so can any program running as you. A backup of your home folder can copy them as they are.
 	</p>
