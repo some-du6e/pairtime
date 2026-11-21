@@ -196,6 +196,7 @@ func TestKeys(t *testing.T) {
 			k.Agent(sid, "a627b317dcd2e5387"), "a18edd018233f21d701ec5411b03a6e4a"},
 		{"a cron key is c and the HMAC over its domain, the session's id and the scheduled prompt's prefix",
 			k.Cron(sid, "Reply with the word tick and nothing else."), "c81715e31a20c0bb3f23196f4f3b0e3c5"},
+		{"the memory key is m and the HMAC over its domain alone", k.Memory(), "m3272157ed3aa96e2a5649916f4566b51"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -212,7 +213,7 @@ func TestKeys(t *testing.T) {
 	t.Run("one id gives different keys in different domains, and one pair of ids in different orders", func(t *testing.T) {
 		seen := map[string]bool{}
 		for _, key := range []string{k.Session("x"), k.Turn("x", ""), k.Agent("x", ""), k.Cron("x", ""),
-			k.Turn("", "x"), k.Turn("x", "y"), k.Turn("y", "x"), k.Turn("xy", "")} {
+			k.Turn("", "x"), k.Turn("x", "y"), k.Turn("y", "x"), k.Turn("xy", ""), k.Memory(), k.Session("memory")} {
 			if seen[key[1:]] {
 				t.Errorf("%s repeats", key)
 			}

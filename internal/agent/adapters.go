@@ -260,9 +260,14 @@ type adaptersState struct {
 }
 
 // memoryKey names the K_session a memory was saved under, as an opaque key
-// of a fixed id: the session key no harness session can have.
+// over a domain of its own (adapters.Keys.Memory; ledger-v1 3), which no
+// session, turn, subagent or scheduled prompt key can equal. It is "" for a
+// K_session the agent doesn't have yet.
 func memoryKey(kSession []byte) string {
-	return hookpath.SessionKey(kSession, "pairtime adapters' memory")
+	if len(kSession) != hookpath.SessionSecretLen {
+		return ""
+	}
+	return adapters.NewKeys(kSession).Memory()
 }
 
 func newAdapterHost(a *agent) *adapterHost {

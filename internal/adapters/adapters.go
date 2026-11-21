@@ -414,3 +414,10 @@ func (k *Keys) Agent(session, id string) string { return k.key("a", "agent", ses
 // characters in the harness session session (agent.stop's pending_crons,
 // which stay on the device).
 func (k *Keys) Cron(session, prefix string) string { return k.key("c", "cron", session, prefix) }
+
+// Memory returns the key the agent names this K_session by beside the
+// adapters' saved memory in state.json, so memory saved under another one,
+// as after a restore, is left behind. It is over a domain of its own, so no
+// session, turn, subagent or scheduled prompt key equals it, and it never
+// leaves the device.
+func (k *Keys) Memory() string { return k.key("m", "memory") }
