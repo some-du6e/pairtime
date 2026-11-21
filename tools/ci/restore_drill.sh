@@ -55,7 +55,7 @@ set -euo pipefail
 image_paths=(
 	cmd/pairtimed
 	internal/server
-	'deploy/*.go'
+	deploy/embed.go
 	deploy/pairtime.toml.tmpl
 	deploy/litestream.yml
 	docs/embed.go
@@ -131,6 +131,14 @@ decide() {
 	if [ "${GITHUB_EVENT_NAME:-}" = pull_request ] &&
 		grep -Eq '^[-+][[:space:]]+image:[[:space:]]+ghcr\.io/some-du6e/pairtimed:' <<< "$diff"; then
 		fail "this PR changes compose.yml's pairtimed pin and what goes into the image too, and one drill can test only one of them: pin in a PR of its own (deploy/runbook.md, The image pin)"
+	fi
+	# Only the pinned image runs litestream.frozen.yml, and a source build's
+	# drill runs without it, so an edit to it goes in a PR of its own, whose
+	# drill runs the pinned image with it. Adding it, as #123 did, or
+	# deleting it with its mount, as the next pin does, is no edit.
+	if [ "${GITHUB_EVENT_NAME:-}" = pull_request ] &&
+		! git diff --quiet --diff-filter=M "$base" "$head" -- deploy/litestream.frozen.yml; then
+		fail "this PR edits deploy/litestream.frozen.yml, which only the pinned image runs, and changes what goes into the image too, whose drill runs without it: edit the frozen copy in a PR of its own (deploy/runbook.md, The image pin)"
 	fi
 	drill_mode=source
 }

@@ -116,7 +116,7 @@ func runDoctor(ctx context.Context, e *env, args []string) int {
 	load := configFlags(fs, e)
 	skipList := fs.String("skip", "", "checks to leave out, comma-separated: a name, or its first or last part, such as hca,push,write_once")
 	onlyList := fs.String("only", "", "the checks to run, comma-separated in the same way, leaving out the rest")
-	litestreamConfig := fs.String("litestream-config", "/etc/litestream.yml", "the litestream.yml compose mounts, to compare with pairtime.toml")
+	litestreamConfig := fs.String("litestream-config", "/etc/litestream.yml", "the litestream.yml Litestream runs, which the image carries, to compare with pairtime.toml")
 	witnessDir := fs.String("witness-dir", "/witness", "where pairtimed writes the day roots the witness sidecar pushes")
 	timeout := fs.Duration("timeout", 15*time.Second, "how long each check may take")
 	if code, done := parse(fs, args); done {

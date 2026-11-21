@@ -34,10 +34,11 @@ on:
     paths:
       - cmd/pairtimed/**
       - internal/server/**
-      # Of deploy/, only the package init imports, the template it embeds,
-      # and litestream.yml, which the Dockerfile copies in. A pin in
-      # compose.yml or a runbook edit builds no image.
-      - deploy/*.go
+      # Of deploy/, only embed.go, the one file of the package init imports
+      # that isn't a test, the template it embeds, and litestream.yml,
+      # which the Dockerfile copies in. A pin in compose.yml, a runbook edit
+      # or a change to deploy's tests builds no image.
+      - deploy/embed.go
       - deploy/pairtime.toml.tmpl
       - deploy/litestream.yml
       # The packages outside internal/server that pairtimed imports.

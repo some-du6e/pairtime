@@ -330,7 +330,7 @@ jobs:
           cd "$D"
           compose() { docker compose -f compose.yml -f drill.yml "$@"; }
           # The keys from their backup (deploy/runbook.md, Restoring the keys).
-          sudo install -d -m 0700 -o "$UID65532" -g "$UID65532" data/keys
+          sudo install -d -m 0700 -o "$UID65532" -g "$UID65532" data/keys data/tmp
           sudo install -m 0600 -o "$UID65532" -g "$UID65532" \
             "$RUNNER_TEMP/keys/pairtime-keys/server.ed25519" "$RUNNER_TEMP/keys/pairtime-keys/evidence.p256" \
             "$RUNNER_TEMP/keys/pairtime-keys/pepper" data/keys/

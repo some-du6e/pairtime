@@ -165,11 +165,15 @@ func runInit(ctx context.Context, e *env, args []string) int {
 	// the database itself, its replica, and evidence sealed to the old key.
 	// Old key backups stop nothing.
 	var leftover string
+	// Whether object storage is on, so a replica could bring the database
+	// back.
+	replicated := false
 	if !anyKey(keysDir) {
 		objs, err := openBuckets(cfg)
 		if err != nil {
 			return fail("%v", err)
 		}
+		replicated = objs != nil
 		prefixes := []string{litestreamPrefix, objstore.EvidencePrefix, backup.KeyBackupPrefix}
 		if *newKeys {
 			prefixes = prefixes[:2]
@@ -190,8 +194,11 @@ func runInit(ctx context.Context, e *env, args []string) int {
 	if err != nil {
 		return fail("%v", err)
 	}
-	if made && leftover != "" {
+	switch {
+	case made && leftover != "" && replicated:
 		fmt.Fprintf(e.stderr, "pairtimed init: warning: %s. pairtimed serve refuses a database written with other keys, and Litestream restores the old one from its replica whenever %s holds none, so before the first start move the database aside and delete litestream/ and evidence/ from the main bucket (deploy/runbook.md, Starting over with new keys)\n", leftover, dir)
+	case made && leftover != "":
+		fmt.Fprintf(e.stderr, "pairtimed init: warning: %s. pairtimed serve refuses a database written with other keys, so move it aside before the first start (deploy/runbook.md, Starting over with new keys)\n", leftover)
 	}
 
 	if *out == "-" {

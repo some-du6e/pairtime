@@ -32,7 +32,7 @@ gh run view <run id> --repo some-du6e/pairtime   # its notice is the image: line
 
 Until the first push is pinned, the line reads `ghcr.io/some-du6e/pairtimed:UNRELEASED`, which can't be pulled. If you see that, ask the orchestrator for the PR that pins it, and deploy once it has merged. The orchestrator makes the package public once, after its first push, so the host pulls it without logging in.
 
-Images built from #123 on carry their own `litestream.yml` at `/etc/litestream.yml`, so each runs the Litestream settings and `exec` line it was built and drilled with. Older images have none, so `compose.yml` mounts `litestream.frozen.yml` for them: a copy of `litestream.yml` that changes only in a PR whose restore drill runs the pinned image. A change to `litestream.yml` itself reaches hosts only in the next image, which its PR's drill builds and runs. The first PR that pins a newer image also deletes that mount, the `./litestream.frozen.yml` line under the pairtimed service and its comment, and `litestream.frozen.yml` with it; its restore drill fails until it does.
+Images built from #123 on carry their own `litestream.yml` at `/etc/litestream.yml`, so each runs the Litestream settings and `exec` line it was built and drilled with. Older images have none, so `compose.yml` mounts `litestream.frozen.yml` for them, a copy of `litestream.yml` that only a drill of the pinned image runs. So it changes only in a PR of its own: a PR that edits it and changes what goes into the image fails its restore drill. A change to `litestream.yml` itself reaches hosts only in the next image, which its PR's drill builds and runs. The first PR that pins a newer image also deletes the mount, the `./litestream.frozen.yml` line under the pairtimed service and its comment, and `litestream.frozen.yml` with it. Its restore drill fails while the mount is there, and ci.yml's `TestFrozenLitestream` while the file is.
 
 ## The pilot
 
@@ -222,7 +222,7 @@ Every line should say `ok`, except these, which may say `skip`:
 - `witness`, until WP-SV17's publisher writes day roots to `witness-roots/`. Before then the sidecar runs and finds nothing to push.
 - `hca`, while there is no client id.
 
-doctor checks the configuration, the keys and their modes, the database and its migrations, the room the database has on its disk, that `litestream.yml` and `pairtime.toml` name the same database and bucket, `/readyz` with the replica's lag, that neither bucket keeps versions, the lifecycle rules of both (none that deletes in `pairtime-data`, and one in `pairtime-snapshots` that deletes snapshots within 30 days), that both refuse a second write-once put, that an upload of about 11 MiB in parts reaches the snapshot bucket whole, as each nightly snapshot past 64 MiB goes up, the newest snapshot, that the newest key backup holds these keys, HCA's discovery document, the witness repository through GitHub's public API, each push monitor, and `https://<host>/healthz` through the tunnel. It pings a monitor only when that monitor's owner would, and checks the HCA client id and secret with one client_credentials grant. HCA refuses that grant with `invalid_scope` once the id and secret check out, and with `invalid_client` when they don't, so `invalid_scope` in the `hca` line is ok. A `warn` line means doctor couldn't tell, and doesn't fail the run. An R2 key scoped to the two buckets may get 403 for GetBucketVersioning and GetBucketLifecycleConfiguration. R2 has no versioning, and the lifecycle rules show in the dashboard under each bucket's settings, so check them there, note it in the deploy log, and leave the two checks out with `-skip versioning,lifecycle`. Paste the output into the deploy log, issue #103.
+doctor checks the configuration, the keys and their modes, the database and its migrations, the room the database has on its disk, that `litestream.yml` and `pairtime.toml` name the same database and bucket, `/readyz` with the replica's lag, that neither bucket keeps versions, the lifecycle rules of both (none that deletes in `pairtime-data`, and one in `pairtime-snapshots` that deletes snapshots within 30 days), that both refuse a second write-once put, that an upload of about 11 MiB in parts reaches the snapshot bucket whole, as each nightly snapshot past 64 MiB goes up, the newest snapshot, that the newest key backup holds these keys, HCA's discovery document, the witness repository through GitHub's public API, each push monitor, and `https://<host>/healthz` through the tunnel. It pings a monitor only when that monitor's owner would, and checks the HCA client id and secret with one client_credentials grant. HCA refuses that grant with `invalid_scope` once the id and secret check out, and with `invalid_client` when they don't, so `invalid_scope` in the `hca` line is ok. An image from before #123 prints the same answer as `FAIL`, `the token endpoint answered 400 invalid_scope`, which is ok too. A `warn` line means doctor couldn't tell, and doesn't fail the run. An R2 key scoped to the two buckets may get 403 for GetBucketVersioning and GetBucketLifecycleConfiguration. R2 has no versioning, and the lifecycle rules show in the dashboard under each bucket's settings, so check them there, note it in the deploy log, and leave the two checks out with `-skip versioning,lifecycle`. Paste the output into the deploy log, issue #103.
 
 ### 13. From outside
 
@@ -269,16 +269,15 @@ Keep the copy of `pairtime.toml`: a rollback can need it. Migrations only add in
 
 ## Rolling back
 
-A rollback is the previous image. Find the commit before the bump and put its `compose.yml` back, with the `litestream.frozen.yml` that commit has, if any:
+A rollback is the previous image. Find the commit before the bump and put its `deploy/` back, so `compose.yml` and every file it mounts are the ones that image ran with:
 
 ```sh
 git -C /srv/pairtime log --oneline -5 -- deploy/compose.yml
-git -C /srv/pairtime checkout <commit before the bump> -- deploy/compose.yml
-git -C /srv/pairtime checkout <commit before the bump> -- deploy/litestream.frozen.yml   # only if it has one
+git -C /srv/pairtime checkout --no-overlay <commit before the bump> -- deploy/
 docker compose up -d
 ```
 
-An image from before #123 has no `litestream.yml` of its own, so that commit's `compose.yml` mounts `litestream.frozen.yml`, the copy that image was drilled with. Newer images carry theirs, and that commit has no mount for them.
+An image from before #123 has no `litestream.yml` of its own. A commit from before #123 mounts its own `litestream.yml` for it, and a commit from #123 up to the next pin mounts `litestream.frozen.yml`. A newer image carries its own, and its commit mounts none. `--no-overlay` also removes the files in `deploy/` that the commit lacks. git ignores `config/`, `data/` and `witness-roots/`, so the checkout leaves them alone.
 
 The previous release starts on the newer `pairtime.toml`: a release that adds a key raises `config_version`, and an older release ignores the keys it doesn't know in such a file, with a warning in its log. The exception is a release that added a value to an existing key. The previous release refuses that value and doesn't start, so put the copy back and start again:
 
@@ -287,7 +286,7 @@ cp config/pairtime.toml.before-<date> config/pairtime.toml
 docker compose up -d
 ```
 
-The older release also runs on a database a newer one migrated, since v1 migrations only add, and its log names them. Then open a PR that reverts the bump, and once it merges, `git -C /srv/pairtime checkout HEAD -- deploy/ && git -C /srv/pairtime pull --ff-only`.
+The older release also runs on a database a newer one migrated, since v1 migrations only add, and its log names them. Then open a PR that reverts the bump, and once it merges, `git -C /srv/pairtime checkout --no-overlay HEAD -- deploy/ && git -C /srv/pairtime pull --ff-only`.
 
 ## Restoring the keys
 
@@ -300,12 +299,12 @@ age -d -i <identity file> pairtime-keys-<time>.tar.age | tar -x
 and sends you the `pairtime-keys/` directory over SSH. On the host:
 
 ```sh
-sudo install -d -m 0700 -o 65532 -g 65532 data data/keys
+sudo install -d -m 0700 -o 65532 -g 65532 data data/keys data/tmp
 sudo install -m 0600 -o 65532 -g 65532 pairtime-keys/server.ed25519 \
   pairtime-keys/evidence.p256 pairtime-keys/pepper data/keys/
 ```
 
-`install -d` makes `data/` itself with the right owner and mode when the host has none yet; otherwise it would make it root's. Put `pairtime-keys/PAIRTIME_EMAIL_KEY`'s one line back into `config/secrets.env` as `PAIRTIME_EMAIL_KEY=<value>`, then `shred -u` every file under `pairtime-keys/` and remove the directory, here and on Karim's side. `docker compose run --rm -T pairtimed pairtimed keys show` should print the same key ids as the deploy log, issue #103, and `pairtimed keys list` the backups that hold them. With the keys back, step 7's init is safe: it keeps them, and writes `pairtime.toml` if `config/` has none.
+`install -d` makes `data/` itself with the right owner and mode when the host has none yet; otherwise it would make it root's. It makes `data/tmp` too, which an image from before #123 doesn't (step 2). Put `pairtime-keys/PAIRTIME_EMAIL_KEY`'s one line back into `config/secrets.env` as `PAIRTIME_EMAIL_KEY=<value>`, then `shred -u` every file under `pairtime-keys/` and remove the directory, here and on Karim's side. `docker compose run --rm -T pairtimed pairtimed keys show` should print the same key ids as the deploy log, issue #103, and `pairtimed keys list` the backups that hold them. With the keys back, step 7's init is safe: it keeps them, and writes `pairtime.toml` if `config/` has none.
 
 ## Starting over with new keys
 
@@ -318,7 +317,14 @@ sudo sh -c 'mv data/pairtime.db data/pairtime.db-wal data/pairtime.db-shm data/.
 sudo ls -la data   # tmp/, nothing else
 ```
 
-Then, in the R2 dashboard, delete every object under `litestream/` and `evidence/` in `pairtime-data`. Keep `backups/keys/`. Run step 7's init with `-new-keys`, which warns if a database or replica is still there, back the new keys up at once (step 8), and start (step 10). Note in the deploy log, issue #103, that the server started over and why. Once nobody needs `/srv/pairtime-old`, remove it with `shred`.
+Then, in the R2 dashboard, delete every object under `litestream/` and `evidence/` in `pairtime-data`. Keep `backups/keys/`. Make the new keys with init. `config/pairtime.toml` stays, with its operators and every edit: `-force` lets init run beside it, and `> /dev/null` drops the copy init prints.
+
+```sh
+docker compose run --rm -T pairtimed pairtimed init -base-url https://pairtime.karimeltaib.com \
+  -new-keys -force -config-out - > /dev/null
+```
+
+init prints the new key ids for the deploy log, and warns if a database or replica is still there. Back the new keys up at once (step 8), start (step 10), and note in the deploy log, issue #103, that the server started over and why. Once nobody needs `/srv/pairtime-old`, remove it with `shred`.
 
 ## Restoring from a disk backup
 

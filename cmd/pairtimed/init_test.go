@@ -215,6 +215,12 @@ func TestInit(t *testing.T) {
 				writeFile(t, filepath.Join(data, config.DefaultDatabaseFile), "", 0o600)
 			},
 			wantStderr: "Starting over with new keys"},
+		{name: "-new-keys with object storage off warns only to move the database aside, since no replica can bring it back",
+			args: []string{"-new-keys", "-no-object-storage"}, wantKeys: true,
+			setup: func(t *testing.T, data, _ string, _ *objstoretest.Server) {
+				writeFile(t, filepath.Join(data, config.DefaultDatabaseFile), "", 0o600)
+			},
+			wantStderr: "so move it aside before the first start", notStderr: "litestream/"},
 		{name: "-new-keys where only old key backups are left makes keys without a warning, since they stop nothing",
 			args: []string{"-new-keys"}, environ: s3Environ, wantKeys: true,
 			setup: func(t *testing.T, _, _ string, s3 *objstoretest.Server) {

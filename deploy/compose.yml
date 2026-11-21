@@ -49,9 +49,9 @@ services:
       # above has none, so it gets litestream.frozen.yml, a copy that changes
       # only with that image: a change to litestream.yml reaches hosts with
       # the next image it is drilled in, never this one. The PR that first
-      # pins a newer image deletes these lines and that file, and
-      # restore-drill.yml fails it until it does (deploy/runbook.md, The
-      # image pin).
+      # pins a newer image deletes these lines and that file. Its restore
+      # drill fails while the mount is there, and TestFrozenLitestream while
+      # the file is (deploy/runbook.md, The image pin).
       - ./litestream.frozen.yml:/etc/litestream.yml:ro
       # Where pairtimed writes each day's signed witness root (WP-SV17).
       - ./witness-roots:/witness
