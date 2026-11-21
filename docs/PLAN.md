@@ -68,6 +68,7 @@ GitHub Actions is the only build and test environment, and its capacity is share
 |---|---|---|---|---|
 | `ci.yml` | one `ubuntu-latest` job | every PR, pushes to `main`, `workflow_dispatch` | PR1's steps (license text and SPDX headers, gofmt, vet, `go test ./...`, the seven-target cross-compile with the 15 MB client budget), plus, as new steps: module license check, `oracle-guard`, fixture provenance check, `python3 -I tools/ledger_ref.py selftest`, `score-regression`, the ingest fuzz corpus, the Ruby client check and the red-team goldens | PR1, then WP-CI1, WP-LG1, WP-SC4, WP-SV5, WP-PG5, WP-FX7 |
 | `platform.yml` | `windows-latest`, `macos-latest`, and `ubuntu-latest` with Xvfb, one job each | PRs touching `internal/platform/**`, `internal/install/**`, `internal/agent/ipc/**`, `internal/adapters/git/**`, `cmd/pairtime/**`; release tags; `workflow_dispatch` | `go test` of those packages only, not the whole module; the Linux job runs only the desktop tests that need an X server and a private D-Bus | WP-CI1 |
+| `rehearsal.yml` | one `ubuntu-latest` job with Xvfb and docker | PRs touching what it builds or reads (both binaries' packages, `pkg/**`, `go.mod`, `go.sum`, the Claude Code capture it replays; `tools/ci`'s `TestRehearsalPaths` checks the list); every push to `main`; release tags; `workflow_dispatch` | the end-to-end rehearsal (`internal/rehearsal`): Hack Club Auth sign-in against `navikt/mock-oauth2-server`, `pairtime install` and `login`, a Claude Code session typed under Xvfb, the hours on `/dashboard`, uninstall | WP-E2E |
 | `nightly.yml` | `ubuntu-latest` | 03:00 UTC daily, `workflow_dispatch` | `go test -race` (with `CGO_ENABLED=1`, the one exception to the cgo rule) over `internal/agent/...`, `internal/server/...` and `pkg/...`, plus 60 s of Go fuzzing on ingest (WP-SV5); the 10-minute footprint run is in `footprint.yml` | WP-CI1 |
 | `postgres.yml` | `ubuntu-latest` with a Postgres 18 service | PRs touching `internal/server/store/**`; nightly; `workflow_dispatch` | the store and migration tests against Postgres (SP 7.4) | WP-SV1 |
 | `web.yml` | `ubuntu-latest` | PRs touching `web/**`, `extension/**`, `internal/webui/**`; release tags | `npm ci`, vitest, the real UI build, Playwright on Chromium only | WP-CI1, WP-UI0 |
@@ -83,9 +84,9 @@ GitHub Actions is the only build and test environment, and its capacity is share
 
 Rules every workflow follows:
 
-- `concurrency: group: ${{ github.workflow }}-${{ github.ref }}` with `cancel-in-progress: true`, so a new push cancels the stale run. `release.yml` on a tag is the exception: it never cancels.
+- `concurrency: group: ${{ github.workflow }}-${{ github.ref }}` with `cancel-in-progress: true`, so a new push cancels the stale run. `release.yml` on a tag never cancels, and `rehearsal.yml` gives each push its own group, so a push to `main` or a tag never cancels or waits for another.
 - `workflow_dispatch` on every workflow, so a run can be repeated by hand.
-- `timeout-minutes` on every job: 15 for `ci.yml`, 20 for `platform.yml`, 30 for e2e jobs, 45 for `loadtest.yml`.
+- `timeout-minutes` on every job: 15 for `ci.yml`, 20 for `platform.yml`, 30 for e2e jobs, 45 for `loadtest.yml` and `rehearsal.yml`.
 - `permissions: contents: read` unless the job pushes (`tidy.yml`) or publishes (`release.yml`).
 - No matrix over Go versions or architectures. The seven targets are a loop inside one job (PR1). The only three-runner workflows are the two e2e jobs, and both are path-filtered and release-gated.
 - Windows and macOS tests use injected fakes. Real focus switching runs only on Linux under Xvfb with `xdotool` (JE must-fix 11).

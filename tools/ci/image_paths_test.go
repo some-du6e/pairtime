@@ -134,6 +134,23 @@ func sortedUnique(s []string) []string {
 // cache are left out, since go.sum pins what the build takes from them.
 func sources(t *testing.T, target, pkg string) buildFiles {
 	t.Helper()
+	return walkSources(t, target, nil, pkg, false)
+}
+
+// testSources returns the files in the repository that go test -tags
+// reads to build the test binary of the package in pkg for target: what
+// sources returns with those build tags, and the package's own _test.go
+// files, the files they embed and the packages they import.
+func testSources(t *testing.T, target string, tags []string, pkg string) buildFiles {
+	t.Helper()
+	return walkSources(t, target, tags, pkg, true)
+}
+
+// walkSources walks the import graph of the package in pkg for sources and
+// testSources, with the build tags in tags, and with the package's own
+// test files when tests is set.
+func walkSources(t *testing.T, target string, tags []string, pkg string, tests bool) buildFiles {
+	t.Helper()
 	mod, replaced := goMod(t)
 	goos, goarch, ok := strings.Cut(target, "/")
 	if !ok {
@@ -141,6 +158,7 @@ func sources(t *testing.T, target, pkg string) buildFiles {
 	}
 	ctx := build.Default
 	ctx.GOOS, ctx.GOARCH, ctx.CgoEnabled = goos, goarch, false
+	ctx.BuildTags = append(slices.Clone(ctx.BuildTags), tags...)
 	var out buildFiles
 	seen := make(map[string]bool)
 	var visit func(dir string)
@@ -155,13 +173,21 @@ func sources(t *testing.T, target, pkg string) buildFiles {
 		if err != nil {
 			t.Fatalf("%s for %s: %v", dir, target, err)
 		}
-		for _, f := range p.GoFiles {
+		files, embeds, imports := p.GoFiles, p.EmbedPatterns, p.Imports
+		// go test compiles the test files of the package it tests alone;
+		// the packages they import are built as go build builds them.
+		if tests && dir == pkg {
+			files = slices.Concat(files, p.TestGoFiles, p.XTestGoFiles)
+			embeds = slices.Concat(embeds, p.TestEmbedPatterns, p.XTestEmbedPatterns)
+			imports = slices.Concat(imports, p.TestImports, p.XTestImports)
+		}
+		for _, f := range files {
 			out.goFiles = append(out.goFiles, path.Join(dir, f))
 		}
-		for _, pattern := range p.EmbedPatterns {
+		for _, pattern := range embeds {
 			out.embedded = append(out.embedded, embeddedFiles(t, dir, pattern)...)
 		}
-		for _, imp := range p.Imports {
+		for _, imp := range imports {
 			if d, ok := localDir(imp, mod, replaced); ok {
 				visit(d)
 			}
