@@ -74,6 +74,10 @@
 		computer can't open, but an administrator can, and so can any program running as you. A backup of your home folder
 		can copy it as it is.
 	</p>
+	<p data-testid="sketches">
+		The prompt similarity sketches (MinHash) in the table are not encrypted either. They're numbers worked out from your
+		prompts' words, not the words, and they're in the same pairtime folder as the inbox.
+	</p>
 	<p>
 		A later version will keep your prompts, the agent's final reply to each one and the file paths for your recaps in a
 		vault, which it encrypts. That will keep them from other people who use this computer, from cloud backups of your

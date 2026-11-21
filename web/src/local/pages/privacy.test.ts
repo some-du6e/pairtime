@@ -144,6 +144,11 @@ describe('Privacy', () => {
 			},
 		},
 		{
+			name: "Who can read it says the MinHash sketches are kept unencrypted, as DESIGN 4.4 keeps them in clear",
+			check: (html) =>
+				expect(text(html)).toContain('The prompt similarity sketches (MinHash) in the table are not encrypted either.'),
+		},
+		{
 			name: 'Who can read it says the dashboard opens only in the browser pairtime dashboard signed in',
 			check: (html) =>
 				expect(text(html)).toContain('This dashboard opens only on this computer, in the browser that pairtime dashboard signed in.'),
