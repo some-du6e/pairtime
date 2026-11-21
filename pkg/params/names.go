@@ -121,8 +121,9 @@ var (
 
 // SM 8.4, attribution.
 var (
-	// ATTRIB_STICKY_S is how long a multi-session terminal keeps the
-	// project of its last anchor when no upcoming lead applies.
+	// ATTRIB_STICKY_S is how long a terminal hosting several sessions keeps
+	// the session of its last anchor when the look-ahead doesn't apply (SM
+	// 3.2, 8.4).
 	ATTRIB_STICKY_S = IntParam{"ATTRIB_STICKY_S"}
 	// PROC_SCAN_S is the interval of the harness process scan.
 	PROC_SCAN_S = IntParam{"PROC_SCAN_S"}

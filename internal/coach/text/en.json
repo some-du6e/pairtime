@@ -1,0 +1,72 @@
+{
+  "$comment": "The words pairtime shows a teen about their time, shared by the coach, the CLI views and the dashboard (DESIGN 3.8; approach-teen.md D5). Plain and kind: credited time is your time, agent-only time is named after the agent, other time is described for what it was, X.noprog seconds that progress can still bring back are on hold, and nothing scolds or counts streaks. {name} is a placeholder; text.go lists which each entry may use.",
+  "agents": {
+    "claude_code": "Claude",
+    "cursor": "Cursor",
+    "copilot": "Copilot",
+    "codex": "Codex",
+    "gemini": "Gemini",
+    "devin": "Devin",
+    "cline": "Cline",
+    "opencode": "OpenCode",
+    "other": "your agent"
+  },
+  "kinds": {
+    "prompting": "writing prompts",
+    "reading_output": "reading {agent}'s answers",
+    "supervising": "watching {agent} work",
+    "reviewing": "reviewing and deciding",
+    "testing": "testing",
+    "debugging": "running commands",
+    "hand_edit": "editing by hand",
+    "lookup": "looking things up"
+  },
+  "agent_time": "{agent}, working on its own",
+  "other": {
+    "X.absent": "away",
+    "X.other_focus": "in other apps",
+    "X.ambiguous": "in a window pairtime couldn't tie to one project",
+    "X.no_anchor": "here, between steps",
+    "X.no_input": "prompts that arrived without typing",
+    "X.reroll": "re-rolling the same prompt",
+    "X.rewrite_loop": "{agent} rewriting the same lines",
+    "X.same_error": "the same error coming back",
+    "X.autopilot": "replies sent before reading the answer",
+    "X.noprog": "past two hours without progress, counted at half",
+    "X.lookup_cap": "looking things up, past what counts",
+    "X.bucket_cap": "reading, past what counts",
+    "X.day_cap": "past 12 hours in one day"
+  },
+  "on_hold": "on hold: these come back when you fix it",
+  "levels": {
+    "A": "pairtime saw your typing",
+    "B": "pairtime saw you at the computer, not your typing",
+    "C": "this shows on your own dashboard, not on your profile, build days or most programs"
+  },
+  "phrases": {
+    "you": "you {time}",
+    "you_level_c": "you {time}, {level_c} level C",
+    "you_calibrating": "you calibrating",
+    "agent": "{agent} {time}",
+    "separator": " · ",
+    "your_time": "Your time",
+    "calibrating": "calibrating",
+    "calibrating_note": "Your time shows as calibrating while pairtime checks how it counts.",
+    "level_c_note": "{time} of it is level C: it shows on your own dashboard, not on your profile, build days or most programs",
+    "pending_note": "{time} of it may still change",
+    "nothing_today": "Nothing tracked yet today.",
+    "nothing_on": "Nothing tracked this day.",
+    "session_last": "Your last session: {project}",
+    "session_open": "Your session so far: {project}",
+    "session_span": "{day}, {start} to {end}",
+    "session_since": "{day}, since {start}",
+    "no_session": "No work sessions yet. The first one starts when pairtime counts some of your time.",
+    "levels_head": "How pairtime saw your time",
+    "level_line": "level {level}: {words}",
+    "agent_down": "pairtime's agent isn't running, so there's nothing to show yet. Logging in starts it, or run: pairtime agent --detach",
+    "agent_old": "The pairtime agent that's running can't show this yet. It can once it restarts on this version.",
+    "agent_slow": "pairtime's agent didn't answer in time. Try again in a moment.",
+    "agent_error": "pairtime couldn't get this from its agent: {error}",
+    "store_error": "pairtime couldn't read what its agent stored: {error}"
+  }
+}
