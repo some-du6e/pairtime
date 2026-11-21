@@ -165,6 +165,28 @@ func TestReadRecords(t *testing.T) {
 			wantErr: ErrDamaged,
 		},
 		{
+			name: "after a seal that doesn't close the record before it, that record is in no batch and the next batch keeps its number",
+			setup: func(t *testing.T, dir string, w *Writer, c *clock, rng *rand.Rand) {
+				writeAt(t, w, c, rng, testT)
+				seal(t, w, c, testT+1000)
+				w.Close()
+				seg := segPath(dir, "2026-11-19")
+				record := func(seq uint64) {
+					var h ledger.Header
+					binary.BigEndian.PutUint64(h[:8], seq)
+					h[8] = 0x13
+					body := []byte(`{"n":"` + string(make64('0')) + `","e":{"t":1795089602000}}`)
+					appendTo(t, seg, appendFrame(nil, kindRecord, append(h[:], body...)))
+				}
+				record(2)
+				appendTo(t, seg, appendFrame(nil, kindSeal, []byte(`{"b":2,"first_seq":2,"n":2}`)))
+				record(3)
+				appendTo(t, seg, appendFrame(nil, kindSeal, []byte(`{"b":3,"first_seq":3,"n":1}`)))
+			},
+			want:    []shown{{1, "2026-11-19", 1}, {2, "2026-11-19", 0}, {3, "2026-11-19", 3}},
+			wantErr: ErrDamaged,
+		},
+		{
 			name: "a record of a kind added after this version is read, with its rtype",
 			setup: func(t *testing.T, dir string, w *Writer, c *clock, rng *rand.Rand) {
 				writeAt(t, w, c, rng, testT)
