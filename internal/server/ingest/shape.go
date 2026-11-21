@@ -50,17 +50,15 @@ var (
 	harnessOptional = []string{"version"}
 )
 
-// The enum values each string may hold, from pkg/event (ingest-v1 2.3).
+// The enum values each string may hold, pkg/event's own lists (ingest-v1
+// 2.3), so a value pkg/event adds is one ingest takes.
 var (
-	activities = []event.Activity{
-		event.ActivityPrompting, event.ActivityReadingOutput, event.ActivitySupervising, event.ActivityReviewing,
-		event.ActivityTesting, event.ActivityDebugging, event.ActivityHandEdit, event.ActivityLookup,
-	}
-	evidences    = []event.Evidence{event.EvidenceA, event.EvidenceB, event.EvidenceC}
-	slotLabels   = []event.Label{event.LabelViaTrack, event.LabelViaPlugin, event.LabelViaBridge}
-	bucketStates = []event.BucketState{event.StatePending, event.StateFinal, event.StateProvisional, event.StateRestored}
-	witnesses    = []event.Witness{event.Witnessed, event.Offline, event.Backfilled}
-	actors       = []event.Actor{event.ActorHuman, event.ActorAgent, event.ActorUnknown}
+	activities   = event.Activities()
+	evidences    = event.Evidences()
+	slotLabels   = event.SlotLabels()
+	bucketStates = event.BucketStates()
+	witnesses    = event.Witnesses()
+	actors       = event.Actors()
 	// agentTrailers are the agents a commit's trailer or bot author can
 	// credit, the values internal/adapters/git writes (its trailerAgents,
 	// Replit's trailer and botAuthors). The list is closed, because the
@@ -69,10 +67,7 @@ var (
 	agentTrailers = []string{"aider", "claude", "lovable", "replit"}
 	// labelHarnesses are the harnesses a device's labels may name: every
 	// one of pkg/event's but none, which marks events no harness made.
-	labelHarnesses = []event.Harness{
-		event.HarnessClaudeCode, event.HarnessCursor, event.HarnessCopilot, event.HarnessCodex, event.HarnessGemini,
-		event.HarnessDevin, event.HarnessCline, event.HarnessOpenCode, event.HarnessOther,
-	}
+	labelHarnesses = slices.DeleteFunc(event.Harnesses(), func(h event.Harness) bool { return h == event.HarnessNone })
 )
 
 // Bounds of lists and numbers (ingest-v1 2.3).
@@ -82,7 +77,6 @@ const (
 	maxUncredited  = 64
 	maxAgentOnly   = 64
 	maxHarnesses   = 16
-	maxBuildLen    = 64
 	maxSeconds     = 60
 	maxSlotSeconds = 15
 	maxCount       = math.MaxInt32
@@ -122,9 +116,67 @@ func join(path, name string) string {
 // index names element i of the list at path.
 func index(path string, i int) string { return fmt.Sprintf("%s[%d]", path, i) }
 
+// member is one member of a JSON object, as it appears.
+type member struct {
+	name  string
+	value json.RawMessage
+}
+
+// members reads the JSON object raw member by member, in the order they
+// appear, a repeated name as often as it appears. It reports false when
+// raw isn't an object.
+func members(raw json.RawMessage) ([]member, bool) {
+	if jsonKind(raw) != '{' {
+		return nil, false
+	}
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	if t, err := dec.Token(); err != nil || t != json.Delim('{') {
+		return nil, false
+	}
+	var out []member
+	for dec.More() {
+		t, err := dec.Token()
+		if err != nil {
+			return nil, false
+		}
+		name, ok := t.(string)
+		if !ok {
+			return nil, false
+		}
+		var v json.RawMessage
+		if err := dec.Decode(&v); err != nil {
+			return nil, false
+		}
+		out = append(out, member{name: name, value: v})
+	}
+	if t, err := dec.Token(); err != nil || t != json.Delim('}') {
+		return nil, false
+	}
+	return out, true
+}
+
+// memberMap reads the JSON object raw into a map. repeated reports a name
+// that appears twice, which ingest-v1 2.3 refuses; ok is false when raw
+// isn't an object.
+func memberMap(raw json.RawMessage) (m map[string]json.RawMessage, repeated, ok bool) {
+	ms, ok := members(raw)
+	if !ok {
+		return nil, false, false
+	}
+	m = make(map[string]json.RawMessage, len(ms))
+	for _, mb := range ms {
+		if _, seen := m[mb.name]; seen {
+			repeated = true
+		}
+		m[mb.name] = mb.value
+	}
+	return m, repeated, true
+}
+
 // object reads the object at path and checks its members against the
-// allowlist: a member it doesn't name is unknown_field at path, never
-// naming the member, and a missing required one is missing_field.
+// allowlist, in the order they appear: a member it doesn't name is
+// unknown_field at path, and a name that repeats is bad_rule at path,
+// neither naming the member. A missing required one is missing_field.
 func object(raw json.RawMessage, path string, required, optional []string) (map[string]json.RawMessage, *itemErr) {
 	if jsonKind(raw) != '{' {
 		if path == "" {
@@ -132,14 +184,19 @@ func object(raw json.RawMessage, path string, required, optional []string) (map[
 		}
 		return nil, shapeErr(CodeBadType, path)
 	}
-	var m map[string]json.RawMessage
-	if err := json.Unmarshal(raw, &m); err != nil {
+	ms, ok := members(raw)
+	if !ok {
 		return nil, shapeErr(CodeBadType, path)
 	}
-	for name := range m {
-		if !slices.Contains(required, name) && !slices.Contains(optional, name) {
+	m := make(map[string]json.RawMessage, len(ms))
+	for _, mb := range ms {
+		if !slices.Contains(required, mb.name) && !slices.Contains(optional, mb.name) {
 			return nil, shapeErr(CodeUnknownField, path)
 		}
+		if _, seen := m[mb.name]; seen {
+			return nil, shapeErr(CodeBadRule, path)
+		}
+		m[mb.name] = mb.value
 	}
 	for _, name := range required {
 		if _, ok := m[name]; !ok {
@@ -215,14 +272,26 @@ func boolean(raw json.RawMessage, field string) (bool, *itemErr) {
 	return false, shapeErr(CodeBadType, field)
 }
 
-// array reads a list of at most max entries.
+// array reads a list of at most max entries. It stops at entry max + 1,
+// so a list past its bound costs no more than max entries do.
 func array(raw json.RawMessage, field string, max int) ([]json.RawMessage, *itemErr) {
-	var a []json.RawMessage
-	if jsonKind(raw) != '[' || json.Unmarshal(raw, &a) != nil {
+	if jsonKind(raw) != '[' {
 		return nil, shapeErr(CodeBadType, field)
 	}
-	if len(a) > max {
-		return nil, shapeErr(CodeTooMany, field)
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	if t, err := dec.Token(); err != nil || t != json.Delim('[') {
+		return nil, shapeErr(CodeBadType, field)
+	}
+	var a []json.RawMessage
+	for dec.More() {
+		if len(a) == max {
+			return nil, shapeErr(CodeTooMany, field)
+		}
+		var v json.RawMessage
+		if err := dec.Decode(&v); err != nil {
+			return nil, shapeErr(CodeBadType, field)
+		}
+		a = append(a, v)
 	}
 	return a, nil
 }
@@ -278,22 +347,11 @@ func isParams(s string) bool {
 	return ok && isHex(h, 64)
 }
 
-// isBuild reports whether s is a version such as v0.1.0, 2.1.327 or
-// v0.0.0-20261119104900-1a2b3c4d5e6f: 1 to 64 letters, digits, '.', '_',
-// '+' or '-', starting with a letter or digit.
-func isBuild(s string) bool {
-	if len(s) == 0 || len(s) > maxBuildLen {
-		return false
-	}
-	for i := 0; i < len(s); i++ {
-		c := s[i]
-		alnum := 'a' <= c && c <= 'z' || 'A' <= c && c <= 'Z' || '0' <= c && c <= '9'
-		if !alnum && (i == 0 || c != '.' && c != '_' && c != '+' && c != '-') {
-			return false
-		}
-	}
-	return true
-}
+// isVersion reports whether s is a version such as 2.1.327, v0.1.0-alpha.1
+// or 0.1.0+3dbf6d4, in D-version-grammar's form, which pkg/event checks
+// for a harness_version too. A bare word isn't one, so no file, folder or
+// host name reaches the labels.
+func isVersion(s string) bool { return event.IsVersion(s) }
 
 // minuteLayout is a bucket's minute, as encoding/json writes a whole UTC
 // minute of a time.Time.
@@ -450,9 +508,12 @@ func parseBucket(raw json.RawMessage) (Revision, *itemErr) {
 // (D-bucket-agent-only). Names are checked in sorted order, so the same
 // bucket always fails the same way.
 func parseAgentOnly(raw json.RawMessage) (map[string]float64, *itemErr) {
-	var m map[string]json.RawMessage
-	if jsonKind(raw) != '{' || json.Unmarshal(raw, &m) != nil {
+	m, repeated, ok := memberMap(raw)
+	switch {
+	case !ok:
 		return nil, shapeErr(CodeBadType, "agent_only")
+	case repeated:
+		return nil, shapeErr(CodeBadRule, "agent_only")
 	}
 	if len(m) > maxAgentOnly {
 		return nil, shapeErr(CodeTooMany, "agent_only")
@@ -534,9 +595,12 @@ func parseSlot(raw json.RawMessage, path string) (event.BucketSlot, *itemErr) {
 // codes, checked in sorted order so the same bucket always fails the same
 // way.
 func parseUncredited(raw json.RawMessage) (map[event.Reason]float64, *itemErr) {
-	var m map[string]json.RawMessage
-	if jsonKind(raw) != '{' || json.Unmarshal(raw, &m) != nil {
+	m, repeated, ok := memberMap(raw)
+	switch {
+	case !ok:
 		return nil, shapeErr(CodeBadType, "uncredited")
+	case repeated:
+		return nil, shapeErr(CodeBadRule, "uncredited")
 	}
 	if len(m) > maxUncredited {
 		return nil, shapeErr(CodeTooMany, "uncredited")
@@ -574,31 +638,54 @@ func checkBucket(raw json.RawMessage) (Revision, *itemErr) {
 	return rv, nil
 }
 
+// mapFields are the bucket's members that are maps. pkg/event names a
+// map's member field[key], as in agent_only[p_3f9a] or
+// uncredited[X.absent].
+var mapFields = []string{"uncredited", "agent_only"}
+
 // ruleField returns the field pkg/event's first error names, or "" when
 // it isn't a plain JSON path. Each of its errors reads "field: message",
-// and the message, which can quote values, is dropped.
+// and the message, which can quote values, is dropped. A map's member is
+// named by the map alone, so no result repeats a key the request sent
+// (ingest-v1 2.8).
 func ruleField(err error) string {
 	msg, _, _ := strings.Cut(err.Error(), "\n")
 	field, _, ok := strings.Cut(msg, ": ")
-	if !ok || !isPath(field) {
+	if !ok {
+		return ""
+	}
+	for _, m := range mapFields {
+		if strings.HasPrefix(field, m+"[") {
+			field = m
+		}
+	}
+	if !isPath(field) {
 		return ""
 	}
 	return field
 }
 
 // isPath reports whether s is a JSON path of lowercase names, dots and
-// [N] or [] indexes, such as slots[2].lbl[0] or slots[].cr.
+// [N] or [] indexes, such as slots[2].lbl[0] or slots[].cr. An index holds
+// digits only, so a path never carries a key.
 func isPath(s string) bool {
 	if s == "" || len(s) > 64 {
 		return false
 	}
+	inIndex := false
 	for i := 0; i < len(s); i++ {
-		c := s[i]
-		if !('a' <= c && c <= 'z' || '0' <= c && c <= '9' || c == '_' || c == '.' || c == '[' || c == ']') {
+		switch c := s[i]; {
+		case c == '[' && !inIndex:
+			inIndex = true
+		case c == ']' && inIndex:
+			inIndex = false
+		case '0' <= c && c <= '9':
+		case !inIndex && ('a' <= c && c <= 'z' || c == '_' || c == '.'):
+		default:
 			return false
 		}
 	}
-	return true
+	return !inIndex
 }
 
 // commitRecord is DESIGN 4.3's commit record as the server stores it, its
@@ -662,14 +749,20 @@ func hasRepeat[T comparable](vs []T) bool {
 }
 
 // objectMember returns member name of the object raw, when raw is an
-// object that has it.
+// object that has it exactly once.
 func objectMember(raw json.RawMessage, name string) (json.RawMessage, bool) {
-	var m map[string]json.RawMessage
-	if jsonKind(raw) != '{' || json.Unmarshal(raw, &m) != nil {
+	ms, ok := members(raw)
+	if !ok {
 		return nil, false
 	}
-	v, ok := m[name]
-	return v, ok
+	var v json.RawMessage
+	n := 0
+	for _, mb := range ms {
+		if mb.name == name {
+			v, n = mb.value, n+1
+		}
+	}
+	return v, n == 1
 }
 
 // optCount reads one of a commit's optional counts.
@@ -688,9 +781,12 @@ func optCount(m map[string]json.RawMessage, field string) (*int64, *itemErr) {
 // parseKinds reads credited_seconds_since_parent{kind: s}: each member's
 // name an activity kind of SM 5.1, and its value seconds, 0 to 1e9.
 func parseKinds(raw json.RawMessage, field string) (map[event.Activity]float64, *itemErr) {
-	var m map[string]json.RawMessage
-	if jsonKind(raw) != '{' || json.Unmarshal(raw, &m) != nil {
+	m, repeated, ok := memberMap(raw)
+	switch {
+	case !ok:
 		return nil, shapeErr(CodeBadType, field)
+	case repeated:
+		return nil, shapeErr(CodeBadRule, field)
 	}
 	if len(m) > maxKinds {
 		return nil, shapeErr(CodeTooMany, field)
@@ -823,7 +919,7 @@ func parseLabels(raw json.RawMessage) (labels, *itemErr) {
 	if e != nil {
 		return l, e
 	}
-	if l.ClientBuild, e = pattern(m["client_build"], "client_build", isBuild); e != nil {
+	if l.ClientBuild, e = pattern(m["client_build"], "client_build", isVersion); e != nil {
 		return l, e
 	}
 	if l.ScoringVersion, e = pattern(m["scoring_version"], "scoring_version", isSemver); e != nil {
@@ -849,7 +945,7 @@ func parseLabels(raw json.RawMessage) (labels, *itemErr) {
 		}
 		var version string
 		if raw, ok := hm["version"]; ok {
-			if version, e = pattern(raw, join(path, "version"), isBuild); e != nil {
+			if version, e = pattern(raw, join(path, "version"), isVersion); e != nil {
 				return l, e
 			}
 		}

@@ -678,6 +678,12 @@ func (s *Service) bucket(ctx context.Context, tx writer.Tx, dev Device, pb parse
 	}
 	rev, revisions := int64(rv.Rev), int64(1)
 	var prev *Revision
+	same := false
+	if found && rev == cur.rev {
+		if same, err = sameBucket(cur.bucket, pb.data); err != nil {
+			return itemResult{}, err
+		}
+	}
 	switch {
 	case !found:
 	case rev > cur.rev && cur.revisions >= MaxRevisions:
@@ -690,7 +696,7 @@ func (s *Service) bucket(ctx context.Context, tx writer.Tx, dev Device, pb parse
 				return itemResult{}, err
 			}
 		}
-	case rev == cur.rev && cur.bucket == string(pb.data):
+	case rev == cur.rev && same:
 		return accepted(CodeDuplicate), nil
 	case rev == cur.rev:
 		return storedRev(http.StatusConflict, CodeRevConflict, cur.rev), nil
@@ -706,6 +712,26 @@ func (s *Service) bucket(ctx context.Context, tx writer.Tx, dev Device, pb parse
 		}
 	}
 	return accepted(CodeAccepted), nil
+}
+
+// sameBucket reports whether stored, a bucket's JSON as ingest stored it,
+// is the bucket data now encodes. It decodes stored and encodes it again
+// first, so a bucket stored by a release that wrote its members in another
+// order, or without one this release leaves out when empty, is still the
+// same bucket (ingest-v1 2.7), and its resend a duplicate.
+func sameBucket(stored string, data []byte) (bool, error) {
+	if stored == string(data) {
+		return true, nil
+	}
+	var rv Revision
+	if err := json.Unmarshal([]byte(stored), &rv); err != nil {
+		return false, err
+	}
+	again, err := json.Marshal(rv)
+	if err != nil {
+		return false, err
+	}
+	return string(again) == string(data), nil
 }
 
 // commit stores one commit record (ingest-v1 2.7).

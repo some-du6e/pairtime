@@ -353,6 +353,39 @@ func TestReadRaw(t *testing.T) {
 	}
 }
 
+// TestBodyCountStopsKeeping checks that a body of millions of tiny items,
+// which a few KiB of gzip inflate to, is refused for its count at the item
+// past the limit, having kept no more items than the limit (ingest-v1 2.4).
+func TestBodyCountStopsKeeping(t *testing.T) {
+	tests := []struct {
+		name, member, want string
+	}{
+		{"two million buckets are too_many_buckets", "buckets", CodeTooManyBuckets},
+		{"two million batch roots are too_many_batches", "batches", CodeTooManyBatches},
+		{"two million commit records are too_many_commits", "commits", CodeTooManyCommits},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			n := (MaxInflatedBody - 32) / 2
+			body := []byte(`{"` + tt.member + `":[` + strings.Repeat("0,", n-1) + `0]}`)
+			if len(body) > MaxInflatedBody {
+				t.Fatalf("the body is %d bytes, over the inflated limit, so it tests nothing", len(body))
+			}
+			var before, after runtime.MemStats
+			runtime.GC()
+			runtime.ReadMemStats(&before)
+			_, ref := parseBody(body)
+			runtime.ReadMemStats(&after)
+			if ref == nil || ref.code != tt.want {
+				t.Fatalf("refusal = %v, want %s", ref, tt.want)
+			}
+			if grew := after.TotalAlloc - before.TotalAlloc; grew > 16<<20 {
+				t.Errorf("parsing allocated %d bytes for %d items, more than 16 MiB: it kept items past the limit", grew, n)
+			}
+		})
+	}
+}
+
 func TestParseBody(t *testing.T) {
 	items := func(name string, n int) string {
 		return `{"` + name + `":[` + strings.TrimSuffix(strings.Repeat("0,", n), ",") + `]}`
@@ -373,6 +406,11 @@ func TestParseBody(t *testing.T) {
 		{"batches as an object is body_shape", `{"batches":{}}`, CodeBodyShape},
 		{"labels as an array is body_shape", `{"labels":[]}`, CodeBodyShape},
 		{"buckets as a string is body_shape", `{"buckets":"[]"}`, CodeBodyShape},
+		{"a member that appears twice is body_shape", `{"batches":[],"batches":[]}`, CodeBodyShape},
+		{"a member spelled twice, once with an escape, is body_shape", `{"batches":[],"\u0062atches":[]}`, CodeBodyShape},
+		{"labels twice are body_shape, even when both are empty", `{"labels":{},"labels":null}`, CodeBodyShape},
+		{"members are read in order: one outside 2.3 before too many buckets is body_shape", `{"events":[],` + items("buckets", MaxBuckets+1)[1:], CodeBodyShape},
+		{"members are read in order: too many buckets before one outside 2.3 are too_many_buckets", items("buckets", MaxBuckets+1)[:len(items("buckets", MaxBuckets+1))-1] + `,"events":[]}`, CodeTooManyBuckets},
 		{"2,000 batch roots fit", items("batches", MaxBatches), ""},
 		{"2,001 batch roots are too many", items("batches", MaxBatches+1), CodeTooManyBatches},
 		{"2,000 buckets fit", items("buckets", MaxBuckets), ""},

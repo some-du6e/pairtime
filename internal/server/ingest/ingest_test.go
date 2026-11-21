@@ -69,6 +69,7 @@ type rollupCall struct {
 
 type harness struct {
 	db      *store.DB
+	writer  *writer.Writer
 	svc     *Service
 	mux     *http.ServeMux
 	clock   time.Time
@@ -101,7 +102,7 @@ func newHarness(t *testing.T, engine store.Engine) *harness {
 	}
 	w := writer.Start(db.Write, writer.Options{Window: time.Millisecond})
 	t.Cleanup(w.Close)
-	h := &harness{db: db, clock: exampleClock, server: seedKey("server"), devices: fakeDevices{}}
+	h := &harness{db: db, writer: w, clock: exampleClock, server: seedKey("server"), devices: fakeDevices{}}
 	h.svc = New(Options{
 		Devices: h.devices, Writer: w, Read: db.Read, Key: h.server,
 		Now: func() time.Time { return h.clock },
@@ -455,6 +456,7 @@ func TestRefusals(t *testing.T) {
 			{"a gzip bomb is decompressed_too_large", upload{dev: dev, raw: bomb(t, 64<<20)}, 413, CodeDecompressedTooLarge},
 			{"text that isn't JSON is json_invalid", upload{dev: dev, json: []byte(`{"batches":`)}, 400, CodeJSONInvalid},
 			{"a member outside ingest-v1 2.3 is body_shape", upload{dev: dev, json: []byte(`{"prompts":["fix it"]}`)}, 422, CodeBodyShape},
+			{"a member that appears twice is body_shape", upload{dev: dev, json: []byte(`{"batches":[],"batches":[]}`)}, 422, CodeBodyShape},
 			{"2,001 batch roots are too_many_batches", upload{dev: dev, json: items("batches", MaxBatches+1)}, 413, CodeTooManyBatches},
 			{"2,001 buckets are too_many_buckets", upload{dev: dev, json: items("buckets", MaxBuckets+1)}, 413, CodeTooManyBuckets},
 			{"501 commit records are too_many_commits", upload{dev: dev, json: items("commits", MaxCommits+1)}, 413, CodeTooManyCommits},
@@ -664,6 +666,13 @@ func TestChain(t *testing.T) {
 					t.Errorf("got %+v", got)
 				}
 			}},
+			{"a batch root that repeats b is bad_rule, and its result names no b", func(t *testing.T) {
+				raw := strings.Replace(string(marshal(t, roots[5].json())), `"b":6`, `"b":6,"b":6`, 1)
+				resp := h.ok(t, upload{dev: dev, json: []byte(`{"batches":[` + raw + `]}`)})
+				if got := resp.Batches[0]; got.Status != 422 || got.Code != CodeBadRule || got.B != 0 || got.Field == nil || *got.Field != "" {
+					t.Errorf("got %+v", got)
+				}
+			}},
 			{"a device's first batch may be any b, its prev taken as given", func(t *testing.T) {
 				want(t, one(t, late, lateRoots[0]), 200, CodeAccepted)
 				if st := h.state(t, late); st.ChainStart == nil || *st.ChainStart != 5 {
@@ -699,7 +708,10 @@ func TestChain(t *testing.T) {
 
 // TestRandomChains uploads random valid chains in requests of random size,
 // and before each request tries one single change to its first batch
-// root, which the server must refuse (PLAN WP-SV4).
+// root, which the server must refuse (PLAN WP-SV4). A device's first
+// request never gets the skipped batch: a device with no head starts its
+// chain at any b, its prev taken as given (ingest-v1 2.7 step 4), so a
+// correct server accepts it.
 func TestRandomChains(t *testing.T) {
 	type mutation struct {
 		name string
@@ -718,6 +730,13 @@ func TestRandomChains(t *testing.T) {
 		{"a skipped batch, with H_b made to follow", func(x root) root { x.b++; return x.relink() }},
 		{"a stored batch rewritten, with H_b made to follow", func(x root) root { x.b--; x.r = flip(x.r); return x.relink() }},
 	}
+	// startsAChain is the mutation a device with no head takes as its
+	// chain's start.
+	const startsAChain = "a skipped batch, with H_b made to follow"
+	first := slices.DeleteFunc(slices.Clone(mutations), func(m mutation) bool { return m.name == startsAChain })
+	if len(first) != len(mutations)-1 {
+		t.Fatalf("no mutation is named %q", startsAChain)
+	}
 	engines(t, func(t *testing.T, engine store.Engine) {
 		h := newHarness(t, engine)
 		rng := rand.New(rand.NewPCG(5, 6))
@@ -726,7 +745,11 @@ func TestRandomChains(t *testing.T) {
 			prev, b := ledger.Hash{}, uint64(1)
 			for b <= 30 {
 				roots := chain(rng, prev, b, 1+rng.IntN(5))
-				m := mutations[rng.IntN(len(mutations))]
+				pool := mutations
+				if b == 1 {
+					pool = first
+				}
+				m := pool[rng.IntN(len(pool))]
 				t.Run(fmt.Sprintf("%s: batch %d with %s is refused", dev.ID, b, m.name), func(t *testing.T) {
 					resp := h.ok(t, upload{dev: dev, body: batchesBody(m.edit(roots[0]))})
 					if got := resp.Batches[0]; got.Status == http.StatusOK {
@@ -852,6 +875,31 @@ func TestBuckets(t *testing.T) {
 				got := results(t, other3)
 				if got[0].Status != 409 || got[0].Code != CodeRevConflict || got[0].Rev == nil || *got[0].Rev != 3 {
 					t.Errorf("got %+v", got[0])
+				}
+			}},
+			{"the same bucket stored in another encoding, as an earlier release wrote it, is still a duplicate", func(t *testing.T) {
+				// Through a map, the stored bucket is encoded again with its
+				// members sorted by name, as a release whose field order
+				// differs would have stored it.
+				var cur string
+				if err := h.db.Read.QueryRow(`SELECT bucket FROM minute_buckets WHERE device_id = $1 AND minute_ms = $2`, dev.ID, minute.UnixMilli()).Scan(&cur); err != nil {
+					t.Fatal(err)
+				}
+				resorted := string(marshal(t, asMap(t, []byte(cur))))
+				if resorted == cur {
+					t.Fatal("the new encoding is the same bytes, so this tests nothing")
+				}
+				if err := h.writer.Do(context.Background(), 1, func(ctx context.Context, tx writer.Tx) error {
+					_, err := tx.ExecContext(ctx, `UPDATE minute_buckets SET bucket = $3 WHERE device_id = $1 AND minute_ms = $2`, dev.ID, minute.UnixMilli(), resorted)
+					return err
+				}); err != nil {
+					t.Fatal(err)
+				}
+				if got := code(t, rev3); got[0] != CodeDuplicate {
+					t.Errorf("got %q, want duplicate", got)
+				}
+				if got := results(t, other3); got[0].Code != CodeRevConflict {
+					t.Errorf("another bucket at the same rev: got %+v, want rev_conflict", got[0])
 				}
 			}},
 			{"the rollups moved with each stored revision, inside its transaction", func(t *testing.T) {
@@ -1117,10 +1165,22 @@ func TestTimeAndOff(t *testing.T) {
 				t.Errorf("got %d %s", s, c)
 			}
 		}},
-		{"a server with devices but no server key is off", func(t *testing.T) {
-			s := New(Options{Devices: fakeDevices{}})
-			if s.On() {
+		{"a server with devices, a writer and a read pool but no server key is off", func(t *testing.T) {
+			h := newHarness(t, store.SQLite)
+			dev := h.device("d_test", false)
+			keyless := New(Options{Devices: h.devices, Writer: h.writer, Read: h.db.Read, Now: func() time.Time { return h.clock },
+				Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+			if keyless.On() {
 				t.Error("on without a key")
+			}
+			mux := http.NewServeMux()
+			keyless.Register(mux)
+			for _, r := range []*http.Request{h.request(t, upload{dev: dev}), h.stateRequest(dev, dev.key)} {
+				rec := httptest.NewRecorder()
+				mux.ServeHTTP(rec, r)
+				if s, c := refusalOf(t, rec); s != 503 || c != CodeIngestOff {
+					t.Errorf("%s %s: got %d %s, want 503 %s", r.Method, r.URL.Path, s, c, CodeIngestOff)
+				}
 			}
 		}},
 		{"other methods get 405 from the router", func(t *testing.T) {

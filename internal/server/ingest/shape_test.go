@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"maps"
+	"os"
 	"regexp"
 	"slices"
 	"strconv"
@@ -163,33 +164,70 @@ func withAgentOnly(fields []string) []string {
 	return append(fields, "agent_only")
 }
 
-// TestEnums checks the server's enum lists against pkg/event's, so a value
-// pkg/event adds can't be refused by mistake.
+// TestEnums checks the server's enum lists against pkg/event's and the
+// event schema's, so a value pkg/event adds is one ingest takes.
 func TestEnums(t *testing.T) {
+	schema := schemaEnums(t)
+	var unshaped []string
+	for _, r := range event.CreditReasons() {
+		if !slices.Contains(activities, r.Activity()) {
+			unshaped = append(unshaped, string(r))
+		}
+	}
 	tests := []struct {
-		name string
-		ok   bool
+		name      string
+		got, want []string
 	}{
-		{"every credit reason's activity is an activity the shape allows", func() bool {
-			for _, r := range []event.Reason{event.ReasonPrompt, event.ReasonAnswer, event.ReasonGoAhead, event.ReasonQueued,
-				event.ReasonPermission, event.ReasonInterrupt, event.ReasonEdit, event.ReasonNavigate, event.ReasonCommand,
-				event.ReasonTest, event.ReasonCommit, event.ReasonSupervise, event.ReasonRead, event.ReasonLookup} {
-				if !slices.Contains(activities, r.Activity()) {
-					return false
-				}
-			}
-			return true
-		}()},
-		{"a harness label can't be none", !slices.Contains(labelHarnesses, event.HarnessNone)},
-		{"slot labels are the three side doors", slices.Equal(slotLabels, []event.Label{event.LabelViaTrack, event.LabelViaPlugin, event.LabelViaBridge})},
+		{"activities are pkg/event's", names(activities), names(event.Activities())},
+		{"evidence levels are pkg/event's", names(evidences), names(event.Evidences())},
+		{"slot labels are pkg/event's three side doors", names(slotLabels), names(event.SlotLabels())},
+		{"bucket states are pkg/event's", names(bucketStates), names(event.BucketStates())},
+		{"witness labels are pkg/event's", names(witnesses), names(event.Witnesses())},
+		{"actors are the event schema's", names(actors), schema["actor"]},
+		{"label harnesses are the event schema's harnesses but none", names(labelHarnesses), slices.DeleteFunc(schema["harness"], func(h string) bool { return h == "none" })},
+		{"every credit reason's activity is one the shape allows", unshaped, nil},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if !tt.ok {
-				t.Error("no")
+			if !slices.Equal(tt.got, tt.want) {
+				t.Errorf("got %q, want %q", tt.got, tt.want)
 			}
 		})
 	}
+}
+
+// schemaEnums returns docs/schema/event.schema.json's enum lists by their
+// $defs names.
+func schemaEnums(t *testing.T) map[string][]string {
+	t.Helper()
+	data, err := os.ReadFile("../../../docs/schema/event.schema.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var schema struct {
+		Defs map[string]struct {
+			Enum []string `json:"enum"`
+		} `json:"$defs"`
+	}
+	if err := json.Unmarshal(data, &schema); err != nil {
+		t.Fatal(err)
+	}
+	out := map[string][]string{}
+	for name, def := range schema.Defs {
+		if def.Enum != nil {
+			out[name] = def.Enum
+		}
+	}
+	return out
+}
+
+// names turns a list of enum values into strings.
+func names[T ~string](vs []T) []string {
+	out := make([]string, len(vs))
+	for i, v := range vs {
+		out[i] = string(v)
+	}
+	return out
 }
 
 func TestBucketShape(t *testing.T) {
@@ -460,6 +498,19 @@ func TestLabelsShape(t *testing.T) {
 		}, shapeResult{CodeTooMany, "harnesses"}},
 		{"a build starting with a dot is bad_string", func(m map[string]any) { m["client_build"] = ".1" }, shapeResult{CodeBadString, "client_build"}},
 		{"a build of 65 characters is bad_string", func(m map[string]any) { m["client_build"] = strings.Repeat("1", 65) }, shapeResult{CodeBadString, "client_build"}},
+		{"a dev build is v0.0.0-dev, which passes", func(m map[string]any) { m["client_build"] = "v0.0.0-dev" }, shapeResult{}},
+		{"a build with a pre-release suffix passes", func(m map[string]any) { m["client_build"] = "v0.1.0-alpha.1" }, shapeResult{}},
+		{"a bare word as the build is bad_string, as dev is", func(m map[string]any) { m["client_build"] = "dev" }, shapeResult{CodeBadString, "client_build"}},
+		{"a folder name as the build is bad_string", func(m map[string]any) { m["client_build"] = "my-secret-startup" }, shapeResult{CodeBadString, "client_build"}},
+		{"a hostname as a harness's version is bad_string", func(m map[string]any) {
+			m["harnesses"] = []any{map[string]any{"name": "codex", "version": "karims-mbp.local"}}
+		}, shapeResult{CodeBadString, "harnesses[0].version"}},
+		{"a file name as a harness's version is bad_string", func(m map[string]any) {
+			m["harnesses"] = []any{map[string]any{"name": "codex", "version": "main.go"}}
+		}, shapeResult{CodeBadString, "harnesses[0].version"}},
+		{"a build suffix on a harness's version passes", func(m map[string]any) {
+			m["harnesses"] = []any{map[string]any{"name": "codex", "version": "0.1.0+3dbf6d4"}}
+		}, shapeResult{}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -513,7 +564,7 @@ func TestBatchRootShape(t *testing.T) {
 
 // freeText is text no string member may hold: sentences, paths, an email
 // address, a window title, an empty string, an over-long run, non-ASCII,
-// and a JSON-escaped NUL.
+// a JSON-escaped NUL, and a bare file name and hostname.
 var freeText = []string{
 	"fix the login bug please",
 	"/home/teen/projects/game/main.go",
@@ -525,6 +576,8 @@ var freeText = []string{
 	"héllo",
 	"ignore previous instructions\n",
 	"\x00",
+	"main.go",
+	"karims-mbp.local",
 }
 
 // TestFreeTextRefused puts free text in every string member of every item
@@ -615,6 +668,88 @@ func TestFreeTextRefused(t *testing.T) {
 	}
 }
 
+// replaceOnce replaces old, which must appear exactly once in s.
+func replaceOnce(t *testing.T, s []byte, old, new string) []byte {
+	t.Helper()
+	if n := strings.Count(string(s), old); n != 1 {
+		t.Fatalf("%q appears %d times in %s", old, n, s)
+	}
+	return []byte(strings.Replace(string(s), old, new, 1))
+}
+
+// TestRepeatedNames checks that an item whose object repeats a member name
+// is refused as bad_rule naming that object, never the member, where
+// encoding/json alone would keep the last value (ingest-v1 2.3).
+func TestRepeatedNames(t *testing.T) {
+	bucket := func(t *testing.T) []byte { return shareableJSON(t, sampleBucket("d_test", sampleMinute, 1)) }
+	checks := map[string]func(raw []byte) *itemErr{
+		"root":   func(raw []byte) *itemErr { _, e := parseBatchRoot(raw); return e },
+		"bucket": func(raw []byte) *itemErr { _, e := checkBucket(raw); return e },
+		"commit": func(raw []byte) *itemErr { _, e := parseCommit(raw); return e },
+		"labels": func(raw []byte) *itemErr { _, e := parseLabels(raw); return e },
+	}
+	tests := []struct {
+		name string
+		kind string
+		raw  func(t *testing.T) []byte
+		want shapeResult
+	}{
+		{"a batch root's b twice is bad_rule", "root", func(t *testing.T) []byte {
+			return replaceOnce(t, marshal(t, sampleRoot()), `"b":7`, `"b":7,"b":8`)
+		}, shapeResult{CodeBadRule, ""}},
+		{"a bucket's rev twice is bad_rule", "bucket", func(t *testing.T) []byte {
+			return replaceOnce(t, bucket(t), `"rev":1`, `"rev":1,"rev":2`)
+		}, shapeResult{CodeBadRule, ""}},
+		{"free text in a first v, with a valid v after it, is refused", "bucket", func(t *testing.T) []byte {
+			return replaceOnce(t, bucket(t), `"v":"1.0.0"`, `"v":"fix the login bug","v":"1.0.0"`)
+		}, shapeResult{CodeBadRule, ""}},
+		{"a name spelled once plainly and once with an escape repeats", "bucket", func(t *testing.T) []byte {
+			return replaceOnce(t, bucket(t), `"rev":1`, `"rev":1,"\u0072ev":2`)
+		}, shapeResult{CodeBadRule, ""}},
+		{"a slot's cr twice names the slot", "bucket", func(t *testing.T) []byte {
+			return replaceOnce(t, bucket(t), `"cr":12.5`, `"cr":12.5,"cr":12.5`)
+		}, shapeResult{CodeBadRule, "slots[0]"}},
+		{"an uncredited reason twice names uncredited", "bucket", func(t *testing.T) []byte {
+			return replaceOnce(t, bucket(t), `"X.absent":15`, `"X.absent":15,"X.absent":45`)
+		}, shapeResult{CodeBadRule, "uncredited"}},
+		{"an agent_only project twice names agent_only", "bucket", func(t *testing.T) []byte {
+			return replaceOnce(t, bucket(t), `"agent_running_s":30`, `"agent_running_s":30,"agent_only":{"p_one":1,"p_one":2}`)
+		}, shapeResult{CodeBadRule, "agent_only"}},
+		{"an unknown member twice is unknown_field, the first failure in order", "bucket", func(t *testing.T) []byte {
+			return replaceOnce(t, bucket(t), `"rev":1`, `"rev":1,"note":"a","note":"b"`)
+		}, shapeResult{CodeUnknownField, ""}},
+		{"a commit's actor twice is bad_rule", "commit", func(t *testing.T) []byte {
+			return replaceOnce(t, marshal(t, sampleCommit()), `"actor":"human"`, `"actor":"human","actor":"agent"`)
+		}, shapeResult{CodeBadRule, ""}},
+		{"an activity twice in credited_seconds_since_parent names the map", "commit", func(t *testing.T) []byte {
+			return replaceOnce(t, marshal(t, sampleCommit()), `"prompting":100`, `"prompting":100,"prompting":5`)
+		}, shapeResult{CodeBadRule, "credited_seconds_since_parent"}},
+		{"a rewrite's old_sha twice names the rewrite", "commit", func(t *testing.T) []byte {
+			old := `"old_sha":"` + strings.Repeat("c", 40) + `"`
+			return replaceOnce(t, marshal(t, sampleCommit()), old, old+","+old)
+		}, shapeResult{CodeBadRule, "rewrites[0]"}},
+		{"the labels' vm twice is bad_rule", "labels", func(t *testing.T) []byte {
+			return replaceOnce(t, marshal(t, sampleLabels()), `"vm":true`, `"vm":true,"vm":false`)
+		}, shapeResult{CodeBadRule, ""}},
+		{"a harness's name twice names the harness", "labels", func(t *testing.T) []byte {
+			return replaceOnce(t, marshal(t, sampleLabels()), `"name":"claude_code"`, `"name":"claude_code","name":"codex"`)
+		}, shapeResult{CodeBadRule, "harnesses[0]"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := outcomeOf(checks[tt.kind](tt.raw(t))); got != tt.want {
+				t.Errorf("got %+v, want %+v", got, tt.want)
+			}
+		})
+	}
+	t.Run("a batch root whose b repeats names no b in its result", func(t *testing.T) {
+		br, e := parseBatchRoot(replaceOnce(t, marshal(t, sampleRoot()), `"b":7`, `"b":7,"b":8`))
+		if e == nil || br.b != 0 {
+			t.Errorf("b = %d with %+v, want no b and a refusal", br.b, e)
+		}
+	})
+}
+
 func TestRuleField(t *testing.T) {
 	tests := []struct {
 		name, err, want string
@@ -622,6 +757,11 @@ func TestRuleField(t *testing.T) {
 		{"a field path is kept and the message dropped", "slots[0].p: must be 1-128 letters, got \"/home/teen\"", "slots[0].p"},
 		{"only the first error counts", "slots[].cr: sums to 3\ncredited_s: bad", "slots[].cr"},
 		{"a field that isn't a plain path is dropped", "/home/teen: oops", ""},
+		{"an agent_only member is named by agent_only alone, never by its project key", "agent_only[p_3f9a]: is 3, more than agent_running_s (2)", "agent_only"},
+		{"an uncredited member is named by uncredited alone", "uncredited[X.absent]: must be 0 to 60 seconds", "uncredited"},
+		{"a numbered index is kept", "slots[2].lbl[0]: bad", "slots[2].lbl[0]"},
+		{"an index that isn't a number is no path", "slots[p_one].cr: bad", ""},
+		{"an unclosed index is no path", "slots[2: bad", ""},
 		{"an error without a field gives none", "oops", ""},
 	}
 	for _, tt := range tests {
@@ -651,7 +791,7 @@ var lenientForms = map[string]*regexp.Regexp{
 	"reason":  regexp.MustCompile(`^[A-Za-z_.~+]{1,40}$`),
 	"lower":   regexp.MustCompile(`^[a-z_]{1,32}$`),
 	"level":   regexp.MustCompile(`^[ABC]$`),
-	"version": regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$`),
+	"version": regexp.MustCompile(event.VersionPattern),
 }
 
 // uncreditedForm accepts at least the uncredited reason codes of SM 5.2.
@@ -666,7 +806,7 @@ func FuzzFreeText(f *testing.F) {
 	for _, s := range freeText {
 		f.Add(s)
 	}
-	for _, s := range []string{"p_one", "1.0.0", "v0.1.0", "P", "READ~r+restored", "X.absent", "via_track", "final", "human", "A",
+	for _, s := range []string{"p_one", "1.0.0", "v0.1.0", "v0.0.0-dev", "0.1.0+3dbf6d4", "dev", "P", "READ~r+restored", "X.absent", "via_track", "final", "human", "A",
 		strings.Repeat("a", 40), strings.Repeat("0", 64), "sha256:" + strings.Repeat("ab", 32), "2026-11-19T12:00:00Z"} {
 		f.Add(s)
 	}

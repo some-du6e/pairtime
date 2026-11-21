@@ -289,37 +289,56 @@ type body struct {
 // wrong JSON type.
 var errShape = errors.New("ingest: body shape")
 
-// parseBody reads the inflated body (ingest-v1 2.5 step 12).
+// parseBody reads the inflated body (ingest-v1 2.5 step 12). It reads the
+// object's members in order and refuses the first that fails: a member
+// outside 2.3, of the wrong type or there twice is body_shape, and an array
+// is refused for its count at its first item past the limit, so a body of
+// millions of tiny items costs no more than the limits allow.
 func parseBody(data []byte) (body, *refusal) {
 	var b body
 	if !utf8.Valid(data) || !json.Valid(data) {
 		return b, refuse(CodeJSONInvalid, "The body must be one JSON object in valid UTF-8.")
 	}
-	shape := refuse(CodeBodyShape, "The body is an object with only batches, buckets and commits as arrays and labels as an object.")
+	shape := refuse(CodeBodyShape, "The body is an object with batches, buckets and commits as arrays and labels as an object, each at most once.")
 	if jsonKind(data) != '{' {
 		return b, shape
 	}
-	var top map[string]json.RawMessage
-	if err := json.Unmarshal(data, &top); err != nil {
+	dec := json.NewDecoder(bytes.NewReader(data))
+	if t, err := dec.Token(); err != nil || t != json.Delim('{') {
 		return b, shape
 	}
-	for name, raw := range top {
-		var err error
+	seen := map[string]bool{}
+	for dec.More() {
+		t, err := dec.Token()
+		name, ok := t.(string)
+		if err != nil || !ok || seen[name] {
+			return body{}, shape
+		}
+		seen[name] = true
+		var tooMany *refusal
 		switch name {
 		case "batches":
-			b.batches, err = topArray(raw)
+			b.batches, err = topArray(dec, MaxBatches)
+			tooMany = refuse(CodeTooManyBatches, "A request holds at most 2000 batch roots; split the upload.")
 		case "buckets":
-			b.buckets, err = topArray(raw)
+			b.buckets, err = topArray(dec, MaxBuckets)
+			tooMany = refuse(CodeTooManyBuckets, "A request holds at most 2000 minute buckets; split the upload.")
 		case "commits":
-			b.commits, err = topArray(raw)
+			b.commits, err = topArray(dec, MaxCommits)
+			tooMany = refuse(CodeTooManyCommits, "A request holds at most 500 commit records; split the upload.")
 		case "labels":
+			var raw json.RawMessage
+			if err = dec.Decode(&raw); err != nil {
+				break
+			}
 			switch jsonKind(raw) {
 			case 'n':
 			case '{':
 				// An empty object means no labels, as an absent member
 				// does (ingest-v1 2.3).
-				var m map[string]json.RawMessage
-				if err = json.Unmarshal(raw, &m); err == nil && len(m) > 0 {
+				if ms, ok := members(raw); !ok {
+					err = errShape
+				} else if len(ms) > 0 {
 					b.labels = raw
 				}
 			default:
@@ -328,32 +347,45 @@ func parseBody(data []byte) (body, *refusal) {
 		default:
 			err = errShape
 		}
-		if err != nil {
-			return b, shape
+		switch {
+		case errors.Is(err, errTooMany):
+			return body{}, tooMany
+		case err != nil:
+			return body{}, shape
 		}
-	}
-	switch {
-	case len(b.batches) > MaxBatches:
-		return b, refuse(CodeTooManyBatches, "A request holds at most 2000 batch roots; split the upload.")
-	case len(b.buckets) > MaxBuckets:
-		return b, refuse(CodeTooManyBuckets, "A request holds at most 2000 minute buckets; split the upload.")
-	case len(b.commits) > MaxCommits:
-		return b, refuse(CodeTooManyCommits, "A request holds at most 500 commit records; split the upload.")
 	}
 	return b, nil
 }
 
-// topArray reads a top-level array member, where null means none.
-func topArray(raw json.RawMessage) ([]json.RawMessage, error) {
-	switch jsonKind(raw) {
-	case 'n':
+// errTooMany is a top-level array with more items than its limit.
+var errTooMany = errors.New("ingest: too many items")
+
+// topArray reads a top-level array member from dec, where null means
+// none. It stops at item max + 1 with errTooMany, so it never holds more
+// than max items.
+func topArray(dec *json.Decoder, max int) ([]json.RawMessage, error) {
+	t, err := dec.Token()
+	switch {
+	case err != nil:
+		return nil, errShape
+	case t == nil:
 		return nil, nil
-	case '[':
-		var items []json.RawMessage
-		if err := json.Unmarshal(raw, &items); err != nil {
+	case t != json.Delim('['):
+		return nil, errShape
+	}
+	var items []json.RawMessage
+	for dec.More() {
+		if len(items) == max {
+			return nil, errTooMany
+		}
+		var v json.RawMessage
+		if err := dec.Decode(&v); err != nil {
 			return nil, errShape
 		}
-		return items, nil
+		items = append(items, v)
 	}
-	return nil, errShape
+	if t, err := dec.Token(); err != nil || t != json.Delim(']') {
+		return nil, errShape
+	}
+	return items, nil
 }
