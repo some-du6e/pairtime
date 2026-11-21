@@ -100,14 +100,14 @@ type Options struct {
 	// Batches sealed before Open are on disk for ReadBatches.
 	Sealed func(Batch)
 	// Online, when set, reports whether config.toml's mode lets the
-	// computer upload right now (DESIGN 4.2). Each seal asks it once the
-	// batch's last record is in, with the Writer's lock held, so it must
-	// return quickly and never call the Writer, and the seal frame records
-	// the answer. So a batch's mode is on disk with the seal, in the same
-	// flush, before Sealed hears of it, and no crash can lose it. A batch
-	// whose seal frame doesn't say it was sealed online, as one an older
-	// writer sealed, counts as sealed in local-only mode (Batch.Online).
-	// Nil means every batch is sealed online.
+	// computer upload right now (DESIGN 4.2). Each seal asks it as it
+	// begins, before it takes the lock records take, so a slow read holds
+	// up no record, and it must never call the Writer. The seal frame
+	// records the answer: a batch's mode is on disk with the seal, in the
+	// same flush, before Sealed hears of it, and no crash can lose it. A
+	// batch whose seal frame doesn't say it was sealed online, as one an
+	// older writer sealed, counts as sealed in local-only mode
+	// (Batch.Online). Nil means every batch is sealed online.
 	Online func() bool
 	// Problem gets a description of what went wrong when a seal that no
 	// caller waits for fails, and "" when one succeeds after that.
@@ -526,8 +526,8 @@ type sealPayload struct {
 }
 
 // rowPayload is a batch frame's payload in batches.seg: DESIGN 3.5's row,
-// {b, first_seq, last_seq, n, R_b, H_b, sealed_at}, with prev and where
-// the batch's frames are. The receipt goes in a receipt frame of its own,
+// {b, first_seq, last_seq, n, R_b, H_b, sealed_at}, with prev, online and
+// where the batch's frames are. The receipt goes in a receipt frame of its own,
 // when it arrives.
 type rowPayload struct {
 	sealPayload
@@ -581,6 +581,9 @@ func (w *Writer) RequestSeal() {
 
 // seal is Seal. w.sealMu is held.
 func (w *Writer) seal() (Batch, bool, error) {
+	// A switch to local-only mode that came before the seal makes the
+	// batch local-only, whenever its records came.
+	online := w.online == nil || w.online()
 	w.mu.Lock()
 	if err := w.usable(); err != nil {
 		w.mu.Unlock()
@@ -609,10 +612,6 @@ func (w *Writer) seal() (Batch, bool, error) {
 		return Batch{}, false, err
 	}
 	at := w.now()
-	// Asked after the batch's last record went in, under the lock every
-	// record takes, so no record written after a switch to local-only mode
-	// is in a batch sealed online.
-	online := w.online == nil || w.online()
 	sp := sealPayload{B: row.B, FirstSeq: row.FirstSeq, N: row.N, Prev: w.head, Root: row.Root, Head: row.Head,
 		SealedAt: at.UnixMilli(), Online: online}
 	snap := w.snap

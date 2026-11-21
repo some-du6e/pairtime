@@ -489,14 +489,16 @@ func TestSealMode(t *testing.T) {
 		// for a writer without it.
 		online []bool
 		// crash, when set, leaves the ledger as a crash after the third
-		// seal's flush does: batches.seg lacks its row, which the next Open
-		// rebuilds, with Options.Online saying online by then.
+		// seal's flush does, with batches.seg's rows of batches 2 and 3
+		// lost, which the next Open rebuilds from their seal frames. Online
+		// says local-only by then, so a rebuild that asked it would lose
+		// batch 3's mark.
 		crash bool
 		want  []bool
 	}{
 		{"a batch sealed online says so, and one sealed in local-only mode doesn't", []bool{true, false, true}, false, []bool{true, false, true}},
 		{"a writer without Online seals every batch online", nil, false, []bool{true, true, true}},
-		{"a row a crash lost from batches.seg keeps its batch's mode when Open rebuilds it from the seal frame", []bool{true, true, false}, true, []bool{true, true, false}},
+		{"rows a crash lost from batches.seg keep their batches' modes when Open rebuilds them from the seal frames", []bool{true, false, true}, true, []bool{true, false, true}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -527,9 +529,8 @@ func TestSealMode(t *testing.T) {
 				abandon(w)
 				batches := filepath.Join(dir, batchesName)
 				// Frame 0 is the chain frame, and frames 1 to 3 the rows.
-				truncate(t, batches, framesOf(t, batches)[2].end)
-				online.Store(true)
-				open(t, dir, newClock(testT+60_000), func(o *Options) { o.Online = online.Load })
+				truncate(t, batches, framesOf(t, batches)[1].end)
+				open(t, dir, newClock(testT+60_000), func(o *Options) { o.Online = func() bool { return false } })
 			}
 			_, rows, err := ReadRows(dir, 1)
 			if err != nil {

@@ -224,6 +224,78 @@ func TestLocalCredit(t *testing.T) {
 	}
 }
 
+// TestUnseenBatch is a revision whose credit rests on a batch sealed after
+// the uploader took its rows, as when the scorer scores a batch between a
+// cycle's takeSealed and its plan: the revision waits until the batch's
+// row, with the mode its seal frame records, is in, and then goes only if
+// the batch was sealed online.
+func TestUnseenBatch(t *testing.T) {
+	dir := t.TempDir()
+	bs, err := store.OpenBuckets(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	table := newestTable()
+	rev := func(credited float64, batch uint64) store.Bucket {
+		b := testBucket(table, "d_test", day0, credited, event.StatePending)
+		b.Batch = batch
+		return b
+	}
+	for _, b := range []store.Bucket{rev(15, 1), rev(30, 3)} {
+		if _, _, err := bs.Put(b); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := bs.Close(); err != nil {
+		t.Fatal(err)
+	}
+	day := day0.Format(time.DateOnly)
+	file, err := os.Stat(filepath.Join(dir, day+".jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	credits := func(p plan) []float64 {
+		var out []float64
+		for _, b := range p.body.Buckets {
+			out = append(out, b.CreditedS)
+		}
+		return out
+	}
+	// Batches 1 and 2 are in the rows, each received at once, and batch 3,
+	// whose scoring gave the second revision, isn't yet.
+	first, err := makePlan(planInput{rows: indexOf(t, []float64{1, 2}, []float64{1.1, 2.1}), st: saved{Next: 3}, bucketDir: dir, lag: 900_000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The next plan, with batch 3's row in, sealed in local-only mode or
+	// online.
+	again := func(gaps []gap) plan {
+		t.Helper()
+		st := saved{Next: 4, Gaps: gaps, Marks: first.marks, Sent: first.sent}
+		p, err := makePlan(planInput{rows: indexOf(t, []float64{1, 2, 3}, []float64{1.1, 2.1, 3.1}), st: st, bucketDir: dir, lag: 900_000})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	local, online := again([]gap{{3, 3}}), again(nil)
+	tests := []struct {
+		name string
+		ok   bool
+	}{
+		{"the revision on a batch the rows don't hold waits, and the one before it goes", slices.Equal(credits(first), []float64{15}) && first.marks[day].Off < file.Size()},
+		{"once the batch's row is in, sealed in local-only mode, the revision is withheld", len(credits(local)) == 0 && local.sent[at(0)].B == 3 && local.marks[day].Off == file.Size()},
+		{"once the batch's row is in, sealed online, the revision goes", slices.Equal(credits(online), []float64{30})},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if !tc.ok {
+				t.Errorf("no: first %v (mark %d of %d), local %v, online %v", credits(first), first.marks[day].Off, file.Size(), credits(local), credits(online))
+			}
+		})
+	}
+}
+
 // liveRig is an uploader over a ledger writer that hands it each batch as
 // it seals, against a fake server, with config.toml's mode and the
 // sign-in as the test sets them: the tests of local-only mode. It is

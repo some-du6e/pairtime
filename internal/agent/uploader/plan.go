@@ -245,6 +245,12 @@ func bucketsOf(in planInput, n int) ([]entry, map[string]bool, []string, error) 
 			if had && (prev.H == rev.H || in.st.localOnly(prev.B)) {
 				rev.B = prev.B
 			}
+			if rev.B > in.rows.last() {
+				// Its credit rests on a batch sealed since the rows were
+				// taken, whose mode the place doesn't have yet: it waits for
+				// the plan that has the batch's row, and its mode with it.
+				return false
+			}
 			if in.st.localOnly(rev.B) {
 				// Its credit rests on records sealed in local-only mode, as a
 				// prompt after pairtime logout credits the minutes before it.
