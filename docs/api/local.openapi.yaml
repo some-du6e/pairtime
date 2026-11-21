@@ -205,8 +205,8 @@ components:
           description: >
             What isn't working, keyed by where it comes from (`config`,
             `config-watch`, `state`, `port`, `ipc`, `presence`, `focus`,
-            `ledger`, `scorer`, `uploader`), in words for the teen. Absent
-            when nothing is wrong.
+            `ledger`, `scorer`, `uploader`, `account`), in words for the
+            teen. Absent when nothing is wrong.
           additionalProperties:
             type: string
     Version:

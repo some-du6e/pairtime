@@ -76,7 +76,10 @@ func runPrivacy(args []string, stdout, stderr io.Writer) int {
 		// upload nothing.
 		fmt.Fprintf(stderr, "pairtime privacy show: config.toml: %v\n", err)
 	}
-	creds, ok := agent.SignedIn(dirs, cfg)
+	creds, ok, err := agent.SignedIn(dirs, cfg, agentKeyStores)
+	if err != nil {
+		fmt.Fprintf(stderr, "pairtime privacy show: this computer is linked to a server, but its sign-in doesn't read, so nothing uploads: %v\n", err)
+	}
 	return showUpload(stdout, stderr, dirs, creds, ok)
 }
 

@@ -3,10 +3,13 @@
 package agent
 
 import (
+	"errors"
 	"fmt"
 
+	"github.com/some-du6e/pairtime/internal/agent/account"
 	"github.com/some-du6e/pairtime/internal/agent/config"
 	"github.com/some-du6e/pairtime/internal/agent/home"
+	"github.com/some-du6e/pairtime/internal/agent/keys"
 	"github.com/some-du6e/pairtime/internal/agent/ledger"
 	"github.com/some-du6e/pairtime/internal/agent/uploader"
 	"github.com/some-du6e/pairtime/pkg/event"
@@ -14,8 +17,8 @@ import (
 )
 
 // modeOnline is config.toml's mode once `pairtime login` has signed the
-// device in (docs/spec/device-auth-v1.md 8). WP-SV3 adds it to package
-// config; until then config.toml can only say "local".
+// device in (docs/spec/device-auth-v1.md 8), config.Online. It stays an
+// untyped constant, which the tests use as a config.Mode.
 const modeOnline = "online"
 
 // What agent.mode holds: config.toml's mode as it last read cleanly.
@@ -52,21 +55,41 @@ func (a *agent) localOnly() (local, known bool) {
 // a token, and only to the server account.json names, never to one a
 // later [server] url names. The agent's uploader asks it before every
 // upload and `pairtime privacy show` before it prints one, so a local-only
-// install sends nothing (DESIGN 4.2).
-func SignedIn(dirs home.Dirs, cfg config.Config) (uploader.Credentials, bool) {
+// install sends nothing (DESIGN 4.2). stores are the keystore's stores,
+// agent.Options.KeyStores. The error says why the sign-in of a computer
+// that is linked doesn't read, as from a damaged keystore; it is nil when
+// the computer isn't linked or config.toml keeps it local-only.
+func SignedIn(dirs home.Dirs, cfg config.Config, stores []keys.Store) (uploader.Credentials, bool, error) {
 	if string(cfg.Mode) != modeOnline {
-		return uploader.Credentials{}, false
+		return uploader.Credentials{}, false, nil
 	}
-	return accountCredentials(dirs)
+	return accountCredentials(dirs, stores)
 }
 
-// accountCredentials reads what `pairtime login` keeps: the token and the
-// device key's seed in the device keystore, and account.json's server and
-// device id. TODO(WP-SV3): read them through internal/agent/account once
-// it merges. Until then no device is signed in, so nothing is uploaded.
-// Tests replace it.
-var accountCredentials = func(home.Dirs) (uploader.Credentials, bool) {
-	return uploader.Credentials{}, false
+// accountCredentials reads what `pairtime login` keeps, through package
+// account: account.json's server, device id and linked_at, and the token
+// and the device key's seed in the device keystore. It reads account.json
+// first, so a computer that isn't linked opens no keystore, which at a
+// first run would make K_dev. Tests replace it.
+var accountCredentials = func(dirs home.Dirs, stores []keys.Store) (uploader.Credentials, bool, error) {
+	if _, err := account.Load(dirs.Data); err != nil {
+		if errors.Is(err, account.ErrNotLinked) {
+			return uploader.Credentials{}, false, nil
+		}
+		return uploader.Credentials{}, false, err
+	}
+	ks, err := keys.Open(keys.Options{Dir: dirs.Data, Stores: stores})
+	if err != nil {
+		return uploader.Credentials{}, false, err
+	}
+	c, err := account.Open(dirs.Data, ks)
+	if err != nil {
+		if errors.Is(err, account.ErrNotLinked) {
+			return uploader.Credentials{}, false, nil
+		}
+		return uploader.Credentials{}, false, err
+	}
+	return uploader.Credentials{Server: c.Server, Token: c.Token, DeviceID: c.DeviceID, Sign: uploader.KeySigner(c.Key), LinkedAt: c.LinkedAt}, true, nil
 }
 
 // startUploader makes and starts the uploader (WP-AG5) with the open
@@ -85,7 +108,13 @@ func (a *agent) startUploader(w *ledger.Writer) func() {
 		DataDir:   a.dirs.Data,
 		State:     a.state,
 		Login: uploader.LoginFunc(func() (uploader.Credentials, bool) {
-			return SignedIn(a.dirs, a.config())
+			c, ok, err := SignedIn(a.dirs, a.config(), a.keyStores)
+			if err != nil {
+				a.setProblem("account", fmt.Sprintf("pairtime uploads nothing, because this computer is linked to a server but its sign-in doesn't read: %v", err))
+			} else {
+				a.setProblem("account", "")
+			}
+			return c, ok
 		}),
 		LocalOnly: a.localOnly,
 		Params:    a.table,
