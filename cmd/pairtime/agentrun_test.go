@@ -77,8 +77,8 @@ func startFakeHarness(t *testing.T) {
 	})
 }
 
-// agentStatus is the part of GET /v1/status these tests read.
-type agentStatus struct {
+// runStatus is the part of GET /v1/status these tests read.
+type runStatus struct {
 	Jobs []struct {
 		Name string
 		Runs uint64
@@ -96,7 +96,7 @@ type agentStatus struct {
 
 type signalStatus struct{ Via, Unknown string }
 
-func (s agentStatus) runs(job string) uint64 {
+func (s runStatus) runs(job string) uint64 {
 	for _, j := range s.Jobs {
 		if j.Name == job {
 			return j.Runs
@@ -126,15 +126,15 @@ func agentRequest(t *testing.T, ptHome, method, path string) *http.Response {
 	return res
 }
 
-// readStatus returns the agent's GET /v1/status.
-func readStatus(t *testing.T, ptHome string) agentStatus {
+// readRunStatus returns the agent's GET /v1/status.
+func readRunStatus(t *testing.T, ptHome string) runStatus {
 	t.Helper()
 	res := agentRequest(t, ptHome, "GET", "/v1/status")
 	defer res.Body.Close()
 	if res.StatusCode != http.StatusOK {
 		t.Fatalf("GET /v1/status = %s", res.Status)
 	}
-	var s agentStatus
+	var s runStatus
 	if err := json.NewDecoder(res.Body).Decode(&s); err != nil {
 		t.Fatalf("decoding GET /v1/status: %v", err)
 	}
@@ -142,11 +142,11 @@ func readStatus(t *testing.T, ptHome string) agentStatus {
 }
 
 // waitStatus polls GET /v1/status until ok says yes, for up to d.
-func waitStatus(t *testing.T, ptHome string, d time.Duration, what string, ok func(agentStatus) bool) agentStatus {
+func waitStatus(t *testing.T, ptHome string, d time.Duration, what string, ok func(runStatus) bool) runStatus {
 	t.Helper()
 	deadline := time.Now().Add(d)
 	for {
-		s := readStatus(t, ptHome)
+		s := readRunStatus(t, ptHome)
 		if ok(s) {
 			return s
 		}
@@ -157,9 +157,9 @@ func waitStatus(t *testing.T, ptHome string, d time.Duration, what string, ok fu
 	}
 }
 
-// stopAgent asks the agent to stop and waits for its process to exit, so
+// stopRunAgent asks the agent to stop and waits for its process to exit, so
 // that it has sealed everything it recorded.
-func stopAgent(t *testing.T, ptHome string, cmd *exec.Cmd) {
+func stopRunAgent(t *testing.T, ptHome string, cmd *exec.Cmd) {
 	t.Helper()
 	res := agentRequest(t, ptHome, "POST", "/v1/agent/stop")
 	res.Body.Close()
