@@ -5,19 +5,26 @@
 #
 #   irm https://github.com/some-du6e/pairtime/releases/download/<version>/install.ps1 | iex
 #
-# It stops at the first thing that's wrong, and until step 4 it changes
-# nothing on this computer:
+# It stops at the first thing that's wrong, and nothing it does stays on
+# this computer before you say yes to pairtime install:
 #
 #   1. Downloads the release's manifest.json and checks that a pairtime
 #      release key signed it (docs/spec/update-manifest.md).
 #   2. Downloads the archive for this computer and checks it, and the
 #      pairtime.exe inside it, against the manifest's SHA-256s.
-#   3. Runs the new pairtime.exe's 'pairtime version' and gives up if that
-#      fails or takes over 60 seconds.
-#   4. Puts it at %LOCALAPPDATA%\pairtime\bin\pairtime.exe.
-#   5. Runs 'pairtime install', which lists every change it would make and
-#      asks before making any. It names the folders this script made, so
-#      that 'pairtime uninstall' takes those away too.
+#   3. Puts it beside %LOCALAPPDATA%\pairtime\bin\pairtime.exe, runs its
+#      'pairtime version' and gives up if that fails or takes over 60
+#      seconds.
+#   4. Runs that pairtime.exe's 'pairtime install', which lists every
+#      change it would make, asks before making any, and puts pairtime at
+#      %LOCALAPPDATA%\pairtime\bin\pairtime.exe once you say yes. It names
+#      the folders this script made, so that 'pairtime uninstall' takes
+#      those away too.
+#
+# A no, or a failure before pairtime is in place, removes what the script
+# downloaded and the folders it made. With -NoInstall, or for a release
+# whose pairtime has no install command, the script puts the binary in
+# place itself after step 3 and stops there.
 #
 # It needs no administrator rights, and it stops before downloading
 # anything when PowerShell was opened with "Run as administrator", the
@@ -33,7 +40,7 @@
 #   $env:PAIRTIME_BASE_URL = 'URL'       -BaseUrl URL        download the release files from URL
 #   $env:PAIRTIME_RELEASE_KEYS = 'FILE'  -ReleaseKeys FILE   trust the public keys in FILE instead of pairtime's
 #   $env:PAIRTIME_ALLOW_UNSIGNED = '1'   -AllowUnsigned      install an unsigned release; see below
-#   $env:PAIRTIME_NO_INSTALL = '1'       -NoInstall          stop after step 4
+#   $env:PAIRTIME_NO_INSTALL = '1'       -NoInstall          put pairtime in place and skip step 4
 #                                        -Yes                answer yes for 'pairtime install'
 #
 # Allowing unsigned installs lets a script that trusts no release key
@@ -421,6 +428,23 @@ $installPairtime = {
     }
   }
 
+  # Deletes Path, trying again for a few seconds, since Windows keeps a
+  # program's file in use for a moment after the program exits.
+  function Remove-Program([string]$Path) {
+    for ($i = 0; $i -lt 50 -and (Test-Path -LiteralPath $Path); $i++) {
+      Remove-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
+      if (Test-Path -LiteralPath $Path) { Start-Sleep -Milliseconds 200 }
+    }
+  }
+
+  # Removes each of Dirs that is an empty folder, in order: the folders an
+  # install made, innermost first, once nothing it put in them stayed.
+  function Remove-EmptyFolders([string[]]$Dirs) {
+    foreach ($dir in $Dirs) {
+      if (-not (Get-ChildItem -LiteralPath $dir -Force -ErrorAction SilentlyContinue)) { Remove-Item -LiteralPath $dir -Force -ErrorAction SilentlyContinue }
+    }
+  }
+
   # Puts New at Target. Windows can't replace or delete a pairtime.exe that
   # is running, such as the agent, but it can rename it, so an old one
   # moves aside first and goes once nothing runs it.
@@ -482,6 +506,7 @@ $installPairtime = {
     $work = Join-Path ([System.IO.Path]::GetTempPath()) ('pairtime-install-' + [guid]::NewGuid().ToString('N'))
     $new = $null
     $installed = $false
+    $handOver = $false
     # The folders this install makes, innermost first. A failed install
     # removes them again; they're empty then.
     $made = @()
@@ -546,17 +571,26 @@ $installPairtime = {
       if (-not $run.Ok) { Fail "the new pairtime doesn't run on this computer ('pairtime version': $(Get-Start $run.Output 300)), so it wasn't installed. Any pairtime you had is still there." }
       $first = ($run.Output -split "`r?`n")[0]
       if (-not $first.StartsWith("pairtime $Version ")) { Fail "the new binary says it's $(Get-Start $first 200), not pairtime $Version, so it wasn't installed" }
-      Move-IntoPlace $new $target
-      $new = $null
-      $installed = $true
-      Say "Installed pairtime $Version at $target."
+      # pairtime install puts the binary in place itself, after the yes on
+      # its consent screen, so nothing stays on the computer before the
+      # teen agrees (docs/errata/2026-11-20-install-binary-after-consent.md).
+      # It also makes the checks that go with replacing a binary: that the
+      # file there is pairtime, and that hooks which run it would still
+      # work. So the staged copy runs it and is what it copies into place.
+      # Without pairtime install there's no consent screen to wait for, so
+      # the script puts the binary in place itself.
+      $handOver = -not $placeOnly -and (@(& $new help) -cmatch '^  install ')
+      if (-not $handOver) {
+        Move-IntoPlace $new $target
+        $new = $null
+        $installed = $true
+        Say "Installed pairtime $Version at $target."
+      }
     } finally {
-      if ($new -and (Test-Path -LiteralPath $new)) { Remove-Item -LiteralPath $new -Force -ErrorAction SilentlyContinue }
       Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
-      if (-not $installed) {
-        foreach ($dir in $made) {
-          if (-not (Get-ChildItem -LiteralPath $dir -Force -ErrorAction SilentlyContinue)) { Remove-Item -LiteralPath $dir -Force -ErrorAction SilentlyContinue }
-        }
+      if (-not $handOver) {
+        if ($new) { Remove-Program $new }
+        if (-not $installed) { Remove-EmptyFolders $made }
       }
     }
 
@@ -565,19 +599,35 @@ $installPairtime = {
     # script made already there, so it names them (pairtime install --made).
     $finish = "& $(ConvertTo-Quoted $target) install"
     for ($i = $made.Count - 1; $i -ge 0; $i--) { $finish += " --made $(ConvertTo-Quoted $made[$i])" }
-    if ($placeOnly) {
-      Say "To finish setting it up, run: $finish"
-    } elseif (@(& $target help) -cmatch '^  install ') {
-      Say 'Running pairtime install. It lists every change it would make and asks before making any.'
+    if ($handOver) {
+      Say "Running pairtime install. It lists every change it would make, asks before making any, and puts pairtime at $target once you say yes."
       $installArgs = @('install')
       if ($Yes) { $installArgs += '--yes' }
       # pairtime install records the folders it makes, so that pairtime
       # uninstall can take them away again. The ones this script made for
-      # the binary exist by the time it starts, so it's told which they are
-      # (pairtime install --made), outermost first.
+      # the binary exist by the time it starts, so it's told which they
+      # are, outermost first.
       for ($i = $made.Count - 1; $i -ge 0; $i--) { $installArgs += @('--made', $made[$i]) }
-      & $target @installArgs
-      if ($LASTEXITCODE -ne 0) { Fail "'pairtime install' stopped with status $LASTEXITCODE. pairtime is at $target; run $finish to try again." }
+      $code = 1
+      try {
+        & $new @installArgs
+        $code = $LASTEXITCODE
+      } finally {
+        # pairtime install has copied the staged binary into place, or it
+        # stopped before it did.
+        Remove-Program $new
+        $installed = (Test-Path -LiteralPath $target -PathType Leaf) -and ((Get-FileSha256 $target) -ceq $artifact.binary_sha256)
+        if (-not $installed) { Remove-EmptyFolders $made }
+      }
+      if ($code -ne 0) {
+        if ($installed) { Fail "'pairtime install' stopped with status $code. pairtime is at $target; run $finish to finish setting it up." }
+        # 3 is pairtime install's status for a no.
+        if ($code -eq 3) { Fail 'you said no, so nothing was installed. To set pairtime up later, run this install again.' }
+        Fail "'pairtime install' stopped with status $code before it put pairtime in place, so nothing was installed."
+      }
+      if (-not $installed) { Fail "'pairtime install' finished, but $target isn't the pairtime $Version this script checked, so something else is there. Nothing was installed." }
+    } elseif ($placeOnly) {
+      Say "To finish setting it up, run: $finish"
     } else {
       Say 'This build of pairtime has no install command yet, so setup stops here.'
     }

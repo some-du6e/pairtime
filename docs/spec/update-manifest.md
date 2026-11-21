@@ -304,9 +304,9 @@ Each script checks `manifest.json` itself, before it runs anything it downloaded
 
 Then each one:
 
-- runs the new binary's `version` beside its final place, for at most 60 seconds, and puts it in place only if that exits 0 and names the release (DESIGN 3.12);
-- puts it at the per-user path, `~/.local/bin/pairtime` or `%LOCALAPPDATA%\pairtime\bin\pairtime.exe`, without admin rights. On Windows a running `pairtime.exe` is renamed to `pairtime.old.exe` first, since it can't be replaced;
-- runs `pairtime install` if the binary has that command, with the terminal as its input when the script came through a pipe. It passes `--made <folder>` for each folder it made for the binary, `~/.local` and `~/.local/bin` or `pairtime` and `pairtime\bin` in `%LOCALAPPDATA%`, so that `pairtime uninstall` removes those too.
+- stages the new binary beside its final place and runs its `version`, for at most 60 seconds, and goes on only if that exits 0 and names the release (DESIGN 3.12);
+- if the binary has `pairtime install`, runs the staged copy's `install`, with the terminal as its input when the script came through a pipe. `pairtime install` puts the binary at the per-user path, `~/.local/bin/pairtime` or `%LOCALAPPDATA%\pairtime\bin\pairtime.exe`, once the teen says yes, after its own checks that the file there is pairtime and that hooks which run it would still work (docs/errata/2026-11-20-install-binary-after-consent.md). The script passes `--made <folder>` for each folder it made for the binary, `~/.local` and `~/.local/bin` or `pairtime` and `pairtime\bin` in `%LOCALAPPDATA%`, so that `pairtime uninstall` removes those too, and every install command it prints for later carries the same flags. After a no, or a failure before the binary is in place, it removes the staged copy and those folders;
+- otherwise, with `--no-install` or for a build without that command, puts the binary at the per-user path itself, without admin rights. On Windows a running `pairtime.exe` is renamed to `pairtime.old.exe` first, since it can't be replaced.
 
 The scripts install for the person running them. They refuse to run as root, or with the elevated half of a split Windows token, as from "Run as administrator", before downloading anything. On Windows that is the test `pairtime hook` makes before it starts the agent, so an administrator whose token isn't split, as with UAC off, can still install.
 

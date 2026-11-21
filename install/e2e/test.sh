@@ -286,10 +286,11 @@ check "a signed manifest for another release is refused" \
   run sh "$stamped" --version v0.0.0-snapshot.999999999 --base-url "$server/real" --release-keys "$keys/real.pub"
 
 fresh
-check "a build with an install command gets handed over to, told which folders the script made, with stdin from /dev/null when there's no terminal" \
+check "a build with an install command gets the staged binary to put in place, told which folders the script made, with stdin from /dev/null when there's no terminal" \
   ok 'Running pairtime install' "$installed" \
   run sh "$stamped" --base-url "$server/fake" --release-keys "$keys/fake.pub"
 check_record "install --made $home/.local --made $home/.local/bin"$'\nstdin: null'
+check_binary fake
 
 fresh
 mkdir "$home/.local"
@@ -318,15 +319,27 @@ check "--no-install stops once the binary is in place" ok 'To finish setting it 
 check_record ''
 
 fresh
-check "a failing pairtime install fails the script, and the binary stays" \
-  fails 'pairtime install. stopped with status 4' "$installed" \
+check "a pairtime install that stops before it puts pairtime in place leaves nothing, the folders made for it included" \
+  fails 'pairtime install. stopped with status 4 before it put pairtime in place, so nothing was installed' '' \
   run PAIRTIME_FAKE_INSTALL_EXIT=4 sh "$stamped" --base-url "$server/fake" --release-keys "$keys/fake.pub"
 
 fresh
-check "Ctrl-C during pairtime install says where pairtime is, not that nothing was installed" \
-  fails "stopped while running pairtime install. pairtime $version is installed at $home/.local/bin/pairtime" "$installed" \
+mkdir -p "$home/.local/bin"
+echo 'an old pairtime' > "$home/.local/bin/pairtime"
+check "a no at pairtime install's screen leaves the pairtime that was there as it was" \
+  fails 'you said no, so nothing was installed' "$installed" \
+  run PAIRTIME_FAKE_INSTALL_EXIT=3 sh "$stamped" --base-url "$server/fake" --release-keys "$keys/fake.pub"
+if [ "$(cat "$home/.local/bin/pairtime")" != 'an old pairtime' ]; then fail "the old pairtime was changed"; fi
+
+fresh
+check "a pairtime install that fails after putting pairtime in place says where it is and how to finish, with the folders made" \
+  fails "stopped with status 4. pairtime is at $home/.local/bin/pairtime; run .*install --made $home/.local --made $home/.local/bin" "$installed" \
+  run PAIRTIME_FAKE_INSTALL_AFTER=4 sh "$stamped" --base-url "$server/fake" --release-keys "$keys/fake.pub"
+
+fresh
+check "Ctrl-C at pairtime install's screen leaves nothing, and says so" \
+  fails "stopped while running pairtime install. Nothing was installed." '' \
   run PAIRTIME_FAKE_INSTALL_INTERRUPT=1 sh "$stamped" --base-url "$server/fake" --release-keys "$keys/fake.pub"
-not_in_output 'Nothing was installed'
 
 fresh
 home="$home/it's a home"

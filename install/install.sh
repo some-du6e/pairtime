@@ -6,19 +6,24 @@
 #
 #   curl -fsSL https://github.com/some-du6e/pairtime/releases/download/<version>/install.sh | sh
 #
-# It stops at the first thing that's wrong, and until step 4 it changes
-# nothing on this computer:
+# It stops at the first thing that's wrong, and nothing it does stays on
+# this computer before you say yes to pairtime install:
 #
 #   1. Downloads the release's manifest.json and checks that a pairtime
 #      release key signed it (docs/spec/update-manifest.md).
 #   2. Downloads the archive for this computer and checks it, and the
 #      pairtime binary inside it, against the manifest's SHA-256s.
-#   3. Runs the new binary's `pairtime version` and gives up if that fails
-#      or takes over 60 seconds.
-#   4. Puts the binary at ~/.local/bin/pairtime.
-#   5. Runs `pairtime install`, which lists every change it would make and
-#      asks before making any. It names the folders this script made, so
-#      that `pairtime uninstall` takes those away too.
+#   3. Puts the binary beside ~/.local/bin/pairtime, runs its `pairtime
+#      version` and gives up if that fails or takes over 60 seconds.
+#   4. Runs that binary's `pairtime install`, which lists every change it
+#      would make, asks before making any, and puts pairtime at
+#      ~/.local/bin/pairtime once you say yes. It names the folders this
+#      script made, so that `pairtime uninstall` takes those away too.
+#
+# A no, or a failure before pairtime is in place, removes what the script
+# downloaded and the folders it made. With --no-install, or for a release
+# whose pairtime has no install command, the script puts the binary in
+# place itself after step 3 and stops there.
 #
 # It runs as you and refuses to run as root, so it never uses sudo. It
 # sends nothing anywhere: its only requests are the downloads. It needs
@@ -31,7 +36,7 @@
 #   --version V          PAIRTIME_VERSION=V          install release V instead of this script's
 #   --base-url URL       PAIRTIME_BASE_URL=URL       download the release files from URL
 #   --release-keys FILE  PAIRTIME_RELEASE_KEYS=FILE  trust the public keys in FILE instead of pairtime's
-#   --no-install         PAIRTIME_NO_INSTALL=1       stop after step 4
+#   --no-install         PAIRTIME_NO_INSTALL=1       put pairtime in place and skip step 4
 #   --allow-unsigned                                 install an unsigned release; see below
 #   --yes                                            answer yes for `pairtime install`
 #
@@ -209,11 +214,15 @@ new=''
 made_bin=''
 made_local=''
 installed=''
+handed=''
 finish=''
 step='starting'
 on_exit() {
   status=$?
   if [ -n "$new" ] && [ -f "$new" ]; then rm -f "$new"; fi
+  # Stopped during pairtime install, which may have put the binary in
+  # place by then.
+  if [ -z "$installed" ] && [ -n "$handed" ] && placed; then installed=1; fi
   if [ -n "$work" ] && [ -d "$work" ]; then rm -rf "$work"; fi
   if [ -z "$installed" ]; then
     if [ -n "$made_bin" ]; then rmdir "$HOME/.local/bin" 2> /dev/null || :; fi
@@ -236,14 +245,19 @@ on_exit() {
 usage() {
   say "Usage: curl -fsSL $repo/releases/download/<version>/install.sh | sh -s -- [options]"
   say ""
-  say "Installs pairtime at ~/.local/bin/pairtime and runs \`pairtime install\`."
+  say "Checks a pairtime release and runs its \`pairtime install\`, which puts it at ~/.local/bin/pairtime once you say yes."
   say ""
   say "  --version V          install release V (PAIRTIME_VERSION)"
   say "  --base-url URL       download the release files from URL (PAIRTIME_BASE_URL)"
   say "  --release-keys FILE  trust the release public keys in FILE (PAIRTIME_RELEASE_KEYS)"
-  say "  --no-install         don't run \`pairtime install\` (PAIRTIME_NO_INSTALL=1)"
+  say "  --no-install         put pairtime in place without running \`pairtime install\` (PAIRTIME_NO_INSTALL=1)"
   say "  --allow-unsigned     install a release that no key signed, if this script trusts no release key"
   say "  --yes                answer yes for \`pairtime install\`"
+}
+
+# placed succeeds if the binary at $target is the one this script checked.
+placed() {
+  [ -f "$target" ] && [ "$(sha256 "$target")" = "$binsha" ]
 }
 
 # size_of FILE prints FILE's length in bytes.
@@ -681,38 +695,57 @@ main() {
   finish="$(shell_quote "$target") install"
   if [ -n "$made_local" ]; then finish="$finish --made $(shell_quote "$HOME/.local")"; fi
   if [ -n "$made_bin" ]; then finish="$finish --made $(shell_quote "$bin_dir")"; fi
-  step="moving pairtime to $target"
-  mv -f "$new" "$target" || die "couldn't move pairtime to $target"
-  new=''
-  installed=1
-  say "Installed pairtime $version at $target."
 
-  step='running pairtime install'
-  if [ "$no_install" = 1 ]; then
-    say "To finish setting it up, run: $finish"
-  elif "$target" help < /dev/null 2> /dev/null | grep -q '^  install '; then
+  if [ "$no_install" != 1 ] && "$new" help < /dev/null 2> /dev/null | grep -q '^  install '; then
+    # pairtime install puts the binary in place itself, after the yes on
+    # its consent screen, so nothing stays on the computer before the teen
+    # agrees (docs/errata/2026-11-20-install-binary-after-consent.md). It
+    # also makes the checks that go with replacing a binary: that the file
+    # there is pairtime, and that hooks which run it would still work. So
+    # the staged copy runs it and is what it copies into place.
+    step='running pairtime install'
     set -- install
     if [ "$yes" = 1 ]; then set -- "$@" --yes; fi
     # pairtime install records the folders it makes, so that pairtime
     # uninstall can take them away again. The ones this script made for
-    # the binary exist by the time it starts, so it's told which they are
-    # (pairtime install --made).
+    # the binary exist by the time it starts, so it's told which they are.
     if [ -n "$made_local" ]; then set -- "$@" --made "$HOME/.local"; fi
     if [ -n "$made_bin" ]; then set -- "$@" --made "$bin_dir"; fi
-    say "Running pairtime install. It lists every change it would make and asks before making any."
+    say "Running pairtime install. It lists every change it would make, asks before making any, and puts pairtime at $target once you say yes."
+    handed=1
     # The script itself came through standard input, so pairtime install
     # asks on the terminal instead.
     status=0
     if [ -t 0 ]; then
-      "$target" "$@" || status=$?
+      "$new" "$@" || status=$?
     elif (: < /dev/tty) 2> /dev/null; then
-      "$target" "$@" < /dev/tty || status=$?
+      "$new" "$@" < /dev/tty || status=$?
     else
-      "$target" "$@" < /dev/null || status=$?
+      "$new" "$@" < /dev/null || status=$?
     fi
-    [ "$status" = 0 ] || die "\`pairtime install\` stopped with status $status. pairtime is at $target; run \`$finish\` to try again."
+    rm -f "$new"
+    new=''
+    if placed; then installed=1; fi
+    if [ "$status" != 0 ]; then
+      [ -z "$installed" ] || die "\`pairtime install\` stopped with status $status. pairtime is at $target; run \`$finish\` to finish setting it up."
+      # 3 is pairtime install's status for a no.
+      [ "$status" != 3 ] || die "you said no, so nothing was installed. To set pairtime up later, run this install again."
+      die "\`pairtime install\` stopped with status $status before it put pairtime in place, so nothing was installed."
+    fi
+    [ -n "$installed" ] || die "\`pairtime install\` finished, but $target isn't the pairtime $version this script checked, so something else is there. Nothing was installed."
   else
-    say "This build of pairtime has no install command yet, so setup stops here."
+    # Without pairtime install there's no consent screen to wait for, so
+    # the script puts the binary in place itself.
+    step="moving pairtime to $target"
+    mv -f "$new" "$target" || die "couldn't move pairtime to $target"
+    new=''
+    installed=1
+    say "Installed pairtime $version at $target."
+    if [ "$no_install" = 1 ]; then
+      say "To finish setting it up, run: $finish"
+    else
+      say "This build of pairtime has no install command yet, so setup stops here."
+    fi
   fi
 
   case ":${PATH:-}:" in

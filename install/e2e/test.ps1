@@ -373,8 +373,9 @@ Test-Case 'a signed manifest for another release is refused' fails "manifest.jso
   (Invoke-File $stamped (Real real real.pub @('-Version', 'v0.0.0-snapshot.999999999')))
 
 New-Case
-Test-Case 'a build with an install command gets handed over to, told which folders the script made' ok 'Running pairtime install' $installed (Invoke-File $stamped (Real fake fake.pub))
+Test-Case 'a build with an install command gets the staged binary to put in place, told which folders the script made' ok 'Running pairtime install' $installed (Invoke-File $stamped (Real fake fake.pub))
 Test-Record "install --made $($script:appData)\pairtime --made $($script:appData)\pairtime\bin"
+Test-Binary fake
 
 New-Case
 Test-Case '-Yes is passed on to pairtime install as --yes' ok 'Running pairtime install' $installed (Invoke-File $stamped (Real fake fake.pub @('-Yes')))
@@ -395,8 +396,21 @@ Test-Case '-NoInstall stops once the binary is in place' ok 'To finish setting i
 Test-Record ''
 
 New-Case
-Test-Case 'a failing pairtime install fails the script, and the binary stays' fails "'pairtime install' stopped with status 4" $installed `
+Test-Case 'a pairtime install that stops before it puts pairtime in place leaves nothing, the folders made for it included' `
+  fails "'pairtime install' stopped with status 4 before it put pairtime in place, so nothing was installed" '' `
   (Invoke-File $stamped (Real fake fake.pub) @{ PAIRTIME_FAKE_INSTALL_EXIT = '4' })
+
+New-Case
+New-Item -ItemType Directory -Force -Path (Join-Path $script:appData 'pairtime\bin') | Out-Null
+Set-Content -LiteralPath (Join-Path $script:appData 'pairtime\bin\pairtime.exe') -Value 'an old pairtime'
+Test-Case "a no at pairtime install's screen leaves the pairtime.exe that was there as it was" fails 'you said no, so nothing was installed' $installed `
+  (Invoke-File $stamped (Real fake fake.pub) @{ PAIRTIME_FAKE_INSTALL_EXIT = '3' })
+if ((Get-Content -LiteralPath (Join-Path $script:appData 'pairtime\bin\pairtime.exe')) -ne 'an old pairtime') { Add-Failure 'the old pairtime.exe was changed' }
+
+New-Case
+Test-Case 'a pairtime install that fails after putting pairtime in place says where it is and how to finish, with the folders made' `
+  fails "'pairtime install' stopped with status 4. pairtime is at $([regex]::Escape((Join-Path $script:appData 'pairtime\bin\pairtime.exe'))); run & .*install --made" $installed `
+  (Invoke-File $stamped (Real fake fake.pub) @{ PAIRTIME_FAKE_INSTALL_AFTER = '4' })
 
 New-Case
 $script:appData = (New-Item -ItemType Directory -Path (Join-Path $script:appData "D'Angelo")).FullName
