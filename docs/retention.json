@@ -72,7 +72,7 @@
     {
       "id": "server.devices",
       "where": "server",
-      "data": "Your devices: a random device ID, the OS family, the pairtime build, and the names and versions of your AI tools",
+      "data": "Your devices: for each computer you link with pairtime login, a random device ID, a hash of its sign-in token (never the token itself), the public key that signs its uploads, the OS family, the pairtime build, when you linked it and when it last connected, where its chain of uploaded batches stands (how many uploads it has sent, the number, hash and arrival time of its latest batch, and the batches it made in local-only mode, which are never uploaded), and the labels its uploads carry: the names and versions of your AI tools, the scoring version and parameter hash, whether the typing module is on, and whether pairtime thinks it runs in a virtual machine",
       "kept": "Until you remove the device, then {days} more",
       "days": 90,
       "jobs": [{
