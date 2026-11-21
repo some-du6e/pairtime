@@ -87,8 +87,10 @@ func Next(o PreviewOptions) (Preview, error) {
 	case st.Chain != rows.device:
 		st = saved{Chain: rows.device, Harnesses: st.Harnesses}
 	case st.Server != c.Server || st.Device != c.DeviceID:
+		// As the agent's load does, the runs of batches sealed in local-only
+		// mode stay: they are the ledger's.
 		foreign := st.Server != ""
-		st = saved{Chain: rows.device, Harnesses: st.Harnesses}
+		st = saved{Chain: rows.device, Harnesses: st.Harnesses, LocalFrom: st.LocalFrom, Gaps: st.Gaps}
 		if foreign {
 			rows.forgetReceipts() // they are the old server's
 			st.Foreign = rows.last()

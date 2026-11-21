@@ -26,8 +26,8 @@ import (
 
 func TestLocalRuns(t *testing.T) {
 	type check struct {
-		gaps      []gap
-		localFrom uint64
+		gaps            []gap
+		localFrom, from uint64
 	}
 	tests := []struct {
 		name string
@@ -46,10 +46,12 @@ func TestLocalRuns(t *testing.T) {
 		{"a gap between two that it touches joins them", saved{Gaps: []gap{{1, 4}, {8, 9}}}, func(s *saved) bool { s.addGap(5, 7); return false }, check{gaps: []gap{{1, 9}}}, false},
 		{"a gap inside one changes nothing", saved{Gaps: []gap{{1, 9}}}, func(s *saved) bool { s.addGap(3, 4); return false }, check{gaps: []gap{{1, 9}}}, false},
 		{"gaps stay in order", saved{Gaps: []gap{{10, 12}}}, func(s *saved) bool { s.addGap(2, 3); return false }, check{gaps: []gap{{2, 3}, {10, 12}}}, false},
-		{"a re-link ends an open run that started before it at the batch before its first", saved{LocalFrom: 5}, func(s *saved) bool { s.cutLocal(8); return false }, check{gaps: []gap{{5, 7}}}, false},
-		{"a re-link ends a run that runs past its first batch before it", saved{Gaps: []gap{{5, 9}}}, func(s *saved) bool { s.cutLocal(8); return false }, check{gaps: []gap{{5, 7}}}, false},
-		{"a run that started after the re-link stays", saved{Gaps: []gap{{9, 10}}, LocalFrom: 12}, func(s *saved) bool { s.cutLocal(8); return false }, check{gaps: []gap{{9, 10}}, localFrom: 12}, false},
-		{"a run before the re-link stays as it was", saved{Gaps: []gap{{2, 3}}}, func(s *saved) bool { s.cutLocal(8); return false }, check{gaps: []gap{{2, 3}}}, false},
+		{"while the link's first batch isn't stored, From moves past a run sealed in local-only mode after the link", saved{Linking: true, From: 6, Gaps: []gap{{6, 7}}}, func(s *saved) bool { s.settle(9); return false }, check{gaps: []gap{{6, 7}}, from: 8}, false},
+		{"an open run takes in every batch from it on, so From is the next batch to be sealed", saved{Linking: true, From: 6, LocalFrom: 6}, func(s *saved) bool { s.settle(9); return false }, check{localFrom: 6, from: 10}, false},
+		{"a run From reaches past a closed one is passed over too", saved{Linking: true, From: 6, Gaps: []gap{{4, 7}}, LocalFrom: 8}, func(s *saved) bool { s.settle(9); return false }, check{gaps: []gap{{4, 7}}, localFrom: 8, from: 10}, false},
+		{"a run that opens after From leaves it, since From's root goes before it", saved{Linking: true, From: 6, LocalFrom: 8}, func(s *saved) bool { s.settle(9); return false }, check{localFrom: 8, from: 6}, false},
+		{"a run before From leaves it", saved{Linking: true, From: 6, Gaps: []gap{{2, 3}}}, func(s *saved) bool { s.settle(9); return false }, check{gaps: []gap{{2, 3}}, from: 6}, false},
+		{"once the link's first batch is stored, From stays where it is", saved{From: 6, Gaps: []gap{{6, 7}}}, func(s *saved) bool { s.settle(9); return false }, check{gaps: []gap{{6, 7}}, from: 6}, false},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -57,8 +59,8 @@ func TestLocalRuns(t *testing.T) {
 			if changed := tc.do(&st); changed != tc.changed {
 				t.Errorf("reported a change: %v, want %v", changed, tc.changed)
 			}
-			if !slices.Equal(st.Gaps, tc.want.gaps) || st.LocalFrom != tc.want.localFrom {
-				t.Errorf("gaps %v, local from %d; want %v, %d", st.Gaps, st.LocalFrom, tc.want.gaps, tc.want.localFrom)
+			if !slices.Equal(st.Gaps, tc.want.gaps) || st.LocalFrom != tc.want.localFrom || st.From != tc.want.from {
+				t.Errorf("gaps %v, local from %d, from %d; want %v, %d, %d", st.Gaps, st.LocalFrom, st.From, tc.want.gaps, tc.want.localFrom, tc.want.from)
 			}
 		})
 	}
@@ -196,14 +198,34 @@ func TestLocalCredit(t *testing.T) {
 	}
 }
 
-// TestLocalMode is a signed-in device whose config.toml said mode =
-// "local" while batches 3 and 4 were sealed, and online again by batch 5,
-// with no re-link. No root from batch 3 on goes and doctor says to link
-// again. After the re-link, from a new linked_at with no signed-out wake
-// in between, the chain goes on from batch 6, the first sealed after it,
-// and no minute of batches 3 to 5 ever goes: batch 5's records began in
-// local-only mode.
-func TestLocalMode(t *testing.T) {
+// liveRig is an uploader over a ledger writer that hands it each batch as
+// it seals, against a fake server, with config.toml's mode and the
+// sign-in as the test sets them: the tests of local-only mode. It is
+// linked from before its first batch, and online, until the test says
+// otherwise, and its uploader waits for the test to start it.
+type liveRig struct {
+	start time.Time
+	w     *ledger.Writer
+	f     *fakeIngest
+	u     *Uploader
+	// local is config.toml's mode = "local", and linked whether the
+	// computer is linked to the server. As agent.SignedIn has it, nothing
+	// goes while either keeps it local-only.
+	local, linked atomic.Bool
+
+	clockMu sync.Mutex
+	now     time.Time
+
+	mu      sync.Mutex
+	creds   Credentials
+	problem string
+}
+
+// newLiveRig makes a liveRig whose bucket store holds minutes 0 to
+// minutes-1 after its start, credited 30 s each. Batch k, which seal
+// seals at sealedAt(k), holds minutes 15(k-1) to 15k-1.
+func newLiveRig(t *testing.T, minutes int) *liveRig {
+	t.Helper()
 	dir := t.TempDir()
 	dirs := home.Dirs{Data: dir, Config: dir, Runtime: dir}
 	kDev := sha256.Sum256([]byte("uploader local mode test K_dev"))
@@ -211,16 +233,13 @@ func TestLocalMode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	start := time.Now().UTC().Truncate(time.Hour).Add(-3 * time.Hour)
-	var (
-		mu    sync.Mutex
-		now   = start
-		up    atomic.Pointer[Uploader]
-		local atomic.Bool
-	)
-	w, err := ledger.Open(ledger.Options{
+	r := &liveRig{start: time.Now().UTC().Truncate(time.Hour).Add(-3 * time.Hour)}
+	r.now = r.start
+	r.linked.Store(true)
+	var up atomic.Pointer[Uploader]
+	r.w, err = ledger.Open(ledger.Options{
 		Dir: dirs.Ledger(), Keys: keys, KeyID: "0123456789abcdef", Params: newestTable(),
-		Now: func() time.Time { mu.Lock(); defer mu.Unlock(); return now },
+		Now: func() time.Time { r.clockMu.Lock(); defer r.clockMu.Unlock(); return r.now },
 		Sealed: func(b ledger.Batch) {
 			if u := up.Load(); u != nil {
 				u.Sealed(b)
@@ -230,28 +249,13 @@ func TestLocalMode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { w.Close() })
-	seal := func(k int) {
-		t.Helper()
-		q := start.Add(time.Duration(k) * 15 * time.Minute)
-		mu.Lock()
-		now = q
-		mu.Unlock()
-		if _, err := w.Checkpoint("p_test", uint64(q.UnixMilli()), json.RawMessage(`{}`)); err != nil {
-			t.Fatal(err)
-		}
-		if _, _, err := w.Seal(); err != nil {
-			t.Fatal(err)
-		}
-	}
-	// Minutes 0 to 89, fifteen to a batch: batch k holds minutes 15(k-1)
-	// to 15k-1.
+	t.Cleanup(func() { r.w.Close() })
 	bs, err := store.OpenBuckets(dirs.Buckets())
 	if err != nil {
 		t.Fatal(err)
 	}
-	for m := range 90 {
-		if _, _, err := bs.Put(testBucket(newestTable(), w.DeviceID(), start.Add(time.Duration(m)*time.Minute), 30, event.StateFinal)); err != nil {
+	for m := range minutes {
+		if _, _, err := bs.Put(testBucket(newestTable(), r.w.DeviceID(), r.start.Add(time.Duration(m)*time.Minute), 30, event.StateFinal)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -259,86 +263,137 @@ func TestLocalMode(t *testing.T) {
 		t.Fatal(err)
 	}
 	devKey := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{11}, 32))
-	f := newFakeIngest(w.DeviceID(), testToken, devKey.Public().(ed25519.PublicKey))
-	srv := httptest.NewServer(f)
+	r.f = newFakeIngest(r.w.DeviceID(), testToken, devKey.Public().(ed25519.PublicKey))
+	srv := httptest.NewServer(r.f)
 	t.Cleanup(srv.Close)
 	st, _, err := state.Open(dirs.StateFile())
 	if err != nil {
 		t.Fatal(err)
 	}
-	var (
-		credsMu sync.Mutex
-		creds   = Credentials{Server: srv.URL, Token: testToken, DeviceID: w.DeviceID(), Sign: KeySigner(devKey), LinkedAt: start.Add(-time.Minute)}
-		problem string
-	)
-	u, err := New(Options{
-		Ledger: w, LedgerDir: dirs.Ledger(), BucketDir: dirs.Buckets(), DataDir: dirs.Data, State: st,
-		// As agent.SignedIn has it, nothing goes while the mode is local.
+	r.creds = Credentials{Server: srv.URL, Token: testToken, DeviceID: r.w.DeviceID(), Sign: KeySigner(devKey), LinkedAt: r.start.Add(-time.Minute)}
+	r.u, err = New(Options{
+		Ledger: r.w, LedgerDir: dirs.Ledger(), BucketDir: dirs.Buckets(), DataDir: dirs.Data, State: st,
 		Login: LoginFunc(func() (Credentials, bool) {
-			credsMu.Lock()
-			defer credsMu.Unlock()
-			return creds, !local.Load()
+			r.mu.Lock()
+			defer r.mu.Unlock()
+			return r.creds, r.linked.Load() && !r.local.Load()
 		}),
-		LocalOnly: func() (bool, bool) { return local.Load(), true },
+		LocalOnly: func() (bool, bool) { return r.local.Load(), true },
 		Params:    newestTable(), Client: srv.Client(), Draw: func(int64) int64 { return 0 },
 		Problem: func(msg string) {
-			credsMu.Lock()
-			problem = msg
-			credsMu.Unlock()
+			r.mu.Lock()
+			r.problem = msg
+			r.mu.Unlock()
 		},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	up.Store(u)
-	t.Cleanup(u.Close)
-	u.Start()
-	served := func(cond func() bool) func() bool {
-		return func() bool {
-			f.mu.Lock()
-			defer f.mu.Unlock()
-			return cond()
-		}
-	}
-	doctor := func() string {
-		credsMu.Lock()
-		defer credsMu.Unlock()
-		return problem
-	}
-	minutesIn := func(from, to int) int {
-		n := 0
-		for ms := range f.buckets {
-			if m := int((ms - start.UnixMilli()) / 60_000); m >= from && m <= to {
-				n++
-			}
-		}
-		return n
-	}
+	up.Store(r.u)
+	t.Cleanup(r.u.Close)
+	return r
+}
 
-	seal(1)
-	seal(2)
-	waitFor(t, "batches 1 and 2 and their minutes", served(func() bool { return f.head != nil && f.head.b == 2 && len(f.buckets) == 30 }))
-	local.Store(true)
-	seal(3)
-	seal(4)
-	local.Store(false)
-	seal(5)
-	u.Wake()
-	waitFor(t, "doctor to hear that uploads stopped", func() bool { return strings.Contains(doctor(), "stopped uploading") })
+// sealedAt is when seal seals batch k.
+func (r *liveRig) sealedAt(k int) time.Time { return r.start.Add(time.Duration(k) * 15 * time.Minute) }
+
+// seal seals batch k, with one checkpoint in it.
+func (r *liveRig) seal(t *testing.T, k int) {
+	t.Helper()
+	q := r.sealedAt(k)
+	r.clockMu.Lock()
+	r.now = q
+	r.clockMu.Unlock()
+	if _, err := r.w.Checkpoint("p_test", uint64(q.UnixMilli()), json.RawMessage(`{}`)); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := r.w.Seal(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// link is pairtime login at at, the first or, after pairtime logout, again:
+// a new token and linked_at for the same device id, after which the server
+// takes the device's next batch at any b above its head.
+func (r *liveRig) link(at time.Time) {
+	r.mu.Lock()
+	r.creds.LinkedAt = at
+	r.mu.Unlock()
+	r.f.mu.Lock()
+	r.f.relinked = true
+	r.f.mu.Unlock()
+	r.linked.Store(true)
+}
+
+// served returns a condition on the fake server, which it checks under
+// the server's lock.
+func (r *liveRig) served(cond func(f *fakeIngest) bool) func() bool {
+	return func() bool {
+		r.f.mu.Lock()
+		defer r.f.mu.Unlock()
+		return cond(r.f)
+	}
+}
+
+// doctor is what the uploader last told doctor.
+func (r *liveRig) doctor() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.problem
+}
+
+// minutesIn counts the minutes from to to after the start that f holds.
+// The caller holds f's lock.
+func (r *liveRig) minutesIn(f *fakeIngest, from, to int) int {
+	n := 0
+	for ms := range f.buckets {
+		if m := int((ms - r.start.UnixMilli()) / 60_000); m >= from && m <= to {
+			n++
+		}
+	}
+	return n
+}
+
+// drain wakes the uploader a few times, so anything it would still send
+// goes before the test looks.
+func (r *liveRig) drain() {
 	for range 3 {
-		u.Wake()
+		r.u.Wake()
 		time.Sleep(100 * time.Millisecond)
 	}
-	f.mu.Lock()
+}
+
+// TestLocalMode is a signed-in device whose config.toml said mode =
+// "local" while batches 3 and 4 were sealed, and online again by batch 5,
+// with no re-link. No root from batch 3 on goes and doctor says to link
+// again. After the re-link, from a new linked_at with no signed-out wake
+// in between, the chain goes on from batch 6, the first sealed after it,
+// and no minute of batches 3 to 5 ever goes: batch 5's records began in
+// local-only mode.
+func TestLocalMode(t *testing.T) {
+	r := newLiveRig(t, 90)
+	r.u.Start()
+	r.seal(t, 1)
+	r.seal(t, 2)
+	waitFor(t, "batches 1 and 2 and their minutes", r.served(func(f *fakeIngest) bool { return f.head != nil && f.head.b == 2 && len(f.buckets) == 30 }))
+	r.local.Store(true)
+	r.seal(t, 3)
+	r.seal(t, 4)
+	r.local.Store(false)
+	r.seal(t, 5)
+	r.u.Wake()
+	waitFor(t, "doctor to hear that uploads stopped", func() bool { return strings.Contains(r.doctor(), "stopped uploading") })
+	r.drain()
+	r.f.mu.Lock()
 	stopped := []struct {
 		name string
 		ok   bool
 	}{
-		{"no root from the first batch sealed in local-only mode on went", f.head.b == 2 && f.rows[3].b == 0 && f.rows[4].b == 0 && f.rows[5].b == 0},
-		{"no minute of a batch sealed in local-only mode went", minutesIn(30, 89) == 0},
-		{"the uploader says where the roots stop", u.Status().Stopped == 3},
+		{"no root from the first batch sealed in local-only mode on went", r.f.head.b == 2 && r.f.rows[3].b == 0 && r.f.rows[4].b == 0 && r.f.rows[5].b == 0},
+		{"no minute of a batch sealed in local-only mode went", r.minutesIn(r.f, 30, 89) == 0},
+		{"the uploader says where the roots stop", r.u.Status().Stopped == 3},
 	}
-	f.mu.Unlock()
+	r.f.mu.Unlock()
 	for _, tc := range stopped {
 		t.Run("stopped/"+tc.name, func(t *testing.T) {
 			if !tc.ok {
@@ -349,30 +404,22 @@ func TestLocalMode(t *testing.T) {
 
 	// pairtime logout and pairtime login: a new token and linked_at for the
 	// same device id, between batches 5 and 6.
-	credsMu.Lock()
-	creds.LinkedAt = start.Add(80 * time.Minute)
-	credsMu.Unlock()
-	f.mu.Lock()
-	f.relinked = true
-	f.mu.Unlock()
-	seal(6)
-	u.Wake()
-	waitFor(t, "batch 6 and its minutes", served(func() bool { return f.head.b == 6 && minutesIn(75, 89) == 15 }))
-	for range 3 {
-		u.Wake()
-		time.Sleep(100 * time.Millisecond)
-	}
-	f.mu.Lock()
-	defer f.mu.Unlock()
+	r.link(r.start.Add(80 * time.Minute))
+	r.seal(t, 6)
+	r.u.Wake()
+	waitFor(t, "batch 6 and its minutes", r.served(func(f *fakeIngest) bool { return f.head.b == 6 && r.minutesIn(f, 75, 89) == 15 }))
+	r.drain()
+	r.f.mu.Lock()
+	defer r.f.mu.Unlock()
 	relinked := []struct {
 		name string
 		ok   bool
 	}{
-		{"the first root after the re-link is the first batch sealed after it", f.rows[6].b == 6 && f.rows[5].b == 0},
-		{"no minute of batches 3 to 5 went, batch 5's included", minutesIn(30, 74) == 0},
-		{"every other minute went", len(f.buckets) == 45},
-		{"doctor no longer hears that uploads stopped", !strings.Contains(doctor(), "stopped uploading")},
-		{"the uploader no longer says the roots stop", u.Status().Stopped == 0},
+		{"the first root after the re-link is the first batch sealed after it", r.f.rows[6].b == 6 && r.f.rows[5].b == 0},
+		{"no minute of batches 3 to 5 went, batch 5's included", r.minutesIn(r.f, 30, 74) == 0},
+		{"every other minute went", len(r.f.buckets) == 45},
+		{"doctor no longer hears that uploads stopped", !strings.Contains(r.doctor(), "stopped uploading")},
+		{"the uploader no longer says the roots stop", r.u.Status().Stopped == 0},
 	}
 	for _, tc := range relinked {
 		t.Run("relinked/"+tc.name, func(t *testing.T) {
@@ -381,6 +428,106 @@ func TestLocalMode(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestRelinkLocal is where the chain goes on from after a link, when
+// batches were sealed in local-only mode after it: they join the link's
+// gap, and the chain goes on from the first batch sealed online after
+// them, not from linked_at, and nothing they hold goes (D-local-gap).
+func TestRelinkLocal(t *testing.T) {
+	type check struct {
+		name string
+		ok   bool
+	}
+	report := func(t *testing.T, checks []check) {
+		t.Helper()
+		for _, c := range checks {
+			if !c.ok {
+				t.Errorf("no: %s", c.name)
+			}
+		}
+	}
+	t.Run("a re-link while config.toml still says local sends nothing sealed before it went online", func(t *testing.T) {
+		r := newLiveRig(t, 120)
+		r.u.Start()
+		r.seal(t, 1)
+		r.seal(t, 2)
+		waitFor(t, "batches 1 and 2 and their minutes", r.served(func(f *fakeIngest) bool { return f.head != nil && f.head.b == 2 && len(f.buckets) == 30 }))
+		// pairtime logout sets mode = "local", and pairtime login couldn't
+		// set it online again, so config.toml says local after the link.
+		r.local.Store(true)
+		r.seal(t, 3)
+		r.link(r.sealedAt(3).Add(time.Minute))
+		r.seal(t, 4)
+		r.seal(t, 5)
+		// The teen sets mode = "online" by hand.
+		r.local.Store(false)
+		r.seal(t, 6)
+		r.seal(t, 7)
+		r.u.Wake()
+		waitFor(t, "batch 7 and its minutes", r.served(func(f *fakeIngest) bool { return f.head.b == 7 && r.minutesIn(f, 90, 104) == 15 }))
+		r.drain()
+		r.f.mu.Lock()
+		defer r.f.mu.Unlock()
+		report(t, []check{
+			{"no root of a batch sealed while config.toml said local went, nor of the one sealed as it went online", r.f.rows[3].b == 0 && r.f.rows[4].b == 0 && r.f.rows[5].b == 0 && r.f.rows[6].b == 0},
+			{"the chain went on from the first batch sealed online after them, over their gap", r.f.rows[7].b == 7 && slices.Contains(r.f.gaps, [2]uint64{3, 6})},
+			{"no minute of those batches went", r.minutesIn(r.f, 30, 89) == 0},
+			{"doctor doesn't hear that uploads stopped", !strings.Contains(r.doctor(), "stopped uploading")},
+		})
+	})
+	t.Run("a batch sealed in local mode just after a quick re-link joins its gap, and uploads go on", func(t *testing.T) {
+		r := newLiveRig(t, 90)
+		r.u.Start()
+		r.seal(t, 1)
+		r.seal(t, 2)
+		waitFor(t, "batches 1 and 2 and their minutes", r.served(func(f *fakeIngest) bool { return f.head != nil && f.head.b == 2 && len(f.buckets) == 30 }))
+		// pairtime logout and pairtime login within one wake, with no batch
+		// sealed between them, and batch 3 sealed before config.toml's
+		// change to online reached the agent.
+		r.link(r.sealedAt(2).Add(time.Minute))
+		r.local.Store(true)
+		r.seal(t, 3)
+		r.local.Store(false)
+		r.seal(t, 4)
+		r.seal(t, 5)
+		r.u.Wake()
+		waitFor(t, "batch 5 and its minutes", r.served(func(f *fakeIngest) bool { return f.head.b == 5 && r.minutesIn(f, 60, 74) == 15 }))
+		r.drain()
+		r.f.mu.Lock()
+		defer r.f.mu.Unlock()
+		report(t, []check{
+			{"neither the batch sealed in local mode nor the one that ended its run went", r.f.rows[3].b == 0 && r.f.rows[4].b == 0},
+			{"the chain went on from the next batch, over their gap", r.f.rows[5].b == 5 && slices.Contains(r.f.gaps, [2]uint64{3, 4})},
+			{"no minute of those two batches went", r.minutesIn(r.f, 30, 59) == 0},
+			{"doctor doesn't hear that uploads stopped", !strings.Contains(r.doctor(), "stopped uploading")},
+			{"the uploader doesn't say the roots stop", r.u.Status().Stopped == 0},
+		})
+	})
+	t.Run("a first sign-in keeps the runs of batches sealed in local-only mode before it", func(t *testing.T) {
+		r := newLiveRig(t, 90)
+		r.linked.Store(false)
+		r.local.Store(true) // a new install's mode
+		r.u.Start()
+		r.seal(t, 1)
+		r.seal(t, 2)
+		// pairtime login, which couldn't set config.toml online.
+		r.link(r.sealedAt(2).Add(time.Minute))
+		r.seal(t, 3)
+		r.local.Store(false)
+		r.seal(t, 4)
+		r.seal(t, 5)
+		r.u.Wake()
+		waitFor(t, "batch 5 and its minutes", r.served(func(f *fakeIngest) bool { return f.head != nil && f.head.b == 5 && r.minutesIn(f, 60, 74) == 15 }))
+		r.drain()
+		r.f.mu.Lock()
+		defer r.f.mu.Unlock()
+		report(t, []check{
+			{"the server's chain starts at the first batch sealed online after the sign-in", r.f.start == 5},
+			{"no root of a batch sealed before it went", r.f.rows[1].b == 0 && r.f.rows[2].b == 0 && r.f.rows[3].b == 0 && r.f.rows[4].b == 0},
+			{"no minute of those batches went", r.minutesIn(r.f, 0, 59) == 0},
+		})
+	})
 }
 
 // TestServerGaps is a device that lost state.json after a re-link: the

@@ -677,6 +677,10 @@ func (u *Uploader) cycle() bool {
 		return false // stopping
 	}
 	u.takeSealed()
+	// A run of batches sealed in local-only mode that closed since the
+	// state read, while the link's first batch isn't stored, moves From
+	// past it rather than stop the roots.
+	u.st.settle(u.rows.last())
 	stop := u.st.localStop(u.rows.last())
 	if stop > 0 {
 		u.setProblem("local-only", localOnlyProblem)
@@ -757,10 +761,12 @@ func (u *Uploader) load(c Credentials) error {
 		st = saved{Chain: chain, Harnesses: st.Harnesses}
 	case st.Server != c.Server || st.Device != c.DeviceID:
 		// Another server or another sign-in holds none of this: it gets
-		// the chain from the first batch sealed after the sign-in, and the
-		// buckets of its minutes. The old server's outages say nothing
-		// about this one.
-		st = saved{Chain: chain, Harnesses: st.Harnesses}
+		// the chain from the first batch sealed online after the sign-in,
+		// and the buckets of its minutes. The old server's outages say
+		// nothing about this one. The runs of batches sealed in local-only
+		// mode describe the ledger, not a server, so they stay, as those
+		// recorded while signed out do for a first sign-in (D-local-gap).
+		st = saved{Chain: chain, Harnesses: st.Harnesses, LocalFrom: st.LocalFrom, Gaps: st.Gaps}
 	}
 	st.Server, st.Device = c.Server, c.DeviceID
 	rows, err := loadRows(u.opts.LedgerDir, max(st.Next, 1))
@@ -779,8 +785,8 @@ func (u *Uploader) load(c Credentials) error {
 	fresh := relinked(st, c)
 	relink(&st, rows, c)
 	u.st, u.rows, u.loaded, u.synced = st, rows, true, false
-	// The place may have changed under what Sealed last saw, as when a
-	// re-link ended a local-only run: the next batch records its mode again.
+	// The place may have changed under what Sealed last saw, as after a
+	// sign-in to another server: the next batch records its mode again.
 	u.mu.Lock()
 	u.modeSeen = modeUnknown
 	u.mu.Unlock()
@@ -804,31 +810,37 @@ func relinked(st saved, c Credentials) bool {
 	return !c.LinkedAt.IsZero() && c.LinkedAt.UnixMilli() != st.LinkedAt
 }
 
-// relink sets where the device's chain goes on from for the sign-in c: the
-// first batch sealed after it, for a new sign-in or a re-link, a new token
-// after pairtime logout, which account.json's new linked_at shows. The
-// batches sealed before it, in local-only mode, never go, nor their
-// minutes, and the server takes the gap after a re-link (D-local-gap). A
-// run of batches sealed in local-only mode that started before it ends
-// there (cutLocal). The same sign-in keeps its place: a batch skipped
-// without a re-link is still chain_gap, so nothing is skipped then.
+// relink sets where the device's chain goes on from for the sign-in c. A
+// new sign-in or a re-link, a new token after pairtime logout, which
+// account.json's new linked_at shows, starts at the first batch sealed
+// after it that the recorded modes don't mark local-only, and stays
+// Linking until the server holds a batch from there: the batches before
+// it never go, nor their minutes, and the server takes the gap after a
+// re-link (D-local-gap). The runs of batches sealed in local-only mode
+// stay as they were recorded, whenever the link was. The same sign-in
+// keeps its place: a batch skipped without a re-link is still chain_gap,
+// so nothing is skipped then.
 func relink(st *saved, rows *rowIndex, c Credentials) {
 	if la := c.LinkedAt.UnixMilli(); !c.LinkedAt.IsZero() && la != st.LinkedAt {
-		st.From, st.LinkedAt = firstLinked(rows, c.LinkedAt), la
-		st.cutLocal(st.From)
-		return
+		st.From, st.LinkedAt, st.Linking = firstLinked(rows, c.LinkedAt), la, true
+	} else if st.From == 0 {
+		st.From, st.Linking = firstLinked(rows, c.LinkedAt), true
 	}
-	if st.From == 0 {
-		st.From = firstLinked(rows, c.LinkedAt)
-		st.cutLocal(st.From)
-	}
+	st.settle(rows.last())
 }
 
 // firstLinked returns the first batch sealed after the sign-in at
 // linkedAt, or the next one to be sealed when linkedAt is unknown or
-// after every batch: the batches before it are local-only mode's.
+// after every batch: the batches before it are local-only mode's. It
+// compares seal times with linkedAt at full precision, and takes a
+// linkedAt of whole seconds, as account.json's is, for the end of its
+// second, so a batch sealed in the second the login finished counts as
+// sealed before it.
 func firstLinked(rows *rowIndex, linkedAt time.Time) uint64 {
 	if !linkedAt.IsZero() {
+		if linkedAt.Nanosecond() == 0 {
+			linkedAt = linkedAt.Add(time.Second)
+		}
 		if b, ok := rows.sealedAfter(linkedAt.UnixMilli()); ok {
 			return b
 		}
@@ -1035,6 +1047,14 @@ func (u *Uploader) sync(c Credentials) bool {
 	for _, g := range st.Gaps {
 		u.st.addGap(g.First, g.Last)
 	}
+	if st.Head != nil && st.Head.B >= u.st.From {
+		// The server holds a batch from where this link's chain goes on,
+		// as after a request whose answer was lost: no later batch skips.
+		u.st.Linking = false
+	}
+	// Until then From is worked out again at each state read, past the
+	// batches sealed in local-only mode since the link.
+	u.st.settle(u.rows.last())
 	// While the server holds no batch of the device, its chain starts at
 	// the first batch sealed after the sign-in (ingest-v1 5.3), and after a
 	// re-link it goes on from there (D-local-gap): the batches between are
@@ -1333,6 +1353,9 @@ func (u *Uploader) answered(c Credentials, p plan, a answer) bool {
 		case codeAccepted, codeDuplicate:
 			u.receipt(c, root, res.Receipt, &refetched)
 			passed, took = true, true
+			if root.B >= u.st.From {
+				u.st.Linking = false // the link's first batch is stored
+			}
 		case codeBeforeChain:
 			// The server holds no row for it any more: no receipt comes
 			// for it, so no state read sends it again.

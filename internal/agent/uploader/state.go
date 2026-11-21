@@ -61,22 +61,33 @@ type saved struct {
 	// Next is the batch whose root goes next, from 1. Rows before it hold
 	// receipts, or are before ChainStart.
 	Next uint64 `json:"next,omitempty"`
-	// From is the first batch sealed after the sign-in. The batches before
-	// it were sealed in local-only mode: none of them goes, nor the buckets
-	// of the minutes they hold (ingest-v1 5.3, 7.6). 0 until the first
-	// load with this sign-in sets it.
+	// From is where the device's chain goes on from under its sign-in: the
+	// first batch sealed after the link that the recorded modes don't mark
+	// local-only (firstLinked, settle). The batches before it that the
+	// server doesn't hold were sealed in local-only mode, or before a
+	// re-link: none of them goes, nor the buckets of the minutes they hold
+	// (ingest-v1 5.3, 7.6; D-local-gap). 0 until the first load with this
+	// sign-in sets it.
 	From uint64 `json:"from,omitempty"`
 	// LinkedAt is the sign-in's linked_at From was set for, in Unix ms: a
 	// newer one is a re-link, after which From moves to the first batch
-	// sealed after it (D-local-gap).
+	// sealed online after it (D-local-gap).
 	LinkedAt int64 `json:"linked_at,omitempty"`
+	// Linking is set from a new link until the server holds a batch at or
+	// after From. Until then the server takes any batch above its head, so
+	// From moves past every run of batches sealed in local-only mode
+	// meanwhile (settle), and a request carries one batch root at most
+	// (rootsOf).
+	Linking bool `json:"linking,omitempty"`
 	// Gaps are the runs of batches sealed in local-only mode, merged
 	// where they touch: before the first sign-in, between a logout and a
-	// re-link (from the server's head then to the first batch after the
-	// re-link), and while config.toml's mode was local (mode). Neither
-	// their roots nor their minutes ever go (D-local-gap; DESIGN 4.2). The
-	// server takes a gap only at a re-link, so the roots stop before a run
-	// sealed after the chain's last link until the next one (localStop).
+	// re-link (from the server's head then to the batch before From), and
+	// while config.toml's mode was local (mode). Neither their roots nor
+	// their minutes ever go (D-local-gap; DESIGN 4.2). They describe the
+	// ledger, not a server, so they stay across a sign-in to another
+	// server. The server takes a gap only at a re-link, so the roots stop
+	// before a run sealed after the link's first stored batch until the
+	// next link (localStop).
 	Gaps []gap `json:"gaps,omitempty"`
 	// LocalFrom is the first batch sealed while config.toml's mode was
 	// local, while it still is: it and every batch after it count as
@@ -214,23 +225,31 @@ func (s *saved) mode(b uint64, local bool) bool {
 	return false
 }
 
-// cutLocal ends every run of local-only batches that started before from,
-// the first batch sealed after a re-link, at the batch before it: a re-link
-// sets the mode online (`pairtime login`), and the batches sealed after it
-// went online again even when config.toml's change reached the agent a
-// moment later (D-local-gap). A run that started at or after from is the
-// mode set to local again after the re-link, and stays.
-func (s *saved) cutLocal(from uint64) {
-	if from == 0 {
+// settle moves From past the runs of batches the recorded modes mark
+// local-only, while the link's first batch isn't stored (Linking): until
+// then the server takes any batch above its head, so a run sealed in
+// local-only mode after the link, as while config.toml still said local
+// or before its change reached the agent, joins the link's gap rather
+// than stopping the roots (D-local-gap). An open run takes in every batch
+// from LocalFrom on, so From is then the next batch to be sealed, last + 1,
+// until one is sealed online and closes the run with itself in it.
+func (s *saved) settle(last uint64) {
+	if !s.Linking || s.From == 0 {
 		return
 	}
-	if s.LocalFrom > 0 && s.LocalFrom < from {
-		s.addGap(s.LocalFrom, from-1)
-		s.LocalFrom = 0
-	}
-	for i, g := range s.Gaps {
-		if g.From < from && g.To >= from {
-			s.Gaps[i].To = from - 1
+	for {
+		if s.LocalFrom > 0 && s.From >= s.LocalFrom {
+			s.From = max(s.From, last+1)
+			return
+		}
+		moved := false
+		for _, g := range s.Gaps {
+			if g.From <= s.From && s.From <= g.To {
+				s.From, moved = g.To+1, true
+			}
+		}
+		if !moved {
+			return
 		}
 	}
 }

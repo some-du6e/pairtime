@@ -229,7 +229,9 @@ func TestUploadDay(t *testing.T) {
 		}},
 		{"privacy show's first upload is the first request's body, byte for byte", func(t *testing.T) {
 			first = preview(t)
-			if first.JSON == nil || first.Batches != 30 || first.Buckets != 0 || !first.Labels {
+			// The first root under a new sign-in goes alone, and the rest
+			// once it is stored (ingest-v1 5.3).
+			if first.JSON == nil || first.Batches != 1 || first.Buckets != 0 || !first.Labels {
 				t.Fatalf("the preview holds %d roots, %d buckets, labels %v", first.Batches, first.Buckets, first.Labels)
 			}
 			signedIn.Store(true)

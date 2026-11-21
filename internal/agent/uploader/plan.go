@@ -150,9 +150,17 @@ func makePlan(in planInput) (plan, error) {
 // rootsOf returns the batch roots that go next: up to n from st.Next on,
 // none after a fork, and none from the first batch sealed in local-only
 // mode since the chain's last link on, until the next link (localStop).
+// While the link's first batch isn't stored (Linking), a request carries
+// that one root alone, and the rest go once it is: in one request, a fork
+// refused at the batch after the server's head, followed by a higher root,
+// would be taken as a skip, and the fork stored as a local-only gap
+// (ingest-v1 5.3).
 func rootsOf(in planInput, n int) []Root {
 	if in.st.Fork != 0 {
 		return nil
+	}
+	if in.st.Linking {
+		n = 1
 	}
 	var roots []Root
 	for _, r := range in.rows.rowsFrom(max(in.st.Next, in.st.From, 1), n) {

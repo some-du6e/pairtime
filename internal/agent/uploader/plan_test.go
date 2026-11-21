@@ -69,6 +69,11 @@ func TestPlan(t *testing.T) {
 				t.Errorf("roots %+v", p.body.Batches)
 			}
 		}},
+		{"while the link's first batch isn't stored, its root goes alone", saved{Next: 2, From: 2, Linking: true}, nil, func(t *testing.T, p plan, in planInput) {
+			if len(p.body.Batches) != 1 || p.body.Batches[0].B != 2 {
+				t.Errorf("roots %+v", p.body.Batches)
+			}
+		}},
 		{"no root goes after a fork", saved{Next: 2, Fork: 2}, nil, func(t *testing.T, p plan, in planInput) {
 			if len(p.body.Batches) != 0 {
 				t.Errorf("%d roots after a fork", len(p.body.Batches))

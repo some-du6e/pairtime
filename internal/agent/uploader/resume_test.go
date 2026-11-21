@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -766,20 +767,28 @@ func TestRelink(t *testing.T) {
 		st       saved
 		linkedAt time.Time
 		from     uint64
+		linking  bool
 	}{
-		{"a first sign-in starts at the first batch sealed after it", saved{}, la(2.5), 3},
-		{"the same sign-in keeps its place", saved{From: 3, LinkedAt: la(2.5).UnixMilli()}, la(2.5), 3},
-		{"a re-link moves to the first batch sealed after it", saved{From: 1, LinkedAt: la(0).UnixMilli()}, la(3.5), 4},
-		{"a re-link after the last batch starts at the next one", saved{From: 1, LinkedAt: la(0).UnixMilli()}, la(9), 5},
-		{"a sign-in with no linked_at keeps the place it has", saved{From: 2}, time.Time{}, 2},
-		{"a first sign-in with no linked_at starts at the next batch", saved{}, time.Time{}, 5},
+		{"a first sign-in starts at the first batch sealed after it", saved{}, la(2.5), 3, true},
+		{"the same sign-in keeps its place", saved{From: 3, LinkedAt: la(2.5).UnixMilli()}, la(2.5), 3, false},
+		{"a re-link moves to the first batch sealed after it", saved{From: 1, LinkedAt: la(0).UnixMilli()}, la(3.5), 4, true},
+		{"a re-link after the last batch starts at the next one", saved{From: 1, LinkedAt: la(0).UnixMilli()}, la(9), 5, true},
+		{"a sign-in with no linked_at keeps the place it has", saved{From: 2}, time.Time{}, 2, false},
+		{"a first sign-in with no linked_at starts at the next batch", saved{}, time.Time{}, 5, true},
+		{"a batch sealed in the second a linked_at of whole seconds names counts as sealed before the link", saved{}, la(3), 4, true},
+		{"a linked_at with milliseconds is compared at full precision", saved{}, la(3).Add(-500 * time.Millisecond), 3, true},
+		{"a re-link starts after the batches sealed in local-only mode after it", saved{From: 1, LinkedAt: la(0).UnixMilli(), Gaps: []gap{{2, 3}}}, la(1.5), 4, true},
+		{"a re-link while config.toml still says local starts at the next batch to be sealed", saved{From: 1, LinkedAt: la(0).UnixMilli(), LocalFrom: 2}, la(1.5), 5, true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			st := tc.st
+			st := tc.st.clone()
 			relink(&st, ix, Credentials{LinkedAt: tc.linkedAt})
-			if st.From != tc.from {
-				t.Errorf("From = %d, want %d", st.From, tc.from)
+			if st.From != tc.from || st.Linking != tc.linking {
+				t.Errorf("From = %d, linking %v; want %d, %v", st.From, st.Linking, tc.from, tc.linking)
+			}
+			if !slices.Equal(st.Gaps, tc.st.Gaps) || st.LocalFrom != tc.st.LocalFrom {
+				t.Errorf("the runs are %v from %d, want them as recorded, %v from %d", st.Gaps, st.LocalFrom, tc.st.Gaps, tc.st.LocalFrom)
 			}
 		})
 	}
