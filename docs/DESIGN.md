@@ -622,9 +622,9 @@ The server side:
 
 `pairtime install`, run by either install script or the VS Code extension, takes under two minutes:
 
-1. Put the binary at the per-user path (CP 7) and verify the signed release manifest's SHA-256 (CP 4.6). No admin rights anywhere.
+1. Verify the signed release manifest's SHA-256 (CP 4.6). No admin rights anywhere. The install script checks the manifest's signature and the SHA-256s it lists before it runs anything it downloaded. The VS Code extension (WP-RL6) carries its binary inside the extension, so it checks that binary against the manifest's `binary_sha256` itself before it runs it (docs/spec/update-manifest.md).
 2. Detect harnesses, then show one consent screen with every planned change as a diff (`--dry-run` prints only the diff): the autostart entry, hook entries per harness, Karim's entry for each harness no hook or log reader sees and for any harness named with `--track`, with its cost line (5.4), the `~/.wakatime.cfg` line, and the coach skill files. The teen can untick any item.
-3. Write autostart and start the agent.
+3. Put the binary at the per-user path (CP 7), write autostart and start the agent.
 4. Merge hook entries. Print the Codex `/hooks` trust instruction and Cline's "Enable Hooks" step in plain words when those harnesses are present.
 5. Edit `~/.wakatime.cfg` (5.6). If wakatime-cli is installed, send a test heartbeat with entity `test.txt` (Hackatime stores it as a `test_entry`), confirm the agent received it, and confirm wakatime-cli reported no error for Hackatime.
 6. From 2027-01-01, request the OS age signal (8.2).
@@ -633,7 +633,7 @@ The server side:
 9. Run lookback over 30 days at low CPU and I/O priority with a progress bar, then open the welcome recap (TE WP4.7).
 10. Offer the recovery code (7.11).
 
-`pairtime doctor` prints one line per check: agent running; idle detection working, or "presence unknown on this desktop" on GNOME Wayland; hook round trip in ms per harness; Codex and Claude Code trust state; both WakaTime destinations reachable; last upload and clock offset; signing state of the binary; adapters found with parse-failure counts; `.jsonl.zst` rollouts skipped. `pairtime doctor --report` writes a redacted footprint report (RSS, idle CPU, wakeups, hook latency, disk type, OS build) that the teen can choose to share; its test plants usernames and paths and finds none in the report (TE WP7.9). Those reports are the R8 evidence.
+`pairtime doctor` prints one line per check: agent running; idle detection working with its source, or "presence unknown on this desktop"; focus detection working with its source, or "focus unknown on this desktop", as on GNOME Wayland, which gives idle time through Mutter's `IdleMonitor` and no focus signal; hook round trip in ms per harness; Codex and Claude Code trust state; both WakaTime destinations reachable; last upload and clock offset; signing state of the binary; adapters found with parse-failure counts; `.jsonl.zst` rollouts skipped. `pairtime doctor --report` writes a redacted footprint report (RSS, idle CPU, wakeups, hook latency, disk type, OS build) that the teen can choose to share; its test plants usernames and paths and finds none in the report (TE WP7.9). Those reports are the R8 evidence.
 
 ### 5.10 Program-side integrations
 
