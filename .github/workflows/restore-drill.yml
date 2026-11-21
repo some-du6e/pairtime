@@ -104,6 +104,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          # A PR is checked out as its merge commit; depth 2 brings its first
+          # parent, the base the drill's choice of image compares with.
+          fetch-depth: 2
 
       - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
@@ -158,7 +161,8 @@ jobs:
       - name: Lay out the host as the runbook does
         run: |
           d=$RUNNER_TEMP/pairtime
-          cp -r deploy "$d"
+          # deploy/, for the image the last step made (restore_drill.sh bundle).
+          bash tools/ci/restore_drill.sh bundle "$d"
           cd "$d"
           echo "D=$d" >> "$GITHUB_ENV"
           sudo install -d -m 0700 -o "$UID65532" -g "$UID65532" data data/tmp witness-roots

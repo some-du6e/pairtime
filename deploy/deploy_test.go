@@ -5,6 +5,7 @@ package deploy
 import (
 	"cmp"
 	"errors"
+	"io/fs"
 	"os"
 	"path"
 	"regexp"
@@ -65,8 +66,8 @@ func TestBundleFilesAgree(t *testing.T) {
 		{name: "compose runs Litestream on the litestream.yml the image carries",
 			got:  litestreamConfig,
 			want: line(`^COPY --chmod=0644 deploy/litestream\.yml (\S+)\s*$`, dockerfile)},
-		{name: "a litestream.yml compose mounts, for an image from before it carried one, goes where the image keeps its own",
-			got:  cmp.Or(line(`^\s*- \./litestream\.yml:([^:]+):ro\s*$`, composeYAML), litestreamConfig),
+		{name: "the frozen litestream.yml compose mounts, for an image from before it carried one, goes where the image keeps its own",
+			got:  cmp.Or(line(`^\s*- \./litestream\.frozen\.yml:([^:]+):ro\s*$`, composeYAML), litestreamConfig),
 			want: litestreamConfig},
 		{name: "compose mounts the data directory at pairtime.toml's default data_dir",
 			got: line(`^\s*- \./data:(\S+)\s*$`, composeYAML), want: config.DefaultDataDir},
@@ -98,6 +99,65 @@ func TestBundleFilesAgree(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if tt.got == "" || tt.got != tt.want {
 				t.Errorf("got %q, want %q", tt.got, tt.want)
+			}
+		})
+	}
+}
+
+// TestFrozenLitestream checks litestream.frozen.yml, the copy of
+// litestream.yml that compose.yml mounts while it pins an image from before
+// #123, which carries none of its own (#119). The copy goes with its mount,
+// and until then it replicates the database litestream.yml does, to the
+// same replica, so the next image, which reads its own copy, carries on
+// from the replica the pinned one wrote.
+func TestFrozenLitestream(t *testing.T) {
+	data, err := os.ReadFile("litestream.frozen.yml")
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		t.Fatal(err)
+	}
+	exists := err == nil
+	frozen := string(data)
+	mounted := regexp.MustCompile(`(?m)^\s*- \./litestream\.frozen\.yml:/etc/litestream\.yml:ro\s*$`).MatchString(composeYAML)
+	tests := []struct {
+		name string
+		ok   bool
+	}{
+		{name: "litestream.frozen.yml is in the bundle exactly while compose.yml mounts it, so the PR that drops the mount drops the file", ok: exists == mounted},
+	}
+	if exists {
+		grace, err1 := time.ParseDuration(line(`^\s*stop_grace_period: (\S+)\s*$`, composeYAML))
+		shutdown, err2 := time.ParseDuration(line(`^shutdown-timeout: (\S+)\s*$`, frozen))
+		dbPath := `^\s*-\s*path:\s*(\S+)\s*$`
+		replicaPath := `^\s+path:\s*(\S+)\s*$`
+		quoted := regexp.MustCompile(`:\s'\$\{[A-Z0-9_]+\}'\s*$`)
+		allQuoted := true
+		for _, l := range strings.Split(frozen, "\n") {
+			if strings.Contains(l, "${") && !strings.HasPrefix(strings.TrimSpace(l), "#") && !quoted.MatchString(l) {
+				allQuoted = false
+			}
+		}
+		tests = append(tests, []struct {
+			name string
+			ok   bool
+		}{
+			{name: "the frozen copy replicates the database litestream.yml replicates",
+				ok: line(dbPath, frozen) != "" && line(dbPath, frozen) == line(dbPath, LitestreamYAML)},
+			{name: "the frozen copy replicates to litestream.yml's replica path, so the next image carries on from the replica",
+				ok: line(replicaPath, frozen) != "" && line(replicaPath, frozen) == line(replicaPath, LitestreamYAML)},
+			{name: "the frozen copy restores the database when the file is missing (DESIGN 10.1)",
+				ok: line(`^\s*restore-if-db-not-exists:\s*(\S+)\s*$`, frozen) == "true"},
+			{name: "the frozen copy runs pairtimed serve and tells it the replica path it replicates to",
+				ok: line(`^exec:\s*pairtimed serve -litestream-replica (\S+)\s*$`, frozen) == line(replicaPath, frozen)},
+			{name: "the frozen copy gives pairtimed and its last sync less time than Docker gives the container",
+				ok: errors.Join(err1, err2) == nil && shutdown < grace},
+			{name: "the frozen copy holds each variable in single quotes, as litestream.yml does",
+				ok: allQuoted && strings.Contains(frozen, "${PAIRTIME_S3_SECRET_ACCESS_KEY}")},
+		}...)
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if !tt.ok {
+				t.Errorf("litestream.frozen.yml (there: %v) and compose.yml (mounts it: %v) break this", exists, mounted)
 			}
 		})
 	}

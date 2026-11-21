@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
 # restore_drill.sh image
+# restore_drill.sh bundle DIR
 # restore_drill.sh read-only
 #
 # The steps restore-drill.yml's two jobs share (DESIGN 10.3; deploy/runbook.md,
@@ -19,12 +20,20 @@
 # PAIRTIME_DRILL_IMAGE picks one. Unset or auto, the weekly drill uses the
 # pinned image, the one hosts run, and any other run builds from source when
 # the checkout changes what goes into the image (image_paths) against its
-# base, main or a pull request's base branch, so a PR's drill tests the
-# image its code would make. A pin bump, a bump of the other images or a
-# runbook change runs the pinned image. A pull request that changes both the
-# pin and what goes into the image fails, since one drill can't test both.
-# Then image checks what it made: both programs answer, the image runs as
-# 65532, and it holds the litestream.yml compose needs (#119).
+# base, so a PR's drill tests the image its code would make. A pull
+# request's base is its merge commit's first parent, main as it stood when
+# GitHub made the merge, and anything else's is where it forked from main,
+# so a change main made since counts for neither. A pin bump, a bump of the
+# other images or a runbook change runs the pinned image. A pull request
+# that changes both the pin and what goes into the image fails, since one
+# drill can't test both. Then image checks what it made: both programs
+# answer, the image runs as 65532, and it holds the litestream.yml compose
+# needs (#119). It records which one it made for bundle and read-only.
+#
+# bundle copies deploy/ to DIR, a drill host's bundle. A pinned image from
+# before #123 runs litestream.frozen.yml, which compose.yml mounts for it; a
+# source build runs the litestream.yml it carries, as hosts will once the
+# next pin drops that mount, so its bundle loses the mount.
 #
 # read-only restores the replica in the buckets that S3_ENDPOINT, S3_REGION,
 # S3_BUCKET, S3_SNAPSHOT_BUCKET, S3_ACCESS_KEY_ID and S3_SECRET_ACCESS_KEY
@@ -69,6 +78,10 @@ image_paths=(
 # it.
 repository=ghcr.io/some-du6e/pairtimed
 
+# frozen_mount matches compose.yml's mount of litestream.frozen.yml, the
+# litestream.yml of a pinned image from before #123, which carries none.
+frozen_mount='^[[:space:]]+- \./litestream\.frozen\.yml:/etc/litestream\.yml:ro[[:space:]]*$'
+
 fail() {
 	echo "::error::$*"
 	exit 1
@@ -82,7 +95,7 @@ pinned_image() {
 # decide sets drill_mode to how image makes pairtimed:drill, pinned or
 # source.
 decide() {
-	local base diff
+	local base head diff
 	case "${PAIRTIME_DRILL_IMAGE:-auto}" in
 	pinned | source)
 		drill_mode=$PAIRTIME_DRILL_IMAGE
@@ -96,15 +109,25 @@ decide() {
 		drill_mode=pinned
 		return
 	fi
-	# The base's tip alone: the diff compares two trees and needs no
-	# history. A pull request's checkout is its merge commit with the base.
-	base=${GITHUB_BASE_REF:-main}
-	git fetch --quiet --no-tags --depth=1 origin "refs/heads/$base"
-	if git diff --quiet FETCH_HEAD HEAD -- "${image_paths[@]}"; then
+	# What the checkout changes, against the base it was made from. A pull
+	# request is checked out as the merge commit GitHub made when the event
+	# fired, whose first parent is the base branch as it stood then:
+	# restore-drill.yml checks out two commits for it. A dispatch compares
+	# with where its commit forked from main, from GitHub's compare API, so
+	# a branch behind main isn't drilled from source for main's changes.
+	head=$(git rev-parse HEAD)
+	if [ "${GITHUB_EVENT_NAME:-}" = pull_request ]; then
+		base=$(git rev-parse --quiet --verify 'HEAD^1^{commit}') ||
+			fail "the checkout has no first parent to compare with: restore-drill.yml checks a pull request out with fetch-depth 2"
+	else
+		base=$(gh api "repos/$GITHUB_REPOSITORY/compare/main...$head" --jq .merge_base_commit.sha)
+		git fetch --quiet --no-tags --depth=1 origin "$base"
+	fi
+	if git diff --quiet "$base" "$head" -- "${image_paths[@]}"; then
 		drill_mode=pinned
 		return
 	fi
-	diff=$(git diff FETCH_HEAD HEAD -- deploy/compose.yml)
+	diff=$(git diff "$base" "$head" -- deploy/compose.yml)
 	if [ "${GITHUB_EVENT_NAME:-}" = pull_request ] &&
 		grep -Eq '^[-+][[:space:]]+image:[[:space:]]+ghcr\.io/some-du6e/pairtimed:' <<< "$diff"; then
 		fail "this PR changes compose.yml's pairtimed pin and what goes into the image too, and one drill can test only one of them: pin in a PR of its own (deploy/runbook.md, The image pin)"
@@ -167,13 +190,13 @@ check_image() {
 
 	# Each image carries the litestream.yml it was built and drilled with,
 	# so a rollback to it needs nothing from git (#119). Images from before
-	# that have none, and compose.yml mounts the checkout's copy for them.
+	# that have none, and compose.yml mounts litestream.frozen.yml for them.
 	cid=$(docker create pairtimed:drill)
 	if docker cp "$cid:/etc/litestream.yml" - > "$RUNNER_TEMP/image-litestream.tar" 2> /dev/null; then
 		has=yes
 	fi
 	docker rm "$cid" > /dev/null
-	if grep -Eq '^[[:space:]]+- \./litestream\.yml:/etc/litestream\.yml:ro[[:space:]]*$' deploy/compose.yml; then
+	if grep -Eq "$frozen_mount" deploy/compose.yml; then
 		mounts=yes
 	fi
 	if [ "$has" = yes ]; then
@@ -188,22 +211,22 @@ check_image() {
 		if ! cmp -s "$RUNNER_TEMP/image-litestream.yml" deploy/litestream.yml; then
 			fail "the image's /etc/litestream.yml isn't deploy/litestream.yml"
 		fi
-		echo "The image holds deploy/litestream.yml at /etc/litestream.yml, mode 0644."
+		echo "The image holds deploy/litestream.yml at /etc/litestream.yml, mode 0644, and the drill runs it without compose.yml's mount of litestream.frozen.yml, if any."
 		;;
 	source,no,*)
 		fail "the image has no /etc/litestream.yml: Dockerfile.pairtimed copies deploy/litestream.yml there"
 		;;
 	pinned,yes,yes)
-		fail "the pinned image carries its own /etc/litestream.yml, so compose.yml's mount of the checkout's copy goes: delete the ./litestream.yml line under the pairtimed service in this PR (deploy/runbook.md, The image pin)"
+		fail "the pinned image carries its own /etc/litestream.yml, so compose.yml's mount of litestream.frozen.yml goes: delete the ./litestream.frozen.yml line under the pairtimed service, its comment and deploy/litestream.frozen.yml in this PR (deploy/runbook.md, The image pin)"
 		;;
 	pinned,no,no)
-		fail "the pinned image has no /etc/litestream.yml of its own, so compose.yml has to mount the checkout's copy"
+		fail "the pinned image has no /etc/litestream.yml of its own, so compose.yml has to mount litestream.frozen.yml over it"
 		;;
 	pinned,yes,no)
 		echo "The pinned image runs its own litestream.yml."
 		;;
 	pinned,no,yes)
-		echo "The pinned image is older than litestream.yml in the image, so compose.yml mounts the checkout's copy."
+		echo "The pinned image is older than litestream.yml in the image, so compose.yml mounts litestream.frozen.yml for it."
 		;;
 	esac
 }
@@ -216,10 +239,28 @@ image() {
 	source) build_source ;;
 	esac
 	check_image "$drill_mode"
+	echo "$drill_mode" > "$RUNNER_TEMP/drill-mode"
+}
+
+# bundle copies deploy/ to $1 for the image image made. A source build runs
+# its own litestream.yml, as hosts will once the next pin drops the frozen
+# copy's mount, so its bundle loses that mount; a pinned image keeps it, as
+# hosts run it now.
+bundle() {
+	local dir=$1 mode
+	mode=$(cat "$RUNNER_TEMP/drill-mode" 2> /dev/null) ||
+		fail "restore_drill.sh image runs first: bundle lays the host out for the image it made"
+	cp -r deploy "$dir"
+	if [ "$mode" = source ]; then
+		sed -E -i "\#$frozen_mount#d" "$dir/compose.yml"
+		if grep -q ':/etc/litestream\.yml' "$dir/compose.yml"; then
+			fail "the drill's compose.yml still mounts a litestream.yml over the one the source build carries"
+		fi
+	fi
 }
 
 read_only() {
-	local v d copy agent help newkeys recorded newest only missing=""
+	local v d copy agent help keyshelp newkeys recorded newest only missing=""
 	for v in S3_ENDPOINT S3_BUCKET S3_SNAPSHOT_BUCKET S3_ACCESS_KEY_ID S3_SECRET_ACCESS_KEY; do
 		if [ -z "${!v:-}" ]; then
 			missing="$missing $v"
@@ -230,7 +271,7 @@ read_only() {
 	fi
 	d=$RUNNER_TEMP/read-only
 	copy=$RUNNER_TEMP/read-only-copy
-	cp -r deploy "$d"
+	bundle "$d"
 	cd "$d"
 	sudo install -d -m 0700 -o 65532 -g 65532 data data/tmp witness-roots
 	mkdir config
@@ -304,16 +345,25 @@ read_only() {
 	# with. doctor's own key backup check compares it with this host's
 	# keys, which are throwaway ones, so it is left out where the image
 	# can list the backups; an image from before keys list has the older
-	# check, which only asks that a backup exists.
-	if docker exec drill-serve pairtimed keys list > "$RUNNER_TEMP/key-backups.txt"; then
+	# check, which only asks that a backup exists. Which one is the
+	# image's usage, as for init's -new-keys above, so a keys list that
+	# fails, such as on a store error, fails the drill with its own error.
+	keyshelp=$(docker exec drill-serve pairtimed keys -h 2>&1 || true)
+	if grep -q 'pairtimed keys list' <<< "$keyshelp"; then
+		if ! docker exec drill-serve pairtimed keys list > "$RUNNER_TEMP/key-backups.txt"; then
+			fail "pairtimed keys list couldn't list the key backups in the main bucket; its error is above"
+		fi
 		newest=$(tail -n 1 "$RUNNER_TEMP/key-backups.txt")
 		if [ -z "$newest" ]; then
 			fail "there is no key backup in the main bucket"
 		fi
-		if [ -n "$recorded" ] && [ "$(cut -f 3 <<< "$newest")" != "$recorded" ]; then
+		if [ -z "$recorded" ]; then
+			echo "The newest key backup is $(cut -f 1 <<< "$newest"). The database records no server key to compare it with, since it was written before pairtimed recorded one (#133)."
+		elif [ "$(cut -f 3 <<< "$newest")" != "$recorded" ]; then
 			fail "the newest key backup, $(cut -f 1 <<< "$newest"), doesn't hold server key $recorded, which the database was written with: back the keys up again (deploy/runbook.md, step 8)"
+		else
+			echo "The newest key backup, $(cut -f 1 <<< "$newest"), holds server key $recorded, which the database was written with."
 		fi
-		echo "The newest key backup, $(cut -f 1 <<< "$newest"), holds the server key the database was written with${recorded:+, $recorded}."
 		only=snapshot,database,keys,config
 	else
 		only=snapshot,keys_backup,database,keys,config
@@ -335,9 +385,16 @@ read_only() {
 
 case "${1:-}" in
 image) image ;;
+bundle)
+	if [ -z "${2:-}" ]; then
+		echo "usage: restore_drill.sh bundle DIR" >&2
+		exit 2
+	fi
+	bundle "$2"
+	;;
 read-only) read_only ;;
 *)
-	echo "usage: restore_drill.sh image | read-only" >&2
+	echo "usage: restore_drill.sh image | bundle DIR | read-only" >&2
 	exit 2
 	;;
 esac

@@ -8,12 +8,12 @@
 # Litestream syncs once more and exits with it.
 #
 # Litestream fills ${NAME} from its environment, which compose sets from
-# config/secrets.env, so this file holds no value of one deployment and
-# comes from git with compose.yml. Each one is in single quotes, where YAML
-# keeps a value as written, so a URL with '&' or '?' in it, as an Uptime
-# Kuma push URL has, stays one string and a backslash in a key stays a
-# backslash. Only a ' would end one early: pairtimed init and doctor
-# refuse a value that holds one.
+# config/secrets.env, so this file holds no value of one deployment, and
+# each server image carries it (Dockerfile.pairtimed). Each one is in
+# single quotes, where YAML keeps a value as written, so a URL with '&' or
+# '?' in it, as an Uptime Kuma push URL has, stays one string and a
+# backslash in a key stays a backslash. Only a ' would end one early:
+# pairtimed init and doctor refuse a value that holds one.
 # pairtimed's own copy of the endpoint and the bucket is [object_storage]
 # in pairtime.toml; `pairtimed init` writes it from the same variables, and
 # `pairtimed doctor` fails when the two disagree.
