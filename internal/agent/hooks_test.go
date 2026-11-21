@@ -30,6 +30,7 @@ import (
 	"github.com/some-du6e/pairtime/internal/agent/sched"
 	"github.com/some-du6e/pairtime/internal/agent/state"
 	"github.com/some-du6e/pairtime/internal/platform"
+	"github.com/some-du6e/pairtime/internal/platform/clock"
 	"github.com/some-du6e/pairtime/pkg/event"
 	pkgledger "github.com/some-du6e/pairtime/pkg/ledger"
 )
@@ -698,14 +699,26 @@ func TestIgnoredSessionLeavesFocus(t *testing.T) {
 	}
 	self := inbox.Proc{PID: hook.PID, Name: hook.Name, Start: hook.Start}
 	sent := uint64(0)
+	// deliver sends a call of the session in dir as the socket would hand
+	// it over: from under the claude, stamped by the agent as it came, with
+	// the fields Claude Code sends for its event.
 	deliver := func(t *testing.T, name, dir string) {
 		t.Helper()
-		payload, err := json.Marshal(map[string]string{"session_id": "stub-session", "cwd": dir, "prompt": "hi"})
+		p := map[string]any{"session_id": "stub-session", "cwd": dir, "hook_event_name": name}
+		switch name {
+		case "SessionStart":
+			p["source"] = "startup"
+		case "UserPromptSubmit":
+			p["prompt"] = "hi"
+		case "Stop":
+			p["stop_hook_active"] = false
+		}
+		payload, err := json.Marshal(p)
 		if err != nil {
 			t.Fatal(err)
 		}
 		d := inbox.Delivery{Message: hookMessage(t, name, string(payload), self, now), Via: inbox.ViaSocket, PeerPID: hook.PID,
-			Walk: []platform.Proc{hook, claude, desk[3], desk[2], desk[1]}}
+			Walk: []platform.Proc{hook, claude, desk[3], desk[2], desk[1]}, Received: clock.Now()}
 		if err := sink.Deliver(d); err != nil {
 			t.Fatal(err)
 		}
