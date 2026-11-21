@@ -99,7 +99,7 @@ func TestOrigin(t *testing.T) {
 			origin: event.OriginHeadless},
 		{name: "rule 5: a session on a vendor VM is cloud", edit: restart(event.EntrypointCloud, event.ParentUnknown, true),
 			origin: event.OriginCloud},
-		{name: "rule 8: no input in the KEYS_PRE_S before submit is no_input",
+		{name: "rule 8: no input in the KEYS_PRE_S before submit or the INPUT_RELEASE_GRACE_MS after it is no_input",
 			typing: every(atMS(30_500), atMS(49_500), 1000), origin: event.OriginNoInput},
 		{name: "rule 8: focus on a window that doesn't host the session is no_input",
 			edit:   func(b *tl, p *event.PromptSubmit) { b.focus(at(40), event.AppTerminal, "p_1") },
@@ -236,10 +236,16 @@ func rehearsal(b *tl, release int64) event.Event {
 	b.mouse(atMS(release))
 	e := b.prompt(atMS(rehearsalSubmit), event.ViaHook, "s_1", "p_1", "t_p", 53)
 	b.sample(max(atMS(58_501), atMS(release+1)))
+	cadence(b)
+	return e
+}
+
+// cadence takes the regular samples of the rehearsal's agent, 7 ms after
+// each slot boundary from base to two minutes on.
+func cadence(b *tl) {
 	for s := int64(7); s <= 120_007; s += event.SlotMS {
 		b.sample(atMS(s))
 	}
-	return e
 }
 
 // tableWithGrace returns the test table with INPUT_RELEASE_GRACE_MS set to
@@ -337,8 +343,11 @@ func TestReleaseGrace(t *testing.T) {
 }
 
 // TestReleaseGraceRules6And7Only checks that no other test of input or
-// focus takes INPUT_RELEASE_GRACE_MS (D-input-release-grace): input 100 ms
-// after the act, which the grace would cover, never counts for them.
+// focus takes INPUT_RELEASE_GRACE_MS (D-input-release-grace): focus at
+// submit, a typed command's evidence test, rule 4's test before
+// session.start, a prompt's evidence level, and rule 6's plausibility test,
+// which counts input slots in the lead. Input after the act that the grace
+// would cover never counts for them.
 func TestReleaseGraceRules6And7Only(t *testing.T) {
 	// command is a command typed in a shell in the terminal, started at
 	// 58.497 s with a key press 100 ms from its start, before it when
@@ -379,6 +388,14 @@ func TestReleaseGraceRules6And7Only(t *testing.T) {
 		tu, _ := turnByKey(d, "t_p")
 		return tu.Origin
 	}
+	// anchor returns the anchor of the prompt with turn key t_p.
+	anchor := func(d Derived) (Anchor, bool) {
+		i := slices.IndexFunc(d.Anchors, func(a Anchor) bool { return a.TurnKey == "t_p" })
+		if i < 0 {
+			return Anchor{}, false
+		}
+		return d.Anchors[i], true
+	}
 	cases := []struct {
 		name  string
 		keys  bool
@@ -400,6 +417,34 @@ func TestReleaseGraceRules6And7Only(t *testing.T) {
 			keys: true, build: claudeP(100), ok: func(d Derived) bool { return origin(d) == event.OriginHeadless }},
 		{name: "rule 4, the control: a key press 100 ms before the session starts makes its prompt human_typed",
 			keys: true, build: claudeP(-100), ok: func(d Derived) bool { return origin(d) == event.OriginHumanTyped }},
+		{name: "the evidence level: a key press only in the grace makes the prompt human_typed at level B, since the level reads the KEYS_PRE_S alone",
+			keys: true,
+			build: func(b *tl) {
+				terminalSession(b)
+				b.mouse(atMS(44_421))
+				b.prompt(atMS(rehearsalSubmit), event.ViaHook, "s_1", "p_1", "t_p", 53)
+				b.press(atMS(rehearsalSubmit + 100))
+				b.sample(atMS(rehearsalSubmit + 150))
+				cadence(b)
+			},
+			ok: func(d Derived) bool {
+				a, ok := anchor(d)
+				return origin(d) == event.OriginHumanTyped && ok && a.Level == event.EvidenceB
+			}},
+		{name: "the plausibility test: a release in the slot after submit adds no input slot to the lead, so a prompt whose typing it hid is human_pasted, its typing cut to 0",
+			build: func(b *tl) {
+				terminalSession(b)
+				b.press(every(atMS(55_000), atMS(59_680), 90)...)
+				b.press(atMS(59_990))
+				b.prompt(atMS(59_995), event.ViaHook, "s_1", "p_1", "t_p", 53)
+				b.mouse(atMS(60_003))
+				b.sample(atMS(60_004))
+				cadence(b)
+			},
+			ok: func(d Derived) bool {
+				a, ok := anchor(d)
+				return origin(d) == event.OriginHumanPasted && ok && a.LeadMS == 120_000
+			}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
