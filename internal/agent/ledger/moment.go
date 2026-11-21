@@ -47,16 +47,27 @@ func momentAt(at time.Time, s clock.Stamp) moment {
 
 // raise moves m on to n by each clock where n is later. An OS reading of
 // another boot than m's replaces m's, since only one boot runs at a time
-// and n's is the newer.
+// and n's is the newer. When n is later by the wall clock and has no
+// reading of a clock m has, as a moment read back from disk or kept by
+// the wall clock alone, m's reading is of an earlier time than the moment
+// now is, so it goes, and events of that clock are held to the wall
+// clock.
 func (m *moment) raise(n moment) {
+	later := n.wall > m.wall
 	m.wall = max(m.wall, n.wall)
-	m.run = max(m.run, n.run)
 	switch {
-	case n.os == 0:
-	case m.boot != n.boot:
-		m.os, m.boot = n.os, n.boot
-	default:
+	case n.run > 0:
+		m.run = max(m.run, n.run)
+	case later:
+		m.run = 0
+	}
+	switch {
+	case n.os > 0 && m.boot == n.boot:
 		m.os = max(m.os, n.os)
+	case n.os > 0:
+		m.os, m.boot = n.os, n.boot
+	case later:
+		m.os, m.boot = 0, ""
 	}
 }
 

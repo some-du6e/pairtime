@@ -65,9 +65,12 @@ func TestMoment(t *testing.T) {
 		{"a reading of the OS's clock in another boot replaces the moment's, as the newer",
 			moment{wall: 10, os: 30, boot: boot}, moment{wall: 5, os: 2, boot: "b_new"},
 			moment{wall: 10, os: 2, boot: "b_new"}},
-		{"a moment with no reading of the OS's clock leaves the moment's",
-			moment{wall: 10, os: 30, boot: boot}, moment{wall: 20},
-			moment{wall: 20, os: 30, boot: boot}},
+		{"an earlier moment with no reading of a clock leaves the moment's",
+			moment{wall: 10, run: 20, os: 30, boot: boot}, moment{wall: 5},
+			moment{wall: 10, run: 20, os: 30, boot: boot}},
+		{"a later moment with no reading of a clock drops the moment's, which is of an earlier time",
+			moment{wall: 10, run: 20, os: 30, boot: boot}, moment{wall: 20},
+			moment{wall: 20}},
 	}
 	for _, c := range raises {
 		t.Run(c.name, func(t *testing.T) {

@@ -782,8 +782,8 @@ func msTime(ms int64) time.Time {
 
 // rowPayload is a batch frame's payload in batches.seg: DESIGN 3.5's row,
 // {b, first_seq, last_seq, n, R_b, H_b, sealed_at}, with prev, online,
-// back, local_until and where the batch's frames are. The receipt goes in a receipt
-// frame of its own, when it arrives.
+// back, local_until and where the batch's frames are. The receipt goes in
+// a receipt frame of its own, when it arrives.
 type rowPayload struct {
 	sealPayload
 	LastSeq uint64 `json:"last_seq"`
