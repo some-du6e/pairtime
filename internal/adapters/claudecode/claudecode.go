@@ -221,8 +221,13 @@ type session struct {
 	// time, in Unix milliseconds, at which a call named it. Calls can reach
 	// Parse in another order than they were made, a spooled one after a
 	// later one over the socket, so whether a call is earlier than another
-	// goes by the times they carry. An id of started with no time, as from
-	// memory an older adapter saved, counts as named before any call.
+	// goes by the times they carry: the stamps hookpath.Times gives, which
+	// are the hooks' own unless a hook had no monotonic reading or stamped
+	// itself later than the agent took it in. A call in the same
+	// millisecond counts as earlier, so calls whose stamps tie, as the
+	// agent's own stamps of one spool drain can, keep the order they
+	// arrived in. An id of started with no time, such as one loaded from
+	// saved memory, counts as named before any call.
 	named map[string]int64
 	// turn is the turn the session's latest call named: its prompt_id, or
 	// one the adapter made up when Claude Code sent none.
@@ -287,14 +292,14 @@ func (s *session) startedTurn(id string) bool {
 	return false
 }
 
-// namedBefore reports whether a call of the session made before t named
-// prompt_id id, or the memory an older adapter saved holds it.
+// namedBefore reports whether a call of the session made no later than t
+// named prompt_id id, or saved memory the adapter loaded holds it.
 func (s *session) namedBefore(id string, t int64) bool {
 	if !s.startedTurn(id) {
 		return false
 	}
 	first, ok := s.named[id]
-	return !ok || first < t
+	return !ok || first <= t
 }
 
 // start records that a prompt made at t started turn id.

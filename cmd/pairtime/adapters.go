@@ -36,6 +36,9 @@ the --expected file's for a single run. It prints one line per run and
 exits 1 when a run doesn't replay to its expected records, when a call
 doesn't parse, or when no capture it replayed is real (synthetic: false),
 since an adapter can't ship with synthetic fixtures alone (DESIGN 5.1).
+A run the adapter has no expected records for fails too, unless it holds a
+pending.md saying why they wait, which a capture lands with when its
+expected records come later: then it is reported as pending.
 
 A record that differs is shown without its content: its event, whose keys
 are symbols, and of its text, command line and edits only whether they
@@ -181,6 +184,11 @@ func adaptersTest(args []string, stdout, stderr io.Writer) int {
 		} else {
 			a, _ := adapters.Default.New(h, adapters.FixtureOptions())
 			want, err = fs.ReadFile(a.Fixtures(), prov.version+"/"+filepath.Base(osDir)+"/"+run+"/expected.jsonl")
+			if errors.Is(err, fs.ErrNotExist) && adapters.HoldsPending(os.DirFS(filepath.Join(osDir, run))) {
+				fmt.Fprintf(stdout, "pending %s/%s/%s/%s: no expected records yet, and its %s says why\n",
+					prov.harness, prov.version, filepath.Base(osDir), run, adapters.PendingFile)
+				continue
+			}
 		}
 		if err != nil {
 			fmt.Fprintf(stderr, "FAIL %s: no expected records: %v\n", run, err)

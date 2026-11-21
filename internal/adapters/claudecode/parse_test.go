@@ -222,6 +222,12 @@ func TestQueuedMessage(t *testing.T) {
 		{name: "a message queued after such a prompt is still that turn's agent.queue",
 			calls: []adapters.RawRecord{tool("p1"), prompt("p1", goal), prompt("p1", "Then say which test.")}, at: []int64{2000, 1000, 3000},
 			want: "agent.tool,prompt.submit,agent.queue", turn: "p1"},
+		{name: "a message queued before the turn's call that reached the adapter first is agent.queue too, since the late prompt dates the turn",
+			calls: []adapters.RawRecord{tool("p1"), prompt("p1", goal), prompt("p1", "Then say which test.")}, at: []int64{2000, 1000, 1500},
+			want: "agent.tool,prompt.submit,agent.queue", turn: "p1"},
+		{name: "a message stamped in the same millisecond as its turn's prompt is agent.queue: tied calls keep the order they arrived in",
+			calls: []adapters.RawRecord{prompt("p1", goal), prompt("p1", "Then say which test.")}, at: []int64{0, 0},
+			want: "prompt.submit,agent.queue", turn: "p1"},
 	}
 	keys := adapters.FixtureKeys()
 	const sid = "11111111-2222-4333-8444-555555555555" // hookRaw's
@@ -711,5 +717,66 @@ func TestPendingCrons(t *testing.T) {
 				t.Errorf("pending_crons %+v, want prefix_hash %s", st.PendingCrons, tc.want)
 			}
 		})
+	}
+}
+
+// TestTurnMemory checks the bound on the turns a session remembers: the
+// last maxTurns that its calls named, each with the time it was first
+// named, so the oldest goes with its time.
+func TestTurnMemory(t *testing.T) {
+	const sid = "11111111-2222-4333-8444-555555555555" // hookRaw's
+	at := func(raw adapters.RawRecord, ms int64) adapters.RawRecord {
+		raw.Arrival.T = t0 + ms
+		return raw
+	}
+	// filled has named maxTurns+1 turns, p0 to p64, in its Stop calls.
+	filled := func(t *testing.T) *Adapter {
+		a := newTest()
+		for i := 0; i <= maxTurns; i++ {
+			raw := hookRaw(EventStop, map[string]any{"prompt_id": "p" + strconv.Itoa(i), "stop_hook_active": false,
+				"last_assistant_message": ""}, nil)
+			if _, err := a.Parse(at(raw, int64(i)*1000)); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return a
+	}
+	prompt := func(pid string) adapters.RawRecord {
+		return at(hookRaw(EventUserPromptSubmit, map[string]any{"prompt_id": pid, "prompt": "And push it."}, nil), 100_000)
+	}
+	cases := []struct {
+		name  string
+		check func(t *testing.T, a *Adapter)
+	}{
+		{"a session remembers the last maxTurns turns its calls named, and the time each was first named", func(t *testing.T, a *Adapter) {
+			s := a.sessions[sid]
+			if len(s.started) != maxTurns || s.started[0] != "p1" || s.started[maxTurns-1] != "p"+strconv.Itoa(maxTurns) {
+				t.Errorf("started %d turns, from %s to %s", len(s.started), s.started[0], s.started[len(s.started)-1])
+			}
+			if len(s.named) != maxTurns || s.named["p1"] != t0+1000 {
+				t.Errorf("named %d turns, p1 at %d", len(s.named), s.named["p1"]-t0)
+			}
+		}},
+		{"the oldest turn is forgotten with its time", func(t *testing.T, a *Adapter) {
+			s := a.sessions[sid]
+			if _, ok := s.named["p0"]; ok || slices.Contains(s.started, "p0") {
+				t.Error("p0 is still remembered")
+			}
+		}},
+		{"a prompt with a forgotten turn's prompt_id is a prompt.submit", func(t *testing.T, a *Adapter) {
+			recs, err := a.Parse(prompt("p0"))
+			if err != nil || len(recs) != 1 || recs[0].Event.Kind() != event.KindPromptSubmit {
+				t.Errorf("records %v, %v", kinds(recs), err)
+			}
+		}},
+		{"a prompt with a remembered turn's prompt_id is that turn's agent.queue", func(t *testing.T, a *Adapter) {
+			recs, err := a.Parse(prompt("p1"))
+			if err != nil || len(recs) != 1 || recs[0].Event.Kind() != event.KindAgentQueue {
+				t.Errorf("records %v, %v", kinds(recs), err)
+			}
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) { tc.check(t, filled(t)) })
 	}
 }
