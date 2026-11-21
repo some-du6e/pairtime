@@ -571,6 +571,138 @@ func TestHookCallsAKilledAgentAcked(t *testing.T) {
 	}
 }
 
+// TestPendingLog checks held.jsonl.pending on a host with no worker: a
+// call the socket acks is written down before the journal stores it, and
+// the file is emptied only once every call in it is parsed or held.
+func TestPendingLog(t *testing.T) {
+	at := time.Date(2026, 11, 20, 9, 0, 0, 0, time.UTC)
+	self := inbox.Proc{PID: 4242, Name: "pairtime", Start: at}
+	call := func(t *testing.T, prompt string) inbox.Delivery {
+		return inbox.Delivery{Message: hookMessage(t, "UserPromptSubmit", `{"session_id":"s1","prompt":"`+prompt+`"}`, self, at),
+			Via: inbox.ViaSocket}
+	}
+	newHost := func(dirs home.Dirs) *adapterHost {
+		return newAdapterHost(&agent{dirs: dirs, log: slog.New(slog.DiscardHandler), problems: make(map[string]string)})
+	}
+	lineOf := func(t *testing.T, d inbox.Delivery) []byte {
+		t.Helper()
+		b, err := heldLine(d)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return b
+	}
+	read := func(t *testing.T, name string) []byte {
+		t.Helper()
+		b, err := os.ReadFile(name)
+		if err != nil && !errors.Is(err, fs.ErrNotExist) {
+			t.Fatal(err)
+		}
+		return b
+	}
+	takeQueue := func(h *adapterHost) { // as the worker's step does
+		h.mu.Lock()
+		h.queue = nil
+		h.mu.Unlock()
+	}
+	cases := []struct {
+		name string
+		run  func(t *testing.T, dirs home.Dirs, pending string)
+	}{
+		{"a call is written down before the journal stores it, and stays while it waits to be parsed", func(t *testing.T, dirs home.Dirs, pending string) {
+			h := newHost(dirs)
+			d := call(t, "one")
+			settle := h.pend(d)
+			if got := read(t, pending); !bytes.Equal(got, lineOf(t, d)) {
+				t.Errorf("before the journal stored it, the file holds %q", got)
+			}
+			settle(true)
+			h.donePending(false)
+			if got := read(t, pending); !bytes.Equal(got, lineOf(t, d)) {
+				t.Errorf("while the call waits in the queue, the file holds %q", got)
+			}
+		}},
+		{"nothing is emptied under a call written down and not yet settled", func(t *testing.T, dirs home.Dirs, pending string) {
+			h := newHost(dirs)
+			d := call(t, "one")
+			settle := h.pend(d)
+			h.donePending(false)
+			if got := read(t, pending); !bytes.Equal(got, lineOf(t, d)) {
+				t.Errorf("the file holds %q", got)
+			}
+			settle(true)
+		}},
+		{"once the worker has taken the queue the file is emptied, and the last step deletes it", func(t *testing.T, dirs home.Dirs, pending string) {
+			h := newHost(dirs)
+			h.pend(call(t, "one"))(true)
+			takeQueue(h)
+			h.donePending(false)
+			if got := read(t, pending); len(got) != 0 {
+				t.Errorf("after the worker took the call, the file holds %q", got)
+			}
+			h.donePending(true)
+			if _, err := os.Stat(pending); !errors.Is(err, fs.ErrNotExist) {
+				t.Errorf("after the last step the file is there (%v)", err)
+			}
+		}},
+		{"a copy the journal had already isn't queued, and its line goes with the next emptying", func(t *testing.T, dirs home.Dirs, pending string) {
+			h := newHost(dirs)
+			h.pend(call(t, "one"))(false)
+			if len(h.queue) != 0 {
+				t.Error("a copy the journal had was queued")
+			}
+			h.donePending(false)
+			if got := read(t, pending); len(got) != 0 {
+				t.Errorf("the file holds %q", got)
+			}
+		}},
+		{"a start moves the calls a killed run left pending to the end of held.jsonl", func(t *testing.T, dirs home.Dirs, pending string) {
+			held, left := lineOf(t, call(t, "held")), lineOf(t, call(t, "left"))
+			if err := os.WriteFile(dirs.Held(), held, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(pending, left, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			newHost(dirs).recoverPending()
+			if got, want := read(t, dirs.Held()), slices.Concat(held, left); !bytes.Equal(got, want) {
+				t.Errorf("held.jsonl holds %q, want %q", got, want)
+			}
+			if _, err := os.Stat(pending); !errors.Is(err, fs.ErrNotExist) {
+				t.Errorf("the pending file is still there (%v)", err)
+			}
+		}},
+		{"when the move fails, this run empties the file only back to what the killed run left, and keeps it", func(t *testing.T, dirs home.Dirs, pending string) {
+			left := lineOf(t, call(t, "left"))
+			if err := os.WriteFile(pending, left, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Mkdir(dirs.Held(), 0o700); err != nil { // so held.jsonl can't be written
+				t.Fatal(err)
+			}
+			h := newHost(dirs)
+			h.recoverPending()
+			if h.a.currentProblems()["adapters.recover"] == "" {
+				t.Error("no problem says the move failed")
+			}
+			h.pend(call(t, "new"))(true)
+			takeQueue(h)
+			h.donePending(false)
+			h.donePending(true)
+			if got := read(t, pending); !bytes.Equal(got, left) {
+				t.Errorf("the pending file holds %q, want the killed run's %q", got, left)
+			}
+		}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			dir := t.TempDir()
+			dirs := home.Dirs{Data: dir, Config: dir, Runtime: dir}
+			c.run(t, dirs, dirs.Held()+pendingSuffix)
+		})
+	}
+}
+
 // TestMalformedHookCalls checks that calls the adapters can't read count
 // as parse failures, naming no content, and that the calls after them
 // still make their records.

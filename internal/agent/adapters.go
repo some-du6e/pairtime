@@ -41,10 +41,16 @@ const adaptersKey = "adapters"
 // tail is about as long (BATCH_S).
 const adaptersSaveEvery = time.Minute
 
-// keyRetry is how often the adapters try again to derive their keys when
-// the device key couldn't be read for them, as after a dismissed keyring
-// prompt: each try may ask the person again.
+// keyRetry is how long the adapters first wait before they try again to
+// derive their keys when the device key couldn't be read for them, as after
+// a dismissed keyring prompt, and they wait twice as long after each try
+// that fails, up to ledgerRetryMax: each try may ask the person again.
 const keyRetry = time.Minute
+
+// maxQueued bounds the calls the worker keeps in memory when it can neither
+// parse nor hold them, as while held.jsonl can't be written. The ones past
+// it are counted as lost.
+const maxQueued = 4096
 
 // adapterHost runs the harness adapters inside the agent (WP-AG7; DESIGN
 // 3.3, 3.4). The hook sink hands it every hook call it stored (hooks.go),
@@ -69,10 +75,11 @@ const keyRetry = time.Minute
 // agent took them in once the keys and the writer are there, in this run
 // or, after a stop, in the next.
 //
-// The journal keeps no bodies, so before the socket acks a call, add also
-// appends it to held.jsonl.pending with one write and no flush, as the
-// journal writes its line: a call survives the agent being killed before
-// the worker parses or holds it (inbox.Sink). The worker empties the file
+// The journal keeps no bodies, so before the journal even records a call's
+// id, pend appends the call to held.jsonl.pending with one write and no
+// flush, as the journal writes its line: a call the socket acks survives
+// the agent being killed before the worker parses or holds it, and one cut
+// off before its id is recorded comes again through the spool (inbox.Sink). The worker empties the file
 // once every call in it is parsed or held, and the next start parses what a
 // killed run left there. A call whose records were written in the moment
 // before a kill, ahead of the emptying, is parsed again: twice rather than
@@ -93,12 +100,20 @@ type adapterHost struct {
 	held    int          // calls waiting in held.jsonl
 	dropped uint64       // calls lost because held.jsonl was full
 	saveDue bool
-	// pending is held.jsonl.pending, open once add has written to it, and
-	// pendingSize how much it holds. add writes it and the worker empties
+	// pending is held.jsonl.pending, open once pend has written to it, and
+	// pendingSize how much it holds. pend writes it and the worker empties
 	// it, both under mu.
 	pending     *os.File
 	pendingSize int64
 	pendingBad  bool // the last write to it failed, and doctor heard so
+	// pendingBase is how much of held.jsonl.pending an earlier run left
+	// that this run couldn't move to held.jsonl (recoverPending): the file
+	// is emptied only back to it, and kept for the next start.
+	pendingBase int64
+	// unsettled counts the calls pend wrote down that the hook sink hasn't
+	// settled yet: the file isn't emptied under them.
+	unsettled int
+	retrying  bool // a goroutine derives the keys again (retryKeysLocked)
 
 	kick chan struct{}
 	stop chan struct{}
@@ -107,10 +122,9 @@ type adapterHost struct {
 
 	// The rest belong to the worker goroutine, and to close once the
 	// worker is gone.
-	ready    bool      // the adapters and the git host are made
-	replayed bool      // held.jsonl was read, and nothing has been held since
-	replayAt int64     // how far into the .replay file the calls are parsed
-	keyTried time.Time // the last try at deriving the keys again
+	ready    bool  // the adapters and the git host are made
+	replayed bool  // held.jsonl was read, and nothing has been held since
+	replayAt int64 // how far into the .replay file the calls are parsed
 	built    map[event.Harness]adapters.Adapter
 	ignored  bool // the call being parsed ran in a folder out of pairtime
 	memory   adaptersState
@@ -221,8 +235,8 @@ func (a *agent) startAdapters() func() {
 // keyAdapters derives the adapters' keys from the device key, for the
 // adapter host, and keeps the keystore to derive them again from.
 // openLedger calls it once the keystore has opened. WithDeviceKey reads
-// K_dev from the OS's store each time, and when that fails the host tries
-// again every keyRetry (prepare).
+// K_dev from the OS's store each time, and when that fails a goroutine of
+// the host's tries again (retryKeysLocked).
 func (a *agent) keyAdapters(ks *keys.Keystore) {
 	h := a.adaptersHost()
 	k, err := deriveAdapterKeys(ks)
@@ -265,35 +279,51 @@ func (h *adapterHost) attach(w *ledger.Writer) {
 	h.poke()
 }
 
-// add takes a call the hook sink stored (hookSteps.record), before the
-// socket acks it. It writes the call to held.jsonl.pending, once, and
-// leaves the rest to the worker, which parses it, or holds it while the
-// agent has no keys. A call that comes after the host stopped, which the
-// agent's stop order rules out, is held for the next run.
-func (h *adapterHost) add(d inbox.Delivery) {
-	line, lineErr := heldLine(d)
+// pend writes down a hook call the hook sink is about to store, before the
+// journal records its id (hookSteps.pend), and returns the step that
+// settles it once the journal has answered. Settled as stored, the call
+// goes to the worker, which parses it, or holds it while the agent has no
+// keys. Settled as not stored, a copy the journal had or one it couldn't
+// store, only its line was written, and it goes when the worker empties
+// the file. Neither blocks the hook. A call that comes after the host
+// stopped, which the agent's stop order rules out, is held for the next
+// run.
+func (h *adapterHost) pend(d inbox.Delivery) func(stored bool) {
+	line, err := heldLine(d)
 	h.mu.Lock()
-	if h.closed {
-		h.mu.Unlock()
-		h.hold([]inbox.Delivery{d})
-		return
-	}
-	err := lineErr
-	if err == nil {
-		err = h.writePendingLocked(line)
+	closed := h.closed
+	if !closed {
+		if err == nil {
+			err = h.writePendingLocked(line)
+		}
+		h.unsettled++
 	}
 	was := h.pendingBad
 	h.pendingBad = err != nil
-	h.queue = append(h.queue, d)
 	h.mu.Unlock()
 	switch {
+	case closed:
 	case err != nil:
 		// The call goes on in memory alone.
 		h.a.setProblem("adapters.pending", fmt.Sprintf("hook calls the agent took in can be lost if it is killed before it parses them, because it can't write them down: %v", err))
 	case was:
 		h.a.setProblem("adapters.pending", "")
 	}
-	h.poke()
+	return func(stored bool) {
+		if closed {
+			if stored {
+				h.hold([]inbox.Delivery{d})
+			}
+			return
+		}
+		h.mu.Lock()
+		h.unsettled--
+		if stored {
+			h.queue = append(h.queue, d)
+		}
+		h.mu.Unlock()
+		h.poke()
+	}
 }
 
 // pendingSuffix names held.jsonl.pending, beside held.jsonl.
@@ -301,7 +331,7 @@ const pendingSuffix = ".pending"
 
 // writePendingLocked appends a call's line to held.jsonl.pending with one
 // write, opening the file on first use. It is opened without O_APPEND,
-// which on Windows gives a handle that can't truncate it; add alone
+// which on Windows gives a handle that can't truncate it; pend alone
 // writes, so writes land at the end anyway. h.mu is held.
 func (h *adapterHost) writePendingLocked(line []byte) error {
 	if h.pending == nil {
@@ -324,63 +354,86 @@ func (h *adapterHost) writePendingLocked(line []byte) error {
 	return err
 }
 
-// donePending empties held.jsonl.pending once every call add wrote to it
-// is parsed or held, which an empty queue says under the lock add writes
-// with, and at the last step closes and deletes it.
+// donePending empties held.jsonl.pending once every call pend wrote to it
+// is parsed or held, which an empty queue and no call left to settle say
+// under the lock pend writes with: back to what an earlier run left in it,
+// pendingBase, which is zero but for a recovery that failed. At the last
+// step it closes the file, and deletes it when nothing is left in it.
 func (h *adapterHost) donePending(last bool) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if h.pending == nil || len(h.queue) > 0 {
+	if h.pending == nil {
 		return
 	}
-	if h.pendingSize > 0 {
-		if err := h.pending.Truncate(0); err != nil {
+	idle := len(h.queue) == 0 && h.unsettled == 0
+	if idle && h.pendingSize > h.pendingBase {
+		if err := h.pending.Truncate(h.pendingBase); err != nil {
 			h.a.log.Warn("couldn't empty held.jsonl.pending", "err", err)
-			return
-		}
-		if _, err := h.pending.Seek(0, io.SeekStart); err != nil {
+			idle = false
+		} else if _, err := h.pending.Seek(h.pendingBase, io.SeekStart); err != nil {
 			h.a.log.Warn("couldn't empty held.jsonl.pending", "err", err)
-			return
+			idle = false
+		} else {
+			h.pendingSize = h.pendingBase
 		}
-		h.pendingSize = 0
 	}
 	if last {
 		h.pending.Close()
 		h.pending = nil
-		os.Remove(h.a.dirs.Held() + pendingSuffix)
+		if idle && h.pendingBase == 0 {
+			os.Remove(h.a.dirs.Held() + pendingSuffix)
+		}
 	}
 }
 
 // recoverPending moves what held.jsonl.pending holds, calls a run that was
 // killed had acked and not yet parsed or held, to the end of held.jsonl,
 // whose replay then parses them after the calls held before them.
-// startAdapters calls it before the socket can deliver a call.
+// startAdapters calls it before the socket can deliver a call. When it
+// can't, the calls stay in the file, which this run then empties only back
+// to them (pendingBase), and the next start tries again.
 func (h *adapterHost) recoverPending() {
 	name := h.a.dirs.Held() + pendingSuffix
-	src, err := os.Open(name)
+	fi, err := os.Stat(name)
 	if errors.Is(err, fs.ErrNotExist) {
 		return
 	}
-	if err != nil {
-		h.a.log.Warn("the hook calls an earlier run left pending can't be read", "err", err)
+	if err == nil && fi.Size() == 0 {
+		os.Remove(name)
 		return
 	}
-	dst, err := os.OpenFile(h.a.dirs.Held(), os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o600)
+	var copied bool
 	if err == nil {
-		// Each line starts with a newline (heldLine), so the calls stay
-		// whole whatever held.jsonl ends with.
-		_, err = io.Copy(dst, src)
-		if cerr := dst.Close(); err == nil {
-			err = cerr
+		var src *os.File
+		if src, err = os.Open(name); err == nil {
+			var dst *os.File
+			if dst, err = os.OpenFile(h.a.dirs.Held(), os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o600); err == nil {
+				// Each line starts with a newline (heldLine), so the calls
+				// stay whole whatever held.jsonl ends with.
+				_, err = io.Copy(dst, src)
+				if cerr := dst.Close(); err == nil {
+					err = cerr
+				}
+				copied = err == nil
+			}
+			src.Close()
 		}
 	}
-	src.Close()
-	if err != nil {
-		h.a.log.Warn("the hook calls an earlier run left pending couldn't be held", "err", err)
-		return
+	if copied {
+		// Held now: the file goes, or at least stays empty, so no later
+		// start holds its calls again.
+		if err = os.Remove(name); err != nil && os.Truncate(name, 0) == nil {
+			err = nil
+		}
 	}
-	if err := os.Remove(name); err != nil {
-		h.a.log.Warn("couldn't delete held.jsonl.pending once held", "err", err)
+	if err != nil {
+		size := int64(0)
+		if fi != nil {
+			size = fi.Size()
+		}
+		h.pendingBase = size
+		h.a.log.Warn("the hook calls an earlier run left pending couldn't be held", "err", err)
+		h.a.setProblem("adapters.recover", fmt.Sprintf("hook calls a run that was killed had taken in wait in held.jsonl.pending, because they couldn't be moved to held.jsonl, and the next start tries again: %v", err))
 	}
 }
 
@@ -421,18 +474,31 @@ func (h *adapterHost) run() {
 	for {
 		select {
 		case <-h.kick:
+			select {
+			case <-h.stop: // the stop goes first
+				h.finish()
+				return
+			default:
+			}
 			h.step(false)
 		case <-h.stop:
-			h.step(true)
-			h.donePending(true)
-			if g := h.git.Load(); g != nil {
-				g.close() // its held changes go to the ledger first
-			}
-			if h.ready {
-				h.save(true)
-			}
+			h.finish()
 			return
 		}
+	}
+}
+
+// finish is the worker's last step, at the agent's stop: it parses what it
+// can and holds the rest, empties held.jsonl.pending, stops the git
+// watcher, whose held changes go to the ledger first, and saves state.json.
+func (h *adapterHost) finish() {
+	h.step(true)
+	h.donePending(true)
+	if g := h.git.Load(); g != nil {
+		g.close()
+	}
+	if h.ready {
+		h.save(true)
 	}
 }
 
@@ -441,33 +507,32 @@ func (h *adapterHost) run() {
 // the last step, at the agent's stop, what can't be parsed is held for
 // the next run.
 func (h *adapterHost) step(last bool) {
+	// The batch is taken after prepare, so calls that come while it works
+	// go with it.
+	ready := h.prepare()
 	h.mu.Lock()
 	batch := h.queue
 	h.queue = nil
 	saveDue := h.saveDue
 	h.saveDue = false
+	held := h.held
 	h.mu.Unlock()
 
-	// The last step, at the agent's stop, doesn't wait on the keyring.
-	if !h.prepare(!last) {
-		h.hold(batch)
+	if !ready {
+		h.keep(h.hold(batch))
 		h.donePending(false)
 		return
 	}
-	h.mu.Lock()
-	held := h.held
-	h.mu.Unlock()
 	if !h.replayed || held > 0 {
 		if h.replayed = h.replayHeld(); !h.replayed {
-			// The calls held before these come first: these wait in the
-			// queue, and in held.jsonl.pending, until the replay works.
-			h.mu.Lock()
-			h.queue = append(batch, h.queue...)
-			h.mu.Unlock()
-			h.a.setProblem("adapters.held", "the hook calls held while the ledger wasn't open can't be read yet, and the calls after them wait; the agent's log says why")
+			// The calls held before these come first: these are held
+			// behind them, as while the agent has no keys.
+			h.keep(h.hold(batch))
+			h.donePending(false)
+			h.a.setProblem("adapters.replay", "the hook calls held while the ledger wasn't open can't be read yet, and the calls after them wait behind them; the agent's log says why")
 			return
 		}
-		h.a.setProblem("adapters.held", "")
+		h.a.setProblem("adapters.replay", "")
 	}
 	for _, d := range batch {
 		h.handle(d)
@@ -482,45 +547,26 @@ func (h *adapterHost) step(last bool) {
 // are there, and reports whether the adapters can run: the git host, and
 // the memory state.json kept of the adapters. It never makes an adapter
 // before K_session is known: Keys under a secret anybody has would key
-// every session, turn and subagent so a reader could test a guess. With
-// retry set, it derives keys it lacks again, which can wait on a keyring
-// prompt (keyRetry).
-func (h *adapterHost) prepare(retry bool) bool {
+// every session, turn and subagent so a reader could test a guess. It never
+// waits on the keyring either: when the keystore opened but reading K_dev
+// for these keys failed, a goroutine of its own tries again
+// (retryKeysLocked), so a step stays short and a stop never waits for a
+// prompt.
+func (h *adapterHost) prepare() bool {
 	if h.ready {
 		return true
 	}
 	h.mu.Lock()
-	k, w, ks := h.keys, h.writer, h.ks
+	k, w := h.keys, h.writer
+	keyed := k != nil && len(h.a.sessionSecret()) == hookpath.SessionSecretLen
+	if !keyed {
+		h.retryKeysLocked()
+	}
 	h.mu.Unlock()
-	if w == nil || ks == nil {
+	if w == nil || !keyed {
 		return false
 	}
-	if k == nil || len(h.a.sessionSecret()) != hookpath.SessionSecretLen {
-		// The keystore opened, and the ledger with it, but reading K_dev
-		// for these keys failed: try again, now and then.
-		if !retry || time.Since(h.keyTried) < keyRetry {
-			return false
-		}
-		h.keyTried = time.Now()
-		if k == nil {
-			var err error
-			if k, err = deriveAdapterKeys(ks); err != nil {
-				h.a.setProblem("adapters.keys", fmt.Sprintf("hook calls wait unparsed, because the device key couldn't be read for the adapters' keys, and the agent tries again: %v", err))
-				return false
-			}
-			h.mu.Lock()
-			h.keys = k
-			h.mu.Unlock()
-		}
-		if len(h.a.sessionSecret()) != hookpath.SessionSecretLen {
-			h.a.keySessions(ks)
-			if len(h.a.sessionSecret()) != hookpath.SessionSecretLen {
-				h.a.setProblem("adapters.keys", "hook calls wait unparsed, because the device key couldn't be read for K_session, and the agent tries again")
-				return false
-			}
-		}
-		h.a.setProblem("adapters.keys", "")
-	}
+	h.a.setProblem("adapters.keys", "")
 	if g, err := newGitHost(h.a, k.project, w); err != nil {
 		h.a.setProblem("git", fmt.Sprintf("no commit is recorded and no folder becomes a project, because the git adapter couldn't start: %v", err))
 		h.a.log.Warn("the git adapter couldn't start", "err", err)
@@ -530,6 +576,87 @@ func (h *adapterHost) prepare(retry bool) bool {
 	h.memory = h.loadMemory()
 	h.ready = true
 	return true
+}
+
+// retryKeysLocked starts, unless one runs, a goroutine that derives the
+// keys the adapters lack again from the keystore: K_feat and K_project, and
+// K_session for the hook sink and the adapters (keySessions). It waits
+// keyRetry first and twice as long after each try that fails, up to
+// ledgerRetryMax, gives up when the host stops, and pokes the worker once
+// the keys are in. It does nothing before the keystore has opened. h.mu is
+// held.
+func (h *adapterHost) retryKeysLocked() {
+	if h.retrying || h.closed || h.ks == nil {
+		return
+	}
+	h.retrying = true
+	ks := h.ks
+	go func() {
+		defer func() {
+			h.mu.Lock()
+			h.retrying = false
+			h.mu.Unlock()
+		}()
+		for wait := keyRetry; ; wait = min(2*wait, ledgerRetryMax) {
+			t := time.NewTimer(wait)
+			select {
+			case <-h.stop:
+				t.Stop()
+				return
+			case <-t.C:
+			}
+			if h.deriveMissing(ks) {
+				h.poke()
+				return
+			}
+		}
+	}()
+}
+
+// deriveMissing derives the keys the adapters lack, and reports whether
+// they have them all now.
+func (h *adapterHost) deriveMissing(ks *keys.Keystore) bool {
+	h.mu.Lock()
+	have := h.keys != nil
+	h.mu.Unlock()
+	if !have {
+		k, err := deriveAdapterKeys(ks)
+		if err != nil {
+			h.a.setProblem("adapters.keys", fmt.Sprintf("hook calls wait unparsed, because the device key couldn't be read for the adapters' keys, and the agent tries again: %v", err))
+			return false
+		}
+		h.mu.Lock()
+		h.keys = k
+		h.mu.Unlock()
+	}
+	if len(h.a.sessionSecret()) != hookpath.SessionSecretLen {
+		h.a.keySessions(ks)
+		if len(h.a.sessionSecret()) != hookpath.SessionSecretLen {
+			h.a.setProblem("adapters.keys", "hook calls wait unparsed, because the device key couldn't be read for K_session, and the agent tries again")
+			return false
+		}
+	}
+	return true
+}
+
+// keep puts calls hold couldn't write back at the head of the queue, where
+// held.jsonl.pending keeps them too, for the next step. Past maxQueued the
+// newest are counted as lost.
+func (h *adapterHost) keep(calls []inbox.Delivery) {
+	if len(calls) == 0 {
+		return
+	}
+	h.mu.Lock()
+	h.queue = slices.Concat(calls, h.queue)
+	lost := 0
+	if len(h.queue) > maxQueued {
+		lost = len(h.queue) - maxQueued
+		h.queue = h.queue[:maxQueued]
+	}
+	h.mu.Unlock()
+	if lost > 0 {
+		h.dropHeld(lost, errors.New("held.jsonl can't be written, and too many calls wait in memory"))
+	}
 }
 
 // loadMemory reads the adapters' memory from state.json, or none.
@@ -805,18 +932,19 @@ type heldCall struct {
 
 // hold appends calls to held.jsonl, which only this user can read (the
 // data directory is theirs alone, home.Dirs.Create), with one write per
-// call. A call that would take the file past inbox.MaxSpool is dropped,
-// counted and reported: the ledger has then been shut for days, and
+// call, and returns the ones it couldn't write, which the caller keeps
+// (keep). A call that would take the file past inbox.MaxSpool is dropped,
+// counted and reported instead: the ledger has then been shut for days, and
 // filling the disk helps nobody.
-func (h *adapterHost) hold(calls []inbox.Delivery) {
+func (h *adapterHost) hold(calls []inbox.Delivery) []inbox.Delivery {
 	if len(calls) == 0 {
-		return
+		return nil
 	}
 	name := h.a.dirs.Held()
 	f, err := os.OpenFile(name, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o600)
 	if err != nil {
-		h.dropHeld(len(calls), err)
-		return
+		h.a.log.Warn("hook calls that wait for the ledger couldn't be held, and wait in memory", "calls", len(calls), "err", err)
+		return calls
 	}
 	defer f.Close()
 	size := int64(0)
@@ -825,19 +953,22 @@ func (h *adapterHost) hold(calls []inbox.Delivery) {
 	}
 	for i, d := range calls {
 		line, err := heldLine(d)
-		if err == nil && size+int64(len(line)) > inbox.MaxSpool {
-			err = errors.New("held.jsonl is full")
-		}
-		if err == nil {
-			_, err = f.Write(line)
-		}
 		if err != nil {
-			h.dropHeld(len(calls)-i, err)
-			return
+			h.dropHeld(1, err) // can't happen: a message the agent took in encodes
+			continue
+		}
+		if size+int64(len(line)) > inbox.MaxSpool {
+			h.dropHeld(len(calls)-i, errors.New("held.jsonl is full"))
+			return nil
+		}
+		if _, err := f.Write(line); err != nil {
+			h.a.log.Warn("hook calls that wait for the ledger couldn't be held, and wait in memory", "calls", len(calls)-i, "err", err)
+			return calls[i:]
 		}
 		size += int64(len(line))
 		h.count(func() { h.held++ })
 	}
+	return nil
 }
 
 // heldLine is d as a line of held.jsonl, with a newline on each side.
@@ -866,7 +997,7 @@ func (h *adapterHost) dropHeld(n int, err error) {
 	dropped := h.dropped
 	h.mu.Unlock()
 	h.a.log.Warn("hook calls that wait for the ledger couldn't be held", "calls", n, "err", err)
-	h.a.setProblem("adapters.held", fmt.Sprintf("%d hook calls that waited for the ledger to open were lost: %v", dropped, err))
+	h.a.setProblem("adapters.dropped", fmt.Sprintf("%d hook calls that waited for the ledger to open were lost: %v", dropped, err))
 }
 
 // replayHeld parses the calls held.jsonl holds, oldest first, then seals

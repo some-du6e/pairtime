@@ -40,11 +40,12 @@ import (
 // from the delivery, so the journal records none.
 //
 // Every call the journal stores, whichever way it came, then goes to the
-// adapters (hookSteps.record, adapters.go), which parse it on a goroutine
-// of their own and write its records to the ledger. Nothing of that runs
-// on the ack's path, and a call the journal had already, the second copy
-// of one that came over the socket and through the spool, goes to them
-// once.
+// adapters (hookSteps.pend, adapters.go), which parse it on a goroutine of
+// their own and write its records to the ledger. Before the journal
+// records its id, the adapters write the call down, so it outlives an agent
+// killed before they parse it. Nothing else of theirs runs on the ack's
+// path, and a call the journal had already, the second copy of one that
+// came over the socket and through the spool, goes to them once.
 //
 // A spooled call does none of it. Its line proves nothing about which
 // process wrote it, so it claims and ties nothing (DESIGN 5.2), and the
@@ -77,11 +78,13 @@ type hookSteps struct {
 	// refresh has the focus component look again at the window in front
 	// (focus.Watcher.Refresh).
 	refresh func()
-	// record hands a call the journal stored to the adapters, which parse
-	// it later, off the ack's path (adapterHost.add). It must not block.
-	// The adapters also set each session's project for focus_project
-	// (hookTies.setProject), once the git adapter has resolved its folder.
-	record func(d inbox.Delivery)
+	// pend writes a call down for the adapters before the journal stores it,
+	// and returns the step that settles it once the journal has answered:
+	// stored, the call goes to the adapters, which parse it later, off the
+	// ack's path (adapterHost.pend). Neither may block. The adapters also
+	// set each session's project for focus_project (hookTies.setProject),
+	// once the git adapter has resolved its folder.
+	pend func(d inbox.Delivery) func(stored bool)
 }
 
 func newHookSink(next inbox.Sink, goos string, ties *hookTies, steps hookSteps) *hookSink {
@@ -93,7 +96,7 @@ func newHookSink(next inbox.Sink, goos string, ties *hookTies, steps hookSteps) 
 // hookSteps wires the hook sink to the agent's components: the process
 // scan, presence and focus, which startIPC's callers start first.
 func (a *agent) hookSteps() hookSteps {
-	st := hookSteps{secret: a.sessionSecret, refresh: a.refreshFocus, record: a.adaptersHost().add}
+	st := hookSteps{secret: a.sessionSecret, refresh: a.refreshFocus, pend: a.adaptersHost().pend}
 	if a.procs != nil {
 		st.claim = a.procs.ClaimLive
 	}
@@ -142,11 +145,14 @@ type journalStore interface {
 }
 
 // store stores the hook call d through the next sink, and hands it to the
-// adapters when the next sink stored it, and hadn't before.
+// adapters when the next sink stored it, and hadn't before. The adapters
+// write it down first: a kill after the journal recorded the id would
+// otherwise lose a call whose spooled copy the journal then drops.
 func (s *hookSink) store(d inbox.Delivery) error {
-	if s.steps.record == nil {
+	if s.steps.pend == nil {
 		return s.next.Deliver(d)
 	}
+	settle := s.steps.pend(d)
 	isNew := true
 	var err error
 	if j, ok := s.next.(journalStore); ok {
@@ -154,9 +160,7 @@ func (s *hookSink) store(d inbox.Delivery) error {
 	} else {
 		err = s.next.Deliver(d)
 	}
-	if err == nil && isNew {
-		s.steps.record(d)
-	}
+	settle(err == nil && isNew)
 	return err
 }
 

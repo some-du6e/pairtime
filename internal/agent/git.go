@@ -29,8 +29,14 @@ const (
 	gitwatchKey = "gitwatch"
 )
 
-// maxResting bounds the folders that rest at once (trackRest).
-const maxResting = 256
+// maxResting bounds the folders that rest at once (trackRest), and
+// maxResolving the resolves that go on past trackWait at once: each walks a
+// repo's whole history, and the folders of one repo, its worktrees say,
+// would each start one.
+const (
+	maxResting   = 256
+	maxResolving = 2
+)
 
 // gitPollEvery is how often the watcher looks at the repos it watches
 // with a few stats each, which finds what file notifications missed
@@ -84,6 +90,7 @@ type gitHost struct {
 	tracked map[string]bool
 	slow    map[string]bool
 	rest    map[string]time.Time // folders whose resolve timed out, until when they rest
+	running int                  // resolves going on, slow ones included
 	// logged are the watcher's own problems as last logged.
 	logged map[string]string
 }
@@ -159,13 +166,17 @@ type tracked struct {
 // that is gone has no project for this call, and the next call asks again.
 // One git can't answer for within trackWait has none yet either: its
 // resolve goes on, and until it ends the folder's calls don't wait again.
+// A call that goes without its project still learns, from a few stats,
+// whether its folder is out of pairtime (git.Resolver.Ignored).
 func (g *gitHost) project(dir string) (p adapters.Project, ok, ignored bool) {
 	g.mu.Lock()
-	slow := g.slow[dir]
-	resting := time.Now().Before(g.rest[dir])
+	wait := !g.slow[dir] && !time.Now().Before(g.rest[dir]) && g.running < maxResolving
+	if wait {
+		g.running++
+	}
 	g.mu.Unlock()
-	if slow || resting {
-		return adapters.Project{}, false, false
+	if !wait {
+		return adapters.Project{}, false, g.res.Ignored(dir)
 	}
 	done := make(chan tracked, 1)
 	go func() {
@@ -188,6 +199,7 @@ func (g *gitHost) project(dir string) (p adapters.Project, ok, ignored bool) {
 		done <- tracked{loc, err}
 		g.mu.Lock()
 		delete(g.slow, dir)
+		g.running--
 		g.mu.Unlock()
 	}()
 	t := time.NewTimer(trackWait)
@@ -203,7 +215,7 @@ func (g *gitHost) project(dir string) (p adapters.Project, ok, ignored bool) {
 		default:
 			g.slow[dir] = true
 			g.mu.Unlock()
-			return adapters.Project{}, false, false
+			return adapters.Project{}, false, g.res.Ignored(dir)
 		}
 	}
 	switch {
@@ -218,8 +230,16 @@ func (g *gitHost) project(dir string) (p adapters.Project, ok, ignored bool) {
 // noteCommand tells the watcher about the command an agent's bash call
 // ran, r's, with the call's span from its agent.tool, t: Claude Code's
 // PostToolUse arrives as the call ends, and its duration_ms gives the
-// start (git.AgentCommand).
+// start (git.AgentCommand). A command in a folder whose resolve goes on is
+// left out: the watcher would resolve the folder on its only loop, waiting
+// for that resolve, so its commit goes by its trailers alone.
 func (g *gitHost) noteCommand(r adapters.Record, t *event.AgentTool) {
+	g.mu.Lock()
+	busy := g.slow[r.Dir] || time.Now().Before(g.rest[r.Dir])
+	g.mu.Unlock()
+	if busy {
+		return
+	}
 	c := git.AgentCommand{Call: r.Call, Dir: r.Dir, Line: r.Command}
 	if t.TStart > 0 {
 		c.Start = time.UnixMilli(t.TStart)

@@ -136,6 +136,22 @@ func TestResolve(t *testing.T) {
 			},
 		},
 		{
+			name: "Ignored tells a folder a .pairtime-ignore keeps out, in it or above it, from one it doesn't, before any Resolve",
+			run: func(t *testing.T, g *gitEnv) {
+				r := g.initRepo()
+				r.commit("one", map[string]string{"src/a.txt": "a\n", "keep/b.txt": "b\n"})
+				r.write(map[string]string{"src/" + IgnoreFile: ""})
+				res := g.resolver(ProjectMap{}, Excludes{})
+				cases := map[string]bool{r.dir: false, filepath.Join(r.dir, "keep"): false,
+					filepath.Join(r.dir, "src"): true, filepath.Join(r.dir, "src", "deep"): true}
+				for dir, want := range cases {
+					if got := res.Ignored(dir); got != want {
+						t.Errorf("Ignored(%s) = %v, want %v", dir, got, want)
+					}
+				}
+			},
+		},
+		{
 			name: "a .pairtime-ignore added after a folder was resolved keeps it out from the next check",
 			run: func(t *testing.T, g *gitEnv) {
 				r := g.initRepo()
