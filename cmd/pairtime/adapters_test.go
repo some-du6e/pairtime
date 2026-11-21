@@ -13,9 +13,51 @@ import (
 // claudeCapture is WP-AD1's Claude Code 2.1.327 capture on Linux.
 var claudeCapture = filepath.Join("..", "..", "testdata", "fixtures", "claude_code", "2.1.327", "linux")
 
+// osFolder makes an OS folder of the Claude Code capture in a temporary
+// directory: the real one's PROVENANCE.md, the hook calls of its cli run
+// when cli is set, and the files of the runs given, by path in the folder.
+func osFolder(t *testing.T, cli bool, files map[string]string) string {
+	t.Helper()
+	dir := filepath.Join(t.TempDir(), "linux")
+	if cli {
+		if err := os.CopyFS(filepath.Join(dir, "cli", "hooks"), os.DirFS(filepath.Join(claudeCapture, "cli", "hooks"))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	files["PROVENANCE.md"] = ""
+	prov, err := os.ReadFile(filepath.Join(claudeCapture, "PROVENANCE.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, data := range files {
+		if name == "PROVENANCE.md" {
+			data = string(prov)
+		}
+		p := filepath.Join(dir, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(data), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return dir
+}
+
 func TestAdapters(t *testing.T) {
 	osDir, err := filepath.Abs(claudeCapture)
 	if err != nil {
+		t.Fatal(err)
+	}
+	// A run waiting for its expected records, with and without the
+	// pending.md that says why, and a run whose calls can't be read.
+	pending := osFolder(t, true, map[string]string{"vscode/hooks/000001/argv": "/run\nStop\n",
+		"vscode/pending.md": "gen_expected.py can't class VS Code's parent chains yet.\n"})
+	unexplained := osFolder(t, true, map[string]string{"vscode/hooks/000001/argv": "/run\nStop\n"})
+	broken := osFolder(t, false, map[string]string{"broken/hooks/000001/argv": "/run\nUserPromptSubmit\n"})
+	private := filepath.Join(t.TempDir(), "expected.jsonl")
+	privateLine := `{"from":"000001","event":{"data":{"turn_key":"turn-1"},"harness":"claude_code","kind":"prompt.submit","session_key":"session-1","source":"hook","t":1,"via":"hook"},"text":"a prompt only the person has seen"}` + "\n"
+	if err := os.WriteFile(private, []byte(privateLine), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	differs := filepath.Join(t.TempDir(), "expected.jsonl")
@@ -55,6 +97,14 @@ func TestAdapters(t *testing.T) {
 		{name: "--show-content shows the records that differ whole",
 			args: []string{"test", "--show-content", "--expected", differs, filepath.Join(claudeCapture, "cli")}, code: 1,
 			inStdout: []string{`"text":`, `"command":`}, notInStdout: []string{"text differs: "}},
+		{name: "a run with no expected records that holds a pending.md is reported pending, and the other runs still replay",
+			args: []string{"test", pending}, wantStdout: "ok   claude_code/2.1.327/linux/cli: 89 records\n",
+			inStdout: []string{"pending claude_code/2.1.327/linux/vscode: no expected records yet, and its pending.md says why"}},
+		{name: "a run with no expected records and no pending.md fails",
+			args: []string{"test", unexplained}, code: 1, wantStderr: "FAIL vscode: no expected records"},
+		{name: "--show-content shows nothing of the expected records when the run itself can't be read",
+			args: []string{"test", "--show-content", "--expected", private, filepath.Join(broken, "broken")}, code: 1,
+			wantStdout: "FAIL claude_code/2.1.327/linux/broken\n", notInStdout: []string{"only the person", `"text":`}},
 		{name: "a folder with no run fails", args: []string{"test", t.TempDir()}, code: 1, wantStderr: "holds no run with hooks/"},
 		{name: "test with no folder is a usage error", args: []string{"test"}, code: 2, wantStderr: "Usage:"},
 		{name: "an unknown subcommand is a usage error", args: []string{"frob"}, code: 2, wantStderr: `unknown command "frob"`},

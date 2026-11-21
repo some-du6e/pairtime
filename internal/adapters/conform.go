@@ -566,6 +566,13 @@ var ErrNoExpected = errors.New("adapters: the adapter has no expected records fo
 // PR that adds them can leave it for a fixtures PR to delete.
 const PendingFile = "pending.md"
 
+// HoldsPending reports whether a captured run, whose files run holds,
+// holds a PendingFile.
+func HoldsPending(run fs.FS) bool {
+	_, err := fs.Stat(run, PendingFile)
+	return err == nil
+}
+
 // Conform replays each captured run that the adapter's Fixtures has
 // expected records for against captures, which holds
 // testdata/fixtures/<harness>: <version>/<os>/PROVENANCE.md and
@@ -633,7 +640,7 @@ func Conform(mk func() Adapter, captures fs.FS) ([]Result, error) {
 		}
 		r := Result{Run: run, Err: fmt.Errorf("%w: its fixtures have no %s/expected.jsonl, and the run holds no %s saying why they wait",
 			ErrNoExpected, run, PendingFile)}
-		if _, err := fs.Stat(captures, run+"/"+PendingFile); err == nil {
+		if sub, err := fs.Sub(captures, run); err == nil && HoldsPending(sub) {
 			r = Result{Run: run, Pending: true}
 		}
 		results = append(results, r)

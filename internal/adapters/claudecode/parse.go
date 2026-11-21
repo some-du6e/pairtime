@@ -216,9 +216,10 @@ func (c *call) prompt() {
 		// prompt whose prompt_id an earlier call of the session carried is
 		// that turn's agent.queue, SM 2.3's Q anchor, and never a second
 		// prompt of the turn, which the scorer would take for another copy
-		// of the first (E-cc-queued-turn). Earlier goes by the calls' own
-		// times, so a prompt that reaches the adapter through the spool
-		// after a later call of its turn still starts it. Only a person's
+		// of the first (E-cc-queued-turn). Earlier goes by the times the
+		// calls carry (session.named), so a prompt that reaches the adapter
+		// through the spool after a later call of its turn still starts
+		// it, as long as the hooks' own stamps stand. Only a person's
 		// message is queued: Claude Code runs a scheduled prompt's or a
 		// task notification's hook as it takes it up, with a prompt_id of
 		// its own. A message queued in a turn that took up another before

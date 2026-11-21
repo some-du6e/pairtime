@@ -438,7 +438,7 @@ def main(capture, out_path):
             # Rules 1 and 3 read a queued message's text too (E-cc-queued-turn).
             cron = matches_cron(s["crons"], text)
             notification = text.lstrip(" \t\r\n").startswith("<task-notification>")
-            if pid and pid in s["started"] and (pid not in s["named"] or s["named"][pid] < t):
+            if pid and pid in s["started"] and (pid not in s["named"] or s["named"][pid] <= t):
                 # A person's message queued in the running turn: an earlier
                 # call, by the calls' own times, named its prompt_id. A scheduled
                 # prompt or a task notification with a known prompt_id is a
