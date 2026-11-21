@@ -367,9 +367,11 @@ func TestLedgerMode(t *testing.T) {
 	sealsAtOnce := func(t *testing.T, w func() *ledger.Writer, dirs home.Dirs) []ledger.Row {
 		t.Helper()
 		for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); time.Sleep(50 * time.Millisecond) {
-			if lw := w(); lw != nil {
-				record(t, lw)
+			lw := w()
+			if lw == nil {
+				continue // the ledger opens on a goroutine of its own
 			}
+			record(t, lw)
 			if got := rows(t, dirs); len(got) > 0 {
 				return got
 			}
