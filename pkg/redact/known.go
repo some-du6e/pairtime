@@ -121,7 +121,10 @@ func compileKnown(k Known) []knownPattern {
 		for _, sp := range spellings(tv.t, v) {
 			s := sp.s
 			key := strings.ToLower(s)
-			if seen[key] {
+			// A value that isn't UTF-8, as a git config saved in another
+			// encoding gives, can't be in text, which is, and regexp
+			// refuses it.
+			if seen[key] || !utf8.ValidString(s) {
 				continue
 			}
 			seen[key] = true

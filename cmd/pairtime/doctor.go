@@ -12,6 +12,7 @@ import (
 	"io/fs"
 	"os"
 	"os/exec"
+	"os/user"
 	"runtime"
 	"slices"
 	"strings"
@@ -426,7 +427,14 @@ func startupTrips(exe string, n int) ([]time.Duration, error) {
 // pairtime's own folders. The report holds none of them by construction;
 // this is the check that it stays so.
 func scrubReport(report string, dirs home.Dirs) (string, error) {
-	k := machineKnown()
+	current := user.Current
+	if runtime.GOOS == "windows" {
+		// os/user asks a domain controller for a domain account's display
+		// name, which would send the account's name off the computer;
+		// USERNAME and USERPROFILE name the account and its home here.
+		current = nil
+	}
+	k := machineKnownWith(current)
 	for _, name := range []string{"USER", "USERNAME", "LOGNAME"} {
 		k.Accounts = appendSet(k.Accounts, os.Getenv(name))
 	}
