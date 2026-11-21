@@ -107,7 +107,7 @@
     {
       "id": "server.minute_buckets",
       "where": "server",
-      "data": "Minute buckets: for each 15 seconds, the credited seconds by project key, why they were credited and what kind of work they counted as, with the reasons for seconds that weren't credited and how long an AI agent was running",
+      "data": "Minute buckets: for each 15 seconds, the credited seconds by project key, why they were credited and what kind of work they counted as, with the reasons for seconds that weren't credited, how long an AI agent was running, and for each project key how long an AI agent ran there without you getting credit there",
       "kept": "Per-minute detail for {days}, the furthest back a submission can reach. Minutes a submission uses stay until its spot-check window closes ({window}). After that only daily totals per project and kind of work stay, for as long as your account exists",
       "days": 180,
       "lifetime_tables": ["rollups_daily"],

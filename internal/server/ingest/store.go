@@ -209,7 +209,7 @@ updated_at_ms = excluded.updated_at_ms`,
 
 // witnessHead fills st's head and chain start from the device's witness
 // rows, for a device whose row holds no head while some of its witness
-// rows stay, as when the row expired and the device was linked again
+// rows stay, which only a row made afresh for the device_id can give
 // (ingest-v1 2.7 step 4). The head it gives was stored under no link the
 // row knows, generation 0, so the device counts as signed in again since
 // (D-local-gap). It reports whether it found one.
