@@ -7,9 +7,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/netip"
 	"net/url"
 	"path"
+	"slices"
 	"strings"
 	"time"
 )
@@ -28,6 +30,15 @@ type Manifest struct {
 	MinimumVersion string `json:"minimum_version"`
 	// Artifacts holds one archive per platform.
 	Artifacts []Artifact `json:"artifacts"`
+	// InstallScripts holds the SHA-256 of each install script the release
+	// carries, in lowercase hex, by file name: install.sh and install.ps1
+	// (docs/PLAN.md, WP-RL2). `curl | sh` runs the script before anything
+	// else and trusts the release keys written into it, so whatever serves
+	// or checks a copy, such as pairtimed (WP-OP2) and
+	// tools/release/check.sh, compares it with this. A release without the
+	// scripts leaves it out, and readers that don't use it ignore it, as
+	// they ignore any field they don't know.
+	InstallScripts map[string]string `json:"install_scripts,omitempty"`
 }
 
 // Artifact is one platform's archive.
@@ -88,7 +99,29 @@ func (m *Manifest) Validate() error {
 		}
 		seen[platform] = true
 	}
+	for _, name := range slices.Sorted(maps.Keys(m.InstallScripts)) {
+		if !isFileName(name) {
+			return fmt.Errorf("install_scripts: %q isn't a file name", name)
+		}
+		if sum := m.InstallScripts[name]; !isLowerHex(sum, 64) {
+			return fmt.Errorf("install_scripts: the sha256 of %s, %q, isn't 64 lowercase hex digits", name, sum)
+		}
+	}
 	return nil
+}
+
+// isFileName reports whether s can name a file in a release's directory:
+// printable ASCII without spaces or slashes, and not . or ..
+func isFileName(s string) bool {
+	if s == "" || s == "." || s == ".." {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if c := s[i]; c <= ' ' || c > '~' || c == '/' || c == '\x5c' {
+			return false
+		}
+	}
+	return true
 }
 
 func (a Artifact) validate() error {

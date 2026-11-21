@@ -4,7 +4,9 @@ package release
 
 import (
 	"bytes"
+	"crypto/rand"
 	"encoding/json"
+	"maps"
 	"strings"
 	"testing"
 )
@@ -65,6 +67,22 @@ func TestManifestValidate(t *testing.T) {
 		{name: "sha256 must be lowercase", edit: func(m *Manifest) { m.Artifacts[0].SHA256 = strings.ToUpper(sum1) }, wantErr: "sha256"},
 		{name: "size must be positive", edit: func(m *Manifest) { m.Artifacts[0].Size = 0 }, wantErr: "size"},
 		{name: "binary_sha256 must be 64 hex digits", edit: func(m *Manifest) { m.Artifacts[1].BinarySHA256 = "" }, wantErr: "artifacts[1]: binary_sha256"},
+		{name: "install scripts with their SHA-256s are valid", edit: func(m *Manifest) { m.InstallScripts = testScripts() }},
+		{name: "an install script's SHA-256 must be lowercase hex", edit: func(m *Manifest) {
+			m.InstallScripts = map[string]string{"install.sh": strings.ToUpper(sum1)}
+		}, wantErr: "install_scripts: the sha256 of install.sh"},
+		{name: "an install script's SHA-256 must have 64 digits", edit: func(m *Manifest) {
+			m.InstallScripts = map[string]string{"install.ps1": sum1[:63]}
+		}, wantErr: "install_scripts: the sha256 of install.ps1"},
+		{name: "an install script's name can't hold a directory", edit: func(m *Manifest) {
+			m.InstallScripts = map[string]string{"../install.sh": sum1}
+		}, wantErr: `install_scripts: "../install.sh" isn't a file name`},
+		{name: "an install script's name can't be a Windows path either", edit: func(m *Manifest) {
+			m.InstallScripts = map[string]string{"bin\x5cinstall.ps1": sum1}
+		}, wantErr: "isn't a file name"},
+		{name: "an install script's name can't be empty", edit: func(m *Manifest) {
+			m.InstallScripts = map[string]string{"": sum1}
+		}, wantErr: `install_scripts: "" isn't a file name`},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -152,6 +170,104 @@ func TestEncodeManifestForm(t *testing.T) {
 				t.Errorf("EncodeManifest wrote:\n%s", payload)
 			}
 		})
+	}
+}
+
+// testScripts is install_scripts as tools/release scripts writes it.
+func testScripts() map[string]string {
+	return map[string]string{"install.sh": sum1, "install.ps1": sum2}
+}
+
+// manifestV1 is Manifest as WP-RL1 shipped it, before install_scripts. A
+// reader built then decodes a payload into this, then validates it.
+type manifestV1 struct {
+	Version        string     `json:"version"`
+	Commit         string     `json:"commit"`
+	Date           string     `json:"date"`
+	MinimumVersion string     `json:"minimum_version"`
+	Artifacts      []Artifact `json:"artifacts"`
+}
+
+// TestInstallScriptsCompatibility checks that install_scripts is a field
+// older readers ignore (D-immutable-releases): the payload stays version 1,
+// and nothing about a manifest without it changes.
+func TestInstallScriptsCompatibility(t *testing.T) {
+	plain, err := EncodeManifest(testManifest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	withScripts := testManifest()
+	withScripts.InstallScripts = testScripts()
+	payload, err := EncodeManifest(withScripts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, err := GenerateSecretKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	signed, err := Sign(payload, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name  string
+		check func(t *testing.T)
+	}{
+		{
+			name: "a manifest without install scripts encodes with no install_scripts key",
+			check: func(t *testing.T) {
+				if bytes.Contains(plain, []byte("install_scripts")) {
+					t.Fatalf("payload:\n%s", plain)
+				}
+			},
+		},
+		{
+			name: "a reader from before install_scripts accepts a payload that has them, and reads the same release",
+			check: func(t *testing.T) {
+				var old manifestV1
+				if err := json.Unmarshal(payload, &old); err != nil {
+					t.Fatal(err)
+				}
+				m := Manifest{Version: old.Version, Commit: old.Commit, Date: old.Date, MinimumVersion: old.MinimumVersion, Artifacts: old.Artifacts}
+				if err := m.Validate(); err != nil {
+					t.Fatal(err)
+				}
+				got, _ := json.Marshal(m)
+				want, _ := json.Marshal(testManifest())
+				if !bytes.Equal(got, want) {
+					t.Fatalf("the old reader got %s, want %s", got, want)
+				}
+			},
+		},
+		{
+			name: "this reader gets each script's SHA-256 out of a signed manifest",
+			check: func(t *testing.T) {
+				m, _, err := Open(signed, []PublicKey{key.Public()})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !maps.Equal(m.InstallScripts, testScripts()) {
+					t.Fatalf("install_scripts = %v, want %v", m.InstallScripts, testScripts())
+				}
+			},
+		},
+		{
+			// install.sh reads the payload line by line, and takes each line
+			// of four spaces and an opening brace for an archive's entry.
+			name: "install_scripts adds no line that install.sh's payload reader would take for an archive",
+			check: func(t *testing.T) {
+				if n := bytes.Count(payload, []byte("\n    {\n")); n != len(withScripts.Artifacts) {
+					t.Fatalf("%d entries open with four spaces and a brace, want %d:\n%s", n, len(withScripts.Artifacts), payload)
+				}
+				if !bytes.Contains(payload, []byte("\n  \"install_scripts\": {\n    \"install.ps1\": \""+sum2+"\",\n    \"install.sh\": \""+sum1+"\"\n  }\n}\n")) {
+					t.Fatalf("install_scripts isn't the last field, an object of name and SHA-256 two spaces in:\n%s", payload)
+				}
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, tt.check)
 	}
 }
 
