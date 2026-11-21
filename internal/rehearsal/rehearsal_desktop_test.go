@@ -1026,25 +1026,77 @@ func (r *rehearsal) stepUpload(t *testing.T) {
 			}
 		}
 	}
-	// The rollups split the time as the client does: by evidence level
-	// (DESIGN 6.4), by kind of work (SM 5.1), and the agent's time on its
-	// own beside the person's (D-bucket-agent-only). The account is new,
-	// so its week is this one day.
+	// The rollups split the time as the minutes the client uploaded do:
+	// by evidence level (DESIGN 6.4) and by kind of work, each 15-second
+	// slot under its one reason's kind and its one level (SM 5.1), and
+	// the agent's time on its own beside the person's
+	// (D-bucket-agent-only). The account is new, so its week is this one
+	// day.
 	if len(dates) != 1 || err != nil {
 		t.Logf("not comparing the splits: the session spans %v (%v)", dates, err)
 		return
 	}
+	srvLevels, srvKinds, srvAgent := serverSplits(view, today.Date)
+	slotLevels, slotKinds, err := r.slotSplits(today.Date)
+	if err != nil {
+		t.Errorf("reading the client's minute buckets: %v", err)
+	}
+	if !sameSplit(slotLevels, srvLevels) {
+		t.Errorf("by evidence level the client's uploaded slots have %v and the server's week %v", slotLevels, srvLevels)
+	}
+	if !sameSplit(slotKinds, srvKinds) {
+		t.Errorf("by kind of work the client's uploaded slots have %v and the server's week %v", slotKinds, srvKinds)
+	}
 	levels, kinds, agent := today.splits()
-	srvLevels, srvKinds, srvAgent := serverSplits(view, str(view, "today"))
-	if !sameSplit(levels, srvLevels) {
-		t.Errorf("by evidence level the client has %v and the server's week %v", levels, srvLevels)
-	}
-	if !sameSplit(kinds, srvKinds) {
-		t.Errorf("by kind of work the client has %v and the server's week %v", kinds, srvKinds)
-	}
 	if math.Abs(agent-srvAgent) > 0.01 {
 		t.Errorf("the agent's time on its own is %.1f s on the client and %.1f s on the server", agent, srvAgent)
 	}
+	// The client's own views split each second exactly, so a slot whose
+	// seconds had two reasons or two levels reads differently there than
+	// on the server's dashboard. Same total, other split.
+	if !sameSplit(levels, srvLevels) || !sameSplit(kinds, srvKinds) {
+		t.Logf("pairtime today splits the same time %v by level and %v by kind; pairtimed's dashboard, from one reason and one level a slot, %v and %v", levels, kinds, srvLevels, srvKinds)
+	}
+}
+
+// slotSplits is the client's minute buckets of date by evidence level and
+// by kind of work, slot by slot, from the latest revision of each minute:
+// what the uploader sends (SM 5.1).
+func (r *rehearsal) slotSplits(date string) (levels, kinds map[string]float64, err error) {
+	b, err := os.ReadFile(filepath.Join(r.dataDir(), "buckets", date+".jsonl"))
+	if err != nil {
+		return nil, nil, err
+	}
+	type slot struct {
+		CR   float64 `json:"cr"`
+		Kind string  `json:"kind"`
+		EV   string  `json:"ev"`
+	}
+	type bucket struct {
+		Minute string `json:"minute"`
+		Rev    int    `json:"rev"`
+		Slots  []slot `json:"slots"`
+	}
+	latest := map[string]bucket{}
+	for _, line := range strings.Split(string(b), "\n") {
+		var bk bucket
+		if json.Unmarshal([]byte(line), &bk) != nil || bk.Minute == "" {
+			continue // a blank line, or a torn last one the agent is still writing
+		}
+		if prev, ok := latest[bk.Minute]; !ok || bk.Rev >= prev.Rev {
+			latest[bk.Minute] = bk
+		}
+	}
+	levels, kinds = map[string]float64{}, map[string]float64{}
+	for _, bk := range latest {
+		for _, s := range bk.Slots {
+			if s.CR > 0 {
+				levels[s.EV] += s.CR
+				kinds[s.Kind] += s.CR
+			}
+		}
+	}
+	return levels, kinds, nil
 }
 
 // serverSplits is the server's week by evidence level and by kind of
