@@ -22,6 +22,7 @@ import (
 
 	"github.com/some-du6e/pairtime/internal/server/backup"
 	"github.com/some-du6e/pairtime/internal/server/writer"
+	"github.com/some-du6e/pairtime/pkg/event"
 	"github.com/some-du6e/pairtime/pkg/ledger"
 )
 
@@ -70,7 +71,7 @@ func (f AuthenticatorFunc) Authenticate(ctx context.Context, token string) (Devi
 // replaces or nil for the minute's first, to next, inside the writer
 // transaction tx that stores next (the dashboard wave's meeting point 3,
 // WP-SV7). An error fails the request, and nothing it stored stays.
-type RollupFunc func(ctx context.Context, tx writer.Tx, account string, prev *Revision, next Revision) error
+type RollupFunc func(ctx context.Context, tx writer.Tx, account string, prev *event.MinuteBucket, next event.MinuteBucket) error
 
 // Doer runs a write through the writer goroutine. *writer.Writer is one.
 type Doer interface {
@@ -91,7 +92,8 @@ type Options struct {
 	Key ed25519.PrivateKey
 	// Rollup, when set, is called for every bucket revision stored.
 	// TODO(WP-SV7): serve.go passes rollup.Apply through it, converting
-	// each Revision to a rollup.Bucket, once package rollup merges.
+	// each bucket with rollup.FromEvent(account, b, b.AgentOnly), once
+	// package rollup merges.
 	Rollup RollupFunc
 	// Observe, when set, hears of each upload the writer processed, not
 	// counting replays: how many batch roots it stored, and how long the
@@ -395,7 +397,7 @@ type parsedBatch struct {
 }
 
 type parsedBucket struct {
-	rv   Revision
+	rv   event.MinuteBucket
 	data []byte
 	err  *itemErr
 }
@@ -677,7 +679,7 @@ func (s *Service) bucket(ctx context.Context, tx writer.Tx, dev Device, pb parse
 		return itemResult{}, err
 	}
 	rev, revisions := int64(rv.Rev), int64(1)
-	var prev *Revision
+	var prev *event.MinuteBucket
 	same := false
 	if found && rev == cur.rev {
 		if same, err = sameBucket(cur.bucket, pb.data); err != nil {
@@ -691,7 +693,7 @@ func (s *Service) bucket(ctx context.Context, tx writer.Tx, dev Device, pb parse
 	case rev > cur.rev:
 		revisions = cur.revisions + 1
 		if s.o.Rollup != nil {
-			prev = new(Revision)
+			prev = new(event.MinuteBucket)
 			if err := json.Unmarshal([]byte(cur.bucket), prev); err != nil {
 				return itemResult{}, err
 			}
@@ -723,7 +725,7 @@ func sameBucket(stored string, data []byte) (bool, error) {
 	if stored == string(data) {
 		return true, nil
 	}
-	var rv Revision
+	var rv event.MinuteBucket
 	if err := json.Unmarshal([]byte(stored), &rv); err != nil {
 		return false, err
 	}

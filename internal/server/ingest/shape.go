@@ -34,8 +34,8 @@ func refused(status int, code string) *itemErr { return &itemErr{status: status,
 
 // The members each item may have, required and optional (ingest-v1 2.3).
 // TestAllowlist checks the bucket's and the slot's against
-// event.Tier1BucketFields and event.Tier1SlotFields. agent_only is
-// D-bucket-agent-only's, which WP-EV3 adds to Tier1BucketFields.
+// event.Tier1BucketFields and event.Tier1SlotFields, agent_only
+// (D-bucket-agent-only) included.
 var (
 	batchRequired   = []string{"b", "n", "R_b", "H_b", "prev"}
 	bucketRequired  = []string{"v", "params", "minute", "device", "slots", "credited_s", "agent_running_s", "state", "witness", "rev"}
@@ -422,25 +422,11 @@ func parseBatchRoot(raw json.RawMessage) (batchRoot, *itemErr) {
 	return br, nil
 }
 
-// Revision is a minute bucket as ingest stores and hands it to the
-// rollups: pkg/event's MinuteBucket, and agent_only{p: s}, which
-// D-bucket-agent-only adds to tier 1 before pkg/event has it. Its JSON is
-// the bucket's, with agent_only after the rest.
-//
-// TODO(WP-EV3): once MinuteBucket has AgentOnly, a Revision is a
-// MinuteBucket; parseBucket fills mb.AgentOnly, and Validate checks it.
-type Revision struct {
-	event.MinuteBucket
-	// AgentOnly is, for each project key, the seconds in the minute a turn
-	// of that project ran and weren't credited to that project: 0 to 60 in
-	// steps of 0.5 (SM 2.6's agent-only seconds; D-bucket-agent-only).
-	AgentOnly map[string]float64 `json:"agent_only,omitempty"`
-}
-
 // parseBucket checks a minute bucket's forms (ingest-v1 2.3.2) and returns
-// it as a Revision. The caller runs Validate for the rules across fields.
-func parseBucket(raw json.RawMessage) (Revision, *itemErr) {
-	var rv Revision
+// it as pkg/event's MinuteBucket, agent_only (D-bucket-agent-only)
+// included. The caller runs Validate for the rules across fields.
+func parseBucket(raw json.RawMessage) (event.MinuteBucket, *itemErr) {
+	var rv event.MinuteBucket
 	m, e := object(raw, "", bucketRequired, bucketOptional)
 	if e != nil {
 		return rv, e
@@ -450,7 +436,7 @@ func parseBucket(raw json.RawMessage) (Revision, *itemErr) {
 			return rv, e
 		}
 	}
-	mb := &rv.MinuteBucket
+	mb := &rv
 	if mb.V, e = pattern(m["v"], "v", isSemver); e != nil {
 		return rv, e
 	}
@@ -627,7 +613,7 @@ func parseUncredited(raw json.RawMessage) (map[event.Reason]float64, *itemErr) {
 // checkBucket checks a bucket's forms, then the rules across its fields
 // that event.MinuteBucket.Validate holds, which fail as bad_rule
 // (ingest-v1 2.3.2).
-func checkBucket(raw json.RawMessage) (Revision, *itemErr) {
+func checkBucket(raw json.RawMessage) (event.MinuteBucket, *itemErr) {
 	rv, e := parseBucket(raw)
 	if e != nil {
 		return rv, e

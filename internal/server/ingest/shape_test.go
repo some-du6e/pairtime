@@ -136,9 +136,7 @@ func TestAllowlist(t *testing.T) {
 		name      string
 		got, want []string
 	}{
-		// TODO(WP-EV3): drop the append once Tier1BucketFields lists
-		// D-bucket-agent-only's agent_only.
-		{"the bucket allowlist is DESIGN 4.3's bucket fields, Tier1BucketFields, with agent_only", set(bucketRequired, bucketOptional), set(withAgentOnly(event.Tier1BucketFields()))},
+		{"the bucket allowlist is DESIGN 4.3's bucket fields, Tier1BucketFields, agent_only included", set(bucketRequired, bucketOptional), set(event.Tier1BucketFields())},
 		{"the slot allowlist is DESIGN 4.3's slot fields, Tier1SlotFields", set(slotRequired, slotOptional), set(event.Tier1SlotFields())},
 		{"the commit allowlist is DESIGN 4.3's commit fields", set(commitRequired, commitOptional), set([]string{
 			"sha", "parents", "project", "observed_at", "author_time", "committer_time", "files_changed", "insertions",
@@ -154,14 +152,6 @@ func TestAllowlist(t *testing.T) {
 			}
 		})
 	}
-}
-
-// withAgentOnly adds agent_only to fields unless they have it.
-func withAgentOnly(fields []string) []string {
-	if slices.Contains(fields, "agent_only") {
-		return fields
-	}
-	return append(fields, "agent_only")
 }
 
 // TestEnums checks the server's enum lists against pkg/event's and the
@@ -309,6 +299,9 @@ func TestBucketShape(t *testing.T) {
 			m["agent_only"] = map[string]any{"p_one": "3"}
 		}, shapeResult{CodeBadType, "agent_only"}},
 		{"a null agent_only is bad_type", func(m map[string]any) { m["agent_only"] = nil }, shapeResult{CodeBadType, "agent_only"}},
+		{"agent_only above agent_running_s breaks MinuteBucket.Validate's rule, named by agent_only alone", func(m map[string]any) {
+			m["agent_only"] = map[string]any{"p_one": 45}
+		}, shapeResult{CodeBadRule, "agent_only"}},
 		{"agent_only for 65 projects is too_many", func(m map[string]any) {
 			ao := map[string]any{}
 			for i := range maxAgentOnly + 1 {
@@ -333,7 +326,7 @@ func TestBucketShape(t *testing.T) {
 		if e != nil {
 			t.Fatalf("refused: %+v", *e)
 		}
-		if want := (Revision{MinuteBucket: mb.Shareable()}); string(marshal(t, got)) != string(marshal(t, want)) {
+		if want := mb.Shareable(); string(marshal(t, got)) != string(marshal(t, want)) {
 			t.Errorf("got  %s\nwant %s", marshal(t, got), marshal(t, want))
 		}
 	})

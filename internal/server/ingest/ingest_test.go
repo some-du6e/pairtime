@@ -114,7 +114,7 @@ func newHarness(t *testing.T, engine store.Engine) *harness {
 		},
 		Logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
 		RateBurst: 1000,
-		Rollup: func(ctx context.Context, tx writer.Tx, account string, prev *Revision, next Revision) error {
+		Rollup: func(ctx context.Context, tx writer.Tx, account string, prev *event.MinuteBucket, next event.MinuteBucket) error {
 			c := rollupCall{account: account, prevRev: -1, nextRev: int64(next.Rev), minuteMS: next.Minute.UnixMilli()}
 			if next.AgentOnly != nil {
 				c.agentOnly = string(marshal(t, next.AgentOnly))

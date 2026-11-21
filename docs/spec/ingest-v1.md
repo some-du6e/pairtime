@@ -116,7 +116,7 @@ DESIGN 4.3's `{b, n, R_b, H_b, prev}`, exactly these five members:
 
 #### 2.3.2 Minute buckets
 
-A bucket is the JSON that `encoding/json` writes for `pkg/event`'s `MinuteBucket.Shareable()`: DESIGN 4.3's `{v, params, minute, device, slots[4]{p, cr, why, kind, ev, lbl}, credited_s, uncredited{code: s}, agent_running_s, state, witness, rev}`, which `event.Tier1BucketFields` and `event.Tier1SlotFields` pin, and `agent_only{p: s}`, which the decision D-bucket-agent-only adds to tier 1 and WP-EV3 adds to `pkg/event`. It never holds `anchors`, the event ids that stay on the device (DESIGN 4.1 E-5): a bucket with that member is refused as `unknown_field`.
+A bucket is the JSON that `encoding/json` writes for `pkg/event`'s `MinuteBucket.Shareable()`: DESIGN 4.3's `{v, params, minute, device, slots[4]{p, cr, why, kind, ev, lbl}, credited_s, uncredited{code: s}, agent_running_s, agent_only{p: s}, state, witness, rev}`, which `event.Tier1BucketFields` and `event.Tier1SlotFields` pin, `agent_only` being the decision D-bucket-agent-only's. It never holds `anchors`, the event ids that stay on the device (DESIGN 4.1 E-5): a bucket with that member is refused as `unknown_field`.
 
 | Member | Type | Form |
 |---|---|---|
@@ -128,7 +128,7 @@ A bucket is the JSON that `encoding/json` writes for `pkg/event`'s `MinuteBucket
 | `credited_s` | number | Seconds, 0 to 60 |
 | `uncredited` | object | Optional. Each member's name is an uncredited reason code of SM 5.2 (`pkg/event`'s `Reason.Uncredited`) and its value seconds, 0 to 60; at most 64 members |
 | `agent_running_s` | number | Seconds, 0 to 60 |
-| `agent_only` | object | Optional. For each project key, the seconds in the minute a turn of that project ran and weren't credited to that project: SM 2.6's agent-only seconds, which the chess clock shows (D-bucket-agent-only). Each member's name is a project key, as `slots[].p`, and its value seconds, 0 to 60 in steps of 0.5; at most 64 members. Absent and `{}` both mean none |
+| `agent_only` | object | Optional. For each project key, the seconds in the minute a turn of that project ran and weren't credited to that project: SM 2.6's agent-only seconds, which the chess clock shows (D-bucket-agent-only). Each member's name is a project key, as `slots[].p`, and its value seconds, 0 to 60 in steps of 0.5 and no more than `agent_running_s`; at most 64 members. Absent and `{}` both mean none |
 | `state` | string | `pending`, `final`, `provisional` or `restored` |
 | `witness` | string | `witnessed`, `offline` or `backfilled`. It is the client's own reading, stored as sent; the server's witness label is WP-SV6's |
 | `rev` | integer | The revision, 0 to 4294967295 |
