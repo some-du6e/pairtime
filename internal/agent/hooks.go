@@ -125,13 +125,19 @@ func (s *hookSink) Deliver(d inbox.Delivery) error {
 		if berr == nil {
 			kind = hookpath.PresenceKind(b)
 		}
+		session := s.sessionKey(b)
+		// A session whose calls ran in a folder out of pairtime is tied to
+		// no window and sampled by no presence (DESIGN 8.8; hookTies.ignore).
+		out := s.ties.ignoring(session)
 		if p.Host != nil {
 			if s.steps.claim != nil {
 				s.steps.claim(*p.Host)
 			}
-			s.tie(*p.Host, b, kind)
+			if !out {
+				s.tie(*p.Host, session, kind)
+			}
 		}
-		if berr == nil && s.steps.presence != nil {
+		if berr == nil && s.steps.presence != nil && !out {
 			s.steps.presence(s.presenceKey(b), kind)
 		}
 	}
@@ -164,12 +170,12 @@ func (s *hookSink) store(d inbox.Delivery) error {
 	return err
 }
 
-// tie records that host runs the session the call b names, a call of kind
-// k, and has focus look again when that is news: a session the process
-// hadn't run before, one that starts, or one that ends.
-func (s *hookSink) tie(host platform.Proc, b hookpath.Body, k event.Kind) {
+// tie records that host runs session, the key of the session a call of
+// kind k names, and has focus look again when that is news: a session the
+// process hadn't run before, one that starts, or one that ends.
+func (s *hookSink) tie(host platform.Proc, session string, k event.Kind) {
 	news := k == event.KindSessionStart || k == event.KindSessionEnd
-	if session := s.sessionKey(b); session != "" {
+	if session != "" {
 		if k == event.KindSessionEnd {
 			s.ties.end(host.ID(), session)
 		} else if s.ties.tie(host.ID(), session) {
@@ -224,10 +230,66 @@ type hookTies struct {
 	mu       sync.Mutex
 	sessions map[platform.ID]string // session key, by process
 	projects map[string]string      // project key, by session key
+	// ignored are the sessions a call of which ran in a folder out of
+	// pairtime (DESIGN 8.8), which the hook sink neither ties nor hands to
+	// presence, so no os.focus record names them (ignore).
+	ignored map[string]bool
 }
 
+// maxIgnored bounds the sessions hookTies keeps out (ignore).
+const maxIgnored = 256
+
 func newHookTies() *hookTies {
-	return &hookTies{sessions: make(map[platform.ID]string), projects: make(map[string]string)}
+	return &hookTies{sessions: make(map[platform.ID]string), projects: make(map[string]string),
+		ignored: make(map[string]bool)}
+}
+
+// ignore keeps session out of focus and presence from now on, because a
+// call of it ran in a folder out of pairtime (DESIGN 8.8): it unties the
+// session from every process, forgets its project, and has the hook sink
+// skip its later calls (ignoring). It reports whether a tie or a project
+// went, which focus needs to hear.
+func (t *hookTies) ignore(session string) bool {
+	if t == nil || session == "" {
+		return false
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if !t.ignored[session] && len(t.ignored) >= maxIgnored {
+		clear(t.ignored)
+	}
+	t.ignored[session] = true
+	_, news := t.projects[session]
+	delete(t.projects, session)
+	for id, s := range t.sessions {
+		if s == session {
+			delete(t.sessions, id)
+			news = true
+		}
+	}
+	return news
+}
+
+// unignore lets session's calls be tied and sampled again, as once one of
+// them runs in a folder that isn't out of pairtime.
+func (t *hookTies) unignore(session string) {
+	if t == nil {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	delete(t.ignored, session)
+}
+
+// ignoring reports whether session's calls are kept out of focus and
+// presence (ignore).
+func (t *hookTies) ignoring(session string) bool {
+	if t == nil || session == "" {
+		return false
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.ignored[session]
 }
 
 // tie records that the process id runs session, and reports whether that
@@ -273,21 +335,6 @@ func (t *hookTies) setProject(session, project string) bool {
 		return false
 	}
 	t.projects[session] = project
-	return true
-}
-
-// dropProject forgets the project session works in, as when its folder
-// turns out of pairtime (DESIGN 8.8), and reports whether it had one.
-func (t *hookTies) dropProject(session string) bool {
-	if t == nil {
-		return false
-	}
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	if _, ok := t.projects[session]; !ok {
-		return false
-	}
-	delete(t.projects, session)
 	return true
 }
 

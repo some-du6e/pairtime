@@ -958,16 +958,20 @@ func (h *adapterHost) parse(c hostCall) {
 	if err != nil && !errors.Is(err, adapters.ErrOtherHarness) {
 		h.fail(c.st, err.Error())
 	}
+	session := hookpath.SessionKey(h.a.sessionSecret(), c.session)
 	if h.ignored {
 		h.count(func() { c.st.Ignored++ })
-		// Its session's window shows no project any more (focus_project).
-		for _, r := range recs {
-			if k := r.Event.SessionKey; k != "" && k != event.NoSession && h.a.hooked.dropProject(k) {
-				h.a.refreshFocus()
-			}
+		// Its session is out of focus from now on: no window hosts it or
+		// shows its project, and presence hears none of its calls, so no
+		// os.focus record names it (hookTies.ignore).
+		if h.a.hooked.ignore(session) {
+			h.a.refreshFocus()
 		}
 		return
 	}
+	// A call that does count lets its session back in, as when it moved to
+	// a folder that isn't out of pairtime.
+	h.a.hooked.unignore(session)
 	due := false
 	for _, r := range recs {
 		h.write(c.st, r)

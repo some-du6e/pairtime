@@ -5,6 +5,7 @@ package agent
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"maps"
 	"os"
@@ -115,7 +116,8 @@ func TestHookSink(t *testing.T) {
 
 	tests := []struct {
 		name     string
-		noSecret bool // K_session isn't known yet
+		noSecret bool     // K_session isn't known yet
+		ignored  []string // the sessions kept out before the calls, by id (hookTies.ignore)
 		calls    func() []inbox.Delivery
 		check    func(t *testing.T, r *recorder, ties *hookTies)
 	}{
@@ -260,6 +262,24 @@ func TestHookSink(t *testing.T) {
 			},
 		},
 		{
+			name:    "a call of a session whose folder is out of pairtime still claims the harness and is stored, but ties nothing and reaches no presence",
+			ignored: []string{"s1"},
+			calls: func() []inbox.Delivery {
+				return []inbox.Delivery{socket("UserPromptSubmit", s1), socket("SessionStart", s2)}
+			},
+			check: func(t *testing.T, r *recorder, ties *hookTies) {
+				if !slices.Equal(r.claims, []int{300, 300}) {
+					t.Errorf("the scan was told of %v, want the harness for both calls", r.claims)
+				}
+				if got := ties.merged(nil); len(got) != 1 || got[claude.ID()] != key("s2") {
+					t.Errorf("the ties are %v, want only s2's", got)
+				}
+				if len(r.presence) != 1 || r.presence[0].kind != event.KindSessionStart {
+					t.Errorf("presence heard %+v, want only s2's start", r.presence)
+				}
+			},
+		},
+		{
 			name: "a message that isn't a hook call goes straight to the journal",
 			calls: func() []inbox.Delivery {
 				d := socket("UserPromptSubmit", s1)
@@ -280,6 +300,9 @@ func TestHookSink(t *testing.T) {
 				r.secret = nil
 			}
 			ties := newHookTies()
+			for _, id := range tt.ignored {
+				ties.ignore(key(id))
+			}
 			sink := newHookSink(r, platform.Linux, ties, r.steps())
 			calls := tt.calls()
 			for _, d := range calls {
@@ -316,7 +339,7 @@ func TestHookTies(t *testing.T) {
 				t.Error("tie reported news wrongly")
 			}
 		}},
-		{"a session gets a project only while a process runs it, a project is news once, and a dropped one is forgotten", func(t *testing.T, ties *hookTies) {
+		{"a session gets a project only while a process runs it, and a project is news once", func(t *testing.T, ties *hookTies) {
 			if ties.setProject("s1", "g1") || ties.projectOf("s1") != "" {
 				t.Error("a session no process runs got a project")
 			}
@@ -327,8 +350,33 @@ func TestHookTies(t *testing.T) {
 			if got := ties.projectOf("s1"); got != "g2" {
 				t.Errorf("project %q, want the newest, g2", got)
 			}
-			if !ties.dropProject("s1") || ties.dropProject("s1") || ties.projectOf("s1") != "" {
-				t.Error("dropProject didn't forget the project once")
+		}},
+		{"an ignored session is untied from every process and loses its project, once, and the others stay", func(t *testing.T, ties *hookTies) {
+			ties.tie(a, "s1")
+			ties.tie(b, "s1")
+			ties.tie(scanned, "s2")
+			ties.setProject("s1", "g1")
+			if !ties.ignore("s1") || ties.ignore("s1") {
+				t.Error("ignore reported news wrongly")
+			}
+			if got, want := ties.merged(nil), map[platform.ID]string{scanned: "s2"}; !maps.Equal(got, want) || ties.projectOf("s1") != "" {
+				t.Errorf("after ignore the ties are %v and the project %q, want %v and none", got, ties.projectOf("s1"), want)
+			}
+			if !ties.ignoring("s1") || ties.ignoring("s2") || ties.ignoring("") {
+				t.Error("ignoring names the wrong sessions")
+			}
+		}},
+		{"unignore lets an ignored session be kept out no longer, and the set stays bounded", func(t *testing.T, ties *hookTies) {
+			ties.ignore("s1")
+			ties.unignore("s1")
+			if ties.ignoring("s1") {
+				t.Error("unignore left the session out")
+			}
+			for i := range maxIgnored + 1 {
+				ties.ignore(fmt.Sprintf("s%d", i))
+			}
+			if n := len(ties.ignored); n > maxIgnored {
+				t.Errorf("%d sessions kept out, more than %d", n, maxIgnored)
 			}
 		}},
 		{"a session's end unties only that session from the process", func(t *testing.T, ties *hookTies) {
@@ -370,6 +418,10 @@ func TestHookTies(t *testing.T) {
 			none.tie(a, "s1")
 			none.end(a, "s1")
 			none.prune(func(platform.ID) bool { return false })
+			none.unignore("s1")
+			if none.ignore("s1") || none.ignoring("s1") {
+				t.Error("a nil table ignores a session")
+			}
 			if got := none.merged(scan); !maps.Equal(got, scan) || none.projectOf("s1") != "" {
 				t.Errorf("merged = %v, projectOf = %q", got, none.projectOf("s1"))
 			}
