@@ -30,8 +30,10 @@ info:
     D-dashboard-link). It asks the running agent for a one-time URL over the
     per-user socket, the way `pairtime recap` asks for the last work
     session, so it sends no token over TCP. It hands the URL to the browser
-    in a file in the data directory that only the user can read, so the
-    code is on no process's command line. GET /signin trades the code for
+    in a file that only the user can read, so the code is on no process's
+    command line. The file is in the data directory, or, where the default
+    browser is a snap, which can't read the data directory, in that snap's
+    `~/snap/<name>/common`. GET /signin trades the code for
     the cookie, `SameSite=Strict` and `HttpOnly`, and sends the browser on
     to the dashboard.
 servers:
@@ -186,7 +188,7 @@ paths:
                 `pairtime_session=<id>; Path=/; HttpOnly; SameSite=Strict`,
                 only for a good code. The session lasts until the agent
                 stops, or until 8 hours pass with no request that uses it.
-                The cookie has no expiry, so a browser that quits drops it.
+                The cookie sets no Expires or Max-Age.
               schema:
                 type: string
         "403":

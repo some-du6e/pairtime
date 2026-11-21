@@ -35,8 +35,8 @@ the pairtime agent on 127.0.0.1, and it starts the agent first if it isn't
 running. The agent gives it a sign-in link over its socket, which only you
 can reach, and it hands the link to your browser in a file that only you
 can read, never on a command line. The link works once, for two minutes.
-The browser stays signed in until you quit it or the agent stops, or until
-it goes 8 hours without opening the dashboard.
+The sign-in lasts until the agent stops, or until the dashboard goes 8
+hours unused.
 
   --no-open  Print the link instead of opening a browser.
 
@@ -316,19 +316,23 @@ func agentRunning(dirs home.Dirs, procs func() ([]platform.Proc, error), self in
 	}
 	for _, p := range list {
 		if p.PID == pf.PID {
-			return pf.PID, sameProgram(p.Name, filepath.Base(exe))
+			return pf.PID, sameProgram(runtime.GOOS, p.Name, exe)
 		}
 	}
 	return 0, false
 }
 
-// sameProgram reports whether a process named name runs the program whose
-// file is exe, as the OS names each: case aside on Windows.
-func sameProgram(name, exe string) bool {
-	if runtime.GOOS == "windows" {
-		return strings.EqualFold(name, exe)
+// sameProgram reports whether a process the process table names name runs
+// the program at path exe on goos. The table names a process by
+// platform.ExeName of its executable, which drops Windows's ".exe", so exe
+// is named the same way before the two are compared, case aside on
+// Windows.
+func sameProgram(goos, name, exe string) bool {
+	want := platform.ExeName(goos, exe)
+	if goos == platform.Windows {
+		return strings.EqualFold(name, want)
 	}
-	return name == exe
+	return name == want
 }
 
 // sayNoLink says why there is no link to open.
@@ -355,8 +359,10 @@ func words(d time.Duration) string {
 	return strconv.Itoa(n) + " " + unit
 }
 
-// The page `pairtime dashboard` opens is a file in the data directory that
-// only this user can read: it sends the browser on to the agent's sign-in
+// The page `pairtime dashboard` opens is a file that only this user can
+// read, in the data directory, or where the default browser is a snap in
+// that snap's ~/snap/<name>/common, since a snap can't read the data
+// directory (signInDir). It sends the browser on to the agent's sign-in
 // link at once, and links to it for a browser that doesn't follow the
 // refresh. A browser opened with a URL gets it on its command line, which
 // on Linux every other user of the computer can read in /proc while the

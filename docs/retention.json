@@ -19,7 +19,7 @@
       "id": "device.transcripts",
       "where": "device",
       "data": "Your AI tool's transcripts and output",
-      "kept": "Not copied. pairtime reads them where your AI tool keeps them, so the tool's own setting applies (Claude Code keeps them for 30 days unless you change it)"
+      "kept": "Not copied: pairtime reads them where your AI tool keeps them. What the tool hands pairtime while the agent isn't running waits in pairtime's inbox on this computer until the agent reads it. Everything else follows the tool's own setting (Claude Code keeps them for 30 days unless you change it)"
     },
     {
       "id": "device.paths_commands",

@@ -506,7 +506,9 @@ func TestAgentRunning(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	me := filepath.Base(exe)
+	// The process table names a process by platform.ExeName of its
+	// executable, which drops Windows's ".exe".
+	me := platform.ExeName(runtime.GOOS, exe)
 	tests := []struct {
 		name  string
 		pid   int // port.json's; -1 for no port.json
@@ -534,6 +536,31 @@ func TestAgentRunning(t *testing.T) {
 			procs := func() ([]platform.Proc, error) { return tt.procs, tt.err }
 			if _, got := agentRunning(dirs, procs, 7); got != tt.want {
 				t.Errorf("agentRunning = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestSameProgram(t *testing.T) {
+	tests := []struct {
+		name string
+		goos string
+		proc string // what the process table names the process
+		exe  string // this program's path, as os.Executable gives it
+		want bool
+	}{
+		{name: "on Windows the table's name has no .exe, and this program's path does", goos: "windows", proc: "pairtime", exe: `C:\Users\sam\AppData\Local\Programs\pairtime\pairtime.exe`, want: true},
+		{name: "on Windows names match case aside", goos: "windows", proc: "PAIRTIME", exe: `C:\Users\sam\AppData\Local\Programs\pairtime\pairtime.exe`, want: true},
+		{name: "on Windows another program isn't this one", goos: "windows", proc: "pairtimed", exe: `C:\Users\sam\AppData\Local\Programs\pairtime\pairtime.exe`},
+		{name: "on Linux the names are the files' own", goos: "linux", proc: "pairtime", exe: "/home/sam/.local/bin/pairtime", want: true},
+		{name: "off Windows case matters", goos: "linux", proc: "Pairtime", exe: "/home/sam/.local/bin/pairtime"},
+		{name: "on macOS the names are the files' own", goos: "darwin", proc: "pairtime", exe: "/usr/local/bin/pairtime", want: true},
+		{name: "on macOS another program isn't this one", goos: "darwin", proc: "firefox", exe: "/usr/local/bin/pairtime"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := sameProgram(tt.goos, tt.proc, tt.exe); got != tt.want {
+				t.Errorf("sameProgram(%s, %q, %q) = %v, want %v", tt.goos, tt.proc, tt.exe, got, tt.want)
 			}
 		})
 	}
