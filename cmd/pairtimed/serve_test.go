@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/some-du6e/pairtime/internal/server/ops"
+	"github.com/some-du6e/pairtime/internal/server/pages"
 	"github.com/some-du6e/pairtime/internal/server/retention"
 	"github.com/some-du6e/pairtime/internal/server/store"
 	"github.com/some-du6e/pairtime/internal/version"
@@ -131,7 +132,7 @@ func TestServe(t *testing.T) {
 		{name: "/metrics counts rows the retention jobs deleted", url: private + "/metrics", wantCode: 200, wantBody: `(?m)^pairtime_retention_deleted_rows_total 0$`},
 		{name: "the public listener serves the privacy notice", url: public + "/privacy", wantCode: 200, wantBody: `<h1 id="pairtime-privacy-notice">`},
 		{name: "the privacy notice marks the controller as not named yet", url: public + "/privacy", wantCode: 200, wantBody: `This notice isn&#39;t final\.`},
-		{name: "the public listener serves the evidence definition", url: public + "/docs/evidence", wantCode: 200, wantBody: `This server runs scoring 0\.1\.0\.`},
+		{name: "the public listener serves the evidence definition for the built-in scoring version", url: public + "/docs/evidence", wantCode: 200, wantBody: `This server runs scoring ` + regexp.QuoteMeta(pages.BuiltinScoringVersion) + `\.`},
 		{name: "the ops listener doesn't serve the pages", url: private + "/privacy", wantCode: 404},
 		{name: "the public listener serves the home page at /, so a sign-in without return_to never ends on a 404", url: public + "/", wantCode: 200, wantBody: `<h1 id="pairtime-counts-the-time-you-spend-building-with-ai">`},
 		{name: "without hca.client_id the home page says sign-in isn't set up, and offers none", url: public + "/", wantCode: 200, wantBody: `(?s)<header>\n<a class="name" href="/">pairtime</a>\n</header>.*Sign-in isn&#39;t set up on this server yet\.`},
