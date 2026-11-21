@@ -39,7 +39,8 @@ const (
 // on lock and suspend, and the writer's own on a prompt or a stop. Each
 // sealed batch goes to the scorer loop, which startLedger starts once the
 // writer is open (WP-AG4), so the scorer reads only sealed records
-// (decision E-sm-1.1-seq-gaps).
+// (decision E-sm-1.1-seq-gaps), and to the uploader, which startLedger
+// starts then too (WP-AG5).
 //
 // The ledger's problems go under three sources, so none overwrites
 // another: "ledger" says why it isn't open, and later why a seal failed;
@@ -48,9 +49,10 @@ const (
 func (a *agent) startLedger() func() {
 	a.ledgerIn = ledger.NewPresence(func(msg string) { a.setProblem("ledger.presence", msg) })
 	var (
-		mu      sync.Mutex
-		w       *ledger.Writer
-		stopped bool
+		mu         sync.Mutex
+		w          *ledger.Writer
+		stopped    bool
+		stopUpload = func() {}
 	)
 	quit := make(chan struct{})
 	opened := make(chan struct{})
@@ -74,6 +76,7 @@ func (a *agent) startLedger() func() {
 		if a.scorer != nil {
 			a.scorer.Start()
 		}
+		stopUpload = a.startUploader(lw)
 	}()
 	return func() {
 		close(quit)
@@ -85,7 +88,11 @@ func (a *agent) startLedger() func() {
 		mu.Lock()
 		stopped = true
 		lw := w
+		stop := stopUpload
 		mu.Unlock()
+		// The uploader stops first: it writes receipts and failure notes
+		// to the writer.
+		stop()
 		// Presence and focus have stopped, so this writes the last of
 		// their records, and Close seals them.
 		a.ledgerIn.Close()
@@ -158,10 +165,6 @@ func (a *agent) openLedger() (*ledger.Writer, error) {
 	a.keyAdapters(ks)
 	a.keyFocus(ks)
 	a.keySessions(ks)
-	var sealed func(ledger.Batch)
-	if a.scorer != nil {
-		sealed = a.scorer.Sealed
-	}
 	return ledger.Open(ledger.Options{
 		Dir:   a.dirs.Ledger(),
 		Keys:  ks.Keys(),
@@ -171,7 +174,7 @@ func (a *agent) openLedger() (*ledger.Writer, error) {
 		Chains:  ks,
 		Params:  a.table,
 		Sched:   a.sched,
-		Sealed:  sealed,
+		Sealed:  a.sealed,
 		Problem: func(msg string) { a.setProblem("ledger", msg) },
 	})
 }
