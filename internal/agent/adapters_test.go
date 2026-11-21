@@ -2317,6 +2317,25 @@ func TestParkedCallsKeepTheirOrder(t *testing.T) {
 				t.Errorf("%d calls still wait", len(e.h.parked))
 			}
 		}},
+		{"a Track that ends while release walks lets none of its folder's calls go in that walk, and the next call lets them all go first, in order", func(t *testing.T, e *env) {
+			resolving(e, e.x)
+			admit(e, call(t, e, "a1", "A", e.x), call(t, e, "b1", "B", e.x))
+			// x's Track ends just after the walk first asks about x, between
+			// a1's question and b1's.
+			e.h.askedForTest = func(dir string) {
+				if dir == e.x {
+					e.h.askedForTest = nil
+					end(e, e.x, true)
+				}
+			}
+			e.h.release(false)
+			want(t, e)
+			if len(e.h.parked) != 2 {
+				t.Errorf("%d calls still wait after the walk, want a1 and b1", len(e.h.parked))
+			}
+			admit(e, call(t, e, "c1", "C", e.x))
+			want(t, e, "a1", "b1", "c1")
+		}},
 		{"a folder that turns known without a counted Track lets the next call go alone, with no walk of the parked calls", func(t *testing.T, e *env) {
 			resolving(e, e.x)
 			admit(e, call(t, e, "a1", "A", e.x), call(t, e, "a2", "A", e.x))

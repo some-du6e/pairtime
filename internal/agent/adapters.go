@@ -206,8 +206,10 @@ type adapterHost struct {
 	heldDue, baseDue, expireBase time.Time
 	// copiedForTest, when set, runs once a rewrite of held.jsonl.pending has
 	// copied what it keeps, before it flushes the copy to disk and takes mu
-	// to finish (inbox.StartSplice).
+	// to finish (inbox.StartSplice). askedForTest, when set, runs each time
+	// waits has asked the git host about a folder.
 	copiedForTest func()
+	askedForTest  func(dir string)
 
 	kick chan struct{}
 	stop chan struct{}
@@ -1312,8 +1314,8 @@ func (h *adapterHost) admit(d inbox.Delivery, replay, last bool) {
 	h.parse(c)
 }
 
-// tracksEnded is the git host's count of ended Tracks, zero with no git
-// host.
+// tracksEnded is the git host's count of Tracks that made a folder known
+// (gitHost.tracksEnded), zero with no git host.
 func (h *adapterHost) tracksEnded() uint64 {
 	if g := h.git.Load(); g != nil {
 		return g.tracksEnded()
@@ -1325,7 +1327,11 @@ func (h *adapterHost) tracksEnded() uint64 {
 // never for no folder, or with no git adapter, which resolves none.
 func (h *adapterHost) waits(dir string) bool {
 	g := h.git.Load()
-	return dir != "" && g != nil && !g.known(dir)
+	w := dir != "" && g != nil && !g.known(dir)
+	if h.askedForTest != nil {
+		h.askedForTest(dir)
+	}
+	return w
 }
 
 // park puts c behind the calls that wait already. Past maxParked, the
@@ -1402,18 +1408,20 @@ func (h *adapterHost) release(last bool) {
 		return
 	}
 	held := make(map[string]bool)
-	// Each folder is asked once a walk, so its calls all go or all wait: a
-	// Track that ends while it walks lets the folder's calls go together at
-	// the next look, which the count's move brings (admit), rather than a
-	// later call now and an earlier one then.
-	asked := make(map[string]bool)
+	// A folder that waits once in a walk waits for the rest of it, so a
+	// Track that ends while it walks can't let a later call of the folder go
+	// while an earlier one stays: they go together at the next look, which
+	// the count's move brings (admit). A folder that answered known is asked
+	// again, since known can forget it (maxFolders), and its later calls
+	// then wait for the new Track rather than go with no project; an earlier
+	// call going first is no reorder.
+	waiting := make(map[string]bool)
 	folderWaits := func(dir string) bool {
-		w, ok := asked[dir]
-		if !ok {
-			w = h.waits(dir)
-			asked[dir] = w
+		if waiting[dir] {
+			return true
 		}
-		return w
+		waiting[dir] = h.waits(dir)
+		return waiting[dir]
 	}
 	var ready []hostCall
 	kept := h.parked[:0]
