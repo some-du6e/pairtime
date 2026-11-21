@@ -6,9 +6,10 @@
 # Runs COMMAND inside a throwaway Linux desktop: an Xvfb display with the
 # openbox window manager, and a private session D-Bus from dbus-run-session.
 # platform.yml's Linux job uses it for the *_desktop_test.go tests
-# (AGENTS.md). Before COMMAND it checks that the display, the window manager,
-# xdotool focus switching and the bus all work, so a broken runner image
-# fails here with a clear message instead of inside a test.
+# (AGENTS.md), and rehearsal.yml for the end-to-end rehearsal. Before
+# COMMAND it checks that the display, the window manager, xdotool focus
+# switching and the bus all work, so a broken runner image fails here with
+# a clear message instead of inside a test.
 #
 # Needs: Xvfb, openbox, xterm, xdotool, xdpyinfo and xprop (x11-utils),
 # dbus-run-session and dbus-send.

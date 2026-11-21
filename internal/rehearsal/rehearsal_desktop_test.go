@@ -4,11 +4,11 @@
 
 package rehearsal
 
-// TestDesktopRehearsal runs in platform.yml's Linux desktop job, inside
-// Xvfb with openbox and a private session bus (tools/ci/desktop_session.sh),
-// with navikt/mock-oauth2-server standing in for Hack Club Auth as it does
-// for internal/server/auth's TestMockOAuth2Server. Its oracles are what a
-// teen can see: the commands' exit codes and words, the server's pages and
+// TestDesktopRehearsal runs in rehearsal.yml, inside Xvfb with openbox and
+// a private session bus (tools/ci/desktop_session.sh), with
+// navikt/mock-oauth2-server standing in for Hack Club Auth as it does for
+// internal/server/auth's TestMockOAuth2Server. Its oracles are what a teen
+// can see: the commands' exit codes and words, the server's pages and
 // JSON, the agent's local API, and the files left in the home folder.
 
 import (
@@ -47,13 +47,13 @@ import (
 
 const (
 	// oidcEnv names the base URL of a running navikt/mock-oauth2-server.
-	// platform.yml's rehearsal step starts it and sets this, as ci.yml
-	// does for TestMockOAuth2Server.
+	// rehearsal.yml starts it and sets this, as ci.yml does for
+	// TestMockOAuth2Server.
 	oidcEnv = "PAIRTIME_TEST_OIDC_URL"
 	// outEnv names a folder for what a person debugging a failed run
 	// reads: each command's output, pairtimed's log, the agent's status,
 	// both sides' numbers, the scorer's buckets and the ledger's events.
-	// platform.yml uploads it as the rehearsal artifact. Without it they
+	// rehearsal.yml uploads it as the rehearsal artifact. Without it they
 	// go in the test's temporary folder.
 	outEnv = "PAIRTIME_REHEARSAL_OUT"
 	// claudePlanEnv, set to a plan file, makes the test binary the
@@ -71,7 +71,9 @@ const (
 	versionPkg   = "github.com/some-du6e/pairtime/internal/version"
 
 	// captureDir holds WP-AD1's capture of Claude Code 2.1.327 on Linux,
-	// whose hook calls the stand-in claude replays.
+	// whose hook calls the stand-in claude replays. tools/ci's
+	// TestRehearsalPaths reads it, to check that rehearsal.yml runs on a
+	// change to the capture.
 	captureDir = "testdata/fixtures/claude_code/2.1.327/linux/cli/hooks"
 	// The capture's paths, which the replay moves to the rehearsal's own.
 	captureProject    = "/home/capture/pairtime-capture/projects/cli"
@@ -108,7 +110,7 @@ func init() {
 func TestDesktopRehearsal(t *testing.T) {
 	oidc := os.Getenv(oidcEnv)
 	if oidc == "" {
-		t.Skipf("%s isn't set; platform.yml's rehearsal step starts navikt/mock-oauth2-server and sets it", oidcEnv)
+		t.Skipf("%s isn't set; rehearsal.yml starts navikt/mock-oauth2-server and sets it", oidcEnv)
 	}
 	r := newRehearsal(t, oidc)
 	steps := []struct {
@@ -698,7 +700,7 @@ func (r *rehearsal) approve(t *testing.T, code string) {
 func (r *rehearsal) stepDesktop(t *testing.T) {
 	for _, tool := range []string{"xterm", "xdotool"} {
 		if _, err := exec.LookPath(tool); err != nil {
-			t.Fatalf("%s isn't installed; platform.yml's Linux desktop job installs it", tool)
+			t.Fatalf("%s isn't installed; rehearsal.yml installs it", tool)
 		}
 	}
 	r.plainWin = r.startWindow(t, "PairtimePlain", nil, "xterm", "-class", "PairtimePlain", "-e", "sleep", "3600")

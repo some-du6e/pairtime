@@ -6,6 +6,7 @@
 // `pairtime login`, a Claude Code session typed at the keyboard, the hours
 // on /dashboard, then `pairtime uninstall`. It holds no code, only
 // TestDesktopRehearsal in rehearsal_desktop_test.go, which needs a desktop
-// to type into, so platform.yml's Linux desktop job runs it under Xvfb,
-// against navikt/mock-oauth2-server standing in for Hack Club Auth.
+// to type into, so rehearsal.yml runs it under Xvfb, against
+// navikt/mock-oauth2-server standing in for Hack Club Auth, on every PR
+// that changes what it builds or reads and on every push to main.
 package rehearsal

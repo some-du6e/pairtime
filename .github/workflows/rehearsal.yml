@@ -1,0 +1,156 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# The end-to-end rehearsal (internal/rehearsal): a teen's first hour with
+# pairtime, from Hack Club Auth sign-in to the hours on pairtimed's
+# /dashboard, typed under Xvfb against navikt/mock-oauth2-server. It builds
+# and runs both binaries, so it runs on every PR that changes what they're
+# built from or what it reads, on every push to main and on release tags
+# (DESIGN 3.13). While it was a step of platform.yml's Linux job, whose
+# paths are the client's, #123 broke it on main through cmd/pairtimed and
+# no PR run showed it.
+#
+# It isn't a step of ci.yml: it needs an X server, a session D-Bus and
+# docker, and takes minutes a PR that can't break it shouldn't pay.
+# platform.yml's Linux job runs the other desktop tests, which test client
+# code alone.
+name: rehearsal
+
+on:
+  pull_request:
+    # Everything the rehearsal builds or reads. tools/ci's
+    # TestRehearsalPaths walks the imports of pairtime, pairtimed and the
+    # rehearsal's own test binary as go build does on this runner, and
+    # fails when a Go file they compile, a file they embed, a file of the
+    # capture or a file the steps below run is under none of these.
+    paths:
+      # What pairtime and pairtimed are built from.
+      - cmd/pairtime/**
+      - cmd/pairtimed/**
+      - internal/adapters/**
+      - internal/agent/**
+      - internal/coach/text/**
+      - internal/devtoken/**
+      - internal/install/**
+      - internal/platform/**
+      - internal/release/**
+      - internal/server/**
+      - internal/version/**
+      - internal/webui/**
+      - pkg/**
+      # The patched BurntSushi/toml that go.mod's replace builds in.
+      - third_party/burntsushi-toml/**
+      # Of deploy/, the files its package embeds, among them the template
+      # pairtimed init writes pairtime.toml from. docs/embed.go embeds
+      # docs/retention.json, which /privacy and the retention jobs read.
+      - deploy/embed.go
+      - deploy/pairtime.toml.tmpl
+      - deploy/litestream.yml
+      - docs/embed.go
+      - docs/retention.json
+      - go.mod
+      - go.sum
+      # The rehearsal, which is also the stand-in claude, the Claude Code
+      # capture that stand-in replays, and the desktop it runs in. The
+      # mock's config is under internal/server/auth/testdata.
+      - internal/rehearsal/**
+      - testdata/fixtures/claude_code/2.1.327/linux/cli/hooks/**
+      - tools/ci/desktop_session.sh
+      - .github/workflows/rehearsal.yml
+  push:
+    # Every push to main, whatever it changed, so main shows the
+    # rehearsal's result for each commit; and release tags.
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+
+concurrency:
+  # A newer push to a PR, or a newer run by hand on the same branch,
+  # cancels the stale run. A push to main or a tag has a group of its own,
+  # its run's id, so no other run cancels it, or holds it pending: in a
+  # shared group GitHub cancels a pending run when a newer one queues,
+  # cancel-in-progress or not.
+  group: ${{ github.workflow }}-${{ github.event_name == 'push' && github.run_id || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  # pairtime never uses cgo (AGENTS.md).
+  CGO_ENABLED: "0"
+
+jobs:
+  rehearsal:
+    name: rehearsal (Xvfb, D-Bus, mock OIDC)
+    runs-on: ubuntu-latest
+    # The rehearsal step takes minutes of real time, 6 to 6.5 in four runs
+    # on 2026-11-21: a session typed at human speed, then the minutes' way
+    # to the server. The rest is room for a slow runner.
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
+    steps:
+      # Actions are pinned to commit SHAs; tags can be moved. Dependabot bumps them.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: |
+            go.mod
+            go.sum
+
+      - name: Install Xvfb, openbox, xterm, xdotool and D-Bus
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends \
+            xvfb openbox xterm xdotool x11-utils dbus dbus-bin
+
+      - name: Rehearsal of a teen's first hour (internal/rehearsal), against an independent OIDC server
+        # TestDesktopRehearsal builds both binaries as release.yml does,
+        # starts pairtimed on SQLite with sign-in through
+        # navikt/mock-oauth2-server (pinned by digest, as in ci.yml), and
+        # does what a teen does: sign in, pairtime install --yes in an empty
+        # home folder, pairtime login approved on /device, three prompts
+        # typed into a Claude Code session in an xterm with real XTEST
+        # input, then pairtime uninstall --yes --delete-data. It checks
+        # that pairtimed's /dashboard and its API show exactly what the
+        # client credits. The step runs every TestDesktop* test in
+        # internal/rehearsal, since no other job runs that package's. The
+        # test skips without PAIRTIME_TEST_OIDC_URL, so the step fails
+        # unless TestDesktopRehearsal ran and passed.
+        env:
+          PAIRTIME_TEST_OIDC_URL: http://localhost:8080
+          PAIRTIME_REHEARSAL_OUT: ${{ runner.temp }}/rehearsal
+          # 6.1.4, 2026-10-28.
+          IMAGE: ghcr.io/navikt/mock-oauth2-server:6.1.4@sha256:647dd8c78a54f0e6fcd58d79c884e612f8f998a0662276f3e1db22e464a50192
+        run: |
+          docker run -d --name oidc -p 8080:8080 \
+            -e JSON_CONFIG_PATH=/config/mock-oauth2-server.json \
+            -v "$PWD/internal/server/auth/testdata:/config:ro" \
+            "$IMAGE" >/dev/null
+          for _ in $(seq 1 60); do
+            if curl -fsS http://localhost:8080/isalive >/dev/null 2>&1; then break; fi
+            sleep 1
+          done
+          mkdir -p "$PAIRTIME_REHEARSAL_OUT"
+          log="$PAIRTIME_REHEARSAL_OUT/go-test.txt"
+          set +e
+          bash tools/ci/desktop_session.sh go test -tags desktop -run '^TestDesktop' -count=1 -v -timeout 40m ./internal/rehearsal 2>&1 | tee "$log"
+          code=${PIPESTATUS[0]}
+          set -e
+          docker logs oidc >"$PAIRTIME_REHEARSAL_OUT/mock-oauth2-server.log" 2>&1 || true
+          if [ "$code" -ne 0 ] || ! grep -q -- '--- PASS: TestDesktopRehearsal ' "$log"; then
+            echo "::error::TestDesktopRehearsal didn't run and pass; the rehearsal artifact has each step's output"
+            exit 1
+          fi
+
+      - name: Upload the rehearsal's diagnostics
+        if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: rehearsal
+          path: ${{ runner.temp }}/rehearsal
+          if-no-files-found: ignore
+          retention-days: 14
