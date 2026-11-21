@@ -314,10 +314,16 @@ func (c *checker) seconds(field string, v float64) {
 
 // slotSeconds checks credited seconds within one slot: 0 to 15, in steps
 // of 0.5, since a half-weight second credits half a second (SM 5.1).
-func (c *checker) slotSeconds(field string, v float64) {
-	if !finite(v) || v < 0 || v > SlotMS/1000 || v*2 != math.Trunc(v*2) {
-		c.addf(field, "must be 0 to 15 seconds in steps of 0.5, got %v", v)
+func (c *checker) slotSeconds(field string, v float64) { c.halfSeconds(field, v, SlotMS/1000) }
+
+// halfSeconds checks seconds from 0 to limit in steps of 0.5, and reports
+// whether v passed.
+func (c *checker) halfSeconds(field string, v, limit float64) bool {
+	if !finite(v) || v < 0 || v > limit || v*2 != math.Trunc(v*2) {
+		c.addf(field, "must be 0 to %v seconds in steps of 0.5, got %v", limit, v)
+		return false
 	}
+	return true
 }
 
 func (c *checker) scoringVersion(field, v string) {
