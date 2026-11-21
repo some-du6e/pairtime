@@ -25,8 +25,10 @@ type Job struct {
 	// MaxAge is the entry's period, for a job by days: rows whose time is
 	// at least this old are deleted.
 	MaxAge time.Duration
-	// WindowMonths is the spot-check window, for a job by the window: rows
-	// whose time is a decision whose window has closed are deleted.
+	// WindowMonths is the spot-check window, for a job by the window: a row
+	// is deleted once the window that opened at its time has closed. Its
+	// time is when its submission's spot-check window opened (DESIGN 4.4),
+	// and NULL until WP-SV18 writes it.
 	WindowMonths int
 	// Hold, when set, keeps the rows a submission uses.
 	Hold *Hold
@@ -166,9 +168,10 @@ func Sweep(ctx context.Context, d Doer, jobs []Job, now time.Time, batch int) []
 // deleteSQL is one batch's DELETE and its arguments, in the portable SQL of
 // package store. A row whose time is at or before now minus MaxAge, or for
 // a job by the window at or before lastClosed, is past its period. A hold
-// keeps its row while the hold's decision time is NULL, because the
-// submission is open, or later than lastClosed, because the decision's
-// spot-check window is still open (Window.Closes).
+// keeps its row while the hold's time, when its submission's spot-check
+// window opened (DESIGN 4.4), is NULL, because the window hasn't opened or
+// WP-SV18 hasn't written it yet, or later than lastClosed, because the
+// window is still open (Window.Closes).
 func (j Job) deleteSQL(now time.Time, batch int) (string, []any) {
 	col := func(alias string, cols []string) []string {
 		out := make([]string, len(cols))

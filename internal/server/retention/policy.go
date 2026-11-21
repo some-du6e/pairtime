@@ -12,9 +12,10 @@
 // evidence store's, whose index rows are there too (DESIGN 10.1), may bind
 // jobs to tables. A job deletes its table's rows whose time column is at
 // least the entry's days old, or, for a job by the window, whose time
-// column is a decision whose spot-check window has closed, except rows a
-// hold keeps. That one shape covers DESIGN 4.4's four server jobs, and
-// the two that delete the holds:
+// column says when a submission's spot-check window opened (DESIGN 4.4),
+// once that window has closed, except rows a hold keeps. That column is
+// NULL until WP-SV18 writes it, which keeps the row. That one shape covers
+// DESIGN 4.4's four server jobs, and the two that delete the holds:
 //
 //   - IP addresses and JA4 fingerprints, 30 days after they were seen.
 //   - Per-minute buckets, 180 days after their minute, unless a
@@ -142,8 +143,9 @@ func (e Entry) HasPeriod() bool {
 const (
 	// PeriodDays deletes a row once its time is the entry's days old.
 	PeriodDays = "days"
-	// PeriodWindow deletes a row once its time, a decision, is past the
-	// spot-check window (Window.Closes).
+	// PeriodWindow deletes a row once the spot-check window that opened at
+	// its time has closed (Window.Closes). Its time is when the submission's
+	// window opened (DESIGN 4.4), which WP-SV18 writes.
 	PeriodWindow = "window"
 )
 

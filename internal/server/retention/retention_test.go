@@ -179,8 +179,7 @@ func designRows(t *testing.T, heading string) [][]string {
 // the oracle, DESIGN 4.4's own text, or for the server's database backups,
 // which 4.4 doesn't list, DESIGN 10.3's: each entry's days, and each number
 // that an entry without days writes in its kept text, such as the access
-// log's 2 years. The sessions entry's numbers are package accounts'
-// constants, which TestSessionRetention there checks.
+// log's 2 years.
 func TestDesignPeriods(t *testing.T) {
 	p, err := Default()
 	if err != nil {
@@ -210,6 +209,8 @@ func TestDesignPeriods(t *testing.T) {
 		{name: "deleted rows stay in the nightly snapshots for their 30-day lifecycle", id: "server.db_snapshots", section: design103, where: "Nightly", data: "`VACUUM INTO` a snapshot", re: `uploaded to a second bucket with a (\d+)-day lifecycle\.`},
 		{name: "the evidence access log is kept 2 years", id: "server.access_log", where: "Server", data: "Evidence access log", re: `^(\d+) years, visible to the teen$`, kept: `^(\d+) years$`},
 		{name: "Claude Code keeps its transcripts 30 days by default", id: "device.transcripts", where: "Device", data: "Transcripts and agent output", re: `\(Claude Code: (\d+) days by default; TP B8\)`, kept: `\(Claude Code keeps them for (\d+) days unless you change it\)$`},
+		{name: "a web sign-in session ends 30 days after sign-in at the latest", id: "server.sessions", where: "Server", data: "Web sign-in sessions", re: `or (\d+) days after sign-in at the latest`, kept: `or (\d+) days after you sign in at the latest`},
+		{name: "a web sign-in session's row is deleted 1 day after the session ends", id: "server.sessions", where: "Server", data: "Web sign-in sessions", re: `deleted (\d+) days? after the session ends$`, kept: `deleted (\d+) days? after the session ends$`},
 	}
 	checked := make(map[string]bool)
 	for _, tt := range tests {
@@ -272,9 +273,8 @@ func TestDesignPeriods(t *testing.T) {
 	t.Run("every number written in a kept text is checked", func(t *testing.T) {
 		// Load refuses a number beside {days}, so these are entries
 		// without days.
-		elsewhere := map[string]bool{"server.sessions": true} // accounts' TestSessionRetention
 		for _, e := range p.Entries {
-			if strings.ContainsAny(e.Kept, "0123456789") && !checked[e.ID] && !elsewhere[e.ID] {
+			if strings.ContainsAny(e.Kept, "0123456789") && !checked[e.ID] {
 				t.Errorf("%s's kept says %q, and no case in TestDesignPeriods checks its number", e.ID, e.Kept)
 			}
 		}

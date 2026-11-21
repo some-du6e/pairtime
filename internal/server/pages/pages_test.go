@@ -331,9 +331,13 @@ func TestPrivacyNotice(t *testing.T) {
 			},
 		},
 		{
-			name:    "the purge promises one deletion, since the buckets keep no versions (DESIGN 10.3)",
-			want:    []string{"button deletes it from the evidence store at once. The minutes it supported stop counting."},
+			name:    "the purge promises one deletion, at once or as soon as the server reaches the store (DESIGN 7.11, 10.3)",
+			want:    []string{"button deletes it from the evidence store at once. If the server can&#39;t reach the evidence store just then, reviewers can&#39;t open the item any more, and the server deletes it as soon as it can. The minutes it supported stop counting."},
 			notWant: []string{"every stored version"},
+		},
+		{
+			name: "the deletion report lists revealed items the server couldn't delete yet as not deleted (DESIGN 8.9)",
+			want: []string{"If the server can&#39;t reach the evidence store just then, the report also lists what you revealed as not deleted yet, and the server deletes it as soon as it can."},
 		},
 		{
 			name: "the notice names this server and its version",
