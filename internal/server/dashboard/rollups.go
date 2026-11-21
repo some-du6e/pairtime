@@ -23,7 +23,11 @@ type Rollups struct {
 	DB rollup.Querier
 }
 
-// View returns the account's last MonthDays local days as of now.
+// View returns the account's last MonthDays local days as of now. Its
+// projects are the account-level ones the rollups count
+// (D-account-project-id), each called by its first device key, cut short.
+// Until project registration (WP-SV10) links the keys of one repo, each
+// device's key is a project of its own, and the view says so.
 func (r Rollups) View(ctx context.Context, account string, now time.Time) (View, error) {
 	zone, name, err := rollup.Zone(ctx, r.DB, account)
 	if err != nil {
@@ -39,35 +43,53 @@ func (r Rollups) View(ctx context.Context, account string, now time.Time) (View,
 	if err != nil {
 		return View{}, err
 	}
+	keys, err := rollup.Projects(ctx, r.DB, account)
+	if err != nil {
+		return View{}, err
+	}
 	var rows []Row
 	names := make(map[string]string)
 	for _, day := range days {
-		if day.Project != "" {
-			names[day.Project] = shortKey(day.Project)
+		id := day.ProjectID
+		if _, ok := names[id]; !ok && id != "" {
+			// A project's keys outlive the 30 days, since their rows stay
+			// as long as the minutes that name them, so this falls back to
+			// the id only for a project nothing maps.
+			names[id] = ShortKey(id)
+			if k := keys[id]; len(k) > 0 {
+				names[id] = ShortKey(k[0])
+			}
 		}
 		if day.Kind == "" {
 			rows = append(rows,
-				Row{Day: day.Day, Project: day.Project, Agent: true, Seconds: seconds(day.AgentOnlyFinalMS)},
-				Row{Day: day.Day, Project: day.Project, Agent: true, Pending: true, Seconds: seconds(day.AgentOnlyPendingMS)})
+				Row{Day: day.Day, Project: id, Agent: true, Seconds: seconds(day.AgentOnlyFinalMS)},
+				Row{Day: day.Day, Project: id, Agent: true, Pending: true, Seconds: seconds(day.AgentOnlyPendingMS)})
 			continue
 		}
 		for i, level := range rollup.Levels {
 			rows = append(rows,
-				Row{Day: day.Day, Project: day.Project, Kind: day.Kind, Level: level, Seconds: seconds(day.FinalMS[i])},
-				Row{Day: day.Day, Project: day.Project, Kind: day.Kind, Level: level, Pending: true, Seconds: seconds(day.PendingMS[i])})
+				Row{Day: day.Day, Project: id, Kind: day.Kind, Level: level, Seconds: seconds(day.FinalMS[i])},
+				Row{Day: day.Day, Project: id, Kind: day.Kind, Level: level, Pending: true, Seconds: seconds(day.PendingMS[i])})
 		}
 	}
-	return Build(Meta{AsOf: now, TZ: name, Today: today.Format(DateLayout), Agent: AgentName, Names: names}, rows)
+	return Build(Meta{
+		AsOf: now, TZ: name, Today: today.Format(DateLayout), Agent: AgentName,
+		Names: names, Keys: keys,
+		// TODO(WP-SV10): false once registration links the keys of one
+		// repo across devices.
+		SplitByDevice: true,
+	}, rows)
 }
 
 // seconds turns milliseconds into seconds. Credit moves in steps of half
 // a second, which float64 holds exactly.
 func seconds(ms int64) float64 { return float64(ms) / 1000 }
 
-// shortKey is what the page calls a project with no name: its key, cut
-// to 12 characters. Keys are opaque HMACs (DESIGN 4.3), and the server
-// never learns a project's name unless the owner publishes it.
-func shortKey(key string) string {
+// ShortKey is what the owner's dashboard calls a project, which has no
+// name on the server: its key, cut to 12 characters. Keys are opaque HMACs
+// (DESIGN 4.3), and the server never learns a project's name unless the
+// owner publishes it.
+func ShortKey(key string) string {
 	if len(key) <= 12 {
 		return key
 	}

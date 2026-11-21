@@ -5,6 +5,8 @@ package dashboard
 import (
 	"context"
 	"math/rand/v2"
+	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -33,6 +35,19 @@ VALUES ('u1', 'sub-u1', 'verified', 0, 0, 0, $1)`, zone); err != nil {
 	return db
 }
 
+// link gives the "device/key" pairs one project id, as project
+// registration (WP-SV10) will for the keys of one repo.
+func link(t *testing.T, db *store.DB, id string, pairs ...string) {
+	t.Helper()
+	for _, pair := range pairs {
+		device, key, _ := strings.Cut(pair, "/")
+		if _, err := db.Write.ExecContext(context.Background(), `INSERT INTO rollup_projects (user_id, device_id, project_key, project_id, last_minute_ms)
+VALUES ('u1', $1, $2, $3, 0)`, device, key, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
 // applyAll applies each bucket in a transaction of its own, as ingest
 // does.
 func applyAll(t *testing.T, db *store.DB, bs []rollup.Bucket) {
@@ -55,7 +70,9 @@ func applyAll(t *testing.T, db *store.DB, bs []rollup.Bucket) {
 
 // TestRollupsSumOfBuckets is WP-SV7's third check: the dashboard's totals
 // equal the sum of the buckets stored, final apart from pending. Each
-// device credits its own slots, so no minute merges anything away.
+// device credits its own slots, so no minute merges anything away, and
+// the devices' keys p1 and p2 are linked as two projects, as registration
+// will link a repo's keys, so the agent's time merges across them.
 func TestRollupsSumOfBuckets(t *testing.T) {
 	now := time.Date(2026, 11, 20, 18, 0, 0, 0, time.UTC)
 	gen := rand.New(rand.NewPCG(3, 5))
@@ -115,6 +132,8 @@ func TestRollupsSumOfBuckets(t *testing.T) {
 	for _, engine := range storetest.Engines() {
 		t.Run(string(engine)+"/the month's totals are the sum of the latest revisions' credit, final apart from pending", func(t *testing.T) {
 			db := rollupsDB(t, engine, "UTC")
+			link(t, db, "P1", "d1/p1", "d2/p1")
+			link(t, db, "P2", "d1/p2", "d2/p2")
 			applyAll(t, db, buckets)
 			v, err := Rollups{DB: db.Read}.View(context.Background(), "u1", now)
 			if err != nil {
@@ -152,6 +171,22 @@ func TestRollupsView(t *testing.T) {
 		check   func(*testing.T, View)
 	}{
 		{
+			name: "every real dashboard says a repo used on two computers shows as two projects, and does show it so",
+			zone: "UTC",
+			now:  time.Date(2026, 11, 20, 18, 0, 0, 0, time.UTC),
+			buckets: []rollup.Bucket{
+				{Account: "u1", Device: "d1", Minute: time.Date(2026, 11, 20, 17, 0, 0, 0, time.UTC).Unix(), State: "final",
+					Slots: []rollup.Slot{{Project: "g_laptop_key", CreditedS: 15, Kind: "prompting", Level: "A"}}},
+				{Account: "u1", Device: "d2", Minute: time.Date(2026, 11, 20, 17, 1, 0, 0, time.UTC).Unix(), State: "final",
+					Slots: []rollup.Slot{{Project: "g_desktop_key", CreditedS: 15, Kind: "prompting", Level: "A"}}},
+			},
+			check: func(t *testing.T, v View) {
+				if !v.SplitByDevice || len(v.Projects) != 2 {
+					t.Errorf("split by device %v, projects %+v; want split and two projects", v.SplitByDevice, v.Projects)
+				}
+			},
+		},
+		{
 			name: "an account with no rollups gets 30 empty days and no projects, for the page's empty state",
 			zone: "UTC",
 			now:  time.Date(2026, 11, 20, 18, 0, 0, 0, time.UTC),
@@ -179,7 +214,7 @@ func TestRollupsView(t *testing.T) {
 			},
 		},
 		{
-			name: "a project is called by its key, cut short, since the server never learns its name",
+			name: "a project is called by its device's key, cut short, since the server never learns its name",
 			zone: "UTC",
 			now:  time.Date(2026, 11, 20, 18, 0, 0, 0, time.UTC),
 			buckets: []rollup.Bucket{
@@ -188,7 +223,11 @@ func TestRollupsView(t *testing.T) {
 			},
 			check: func(t *testing.T, v View) {
 				if len(v.Projects) != 1 || v.Projects[0].Name != "p_0123456789…" || v.Agent != AgentName {
-					t.Errorf("projects %+v and agent %q", v.Projects, v.Agent)
+					t.Fatalf("projects %+v and agent %q", v.Projects, v.Agent)
+				}
+				// The project's id is the account's, not the device's key.
+				if p := v.Projects[0]; p.ID == "p_0123456789abcdef" || !reflect.DeepEqual(p.Keys, []string{"p_0123456789abcdef"}) {
+					t.Errorf("project %+v, want an id of its own and the device's key", p)
 				}
 				if v.Week.Agent.FinalS != 30 {
 					t.Errorf("agent %+v, want 30 s", v.Week.Agent)

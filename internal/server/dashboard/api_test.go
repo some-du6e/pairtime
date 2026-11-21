@@ -30,23 +30,36 @@ func (s source) View(_ context.Context, account string, _ time.Time) (View, erro
 func TestAPI(t *testing.T) {
 	sample := demoView(t, demoNow)
 	tests := []struct {
-		name      string
-		account   string
-		err       error
-		wantCode  int
-		wantBody  string
-		wantAsked string
+		name    string
+		account string
+		// sessionErr is the error reading the session gives, if any.
+		sessionErr error
+		err        error
+		wantCode   int
+		wantBody   string
+		wantAsked  string
 	}{
 		{name: "a signed-in owner gets their own view as JSON", account: "u1", wantCode: 200, wantBody: `"today":"2026-11-20"`, wantAsked: "u1"},
 		{name: "the JSON keeps pending apart from final", account: "u1", wantCode: 200, wantBody: `"you":{"final_s":6240,"pending_s":540}`, wantAsked: "u1"},
+		{name: "each project has its account-level id, its devices' keys and its name", account: "u1", wantCode: 200, wantBody: `{"id":"p_sample_chip8","keys":["p_sample_chip8"],"name":"chip8-emulator"}`, wantAsked: "u1"},
+		{name: "the JSON says whether a repo on two computers shows as two projects", account: "u1", wantCode: 200, wantBody: `"projects_split_by_device":false`, wantAsked: "u1"},
 		{name: "a request that isn't signed in gets 401 not_signed_in, as GET /api/v1/users/me answers", wantCode: 401, wantBody: `{"error":"not_signed_in"}`},
+		{name: "a session that can't be read is a 500, not a sign-in, and no view is read", sessionErr: errors.New("database is locked"), wantCode: 500, wantBody: `{"error":"dashboard_unavailable"}`},
 		{name: "a view that doesn't load is a 500, never a view with wrong numbers", account: "u1", err: errors.New("disk on fire"), wantCode: 500, wantBody: `{"error":"dashboard_unavailable"}`, wantAsked: "u1"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var asked string
 			h := API(source{v: sample, err: tt.err, asked: &asked},
-				func(*http.Request) (string, bool) { return tt.account, tt.account != "" },
+				func(*http.Request) (string, error) {
+					switch {
+					case tt.sessionErr != nil:
+						return "", tt.sessionErr
+					case tt.account == "":
+						return "", ErrNotSignedIn
+					}
+					return tt.account, nil
+				},
 				func() time.Time { return demoNow }, slog.New(slog.DiscardHandler))
 			rec := httptest.NewRecorder()
 			h(rec, httptest.NewRequest(http.MethodGet, APIPath, nil))
@@ -68,7 +81,7 @@ func TestAPI(t *testing.T) {
 	}
 	t.Run("the JSON reads back as the view it was made from", func(t *testing.T) {
 		var asked string
-		h := API(source{v: sample, asked: &asked}, func(*http.Request) (string, bool) { return "u1", true }, func() time.Time { return demoNow }, slog.New(slog.DiscardHandler))
+		h := API(source{v: sample, asked: &asked}, func(*http.Request) (string, error) { return "u1", nil }, func() time.Time { return demoNow }, slog.New(slog.DiscardHandler))
 		rec := httptest.NewRecorder()
 		h(rec, httptest.NewRequest(http.MethodGet, APIPath, nil))
 		var got View

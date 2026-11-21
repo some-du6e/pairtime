@@ -11,6 +11,7 @@ import (
 	"github.com/some-du6e/pairtime/internal/server/accounts"
 	"github.com/some-du6e/pairtime/internal/server/auth"
 	"github.com/some-du6e/pairtime/internal/server/config"
+	"github.com/some-du6e/pairtime/internal/server/dashboard"
 	"github.com/some-du6e/pairtime/internal/server/store"
 	"github.com/some-du6e/pairtime/internal/server/writer"
 )
@@ -80,18 +81,21 @@ func visitor(svc *auth.Service, logger *slog.Logger) func(*http.Request) (string
 }
 
 // accountOf tells the dashboard which account a request is signed in to:
-// its users id. Like visitor, it logs a session that can't be read and
-// treats the request as signed out.
-func accountOf(svc *auth.Service, logger *slog.Logger) func(*http.Request) (string, bool) {
-	return func(r *http.Request) (string, bool) {
+// its users id, or dashboard.ErrNotSignedIn without a session. Unlike
+// visitor, it passes on an error reading the session, which the dashboard
+// answers with a 500: the page and the API need the account, and sending
+// a signed-in owner to sign in again wouldn't help while the database
+// fails.
+func accountOf(svc *auth.Service) func(*http.Request) (string, error) {
+	return func(r *http.Request) (string, error) {
 		sess, err := svc.Session(r)
-		if err != nil {
-			if !errors.Is(err, accounts.ErrNoSession) {
-				logger.Error("reading a session for the dashboard", "err", err)
-			}
-			return "", false
+		switch {
+		case errors.Is(err, accounts.ErrNoSession):
+			return "", dashboard.ErrNotSignedIn
+		case err != nil:
+			return "", err
 		}
-		return sess.User.ID, true
+		return sess.User.ID, nil
 	}
 }
 

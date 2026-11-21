@@ -10,7 +10,14 @@
 // as rolled up from minute buckets (SM 5.1, 5.3). Minutes still inside
 // their pending window are kept apart from final ones throughout, because
 // a late event can still change them (DESIGN 6.2 D1), and the page draws
-// them faded.
+// them faded. The server settles a minute its device leaves pending once
+// the window has passed (D-server-settles-pending).
+//
+// The server can't see display.shadow, SM 7.5's calibration week: no
+// tier-1 field carries it, so a real dashboard shows credited time
+// whatever the device's setting says. D-shadow-scope hides it on the
+// device's own views; how shadow mode reaches the server is still to be
+// decided.
 package dashboard
 
 import (
@@ -47,6 +54,11 @@ type View struct {
 	// such as "Claude Code" (DESIGN 3.8: agent-only time is named after
 	// the agent that ran).
 	Agent string `json:"agent"`
+	// SplitByDevice says that each device's project keys count as
+	// projects of their own, so a repo used on two computers shows as two
+	// projects. Every real dashboard says so until project registration
+	// (WP-SV10) links the keys of one repo (D-account-project-id).
+	SplitByDevice bool `json:"projects_split_by_device"`
 	// Projects lists every project with time in the last MonthDays days,
 	// the most of the owner's time first.
 	Projects []Project `json:"projects"`
@@ -60,8 +72,15 @@ type View struct {
 
 // Project is one of the owner's projects.
 type Project struct {
-	// Key is the opaque project key the client uploads (DESIGN 4.3).
-	Key string `json:"key"`
+	// ID is the account-level project id that ProjectTime.Project names
+	// (D-account-project-id). The sample's ids are made up.
+	ID string `json:"id"`
+	// Keys are the opaque project keys the owner's devices upload for the
+	// project (DESIGN 4.3), in device order, so a client can match the
+	// project with its own name for it. Each device keys its projects
+	// itself, so until project registration (WP-SV10) links the keys of
+	// one repo, a project has one key.
+	Keys []string `json:"keys"`
 	// Name is what the page calls the project.
 	Name string `json:"name"`
 }
@@ -83,7 +102,7 @@ func (t Time) Add(u Time) Time {
 // ProjectTime is the owner's credited time and the agent's time on its own
 // in one project.
 type ProjectTime struct {
-	// Project is the Project's Key.
+	// Project is the Project's ID.
 	Project string `json:"project"`
 	You     Time   `json:"you"`
 	Agent   Time   `json:"agent"`

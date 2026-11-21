@@ -309,7 +309,7 @@ func TestJobs(t *testing.T) {
 		{
 			name:     "every job waits while its table doesn't exist, and the rollups' jobs, whose tables exist, run",
 			edit:     func(*Policy) {},
-			wantJobs: []string{"server.minute_buckets/rollup_minutes", "server.minute_buckets/rollup_flags"},
+			wantJobs: []string{"server.minute_buckets/rollup_minutes", "server.minute_buckets/rollup_projects"},
 			wantOff: []string{
 				"server.devices/devices awaits WP-SV3", "server.ip_ja4/request_origins awaits WP-SV4",
 				"server.minute_buckets/minute_buckets awaits WP-SV7", "server.minute_buckets/submission_minutes awaits WP-SB4",
@@ -328,7 +328,7 @@ func TestJobs(t *testing.T) {
 			wantJobs: []string{
 				"server.devices/devices", "server.ip_ja4/request_origins",
 				"server.minute_buckets/minute_buckets", "server.minute_buckets/submission_minutes",
-				"server.minute_buckets/rollup_minutes", "server.minute_buckets/rollup_flags",
+				"server.minute_buckets/rollup_minutes", "server.minute_buckets/rollup_projects",
 				"server.witness/witness_rows", "server.witness/submission_batches",
 			},
 			wantOff: []string{"server.minute_buckets/minute_buckets hold awaits WP-SB4", "server.witness/witness_rows hold awaits WP-SB4"},
@@ -348,7 +348,7 @@ func TestJobs(t *testing.T) {
 			wantJobs: []string{
 				"server.devices/devices", "server.ip_ja4/request_origins",
 				"server.minute_buckets/minute_buckets+hold", "server.minute_buckets/submission_minutes",
-				"server.minute_buckets/rollup_minutes", "server.minute_buckets/rollup_flags",
+				"server.minute_buckets/rollup_minutes", "server.minute_buckets/rollup_projects",
 				"server.witness/witness_rows+hold", "server.witness/submission_batches",
 			},
 		},

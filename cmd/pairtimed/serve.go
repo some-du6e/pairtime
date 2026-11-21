@@ -171,6 +171,27 @@ func serve(ctx context.Context, cfg *config.Config, logger *slog.Logger, e *env,
 		<-retentionDone
 	}()
 
+	// The settle job runs beside the sweep, through the writer: a minute
+	// its device left pending counts as final by the server's clock once
+	// PENDING_WINDOW_S has passed since it ended (D-server-settles-pending).
+	// It too stops before the writer does.
+	settled := reg.Counter("pairtime_rollup_settled_minutes_total", "Minutes their devices left pending that the server settled as final (D-server-settles-pending).")
+	settleCtx, stopSettle := context.WithCancel(ctx)
+	settleDone := make(chan struct{})
+	go func() {
+		defer close(settleDone)
+		rollup.RunSettle(settleCtx, w, rollup.SettleEvery, time.Now, func(n int, err error) {
+			settled.Add(uint64(n))
+			if err != nil && settleCtx.Err() == nil {
+				logger.Error("settling pending minutes failed", "settled", n, "err", err)
+			}
+		})
+	}()
+	defer func() {
+		stopSettle()
+		<-settleDone
+	}()
+
 	checks := []ops.Check{{
 		Name: "database",
 		Run: func(ctx context.Context) error {
@@ -261,9 +282,10 @@ func serve(ctx context.Context, cfg *config.Config, logger *slog.Logger, e *env,
 	site.RegisterDemo(public, visit, time.Now)
 	// The signed-in owner's dashboard, as a page and as JSON, from the
 	// rollups (WP-SV7). Ingest's bucket revisions reach them through
-	// rollup.ApplyEvent.
+	// rollup.Apply, each turned into a rollup.Bucket by rollup.FromEvent
+	// with its agent_only; the comment on FromEvent has the adapter.
 	rollups := dashboard.Rollups{DB: db.Read}
-	owner := accountOf(signIn, logger)
+	owner := accountOf(signIn)
 	site.RegisterDashboard(public, visit, pages.Dashboard{
 		Source:  rollups,
 		Account: owner,

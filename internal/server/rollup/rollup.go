@@ -3,21 +3,41 @@
 // Package rollup keeps pairtimed's daily rollups (WP-SV7; DESIGN 3.10,
 // SM 3.4 and 5.3): credited seconds per account, project, local day and
 // activity kind, with pending minutes kept apart from final ones, and the
-// agent's running time beside them. The owner's dashboard reads them
-// (package dashboard).
+// agent's time on its own (agent_only) per project beside them. The
+// owner's dashboard reads them (package dashboard).
 //
 // Ingest calls Apply inside the writer transaction that stores a minute
 // bucket's revision, so the rollups never disagree with the buckets they
 // sum. Apply works from the delta between a bucket's revisions, as
 // additive upserts, and merges devices: one human minute per wall-clock
-// minute per account, with concurrent_devices raised when two devices
-// credit the same slot (SM 3.4).
+// minute per account (SM 3.4).
 //
 // Apply keeps its own copy of each device's latest revision of each minute
 // (rollup_minutes), and moves the rollups from that copy, never from the
 // prev a caller passes. So the rollups depend only on the latest revision
 // of each device's minutes: a revision that arrives twice, late or out of
 // order changes nothing it shouldn't.
+//
+// The rollups count a project by its account-level project id, never by a
+// device's own project key (D-account-project-id). A device's project keys
+// are HMACs under its own secret (AGENTS.md: keyed per device), so one
+// repo has a different key on each computer. rollup_projects gives each
+// (device, key) its project id, and the merge compares project ids. Until
+// project registration (WP-SV10) links the keys of one repo to one id,
+// each (device, key) is a project of its own, so a repo used on two
+// computers shows as two projects.
+//
+// A minute stays pending until its device sends a final revision, or
+// until the settle job (Settle), which runs through the writer beside the
+// retention sweep, finds it still pending PENDING_WINDOW_S after it ended
+// and re-applies it as final by the server's clock
+// (D-server-settles-pending; DESIGN 3.7, 6.2 D1).
+//
+// No fraud flag is stored for hours nobody submitted (D-no-ingest-flags;
+// DESIGN 4.2, 8.5). SM 3.4's concurrent_devices, two devices crediting
+// one slot, is computed when a submission is frozen, over the submitted
+// window, from the per-device minutes rollup_minutes keeps for 180 days
+// (ConcurrentMinutes). The merge keeps one slot either way.
 //
 // A minute counts toward the account's local day, in the time zone the
 // owner set (users.tz, UTC until set). A minute's day comes from the
@@ -97,7 +117,9 @@ type Bucket struct {
 // Slot is one 15-second slot of a Bucket.
 type Slot struct {
 	// Project is the opaque project key from the client (p), or "" when
-	// nothing in the slot was credited and no project was resolved.
+	// nothing in the slot was credited and no project was resolved. It is
+	// the device's own key; Apply counts it under the account-level
+	// project id that rollup_projects gives it.
 	Project string
 	// CreditedS is cr: 0 to 15 seconds, in steps of 0.5.
 	CreditedS float64
@@ -130,16 +152,14 @@ func Apply(ctx context.Context, tx writer.Tx, prev *Bucket, next Bucket) error {
 		return err
 	}
 	minuteMS := next.Minute * 1000
-	rows, err := loadMinute(ctx, tx, next.Account, minuteMS)
+	before, err := loadMinute(ctx, tx, next.Account, minuteMS)
 	if err != nil {
 		return err
 	}
-	before := make([]device, 0, len(rows)+1)
-	after := make([]device, 0, len(rows)+1)
+	after := make([]device, 0, len(before)+1)
 	oldDay := ""
-	for _, r := range rows {
+	for _, r := range before {
 		oldDay = r.day
-		before = append(before, r)
 		if r.id == next.Device {
 			if r.rev >= in.rev {
 				return nil
@@ -152,53 +172,57 @@ func Apply(ctx context.Context, tx writer.Tx, prev *Bucket, next Bucket) error {
 	if err != nil {
 		return err
 	}
+	// The other devices' rows already hold project ids, so in's keys
+	// become ids before the merge compares them.
+	if err := toProjects(ctx, tx, next.Account, minuteMS, &in); err != nil {
+		return err
+	}
 	day := LocalDay(next.Minute, zone)
 	in.day = day
 	after = append(after, in)
-
-	was, now := merge(before), merge(after)
-	delta := now.contribution(day)
-	if oldDay != "" {
-		delta.subtract(was.contribution(oldDay))
-	}
-	if err := addDaily(ctx, tx, next.Account, delta); err != nil {
+	if err := remerge(ctx, tx, next.Account, before, oldDay, after, day); err != nil {
 		return err
 	}
 	if err := saveDevice(ctx, tx, next.Account, minuteMS, in); err != nil {
 		return err
 	}
 	if oldDay != "" && oldDay != day {
-		if err := moveMinute(ctx, tx, next.Account, minuteMS, day); err != nil {
-			return err
-		}
-	}
-	if was.concurrent != now.concurrent {
-		if err := setFlag(ctx, tx, next.Account, minuteMS, FlagConcurrentDevices, now.concurrent); err != nil {
-			return err
-		}
+		return moveMinute(ctx, tx, next.Account, minuteMS, day)
 	}
 	return nil
 }
 
-// FlagConcurrentDevices is the flag rollup_flags holds for a minute in
-// which two of an account's devices credit the same slot (SM 3.4).
-const FlagConcurrentDevices = "concurrent_devices"
-
-// ApplyEvent is Apply for ingest, which holds buckets as pkg/event's
-// MinuteBucket and the account apart: its signature is ingest's
-// RollupFunc, so serve.go passes it as it is.
-func ApplyEvent(ctx context.Context, tx writer.Tx, account string, prev *event.MinuteBucket, next event.MinuteBucket) error {
-	var p *Bucket
-	if prev != nil {
-		b := FromEvent(account, *prev)
-		p = &b
+// remerge moves the account's rollups for one minute from the device rows
+// before, which counted toward oldDay ("" when there were none), to the
+// rows after, which count toward day: it merges each (SM 3.4) and adds the
+// difference to rollups_daily. Apply and the settle job both take this
+// path.
+func remerge(ctx context.Context, tx writer.Tx, account string, before []device, oldDay string, after []device, day string) error {
+	delta := merge(after).contribution(day)
+	if oldDay != "" {
+		delta.subtract(merge(before).contribution(oldDay))
 	}
-	return Apply(ctx, tx, p, FromEvent(account, next))
+	return addDaily(ctx, tx, account, delta)
 }
 
 // FromEvent turns a minute bucket as pkg/event holds it into a Bucket of
-// account's.
-func FromEvent(account string, m event.MinuteBucket) Bucket {
+// account's, with agentOnly as its agent_only (D-bucket-agent-only).
+// Ingest holds agent_only beside the bucket, as ingest.Revision's
+// AgentOnly, until pkg/event's MinuteBucket carries it (WP-EV3); the
+// caller passes whichever holds it.
+//
+// Ingest's RollupFunc takes ingest.Revision, so serve.go wires the
+// rollups as
+//
+//	func(ctx context.Context, tx writer.Tx, account string, prev *ingest.Revision, next ingest.Revision) error {
+//		var p *rollup.Bucket
+//		if prev != nil {
+//			b := rollup.FromEvent(account, prev.MinuteBucket, prev.AgentOnly)
+//			p = &b
+//		}
+//		return rollup.Apply(ctx, tx, p, rollup.FromEvent(account, next.MinuteBucket, next.AgentOnly))
+//	}
+func FromEvent(account string, m event.MinuteBucket, agentOnly map[string]float64) Bucket {
 	b := Bucket{
 		Account:       account,
 		Device:        m.Device,
@@ -221,9 +245,12 @@ func FromEvent(account string, m event.MinuteBucket) Bucket {
 			b.Uncredited[string(r)] = s
 		}
 	}
-	// TODO(WP-EV3): copy m's agent_only into b.AgentOnly once pkg/event's
-	// MinuteBucket has it (D-bucket-agent-only). Until then a bucket from
-	// ingest has no agent time on its own.
+	if len(agentOnly) > 0 {
+		b.AgentOnly = make(map[string]float64, len(agentOnly))
+		for p, s := range agentOnly {
+			b.AgentOnly[p] = s
+		}
+	}
 	return b
 }
 

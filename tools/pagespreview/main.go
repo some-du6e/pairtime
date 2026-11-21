@@ -96,7 +96,7 @@ func write(dir string) error {
 		d := pages.Dashboard{Now: time.Now, Logger: slog.Default()}
 		if p.owner != nil {
 			d.Source = source(p.owner)
-			d.Account = func(*http.Request) (string, bool) { return "u1", true }
+			d.Account = func(*http.Request) (string, error) { return "u1", nil }
 		}
 		site.RegisterDashboard(mux, p.signIn, d)
 		rec := httptest.NewRecorder()
@@ -124,10 +124,16 @@ func (s source) View(_ context.Context, _ string, now time.Time) (dashboard.View
 }
 
 // ownerView is the sample's numbers as a signed-in owner's own view, as
-// dashboard.Rollups names the agent.
+// dashboard.Rollups makes it: the agent is "your agent", each project is
+// called by its key cut short, since the server never learns a project's
+// name, and each computer's projects count apart until project
+// registration (WP-SV10).
 func ownerView(now time.Time) (dashboard.View, error) {
 	v, err := dashboard.Demo{}.View(context.Background(), "", now)
-	v.Sample, v.Agent, v.TZ = false, dashboard.AgentName, "Europe/London"
+	v.Sample, v.Agent, v.TZ, v.SplitByDevice = false, dashboard.AgentName, "Europe/London", true
+	for i, p := range v.Projects {
+		v.Projects[i].Name = dashboard.ShortKey(p.Keys[0])
+	}
 	return v, err
 }
 

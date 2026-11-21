@@ -3,16 +3,23 @@
 package rollup
 
 import (
+	"cmp"
 	"context"
+	"crypto/rand"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"regexp"
+	"slices"
 	"sync"
 	"time"
-	// The zones come with pairtimed, so an account's days start at the
-	// same moment on every host, whatever zoneinfo it has.
+	// A copy of the zone database for a host that has none. It is only a
+	// fallback: time.LoadLocation reads $ZONEINFO and the system's zoneinfo
+	// first, so on pairtimed's image, which ships Debian's tzdata, the
+	// image's copy decides where an account's days start.
 	_ "time/tzdata"
 
 	"github.com/some-du6e/pairtime/internal/server/writer"
@@ -25,10 +32,35 @@ type Querier interface {
 	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
 }
 
+// minuteColumns are the rollup_minutes columns scanDevice reads, in its
+// order.
+const minuteColumns = `minute_ms, device_id, rev, state, slots, agent_only, day`
+
+// scanDevice reads one of the account's rollup_minutes rows, selected as
+// minuteColumns, and returns it with its minute.
+func scanDevice(rows *sql.Rows, account string) (device, int64, error) {
+	var d device
+	var minuteMS int64
+	var state, slots, agentOnly string
+	if err := rows.Scan(&minuteMS, &d.id, &d.rev, &state, &slots, &agentOnly, &d.day); err != nil {
+		return device{}, 0, fmt.Errorf("rollup: reading a minute: %w", err)
+	}
+	if err := json.Unmarshal([]byte(agentOnly), &d.agentOnly); err != nil {
+		return device{}, 0, fmt.Errorf("rollup: minute %d of %s on %s has agent_only %q", minuteMS, account, d.id, agentOnly)
+	}
+	d.pending = state == "pending"
+	var s []slot
+	if err := json.Unmarshal([]byte(slots), &s); err != nil || len(s) > slotsPerMinute {
+		return device{}, 0, fmt.Errorf("rollup: minute %d of %s on %s has slots %q", minuteMS, account, d.id, slots)
+	}
+	copy(d.slots[:], s)
+	return d, minuteMS, nil
+}
+
 // loadMinute returns the account's device rows for one minute, in
 // device_id order.
 func loadMinute(ctx context.Context, q Querier, account string, minuteMS int64) ([]device, error) {
-	rows, err := q.QueryContext(ctx, `SELECT device_id, rev, state, slots, agent_only, day FROM rollup_minutes
+	rows, err := q.QueryContext(ctx, `SELECT `+minuteColumns+` FROM rollup_minutes
 WHERE user_id = $1 AND minute_ms = $2 ORDER BY device_id`, account, minuteMS)
 	if err != nil {
 		return nil, fmt.Errorf("rollup: reading a minute: %w", err)
@@ -36,20 +68,10 @@ WHERE user_id = $1 AND minute_ms = $2 ORDER BY device_id`, account, minuteMS)
 	defer rows.Close()
 	var out []device
 	for rows.Next() {
-		var d device
-		var state, slots, agentOnly string
-		if err := rows.Scan(&d.id, &d.rev, &state, &slots, &agentOnly, &d.day); err != nil {
-			return nil, fmt.Errorf("rollup: reading a minute: %w", err)
+		d, _, err := scanDevice(rows, account)
+		if err != nil {
+			return nil, err
 		}
-		if err := json.Unmarshal([]byte(agentOnly), &d.agentOnly); err != nil {
-			return nil, fmt.Errorf("rollup: minute %d of %s on %s has agent_only %q", minuteMS, account, d.id, agentOnly)
-		}
-		d.pending = state == "pending"
-		var s []slot
-		if err := json.Unmarshal([]byte(slots), &s); err != nil || len(s) > slotsPerMinute {
-			return nil, fmt.Errorf("rollup: minute %d of %s on %s has slots %q", minuteMS, account, d.id, slots)
-		}
-		copy(d.slots[:], s)
 		out = append(out, d)
 	}
 	if err := rows.Err(); err != nil {
@@ -101,10 +123,10 @@ func addDaily(ctx context.Context, tx writer.Tx, account string, d delta) error 
 		if c == (columns{}) {
 			continue
 		}
-		_, err := tx.ExecContext(ctx, `INSERT INTO rollups_daily (user_id, project, day, activity_kind,
+		_, err := tx.ExecContext(ctx, `INSERT INTO rollups_daily (user_id, project_id, day, activity_kind,
 final_a_ms, final_b_ms, final_c_ms, pending_a_ms, pending_b_ms, pending_c_ms, agent_only_final_ms, agent_only_pending_ms)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-ON CONFLICT (user_id, project, day, activity_kind) DO UPDATE SET
+ON CONFLICT (user_id, project_id, day, activity_kind) DO UPDATE SET
 final_a_ms = rollups_daily.final_a_ms + excluded.final_a_ms,
 final_b_ms = rollups_daily.final_b_ms + excluded.final_b_ms,
 final_c_ms = rollups_daily.final_c_ms + excluded.final_c_ms,
@@ -121,19 +143,120 @@ agent_only_pending_ms = rollups_daily.agent_only_pending_ms + excluded.agent_onl
 	return nil
 }
 
-// setFlag raises or clears flag on the account's minute.
-func setFlag(ctx context.Context, tx writer.Tx, account string, minuteMS int64, flag string, on bool) error {
-	var err error
-	if on {
-		_, err = tx.ExecContext(ctx, `INSERT INTO rollup_flags (user_id, minute_ms, flag) VALUES ($1, $2, $3)
-ON CONFLICT (user_id, minute_ms, flag) DO NOTHING`, account, minuteMS, flag)
-	} else {
-		_, err = tx.ExecContext(ctx, `DELETE FROM rollup_flags WHERE user_id = $1 AND minute_ms = $2 AND flag = $3`, account, minuteMS, flag)
+// toProjects turns the device's project keys in d, its slots' and its
+// agent_only's, into the account-level project ids rollup_projects gives
+// them (D-account-project-id), and records minuteMS as the latest minute
+// that names each key, so a key's row stays as long as the minutes that
+// use it. Two keys of the device that project registration (WP-SV10) has
+// linked to one id may both name agent time; the larger counts, as it
+// does across devices (merge).
+func toProjects(ctx context.Context, tx writer.Tx, account string, minuteMS int64, d *device) error {
+	ids := make(map[string]string)
+	idOf := func(key string) (string, error) {
+		if id, ok := ids[key]; ok {
+			return id, nil
+		}
+		id, err := projectID(ctx, tx, account, d.id, key, minuteMS)
+		if err != nil {
+			return "", err
+		}
+		ids[key] = id
+		return id, nil
+	}
+	for i := range d.slots {
+		if d.slots[i].MS == 0 {
+			continue
+		}
+		id, err := idOf(d.slots[i].Project)
+		if err != nil {
+			return err
+		}
+		d.slots[i].Project = id
+	}
+	if len(d.agentOnly) == 0 {
+		return nil
+	}
+	agent := make(map[string]int64, len(d.agentOnly))
+	for _, key := range slices.Sorted(maps.Keys(d.agentOnly)) {
+		id, err := idOf(key)
+		if err != nil {
+			return err
+		}
+		agent[id] = max(agent[id], d.agentOnly[key])
+	}
+	d.agentOnly = agent
+	return nil
+}
+
+// projectID returns the project id of the device's project key, and
+// records minuteMS as the latest minute that names it. A key the device
+// hasn't named before gets a new id.
+func projectID(ctx context.Context, tx writer.Tx, account, device, key string, minuteMS int64) (string, error) {
+	var id string
+	var last int64
+	err := tx.QueryRowContext(ctx, `SELECT project_id, last_minute_ms FROM rollup_projects
+WHERE user_id = $1 AND device_id = $2 AND project_key = $3`, account, device, key).Scan(&id, &last)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		id = newProjectID(minuteMS)
+		_, err = tx.ExecContext(ctx, `INSERT INTO rollup_projects (user_id, device_id, project_key, project_id, last_minute_ms)
+VALUES ($1, $2, $3, $4, $5)`, account, device, key, id, minuteMS)
+	case err == nil && last < minuteMS:
+		_, err = tx.ExecContext(ctx, `UPDATE rollup_projects SET last_minute_ms = $1
+WHERE user_id = $2 AND device_id = $3 AND project_key = $4`, minuteMS, account, device, key)
 	}
 	if err != nil {
-		return fmt.Errorf("rollup: setting %s: %w", flag, err)
+		return "", fmt.Errorf("rollup: the project of %s's key on %s: %w", account, device, err)
 	}
-	return nil
+	return id, nil
+}
+
+// newProjectID returns a new project id: a UUIDv7 (RFC 9562 section 5.7),
+// the id form of package store's rules, stamped with the minute the key
+// was first named in.
+func newProjectID(minuteMS int64) string {
+	var b [16]byte
+	rand.Read(b[:])
+	for i := range 6 {
+		b[i] = byte(uint64(minuteMS) >> (40 - 8*i))
+	}
+	b[6] = b[6]&0x0f | 0x70
+	b[8] = b[8]&0x3f | 0x80
+	h := hex.EncodeToString(b[:])
+	return h[0:8] + "-" + h[8:12] + "-" + h[12:16] + "-" + h[16:20] + "-" + h[20:32]
+}
+
+// Projects returns, by project id, the project keys the account's devices
+// name each of its projects by, ordered by device_id and then key in byte
+// order (rollup_projects). Until project registration (WP-SV10) links two
+// keys, each project has one.
+func Projects(ctx context.Context, q Querier, account string) (map[string][]string, error) {
+	rows, err := q.QueryContext(ctx, `SELECT project_id, device_id, project_key FROM rollup_projects WHERE user_id = $1`, account)
+	if err != nil {
+		return nil, fmt.Errorf("rollup: reading %s's projects: %w", account, err)
+	}
+	defer rows.Close()
+	type mapping struct{ project, device, key string }
+	var all []mapping
+	for rows.Next() {
+		var m mapping
+		if err := rows.Scan(&m.project, &m.device, &m.key); err != nil {
+			return nil, fmt.Errorf("rollup: reading %s's projects: %w", account, err)
+		}
+		all = append(all, m)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("rollup: reading %s's projects: %w", account, err)
+	}
+	// Sorted here, so the order doesn't depend on the engine's collation.
+	slices.SortFunc(all, func(a, b mapping) int {
+		return cmp.Or(cmp.Compare(a.device, b.device), cmp.Compare(a.key, b.key))
+	})
+	out := make(map[string][]string)
+	for _, m := range all {
+		out[m.project] = append(out[m.project], m.key)
+	}
+	return out, nil
 }
 
 // zones caches the zones accounts name, since ingest applies up to 2,000
@@ -213,7 +336,9 @@ func SetZone(ctx context.Context, tx writer.Tx, account, name string) error {
 // day and activity kind, in milliseconds. The row whose Kind is "" holds
 // the agent's time on its own in that project and day.
 type Day struct {
-	Project, Day, Kind string
+	// ProjectID is the account-level project id (D-account-project-id);
+	// Projects gives the device keys behind it.
+	ProjectID, Day, Kind string
 	// FinalMS and PendingMS are credited time by evidence level, in
 	// Levels order.
 	FinalMS, PendingMS [3]int64
@@ -225,10 +350,10 @@ type Day struct {
 // Read returns the account's rollups_daily rows for the days from to to,
 // both YYYY-MM-DD and included.
 func Read(ctx context.Context, q Querier, account, from, to string) ([]Day, error) {
-	rows, err := q.QueryContext(ctx, `SELECT project, day, activity_kind,
+	rows, err := q.QueryContext(ctx, `SELECT project_id, day, activity_kind,
 final_a_ms, final_b_ms, final_c_ms, pending_a_ms, pending_b_ms, pending_c_ms, agent_only_final_ms, agent_only_pending_ms
 FROM rollups_daily WHERE user_id = $1 AND day >= $2 AND day <= $3
-ORDER BY day, project, activity_kind`, account, from, to)
+ORDER BY day, project_id, activity_kind`, account, from, to)
 	if err != nil {
 		return nil, fmt.Errorf("rollup: reading %s's days: %w", account, err)
 	}
@@ -236,7 +361,7 @@ ORDER BY day, project, activity_kind`, account, from, to)
 	var out []Day
 	for rows.Next() {
 		var d Day
-		if err := rows.Scan(&d.Project, &d.Day, &d.Kind,
+		if err := rows.Scan(&d.ProjectID, &d.Day, &d.Kind,
 			&d.FinalMS[0], &d.FinalMS[1], &d.FinalMS[2], &d.PendingMS[0], &d.PendingMS[1], &d.PendingMS[2],
 			&d.AgentOnlyFinalMS, &d.AgentOnlyPendingMS); err != nil {
 			return nil, fmt.Errorf("rollup: reading %s's days: %w", account, err)
@@ -250,13 +375,43 @@ ORDER BY day, project, activity_kind`, account, from, to)
 }
 
 // ConcurrentMinutes counts the account's minutes from fromMS to before
-// toMS in which two of its devices credited the same slot.
+// toMS in which two of its devices credited the same slot: SM 3.4's
+// concurrent_devices. Ingest stores no such flag, since no fraud check
+// runs on hours nobody submitted (D-no-ingest-flags; DESIGN 4.2, 8.5): the
+// submission freeze (WP-SB1) calls this over the submitted window. It
+// reads the per-device minutes rollup_minutes keeps for 180 days, the
+// furthest back a submission reaches, and merges each minute as Apply
+// does.
 func ConcurrentMinutes(ctx context.Context, q Querier, account string, fromMS, toMS int64) (int, error) {
-	var n int
-	err := q.QueryRowContext(ctx, `SELECT COUNT(*) FROM rollup_flags WHERE user_id = $1 AND flag = $2 AND minute_ms >= $3 AND minute_ms < $4`,
-		account, FlagConcurrentDevices, fromMS, toMS).Scan(&n)
+	rows, err := q.QueryContext(ctx, `SELECT `+minuteColumns+` FROM rollup_minutes
+WHERE user_id = $1 AND minute_ms >= $2 AND minute_ms < $3 ORDER BY minute_ms, device_id`, account, fromMS, toMS)
 	if err != nil {
-		return 0, fmt.Errorf("rollup: counting %s's flagged minutes: %w", account, err)
+		return 0, fmt.Errorf("rollup: counting %s's concurrent minutes: %w", account, err)
 	}
+	defer rows.Close()
+	n := 0
+	var devs []device
+	minute := int64(-1)
+	count := func() {
+		if len(devs) > 1 && merge(devs).concurrent {
+			n++
+		}
+		devs = devs[:0]
+	}
+	for rows.Next() {
+		d, m, err := scanDevice(rows, account)
+		if err != nil {
+			return 0, err
+		}
+		if m != minute {
+			count()
+			minute = m
+		}
+		devs = append(devs, d)
+	}
+	if err := rows.Err(); err != nil {
+		return 0, fmt.Errorf("rollup: counting %s's concurrent minutes: %w", account, err)
+	}
+	count()
 	return n, nil
 }

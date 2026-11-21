@@ -4,6 +4,7 @@ package pages
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -132,7 +133,7 @@ func TestDemoPage(t *testing.T) {
 			want: []string{
 				`<span class="seg c1 f26" title="chip8-emulator, 1h 3m"></span><span class="seg c1 pend f4" title="chip8-emulator, 9m pending"></span><span class="seg c2 f17" title="robotics-scouting, 41m"></span><small class="cap">1h 53m</small>`,
 				`<li><span class="key c1 pend"></span>Faded means pending</li>`,
-				"Pending minutes can still change until your computer sends their final version, usually within 15 minutes, so they stay faded until then.",
+				"Pending minutes can still change, so they stay faded until they settle, within about 15 minutes of when they end.",
 			},
 		},
 		{
@@ -530,6 +531,19 @@ func ownerView(t *testing.T) dashboard.View {
 	return v
 }
 
+// unreadable is the account ownerSite takes for a session that can't be
+// read.
+const unreadable = "!"
+
+// splitView is ownerView as dashboard.Rollups makes it until project
+// registration (WP-SV10): each computer's projects count apart.
+func splitView(t *testing.T) dashboard.View {
+	t.Helper()
+	v := ownerView(t)
+	v.SplitByDevice = true
+	return v
+}
+
 // emptyView is a new account's view: 30 days with nothing in them.
 func emptyView(t *testing.T) dashboard.View {
 	t.Helper()
@@ -545,14 +559,23 @@ type zoneCall struct{ account, zone string }
 
 // ownerSite serves the owner's dashboard with sign-in as in, the request
 // signed in to account ("" for none), src as the views, and setZone's
-// answer to the form.
+// answer to the form. account "!" stands for a session that can't be
+// read.
 func ownerSite(t *testing.T, in SignIn, account string, src dashboard.Source, sameOrigin bool, setZone error) (*http.ServeMux, *[]zoneCall) {
 	t.Helper()
 	var calls []zoneCall
 	mux := http.NewServeMux()
 	newSite(t, Options{}).RegisterDashboard(mux, in, Dashboard{
-		Source:     src,
-		Account:    func(*http.Request) (string, bool) { return account, account != "" },
+		Source: src,
+		Account: func(*http.Request) (string, error) {
+			switch account {
+			case "":
+				return "", dashboard.ErrNotSignedIn
+			case unreadable:
+				return "", errors.New("database is locked")
+			}
+			return account, nil
+		},
 		SetZone:    func(_ context.Context, a, z string) error { calls = append(calls, zoneCall{a, z}); return setZone },
 		SameOrigin: func(*http.Request) bool { return sameOrigin },
 		Now:        func() time.Time { return demoClock },
@@ -662,6 +685,30 @@ func TestOwnerDashboard(t *testing.T) {
 			wantCode: 500,
 			want:     []string{"Your dashboard didn't load."},
 		},
+		{
+			name:     "a session that can't be read gets an error, not a trip to sign-in, which wouldn't help",
+			signIn:   signInOn("U0FAKEVERIFIED"),
+			account:  unreadable,
+			src:      fakeSource{v: ownerView(t)},
+			wantCode: 500,
+			want:     []string{"Your dashboard didn't load."},
+		},
+		{
+			name:     "while each computer's projects count apart, the projects table says a repo on two computers shows as two projects",
+			signIn:   signInOn("U0FAKEVERIFIED"),
+			account:  "u1",
+			src:      fakeSource{v: splitView(t)},
+			wantCode: 200,
+			want:     []string{`<p class="note">For now, a repo you work on from two computers shows as two projects here, one for each computer.</p>`},
+		},
+		{
+			name:     "a view that doesn't split projects by computer says nothing about it",
+			signIn:   signInOn("U0FAKEVERIFIED"),
+			account:  "u1",
+			src:      fakeSource{v: ownerView(t)},
+			wantCode: 200,
+			notWant:  []string{"two computers"},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -766,6 +813,11 @@ func TestZoneForm(t *testing.T) {
 			wantCode: 303, wantLocation: "/auth/hca/login?return_to=/dashboard",
 		},
 		{
+			name:   "a post whose session can't be read is an error, not a trip to sign-in, and nothing is saved",
+			signIn: signInOn("U0FAKEVERIFIED"), account: unreadable, sameOrigin: true, body: "UTC",
+			wantCode: 500,
+		},
+		{
 			name:   "with sign-in off the form saves nothing and goes back to the dashboard",
 			signIn: SignIn{}, sameOrigin: true, body: "UTC",
 			wantCode: 303, wantLocation: "/dashboard",
@@ -807,8 +859,10 @@ func TestCapitalize(t *testing.T) {
 }
 
 // manyView is an owner's view of seven projects, p1 the busiest over the
-// month and p7 the quietest, with today's time in the projects week names.
-func manyView(t *testing.T, week ...string) dashboard.View {
+// month and p7 the quietest, with today's time in the projects week names,
+// and today's agent-only time, and none of the owner's, in those
+// agentWeek names.
+func manyView(t *testing.T, agentWeek []string, week ...string) dashboard.View {
 	t.Helper()
 	var rows []dashboard.Row
 	for i := 1; i <= 7; i++ {
@@ -819,6 +873,9 @@ func manyView(t *testing.T, week ...string) dashboard.View {
 	for _, key := range week {
 		rows = append(rows, dashboard.Row{Day: "2026-11-20", Project: key, Kind: "prompting", Level: "A", Seconds: 1800})
 	}
+	for _, key := range agentWeek {
+		rows = append(rows, dashboard.Row{Day: "2026-11-20", Project: key, Agent: true, Seconds: 2400})
+	}
 	v, err := dashboard.Build(dashboard.Meta{Today: "2026-11-20", TZ: "UTC", Agent: dashboard.AgentName}, rows)
 	if err != nil {
 		t.Fatal(err)
@@ -828,11 +885,12 @@ func manyView(t *testing.T, week ...string) dashboard.View {
 
 func TestManyProjects(t *testing.T) {
 	tests := []struct {
-		name    string
-		week    []string
-		section string
-		want    []string
-		notWant []string
+		name      string
+		week      []string
+		agentWeek []string
+		section   string
+		want      []string
+		notWant   []string
 	}{
 		{
 			name:    "past five projects in a week, the chart draws the rest together as Other, in its own gray",
@@ -859,6 +917,14 @@ func TestManyProjects(t *testing.T) {
 			notWant: []string{"Other"},
 		},
 		{
+			name:      "projects with only the agent's time this week don't take the colors, so the week's one project with the owner's time gets one though five agent-only projects rank above it",
+			week:      []string{"p6"},
+			agentWeek: []string{"p1", "p2", "p3", "p4", "p5"},
+			section:   "week",
+			want:      []string{`<li><span class="key c1"></span>p6</li>`, `title="p6, 30m"`},
+			notWant:   []string{"Other"},
+		},
+		{
 			name:    "a project keeps its color in every section: the week's only project is c1 in the projects table too",
 			week:    []string{"p6"},
 			section: "projects",
@@ -867,7 +933,7 @@ func TestManyProjects(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			mux, _ := ownerSite(t, signInOn("U0FAKEVERIFIED"), "u1", fakeSource{v: manyView(t, tt.week...)}, true, nil)
+			mux, _ := ownerSite(t, signInOn("U0FAKEVERIFIED"), "u1", fakeSource{v: manyView(t, tt.agentWeek, tt.week...)}, true, nil)
 			_, page := serve(mux, httptest.NewRequest(http.MethodGet, "/dashboard", nil))
 			if page = sectionOf(page, tt.section); page == "" {
 				t.Fatalf("the page has no section %q", tt.section)

@@ -106,6 +106,9 @@ type dashPage struct {
 	// it has no time in the last 30 days yet, which shows how to link the
 	// app instead of empty charts.
 	Owner, Empty bool
+	// SplitByDevice says a repo used on two computers shows as two
+	// projects (dashboard.View.SplitByDevice).
+	SplitByDevice bool
 	// Zone is the IANA time zone the account's days are counted in, and
 	// ZoneError says why the last change to it was refused.
 	Zone, ZoneError string
@@ -231,26 +234,30 @@ func newDashPageFor(v dashboard.View, in SignIn, signupsOpen, signedIn bool) (da
 	}
 	p := dashPage{
 		Sample: v.Sample, SignIn: in.Enabled, SignupsOpen: signupsOpen, SignedIn: signedIn, Agent: agent, AgentStart: capitalize(agent),
-		Owner: !v.Sample, Empty: !v.Sample && v.Month.You.Total() == 0 && v.Month.Agent.Total() == 0,
+		Owner: !v.Sample, Empty: !v.Sample && v.Month.You.Total() == 0 && v.Month.Agent.Total() == 0, SplitByDevice: v.SplitByDevice,
 		Zone: v.TZ, ZonePath: ZonePath,
 	}
 	if in.LoginPath != "" {
 		// Sign-in brings the visitor to their own dashboard.
 		p.Login = in.LoginPath + "?return_to=" + DashboardPath
 	}
-	// Colors go to the projects with time this week first, in the view's
-	// order, then to the rest, so the week chart never folds one of the
-	// week's projects into Other while a quieter one keeps a color. Each
-	// project keeps its color across the page.
+	// Colors go to the projects with the owner's time this week first, in
+	// the view's order, then to the rest, so the week chart, which draws
+	// only the owner's time, never folds one of the week's projects into
+	// Other while a quieter one keeps a color. A project with only the
+	// agent's time this week isn't on the chart, so it waits with the
+	// rest. Each project keeps its color across the page.
 	inWeek := make(map[string]bool, len(v.Week.Projects))
 	for _, pt := range v.Week.Projects {
-		inWeek[pt.Project] = true
+		if pt.You.Total() > 0 {
+			inWeek[pt.Project] = true
+		}
 	}
 	var order []string
 	for _, week := range []bool{true, false} {
 		for _, pr := range v.Projects {
-			if inWeek[pr.Key] == week {
-				order = append(order, pr.Key)
+			if inWeek[pr.ID] == week {
+				order = append(order, pr.ID)
 			}
 		}
 	}
@@ -263,7 +270,7 @@ func newDashPageFor(v dashboard.View, in SignIn, signupsOpen, signedIn bool) (da
 		}
 	}
 	for _, pr := range v.Projects {
-		names[pr.Key] = pr.Name
+		names[pr.ID] = pr.Name
 	}
 
 	today := v.Days[len(v.Days)-1]
@@ -668,8 +675,10 @@ type Dashboard struct {
 	// Source is where views come from: dashboard.Rollups in pairtimed.
 	Source dashboard.Source
 	// Account returns the users id of the account a request is signed in
-	// to, and false when it isn't signed in.
-	Account func(r *http.Request) (string, bool)
+	// to: dashboard.ErrNotSignedIn when it isn't signed in, and another
+	// error when its session can't be read, which the page answers with a
+	// 500 rather than sending a signed-in owner to sign in again.
+	Account func(r *http.Request) (string, error)
 	// SetZone sets an account's time zone. It wraps rollup.ErrBadZone for
 	// a name that isn't one.
 	SetZone func(ctx context.Context, account, zone string) error
@@ -688,7 +697,8 @@ const zoneFormMax = 4 << 10
 // RegisterDashboard adds GET /dashboard, the signed-in account's own
 // dashboard, and POST /dashboard/zone, which sets its time zone. With
 // sign-in off the page says so and links /demo. A visitor who isn't signed
-// in goes to Hack Club sign-in, which brings them back.
+// in goes to Hack Club sign-in, which brings them back. A session that
+// can't be read is a 500, since signing in again wouldn't help.
 //
 // The page is the owner's own, so nothing may store it, and its form posts
 // to this server only. Its referrer policy is same-origin, like the home
@@ -706,9 +716,14 @@ func (s *Site) RegisterDashboard(mux *http.ServeMux, in SignIn, d Dashboard) {
 			http.Error(w, "Changing your time zone has to start from your dashboard.", http.StatusForbidden)
 			return
 		}
-		id, ok := d.Account(r)
-		if !ok {
+		id, err := d.Account(r)
+		switch {
+		case errors.Is(err, dashboard.ErrNotSignedIn):
 			http.Redirect(w, r, in.LoginPath+"?return_to="+DashboardPath, http.StatusSeeOther)
+			return
+		case err != nil:
+			d.Logger.Error("reading a session for the dashboard", "err", err)
+			http.Error(w, "Your time zone didn't save. Try again in a minute.", http.StatusInternalServerError)
 			return
 		}
 		r.Body = http.MaxBytesReader(w, r.Body, zoneFormMax)
@@ -744,9 +759,14 @@ func (s *Site) serveDashboard(w http.ResponseWriter, r *http.Request, in SignIn,
 		writePage(w, http.StatusOK, page.Bytes(), s.csp, "no-store", "no-referrer")
 		return
 	}
-	id, ok := d.Account(r)
-	if !ok {
+	id, err := d.Account(r)
+	switch {
+	case errors.Is(err, dashboard.ErrNotSignedIn):
 		http.Redirect(w, r, in.LoginPath+"?return_to="+DashboardPath, http.StatusSeeOther)
+		return
+	case err != nil:
+		d.Logger.Error("reading a session for the dashboard", "err", err)
+		http.Error(w, "Your dashboard didn't load. Try again in a minute.", http.StatusInternalServerError)
 		return
 	}
 	v, err := d.Source.View(r.Context(), id, d.Now())

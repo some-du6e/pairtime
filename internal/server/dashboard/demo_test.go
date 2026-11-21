@@ -143,12 +143,13 @@ func TestDemoStory(t *testing.T) {
 		ok   func() bool
 	}{
 		{name: "the view says it is a sample", ok: func() bool { return v.Sample }},
+		{name: "the sample's made-up projects aren't split by device", ok: func() bool { return !v.SplitByDevice }},
 		{name: "the agent is Claude Code", ok: func() bool { return v.Agent == "Claude Code" }},
 		{name: "the sample has three projects, with names", ok: func() bool {
 			return reflect.DeepEqual(v.Projects, []Project{
-				{Key: demoChip8, Name: "chip8-emulator"},
-				{Key: demoRobotics, Name: "robotics-scouting"},
-				{Key: demoPortfolio, Name: "portfolio-site"},
+				{ID: demoChip8, Keys: []string{demoChip8}, Name: "chip8-emulator"},
+				{ID: demoRobotics, Keys: []string{demoRobotics}, Name: "robotics-scouting"},
+				{ID: demoPortfolio, Keys: []string{demoPortfolio}, Name: "portfolio-site"},
 			})
 		}},
 		{name: "today's chess clock in chip8-emulator reads You 1h 12m, Claude Code 2h 40m, DESIGN 3.8's example", ok: func() bool {

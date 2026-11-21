@@ -72,7 +72,7 @@
 </ul>
 {{- end}}
 {{- if .Week.HasPending}}
-<p class="note">Pending minutes can still change until your computer sends their final version, usually within 15 minutes, so they stay faded until then.</p>
+<p class="note">Pending minutes can still change, so they stay faded until they settle, within about 15 minutes of when they end.</p>
 {{- end}}
 <details>
 <summary>The last 7 days as a table</summary>
@@ -101,6 +101,9 @@
 <tr><th>{{.AllProjects.Name}}</th><td><strong>{{.AllProjects.Week}}</strong> <span class="agent">{{.AgentStart}} {{.AllProjects.WeekAgent}}</span></td><td><strong>{{.AllProjects.Month}}</strong> <span class="agent">{{.AgentStart}} {{.AllProjects.MonthAgent}}</span></td></tr>
 </tfoot>
 </table></div>
+{{- if .SplitByDevice}}
+<p class="note">For now, a repo you work on from two computers shows as two projects here, one for each computer.</p>
+{{- end}}
 {{- else}}
 <p class="note">No project has any time in the last 30 days.</p>
 {{- end}}

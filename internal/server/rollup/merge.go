@@ -25,20 +25,22 @@ var states = []string{"pending", "final", "provisional", "restored"}
 var kindShape = regexp.MustCompile(`^[a-z][a-z_]{0,31}$`)
 
 // device is one device's revision of one minute, as rollup_minutes holds
-// it.
+// it. Its slots and agentOnly name projects by project id, except in the
+// row minuteOf makes from a bucket, which names them by the device's
+// project keys until toProjects turns them into ids.
 type device struct {
 	id      string
 	rev     int64
 	pending bool
 	slots   [slotsPerMinute]slot
-	// agentOnly is the agent's time on its own, in milliseconds by project
-	// key, as the bucket's agent_only says; nil when it says none.
+	// agentOnly is the agent's time on its own, in milliseconds by
+	// project, as the bucket's agent_only says; nil when it says none.
 	agentOnly map[string]int64
 	// day is the local day the minute counts toward.
 	day string
 }
 
-// slot is a slot's credit, in rollup_minutes' JSON.
+// slot is a slot's credit, in rollup_minutes' JSON. p is the project id.
 type slot struct {
 	Project string `json:"p,omitempty"`
 	MS      int64  `json:"ms,omitempty"`
@@ -116,9 +118,11 @@ type merged struct {
 		pending bool
 	}
 	// agent is the agent's time on its own that counts, by project, in
-	// project key order.
+	// project id order.
 	agent []share
-	// concurrent says two devices credit the same slot.
+	// concurrent says two devices credit the same slot: SM 3.4's
+	// concurrent_devices. Nothing stores it (D-no-ingest-flags);
+	// ConcurrentMinutes counts it for a submission's window.
 	concurrent bool
 }
 
@@ -133,15 +137,17 @@ type share struct {
 // merge merges devs' revisions of one minute. In each slot the device
 // with the most credited seconds wins, then the one whose credit is
 // keyboard-backed (level A, input_keys), then the lower device_id, and the
-// others are dropped; two devices crediting a slot raise
-// concurrent_devices (SM 3.4).
+// others are dropped; two devices crediting a slot set concurrent (SM
+// 3.4).
 //
 // The agent's time on its own is wall-clock time too. In each project the
 // device that reports the most of it counts, the lower device_id on a tie,
 // and the others don't add to it. It never takes more than the part of the
 // minute that the merged credit in that project leaves: a second another
 // device credited to the project is covered by a person, so it isn't the
-// agent's alone (SM 2.6).
+// agent's alone (SM 2.6). Projects are project ids, so this crosses
+// devices only for keys that project registration (WP-SV10) has linked to
+// one id (D-account-project-id).
 func merge(devs []device) merged {
 	var m merged
 	for i := range slotsPerMinute {
