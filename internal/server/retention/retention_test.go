@@ -316,6 +316,7 @@ var devicesKeptByOff = []string{
 	"server.devices/devices kept_by minute_bucket_revisions awaits WP-SV4",
 	"server.devices/devices kept_by commit_records awaits WP-SV4",
 	"server.devices/devices kept_by device_labels awaits WP-SV4",
+	"server.devices/devices kept_by ingest_replies awaits WP-SV4",
 }
 
 func TestJobs(t *testing.T) {

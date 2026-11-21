@@ -206,10 +206,7 @@ FROM device_codes WHERE user_code_hash = $1`, s.userCodeHash(userCode)).Scan(&p.
 	}
 	p.UserCode = FormatUserCode(userCode)
 	p.ExpiresAt = time.UnixMilli(expiresMs)
-	var (
-		removed      sql.NullInt64
-		linked, seen int64
-	)
+	var removed, linked, seen sql.NullInt64
 	err = s.db.Read.QueryRowContext(ctx, `SELECT user_id, removed_at_ms, linked_at_ms, last_seen_at_ms FROM devices WHERE device_id = $1`,
 		p.DeviceID).Scan(&p.Owner, &removed, &linked, &seen)
 	switch {
@@ -217,7 +214,7 @@ FROM device_codes WHERE user_code_hash = $1`, s.userCodeHash(userCode)).Scan(&p.
 	case err != nil:
 		return Pending{}, fmt.Errorf("device: looking up the code's device: %w", err)
 	case !removed.Valid:
-		p.Linked, p.LinkedAt, p.LastSeenAt = true, time.UnixMilli(linked), time.UnixMilli(seen)
+		p.Linked, p.LinkedAt, p.LastSeenAt = true, time.UnixMilli(linked.Int64), time.UnixMilli(seen.Int64)
 	}
 	return p, nil
 }

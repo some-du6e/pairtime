@@ -316,8 +316,8 @@ func TestGrant(t *testing.T) {
 					}
 					ctx := context.Background()
 					d, err := h.store.Authenticate(ctx, second.AccessToken)
-					if err != nil || d.Generation != 2 || !d.RemovedAt.IsZero() {
-						t.Fatalf("Authenticate = %+v, %v; want link generation 2, not removed", d, err)
+					if err != nil || d.Generation != 2 || !d.RemovedAt.IsZero() || d.OS != device.OSLinux || d.ClientBuild != "v0.1.0" || d.LinkedAt.IsZero() {
+						t.Fatalf("Authenticate = %+v, %v; want link generation 2, not removed, with what the new code sent", d, err)
 					}
 					var got device.State
 					if err := h.w.Do(ctx, 1, func(ctx context.Context, tx writer.Tx) error {

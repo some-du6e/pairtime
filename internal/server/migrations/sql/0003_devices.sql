@@ -30,20 +30,24 @@
 --
 -- Removing a device stops its token at once. A device ingest has nothing
 -- from loses its row, which frees its device_id. Any other stays as a
--- tombstone, removed_at_ms set and token_hash NULL, so its device_id stays
--- with its account (D-device-account-binding), until the retention job
--- deletes it 90 days later (docs/retention.json server.devices). No table
--- may have a foreign key to this one, since that job deletes rows
--- (AGENTS.md, Retention).
+-- tombstone that keeps its device_id with its account
+-- (D-device-account-binding): removed_at_ms is set, and token_hash,
+-- public_key, os_family, client_build, linked_at_ms and last_seen_at_ms go
+-- NULL, so only the account, the removal time, the link generation and
+-- ingest's state stay. The retention job deletes a tombstone 90 days after
+-- the removal, and only once ingest's tables hold no row for its device_id
+-- (docs/retention.json server.devices, kept_by). A new link sets them all
+-- again. No table may have a foreign key to this one, since that job
+-- deletes rows (AGENTS.md, Retention).
 CREATE TABLE devices (
     device_id TEXT PRIMARY KEY,
     user_id TEXT NOT NULL REFERENCES users (id),
     token_hash TEXT,
-    public_key BYTEA NOT NULL,
-    os_family TEXT NOT NULL,
-    client_build TEXT NOT NULL,
-    linked_at_ms BIGINT NOT NULL,
-    last_seen_at_ms BIGINT NOT NULL,
+    public_key BYTEA,
+    os_family TEXT,
+    client_build TEXT,
+    linked_at_ms BIGINT,
+    last_seen_at_ms BIGINT,
     removed_at_ms BIGINT,
     link_generation BIGINT NOT NULL,
     ingest_req BIGINT,

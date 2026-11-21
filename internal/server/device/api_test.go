@@ -97,10 +97,12 @@ func TestDeviceAPI(t *testing.T) {
 					if r := h.call(http.MethodGet, device.MePath, linked.AccessToken, nil); r.status != http.StatusUnauthorized {
 						t.Errorf("a removed device's token answered %d, want 401", r.status)
 					}
-					if n := h.count(`SELECT count(*) FROM devices WHERE removed_at_ms IS NOT NULL AND token_hash IS NULL AND ingest_req IS NOT NULL`); n != 1 {
-						t.Errorf("%d tombstones keeping ingest's state and no token, want 1", n)
+					if n := h.count(`SELECT count(*) FROM devices WHERE removed_at_ms IS NOT NULL AND ingest_req IS NOT NULL AND link_generation = 1
+AND token_hash IS NULL AND public_key IS NULL AND os_family IS NULL AND client_build IS NULL AND linked_at_ms IS NULL AND last_seen_at_ms IS NULL`); n != 1 {
+						t.Errorf("%d tombstones keeping only the account, removal time, link generation and ingest's state, want 1", n)
 					}
-					if r := b.get(device.DevicesPath); !strings.Contains(r.body, "Removed ") || strings.Contains(r.body, ">Remove</button>") || !strings.Contains(r.body, testDeviceID) {
+					if r := b.get(device.DevicesPath); !strings.Contains(r.body, "Removed ") || !strings.Contains(r.body, "A removed computer") ||
+						strings.Contains(r.body, ">Remove</button>") || !strings.Contains(r.body, testDeviceID) {
 						t.Errorf("the page after Remove:\n%s", r.body)
 					}
 					// The page has no Remove form for it now; /device carries the
