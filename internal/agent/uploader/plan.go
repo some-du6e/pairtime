@@ -228,9 +228,11 @@ func bucketsOf(in planInput, n int) ([]entry, map[string]bool, []string, error) 
 				return true
 			}
 			ms := b.At()
-			if bs, ok := in.rows.sealedAfter(ms + 60_000); ok && in.st.localOnly(bs) {
-				// Its records were sealed in local-only mode: it never goes
-				// (ingest-v1 5.3; D-local-gap).
+			if bs, ok := in.rows.sealedAfter(ms + 60_000); ok && in.st.localOnly(bs) || in.st.straddles(in.rows, ms) {
+				// Its records were sealed in local-only mode, or a run of such
+				// batches ends inside it, as at the switch back online that
+				// pairtime login makes: it never goes (ingest-v1 5.3;
+				// D-local-gap).
 				out = append(out, entry{day: f.Day, mark: r.Mark})
 				took++
 				return true

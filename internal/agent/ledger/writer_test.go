@@ -717,6 +717,8 @@ func TestNoteMode(t *testing.T) {
 			[]string{"no-online", "local", "write", "sealed", "write", "seal", "online", "write", "seal"}, []bool{false, false, true}, []bool{false, false, true}, []int{1, 1, 1}},
 		{"a second stretch's first record seals at once too",
 			[]string{"file-local", "local", "write", "sealed", "file-online", "online", "write", "seal", "file-local", "local", "write", "sealed"}, []bool{false, true, false}, []bool{false, true, false}, []int{1, 1, 1}},
+		{"a switch back online after a seal that read config.toml local-only, with nothing pending, marks the next batch",
+			[]string{"file-local", "write", "seal", "file-online", "online", "write", "seal"}, []bool{false, true}, []bool{false, true}, []int{1, 1}},
 		{"a switch back online after a seal that read config.toml local-only, as at the first pairtime login, seals what is pending, and marks the batch after it",
 			[]string{"file-local", "write", "seal", "write", "file-online", "online", "sealed", "write", "seal"}, []bool{false, true, true}, []bool{false, false, true}, []int{1, 1, 1}},
 		{"a seal that reads config.toml local-only after a switch back marks no batch after it",

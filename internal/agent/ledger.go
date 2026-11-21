@@ -80,7 +80,8 @@ func (a *agent) startLedger() func() {
 		// stretch from the start that no seal falls in, as from pairtime
 		// install to pairtime login, takes the mode of its seal. Once a
 		// seal has read config.toml as local-only, the login's note seals
-		// what is pending, and the first batch after it goes (Batch.Back).
+		// what is pending, and the root of the first batch after it goes,
+		// and the minutes after the switch (Batch.Back).
 		// The records that waited for the writer, presence's queue and the
 		// hook calls the adapters held, attach on goroutines of their own
 		// and take the mode of their seal too: those made in a local-only

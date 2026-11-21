@@ -248,6 +248,25 @@ func (s saved) localOnly(b uint64) bool {
 	return s.From > base && b >= base && b < s.From
 }
 
+// straddles reports whether the minute that starts at minute, in Unix ms,
+// holds the end of a run of batches sealed in local-only mode: it starts
+// before the run's last batch was sealed and ends after, as the minute
+// pairtime login lands in does. The first batch sealed after the minute
+// can be online, as one marked as the first after a noted switch back
+// online is (mode), but part of the minute came in local-only mode, and a
+// later revision's credit can reach back into it, as a first prompt's lead
+// does (SM 2.3). So it never goes, though the marked batch's root and the
+// minutes after it do. The cost is at most that minute's credit, when the
+// first prompt after the switch falls in it.
+func (s saved) straddles(rows *rowIndex, minute int64) bool {
+	for _, g := range s.Gaps {
+		if t, ok := rows.sealedAt(g.To); ok && minute < t && t < minute+60_000 {
+			return true
+		}
+	}
+	return false
+}
+
 // mode records that batch b was sealed while config.toml's mode was local
 // (local) or online. The first batch sealed in local mode opens a run at
 // LocalFrom, and the first one sealed online after it closes the run into
@@ -255,7 +274,8 @@ func (s saved) localOnly(b uint64) bool {
 // still local, as the first one's began before it was. A batch whose
 // records all came after the agent's config watch noted the switch back
 // online (back, ledger.Row.Back) closes the run before itself instead, so
-// the first batch after a pairtime login can go. A batch sealed in local
+// the first batch after a pairtime login can go, and the minutes after the
+// one the switch lands in (straddles). A batch sealed in local
 // mode before the open run, as an older writer's row below a run an older
 // place recorded, takes the run down to it, and one sealed online before
 // it leaves the run as it is. It reports whether anything changed.

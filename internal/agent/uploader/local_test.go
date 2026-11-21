@@ -134,6 +134,30 @@ func TestLocalRuns(t *testing.T) {
 		})
 	}
 
+	straddle := []struct {
+		name string
+		// sealed is when each batch was sealed, in minutes after day0.
+		sealed []float64
+		gaps   []gap
+		minute int
+		want   bool
+	}{
+		{"the minute a run's last batch is sealed in holds the run's end", []float64{1, 2, 3.5, 5}, []gap{{3, 3}}, 3, true},
+		{"the minute before it doesn't", []float64{1, 2, 3.5, 5}, []gap{{3, 3}}, 2, false},
+		{"nor does the minute after it", []float64{1, 2, 3.5, 5}, []gap{{3, 3}}, 4, false},
+		{"a minute an earlier batch of the run is sealed in is left to its first batch sealed after it, the run's", []float64{1, 2.5, 3.5, 5}, []gap{{2, 3}}, 2, false},
+		{"a minute that ends as the run's last batch is sealed is left to that batch", []float64{1, 2, 3, 5}, []gap{{3, 3}}, 2, false},
+		{"the minute that starts then holds nothing of the run", []float64{1, 2, 3, 5}, []gap{{3, 3}}, 3, false},
+	}
+	for _, tc := range straddle {
+		t.Run(tc.name, func(t *testing.T) {
+			st := saved{Gaps: tc.gaps}
+			if got := st.straddles(indexOf(t, tc.sealed, make([]float64, len(tc.sealed))), at(tc.minute)); got != tc.want {
+				t.Errorf("straddles(minute %d) = %v", tc.minute, got)
+			}
+		})
+	}
+
 	only := []struct {
 		name string
 		st   saved
@@ -517,6 +541,43 @@ func (r *liveRig) record(t *testing.T, k int) {
 	}
 }
 
+// recordAt writes a checkpoint with the clock at at, between the quarter
+// hours seal keeps to, and seals nothing.
+func (r *liveRig) recordAt(t *testing.T, at time.Time) {
+	t.Helper()
+	r.setClock(at)
+	q := at.Truncate(15 * time.Minute)
+	if _, err := r.w.Checkpoint("p_test", uint64(q.UnixMilli()), json.RawMessage(`{}`)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// setClock sets the writer's clock, which a seal stamps its batch with.
+func (r *liveRig) setClock(at time.Time) {
+	r.clockMu.Lock()
+	r.now = at
+	r.clockMu.Unlock()
+}
+
+// put adds revisions to the bucket store, each resting on the batch its
+// Batch names, as the scorer stamps them. The uploader must not be
+// started yet.
+func (r *liveRig) put(t *testing.T, revs ...store.Bucket) {
+	t.Helper()
+	bs, err := store.OpenBuckets(r.dirs.Buckets())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, b := range revs {
+		if _, _, err := bs.Put(b); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := bs.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // link is pairtime login at at, the first or, after pairtime logout, again:
 // a new token and linked_at for the same device id, after which the server
 // takes the device's next batch at any b above its head.
@@ -756,8 +817,10 @@ func TestRelinkLocal(t *testing.T) {
 // the batch sealed just after it, when batches were sealed in local-only
 // mode before the login: the config watch's note of the switch back online
 // seals what is pending then, and marks the next batch as the first whose
-// records all came after the note (ledger.Batch.Back), so its root and its
-// minutes reach the server, and nothing sealed before it does.
+// records all came after the note (ledger.Batch.Back), so its root and the
+// minutes after the switch back reach the server, and nothing sealed
+// before it does. Every batch here is sealed on a quarter hour, so no
+// minute holds the switch; TestLoginMinute has one that does.
 func TestFirstBatchAfterLogin(t *testing.T) {
 	cases := []struct {
 		name string
@@ -773,6 +836,14 @@ func TestFirstBatchAfterLogin(t *testing.T) {
 		signedIn    bool
 		serverStart uint64
 	}{
+		{"a first sign-in after batches sealed while config.toml said local, with nothing pending at the login", func(t *testing.T, r *liveRig) (int, int) {
+			r.seal(t, 1)
+			r.seal(t, 2)
+			r.link(r.sealedAt(2).Add(time.Minute))
+			r.local.Store(false) // pairtime login sets mode = "online", which the watch notes
+			r.w.NoteMode(true)
+			return 1, 3
+		}, false, 3},
 		{"a first sign-in after batches sealed while config.toml said local, with a record pending at the login", func(t *testing.T, r *liveRig) (int, int) {
 			r.seal(t, 1)
 			r.seal(t, 2)
@@ -851,6 +922,115 @@ func TestFirstBatchAfterLogin(t *testing.T) {
 				t.Run(ch.name, func(t *testing.T) {
 					if !ch.ok {
 						t.Errorf("no: the server holds head %d from %d, gaps %v and %d minutes; the uploader says %+v", r.f.head.b, r.f.start, r.f.gaps, len(r.f.buckets), r.u.Status())
+					}
+				})
+			}
+		})
+	}
+}
+
+// TestLoginMinute is the minute pairtime login lands in, after a re-link's
+// stretch of local-only mode: the switch back online seals the stretch's
+// last record 20.3 s into the minute, and the first prompt's batch, marked
+// as the first after the switch (ledger.Batch.Back), 40 s into it. The
+// minute's revisions rest on the batches the scorer stamps them with, the
+// marked batch's alone, its credit reaching back into the stretch as a
+// first prompt's lead does, or the switch-back batch's and then the marked
+// batch's. The minute stays on the device (saved.straddles), and the
+// marked batch's root and the minutes after the login's, with their
+// credit, reach the server.
+func TestLoginMinute(t *testing.T) {
+	cases := []struct {
+		name string
+		// revs are the batches the login minute's revisions rest on, in the
+		// order the scorer writes them.
+		revs []uint64
+	}{
+		{"a first revision on the marked batch, its credit reaching back into the stretch", []uint64{5}},
+		{"a revision on the switch-back batch, then one on the marked batch", []uint64{4, 5}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			r := newLiveRig(t, 30) // minutes 0 to 29, batches 1 and 2
+			login := r.start.Add(50 * time.Minute)
+			var revs []store.Bucket
+			for i, b := range c.revs {
+				st := event.StatePending
+				if i == len(c.revs)-1 {
+					st = event.StateFinal
+				}
+				rev := testBucket(newestTable(), r.w.DeviceID(), login, float64(20*(i+1)), st)
+				rev.Batch = b
+				revs = append(revs, rev)
+			}
+			// The two minutes after the login's, which batch 6's scoring
+			// credits.
+			credits := map[int64]float64{login.Add(time.Minute).UnixMilli(): 45, login.Add(2 * time.Minute).UnixMilli(): 30}
+			for ms, cr := range credits {
+				rev := testBucket(newestTable(), r.w.DeviceID(), time.UnixMilli(ms), cr, event.StateFinal)
+				rev.Batch = 6
+				revs = append(revs, rev)
+			}
+			r.put(t, revs...)
+			r.u.Start()
+			r.seal(t, 1)
+			r.seal(t, 2)
+			r.wait(t, "batches 1 and 2 and their minutes", func(f *fakeIngest) bool { return f.head != nil && f.head.b == 2 && len(f.buckets) == 30 })
+			// pairtime logout sets mode = "local", which the watch notes, and
+			// the stretch's first record seals at once as batch 3.
+			r.linked.Store(false)
+			r.local.Store(true)
+			r.w.NoteMode(false)
+			r.record(t, 3)
+			waitFor(t, "the stretch's first record to seal at once", func() bool { return r.w.Status().Batches == 3 })
+			r.recordAt(t, login.Add(10*time.Second)) // pending as the login finishes
+			// pairtime login finishes 20 s into the minute, and the watch
+			// notes it 300 ms later: batch 4, sealed local-only mid-minute.
+			r.link(login.Add(20 * time.Second))
+			r.local.Store(false)
+			r.setClock(login.Add(20300 * time.Millisecond))
+			r.w.NoteMode(true)
+			waitFor(t, "the switch back online to seal the stretch's last record", func() bool { return r.w.Status().Batches == 4 })
+			// The first prompt, 40 s into the minute: batch 5, marked.
+			r.recordAt(t, login.Add(40*time.Second))
+			if _, _, err := r.w.Seal(); err != nil {
+				t.Fatal(err)
+			}
+			// Batch 6, sealed after the two minutes after the login's end.
+			r.recordAt(t, login.Add(3*time.Minute+5*time.Second))
+			if _, _, err := r.w.Seal(); err != nil {
+				t.Fatal(err)
+			}
+			r.u.Wake()
+			r.wait(t, "batch 6 and the minutes after the login's", func(f *fakeIngest) bool {
+				n := 0
+				for ms := range credits {
+					if _, ok := f.buckets[ms]; ok {
+						n++
+					}
+				}
+				return f.head.b == 6 && n == len(credits)
+			})
+			r.drain()
+			r.f.mu.Lock()
+			defer r.f.mu.Unlock()
+			_, sent := r.f.buckets[login.UnixMilli()]
+			credited := true
+			for ms, cr := range credits {
+				credited = credited && r.f.buckets[ms].CreditedS == cr
+			}
+			checks := []struct {
+				name string
+				ok   bool
+			}{
+				{"the batch marked as the first after the switch went, over the stretch's gap", r.f.rows[5].b == 5 && r.f.rows[3].b == 0 && r.f.rows[4].b == 0 && slices.Contains(r.f.gaps, [2]uint64{3, 4})},
+				{"the minute the switch lands in stays on the device", !sent},
+				{"the minutes after it reached the server with their credit", credited},
+			}
+			for _, ch := range checks {
+				t.Run(ch.name, func(t *testing.T) {
+					if !ch.ok {
+						t.Errorf("no: the server holds head %d, gaps %v and %d minutes", r.f.head.b, r.f.gaps, len(r.f.buckets))
 					}
 				})
 			}

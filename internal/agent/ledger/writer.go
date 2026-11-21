@@ -511,8 +511,8 @@ func (w *Writer) append(rec ledger.Record) error {
 // pairtime login after batches sealed while config.toml said local, seals
 // what it finds pending, and the first batch after it whose records all
 // came after the note is marked as one (Batch.Back): the run of local-only
-// batches ends before it, so the first prompt after the switch keeps its
-// credit. A switch back the watch misses, as to a symlinked config.toml's
+// batches ends before it, so its root and the minutes after the switch can
+// go. A switch back the watch misses, as to a symlinked config.toml's
 // target, ends the stretch at the next seal that reads the file online,
 // and marks no batch.
 func (w *Writer) NoteMode(online bool) {
@@ -592,8 +592,9 @@ type sealPayload struct {
 	// frame without it is one an older pairtime version wrote, which
 	// recorded no mode (Row.NoMode).
 	Online *bool `json:"online,omitempty"`
-	// Back marks the first batch sealed online after a noted switch back
-	// online (Batch.Back).
+	// Back marks the first batch sealed online whose records all came
+	// after the noted switch back online, with no seal since that read
+	// config.toml as local-only (Batch.Back).
 	Back bool `json:"back,omitempty"`
 	// Q is what the prompt classes' questions remember after the batch's
 	// last record (score.Questions), in the seal frame of every

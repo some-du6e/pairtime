@@ -19,8 +19,9 @@
 //     upload and none of its records came while the agent's config watch
 //     said local-only, false otherwise (Options.Online, Writer.NoteMode),
 //     and missing only from an older version's seal frames, which recorded
-//     no mode; and back on the first batch sealed online after the watch
-//     noted a switch back online (Batch.Back).
+//     no mode; and back on the first batch sealed online whose records all
+//     came after the watch noted a switch back online, with no seal since
+//     that read config.toml as local-only (Batch.Back).
 //   - batches.seg: a chain frame naming the device id and the device
 //     key's id, then a row per batch, {b, first_seq, last_seq, n, prev,
 //     R_b, H_b, sealed_at, online, back} and where its frames are, and the
