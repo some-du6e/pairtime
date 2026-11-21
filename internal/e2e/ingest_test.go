@@ -370,16 +370,16 @@ VALUES ($1, $2, $3, $4, 'linux', 'v0.0.0-dev', $5, $5, 1)`,
 	var (
 		signedIn atomic.Bool
 		sent     atomic.Int64
-		keysMu   sync.Mutex
-		keys     []string // the Idempotency-Key of each POST the uploader sent, a retry of its own included
+		postsMu  sync.Mutex
+		posted   []string // the Idempotency-Key of each POST the uploader sent, a retry of its own included
 	)
 	creds := uploader.Credentials{Server: srv.URL, Token: token, DeviceID: deviceID, Sign: uploader.KeySigner(devKey), LinkedAt: start}
 	client := &http.Client{Transport: roundTripper(func(r *http.Request) (*http.Response, error) {
 		sent.Add(1)
 		if r.Method == http.MethodPost {
-			keysMu.Lock()
-			keys = append(keys, r.Header.Get("Idempotency-Key"))
-			keysMu.Unlock()
+			postsMu.Lock()
+			posted = append(posted, r.Header.Get("Idempotency-Key"))
+			postsMu.Unlock()
 		}
 		return transport.RoundTrip(r)
 	})}
@@ -485,14 +485,14 @@ VALUES ($1, $2, $3, $4, 'linux', 'v0.0.0-dev', $5, $5, 1)`,
 			if rateLimited != 0 {
 				t.Errorf("the server's own limiter refused %d requests as rate_limited", rateLimited)
 			}
-			keysMu.Lock()
+			postsMu.Lock()
 			resent := 0
-			for _, k := range keys {
+			for _, k := range posted {
 				if k == lost {
 					resent++
 				}
 			}
-			keysMu.Unlock()
+			postsMu.Unlock()
 			// The client counts a POST once however often net/http sends it
 			// again by itself, so a second POST with the key is the
 			// uploader's own retry.
