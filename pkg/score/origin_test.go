@@ -3,14 +3,17 @@
 package score
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/some-du6e/pairtime/pkg/event"
+	"github.com/some-du6e/pairtime/pkg/params"
 )
 
 // promptCase is a prompt submitted at 60 s in session s_1, after typing from
@@ -96,7 +99,7 @@ func TestOrigin(t *testing.T) {
 			origin: event.OriginHeadless},
 		{name: "rule 5: a session on a vendor VM is cloud", edit: restart(event.EntrypointCloud, event.ParentUnknown, true),
 			origin: event.OriginCloud},
-		{name: "rule 8: no input in the KEYS_PRE_S before submit is no_input",
+		{name: "rule 8: no input in the KEYS_PRE_S before submit or the INPUT_RELEASE_GRACE_MS after it is no_input",
 			typing: every(atMS(30_500), atMS(49_500), 1000), origin: event.OriginNoInput},
 		{name: "rule 8: focus on a window that doesn't host the session is no_input",
 			edit:   func(b *tl, p *event.PromptSubmit) { b.focus(at(40), event.AppTerminal, "p_1") },
@@ -206,6 +209,249 @@ func TestOrigin(t *testing.T) {
 				t.Errorf("no anchor, want %s", c.kind)
 			case ok && (a.Kind != c.kind || a.LeadMS != c.lead*1000):
 				t.Errorf("anchor %s with lead %d ms, want %s with %d s", a.Kind, a.LeadMS, c.kind, c.lead)
+			}
+		})
+	}
+}
+
+// rehearsalSubmit is when the hook stamped the prompt in the CI rehearsal
+// that found the race INPUT_RELEASE_GRACE_MS is for, in milliseconds after
+// base.
+const rehearsalSubmit = 58_497
+
+// rehearsal builds the rehearsal's prompt, a minute from base, with the
+// times the rehearsal recorded (04:13:00 UTC is base): the regular samples
+// came 7 ms after each slot boundary, so the last one before the prompt,
+// at 45.007 s, saw the last input at 44.421 s; xdotool typed 53 characters
+// from 53.7 s to 58.38 s and pressed Return at 58.49 s; the hook stamped
+// the prompt at 58.497 s; and the hook's sample, at 58.501 s, saw Return's
+// release at 58.5 s. release moves the release, a millisecond count after
+// base, and the hook's sample to just after it when it is later. A release
+// is input, but not a key press.
+func rehearsal(b *tl, release int64) event.Event {
+	terminalSession(b)
+	b.mouse(atMS(44_421))
+	b.press(every(atMS(53_700), atMS(58_380), 90)...)
+	b.press(atMS(58_490))
+	b.mouse(atMS(release))
+	e := b.prompt(atMS(rehearsalSubmit), event.ViaHook, "s_1", "p_1", "t_p", 53)
+	b.sample(max(atMS(58_501), atMS(release+1)))
+	cadence(b)
+	return e
+}
+
+// cadence takes the regular samples of the rehearsal's agent, 7 ms after
+// each slot boundary from base to two minutes on.
+func cadence(b *tl) {
+	for s := int64(7); s <= 120_007; s += event.SlotMS {
+		b.sample(atMS(s))
+	}
+}
+
+// tableWithGrace returns the test table with INPUT_RELEASE_GRACE_MS set to
+// ms, under a version no real table has.
+func tableWithGrace(t *testing.T, ms int64) *params.Table {
+	t.Helper()
+	var doc struct {
+		Version string                     `json:"version"`
+		Params  map[string]json.RawMessage `json:"params"`
+	}
+	if err := json.Unmarshal(testTable(t).Canonical(), &doc); err != nil {
+		t.Fatal(err)
+	}
+	doc.Version = "9.9.9"
+	doc.Params[params.INPUT_RELEASE_GRACE_MS.String()] = json.RawMessage(strconv.FormatInt(ms, 10))
+	data, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tab, err := params.Parse(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return tab
+}
+
+// TestReleaseGrace checks SM 2.2 rules 6 and 7's INPUT_RELEASE_GRACE_MS
+// (D-input-release-grace). The hook stamps a prompt's t when it starts,
+// after the press of the key that sends it, and the agent samples a few
+// milliseconds later. A sample only says when the last input before it
+// came, so a release in between dates the input after t and hides the
+// typing before it. Input up to 250 ms after the submit counts for the two
+// rules' input test.
+func TestReleaseGrace(t *testing.T) {
+	cases := []struct {
+		name string
+		// keys says the OS reports key presses apart from other input, as
+		// macOS's key-down idle time does.
+		keys bool
+		// release is when Return was released, in milliseconds after base.
+		release int64
+		edit    func(b *tl, p *event.PromptSubmit)
+		// noGrace scores with INPUT_RELEASE_GRACE_MS = 0, the input test
+		// before table 0.2.0.
+		noGrace bool
+		origin  event.Origin
+		// level and lead describe the prompt's anchor; level "" means
+		// none.
+		level event.Evidence
+		lead  int64 // seconds
+	}{
+		{name: "rule 6: the rehearsal's prompt, whose hook sample saw Return released 3 ms after submit, is human_typed",
+			release: 58_500, origin: event.OriginHumanTyped, level: event.EvidenceB, lead: 120 + 35},
+		{name: "rule 8: without the grace, the rehearsal's prompt is no_input, as the rehearsal found",
+			release: 58_500, noGrace: true, origin: event.OriginNoInput},
+		{name: "rule 6: input exactly INPUT_RELEASE_GRACE_MS after submit counts",
+			release: rehearsalSubmit + 250, origin: event.OriginHumanTyped, level: event.EvidenceB, lead: 120 + 35},
+		{name: "rule 8: input 251 ms after submit doesn't count, and the typing it hides is lost",
+			release: rehearsalSubmit + 251, origin: event.OriginNoInput},
+		{name: "rule 7: a pasted prompt's input test takes the grace too",
+			release: 58_500, edit: func(b *tl, p *event.PromptSubmit) { p.LenChars, p.PastedChars = 153, 100 },
+			origin: event.OriginHumanPasted, level: event.EvidenceB, lead: 120 + 35},
+		{name: "rule 6 reads key presses where the OS reports them, and a release isn't one: Return's press before submit shows, at level A",
+			keys: true, release: 58_500, origin: event.OriginHumanTyped, level: event.EvidenceA, lead: 120 + 35},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			b := newTL(c.keys)
+			e := rehearsal(b, c.release)
+			if c.edit != nil {
+				c.edit(b, e.Data.(*event.PromptSubmit))
+			}
+			tab := testTable(t)
+			if c.noGrace {
+				tab = tableWithGrace(t, 0)
+			}
+			_, out := Step(NewState(tab, Device{}), b.records())
+			var got Derived
+			got.Append(out.Final)
+			got.Append(out.Pending)
+			if tu, ok := turnByKey(got, "t_p"); !ok || tu.Origin != c.origin {
+				t.Errorf("origin %q, want %q", tu.Origin, c.origin)
+			}
+			a, ok := anchorByID(got, e.EventID)
+			switch {
+			case c.level == "" && ok:
+				t.Errorf("an anchor %s, want none", a.Kind)
+			case c.level != "" && !ok:
+				t.Error("no anchor")
+			case ok && (a.Level != c.level || a.LeadMS != c.lead*1000):
+				t.Errorf("anchor at level %s with lead %d ms, want %s and %d s", a.Level, a.LeadMS, c.level, c.lead)
+			}
+		})
+	}
+}
+
+// TestReleaseGraceRules6And7Only checks that no other test of input or
+// focus takes INPUT_RELEASE_GRACE_MS (D-input-release-grace): focus at
+// submit, a typed command's evidence test, rule 4's test before
+// session.start, a prompt's evidence level, and rule 6's plausibility test,
+// which counts input slots in the lead. Input after the act that the grace
+// would cover never counts for them.
+func TestReleaseGraceRules6And7Only(t *testing.T) {
+	// command is a command typed in a shell in the terminal, started at
+	// 58.497 s with a key press 100 ms from its start, before it when
+	// early is set and after it otherwise, and the shell's sample right
+	// after that press.
+	command := func(early bool) func(b *tl) {
+		return func(b *tl) {
+			start := atMS(rehearsalSubmit)
+			press := start + 100
+			if early {
+				press = start - 100
+			}
+			b.focus(at(0), event.AppTerminal, "p_1")
+			b.mouse(atMS(44_421))
+			b.press(press)
+			b.sample(press + 1)
+			b.shell(at(70), "p_1", &event.ShellCommand{CmdClass: event.CmdRun, TStart: start, TEnd: at(69), Interactive: true})
+			b.samples(at(0), at(120))
+		}
+	}
+	// claudeP is a claude -p session from a terminal, started at 55 s
+	// with a key press at 55 s plus offset ms and the agent's sample right
+	// after it, whose prompt comes at 60 s.
+	claudeP := func(offset int64) func(b *tl) {
+		return func(b *tl) {
+			b.focus(at(0), event.AppTerminal, "p_1", "s_1")
+			b.start(at(55), "s_1", "p_1", event.EntrypointSDK, event.ParentTerminalApp, true)
+			b.press(at(55) + offset)
+			b.sample(at(55) + offset + 1)
+			b.prompt(at(60), event.ViaHook, "s_1", "p_1", "t_p", 30)
+			b.samples(at(0), at(120))
+		}
+	}
+	hasCommand := func(d Derived) bool {
+		return slices.ContainsFunc(d.Anchors, func(a Anchor) bool { return a.Kind == event.AnchorTypedCommand })
+	}
+	origin := func(d Derived) event.Origin {
+		tu, _ := turnByKey(d, "t_p")
+		return tu.Origin
+	}
+	// anchor returns the anchor of the prompt with turn key t_p.
+	anchor := func(d Derived) (Anchor, bool) {
+		i := slices.IndexFunc(d.Anchors, func(a Anchor) bool { return a.TurnKey == "t_p" })
+		if i < 0 {
+			return Anchor{}, false
+		}
+		return d.Anchors[i], true
+	}
+	cases := []struct {
+		name  string
+		keys  bool
+		build func(b *tl)
+		ok    func(d Derived) bool
+	}{
+		{name: "focus at submit: the window hosting the session coming into focus 100 ms after submit leaves the prompt no_input",
+			build: func(b *tl) {
+				e := rehearsal(b, 58_500)
+				b.evs[0].Data = &event.OSFocus{AppClass: event.AppBrowser, AppHash: "a_browser"}
+				b.focus(e.T+100, event.AppTerminal, "p_1", "s_1")
+			},
+			ok: func(d Derived) bool { return origin(d) == event.OriginNoInput }},
+		{name: "a typed command's evidence test: a key press 100 ms after the command starts opens no anchor",
+			build: command(false), ok: func(d Derived) bool { return !hasCommand(d) }},
+		{name: "a typed command's evidence test, the control: a key press 100 ms before the command starts opens one",
+			build: command(true), ok: hasCommand},
+		{name: "rule 4: a key press 100 ms after a claude -p session starts leaves its prompt headless",
+			keys: true, build: claudeP(100), ok: func(d Derived) bool { return origin(d) == event.OriginHeadless }},
+		{name: "rule 4, the control: a key press 100 ms before the session starts makes its prompt human_typed",
+			keys: true, build: claudeP(-100), ok: func(d Derived) bool { return origin(d) == event.OriginHumanTyped }},
+		{name: "the evidence level: a key press only in the grace makes the prompt human_typed at level B, since the level reads the KEYS_PRE_S alone",
+			keys: true,
+			build: func(b *tl) {
+				terminalSession(b)
+				b.mouse(atMS(44_421))
+				b.prompt(atMS(rehearsalSubmit), event.ViaHook, "s_1", "p_1", "t_p", 53)
+				b.press(atMS(rehearsalSubmit + 100))
+				b.sample(atMS(rehearsalSubmit + 150))
+				cadence(b)
+			},
+			ok: func(d Derived) bool {
+				a, ok := anchor(d)
+				return origin(d) == event.OriginHumanTyped && ok && a.Level == event.EvidenceB
+			}},
+		{name: "the plausibility test: a release in the slot after submit adds no input slot to the lead, so a prompt whose typing it hid is human_pasted, its typing cut to 0",
+			build: func(b *tl) {
+				terminalSession(b)
+				b.press(every(atMS(55_000), atMS(59_680), 90)...)
+				b.press(atMS(59_990))
+				b.prompt(atMS(59_995), event.ViaHook, "s_1", "p_1", "t_p", 53)
+				b.mouse(atMS(60_003))
+				b.sample(atMS(60_004))
+				cadence(b)
+			},
+			ok: func(d Derived) bool {
+				a, ok := anchor(d)
+				return origin(d) == event.OriginHumanPasted && ok && a.LeadMS == 120_000
+			}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			b := newTL(c.keys)
+			c.build(b)
+			if d := b.run(t, Device{}); !c.ok(d) {
+				t.Errorf("anchors %+v, turns %+v", d.Anchors, d.Turns)
 			}
 		})
 	}

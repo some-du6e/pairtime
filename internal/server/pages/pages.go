@@ -65,11 +65,11 @@ var files embed.FS
 const SourceURL = "https://github.com/some-du6e/pairtime"
 
 // BuiltinScoringVersion is the scoring version /docs/evidence describes
-// when pairtime.toml leaves scoring_version empty. It is the first scoring
-// version, the one pkg/params' first table and pkg/score/VERSION carry
-// (WP-PA1, WP-SC1). Once pkg/score is part of the server, its version
-// replaces this constant.
-const BuiltinScoringVersion = "0.1.0"
+// when pairtime.toml leaves scoring_version empty: the one pkg/score/VERSION
+// carries, which TestBuiltinScoringVersion holds it to, so a PR that bumps
+// the scorer's version changes it too. Once pkg/score is part of the
+// server, its version replaces this constant.
+const BuiltinScoringVersion = "0.2.0"
 
 // Controller says who is responsible for the data on this server
 // (DESIGN 8.6). Fields left empty show as placeholders.

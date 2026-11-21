@@ -58,10 +58,12 @@ type value struct {
 
 // Parse reads a parameter table: a JSON object with the table's "version",
 // MAJOR.MINOR.PATCH, and its "params", which map each parameter's name to
-// its value. Every parameter this package declares must be there with a
-// value of its type, and nothing else may be. Parse reports every problem
-// it finds at once, each naming its field by JSON path, as in
-// "params.THINK_LEAD_S: missing".
+// its value. Every parameter of the table's version must be there with a
+// value of its type, and nothing else may be: a version has every
+// parameter this package declares except those a later version added. With
+// no valid version, a parameter some versions lack may be there or not.
+// Parse reports every problem it finds at once, each naming its field by
+// JSON path, as in "params.THINK_LEAD_S: missing".
 func Parse(data []byte) (*Table, error) {
 	doc, err := decode(data)
 	if err != nil {
@@ -81,9 +83,10 @@ func Parse(data []byte) (*Table, error) {
 		}
 	}
 	version, _ := top["version"].(string)
+	_, versionOK := parseVersion(version)
 	if raw, ok := top["version"]; !ok {
 		add("version: missing")
-	} else if _, ok := parseVersion(version); !ok {
+	} else if !versionOK {
 		add("version: must be MAJOR.MINOR.PATCH, such as \"0.1.0\", got %s", describe(raw))
 	}
 	params, ok := top["params"].(map[string]any)
@@ -96,6 +99,21 @@ func Parse(data []byte) (*Table, error) {
 	if params != nil {
 		for _, p := range all {
 			raw, ok := params[p.String()]
+			switch from := since(p); {
+			case from == "":
+				// Every version has p.
+			case !versionOK:
+				// Which parameters the table should have depends on a
+				// version it doesn't give, so p may be missing.
+				if !ok {
+					continue
+				}
+			case compareVersions(version, from) < 0:
+				if ok {
+					add("params.%s: not a parameter before version %s, which added it", p.String(), from)
+				}
+				continue
+			}
 			if !ok {
 				add("params.%s: missing", p.String())
 				continue
@@ -199,18 +217,21 @@ func (t *Table) Text(name string) (string, bool) {
 	return v.text, ok
 }
 
-// Int returns an integer parameter. Every table has every IntParam this
-// package declares, and no other package can make one up, so Int panics
-// only for the zero IntParam, which names no parameter. Each call is a map
-// lookup; a rule that reads a parameter in a loop should read it once
+// Int returns an integer parameter. No other package can make an IntParam
+// up, so Int panics only for the zero IntParam, which names no parameter,
+// and for a parameter added after the table's version, such as
+// INPUT_RELEASE_GRACE_MS in table 0.1.0. Code that reads a parameter runs
+// with tables that have it: pkg/score refuses an older one. Each call is a
+// map lookup; a rule that reads a parameter in a loop should read it once
 // outside.
 func (t *Table) Int(p IntParam) int64 { return t.lookup(p.intName, kindInt).num.num }
 
 // Rat returns a rational parameter. Like Int, it panics only for the zero
-// RatParam.
+// RatParam and for a parameter added after the table's version.
 func (t *Table) Rat(p RatParam) Rat { return t.lookup(p.ratName, kindRat).num }
 
-// Bool returns a flag. Like Int, it panics only for the zero BoolParam.
+// Bool returns a flag. Like Int, it panics only for the zero BoolParam and
+// for a flag added after the table's version.
 func (t *Table) Bool(p BoolParam) bool { return t.lookup(p.flagName, kindBool).flag }
 
 func (t *Table) lookup(name string, k kind) value {

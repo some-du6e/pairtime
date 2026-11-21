@@ -10,15 +10,13 @@ import (
 	"testing"
 )
 
-// TestValues checks every parameter of table 0.1.0 against the value SM 8
+// TestValues checks every parameter of every table against the value SM 8
 // or DESIGN 6.3 gives it. The rows are copied from those two tables, not
-// from the JSON file, so a wrong value in the file fails here, and so does
-// a parameter without a row.
+// from the JSON files, so a wrong value in a file fails here, and so does
+// a parameter without a row. A table older than the version that added a
+// parameter must not have it. So far every table has SM's values; a table
+// that changes one will need a row of its own for the older value.
 func TestValues(t *testing.T) {
-	tab, err := ByVersion("0.1.0")
-	if err != nil {
-		t.Fatal(err)
-	}
 	cases := []struct {
 		p param
 		// want is the value as SM or DESIGN states it, without units or
@@ -33,6 +31,7 @@ func TestValues(t *testing.T) {
 		{PRESENCE_TAIL_S, "30", "SM 8.1"},
 		{RETURN_GAP_MAX_S, "600", "SM 8.1"},
 		{KEYS_PRE_S, "10", "SM 8.1"},
+		{INPUT_RELEASE_GRACE_MS, "250", "SM 8.1"},
 		{TYPING_MAX_CPS, "15", "SM 8.1"},
 		{SUBSTANTIVE_CHARS, "20", "SM 8.1"},
 		{ERROR_PASTE_TEXT_MAX, "40", "SM 8.1"},
@@ -121,51 +120,66 @@ func TestValues(t *testing.T) {
 		{COMPOSE_NEEDS_KEYS, "false", "DESIGN 6.3"},
 		{AUDIT_BASE_P, "0.08", "DESIGN 6.3"},
 	}
-	rows := make(map[string]int)
-	for _, c := range cases {
-		rows[c.p.String()]++
-		t.Run(fmt.Sprintf("%s is %s per %s", c.p.String(), c.want, c.src), func(t *testing.T) {
-			if got, ok := tab.Text(c.p.String()); !ok {
-				t.Fatalf("table 0.1.0 has no %s", c.p.String())
-			} else if got != c.want {
-				t.Errorf("%s = %s in the table, want %s (%s)", c.p.String(), got, c.want, c.src)
+	for _, tab := range Tables() {
+		rows := make(map[string]int)
+		for _, c := range cases {
+			rows[c.p.String()]++
+			if from := since(c.p); from != "" && compareVersions(tab.Version(), from) < 0 {
+				t.Run(fmt.Sprintf("table %s has no %s, which %s added", tab.Version(), c.p, from), func(t *testing.T) {
+					if got, ok := tab.Text(c.p.String()); ok {
+						t.Errorf("table %s has %s = %s", tab.Version(), c.p, got)
+					}
+				})
+				continue
 			}
-			switch p := c.p.(type) {
-			case IntParam:
-				want, err := strconv.ParseInt(c.want, 10, 64)
-				if err != nil {
-					t.Fatalf("the row for %s isn't an integer: %v", p, err)
+			t.Run(fmt.Sprintf("table %s: %s is %s per %s", tab.Version(), c.p.String(), c.want, c.src), func(t *testing.T) {
+				if got, ok := tab.Text(c.p.String()); !ok {
+					t.Fatalf("table %s has no %s", tab.Version(), c.p.String())
+				} else if got != c.want {
+					t.Errorf("%s = %s in the table, want %s (%s)", c.p.String(), got, c.want, c.src)
 				}
-				if got := tab.Int(p); got != want {
-					t.Errorf("Int(%s) = %d, want %d", p, got, want)
+				switch p := c.p.(type) {
+				case IntParam:
+					want, err := strconv.ParseInt(c.want, 10, 64)
+					if err != nil {
+						t.Fatalf("the row for %s isn't an integer: %v", p, err)
+					}
+					if got := tab.Int(p); got != want {
+						t.Errorf("Int(%s) = %d, want %d", p, got, want)
+					}
+				case RatParam:
+					want, ok := new(big.Rat).SetString(c.want)
+					if !ok {
+						t.Fatalf("the row for %s isn't a decimal: %q", p, c.want)
+					}
+					if got := tab.Rat(p); got.Num() != want.Num().Int64() || got.Den() != want.Denom().Int64() {
+						t.Errorf("Rat(%s) = %s, want %s", p, got, want)
+					}
+				case BoolParam:
+					if got := strconv.FormatBool(tab.Bool(p)); got != c.want {
+						t.Errorf("Bool(%s) = %s, want %s", p, got, c.want)
+					}
 				}
-			case RatParam:
-				want, ok := new(big.Rat).SetString(c.want)
-				if !ok {
-					t.Fatalf("the row for %s isn't a decimal: %q", p, c.want)
+			})
+		}
+		t.Run("table "+tab.Version()+": every parameter has exactly one row", func(t *testing.T) {
+			for _, name := range tab.Names() {
+				if rows[name] != 1 {
+					t.Errorf("%s has %d rows, want 1 with the value SM or DESIGN gives it", name, rows[name])
 				}
-				if got := tab.Rat(p); got.Num() != want.Num().Int64() || got.Den() != want.Denom().Int64() {
-					t.Errorf("Rat(%s) = %s, want %s", p, got, want)
+			}
+			for _, p := range all {
+				if rows[p.String()] == 0 {
+					t.Errorf("%s has no row", p)
 				}
-			case BoolParam:
-				if got := strconv.FormatBool(tab.Bool(p)); got != c.want {
-					t.Errorf("Bool(%s) = %s, want %s", p, got, c.want)
+			}
+			for name := range rows {
+				if !slices.ContainsFunc(all, func(p param) bool { return p.String() == name }) {
+					t.Errorf("a row checks %s, which no table has", name)
 				}
 			}
 		})
 	}
-	t.Run("every parameter has exactly one row", func(t *testing.T) {
-		for _, name := range tab.Names() {
-			if rows[name] != 1 {
-				t.Errorf("%s has %d rows, want 1 with the value SM or DESIGN gives it", name, rows[name])
-			}
-		}
-		for name := range rows {
-			if !slices.Contains(tab.Names(), name) {
-				t.Errorf("a row checks %s, which table 0.1.0 doesn't have", name)
-			}
-		}
-	})
 }
 
 // TestRationals pins the fraction behind every rational parameter, worked

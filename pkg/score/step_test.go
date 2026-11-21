@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/some-du6e/pairtime/pkg/event"
+	"github.com/some-du6e/pairtime/pkg/params"
 )
 
 func TestStep(t *testing.T) {
@@ -354,11 +355,17 @@ func TestFutureRecord(t *testing.T) {
 }
 
 func TestStateConstructors(t *testing.T) {
+	old, err := params.ByVersion("0.1.0")
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, c := range []struct {
 		name string
 		call func()
 	}{
 		{"NewState needs a parameter table", func() { NewState(nil, Device{}) }},
+		{"NewState refuses table 0.1.0, which predates INPUT_RELEASE_GRACE_MS, a parameter the scorer reads",
+			func() { NewState(old, Device{}) }},
 		{"Step refuses the zero State", func() { Step(State{}, nil) }},
 	} {
 		t.Run(c.name, func(t *testing.T) {

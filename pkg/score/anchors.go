@@ -428,8 +428,9 @@ func sideDoorLabel(v event.Via) event.Label {
 }
 
 // level sets an anchor's evidence level and labels (DESIGN 6.4). from and
-// to bound its evidence window, the span its evidence test reads: the
-// KEYS_PRE_S before a prompt or command, else its slot. host says whether
+// to bound its evidence window: the KEYS_PRE_S before a prompt or command,
+// else its slot. A prompt's window leaves out the INPUT_RELEASE_GRACE_MS
+// after it, which only rules 6 and 7's input test reads. host says whether
 // the window in focus at a time is the one the act happened in.
 //
 //   - A: a hook, log, shell, git or editor anchor with key presses in its
