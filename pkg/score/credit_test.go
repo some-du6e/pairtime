@@ -357,7 +357,7 @@ func TestCredit(t *testing.T) {
 			want: []secondsWant{{450, 465, map[event.Reason]int64{rP: 10, rSUP: 5}}},
 		},
 		{
-			name: "SM 5.2: the seconds a no-input prompt's lead would have covered are X.no_input, and its run X.agent_only",
+			name: "SM 5.2: a no-input prompt opens no window, and while its turn runs alone the project's seconds are X.no_input",
 			build: func(b *tl) {
 				terminalSession(b)
 				// No input in the KEYS_PRE_S before the prompt at 60 s, as
@@ -369,8 +369,8 @@ func TestCredit(t *testing.T) {
 				b.samples(at(0), at(300))
 			},
 			want: []secondsWant{
-				{0, 60, map[event.Reason]int64{event.ReasonNoInput: 60}},
-				{60, 120, map[event.Reason]int64{xAgent: 60}},
+				{0, 60, map[event.Reason]int64{xNoAnch: 60}},
+				{60, 120, map[event.Reason]int64{event.ReasonNoInput: 60}},
 				{120, 135, map[event.Reason]int64{xNoAnch: 15}},
 			},
 		},
@@ -385,6 +385,94 @@ func TestCredit(t *testing.T) {
 			want: []secondsWant{
 				{0, 30, map[event.Reason]int64{xAmbig: 30}},
 				{30, 45, map[event.Reason]int64{xOther: 15}},
+			},
+		},
+		{
+			name: "E-6.6-codes: a slot before the client's first os.focus record is X.ambiguous, not X.other_focus",
+			build: func(b *tl) {
+				b.mouse(every(at(1), at(56), 5000)...)
+				b.focus(at(30), event.AppTerminal, "p_1")
+				b.samples(at(0), at(60))
+			},
+			want: []secondsWant{
+				{0, 30, map[event.Reason]int64{xAmbig: 30}},
+				{30, 60, map[event.Reason]int64{xNoAnch: 30}},
+			},
+		},
+		{
+			name: "SM 5.2: while a person's turn and an automated turn of the project both run, the seconds nothing credits are X.agent_only",
+			build: func(b *tl) {
+				b.focus(at(0), event.AppTerminal, "p_1", "s_1", "s_2")
+				b.start(at(0), "s_1", "p_1", event.EntrypointCLI, event.ParentTerminalApp, true)
+				b.start(at(0), "s_2", "p_1", event.EntrypointCLI, event.ParentTerminalApp, true)
+				b.mouse(every(at(1), at(296), 5000)...)
+				b.prompt(at(60), event.ViaHook, "s_1", "p_1", "t_1", 30)
+				scheduled(b.prompt(at(61), event.ViaHook, "s_2", "p_1", "t_2", 30))
+				b.agentStops(at(290), "s_1", "t_1")
+				b.agentStops(at(290), "s_2", "t_2")
+				b.samples(at(0), at(300))
+			},
+			want: []secondsWant{{90, 285, map[event.Reason]int64{xAgent: 195}}},
+		},
+		{
+			name: "E-6.6-codes: an automated turn in a slot whose terminal hosts no harness for most of it is X.ambiguous",
+			build: func(b *tl) {
+				b.focus(at(0), event.AppTerminal, "")
+				b.mouse(every(at(1), at(116), 5000)...)
+				b.start(at(50), "s_1", "p_1", event.EntrypointCLI, event.ParentTerminalApp, true)
+				scheduled(b.prompt(at(50), event.ViaHook, "s_1", "p_1", "t_1", 30))
+				// The agent walks the window again a moment after the session
+				// starts under it, and again when it exits (SM 3.2).
+				b.focus(at(58), event.AppTerminal, "p_1", "s_1")
+				b.agentStops(at(70), "s_1", "t_1")
+				b.focus(at(70), event.AppTerminal, "")
+				b.samples(at(0), at(120))
+			},
+			want: []secondsWant{
+				{45, 60, map[event.Reason]int64{xAmbig: 15}},
+				{60, 75, map[event.Reason]int64{xAuto: 10, xNoAnch: 5}},
+			},
+		},
+		{
+			name: "SM 2.4, 5.2: output BUCKET_MAX_S evicted drains as X.bucket_cap until it runs out, and then the seconds are X.no_anchor",
+			build: func(b *tl) {
+				terminalSession(b)
+				b.mouse(every(at(1), at(956), 5000)...)
+				b.prompt(at(60), event.ViaHook, "s_1", "p_1", "t_1", 30)
+				// 675 s of diff on top of what is left of the 20 s base
+				// evicts 94 s: 19 s of base and 75 s of the diff.
+				b.agentEdits(at(61), "s_1", 90)
+				b.agentStops(at(62), "s_1", "t_1")
+				b.git(at(900), "p_1", event.ActorHuman)
+				b.samples(at(0), at(960))
+			},
+			want: []secondsWant{
+				{660, 675, map[event.Reason]int64{rREAD: 1, xBucketCap: 14}},
+				{675, 750, map[event.Reason]int64{xBucketCap: 75}},
+				{750, 765, map[event.Reason]int64{xBucketCap: 5, xNoAnch: 10}},
+				{765, 840, map[event.Reason]int64{xNoAnch: 75}},
+				{840, 900, map[event.Reason]int64{rG: 60}},
+			},
+		},
+		{
+			name: "SM 2.4: side-door output past its turn's R_TURN_BASE_S never enters the bucket, so it gives no X.bucket_cap",
+			build: func(b *tl) {
+				plugin := func(tm int64, p event.Payload) event.Event {
+					return b.emit(tm, event.Envelope{Source: event.SourceHook, Via: event.ViaPlugin, Harness: event.HarnessOther,
+						SessionKey: "s_9", ProjectKey: "p_1"}, p)
+				}
+				b.focus(at(0), event.AppTerminal, "p_1", "s_9")
+				b.mouse(every(at(1), at(296), 5000)...)
+				scheduled(plugin(at(60), &event.PromptSubmit{TurnKey: "t_9", LenChars: 30, TypedLenEst: 30,
+					OriginDeclared: event.DeclaredNone}))
+				plugin(at(70), &event.AgentOutput{TurnKey: "t_9", Words: 9000})
+				plugin(at(70), &event.AgentStop{TurnKey: "t_9", StopReason: event.StopEndTurn})
+				b.git(at(100), "p_1", event.ActorHuman)
+				b.samples(at(0), at(300))
+			},
+			want: []secondsWant{
+				{90, 120, map[event.Reason]int64{rG: 10, rREAD: 20}},
+				{120, 300, map[event.Reason]int64{xNoAnch: 180}},
 			},
 		},
 	}

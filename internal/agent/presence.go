@@ -19,10 +19,11 @@ import (
 // table it scores with as Params; until then the sampler reads the newest
 // table. Its records go to the ledger, which seals a batch after every
 // suspend and lock (startLedger, WP-LG5), so startLedger must run first.
-func (a *agent) startPresence() func() {
+// src is the OS's sources, from openOS, or a fake in tests.
+func (a *agent) startPresence(src presence.OS) func() {
 	a.presence = presence.New(presence.Options{
 		Sched:   a.sched,
-		OS:      presence.ThisOS(),
+		OS:      src,
 		Record:  a.ledgerIn.Record,
 		Seal:    a.ledgerIn.Seal,
 		Problem: func(msg string) { a.setProblem("presence", msg) },

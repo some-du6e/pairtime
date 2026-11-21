@@ -98,17 +98,7 @@ func (c *Conn) Send(ctx context.Context, m inbox.Message) error {
 	if err != nil {
 		return err
 	}
-	deadline, _ := ctx.Deadline() // the zero time means none
-	if err := c.c.SetDeadline(deadline); err != nil {
-		return err
-	}
-	// A cancel before the deadline cuts the wait short too.
-	stop := context.AfterFunc(ctx, func() { c.c.SetDeadline(time.Now()) })
-	defer stop()
-	if err := WriteFrame(c.c, b, inbox.MaxMessage); err != nil {
-		return err
-	}
-	rb, err := ReadFrame(c.c, maxReply)
+	rb, err := c.roundTrip(ctx, b, inbox.MaxMessage, maxReply)
 	if err != nil {
 		return err
 	}
@@ -123,6 +113,22 @@ func (c *Conn) Send(ctx context.Context, m inbox.Message) error {
 		return errors.New("ipc: the agent acked another message")
 	}
 	return nil
+}
+
+// roundTrip writes body as one frame of at most out bytes and reads the
+// agent's reply frame of at most in bytes, until ctx is done.
+func (c *Conn) roundTrip(ctx context.Context, body []byte, out, in int) ([]byte, error) {
+	deadline, _ := ctx.Deadline() // the zero time means none
+	if err := c.c.SetDeadline(deadline); err != nil {
+		return nil, err
+	}
+	// A cancel before the deadline cuts the wait short too.
+	stop := context.AfterFunc(ctx, func() { c.c.SetDeadline(time.Now()) })
+	defer stop()
+	if err := WriteFrame(c.c, body, out); err != nil {
+		return nil, err
+	}
+	return ReadFrame(c.c, in)
 }
 
 // Close closes the connection.
