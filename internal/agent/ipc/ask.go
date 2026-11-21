@@ -5,8 +5,9 @@ package ipc
 // Questions: the CLI asking the agent for something over the socket or
 // pipe that hooks hand their messages to, through the same checks of who
 // runs each end (doc.go). `pairtime recap` asks for the last work session
-// this way rather than over the local HTTP API, which needs the bearer
-// token and can't tell who listens on its port (CP 6.3; #120).
+// this way, and `pairtime doctor` for the agent's status, rather than over
+// the local HTTP API, which needs the bearer token and can't tell who
+// listens on its port (CP 6.3; #120).
 
 import (
 	"context"
@@ -27,6 +28,13 @@ const AskLastSession = "sessions/last"
 // a DashboardLink. Asked here, the link needs no bearer token, so the CLI
 // sends the token nowhere (D-dashboard-link).
 const AskDashboardLink = "dashboard/link"
+
+// AskStatus asks for the agent's status, which `pairtime doctor` reads its
+// lines from, so that they say what the running agent reads and not what
+// the terminal doctor runs in can reach (DESIGN 5.9). The answer is the
+// JSON GET /v1/status gives, so one function serves both, and doctor sends
+// the bearer token nowhere.
+const AskStatus = "status"
 
 // DashboardLink is the agent's answer to AskDashboardLink.
 type DashboardLink struct {

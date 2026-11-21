@@ -78,11 +78,17 @@ type jobReply struct {
 }
 
 func (a *agent) serveStatus(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, a.status())
+}
+
+// status is GET /v1/status, and the agent's answer to the CLI's status
+// question (ipc.AskStatus), which `pairtime doctor` asks.
+func (a *agent) status() statusReply {
 	jobs := []jobReply{}
 	for _, j := range a.sched.Jobs() {
 		jobs = append(jobs, jobReply{Name: j.Name, EveryS: j.Every.Seconds(), Runs: j.Runs})
 	}
-	writeJSON(w, http.StatusOK, statusReply{
+	return statusReply{
 		Version:  version.Get(),
 		PID:      os.Getpid(),
 		Started:  a.started.UTC(),
@@ -95,7 +101,7 @@ func (a *agent) serveStatus(w http.ResponseWriter, r *http.Request) {
 		Signals:  a.signalsNow(),
 		Adapters: a.adaptersHost().status(),
 		Problems: a.currentProblems(),
-	})
+	}
 }
 
 // serveStop answers POST /v1/agent/stop and then stops the agent, the same

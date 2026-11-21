@@ -295,6 +295,36 @@ func TestRun(t *testing.T) {
 		}
 	})
 
+	t.Run("the socket's status question answers what GET /v1/status gives, for doctor", func(t *testing.T) {
+		ep, err := ipc.EndpointFor(dirs)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		ans, err := ipc.Ask(ctx, ep, ipc.AskStatus)
+		if err != nil {
+			t.Fatalf("asking the socket for the status: %v", err)
+		}
+		var asked statusReply
+		if err := json.Unmarshal(ans, &asked); err != nil {
+			t.Fatalf("the socket's status %s doesn't parse: %v", ans, err)
+		}
+		got := getStatus(t, a)
+		// The counters and problems may move between the two reads; what
+		// says which agent this is, and what it reads, doesn't.
+		same := func(s statusReply) string {
+			b, err := json.Marshal([]any{s.Version, s.PID, s.Started, s.Mode, s.Port, s.Signals})
+			if err != nil {
+				t.Fatal(err)
+			}
+			return string(b)
+		}
+		if same(asked) != same(got) {
+			t.Errorf("the socket's status is %+v, GET /v1/status's %+v", asked, got)
+		}
+	})
+
 	t.Run("a second agent on the same data directory gets ErrAlreadyRunning", func(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
