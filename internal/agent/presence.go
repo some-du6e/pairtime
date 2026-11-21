@@ -20,12 +20,12 @@ import (
 // to (WP-AG4; DESIGN 6.2 D14). Its records go to the ledger, which seals a
 // batch after every suspend and lock (startLedger, WP-LG5), and once it is
 // sealed the uploader sends at once (WP-AG5), so startLedger must run
-// first.
-func (a *agent) startPresence() func() {
+// first. src is the OS's sources, from openOS, or a fake in tests.
+func (a *agent) startPresence(src presence.OS) func() {
 	a.presence = presence.New(presence.Options{
 		Sched:   a.sched,
 		Params:  a.table,
-		OS:      presence.ThisOS(),
+		OS:      src,
 		Record:  a.ledgerIn.Record,
 		Seal:    a.sealAndUpload,
 		Problem: func(msg string) { a.setProblem("presence", msg) },

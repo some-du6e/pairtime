@@ -259,6 +259,15 @@ func TestRun(t *testing.T) {
 		waitStatus(t, a, func(s statusReply) bool { return s.Problems["config"] == "" })
 	})
 
+	t.Run("the status reply says where idle time, focus, power and the lock state come from, or why each is unknown (D-design-5.9)", func(t *testing.T) {
+		s := getStatus(t, a)
+		for name, sig := range map[string]signalReply{"idle": s.Signals.Idle, "focus": s.Signals.Focus, "power": s.Signals.Power, "lock": s.Signals.Lock} {
+			if (sig.Via == "") == (sig.Unknown == "") {
+				t.Errorf("signals.%s = %+v, want exactly one of via and unknown", name, sig)
+			}
+		}
+	})
+
 	t.Run("POST /v1/agent/stop stops the agent cleanly", func(t *testing.T) {
 		if code, body := request(t, "POST", base+"/v1/agent/stop", "", "", a.port.Token); code != http.StatusAccepted {
 			t.Fatalf("POST /v1/agent/stop = %d %s", code, body)

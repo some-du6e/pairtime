@@ -306,6 +306,23 @@ func TestWatcherSequences(t *testing.T) {
 			},
 		},
 		{
+			name: "a window with no process to walk is recorded by the class its source gives it: none when no window has focus, other when its process isn't known",
+			steps: []step{
+				{"Windows Terminal comes to the front", front(0, 6100), []Record{focusRec(at(0), event.AppTerminal, "s_tab1", "s_tab2")}, 1, []event.AppClass{event.AppTerminal}, "", ""},
+				{"a click on an X11 desktop leaves no window with focus", func(r *rig) { r.os.send(Change{At: at(4), Class: event.AppNone}) }, []Record{focusRec(at(4), event.AppNone)}, 1, []event.AppClass{event.AppNone}, "", ""},
+				{"an X11 window from another host comes to the front", func(r *rig) { r.os.send(Change{At: at(8), Class: event.AppOther}) }, []Record{focusRec(at(8), event.AppOther)}, 1, []event.AppClass{event.AppOther}, "", ""},
+				{"a refresh doesn't walk the process table for it, and finds nothing new", func(r *rig) { r.w.Refresh() }, nil, 0, nil, "", ""},
+			},
+		},
+		{
+			name: "a context that goes live while no window has focus records none at the next refresh (D14)",
+			steps: []step{
+				{"with no context live, no window has focus", func(r *rig) { r.setLive(false); r.os.send(Change{At: at(0), Class: event.AppNone}) }, nil, 0, []event.AppClass{event.AppNone}, "", ""},
+				{"a hook makes a context live and the agent refreshes", func(r *rig) { r.setLive(true); r.w.Refresh() }, []Record{focusRec(t0.Add(time.Hour), event.AppNone)}, 0, nil, "", ""},
+				{"another refresh finds nothing new", func(r *rig) { r.w.Refresh() }, nil, 0, nil, "", ""},
+			},
+		},
+		{
 			name: "a session key that isn't an opaque key is left out of the record",
 			steps: []step{
 				{"a session with a bad key runs in the cmd window", func(r *rig) {
