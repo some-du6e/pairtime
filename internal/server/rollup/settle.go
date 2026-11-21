@@ -29,10 +29,14 @@ const SettleEvery = time.Minute
 // settleBatch is how many of an account's minutes one settle op takes at
 // most, and maxSettleOps how many ops one Settle runs at most, so a
 // backlog can't keep the writer busy for long. The next run goes on where
-// this one stopped.
+// this one stopped. settleRowsPerMinute is the rows a settled minute
+// writes, its pending device rows and the rollups_daily rows its time
+// moves between, as a typical minute has them; Settle declares that many
+// per due minute to the writer.
 const (
-	settleBatch  = 100
-	maxSettleOps = 100
+	settleBatch         = 100
+	maxSettleOps        = 100
+	settleRowsPerMinute = 4
 )
 
 // Doer runs a write through the writer goroutine. *writer.Writer is one.
@@ -49,13 +53,25 @@ type Doer interface {
 // ones, and a later revision from the device still replaces it as usual.
 // Settle runs through d, in ops of at most settleBatch minutes, and
 // returns how many of the accounts' minutes it settled.
-func Settle(ctx context.Context, d Doer, now time.Time) (int, error) {
+//
+// Settle counts the due minutes on q, the read pool, before each op, and
+// runs none when nothing is due. So an idle server makes no transaction
+// for it: serve counts every transaction that declares rows as a write
+// Litestream has to copy (backup.Replication.Wrote).
+func Settle(ctx context.Context, d Doer, q Querier, now time.Time) (int, error) {
 	// A minute ends 60 s after it starts.
 	cutoffMS := now.Add(-PendingWindow() - time.Minute).UnixMilli()
 	total := 0
 	for range maxSettleOps {
+		due, err := countDue(ctx, q, cutoffMS, settleBatch)
+		if err != nil {
+			return total, fmt.Errorf("rollup: counting the pending minutes due to settle: %w", err)
+		}
+		if due == 0 {
+			break
+		}
 		var n int
-		err := d.Do(ctx, writer.DefaultMaxRows, func(ctx context.Context, tx writer.Tx) error {
+		err = d.Do(ctx, due*settleRowsPerMinute, func(ctx context.Context, tx writer.Tx) error {
 			var err error
 			n, err = settle(ctx, tx, cutoffMS, settleBatch)
 			return err
@@ -69,6 +85,15 @@ func Settle(ctx context.Context, d Doer, now time.Time) (int, error) {
 		}
 	}
 	return total, nil
+}
+
+// countDue counts, up to limit, the accounts' minutes that start before
+// cutoffMS and have a pending device row.
+func countDue(ctx context.Context, q Querier, cutoffMS int64, limit int) (int, error) {
+	var n int
+	err := q.QueryRowContext(ctx, `SELECT COUNT(*) FROM (SELECT DISTINCT user_id, minute_ms FROM rollup_minutes
+WHERE state = 'pending' AND minute_ms < $1 LIMIT $2) due`, cutoffMS, limit).Scan(&n)
+	return n, err
 }
 
 // settle settles at most limit of the accounts' minutes that start before
@@ -133,14 +158,14 @@ WHERE user_id = $1 AND minute_ms = $2 AND device_id = $3`, account, minuteMS, af
 	return remerge(ctx, tx, account, before, day, after, day)
 }
 
-// RunSettle runs Settle at once, then every interval, until ctx ends.
-// report, when set, hears how many minutes each run settled, and its
-// error.
-func RunSettle(ctx context.Context, d Doer, every time.Duration, now func() time.Time, report func(settled int, err error)) {
+// RunSettle runs Settle through d, reading q, at once, then every
+// interval, until ctx ends. report, when set, hears how many minutes each
+// run settled, and its error.
+func RunSettle(ctx context.Context, d Doer, q Querier, every time.Duration, now func() time.Time, report func(settled int, err error)) {
 	tick := time.NewTicker(every)
 	defer tick.Stop()
 	for {
-		n, err := Settle(ctx, d, now())
+		n, err := Settle(ctx, d, q, now())
 		if report != nil {
 			report(n, err)
 		}

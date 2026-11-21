@@ -145,11 +145,10 @@ agent_only_pending_ms = rollups_daily.agent_only_pending_ms + excluded.agent_onl
 
 // toProjects turns the device's project keys in d, its slots' and its
 // agent_only's, into the account-level project ids rollup_projects gives
-// them (D-account-project-id), and records minuteMS as the latest minute
-// that names each key, so a key's row stays as long as the minutes that
-// use it. Two keys of the device that project registration (WP-SV10) has
-// linked to one id may both name agent time; the larger counts, as it
-// does across devices (merge).
+// them (D-account-project-id). A key the device hasn't named before gets
+// a new id, stamped with minuteMS. Two keys of the device that project
+// registration (WP-SV10) has linked to one id may both name agent time;
+// the larger counts, as it does across devices (merge).
 func toProjects(ctx context.Context, tx writer.Tx, account string, minuteMS int64, d *device) error {
 	ids := make(map[string]string)
 	idOf := func(key string) (string, error) {
@@ -188,22 +187,16 @@ func toProjects(ctx context.Context, tx writer.Tx, account string, minuteMS int6
 	return nil
 }
 
-// projectID returns the project id of the device's project key, and
-// records minuteMS as the latest minute that names it. A key the device
-// hasn't named before gets a new id.
+// projectID returns the project id of the device's project key. A key
+// the device hasn't named before gets a new id, stamped with minuteMS.
 func projectID(ctx context.Context, tx writer.Tx, account, device, key string, minuteMS int64) (string, error) {
 	var id string
-	var last int64
-	err := tx.QueryRowContext(ctx, `SELECT project_id, last_minute_ms FROM rollup_projects
-WHERE user_id = $1 AND device_id = $2 AND project_key = $3`, account, device, key).Scan(&id, &last)
-	switch {
-	case errors.Is(err, sql.ErrNoRows):
+	err := tx.QueryRowContext(ctx, `SELECT project_id FROM rollup_projects
+WHERE user_id = $1 AND device_id = $2 AND project_key = $3`, account, device, key).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
 		id = newProjectID(minuteMS)
-		_, err = tx.ExecContext(ctx, `INSERT INTO rollup_projects (user_id, device_id, project_key, project_id, last_minute_ms)
-VALUES ($1, $2, $3, $4, $5)`, account, device, key, id, minuteMS)
-	case err == nil && last < minuteMS:
-		_, err = tx.ExecContext(ctx, `UPDATE rollup_projects SET last_minute_ms = $1
-WHERE user_id = $2 AND device_id = $3 AND project_key = $4`, minuteMS, account, device, key)
+		_, err = tx.ExecContext(ctx, `INSERT INTO rollup_projects (user_id, device_id, project_key, project_id)
+VALUES ($1, $2, $3, $4)`, account, device, key, id)
 	}
 	if err != nil {
 		return "", fmt.Errorf("rollup: the project of %s's key on %s: %w", account, device, err)

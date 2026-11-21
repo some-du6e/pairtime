@@ -307,9 +307,9 @@ func TestJobs(t *testing.T) {
 		wantOff  []string
 	}{
 		{
-			name:     "every job waits while its table doesn't exist, and the rollups' jobs, whose tables exist, run",
+			name:     "every job waits while its table doesn't exist, and rollup_minutes' job, whose table exists, runs",
 			edit:     func(*Policy) {},
-			wantJobs: []string{"server.minute_buckets/rollup_minutes", "server.minute_buckets/rollup_projects"},
+			wantJobs: []string{"server.minute_buckets/rollup_minutes"},
 			wantOff: []string{
 				"server.devices/devices awaits WP-SV3", "server.ip_ja4/request_origins awaits WP-SV4",
 				"server.minute_buckets/minute_buckets awaits WP-SV7", "server.minute_buckets/submission_minutes awaits WP-SB4",
@@ -328,7 +328,7 @@ func TestJobs(t *testing.T) {
 			wantJobs: []string{
 				"server.devices/devices", "server.ip_ja4/request_origins",
 				"server.minute_buckets/minute_buckets", "server.minute_buckets/submission_minutes",
-				"server.minute_buckets/rollup_minutes", "server.minute_buckets/rollup_projects",
+				"server.minute_buckets/rollup_minutes",
 				"server.witness/witness_rows", "server.witness/submission_batches",
 			},
 			wantOff: []string{"server.minute_buckets/minute_buckets hold awaits WP-SB4", "server.witness/witness_rows hold awaits WP-SB4"},
@@ -348,7 +348,7 @@ func TestJobs(t *testing.T) {
 			wantJobs: []string{
 				"server.devices/devices", "server.ip_ja4/request_origins",
 				"server.minute_buckets/minute_buckets+hold", "server.minute_buckets/submission_minutes",
-				"server.minute_buckets/rollup_minutes", "server.minute_buckets/rollup_projects",
+				"server.minute_buckets/rollup_minutes",
 				"server.witness/witness_rows+hold", "server.witness/submission_batches",
 			},
 		},
@@ -541,8 +541,6 @@ func TestSweep(t *testing.T) {
 				{name: "an IP seen a year ago is deleted", job: "server.ip_ja4/request_origins", age: 365 * day},
 				{name: "a minute bucket 180 days old loses its per-minute row", job: "server.minute_buckets/minute_buckets", age: 180 * day},
 				{name: "a minute bucket a minute younger than 180 days keeps its row", job: "server.minute_buckets/minute_buckets", age: 180*day - time.Minute, kept: true},
-				{name: "a device's project key last used 180 days ago loses its project row", job: "server.minute_buckets/rollup_projects", age: 180 * day},
-				{name: "a device's project key last used a minute less than 180 days ago keeps its project row", job: "server.minute_buckets/rollup_projects", age: 180*day - time.Minute, kept: true},
 				{name: "an old minute bucket an open submission uses keeps its row and its hold", job: "server.minute_buckets/minute_buckets", age: 400 * day, hold: &hold{open: true}, kept: true},
 				{name: "an old minute bucket keeps its row and its hold a minute before its submission's window closes", job: "server.minute_buckets/minute_buckets", age: 400 * day, hold: &hold{decided: utc(2026, 7, 1, 12, 1)}, kept: true},
 				{name: "an old minute bucket loses its row, and its hold goes, when its submission's window closes", job: "server.minute_buckets/minute_buckets", age: 400 * day, hold: &hold{decided: utc(2026, 7, 1, 12, 0), gone: true}},

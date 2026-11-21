@@ -11,20 +11,18 @@
 -- (D-account-project-id). A device's project keys are HMACs under its own
 -- secret, so one repo has a different key on each computer. Until project
 -- registration (WP-SV10) links the keys of one repo to one project_id,
--- each (device, key) has a project_id of its own, a UUIDv7.
--- last_minute_ms is the latest minute a revision named the key in, and
--- the row goes 180 days after it, as the per-minute rows do
--- (docs/retention.json server.minute_buckets).
+-- each (device, key) has a project_id of its own, a UUIDv7. A row stays
+-- as long as the account, as rollups_daily, which names its project_id,
+-- does, so a key used again after a long gap keeps its project, and
+-- registration can always link it. The commit records ingest keeps for
+-- the account's lifetime hold the same pairs of device and key.
 CREATE TABLE rollup_projects (
     user_id TEXT NOT NULL REFERENCES users (id),
     device_id TEXT NOT NULL,
     project_key TEXT NOT NULL,
     project_id TEXT NOT NULL,
-    last_minute_ms BIGINT NOT NULL,
     PRIMARY KEY (user_id, device_id, project_key)
 );
-
-CREATE INDEX rollup_projects_last_minute_ms ON rollup_projects (last_minute_ms);
 
 -- rollup_minutes is each device's latest revision of each minute, as the
 -- rollups applied it: its state, its four slots as JSON (project id,

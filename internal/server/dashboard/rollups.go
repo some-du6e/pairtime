@@ -52,9 +52,9 @@ func (r Rollups) View(ctx context.Context, account string, now time.Time) (View,
 	for _, day := range days {
 		id := day.ProjectID
 		if _, ok := names[id]; !ok && id != "" {
-			// A project's keys outlive the 30 days, since their rows stay
-			// as long as the minutes that name them, so this falls back to
-			// the id only for a project nothing maps.
+			// rollup_projects keeps a project's keys as long as the
+			// account, so this falls back to the id only for a project
+			// nothing maps.
 			names[id] = ShortKey(id)
 			if k := keys[id]; len(k) > 0 {
 				names[id] = ShortKey(k[0])

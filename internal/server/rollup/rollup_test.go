@@ -93,7 +93,7 @@ func run(t *testing.T, db *store.DB, account string, steps []step) error {
 	ctx := context.Background()
 	for i, s := range steps {
 		if !s.settle.IsZero() {
-			if _, err := Settle(ctx, txDoer{db: db}, s.settle); err != nil {
+			if _, err := Settle(ctx, txDoer{db: db}, db.Read, s.settle); err != nil {
 				return err
 			}
 			continue
@@ -108,8 +108,8 @@ func run(t *testing.T, db *store.DB, account string, steps []step) error {
 		case s.link != nil:
 			for _, pair := range s.link {
 				device, key, _ := strings.Cut(pair, "/")
-				if _, err = tx.ExecContext(ctx, `INSERT INTO rollup_projects (user_id, device_id, project_key, project_id, last_minute_ms)
-VALUES ($1, $2, $3, $4, 0)`, account, device, key, "linked-"+string(rune('a'+i))); err != nil {
+				if _, err = tx.ExecContext(ctx, `INSERT INTO rollup_projects (user_id, device_id, project_key, project_id)
+VALUES ($1, $2, $3, $4)`, account, device, key, "linked-"+string(rune('a'+i))); err != nil {
 					break
 				}
 			}
@@ -779,13 +779,35 @@ func TestSettleBatches(t *testing.T) {
 	}
 	ops := 0
 	last := time.Unix(base+60*(settleBatch+30), 0)
-	n, err := Settle(context.Background(), txDoer{db: db, ops: &ops}, last.Add(PendingWindow()+time.Millisecond))
+	doer := txDoer{db: db, ops: &ops}
+	t.Run("a run before any minute is due makes no writer op", func(t *testing.T) {
+		// The first minute's pending window closes then, and it is due
+		// only after.
+		n, err := Settle(context.Background(), doer, db.Read, time.Unix(base+60, 0).Add(PendingWindow()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if n != 0 || ops != 0 {
+			t.Errorf("settled %d minutes in %d ops, want none in none", n, ops)
+		}
+	})
+	n, err := Settle(context.Background(), doer, db.Read, last.Add(PendingWindow()+time.Millisecond))
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Run("Settle settles every minute that is due, in ops of at most settleBatch minutes", func(t *testing.T) {
 		if want := settleBatch + 31; n != want || ops != 2 {
 			t.Errorf("settled %d minutes in %d ops, want %d in 2", n, ops, want)
+		}
+	})
+	t.Run("a run with nothing left to settle makes no writer op, so an idle server writes nothing", func(t *testing.T) {
+		before := ops
+		n, err := Settle(context.Background(), doer, db.Read, last.Add(PendingWindow()+time.Hour))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if n != 0 || ops != before {
+			t.Errorf("settled %d minutes in %d more ops, want none in none", n, ops-before)
 		}
 	})
 	t.Run("nothing stays pending, in either account", func(t *testing.T) {
@@ -812,7 +834,7 @@ func TestRunSettle(t *testing.T) {
 		done := make(chan struct{})
 		go func() {
 			defer close(done)
-			RunSettle(ctx, txDoer{db: db}, time.Hour, clock, func(n int, err error) {
+			RunSettle(ctx, txDoer{db: db}, db.Read, time.Hour, clock, func(n int, err error) {
 				if err != nil {
 					t.Error(err)
 				}
@@ -876,14 +898,13 @@ func TestProjects(t *testing.T) {
 			t.Errorf("Projects = %v, want a project with keys g_z, g_y", got)
 		}
 	})
-	t.Run("a key keeps its id and remembers the latest minute that named it", func(t *testing.T) {
+	t.Run("a key a device names again keeps its one id", func(t *testing.T) {
 		var n int
-		var last int64
-		if err := db.Read.QueryRowContext(context.Background(), `SELECT COUNT(*), MAX(last_minute_ms) FROM rollup_projects WHERE device_id = 'd2' AND project_key = 'g_a'`).Scan(&n, &last); err != nil {
+		if err := db.Read.QueryRowContext(context.Background(), `SELECT COUNT(*) FROM rollup_projects WHERE device_id = 'd2' AND project_key = 'g_a'`).Scan(&n); err != nil {
 			t.Fatal(err)
 		}
-		if n != 1 || last != (base+60)*1000 {
-			t.Errorf("%d rows for d2's g_a, the latest at %d, want 1 at %d", n, last, (base+60)*1000)
+		if n != 1 {
+			t.Errorf("%d rows for d2's g_a, want 1", n)
 		}
 	})
 }

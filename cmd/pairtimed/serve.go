@@ -180,7 +180,7 @@ func serve(ctx context.Context, cfg *config.Config, logger *slog.Logger, e *env,
 	settleDone := make(chan struct{})
 	go func() {
 		defer close(settleDone)
-		rollup.RunSettle(settleCtx, w, rollup.SettleEvery, time.Now, func(n int, err error) {
+		rollup.RunSettle(settleCtx, w, db.Read, rollup.SettleEvery, time.Now, func(n int, err error) {
 			settled.Add(uint64(n))
 			if err != nil && settleCtx.Err() == nil {
 				logger.Error("settling pending minutes failed", "settled", n, "err", err)

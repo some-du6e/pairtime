@@ -99,9 +99,9 @@
       "id": "server.minute_buckets",
       "where": "server",
       "data": "Minute buckets: for each 15 seconds, the credited seconds by project key, why they were credited and what kind of work they counted as, with the reasons for seconds that weren't credited and how long an AI agent was running, and for each of your devices' project keys, the project its time counts toward",
-      "kept": "Per-minute detail for {days}, the furthest back a submission can reach, and each project key's project until {days} after the key was last used. Minutes a submission uses stay until its spot-check window closes ({window}). After that only daily totals per project and kind of work, split by evidence level, and the time your agent worked on its own in each project, stay for as long as your account exists",
+      "kept": "Per-minute detail for {days}, the furthest back a submission can reach. Minutes a submission uses stay until its spot-check window closes ({window}). After that only daily totals per project and kind of work, split by evidence level, the time your agent worked on its own in each project, and the project each of your devices' project keys counts toward, stay for as long as your account exists",
       "days": 180,
-      "lifetime_tables": ["rollups_daily"],
+      "lifetime_tables": ["rollups_daily", "rollup_projects"],
       "jobs": [{
         "table": "minute_buckets",
         "key": ["device_id", "minute_ms"],
@@ -122,10 +122,6 @@
         "table": "rollup_minutes",
         "key": ["user_id", "minute_ms", "device_id"],
         "time_column": "minute_ms"
-      }, {
-        "table": "rollup_projects",
-        "key": ["user_id", "device_id", "project_key"],
-        "time_column": "last_minute_ms"
       }]
     },
     {

@@ -41,8 +41,8 @@ func link(t *testing.T, db *store.DB, id string, pairs ...string) {
 	t.Helper()
 	for _, pair := range pairs {
 		device, key, _ := strings.Cut(pair, "/")
-		if _, err := db.Write.ExecContext(context.Background(), `INSERT INTO rollup_projects (user_id, device_id, project_key, project_id, last_minute_ms)
-VALUES ('u1', $1, $2, $3, 0)`, device, key, id); err != nil {
+		if _, err := db.Write.ExecContext(context.Background(), `INSERT INTO rollup_projects (user_id, device_id, project_key, project_id)
+VALUES ('u1', $1, $2, $3)`, device, key, id); err != nil {
 			t.Fatal(err)
 		}
 	}
