@@ -272,7 +272,10 @@ func TestDesignPeriods(t *testing.T) {
 	t.Run("every number written in a kept text is checked", func(t *testing.T) {
 		// Load refuses a number beside {days}, so these are entries
 		// without days.
-		elsewhere := map[string]bool{"server.sessions": true} // accounts' TestSessionRetention
+		elsewhere := map[string]bool{
+			"server.sessions":     true, // accounts' TestSessionRetention
+			"server.device_codes": true, // device's TestCodeRetention
+		}
 		for _, e := range p.Entries {
 			if strings.ContainsAny(e.Kept, "0123456789") && !checked[e.ID] && !elsewhere[e.ID] {
 				t.Errorf("%s's kept says %q, and no case in TestDesignPeriods checks its number", e.ID, e.Kept)
@@ -307,15 +310,14 @@ func TestJobs(t *testing.T) {
 		wantOff  []string
 	}{
 		{
-			name: "a job waits while its table doesn't exist, and ingest's tables run without the holds WP-SB4 creates",
+			name: "a job runs once its table exists, and ingest's tables run without the holds WP-SB4 creates",
 			edit: func(*Policy) {},
 			wantJobs: []string{
-				"server.devices/device_labels", "server.ip_ja4/request_origins",
+				"server.devices/devices", "server.devices/device_labels", "server.ip_ja4/request_origins",
 				"server.minute_buckets/minute_buckets", "server.minute_buckets/minute_bucket_revisions",
 				"server.witness/witness_rows", "server.witness/ingest_devices",
 			},
 			wantOff: []string{
-				"server.devices/devices awaits WP-SV3",
 				"server.minute_buckets/minute_buckets hold awaits WP-SB4", "server.minute_buckets/minute_bucket_revisions hold awaits WP-SB4",
 				"server.minute_buckets/submission_minutes awaits WP-SB4",
 				"server.witness/witness_rows hold awaits WP-SB4", "server.witness/submission_batches awaits WP-SB4",

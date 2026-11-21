@@ -3,10 +3,12 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/some-du6e/pairtime/internal/server/accounts"
 	"github.com/some-du6e/pairtime/internal/server/auth"
@@ -20,8 +22,11 @@ import (
 // secret and the email key must be set, or serve doesn't start. mayCreate
 // is the sign-up gate, pages.Signups.MayCreate: everyone may create an
 // account while signups_open is true, and only the operators list while it
-// is false (DESIGN 8.6; WP-SV14).
-func newSignIn(cfg *config.Config, db *store.DB, w *writer.Writer, logger *slog.Logger, mayCreate func(sub string) bool) (*auth.Service, error) {
+// is false (DESIGN 8.6; WP-SV14). ineligible runs in the transaction that
+// closes an account HCA turns ineligible: device.Store.RemoveAccount,
+// which removes its devices (D-device-account-binding).
+func newSignIn(cfg *config.Config, db *store.DB, w *writer.Writer, logger *slog.Logger, mayCreate func(sub string) bool,
+	ineligible func(ctx context.Context, tx writer.Tx, account string, now time.Time) error) (*auth.Service, error) {
 	if cfg.HCA.ClientID == "" {
 		logger.Warn("hca.client_id isn't set, so nobody can sign in")
 		return auth.New(auth.Config{BaseURL: cfg.BaseURL, Logger: logger})
@@ -39,11 +44,12 @@ func newSignIn(cfg *config.Config, db *store.DB, w *writer.Writer, logger *slog.
 		return nil, err
 	}
 	acc, err := accounts.New(accounts.Options{
-		DB:        db,
-		Writer:    w,
-		Emails:    emails,
-		Reviewers: cfg.Reviewers,
-		MayCreate: mayCreate,
+		DB:         db,
+		Writer:     w,
+		Emails:     emails,
+		Reviewers:  cfg.Reviewers,
+		MayCreate:  mayCreate,
+		Ineligible: ineligible,
 	})
 	if err != nil {
 		return nil, err

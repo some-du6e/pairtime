@@ -240,11 +240,11 @@ func TestRun(t *testing.T) {
 	})
 
 	t.Run("an unknown mode in config.toml is reported and the agent stays local", func(t *testing.T) {
-		if err := os.WriteFile(dirs.ConfigFile(), []byte("mode = \"online\"\n"), 0o600); err != nil {
+		if err := os.WriteFile(dirs.ConfigFile(), []byte("mode = \"cloud\"\n"), 0o600); err != nil {
 			t.Fatal(err)
 		}
 		waitStatus(t, a, func(s statusReply) bool {
-			return strings.Contains(s.Problems["config"], `"online"`) && s.Mode == config.Local
+			return strings.Contains(s.Problems["config"], `"cloud"`) && s.Mode == config.Local
 		})
 	})
 
