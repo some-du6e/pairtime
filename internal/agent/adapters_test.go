@@ -1834,6 +1834,7 @@ func TestHeldRetention(t *testing.T) {
 			replay := h.a.dirs.Held() + ".replay"
 			first := line(t, h, call(t, "new-1", time.Hour, false))
 			write(t, replay, first, line(t, h, call(t, "new-2", 2*time.Hour, false)))
+			write(t, h.a.dirs.Held(), line(t, h, call(t, "fresh", 0, false))) // held after the replay began, and not due
 			h.expireHeld(now)
 			h.countHeld()
 			// The replay took the first call in, then the writer stopped, and
@@ -1845,8 +1846,47 @@ func TestHeldRetention(t *testing.T) {
 			if _, err := os.Stat(replay); !errors.Is(err, fs.ErrNotExist) {
 				t.Errorf(".replay is still there (%v)", err)
 			}
+			if w := h.status().Waiting; w != 1 {
+				t.Errorf("the status counts %d calls waiting, want the one in held.jsonl", w)
+			}
+		}},
+		{"a .replay file cut twice behind a stopped ledger writer has the status stop counting each unread call as it goes, the first cut having moved where the replay stopped", func(t *testing.T, h *adapterHost) {
+			replay := h.a.dirs.Held() + ".replay"
+			first := line(t, h, call(t, "new-1", 2*time.Hour, false))
+			write(t, replay, first, line(t, h, call(t, "new-2", time.Hour, false)))
+			h.expireHeld(now)
+			h.countHeld()
+			// The replay took new-1 in, then the writer stopped.
+			h.replayAt = int64(len(first))
+			h.count(func() { h.held-- })
+			h.down = true
+			h.expireRun(now.Add(week - 2*time.Hour + time.Minute)) // new-1 goes
+			if got := prompts(t, replay); !slices.Equal(got, []string{"new-2"}) {
+				t.Errorf(".replay holds %q, want new-2 alone", got)
+			}
+			if w := h.status().Waiting; w != 1 {
+				t.Errorf("after the first cut the status counts %d calls waiting, want new-2's", w)
+			}
+			h.expireRun(now.Add(week - time.Hour + time.Minute)) // new-2 goes
 			if w := h.status().Waiting; w != 0 {
-				t.Errorf("the status counts %d calls waiting, want none", w)
+				t.Errorf("after the second cut the status counts %d calls waiting, want none", w)
+			}
+		}},
+		{"a .replay file whose replay stops for the run, as when the ledger writer stops, is cut at the next minute job's look rather than an hour later", func(t *testing.T, h *adapterHost) {
+			replay := h.a.dirs.Held() + ".replay"
+			b := line(t, h, call(t, "new-1", time.Hour, false))
+			write(t, replay, b)
+			h.expireHeld(now)
+			// Read to its end, with its call waiting for a slow folder.
+			h.replayAt, h.replayRead = int64(len(b)), true
+			due := now.Add(week - time.Hour + time.Minute)
+			// Its replay is under way, so the first look leaves it.
+			h.expireRun(due)
+			// Then the writer stops, and the call stays in the file.
+			h.holdBack(hostCall{replay: true})
+			h.expireRun(due.Add(time.Minute))
+			if _, err := os.Stat(replay); !errors.Is(err, fs.ErrNotExist) {
+				t.Errorf(".replay is still there (%v)", err)
 			}
 		}},
 		{"as the agent runs, a .replay file stuck for the run is cut, and the status, which no longer counted its calls, doesn't change", func(t *testing.T, h *adapterHost) {

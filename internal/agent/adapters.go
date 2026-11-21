@@ -227,10 +227,10 @@ type adapterHost struct {
 	replayAt                int64
 	replayRead, replayStuck bool
 	replayTaken, replayOut  int
-	// replayIDs are the message ids of the calls read from the .replay file,
-	// which the replay takes in once each: a kill can leave two lines of one
-	// call there, as from a killed run's pending log that held a spooled
-	// copy (readReplay).
+	// replayIDs are the message ids of the calls read from the .replay file
+	// while it is read, which the replay takes in once each: a kill can
+	// leave two lines of one call there, as from a killed run's pending log
+	// that held a spooled copy (readReplay).
 	replayIDs map[string]bool
 	// replayKept is replayOut as it was when trimReplay last left the
 	// .replay file holding the parked calls alone.
@@ -868,17 +868,17 @@ func (h *adapterHost) recoverPending() {
 		// can be rewritten; the run's first open then takes what is left as
 		// what it mustn't empty (openPendingLocked).
 		now := wallNow()
-		n, _, oldest, err := h.expireFile(name, now.Add(-heldKeep), 0)
+		cut, err := h.expireFile(name, now.Add(-heldKeep), 0)
 		h.mu.Lock()
 		switch {
-		case err == nil && !oldest.IsZero():
-			h.baseDue = oldest.Add(heldKeep)
+		case err == nil && !cut.oldest.IsZero():
+			h.baseDue = cut.oldest.Add(heldKeep)
 		case err != nil && !errors.Is(err, fs.ErrNotExist):
 			h.baseDue = now.Add(heldRetry)
 		}
 		h.mu.Unlock()
-		if n > 0 {
-			h.dropHeld(n, fmt.Errorf("they were held longer than %v, which is as long as hook calls are kept", heldKeep))
+		if cut.dropped > 0 {
+			h.dropHeld(cut.dropped, fmt.Errorf("they were held longer than %v, which is as long as hook calls are kept", heldKeep))
 		}
 	}
 }
@@ -1281,8 +1281,11 @@ func (h *adapterHost) read(d inbox.Delivery) (hostCall, bool) {
 // worked out (gitHost.known) or an earlier call of its session waits; the
 // call then waits too, parked behind them, until release parses it. So the
 // calls of other folders go on, and none is parsed without its project
-// because a resolve was slow. On the last step nothing waits. replay says
-// the call came from the .replay file.
+// because a resolve was slow. A call that goes at once lets go first of the
+// calls parked before it that can go now: a Track can end in the middle of
+// a step, after its release, and a later call in that folder, of another
+// session, would then come before them in the ledger. On the last step
+// nothing waits. replay says the call came from the .replay file.
 func (h *adapterHost) admit(d inbox.Delivery, replay, last bool) {
 	c, ok := h.read(d)
 	if !ok {
@@ -1293,6 +1296,7 @@ func (h *adapterHost) admit(d inbox.Delivery, replay, last bool) {
 		h.park(c)
 		return
 	}
+	h.release(last)
 	h.parse(c)
 }
 
@@ -1460,6 +1464,7 @@ func (h *adapterHost) writerDown() bool {
 		return false
 	}
 	h.down = true
+	h.replayStopped()
 	h.a.log.Warn("hook calls wait for the next start, because the ledger writer stopped after a failure", "failed", failed)
 	h.a.setProblem("adapters.ledger", "hook calls wait in held.jsonl for the agent's next start, because the ledger writer stopped after a failure; the agent's log says why")
 	return true
@@ -1474,6 +1479,7 @@ func (h *adapterHost) writerDown() bool {
 func (h *adapterHost) holdBack(c hostCall) {
 	if c.replay {
 		h.replayStuck = true
+		h.replayStopped()
 		return
 	}
 	h.holding = append(h.holding, c.d)
@@ -1820,7 +1826,8 @@ func (h *adapterHost) replayHeld(last bool) bool {
 			return false // the file stays, and the next step tries again
 		}
 		h.a.setProblem("adapters.replay", "")
-		h.replayRead = true
+		// Read to its end: nothing reads it again, so its ids can go.
+		h.replayRead, h.replayIDs = true, nil
 	}
 }
 
@@ -1898,6 +1905,7 @@ func (h *adapterHost) endReplay(name string) {
 		h.a.log.Warn("couldn't delete the held hook calls once replayed", "err", err)
 		h.a.setProblem("adapters.held", fmt.Sprintf("the hook calls held while the ledger wasn't open were parsed, but couldn't be deleted, so the next start parses them again: %v", err))
 		h.replayStuck = true
+		h.replayStopped()
 		return
 	}
 	h.replayAt = 0
@@ -1954,6 +1962,14 @@ func (h *adapterHost) expireHeld(now time.Time) {
 	h.expireFiles(now, true, 0)
 }
 
+// heldCut is what expireFile cut from a held file.
+type heldCut struct {
+	dropped int       // the lines it dropped
+	past    int       // those of them at or past from
+	from    int64     // where from lies in the file as cut
+	oldest  time.Time // when the oldest call it kept was taken in, zero for none
+}
+
 // expireRun drops, while the agent runs, the held calls that have waited
 // heldKeep, as a start does (expireHeld), so that none waits longer while
 // the agent runs for days with its ledger stopped or its keys out of reach
@@ -1984,7 +2000,11 @@ func (h *adapterHost) expireRun(now time.Time) {
 			h.dueBy(now.Add(heldRetry)) // to look again once its replay is over
 		}
 	}
-	if n := h.expireFiles(now, replay, h.replayAt); n > 0 {
+	n, at := h.expireFiles(now, replay, h.replayAt)
+	if replay {
+		h.replayAt = at // where the replay stopped, in the file as cut
+	}
+	if n > 0 {
 		h.count(func() { h.held = max(h.held-n, 0) })
 	}
 }
@@ -1994,32 +2014,39 @@ func (h *adapterHost) expireRun(now time.Time) {
 // It tells doctor how many it dropped, and returns how many of them no
 // replay has read, which the status counts as held: those of held.jsonl,
 // and those of the .replay file past from, where this run's replay of it
-// stopped. It has expireRun look again once the oldest call it kept comes
-// due, or after heldRetry at a file it couldn't cut.
-func (h *adapterHost) expireFiles(now time.Time, replay bool, from int64) int {
-	type file struct {
-		name string
-		from int64
-	}
-	files := []file{{h.a.dirs.Held(), 0}}
-	if replay {
-		files = append(files, file{h.a.dirs.Held() + ".replay", from})
-	}
-	dropped, unread := 0, 0
-	for _, f := range files {
-		n, u, oldest, err := h.expireFile(f.name, now.Add(-heldKeep), f.from)
+// stopped. It also returns where from lies in the .replay file once cut.
+// It has expireRun look again once the oldest call it kept comes due, or
+// after heldRetry at a file it couldn't cut.
+func (h *adapterHost) expireFiles(now time.Time, replay bool, from int64) (int, int64) {
+	look := func(name string, from int64) heldCut {
+		cut, err := h.expireFile(name, now.Add(-heldKeep), from)
 		switch {
 		case err != nil && !errors.Is(err, fs.ErrNotExist):
 			h.dueBy(now.Add(heldRetry))
-		case !oldest.IsZero():
-			h.dueBy(oldest.Add(heldKeep))
+		case !cut.oldest.IsZero():
+			h.dueBy(cut.oldest.Add(heldKeep))
 		}
-		dropped, unread = dropped+n, unread+u
+		return cut
+	}
+	cut := look(h.a.dirs.Held(), 0)
+	dropped, unread, at := cut.dropped, cut.past, from
+	if replay {
+		cut = look(h.a.dirs.Held()+".replay", from)
+		dropped, unread, at = dropped+cut.dropped, unread+cut.past, cut.from
 	}
 	if dropped > 0 {
 		h.dropHeld(dropped, fmt.Errorf("they were held longer than %v, which is as long as hook calls are kept", heldKeep))
 	}
-	return unread
+	return unread, at
+}
+
+// replayStopped notes that this run reads the .replay file no more, as once
+// the ledger writer is down or the file is stuck. expireRun then cuts it
+// like held.jsonl, so it has the next minute job look at it, and a call in
+// it that came due while its replay was under way goes then, rather than
+// at the look heldRetry later.
+func (h *adapterHost) replayStopped() {
+	h.dueBy(wallNow())
 }
 
 // dueBy has expireRun look at the held files at t, or sooner.
@@ -2039,22 +2066,27 @@ func (h *adapterHost) dueByLocked(t time.Time) {
 
 // expireFile drops from name the calls taken in before cutoff, and lines
 // that hold no call or no stamp, by rewriting it with the rest, or by
-// deleting it when none is left. It returns how many it dropped, how many
-// of those lay at or past from, and when the oldest call it kept was taken
-// in, zero for none. A file it can't rewrite stays as it is, and the error
-// says why: fs.ErrNotExist for none. The rewrite closes the file before it
-// renames the new one over it, as Windows needs (inbox.Rewrite).
-func (h *adapterHost) expireFile(name string, cutoff time.Time, from int64) (dropped, past int, oldest time.Time, err error) {
-	dropped, err = inbox.Rewrite(name, heldTmp, func(line []byte, off int64) bool {
+// deleting it when none is left. It says what it cut (heldCut), from being
+// an offset at the start of a line, such as where a replay stopped, which
+// moves back by the lines dropped before it. A file it can't rewrite stays
+// as it is, and the error says why: fs.ErrNotExist for none. The rewrite
+// closes the file before it renames the new one over it, as Windows needs
+// (inbox.Rewrite).
+func (h *adapterHost) expireFile(name string, cutoff time.Time, from int64) (heldCut, error) {
+	cut := heldCut{from: from}
+	var before int64 // the bytes of the dropped lines before from
+	n, err := inbox.Rewrite(name, heldTmp, func(line []byte, off int64) bool {
 		at, ok := heldAt(line)
 		if !ok || at.Before(cutoff) {
 			if off >= from {
-				past++
+				cut.past++
+			} else {
+				before += int64(len(line))
 			}
 			return false
 		}
-		if oldest.IsZero() || at.Before(oldest) {
-			oldest = at
+		if cut.oldest.IsZero() || at.Before(cut.oldest) {
+			cut.oldest = at
 		}
 		return true
 	})
@@ -2062,9 +2094,10 @@ func (h *adapterHost) expireFile(name string, cutoff time.Time, from int64) (dro
 		if !errors.Is(err, fs.ErrNotExist) {
 			h.a.log.Warn("couldn't drop the old held hook calls", "err", err)
 		}
-		return 0, 0, time.Time{}, err
+		return heldCut{from: from}, err
 	}
-	return dropped, past, oldest, nil
+	cut.dropped, cut.from = n, from-before
+	return cut, nil
 }
 
 // heldAt is when the agent took the call on a line of held.jsonl in, by
