@@ -491,7 +491,9 @@ func TestSealMode(t *testing.T) {
 		name string
 		// online is what Options.Online says at each of three seals, nil
 		// for a writer without it. Each batch's first record comes while it
-		// still says what it said at the seal before.
+		// still says what it said at the seal before, and it says online as
+		// the writer opens: a seal that reads it local-only with nothing
+		// pending, as Open's own, begins a stretch.
 		online []bool
 		// crash, when set, leaves the ledger as a crash after the third
 		// seal's flush does, with batches.seg's rows of batches 2 and 3
@@ -512,6 +514,7 @@ func TestSealMode(t *testing.T) {
 				online    atomic.Bool
 				delivered []Batch
 			)
+			online.Store(true)
 			w := open(t, dir, newClock(testT), func(o *Options) {
 				o.Sealed = func(b Batch) { delivered = append(delivered, b) }
 				if c.online != nil {
@@ -739,7 +742,7 @@ func TestNoteMode(t *testing.T) {
 		{"a switch back online after a seal that read config.toml local-only, as at the first pairtime login, seals what is pending, and marks the batch after it",
 			[]string{"file-local", "write", "seal", "write", "file-online", "online", "sealed", "write", "seal"}, []bool{false, true, true}, []bool{false, false, true}, []int{1, 1, 1}},
 		{"a seal that reads config.toml local-only after a switch back marks no batch after it",
-			[]string{"file-local", "local", "write", "sealed", "file-online", "online", "file-local", "write", "seal", "file-online", "write", "seal"}, []bool{false, false, true}, []bool{false, false, false}, []int{1, 1, 1}},
+			[]string{"file-local", "local", "write", "sealed", "file-online", "online", "pause", "file-local", "write", "seal", "file-online", "write", "seal"}, []bool{false, false, true}, []bool{false, false, false}, []int{1, 1, 1}},
 		{"an event made before the switch back that the writer gets after it, as a git change the watcher held, seals its batch local-only, and the next batch takes the mark",
 			[]string{"file-local", "local", "write", "sealed", "file-online", "online", "write-old", "seal", "write", "seal"}, []bool{false, false, true}, []bool{false, false, true}, []int{1, 1, 1}},
 		{"an event made before the switch back, pending with records that came after it, makes their batch local-only too",
