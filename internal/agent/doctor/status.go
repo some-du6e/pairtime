@@ -72,6 +72,9 @@ type Spooled struct {
 type Signals struct {
 	Idle  Signal `json:"idle"`
 	Focus Signal `json:"focus"`
+	// Session is the kind of Linux desktop session the agent runs in:
+	// x11, wayland or none, and "" elsewhere.
+	Session string `json:"session,omitempty"`
 	// Loop is the macOS notification loop, on macOS once it runs.
 	Loop *Loop `json:"loop,omitempty"`
 }

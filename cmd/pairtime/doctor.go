@@ -152,11 +152,15 @@ func gatherFacts(dirs home.Dirs) doctor.Facts {
 	for _, h := range adapters.Default.Harnesses() {
 		f.Adapters = append(f.Adapters, string(h))
 	}
+	f.Home, _ = os.UserHomeDir()
 	f.Hooks = doctorHooks()
 	for i, h := range f.Hooks {
 		if len(h.Events) > 0 && len(h.Exes) > 0 && !h.Disabled && h.ReadError == "" {
 			trips, err := doctorRoundTrips(h.Exes[0], h.Harness, doctorHookCalls)
-			if err != nil {
+			switch {
+			case errors.Is(err, errRig):
+				f.Hooks[i].RigError = err.Error()
+			case err != nil:
 				f.Hooks[i].TripError = err.Error()
 			}
 			f.Hooks[i].Trips = trips
@@ -242,6 +246,10 @@ func readDoctorHooks() []doctor.Hooks {
 	return out
 }
 
+// errRig means doctor couldn't start the listener its test calls go to,
+// so no call ran: the hook itself may be fine.
+var errRig = errors.New("doctor's test listener")
+
 // hookRoundTrips times n warm test calls of exe's hook command for
 // harness, after one that warms the OS's caches, the way a harness runs
 // its hooks: exec form, an event on stdin, from start to exit. Each goes
@@ -253,7 +261,7 @@ func hookRoundTrips(exe, harness string, n int) ([]time.Duration, error) {
 		return chain
 	})
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: %v", errRig, err)
 	}
 	defer r.close()
 	var trips []time.Duration
@@ -336,7 +344,8 @@ func runReport(dirs home.Dirs, stdout, stderr io.Writer) int {
 			continue
 		}
 		trips, err := doctorRoundTrips(h.Exes[0], h.Harness, doctorReportCalls)
-		r.Hooks = append(r.Hooks, doctor.HookTimes{Harness: h.Harness, Times: doctor.TimesOf(trips), Failed: err != nil})
+		r.Hooks = append(r.Hooks, doctor.HookTimes{Harness: h.Harness, Times: doctor.TimesOf(trips),
+			NoRig: errors.Is(err, errRig), Failed: err != nil && !errors.Is(err, errRig)})
 		if exe == "" {
 			exe = h.Exes[0]
 		}

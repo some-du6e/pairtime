@@ -15,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"runtime"
 	"slices"
 	"strings"
@@ -109,24 +110,29 @@ func doctorChecks(t *testing.T) (map[string]doctor.Check, int) {
 func TestDoctorSignals(t *testing.T) {
 	tests := []struct {
 		name         string
+		session      string
 		idle, focus  doctor.Signal
 		wantIdle     doctor.Result
 		wantFocus    doctor.Result
+		wantCode     int
 		wantText     []string
 		wantNotInOut []string
 	}{
 		{
-			name:      "on GNOME on Wayland, idle time from Mutter is idle detection working and focus is unknown on this desktop, never presence unknown (D-design-5.9)",
+			name:      "on GNOME on Wayland, idle time from Mutter is idle detection working, and focus unknown on this desktop fails with what it costs and the X11 session that fixes it, never presence unknown (D-design-5.9)",
+			session:   "wayland",
 			idle:      doctor.Signal{Via: "org.gnome.Mutter.IdleMonitor"},
 			focus:     doctor.Signal{Unknown: "Wayland gives other programs no focus signal"},
 			wantIdle:  doctor.OK,
-			wantFocus: doctor.Warn,
+			wantFocus: doctor.Fail,
+			wantCode:  1,
 			wantText: []string{"idle detection working, from org.gnome.Mutter.IdleMonitor",
-				"focus unknown on this desktop: Wayland gives other programs no focus signal"},
+				"focus unknown on this desktop: Wayland gives other programs no focus signal. pairtime counts none of your time here yet; an X11 session, where your login screen offers one, lets it see the window in front"},
 			wantNotInOut: []string{"presence unknown on this desktop", "level C"},
 		},
 		{
-			name:         "on X11 both signals work, each with its source",
+			name:         "on X11 both signals work, each with its source, and nothing fails",
+			session:      "x11",
 			idle:         doctor.Signal{Via: "MIT-SCREEN-SAVER"},
 			focus:        doctor.Signal{Via: "_NET_ACTIVE_WINDOW, with each window's process from X-Resource"},
 			wantIdle:     doctor.OK,
@@ -135,18 +141,22 @@ func TestDoctorSignals(t *testing.T) {
 			wantNotInOut: []string{"unknown on this desktop"},
 		},
 		{
-			name:         "with no idle source, presence is unknown on this desktop, with the agent's reason",
-			idle:         doctor.Signal{Unknown: "no X server and no Mutter on the session bus"},
-			focus:        doctor.Signal{Unknown: "no X server"},
-			wantIdle:     doctor.Warn,
-			wantFocus:    doctor.Warn,
-			wantText:     []string{"presence unknown on this desktop: no X server and no Mutter on the session bus", "focus unknown on this desktop: no X server"},
-			wantNotInOut: []string{"idle detection working", "focus detection working"},
+			name:      "with no idle source outside Wayland, presence unknown on this desktop fails, with the agent's reason and a new login to fix it",
+			session:   "none",
+			idle:      doctor.Signal{Unknown: "no X server and no Mutter on the session bus"},
+			focus:     doctor.Signal{Unknown: "no X server"},
+			wantIdle:  doctor.Fail,
+			wantFocus: doctor.Fail,
+			wantCode:  1,
+			wantText: []string{"presence unknown on this desktop: no X server and no Mutter on the session bus. pairtime counts none of your time here yet; logging out and back in starts the agent in your desktop's session, where it can see when you're at the keyboard",
+				"focus unknown on this desktop: no X server"},
+			wantNotInOut: []string{"idle detection working", "focus detection working", "X11 session"},
 		},
 		{
 			name:         "a signal the agent gives no source or reason for is unknown, never working",
-			wantIdle:     doctor.Warn,
-			wantFocus:    doctor.Warn,
+			wantIdle:     doctor.Fail,
+			wantFocus:    doctor.Fail,
+			wantCode:     1,
 			wantText:     []string{"presence unknown on this desktop: the agent doesn't say why", "focus unknown on this desktop: the agent doesn't say why"},
 			wantNotInOut: []string{"working"},
 		},
@@ -155,14 +165,17 @@ func TestDoctorSignals(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			h := newDoctorHome(t)
 			st := runningStatus()
-			st.Signals.Idle, st.Signals.Focus = tt.idle, tt.focus
+			st.Signals.Idle, st.Signals.Focus, st.Signals.Session = tt.idle, tt.focus, tt.session
 			h.statusAgent(st)
-			checks, _ := doctorChecks(t)
+			checks, code := doctorChecks(t)
 			if c := checks["idle"]; c.Result != tt.wantIdle {
 				t.Errorf("idle is %s %q, want %s", c.Result, c.Text, tt.wantIdle)
 			}
 			if c := checks["focus"]; c.Result != tt.wantFocus {
 				t.Errorf("focus is %s %q, want %s", c.Result, c.Text, tt.wantFocus)
+			}
+			if code != tt.wantCode {
+				t.Errorf("doctor --json exits %d, want %d", code, tt.wantCode)
 			}
 			_, text, _ := runCmd("doctor")
 			for _, want := range tt.wantText {
@@ -198,7 +211,7 @@ func TestDoctorReadsTheAgentNotTheTerminal(t *testing.T) {
 			st.Signals.Focus = doctor.Signal{Unknown: "Wayland gives other programs no focus signal"}
 			asked := h.statusAgent(st)
 			checks, _ := doctorChecks(t)
-			if checks["idle"].Result != doctor.OK || checks["focus"].Result != doctor.Warn || !strings.Contains(checks["focus"].Text, "focus unknown on this desktop") {
+			if checks["idle"].Result != doctor.OK || checks["focus"].Result != doctor.Fail || !strings.Contains(checks["focus"].Text, "focus unknown on this desktop") {
 				t.Errorf("idle %+v, focus %+v; want them as the agent's status has them", checks["idle"], checks["focus"])
 			}
 			if got := asked(); !slices.Contains(got, ipc.AskStatus) {
@@ -342,7 +355,7 @@ func TestDoctorAdaptersAndProblems(t *testing.T) {
 			},
 			check:   "adapter.claude_code",
 			want:    doctor.Warn,
-			wantHas: []string{"2 calls didn't fully parse", "UserPromptSubmit: unknown field prompt_v2", "github.com/some-du6e/pairtime/issues"},
+			wantHas: []string{"2 calls didn't fully parse", "UserPromptSubmit: unknown field prompt_v2", "Report this line, and pairtime doctor --report if it helps, at https://github.com/some-du6e/pairtime/issues"},
 		},
 		{
 			name:    "an adapter this pairtime has but no call reached yet is found, with none",
@@ -609,9 +622,12 @@ func reportMachine(t *testing.T, exe string) {
 // TestDoctorReportNamesNothing plants a username, a hostname and a home
 // path in the environment, in the data directory, in the agent's status
 // and in the hook's path, and finds none of them in the report (DESIGN
-// 5.9; TE WP7.9).
+// 5.9; TE WP7.9). It also plants a project folder's name, which the scrub
+// isn't given, wherever free text could carry it into the report, and
+// finds no redaction marker but in the one place it planted for one: so a
+// value that reaches the report fails the test, rather than being masked.
 func TestDoctorReportNamesNothing(t *testing.T) {
-	const user, host = "plantedteen", "plantedbox"
+	const user, host, project = "plantedteen", "plantedbox", "plantedproject"
 	data := filepath.Join(shortHome(t), user)
 	if err := os.MkdirAll(data, 0o700); err != nil {
 		t.Fatal(err)
@@ -622,17 +638,20 @@ func TestDoctorReportNamesNothing(t *testing.T) {
 		t.Setenv(k, v)
 	}
 	h := fakeHome{t: t, dir: data}
-	h.writeFile("config.toml", []byte("# "+homeDir+" on "+host+"\n"))
-	h.writeFile("state.json", []byte(`{"home":"`+filepath.ToSlash(homeDir)+`","host":"`+host+`"}`))
+	h.writeFile("config.toml", []byte("# "+homeDir+" on "+host+", working on "+project+"\n"))
+	h.writeFile("state.json", []byte(`{"home":"`+filepath.ToSlash(homeDir)+`","host":"`+host+`","project":"`+project+`"}`))
 	st := runningStatus()
 	// Even a version that names the teen, which a build from a checkout
-	// can have, doesn't reach the report.
+	// can have, doesn't reach the report: the agent line is the one place
+	// the scrub is meant to find something.
 	st.Version.Version = "v0.1.0-" + user
-	st.Signals.Focus = doctor.Signal{Unknown: "no X display on " + host}
-	st.Problems = map[string]string{"config": "couldn't read " + filepath.Join(homeDir, ".config") + ": permission denied", "uploader": host + " " + user}
+	st.Signals.Idle = doctor.Signal{Unknown: "no idle time in " + project}
+	st.Signals.Focus = doctor.Signal{Unknown: "no X display on " + host + " for " + project}
+	st.Problems = map[string]string{"config": "couldn't read " + filepath.Join(homeDir, ".config") + ": permission denied", "uploader": host + " " + user,
+		"git": "git: can't read " + filepath.Join(homeDir, project, ".git")}
 	st.Footprint = doctor.Footprint{RSSBytes: 18_200_000, PeakRSSBytes: 21_400_000, CPUS: 3.2}
 	h.statusAgent(st)
-	reportMachine(t, filepath.Join(homeDir, ".local", "bin", "pairtime"))
+	reportMachine(t, filepath.Join(homeDir, project, "bin", "pairtime"))
 
 	code, out, errOut := runCmd("doctor", "--report")
 	if code != 0 {
@@ -651,6 +670,22 @@ func TestDoctorReportNamesNothing(t *testing.T) {
 				if strings.Contains(strings.ToLower(out), strings.ToLower(p)) {
 					t.Errorf("the report has %q:\n%s", p, out)
 				}
+			}
+		}},
+		{"the project folder's name, which the scrub isn't given, reaches the report from none of the places it was planted", func(t *testing.T) {
+			if strings.Contains(strings.ToLower(out), project) {
+				t.Errorf("the report has %q:\n%s", project, out)
+			}
+		}},
+		{"no line but the agent's, whose version names the teen, holds a redaction marker, so nothing else that names them got that far", func(t *testing.T) {
+			marker := regexp.MustCompile(`\[[A-Z_]+\]`)
+			for _, line := range strings.Split(out, "\n") {
+				if marker.MatchString(line) && !strings.HasPrefix(line, "agent:") {
+					t.Errorf("the scrub had to mask something in %q:\n%s", line, out)
+				}
+			}
+			if !strings.Contains(out, "agent:           v0.1.0-[ACCOUNT]") {
+				t.Errorf("the version that names the teen isn't scrubbed:\n%s", out)
 			}
 		}},
 		{"with all of that scrubbed, the report still has the agent's memory and the hook's times", func(t *testing.T) {
@@ -935,5 +970,64 @@ func TestDoctorOfARealAgent(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, tt.check)
+	}
+}
+
+func TestDoctorHookLine(t *testing.T) {
+	tests := []struct {
+		name string
+		// trips stands in for the round trips; nil runs the real ones.
+		trips      func(exe, harness string, n int) ([]time.Duration, error)
+		brokenTemp bool
+		want       doctor.Result
+		wantText   string
+		wantNot    string
+		wantCode   int
+	}{
+		{
+			name:       "a temporary folder doctor can't use keeps its own test listener from starting, which is a skip that blames no hook",
+			brokenTemp: true,
+			want:       doctor.Skip,
+			wantText:   "doctor couldn't start its test listener, so it didn't time the hook",
+			wantNot:    "pairtime install",
+		},
+		{
+			name: "a test call that ran the hook's binary and failed is a failure that says to install again",
+			trips: func(string, string, int) ([]time.Duration, error) {
+				return nil, errors.New("it exited with status 2")
+			},
+			want:     doctor.Fail,
+			wantText: "failed a test call: it exited with status 2. Run pairtime install",
+			wantCode: 1,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := newDoctorHome(t)
+			swap(t, &doctorHooks, func() []doctor.Hooks {
+				return []doctor.Hooks{{Harness: "claude_code", Title: "Claude Code", Found: true, Settings: "settings.json",
+					Events: []string{"SessionStart"}, Exes: []string{filepath.Join(h.dir, "pairtime")}}}
+			})
+			trips := tt.trips
+			if trips == nil {
+				trips = hookRoundTrips
+			}
+			swap(t, &doctorRoundTrips, trips)
+			if tt.brokenTemp {
+				missing := filepath.Join(h.dir, "no-such-folder")
+				for _, k := range []string{"TMPDIR", "TMP", "TEMP"} {
+					t.Setenv(k, missing)
+				}
+			}
+			h.statusAgent(runningStatus())
+			checks, code := doctorChecks(t)
+			c := checks["hook.claude_code"]
+			if c.Result != tt.want || !strings.Contains(c.Text, tt.wantText) || (tt.wantNot != "" && strings.Contains(c.Text, tt.wantNot)) {
+				t.Errorf("hook.claude_code is %s %q, want %s with %q", c.Result, c.Text, tt.want, tt.wantText)
+			}
+			if code != tt.wantCode {
+				t.Errorf("doctor exits %d, want %d", code, tt.wantCode)
+			}
+		})
 	}
 }

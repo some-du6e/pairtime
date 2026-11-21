@@ -78,17 +78,18 @@ func TestChecks(t *testing.T) {
 			edit: func(f *Facts) { f.Reach, f.Agent = Down, nil }, check: "spool", want: Skip},
 		{name: "idle time with a source is idle detection working, from it",
 			edit: func(*Facts) {}, check: "idle", want: OK, wantHas: []string{"idle detection working, from GetLastInputInfo"}},
-		{name: "no idle source is presence unknown on this desktop",
-			edit: func(f *Facts) { f.Agent.Signals.Idle = Signal{Unknown: "no session bus"} }, check: "idle", want: Warn,
-			wantHas: []string{"presence unknown on this desktop: no session bus"}},
-		{name: "no focus source is focus unknown on this desktop, without the level-C clause WP-SC8 adds",
+		{name: "no idle source is presence unknown on this desktop, a failure, since pairtime counts none of that time, with a new login to fix it",
+			edit: func(f *Facts) { f.Agent.Signals.Idle = Signal{Unknown: "no session bus"} }, check: "idle", want: Fail,
+			wantHas: []string{"presence unknown on this desktop: no session bus. pairtime counts none of your time here yet; logging out and back in"}},
+		{name: "no focus source on Wayland is focus unknown on this desktop, a failure that names the X11 session to fix it, without the level-C clause WP-SC8 adds",
 			edit: func(f *Facts) {
-				f.Agent.Signals.Focus = Signal{Unknown: "Wayland gives other programs no focus signal"}
-			}, check: "focus", want: Warn,
-			wantHas: []string{"focus unknown on this desktop: Wayland gives other programs no focus signal"}},
-		{name: "the macOS loop off the main thread warns that locks and app switches may not arrive",
+				f.Agent.Signals.Focus, f.Agent.Signals.Session = Signal{Unknown: "Wayland gives other programs no focus signal"}, "wayland"
+			}, check: "focus", want: Fail,
+			wantHas: []string{"focus unknown on this desktop: Wayland gives other programs no focus signal. pairtime counts none of your time here yet; an X11 session, where your login screen offers one, lets it see the window in front"},
+			wantNot: []string{"level C"}},
+		{name: "the macOS loop off the main thread warns that locks and app switches may not arrive, and says to share that line alone",
 			edit: func(f *Facts) { f.Agent.Signals.Loop = &Loop{} }, check: "macos-loop", want: Warn,
-			wantHas: []string{"may not arrive"}},
+			wantHas: []string{"may not arrive", "Report this line, and pairtime doctor --report if it helps", "not the rest of doctor's output, which names your folders"}},
 		{name: "the macOS loop on the main thread is ok",
 			edit: func(f *Facts) { f.Agent.Signals.Loop = &Loop{MainThread: true} }, check: "macos-loop", want: OK},
 		{name: "a desktop with no macOS loop has no line for it",
@@ -108,6 +109,18 @@ func TestChecks(t *testing.T) {
 		{name: "a missing hook warns and names it",
 			edit:  claude(func(h *Hooks) { h.Missing = []string{"Stop"} }),
 			check: "hook.claude_code", want: Warn, wantHas: []string{"1 of pairtime's hooks is missing", "(Stop)", "pairtime install"}},
+		{name: "a test listener doctor couldn't start is a skip, which blames neither the hook nor its binary",
+			edit: claude(func(h *Hooks) {
+				h.Trips, h.RigError = nil, "doctor's test listener: mkdir /tmp/pt1: read-only file system"
+			}),
+			check: "hook.claude_code", want: Skip, wantHas: []string{"doctor couldn't start its test listener, so it didn't time the hook"},
+			wantNot: []string{"failed a test call", "pairtime install"}},
+		{name: "the home folder in a line reads as ~, so a line someone shares names fewer of their folders",
+			edit: func(f *Facts) {
+				f.Home = "/home/teen"
+				f.Agent.Problems = map[string]string{"config": "couldn't read /home/teen/.config/pairtime/config.toml"}
+			},
+			check: "problem.config", want: Warn, wantHas: []string{"couldn't read ~/.config/pairtime/config.toml"}, wantNot: []string{"/home/teen"}},
 		{name: "a hook that runs without install's arguments warns that its calls count as parse failures",
 			edit:  claude(func(h *Hooks) { h.Stale = []string{"UserPromptSubmit"} }),
 			check: "hook.claude_code", want: Warn, wantHas: []string{"the hooks for UserPromptSubmit don't run with the arguments install writes", "parse failure", "pairtime install"}},
@@ -133,13 +146,13 @@ func TestChecks(t *testing.T) {
 			edit: func(f *Facts) {
 				f.Agent.Adapters.Harnesses["claude_code"] = HarnessCounts{Calls: 5, ParseFailures: 2, LastFailure: "Stop: unknown field"}
 			},
-			check: "adapter.claude_code", want: Warn, wantHas: []string{"but 2 calls didn't fully parse; the last failure: Stop: unknown field", "report it at"}},
+			check: "adapter.claude_code", want: Warn, wantHas: []string{"but 2 calls didn't fully parse; the last failure: Stop: unknown field", "Report this line, and pairtime doctor --report if it helps", "which names your folders"}},
 		{name: "a record the ledger refused warns, and isn't called a parse failure",
 			edit: func(f *Facts) {
 				f.Agent.Adapters.Harnesses["claude_code"] = HarnessCounts{Calls: 5, Records: 4, WriteFailures: 1, LastFailure: "the ledger refused a prompt.submit record: closed"}
 			},
 			check: "adapter.claude_code", want: Warn, wantHas: []string{"but the ledger refused 1 record; the last failure: the ledger refused a prompt.submit record"},
-			wantNot: []string{"parse", "report it at"}},
+			wantNot: []string{"parse", "Report this line"}},
 		{name: "an unsigned release is ok, and says releases aren't signed yet",
 			edit: func(*Facts) {}, check: "signing", want: OK,
 			wantHas: []string{"release v0.1.0 from commit 0123456789ab, not code-signed", "aren't code-signed yet"}},

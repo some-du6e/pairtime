@@ -34,10 +34,12 @@ type Hooks struct {
 	Disabled bool
 	// Trips are the times of warm test calls of the hook Exes[0] runs, from
 	// start to exit, each handed to a listener of doctor's own so nothing
-	// of it reaches the agent or the ledger. TripError says why a call
-	// failed.
+	// of it reaches the agent or the ledger. TripError says why a call that
+	// ran the binary failed, and RigError why doctor couldn't start its
+	// listener, when no call ran.
 	Trips     []time.Duration
 	TripError string
+	RigError  string
 }
 
 // R8HookMS is R8's bound on a warm hook round trip, from start to exit,
@@ -76,6 +78,8 @@ func hookChecks(h Hooks) []Check {
 		return []Check{c}
 	case h.Disabled:
 		c.Result, c.Text = Fail, fmt.Sprintf("%s has \"disableAllHooks\": true, so %s runs none of its hooks, pairtime's included. Take that line out to turn them back on", settings, h.Title)
+	case h.RigError != "":
+		c.Result, c.Text = Skip, "doctor couldn't start its test listener, so it didn't time the hook: "+text.Printable(h.RigError)
 	case h.TripError != "":
 		c.Result, c.Text = Fail, fmt.Sprintf("the hook %s runs, %s, failed a test call: %s. Run pairtime install to put a working one there", h.Title, text.Printable(firstOf(h.Exes)), text.Printable(h.TripError))
 	default:

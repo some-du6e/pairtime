@@ -62,9 +62,11 @@ type AgentFootprint struct {
 type HookTimes struct {
 	Harness string
 	Times   Times
-	// Failed is set when a call failed, which the report says without the
-	// error, since an error can name a path.
+	// Failed is set when a call failed, and NoRig when doctor couldn't
+	// start its test listener, which the report says without the error,
+	// since an error can name a path.
 	Failed bool
+	NoRig  bool
 }
 
 // Times sums up some timings.
@@ -139,6 +141,10 @@ func (r Report) Text() string {
 		line("hook round trip", "no harness has pairtime's hooks, so none was timed")
 	}
 	for _, h := range r.Hooks {
+		if h.NoRig {
+			line("hook round trip", "%s: doctor couldn't start its test listener, so none was timed", h.Harness)
+			continue
+		}
 		if h.Failed {
 			line("hook round trip", "%s: a test call failed, so none was timed; pairtime doctor says why", h.Harness)
 			continue

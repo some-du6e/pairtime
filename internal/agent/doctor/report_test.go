@@ -81,6 +81,12 @@ func TestReportText(t *testing.T) {
 			want: []string{"hook round trip: claude_code: a test call failed, so none was timed; pairtime doctor says why\n"},
 		},
 		{
+			name: "a hook doctor couldn't time because its own test listener didn't start says so, blaming no hook",
+			edit: func(r *Report) { r.Hooks[0] = HookTimes{Harness: "claude_code", NoRig: true} },
+			want: []string{"hook round trip: claude_code: doctor couldn't start its test listener, so none was timed\n"},
+			not:  []string{"failed"},
+		},
+		{
 			name: "with no harness's hooks, the report says none was timed",
 			edit: func(r *Report) { r.Hooks = nil },
 			want: []string{"hook round trip: no harness has pairtime's hooks, so none was timed\n"},

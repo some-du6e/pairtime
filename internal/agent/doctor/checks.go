@@ -57,6 +57,9 @@ type Facts struct {
 	Keystore Keystore
 	// Signing is what this binary is and how it is signed.
 	Signing Signing
+	// Home is the home folder, which the lines show as ~, so that a line
+	// someone shares names fewer of their folders.
+	Home string
 }
 
 // Checks works out doctor's lines from f, in the order DESIGN 5.9 lists
@@ -71,7 +74,7 @@ func Checks(f Facts) []Check {
 			Check{Name: "focus", Result: Skip, Text: why})
 	} else {
 		s := f.Agent.Signals
-		out = append(out, idleCheck(s.Idle), focusCheck(s.Focus))
+		out = append(out, idleCheck(s), focusCheck(s))
 		if s.Loop != nil {
 			out = append(out, loopCheck(*s.Loop))
 		}
@@ -82,7 +85,21 @@ func Checks(f Facts) []Check {
 	out = append(out, adapterChecks(f)...)
 	out = append(out, signingCheck(f.Signing), keystoreCheck(f.Keystore), spoolCheck(f))
 	out = append(out, problemChecks(f)...)
+	for i := range out {
+		out[i].Text = tilde(out[i].Text, f.Home)
+	}
 	return out
+}
+
+// tilde writes home as ~ in s, in both its slashes' spellings.
+func tilde(s, home string) string {
+	if len(home) < 3 {
+		return s
+	}
+	for _, h := range []string{home, strings.ReplaceAll(home, `\`, "/"), strings.ReplaceAll(home, "/", `\`)} {
+		s = strings.ReplaceAll(s, h, "~")
+	}
+	return s
 }
 
 // notAsked says why a line that reads the agent's status was skipped.
@@ -142,22 +159,40 @@ func modeWords(mode string) string {
 }
 
 // idleCheck is DESIGN 5.9's idle line: idle detection working with its
-// source, or "presence unknown on this desktop".
-func idleCheck(s Signal) Check {
-	if s.Via != "" {
-		return Check{Name: "idle", Result: OK, Text: "idle detection working, from " + text.Printable(s.Via)}
+// source, or "presence unknown on this desktop". With presence unknown no
+// slot is present (pkg/score), so pairtime counts none of the teen's time
+// there: the line fails, and says what to do.
+func idleCheck(s Signals) Check {
+	if s.Idle.Via != "" {
+		return Check{Name: "idle", Result: OK, Text: "idle detection working, from " + text.Printable(s.Idle.Via)}
 	}
-	return Check{Name: "idle", Result: Warn, Text: "presence unknown on this desktop: " + reason(s.Unknown)}
+	return Check{Name: "idle", Result: Fail,
+		Text: "presence unknown on this desktop: " + reason(s.Idle.Unknown) + unknownCost(s, "when you're at the keyboard")}
 }
 
 // focusCheck is DESIGN 5.9's focus line: focus detection working with its
-// source, or "focus unknown on this desktop". It leaves out 5.9's ", so
-// time here counts at level C" until WP-SC8 makes that true.
-func focusCheck(s Signal) Check {
-	if s.Via != "" {
-		return Check{Name: "focus", Result: OK, Text: "focus detection working, from " + text.Printable(s.Via)}
+// source, or "focus unknown on this desktop". With focus unknown the agent
+// records no os.focus, so every slot has no focus and the scorer credits
+// none of it (pkg/score): the line fails, and says what to do. WP-SC8,
+// which credits such time at level C, makes it a warning with 5.9's ", so
+// time here counts at level C".
+func focusCheck(s Signals) Check {
+	if s.Focus.Via != "" {
+		return Check{Name: "focus", Result: OK, Text: "focus detection working, from " + text.Printable(s.Focus.Via)}
 	}
-	return Check{Name: "focus", Result: Warn, Text: "focus unknown on this desktop: " + reason(s.Unknown)}
+	return Check{Name: "focus", Result: Fail,
+		Text: "focus unknown on this desktop: " + reason(s.Focus.Unknown) + unknownCost(s, "the window in front")}
+}
+
+// unknownCost is what an unknown signal costs, and the one thing to do: on
+// Wayland, whose desktops tell other programs neither, an X11 session;
+// elsewhere, a new login, which starts the agent in the desktop's session.
+func unknownCost(s Signals, sees string) string {
+	const cost = ". pairtime counts none of your time here yet; "
+	if s.Session == "wayland" {
+		return cost + "an X11 session, where your login screen offers one, lets it see " + sees
+	}
+	return cost + "logging out and back in starts the agent in your desktop's session, where it can see " + sees
 }
 
 // loopCheck warns when the macOS notification loop runs off the main
@@ -167,7 +202,7 @@ func loopCheck(l Loop) Check {
 	c := Check{Name: "macos-loop", Result: OK, Text: "the notification loop runs on the main thread, where macOS sends screen locks and app switches"}
 	if !l.MainThread {
 		c.Result = Warn
-		c.Text = "the notification loop doesn't run on the main thread, so screen locks and app switches may not arrive. Report this at " + issues
+		c.Text = "the notification loop doesn't run on the main thread, so screen locks and app switches may not arrive. " + reportIt
 	}
 	if l.Dropped > 0 {
 		c.Result = Warn
@@ -223,7 +258,7 @@ func adapterChecks(f Facts) []Check {
 				c.Text += "; the last failure: " + reason(n.LastFailure)
 			}
 			if n.ParseFailures > 0 {
-				c.Text += ". pairtime may count less of this harness until it reads them, so report it at " + issues
+				c.Text += ". pairtime may count less of this harness until it reads them. " + reportIt
 			}
 		}
 		if !slices.Contains(f.Adapters, h) {
@@ -333,8 +368,9 @@ func checkName(s string) string {
 	return n
 }
 
-// issues is where doctor asks for reports.
-const issues = "https://github.com/some-du6e/pairtime/issues"
+// reportIt is where and what doctor asks the teen to report. The issues
+// are public, and doctor's other lines name their folders.
+const reportIt = "Report this line, and pairtime doctor --report if it helps, at https://github.com/some-du6e/pairtime/issues, but not the rest of doctor's output, which names your folders"
 
 // reason is an unknown signal's or a failure's reason, made printable, or
 // "the agent doesn't say why" when there is none.
