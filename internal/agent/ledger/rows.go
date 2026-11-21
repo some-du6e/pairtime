@@ -21,6 +21,18 @@ type Row struct {
 	Prev ledger.Hash
 	// SealedAt is when the batch was sealed.
 	SealedAt time.Time
+	// Online is set when the batch was sealed online, as its seal frame
+	// records (Batch.Online), and Back when it is the first batch sealed
+	// online whose records all came after the noted switch back online,
+	// events by their own time too, with no seal since that read
+	// config.toml as local-only (Batch.Back).
+	Online, Back bool
+	// NoMode is set when the batch's seal frame records no mode, as those
+	// of pairtime 0.1.0-alpha.1 and before don't: the batch counts as
+	// sealed in local-only mode, since nothing says config.toml let it
+	// upload. Every batch sealed since an upgrade records its mode, so the
+	// rows after the last one with NoMode are where those seals begin.
+	NoMode bool
 }
 
 // ReadRows reads which chain the ledger in dir holds and the rows of its
@@ -49,6 +61,9 @@ func ReadRows(dir string, from uint64) (ChainInfo, []Row, error) {
 			BatchRow: ledger.BatchRow{B: rp.B, FirstSeq: rp.FirstSeq, N: rp.N, Root: rp.Root, Head: rp.Head},
 			Prev:     rp.Prev,
 			SealedAt: time.UnixMilli(rp.SealedAt),
+			Online:   rp.online(),
+			Back:     rp.Back,
+			NoMode:   rp.Online == nil,
 		}
 		if rc, ok := bf.receipts[rp.B]; ok {
 			r.Receipt = &rc
@@ -62,5 +77,5 @@ func ReadRows(dir string, from uint64) (ChainInfo, []Row, error) {
 // read it, given prev, the head of the batch before it: Batch doesn't
 // carry it, and its holder knows it from that batch.
 func RowOf(b Batch, prev ledger.Hash) Row {
-	return Row{BatchRow: b.Row, Prev: prev, SealedAt: b.SealedAt}
+	return Row{BatchRow: b.Row, Prev: prev, SealedAt: b.SealedAt, Online: b.Online, Back: b.Back}
 }

@@ -132,13 +132,6 @@ type Options struct {
 	State *state.Store
 	// Login gives the sign-in. Nil means the device is never signed in.
 	Login Login
-	// LocalOnly reports whether config.toml's mode is local-only right
-	// now (DESIGN 4.2), as the uploads obey it, so that a batch counts as
-	// local-only exactly when nothing could have uploaded it, with known
-	// false while that can't be told. Sealed asks it of every batch: none
-	// sealed in local-only mode goes, neither its root nor its minutes
-	// (D-local-gap). Nil means the mode is never local-only.
-	LocalOnly func() (local, known bool)
 	// Params is the table the scorer runs with: its version and hash go
 	// in the labels, and WITNESS_LAG_S reads the witness labels.
 	Params *params.Table
@@ -236,16 +229,6 @@ type Uploader struct {
 	lost    bool
 	running bool
 	status  Status
-	// modeSeen is the mode Sealed last saw, and modes the changes it saw
-	// that applyModes hasn't recorded yet. closed is set once Close has
-	// stopped the loop, after which Sealed records them itself.
-	modeSeen int8
-	modes    []modeChange
-	closed   bool
-
-	// keepMu keeps applyModes to one caller at a time once the loop has
-	// stopped.
-	keepMu sync.Mutex
 
 	// The rest belongs to the loop's goroutine.
 	st        saved
@@ -271,12 +254,15 @@ type Uploader struct {
 }
 
 // sealedRow is what the uploader takes of a sealed batch: its row, when it
-// was sealed, and the harnesses its records named, each with the version
-// it last named, for the labels, without its records.
+// was sealed, whether it was sealed online and is marked as the first
+// after a noted switch back online (ledger.Batch.Back), and the harnesses
+// its records named, each with the version it last named, for the labels,
+// without its records.
 type sealedRow struct {
-	row       pkgledger.BatchRow
-	sealedAt  time.Time
-	harnesses map[event.Harness]string
+	row          pkgledger.BatchRow
+	sealedAt     time.Time
+	online, back bool
+	harnesses    map[event.Harness]string
 }
 
 // sealedQueueMax bounds the sealed batches waiting for the loop, as while the
@@ -284,27 +270,32 @@ type sealedRow struct {
 // batches.seg instead.
 const sealedQueueMax = 1024
 
-// The modes Sealed sees: modeUnknown before it has seen one, or after the
-// uploader's place changed under it, so that the next batch records its
-// mode again.
+// localOnlyProblem is what doctor hears while the batch roots stop at a
+// batch sealed in local-only mode (saved.localStop), and noModeProblem
+// while they stop at one an older pairtime version sealed, which recorded
+// no mode, so it counts as local-only (ledger.Row.NoMode).
 const (
-	modeUnknown int8 = iota
-	modeOnline
-	modeLocal
+	localOnlyProblem = `pairtime has stopped uploading, because config.toml kept this computer local-only for a while after it was linked (it said mode = "local", or it had an error), and nothing it records in local-only mode may leave it; to upload again, run pairtime logout, then pairtime login`
+	noModeProblem    = `pairtime has stopped uploading, because an older pairtime version sealed batches on this computer without recording whether config.toml let them upload, so they count as local-only, and nothing recorded in local-only mode may leave it; to upload again, run pairtime logout, then pairtime login`
 )
 
-// modeChange is a batch whose mode differs from the batch's before it.
-type modeChange struct {
-	b     uint64
-	local bool
+// stopProblem is what doctor hears while the batch roots stop at batch b,
+// by whether an older version sealed it (stoppedNoMode).
+func stopProblem(rows *rowIndex, b uint64) string {
+	if stoppedNoMode(rows, b) {
+		return noModeProblem
+	}
+	return localOnlyProblem
 }
 
-// modeQueueMax bounds the mode changes waiting for the loop.
-const modeQueueMax = 64
-
-// localOnlyProblem is what doctor hears while the batch roots stop at a
-// batch sealed in local-only mode (saved.localStop).
-const localOnlyProblem = `pairtime has stopped uploading, because config.toml kept this computer local-only for a while after it was linked (it said mode = "local", or it had an error), and nothing it records in local-only mode may leave it; to upload again, run pairtime logout, then pairtime login`
+// stoppedNoMode reports whether the roots stop at batch b because an older
+// pairtime version sealed it, which recorded no mode: its row says so
+// (ledger.Row.NoMode). The rows hold b, which comes at or after the next
+// root's batch.
+func stoppedNoMode(rows *rowIndex, b uint64) bool {
+	r, ok := rows.row(b)
+	return ok && r.NoMode
+}
 
 // pendingReq is a request waiting for its retry: the same body goes again
 // with the same Idempotency-Key (ingest-v1 2.10).
@@ -378,25 +369,12 @@ func New(opts Options) (*Uploader, error) {
 // labels and the User-Agent name.
 func defaultBuild() string { return version.Get().Version }
 
-// Sealed takes a batch the ledger writer sealed. It never blocks, so it
-// can be called from ledger.Options.Sealed. A batch that holds a prompt
-// or a stop makes the uploader send within SoonDelay.
+// Sealed takes a batch the ledger writer sealed, with the mode its seal
+// frame records (ledger.Batch.Online), which the loop puts in its place
+// before anything of the batch can be planned (takeSealed). It never
+// blocks, so it can be called from ledger.Options.Sealed. A batch that
+// holds a prompt or a stop makes the uploader send within SoonDelay.
 func (u *Uploader) Sealed(b ledger.Batch) {
-	local, known := false, false
-	if u.opts.LocalOnly != nil {
-		local, known = u.opts.LocalOnly()
-	}
-	u.sealedAs(b, local, known)
-}
-
-// SealedWhile is Sealed for a batch sealed while config.toml's mode was
-// local or not, as one the ledger writer sealed before the uploader
-// existed: its mode is recorded as it was at its seal.
-func (u *Uploader) SealedWhile(b ledger.Batch, local bool) { u.sealedAs(b, local, true) }
-
-// sealedAs takes batch b, sealed in local-only mode (local) or not, which
-// known says is known.
-func (u *Uploader) sealedAs(b ledger.Batch, local, known bool) {
 	soon := false
 	var learned map[event.Harness]string
 	for _, rec := range b.Records {
@@ -421,7 +399,7 @@ func (u *Uploader) sealedAs(b ledger.Batch, local, known bool) {
 	}
 	u.mu.Lock()
 	if len(u.sealed) < sealedQueueMax {
-		u.sealed = append(u.sealed, sealedRow{row: b.Row, sealedAt: b.SealedAt, harnesses: learned})
+		u.sealed = append(u.sealed, sealedRow{row: b.Row, sealedAt: b.SealedAt, online: b.Online, back: b.Back, harnesses: learned})
 	} else {
 		u.sealed, u.lost = nil, true
 	}
@@ -429,85 +407,9 @@ func (u *Uploader) sealedAs(b ledger.Batch, local, known bool) {
 		// With the row, so the plan that takes the row clears it.
 		u.hookAt.CompareAndSwap(0, time.Now().UnixMilli())
 	}
-	changed := false
-	if m := modeOf(local); known && m != u.modeSeen {
-		u.modeSeen, changed = m, true
-		u.modes = append(u.modes, modeChange{b: b.Row.B, local: local})
-		if len(u.modes) > modeQueueMax {
-			// The loop hasn't taken them for a long while. Every batch
-			// from the first change on counts as local-only, so none that
-			// was goes, and the next batch records its mode again.
-			u.modes = []modeChange{{b: u.modes[0].b, local: true}}
-			u.modeSeen = modeUnknown
-		}
-	}
-	closed := u.closed
 	u.mu.Unlock()
-	if changed {
-		if closed {
-			u.applyModes()
-		} else {
-			u.Wake()
-		}
-	}
 	if soon {
 		u.soonWake()
-	}
-}
-
-// modeOf is the mode Sealed records for a batch sealed in local-only
-// mode (local) or not.
-func modeOf(local bool) int8 {
-	if local {
-		return modeLocal
-	}
-	return modeOnline
-}
-
-// applyModes records the mode changes Sealed saw in the uploader's place
-// (saved.mode): in u.st while it is loaded, and else in state.json, where
-// the next sign-in reads them. The loop calls it before anything else
-// after a wake, so a batch's mode is recorded before its root can be
-// planned, and Close and Sealed call it once the loop has stopped.
-func (u *Uploader) applyModes() {
-	u.keepMu.Lock()
-	defer u.keepMu.Unlock()
-	u.mu.Lock()
-	changes := u.modes
-	u.modes = nil
-	u.mu.Unlock()
-	if len(changes) == 0 {
-		return
-	}
-	record := func(st *saved) bool {
-		changed := false
-		for _, c := range changes {
-			changed = st.mode(c.b, c.local) || changed
-		}
-		return changed
-	}
-	if u.loaded {
-		if record(&u.st) {
-			u.save()
-		}
-		return
-	}
-	var st saved
-	if _, err := u.opts.State.Get(StateKey, &st); err != nil {
-		st = saved{}
-	}
-	if chain := u.opts.Ledger.DeviceID(); st.Chain != chain {
-		st = saved{Chain: chain, Harnesses: st.Harnesses}
-	}
-	if !record(&st) {
-		return
-	}
-	if err := u.opts.State.Put(StateKey, st); err != nil {
-		u.log.Warn("couldn't keep which batches were sealed in local-only mode", "err", err)
-		return
-	}
-	if err := u.opts.State.Save(); err != nil {
-		u.log.Warn("couldn't save which batches were sealed in local-only mode", "err", err)
 	}
 }
 
@@ -616,10 +518,6 @@ func (u *Uploader) Close() {
 		if started {
 			<-u.done
 		}
-		u.mu.Lock()
-		u.closed = true
-		u.mu.Unlock()
-		u.applyModes()
 	})
 }
 
@@ -648,7 +546,6 @@ func (u *Uploader) run() {
 		case <-tick:
 		case <-timer.C:
 		}
-		u.applyModes()
 		u.prunePast()
 		for {
 			if wait := u.holdOff(); wait > 0 {
@@ -693,7 +590,6 @@ func (u *Uploader) holdOff() time.Duration {
 // the receipts a request brought go with the next wake's roots, so a
 // steady session sends one request a wake.
 func (u *Uploader) cycle() bool {
-	u.applyModes()
 	var c Credentials
 	ok := false
 	if u.opts.Login != nil {
@@ -755,7 +651,7 @@ func (u *Uploader) cycle() bool {
 	u.st.settle(u.rows.last())
 	stop := u.st.localStop(u.rows.last())
 	if stop > 0 {
-		u.setProblem("local-only", localOnlyProblem)
+		u.setProblem("local-only", stopProblem(u.rows, stop))
 	} else {
 		u.setProblem("local-only", "")
 	}
@@ -870,7 +766,7 @@ func (u *Uploader) load(c Credentials) error {
 		// nothing about this one. The runs of batches sealed in local-only
 		// mode describe the ledger, not a server, so they stay, as those
 		// recorded while signed out do for a first sign-in (D-local-gap).
-		st = saved{Chain: chain, Harnesses: st.Harnesses, LocalFrom: st.LocalFrom, Gaps: st.Gaps}
+		st = saved{Chain: chain, Harnesses: st.Harnesses, LocalFrom: st.LocalFrom, Gaps: st.Gaps, Modes: st.Modes}
 	}
 	st.Server, st.Device = c.Server, c.DeviceID
 	rows, err := loadRows(u.opts.LedgerDir, max(st.Next, 1))
@@ -886,32 +782,27 @@ func (u *Uploader) load(c Credentials) error {
 	if rows.device != chain {
 		return fmt.Errorf("the ledger's batches.seg is %s's chain, and the writer writes %s's", rows.device, chain)
 	}
-	// The writer puts a batch in batches.seg before Sealed queues its mode,
-	// so the modes of the rows just read may still wait: they go in before
-	// the link's start is worked out over them.
-	u.keepMu.Lock()
-	u.mu.Lock()
-	changes := u.modes
-	u.modes = nil
-	u.mu.Unlock()
-	u.keepMu.Unlock()
-	for _, m := range changes {
-		st.mode(m.b, m.local)
-	}
+	// A request an older version left waiting for its retry, whose place
+	// took no modes from the rows, may hold items whose batches count as
+	// local-only now, and doesn't say which batch each minute's credit
+	// rests on: it is planned again (below).
+	older := st.Modes == 0 && st.Outbox != nil
+	// Every row says the mode its batch was sealed in, so the modes of the
+	// batches sealed since the place last took one go in from the rows,
+	// before the link's start is worked out over them: whatever a crash
+	// cut short, as a batch Sealed never heard of or a place it didn't
+	// save, no batch sealed in local-only mode goes.
+	st.foldModes(rows)
 	fresh := relinked(st, c)
 	relink(&st, rows, c)
 	u.st, u.rows, u.loaded, u.synced = st, rows, true, false
-	// The place may have changed under what Sealed last saw, as after a
-	// sign-in to another server: the next batch records its mode again.
-	u.mu.Lock()
-	u.modeSeen = modeUnknown
-	u.mu.Unlock()
 	u.lastReq = max(u.lastReq, st.Req)
 	u.pending = u.readOutbox()
-	if fresh && u.pending != nil {
+	if u.pending != nil && (fresh || older) {
 		// A request from before the link may carry roots the gap now
-		// holds, which the server never takes: its items are planned
-		// again from where they stood.
+		// holds, which the server never takes, and one an older version
+		// left items of batches that now count as local-only, which may
+		// never go: its items are planned again from where they stood.
 		u.pending = nil
 		u.removeOutbox()
 		u.save()
@@ -964,23 +855,20 @@ func firstLinked(rows *rowIndex, linkedAt time.Time) uint64 {
 	return rows.last() + 1
 }
 
-// takeSealed adds the batches Sealed took to the rows, and the harnesses
-// their records named to the labels. It takes the rows and the modes
-// Sealed recorded with them under one hold, and records the modes first,
-// so a batch's mode is in the place before its root or its minutes can be
-// planned, however late in a cycle it was sealed. The harnesses of a batch
-// sealed in local-only mode stay out of the labels, as everything it holds
-// stays on the device (DESIGN 4.2).
+// takeSealed adds the batches Sealed took to the rows, with the modes
+// their seal frames record, and the harnesses their records named to the
+// labels. The modes go in the place before anything else, so a batch's
+// mode is there before its root or its minutes can be planned, however
+// late in a cycle it was sealed. The harnesses of a batch sealed in
+// local-only mode stay out of the labels, as everything it holds stays on
+// the device (DESIGN 4.2): by the mode it was sealed in, which holds even
+// when its row didn't reach the rows, and by the runs.
 func (u *Uploader) takeSealed() {
 	u.mu.Lock()
-	batches, lost, changes := u.sealed, u.lost, u.modes
-	u.sealed, u.lost, u.modes = nil, false, nil
+	batches, lost := u.sealed, u.lost
+	u.sealed, u.lost = nil, false
 	u.hookAt.Store(0) // every hook's batch is in this plan
 	u.mu.Unlock()
-	changed := false
-	for _, c := range changes {
-		changed = u.st.mode(c.b, c.local) || changed
-	}
 	if lost {
 		if rows, err := loadRows(u.opts.LedgerDir, max(u.st.Next, 1)); err == nil {
 			u.st.prepare(rows)
@@ -992,7 +880,7 @@ func (u *Uploader) takeSealed() {
 		case sb.row.B <= u.rows.last():
 			// Read from batches.seg already.
 		case sb.row.B == u.rows.last()+1:
-			r := ledger.Row{BatchRow: sb.row, Prev: u.rows.lastHead, SealedAt: sb.sealedAt}
+			r := ledger.Row{BatchRow: sb.row, Prev: u.rows.lastHead, SealedAt: sb.sealedAt, Online: sb.online, Back: sb.back}
 			if err := u.rows.add(r); err != nil {
 				u.log.Warn("a sealed batch doesn't follow the rows", "err", err)
 			}
@@ -1005,8 +893,9 @@ func (u *Uploader) takeSealed() {
 			}
 		}
 	}
+	changed := u.st.foldModes(u.rows)
 	for _, sb := range batches {
-		if u.st.localOnly(sb.row.B) {
+		if !sb.online || u.st.localOnly(sb.row.B) {
 			continue
 		}
 		for h, v := range sb.harnesses {

@@ -63,14 +63,58 @@ func Linked(dirs home.Dirs) bool {
 	return err == nil
 }
 
-// localOnly is the uploader's LocalOnly: whether config.toml keeps the
-// computer local-only right now, as the uploads obey it (UploadConfig).
-// Batches sealed then never go, nor their minutes (D-local-gap), so a
-// batch counts as local-only exactly when nothing could have uploaded it.
-// It reads one small file, quick enough for the ledger writer's Sealed.
-func (a *agent) localOnly() (local, known bool) {
+// online is the ledger writer's Online: whether config.toml lets the
+// computer upload right now, as the uploads obey it (UploadConfig). The
+// writer records it in each batch's seal frame, and batches sealed while
+// it says no never go, nor their minutes (D-local-gap), so a batch counts
+// as local-only exactly when nothing could have uploaded it. It reads one
+// small file, quick enough for a seal, and calls nothing of the writer.
+func (a *agent) online() bool {
 	cfg, _ := UploadConfig(a.dirs)
-	return string(cfg.Mode) != modeOnline, true
+	return string(cfg.Mode) == modeOnline
+}
+
+// noteMode tells the ledger writer, once it is open, config.toml's mode as
+// uploads obey it (ledger.Writer.NoteMode): a record written while it is
+// local-only makes its batch local-only, even if no seal reads the file
+// before the teen switches back online. A note that comes before the
+// writer is published is kept, and publishWriter gives it to the writer,
+// so a switch to local-only while the ledger waited to open still counts
+// for the records written once it is open.
+func (a *agent) noteMode() {
+	if w := a.writer.Load(); w != nil {
+		w.NoteMode(a.online())
+		return
+	}
+	a.noteKept.Store(true)
+	// publishWriter may have stored the writer since the load, and looked
+	// for a kept note before this one was kept.
+	if w := a.writer.Load(); w != nil && a.noteKept.Swap(false) {
+		w.NoteMode(a.online())
+	}
+}
+
+// publishWriter makes w the writer noteMode tells, and first gives it the
+// note the config watch kept while there was none, as config.toml reads
+// now, so the records written once w is published already take it. With no
+// note kept, it notes nothing: the mode the agent started in isn't noted
+// (startLedger).
+func (a *agent) publishWriter(w *ledger.Writer) {
+	if a.noteKept.Swap(false) {
+		w.NoteMode(a.online())
+	}
+	a.writer.Store(w)
+	// A note kept between that look and the store.
+	if a.noteKept.Swap(false) {
+		w.NoteMode(a.online())
+	}
+}
+
+// reloadConfig is the config watch's reload: config.toml as the agent's
+// settings, and its mode for the ledger writer.
+func (a *agent) reloadConfig() {
+	a.loadConfig(false)
+	a.noteMode()
 }
 
 // uploadMode is config.toml's mode as uploads obey it, for GET /v1/status.
@@ -210,7 +254,6 @@ func (a *agent) startUploader(w *ledger.Writer) func() {
 		DataDir:   a.dirs.Data,
 		State:     a.state,
 		Login:     uploader.LoginFunc(a.credentials),
-		LocalOnly: a.localOnly,
 		Params:    a.table,
 		Device:    score.Device{},
 		Started:   a.started,
@@ -228,24 +271,21 @@ func (a *agent) startUploader(w *ledger.Writer) func() {
 	return u.Close
 }
 
-// earlyBatch is a batch the ledger writer sealed before the uploader
-// existed, and whether config.toml kept the computer local-only then.
-type earlyBatch struct {
-	b     ledger.Batch
-	local bool
-}
-
 // earlyMax bounds the batches kept for the uploader before it exists. The
 // writer seals only what a crash left before it, and maybe one more.
 const earlyMax = 64
 
-// handEarly hands u the batches sealed before it existed, with the modes
-// they were sealed in, and makes u the one sealed hands the rest to.
+// handSealed is how the agent hands a sealed batch to its uploader. Tests
+// replace it.
+var handSealed = (*uploader.Uploader).Sealed
+
+// handEarly hands u the batches sealed before it existed, and makes u the
+// one sealed hands the rest to.
 func (a *agent) handEarly(u *uploader.Uploader) {
 	a.earlyMu.Lock()
 	defer a.earlyMu.Unlock()
-	for _, e := range a.early {
-		u.SealedWhile(e.b, e.local)
+	for _, b := range a.early {
+		handSealed(u, b)
 	}
 	a.early = nil
 	a.upload.Store(u)
@@ -255,25 +295,19 @@ func (a *agent) handEarly(u *uploader.Uploader) {
 // scorer loop: it is ledger.Options.Sealed, so it must return quickly,
 // and both only queue the batch. A batch sealed before the uploader
 // exists, as the one ledger.Open seals of what a crash left, waits for it
-// with the mode config.toml had at its seal (handEarly): a batch whose mode
-// isn't recorded could go although it was sealed in local-only mode.
+// (handEarly), so the harnesses its records name reach the labels. Its
+// mode is in its seal frame, and so in its row in batches.seg, which the
+// uploader reads when it first uploads: one past earlyMax isn't kept, and
+// loses only its harnesses.
 func (a *agent) sealed(b ledger.Batch) {
 	a.earlyMu.Lock()
 	u := a.upload.Load()
-	if u == nil {
-		local, _ := a.localOnly()
-		switch {
-		case len(a.early) < earlyMax:
-			a.early = append(a.early, earlyBatch{b: b, local: local})
-		case local:
-			// Past the bound only the mode counts: the last batch kept takes
-			// a local one's, so no batch from it on goes.
-			a.early[len(a.early)-1].local = true
-		}
+	if u == nil && len(a.early) < earlyMax {
+		a.early = append(a.early, b)
 	}
 	a.earlyMu.Unlock()
 	if u != nil {
-		u.Sealed(b)
+		handSealed(u, b)
 	}
 	if a.scorer != nil {
 		a.scorer.Sealed(b)

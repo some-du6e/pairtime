@@ -30,8 +30,11 @@ type Preview struct {
 	More bool
 	// Stopped is the first batch sealed in local-only mode after the
 	// chain's last link: no batch root from it on goes until the next link,
-	// nor the minutes it holds. 0 for none.
+	// nor the minutes it holds. 0 for none. NoMode is set when an older
+	// pairtime version sealed it, which recorded no mode, so it counts as
+	// local-only (ledger.Row.NoMode).
 	Stopped uint64
+	NoMode  bool
 	// Fork is the batch the server's record of this computer's chain parts
 	// from its ledger at, after which nothing more goes under its device ID
 	// (#150 R5). 0 for none.
@@ -97,13 +100,18 @@ func Next(o PreviewOptions) (Preview, error) {
 		// As the agent's load does, the runs of batches sealed in local-only
 		// mode stay: they are the ledger's.
 		foreign := st.Server != ""
-		st = saved{Chain: rows.device, Harnesses: st.Harnesses, LocalFrom: st.LocalFrom, Gaps: st.Gaps}
+		st = saved{Chain: rows.device, Harnesses: st.Harnesses, LocalFrom: st.LocalFrom, Gaps: st.Gaps, Modes: st.Modes}
 		if foreign {
 			rows.forgetReceipts() // they are the old server's
 			st.Foreign = rows.last()
 		}
 	}
 	st.prepare(rows)
+	// As the agent's load does, the modes of the batches sealed since the
+	// place last took one go in from the rows, and a request an older
+	// version left waiting is planned again.
+	older := st.Modes == 0 && st.Outbox != nil
+	st.foldModes(rows)
 	if st.Fork != 0 || st.Mismatch {
 		// As the agent does, nothing more goes after a fork or a
 		// device_mismatch.
@@ -114,9 +122,10 @@ func Next(o PreviewOptions) (Preview, error) {
 	fresh := relinked(st, c)
 	relink(&st, rows, c)
 	stop := st.localStop(rows.last())
-	if p, err := readOutbox(o.DataDir, st); err == nil && p != nil && !fresh {
+	noMode := stoppedNoMode(rows, stop)
+	if p, err := readOutbox(o.DataDir, st); err == nil && p != nil && !fresh && !older {
 		pv := previewOf(p.plan, true)
-		pv.Stopped = stop
+		pv.Stopped, pv.NoMode = stop, noMode
 		return pv, nil
 	}
 	if fresh {
@@ -145,7 +154,7 @@ func Next(o PreviewOptions) (Preview, error) {
 		return Preview{}, err
 	}
 	pv := previewOf(p, false)
-	pv.Stopped = stop
+	pv.Stopped, pv.NoMode = stop, noMode
 	return pv, nil
 }
 

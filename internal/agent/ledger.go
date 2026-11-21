@@ -72,6 +72,24 @@ func (a *agent) startLedger() func() {
 		// the writer (adapters.go).
 		a.adaptersHost().attach(lw)
 		w = lw
+		// The config watch tells the writer each change of config.toml's
+		// mode from here on (ledger.Writer.NoteMode), and publishWriter
+		// gives it the one the watch noted while the ledger waited to open.
+		// The mode the agent started in isn't noted: every install starts
+		// in local mode, and the watch notes pairtime login only after its
+		// debounce, so the records just after the login would count as
+		// local-only. A stretch from the start that no seal falls in, as
+		// from pairtime install to pairtime login, takes the mode of its
+		// seal. Once a batch has been sealed local-only, the login's note
+		// seals what is pending, and the root of the first batch after it
+		// goes, and the minutes after the switch (Batch.Back).
+		// The records that waited for the writer, presence's queue and the
+		// hook calls the adapters held, attach on goroutines of their own
+		// and take the mode of their seal too: those made in a local-only
+		// stretch while the ledger was shut can be sealed online, a gap
+		// #131 had too, which a WP-AG5 follow-up closes before the teen
+		// pilot (docs/PLAN.md).
+		a.publishWriter(lw)
 		a.ledgerIn.Attach(lw)
 		if a.scorer != nil {
 			a.scorer.Start()
@@ -175,6 +193,7 @@ func (a *agent) openLedger() (*ledger.Writer, error) {
 		Params:  a.table,
 		Sched:   a.sched,
 		Sealed:  a.sealed,
+		Online:  a.online,
 		Problem: func(msg string) { a.setProblem("ledger", msg) },
 	})
 }

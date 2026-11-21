@@ -107,6 +107,15 @@ func (ix *rowIndex) rowsFrom(from uint64, n int) []ledger.Row {
 	return rows[:min(n, len(rows))]
 }
 
+// sealedAt returns when batch b was sealed, in Unix ms, while the device
+// has it, whether or not the index still holds its row.
+func (ix *rowIndex) sealedAt(b uint64) (int64, bool) {
+	if !ix.holdsRow(b) {
+		return 0, false
+	}
+	return ix.times[b-1].sealed, true
+}
+
 // holdsRow reports whether the device has a batch b, whether or not the
 // index still holds its row.
 func (ix *rowIndex) holdsRow(b uint64) bool { return b >= 1 && b <= ix.last() }

@@ -4,14 +4,17 @@ package agent
 
 import (
 	"bytes"
+	"context"
 	"crypto/ed25519"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -20,6 +23,7 @@ import (
 	"github.com/some-du6e/pairtime/internal/agent/home"
 	"github.com/some-du6e/pairtime/internal/agent/keys"
 	"github.com/some-du6e/pairtime/internal/agent/ledger"
+	"github.com/some-du6e/pairtime/internal/agent/sched"
 	"github.com/some-du6e/pairtime/internal/agent/state"
 	"github.com/some-du6e/pairtime/internal/agent/uploader"
 	"github.com/some-du6e/pairtime/internal/devtoken"
@@ -27,8 +31,8 @@ import (
 )
 
 // TestUploadMode is config.toml as uploads obey it, read from the file:
-// the uploader's LocalOnly for each sealed batch, and its Login before
-// each upload, which agree on every file.
+// the ledger writer's Online for each seal, which the seal frame records,
+// and the uploader's Login before each upload, which agree on every file.
 func TestUploadMode(t *testing.T) {
 	dir := t.TempDir()
 	dirs := home.Dirs{Data: dir, Config: dir, Runtime: dir}
@@ -80,8 +84,8 @@ func TestUploadMode(t *testing.T) {
 				a.loadConfig(false)
 			}
 			write(t, tc.text)
-			if local, known := a.localOnly(); local != tc.local || !known {
-				t.Errorf("localOnly() = %v, %v; want %v, true", local, known, tc.local)
+			if online := a.online(); online == tc.local {
+				t.Errorf("online() = %v, want %v", online, !tc.local)
 			}
 			if _, ok := a.credentials(); ok == tc.local {
 				t.Errorf("uploads go: %v, while a batch sealed now is local-only: %v", ok, tc.local)
@@ -237,54 +241,217 @@ func (earlyLedger) DeviceID() string                             { return "d_tes
 func (earlyLedger) StoreReceipt(uint64, pkgledger.Receipt) error { return nil }
 func (earlyLedger) UploadFailure(uint64, string) (uint64, error) { return 0, nil }
 
-// TestEarlyBatches is a batch the ledger writer seals before the uploader
-// exists, as ledger.Open seals what a crash left: it waits for the
-// uploader, which records it in the mode config.toml had at its seal, so a
-// batch sealed in local-only mode never goes.
+// TestEarlyBatches is the batches the ledger writer seals before the
+// uploader exists, as ledger.Open seals what a crash left: up to earlyMax
+// of them wait for it, for the harnesses their records name, and it takes
+// them, in order, and then every batch sealed after it. Their modes are in
+// their seal frames, and so in the rows the uploader reads when it first
+// uploads (TestLedgerMode, uploader.TestKillKeepsModes).
 func TestEarlyBatches(t *testing.T) {
 	dir := t.TempDir()
 	dirs := home.Dirs{Data: dir, Config: dir, Runtime: dir}
-	write := func(t *testing.T, text string) {
-		t.Helper()
-		if err := os.WriteFile(dirs.ConfigFile(), []byte(text), 0o600); err != nil {
-			t.Fatal(err)
-		}
-	}
+	var handed []uint64
+	saved := handSealed
+	t.Cleanup(func() { handSealed = saved })
+	handSealed = func(_ *uploader.Uploader, b ledger.Batch) { handed = append(handed, b.Row.B) }
 	a := &agent{dirs: dirs, log: slog.New(slog.DiscardHandler), problems: map[string]string{}}
-	write(t, "mode = \"local\"\n")
-	a.sealed(ledger.Batch{Row: pkgledger.BatchRow{B: 7, FirstSeq: 7, N: 1}, SealedAt: time.Now()})
-	write(t, "mode = \"online\"\n") // and online again by the time the uploader starts
+	batch := func(b uint64) ledger.Batch {
+		return ledger.Batch{Row: pkgledger.BatchRow{B: b, FirstSeq: b, N: 1}, SealedAt: time.Now()}
+	}
+	for b := uint64(1); b <= earlyMax+1; b++ {
+		a.sealed(batch(b))
+	}
+	kept, before := len(a.early), len(handed)
 	st, _, err := state.Open(dirs.StateFile())
 	if err != nil {
 		t.Fatal(err)
 	}
 	u, err := uploader.New(uploader.Options{
 		Ledger: earlyLedger{}, LedgerDir: dirs.Ledger(), BucketDir: dirs.Buckets(), DataDir: dirs.Data, State: st,
-		Params: newestTable(), LocalOnly: a.localOnly,
+		Params: newestTable(),
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(u.Close)
 	a.handEarly(u)
-	u.Close() // a stopped uploader records the modes it took in state.json
-	var place struct {
-		LocalFrom uint64 `json:"local_from"`
-	}
-	if _, err := st.Get(uploader.StateKey, &place); err != nil {
-		t.Fatal(err)
+	early := slices.Clone(handed)
+	a.sealed(batch(earlyMax + 2))
+	want := make([]uint64, 0, earlyMax)
+	for b := uint64(1); b <= earlyMax; b++ {
+		want = append(want, b)
 	}
 	tests := []struct {
 		name string
 		ok   bool
 	}{
-		{"the batch sealed in local mode before the uploader existed is recorded local-only", place.LocalFrom == 7},
-		{"the uploader takes the batches sealed after it from then on", a.upload.Load() == u && len(a.early) == 0},
+		{"the batches sealed before the uploader existed wait for it, up to earlyMax", kept == earlyMax && before == 0},
+		{"the uploader takes them, in order", slices.Equal(early, want)},
+		{"the uploader takes the batches sealed after it from then on", a.upload.Load() == u && len(a.early) == 0 && slices.Equal(handed[len(early):], []uint64{earlyMax + 2})},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			if !tc.ok {
-				t.Errorf("no: local from %d", place.LocalFrom)
+				t.Errorf("no: %d kept, %d handed before, then %v", kept, before, handed)
 			}
 		})
 	}
+}
+
+// TestLedgerMode is config.toml's mode as the agent's ledger writer
+// records it: openLedger gives the writer the mode uploads obey, which each
+// seal frame keeps, and the config watch's reload (reloadConfig) tells the
+// writer of a switch to local-only mode, after which the next record seals
+// at once in a local-only batch.
+func TestLedgerMode(t *testing.T) {
+	str := func(s string) *string { return &s }
+	// open opens the agent's ledger in a new data directory with
+	// config.toml as text says, nil for none.
+	open := func(t *testing.T, text *string) (*agent, *ledger.Writer, home.Dirs) {
+		t.Helper()
+		dir := t.TempDir()
+		dirs := home.Dirs{Data: dir, Config: dir, Runtime: dir}
+		if text != nil {
+			if err := os.WriteFile(dirs.ConfigFile(), []byte(*text), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		a := &agent{dirs: dirs, log: slog.New(slog.DiscardHandler), problems: map[string]string{}, table: newestTable(), keyStores: []keys.Store{}}
+		w, err := a.openLedger()
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { w.Close() })
+		return a, w, dirs
+	}
+	record := func(t *testing.T, w *ledger.Writer) {
+		t.Helper()
+		at := uint64(time.Now().UnixMilli()) / pkgledger.CheckpointMS * pkgledger.CheckpointMS
+		if _, err := w.Checkpoint("p_test", at, json.RawMessage(`{}`)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rows := func(t *testing.T, dirs home.Dirs) []ledger.Row {
+		t.Helper()
+		_, rows, err := ledger.ReadRows(dirs.Ledger(), 1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return rows
+	}
+	seals := []struct {
+		name   string
+		text   *string
+		online bool
+	}{
+		{"a batch sealed while config.toml says online is sealed online", str("mode = \"online\"\n"), true},
+		{"a batch sealed while it says local is local-only", str("mode = \"local\"\n"), false},
+		{"a batch sealed with no config.toml is local-only, as its default is", nil, false},
+		{"a batch sealed while config.toml has an error is local-only", str("mode = \"onl"), false},
+	}
+	for _, tc := range seals {
+		t.Run(tc.name, func(t *testing.T) {
+			_, w, dirs := open(t, tc.text)
+			record(t, w)
+			if _, _, err := w.Seal(); err != nil {
+				t.Fatal(err)
+			}
+			if got := rows(t, dirs); len(got) != 1 || got[0].Online != tc.online {
+				t.Errorf("rows %+v, want one sealed online: %v", got, tc.online)
+			}
+		})
+	}
+	// sealsAtOnce writes a record every 50 ms, up to 10 s, until a batch
+	// is sealed: only NoteMode's seal of a local-only stretch's first
+	// record seals one so soon, since these writers have no BATCH_S job.
+	sealsAtOnce := func(t *testing.T, w func() *ledger.Writer, dirs home.Dirs) []ledger.Row {
+		t.Helper()
+		for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); time.Sleep(50 * time.Millisecond) {
+			lw := w()
+			if lw == nil {
+				continue // the ledger opens on a goroutine of its own
+			}
+			record(t, lw)
+			if got := rows(t, dirs); len(got) > 0 {
+				return got
+			}
+		}
+		return nil
+	}
+	t.Run("the ledger's start notes no mode and hands the writer to the config watch, whose notes begin at its first reload", func(t *testing.T) {
+		dir := t.TempDir()
+		dirs := home.Dirs{Data: dir, Config: dir, Runtime: dir}
+		if err := os.WriteFile(dirs.ConfigFile(), []byte("mode = \"local\"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		a := &agent{dirs: dirs, log: slog.New(slog.DiscardHandler), problems: map[string]string{}, table: newestTable(), keyStores: []keys.Store{}}
+		t.Cleanup(a.startLedger())
+		var w *ledger.Writer
+		for deadline := time.Now().Add(10 * time.Second); w == nil && time.Now().Before(deadline); time.Sleep(25 * time.Millisecond) {
+			w = a.writer.Load()
+		}
+		if w == nil {
+			t.Fatal("the ledger didn't open")
+		}
+		// Unnoted, as records just after pairtime login are until the
+		// watch notes it, a record doesn't seal at once.
+		record(t, w)
+		time.Sleep(200 * time.Millisecond)
+		if got := rows(t, dirs); len(got) != 0 {
+			t.Fatalf("a record sealed at once after the ledger's start: %+v", got)
+		}
+		a.reloadConfig() // the watch's reload of a change that leaves mode = "local"
+		if got := sealsAtOnce(t, a.writer.Load, dirs); len(got) != 1 || got[0].Online {
+			t.Errorf("rows %+v, want one local-only batch sealed at once", got)
+		}
+	})
+	t.Run("a switch to local-only the config watch notes while the ledger waits to open is noted as the writer is published", func(t *testing.T) {
+		dir := t.TempDir()
+		dirs := home.Dirs{Data: dir, Config: dir, Runtime: dir}
+		setMode := func(mode string) {
+			t.Helper()
+			if err := os.WriteFile(dirs.ConfigFile(), []byte("mode = \""+mode+"\"\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		setMode("local")
+		a := &agent{dirs: dirs, log: slog.New(slog.DiscardHandler), problems: map[string]string{}, table: newestTable(), keyStores: []keys.Store{}}
+		// The watch's reload of the switch, with no writer to tell yet.
+		a.reloadConfig()
+		t.Cleanup(a.startLedger())
+		var w *ledger.Writer
+		for deadline := time.Now().Add(10 * time.Second); w == nil && time.Now().Before(deadline); time.Sleep(25 * time.Millisecond) {
+			w = a.writer.Load()
+		}
+		if w == nil {
+			t.Fatal("the ledger didn't open")
+		}
+		// Back online before any seal reads the file, which the watch,
+		// not running here, doesn't note: the record written in the
+		// stretch seals at once, local-only, as the stretch's first.
+		setMode("online")
+		if got := sealsAtOnce(t, a.writer.Load, dirs); len(got) != 1 || got[0].Online {
+			t.Errorf("rows %+v, want one local-only batch sealed at once", got)
+		}
+	})
+	t.Run("the config watch tells the writer of a switch to local-only mode, after which the next record seals at once, local-only", func(t *testing.T) {
+		a, w, dirs := open(t, str("mode = \"online\"\n"))
+		ctx, cancel := context.WithCancel(context.Background())
+		a.sched = sched.New()
+		go a.sched.Run(ctx)
+		t.Cleanup(cancel)
+		a.publishWriter(w) // as the ledger's start does
+		t.Cleanup(a.watchConfig())
+		record(t, w)
+		time.Sleep(200 * time.Millisecond)
+		if got := rows(t, dirs); len(got) != 0 {
+			t.Fatalf("a record written online sealed at once: %+v", got)
+		}
+		if err := os.WriteFile(dirs.ConfigFile(), []byte("mode = \"local\"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if got := sealsAtOnce(t, func() *ledger.Writer { return w }, dirs); len(got) != 1 || got[0].Online {
+			t.Errorf("rows %+v, want one local-only batch sealed at once", got)
+		}
+	})
 }

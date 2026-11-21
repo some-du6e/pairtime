@@ -228,9 +228,11 @@ func bucketsOf(in planInput, n int) ([]entry, map[string]bool, []string, error) 
 				return true
 			}
 			ms := b.At()
-			if bs, ok := in.rows.sealedAfter(ms + 60_000); ok && in.st.localOnly(bs) {
-				// Its records were sealed in local-only mode: it never goes
-				// (ingest-v1 5.3; D-local-gap).
+			if bs, ok := in.rows.sealedAfter(ms + 60_000); ok && in.st.localOnly(bs) || in.st.straddles(in.rows, ms) {
+				// Its records were sealed in local-only mode, or a run of such
+				// batches ends inside it, as at the switch back online that
+				// pairtime login makes: it never goes (ingest-v1 5.3;
+				// D-local-gap).
 				out = append(out, entry{day: f.Day, mark: r.Mark})
 				took++
 				return true
@@ -244,6 +246,12 @@ func bucketsOf(in planInput, n int) ([]entry, map[string]bool, []string, error) 
 			prev, had := sent[ms]
 			if had && (prev.H == rev.H || in.st.localOnly(prev.B)) {
 				rev.B = prev.B
+			}
+			if rev.B > in.rows.last() {
+				// Its credit rests on a batch sealed since the rows were
+				// taken, whose mode the place doesn't have yet: it waits for
+				// the plan that has the batch's row, and its mode with it.
+				return false
 			}
 			if in.st.localOnly(rev.B) {
 				// Its credit rests on records sealed in local-only mode, as a
