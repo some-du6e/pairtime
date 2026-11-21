@@ -629,13 +629,22 @@ func (w *Writer) RequestSeal() {
 // seal is Seal. w.sealMu is held.
 func (w *Writer) seal() (Batch, bool, error) {
 	w.mu.Lock()
-	notes := w.notes
-	w.mu.Unlock()
-	// A switch to local-only mode that came before the seal makes the
-	// batch local-only, whenever its records came.
-	online := w.online == nil || w.online()
-	w.mu.Lock()
-	if w.online != nil && online && w.notes == notes {
+	var online bool
+	for {
+		notes := w.notes
+		w.mu.Unlock()
+		// A switch to local-only mode that came before the seal makes the
+		// batch local-only, whenever its records came.
+		online = w.online == nil || w.online()
+		w.mu.Lock()
+		if w.notes == notes {
+			break
+		}
+		// A note came while config.toml was read, as the config watch's of
+		// a switch back online, after which records are online: it is read
+		// again, so the batch isn't sealed in the mode from before the note.
+	}
+	if w.online != nil && online {
 		// config.toml says online, and no note came since it was read: a
 		// stretch the noted mode still says is local-only ended unnoted.
 		// The batch's own records keep their taint. Without Online, only

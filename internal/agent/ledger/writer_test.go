@@ -667,6 +667,65 @@ func TestNoteMode(t *testing.T) {
 	}
 }
 
+// TestSealReadsModeAgain checks a note that comes while a seal reads
+// config.toml (Options.Online), which it does without the Writer's lock:
+// the seal reads the file again, so a record written after a switch back
+// online isn't sealed in the mode the file had before it. The test's
+// Online notes the mode and writes the record itself, which a real one
+// never does, to land them in that moment.
+func TestSealReadsModeAgain(t *testing.T) {
+	cases := []struct {
+		name string
+		// noted is the mode noted before the seal, note the one noted while
+		// it reads, and before and after what the file says at its first
+		// read and at the next.
+		noted, note, before, after, want bool
+	}{
+		{"a switch back online noted mid-read, with a record after it, seals the batch online", false, true, false, true, true},
+		{"a switch to local-only noted mid-read, with a record after it, seals the batch local-only", true, false, true, false, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			var (
+				w     *Writer
+				armed atomic.Bool
+				reads atomic.Int32
+			)
+			rng := rand.New(rand.NewPCG(13, 14))
+			sealed := make(chan Batch, 4)
+			w = open(t, t.TempDir(), newClock(testT), func(o *Options) {
+				o.Sealed = func(b Batch) { sealed <- b }
+				o.Online = func() bool {
+					if !armed.Load() {
+						return c.noted
+					}
+					if reads.Add(1) > 1 {
+						return c.after
+					}
+					w.NoteMode(c.note)
+					if _, _, err := write(w, rng, "os.presence", testT); err != nil {
+						t.Error(err)
+					}
+					return c.before
+				}
+			})
+			w.NoteMode(c.noted)
+			armed.Store(true)
+			if _, ok, err := w.Seal(); !ok || err != nil {
+				t.Fatalf("Seal sealed %v, %v", ok, err)
+			}
+			select {
+			case b := <-sealed:
+				if b.Online != c.want || len(b.Records) != 1 {
+					t.Errorf("the batch of %d records was sealed online %v, want %v", len(b.Records), b.Online, c.want)
+				}
+			case <-time.After(10 * time.Second):
+				t.Fatal("no batch was sealed")
+			}
+		})
+	}
+}
+
 // TestSegments checks that records go to the segment of the UTC day they
 // are written on, and that batches read back across days.
 func TestSegments(t *testing.T) {
