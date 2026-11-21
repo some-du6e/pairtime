@@ -115,7 +115,7 @@ var tmpl = template.Must(template.New("device").Funcs(template.FuncMap{
 <tbody>
 {{- range .Devices}}
 <tr>
-<td>{{os .OS}}, pairtime {{.ClientBuild}}<br><code>{{.ID}}</code></td>
+<td>{{if .RemovedAt.IsZero}}{{os .OS}}, pairtime {{.ClientBuild}}{{else}}A removed computer{{end}}<br><code>{{.ID}}</code></td>
 <td>{{when .LinkedAt}}</td>
 <td>{{when .LastSeenAt}}</td>
 <td>{{if .Revoked}}Removed {{when .RemovedAt}}{{else}}<form method="post" action="/account/devices/remove"><input type="hidden" name="csrf" value="{{$.CSRF}}"><input type="hidden" name="device_id" value="{{.ID}}"><button type="submit">Remove</button></form>{{end}}</td>
@@ -123,7 +123,7 @@ var tmpl = template.Must(template.New("device").Funcs(template.FuncMap{
 {{- end}}
 </tbody>
 </table></div>
-<p>Removing a computer stops its uploads at once. A computer that never uploaded anything is deleted at once. Any other stays listed for 90 days, as the <a href="/privacy">privacy notice</a> says, and keeps its device ID with your account until then.</p>
+<p>Removing a computer stops its uploads at once. A computer that never uploaded anything is deleted at once. Of any other, only its device ID stays listed, with your account, for 90 days, or for as long as this server keeps what it uploaded, as the <a href="/privacy">privacy notice</a> says.</p>
 {{- else}}
 <p>No computer is linked yet.</p>
 {{- end}}

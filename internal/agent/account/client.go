@@ -256,12 +256,12 @@ type Token struct {
 // Poll asks for the token of code until the teen answers or the code
 // expires (RFC 8628 3.4, 3.5). It waits the server's interval before each
 // request, 5 s more after each slow_down, and twice as long after a
-// network error, up to a minute, as RFC 8628 3.5 asks. An answer without
-// an error code, such as a proxy's 502 page or a 429, isn't the server's
-// answer to the code, so it waits as after a network error and asks
-// again. Any error code but authorization_pending and slow_down ends the
-// polling, as RFC 8628 3.5 says: ErrDenied, ErrTaken, ErrExpired, or a
-// *ServerError for the rest. Once it has waited longer than the code
+// network error, up to a minute, as RFC 8628 3.5 asks. A 5xx or 429
+// answer without an error code, such as a proxy's 502 page, isn't the
+// server's answer to the code, so it waits as after a network error and
+// asks again. Any error code but authorization_pending and slow_down ends
+// the polling, as RFC 8628 3.5 says, and so does any other answer without
+// one: ErrDenied, ErrTaken, ErrExpired, or a *ServerError for the rest. Once it has waited longer than the code
 // lives, as when the network never came back, it stops with ErrExpired.
 func (c *Client) Poll(ctx context.Context, code Code) (Token, error) {
 	interval := time.Duration(code.Interval) * time.Second

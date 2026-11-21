@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/some-du6e/pairtime/internal/devtoken"
+	"github.com/some-du6e/pairtime/internal/server/accounts"
 	"github.com/some-du6e/pairtime/internal/server/writer"
 )
 
@@ -205,10 +206,7 @@ FROM device_codes WHERE user_code_hash = $1`, s.userCodeHash(userCode)).Scan(&p.
 	}
 	p.UserCode = FormatUserCode(userCode)
 	p.ExpiresAt = time.UnixMilli(expiresMs)
-	var (
-		removed      sql.NullInt64
-		linked, seen int64
-	)
+	var removed, linked, seen sql.NullInt64
 	err = s.db.Read.QueryRowContext(ctx, `SELECT user_id, removed_at_ms, linked_at_ms, last_seen_at_ms FROM devices WHERE device_id = $1`,
 		p.DeviceID).Scan(&p.Owner, &removed, &linked, &seen)
 	switch {
@@ -216,7 +214,7 @@ FROM device_codes WHERE user_code_hash = $1`, s.userCodeHash(userCode)).Scan(&p.
 	case err != nil:
 		return Pending{}, fmt.Errorf("device: looking up the code's device: %w", err)
 	case !removed.Valid:
-		p.Linked, p.LinkedAt, p.LastSeenAt = true, time.UnixMilli(linked), time.UnixMilli(seen)
+		p.Linked, p.LinkedAt, p.LastSeenAt = true, time.UnixMilli(linked.Int64), time.UnixMilli(seen.Int64)
 	}
 	return p, nil
 }
@@ -328,7 +326,9 @@ func ownerOf(ctx context.Context, tx writer.Tx, deviceID string) (string, error)
 // A new device id gets a row at link generation 1. A device its account
 // linked before, removed or not, is linked again: a new token, the code's
 // key, and the next link generation, while ingest's state for it stays
-// (D-local-gap). Any token it had stops working.
+// (D-local-gap). Any token it had stops working. An account Hack Club Auth
+// has marked ineligible since it approved links nothing, and the app gets
+// ErrDenied.
 func (s *Store) Poll(ctx context.Context, deviceCode string) (tok Token, interval time.Duration, err error) {
 	now := s.now()
 	nowMs := now.UnixMilli()
@@ -397,6 +397,20 @@ FROM device_codes WHERE device_code_hash = $1`, codeHash).Scan(&deviceID, &osFam
 		if !account.Valid || len(pub) != ed25519.PublicKeySize {
 			return errors.New("device: an approved device code names no account or no key")
 		}
+		var verification string
+		if err := tx.QueryRowContext(ctx, `SELECT slack_id, hca_sub, verification_status FROM users WHERE id = $1`, account.String).Scan(&slackID, &hcaSub, &verification); err != nil {
+			return fmt.Errorf("device: reading the approving account: %w", err)
+		}
+		if accounts.VerificationStatus(verification) == accounts.Ineligible {
+			// Hack Club Auth marked the account ineligible after it
+			// approved, and sign-in has removed its devices since; this one
+			// isn't linked either (D-device-account-binding).
+			if _, err := tx.ExecContext(ctx, `UPDATE device_codes SET status = $2 WHERE device_code_hash = $1`, codeHash, statusDenied); err != nil {
+				return fmt.Errorf("device: refusing the code: %w", err)
+			}
+			outcome = ErrDenied
+			return nil
+		}
 		owner, err := ownerOf(ctx, tx, deviceID)
 		if err != nil {
 			return err
@@ -430,9 +444,6 @@ WHERE device_id = $1`,
 		if _, err := tx.ExecContext(ctx, `UPDATE device_codes SET status = $2, last_poll_at_ms = $3 WHERE device_code_hash = $1`,
 			codeHash, statusRedeemed, nowMs); err != nil {
 			return fmt.Errorf("device: redeeming the code: %w", err)
-		}
-		if err := tx.QueryRowContext(ctx, `SELECT slack_id, hca_sub FROM users WHERE id = $1`, account.String).Scan(&slackID, &hcaSub); err != nil {
-			return fmt.Errorf("device: reading the approving account: %w", err)
 		}
 		linked, key = deviceID, pub
 		return nil

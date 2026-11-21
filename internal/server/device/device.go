@@ -69,14 +69,17 @@ type Device struct {
 	// linked to, a UUIDv7.
 	Account string
 	// PublicKey is the device key, which the app sent with the code that
-	// linked it. The token works only with it (D-key-at-grant).
+	// linked it. The token works only with it (D-key-at-grant). A removed
+	// device's row keeps none, so it is nil then.
 	PublicKey ed25519.PublicKey
 	// Revoked is set when the device was removed, or Hack Club Auth has
 	// since marked its account ineligible. Its token no longer works.
 	Revoked bool
-	// OS is the OS family the app reported: one of the OS constants.
+	// OS is the OS family the app reported: one of the OS constants, or
+	// "" for a removed device.
 	OS string
-	// ClientBuild is the pairtime version the app reported.
+	// ClientBuild is the pairtime version the app reported, or "" for a
+	// removed device.
 	ClientBuild string
 	// Generation is the device's link generation: 1 for the link that made
 	// its row, and one more each time a login linked it again with a new
@@ -84,7 +87,8 @@ type Device struct {
 	Generation int64
 	// LinkedAt is when its token was handed out, LastSeenAt when the token
 	// was last used (to within TouchEvery), and RemovedAt when the device
-	// was removed, zero until then.
+	// was removed, zero until then. A removed device's row keeps only
+	// RemovedAt.
 	LinkedAt, LastSeenAt, RemovedAt time.Time
 
 	// tokenHash is the hash of the token Authenticate found the device
@@ -183,25 +187,28 @@ type scanner interface {
 // scanDevice reads one row of deviceColumns.
 func scanDevice(row scanner) (Device, error) {
 	var (
-		d            Device
-		token        sql.NullString
-		key          []byte
-		linked, seen int64
-		removed      sql.NullInt64
-		status       string
+		d                     Device
+		token, osFamily       sql.NullString
+		build                 sql.NullString
+		key                   []byte
+		linked, seen, removed sql.NullInt64
+		status                string
 	)
-	if err := row.Scan(&d.ID, &d.Account, &token, &key, &d.OS, &d.ClientBuild,
+	if err := row.Scan(&d.ID, &d.Account, &token, &key, &osFamily, &build,
 		&d.Generation, &linked, &seen, &removed, &status); err != nil {
 		return Device{}, err
 	}
-	d.tokenHash = token.String
+	d.tokenHash, d.OS, d.ClientBuild = token.String, osFamily.String, build.String
 	if len(key) == ed25519.PublicKeySize {
 		d.PublicKey = ed25519.PublicKey(key)
 	}
-	d.LinkedAt = time.UnixMilli(linked)
-	d.LastSeenAt = time.UnixMilli(seen)
-	if removed.Valid {
-		d.RemovedAt = time.UnixMilli(removed.Int64)
+	for _, t := range []struct {
+		at  *time.Time
+		col sql.NullInt64
+	}{{&d.LinkedAt, linked}, {&d.LastSeenAt, seen}, {&d.RemovedAt, removed}} {
+		if t.col.Valid {
+			*t.at = time.UnixMilli(t.col.Int64)
+		}
 	}
 	d.Revoked = removed.Valid || accounts.VerificationStatus(status) == accounts.Ineligible
 	return d, nil
@@ -246,14 +253,15 @@ WHERE device_id = $1 AND token_hash = $2 AND last_seen_at_ms < $3`, d.ID, d.toke
 	return d, nil
 }
 
-// List returns the devices of account, the linked ones first, newest
-// first within each group. A removed device is listed while its row
-// stays, which is only when ingest holds something from it.
+// List returns the devices of account: the linked ones first, newest link
+// first, then the removed ones, newest removal first. A removed device is
+// listed while its row stays, which is only when ingest holds something
+// from it.
 func (s *Store) List(ctx context.Context, account string) ([]Device, error) {
 	rows, err := s.db.Read.QueryContext(ctx, `SELECT `+deviceColumns+`
 FROM devices d JOIN users u ON u.id = d.user_id
 WHERE d.user_id = $1
-ORDER BY CASE WHEN d.removed_at_ms IS NULL THEN 0 ELSE 1 END, d.linked_at_ms DESC, d.device_id`, account)
+ORDER BY CASE WHEN d.removed_at_ms IS NULL THEN 0 ELSE 1 END, COALESCE(d.linked_at_ms, d.removed_at_ms) DESC, d.device_id`, account)
 	if err != nil {
 		return nil, fmt.Errorf("device: listing devices: %w", err)
 	}
@@ -321,16 +329,18 @@ func (s *Store) RemoveAccount(ctx context.Context, tx writer.Tx, account string,
 // unlink removes the linked devices that where matches, with args for its
 // placeholders, at nowMs. A device ingest holds nothing from loses its
 // row, which frees its id for whichever account links it next. Any other
-// becomes a tombstone: it keeps its account and gets its removal time, but
-// no token, and its device id stays with the account until the retention
-// job deletes the row (D-device-account-binding; docs/retention.json
-// server.devices).
+// becomes a tombstone: it keeps its account, its link generation and
+// ingest's state and gets its removal time, and loses its token, key, OS
+// family, build and times. Its device id stays with the account until the
+// retention job deletes the row, once ingest holds nothing from it
+// (D-device-account-binding; docs/retention.json server.devices).
 func unlink(ctx context.Context, tx writer.Tx, nowMs int64, where string, args ...any) error {
 	if _, err := tx.ExecContext(ctx, `DELETE FROM devices WHERE `+where+` AND removed_at_ms IS NULL AND ingest_req IS NULL`, args...); err != nil {
 		return fmt.Errorf("device: removing a device: %w", err)
 	}
 	at := fmt.Sprintf("$%d", len(args)+1)
-	if _, err := tx.ExecContext(ctx, `UPDATE devices SET removed_at_ms = `+at+`, token_hash = NULL WHERE `+where+` AND removed_at_ms IS NULL`,
+	if _, err := tx.ExecContext(ctx, `UPDATE devices SET removed_at_ms = `+at+`, token_hash = NULL, public_key = NULL, os_family = NULL,
+client_build = NULL, linked_at_ms = NULL, last_seen_at_ms = NULL WHERE `+where+` AND removed_at_ms IS NULL`,
 		append(args, nowMs)...); err != nil {
 		return fmt.Errorf("device: removing a device: %w", err)
 	}

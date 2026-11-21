@@ -95,6 +95,12 @@ func TestLoad(t *testing.T) {
 		{name: "a column name can't carry SQL", old: `"time_column": "seen_at_ms"`, new: `"time_column": "seen_at_ms; DROP TABLE devices"`, wantErr: "isn't a lowercase SQL name"},
 		{name: "a key column is listed once", old: `"key": ["id"]`, new: `"key": ["id", "id"]`, wantErr: "key lists id twice"},
 		{name: "data can't be empty", old: `"data": "IPs"`, new: `"data": " "`, wantErr: "data is empty"},
+		{name: "a kept_by table the schedule places loads", old: `"time_column": "seen_at_ms"}`, new: `"time_column": "seen_at_ms", "kept_by": [{"table": "schema_migrations"}]}`},
+		{name: "a kept_by table that awaits its work package needn't be in the schedule yet", old: `"time_column": "seen_at_ms"}`, new: `"time_column": "seen_at_ms", "kept_by": [{"table": "uploads", "awaits": "WP-SV4"}]}`},
+		{name: "a kept_by table in use must be in the schedule, so a misspelt one can't go unnoticed", old: `"time_column": "seen_at_ms"}`, new: `"time_column": "seen_at_ms", "kept_by": [{"table": "uploads"}]}`, wantErr: "kept_by table uploads isn't in the schedule"},
+		{name: "kept_by can't name the job's own table", old: `"time_column": "seen_at_ms"}`, new: `"time_column": "seen_at_ms", "kept_by": [{"table": "request_origins"}]}`, wantErr: "kept_by names the job's own table"},
+		{name: "kept_by names a table once", old: `"time_column": "seen_at_ms"}`, new: `"time_column": "seen_at_ms", "kept_by": [{"table": "uploads", "awaits": "WP-SV4"}, {"table": "uploads", "awaits": "WP-SV4"}]}`, wantErr: "kept_by names uploads twice"},
+		{name: "a kept_by table name can't carry SQL", old: `"time_column": "seen_at_ms"}`, new: `"time_column": "seen_at_ms", "kept_by": [{"table": "uploads u; DROP TABLE devices", "awaits": "WP-SV4"}]}`, wantErr: "isn't a lowercase SQL name"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -306,14 +312,14 @@ func TestJobs(t *testing.T) {
 	tests := []struct {
 		name     string
 		edit     func(p *Policy)
-		wantJobs []string // ids, and "+hold" when the job has its hold
+		wantJobs []string // ids, with "+hold" when the job has its hold and "+kept" when it has kept_by tables
 		wantOff  []string
 	}{
 		{
 			name: "a job runs once its table exists, and ingest's tables run without the holds WP-SB4 creates",
 			edit: func(*Policy) {},
 			wantJobs: []string{
-				"server.devices/devices", "server.devices/device_labels", "server.ip_ja4/request_origins",
+				"server.devices/devices+kept", "server.devices/device_labels", "server.ip_ja4/request_origins",
 				"server.minute_buckets/minute_buckets", "server.minute_buckets/minute_bucket_revisions",
 				"server.witness/witness_rows", "server.witness/ingest_replies",
 			},
@@ -333,7 +339,7 @@ func TestJobs(t *testing.T) {
 				}
 			},
 			wantJobs: []string{
-				"server.devices/devices", "server.devices/device_labels", "server.ip_ja4/request_origins",
+				"server.devices/devices+kept", "server.devices/device_labels", "server.ip_ja4/request_origins",
 				"server.minute_buckets/minute_buckets", "server.minute_buckets/minute_bucket_revisions", "server.minute_buckets/submission_minutes",
 				"server.witness/witness_rows", "server.witness/submission_batches", "server.witness/ingest_replies",
 			},
@@ -343,7 +349,7 @@ func TestJobs(t *testing.T) {
 			},
 		},
 		{
-			name: "a job runs with its hold once both tables exist",
+			name: "a job runs with its hold and its kept_by guards once their tables exist",
 			edit: func(p *Policy) {
 				for _, e := range p.Entries {
 					for k := range e.Jobs {
@@ -351,11 +357,14 @@ func TestJobs(t *testing.T) {
 						if h := e.Jobs[k].Hold; h != nil {
 							h.Awaits = ""
 						}
+						for i := range e.Jobs[k].KeptBy {
+							e.Jobs[k].KeptBy[i].Awaits = ""
+						}
 					}
 				}
 			},
 			wantJobs: []string{
-				"server.devices/devices", "server.devices/device_labels", "server.ip_ja4/request_origins",
+				"server.devices/devices+kept", "server.devices/device_labels", "server.ip_ja4/request_origins",
 				"server.minute_buckets/minute_buckets+hold", "server.minute_buckets/minute_bucket_revisions+hold", "server.minute_buckets/submission_minutes",
 				"server.witness/witness_rows+hold", "server.witness/submission_batches", "server.witness/ingest_replies",
 			},
@@ -374,6 +383,9 @@ func TestJobs(t *testing.T) {
 				id := j.ID
 				if j.Hold != nil {
 					id += "+hold"
+				}
+				if len(j.KeptBy) > 0 {
+					id += "+kept"
 				}
 				got = append(got, id)
 				e, _ := p.Find(j.Entry)
@@ -421,6 +433,15 @@ func TestDeleteSQL(t *testing.T) {
 				" AND NOT EXISTS (SELECT 1 FROM submission_batches h WHERE h.device_id = t.device_id AND h.b = t.b" +
 				" AND (h.decided_at_ms IS NULL OR h.decided_at_ms > $3)) LIMIT $2)",
 			wantArgs: []any{now.Add(-180 * day).UnixMilli(), 500, time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC).UnixMilli()},
+		},
+		{
+			name: "kept_by tables keep every row one of their rows names by the job's key",
+			job: Job{ID: "server.devices/devices", Table: "devices", Key: []string{"device_id"}, TimeColumn: "removed_at_ms", MaxAge: 90 * day,
+				KeptBy: []string{"witness_rows", "commit_records"}},
+			wantSQL: "DELETE FROM devices WHERE device_id IN (SELECT t.device_id FROM devices t WHERE t.removed_at_ms <= $1" +
+				" AND NOT EXISTS (SELECT 1 FROM witness_rows k0 WHERE k0.device_id = t.device_id)" +
+				" AND NOT EXISTS (SELECT 1 FROM commit_records k1 WHERE k1.device_id = t.device_id) LIMIT $2)",
+			wantArgs: []any{now.Add(-90 * day).UnixMilli(), 500},
 		},
 		{
 			name:     "a job by the window deletes rows whose decision's window has closed",
@@ -532,7 +553,10 @@ func TestSweep(t *testing.T) {
 		age  time.Duration // how long before the sweep the row's time is
 		null bool          // the row's time is NULL
 		hold *hold
-		kept bool
+		// keptBy is a kept_by table of the job that gets a row naming
+		// this case's row.
+		keptBy string
+		kept   bool
 	}
 	sweeps := []struct {
 		name  string
@@ -555,6 +579,8 @@ func TestSweep(t *testing.T) {
 				{name: "a device removed 90 days ago is deleted", job: "server.devices/devices", age: 90 * day},
 				{name: "a device removed 89 days ago stays", job: "server.devices/devices", age: 89 * day, kept: true},
 				{name: "a device that was never removed stays", job: "server.devices/devices", null: true, kept: true},
+				{name: "a device removed 90 days ago stays while ingest holds anything from it", job: "server.devices/devices", age: 90 * day, keptBy: "commit_records", kept: true},
+				{name: "a device removed a year ago stays while ingest holds its commit records", job: "server.devices/devices", age: 365 * day, keptBy: "commit_records", kept: true},
 				{name: "a witness row received 180 days ago is deleted", job: "server.witness/witness_rows", age: 180 * day},
 				{name: "a witness row received 179 days ago stays", job: "server.witness/witness_rows", age: 179 * day, kept: true},
 				{name: "an old witness row an open submission uses stays, and so does its hold", job: "server.witness/witness_rows", age: 400 * day, hold: &hold{open: true}, kept: true},
@@ -602,6 +628,10 @@ func TestSweep(t *testing.T) {
 				t.Fatalf("%s: job %s has no hold", c.name, c.job)
 			case c.hold != nil && byTable[j.Hold.Table].ID == "":
 				t.Fatalf("%s: no job deletes the holds in %s", c.name, j.Hold.Table)
+			case c.keptBy != "" && !slices.Contains(j.KeptBy, c.keptBy):
+				t.Fatalf("%s: job %s has no kept_by table %s", c.name, c.job, c.keptBy)
+			case c.keptBy != "" && byTable[c.keptBy].ID != "":
+				t.Fatalf("%s: kept_by table %s is a job's too; give the case one that isn't, whose rows need only the key", c.name, c.keptBy)
 			}
 		}
 	}
@@ -647,6 +677,10 @@ func TestSweep(t *testing.T) {
 						}
 						cols, vals := rowValues(j, i, rowTime(c))
 						insert(t, db, j.Table, cols, vals)
+						if c.keptBy != "" {
+							kcols, kvals := keyValues(j, i, rowTime(c))
+							insert(t, db, c.keptBy, kcols, kvals)
+						}
 						if h := c.hold; h != nil {
 							if h.gone {
 								wantDeleted[byTable[j.Hold.Table].ID]++
@@ -727,8 +761,8 @@ func TestSweep(t *testing.T) {
 	}
 }
 
-// createTables creates each job's table and each hold table, with just the
-// columns the bindings name. A column that some binding uses as a time, a
+// createTables creates each job's table, each hold table and each kept_by
+// table, with just the columns the bindings name. A column that some binding uses as a time, a
 // job's time column or a hold's decided column, is BIGINT, and any other
 // is TEXT, so a hold's columns compare with the rows it names on both
 // engines. A table that is both a hold and a job's, as every hold table
@@ -768,6 +802,9 @@ func createTables(t *testing.T, db *store.DB, jobs []Job) {
 		add(j.Table, append(slices.Clone(j.Key), j.TimeColumn), j.Key)
 		if h := j.Hold; h != nil {
 			add(h.Table, append(slices.Clone(j.Key), h.DecidedColumn), nil)
+		}
+		for _, k := range j.KeptBy {
+			add(k, slices.Clone(j.Key), nil)
 		}
 	}
 	for _, tb := range tables {
@@ -996,6 +1033,18 @@ func TestTables(t *testing.T) {
 					for _, j := range e.Jobs {
 						if h := j.Hold; h != nil {
 							bound(t, e.ID+" hold", h.Table, h.Awaits, append(slices.Clone(j.Key), h.DecidedColumn))
+						}
+					}
+				}
+			},
+		},
+		{
+			name: "a kept_by guard is used only once its table exists, with the job's key columns",
+			check: func(t *testing.T) {
+				for _, e := range p.Entries {
+					for _, j := range e.Jobs {
+						for _, k := range j.KeptBy {
+							bound(t, e.ID+" kept_by", k.Table, k.Awaits, j.Key)
 						}
 					}
 				}
