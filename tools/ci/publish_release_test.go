@@ -16,10 +16,17 @@ import (
 )
 
 // fakeGH stands in for gh in TestPublishRelease. It answers gh api calls
-// as the REST API does, from the files in FAKE_DIR, and writes each call to
-// FAKE_DIR/calls as a line: the method, the path, then each field and the
-// --input file in the order given. The draft it makes is always release
-// 900.
+// as the REST API does, from the files in FAKE_DIR, and writes each call
+// to FAKE_DIR/calls as a line: the method, the path, then every other
+// argument in the order given, so -f and -F, the headers and --paginate
+// all show. The draft it makes is always release 900.
+//
+//   - releases.json holds the release list, a page a line. Without
+//     --paginate only the first page comes back.
+//   - assets.json is the draft's asset list.
+//   - upload-fails/NAME holds how many more uploads of NAME fail with a
+//     502, and upload-state and upload-size, if there, what an upload
+//     answers instead of uploaded at the file's size.
 const fakeGH = `#!/usr/bin/env bash
 set -euo pipefail
 if [ "${1:-}" != api ]; then
@@ -27,20 +34,20 @@ if [ "${1:-}" != api ]; then
 	exit 64
 fi
 shift
-method=GET path="" input="" fields=""
+method=GET path="" input="" paginate=false logged=()
 while [ $# -gt 0 ]; do
 	case "$1" in
 	-X | --method) method=$2; shift ;;
-	-f | -F | --raw-field | --field) fields="$fields $2"; shift ;;
-	-H | --header) shift ;;
-	--input) input=$2; fields="$fields --input=$2"; shift ;;
-	--paginate | --silent) ;;
+	-f | -F | -H | --raw-field | --field | --header) logged+=("$1" "$2"); shift ;;
+	--input) input=$2; logged+=("$1" "$2"); shift ;;
+	--paginate) paginate=true; logged+=("$1") ;;
+	--silent) logged+=("$1") ;;
 	-*) echo "fake gh: unexpected flag $1" >&2; exit 64 ;;
 	*) path=$1 ;;
 	esac
 	shift
 done
-echo "$method $path$fields" >>"$FAKE_DIR/calls"
+echo "$method $path${logged[*]+ ${logged[*]}}" >>"$FAKE_DIR/calls"
 repo=repos/$GH_REPO
 case "$method $path" in
 "GET $repo/releases")
@@ -48,14 +55,29 @@ case "$method $path" in
 		echo "gh: Server Error (HTTP 502)" >&2
 		exit 1
 	fi
-	cat "$FAKE_DIR/releases.json"
+	if [ "$paginate" = true ]; then
+		cat "$FAKE_DIR/releases.json"
+	else
+		head -n 1 "$FAKE_DIR/releases.json"
+	fi
 	;;
 "DELETE $repo/releases/"*) ;;
 "POST $repo/releases")
 	echo "{\"id\": 900, \"draft\": true, \"upload_url\": \"https://uploads.github.com/$repo/releases/900/assets{?name,label}\"}"
 	;;
+"GET $repo/releases/900/assets") cat "$FAKE_DIR/assets.json" ;;
 "POST https://uploads.github.com/$repo/releases/900/assets")
-	echo "{\"state\": \"$(cat "$FAKE_DIR/upload-state")\", \"size\": $(wc -c <"$input")}"
+	name=$(basename "$input")
+	fails="$FAKE_DIR/upload-fails/$name"
+	if [ -e "$fails" ] && [ "$(cat "$fails")" -gt 0 ]; then
+		echo $(($(cat "$fails") - 1)) >"$fails"
+		echo "gh: Bad Gateway (HTTP 502)" >&2
+		exit 1
+	fi
+	state=uploaded size=$(wc -c <"$input")
+	if [ -e "$FAKE_DIR/upload-state" ]; then state=$(cat "$FAKE_DIR/upload-state"); fi
+	if [ -e "$FAKE_DIR/upload-size" ]; then size=$(cat "$FAKE_DIR/upload-size"); fi
+	echo "{\"name\": \"$name\", \"state\": \"$state\", \"size\": $size}"
 	;;
 "PATCH $repo/releases/900")
 	echo "{\"id\": 900, \"draft\": false, \"html_url\": \"https://github.com/$GH_REPO/releases/tag/$(cat "$FAKE_DIR/version")\"}"
@@ -68,7 +90,8 @@ esac
 `
 
 // fakeGit stands in for git: it writes each call to FAKE_DIR/calls, and
-// git ls-remote prints FAKE_DIR/ls-remote.
+// its Nth git ls-remote prints FAKE_DIR/ls-remote.N if that's there, or
+// else FAKE_DIR/ls-remote.
 const fakeGit = `#!/usr/bin/env bash
 set -euo pipefail
 echo "git $*" >>"$FAKE_DIR/calls"
@@ -76,7 +99,13 @@ if [ "${1:-}" != ls-remote ]; then
 	echo "fake git: only git ls-remote is expected, not: git $*" >&2
 	exit 64
 fi
-cat "$FAKE_DIR/ls-remote"
+n=$(($(cat "$FAKE_DIR/ls-remote-calls" 2>/dev/null || echo 0) + 1))
+echo "$n" >"$FAKE_DIR/ls-remote-calls"
+if [ -e "$FAKE_DIR/ls-remote.$n" ]; then
+	cat "$FAKE_DIR/ls-remote.$n"
+else
+	cat "$FAKE_DIR/ls-remote"
+fi
 `
 
 const (
@@ -100,17 +129,21 @@ var releaseFiles = []struct{ name, body string }{
 type publishCase struct {
 	name     string
 	version  string // v1.2.0 if empty
-	releases string // the release list's answer
+	releases string // the release list's answer, a page a line
+	assets   string // the draft's asset list; [] if empty
 	// lsRemote is what git ls-remote prints; empty means the version's tag
-	// at builtSHA, unless noTag is set.
-	lsRemote    string
-	noTag       bool
-	listFails   bool   // the release list answers HTTP 502
-	uploadState string // the state an upload answers with; uploaded if empty
-	noFiles     bool   // the script gets only VERSION and NOTES
-	wantCode    int
-	wantCalls   []string // FAKE_DIR is TMP in them
-	wantOut     string   // a substring of the script's output
+	// at builtSHA, unless noTag is set. lsRemote2 replaces it for the
+	// second call.
+	lsRemote, lsRemote2 string
+	noTag               bool
+	listFails           bool   // the release list answers HTTP 502
+	uploadFails         int    // how many uploads of the first file fail
+	uploadState         string // what an upload answers as its state
+	uploadSize          string // what an upload answers as its size
+	noFiles             bool   // the script gets only VERSION and NOTES
+	wantCode            int
+	wantCalls           []string // FAKE_DIR is TMP in them
+	wantOut             string   // a substring of the script's output
 }
 
 // TestPublishRelease runs publish_release.sh, which release.yml's publish
@@ -118,37 +151,50 @@ type publishCase struct {
 // PR runs that job, so this is where its handling of the releases already
 // there is checked: a leftover draft, however many, is deleted and never
 // published; a published release stops it; a failed lookup never reads as
-// no release; and the release it publishes is the draft it made, by id.
+// no release; the release it publishes is the draft it made, by id; and
+// it publishes only whole uploads of a tag that still names the commit.
 func TestPublishRelease(t *testing.T) {
 	for _, tool := range []string{"bash", "jq", "awk", "stat"} {
 		if _, err := exec.LookPath(tool); err != nil {
 			t.Skipf("publish_release.sh needs %s: %v", tool, err)
 		}
 	}
+	// go test reuses a cached pass while the files the test process opened
+	// are unchanged, and bash reads the script in a process of its own, so
+	// open it here too, or a change to the script alone could pass unrun.
+	if _, err := os.ReadFile("publish_release.sh"); err != nil {
+		t.Fatal(err)
+	}
 	const (
-		list    = "GET repos/" + publishRepo + "/releases"
-		publish = "PATCH repos/" + publishRepo + "/releases/900 draft=false"
-		latest  = publish + " make_latest=true"
+		list      = "GET repos/" + publishRepo + "/releases --paginate"
+		assets    = "GET repos/" + publishRepo + "/releases/900/assets --paginate"
+		publish   = "PATCH repos/" + publishRepo + "/releases/900 -F draft=false"
+		latest    = publish + " -f make_latest=true"
+		firstFile = "pairtime_1.2.0_linux_amd64.tar.gz"
 	)
 	lsRemote := func(v string) string {
 		return fmt.Sprintf("git ls-remote origin refs/tags/%s refs/tags/%s^{}", v, v)
 	}
 	create := func(v string, prerelease bool) string {
-		return fmt.Sprintf("POST repos/%s/releases tag_name=%s name=%s body=@TMP/notes.md draft=true prerelease=%v", publishRepo, v, v, prerelease)
+		return fmt.Sprintf("POST repos/%s/releases -f tag_name=%s -f name=%s -F body=@TMP/notes.md -F draft=true -F prerelease=%v", publishRepo, v, v, prerelease)
 	}
 	del := func(id int) string {
-		return fmt.Sprintf("DELETE repos/%s/releases/%d", publishRepo, id)
+		return fmt.Sprintf("DELETE repos/%s/releases/%d --silent", publishRepo, id)
+	}
+	delAsset := func(id int) string {
+		return fmt.Sprintf("DELETE repos/%s/releases/assets/%d --silent", publishRepo, id)
 	}
 	upload := func(name string) string {
-		return fmt.Sprintf("POST https://uploads.github.com/repos/%s/releases/900/assets name=%s --input=TMP/dist/%s", publishRepo, name, name)
+		return fmt.Sprintf("POST https://uploads.github.com/repos/%s/releases/900/assets -H Content-Type: application/octet-stream -f name=%s --input TMP/dist/%s", publishRepo, name, name)
 	}
-	// made is the calls from the tag check on, for a run that publishes.
+	// made is the calls from the first tag check on, for a run that
+	// publishes.
 	made := func(v string, prerelease bool) []string {
 		last := latest
 		if prerelease {
 			last = publish
 		}
-		return []string{lsRemote(v), create(v, prerelease), upload(releaseFiles[0].name), upload(releaseFiles[1].name), last}
+		return []string{lsRemote(v), create(v, prerelease), upload(releaseFiles[0].name), upload(releaseFiles[1].name), lsRemote(v), last}
 	}
 	tests := []publishCase{
 		{
@@ -176,9 +222,16 @@ func TestPublishRelease(t *testing.T) {
 			wantOut:   "release v1.2.0 is already published (release 5)",
 		},
 		{
-			name:      "a draft on a later page is deleted too, whether gh prints the pages as one array or as an array a page",
-			releases:  `[{"id": 4, "tag_name": "v1.1.0", "draft": false}][{"id": 2, "tag_name": "v1.2.0", "draft": true}]`,
+			name:      "the whole list is read, so a draft on its second page is deleted too",
+			releases:  "[{\"id\": 4, \"tag_name\": \"v1.1.0\", \"draft\": false}]\n[{\"id\": 2, \"tag_name\": \"v1.2.0\", \"draft\": true}]",
 			wantCalls: slices.Concat([]string{list, del(2)}, made("v1.2.0", false)),
+		},
+		{
+			name:      "the whole list is read, so a published release on its second page is refused",
+			releases:  "[{\"id\": 4, \"tag_name\": \"v1.1.0\", \"draft\": false}]\n[{\"id\": 2, \"tag_name\": \"v1.2.0\", \"draft\": false}]",
+			wantCode:  1,
+			wantCalls: []string{list},
+			wantOut:   "release v1.2.0 is already published (release 2)",
 		},
 		{
 			name:      "drafts and releases of other tags are left alone, a tag that only starts the same among them",
@@ -223,18 +276,51 @@ func TestPublishRelease(t *testing.T) {
 			wantOut:   "refs/tags/v1.2.0 on origin names no commit",
 		},
 		{
+			name:      "a tag moved while the files upload is refused before the draft is published",
+			releases:  `[]`,
+			lsRemote2: otherSHA + "\trefs/tags/v1.2.0\n",
+			wantCode:  1,
+			wantCalls: []string{list, lsRemote("v1.2.0"), create("v1.2.0", false), upload(releaseFiles[0].name), upload(releaseFiles[1].name), lsRemote("v1.2.0")},
+			wantOut:   "names " + otherSHA,
+		},
+		{
 			name:      "a release list that fails stops the script, rather than reading as a tag with no releases",
 			listFails: true,
 			wantCode:  1,
 			wantCalls: []string{list},
 		},
 		{
-			name:        "an upload the API doesn't answer as uploaded at the file's size leaves the draft unpublished",
+			name:        "an upload answered in a state other than uploaded leaves the draft unpublished",
 			releases:    `[]`,
 			uploadState: "starter",
 			wantCode:    1,
 			wantCalls:   []string{list, lsRemote("v1.2.0"), create("v1.2.0", false), upload(releaseFiles[0].name)},
-			wantOut:     "so the draft stays unpublished",
+			wantOut:     `answered "starter 11", not "uploaded 11", so the draft stays unpublished`,
+		},
+		{
+			name:       "an upload answered as uploaded at another size than the file's leaves the draft unpublished",
+			releases:   `[]`,
+			uploadSize: "3",
+			wantCode:   1,
+			wantCalls:  []string{list, lsRemote("v1.2.0"), create("v1.2.0", false), upload(releaseFiles[0].name)},
+			wantOut:    `answered "uploaded 3", not "uploaded 11"`,
+		},
+		{
+			name:        "a failed upload goes again, after the asset the failed try left under that name is deleted",
+			releases:    `[]`,
+			assets:      `[{"id": 30, "name": "checksums.txt.old", "state": "uploaded"}, {"id": 31, "name": "` + firstFile + `", "state": "starter"}]`,
+			uploadFails: 1,
+			wantCalls: slices.Concat([]string{list, lsRemote("v1.2.0"), create("v1.2.0", false), upload(firstFile), assets, delAsset(31)},
+				[]string{upload(firstFile), upload(releaseFiles[1].name), lsRemote("v1.2.0"), latest}),
+			wantOut: "Uploading " + firstFile + " failed, so it goes again",
+		},
+		{
+			name:        "an upload that fails three times leaves the draft unpublished",
+			releases:    `[]`,
+			uploadFails: 3,
+			wantCode:    1,
+			wantCalls:   []string{list, lsRemote("v1.2.0"), create("v1.2.0", false), upload(firstFile), assets, upload(firstFile), assets, upload(firstFile)},
+			wantOut:     "failed three times, so the draft stays unpublished",
 		},
 		{
 			name:     "without a file to publish it is a usage error, and it calls nothing",
@@ -253,29 +339,39 @@ func TestPublishRelease(t *testing.T) {
 			if lsRemoteOut == "" && !tt.noTag {
 				lsRemoteOut = builtSHA + "\trefs/tags/" + version + "\n"
 			}
-			uploadState := tt.uploadState
-			if uploadState == "" {
-				uploadState = "uploaded"
+			assetList := tt.assets
+			if assetList == "" {
+				assetList = "[]"
 			}
 			dir := t.TempDir()
-			bin := filepath.Join(dir, "bin")
-			dist := filepath.Join(dir, "dist")
-			for _, d := range []string{bin, dist} {
-				if err := os.Mkdir(d, 0o755); err != nil {
+			for _, d := range []string{"bin", "dist", "upload-fails"} {
+				if err := os.Mkdir(filepath.Join(dir, d), 0o755); err != nil {
 					t.Fatal(err)
 				}
 			}
 			files := map[string]string{
 				"bin/gh":        fakeGH,
 				"bin/git":       fakeGit,
-				"releases.json": tt.releases,
+				"releases.json": tt.releases + "\n",
+				"assets.json":   assetList + "\n",
 				"ls-remote":     lsRemoteOut,
-				"upload-state":  uploadState,
 				"version":       version,
 				"notes.md":      "manifest.json is signed with release key `0123456789abcdef`.\n",
 			}
+			if tt.lsRemote2 != "" {
+				files["ls-remote.2"] = tt.lsRemote2
+			}
 			if tt.listFails {
 				files["list-fails"] = ""
+			}
+			if tt.uploadFails > 0 {
+				files["upload-fails/"+firstFile] = fmt.Sprintf("%d\n", tt.uploadFails)
+			}
+			if tt.uploadState != "" {
+				files["upload-state"] = tt.uploadState
+			}
+			if tt.uploadSize != "" {
+				files["upload-size"] = tt.uploadSize
 			}
 			for _, f := range releaseFiles {
 				files["dist/"+f.name] = f.body
@@ -292,7 +388,7 @@ func TestPublishRelease(t *testing.T) {
 			args := []string{"publish_release.sh", version, filepath.Join(dir, "notes.md")}
 			if !tt.noFiles {
 				for _, f := range releaseFiles {
-					args = append(args, filepath.Join(dist, f.name))
+					args = append(args, filepath.Join(dir, "dist", f.name))
 				}
 			}
 			summary := filepath.Join(dir, "summary.md")
@@ -300,11 +396,12 @@ func TestPublishRelease(t *testing.T) {
 			// The last value of a variable wins, so these override what the
 			// CI job itself has, GITHUB_SHA and GITHUB_STEP_SUMMARY among it.
 			cmd.Env = append(os.Environ(),
-				"PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"),
+				"PATH="+filepath.Join(dir, "bin")+string(os.PathListSeparator)+os.Getenv("PATH"),
 				"FAKE_DIR="+dir,
 				"GH_REPO="+publishRepo,
 				"GITHUB_SHA="+builtSHA,
 				"GITHUB_STEP_SUMMARY="+summary,
+				"PUBLISH_RETRY_SECONDS=0",
 			)
 			var out bytes.Buffer
 			cmd.Stdout = &out

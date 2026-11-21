@@ -19,17 +19,23 @@
 # 1. It lists the repository's releases, drafts included. A published
 #    release of VERSION stops it: what's out is never changed. Every draft
 #    of VERSION, which a failed run left, is deleted.
-# 2. It checks that refs/tags/VERSION on origin still names GITHUB_SHA, so
-#    a tag moved after checkout can't carry this build.
-# 3. It makes a draft and keeps its id, uploads each file into that draft
+# 2. It makes a draft and keeps its id, uploads each file into that draft
 #    and checks that the upload is whole, then publishes that id. A version
 #    with a prerelease part, such as v0.1.0-alpha.1, is a prerelease, and
 #    any other becomes the latest release.
+# 3. Right before it makes the draft, and again right before it publishes
+#    it, it checks that refs/tags/VERSION on origin still names GITHUB_SHA,
+#    so a tag moved after checkout, or while the files upload, can't carry
+#    this build.
+#
+# If it stops after making the draft, the draft stays unpublished, and the
+# next run's step 1 deletes it.
 #
 # GH_REPO names the repository (owner/name), and gh reads its token from
-# GH_TOKEN. It needs gh, git, jq and coreutils, prints the release's URL
-# and adds that to GITHUB_STEP_SUMMARY when it's set. tools/ci's
-# TestPublishRelease runs it against a fake gh.
+# GH_TOKEN. PUBLISH_RETRY_SECONDS, 5 unless set, is the pause before an
+# upload is tried again. It needs gh, git, jq and coreutils, prints the
+# release's URL and adds that to GITHUB_STEP_SUMMARY when it's set.
+# tools/ci's TestPublishRelease runs it against a fake gh.
 set -euo pipefail
 
 if [ $# -lt 3 ]; then
@@ -50,6 +56,51 @@ case "$version" in
 *-*) prerelease=true ;;
 esac
 
+# check_tag stops the script unless refs/tags/VERSION on origin names
+# GITHUB_SHA. An annotated tag's own line names the tag object, and its ^{}
+# line the commit the tag points at.
+check_tag() {
+	local refs tagged
+	refs=$(git ls-remote origin "refs/tags/$version" "refs/tags/$version^{}")
+	tagged=$(awk -v ref="refs/tags/$version" '$2 == ref { plain = $1 } $2 == ref "^{}" { peeled = $1 } END { print (peeled != "" ? peeled : plain) }' <<<"$refs")
+	if [ "$tagged" != "$GITHUB_SHA" ]; then
+		echo "::error::refs/tags/$version on origin names ${tagged:-no commit}, not $GITHUB_SHA, which this run built, so it won't be published"
+		exit 1
+	fi
+}
+
+# upload puts FILE into draft release id at upload_url and checks that the
+# answer is the whole file, uploaded. It tries three times, as gh release
+# upload does, since an upload can fail on a 5xx or a dropped connection.
+# A failed try can leave an asset of the name behind, such as an empty one
+# in state starter, and the API refuses a second asset of a name, so before
+# trying again it deletes those. gh sends the -f fields of a request with
+# --input as its query.
+upload() {
+	local file=$1 name want got try assets asset
+	name=$(basename "$file")
+	want="uploaded $(stat -c %s "$file")"
+	for try in 1 2 3; do
+		if got=$(gh api --method POST "$upload_url" -H "Content-Type: application/octet-stream" -f name="$name" --input "$file" | jq -r '"\(.state) \(.size)"'); then
+			if [ "$got" != "$want" ]; then
+				echo "::error::uploading $name into draft release $id answered \"$got\", not \"$want\", so the draft stays unpublished"
+				exit 1
+			fi
+			echo "Uploaded $name"
+			return
+		fi
+		[ "$try" -lt 3 ] || break
+		echo "Uploading $name failed, so it goes again"
+		assets=$(gh api --paginate "$api/releases/$id/assets" | jq -r --arg n "$name" '.[] | select(.name == $n) | .id')
+		for asset in $assets; do
+			gh api --method DELETE "$api/releases/assets/$asset" --silent
+		done
+		sleep "${PUBLISH_RETRY_SECONDS:-5}"
+	done
+	echo "::error::uploading $name into draft release $id failed three times, so the draft stays unpublished"
+	exit 1
+}
+
 # 1. A token that can push lists drafts too. A failed list stops the script
 # here, so it never reads as a tag without releases. --paginate prints the
 # pages as one array, or as one array a page in older gh; .[] reads both.
@@ -68,23 +119,13 @@ for id in "${drafts[@]}"; do
 	gh api --method DELETE "$api/releases/$id" --silent
 done
 
-# 2. An annotated tag's own line names the tag object, and its ^{} line the
-# commit the tag points at.
-refs=$(git ls-remote origin "refs/tags/$version" "refs/tags/$version^{}")
-tagged=$(awk -v ref="refs/tags/$version" '$2 == ref { plain = $1 } $2 == ref "^{}" { peeled = $1 } END { print (peeled != "" ? peeled : plain) }' <<<"$refs")
-if [ "$tagged" != "$GITHUB_SHA" ]; then
-	echo "::error::refs/tags/$version on origin names ${tagged:-no commit}, not $GITHUB_SHA, which this run built, so it won't be published"
-	exit 1
-fi
-
-# 3. If anything below fails, the draft stays unpublished, and the next
-# run's step 1 deletes it. Its upload_url is a URI template, {?name,label}
-# at the end, and gh sends the -f fields of a request with --input as its
-# query.
+# 2 and 3. The draft's upload_url is a URI template, {?name,label} at the
+# end.
+check_tag
 created=$(gh api --method POST "$api/releases" -f tag_name="$version" -f name="$version" -F body=@"$notes" -F draft=true -F prerelease="$prerelease")
 id=$(jq -r .id <<<"$created")
-upload=$(jq -r .upload_url <<<"$created")
-upload=${upload%%\{*}
+upload_url=$(jq -r .upload_url <<<"$created")
+upload_url=${upload_url%%\{*}
 case "$id" in
 "" | *[!0-9]*)
 	echo "::error::creating the draft of $version answered without a release id: $created"
@@ -93,16 +134,10 @@ case "$id" in
 esac
 echo "Made draft release $id of $version"
 for file in "$@"; do
-	name=$(basename "$file")
-	got=$(gh api --method POST "$upload" -H "Content-Type: application/octet-stream" -f name="$name" --input "$file" | jq -r '"\(.state) \(.size)"')
-	want="uploaded $(stat -c %s "$file")"
-	if [ "$got" != "$want" ]; then
-		echo "::error::uploading $name into draft release $id answered \"$got\", not \"$want\", so the draft stays unpublished"
-		exit 1
-	fi
-	echo "Uploaded $name"
+	upload "$file"
 done
 
+check_tag
 publish=(-F draft=false)
 if [ "$prerelease" = false ]; then
 	publish+=(-f make_latest=true)
