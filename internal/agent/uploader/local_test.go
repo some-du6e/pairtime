@@ -11,6 +11,8 @@ import (
 	"fmt"
 	"maps"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -155,6 +157,11 @@ func TestLocalCredit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	day := day0.Format(time.DateOnly)
+	file, err := os.Stat(filepath.Join(dir, day+".jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	type sentBucket struct {
 		minute int64
 		credit float64
@@ -170,7 +177,7 @@ func TestLocalCredit(t *testing.T) {
 		{"the revision before batch 3 went, and the other minute's after it in the file", slices.Equal(got, []sentBucket{{at(0), 15}, {at(1), 15}})},
 		{"no revision that rests on batch 3 went, nor any later one of its minute", len(got) == 2},
 		{"the minute remembers that its credit rests on batch 3", p.sent[at(0)].B == 3},
-		{"the day's mark moved past every line", len(p.marks) == 1},
+		{"the day's mark moved past every line", p.marks[day].Off == file.Size()},
 		{"across plans of one bucket each, the minute stays withheld", func() bool {
 			var all []sentBucket
 			in := planInput{rows: ix, st: saved{Next: 5, Gaps: st.Gaps}, bucketDir: dir, lag: 900_000, maxBuckets: 1}
@@ -184,7 +191,7 @@ func TestLocalCredit(t *testing.T) {
 				}
 				in.st.Marks, in.st.Sent = p.marks, p.sent
 			}
-			return slices.Equal(all, []sentBucket{{at(0), 15}, {at(1), 15}}) && in.st.Sent[at(0)].B == 3
+			return slices.Equal(all, []sentBucket{{at(0), 15}, {at(1), 15}}) && in.st.Sent[at(0)].B == 3 && in.st.Marks[day].Off == file.Size()
 		}()},
 		{"the batch roots stop before batch 3", func() bool {
 			roots, _ := rootsOf(planInput{rows: ix, st: saved{Next: 2, Gaps: st.Gaps}}, 10)

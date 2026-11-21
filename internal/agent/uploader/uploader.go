@@ -220,6 +220,7 @@ type Uploader struct {
 	done   chan struct{}
 	once   sync.Once
 	soon   atomic.Bool // a SoonDelay wake is armed
+	hook   atomic.Bool // the next cycle is a SoonDelay wake's (hookWait)
 	urgent atomic.Bool // the next cycle doesn't wait for the scorer
 	job    *sched.Job
 
@@ -518,6 +519,7 @@ func (u *Uploader) Soon() {
 	}
 	time.AfterFunc(SoonDelay, func() {
 		u.soon.Store(false)
+		u.hook.Store(true)
 		u.Wake()
 	})
 }
@@ -697,7 +699,8 @@ func (u *Uploader) cycle() bool {
 		u.setProblem("chain", forkProblem(u.st.Fork))
 		return false
 	}
-	if !u.urgent.Swap(false) && !u.flush() {
+	hook := u.hook.Swap(false)
+	if !u.urgent.Swap(false) && !u.flush(flushWaitFor(hook)) {
 		return false // stopping
 	}
 	u.takeSealed()
@@ -739,10 +742,25 @@ func (u *Uploader) cycle() bool {
 // meanwhile, and the batch roots shouldn't wait for it.
 const flushWait = 10 * time.Second
 
-// flush waits, up to flushWait, until the scorer has scored every batch
-// sealed so far, so the upload carries their buckets. It returns false
-// when the uploader is stopping.
-func (u *Uploader) flush() bool {
+// hookWait is flushWait for the wake SoonDelay after a prompt or a stop,
+// so that its upload goes within DESIGN 3.3's 10 s of the hook, whatever
+// the scorer is doing: the roots don't depend on it, and buckets it hasn't
+// written yet go with the next wake.
+const hookWait = 10*time.Second - SoonDelay
+
+// flushWaitFor is how long a cycle waits for the scorer: hookWait for a
+// hook's wake, and flushWait otherwise.
+func flushWaitFor(hook bool) time.Duration {
+	if hook {
+		return hookWait
+	}
+	return flushWait
+}
+
+// flush waits, up to wait, until the scorer has scored every batch sealed
+// so far, so the upload carries their buckets. It returns false when the
+// uploader is stopping.
+func (u *Uploader) flush(wait time.Duration) bool {
 	if u.opts.Flush == nil {
 		return true
 	}
@@ -751,7 +769,7 @@ func (u *Uploader) flush() bool {
 		u.opts.Flush()
 		close(done)
 	}()
-	t := time.NewTimer(flushWait)
+	t := time.NewTimer(wait)
 	defer t.Stop()
 	select {
 	case <-done:

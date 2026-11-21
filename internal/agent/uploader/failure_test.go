@@ -210,3 +210,20 @@ func TestPace(t *testing.T) {
 		}
 	})
 }
+
+func TestFlushWait(t *testing.T) {
+	tests := []struct {
+		name string
+		ok   bool
+	}{
+		{"a wake after a prompt or a stop waits for the scorer no longer than lets its upload go within DESIGN 3.3's 10 s", SoonDelay+flushWaitFor(true) <= 10*time.Second},
+		{"any other wake waits up to flushWait", flushWaitFor(false) == flushWait},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if !tc.ok {
+				t.Errorf("no: %v after the hook, then %v for the scorer", SoonDelay, flushWaitFor(true))
+			}
+		})
+	}
+}
