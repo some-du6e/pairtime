@@ -882,7 +882,9 @@ func TestWriteDay(t *testing.T) {
 func TestMinuteBucket(t *testing.T) {
 	b := bucket(t, "2026-11-20T16:42:00Z", event.StateFinal, map[string][]Credited{
 		"p_9f2c": {{Why: event.ReasonPrompt, Ev: event.EvidenceA, Halves: 30}},
-	}, nil)
+	}, map[string]int64{"p_9f2c": 20, "p_77ab": 40})
+	b = with(b, "p_9f2c", func(pm *ProjectMinute) { pm.AgentOnlyS = 5 })
+	b = with(b, "p_77ab", func(pm *ProjectMinute) { pm.AgentOnlyS = 40 })
 	b.Anchors = []string{"01a20d91-f900-7adf-af18-9024d7dbaf8d"}
 	b.Uncredited = map[event.Reason]float64{event.ReasonOtherFocus: 10}
 	tests := []struct {
@@ -907,6 +909,9 @@ func TestMinuteBucket(t *testing.T) {
 			}
 			if s := m.Shareable(); len(s.Anchors) != 0 {
 				t.Errorf("the shareable form keeps the anchors %q", s.Anchors)
+			}
+			if want := map[string]float64{"p_9f2c": 5, "p_77ab": 40}; !maps.Equal(m.Shareable().AgentOnly, want) {
+				t.Errorf("agent_only %v, want each project's agent-only seconds, %v (D-bucket-agent-only)", m.Shareable().AgentOnly, want)
 			}
 		})
 	}
